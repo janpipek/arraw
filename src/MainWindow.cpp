@@ -4,6 +4,7 @@
 #include "ExifPanel.h"
 #include "FileBrowser.h"
 #include "RawProcessor.h"
+#include "StandardImageLoader.h"
 #include "ThumbnailCache.h"
 #include "XmpSidecar.h"
 #include "ExportDialog.h"
@@ -209,8 +210,11 @@ void MainWindow::openFile() {
     QSettings s;
     const QString startDir = s.value("lastDir", QDir::homePath()).toString();
     const QString path = QFileDialog::getOpenFileName(
-        this, "Open RAW Image", startDir,
+        this, "Open Image", startDir,
+        "All Images (*.cr2 *.cr3 *.nef *.arw *.dng *.raf *.orf *.rw2 *.pef *.srw "
+                    "*.jpg *.jpeg *.png *.tiff *.tif *.webp *.bmp);;"
         "RAW Images (*.cr2 *.cr3 *.nef *.arw *.dng *.raf *.orf *.rw2 *.pef *.srw);;"
+        "Standard Images (*.jpg *.jpeg *.png *.tiff *.tif *.webp *.bmp);;"
         "All Files (*)");
     if (!path.isEmpty())
         loadImage(path);
@@ -249,6 +253,8 @@ void MainWindow::loadImage(const QString& path) {
                             viewport->setImage(buf);
                     }, Qt::QueuedConnection);
             };
+            if (StandardImageLoader::canLoad(path))
+                return StandardImageLoader::load(path, cancel);
             return RawProcessor::load(path, std::move(onPreview), cancel);
         })
     );

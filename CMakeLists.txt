@@ -35,6 +35,7 @@ set(SOURCES
     src/ImageMetadata.cpp
     src/Histogram.cpp
     src/RawProcessor.cpp
+    src/StandardImageLoader.cpp
     src/ImagePipeline.cpp
     src/XmpSidecar.cpp
     src/FileBrowser.cpp

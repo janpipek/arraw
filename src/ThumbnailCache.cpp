@@ -36,37 +36,37 @@ QImage scaleDown(const QImage& src, int maxPx) {
 QImage decodeEmbeddedThumb(const QString& path) {
     LibRaw raw;
     const QByteArray local = path.toLocal8Bit();
-    if (raw.open_file(local.constData()) != LIBRAW_SUCCESS)
-        return {};
-    if (raw.unpack_thumb() != LIBRAW_SUCCESS)
-        return {};
-
-    int err = 0;
-    libraw_processed_image_t* thumb = raw.dcraw_make_mem_thumb(&err);
-    if (!thumb || err != LIBRAW_SUCCESS)
-        return {};
-
-    QImage img;
-    if (thumb->type == LIBRAW_IMAGE_JPEG) {
-        img.loadFromData(reinterpret_cast<const uchar*>(thumb->data),
-                         int(thumb->data_size), "JPEG");
-    } else {
-        img = QImage(thumb->width, thumb->height, QImage::Format_RGB888);
-        if (!img.isNull()) {
-            const int pixels = thumb->width * thumb->height * 3;
-            if (thumb->bits == 8) {
-                memcpy(img.bits(), thumb->data, size_t(pixels));
-            } else if (thumb->bits == 16) {
-                const auto* src = reinterpret_cast<const uint16_t*>(thumb->data);
-                auto* dst = img.bits();
-                for (int i = 0; i < pixels; ++i)
-                    dst[i] = uchar(src[i] >> 8);
+    if (raw.open_file(local.constData()) == LIBRAW_SUCCESS &&
+        raw.unpack_thumb() == LIBRAW_SUCCESS) {
+        int err = 0;
+        libraw_processed_image_t* thumb = raw.dcraw_make_mem_thumb(&err);
+        if (thumb && err == LIBRAW_SUCCESS) {
+            QImage img;
+            if (thumb->type == LIBRAW_IMAGE_JPEG) {
+                img.loadFromData(reinterpret_cast<const uchar*>(thumb->data),
+                                 int(thumb->data_size), "JPEG");
+            } else {
+                img = QImage(thumb->width, thumb->height, QImage::Format_RGB888);
+                if (!img.isNull()) {
+                    const int pixels = thumb->width * thumb->height * 3;
+                    if (thumb->bits == 8) {
+                        memcpy(img.bits(), thumb->data, size_t(pixels));
+                    } else if (thumb->bits == 16) {
+                        const auto* src = reinterpret_cast<const uint16_t*>(thumb->data);
+                        auto* dst = img.bits();
+                        for (int i = 0; i < pixels; ++i)
+                            dst[i] = uchar(src[i] >> 8);
+                    }
+                }
             }
+            LibRaw::dcraw_clear_mem(thumb);
+            if (!img.isNull())
+                return scaleDown(img, kMaxThumbPx);
         }
     }
 
-    LibRaw::dcraw_clear_mem(thumb);
-    return scaleDown(img, kMaxThumbPx);
+    // Fallback for standard image formats (JPEG, PNG, TIFF, etc.)
+    return scaleDown(QImage(path), kMaxThumbPx);
 }
 
 bool saveJpeg(const QImage& img, const QString& path) {

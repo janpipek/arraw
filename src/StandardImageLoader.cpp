@@ -1,0 +1,28 @@
+#include "StandardImageLoader.h"
+#include <QFileInfo>
+#include <QImage>
+
+static const QStringList kStandardExts = {
+    "jpg", "jpeg", "png", "tiff", "tif", "webp", "bmp"
+};
+
+bool StandardImageLoader::canLoad(const QString& path) {
+    return kStandardExts.contains(QFileInfo(path).suffix().toLower());
+}
+
+LoadResult StandardImageLoader::load(const QString& path,
+                                      std::shared_ptr<std::atomic<bool>> cancel) {
+    QImage img(path);
+    if (img.isNull())
+        return {{}, {}, {}, QString("Failed to load: %1").arg(path)};
+
+    if (cancel && cancel->load())
+        return {};
+
+    ImageBuffer fullRes = srgbToLinearBuffer(img);
+    if (!fullRes.valid())
+        return {{}, {}, {}, QString("Failed to decode: %1").arg(path)};
+
+    ImageBuffer preview = downsample2x(fullRes);
+    return {std::move(fullRes), std::move(preview), {}, {}};
+}
