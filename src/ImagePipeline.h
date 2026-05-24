@@ -2,6 +2,7 @@
 #include "ImageMetadata.h"
 #include <cstdint>
 #include <vector>
+#include <QImage>
 #include <QString>
 #include <QRectF>
 
@@ -52,3 +53,7 @@ struct LoadResult {
 
 // Box-filter 2× downsample (half W, half H). Safe to call off the main thread.
 ImageBuffer downsample2x(const ImageBuffer& src);
+
+// Convert an sRGB QImage (any format) to a linear-light float32 ImageBuffer.
+// Safe to call off the main thread.
+ImageBuffer srgbToLinearBuffer(const QImage& img);

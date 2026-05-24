@@ -19,6 +19,13 @@ public:
     void setFullResImage(const ImageBuffer& fullRes);
     void setAdjustments(const AdjustmentParams& p);
     void setStraightenActive(bool active);
+    void setOriginalImageSize(int width, int height);
+    void resetView();
+    void setZoom(float value);
+    void setPixelZoom(float value);
+    float zoomFactor() const;
+    float pixelZoom() const;
+    bool hasKnownOriginalSize() const;
 
     // Render buf through the full shader pipeline into an offscreen FBO.
     // Returns an sRGB QImage cropped to params.cropRect and scaled to outW×outH.
@@ -28,6 +35,7 @@ public:
 signals:
     void fullResNeeded();
     void cropCommitted(const QRectF& cropRect);
+    void zoomChanged(float pixelZoom);
 
 protected:
     void initializeGL() override;
@@ -72,6 +80,8 @@ private:
 
     // Aspect ratio of the region currently shown (accounts for committed crop).
     float displayAspect() const;
+    float fitZoom() const;
+    float displayOriginalPixelHeight() const;
 
     // ── GL state ──────────────────────────────────────────────────────────
     std::unique_ptr<QOpenGLShaderProgram> shader;
@@ -83,6 +93,8 @@ private:
     // ── Image state ───────────────────────────────────────────────────────
     AdjustmentParams params;
     float imageAspect = 1.0f;   // width/height of the full uncropped image
+    int   originalWidth = 0;
+    int   originalHeight = 0;
     bool  hasImage    = false;
     bool  hasFullRes  = false;
 

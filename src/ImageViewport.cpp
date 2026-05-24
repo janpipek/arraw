@@ -8,6 +8,7 @@
 #include <QOpenGLFramebufferObject>
 #include <QColorSpace>
 #include <QPainterPath>
+#include <algorithm>
 #include <cmath>
 
 static QVector4D cropUniform(const QRectF& cr) {
@@ -79,6 +80,7 @@ void ImageViewport::reloadShaders() {
 
 void ImageViewport::resizeGL(int w, int h) {
     glViewport(0, 0, w, h);
+    emit zoomChanged(pixelZoom());
 }
 
 // ── Rendering ─────────────────────────────────────────────────────────────────
@@ -88,6 +90,26 @@ float ImageViewport::displayAspect() const {
         return imageAspect;
     const QRectF& cr = params.cropRect;
     return imageAspect * float(cr.width() / cr.height());
+}
+
+float ImageViewport::fitZoom() const {
+    if (width() <= 0 || height() <= 0)
+        return 1.0f;
+
+    const float aspect = displayAspect();
+    if (aspect <= 0.0f)
+        return 1.0f;
+
+    const float viewportAspect = float(width()) / float(height());
+    return std::min(1.0f, viewportAspect / aspect);
+}
+
+float ImageViewport::displayOriginalPixelHeight() const {
+    if (!hasKnownOriginalSize())
+        return 0.0f;
+    if (cropMode || showOriginal)
+        return float(originalHeight);
+    return float(originalHeight) * float(params.cropRect.height());
 }
 
 QOpenGLTexture* ImageViewport::activeTexture() const {
@@ -431,13 +453,14 @@ void ImageViewport::setImage(const ImageBuffer& buf) {
     uploadTexture(buf, previewTex);
     hasImage  = buf.valid();
     hasFullRes = false;
-    zoom = 1.0f;
-    pan  = {0, 0};
     doneCurrent();
+    resetView();
     update();
 }
 
 void ImageViewport::setFullResImage(const ImageBuffer& buf) {
+    if (buf.valid())
+        setOriginalImageSize(buf.width, buf.height);
     makeCurrent();
     uploadTexture(buf, fullResTex);
     hasFullRes = buf.valid();
@@ -450,6 +473,7 @@ void ImageViewport::setAdjustments(const AdjustmentParams& p) {
     params = p;
     if (!cropMode)
         activeCrop = p.cropRect;
+    emit zoomChanged(pixelZoom());
     update();
 }
 
@@ -458,6 +482,55 @@ void ImageViewport::setStraightenActive(bool active) {
         return;
     straightenActive = active;
     update();
+}
+
+void ImageViewport::setOriginalImageSize(int width, int height) {
+    originalWidth = width;
+    originalHeight = height;
+    emit zoomChanged(pixelZoom());
+}
+
+void ImageViewport::resetView() {
+    setZoom(fitZoom());
+    pan = {0, 0};
+    update();
+}
+
+void ImageViewport::setZoom(float value) {
+    const float newZoom = qBound(0.05f, value, 32.0f);
+    if (newZoom >= kFullResZoomThreshold && zoom < kFullResZoomThreshold && !hasFullRes)
+        emit fullResNeeded();
+
+    if (std::abs(newZoom - zoom) < 0.0001f) {
+        emit zoomChanged(pixelZoom());
+        return;
+    }
+
+    zoom = newZoom;
+    emit zoomChanged(pixelZoom());
+    update();
+}
+
+void ImageViewport::setPixelZoom(float value) {
+    const float displayHeight = displayOriginalPixelHeight();
+    if (displayHeight <= 0.0f || height() <= 0)
+        return;
+    setZoom(value * displayHeight / float(height()));
+}
+
+float ImageViewport::zoomFactor() const {
+    return zoom;
+}
+
+float ImageViewport::pixelZoom() const {
+    const float displayHeight = displayOriginalPixelHeight();
+    if (displayHeight <= 0.0f || height() <= 0)
+        return 0.0f;
+    return zoom * float(height()) / displayHeight;
+}
+
+bool ImageViewport::hasKnownOriginalSize() const {
+    return originalWidth > 0 && originalHeight > 0;
 }
 
 void ImageViewport::uploadTexture(const ImageBuffer& buf,
@@ -547,11 +620,7 @@ QImage ImageViewport::renderToImage(const ImageBuffer& buf,
 
 void ImageViewport::wheelEvent(QWheelEvent* e) {
     const float factor = e->angleDelta().y() > 0 ? 1.15f : 1.0f / 1.15f;
-    const float newZoom = qBound(0.05f, zoom * factor, 32.0f);
-    if (newZoom >= kFullResZoomThreshold && zoom < kFullResZoomThreshold && !hasFullRes)
-        emit fullResNeeded();
-    zoom = newZoom;
-    update();
+    setZoom(zoom * factor);
 }
 
 void ImageViewport::mousePressEvent(QMouseEvent* e) {
@@ -617,6 +686,7 @@ void ImageViewport::keyPressEvent(QKeyEvent* e) {
                 activeCrop = viewportCropToTextureCrop(activeCropViewport);
             params.cropRect = activeCrop;
             emit cropCommitted(params.cropRect);
+            emit zoomChanged(pixelZoom());
             update();
         }
         break;

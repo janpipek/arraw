@@ -1,5 +1,7 @@
 #pragma once
 #include "ImagePipeline.h"
+#include <atomic>
+#include <memory>
 #include <QMainWindow>
 #include <QFutureWatcher>
 
@@ -10,6 +12,7 @@ class FileBrowser;
 class QDockWidget;
 class QUndoStack;
 class QLabel;
+class QToolButton;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -34,8 +37,10 @@ private slots:
 private:
     void setupMenus();
     void setupDocks();
+    void setupStatusBar();
     void loadImage(const QString& path);
     void setLoadingState(bool loading);
+    void updateZoomStatus(float zoom);
 
     ImageViewport*   viewport;
     AdjustmentPanel* adjPanel;
@@ -44,10 +49,12 @@ private:
     QDockWidget*     filmStripDock;
     QUndoStack*      undoStack;
     QLabel*          statusLabel;
+    QToolButton*     zoomButton;
 
     ImageBuffer fullRes;
     ImageBuffer preview;
     QString     currentPath;
 
-    QFutureWatcher<LoadResult> loadWatcher;
+    std::shared_ptr<std::atomic<bool>> loadCancel;
+    QFutureWatcher<LoadResult>         loadWatcher;
 };

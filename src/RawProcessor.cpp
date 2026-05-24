@@ -1,17 +1,73 @@
 #include "RawProcessor.h"
 #include "ImageMetadata.h"
 #include <libraw/libraw.h>
+#include <QImage>
 
-LoadResult RawProcessor::load(const QString& path) {
+// Extract the embedded JPEG/bitmap thumbnail from an already-open LibRaw
+// instance and return it as a linear-light ImageBuffer.  Does not require
+// unpack() to have been called first.
+static ImageBuffer extractThumb(LibRaw& raw) {
+    if (raw.unpack_thumb() != LIBRAW_SUCCESS)
+        return {};
+
+    int err = 0;
+    libraw_processed_image_t* thumb = raw.dcraw_make_mem_thumb(&err);
+    if (!thumb || err != LIBRAW_SUCCESS)
+        return {};
+
+    QImage img;
+    if (thumb->type == LIBRAW_IMAGE_JPEG) {
+        img.loadFromData(reinterpret_cast<const uchar*>(thumb->data),
+                         int(thumb->data_size), "JPEG");
+    } else {
+        img = QImage(thumb->width, thumb->height, QImage::Format_RGB888);
+        if (!img.isNull()) {
+            const int pixels = thumb->width * thumb->height * 3;
+            if (thumb->bits == 8) {
+                memcpy(img.bits(), thumb->data, size_t(pixels));
+            } else if (thumb->bits == 16) {
+                const auto* src16 = reinterpret_cast<const uint16_t*>(thumb->data);
+                auto* dst = img.bits();
+                for (int i = 0; i < pixels; ++i)
+                    dst[i] = uchar(src16[i] >> 8);
+            }
+        }
+    }
+    LibRaw::dcraw_clear_mem(thumb);
+    return srgbToLinearBuffer(img);
+}
+
+ImageBuffer RawProcessor::loadEmbeddedPreview(const QString& path) {
+    LibRaw raw;
+    if (raw.open_file(path.toLocal8Bit().constData()) != LIBRAW_SUCCESS)
+        return {};
+    return extractThumb(raw);
+}
+
+LoadResult RawProcessor::load(const QString& path,
+                               std::function<void(ImageBuffer)> onEmbeddedPreview,
+                               std::shared_ptr<std::atomic<bool>> cancel) {
+    auto cancelled = [&]{ return cancel && cancel->load(); };
     LibRaw raw;
 
     int ret = raw.open_file(path.toLocal8Bit().constData());
     if (ret != LIBRAW_SUCCESS)
         return {{}, {}, {}, QString("open_file: %1").arg(libraw_strerror(ret))};
 
+    // Extract embedded preview on the same open handle, before the slow unpack.
+    if (onEmbeddedPreview) {
+        ImageBuffer buf = extractThumb(raw);
+        if (buf.valid())
+            onEmbeddedPreview(std::move(buf));
+    }
+
+    if (cancelled()) return {};
+
     ret = raw.unpack();
     if (ret != LIBRAW_SUCCESS)
         return {{}, {}, {}, QString("unpack: %1").arg(libraw_strerror(ret))};
+
+    if (cancelled()) return {};
 
     const ImageMetadata metadata = extractMetadata(raw);
 

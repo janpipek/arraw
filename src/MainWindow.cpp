@@ -4,6 +4,7 @@
 #include "ExifPanel.h"
 #include "FileBrowser.h"
 #include "RawProcessor.h"
+#include "ThumbnailCache.h"
 #include "XmpSidecar.h"
 #include "ExportDialog.h"
 #include <QMenuBar>
@@ -11,6 +12,7 @@
 #include <QFileDialog>
 #include <QStatusBar>
 #include <QLabel>
+#include <QToolButton>
 #include <QMessageBox>
 #include <QScrollArea>
 #include <QTabWidget>
@@ -55,15 +57,16 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     setupDocks();
     setupMenus();
-
-    statusLabel = new QLabel("No image loaded", this);
-    statusBar()->addWidget(statusLabel);
+    setupStatusBar();
 
     connect(&loadWatcher, &QFutureWatcher<LoadResult>::finished,
             this, &MainWindow::onLoadFinished);
 
     connect(viewport, &ImageViewport::fullResNeeded,
             this, &MainWindow::onFullResNeeded);
+
+    connect(viewport, &ImageViewport::zoomChanged,
+            this, &MainWindow::updateZoomStatus);
 
     connect(viewport, &ImageViewport::cropCommitted,
             this, [this](const QRectF& rect) {
@@ -120,9 +123,29 @@ void MainWindow::setupMenus() {
     auto* view = menuBar()->addMenu("&View");
     view->addAction(filmStripDock->toggleViewAction());
     view->addSeparator();
-    view->addAction("Reset Zoom", viewport, [this] {
-        // TODO: expose zoom reset
-    }, Qt::CTRL | Qt::Key_0);
+    view->addAction("Reset Zoom", Qt::CTRL | Qt::Key_0,
+                    viewport, &ImageViewport::resetView);
+}
+
+void MainWindow::setupStatusBar() {
+    statusLabel = new QLabel("No image loaded", this);
+    statusBar()->addWidget(statusLabel, 1);
+
+    zoomButton = new QToolButton(this);
+    zoomButton->setPopupMode(QToolButton::InstantPopup);
+    zoomButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    zoomButton->setAutoRaise(true);
+
+    auto* zoomMenu = new QMenu(zoomButton);
+    zoomMenu->addAction("Fit", viewport, &ImageViewport::resetView);
+    zoomMenu->addSeparator();
+    zoomMenu->addAction("50 %", this, [this] { viewport->setPixelZoom(0.5f); });
+    zoomMenu->addAction("100 %", this, [this] { viewport->setPixelZoom(1.0f); });
+    zoomMenu->addAction("200 %", this, [this] { viewport->setPixelZoom(2.0f); });
+    zoomButton->setMenu(zoomMenu);
+
+    statusBar()->addPermanentWidget(zoomButton);
+    updateZoomStatus(viewport->pixelZoom());
 }
 
 void MainWindow::setupDocks() {
@@ -191,26 +214,51 @@ void MainWindow::openFile() {
 }
 
 void MainWindow::loadImage(const QString& path) {
-    if (loadWatcher.isRunning()) return;
+    // Cancel any in-progress load so it stops before dcraw_process.
+    if (loadCancel)
+        loadCancel->store(true);
+    loadCancel = std::make_shared<std::atomic<bool>>(false);
+    auto cancel = loadCancel;
 
     currentPath = path;
     exifPanel->clear();
+    viewport->setOriginalImageSize(0, 0);
     setLoadingState(true);
 
     // Populate browser from the file's directory
     fileBrowser->setDirectory(QFileInfo(path).absolutePath());
     fileBrowser->setCurrentFile(path);
 
+    // Sync: show cached thumbnail immediately while the background task runs
+    if (QImage cached = ThumbnailCache::loadFromDisk(path); !cached.isNull())
+        viewport->setImage(srgbToLinearBuffer(cached));
+
+    // Single background task: extract embedded preview on the same open file
+    // handle (unpack_thumb only), dispatch it to the main thread, then
+    // continue with the full demosaic.  Sequential I/O avoids contention.
     loadWatcher.setFuture(
-        QtConcurrent::run([path]() -> LoadResult {
-            return RawProcessor::load(path);
+        QtConcurrent::run([this, path, cancel]() -> LoadResult {
+            auto onPreview = [this, path, cancel](ImageBuffer buf) {
+                if (cancel->load()) return;
+                QMetaObject::invokeMethod(this,
+                    [this, path, buf = std::move(buf)]() mutable {
+                        if (currentPath == path)
+                            viewport->setImage(buf);
+                    }, Qt::QueuedConnection);
+            };
+            return RawProcessor::load(path, std::move(onPreview), cancel);
         })
     );
 }
 
 void MainWindow::onLoadFinished() {
-    setLoadingState(false);
     LoadResult result = loadWatcher.result();
+
+    // Empty result means the task was cancelled — another load is already running.
+    if (!result.fullRes.valid() && result.error.isEmpty())
+        return;
+
+    setLoadingState(false);
 
     if (!result.error.isEmpty()) {
         QMessageBox::critical(this, "Load Error", result.error);
@@ -222,6 +270,7 @@ void MainWindow::onLoadFinished() {
     fullRes = std::move(result.fullRes);
     preview = std::move(result.preview);
 
+    viewport->setOriginalImageSize(fullRes.width, fullRes.height);
     viewport->setImage(preview);
     adjPanel->setHistogramImage(preview);
     exifPanel->setMetadata(result.metadata);
@@ -238,6 +287,13 @@ void MainWindow::onLoadFinished() {
 void MainWindow::onFullResNeeded() {
     if (fullRes.valid())
         viewport->setFullResImage(fullRes);
+}
+
+void MainWindow::updateZoomStatus(float zoom) {
+    zoomButton->setVisible(zoom > 0.0f);
+    if (zoom <= 0.0f)
+        return;
+    zoomButton->setText(QString("%1 %").arg(qRound(zoom * 100.0f)));
 }
 
 void MainWindow::setLoadingState(bool loading) {
