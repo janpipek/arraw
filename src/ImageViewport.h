@@ -61,6 +61,9 @@ private:
 
     void drawCropOverlay(QPainter& p) const;
 
+    // Aspect ratio of the region currently shown (accounts for committed crop).
+    float displayAspect() const;
+
     // ── GL state ──────────────────────────────────────────────────────────
     std::unique_ptr<QOpenGLShaderProgram> shader;
     std::unique_ptr<QOpenGLTexture>       previewTex;
@@ -70,7 +73,7 @@ private:
 
     // ── Image state ───────────────────────────────────────────────────────
     AdjustmentParams params;
-    float imageAspect = 1.0f;   // width/height of the loaded image
+    float imageAspect = 1.0f;   // width/height of the full uncropped image
     bool  hasImage    = false;
     bool  hasFullRes  = false;
 

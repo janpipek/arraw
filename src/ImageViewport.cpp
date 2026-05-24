@@ -8,6 +8,11 @@
 #include <QOpenGLFramebufferObject>
 #include <QColorSpace>
 
+static QVector4D cropUniform(const QRectF& cr) {
+    return {float(cr.left()), float(cr.top()),
+            float(cr.right()), float(cr.bottom())};
+}
+
 static const float kQuad[] = {
     -1, -1,   0, 1,
      1, -1,   1, 1,
@@ -64,6 +69,13 @@ void ImageViewport::resizeGL(int w, int h) {
 
 // ── Rendering ─────────────────────────────────────────────────────────────────
 
+float ImageViewport::displayAspect() const {
+    if (!hasImage || cropMode || showOriginal)
+        return imageAspect;
+    const QRectF& cr = params.cropRect;
+    return imageAspect * float(cr.width() / cr.height());
+}
+
 QOpenGLTexture* ImageViewport::activeTexture() const {
     if (hasFullRes && fullResTex && zoom >= kFullResZoomThreshold)
         return fullResTex.get();
@@ -79,12 +91,15 @@ void ImageViewport::paintGL() {
     tex->bind(0);
     shader->setUniformValue("uTexture", 0);
 
-    float aspect = float(width()) / float(height());
-    float sx = zoom * (imageAspect / aspect);
-    float sy = zoom;
+    const float viewportAspect = float(width()) / float(height());
+    const float sx = zoom * (displayAspect() / viewportAspect);
+    const float sy = zoom;
     shader->setUniformValue("uTransform", QVector4D(sx, sy, pan.x(), pan.y()));
 
     const AdjustmentParams& p = showOriginal ? AdjustmentParams{} : params;
+    // While editing, show full image + overlay; after Enter, apply committed crop
+    const QRectF crop = cropMode ? QRectF(0, 0, 1, 1) : p.cropRect;
+    shader->setUniformValue("uCropRect",    cropUniform(crop));
     shader->setUniformValue("uRotation",    p.rotation);
     shader->setUniformValue("uExposure",    p.exposure);
     shader->setUniformValue("uContrast",    p.contrast    / 100.0f);
@@ -115,9 +130,9 @@ void ImageViewport::paintEvent(QPaintEvent* e) {
 // ── Coordinate mapping ────────────────────────────────────────────────────────
 
 QPointF ImageViewport::uvToViewport(float u, float v) const {
-    float aspect = float(width()) / float(height());
-    float sx = zoom * (imageAspect / aspect);
-    float sy = zoom;
+    const float viewportAspect = float(width()) / float(height());
+    const float sx = zoom * (displayAspect() / viewportAspect);
+    const float sy = zoom;
     float ndcX = (u * 2.0f - 1.0f) * sx + float(pan.x());
     float ndcY = (1.0f - 2.0f * v) * sy + float(pan.y());
     return QPointF(double((ndcX + 1.0f) * width()  / 2.0f),
@@ -125,9 +140,9 @@ QPointF ImageViewport::uvToViewport(float u, float v) const {
 }
 
 QPointF ImageViewport::viewportToUV(QPointF pos) const {
-    float aspect = float(width()) / float(height());
-    float sx = zoom * (imageAspect / aspect);
-    float sy = zoom;
+    const float viewportAspect = float(width()) / float(height());
+    const float sx = zoom * (displayAspect() / viewportAspect);
+    const float sy = zoom;
     float ndcX = float(pos.x()) * 2.0f / width()  - 1.0f;
     float ndcY = 1.0f - float(pos.y()) * 2.0f / height();
     float u = ((ndcX - float(pan.x())) / sx + 1.0f) / 2.0f;
@@ -296,22 +311,27 @@ QImage ImageViewport::renderToImage(const ImageBuffer& buf,
     exportTex.allocateStorage();
     exportTex.setData(QOpenGLTexture::RGB, QOpenGLTexture::Float32, buf.data.data());
 
-    // Offscreen FBO at full-res size
+    const QRectF& cr = p.cropRect;
+    const int cropW = qMax(1, int(cr.width()  * buf.width  + 0.5f));
+    const int cropH = qMax(1, int(cr.height() * buf.height + 0.5f));
+
+    // Offscreen FBO at cropped pixel size
     QOpenGLFramebufferObjectFormat fboFmt;
     fboFmt.setAttachment(QOpenGLFramebufferObject::NoAttachment);
     fboFmt.setInternalTextureFormat(GL_RGBA8);
-    QOpenGLFramebufferObject fbo(buf.width, buf.height, fboFmt);
+    QOpenGLFramebufferObject fbo(cropW, cropH, fboFmt);
     fbo.bind();
 
-    glViewport(0, 0, buf.width, buf.height);
+    glViewport(0, 0, cropW, cropH);
     glClear(GL_COLOR_BUFFER_BIT);
 
     shader->bind();
     exportTex.bind(0);
     shader->setUniformValue("uTexture", 0);
 
-    // Identity transform renders the whole image with no pan/zoom
+    // Identity transform: crop region fills the FBO
     shader->setUniformValue("uTransform", QVector4D(1.0f, 1.0f, 0.0f, 0.0f));
+    shader->setUniformValue("uCropRect",    cropUniform(cr));
     shader->setUniformValue("uRotation",    p.rotation);
     shader->setUniformValue("uExposure",    p.exposure);
     shader->setUniformValue("uContrast",    p.contrast    / 100.0f);
@@ -337,16 +357,6 @@ QImage ImageViewport::renderToImage(const ImageBuffer& buf,
     doneCurrent();
 
     result = result.convertToFormat(QImage::Format_RGB888);
-
-    // Crop to params.cropRect (UV coordinates)
-    const QRectF& cr = p.cropRect;
-    if (cr != QRectF(0, 0, 1, 1)) {
-        int cx = int(cr.x()      * buf.width  + 0.5);
-        int cy = int(cr.y()      * buf.height + 0.5);
-        int cw = int(cr.width()  * buf.width  + 0.5);
-        int ch = int(cr.height() * buf.height + 0.5);
-        result = result.copy(cx, cy, cw, ch);
-    }
 
     // Scale to requested output dimensions
     if (result.width() != outW || result.height() != outH)

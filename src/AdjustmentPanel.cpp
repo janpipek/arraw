@@ -115,6 +115,7 @@ AdjustmentPanel::SliderRow AdjustmentPanel::addSlider(
 
 void AdjustmentPanel::connectAll() {
     auto syncParams = [this]() {
+        const QRectF crop = adjustments.cropRect;
         adjustments.exposure    = exposure.slider->value()    / 100.0f;
         adjustments.contrast    = float(contrast.slider->value());
         adjustments.highlights  = float(highlights.slider->value());
@@ -127,6 +128,7 @@ void AdjustmentPanel::connectAll() {
         adjustments.vibrance    = float(vibrance.slider->value());
         adjustments.sharpening  = float(sharpening.slider->value());
         adjustments.rotation    = rotation.slider->value() / 100.0f;
+        adjustments.cropRect    = crop;
     };
 
     auto allSliders = {
