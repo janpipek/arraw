@@ -11,6 +11,7 @@ public:
 
     void setDirectory(const QString& dir);
     void setCurrentFile(const QString& path);
+    void selectFirst();
 
     // Navigate ±1 from current selection. Returns false if already at boundary.
     bool navigateBy(int delta);

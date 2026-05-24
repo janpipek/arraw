@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <vector>
 #include <QString>
+#include <QRectF>
 
 struct AdjustmentParams {
     // Tone
@@ -22,7 +23,8 @@ struct AdjustmentParams {
     float sharpening  = 0.0f;     // 0 .. 100
 
     // Geometry
-    float rotation    = 0.0f;     // degrees, -45 .. +45
+    float  rotation = 0.0f;                    // degrees, -45 .. +45
+    QRectF cropRect = {0.0, 0.0, 1.0, 1.0};   // normalised UV, full image by default
 
     bool operator==(const AdjustmentParams&) const = default;
 };

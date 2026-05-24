@@ -61,6 +61,14 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(viewport, &ImageViewport::fullResNeeded,
             this, &MainWindow::onFullResNeeded);
 
+    connect(viewport, &ImageViewport::cropCommitted,
+            this, [this](const QRectF& rect) {
+                AdjustmentParams before = adjPanel->params();
+                AdjustmentParams after  = before;
+                after.cropRect = rect;
+                undoStack->push(new AdjustmentCommand(adjPanel, before, after));
+            });
+
     connect(adjPanel, &AdjustmentPanel::adjustmentCommitted,
             this, [this](const AdjustmentParams& before, const AdjustmentParams& after) {
                 undoStack->push(new AdjustmentCommand(adjPanel, before, after));
@@ -135,6 +143,18 @@ void MainWindow::setupDocks() {
     rightDock->setWidget(scroll);
     addDockWidget(Qt::RightDockWidgetArea, rightDock);
     // adjPanel → viewport paramsChanged wired in constructor (after both are created)
+}
+
+void MainWindow::openPath(const QString& path) {
+    QFileInfo fi(path);
+    if (!fi.exists()) return;
+
+    if (fi.isDir()) {
+        fileBrowser->setDirectory(fi.absoluteFilePath());
+        fileBrowser->selectFirst();
+    } else {
+        loadImage(fi.absoluteFilePath());
+    }
 }
 
 void MainWindow::openFile() {

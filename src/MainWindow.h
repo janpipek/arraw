@@ -14,6 +14,10 @@ class MainWindow : public QMainWindow {
 public:
     explicit MainWindow(QWidget* parent = nullptr);
 
+    // Called after show() with the command-line argument, if any.
+    // Accepts a RAW file path or a directory.
+    void openPath(const QString& path);
+
 protected:
     void closeEvent(QCloseEvent* e) override;
     void keyPressEvent(QKeyEvent* e) override;

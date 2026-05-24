@@ -72,6 +72,10 @@ AdjustmentPanel::AdjustmentPanel(QWidget* parent) : QWidget(parent) {
 
     connect(resetBtn, &QPushButton::clicked, this, &AdjustmentPanel::resetAll);
 
+    // Keep histogram in sync with every adjustment change.
+    connect(this, &AdjustmentPanel::paramsChanged,
+            histogram, &Histogram::setAdjustments);
+
     connect(wbPresets, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int i) {
         if (i < 0) return;
         temperature.slider->setValue(kWBPresets[i].kelvin);

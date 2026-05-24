@@ -14,5 +14,10 @@ int main(int argc, char* argv[]) {
 
     MainWindow w;
     w.show();
+
+    const QStringList args = app.arguments();
+    if (args.size() > 1)
+        w.openPath(args.at(1));
+
     return app.exec();
 }

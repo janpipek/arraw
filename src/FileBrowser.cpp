@@ -43,6 +43,11 @@ void FileBrowser::setCurrentFile(const QString& path) {
     }
 }
 
+void FileBrowser::selectFirst() {
+    if (!files.isEmpty())
+        list->setCurrentRow(0);  // triggers currentRowChanged → fileSelected
+}
+
 bool FileBrowser::navigateBy(int delta) {
     int current = list->currentRow();
     int next    = current + delta;

@@ -1,5 +1,6 @@
 #include "XmpSidecar.h"
 #include <QFile>
+#include <QRectF>
 #include <QFileInfo>
 #include <QDir>
 #include <QXmlStreamWriter>
@@ -37,11 +38,16 @@ AdjustmentParams XmpSidecar::load(const QString& rawPath) {
             p.shadows     = attr("Shadows2012",    0.0f);
             p.whites      = attr("Whites2012",     0.0f);
             p.blacks      = attr("Blacks2012",     0.0f);
-            p.temperature = attr("Temperature",    0.0f);
+            p.temperature = attr("Temperature",    5500.0f);
             p.tint        = attr("Tint",           0.0f);
             p.saturation  = attr("Saturation",     0.0f);
             p.vibrance    = attr("Vibrance",       0.0f);
             p.sharpening  = attr("Sharpness",      0.0f);
+            p.rotation    = attr("StraightenAngle",0.0f);
+            p.cropRect    = QRectF(
+                attr("CropLeft",   0.0f), attr("CropTop",    0.0f),
+                attr("CropRight",  1.0f) - attr("CropLeft", 0.0f),
+                attr("CropBottom", 1.0f) - attr("CropTop",  0.0f));
             break;
         }
     }
@@ -81,7 +87,12 @@ bool XmpSidecar::save(const QString& rawPath, const AdjustmentParams& p) {
     write("Tint",           p.tint);
     write("Saturation",     p.saturation);
     write("Vibrance",       p.vibrance);
-    write("Sharpness",      p.sharpening);
+    write("Sharpness",       p.sharpening);
+    write("StraightenAngle", p.rotation);
+    write("CropLeft",        float(p.cropRect.left()));
+    write("CropTop",         float(p.cropRect.top()));
+    write("CropRight",       float(p.cropRect.right()));
+    write("CropBottom",      float(p.cropRect.bottom()));
 
     xml.writeEndElement(); // rdf:Description
     xml.writeEndElement(); // rdf:RDF
