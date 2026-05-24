@@ -24,6 +24,7 @@ set(SOURCES
     src/MainWindow.cpp
     src/ImageViewport.cpp
     src/AdjustmentPanel.cpp
+    src/ToneCurveWidget.cpp
     src/ExifPanel.cpp
     src/ImageMetadata.cpp
     src/Histogram.cpp
