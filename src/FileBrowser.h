@@ -4,6 +4,7 @@
 
 class QListWidget;
 class ThumbnailCache;
+class QLineEdit;
 
 class FileBrowser : public QWidget {
     Q_OBJECT
@@ -17,6 +18,8 @@ public:
     // Navigate ±1 from current selection. Returns false if already at boundary.
     bool navigateBy(int delta);
 
+    QString directory() const { return currentDir; }
+
 signals:
     void fileSelected(const QString& path);
 
@@ -26,6 +29,7 @@ private slots:
 private:
     void requestVisibleThumbnails();
 
+    QLineEdit*       pathEdit;
     QListWidget*     list;
     ThumbnailCache*  thumbs;
     QString          currentDir;

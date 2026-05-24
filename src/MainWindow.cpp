@@ -97,7 +97,10 @@ void MainWindow::closeEvent(QCloseEvent* e) {
     QSettings s;
     s.setValue("geometry",    saveGeometry());
     s.setValue("windowState", saveState());
-    s.setValue("lastDir",     QFileInfo(currentPath).absolutePath());
+    QString lastDir = fileBrowser->directory();
+    if (!lastDir.isEmpty()) {
+        s.setValue("lastDir", lastDir);
+    }
     QMainWindow::closeEvent(e);
 }
 
@@ -271,12 +274,14 @@ void MainWindow::onLoadFinished() {
     preview = std::move(result.preview);
 
     viewport->setOriginalImageSize(fullRes.width, fullRes.height);
-    viewport->setImage(preview);
+    viewport->setImage(preview, true);
     adjPanel->setHistogramImage(preview);
     exifPanel->setMetadata(result.metadata);
     undoStack->clear();
 
     AdjustmentParams saved = XmpSidecar::load(currentPath);
+    if (!QFileInfo::exists(XmpSidecar::pathFor(currentPath)))
+        saved.cropRect = result.defaultCrop;
     adjPanel->setParams(saved);
 
     statusLabel->setText(QString("%1  —  %2 × %3")

@@ -2,6 +2,10 @@
 #include "ThumbnailCache.h"
 #include <QListWidget>
 #include <QVBoxLayout>
+#include <QHBoxLayout>
+#include <QLineEdit>
+#include <QToolButton>
+#include <QFileDialog>
 #include <QDir>
 #include <QFileInfo>
 #include <QScrollBar>
@@ -18,6 +22,22 @@ FileBrowser::FileBrowser(QWidget* parent) : QWidget(parent) {
 
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(4, 4, 4, 4);
+
+    auto* pathLayout = new QHBoxLayout();
+    pathLayout->setContentsMargins(0, 0, 0, 0);
+    pathLayout->setSpacing(4);
+
+    pathEdit = new QLineEdit(this);
+    pathEdit->setPlaceholderText("Directory...");
+    pathEdit->setToolTip("Current directory path (press Enter to change)");
+    pathLayout->addWidget(pathEdit);
+
+    auto* browseButton = new QToolButton(this);
+    browseButton->setText("...");
+    browseButton->setToolTip("Browse directory");
+    pathLayout->addWidget(browseButton);
+
+    layout->addLayout(pathLayout);
 
     list = new QListWidget(this);
     list->setViewMode(QListView::IconMode);
@@ -38,12 +58,52 @@ FileBrowser::FileBrowser(QWidget* parent) : QWidget(parent) {
 
     connect(list->verticalScrollBar(), &QScrollBar::valueChanged,
             this, [this](int) { requestVisibleThumbnails(); });
+
+    connect(browseButton, &QToolButton::clicked, this, [this]() {
+        QString dir = QFileDialog::getExistingDirectory(
+            this, tr("Select Directory"), currentDir,
+            QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks);
+        if (!dir.isEmpty()) {
+            setDirectory(dir);
+            selectFirst();
+        }
+    });
+
+    connect(pathEdit, &QLineEdit::returnPressed, this, [this]() {
+        QString pathStr = pathEdit->text().trimmed();
+        if (pathStr.isEmpty()) {
+            pathEdit->setText(QDir::toNativeSeparators(currentDir));
+            return;
+        }
+        if (pathStr.startsWith("~")) {
+            pathStr = QDir::homePath() + pathStr.mid(1);
+        }
+        QFileInfo fi(pathStr);
+        if (!fi.isAbsolute()) {
+            fi = QFileInfo(QDir(currentDir).absoluteFilePath(pathStr));
+        }
+        if (fi.exists() && fi.isDir()) {
+            setDirectory(fi.absoluteFilePath());
+            selectFirst();
+        } else {
+            pathEdit->setText(QDir::toNativeSeparators(currentDir));
+        }
+    });
 }
 
 void FileBrowser::setDirectory(const QString& dir) {
-    if (dir == currentDir) return;
-    currentDir = dir;
-    files = scanRawFiles(dir);
+    QString cleanDir = QDir(dir).canonicalPath();
+    if (cleanDir.isEmpty()) {
+        cleanDir = QDir(dir).absolutePath();
+    }
+
+    if (pathEdit) {
+        pathEdit->setText(QDir::toNativeSeparators(cleanDir));
+    }
+
+    if (cleanDir == currentDir) return;
+    currentDir = cleanDir;
+    files = scanRawFiles(cleanDir);
 
     list->blockSignals(true);
     list->clear();

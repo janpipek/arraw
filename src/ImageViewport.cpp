@@ -148,6 +148,7 @@ void ImageViewport::paintGL() {
     shader->setUniformValue("uTint",        p.tint        / 100.0f);
     shader->setUniformValue("uSaturation",  p.saturation  / 100.0f);
     shader->setUniformValue("uVibrance",    p.vibrance    / 100.0f);
+    shader->setUniformValue("uBaseLook",    useBaseLook && !showOriginal);
 
     glBindVertexArray(vao);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
@@ -447,12 +448,13 @@ void ImageViewport::drawCropOverlay(QPainter& p) const {
 
 // ── Public setters ────────────────────────────────────────────────────────────
 
-void ImageViewport::setImage(const ImageBuffer& buf) {
+void ImageViewport::setImage(const ImageBuffer& buf, bool baseLook) {
     imageAspect = buf.valid() ? float(buf.width) / float(buf.height) : 1.0f;
     makeCurrent();
     uploadTexture(buf, previewTex);
     hasImage  = buf.valid();
     hasFullRes = false;
+    useBaseLook = baseLook;
     doneCurrent();
     resetView();
     update();
@@ -593,6 +595,7 @@ QImage ImageViewport::renderToImage(const ImageBuffer& buf,
     shader->setUniformValue("uTint",        p.tint        / 100.0f);
     shader->setUniformValue("uSaturation",  p.saturation  / 100.0f);
     shader->setUniformValue("uVibrance",    p.vibrance    / 100.0f);
+    shader->setUniformValue("uBaseLook",    true);
 
     glBindVertexArray(vao);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);

@@ -49,6 +49,7 @@ struct LoadResult {
     ImageBuffer    preview;   // 1/4-res (half W, half H) — used for viewport + histogram
     ImageMetadata  metadata;
     QString        error;     // non-empty on failure
+    QRectF         defaultCrop = {0.0, 0.0, 1.0, 1.0};
 };
 
 // Box-filter 2× downsample (half W, half H). Safe to call off the main thread.

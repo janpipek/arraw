@@ -2,6 +2,10 @@
 #include "ImageMetadata.h"
 #include <libraw/libraw.h>
 #include <QImage>
+#include <QRectF>
+#include <algorithm>
+#include <cmath>
+#include <vector>
 
 // Extract the embedded JPEG/bitmap thumbnail from an already-open LibRaw
 // instance and return it as a linear-light ImageBuffer.  Does not require
@@ -42,6 +46,62 @@ ImageBuffer RawProcessor::loadEmbeddedPreview(const QString& path) {
     if (raw.open_file(path.toLocal8Bit().constData()) != LIBRAW_SUCCESS)
         return {};
     return extractThumb(raw);
+}
+
+static void normalizeRawExposure(ImageBuffer& buf) {
+    if (!buf.valid())
+        return;
+
+    std::vector<float> luma;
+    luma.reserve(size_t(buf.width * buf.height / 16 + 1));
+
+    constexpr float kR = 0.2126f;
+    constexpr float kG = 0.7152f;
+    constexpr float kB = 0.0722f;
+    constexpr int kStride = 16;
+
+    const int pixels = buf.width * buf.height;
+    for (int i = 0; i < pixels; i += kStride) {
+        const float* p = buf.data.data() + i * 3;
+        const float y = p[0] * kR + p[1] * kG + p[2] * kB;
+        if (std::isfinite(y) && y > 0.0f)
+            luma.push_back(y);
+    }
+
+    if (luma.empty())
+        return;
+
+    const size_t idx = std::min(luma.size() - 1, size_t(luma.size() * 0.995f));
+    std::nth_element(luma.begin(), luma.begin() + idx, luma.end());
+
+    const float highlight = luma[idx];
+    if (highlight <= 0.0f)
+        return;
+
+    constexpr float kTargetHighlight = 0.78f;
+    const float gain = std::clamp(kTargetHighlight / highlight, 0.5f, 4.0f);
+    for (float& v : buf.data)
+        v = std::max(0.0f, v * gain);
+}
+
+static QRectF defaultCropRect(const LibRaw& raw, int imageWidth, int imageHeight) {
+    const auto& crop = raw.imgdata.color.dng_levels.default_crop;
+    const int x = int(crop[0]);
+    const int y = int(crop[1]);
+    const int w = int(crop[2]);
+    const int h = int(crop[3]);
+
+    if (imageWidth <= 0 || imageHeight <= 0 || w <= 0 || h <= 0)
+        return {0.0, 0.0, 1.0, 1.0};
+    if (x == 0 && y == 0 && w == imageWidth && h == imageHeight)
+        return {0.0, 0.0, 1.0, 1.0};
+    if (x < 0 || y < 0 || x + w > imageWidth || y + h > imageHeight)
+        return {0.0, 0.0, 1.0, 1.0};
+
+    return {double(x) / double(imageWidth),
+            double(y) / double(imageHeight),
+            double(w) / double(imageWidth),
+            double(h) / double(imageHeight)};
 }
 
 LoadResult RawProcessor::load(const QString& path,
@@ -101,6 +161,8 @@ LoadResult RawProcessor::load(const QString& path,
 
     LibRaw::dcraw_clear_mem(img);
 
+    const QRectF defaultCrop = defaultCropRect(raw, fullRes.width, fullRes.height);
+    normalizeRawExposure(fullRes);
     ImageBuffer preview = downsample2x(fullRes);
-    return {std::move(fullRes), std::move(preview), metadata, {}};
+    return {std::move(fullRes), std::move(preview), metadata, {}, defaultCrop};
 }

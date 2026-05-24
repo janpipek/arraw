@@ -15,7 +15,7 @@ public:
     explicit ImageViewport(QWidget* parent = nullptr);
     ~ImageViewport() override;
 
-    void setImage(const ImageBuffer& preview);
+    void setImage(const ImageBuffer& preview, bool baseLookEnabled = false);
     void setFullResImage(const ImageBuffer& fullRes);
     void setAdjustments(const AdjustmentParams& p);
     void setStraightenActive(bool active);
@@ -97,6 +97,7 @@ private:
     int   originalHeight = 0;
     bool  hasImage    = false;
     bool  hasFullRes  = false;
+    bool  useBaseLook = false;
 
     static constexpr float kFullResZoomThreshold = 1.5f;
 

@@ -28,14 +28,31 @@ static float applyExposure(float v, float ev) {
     return v * std::pow(2.0f, ev);
 }
 
-static float applyContrast(float v, float contrast) {
-    if (std::abs(contrast) < 0.001f) return v;
-    return (v - 0.5f) * (1.0f + contrast / kToneSliderToUniform * 0.8f) + 0.5f;
-}
-
 static float smoothstep(float e0, float e1, float x) {
     const float t = std::clamp((x - e0) / (e1 - e0), 0.0f, 1.0f);
     return t * t * (3.0f - 2.0f * t);
+}
+
+static void applyBaseLook(float& r, float& g, float& b) {
+    constexpr float kLumaR = 0.2126f, kLumaG = 0.7152f, kLumaB = 0.0722f;
+    const float y = kLumaR * r + kLumaG * g + kLumaB * b;
+    const float s = smoothstep(0.0f, 1.0f, y);
+    const float y2 = y + (s - y) * 0.35f;
+    const float toneScale = y2 / std::max(y, 1e-5f);
+    r *= toneScale;
+    g *= toneScale;
+    b *= toneScale;
+
+    const float luma = kLumaR * r + kLumaG * g + kLumaB * b;
+    const float satBoost = 1.05f - 0.03f * smoothstep(0.45f, 1.0f, luma);
+    r = luma + (r - luma) * satBoost;
+    g = luma + (g - luma) * satBoost;
+    b = luma + (b - luma) * satBoost;
+}
+
+static float applyContrast(float v, float contrast) {
+    if (std::abs(contrast) < 0.001f) return v;
+    return (v - 0.5f) * (1.0f + contrast / kToneSliderToUniform * 0.8f) + 0.5f;
 }
 
 static void applyToneRegions(float& r, float& g, float& b, const AdjustmentParams& p) {
@@ -78,6 +95,8 @@ void Histogram::recompute() {
         float rv = rawBuf.data[i * 3 + 0];
         float gv = rawBuf.data[i * 3 + 1];
         float bv = rawBuf.data[i * 3 + 2];
+
+        applyBaseLook(rv, gv, bv);
 
         // Exposure
         rv = applyExposure(rv, p.exposure);

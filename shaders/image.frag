@@ -15,11 +15,22 @@ uniform float uTemperature;  // Kelvin, 2000..12000 (5500 = neutral)
 uniform float uTint;         // -1..+1
 uniform float uSaturation;   // -1..+1
 uniform float uVibrance;     // -1..+1
+uniform bool  uBaseLook;
 
 const vec3 kLuma = vec3(0.2126, 0.7152, 0.0722);
 
 vec3 applyExposure(vec3 c) {
     return c * pow(2.0, uExposure);
+}
+
+vec3 applyBaseLook(vec3 c) {
+    float y = dot(c, kLuma);
+    float y2 = mix(y, smoothstep(0.0, 1.0, y), 0.35);
+    c *= y2 / max(y, 1e-5);
+
+    float luma = dot(c, kLuma);
+    float satBoost = 1.05 - 0.03 * smoothstep(0.45, 1.0, luma);
+    return mix(vec3(luma), c, satBoost);
 }
 
 vec3 applyContrast(vec3 c) {
@@ -90,6 +101,8 @@ void main() {
     }
 
     vec3 c = texture(uTexture, vUV).rgb;
+    if (uBaseLook)
+        c = applyBaseLook(c);
     c = applyExposure(c);
     c = applyContrast(c);
     c = applyToneRegions(c);
