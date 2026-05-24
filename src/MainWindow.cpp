@@ -118,20 +118,28 @@ void MainWindow::setupMenus() {
     edit->addAction(undoStack->createRedoAction(this));
 
     auto* view = menuBar()->addMenu("&View");
+    view->addAction(filmStripDock->toggleViewAction());
+    view->addSeparator();
     view->addAction("Reset Zoom", viewport, [this] {
         // TODO: expose zoom reset
     }, Qt::CTRL | Qt::Key_0);
 }
 
 void MainWindow::setupDocks() {
-    // File browser (left)
-    auto* leftDock = new QDockWidget("Files", this);
-    leftDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
-    leftDock->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable);
-    fileBrowser = new FileBrowser(leftDock);
-    fileBrowser->setMinimumWidth(180);
-    leftDock->setWidget(fileBrowser);
-    addDockWidget(Qt::LeftDockWidgetArea, leftDock);
+    // Film strip (left)
+    filmStripDock = new QDockWidget("Film Strip", this);
+    filmStripDock->setObjectName("FilmStripDock");
+    filmStripDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
+    filmStripDock->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable);
+
+    fileBrowser = new FileBrowser(filmStripDock);
+    fileBrowser->setMinimumWidth(148);
+    filmStripDock->setWidget(fileBrowser);
+    addDockWidget(Qt::LeftDockWidgetArea, filmStripDock);
+
+    auto* toggleFilmStrip = filmStripDock->toggleViewAction();
+    toggleFilmStrip->setText("Film Strip");
+    toggleFilmStrip->setShortcut(Qt::Key_F9);
 
     connect(fileBrowser, &FileBrowser::fileSelected,
             this, &MainWindow::loadImage);

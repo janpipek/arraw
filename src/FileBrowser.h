@@ -3,6 +3,7 @@
 #include <QStringList>
 
 class QListWidget;
+class ThumbnailCache;
 
 class FileBrowser : public QWidget {
     Q_OBJECT
@@ -19,10 +20,16 @@ public:
 signals:
     void fileSelected(const QString& path);
 
+private slots:
+    void onThumbnailReady(const QString& path, const QImage& image);
+
 private:
-    QListWidget* list;
-    QString      currentDir;
-    QStringList  files;   // absolute paths, same order as list widget
+    void requestVisibleThumbnails();
+
+    QListWidget*     list;
+    ThumbnailCache*  thumbs;
+    QString          currentDir;
+    QStringList      files;   // absolute paths, same order as list widget
 
     static QStringList scanRawFiles(const QString& dir);
 };
