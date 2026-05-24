@@ -30,19 +30,37 @@ static float applyExposure(float v, float ev) {
 
 static float applyContrast(float v, float contrast) {
     if (std::abs(contrast) < 0.001f) return v;
-    return (v - 0.5f) * (1.0f + contrast * 0.008f) + 0.5f;
+    return (v - 0.5f) * (1.0f + contrast / kToneSliderToUniform * 0.8f) + 0.5f;
 }
 
-static float applyHighlights(float v, float hl) {
-    if (std::abs(hl) < 0.001f) return v;
-    float mask = std::max(0.0f, std::min(1.0f, (v - 0.5f) * 2.0f));
-    return v + hl * 0.005f * mask;
+static float smoothstep(float e0, float e1, float x) {
+    const float t = std::clamp((x - e0) / (e1 - e0), 0.0f, 1.0f);
+    return t * t * (3.0f - 2.0f * t);
 }
 
-static float applyShadows(float v, float sh) {
-    if (std::abs(sh) < 0.001f) return v;
-    float mask = std::max(0.0f, std::min(1.0f, 1.0f - v * 2.0f));
-    return v + sh * 0.005f * mask;
+static void applyToneRegions(float& r, float& g, float& b, const AdjustmentParams& p) {
+    if (std::abs(p.highlights) < 0.001f && std::abs(p.shadows) < 0.001f &&
+        std::abs(p.whites) < 0.001f && std::abs(p.blacks) < 0.001f)
+        return;
+
+    constexpr float kLumaR = 0.2126f, kLumaG = 0.7152f, kLumaB = 0.0722f;
+    const float y = kLumaR * r + kLumaG * g + kLumaB * b;
+
+    const float hl = smoothstep(0.28f, 0.88f, y);
+    const float sh = 1.0f - smoothstep(0.12f, 0.78f, y);
+    const float w  = smoothstep(0.52f, 0.97f, y);
+    const float blk = 1.0f - smoothstep(0.03f, 0.48f, y);
+
+    const float delta = p.highlights / kToneSliderToUniform * 0.5f * hl
+                      + p.shadows    / kToneSliderToUniform * 0.5f * sh
+                      + p.whites     / kToneSliderToUniform * 0.25f * w
+                      + p.blacks     / kToneSliderToUniform * 0.25f * blk;
+
+    const float y2 = std::max(y + delta, 0.0f);
+    const float scale = y2 / std::max(y, 1e-5f);
+    r *= scale;
+    g *= scale;
+    b *= scale;
 }
 
 static float gamma(float v) {
@@ -71,13 +89,7 @@ void Histogram::recompute() {
         gv = applyContrast(gv, p.contrast);
         bv = applyContrast(bv, p.contrast);
 
-        // Highlights / Shadows (luma-based mask for speed)
-        rv = applyHighlights(rv, p.highlights);
-        gv = applyHighlights(gv, p.highlights);
-        bv = applyHighlights(bv, p.highlights);
-        rv = applyShadows(rv, p.shadows);
-        gv = applyShadows(gv, p.shadows);
-        bv = applyShadows(bv, p.shadows);
+        applyToneRegions(rv, gv, bv, p);
 
         // Temperature (Kelvin, normalised around 5500K)
         float t = (p.temperature - 5500.0f) / 5500.0f;

@@ -27,20 +27,27 @@ vec3 applyContrast(vec3 c) {
     return (c - 0.5) * (1.0 + uContrast * 0.8) + 0.5;
 }
 
-vec3 applyHighlights(vec3 c) {
-    if (abs(uHighlights) < 0.001) return c;
-    return c + uHighlights * 0.5 * smoothstep(0.5, 1.0, c);
-}
+// Luma-masked tone regions: wide overlapping ranges, single luminance remap
+// (preserves hue, avoids per-channel mask seams and curve inversions).
+vec3 applyToneRegions(vec3 c) {
+    if (abs(uHighlights) < 0.001 && abs(uShadows) < 0.001 &&
+        abs(uWhites) < 0.001 && abs(uBlacks) < 0.001)
+        return c;
 
-vec3 applyShadows(vec3 c) {
-    if (abs(uShadows) < 0.001) return c;
-    return c + uShadows * 0.5 * (1.0 - smoothstep(0.0, 0.5, c));
-}
+    float y = dot(c, kLuma);
 
-vec3 applyWhitesBlacks(vec3 c) {
-    c += uWhites * smoothstep(0.75, 1.0, c) * 0.25;
-    c += uBlacks * (1.0 - smoothstep(0.0, 0.25, c)) * 0.25;
-    return c;
+    float hl = smoothstep(0.28, 0.88, y);
+    float sh = 1.0 - smoothstep(0.12, 0.78, y);
+    float w  = smoothstep(0.52, 0.97, y);
+    float b  = 1.0 - smoothstep(0.03, 0.48, y);
+
+    float delta = uHighlights * 0.5 * hl
+                + uShadows  * 0.5 * sh
+                + uWhites   * 0.25 * w
+                + uBlacks   * 0.25 * b;
+
+    float y2 = max(y + delta, 0.0);
+    return c * (y2 / max(y, 1e-5));
 }
 
 vec3 applyTemperature(vec3 c) {
@@ -85,9 +92,7 @@ void main() {
     vec3 c = texture(uTexture, vUV).rgb;
     c = applyExposure(c);
     c = applyContrast(c);
-    c = applyHighlights(c);
-    c = applyShadows(c);
-    c = applyWhitesBlacks(c);
+    c = applyToneRegions(c);
     c = applyTemperature(c);
     c = applyTint(c);
     c = applySaturation(c);

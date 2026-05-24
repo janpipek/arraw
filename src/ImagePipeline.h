@@ -5,6 +5,9 @@
 #include <QString>
 #include <QRectF>
 
+// Slider ±100 → shader uniform ±0.2 (gentler than dividing by 100 alone).
+inline constexpr float kToneSliderToUniform = 500.0f;
+
 struct AdjustmentParams {
     // Tone
     float exposure    = 0.0f;     // -5.0 .. +5.0 EV
