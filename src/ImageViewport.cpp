@@ -7,10 +7,24 @@
 #include <QPaintEvent>
 #include <QOpenGLFramebufferObject>
 #include <QColorSpace>
+#include <QPainterPath>
+#include <cmath>
 
 static QVector4D cropUniform(const QRectF& cr) {
     return {float(cr.left()), float(cr.top()),
             float(cr.right()), float(cr.bottom())};
+}
+
+static QPointF rotateTexUV(float u, float v, float degrees, float aspect,
+                           float cx, float cy) {
+    float dx = (u - cx) * aspect;
+    float dy = v - cy;
+    const float rad = degrees * float(M_PI) / 180.0f;
+    const float c = std::cos(rad);
+    const float s = std::sin(rad);
+    const float rx = c * dx - s * dy;
+    const float ry = s * dx + c * dy;
+    return {rx / aspect + cx, ry + cy};
 }
 
 static const float kQuad[] = {
@@ -100,6 +114,7 @@ void ImageViewport::paintGL() {
     // While editing, show full image + overlay; after Enter, apply committed crop
     const QRectF crop = cropMode ? QRectF(0, 0, 1, 1) : p.cropRect;
     shader->setUniformValue("uCropRect",    cropUniform(crop));
+    shader->setUniformValue("uAspect",      imageAspect);
     shader->setUniformValue("uRotation",    p.rotation);
     shader->setUniformValue("uExposure",    p.exposure);
     shader->setUniformValue("uContrast",    p.contrast    / 100.0f);
@@ -129,25 +144,38 @@ void ImageViewport::paintEvent(QPaintEvent* e) {
 
 // ── Coordinate mapping ────────────────────────────────────────────────────────
 
-QPointF ImageViewport::uvToViewport(float u, float v) const {
+QPointF ImageViewport::textureUVToViewport(float u, float v) const {
+    if (!showOriginal && std::abs(params.rotation) > 0.0001f) {
+        const QPointF r = rotateTexUV(u, v, params.rotation, imageAspect, 0.5f, 0.5f);
+        u = float(r.x());
+        v = float(r.y());
+    }
+
     const float viewportAspect = float(width()) / float(height());
     const float sx = zoom * (displayAspect() / viewportAspect);
     const float sy = zoom;
-    float ndcX = (u * 2.0f - 1.0f) * sx + float(pan.x());
-    float ndcY = (1.0f - 2.0f * v) * sy + float(pan.y());
-    return QPointF(double((ndcX + 1.0f) * width()  / 2.0f),
-                   double((1.0f - ndcY) * height() / 2.0f));
+    const float ndcX = (u * 2.0f - 1.0f) * sx + float(pan.x());
+    const float ndcY = (1.0f - 2.0f * v) * sy + float(pan.y());
+    return {(ndcX + 1.0f) * width()  / 2.0f,
+            (1.0f - ndcY) * height() / 2.0f};
 }
 
-QPointF ImageViewport::viewportToUV(QPointF pos) const {
+QPointF ImageViewport::viewportToTextureUV(QPointF pos) const {
     const float viewportAspect = float(width()) / float(height());
     const float sx = zoom * (displayAspect() / viewportAspect);
     const float sy = zoom;
-    float ndcX = float(pos.x()) * 2.0f / width()  - 1.0f;
-    float ndcY = 1.0f - float(pos.y()) * 2.0f / height();
+    const float ndcX = float(pos.x()) * 2.0f / width()  - 1.0f;
+    const float ndcY = 1.0f - float(pos.y()) * 2.0f / height();
     float u = ((ndcX - float(pan.x())) / sx + 1.0f) / 2.0f;
     float v = (1.0f - (ndcY - float(pan.y())) / sy) / 2.0f;
-    return QPointF(double(u), double(v));
+
+    if (!showOriginal && std::abs(params.rotation) > 0.0001f) {
+        const QPointF r = rotateTexUV(u, v, -params.rotation, imageAspect, 0.5f, 0.5f);
+        u = float(r.x());
+        v = float(r.y());
+    }
+
+    return {u, v};
 }
 
 // ── Crop overlay ──────────────────────────────────────────────────────────────
@@ -166,7 +194,7 @@ QPointF ImageViewport::handlePos(int i) const {
         {r, b}, {cx, b}, {l, b},
         {l, cy}
     };
-    return uvToViewport(float(uvs[i].x()), float(uvs[i].y()));
+    return textureUVToViewport(float(uvs[i].x()), float(uvs[i].y()));
 }
 
 int ImageViewport::hitTest(QPointF pos) const {
@@ -177,7 +205,7 @@ int ImageViewport::hitTest(QPointF pos) const {
             return i;
     }
     // Inside rect = move
-    QPointF uv = viewportToUV(pos);
+    QPointF uv = viewportToTextureUV(pos);
     if (activeCrop.contains(uv))
         return -1;
     // Outside = (reserved for rotate, not yet implemented)
@@ -185,7 +213,7 @@ int ImageViewport::hitTest(QPointF pos) const {
 }
 
 void ImageViewport::applyCropDrag(QPointF viewportPos) {
-    QPointF uv = viewportToUV(viewportPos);
+    QPointF uv = viewportToTextureUV(viewportPos);
     float u = float(std::clamp(uv.x(), 0.0, 1.0));
     float v = float(std::clamp(uv.y(), 0.0, 1.0));
 
@@ -202,7 +230,7 @@ void ImageViewport::applyCropDrag(QPointF viewportPos) {
     case 6: r.setBottomLeft ({std::min(u, float(r.right())  - kMinSize), std::max(v, float(r.top())    + kMinSize)}); break;
     case 7: r.setLeft       (std::min(u, float(r.right())   - kMinSize)); break;
     case -1: { // move
-        QPointF startUV = viewportToUV(cropDragStart);
+        QPointF startUV = viewportToTextureUV(cropDragStart);
         float du = float(uv.x() - startUV.x());
         float dv = float(uv.y() - startUV.y());
         float w  = float(cropDragStartRect.width());
@@ -219,31 +247,37 @@ void ImageViewport::applyCropDrag(QPointF viewportPos) {
 }
 
 void ImageViewport::drawCropOverlay(QPainter& p) const {
-    QPointF tl = uvToViewport(float(activeCrop.left()),  float(activeCrop.top()));
-    QPointF br = uvToViewport(float(activeCrop.right()), float(activeCrop.bottom()));
-    QRectF cropVP(tl, br);
+    const float l = float(activeCrop.left());
+    const float r = float(activeCrop.right());
+    const float t = float(activeCrop.top());
+    const float b = float(activeCrop.bottom());
+    const QPolygonF cropPoly{
+        textureUVToViewport(l, t),
+        textureUVToViewport(r, t),
+        textureUVToViewport(r, b),
+        textureUVToViewport(l, b),
+    };
 
-    // Darkened areas outside crop rect
-    QColor shade(0, 0, 0, 140);
-    p.fillRect(QRectF(0, 0, width(), cropVP.top()),               shade);
-    p.fillRect(QRectF(0, cropVP.bottom(), width(), height()),      shade);
-    p.fillRect(QRectF(0, cropVP.top(), cropVP.left(), cropVP.height()), shade);
-    p.fillRect(QRectF(cropVP.right(), cropVP.top(),
-                      width() - cropVP.right(), cropVP.height()),  shade);
+    // Darken everything outside the (possibly rotated) crop quad
+    QPainterPath outside;
+    outside.addRect(QRectF(0, 0, width(), height()));
+    QPainterPath inside;
+    inside.addPolygon(cropPoly);
+    p.fillPath(outside.subtracted(inside), QColor(0, 0, 0, 140));
 
-    // Rule-of-thirds grid
+    // Rule-of-thirds grid (interpolate between opposite edges of the crop quad)
     p.setPen(QPen(QColor(255, 255, 255, 60), 0.5));
     for (int i = 1; i < 3; ++i) {
-        float x = float(cropVP.left() + cropVP.width()  * i / 3.0);
-        float y = float(cropVP.top()  + cropVP.height() * i / 3.0);
-        p.drawLine(QPointF(x, cropVP.top()), QPointF(x, cropVP.bottom()));
-        p.drawLine(QPointF(cropVP.left(), y), QPointF(cropVP.right(), y));
+        const qreal t = i / 3.0;
+        p.drawLine(cropPoly[0] + (cropPoly[1] - cropPoly[0]) * t,
+                   cropPoly[3] + (cropPoly[2] - cropPoly[3]) * t);
+        p.drawLine(cropPoly[0] + (cropPoly[3] - cropPoly[0]) * t,
+                   cropPoly[1] + (cropPoly[2] - cropPoly[1]) * t);
     }
 
-    // Crop border
     p.setPen(QPen(Qt::white, 1.5));
     p.setBrush(Qt::NoBrush);
-    p.drawRect(cropVP);
+    p.drawPolygon(cropPoly);
 
     // Handles
     p.setPen(QPen(Qt::white, 1.5));
@@ -331,7 +365,9 @@ QImage ImageViewport::renderToImage(const ImageBuffer& buf,
 
     // Identity transform: crop region fills the FBO
     shader->setUniformValue("uTransform", QVector4D(1.0f, 1.0f, 0.0f, 0.0f));
+    const float texAspect = float(buf.width) / float(buf.height);
     shader->setUniformValue("uCropRect",    cropUniform(cr));
+    shader->setUniformValue("uAspect",      texAspect);
     shader->setUniformValue("uRotation",    p.rotation);
     shader->setUniformValue("uExposure",    p.exposure);
     shader->setUniformValue("uContrast",    p.contrast    / 100.0f);

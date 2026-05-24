@@ -50,9 +50,9 @@ private:
     void reloadShaders();
     QOpenGLTexture* activeTexture() const;
 
-    // Coordinate mapping between normalised UV [0..1] and viewport pixels
-    QPointF uvToViewport(float u, float v) const;
-    QPointF viewportToUV(QPointF pos) const;
+    // Map texture UV ↔ viewport (matches vertex shader: image-centre rotation + fit)
+    QPointF textureUVToViewport(float u, float v) const;
+    QPointF viewportToTextureUV(QPointF pos) const;
 
     // Returns handle index 0-7, or -1 for "inside rect" (move), or -2 for "outside" (rotate)
     int hitTest(QPointF viewportPos) const;
