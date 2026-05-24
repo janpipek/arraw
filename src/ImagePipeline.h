@@ -23,6 +23,8 @@ struct AdjustmentParams {
 
     // Geometry
     float rotation    = 0.0f;     // degrees, -45 .. +45
+
+    bool operator==(const AdjustmentParams&) const = default;
 };
 
 // Linear float32 RGB image buffer, interleaved, [0..1] nominal.

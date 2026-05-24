@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 #include "ImageViewport.h"
 #include "AdjustmentPanel.h"
+#include "FileBrowser.h"
 #include "RawProcessor.h"
 #include "XmpSidecar.h"
 #include <QMenuBar>
@@ -12,14 +13,40 @@
 #include <QScrollArea>
 #include <QFileInfo>
 #include <QApplication>
+#include <QCloseEvent>
+#include <QDir>
+#include <QKeyEvent>
+#include <QSettings>
+#include <QUndoStack>
+#include <QUndoCommand>
+#include <QColorSpace>
 #include <QtConcurrent/QtConcurrent>
 #include <cmath>
 
+// ---------------------------------------------------------------------------
+// Undo command: captures before/after AdjustmentParams for a single gesture.
+// ---------------------------------------------------------------------------
+class AdjustmentCommand : public QUndoCommand {
+public:
+    AdjustmentCommand(AdjustmentPanel* panel,
+                      const AdjustmentParams& before,
+                      const AdjustmentParams& after)
+        : panel(panel), before(before), after(after) {}
+
+    void undo() override { panel->setParams(before); }
+    void redo() override { panel->setParams(after);  }
+
+private:
+    AdjustmentPanel* panel;
+    AdjustmentParams before, after;
+};
+
+// ---------------------------------------------------------------------------
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     setWindowTitle("arraw");
-    resize(1400, 900);
 
-    viewport = new ImageViewport(this);
+    viewport    = new ImageViewport(this);
+    undoStack   = new QUndoStack(this);
     setCentralWidget(viewport);
 
     setupDocks();
@@ -30,6 +57,36 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     connect(&loadWatcher, &QFutureWatcher<LoadResult>::finished,
             this, &MainWindow::onLoadFinished);
+
+    connect(viewport, &ImageViewport::fullResNeeded,
+            this, &MainWindow::onFullResNeeded);
+
+    connect(adjPanel, &AdjustmentPanel::adjustmentCommitted,
+            this, [this](const AdjustmentParams& before, const AdjustmentParams& after) {
+                undoStack->push(new AdjustmentCommand(adjPanel, before, after));
+            });
+
+    connect(adjPanel, &AdjustmentPanel::paramsChanged,
+            viewport, &ImageViewport::setAdjustments);
+
+    // Restore window geometry
+    QSettings s;
+    restoreGeometry(s.value("geometry").toByteArray());
+    restoreState(s.value("windowState").toByteArray());
+}
+
+void MainWindow::closeEvent(QCloseEvent* e) {
+    QSettings s;
+    s.setValue("geometry",    saveGeometry());
+    s.setValue("windowState", saveState());
+    s.setValue("lastDir",     QFileInfo(currentPath).absolutePath());
+    QMainWindow::closeEvent(e);
+}
+
+void MainWindow::keyPressEvent(QKeyEvent* e) {
+    if (e->key() == Qt::Key_Left)       fileBrowser->navigateBy(-1);
+    else if (e->key() == Qt::Key_Right) fileBrowser->navigateBy(+1);
+    else QMainWindow::keyPressEvent(e);
 }
 
 void MainWindow::setupMenus() {
@@ -41,34 +98,50 @@ void MainWindow::setupMenus() {
     file->addSeparator();
     file->addAction("&Quit", qApp, &QCoreApplication::quit, QKeySequence::Quit);
 
+    auto* edit = menuBar()->addMenu("&Edit");
+    edit->addAction(undoStack->createUndoAction(this));
+    edit->addAction(undoStack->createRedoAction(this));
+
     auto* view = menuBar()->addMenu("&View");
     view->addAction("Reset Zoom", viewport, [this] {
-        // TODO: expose zoom reset on viewport
+        // TODO: expose zoom reset
     }, Qt::CTRL | Qt::Key_0);
 }
 
 void MainWindow::setupDocks() {
-    auto* dock = new QDockWidget("Adjustments", this);
-    dock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
-    dock->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable);
+    // File browser (left)
+    auto* leftDock = new QDockWidget("Files", this);
+    leftDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
+    leftDock->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable);
+    fileBrowser = new FileBrowser(leftDock);
+    fileBrowser->setMinimumWidth(180);
+    leftDock->setWidget(fileBrowser);
+    addDockWidget(Qt::LeftDockWidgetArea, leftDock);
 
-    auto* scroll = new QScrollArea(dock);
+    connect(fileBrowser, &FileBrowser::fileSelected,
+            this, &MainWindow::loadImage);
+
+    // Adjustments (right)
+    auto* rightDock = new QDockWidget("Adjustments", this);
+    rightDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
+    rightDock->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable);
+
+    auto* scroll = new QScrollArea(rightDock);
     adjPanel = new AdjustmentPanel(scroll);
     scroll->setWidget(adjPanel);
     scroll->setWidgetResizable(true);
     scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     scroll->setMinimumWidth(280);
-    dock->setWidget(scroll);
-
-    addDockWidget(Qt::RightDockWidgetArea, dock);
-
-    connect(adjPanel, &AdjustmentPanel::paramsChanged,
-            viewport, &ImageViewport::setAdjustments);
+    rightDock->setWidget(scroll);
+    addDockWidget(Qt::RightDockWidgetArea, rightDock);
+    // adjPanel → viewport paramsChanged wired in constructor (after both are created)
 }
 
 void MainWindow::openFile() {
+    QSettings s;
+    const QString startDir = s.value("lastDir", QDir::homePath()).toString();
     const QString path = QFileDialog::getOpenFileName(
-        this, "Open RAW Image", {},
+        this, "Open RAW Image", startDir,
         "RAW Images (*.cr2 *.cr3 *.nef *.arw *.dng *.raf *.orf *.rw2 *.pef *.srw);;"
         "All Files (*)");
     if (!path.isEmpty())
@@ -80,6 +153,10 @@ void MainWindow::loadImage(const QString& path) {
 
     currentPath = path;
     setLoadingState(true);
+
+    // Populate browser from the file's directory
+    fileBrowser->setDirectory(QFileInfo(path).absolutePath());
+    fileBrowser->setCurrentFile(path);
 
     loadWatcher.setFuture(
         QtConcurrent::run([path]() -> LoadResult {
@@ -103,14 +180,19 @@ void MainWindow::onLoadFinished() {
 
     viewport->setImage(preview);
     adjPanel->setHistogramImage(preview);
+    undoStack->clear();
 
     AdjustmentParams saved = XmpSidecar::load(currentPath);
     adjPanel->setParams(saved);
 
-    statusLabel->setText(QString("%1  —  %2 × %3  (preview: %4 × %5)")
+    statusLabel->setText(QString("%1  —  %2 × %3")
         .arg(QFileInfo(currentPath).fileName())
-        .arg(fullRes.width).arg(fullRes.height)
-        .arg(preview.width).arg(preview.height));
+        .arg(fullRes.width).arg(fullRes.height));
+}
+
+void MainWindow::onFullResNeeded() {
+    if (fullRes.valid())
+        viewport->setFullResImage(fullRes);
 }
 
 void MainWindow::setLoadingState(bool loading) {
@@ -137,18 +219,17 @@ void MainWindow::exportFile() {
     }
 
     const QString path = QFileDialog::getSaveFileName(
-        this, "Export Image", {},
+        this, "Export Image", QFileInfo(currentPath).absolutePath(),
         "JPEG (*.jpg *.jpeg);;PNG (*.png);;TIFF (*.tif *.tiff)");
     if (path.isEmpty()) return;
 
-    // CPU export: exposure + gamma 2.2 only. FBO readback (WYSIWYG) is next step.
+    // CPU export: exposure + gamma 2.2. FBO readback (WYSIWYG) is next milestone.
     const int w = fullRes.width;
     const int h = fullRes.height;
     const AdjustmentParams p = adjPanel->params();
-
-    QImage out(w, h, QImage::Format_RGB888);
     const float expMul = std::pow(2.0f, p.exposure);
 
+    QImage out(w, h, QImage::Format_RGB888);
     for (int y = 0; y < h; ++y) {
         uchar* row = out.scanLine(y);
         for (int x = 0; x < w; ++x) {
@@ -162,6 +243,8 @@ void MainWindow::exportFile() {
             row[x * 3 + 2] = tonemap(fullRes.data[idx + 2]);
         }
     }
+
+    out.setColorSpace(QColorSpace(QColorSpace::SRgb));
 
     if (!out.save(path))
         QMessageBox::critical(this, "Export Error", "Failed to save " + path);

@@ -17,6 +17,9 @@ public:
     void setFullResImage(const ImageBuffer& fullRes);
     void setAdjustments(const AdjustmentParams& p);
 
+signals:
+    void fullResNeeded();  // emitted when zoom crosses threshold and full-res isn't loaded yet
+
 protected:
     void initializeGL() override;
     void resizeGL(int w, int h) override;

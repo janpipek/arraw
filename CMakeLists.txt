@@ -28,6 +28,7 @@ set(SOURCES
     src/RawProcessor.cpp
     src/ImagePipeline.cpp
     src/XmpSidecar.cpp
+    src/FileBrowser.cpp
 )
 
 

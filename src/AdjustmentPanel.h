@@ -4,6 +4,7 @@
 
 class QSlider;
 class QLabel;
+class QComboBox;
 class QVBoxLayout;
 class Histogram;
 
@@ -19,6 +20,8 @@ public:
 
 signals:
     void paramsChanged(const AdjustmentParams&);
+    // Emitted on sliderReleased with before/after state — used by undo stack.
+    void adjustmentCommitted(const AdjustmentParams& before, const AdjustmentParams& after);
 
 private:
     struct SliderRow {
@@ -27,10 +30,12 @@ private:
     };
 
     SliderRow addSlider(QVBoxLayout* layout, const QString& name,
-                        int min, int max, int defaultVal);
+                        int min, int max, int defaultVal,
+                        const QString& suffix = {});
     void connectAll();
 
-    Histogram* histogram;
+    Histogram*  histogram;
+    QComboBox*  wbPresets;
 
     SliderRow exposure;
     SliderRow contrast;
@@ -43,6 +48,8 @@ private:
     SliderRow saturation;
     SliderRow vibrance;
     SliderRow sharpening;
+    SliderRow rotation;
 
     AdjustmentParams adjustments;
+    AdjustmentParams beforeDrag;   // snapshot on sliderPressed for undo
 };

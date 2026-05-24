@@ -5,7 +5,8 @@
 
 class ImageViewport;
 class AdjustmentPanel;
-class QDockWidget;
+class FileBrowser;
+class QUndoStack;
 class QLabel;
 
 class MainWindow : public QMainWindow {
@@ -13,11 +14,16 @@ class MainWindow : public QMainWindow {
 public:
     explicit MainWindow(QWidget* parent = nullptr);
 
+protected:
+    void closeEvent(QCloseEvent* e) override;
+    void keyPressEvent(QKeyEvent* e) override;
+
 private slots:
     void openFile();
     void saveAdjustments();
     void exportFile();
     void onLoadFinished();
+    void onFullResNeeded();
 
 private:
     void setupMenus();
@@ -27,10 +33,12 @@ private:
 
     ImageViewport*   viewport;
     AdjustmentPanel* adjPanel;
+    FileBrowser*     fileBrowser;
+    QUndoStack*      undoStack;
     QLabel*          statusLabel;
 
-    ImageBuffer fullRes;    // export only
-    ImageBuffer preview;    // viewport + histogram
+    ImageBuffer fullRes;
+    ImageBuffer preview;
     QString     currentPath;
 
     QFutureWatcher<LoadResult> loadWatcher;
