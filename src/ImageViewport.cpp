@@ -5,6 +5,8 @@
 #include <QPainter>
 #include <QCoreApplication>
 #include <QPaintEvent>
+#include <QOpenGLFramebufferObject>
+#include <QColorSpace>
 
 static const float kQuad[] = {
     -1, -1,   0, 1,
@@ -276,6 +278,82 @@ void ImageViewport::uploadTexture(const ImageBuffer& buf,
     target->setMinMagFilters(QOpenGLTexture::Linear, QOpenGLTexture::Linear);
     target->allocateStorage();
     target->setData(QOpenGLTexture::RGB, QOpenGLTexture::Float32, buf.data.data());
+}
+
+// ── Offscreen export render ───────────────────────────────────────────────────
+
+QImage ImageViewport::renderToImage(const ImageBuffer& buf,
+                                     const AdjustmentParams& p,
+                                     int outW, int outH)
+{
+    makeCurrent();
+
+    // Temporary texture for the full-res buffer
+    QOpenGLTexture exportTex(QOpenGLTexture::Target2D);
+    exportTex.setSize(buf.width, buf.height);
+    exportTex.setFormat(QOpenGLTexture::RGB32F);
+    exportTex.setMinMagFilters(QOpenGLTexture::Linear, QOpenGLTexture::Linear);
+    exportTex.allocateStorage();
+    exportTex.setData(QOpenGLTexture::RGB, QOpenGLTexture::Float32, buf.data.data());
+
+    // Offscreen FBO at full-res size
+    QOpenGLFramebufferObjectFormat fboFmt;
+    fboFmt.setAttachment(QOpenGLFramebufferObject::NoAttachment);
+    fboFmt.setInternalTextureFormat(GL_RGBA8);
+    QOpenGLFramebufferObject fbo(buf.width, buf.height, fboFmt);
+    fbo.bind();
+
+    glViewport(0, 0, buf.width, buf.height);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    shader->bind();
+    exportTex.bind(0);
+    shader->setUniformValue("uTexture", 0);
+
+    // Identity transform renders the whole image with no pan/zoom
+    shader->setUniformValue("uTransform", QVector4D(1.0f, 1.0f, 0.0f, 0.0f));
+    shader->setUniformValue("uRotation",    p.rotation);
+    shader->setUniformValue("uExposure",    p.exposure);
+    shader->setUniformValue("uContrast",    p.contrast    / 100.0f);
+    shader->setUniformValue("uHighlights",  p.highlights  / 100.0f);
+    shader->setUniformValue("uShadows",     p.shadows     / 100.0f);
+    shader->setUniformValue("uWhites",      p.whites      / 100.0f);
+    shader->setUniformValue("uBlacks",      p.blacks      / 100.0f);
+    shader->setUniformValue("uTemperature", p.temperature);
+    shader->setUniformValue("uTint",        p.tint        / 100.0f);
+    shader->setUniformValue("uSaturation",  p.saturation  / 100.0f);
+    shader->setUniformValue("uVibrance",    p.vibrance    / 100.0f);
+
+    glBindVertexArray(vao);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    exportTex.release();
+    shader->release();
+
+    // Read back — toImage() returns ARGB32 with Y=0 at top (Qt flips automatically)
+    QImage result = fbo.toImage();
+
+    fbo.release();
+    glViewport(0, 0, width(), height());
+    doneCurrent();
+
+    result = result.convertToFormat(QImage::Format_RGB888);
+
+    // Crop to params.cropRect (UV coordinates)
+    const QRectF& cr = p.cropRect;
+    if (cr != QRectF(0, 0, 1, 1)) {
+        int cx = int(cr.x()      * buf.width  + 0.5);
+        int cy = int(cr.y()      * buf.height + 0.5);
+        int cw = int(cr.width()  * buf.width  + 0.5);
+        int ch = int(cr.height() * buf.height + 0.5);
+        result = result.copy(cx, cy, cw, ch);
+    }
+
+    // Scale to requested output dimensions
+    if (result.width() != outW || result.height() != outH)
+        result = result.scaled(outW, outH, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+
+    result.setColorSpace(QColorSpace(QColorSpace::SRgb));
+    return result;
 }
 
 // ── Input events ──────────────────────────────────────────────────────────────

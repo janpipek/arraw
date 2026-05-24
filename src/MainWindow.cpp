@@ -4,6 +4,7 @@
 #include "FileBrowser.h"
 #include "RawProcessor.h"
 #include "XmpSidecar.h"
+#include "ExportDialog.h"
 #include <QMenuBar>
 #include <QDockWidget>
 #include <QFileDialog>
@@ -21,6 +22,7 @@
 #include <QUndoCommand>
 #include <QColorSpace>
 #include <QtConcurrent/QtConcurrent>
+#include <algorithm>
 #include <cmath>
 
 // ---------------------------------------------------------------------------
@@ -232,41 +234,77 @@ void MainWindow::saveAdjustments() {
             "Could not write " + XmpSidecar::pathFor(currentPath));
 }
 
+// Simple unsharp mask: radius ≈ 1% of image width, amount 0..100.
+static QImage applyUnsharpMask(QImage img, int amount) {
+    if (amount == 0) return img;
+    const float a = amount / 100.0f;
+    int r = std::max(1, img.width() / 100);
+    QImage blurred = img.scaled(img.width()  / (r + 1),
+                                img.height() / (r + 1),
+                                Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
+                       .scaled(img.width(), img.height(),
+                               Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    for (int y = 0; y < img.height(); ++y) {
+        const uchar* src = img.constScanLine(y);
+        const uchar* blr = blurred.constScanLine(y);
+        uchar* dst = img.scanLine(y);
+        for (int x = 0; x < img.width() * 3; ++x) {
+            int v = int(src[x]) + int(a * (int(src[x]) - int(blr[x])));
+            dst[x] = uchar(std::clamp(v, 0, 255));
+        }
+    }
+    return img;
+}
+
 void MainWindow::exportFile() {
     if (!fullRes.valid()) {
         QMessageBox::information(this, "Export", "No image loaded.");
         return;
     }
 
-    const QString path = QFileDialog::getSaveFileName(
-        this, "Export Image", QFileInfo(currentPath).absolutePath(),
-        "JPEG (*.jpg *.jpeg);;PNG (*.png);;TIFF (*.tif *.tiff)");
-    if (path.isEmpty()) return;
-
-    // CPU export: exposure + gamma 2.2. FBO readback (WYSIWYG) is next milestone.
-    const int w = fullRes.width;
-    const int h = fullRes.height;
     const AdjustmentParams p = adjPanel->params();
-    const float expMul = std::pow(2.0f, p.exposure);
 
-    QImage out(w, h, QImage::Format_RGB888);
-    for (int y = 0; y < h; ++y) {
-        uchar* row = out.scanLine(y);
-        for (int x = 0; x < w; ++x) {
-            const int idx = (y * w + x) * 3;
-            auto tonemap = [&](float v) -> uchar {
-                v = std::clamp(v * expMul, 0.0f, 1.0f);
-                return uchar(std::pow(v, 1.0f / 2.2f) * 255.0f + 0.5f);
-            };
-            row[x * 3 + 0] = tonemap(fullRes.data[idx + 0]);
-            row[x * 3 + 1] = tonemap(fullRes.data[idx + 1]);
-            row[x * 3 + 2] = tonemap(fullRes.data[idx + 2]);
-        }
+    // Natural output size = full-res pixels inside the crop rect
+    const int naturalW = int(fullRes.width  * p.cropRect.width()  + 0.5);
+    const int naturalH = int(fullRes.height * p.cropRect.height() + 0.5);
+
+    ExportDialog optDlg(naturalW, naturalH, this);
+    if (optDlg.exec() != QDialog::Accepted)
+        return;
+
+    const ExportOptions opts = optDlg.options();
+
+    QString suffix, filter;
+    switch (opts.format) {
+    case ExportOptions::Format::JPEG: suffix = "jpg";  filter = "JPEG (*.jpg *.jpeg)"; break;
+    case ExportOptions::Format::PNG:  suffix = "png";  filter = "PNG (*.png)";         break;
+    case ExportOptions::Format::TIFF: suffix = "tif";  filter = "TIFF (*.tif *.tiff)"; break;
     }
 
-    out.setColorSpace(QColorSpace(QColorSpace::SRgb));
+    QFileDialog fileDlg(this, "Export Image", QFileInfo(currentPath).absolutePath());
+    fileDlg.setAcceptMode(QFileDialog::AcceptSave);
+    fileDlg.setNameFilter(filter);
+    fileDlg.setDefaultSuffix(suffix);
+    if (fileDlg.exec() != QDialog::Accepted)
+        return;
 
-    if (!out.save(path))
+    QString path = fileDlg.selectedFiles().constFirst();
+    if (QFileInfo(path).suffix().isEmpty())
+        path += "." + suffix;
+
+    statusLabel->setText("Exporting…");
+    QApplication::processEvents();
+
+    QImage out = viewport->renderToImage(fullRes, p, opts.width, opts.height);
+    out = applyUnsharpMask(std::move(out), opts.sharpening);
+
+    bool ok;
+    if (opts.format == ExportOptions::Format::JPEG)
+        ok = out.save(path, "JPEG", opts.quality);
+    else
+        ok = out.save(path);
+
+    if (!ok)
         QMessageBox::critical(this, "Export Error", "Failed to save " + path);
     else
         statusLabel->setText("Exported: " + QFileInfo(path).fileName());

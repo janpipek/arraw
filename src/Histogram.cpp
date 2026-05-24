@@ -6,6 +6,10 @@
 Histogram::Histogram(QWidget* parent) : QWidget(parent) {
     setMinimumHeight(80);
     setMaximumHeight(120);
+
+    debounce.setSingleShot(true);
+    debounce.setInterval(150);
+    connect(&debounce, &QTimer::timeout, this, &Histogram::recompute);
 }
 
 void Histogram::setImage(const ImageBuffer& buf) {
@@ -16,7 +20,7 @@ void Histogram::setImage(const ImageBuffer& buf) {
 void Histogram::setAdjustments(const AdjustmentParams& p) {
     params = p;
     if (rawBuf.valid())
-        recompute();
+        debounce.start();   // restarts the timer if already running
 }
 
 // CPU mirror of the shader pipeline — applied to sampled preview pixels.

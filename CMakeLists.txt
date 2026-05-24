@@ -29,6 +29,7 @@ set(SOURCES
     src/ImagePipeline.cpp
     src/XmpSidecar.cpp
     src/FileBrowser.cpp
+    src/ExportDialog.cpp
 )
 
 

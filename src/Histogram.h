@@ -1,6 +1,7 @@
 #pragma once
 #include "ImagePipeline.h"
 #include <QWidget>
+#include <QTimer>
 #include <array>
 
 class Histogram : public QWidget {
@@ -17,11 +18,12 @@ protected:
 private:
     void recompute();
 
-    static constexpr int kBins  = 256;
-    static constexpr int kStride = 4;   // sample every 4th pixel for speed
+    static constexpr int kBins   = 256;
+    static constexpr int kStride = 4;    // sample every 4th pixel for speed
 
     ImageBuffer      rawBuf;
     AdjustmentParams params;
+    QTimer           debounce;
 
     std::array<int, kBins> r{}, g{}, b{};
     int peak = 1;

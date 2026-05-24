@@ -4,6 +4,7 @@
 #include <QOpenGLFunctions_3_3_Core>
 #include <QOpenGLShaderProgram>
 #include <QOpenGLTexture>
+#include <QImage>
 #include <QPointF>
 #include <QRectF>
 #include <memory>
@@ -17,6 +18,11 @@ public:
     void setImage(const ImageBuffer& preview);
     void setFullResImage(const ImageBuffer& fullRes);
     void setAdjustments(const AdjustmentParams& p);
+
+    // Render buf through the full shader pipeline into an offscreen FBO.
+    // Returns an sRGB QImage cropped to params.cropRect and scaled to outW×outH.
+    QImage renderToImage(const ImageBuffer& buf, const AdjustmentParams& params,
+                         int outW, int outH);
 
 signals:
     void fullResNeeded();

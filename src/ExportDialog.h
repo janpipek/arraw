@@ -1,0 +1,45 @@
+#pragma once
+#include <QDialog>
+
+class QComboBox;
+class QSpinBox;
+class QSlider;
+class QCheckBox;
+class QGroupBox;
+class QLabel;
+
+struct ExportOptions {
+    enum class Format { JPEG, PNG, TIFF };
+    Format format    = Format::JPEG;
+    int    width     = 0;
+    int    height    = 0;
+    int    quality   = 90;
+    int    sharpening = 0;
+};
+
+class ExportDialog : public QDialog {
+    Q_OBJECT
+public:
+    // srcW/srcH: natural pixel dimensions after crop (used as default output size)
+    ExportDialog(int srcW, int srcH, QWidget* parent = nullptr);
+
+    ExportOptions options() const;
+
+private:
+    void onFormatChanged(int idx);
+    void onWidthChanged(int w);
+    void onHeightChanged(int h);
+
+    int  srcW, srcH;
+    bool syncing = false;
+
+    QComboBox* formatBox;
+    QSpinBox*  widthSpin;
+    QSpinBox*  heightSpin;
+    QCheckBox* constrainCheck;
+    QGroupBox* qualityGroup;
+    QSlider*   qualitySlider;
+    QSpinBox*  qualitySpin;
+    QSlider*   sharpenSlider;
+    QSpinBox*  sharpenSpin;
+};
