@@ -1,4 +1,5 @@
 #pragma once
+#include "ImageMetadata.h"
 #include <cstdint>
 #include <vector>
 #include <QString>
@@ -40,9 +41,10 @@ struct ImageBuffer {
 
 // Returned by the background load task.
 struct LoadResult {
-    ImageBuffer fullRes;   // stored for export only
-    ImageBuffer preview;   // 1/4-res (half W, half H) — used for viewport + histogram
-    QString     error;     // non-empty on failure
+    ImageBuffer    fullRes;   // stored for export only
+    ImageBuffer    preview;   // 1/4-res (half W, half H) — used for viewport + histogram
+    ImageMetadata  metadata;
+    QString        error;     // non-empty on failure
 };
 
 // Box-filter 2× downsample (half W, half H). Safe to call off the main thread.

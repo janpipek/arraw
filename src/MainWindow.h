@@ -5,6 +5,7 @@
 
 class ImageViewport;
 class AdjustmentPanel;
+class ExifPanel;
 class FileBrowser;
 class QUndoStack;
 class QLabel;
@@ -37,6 +38,7 @@ private:
 
     ImageViewport*   viewport;
     AdjustmentPanel* adjPanel;
+    ExifPanel*       exifPanel;
     FileBrowser*     fileBrowser;
     QUndoStack*      undoStack;
     QLabel*          statusLabel;

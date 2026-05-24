@@ -135,11 +135,16 @@ void ImageViewport::paintGL() {
 
 void ImageViewport::paintEvent(QPaintEvent* e) {
     QOpenGLWidget::paintEvent(e);   // calls paintGL
-    if (cropMode && hasImage) {
-        QPainter p(this);
-        p.setRenderHint(QPainter::Antialiasing);
+    if (!hasImage)
+        return;
+
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+
+    if (cropMode)
         drawCropOverlay(p);
-    }
+    else if (shouldShowAlignGrid())
+        drawAlignGrid(p);
 }
 
 // ── Coordinate mapping ────────────────────────────────────────────────────────
@@ -178,10 +183,112 @@ QPointF ImageViewport::viewportToTextureUV(QPointF pos) const {
     return {u, v};
 }
 
+bool ImageViewport::useViewportCrop() const {
+    return cropMode && std::abs(params.rotation) > 0.01f;
+}
+
+QRectF ImageViewport::rotatedImageViewportBounds() const {
+    const QPointF corners[4] = {
+        textureUVToViewport(0.f, 0.f), textureUVToViewport(1.f, 0.f),
+        textureUVToViewport(1.f, 1.f), textureUVToViewport(0.f, 1.f),
+    };
+    QRectF bounds;
+    for (const QPointF& c : corners)
+        bounds |= QRectF(c, QSizeF(0, 0));
+    return bounds.normalized();
+}
+
+QRectF ImageViewport::textureCropToViewportBounds(const QRectF& tex) const {
+    const QPointF corners[4] = {
+        textureUVToViewport(float(tex.left()),  float(tex.top())),
+        textureUVToViewport(float(tex.right()), float(tex.top())),
+        textureUVToViewport(float(tex.right()), float(tex.bottom())),
+        textureUVToViewport(float(tex.left()),  float(tex.bottom())),
+    };
+    QRectF bounds;
+    for (const QPointF& c : corners)
+        bounds |= QRectF(c, QSizeF(0, 0));
+    return bounds.normalized();
+}
+
+QRectF ImageViewport::viewportCropToTextureCrop(const QRectF& vp) const {
+    const QPointF corners[4] = {
+        viewportToTextureUV(vp.topLeft()),
+        viewportToTextureUV(vp.topRight()),
+        viewportToTextureUV(vp.bottomRight()),
+        viewportToTextureUV(vp.bottomLeft()),
+    };
+    float minU = 1.f, minV = 1.f, maxU = 0.f, maxV = 0.f;
+    for (const QPointF& c : corners) {
+        minU = std::min(minU, float(c.x()));
+        maxU = std::max(maxU, float(c.x()));
+        minV = std::min(minV, float(c.y()));
+        maxV = std::max(maxV, float(c.y()));
+    }
+    minU = std::clamp(minU, 0.f, 1.f);
+    maxU = std::clamp(maxU, 0.f, 1.f);
+    minV = std::clamp(minV, 0.f, 1.f);
+    maxV = std::clamp(maxV, 0.f, 1.f);
+    return {minU, minV, maxU - minU, maxV - minV};
+}
+
+// ── Straighten alignment grid (viewport-fixed horizontals / verticals) ────────
+
+bool ImageViewport::shouldShowAlignGrid() const {
+    if (!hasImage || cropMode || showOriginal)
+        return false;
+    if (straightenActive)
+        return true;
+    return std::abs(params.rotation) > 0.01f;
+}
+
+void ImageViewport::drawAlignGrid(QPainter& p) const {
+    const int w = width();
+    const int h = height();
+    const int cx = w / 2;
+    const int cy = h / 2;
+    const int hSpacing = qMax(32, h / 10);
+    const int vSpacing = qMax(32, w / 10);
+
+    const QPen minorPen(QColor(255, 255, 255, 45), 0.5, Qt::DashLine);
+    const QPen majorPen(QColor(255, 255, 255, 110), 1.0, Qt::DashLine);
+
+    // Horizontal lines — primary guides for horizon / level alignment
+    p.setPen(minorPen);
+    for (int y = cy - hSpacing; y > 0; y -= hSpacing)
+        p.drawLine(0, y, w, y);
+    for (int y = cy + hSpacing; y < h; y += hSpacing)
+        p.drawLine(0, y, w, y);
+
+    p.setPen(majorPen);
+    p.drawLine(0, cy, w, cy);
+
+    // Vertical references
+    p.setPen(minorPen);
+    for (int x = cx - vSpacing; x > 0; x -= vSpacing)
+        p.drawLine(x, 0, x, h);
+    for (int x = cx + vSpacing; x < w; x += vSpacing)
+        p.drawLine(x, 0, x, h);
+
+    p.setPen(majorPen);
+    p.drawLine(cx, 0, cx, h);
+}
+
 // ── Crop overlay ──────────────────────────────────────────────────────────────
 
 // Handle positions in order: TL, TC, TR, MR, BR, BC, BL, ML
 QPointF ImageViewport::handlePos(int i) const {
+    if (useViewportCrop()) {
+        const QRectF& r = activeCropViewport;
+        const QPointF pts[kHandleCount] = {
+            r.topLeft(), {r.center().x(), r.top()}, r.topRight(),
+            {r.right(), r.center().y()},
+            r.bottomRight(), {r.center().x(), r.bottom()}, r.bottomLeft(),
+            {r.left(), r.center().y()},
+        };
+        return pts[i];
+    }
+
     const float l = float(activeCrop.left());
     const float r = float(activeCrop.right());
     const float t = float(activeCrop.top());
@@ -198,21 +305,56 @@ QPointF ImageViewport::handlePos(int i) const {
 }
 
 int ImageViewport::hitTest(QPointF pos) const {
-    // Check handles first
     for (int i = 0; i < kHandleCount; ++i) {
         QPointF d = pos - handlePos(i);
         if (d.x()*d.x() + d.y()*d.y() < kHandleRadius * kHandleRadius * 4)
             return i;
     }
-    // Inside rect = move
-    QPointF uv = viewportToTextureUV(pos);
-    if (activeCrop.contains(uv))
+    if (useViewportCrop()) {
+        if (activeCropViewport.contains(pos))
+            return -1;
+    } else if (activeCrop.contains(viewportToTextureUV(pos))) {
         return -1;
-    // Outside = (reserved for rotate, not yet implemented)
+    }
     return -2;
 }
 
+void ImageViewport::applyCropDragViewport(QPointF pos) {
+    QRectF r = cropDragStartRect;
+    const qreal kMin = 24.0;
+    const QRectF limits = rotatedImageViewportBounds();
+
+    switch (cropDragHandle) {
+    case 0: r.setTopLeft({std::min(pos.x(), r.right() - kMin),
+                          std::min(pos.y(), r.bottom() - kMin)}); break;
+    case 1: r.setTop(std::min(pos.y(), r.bottom() - kMin)); break;
+    case 2: r.setTopRight({std::max(pos.x(), r.left() + kMin),
+                           std::min(pos.y(), r.bottom() - kMin)}); break;
+    case 3: r.setRight(std::max(pos.x(), r.left() + kMin)); break;
+    case 4: r.setBottomRight({std::max(pos.x(), r.left() + kMin),
+                              std::max(pos.y(), r.top() + kMin)}); break;
+    case 5: r.setBottom(std::max(pos.y(), r.top() + kMin)); break;
+    case 6: r.setBottomLeft({std::min(pos.x(), r.right() - kMin),
+                             std::max(pos.y(), r.top() + kMin)}); break;
+    case 7: r.setLeft(std::min(pos.x(), r.right() - kMin)); break;
+    case -1:
+        r = cropDragStartRect.translated(pos - cropDragStart);
+        break;
+    default:
+        return;
+    }
+
+    activeCropViewport = r.intersected(limits).normalized();
+    if (activeCropViewport.width() < kMin || activeCropViewport.height() < kMin)
+        activeCropViewport = cropDragStartRect;
+    update();
+}
+
 void ImageViewport::applyCropDrag(QPointF viewportPos) {
+    if (useViewportCrop()) {
+        applyCropDragViewport(viewportPos);
+        return;
+    }
     QPointF uv = viewportToTextureUV(viewportPos);
     float u = float(std::clamp(uv.x(), 0.0, 1.0));
     float v = float(std::clamp(uv.y(), 0.0, 1.0));
@@ -247,39 +389,31 @@ void ImageViewport::applyCropDrag(QPointF viewportPos) {
 }
 
 void ImageViewport::drawCropOverlay(QPainter& p) const {
-    const float l = float(activeCrop.left());
-    const float r = float(activeCrop.right());
-    const float t = float(activeCrop.top());
-    const float b = float(activeCrop.bottom());
-    const QPolygonF cropPoly{
-        textureUVToViewport(l, t),
-        textureUVToViewport(r, t),
-        textureUVToViewport(r, b),
-        textureUVToViewport(l, b),
-    };
+    const QRectF cropVP = useViewportCrop()
+        ? activeCropViewport
+        : QRectF(textureUVToViewport(float(activeCrop.left()), float(activeCrop.top())),
+                 textureUVToViewport(float(activeCrop.right()), float(activeCrop.bottom())))
+              .normalized();
 
-    // Darken everything outside the (possibly rotated) crop quad
     QPainterPath outside;
     outside.addRect(QRectF(0, 0, width(), height()));
     QPainterPath inside;
-    inside.addPolygon(cropPoly);
+    inside.addRect(cropVP);
     p.fillPath(outside.subtracted(inside), QColor(0, 0, 0, 140));
 
-    // Rule-of-thirds grid (interpolate between opposite edges of the crop quad)
     p.setPen(QPen(QColor(255, 255, 255, 60), 0.5));
     for (int i = 1; i < 3; ++i) {
         const qreal t = i / 3.0;
-        p.drawLine(cropPoly[0] + (cropPoly[1] - cropPoly[0]) * t,
-                   cropPoly[3] + (cropPoly[2] - cropPoly[3]) * t);
-        p.drawLine(cropPoly[0] + (cropPoly[3] - cropPoly[0]) * t,
-                   cropPoly[1] + (cropPoly[2] - cropPoly[1]) * t);
+        const qreal x = cropVP.left() + cropVP.width() * t;
+        const qreal y = cropVP.top() + cropVP.height() * t;
+        p.drawLine(QPointF(x, cropVP.top()), QPointF(x, cropVP.bottom()));
+        p.drawLine(QPointF(cropVP.left(), y), QPointF(cropVP.right(), y));
     }
 
     p.setPen(QPen(Qt::white, 1.5));
     p.setBrush(Qt::NoBrush);
-    p.drawPolygon(cropPoly);
+    p.drawRect(cropVP);
 
-    // Handles
     p.setPen(QPen(Qt::white, 1.5));
     p.setBrush(Qt::white);
     for (int i = 0; i < kHandleCount; ++i) {
@@ -316,6 +450,13 @@ void ImageViewport::setAdjustments(const AdjustmentParams& p) {
     params = p;
     if (!cropMode)
         activeCrop = p.cropRect;
+    update();
+}
+
+void ImageViewport::setStraightenActive(bool active) {
+    if (straightenActive == active)
+        return;
+    straightenActive = active;
     update();
 }
 
@@ -417,7 +558,7 @@ void ImageViewport::mousePressEvent(QMouseEvent* e) {
     if (cropMode && e->button() == Qt::LeftButton) {
         cropDragHandle    = hitTest(e->position());
         cropDragStart     = e->position();
-        cropDragStartRect = activeCrop;
+        cropDragStartRect = useViewportCrop() ? activeCropViewport : activeCrop;
         return;
     }
     if (e->button() == Qt::MiddleButton ||
@@ -461,6 +602,10 @@ void ImageViewport::keyPressEvent(QKeyEvent* e) {
             cropMode   = true;
             cancelCrop = params.cropRect;
             activeCrop = params.cropRect;
+            if (useViewportCrop()) {
+                activeCropViewport = textureCropToViewportBounds(params.cropRect);
+                cancelCropViewport = activeCropViewport;
+            }
             update();
         }
         break;
@@ -468,7 +613,8 @@ void ImageViewport::keyPressEvent(QKeyEvent* e) {
     case Qt::Key_Enter:
         if (cropMode) {
             cropMode = false;
-            // Commit crop back into params and notify
+            if (std::abs(params.rotation) > 0.01f)
+                activeCrop = viewportCropToTextureCrop(activeCropViewport);
             params.cropRect = activeCrop;
             emit cropCommitted(params.cropRect);
             update();
@@ -478,6 +624,8 @@ void ImageViewport::keyPressEvent(QKeyEvent* e) {
         if (cropMode) {
             cropMode   = false;
             activeCrop = cancelCrop;
+            if (std::abs(params.rotation) > 0.01f)
+                activeCropViewport = cancelCropViewport;
             update();
         }
         break;

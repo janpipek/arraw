@@ -1,4 +1,5 @@
 #include "RawProcessor.h"
+#include "ImageMetadata.h"
 #include <libraw/libraw.h>
 
 LoadResult RawProcessor::load(const QString& path) {
@@ -6,11 +7,13 @@ LoadResult RawProcessor::load(const QString& path) {
 
     int ret = raw.open_file(path.toLocal8Bit().constData());
     if (ret != LIBRAW_SUCCESS)
-        return {{}, {}, QString("open_file: %1").arg(libraw_strerror(ret))};
+        return {{}, {}, {}, QString("open_file: %1").arg(libraw_strerror(ret))};
 
     ret = raw.unpack();
     if (ret != LIBRAW_SUCCESS)
-        return {{}, {}, QString("unpack: %1").arg(libraw_strerror(ret))};
+        return {{}, {}, {}, QString("unpack: %1").arg(libraw_strerror(ret))};
+
+    const ImageMetadata metadata = extractMetadata(raw);
 
     raw.imgdata.params.use_camera_wb   = 1;
     raw.imgdata.params.no_auto_bright  = 1;
@@ -21,11 +24,11 @@ LoadResult RawProcessor::load(const QString& path) {
 
     ret = raw.dcraw_process();
     if (ret != LIBRAW_SUCCESS)
-        return {{}, {}, QString("dcraw_process: %1").arg(libraw_strerror(ret))};
+        return {{}, {}, {}, QString("dcraw_process: %1").arg(libraw_strerror(ret))};
 
     libraw_processed_image_t* img = raw.dcraw_make_mem_image(&ret);
     if (!img || ret != LIBRAW_SUCCESS)
-        return {{}, {}, QString("dcraw_make_mem_image: %1").arg(libraw_strerror(ret))};
+        return {{}, {}, {}, QString("dcraw_make_mem_image: %1").arg(libraw_strerror(ret))};
 
     const int w = img->width;
     const int h = img->height;
@@ -43,5 +46,5 @@ LoadResult RawProcessor::load(const QString& path) {
     LibRaw::dcraw_clear_mem(img);
 
     ImageBuffer preview = downsample2x(fullRes);
-    return {std::move(fullRes), std::move(preview), {}};
+    return {std::move(fullRes), std::move(preview), metadata, {}};
 }

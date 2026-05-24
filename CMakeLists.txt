@@ -24,6 +24,8 @@ set(SOURCES
     src/MainWindow.cpp
     src/ImageViewport.cpp
     src/AdjustmentPanel.cpp
+    src/ExifPanel.cpp
+    src/ImageMetadata.cpp
     src/Histogram.cpp
     src/RawProcessor.cpp
     src/ImagePipeline.cpp

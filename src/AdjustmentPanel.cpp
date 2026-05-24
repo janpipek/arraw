@@ -83,6 +83,11 @@ AdjustmentPanel::AdjustmentPanel(QWidget* parent) : QWidget(parent) {
     });
 
     connectAll();
+
+    connect(rotation.slider, &QSlider::sliderPressed,
+            this, [this] { emit straightenActive(true); });
+    connect(rotation.slider, &QSlider::sliderReleased,
+            this, [this] { emit straightenActive(false); });
 }
 
 AdjustmentPanel::SliderRow AdjustmentPanel::addSlider(

@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 #include "ImageViewport.h"
 #include "AdjustmentPanel.h"
+#include "ExifPanel.h"
 #include "FileBrowser.h"
 #include "RawProcessor.h"
 #include "XmpSidecar.h"
@@ -12,6 +13,7 @@
 #include <QLabel>
 #include <QMessageBox>
 #include <QScrollArea>
+#include <QTabWidget>
 #include <QFileInfo>
 #include <QApplication>
 #include <QCloseEvent>
@@ -79,6 +81,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(adjPanel, &AdjustmentPanel::paramsChanged,
             viewport, &ImageViewport::setAdjustments);
 
+    connect(adjPanel, &AdjustmentPanel::straightenActive,
+            viewport, &ImageViewport::setStraightenActive);
+
     // Restore window geometry
     QSettings s;
     restoreGeometry(s.value("geometry").toByteArray());
@@ -131,18 +136,25 @@ void MainWindow::setupDocks() {
     connect(fileBrowser, &FileBrowser::fileSelected,
             this, &MainWindow::loadImage);
 
-    // Adjustments (right)
+    // Adjustments + EXIF (right)
     auto* rightDock = new QDockWidget("Adjustments", this);
     rightDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
     rightDock->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable);
 
-    auto* scroll = new QScrollArea(rightDock);
-    adjPanel = new AdjustmentPanel(scroll);
-    scroll->setWidget(adjPanel);
-    scroll->setWidgetResizable(true);
-    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    scroll->setMinimumWidth(280);
-    rightDock->setWidget(scroll);
+    auto* tabs = new QTabWidget(rightDock);
+    tabs->setMinimumWidth(280);
+
+    auto* adjScroll = new QScrollArea(tabs);
+    adjPanel = new AdjustmentPanel(adjScroll);
+    adjScroll->setWidget(adjPanel);
+    adjScroll->setWidgetResizable(true);
+    adjScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    tabs->addTab(adjScroll, "Adjustments");
+
+    exifPanel = new ExifPanel(tabs);
+    tabs->addTab(exifPanel, "EXIF");
+
+    rightDock->setWidget(tabs);
     addDockWidget(Qt::RightDockWidgetArea, rightDock);
     // adjPanel → viewport paramsChanged wired in constructor (after both are created)
 }
@@ -174,6 +186,7 @@ void MainWindow::loadImage(const QString& path) {
     if (loadWatcher.isRunning()) return;
 
     currentPath = path;
+    exifPanel->clear();
     setLoadingState(true);
 
     // Populate browser from the file's directory
@@ -194,6 +207,7 @@ void MainWindow::onLoadFinished() {
     if (!result.error.isEmpty()) {
         QMessageBox::critical(this, "Load Error", result.error);
         statusLabel->setText("Load failed.");
+        exifPanel->clear();
         return;
     }
 
@@ -202,6 +216,7 @@ void MainWindow::onLoadFinished() {
 
     viewport->setImage(preview);
     adjPanel->setHistogramImage(preview);
+    exifPanel->setMetadata(result.metadata);
     undoStack->clear();
 
     AdjustmentParams saved = XmpSidecar::load(currentPath);
@@ -220,6 +235,7 @@ void MainWindow::onFullResNeeded() {
 void MainWindow::setLoadingState(bool loading) {
     menuBar()->setEnabled(!loading);
     adjPanel->setEnabled(!loading);
+    exifPanel->setEnabled(!loading);
     statusLabel->setText(loading
         ? QString("Loading %1...").arg(QFileInfo(currentPath).fileName())
         : QString());

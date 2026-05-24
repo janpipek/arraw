@@ -22,6 +22,8 @@ signals:
     void paramsChanged(const AdjustmentParams&);
     // Emitted on sliderReleased with before/after state — used by undo stack.
     void adjustmentCommitted(const AdjustmentParams& before, const AdjustmentParams& after);
+    // True while the rotation slider is held — shows the straighten grid in the viewport.
+    void straightenActive(bool active);
 
 private:
     struct SliderRow {

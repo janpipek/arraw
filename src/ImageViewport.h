@@ -18,6 +18,7 @@ public:
     void setImage(const ImageBuffer& preview);
     void setFullResImage(const ImageBuffer& fullRes);
     void setAdjustments(const AdjustmentParams& p);
+    void setStraightenActive(bool active);
 
     // Render buf through the full shader pipeline into an offscreen FBO.
     // Returns an sRGB QImage cropped to params.cropRect and scaled to outW×outH.
@@ -54,12 +55,20 @@ private:
     QPointF textureUVToViewport(float u, float v) const;
     QPointF viewportToTextureUV(QPointF pos) const;
 
+    bool useViewportCrop() const;
+    QRectF rotatedImageViewportBounds() const;
+    QRectF textureCropToViewportBounds(const QRectF& texCrop) const;
+    QRectF viewportCropToTextureCrop(const QRectF& vpCrop) const;
+
     // Returns handle index 0-7, or -1 for "inside rect" (move), or -2 for "outside" (rotate)
     int hitTest(QPointF viewportPos) const;
-    QPointF handlePos(int i) const;         // viewport coords of handle i
+    QPointF handlePos(int i) const;
     void applyCropDrag(QPointF viewportPos);
+    void applyCropDragViewport(QPointF viewportPos);
 
     void drawCropOverlay(QPainter& p) const;
+    void drawAlignGrid(QPainter& p) const;
+    bool shouldShowAlignGrid() const;
 
     // Aspect ratio of the region currently shown (accounts for committed crop).
     float displayAspect() const;
@@ -85,11 +94,14 @@ private:
     QPointF  dragStart;
     bool     dragging     = false;
     bool     showOriginal = false;
+    bool     straightenActive = false;
 
     // ── Crop state ────────────────────────────────────────────────────────
     bool    cropMode       = false;
-    QRectF  activeCrop     = {0, 0, 1, 1};   // rect being edited
-    QRectF  cancelCrop     = {0, 0, 1, 1};   // restored on Escape
+    QRectF  activeCrop     = {0, 0, 1, 1};   // texture UV rect being edited
+    QRectF  cancelCrop     = {0, 0, 1, 1};
+    QRectF  activeCropViewport;              // screen-aligned crop when straightening
+    QRectF  cancelCropViewport;
     int     cropDragHandle = -2;             // which handle is dragged
     QPointF cropDragStart;
     QRectF  cropDragStartRect;
