@@ -1,0 +1,45 @@
+#pragma once
+#include <cstdint>
+#include <vector>
+#include <QString>
+
+struct AdjustmentParams {
+    // Tone
+    float exposure    = 0.0f;     // -5.0 .. +5.0 EV
+    float contrast    = 0.0f;     // -100 .. +100
+    float highlights  = 0.0f;     // -100 .. +100
+    float shadows     = 0.0f;     // -100 .. +100
+    float whites      = 0.0f;     // -100 .. +100
+    float blacks      = 0.0f;     // -100 .. +100
+
+    // Color
+    float temperature = 5500.0f;  // Kelvin, 2000 .. 12000
+    float tint        = 0.0f;     // -100 .. +100
+    float saturation  = 0.0f;     // -100 .. +100
+    float vibrance    = 0.0f;     // -100 .. +100
+
+    // Detail
+    float sharpening  = 0.0f;     // 0 .. 100
+
+    // Geometry
+    float rotation    = 0.0f;     // degrees, -45 .. +45
+};
+
+// Linear float32 RGB image buffer, interleaved, [0..1] nominal.
+struct ImageBuffer {
+    std::vector<float> data;
+    int width  = 0;
+    int height = 0;
+
+    bool valid() const { return !data.empty() && width > 0 && height > 0; }
+};
+
+// Returned by the background load task.
+struct LoadResult {
+    ImageBuffer fullRes;   // stored for export only
+    ImageBuffer preview;   // 1/4-res (half W, half H) — used for viewport + histogram
+    QString     error;     // non-empty on failure
+};
+
+// Box-filter 2× downsample (half W, half H). Safe to call off the main thread.
+ImageBuffer downsample2x(const ImageBuffer& src);
