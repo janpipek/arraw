@@ -56,6 +56,7 @@ private:
     static constexpr float kHandleRadius = 6.0f;
 
     void uploadTexture(const ImageBuffer& buf, std::unique_ptr<QOpenGLTexture>& target);
+    void uploadCurveLUT();
     void reloadShaders();
     QOpenGLTexture* activeTexture() const;
 
@@ -87,8 +88,10 @@ private:
     std::unique_ptr<QOpenGLShaderProgram> shader;
     std::unique_ptr<QOpenGLTexture>       previewTex;
     std::unique_ptr<QOpenGLTexture>       fullResTex;
-    unsigned int vao = 0;
-    unsigned int vbo = 0;
+    unsigned int vao         = 0;
+    unsigned int vbo         = 0;
+    unsigned int curveLutTex = 0;   // 256×1 RGBA32F, one column per channel (L R G B)
+    bool curveLutDirty       = true;
 
     // ── Image state ───────────────────────────────────────────────────────
     AdjustmentParams params;

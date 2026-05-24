@@ -1,13 +1,21 @@
 #pragma once
 #include "ImageMetadata.h"
+#include <array>
 #include <cstdint>
 #include <vector>
 #include <QImage>
+#include <QPointF>
 #include <QString>
 #include <QRectF>
 
 // Slider ±100 → shader uniform ±0.2 (gentler than dividing by 100 alone).
 inline constexpr float kToneSliderToUniform = 500.0f;
+
+// Tone curve control points in [0,1]×[0,1] space.
+struct CurvePoints {
+    std::vector<QPointF> points = {{0.0, 0.0}, {1.0, 1.0}};
+    bool operator==(const CurvePoints&) const = default;
+};
 
 struct AdjustmentParams {
     // Tone
@@ -18,11 +26,22 @@ struct AdjustmentParams {
     float whites      = 0.0f;     // -100 .. +100
     float blacks      = 0.0f;     // -100 .. +100
 
+    // Tone curve (Luma + per-channel R/G/B), control points in [0,1]×[0,1]
+    CurvePoints curveLuma;
+    CurvePoints curveR;
+    CurvePoints curveG;
+    CurvePoints curveB;
+
     // Color
     float temperature = 5500.0f;  // Kelvin, 2000 .. 12000
     float tint        = 0.0f;     // -100 .. +100
     float saturation  = 0.0f;     // -100 .. +100
     float vibrance    = 0.0f;     // -100 .. +100
+
+    // HSL: 8 ranges [Red, Orange, Yellow, Green, Aqua, Blue, Purple, Magenta], -100..+100
+    std::array<float, 8> hslHue = {};
+    std::array<float, 8> hslSat = {};
+    std::array<float, 8> hslLum = {};
 
     // Detail
     float sharpening  = 0.0f;     // 0 .. 100
@@ -58,3 +77,6 @@ ImageBuffer downsample2x(const ImageBuffer& src);
 // Convert an sRGB QImage (any format) to a linear-light float32 ImageBuffer.
 // Safe to call off the main thread.
 ImageBuffer srgbToLinearBuffer(const QImage& img);
+
+// Compute a 256-entry output LUT from tone-curve control points (Fritsch-Carlson monotone spline).
+std::array<float, 256> computeCurveLUT(const std::vector<QPointF>& pts);

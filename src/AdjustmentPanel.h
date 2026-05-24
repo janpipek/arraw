@@ -1,11 +1,14 @@
 #pragma once
 #include "ImagePipeline.h"
+#include "ToneCurveWidget.h"
+#include <array>
 #include <QWidget>
 
 class QSlider;
 class QLabel;
 class QComboBox;
 class QVBoxLayout;
+class QStackedWidget;
 class Histogram;
 
 class AdjustmentPanel : public QWidget {
@@ -20,9 +23,7 @@ public:
 
 signals:
     void paramsChanged(const AdjustmentParams&);
-    // Emitted on sliderReleased with before/after state — used by undo stack.
     void adjustmentCommitted(const AdjustmentParams& before, const AdjustmentParams& after);
-    // True while the rotation slider is held — shows the straighten grid in the viewport.
     void straightenActive(bool active);
 
 private:
@@ -34,10 +35,15 @@ private:
     SliderRow addSlider(QVBoxLayout* layout, const QString& name,
                         int min, int max, int defaultVal,
                         const QString& suffix = {});
-    void connectAll();
+    void connectSliders();
+    void connectCurve();
+    void connectHsl();
+    void syncParams();
 
-    Histogram*  histogram;
-    QComboBox*  wbPresets;
+    Histogram*         histogram;
+    QComboBox*         wbPresets;
+    ToneCurveWidget*   toneCurve;
+    QStackedWidget*    hslStack;
 
     SliderRow exposure;
     SliderRow contrast;
@@ -52,6 +58,11 @@ private:
     SliderRow sharpening;
     SliderRow rotation;
 
+    // HSL: 8 ranges per channel (Hue page=0, Sat page=1, Lum page=2)
+    std::array<SliderRow, 8> hslHue;
+    std::array<SliderRow, 8> hslSat;
+    std::array<SliderRow, 8> hslLum;
+
     AdjustmentParams adjustments;
-    AdjustmentParams beforeDrag;   // snapshot on sliderPressed for undo
+    AdjustmentParams beforeDrag;
 };

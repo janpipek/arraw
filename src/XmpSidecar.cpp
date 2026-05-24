@@ -15,6 +15,28 @@ QString XmpSidecar::pathFor(const QString& rawPath) {
     return fi.dir().filePath(fi.completeBaseName() + ".xmp");
 }
 
+// Parse "x, y" pairs from an rdf:Seq element into control points (0..255 scale → 0..1).
+static std::vector<QPointF> parseCurveSeq(QXmlStreamReader& xml) {
+    std::vector<QPointF> pts;
+    while (!xml.atEnd()) {
+        xml.readNext();
+        if (xml.isEndElement() && xml.qualifiedName() == "rdf:Seq") break;
+        if (xml.isStartElement() && xml.qualifiedName() == "rdf:li") {
+            const QString text = xml.readElementText().trimmed();
+            const int comma = text.indexOf(',');
+            if (comma > 0) {
+                bool ok1, ok2;
+                const float x = text.left(comma).trimmed().toFloat(&ok1);
+                const float y = text.mid(comma + 1).trimmed().toFloat(&ok2);
+                if (ok1 && ok2)
+                    pts.push_back({x / 255.0, y / 255.0});
+            }
+        }
+    }
+    if (pts.size() < 2) pts = {{0.0, 0.0}, {1.0, 1.0}};
+    return pts;
+}
+
 AdjustmentParams XmpSidecar::load(const QString& rawPath) {
     QFile f(pathFor(rawPath));
     if (!f.open(QIODevice::ReadOnly)) return {};
@@ -24,6 +46,7 @@ AdjustmentParams XmpSidecar::load(const QString& rawPath) {
 
     while (!xml.atEnd()) {
         xml.readNext();
+
         if (xml.isStartElement() && xml.qualifiedName() == "rdf:Description") {
             auto attr = [&](const char* name, float fallback) -> float {
                 auto val = xml.attributes().value(kNsCrs, name);
@@ -48,10 +71,61 @@ AdjustmentParams XmpSidecar::load(const QString& rawPath) {
                 attr("CropLeft",   0.0f), attr("CropTop",    0.0f),
                 attr("CropRight",  1.0f) - attr("CropLeft", 0.0f),
                 attr("CropBottom", 1.0f) - attr("CropTop",  0.0f));
-            break;
+
+            // HSL attributes
+            const char* hueNames[] = { "HueAdjustmentRed","HueAdjustmentOrange","HueAdjustmentYellow",
+                "HueAdjustmentGreen","HueAdjustmentAqua","HueAdjustmentBlue",
+                "HueAdjustmentPurple","HueAdjustmentMagenta" };
+            const char* satNames[] = { "SaturationAdjustmentRed","SaturationAdjustmentOrange",
+                "SaturationAdjustmentYellow","SaturationAdjustmentGreen","SaturationAdjustmentAqua",
+                "SaturationAdjustmentBlue","SaturationAdjustmentPurple","SaturationAdjustmentMagenta" };
+            const char* lumNames[] = { "LuminanceAdjustmentRed","LuminanceAdjustmentOrange",
+                "LuminanceAdjustmentYellow","LuminanceAdjustmentGreen","LuminanceAdjustmentAqua",
+                "LuminanceAdjustmentBlue","LuminanceAdjustmentPurple","LuminanceAdjustmentMagenta" };
+            for (int i = 0; i < 8; ++i) {
+                p.hslHue[i] = attr(hueNames[i], 0.0f);
+                p.hslSat[i] = attr(satNames[i], 0.0f);
+                p.hslLum[i] = attr(lumNames[i], 0.0f);
+            }
+        }
+
+        // Tone curve child elements (inside rdf:Description)
+        if (xml.isStartElement()) {
+            const auto name = xml.qualifiedName().toString();
+            CurvePoints* target = nullptr;
+            if      (name == "crs:ToneCurvePV2012")      target = &p.curveLuma;
+            else if (name == "crs:ToneCurvePV2012Red")   target = &p.curveR;
+            else if (name == "crs:ToneCurvePV2012Green") target = &p.curveG;
+            else if (name == "crs:ToneCurvePV2012Blue")  target = &p.curveB;
+            if (target) {
+                xml.readNext(); // enter rdf:Seq
+                if (xml.isStartElement() && xml.qualifiedName() == "rdf:Seq")
+                    target->points = parseCurveSeq(xml);
+            }
         }
     }
     return p;
+}
+
+static void writeCurve(QXmlStreamWriter& xml, const char* elemName,
+                       const std::vector<QPointF>& pts)
+{
+    // Skip if identity (only the two default endpoints, unmodified)
+    const bool isIdentity = pts.size() == 2
+        && std::abs(pts[0].x()) < 1e-4 && std::abs(pts[0].y()) < 1e-4
+        && std::abs(pts[1].x() - 1.0) < 1e-4 && std::abs(pts[1].y() - 1.0) < 1e-4;
+    if (isIdentity) return;
+
+    xml.writeStartElement(kNsCrs, elemName);
+    xml.writeStartElement(kNsRdf, "Seq");
+    for (const auto& pt : pts) {
+        xml.writeStartElement(kNsRdf, "li");
+        xml.writeCharacters(QString::number(qRound(pt.x() * 255.0)) + ", " +
+                            QString::number(qRound(pt.y() * 255.0)));
+        xml.writeEndElement();
+    }
+    xml.writeEndElement(); // Seq
+    xml.writeEndElement(); // curve element
 }
 
 bool XmpSidecar::save(const QString& rawPath, const AdjustmentParams& p) {
@@ -87,12 +161,34 @@ bool XmpSidecar::save(const QString& rawPath, const AdjustmentParams& p) {
     write("Tint",           p.tint);
     write("Saturation",     p.saturation);
     write("Vibrance",       p.vibrance);
-    write("Sharpness",       p.sharpening);
+    write("Sharpness",      p.sharpening);
     write("StraightenAngle", p.rotation);
     write("CropLeft",        float(p.cropRect.left()));
     write("CropTop",         float(p.cropRect.top()));
     write("CropRight",       float(p.cropRect.right()));
     write("CropBottom",      float(p.cropRect.bottom()));
+
+    // HSL
+    const char* hueNames[] = { "HueAdjustmentRed","HueAdjustmentOrange","HueAdjustmentYellow",
+        "HueAdjustmentGreen","HueAdjustmentAqua","HueAdjustmentBlue",
+        "HueAdjustmentPurple","HueAdjustmentMagenta" };
+    const char* satNames[] = { "SaturationAdjustmentRed","SaturationAdjustmentOrange",
+        "SaturationAdjustmentYellow","SaturationAdjustmentGreen","SaturationAdjustmentAqua",
+        "SaturationAdjustmentBlue","SaturationAdjustmentPurple","SaturationAdjustmentMagenta" };
+    const char* lumNames[] = { "LuminanceAdjustmentRed","LuminanceAdjustmentOrange",
+        "LuminanceAdjustmentYellow","LuminanceAdjustmentGreen","LuminanceAdjustmentAqua",
+        "LuminanceAdjustmentBlue","LuminanceAdjustmentPurple","LuminanceAdjustmentMagenta" };
+    for (int i = 0; i < 8; ++i) {
+        write(hueNames[i], p.hslHue[i]);
+        write(satNames[i], p.hslSat[i]);
+        write(lumNames[i], p.hslLum[i]);
+    }
+
+    // Tone curves (child elements, written after attributes)
+    writeCurve(xml, "ToneCurvePV2012",      p.curveLuma.points);
+    writeCurve(xml, "ToneCurvePV2012Red",   p.curveR.points);
+    writeCurve(xml, "ToneCurvePV2012Green", p.curveG.points);
+    writeCurve(xml, "ToneCurvePV2012Blue",  p.curveB.points);
 
     xml.writeEndElement(); // rdf:Description
     xml.writeEndElement(); // rdf:RDF

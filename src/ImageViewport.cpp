@@ -1,4 +1,5 @@
 #include "ImageViewport.h"
+#include "ImagePipeline.h"
 #include <QWheelEvent>
 #include <QMouseEvent>
 #include <QKeyEvent>
@@ -43,8 +44,9 @@ ImageViewport::ImageViewport(QWidget* parent)
 
 ImageViewport::~ImageViewport() {
     makeCurrent();
-    if (vao) glDeleteVertexArrays(1, &vao);
-    if (vbo) glDeleteBuffers(1, &vbo);
+    if (vao)         glDeleteVertexArrays(1, &vao);
+    if (vbo)         glDeleteBuffers(1, &vbo);
+    if (curveLutTex) glDeleteTextures(1, &curveLutTex);
     doneCurrent();
 }
 
@@ -65,7 +67,17 @@ void ImageViewport::initializeGL() {
     glEnableVertexAttribArray(0);
     glEnableVertexAttribArray(1);
 
+    // Curve LUT texture: 256×1 RGBA32F (channels: luma, red, green, blue)
+    glGenTextures(1, &curveLutTex);
+    glBindTexture(GL_TEXTURE_2D, curveLutTex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
     reloadShaders();
+    uploadCurveLUT();
 }
 
 void ImageViewport::reloadShaders() {
@@ -76,6 +88,26 @@ void ImageViewport::reloadShaders() {
         !prog->link())
         return;
     shader = std::move(prog);
+}
+
+void ImageViewport::uploadCurveLUT() {
+    const auto lumaLUT = computeCurveLUT(params.curveLuma.points);
+    const auto redLUT  = computeCurveLUT(params.curveR.points);
+    const auto grnLUT  = computeCurveLUT(params.curveG.points);
+    const auto bluLUT  = computeCurveLUT(params.curveB.points);
+
+    std::array<float, 256 * 4> rgba{};
+    for (int i = 0; i < 256; ++i) {
+        rgba[i*4+0] = lumaLUT[i];
+        rgba[i*4+1] = redLUT[i];
+        rgba[i*4+2] = grnLUT[i];
+        rgba[i*4+3] = bluLUT[i];
+    }
+
+    glBindTexture(GL_TEXTURE_2D, curveLutTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, 256, 1, 0, GL_RGBA, GL_FLOAT, rgba.data());
+    glBindTexture(GL_TEXTURE_2D, 0);
+    curveLutDirty = false;
 }
 
 void ImageViewport::resizeGL(int w, int h) {
@@ -118,7 +150,25 @@ QOpenGLTexture* ImageViewport::activeTexture() const {
     return previewTex.get();
 }
 
+static void setHslUniforms(QOpenGLShaderProgram* shader, const AdjustmentParams& p) {
+    float hu[8], sa[8], lu[8];
+    bool active = false;
+    for (int i = 0; i < 8; ++i) {
+        hu[i] = p.hslHue[i] / 100.0f;
+        sa[i] = p.hslSat[i] / 100.0f;
+        lu[i] = p.hslLum[i] / 100.0f;
+        if (p.hslHue[i] != 0.0f || p.hslSat[i] != 0.0f || p.hslLum[i] != 0.0f)
+            active = true;
+    }
+    shader->setUniformValueArray("uHslHue", hu, 8, 1);
+    shader->setUniformValueArray("uHslSat", sa, 8, 1);
+    shader->setUniformValueArray("uHslLum", lu, 8, 1);
+    shader->setUniformValue("uHslActive", active);
+}
+
 void ImageViewport::paintGL() {
+    if (curveLutDirty) uploadCurveLUT();
+
     glClear(GL_COLOR_BUFFER_BIT);
     auto* tex = activeTexture();
     if (!hasImage || !shader || !tex) return;
@@ -127,13 +177,17 @@ void ImageViewport::paintGL() {
     tex->bind(0);
     shader->setUniformValue("uTexture", 0);
 
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, curveLutTex);
+    shader->setUniformValue("uCurveLUT", 1);
+    glActiveTexture(GL_TEXTURE0);
+
     const float viewportAspect = float(width()) / float(height());
     const float sx = zoom * (displayAspect() / viewportAspect);
     const float sy = zoom;
     shader->setUniformValue("uTransform", QVector4D(sx, sy, pan.x(), pan.y()));
 
     const AdjustmentParams& p = showOriginal ? AdjustmentParams{} : params;
-    // While editing, show full image + overlay; after Enter, apply committed crop
     const QRectF crop = cropMode ? QRectF(0, 0, 1, 1) : p.cropRect;
     shader->setUniformValue("uCropRect",    cropUniform(crop));
     shader->setUniformValue("uAspect",      imageAspect);
@@ -149,6 +203,7 @@ void ImageViewport::paintGL() {
     shader->setUniformValue("uSaturation",  p.saturation  / 100.0f);
     shader->setUniformValue("uVibrance",    p.vibrance    / 100.0f);
     shader->setUniformValue("uBaseLook",    useBaseLook && !showOriginal);
+    setHslUniforms(shader.get(), p);
 
     glBindVertexArray(vao);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
@@ -472,6 +527,9 @@ void ImageViewport::setFullResImage(const ImageBuffer& buf) {
 }
 
 void ImageViewport::setAdjustments(const AdjustmentParams& p) {
+    if (p.curveLuma != params.curveLuma || p.curveR != params.curveR ||
+        p.curveG != params.curveG || p.curveB != params.curveB)
+        curveLutDirty = true;
     params = p;
     if (!cropMode)
         activeCrop = p.cropRect;
@@ -575,11 +633,18 @@ QImage ImageViewport::renderToImage(const ImageBuffer& buf,
     glViewport(0, 0, cropW, cropH);
     glClear(GL_COLOR_BUFFER_BIT);
 
+    // Ensure curve LUT is current (params may have changed since last paintGL)
+    if (curveLutDirty) uploadCurveLUT();
+
     shader->bind();
     exportTex.bind(0);
     shader->setUniformValue("uTexture", 0);
 
-    // Identity transform: crop region fills the FBO
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, curveLutTex);
+    shader->setUniformValue("uCurveLUT", 1);
+    glActiveTexture(GL_TEXTURE0);
+
     shader->setUniformValue("uTransform", QVector4D(1.0f, 1.0f, 0.0f, 0.0f));
     const float texAspect = float(buf.width) / float(buf.height);
     shader->setUniformValue("uCropRect",    cropUniform(cr));
@@ -596,6 +661,7 @@ QImage ImageViewport::renderToImage(const ImageBuffer& buf,
     shader->setUniformValue("uSaturation",  p.saturation  / 100.0f);
     shader->setUniformValue("uVibrance",    p.vibrance    / 100.0f);
     shader->setUniformValue("uBaseLook",    true);
+    setHslUniforms(shader.get(), p);
 
     glBindVertexArray(vao);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
