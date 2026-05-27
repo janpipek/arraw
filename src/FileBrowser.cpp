@@ -15,9 +15,6 @@ static const QStringList kRawExts = {
     "cr2","cr3","nef","arw","dng","raf","orf","rw2","pef","srw"
 };
 
-static const QStringList kSupportedExts = kRawExts + QStringList{
-    "jpg","jpeg","png","tiff","tif","webp","bmp"
-};
 
 FileBrowser::FileBrowser(QWidget* parent) : QWidget(parent) {
     thumbs = new ThumbnailCache(this);
@@ -177,6 +174,9 @@ void FileBrowser::onThumbnailReady(const QString& path, const QImage& image) {
 }
 
 QStringList FileBrowser::scanRawFiles(const QString& dir) {
+    static const QStringList kSupportedExts = kRawExts + QStringList{
+        "jpg","jpeg","png","tiff","tif","webp","bmp"
+    };
     QDir d(dir);
     QStringList filters;
     for (const auto& ext : kSupportedExts) {

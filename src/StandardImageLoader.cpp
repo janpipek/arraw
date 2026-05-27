@@ -2,12 +2,11 @@
 #include <QFileInfo>
 #include <QImage>
 
-static const QStringList kStandardExts = {
-    "jpg", "jpeg", "png", "tiff", "tif", "webp", "bmp"
-};
-
 bool StandardImageLoader::canLoad(const QString& path) {
-    return kStandardExts.contains(QFileInfo(path).suffix().toLower());
+    static const QStringList kExts = {
+        "jpg", "jpeg", "png", "tiff", "tif", "webp", "bmp"
+    };
+    return kExts.contains(QFileInfo(path).suffix().toLower());
 }
 
 LoadResult StandardImageLoader::load(const QString& path,

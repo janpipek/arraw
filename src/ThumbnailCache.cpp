@@ -6,6 +6,7 @@
 #include <QFileInfo>
 #include <QStandardPaths>
 #include <QtConcurrent/QtConcurrent>
+#include <memory>
 
 namespace {
 
@@ -34,12 +35,12 @@ QImage scaleDown(const QImage& src, int maxPx) {
 }
 
 QImage decodeEmbeddedThumb(const QString& path) {
-    LibRaw raw;
+    auto raw = std::make_unique<LibRaw>();
     const QByteArray local = path.toLocal8Bit();
-    if (raw.open_file(local.constData()) == LIBRAW_SUCCESS &&
-        raw.unpack_thumb() == LIBRAW_SUCCESS) {
+    if (raw->open_file(local.constData()) == LIBRAW_SUCCESS &&
+        raw->unpack_thumb() == LIBRAW_SUCCESS) {
         int err = 0;
-        libraw_processed_image_t* thumb = raw.dcraw_make_mem_thumb(&err);
+        libraw_processed_image_t* thumb = raw->dcraw_make_mem_thumb(&err);
         if (thumb && err == LIBRAW_SUCCESS) {
             QImage img;
             if (thumb->type == LIBRAW_IMAGE_JPEG) {

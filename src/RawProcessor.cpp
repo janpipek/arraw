@@ -5,6 +5,7 @@
 #include <QRectF>
 #include <algorithm>
 #include <cmath>
+#include <memory>
 #include <vector>
 
 // Extract the embedded JPEG/bitmap thumbnail from an already-open LibRaw
@@ -42,10 +43,10 @@ static ImageBuffer extractThumb(LibRaw& raw) {
 }
 
 ImageBuffer RawProcessor::loadEmbeddedPreview(const QString& path) {
-    LibRaw raw;
-    if (raw.open_file(path.toLocal8Bit().constData()) != LIBRAW_SUCCESS)
+    auto raw = std::make_unique<LibRaw>();
+    if (raw->open_file(path.toLocal8Bit().constData()) != LIBRAW_SUCCESS)
         return {};
-    return extractThumb(raw);
+    return extractThumb(*raw);
 }
 
 static void normalizeRawExposure(ImageBuffer& buf) {
@@ -108,41 +109,41 @@ LoadResult RawProcessor::load(const QString& path,
                                std::function<void(ImageBuffer)> onEmbeddedPreview,
                                std::shared_ptr<std::atomic<bool>> cancel) {
     auto cancelled = [&]{ return cancel && cancel->load(); };
-    LibRaw raw;
+    auto raw = std::make_unique<LibRaw>();
 
-    int ret = raw.open_file(path.toLocal8Bit().constData());
+    int ret = raw->open_file(path.toLocal8Bit().constData());
     if (ret != LIBRAW_SUCCESS)
         return {{}, {}, {}, QString("open_file: %1").arg(libraw_strerror(ret))};
 
     // Extract embedded preview on the same open handle, before the slow unpack.
     if (onEmbeddedPreview) {
-        ImageBuffer buf = extractThumb(raw);
+        ImageBuffer buf = extractThumb(*raw);
         if (buf.valid())
             onEmbeddedPreview(std::move(buf));
     }
 
     if (cancelled()) return {};
 
-    ret = raw.unpack();
+    ret = raw->unpack();
     if (ret != LIBRAW_SUCCESS)
         return {{}, {}, {}, QString("unpack: %1").arg(libraw_strerror(ret))};
 
     if (cancelled()) return {};
 
-    const ImageMetadata metadata = extractMetadata(raw);
+    const ImageMetadata metadata = extractMetadata(*raw);
 
-    raw.imgdata.params.use_camera_wb   = 1;
-    raw.imgdata.params.no_auto_bright  = 1;
-    raw.imgdata.params.output_bps      = 16;
-    raw.imgdata.params.gamm[0]         = 1.0;  // linear gamma
-    raw.imgdata.params.gamm[1]         = 1.0;
-    raw.imgdata.params.bright          = 1.0;
+    raw->imgdata.params.use_camera_wb   = 1;
+    raw->imgdata.params.no_auto_bright  = 1;
+    raw->imgdata.params.output_bps      = 16;
+    raw->imgdata.params.gamm[0]         = 1.0;  // linear gamma
+    raw->imgdata.params.gamm[1]         = 1.0;
+    raw->imgdata.params.bright          = 1.0;
 
-    ret = raw.dcraw_process();
+    ret = raw->dcraw_process();
     if (ret != LIBRAW_SUCCESS)
         return {{}, {}, {}, QString("dcraw_process: %1").arg(libraw_strerror(ret))};
 
-    libraw_processed_image_t* img = raw.dcraw_make_mem_image(&ret);
+    libraw_processed_image_t* img = raw->dcraw_make_mem_image(&ret);
     if (!img || ret != LIBRAW_SUCCESS)
         return {{}, {}, {}, QString("dcraw_make_mem_image: %1").arg(libraw_strerror(ret))};
 
@@ -161,7 +162,7 @@ LoadResult RawProcessor::load(const QString& path,
 
     LibRaw::dcraw_clear_mem(img);
 
-    const QRectF defaultCrop = defaultCropRect(raw, fullRes.width, fullRes.height);
+    const QRectF defaultCrop = defaultCropRect(*raw, fullRes.width, fullRes.height);
     normalizeRawExposure(fullRes);
     ImageBuffer preview = downsample2x(fullRes);
     return {std::move(fullRes), std::move(preview), metadata, {}, defaultCrop};
