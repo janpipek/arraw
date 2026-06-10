@@ -58,7 +58,7 @@ The full design rationale lives in `DESIGN.md`. Key things that require reading 
 1. `MainWindow::loadImage()` fires a `QtConcurrent::run` task.
 2. `RawProcessor::load()` (background thread) calls libraw, produces a linear float32 RGB `ImageBuffer` (`fullRes`), then calls `downsample2x()` to produce `preview` (half W × half H).
 3. `QFutureWatcher<LoadResult>::finished` fires on the main thread → `MainWindow::onLoadFinished()`.
-4. `m_fullRes` is stored silently (export only). `m_preview` is handed to `ImageViewport::setImage()` and `AdjustmentPanel::setHistogramImage()`.
+4. `m_fullRes` is stored silently (export only). `m_preview` is handed to `ImageViewport::setImage()`. Histograms are not fed directly: the viewport renders small shader samples (debounced) and emits `histogramsReady`, which `AdjustmentPanel::setHistogramSamples()` forwards to the panel `Histogram` and the `ToneCurveWidget` background.
 5. `XmpSidecar::load()` reads the `.xmp` sidecar if present and calls `AdjustmentPanel::setParams()` to restore prior edits.
 
 ### Real-time preview

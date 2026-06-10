@@ -120,7 +120,8 @@ MainWindow (QMainWindow)
 - WB preset combobox sets `temperature` + `tint` in Kelvin scale.
 
 ### `Histogram`
-- Recomputes from `preview` buffer on image load. Log-scale, RGB channels overlaid.
+- Bins the shader-rendered sample from `ImageViewport::histogramsReady`.
+  Log-scale, RGB channels overlaid. No adjustment math of its own.
 
 ### `XmpSidecar`
 - `pathFor(rawPath)` → same dir, same base name, `.xmp` extension.
@@ -190,7 +191,9 @@ that file is the source of truth; keep this list in sync with it.
  9. Tone regions     highlights, shadows, whites, blacks — luma-masked
                      (smoothstep ramps), applied as one combined luma delta
 10. Tone curves      256×1 LUT texture: luma curve first (scales RGB
-                     proportionally, preserves hue), then per-channel R/G/B
+                     proportionally, preserves hue), then per-channel R/G/B.
+                     Applied on gamma-encoded values (docs/adr/0001), then
+                     decoded back to linear
 11. Temperature      Kelvin → red/blue shift relative to 5500K neutral
 12. Tint             green axis shift
 13. HSL color mix    8 hue ranges, smoothstep-weighted hue/sat/lum shifts
@@ -208,8 +211,11 @@ that file is the source of truth; keep this list in sync with it.
 19. Save             JPEG/PNG/TIFF, tagged QColorSpace::SRgb
 ```
 
-The histogram (`Histogram.cpp`) mirrors steps 6–9, 11, and 14 on the CPU; it
-ignores curves, tint, HSL, and vibrance.
+Histograms are exact: `ImageViewport::renderHistograms()` renders the preview
+through the real shader into a small offscreen FBO (debounced on parameter
+changes) and reads back two samples — the full pipeline for the panel
+histogram, and a "stop after tone regions, gamma-encode" pass (`uCurveInput`)
+for the histogram behind the tone curve (docs/adr/0002).
 
 ---
 
@@ -274,11 +280,11 @@ ignores curves, tint, HSL, and vibrance.
 
 ## Post-MVP Milestones
 
-### Milestone 2 — Tone Curve
+### Milestone 2 — Tone Curve ✅
 - Curve editor widget: draggable control points on a histogram background.
-- Per-channel (R/G/B/Luma) curves.
-- 256-entry LUT uploaded as a 1D texture uniform.
-- Stored in XMP as point list.
+- Per-channel (R/G/B/Luma) curves, ghost overlays, modified-channel indicators.
+- 256-entry LUT uploaded as a 1D texture uniform; applied in gamma space.
+- Stored in XMP as `crs:ToneCurvePV2012*` point lists.
 
 ### Milestone 3 — Thumbnail Strip
 - Replace filename list with a horizontal thumbnail dock.

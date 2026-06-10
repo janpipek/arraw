@@ -45,6 +45,10 @@ ImageViewport::ImageViewport(QWidget* parent)
     : QOpenGLWidget(parent)
 {
     setFocusPolicy(Qt::StrongFocus);
+
+    histoTimer.setSingleShot(true);
+    histoTimer.setInterval(150);
+    connect(&histoTimer, &QTimer::timeout, this, &ImageViewport::renderHistograms);
 }
 
 ImageViewport::~ImageViewport() {
@@ -213,6 +217,7 @@ void ImageViewport::paintGL() {
     shader->setUniformValue("uCropRect",    cropUniform(crop));
     shader->setUniformValue("uAspect",      imageAspect);
     shader->setUniformValue("uBaseLook",    useBaseLook && !showOriginal);
+    shader->setUniformValue("uCurveInput",  false);
     setAdjustmentUniforms(shader.get(), p);
 
     glBindVertexArray(vao);
@@ -526,6 +531,7 @@ void ImageViewport::setImage(const ImageBuffer& buf, bool baseLook) {
     useBaseLook = baseLook;
     doneCurrent();
     resetView();
+    histoTimer.start();
     update();
 }
 
@@ -547,6 +553,8 @@ void ImageViewport::setAdjustments(const AdjustmentParams& p) {
     params = p;
     if (!cropMode)
         activeCrop = p.cropRect;
+    if (hasImage)
+        histoTimer.start();
     emit zoomChanged(pixelZoom());
     update();
 }
@@ -661,6 +669,7 @@ QImage ImageViewport::renderToImage(const ImageBuffer& buf,
     shader->setUniformValue("uCropRect",    cropUniform(cr));
     shader->setUniformValue("uAspect",      texAspect);
     shader->setUniformValue("uBaseLook",    true);
+    shader->setUniformValue("uCurveInput",  false);
     setAdjustmentUniforms(shader.get(), p);
 
     glBindVertexArray(vao);
@@ -683,6 +692,65 @@ QImage ImageViewport::renderToImage(const ImageBuffer& buf,
 
     result.setColorSpace(QColorSpace(QColorSpace::SRgb));
     return result;
+}
+
+// ── Histogram readback (docs/adr/0002) ────────────────────────────────────────
+
+// Render the preview texture through the real shader twice into a small FBO —
+// once with uCurveInput (pipeline stops after tone regions, gamma-encoded) and
+// once full — and hand both samples to whoever bins them.
+void ImageViewport::renderHistograms() {
+    if (!hasImage || !shader || !previewTex)
+        return;
+
+    makeCurrent();
+    if (curveLutDirty) uploadCurveLUT();
+
+    const QRectF& cr = params.cropRect;
+    const float aspect = imageAspect * float(cr.width() / cr.height());
+    const int w = 256;
+    const int h = std::clamp(int(w / aspect + 0.5f), 16, 1024);
+
+    QOpenGLFramebufferObjectFormat fboFmt;
+    fboFmt.setAttachment(QOpenGLFramebufferObject::NoAttachment);
+    fboFmt.setInternalTextureFormat(GL_RGBA8);
+    QOpenGLFramebufferObject fbo(w, h, fboFmt);
+    fbo.bind();
+    glViewport(0, 0, w, h);
+
+    shader->bind();
+    previewTex->bind(0);
+    shader->setUniformValue("uTexture", 0);
+
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, curveLutTex);
+    shader->setUniformValue("uCurveLUT", 1);
+    glActiveTexture(GL_TEXTURE0);
+
+    shader->setUniformValue("uTransform", QVector4D(1.0f, 1.0f, 0.0f, 0.0f));
+    shader->setUniformValue("uCropRect",  cropUniform(cr));
+    shader->setUniformValue("uAspect",    imageAspect);
+    shader->setUniformValue("uBaseLook",  useBaseLook);
+    setAdjustmentUniforms(shader.get(), params);
+    glBindVertexArray(vao);
+
+    shader->setUniformValue("uCurveInput", true);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    const QImage curveInput = fbo.toImage();
+
+    shader->setUniformValue("uCurveInput", false);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    const QImage finalSample = fbo.toImage();
+
+    previewTex->release();
+    shader->release();
+    fbo.release();
+    glViewport(0, 0, width(), height());
+    doneCurrent();
+
+    emit histogramsReady(finalSample, curveInput);
 }
 
 // ── Input events ──────────────────────────────────────────────────────────────

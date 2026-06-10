@@ -1,7 +1,6 @@
 #pragma once
-#include "ImagePipeline.h"
 #include <QWidget>
-#include <QTimer>
+#include <QImage>
 #include <array>
 
 class Histogram : public QWidget {
@@ -9,21 +8,14 @@ class Histogram : public QWidget {
 public:
     explicit Histogram(QWidget* parent = nullptr);
 
-    void setImage(const ImageBuffer& buf);
-    void setAdjustments(const AdjustmentParams& p);
+    // Display-space sample rendered by the shader (ImageViewport::histogramsReady).
+    void setSample(const QImage& img);
 
 protected:
     void paintEvent(QPaintEvent*) override;
 
 private:
-    void recompute();
-
-    static constexpr int kBins   = 256;
-    static constexpr int kStride = 4;    // sample every 4th pixel for speed
-
-    ImageBuffer      rawBuf;
-    AdjustmentParams params;
-    QTimer           debounce;
+    static constexpr int kBins = 256;
 
     std::array<int, kBins> r{}, g{}, b{};
     int peak = 1;
