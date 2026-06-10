@@ -17,6 +17,7 @@ uniform float uTint;            // -1..+1
 uniform float uSaturation;      // -1..+1
 uniform float uVibrance;        // -1..+1
 uniform bool  uBaseLook;
+uniform bool  uCurveInput;      // stop after tone regions + gamma-encode (histograms)
 uniform bool  uHslActive;
 uniform float uHslHue[8];       // -1..+1 per range
 uniform float uHslSat[8];
@@ -78,16 +79,27 @@ vec3 applyToneRegions(vec3 c) {
     return c * (y2 / max(y, 1e-5));
 }
 
+vec3 linearToSRGB(vec3 c) {
+    return pow(clamp(c, 0.0, 1.0), vec3(1.0 / 2.2));
+}
+
+vec3 srgbToLinear(vec3 c) {
+    return pow(clamp(c, 0.0, 1.0), vec3(2.2));
+}
+
 // Tone curve: sample RGBA LUT — R=luma, G=red, B=green, A=blue.
 // Luma curve scales RGB proportionally (preserves hue); per-channel curves follow.
+// Operates on gamma-encoded values (docs/adr/0001): the stored crs: points are
+// display-space, matching Lightroom's interpretation of ToneCurvePV2012.
 vec3 applyCurve(vec3 c) {
+    c = linearToSRGB(c);
     float y  = dot(c, kLuma);
     float y2 = texture(uCurveLUT, vec2(y, 0.5)).r;
     if (y > 1e-5) c *= y2 / y;
     c.r = texture(uCurveLUT, vec2(clamp(c.r, 0.0, 1.0), 0.5)).g;
     c.g = texture(uCurveLUT, vec2(clamp(c.g, 0.0, 1.0), 0.5)).b;
     c.b = texture(uCurveLUT, vec2(clamp(c.b, 0.0, 1.0), 0.5)).a;
-    return c;
+    return srgbToLinear(c);
 }
 
 vec3 applyTemperature(vec3 c) {
@@ -183,16 +195,14 @@ vec3 applyVibrance(vec3 c) {
     return mix(vec3(luma), c, 1.0 + uVibrance * (1.0 - sat));
 }
 
-vec3 linearToSRGB(vec3 c) {
-    return pow(clamp(c, 0.0, 1.0), vec3(1.0 / 2.2));
-}
-
 // Processing order (the authoritative definition — DESIGN.md mirrors it).
 // Everything up to the final gamma operates in linear light:
 //   base look → exposure → contrast → tone regions → tone curves
 //   → temperature → tint → HSL → saturation → vibrance → sRGB gamma
 // Crop/rotation happen earlier in image.vert; export-only resize and
 // unsharp mask happen later on the CPU (MainWindow::exportFile).
+// With uCurveInput set, the pipeline stops after tone regions and
+// gamma-encodes — the curve input histogram readback (docs/adr/0002).
 void main() {
     if (any(lessThan(vUV, vec2(0.0))) || any(greaterThan(vUV, vec2(1.0)))) {
         fragColor = vec4(0.0, 0.0, 0.0, 1.0);
@@ -205,6 +215,10 @@ void main() {
     c = applyExposure(c);
     c = applyContrast(c);
     c = applyToneRegions(c);
+    if (uCurveInput) {
+        fragColor = vec4(linearToSRGB(c), 1.0);
+        return;
+    }
     c = applyCurve(c);
     c = applyTemperature(c);
     c = applyTint(c);

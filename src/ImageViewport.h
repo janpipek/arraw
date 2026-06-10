@@ -7,6 +7,7 @@
 #include <QImage>
 #include <QPointF>
 #include <QRectF>
+#include <QTimer>
 #include <memory>
 
 class ImageViewport : public QOpenGLWidget, protected QOpenGLFunctions_3_3_Core {
@@ -36,6 +37,10 @@ signals:
     void fullResNeeded();
     void cropCommitted(const QRectF& cropRect);
     void zoomChanged(float pixelZoom);
+    // Small shader-rendered samples for histogramming (docs/adr/0002):
+    // finalSample is the full pipeline, curveInputSample stops after tone
+    // regions and is gamma-encoded — what the tone curve receives.
+    void histogramsReady(const QImage& finalSample, const QImage& curveInputSample);
 
 protected:
     void initializeGL() override;
@@ -58,6 +63,7 @@ private:
     std::unique_ptr<QOpenGLTexture> createTexture(const ImageBuffer& buf);
     void uploadCurveLUT();
     void reloadShaders();
+    void renderHistograms();
     QOpenGLTexture* activeTexture() const;
 
     // Map texture UV ↔ viewport (matches vertex shader: image-centre rotation + fit)
@@ -105,6 +111,8 @@ private:
     // The preview is half-res, so its texels start to magnify around zoom 2×.
     // Request the full-res texture a bit earlier so it is ready in time.
     static constexpr float kFullResZoomThreshold = 1.5f;
+
+    QTimer histoTimer;   // debounces histogram readbacks during slider drags
 
     // ── View state ────────────────────────────────────────────────────────
     float    zoom      = 1.0f;

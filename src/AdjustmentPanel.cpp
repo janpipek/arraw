@@ -82,6 +82,7 @@ AdjustmentPanel::AdjustmentPanel(QWidget* parent) : QWidget(parent) {
             btn->setStyleSheet(QString("QPushButton:checked { background: %1; color: white; }").arg(color));
             chGroup->addButton(btn, int(ch));
             chLayout->addWidget(btn);
+            curveChannelBtns[int(ch)] = btn;
             return btn;
         };
         auto* btnL = makeChBtn("L", ToneCurveWidget::Channel::Luma,  "#555");
@@ -104,6 +105,8 @@ AdjustmentPanel::AdjustmentPanel(QWidget* parent) : QWidget(parent) {
         connect(resetCurveBtn, &QPushButton::clicked, this, [this] {
             beforeDrag = adjustments;
             toneCurve->resetChannel(toneCurve->channel());
+            if (!(adjustments == beforeDrag))
+                emit adjustmentCommitted(beforeDrag, adjustments);
         });
     }
 
@@ -173,7 +176,6 @@ AdjustmentPanel::AdjustmentPanel(QWidget* parent) : QWidget(parent) {
     root->addStretch();
 
     connect(resetBtn, &QPushButton::clicked, this, &AdjustmentPanel::resetAll);
-    connect(this, &AdjustmentPanel::paramsChanged, histogram, &Histogram::setAdjustments);
     connect(wbPresets, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int i) {
         if (i < 0) return;
         temperature.slider->setValue(kWBPresets[i].kelvin);
@@ -293,6 +295,7 @@ void AdjustmentPanel::connectCurve() {
         case ToneCurveWidget::Channel::Green: adjustments.curveG.points    = pts; break;
         case ToneCurveWidget::Channel::Blue:  adjustments.curveB.points    = pts; break;
         }
+        updateCurveChannelIndicators();
         emit paramsChanged(adjustments);
     });
     connect(toneCurve, &ToneCurveWidget::editingFinished, this, [this] {
@@ -339,9 +342,28 @@ void AdjustmentPanel::setParams(const AdjustmentParams& p) {
     toneCurve->setPoints(ToneCurveWidget::Channel::Blue,  p.curveB.points);
 
     adjustments = p;
+    updateCurveChannelIndicators();
     emit paramsChanged(adjustments);
 }
 
-void AdjustmentPanel::setHistogramImage(const ImageBuffer& buf) {
-    histogram->setImage(buf);
+// A "•" suffix marks channels whose curve is bent — otherwise a non-identity
+// curve on an unselected channel is invisible.
+void AdjustmentPanel::updateCurveChannelIndicators() {
+    static const char* labels[4] = {"L", "R", "G", "B"};
+    const CurvePoints* curves[4] = {
+        &adjustments.curveLuma, &adjustments.curveR,
+        &adjustments.curveG,    &adjustments.curveB,
+    };
+    for (int i = 0; i < 4; ++i) {
+        const QString text = curves[i]->isIdentity()
+            ? QString(labels[i]) : QString(labels[i]) + "•";
+        if (curveChannelBtns[i]->text() != text)
+            curveChannelBtns[i]->setText(text);
+    }
+}
+
+void AdjustmentPanel::setHistogramSamples(const QImage& finalSample,
+                                          const QImage& curveInputSample) {
+    histogram->setSample(finalSample);
+    toneCurve->setHistogramSample(curveInputSample);
 }

@@ -8,6 +8,7 @@
 class QSlider;
 class QLabel;
 class QComboBox;
+class QPushButton;
 class QVBoxLayout;
 class QStackedWidget;
 class Histogram;
@@ -17,7 +18,7 @@ class AdjustmentPanel : public QWidget {
 public:
     explicit AdjustmentPanel(QWidget* parent = nullptr);
 
-    void setHistogramImage(const ImageBuffer& buf);
+    void setHistogramSamples(const QImage& finalSample, const QImage& curveInputSample);
     AdjustmentParams params() const { return adjustments; }
     void setParams(const AdjustmentParams& p);
     void resetAll();
@@ -40,10 +41,12 @@ private:
     void connectSliders();
     void connectCurve();
     void syncParams();
+    void updateCurveChannelIndicators();
 
     Histogram*         histogram;
     QComboBox*         wbPresets;
     ToneCurveWidget*   toneCurve;
+    std::array<QPushButton*, 4> curveChannelBtns;   // indexed by ToneCurveWidget::Channel
     QStackedWidget*    hslStack;
 
     SliderRow exposure;
