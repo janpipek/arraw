@@ -220,6 +220,10 @@ AdjustmentPanel::SliderRow AdjustmentPanel::addSlider(
 
 // ── Param sync ────────────────────────────────────────────────────────────────
 
+// Pull all slider values into `adjustments`. Sliders store ×100 fixed-point
+// where the param is fractional: exposure ±500 → ±5 EV, rotation ±4500 → ±45°.
+// cropRect and the curves have no sliders (viewport / curve widget own them),
+// so they are carried over untouched.
 void AdjustmentPanel::syncParams() {
     const QRectF crop      = adjustments.cropRect;
     adjustments.exposure   = exposure.slider->value()   / 100.0f;
@@ -260,6 +264,9 @@ std::vector<QSlider*> AdjustmentPanel::allSliders() const {
     return sliders;
 }
 
+// Each drag gesture becomes one undo entry: sliderPressed snapshots the params
+// into beforeDrag, sliderReleased emits the (before, after) pair that
+// MainWindow turns into a single AdjustmentCommand.
 void AdjustmentPanel::connectSliders() {
     for (auto* s : allSliders()) {
         connect(s, &QSlider::valueChanged, this, [this](int) {

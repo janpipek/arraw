@@ -17,6 +17,9 @@ static QVector4D cropUniform(const QRectF& cr) {
             float(cr.right()), float(cr.bottom())};
 }
 
+// CPU mirror of the rotation in image.vert (keep in sync). UV space is not
+// square, so x is scaled by the image aspect before rotating to make the
+// rotation isotropic in pixel space, then scaled back.
 static QPointF rotateTexUV(float u, float v, float degrees, float aspect,
                            float cx, float cy) {
     float dx = (u - cx) * aspect;
@@ -29,6 +32,8 @@ static QPointF rotateTexUV(float u, float v, float degrees, float aspect,
     return {rx / aspect + cx, ry + cy};
 }
 
+// Fullscreen quad, interleaved (x, y, u, v). V is flipped (bottom vertices get
+// v=1) because GL's NDC Y axis points up while image row 0 is the top.
 static const float kQuad[] = {
     -1, -1,   0, 1,
      1, -1,   1, 1,
@@ -266,6 +271,10 @@ QPointF ImageViewport::viewportToTextureUV(QPointF pos) const {
     return {u, v};
 }
 
+// When the image is rotated, the crop rect the user drags must stay
+// screen-axis-aligned, but an axis-aligned rect in texture UV would appear
+// tilted. So while straightening, the crop is edited in viewport coordinates
+// (activeCropViewport) and only converted back to UV on commit.
 bool ImageViewport::useViewportCrop() const {
     return cropMode && std::abs(params.rotation) > 0.01f;
 }
@@ -566,6 +575,8 @@ void ImageViewport::setZoom(float value) {
     if (newZoom >= kFullResZoomThreshold && zoom < kFullResZoomThreshold && !hasFullRes)
         emit fullResNeeded();
 
+    // Emit even when the zoom value is unchanged: callers (e.g. resetView
+    // after an image load) rely on this to refresh the zoom label.
     if (std::abs(newZoom - zoom) < 0.0001f) {
         emit zoomChanged(pixelZoom());
         return;
@@ -701,6 +712,7 @@ void ImageViewport::mouseMoveEvent(QMouseEvent* e) {
         return;
     }
     if (!dragging) return;
+    // pan is in NDC units (viewport spans -1..1), hence the ×2 / size.
     QPointF delta = e->position() - dragStart;
     pan.setX(pan.x() + float(delta.x()) / width()  * 2.0f);
     pan.setY(pan.y() - float(delta.y()) / height() * 2.0f);

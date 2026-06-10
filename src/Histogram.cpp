@@ -144,6 +144,7 @@ void Histogram::paintEvent(QPaintEvent*) {
     QPainter p(this);
     p.fillRect(rect(), QColor(30, 30, 30));
 
+    // Log-scale the bar heights so sparse bins stay visible next to the peak.
     const float xScale = float(width())  / kBins;
     const float yScale = float(height()) / std::log1p(float(peak));
 

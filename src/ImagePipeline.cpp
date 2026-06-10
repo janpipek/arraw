@@ -50,6 +50,9 @@ std::array<float, 256> computeCurveLUT(const std::vector<QPointF>& ctrl) {
     for (int i = 1; i < m-1; ++i)
         mk[i] = (delta[i-1] + delta[i]) * 0.5;
 
+    // Fritsch-Carlson condition: the curve stays monotone between two control
+    // points iff the normalised tangents satisfy a² + b² ≤ 9; rescale any
+    // tangent pair outside that circle (prevents overshoot/ringing).
     for (int i = 0; i < m-1; ++i) {
         if (std::abs(delta[i]) < 1e-10) { mk[i] = mk[i+1] = 0.0; continue; }
         const double a = mk[i] / delta[i];

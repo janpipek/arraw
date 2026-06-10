@@ -52,6 +52,11 @@ ImageBuffer RawProcessor::loadEmbeddedPreview(const QString& path) {
     return extractThumb(*raw);
 }
 
+// With no_auto_bright and linear gamma, libraw output brightness varies a lot
+// between shots (often very dark). Scale the image so its near-maximum luma
+// (99.5th percentile, ignoring outliers like specular highlights) lands at a
+// fixed target, giving every photo a comparable starting exposure. The gain is
+// clamped so a failed estimate can't blow the image out or crush it.
 static void normalizeRawExposure(ImageBuffer& buf) {
     if (!buf.valid())
         return;
@@ -85,6 +90,9 @@ static void normalizeRawExposure(ImageBuffer& buf) {
         v = std::max(0.0f, v * gain);
 }
 
+// DNG DefaultCrop tag as a normalised rect: {x, y, w, h} in pixels of the
+// demosaiced image. Cameras that don't set it leave zeros, and some write
+// values outside the frame — fall back to the full image in both cases.
 static QRectF defaultCropRect(const LibRaw& raw, int imageWidth, int imageHeight) {
     const auto& crop = raw.imgdata.color.dng_levels.default_crop;
     const int x = int(crop[0]);

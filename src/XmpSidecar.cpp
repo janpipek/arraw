@@ -81,6 +81,8 @@ AdjustmentParams XmpSidecar::load(const QString& rawPath) {
             p.vibrance    = attr("Vibrance",       0.0f);
             p.sharpening  = attr("Sharpness",      0.0f);
             p.rotation    = attr("StraightenAngle",0.0f);
+            // crs stores the crop as normalised edges (left/top/right/bottom),
+            // QRectF wants x/y/width/height.
             p.cropRect    = QRectF(
                 attr("CropLeft",   0.0f), attr("CropTop",    0.0f),
                 attr("CropRight",  1.0f) - attr("CropLeft", 0.0f),

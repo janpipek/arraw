@@ -119,12 +119,17 @@ void FileBrowser::setDirectory(const QString& dir) {
     }
     list->blockSignals(false);
 
+    // Deferred: item geometry isn't laid out yet, so visibility tests
+    // (visualItemRect) would be wrong if run synchronously here.
     QTimer::singleShot(0, this, [this] { requestVisibleThumbnails(); });
 }
 
 void FileBrowser::setCurrentFile(const QString& path) {
     int idx = files.indexOf(path);
     if (idx >= 0) {
+        // Signals blocked: this is called from MainWindow::loadImage, and
+        // letting currentRowChanged fire would re-emit fileSelected and
+        // re-enter the load.
         list->blockSignals(true);
         list->setCurrentRow(idx);
         list->scrollToItem(list->item(idx), QAbstractItemView::PositionAtCenter);

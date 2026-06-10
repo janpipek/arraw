@@ -326,6 +326,8 @@ void MainWindow::saveAdjustments() {
 }
 
 // Simple unsharp mask: radius ≈ 1% of image width, amount 0..100.
+// The blur is approximated by a smooth downscale + upscale round-trip,
+// which is much cheaper than a real Gaussian at these radii.
 static QImage applyUnsharpMask(QImage img, int amount) {
     if (amount == 0) return img;
     const float a = amount / 100.0f;
@@ -384,7 +386,7 @@ void MainWindow::exportFile() {
         path += "." + suffix;
 
     statusLabel->setText("Exporting…");
-    QApplication::processEvents();
+    QApplication::processEvents();  // repaint the status bar before the render blocks the UI
 
     QImage out = viewport->renderToImage(fullRes, p, opts.width, opts.height);
     out = applyUnsharpMask(std::move(out), opts.sharpening);

@@ -102,6 +102,8 @@ private:
     bool  hasFullRes  = false;
     bool  useBaseLook = false;
 
+    // The preview is half-res, so its texels start to magnify around zoom 2×.
+    // Request the full-res texture a bit earlier so it is ready in time.
     static constexpr float kFullResZoomThreshold = 1.5f;
 
     // ── View state ────────────────────────────────────────────────────────
@@ -113,6 +115,10 @@ private:
     bool     straightenActive = false;
 
     // ── Crop state ────────────────────────────────────────────────────────
+    // The crop being edited lives in one of two spaces: texture UV
+    // (activeCrop) normally, or viewport pixels (activeCropViewport) while
+    // the image is rotated — see useViewportCrop(). The cancel* copies are
+    // snapshots taken on entering crop mode, restored on Escape.
     bool    cropMode       = false;
     QRectF  activeCrop     = {0, 0, 1, 1};   // texture UV rect being edited
     QRectF  cancelCrop     = {0, 0, 1, 1};

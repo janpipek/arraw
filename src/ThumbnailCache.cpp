@@ -14,6 +14,8 @@ namespace {
 constexpr int kMaxThumbPx = 512;
 constexpr int kJpegQuality = 85;
 
+// Size and mtime are part of the key, so a modified file simply hashes to a
+// new entry — stale thumbnails never need explicit invalidation.
 QString cacheKey(const QFileInfo& fi) {
     QByteArray data = fi.canonicalFilePath().toUtf8();
     data += '|';
