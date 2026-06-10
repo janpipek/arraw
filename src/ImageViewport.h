@@ -55,7 +55,7 @@ private:
     static constexpr int kHandleCount = 8;
     static constexpr float kHandleRadius = 6.0f;
 
-    void uploadTexture(const ImageBuffer& buf, std::unique_ptr<QOpenGLTexture>& target);
+    std::unique_ptr<QOpenGLTexture> createTexture(const ImageBuffer& buf);
     void uploadCurveLUT();
     void reloadShaders();
     QOpenGLTexture* activeTexture() const;

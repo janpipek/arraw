@@ -10,6 +10,20 @@ static constexpr char kNsCrs[]  = "http://ns.adobe.com/camera-raw-settings/1.0/"
 static constexpr char kNsRdf[]  = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 static constexpr char kNsX[]    = "adobe:ns:meta/";
 
+// crs: attribute names for the 8 HSL ranges, indexed like AdjustmentParams::hslHue etc.
+static constexpr const char* kHslHueNames[8] = {
+    "HueAdjustmentRed","HueAdjustmentOrange","HueAdjustmentYellow",
+    "HueAdjustmentGreen","HueAdjustmentAqua","HueAdjustmentBlue",
+    "HueAdjustmentPurple","HueAdjustmentMagenta" };
+static constexpr const char* kHslSatNames[8] = {
+    "SaturationAdjustmentRed","SaturationAdjustmentOrange",
+    "SaturationAdjustmentYellow","SaturationAdjustmentGreen","SaturationAdjustmentAqua",
+    "SaturationAdjustmentBlue","SaturationAdjustmentPurple","SaturationAdjustmentMagenta" };
+static constexpr const char* kHslLumNames[8] = {
+    "LuminanceAdjustmentRed","LuminanceAdjustmentOrange",
+    "LuminanceAdjustmentYellow","LuminanceAdjustmentGreen","LuminanceAdjustmentAqua",
+    "LuminanceAdjustmentBlue","LuminanceAdjustmentPurple","LuminanceAdjustmentMagenta" };
+
 QString XmpSidecar::pathFor(const QString& rawPath) {
     QFileInfo fi(rawPath);
     return fi.dir().filePath(fi.completeBaseName() + ".xmp");
@@ -73,19 +87,10 @@ AdjustmentParams XmpSidecar::load(const QString& rawPath) {
                 attr("CropBottom", 1.0f) - attr("CropTop",  0.0f));
 
             // HSL attributes
-            const char* hueNames[] = { "HueAdjustmentRed","HueAdjustmentOrange","HueAdjustmentYellow",
-                "HueAdjustmentGreen","HueAdjustmentAqua","HueAdjustmentBlue",
-                "HueAdjustmentPurple","HueAdjustmentMagenta" };
-            const char* satNames[] = { "SaturationAdjustmentRed","SaturationAdjustmentOrange",
-                "SaturationAdjustmentYellow","SaturationAdjustmentGreen","SaturationAdjustmentAqua",
-                "SaturationAdjustmentBlue","SaturationAdjustmentPurple","SaturationAdjustmentMagenta" };
-            const char* lumNames[] = { "LuminanceAdjustmentRed","LuminanceAdjustmentOrange",
-                "LuminanceAdjustmentYellow","LuminanceAdjustmentGreen","LuminanceAdjustmentAqua",
-                "LuminanceAdjustmentBlue","LuminanceAdjustmentPurple","LuminanceAdjustmentMagenta" };
             for (int i = 0; i < 8; ++i) {
-                p.hslHue[i] = attr(hueNames[i], 0.0f);
-                p.hslSat[i] = attr(satNames[i], 0.0f);
-                p.hslLum[i] = attr(lumNames[i], 0.0f);
+                p.hslHue[i] = attr(kHslHueNames[i], 0.0f);
+                p.hslSat[i] = attr(kHslSatNames[i], 0.0f);
+                p.hslLum[i] = attr(kHslLumNames[i], 0.0f);
             }
         }
 
@@ -169,19 +174,10 @@ bool XmpSidecar::save(const QString& rawPath, const AdjustmentParams& p) {
     write("CropBottom",      float(p.cropRect.bottom()));
 
     // HSL
-    const char* hueNames[] = { "HueAdjustmentRed","HueAdjustmentOrange","HueAdjustmentYellow",
-        "HueAdjustmentGreen","HueAdjustmentAqua","HueAdjustmentBlue",
-        "HueAdjustmentPurple","HueAdjustmentMagenta" };
-    const char* satNames[] = { "SaturationAdjustmentRed","SaturationAdjustmentOrange",
-        "SaturationAdjustmentYellow","SaturationAdjustmentGreen","SaturationAdjustmentAqua",
-        "SaturationAdjustmentBlue","SaturationAdjustmentPurple","SaturationAdjustmentMagenta" };
-    const char* lumNames[] = { "LuminanceAdjustmentRed","LuminanceAdjustmentOrange",
-        "LuminanceAdjustmentYellow","LuminanceAdjustmentGreen","LuminanceAdjustmentAqua",
-        "LuminanceAdjustmentBlue","LuminanceAdjustmentPurple","LuminanceAdjustmentMagenta" };
     for (int i = 0; i < 8; ++i) {
-        write(hueNames[i], p.hslHue[i]);
-        write(satNames[i], p.hslSat[i]);
-        write(lumNames[i], p.hslLum[i]);
+        write(kHslHueNames[i], p.hslHue[i]);
+        write(kHslSatNames[i], p.hslSat[i]);
+        write(kHslLumNames[i], p.hslLum[i]);
     }
 
     // Tone curves (child elements, written after attributes)

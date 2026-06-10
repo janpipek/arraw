@@ -8,10 +8,7 @@
 #include <memory>
 #include <vector>
 
-// Extract the embedded JPEG/bitmap thumbnail from an already-open LibRaw
-// instance and return it as a linear-light ImageBuffer.  Does not require
-// unpack() to have been called first.
-static ImageBuffer extractThumb(LibRaw& raw) {
+QImage RawProcessor::extractThumbImage(LibRaw& raw) {
     if (raw.unpack_thumb() != LIBRAW_SUCCESS)
         return {};
 
@@ -39,7 +36,13 @@ static ImageBuffer extractThumb(LibRaw& raw) {
         }
     }
     LibRaw::dcraw_clear_mem(thumb);
-    return srgbToLinearBuffer(img);
+    return img;
+}
+
+// Embedded thumbnail as a linear-light ImageBuffer. Does not require
+// unpack() to have been called first.
+static ImageBuffer extractThumb(LibRaw& raw) {
+    return srgbToLinearBuffer(RawProcessor::extractThumbImage(raw));
 }
 
 ImageBuffer RawProcessor::loadEmbeddedPreview(const QString& path) {
@@ -56,15 +59,12 @@ static void normalizeRawExposure(ImageBuffer& buf) {
     std::vector<float> luma;
     luma.reserve(size_t(buf.width * buf.height / 16 + 1));
 
-    constexpr float kR = 0.2126f;
-    constexpr float kG = 0.7152f;
-    constexpr float kB = 0.0722f;
     constexpr int kStride = 16;
 
     const int pixels = buf.width * buf.height;
     for (int i = 0; i < pixels; i += kStride) {
         const float* p = buf.data.data() + i * 3;
-        const float y = p[0] * kR + p[1] * kG + p[2] * kB;
+        const float y = p[0] * kLumaR + p[1] * kLumaG + p[2] * kLumaB;
         if (std::isfinite(y) && y > 0.0f)
             luma.push_back(y);
     }

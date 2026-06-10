@@ -62,6 +62,8 @@ vec3 applyToneRegions(vec3 c) {
 
     float y = dot(c, kLuma);
 
+    // Luma masks for each tone region (hand-tuned ramp bounds; the CPU
+    // histogram in Histogram.cpp mirrors these values).
     float hl = smoothstep(0.28, 0.88, y);
     float sh = 1.0 - smoothstep(0.12, 0.78, y);
     float w  = smoothstep(0.52, 0.97, y);

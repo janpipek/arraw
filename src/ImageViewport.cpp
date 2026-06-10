@@ -166,6 +166,22 @@ static void setHslUniforms(QOpenGLShaderProgram* shader, const AdjustmentParams&
     shader->setUniformValue("uHslActive", active);
 }
 
+// Uniforms shared between the live preview (paintGL) and export (renderToImage).
+static void setAdjustmentUniforms(QOpenGLShaderProgram* shader, const AdjustmentParams& p) {
+    shader->setUniformValue("uRotation",    p.rotation);
+    shader->setUniformValue("uExposure",    p.exposure);
+    shader->setUniformValue("uContrast",    p.contrast    / kToneSliderToUniform);
+    shader->setUniformValue("uHighlights",  p.highlights  / kToneSliderToUniform);
+    shader->setUniformValue("uShadows",     p.shadows     / kToneSliderToUniform);
+    shader->setUniformValue("uWhites",      p.whites      / kToneSliderToUniform);
+    shader->setUniformValue("uBlacks",      p.blacks      / kToneSliderToUniform);
+    shader->setUniformValue("uTemperature", p.temperature);
+    shader->setUniformValue("uTint",        p.tint        / 100.0f);
+    shader->setUniformValue("uSaturation",  p.saturation  / 100.0f);
+    shader->setUniformValue("uVibrance",    p.vibrance    / 100.0f);
+    setHslUniforms(shader, p);
+}
+
 void ImageViewport::paintGL() {
     if (curveLutDirty) uploadCurveLUT();
 
@@ -191,19 +207,8 @@ void ImageViewport::paintGL() {
     const QRectF crop = cropMode ? QRectF(0, 0, 1, 1) : p.cropRect;
     shader->setUniformValue("uCropRect",    cropUniform(crop));
     shader->setUniformValue("uAspect",      imageAspect);
-    shader->setUniformValue("uRotation",    p.rotation);
-    shader->setUniformValue("uExposure",    p.exposure);
-    shader->setUniformValue("uContrast",    p.contrast    / kToneSliderToUniform);
-    shader->setUniformValue("uHighlights",  p.highlights  / kToneSliderToUniform);
-    shader->setUniformValue("uShadows",     p.shadows     / kToneSliderToUniform);
-    shader->setUniformValue("uWhites",      p.whites      / kToneSliderToUniform);
-    shader->setUniformValue("uBlacks",      p.blacks      / kToneSliderToUniform);
-    shader->setUniformValue("uTemperature", p.temperature);
-    shader->setUniformValue("uTint",        p.tint        / 100.0f);
-    shader->setUniformValue("uSaturation",  p.saturation  / 100.0f);
-    shader->setUniformValue("uVibrance",    p.vibrance    / 100.0f);
     shader->setUniformValue("uBaseLook",    useBaseLook && !showOriginal);
-    setHslUniforms(shader.get(), p);
+    setAdjustmentUniforms(shader.get(), p);
 
     glBindVertexArray(vao);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
@@ -506,7 +511,7 @@ void ImageViewport::drawCropOverlay(QPainter& p) const {
 void ImageViewport::setImage(const ImageBuffer& buf, bool baseLook) {
     imageAspect = buf.valid() ? float(buf.width) / float(buf.height) : 1.0f;
     makeCurrent();
-    uploadTexture(buf, previewTex);
+    previewTex = createTexture(buf);
     hasImage  = buf.valid();
     hasFullRes = false;
     useBaseLook = baseLook;
@@ -519,7 +524,7 @@ void ImageViewport::setFullResImage(const ImageBuffer& buf) {
     if (buf.valid())
         setOriginalImageSize(buf.width, buf.height);
     makeCurrent();
-    uploadTexture(buf, fullResTex);
+    fullResTex = createTexture(buf);
     hasFullRes = buf.valid();
     doneCurrent();
     if (zoom >= kFullResZoomThreshold)
@@ -593,14 +598,14 @@ bool ImageViewport::hasKnownOriginalSize() const {
     return originalWidth > 0 && originalHeight > 0;
 }
 
-void ImageViewport::uploadTexture(const ImageBuffer& buf,
-                                   std::unique_ptr<QOpenGLTexture>& target) {
-    target = std::make_unique<QOpenGLTexture>(QOpenGLTexture::Target2D);
-    target->setSize(buf.width, buf.height);
-    target->setFormat(QOpenGLTexture::RGB32F);
-    target->setMinMagFilters(QOpenGLTexture::Linear, QOpenGLTexture::Linear);
-    target->allocateStorage();
-    target->setData(QOpenGLTexture::RGB, QOpenGLTexture::Float32, buf.data.data());
+std::unique_ptr<QOpenGLTexture> ImageViewport::createTexture(const ImageBuffer& buf) {
+    auto tex = std::make_unique<QOpenGLTexture>(QOpenGLTexture::Target2D);
+    tex->setSize(buf.width, buf.height);
+    tex->setFormat(QOpenGLTexture::RGB32F);
+    tex->setMinMagFilters(QOpenGLTexture::Linear, QOpenGLTexture::Linear);
+    tex->allocateStorage();
+    tex->setData(QOpenGLTexture::RGB, QOpenGLTexture::Float32, buf.data.data());
+    return tex;
 }
 
 // ── Offscreen export render ───────────────────────────────────────────────────
@@ -612,12 +617,7 @@ QImage ImageViewport::renderToImage(const ImageBuffer& buf,
     makeCurrent();
 
     // Temporary texture for the full-res buffer
-    QOpenGLTexture exportTex(QOpenGLTexture::Target2D);
-    exportTex.setSize(buf.width, buf.height);
-    exportTex.setFormat(QOpenGLTexture::RGB32F);
-    exportTex.setMinMagFilters(QOpenGLTexture::Linear, QOpenGLTexture::Linear);
-    exportTex.allocateStorage();
-    exportTex.setData(QOpenGLTexture::RGB, QOpenGLTexture::Float32, buf.data.data());
+    const auto exportTex = createTexture(buf);
 
     const QRectF& cr = p.cropRect;
     const int cropW = qMax(1, int(cr.width()  * buf.width  + 0.5f));
@@ -637,7 +637,7 @@ QImage ImageViewport::renderToImage(const ImageBuffer& buf,
     if (curveLutDirty) uploadCurveLUT();
 
     shader->bind();
-    exportTex.bind(0);
+    exportTex->bind(0);
     shader->setUniformValue("uTexture", 0);
 
     glActiveTexture(GL_TEXTURE1);
@@ -649,23 +649,12 @@ QImage ImageViewport::renderToImage(const ImageBuffer& buf,
     const float texAspect = float(buf.width) / float(buf.height);
     shader->setUniformValue("uCropRect",    cropUniform(cr));
     shader->setUniformValue("uAspect",      texAspect);
-    shader->setUniformValue("uRotation",    p.rotation);
-    shader->setUniformValue("uExposure",    p.exposure);
-    shader->setUniformValue("uContrast",    p.contrast    / kToneSliderToUniform);
-    shader->setUniformValue("uHighlights",  p.highlights  / kToneSliderToUniform);
-    shader->setUniformValue("uShadows",     p.shadows     / kToneSliderToUniform);
-    shader->setUniformValue("uWhites",      p.whites      / kToneSliderToUniform);
-    shader->setUniformValue("uBlacks",      p.blacks      / kToneSliderToUniform);
-    shader->setUniformValue("uTemperature", p.temperature);
-    shader->setUniformValue("uTint",        p.tint        / 100.0f);
-    shader->setUniformValue("uSaturation",  p.saturation  / 100.0f);
-    shader->setUniformValue("uVibrance",    p.vibrance    / 100.0f);
     shader->setUniformValue("uBaseLook",    true);
-    setHslUniforms(shader.get(), p);
+    setAdjustmentUniforms(shader.get(), p);
 
     glBindVertexArray(vao);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    exportTex.release();
+    exportTex->release();
     shader->release();
 
     // Read back — toImage() returns ARGB32 with Y=0 at top (Qt flips automatically)

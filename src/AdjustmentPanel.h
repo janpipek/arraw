@@ -2,6 +2,7 @@
 #include "ImagePipeline.h"
 #include "ToneCurveWidget.h"
 #include <array>
+#include <vector>
 #include <QWidget>
 
 class QSlider;
@@ -35,9 +36,9 @@ private:
     SliderRow addSlider(QVBoxLayout* layout, const QString& name,
                         int min, int max, int defaultVal,
                         const QString& suffix = {});
+    std::vector<QSlider*> allSliders() const;
     void connectSliders();
     void connectCurve();
-    void connectHsl();
     void syncParams();
 
     Histogram*         histogram;

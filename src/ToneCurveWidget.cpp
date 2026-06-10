@@ -123,7 +123,11 @@ void ToneCurveWidget::paintEvent(QPaintEvent*) {
 
     // Draw the spline as a polyline of many samples
     const auto& pts = currentPoints();
-    const auto lut  = computeCurveLUT(pts);
+    if (pts != lutSource) {
+        lutCache  = computeCurveLUT(pts);
+        lutSource = pts;
+    }
+    const auto& lut = lutCache;
 
     QPainterPath curvePath;
     for (int i = 0; i < 256; ++i) {

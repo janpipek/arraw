@@ -18,6 +18,8 @@ void Histogram::setImage(const ImageBuffer& buf) {
 }
 
 void Histogram::setAdjustments(const AdjustmentParams& p) {
+    if (params == p)
+        return;
     params = p;
     if (rawBuf.valid())
         debounce.start();   // restarts the timer if already running
@@ -34,7 +36,6 @@ static float smoothstep(float e0, float e1, float x) {
 }
 
 static void applyBaseLook(float& r, float& g, float& b) {
-    constexpr float kLumaR = 0.2126f, kLumaG = 0.7152f, kLumaB = 0.0722f;
     const float y = kLumaR * r + kLumaG * g + kLumaB * b;
     const float s = smoothstep(0.0f, 1.0f, y);
     const float y2 = y + (s - y) * 0.35f;
@@ -60,7 +61,6 @@ static void applyToneRegions(float& r, float& g, float& b, const AdjustmentParam
         std::abs(p.whites) < 0.001f && std::abs(p.blacks) < 0.001f)
         return;
 
-    constexpr float kLumaR = 0.2126f, kLumaG = 0.7152f, kLumaB = 0.0722f;
     const float y = kLumaR * r + kLumaG * g + kLumaB * b;
 
     const float hl = smoothstep(0.28f, 0.88f, y);
@@ -117,7 +117,7 @@ void Histogram::recompute() {
 
         // Saturation
         if (std::abs(p.saturation) > 0.001f) {
-            float luma = 0.2126f * rv + 0.7152f * gv + 0.0722f * bv;
+            float luma = kLumaR * rv + kLumaG * gv + kLumaB * bv;
             float sat  = 1.0f + p.saturation / 100.0f;
             rv = luma + (rv - luma) * sat;
             gv = luma + (gv - luma) * sat;

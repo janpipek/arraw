@@ -51,6 +51,10 @@ private:
     int  dragIndex  = -1;
     bool dragging   = false;
 
+    // Spline LUT cache for paintEvent — recomputed only when the points change.
+    std::vector<QPointF>   lutSource;
+    std::array<float, 256> lutCache{};
+
     static constexpr int kPad    = 10;
     static constexpr int kRadius = 5;
 };

@@ -12,6 +12,9 @@
 // If onEmbeddedPreview is provided, it is called synchronously (on the
 // calling thread) with the embedded JPEG preview converted to a linear
 // ImageBuffer, before the slower full demosaic begins.
+class LibRaw;
+class QImage;
+
 class RawProcessor {
 public:
     static LoadResult  load(const QString& path,
@@ -20,4 +23,8 @@ public:
 
     // Standalone fast path: extracts the embedded preview without demosaicing.
     static ImageBuffer loadEmbeddedPreview(const QString& path);
+
+    // Decode the embedded JPEG/bitmap thumbnail of an already-open LibRaw
+    // handle into an sRGB QImage. Null image if there is no usable thumbnail.
+    static QImage extractThumbImage(LibRaw& raw);
 };

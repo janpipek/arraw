@@ -186,7 +186,6 @@ AdjustmentPanel::AdjustmentPanel(QWidget* parent) : QWidget(parent) {
 
     connectSliders();
     connectCurve();
-    connectHsl();
 }
 
 // ── Slider factory ────────────────────────────────────────────────────────────
@@ -245,15 +244,24 @@ void AdjustmentPanel::syncParams() {
 
 // ── Connect helpers ───────────────────────────────────────────────────────────
 
-void AdjustmentPanel::connectSliders() {
-    const std::initializer_list<QSlider*> allSliders = {
+std::vector<QSlider*> AdjustmentPanel::allSliders() const {
+    std::vector<QSlider*> sliders = {
         exposure.slider, contrast.slider, highlights.slider,
         shadows.slider,  whites.slider,   blacks.slider,
         temperature.slider, tint.slider,
         saturation.slider, vibrance.slider, sharpening.slider,
         rotation.slider
     };
-    for (auto* s : allSliders) {
+    for (int i = 0; i < 8; ++i) {
+        sliders.push_back(hslHue[i].slider);
+        sliders.push_back(hslSat[i].slider);
+        sliders.push_back(hslLum[i].slider);
+    }
+    return sliders;
+}
+
+void AdjustmentPanel::connectSliders() {
+    for (auto* s : allSliders()) {
         connect(s, &QSlider::valueChanged, this, [this](int) {
             syncParams();
             emit paramsChanged(adjustments);
@@ -286,22 +294,6 @@ void AdjustmentPanel::connectCurve() {
     });
 }
 
-void AdjustmentPanel::connectHsl() {
-    for (int i = 0; i < 8; ++i) {
-        for (auto* row : {&hslHue[i], &hslSat[i], &hslLum[i]}) {
-            connect(row->slider, &QSlider::valueChanged, this, [this](int) {
-                syncParams();
-                emit paramsChanged(adjustments);
-            });
-            connect(row->slider, &QSlider::sliderPressed,  this, [this] { beforeDrag = adjustments; });
-            connect(row->slider, &QSlider::sliderReleased, this, [this] {
-                if (!(adjustments == beforeDrag))
-                    emit adjustmentCommitted(beforeDrag, adjustments);
-            });
-        }
-    }
-}
-
 // ── Reset / set params ────────────────────────────────────────────────────────
 
 void AdjustmentPanel::resetAll() {
@@ -310,19 +302,8 @@ void AdjustmentPanel::resetAll() {
 
 void AdjustmentPanel::setParams(const AdjustmentParams& p) {
     // Block all slider signals
-    std::initializer_list<QSlider*> allSliders = {
-        exposure.slider, contrast.slider, highlights.slider,
-        shadows.slider,  whites.slider,   blacks.slider,
-        temperature.slider, tint.slider,
-        saturation.slider, vibrance.slider, sharpening.slider,
-        rotation.slider
-    };
-    for (auto* s : allSliders) s->blockSignals(true);
-    for (int i = 0; i < 8; ++i) {
-        hslHue[i].slider->blockSignals(true);
-        hslSat[i].slider->blockSignals(true);
-        hslLum[i].slider->blockSignals(true);
-    }
+    const auto sliders = allSliders();
+    for (auto* s : sliders) s->blockSignals(true);
 
     exposure.slider->setValue(int(p.exposure * 100.0f));
     contrast.slider->setValue(int(p.contrast));
@@ -342,12 +323,7 @@ void AdjustmentPanel::setParams(const AdjustmentParams& p) {
         hslLum[i].slider->setValue(int(p.hslLum[i]));
     }
 
-    for (auto* s : allSliders) s->blockSignals(false);
-    for (int i = 0; i < 8; ++i) {
-        hslHue[i].slider->blockSignals(false);
-        hslSat[i].slider->blockSignals(false);
-        hslLum[i].slider->blockSignals(false);
-    }
+    for (auto* s : sliders) s->blockSignals(false);
 
     // Curve widget update (no signals needed — setPoints doesn't emit curveChanged)
     toneCurve->setPoints(ToneCurveWidget::Channel::Luma,  p.curveLuma.points);

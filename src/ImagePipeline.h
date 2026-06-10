@@ -11,6 +11,11 @@
 // Slider ±100 → shader uniform ±0.2 (gentler than dividing by 100 alone).
 inline constexpr float kToneSliderToUniform = 500.0f;
 
+// Rec. 709 luma coefficients — must match kLuma in shaders/image.frag.
+inline constexpr float kLumaR = 0.2126f;
+inline constexpr float kLumaG = 0.7152f;
+inline constexpr float kLumaB = 0.0722f;
+
 // Tone curve control points in [0,1]×[0,1] space.
 struct CurvePoints {
     std::vector<QPointF> points = {{0.0, 0.0}, {1.0, 1.0}};
