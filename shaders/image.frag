@@ -17,12 +17,16 @@ uniform float uTint;            // -1..+1
 uniform float uSaturation;      // -1..+1
 uniform float uVibrance;        // -1..+1
 uniform bool  uBaseLook;
+uniform bool  uDisplayEncode; // true: encode for the (assumed sRGB) display;
+                              // false: output clamped linear working space (export readback)
 uniform bool  uHslActive;
 uniform float uHslHue[8];       // -1..+1 per range
 uniform float uHslSat[8];
 uniform float uHslLum[8];
 
-const vec3 kLuma = vec3(0.2126, 0.7152, 0.0722);
+// Rec.2020 luma — the whole pipeline works in linear Rec.2020 (docs/adr/0001).
+// Must match kLumaR/G/B in src/ImagePipeline.h.
+const vec3 kLuma = vec3(0.2627, 0.6780, 0.0593);
 
 // Hue centres (0..1) for: Red, Orange, Yellow, Green, Aqua, Blue, Purple, Magenta
 const float kHslCenters[8] = float[8](
@@ -183,16 +187,30 @@ vec3 applyVibrance(vec3 c) {
     return mix(vec3(luma), c, 1.0 + uVibrance * (1.0 - sat));
 }
 
-vec3 linearToSRGB(vec3 c) {
-    return pow(clamp(c, 0.0, 1.0), vec3(1.0 / 2.2));
+// Display transform: linear Rec.2020 → sRGB display (docs/adr/0002).
+// Columns of the Rec.2020 → Rec.709/sRGB primaries matrix (GLSL is column-major).
+const mat3 kRec2020ToSRGB = mat3(
+     1.6605, -0.1246, -0.0182,
+    -0.5876,  1.1329, -0.1006,
+    -0.0728, -0.0083,  1.1187
+);
+
+vec3 displayTransform(vec3 c) {
+    c = clamp(kRec2020ToSRGB * c, 0.0, 1.0);
+    // True piecewise sRGB encode (not the 1/2.2 approximation) — the CPU
+    // histogram in Histogram.cpp mirrors this.
+    vec3 lo = c * 12.92;
+    vec3 hi = 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055;
+    return mix(lo, hi, step(vec3(0.0031308), c));
 }
 
 // Processing order (the authoritative definition — DESIGN.md mirrors it).
-// Everything up to the final gamma operates in linear light:
+// Everything up to the final encode operates in linear Rec.2020:
 //   base look → exposure → contrast → tone regions → tone curves
-//   → temperature → tint → HSL → saturation → vibrance → sRGB gamma
-// Crop/rotation happen earlier in image.vert; export-only resize and
-// unsharp mask happen later on the CPU (MainWindow::exportFile).
+//   → temperature → tint → HSL → saturation → vibrance → display transform
+// Crop/rotation happen earlier in image.vert. For export, uDisplayEncode is
+// false: the FBO readback stays in linear working space and the output
+// transform runs on the CPU (lcms2, MainWindow::exportFile).
 void main() {
     if (any(lessThan(vUV, vec2(0.0))) || any(greaterThan(vUV, vec2(1.0)))) {
         fragColor = vec4(0.0, 0.0, 0.0, 1.0);
@@ -212,5 +230,5 @@ void main() {
         c = applyHsl(c);
     c = applySaturation(c);
     c = applyVibrance(c);
-    fragColor = vec4(linearToSRGB(c), 1.0);
+    fragColor = vec4(uDisplayEncode ? displayTransform(c) : clamp(c, 0.0, 1.0), 1.0);
 }

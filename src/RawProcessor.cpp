@@ -1,4 +1,5 @@
 #include "RawProcessor.h"
+#include "ColorManagement.h"
 #include "ImageMetadata.h"
 #include <libraw/libraw.h>
 #include <QImage>
@@ -39,10 +40,10 @@ QImage RawProcessor::extractThumbImage(LibRaw& raw) {
     return img;
 }
 
-// Embedded thumbnail as a linear-light ImageBuffer. Does not require
+// Embedded thumbnail as a working-space ImageBuffer. Does not require
 // unpack() to have been called first.
 static ImageBuffer extractThumb(LibRaw& raw) {
-    return srgbToLinearBuffer(RawProcessor::extractThumbImage(raw));
+    return toWorkingSpaceBuffer(RawProcessor::extractThumbImage(raw));
 }
 
 ImageBuffer RawProcessor::loadEmbeddedPreview(const QString& path) {
@@ -143,6 +144,7 @@ LoadResult RawProcessor::load(const QString& path,
     raw->imgdata.params.use_camera_wb   = 1;
     raw->imgdata.params.no_auto_bright  = 1;
     raw->imgdata.params.output_bps      = 16;
+    raw->imgdata.params.output_color    = 8;   // Rec.2020 working space (needs libraw ≥ 0.21)
     raw->imgdata.params.gamm[0]         = 1.0;  // linear gamma
     raw->imgdata.params.gamm[1]         = 1.0;
     raw->imgdata.params.bright          = 1.0;

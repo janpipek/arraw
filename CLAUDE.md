@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Linux (Fedora)**
 ```bash
-sudo dnf install qt6-qtbase-devel qt6-qttools-devel LibRaw-devel cmake ninja-build
+sudo dnf install qt6-qtbase-devel qt6-qttools-devel LibRaw-devel lcms2-devel cmake ninja-build
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
 ninja -C build
 ./build/arraw
@@ -14,7 +14,7 @@ ninja -C build
 
 **macOS (Homebrew)**
 ```bash
-brew install qt libraw cmake ninja
+brew install qt libraw little-cms2 cmake ninja
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
   -DCMAKE_PREFIX_PATH=$(brew --prefix qt)
 ninja -C build
@@ -23,7 +23,7 @@ ninja -C build
 
 **Windows (vcpkg)**
 ```bat
-vcpkg install qt6-base qt6-tools libraw
+vcpkg install qt6-base qt6-tools libraw lcms
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
   -DCMAKE_TOOLCHAIN_FILE=path/to/vcpkg/scripts/buildsystems/vcpkg.cmake
 ninja -C build

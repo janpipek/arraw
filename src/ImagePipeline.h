@@ -11,10 +11,11 @@
 // Slider ±100 → shader uniform ±0.2 (gentler than dividing by 100 alone).
 inline constexpr float kToneSliderToUniform = 500.0f;
 
-// Rec. 709 luma coefficients — must match kLuma in shaders/image.frag.
-inline constexpr float kLumaR = 0.2126f;
-inline constexpr float kLumaG = 0.7152f;
-inline constexpr float kLumaB = 0.0722f;
+// Rec. 2020 luma coefficients (the working space, see docs/adr/0001) —
+// must match kLuma in shaders/image.frag.
+inline constexpr float kLumaR = 0.2627f;
+inline constexpr float kLumaG = 0.6780f;
+inline constexpr float kLumaB = 0.0593f;
 
 // Tone curve control points in [0,1]×[0,1] space.
 struct CurvePoints {
@@ -78,10 +79,6 @@ struct LoadResult {
 
 // Box-filter 2× downsample (half W, half H). Safe to call off the main thread.
 ImageBuffer downsample2x(const ImageBuffer& src);
-
-// Convert an sRGB QImage (any format) to a linear-light float32 ImageBuffer.
-// Safe to call off the main thread.
-ImageBuffer srgbToLinearBuffer(const QImage& img);
 
 // Compute a 256-entry output LUT from tone-curve control points (Fritsch-Carlson monotone spline).
 std::array<float, 256> computeCurveLUT(const std::vector<QPointF>& pts);

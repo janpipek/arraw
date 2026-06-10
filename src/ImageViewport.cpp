@@ -210,9 +210,10 @@ void ImageViewport::paintGL() {
 
     const AdjustmentParams& p = showOriginal ? AdjustmentParams{} : params;
     const QRectF crop = cropMode ? QRectF(0, 0, 1, 1) : p.cropRect;
-    shader->setUniformValue("uCropRect",    cropUniform(crop));
-    shader->setUniformValue("uAspect",      imageAspect);
-    shader->setUniformValue("uBaseLook",    useBaseLook && !showOriginal);
+    shader->setUniformValue("uCropRect",      cropUniform(crop));
+    shader->setUniformValue("uAspect",        imageAspect);
+    shader->setUniformValue("uBaseLook",      useBaseLook && !showOriginal);
+    shader->setUniformValue("uDisplayEncode", true);
     setAdjustmentUniforms(shader.get(), p);
 
     glBindVertexArray(vao);
@@ -634,10 +635,11 @@ QImage ImageViewport::renderToImage(const ImageBuffer& buf,
     const int cropW = qMax(1, int(cr.width()  * buf.width  + 0.5f));
     const int cropH = qMax(1, int(cr.height() * buf.height + 0.5f));
 
-    // Offscreen FBO at cropped pixel size
+    // Offscreen FBO at cropped pixel size. Float format: the readback stays in
+    // linear working space; the output transform happens on the CPU (lcms2).
     QOpenGLFramebufferObjectFormat fboFmt;
     fboFmt.setAttachment(QOpenGLFramebufferObject::NoAttachment);
-    fboFmt.setInternalTextureFormat(GL_RGBA8);
+    fboFmt.setInternalTextureFormat(GL_RGBA32F);
     QOpenGLFramebufferObject fbo(cropW, cropH, fboFmt);
     fbo.bind();
 
@@ -658,9 +660,10 @@ QImage ImageViewport::renderToImage(const ImageBuffer& buf,
 
     shader->setUniformValue("uTransform", QVector4D(1.0f, 1.0f, 0.0f, 0.0f));
     const float texAspect = float(buf.width) / float(buf.height);
-    shader->setUniformValue("uCropRect",    cropUniform(cr));
-    shader->setUniformValue("uAspect",      texAspect);
-    shader->setUniformValue("uBaseLook",    true);
+    shader->setUniformValue("uCropRect",      cropUniform(cr));
+    shader->setUniformValue("uAspect",        texAspect);
+    shader->setUniformValue("uBaseLook",      true);
+    shader->setUniformValue("uDisplayEncode", false);
     setAdjustmentUniforms(shader.get(), p);
 
     glBindVertexArray(vao);
@@ -668,20 +671,30 @@ QImage ImageViewport::renderToImage(const ImageBuffer& buf,
     exportTex->release();
     shader->release();
 
-    // Read back — toImage() returns ARGB32 with Y=0 at top (Qt flips automatically)
-    QImage result = fbo.toImage();
+    // Read back as linear working-space floats. GL rows are bottom-up, so
+    // flip in place (Format_RGBX32FPx4 scanlines are tightly packed).
+    QImage result(cropW, cropH, QImage::Format_RGBX32FPx4);
+    glReadPixels(0, 0, cropW, cropH, GL_RGBA, GL_FLOAT, result.bits());
 
     fbo.release();
     glViewport(0, 0, width(), height());
     doneCurrent();
 
-    result = result.convertToFormat(QImage::Format_RGB888);
+    const qsizetype stride = result.bytesPerLine();
+    std::vector<uchar> tmp(stride);
+    for (int y = 0; y < cropH / 2; ++y) {
+        uchar* top = result.scanLine(y);
+        uchar* bot = result.scanLine(cropH - 1 - y);
+        memcpy(tmp.data(), top, stride);
+        memcpy(top, bot, stride);
+        memcpy(bot, tmp.data(), stride);
+    }
 
-    // Scale to requested output dimensions
+    // Scale to requested output dimensions while still in linear light —
+    // gamma-space scaling darkens fine detail.
     if (result.width() != outW || result.height() != outH)
         result = result.scaled(outW, outH, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
 
-    result.setColorSpace(QColorSpace(QColorSpace::SRgb));
     return result;
 }
 

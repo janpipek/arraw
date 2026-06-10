@@ -6,7 +6,8 @@ A lightweight, cross-platform RAW photo editor with a Lightroom-style developmen
 
 - **Real-time adjustments** — all edits run as GLSL uniforms; no CPU processing during preview
 - **Non-destructive** — edits saved as `.xmp` sidecar files, Lightroom-compatible (`crs:` namespace)
-- **GPU export** — full-resolution FBO readback through the same shader pipeline; JPEG, PNG, TIFF output
+- **Color-managed** — linear Rec.2020 working space; export to sRGB, Display P3, or Adobe RGB (lcms2, ICC embedded); embedded profiles honoured on load
+- **GPU export** — full-resolution FBO readback through the same shader pipeline; JPEG, PNG, TIFF (8- or 16-bit) output
 - **Dual-res textures** — quarter-res preview for interaction, full-res texture swapped in lazily at high zoom
 - **Undo/redo** — per-slider-drag coalescing via `QUndoStack`
 - **File browser** — filename list dock with arrow-key navigation through a folder
@@ -48,7 +49,7 @@ Zoom: scroll wheel (0.05×–32×). Pan: Alt+drag or middle-button drag.
 ### Linux (Fedora)
 
 ```bash
-sudo dnf install qt6-qtbase-devel qt6-qttools-devel LibRaw-devel cmake ninja-build
+sudo dnf install qt6-qtbase-devel qt6-qttools-devel LibRaw-devel lcms2-devel cmake ninja-build
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
 ninja -C build
 ./build/arraw
@@ -57,7 +58,7 @@ ninja -C build
 ### macOS (Homebrew)
 
 ```bash
-brew install qt libraw cmake ninja
+brew install qt libraw little-cms2 cmake ninja
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
   -DCMAKE_PREFIX_PATH=$(brew --prefix qt)
 ninja -C build
@@ -67,7 +68,7 @@ ninja -C build
 ### Windows (vcpkg)
 
 ```bat
-vcpkg install qt6-base qt6-tools libraw
+vcpkg install qt6-base qt6-tools libraw lcms
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
   -DCMAKE_TOOLCHAIN_FILE=path/to/vcpkg/scripts/buildsystems/vcpkg.cmake
 ninja -C build
@@ -85,9 +86,10 @@ Shaders are copied from `shaders/` to `build/shaders/` automatically. If the app
 ## Dependencies
 
 - **Qt 6** (Widgets, OpenGL, Concurrent, Xml)
-- **libraw** — RAW decoding
+- **libraw** (≥ 0.21) — RAW decoding into the Rec.2020 working space
+- **lcms2** — output color transforms and ICC profile handling
 - **OpenGL 3.3 core** — GPU preview and export pipeline
-- CMake 3.16+, Ninja
+- CMake 3.21+, Ninja
 
 ## Architecture
 
@@ -102,4 +104,4 @@ Brief overview:
 - `FileBrowser` — folder-scoped filename list dock
 - `MainWindow` — wires everything together; owns the `QUndoStack`
 
-All adjustments live in `AdjustmentParams` (a plain struct). The GLSL fragment shader is the single source of truth for rendering — the same shader runs during preview and export.
+All adjustments live in `AdjustmentParams` (a plain struct). The GLSL fragment shader is the single source of truth for all *adjustments* — the same shader runs during preview and export, always in linear Rec.2020. Only the final color encode differs per destination: in-shader for the display, lcms2 on the CPU for export (see `docs/adr/0002`).

@@ -10,6 +10,7 @@
 #include <QCheckBox>
 #include <QLabel>
 #include <QPushButton>
+#include <QSettings>
 
 ExportDialog::ExportDialog(int srcW, int srcH, QWidget* parent)
     : QDialog(parent), srcW(srcW), srcH(srcH)
@@ -19,11 +20,23 @@ ExportDialog::ExportDialog(int srcW, int srcH, QWidget* parent)
 
     auto* root = new QVBoxLayout(this);
 
+    QSettings settings;
+
     // ── Format ──────────────────────────────────────────────────────────────
     auto* fmtForm = new QFormLayout;
     formatBox = new QComboBox;
     formatBox->addItems({"JPEG", "PNG", "TIFF"});
     fmtForm->addRow("Format:", formatBox);
+
+    profileBox = new QComboBox;
+    profileBox->addItems({"sRGB", "Display P3", "Adobe RGB"});
+    profileBox->setCurrentIndex(settings.value("export/profile", 0).toInt());
+    fmtForm->addRow("Color profile:", profileBox);
+
+    sixteenBitCheck = new QCheckBox("16-bit per channel");
+    sixteenBitCheck->setChecked(settings.value("export/sixteenBit", false).toBool());
+    fmtForm->addRow(QString(), sixteenBitCheck);
+
     root->addLayout(fmtForm);
 
     root->addSpacing(6);
@@ -115,6 +128,12 @@ ExportDialog::ExportDialog(int srcW, int srcH, QWidget* parent)
     connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
 
+    connect(this, &QDialog::accepted, this, [this] {
+        QSettings s;
+        s.setValue("export/profile",    profileBox->currentIndex());
+        s.setValue("export/sixteenBit", sixteenBitCheck->isChecked());
+    });
+
     onFormatChanged(0);
 }
 
@@ -129,11 +148,19 @@ ExportOptions ExportDialog::options() const {
     o.height    = heightSpin->value();
     o.quality   = qualitySpin->value();
     o.sharpening = sharpenSpin->value();
+    switch (profileBox->currentIndex()) {
+    case 0: o.profile = OutputProfile::SRgb;      break;
+    case 1: o.profile = OutputProfile::DisplayP3; break;
+    case 2: o.profile = OutputProfile::AdobeRgb;  break;
+    }
+    o.bitDepth = (o.format == ExportOptions::Format::TIFF &&
+                  sixteenBitCheck->isChecked()) ? 16 : 8;
     return o;
 }
 
 void ExportDialog::onFormatChanged(int idx) {
-    qualityGroup->setVisible(idx == 0); // only for JPEG
+    qualityGroup->setVisible(idx == 0);    // only for JPEG
+    sixteenBitCheck->setVisible(idx == 2); // only for TIFF
     adjustSize();
 }
 

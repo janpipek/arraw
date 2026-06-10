@@ -25,6 +25,20 @@ if(NOT TARGET PkgConfig::LIBRAW)
     )
 endif()
 
+# lcms2: same pkg-config-first strategy as libraw.
+if(PkgConfig_FOUND)
+    pkg_check_modules(LCMS2 IMPORTED_TARGET lcms2)
+endif()
+if(NOT TARGET PkgConfig::LCMS2)
+    find_library(LCMS2_LIB NAMES lcms2 REQUIRED)
+    find_path(LCMS2_INCLUDE_DIR lcms2.h REQUIRED)
+    add_library(PkgConfig::LCMS2 INTERFACE IMPORTED)
+    set_target_properties(PkgConfig::LCMS2 PROPERTIES
+        INTERFACE_LINK_LIBRARIES "${LCMS2_LIB}"
+        INTERFACE_INCLUDE_DIRECTORIES "${LCMS2_INCLUDE_DIR}"
+    )
+endif()
+
 set(SOURCES
     src/main.cpp
     src/MainWindow.cpp
@@ -37,6 +51,7 @@ set(SOURCES
     src/RawProcessor.cpp
     src/StandardImageLoader.cpp
     src/ImagePipeline.cpp
+    src/ColorManagement.cpp
     src/XmpSidecar.cpp
     src/FileBrowser.cpp
     src/ThumbnailCache.cpp
@@ -55,6 +70,7 @@ target_link_libraries(arraw PRIVATE
     Qt6::Concurrent
     OpenGL::GL
     PkgConfig::LIBRAW
+    PkgConfig::LCMS2
 )
 
 # Copy shaders next to the binary

@@ -25,7 +25,7 @@ clean export. Not a DAM, not a cataloguing tool — just open a folder, edit, ex
 | UI | Qt6 Widgets + QOpenGLWidget | Migrate to QRhiWidget (Metal/Vulkan/D3D native) |
 | GPU | OpenGL 3.3 core + GLSL | Qt RHI shaders via `qsb` |
 | RAW decode | libraw | — |
-| Color mgmt | `QColorSpace::SRgb` tag | lcms2 (wide-gamut, print profiles) |
+| Color mgmt | lcms2, linear Rec.2020 working space | monitor ICC + soft-proofing (Milestone 4 Phase B) |
 | Build | CMake + Ninja, pkg-config | — |
 
 ---
@@ -45,9 +45,14 @@ Geometry:   rotation (degrees, -45..45), cropRect (normalised 0..1 QRectF)
 
 ### `ImageBuffer`
 ```
-data:   std::vector<float>  — interleaved RGB, linear light, [0..1] nominal
+data:   std::vector<float>  — interleaved RGB, linear-light Rec.2020, [0..1] nominal
 width, height: int
 ```
+
+The working color space is linear Rec.2020 everywhere (see `docs/adr/0001`):
+libraw decodes into it directly (`output_color=8`), and `toWorkingSpaceBuffer()`
+(ColorManagement) converts standard images / thumbnails into it, honouring
+embedded ICC profiles and assuming sRGB when untagged.
 
 ### `LoadResult`
 Returned by the background decode task:
@@ -93,12 +98,19 @@ MainWindow (QMainWindow)
 
 ### `RawProcessor`
 - Wraps libraw. Called only from background threads.
-- Decodes RAW → linear float32 RGB buffer with camera white balance applied.
+- Decodes RAW → linear float32 Rec.2020 buffer with camera white balance applied.
 - Returns `LoadResult` containing `fullRes` + `preview` (via `downsample2x`).
 
 ### `ImagePipeline`
 - `AdjustmentParams` and `ImageBuffer` struct definitions.
 - `downsample2x()`: box-filter 2× downsample, thread-safe, no Qt dependency.
+
+### `ColorManagement` (lcms2)
+- `toWorkingSpaceBuffer()`: any QImage → linear Rec.2020 `ImageBuffer`,
+  honouring the embedded ICC profile (sRGB fallback). Thread-safe.
+- `toOutputImage()`: linear working-space float QImage → sRGB / Display P3 /
+  Adobe RGB, 8-bit `RGB888` or 16-bit `RGBA64`, color-space tagged.
+- All profiles are synthesized from primaries — no `.icc` files shipped.
 
 ### `ImageViewport` (QOpenGLWidget + QOpenGLFunctions_3_3_Core)
 - Holds two textures: `m_previewTex` (always uploaded) and `m_fullResTex` (uploaded
@@ -110,8 +122,9 @@ MainWindow (QMainWindow)
   `Escape` cancels.
 - Before/after: `\` key held → renders with zeroed `AdjustmentParams`.
 - Export: `renderToImage(const AdjustmentParams&, const ImageBuffer& fullRes)`
-  — renders full-res buffer through the shader pipeline into an offscreen FBO,
-  calls `glReadPixels`, returns a `QImage` tagged `QColorSpace::SRgb`.
+  — renders full-res buffer through the shader pipeline into an offscreen
+  float FBO with `uDisplayEncode` off, calls `glReadPixels`, returns a linear
+  working-space `QImage` (`Format_RGBX32FPx4`) for the CPU output transform.
 
 ### `AdjustmentPanel`
 - Emits `paramsChanged(AdjustmentParams)` on any slider change.
@@ -164,8 +177,10 @@ that file is the source of truth; keep this list in sync with it.
 **Load time — CPU, background thread, once per image**
 
 ```
-1. Decode            RAW: libraw demosaic (camera WB, linear gamma, 16-bit)
-                     Standard images: QImage decode → srgbToLinearBuffer()
+1. Decode            RAW: libraw demosaic (camera WB, linear gamma, 16-bit,
+                     output_color=8 → linear Rec.2020)
+                     Standard images: QImage decode → toWorkingSpaceBuffer()
+                     (embedded ICC honoured, sRGB assumed when untagged)
 2. Exposure normalisation (RAW only)
                      gain so the 99.5th-percentile luma lands at 0.78
 3. downsample2x      box filter → half-res preview for viewport + histogram
@@ -179,7 +194,7 @@ that file is the source of truth; keep this list in sync with it.
                      (zoom/pan are applied to vertex positions, not pixels)
 ```
 
-**Color — fragment shader (`image.frag`), per frame, linear light throughout**
+**Color — fragment shader (`image.frag`), per frame, linear Rec.2020 throughout**
 
 ```
  6. Base look        fixed S-curve + slight sat boost (uBaseLook; on for the
@@ -196,34 +211,46 @@ that file is the source of truth; keep this list in sync with it.
 13. HSL color mix    8 hue ranges, smoothstep-weighted hue/sat/lum shifts
 14. Saturation       luma-preserving saturation scale
 15. Vibrance         saturation boost weighted toward desaturated pixels
-16. sRGB gamma       pow(x, 1/2.2) — applied on screen AND on export readback
+16. Encode           uDisplayEncode on (screen): display transform —
+                     Rec.2020→sRGB matrix + true piecewise sRGB curve
+                     (monitor assumed sRGB until Phase B)
+                     uDisplayEncode off (export): clamped linear working space
 ```
 
 **Export only — CPU, after FBO readback (`MainWindow::exportFile`)**
 
 ```
-17. Resize           scale to the dimensions chosen in the export dialog
-18. Sharpening       unsharp mask (the Sharpen slider has no preview effect —
-                     it is applied only here)
-19. Save             JPEG/PNG/TIFF, tagged QColorSpace::SRgb
+17. Resize           linear-light float scale to the chosen dimensions
+18. Output transform lcms2: working space → sRGB / Display P3 / Adobe RGB,
+                     8-bit (RGB888) or 16-bit (RGBA64, TIFF only)
+19. Sharpening       unsharp mask in encoded space (the Sharpen slider has no
+                     preview effect — it is applied only here)
+20. Save             JPEG/PNG/TIFF with the output ICC profile embedded
 ```
 
-The histogram (`Histogram.cpp`) mirrors steps 6–9, 11, and 14 on the CPU; it
-ignores curves, tint, HSL, and vibrance.
+The histogram (`Histogram.cpp`) mirrors steps 6–9, 11, 14, and the sRGB curve
+of 16 on the CPU; it ignores curves, tint, HSL, vibrance, and the primaries
+matrix — approximate by design.
 
 ---
 
 ## Export Pipeline
 
-1. User triggers export (Ctrl+E).
+1. User triggers export (Ctrl+E). Dialog: format, size, quality, sharpening,
+   color profile (sRGB / Display P3 / Adobe RGB, remembered via QSettings),
+   16-bit toggle (TIFF only).
 2. `ImageViewport::renderToImage()` called on the main thread:
-   - Upload `m_fullRes` as a float32 RGB texture.
-   - Bind offscreen FBO at the cropped pixel size.
-   - Run the full shader pipeline (steps 4–16 above) with current `AdjustmentParams`.
-   - Read back → `QImage(Format_RGB888)`, scaled to the requested output size.
-   - Tag: `image.setColorSpace(QColorSpace::SRgb)`.
-3. Unsharp mask (sharpening slider, CPU).
-4. `QImage::save(path)` — JPEG, PNG, or TIFF.
+   - Upload `fullRes` as a float32 RGB texture.
+   - Bind offscreen float FBO (GL_RGBA32F) at the cropped pixel size.
+   - Run the full shader pipeline (steps 4–15 above) with current
+     `AdjustmentParams`, `uDisplayEncode` off.
+   - `glReadPixels` → `QImage(Format_RGBX32FPx4)`, linear working space,
+     scaled to the requested output size while still linear.
+3. `toOutputImage()` (ColorManagement, lcms2): working space → chosen output
+   profile, 8- or 16-bit, tagged with the matching `QColorSpace` so the ICC
+   profile is embedded on save.
+4. Unsharp mask (sharpening slider, CPU, encoded space).
+5. `QImage::save(path)` — JPEG, PNG, or TIFF.
 
 ---
 
@@ -266,7 +293,8 @@ ignores curves, tint, HSL, and vibrance.
 - [x] Crop + straighten (`C`, handles, rotation slider + drag gesture)
 - [x] Undo/redo (`QUndoStack`, coalesced per slider drag)
 - [x] XMP sidecar load/save (`Ctrl+S`)
-- [x] WYSIWYG export via FBO readback, sRGB-tagged output (JPEG/PNG/TIFF)
+- [x] WYSIWYG export via FBO readback; sRGB / Display P3 / Adobe RGB output
+      with embedded ICC (JPEG/PNG/TIFF, 16-bit TIFF)
 - [x] Filename list dock with arrow-key navigation
 - [x] Window state persistence via `QSettings`
 
@@ -287,10 +315,24 @@ ignores curves, tint, HSL, and vibrance.
   capped concurrency, LRU cache.
 
 ### Milestone 4 — Color Management (lcms2)
-- Proper linear → sRGB transform via lcms2 on export.
-- Wide-gamut output (AdobeRGB, Display P3).
-- Soft-proofing for print profiles.
-- Camera input profile support (DCP or ICC).
+
+Design resolved 2026-06 — see `docs/adr/0001-linear-rec2020-working-space.md` and
+`docs/adr/0002-shader-adjustments-cpu-encode.md`. Camera input profiles (DCP/ICC)
+are explicitly out of scope.
+
+**Phase A — correct transforms + wide-gamut export — ✅ implemented**
+(now described by the Processing/Export Pipeline sections above and the
+`ColorManagement` component)
+
+**Phase B — soft-proofing + monitor profiles**
+- lcms2 bakes working→proof→display into a ~33³ 3D LUT texture sampled as the
+  shader's final stage (replaces the display transform while proofing).
+- Profile sources: OS profile-directory scan + file picker for `.icc`.
+- Rendering intent UI: Perceptual / Relative Colorimetric, black-point compensation.
+- Gamut warning overlay (in-gamut flag in the LUT alpha channel).
+- Toggle: `S` key, with a visible proofing indicator.
+- The same LUT path honors the monitor's actual ICC profile (closing the
+  assume-sRGB gap from Phase A).
 
 ### Milestone 5 — Qt RHI Migration
 - Swap `QOpenGLWidget` → `QRhiWidget`.

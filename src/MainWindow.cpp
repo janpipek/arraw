@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "ColorManagement.h"
 #include "ImageViewport.h"
 #include "AdjustmentPanel.h"
 #include "ExifPanel.h"
@@ -238,7 +239,7 @@ void MainWindow::loadImage(const QString& path) {
 
     // Sync: show cached thumbnail immediately while the background task runs
     if (QImage cached = ThumbnailCache::loadFromDisk(path); !cached.isNull())
-        viewport->setImage(srgbToLinearBuffer(cached));
+        viewport->setImage(toWorkingSpaceBuffer(cached));
 
     // Single background task: extract embedded preview on the same open file
     // handle (unpack_thumb only), dispatch it to the main thread, then
@@ -328,6 +329,7 @@ void MainWindow::saveAdjustments() {
 // Simple unsharp mask: radius ≈ 1% of image width, amount 0..100.
 // The blur is approximated by a smooth downscale + upscale round-trip,
 // which is much cheaper than a real Gaussian at these radii.
+// Runs in encoded (output-profile) space — Format_RGB888 or Format_RGBA64.
 static QImage applyUnsharpMask(QImage img, int amount) {
     if (amount == 0) return img;
     const float a = amount / 100.0f;
@@ -337,6 +339,19 @@ static QImage applyUnsharpMask(QImage img, int amount) {
                                 Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
                        .scaled(img.width(), img.height(),
                                Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    if (img.format() == QImage::Format_RGBA64) {
+        for (int y = 0; y < img.height(); ++y) {
+            const auto* src = reinterpret_cast<const quint16*>(img.constScanLine(y));
+            const auto* blr = reinterpret_cast<const quint16*>(blurred.constScanLine(y));
+            auto* dst = reinterpret_cast<quint16*>(img.scanLine(y));
+            for (int x = 0; x < img.width() * 4; ++x) {
+                if ((x & 3) == 3) continue;   // leave alpha alone
+                int v = int(src[x]) + int(a * (int(src[x]) - int(blr[x])));
+                dst[x] = quint16(std::clamp(v, 0, 65535));
+            }
+        }
+        return img;
+    }
     for (int y = 0; y < img.height(); ++y) {
         const uchar* src = img.constScanLine(y);
         const uchar* blr = blurred.constScanLine(y);
@@ -388,7 +403,9 @@ void MainWindow::exportFile() {
     statusLabel->setText("Exporting…");
     QApplication::processEvents();  // repaint the status bar before the render blocks the UI
 
+    // Linear working-space render → output profile (lcms2) → sharpen → save.
     QImage out = viewport->renderToImage(fullRes, p, opts.width, opts.height);
+    out = toOutputImage(out, opts.profile, opts.bitDepth == 16);
     out = applyUnsharpMask(std::move(out), opts.sharpening);
 
     bool ok;

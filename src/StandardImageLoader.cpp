@@ -1,4 +1,5 @@
 #include "StandardImageLoader.h"
+#include "ColorManagement.h"
 #include <QFileInfo>
 #include <QImage>
 
@@ -18,7 +19,7 @@ LoadResult StandardImageLoader::load(const QString& path,
     if (cancel && cancel->load())
         return {};
 
-    ImageBuffer fullRes = srgbToLinearBuffer(img);
+    ImageBuffer fullRes = toWorkingSpaceBuffer(img);
     if (!fullRes.valid())
         return {{}, {}, {}, QString("Failed to decode: %1").arg(path)};
 

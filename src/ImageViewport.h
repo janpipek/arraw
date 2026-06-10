@@ -28,7 +28,9 @@ public:
     bool hasKnownOriginalSize() const;
 
     // Render buf through the full shader pipeline into an offscreen FBO.
-    // Returns an sRGB QImage cropped to params.cropRect and scaled to outW×outH.
+    // Returns a *linear working-space* float QImage (Format_RGBX32FPx4),
+    // cropped to params.cropRect and scaled to outW×outH; the caller applies
+    // the output transform (toOutputImage) before saving.
     QImage renderToImage(const ImageBuffer& buf, const AdjustmentParams& params,
                          int outW, int outH);
 

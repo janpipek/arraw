@@ -80,9 +80,13 @@ static void applyToneRegions(float& r, float& g, float& b, const AdjustmentParam
     b *= scale;
 }
 
-static float gamma(float v) {
+// True piecewise sRGB encode — mirrors displayTransform() in image.frag
+// (minus the Rec.2020→sRGB primaries matrix; the histogram is approximate
+// by design, see the pipeline notes in DESIGN.md).
+static float srgbEncode(float v) {
     v = std::clamp(v, 0.0f, 1.0f);
-    return std::pow(v, 1.0f / 2.2f);
+    return v <= 0.0031308f ? v * 12.92f
+                           : 1.055f * std::pow(v, 1.0f / 2.4f) - 0.055f;
 }
 
 void Histogram::recompute() {
@@ -124,9 +128,9 @@ void Histogram::recompute() {
             bv = luma + (bv - luma) * sat;
         }
 
-        // Gamma → display space
+        // Encode → display space
         auto bin = [](float v) {
-            return std::clamp(int(gamma(v) * kBins), 0, kBins - 1);
+            return std::clamp(int(srgbEncode(v) * kBins), 0, kBins - 1);
         };
         ++r[bin(rv)];
         ++g[bin(gv)];
