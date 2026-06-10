@@ -187,6 +187,12 @@ vec3 linearToSRGB(vec3 c) {
     return pow(clamp(c, 0.0, 1.0), vec3(1.0 / 2.2));
 }
 
+// Processing order (the authoritative definition — DESIGN.md mirrors it).
+// Everything up to the final gamma operates in linear light:
+//   base look → exposure → contrast → tone regions → tone curves
+//   → temperature → tint → HSL → saturation → vibrance → sRGB gamma
+// Crop/rotation happen earlier in image.vert; export-only resize and
+// unsharp mask happen later on the CPU (MainWindow::exportFile).
 void main() {
     if (any(lessThan(vUV, vec2(0.0))) || any(greaterThan(vUV, vec2(1.0)))) {
         fragColor = vec4(0.0, 0.0, 0.0, 1.0);

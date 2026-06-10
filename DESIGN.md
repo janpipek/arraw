@@ -155,24 +155,61 @@ The GL context is never accessed from the worker thread.
 
 ---
 
-## GPU Pipeline (GLSL fragment shader)
+## Processing Pipeline (full order)
 
-Applied per-frame as uniforms. Order matters:
+Every step that touches pixels, from file to screen/disk, in execution order.
+The fragment-shader order is enforced by `main()` in `shaders/image.frag` —
+that file is the source of truth; keep this list in sync with it.
+
+**Load time — CPU, background thread, once per image**
 
 ```
-1. Exposure         pow(2, uExposure) multiply
-2. Contrast         sigmoid around 0.5
-3. Highlights       smoothstep mask on bright region
-4. Shadows          smoothstep mask on dark region
-5. Whites / Blacks  extreme-range clipping adjust
-6. Temperature      Kelvin → RGB shift (relative to 5500K neutral)
-7. Tint             green/magenta axis shift
-8. Saturation       luma-preserving saturation scale
-9. Vibrance         saturation boost weighted toward desaturated pixels
-10. sRGB gamma      pow(x, 1/2.2) — display only, not applied on export readback
+1. Decode            RAW: libraw demosaic (camera WB, linear gamma, 16-bit)
+                     Standard images: QImage decode → srgbToLinearBuffer()
+2. Exposure normalisation (RAW only)
+                     gain so the 99.5th-percentile luma lands at 0.78
+3. downsample2x      box filter → half-res preview for viewport + histogram
 ```
 
-Crop and rotation are handled in the vertex shader (transform the quad UV coords).
+**Geometry — vertex shader (`image.vert`), per frame**
+
+```
+4. Crop              quad UVs remapped into params.cropRect
+5. Rotation          aspect-corrected rotation around the image centre
+                     (zoom/pan are applied to vertex positions, not pixels)
+```
+
+**Color — fragment shader (`image.frag`), per frame, linear light throughout**
+
+```
+ 6. Base look        fixed S-curve + slight sat boost (uBaseLook; on for the
+                     final image and export, off for interim embedded-preview
+                     display and the before/after view)
+ 7. Exposure         pow(2, uExposure) multiply
+ 8. Contrast         linear scale around 0.5
+ 9. Tone regions     highlights, shadows, whites, blacks — luma-masked
+                     (smoothstep ramps), applied as one combined luma delta
+10. Tone curves      256×1 LUT texture: luma curve first (scales RGB
+                     proportionally, preserves hue), then per-channel R/G/B
+11. Temperature      Kelvin → red/blue shift relative to 5500K neutral
+12. Tint             green axis shift
+13. HSL color mix    8 hue ranges, smoothstep-weighted hue/sat/lum shifts
+14. Saturation       luma-preserving saturation scale
+15. Vibrance         saturation boost weighted toward desaturated pixels
+16. sRGB gamma       pow(x, 1/2.2) — applied on screen AND on export readback
+```
+
+**Export only — CPU, after FBO readback (`MainWindow::exportFile`)**
+
+```
+17. Resize           scale to the dimensions chosen in the export dialog
+18. Sharpening       unsharp mask (the Sharpen slider has no preview effect —
+                     it is applied only here)
+19. Save             JPEG/PNG/TIFF, tagged QColorSpace::SRgb
+```
+
+The histogram (`Histogram.cpp`) mirrors steps 6–9, 11, and 14 on the CPU; it
+ignores curves, tint, HSL, and vibrance.
 
 ---
 
@@ -180,13 +217,13 @@ Crop and rotation are handled in the vertex shader (transform the quad UV coords
 
 1. User triggers export (Ctrl+E).
 2. `ImageViewport::renderToImage()` called on the main thread:
-   - Upload `m_fullRes` as a float32 RGB texture (if not already uploaded).
-   - Bind offscreen FBO at full image dimensions.
-   - Run the full shader pipeline with current `AdjustmentParams`.
-   - Apply crop/rotation transform.
-   - `glReadPixels` → `QImage(Format_RGB888)`.
+   - Upload `m_fullRes` as a float32 RGB texture.
+   - Bind offscreen FBO at the cropped pixel size.
+   - Run the full shader pipeline (steps 4–16 above) with current `AdjustmentParams`.
+   - Read back → `QImage(Format_RGB888)`, scaled to the requested output size.
    - Tag: `image.setColorSpace(QColorSpace::SRgb)`.
-3. `QImage::save(path)` — JPEG, PNG, or TIFF.
+3. Unsharp mask (sharpening slider, CPU).
+4. `QImage::save(path)` — JPEG, PNG, or TIFF.
 
 ---
 
