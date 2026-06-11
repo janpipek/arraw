@@ -25,7 +25,7 @@ clean export. Not a DAM, not a cataloguing tool — just open a folder, edit, ex
 | UI | Qt6 Widgets + QOpenGLWidget | Migrate to QRhiWidget (Metal/Vulkan/D3D native) |
 | GPU | OpenGL 3.3 core + GLSL | Qt RHI shaders via `qsb` |
 | RAW decode | libraw | — |
-| Color mgmt | lcms2, linear Rec.2020 working space | monitor ICC + soft-proofing (Milestone 4 Phase B) |
+| Color mgmt | lcms2, linear Rec.2020 working space, soft-proofing, monitor ICC | — |
 | Build | CMake + Ninja, pkg-config | — |
 
 ---
@@ -110,7 +110,22 @@ MainWindow (QMainWindow)
   honouring the embedded ICC profile (sRGB fallback). Thread-safe.
 - `toOutputImage()`: linear working-space float QImage → sRGB / Display P3 /
   Adobe RGB, 8-bit `RGB888` or 16-bit `RGBA64`, color-space tagged.
-- All profiles are synthesized from primaries — no `.icc` files shipped.
+- All built-in profiles are synthesized from primaries — no `.icc` files shipped.
+- `buildDisplayLut()`: bakes working→[proof→]display into a 33³ RGBA LUT for
+  the shader. Indexed in sRGB-encoded coordinates (shadow precision); alpha =
+  in-gamut flag, computed twice — lcms alarm-code check (cLUT printer
+  profiles) plus an unclamped transform into the proof space (matrix-shaper
+  profiles, where the alarm check never fires).
+- `scanSystemProfiles()`: display-/output-class `.icc`/`.icm` files from the
+  OS profile directories.
+
+### `ProofingPanel`
+- Soft-proofing controls under the adjustments column: profile (scan + browse),
+  intent (Perceptual / Relative Colorimetric), black point compensation,
+  gamut warning. View state only — persisted in QSettings, never in the XMP.
+- `S` toggles proofing; the status bar shows "Proofing: <profile>" while on.
+- The monitor profile (View → Monitor Profile) reuses the same LUT path with
+  no proof profile in the chain; "sRGB (assume)" keeps the fast shader path.
 
 ### `ImageViewport` (QOpenGLWidget + QOpenGLFunctions_3_3_Core)
 - Holds two textures: `m_previewTex` (always uploaded) and `m_fullResTex` (uploaded
@@ -211,9 +226,12 @@ that file is the source of truth; keep this list in sync with it.
 13. HSL color mix    8 hue ranges, smoothstep-weighted hue/sat/lum shifts
 14. Saturation       luma-preserving saturation scale
 15. Vibrance         saturation boost weighted toward desaturated pixels
-16. Encode           uDisplayEncode on (screen): display transform —
-                     Rec.2020→sRGB matrix + true piecewise sRGB curve
-                     (monitor assumed sRGB until Phase B)
+16. Encode           uDisplayEncode on (screen):
+                       uUseLut off — display transform: Rec.2020→sRGB matrix
+                       + true piecewise sRGB curve (sRGB monitor assumed)
+                       uUseLut on — 33³ LUT texture baked by lcms2
+                       (soft-proofing and/or monitor ICC profile; LUT alpha
+                       carries the in-gamut flag for the gamut warning)
                      uDisplayEncode off (export): clamped linear working space
 ```
 
@@ -268,6 +286,7 @@ matrix — approximate by design.
 | `Enter` | Confirm crop |
 | `Escape` | Cancel crop |
 | `\` (hold) | Before/after toggle |
+| `S` | Toggle soft-proofing |
 | `R` | Reset all adjustments |
 
 ---
@@ -278,6 +297,8 @@ matrix — approximate by design.
   No auto-save on every slider move.
 - **Window state**: geometry, dock layout, last opened folder — via `QSettings`
   on close, restored on launch.
+- **Color settings**: export profile + bit depth, soft-proofing configuration,
+  monitor profile — via `QSettings` (view/export state, never in the sidecar).
 
 ---
 
@@ -324,15 +345,8 @@ are explicitly out of scope.
 (now described by the Processing/Export Pipeline sections above and the
 `ColorManagement` component)
 
-**Phase B — soft-proofing + monitor profiles**
-- lcms2 bakes working→proof→display into a ~33³ 3D LUT texture sampled as the
-  shader's final stage (replaces the display transform while proofing).
-- Profile sources: OS profile-directory scan + file picker for `.icc`.
-- Rendering intent UI: Perceptual / Relative Colorimetric, black-point compensation.
-- Gamut warning overlay (in-gamut flag in the LUT alpha channel).
-- Toggle: `S` key, with a visible proofing indicator.
-- The same LUT path honors the monitor's actual ICC profile (closing the
-  assume-sRGB gap from Phase A).
+**Phase B — soft-proofing + monitor profiles — ✅ implemented**
+(see the `ColorManagement` and `ProofingPanel` components and pipeline step 16)
 
 ### Milestone 5 — Qt RHI Migration
 - Swap `QOpenGLWidget` → `QRhiWidget`.

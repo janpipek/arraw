@@ -5,6 +5,11 @@ out vec4 fragColor;
 
 uniform sampler2D uTexture;
 uniform sampler2D uCurveLUT;    // 256×1 RGBA32F: R=luma, G=red, B=green, A=blue
+uniform sampler3D uLut3D;       // display LUT (soft-proof / monitor profile):
+                                // indexed by sRGB-encoded working RGB,
+                                // RGB=display output, A=in-gamut flag
+uniform bool  uUseLut;
+uniform bool  uGamutWarn;
 
 uniform float uExposure;        // EV stops
 uniform float uContrast;        // -1..+1
@@ -195,13 +200,28 @@ const mat3 kRec2020ToSRGB = mat3(
     -0.0728, -0.0083,  1.1187
 );
 
-vec3 displayTransform(vec3 c) {
-    c = clamp(kRec2020ToSRGB * c, 0.0, 1.0);
-    // True piecewise sRGB encode (not the 1/2.2 approximation) — the CPU
-    // histogram in Histogram.cpp mirrors this.
+// True piecewise sRGB encode (not the 1/2.2 approximation) — the CPU
+// histogram in Histogram.cpp mirrors this.
+vec3 srgbCurve(vec3 c) {
     vec3 lo = c * 12.92;
     vec3 hi = 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055;
     return mix(lo, hi, step(vec3(0.0031308), c));
+}
+
+vec3 displayTransform(vec3 c) {
+    return srgbCurve(clamp(kRec2020ToSRGB * c, 0.0, 1.0));
+}
+
+// Soft-proof / monitor-profile path: sample the lcms2-baked 3D LUT. The index
+// is sRGB-encoded (same shaper the LUT was built with) so the grid resolution
+// concentrates where the eye sees banding — the shadows.
+vec3 displayLut(vec3 c) {
+    vec3 idx = srgbCurve(clamp(c, 0.0, 1.0));
+    float n = float(textureSize(uLut3D, 0).x);
+    vec4 v = texture(uLut3D, idx * ((n - 1.0) / n) + 0.5 / n);
+    if (uGamutWarn && v.a < 0.5)
+        return vec3(1.0, 0.1, 0.1);   // out-of-gamut warning overlay
+    return v.rgb;
 }
 
 // Processing order (the authoritative definition — DESIGN.md mirrors it).
@@ -230,5 +250,10 @@ void main() {
         c = applyHsl(c);
     c = applySaturation(c);
     c = applyVibrance(c);
-    fragColor = vec4(uDisplayEncode ? displayTransform(c) : clamp(c, 0.0, 1.0), 1.0);
+    if (!uDisplayEncode)
+        fragColor = vec4(clamp(c, 0.0, 1.0), 1.0);          // export readback
+    else if (uUseLut)
+        fragColor = vec4(displayLut(c), 1.0);               // proof / monitor ICC
+    else
+        fragColor = vec4(displayTransform(c), 1.0);         // assume-sRGB display
 }

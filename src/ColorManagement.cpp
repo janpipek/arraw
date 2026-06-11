@@ -1,5 +1,10 @@
 #include "ColorManagement.h"
 #include <QColorSpace>
+#include <QDir>
+#include <QDirIterator>
+#include <QFileInfo>
+#include <algorithm>
+#include <cmath>
 #include <lcms2.h>
 #include <memory>
 
@@ -126,4 +131,173 @@ QImage toOutputImage(const QImage& linearWorking, OutputProfile profile, bool si
 
     dst.setColorSpace(outputColorSpace(profile));
     return dst;
+}
+
+// ── Soft-proofing / monitor profiles ─────────────────────────────────────────
+
+namespace {
+
+// Inverse of the LUT shaper (srgbCurve in image.frag): grid coordinates are
+// sRGB-encoded, transform input must be linear working space.
+float srgbDecode(float v) {
+    return v <= 0.04045f ? v / 12.92f
+                         : std::pow((v + 0.055f) / 1.055f, 2.4f);
+}
+
+constexpr int kLutSize = 33;
+
+int lcmsIntent(ProofIntent intent) {
+    return intent == ProofIntent::Perceptual ? INTENT_PERCEPTUAL
+                                             : INTENT_RELATIVE_COLORIMETRIC;
+}
+
+}  // namespace
+
+DisplayLut buildDisplayLut(const QString& proofIcc, ProofIntent intent,
+                           bool blackPointCompensation, const QString& monitorIcc) {
+    // Own context: the gamut pass sets alarm codes, which are context state.
+    using ContextPtr = std::unique_ptr<std::remove_pointer_t<cmsContext>, decltype(&cmsDeleteContext)>;
+    const ContextPtr ctx{cmsCreateContext(nullptr, nullptr), &cmsDeleteContext};
+
+    const ProfilePtr work = workingProfile();
+    ProfilePtr display = makeProfile(nullptr);
+    if (!monitorIcc.isEmpty())
+        display = makeProfile(cmsOpenProfileFromFile(monitorIcc.toLocal8Bit().constData(), "r"));
+    if (!display) {
+        if (!monitorIcc.isEmpty()) return {};   // explicit profile failed to load
+        display = makeProfile(cmsCreate_sRGBProfile());
+    }
+    ProfilePtr proof = makeProfile(nullptr);
+    if (!proofIcc.isEmpty()) {
+        proof = makeProfile(cmsOpenProfileFromFile(proofIcc.toLocal8Bit().constData(), "r"));
+        if (!proof) return {};
+    }
+
+    // Grid of linear working-space inputs at shaper-spaced coordinates.
+    constexpr int n = kLutSize;
+    constexpr size_t points = size_t(n) * n * n;
+    std::vector<float> in(points * 4);
+    size_t i = 0;
+    for (int b = 0; b < n; ++b)
+        for (int g = 0; g < n; ++g)
+            for (int r = 0; r < n; ++r) {
+                in[i++] = srgbDecode(float(r) / (n - 1));
+                in[i++] = srgbDecode(float(g) / (n - 1));
+                in[i++] = srgbDecode(float(b) / (n - 1));
+                in[i++] = 1.0f;
+            }
+
+    DisplayLut lut;
+    lut.size = n;
+    lut.data.assign(points * 4, 1.0f);   // pre-fill: lcms skips the alpha channel
+
+    const cmsUInt32Number bpcFlag = blackPointCompensation ? cmsFLAGS_BLACKPOINTCOMPENSATION : 0;
+    TransformPtr t{nullptr, &cmsDeleteTransform};
+    if (proof)
+        t = TransformPtr{cmsCreateProofingTransformTHR(ctx.get(),
+                             work.get(), TYPE_RGBA_FLT, display.get(), TYPE_RGBA_FLT,
+                             proof.get(), lcmsIntent(intent), INTENT_RELATIVE_COLORIMETRIC,
+                             cmsFLAGS_SOFTPROOFING | bpcFlag),
+                         &cmsDeleteTransform};
+    else
+        t = TransformPtr{cmsCreateTransformTHR(ctx.get(),
+                             work.get(), TYPE_RGBA_FLT, display.get(), TYPE_RGBA_FLT,
+                             INTENT_RELATIVE_COLORIMETRIC, 0),
+                         &cmsDeleteTransform};
+    if (!t) return {};
+    cmsDoTransform(t.get(), in.data(), lut.data.data(), cmsUInt32Number(points));
+
+    // lcms float transforms don't clip: out-of-gamut inputs produce values far
+    // outside [0,1]. Clamp like the shader's non-LUT display path does (the
+    // encode curve is monotonic, so clamping after it equals clipping before).
+    for (size_t p = 0; p < points; ++p)
+        for (int c = 0; c < 3; ++c) {
+            float& v = lut.data[p*4 + c];
+            v = std::clamp(v, 0.0f, 1.0f);
+        }
+
+    if (proof) {
+        // Gamut pass 1 (cLUT printer profiles): out-of-gamut grid points come
+        // back painted with the alarm color (an improbable exact sentinel).
+        cmsUInt16Number alarm[cmsMAXCHANNELS] = {0xFFFF, 0x0001, 0xFFFF};
+        cmsSetAlarmCodesTHR(ctx.get(), alarm);
+        const TransformPtr gamut{cmsCreateProofingTransformTHR(ctx.get(),
+                                     work.get(), TYPE_RGBA_FLT, display.get(), TYPE_RGBA_16,
+                                     proof.get(), lcmsIntent(intent), INTENT_RELATIVE_COLORIMETRIC,
+                                     cmsFLAGS_SOFTPROOFING | cmsFLAGS_GAMUTCHECK | bpcFlag),
+                                 &cmsDeleteTransform};
+        if (gamut) {
+            std::vector<cmsUInt16Number> out16(points * 4);
+            cmsDoTransform(gamut.get(), in.data(), out16.data(), cmsUInt32Number(points));
+            for (size_t p = 0; p < points; ++p)
+                if (out16[p*4] == 0xFFFF && out16[p*4+1] == 0x0001 && out16[p*4+2] == 0xFFFF)
+                    lut.data[p*4 + 3] = 0.0f;
+        }
+
+        // Gamut pass 2 (matrix-shaper profiles, where lcms's alarm check never
+        // fires because matrix math inverts exactly): transform into the proof
+        // space unclamped and flag anything outside [0,1]. For cLUT profiles
+        // the output is already clipped in-range, so this adds no false hits.
+        if (cmsGetColorSpace(proof.get()) == cmsSigRgbData) {
+            const TransformPtr direct{cmsCreateTransformTHR(ctx.get(),
+                                          work.get(), TYPE_RGBA_FLT, proof.get(), TYPE_RGBA_FLT,
+                                          INTENT_RELATIVE_COLORIMETRIC, bpcFlag),
+                                      &cmsDeleteTransform};
+            if (direct) {
+                std::vector<float> outF(points * 4);
+                cmsDoTransform(direct.get(), in.data(), outF.data(), cmsUInt32Number(points));
+                constexpr float eps = 1e-3f;
+                for (size_t p = 0; p < points; ++p)
+                    for (int c = 0; c < 3; ++c)
+                        if (outF[p*4 + c] < -eps || outF[p*4 + c] > 1.0f + eps)
+                            lut.data[p*4 + 3] = 0.0f;
+            }
+        }
+    }
+    return lut;
+}
+
+QList<IccProfileInfo> scanSystemProfiles() {
+    QStringList dirs;
+#if defined(Q_OS_MACOS)
+    dirs << "/System/Library/ColorSync/Profiles"
+         << "/Library/ColorSync/Profiles"
+         << QDir::homePath() + "/Library/ColorSync/Profiles";
+#elif defined(Q_OS_WIN)
+    dirs << qEnvironmentVariable("WINDIR", "C:/Windows") + "/System32/spool/drivers/color";
+#else
+    dirs << "/usr/share/color/icc"
+         << "/var/lib/color/icc"
+         << QDir::homePath() + "/.local/share/icc"
+         << QDir::homePath() + "/.color/icc";
+#endif
+
+    QList<IccProfileInfo> profiles;
+    for (const QString& dir : dirs) {
+        QDirIterator it(dir, {"*.icc", "*.icm"}, QDir::Files, QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            const QString path = it.next();
+            const auto p = makeProfile(cmsOpenProfileFromFile(path.toLocal8Bit().constData(), "r"));
+            if (!p) continue;
+
+            const cmsProfileClassSignature cls = cmsGetDeviceClass(p.get());
+            if (cls != cmsSigDisplayClass && cls != cmsSigOutputClass)
+                continue;
+
+            char desc[256] = {};
+            cmsGetProfileInfoASCII(p.get(), cmsInfoDescription, "en", "US", desc, sizeof(desc));
+
+            IccProfileInfo info;
+            info.path = path;
+            info.description = desc[0] ? QString::fromLatin1(desc) : QFileInfo(path).baseName();
+            info.isDisplayClass = cls == cmsSigDisplayClass &&
+                                  cmsGetColorSpace(p.get()) == cmsSigRgbData;
+            profiles.append(info);
+        }
+    }
+    std::sort(profiles.begin(), profiles.end(),
+              [](const IccProfileInfo& a, const IccProfileInfo& b) {
+                  return a.description.localeAwareCompare(b.description) < 0;
+              });
+    return profiles;
 }

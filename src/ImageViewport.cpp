@@ -49,9 +49,10 @@ ImageViewport::ImageViewport(QWidget* parent)
 
 ImageViewport::~ImageViewport() {
     makeCurrent();
-    if (vao)         glDeleteVertexArrays(1, &vao);
-    if (vbo)         glDeleteBuffers(1, &vbo);
-    if (curveLutTex) glDeleteTextures(1, &curveLutTex);
+    if (vao)           glDeleteVertexArrays(1, &vao);
+    if (vbo)           glDeleteBuffers(1, &vbo);
+    if (curveLutTex)   glDeleteTextures(1, &curveLutTex);
+    if (displayLutTex) glDeleteTextures(1, &displayLutTex);
     doneCurrent();
 }
 
@@ -113,6 +114,47 @@ void ImageViewport::uploadCurveLUT() {
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, 256, 1, 0, GL_RGBA, GL_FLOAT, rgba.data());
     glBindTexture(GL_TEXTURE_2D, 0);
     curveLutDirty = false;
+}
+
+void ImageViewport::uploadDisplayLut() {
+    if (pendingLut.valid()) {
+        if (!displayLutTex)
+            glGenTextures(1, &displayLutTex);
+        glBindTexture(GL_TEXTURE_3D, displayLutTex);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+        glTexImage3D(GL_TEXTURE_3D, 0, GL_RGBA32F,
+                     pendingLut.size, pendingLut.size, pendingLut.size,
+                     0, GL_RGBA, GL_FLOAT, pendingLut.data.data());
+        glBindTexture(GL_TEXTURE_3D, 0);
+        pendingLut = {};
+    }
+    displayLutDirty = false;
+}
+
+void ImageViewport::setDisplayLut(const DisplayLut& lut) {
+    if (!lut.valid()) { clearDisplayLut(); return; }
+    pendingLut      = lut;
+    displayLutDirty = true;
+    useDisplayLut   = true;
+    update();
+}
+
+void ImageViewport::clearDisplayLut() {
+    useDisplayLut   = false;
+    displayLutDirty = false;
+    pendingLut      = {};
+    update();
+}
+
+void ImageViewport::setGamutWarning(bool on) {
+    if (gamutWarn == on)
+        return;
+    gamutWarn = on;
+    update();
 }
 
 void ImageViewport::resizeGL(int w, int h) {
@@ -188,7 +230,8 @@ static void setAdjustmentUniforms(QOpenGLShaderProgram* shader, const Adjustment
 }
 
 void ImageViewport::paintGL() {
-    if (curveLutDirty) uploadCurveLUT();
+    if (curveLutDirty)   uploadCurveLUT();
+    if (displayLutDirty) uploadDisplayLut();
 
     glClear(GL_COLOR_BUFFER_BIT);
     auto* tex = activeTexture();
@@ -201,7 +244,14 @@ void ImageViewport::paintGL() {
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, curveLutTex);
     shader->setUniformValue("uCurveLUT", 1);
+    // uLut3D must always point at its own unit: a sampler3D left at the
+    // default 0 would alias uTexture's unit and fail program validation.
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_3D, displayLutTex);
+    shader->setUniformValue("uLut3D", 2);
     glActiveTexture(GL_TEXTURE0);
+    shader->setUniformValue("uUseLut",    useDisplayLut);
+    shader->setUniformValue("uGamutWarn", gamutWarn);
 
     const float viewportAspect = float(width()) / float(height());
     const float sx = zoom * (displayAspect() / viewportAspect);
@@ -657,6 +707,8 @@ QImage ImageViewport::renderToImage(const ImageBuffer& buf,
     glBindTexture(GL_TEXTURE_2D, curveLutTex);
     shader->setUniformValue("uCurveLUT", 1);
     glActiveTexture(GL_TEXTURE0);
+    shader->setUniformValue("uLut3D",  2);      // unused (uDisplayEncode off), but
+    shader->setUniformValue("uUseLut", false);  // must not alias a 2D sampler unit
 
     shader->setUniformValue("uTransform", QVector4D(1.0f, 1.0f, 0.0f, 0.0f));
     const float texAspect = float(buf.width) / float(buf.height);

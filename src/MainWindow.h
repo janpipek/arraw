@@ -7,6 +7,7 @@
 
 class ImageViewport;
 class AdjustmentPanel;
+class ProofingPanel;
 class ExifPanel;
 class FileBrowser;
 class QDockWidget;
@@ -42,14 +43,22 @@ private:
     void setLoadingState(bool loading);
     void updateZoomStatus(float zoom);
 
+    // Rebuild the viewport's display LUT from the current soft-proofing
+    // settings and monitor profile (no LUT when both are off).
+    void rebuildDisplayLut();
+
     ImageViewport*   viewport;
     AdjustmentPanel* adjPanel;
+    ProofingPanel*   proofPanel;
     ExifPanel*       exifPanel;
     FileBrowser*     fileBrowser;
     QDockWidget*     filmStripDock;
     QUndoStack*      undoStack;
     QLabel*          statusLabel;
+    QLabel*          proofLabel;
     QToolButton*     zoomButton;
+
+    QString monitorProfilePath;   // empty = assume sRGB
 
     ImageBuffer fullRes;
     ImageBuffer preview;

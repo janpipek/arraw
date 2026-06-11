@@ -1,4 +1,5 @@
 #pragma once
+#include "ColorManagement.h"
 #include "ImagePipeline.h"
 #include <QOpenGLWidget>
 #include <QOpenGLFunctions_3_3_Core>
@@ -26,6 +27,13 @@ public:
     float zoomFactor() const;
     float pixelZoom() const;
     bool hasKnownOriginalSize() const;
+
+    // Display LUT (soft-proofing / monitor profile). Affects preview only —
+    // export renders with the display encode disabled. The upload happens
+    // lazily in paintGL, so these are safe to call before the GL context exists.
+    void setDisplayLut(const DisplayLut& lut);
+    void clearDisplayLut();
+    void setGamutWarning(bool on);
 
     // Render buf through the full shader pipeline into an offscreen FBO.
     // Returns a *linear working-space* float QImage (Format_RGBX32FPx4),
@@ -59,6 +67,7 @@ private:
 
     std::unique_ptr<QOpenGLTexture> createTexture(const ImageBuffer& buf);
     void uploadCurveLUT();
+    void uploadDisplayLut();
     void reloadShaders();
     QOpenGLTexture* activeTexture() const;
 
@@ -94,6 +103,12 @@ private:
     unsigned int vbo         = 0;
     unsigned int curveLutTex = 0;   // 256×1 RGBA32F, one column per channel (L R G B)
     bool curveLutDirty       = true;
+
+    unsigned int displayLutTex = 0; // N³ RGBA32F display LUT (proof / monitor ICC)
+    DisplayLut   pendingLut;        // uploaded on the next paintGL
+    bool displayLutDirty = false;
+    bool useDisplayLut   = false;
+    bool gamutWarn       = false;
 
     // ── Image state ───────────────────────────────────────────────────────
     AdjustmentParams params;

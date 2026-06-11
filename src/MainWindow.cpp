@@ -2,6 +2,7 @@
 #include "ColorManagement.h"
 #include "ImageViewport.h"
 #include "AdjustmentPanel.h"
+#include "ProofingPanel.h"
 #include "ExifPanel.h"
 #include "FileBrowser.h"
 #include "RawProcessor.h"
@@ -9,6 +10,7 @@
 #include "ThumbnailCache.h"
 #include "XmpSidecar.h"
 #include "ExportDialog.h"
+#include <QActionGroup>
 #include <QMenuBar>
 #include <QDockWidget>
 #include <QFileDialog>
@@ -18,6 +20,7 @@
 #include <QMessageBox>
 #include <QScrollArea>
 #include <QTabWidget>
+#include <QVBoxLayout>
 #include <QFileInfo>
 #include <QApplication>
 #include <QCloseEvent>
@@ -57,9 +60,15 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     undoStack   = new QUndoStack(this);
     setCentralWidget(viewport);
 
+    monitorProfilePath = QSettings().value("display/monitorProfile").toString();
+
     setupDocks();
     setupMenus();
     setupStatusBar();
+
+    connect(proofPanel, &ProofingPanel::proofingChanged,
+            this, &MainWindow::rebuildDisplayLut);
+    rebuildDisplayLut();
 
     connect(&loadWatcher, &QFutureWatcher<LoadResult>::finished,
             this, &MainWindow::onLoadFinished);
@@ -109,6 +118,8 @@ void MainWindow::closeEvent(QCloseEvent* e) {
 void MainWindow::keyPressEvent(QKeyEvent* e) {
     if (e->key() == Qt::Key_Left)       fileBrowser->navigateBy(-1);
     else if (e->key() == Qt::Key_Right) fileBrowser->navigateBy(+1);
+    else if (e->key() == Qt::Key_S && e->modifiers() == Qt::NoModifier)
+        proofPanel->setProofingEnabled(!proofPanel->proofingEnabled());
     else QMainWindow::keyPressEvent(e);
 }
 
@@ -130,11 +141,40 @@ void MainWindow::setupMenus() {
     view->addSeparator();
     view->addAction("Reset Zoom", Qt::CTRL | Qt::Key_0,
                     viewport, &ImageViewport::resetView);
+    view->addSeparator();
+
+    // Monitor profile: how the preview is encoded for this screen.
+    // "sRGB" keeps the fast in-shader path; a profile switches to the LUT path.
+    auto* monitorMenu = view->addMenu("Monitor Profile");
+    auto* monitorGroup = new QActionGroup(this);
+    monitorGroup->setExclusive(true);
+
+    auto addMonitorAction = [&](const QString& text, const QString& path) {
+        QAction* a = monitorMenu->addAction(text);
+        a->setCheckable(true);
+        a->setActionGroup(monitorGroup);
+        a->setChecked(path == monitorProfilePath);
+        connect(a, &QAction::triggered, this, [this, path] {
+            monitorProfilePath = path;
+            QSettings().setValue("display/monitorProfile", path);
+            rebuildDisplayLut();
+        });
+        return a;
+    };
+
+    addMonitorAction("sRGB (assume)", QString())->setChecked(monitorProfilePath.isEmpty());
+    for (const IccProfileInfo& info : scanSystemProfiles())
+        if (info.isDisplayClass)
+            addMonitorAction(info.description, info.path);
 }
 
 void MainWindow::setupStatusBar() {
     statusLabel = new QLabel("No image loaded", this);
     statusBar()->addWidget(statusLabel, 1);
+
+    proofLabel = new QLabel(this);
+    proofLabel->setVisible(false);
+    statusBar()->addPermanentWidget(proofLabel);
 
     zoomButton = new QToolButton(this);
     zoomButton->setPopupMode(QToolButton::InstantPopup);
@@ -181,8 +221,14 @@ void MainWindow::setupDocks() {
     tabs->setMinimumWidth(280);
 
     auto* adjScroll = new QScrollArea(tabs);
-    adjPanel = new AdjustmentPanel(adjScroll);
-    adjScroll->setWidget(adjPanel);
+    adjPanel   = new AdjustmentPanel;
+    proofPanel = new ProofingPanel;
+    auto* adjColumn = new QWidget(adjScroll);
+    auto* adjLayout = new QVBoxLayout(adjColumn);
+    adjLayout->setContentsMargins(0, 0, 0, 0);
+    adjLayout->addWidget(adjPanel);
+    adjLayout->addWidget(proofPanel);
+    adjScroll->setWidget(adjColumn);
     adjScroll->setWidgetResizable(true);
     adjScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     tabs->addTab(adjScroll, "Adjustments");
@@ -315,6 +361,34 @@ void MainWindow::setLoadingState(bool loading) {
     statusLabel->setText(loading
         ? QString("Loading %1...").arg(QFileInfo(currentPath).fileName())
         : QString());
+}
+
+void MainWindow::rebuildDisplayLut() {
+    const bool proofing = proofPanel->proofingEnabled();
+    if (!proofing && monitorProfilePath.isEmpty()) {
+        viewport->clearDisplayLut();
+        viewport->setGamutWarning(false);
+        proofLabel->setVisible(false);
+        return;
+    }
+
+    const DisplayLut lut = buildDisplayLut(
+        proofing ? proofPanel->profilePath() : QString(),
+        proofPanel->intent(), proofPanel->blackPointCompensation(),
+        monitorProfilePath);
+    if (!lut.valid()) {
+        QMessageBox::warning(this, "Color Management",
+            "Could not build the display transform — check the selected ICC profiles.");
+        viewport->clearDisplayLut();
+        viewport->setGamutWarning(false);
+        proofLabel->setVisible(false);
+        return;
+    }
+
+    viewport->setDisplayLut(lut);
+    viewport->setGamutWarning(proofing && proofPanel->gamutWarning());
+    proofLabel->setText(proofing ? "Proofing: " + proofPanel->profileName() : QString());
+    proofLabel->setVisible(proofing);
 }
 
 void MainWindow::saveAdjustments() {

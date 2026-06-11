@@ -7,6 +7,7 @@ A lightweight, cross-platform RAW photo editor with a Lightroom-style developmen
 - **Real-time adjustments** — all edits run as GLSL uniforms; no CPU processing during preview
 - **Non-destructive** — edits saved as `.xmp` sidecar files, Lightroom-compatible (`crs:` namespace)
 - **Color-managed** — linear Rec.2020 working space; export to sRGB, Display P3, or Adobe RGB (lcms2, ICC embedded); embedded profiles honoured on load
+- **Soft-proofing** — preview against any printer/paper ICC profile (`S`), Perceptual/Relative intent, black point compensation, gamut warning; monitor ICC profile support
 - **GPU export** — full-resolution FBO readback through the same shader pipeline; JPEG, PNG, TIFF (8- or 16-bit) output
 - **Dual-res textures** — quarter-res preview for interaction, full-res texture swapped in lazily at high zoom
 - **Undo/redo** — per-slider-drag coalescing via `QUndoStack`
@@ -40,6 +41,7 @@ CR2, CR3, NEF, ARW, DNG, RAF, ORF, RW2, PEF, SRW (via libraw)
 | `Enter` | Confirm crop |
 | `Escape` | Cancel crop |
 | `\` (hold) | Before/after toggle |
+| `S` | Toggle soft-proofing |
 | `R` | Reset all adjustments |
 
 Zoom: scroll wheel (0.05×–32×). Pan: Alt+drag or middle-button drag.

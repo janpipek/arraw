@@ -52,6 +52,7 @@ set(SOURCES
     src/StandardImageLoader.cpp
     src/ImagePipeline.cpp
     src/ColorManagement.cpp
+    src/ProofingPanel.cpp
     src/XmpSidecar.cpp
     src/FileBrowser.cpp
     src/ThumbnailCache.cpp
