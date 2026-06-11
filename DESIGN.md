@@ -364,3 +364,38 @@ are explicitly out of scope.
 - At high zoom, stream tiles from full-res buffer rather than uploading entire texture.
 - Tile cache with LRU eviction.
 - Async tile upload via PBO (Pixel Buffer Objects).
+
+---
+
+## Testing Strategy
+
+Design resolved 2026-06. Framework: **Catch2 v3** via CMake `FetchContent`
+(identical on all three platforms; float matchers suit image math; tags
+partition fast unit tests from `[gpu]` goldens). Tests link against an
+**`arraw_core` static library** — every source file except `main.cpp` — so
+both phases share one build restructure. Suite runs locally via `ctest` /
+`just test`; **no CI for now**.
+
+**Phase 1 — numeric core ✅** (pure logic, no GL context):
+- `computeCurveLUT`: property tests — endpoints pinned, monotonicity
+  (Fritsch-Carlson), identity curve → identity LUT.
+- `downsample2x`: exact box-filter averages on synthetic buffers; odd sizes.
+- `XmpSidecar`: save→load round-trip on randomized params, **plus** a
+  committed known-good `crs:` sidecar fixture and exact-string assertions on
+  emitted fields (`crs:Temperature` in Kelvin, the rest -100..100) — the
+  Lightroom-compat contract is tested, not aspirational. Round-trip alone
+  cannot catch a matched reader/writer bug.
+- `ColorManagement`: lcms2 output transforms asserted against exact known
+  values (the CPU encode stage is deterministic — see ADR 0002).
+- `RawProcessor`: one or two tiny committed DNG fixtures (hundreds of KB);
+  assert buffer validity, preview = half W × half H, metadata fields.
+- Param↔slider mappings and `kLuma*` constants matching `image.frag`.
+
+**Phase 2 — golden images ✅** (GLSL pipeline, locked in before the
+Milestone 5 RHI migration so the rework cannot silently change output):
+- Tests call the real `ImageViewport::renderToImage()`; comparison policy,
+  tolerances, and PFM golden format are in
+  `docs/adr/0005-golden-image-tests-tolerance-policy.md`.
+- Seven scenarios (`tests/test_GoldenImages.cpp`) over a synthetic
+  gradient + color-bar scene; goldens live in `tests/fixtures/golden/`,
+  regenerated with `ARRAW_UPDATE_GOLDENS=1 ./build/tests/arraw_tests "[golden]"`.

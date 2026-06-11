@@ -105,7 +105,10 @@ AdjustmentParams XmpSidecar::load(const QString& rawPath) {
             else if (name == "crs:ToneCurvePV2012Green") target = &p.curveG;
             else if (name == "crs:ToneCurvePV2012Blue")  target = &p.curveB;
             if (target) {
-                xml.readNext(); // enter rdf:Seq
+                // Enter rdf:Seq — skip the whitespace tokens that formatted
+                // XML (including our own auto-formatted output) puts between
+                // the curve element and its child.
+                do { xml.readNext(); } while (xml.isWhitespace());
                 if (xml.isStartElement() && xml.qualifiedName() == "rdf:Seq")
                     target->points = parseCurveSeq(xml);
             }

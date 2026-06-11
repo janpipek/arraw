@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.21)
 project(arraw VERSION 0.1.0 LANGUAGES CXX)
 
+enable_testing()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
@@ -39,8 +41,9 @@ if(NOT TARGET PkgConfig::LCMS2)
     )
 endif()
 
-set(SOURCES
-    src/main.cpp
+# Everything except main.cpp lives in a static library so test executables
+# can link the real code (see DESIGN.md "Testing Strategy").
+set(CORE_SOURCES
     src/MainWindow.cpp
     src/ImageViewport.cpp
     src/AdjustmentPanel.cpp
@@ -59,12 +62,11 @@ set(SOURCES
     src/ExportDialog.cpp
 )
 
+add_library(arraw_core STATIC ${CORE_SOURCES})
 
-add_executable(arraw ${SOURCES})
+target_include_directories(arraw_core PUBLIC src)
 
-target_include_directories(arraw PRIVATE src)
-
-target_link_libraries(arraw PRIVATE
+target_link_libraries(arraw_core PUBLIC
     Qt6::Widgets
     Qt6::OpenGL
     Qt6::OpenGLWidgets
@@ -73,6 +75,12 @@ target_link_libraries(arraw PRIVATE
     PkgConfig::LIBRAW
     PkgConfig::LCMS2
 )
+
+add_executable(arraw src/main.cpp)
+
+target_link_libraries(arraw PRIVATE arraw_core)
+
+add_subdirectory(tests)
 
 # Copy shaders next to the binary
 add_custom_command(TARGET arraw POST_BUILD
