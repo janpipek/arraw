@@ -95,6 +95,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(adjPanel, &AdjustmentPanel::paramsChanged,
             viewport, &ImageViewport::setAdjustments);
 
+    connect(viewport, &ImageViewport::histogramsReady,
+            adjPanel, &AdjustmentPanel::setHistogramSamples);
+
     connect(adjPanel, &AdjustmentPanel::straightenActive,
             viewport, &ImageViewport::setStraightenActive);
 
@@ -328,7 +331,6 @@ void MainWindow::onLoadFinished() {
 
     viewport->setOriginalImageSize(fullRes.width, fullRes.height);
     viewport->setImage(preview, true);
-    adjPanel->setHistogramImage(preview);
     exifPanel->setMetadata(result.metadata);
     undoStack->clear();
 

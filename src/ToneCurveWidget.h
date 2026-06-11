@@ -1,7 +1,11 @@
 #pragma once
 #include "ImagePipeline.h"
+#include <QImage>
 #include <QWidget>
+#include <array>
 #include <vector>
+
+class QPainter;
 
 class ToneCurveWidget : public QWidget {
     Q_OBJECT
@@ -17,6 +21,10 @@ public:
     const std::vector<QPointF>& points(Channel ch) const;
 
     void resetChannel(Channel ch);
+
+    // Gamma-encoded curve-input sample (ImageViewport::histogramsReady);
+    // binned per channel and drawn behind the curve.
+    void setHistogramSample(const QImage& img);
 
     QSize sizeHint() const override { return {200, 160}; }
     QSize minimumSizeHint() const override { return {120, 96}; }
@@ -38,9 +46,16 @@ private:
     QPointF toWidget(QPointF curve) const;
     QPointF toCurve(QPointF widget) const;
     int hitTest(QPointF widgetPos) const;
+    int insertPointOnCurve(QPointF widgetPos);
+    void drawHistogram(QPainter& p, const QRectF& area) const;
+    void drawCurve(QPainter& p, Channel ch, const QPen& pen);
 
     std::vector<QPointF>& currentPoints();
     const std::vector<QPointF>& currentPoints() const;
+    std::vector<QPointF>& pointsFor(Channel ch);
+    const std::array<float, 256>& lutFor(Channel ch);
+
+    static QColor channelColor(Channel ch);
 
     Channel currentChannel = Channel::Luma;
     std::vector<QPointF> pointsLuma = {{0.0, 0.0}, {1.0, 1.0}};
@@ -51,10 +66,16 @@ private:
     int  dragIndex  = -1;
     bool dragging   = false;
 
-    // Spline LUT cache for paintEvent — recomputed only when the points change.
-    std::vector<QPointF>   lutSource;
-    std::array<float, 256> lutCache{};
+    // Spline LUT caches for paintEvent — recomputed only when points change.
+    std::array<std::vector<QPointF>,   4> lutSource;
+    std::array<std::array<float, 256>, 4> lutCache{};
 
-    static constexpr int kPad    = 10;
-    static constexpr int kRadius = 5;
+    // Curve input histogram, log-normalised to 0..1, indexed by Channel.
+    static constexpr int kHistBins = 128;
+    std::array<std::array<float, kHistBins>, 4> hist{};
+    bool hasHist = false;
+
+    static constexpr int kPad          = 10;
+    static constexpr int kRadius       = 5;
+    static constexpr int kRemoveMargin = 24;  // drag a point this far outside to delete
 };

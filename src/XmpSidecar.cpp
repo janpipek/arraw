@@ -118,10 +118,7 @@ static void writeCurve(QXmlStreamWriter& xml, const char* elemName,
                        const std::vector<QPointF>& pts)
 {
     // Skip if identity (only the two default endpoints, unmodified)
-    const bool isIdentity = pts.size() == 2
-        && std::abs(pts[0].x()) < 1e-4 && std::abs(pts[0].y()) < 1e-4
-        && std::abs(pts[1].x() - 1.0) < 1e-4 && std::abs(pts[1].y() - 1.0) < 1e-4;
-    if (isIdentity) return;
+    if (isIdentityCurve(pts)) return;
 
     xml.writeStartElement(kNsCrs, elemName);
     xml.writeStartElement(kNsRdf, "Seq");

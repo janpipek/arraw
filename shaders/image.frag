@@ -22,8 +22,9 @@ uniform float uTint;            // -1..+1
 uniform float uSaturation;      // -1..+1
 uniform float uVibrance;        // -1..+1
 uniform bool  uBaseLook;
-uniform bool  uDisplayEncode; // true: encode for the (assumed sRGB) display;
-                              // false: output clamped linear working space (export readback)
+uniform bool  uDisplayEncode;   // true: encode for the (assumed sRGB) display;
+                                // false: output clamped linear working space (export readback)
+uniform bool  uCurveInput;      // stop after tone regions + gamma-encode (histograms)
 uniform bool  uHslActive;
 uniform float uHslHue[8];       // -1..+1 per range
 uniform float uHslSat[8];
@@ -71,8 +72,7 @@ vec3 applyToneRegions(vec3 c) {
 
     float y = dot(c, kLuma);
 
-    // Luma masks for each tone region (hand-tuned ramp bounds; the CPU
-    // histogram in Histogram.cpp mirrors these values).
+    // Luma masks for each tone region (hand-tuned ramp bounds).
     float hl = smoothstep(0.28, 0.88, y);
     float sh = 1.0 - smoothstep(0.12, 0.78, y);
     float w  = smoothstep(0.52, 0.97, y);
@@ -87,16 +87,27 @@ vec3 applyToneRegions(vec3 c) {
     return c * (y2 / max(y, 1e-5));
 }
 
+vec3 linearToSRGB(vec3 c) {
+    return pow(clamp(c, 0.0, 1.0), vec3(1.0 / 2.2));
+}
+
+vec3 srgbToLinear(vec3 c) {
+    return pow(clamp(c, 0.0, 1.0), vec3(2.2));
+}
+
 // Tone curve: sample RGBA LUT — R=luma, G=red, B=green, A=blue.
 // Luma curve scales RGB proportionally (preserves hue); per-channel curves follow.
+// Operates on gamma-encoded values (docs/adr/0003): the stored crs: points are
+// display-space, matching Lightroom's interpretation of ToneCurvePV2012.
 vec3 applyCurve(vec3 c) {
+    c = linearToSRGB(c);
     float y  = dot(c, kLuma);
     float y2 = texture(uCurveLUT, vec2(y, 0.5)).r;
     if (y > 1e-5) c *= y2 / y;
     c.r = texture(uCurveLUT, vec2(clamp(c.r, 0.0, 1.0), 0.5)).g;
     c.g = texture(uCurveLUT, vec2(clamp(c.g, 0.0, 1.0), 0.5)).b;
     c.b = texture(uCurveLUT, vec2(clamp(c.b, 0.0, 1.0), 0.5)).a;
-    return c;
+    return srgbToLinear(c);
 }
 
 vec3 applyTemperature(vec3 c) {
@@ -200,8 +211,7 @@ const mat3 kRec2020ToSRGB = mat3(
     -0.0728, -0.0083,  1.1187
 );
 
-// True piecewise sRGB encode (not the 1/2.2 approximation) — the CPU
-// histogram in Histogram.cpp mirrors this.
+// True piecewise sRGB encode (not the 1/2.2 approximation).
 vec3 srgbCurve(vec3 c) {
     vec3 lo = c * 12.92;
     vec3 hi = 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055;
@@ -231,6 +241,8 @@ vec3 displayLut(vec3 c) {
 // Crop/rotation happen earlier in image.vert. For export, uDisplayEncode is
 // false: the FBO readback stays in linear working space and the output
 // transform runs on the CPU (lcms2, MainWindow::exportFile).
+// With uCurveInput set, the pipeline stops after tone regions and
+// gamma-encodes — the curve input histogram readback (docs/adr/0004).
 void main() {
     if (any(lessThan(vUV, vec2(0.0))) || any(greaterThan(vUV, vec2(1.0)))) {
         fragColor = vec4(0.0, 0.0, 0.0, 1.0);
@@ -243,6 +255,10 @@ void main() {
     c = applyExposure(c);
     c = applyContrast(c);
     c = applyToneRegions(c);
+    if (uCurveInput) {
+        fragColor = vec4(linearToSRGB(c), 1.0);
+        return;
+    }
     c = applyCurve(c);
     c = applyTemperature(c);
     c = applyTint(c);

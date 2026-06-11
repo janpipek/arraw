@@ -1,6 +1,7 @@
 #pragma once
 #include "ImageMetadata.h"
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <vector>
 #include <QImage>
@@ -18,8 +19,15 @@ inline constexpr float kLumaG = 0.6780f;
 inline constexpr float kLumaB = 0.0593f;
 
 // Tone curve control points in [0,1]×[0,1] space.
+inline bool isIdentityCurve(const std::vector<QPointF>& pts) {
+    return pts.size() == 2
+        && std::abs(pts[0].x()) < 1e-4 && std::abs(pts[0].y()) < 1e-4
+        && std::abs(pts[1].x() - 1.0) < 1e-4 && std::abs(pts[1].y() - 1.0) < 1e-4;
+}
+
 struct CurvePoints {
     std::vector<QPointF> points = {{0.0, 0.0}, {1.0, 1.0}};
+    bool isIdentity() const { return isIdentityCurve(points); }
     bool operator==(const CurvePoints&) const = default;
 };
 
