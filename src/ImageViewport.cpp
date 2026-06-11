@@ -88,6 +88,17 @@ void ImageViewport::initializeGL() {
 
     reloadShaders();
     uploadCurveLUT();
+
+    // Textures handed over before the context existed (setImage called
+    // before the widget was first shown).
+    if (pendingPreview.valid()) {
+        previewTex = createTexture(pendingPreview);
+        pendingPreview = {};
+    }
+    if (pendingFullRes.valid()) {
+        fullResTex = createTexture(pendingFullRes);
+        pendingFullRes = {};
+    }
 }
 
 void ImageViewport::reloadShaders() {
@@ -575,12 +586,17 @@ void ImageViewport::drawCropOverlay(QPainter& p) const {
 
 void ImageViewport::setImage(const ImageBuffer& buf, bool baseLook) {
     imageAspect = buf.valid() ? float(buf.width) / float(buf.height) : 1.0f;
-    makeCurrent();
-    previewTex = createTexture(buf);
     hasImage  = buf.valid();
     hasFullRes = false;
     useBaseLook = baseLook;
-    doneCurrent();
+    if (context()) {
+        makeCurrent();
+        previewTex = createTexture(buf);
+        doneCurrent();
+    } else {
+        // No GL context yet (widget not shown) — upload in initializeGL.
+        pendingPreview = buf;
+    }
     resetView();
     histoTimer.start();
     update();
@@ -589,10 +605,14 @@ void ImageViewport::setImage(const ImageBuffer& buf, bool baseLook) {
 void ImageViewport::setFullResImage(const ImageBuffer& buf) {
     if (buf.valid())
         setOriginalImageSize(buf.width, buf.height);
-    makeCurrent();
-    fullResTex = createTexture(buf);
     hasFullRes = buf.valid();
-    doneCurrent();
+    if (context()) {
+        makeCurrent();
+        fullResTex = createTexture(buf);
+        doneCurrent();
+    } else {
+        pendingFullRes = buf;
+    }
     if (zoom >= kFullResZoomThreshold)
         update();
 }

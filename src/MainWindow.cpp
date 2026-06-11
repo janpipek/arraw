@@ -128,12 +128,12 @@ void MainWindow::keyPressEvent(QKeyEvent* e) {
 
 void MainWindow::setupMenus() {
     auto* file = menuBar()->addMenu("&File");
-    file->addAction("&Open...",          this, &MainWindow::openFile,        QKeySequence::Open);
+    file->addAction("&Open...",          QKeySequence::Open,    this, &MainWindow::openFile);
     file->addSeparator();
-    file->addAction("&Save Adjustments", this, &MainWindow::saveAdjustments, QKeySequence::Save);
-    file->addAction("&Export...",        this, &MainWindow::exportFile,      Qt::CTRL | Qt::Key_E);
+    file->addAction("&Save Adjustments", QKeySequence::Save,    this, &MainWindow::saveAdjustments);
+    file->addAction("&Export...",        Qt::CTRL | Qt::Key_E,  this, &MainWindow::exportFile);
     file->addSeparator();
-    file->addAction("&Quit", qApp, &QCoreApplication::quit, QKeySequence::Quit);
+    file->addAction("&Quit", QKeySequence::Quit, qApp, &QCoreApplication::quit);
 
     auto* edit = menuBar()->addMenu("&Edit");
     edit->addAction(undoStack->createUndoAction(this));

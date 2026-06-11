@@ -117,6 +117,11 @@ private:
     bool gamutWarn       = false;
 
     // ── Image state ───────────────────────────────────────────────────────
+    // Buffers received before the GL context existed (setImage/setFullResImage
+    // called before the widget was first shown); uploaded in initializeGL.
+    ImageBuffer pendingPreview;
+    ImageBuffer pendingFullRes;
+
     AdjustmentParams params;
     float imageAspect = 1.0f;   // width/height of the full uncropped image
     int   originalWidth = 0;

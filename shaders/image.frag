@@ -12,11 +12,11 @@ uniform bool  uUseLut;
 uniform bool  uGamutWarn;
 
 uniform float uExposure;        // EV stops
-uniform float uContrast;        // -1..+1
-uniform float uHighlights;      // -1..+1
-uniform float uShadows;         // -1..+1
-uniform float uWhites;          // -1..+1
-uniform float uBlacks;          // -1..+1
+uniform float uContrast;        // -0.2..+0.2 (slider ±100 / kToneSliderToUniform)
+uniform float uHighlights;      // -0.2..+0.2
+uniform float uShadows;         // -0.2..+0.2
+uniform float uWhites;          // -0.2..+0.2
+uniform float uBlacks;          // -0.2..+0.2
 uniform float uTemperature;     // Kelvin, 2000..12000 (5500 = neutral)
 uniform float uTint;            // -1..+1
 uniform float uSaturation;      // -1..+1
