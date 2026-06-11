@@ -5,7 +5,8 @@
 // Reads and writes AdjustmentParams as an XMP sidecar file.
 // Sidecar path: same directory + base name as the RAW file, .xmp extension.
 // Uses crs: (Camera Raw Settings) namespace for Lightroom-compatible fields.
-// Note: Temperature/Tint are stored on our -100..100 scale, not absolute Kelvin.
+// Note: Temperature is stored in absolute Kelvin (2000-12000, matching crs:);
+// Tint and all other fields use the internal -100..100 scale.
 class XmpSidecar {
 public:
     static QString pathFor(const QString& rawPath);

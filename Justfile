@@ -7,6 +7,9 @@ build:
 run: build
     ./build/arraw
 
+test: build
+    ctest --test-dir build --output-on-failure
+
 release:
     cmake -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release {{qt_flag}}
     ninja -C build-release
