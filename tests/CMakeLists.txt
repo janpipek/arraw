@@ -16,6 +16,15 @@ add_executable(arraw_tests
     test_XmpSidecar.cpp
     test_ColorManagement.cpp
     test_RawProcessor.cpp
+    test_GoldenImages.cpp
+)
+
+# ImageViewport loads shaders from applicationDirPath()/shaders — give the
+# test binary the same layout the app gets.
+add_custom_command(TARGET arraw_tests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_SOURCE_DIR}/shaders
+        $<TARGET_FILE_DIR:arraw_tests>/shaders
 )
 
 target_link_libraries(arraw_tests PRIVATE arraw_core Catch2::Catch2WithMain)

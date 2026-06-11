@@ -376,7 +376,7 @@ partition fast unit tests from `[gpu]` goldens). Tests link against an
 both phases share one build restructure. Suite runs locally via `ctest` /
 `just test`; **no CI for now**.
 
-**Phase 1 — numeric core** (pure logic, no GL context):
+**Phase 1 — numeric core ✅** (pure logic, no GL context):
 - `computeCurveLUT`: property tests — endpoints pinned, monotonicity
   (Fritsch-Carlson), identity curve → identity LUT.
 - `downsample2x`: exact box-filter averages on synthetic buffers; odd sizes.
@@ -391,8 +391,11 @@ both phases share one build restructure. Suite runs locally via `ctest` /
   assert buffer validity, preview = half W × half H, metadata fields.
 - Param↔slider mappings and `kLuma*` constants matching `image.frag`.
 
-**Phase 2 — golden images** (GLSL pipeline, before the Milestone 5 RHI
-migration so the rework cannot silently change output):
+**Phase 2 — golden images ✅** (GLSL pipeline, locked in before the
+Milestone 5 RHI migration so the rework cannot silently change output):
 - Tests call the real `ImageViewport::renderToImage()`; comparison policy,
   tolerances, and PFM golden format are in
   `docs/adr/0005-golden-image-tests-tolerance-policy.md`.
+- Seven scenarios (`tests/test_GoldenImages.cpp`) over a synthetic
+  gradient + color-bar scene; goldens live in `tests/fixtures/golden/`,
+  regenerated with `ARRAW_UPDATE_GOLDENS=1 ./build/tests/arraw_tests "[golden]"`.
