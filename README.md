@@ -8,7 +8,7 @@ A lightweight, cross-platform RAW photo editor with a Lightroom-style developmen
 - **Non-destructive** — edits saved as `.xmp` sidecar files, Lightroom-compatible (`crs:` namespace)
 - **Color-managed** — linear Rec.2020 working space; export to sRGB, Display P3, or Adobe RGB (lcms2, ICC embedded); embedded profiles honoured on load
 - **Soft-proofing** — preview against any printer/paper ICC profile (`S`), Perceptual/Relative intent, black point compensation, gamut warning; monitor ICC profile support
-- **GPU export** — full-resolution FBO readback through the same shader pipeline; JPEG, PNG, TIFF (8- or 16-bit) output
+- **GPU export** — full-resolution offscreen readback through the same shader pipeline; JPEG, PNG, TIFF (8- or 16-bit) output
 - **Dual-res textures** — quarter-res preview for interaction, full-res texture swapped in lazily at high zoom
 - **Undo/redo** — per-slider-drag coalescing via `QUndoStack`
 - **File browser** — filename list dock with arrow-key navigation through a folder
@@ -51,7 +51,8 @@ Zoom: scroll wheel (0.05×–32×). Pan: Alt+drag or middle-button drag.
 ### Linux (Fedora)
 
 ```bash
-sudo dnf install qt6-qtbase-devel qt6-qttools-devel LibRaw-devel lcms2-devel cmake ninja-build
+sudo dnf install qt6-qtbase-devel qt6-qtbase-private-devel qt6-qtshadertools-devel \
+    qt6-qttools-devel LibRaw-devel lcms2-devel cmake ninja-build
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
 ninja -C build
 ./build/arraw
@@ -70,7 +71,7 @@ ninja -C build
 ### Windows (vcpkg)
 
 ```bat
-vcpkg install qt6-base qt6-tools libraw lcms
+vcpkg install qt6-base qt6-tools qt6-shadertools libraw lcms
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
   -DCMAKE_TOOLCHAIN_FILE=path/to/vcpkg/scripts/buildsystems/vcpkg.cmake
 ninja -C build
@@ -83,14 +84,16 @@ cmake -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release
 ninja -C build-release
 ```
 
-Shaders are copied from `shaders/` to `build/shaders/` automatically. If the app fails to display images, verify that `build/shaders/image.vert` and `image.frag` exist.
+Shaders are compiled at build time by `qsb` (Qt ShaderTools) and baked into
+the binary as resources — there is nothing to copy or deploy.
 
 ## Dependencies
 
-- **Qt 6** (Widgets, OpenGL, Concurrent, Xml)
+- **Qt 6** ≥ 6.8 (Widgets, Concurrent; RHI via GuiPrivate; ShaderTools at build time)
 - **libraw** (≥ 0.21) — RAW decoding into the Rec.2020 working space
 - **lcms2** — output color transforms and ICC profile handling
-- **OpenGL 3.3 core** — GPU preview and export pipeline
+- GPU rendering via **Qt RHI** — Metal on macOS, D3D11 on Windows, OpenGL on
+  Linux (Vulkan opt-in); no direct OpenGL dependency
 - CMake 3.21+, Ninja
 
 ## Architecture
@@ -100,7 +103,8 @@ See [`DESIGN.md`](DESIGN.md) for the full design document.
 Brief overview:
 
 - `RawProcessor` — libraw wrapper, runs on a background thread via `QtConcurrent::run`
-- `ImageViewport` — `QOpenGLWidget` managing two textures (preview + full-res) and the GLSL pipeline
+- `RendererCore` — owns all RHI resources; the single place the shader pass is recorded (preview, export, histograms)
+- `ImageViewport` — `QRhiWidget` with zoom/pan/crop logic, delegating all drawing to `RendererCore`
 - `AdjustmentPanel` — slider UI, emits `paramsChanged(AdjustmentParams)` on every change
 - `XmpSidecar` — reads/writes `.xmp` files using Adobe Camera Raw field names
 - `FileBrowser` — folder-scoped filename list dock

@@ -13,17 +13,17 @@ clean export. Not a DAM, not a cataloguing tool — just open a folder, edit, ex
 - Real-time GPU-accelerated preview: slider moves never block the UI
 - Non-destructive: edits stored as XMP sidecar files alongside originals
 - Cross-platform: Linux, macOS, Windows
-- Minimal dependencies: Qt6, libraw, OpenGL
+- Minimal dependencies: Qt6 (RHI for the GPU), libraw, lcms2
 - Clean codebase: one class per responsibility, no premature abstraction
 
 ---
 
 ## Target Stack
 
-| Layer | MVP | Future |
+| Layer | Current | Notes |
 |---|---|---|
-| UI | Qt6 Widgets + QOpenGLWidget | Migrate to QRhiWidget (Metal/Vulkan/D3D native) |
-| GPU | OpenGL 3.3 core + GLSL | Qt RHI shaders via `qsb` |
+| UI | Qt6 Widgets (≥ 6.8) + QRhiWidget | docs/adr/0006 |
+| GPU | Qt RHI — platform default backend (Metal on macOS, D3D11 on Windows, OpenGL on Linux; Vulkan opt-in) | one Vulkan-GLSL shader source, `qsb`-compiled |
 | RAW decode | libraw | — |
 | Color mgmt | lcms2, linear Rec.2020 working space, soft-proofing, monitor ICC | — |
 | Build | CMake + Ninja, pkg-config | — |
@@ -74,7 +74,7 @@ MainWindow (QMainWindow)
 │
 ├── FileBrowser (QDockWidget, left)          ← filename list, arrow-key navigation
 │
-├── ImageViewport (QOpenGLWidget, centre)    ← GPU preview, zoom/pan, crop overlay
+├── ImageViewport (QRhiWidget, centre)       ← GPU preview, zoom/pan, crop overlay
 │
 └── AdjustmentDock (QDockWidget, right)
     ├── Histogram (custom QWidget)
@@ -127,10 +127,22 @@ MainWindow (QMainWindow)
 - The monitor profile (View → Monitor Profile) reuses the same LUT path with
   no proof profile in the chain; "sRGB (assume)" keeps the fast shader path.
 
-### `ImageViewport` (QOpenGLWidget + QOpenGLFunctions_3_3_Core)
-- Holds two textures: `m_previewTex` (always uploaded) and `m_fullResTex` (uploaded
-  lazily when zoom crosses the preview pixel threshold).
-- `paintGL` binds the appropriate texture and uploads adjustment uniforms each frame.
+### `RendererCore` (RHI)
+- Owns every RHI resource: vertex/uniform buffers, samplers, the curve and
+  display LUT textures, the preview/full-res image textures, pipelines per
+  render-pass format.
+- `record()` is the single place the shader pass is recorded (docs/adr/0006);
+  the widget's on-screen paint, export, and the histogram samples are three
+  callers of it. `renderOffscreen()` wraps it in an offscreen frame with a
+  synchronous readback.
+- Accepts images/LUTs before the QRhi exists; uploads ride the next pass.
+
+### `ImageViewport` (QRhiWidget)
+- View/crop/input logic; all drawing is delegated to `RendererCore` with the
+  widget's render target. Holds preview + full-res image slots; full-res is
+  used when zoom crosses the preview pixel threshold.
+- The crop overlay and align grid are QPainter drawings on a transparent
+  child widget (QRhiWidget content cannot be over-painted directly).
 - Zoom: scroll wheel, 0.05×–32×. Pan: Alt+drag or middle-button drag.
 - Crop mode: activated by `C` key. Renders darkened overlay outside crop rect.
   Corner/edge handles are draggable. Drag outside rect = rotate. `Enter` confirms,
@@ -138,7 +150,7 @@ MainWindow (QMainWindow)
 - Before/after: `\` key held → renders with zeroed `AdjustmentParams`.
 - Export: `renderToImage(const AdjustmentParams&, const ImageBuffer& fullRes)`
   — renders full-res buffer through the shader pipeline into an offscreen
-  float FBO with `uDisplayEncode` off, calls `glReadPixels`, returns a linear
+  float target with `displayEncode` off, reads back, returns a linear
   working-space `QImage` (`Format_RGBX32FPx4`) for the CPU output transform.
 
 ### `AdjustmentPanel`
@@ -174,13 +186,13 @@ MainWindow (QMainWindow)
 ## Threading Model
 
 ```
-Main thread:   UI, GL context, QUndoStack, XmpSidecar I/O
+Main thread:   UI, QRhi (all GPU work), QUndoStack, XmpSidecar I/O
 Worker thread: RawProcessor::load() via QtConcurrent::run
                (fullRes + preview produced in one task)
 ```
 
 The `QFutureWatcher<LoadResult>` fires `finished()` on the main thread.
-The GL context is never accessed from the worker thread.
+The QRhi is never accessed from the worker thread.
 
 ---
 
@@ -213,10 +225,10 @@ that file is the source of truth; keep this list in sync with it.
 **Color — fragment shader (`image.frag`), per frame, linear Rec.2020 throughout**
 
 ```
- 6. Base look        fixed S-curve + slight sat boost (uBaseLook; on for the
+ 6. Base look        fixed S-curve + slight sat boost (u.baseLook; on for the
                      final image and export, off for interim embedded-preview
                      display and the before/after view)
- 7. Exposure         pow(2, uExposure) multiply
+ 7. Exposure         pow(2, u.exposure) multiply
  8. Contrast         linear scale around 0.5
  9. Tone regions     highlights, shadows, whites, blacks — luma-masked
                      (smoothstep ramps), applied as one combined luma delta
@@ -229,16 +241,16 @@ that file is the source of truth; keep this list in sync with it.
 13. HSL color mix    8 hue ranges, smoothstep-weighted hue/sat/lum shifts
 14. Saturation       luma-preserving saturation scale
 15. Vibrance         saturation boost weighted toward desaturated pixels
-16. Encode           uDisplayEncode on (screen):
-                       uUseLut off — display transform: Rec.2020→sRGB matrix
+16. Encode           u.displayEncode on (screen):
+                       u.useLut off — display transform: Rec.2020→sRGB matrix
                        + true piecewise sRGB curve (sRGB monitor assumed)
-                       uUseLut on — 33³ LUT texture baked by lcms2
+                       u.useLut on — 33³ LUT texture baked by lcms2
                        (soft-proofing and/or monitor ICC profile; LUT alpha
                        carries the in-gamut flag for the gamut warning)
-                     uDisplayEncode off (export): clamped linear working space
+                     u.displayEncode off (export): clamped linear working space
 ```
 
-**Export only — CPU, after FBO readback (`MainWindow::exportFile`)**
+**Export only — CPU, after the offscreen readback (`MainWindow::exportFile`)**
 
 ```
 17. Resize           linear-light float scale to the chosen dimensions
@@ -250,11 +262,11 @@ that file is the source of truth; keep this list in sync with it.
 ```
 
 Histograms are exact: `ImageViewport::renderHistograms()` renders the preview
-through the real shader into a small offscreen FBO (debounced on parameter
+through the real shader into a small offscreen target (debounced on parameter
 changes) and reads back two samples — the full pipeline (display transform,
-`uUseLut` off, so the histogram is output-sRGB regardless of soft-proofing)
+`u.useLut` off, so the histogram is output-sRGB regardless of soft-proofing)
 for the panel histogram, and a "stop after tone regions, gamma-encode" pass
-(`uCurveInput`) for the histogram behind the tone curve (docs/adr/0004).
+(`u.curveInput`) for the histogram behind the tone curve (docs/adr/0004).
 
 ---
 
@@ -264,11 +276,12 @@ for the panel histogram, and a "stop after tone regions, gamma-encode" pass
    color profile (sRGB / Display P3 / Adobe RGB, remembered via QSettings),
    16-bit toggle (TIFF only).
 2. `ImageViewport::renderToImage()` called on the main thread:
-   - Upload `fullRes` as a float32 RGB texture.
-   - Bind offscreen float FBO (GL_RGBA32F) at the cropped pixel size.
+   - Upload `fullRes` as a float32 RGBA texture (temporary).
+   - Render into an offscreen RGBA32F target at the cropped pixel size, in an
+     offscreen RHI frame of its own.
    - Run the full shader pipeline (steps 4–15 above) with current
-     `AdjustmentParams`, `uDisplayEncode` off.
-   - `glReadPixels` → `QImage(Format_RGBX32FPx4)`, linear working space,
+     `AdjustmentParams`, `u.displayEncode` off.
+   - Synchronous readback → `QImage(Format_RGBX32FPx4)`, linear working space,
      scaled to the requested output size while still linear.
 3. `toOutputImage()` (ColorManagement, lcms2): working space → chosen output
    profile, 8- or 16-bit, tagged with the matching `QColorSpace` so the ICC
@@ -320,7 +333,7 @@ for the panel histogram, and a "stop after tone regions, gamma-encode" pass
 - [x] Crop + straighten (`C`, handles, rotation slider + drag gesture)
 - [x] Undo/redo (`QUndoStack`, coalesced per slider drag)
 - [x] XMP sidecar load/save (`Ctrl+S`)
-- [x] WYSIWYG export via FBO readback; sRGB / Display P3 / Adobe RGB output
+- [x] WYSIWYG export via offscreen GPU readback; sRGB / Display P3 / Adobe RGB output
       with embedded ICC (JPEG/PNG/TIFF, 16-bit TIFF)
 - [x] Filename list dock with arrow-key navigation
 - [x] Window state persistence via `QSettings`
@@ -354,11 +367,21 @@ are explicitly out of scope.
 **Phase B — soft-proofing + monitor profiles — ✅ implemented**
 (see the `ColorManagement` and `ProofingPanel` components and pipeline step 16)
 
-### Milestone 5 — Qt RHI Migration
-- Swap `QOpenGLWidget` → `QRhiWidget`.
-- Compile GLSL shaders via `qsb` → SPIR-V → MSL/HLSL/GLSL.
-- Native Metal on macOS, Vulkan on Linux, D3D11 on Windows.
-- Remove OpenGL dependency.
+### Milestone 5 — Qt RHI Migration ✅
+
+Implemented 2026-06 — see `docs/adr/0006-rhi-migration-single-renderer-core.md`.
+
+- `QOpenGLWidget` → `QRhiWidget` (Qt floor 6.8 LTS); big-bang, raw GL deleted,
+  ADR 0005 goldens gated the change (not regenerated — their tolerance absorbs
+  backend variance).
+- One shader source: `image.frag`/`.vert` rewritten to Vulkan-dialect GLSL
+  (440, uniform block), baked via `qsb`/`qt6_add_shaders` into resources.
+  Runtime shader loading and hot-reload are deleted.
+- `RendererCore` records the pass for all three consumers — widget paint,
+  `renderToImage()` (signature unchanged), histogram samples.
+- Backend is the Qt platform default: Metal on macOS, D3D11 on Windows,
+  OpenGL (via RHI) on Linux; Vulkan available through `QRhiWidget::setApi()`.
+  No direct OpenGL dependency remains.
 
 ### Milestone 6 — Tile-based LOD
 - At high zoom, stream tiles from full-res buffer rather than uploading entire texture.
@@ -376,7 +399,7 @@ partition fast unit tests from `[gpu]` goldens). Tests link against an
 both phases share one build restructure. Suite runs locally via `ctest` /
 `just test`; **no CI for now**.
 
-**Phase 1 — numeric core ✅** (pure logic, no GL context):
+**Phase 1 — numeric core ✅** (pure logic, no GPU):
 - `computeCurveLUT`: property tests — endpoints pinned, monotonicity
   (Fritsch-Carlson), identity curve → identity LUT.
 - `downsample2x`: exact box-filter averages on synthetic buffers; odd sizes.

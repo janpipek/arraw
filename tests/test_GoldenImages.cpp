@@ -18,7 +18,7 @@ namespace {
 constexpr float kMaxPixelDiff   = 4.0f / 255.0f;
 constexpr float kMaxChannelMean = 0.3f / 255.0f;
 
-// ── Realized viewport (QApplication + shown widget = live GL context) ────────
+// ── Realized viewport (QApplication + shown widget = live RHI) ───────────────
 
 ImageViewport* goldenViewport() {
     static int argc = 1;
@@ -27,16 +27,16 @@ ImageViewport* goldenViewport() {
     static QApplication app(argc, argv);
 
     // Declared after `app` so it is destroyed first — tearing down a live
-    // QOpenGLWidget after QApplication segfaults in the platform plugin.
+    // render widget after QApplication segfaults in the platform plugin.
     static std::unique_ptr<ImageViewport> vp = [] {
         auto v = std::make_unique<ImageViewport>();
         v->resize(128, 96);
         v->show();
-        for (int i = 0; i < 200 && !v->context(); ++i)
+        for (int i = 0; i < 200 && !v->rendererReady(); ++i)
             QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
         return v;
     }();
-    return vp->context() ? vp.get() : nullptr;
+    return vp->rendererReady() ? vp.get() : nullptr;
 }
 
 // ── Synthetic input: grey gradient over color bars (see ADR 0005) ────────────

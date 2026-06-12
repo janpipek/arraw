@@ -1,34 +1,44 @@
-#version 330 core
+#version 440
+// Vulkan-dialect GLSL, compiled by qsb for every RHI backend (docs/adr/0006).
+// The uniform block must match Ubuf in src/RendererCore.h and the copy in
+// image.vert exactly (std140).
 
-in  vec2 vUV;
-out vec4 fragColor;
+layout(location = 0) in vec2 vUV;
+layout(location = 0) out vec4 fragColor;
 
-uniform sampler2D uTexture;
-uniform sampler2D uCurveLUT;    // 256×1 RGBA32F: R=luma, G=red, B=green, A=blue
-uniform sampler3D uLut3D;       // display LUT (soft-proof / monitor profile):
-                                // indexed by sRGB-encoded working RGB,
-                                // RGB=display output, A=in-gamut flag
-uniform bool  uUseLut;
-uniform bool  uGamutWarn;
+layout(std140, binding = 0) uniform buf {
+    mat4  clipCorr;      // QRhi::clipSpaceCorrMatrix() — GL-style NDC → backend NDC
+    vec4  transform;     // (scaleX, scaleY, panX, panY)
+    vec4  cropRect;      // UV bounds: (left, top, right, bottom)
+    vec4  hslHue[2];     // 8 floats, -1..+1 per range (std140: packed as vec4 pairs)
+    vec4  hslSat[2];
+    vec4  hslLum[2];
+    float rotation;      // degrees
+    float aspect;        // crop width / height in pixels (for isotropic rotation)
+    float exposure;      // EV stops
+    float contrast;      // -0.2..+0.2 (slider ±100 / kToneSliderToUniform)
+    float highlights;    // -0.2..+0.2
+    float shadows;       // -0.2..+0.2
+    float whites;        // -0.2..+0.2
+    float blacks;        // -0.2..+0.2
+    float temperature;   // Kelvin, 2000..12000 (5500 = neutral)
+    float tint;          // -1..+1
+    float saturation;    // -1..+1
+    float vibrance;      // -1..+1
+    int   useLut;
+    int   gamutWarn;
+    int   baseLook;
+    int   displayEncode; // 1: encode for the (assumed sRGB) display;
+                         // 0: output clamped linear working space (export readback)
+    int   curveInput;    // stop after tone regions + gamma-encode (histograms)
+    int   hslActive;
+} u;
 
-uniform float uExposure;        // EV stops
-uniform float uContrast;        // -0.2..+0.2 (slider ±100 / kToneSliderToUniform)
-uniform float uHighlights;      // -0.2..+0.2
-uniform float uShadows;         // -0.2..+0.2
-uniform float uWhites;          // -0.2..+0.2
-uniform float uBlacks;          // -0.2..+0.2
-uniform float uTemperature;     // Kelvin, 2000..12000 (5500 = neutral)
-uniform float uTint;            // -1..+1
-uniform float uSaturation;      // -1..+1
-uniform float uVibrance;        // -1..+1
-uniform bool  uBaseLook;
-uniform bool  uDisplayEncode;   // true: encode for the (assumed sRGB) display;
-                                // false: output clamped linear working space (export readback)
-uniform bool  uCurveInput;      // stop after tone regions + gamma-encode (histograms)
-uniform bool  uHslActive;
-uniform float uHslHue[8];       // -1..+1 per range
-uniform float uHslSat[8];
-uniform float uHslLum[8];
+layout(binding = 1) uniform sampler2D uTexture;
+layout(binding = 2) uniform sampler2D uCurveLUT;   // 256×1 RGBA32F: R=luma, G=red, B=green, A=blue
+layout(binding = 3) uniform sampler3D uLut3D;      // display LUT (soft-proof / monitor profile):
+                                                   // indexed by sRGB-encoded working RGB,
+                                                   // RGB=display output, A=in-gamut flag
 
 // Rec.2020 luma — the whole pipeline works in linear Rec.2020 (docs/adr/0001).
 // Must match kLumaR/G/B in src/ImagePipeline.h.
@@ -47,7 +57,7 @@ const float kHslCenters[8] = float[8](
 );
 
 vec3 applyExposure(vec3 c) {
-    return c * pow(2.0, uExposure);
+    return c * pow(2.0, u.exposure);
 }
 
 vec3 applyBaseLook(vec3 c) {
@@ -61,13 +71,13 @@ vec3 applyBaseLook(vec3 c) {
 }
 
 vec3 applyContrast(vec3 c) {
-    if (abs(uContrast) < 0.001) return c;
-    return (c - 0.5) * (1.0 + uContrast * 0.8) + 0.5;
+    if (abs(u.contrast) < 0.001) return c;
+    return (c - 0.5) * (1.0 + u.contrast * 0.8) + 0.5;
 }
 
 vec3 applyToneRegions(vec3 c) {
-    if (abs(uHighlights) < 0.001 && abs(uShadows) < 0.001 &&
-        abs(uWhites) < 0.001 && abs(uBlacks) < 0.001)
+    if (abs(u.highlights) < 0.001 && abs(u.shadows) < 0.001 &&
+        abs(u.whites) < 0.001 && abs(u.blacks) < 0.001)
         return c;
 
     float y = dot(c, kLuma);
@@ -78,10 +88,10 @@ vec3 applyToneRegions(vec3 c) {
     float w  = smoothstep(0.52, 0.97, y);
     float b  = 1.0 - smoothstep(0.03, 0.48, y);
 
-    float delta = uHighlights * 0.5 * hl
-                + uShadows   * 0.5 * sh
-                + uWhites    * 0.25 * w
-                + uBlacks    * 0.25 * b;
+    float delta = u.highlights * 0.5 * hl
+                + u.shadows   * 0.5 * sh
+                + u.whites    * 0.25 * w
+                + u.blacks    * 0.25 * b;
 
     float y2 = max(y + delta, 0.0);
     return c * (y2 / max(y, 1e-5));
@@ -111,7 +121,7 @@ vec3 applyCurve(vec3 c) {
 }
 
 vec3 applyTemperature(vec3 c) {
-    float t = (uTemperature - 5500.0) / 5500.0;
+    float t = (u.temperature - 5500.0) / 5500.0;
     if (abs(t) < 0.0001) return c;
     c.r += t * 0.15;
     c.b -= t * 0.15;
@@ -119,8 +129,8 @@ vec3 applyTemperature(vec3 c) {
 }
 
 vec3 applyTint(vec3 c) {
-    if (abs(uTint) < 0.001) return c;
-    c.g += uTint * 0.05;
+    if (abs(u.tint) < 0.001) return c;
+    c.g += u.tint * 0.05;
     return c;
 }
 
@@ -173,9 +183,9 @@ vec3 applyHsl(vec3 c) {
         float w = max(0.0, 1.0 - d * 6.0);  // cut off at ±60° (was 40°)
         w = w * w * (3.0 - 2.0 * w);  // smoothstep
         if (w > 0.001) {
-            totalHue += uHslHue[i] * w;
-            totalSat += uHslSat[i] * w;
-            totalLum += uHslLum[i] * w;
+            totalHue += u.hslHue[i >> 2][i & 3] * w;
+            totalSat += u.hslSat[i >> 2][i & 3] * w;
+            totalLum += u.hslLum[i >> 2][i & 3] * w;
             totalW   += w;
         }
     }
@@ -191,16 +201,16 @@ vec3 applyHsl(vec3 c) {
 }
 
 vec3 applySaturation(vec3 c) {
-    if (abs(uSaturation) < 0.001) return c;
+    if (abs(u.saturation) < 0.001) return c;
     float luma = dot(c, kLuma);
-    return mix(vec3(luma), c, 1.0 + uSaturation);
+    return mix(vec3(luma), c, 1.0 + u.saturation);
 }
 
 vec3 applyVibrance(vec3 c) {
-    if (abs(uVibrance) < 0.001) return c;
+    if (abs(u.vibrance) < 0.001) return c;
     float luma = dot(c, kLuma);
     float sat  = length(c - vec3(luma));
-    return mix(vec3(luma), c, 1.0 + uVibrance * (1.0 - sat));
+    return mix(vec3(luma), c, 1.0 + u.vibrance * (1.0 - sat));
 }
 
 // Display transform: linear Rec.2020 → sRGB display (docs/adr/0002).
@@ -229,7 +239,7 @@ vec3 displayLut(vec3 c) {
     vec3 idx = srgbCurve(clamp(c, 0.0, 1.0));
     float n = float(textureSize(uLut3D, 0).x);
     vec4 v = texture(uLut3D, idx * ((n - 1.0) / n) + 0.5 / n);
-    if (uGamutWarn && v.a < 0.5)
+    if (u.gamutWarn != 0 && v.a < 0.5)
         return vec3(1.0, 0.1, 0.1);   // out-of-gamut warning overlay
     return v.rgb;
 }
@@ -238,10 +248,10 @@ vec3 displayLut(vec3 c) {
 // Everything up to the final encode operates in linear Rec.2020:
 //   base look → exposure → contrast → tone regions → tone curves
 //   → temperature → tint → HSL → saturation → vibrance → display transform
-// Crop/rotation happen earlier in image.vert. For export, uDisplayEncode is
-// false: the FBO readback stays in linear working space and the output
+// Crop/rotation happen earlier in image.vert. For export, displayEncode is
+// 0: the offscreen readback stays in linear working space and the output
 // transform runs on the CPU (lcms2, MainWindow::exportFile).
-// With uCurveInput set, the pipeline stops after tone regions and
+// With curveInput set, the pipeline stops after tone regions and
 // gamma-encodes — the curve input histogram readback (docs/adr/0004).
 void main() {
     if (any(lessThan(vUV, vec2(0.0))) || any(greaterThan(vUV, vec2(1.0)))) {
@@ -250,25 +260,25 @@ void main() {
     }
 
     vec3 c = texture(uTexture, vUV).rgb;
-    if (uBaseLook)
+    if (u.baseLook != 0)
         c = applyBaseLook(c);
     c = applyExposure(c);
     c = applyContrast(c);
     c = applyToneRegions(c);
-    if (uCurveInput) {
+    if (u.curveInput != 0) {
         fragColor = vec4(linearToSRGB(c), 1.0);
         return;
     }
     c = applyCurve(c);
     c = applyTemperature(c);
     c = applyTint(c);
-    if (uHslActive)
+    if (u.hslActive != 0)
         c = applyHsl(c);
     c = applySaturation(c);
     c = applyVibrance(c);
-    if (!uDisplayEncode)
+    if (u.displayEncode == 0)
         fragColor = vec4(clamp(c, 0.0, 1.0), 1.0);          // export readback
-    else if (uUseLut)
+    else if (u.useLut != 0)
         fragColor = vec4(displayLut(c), 1.0);               // proof / monitor ICC
     else
         fragColor = vec4(displayTransform(c), 1.0);         // assume-sRGB display

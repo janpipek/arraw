@@ -1,17 +1,16 @@
 #pragma once
 #include "ColorManagement.h"
 #include "ImagePipeline.h"
-#include <QOpenGLWidget>
-#include <QOpenGLFunctions_3_3_Core>
-#include <QOpenGLShaderProgram>
-#include <QOpenGLTexture>
+#include "RendererCore.h"
+#include <QRhiWidget>
 #include <QImage>
 #include <QPointF>
 #include <QRectF>
 #include <QTimer>
-#include <memory>
 
-class ImageViewport : public QOpenGLWidget, protected QOpenGLFunctions_3_3_Core {
+class ViewportOverlay;
+
+class ImageViewport : public QRhiWidget {
     Q_OBJECT
 public:
     explicit ImageViewport(QWidget* parent = nullptr);
@@ -29,14 +28,19 @@ public:
     float pixelZoom() const;
     bool hasKnownOriginalSize() const;
 
+    // True once the RHI exists (first frame after show) — required before
+    // renderToImage can run.
+    bool rendererReady() const { return core.ready(); }
+
     // Display LUT (soft-proofing / monitor profile). Affects preview only —
     // export renders with the display encode disabled. The upload happens
-    // lazily in paintGL, so these are safe to call before the GL context exists.
+    // lazily with the next recorded pass, so these are safe to call before
+    // the widget is first shown.
     void setDisplayLut(const DisplayLut& lut);
     void clearDisplayLut();
     void setGamutWarning(bool on);
 
-    // Render buf through the full shader pipeline into an offscreen FBO.
+    // Render buf through the full shader pipeline into an offscreen target.
     // Returns a *linear working-space* float QImage (Format_RGBX32FPx4),
     // cropped to params.cropRect and scaled to outW×outH; the caller applies
     // the output transform (toOutputImage) before saving.
@@ -53,10 +57,10 @@ signals:
     void histogramsReady(const QImage& finalSample, const QImage& curveInputSample);
 
 protected:
-    void initializeGL() override;
-    void resizeGL(int w, int h) override;
-    void paintGL() override;
-    void paintEvent(QPaintEvent* e) override;
+    void initialize(QRhiCommandBuffer* cb) override;
+    void render(QRhiCommandBuffer* cb) override;
+    void releaseResources() override;
+    void resizeEvent(QResizeEvent* e) override;
 
     void wheelEvent(QWheelEvent* e) override;
     void mousePressEvent(QMouseEvent* e) override;
@@ -66,16 +70,20 @@ protected:
     void keyReleaseEvent(QKeyEvent* e) override;
 
 private:
+    friend class ViewportOverlay;
+
     // Crop handles: TL, TC, TR, MR, BR, BC, BL, ML
     static constexpr int kHandleCount = 8;
     static constexpr float kHandleRadius = 6.0f;
 
-    std::unique_ptr<QOpenGLTexture> createTexture(const ImageBuffer& buf);
-    void uploadCurveLUT();
-    void uploadDisplayLut();
-    void reloadShaders();
+    // Shadows QWidget::update: also repaints the QPainter overlay child
+    // (QRhiWidget content cannot be painted over directly).
+    void update();
+
+    void ensureCurveLut();
     void renderHistograms();
-    QOpenGLTexture* activeTexture() const;
+    RendererCore::Slot activeSlot() const;
+    void paintOverlay(QPainter& p) const;
 
     // Map texture UV ↔ viewport (matches vertex shader: image-centre rotation + fit)
     QPointF textureUVToViewport(float u, float v) const;
@@ -101,27 +109,14 @@ private:
     float fitZoom() const;
     float displayOriginalPixelHeight() const;
 
-    // ── GL state ──────────────────────────────────────────────────────────
-    std::unique_ptr<QOpenGLShaderProgram> shader;
-    std::unique_ptr<QOpenGLTexture>       previewTex;
-    std::unique_ptr<QOpenGLTexture>       fullResTex;
-    unsigned int vao         = 0;
-    unsigned int vbo         = 0;
-    unsigned int curveLutTex = 0;   // 256×1 RGBA32F, one column per channel (L R G B)
-    bool curveLutDirty       = true;
-
-    unsigned int displayLutTex = 0; // N³ RGBA32F display LUT (proof / monitor ICC)
-    DisplayLut   pendingLut;        // uploaded on the next paintGL
-    bool displayLutDirty = false;
-    bool useDisplayLut   = false;
-    bool gamutWarn       = false;
+    // ── Render state ──────────────────────────────────────────────────────
+    RendererCore core;
+    bool curveLutDirty = true;
+    bool useDisplayLut = false;
+    bool gamutWarn     = false;
+    ViewportOverlay* overlay = nullptr;
 
     // ── Image state ───────────────────────────────────────────────────────
-    // Buffers received before the GL context existed (setImage/setFullResImage
-    // called before the widget was first shown); uploaded in initializeGL.
-    ImageBuffer pendingPreview;
-    ImageBuffer pendingFullRes;
-
     AdjustmentParams params;
     float imageAspect = 1.0f;   // width/height of the full uncropped image
     int   originalWidth = 0;

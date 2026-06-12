@@ -4,18 +4,10 @@
 #include <QMouseEvent>
 #include <QKeyEvent>
 #include <QPainter>
-#include <QCoreApplication>
 #include <QPaintEvent>
-#include <QOpenGLFramebufferObject>
-#include <QColorSpace>
 #include <QPainterPath>
 #include <algorithm>
 #include <cmath>
-
-static QVector4D cropUniform(const QRectF& cr) {
-    return {float(cr.left()), float(cr.top()),
-            float(cr.right()), float(cr.bottom())};
-}
 
 // CPU mirror of the rotation in image.vert (keep in sync). UV space is not
 // square, so x is scaled by the image aspect before rotating to make the
@@ -32,148 +24,61 @@ static QPointF rotateTexUV(float u, float v, float degrees, float aspect,
     return {rx / aspect + cx, ry + cy};
 }
 
-// Fullscreen quad, interleaved (x, y, u, v). V is flipped (bottom vertices get
-// v=1) because GL's NDC Y axis points up while image row 0 is the top.
-static const float kQuad[] = {
-    -1, -1,   0, 1,
-     1, -1,   1, 1,
-    -1,  1,   0, 0,
-     1,  1,   1, 0,
+// QRhiWidget content cannot be painted over with QPainter (unlike
+// QOpenGLWidget), so the crop overlay and align grid live on a transparent,
+// mouse-transparent child that the viewport repaints alongside itself.
+class ViewportOverlay : public QWidget {
+public:
+    explicit ViewportOverlay(ImageViewport* parent)
+        : QWidget(parent), viewport(parent) {
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+        setAttribute(Qt::WA_NoSystemBackground);
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override {
+        if (!viewport->hasImage)
+            return;
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing);
+        viewport->paintOverlay(p);
+    }
+
+private:
+    ImageViewport* viewport;
 };
 
 ImageViewport::ImageViewport(QWidget* parent)
-    : QOpenGLWidget(parent)
+    : QRhiWidget(parent)
 {
     setFocusPolicy(Qt::StrongFocus);
+    overlay = new ViewportOverlay(this);
 
     histoTimer.setSingleShot(true);
     histoTimer.setInterval(150);
     connect(&histoTimer, &QTimer::timeout, this, &ImageViewport::renderHistograms);
 }
 
-ImageViewport::~ImageViewport() {
-    makeCurrent();
-    if (vao)           glDeleteVertexArrays(1, &vao);
-    if (vbo)           glDeleteBuffers(1, &vbo);
-    if (curveLutTex)   glDeleteTextures(1, &curveLutTex);
-    if (displayLutTex) glDeleteTextures(1, &displayLutTex);
-    doneCurrent();
+ImageViewport::~ImageViewport() = default;
+
+void ImageViewport::update() {
+    QRhiWidget::update();
+    overlay->update();
 }
 
-// ── GL setup ─────────────────────────────────────────────────────────────────
+// ── RHI lifecycle ─────────────────────────────────────────────────────────────
 
-void ImageViewport::initializeGL() {
-    QOpenGLFunctions_3_3_Core::initializeOpenGLFunctions();
-    glClearColor(0.15f, 0.15f, 0.15f, 1.0f);
-
-    glGenVertexArrays(1, &vao);
-    glGenBuffers(1, &vbo);
-    glBindVertexArray(vao);
-    glBindBuffer(GL_ARRAY_BUFFER, vbo);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(kQuad), kQuad, GL_STATIC_DRAW);
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), nullptr);
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float),
-                          reinterpret_cast<void*>(2 * sizeof(float)));
-    glEnableVertexAttribArray(0);
-    glEnableVertexAttribArray(1);
-
-    // Curve LUT texture: 256×1 RGBA32F (channels: luma, red, green, blue)
-    glGenTextures(1, &curveLutTex);
-    glBindTexture(GL_TEXTURE_2D, curveLutTex);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glBindTexture(GL_TEXTURE_2D, 0);
-
-    reloadShaders();
-    uploadCurveLUT();
-
-    // Textures handed over before the context existed (setImage called
-    // before the widget was first shown).
-    if (pendingPreview.valid()) {
-        previewTex = createTexture(pendingPreview);
-        pendingPreview = {};
-    }
-    if (pendingFullRes.valid()) {
-        fullResTex = createTexture(pendingFullRes);
-        pendingFullRes = {};
-    }
+void ImageViewport::initialize(QRhiCommandBuffer*) {
+    core.initialize(rhi());
 }
 
-void ImageViewport::reloadShaders() {
-    auto prog = std::make_unique<QOpenGLShaderProgram>();
-    const QString base = QCoreApplication::applicationDirPath() + "/shaders/";
-    if (!prog->addShaderFromSourceFile(QOpenGLShader::Vertex,   base + "image.vert") ||
-        !prog->addShaderFromSourceFile(QOpenGLShader::Fragment, base + "image.frag") ||
-        !prog->link())
-        return;
-    shader = std::move(prog);
+void ImageViewport::releaseResources() {
+    core.release();
 }
 
-void ImageViewport::uploadCurveLUT() {
-    const auto lumaLUT = computeCurveLUT(params.curveLuma.points);
-    const auto redLUT  = computeCurveLUT(params.curveR.points);
-    const auto grnLUT  = computeCurveLUT(params.curveG.points);
-    const auto bluLUT  = computeCurveLUT(params.curveB.points);
-
-    std::array<float, 256 * 4> rgba{};
-    for (int i = 0; i < 256; ++i) {
-        rgba[i*4+0] = lumaLUT[i];
-        rgba[i*4+1] = redLUT[i];
-        rgba[i*4+2] = grnLUT[i];
-        rgba[i*4+3] = bluLUT[i];
-    }
-
-    glBindTexture(GL_TEXTURE_2D, curveLutTex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, 256, 1, 0, GL_RGBA, GL_FLOAT, rgba.data());
-    glBindTexture(GL_TEXTURE_2D, 0);
-    curveLutDirty = false;
-}
-
-void ImageViewport::uploadDisplayLut() {
-    if (pendingLut.valid()) {
-        if (!displayLutTex)
-            glGenTextures(1, &displayLutTex);
-        glBindTexture(GL_TEXTURE_3D, displayLutTex);
-        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
-        glTexImage3D(GL_TEXTURE_3D, 0, GL_RGBA32F,
-                     pendingLut.size, pendingLut.size, pendingLut.size,
-                     0, GL_RGBA, GL_FLOAT, pendingLut.data.data());
-        glBindTexture(GL_TEXTURE_3D, 0);
-        pendingLut = {};
-    }
-    displayLutDirty = false;
-}
-
-void ImageViewport::setDisplayLut(const DisplayLut& lut) {
-    if (!lut.valid()) { clearDisplayLut(); return; }
-    pendingLut      = lut;
-    displayLutDirty = true;
-    useDisplayLut   = true;
-    update();
-}
-
-void ImageViewport::clearDisplayLut() {
-    useDisplayLut   = false;
-    displayLutDirty = false;
-    pendingLut      = {};
-    update();
-}
-
-void ImageViewport::setGamutWarning(bool on) {
-    if (gamutWarn == on)
-        return;
-    gamutWarn = on;
-    update();
-}
-
-void ImageViewport::resizeGL(int w, int h) {
-    glViewport(0, 0, w, h);
+void ImageViewport::resizeEvent(QResizeEvent* e) {
+    QRhiWidget::resizeEvent(e);
+    overlay->setGeometry(rect());
     emit zoomChanged(pixelZoom());
 }
 
@@ -206,96 +111,58 @@ float ImageViewport::displayOriginalPixelHeight() const {
     return float(originalHeight) * float(params.cropRect.height());
 }
 
-QOpenGLTexture* ImageViewport::activeTexture() const {
-    if (hasFullRes && fullResTex && zoom >= kFullResZoomThreshold)
-        return fullResTex.get();
-    return previewTex.get();
+RendererCore::Slot ImageViewport::activeSlot() const {
+    if (hasFullRes && core.hasImage(RendererCore::Slot::FullRes) &&
+        zoom >= kFullResZoomThreshold)
+        return RendererCore::Slot::FullRes;
+    return RendererCore::Slot::Preview;
 }
 
-static void setHslUniforms(QOpenGLShaderProgram* shader, const AdjustmentParams& p) {
-    float hu[8], sa[8], lu[8];
-    bool active = false;
-    for (int i = 0; i < 8; ++i) {
-        hu[i] = p.hslHue[i] / 100.0f;
-        sa[i] = p.hslSat[i] / 100.0f;
-        lu[i] = p.hslLum[i] / 100.0f;
-        if (p.hslHue[i] != 0.0f || p.hslSat[i] != 0.0f || p.hslLum[i] != 0.0f)
-            active = true;
+void ImageViewport::ensureCurveLut() {
+    if (!curveLutDirty)
+        return;
+    const auto lumaLUT = computeCurveLUT(params.curveLuma.points);
+    const auto redLUT  = computeCurveLUT(params.curveR.points);
+    const auto grnLUT  = computeCurveLUT(params.curveG.points);
+    const auto bluLUT  = computeCurveLUT(params.curveB.points);
+
+    std::array<float, 256 * 4> rgba{};
+    for (int i = 0; i < 256; ++i) {
+        rgba[i*4+0] = lumaLUT[i];
+        rgba[i*4+1] = redLUT[i];
+        rgba[i*4+2] = grnLUT[i];
+        rgba[i*4+3] = bluLUT[i];
     }
-    shader->setUniformValueArray("uHslHue", hu, 8, 1);
-    shader->setUniformValueArray("uHslSat", sa, 8, 1);
-    shader->setUniformValueArray("uHslLum", lu, 8, 1);
-    shader->setUniformValue("uHslActive", active);
+    core.setCurveLut(rgba);
+    curveLutDirty = false;
 }
 
-// Uniforms shared between the live preview (paintGL) and export (renderToImage).
-static void setAdjustmentUniforms(QOpenGLShaderProgram* shader, const AdjustmentParams& p) {
-    shader->setUniformValue("uRotation",    p.rotation);
-    shader->setUniformValue("uExposure",    p.exposure);
-    shader->setUniformValue("uContrast",    p.contrast    / kToneSliderToUniform);
-    shader->setUniformValue("uHighlights",  p.highlights  / kToneSliderToUniform);
-    shader->setUniformValue("uShadows",     p.shadows     / kToneSliderToUniform);
-    shader->setUniformValue("uWhites",      p.whites      / kToneSliderToUniform);
-    shader->setUniformValue("uBlacks",      p.blacks      / kToneSliderToUniform);
-    shader->setUniformValue("uTemperature", p.temperature);
-    shader->setUniformValue("uTint",        p.tint        / 100.0f);
-    shader->setUniformValue("uSaturation",  p.saturation  / 100.0f);
-    shader->setUniformValue("uVibrance",    p.vibrance    / 100.0f);
-    setHslUniforms(shader, p);
-}
-
-void ImageViewport::paintGL() {
-    if (curveLutDirty)   uploadCurveLUT();
-    if (displayLutDirty) uploadDisplayLut();
-
-    glClear(GL_COLOR_BUFFER_BIT);
-    auto* tex = activeTexture();
-    if (!hasImage || !shader || !tex) return;
-
-    shader->bind();
-    tex->bind(0);
-    shader->setUniformValue("uTexture", 0);
-
-    glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, curveLutTex);
-    shader->setUniformValue("uCurveLUT", 1);
-    // uLut3D must always point at its own unit: a sampler3D left at the
-    // default 0 would alias uTexture's unit and fail program validation.
-    glActiveTexture(GL_TEXTURE2);
-    glBindTexture(GL_TEXTURE_3D, displayLutTex);
-    shader->setUniformValue("uLut3D", 2);
-    glActiveTexture(GL_TEXTURE0);
-    shader->setUniformValue("uUseLut",    useDisplayLut);
-    shader->setUniformValue("uGamutWarn", gamutWarn);
-
-    const float viewportAspect = float(width()) / float(height());
-    const float sx = zoom * (displayAspect() / viewportAspect);
-    const float sy = zoom;
-    shader->setUniformValue("uTransform", QVector4D(sx, sy, pan.x(), pan.y()));
+void ImageViewport::render(QRhiCommandBuffer* cb) {
+    if (!hasImage) {
+        core.clear(cb, renderTarget());
+        return;
+    }
+    ensureCurveLut();
 
     const AdjustmentParams& p = showOriginal ? AdjustmentParams{} : params;
-    const QRectF crop = cropMode ? QRectF(0, 0, 1, 1) : p.cropRect;
-    shader->setUniformValue("uCropRect",      cropUniform(crop));
-    shader->setUniformValue("uAspect",        imageAspect);
-    shader->setUniformValue("uBaseLook",      useBaseLook && !showOriginal);
-    shader->setUniformValue("uDisplayEncode", true);
-    shader->setUniformValue("uCurveInput",    false);
-    setAdjustmentUniforms(shader.get(), p);
+    const float viewportAspect = float(width()) / float(height());
 
-    glBindVertexArray(vao);
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    tex->release();
-    shader->release();
+    RendererCore::FrameParams fp;
+    fp.transform = QVector4D(zoom * (displayAspect() / viewportAspect), zoom,
+                             pan.x(), pan.y());
+    fp.cropRect      = cropMode ? QRectF(0, 0, 1, 1) : p.cropRect;
+    fp.aspect        = imageAspect;
+    fp.baseLook      = useBaseLook && !showOriginal;
+    fp.displayEncode = true;
+    fp.curveInput    = false;
+    fp.useLut        = useDisplayLut;
+    fp.gamutWarn     = gamutWarn;
+    fp.adjustments   = p;
+
+    core.record(cb, renderTarget(), activeSlot(), fp);
 }
 
-void ImageViewport::paintEvent(QPaintEvent* e) {
-    QOpenGLWidget::paintEvent(e);   // calls paintGL
-    if (!hasImage)
-        return;
-
-    QPainter p(this);
-    p.setRenderHint(QPainter::Antialiasing);
-
+void ImageViewport::paintOverlay(QPainter& p) const {
     if (cropMode)
         drawCropOverlay(p);
     else if (shouldShowAlignGrid())
@@ -589,14 +456,8 @@ void ImageViewport::setImage(const ImageBuffer& buf, bool baseLook) {
     hasImage  = buf.valid();
     hasFullRes = false;
     useBaseLook = baseLook;
-    if (context()) {
-        makeCurrent();
-        previewTex = createTexture(buf);
-        doneCurrent();
-    } else {
-        // No GL context yet (widget not shown) — upload in initializeGL.
-        pendingPreview = buf;
-    }
+    core.setImage(RendererCore::Slot::Preview, buf);
+    core.setImage(RendererCore::Slot::FullRes, {});
     resetView();
     histoTimer.start();
     update();
@@ -606,13 +467,7 @@ void ImageViewport::setFullResImage(const ImageBuffer& buf) {
     if (buf.valid())
         setOriginalImageSize(buf.width, buf.height);
     hasFullRes = buf.valid();
-    if (context()) {
-        makeCurrent();
-        fullResTex = createTexture(buf);
-        doneCurrent();
-    } else {
-        pendingFullRes = buf;
-    }
+    core.setImage(RendererCore::Slot::FullRes, buf);
     if (zoom >= kFullResZoomThreshold)
         update();
 }
@@ -641,6 +496,25 @@ void ImageViewport::setOriginalImageSize(int width, int height) {
     originalWidth = width;
     originalHeight = height;
     emit zoomChanged(pixelZoom());
+}
+
+void ImageViewport::setDisplayLut(const DisplayLut& lut) {
+    if (!lut.valid()) { clearDisplayLut(); return; }
+    core.setDisplayLut(lut);
+    useDisplayLut = true;
+    update();
+}
+
+void ImageViewport::clearDisplayLut() {
+    useDisplayLut = false;
+    update();
+}
+
+void ImageViewport::setGamutWarning(bool on) {
+    if (gamutWarn == on)
+        return;
+    gamutWarn = on;
+    update();
 }
 
 void ImageViewport::resetView() {
@@ -688,88 +562,39 @@ bool ImageViewport::hasKnownOriginalSize() const {
     return originalWidth > 0 && originalHeight > 0;
 }
 
-std::unique_ptr<QOpenGLTexture> ImageViewport::createTexture(const ImageBuffer& buf) {
-    auto tex = std::make_unique<QOpenGLTexture>(QOpenGLTexture::Target2D);
-    tex->setSize(buf.width, buf.height);
-    tex->setFormat(QOpenGLTexture::RGB32F);
-    tex->setMinMagFilters(QOpenGLTexture::Linear, QOpenGLTexture::Linear);
-    tex->allocateStorage();
-    tex->setData(QOpenGLTexture::RGB, QOpenGLTexture::Float32, buf.data.data());
-    return tex;
-}
-
 // ── Offscreen export render ───────────────────────────────────────────────────
 
 QImage ImageViewport::renderToImage(const ImageBuffer& buf,
                                      const AdjustmentParams& p,
                                      int outW, int outH)
 {
-    makeCurrent();
+    if (!core.ready() || !buf.valid())
+        return {};
 
-    // Temporary texture for the full-res buffer
-    const auto exportTex = createTexture(buf);
+    // Ensure the curve LUT is current (params may have changed since last paint)
+    ensureCurveLut();
 
     const QRectF& cr = p.cropRect;
     const int cropW = qMax(1, int(cr.width()  * buf.width  + 0.5f));
     const int cropH = qMax(1, int(cr.height() * buf.height + 0.5f));
 
-    // Offscreen FBO at cropped pixel size. Float format: the readback stays in
-    // linear working space; the output transform happens on the CPU (lcms2).
-    QOpenGLFramebufferObjectFormat fboFmt;
-    fboFmt.setAttachment(QOpenGLFramebufferObject::NoAttachment);
-    fboFmt.setInternalTextureFormat(GL_RGBA32F);
-    QOpenGLFramebufferObject fbo(cropW, cropH, fboFmt);
-    fbo.bind();
+    // Offscreen target at cropped pixel size. Float format: the readback stays
+    // in linear working space; the output transform happens on the CPU (lcms2).
+    RendererCore::FrameParams fp;
+    fp.transform     = QVector4D(1.0f, 1.0f, 0.0f, 0.0f);
+    fp.cropRect      = cr;
+    fp.aspect        = float(buf.width) / float(buf.height);
+    fp.baseLook      = true;
+    fp.displayEncode = false;
+    fp.curveInput    = false;
+    fp.useLut        = false;
+    fp.gamutWarn     = false;
+    fp.adjustments   = p;
 
-    glViewport(0, 0, cropW, cropH);
-    glClear(GL_COLOR_BUFFER_BIT);
-
-    // Ensure curve LUT is current (params may have changed since last paintGL)
-    if (curveLutDirty) uploadCurveLUT();
-
-    shader->bind();
-    exportTex->bind(0);
-    shader->setUniformValue("uTexture", 0);
-
-    glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, curveLutTex);
-    shader->setUniformValue("uCurveLUT", 1);
-    glActiveTexture(GL_TEXTURE0);
-    shader->setUniformValue("uLut3D",  2);      // unused (uDisplayEncode off), but
-    shader->setUniformValue("uUseLut", false);  // must not alias a 2D sampler unit
-
-    shader->setUniformValue("uTransform", QVector4D(1.0f, 1.0f, 0.0f, 0.0f));
-    const float texAspect = float(buf.width) / float(buf.height);
-    shader->setUniformValue("uCropRect",      cropUniform(cr));
-    shader->setUniformValue("uAspect",        texAspect);
-    shader->setUniformValue("uBaseLook",      true);
-    shader->setUniformValue("uDisplayEncode", false);
-    shader->setUniformValue("uCurveInput",    false);
-    setAdjustmentUniforms(shader.get(), p);
-
-    glBindVertexArray(vao);
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    exportTex->release();
-    shader->release();
-
-    // Read back as linear working-space floats. GL rows are bottom-up, so
-    // flip in place (Format_RGBX32FPx4 scanlines are tightly packed).
-    QImage result(cropW, cropH, QImage::Format_RGBX32FPx4);
-    glReadPixels(0, 0, cropW, cropH, GL_RGBA, GL_FLOAT, result.bits());
-
-    fbo.release();
-    glViewport(0, 0, width(), height());
-    doneCurrent();
-
-    const qsizetype stride = result.bytesPerLine();
-    std::vector<uchar> tmp(stride);
-    for (int y = 0; y < cropH / 2; ++y) {
-        uchar* top = result.scanLine(y);
-        uchar* bot = result.scanLine(cropH - 1 - y);
-        memcpy(tmp.data(), top, stride);
-        memcpy(top, bot, stride);
-        memcpy(bot, tmp.data(), stride);
-    }
+    QImage result = core.renderOffscreen(buf, fp, QSize(cropW, cropH),
+                                         QRhiTexture::RGBA32F);
+    if (result.isNull())
+        return {};
 
     // Scale to requested output dimensions while still in linear light —
     // gamma-space scaling darkens fine detail.
@@ -781,64 +606,40 @@ QImage ImageViewport::renderToImage(const ImageBuffer& buf,
 
 // ── Histogram readback (docs/adr/0004) ────────────────────────────────────────
 
-// Render the preview texture through the real shader twice into a small FBO —
-// once with uCurveInput (pipeline stops after tone regions, gamma-encoded) and
-// once full — and hand both samples to whoever bins them.
+// Render the preview texture through the real shader twice into a small
+// offscreen target — once with curveInput (pipeline stops after tone regions,
+// gamma-encoded) and once full — and hand both samples to whoever bins them.
 void ImageViewport::renderHistograms() {
-    if (!hasImage || !shader || !previewTex)
+    if (!hasImage || !core.ready() ||
+        !core.hasImage(RendererCore::Slot::Preview))
         return;
 
-    makeCurrent();
-    if (curveLutDirty) uploadCurveLUT();
+    ensureCurveLut();
 
     const QRectF& cr = params.cropRect;
     const float aspect = imageAspect * float(cr.width() / cr.height());
     const int w = 256;
     const int h = std::clamp(int(w / aspect + 0.5f), 16, 1024);
 
-    QOpenGLFramebufferObjectFormat fboFmt;
-    fboFmt.setAttachment(QOpenGLFramebufferObject::NoAttachment);
-    fboFmt.setInternalTextureFormat(GL_RGBA8);
-    QOpenGLFramebufferObject fbo(w, h, fboFmt);
-    fbo.bind();
-    glViewport(0, 0, w, h);
-
-    shader->bind();
-    previewTex->bind(0);
-    shader->setUniformValue("uTexture", 0);
-
-    glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, curveLutTex);
-    shader->setUniformValue("uCurveLUT", 1);
-    glActiveTexture(GL_TEXTURE0);
-    shader->setUniformValue("uLut3D",  2);      // uUseLut is off, but the sampler
-    shader->setUniformValue("uUseLut", false);  // must not alias a 2D sampler unit
-
-    shader->setUniformValue("uTransform", QVector4D(1.0f, 1.0f, 0.0f, 0.0f));
-    shader->setUniformValue("uCropRect",  cropUniform(cr));
-    shader->setUniformValue("uAspect",    imageAspect);
-    shader->setUniformValue("uBaseLook",  useBaseLook);
+    RendererCore::FrameParams fp;
+    fp.transform     = QVector4D(1.0f, 1.0f, 0.0f, 0.0f);
+    fp.cropRect      = cr;
+    fp.aspect        = imageAspect;
+    fp.baseLook      = useBaseLook;
     // Display transform on, monitor/proof LUT off: the panel histogram shows
     // output-sRGB values regardless of soft-proofing.
-    shader->setUniformValue("uDisplayEncode", true);
-    setAdjustmentUniforms(shader.get(), params);
-    glBindVertexArray(vao);
+    fp.displayEncode = true;
+    fp.useLut        = false;
+    fp.gamutWarn     = false;
+    fp.adjustments   = params;
 
-    shader->setUniformValue("uCurveInput", true);
-    glClear(GL_COLOR_BUFFER_BIT);
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    const QImage curveInput = fbo.toImage();
+    fp.curveInput = true;
+    const QImage curveInput = core.renderOffscreen(
+        RendererCore::Slot::Preview, fp, QSize(w, h), QRhiTexture::RGBA8);
 
-    shader->setUniformValue("uCurveInput", false);
-    glClear(GL_COLOR_BUFFER_BIT);
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    const QImage finalSample = fbo.toImage();
-
-    previewTex->release();
-    shader->release();
-    fbo.release();
-    glViewport(0, 0, width(), height());
-    doneCurrent();
+    fp.curveInput = false;
+    const QImage finalSample = core.renderOffscreen(
+        RendererCore::Slot::Preview, fp, QSize(w, h), QRhiTexture::RGBA8);
 
     emit histogramsReady(finalSample, curveInput);
 }
@@ -887,7 +688,7 @@ void ImageViewport::mouseReleaseEvent(QMouseEvent* e) {
 }
 
 void ImageViewport::keyPressEvent(QKeyEvent* e) {
-    if (e->isAutoRepeat()) { QOpenGLWidget::keyPressEvent(e); return; }
+    if (e->isAutoRepeat()) { QRhiWidget::keyPressEvent(e); return; }
 
     switch (e->key()) {
     case Qt::Key_Backslash:
@@ -928,7 +729,7 @@ void ImageViewport::keyPressEvent(QKeyEvent* e) {
         }
         break;
     default:
-        QOpenGLWidget::keyPressEvent(e);
+        QRhiWidget::keyPressEvent(e);
     }
 }
 
@@ -937,6 +738,6 @@ void ImageViewport::keyReleaseEvent(QKeyEvent* e) {
         showOriginal = false;
         update();
     } else {
-        QOpenGLWidget::keyReleaseEvent(e);
+        QRhiWidget::keyReleaseEvent(e);
     }
 }

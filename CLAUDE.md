@@ -6,7 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Linux (Fedora)**
 ```bash
-sudo dnf install qt6-qtbase-devel qt6-qttools-devel LibRaw-devel lcms2-devel cmake ninja-build
+sudo dnf install qt6-qtbase-devel qt6-qtbase-private-devel qt6-qtshadertools-devel \
+    qt6-qttools-devel LibRaw-devel lcms2-devel cmake ninja-build
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
 ninja -C build
 ./build/arraw
@@ -23,7 +24,7 @@ ninja -C build
 
 **Windows (vcpkg)**
 ```bat
-vcpkg install qt6-base qt6-tools libraw lcms
+vcpkg install qt6-base qt6-tools qt6-shadertools libraw lcms
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
   -DCMAKE_TOOLCHAIN_FILE=path/to/vcpkg/scripts/buildsystems/vcpkg.cmake
 ninja -C build
@@ -35,7 +36,9 @@ cmake -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release
 ninja -C build-release
 ```
 
-Shaders are copied from `shaders/` to `build/shaders/` automatically post-build. If the app fails to display images, check that `build/shaders/image.vert` and `image.frag` exist.
+Shaders are Vulkan-dialect GLSL in `shaders/`, compiled at build time by `qsb`
+and baked into the binary as Qt resources (`:/shaders/*.qsb`) — editing them
+requires a rebuild; there is no runtime loading or hot-reload (docs/adr/0006).
 
 **Tests**: `just test` (or `ctest --test-dir build --output-on-failure`). Catch2 v3
 tests live in `tests/`, linking the `arraw_core` static library (everything but
@@ -47,11 +50,8 @@ tests live in `tests/`, linking the `arraw_core` static library (everything but
 
 Modern C++20. No Hungarian notation — no `m_` prefix on members, no type prefixes.
 Use `auto` where the type is obvious from context. Prefer `const` by default.
-Class members, locals, and parameters are plain names (`zoom`, `shader`, `previewTex`).
+Class members, locals, and parameters are plain names (`zoom`, `params`, `curveLutTex`).
 The existing code uses `m_` — strip it when touching a file, don't introduce new uses.
-
-Shader hot-reload: `ImageViewport::reloadShaders()` exists but is not wired to a key
-or file watcher yet. When iterating on shaders, call it manually or wire `Ctrl+Shift+R`.
 
 ## Architecture
 
@@ -67,15 +67,15 @@ The full design rationale lives in `DESIGN.md`. Key things that require reading 
 
 ### Real-time preview
 
-`AdjustmentPanel` emits `paramsChanged(AdjustmentParams)` on every slider move. `ImageViewport` receives this, stores the params, and calls `update()`. In `paintGL()`, all adjustments are passed as GLSL uniforms — no CPU image processing happens during preview. The shader pipeline order is defined in `shaders/image.frag` and documented in `DESIGN.md`.
+`AdjustmentPanel` emits `paramsChanged(AdjustmentParams)` on every slider move. `ImageViewport` receives this, stores the params, and calls `update()`. In `render()`, all adjustments travel in one uniform block — no CPU image processing happens during preview. The shader pipeline order is defined in `shaders/image.frag` and documented in `DESIGN.md`.
 
-### Two textures in ImageViewport
+### RendererCore and the two image slots
 
-`ImageViewport` maintains `m_previewTex` (always present) and `m_fullResTex` (uploaded lazily when zoom crosses the point where preview pixels become visible). `paintGL` selects which to bind based on current zoom level. The full-res buffer is never uploaded until needed.
+All GPU work goes through `RendererCore` (docs/adr/0006): it owns every RHI resource and `record()` is the only place the shader pass is recorded — the widget's paint, export, and histogram samples are three callers. It holds two image slots, `Preview` (always present) and `FullRes` (uploaded lazily when zoom crosses the point where preview pixels become visible); `ImageViewport::activeSlot()` picks one per frame. The full-res buffer is never uploaded until needed.
 
 ### Export
 
-Export does not use `QImage` pixel manipulation. `ImageViewport::renderToImage()` uploads `m_fullRes` into an offscreen FBO, runs the full GLSL pipeline at full resolution, and calls `glReadPixels`. The result is tagged `QColorSpace::SRgb` before saving. This keeps the shader as the single source of truth for all adjustments.
+Export does not use `QImage` pixel manipulation. `ImageViewport::renderToImage()` uploads `m_fullRes` into a temporary texture, runs the full shader pipeline at full resolution in an offscreen RHI frame, and reads the result back synchronously. The result is tagged `QColorSpace::SRgb` before saving. This keeps the shader as the single source of truth for all adjustments.
 
 ### XMP sidecar
 
@@ -88,4 +88,4 @@ Export does not use `QImage` pixel manipulation. `ImageViewport::renderToImage()
 - `temperature`: slider value = Kelvin directly (range 2000..12000)
 - All other fields: slider value = float value directly (-100..100)
 
-When adding a new adjustment, update `AdjustmentParams` (struct), the slider in `AdjustmentPanel`, the GLSL uniform in `image.frag`, the `setUniformValue` block in `ImageViewport::paintGL()`, and `XmpSidecar` load/save.
+When adding a new adjustment, update `AdjustmentParams` (struct), the slider in `AdjustmentPanel`, the uniform block in **both** `image.vert` and `image.frag` plus its `Ubuf` mirror in `RendererCore.h` (the three must stay byte-identical, std140), `RendererCore::fillUbuf()`, and `XmpSidecar` load/save.

@@ -8,8 +8,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets OpenGL OpenGLWidgets Concurrent)
-find_package(OpenGL REQUIRED)
+# 6.8: QRhiWidget (6.7) + LTS. ShaderTools provides qt6_add_shaders (qsb);
+# GuiPrivate provides the semi-public RHI headers (rhi/qrhi.h).
+find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets Concurrent ShaderTools GuiPrivate)
 
 # libraw: try pkg-config first (IMPORTED_TARGET wires up lib dirs automatically),
 # fall back to manual find_library when pkg-config is unavailable.
@@ -46,6 +47,7 @@ endif()
 set(CORE_SOURCES
     src/MainWindow.cpp
     src/ImageViewport.cpp
+    src/RendererCore.cpp
     src/AdjustmentPanel.cpp
     src/ToneCurveWidget.cpp
     src/ExifPanel.cpp
@@ -68,12 +70,22 @@ target_include_directories(arraw_core PUBLIC src)
 
 target_link_libraries(arraw_core PUBLIC
     Qt6::Widgets
-    Qt6::OpenGL
-    Qt6::OpenGLWidgets
+    Qt6::GuiPrivate
     Qt6::Concurrent
-    OpenGL::GL
     PkgConfig::LIBRAW
     PkgConfig::LCMS2
+)
+
+# Shaders are compiled by qsb at build time (Vulkan GLSL → SPIR-V →
+# MSL/HLSL/GLSL) and baked into resources as :/shaders/*.qsb (ADR 0006).
+# GLSL floor is 330/300es: the fragment shader needs textureSize + sampler3D.
+qt6_add_shaders(arraw_core "arraw_shaders"
+    PREFIX "/shaders"
+    BASE shaders
+    GLSL "300es,330"
+    HLSL 50
+    MSL 12
+    FILES shaders/image.vert shaders/image.frag
 )
 
 add_executable(arraw src/main.cpp)
@@ -81,10 +93,3 @@ add_executable(arraw src/main.cpp)
 target_link_libraries(arraw PRIVATE arraw_core)
 
 add_subdirectory(tests)
-
-# Copy shaders next to the binary
-add_custom_command(TARGET arraw POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        ${CMAKE_SOURCE_DIR}/shaders
-        $<TARGET_FILE_DIR:arraw>/shaders
-)
