@@ -112,6 +112,7 @@ public:
 
         if (selected) {
             painter->setPen(QPen(option.palette.highlight().color(), kBorderWidth));
+            painter->setBrush(Qt::NoBrush);  // paintMarks left the swatch colour set
             const int o = kBorderWidth / 2;
             painter->drawRect(option.rect.adjusted(o, o, -o - 1, -o - 1));
         }
