@@ -60,6 +60,8 @@ set(CORE_SOURCES
     src/ProofingPanel.cpp
     src/XmpSidecar.cpp
     src/FileBrowser.cpp
+    src/FilmStripModel.cpp
+    src/FilmStripLayout.cpp
     src/ThumbnailCache.cpp
     src/ExportDialog.cpp
 )
