@@ -96,6 +96,13 @@ FilmStrip::FilmStrip(QWidget* parent) : QWidget(parent) {
                     emit fileSelected(current.data(FilmStripModel::PathRole).toString());
             });
 
+    // Centre the clicked thumbnail — but only after the click finishes
+    // (clicked fires on release), so the scroll never moves content out from
+    // under the cursor mid-click and re-selects a neighbour.
+    connect(list, &QListView::clicked, this, [this](const QModelIndex& idx) {
+        list->scrollTo(idx, QAbstractItemView::PositionAtCenter);
+    });
+
     connect(list->horizontalScrollBar(), &QScrollBar::valueChanged,
             this, [this](int) { requestVisibleThumbnails(); });
 
@@ -127,9 +134,14 @@ void FilmStrip::setCurrentFile(const QString& path) {
     const QModelIndex idx = model->indexForPath(path);
     if (!idx.isValid())
         return;
-    // Block selection signals: this is called from MainWindow::loadImage, and
-    // letting currentChanged fire would re-emit fileSelected and re-enter load.
-    QSignalBlocker block(list->selectionModel());
+    // Called from MainWindow::loadImage on every selection. When it already
+    // matches the view's current item — the common case, a click or keyboard
+    // nav that originated here — there's nothing to do, and scrolling now would
+    // yank the strip out from under the mouse mid-click. Only external opens
+    // (File ▸ Open, command line) land here with a different current item.
+    if (list->currentIndex() == idx)
+        return;
+    QSignalBlocker block(list->selectionModel());  // don't re-enter loadImage
     list->setCurrentIndex(idx);
     list->scrollTo(idx, QAbstractItemView::PositionAtCenter);
     requestVisibleThumbnails();
@@ -145,7 +157,9 @@ bool FilmStrip::navigateBy(int delta) {
     const int next = (cur.isValid() ? cur.row() : -1) + delta;
     if (next < 0 || next >= model->rowCount())
         return false;
-    list->setCurrentIndex(model->index(next));   // fires currentChanged → fileSelected
+    const QModelIndex idx = model->index(next);
+    list->setCurrentIndex(idx);   // fires currentChanged → fileSelected
+    list->scrollTo(idx, QAbstractItemView::PositionAtCenter);  // keyboard nav centres
     return true;
 }
 
