@@ -1,5 +1,7 @@
 # arraw
 
+**WARNING** Though a lot of thinking and some basic knowledge of C++ and Qt has been put to the development, it is very heavily vibe-coded.
+
 A lightweight, cross-platform RAW photo editor with a Lightroom-style development workflow. Real-time GPU preview, non-destructive editing, XMP sidecar output.
 
 ## Features
