@@ -13,6 +13,12 @@ class ViewportOverlay;
 class ImageViewport : public QRhiWidget {
     Q_OBJECT
 public:
+    // Mutually-exclusive viewport tools. Crop edits a rectangle; Straighten
+    // draws a level line; WhiteBalance samples a neutral pixel. Only one is
+    // active at a time — the toolbar is a thin control surface over this.
+    enum class ActiveTool { None, Crop, Straighten, WhiteBalance };
+    Q_ENUM(ActiveTool)
+
     explicit ImageViewport(QWidget* parent = nullptr);
     ~ImageViewport() override;
 
@@ -20,6 +26,14 @@ public:
     void setFullResImage(const ImageBuffer& fullRes);
     void setAdjustments(const AdjustmentParams& p);
     void setStraightenActive(bool active);
+
+    // Active-tool state machine. setActiveTool switches tools, committing any
+    // pending edit of the tool being left (commit-on-leave); commitActiveTool
+    // is setActiveTool(None); cancelActiveTool discards the pending edit (Esc).
+    ActiveTool activeTool() const { return tool; }
+    void setActiveTool(ActiveTool t);
+    void commitActiveTool() { setActiveTool(ActiveTool::None); }
+    void cancelActiveTool();
     void setOriginalImageSize(int width, int height);
     void resetView();
     void setZoom(float value);
@@ -50,6 +64,9 @@ public:
 signals:
     void fullResNeeded();
     void cropCommitted(const QRectF& cropRect);
+    void rotationCommitted(float degrees);          // Straighten tool result
+    void whiteBalanceCommitted(float kelvin, float tint);   // WB picker result
+    void activeToolChanged(ImageViewport::ActiveTool tool);
     void zoomChanged(float pixelZoom);
     // Small shader-rendered samples for histogramming (docs/adr/0004):
     // finalSample is the full pipeline, curveInputSample stops after tone
@@ -85,24 +102,41 @@ private:
     RendererCore::Slot activeSlot() const;
     void paintOverlay(QPainter& p) const;
 
-    // Map texture UV ↔ viewport (matches vertex shader: image-centre rotation + fit)
-    QPointF textureUVToViewport(float u, float v) const;
-    QPointF viewportToTextureUV(QPointF pos) const;
+    // Crop lives in the rotated *display frame*: cropRect is an axis-aligned
+    // rectangle of what you see, and the shader applies rotation underneath
+    // (crop after rotation). These map that frame ↔ viewport with the fit/pan
+    // but NOT the rotation — an axis-aligned crop stays axis-aligned on screen.
+    QPointF cropUVToViewport(float u, float v) const;
+    QPointF viewportToCropUV(QPointF pos) const;
 
-    bool useViewportCrop() const;
-    QRectF rotatedImageViewportBounds() const;
-    QRectF textureCropToViewportBounds(const QRectF& texCrop) const;
-    QRectF viewportCropToTextureCrop(const QRectF& vpCrop) const;
+    // True when every corner of a display-frame crop maps onto real image
+    // pixels (no empty corner left by the rotation). The shader rotation is the
+    // arbiter, so this mirrors it.
+    bool cropInsideImage(const QRectF& cropUV) const;
+    // Largest centred, full-aspect crop that fits inside the rotated image.
+    QRectF maxInscribedCrop() const;
 
     // Returns handle index 0-7, or -1 for "inside rect" (move), or -2 for "outside" (rotate)
     int hitTest(QPointF viewportPos) const;
     QPointF handlePos(int i) const;
     void applyCropDrag(QPointF viewportPos);
-    void applyCropDragViewport(QPointF viewportPos);
 
     void drawCropOverlay(QPainter& p) const;
     void drawAlignGrid(QPainter& p) const;
     bool shouldShowAlignGrid() const;
+
+    // Crop is just one of the active tools; this keeps the crop code readable.
+    bool cropMode() const { return tool == ActiveTool::Crop; }
+    void enterCrop();      // snapshot + seed the editable crop rect
+    void commitCrop();     // write activeCrop into params and emit cropCommitted
+
+    // Straighten: turn the drawn line into a rotation (auto horizontal/vertical).
+    void applyStraightenLine();
+    void drawStraightenLine(QPainter& p) const;
+
+    // WB picker: read the pre-WB pixel value under pos (GPU tap, docs/adr/0004)
+    // and invert the additive WB model into kelvin/tint. False if pos is off-image.
+    bool sampleWhiteBalance(QPointF pos, float& kelvin, float& tintOut);
 
     // Aspect ratio of the region currently shown (accounts for committed crop).
     float displayAspect() const;
@@ -139,16 +173,19 @@ private:
     bool     showOriginal = false;
     bool     straightenActive = false;
 
+    // ── Tool state ────────────────────────────────────────────────────────
+    ActiveTool tool = ActiveTool::None;
+
+    // Straighten: endpoints of the level line being dragged (viewport pixels).
+    bool     straightenDragging = false;
+    QPointF  straightenStart;
+    QPointF  straightenEnd;
+
     // ── Crop state ────────────────────────────────────────────────────────
-    // The crop being edited lives in one of two spaces: texture UV
-    // (activeCrop) normally, or viewport pixels (activeCropViewport) while
-    // the image is rotated — see useViewportCrop(). The cancel* copies are
-    // snapshots taken on entering crop mode, restored on Escape.
-    bool    cropMode       = false;
-    QRectF  activeCrop     = {0, 0, 1, 1};   // texture UV rect being edited
+    // The crop being edited is axis-aligned in the display frame (see
+    // cropUVToViewport). cancelCrop is the snapshot restored on Escape.
+    QRectF  activeCrop     = {0, 0, 1, 1};   // display-frame UV rect being edited
     QRectF  cancelCrop     = {0, 0, 1, 1};
-    QRectF  activeCropViewport;              // screen-aligned crop when straightening
-    QRectF  cancelCropViewport;
     int     cropDragHandle = -2;             // which handle is dragged
     QPointF cropDragStart;
     QRectF  cropDragStartRect;

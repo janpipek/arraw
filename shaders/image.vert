@@ -34,6 +34,7 @@ layout(std140, binding = 0) uniform buf {
                          // 0: output clamped linear working space (export readback)
     int   curveInput;    // stop after tone regions + gamma-encode (histograms)
     int   hslActive;
+    int   wbInput;       // stop before temperature/tint, output linear (WB picker)
 } u;
 
 void main() {

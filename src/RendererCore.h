@@ -33,7 +33,8 @@ struct Ubuf {
     qint32 displayEncode;
     qint32 curveInput;
     qint32 hslActive;
-    qint32 pad[2];         // std140 block size is a multiple of 16
+    qint32 wbInput;
+    qint32 pad[1];         // std140 block size is a multiple of 16
 };
 static_assert(sizeof(Ubuf) == 272);
 
@@ -57,6 +58,7 @@ public:
         bool      baseLook      = false;
         bool      displayEncode = true;
         bool      curveInput    = false;
+        bool      wbInput       = false;
         bool      useLut        = false;
         bool      gamutWarn     = false;
         AdjustmentParams adjustments;

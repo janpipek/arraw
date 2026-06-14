@@ -14,6 +14,9 @@ class QDockWidget;
 class QUndoStack;
 class QLabel;
 class QToolButton;
+class QToolBar;
+class QActionGroup;
+class QAction;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -39,6 +42,9 @@ private:
     void setupMenus();
     void setupDocks();
     void setupStatusBar();
+    void setupToolbar();
+    void syncToolActions();            // reflect viewport->activeTool() in the buttons
+    void setToolsEnabled(bool on);     // image-dependent toolbar items
     void loadImage(const QString& path);
     void setLoadingState(bool loading);
     void updateZoomStatus(float zoom);
@@ -57,6 +63,14 @@ private:
     QLabel*          statusLabel;
     QLabel*          proofLabel;
     QToolButton*     zoomButton;
+
+    // Toolbar: modal tools (left) + immediate actions (right).
+    QActionGroup*    toolGroup;
+    QAction*         cropAction;
+    QAction*         straightenAction;
+    QAction*         wbAction;
+    QAction*         saveAction;
+    QAction*         exportAction;
 
     QString monitorProfilePath;   // empty = assume sRGB
 
