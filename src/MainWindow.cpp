@@ -21,6 +21,8 @@
 #include <QScrollArea>
 #include <QTabWidget>
 #include <QVBoxLayout>
+#include <QHBoxLayout>
+#include <QStyle>
 #include <QFileInfo>
 #include <QApplication>
 #include <QCloseEvent>
@@ -212,6 +214,30 @@ void MainWindow::setupDocks() {
     filmStripDock->setWidget(filmStrip);
     addDockWidget(Qt::BottomDockWidgetArea, filmStripDock);
     resizeDocks({filmStripDock}, {132}, Qt::Vertical);  // sensible initial height
+
+    // Custom title bar: folder icon + current path, instead of "Film Strip".
+    auto* stripTitle = new QWidget(filmStripDock);
+    auto* stripTitleLayout = new QHBoxLayout(stripTitle);
+    stripTitleLayout->setContentsMargins(6, 2, 6, 2);
+    stripTitleLayout->setSpacing(6);
+
+    auto* folderButton = new QToolButton(stripTitle);
+    folderButton->setIcon(style()->standardIcon(QStyle::SP_DirOpenIcon));
+    folderButton->setAutoRaise(true);
+    folderButton->setToolTip("Open folder…");
+    connect(folderButton, &QToolButton::clicked, filmStrip, &FilmStrip::promptForDirectory);
+    stripTitleLayout->addWidget(folderButton);
+
+    auto* pathLabel = new QLabel("No folder", stripTitle);
+    pathLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    stripTitleLayout->addWidget(pathLabel, 1);
+    filmStripDock->setTitleBarWidget(stripTitle);
+
+    connect(filmStrip, &FilmStrip::directoryChanged, this, [pathLabel](const QString& dir) {
+        const QString native = QDir::toNativeSeparators(dir);
+        pathLabel->setText(native);
+        pathLabel->setToolTip(native);
+    });
 
     auto* toggleFilmStrip = filmStripDock->toggleViewAction();
     toggleFilmStrip->setText("Film Strip");

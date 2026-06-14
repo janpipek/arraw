@@ -3,7 +3,6 @@
 #include <QString>
 
 class QListView;
-class QToolButton;
 class FilmStripModel;
 class ThumbnailCache;
 
@@ -34,6 +33,7 @@ public slots:
 
 signals:
     void fileSelected(const QString& path);
+    void directoryChanged(const QString& dir);
 
 protected:
     // Watches the list viewport for resizes (fired after its geometry is final,
@@ -44,7 +44,6 @@ private:
     void requestVisibleThumbnails();
     void updateThumbHeight();
 
-    QToolButton*     folderButton;
     QListView*       list;
     FilmStripModel*  model;
     ThumbnailCache*  thumbs;

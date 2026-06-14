@@ -4,7 +4,6 @@
 #include "ThumbnailCache.h"
 
 #include <QListView>
-#include <QToolButton>
 #include <QHBoxLayout>
 #include <QFileDialog>
 #include <QDir>
@@ -74,15 +73,8 @@ FilmStrip::FilmStrip(QWidget* parent) : QWidget(parent) {
     thumbs = new ThumbnailCache(this);
 
     auto* layout = new QHBoxLayout(this);
-    layout->setContentsMargins(4, 4, 4, 4);
-    layout->setSpacing(4);
-
-    folderButton = new QToolButton(this);
-    folderButton->setText("📁");
-    folderButton->setToolTip(tr("Open folder…"));
-    folderButton->setAutoRaise(true);
-    connect(folderButton, &QToolButton::clicked, this, &FilmStrip::promptForDirectory);
-    layout->addWidget(folderButton, 0, Qt::AlignVCenter);
+    layout->setContentsMargins(2, 2, 2, 2);
+    layout->setSpacing(0);
 
     list = new QListView(this);
     list->setModel(model);
@@ -123,7 +115,7 @@ void FilmStrip::setDirectory(const QString& dir) {
         return;
 
     currentDir = clean;
-    folderButton->setToolTip(QDir::toNativeSeparators(clean));
+    emit directoryChanged(clean);
     model->setFiles(scanImageFiles(clean));
 
     // Deferred: cell geometry isn't laid out yet, so visibility tests would be
