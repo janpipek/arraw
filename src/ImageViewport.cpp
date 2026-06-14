@@ -562,8 +562,10 @@ void ImageViewport::applyStraightenLine() {
     const double deviation = std::abs(angle) <= 45.0
                                  ? angle                              // treat as horizontal
                                  : angle - (angle > 0 ? 90.0 : -90.0); // from vertical
+    // Rotating by +deviation on top of the current rotation brings the drawn
+    // line onto its axis (the line the user traced along the horizon goes level).
     const float newRotation =
-        std::clamp(float(params.rotation - deviation), -45.0f, 45.0f);
+        std::clamp(float(params.rotation + deviation), -45.0f, 45.0f);
     emit rotationCommitted(newRotation);
 }
 
