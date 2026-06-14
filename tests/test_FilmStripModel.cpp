@@ -1,0 +1,95 @@
+#include <catch2/catch_test_macros.hpp>
+#include "FilmStripModel.h"
+
+#include <QCoreApplication>
+#include <QImage>
+
+// QAbstractListModel needs a QCoreApplication for its meta-object machinery
+// (dataChanged, QSignalSpy). A lazy static instance mirrors the pattern in
+// test_GoldenImages.cpp; ctest runs each case in its own process, so only the
+// app the selected test touches is ever constructed.
+namespace {
+void ensureApp() {
+    static int argc = 1;
+    static char arg0[] = "arraw_tests";
+    static char* argv[] = {arg0, nullptr};
+    static QCoreApplication app(argc, argv);
+    (void)app;
+}
+} // namespace
+
+TEST_CASE("model exposes the files it was given", "[filmstrip]") {
+    ensureApp();
+    FilmStripModel model;
+    model.setFiles({"/photos/a.dng", "/photos/b.dng", "/photos/c.dng"});
+
+    REQUIRE(model.rowCount() == 3);
+    REQUIRE(model.data(model.index(0), Qt::DisplayRole).toString() == "a.dng");
+}
+
+TEST_CASE("model orders files by natural sort, not lexical", "[filmstrip]") {
+    ensureApp();
+    FilmStripModel model;
+    model.setFiles({"/p/IMG_10.dng", "/p/IMG_2.dng", "/p/IMG_1.dng"});
+
+    // Lexical sort would put IMG_10 before IMG_2; natural sort must not.
+    REQUIRE(model.data(model.index(0), Qt::DisplayRole).toString() == "IMG_1.dng");
+    REQUIRE(model.data(model.index(1), Qt::DisplayRole).toString() == "IMG_2.dng");
+    REQUIRE(model.data(model.index(2), Qt::DisplayRole).toString() == "IMG_10.dng");
+}
+
+TEST_CASE("model exposes full path and a null thumbnail before load", "[filmstrip]") {
+    ensureApp();
+    FilmStripModel model;
+    model.setFiles({"/photos/a.dng"});
+    const QModelIndex idx = model.index(0);
+
+    REQUIRE(model.data(idx, FilmStripModel::PathRole).toString() == "/photos/a.dng");
+    REQUIRE(model.data(idx, Qt::DecorationRole).value<QImage>().isNull());
+}
+
+TEST_CASE("model offers the filename as the tooltip", "[filmstrip]") {
+    ensureApp();
+    FilmStripModel model;
+    model.setFiles({"/photos/a.dng"});
+    REQUIRE(model.data(model.index(0), Qt::ToolTipRole).toString() == "a.dng");
+}
+
+TEST_CASE("indexForPath locates a known path and rejects an unknown one",
+          "[filmstrip]") {
+    ensureApp();
+    FilmStripModel model;
+    model.setFiles({"/p/b.dng", "/p/a.dng"});  // natural order: a(0), b(1)
+
+    REQUIRE(model.indexForPath("/p/b.dng").row() == 1);
+    REQUIRE_FALSE(model.indexForPath("/p/missing.dng").isValid());
+}
+
+TEST_CASE("setting a thumbnail updates that row and notifies the view", "[filmstrip]") {
+    ensureApp();
+    FilmStripModel model;
+    model.setFiles({"/p/a.dng", "/p/b.dng"});  // natural order: a, then b
+    // Direct-connected lambda fires synchronously on emit — no event loop needed.
+    int changes = 0;
+    int topRow = -1, bottomRow = -1;
+    QObject::connect(&model, &QAbstractItemModel::dataChanged,
+                     [&](const QModelIndex& tl, const QModelIndex& br, const QList<int>&) {
+                         ++changes;
+                         topRow = tl.row();
+                         bottomRow = br.row();
+                     });
+
+    QImage img(4, 4, QImage::Format_RGB32);
+    img.fill(Qt::red);
+    model.setThumbnail("/p/b.dng", img);
+
+    REQUIRE(model.data(model.index(1), Qt::DecorationRole).value<QImage>().size()
+            == QSize(4, 4));
+    // The other row stays empty.
+    REQUIRE(model.data(model.index(0), Qt::DecorationRole).value<QImage>().isNull());
+
+    // Exactly one notification, naming only the changed row.
+    REQUIRE(changes == 1);
+    REQUIRE(topRow == 1);
+    REQUIRE(bottomRow == 1);
+}

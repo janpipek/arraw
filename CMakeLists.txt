@@ -59,7 +59,9 @@ set(CORE_SOURCES
     src/ColorManagement.cpp
     src/ProofingPanel.cpp
     src/XmpSidecar.cpp
-    src/FileBrowser.cpp
+    src/FilmStrip.cpp
+    src/FilmStripModel.cpp
+    src/FilmStripLayout.cpp
     src/ThumbnailCache.cpp
     src/ExportDialog.cpp
 )

@@ -348,11 +348,39 @@ for the panel histogram, and a "stop after tone regions, gamma-encode" pass
 - 256-entry LUT uploaded as a 1D texture uniform; applied in gamma space.
 - Stored in XMP as `crs:ToneCurvePV2012*` point lists.
 
-### Milestone 3 — Thumbnail Strip
-- Replace filename list with a horizontal thumbnail dock.
-- `QAbstractItemModel` + custom delegate.
-- Lazy thumbnail generation: thread pool, one `QtConcurrent::run` per file,
-  capped concurrency, LRU cache.
+### Milestone 3 — Horizontal Filmstrip
+
+The current `FileBrowser` is a vertical icon **grid** in a left-side dock
+(`QListWidget`, square 128px icons, inline path edit). This milestone turns it
+into a true Lightroom-style **horizontal filmstrip** docked at the **bottom**,
+full width under the viewport, replacing the left dock. Adjustments stays right.
+
+Design resolved 2026-06-14:
+
+- **Layout**: single-row horizontal strip at the bottom, ~110px tall, resizable
+  via the dock and collapsible via the existing View-menu toggle. Single
+  selection drives the loaded image (no multi-select). Current item is centered
+  and highlighted.
+- **Architecture**: `QAbstractListModel` + `QListView` (flow left-to-right,
+  no wrap) + a custom `QStyledItemDelegate`. The model exposes thumbnails as
+  **`QImage`** (the delegate converts to `QPixmap` at paint time) so the model
+  is testable headless under the offscreen platform.
+- **Cells**: aspect-correct thumbnails at fixed strip height (landscape wider
+  than portrait), no filename caption — filename via tooltip; current item drawn
+  with a highlight border.
+- **Ordering**: case-insensitive natural sort by filename (`IMG_2` before
+  `IMG_10`), replacing today's `QDir::Name` lexical order.
+- **Directory controls**: an "Open Folder…" action in the File menu plus a
+  compact current-folder label/button at the strip's left edge — no inline path
+  field in the strip.
+- **Pure logic extracted to `arraw_core`** (TDD targets, no widget needed):
+  natural-sort comparison, aspect-fit cell width from strip height + image size,
+  and the center-scroll offset for the current item.
+- **Thumbnails**: reuse the existing disk-backed `ThumbnailCache` (embedded RAW
+  preview → 512px JPEG, keyed by path+size+mtime); the model becomes its
+  consumer, requesting lazily for the visible range and emitting `dataChanged`
+  when a thumbnail arrives. In-memory LRU and explicit cancellation are deferred
+  (see Milestone 6 / future perf work) — not part of this milestone.
 
 ### Milestone 4 — Color Management (lcms2)
 

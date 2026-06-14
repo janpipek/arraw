@@ -4,7 +4,7 @@
 #include "AdjustmentPanel.h"
 #include "ProofingPanel.h"
 #include "ExifPanel.h"
-#include "FileBrowser.h"
+#include "FilmStrip.h"
 #include "RawProcessor.h"
 #include "StandardImageLoader.h"
 #include "ThumbnailCache.h"
@@ -21,6 +21,8 @@
 #include <QScrollArea>
 #include <QTabWidget>
 #include <QVBoxLayout>
+#include <QHBoxLayout>
+#include <QStyle>
 #include <QFileInfo>
 #include <QApplication>
 #include <QCloseEvent>
@@ -111,7 +113,7 @@ void MainWindow::closeEvent(QCloseEvent* e) {
     QSettings s;
     s.setValue("geometry",    saveGeometry());
     s.setValue("windowState", saveState());
-    QString lastDir = fileBrowser->directory();
+    QString lastDir = filmStrip->directory();
     if (!lastDir.isEmpty()) {
         s.setValue("lastDir", lastDir);
     }
@@ -119,8 +121,8 @@ void MainWindow::closeEvent(QCloseEvent* e) {
 }
 
 void MainWindow::keyPressEvent(QKeyEvent* e) {
-    if (e->key() == Qt::Key_Left)       fileBrowser->navigateBy(-1);
-    else if (e->key() == Qt::Key_Right) fileBrowser->navigateBy(+1);
+    if (e->key() == Qt::Key_Left)       filmStrip->navigateBy(-1);
+    else if (e->key() == Qt::Key_Right) filmStrip->navigateBy(+1);
     else if (e->key() == Qt::Key_S && e->modifiers() == Qt::NoModifier)
         proofPanel->setProofingEnabled(!proofPanel->proofingEnabled());
     else QMainWindow::keyPressEvent(e);
@@ -129,6 +131,8 @@ void MainWindow::keyPressEvent(QKeyEvent* e) {
 void MainWindow::setupMenus() {
     auto* file = menuBar()->addMenu("&File");
     file->addAction("&Open...",          QKeySequence::Open,    this, &MainWindow::openFile);
+    file->addAction("Open &Folder...",   QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_O),
+                    filmStrip, &FilmStrip::promptForDirectory);
     file->addSeparator();
     file->addAction("&Save Adjustments", QKeySequence::Save,    this, &MainWindow::saveAdjustments);
     file->addAction("&Export...",        Qt::CTRL | Qt::Key_E,  this, &MainWindow::exportFile);
@@ -197,22 +201,49 @@ void MainWindow::setupStatusBar() {
 }
 
 void MainWindow::setupDocks() {
-    // Film strip (left)
+    // Film strip (bottom): a horizontal thumbnail strip under the viewport.
     filmStripDock = new QDockWidget("Film Strip", this);
-    filmStripDock->setObjectName("FilmStripDock");
-    filmStripDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
+    // New object name so a window state saved with the old left-side dock
+    // doesn't restore the strip to the side.
+    filmStripDock->setObjectName("FilmStripDockBottom");
+    filmStripDock->setAllowedAreas(Qt::TopDockWidgetArea | Qt::BottomDockWidgetArea);
     filmStripDock->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable);
 
-    fileBrowser = new FileBrowser(filmStripDock);
-    fileBrowser->setMinimumWidth(148);
-    filmStripDock->setWidget(fileBrowser);
-    addDockWidget(Qt::LeftDockWidgetArea, filmStripDock);
+    filmStrip = new FilmStrip(filmStripDock);
+    filmStrip->setMinimumHeight(80);
+    filmStripDock->setWidget(filmStrip);
+    addDockWidget(Qt::BottomDockWidgetArea, filmStripDock);
+    resizeDocks({filmStripDock}, {132}, Qt::Vertical);  // sensible initial height
+
+    // Custom title bar: folder icon + current path, instead of "Film Strip".
+    auto* stripTitle = new QWidget(filmStripDock);
+    auto* stripTitleLayout = new QHBoxLayout(stripTitle);
+    stripTitleLayout->setContentsMargins(6, 2, 6, 2);
+    stripTitleLayout->setSpacing(6);
+
+    auto* folderButton = new QToolButton(stripTitle);
+    folderButton->setIcon(style()->standardIcon(QStyle::SP_DirOpenIcon));
+    folderButton->setAutoRaise(true);
+    folderButton->setToolTip("Open folder…");
+    connect(folderButton, &QToolButton::clicked, filmStrip, &FilmStrip::promptForDirectory);
+    stripTitleLayout->addWidget(folderButton);
+
+    auto* pathLabel = new QLabel("No folder", stripTitle);
+    pathLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    stripTitleLayout->addWidget(pathLabel, 1);
+    filmStripDock->setTitleBarWidget(stripTitle);
+
+    connect(filmStrip, &FilmStrip::directoryChanged, this, [pathLabel](const QString& dir) {
+        const QString native = QDir::toNativeSeparators(dir);
+        pathLabel->setText(native);
+        pathLabel->setToolTip(native);
+    });
 
     auto* toggleFilmStrip = filmStripDock->toggleViewAction();
     toggleFilmStrip->setText("Film Strip");
     toggleFilmStrip->setShortcut(Qt::Key_F9);
 
-    connect(fileBrowser, &FileBrowser::fileSelected,
+    connect(filmStrip, &FilmStrip::fileSelected,
             this, &MainWindow::loadImage);
 
     // Adjustments + EXIF (right)
@@ -249,8 +280,8 @@ void MainWindow::openPath(const QString& path) {
     if (!fi.exists()) return;
 
     if (fi.isDir()) {
-        fileBrowser->setDirectory(fi.absoluteFilePath());
-        fileBrowser->selectFirst();
+        filmStrip->setDirectory(fi.absoluteFilePath());
+        filmStrip->selectFirst();
     } else {
         loadImage(fi.absoluteFilePath());
     }
@@ -282,9 +313,9 @@ void MainWindow::loadImage(const QString& path) {
     viewport->setOriginalImageSize(0, 0);
     setLoadingState(true);
 
-    // Populate browser from the file's directory
-    fileBrowser->setDirectory(QFileInfo(path).absolutePath());
-    fileBrowser->setCurrentFile(path);
+    // Populate the strip from the file's directory
+    filmStrip->setDirectory(QFileInfo(path).absolutePath());
+    filmStrip->setCurrentFile(path);
 
     // Sync: show cached thumbnail immediately while the background task runs
     if (QImage cached = ThumbnailCache::loadFromDisk(path); !cached.isNull())
