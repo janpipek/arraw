@@ -1,4 +1,5 @@
 #pragma once
+#include "UserMetadata.h"
 #include <QAbstractListModel>
 #include <QHash>
 #include <QImage>
@@ -9,7 +10,11 @@
 class FilmStripModel : public QAbstractListModel {
     Q_OBJECT
 public:
-    enum Roles { PathRole = Qt::UserRole + 1 };
+    enum Roles {
+        PathRole = Qt::UserRole + 1,
+        RatingRole,   // int: 0 unrated, -1 reject, 1..5 stars
+        LabelRole,    // int: a ColourLabel value
+    };
 
     explicit FilmStripModel(QObject* parent = nullptr);
 
@@ -19,6 +24,13 @@ public:
     // No-op if the path is not in the current file list.
     void setThumbnail(const QString& path, const QImage& thumb);
 
+    // Attaches culling marks to a row, emitting dataChanged for it.
+    // No-op if the path is not in the current file list.
+    void setMarks(const QString& path, const UserMetadata& marks);
+
+    // The marks currently held for a path (defaults if none / unknown path).
+    UserMetadata marksFor(const QString& path) const { return marks.value(path); }
+
     // Model index of the row holding `path`, or an invalid index if absent.
     QModelIndex indexForPath(const QString& path) const;
 
@@ -27,5 +39,6 @@ public:
 
 private:
     QStringList files;
-    QHash<QString, QImage> thumbnails;  // keyed by path, survives reordering
+    QHash<QString, QImage> thumbnails;       // keyed by path, survives reordering
+    QHash<QString, UserMetadata> marks;      // keyed by path, survives reordering
 };

@@ -36,6 +36,10 @@ QVariant FilmStripModel::data(const QModelIndex& index, int role) const {
         return path;
     if (role == Qt::DecorationRole)
         return thumbnails.value(path);  // null QImage until loaded
+    if (role == RatingRole)
+        return marks.value(path).rating;
+    if (role == LabelRole)
+        return int(marks.value(path).label);
     return {};
 }
 
@@ -51,4 +55,13 @@ void FilmStripModel::setThumbnail(const QString& path, const QImage& thumb) {
     thumbnails.insert(path, thumb);
     const QModelIndex idx = index(row);
     emit dataChanged(idx, idx, {Qt::DecorationRole});
+}
+
+void FilmStripModel::setMarks(const QString& path, const UserMetadata& m) {
+    const int row = files.indexOf(path);
+    if (row < 0)
+        return;
+    marks.insert(path, m);
+    const QModelIndex idx = index(row);
+    emit dataChanged(idx, idx, {RatingRole, LabelRole});
 }

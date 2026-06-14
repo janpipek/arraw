@@ -148,6 +148,8 @@ void MainWindow::closeEvent(QCloseEvent* e) {
 }
 
 void MainWindow::keyPressEvent(QKeyEvent* e) {
+    // Culling marks (0-5, X, r/y/g/b/p) are owned by the Image menu's actions —
+    // window-level shortcuts that fire whether the strip or the image has focus.
     if (e->key() == Qt::Key_Left)       filmStrip->navigateBy(-1);
     else if (e->key() == Qt::Key_Right) filmStrip->navigateBy(+1);
     else if (e->key() == Qt::Key_S && e->modifiers() == Qt::NoModifier)
@@ -169,6 +171,8 @@ void MainWindow::setupMenus() {
     auto* edit = menuBar()->addMenu("&Edit");
     edit->addAction(undoStack->createUndoAction(this));
     edit->addAction(undoStack->createRedoAction(this));
+
+    setupImageMenu();
 
     auto* view = menuBar()->addMenu("&View");
     view->addAction(filmStripDock->toggleViewAction());
@@ -200,6 +204,57 @@ void MainWindow::setupMenus() {
     for (const IccProfileInfo& info : scanSystemProfiles())
         if (info.isDisplayClass)
             addMonitorAction(info.description, info.path);
+}
+
+void MainWindow::setupImageMenu() {
+    // Culling marks on the current file. These actions own the single-key
+    // shortcuts (window-level, so they fire whether the strip or the image has
+    // focus, and beat the file list's type-ahead). The same commands appear in
+    // the strip's right-click menu. See docs/adr/0007.
+    auto* image = menuBar()->addMenu("&Image");
+
+    auto* rateMenu = image->addMenu("Rating");
+    QList<QPair<QAction*, int>> rateActions;
+    auto addRate = [&](const QString& text, int n, QKeySequence key) {
+        QAction* a = rateMenu->addAction(text, this, [this, n] { filmStrip->rateCurrent(n); });
+        a->setShortcut(key);
+        a->setCheckable(true);
+        rateActions.append({a, n});
+    };
+    for (int n = 5; n >= 1; --n)
+        addRate(QString(n, QChar(0x2605)), n, QKeySequence(Qt::Key_0 + n));  // ★×n
+    rateMenu->addSeparator();
+    addRate(tr("Unrated"), 0, QKeySequence(Qt::Key_0));
+    addRate(tr("Reject"), -1, QKeySequence(Qt::Key_X));
+
+    auto* labelMenu = image->addMenu("Label");
+    QList<QPair<QAction*, ColourLabel>> labelActions;
+    struct LabelKey { const char* name; ColourLabel value; Qt::Key key; };
+    for (auto [name, value, key] : {
+             LabelKey{"Red", ColourLabel::Red, Qt::Key_R},
+             {"Yellow", ColourLabel::Yellow, Qt::Key_Y},
+             {"Green", ColourLabel::Green, Qt::Key_G},
+             {"Blue", ColourLabel::Blue, Qt::Key_B},
+             {"Purple", ColourLabel::Purple, Qt::Key_P} }) {
+        QAction* a = labelMenu->addAction(tr(name), this,
+                                          [this, value] { filmStrip->labelCurrent(value); });
+        a->setShortcut(key);
+        a->setCheckable(true);
+        labelActions.append({a, value});
+    }
+    labelMenu->addSeparator();
+    // labelCurrent(None) always clears (toggling None off is still None).
+    labelMenu->addAction(tr("None"), this,
+                         [this] { filmStrip->labelCurrent(ColourLabel::None); });
+
+    // Reflect the current file's marks each time the menu opens.
+    connect(image, &QMenu::aboutToShow, this, [this, rateActions, labelActions] {
+        const UserMetadata m = filmStrip->currentMarks();
+        for (const auto& [a, n] : rateActions)
+            a->setChecked(m.rating == n);
+        for (const auto& [a, value] : labelActions)
+            a->setChecked(m.label == value);
+    });
 }
 
 void MainWindow::setupStatusBar() {
@@ -457,7 +512,7 @@ void MainWindow::onLoadFinished() {
     exifPanel->setMetadata(result.metadata);
     undoStack->clear();
 
-    AdjustmentParams saved = XmpSidecar::load(currentPath);
+    AdjustmentParams saved = XmpSidecar::loadAdjustments(currentPath);
     if (!QFileInfo::exists(XmpSidecar::pathFor(currentPath)))
         saved.cropRect = result.defaultCrop;
     adjPanel->setParams(saved);
@@ -523,7 +578,7 @@ void MainWindow::rebuildDisplayLut() {
 void MainWindow::saveAdjustments() {
     if (currentPath.isEmpty()) return;
     viewport->commitActiveTool();   // fold any pending crop into the params first
-    if (XmpSidecar::save(currentPath, adjPanel->params()))
+    if (XmpSidecar::saveAdjustments(currentPath, adjPanel->params()))
         statusLabel->setText("Saved: " + XmpSidecar::pathFor(currentPath));
     else
         QMessageBox::warning(this, "Save Error",

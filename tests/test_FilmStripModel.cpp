@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include "FilmStripModel.h"
+#include "UserMetadata.h"
 
 #include <QCoreApplication>
 #include <QImage>
@@ -63,6 +64,55 @@ TEST_CASE("indexForPath locates a known path and rejects an unknown one",
 
     REQUIRE(model.indexForPath("/p/b.dng").row() == 1);
     REQUIRE_FALSE(model.indexForPath("/p/missing.dng").isValid());
+}
+
+TEST_CASE("rows report default marks until set", "[filmstrip][marks]") {
+    ensureApp();
+    FilmStripModel model;
+    model.setFiles({"/p/a.dng"});
+    const QModelIndex idx = model.index(0);
+
+    REQUIRE(model.data(idx, FilmStripModel::RatingRole).toInt() == 0);
+    REQUIRE(model.data(idx, FilmStripModel::LabelRole).toInt()
+            == int(ColourLabel::None));
+}
+
+TEST_CASE("setting marks updates that row, keyed by path, and notifies",
+          "[filmstrip][marks]") {
+    ensureApp();
+    FilmStripModel model;
+    model.setFiles({"/p/a.dng", "/p/b.dng"});  // natural order: a, then b
+
+    int changes = 0, topRow = -1;
+    QList<int> roles;
+    QObject::connect(&model, &QAbstractItemModel::dataChanged,
+                     [&](const QModelIndex& tl, const QModelIndex&, const QList<int>& r) {
+                         ++changes; topRow = tl.row(); roles = r;
+                     });
+
+    model.setMarks("/p/b.dng", {5, ColourLabel::Green});
+
+    REQUIRE(model.data(model.index(1), FilmStripModel::RatingRole).toInt() == 5);
+    REQUIRE(model.data(model.index(1), FilmStripModel::LabelRole).toInt()
+            == int(ColourLabel::Green));
+    REQUIRE(model.data(model.index(0), FilmStripModel::RatingRole).toInt() == 0);
+    REQUIRE(changes == 1);
+    REQUIRE(topRow == 1);
+    REQUIRE(roles.contains(FilmStripModel::RatingRole));
+    REQUIRE(roles.contains(FilmStripModel::LabelRole));
+}
+
+TEST_CASE("marks survive a re-sort because they are keyed by path",
+          "[filmstrip][marks]") {
+    ensureApp();
+    FilmStripModel model;
+    model.setFiles({"/p/a.dng", "/p/b.dng"});
+    model.setMarks("/p/b.dng", {3, ColourLabel::Blue});
+
+    // Re-assign the same files (a fresh scan); marks keyed by path persist.
+    model.setFiles({"/p/b.dng", "/p/a.dng"});
+    REQUIRE(model.data(model.indexForPath("/p/b.dng"),
+                       FilmStripModel::RatingRole).toInt() == 3);
 }
 
 TEST_CASE("setting a thumbnail updates that row and notifies the view", "[filmstrip]") {

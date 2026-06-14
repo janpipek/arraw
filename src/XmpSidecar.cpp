@@ -9,6 +9,7 @@
 static constexpr char kNsCrs[]  = "http://ns.adobe.com/camera-raw-settings/1.0/";
 static constexpr char kNsRdf[]  = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 static constexpr char kNsX[]    = "adobe:ns:meta/";
+static constexpr char kNsXmp[]  = "http://ns.adobe.com/xap/1.0/";
 
 // crs: attribute names for the 8 HSL ranges, indexed like AdjustmentParams::hslHue etc.
 static constexpr const char* kHslHueNames[8] = {
@@ -51,11 +52,12 @@ static std::vector<QPointF> parseCurveSeq(QXmlStreamReader& xml) {
     return pts;
 }
 
-AdjustmentParams XmpSidecar::load(const QString& rawPath) {
+SidecarData XmpSidecar::load(const QString& rawPath) {
     QFile f(pathFor(rawPath));
     if (!f.open(QIODevice::ReadOnly)) return {};
 
-    AdjustmentParams p;
+    SidecarData data;
+    AdjustmentParams& p = data.adjustments;
     QXmlStreamReader xml(&f);
 
     while (!xml.atEnd()) {
@@ -69,6 +71,15 @@ AdjustmentParams XmpSidecar::load(const QString& rawPath) {
                 float v = val.toFloat(&ok);
                 return ok ? v : fallback;
             };
+
+            // User metadata (xmp: namespace): rating + colour label.
+            if (auto r = xml.attributes().value(kNsXmp, "Rating"); !r.isEmpty()) {
+                bool ok = false;
+                int v = r.toInt(&ok);
+                if (ok) data.metadata.rating = v;
+            }
+            data.metadata.label = colourLabelFromString(
+                xml.attributes().value(kNsXmp, "Label").toString());
             p.exposure    = attr("Exposure2012",   0.0f);
             p.contrast    = attr("Contrast2012",   0.0f);
             p.highlights  = attr("Highlights2012", 0.0f);
@@ -114,7 +125,7 @@ AdjustmentParams XmpSidecar::load(const QString& rawPath) {
             }
         }
     }
-    return p;
+    return data;
 }
 
 static void writeCurve(QXmlStreamWriter& xml, const char* elemName,
@@ -135,8 +146,13 @@ static void writeCurve(QXmlStreamWriter& xml, const char* elemName,
     xml.writeEndElement(); // curve element
 }
 
-bool XmpSidecar::save(const QString& rawPath, const AdjustmentParams& p) {
-    QFile f(pathFor(rawPath));
+// Writes the whole sidecar (both develop settings and user metadata) from one
+// SidecarData. The namespace-scoped public saves below read-modify-write through
+// this, so each preserves the half it doesn't touch (docs/adr/0007).
+static bool writeFile(const QString& rawPath, const SidecarData& data) {
+    const AdjustmentParams& p = data.adjustments;
+
+    QFile f(XmpSidecar::pathFor(rawPath));
     if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
 
     QXmlStreamWriter xml(&f);
@@ -152,8 +168,16 @@ bool XmpSidecar::save(const QString& rawPath, const AdjustmentParams& p) {
 
     xml.writeNamespace(kNsRdf, "rdf");
     xml.writeNamespace(kNsCrs, "crs");
+    xml.writeNamespace(kNsXmp, "xmp");
     xml.writeStartElement(kNsRdf, "Description");
     xml.writeAttribute(kNsRdf, "about", "");
+
+    // User metadata (xmp:). Absent attribute = unrated / unlabelled, so the
+    // defaults are omitted to keep an unmarked sidecar clean.
+    if (data.metadata.rating != 0)
+        xml.writeAttribute(kNsXmp, "Rating", QString::number(data.metadata.rating));
+    if (data.metadata.label != ColourLabel::None)
+        xml.writeAttribute(kNsXmp, "Label", colourLabelToString(data.metadata.label));
 
     auto write = [&](const char* name, float v) {
         xml.writeAttribute(kNsCrs, name, QString::number(double(v), 'f', 4));
@@ -195,4 +219,16 @@ bool XmpSidecar::save(const QString& rawPath, const AdjustmentParams& p) {
     xml.writeEndDocument();
 
     return f.error() == QFileDevice::NoError;
+}
+
+bool XmpSidecar::saveAdjustments(const QString& rawPath, const AdjustmentParams& params) {
+    SidecarData data = load(rawPath);   // preserve any existing xmp: marks
+    data.adjustments = params;
+    return writeFile(rawPath, data);
+}
+
+bool XmpSidecar::saveMetadata(const QString& rawPath, const UserMetadata& metadata) {
+    SidecarData data = load(rawPath);   // preserve any existing crs: edits
+    data.metadata = metadata;
+    return writeFile(rawPath, data);
 }
