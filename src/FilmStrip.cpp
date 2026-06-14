@@ -93,8 +93,6 @@ public:
                const QModelIndex& index) const override {
         painter->save();
         const bool selected = option.state & QStyle::State_Selected;
-        if (selected)
-            painter->fillRect(option.rect, option.palette.highlight());
 
         const QRect inner = option.rect.adjusted(kCellPad, kCellPad, -kCellPad, -kCellPad);
         const QImage img = index.data(Qt::DecorationRole).value<QImage>();
