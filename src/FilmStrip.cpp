@@ -14,6 +14,7 @@
 #include <QStyledItemDelegate>
 #include <QPainter>
 #include <QEvent>
+#include <QKeyEvent>
 #include <QMenu>
 #include <QSignalBlocker>
 #include <QtConcurrent>
@@ -144,6 +145,7 @@ FilmStrip::FilmStrip(QWidget* parent) : QWidget(parent) {
     list->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     list->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     list->viewport()->installEventFilter(this);
+    list->installEventFilter(this);  // intercept culling keys before type-ahead
     list->viewport()->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(list->viewport(), &QWidget::customContextMenuRequested,
             this, &FilmStrip::showContextMenu);
@@ -341,7 +343,32 @@ void FilmStrip::promptForDirectory() {
 bool FilmStrip::eventFilter(QObject* watched, QEvent* event) {
     if (watched == list->viewport() && event->type() == QEvent::Resize)
         updateThumbHeight();
+
+    // Culling keys: handle them on the list before QListView's type-ahead search
+    // (which the view's shortcut-override otherwise steals — e.g. X jumping to a
+    // filename) can run. Navigation keys fall through to the view as normal.
+    if (watched == list && event->type() == QEvent::KeyPress) {
+        auto* ke = static_cast<QKeyEvent*>(event);
+        if (ke->modifiers() == Qt::NoModifier && handleMarkKey(ke->key()))
+            return true;
+    }
     return QWidget::eventFilter(watched, event);
+}
+
+bool FilmStrip::handleMarkKey(int key) {
+    if (key >= Qt::Key_0 && key <= Qt::Key_5) {
+        rateCurrent(key - Qt::Key_0);
+        return true;
+    }
+    switch (key) {
+    case Qt::Key_X: rateCurrent(-1);                 return true;
+    case Qt::Key_R: labelCurrent(ColourLabel::Red);    return true;
+    case Qt::Key_Y: labelCurrent(ColourLabel::Yellow); return true;
+    case Qt::Key_G: labelCurrent(ColourLabel::Green);  return true;
+    case Qt::Key_B: labelCurrent(ColourLabel::Blue);   return true;
+    case Qt::Key_P: labelCurrent(ColourLabel::Purple); return true;
+    }
+    return false;
 }
 
 void FilmStrip::updateThumbHeight() {

@@ -55,6 +55,7 @@ protected:
 private:
     void requestVisibleThumbnails();
     void updateThumbHeight();
+    bool handleMarkKey(int key);   // maps a culling key to a mark; false if not one
     void loadMarks(const QStringList& paths);   // background sidecar scan
     void setRating(const QString& path, int rating);
     void setLabel(const QString& path, ColourLabel label);   // toggles off if already set
