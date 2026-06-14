@@ -9,8 +9,4 @@ namespace filmstrip {
 // height, preserving aspect ratio. Degenerate sizes fall back to a square cell.
 int cellWidth(int contentHeight, QSize imageSize);
 
-// Horizontal scroll offset that centers cell `index` in the viewport, clamped
-// so the strip never scrolls past either end of its content.
-int centerScrollOffset(int index, int cellPitch, int viewportWidth, int contentWidth);
-
 } // namespace filmstrip

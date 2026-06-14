@@ -48,6 +48,23 @@ TEST_CASE("model exposes full path and a null thumbnail before load", "[filmstri
     REQUIRE(model.data(idx, Qt::DecorationRole).value<QImage>().isNull());
 }
 
+TEST_CASE("model offers the filename as the tooltip", "[filmstrip]") {
+    ensureApp();
+    FilmStripModel model;
+    model.setFiles({"/photos/a.dng"});
+    REQUIRE(model.data(model.index(0), Qt::ToolTipRole).toString() == "a.dng");
+}
+
+TEST_CASE("indexForPath locates a known path and rejects an unknown one",
+          "[filmstrip]") {
+    ensureApp();
+    FilmStripModel model;
+    model.setFiles({"/p/b.dng", "/p/a.dng"});  // natural order: a(0), b(1)
+
+    REQUIRE(model.indexForPath("/p/b.dng").row() == 1);
+    REQUIRE_FALSE(model.indexForPath("/p/missing.dng").isValid());
+}
+
 TEST_CASE("setting a thumbnail updates that row and notifies the view", "[filmstrip]") {
     ensureApp();
     FilmStripModel model;

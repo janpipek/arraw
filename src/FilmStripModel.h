@@ -19,6 +19,9 @@ public:
     // No-op if the path is not in the current file list.
     void setThumbnail(const QString& path, const QImage& thumb);
 
+    // Model index of the row holding `path`, or an invalid index if absent.
+    QModelIndex indexForPath(const QString& path) const;
+
     int rowCount(const QModelIndex& parent = {}) const override;
     QVariant data(const QModelIndex& index, int role) const override;
 
