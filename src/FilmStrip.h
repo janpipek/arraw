@@ -29,6 +29,10 @@ public:
     void rateCurrent(int rating);
     void labelCurrent(ColourLabel label);
 
+    // Marks of the current item (defaults if nothing is selected). Lets a menu
+    // reflect the current file's rating/label.
+    UserMetadata currentMarks() const;
+
     QString directory() const { return currentDir; }
 
     // Modest default height so the dock doesn't inherit QListView's tall hint.

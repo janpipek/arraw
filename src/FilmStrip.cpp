@@ -230,6 +230,10 @@ QString FilmStrip::currentPath() const {
     return cur.isValid() ? cur.data(FilmStripModel::PathRole).toString() : QString();
 }
 
+UserMetadata FilmStrip::currentMarks() const {
+    return model->marksFor(currentPath());   // empty path → default marks
+}
+
 void FilmStrip::rateCurrent(int rating) {
     setRating(currentPath(), rating);
 }

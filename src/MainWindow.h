@@ -40,6 +40,7 @@ private slots:
 
 private:
     void setupMenus();
+    void setupImageMenu();
     void setupDocks();
     void setupStatusBar();
     void setupToolbar();
