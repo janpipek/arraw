@@ -32,6 +32,7 @@ layout(std140, binding = 0) uniform buf {
                          // 0: output clamped linear working space (export readback)
     int   curveInput;    // stop after tone regions + gamma-encode (histograms)
     int   hslActive;
+    int   wbInput;       // stop before temperature/tint, output linear (WB picker)
 } u;
 
 layout(binding = 1) uniform sampler2D uTexture;
@@ -270,6 +271,10 @@ void main() {
         return;
     }
     c = applyCurve(c);
+    if (u.wbInput != 0) {
+        fragColor = vec4(c, 1.0);   // linear value the WB picker inverts (pre-temp/tint)
+        return;
+    }
     c = applyTemperature(c);
     c = applyTint(c);
     if (u.hslActive != 0)

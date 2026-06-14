@@ -11,6 +11,10 @@
 #include "XmpSidecar.h"
 #include "ExportDialog.h"
 #include <QActionGroup>
+#include <QAction>
+#include <QToolBar>
+#include <QSizePolicy>
+#include <QSignalBlocker>
 #include <QMenuBar>
 #include <QDockWidget>
 #include <QFileDialog>
@@ -67,6 +71,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     setupDocks();
     setupMenus();
     setupStatusBar();
+    setupToolbar();
 
     connect(proofPanel, &ProofingPanel::proofingChanged,
             this, &MainWindow::rebuildDisplayLut);
@@ -88,6 +93,28 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                 after.cropRect = rect;
                 undoStack->push(new AdjustmentCommand(adjPanel, before, after));
             });
+
+    connect(viewport, &ImageViewport::rotationCommitted,
+            this, [this](float degrees) {
+                AdjustmentParams before = adjPanel->params();
+                AdjustmentParams after  = before;
+                after.rotation = degrees;
+                if (after != before)
+                    undoStack->push(new AdjustmentCommand(adjPanel, before, after));
+            });
+
+    connect(viewport, &ImageViewport::whiteBalanceCommitted,
+            this, [this](float kelvin, float tint) {
+                AdjustmentParams before = adjPanel->params();
+                AdjustmentParams after  = before;
+                after.temperature = kelvin;
+                after.tint        = tint;
+                if (after != before)
+                    undoStack->push(new AdjustmentCommand(adjPanel, before, after));
+            });
+
+    connect(viewport, &ImageViewport::activeToolChanged,
+            this, [this](ImageViewport::ActiveTool) { syncToolActions(); });
 
     connect(adjPanel, &AdjustmentPanel::adjustmentCommitted,
             this, [this](const AdjustmentParams& before, const AdjustmentParams& after) {
@@ -200,6 +227,70 @@ void MainWindow::setupStatusBar() {
     updateZoomStatus(viewport->pixelZoom());
 }
 
+void MainWindow::setupToolbar() {
+    auto* tb = new QToolBar("Tools", this);
+    tb->setObjectName("ToolsToolBar");
+    tb->setMovable(false);
+    tb->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    addToolBar(Qt::TopToolBarArea, tb);
+
+    // Modal tools (left): mutually exclusive, but all may be off — clicking the
+    // active tool again deselects it. The viewport owns the actual tool state.
+    toolGroup = new QActionGroup(this);
+    toolGroup->setExclusionPolicy(QActionGroup::ExclusionPolicy::ExclusiveOptional);
+
+    auto addTool = [&](const QString& text, const QKeySequence& sc) {
+        QAction* a = tb->addAction(text);
+        a->setCheckable(true);
+        a->setActionGroup(toolGroup);
+        if (!sc.isEmpty()) a->setShortcut(sc);
+        return a;
+    };
+    cropAction       = addTool("Crop",        Qt::Key_C);
+    straightenAction = addTool("Straighten",  {});
+    wbAction         = addTool("White Bal.",  {});
+
+    connect(toolGroup, &QActionGroup::triggered, this, [this](QAction* a) {
+        using T = ImageViewport::ActiveTool;
+        T t = T::None;
+        if (a->isChecked())
+            t = a == cropAction       ? T::Crop
+              : a == straightenAction ? T::Straighten
+                                      : T::WhiteBalance;
+        viewport->setActiveTool(t);
+    });
+
+    // Spacer pushes the action group to the right edge.
+    auto* spacer = new QWidget(tb);
+    spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    tb->addWidget(spacer);
+
+    // Immediate actions (right): reuse the existing slots; Open stays usable
+    // with no image loaded, the rest are image-dependent.
+    tb->addAction("Open", this, &MainWindow::openFile);
+    saveAction   = tb->addAction("Save",   this, &MainWindow::saveAdjustments);
+    exportAction = tb->addAction("Export", this, &MainWindow::exportFile);
+
+    setToolsEnabled(false);
+}
+
+void MainWindow::syncToolActions() {
+    const ImageViewport::ActiveTool t = viewport->activeTool();
+    // setChecked doesn't emit QActionGroup::triggered, but block toggled too.
+    const QSignalBlocker b1(cropAction), b2(straightenAction), b3(wbAction);
+    cropAction->setChecked(      t == ImageViewport::ActiveTool::Crop);
+    straightenAction->setChecked(t == ImageViewport::ActiveTool::Straighten);
+    wbAction->setChecked(        t == ImageViewport::ActiveTool::WhiteBalance);
+}
+
+void MainWindow::setToolsEnabled(bool on) {
+    cropAction->setEnabled(on);
+    straightenAction->setEnabled(on);
+    wbAction->setEnabled(on);
+    saveAction->setEnabled(on);
+    exportAction->setEnabled(on);
+}
+
 void MainWindow::setupDocks() {
     // Film strip (bottom): a horizontal thumbnail strip under the viewport.
     filmStripDock = new QDockWidget("Film Strip", this);
@@ -310,6 +401,7 @@ void MainWindow::loadImage(const QString& path) {
 
     currentPath = path;
     exifPanel->clear();
+    viewport->cancelActiveTool();   // discard any in-progress tool from the last image
     viewport->setOriginalImageSize(0, 0);
     setLoadingState(true);
 
@@ -373,6 +465,8 @@ void MainWindow::onLoadFinished() {
     statusLabel->setText(QString("%1  —  %2 × %3")
         .arg(QFileInfo(currentPath).fileName())
         .arg(fullRes.width).arg(fullRes.height));
+
+    setToolsEnabled(true);
 }
 
 void MainWindow::onFullResNeeded() {
@@ -391,6 +485,8 @@ void MainWindow::setLoadingState(bool loading) {
     menuBar()->setEnabled(!loading);
     adjPanel->setEnabled(!loading);
     exifPanel->setEnabled(!loading);
+    if (loading)
+        setToolsEnabled(false);   // re-enabled in onLoadFinished on success
     statusLabel->setText(loading
         ? QString("Loading %1...").arg(QFileInfo(currentPath).fileName())
         : QString());
@@ -426,6 +522,7 @@ void MainWindow::rebuildDisplayLut() {
 
 void MainWindow::saveAdjustments() {
     if (currentPath.isEmpty()) return;
+    viewport->commitActiveTool();   // fold any pending crop into the params first
     if (XmpSidecar::save(currentPath, adjPanel->params()))
         statusLabel->setText("Saved: " + XmpSidecar::pathFor(currentPath));
     else
@@ -477,6 +574,7 @@ void MainWindow::exportFile() {
         return;
     }
 
+    viewport->commitActiveTool();   // fold any pending crop into the params first
     const AdjustmentParams p = adjPanel->params();
 
     // Natural output size = full-res pixels inside the crop rect

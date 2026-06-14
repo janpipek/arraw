@@ -85,7 +85,7 @@ void ImageViewport::resizeEvent(QResizeEvent* e) {
 // ── Rendering ─────────────────────────────────────────────────────────────────
 
 float ImageViewport::displayAspect() const {
-    if (!hasImage || cropMode || showOriginal)
+    if (!hasImage || cropMode() || showOriginal)
         return imageAspect;
     const QRectF& cr = params.cropRect;
     return imageAspect * float(cr.width() / cr.height());
@@ -106,7 +106,7 @@ float ImageViewport::fitZoom() const {
 float ImageViewport::displayOriginalPixelHeight() const {
     if (!hasKnownOriginalSize())
         return 0.0f;
-    if (cropMode || showOriginal)
+    if (cropMode() || showOriginal)
         return float(originalHeight);
     return float(originalHeight) * float(params.cropRect.height());
 }
@@ -150,7 +150,7 @@ void ImageViewport::render(QRhiCommandBuffer* cb) {
     RendererCore::FrameParams fp;
     fp.transform = QVector4D(zoom * (displayAspect() / viewportAspect), zoom,
                              pan.x(), pan.y());
-    fp.cropRect      = cropMode ? QRectF(0, 0, 1, 1) : p.cropRect;
+    fp.cropRect      = cropMode() ? QRectF(0, 0, 1, 1) : p.cropRect;
     fp.aspect        = imageAspect;
     fp.baseLook      = useBaseLook && !showOriginal;
     fp.displayEncode = true;
@@ -163,10 +163,13 @@ void ImageViewport::render(QRhiCommandBuffer* cb) {
 }
 
 void ImageViewport::paintOverlay(QPainter& p) const {
-    if (cropMode)
+    if (cropMode()) {
         drawCropOverlay(p);
-    else if (shouldShowAlignGrid())
+    } else if (shouldShowAlignGrid()) {
         drawAlignGrid(p);
+        if (tool == ActiveTool::Straighten && straightenDragging)
+            drawStraightenLine(p);
+    }
 }
 
 // ── Coordinate mapping ────────────────────────────────────────────────────────
@@ -210,7 +213,7 @@ QPointF ImageViewport::viewportToTextureUV(QPointF pos) const {
 // tilted. So while straightening, the crop is edited in viewport coordinates
 // (activeCropViewport) and only converted back to UV on commit.
 bool ImageViewport::useViewportCrop() const {
-    return cropMode && std::abs(params.rotation) > 0.01f;
+    return cropMode() && std::abs(params.rotation) > 0.01f;
 }
 
 QRectF ImageViewport::rotatedImageViewportBounds() const {
@@ -261,9 +264,9 @@ QRectF ImageViewport::viewportCropToTextureCrop(const QRectF& vp) const {
 // ── Straighten alignment grid (viewport-fixed horizontals / verticals) ────────
 
 bool ImageViewport::shouldShowAlignGrid() const {
-    if (!hasImage || cropMode || showOriginal)
+    if (!hasImage || cropMode() || showOriginal)
         return false;
-    if (straightenActive)
+    if (straightenActive || tool == ActiveTool::Straighten)
         return true;
     return std::abs(params.rotation) > 0.01f;
 }
@@ -477,7 +480,7 @@ void ImageViewport::setAdjustments(const AdjustmentParams& p) {
         p.curveG != params.curveG || p.curveB != params.curveB)
         curveLutDirty = true;
     params = p;
-    if (!cropMode)
+    if (!cropMode())
         activeCrop = p.cropRect;
     if (hasImage)
         histoTimer.start();
@@ -490,6 +493,139 @@ void ImageViewport::setStraightenActive(bool active) {
         return;
     straightenActive = active;
     update();
+}
+
+// ── Active-tool state machine ─────────────────────────────────────────────────
+
+void ImageViewport::setActiveTool(ActiveTool t) {
+    if (tool == t)
+        return;
+    // Commit-on-leave: switching away (or toggling off) keeps the pending edit
+    // of the tool we are leaving. Esc — via cancelActiveTool — is the discard path.
+    if (tool == ActiveTool::Crop)
+        commitCrop();
+
+    tool = t;
+    straightenDragging = false;
+    if (tool == ActiveTool::Crop)
+        enterCrop();
+
+    setCursor(tool == ActiveTool::Straighten || tool == ActiveTool::WhiteBalance
+                  ? Qt::CrossCursor : Qt::ArrowCursor);
+    emit activeToolChanged(tool);
+    update();
+}
+
+void ImageViewport::cancelActiveTool() {
+    if (tool == ActiveTool::None)
+        return;
+    if (tool == ActiveTool::Crop) {
+        activeCrop = cancelCrop;
+        if (std::abs(params.rotation) > 0.01f)
+            activeCropViewport = cancelCropViewport;
+    }
+    straightenDragging = false;
+    tool = ActiveTool::None;
+    setCursor(Qt::ArrowCursor);
+    emit activeToolChanged(tool);
+    update();
+}
+
+void ImageViewport::enterCrop() {
+    cancelCrop = params.cropRect;
+    activeCrop = params.cropRect;
+    if (useViewportCrop()) {
+        activeCropViewport = textureCropToViewportBounds(params.cropRect);
+        cancelCropViewport = activeCropViewport;
+    }
+}
+
+void ImageViewport::commitCrop() {
+    if (std::abs(params.rotation) > 0.01f)
+        activeCrop = viewportCropToTextureCrop(activeCropViewport);
+    params.cropRect = activeCrop;
+    emit cropCommitted(params.cropRect);
+    emit zoomChanged(pixelZoom());
+}
+
+// Turn the drawn line into an absolute rotation. The line is folded to its
+// nearest axis (auto horizontal/vertical), and the deviation from that axis is
+// the correction. +rotation rotates content clockwise on screen (increasing a
+// feature's screen angle), so the leveling correction is -deviation.
+void ImageViewport::applyStraightenLine() {
+    const QPointF d = straightenEnd - straightenStart;
+    if (d.manhattanLength() < 8.0)   // ignore taps / tiny drags
+        return;
+    double angle = std::atan2(d.y(), d.x()) * 180.0 / M_PI;   // screen space, y down
+    while (angle <= -90.0) angle += 180.0;   // a line has no direction: fold to (-90,90]
+    while (angle >   90.0) angle -= 180.0;
+    const double deviation = std::abs(angle) <= 45.0
+                                 ? angle                              // treat as horizontal
+                                 : angle - (angle > 0 ? 90.0 : -90.0); // from vertical
+    const float newRotation =
+        std::clamp(float(params.rotation - deviation), -45.0f, 45.0f);
+    emit rotationCommitted(newRotation);
+}
+
+void ImageViewport::drawStraightenLine(QPainter& p) const {
+    p.setPen(QPen(QColor(255, 220, 80), 1.5));
+    p.drawLine(straightenStart, straightenEnd);
+    p.setBrush(QColor(255, 220, 80));
+    p.drawEllipse(straightenStart, 3.0, 3.0);
+    p.drawEllipse(straightenEnd,   3.0, 3.0);
+}
+
+// Read the pre-WB pixel value the shader produces under `pos` (GPU tap, same
+// readback rationale as the histograms — docs/adr/0004) and invert the additive
+// white-balance model from image.frag to the temperature/tint that neutralise it.
+bool ImageViewport::sampleWhiteBalance(QPointF pos, float& kelvin, float& tintOut) {
+    if (!hasImage || !core.ready())
+        return false;
+    ensureCurveLut();
+
+    // Render the current on-screen framing with the pre-WB tap at 1:1 viewport
+    // pixels, so the clicked point maps straight to a texel (no UV inversion).
+    const float viewportAspect = float(width()) / float(height());
+    RendererCore::FrameParams fp;
+    fp.transform     = QVector4D(zoom * (displayAspect() / viewportAspect), zoom,
+                                 pan.x(), pan.y());
+    fp.cropRect      = cropMode() ? QRectF(0, 0, 1, 1) : params.cropRect;
+    fp.aspect        = imageAspect;
+    fp.baseLook      = useBaseLook;
+    fp.displayEncode = false;
+    fp.wbInput       = true;
+    fp.adjustments   = params;
+
+    const QImage tap = core.renderOffscreen(activeSlot(), fp, size(),
+                                            QRhiTexture::RGBA32F);
+    if (tap.isNull())
+        return false;
+
+    // Average a small neighbourhood for noise robustness.
+    const int x0 = int(pos.x()), y0 = int(pos.y()), rad = 2;
+    double sr = 0, sg = 0, sb = 0; int n = 0;
+    for (int y = y0 - rad; y <= y0 + rad; ++y) {
+        if (y < 0 || y >= tap.height()) continue;
+        const auto* px = reinterpret_cast<const float*>(tap.constScanLine(y));
+        for (int x = x0 - rad; x <= x0 + rad; ++x) {
+            if (x < 0 || x >= tap.width()) continue;
+            sr += px[x*4+0]; sg += px[x*4+1]; sb += px[x*4+2]; ++n;
+        }
+    }
+    if (n == 0) return false;
+    const double r = sr / n, g = sg / n, b = sb / n;
+    if (r + g + b < 1e-4)   // clicked off the image (black) — ignore
+        return false;
+
+    // Invert image.frag's additive WB (keep these constants in sync with it):
+    //   applyTemperature: t=(K-5500)/5500; r += t*0.15; b -= t*0.15
+    //   applyTint:        g += (tint/100)*0.05
+    // Solve r==g==b: t balances R/B; the grey level is r1=(r+b)/2; tint lifts G.
+    const double t  = (b - r) / 0.3;                 // 0.3 = 2*0.15
+    const double r1 = 0.5 * (r + b);
+    kelvin  = float(std::clamp(5500.0 * (1.0 + t), 2000.0, 12000.0));
+    tintOut = float(std::clamp((r1 - g) * 2000.0, -100.0, 100.0));  // 2000 = 100/0.05
+    return true;
 }
 
 void ImageViewport::setOriginalImageSize(int width, int height) {
@@ -652,11 +788,23 @@ void ImageViewport::wheelEvent(QWheelEvent* e) {
 }
 
 void ImageViewport::mousePressEvent(QMouseEvent* e) {
-    if (cropMode && e->button() == Qt::LeftButton) {
+    if (cropMode() && e->button() == Qt::LeftButton) {
         cropDragHandle    = hitTest(e->position());
         cropDragStart     = e->position();
         cropDragStartRect = useViewportCrop() ? activeCropViewport : activeCrop;
         return;
+    }
+    if (tool == ActiveTool::Straighten && e->button() == Qt::LeftButton) {
+        straightenDragging = true;
+        straightenStart = straightenEnd = e->position();
+        update();
+        return;
+    }
+    if (tool == ActiveTool::WhiteBalance && e->button() == Qt::LeftButton) {
+        float kelvin, tintOut;
+        if (sampleWhiteBalance(e->position(), kelvin, tintOut))
+            emit whiteBalanceCommitted(kelvin, tintOut);
+        return;   // tool stays active for further picks
     }
     if (e->button() == Qt::MiddleButton ||
         (e->button() == Qt::LeftButton && e->modifiers() & Qt::AltModifier)) {
@@ -666,8 +814,13 @@ void ImageViewport::mousePressEvent(QMouseEvent* e) {
 }
 
 void ImageViewport::mouseMoveEvent(QMouseEvent* e) {
-    if (cropMode && (e->buttons() & Qt::LeftButton) && cropDragHandle > -2) {
+    if (cropMode() && (e->buttons() & Qt::LeftButton) && cropDragHandle > -2) {
         applyCropDrag(e->position());
+        return;
+    }
+    if (tool == ActiveTool::Straighten && straightenDragging) {
+        straightenEnd = e->position();
+        update();
         return;
     }
     if (!dragging) return;
@@ -680,8 +833,15 @@ void ImageViewport::mouseMoveEvent(QMouseEvent* e) {
 }
 
 void ImageViewport::mouseReleaseEvent(QMouseEvent* e) {
-    if (cropMode && e->button() == Qt::LeftButton) {
+    if (cropMode() && e->button() == Qt::LeftButton) {
         cropDragHandle = -2;
+        return;
+    }
+    if (tool == ActiveTool::Straighten && straightenDragging &&
+        e->button() == Qt::LeftButton) {
+        straightenDragging = false;
+        applyStraightenLine();   // tool stays active; redraw the line to retry
+        update();
         return;
     }
     dragging = false;
@@ -696,37 +856,16 @@ void ImageViewport::keyPressEvent(QKeyEvent* e) {
         update();
         break;
     case Qt::Key_C:
-        if (!cropMode) {
-            cropMode   = true;
-            cancelCrop = params.cropRect;
-            activeCrop = params.cropRect;
-            if (useViewportCrop()) {
-                activeCropViewport = textureCropToViewportBounds(params.cropRect);
-                cancelCropViewport = activeCropViewport;
-            }
-            update();
-        }
+        setActiveTool(cropMode() ? ActiveTool::None : ActiveTool::Crop);
         break;
     case Qt::Key_Return:
     case Qt::Key_Enter:
-        if (cropMode) {
-            cropMode = false;
-            if (std::abs(params.rotation) > 0.01f)
-                activeCrop = viewportCropToTextureCrop(activeCropViewport);
-            params.cropRect = activeCrop;
-            emit cropCommitted(params.cropRect);
-            emit zoomChanged(pixelZoom());
-            update();
-        }
+        if (tool != ActiveTool::None)
+            commitActiveTool();   // commit-on-leave
         break;
     case Qt::Key_Escape:
-        if (cropMode) {
-            cropMode   = false;
-            activeCrop = cancelCrop;
-            if (std::abs(params.rotation) > 0.01f)
-                activeCropViewport = cancelCropViewport;
-            update();
-        }
+        if (tool != ActiveTool::None)
+            cancelActiveTool();
         break;
     default:
         QRhiWidget::keyPressEvent(e);

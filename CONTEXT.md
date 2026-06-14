@@ -44,3 +44,13 @@ hue by design.
 The histogram of the image as the tone curve receives it — after upstream
 adjustments, gamma-encoded — drawn behind the curve so its x-axis matches the
 curve's. Distinct from the panel Histogram, which shows the final image.
+
+**Straighten**:
+Leveling the image by drawing a reference line along something that should be
+horizontal or vertical; the line's angle is written to Rotation. The gesture,
+not the stored value (that is Rotation).
+_Avoid_: deskew, level, auto-rotate
+
+**Rotation**:
+The signed angle (±45°) applied to the image, exposed as a slider and also set
+by Straighten. The stored value, not the gesture.
