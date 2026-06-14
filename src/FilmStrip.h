@@ -1,10 +1,12 @@
 #pragma once
+#include "UserMetadata.h"
 #include <QWidget>
 #include <QString>
 
 class QListView;
 class FilmStripModel;
 class ThumbnailCache;
+class QModelIndex;
 
 // Horizontal thumbnail strip for one directory. A thin shell over FilmStripModel
 // + QListView; the testable logic lives in FilmStripModel / FilmStripLayout.
@@ -20,6 +22,12 @@ public:
 
     // Navigate ±1 from current selection. Returns false if already at boundary.
     bool navigateBy(int delta);
+
+    // Culling marks for the current item (write-through to its sidecar, and the
+    // model). rateCurrent(0) clears; labelCurrent(l) toggles l off if already l.
+    // No-op when nothing is selected.
+    void rateCurrent(int rating);
+    void labelCurrent(ColourLabel label);
 
     QString directory() const { return currentDir; }
 
@@ -43,6 +51,12 @@ protected:
 private:
     void requestVisibleThumbnails();
     void updateThumbHeight();
+    void loadMarks(const QStringList& paths);   // background sidecar scan
+    void setRating(const QString& path, int rating);
+    void setLabel(const QString& path, ColourLabel label);   // toggles off if already set
+    void applyMarks(const QString& path, const UserMetadata& marks);
+    void showContextMenu(const QPoint& pos);
+    QString currentPath() const;
 
     QListView*       list;
     FilmStripModel*  model;

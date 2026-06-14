@@ -2,6 +2,7 @@
 #include "FilmStripModel.h"
 #include "FilmStripLayout.h"
 #include "ThumbnailCache.h"
+#include "XmpSidecar.h"
 
 #include <QListView>
 #include <QHBoxLayout>
@@ -13,13 +14,65 @@
 #include <QStyledItemDelegate>
 #include <QPainter>
 #include <QEvent>
+#include <QMenu>
 #include <QSignalBlocker>
+#include <QtConcurrent>
+#include <QFutureWatcher>
 #include <algorithm>
 
 namespace {
 
 constexpr int kCellPad = 4;       // padding around each thumbnail
 constexpr int kBorderWidth = 2;   // current-item highlight border
+constexpr int kMarksMinHeight = 64;  // below this, stars are illegible: swatch only
+
+// Swatch colours for the five labels (None never drawn).
+QColor labelColour(ColourLabel label) {
+    switch (label) {
+    case ColourLabel::Red:    return QColor(0xD6, 0x45, 0x41);
+    case ColourLabel::Yellow: return QColor(0xF5, 0xD8, 0x20);
+    case ColourLabel::Green:  return QColor(0x4C, 0xAF, 0x50);
+    case ColourLabel::Blue:   return QColor(0x3B, 0x82, 0xF6);
+    case ColourLabel::Purple: return QColor(0x9B, 0x59, 0xB6);
+    case ColourLabel::None:   break;
+    }
+    return Qt::transparent;
+}
+
+// Overlay the culling marks on a thumbnail cell: a colour swatch top-left, and
+// (when the cell is tall enough to read them) filled stars on a translucent
+// bottom bar. A reject (rating -1) dims the thumbnail and shows a ✗.
+void paintMarks(QPainter* painter, const QRect& inner, int thumbHeight,
+                int rating, ColourLabel label) {
+    if (rating < 0)
+        painter->fillRect(inner, QColor(0, 0, 0, 140));  // reject: dim the frame
+
+    if (label != ColourLabel::None) {
+        const int s = std::max(8, thumbHeight / 9);
+        const QRect sw(inner.left() + 3, inner.top() + 3, s, s);
+        painter->setPen(QPen(QColor(0, 0, 0, 160), 1));
+        painter->setBrush(labelColour(label));
+        painter->drawRoundedRect(sw, 2, 2);
+    }
+
+    if (thumbHeight < kMarksMinHeight)
+        return;  // swatch stays readable at any size; stars do not
+
+    QString glyphs;
+    if (rating < 0)      glyphs = QStringLiteral("✗");            // ✗
+    else if (rating > 0) glyphs = QString(rating, QChar(0x2605));      // ★×n
+    if (glyphs.isEmpty())
+        return;
+
+    const int barH = std::max(14, thumbHeight / 6);
+    const QRect bar(inner.left(), inner.bottom() - barH + 1, inner.width(), barH);
+    painter->fillRect(bar, QColor(0, 0, 0, 110));
+    QFont f = painter->font();
+    f.setPixelSize(int(barH * 0.8));
+    painter->setFont(f);
+    painter->setPen(rating < 0 ? QColor(0xFF, 0x5A, 0x5A) : QColor(0xFF, 0xD7, 0x00));
+    painter->drawText(bar, Qt::AlignCenter, glyphs);
+}
 
 // Paints aspect-correct thumbnails at the strip's content height, with a
 // highlight border on the current item. Cell width comes from FilmStripLayout
@@ -55,6 +108,10 @@ public:
             painter->drawPixmap(target, pm);
         }
 
+        paintMarks(painter, inner, thumbHeight,
+                   index.data(FilmStripModel::RatingRole).toInt(),
+                   ColourLabel(index.data(FilmStripModel::LabelRole).toInt()));
+
         if (selected) {
             painter->setPen(QPen(option.palette.highlight().color(), kBorderWidth));
             const int o = kBorderWidth / 2;
@@ -88,6 +145,9 @@ FilmStrip::FilmStrip(QWidget* parent) : QWidget(parent) {
     list->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     list->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     list->viewport()->installEventFilter(this);
+    list->viewport()->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(list->viewport(), &QWidget::customContextMenuRequested,
+            this, &FilmStrip::showContextMenu);
     layout->addWidget(list, 1);
 
     connect(list->selectionModel(), &QItemSelectionModel::currentChanged,
@@ -123,7 +183,9 @@ void FilmStrip::setDirectory(const QString& dir) {
 
     currentDir = clean;
     emit directoryChanged(clean);
-    model->setFiles(scanImageFiles(clean));
+    const QStringList files = scanImageFiles(clean);
+    model->setFiles(files);
+    loadMarks(files);
 
     // Deferred: cell geometry isn't laid out yet, so visibility tests would be
     // wrong if run synchronously here.
@@ -161,6 +223,106 @@ bool FilmStrip::navigateBy(int delta) {
     list->setCurrentIndex(idx);   // fires currentChanged → fileSelected
     list->scrollTo(idx, QAbstractItemView::PositionAtCenter);  // keyboard nav centres
     return true;
+}
+
+QString FilmStrip::currentPath() const {
+    const QModelIndex cur = list->currentIndex();
+    return cur.isValid() ? cur.data(FilmStripModel::PathRole).toString() : QString();
+}
+
+void FilmStrip::rateCurrent(int rating) {
+    setRating(currentPath(), rating);
+}
+
+void FilmStrip::labelCurrent(ColourLabel label) {
+    setLabel(currentPath(), label);
+}
+
+void FilmStrip::setRating(const QString& path, int rating) {
+    if (path.isEmpty())
+        return;
+    UserMetadata m = model->marksFor(path);
+    m.rating = rating;
+    applyMarks(path, m);
+}
+
+void FilmStrip::setLabel(const QString& path, ColourLabel label) {
+    if (path.isEmpty())
+        return;
+    UserMetadata m = model->marksFor(path);
+    m.label = (m.label == label) ? ColourLabel::None : label;  // same key clears
+    applyMarks(path, m);
+}
+
+// The single sink for a mark change: update the model (repaints the cell) and
+// write it straight through to the sidecar (docs/adr/0007 — marks persist
+// immediately, no Ctrl-S).
+void FilmStrip::applyMarks(const QString& path, const UserMetadata& marks) {
+    model->setMarks(path, marks);
+    XmpSidecar::saveMetadata(path, marks);
+}
+
+void FilmStrip::loadMarks(const QStringList& paths) {
+    using Marks = QList<QPair<QString, UserMetadata>>;
+    auto* watcher = new QFutureWatcher<Marks>(this);
+    connect(watcher, &QFutureWatcher<Marks>::finished, this, [this, watcher] {
+        for (const auto& [path, m] : watcher->result())
+            model->setMarks(path, m);   // no-ops paths no longer in the model
+        watcher->deleteLater();
+    });
+    watcher->setFuture(QtConcurrent::run([paths] {
+        Marks out;
+        for (const QString& p : paths) {
+            const UserMetadata m = XmpSidecar::loadMetadata(p);
+            if (!(m == UserMetadata{}))   // only carry files that actually have marks
+                out.append({p, m});
+        }
+        return out;
+    }));
+}
+
+void FilmStrip::showContextMenu(const QPoint& pos) {
+    const QModelIndex idx = list->indexAt(pos);
+    if (!idx.isValid())
+        return;
+    const QString path = idx.data(FilmStripModel::PathRole).toString();
+    const UserMetadata cur = model->marksFor(path);
+
+    QMenu menu(this);
+    QMenu* rate = menu.addMenu(tr("Rating"));
+    for (int n = 5; n >= 1; --n) {
+        QAction* a = rate->addAction(QString(n, QChar(0x2605)));
+        a->setCheckable(true);
+        a->setChecked(cur.rating == n);
+        connect(a, &QAction::triggered, this, [this, path, n] { setRating(path, n); });
+    }
+    rate->addSeparator();
+    QAction* unrated = rate->addAction(tr("Unrated"));
+    connect(unrated, &QAction::triggered, this, [this, path] { setRating(path, 0); });
+    QAction* reject = rate->addAction(tr("Reject"));
+    reject->setCheckable(true);
+    reject->setChecked(cur.rating == -1);
+    connect(reject, &QAction::triggered, this, [this, path] { setRating(path, -1); });
+
+    QMenu* lab = menu.addMenu(tr("Label"));
+    struct LabelEntry { const char* name; ColourLabel value; };
+    for (auto [name, value] : {
+             LabelEntry{"Red", ColourLabel::Red}, {"Yellow", ColourLabel::Yellow},
+             {"Green", ColourLabel::Green}, {"Blue", ColourLabel::Blue},
+             {"Purple", ColourLabel::Purple} }) {
+        QAction* a = lab->addAction(tr(name));
+        a->setCheckable(true);
+        a->setChecked(cur.label == value);
+        connect(a, &QAction::triggered, this, [this, path, value] { setLabel(path, value); });
+    }
+    QAction* none = lab->addAction(tr("None"));
+    connect(none, &QAction::triggered, this, [this, path] {
+        UserMetadata m = model->marksFor(path);
+        m.label = ColourLabel::None;
+        applyMarks(path, m);
+    });
+
+    menu.exec(list->viewport()->mapToGlobal(pos));
 }
 
 void FilmStrip::promptForDirectory() {

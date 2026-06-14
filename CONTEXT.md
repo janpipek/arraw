@@ -6,6 +6,34 @@ export. Not a DAM, not a catalogue.
 
 ## Language
 
+**Culling**:
+Marking which frames in the open folder are keepers vs rejects while editing —
+a per-file, in-the-moment triage, not a searchable cross-folder catalogue. The
+attributes used for culling (rating, colour label) are stored on the file the
+same Lightroom-compatible way edits are; there is no index or database.
+_Avoid_: cataloguing, library, DAM
+
+**Rating**:
+A single per-file culling value on a 0–5 star scale, where 0 is unrated and -1
+means rejected — the reject state is folded into the rating, not a separate
+pick/reject flag. Persisted as `xmp:Rating` in the sidecar.
+_Avoid_: stars (UI term), pick/reject flag (we have no separate flag axis)
+
+**Colour Label**:
+A single per-file culling category drawn from a fixed five-colour set — Red,
+Yellow, Green, Blue, Purple — or none. Independent of [[Rating]]: a file may
+carry any rating and any label at once. Stored as the canonical English colour
+name in `xmp:Label` (matching Lightroom's default label set so the colours
+survive a round-trip). The meaning of each colour is the user's own convention.
+_Avoid_: tag, keyword, free-text label
+
+**User Metadata**:
+Writable, user-authored metadata that travels with an image — today the
+[[Rating]] and [[Colour Label]], plausibly caption/keywords later. Persisted as
+XMP (`xmp:`/`dc:`) alongside the develop settings. Distinct from the read-only
+camera EXIF shown in the Exif panel, which the user never edits.
+_Avoid_: image metadata (that name is the read-only EXIF rows), tags, catalogue data
+
 **Working color space**:
 The color space all pixels live in from RAW decode until the final display/output
 transform: linear-light Rec.2020 primaries. Every adjustment operates in this space.

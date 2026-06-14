@@ -148,11 +148,29 @@ void MainWindow::closeEvent(QCloseEvent* e) {
 }
 
 void MainWindow::keyPressEvent(QKeyEvent* e) {
-    if (e->key() == Qt::Key_Left)       filmStrip->navigateBy(-1);
-    else if (e->key() == Qt::Key_Right) filmStrip->navigateBy(+1);
-    else if (e->key() == Qt::Key_S && e->modifiers() == Qt::NoModifier)
-        proofPanel->setProofingEnabled(!proofPanel->proofingEnabled());
-    else QMainWindow::keyPressEvent(e);
+    if (e->key() == Qt::Key_Left)       { filmStrip->navigateBy(-1); return; }
+    if (e->key() == Qt::Key_Right)      { filmStrip->navigateBy(+1); return; }
+
+    if (e->modifiers() == Qt::NoModifier) {
+        // Culling marks on the current file (docs/adr/0007). Acts globally so it
+        // works whether the strip or the image has focus.
+        if (e->key() >= Qt::Key_0 && e->key() <= Qt::Key_5) {
+            filmStrip->rateCurrent(e->key() - Qt::Key_0);
+            return;
+        }
+        switch (e->key()) {
+        case Qt::Key_X: filmStrip->rateCurrent(-1);                 return;
+        case Qt::Key_R: filmStrip->labelCurrent(ColourLabel::Red);    return;
+        case Qt::Key_Y: filmStrip->labelCurrent(ColourLabel::Yellow); return;
+        case Qt::Key_G: filmStrip->labelCurrent(ColourLabel::Green);  return;
+        case Qt::Key_B: filmStrip->labelCurrent(ColourLabel::Blue);   return;
+        case Qt::Key_P: filmStrip->labelCurrent(ColourLabel::Purple); return;
+        case Qt::Key_S:
+            proofPanel->setProofingEnabled(!proofPanel->proofingEnabled());
+            return;
+        }
+    }
+    QMainWindow::keyPressEvent(e);
 }
 
 void MainWindow::setupMenus() {
@@ -457,7 +475,7 @@ void MainWindow::onLoadFinished() {
     exifPanel->setMetadata(result.metadata);
     undoStack->clear();
 
-    AdjustmentParams saved = XmpSidecar::load(currentPath);
+    AdjustmentParams saved = XmpSidecar::loadAdjustments(currentPath);
     if (!QFileInfo::exists(XmpSidecar::pathFor(currentPath)))
         saved.cropRect = result.defaultCrop;
     adjPanel->setParams(saved);
@@ -523,7 +541,7 @@ void MainWindow::rebuildDisplayLut() {
 void MainWindow::saveAdjustments() {
     if (currentPath.isEmpty()) return;
     viewport->commitActiveTool();   // fold any pending crop into the params first
-    if (XmpSidecar::save(currentPath, adjPanel->params()))
+    if (XmpSidecar::saveAdjustments(currentPath, adjPanel->params()))
         statusLabel->setText("Saved: " + XmpSidecar::pathFor(currentPath));
     else
         QMessageBox::warning(this, "Save Error",

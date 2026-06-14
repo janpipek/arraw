@@ -80,7 +80,7 @@ TEST_CASE("sidecar path replaces the RAW extension with .xmp", "[xmp]") {
 
 TEST_CASE("missing sidecar loads default params", "[xmp]") {
     QTemporaryDir dir;
-    REQUIRE(XmpSidecar::load(dir.filePath("nothing-here.arw")) == AdjustmentParams{});
+    REQUIRE(XmpSidecar::loadAdjustments(dir.filePath("nothing-here.arw")) == AdjustmentParams{});
 }
 
 TEST_CASE("save then load round-trips all params", "[xmp]") {
@@ -88,8 +88,8 @@ TEST_CASE("save then load round-trips all params", "[xmp]") {
     const QString rawPath = dir.filePath("shot.arw");
     const auto saved = sampleParams();
 
-    REQUIRE(XmpSidecar::save(rawPath, saved));
-    const auto loaded = XmpSidecar::load(rawPath);
+    REQUIRE(XmpSidecar::saveAdjustments(rawPath, saved));
+    const auto loaded = XmpSidecar::loadAdjustments(rawPath);
 
     checkClose(loaded, saved);
     checkCurveClose(loaded.curveLuma, saved.curveLuma);
@@ -101,8 +101,8 @@ TEST_CASE("save then load round-trips all params", "[xmp]") {
 TEST_CASE("default params round-trip to defaults", "[xmp]") {
     QTemporaryDir dir;
     const QString rawPath = dir.filePath("untouched.nef");
-    REQUIRE(XmpSidecar::save(rawPath, {}));
-    checkClose(XmpSidecar::load(rawPath), {});
+    REQUIRE(XmpSidecar::saveAdjustments(rawPath, {}));
+    checkClose(XmpSidecar::loadAdjustments(rawPath), {});
 }
 
 // The crs: contract (Lightroom compatibility) — exact emitted fields, not
@@ -114,7 +114,7 @@ TEST_CASE("writer emits crs:Temperature in absolute Kelvin", "[xmp][crs]") {
     AdjustmentParams p;
     p.temperature = 6500.0f;
     p.exposure    = 0.85f;
-    REQUIRE(XmpSidecar::save(rawPath, p));
+    REQUIRE(XmpSidecar::saveAdjustments(rawPath, p));
 
     QFile f(XmpSidecar::pathFor(rawPath));
     REQUIRE(f.open(QIODevice::ReadOnly));
@@ -128,7 +128,7 @@ TEST_CASE("writer emits crs:Temperature in absolute Kelvin", "[xmp][crs]") {
 TEST_CASE("reader parses a Lightroom-style sidecar", "[xmp][crs]") {
     // Fixture mimics Adobe output: signed values with leading '+', Temperature
     // in Kelvin, crop as normalised edges, tone curve as 0..255 rdf:Seq.
-    const auto p = XmpSidecar::load(QStringLiteral(ARRAW_FIXTURE_DIR "/lightroom-sample.arw"));
+    const auto p = XmpSidecar::loadAdjustments(QStringLiteral(ARRAW_FIXTURE_DIR "/lightroom-sample.arw"));
 
     CHECK_THAT(p.exposure,    WithinAbs(0.85, 1e-5));
     CHECK_THAT(p.contrast,    WithinAbs(12.0, 1e-5));
@@ -150,4 +150,79 @@ TEST_CASE("reader parses a Lightroom-style sidecar", "[xmp][crs]") {
     CHECK_THAT(p.curveLuma.points[1].x(), WithinAbs(64 / 255.0, 1e-5));
     CHECK_THAT(p.curveLuma.points[1].y(), WithinAbs(48 / 255.0, 1e-5));
     CHECK(p.curveR.isIdentity());
+}
+
+// ── User metadata: rating + colour label ────────────────────────────────────
+
+TEST_CASE("ColourLabel maps to and from the canonical English name", "[xmp][marks]") {
+    CHECK(colourLabelToString(ColourLabel::Green) == "Green");
+    CHECK(colourLabelToString(ColourLabel::None).isEmpty());
+    CHECK(colourLabelFromString("Purple") == ColourLabel::Purple);
+    CHECK(colourLabelFromString("") == ColourLabel::None);
+    CHECK(colourLabelFromString("Chartreuse") == ColourLabel::None);  // unknown → None
+}
+
+TEST_CASE("missing sidecar loads default marks", "[xmp][marks]") {
+    QTemporaryDir dir;
+    CHECK(XmpSidecar::loadMetadata(dir.filePath("nothing-here.arw")) == UserMetadata{});
+}
+
+TEST_CASE("rating and label round-trip", "[xmp][marks]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("shot.arw");
+
+    REQUIRE(XmpSidecar::saveMetadata(rawPath, {4, ColourLabel::Blue}));
+    CHECK(XmpSidecar::loadMetadata(rawPath) == UserMetadata{4, ColourLabel::Blue});
+}
+
+TEST_CASE("reject is stored as rating -1", "[xmp][marks]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("reject.arw");
+
+    REQUIRE(XmpSidecar::saveMetadata(rawPath, {-1, ColourLabel::None}));
+    CHECK(XmpSidecar::loadMetadata(rawPath).rating == -1);
+
+    QFile f(XmpSidecar::pathFor(rawPath));
+    REQUIRE(f.open(QIODevice::ReadOnly));
+    const QString xml = QString::fromUtf8(f.readAll());
+    CHECK(xml.contains(R"(xmp:Rating="-1")"));
+    CHECK(xml.contains("http://ns.adobe.com/xap/1.0/"));
+}
+
+TEST_CASE("default marks are not written to the sidecar", "[xmp][marks]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("clean.arw");
+
+    REQUIRE(XmpSidecar::saveMetadata(rawPath, UserMetadata{}));
+
+    QFile f(XmpSidecar::pathFor(rawPath));
+    REQUIRE(f.open(QIODevice::ReadOnly));
+    const QString xml = QString::fromUtf8(f.readAll());
+    CHECK_FALSE(xml.contains("xmp:Rating"));
+    CHECK_FALSE(xml.contains("xmp:Label"));
+}
+
+// The clobber guarantee (docs/adr/0007): the two namespace-scoped saves are
+// read-first, so neither destroys the half it doesn't own.
+TEST_CASE("saveMetadata preserves existing develop edits", "[xmp][marks]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("edited.arw");
+
+    const auto edits = sampleParams();
+    REQUIRE(XmpSidecar::saveAdjustments(rawPath, edits));
+    REQUIRE(XmpSidecar::saveMetadata(rawPath, {5, ColourLabel::Red}));
+
+    CHECK(XmpSidecar::loadMetadata(rawPath) == UserMetadata{5, ColourLabel::Red});
+    checkClose(XmpSidecar::loadAdjustments(rawPath), edits);  // edits survived
+}
+
+TEST_CASE("saveAdjustments preserves existing marks", "[xmp][marks]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("rated.arw");
+
+    REQUIRE(XmpSidecar::saveMetadata(rawPath, {3, ColourLabel::Yellow}));
+    REQUIRE(XmpSidecar::saveAdjustments(rawPath, sampleParams()));
+
+    CHECK(XmpSidecar::loadMetadata(rawPath) == UserMetadata{3, ColourLabel::Yellow});  // marks survived
+    checkClose(XmpSidecar::loadAdjustments(rawPath), sampleParams());
 }
