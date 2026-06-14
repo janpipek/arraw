@@ -102,27 +102,30 @@ private:
     RendererCore::Slot activeSlot() const;
     void paintOverlay(QPainter& p) const;
 
-    // Map texture UV ↔ viewport (matches vertex shader: image-centre rotation + fit)
-    QPointF textureUVToViewport(float u, float v) const;
-    QPointF viewportToTextureUV(QPointF pos) const;
+    // Crop lives in the rotated *display frame*: cropRect is an axis-aligned
+    // rectangle of what you see, and the shader applies rotation underneath
+    // (crop after rotation). These map that frame ↔ viewport with the fit/pan
+    // but NOT the rotation — an axis-aligned crop stays axis-aligned on screen.
+    QPointF cropUVToViewport(float u, float v) const;
+    QPointF viewportToCropUV(QPointF pos) const;
 
-    bool useViewportCrop() const;
-    QRectF rotatedImageViewportBounds() const;
-    QRectF textureCropToViewportBounds(const QRectF& texCrop) const;
-    QRectF viewportCropToTextureCrop(const QRectF& vpCrop) const;
+    // True when every corner of a display-frame crop maps onto real image
+    // pixels (no empty corner left by the rotation). The shader rotation is the
+    // arbiter, so this mirrors it.
+    bool cropInsideImage(const QRectF& cropUV) const;
+    // Largest centred, full-aspect crop that fits inside the rotated image.
+    QRectF maxInscribedCrop() const;
 
     // Returns handle index 0-7, or -1 for "inside rect" (move), or -2 for "outside" (rotate)
     int hitTest(QPointF viewportPos) const;
     QPointF handlePos(int i) const;
     void applyCropDrag(QPointF viewportPos);
-    void applyCropDragViewport(QPointF viewportPos);
 
     void drawCropOverlay(QPainter& p) const;
     void drawAlignGrid(QPainter& p) const;
     bool shouldShowAlignGrid() const;
 
-    // Crop is just one of the active tools; this keeps the existing crop code
-    // (overlay, handles, viewport-crop) reading naturally.
+    // Crop is just one of the active tools; this keeps the crop code readable.
     bool cropMode() const { return tool == ActiveTool::Crop; }
     void enterCrop();      // snapshot + seed the editable crop rect
     void commitCrop();     // write activeCrop into params and emit cropCommitted
@@ -179,14 +182,10 @@ private:
     QPointF  straightenEnd;
 
     // ── Crop state ────────────────────────────────────────────────────────
-    // The crop being edited lives in one of two spaces: texture UV
-    // (activeCrop) normally, or viewport pixels (activeCropViewport) while
-    // the image is rotated — see useViewportCrop(). The cancel* copies are
-    // snapshots taken on entering crop mode, restored on Escape.
-    QRectF  activeCrop     = {0, 0, 1, 1};   // texture UV rect being edited
+    // The crop being edited is axis-aligned in the display frame (see
+    // cropUVToViewport). cancelCrop is the snapshot restored on Escape.
+    QRectF  activeCrop     = {0, 0, 1, 1};   // display-frame UV rect being edited
     QRectF  cancelCrop     = {0, 0, 1, 1};
-    QRectF  activeCropViewport;              // screen-aligned crop when straightening
-    QRectF  cancelCropViewport;
     int     cropDragHandle = -2;             // which handle is dragged
     QPointF cropDragStart;
     QRectF  cropDragStartRect;
