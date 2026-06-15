@@ -294,7 +294,7 @@ void RendererCore::fillUbuf(Ubuf& ub, const FrameParams& fp) const {
     ub.cropRect[2] = float(fp.cropRect.right());
     ub.cropRect[3] = float(fp.cropRect.bottom());
 
-    const AdjustmentParams& a = fp.adjustments;
+    const GlobalAdjustment& a = fp.adjustments;
     bool hslActive = false;
     for (int i = 0; i < 8; ++i) {
         ub.hslHue[i] = a.hslHue[i] / 100.0f;

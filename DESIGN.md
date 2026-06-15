@@ -32,7 +32,7 @@ clean export. Not a DAM, not a cataloguing tool — just open a folder, edit, ex
 
 ## Data Model
 
-### `AdjustmentParams`
+### `GlobalAdjustment`
 Plain struct, zero-initialized = no adjustments. Serialises cleanly to XMP.
 
 ```
@@ -102,7 +102,7 @@ MainWindow (QMainWindow)
 - Returns `LoadResult` containing `fullRes` + `preview` (via `downsample2x`).
 
 ### `ImagePipeline`
-- `AdjustmentParams` and `ImageBuffer` struct definitions.
+- `GlobalAdjustment` and `ImageBuffer` struct definitions.
 - `downsample2x()`: box-filter 2× downsample, thread-safe, no Qt dependency.
 
 ### `ColorManagement` (lcms2)
@@ -147,14 +147,14 @@ MainWindow (QMainWindow)
 - Crop mode: activated by `C` key. Renders darkened overlay outside crop rect.
   Corner/edge handles are draggable. Drag outside rect = rotate. `Enter` confirms,
   `Escape` cancels.
-- Before/after: `\` key held → renders with zeroed `AdjustmentParams`.
-- Export: `renderToImage(const AdjustmentParams&, const ImageBuffer& fullRes)`
+- Before/after: `\` key held → renders with zeroed `GlobalAdjustment`.
+- Export: `renderToImage(const GlobalAdjustment&, const ImageBuffer& fullRes)`
   — renders full-res buffer through the shader pipeline into an offscreen
   float target with `displayEncode` off, reads back, returns a linear
   working-space `QImage` (`Format_RGBX32FPx4`) for the CPU output transform.
 
 ### `AdjustmentPanel`
-- Emits `paramsChanged(AdjustmentParams)` on any slider change.
+- Emits `paramsChanged(GlobalAdjustment)` on any slider change.
 - `setParams()` restores all sliders atomically with signals blocked (used by
   XMP load and undo/redo).
 - WB preset combobox sets `temperature` + `tint` in Kelvin scale.
@@ -165,7 +165,7 @@ MainWindow (QMainWindow)
 
 ### `XmpSidecar`
 - `pathFor(rawPath)` → same dir, same base name, `.xmp` extension.
-- `load()` → `AdjustmentParams`. Returns defaults if file absent or unparseable.
+- `load()` → `GlobalAdjustment`. Returns defaults if file absent or unparseable.
 - `save()` → writes XMP using Qt's `QXmlStreamWriter`. Uses `crs:` namespace
   (Adobe Camera Raw) for Lightroom-compatible field names.
   `crs:Temperature` is stored in absolute Kelvin (compatible with LR).
@@ -292,7 +292,7 @@ for the panel histogram, and a "stop after tone regions, gamma-encode" pass
    - Render into an offscreen RGBA32F target at the cropped pixel size, in an
      offscreen RHI frame of its own.
    - Run the full shader pipeline (steps 4–16 above) with current
-     `AdjustmentParams`, `u.displayEncode` off.
+     `GlobalAdjustment`, `u.displayEncode` off.
    - Synchronous readback → `QImage(Format_RGBX32FPx4)`, linear working space,
      scaled to the requested output size while still linear.
 3. `toOutputImage()` (ColorManagement, lcms2): working space → chosen output

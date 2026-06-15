@@ -7,7 +7,7 @@
 // Pure (no widget state) so it can be unit-tested without building the panel.
 //
 // Two independent scales, because they don't always agree:
-//   param   = raw * paramScale     (what AdjustmentParams stores)
+//   param   = raw * paramScale     (what GlobalAdjustment stores)
 //   display = raw * displayScale   (what the user reads/edits)
 // e.g. HSL Hue stores ±100 (paramScale 1.0) but reads ±30° (displayScale 0.3).
 struct FieldSpec {
@@ -35,7 +35,7 @@ struct FieldSpec {
     QString format(int raw) const { return formatDisplay(rawToDisplay(raw)); }
     int     parse(const QString& text, bool* ok = nullptr) const;
 
-    // ── param space (AdjustmentParams storage) ──────────────────────────────
+    // ── param space (GlobalAdjustment storage) ──────────────────────────────
     float toParam(int raw) const { return raw * paramScale; }
     int   fromParam(float param) const;
 };

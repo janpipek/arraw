@@ -17,7 +17,7 @@ static constexpr char kNsXmp[]   = "http://ns.adobe.com/xap/1.0/";
 // (docs/adr/0010). Versioned in the URI like Adobe's namespaces.
 static constexpr char kNsArraw[] = "http://ns.arraw.app/1.0/";
 
-// crs: attribute names for the 8 HSL ranges, indexed like AdjustmentParams::hslHue etc.
+// crs: attribute names for the 8 HSL ranges, indexed like GlobalAdjustment::hslHue etc.
 static constexpr const char* kHslHueNames[8] = {
     "HueAdjustmentRed","HueAdjustmentOrange","HueAdjustmentYellow",
     "HueAdjustmentGreen","HueAdjustmentAqua","HueAdjustmentBlue",
@@ -112,7 +112,7 @@ SidecarData XmpSidecar::load(const QString& rawPath) {
     if (!f.open(QIODevice::ReadOnly)) return {};
 
     SidecarData data;
-    AdjustmentParams& p = data.adjustments;
+    GlobalAdjustment& p = data.adjustments;
     QXmlStreamReader xml(&f);
 
     while (!xml.atEnd()) {
@@ -251,7 +251,7 @@ static void writeLocalAdjustments(QXmlStreamWriter& xml,
 // SidecarData. The namespace-scoped public saves below read-modify-write through
 // this, so each preserves the half it doesn't touch (docs/adr/0007).
 static bool writeFile(const QString& rawPath, const SidecarData& data) {
-    const AdjustmentParams& p = data.adjustments;
+    const GlobalAdjustment& p = data.adjustments;
 
     QFile f(XmpSidecar::pathFor(rawPath));
     if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
@@ -326,7 +326,7 @@ static bool writeFile(const QString& rawPath, const SidecarData& data) {
     return f.error() == QFileDevice::NoError;
 }
 
-bool XmpSidecar::saveAdjustments(const QString& rawPath, const AdjustmentParams& params) {
+bool XmpSidecar::saveAdjustments(const QString& rawPath, const GlobalAdjustment& params) {
     SidecarData data = load(rawPath);   // preserve any existing xmp: marks
     data.adjustments = params;
     return writeFile(rawPath, data);

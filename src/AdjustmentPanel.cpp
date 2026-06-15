@@ -349,10 +349,10 @@ void AdjustmentPanel::connectCurve() {
 // ── Reset / set params ────────────────────────────────────────────────────────
 
 void AdjustmentPanel::resetAll() {
-    setParams(AdjustmentParams{});
+    setParams(GlobalAdjustment{});
 }
 
-void AdjustmentPanel::setParams(const AdjustmentParams& p) {
+void AdjustmentPanel::setParams(const GlobalAdjustment& p) {
     const auto rows = allRows();
     for (auto* r : rows) { r->slider->blockSignals(true); r->spin->blockSignals(true); }
 

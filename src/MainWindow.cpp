@@ -41,13 +41,13 @@
 #include <cmath>
 
 // ---------------------------------------------------------------------------
-// Undo command: captures before/after AdjustmentParams for a single gesture.
+// Undo command: captures before/after GlobalAdjustment for a single gesture.
 // ---------------------------------------------------------------------------
 class AdjustmentCommand : public QUndoCommand {
 public:
     AdjustmentCommand(AdjustmentPanel* panel,
-                      const AdjustmentParams& before,
-                      const AdjustmentParams& after)
+                      const GlobalAdjustment& before,
+                      const GlobalAdjustment& after)
         : panel(panel), before(before), after(after) {}
 
     void undo() override { panel->setParams(before); }
@@ -55,7 +55,7 @@ public:
 
 private:
     AdjustmentPanel* panel;
-    AdjustmentParams before, after;
+    GlobalAdjustment before, after;
 };
 
 // ---------------------------------------------------------------------------
@@ -88,16 +88,16 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     connect(viewport, &ImageViewport::cropCommitted,
             this, [this](const QRectF& rect) {
-                AdjustmentParams before = adjPanel->params();
-                AdjustmentParams after  = before;
+                GlobalAdjustment before = adjPanel->params();
+                GlobalAdjustment after  = before;
                 after.cropRect = rect;
                 undoStack->push(new AdjustmentCommand(adjPanel, before, after));
             });
 
     connect(viewport, &ImageViewport::rotationCommitted,
             this, [this](float degrees) {
-                AdjustmentParams before = adjPanel->params();
-                AdjustmentParams after  = before;
+                GlobalAdjustment before = adjPanel->params();
+                GlobalAdjustment after  = before;
                 after.rotation = degrees;
                 if (after != before)
                     undoStack->push(new AdjustmentCommand(adjPanel, before, after));
@@ -105,8 +105,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     connect(viewport, &ImageViewport::whiteBalanceCommitted,
             this, [this](float kelvin, float tint) {
-                AdjustmentParams before = adjPanel->params();
-                AdjustmentParams after  = before;
+                GlobalAdjustment before = adjPanel->params();
+                GlobalAdjustment after  = before;
                 after.temperature = kelvin;
                 after.tint        = tint;
                 if (after != before)
@@ -117,7 +117,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             this, [this](ImageViewport::ActiveTool) { syncToolActions(); });
 
     connect(adjPanel, &AdjustmentPanel::adjustmentCommitted,
-            this, [this](const AdjustmentParams& before, const AdjustmentParams& after) {
+            this, [this](const GlobalAdjustment& before, const GlobalAdjustment& after) {
                 undoStack->push(new AdjustmentCommand(adjPanel, before, after));
             });
 
@@ -531,7 +531,7 @@ void MainWindow::onLoadFinished() {
     exifPanel->setMetadata(result.metadata);
     undoStack->clear();
 
-    AdjustmentParams saved = XmpSidecar::loadAdjustments(currentPath);
+    GlobalAdjustment saved = XmpSidecar::loadAdjustments(currentPath);
     if (!QFileInfo::exists(XmpSidecar::pathFor(currentPath)))
         saved.cropRect = result.defaultCrop;
     adjPanel->setParams(saved);
@@ -666,7 +666,7 @@ void MainWindow::exportFile() {
     }
 
     viewport->commitActiveTool();   // fold any pending crop into the params first
-    const AdjustmentParams p = adjPanel->params();
+    const GlobalAdjustment p = adjPanel->params();
 
     // Natural output size = full-res pixels inside the crop rect
     const int naturalW = int(fullRes.width  * p.cropRect.width()  + 0.5);

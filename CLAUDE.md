@@ -67,7 +67,7 @@ The full design rationale lives in `DESIGN.md`. Key things that require reading 
 
 ### Real-time preview
 
-`AdjustmentPanel` emits `paramsChanged(AdjustmentParams)` on every slider move. `ImageViewport` receives this, stores the params, and calls `update()`. In `render()`, all adjustments travel in one uniform block — no CPU image processing happens during preview. The shader pipeline order is defined in `shaders/image.frag` and documented in `DESIGN.md`.
+`AdjustmentPanel` emits `paramsChanged(GlobalAdjustment)` on every slider move. `ImageViewport` receives this, stores the params, and calls `update()`. In `render()`, all adjustments travel in one uniform block — no CPU image processing happens during preview. The shader pipeline order is defined in `shaders/image.frag` and documented in `DESIGN.md`.
 
 ### RendererCore and the two image slots
 
@@ -81,11 +81,11 @@ Export does not use `QImage` pixel manipulation. `ImageViewport::renderToImage()
 
 `XmpSidecar` reads/writes the `crs:` (Adobe Camera Raw) XML namespace so files are Lightroom-compatible. `crs:Temperature` is stored in absolute Kelvin (2000–12000K). Tint and all other fields use our internal -100..100 scale. Sidecar path = same directory as RAW file, same base name, `.xmp` extension.
 
-### AdjustmentParams ↔ slider scale
+### GlobalAdjustment ↔ slider scale
 
 `AdjustmentPanel` sliders work in integers for Qt's `QSlider`. The mapping:
 - `exposure`: slider × 0.01 = EV (slider range -500..500 → -5.0..5.0 EV)
 - `temperature`: slider value = Kelvin directly (range 2000..12000)
 - All other fields: slider value = float value directly (-100..100)
 
-When adding a new adjustment, update `AdjustmentParams` (struct), the slider in `AdjustmentPanel`, the uniform block in **both** `image.vert` and `image.frag` plus its `Ubuf` mirror in `RendererCore.h` (the three must stay byte-identical, std140), `RendererCore::fillUbuf()`, and `XmpSidecar` load/save.
+When adding a new adjustment, update `GlobalAdjustment` (struct), the slider in `AdjustmentPanel`, the uniform block in **both** `image.vert` and `image.frag` plus its `Ubuf` mirror in `RendererCore.h` (the three must stay byte-identical, std140), `RendererCore::fillUbuf()`, and `XmpSidecar` load/save.

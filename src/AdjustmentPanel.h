@@ -23,13 +23,13 @@ public:
     explicit AdjustmentPanel(QWidget* parent = nullptr);
 
     void setHistogramSamples(const QImage& finalSample, const QImage& curveInputSample);
-    AdjustmentParams params() const { return adjustments; }
-    void setParams(const AdjustmentParams& p);
+    GlobalAdjustment params() const { return adjustments; }
+    void setParams(const GlobalAdjustment& p);
     void resetAll();
 
 signals:
-    void paramsChanged(const AdjustmentParams&);
-    void adjustmentCommitted(const AdjustmentParams& before, const AdjustmentParams& after);
+    void paramsChanged(const GlobalAdjustment&);
+    void adjustmentCommitted(const GlobalAdjustment& before, const GlobalAdjustment& after);
     void straightenActive(bool active);
 
 protected:
@@ -77,8 +77,8 @@ private:
     std::array<SliderRow, 8> hslSat;
     std::array<SliderRow, 8> hslLum;
 
-    AdjustmentParams adjustments;
-    AdjustmentParams committed;    // last committed state — baseline for the next undo entry
+    GlobalAdjustment adjustments;
+    GlobalAdjustment committed;    // last committed state — baseline for the next undo entry
 
     QHash<QObject*, SliderRow*> resetTargets;   // slider/label -> row, for double-click reset
 };

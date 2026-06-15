@@ -24,7 +24,7 @@ public:
 
     void setImage(const ImageBuffer& preview, bool baseLookEnabled = false);
     void setFullResImage(const ImageBuffer& fullRes);
-    void setAdjustments(const AdjustmentParams& p);
+    void setAdjustments(const GlobalAdjustment& p);
     void setStraightenActive(bool active);
 
     // Active-tool state machine. setActiveTool switches tools, committing any
@@ -61,14 +61,14 @@ public:
     // Returns a *linear working-space* float QImage (Format_RGBX32FPx4),
     // cropped to params.cropRect and scaled to outW×outH; the caller applies
     // the output transform (toOutputImage) before saving.
-    QImage renderToImage(const ImageBuffer& buf, const AdjustmentParams& params,
+    QImage renderToImage(const ImageBuffer& buf, const GlobalAdjustment& params,
                          int outW, int outH);
 
     // Render buf through the on-screen display path (sRGB encode, LUT off) with
     // the clipping overlay forced on — the export path forces it off, so this is
     // the testable entry for the overlay (docs/adr/0009). Returns a display-
     // encoded float QImage (Format_RGBX32FPx4) at the cropped pixel size.
-    QImage renderClipSample(const ImageBuffer& buf, const AdjustmentParams& params,
+    QImage renderClipSample(const ImageBuffer& buf, const GlobalAdjustment& params,
                             bool clipHighlights, bool clipShadows);
 
 signals:
@@ -163,7 +163,7 @@ private:
     ViewportOverlay* overlay = nullptr;
 
     // ── Image state ───────────────────────────────────────────────────────
-    AdjustmentParams params;
+    GlobalAdjustment params;
     float imageAspect = 1.0f;   // width/height of the full uncropped image
     int   originalWidth = 0;
     int   originalHeight = 0;

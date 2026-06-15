@@ -3,7 +3,7 @@
 Rating and colour label (the [[Culling]] marks — `xmp:Rating`, `xmp:Label`) are
 persisted in the **same `.xmp` sidecar** that already holds the develop settings,
 for every file regardless of format — never embedded into the original. They are
-modelled as a `UserMetadata` value type **separate from `AdjustmentParams`**
+modelled as a `UserMetadata` value type **separate from `GlobalAdjustment`**
 (they touch no shader uniform), paired with it as `SidecarData`. Because two
 unrelated writers now share one file — `MainWindow` writing `crs:` edits on
 Ctrl-S, and the filmstrip writing `xmp:` marks on a keypress, possibly for a file
@@ -21,7 +21,7 @@ reparses and replaces only `xmp:`. The merge lives once, inside `XmpSidecar`.
 - **A single `save(SidecarData)` taking both halves**: forces every caller to
   load-merge the *other* half first, duplicating the merge at each call site.
   Rejected in favour of two namespace-scoped saves so the merge is SPOT.
-- **Fold rating/label into `AdjustmentParams`**: pollutes the "params are the
+- **Fold rating/label into `GlobalAdjustment`**: pollutes the "params are the
   shader uniform" model and the CLAUDE.md add-an-adjustment ritual (a reader
   would hunt for `rating` in `image.frag`). Rejected; marks are their own type.
 

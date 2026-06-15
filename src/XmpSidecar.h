@@ -11,7 +11,7 @@
 
 // Whole-file in-memory view of one sidecar.
 struct SidecarData {
-    AdjustmentParams adjustments;
+    GlobalAdjustment adjustments;
     UserMetadata     metadata;
 };
 
@@ -22,7 +22,7 @@ public:
     // Reads the whole sidecar. Returns defaults if it doesn't exist or can't be parsed.
     static SidecarData load(const QString& rawPath);
 
-    static AdjustmentParams loadAdjustments(const QString& rawPath) {
+    static GlobalAdjustment loadAdjustments(const QString& rawPath) {
         return load(rawPath).adjustments;
     }
     static UserMetadata loadMetadata(const QString& rawPath) {
@@ -31,6 +31,6 @@ public:
 
     // Namespace-scoped, read-first saves: each replaces only its own half of the
     // sidecar and preserves the other half already on disk (docs/adr/0007).
-    static bool saveAdjustments(const QString& rawPath, const AdjustmentParams& params);
+    static bool saveAdjustments(const QString& rawPath, const GlobalAdjustment& params);
     static bool saveMetadata(const QString& rawPath, const UserMetadata& metadata);
 };

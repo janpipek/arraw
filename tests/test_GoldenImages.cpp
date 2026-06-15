@@ -128,7 +128,7 @@ DiffStats diff(const QImage& a, const QImage& b) {
 
 struct Scenario {
     const char* name;
-    AdjustmentParams params;
+    GlobalAdjustment params;
 };
 
 std::vector<Scenario> scenarios() {
@@ -136,7 +136,7 @@ std::vector<Scenario> scenarios() {
 
     list.push_back({"neutral", {}});
 
-    AdjustmentParams p;
+    GlobalAdjustment p;
     p.exposure = 1.5f;
     list.push_back({"exposure_plus15ev", p});
 
@@ -238,7 +238,7 @@ TEST_CASE("a local exposure mask brightens only the masked region",
     scene.height = 48;
     scene.data.assign(size_t(scene.width) * scene.height * 3, 0.3f);
 
-    AdjustmentParams p;
+    GlobalAdjustment p;
     LocalAdjustment la;
     // Vertical gradient line near centre: left of x=0.4 → weight 0,
     // right of x=0.6 → weight 1.
@@ -278,7 +278,7 @@ TEST_CASE("clipping overlay matches golden render", "[gpu][golden]") {
     if (update)
         QDir().mkpath(goldenDir);
 
-    AdjustmentParams p;   // neutral: clipping reflects the scene itself
+    GlobalAdjustment p;   // neutral: clipping reflects the scene itself
     vp->setAdjustments(p);
     const QImage got = vp->renderClipSample(scene, p, /*highlights=*/true,
                                             /*shadows=*/true);

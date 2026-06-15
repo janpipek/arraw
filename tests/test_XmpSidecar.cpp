@@ -13,8 +13,8 @@ namespace {
 constexpr double kScalarTol = 1e-4;
 constexpr double kCurveTol  = 0.5 / 255.0;
 
-AdjustmentParams sampleParams() {
-    AdjustmentParams p;
+GlobalAdjustment sampleParams() {
+    GlobalAdjustment p;
     p.exposure    = 1.25f;
     p.contrast    = -30.0f;
     p.highlights  = -55.5f;
@@ -39,7 +39,7 @@ AdjustmentParams sampleParams() {
     return p;
 }
 
-void checkClose(const AdjustmentParams& a, const AdjustmentParams& b) {
+void checkClose(const GlobalAdjustment& a, const GlobalAdjustment& b) {
     CHECK_THAT(a.exposure,    WithinAbs(b.exposure,    kScalarTol));
     CHECK_THAT(a.contrast,    WithinAbs(b.contrast,    kScalarTol));
     CHECK_THAT(a.highlights,  WithinAbs(b.highlights,  kScalarTol));
@@ -80,7 +80,7 @@ TEST_CASE("sidecar path replaces the RAW extension with .xmp", "[xmp]") {
 
 TEST_CASE("missing sidecar loads default params", "[xmp]") {
     QTemporaryDir dir;
-    REQUIRE(XmpSidecar::loadAdjustments(dir.filePath("nothing-here.arw")) == AdjustmentParams{});
+    REQUIRE(XmpSidecar::loadAdjustments(dir.filePath("nothing-here.arw")) == GlobalAdjustment{});
 }
 
 TEST_CASE("save then load round-trips all params", "[xmp]") {
@@ -103,7 +103,7 @@ TEST_CASE("local adjustments round-trip through the arraw namespace",
     QTemporaryDir dir;
     const QString rawPath = dir.filePath("local.dng");
 
-    AdjustmentParams p;
+    GlobalAdjustment p;
     LocalAdjustment la;
     la.mask        = LinearMask{ {0.2, 0.5}, {0.8, 0.5} };
     la.exposure    = 0.5f;
@@ -112,7 +112,7 @@ TEST_CASE("local adjustments round-trip through the arraw namespace",
     p.localAdjustments.push_back(la);
 
     REQUIRE(XmpSidecar::saveAdjustments(rawPath, p));
-    const AdjustmentParams loaded = XmpSidecar::loadAdjustments(rawPath);
+    const GlobalAdjustment loaded = XmpSidecar::loadAdjustments(rawPath);
 
     REQUIRE(loaded.localAdjustments.size() == 1);
     const LocalAdjustment& r = loaded.localAdjustments[0];
@@ -134,7 +134,7 @@ TEST_CASE("writer emits local adjustments in the arraw namespace with relative "
     QTemporaryDir dir;
     const QString rawPath = dir.filePath("shot.arw");
 
-    AdjustmentParams p;
+    GlobalAdjustment p;
     LocalAdjustment la;
     la.mask        = LinearMask{ {0.2, 0.5}, {0.8, 0.5} };
     la.exposure    = 0.5f;
@@ -160,7 +160,7 @@ TEST_CASE("loading drops local adjustments beyond the 16-mask cap",
     QTemporaryDir dir;
     const QString rawPath = dir.filePath("many.dng");
 
-    AdjustmentParams p;
+    GlobalAdjustment p;
     for (int i = 0; i < 20; ++i) {
         LocalAdjustment la;
         la.mask     = LinearMask{ {0.0, 0.0}, {1.0, 1.0} };
@@ -185,7 +185,7 @@ TEST_CASE("default params round-trip to defaults", "[xmp]") {
 TEST_CASE("writer emits crs:Temperature in absolute Kelvin", "[xmp][crs]") {
     QTemporaryDir dir;
     const QString rawPath = dir.filePath("shot.arw");
-    AdjustmentParams p;
+    GlobalAdjustment p;
     p.temperature = 6500.0f;
     p.exposure    = 0.85f;
     REQUIRE(XmpSidecar::saveAdjustments(rawPath, p));

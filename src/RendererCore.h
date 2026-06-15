@@ -75,7 +75,7 @@ public:
         bool      gamutWarn     = false;
         bool      clipHighlights = false;   // sRGB-relative clipping overlay (docs/adr/0009)
         bool      clipShadows    = false;
-        AdjustmentParams adjustments;
+        GlobalAdjustment adjustments;
     };
 
     void initialize(QRhi* rhi);   // idempotent; re-creates on a new QRhi

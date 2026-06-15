@@ -32,7 +32,7 @@ struct CurvePoints {
     bool operator==(const CurvePoints&) const = default;
 };
 
-struct AdjustmentParams : SharedAdjustment {
+struct GlobalAdjustment : SharedAdjustment {
     // Tone (exposure, contrast, highlights, shadows, whites, blacks) and
     // tint/saturation/vibrance live in SharedAdjustment, shared with
     // LocalAdjustment (docs/adr/0010).
@@ -62,7 +62,7 @@ struct AdjustmentParams : SharedAdjustment {
     // Local adjustments — arraw-native, capped at 16 (docs/adr/0010).
     std::vector<LocalAdjustment> localAdjustments;
 
-    bool operator==(const AdjustmentParams&) const = default;
+    bool operator==(const GlobalAdjustment&) const = default;
 };
 
 // Linear float32 RGB image buffer, interleaved, [0..1] nominal.

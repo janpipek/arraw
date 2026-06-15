@@ -144,7 +144,7 @@ void ImageViewport::render(QRhiCommandBuffer* cb) {
     }
     ensureCurveLut();
 
-    const AdjustmentParams& p = showOriginal ? AdjustmentParams{} : params;
+    const GlobalAdjustment& p = showOriginal ? GlobalAdjustment{} : params;
     const float viewportAspect = float(width()) / float(height());
 
     RendererCore::FrameParams fp;
@@ -402,7 +402,7 @@ void ImageViewport::setFullResImage(const ImageBuffer& buf) {
         update();
 }
 
-void ImageViewport::setAdjustments(const AdjustmentParams& p) {
+void ImageViewport::setAdjustments(const GlobalAdjustment& p) {
     if (p.curveLuma != params.curveLuma || p.curveR != params.curveR ||
         p.curveG != params.curveG || p.curveB != params.curveB)
         curveLutDirty = true;
@@ -633,7 +633,7 @@ bool ImageViewport::hasKnownOriginalSize() const {
 // ── Offscreen export render ───────────────────────────────────────────────────
 
 QImage ImageViewport::renderToImage(const ImageBuffer& buf,
-                                     const AdjustmentParams& p,
+                                     const GlobalAdjustment& p,
                                      int outW, int outH)
 {
     if (!core.ready() || !buf.valid())
@@ -675,7 +675,7 @@ QImage ImageViewport::renderToImage(const ImageBuffer& buf,
 }
 
 QImage ImageViewport::renderClipSample(const ImageBuffer& buf,
-                                       const AdjustmentParams& p,
+                                       const GlobalAdjustment& p,
                                        bool clipHighlights, bool clipShadows)
 {
     if (!core.ready() || !buf.valid())
