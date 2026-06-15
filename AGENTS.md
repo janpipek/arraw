@@ -84,7 +84,7 @@ just clazy
 
 * **Formatter**: `clang-format` 18+ preferred. Keep formatting mechanical; do not mix broad formatting churn with behavioral changes unless the task is explicitly cleanup-focused.
 * **Warnings**: Treat compiler warnings as the primary lint baseline. Do not introduce new warnings in touched code.
-* **Qt analysis**: `clazy` is optional and advisory. Fix clear Qt correctness/performance issues, but avoid large style rewrites just to satisfy analyzer output.
+* **Qt analysis**: `clazy` is optional and advisory. `just clazy` rebuilds the application target only with tests disabled, because Catch/test diagnostics are noisy and not useful for Qt analysis. Fix clear Qt correctness/performance issues, but avoid large style rewrites just to satisfy analyzer output.
 * **Tool overrides**: set `CLANG_FORMAT` or `CLAZY` if the local binaries are versioned, for example `CLANG_FORMAT=clang-format-18 just format-check`.
 
 ---

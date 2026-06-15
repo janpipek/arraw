@@ -1,7 +1,10 @@
 cmake_minimum_required(VERSION 3.21)
 project(arraw VERSION 0.1.0 LANGUAGES CXX)
 
-enable_testing()
+option(ARRAW_BUILD_TESTS "Build arraw tests" ON)
+if(ARRAW_BUILD_TESTS)
+    enable_testing()
+endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -106,4 +109,6 @@ arraw_enable_warnings(arraw)
 
 target_link_libraries(arraw PRIVATE arraw_core)
 
-add_subdirectory(tests)
+if(ARRAW_BUILD_TESTS)
+    add_subdirectory(tests)
+endif()

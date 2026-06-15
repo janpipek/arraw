@@ -19,8 +19,9 @@ format-check:
     find src tests \( -name '*.cpp' -o -name '*.h' \) -print | xargs {{clang_format}} --dry-run --Werror
 
 clazy:
-    cmake -B build-clazy -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER={{clazy}} {{qt_flag}}
-    ninja -C build-clazy
+    cmake -B build-clazy -G Ninja -DCMAKE_BUILD_TYPE=Debug -DARRAW_BUILD_TESTS=OFF -DCMAKE_CXX_COMPILER={{clazy}} {{qt_flag}}
+    ninja -C build-clazy -t clean arraw
+    ninja -C build-clazy arraw
 
 release:
     cmake -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release {{qt_flag}}
