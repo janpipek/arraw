@@ -151,10 +151,22 @@ void LocalAdjustmentPanel::setActiveIndex(int index) {
 
 void LocalAdjustmentPanel::setLocalAdjustments(
         const std::vector<LocalAdjustment>& list) {
+    const int prev = activeIndex();
     adjustments = list;
     committedState = list;
     rebuildList();
-    setActiveIndex(adjustments.empty() ? -1 : 0);
+    // Preserve the current selection where possible — a commit pushes an undo
+    // command whose redo() re-applies the list, and that must not yank the
+    // selection back to the first mask. Empty list -> nothing selected; an
+    // unset/out-of-range prior selection clamps to the first mask (e.g. load).
+    const int sel = list.empty() ? -1
+                                  : std::clamp(prev, 0, int(list.size()) - 1);
+    setActiveIndex(sel);
+    emit changed(adjustments);   // re-render on load and undo/redo (mirrors setParams)
+}
+
+void LocalAdjustmentPanel::commitMaskEdit() {
+    commit();   // fold an on-image drag gesture into a single undo step
 }
 
 void LocalAdjustmentPanel::addLinearMask() {

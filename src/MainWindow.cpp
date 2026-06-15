@@ -60,6 +60,25 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+// Undo command for local adjustments — add / delete / move-handle / tweak.
+// Restores the whole list (which re-renders), mirroring AdjustmentCommand.
+// ---------------------------------------------------------------------------
+class LocalAdjustmentCommand : public QUndoCommand {
+public:
+    LocalAdjustmentCommand(LocalAdjustmentPanel* panel,
+                           std::vector<LocalAdjustment> before,
+                           std::vector<LocalAdjustment> after)
+        : panel(panel), before(std::move(before)), after(std::move(after)) {}
+
+    void undo() override { panel->setLocalAdjustments(before); }
+    void redo() override { panel->setLocalAdjustments(after);  }
+
+private:
+    LocalAdjustmentPanel* panel;
+    std::vector<LocalAdjustment> before, after;
+};
+
+// ---------------------------------------------------------------------------
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     setWindowTitle("arraw");
 
@@ -134,6 +153,17 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             viewport, &ImageViewport::setActiveLocalAdjustment);
     connect(viewport, &ImageViewport::localMaskChanged,
             localPanel, &LocalAdjustmentPanel::updateMaskGeometry);
+
+    // Local edits join the shared undo stack: add / delete / tweak / numeric
+    // geometry all commit through the panel; an on-image handle drag commits on
+    // release.
+    connect(localPanel, &LocalAdjustmentPanel::committed, this,
+            [this](const std::vector<LocalAdjustment>& before,
+                   const std::vector<LocalAdjustment>& after) {
+                undoStack->push(new LocalAdjustmentCommand(localPanel, before, after));
+            });
+    connect(viewport, &ImageViewport::localMaskEditFinished,
+            localPanel, &LocalAdjustmentPanel::commitMaskEdit);
 
     connect(viewport, &ImageViewport::histogramsReady,
             adjPanel, &AdjustmentPanel::setHistogramSamples);

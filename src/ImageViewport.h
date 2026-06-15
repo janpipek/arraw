@@ -84,6 +84,8 @@ signals:
     void activeToolChanged(ImageViewport::ActiveTool tool);
     // Live geometry of the active Linear mask while its handles are dragged.
     void localMaskChanged(int index, const LinearMask& mask);
+    // A handle drag finished — fold it into one undo step.
+    void localMaskEditFinished();
     void zoomChanged(float pixelZoom);
     // Small shader-rendered samples for histogramming (docs/adr/0004):
     // finalSample is the full pipeline, curveInputSample stops after tone

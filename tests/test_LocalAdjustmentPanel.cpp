@@ -56,3 +56,34 @@ TEST_CASE("panel round-trips a set list, selects first, and deletes",
     panel.deleteActive();
     REQUIRE(panel.localAdjustments().size() == 1);
 }
+
+TEST_CASE("panel emits committed for each undoable gesture", "[localadj][panel]") {
+    testApp();
+    LocalAdjustmentPanel panel;
+
+    int commits = 0;
+    std::vector<LocalAdjustment> lastBefore, lastAfter;
+    QObject::connect(&panel, &LocalAdjustmentPanel::committed, &panel,
+        [&](const std::vector<LocalAdjustment>& before,
+            const std::vector<LocalAdjustment>& after) {
+            ++commits;
+            lastBefore = before;
+            lastAfter = after;
+        });
+
+    panel.addLinearMask();                  // add
+    REQUIRE(commits == 1);
+    REQUIRE(lastBefore.empty());
+    REQUIRE(lastAfter.size() == 1);
+
+    // Simulate an on-image drag: geometry changes (no commit), then release.
+    panel.updateMaskGeometry(0, LinearMask{{0.1, 0.1}, {0.4, 0.4}});
+    REQUIRE(commits == 1);                  // drag is live-only until released
+    panel.commitMaskEdit();                 // release folds it into one step
+    REQUIRE(commits == 2);
+    REQUIRE(std::get<LinearMask>(lastAfter[0].mask).p1 == QPointF(0.4, 0.4));
+
+    panel.deleteActive();                   // delete
+    REQUIRE(commits == 3);
+    REQUIRE(lastAfter.empty());
+}

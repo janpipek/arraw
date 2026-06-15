@@ -900,7 +900,10 @@ void ImageViewport::mouseReleaseEvent(QMouseEvent* e) {
         return;
     }
     if (localMaskMode() && e->button() == Qt::LeftButton) {
-        localDragHandle = LinearHandle::None;
+        if (localDragHandle != LinearHandle::None) {
+            localDragHandle = LinearHandle::None;
+            emit localMaskEditFinished();   // one undo step per drag gesture
+        }
         return;
     }
     dragging = false;

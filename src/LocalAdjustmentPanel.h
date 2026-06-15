@@ -35,6 +35,8 @@ public:
 public slots:
     void addLinearMask();
     void deleteActive();
+    // Commit a finished on-image drag as one undo step (called on mouse release).
+    void commitMaskEdit();
 
 signals:
     void changed(const std::vector<LocalAdjustment>& list);     // live (slider drag)
