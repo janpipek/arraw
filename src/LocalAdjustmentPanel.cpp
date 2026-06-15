@@ -163,6 +163,7 @@ void LocalAdjustmentPanel::addLinearMask() {
     adjustments.push_back(la);
     rebuildList();
     setActiveIndex(int(adjustments.size()) - 1);
+    emit changed(adjustments);   // push the new list to the viewport (draw handles)
     commit();
 }
 
@@ -173,6 +174,7 @@ void LocalAdjustmentPanel::deleteActive() {
     adjustments.erase(adjustments.begin() + i);
     rebuildList();
     setActiveIndex(std::min(i, int(adjustments.size()) - 1));
+    emit changed(adjustments);   // push the updated list to the viewport
     commit();
 }
 
