@@ -222,3 +222,47 @@ TEST_CASE("shader pipeline matches golden renders", "[gpu][golden]") {
         }
     }
 }
+
+// Clipping overlay (docs/adr/0009): rendered through the display path (sRGB
+// encode) with both overlays on. The synthetic scene spans pure white, near
+// black, and saturated single-channel bars, so this one golden locks the
+// any-channel rule, the red/blue colours, and highlight-wins-over-shadow ties.
+TEST_CASE("clipping overlay matches golden render", "[gpu][golden]") {
+    ImageViewport* vp = goldenViewport();
+    if (!vp)
+        SKIP("no OpenGL context available on this machine");
+
+    const ImageBuffer scene = syntheticScene();
+    const bool update = qEnvironmentVariableIsSet("ARRAW_UPDATE_GOLDENS");
+    const QString goldenDir = QStringLiteral(ARRAW_FIXTURE_DIR "/golden");
+    if (update)
+        QDir().mkpath(goldenDir);
+
+    AdjustmentParams p;   // neutral: clipping reflects the scene itself
+    vp->setAdjustments(p);
+    const QImage got = vp->renderClipSample(scene, p, /*highlights=*/true,
+                                            /*shadows=*/true);
+    REQUIRE_FALSE(got.isNull());
+    REQUIRE(got.format() == QImage::Format_RGBX32FPx4);
+
+    const QString path = goldenDir + "/clipping_both.pfm";
+    if (update) {
+        REQUIRE(writePfm(path, got));
+        SUCCEED("golden updated: clipping_both");
+        return;
+    }
+
+    const QImage want = readPfm(path);
+    INFO("golden: " << path.toStdString()
+         << " (regenerate with ARRAW_UPDATE_GOLDENS=1)");
+    REQUIRE_FALSE(want.isNull());
+    REQUIRE(want.size() == got.size());
+
+    const DiffStats d = diff(got, want);
+    INFO("maxDiff=" << d.maxDiff * 255.0f << "/255, meanDiff=("
+         << d.meanDiff[0] * 255.0f << ", " << d.meanDiff[1] * 255.0f
+         << ", " << d.meanDiff[2] * 255.0f << ")/255");
+    CHECK(d.maxDiff <= kMaxPixelDiff);
+    for (int c = 0; c < 3; ++c)
+        CHECK(std::abs(d.meanDiff[c]) <= kMaxChannelMean);
+}

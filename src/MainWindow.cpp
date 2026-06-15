@@ -154,6 +154,8 @@ void MainWindow::keyPressEvent(QKeyEvent* e) {
     else if (e->key() == Qt::Key_Right) filmStrip->navigateBy(+1);
     else if (e->key() == Qt::Key_S && e->modifiers() == Qt::NoModifier)
         proofPanel->setProofingEnabled(!proofPanel->proofingEnabled());
+    else if (e->key() == Qt::Key_J && e->modifiers() == Qt::NoModifier)
+        toggleClipping();
     else QMainWindow::keyPressEvent(e);
 }
 
@@ -179,6 +181,23 @@ void MainWindow::setupMenus() {
     view->addSeparator();
     view->addAction("Reset Zoom", Qt::CTRL | Qt::Key_0,
                     viewport, &ImageViewport::resetView);
+    view->addSeparator();
+
+    // Clipping overlay (docs/adr/0009). Two independent toggles; J (handled in
+    // keyPressEvent) flips both at once. View state, persisted in QSettings.
+    QSettings clipSettings;
+    clipHighlightsAction = view->addAction("Show &Highlight Clipping");
+    clipHighlightsAction->setCheckable(true);
+    clipHighlightsAction->setChecked(
+        clipSettings.value("view/clipHighlights", false).toBool());
+    connect(clipHighlightsAction, &QAction::toggled, this, &MainWindow::applyClipping);
+
+    clipShadowsAction = view->addAction("Show &Shadow Clipping");
+    clipShadowsAction->setCheckable(true);
+    clipShadowsAction->setChecked(
+        clipSettings.value("view/clipShadows", false).toBool());
+    connect(clipShadowsAction, &QAction::toggled, this, &MainWindow::applyClipping);
+    applyClipping();   // push the restored state to the viewport
     view->addSeparator();
 
     // Monitor profile: how the preview is encoded for this screen.
@@ -545,6 +564,23 @@ void MainWindow::setLoadingState(bool loading) {
     statusLabel->setText(loading
         ? QString("Loading %1...").arg(QFileInfo(currentPath).fileName())
         : QString());
+}
+
+void MainWindow::applyClipping() {
+    const bool hi = clipHighlightsAction->isChecked();
+    const bool sh = clipShadowsAction->isChecked();
+    viewport->setClipWarnings(hi, sh);
+    QSettings s;
+    s.setValue("view/clipHighlights", hi);
+    s.setValue("view/clipShadows", sh);
+}
+
+void MainWindow::toggleClipping() {
+    // J: if either overlay is on, turn both off; otherwise turn both on.
+    const bool anyOn = clipHighlightsAction->isChecked() ||
+                       clipShadowsAction->isChecked();
+    clipHighlightsAction->setChecked(!anyOn);
+    clipShadowsAction->setChecked(!anyOn);   // toggled() drives applyClipping()
 }
 
 void MainWindow::rebuildDisplayLut() {

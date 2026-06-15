@@ -54,6 +54,29 @@ A preview mode that temporarily replaces the display transform with a simulation
 a printer/paper profile, so the screen predicts the print.
 _Avoid_: print preview, proof mode
 
+**Clipping**:
+A pixel where at least one channel hits the limit of the sRGB display range —
+≥ 1.0 is highlight clipping (detail lost to white), ≤ 0.0 is shadow clipping
+(detail lost to black). Judged at the [[Display transform]], sRGB-relative,
+the same way regardless of [[Soft-proofing]]. A tonal concern, distinct from
+the [[Gamut Warning]], which is about chroma.
+_Avoid_: extremes (the branch name, not the domain term), blown/crushed
+(informal), gamut warning
+
+**Clipping Overlay**:
+The preview mode that paints clipped pixels onto the image — highlight
+[[Clipping]] in red, shadow clipping in blue — so lost detail is visible while
+developing. Highlight red wins where a pixel clips both ways, and over the
+[[Gamut Warning]] red. Highlights and shadows are two independent toggles
+(`J` flips both at once); view state in QSettings, never in the sidecar.
+_Avoid_: show extremes, zebra, clipping mask
+
+**Gamut Warning**:
+A [[Soft-proofing]]-only overlay (red) marking pixels whose colour falls
+outside the proofed output profile's gamut — a chroma-reproduction warning,
+not a tonal one. Distinct from [[Clipping]].
+_Avoid_: clipping, out-of-range
+
 **Tone Curve**:
 A user-editable remapping of gamma-encoded (display-space) values, defined by
 control points in [0,1]². One Luma Curve plus three Channel Curves per image.

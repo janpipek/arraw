@@ -157,6 +157,8 @@ void ImageViewport::render(QRhiCommandBuffer* cb) {
     fp.curveInput    = false;
     fp.useLut        = useDisplayLut;
     fp.gamutWarn     = gamutWarn;
+    fp.clipHighlights = clipHighlights;
+    fp.clipShadows    = clipShadows;
     fp.adjustments   = p;
 
     core.record(cb, renderTarget(), activeSlot(), fp);
@@ -575,6 +577,14 @@ void ImageViewport::setGamutWarning(bool on) {
     update();
 }
 
+void ImageViewport::setClipWarnings(bool highlights, bool shadows) {
+    if (clipHighlights == highlights && clipShadows == shadows)
+        return;
+    clipHighlights = highlights;
+    clipShadows    = shadows;
+    update();
+}
+
 void ImageViewport::resetView() {
     setZoom(fitZoom());
     pan = {0, 0};
@@ -647,6 +657,8 @@ QImage ImageViewport::renderToImage(const ImageBuffer& buf,
     fp.curveInput    = false;
     fp.useLut        = false;
     fp.gamutWarn     = false;
+    fp.clipHighlights = false;   // overlays never leak into the export readback
+    fp.clipShadows    = false;
     fp.adjustments   = p;
 
     QImage result = core.renderOffscreen(buf, fp, QSize(cropW, cropH),
@@ -660,6 +672,38 @@ QImage ImageViewport::renderToImage(const ImageBuffer& buf,
         result = result.scaled(outW, outH, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
 
     return result;
+}
+
+QImage ImageViewport::renderClipSample(const ImageBuffer& buf,
+                                       const AdjustmentParams& p,
+                                       bool clipHighlights, bool clipShadows)
+{
+    if (!core.ready() || !buf.valid())
+        return {};
+
+    ensureCurveLut();
+
+    // The on-screen display path (sRGB encode, monitor/proof LUT off) so the
+    // clipping overlay actually runs — renderToImage uses the linear export
+    // path where it is forced off. Used by the clipping golden test (adr/0009).
+    const QRectF& cr = p.cropRect;
+    const int cropW = qMax(1, int(cr.width()  * buf.width  + 0.5f));
+    const int cropH = qMax(1, int(cr.height() * buf.height + 0.5f));
+
+    RendererCore::FrameParams fp;
+    fp.transform      = QVector4D(1.0f, 1.0f, 0.0f, 0.0f);
+    fp.cropRect       = cr;
+    fp.aspect         = float(buf.width) / float(buf.height);
+    fp.baseLook       = true;
+    fp.displayEncode  = true;
+    fp.curveInput     = false;
+    fp.useLut         = false;
+    fp.gamutWarn      = false;
+    fp.clipHighlights = clipHighlights;
+    fp.clipShadows    = clipShadows;
+    fp.adjustments    = p;
+
+    return core.renderOffscreen(buf, fp, QSize(cropW, cropH), QRhiTexture::RGBA32F);
 }
 
 // ── Histogram readback (docs/adr/0004) ────────────────────────────────────────
@@ -689,6 +733,8 @@ void ImageViewport::renderHistograms() {
     fp.displayEncode = true;
     fp.useLut        = false;
     fp.gamutWarn     = false;
+    fp.clipHighlights = false;   // overlays never poison the histogram readback
+    fp.clipShadows    = false;
     fp.adjustments   = params;
 
     fp.curveInput = true;

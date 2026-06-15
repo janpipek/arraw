@@ -248,6 +248,11 @@ that file is the source of truth; keep this list in sync with it.
                        (soft-proofing and/or monitor ICC profile; LUT alpha
                        carries the in-gamut flag for the gamut warning)
                      u.displayEncode off (export): clamped linear working space
+                     Clipping overlay (u.clipWarn, on-screen only — forced off
+                       for export and histogram readbacks): judged sRGB-relative
+                       from the pre-clamp value, painted last so it wins over the
+                       gamut warning. Any channel ≥1 → red, ≤0 → blue, red wins
+                       ties (docs/adr/0009)
 ```
 
 **Export only — CPU, after the offscreen readback (`MainWindow::exportFile`)**
@@ -306,6 +311,7 @@ for the panel histogram, and a "stop after tone regions, gamma-encode" pass
 | `Escape` | Cancel crop |
 | `\` (hold) | Before/after toggle |
 | `S` | Toggle soft-proofing |
+| `J` | Toggle clipping overlay (highlights + shadows) |
 | `R` | Reset all adjustments |
 
 ---
@@ -318,6 +324,8 @@ for the panel histogram, and a "stop after tone regions, gamma-encode" pass
   on close, restored on launch.
 - **Color settings**: export profile + bit depth, soft-proofing configuration,
   monitor profile — via `QSettings` (view/export state, never in the sidecar).
+- **Clipping overlay**: the two toggles (`view/clipHighlights`, `view/clipShadows`)
+  — view state via `QSettings`, never in the sidecar (docs/adr/0009).
 
 ---
 
