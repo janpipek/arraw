@@ -1,6 +1,7 @@
 #include "LocalAdjustment.h"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 
 namespace {
@@ -49,6 +50,42 @@ LinearHandle nearestHandle(const LinearMask& m, QPointF cursor, float aspect,
         }
     }
     return bestDist2 <= pickRadius * pickRadius ? best : LinearHandle::None;
+}
+
+float radialMaskWeight(const RadialMask& m, QPointF uv, float aspect) {
+    // Aspect-correct (x scaled by aspect) so equal radii read as a circle on
+    // screen, then un-rotate by the mask angle and normalise by the radii.
+    double dx = (uv.x() - m.center.x()) * aspect;
+    double dy = uv.y() - m.center.y();
+    if (m.angle != 0.0) {
+        constexpr double kPi = 3.14159265358979323846;
+        const double rad = m.angle * kPi / 180.0;
+        const double c = std::cos(rad);
+        const double s = std::sin(rad);
+        const double rotX = dx * c + dy * s;   // rotate by -angle
+        const double rotY = -dx * s + dy * c;
+        dx = rotX;
+        dy = rotY;
+    }
+    if (m.radiusX <= 0.0 || m.radiusY <= 0.0)
+        return 0.0f;
+    const double nx = dx / m.radiusX;
+    const double ny = dy / m.radiusY;
+    const double d = std::sqrt(nx * nx + ny * ny);
+
+    // Weight 1 for d ≤ inner, smoothstep to 0 at the boundary (d = 1).
+    const double inner = 1.0 - m.feather;
+    double s;
+    if (m.feather <= 0.0) {
+        s = d >= 1.0 ? 1.0 : 0.0;   // hard edge
+    } else {
+        const double t = std::clamp((d - inner) / m.feather, 0.0, 1.0);
+        s = t * t * (3.0 - 2.0 * t);
+    }
+    double w = 1.0 - s;             // affect inside
+    if (m.invert)
+        w = 1.0 - w;
+    return static_cast<float>(w);
 }
 
 LinearMask moveHandle(LinearMask m, LinearHandle h, QPointF to) {

@@ -35,6 +35,47 @@ TEST_CASE("Linear mask weight is evaluated in aspect-corrected space", "[localad
     REQUIRE_THAT(maskWeight(m, {1.0, 0.0}, 2.0f), WithinAbs(0.896, 1e-6));
 }
 
+TEST_CASE("Radial mask weight is 1 inside, ramps to 0 at the boundary",
+          "[localadj]") {
+    // Circle (rx=ry=0.4) centred, feather 0.5 → full weight out to half-radius
+    // (inner = 0.5), smoothstep to 0 at the edge.
+    RadialMask m{ .center = {0.5, 0.5}, .radiusX = 0.4, .radiusY = 0.4,
+                  .angle = 0.0, .feather = 0.5, .invert = false };
+
+    REQUIRE_THAT(radialMaskWeight(m, {0.5, 0.5}, 1.0f), WithinAbs(1.0, 1e-6));  // centre
+    REQUIRE_THAT(radialMaskWeight(m, {0.8, 0.5}, 1.0f), WithinAbs(0.5, 1e-6));  // d=0.75
+    REQUIRE_THAT(radialMaskWeight(m, {1.0, 0.5}, 1.0f), WithinAbs(0.0, 1e-6));  // d=1.25, outside
+}
+
+TEST_CASE("Radial mask invert flips inside and outside", "[localadj]") {
+    RadialMask m{ .center = {0.5, 0.5}, .radiusX = 0.4, .radiusY = 0.4,
+                  .angle = 0.0, .feather = 0.5, .invert = true };
+
+    REQUIRE_THAT(radialMaskWeight(m, {0.5, 0.5}, 1.0f), WithinAbs(0.0, 1e-6));  // centre now 0
+    REQUIRE_THAT(radialMaskWeight(m, {0.8, 0.5}, 1.0f), WithinAbs(0.5, 1e-6));
+    REQUIRE_THAT(radialMaskWeight(m, {1.0, 0.5}, 1.0f), WithinAbs(1.0, 1e-6));  // outside now 1
+}
+
+TEST_CASE("Radial mask honours rotation angle", "[localadj]") {
+    // rx=0.4 (long axis), ry=0.2; rotated 90° so the long axis runs vertically.
+    RadialMask m{ .center = {0.5, 0.5}, .radiusX = 0.4, .radiusY = 0.2,
+                  .angle = 90.0, .feather = 0.0, .invert = false };
+
+    // Straight up by 0.5 (d=1.25 on the rotated long axis) is outside.
+    REQUIRE_THAT(radialMaskWeight(m, {0.5, 1.0}, 1.0f), WithinAbs(0.0, 1e-6));
+    // Up by 0.2 is well inside the rotated long axis (d=0.5).
+    REQUIRE_THAT(radialMaskWeight(m, {0.5, 0.7}, 1.0f), WithinAbs(1.0, 1e-6));
+}
+
+TEST_CASE("Radial mask weight is aspect-corrected", "[localadj]") {
+    RadialMask m{ .center = {0.5, 0.5}, .radiusX = 0.4, .radiusY = 0.4,
+                  .angle = 0.0, .feather = 0.0, .invert = false };
+    // aspect=2 scales x by 2: a 0.3 step in x reaches d=1.5 (outside).
+    REQUIRE_THAT(radialMaskWeight(m, {0.8, 0.5}, 2.0f), WithinAbs(0.0, 1e-6));
+    // At aspect=1 the same point is well inside (d=0.75).
+    REQUIRE_THAT(radialMaskWeight(m, {0.8, 0.5}, 1.0f), WithinAbs(1.0, 1e-6));
+}
+
 TEST_CASE("nearestHandle picks the closest endpoint or the derived center",
           "[localadj]") {
     LinearMask m{ .p0 = {0.2, 0.5}, .p1 = {0.8, 0.5} };  // center = (0.5, 0.5)

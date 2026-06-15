@@ -15,10 +15,25 @@ struct LinearMask {
     bool operator==(const LinearMask&) const = default;
 };
 
+// A Radial (oval) mask. Geometry is normalised display-frame coords; the radii
+// and angle live in aspect-corrected space so the oval looks as drawn on screen.
+// Weight is 1 inside, ramping to 0 at the boundary over `feather` (smoothstep);
+// `invert` flips inside/outside (docs/adr/0010).
+struct RadialMask {
+    QPointF center{0.5, 0.5};
+    double  radiusX = 0.25;
+    double  radiusY = 0.25;
+    double  angle   = 0.0;     // degrees
+    double  feather = 0.5;     // 0..1 falloff band
+    bool    invert  = false;
+    bool operator==(const RadialMask&) const = default;
+};
+
 // The kind of parametric mask. Each alternative is a small value struct with its
-// own geometry; a new mask type is an additive new arm (Radial next). The GPU
-// flattens whichever arm into a type-tagged uniform slot (docs/adr/0010).
-using Mask = std::variant<LinearMask>;
+// own geometry; a new mask type is an additive new arm. The GPU flattens
+// whichever arm into a type-tagged uniform slot (docs/adr/0010). LinearMask stays
+// first so a default-constructed Mask is Linear.
+using Mask = std::variant<LinearMask, RadialMask>;
 
 // The dodge/burn + colour-grade scalar subset shared by global and local develop
 // edits (docs/adr/0010). Zero = no change for every field. `exposure` is in EV;
@@ -59,6 +74,10 @@ enum class LinearHandle { None, P0, P1, Center };
 // circle is round on screen.
 LinearHandle nearestHandle(const LinearMask& m, QPointF cursor, float aspect,
                            double pickRadius);
+
+// Radial (oval) mask weight in [0,1] for a pixel at normalised display-frame UV
+// `uv`. Aspect-corrected so the oval is round-on-screen when radiusX == radiusY.
+float radialMaskWeight(const RadialMask& m, QPointF uv, float aspect);
 
 // Reposition a handle of `m` so it lands on `to` (normalised display coords).
 // P0/P1 move that endpoint; Center translates both points (preserving
