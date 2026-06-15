@@ -383,7 +383,11 @@ void MainWindow::setupDocks() {
     // doesn't restore the strip to the side.
     filmStripDock->setObjectName("FilmStripDockBottom");
     filmStripDock->setAllowedAreas(Qt::TopDockWidgetArea | Qt::BottomDockWidgetArea);
-    filmStripDock->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable);
+    // Closable so toggleViewAction() (View → Film Strip, F9) is enabled; the
+    // custom title bar below replaces the default one, so no close button shows.
+    filmStripDock->setFeatures(QDockWidget::DockWidgetMovable
+                             | QDockWidget::DockWidgetFloatable
+                             | QDockWidget::DockWidgetClosable);
 
     filmStrip = new FilmStrip(filmStripDock);
     filmStrip->setMinimumHeight(80);
