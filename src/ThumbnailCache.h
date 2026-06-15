@@ -1,6 +1,6 @@
 #pragma once
-#include <QObject>
 #include <QImage>
+#include <QObject>
 #include <QSet>
 #include <QString>
 

@@ -1,23 +1,34 @@
 #include "RendererCore.h"
-#include <QFile>
 #include <cstring>
+#include <QFile>
 
 // Fullscreen quad, interleaved (x, y, u, v). V is flipped (bottom vertices get
 // v=1) because NDC Y points up (GL convention, kept by QRhi) while image row 0
 // is the top. Backend NDC differences are absorbed by clipCorr in image.vert.
 static const float kQuad[] = {
-    -1, -1,   0, 1,
-     1, -1,   1, 1,
-    -1,  1,   0, 0,
-     1,  1,   1, 0,
+    -1,
+    -1,
+    0,
+    1,
+    1,
+    -1,
+    1,
+    1,
+    -1,
+    1,
+    0,
+    0,
+    1,
+    1,
+    1,
+    0,
 };
 
 static const QColor kClearColor = QColor::fromRgbF(0.15f, 0.15f, 0.15f);
 
 static QShader loadShader(const QString& path) {
     QFile f(path);
-    return f.open(QIODevice::ReadOnly) ? QShader::fromSerialized(f.readAll())
-                                       : QShader();
+    return f.open(QIODevice::ReadOnly) ? QShader::fromSerialized(f.readAll()) : QShader();
 }
 
 void RendererCore::initialize(QRhi* r) {
@@ -30,20 +41,20 @@ void RendererCore::initialize(QRhi* r) {
     vs = loadShader(QStringLiteral(":/shaders/image.vert.qsb"));
     fs = loadShader(QStringLiteral(":/shaders/image.frag.qsb"));
 
-    vbuf.reset(rhi->newBuffer(QRhiBuffer::Immutable, QRhiBuffer::VertexBuffer,
-                              sizeof(kQuad)));
+    vbuf.reset(rhi->newBuffer(QRhiBuffer::Immutable, QRhiBuffer::VertexBuffer, sizeof(kQuad)));
     vbuf->create();
     needQuadUpload = true;
 
-    ubuf.reset(rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer,
-                              sizeof(Ubuf)));
+    ubuf.reset(rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, sizeof(Ubuf)));
     ubuf->create();
 
-    sampler.reset(rhi->newSampler(QRhiSampler::Linear, QRhiSampler::Linear,
-                                  QRhiSampler::None,
-                                  QRhiSampler::ClampToEdge,
-                                  QRhiSampler::ClampToEdge,
-                                  QRhiSampler::ClampToEdge));
+    sampler.reset(rhi->newSampler(
+        QRhiSampler::Linear,
+        QRhiSampler::Linear,
+        QRhiSampler::None,
+        QRhiSampler::ClampToEdge,
+        QRhiSampler::ClampToEdge,
+        QRhiSampler::ClampToEdge));
     sampler->create();
 
     curveLutTex.reset(rhi->newTexture(QRhiTexture::RGBA32F, QSize(256, 1)));
@@ -140,17 +151,15 @@ void RendererCore::flushPendingUploads(QRhiResourceUpdateBatch* batch) {
         if (!pendingImageDirty[i])
             continue;
         if (!imageTex[i] || imageTex[i]->pixelSize() != pendingImage[i].size) {
-            imageTex[i].reset(rhi->newTexture(QRhiTexture::RGBA32F,
-                                              pendingImage[i].size));
+            imageTex[i].reset(rhi->newTexture(QRhiTexture::RGBA32F, pendingImage[i].size));
             imageTex[i]->create();
             ++generation;
         }
         batch->uploadTexture(
             imageTex[i].get(),
             QRhiTextureUploadDescription(QRhiTextureUploadEntry(
-                0, 0,
-                QRhiTextureSubresourceUploadDescription(pendingImage[i].rgba))));
-        pendingImage[i] = {};   // the batch shares the byte array
+                0, 0, QRhiTextureSubresourceUploadDescription(pendingImage[i].rgba))));
+        pendingImage[i] = {}; // the batch shares the byte array
         pendingImageDirty[i] = false;
     }
 
@@ -160,28 +169,28 @@ void RendererCore::flushPendingUploads(QRhiResourceUpdateBatch* batch) {
             qsizetype(pendingCurveLut.size() * sizeof(float)));
         batch->uploadTexture(
             curveLutTex.get(),
-            QRhiTextureUploadDescription(QRhiTextureUploadEntry(
-                0, 0, QRhiTextureSubresourceUploadDescription(data))));
+            QRhiTextureUploadDescription(
+                QRhiTextureUploadEntry(0, 0, QRhiTextureSubresourceUploadDescription(data))));
         curveLutDirty = false;
     }
 
     if (displayLutDirty) {
         const int n = pendingDisplayLut.size;
         if (!displayLutTex || displayLutTex->pixelSize() != QSize(n, n)) {
-            displayLutTex.reset(rhi->newTexture(QRhiTexture::RGBA32F, n, n, n, 1,
-                                                QRhiTexture::ThreeDimensional));
+            displayLutTex.reset(
+                rhi->newTexture(QRhiTexture::RGBA32F, n, n, n, 1, QRhiTexture::ThreeDimensional));
             displayLutTex->create();
             ++generation;
         }
         // One upload entry per depth slice (layer = z for 3D textures).
         const qsizetype sliceBytes = qsizetype(n) * n * 4 * sizeof(float);
-        const char* base =
-            reinterpret_cast<const char*>(pendingDisplayLut.data.data());
+        const char* base = reinterpret_cast<const char*>(pendingDisplayLut.data.data());
         std::vector<QRhiTextureUploadEntry> entries;
         entries.reserve(n);
         for (int z = 0; z < n; ++z)
             entries.emplace_back(
-                z, 0,
+                z,
+                0,
                 QRhiTextureSubresourceUploadDescription(
                     QByteArray(base + z * sliceBytes, sliceBytes)));
         QRhiTextureUploadDescription desc;
@@ -195,8 +204,7 @@ void RendererCore::flushPendingUploads(QRhiResourceUpdateBatch* batch) {
         batch->uploadTexture(
             extraUploadTex,
             QRhiTextureUploadDescription(QRhiTextureUploadEntry(
-                0, 0,
-                QRhiTextureSubresourceUploadDescription(extraUploadData))));
+                0, 0, QRhiTextureSubresourceUploadDescription(extraUploadData))));
         extraUploadTex = nullptr;
         extraUploadData = {};
     }
@@ -212,17 +220,14 @@ QRhiShaderResourceBindings* RendererCore::bindingsFor(QRhiTexture* tex) {
     srb->setBindings({
         QRhiShaderResourceBinding::uniformBuffer(
             0,
-            QRhiShaderResourceBinding::VertexStage |
-                QRhiShaderResourceBinding::FragmentStage,
+            QRhiShaderResourceBinding::VertexStage | QRhiShaderResourceBinding::FragmentStage,
             ubuf.get()),
         QRhiShaderResourceBinding::sampledTexture(
             1, QRhiShaderResourceBinding::FragmentStage, tex, sampler.get()),
         QRhiShaderResourceBinding::sampledTexture(
-            2, QRhiShaderResourceBinding::FragmentStage, curveLutTex.get(),
-            sampler.get()),
+            2, QRhiShaderResourceBinding::FragmentStage, curveLutTex.get(), sampler.get()),
         QRhiShaderResourceBinding::sampledTexture(
-            3, QRhiShaderResourceBinding::FragmentStage, displayLutTex.get(),
-            sampler.get()),
+            3, QRhiShaderResourceBinding::FragmentStage, displayLutTex.get(), sampler.get()),
     });
     srb->create();
     srbImageTex = tex;
@@ -238,8 +243,7 @@ QRhiGraphicsPipeline* RendererCore::pipelineFor(QRhiRenderPassDescriptor* rpDesc
 
     auto pipe = std::unique_ptr<QRhiGraphicsPipeline>(rhi->newGraphicsPipeline());
     pipe->setTopology(QRhiGraphicsPipeline::TriangleStrip);
-    pipe->setShaderStages({{QRhiShaderStage::Vertex, vs},
-                           {QRhiShaderStage::Fragment, fs}});
+    pipe->setShaderStages({{QRhiShaderStage::Vertex, vs}, {QRhiShaderStage::Fragment, fs}});
     QRhiVertexInputLayout layout;
     layout.setBindings({{4 * sizeof(float)}});
     layout.setAttributes({
@@ -280,36 +284,39 @@ void RendererCore::fillUbuf(Ubuf& ub, const FrameParams& fp) const {
             hslActive = true;
     }
 
-    ub.rotation    = a.rotation;
-    ub.aspect      = fp.aspect;
-    ub.exposure    = a.exposure;
-    ub.contrast    = a.contrast    / kToneSliderToUniform;
-    ub.highlights  = a.highlights  / kToneSliderToUniform;
-    ub.shadows     = a.shadows     / kToneSliderToUniform;
-    ub.whites      = a.whites      / kToneSliderToUniform;
-    ub.blacks      = a.blacks      / kToneSliderToUniform;
+    ub.rotation = a.rotation;
+    ub.aspect = fp.aspect;
+    ub.exposure = a.exposure;
+    ub.contrast = a.contrast / kToneSliderToUniform;
+    ub.highlights = a.highlights / kToneSliderToUniform;
+    ub.shadows = a.shadows / kToneSliderToUniform;
+    ub.whites = a.whites / kToneSliderToUniform;
+    ub.blacks = a.blacks / kToneSliderToUniform;
     ub.temperature = a.temperature;
-    ub.tint        = a.tint        / 100.0f;
-    ub.saturation  = a.saturation  / 100.0f;
-    ub.vibrance    = a.vibrance    / 100.0f;
+    ub.tint = a.tint / 100.0f;
+    ub.saturation = a.saturation / 100.0f;
+    ub.vibrance = a.vibrance / 100.0f;
 
-    ub.useLut        = fp.useLut ? 1 : 0;
-    ub.gamutWarn     = fp.gamutWarn ? 1 : 0;
-    ub.baseLook      = fp.baseLook ? 1 : 0;
+    ub.useLut = fp.useLut ? 1 : 0;
+    ub.gamutWarn = fp.gamutWarn ? 1 : 0;
+    ub.baseLook = fp.baseLook ? 1 : 0;
     ub.displayEncode = fp.displayEncode ? 1 : 0;
-    ub.curveInput    = fp.curveInput ? 1 : 0;
-    ub.hslActive     = hslActive ? 1 : 0;
-    ub.wbInput       = fp.wbInput ? 1 : 0;
-    ub.clipWarn      = (fp.clipHighlights ? 1 : 0) | (fp.clipShadows ? 2 : 0);
+    ub.curveInput = fp.curveInput ? 1 : 0;
+    ub.hslActive = hslActive ? 1 : 0;
+    ub.wbInput = fp.wbInput ? 1 : 0;
+    ub.clipWarn = (fp.clipHighlights ? 1 : 0) | (fp.clipShadows ? 2 : 0);
 }
 
 // ── Pass recording — the single point the pipeline is drawn (ADR 0006) ───────
 
 // `batch` must already contain the pending uploads (flushPendingUploads can
 // recreate image textures, so the sampled texture is resolved only afterwards).
-void RendererCore::recordPass(QRhiCommandBuffer* cb, QRhiRenderTarget* rt,
-                              QRhiTexture* tex, const FrameParams& fp,
-                              QRhiResourceUpdateBatch* batch) {
+void RendererCore::recordPass(
+    QRhiCommandBuffer* cb,
+    QRhiRenderTarget* rt,
+    QRhiTexture* tex,
+    const FrameParams& fp,
+    QRhiResourceUpdateBatch* batch) {
     Ubuf ub{};
     fillUbuf(ub, fp);
     batch->updateDynamicBuffer(ubuf.get(), 0, sizeof(Ubuf), &ub);
@@ -328,14 +335,14 @@ void RendererCore::recordPass(QRhiCommandBuffer* cb, QRhiRenderTarget* rt,
     cb->endPass();
 }
 
-void RendererCore::record(QRhiCommandBuffer* cb, QRhiRenderTarget* rt,
-                          Slot slot, const FrameParams& fp) {
+void RendererCore::record(
+    QRhiCommandBuffer* cb, QRhiRenderTarget* rt, Slot slot, const FrameParams& fp) {
     if (!hasImage(slot)) {
         clear(cb, rt);
         return;
     }
     QRhiResourceUpdateBatch* batch = rhi->nextResourceUpdateBatch();
-    flushPendingUploads(batch);   // creates/recreates the slot's texture
+    flushPendingUploads(batch); // creates/recreates the slot's texture
     recordPass(cb, rt, imageTex[int(slot)].get(), fp, batch);
 }
 
@@ -350,8 +357,7 @@ void RendererCore::clear(QRhiCommandBuffer* cb, QRhiRenderTarget* rt) {
 
 QImage RendererCore::readbackToImage(const QRhiReadbackResult& rr) const {
     const bool isFloat = rr.format == QRhiTexture::RGBA32F;
-    const QImage::Format qfmt =
-        isFloat ? QImage::Format_RGBX32FPx4 : QImage::Format_RGBA8888;
+    const QImage::Format qfmt = isFloat ? QImage::Format_RGBX32FPx4 : QImage::Format_RGBA8888;
     const int bpp = isFloat ? 16 : 4;
     const int w = rr.pixelSize.width();
     const int h = rr.pixelSize.height();
@@ -363,28 +369,22 @@ QImage RendererCore::readbackToImage(const QRhiReadbackResult& rr) const {
     const qsizetype rowBytes = qsizetype(w) * bpp;
     const char* src = rr.data.constData();
     for (int y = 0; y < h; ++y)
-        std::memcpy(img.scanLine(flip ? h - 1 - y : y), src + y * rowBytes,
-                    rowBytes);
+        std::memcpy(img.scanLine(flip ? h - 1 - y : y), src + y * rowBytes, rowBytes);
     return img;
 }
 
 // slotIndex >= 0 samples that image slot (resolved after the upload flush,
 // which may recreate it); slotIndex < 0 samples extTex (export's temporary,
 // uploaded via extraUpload* in the same flush).
-QImage RendererCore::renderOffscreenTex(int slotIndex, QRhiTexture* extTex,
-                                        const FrameParams& fp, QSize size,
-                                        QRhiTexture::Format fmt) {
+QImage RendererCore::renderOffscreenTex(
+    int slotIndex, QRhiTexture* extTex, const FrameParams& fp, QSize size, QRhiTexture::Format fmt) {
     std::unique_ptr<QRhiTexture> target(
-        rhi->newTexture(fmt, size, 1,
-                        QRhiTexture::RenderTarget |
-                            QRhiTexture::UsedAsTransferSource));
+        rhi->newTexture(fmt, size, 1, QRhiTexture::RenderTarget | QRhiTexture::UsedAsTransferSource));
     if (!target->create())
         return {};
     QRhiColorAttachment att(target.get());
-    std::unique_ptr<QRhiTextureRenderTarget> rt(
-        rhi->newTextureRenderTarget({att}));
-    std::unique_ptr<QRhiRenderPassDescriptor> rp(
-        rt->newCompatibleRenderPassDescriptor());
+    std::unique_ptr<QRhiTextureRenderTarget> rt(rhi->newTextureRenderTarget({att}));
+    std::unique_ptr<QRhiRenderPassDescriptor> rp(rt->newCompatibleRenderPassDescriptor());
     rt->setRenderPassDescriptor(rp.get());
     rt->create();
 
@@ -400,25 +400,24 @@ QImage RendererCore::renderOffscreenTex(int slotIndex, QRhiTexture* extTex,
     QRhiResourceUpdateBatch* readBatch = rhi->nextResourceUpdateBatch();
     readBatch->readBackTexture(QRhiReadbackDescription(target.get()), &rr);
     cb->resourceUpdate(readBatch);
-    rhi->endOffscreenFrame();   // completes the readback
+    rhi->endOffscreenFrame(); // completes the readback
 
     return readbackToImage(rr);
 }
 
-QImage RendererCore::renderOffscreen(Slot slot, const FrameParams& fp,
-                                     QSize size, QRhiTexture::Format fmt) {
+QImage RendererCore::renderOffscreen(
+    Slot slot, const FrameParams& fp, QSize size, QRhiTexture::Format fmt) {
     if (!rhi || !hasImage(slot))
         return {};
     return renderOffscreenTex(int(slot), nullptr, fp, size, fmt);
 }
 
-QImage RendererCore::renderOffscreen(const ImageBuffer& buf,
-                                     const FrameParams& fp, QSize size,
-                                     QRhiTexture::Format fmt) {
+QImage RendererCore::renderOffscreen(
+    const ImageBuffer& buf, const FrameParams& fp, QSize size, QRhiTexture::Format fmt) {
     if (!rhi || !buf.valid())
         return {};
-    std::unique_ptr<QRhiTexture> tex(rhi->newTexture(
-        QRhiTexture::RGBA32F, QSize(buf.width, buf.height)));
+    std::unique_ptr<QRhiTexture> tex(
+        rhi->newTexture(QRhiTexture::RGBA32F, QSize(buf.width, buf.height)));
     if (!tex->create())
         return {};
     ++generation;

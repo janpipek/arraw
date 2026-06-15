@@ -1,19 +1,18 @@
 #include "ImageViewport.h"
 #include "ImagePipeline.h"
-#include <QWheelEvent>
-#include <QMouseEvent>
-#include <QKeyEvent>
-#include <QPainter>
-#include <QPaintEvent>
-#include <QPainterPath>
 #include <algorithm>
 #include <cmath>
+#include <QKeyEvent>
+#include <QMouseEvent>
+#include <QPaintEvent>
+#include <QPainter>
+#include <QPainterPath>
+#include <QWheelEvent>
 
 // CPU mirror of the rotation in image.vert (keep in sync). UV space is not
 // square, so x is scaled by the image aspect before rotating to make the
 // rotation isotropic in pixel space, then scaled back.
-static QPointF rotateTexUV(float u, float v, float degrees, float aspect,
-                           float cx, float cy) {
+static QPointF rotateTexUV(float u, float v, float degrees, float aspect, float cx, float cy) {
     float dx = (u - cx) * aspect;
     float dy = v - cy;
     const float rad = degrees * float(M_PI) / 180.0f;
@@ -30,7 +29,8 @@ static QPointF rotateTexUV(float u, float v, float degrees, float aspect,
 class ViewportOverlay : public QWidget {
 public:
     explicit ViewportOverlay(ImageViewport* parent)
-        : QWidget(parent), viewport(parent) {
+        : QWidget(parent),
+          viewport(parent) {
         setAttribute(Qt::WA_TransparentForMouseEvents);
         setAttribute(Qt::WA_NoSystemBackground);
     }
@@ -49,8 +49,7 @@ private:
 };
 
 ImageViewport::ImageViewport(QWidget* parent)
-    : QRhiWidget(parent)
-{
+    : QRhiWidget(parent) {
     setFocusPolicy(Qt::StrongFocus);
     overlay = new ViewportOverlay(this);
 
@@ -112,8 +111,7 @@ float ImageViewport::displayOriginalPixelHeight() const {
 }
 
 RendererCore::Slot ImageViewport::activeSlot() const {
-    if (hasFullRes && core.hasImage(RendererCore::Slot::FullRes) &&
-        zoom >= kFullResZoomThreshold)
+    if (hasFullRes && core.hasImage(RendererCore::Slot::FullRes) && zoom >= kFullResZoomThreshold)
         return RendererCore::Slot::FullRes;
     return RendererCore::Slot::Preview;
 }
@@ -122,16 +120,16 @@ void ImageViewport::ensureCurveLut() {
     if (!curveLutDirty)
         return;
     const auto lumaLUT = computeCurveLUT(params.curveLuma.points);
-    const auto redLUT  = computeCurveLUT(params.curveR.points);
-    const auto grnLUT  = computeCurveLUT(params.curveG.points);
-    const auto bluLUT  = computeCurveLUT(params.curveB.points);
+    const auto redLUT = computeCurveLUT(params.curveR.points);
+    const auto grnLUT = computeCurveLUT(params.curveG.points);
+    const auto bluLUT = computeCurveLUT(params.curveB.points);
 
     std::array<float, 256 * 4> rgba{};
     for (int i = 0; i < 256; ++i) {
-        rgba[i*4+0] = lumaLUT[i];
-        rgba[i*4+1] = redLUT[i];
-        rgba[i*4+2] = grnLUT[i];
-        rgba[i*4+3] = bluLUT[i];
+        rgba[i * 4 + 0] = lumaLUT[i];
+        rgba[i * 4 + 1] = redLUT[i];
+        rgba[i * 4 + 2] = grnLUT[i];
+        rgba[i * 4 + 3] = bluLUT[i];
     }
     core.setCurveLut(rgba);
     curveLutDirty = false;
@@ -148,18 +146,17 @@ void ImageViewport::render(QRhiCommandBuffer* cb) {
     const float viewportAspect = float(width()) / float(height());
 
     RendererCore::FrameParams fp;
-    fp.transform = QVector4D(zoom * (displayAspect() / viewportAspect), zoom,
-                             pan.x(), pan.y());
-    fp.cropRect      = cropMode() ? QRectF(0, 0, 1, 1) : p.cropRect;
-    fp.aspect        = imageAspect;
-    fp.baseLook      = useBaseLook && !showOriginal;
+    fp.transform = QVector4D(zoom * (displayAspect() / viewportAspect), zoom, pan.x(), pan.y());
+    fp.cropRect = cropMode() ? QRectF(0, 0, 1, 1) : p.cropRect;
+    fp.aspect = imageAspect;
+    fp.baseLook = useBaseLook && !showOriginal;
     fp.displayEncode = true;
-    fp.curveInput    = false;
-    fp.useLut        = useDisplayLut;
-    fp.gamutWarn     = gamutWarn;
+    fp.curveInput = false;
+    fp.useLut = useDisplayLut;
+    fp.gamutWarn = gamutWarn;
     fp.clipHighlights = clipHighlights;
-    fp.clipShadows    = clipShadows;
-    fp.adjustments   = p;
+    fp.clipShadows = clipShadows;
+    fp.adjustments = p;
 
     core.record(cb, renderTarget(), activeSlot(), fp);
 }
@@ -185,15 +182,14 @@ QPointF ImageViewport::cropUVToViewport(float u, float v) const {
     const float sy = zoom;
     const float ndcX = (u * 2.0f - 1.0f) * sx + float(pan.x());
     const float ndcY = (1.0f - 2.0f * v) * sy + float(pan.y());
-    return {(ndcX + 1.0f) * width()  / 2.0f,
-            (1.0f - ndcY) * height() / 2.0f};
+    return {(ndcX + 1.0f) * width() / 2.0f, (1.0f - ndcY) * height() / 2.0f};
 }
 
 QPointF ImageViewport::viewportToCropUV(QPointF pos) const {
     const float viewportAspect = float(width()) / float(height());
     const float sx = zoom * (displayAspect() / viewportAspect);
     const float sy = zoom;
-    const float ndcX = float(pos.x()) * 2.0f / width()  - 1.0f;
+    const float ndcX = float(pos.x()) * 2.0f / width() - 1.0f;
     const float ndcY = 1.0f - float(pos.y()) * 2.0f / height();
     const float u = ((ndcX - float(pan.x())) / sx + 1.0f) / 2.0f;
     const float v = (1.0f - (ndcY - float(pan.y())) / sy) / 2.0f;
@@ -204,16 +200,18 @@ QPointF ImageViewport::viewportToCropUV(QPointF pos) const {
 // rotation, it lands inside the source [0,1] (rotateTexUV mirrors image.vert).
 bool ImageViewport::cropInsideImage(const QRectF& cropUV) const {
     if (std::abs(params.rotation) <= 0.0001f)
-        return true;   // no rotation: the whole display frame is real
+        return true; // no rotation: the whole display frame is real
     const QPointF corners[4] = {
-        cropUV.topLeft(), cropUV.topRight(), cropUV.bottomRight(), cropUV.bottomLeft(),
+        cropUV.topLeft(),
+        cropUV.topRight(),
+        cropUV.bottomRight(),
+        cropUV.bottomLeft(),
     };
     const float eps = 1e-4f;
     for (const QPointF& c : corners) {
-        const QPointF s = rotateTexUV(float(c.x()), float(c.y()),
-                                      params.rotation, imageAspect, 0.5f, 0.5f);
-        if (s.x() < -eps || s.x() > 1.0f + eps ||
-            s.y() < -eps || s.y() > 1.0f + eps)
+        const QPointF s
+            = rotateTexUV(float(c.x()), float(c.y()), params.rotation, imageAspect, 0.5f, 0.5f);
+        if (s.x() < -eps || s.x() > 1.0f + eps || s.y() < -eps || s.y() > 1.0f + eps)
             return false;
     }
     return true;
@@ -229,7 +227,10 @@ QRectF ImageViewport::maxInscribedCrop() const {
     for (int i = 0; i < 24; ++i) {
         const double s = 0.5 * (lo + hi);
         const QRectF r((1.0 - s) / 2.0, (1.0 - s) / 2.0, s, s);
-        if (cropInsideImage(r)) lo = s; else hi = s;
+        if (cropInsideImage(r))
+            lo = s;
+        else
+            hi = s;
     }
     const double s = lo;
     return {(1.0 - s) / 2.0, (1.0 - s) / 2.0, s, s};
@@ -287,19 +288,15 @@ QPointF ImageViewport::handlePos(int i) const {
     const float b = float(activeCrop.bottom());
     const float cx = (l + r) * 0.5f;
     const float cy = (t + b) * 0.5f;
-    const QPointF uvs[kHandleCount] = {
-        {l, t}, {cx, t}, {r, t},
-        {r, cy},
-        {r, b}, {cx, b}, {l, b},
-        {l, cy}
-    };
+    const QPointF uvs[kHandleCount]
+        = {{l, t}, {cx, t}, {r, t}, {r, cy}, {r, b}, {cx, b}, {l, b}, {l, cy}};
     return cropUVToViewport(float(uvs[i].x()), float(uvs[i].y()));
 }
 
 int ImageViewport::hitTest(QPointF pos) const {
     for (int i = 0; i < kHandleCount; ++i) {
         QPointF d = pos - handlePos(i);
-        if (d.x()*d.x() + d.y()*d.y() < kHandleRadius * kHandleRadius * 4)
+        if (d.x() * d.x() + d.y() * d.y() < kHandleRadius * kHandleRadius * 4)
             return i;
     }
     if (activeCrop.contains(viewportToCropUV(pos)))
@@ -316,26 +313,47 @@ void ImageViewport::applyCropDrag(QPointF viewportPos) {
     const float kMinSize = 0.02f;
 
     switch (cropDragHandle) {
-    case 0: r.setTopLeft    ({std::min(u, float(r.right())  - kMinSize), std::min(v, float(r.bottom()) - kMinSize)}); break;
-    case 1: r.setTop        (std::min(v, float(r.bottom())  - kMinSize)); break;
-    case 2: r.setTopRight   ({std::max(u, float(r.left())   + kMinSize), std::min(v, float(r.bottom()) - kMinSize)}); break;
-    case 3: r.setRight      (std::max(u, float(r.left())    + kMinSize)); break;
-    case 4: r.setBottomRight({std::max(u, float(r.left())   + kMinSize), std::max(v, float(r.top())    + kMinSize)}); break;
-    case 5: r.setBottom     (std::max(v, float(r.top())     + kMinSize)); break;
-    case 6: r.setBottomLeft ({std::min(u, float(r.right())  - kMinSize), std::max(v, float(r.top())    + kMinSize)}); break;
-    case 7: r.setLeft       (std::min(u, float(r.right())   - kMinSize)); break;
+    case 0:
+        r.setTopLeft(
+            {std::min(u, float(r.right()) - kMinSize), std::min(v, float(r.bottom()) - kMinSize)});
+        break;
+    case 1:
+        r.setTop(std::min(v, float(r.bottom()) - kMinSize));
+        break;
+    case 2:
+        r.setTopRight(
+            {std::max(u, float(r.left()) + kMinSize), std::min(v, float(r.bottom()) - kMinSize)});
+        break;
+    case 3:
+        r.setRight(std::max(u, float(r.left()) + kMinSize));
+        break;
+    case 4:
+        r.setBottomRight(
+            {std::max(u, float(r.left()) + kMinSize), std::max(v, float(r.top()) + kMinSize)});
+        break;
+    case 5:
+        r.setBottom(std::max(v, float(r.top()) + kMinSize));
+        break;
+    case 6:
+        r.setBottomLeft(
+            {std::min(u, float(r.right()) - kMinSize), std::max(v, float(r.top()) + kMinSize)});
+        break;
+    case 7:
+        r.setLeft(std::min(u, float(r.right()) - kMinSize));
+        break;
     case -1: { // move
         QPointF startUV = viewportToCropUV(cropDragStart);
         float du = float(uv.x() - startUV.x());
         float dv = float(uv.y() - startUV.y());
-        float w  = float(cropDragStartRect.width());
-        float h  = float(cropDragStartRect.height());
+        float w = float(cropDragStartRect.width());
+        float h = float(cropDragStartRect.height());
         float nl = std::clamp(float(cropDragStartRect.left()) + du, 0.0f, 1.0f - w);
-        float nt = std::clamp(float(cropDragStartRect.top())  + dv, 0.0f, 1.0f - h);
+        float nt = std::clamp(float(cropDragStartRect.top()) + dv, 0.0f, 1.0f - h);
         r = QRectF(nl, nt, w, h);
         break;
     }
-    default: return;
+    default:
+        return;
     }
     // Constrain to the rotated image: reject candidates that would pull a corner
     // into the empty area, so the edge "sticks" at the boundary instead.
@@ -346,10 +364,11 @@ void ImageViewport::applyCropDrag(QPointF viewportPos) {
 }
 
 void ImageViewport::drawCropOverlay(QPainter& p) const {
-    const QRectF cropVP =
-        QRectF(cropUVToViewport(float(activeCrop.left()),  float(activeCrop.top())),
-               cropUVToViewport(float(activeCrop.right()), float(activeCrop.bottom())))
-            .normalized();
+    const QRectF cropVP
+        = QRectF(
+              cropUVToViewport(float(activeCrop.left()), float(activeCrop.top())),
+              cropUVToViewport(float(activeCrop.right()), float(activeCrop.bottom())))
+              .normalized();
 
     QPainterPath outside;
     outside.addRect(QRectF(0, 0, width(), height()));
@@ -374,8 +393,8 @@ void ImageViewport::drawCropOverlay(QPainter& p) const {
     p.setBrush(Qt::white);
     for (int i = 0; i < kHandleCount; ++i) {
         QPointF hp = handlePos(i);
-        p.drawRect(QRectF(hp.x() - kHandleRadius, hp.y() - kHandleRadius,
-                          kHandleRadius * 2, kHandleRadius * 2));
+        p.drawRect(QRectF(
+            hp.x() - kHandleRadius, hp.y() - kHandleRadius, kHandleRadius * 2, kHandleRadius * 2));
     }
 }
 
@@ -383,7 +402,7 @@ void ImageViewport::drawCropOverlay(QPainter& p) const {
 
 void ImageViewport::setImage(const ImageBuffer& buf, bool baseLook) {
     imageAspect = buf.valid() ? float(buf.width) / float(buf.height) : 1.0f;
-    hasImage  = buf.valid();
+    hasImage = buf.valid();
     hasFullRes = false;
     useBaseLook = baseLook;
     core.setImage(RendererCore::Slot::Preview, buf);
@@ -403,8 +422,8 @@ void ImageViewport::setFullResImage(const ImageBuffer& buf) {
 }
 
 void ImageViewport::setAdjustments(const AdjustmentParams& p) {
-    if (p.curveLuma != params.curveLuma || p.curveR != params.curveR ||
-        p.curveG != params.curveG || p.curveB != params.curveB)
+    if (p.curveLuma != params.curveLuma || p.curveR != params.curveR || p.curveG != params.curveG
+        || p.curveB != params.curveB)
         curveLutDirty = true;
     params = p;
     if (!cropMode())
@@ -437,8 +456,9 @@ void ImageViewport::setActiveTool(ActiveTool t) {
     if (tool == ActiveTool::Crop)
         enterCrop();
 
-    setCursor(tool == ActiveTool::Straighten || tool == ActiveTool::WhiteBalance
-                  ? Qt::CrossCursor : Qt::ArrowCursor);
+    setCursor(
+        tool == ActiveTool::Straighten || tool == ActiveTool::WhiteBalance ? Qt::CrossCursor
+                                                                           : Qt::ArrowCursor);
     emit activeToolChanged(tool);
     update();
 }
@@ -476,18 +496,19 @@ void ImageViewport::commitCrop() {
 // feature's screen angle), so the leveling correction is -deviation.
 void ImageViewport::applyStraightenLine() {
     const QPointF d = straightenEnd - straightenStart;
-    if (d.manhattanLength() < 8.0)   // ignore taps / tiny drags
+    if (d.manhattanLength() < 8.0) // ignore taps / tiny drags
         return;
-    double angle = std::atan2(d.y(), d.x()) * 180.0 / M_PI;   // screen space, y down
-    while (angle <= -90.0) angle += 180.0;   // a line has no direction: fold to (-90,90]
-    while (angle >   90.0) angle -= 180.0;
+    double angle = std::atan2(d.y(), d.x()) * 180.0 / M_PI; // screen space, y down
+    while (angle <= -90.0)
+        angle += 180.0; // a line has no direction: fold to (-90,90]
+    while (angle > 90.0)
+        angle -= 180.0;
     const double deviation = std::abs(angle) <= 45.0
-                                 ? angle                              // treat as horizontal
+                                 ? angle                               // treat as horizontal
                                  : angle - (angle > 0 ? 90.0 : -90.0); // from vertical
     // Rotating by +deviation on top of the current rotation brings the drawn
     // line onto its axis (the line the user traced along the horizon goes level).
-    const float newRotation =
-        std::clamp(float(params.rotation + deviation), -45.0f, 45.0f);
+    const float newRotation = std::clamp(float(params.rotation + deviation), -45.0f, 45.0f);
     emit rotationCommitted(newRotation);
 }
 
@@ -496,7 +517,7 @@ void ImageViewport::drawStraightenLine(QPainter& p) const {
     p.drawLine(straightenStart, straightenEnd);
     p.setBrush(QColor(255, 220, 80));
     p.drawEllipse(straightenStart, 3.0, 3.0);
-    p.drawEllipse(straightenEnd,   3.0, 3.0);
+    p.drawEllipse(straightenEnd, 3.0, 3.0);
 }
 
 // Read the pre-WB pixel value the shader produces under `pos` (GPU tap, same
@@ -511,44 +532,49 @@ bool ImageViewport::sampleWhiteBalance(QPointF pos, float& kelvin, float& tintOu
     // pixels, so the clicked point maps straight to a texel (no UV inversion).
     const float viewportAspect = float(width()) / float(height());
     RendererCore::FrameParams fp;
-    fp.transform     = QVector4D(zoom * (displayAspect() / viewportAspect), zoom,
-                                 pan.x(), pan.y());
-    fp.cropRect      = cropMode() ? QRectF(0, 0, 1, 1) : params.cropRect;
-    fp.aspect        = imageAspect;
-    fp.baseLook      = useBaseLook;
+    fp.transform = QVector4D(zoom * (displayAspect() / viewportAspect), zoom, pan.x(), pan.y());
+    fp.cropRect = cropMode() ? QRectF(0, 0, 1, 1) : params.cropRect;
+    fp.aspect = imageAspect;
+    fp.baseLook = useBaseLook;
     fp.displayEncode = false;
-    fp.wbInput       = true;
-    fp.adjustments   = params;
+    fp.wbInput = true;
+    fp.adjustments = params;
 
-    const QImage tap = core.renderOffscreen(activeSlot(), fp, size(),
-                                            QRhiTexture::RGBA32F);
+    const QImage tap = core.renderOffscreen(activeSlot(), fp, size(), QRhiTexture::RGBA32F);
     if (tap.isNull())
         return false;
 
     // Average a small neighbourhood for noise robustness.
     const int x0 = int(pos.x()), y0 = int(pos.y()), rad = 2;
-    double sr = 0, sg = 0, sb = 0; int n = 0;
+    double sr = 0, sg = 0, sb = 0;
+    int n = 0;
     for (int y = y0 - rad; y <= y0 + rad; ++y) {
-        if (y < 0 || y >= tap.height()) continue;
+        if (y < 0 || y >= tap.height())
+            continue;
         const auto* px = reinterpret_cast<const float*>(tap.constScanLine(y));
         for (int x = x0 - rad; x <= x0 + rad; ++x) {
-            if (x < 0 || x >= tap.width()) continue;
-            sr += px[x*4+0]; sg += px[x*4+1]; sb += px[x*4+2]; ++n;
+            if (x < 0 || x >= tap.width())
+                continue;
+            sr += px[x * 4 + 0];
+            sg += px[x * 4 + 1];
+            sb += px[x * 4 + 2];
+            ++n;
         }
     }
-    if (n == 0) return false;
+    if (n == 0)
+        return false;
     const double r = sr / n, g = sg / n, b = sb / n;
-    if (r + g + b < 1e-4)   // clicked off the image (black) — ignore
+    if (r + g + b < 1e-4) // clicked off the image (black) — ignore
         return false;
 
     // Invert image.frag's additive WB (keep these constants in sync with it):
     //   applyTemperature: t=(K-5500)/5500; r += t*0.15; b -= t*0.15
     //   applyTint:        g += (tint/100)*0.05
     // Solve r==g==b: t balances R/B; the grey level is r1=(r+b)/2; tint lifts G.
-    const double t  = (b - r) / 0.3;                 // 0.3 = 2*0.15
+    const double t = (b - r) / 0.3; // 0.3 = 2*0.15
     const double r1 = 0.5 * (r + b);
-    kelvin  = float(std::clamp(5500.0 * (1.0 + t), 2000.0, 12000.0));
-    tintOut = float(std::clamp((r1 - g) * 2000.0, -100.0, 100.0));  // 2000 = 100/0.05
+    kelvin = float(std::clamp(5500.0 * (1.0 + t), 2000.0, 12000.0));
+    tintOut = float(std::clamp((r1 - g) * 2000.0, -100.0, 100.0)); // 2000 = 100/0.05
     return true;
 }
 
@@ -559,7 +585,10 @@ void ImageViewport::setOriginalImageSize(int width, int height) {
 }
 
 void ImageViewport::setDisplayLut(const DisplayLut& lut) {
-    if (!lut.valid()) { clearDisplayLut(); return; }
+    if (!lut.valid()) {
+        clearDisplayLut();
+        return;
+    }
     core.setDisplayLut(lut);
     useDisplayLut = true;
     update();
@@ -581,7 +610,7 @@ void ImageViewport::setClipWarnings(bool highlights, bool shadows) {
     if (clipHighlights == highlights && clipShadows == shadows)
         return;
     clipHighlights = highlights;
-    clipShadows    = shadows;
+    clipShadows = shadows;
     update();
 }
 
@@ -632,10 +661,8 @@ bool ImageViewport::hasKnownOriginalSize() const {
 
 // ── Offscreen export render ───────────────────────────────────────────────────
 
-QImage ImageViewport::renderToImage(const ImageBuffer& buf,
-                                     const AdjustmentParams& p,
-                                     int outW, int outH)
-{
+QImage ImageViewport::renderToImage(
+    const ImageBuffer& buf, const AdjustmentParams& p, int outW, int outH) {
     if (!core.ready() || !buf.valid())
         return {};
 
@@ -643,26 +670,25 @@ QImage ImageViewport::renderToImage(const ImageBuffer& buf,
     ensureCurveLut();
 
     const QRectF& cr = p.cropRect;
-    const int cropW = qMax(1, int(cr.width()  * buf.width  + 0.5f));
+    const int cropW = qMax(1, int(cr.width() * buf.width + 0.5f));
     const int cropH = qMax(1, int(cr.height() * buf.height + 0.5f));
 
     // Offscreen target at cropped pixel size. Float format: the readback stays
     // in linear working space; the output transform happens on the CPU (lcms2).
     RendererCore::FrameParams fp;
-    fp.transform     = QVector4D(1.0f, 1.0f, 0.0f, 0.0f);
-    fp.cropRect      = cr;
-    fp.aspect        = float(buf.width) / float(buf.height);
-    fp.baseLook      = true;
+    fp.transform = QVector4D(1.0f, 1.0f, 0.0f, 0.0f);
+    fp.cropRect = cr;
+    fp.aspect = float(buf.width) / float(buf.height);
+    fp.baseLook = true;
     fp.displayEncode = false;
-    fp.curveInput    = false;
-    fp.useLut        = false;
-    fp.gamutWarn     = false;
-    fp.clipHighlights = false;   // overlays never leak into the export readback
-    fp.clipShadows    = false;
-    fp.adjustments   = p;
+    fp.curveInput = false;
+    fp.useLut = false;
+    fp.gamutWarn = false;
+    fp.clipHighlights = false; // overlays never leak into the export readback
+    fp.clipShadows = false;
+    fp.adjustments = p;
 
-    QImage result = core.renderOffscreen(buf, fp, QSize(cropW, cropH),
-                                         QRhiTexture::RGBA32F);
+    QImage result = core.renderOffscreen(buf, fp, QSize(cropW, cropH), QRhiTexture::RGBA32F);
     if (result.isNull())
         return {};
 
@@ -674,10 +700,8 @@ QImage ImageViewport::renderToImage(const ImageBuffer& buf,
     return result;
 }
 
-QImage ImageViewport::renderClipSample(const ImageBuffer& buf,
-                                       const AdjustmentParams& p,
-                                       bool clipHighlights, bool clipShadows)
-{
+QImage ImageViewport::renderClipSample(
+    const ImageBuffer& buf, const AdjustmentParams& p, bool clipHighlights, bool clipShadows) {
     if (!core.ready() || !buf.valid())
         return {};
 
@@ -687,21 +711,21 @@ QImage ImageViewport::renderClipSample(const ImageBuffer& buf,
     // clipping overlay actually runs — renderToImage uses the linear export
     // path where it is forced off. Used by the clipping golden test (adr/0009).
     const QRectF& cr = p.cropRect;
-    const int cropW = qMax(1, int(cr.width()  * buf.width  + 0.5f));
+    const int cropW = qMax(1, int(cr.width() * buf.width + 0.5f));
     const int cropH = qMax(1, int(cr.height() * buf.height + 0.5f));
 
     RendererCore::FrameParams fp;
-    fp.transform      = QVector4D(1.0f, 1.0f, 0.0f, 0.0f);
-    fp.cropRect       = cr;
-    fp.aspect         = float(buf.width) / float(buf.height);
-    fp.baseLook       = true;
-    fp.displayEncode  = true;
-    fp.curveInput     = false;
-    fp.useLut         = false;
-    fp.gamutWarn      = false;
+    fp.transform = QVector4D(1.0f, 1.0f, 0.0f, 0.0f);
+    fp.cropRect = cr;
+    fp.aspect = float(buf.width) / float(buf.height);
+    fp.baseLook = true;
+    fp.displayEncode = true;
+    fp.curveInput = false;
+    fp.useLut = false;
+    fp.gamutWarn = false;
     fp.clipHighlights = clipHighlights;
-    fp.clipShadows    = clipShadows;
-    fp.adjustments    = p;
+    fp.clipShadows = clipShadows;
+    fp.adjustments = p;
 
     return core.renderOffscreen(buf, fp, QSize(cropW, cropH), QRhiTexture::RGBA32F);
 }
@@ -712,8 +736,7 @@ QImage ImageViewport::renderClipSample(const ImageBuffer& buf,
 // offscreen target — once with curveInput (pipeline stops after tone regions,
 // gamma-encoded) and once full — and hand both samples to whoever bins them.
 void ImageViewport::renderHistograms() {
-    if (!hasImage || !core.ready() ||
-        !core.hasImage(RendererCore::Slot::Preview))
+    if (!hasImage || !core.ready() || !core.hasImage(RendererCore::Slot::Preview))
         return;
 
     ensureCurveLut();
@@ -724,26 +747,26 @@ void ImageViewport::renderHistograms() {
     const int h = std::clamp(int(w / aspect + 0.5f), 16, 1024);
 
     RendererCore::FrameParams fp;
-    fp.transform     = QVector4D(1.0f, 1.0f, 0.0f, 0.0f);
-    fp.cropRect      = cr;
-    fp.aspect        = imageAspect;
-    fp.baseLook      = useBaseLook;
+    fp.transform = QVector4D(1.0f, 1.0f, 0.0f, 0.0f);
+    fp.cropRect = cr;
+    fp.aspect = imageAspect;
+    fp.baseLook = useBaseLook;
     // Display transform on, monitor/proof LUT off: the panel histogram shows
     // output-sRGB values regardless of soft-proofing.
     fp.displayEncode = true;
-    fp.useLut        = false;
-    fp.gamutWarn     = false;
-    fp.clipHighlights = false;   // overlays never poison the histogram readback
-    fp.clipShadows    = false;
-    fp.adjustments   = params;
+    fp.useLut = false;
+    fp.gamutWarn = false;
+    fp.clipHighlights = false; // overlays never poison the histogram readback
+    fp.clipShadows = false;
+    fp.adjustments = params;
 
     fp.curveInput = true;
-    const QImage curveInput = core.renderOffscreen(
-        RendererCore::Slot::Preview, fp, QSize(w, h), QRhiTexture::RGBA8);
+    const QImage curveInput
+        = core.renderOffscreen(RendererCore::Slot::Preview, fp, QSize(w, h), QRhiTexture::RGBA8);
 
     fp.curveInput = false;
-    const QImage finalSample = core.renderOffscreen(
-        RendererCore::Slot::Preview, fp, QSize(w, h), QRhiTexture::RGBA8);
+    const QImage finalSample
+        = core.renderOffscreen(RendererCore::Slot::Preview, fp, QSize(w, h), QRhiTexture::RGBA8);
 
     emit histogramsReady(finalSample, curveInput);
 }
@@ -757,8 +780,8 @@ void ImageViewport::wheelEvent(QWheelEvent* e) {
 
 void ImageViewport::mousePressEvent(QMouseEvent* e) {
     if (cropMode() && e->button() == Qt::LeftButton) {
-        cropDragHandle    = hitTest(e->position());
-        cropDragStart     = e->position();
+        cropDragHandle = hitTest(e->position());
+        cropDragStart = e->position();
         cropDragStartRect = activeCrop;
         return;
     }
@@ -772,11 +795,11 @@ void ImageViewport::mousePressEvent(QMouseEvent* e) {
         float kelvin, tintOut;
         if (sampleWhiteBalance(e->position(), kelvin, tintOut))
             emit whiteBalanceCommitted(kelvin, tintOut);
-        return;   // tool stays active for further picks
+        return; // tool stays active for further picks
     }
-    if (e->button() == Qt::MiddleButton ||
-        (e->button() == Qt::LeftButton && e->modifiers() & Qt::AltModifier)) {
-        dragging  = true;
+    if (e->button() == Qt::MiddleButton
+        || (e->button() == Qt::LeftButton && e->modifiers() & Qt::AltModifier)) {
+        dragging = true;
         dragStart = e->position();
     }
 }
@@ -791,10 +814,11 @@ void ImageViewport::mouseMoveEvent(QMouseEvent* e) {
         update();
         return;
     }
-    if (!dragging) return;
+    if (!dragging)
+        return;
     // pan is in NDC units (viewport spans -1..1), hence the ×2 / size.
     QPointF delta = e->position() - dragStart;
-    pan.setX(pan.x() + float(delta.x()) / width()  * 2.0f);
+    pan.setX(pan.x() + float(delta.x()) / width() * 2.0f);
     pan.setY(pan.y() - float(delta.y()) / height() * 2.0f);
     dragStart = e->position();
     update();
@@ -805,10 +829,9 @@ void ImageViewport::mouseReleaseEvent(QMouseEvent* e) {
         cropDragHandle = -2;
         return;
     }
-    if (tool == ActiveTool::Straighten && straightenDragging &&
-        e->button() == Qt::LeftButton) {
+    if (tool == ActiveTool::Straighten && straightenDragging && e->button() == Qt::LeftButton) {
         straightenDragging = false;
-        applyStraightenLine();   // tool stays active; redraw the line to retry
+        applyStraightenLine(); // tool stays active; redraw the line to retry
         update();
         return;
     }
@@ -816,7 +839,10 @@ void ImageViewport::mouseReleaseEvent(QMouseEvent* e) {
 }
 
 void ImageViewport::keyPressEvent(QKeyEvent* e) {
-    if (e->isAutoRepeat()) { QRhiWidget::keyPressEvent(e); return; }
+    if (e->isAutoRepeat()) {
+        QRhiWidget::keyPressEvent(e);
+        return;
+    }
 
     switch (e->key()) {
     case Qt::Key_Backslash:
@@ -829,7 +855,7 @@ void ImageViewport::keyPressEvent(QKeyEvent* e) {
     case Qt::Key_Return:
     case Qt::Key_Enter:
         if (tool != ActiveTool::None)
-            commitActiveTool();   // commit-on-leave
+            commitActiveTool(); // commit-on-leave
         break;
     case Qt::Key_Escape:
         if (tool != ActiveTool::None)

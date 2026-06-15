@@ -1,9 +1,9 @@
 #include "MainWindow.h"
 #include <QApplication>
-#include <QIcon>
-#include <QSurfaceFormat>
-#include <QSettings>
 #include <QDir>
+#include <QIcon>
+#include <QSettings>
+#include <QSurfaceFormat>
 
 int main(int argc, char* argv[]) {
     QApplication app(argc, argv);

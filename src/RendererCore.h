@@ -1,32 +1,32 @@
 #pragma once
 #include "ColorManagement.h"
 #include "ImagePipeline.h"
-#include <rhi/qrhi.h>
-#include <QImage>
 #include <array>
 #include <memory>
+#include <rhi/qrhi.h>
+#include <QImage>
 
 // std140 mirror of the uniform block in shaders/image.vert and image.frag —
 // the three definitions must stay identical (ADR 0006).
 struct Ubuf {
-    float  clipCorr[16];   // QRhi::clipSpaceCorrMatrix(), column-major
-    float  transform[4];   // (scaleX, scaleY, panX, panY)
-    float  cropRect[4];    // UV bounds: (left, top, right, bottom)
-    float  hslHue[8];      // -1..+1 per range (vec4[2] in the shader)
-    float  hslSat[8];
-    float  hslLum[8];
-    float  rotation;       // degrees
-    float  aspect;
-    float  exposure;       // EV stops
-    float  contrast;       // -0.2..+0.2
-    float  highlights;
-    float  shadows;
-    float  whites;
-    float  blacks;
-    float  temperature;    // Kelvin
-    float  tint;           // -1..+1
-    float  saturation;     // -1..+1
-    float  vibrance;       // -1..+1
+    float clipCorr[16]; // QRhi::clipSpaceCorrMatrix(), column-major
+    float transform[4]; // (scaleX, scaleY, panX, panY)
+    float cropRect[4];  // UV bounds: (left, top, right, bottom)
+    float hslHue[8];    // -1..+1 per range (vec4[2] in the shader)
+    float hslSat[8];
+    float hslLum[8];
+    float rotation; // degrees
+    float aspect;
+    float exposure; // EV stops
+    float contrast; // -0.2..+0.2
+    float highlights;
+    float shadows;
+    float whites;
+    float blacks;
+    float temperature; // Kelvin
+    float tint;        // -1..+1
+    float saturation;  // -1..+1
+    float vibrance;    // -1..+1
     qint32 useLut;
     qint32 gamutWarn;
     qint32 baseLook;
@@ -34,8 +34,9 @@ struct Ubuf {
     qint32 curveInput;
     qint32 hslActive;
     qint32 wbInput;
-    qint32 clipWarn;       // clipping overlay bits: 1 = highlights, 2 = shadows
+    qint32 clipWarn; // clipping overlay bits: 1 = highlights, 2 = shadows
 };
+
 static_assert(sizeof(Ubuf) == 272);
 
 // The one place the shader pipeline is recorded (ADR 0006): the widget's
@@ -53,56 +54,61 @@ public:
     // come from `adjustments`; the rest is per-consumer framing.
     struct FrameParams {
         QVector4D transform{1, 1, 0, 0};
-        QRectF    cropRect{0, 0, 1, 1};
-        float     aspect        = 1.0f;
-        bool      baseLook      = false;
-        bool      displayEncode = true;
-        bool      curveInput    = false;
-        bool      wbInput       = false;
-        bool      useLut        = false;
-        bool      gamutWarn     = false;
-        bool      clipHighlights = false;   // sRGB-relative clipping overlay (docs/adr/0009)
-        bool      clipShadows    = false;
+        QRectF cropRect{0, 0, 1, 1};
+        float aspect = 1.0f;
+        bool baseLook = false;
+        bool displayEncode = true;
+        bool curveInput = false;
+        bool wbInput = false;
+        bool useLut = false;
+        bool gamutWarn = false;
+        bool clipHighlights = false; // sRGB-relative clipping overlay (docs/adr/0009)
+        bool clipShadows = false;
         AdjustmentParams adjustments;
     };
 
-    void initialize(QRhi* rhi);   // idempotent; re-creates on a new QRhi
+    void initialize(QRhi* rhi); // idempotent; re-creates on a new QRhi
     void release();
+
     bool ready() const { return rhi != nullptr; }
 
-    void setImage(Slot slot, const ImageBuffer& buf);  // invalid buf clears
+    void setImage(Slot slot, const ImageBuffer& buf); // invalid buf clears
     bool hasImage(Slot slot) const;
 
     void setCurveLut(const std::array<float, 256 * 4>& rgba);
     void setDisplayLut(const DisplayLut& lut);
 
     // Record one pass into rt (a frame must be active on cb), sampling slot.
-    void record(QRhiCommandBuffer* cb, QRhiRenderTarget* rt, Slot slot,
-                const FrameParams& fp);
+    void record(QRhiCommandBuffer* cb, QRhiRenderTarget* rt, Slot slot, const FrameParams& fp);
     // Clear-only pass for frames with no image yet.
     void clear(QRhiCommandBuffer* cb, QRhiRenderTarget* rt);
 
     // Offscreen render in a frame of its own, with synchronous readback.
     // RGBA32F → Format_RGBX32FPx4 (linear working space), RGBA8 → Format_RGBA8888.
-    QImage renderOffscreen(Slot slot, const FrameParams& fp, QSize size,
-                           QRhiTexture::Format fmt);
-    QImage renderOffscreen(const ImageBuffer& buf, const FrameParams& fp,
-                           QSize size, QRhiTexture::Format fmt);
+    QImage renderOffscreen(Slot slot, const FrameParams& fp, QSize size, QRhiTexture::Format fmt);
+    QImage renderOffscreen(
+        const ImageBuffer& buf, const FrameParams& fp, QSize size, QRhiTexture::Format fmt);
 
 private:
     struct PendingImage {
-        QByteArray rgba;   // RGB float buffer expanded to RGBA
-        QSize      size;
+        QByteArray rgba; // RGB float buffer expanded to RGBA
+        QSize size;
     };
 
     static QByteArray expandToRgba(const ImageBuffer& buf);
     void flushPendingUploads(QRhiResourceUpdateBatch* batch);
-    void recordPass(QRhiCommandBuffer* cb, QRhiRenderTarget* rt,
-                    QRhiTexture* imageTex, const FrameParams& fp,
-                    QRhiResourceUpdateBatch* batch);
-    QImage renderOffscreenTex(int slotIndex, QRhiTexture* extTex,
-                              const FrameParams& fp, QSize size,
-                              QRhiTexture::Format fmt);
+    void recordPass(
+        QRhiCommandBuffer* cb,
+        QRhiRenderTarget* rt,
+        QRhiTexture* imageTex,
+        const FrameParams& fp,
+        QRhiResourceUpdateBatch* batch);
+    QImage renderOffscreenTex(
+        int slotIndex,
+        QRhiTexture* extTex,
+        const FrameParams& fp,
+        QSize size,
+        QRhiTexture::Format fmt);
     QImage readbackToImage(const QRhiReadbackResult& rr) const;
     QRhiGraphicsPipeline* pipelineFor(QRhiRenderPassDescriptor* rpDesc);
     QRhiShaderResourceBindings* bindingsFor(QRhiTexture* imageTex);
@@ -110,19 +116,19 @@ private:
 
     QRhi* rhi = nullptr;
 
-    std::unique_ptr<QRhiBuffer>  vbuf;
-    std::unique_ptr<QRhiBuffer>  ubuf;
+    std::unique_ptr<QRhiBuffer> vbuf;
+    std::unique_ptr<QRhiBuffer> ubuf;
     std::unique_ptr<QRhiSampler> sampler;
-    std::unique_ptr<QRhiTexture> curveLutTex;    // 256×1 RGBA32F (L R G B)
-    std::unique_ptr<QRhiTexture> displayLutTex;  // N³ RGBA32F (1×1×1 dummy when unused)
-    std::unique_ptr<QRhiTexture> imageTex[2];    // indexed by Slot
+    std::unique_ptr<QRhiTexture> curveLutTex;   // 256×1 RGBA32F (L R G B)
+    std::unique_ptr<QRhiTexture> displayLutTex; // N³ RGBA32F (1×1×1 dummy when unused)
+    std::unique_ptr<QRhiTexture> imageTex[2];   // indexed by Slot
 
     // One srb, rebuilt when the sampled image texture or a LUT texture object
     // changes; layout is constant so it stays pipeline-compatible.
     std::unique_ptr<QRhiShaderResourceBindings> srb;
     QRhiTexture* srbImageTex = nullptr;
     int srbGeneration = -1;
-    int generation = 0;          // bumped whenever any texture is (re)created
+    int generation = 0; // bumped whenever any texture is (re)created
 
     // Pipelines cached per render-pass format (widget RGBA8 / export RGBA32F /
     // histogram RGBA8 offscreen).
@@ -134,7 +140,7 @@ private:
     // Transient upload for export's temporary full-res texture, consumed by
     // the next flushPendingUploads.
     QRhiTexture* extraUploadTex = nullptr;
-    QByteArray   extraUploadData;
+    QByteArray extraUploadData;
     PendingImage pendingImage[2];
     bool pendingImageDirty[2] = {false, false};
     std::array<float, 256 * 4> pendingCurveLut{};

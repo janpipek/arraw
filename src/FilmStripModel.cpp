@@ -1,19 +1,18 @@
 #include "FilmStripModel.h"
+#include <algorithm>
 #include <QCollator>
 #include <QFileInfo>
-#include <algorithm>
 
-FilmStripModel::FilmStripModel(QObject* parent) : QAbstractListModel(parent) {}
+FilmStripModel::FilmStripModel(QObject* parent)
+    : QAbstractListModel(parent) {}
 
 void FilmStripModel::setFiles(QStringList paths) {
     QCollator collator;
-    collator.setNumericMode(true);                       // IMG_2 before IMG_10
+    collator.setNumericMode(true); // IMG_2 before IMG_10
     collator.setCaseSensitivity(Qt::CaseInsensitive);
-    std::sort(paths.begin(), paths.end(),
-              [&collator](const QString& a, const QString& b) {
-                  return collator.compare(QFileInfo(a).fileName(),
-                                          QFileInfo(b).fileName()) < 0;
-              });
+    std::sort(paths.begin(), paths.end(), [&collator](const QString& a, const QString& b) {
+        return collator.compare(QFileInfo(a).fileName(), QFileInfo(b).fileName()) < 0;
+    });
 
     beginResetModel();
     files = std::move(paths);
@@ -35,7 +34,7 @@ QVariant FilmStripModel::data(const QModelIndex& index, int role) const {
     if (role == PathRole)
         return path;
     if (role == Qt::DecorationRole)
-        return thumbnails.value(path);  // null QImage until loaded
+        return thumbnails.value(path); // null QImage until loaded
     if (role == RatingRole)
         return marks.value(path).rating;
     if (role == LabelRole)

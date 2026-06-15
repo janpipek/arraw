@@ -14,13 +14,13 @@ public:
     explicit ProofingPanel(QWidget* parent = nullptr);
 
     bool proofingEnabled() const;
-    void setProofingEnabled(bool on);   // `S` key toggle
+    void setProofingEnabled(bool on); // `S` key toggle
 
-    QString     profilePath() const;
-    QString     profileName() const;    // for the status-bar indicator
+    QString profilePath() const;
+    QString profileName() const; // for the status-bar indicator
     ProofIntent intent() const;
-    bool        blackPointCompensation() const;
-    bool        gamutWarning() const;
+    bool blackPointCompensation() const;
+    bool gamutWarning() const;
 
 signals:
     void proofingChanged();

@@ -1,15 +1,18 @@
 #include "Histogram.h"
-#include <QPainter>
 #include <algorithm>
 #include <cmath>
+#include <QPainter>
 
-Histogram::Histogram(QWidget* parent) : QWidget(parent) {
+Histogram::Histogram(QWidget* parent)
+    : QWidget(parent) {
     setMinimumHeight(80);
     setMaximumHeight(120);
 }
 
 void Histogram::setSample(const QImage& img) {
-    r.fill(0); g.fill(0); b.fill(0);
+    r.fill(0);
+    g.fill(0);
+    b.fill(0);
 
     const QImage sample = img.convertToFormat(QImage::Format_RGB32);
     for (int y = 0; y < sample.height(); ++y) {
@@ -33,7 +36,7 @@ void Histogram::paintEvent(QPaintEvent*) {
     p.fillRect(rect(), QColor(30, 30, 30));
 
     // Log-scale the bar heights so sparse bins stay visible next to the peak.
-    const float xScale = float(width())  / kBins;
+    const float xScale = float(width()) / kBins;
     const float yScale = float(height()) / std::log1p(float(peak));
 
     auto draw = [&](const std::array<int, kBins>& ch, QColor col) {
@@ -46,7 +49,7 @@ void Histogram::paintEvent(QPaintEvent*) {
         }
     };
 
-    draw(r, QColor(220, 60,  60));
-    draw(g, QColor(60,  180, 60));
-    draw(b, QColor(60,  100, 220));
+    draw(r, QColor(220, 60, 60));
+    draw(g, QColor(60, 180, 60));
+    draw(b, QColor(60, 100, 220));
 }

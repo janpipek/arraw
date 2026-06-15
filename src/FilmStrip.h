@@ -1,7 +1,7 @@
 #pragma once
 #include "UserMetadata.h"
-#include <QWidget>
 #include <QString>
+#include <QWidget>
 
 class QListView;
 class FilmStripModel;
@@ -55,18 +55,18 @@ protected:
 private:
     void requestVisibleThumbnails();
     void updateThumbHeight();
-    bool handleMarkKey(int key);   // maps a culling key to a mark; false if not one
-    void loadMarks(const QStringList& paths);   // background sidecar scan
+    bool handleMarkKey(int key);              // maps a culling key to a mark; false if not one
+    void loadMarks(const QStringList& paths); // background sidecar scan
     void setRating(const QString& path, int rating);
-    void setLabel(const QString& path, ColourLabel label);   // toggles off if already set
+    void setLabel(const QString& path, ColourLabel label); // toggles off if already set
     void applyMarks(const QString& path, const UserMetadata& marks);
     void showContextMenu(const QPoint& pos);
     QString currentPath() const;
 
-    QListView*       list;
-    FilmStripModel*  model;
-    ThumbnailCache*  thumbs;
-    QString          currentDir;
+    QListView* list;
+    FilmStripModel* model;
+    ThumbnailCache* thumbs;
+    QString currentDir;
 
     static QStringList scanImageFiles(const QString& dir);
 };

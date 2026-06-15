@@ -12,8 +12,8 @@ class FilmStripModel : public QAbstractListModel {
 public:
     enum Roles {
         PathRole = Qt::UserRole + 1,
-        RatingRole,   // int: 0 unrated, -1 reject, 1..5 stars
-        LabelRole,    // int: a ColourLabel value
+        RatingRole, // int: 0 unrated, -1 reject, 1..5 stars
+        LabelRole,  // int: a ColourLabel value
     };
 
     explicit FilmStripModel(QObject* parent = nullptr);
@@ -39,6 +39,6 @@ public:
 
 private:
     QStringList files;
-    QHash<QString, QImage> thumbnails;       // keyed by path, survives reordering
-    QHash<QString, UserMetadata> marks;      // keyed by path, survives reordering
+    QHash<QString, QImage> thumbnails;  // keyed by path, survives reordering
+    QHash<QString, UserMetadata> marks; // keyed by path, survives reordering
 };

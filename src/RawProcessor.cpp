@@ -1,13 +1,13 @@
 #include "RawProcessor.h"
 #include "ColorManagement.h"
 #include "ImageMetadata.h"
-#include <libraw/libraw.h>
-#include <QImage>
-#include <QRectF>
 #include <algorithm>
 #include <cmath>
+#include <libraw/libraw.h>
 #include <memory>
 #include <vector>
+#include <QImage>
+#include <QRectF>
 
 QImage RawProcessor::extractThumbImage(LibRaw& raw) {
     if (raw.unpack_thumb() != LIBRAW_SUCCESS)
@@ -20,8 +20,7 @@ QImage RawProcessor::extractThumbImage(LibRaw& raw) {
 
     QImage img;
     if (thumb->type == LIBRAW_IMAGE_JPEG) {
-        img.loadFromData(reinterpret_cast<const uchar*>(thumb->data),
-                         int(thumb->data_size), "JPEG");
+        img.loadFromData(reinterpret_cast<const uchar*>(thumb->data), int(thumb->data_size), "JPEG");
     } else {
         img = QImage(thumb->width, thumb->height, QImage::Format_RGB888);
         if (!img.isNull()) {
@@ -108,16 +107,18 @@ static QRectF defaultCropRect(const LibRaw& raw, int imageWidth, int imageHeight
     if (x < 0 || y < 0 || x + w > imageWidth || y + h > imageHeight)
         return {0.0, 0.0, 1.0, 1.0};
 
-    return {double(x) / double(imageWidth),
-            double(y) / double(imageHeight),
-            double(w) / double(imageWidth),
-            double(h) / double(imageHeight)};
+    return {
+        double(x) / double(imageWidth),
+        double(y) / double(imageHeight),
+        double(w) / double(imageWidth),
+        double(h) / double(imageHeight)};
 }
 
-LoadResult RawProcessor::load(const QString& path,
-                               std::function<void(ImageBuffer)> onEmbeddedPreview,
-                               std::shared_ptr<std::atomic<bool>> cancel) {
-    auto cancelled = [&]{ return cancel && cancel->load(); };
+LoadResult RawProcessor::load(
+    const QString& path,
+    std::function<void(ImageBuffer)> onEmbeddedPreview,
+    std::shared_ptr<std::atomic<bool>> cancel) {
+    auto cancelled = [&] { return cancel && cancel->load(); };
     auto raw = std::make_unique<LibRaw>();
 
     int ret = raw->open_file(path.toLocal8Bit().constData());
@@ -131,23 +132,25 @@ LoadResult RawProcessor::load(const QString& path,
             onEmbeddedPreview(std::move(buf));
     }
 
-    if (cancelled()) return {};
+    if (cancelled())
+        return {};
 
     ret = raw->unpack();
     if (ret != LIBRAW_SUCCESS)
         return {{}, {}, {}, QString("unpack: %1").arg(libraw_strerror(ret))};
 
-    if (cancelled()) return {};
+    if (cancelled())
+        return {};
 
     const ImageMetadata metadata = extractMetadata(*raw);
 
-    raw->imgdata.params.use_camera_wb   = 1;
-    raw->imgdata.params.no_auto_bright  = 1;
-    raw->imgdata.params.output_bps      = 16;
-    raw->imgdata.params.output_color    = 8;   // Rec.2020 working space (needs libraw ≥ 0.21)
-    raw->imgdata.params.gamm[0]         = 1.0;  // linear gamma
-    raw->imgdata.params.gamm[1]         = 1.0;
-    raw->imgdata.params.bright          = 1.0;
+    raw->imgdata.params.use_camera_wb = 1;
+    raw->imgdata.params.no_auto_bright = 1;
+    raw->imgdata.params.output_bps = 16;
+    raw->imgdata.params.output_color = 8; // Rec.2020 working space (needs libraw ≥ 0.21)
+    raw->imgdata.params.gamm[0] = 1.0;    // linear gamma
+    raw->imgdata.params.gamm[1] = 1.0;
+    raw->imgdata.params.bright = 1.0;
 
     ret = raw->dcraw_process();
     if (ret != LIBRAW_SUCCESS)
@@ -162,7 +165,7 @@ LoadResult RawProcessor::load(const QString& path,
     const float scale = 1.0f / 65535.0f;
 
     ImageBuffer fullRes;
-    fullRes.width  = w;
+    fullRes.width = w;
     fullRes.height = h;
     fullRes.data.resize(w * h * 3);
 

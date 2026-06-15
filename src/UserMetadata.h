@@ -10,8 +10,8 @@
 enum class ColourLabel { None, Red, Yellow, Green, Blue, Purple };
 
 struct UserMetadata {
-    int         rating = 0;                  // 0 unrated, -1 reject, 1..5 stars
-    ColourLabel label  = ColourLabel::None;
+    int rating = 0; // 0 unrated, -1 reject, 1..5 stars
+    ColourLabel label = ColourLabel::None;
 
     bool operator==(const UserMetadata&) const = default;
 };
@@ -21,21 +21,32 @@ struct UserMetadata {
 // absent), and any unrecognised string reads back as None.
 inline QString colourLabelToString(ColourLabel label) {
     switch (label) {
-    case ColourLabel::Red:    return QStringLiteral("Red");
-    case ColourLabel::Yellow: return QStringLiteral("Yellow");
-    case ColourLabel::Green:  return QStringLiteral("Green");
-    case ColourLabel::Blue:   return QStringLiteral("Blue");
-    case ColourLabel::Purple: return QStringLiteral("Purple");
-    case ColourLabel::None:   break;
+    case ColourLabel::Red:
+        return QStringLiteral("Red");
+    case ColourLabel::Yellow:
+        return QStringLiteral("Yellow");
+    case ColourLabel::Green:
+        return QStringLiteral("Green");
+    case ColourLabel::Blue:
+        return QStringLiteral("Blue");
+    case ColourLabel::Purple:
+        return QStringLiteral("Purple");
+    case ColourLabel::None:
+        break;
     }
     return {};
 }
 
 inline ColourLabel colourLabelFromString(const QString& s) {
-    if (s == QLatin1String("Red"))    return ColourLabel::Red;
-    if (s == QLatin1String("Yellow")) return ColourLabel::Yellow;
-    if (s == QLatin1String("Green"))  return ColourLabel::Green;
-    if (s == QLatin1String("Blue"))   return ColourLabel::Blue;
-    if (s == QLatin1String("Purple")) return ColourLabel::Purple;
+    if (s == QLatin1String("Red"))
+        return ColourLabel::Red;
+    if (s == QLatin1String("Yellow"))
+        return ColourLabel::Yellow;
+    if (s == QLatin1String("Green"))
+        return ColourLabel::Green;
+    if (s == QLatin1String("Blue"))
+        return ColourLabel::Blue;
+    if (s == QLatin1String("Purple"))
+        return ColourLabel::Purple;
     return ColourLabel::None;
 }

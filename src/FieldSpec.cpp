@@ -1,7 +1,7 @@
 #include "FieldSpec.h"
-#include <QRegularExpression>
 #include <algorithm>
 #include <cmath>
+#include <QRegularExpression>
 
 int FieldSpec::displayToRaw(double display) const {
     const int raw = int(std::lround(display / double(displayScale)));
@@ -22,7 +22,8 @@ double FieldSpec::parseDisplay(const QString& text, bool* ok) const {
     const auto match = number.match(text.trimmed());
     bool good = false;
     const double value = match.hasMatch() ? match.captured().toDouble(&good) : 0.0;
-    if (ok) *ok = good;
+    if (ok)
+        *ok = good;
     return good ? value : 0.0;
 }
 
@@ -30,10 +31,12 @@ int FieldSpec::parse(const QString& text, bool* ok) const {
     bool good = false;
     const double value = parseDisplay(text, &good);
     if (!good) {
-        if (ok) *ok = false;
+        if (ok)
+            *ok = false;
         return def;
     }
-    if (ok) *ok = true;
+    if (ok)
+        *ok = true;
     return displayToRaw(value);
 }
 
