@@ -128,6 +128,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(localPanel, &LocalAdjustmentPanel::changed,
             this, [this] { pushParamsToViewport(); });
 
+    // Panel selection drives which mask the on-image tool edits; on-image drags
+    // write the geometry back into the panel.
+    connect(localPanel, &LocalAdjustmentPanel::activeIndexChanged,
+            viewport, &ImageViewport::setActiveLocalAdjustment);
+    connect(viewport, &ImageViewport::localMaskChanged,
+            localPanel, &LocalAdjustmentPanel::updateMaskGeometry);
+
     connect(viewport, &ImageViewport::histogramsReady,
             adjPanel, &AdjustmentPanel::setHistogramSamples);
 
@@ -327,6 +334,7 @@ void MainWindow::setupToolbar() {
     cropAction       = addTool("Crop",        Qt::Key_C);
     straightenAction = addTool("Straighten",  {});
     wbAction         = addTool("White Bal.",  {});
+    maskAction       = addTool("Masks",       Qt::Key_M);
 
     connect(toolGroup, &QActionGroup::triggered, this, [this](QAction* a) {
         using T = ImageViewport::ActiveTool;
@@ -334,6 +342,7 @@ void MainWindow::setupToolbar() {
         if (a->isChecked())
             t = a == cropAction       ? T::Crop
               : a == straightenAction ? T::Straighten
+              : a == maskAction       ? T::LocalMask
                                       : T::WhiteBalance;
         viewport->setActiveTool(t);
     });
@@ -359,6 +368,11 @@ void MainWindow::syncToolActions() {
     cropAction->setChecked(      t == ImageViewport::ActiveTool::Crop);
     straightenAction->setChecked(t == ImageViewport::ActiveTool::Straighten);
     wbAction->setChecked(        t == ImageViewport::ActiveTool::WhiteBalance);
+    maskAction->setChecked(      t == ImageViewport::ActiveTool::LocalMask);
+
+    // Raise the Masks tab while the LocalMask tool is active.
+    if (t == ImageViewport::ActiveTool::LocalMask && rightTabs && masksTabIndex >= 0)
+        rightTabs->setCurrentIndex(masksTabIndex);
 }
 
 void MainWindow::setToolsEnabled(bool on) {
@@ -441,11 +455,12 @@ void MainWindow::setupDocks() {
     localScroll->setWidget(localPanel);
     localScroll->setWidgetResizable(true);
     localScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    tabs->addTab(localScroll, "Masks");
+    masksTabIndex = tabs->addTab(localScroll, "Masks");
 
     exifPanel = new ExifPanel(tabs);
     tabs->addTab(exifPanel, "EXIF");
 
+    rightTabs = tabs;
     rightDock->setWidget(tabs);
     addDockWidget(Qt::RightDockWidgetArea, rightDock);
     // adjPanel → viewport paramsChanged wired in constructor (after both are created)

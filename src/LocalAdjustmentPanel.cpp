@@ -218,6 +218,15 @@ void LocalAdjustmentPanel::syncActiveFromSliders() {
     emit changed(adjustments);
 }
 
+void LocalAdjustmentPanel::updateMaskGeometry(int index, const LinearMask& mask) {
+    if (index < 0 || index >= int(adjustments.size()))
+        return;
+    adjustments[index].mask = mask;
+    if (index == activeIndex())
+        loadActiveIntoSliders();   // refresh the P0/P1 fields (signals blocked)
+    emit changed(adjustments);
+}
+
 void LocalAdjustmentPanel::syncActiveGeometry() {
     LocalAdjustment* a = active();
     if (!a)

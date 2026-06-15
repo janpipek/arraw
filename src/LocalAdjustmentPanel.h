@@ -28,6 +28,10 @@ public:
     int  activeIndex() const;
     void setActiveIndex(int index);
 
+    // Apply mask geometry changed by on-image dragging (ImageViewport). Refreshes
+    // the P0/P1 fields if it is the active mask and emits changed for re-render.
+    void updateMaskGeometry(int index, const LinearMask& mask);
+
 public slots:
     void addLinearMask();
     void deleteActive();

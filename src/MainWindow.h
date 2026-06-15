@@ -18,6 +18,7 @@ class QToolButton;
 class QToolBar;
 class QActionGroup;
 class QAction;
+class QTabWidget;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -83,6 +84,9 @@ private:
     QAction*         cropAction;
     QAction*         straightenAction;
     QAction*         wbAction;
+    QAction*         maskAction;             // LocalMask tool toggle
+    QTabWidget*      rightTabs = nullptr;    // Adjustments / Masks / EXIF
+    int              masksTabIndex = -1;
     QAction*         saveAction;
     QAction*         exportAction;
     QAction*         clipHighlightsAction;   // View → Show Highlight Clipping

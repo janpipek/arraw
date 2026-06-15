@@ -16,7 +16,7 @@ public:
     // Mutually-exclusive viewport tools. Crop edits a rectangle; Straighten
     // draws a level line; WhiteBalance samples a neutral pixel. Only one is
     // active at a time — the toolbar is a thin control surface over this.
-    enum class ActiveTool { None, Crop, Straighten, WhiteBalance };
+    enum class ActiveTool { None, Crop, Straighten, WhiteBalance, LocalMask };
     Q_ENUM(ActiveTool)
 
     explicit ImageViewport(QWidget* parent = nullptr);
@@ -35,6 +35,11 @@ public:
     void commitActiveTool() { setActiveTool(ActiveTool::None); }
     void cancelActiveTool();
     void setOriginalImageSize(int width, int height);
+
+    // Which local adjustment the LocalMask tool edits on the image (-1 = none).
+    // Driven by the Masks panel selection.
+    void setActiveLocalAdjustment(int index);
+
     void resetView();
     void setZoom(float value);
     void setPixelZoom(float value);
@@ -77,6 +82,8 @@ signals:
     void rotationCommitted(float degrees);          // Straighten tool result
     void whiteBalanceCommitted(float kelvin, float tint);   // WB picker result
     void activeToolChanged(ImageViewport::ActiveTool tool);
+    // Live geometry of the active Linear mask while its handles are dragged.
+    void localMaskChanged(int index, const LinearMask& mask);
     void zoomChanged(float pixelZoom);
     // Small shader-rendered samples for histogramming (docs/adr/0004):
     // finalSample is the full pipeline, curveInputSample stops after tone
@@ -135,6 +142,13 @@ private:
     void drawAlignGrid(QPainter& p) const;
     bool shouldShowAlignGrid() const;
 
+    // Local-mask tool: edit the active Linear mask's handles on the image.
+    bool localMaskMode() const { return tool == ActiveTool::LocalMask; }
+    const LinearMask* activeLinearMask() const;
+    QPointF localHandleViewport(LinearHandle h) const;   // p0/p1/center → screen
+    LinearHandle hitTestLocalMask(QPointF viewportPos) const;
+    void drawLocalMaskOverlay(QPainter& p) const;
+
     // Crop is just one of the active tools; this keeps the crop code readable.
     bool cropMode() const { return tool == ActiveTool::Crop; }
     void enterCrop();      // snapshot + seed the editable crop rect
@@ -187,6 +201,11 @@ private:
 
     // ── Tool state ────────────────────────────────────────────────────────
     ActiveTool tool = ActiveTool::None;
+
+    // Local-mask editing: which mask is active, and the handle being dragged.
+    static constexpr float kMaskHandleRadius = 8.0f;
+    int          activeLocalAdj = -1;
+    LinearHandle localDragHandle = LinearHandle::None;
 
     // Straighten: endpoints of the level line being dragged (viewport pixels).
     bool     straightenDragging = false;

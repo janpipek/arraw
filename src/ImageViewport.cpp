@@ -8,6 +8,7 @@
 #include <QPainterPath>
 #include <algorithm>
 #include <cmath>
+#include <variant>
 
 // CPU mirror of the rotation in image.vert (keep in sync). UV space is not
 // square, so x is scaled by the image aspect before rotating to make the
@@ -164,9 +165,80 @@ void ImageViewport::render(QRhiCommandBuffer* cb) {
     core.record(cb, renderTarget(), activeSlot(), fp);
 }
 
+void ImageViewport::setActiveLocalAdjustment(int index) {
+    activeLocalAdj = index;
+    update();
+}
+
+const LinearMask* ImageViewport::activeLinearMask() const {
+    if (activeLocalAdj < 0 || activeLocalAdj >= int(params.localAdjustments.size()))
+        return nullptr;
+    return std::get_if<LinearMask>(&params.localAdjustments[activeLocalAdj].mask);
+}
+
+QPointF ImageViewport::localHandleViewport(LinearHandle h) const {
+    const LinearMask* m = activeLinearMask();
+    if (!m)
+        return {};
+    QPointF uv;
+    switch (h) {
+    case LinearHandle::P0:     uv = m->p0; break;
+    case LinearHandle::P1:     uv = m->p1; break;
+    case LinearHandle::Center: uv = (m->p0 + m->p1) / 2.0; break;
+    default: return {};
+    }
+    return cropUVToViewport(float(uv.x()), float(uv.y()));
+}
+
+// Screen-space pick (constant-pixel target regardless of zoom). Endpoints win
+// ties over the centre, matching the CPU nearestHandle convention.
+LinearHandle ImageViewport::hitTestLocalMask(QPointF pos) const {
+    if (!activeLinearMask())
+        return LinearHandle::None;
+    const LinearHandle order[3] = {LinearHandle::P0, LinearHandle::P1,
+                                   LinearHandle::Center};
+    LinearHandle best = LinearHandle::None;
+    double bestD2 = double(kMaskHandleRadius) * kMaskHandleRadius;
+    for (LinearHandle h : order) {
+        const QPointF d = pos - localHandleViewport(h);
+        const double d2 = QPointF::dotProduct(d, d);
+        if (d2 < bestD2) {
+            best = h;
+            bestD2 = d2;
+        }
+    }
+    return best;
+}
+
+void ImageViewport::drawLocalMaskOverlay(QPainter& p) const {
+    const LinearMask* m = activeLinearMask();
+    if (!m)
+        return;
+    const QPointF a = localHandleViewport(LinearHandle::P0);
+    const QPointF b = localHandleViewport(LinearHandle::P1);
+    const QPointF c = localHandleViewport(LinearHandle::Center);
+
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.setPen(QPen(QColor(255, 255, 255, 200), 1.5));
+    p.setBrush(Qt::NoBrush);
+    p.drawLine(a, b);
+
+    auto handle = [&](QPointF pt, bool filled) {
+        p.setBrush(filled ? QBrush(QColor(255, 255, 255, 220))
+                          : QBrush(QColor(0, 0, 0, 60)));
+        p.setPen(QPen(QColor(0, 0, 0, 180), 1.0));
+        p.drawEllipse(pt, kMaskHandleRadius, kMaskHandleRadius);
+    };
+    handle(a, false);   // P0 (weight 0)
+    handle(b, false);   // P1 (weight 1)
+    handle(c, true);    // centre — drag to move the whole mask
+}
+
 void ImageViewport::paintOverlay(QPainter& p) const {
     if (cropMode()) {
         drawCropOverlay(p);
+    } else if (localMaskMode()) {
+        drawLocalMaskOverlay(p);
     } else if (shouldShowAlignGrid()) {
         drawAlignGrid(p);
         if (tool == ActiveTool::Straighten && straightenDragging)
@@ -774,6 +846,10 @@ void ImageViewport::mousePressEvent(QMouseEvent* e) {
             emit whiteBalanceCommitted(kelvin, tintOut);
         return;   // tool stays active for further picks
     }
+    if (localMaskMode() && e->button() == Qt::LeftButton) {
+        localDragHandle = hitTestLocalMask(e->position());
+        return;   // no create-on-drag: empty space does nothing
+    }
     if (e->button() == Qt::MiddleButton ||
         (e->button() == Qt::LeftButton && e->modifiers() & Qt::AltModifier)) {
         dragging  = true;
@@ -789,6 +865,17 @@ void ImageViewport::mouseMoveEvent(QMouseEvent* e) {
     if (tool == ActiveTool::Straighten && straightenDragging) {
         straightenEnd = e->position();
         update();
+        return;
+    }
+    if (localMaskMode() && (e->buttons() & Qt::LeftButton) &&
+        localDragHandle != LinearHandle::None) {
+        if (const LinearMask* m = activeLinearMask()) {
+            const LinearMask moved =
+                moveHandle(*m, localDragHandle, viewportToCropUV(e->position()));
+            params.localAdjustments[activeLocalAdj].mask = moved;  // echo for overlay
+            emit localMaskChanged(activeLocalAdj, moved);
+            update();
+        }
         return;
     }
     if (!dragging) return;
@@ -810,6 +897,10 @@ void ImageViewport::mouseReleaseEvent(QMouseEvent* e) {
         straightenDragging = false;
         applyStraightenLine();   // tool stays active; redraw the line to retry
         update();
+        return;
+    }
+    if (localMaskMode() && e->button() == Qt::LeftButton) {
+        localDragHandle = LinearHandle::None;
         return;
     }
     dragging = false;
