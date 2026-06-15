@@ -24,6 +24,12 @@ ProofingPanel::ProofingPanel(QWidget* parent) : QWidget(parent) {
     auto* form = new QFormLayout(group);
 
     profileBox = new QComboBox;
+    // Some ICC descriptions are very long; don't let them dictate the panel
+    // width. Cap the closed combo to a fixed character budget (it elides) and
+    // let it shrink — the full name still shows in the dropdown.
+    profileBox->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    profileBox->setMinimumContentsLength(10);
+    profileBox->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     // Proof targets: anything printable or displayable found on the system.
     for (const IccProfileInfo& info : scanSystemProfiles())
         profileBox->addItem(info.description, info.path);

@@ -1,4 +1,5 @@
 #include "AdjustmentPanel.h"
+#include "AdjustmentSpinBox.h"
 #include "Histogram.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -10,6 +11,18 @@
 #include <QButtonGroup>
 #include <QStackedWidget>
 #include <QScrollArea>
+#include <QSignalBlocker>
+#include <QEvent>
+
+// Per-row number handling lives in exactly one place (see FieldSpec).
+// {min, max, def, paramScale, displayScale, decimals, suffix, signed, step}
+static const FieldSpec kExposureSpec  {-500,   500,    0, 0.01f, 0.01f, 2, " EV", true, 0.05f};
+static const FieldSpec kToneSpec      {-100,   100,    0, 1.0f,  1.0f,  0, {},    true, 1.0f};
+static const FieldSpec kTempSpec      { 2000, 12000, 5500, 1.0f,  1.0f,  0, " K",  false, 50.0f};
+static const FieldSpec kBipolarSpec   {-100,   100,    0, 1.0f,  1.0f,  0, {},    true, 1.0f};
+static const FieldSpec kHslHueSpec    {-100,   100,    0, 1.0f,  0.3f,  1, QString::fromUtf8("\xc2\xb0"), true, 0.3f};
+static const FieldSpec kSharpenSpec   {    0,   100,    0, 1.0f,  1.0f,  0, {},    false, 1.0f};
+static const FieldSpec kRotationSpec  {-4500, 4500,    0, 0.01f, 0.01f, 2, QString::fromUtf8("\xc2\xb0"), true, 0.10f};
 
 struct WBPreset { const char* name; int kelvin; int tint; };
 static const WBPreset kWBPresets[] = {
@@ -48,17 +61,17 @@ AdjustmentPanel::AdjustmentPanel(QWidget* parent) : QWidget(parent) {
     for (auto& p : kWBPresets)
         wbPresets->addItem(p.name);
     wbLayout->addWidget(wbPresets);
-    temperature = addSlider(wbLayout, "Temp",   2000, 12000, 5500, "K");
-    tint        = addSlider(wbLayout, "Tint",   -100,   100,    0);
+    temperature = addSlider(wbLayout, "Temp", kTempSpec);
+    tint        = addSlider(wbLayout, "Tint", kBipolarSpec);
 
     // ── Tone ──────────────────────────────────────────────────────────────────
     auto* tone = makeGroup("Tone");
-    exposure   = addSlider(tone, "Exposure",   -500,  500,   0);
-    contrast   = addSlider(tone, "Contrast",   -100,  100,   0);
-    highlights = addSlider(tone, "Highlights", -100,  100,   0);
-    shadows    = addSlider(tone, "Shadows",    -100,  100,   0);
-    whites     = addSlider(tone, "Whites",     -100,  100,   0);
-    blacks     = addSlider(tone, "Blacks",     -100,  100,   0);
+    exposure   = addSlider(tone, "Exposure",   kExposureSpec);
+    contrast   = addSlider(tone, "Contrast",   kToneSpec);
+    highlights = addSlider(tone, "Highlights", kToneSpec);
+    shadows    = addSlider(tone, "Shadows",    kToneSpec);
+    whites     = addSlider(tone, "Whites",     kToneSpec);
+    blacks     = addSlider(tone, "Blacks",     kToneSpec);
 
     // ── Tone Curve ────────────────────────────────────────────────────────────
     {
@@ -103,17 +116,15 @@ AdjustmentPanel::AdjustmentPanel(QWidget* parent) : QWidget(parent) {
             toneCurve->setChannel(ToneCurveWidget::Channel(id));
         });
         connect(resetCurveBtn, &QPushButton::clicked, this, [this] {
-            beforeDrag = adjustments;
-            toneCurve->resetChannel(toneCurve->channel());
-            if (!(adjustments == beforeDrag))
-                emit adjustmentCommitted(beforeDrag, adjustments);
+            toneCurve->resetChannel(toneCurve->channel());   // emits curveChanged
+            commit();
         });
     }
 
     // ── Color ─────────────────────────────────────────────────────────────────
     auto* color = makeGroup("Color");
-    saturation  = addSlider(color, "Saturation", -100, 100, 0);
-    vibrance    = addSlider(color, "Vibrance",   -100, 100, 0);
+    saturation  = addSlider(color, "Saturation", kBipolarSpec);
+    vibrance    = addSlider(color, "Vibrance",   kBipolarSpec);
 
     // ── HSL / Color Mix ───────────────────────────────────────────────────────
     {
@@ -131,19 +142,19 @@ AdjustmentPanel::AdjustmentPanel(QWidget* parent) : QWidget(parent) {
 
         hslStack = new QStackedWidget(box);
 
-        auto makeHslPage = [&](std::array<SliderRow, 8>& rows) {
+        auto makeHslPage = [&](std::array<SliderRow, 8>& rows, const FieldSpec& spec) {
             auto* page   = new QWidget(hslStack);
             auto* pvlay  = new QVBoxLayout(page);
             pvlay->setContentsMargins(0, 0, 0, 0);
             pvlay->setSpacing(1);
             for (int i = 0; i < 8; ++i)
-                rows[i] = addSlider(pvlay, kHslRangeNames[i], -100, 100, 0);
+                rows[i] = addSlider(pvlay, kHslRangeNames[i], spec);
             hslStack->addWidget(page);
         };
 
-        makeHslPage(hslHue);
-        makeHslPage(hslSat);
-        makeHslPage(hslLum);
+        makeHslPage(hslHue, kHslHueSpec);   // shown in degrees (±30°)
+        makeHslPage(hslSat, kBipolarSpec);
+        makeHslPage(hslLum, kBipolarSpec);
 
         auto addTabBtn = [&](const QString& label, int page) {
             auto* btn = new QPushButton(label, tabRow);
@@ -165,11 +176,11 @@ AdjustmentPanel::AdjustmentPanel(QWidget* parent) : QWidget(parent) {
 
     // ── Detail ────────────────────────────────────────────────────────────────
     auto* detail = makeGroup("Detail");
-    sharpening   = addSlider(detail, "Sharpen", 0, 100, 0);
+    sharpening   = addSlider(detail, "Sharpen", kSharpenSpec);
 
     // ── Geometry ──────────────────────────────────────────────────────────────
     auto* geo = makeGroup("Geometry");
-    rotation  = addSlider(geo, "Rotation", -4500, 4500, 0, "°");
+    rotation  = addSlider(geo, "Rotation", kRotationSpec);
 
     auto* resetBtn = new QPushButton("Reset All", this);
     root->addWidget(resetBtn);
@@ -180,21 +191,28 @@ AdjustmentPanel::AdjustmentPanel(QWidget* parent) : QWidget(parent) {
         if (i < 0) return;
         temperature.slider->setValue(kWBPresets[i].kelvin);
         tint.slider->setValue(kWBPresets[i].tint);
+        commit();   // one undo entry for the whole preset
     });
     connect(rotation.slider, &QSlider::sliderPressed,
             this, [this] { emit straightenActive(true); });
     connect(rotation.slider, &QSlider::sliderReleased,
             this, [this] { emit straightenActive(false); });
 
-    connectSliders();
+    // Wire every row and register double-click-to-reset on its slider and label.
+    for (SliderRow* r : allRows()) {
+        connectRow(*r);
+        r->slider->installEventFilter(this);
+        r->nameLabel->installEventFilter(this);
+        resetTargets.insert(r->slider, r);
+        resetTargets.insert(r->nameLabel, r);
+    }
     connectCurve();
 }
 
 // ── Slider factory ────────────────────────────────────────────────────────────
 
 AdjustmentPanel::SliderRow AdjustmentPanel::addSlider(
-    QVBoxLayout* layout, const QString& name,
-    int min, int max, int def, const QString& suffix)
+    QVBoxLayout* layout, const QString& name, const FieldSpec& spec)
 {
     auto* row   = new QWidget(this);
     auto* hbox  = new QHBoxLayout(row);
@@ -203,90 +221,117 @@ AdjustmentPanel::SliderRow AdjustmentPanel::addSlider(
     auto* lbl   = new QLabel(name, row);
     lbl->setFixedWidth(72);
     auto* sl    = new QSlider(Qt::Horizontal, row);
-    sl->setRange(min, max);
-    sl->setValue(def);
-    auto* val   = new QLabel(QString::number(def) + suffix, row);
-    val->setFixedWidth(44);
-    val->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    sl->setRange(spec.min, spec.max);
+    sl->setValue(spec.def);
+    sl->setMinimumWidth(28);   // override the ~84px default so the panel can narrow
+    auto* spin  = new AdjustmentSpinBox(spec, row);
+    spin->setValue(spec.rawToDisplay(spec.def));
+    spin->setFixedWidth(64);
 
     hbox->addWidget(lbl);
     hbox->addWidget(sl, 1);
-    hbox->addWidget(val);
+    hbox->addWidget(spin);
     layout->addWidget(row);
 
-    connect(sl, &QSlider::valueChanged, val,
-            [val, suffix](int v) { val->setText(QString::number(v) + suffix); });
-
-    return {sl, val};
+    return {sl, spin, lbl, spec};
 }
 
 // ── Param sync ────────────────────────────────────────────────────────────────
 
-// Pull all slider values into `adjustments`. Sliders store ×100 fixed-point
-// where the param is fractional: exposure ±500 → ±5 EV, rotation ±4500 → ±45°.
+// Pull all slider values into `adjustments`, each through its FieldSpec's
+// raw→param scale (exposure ±500→±5 EV, rotation ±4500→±45°, others 1:1).
 // cropRect and the curves have no sliders (viewport / curve widget own them),
 // so they are carried over untouched.
 void AdjustmentPanel::syncParams() {
-    const QRectF crop      = adjustments.cropRect;
-    adjustments.exposure   = exposure.slider->value()   / 100.0f;
-    adjustments.contrast   = float(contrast.slider->value());
-    adjustments.highlights = float(highlights.slider->value());
-    adjustments.shadows    = float(shadows.slider->value());
-    adjustments.whites     = float(whites.slider->value());
-    adjustments.blacks     = float(blacks.slider->value());
-    adjustments.temperature = float(temperature.slider->value());
-    adjustments.tint       = float(tint.slider->value());
-    adjustments.saturation = float(saturation.slider->value());
-    adjustments.vibrance   = float(vibrance.slider->value());
-    adjustments.sharpening = float(sharpening.slider->value());
-    adjustments.rotation   = rotation.slider->value() / 100.0f;
-    adjustments.cropRect   = crop;
+    auto v = [](const SliderRow& r) { return r.spec.toParam(r.slider->value()); };
+    adjustments.exposure    = v(exposure);
+    adjustments.contrast    = v(contrast);
+    adjustments.highlights  = v(highlights);
+    adjustments.shadows     = v(shadows);
+    adjustments.whites      = v(whites);
+    adjustments.blacks      = v(blacks);
+    adjustments.temperature = v(temperature);
+    adjustments.tint        = v(tint);
+    adjustments.saturation  = v(saturation);
+    adjustments.vibrance    = v(vibrance);
+    adjustments.sharpening  = v(sharpening);
+    adjustments.rotation    = v(rotation);
     for (int i = 0; i < 8; ++i) {
-        adjustments.hslHue[i] = float(hslHue[i].slider->value());
-        adjustments.hslSat[i] = float(hslSat[i].slider->value());
-        adjustments.hslLum[i] = float(hslLum[i].slider->value());
+        adjustments.hslHue[i] = v(hslHue[i]);
+        adjustments.hslSat[i] = v(hslSat[i]);
+        adjustments.hslLum[i] = v(hslLum[i]);
     }
 }
 
 // ── Connect helpers ───────────────────────────────────────────────────────────
 
-std::vector<QSlider*> AdjustmentPanel::allSliders() const {
-    std::vector<QSlider*> sliders = {
-        exposure.slider, contrast.slider, highlights.slider,
-        shadows.slider,  whites.slider,   blacks.slider,
-        temperature.slider, tint.slider,
-        saturation.slider, vibrance.slider, sharpening.slider,
-        rotation.slider
+std::vector<AdjustmentPanel::SliderRow*> AdjustmentPanel::allRows() {
+    std::vector<SliderRow*> rows = {
+        &exposure, &contrast, &highlights, &shadows, &whites, &blacks,
+        &temperature, &tint, &saturation, &vibrance, &sharpening, &rotation
     };
     for (int i = 0; i < 8; ++i) {
-        sliders.push_back(hslHue[i].slider);
-        sliders.push_back(hslSat[i].slider);
-        sliders.push_back(hslLum[i].slider);
+        rows.push_back(&hslHue[i]);
+        rows.push_back(&hslSat[i]);
+        rows.push_back(&hslLum[i]);
     }
-    return sliders;
+    return rows;
 }
 
-// Each drag gesture becomes one undo entry: sliderPressed snapshots the params
-// into beforeDrag, sliderReleased emits the (before, after) pair that
-// MainWindow turns into a single AdjustmentCommand.
-void AdjustmentPanel::connectSliders() {
-    for (auto* s : allSliders()) {
-        connect(s, &QSlider::valueChanged, this, [this](int) {
-            syncParams();
-            emit paramsChanged(adjustments);
-        });
-        connect(s, &QSlider::sliderPressed,  this, [this] { beforeDrag = adjustments; });
-        connect(s, &QSlider::sliderReleased, this, [this] {
-            if (!(adjustments == beforeDrag))
-                emit adjustmentCommitted(beforeDrag, adjustments);
-        });
+// The slider is the source of truth for a row's value; the spinbox is a second
+// face on it. Slider moves drive the live preview and mirror into the spinbox;
+// spinbox edits (committed on Enter/focus-out, or via scroll/arrows) drive the
+// slider, which then re-runs the preview path. Each settled change becomes one
+// undo entry via commit() (baseline = last committed state).
+void AdjustmentPanel::connectRow(SliderRow& row) {
+    auto* slider = row.slider;
+    auto* spin   = row.spin;
+    const FieldSpec spec = row.spec;
+
+    connect(slider, &QSlider::valueChanged, this, [this, spin, spec](int v) {
+        QSignalBlocker block(spin);
+        spin->setValue(spec.rawToDisplay(v));
+        syncParams();
+        emit paramsChanged(adjustments);
+    });
+    connect(slider, &QSlider::sliderReleased, this, [this] { commit(); });
+
+    connect(spin, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+            [this, slider, spec](double d) {
+        slider->setValue(spec.displayToRaw(d));   // runs the preview path above
+        commit();
+    });
+    // After typing, snap the field text to the slider's actual tick.
+    connect(spin, &QAbstractSpinBox::editingFinished, this, [slider, spin, spec] {
+        QSignalBlocker block(spin);
+        spin->setValue(spec.rawToDisplay(slider->value()));
+    });
+}
+
+// Emit one undo entry if the settled state differs from the last commit.
+void AdjustmentPanel::commit() {
+    if (!(adjustments == committed)) {
+        emit adjustmentCommitted(committed, adjustments);
+        committed = adjustments;
     }
+}
+
+void AdjustmentPanel::resetRow(SliderRow& row) {
+    row.slider->setValue(row.spec.def);   // drives preview + spinbox
+    commit();
+}
+
+bool AdjustmentPanel::eventFilter(QObject* obj, QEvent* ev) {
+    if (ev->type() == QEvent::MouseButtonDblClick) {
+        if (auto* row = resetTargets.value(obj, nullptr)) {
+            resetRow(*row);
+            return true;
+        }
+    }
+    return QWidget::eventFilter(obj, ev);
 }
 
 void AdjustmentPanel::connectCurve() {
-    connect(toneCurve, &ToneCurveWidget::editingStarted, this, [this] {
-        beforeDrag = adjustments;
-    });
     connect(toneCurve, &ToneCurveWidget::curveChanged,
             this, [this](ToneCurveWidget::Channel ch, const std::vector<QPointF>& pts) {
         switch (ch) {
@@ -298,10 +343,7 @@ void AdjustmentPanel::connectCurve() {
         updateCurveChannelIndicators();
         emit paramsChanged(adjustments);
     });
-    connect(toneCurve, &ToneCurveWidget::editingFinished, this, [this] {
-        if (!(adjustments == beforeDrag))
-            emit adjustmentCommitted(beforeDrag, adjustments);
-    });
+    connect(toneCurve, &ToneCurveWidget::editingFinished, this, [this] { commit(); });
 }
 
 // ── Reset / set params ────────────────────────────────────────────────────────
@@ -311,29 +353,31 @@ void AdjustmentPanel::resetAll() {
 }
 
 void AdjustmentPanel::setParams(const AdjustmentParams& p) {
-    // Block all slider signals
-    const auto sliders = allSliders();
-    for (auto* s : sliders) s->blockSignals(true);
+    const auto rows = allRows();
+    for (auto* r : rows) { r->slider->blockSignals(true); r->spin->blockSignals(true); }
 
-    exposure.slider->setValue(int(p.exposure * 100.0f));
-    contrast.slider->setValue(int(p.contrast));
-    highlights.slider->setValue(int(p.highlights));
-    shadows.slider->setValue(int(p.shadows));
-    whites.slider->setValue(int(p.whites));
-    blacks.slider->setValue(int(p.blacks));
-    temperature.slider->setValue(int(p.temperature));
-    tint.slider->setValue(int(p.tint));
-    saturation.slider->setValue(int(p.saturation));
-    vibrance.slider->setValue(int(p.vibrance));
-    sharpening.slider->setValue(int(p.sharpening));
-    rotation.slider->setValue(int(p.rotation * 100.0f));
+    auto set = [](SliderRow& r, float param) { r.slider->setValue(r.spec.fromParam(param)); };
+    set(exposure, p.exposure);
+    set(contrast, p.contrast);
+    set(highlights, p.highlights);
+    set(shadows, p.shadows);
+    set(whites, p.whites);
+    set(blacks, p.blacks);
+    set(temperature, p.temperature);
+    set(tint, p.tint);
+    set(saturation, p.saturation);
+    set(vibrance, p.vibrance);
+    set(sharpening, p.sharpening);
+    set(rotation, p.rotation);
     for (int i = 0; i < 8; ++i) {
-        hslHue[i].slider->setValue(int(p.hslHue[i]));
-        hslSat[i].slider->setValue(int(p.hslSat[i]));
-        hslLum[i].slider->setValue(int(p.hslLum[i]));
+        set(hslHue[i], p.hslHue[i]);
+        set(hslSat[i], p.hslSat[i]);
+        set(hslLum[i], p.hslLum[i]);
     }
+    // Mirror each slider tick into its spinbox.
+    for (auto* r : rows) r->spin->setValue(r->spec.rawToDisplay(r->slider->value()));
 
-    for (auto* s : sliders) s->blockSignals(false);
+    for (auto* r : rows) { r->slider->blockSignals(false); r->spin->blockSignals(false); }
 
     // Curve widget update (no signals needed — setPoints doesn't emit curveChanged)
     toneCurve->setPoints(ToneCurveWidget::Channel::Luma,  p.curveLuma.points);
@@ -342,6 +386,7 @@ void AdjustmentPanel::setParams(const AdjustmentParams& p) {
     toneCurve->setPoints(ToneCurveWidget::Channel::Blue,  p.curveB.points);
 
     adjustments = p;
+    committed   = p;
     updateCurveChannelIndicators();
     emit paramsChanged(adjustments);
 }

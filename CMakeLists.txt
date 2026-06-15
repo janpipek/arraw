@@ -49,6 +49,7 @@ set(CORE_SOURCES
     src/ImageViewport.cpp
     src/RendererCore.cpp
     src/AdjustmentPanel.cpp
+    src/AdjustmentSpinBox.cpp
     src/ToneCurveWidget.cpp
     src/ExifPanel.cpp
     src/ImageMetadata.cpp
@@ -56,6 +57,7 @@ set(CORE_SOURCES
     src/RawProcessor.cpp
     src/StandardImageLoader.cpp
     src/ImagePipeline.cpp
+    src/FieldSpec.cpp
     src/ColorManagement.cpp
     src/ProofingPanel.cpp
     src/XmpSidecar.cpp
