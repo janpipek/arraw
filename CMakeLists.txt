@@ -8,6 +8,14 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
+function(arraw_enable_warnings target)
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /W4)
+    else()
+        target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+endfunction()
+
 # 6.8: QRhiWidget (6.7) + LTS. ShaderTools provides qt6_add_shaders (qsb);
 # GuiPrivate provides the semi-public RHI headers (rhi/qrhi.h).
 find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets Concurrent ShaderTools GuiPrivate)
@@ -69,6 +77,7 @@ set(CORE_SOURCES
 )
 
 add_library(arraw_core STATIC ${CORE_SOURCES})
+arraw_enable_warnings(arraw_core)
 
 target_include_directories(arraw_core PUBLIC src)
 
@@ -93,6 +102,7 @@ qt6_add_shaders(arraw_core "arraw_shaders"
 )
 
 add_executable(arraw src/main.cpp)
+arraw_enable_warnings(arraw)
 
 target_link_libraries(arraw PRIVATE arraw_core)
 
