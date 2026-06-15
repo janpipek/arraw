@@ -1,12 +1,24 @@
 cmake_minimum_required(VERSION 3.21)
 project(arraw VERSION 0.1.0 LANGUAGES CXX)
 
-enable_testing()
+option(ARRAW_BUILD_TESTS "Build arraw tests" ON)
+if(ARRAW_BUILD_TESTS)
+    enable_testing()
+endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+function(arraw_enable_warnings target)
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /W4)
+    else()
+        target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+endfunction()
 
 # 6.8: QRhiWidget (6.7) + LTS. ShaderTools provides qt6_add_shaders (qsb);
 # GuiPrivate provides the semi-public RHI headers (rhi/qrhi.h).
@@ -70,6 +82,7 @@ set(CORE_SOURCES
 )
 
 add_library(arraw_core STATIC ${CORE_SOURCES})
+arraw_enable_warnings(arraw_core)
 
 target_include_directories(arraw_core PUBLIC src)
 
@@ -94,7 +107,10 @@ qt6_add_shaders(arraw_core "arraw_shaders"
 )
 
 add_executable(arraw src/main.cpp)
+arraw_enable_warnings(arraw)
 
 target_link_libraries(arraw PRIVATE arraw_core)
 
-add_subdirectory(tests)
+if(ARRAW_BUILD_TESTS)
+    add_subdirectory(tests)
+endif()
