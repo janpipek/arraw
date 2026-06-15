@@ -11,23 +11,23 @@ namespace {
 // Scalars are written with 4 decimals; curve points are quantised to the
 // 0..255 integer grid. These tolerances mirror that, not float noise.
 constexpr double kScalarTol = 1e-4;
-constexpr double kCurveTol  = 0.5 / 255.0;
+constexpr double kCurveTol = 0.5 / 255.0;
 
 AdjustmentParams sampleParams() {
     AdjustmentParams p;
-    p.exposure    = 1.25f;
-    p.contrast    = -30.0f;
-    p.highlights  = -55.5f;
-    p.shadows     = 42.0f;
-    p.whites      = 7.0f;
-    p.blacks      = -3.25f;
+    p.exposure = 1.25f;
+    p.contrast = -30.0f;
+    p.highlights = -55.5f;
+    p.shadows = 42.0f;
+    p.whites = 7.0f;
+    p.blacks = -3.25f;
     p.temperature = 7200.0f;
-    p.tint        = -12.0f;
-    p.saturation  = 15.0f;
-    p.vibrance    = 33.0f;
-    p.sharpening  = 40.0f;
-    p.rotation    = -2.5f;
-    p.cropRect    = QRectF(0.1, 0.2, 0.75, 0.6);
+    p.tint = -12.0f;
+    p.saturation = 15.0f;
+    p.vibrance = 33.0f;
+    p.sharpening = 40.0f;
+    p.rotation = -2.5f;
+    p.cropRect = QRectF(0.1, 0.2, 0.75, 0.6);
     for (int i = 0; i < 8; ++i) {
         p.hslHue[i] = float(i * 10 - 40);
         p.hslSat[i] = float(40 - i * 10);
@@ -35,26 +35,26 @@ AdjustmentParams sampleParams() {
     }
     // Points on the 0..255 grid so quantisation is lossless
     p.curveLuma.points = {{0.0, 0.0}, {64 / 255.0, 32 / 255.0}, {1.0, 1.0}};
-    p.curveR.points    = {{0.0, 16 / 255.0}, {1.0, 240 / 255.0}};
+    p.curveR.points = {{0.0, 16 / 255.0}, {1.0, 240 / 255.0}};
     return p;
 }
 
 void checkClose(const AdjustmentParams& a, const AdjustmentParams& b) {
-    CHECK_THAT(a.exposure,    WithinAbs(b.exposure,    kScalarTol));
-    CHECK_THAT(a.contrast,    WithinAbs(b.contrast,    kScalarTol));
-    CHECK_THAT(a.highlights,  WithinAbs(b.highlights,  kScalarTol));
-    CHECK_THAT(a.shadows,     WithinAbs(b.shadows,     kScalarTol));
-    CHECK_THAT(a.whites,      WithinAbs(b.whites,      kScalarTol));
-    CHECK_THAT(a.blacks,      WithinAbs(b.blacks,      kScalarTol));
+    CHECK_THAT(a.exposure, WithinAbs(b.exposure, kScalarTol));
+    CHECK_THAT(a.contrast, WithinAbs(b.contrast, kScalarTol));
+    CHECK_THAT(a.highlights, WithinAbs(b.highlights, kScalarTol));
+    CHECK_THAT(a.shadows, WithinAbs(b.shadows, kScalarTol));
+    CHECK_THAT(a.whites, WithinAbs(b.whites, kScalarTol));
+    CHECK_THAT(a.blacks, WithinAbs(b.blacks, kScalarTol));
     CHECK_THAT(a.temperature, WithinAbs(b.temperature, kScalarTol));
-    CHECK_THAT(a.tint,        WithinAbs(b.tint,        kScalarTol));
-    CHECK_THAT(a.saturation,  WithinAbs(b.saturation,  kScalarTol));
-    CHECK_THAT(a.vibrance,    WithinAbs(b.vibrance,    kScalarTol));
-    CHECK_THAT(a.sharpening,  WithinAbs(b.sharpening,  kScalarTol));
-    CHECK_THAT(a.rotation,    WithinAbs(b.rotation,    kScalarTol));
-    CHECK_THAT(a.cropRect.left(),   WithinAbs(b.cropRect.left(),   kScalarTol));
-    CHECK_THAT(a.cropRect.top(),    WithinAbs(b.cropRect.top(),    kScalarTol));
-    CHECK_THAT(a.cropRect.right(),  WithinAbs(b.cropRect.right(),  2 * kScalarTol));
+    CHECK_THAT(a.tint, WithinAbs(b.tint, kScalarTol));
+    CHECK_THAT(a.saturation, WithinAbs(b.saturation, kScalarTol));
+    CHECK_THAT(a.vibrance, WithinAbs(b.vibrance, kScalarTol));
+    CHECK_THAT(a.sharpening, WithinAbs(b.sharpening, kScalarTol));
+    CHECK_THAT(a.rotation, WithinAbs(b.rotation, kScalarTol));
+    CHECK_THAT(a.cropRect.left(), WithinAbs(b.cropRect.left(), kScalarTol));
+    CHECK_THAT(a.cropRect.top(), WithinAbs(b.cropRect.top(), kScalarTol));
+    CHECK_THAT(a.cropRect.right(), WithinAbs(b.cropRect.right(), 2 * kScalarTol));
     CHECK_THAT(a.cropRect.bottom(), WithinAbs(b.cropRect.bottom(), 2 * kScalarTol));
     for (int i = 0; i < 8; ++i) {
         CHECK_THAT(a.hslHue[i], WithinAbs(b.hslHue[i], kScalarTol));
@@ -71,7 +71,7 @@ void checkCurveClose(const CurvePoints& a, const CurvePoints& b) {
     }
 }
 
-}  // namespace
+} // namespace
 
 TEST_CASE("sidecar path replaces the RAW extension with .xmp", "[xmp]") {
     REQUIRE(XmpSidecar::pathFor("/photos/IMG_0042.ARW") == "/photos/IMG_0042.xmp");
@@ -93,8 +93,8 @@ TEST_CASE("save then load round-trips all params", "[xmp]") {
 
     checkClose(loaded, saved);
     checkCurveClose(loaded.curveLuma, saved.curveLuma);
-    checkCurveClose(loaded.curveR,    saved.curveR);
-    CHECK(loaded.curveG.isIdentity());  // identity curves are not written
+    checkCurveClose(loaded.curveR, saved.curveR);
+    CHECK(loaded.curveG.isIdentity()); // identity curves are not written
     CHECK(loaded.curveB.isIdentity());
 }
 
@@ -113,7 +113,7 @@ TEST_CASE("writer emits crs:Temperature in absolute Kelvin", "[xmp][crs]") {
     const QString rawPath = dir.filePath("shot.arw");
     AdjustmentParams p;
     p.temperature = 6500.0f;
-    p.exposure    = 0.85f;
+    p.exposure = 0.85f;
     REQUIRE(XmpSidecar::saveAdjustments(rawPath, p));
 
     QFile f(XmpSidecar::pathFor(rawPath));
@@ -128,21 +128,22 @@ TEST_CASE("writer emits crs:Temperature in absolute Kelvin", "[xmp][crs]") {
 TEST_CASE("reader parses a Lightroom-style sidecar", "[xmp][crs]") {
     // Fixture mimics Adobe output: signed values with leading '+', Temperature
     // in Kelvin, crop as normalised edges, tone curve as 0..255 rdf:Seq.
-    const auto p = XmpSidecar::loadAdjustments(QStringLiteral(ARRAW_FIXTURE_DIR "/lightroom-sample.arw"));
+    const auto p = XmpSidecar::loadAdjustments(
+        QStringLiteral(ARRAW_FIXTURE_DIR "/lightroom-sample.arw"));
 
-    CHECK_THAT(p.exposure,    WithinAbs(0.85, 1e-5));
-    CHECK_THAT(p.contrast,    WithinAbs(12.0, 1e-5));
-    CHECK_THAT(p.highlights,  WithinAbs(-40.0, 1e-5));
-    CHECK_THAT(p.shadows,     WithinAbs(35.0, 1e-5));
-    CHECK_THAT(p.temperature, WithinAbs(6500.0, 1e-5));   // Kelvin, the contract
-    CHECK_THAT(p.tint,        WithinAbs(10.0, 1e-5));
-    CHECK_THAT(p.vibrance,    WithinAbs(25.0, 1e-5));
-    CHECK_THAT(p.hslSat[5],   WithinAbs(-15.0, 1e-5));    // SaturationAdjustmentBlue
+    CHECK_THAT(p.exposure, WithinAbs(0.85, 1e-5));
+    CHECK_THAT(p.contrast, WithinAbs(12.0, 1e-5));
+    CHECK_THAT(p.highlights, WithinAbs(-40.0, 1e-5));
+    CHECK_THAT(p.shadows, WithinAbs(35.0, 1e-5));
+    CHECK_THAT(p.temperature, WithinAbs(6500.0, 1e-5)); // Kelvin, the contract
+    CHECK_THAT(p.tint, WithinAbs(10.0, 1e-5));
+    CHECK_THAT(p.vibrance, WithinAbs(25.0, 1e-5));
+    CHECK_THAT(p.hslSat[5], WithinAbs(-15.0, 1e-5)); // SaturationAdjustmentBlue
 
     // CropLeft/Top/Right/Bottom 0.05/0.1/0.95/0.9 → x/y/w/h
-    CHECK_THAT(p.cropRect.left(),   WithinAbs(0.05, 1e-5));
-    CHECK_THAT(p.cropRect.top(),    WithinAbs(0.10, 1e-5));
-    CHECK_THAT(p.cropRect.width(),  WithinAbs(0.90, 1e-5));
+    CHECK_THAT(p.cropRect.left(), WithinAbs(0.05, 1e-5));
+    CHECK_THAT(p.cropRect.top(), WithinAbs(0.10, 1e-5));
+    CHECK_THAT(p.cropRect.width(), WithinAbs(0.90, 1e-5));
     CHECK_THAT(p.cropRect.height(), WithinAbs(0.80, 1e-5));
 
     // ToneCurvePV2012: (0,0) (64,48) (255,255) on the 0..255 grid
@@ -159,7 +160,7 @@ TEST_CASE("ColourLabel maps to and from the canonical English name", "[xmp][mark
     CHECK(colourLabelToString(ColourLabel::None).isEmpty());
     CHECK(colourLabelFromString("Purple") == ColourLabel::Purple);
     CHECK(colourLabelFromString("") == ColourLabel::None);
-    CHECK(colourLabelFromString("Chartreuse") == ColourLabel::None);  // unknown → None
+    CHECK(colourLabelFromString("Chartreuse") == ColourLabel::None); // unknown → None
 }
 
 TEST_CASE("missing sidecar loads default marks", "[xmp][marks]") {
@@ -213,7 +214,7 @@ TEST_CASE("saveMetadata preserves existing develop edits", "[xmp][marks]") {
     REQUIRE(XmpSidecar::saveMetadata(rawPath, {5, ColourLabel::Red}));
 
     CHECK(XmpSidecar::loadMetadata(rawPath) == UserMetadata{5, ColourLabel::Red});
-    checkClose(XmpSidecar::loadAdjustments(rawPath), edits);  // edits survived
+    checkClose(XmpSidecar::loadAdjustments(rawPath), edits); // edits survived
 }
 
 TEST_CASE("saveAdjustments preserves existing marks", "[xmp][marks]") {
@@ -223,6 +224,7 @@ TEST_CASE("saveAdjustments preserves existing marks", "[xmp][marks]") {
     REQUIRE(XmpSidecar::saveMetadata(rawPath, {3, ColourLabel::Yellow}));
     REQUIRE(XmpSidecar::saveAdjustments(rawPath, sampleParams()));
 
-    CHECK(XmpSidecar::loadMetadata(rawPath) == UserMetadata{3, ColourLabel::Yellow});  // marks survived
+    CHECK(
+        XmpSidecar::loadMetadata(rawPath) == UserMetadata{3, ColourLabel::Yellow}); // marks survived
     checkClose(XmpSidecar::loadAdjustments(rawPath), sampleParams());
 }

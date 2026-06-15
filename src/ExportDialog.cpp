@@ -1,20 +1,21 @@
 #include "ExportDialog.h"
-#include <QVBoxLayout>
-#include <QFormLayout>
-#include <QHBoxLayout>
-#include <QGroupBox>
-#include <QDialogButtonBox>
-#include <QComboBox>
-#include <QSpinBox>
-#include <QSlider>
 #include <QCheckBox>
+#include <QComboBox>
+#include <QDialogButtonBox>
+#include <QFormLayout>
+#include <QGroupBox>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
 #include <QSettings>
+#include <QSlider>
+#include <QSpinBox>
+#include <QVBoxLayout>
 
 ExportDialog::ExportDialog(int srcW, int srcH, QWidget* parent)
-    : QDialog(parent), srcW(srcW), srcH(srcH)
-{
+    : QDialog(parent),
+      srcW(srcW),
+      srcH(srcH) {
     setWindowTitle("Export Image");
     setMinimumWidth(380);
 
@@ -43,7 +44,7 @@ ExportDialog::ExportDialog(int srcW, int srcH, QWidget* parent)
 
     // ── Output size ──────────────────────────────────────────────────────────
     auto* sizeGroup = new QGroupBox("Output Size");
-    auto* sizeForm  = new QFormLayout(sizeGroup);
+    auto* sizeForm = new QFormLayout(sizeGroup);
 
     widthSpin = new QSpinBox;
     widthSpin->setRange(1, 99999);
@@ -85,7 +86,7 @@ ExportDialog::ExportDialog(int srcW, int srcH, QWidget* parent)
     root->addSpacing(6);
 
     // ── Output sharpening ────────────────────────────────────────────────────
-    auto* sharpGroup  = new QGroupBox("Output Sharpening");
+    auto* sharpGroup = new QGroupBox("Output Sharpening");
     auto* sharpLayout = new QHBoxLayout(sharpGroup);
 
     sharpenSlider = new QSlider(Qt::Horizontal);
@@ -109,28 +110,34 @@ ExportDialog::ExportDialog(int srcW, int srcH, QWidget* parent)
     root->addWidget(buttons);
 
     // ── Connections ──────────────────────────────────────────────────────────
-    connect(formatBox, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &ExportDialog::onFormatChanged);
+    connect(
+        formatBox,
+        QOverload<int>::of(&QComboBox::currentIndexChanged),
+        this,
+        &ExportDialog::onFormatChanged);
 
-    connect(widthSpin,  QOverload<int>::of(&QSpinBox::valueChanged),
-            this, &ExportDialog::onWidthChanged);
-    connect(heightSpin, QOverload<int>::of(&QSpinBox::valueChanged),
-            this, &ExportDialog::onHeightChanged);
+    connect(
+        widthSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &ExportDialog::onWidthChanged);
+    connect(
+        heightSpin,
+        QOverload<int>::of(&QSpinBox::valueChanged),
+        this,
+        &ExportDialog::onHeightChanged);
 
     connect(qualitySlider, &QSlider::valueChanged, qualitySpin, &QSpinBox::setValue);
-    connect(qualitySpin, QOverload<int>::of(&QSpinBox::valueChanged),
-            qualitySlider, &QSlider::setValue);
+    connect(
+        qualitySpin, QOverload<int>::of(&QSpinBox::valueChanged), qualitySlider, &QSlider::setValue);
 
     connect(sharpenSlider, &QSlider::valueChanged, sharpenSpin, &QSpinBox::setValue);
-    connect(sharpenSpin, QOverload<int>::of(&QSpinBox::valueChanged),
-            sharpenSlider, &QSlider::setValue);
+    connect(
+        sharpenSpin, QOverload<int>::of(&QSpinBox::valueChanged), sharpenSlider, &QSlider::setValue);
 
     connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
 
     connect(this, &QDialog::accepted, this, [this] {
         QSettings s;
-        s.setValue("export/profile",    profileBox->currentIndex());
+        s.setValue("export/profile", profileBox->currentIndex());
         s.setValue("export/sixteenBit", sixteenBitCheck->isChecked());
     });
 
@@ -140,21 +147,32 @@ ExportDialog::ExportDialog(int srcW, int srcH, QWidget* parent)
 ExportOptions ExportDialog::options() const {
     ExportOptions o;
     switch (formatBox->currentIndex()) {
-    case 0: o.format = ExportOptions::Format::JPEG; break;
-    case 1: o.format = ExportOptions::Format::PNG;  break;
-    case 2: o.format = ExportOptions::Format::TIFF; break;
+    case 0:
+        o.format = ExportOptions::Format::JPEG;
+        break;
+    case 1:
+        o.format = ExportOptions::Format::PNG;
+        break;
+    case 2:
+        o.format = ExportOptions::Format::TIFF;
+        break;
     }
-    o.width     = widthSpin->value();
-    o.height    = heightSpin->value();
-    o.quality   = qualitySpin->value();
+    o.width = widthSpin->value();
+    o.height = heightSpin->value();
+    o.quality = qualitySpin->value();
     o.sharpening = sharpenSpin->value();
     switch (profileBox->currentIndex()) {
-    case 0: o.profile = OutputProfile::SRgb;      break;
-    case 1: o.profile = OutputProfile::DisplayP3; break;
-    case 2: o.profile = OutputProfile::AdobeRgb;  break;
+    case 0:
+        o.profile = OutputProfile::SRgb;
+        break;
+    case 1:
+        o.profile = OutputProfile::DisplayP3;
+        break;
+    case 2:
+        o.profile = OutputProfile::AdobeRgb;
+        break;
     }
-    o.bitDepth = (o.format == ExportOptions::Format::TIFF &&
-                  sixteenBitCheck->isChecked()) ? 16 : 8;
+    o.bitDepth = (o.format == ExportOptions::Format::TIFF && sixteenBitCheck->isChecked()) ? 16 : 8;
     return o;
 }
 
@@ -165,14 +183,16 @@ void ExportDialog::onFormatChanged(int idx) {
 }
 
 void ExportDialog::onWidthChanged(int w) {
-    if (syncing || !constrainCheck->isChecked() || srcW == 0) return;
+    if (syncing || !constrainCheck->isChecked() || srcW == 0)
+        return;
     syncing = true;
     heightSpin->setValue(int(double(w) * srcH / srcW + 0.5));
     syncing = false;
 }
 
 void ExportDialog::onHeightChanged(int h) {
-    if (syncing || !constrainCheck->isChecked() || srcH == 0) return;
+    if (syncing || !constrainCheck->isChecked() || srcH == 0)
+        return;
     syncing = true;
     widthSpin->setValue(int(double(h) * srcW / srcH + 0.5));
     syncing = false;

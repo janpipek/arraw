@@ -11,13 +11,13 @@ class QLabel;
 
 struct ExportOptions {
     enum class Format { JPEG, PNG, TIFF };
-    Format        format    = Format::JPEG;
-    int           width     = 0;
-    int           height    = 0;
-    int           quality   = 90;
-    int           sharpening = 0;
-    OutputProfile profile   = OutputProfile::SRgb;
-    int           bitDepth  = 8;   // 16 only for TIFF
+    Format format = Format::JPEG;
+    int width = 0;
+    int height = 0;
+    int quality = 90;
+    int sharpening = 0;
+    OutputProfile profile = OutputProfile::SRgb;
+    int bitDepth = 8; // 16 only for TIFF
 };
 
 class ExportDialog : public QDialog {
@@ -33,18 +33,18 @@ private:
     void onWidthChanged(int w);
     void onHeightChanged(int h);
 
-    int  srcW, srcH;
+    int srcW, srcH;
     bool syncing = false;
 
     QComboBox* formatBox;
     QComboBox* profileBox;
     QCheckBox* sixteenBitCheck;
-    QSpinBox*  widthSpin;
-    QSpinBox*  heightSpin;
+    QSpinBox* widthSpin;
+    QSpinBox* heightSpin;
     QCheckBox* constrainCheck;
     QGroupBox* qualityGroup;
-    QSlider*   qualitySlider;
-    QSpinBox*  qualitySpin;
-    QSlider*   sharpenSlider;
-    QSpinBox*  sharpenSpin;
+    QSlider* qualitySlider;
+    QSpinBox* qualitySpin;
+    QSlider* sharpenSlider;
+    QSpinBox* sharpenSpin;
 };

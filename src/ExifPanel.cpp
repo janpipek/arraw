@@ -1,10 +1,11 @@
 #include "ExifPanel.h"
 #include <QFormLayout>
 #include <QLabel>
-#include <QVBoxLayout>
 #include <QScrollArea>
+#include <QVBoxLayout>
 
-ExifPanel::ExifPanel(QWidget* parent) : QWidget(parent) {
+ExifPanel::ExifPanel(QWidget* parent)
+    : QWidget(parent) {
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(8, 8, 8, 8);
 

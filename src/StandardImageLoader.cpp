@@ -4,14 +4,11 @@
 #include <QImage>
 
 bool StandardImageLoader::canLoad(const QString& path) {
-    static const QStringList kExts = {
-        "jpg", "jpeg", "png", "tiff", "tif", "webp", "bmp"
-    };
+    static const QStringList kExts = {"jpg", "jpeg", "png", "tiff", "tif", "webp", "bmp"};
     return kExts.contains(QFileInfo(path).suffix().toLower());
 }
 
-LoadResult StandardImageLoader::load(const QString& path,
-                                      std::shared_ptr<std::atomic<bool>> cancel) {
+LoadResult StandardImageLoader::load(const QString& path, std::shared_ptr<std::atomic<bool>> cancel) {
     QImage img(path);
     if (img.isNull())
         return {{}, {}, {}, QString("Failed to load: %1").arg(path)};

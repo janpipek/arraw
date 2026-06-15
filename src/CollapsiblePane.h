@@ -9,13 +9,13 @@ class CollapsiblePane {
 public:
     CollapsiblePane(QWidget* expanded, QWidget* strip);
 
-    void collapse();   // hide expanded content, show the strip
-    void expand();     // show expanded content, hide the strip
+    void collapse(); // hide expanded content, show the strip
+    void expand();   // show expanded content, hide the strip
     void toggle();
     bool isCollapsed() const;
 
 private:
-    void setCollapsed(bool);   // the one place the invariant is applied
+    void setCollapsed(bool); // the one place the invariant is applied
 
     QWidget* expanded;
     QWidget* strip;

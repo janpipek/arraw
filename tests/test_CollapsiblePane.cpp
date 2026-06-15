@@ -18,7 +18,8 @@ void ensureApp() {
     static int argc = 1;
     static char arg0[] = "arraw_tests";
     static char* argv[] = {arg0, nullptr};
-    if (!qApp) new QApplication(argc, argv);
+    if (!qApp)
+        new QApplication(argc, argv);
     if (!qobject_cast<QApplication*>(qApp))
         SKIP("needs a QApplication; run isolated (ctest does this per-test)");
 }

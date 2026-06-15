@@ -1,7 +1,7 @@
 #pragma once
 #include <QPair>
-#include <QVector>
 #include <QString>
+#include <QVector>
 
 class LibRaw;
 

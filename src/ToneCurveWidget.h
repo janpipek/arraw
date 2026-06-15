@@ -1,9 +1,9 @@
 #pragma once
 #include "ImagePipeline.h"
-#include <QImage>
-#include <QWidget>
 #include <array>
 #include <vector>
+#include <QImage>
+#include <QWidget>
 
 class QPainter;
 
@@ -15,6 +15,7 @@ public:
     explicit ToneCurveWidget(QWidget* parent = nullptr);
 
     void setChannel(Channel ch);
+
     Channel channel() const { return currentChannel; }
 
     void setPoints(Channel ch, const std::vector<QPointF>& pts);
@@ -27,6 +28,7 @@ public:
     void setHistogramSample(const QImage& img);
 
     QSize sizeHint() const override { return {200, 160}; }
+
     QSize minimumSizeHint() const override { return {120, 96}; }
 
 signals:
@@ -59,15 +61,15 @@ private:
 
     Channel currentChannel = Channel::Luma;
     std::vector<QPointF> pointsLuma = {{0.0, 0.0}, {1.0, 1.0}};
-    std::vector<QPointF> pointsR    = {{0.0, 0.0}, {1.0, 1.0}};
-    std::vector<QPointF> pointsG    = {{0.0, 0.0}, {1.0, 1.0}};
-    std::vector<QPointF> pointsB    = {{0.0, 0.0}, {1.0, 1.0}};
+    std::vector<QPointF> pointsR = {{0.0, 0.0}, {1.0, 1.0}};
+    std::vector<QPointF> pointsG = {{0.0, 0.0}, {1.0, 1.0}};
+    std::vector<QPointF> pointsB = {{0.0, 0.0}, {1.0, 1.0}};
 
-    int  dragIndex  = -1;
-    bool dragging   = false;
+    int dragIndex = -1;
+    bool dragging = false;
 
     // Spline LUT caches for paintEvent — recomputed only when points change.
-    std::array<std::vector<QPointF>,   4> lutSource;
+    std::array<std::vector<QPointF>, 4> lutSource;
     std::array<std::array<float, 256>, 4> lutCache{};
 
     // Curve input histogram, log-normalised to 0..1, indexed by Channel.
@@ -75,7 +77,7 @@ private:
     std::array<std::array<float, kHistBins>, 4> hist{};
     bool hasHist = false;
 
-    static constexpr int kPad          = 10;
-    static constexpr int kRadius       = 5;
-    static constexpr int kRemoveMargin = 24;  // drag a point this far outside to delete
+    static constexpr int kPad = 10;
+    static constexpr int kRadius = 5;
+    static constexpr int kRemoveMargin = 24; // drag a point this far outside to delete
 };

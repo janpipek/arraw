@@ -12,6 +12,5 @@ public:
     // Returns true when path has a supported standard image extension.
     static bool canLoad(const QString& path);
 
-    static LoadResult load(const QString& path,
-                           std::shared_ptr<std::atomic<bool>> cancel = nullptr);
+    static LoadResult load(const QString& path, std::shared_ptr<std::atomic<bool>> cancel = nullptr);
 };

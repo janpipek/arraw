@@ -8,6 +8,12 @@ This rule is active for all source files in the project.
 * When editing/modifying a file, **strip any existing `m_` prefixes** from variables in that file and do not introduce new ones.
 * Class members, local variables, and parameters should use clean, plain names (e.g., `zoom`, `params`, `viewport`).
 * Prefer `const` by default and use `auto` when the type is obvious from context.
+* `clang-format` enforces same-line opening braces for function, class, and struct definitions.
+* `clang-format` should keep function definitions separated by a single empty line.
+* `clang-format` attaches `*` and `&` to the type (`QWidget* parent`, `const ImageBuffer& buffer`).
+* Declare one pointer or reference variable per statement to avoid ambiguous mixed declarators.
+* `clang-format` formats wrapped constructor initializer lists with one initializer per line and trailing commas.
+* In headers, keep consecutive plain function declarations compact. Add a single empty line before a documented declaration or between inline definitions; `clang-format` preserves one intentional empty line and enforces definition-block separation, while docstring grouping remains a human style rule.
 
 ## Domain Vocabulary Constraints
 Avoid legacy or incorrect domain terms and prefer the following official project terms:

@@ -1,11 +1,11 @@
 #pragma once
+#include "FieldSpec.h"
 #include "ImagePipeline.h"
 #include "ToneCurveWidget.h"
-#include "FieldSpec.h"
 #include <array>
 #include <vector>
-#include <QWidget>
 #include <QHash>
+#include <QWidget>
 
 class QSlider;
 class QLabel;
@@ -23,7 +23,9 @@ public:
     explicit AdjustmentPanel(QWidget* parent = nullptr);
 
     void setHistogramSamples(const QImage& finalSample, const QImage& curveInputSample);
+
     AdjustmentParams params() const { return adjustments; }
+
     void setParams(const AdjustmentParams& p);
     void resetAll();
 
@@ -37,14 +39,13 @@ protected:
 
 private:
     struct SliderRow {
-        QSlider*           slider;
+        QSlider* slider;
         AdjustmentSpinBox* spin;
-        QLabel*            nameLabel;
-        FieldSpec          spec;
+        QLabel* nameLabel;
+        FieldSpec spec;
     };
 
-    SliderRow addSlider(QVBoxLayout* layout, const QString& name,
-                        const FieldSpec& spec);
+    SliderRow addSlider(QVBoxLayout* layout, const QString& name, const FieldSpec& spec);
     std::vector<SliderRow*> allRows();
     void connectRow(SliderRow& row);
     void connectCurve();
@@ -53,11 +54,11 @@ private:
     void resetRow(SliderRow& row);
     void updateCurveChannelIndicators();
 
-    Histogram*         histogram;
-    QComboBox*         wbPresets;
-    ToneCurveWidget*   toneCurve;
-    std::array<QPushButton*, 4> curveChannelBtns;   // indexed by ToneCurveWidget::Channel
-    QStackedWidget*    hslStack;
+    Histogram* histogram;
+    QComboBox* wbPresets;
+    ToneCurveWidget* toneCurve;
+    std::array<QPushButton*, 4> curveChannelBtns; // indexed by ToneCurveWidget::Channel
+    QStackedWidget* hslStack;
 
     SliderRow exposure;
     SliderRow contrast;
@@ -78,7 +79,7 @@ private:
     std::array<SliderRow, 8> hslLum;
 
     AdjustmentParams adjustments;
-    AdjustmentParams committed;    // last committed state — baseline for the next undo entry
+    AdjustmentParams committed; // last committed state — baseline for the next undo entry
 
-    QHash<QObject*, SliderRow*> resetTargets;   // slider/label -> row, for double-click reset
+    QHash<QObject*, SliderRow*> resetTargets; // slider/label -> row, for double-click reset
 };

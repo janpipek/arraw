@@ -1,13 +1,13 @@
 #include "ThumbnailCache.h"
 #include "RawProcessor.h"
 #include <libraw/libraw.h>
+#include <memory>
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QStandardPaths>
 #include <QtConcurrent/QtConcurrent>
-#include <memory>
 
 namespace {
 
@@ -56,9 +56,9 @@ bool saveJpeg(const QImage& img, const QString& path) {
 
 } // namespace
 
-ThumbnailCache::ThumbnailCache(QObject* parent) : QObject(parent) {
-    cacheRoot = QStandardPaths::writableLocation(QStandardPaths::HomeLocation)
-              + "/.arraw/cache";
+ThumbnailCache::ThumbnailCache(QObject* parent)
+    : QObject(parent) {
+    cacheRoot = QStandardPaths::writableLocation(QStandardPaths::HomeLocation) + "/.arraw/cache";
     QDir().mkpath(cacheRoot);
 }
 
@@ -67,7 +67,7 @@ QString ThumbnailCache::cachePathFor(const QString& rawPath) {
     if (!fi.exists())
         return {};
     const QString root = QStandardPaths::writableLocation(QStandardPaths::HomeLocation)
-                       + "/.arraw/cache";
+                         + "/.arraw/cache";
     return cachePath(root, cacheKey(fi));
 }
 
@@ -92,16 +92,19 @@ void ThumbnailCache::request(const QString& rawPath) {
         return;
     pending.insert(rawPath);
 
-    (void)QtConcurrent::run([this, rawPath]() {
+    (void) QtConcurrent::run([this, rawPath]() {
         QImage img = decodeEmbeddedThumb(rawPath);
         const QString outPath = cachePathFor(rawPath);
         if (!img.isNull() && !outPath.isEmpty())
             saveJpeg(img, outPath);
 
-        QMetaObject::invokeMethod(this, [this, rawPath, img = std::move(img)]() {
-            pending.remove(rawPath);
-            if (!img.isNull())
-                emit thumbnailReady(rawPath, img);
-        }, Qt::QueuedConnection);
+        QMetaObject::invokeMethod(
+            this,
+            [this, rawPath, img = std::move(img)]() {
+                pending.remove(rawPath);
+                if (!img.isNull())
+                    emit thumbnailReady(rawPath, img);
+            },
+            Qt::QueuedConnection);
     });
 }
