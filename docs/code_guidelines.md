@@ -12,6 +12,8 @@ This rule is active for all source files in the project.
 * `clang-format` should keep function definitions separated by a single empty line.
 * `clang-format` attaches `*` and `&` to the type (`QWidget* parent`, `const ImageBuffer& buffer`).
 * Declare one pointer or reference variable per statement to avoid ambiguous mixed declarators.
+* `clang-format` formats wrapped constructor initializer lists with one initializer per line and trailing commas.
+* In headers, keep consecutive plain function declarations compact. Add a single empty line before a documented declaration or between inline definitions; `clang-format` preserves one intentional empty line and enforces definition-block separation, while docstring grouping remains a human style rule.
 
 ## Domain Vocabulary Constraints
 Avoid legacy or incorrect domain terms and prefer the following official project terms:
