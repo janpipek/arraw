@@ -2,6 +2,9 @@
 #include "AdjustmentSpinBox.h"
 
 #include <algorithm>
+#include <variant>
+#include <QDoubleSpinBox>
+#include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QListWidget>
@@ -29,6 +32,23 @@ LocalAdjustmentPanel::LocalAdjustmentPanel(QWidget* parent) : QWidget(parent) {
     buttons->addWidget(addButton);
     buttons->addWidget(deleteButton);
     col->addLayout(buttons);
+
+    // Linear-mask geometry: P0/P1 in normalised display-frame coords. Editable
+    // numerically here and by dragging on the image (kept in sync).
+    auto* geomGrid = new QGridLayout;
+    const char* geomLabels[4] = {"P0 X", "P0 Y", "P1 X", "P1 Y"};
+    const char* geomNames[4]  = {"p0x", "p0y", "p1x", "p1y"};
+    for (int i = 0; i < 4; ++i) {
+        auto* spin = new QDoubleSpinBox(this);
+        spin->setRange(-1.0, 2.0);   // a gradient line may run past the frame edge
+        spin->setSingleStep(0.01);
+        spin->setDecimals(3);
+        spin->setObjectName(geomNames[i]);
+        geomGrid->addWidget(new QLabel(geomLabels[i], this), i / 2, (i % 2) * 2);
+        geomGrid->addWidget(spin, i / 2, (i % 2) * 2 + 1);
+        geomSpins[i] = spin;
+    }
+    col->addLayout(geomGrid);
 
     // Delta sliders for the active mask — one row per SharedAdjustment field
     // plus the relative temperature.
@@ -88,6 +108,13 @@ LocalAdjustmentPanel::LocalAdjustmentPanel(QWidget* parent) : QWidget(parent) {
             QSignalBlocker block(spin);
             spin->setValue(spec.rawToDisplay(slider->value()));
         });
+    }
+
+    for (QDoubleSpinBox* spin : geomSpins) {
+        connect(spin, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+                [this] { syncActiveGeometry(); });
+        connect(spin, &QAbstractSpinBox::editingFinished, this,
+                [this] { commit(); });
     }
 
     connect(addButton, &QPushButton::clicked, this,
@@ -168,6 +195,18 @@ void LocalAdjustmentPanel::loadActiveIntoSliders() {
         r.slider->setValue(r.spec.fromParam(value));
         r.spin->setValue(r.spec.rawToDisplay(r.slider->value()));
     }
+
+    QPointF p0, p1;
+    if (a)
+        if (const auto* m = std::get_if<LinearMask>(&a->mask)) {
+            p0 = m->p0;
+            p1 = m->p1;
+        }
+    const double coords[4] = {p0.x(), p0.y(), p1.x(), p1.y()};
+    for (int i = 0; i < 4; ++i) {
+        QSignalBlocker b(geomSpins[i]);
+        geomSpins[i]->setValue(coords[i]);
+    }
 }
 
 void LocalAdjustmentPanel::syncActiveFromSliders() {
@@ -179,11 +218,24 @@ void LocalAdjustmentPanel::syncActiveFromSliders() {
     emit changed(adjustments);
 }
 
+void LocalAdjustmentPanel::syncActiveGeometry() {
+    LocalAdjustment* a = active();
+    if (!a)
+        return;
+    if (auto* m = std::get_if<LinearMask>(&a->mask)) {
+        m->p0 = QPointF(geomSpins[0]->value(), geomSpins[1]->value());
+        m->p1 = QPointF(geomSpins[2]->value(), geomSpins[3]->value());
+        emit changed(adjustments);
+    }
+}
+
 void LocalAdjustmentPanel::setSlidersEnabled(bool on) {
     for (SliderRow& r : rows) {
         r.slider->setEnabled(on);
         r.spin->setEnabled(on);
     }
+    for (QDoubleSpinBox* spin : geomSpins)
+        spin->setEnabled(on);
 }
 
 void LocalAdjustmentPanel::commit() {

@@ -5,8 +5,8 @@
 //   ARRAW_UPDATE_GOLDENS=1 ./build/tests/arraw_tests "[golden]"
 
 #include "ImageViewport.h"
+#include "TestApp.h"
 #include <catch2/catch_test_macros.hpp>
-#include <QApplication>
 #include <QDir>
 #include <QFile>
 #include <QImage>
@@ -21,13 +21,10 @@ constexpr float kMaxChannelMean = 0.3f / 255.0f;
 // ── Realized viewport (QApplication + shown widget = live RHI) ───────────────
 
 ImageViewport* goldenViewport() {
-    static int argc = 1;
-    static char arg0[] = "arraw_tests";
-    static char* argv[] = {arg0, nullptr};
-    static QApplication app(argc, argv);
+    testApp();   // ensure the shared QApplication exists (and is destroyed last)
 
-    // Declared after `app` so it is destroyed first — tearing down a live
-    // render widget after QApplication segfaults in the platform plugin.
+    // Declared after the app is constructed so it is destroyed first — tearing
+    // down a live render widget after QApplication segfaults in the platform plugin.
     static std::unique_ptr<ImageViewport> vp = [] {
         auto v = std::make_unique<ImageViewport>();
         v->resize(128, 96);

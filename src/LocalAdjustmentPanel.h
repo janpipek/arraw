@@ -1,12 +1,14 @@
 #pragma once
 #include "ImagePipeline.h"
 #include "FieldSpec.h"
+#include <array>
 #include <vector>
 #include <QWidget>
 
 class QListWidget;
 class QSlider;
 class QPushButton;
+class QDoubleSpinBox;
 class AdjustmentSpinBox;
 
 // The "Masks" tab: manage a photo's Local Adjustments (docs/adr/0010) — add,
@@ -45,8 +47,9 @@ private:
     };
 
     void rebuildList();
-    void loadActiveIntoSliders();
+    void loadActiveIntoSliders();      // also loads the geometry fields
     void syncActiveFromSliders();
+    void syncActiveGeometry();         // P0/P1 fields -> active mask
     void setSlidersEnabled(bool on);
     void commit();
     LocalAdjustment* active();
@@ -54,6 +57,8 @@ private:
     QListWidget*           maskList;
     QPushButton*           deleteButton;
     std::vector<SliderRow> rows;
+    // Linear-mask geometry, normalised display-frame coords (docs/adr/0010).
+    std::array<QDoubleSpinBox*, 4> geomSpins;   // p0.x, p0.y, p1.x, p1.y
 
     std::vector<LocalAdjustment> adjustments;
     std::vector<LocalAdjustment> committedState;   // undo baseline
