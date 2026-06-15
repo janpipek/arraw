@@ -416,6 +416,85 @@ Implemented 2026-06 — see `docs/adr/0006-rhi-migration-single-renderer-core.md
 - Tile cache with LRU eviction.
 - Async tile upload via PBO (Pixel Buffer Objects).
 
+### Milestone 7 — Local Adjustments
+
+Design resolved 2026-06-15. See `docs/adr/0008` (parametric masks, arraw-native
+storage). Per-region develop edits with a real-time preview.
+
+- **Mask model — parametric ("described"), not painted.** A [[Local Adjustment]]
+  is a [[Mask]] plus the tonal/colour delta subset (exposure, contrast,
+  highlights, shadows, whites, blacks, temperature, tint, saturation, vibrance —
+  no geometry, no tone curve). Masks are evaluated analytically inside
+  `image.frag`, so the preview stays **single-pass**; a freehand brush (raster
+  mask) is the documented Option-C extension, deferred.
+- **Mask Types v1: Linear (graduated) + Radial (oval)**, placed by dragging
+  handles on the image. Luminance-range and Colour-range masks are the next set.
+- **Cap: 16 Local Adjustments per image** — a fixed array bound mirrored in
+  `image.frag`, the `Ubuf` mirror in `RendererCore.h` (std140, byte-identical),
+  and `RendererCore::fillUbuf()`. Raisable later; never lower it below counts a
+  saved file already uses (extra masks would drop on load).
+- **Coordinate frame:** masks store normalised coordinates in the cropped/rotated
+  display frame (`docs/adr/0007-crop-after-rotation-display-frame`), so recropping
+  does not slide masks around.
+- **Live preview + undo:** rendered every frame (unlike export-only sharpening);
+  add/move/delete a mask and its slider tweaks are `QUndoStack` steps (unlike the
+  culling marks of `docs/adr/0007-culling-marks-in-develop-sidecar`).
+- **Persistence:** arraw-native XMP namespace in the same sidecar. Global edits,
+  rating, and label remain Lightroom-compatible; local edits are arraw-only.
+- **Pure logic to `arraw_core`** (TDD): mask weight evaluation per type, the
+  parametric-handle ↔ normalised-coordinate maths, and namespace load/save.
+
+### Milestone 8 — Settings Propagation (single-target)
+
+Design resolved 2026-06-15. Move develop settings between photos without a
+catalogue. Batch/multi-photo application is explicitly **out of scope here** —
+see Milestone 10.
+
+- **Copy → Paste, pick-what-copies, paste replaces.** Copy opens a group
+  checklist (WB, Tone, Color, Curve, Detail, Vignette/Grain/Clarity, Local
+  Adjustments, Crop…); paste overwrites exactly those groups on the open photo,
+  leaving unchecked groups untouched.
+- **Develop Presets.** Save a named bundle through the same checklist; apply to
+  any photo. Stored as arraw-native files in `QStandardPaths::AppDataLocation`,
+  listed in a Presets menu. Local Adjustments includable but off by default. Not
+  Lightroom preset files (internal convenience, not an interop surface).
+- **Paste Previous.** One-key "apply the previously-edited photo's settings to
+  this one," no explicit copy step.
+- Auto-apply-on-load is **deferred** (avoids the "what counts as never-edited"
+  edge cases).
+
+### Milestone 9 — Develop Depth (new adjustments)
+
+Design resolved 2026-06-15. Splits by pipeline cost.
+
+- **Cheap & honest (in this milestone): Post-crop Vignette + Grain.** Per-pixel
+  uniforms, no neighbour reads, preview truthfully at quarter-res, slot into the
+  existing single-pass shader and the add-an-adjustment ritual. Pipeline
+  placement: vignette near the end in the cropped frame (post-colour); grain last,
+  on encoded values.
+- **Clarity / Texture (in this milestone, spatial): live preview via a blur
+  pass.** Local-contrast control. Needs a blurred copy of the image, so it adds
+  the **first multi-pass step to the preview pipeline** — see `docs/adr/0009`.
+  Quarter-res is faithful for this broad, low-frequency effect (unlike fine
+  sharpening, which stays export-only). The blur pass is reusable groundwork for
+  the deferred items below.
+- **Deferred, listed with their cost:** Dehaze (spatial, heavier estimation pass),
+  Noise Reduction (wants full-res to judge, expensive per frame — closer to its
+  own milestone), and profile-based Lens Corrections (needs a lens-profile
+  database).
+
+### Milestone 10 — Multi-select & Batch Operations
+
+Design resolved 2026-06-15. Revisits the Milestone 3 **single-select** filmstrip
+decision deliberately, in one place, because three features need it.
+
+- **Scoped multi-select in the filmstrip:** a selection of several files as a
+  batch target, while a single **active** photo still drives the viewport.
+- **Unlocks:** batch paste / sync of develop settings (Milestone 8 across many
+  photos), batch culling marks (rating/label on a selection), and batch export.
+- Kept out of Milestones 7–9 so the recently-designed single-select filmstrip is
+  changed once, on purpose, rather than quietly overturned.
+
 ---
 
 ## Testing Strategy

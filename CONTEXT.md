@@ -73,6 +73,35 @@ The histogram of the image as the tone curve receives it — after upstream
 adjustments, gamma-encoded — drawn behind the curve so its x-axis matches the
 curve's. Distinct from the panel Histogram, which shows the final image.
 
+**Local Adjustment**:
+A develop edit that applies only within a masked region of one image — a
+*([[Mask]] + tonal/colour deltas)* pair, as opposed to the global adjustments
+that touch every pixel identically. Carries the dodge/burn + colour-grade subset
+(exposure, contrast, highlights, shadows, whites, blacks, temperature, tint,
+saturation, vibrance), never geometry or the tone curve. Previews live, lives on
+the develop undo stack, and is stored in arraw's own XMP namespace (not `crs:`).
+_Avoid_: filter, layer, adjustment brush (the brush is one possible future mask
+source, not the concept itself)
+
+**Mask**:
+The stencil that says *where* a [[Local Adjustment]] applies — value 0 (none) to
+1 (full), grey in between. In v1 it is *described* parametrically (a shape or a
+value range), not painted; a freehand brush is a documented later extension.
+_Avoid_: selection, channel, cut-out
+
+**Mask Type**:
+The kind of parametric [[Mask]]: Linear (a graduated fade across the frame) and
+Radial (an oval) in v1; Luminance range and Colour range are the planned next
+set. The brush, if added, becomes a further type.
+
+**Develop Preset**:
+A saved, named bundle of develop settings, applied to any photo through the same
+"pick which groups travel" list used by copy/paste. Local Adjustments may be
+included but are off by default (a mask pinned to one photo's geometry rarely
+generalises). Stored as arraw-native files in the app data directory, not as a
+develop sidecar and not Lightroom-compatible.
+_Avoid_: profile (that is a colour or camera profile), template, style
+
 **Straighten**:
 Leveling the image by drawing a reference line along something that should be
 horizontal or vertical; the line's angle is written to Rotation. The gesture,
