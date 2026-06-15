@@ -34,7 +34,7 @@ struct Ubuf {
     qint32 curveInput;
     qint32 hslActive;
     qint32 wbInput;
-    qint32 pad[1];         // std140 block size is a multiple of 16
+    qint32 clipWarn;       // clipping overlay bits: 1 = highlights, 2 = shadows
 };
 static_assert(sizeof(Ubuf) == 272);
 
@@ -61,6 +61,8 @@ public:
         bool      wbInput       = false;
         bool      useLut        = false;
         bool      gamutWarn     = false;
+        bool      clipHighlights = false;   // sRGB-relative clipping overlay (docs/adr/0009)
+        bool      clipShadows    = false;
         AdjustmentParams adjustments;
     };
 

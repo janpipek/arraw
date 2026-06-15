@@ -33,6 +33,7 @@ layout(std140, binding = 0) uniform buf {
     int   curveInput;    // stop after tone regions + gamma-encode (histograms)
     int   hslActive;
     int   wbInput;       // stop before temperature/tint, output linear (WB picker)
+    int   clipWarn;      // clipping overlay bits: 1 = highlights, 2 = shadows (docs/adr/0009)
 } u;
 
 layout(binding = 1) uniform sampler2D uTexture;
@@ -281,10 +282,24 @@ void main() {
         c = applyHsl(c);
     c = applySaturation(c);
     c = applyVibrance(c);
-    if (u.displayEncode == 0)
+    if (u.displayEncode == 0) {
         fragColor = vec4(clamp(c, 0.0, 1.0), 1.0);          // export readback
-    else if (u.useLut != 0)
-        fragColor = vec4(displayLut(c), 1.0);               // proof / monitor ICC
-    else
-        fragColor = vec4(displayTransform(c), 1.0);         // assume-sRGB display
+        return;
+    }
+
+    vec3 outc = (u.useLut != 0) ? displayLut(c)             // proof / monitor ICC
+                                : displayTransform(c);      // assume-sRGB display
+
+    // Clipping overlay (docs/adr/0009): sRGB-relative, judged once here so it
+    // works in both encode paths and the clip colour wins over the gamut-warning
+    // red. Highlight red wins over shadow blue. clipWarn is forced 0 for the
+    // export and histogram readbacks, so this only paints the on-screen frame.
+    if (u.clipWarn != 0) {
+        vec3 s = kRec2020ToSRGB * c;
+        if ((u.clipWarn & 1) != 0 && any(greaterThanEqual(s, vec3(1.0))))
+            outc = vec3(1.0, 0.0, 0.0);                     // highlight clip
+        else if ((u.clipWarn & 2) != 0 && any(lessThanEqual(s, vec3(0.0))))
+            outc = vec3(0.0, 0.0, 1.0);                     // shadow clip
+    }
+    fragColor = vec4(outc, 1.0);
 }

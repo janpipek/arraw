@@ -35,6 +35,7 @@ layout(std140, binding = 0) uniform buf {
     int   curveInput;    // stop after tone regions + gamma-encode (histograms)
     int   hslActive;
     int   wbInput;       // stop before temperature/tint, output linear (WB picker)
+    int   clipWarn;      // clipping overlay bits: 1 = highlights, 2 = shadows (docs/adr/0009)
 } u;
 
 void main() {

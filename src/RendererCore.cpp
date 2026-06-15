@@ -300,6 +300,7 @@ void RendererCore::fillUbuf(Ubuf& ub, const FrameParams& fp) const {
     ub.curveInput    = fp.curveInput ? 1 : 0;
     ub.hslActive     = hslActive ? 1 : 0;
     ub.wbInput       = fp.wbInput ? 1 : 0;
+    ub.clipWarn      = (fp.clipHighlights ? 1 : 0) | (fp.clipShadows ? 2 : 0);
 }
 
 // ── Pass recording — the single point the pipeline is drawn (ADR 0006) ───────

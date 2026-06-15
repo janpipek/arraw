@@ -54,6 +54,11 @@ private:
     // settings and monitor profile (no LUT when both are off).
     void rebuildDisplayLut();
 
+    // Push the clipping-overlay actions' state to the viewport and persist it
+    // (docs/adr/0009); toggleClipping flips both at once for the J key.
+    void applyClipping();
+    void toggleClipping();
+
     ImageViewport*   viewport;
     AdjustmentPanel* adjPanel;
     ProofingPanel*   proofPanel;
@@ -72,6 +77,8 @@ private:
     QAction*         wbAction;
     QAction*         saveAction;
     QAction*         exportAction;
+    QAction*         clipHighlightsAction;   // View → Show Highlight Clipping
+    QAction*         clipShadowsAction;      // View → Show Shadow Clipping
 
     QString monitorProfilePath;   // empty = assume sRGB
 

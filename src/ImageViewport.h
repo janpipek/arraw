@@ -53,6 +53,9 @@ public:
     void setDisplayLut(const DisplayLut& lut);
     void clearDisplayLut();
     void setGamutWarning(bool on);
+    // Clipping overlay (docs/adr/0009): paint highlight clips red, shadow clips
+    // blue on the on-screen preview. View state only — never exported.
+    void setClipWarnings(bool highlights, bool shadows);
 
     // Render buf through the full shader pipeline into an offscreen target.
     // Returns a *linear working-space* float QImage (Format_RGBX32FPx4),
@@ -60,6 +63,13 @@ public:
     // the output transform (toOutputImage) before saving.
     QImage renderToImage(const ImageBuffer& buf, const AdjustmentParams& params,
                          int outW, int outH);
+
+    // Render buf through the on-screen display path (sRGB encode, LUT off) with
+    // the clipping overlay forced on — the export path forces it off, so this is
+    // the testable entry for the overlay (docs/adr/0009). Returns a display-
+    // encoded float QImage (Format_RGBX32FPx4) at the cropped pixel size.
+    QImage renderClipSample(const ImageBuffer& buf, const AdjustmentParams& params,
+                            bool clipHighlights, bool clipShadows);
 
 signals:
     void fullResNeeded();
@@ -148,6 +158,8 @@ private:
     bool curveLutDirty = true;
     bool useDisplayLut = false;
     bool gamutWarn     = false;
+    bool clipHighlights = false;
+    bool clipShadows    = false;
     ViewportOverlay* overlay = nullptr;
 
     // ── Image state ───────────────────────────────────────────────────────
