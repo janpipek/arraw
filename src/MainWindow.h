@@ -10,6 +10,7 @@ class AdjustmentPanel;
 class ProofingPanel;
 class ExifPanel;
 class FilmStrip;
+class CollapsiblePane;
 class QDockWidget;
 class QUndoStack;
 class QLabel;
@@ -22,6 +23,7 @@ class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
     explicit MainWindow(QWidget* parent = nullptr);
+    ~MainWindow() override;   // out-of-line for unique_ptr<CollapsiblePane>
 
     // Called after show() with the command-line argument, if any.
     // Accepts a RAW file path or a directory.
@@ -65,6 +67,8 @@ private:
     ExifPanel*       exifPanel;
     FilmStrip*       filmStrip;
     QDockWidget*     filmStripDock;
+    QDockWidget*     adjustmentsDock;                     // right; collapses to a strip
+    std::unique_ptr<CollapsiblePane> adjustmentsPane;     // adjustmentsDock ↔ edge strip
     QUndoStack*      undoStack;
     QLabel*          statusLabel;
     QLabel*          proofLabel;
