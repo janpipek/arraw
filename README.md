@@ -78,8 +78,11 @@ ninja -C build
 
 ### Windows (vcpkg)
 
+Install vcpkg using the [vcpkg installation guide](https://learn.microsoft.com/en-us/vcpkg/get_started/get-started)
+(Note: scoop-based install did not work for me)
+
 ```bat
-vcpkg install qt6-base qt6-tools qt6-shadertools libraw lcms
+vcpkg install qtbase qttools qtshadertools libraw lcms
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
   -DCMAKE_TOOLCHAIN_FILE=path/to/vcpkg/scripts/buildsystems/vcpkg.cmake
 ninja -C build

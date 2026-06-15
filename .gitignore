@@ -1,5 +1,10 @@
 build/
+build-release/
 build-clazy/
+dist/
+
+# Local, machine-specific CMake configure preset (vcpkg toolchain path)
+CMakePresets.json
 .cmake/
 CMakeFiles/
 CMakeCache.txt
