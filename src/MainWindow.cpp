@@ -4,6 +4,7 @@
 #include "AdjustmentPanel.h"
 #include "ProofingPanel.h"
 #include "ExifPanel.h"
+#include "CollapsiblePane.h"
 #include "FilmStrip.h"
 #include "RawProcessor.h"
 #include "StandardImageLoader.h"
@@ -134,6 +135,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     QSettings s;
     restoreGeometry(s.value("geometry").toByteArray());
     restoreState(s.value("windowState").toByteArray());
+
+    // restoreState may have brought the Adjustments dock back collapsed; align
+    // the pane's internal state with the widgets it just restored.
+    if (adjustmentsDock->isHidden())
+        adjustmentsPane->collapse();
+    else
+        adjustmentsPane->expand();
 }
 
 void MainWindow::closeEvent(QCloseEvent* e) {
@@ -178,6 +186,9 @@ void MainWindow::setupMenus() {
 
     auto* view = menuBar()->addMenu("&View");
     view->addAction(filmStripDock->toggleViewAction());
+    auto* toggleAdjustments = view->addAction(
+        "Adjustments Panel", this, [this] { adjustmentsPane->toggle(); });
+    toggleAdjustments->setShortcut(Qt::Key_F8);
     view->addSeparator();
     view->addAction("Reset Zoom", Qt::CTRL | Qt::Key_0,
                     viewport, &ImageViewport::resetView);
@@ -372,7 +383,11 @@ void MainWindow::setupDocks() {
     // doesn't restore the strip to the side.
     filmStripDock->setObjectName("FilmStripDockBottom");
     filmStripDock->setAllowedAreas(Qt::TopDockWidgetArea | Qt::BottomDockWidgetArea);
-    filmStripDock->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable);
+    // Closable so toggleViewAction() (View → Film Strip, F9) is enabled; the
+    // custom title bar below replaces the default one, so no close button shows.
+    filmStripDock->setFeatures(QDockWidget::DockWidgetMovable
+                             | QDockWidget::DockWidgetFloatable
+                             | QDockWidget::DockWidgetClosable);
 
     filmStrip = new FilmStrip(filmStripDock);
     filmStrip->setMinimumHeight(80);
@@ -411,10 +426,23 @@ void MainWindow::setupDocks() {
     connect(filmStrip, &FilmStrip::fileSelected,
             this, &MainWindow::loadImage);
 
-    // Adjustments + EXIF (right)
-    auto* rightDock = new QDockWidget("Adjustments", this);
+    // Adjustments + EXIF (right). Collapses to a thin edge strip (ADR 0012).
+    auto* rightDock = adjustmentsDock = new QDockWidget("Adjustments", this);
+    rightDock->setObjectName("AdjustmentsDock");   // saveState/restoreState key
     rightDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
     rightDock->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable);
+
+    // Custom title bar carrying a collapse chevron (mirrors the film strip's).
+    auto* adjTitle = new QWidget(rightDock);
+    auto* adjTitleLayout = new QHBoxLayout(adjTitle);
+    adjTitleLayout->setContentsMargins(6, 2, 4, 2);
+    adjTitleLayout->addWidget(new QLabel("Adjustments", adjTitle), 1);
+    auto* collapseBtn = new QToolButton(adjTitle);
+    collapseBtn->setAutoRaise(true);
+    collapseBtn->setText("›");                 // toward the edge: click to collapse
+    collapseBtn->setToolTip("Collapse panel (F8)");
+    adjTitleLayout->addWidget(collapseBtn);
+    rightDock->setTitleBarWidget(adjTitle);
 
     auto* tabs = new QTabWidget(rightDock);
     tabs->setMinimumWidth(120);   // let the panel follow its content; don't pin it wide
@@ -437,8 +465,29 @@ void MainWindow::setupDocks() {
 
     rightDock->setWidget(tabs);
     addDockWidget(Qt::RightDockWidgetArea, rightDock);
+
+    // Reveal strip: a vertical toolbar pinned to the right edge, visible only
+    // while the dock is collapsed; its chevron re-opens the panel (ADR 0012).
+    auto* strip = new QToolBar("Adjustments Strip", this);
+    strip->setObjectName("AdjustmentsStrip");   // saveState/restoreState key
+    strip->setMovable(false);
+    strip->setFloatable(false);
+    auto* expandAction = strip->addAction("‹");  // toward the centre: click to expand
+    expandAction->setToolTip("Expand panel (F8)");
+    addToolBar(Qt::RightToolBarArea, strip);
+
+    // CollapsiblePane owns the dock↔strip mutual-exclusion invariant; it starts
+    // expanded (dock shown, strip hidden). A restored collapsed state is synced
+    // back onto it after restoreState() in the constructor.
+    adjustmentsPane = std::make_unique<CollapsiblePane>(rightDock, strip);
+    connect(collapseBtn, &QToolButton::clicked,
+            this, [this] { adjustmentsPane->collapse(); });
+    connect(expandAction, &QAction::triggered,
+            this, [this] { adjustmentsPane->expand(); });
     // adjPanel → viewport paramsChanged wired in constructor (after both are created)
 }
+
+MainWindow::~MainWindow() = default;
 
 void MainWindow::openPath(const QString& path) {
     QFileInfo fi(path);

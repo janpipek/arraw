@@ -50,6 +50,7 @@ set(CORE_SOURCES
     src/RendererCore.cpp
     src/AdjustmentPanel.cpp
     src/AdjustmentSpinBox.cpp
+    src/CollapsiblePane.cpp
     src/ToneCurveWidget.cpp
     src/ExifPanel.cpp
     src/ImageMetadata.cpp
