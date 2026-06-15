@@ -12,21 +12,19 @@
   <!-- film sprocket-shaft: two rows of perforations (off-white) -->
   <g fill="#ECE8E0">
     <!-- top row -->
-    <rect x="52"  y="88" width="16" height="26" rx="5"/>
-    <rect x="76"  y="88" width="16" height="26" rx="5"/>
-    <rect x="100" y="88" width="16" height="26" rx="5"/>
-    <rect x="124" y="88" width="16" height="26" rx="5"/>
-    <rect x="148" y="88" width="16" height="26" rx="5"/>
+    <rect x="40"  y="88" width="16" height="26" rx="5"/>
+    <rect x="66"  y="88" width="16" height="26" rx="5"/>
+    <rect x="92"  y="88" width="16" height="26" rx="5"/>
+    <rect x="118" y="88" width="16" height="26" rx="5"/>
     <!-- bottom row -->
-    <rect x="52"  y="142" width="16" height="26" rx="5"/>
-    <rect x="76"  y="142" width="16" height="26" rx="5"/>
-    <rect x="100" y="142" width="16" height="26" rx="5"/>
-    <rect x="124" y="142" width="16" height="26" rx="5"/>
-    <rect x="148" y="142" width="16" height="26" rx="5"/>
+    <rect x="40"  y="142" width="16" height="26" rx="5"/>
+    <rect x="66"  y="142" width="16" height="26" rx="5"/>
+    <rect x="92" y="142" width="16" height="26" rx="5"/>
+    <rect x="118" y="142" width="16" height="26" rx="5"/>
   </g>
 
   <!-- teal chevron tip: the arrowhead -->
-  <polyline points="172,90 206,128 172,166"
+  <polyline points="156,80 216,128 156,176"
             fill="none" stroke="#2DC6D6" stroke-width="22"
             stroke-linecap="round" stroke-linejoin="round"/>
 </svg>
