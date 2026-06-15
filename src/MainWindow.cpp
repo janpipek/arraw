@@ -2,6 +2,7 @@
 #include "ColorManagement.h"
 #include "ImageViewport.h"
 #include "AdjustmentPanel.h"
+#include "LocalAdjustmentPanel.h"
 #include "ProofingPanel.h"
 #include "ExifPanel.h"
 #include "FilmStrip.h"
@@ -122,7 +123,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             });
 
     connect(adjPanel, &AdjustmentPanel::paramsChanged,
-            viewport, &ImageViewport::setAdjustments);
+            this, [this] { pushParamsToViewport(); });
+
+    connect(localPanel, &LocalAdjustmentPanel::changed,
+            this, [this] { pushParamsToViewport(); });
 
     connect(viewport, &ImageViewport::histogramsReady,
             adjPanel, &AdjustmentPanel::setHistogramSamples);
@@ -432,6 +436,13 @@ void MainWindow::setupDocks() {
     adjScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     tabs->addTab(adjScroll, "Adjustments");
 
+    localPanel = new LocalAdjustmentPanel(tabs);
+    auto* localScroll = new QScrollArea(tabs);
+    localScroll->setWidget(localPanel);
+    localScroll->setWidgetResizable(true);
+    localScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    tabs->addTab(localScroll, "Masks");
+
     exifPanel = new ExifPanel(tabs);
     tabs->addTab(exifPanel, "EXIF");
 
@@ -535,6 +546,8 @@ void MainWindow::onLoadFinished() {
     if (!QFileInfo::exists(XmpSidecar::pathFor(currentPath)))
         saved.cropRect = result.defaultCrop;
     adjPanel->setParams(saved);
+    localPanel->setLocalAdjustments(saved.localAdjustments);
+    pushParamsToViewport();
 
     statusLabel->setText(QString("%1  —  %2 × %3")
         .arg(QFileInfo(currentPath).fileName())
@@ -611,10 +624,20 @@ void MainWindow::rebuildDisplayLut() {
     proofLabel->setVisible(proofing);
 }
 
+GlobalAdjustment MainWindow::currentParams() const {
+    GlobalAdjustment p = adjPanel->params();
+    p.localAdjustments = localPanel->localAdjustments();
+    return p;
+}
+
+void MainWindow::pushParamsToViewport() {
+    viewport->setAdjustments(currentParams());
+}
+
 void MainWindow::saveAdjustments() {
     if (currentPath.isEmpty()) return;
     viewport->commitActiveTool();   // fold any pending crop into the params first
-    if (XmpSidecar::saveAdjustments(currentPath, adjPanel->params()))
+    if (XmpSidecar::saveAdjustments(currentPath, currentParams()))
         statusLabel->setText("Saved: " + XmpSidecar::pathFor(currentPath));
     else
         QMessageBox::warning(this, "Save Error",
@@ -666,7 +689,7 @@ void MainWindow::exportFile() {
     }
 
     viewport->commitActiveTool();   // fold any pending crop into the params first
-    const GlobalAdjustment p = adjPanel->params();
+    const GlobalAdjustment p = currentParams();
 
     // Natural output size = full-res pixels inside the crop rect
     const int naturalW = int(fullRes.width  * p.cropRect.width()  + 0.5);

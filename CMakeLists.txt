@@ -49,6 +49,7 @@ set(CORE_SOURCES
     src/ImageViewport.cpp
     src/RendererCore.cpp
     src/AdjustmentPanel.cpp
+    src/LocalAdjustmentPanel.cpp
     src/AdjustmentSpinBox.cpp
     src/ToneCurveWidget.cpp
     src/ExifPanel.cpp
