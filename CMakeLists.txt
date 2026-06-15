@@ -106,7 +106,9 @@ qt6_add_shaders(arraw_core "arraw_shaders"
     FILES shaders/image.vert shaders/image.frag
 )
 
-add_executable(arraw src/main.cpp)
+# resources/icon.qrc bakes the window-icon PNGs (generated from resources/icon.svg
+# by tools/render_icons.py — see ADR 0013) in via AUTORCC.
+add_executable(arraw src/main.cpp resources/icon.qrc)
 arraw_enable_warnings(arraw)
 
 target_link_libraries(arraw PRIVATE arraw_core)
