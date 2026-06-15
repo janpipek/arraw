@@ -1,0 +1,13 @@
+<!-- Generated PNGs from resources/icon.svg (ADR 0013). Regenerate with:
+     uv run tools/render_icons.py -->
+<RCC>
+  <qresource prefix="/">
+    <file>icons/arraw-16.png</file>
+    <file>icons/arraw-24.png</file>
+    <file>icons/arraw-32.png</file>
+    <file>icons/arraw-48.png</file>
+    <file>icons/arraw-64.png</file>
+    <file>icons/arraw-128.png</file>
+    <file>icons/arraw-256.png</file>
+  </qresource>
+</RCC>
