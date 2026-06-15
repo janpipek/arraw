@@ -241,7 +241,14 @@ that file is the source of truth; keep this list in sync with it.
 13. HSL color mix    8 hue ranges, smoothstep-weighted hue/sat/lum shifts
 14. Saturation       luma-preserving saturation scale
 15. Vibrance         saturation boost weighted toward desaturated pixels
-16. Encode           u.displayEncode on (screen):
+16. Local adjustments per-mask weighted tone/colour deltas (docs/adr/0010):
+                     each Local Adjustment's deltas reuse the same parameterised
+                     functions (steps 7–15, minus curve/HSL), scaled by an
+                     analytic mask weight. Single-pass, in array order. Skipped
+                     by the curve-input and WB-picker readbacks (which return
+                     earlier); included on screen, in export, and the panel
+                     histogram
+17. Encode           u.displayEncode on (screen):
                        u.useLut off — display transform: Rec.2020→sRGB matrix
                        + true piecewise sRGB curve (sRGB monitor assumed)
                        u.useLut on — 33³ LUT texture baked by lcms2
@@ -258,12 +265,12 @@ that file is the source of truth; keep this list in sync with it.
 **Export only — CPU, after the offscreen readback (`MainWindow::exportFile`)**
 
 ```
-17. Resize           linear-light float scale to the chosen dimensions
-18. Output transform lcms2: working space → sRGB / Display P3 / Adobe RGB,
+18. Resize           linear-light float scale to the chosen dimensions
+19. Output transform lcms2: working space → sRGB / Display P3 / Adobe RGB,
                      8-bit (RGB888) or 16-bit (RGBA64, TIFF only)
-19. Sharpening       unsharp mask in encoded space (the Sharpen slider has no
+20. Sharpening       unsharp mask in encoded space (the Sharpen slider has no
                      preview effect — it is applied only here)
-20. Save             JPEG/PNG/TIFF with the output ICC profile embedded
+21. Save             JPEG/PNG/TIFF with the output ICC profile embedded
 ```
 
 Histograms are exact: `ImageViewport::renderHistograms()` renders the preview
@@ -284,7 +291,7 @@ for the panel histogram, and a "stop after tone regions, gamma-encode" pass
    - Upload `fullRes` as a float32 RGBA texture (temporary).
    - Render into an offscreen RGBA32F target at the cropped pixel size, in an
      offscreen RHI frame of its own.
-   - Run the full shader pipeline (steps 4–15 above) with current
+   - Run the full shader pipeline (steps 4–16 above) with current
      `AdjustmentParams`, `u.displayEncode` off.
    - Synchronous readback → `QImage(Format_RGBX32FPx4)`, linear working space,
      scaled to the requested output size while still linear.

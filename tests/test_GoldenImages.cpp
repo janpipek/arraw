@@ -223,6 +223,46 @@ TEST_CASE("shader pipeline matches golden renders", "[gpu][golden]") {
     }
 }
 
+// Local adjustments (docs/adr/0010): a behavioural check of the whole GPU chain
+// — std140 packing, fillUbuf, the shader loop, and the GLSL maskWeight port.
+// A +1 EV local exposure on a Linear mask must brighten only the masked region.
+TEST_CASE("a local exposure mask brightens only the masked region",
+          "[gpu][localadj]") {
+    ImageViewport* vp = goldenViewport();
+    if (!vp)
+        SKIP("no OpenGL context available on this machine");
+
+    // Flat mid-grey scene, so any brightness difference is the mask's doing.
+    ImageBuffer scene;
+    scene.width = 64;
+    scene.height = 48;
+    scene.data.assign(size_t(scene.width) * scene.height * 3, 0.3f);
+
+    AdjustmentParams p;
+    LocalAdjustment la;
+    // Vertical gradient line near centre: left of x=0.4 → weight 0,
+    // right of x=0.6 → weight 1.
+    la.mask     = LinearMask{ {0.4, 0.5}, {0.6, 0.5} };
+    la.exposure = 1.0f;  // +1 EV on the masked side
+    p.localAdjustments.push_back(la);
+
+    vp->setAdjustments(p);
+    const QImage got = vp->renderToImage(scene, p, scene.width, scene.height);
+    REQUIRE_FALSE(got.isNull());
+    REQUIRE(got.format() == QImage::Format_RGBX32FPx4);
+
+    auto value = [&](float fx, int y) {
+        const float* px = reinterpret_cast<const float*>(got.constScanLine(y));
+        return px[int(fx * scene.width) * 4];  // grey scene → R channel suffices
+    };
+    const int y = scene.height / 2;
+    const float unmasked = value(0.1f, y);  // weight ~0, untouched
+    const float masked   = value(0.9f, y);  // weight ~1, +1 EV
+
+    INFO("unmasked=" << unmasked << " masked=" << masked);
+    CHECK(masked > unmasked + 0.1f);   // +1 EV ≈ doubles the linear value
+}
+
 // Clipping overlay (docs/adr/0009): rendered through the display path (sRGB
 // encode) with both overlays on. The synthetic scene spans pure white, near
 // black, and saturated single-channel bars, so this one golden locks the

@@ -36,6 +36,13 @@ layout(std140, binding = 0) uniform buf {
     int   hslActive;
     int   wbInput;       // stop before temperature/tint, output linear (WB picker)
     int   clipWarn;      // clipping overlay bits: 1 = highlights, 2 = shadows (docs/adr/0009)
+    // Local adjustments (docs/adr/0010) — unused here, but the block must match
+    // image.frag and Ubuf byte-for-byte (std140).
+    vec4  laGeom[16];
+    vec4  laTone[16];
+    vec4  laTone2[16];
+    vec4  laColor[16];
+    int   numLocalAdj;
 } u;
 
 void main() {
