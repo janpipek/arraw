@@ -1,9 +1,11 @@
 #pragma once
 #include "ImagePipeline.h"
 #include "ToneCurveWidget.h"
+#include "FieldSpec.h"
 #include <array>
 #include <vector>
 #include <QWidget>
+#include <QHash>
 
 class QSlider;
 class QLabel;
@@ -11,7 +13,9 @@ class QComboBox;
 class QPushButton;
 class QVBoxLayout;
 class QStackedWidget;
+class QEvent;
 class Histogram;
+class AdjustmentSpinBox;
 
 class AdjustmentPanel : public QWidget {
     Q_OBJECT
@@ -28,19 +32,25 @@ signals:
     void adjustmentCommitted(const AdjustmentParams& before, const AdjustmentParams& after);
     void straightenActive(bool active);
 
+protected:
+    bool eventFilter(QObject* obj, QEvent* ev) override;
+
 private:
     struct SliderRow {
-        QSlider* slider;
-        QLabel*  valueLabel;
+        QSlider*           slider;
+        AdjustmentSpinBox* spin;
+        QLabel*            nameLabel;
+        FieldSpec          spec;
     };
 
     SliderRow addSlider(QVBoxLayout* layout, const QString& name,
-                        int min, int max, int defaultVal,
-                        const QString& suffix = {});
-    std::vector<QSlider*> allSliders() const;
-    void connectSliders();
+                        const FieldSpec& spec);
+    std::vector<SliderRow*> allRows();
+    void connectRow(SliderRow& row);
     void connectCurve();
     void syncParams();
+    void commit();
+    void resetRow(SliderRow& row);
     void updateCurveChannelIndicators();
 
     Histogram*         histogram;
@@ -68,5 +78,7 @@ private:
     std::array<SliderRow, 8> hslLum;
 
     AdjustmentParams adjustments;
-    AdjustmentParams beforeDrag;
+    AdjustmentParams committed;    // last committed state — baseline for the next undo entry
+
+    QHash<QObject*, SliderRow*> resetTargets;   // slider/label -> row, for double-click reset
 };

@@ -398,7 +398,7 @@ void MainWindow::setupDocks() {
     rightDock->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable);
 
     auto* tabs = new QTabWidget(rightDock);
-    tabs->setMinimumWidth(280);
+    tabs->setMinimumWidth(120);   // let the panel follow its content; don't pin it wide
 
     auto* adjScroll = new QScrollArea(tabs);
     adjPanel   = new AdjustmentPanel;
