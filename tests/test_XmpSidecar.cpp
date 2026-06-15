@@ -98,6 +98,80 @@ TEST_CASE("save then load round-trips all params", "[xmp]") {
     CHECK(loaded.curveB.isIdentity());
 }
 
+TEST_CASE("local adjustments round-trip through the arraw namespace",
+          "[xmp][arraw]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("local.dng");
+
+    AdjustmentParams p;
+    LocalAdjustment la;
+    la.mask        = LinearMask{ {0.2, 0.5}, {0.8, 0.5} };
+    la.exposure    = 0.5f;
+    la.contrast    = -10.0f;
+    la.temperature = 25.0f;  // relative -100..100, not Kelvin
+    p.localAdjustments.push_back(la);
+
+    REQUIRE(XmpSidecar::saveAdjustments(rawPath, p));
+    const AdjustmentParams loaded = XmpSidecar::loadAdjustments(rawPath);
+
+    REQUIRE(loaded.localAdjustments.size() == 1);
+    const LocalAdjustment& r = loaded.localAdjustments[0];
+    REQUIRE(std::holds_alternative<LinearMask>(r.mask));
+    const LinearMask& m = std::get<LinearMask>(r.mask);
+    CHECK_THAT(m.p0.x(), WithinAbs(0.2, kScalarTol));
+    CHECK_THAT(m.p0.y(), WithinAbs(0.5, kScalarTol));
+    CHECK_THAT(m.p1.x(), WithinAbs(0.8, kScalarTol));
+    CHECK_THAT(m.p1.y(), WithinAbs(0.5, kScalarTol));
+    CHECK_THAT(r.exposure,    WithinAbs(0.5,   kScalarTol));
+    CHECK_THAT(r.contrast,    WithinAbs(-10.0, kScalarTol));
+    CHECK_THAT(r.temperature, WithinAbs(25.0,  kScalarTol));
+}
+
+// The arraw-native format contract — exact emitted fields, independent of our
+// reader. A matched reader/writer bug passes round-trip but fails this.
+TEST_CASE("writer emits local adjustments in the arraw namespace with relative "
+          "temperature", "[xmp][arraw]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("shot.arw");
+
+    AdjustmentParams p;
+    LocalAdjustment la;
+    la.mask        = LinearMask{ {0.2, 0.5}, {0.8, 0.5} };
+    la.exposure    = 0.5f;
+    la.temperature = 25.0f;  // relative, NOT Kelvin
+    p.localAdjustments.push_back(la);
+    REQUIRE(XmpSidecar::saveAdjustments(rawPath, p));
+
+    QFile f(XmpSidecar::pathFor(rawPath));
+    REQUIRE(f.open(QIODevice::ReadOnly));
+    const QString xml = QString::fromUtf8(f.readAll());
+
+    CHECK(xml.contains("http://ns.arraw.app/1.0/"));
+    CHECK(xml.contains("<arraw:MaskType>Linear</arraw:MaskType>"));
+    CHECK(xml.contains("<arraw:P0x>0.2000</arraw:P0x>"));
+    CHECK(xml.contains("<arraw:Exposure>0.5000</arraw:Exposure>"));
+    CHECK(xml.contains("<arraw:Temperature>25.0000</arraw:Temperature>"));
+    // It must NOT have leaked into the Lightroom crs: develop block.
+    CHECK_FALSE(xml.contains(R"(crs:LocalAdjustments)"));
+}
+
+TEST_CASE("loading drops local adjustments beyond the 16-mask cap",
+          "[xmp][arraw]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("many.dng");
+
+    AdjustmentParams p;
+    for (int i = 0; i < 20; ++i) {
+        LocalAdjustment la;
+        la.mask     = LinearMask{ {0.0, 0.0}, {1.0, 1.0} };
+        la.exposure = float(i);
+        p.localAdjustments.push_back(la);
+    }
+    REQUIRE(XmpSidecar::saveAdjustments(rawPath, p));
+
+    REQUIRE(XmpSidecar::loadAdjustments(rawPath).localAdjustments.size() == 16);
+}
+
 TEST_CASE("default params round-trip to defaults", "[xmp]") {
     QTemporaryDir dir;
     const QString rawPath = dir.filePath("untouched.nef");

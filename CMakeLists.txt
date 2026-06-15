@@ -57,6 +57,7 @@ set(CORE_SOURCES
     src/RawProcessor.cpp
     src/StandardImageLoader.cpp
     src/ImagePipeline.cpp
+    src/LocalAdjustment.cpp
     src/FieldSpec.cpp
     src/ColorManagement.cpp
     src/ProofingPanel.cpp

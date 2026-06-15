@@ -6,10 +6,16 @@
 #include <QXmlStreamWriter>
 #include <QXmlStreamReader>
 
-static constexpr char kNsCrs[]  = "http://ns.adobe.com/camera-raw-settings/1.0/";
-static constexpr char kNsRdf[]  = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
-static constexpr char kNsX[]    = "adobe:ns:meta/";
-static constexpr char kNsXmp[]  = "http://ns.adobe.com/xap/1.0/";
+#include <type_traits>
+#include <variant>
+
+static constexpr char kNsCrs[]   = "http://ns.adobe.com/camera-raw-settings/1.0/";
+static constexpr char kNsRdf[]   = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+static constexpr char kNsX[]     = "adobe:ns:meta/";
+static constexpr char kNsXmp[]   = "http://ns.adobe.com/xap/1.0/";
+// arraw-native develop data that has no Lightroom equivalent — local adjustments
+// (docs/adr/0010). Versioned in the URI like Adobe's namespaces.
+static constexpr char kNsArraw[] = "http://ns.arraw.app/1.0/";
 
 // crs: attribute names for the 8 HSL ranges, indexed like AdjustmentParams::hslHue etc.
 static constexpr const char* kHslHueNames[8] = {
@@ -50,6 +56,55 @@ static std::vector<QPointF> parseCurveSeq(QXmlStreamReader& xml) {
     }
     if (pts.size() < 2) pts = {{0.0, 0.0}, {1.0, 1.0}};
     return pts;
+}
+
+// Parse one rdf:li (parseType="Resource") of the arraw:LocalAdjustments Seq.
+// The reader is positioned on the rdf:li start element.
+static LocalAdjustment parseLocalAdjustmentLi(QXmlStreamReader& xml) {
+    LocalAdjustment la;
+    QString maskType = "Linear";
+    QPointF p0, p1;
+    while (!xml.atEnd()) {
+        xml.readNext();
+        if (xml.isEndElement() && xml.qualifiedName() == "rdf:li") break;
+        if (!xml.isStartElement()) continue;
+        const QString name = xml.qualifiedName().toString();
+        const QString text = xml.readElementText();
+        const float v = text.toFloat();
+        if      (name == "arraw:MaskType")    maskType = text.trimmed();
+        else if (name == "arraw:P0x")         p0.setX(v);
+        else if (name == "arraw:P0y")         p0.setY(v);
+        else if (name == "arraw:P1x")         p1.setX(v);
+        else if (name == "arraw:P1y")         p1.setY(v);
+        else if (name == "arraw:Exposure")    la.exposure    = v;
+        else if (name == "arraw:Contrast")    la.contrast    = v;
+        else if (name == "arraw:Highlights")  la.highlights  = v;
+        else if (name == "arraw:Shadows")     la.shadows     = v;
+        else if (name == "arraw:Whites")      la.whites      = v;
+        else if (name == "arraw:Blacks")      la.blacks      = v;
+        else if (name == "arraw:Temperature") la.temperature = v;
+        else if (name == "arraw:Tint")        la.tint        = v;
+        else if (name == "arraw:Saturation")  la.saturation  = v;
+        else if (name == "arraw:Vibrance")    la.vibrance    = v;
+    }
+    if (maskType == "Linear")
+        la.mask = LinearMask{p0, p1};
+    return la;
+}
+
+// Parse the arraw:LocalAdjustments Seq into a list. Positioned on the
+// LocalAdjustments start element. Honours the 16-mask cap (docs/adr/0010).
+static std::vector<LocalAdjustment> parseLocalAdjustments(QXmlStreamReader& xml) {
+    std::vector<LocalAdjustment> out;
+    while (!xml.atEnd()) {
+        xml.readNext();
+        if (xml.isEndElement() && xml.qualifiedName() == "arraw:LocalAdjustments")
+            break;
+        if (xml.isStartElement() && xml.qualifiedName() == "rdf:li"
+            && out.size() < 16)
+            out.push_back(parseLocalAdjustmentLi(xml));
+    }
+    return out;
 }
 
 SidecarData XmpSidecar::load(const QString& rawPath) {
@@ -123,6 +178,10 @@ SidecarData XmpSidecar::load(const QString& rawPath) {
                 if (xml.isStartElement() && xml.qualifiedName() == "rdf:Seq")
                     target->points = parseCurveSeq(xml);
             }
+
+            // arraw-native local adjustments (docs/adr/0010).
+            if (name == "arraw:LocalAdjustments")
+                p.localAdjustments = parseLocalAdjustments(xml);
         }
     }
     return data;
@@ -144,6 +203,48 @@ static void writeCurve(QXmlStreamWriter& xml, const char* elemName,
     }
     xml.writeEndElement(); // Seq
     xml.writeEndElement(); // curve element
+}
+
+// Writes the arraw-native local adjustments as a Seq of struct resources
+// (docs/adr/0010). Each li carries the mask type + geometry and the shared
+// delta subset; Temperature here is a relative -100..100 shift, not Kelvin.
+static void writeLocalAdjustments(QXmlStreamWriter& xml,
+                                  const std::vector<LocalAdjustment>& las) {
+    if (las.empty()) return;
+    auto num = [](float v) { return QString::number(double(v), 'f', 4); };
+
+    xml.writeStartElement(kNsArraw, "LocalAdjustments");
+    xml.writeStartElement(kNsRdf, "Seq");
+    for (const auto& la : las) {
+        xml.writeStartElement(kNsRdf, "li");
+        xml.writeAttribute(kNsRdf, "parseType", "Resource");
+
+        std::visit([&](const auto& mask) {
+            using T = std::decay_t<decltype(mask)>;
+            if constexpr (std::is_same_v<T, LinearMask>) {
+                xml.writeTextElement(kNsArraw, "MaskType", "Linear");
+                xml.writeTextElement(kNsArraw, "P0x", num(mask.p0.x()));
+                xml.writeTextElement(kNsArraw, "P0y", num(mask.p0.y()));
+                xml.writeTextElement(kNsArraw, "P1x", num(mask.p1.x()));
+                xml.writeTextElement(kNsArraw, "P1y", num(mask.p1.y()));
+            }
+        }, la.mask);
+
+        xml.writeTextElement(kNsArraw, "Exposure",    num(la.exposure));
+        xml.writeTextElement(kNsArraw, "Contrast",    num(la.contrast));
+        xml.writeTextElement(kNsArraw, "Highlights",  num(la.highlights));
+        xml.writeTextElement(kNsArraw, "Shadows",     num(la.shadows));
+        xml.writeTextElement(kNsArraw, "Whites",      num(la.whites));
+        xml.writeTextElement(kNsArraw, "Blacks",      num(la.blacks));
+        xml.writeTextElement(kNsArraw, "Temperature", num(la.temperature));
+        xml.writeTextElement(kNsArraw, "Tint",        num(la.tint));
+        xml.writeTextElement(kNsArraw, "Saturation",  num(la.saturation));
+        xml.writeTextElement(kNsArraw, "Vibrance",    num(la.vibrance));
+
+        xml.writeEndElement(); // rdf:li
+    }
+    xml.writeEndElement(); // rdf:Seq
+    xml.writeEndElement(); // arraw:LocalAdjustments
 }
 
 // Writes the whole sidecar (both develop settings and user metadata) from one
@@ -169,6 +270,7 @@ static bool writeFile(const QString& rawPath, const SidecarData& data) {
     xml.writeNamespace(kNsRdf, "rdf");
     xml.writeNamespace(kNsCrs, "crs");
     xml.writeNamespace(kNsXmp, "xmp");
+    xml.writeNamespace(kNsArraw, "arraw");
     xml.writeStartElement(kNsRdf, "Description");
     xml.writeAttribute(kNsRdf, "about", "");
 
@@ -211,6 +313,9 @@ static bool writeFile(const QString& rawPath, const SidecarData& data) {
     writeCurve(xml, "ToneCurvePV2012Red",   p.curveR.points);
     writeCurve(xml, "ToneCurvePV2012Green", p.curveG.points);
     writeCurve(xml, "ToneCurvePV2012Blue",  p.curveB.points);
+
+    // arraw-native local adjustments (docs/adr/0010).
+    writeLocalAdjustments(xml, p.localAdjustments);
 
     xml.writeEndElement(); // rdf:Description
     xml.writeEndElement(); // rdf:RDF
