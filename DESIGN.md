@@ -503,6 +503,22 @@ decision deliberately, in one place, because three features need it.
 - Kept out of Milestones 7–9 so the recently-designed single-select filmstrip is
   changed once, on purpose, rather than quietly overturned.
 
+### Milestone 11 — Headless CLI
+
+Design resolved 2026-06-15 in `docs/adr/0012-headless-cli-batch-export.md`. A
+windowless `arraw-cli` executable renders RAW → export with no GUI, reusing the
+shipped pipeline so the CLI and app cannot diverge.
+
+- **`arraw-cli <raw> [-o out.jpg]`** — decode (`RawProcessor::load`), restore the
+  adjacent `.xmp` (`XmpSidecar::load`), render (`RendererCore::renderOffscreen`),
+  save. No CPU re-implementation of the pipeline: the shader stays the one truth.
+- **Library split:** `arraw_core` divides into **`arraw_engine`** (processing,
+  QtGui-only — no Widgets) and the UI layer; CLI and tests link the engine.
+- **One device bootstrap:** RHI creation moves out of `ImageViewport` into a
+  reusable headless `QRhi` context; the widget and the CLI are two callers.
+- **Runtime:** needs a GPU or software rasteriser (llvmpipe / `-platform
+  offscreen`) — the path the offscreen goldens already use.
+
 ---
 
 ## Testing Strategy
