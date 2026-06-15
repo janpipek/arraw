@@ -1,8 +1,14 @@
 # arraw
 
-**WARNING** Though a lot of thinking and some basic knowledge of C++ and Qt has been put to the development, it is very heavily vibe-coded.
-
 A lightweight, cross-platform RAW photo editor with a Lightroom-style development workflow. Real-time GPU preview, non-destructive editing, XMP sidecar output.
+
+⚠️✨ **WARNING** Though a lot of thinking and some basic knowledge of C++ and Qt has been put to the development, it is very heavily vibe-coded. Use at your own risk. ✨⚠️
+
+## Motivation
+
+- Adobe Lightroom is great, but it does not run on Linux and has a quite expensive subscription model.
+- [Darktable](https://www.darktable.org/) is great but it is difficult to grasp mentally.
+- I wanted to experiment with Claude's capabilities.
 
 ## Features
 
