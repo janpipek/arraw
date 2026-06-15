@@ -30,5 +30,9 @@ target_compile_definitions(arraw_tests PRIVATE
     ARRAW_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
 )
 
+# Deploy Qt platform plugins before catch_discover_tests runs the exe at build time.
+arraw_deploy_qt_plugins(arraw_tests)
+
 include(Catch)
-catch_discover_tests(arraw_tests)
+catch_discover_tests(arraw_tests
+    PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

@@ -41,16 +41,17 @@ ninja -C build
 ```
 
 #### Windows (vcpkg)
-```bat
+Windows needs extra setup (the MSVC developer environment plus Qt-plugin/libraw
+deployment quirks). See the dedicated **[Windows build guide](docs/windows-build.md)**
+for the complete walkthrough and troubleshooting. In short:
+```powershell
 # Install dependencies
-vcpkg install qt6-base qt6-tools qt6-shadertools libraw lcms
+vcpkg install qtbase qttools qtshadertools libraw lcms --triplet x64-windows
 
-# Configure
-cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
-  -DCMAKE_TOOLCHAIN_FILE=path/to/vcpkg/scripts/buildsystems/vcpkg.cmake
-
-# Build
-ninja -C build
+# From "Developer PowerShell for VS 2022" (so rc.exe/mt.exe are on PATH):
+cmake --preset default   # CMakePresets.json carries the vcpkg toolchain path
+cmake --build build
+ctest --test-dir build --output-on-failure
 ```
 
 #### Release Build
