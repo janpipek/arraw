@@ -9,6 +9,8 @@ class QListWidget;
 class QSlider;
 class QPushButton;
 class QDoubleSpinBox;
+class QCheckBox;
+class QStackedWidget;
 class AdjustmentSpinBox;
 
 // The "Masks" tab: manage a photo's Local Adjustments (docs/adr/0010) — add,
@@ -34,6 +36,7 @@ public:
 
 public slots:
     void addLinearMask();
+    void addRadialMask();
     void deleteActive();
     // Commit a finished on-image drag as one undo step (called on mouse release).
     void commitMaskEdit();
@@ -52,10 +55,11 @@ private:
         float LocalAdjustment::* member;   // which delta this row edits
     };
 
+    void addMask(LocalAdjustment la);  // shared add: append, select, render, commit
     void rebuildList();
     void loadActiveIntoSliders();      // also loads the geometry fields
     void syncActiveFromSliders();
-    void syncActiveGeometry();         // P0/P1 fields -> active mask
+    void syncActiveGeometry();         // geometry fields -> active mask
     void setSlidersEnabled(bool on);
     void commit();
     LocalAdjustment* active();
@@ -63,8 +67,12 @@ private:
     QListWidget*           maskList;
     QPushButton*           deleteButton;
     std::vector<SliderRow> rows;
-    // Linear-mask geometry, normalised display-frame coords (docs/adr/0010).
-    std::array<QDoubleSpinBox*, 4> geomSpins;   // p0.x, p0.y, p1.x, p1.y
+    // Geometry fields, normalised display-frame coords (docs/adr/0010). A stacked
+    // widget shows the page matching the active mask's type.
+    QStackedWidget*                geomStack;
+    std::array<QDoubleSpinBox*, 4> linSpins;   // Linear: p0.x, p0.y, p1.x, p1.y
+    std::array<QDoubleSpinBox*, 6> radSpins;   // Radial: cx, cy, rx, ry, angle, feather
+    QCheckBox*                     radInvert;
 
     std::vector<LocalAdjustment> adjustments;
     std::vector<LocalAdjustment> committedState;   // undo baseline

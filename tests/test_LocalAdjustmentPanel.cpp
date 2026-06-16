@@ -4,6 +4,7 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include <variant>
+#include <QCheckBox>
 #include <QDoubleSpinBox>
 
 using Catch::Matchers::WithinAbs;
@@ -36,6 +37,27 @@ TEST_CASE("panel geometry fields edit the active mask", "[localadj][panel]") {
     REQUIRE_THAT(m.p0.y(), WithinAbs(0.2, 1e-6));
     REQUIRE_THAT(m.p1.x(), WithinAbs(0.6, 1e-6));
     REQUIRE_THAT(m.p1.y(), WithinAbs(0.8, 1e-6));
+}
+
+TEST_CASE("panel adds and edits a Radial mask via its fields", "[localadj][panel]") {
+    testApp();
+    LocalAdjustmentPanel panel;
+    panel.addRadialMask();
+    REQUIRE(panel.localAdjustments().size() == 1);
+    REQUIRE(std::holds_alternative<RadialMask>(panel.localAdjustments()[0].mask));
+
+    panel.findChild<QDoubleSpinBox*>("cx")->setValue(0.4);
+    panel.findChild<QDoubleSpinBox*>("rrx")->setValue(0.35);
+    panel.findChild<QDoubleSpinBox*>("rangle")->setValue(45.0);
+    panel.findChild<QDoubleSpinBox*>("rfeather")->setValue(0.2);
+    panel.findChild<QCheckBox*>("rinvert")->setChecked(true);
+
+    const auto& m = std::get<RadialMask>(panel.localAdjustments()[0].mask);
+    CHECK_THAT(m.center.x(), WithinAbs(0.4, 1e-6));
+    CHECK_THAT(m.radiusX,    WithinAbs(0.35, 1e-6));
+    CHECK_THAT(m.angle,      WithinAbs(45.0, 1e-6));
+    CHECK_THAT(m.feather,    WithinAbs(0.2, 1e-6));
+    CHECK(m.invert);
 }
 
 TEST_CASE("panel round-trips a set list, selects first, and deletes",

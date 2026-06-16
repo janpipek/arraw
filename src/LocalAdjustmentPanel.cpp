@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <variant>
+#include <QCheckBox>
 #include <QDoubleSpinBox>
 #include <QGridLayout>
 #include <QHBoxLayout>
@@ -10,6 +11,7 @@
 #include <QListWidget>
 #include <QPushButton>
 #include <QSlider>
+#include <QStackedWidget>
 #include <QVBoxLayout>
 
 namespace {
@@ -27,28 +29,61 @@ LocalAdjustmentPanel::LocalAdjustmentPanel(QWidget* parent) : QWidget(parent) {
     col->addWidget(maskList);
 
     auto* buttons = new QHBoxLayout;
-    auto* addButton = new QPushButton("Add Linear Mask", this);
+    auto* addLinearButton = new QPushButton("Add Linear", this);
+    auto* addRadialButton = new QPushButton("Add Radial", this);
     deleteButton = new QPushButton("Delete", this);
-    buttons->addWidget(addButton);
+    buttons->addWidget(addLinearButton);
+    buttons->addWidget(addRadialButton);
     buttons->addWidget(deleteButton);
     col->addLayout(buttons);
 
-    // Linear-mask geometry: P0/P1 in normalised display-frame coords. Editable
-    // numerically here and by dragging on the image (kept in sync).
-    auto* geomGrid = new QGridLayout;
-    const char* geomLabels[4] = {"P0 X", "P0 Y", "P1 X", "P1 Y"};
-    const char* geomNames[4]  = {"p0x", "p0y", "p1x", "p1y"};
-    for (int i = 0; i < 4; ++i) {
+    // Geometry fields, normalised display-frame coords. The stacked widget shows
+    // the page matching the active mask's type; values stay in sync with the
+    // on-image handles. A coordinate spinbox helper keeps the two pages uniform.
+    auto makeCoordSpin = [this](const char* name, double lo, double hi) {
         auto* spin = new QDoubleSpinBox(this);
-        spin->setRange(-1.0, 2.0);   // a gradient line may run past the frame edge
+        spin->setRange(lo, hi);
         spin->setSingleStep(0.01);
         spin->setDecimals(3);
-        spin->setObjectName(geomNames[i]);
-        geomGrid->addWidget(new QLabel(geomLabels[i], this), i / 2, (i % 2) * 2);
-        geomGrid->addWidget(spin, i / 2, (i % 2) * 2 + 1);
-        geomSpins[i] = spin;
+        spin->setObjectName(name);
+        return spin;
+    };
+
+    geomStack = new QStackedWidget(this);
+
+    // Linear page: P0/P1 endpoints (may run past the frame edge).
+    auto* linPage = new QWidget(this);
+    auto* linGrid = new QGridLayout(linPage);
+    const char* linLabels[4] = {"P0 X", "P0 Y", "P1 X", "P1 Y"};
+    const char* linNames[4]  = {"p0x", "p0y", "p1x", "p1y"};
+    for (int i = 0; i < 4; ++i) {
+        linSpins[i] = makeCoordSpin(linNames[i], -1.0, 2.0);
+        linGrid->addWidget(new QLabel(linLabels[i], linPage), i / 2, (i % 2) * 2);
+        linGrid->addWidget(linSpins[i], i / 2, (i % 2) * 2 + 1);
     }
-    col->addLayout(geomGrid);
+    geomStack->addWidget(linPage);
+
+    // Radial page: centre, radii, angle, feather + invert.
+    auto* radPage = new QWidget(this);
+    auto* radGrid = new QGridLayout(radPage);
+    struct RadDef { const char* label; const char* name; double lo, hi; };
+    const RadDef radDefs[6] = {
+        {"Center X", "cx", -1.0, 2.0}, {"Center Y", "cy", -1.0, 2.0},
+        {"Radius X", "rrx", 0.0, 2.0}, {"Radius Y", "rry", 0.0, 2.0},
+        {"Angle",    "rangle", -180.0, 180.0}, {"Feather", "rfeather", 0.0, 1.0},
+    };
+    for (int i = 0; i < 6; ++i) {
+        radSpins[i] = makeCoordSpin(radDefs[i].name, radDefs[i].lo, radDefs[i].hi);
+        radGrid->addWidget(new QLabel(radDefs[i].label, radPage), i / 2, (i % 2) * 2);
+        radGrid->addWidget(radSpins[i], i / 2, (i % 2) * 2 + 1);
+    }
+    radSpins[4]->setSingleStep(1.0);   // angle in degrees
+    radInvert = new QCheckBox("Invert (affect outside)", radPage);
+    radInvert->setObjectName("rinvert");
+    radGrid->addWidget(radInvert, 3, 0, 1, 4);
+    geomStack->addWidget(radPage);
+
+    col->addWidget(geomStack);
 
     // Delta sliders for the active mask — one row per SharedAdjustment field
     // plus the relative temperature.
@@ -110,15 +145,23 @@ LocalAdjustmentPanel::LocalAdjustmentPanel(QWidget* parent) : QWidget(parent) {
         });
     }
 
-    for (QDoubleSpinBox* spin : geomSpins) {
+    auto wireGeom = [this](QDoubleSpinBox* spin) {
         connect(spin, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
                 [this] { syncActiveGeometry(); });
         connect(spin, &QAbstractSpinBox::editingFinished, this,
                 [this] { commit(); });
-    }
+    };
+    for (QDoubleSpinBox* spin : linSpins) wireGeom(spin);
+    for (QDoubleSpinBox* spin : radSpins) wireGeom(spin);
+    connect(radInvert, &QCheckBox::toggled, this, [this] {
+        syncActiveGeometry();
+        commit();
+    });
 
-    connect(addButton, &QPushButton::clicked, this,
+    connect(addLinearButton, &QPushButton::clicked, this,
             &LocalAdjustmentPanel::addLinearMask);
+    connect(addRadialButton, &QPushButton::clicked, this,
+            &LocalAdjustmentPanel::addRadialMask);
     connect(deleteButton, &QPushButton::clicked, this,
             &LocalAdjustmentPanel::deleteActive);
     connect(maskList, &QListWidget::currentRowChanged, this, [this](int row) {
@@ -169,14 +212,24 @@ void LocalAdjustmentPanel::commitMaskEdit() {
     commit();   // fold an on-image drag gesture into a single undo step
 }
 
-void LocalAdjustmentPanel::addLinearMask() {
-    LocalAdjustment la;
-    la.mask = LinearMask{{0.3, 0.5}, {0.7, 0.5}};   // centred default; drag to place
-    adjustments.push_back(la);
+void LocalAdjustmentPanel::addMask(LocalAdjustment la) {
+    adjustments.push_back(std::move(la));
     rebuildList();
     setActiveIndex(int(adjustments.size()) - 1);
     emit changed(adjustments);   // push the new list to the viewport (draw handles)
     commit();
+}
+
+void LocalAdjustmentPanel::addLinearMask() {
+    LocalAdjustment la;
+    la.mask = LinearMask{{0.3, 0.5}, {0.7, 0.5}};   // centred default; drag to place
+    addMask(la);
+}
+
+void LocalAdjustmentPanel::addRadialMask() {
+    LocalAdjustment la;
+    la.mask = RadialMask{};   // centred default circle; drag to place/resize
+    addMask(la);
 }
 
 void LocalAdjustmentPanel::deleteActive() {
@@ -210,16 +263,31 @@ void LocalAdjustmentPanel::loadActiveIntoSliders() {
         r.spin->setValue(r.spec.rawToDisplay(r.slider->value()));
     }
 
-    QPointF p0, p1;
-    if (a)
-        if (const auto* m = std::get_if<LinearMask>(&a->mask)) {
-            p0 = m->p0;
-            p1 = m->p1;
+    // Geometry — show and load the page matching the active mask's type.
+    if (a && std::holds_alternative<RadialMask>(a->mask)) {
+        const RadialMask& r = std::get<RadialMask>(a->mask);
+        geomStack->setCurrentIndex(1);
+        const double vals[6] = {r.center.x(), r.center.y(), r.radiusX,
+                                r.radiusY, r.angle, r.feather};
+        for (int i = 0; i < 6; ++i) {
+            QSignalBlocker b(radSpins[i]);
+            radSpins[i]->setValue(vals[i]);
         }
-    const double coords[4] = {p0.x(), p0.y(), p1.x(), p1.y()};
-    for (int i = 0; i < 4; ++i) {
-        QSignalBlocker b(geomSpins[i]);
-        geomSpins[i]->setValue(coords[i]);
+        QSignalBlocker bi(radInvert);
+        radInvert->setChecked(r.invert);
+    } else {
+        geomStack->setCurrentIndex(0);
+        QPointF p0, p1;
+        if (a)
+            if (const auto* m = std::get_if<LinearMask>(&a->mask)) {
+                p0 = m->p0;
+                p1 = m->p1;
+            }
+        const double coords[4] = {p0.x(), p0.y(), p1.x(), p1.y()};
+        for (int i = 0; i < 4; ++i) {
+            QSignalBlocker b(linSpins[i]);
+            linSpins[i]->setValue(coords[i]);
+        }
     }
 }
 
@@ -246,8 +314,16 @@ void LocalAdjustmentPanel::syncActiveGeometry() {
     if (!a)
         return;
     if (auto* m = std::get_if<LinearMask>(&a->mask)) {
-        m->p0 = QPointF(geomSpins[0]->value(), geomSpins[1]->value());
-        m->p1 = QPointF(geomSpins[2]->value(), geomSpins[3]->value());
+        m->p0 = QPointF(linSpins[0]->value(), linSpins[1]->value());
+        m->p1 = QPointF(linSpins[2]->value(), linSpins[3]->value());
+        emit changed(adjustments);
+    } else if (auto* r = std::get_if<RadialMask>(&a->mask)) {
+        r->center  = QPointF(radSpins[0]->value(), radSpins[1]->value());
+        r->radiusX = radSpins[2]->value();
+        r->radiusY = radSpins[3]->value();
+        r->angle   = radSpins[4]->value();
+        r->feather = radSpins[5]->value();
+        r->invert  = radInvert->isChecked();
         emit changed(adjustments);
     }
 }
@@ -257,8 +333,11 @@ void LocalAdjustmentPanel::setSlidersEnabled(bool on) {
         r.slider->setEnabled(on);
         r.spin->setEnabled(on);
     }
-    for (QDoubleSpinBox* spin : geomSpins)
+    for (QDoubleSpinBox* spin : linSpins)
         spin->setEnabled(on);
+    for (QDoubleSpinBox* spin : radSpins)
+        spin->setEnabled(on);
+    radInvert->setEnabled(on);
 }
 
 void LocalAdjustmentPanel::commit() {
