@@ -1,0 +1,84 @@
+# Distribution plan
+
+How arraw ships to users, across platforms. This is a **status + plan** doc; the
+*why* behind hard-to-reverse choices lives in `docs/adr/`.
+
+## Posture
+
+Self-hosted **GitHub Releases** are the source of truth (posture A): one tagged
+release carries one artifact per OS. Store presence (Flathub / winget / Homebrew)
+is a deliberate *later* milestone (posture B), unlocked once the app stabilises
+past 0.x. We take the cheap posture-B door-openers now (reverse-DNS app-id,
+AppStream metainfo) but build none of the store machinery yet.
+
+## Cross-cutting decisions (shared by all platforms)
+
+- **App-id / identity:** `io.github.janpipek.arraw` — reused verbatim as the Linux
+  AppStream/desktop id, the macOS bundle id, and the Windows AppId. Display name
+  stays "arraw". `organizationDomain` → `io.github.janpipek`; `applicationName`
+  stays `arraw` (don't move existing QSettings).
+- **Version is single-sourced from `CMakeLists.txt`** `project(VERSION …)`. A CI
+  guard fails the release if the pushed `vX.Y.Z` tag disagrees. The value is
+  threaded into `setApplicationVersion` and a new `--version` flag. *(Not yet
+  wired — `main.cpp` currently sets no version.)*
+- **Build & release via GitHub Actions**, tag-triggered: one workflow, one matrix
+  leg per OS, all attaching to the same Release.
+- **x86_64** baseline everywhere (macOS additionally needs Apple Silicon).
+- **No auto-update** for v0.x — users re-download from Releases.
+
+## Linux — DECIDED (see ADR 0014)
+
+Single-file **AppImage**, built in CI on a **KDE neon (Ubuntu 24.04 / glibc 2.39)**
+base, bundling Qt 6.8 + LibRaw + lcms2, reaching every desktop from Ubuntu 24.04
+LTS forward. Qt stays at 6.8 (the viewport needs `QRhiWidget`, 6.7+). Carries a
+`.desktop` launcher, the existing icons, and an AppStream `metainfo.xml`; file
+associations and zsync auto-update are deferred. x86_64 only.
+
+Full rationale and rejected options: [ADR 0014](adr/0014-linux-distribution-appimage-on-neon.md).
+
+## Windows — IN PROGRESS (distribution deferred)
+
+The *build* is established and documented in [windows-build.md](windows-build.md):
+MSVC 2022 + vcpkg (`qtbase qttools qtshadertools libraw lcms`, `x64-windows`),
+with two Windows-specific fixes already in CMake (per-config libraw DLL selection;
+manual Qt platform-plugin deployment). A working build is currently being
+maintained on a separate machine; it is a slow vcpkg build.
+
+**Distribution is not yet designed.** Open questions to resume on, with leanings:
+
+- **Installer format** — Inno Setup / NSIS / WiX (MSI) / MSIX. Leaning Inno Setup
+  (simple, scriptable, no MSI ceremony) for posture A; revisit MSIX/winget for
+  posture B. Likely also offer a portable `.zip`.
+- **Qt/dependency deployment** — prefer `windeployqt` to bundle Qt + plugins for
+  the installer, superseding the current manual `platforms\` copy that exists for
+  dev runs. Pin which DLLs (Release config) the installer carries.
+- **Code signing** — unsigned installers trip SmartScreen ("unknown publisher").
+  An Authenticode cert costs money/identity verification. Decision deferred; may
+  ship unsigned with a documented "more info → run anyway" note initially.
+- **CI** — GitHub Actions `windows-latest` + vcpkg. The slow Qt-from-source build
+  makes **vcpkg binary caching** (e.g. GitHub Actions cache / NuGet feed) the key
+  concern, or switch to aqtinstall to skip building Qt.
+- **Arch** — x64 only.
+
+## macOS — TENTATIVE LEANINGS (not decided)
+
+Goal (per original ask): a `.dmg`, and eventually a Homebrew cask. Build is already
+documented in AGENTS.md (Homebrew deps + CMake). Only lightly explored — **nothing
+below is final**, no ADR yet:
+
+- **Signing/notarization** — the decision that gates everything. *Leaning:*
+  **ad-hoc `codesign` (free)** for the exploratory phase, shipping a `.dmg` that
+  runs but is quarantined (users right-click → Open the first time, or
+  `xattr -dr com.apple.quarantine arraw.app`); document this in the README.
+  **Defer the Apple Developer Program ($99/yr) Developer ID signing +
+  notarization** until there's a real mac audience — it's an additive CI step
+  later, not a redo. Caveat: the quarantine warning is off-putting to
+  non-technical users, so polish-from-day-one would mean paying the $99 up front.
+- **Architecture** — *leaning* universal binary (arm64 + x86_64) so one `.dmg`
+  covers all Macs; Homebrew strongly prefers universal. (Contrast Linux/Windows:
+  x86_64-only.)
+- **Bundle** — `.app` with `Info.plist` carrying the shared bundle id
+  `io.github.janpipek.arraw`, packaged into a `.dmg`.
+- **Homebrew** — *leaning* a **cask** (ships the prebuilt `.dmg`/`.app`), not a
+  formula (build-from-source), as the right shape for a Qt GUI app. Posture-B,
+  later.
