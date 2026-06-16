@@ -3,9 +3,12 @@
 #include "CollapsiblePane.h"
 #include "ColorManagement.h"
 #include "CropGeometry.h"
+#include "DevelopGroup.h"
+#include "DevelopPreset.h"
 #include "ExifPanel.h"
 #include "ExportDialog.h"
 #include "FilmStrip.h"
+#include "GroupChecklistDialog.h"
 #include "ImageViewport.h"
 #include "LocalAdjustmentPanel.h"
 #include "ProofingPanel.h"
@@ -20,20 +23,26 @@
 #include <QApplication>
 #include <QCloseEvent>
 #include <QColorSpace>
+#include <QDialogButtonBox>
 #include <QDir>
 #include <QDockWidget>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QHBoxLayout>
+#include <QInputDialog>
 #include <QKeyEvent>
 #include <QLabel>
+#include <QLineEdit>
+#include <QListWidget>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QPushButton>
 #include <QScrollArea>
 #include <QSettings>
 #include <QSignalBlocker>
 #include <QSizePolicy>
+#include <QStandardPaths>
 #include <QStatusBar>
 #include <QStyle>
 #include <QTabWidget>
@@ -89,7 +98,8 @@ private:
 
 // ---------------------------------------------------------------------------
 MainWindow::MainWindow(QWidget* parent)
-    : QMainWindow(parent) {
+    : QMainWindow(parent),
+      presetStore(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/presets") {
     setWindowTitle("arraw");
 
     viewport = new ImageViewport(this);
@@ -246,6 +256,20 @@ void MainWindow::setupMenus() {
     auto* edit = menuBar()->addMenu("&Edit");
     edit->addAction(undoStack->createUndoAction(this));
     edit->addAction(undoStack->createRedoAction(this));
+    edit->addSeparator();
+    edit->addAction(
+        tr("&Copy Settings..."),
+        QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_C),
+        this,
+        &MainWindow::copySettings);
+    edit->addAction(
+        tr("&Paste Settings..."),
+        QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_V),
+        this,
+        &MainWindow::pasteSettings);
+
+    presetsMenu = menuBar()->addMenu(tr("&Presets"));
+    rebuildPresetsMenu();
 
     setupImageMenu();
 
@@ -818,6 +842,127 @@ void MainWindow::rebuildDisplayLut() {
     viewport->setGamutWarning(proofing && proofPanel->gamutWarning());
     proofLabel->setText(proofing ? "Proofing: " + proofPanel->profileName() : QString());
     proofLabel->setVisible(proofing);
+}
+
+void MainWindow::applyDevelopChange(const GlobalAdjustment& after) {
+    const GlobalAdjustment before = adjPanel->params();
+    if (after != before)
+        undoStack->push(new AdjustmentCommand(adjPanel, before, after));
+}
+
+void MainWindow::copySettings() {
+    if (currentPath.isEmpty())
+        return;
+    viewport->commitActiveTool(); // fold any pending crop into the params first
+
+    GroupChecklistDialog dlg(tr("Copy Settings"), allGroups(), lastCopySelection, this);
+    if (dlg.exec() != QDialog::Accepted)
+        return;
+    const GroupSelection chosen = dlg.selectedGroups();
+    if (chosen.none())
+        return;
+
+    lastCopySelection = chosen;
+    settingsClipboard = SettingsClipboard{adjPanel->params(), chosen};
+}
+
+void MainWindow::pasteSettings() {
+    if (currentPath.isEmpty() || !settingsClipboard)
+        return;
+
+    // Paste's checklist is bounded by what was copied (narrow only).
+    GroupChecklistDialog
+        dlg(tr("Paste Settings"), settingsClipboard->groups, settingsClipboard->groups, this);
+    if (dlg.exec() != QDialog::Accepted)
+        return;
+
+    applyDevelopChange(
+        applyGroups(adjPanel->params(), settingsClipboard->snapshot, dlg.selectedGroups()));
+}
+
+void MainWindow::saveCurrentAsPreset() {
+    if (currentPath.isEmpty())
+        return;
+    viewport->commitActiveTool();
+
+    GroupChecklistDialog dlg(tr("Save Preset"), allGroups(), lastCopySelection, this);
+    if (dlg.exec() != QDialog::Accepted)
+        return;
+    const GroupSelection chosen = dlg.selectedGroups();
+    if (chosen.none())
+        return;
+    lastCopySelection = chosen;
+
+    bool ok = false;
+    const QString name
+        = QInputDialog::getText(
+              this, tr("Save Preset"), tr("Preset name:"), QLineEdit::Normal, QString(), &ok)
+              .trimmed();
+    if (!ok || name.isEmpty())
+        return;
+
+    DevelopPreset preset;
+    preset.name = name;
+    preset.groups = chosen;
+    preset.values = adjPanel->params();
+    if (!presetStore.save(preset)) {
+        QMessageBox::warning(this, tr("Save Preset"), tr("Could not write the preset file."));
+        return;
+    }
+    rebuildPresetsMenu();
+}
+
+void MainWindow::applyPreset(const DevelopPreset& preset) {
+    if (currentPath.isEmpty())
+        return;
+    applyDevelopChange(applyGroups(adjPanel->params(), preset.values, preset.groups));
+}
+
+void MainWindow::managePresets() {
+    QDialog dlg(this);
+    dlg.setWindowTitle(tr("Manage Presets"));
+    auto* layout = new QVBoxLayout(&dlg);
+
+    auto* list = new QListWidget(&dlg);
+    for (const DevelopPreset& p : presetStore.loadAll())
+        list->addItem(p.name);
+    layout->addWidget(list);
+
+    auto* buttons = new QDialogButtonBox(&dlg);
+    auto* deleteBtn = buttons->addButton(tr("Delete"), QDialogButtonBox::DestructiveRole);
+    buttons->addButton(QDialogButtonBox::Close);
+    layout->addWidget(buttons);
+
+    connect(deleteBtn, &QPushButton::clicked, &dlg, [this, list] {
+        QListWidgetItem* item = list->currentItem();
+        if (!item)
+            return;
+        presetStore.remove(item->text());
+        delete list->takeItem(list->row(item));
+    });
+    connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+
+    dlg.exec();
+    rebuildPresetsMenu();
+}
+
+void MainWindow::rebuildPresetsMenu() {
+    presetsMenu->clear();
+    presetsMenu->addAction(
+        tr("&Save Current Settings as Preset..."), this, &MainWindow::saveCurrentAsPreset);
+    QAction* manage
+        = presetsMenu->addAction(tr("&Manage Presets..."), this, &MainWindow::managePresets);
+    presetsMenu->addSeparator();
+
+    const std::vector<DevelopPreset> presets = presetStore.loadAll();
+    manage->setEnabled(!presets.empty());
+    if (presets.empty()) {
+        QAction* none = presetsMenu->addAction(tr("(No presets saved)"));
+        none->setEnabled(false);
+        return;
+    }
+    for (const DevelopPreset& p : presets)
+        presetsMenu->addAction(p.name, this, [this, p] { applyPreset(p); });
 }
 
 GlobalAdjustment MainWindow::currentParams() const {

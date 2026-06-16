@@ -1,0 +1,18 @@
+{
+    "name": "Punchy",
+    "version": 1,
+    "groups": {
+        "tone": {
+            "exposure": 0.5,
+            "contrast": 25,
+            "highlights": -40,
+            "shadows": 30,
+            "whites": 10,
+            "blacks": -10
+        },
+        "colour": {
+            "saturation": 15,
+            "vibrance": 20
+        }
+    }
+}
