@@ -1,58 +1,61 @@
 #include "MainWindow.h"
-#include "ColorManagement.h"
-#include "ImageViewport.h"
 #include "AdjustmentPanel.h"
+#include "CollapsiblePane.h"
+#include "ColorManagement.h"
+#include "ExifPanel.h"
+#include "ExportDialog.h"
+#include "FilmStrip.h"
+#include "ImageViewport.h"
 #include "LocalAdjustmentPanel.h"
 #include "ProofingPanel.h"
-#include "ExifPanel.h"
-#include "FilmStrip.h"
 #include "RawProcessor.h"
 #include "StandardImageLoader.h"
 #include "ThumbnailCache.h"
 #include "XmpSidecar.h"
-#include "ExportDialog.h"
-#include <QActionGroup>
-#include <QAction>
-#include <QToolBar>
-#include <QSizePolicy>
-#include <QSignalBlocker>
-#include <QMenuBar>
-#include <QDockWidget>
-#include <QFileDialog>
-#include <QStatusBar>
-#include <QLabel>
-#include <QToolButton>
-#include <QMessageBox>
-#include <QScrollArea>
-#include <QTabWidget>
-#include <QVBoxLayout>
-#include <QHBoxLayout>
-#include <QStyle>
-#include <QFileInfo>
-#include <QApplication>
-#include <QCloseEvent>
-#include <QDir>
-#include <QKeyEvent>
-#include <QSettings>
-#include <QUndoStack>
-#include <QUndoCommand>
-#include <QColorSpace>
-#include <QtConcurrent/QtConcurrent>
 #include <algorithm>
 #include <cmath>
+#include <QAction>
+#include <QActionGroup>
+#include <QApplication>
+#include <QCloseEvent>
+#include <QColorSpace>
+#include <QDir>
+#include <QDockWidget>
+#include <QFileDialog>
+#include <QFileInfo>
+#include <QHBoxLayout>
+#include <QKeyEvent>
+#include <QLabel>
+#include <QMenuBar>
+#include <QMessageBox>
+#include <QScrollArea>
+#include <QSettings>
+#include <QSignalBlocker>
+#include <QSizePolicy>
+#include <QStatusBar>
+#include <QStyle>
+#include <QTabWidget>
+#include <QToolBar>
+#include <QToolButton>
+#include <QUndoCommand>
+#include <QUndoStack>
+#include <QVBoxLayout>
+#include <QtConcurrent/QtConcurrent>
 
 // ---------------------------------------------------------------------------
 // Undo command: captures before/after GlobalAdjustment for a single gesture.
 // ---------------------------------------------------------------------------
 class AdjustmentCommand : public QUndoCommand {
 public:
-    AdjustmentCommand(AdjustmentPanel* panel,
-                      const GlobalAdjustment& before,
-                      const GlobalAdjustment& after)
-        : panel(panel), before(before), after(after) {}
+    AdjustmentCommand(
+        AdjustmentPanel* panel, const GlobalAdjustment& before, const GlobalAdjustment& after)
+        : panel(panel),
+          before(before),
+          after(after) {}
 
     void undo() override { panel->setParams(before); }
-    void redo() override { panel->setParams(after);  }
+
+    void redo() override { panel->setParams(after); }
 
 private:
     AdjustmentPanel* panel;
@@ -65,13 +68,17 @@ private:
 // ---------------------------------------------------------------------------
 class LocalAdjustmentCommand : public QUndoCommand {
 public:
-    LocalAdjustmentCommand(LocalAdjustmentPanel* panel,
-                           std::vector<LocalAdjustment> before,
-                           std::vector<LocalAdjustment> after)
-        : panel(panel), before(std::move(before)), after(std::move(after)) {}
+    LocalAdjustmentCommand(
+        LocalAdjustmentPanel* panel,
+        std::vector<LocalAdjustment> before,
+        std::vector<LocalAdjustment> after)
+        : panel(panel),
+          before(std::move(before)),
+          after(std::move(after)) {}
 
     void undo() override { panel->setLocalAdjustments(before); }
-    void redo() override { panel->setLocalAdjustments(after);  }
+
+    void redo() override { panel->setLocalAdjustments(after); }
 
 private:
     LocalAdjustmentPanel* panel;
@@ -79,11 +86,12 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
+MainWindow::MainWindow(QWidget* parent)
+    : QMainWindow(parent) {
     setWindowTitle("arraw");
 
-    viewport    = new ImageViewport(this);
-    undoStack   = new QUndoStack(this);
+    viewport = new ImageViewport(this);
+    undoStack = new QUndoStack(this);
     setCentralWidget(viewport);
 
     monitorProfilePath = QSettings().value("display/monitorProfile").toString();
@@ -93,93 +101,106 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     setupStatusBar();
     setupToolbar();
 
-    connect(proofPanel, &ProofingPanel::proofingChanged,
-            this, &MainWindow::rebuildDisplayLut);
+    connect(proofPanel, &ProofingPanel::proofingChanged, this, &MainWindow::rebuildDisplayLut);
     rebuildDisplayLut();
 
-    connect(&loadWatcher, &QFutureWatcher<LoadResult>::finished,
-            this, &MainWindow::onLoadFinished);
+    connect(&loadWatcher, &QFutureWatcher<LoadResult>::finished, this, &MainWindow::onLoadFinished);
 
-    connect(viewport, &ImageViewport::fullResNeeded,
-            this, &MainWindow::onFullResNeeded);
+    connect(viewport, &ImageViewport::fullResNeeded, this, &MainWindow::onFullResNeeded);
 
-    connect(viewport, &ImageViewport::zoomChanged,
-            this, &MainWindow::updateZoomStatus);
+    connect(viewport, &ImageViewport::zoomChanged, this, &MainWindow::updateZoomStatus);
 
-    connect(viewport, &ImageViewport::cropCommitted,
-            this, [this](const QRectF& rect) {
-                GlobalAdjustment before = adjPanel->params();
-                GlobalAdjustment after  = before;
-                after.cropRect = rect;
-                undoStack->push(new AdjustmentCommand(adjPanel, before, after));
-            });
+    connect(viewport, &ImageViewport::cropCommitted, this, [this](const QRectF& rect) {
+        GlobalAdjustment before = adjPanel->params();
+        GlobalAdjustment after = before;
+        after.cropRect = rect;
+        undoStack->push(new AdjustmentCommand(adjPanel, before, after));
+    });
 
-    connect(viewport, &ImageViewport::rotationCommitted,
-            this, [this](float degrees) {
-                GlobalAdjustment before = adjPanel->params();
-                GlobalAdjustment after  = before;
-                after.rotation = degrees;
-                if (after != before)
-                    undoStack->push(new AdjustmentCommand(adjPanel, before, after));
-            });
+    connect(viewport, &ImageViewport::rotationCommitted, this, [this](float degrees) {
+        GlobalAdjustment before = adjPanel->params();
+        GlobalAdjustment after = before;
+        after.rotation = degrees;
+        if (after != before)
+            undoStack->push(new AdjustmentCommand(adjPanel, before, after));
+    });
 
-    connect(viewport, &ImageViewport::whiteBalanceCommitted,
-            this, [this](float kelvin, float tint) {
-                GlobalAdjustment before = adjPanel->params();
-                GlobalAdjustment after  = before;
-                after.temperature = kelvin;
-                after.tint        = tint;
-                if (after != before)
-                    undoStack->push(new AdjustmentCommand(adjPanel, before, after));
-            });
+    connect(viewport, &ImageViewport::whiteBalanceCommitted, this, [this](float kelvin, float tint) {
+        GlobalAdjustment before = adjPanel->params();
+        GlobalAdjustment after = before;
+        after.temperature = kelvin;
+        after.tint = tint;
+        if (after != before)
+            undoStack->push(new AdjustmentCommand(adjPanel, before, after));
+    });
 
-    connect(viewport, &ImageViewport::activeToolChanged,
-            this, [this](ImageViewport::ActiveTool) { syncToolActions(); });
+    connect(viewport, &ImageViewport::activeToolChanged, this, [this](ImageViewport::ActiveTool) {
+        syncToolActions();
+    });
 
-    connect(adjPanel, &AdjustmentPanel::adjustmentCommitted,
-            this, [this](const GlobalAdjustment& before, const GlobalAdjustment& after) {
-                undoStack->push(new AdjustmentCommand(adjPanel, before, after));
-            });
+    connect(
+        adjPanel,
+        &AdjustmentPanel::adjustmentCommitted,
+        this,
+        [this](const GlobalAdjustment& before, const GlobalAdjustment& after) {
+            undoStack->push(new AdjustmentCommand(adjPanel, before, after));
+        });
 
-    connect(adjPanel, &AdjustmentPanel::paramsChanged,
-            this, [this] { pushParamsToViewport(); });
+    connect(adjPanel, &AdjustmentPanel::paramsChanged, this, [this] { pushParamsToViewport(); });
 
-    connect(localPanel, &LocalAdjustmentPanel::changed,
-            this, [this] { pushParamsToViewport(); });
+    connect(localPanel, &LocalAdjustmentPanel::changed, this, [this] { pushParamsToViewport(); });
 
     // Panel selection drives which mask the on-image tool edits; on-image drags
     // write the geometry back into the panel.
-    connect(localPanel, &LocalAdjustmentPanel::activeIndexChanged,
-            viewport, &ImageViewport::setActiveLocalAdjustment);
-    connect(viewport, &ImageViewport::localMaskChanged,
-            localPanel, &LocalAdjustmentPanel::updateMaskGeometry);
+    connect(
+        localPanel,
+        &LocalAdjustmentPanel::activeIndexChanged,
+        viewport,
+        &ImageViewport::setActiveLocalAdjustment);
+    connect(
+        viewport,
+        &ImageViewport::localMaskChanged,
+        localPanel,
+        &LocalAdjustmentPanel::updateMaskGeometry);
 
     // Local edits join the shared undo stack: add / delete / tweak / numeric
     // geometry all commit through the panel; an on-image handle drag commits on
     // release.
-    connect(localPanel, &LocalAdjustmentPanel::committed, this,
-            [this](const std::vector<LocalAdjustment>& before,
-                   const std::vector<LocalAdjustment>& after) {
-                undoStack->push(new LocalAdjustmentCommand(localPanel, before, after));
-            });
-    connect(viewport, &ImageViewport::localMaskEditFinished,
-            localPanel, &LocalAdjustmentPanel::commitMaskEdit);
+    connect(
+        localPanel,
+        &LocalAdjustmentPanel::committed,
+        this,
+        [this](const std::vector<LocalAdjustment>& before, const std::vector<LocalAdjustment>& after) {
+            undoStack->push(new LocalAdjustmentCommand(localPanel, before, after));
+        });
+    connect(
+        viewport,
+        &ImageViewport::localMaskEditFinished,
+        localPanel,
+        &LocalAdjustmentPanel::commitMaskEdit);
 
-    connect(viewport, &ImageViewport::histogramsReady,
-            adjPanel, &AdjustmentPanel::setHistogramSamples);
+    connect(
+        viewport, &ImageViewport::histogramsReady, adjPanel, &AdjustmentPanel::setHistogramSamples);
 
-    connect(adjPanel, &AdjustmentPanel::straightenActive,
-            viewport, &ImageViewport::setStraightenActive);
+    connect(
+        adjPanel, &AdjustmentPanel::straightenActive, viewport, &ImageViewport::setStraightenActive);
 
     // Restore window geometry
     QSettings s;
     restoreGeometry(s.value("geometry").toByteArray());
     restoreState(s.value("windowState").toByteArray());
+
+    // restoreState may have brought the Adjustments dock back collapsed; align
+    // the pane's internal state with the widgets it just restored.
+    if (adjustmentsDock->isHidden())
+        adjustmentsPane->collapse();
+    else
+        adjustmentsPane->expand();
 }
 
 void MainWindow::closeEvent(QCloseEvent* e) {
     QSettings s;
-    s.setValue("geometry",    saveGeometry());
+    s.setValue("geometry", saveGeometry());
     s.setValue("windowState", saveState());
     QString lastDir = filmStrip->directory();
     if (!lastDir.isEmpty()) {
@@ -191,23 +212,29 @@ void MainWindow::closeEvent(QCloseEvent* e) {
 void MainWindow::keyPressEvent(QKeyEvent* e) {
     // Culling marks (0-5, X, r/y/g/b/p) are owned by the Image menu's actions —
     // window-level shortcuts that fire whether the strip or the image has focus.
-    if (e->key() == Qt::Key_Left)       filmStrip->navigateBy(-1);
-    else if (e->key() == Qt::Key_Right) filmStrip->navigateBy(+1);
+    if (e->key() == Qt::Key_Left)
+        filmStrip->navigateBy(-1);
+    else if (e->key() == Qt::Key_Right)
+        filmStrip->navigateBy(+1);
     else if (e->key() == Qt::Key_S && e->modifiers() == Qt::NoModifier)
         proofPanel->setProofingEnabled(!proofPanel->proofingEnabled());
     else if (e->key() == Qt::Key_J && e->modifiers() == Qt::NoModifier)
         toggleClipping();
-    else QMainWindow::keyPressEvent(e);
+    else
+        QMainWindow::keyPressEvent(e);
 }
 
 void MainWindow::setupMenus() {
     auto* file = menuBar()->addMenu("&File");
-    file->addAction("&Open...",          QKeySequence::Open,    this, &MainWindow::openFile);
-    file->addAction("Open &Folder...",   QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_O),
-                    filmStrip, &FilmStrip::promptForDirectory);
+    file->addAction("&Open...", QKeySequence::Open, this, &MainWindow::openFile);
+    file->addAction(
+        "Open &Folder...",
+        QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_O),
+        filmStrip,
+        &FilmStrip::promptForDirectory);
     file->addSeparator();
-    file->addAction("&Save Adjustments", QKeySequence::Save,    this, &MainWindow::saveAdjustments);
-    file->addAction("&Export...",        Qt::CTRL | Qt::Key_E,  this, &MainWindow::exportFile);
+    file->addAction("&Save Adjustments", QKeySequence::Save, this, &MainWindow::saveAdjustments);
+    file->addAction("&Export...", Qt::CTRL | Qt::Key_E, this, &MainWindow::exportFile);
     file->addSeparator();
     file->addAction("&Quit", QKeySequence::Quit, qApp, &QCoreApplication::quit);
 
@@ -219,9 +246,12 @@ void MainWindow::setupMenus() {
 
     auto* view = menuBar()->addMenu("&View");
     view->addAction(filmStripDock->toggleViewAction());
+    auto* toggleAdjustments = view->addAction("Adjustments Panel", this, [this] {
+        adjustmentsPane->toggle();
+    });
+    toggleAdjustments->setShortcut(Qt::Key_F8);
     view->addSeparator();
-    view->addAction("Reset Zoom", Qt::CTRL | Qt::Key_0,
-                    viewport, &ImageViewport::resetView);
+    view->addAction("Reset Zoom", Qt::CTRL | Qt::Key_0, viewport, &ImageViewport::resetView);
     view->addSeparator();
 
     // Clipping overlay (docs/adr/0009). Two independent toggles; J (handled in
@@ -229,16 +259,14 @@ void MainWindow::setupMenus() {
     QSettings clipSettings;
     clipHighlightsAction = view->addAction("Show &Highlight Clipping");
     clipHighlightsAction->setCheckable(true);
-    clipHighlightsAction->setChecked(
-        clipSettings.value("view/clipHighlights", false).toBool());
+    clipHighlightsAction->setChecked(clipSettings.value("view/clipHighlights", false).toBool());
     connect(clipHighlightsAction, &QAction::toggled, this, &MainWindow::applyClipping);
 
     clipShadowsAction = view->addAction("Show &Shadow Clipping");
     clipShadowsAction->setCheckable(true);
-    clipShadowsAction->setChecked(
-        clipSettings.value("view/clipShadows", false).toBool());
+    clipShadowsAction->setChecked(clipSettings.value("view/clipShadows", false).toBool());
     connect(clipShadowsAction, &QAction::toggled, this, &MainWindow::applyClipping);
-    applyClipping();   // push the restored state to the viewport
+    applyClipping(); // push the restored state to the viewport
     view->addSeparator();
 
     // Monitor profile: how the preview is encoded for this screen.
@@ -282,30 +310,36 @@ void MainWindow::setupImageMenu() {
         rateActions.append({a, n});
     };
     for (int n = 5; n >= 1; --n)
-        addRate(QString(n, QChar(0x2605)), n, QKeySequence(Qt::Key_0 + n));  // ★×n
+        addRate(QString(n, QChar(0x2605)), n, QKeySequence(Qt::Key_0 + n)); // ★×n
     rateMenu->addSeparator();
     addRate(tr("Unrated"), 0, QKeySequence(Qt::Key_0));
     addRate(tr("Reject"), -1, QKeySequence(Qt::Key_X));
 
     auto* labelMenu = image->addMenu("Label");
     QList<QPair<QAction*, ColourLabel>> labelActions;
-    struct LabelKey { const char* name; ColourLabel value; Qt::Key key; };
-    for (auto [name, value, key] : {
-             LabelKey{"Red", ColourLabel::Red, Qt::Key_R},
-             {"Yellow", ColourLabel::Yellow, Qt::Key_Y},
-             {"Green", ColourLabel::Green, Qt::Key_G},
-             {"Blue", ColourLabel::Blue, Qt::Key_B},
-             {"Purple", ColourLabel::Purple, Qt::Key_P} }) {
-        QAction* a = labelMenu->addAction(tr(name), this,
-                                          [this, value] { filmStrip->labelCurrent(value); });
+
+    struct LabelKey {
+        const char* name;
+        ColourLabel value;
+        Qt::Key key;
+    };
+
+    for (auto [name, value, key] :
+         {LabelKey{"Red", ColourLabel::Red, Qt::Key_R},
+          {"Yellow", ColourLabel::Yellow, Qt::Key_Y},
+          {"Green", ColourLabel::Green, Qt::Key_G},
+          {"Blue", ColourLabel::Blue, Qt::Key_B},
+          {"Purple", ColourLabel::Purple, Qt::Key_P}}) {
+        QAction* a = labelMenu->addAction(tr(name), this, [this, value] {
+            filmStrip->labelCurrent(value);
+        });
         a->setShortcut(key);
         a->setCheckable(true);
         labelActions.append({a, value});
     }
     labelMenu->addSeparator();
     // labelCurrent(None) always clears (toggling None off is still None).
-    labelMenu->addAction(tr("None"), this,
-                         [this] { filmStrip->labelCurrent(ColourLabel::None); });
+    labelMenu->addAction(tr("None"), this, [this] { filmStrip->labelCurrent(ColourLabel::None); });
 
     // Reflect the current file's marks each time the menu opens.
     connect(image, &QMenu::aboutToShow, this, [this, rateActions, labelActions] {
@@ -358,22 +392,23 @@ void MainWindow::setupToolbar() {
         QAction* a = tb->addAction(text);
         a->setCheckable(true);
         a->setActionGroup(toolGroup);
-        if (!sc.isEmpty()) a->setShortcut(sc);
+        if (!sc.isEmpty())
+            a->setShortcut(sc);
         return a;
     };
-    cropAction       = addTool("Crop",        Qt::Key_C);
-    straightenAction = addTool("Straighten",  {});
-    wbAction         = addTool("White Bal.",  {});
-    maskAction       = addTool("Masks",       Qt::Key_M);
+    cropAction = addTool("Crop", Qt::Key_C);
+    straightenAction = addTool("Straighten", {});
+    wbAction = addTool("White Bal.", {});
+    maskAction = addTool("Masks", Qt::Key_M);
 
     connect(toolGroup, &QActionGroup::triggered, this, [this](QAction* a) {
         using T = ImageViewport::ActiveTool;
         T t = T::None;
         if (a->isChecked())
-            t = a == cropAction       ? T::Crop
-              : a == straightenAction ? T::Straighten
-              : a == maskAction       ? T::LocalMask
-                                      : T::WhiteBalance;
+            t = a == cropAction         ? T::Crop
+                : a == straightenAction ? T::Straighten
+                : a == maskAction       ? T::LocalMask
+                                        : T::WhiteBalance;
         viewport->setActiveTool(t);
     });
 
@@ -385,7 +420,7 @@ void MainWindow::setupToolbar() {
     // Immediate actions (right): reuse the existing slots; Open stays usable
     // with no image loaded, the rest are image-dependent.
     tb->addAction("Open", this, &MainWindow::openFile);
-    saveAction   = tb->addAction("Save",   this, &MainWindow::saveAdjustments);
+    saveAction = tb->addAction("Save", this, &MainWindow::saveAdjustments);
     exportAction = tb->addAction("Export", this, &MainWindow::exportFile);
 
     setToolsEnabled(false);
@@ -395,10 +430,10 @@ void MainWindow::syncToolActions() {
     const ImageViewport::ActiveTool t = viewport->activeTool();
     // setChecked doesn't emit QActionGroup::triggered, but block toggled too.
     const QSignalBlocker b1(cropAction), b2(straightenAction), b3(wbAction);
-    cropAction->setChecked(      t == ImageViewport::ActiveTool::Crop);
+    cropAction->setChecked(t == ImageViewport::ActiveTool::Crop);
     straightenAction->setChecked(t == ImageViewport::ActiveTool::Straighten);
-    wbAction->setChecked(        t == ImageViewport::ActiveTool::WhiteBalance);
-    maskAction->setChecked(      t == ImageViewport::ActiveTool::LocalMask);
+    wbAction->setChecked(t == ImageViewport::ActiveTool::WhiteBalance);
+    maskAction->setChecked(t == ImageViewport::ActiveTool::LocalMask);
 
     // Raise the Masks tab while the LocalMask tool is active.
     if (t == ImageViewport::ActiveTool::LocalMask && rightTabs && masksTabIndex >= 0)
@@ -420,13 +455,17 @@ void MainWindow::setupDocks() {
     // doesn't restore the strip to the side.
     filmStripDock->setObjectName("FilmStripDockBottom");
     filmStripDock->setAllowedAreas(Qt::TopDockWidgetArea | Qt::BottomDockWidgetArea);
-    filmStripDock->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable);
+    // Closable so toggleViewAction() (View → Film Strip, F9) is enabled; the
+    // custom title bar below replaces the default one, so no close button shows.
+    filmStripDock->setFeatures(
+        QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable
+        | QDockWidget::DockWidgetClosable);
 
     filmStrip = new FilmStrip(filmStripDock);
     filmStrip->setMinimumHeight(80);
     filmStripDock->setWidget(filmStrip);
     addDockWidget(Qt::BottomDockWidgetArea, filmStripDock);
-    resizeDocks({filmStripDock}, {132}, Qt::Vertical);  // sensible initial height
+    resizeDocks({filmStripDock}, {132}, Qt::Vertical); // sensible initial height
 
     // Custom title bar: folder icon + current path, instead of "Film Strip".
     auto* stripTitle = new QWidget(filmStripDock);
@@ -456,19 +495,31 @@ void MainWindow::setupDocks() {
     toggleFilmStrip->setText("Film Strip");
     toggleFilmStrip->setShortcut(Qt::Key_F9);
 
-    connect(filmStrip, &FilmStrip::fileSelected,
-            this, &MainWindow::loadImage);
+    connect(filmStrip, &FilmStrip::fileSelected, this, &MainWindow::loadImage);
 
-    // Adjustments + EXIF (right)
-    auto* rightDock = new QDockWidget("Adjustments", this);
+    // Adjustments + EXIF (right). Collapses to a thin edge strip (ADR 0012).
+    auto* rightDock = adjustmentsDock = new QDockWidget("Adjustments", this);
+    rightDock->setObjectName("AdjustmentsDock"); // saveState/restoreState key
     rightDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
     rightDock->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable);
 
+    // Custom title bar carrying a collapse chevron (mirrors the film strip's).
+    auto* adjTitle = new QWidget(rightDock);
+    auto* adjTitleLayout = new QHBoxLayout(adjTitle);
+    adjTitleLayout->setContentsMargins(6, 2, 4, 2);
+    adjTitleLayout->addWidget(new QLabel("Adjustments", adjTitle), 1);
+    auto* collapseBtn = new QToolButton(adjTitle);
+    collapseBtn->setAutoRaise(true);
+    collapseBtn->setText("›"); // toward the edge: click to collapse
+    collapseBtn->setToolTip("Collapse panel (F8)");
+    adjTitleLayout->addWidget(collapseBtn);
+    rightDock->setTitleBarWidget(adjTitle);
+
     auto* tabs = new QTabWidget(rightDock);
-    tabs->setMinimumWidth(120);   // let the panel follow its content; don't pin it wide
+    tabs->setMinimumWidth(120); // let the panel follow its content; don't pin it wide
 
     auto* adjScroll = new QScrollArea(tabs);
-    adjPanel   = new AdjustmentPanel;
+    adjPanel = new AdjustmentPanel;
     proofPanel = new ProofingPanel;
     auto* adjColumn = new QWidget(adjScroll);
     auto* adjLayout = new QVBoxLayout(adjColumn);
@@ -493,12 +544,32 @@ void MainWindow::setupDocks() {
     rightTabs = tabs;
     rightDock->setWidget(tabs);
     addDockWidget(Qt::RightDockWidgetArea, rightDock);
+
+    // Reveal strip: a vertical toolbar pinned to the right edge, visible only
+    // while the dock is collapsed; its chevron re-opens the panel (ADR 0012).
+    auto* strip = new QToolBar("Adjustments Strip", this);
+    strip->setObjectName("AdjustmentsStrip"); // saveState/restoreState key
+    strip->setMovable(false);
+    strip->setFloatable(false);
+    auto* expandAction = strip->addAction("‹"); // toward the centre: click to expand
+    expandAction->setToolTip("Expand panel (F8)");
+    addToolBar(Qt::RightToolBarArea, strip);
+
+    // CollapsiblePane owns the dock↔strip mutual-exclusion invariant; it starts
+    // expanded (dock shown, strip hidden). A restored collapsed state is synced
+    // back onto it after restoreState() in the constructor.
+    adjustmentsPane = std::make_unique<CollapsiblePane>(rightDock, strip);
+    connect(collapseBtn, &QToolButton::clicked, this, [this] { adjustmentsPane->collapse(); });
+    connect(expandAction, &QAction::triggered, this, [this] { adjustmentsPane->expand(); });
     // adjPanel → viewport paramsChanged wired in constructor (after both are created)
 }
 
+MainWindow::~MainWindow() = default;
+
 void MainWindow::openPath(const QString& path) {
     QFileInfo fi(path);
-    if (!fi.exists()) return;
+    if (!fi.exists())
+        return;
 
     if (fi.isDir()) {
         filmStrip->setDirectory(fi.absoluteFilePath());
@@ -512,9 +583,11 @@ void MainWindow::openFile() {
     QSettings s;
     const QString startDir = s.value("lastDir", QDir::homePath()).toString();
     const QString path = QFileDialog::getOpenFileName(
-        this, "Open Image", startDir,
+        this,
+        "Open Image",
+        startDir,
         "All Images (*.cr2 *.cr3 *.nef *.arw *.dng *.raf *.orf *.rw2 *.pef *.srw "
-                    "*.jpg *.jpeg *.png *.tiff *.tif *.webp *.bmp);;"
+        "*.jpg *.jpeg *.png *.tiff *.tif *.webp *.bmp);;"
         "RAW Images (*.cr2 *.cr3 *.nef *.arw *.dng *.raf *.orf *.rw2 *.pef *.srw);;"
         "Standard Images (*.jpg *.jpeg *.png *.tiff *.tif *.webp *.bmp);;"
         "All Files (*)");
@@ -531,7 +604,7 @@ void MainWindow::loadImage(const QString& path) {
 
     currentPath = path;
     exifPanel->clear();
-    viewport->cancelActiveTool();   // discard any in-progress tool from the last image
+    viewport->cancelActiveTool(); // discard any in-progress tool from the last image
     viewport->setOriginalImageSize(0, 0);
     setLoadingState(true);
 
@@ -546,21 +619,22 @@ void MainWindow::loadImage(const QString& path) {
     // Single background task: extract embedded preview on the same open file
     // handle (unpack_thumb only), dispatch it to the main thread, then
     // continue with the full demosaic.  Sequential I/O avoids contention.
-    loadWatcher.setFuture(
-        QtConcurrent::run([this, path, cancel]() -> LoadResult {
-            auto onPreview = [this, path, cancel](ImageBuffer buf) {
-                if (cancel->load()) return;
-                QMetaObject::invokeMethod(this,
-                    [this, path, buf = std::move(buf)]() mutable {
-                        if (currentPath == path)
-                            viewport->setImage(buf);
-                    }, Qt::QueuedConnection);
-            };
-            if (StandardImageLoader::canLoad(path))
-                return StandardImageLoader::load(path, cancel);
-            return RawProcessor::load(path, std::move(onPreview), cancel);
-        })
-    );
+    loadWatcher.setFuture(QtConcurrent::run([this, path, cancel]() -> LoadResult {
+        auto onPreview = [this, path, cancel](ImageBuffer buf) {
+            if (cancel->load())
+                return;
+            QMetaObject::invokeMethod(
+                this,
+                [this, path, buf = std::move(buf)]() mutable {
+                    if (currentPath == path)
+                        viewport->setImage(buf);
+                },
+                Qt::QueuedConnection);
+        };
+        if (StandardImageLoader::canLoad(path))
+            return StandardImageLoader::load(path, cancel);
+        return RawProcessor::load(path, std::move(onPreview), cancel);
+    }));
 }
 
 void MainWindow::onLoadFinished() {
@@ -595,8 +669,9 @@ void MainWindow::onLoadFinished() {
     pushParamsToViewport();
 
     statusLabel->setText(QString("%1  —  %2 × %3")
-        .arg(QFileInfo(currentPath).fileName())
-        .arg(fullRes.width).arg(fullRes.height));
+                             .arg(QFileInfo(currentPath).fileName())
+                             .arg(fullRes.width)
+                             .arg(fullRes.height));
 
     setToolsEnabled(true);
 }
@@ -618,10 +693,9 @@ void MainWindow::setLoadingState(bool loading) {
     adjPanel->setEnabled(!loading);
     exifPanel->setEnabled(!loading);
     if (loading)
-        setToolsEnabled(false);   // re-enabled in onLoadFinished on success
-    statusLabel->setText(loading
-        ? QString("Loading %1...").arg(QFileInfo(currentPath).fileName())
-        : QString());
+        setToolsEnabled(false); // re-enabled in onLoadFinished on success
+    statusLabel->setText(
+        loading ? QString("Loading %1...").arg(QFileInfo(currentPath).fileName()) : QString());
 }
 
 void MainWindow::applyClipping() {
@@ -635,10 +709,9 @@ void MainWindow::applyClipping() {
 
 void MainWindow::toggleClipping() {
     // J: if either overlay is on, turn both off; otherwise turn both on.
-    const bool anyOn = clipHighlightsAction->isChecked() ||
-                       clipShadowsAction->isChecked();
+    const bool anyOn = clipHighlightsAction->isChecked() || clipShadowsAction->isChecked();
     clipHighlightsAction->setChecked(!anyOn);
-    clipShadowsAction->setChecked(!anyOn);   // toggled() drives applyClipping()
+    clipShadowsAction->setChecked(!anyOn); // toggled() drives applyClipping()
 }
 
 void MainWindow::rebuildDisplayLut() {
@@ -652,10 +725,13 @@ void MainWindow::rebuildDisplayLut() {
 
     const DisplayLut lut = buildDisplayLut(
         proofing ? proofPanel->profilePath() : QString(),
-        proofPanel->intent(), proofPanel->blackPointCompensation(),
+        proofPanel->intent(),
+        proofPanel->blackPointCompensation(),
         monitorProfilePath);
     if (!lut.valid()) {
-        QMessageBox::warning(this, "Color Management",
+        QMessageBox::warning(
+            this,
+            "Color Management",
             "Could not build the display transform — check the selected ICC profiles.");
         viewport->clearDisplayLut();
         viewport->setGamutWarning(false);
@@ -680,13 +756,14 @@ void MainWindow::pushParamsToViewport() {
 }
 
 void MainWindow::saveAdjustments() {
-    if (currentPath.isEmpty()) return;
-    viewport->commitActiveTool();   // fold any pending crop into the params first
+    if (currentPath.isEmpty())
+        return;
+    viewport->commitActiveTool(); // fold any pending crop into the params first
     if (XmpSidecar::saveAdjustments(currentPath, currentParams()))
         statusLabel->setText("Saved: " + XmpSidecar::pathFor(currentPath));
     else
-        QMessageBox::warning(this, "Save Error",
-            "Could not write " + XmpSidecar::pathFor(currentPath));
+        QMessageBox::warning(
+            this, "Save Error", "Could not write " + XmpSidecar::pathFor(currentPath));
 }
 
 // Simple unsharp mask: radius ≈ 1% of image width, amount 0..100.
@@ -694,21 +771,25 @@ void MainWindow::saveAdjustments() {
 // which is much cheaper than a real Gaussian at these radii.
 // Runs in encoded (output-profile) space — Format_RGB888 or Format_RGBA64.
 static QImage applyUnsharpMask(QImage img, int amount) {
-    if (amount == 0) return img;
+    if (amount == 0)
+        return img;
     const float a = amount / 100.0f;
     int r = std::max(1, img.width() / 100);
-    QImage blurred = img.scaled(img.width()  / (r + 1),
-                                img.height() / (r + 1),
-                                Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
-                       .scaled(img.width(), img.height(),
-                               Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    QImage blurred
+        = img.scaled(
+                 img.width() / (r + 1),
+                 img.height() / (r + 1),
+                 Qt::IgnoreAspectRatio,
+                 Qt::SmoothTransformation)
+              .scaled(img.width(), img.height(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
     if (img.format() == QImage::Format_RGBA64) {
         for (int y = 0; y < img.height(); ++y) {
             const auto* src = reinterpret_cast<const quint16*>(img.constScanLine(y));
             const auto* blr = reinterpret_cast<const quint16*>(blurred.constScanLine(y));
             auto* dst = reinterpret_cast<quint16*>(img.scanLine(y));
             for (int x = 0; x < img.width() * 4; ++x) {
-                if ((x & 3) == 3) continue;   // leave alpha alone
+                if ((x & 3) == 3)
+                    continue; // leave alpha alone
                 int v = int(src[x]) + int(a * (int(src[x]) - int(blr[x])));
                 dst[x] = quint16(std::clamp(v, 0, 65535));
             }
@@ -733,11 +814,11 @@ void MainWindow::exportFile() {
         return;
     }
 
-    viewport->commitActiveTool();   // fold any pending crop into the params first
+    viewport->commitActiveTool(); // fold any pending crop into the params first
     const GlobalAdjustment p = currentParams();
 
     // Natural output size = full-res pixels inside the crop rect
-    const int naturalW = int(fullRes.width  * p.cropRect.width()  + 0.5);
+    const int naturalW = int(fullRes.width * p.cropRect.width() + 0.5);
     const int naturalH = int(fullRes.height * p.cropRect.height() + 0.5);
 
     ExportDialog optDlg(naturalW, naturalH, this);
@@ -748,9 +829,18 @@ void MainWindow::exportFile() {
 
     QString suffix, filter;
     switch (opts.format) {
-    case ExportOptions::Format::JPEG: suffix = "jpg";  filter = "JPEG (*.jpg *.jpeg)"; break;
-    case ExportOptions::Format::PNG:  suffix = "png";  filter = "PNG (*.png)";         break;
-    case ExportOptions::Format::TIFF: suffix = "tif";  filter = "TIFF (*.tif *.tiff)"; break;
+    case ExportOptions::Format::JPEG:
+        suffix = "jpg";
+        filter = "JPEG (*.jpg *.jpeg)";
+        break;
+    case ExportOptions::Format::PNG:
+        suffix = "png";
+        filter = "PNG (*.png)";
+        break;
+    case ExportOptions::Format::TIFF:
+        suffix = "tif";
+        filter = "TIFF (*.tif *.tiff)";
+        break;
     }
 
     QFileDialog fileDlg(this, "Export Image", QFileInfo(currentPath).absolutePath());
@@ -765,7 +855,7 @@ void MainWindow::exportFile() {
         path += "." + suffix;
 
     statusLabel->setText("Exporting…");
-    QApplication::processEvents();  // repaint the status bar before the render blocks the UI
+    QApplication::processEvents(); // repaint the status bar before the render blocks the UI
 
     // Linear working-space render → output profile (lcms2) → sharpen → save.
     QImage out = viewport->renderToImage(fullRes, p, opts.width, opts.height);

@@ -1,0 +1,227 @@
+# Building arraw on Windows
+
+This guide covers the full Windows development setup for arraw using **vcpkg** for
+dependencies and **MSVC 2022** as the compiler. It documents the exact toolchain,
+the non-obvious environment requirements, and fixes for every error you are likely
+to hit. It reflects a working setup verified on Windows 11 (June 2026).
+
+> The Linux/macOS instructions in [AGENTS.md](../AGENTS.md) are simpler because their
+> package managers put compilers, SDK tools, and Qt plugins on a single path. On
+> Windows the toolchain is split across three providers (vcpkg, MSVC, scoop), so a
+> few extra steps are required.
+
+---
+
+## 1. Prerequisites
+
+Install these once. Paths below are the ones this guide assumes; adjust if yours differ.
+
+| Tool | What for | Location used here |
+|---|---|---|
+| **Visual Studio 2022** (Community is fine) | MSVC C++ compiler (`cl.exe`), linker, and the Windows SDK (`rc.exe`, `mt.exe`) | `C:\Program Files\Microsoft Visual Studio\2022\Community` |
+| **vcpkg** | C++ dependencies (Qt, libraw, lcms2, …) | `C:\dev\vcpkg` |
+| **CMake** and **Ninja** | Build system + generator | via [scoop](https://scoop.sh): `C:\Users\<you>\scoop\shims\` |
+| **Git** | Source control | `C:\Program Files\Git` |
+
+When installing Visual Studio, make sure the **"Desktop development with C++"**
+workload is selected — that is what provides MSVC *and* the Windows SDK. The SDK is
+the part that supplies `rc.exe`/`mt.exe`, which the build needs (see §4).
+
+Install CMake/Ninja via scoop (or use the copies bundled with VS — either works):
+
+```powershell
+scoop install cmake ninja
+```
+
+---
+
+## 2. Install the dependencies with vcpkg
+
+If vcpkg is not yet bootstrapped:
+
+```powershell
+git clone https://github.com/microsoft/vcpkg C:\dev\vcpkg
+C:\dev\vcpkg\bootstrap-vcpkg.bat
+```
+
+Install the ports arraw needs, for the `x64-windows` triplet (this is a long first
+build — Qt is large):
+
+```powershell
+C:\dev\vcpkg\vcpkg.exe install qtbase qttools qtshadertools libraw lcms --triplet x64-windows
+```
+
+`qtshadertools` is required: it provides `qsb`, which compiles the GLSL shaders in
+`shaders/` at build time. `qttools` provides the rest of the Qt tooling.
+
+Verify they landed:
+
+```powershell
+C:\dev\vcpkg\vcpkg.exe list
+```
+
+You should see `qtbase`, `qttools`, `qtshadertools`, `libraw`, and `lcms` among the
+output.
+
+---
+
+## 3. Point CMake at the vcpkg toolchain
+
+CMake needs the vcpkg toolchain file so `find_package` can locate Qt et al. The
+repo keeps this in a **local, untracked** `CMakePresets.json` (the path is
+machine-specific, so it is intentionally not committed):
+
+```json
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "default",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "C:/dev/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_TARGET_TRIPLET": "x64-windows"
+      }
+    }
+  ]
+}
+```
+
+Adjust the toolchain path if your vcpkg lives elsewhere. With this in place you
+configure with `cmake --preset default`. (If you prefer not to use a preset, pass
+`-DCMAKE_TOOLCHAIN_FILE=C:/dev/vcpkg/scripts/buildsystems/vcpkg.cmake` directly.)
+
+---
+
+## 4. The critical step: use the MSVC developer environment
+
+This is the part that trips people up. Having `cl.exe` on your `PATH` is **not
+enough**. The build also needs the Windows SDK tools `rc.exe` (resource compiler)
+and `mt.exe` (manifest tool), plus the correct `INCLUDE`/`LIB` paths. These are only
+set up by the MSVC "developer environment". Without it, CMake's compiler check fails
+with messages like:
+
+```
+The C++ compiler ... is not able to compile a simple test program.
+RC Pass 1: command "rc /fo ... " failed
+  no such file or directory
+--mt=CMAKE_MT-NOTFOUND
+```
+
+You have two ways to get that environment:
+
+### Option A — Developer PowerShell for VS 2022 (simplest)
+
+Open **"Developer PowerShell for VS 2022"** from the Start menu. It launches with the
+full MSVC + SDK environment already applied. Run all `cmake`/`ctest` commands there.
+
+### Option B — Import the environment into your current shell
+
+Useful for scripts/automation. Import `vcvars64.bat` into the current PowerShell
+session (environment changes do not persist between separate shell invocations, so
+keep the build commands in the same session/script):
+
+```powershell
+$vcvars = "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"
+cmd /c "`"$vcvars`" >nul 2>&1 && set" |
+    ForEach-Object { if ($_ -match '^([^=]+)=(.*)$') { Set-Item -Path "Env:$($matches[1])" -Value $matches[2] } }
+```
+
+After this, `rc`, `mt`, `cl`, and `link` all resolve. You can sanity-check with
+`Get-Command rc, mt, cl, link`.
+
+---
+
+## 5. Configure, build, run, test
+
+From a shell that has the developer environment (§4):
+
+```powershell
+# Configure (reads CMakePresets.json)
+cmake --preset default
+
+# Build everything (app + tests)
+cmake --build build
+
+# Run the app
+.\build\arraw.exe
+
+# Run the test suite
+ctest --test-dir build --output-on-failure
+```
+
+A clean run builds `build\arraw.exe` and `build\tests\arraw_tests.exe`, and `ctest`
+reports all tests passing. The two golden-image rendering tests are **skipped** under
+the headless offscreen platform used for tests — that is expected, not a failure (see
+§7).
+
+If you change the vcpkg toolchain path or the configure step gets into a bad state,
+delete the `build\` directory and reconfigure from scratch.
+
+---
+
+## 6. Two Windows-specific fixes baked into the build
+
+These are already in `CMakeLists.txt` / `tests/CMakeLists.txt`; you do not need to do
+anything, but it helps to know why they exist because the symptoms are confusing.
+
+### 6.1 libraw debug/release DLL mismatch
+
+vcpkg names libraw's **debug** import library differently from the release one
+(`rawd.lib` → `rawd.dll` vs `raw.lib` → `raw.dll`), and the debug DLL only lives in
+`installed\x64-windows\debug\bin`. A naïve `find_library(... NAMES raw)` picks the
+*release* import lib even in a Debug build, so the produced exe imports `raw.dll`,
+which is never deployed next to a debug binary. The result is an immediate startup
+crash:
+
+```
+Exit code 0xc0000135   (STATUS_DLL_NOT_FOUND)
+```
+
+The fix in `CMakeLists.txt` selects the import library per build configuration
+(`rawd` in Debug, `raw` in Release) so the right DLL gets deployed.
+
+### 6.2 Qt platform plugin deployment
+
+vcpkg's auto-deploy step (`applocal`) copies the Qt **DLLs** next to the binary but
+**not** the Qt **plugins** for this Qt 6.11 layout. Without the platform plugin Qt
+aborts on startup with a dialog:
+
+```
+This application failed to start because no Qt platform plugin could be initialized.
+```
+
+`CMakeLists.txt` defines `arraw_deploy_qt_plugins(<target>)`, a Windows-only
+post-build step that copies `qwindowsd.dll` and `qoffscreend.dll` into a `platforms\`
+folder next to each executable. It is applied to both `arraw` and `arraw_tests`. The
+test suite additionally runs with `QT_QPA_PLATFORM=offscreen` (set via
+`catch_discover_tests`) so it does not need a visible desktop session.
+
+---
+
+## 7. Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `vcpkg.exe not found` | vcpkg installed somewhere other than `C:\dev\vcpkg` | Point the toolchain path in `CMakePresets.json` at your actual vcpkg root. |
+| CMake: *"compiler is not able to compile a simple test program"*, `rc ... no such file`, `CMAKE_MT-NOTFOUND` | MSVC developer environment not applied — SDK tools missing | Build from "Developer PowerShell for VS 2022", or import `vcvars64.bat` (§4). Then delete `build\` and reconfigure. |
+| App/test exits immediately with `0xc0000135` | A required DLL is missing next to the exe (e.g. `raw.dll`) | Rebuild after a clean configure; the per-config libraw fix (§6.1) deploys the correct DLL. Confirm with `dumpbin /dependents build\arraw.exe`. |
+| *"no Qt platform plugin could be initialized"* | Qt plugins not deployed | Ensure `platforms\qwindowsd.dll` exists next to the exe; it is copied by the post-build step (§6.2). A fresh `cmake --build build` recreates it. |
+| `find_package(Qt6 ...)` fails | Toolchain file not passed, or ports not installed | Use `cmake --preset default`; verify `vcpkg list` shows the Qt ports for `x64-windows`. |
+| Shaders not found / `qsb` missing at configure | `qtshadertools` not installed | `vcpkg install qtshadertools --triplet x64-windows`. |
+| Golden-image tests show as *Skipped* | They run headless under the offscreen platform | Expected. To run them you need a platform/RHI device capable of the rendering — out of scope for the standard headless test run. |
+
+---
+
+## 8. Quick reference
+
+```powershell
+# One-shot: developer env + configure + build + test, in a single session
+$vcvars = "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"
+cmd /c "`"$vcvars`" >nul 2>&1 && set" |
+    ForEach-Object { if ($_ -match '^([^=]+)=(.*)$') { Set-Item -Path "Env:$($matches[1])" -Value $matches[2] } }
+cmake --preset default
+cmake --build build
+ctest --test-dir build --output-on-failure
+```

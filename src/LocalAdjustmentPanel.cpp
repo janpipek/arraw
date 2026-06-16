@@ -18,10 +18,11 @@ namespace {
 // Per-row number handling (see FieldSpec). All local deltas are ±100 except
 // exposure (EV); local temperature is a relative ±100 shift, not Kelvin.
 const FieldSpec kExposureSpec{-500, 500, 0, 0.01f, 0.01f, 2, " EV", true, 0.05f};
-const FieldSpec kBipolarSpec {-100, 100, 0, 1.0f, 1.0f, 0, {}, true, 1.0f};
-}  // namespace
+const FieldSpec kBipolarSpec{-100, 100, 0, 1.0f, 1.0f, 0, {}, true, 1.0f};
+} // namespace
 
-LocalAdjustmentPanel::LocalAdjustmentPanel(QWidget* parent) : QWidget(parent) {
+LocalAdjustmentPanel::LocalAdjustmentPanel(QWidget* parent)
+    : QWidget(parent) {
     auto* col = new QVBoxLayout(this);
 
     maskList = new QListWidget(this);
@@ -55,7 +56,7 @@ LocalAdjustmentPanel::LocalAdjustmentPanel(QWidget* parent) : QWidget(parent) {
     auto* linPage = new QWidget(this);
     auto* linGrid = new QGridLayout(linPage);
     const char* linLabels[4] = {"P0 X", "P0 Y", "P1 X", "P1 Y"};
-    const char* linNames[4]  = {"p0x", "p0y", "p1x", "p1y"};
+    const char* linNames[4] = {"p0x", "p0y", "p1x", "p1y"};
     for (int i = 0; i < 4; ++i) {
         linSpins[i] = makeCoordSpin(linNames[i], -1.0, 2.0);
         linGrid->addWidget(new QLabel(linLabels[i], linPage), i / 2, (i % 2) * 2);
@@ -66,18 +67,27 @@ LocalAdjustmentPanel::LocalAdjustmentPanel(QWidget* parent) : QWidget(parent) {
     // Radial page: centre, radii, angle, feather + invert.
     auto* radPage = new QWidget(this);
     auto* radGrid = new QGridLayout(radPage);
-    struct RadDef { const char* label; const char* name; double lo, hi; };
+
+    struct RadDef {
+        const char* label;
+        const char* name;
+        double lo, hi;
+    };
+
     const RadDef radDefs[6] = {
-        {"Center X", "cx", -1.0, 2.0}, {"Center Y", "cy", -1.0, 2.0},
-        {"Radius X", "rrx", 0.0, 2.0}, {"Radius Y", "rry", 0.0, 2.0},
-        {"Angle",    "rangle", -180.0, 180.0}, {"Feather", "rfeather", 0.0, 1.0},
+        {"Center X", "cx", -1.0, 2.0},
+        {"Center Y", "cy", -1.0, 2.0},
+        {"Radius X", "rrx", 0.0, 2.0},
+        {"Radius Y", "rry", 0.0, 2.0},
+        {"Angle", "rangle", -180.0, 180.0},
+        {"Feather", "rfeather", 0.0, 1.0},
     };
     for (int i = 0; i < 6; ++i) {
         radSpins[i] = makeCoordSpin(radDefs[i].name, radDefs[i].lo, radDefs[i].hi);
         radGrid->addWidget(new QLabel(radDefs[i].label, radPage), i / 2, (i % 2) * 2);
         radGrid->addWidget(radSpins[i], i / 2, (i % 2) * 2 + 1);
     }
-    radSpins[4]->setSingleStep(1.0);   // angle in degrees
+    radSpins[4]->setSingleStep(1.0); // angle in degrees
     radInvert = new QCheckBox("Invert (affect outside)", radPage);
     radInvert->setObjectName("rinvert");
     radGrid->addWidget(radInvert, 3, 0, 1, 4);
@@ -89,28 +99,29 @@ LocalAdjustmentPanel::LocalAdjustmentPanel(QWidget* parent) : QWidget(parent) {
     // plus the relative temperature.
     struct RowDef {
         const char* name;
-        FieldSpec   spec;
+        FieldSpec spec;
         float LocalAdjustment::* member;
     };
+
     const RowDef defs[] = {
-        {"Exposure",   kExposureSpec, &LocalAdjustment::exposure},
-        {"Contrast",   kBipolarSpec,  &LocalAdjustment::contrast},
-        {"Highlights", kBipolarSpec,  &LocalAdjustment::highlights},
-        {"Shadows",    kBipolarSpec,  &LocalAdjustment::shadows},
-        {"Whites",     kBipolarSpec,  &LocalAdjustment::whites},
-        {"Blacks",     kBipolarSpec,  &LocalAdjustment::blacks},
-        {"Temp",       kBipolarSpec,  &LocalAdjustment::temperature},
-        {"Tint",       kBipolarSpec,  &LocalAdjustment::tint},
-        {"Saturation", kBipolarSpec,  &LocalAdjustment::saturation},
-        {"Vibrance",   kBipolarSpec,  &LocalAdjustment::vibrance},
+        {"Exposure", kExposureSpec, &LocalAdjustment::exposure},
+        {"Contrast", kBipolarSpec, &LocalAdjustment::contrast},
+        {"Highlights", kBipolarSpec, &LocalAdjustment::highlights},
+        {"Shadows", kBipolarSpec, &LocalAdjustment::shadows},
+        {"Whites", kBipolarSpec, &LocalAdjustment::whites},
+        {"Blacks", kBipolarSpec, &LocalAdjustment::blacks},
+        {"Temp", kBipolarSpec, &LocalAdjustment::temperature},
+        {"Tint", kBipolarSpec, &LocalAdjustment::tint},
+        {"Saturation", kBipolarSpec, &LocalAdjustment::saturation},
+        {"Vibrance", kBipolarSpec, &LocalAdjustment::vibrance},
     };
     for (const RowDef& d : defs) {
-        auto* row  = new QWidget(this);
+        auto* row = new QWidget(this);
         auto* hbox = new QHBoxLayout(row);
         hbox->setContentsMargins(0, 0, 0, 0);
-        auto* lbl  = new QLabel(d.name, row);
+        auto* lbl = new QLabel(d.name, row);
         lbl->setFixedWidth(72);
-        auto* sl   = new QSlider(Qt::Horizontal, row);
+        auto* sl = new QSlider(Qt::Horizontal, row);
         sl->setRange(d.spec.min, d.spec.max);
         sl->setMinimumWidth(28);
         auto* spin = new AdjustmentSpinBox(d.spec, row);
@@ -133,37 +144,38 @@ LocalAdjustmentPanel::LocalAdjustmentPanel(QWidget* parent) : QWidget(parent) {
             syncActiveFromSliders();
         });
         connect(slider, &QSlider::sliderReleased, this, [this] { commit(); });
-        connect(spin, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
-                [this, slider, spec](double d) {
-            slider->setValue(spec.displayToRaw(d));   // runs the preview path
-            commit();
-        });
-        connect(spin, &QAbstractSpinBox::editingFinished, this,
-                [slider, spin, spec] {
+        connect(
+            spin,
+            qOverload<double>(&QDoubleSpinBox::valueChanged),
+            this,
+            [this, slider, spec](double d) {
+                slider->setValue(spec.displayToRaw(d)); // runs the preview path
+                commit();
+            });
+        connect(spin, &QAbstractSpinBox::editingFinished, this, [slider, spin, spec] {
             QSignalBlocker block(spin);
             spin->setValue(spec.rawToDisplay(slider->value()));
         });
     }
 
     auto wireGeom = [this](QDoubleSpinBox* spin) {
-        connect(spin, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
-                [this] { syncActiveGeometry(); });
-        connect(spin, &QAbstractSpinBox::editingFinished, this,
-                [this] { commit(); });
+        connect(spin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this] {
+            syncActiveGeometry();
+        });
+        connect(spin, &QAbstractSpinBox::editingFinished, this, [this] { commit(); });
     };
-    for (QDoubleSpinBox* spin : linSpins) wireGeom(spin);
-    for (QDoubleSpinBox* spin : radSpins) wireGeom(spin);
+    for (QDoubleSpinBox* spin : linSpins)
+        wireGeom(spin);
+    for (QDoubleSpinBox* spin : radSpins)
+        wireGeom(spin);
     connect(radInvert, &QCheckBox::toggled, this, [this] {
         syncActiveGeometry();
         commit();
     });
 
-    connect(addLinearButton, &QPushButton::clicked, this,
-            &LocalAdjustmentPanel::addLinearMask);
-    connect(addRadialButton, &QPushButton::clicked, this,
-            &LocalAdjustmentPanel::addRadialMask);
-    connect(deleteButton, &QPushButton::clicked, this,
-            &LocalAdjustmentPanel::deleteActive);
+    connect(addLinearButton, &QPushButton::clicked, this, &LocalAdjustmentPanel::addLinearMask);
+    connect(addRadialButton, &QPushButton::clicked, this, &LocalAdjustmentPanel::addRadialMask);
+    connect(deleteButton, &QPushButton::clicked, this, &LocalAdjustmentPanel::deleteActive);
     connect(maskList, &QListWidget::currentRowChanged, this, [this](int row) {
         loadActiveIntoSliders();
         setSlidersEnabled(row >= 0);
@@ -192,8 +204,7 @@ void LocalAdjustmentPanel::setActiveIndex(int index) {
     emit activeIndexChanged(index);
 }
 
-void LocalAdjustmentPanel::setLocalAdjustments(
-        const std::vector<LocalAdjustment>& list) {
+void LocalAdjustmentPanel::setLocalAdjustments(const std::vector<LocalAdjustment>& list) {
     const int prev = activeIndex();
     adjustments = list;
     committedState = list;
@@ -202,33 +213,32 @@ void LocalAdjustmentPanel::setLocalAdjustments(
     // command whose redo() re-applies the list, and that must not yank the
     // selection back to the first mask. Empty list -> nothing selected; an
     // unset/out-of-range prior selection clamps to the first mask (e.g. load).
-    const int sel = list.empty() ? -1
-                                  : std::clamp(prev, 0, int(list.size()) - 1);
+    const int sel = list.empty() ? -1 : std::clamp(prev, 0, int(list.size()) - 1);
     setActiveIndex(sel);
-    emit changed(adjustments);   // re-render on load and undo/redo (mirrors setParams)
+    emit changed(adjustments); // re-render on load and undo/redo (mirrors setParams)
 }
 
 void LocalAdjustmentPanel::commitMaskEdit() {
-    commit();   // fold an on-image drag gesture into a single undo step
+    commit(); // fold an on-image drag gesture into a single undo step
 }
 
 void LocalAdjustmentPanel::addMask(LocalAdjustment la) {
     adjustments.push_back(std::move(la));
     rebuildList();
     setActiveIndex(int(adjustments.size()) - 1);
-    emit changed(adjustments);   // push the new list to the viewport (draw handles)
+    emit changed(adjustments); // push the new list to the viewport (draw handles)
     commit();
 }
 
 void LocalAdjustmentPanel::addLinearMask() {
     LocalAdjustment la;
-    la.mask = LinearMask{{0.3, 0.5}, {0.7, 0.5}};   // centred default; drag to place
+    la.mask = LinearMask{{0.3, 0.5}, {0.7, 0.5}}; // centred default; drag to place
     addMask(la);
 }
 
 void LocalAdjustmentPanel::addRadialMask() {
     LocalAdjustment la;
-    la.mask = RadialMask{};   // centred default circle; drag to place/resize
+    la.mask = RadialMask{}; // centred default circle; drag to place/resize
     addMask(la);
 }
 
@@ -239,7 +249,7 @@ void LocalAdjustmentPanel::deleteActive() {
     adjustments.erase(adjustments.begin() + i);
     rebuildList();
     setActiveIndex(std::min(i, int(adjustments.size()) - 1));
-    emit changed(adjustments);   // push the updated list to the viewport
+    emit changed(adjustments); // push the updated list to the viewport
     commit();
 }
 
@@ -250,8 +260,8 @@ void LocalAdjustmentPanel::rebuildList() {
     int linearN = 0, radialN = 0;
     for (const LocalAdjustment& la : adjustments) {
         const QString label = std::holds_alternative<RadialMask>(la.mask)
-            ? QStringLiteral("Radial %1").arg(++radialN)
-            : QStringLiteral("Linear %1").arg(++linearN);
+                                  ? QStringLiteral("Radial %1").arg(++radialN)
+                                  : QStringLiteral("Linear %1").arg(++linearN);
         maskList->addItem(label);
     }
     if (keep >= 0 && keep < int(adjustments.size()))
@@ -272,8 +282,8 @@ void LocalAdjustmentPanel::loadActiveIntoSliders() {
     if (a && std::holds_alternative<RadialMask>(a->mask)) {
         const RadialMask& r = std::get<RadialMask>(a->mask);
         geomStack->setCurrentIndex(1);
-        const double vals[6] = {r.center.x(), r.center.y(), r.radiusX,
-                                r.radiusY, r.angle, r.feather};
+        const double vals[6]
+            = {r.center.x(), r.center.y(), r.radiusX, r.radiusY, r.angle, r.feather};
         for (int i = 0; i < 6; ++i) {
             QSignalBlocker b(radSpins[i]);
             radSpins[i]->setValue(vals[i]);
@@ -310,7 +320,7 @@ void LocalAdjustmentPanel::updateMaskGeometry(int index, const Mask& mask) {
         return;
     adjustments[index].mask = mask;
     if (index == activeIndex())
-        loadActiveIntoSliders();   // refresh the P0/P1 fields (signals blocked)
+        loadActiveIntoSliders(); // refresh the P0/P1 fields (signals blocked)
     emit changed(adjustments);
 }
 
@@ -323,12 +333,12 @@ void LocalAdjustmentPanel::syncActiveGeometry() {
         m->p1 = QPointF(linSpins[2]->value(), linSpins[3]->value());
         emit changed(adjustments);
     } else if (auto* r = std::get_if<RadialMask>(&a->mask)) {
-        r->center  = QPointF(radSpins[0]->value(), radSpins[1]->value());
+        r->center = QPointF(radSpins[0]->value(), radSpins[1]->value());
         r->radiusX = radSpins[2]->value();
         r->radiusY = radSpins[3]->value();
-        r->angle   = radSpins[4]->value();
+        r->angle = radSpins[4]->value();
         r->feather = radSpins[5]->value();
-        r->invert  = radInvert->isChecked();
+        r->invert = radInvert->isChecked();
         emit changed(adjustments);
     }
 }

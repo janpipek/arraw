@@ -1,41 +1,47 @@
 #include "FilmStrip.h"
-#include "FilmStripModel.h"
 #include "FilmStripLayout.h"
+#include "FilmStripModel.h"
 #include "ThumbnailCache.h"
 #include "XmpSidecar.h"
 
-#include <QListView>
-#include <QHBoxLayout>
-#include <QFileDialog>
-#include <QDir>
-#include <QFileInfo>
-#include <QScrollBar>
-#include <QTimer>
-#include <QStyledItemDelegate>
-#include <QPainter>
-#include <QEvent>
-#include <QKeyEvent>
-#include <QMenu>
-#include <QSignalBlocker>
-#include <QtConcurrent>
-#include <QFutureWatcher>
 #include <algorithm>
+#include <QDir>
+#include <QEvent>
+#include <QFileDialog>
+#include <QFileInfo>
+#include <QFutureWatcher>
+#include <QHBoxLayout>
+#include <QKeyEvent>
+#include <QListView>
+#include <QMenu>
+#include <QPainter>
+#include <QScrollBar>
+#include <QSignalBlocker>
+#include <QStyledItemDelegate>
+#include <QTimer>
+#include <QtConcurrent>
 
 namespace {
 
-constexpr int kCellPad = 4;       // padding around each thumbnail
-constexpr int kBorderWidth = 2;   // current-item highlight border
-constexpr int kMarksMinHeight = 64;  // below this, stars are illegible: swatch only
+constexpr int kCellPad = 4;         // padding around each thumbnail
+constexpr int kBorderWidth = 2;     // current-item highlight border
+constexpr int kMarksMinHeight = 64; // below this, stars are illegible: swatch only
 
 // Swatch colours for the five labels (None never drawn).
 QColor labelColour(ColourLabel label) {
     switch (label) {
-    case ColourLabel::Red:    return QColor(0xD6, 0x45, 0x41);
-    case ColourLabel::Yellow: return QColor(0xF5, 0xD8, 0x20);
-    case ColourLabel::Green:  return QColor(0x4C, 0xAF, 0x50);
-    case ColourLabel::Blue:   return QColor(0x3B, 0x82, 0xF6);
-    case ColourLabel::Purple: return QColor(0x9B, 0x59, 0xB6);
-    case ColourLabel::None:   break;
+    case ColourLabel::Red:
+        return QColor(0xD6, 0x45, 0x41);
+    case ColourLabel::Yellow:
+        return QColor(0xF5, 0xD8, 0x20);
+    case ColourLabel::Green:
+        return QColor(0x4C, 0xAF, 0x50);
+    case ColourLabel::Blue:
+        return QColor(0x3B, 0x82, 0xF6);
+    case ColourLabel::Purple:
+        return QColor(0x9B, 0x59, 0xB6);
+    case ColourLabel::None:
+        break;
     }
     return Qt::transparent;
 }
@@ -43,10 +49,10 @@ QColor labelColour(ColourLabel label) {
 // Overlay the culling marks on a thumbnail cell: a colour swatch top-left, and
 // (when the cell is tall enough to read them) filled stars on a translucent
 // bottom bar. A reject (rating -1) dims the thumbnail and shows a ✗.
-void paintMarks(QPainter* painter, const QRect& inner, int thumbHeight,
-                int rating, ColourLabel label) {
+void paintMarks(
+    QPainter* painter, const QRect& inner, int thumbHeight, int rating, ColourLabel label) {
     if (rating < 0)
-        painter->fillRect(inner, QColor(0, 0, 0, 140));  // reject: dim the frame
+        painter->fillRect(inner, QColor(0, 0, 0, 140)); // reject: dim the frame
 
     if (label != ColourLabel::None) {
         const int s = std::max(8, thumbHeight / 9);
@@ -57,11 +63,13 @@ void paintMarks(QPainter* painter, const QRect& inner, int thumbHeight,
     }
 
     if (thumbHeight < kMarksMinHeight)
-        return;  // swatch stays readable at any size; stars do not
+        return; // swatch stays readable at any size; stars do not
 
     QString glyphs;
-    if (rating < 0)      glyphs = QStringLiteral("✗");            // ✗
-    else if (rating > 0) glyphs = QString(rating, QChar(0x2605));      // ★×n
+    if (rating < 0)
+        glyphs = QStringLiteral("✗"); // ✗
+    else if (rating > 0)
+        glyphs = QString(rating, QChar(0x2605)); // ★×n
     if (glyphs.isEmpty())
         return;
 
@@ -90,30 +98,34 @@ public:
         return {w + 2 * kCellPad, thumbHeight + 2 * kCellPad};
     }
 
-    void paint(QPainter* painter, const QStyleOptionViewItem& option,
-               const QModelIndex& index) const override {
+    void paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index)
+        const override {
         painter->save();
         const bool selected = option.state & QStyle::State_Selected;
 
         const QRect inner = option.rect.adjusted(kCellPad, kCellPad, -kCellPad, -kCellPad);
         const QImage img = index.data(Qt::DecorationRole).value<QImage>();
         if (img.isNull()) {
-            painter->fillRect(inner, option.palette.mid());  // placeholder
+            painter->fillRect(inner, option.palette.mid()); // placeholder
         } else {
-            const QPixmap pm = QPixmap::fromImage(img).scaled(
-                inner.size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
+            const QPixmap pm
+                = QPixmap::fromImage(img)
+                      .scaled(inner.size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
             QRect target(QPoint(), pm.size());
             target.moveCenter(inner.center());
             painter->drawPixmap(target, pm);
         }
 
-        paintMarks(painter, inner, thumbHeight,
-                   index.data(FilmStripModel::RatingRole).toInt(),
-                   ColourLabel(index.data(FilmStripModel::LabelRole).toInt()));
+        paintMarks(
+            painter,
+            inner,
+            thumbHeight,
+            index.data(FilmStripModel::RatingRole).toInt(),
+            ColourLabel(index.data(FilmStripModel::LabelRole).toInt()));
 
         if (selected) {
             painter->setPen(QPen(option.palette.highlight().color(), kBorderWidth));
-            painter->setBrush(Qt::NoBrush);  // paintMarks left the swatch colour set
+            painter->setBrush(Qt::NoBrush); // paintMarks left the swatch colour set
             const int o = kBorderWidth / 2;
             painter->drawRect(option.rect.adjusted(o, o, -o - 1, -o - 1));
         }
@@ -125,8 +137,9 @@ public:
 
 } // namespace
 
-FilmStrip::FilmStrip(QWidget* parent) : QWidget(parent) {
-    model  = new FilmStripModel(this);
+FilmStrip::FilmStrip(QWidget* parent)
+    : QWidget(parent) {
+    model = new FilmStripModel(this);
     thumbs = new ThumbnailCache(this);
 
     auto* layout = new QHBoxLayout(this);
@@ -139,23 +152,25 @@ FilmStrip::FilmStrip(QWidget* parent) : QWidget(parent) {
     list->setFlow(QListView::LeftToRight);
     list->setWrapping(false);
     list->setMovement(QListView::Static);
-    list->setUniformItemSizes(false);          // cell width varies with aspect
+    list->setUniformItemSizes(false); // cell width varies with aspect
     list->setSelectionMode(QAbstractItemView::SingleSelection);
     list->setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);
     list->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     list->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     list->viewport()->installEventFilter(this);
-    list->installEventFilter(this);  // intercept culling keys before type-ahead
+    list->installEventFilter(this); // intercept culling keys before type-ahead
     list->viewport()->setContextMenuPolicy(Qt::CustomContextMenu);
-    connect(list->viewport(), &QWidget::customContextMenuRequested,
-            this, &FilmStrip::showContextMenu);
+    connect(list->viewport(), &QWidget::customContextMenuRequested, this, &FilmStrip::showContextMenu);
     layout->addWidget(list, 1);
 
-    connect(list->selectionModel(), &QItemSelectionModel::currentChanged,
-            this, [this](const QModelIndex& current, const QModelIndex&) {
-                if (current.isValid())
-                    emit fileSelected(current.data(FilmStripModel::PathRole).toString());
-            });
+    connect(
+        list->selectionModel(),
+        &QItemSelectionModel::currentChanged,
+        this,
+        [this](const QModelIndex& current, const QModelIndex&) {
+            if (current.isValid())
+                emit fileSelected(current.data(FilmStripModel::PathRole).toString());
+        });
 
     // Centre the clicked thumbnail — but only after the click finishes
     // (clicked fires on release), so the scroll never moves content out from
@@ -164,15 +179,19 @@ FilmStrip::FilmStrip(QWidget* parent) : QWidget(parent) {
         list->scrollTo(idx, QAbstractItemView::PositionAtCenter);
     });
 
-    connect(list->horizontalScrollBar(), &QScrollBar::valueChanged,
-            this, [this](int) { requestVisibleThumbnails(); });
+    connect(list->horizontalScrollBar(), &QScrollBar::valueChanged, this, [this](int) {
+        requestVisibleThumbnails();
+    });
 
     // A loaded thumbnail changes a cell's size, so re-check visibility after.
-    connect(thumbs, &ThumbnailCache::thumbnailReady, this,
-            [this](const QString& path, const QImage& image) {
-                model->setThumbnail(path, image);
-                QTimer::singleShot(0, this, [this] { requestVisibleThumbnails(); });
-            });
+    connect(
+        thumbs,
+        &ThumbnailCache::thumbnailReady,
+        this,
+        [this](const QString& path, const QImage& image) {
+            model->setThumbnail(path, image);
+            QTimer::singleShot(0, this, [this] { requestVisibleThumbnails(); });
+        });
 }
 
 void FilmStrip::setDirectory(const QString& dir) {
@@ -204,7 +223,7 @@ void FilmStrip::setCurrentFile(const QString& path) {
     // (File ▸ Open, command line) land here with a different current item.
     if (list->currentIndex() == idx)
         return;
-    QSignalBlocker block(list->selectionModel());  // don't re-enter loadImage
+    QSignalBlocker block(list->selectionModel()); // don't re-enter loadImage
     list->setCurrentIndex(idx);
     list->scrollTo(idx, QAbstractItemView::PositionAtCenter);
     requestVisibleThumbnails();
@@ -212,7 +231,7 @@ void FilmStrip::setCurrentFile(const QString& path) {
 
 void FilmStrip::selectFirst() {
     if (model->rowCount() > 0)
-        list->setCurrentIndex(model->index(0));  // fires currentChanged → fileSelected
+        list->setCurrentIndex(model->index(0)); // fires currentChanged → fileSelected
 }
 
 bool FilmStrip::navigateBy(int delta) {
@@ -221,8 +240,8 @@ bool FilmStrip::navigateBy(int delta) {
     if (next < 0 || next >= model->rowCount())
         return false;
     const QModelIndex idx = model->index(next);
-    list->setCurrentIndex(idx);   // fires currentChanged → fileSelected
-    list->scrollTo(idx, QAbstractItemView::PositionAtCenter);  // keyboard nav centres
+    list->setCurrentIndex(idx);                               // fires currentChanged → fileSelected
+    list->scrollTo(idx, QAbstractItemView::PositionAtCenter); // keyboard nav centres
     return true;
 }
 
@@ -232,7 +251,7 @@ QString FilmStrip::currentPath() const {
 }
 
 UserMetadata FilmStrip::currentMarks() const {
-    return model->marksFor(currentPath());   // empty path → default marks
+    return model->marksFor(currentPath()); // empty path → default marks
 }
 
 void FilmStrip::rateCurrent(int rating) {
@@ -255,7 +274,7 @@ void FilmStrip::setLabel(const QString& path, ColourLabel label) {
     if (path.isEmpty())
         return;
     UserMetadata m = model->marksFor(path);
-    m.label = (m.label == label) ? ColourLabel::None : label;  // same key clears
+    m.label = (m.label == label) ? ColourLabel::None : label; // same key clears
     applyMarks(path, m);
 }
 
@@ -272,14 +291,14 @@ void FilmStrip::loadMarks(const QStringList& paths) {
     auto* watcher = new QFutureWatcher<Marks>(this);
     connect(watcher, &QFutureWatcher<Marks>::finished, this, [this, watcher] {
         for (const auto& [path, m] : watcher->result())
-            model->setMarks(path, m);   // no-ops paths no longer in the model
+            model->setMarks(path, m); // no-ops paths no longer in the model
         watcher->deleteLater();
     });
     watcher->setFuture(QtConcurrent::run([paths] {
         Marks out;
         for (const QString& p : paths) {
             const UserMetadata m = XmpSidecar::loadMetadata(p);
-            if (!(m == UserMetadata{}))   // only carry files that actually have marks
+            if (!(m == UserMetadata{})) // only carry files that actually have marks
                 out.append({p, m});
         }
         return out;
@@ -310,11 +329,18 @@ void FilmStrip::showContextMenu(const QPoint& pos) {
     connect(reject, &QAction::triggered, this, [this, path] { setRating(path, -1); });
 
     QMenu* lab = menu.addMenu(tr("Label"));
-    struct LabelEntry { const char* name; ColourLabel value; };
-    for (auto [name, value] : {
-             LabelEntry{"Red", ColourLabel::Red}, {"Yellow", ColourLabel::Yellow},
-             {"Green", ColourLabel::Green}, {"Blue", ColourLabel::Blue},
-             {"Purple", ColourLabel::Purple} }) {
+
+    struct LabelEntry {
+        const char* name;
+        ColourLabel value;
+    };
+
+    for (auto [name, value] :
+         {LabelEntry{"Red", ColourLabel::Red},
+          {"Yellow", ColourLabel::Yellow},
+          {"Green", ColourLabel::Green},
+          {"Blue", ColourLabel::Blue},
+          {"Purple", ColourLabel::Purple}}) {
         QAction* a = lab->addAction(tr(name));
         a->setCheckable(true);
         a->setChecked(cur.label == value);
@@ -332,7 +358,9 @@ void FilmStrip::showContextMenu(const QPoint& pos) {
 
 void FilmStrip::promptForDirectory() {
     const QString dir = QFileDialog::getExistingDirectory(
-        this, tr("Open Folder"), currentDir,
+        this,
+        tr("Open Folder"),
+        currentDir,
         QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks);
     if (!dir.isEmpty()) {
         setDirectory(dir);
@@ -361,12 +389,24 @@ bool FilmStrip::handleMarkKey(int key) {
         return true;
     }
     switch (key) {
-    case Qt::Key_X: rateCurrent(-1);                 return true;
-    case Qt::Key_R: labelCurrent(ColourLabel::Red);    return true;
-    case Qt::Key_Y: labelCurrent(ColourLabel::Yellow); return true;
-    case Qt::Key_G: labelCurrent(ColourLabel::Green);  return true;
-    case Qt::Key_B: labelCurrent(ColourLabel::Blue);   return true;
-    case Qt::Key_P: labelCurrent(ColourLabel::Purple); return true;
+    case Qt::Key_X:
+        rateCurrent(-1);
+        return true;
+    case Qt::Key_R:
+        labelCurrent(ColourLabel::Red);
+        return true;
+    case Qt::Key_Y:
+        labelCurrent(ColourLabel::Yellow);
+        return true;
+    case Qt::Key_G:
+        labelCurrent(ColourLabel::Green);
+        return true;
+    case Qt::Key_B:
+        labelCurrent(ColourLabel::Blue);
+        return true;
+    case Qt::Key_P:
+        labelCurrent(ColourLabel::Purple);
+        return true;
     }
     return false;
 }
@@ -394,10 +434,24 @@ void FilmStrip::requestVisibleThumbnails() {
 }
 
 QStringList FilmStrip::scanImageFiles(const QString& dir) {
-    static const QStringList exts = {
-        "cr2", "cr3", "nef", "arw", "dng", "raf", "orf", "rw2", "pef", "srw",
-        "jpg", "jpeg", "png", "tiff", "tif", "webp", "bmp"
-    };
+    static const QStringList exts
+        = {"cr2",
+           "cr3",
+           "nef",
+           "arw",
+           "dng",
+           "raf",
+           "orf",
+           "rw2",
+           "pef",
+           "srw",
+           "jpg",
+           "jpeg",
+           "png",
+           "tiff",
+           "tif",
+           "webp",
+           "bmp"};
     QDir d(dir);
     QStringList filters;
     for (const auto& ext : exts)
@@ -408,5 +462,5 @@ QStringList FilmStrip::scanImageFiles(const QString& dir) {
     result.reserve(names.size());
     for (const auto& name : names)
         result << d.filePath(name);
-    return result;  // FilmStripModel natural-sorts on assignment
+    return result; // FilmStripModel natural-sorts on assignment
 }

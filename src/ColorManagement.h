@@ -25,21 +25,25 @@ enum class ProofIntent { Perceptual, RelativeColorimetric };
 // working-space RGB (shaper — concentrates resolution in the shadows);
 // RGB = display-encoded output, A = 1 in-gamut / 0 out-of-gamut.
 struct DisplayLut {
-    std::vector<float> data;   // size³ × RGBA, red axis fastest
+    std::vector<float> data; // size³ × RGBA, red axis fastest
     int size = 0;
+
     bool valid() const { return size > 0 && !data.empty(); }
 };
 
 // Build the working→[proof→]display LUT. Empty proofIcc = no proofing (plain
 // working→display, gamut alpha all 1); empty monitorIcc = sRGB display.
 // Returns an invalid LUT if a profile fails to load.
-DisplayLut buildDisplayLut(const QString& proofIcc, ProofIntent intent,
-                           bool blackPointCompensation, const QString& monitorIcc);
+DisplayLut buildDisplayLut(
+    const QString& proofIcc,
+    ProofIntent intent,
+    bool blackPointCompensation,
+    const QString& monitorIcc);
 
 struct IccProfileInfo {
     QString path;
     QString description;
-    bool isDisplayClass = false;   // RGB display-class — usable as monitor profile
+    bool isDisplayClass = false; // RGB display-class — usable as monitor profile
 };
 
 // Scan the OS color-profile directories for usable proof/monitor profiles

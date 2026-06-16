@@ -1,16 +1,50 @@
 cmake_minimum_required(VERSION 3.21)
 project(arraw VERSION 0.1.0 LANGUAGES CXX)
 
-enable_testing()
+option(ARRAW_BUILD_TESTS "Build arraw tests" ON)
+if(ARRAW_BUILD_TESTS)
+    enable_testing()
+endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+function(arraw_enable_warnings target)
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /W4)
+    else()
+        target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+endfunction()
 
 # 6.8: QRhiWidget (6.7) + LTS. ShaderTools provides qt6_add_shaders (qsb);
 # GuiPrivate provides the semi-public RHI headers (rhi/qrhi.h).
 find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets Concurrent ShaderTools GuiPrivate)
+
+# On Windows (vcpkg) the Qt DLLs are deployed next to the binary by vcpkg's
+# applocal step, but the platform plugins are not, so Qt aborts at startup with
+# "no Qt platform plugin could be initialized". Copy the platform plugins into a
+# platforms/ dir beside each runnable target. Includes offscreen so headless test
+# runs work via QT_QPA_PLATFORM=offscreen.
+function(arraw_deploy_qt_plugins target)
+    if(NOT WIN32)
+        return()
+    endif()
+    foreach(plugin Qt6::QWindowsIntegrationPlugin Qt6::QOffscreenIntegrationPlugin)
+        if(TARGET ${plugin})
+            add_custom_command(TARGET ${target} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E make_directory
+                    "$<TARGET_FILE_DIR:${target}>/platforms"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "$<TARGET_FILE:${plugin}>"
+                    "$<TARGET_FILE_DIR:${target}>/platforms/"
+                VERBATIM)
+        endif()
+    endforeach()
+endfunction()
 
 # libraw: try pkg-config first (IMPORTED_TARGET wires up lib dirs automatically),
 # fall back to manual find_library when pkg-config is unavailable.
@@ -19,11 +53,19 @@ if(PkgConfig_FOUND)
     pkg_check_modules(LIBRAW IMPORTED_TARGET libraw)
 endif()
 if(NOT TARGET PkgConfig::LIBRAW)
-    find_library(LIBRAW_LIB NAMES raw raw_r REQUIRED)
+    # On vcpkg the debug import library is named differently (rawd) and points at
+    # rawd.dll in debug/bin. Pick per-config so debug builds deploy the right DLL.
+    find_library(LIBRAW_LIB_RELEASE NAMES raw raw_r REQUIRED)
+    find_library(LIBRAW_LIB_DEBUG NAMES rawd raw_rd)
     find_path(LIBRAW_INCLUDE_DIR libraw/libraw.h REQUIRED)
     add_library(PkgConfig::LIBRAW INTERFACE IMPORTED)
+    if(LIBRAW_LIB_DEBUG)
+        set(LIBRAW_LINK "$<IF:$<CONFIG:Debug>,${LIBRAW_LIB_DEBUG},${LIBRAW_LIB_RELEASE}>")
+    else()
+        set(LIBRAW_LINK "${LIBRAW_LIB_RELEASE}")
+    endif()
     set_target_properties(PkgConfig::LIBRAW PROPERTIES
-        INTERFACE_LINK_LIBRARIES "${LIBRAW_LIB}"
+        INTERFACE_LINK_LIBRARIES "${LIBRAW_LINK}"
         INTERFACE_INCLUDE_DIRECTORIES "${LIBRAW_INCLUDE_DIR}"
     )
 endif()
@@ -51,6 +93,7 @@ set(CORE_SOURCES
     src/AdjustmentPanel.cpp
     src/LocalAdjustmentPanel.cpp
     src/AdjustmentSpinBox.cpp
+    src/CollapsiblePane.cpp
     src/ToneCurveWidget.cpp
     src/ExifPanel.cpp
     src/ImageMetadata.cpp
@@ -71,6 +114,7 @@ set(CORE_SOURCES
 )
 
 add_library(arraw_core STATIC ${CORE_SOURCES})
+arraw_enable_warnings(arraw_core)
 
 target_include_directories(arraw_core PUBLIC src)
 
@@ -94,8 +138,14 @@ qt6_add_shaders(arraw_core "arraw_shaders"
     FILES shaders/image.vert shaders/image.frag
 )
 
-add_executable(arraw src/main.cpp)
+# resources/icon.qrc bakes the window-icon PNGs (generated from resources/icon.svg
+# by tools/render_icons.py — see ADR 0013) in via AUTORCC.
+add_executable(arraw src/main.cpp resources/icon.qrc)
+arraw_enable_warnings(arraw)
 
 target_link_libraries(arraw PRIVATE arraw_core)
+arraw_deploy_qt_plugins(arraw)
 
-add_subdirectory(tests)
+if(ARRAW_BUILD_TESTS)
+    add_subdirectory(tests)
+endif()

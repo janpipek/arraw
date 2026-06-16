@@ -1,15 +1,16 @@
 #include "ToneCurveWidget.h"
-#include <QMouseEvent>
-#include <QContextMenuEvent>
-#include <QPainter>
-#include <QPainterPath>
-#include <QAction>
-#include <QMenu>
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <QAction>
+#include <QContextMenuEvent>
+#include <QMenu>
+#include <QMouseEvent>
+#include <QPainter>
+#include <QPainterPath>
 
-ToneCurveWidget::ToneCurveWidget(QWidget* parent) : QWidget(parent) {
+ToneCurveWidget::ToneCurveWidget(QWidget* parent)
+    : QWidget(parent) {
     setMouseTracking(true);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 }
@@ -17,13 +18,13 @@ ToneCurveWidget::ToneCurveWidget(QWidget* parent) : QWidget(parent) {
 // ── Coordinate helpers ────────────────────────────────────────────────────────
 
 QPointF ToneCurveWidget::toWidget(QPointF curve) const {
-    const int pw = width()  - 2 * kPad;
+    const int pw = width() - 2 * kPad;
     const int ph = height() - 2 * kPad;
     return {kPad + curve.x() * pw, kPad + (1.0 - curve.y()) * ph};
 }
 
 QPointF ToneCurveWidget::toCurve(QPointF widget) const {
-    const int pw = width()  - 2 * kPad;
+    const int pw = width() - 2 * kPad;
     const int ph = height() - 2 * kPad;
     return {(widget.x() - kPad) / pw, 1.0 - (widget.y() - kPad) / ph};
 }
@@ -32,7 +33,7 @@ int ToneCurveWidget::hitTest(QPointF pos) const {
     const auto& pts = currentPoints();
     for (int i = 0; i < int(pts.size()); ++i) {
         QPointF d = pos - toWidget(pts[i]);
-        if (d.x()*d.x() + d.y()*d.y() < (kRadius*2) * (kRadius*2))
+        if (d.x() * d.x() + d.y() * d.y() < (kRadius * 2) * (kRadius * 2))
             return i;
     }
     return -1;
@@ -40,10 +41,14 @@ int ToneCurveWidget::hitTest(QPointF pos) const {
 
 std::vector<QPointF>& ToneCurveWidget::pointsFor(Channel ch) {
     switch (ch) {
-    case Channel::Red:   return pointsR;
-    case Channel::Green: return pointsG;
-    case Channel::Blue:  return pointsB;
-    default:             return pointsLuma;
+    case Channel::Red:
+        return pointsR;
+    case Channel::Green:
+        return pointsG;
+    case Channel::Blue:
+        return pointsB;
+    default:
+        return pointsLuma;
     }
 }
 
@@ -59,7 +64,7 @@ const std::array<float, 256>& ToneCurveWidget::lutFor(Channel ch) {
     const int i = int(ch);
     const auto& pts = pointsFor(ch);
     if (pts != lutSource[i]) {
-        lutCache[i]  = computeCurveLUT(pts);
+        lutCache[i] = computeCurveLUT(pts);
         lutSource[i] = pts;
     }
     return lutCache[i];
@@ -67,17 +72,22 @@ const std::array<float, 256>& ToneCurveWidget::lutFor(Channel ch) {
 
 QColor ToneCurveWidget::channelColor(Channel ch) {
     switch (ch) {
-    case Channel::Red:   return {220, 80, 80};
-    case Channel::Green: return {80, 180, 80};
-    case Channel::Blue:  return {80, 130, 220};
-    default:             return Qt::white;
+    case Channel::Red:
+        return {220, 80, 80};
+    case Channel::Green:
+        return {80, 180, 80};
+    case Channel::Blue:
+        return {80, 130, 220};
+    default:
+        return Qt::white;
     }
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
 void ToneCurveWidget::setChannel(Channel ch) {
-    if (currentChannel == ch) return;
+    if (currentChannel == ch)
+        return;
     currentChannel = ch;
     update();
 }
@@ -108,10 +118,10 @@ void ToneCurveWidget::setHistogramSample(const QImage& img) {
             const int g = qGreen(line[x]);
             const int b = qBlue(line[x]);
             const int luma = int(kLumaR * r + kLumaG * g + kLumaB * b + 0.5f);
-            ++counts[int(Channel::Luma)] [luma * kHistBins / 256];
-            ++counts[int(Channel::Red)]  [r    * kHistBins / 256];
-            ++counts[int(Channel::Green)][g    * kHistBins / 256];
-            ++counts[int(Channel::Blue)] [b    * kHistBins / 256];
+            ++counts[int(Channel::Luma)][luma * kHistBins / 256];
+            ++counts[int(Channel::Red)][r * kHistBins / 256];
+            ++counts[int(Channel::Green)][g * kHistBins / 256];
+            ++counts[int(Channel::Blue)][b * kHistBins / 256];
         }
     }
 
@@ -144,8 +154,8 @@ void ToneCurveWidget::drawHistogram(QPainter& p, const QRectF& area) const {
     silhouette.lineTo(area.bottomRight());
     silhouette.closeSubpath();
 
-    QColor fill = currentChannel == Channel::Luma
-        ? QColor(130, 130, 130) : channelColor(currentChannel);
+    QColor fill = currentChannel == Channel::Luma ? QColor(130, 130, 130)
+                                                  : channelColor(currentChannel);
     fill.setAlpha(60);
     p.fillPath(silhouette, fill);
 }
@@ -155,8 +165,10 @@ void ToneCurveWidget::drawCurve(QPainter& p, Channel ch, const QPen& pen) {
     QPainterPath path;
     for (int i = 0; i < 256; ++i) {
         const QPointF wp = toWidget({i / 255.0, double(lut[i])});
-        if (i == 0) path.moveTo(wp);
-        else        path.lineTo(wp);
+        if (i == 0)
+            path.moveTo(wp);
+        else
+            path.lineTo(wp);
     }
     p.setPen(pen);
     p.drawPath(path);
@@ -166,7 +178,7 @@ void ToneCurveWidget::paintEvent(QPaintEvent*) {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
 
-    const QRectF area(kPad, kPad, width() - 2*kPad, height() - 2*kPad);
+    const QRectF area(kPad, kPad, width() - 2 * kPad, height() - 2 * kPad);
 
     // Background
     p.fillRect(rect(), QColor(28, 28, 28));
@@ -178,8 +190,8 @@ void ToneCurveWidget::paintEvent(QPaintEvent*) {
     // Grid (4×4)
     p.setPen(QPen(QColor(50, 50, 50), 0.5));
     for (int i = 1; i < 4; ++i) {
-        const qreal x = area.left() + area.width()  * i / 4.0;
-        const qreal y = area.top()  + area.height() * i / 4.0;
+        const qreal x = area.left() + area.width() * i / 4.0;
+        const qreal y = area.top() + area.height() * i / 4.0;
         p.drawLine(QPointF(x, area.top()), QPointF(x, area.bottom()));
         p.drawLine(QPointF(area.left(), y), QPointF(area.right(), y));
     }
@@ -219,9 +231,9 @@ int ToneCurveWidget::insertPointOnCurve(QPointF pos) {
     float best = std::numeric_limits<float>::max();
     for (int i = 0; i < 256; ++i) {
         const QPointF d = pos - toWidget({i / 255.0, double(lut[i])});
-        best = std::min(best, float(d.x()*d.x() + d.y()*d.y()));
+        best = std::min(best, float(d.x() * d.x() + d.y() * d.y()));
     }
-    if (best > (kRadius*2) * (kRadius*2))
+    if (best > (kRadius * 2) * (kRadius * 2))
         return -1;
 
     QPointF cp = toCurve(pos);
@@ -229,13 +241,15 @@ int ToneCurveWidget::insertPointOnCurve(QPointF pos) {
     cp = {x, double(lut[int(x * 255.0 + 0.5)])};
 
     auto& pts = currentPoints();
-    auto  it  = std::lower_bound(pts.begin(), pts.end(), cp,
-                    [](const QPointF& a, const QPointF& b) { return a.x() < b.x(); });
+    auto it = std::lower_bound(pts.begin(), pts.end(), cp, [](const QPointF& a, const QPointF& b) {
+        return a.x() < b.x();
+    });
     return int(pts.insert(it, cp) - pts.begin());
 }
 
 void ToneCurveWidget::mousePressEvent(QMouseEvent* e) {
-    if (e->button() != Qt::LeftButton) return;
+    if (e->button() != Qt::LeftButton)
+        return;
     int hit = hitTest(e->position());
     bool inserted = false;
     if (hit < 0) {
@@ -244,7 +258,7 @@ void ToneCurveWidget::mousePressEvent(QMouseEvent* e) {
     }
     if (hit >= 0) {
         dragIndex = hit;
-        dragging  = true;
+        dragging = true;
         emit editingStarted();
         if (inserted)
             emit curveChanged(currentChannel, currentPoints());
@@ -253,15 +267,17 @@ void ToneCurveWidget::mousePressEvent(QMouseEvent* e) {
 }
 
 void ToneCurveWidget::mouseMoveEvent(QMouseEvent* e) {
-    if (!dragging || dragIndex < 0) return;
+    if (!dragging || dragIndex < 0)
+        return;
 
     auto& pts = currentPoints();
 
     // Dragging an interior point well outside the widget deletes it.
     const bool interior = dragIndex > 0 && dragIndex < int(pts.size()) - 1;
-    if (interior && !rect().adjusted(-kRemoveMargin, -kRemoveMargin,
-                                     kRemoveMargin, kRemoveMargin)
-                         .contains(e->position().toPoint())) {
+    if (interior
+        && !rect()
+                .adjusted(-kRemoveMargin, -kRemoveMargin, kRemoveMargin, kRemoveMargin)
+                .contains(e->position().toPoint())) {
         pts.erase(pts.begin() + dragIndex);
         dragIndex = -1;
         update();
@@ -274,14 +290,16 @@ void ToneCurveWidget::mouseMoveEvent(QMouseEvent* e) {
     cp.setY(std::clamp(cp.y(), 0.0, 1.0));
 
     // Endpoints stay pinned on x=0 and x=1 (first and last point only)
-    if (dragIndex == 0)                   cp.setX(0.0);
-    if (dragIndex == int(pts.size()) - 1) cp.setX(1.0);
+    if (dragIndex == 0)
+        cp.setX(0.0);
+    if (dragIndex == int(pts.size()) - 1)
+        cp.setX(1.0);
 
     // Keep x between neighbours
     if (dragIndex > 0)
-        cp.setX(std::max(cp.x(), pts[dragIndex-1].x() + 0.01));
+        cp.setX(std::max(cp.x(), pts[dragIndex - 1].x() + 0.01));
     if (dragIndex < int(pts.size()) - 1)
-        cp.setX(std::min(cp.x(), pts[dragIndex+1].x() - 0.01));
+        cp.setX(std::min(cp.x(), pts[dragIndex + 1].x() - 0.01));
 
     pts[dragIndex] = cp;
     update();
@@ -289,25 +307,29 @@ void ToneCurveWidget::mouseMoveEvent(QMouseEvent* e) {
 }
 
 void ToneCurveWidget::mouseReleaseEvent(QMouseEvent* e) {
-    if (e->button() != Qt::LeftButton) return;
+    if (e->button() != Qt::LeftButton)
+        return;
     if (dragging) {
-        dragging  = false;
+        dragging = false;
         dragIndex = -1;
         emit editingFinished();
     }
 }
 
 void ToneCurveWidget::mouseDoubleClickEvent(QMouseEvent* e) {
-    if (e->button() != Qt::LeftButton) return;
-    if (hitTest(e->position()) >= 0) return; // don't add on existing handle
+    if (e->button() != Qt::LeftButton)
+        return;
+    if (hitTest(e->position()) >= 0)
+        return; // don't add on existing handle
 
     QPointF cp = toCurve(e->position());
     cp.setX(std::clamp(cp.x(), 0.01, 0.99));
-    cp.setY(std::clamp(cp.y(), 0.0,  1.0));
+    cp.setY(std::clamp(cp.y(), 0.0, 1.0));
 
     auto& pts = currentPoints();
-    auto  it  = std::lower_bound(pts.begin(), pts.end(), cp,
-                    [](const QPointF& a, const QPointF& b) { return a.x() < b.x(); });
+    auto it = std::lower_bound(pts.begin(), pts.end(), cp, [](const QPointF& a, const QPointF& b) {
+        return a.x() < b.x();
+    });
     pts.insert(it, cp);
     update();
     emit editingStarted();
@@ -317,11 +339,13 @@ void ToneCurveWidget::mouseDoubleClickEvent(QMouseEvent* e) {
 
 void ToneCurveWidget::contextMenuEvent(QContextMenuEvent* e) {
     int hit = hitTest(e->pos());
-    if (hit < 0) return;
+    if (hit < 0)
+        return;
 
     auto& pts = currentPoints();
     // Don't allow removing the two boundary endpoints
-    if (hit == 0 || hit == int(pts.size()) - 1) return;
+    if (hit == 0 || hit == int(pts.size()) - 1)
+        return;
 
     QMenu menu(this);
     QAction* removeAct = menu.addAction("Remove point");

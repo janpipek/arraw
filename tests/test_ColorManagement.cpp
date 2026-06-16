@@ -24,7 +24,7 @@ QImage toLinearImage(const ImageBuffer& buf) {
     return img;
 }
 
-}  // namespace
+} // namespace
 
 TEST_CASE("sRGB white and black map to working-space 1 and 0", "[color]") {
     QImage img(2, 1, QImage::Format_RGB888);
@@ -34,8 +34,8 @@ TEST_CASE("sRGB white and black map to working-space 1 and 0", "[color]") {
     const auto buf = toWorkingSpaceBuffer(img);
     REQUIRE(buf.valid());
     for (int c = 0; c < 3; ++c) {
-        CHECK_THAT(buf.data[c],     WithinAbs(1.0, 2e-3));  // white
-        CHECK_THAT(buf.data[3 + c], WithinAbs(0.0, 2e-3));  // black
+        CHECK_THAT(buf.data[c], WithinAbs(1.0, 2e-3));     // white
+        CHECK_THAT(buf.data[3 + c], WithinAbs(0.0, 2e-3)); // black
     }
 }
 
@@ -63,9 +63,9 @@ TEST_CASE("linear mid-grey encodes to sRGB 188", "[color]") {
     REQUIRE_FALSE(out.isNull());
     REQUIRE(out.format() == QImage::Format_RGB888);
     const QColor px = out.pixelColor(0, 0);
-    CHECK(std::abs(px.red()   - 188) <= 1);
+    CHECK(std::abs(px.red() - 188) <= 1);
     CHECK(std::abs(px.green() - 188) <= 1);
-    CHECK(std::abs(px.blue()  - 188) <= 1);
+    CHECK(std::abs(px.blue() - 188) <= 1);
 }
 
 TEST_CASE("16-bit export keeps white at full scale", "[color]") {
@@ -77,9 +77,9 @@ TEST_CASE("16-bit export keeps white at full scale", "[color]") {
     const QImage out = toOutputImage(toLinearImage(white), OutputProfile::SRgb, true);
     REQUIRE(out.format() == QImage::Format_RGBA64);
     const QRgba64 px = out.pixelColor(0, 0).rgba64();
-    CHECK(px.red()   >= 65500);
+    CHECK(px.red() >= 65500);
     CHECK(px.green() >= 65500);
-    CHECK(px.blue()  >= 65500);
+    CHECK(px.blue() >= 65500);
 }
 
 TEST_CASE("sRGB through working space and back is identity within 8 bits", "[color]") {
@@ -99,9 +99,9 @@ TEST_CASE("sRGB through working space and back is identity within 8 bits", "[col
     for (int x = 0; x < img.width(); ++x) {
         const QColor a = img.pixelColor(x, 0);
         const QColor b = out.pixelColor(x, 0);
-        CHECK(std::abs(a.red()   - b.red())   <= 1);
+        CHECK(std::abs(a.red() - b.red()) <= 1);
         CHECK(std::abs(a.green() - b.green()) <= 1);
-        CHECK(std::abs(a.blue()  - b.blue())  <= 1);
+        CHECK(std::abs(a.blue() - b.blue()) <= 1);
     }
 }
 

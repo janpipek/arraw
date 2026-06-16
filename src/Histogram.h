@@ -1,7 +1,7 @@
 #pragma once
-#include <QWidget>
-#include <QImage>
 #include <array>
+#include <QImage>
+#include <QWidget>
 
 class Histogram : public QWidget {
     Q_OBJECT

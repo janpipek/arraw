@@ -15,7 +15,7 @@ public:
     void clear();
 
 private:
-    QFormLayout*  form;
-    QScrollArea*  scroll;
-    QLabel*       placeholder;
+    QFormLayout* form;
+    QScrollArea* scroll;
+    QLabel* placeholder;
 };

@@ -12,7 +12,7 @@
 // Whole-file in-memory view of one sidecar.
 struct SidecarData {
     GlobalAdjustment adjustments;
-    UserMetadata     metadata;
+    UserMetadata metadata;
 };
 
 class XmpSidecar {
@@ -25,9 +25,8 @@ public:
     static GlobalAdjustment loadAdjustments(const QString& rawPath) {
         return load(rawPath).adjustments;
     }
-    static UserMetadata loadMetadata(const QString& rawPath) {
-        return load(rawPath).metadata;
-    }
+
+    static UserMetadata loadMetadata(const QString& rawPath) { return load(rawPath).metadata; }
 
     // Namespace-scoped, read-first saves: each replaces only its own half of the
     // sidecar and preserves the other half already on disk (docs/adr/0007).

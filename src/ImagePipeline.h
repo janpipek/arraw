@@ -7,8 +7,8 @@
 #include <vector>
 #include <QImage>
 #include <QPointF>
-#include <QString>
 #include <QRectF>
+#include <QString>
 
 // Slider ±100 → shader uniform ±0.2 (gentler than dividing by 100 alone).
 inline constexpr float kToneSliderToUniform = 500.0f;
@@ -21,14 +21,15 @@ inline constexpr float kLumaB = 0.0593f;
 
 // Tone curve control points in [0,1]×[0,1] space.
 inline bool isIdentityCurve(const std::vector<QPointF>& pts) {
-    return pts.size() == 2
-        && std::abs(pts[0].x()) < 1e-4 && std::abs(pts[0].y()) < 1e-4
-        && std::abs(pts[1].x() - 1.0) < 1e-4 && std::abs(pts[1].y() - 1.0) < 1e-4;
+    return pts.size() == 2 && std::abs(pts[0].x()) < 1e-4 && std::abs(pts[0].y()) < 1e-4
+           && std::abs(pts[1].x() - 1.0) < 1e-4 && std::abs(pts[1].y() - 1.0) < 1e-4;
 }
 
 struct CurvePoints {
     std::vector<QPointF> points = {{0.0, 0.0}, {1.0, 1.0}};
+
     bool isIdentity() const { return isIdentityCurve(points); }
+
     bool operator==(const CurvePoints&) const = default;
 };
 
@@ -45,7 +46,7 @@ struct GlobalAdjustment : SharedAdjustment {
 
     // Color — temperature is global-only, in absolute Kelvin (a local adjustment's
     // temperature is a relative -100..100 shift instead; see LocalAdjustment).
-    float temperature = 5500.0f;  // Kelvin, 2000 .. 12000
+    float temperature = 5500.0f; // Kelvin, 2000 .. 12000
 
     // HSL: 8 ranges [Red, Orange, Yellow, Green, Aqua, Blue, Purple, Magenta], -100..+100
     std::array<float, 8> hslHue = {};
@@ -53,11 +54,11 @@ struct GlobalAdjustment : SharedAdjustment {
     std::array<float, 8> hslLum = {};
 
     // Detail
-    float sharpening  = 0.0f;     // 0 .. 100
+    float sharpening = 0.0f; // 0 .. 100
 
     // Geometry
-    float  rotation = 0.0f;                    // degrees, -45 .. +45
-    QRectF cropRect = {0.0, 0.0, 1.0, 1.0};   // normalised UV, full image by default
+    float rotation = 0.0f;                  // degrees, -45 .. +45
+    QRectF cropRect = {0.0, 0.0, 1.0, 1.0}; // normalised UV, full image by default
 
     // Local adjustments — arraw-native, capped at 16 (docs/adr/0010).
     std::vector<LocalAdjustment> localAdjustments;
@@ -68,7 +69,7 @@ struct GlobalAdjustment : SharedAdjustment {
 // Linear float32 RGB image buffer, interleaved, [0..1] nominal.
 struct ImageBuffer {
     std::vector<float> data;
-    int width  = 0;
+    int width = 0;
     int height = 0;
 
     bool valid() const { return !data.empty() && width > 0 && height > 0; }
@@ -76,11 +77,11 @@ struct ImageBuffer {
 
 // Returned by the background load task.
 struct LoadResult {
-    ImageBuffer    fullRes;   // stored for export only
-    ImageBuffer    preview;   // 1/4-res (half W, half H) — used for viewport + histogram
-    ImageMetadata  metadata;
-    QString        error;     // non-empty on failure
-    QRectF         defaultCrop = {0.0, 0.0, 1.0, 1.0};
+    ImageBuffer fullRes; // stored for export only
+    ImageBuffer preview; // 1/4-res (half W, half H) — used for viewport + histogram
+    ImageMetadata metadata;
+    QString error; // non-empty on failure
+    QRectF defaultCrop = {0.0, 0.0, 1.0, 1.0};
 };
 
 // Box-filter 2× downsample (half W, half H). Safe to call off the main thread.

@@ -2,10 +2,10 @@
 #include "ColorManagement.h"
 #include "ImagePipeline.h"
 #include "RendererCore.h"
-#include <QRhiWidget>
 #include <QImage>
 #include <QPointF>
 #include <QRectF>
+#include <QRhiWidget>
 #include <QTimer>
 
 class ViewportOverlay;
@@ -31,8 +31,11 @@ public:
     // pending edit of the tool being left (commit-on-leave); commitActiveTool
     // is setActiveTool(None); cancelActiveTool discards the pending edit (Esc).
     ActiveTool activeTool() const { return tool; }
+
     void setActiveTool(ActiveTool t);
+
     void commitActiveTool() { setActiveTool(ActiveTool::None); }
+
     void cancelActiveTool();
     void setOriginalImageSize(int width, int height);
 
@@ -66,21 +69,23 @@ public:
     // Returns a *linear working-space* float QImage (Format_RGBX32FPx4),
     // cropped to params.cropRect and scaled to outW×outH; the caller applies
     // the output transform (toOutputImage) before saving.
-    QImage renderToImage(const ImageBuffer& buf, const GlobalAdjustment& params,
-                         int outW, int outH);
+    QImage renderToImage(const ImageBuffer& buf, const GlobalAdjustment& params, int outW, int outH);
 
     // Render buf through the on-screen display path (sRGB encode, LUT off) with
     // the clipping overlay forced on — the export path forces it off, so this is
     // the testable entry for the overlay (docs/adr/0009). Returns a display-
     // encoded float QImage (Format_RGBX32FPx4) at the cropped pixel size.
-    QImage renderClipSample(const ImageBuffer& buf, const GlobalAdjustment& params,
-                            bool clipHighlights, bool clipShadows);
+    QImage renderClipSample(
+        const ImageBuffer& buf,
+        const GlobalAdjustment& params,
+        bool clipHighlights,
+        bool clipShadows);
 
 signals:
     void fullResNeeded();
     void cropCommitted(const QRectF& cropRect);
-    void rotationCommitted(float degrees);          // Straighten tool result
-    void whiteBalanceCommitted(float kelvin, float tint);   // WB picker result
+    void rotationCommitted(float degrees);                // Straighten tool result
+    void whiteBalanceCommitted(float kelvin, float tint); // WB picker result
     void activeToolChanged(ImageViewport::ActiveTool tool);
     // Live geometry of the active mask (either type) while its handles are dragged.
     void localMaskChanged(int index, const Mask& mask);
@@ -146,18 +151,20 @@ private:
 
     // Local-mask tool: edit the active Linear mask's handles on the image.
     bool localMaskMode() const { return tool == ActiveTool::LocalMask; }
+
     const LinearMask* activeLinearMask() const;
     const RadialMask* activeRadialMask() const;
-    QPointF localHandleViewport(LinearHandle h) const;   // p0/p1/center → screen
+    QPointF localHandleViewport(LinearHandle h) const; // p0/p1/center → screen
     LinearHandle hitTestLocalMask(QPointF viewportPos) const;
     RadialHandle hitTestRadialMask(QPointF viewportPos) const;
-    void drawLocalMaskOverlay(QPainter& p) const;        // Linear
+    void drawLocalMaskOverlay(QPainter& p) const; // Linear
     void drawRadialMaskOverlay(QPainter& p) const;
 
     // Crop is just one of the active tools; this keeps the crop code readable.
     bool cropMode() const { return tool == ActiveTool::Crop; }
-    void enterCrop();      // snapshot + seed the editable crop rect
-    void commitCrop();     // write activeCrop into params and emit cropCommitted
+
+    void enterCrop();  // snapshot + seed the editable crop rect
+    void commitCrop(); // write activeCrop into params and emit cropCommitted
 
     // Straighten: turn the drawn line into a rotation (auto horizontal/vertical).
     void applyStraightenLine();
@@ -176,54 +183,54 @@ private:
     RendererCore core;
     bool curveLutDirty = true;
     bool useDisplayLut = false;
-    bool gamutWarn     = false;
+    bool gamutWarn = false;
     bool clipHighlights = false;
-    bool clipShadows    = false;
+    bool clipShadows = false;
     ViewportOverlay* overlay = nullptr;
 
     // ── Image state ───────────────────────────────────────────────────────
     GlobalAdjustment params;
-    float imageAspect = 1.0f;   // width/height of the full uncropped image
-    int   originalWidth = 0;
-    int   originalHeight = 0;
-    bool  hasImage    = false;
-    bool  hasFullRes  = false;
-    bool  useBaseLook = false;
+    float imageAspect = 1.0f; // width/height of the full uncropped image
+    int originalWidth = 0;
+    int originalHeight = 0;
+    bool hasImage = false;
+    bool hasFullRes = false;
+    bool useBaseLook = false;
 
     // The preview is half-res, so its texels start to magnify around zoom 2×.
     // Request the full-res texture a bit earlier so it is ready in time.
     static constexpr float kFullResZoomThreshold = 1.5f;
 
-    QTimer histoTimer;   // debounces histogram readbacks during slider drags
+    QTimer histoTimer; // debounces histogram readbacks during slider drags
 
     // ── View state ────────────────────────────────────────────────────────
-    float    zoom      = 1.0f;
-    QPointF  pan       = {0, 0};
-    QPointF  dragStart;
-    bool     dragging     = false;
-    bool     showOriginal = false;
-    bool     straightenActive = false;
+    float zoom = 1.0f;
+    QPointF pan = {0, 0};
+    QPointF dragStart;
+    bool dragging = false;
+    bool showOriginal = false;
+    bool straightenActive = false;
 
     // ── Tool state ────────────────────────────────────────────────────────
     ActiveTool tool = ActiveTool::None;
 
     // Local-mask editing: which mask is active, and the handle being dragged.
     static constexpr float kMaskHandleRadius = 8.0f;
-    int          activeLocalAdj = -1;
+    int activeLocalAdj = -1;
     LinearHandle localDragHandle = LinearHandle::None;
     RadialHandle radialDragHandle = RadialHandle::None;
 
     // Straighten: endpoints of the level line being dragged (viewport pixels).
-    bool     straightenDragging = false;
-    QPointF  straightenStart;
-    QPointF  straightenEnd;
+    bool straightenDragging = false;
+    QPointF straightenStart;
+    QPointF straightenEnd;
 
     // ── Crop state ────────────────────────────────────────────────────────
     // The crop being edited is axis-aligned in the display frame (see
     // cropUVToViewport). cancelCrop is the snapshot restored on Escape.
-    QRectF  activeCrop     = {0, 0, 1, 1};   // display-frame UV rect being edited
-    QRectF  cancelCrop     = {0, 0, 1, 1};
-    int     cropDragHandle = -2;             // which handle is dragged
+    QRectF activeCrop = {0, 0, 1, 1}; // display-frame UV rect being edited
+    QRectF cancelCrop = {0, 0, 1, 1};
+    int cropDragHandle = -2; // which handle is dragged
     QPointF cropDragStart;
-    QRectF  cropDragStartRect;
+    QRectF cropDragStartRect;
 };

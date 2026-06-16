@@ -2,8 +2,8 @@
 #include "ImagePipeline.h"
 #include <atomic>
 #include <memory>
-#include <QMainWindow>
 #include <QFutureWatcher>
+#include <QMainWindow>
 
 class ImageViewport;
 class AdjustmentPanel;
@@ -11,6 +11,7 @@ class LocalAdjustmentPanel;
 class ProofingPanel;
 class ExifPanel;
 class FilmStrip;
+class CollapsiblePane;
 class QDockWidget;
 class QUndoStack;
 class QLabel;
@@ -24,6 +25,7 @@ class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
     explicit MainWindow(QWidget* parent = nullptr);
+    ~MainWindow() override; // out-of-line for unique_ptr<CollapsiblePane>
 
     // Called after show() with the command-line argument, if any.
     // Accepts a RAW file path or a directory.
@@ -46,8 +48,8 @@ private:
     void setupDocks();
     void setupStatusBar();
     void setupToolbar();
-    void syncToolActions();            // reflect viewport->activeTool() in the buttons
-    void setToolsEnabled(bool on);     // image-dependent toolbar items
+    void syncToolActions();        // reflect viewport->activeTool() in the buttons
+    void setToolsEnabled(bool on); // image-dependent toolbar items
     void loadImage(const QString& path);
     void setLoadingState(bool loading);
     void updateZoomStatus(float zoom);
@@ -67,37 +69,39 @@ private:
     void applyClipping();
     void toggleClipping();
 
-    ImageViewport*        viewport;
-    AdjustmentPanel*      adjPanel;
+    ImageViewport* viewport;
+    AdjustmentPanel* adjPanel;
     LocalAdjustmentPanel* localPanel;
-    ProofingPanel*        proofPanel;
-    ExifPanel*       exifPanel;
-    FilmStrip*       filmStrip;
-    QDockWidget*     filmStripDock;
-    QUndoStack*      undoStack;
-    QLabel*          statusLabel;
-    QLabel*          proofLabel;
-    QToolButton*     zoomButton;
+    ProofingPanel* proofPanel;
+    ExifPanel* exifPanel;
+    FilmStrip* filmStrip;
+    QDockWidget* filmStripDock;
+    QDockWidget* adjustmentsDock;                     // right; collapses to a strip
+    std::unique_ptr<CollapsiblePane> adjustmentsPane; // adjustmentsDock ↔ edge strip
+    QUndoStack* undoStack;
+    QLabel* statusLabel;
+    QLabel* proofLabel;
+    QToolButton* zoomButton;
 
     // Toolbar: modal tools (left) + immediate actions (right).
-    QActionGroup*    toolGroup;
-    QAction*         cropAction;
-    QAction*         straightenAction;
-    QAction*         wbAction;
-    QAction*         maskAction;             // LocalMask tool toggle
-    QTabWidget*      rightTabs = nullptr;    // Adjustments / Masks / EXIF
-    int              masksTabIndex = -1;
-    QAction*         saveAction;
-    QAction*         exportAction;
-    QAction*         clipHighlightsAction;   // View → Show Highlight Clipping
-    QAction*         clipShadowsAction;      // View → Show Shadow Clipping
+    QActionGroup* toolGroup;
+    QAction* cropAction;
+    QAction* straightenAction;
+    QAction* wbAction;
+    QAction* maskAction;             // LocalMask tool toggle
+    QTabWidget* rightTabs = nullptr; // Adjustments / Masks / EXIF
+    int masksTabIndex = -1;
+    QAction* saveAction;
+    QAction* exportAction;
+    QAction* clipHighlightsAction; // View → Show Highlight Clipping
+    QAction* clipShadowsAction;    // View → Show Shadow Clipping
 
-    QString monitorProfilePath;   // empty = assume sRGB
+    QString monitorProfilePath; // empty = assume sRGB
 
     ImageBuffer fullRes;
     ImageBuffer preview;
-    QString     currentPath;
+    QString currentPath;
 
     std::shared_ptr<std::atomic<bool>> loadCancel;
-    QFutureWatcher<LoadResult>         loadWatcher;
+    QFutureWatcher<LoadResult> loadWatcher;
 };

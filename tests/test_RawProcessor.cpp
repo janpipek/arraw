@@ -45,7 +45,7 @@ TEST_CASE("decoded gradient keeps left-to-right ordering", "[raw][fixtures]") {
         return sum / n;
     };
 
-    const double left  = meanLuma(0, b.width / 4);
+    const double left = meanLuma(0, b.width / 4);
     const double right = meanLuma(b.width * 3 / 4, b.width);
     CHECK(right > left * 2.0);
 }

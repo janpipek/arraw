@@ -10,7 +10,8 @@
 #include <QSettings>
 #include <QVBoxLayout>
 
-ProofingPanel::ProofingPanel(QWidget* parent) : QWidget(parent) {
+ProofingPanel::ProofingPanel(QWidget* parent)
+    : QWidget(parent) {
     QSettings settings;
 
     auto* root = new QVBoxLayout(this);
@@ -57,11 +58,17 @@ ProofingPanel::ProofingPanel(QWidget* parent) : QWidget(parent) {
     selectProfile(settings.value("proof/profile").toString());
 
     connect(group, &QGroupBox::toggled, this, &ProofingPanel::persistAndNotify);
-    connect(profileBox, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &ProofingPanel::persistAndNotify);
-    connect(intentBox, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &ProofingPanel::persistAndNotify);
-    connect(bpcCheck,  &QCheckBox::toggled, this, &ProofingPanel::persistAndNotify);
+    connect(
+        profileBox,
+        QOverload<int>::of(&QComboBox::currentIndexChanged),
+        this,
+        &ProofingPanel::persistAndNotify);
+    connect(
+        intentBox,
+        QOverload<int>::of(&QComboBox::currentIndexChanged),
+        this,
+        &ProofingPanel::persistAndNotify);
+    connect(bpcCheck, &QCheckBox::toggled, this, &ProofingPanel::persistAndNotify);
     connect(warnCheck, &QCheckBox::toggled, this, &ProofingPanel::persistAndNotify);
     connect(browseBtn, &QPushButton::clicked, this, &ProofingPanel::browseForProfile);
 }
@@ -71,7 +78,7 @@ bool ProofingPanel::proofingEnabled() const {
 }
 
 void ProofingPanel::setProofingEnabled(bool on) {
-    group->setChecked(on);   // toggled() fires persistAndNotify
+    group->setChecked(on); // toggled() fires persistAndNotify
 }
 
 QString ProofingPanel::profilePath() const {
@@ -117,10 +124,10 @@ void ProofingPanel::selectProfile(const QString& path) {
 
 void ProofingPanel::persistAndNotify() {
     QSettings s;
-    s.setValue("proof/enabled",      group->isChecked());
-    s.setValue("proof/profile",      profilePath());
-    s.setValue("proof/intent",       intentBox->currentIndex());
-    s.setValue("proof/bpc",          bpcCheck->isChecked());
+    s.setValue("proof/enabled", group->isChecked());
+    s.setValue("proof/profile", profilePath());
+    s.setValue("proof/intent", intentBox->currentIndex());
+    s.setValue("proof/bpc", bpcCheck->isChecked());
     s.setValue("proof/gamutWarning", warnCheck->isChecked());
     emit proofingChanged();
 }

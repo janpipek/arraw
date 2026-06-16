@@ -54,21 +54,20 @@ TEST_CASE("panel adds and edits a Radial mask via its fields", "[localadj][panel
 
     const auto& m = std::get<RadialMask>(panel.localAdjustments()[0].mask);
     CHECK_THAT(m.center.x(), WithinAbs(0.4, 1e-6));
-    CHECK_THAT(m.radiusX,    WithinAbs(0.35, 1e-6));
-    CHECK_THAT(m.angle,      WithinAbs(45.0, 1e-6));
-    CHECK_THAT(m.feather,    WithinAbs(0.2, 1e-6));
+    CHECK_THAT(m.radiusX, WithinAbs(0.35, 1e-6));
+    CHECK_THAT(m.angle, WithinAbs(45.0, 1e-6));
+    CHECK_THAT(m.feather, WithinAbs(0.2, 1e-6));
     CHECK(m.invert);
 }
 
-TEST_CASE("panel round-trips a set list, selects first, and deletes",
-          "[localadj][panel]") {
+TEST_CASE("panel round-trips a set list, selects first, and deletes", "[localadj][panel]") {
     testApp();
     LocalAdjustmentPanel panel;
 
     std::vector<LocalAdjustment> in(2);
-    in[0].mask     = LinearMask{{0.0, 0.0}, {1.0, 1.0}};
+    in[0].mask = LinearMask{{0.0, 0.0}, {1.0, 1.0}};
     in[0].exposure = 0.5f;
-    in[1].mask     = LinearMask{{0.2, 0.3}, {0.6, 0.7}};
+    in[1].mask = LinearMask{{0.2, 0.3}, {0.6, 0.7}};
     panel.setLocalAdjustments(in);
 
     REQUIRE(panel.localAdjustments().size() == 2);
@@ -85,27 +84,29 @@ TEST_CASE("panel emits committed for each undoable gesture", "[localadj][panel]"
 
     int commits = 0;
     std::vector<LocalAdjustment> lastBefore, lastAfter;
-    QObject::connect(&panel, &LocalAdjustmentPanel::committed, &panel,
-        [&](const std::vector<LocalAdjustment>& before,
-            const std::vector<LocalAdjustment>& after) {
+    QObject::connect(
+        &panel,
+        &LocalAdjustmentPanel::committed,
+        &panel,
+        [&](const std::vector<LocalAdjustment>& before, const std::vector<LocalAdjustment>& after) {
             ++commits;
             lastBefore = before;
             lastAfter = after;
         });
 
-    panel.addLinearMask();                  // add
+    panel.addLinearMask(); // add
     REQUIRE(commits == 1);
     REQUIRE(lastBefore.empty());
     REQUIRE(lastAfter.size() == 1);
 
     // Simulate an on-image drag: geometry changes (no commit), then release.
     panel.updateMaskGeometry(0, LinearMask{{0.1, 0.1}, {0.4, 0.4}});
-    REQUIRE(commits == 1);                  // drag is live-only until released
-    panel.commitMaskEdit();                 // release folds it into one step
+    REQUIRE(commits == 1);  // drag is live-only until released
+    panel.commitMaskEdit(); // release folds it into one step
     REQUIRE(commits == 2);
     REQUIRE(std::get<LinearMask>(lastAfter[0].mask).p1 == QPointF(0.4, 0.4));
 
-    panel.deleteActive();                   // delete
+    panel.deleteActive(); // delete
     REQUIRE(commits == 3);
     REQUIRE(lastAfter.empty());
 }

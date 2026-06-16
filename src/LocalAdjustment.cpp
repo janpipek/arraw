@@ -13,7 +13,7 @@ double aspectDist2(QPointF a, QPointF b, double aspect) {
     const double dy = a.y() - b.y();
     return dx * dx + dy * dy;
 }
-}  // namespace
+} // namespace
 
 float maskWeight(const LinearMask& m, QPointF uv, float aspect) {
     // Evaluate in aspect-corrected space (x scaled by aspect) so the gradient
@@ -28,12 +28,12 @@ float maskWeight(const LinearMask& m, QPointF uv, float aspect) {
     const double px = (uv.x() - m.p0.x()) * a;
     const double py = uv.y() - m.p0.y();
     const double t = std::clamp((px * dx + py * dy) / len2, 0.0, 1.0);
-    return static_cast<float>(t * t * (3.0 - 2.0 * t));  // smoothstep falloff
+    return static_cast<float>(t * t * (3.0 - 2.0 * t)); // smoothstep falloff
 }
 
-LinearHandle nearestHandle(const LinearMask& m, QPointF cursor, float aspect,
-                           double pickRadius) {
+LinearHandle nearestHandle(const LinearMask& m, QPointF cursor, float aspect, double pickRadius) {
     const QPointF center = (m.p0 + m.p1) / 2.0;
+
     const struct {
         LinearHandle handle;
         double dist2;
@@ -46,7 +46,7 @@ LinearHandle nearestHandle(const LinearMask& m, QPointF cursor, float aspect,
     LinearHandle best = LinearHandle::None;
     double bestDist2 = std::numeric_limits<double>::infinity();
     for (const auto& c : candidates) {
-        if (c.dist2 < bestDist2) {  // strict: endpoints win ties over center
+        if (c.dist2 < bestDist2) { // strict: endpoints win ties over center
             best = c.handle;
             bestDist2 = c.dist2;
         }
@@ -64,7 +64,7 @@ float radialMaskWeight(const RadialMask& m, QPointF uv, float aspect) {
         const double rad = m.angle * kPi / 180.0;
         const double c = std::cos(rad);
         const double s = std::sin(rad);
-        const double rotX = dx * c + dy * s;   // rotate by -angle
+        const double rotX = dx * c + dy * s; // rotate by -angle
         const double rotY = -dx * s + dy * c;
         dx = rotX;
         dy = rotY;
@@ -79,12 +79,12 @@ float radialMaskWeight(const RadialMask& m, QPointF uv, float aspect) {
     const double inner = 1.0 - m.feather;
     double s;
     if (m.feather <= 0.0) {
-        s = d >= 1.0 ? 1.0 : 0.0;   // hard edge
+        s = d >= 1.0 ? 1.0 : 0.0; // hard edge
     } else {
         const double t = std::clamp((d - inner) / m.feather, 0.0, 1.0);
         s = t * t * (3.0 - 2.0 * t);
     }
-    double w = 1.0 - s;             // affect inside
+    double w = 1.0 - s; // affect inside
     if (m.invert)
         w = 1.0 - w;
     return static_cast<float>(w);
@@ -97,12 +97,10 @@ QPointF radialHandlePos(const RadialMask& m, RadialHandle h, float aspect) {
     switch (h) {
     case RadialHandle::RadiusX:
         // +X axis end (angle+0); x divided by aspect to return to UV space.
-        return {m.center.x() + m.radiusX * ca / aspect,
-                m.center.y() + m.radiusX * sa};
+        return {m.center.x() + m.radiusX * ca / aspect, m.center.y() + m.radiusX * sa};
     case RadialHandle::RadiusY:
         // +Y axis end (angle+90): direction (-sin a, cos a).
-        return {m.center.x() - m.radiusY * sa / aspect,
-                m.center.y() + m.radiusY * ca};
+        return {m.center.x() - m.radiusY * sa / aspect, m.center.y() + m.radiusY * ca};
     case RadialHandle::Center:
     default:
         return m.center;
@@ -122,7 +120,7 @@ RadialMask moveRadialHandle(RadialMask m, RadialHandle h, QPointF to, float aspe
         break;
     case RadialHandle::RadiusY: {
         const double a = m.angle * kPi / 180.0;
-        m.radiusY = std::abs(-dx * std::sin(a) + dy * std::cos(a));  // onto +Y axis
+        m.radiusY = std::abs(-dx * std::sin(a) + dy * std::cos(a)); // onto +Y axis
         break;
     }
     case RadialHandle::None:
