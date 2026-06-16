@@ -247,8 +247,13 @@ void LocalAdjustmentPanel::rebuildList() {
     QSignalBlocker block(maskList);
     const int keep = maskList->currentRow();
     maskList->clear();
-    for (int i = 0; i < int(adjustments.size()); ++i)
-        maskList->addItem(QStringLiteral("Linear %1").arg(i + 1));
+    int linearN = 0, radialN = 0;
+    for (const LocalAdjustment& la : adjustments) {
+        const QString label = std::holds_alternative<RadialMask>(la.mask)
+            ? QStringLiteral("Radial %1").arg(++radialN)
+            : QStringLiteral("Linear %1").arg(++linearN);
+        maskList->addItem(label);
+    }
     if (keep >= 0 && keep < int(adjustments.size()))
         maskList->setCurrentRow(keep);
 }
