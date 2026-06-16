@@ -42,3 +42,13 @@ they store only the groups the user picked rather than a whole settings snapshot
   one test surface, per [[spot-for-algorithms]].
 - Presets never carry [[Local Adjustment]]s — masks are pinned to one photo's
   framing and are not a [[Develop Group]] (see Milestone 8).
+- The root carries a `"version": 1` stamp that the writer emits but the loader
+  **does not yet read** (Milestone 8). It is a deliberate placeholder, not a live
+  guard: today the "tolerate unknown keys, missing groups" rule above already
+  handles every *forward-compatible* change (a new optional group is harmless to
+  an older reader), so version checking buys nothing yet. The field is reserved
+  for the first genuinely *breaking* format change — e.g. re-encoding curve
+  points — at which point the loader should reject or migrate files whose
+  `version` exceeds what the running build understands, rather than silently
+  misreading them. Until then it stays write-only by design; do not treat the
+  absence of a version check as an oversight.
