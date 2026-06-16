@@ -48,11 +48,18 @@ Install the ports arraw needs, for the `x64-windows` triplet (this is a long fir
 build — Qt is large):
 
 ```powershell
-C:\dev\vcpkg\vcpkg.exe install qtbase qttools qtshadertools libraw lcms --triplet x64-windows
+C:\dev\vcpkg\vcpkg.exe install qtbase qttools qtshadertools "libraw[openmp]" lcms --triplet x64-windows
 ```
 
 `qtshadertools` is required: it provides `qsb`, which compiles the GLSL shaders in
 `shaders/` at build time. `qttools` provides the rest of the Qt tooling.
+
+`libraw[openmp]` builds libraw with OpenMP so the demosaic (`dcraw_process`) runs
+multithreaded — roughly 3× faster on a multi-core CPU (≈3s → ≈0.9s on the reference
+machine). It adds a dependency on the OpenMP runtime `vcomp140.dll`, which ships with
+the same VC++ redistributable noted in §7. To profile the load yourself, set
+`ARRAW_TIME_LOAD=1` before launching `arraw.exe` for a per-stage `[arraw load]`
+breakdown on stderr.
 
 Verify they landed:
 
