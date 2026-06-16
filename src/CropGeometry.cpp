@@ -100,4 +100,32 @@ double presetRatio(AspectPreset preset, bool landscape, double imageAspect) {
     return landscape ? longShort : 1.0 / longShort;
 }
 
+double cropPixelRatio(const QRectF& cropRect, double imageAspect) {
+    if (cropRect.height() <= 0.0)
+        return 0.0;
+    return cropRect.width() / cropRect.height() * imageAspect;
+}
+
+PresetMatch matchPreset(double pixelRatio, double imageAspect) {
+    if (pixelRatio <= 0.0)
+        return {AspectPreset::Free, true, true};
+    // Named ratios win over Original, which only coincides with one when the
+    // image itself is that shape (then the explicit name is the clearer label).
+    const AspectPreset presets[] = {
+        AspectPreset::Square,
+        AspectPreset::R2x3,
+        AspectPreset::R3x4,
+        AspectPreset::R4x5,
+        AspectPreset::R16x9,
+        AspectPreset::Original,
+    };
+    for (AspectPreset preset : presets) {
+        for (bool landscape : {true, false}) {
+            if (std::abs(presetRatio(preset, landscape, imageAspect) - pixelRatio) < 1e-3)
+                return {preset, landscape, true};
+        }
+    }
+    return {AspectPreset::Free, true, false};
+}
+
 } // namespace crop

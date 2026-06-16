@@ -97,3 +97,32 @@ TEST_CASE("presetRatio derives Original from imageAspect, orientation-normalised
     // Portrait image (2:3, imageAspect 0.6667): landscape still yields the wide form.
     REQUIRE(crop::presetRatio(AspectPreset::Original, true, 2.0 / 3.0) == Approx(1.5));
 }
+
+TEST_CASE("cropPixelRatio is the rect's pixel width:height", "[crop]") {
+    // Full crop on a 3:2 image is 3:2.
+    REQUIRE(crop::cropPixelRatio(QRectF(0, 0, 1, 1), 1.5) == Approx(1.5));
+    // A square UV rect on a 2:1 image is 2:1 in pixels.
+    REQUIRE(crop::cropPixelRatio(QRectF(0.1, 0.1, 0.5, 0.5), 2.0) == Approx(2.0));
+    // A half-wide UV rect on a square image is 0.5 (portrait).
+    REQUIRE(crop::cropPixelRatio(QRectF(0, 0, 0.5, 1.0), 1.0) == Approx(0.5));
+}
+
+TEST_CASE("matchPreset names a ratio, or reports no match", "[crop]") {
+    using crop::AspectPreset;
+    // Zero ratio is Free (a matched, named state).
+    auto free = crop::matchPreset(0.0, 1.5);
+    REQUIRE(free.matched);
+    REQUIRE(free.preset == AspectPreset::Free);
+    // 16:9 landscape on any image matches R16x9 landscape.
+    auto wide = crop::matchPreset(16.0 / 9.0, 1.5);
+    REQUIRE(wide.matched);
+    REQUIRE(wide.preset == AspectPreset::R16x9);
+    REQUIRE(wide.landscape);
+    // 2:3 portrait matches R2x3 portrait.
+    auto tall = crop::matchPreset(2.0 / 3.0, 1.5);
+    REQUIRE(tall.matched);
+    REQUIRE(tall.preset == AspectPreset::R2x3);
+    REQUIRE_FALSE(tall.landscape);
+    // An exotic ratio (7:3) matches nothing.
+    REQUIRE_FALSE(crop::matchPreset(7.0 / 3.0, 1.5).matched);
+}

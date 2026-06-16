@@ -28,11 +28,17 @@ public:
     void setAdjustments(const AdjustmentParams& p);
     void setStraightenActive(bool active);
 
-    // Constrain the crop being edited to a fixed aspect ratio (transient tool
-    // state — forgotten when the crop tool closes). Reshapes the current crop to
-    // the new ratio immediately (shrink-to-fit, centred). No effect unless the
-    // crop tool is active.
+    // Constrain the crop being edited to a fixed aspect ratio. Reshapes the
+    // current crop to the new ratio immediately (shrink-to-fit, centred). No
+    // effect unless the crop tool is active. The constraint persists with the
+    // crop (crs:CropConstrainAspectRatio); re-entering crop on a constrained
+    // image re-locks to the stored rectangle's ratio.
     void setAspectLock(crop::AspectPreset preset, bool landscape);
+
+    // The preset/orientation the active crop's lock corresponds to, for the
+    // aspect menu to reflect a restored lock. Free when unlocked; matched=false
+    // for a custom ratio with no named preset.
+    crop::PresetMatch currentLockMatch() const;
 
     // Active-tool state machine. setActiveTool switches tools, committing any
     // pending edit of the tool being left (commit-on-leave); commitActiveTool
@@ -85,7 +91,7 @@ public:
 
 signals:
     void fullResNeeded();
-    void cropCommitted(const QRectF& cropRect);
+    void cropCommitted(const QRectF& cropRect, bool constrained);
     void rotationCommitted(float degrees);                // Straighten tool result
     void whiteBalanceCommitted(float kelvin, float tint); // WB picker result
     void activeToolChanged(ImageViewport::ActiveTool tool);
@@ -215,8 +221,8 @@ private:
     QPointF cropDragStart;
     QRectF cropDragStartRect;
 
-    // Aspect Ratio Lock — transient, reset to Free on each crop entry. When not
-    // Free, corner drags preserve the ratio and edge handles are inactive.
-    crop::AspectPreset cropAspect = crop::AspectPreset::Free;
-    bool cropLandscape = true;
+    // Aspect Ratio Lock: the pixel width:height the crop is constrained to, or 0
+    // when free. Set from the menu (a preset) or restored from a constrained
+    // crop on entry. When non-zero, corner drags preserve it and edges go inert.
+    double lockedRatio = 0.0;
 };

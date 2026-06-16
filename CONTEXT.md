@@ -144,11 +144,13 @@ from the gesture of dragging its handles.
 _Avoid_: trim, frame, mask ([[Mask]] is the local-adjustment stencil)
 
 **Aspect Ratio Lock**:
-A *transient* crop-tool state that constrains the [[Crop]] rectangle to a fixed
-width:height while dragging — Free (unconstrained), Original (the image's own
-proportions), or a preset (1:1, 2:3, 3:4, 4:5, 16:9), with an orientation toggle
-that swaps width and height. It shapes the rectangle but is **not** persisted:
-closing the crop tool forgets the lock; only the resulting [[Crop]] rectangle is
-saved. The proportions of a committed crop are therefore implicit in the
-rectangle, never stored as a separate "constrain" flag.
+A crop-tool state that constrains the [[Crop]] rectangle to a fixed width:height
+while dragging — Free (unconstrained), Original (the image's own proportions), or
+a preset (1:1, 2:3, 3:4, 4:5, 16:9), with an orientation toggle that swaps width
+and height. *Whether* a crop is locked is persisted, as the Lightroom-compatible
+`crs:CropConstrainAspectRatio` flag; on reload the lock re-engages at the stored
+rectangle's ratio. The exact preset is **not** stored — the ratio lives in the
+rectangle, and the preset name is re-derived on load (a ratio matching no preset,
+e.g. from a foreign editor, round-trips as a nameless "locked" state). Free is the
+absence of the flag.
 _Avoid_: constrain, fix ratio, crop preset

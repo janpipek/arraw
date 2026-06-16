@@ -88,12 +88,15 @@ MainWindow::MainWindow(QWidget* parent)
 
     connect(viewport, &ImageViewport::zoomChanged, this, &MainWindow::updateZoomStatus);
 
-    connect(viewport, &ImageViewport::cropCommitted, this, [this](const QRectF& rect) {
-        AdjustmentParams before = adjPanel->params();
-        AdjustmentParams after = before;
-        after.cropRect = rect;
-        undoStack->push(new AdjustmentCommand(adjPanel, before, after));
-    });
+    connect(
+        viewport, &ImageViewport::cropCommitted, this, [this](const QRectF& rect, bool constrained) {
+            AdjustmentParams before = adjPanel->params();
+            AdjustmentParams after = before;
+            after.cropRect = rect;
+            after.cropConstrained = constrained;
+            if (after != before)
+                undoStack->push(new AdjustmentCommand(adjPanel, before, after));
+        });
 
     connect(viewport, &ImageViewport::rotationCommitted, this, [this](float degrees) {
         AdjustmentParams before = adjPanel->params();
@@ -379,7 +382,9 @@ void MainWindow::setupAspectMenu(QToolBar* tb) {
 
     auto* menu = new QMenu(aspectButton);
     aspectGroup = new QActionGroup(menu);
-    aspectGroup->setExclusive(true);
+    // Optional exclusion: a restored custom ratio (no named preset) leaves every
+    // item unchecked while the lock is still active.
+    aspectGroup->setExclusionPolicy(QActionGroup::ExclusionPolicy::ExclusiveOptional);
 
     struct PresetItem {
         const char* label;
@@ -400,6 +405,7 @@ void MainWindow::setupAspectMenu(QToolBar* tb) {
         a->setCheckable(true);
         a->setActionGroup(aspectGroup);
         a->setChecked(item.preset == crop::AspectPreset::Free);
+        a->setData(int(item.preset)); // looked up by syncToolActions to reflect a restored lock
         const crop::AspectPreset preset = item.preset;
         connect(a, &QAction::triggered, this, [this, preset] {
             aspectPreset = preset;
@@ -432,13 +438,16 @@ void MainWindow::syncToolActions() {
     straightenAction->setChecked(t == ImageViewport::ActiveTool::Straighten);
     wbAction->setChecked(t == ImageViewport::ActiveTool::WhiteBalance);
 
-    // The aspect lock is transient: it only applies while cropping and resets to
-    // Free on each entry, mirroring ImageViewport::enterCrop.
+    // The aspect lock only applies while cropping. Reflect whatever the viewport
+    // restored from the persisted crop: check the matching preset, or uncheck all
+    // for a custom (unnamed) ratio while the lock still holds.
     aspectButton->setEnabled(cropOn);
     if (cropOn) {
-        aspectPreset = crop::AspectPreset::Free;
-        aspectLandscape = true;
-        aspectGroup->actions().constFirst()->setChecked(true); // Free
+        const crop::PresetMatch m = viewport->currentLockMatch();
+        aspectPreset = m.preset;
+        aspectLandscape = m.landscape;
+        for (QAction* a : aspectGroup->actions())
+            a->setChecked(m.matched && a->data().toInt() == int(m.preset));
     }
 }
 

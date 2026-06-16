@@ -334,10 +334,9 @@ void ImageViewport::applyCropDrag(QPointF viewportPos) {
     // Under an Aspect Ratio Lock, corner drags preserve the ratio (anchored at
     // the opposite corner) and edge handles are inactive; the move handle (-1)
     // still translates via the free path below.
-    const double lockRatio = crop::presetRatio(cropAspect, cropLandscape, imageAspect);
-    if (lockRatio > 0.0 && cropDragHandle >= 0) {
+    if (lockedRatio > 0.0 && cropDragHandle >= 0) {
         const QRectF locked = crop::lockedResize(
-            cropDragHandle, cropDragStartRect, QPointF(u, v), lockRatio, imageAspect);
+            cropDragHandle, cropDragStartRect, QPointF(u, v), lockedRatio, imageAspect);
         if (cropInsideImage(locked)) {
             activeCrop = locked;
             update();
@@ -440,8 +439,10 @@ void ImageViewport::drawCropOverlay(QPainter& p) const {
         const QSize px = crop::cropPixelSize(originalWidth, originalHeight, activeCrop);
         label = QStringLiteral("%1 × %2").arg(px.width()).arg(px.height());
     }
-    if (cropAspect != crop::AspectPreset::Free) {
-        const QString tag = aspectLabel(cropAspect, cropLandscape);
+    if (lockedRatio > 0.0) {
+        const crop::PresetMatch m = crop::matchPreset(lockedRatio, imageAspect);
+        const QString tag = m.matched ? aspectLabel(m.preset, m.landscape)
+                                      : QStringLiteral("locked");
         label = label.isEmpty() ? tag : label + QStringLiteral("  ·  ") + tag;
     }
     if (!label.isEmpty()) {
@@ -509,19 +510,21 @@ void ImageViewport::setStraightenActive(bool active) {
 }
 
 void ImageViewport::setAspectLock(crop::AspectPreset preset, bool landscape) {
-    cropAspect = preset;
-    cropLandscape = landscape;
     if (!cropMode())
         return;
+    lockedRatio = crop::presetRatio(preset, landscape, imageAspect);
     // Reshape the current crop to the new ratio: shrink-to-fit keeps it inside
     // the already-valid rectangle, so the rotation guard is satisfied for free.
-    const double ratio = crop::presetRatio(preset, landscape, imageAspect);
-    if (ratio > 0.0) {
-        const QRectF r = crop::fitRatioInside(activeCrop, ratio, imageAspect);
+    if (lockedRatio > 0.0) {
+        const QRectF r = crop::fitRatioInside(activeCrop, lockedRatio, imageAspect);
         if (cropInsideImage(r))
             activeCrop = r;
     }
     update();
+}
+
+crop::PresetMatch ImageViewport::currentLockMatch() const {
+    return crop::matchPreset(lockedRatio, imageAspect);
 }
 
 // ── Active-tool state machine ─────────────────────────────────────────────────
@@ -561,9 +564,9 @@ void ImageViewport::cancelActiveTool() {
 void ImageViewport::enterCrop() {
     cancelCrop = params.cropRect;
     activeCrop = params.cropRect;
-    // The Aspect Ratio Lock is transient: every fresh crop starts unconstrained.
-    cropAspect = crop::AspectPreset::Free;
-    cropLandscape = true;
+    // Restore the Aspect Ratio Lock from the persisted flag: a constrained crop
+    // re-locks to its stored rectangle's ratio (the preset name is re-derived).
+    lockedRatio = params.cropConstrained ? crop::cropPixelRatio(activeCrop, imageAspect) : 0.0;
     // A rotation set before cropping (e.g. via Straighten) can leave the stored
     // crop covering empty corners — pull it in to the largest valid rectangle.
     if (!cropInsideImage(activeCrop))
@@ -572,7 +575,8 @@ void ImageViewport::enterCrop() {
 
 void ImageViewport::commitCrop() {
     params.cropRect = activeCrop;
-    emit cropCommitted(params.cropRect);
+    params.cropConstrained = lockedRatio > 0.0;
+    emit cropCommitted(params.cropRect, params.cropConstrained);
     emit zoomChanged(pixelZoom());
 }
 

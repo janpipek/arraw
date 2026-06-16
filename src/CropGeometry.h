@@ -41,4 +41,21 @@ enum class AspectPreset { Free, Original, Square, R2x3, R3x4, R4x5, R16x9 };
 // Original derives from `imageAspect`; Free returns 0.0, meaning "unlocked".
 double presetRatio(AspectPreset preset, bool landscape, double imageAspect);
 
+// The pixel width:height ratio of a normalised crop rectangle. Converts through
+// imageAspect (UV space is not square). Used to re-derive a persisted Aspect
+// Ratio Lock from the stored rectangle on reload.
+double cropPixelRatio(const QRectF& cropRect, double imageAspect);
+
+// Which preset/orientation a pixel ratio corresponds to, for reflecting a
+// restored lock in the menu and readout. A ratio of 0 maps to Free (matched).
+// A ratio that fits no preset (e.g. an exotic crop from a Lightroom file) is
+// returned with matched = false — the lock still holds, it just has no name.
+struct PresetMatch {
+    AspectPreset preset;
+    bool landscape;
+    bool matched;
+};
+
+PresetMatch matchPreset(double pixelRatio, double imageAspect);
+
 } // namespace crop
