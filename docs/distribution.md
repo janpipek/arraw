@@ -36,22 +36,36 @@ associations and zsync auto-update are deferred. x86_64 only.
 
 Full rationale and rejected options: [ADR 0014](adr/0014-linux-distribution-appimage-on-neon.md).
 
-## Windows — IN PROGRESS (distribution deferred)
+## Windows — BUILD + PORTABLE ZIP DONE (installer deferred)
 
 The *build* is established and documented in [windows-build.md](windows-build.md):
-MSVC 2022 + vcpkg (`qtbase qttools qtshadertools libraw lcms`, `x64-windows`),
-with two Windows-specific fixes already in CMake (per-config libraw DLL selection;
-manual Qt platform-plugin deployment). A working build is currently being
-maintained on a separate machine; it is a slow vcpkg build.
+MSVC 2022 + vcpkg (`qtbase qttools qtshadertools libraw[openmp] lcms`,
+`x64-windows`). Several Windows-specific fixes live in CMake:
 
-**Distribution is not yet designed.** Open questions to resume on, with leanings:
+- per-config libraw DLL selection (`rawd` in Debug, so the right DLL is deployed);
+- manual deployment of the Qt **platform** *and* **imageformats** plugins plus the
+  `jpeg62.dll` codec next to the exe (vcpkg's `applocal` deploys Qt DLLs but not
+  plugins — see windows-build.md §6.2);
+- `libraw[openmp]` for a multithreaded demosaic (much faster RAW load);
+- the executable is a **GUI-subsystem** app with an **embedded icon**
+  ([ADR 0015](adr/0015-windows-native-icon-gui-subsystem.md)).
+
+A **portable `.zip`** is implemented: `tools/package_windows.py` builds Release and
+bundles the runnable app to `dist/arraw-<version>-windows-x64.zip` (exe + Release
+runtime DLLs + plugin folders). It does **not** bundle the MSVC/OpenMP runtime
+(`vcruntime140*.dll`, `msvcp140.dll`, `vcomp140.dll`); the target needs the VC++
+2015–2022 x64 redistributable, or those DLLs copied in app-local. This is the
+posture-A portable artifact; an installer remains the open design below.
+
+**Installer is not yet designed.** Open questions to resume on, with leanings:
 
 - **Installer format** — Inno Setup / NSIS / WiX (MSI) / MSIX. Leaning Inno Setup
   (simple, scriptable, no MSI ceremony) for posture A; revisit MSIX/winget for
-  posture B. Likely also offer a portable `.zip`.
-- **Qt/dependency deployment** — prefer `windeployqt` to bundle Qt + plugins for
-  the installer, superseding the current manual `platforms\` copy that exists for
-  dev runs. Pin which DLLs (Release config) the installer carries.
+  posture B. The portable `.zip` above already covers the "no-install" case.
+- **Qt/dependency deployment** — the dev/zip path deploys plugins manually because
+  this vcpkg port set ships no `windeployqt`. For the installer, evaluate adding
+  `windeployqt` (e.g. via an aqtinstall Qt) to bundle Qt + plugins + the CRT/OpenMP
+  runtimes in one step, superseding the manual copy. Pin which DLLs (Release) ship.
 - **Code signing** — unsigned installers trip SmartScreen ("unknown publisher").
   An Authenticode cert costs money/identity verification. Decision deferred; may
   ship unsigned with a documented "more info → run anyway" note initially.

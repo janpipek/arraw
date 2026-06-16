@@ -48,11 +48,19 @@ Install the ports arraw needs, for the `x64-windows` triplet (this is a long fir
 build — Qt is large):
 
 ```powershell
-C:\dev\vcpkg\vcpkg.exe install qtbase qttools qtshadertools libraw lcms --triplet x64-windows
+C:\dev\vcpkg\vcpkg.exe install qtbase qttools qtshadertools "libraw[openmp]" lcms --triplet x64-windows
 ```
 
 `qtshadertools` is required: it provides `qsb`, which compiles the GLSL shaders in
 `shaders/` at build time. `qttools` provides the rest of the Qt tooling.
+
+`libraw[openmp]` builds libraw with OpenMP so the demosaic (`dcraw_process`) runs
+multithreaded — roughly 3× faster on a multi-core CPU (≈3s → ≈0.9s on the reference
+machine). It adds a dependency on the OpenMP runtime `vcomp140.dll`, which ships with
+the same VC++ redistributable noted in §7. To profile, set the `ARRAW_TRACE`
+environment variable before launching `arraw.exe`; expensive operations (RAW load
+stages, colour transforms, LUT builds) print a `[trace] <label> N ms` line on stderr
+(see `src/Trace.h`).
 
 Verify they landed:
 
@@ -182,25 +190,71 @@ Exit code 0xc0000135   (STATUS_DLL_NOT_FOUND)
 The fix in `CMakeLists.txt` selects the import library per build configuration
 (`rawd` in Debug, `raw` in Release) so the right DLL gets deployed.
 
-### 6.2 Qt platform plugin deployment
+### 6.2 Qt plugin (and codec) deployment
 
 vcpkg's auto-deploy step (`applocal`) copies the Qt **DLLs** next to the binary but
-**not** the Qt **plugins** for this Qt 6.11 layout. Without the platform plugin Qt
-aborts on startup with a dialog:
+**not** the Qt **plugins** for this Qt 6.11 layout. Two distinct symptoms follow:
 
-```
-This application failed to start because no Qt platform plugin could be initialized.
-```
+- **No platform plugin** → Qt aborts on startup:
+  `This application failed to start because no Qt platform plugin could be initialized.`
+- **No imageformats plugin** → `QImage` silently fails to decode JPEG/GIF/ICO, so the
+  app shows **"Failed to load"** for every JPG thumbnail. (PNG and BMP are built into
+  Qt Gui, so they keep working — which is why the gap is easy to miss.)
 
 `CMakeLists.txt` defines `arraw_deploy_qt_plugins(<target>)`, a Windows-only
-post-build step that copies `qwindowsd.dll` and `qoffscreend.dll` into a `platforms\`
-folder next to each executable. It is applied to both `arraw` and `arraw_tests`. The
-test suite additionally runs with `QT_QPA_PLATFORM=offscreen` (set via
+(`if(WIN32)`) post-build step applied to both `arraw` and `arraw_tests`. It copies:
+
+- `qwindowsd.dll`, `qoffscreend.dll` → `platforms\` next to the exe;
+- `qjpegd.dll`, `qgifd.dll`, `qicod.dll` → `imageformats\` next to the exe;
+- `jpeg62.dll` (libjpeg-turbo) → **next to the exe itself**. The JPEG plugin links
+  this codec, and applocal misses it because the exe never imports it directly —
+  only the plugin does. Windows resolves a plugin's imports from the *executable's*
+  directory, so the codec must sit beside the exe, not inside `imageformats\`.
+
+The test suite additionally runs with `QT_QPA_PLATFORM=offscreen` (set via
 `catch_discover_tests`) so it does not need a visible desktop session.
+`test_StandardImageLoader.cpp` decodes a real JPEG and acts as a regression guard for
+this whole deployment chain.
+
+> This vcpkg Qt build ships only the jpeg/gif/ico imageformats plugins — there is no
+> tiff/webp plugin, so those extensions in `StandardImageLoader::canLoad` will not
+> decode until the corresponding vcpkg features are installed and deployed.
+
+The codec DLL is fetched from the vcpkg tree pointed at by the `ARRAW_VCPKG_INSTALLED`
+cache variable (default `C:/dev/vcpkg/installed/x64-windows`). Override it at configure
+time if your vcpkg lives elsewhere:
+
+```powershell
+cmake --preset default -DARRAW_VCPKG_INSTALLED=D:/vcpkg/installed/x64-windows
+```
 
 ---
 
-## 7. Troubleshooting
+## 7. Packaging a release ZIP
+
+`tools/package_windows.py` builds a Release configuration (tests off) and bundles the
+runnable app into `dist/arraw-<version>-windows-x64.zip`. It imports the MSVC
+developer environment itself, so it can be run from a plain shell:
+
+```powershell
+python tools/package_windows.py
+```
+
+Useful flags: `--skip-build` (zip an existing `build-release/` without rebuilding),
+`--vcvars`, `--toolchain`, `--vcpkg-installed`, `--build-dir`, `--out-dir`. The archive
+contains `arraw.exe`, the Release Qt/libraw/lcms runtime DLLs, and the `platforms\` /
+`imageformats\` plugin folders plus `jpeg62.dll` — i.e. everything the deploy step
+(§6.2) places next to the binary, in its Release variant.
+
+> **VC++ runtime:** the ZIP does *not* include the MSVC C++ runtime
+> (`vcruntime140.dll`, `vcruntime140_1.dll`, `msvcp140.dll`). Target machines need the
+> "Microsoft Visual C++ 2015–2022 Redistributable (x64)" installed. To make the ZIP
+> fully self-contained instead, copy those three DLLs (from
+> `VC\Redist\MSVC\<ver>\x64\Microsoft.VC143.CRT\`) next to `arraw.exe` before zipping.
+
+---
+
+## 8. Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
@@ -208,13 +262,15 @@ test suite additionally runs with `QT_QPA_PLATFORM=offscreen` (set via
 | CMake: *"compiler is not able to compile a simple test program"*, `rc ... no such file`, `CMAKE_MT-NOTFOUND` | MSVC developer environment not applied — SDK tools missing | Build from "Developer PowerShell for VS 2022", or import `vcvars64.bat` (§4). Then delete `build\` and reconfigure. |
 | App/test exits immediately with `0xc0000135` | A required DLL is missing next to the exe (e.g. `raw.dll`) | Rebuild after a clean configure; the per-config libraw fix (§6.1) deploys the correct DLL. Confirm with `dumpbin /dependents build\arraw.exe`. |
 | *"no Qt platform plugin could be initialized"* | Qt plugins not deployed | Ensure `platforms\qwindowsd.dll` exists next to the exe; it is copied by the post-build step (§6.2). A fresh `cmake --build build` recreates it. |
+| **"Failed to load" for every JPG** (PNG works) | imageformats plugin (`qjpegd.dll`) and/or its codec (`jpeg62.dll`) not deployed | Both are copied by the post-build step (§6.2). Confirm `imageformats\qjpegd.dll` and `jpeg62.dll` sit next to the exe; check `ARRAW_VCPKG_INSTALLED` points at your vcpkg tree. |
+| `LNK1168: cannot open arraw.exe for writing` | A running `arraw.exe` is holding the file | Close the running app (or `Stop-Process -Name arraw`) and rebuild. |
 | `find_package(Qt6 ...)` fails | Toolchain file not passed, or ports not installed | Use `cmake --preset default`; verify `vcpkg list` shows the Qt ports for `x64-windows`. |
 | Shaders not found / `qsb` missing at configure | `qtshadertools` not installed | `vcpkg install qtshadertools --triplet x64-windows`. |
 | Golden-image tests show as *Skipped* | They run headless under the offscreen platform | Expected. To run them you need a platform/RHI device capable of the rendering — out of scope for the standard headless test run. |
 
 ---
 
-## 8. Quick reference
+## 9. Quick reference
 
 ```powershell
 # One-shot: developer env + configure + build + test, in a single session

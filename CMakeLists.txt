@@ -25,25 +25,55 @@ endfunction()
 find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets Concurrent ShaderTools GuiPrivate)
 
 # On Windows (vcpkg) the Qt DLLs are deployed next to the binary by vcpkg's
-# applocal step, but the platform plugins are not, so Qt aborts at startup with
-# "no Qt platform plugin could be initialized". Copy the platform plugins into a
-# platforms/ dir beside each runnable target. Includes offscreen so headless test
-# runs work via QT_QPA_PLATFORM=offscreen.
+# applocal step, but the Qt plugins are not. Without the platform plugin Qt aborts
+# at startup ("no Qt platform plugin could be initialized"); without the
+# imageformats plugins QImage silently fails to decode JPEG/GIF/ICO and the app
+# reports "Failed to load" (PNG/BMP are built into Qt Gui, so they still work).
+# Copy each needed plugin into its plugin-type subdir beside the target. Offscreen
+# is included so headless test runs work via QT_QPA_PLATFORM=offscreen.
+if(WIN32)
+    # vcpkg installed tree, used to fetch plugin codec DLLs (e.g. jpeg62.dll) that
+    # applocal does not deploy. Fixed default for this machine; override if needed.
+    set(ARRAW_VCPKG_INSTALLED "C:/dev/vcpkg/installed/x64-windows"
+        CACHE PATH "vcpkg installed tree (Windows runtime-dependency deploy)")
+endif()
 function(arraw_deploy_qt_plugins target)
     if(NOT WIN32)
         return()
     endif()
-    foreach(plugin Qt6::QWindowsIntegrationPlugin Qt6::QOffscreenIntegrationPlugin)
+    # plugin imported target -> destination subdir next to the binary
+    set(plugins
+        Qt6::QWindowsIntegrationPlugin    platforms
+        Qt6::QOffscreenIntegrationPlugin  platforms
+        Qt6::QJpegPlugin                  imageformats
+        Qt6::QGifPlugin                   imageformats
+        Qt6::QICOPlugin                   imageformats
+    )
+    while(plugins)
+        list(POP_FRONT plugins plugin subdir)
         if(TARGET ${plugin})
             add_custom_command(TARGET ${target} POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E make_directory
-                    "$<TARGET_FILE_DIR:${target}>/platforms"
+                    "$<TARGET_FILE_DIR:${target}>/${subdir}"
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
                     "$<TARGET_FILE:${plugin}>"
-                    "$<TARGET_FILE_DIR:${target}>/platforms/"
+                    "$<TARGET_FILE_DIR:${target}>/${subdir}/"
                 VERBATIM)
         endif()
-    endforeach()
+    endwhile()
+
+    # The JPEG plugin links the external libjpeg-turbo codec (jpeg62.dll), which
+    # applocal does not deploy (the exe never imports it directly, only the plugin
+    # does). Windows resolves a plugin's imports from the EXE's directory, so place
+    # it there, taking the debug build's codec from the debug bin.
+    if(TARGET Qt6::QJpegPlugin)
+        set(jpeg_dll "$<IF:$<CONFIG:Debug>,${ARRAW_VCPKG_INSTALLED}/debug/bin/jpeg62.dll,${ARRAW_VCPKG_INSTALLED}/bin/jpeg62.dll>")
+        add_custom_command(TARGET ${target} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${jpeg_dll}"
+                "$<TARGET_FILE_DIR:${target}>/"
+            VERBATIM)
+    endif()
 endfunction()
 
 # libraw: try pkg-config first (IMPORTED_TARGET wires up lib dirs automatically),
@@ -140,8 +170,18 @@ qt6_add_shaders(arraw_core "arraw_shaders"
 )
 
 # resources/icon.qrc bakes the window-icon PNGs (generated from resources/icon.svg
-# by tools/render_icons.py — see ADR 0013) in via AUTORCC.
-add_executable(arraw src/main.cpp resources/icon.qrc)
+# by tools/render_icons.py — see ADR 0013) in via AUTORCC. On Windows, arraw.rc
+# additionally embeds arraw.ico as the executable's Win32 icon (Explorer/taskbar).
+set(arraw_platform_sources "")
+if(WIN32)
+    enable_language(RC)
+    set(arraw_platform_sources resources/arraw.rc)
+endif()
+# WIN32: build as a GUI-subsystem app so double-clicking does not pop a console
+# window. Qt6::EntryPoint (pulled in via Qt6::Core) supplies WinMain -> main. The
+# keyword is ignored on non-Windows platforms. With no console attached, redirect
+# ARRAW_TRACE output to a file when profiling: arraw.exe 2> trace.txt
+add_executable(arraw WIN32 src/main.cpp resources/icon.qrc ${arraw_platform_sources})
 arraw_enable_warnings(arraw)
 
 target_link_libraries(arraw PRIVATE arraw_core)

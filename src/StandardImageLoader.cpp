@@ -1,5 +1,6 @@
 #include "StandardImageLoader.h"
 #include "ColorManagement.h"
+#include "Trace.h"
 #include <QFileInfo>
 #include <QImage>
 
@@ -9,6 +10,7 @@ bool StandardImageLoader::canLoad(const QString& path) {
 }
 
 LoadResult StandardImageLoader::load(const QString& path, std::shared_ptr<std::atomic<bool>> cancel) {
+    const trace::Scope trace_("StandardImageLoader::load");
     QImage img(path);
     if (img.isNull())
         return {{}, {}, {}, QString("Failed to load: %1").arg(path)};
