@@ -64,6 +64,9 @@ static LocalAdjustment parseLocalAdjustmentLi(QXmlStreamReader& xml) {
     LocalAdjustment la;
     QString maskType = "Linear";
     QPointF p0, p1;
+    QPointF center{0.5, 0.5};
+    double  radiusX = 0.25, radiusY = 0.25, angle = 0.0, feather = 0.5;
+    bool    invert = false;
     while (!xml.atEnd()) {
         xml.readNext();
         if (xml.isEndElement() && xml.qualifiedName() == "rdf:li") break;
@@ -76,6 +79,13 @@ static LocalAdjustment parseLocalAdjustmentLi(QXmlStreamReader& xml) {
         else if (name == "arraw:P0y")         p0.setY(v);
         else if (name == "arraw:P1x")         p1.setX(v);
         else if (name == "arraw:P1y")         p1.setY(v);
+        else if (name == "arraw:CenterX")     center.setX(v);
+        else if (name == "arraw:CenterY")     center.setY(v);
+        else if (name == "arraw:RadiusX")     radiusX = v;
+        else if (name == "arraw:RadiusY")     radiusY = v;
+        else if (name == "arraw:Angle")       angle   = v;
+        else if (name == "arraw:Feather")     feather = v;
+        else if (name == "arraw:Invert")      invert  = (v != 0.0f);
         else if (name == "arraw:Exposure")    la.exposure    = v;
         else if (name == "arraw:Contrast")    la.contrast    = v;
         else if (name == "arraw:Highlights")  la.highlights  = v;
@@ -87,7 +97,9 @@ static LocalAdjustment parseLocalAdjustmentLi(QXmlStreamReader& xml) {
         else if (name == "arraw:Saturation")  la.saturation  = v;
         else if (name == "arraw:Vibrance")    la.vibrance    = v;
     }
-    if (maskType == "Linear")
+    if (maskType == "Radial")
+        la.mask = RadialMask{center, radiusX, radiusY, angle, feather, invert};
+    else
         la.mask = LinearMask{p0, p1};
     return la;
 }
@@ -227,6 +239,15 @@ static void writeLocalAdjustments(QXmlStreamWriter& xml,
                 xml.writeTextElement(kNsArraw, "P0y", num(mask.p0.y()));
                 xml.writeTextElement(kNsArraw, "P1x", num(mask.p1.x()));
                 xml.writeTextElement(kNsArraw, "P1y", num(mask.p1.y()));
+            } else if constexpr (std::is_same_v<T, RadialMask>) {
+                xml.writeTextElement(kNsArraw, "MaskType", "Radial");
+                xml.writeTextElement(kNsArraw, "CenterX", num(mask.center.x()));
+                xml.writeTextElement(kNsArraw, "CenterY", num(mask.center.y()));
+                xml.writeTextElement(kNsArraw, "RadiusX", num(mask.radiusX));
+                xml.writeTextElement(kNsArraw, "RadiusY", num(mask.radiusY));
+                xml.writeTextElement(kNsArraw, "Angle",   num(mask.angle));
+                xml.writeTextElement(kNsArraw, "Feather", num(mask.feather));
+                xml.writeTextElement(kNsArraw, "Invert",  mask.invert ? "1" : "0");
             }
         }, la.mask);
 

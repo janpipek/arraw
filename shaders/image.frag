@@ -35,14 +35,16 @@ layout(std140, binding = 0) uniform buf {
     int   wbInput;       // stop before temperature/tint, output linear (WB picker)
     int   clipWarn;      // clipping overlay bits: 1 = highlights, 2 = shadows (docs/adr/0009)
     // Local adjustments (docs/adr/0010), 16-mask cap. Packed parallel vec4 arrays:
-    //   laGeom  = (p0.x, p0.y, p1.x, p1.y)   — Linear mask endpoints
+    //   laGeom  = Linear (p0.x, p0.y, p1.x, p1.y) | Radial (cx, cy, rx, ry)
+    //   laGeom2 = Radial (angle, feather, invert, spare); unused for Linear
     //   laTone  = (exposure, contrast, highlights, shadows)
     //   laTone2 = (whites, blacks, tempShift, tint)
-    //   laColor = (saturation, vibrance, maskType, spare)
+    //   laColor = (saturation, vibrance, maskType, spare)  maskType 0=Linear 1=Radial
     vec4  laGeom[16];
     vec4  laTone[16];
     vec4  laTone2[16];
     vec4  laColor[16];
+    vec4  laGeom2[16];
     int   numLocalAdj;
 } u;
 
@@ -280,12 +282,58 @@ float linearMaskWeight(int i, vec2 uv, float aspect) {
     return t * t * (3.0 - 2.0 * t);
 }
 
+// Radial (oval) mask weight — port of radialMaskWeight in src/LocalAdjustment.cpp.
+float radialMaskWeight(int i, vec2 uv, float aspect) {
+    vec2  center = u.laGeom[i].xy;
+    float rx = u.laGeom[i].z;
+    float ry = u.laGeom[i].w;
+    float angle   = u.laGeom2[i].x;
+    float feather = u.laGeom2[i].y;
+    float invert  = u.laGeom2[i].z;
+
+    float dx = (uv.x - center.x) * aspect;
+    float dy = uv.y - center.y;
+    if (angle != 0.0) {
+        float rad = angle * 3.14159265 / 180.0;
+        float cs = cos(rad), sn = sin(rad);
+        float rotX =  dx * cs + dy * sn;
+        float rotY = -dx * sn + dy * cs;
+        dx = rotX;
+        dy = rotY;
+    }
+    if (rx <= 0.0 || ry <= 0.0)
+        return 0.0;
+    float nx = dx / rx;
+    float ny = dy / ry;
+    float d = sqrt(nx * nx + ny * ny);
+
+    float inner = 1.0 - feather;
+    float sm;
+    if (feather <= 0.0)
+        sm = d >= 1.0 ? 1.0 : 0.0;
+    else {
+        float t = clamp((d - inner) / feather, 0.0, 1.0);
+        sm = t * t * (3.0 - 2.0 * t);
+    }
+    float w = 1.0 - sm;
+    if (invert > 0.5)
+        w = 1.0 - w;
+    return w;
+}
+
+// Dispatch on the mask type tag (laColor.z): 0 = Linear, 1 = Radial.
+float maskWeight(int i, vec2 uv, float aspect) {
+    if (int(u.laColor[i].z + 0.5) == 1)
+        return radialMaskWeight(i, uv, aspect);
+    return linearMaskWeight(i, uv, aspect);
+}
+
 // Apply every local adjustment in array order, each blended by its mask weight
 // (w = 0 leaves the pixel untouched). Reuses the same parameterised tone/colour
 // functions as the global path — the deltas just arrive scaled by w.
 vec3 applyLocalAdjustments(vec3 c, vec2 uv, float aspect) {
     for (int i = 0; i < u.numLocalAdj; ++i) {
-        float w = linearMaskWeight(i, uv, aspect);   // v1: only Linear masks
+        float w = maskWeight(i, uv, aspect);
         c = applyExposure(c, w * u.laTone[i].x);
         c = applyContrast(c, w * u.laTone[i].y);
         c = applyToneRegions(c, w * u.laTone[i].z, w * u.laTone[i].w,

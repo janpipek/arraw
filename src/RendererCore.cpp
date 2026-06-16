@@ -338,12 +338,22 @@ void RendererCore::fillUbuf(Ubuf& ub, const FrameParams& fp) const {
         const SharedUniform d = toUniform(la);
         const int k = i * 4;
 
-        float maskType = 0.0f;  // 0 = Linear (the only v1 type)
+        float maskType = 0.0f;  // 0 = Linear, 1 = Radial
         if (const auto* m = std::get_if<LinearMask>(&la.mask)) {
             ub.laGeom[k + 0] = float(m->p0.x());
             ub.laGeom[k + 1] = float(m->p0.y());
             ub.laGeom[k + 2] = float(m->p1.x());
             ub.laGeom[k + 3] = float(m->p1.y());
+        } else if (const auto* r = std::get_if<RadialMask>(&la.mask)) {
+            maskType = 1.0f;
+            ub.laGeom[k + 0]  = float(r->center.x());
+            ub.laGeom[k + 1]  = float(r->center.y());
+            ub.laGeom[k + 2]  = float(r->radiusX);
+            ub.laGeom[k + 3]  = float(r->radiusY);
+            ub.laGeom2[k + 0] = float(r->angle);
+            ub.laGeom2[k + 1] = float(r->feather);
+            ub.laGeom2[k + 2] = r->invert ? 1.0f : 0.0f;
+            ub.laGeom2[k + 3] = 0.0f;
         }
         ub.laTone[k + 0]  = d.exposure;
         ub.laTone[k + 1]  = d.contrast;

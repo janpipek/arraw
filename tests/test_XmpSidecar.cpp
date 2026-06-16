@@ -155,6 +155,34 @@ TEST_CASE("writer emits local adjustments in the arraw namespace with relative "
     CHECK_FALSE(xml.contains(R"(crs:LocalAdjustments)"));
 }
 
+TEST_CASE("radial local adjustments round-trip through the arraw namespace",
+          "[xmp][arraw]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("radial.dng");
+
+    GlobalAdjustment p;
+    LocalAdjustment la;
+    la.mask     = RadialMask{ {0.4, 0.6}, 0.3, 0.2, 30.0, 0.4, true };
+    la.exposure = -0.5f;
+    p.localAdjustments.push_back(la);
+
+    REQUIRE(XmpSidecar::saveAdjustments(rawPath, p));
+    const GlobalAdjustment loaded = XmpSidecar::loadAdjustments(rawPath);
+
+    REQUIRE(loaded.localAdjustments.size() == 1);
+    const LocalAdjustment& r = loaded.localAdjustments[0];
+    REQUIRE(std::holds_alternative<RadialMask>(r.mask));
+    const RadialMask& m = std::get<RadialMask>(r.mask);
+    CHECK_THAT(m.center.x(), WithinAbs(0.4, kScalarTol));
+    CHECK_THAT(m.center.y(), WithinAbs(0.6, kScalarTol));
+    CHECK_THAT(m.radiusX,    WithinAbs(0.3, kScalarTol));
+    CHECK_THAT(m.radiusY,    WithinAbs(0.2, kScalarTol));
+    CHECK_THAT(m.angle,      WithinAbs(30.0, kScalarTol));
+    CHECK_THAT(m.feather,    WithinAbs(0.4, kScalarTol));
+    CHECK(m.invert);
+    CHECK_THAT(r.exposure,   WithinAbs(-0.5, kScalarTol));
+}
+
 TEST_CASE("loading drops local adjustments beyond the 16-mask cap",
           "[xmp][arraw]") {
     QTemporaryDir dir;

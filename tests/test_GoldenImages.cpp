@@ -260,6 +260,40 @@ TEST_CASE("a local exposure mask brightens only the masked region",
     CHECK(masked > unmasked + 0.1f);   // +1 EV ≈ doubles the linear value
 }
 
+TEST_CASE("a local radial mask brightens only inside the oval",
+          "[gpu][localadj]") {
+    ImageViewport* vp = goldenViewport();
+    if (!vp)
+        SKIP("no OpenGL context available on this machine");
+
+    ImageBuffer scene;
+    scene.width = 64;
+    scene.height = 48;
+    scene.data.assign(size_t(scene.width) * scene.height * 3, 0.3f);
+
+    GlobalAdjustment p;
+    LocalAdjustment la;
+    la.mask = RadialMask{ .center = {0.5, 0.5}, .radiusX = 0.3, .radiusY = 0.3,
+                          .angle = 0.0, .feather = 0.3, .invert = false };
+    la.exposure = 1.0f;
+    p.localAdjustments.push_back(la);
+
+    vp->setAdjustments(p);
+    const QImage got = vp->renderToImage(scene, p, scene.width, scene.height);
+    REQUIRE_FALSE(got.isNull());
+
+    auto value = [&](float fx, float fy) {
+        const float* px = reinterpret_cast<const float*>(
+            got.constScanLine(int(fy * scene.height)));
+        return px[int(fx * scene.width) * 4];
+    };
+    const float inside  = value(0.5f, 0.5f);    // centre of the oval, +1 EV
+    const float outside = value(0.05f, 0.05f);  // corner, well outside
+
+    INFO("inside=" << inside << " outside=" << outside);
+    CHECK(inside > outside + 0.1f);
+}
+
 // Clipping overlay (docs/adr/0009): rendered through the display path (sRGB
 // encode) with both overlays on. The synthetic scene spans pure white, near
 // black, and saturated single-channel bars, so this one golden locks the

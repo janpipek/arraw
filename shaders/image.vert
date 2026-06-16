@@ -42,6 +42,7 @@ layout(std140, binding = 0) uniform buf {
     vec4  laTone[16];
     vec4  laTone2[16];
     vec4  laColor[16];
+    vec4  laGeom2[16];
     int   numLocalAdj;
 } u;
 
