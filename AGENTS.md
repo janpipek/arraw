@@ -45,14 +45,15 @@ Windows needs extra setup (the MSVC developer environment plus Qt-plugin/libraw
 deployment quirks). See the dedicated **[Windows build guide](docs/windows-build.md)**
 for the complete walkthrough and troubleshooting. In short:
 ```powershell
-# Install dependencies
-vcpkg install qtbase qttools qtshadertools libraw lcms --triplet x64-windows
+# Install dependencies (libraw[openmp] multithreads the demosaic — much faster loads)
+vcpkg install qtbase qttools qtshadertools libraw[openmp] lcms --triplet x64-windows
 
 # From "Developer PowerShell for VS 2022" (so rc.exe/mt.exe are on PATH):
 cmake --preset default   # CMakePresets.json carries the vcpkg toolchain path
 cmake --build build
 ctest --test-dir build --output-on-failure
 ```
+A release ZIP of the runnable app is produced by `python tools/package_windows.py`.
 
 #### Release Build
 ```bash
@@ -62,6 +63,9 @@ ninja -C build-release
 
 #### Shaders
 Shaders are Vulkan-dialect GLSL in `shaders/`, compiled at build time by `qsb` and baked into the binary as Qt resources (`:/shaders/*.qsb`). Modifying them requires a rebuild (see architectural records in [docs/adr/](file:///home/jan/code/my/arraw/docs/adr/)).
+
+#### Diagnostics
+Set the `ARRAW_TRACE` environment variable to print per-operation timings (`[trace] <label> N ms` on stderr) for expensive work — RAW load stages, the standard image loader, and the lcms colour transforms. The facility is in `src/Trace.h` (`trace::Scope` for a whole scope, `trace::Laps` for multi-stage ops); it is free when the variable is unset. On Windows the app is a GUI-subsystem binary with no attached console, so redirect to capture it: `arraw.exe 2> trace.txt`.
 
 ### Tests
 Use `just` or direct `ctest` execution:

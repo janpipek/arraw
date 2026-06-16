@@ -39,7 +39,10 @@ step, no build dependency).
 
 - A future reader will find an SVG, a folder of committed PNGs, and a regen script
   for an icon that is **not wired into any installer or bundle** — that is
-  intentional, recorded here, and the documented next step.
+  intentional, recorded here, and the documented next step. *(Update: the Windows
+  native step is now taken — `arraw.ico` is embedded into `arraw.exe`; see
+  [ADR 0015](0015-windows-native-icon-gui-subsystem.md). macOS/Linux native icons
+  remain deferred.)*
 - The PNGs are generated; do not hand-edit them. Edit `resources/icon.svg` and
   rerun `uv run tools/render_icons.py`.
 - The tile design (rounded charcoal square, off-white film shaft, teal chevron)

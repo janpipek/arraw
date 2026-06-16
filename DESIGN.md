@@ -100,6 +100,16 @@ MainWindow (QMainWindow)
 - Wraps libraw. Called only from background threads.
 - Decodes RAW → linear float32 Rec.2020 buffer with camera white balance applied.
 - Returns `LoadResult` containing `fullRes` + `preview` (via `downsample2x`).
+- **Embedded preview first:** before the slow `unpack`/`dcraw_process`, the camera's
+  embedded JPEG preview is extracted on the same file handle and dispatched to the
+  UI via the `onEmbeddedPreview` callback, so an image appears almost immediately.
+  Cameras embed full-resolution (20+ MP) previews, so it is downscaled to a
+  ≤2048 px edge **before** the lcms working-space conversion — converting all of it
+  would cost several seconds for an image the full decode replaces moments later.
+- **Demosaic cost:** `dcraw_process` dominates the full-res load. libraw built with
+  OpenMP multithreads it (the vcpkg `libraw[openmp]` feature on Windows; the system
+  libraw on Linux/macOS). Set `ARRAW_TRACE` to print per-stage load timings (see
+  `src/Trace.h`).
 
 ### `ImagePipeline`
 - `GlobalAdjustment` and `ImageBuffer` struct definitions.
