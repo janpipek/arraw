@@ -32,7 +32,7 @@ clean export. Not a DAM, not a cataloguing tool — just open a folder, edit, ex
 
 ## Data Model
 
-### `AdjustmentParams`
+### `GlobalAdjustment`
 Plain struct, zero-initialized = no adjustments. Serialises cleanly to XMP.
 
 ```
@@ -102,7 +102,7 @@ MainWindow (QMainWindow)
 - Returns `LoadResult` containing `fullRes` + `preview` (via `downsample2x`).
 
 ### `ImagePipeline`
-- `AdjustmentParams` and `ImageBuffer` struct definitions.
+- `GlobalAdjustment` and `ImageBuffer` struct definitions.
 - `downsample2x()`: box-filter 2× downsample, thread-safe, no Qt dependency.
 
 ### `ColorManagement` (lcms2)
@@ -147,14 +147,14 @@ MainWindow (QMainWindow)
 - Crop mode: activated by `C` key. Renders darkened overlay outside crop rect.
   Corner/edge handles are draggable. Drag outside rect = rotate. `Enter` confirms,
   `Escape` cancels.
-- Before/after: `\` key held → renders with zeroed `AdjustmentParams`.
-- Export: `renderToImage(const AdjustmentParams&, const ImageBuffer& fullRes)`
+- Before/after: `\` key held → renders with zeroed `GlobalAdjustment`.
+- Export: `renderToImage(const GlobalAdjustment&, const ImageBuffer& fullRes)`
   — renders full-res buffer through the shader pipeline into an offscreen
   float target with `displayEncode` off, reads back, returns a linear
   working-space `QImage` (`Format_RGBX32FPx4`) for the CPU output transform.
 
 ### `AdjustmentPanel`
-- Emits `paramsChanged(AdjustmentParams)` on any slider change.
+- Emits `paramsChanged(GlobalAdjustment)` on any slider change.
 - `setParams()` restores all sliders atomically with signals blocked (used by
   XMP load and undo/redo).
 - WB preset combobox sets `temperature` + `tint` in Kelvin scale.
@@ -165,7 +165,7 @@ MainWindow (QMainWindow)
 
 ### `XmpSidecar`
 - `pathFor(rawPath)` → same dir, same base name, `.xmp` extension.
-- `load()` → `AdjustmentParams`. Returns defaults if file absent or unparseable.
+- `load()` → `GlobalAdjustment`. Returns defaults if file absent or unparseable.
 - `save()` → writes XMP using Qt's `QXmlStreamWriter`. Uses `crs:` namespace
   (Adobe Camera Raw) for Lightroom-compatible field names.
   `crs:Temperature` is stored in absolute Kelvin (compatible with LR).
@@ -241,7 +241,14 @@ that file is the source of truth; keep this list in sync with it.
 13. HSL color mix    8 hue ranges, smoothstep-weighted hue/sat/lum shifts
 14. Saturation       luma-preserving saturation scale
 15. Vibrance         saturation boost weighted toward desaturated pixels
-16. Encode           u.displayEncode on (screen):
+16. Local adjustments per-mask weighted tone/colour deltas (docs/adr/0010):
+                     each Local Adjustment's deltas reuse the same parameterised
+                     functions (steps 7–15, minus curve/HSL), scaled by an
+                     analytic mask weight. Single-pass, in array order. Skipped
+                     by the curve-input and WB-picker readbacks (which return
+                     earlier); included on screen, in export, and the panel
+                     histogram
+17. Encode           u.displayEncode on (screen):
                        u.useLut off — display transform: Rec.2020→sRGB matrix
                        + true piecewise sRGB curve (sRGB monitor assumed)
                        u.useLut on — 33³ LUT texture baked by lcms2
@@ -258,12 +265,12 @@ that file is the source of truth; keep this list in sync with it.
 **Export only — CPU, after the offscreen readback (`MainWindow::exportFile`)**
 
 ```
-17. Resize           linear-light float scale to the chosen dimensions
-18. Output transform lcms2: working space → sRGB / Display P3 / Adobe RGB,
+18. Resize           linear-light float scale to the chosen dimensions
+19. Output transform lcms2: working space → sRGB / Display P3 / Adobe RGB,
                      8-bit (RGB888) or 16-bit (RGBA64, TIFF only)
-19. Sharpening       unsharp mask in encoded space (the Sharpen slider has no
+20. Sharpening       unsharp mask in encoded space (the Sharpen slider has no
                      preview effect — it is applied only here)
-20. Save             JPEG/PNG/TIFF with the output ICC profile embedded
+21. Save             JPEG/PNG/TIFF with the output ICC profile embedded
 ```
 
 Histograms are exact: `ImageViewport::renderHistograms()` renders the preview
@@ -284,8 +291,8 @@ for the panel histogram, and a "stop after tone regions, gamma-encode" pass
    - Upload `fullRes` as a float32 RGBA texture (temporary).
    - Render into an offscreen RGBA32F target at the cropped pixel size, in an
      offscreen RHI frame of its own.
-   - Run the full shader pipeline (steps 4–15 above) with current
-     `AdjustmentParams`, `u.displayEncode` off.
+   - Run the full shader pipeline (steps 4–16 above) with current
+     `GlobalAdjustment`, `u.displayEncode` off.
    - Synchronous readback → `QImage(Format_RGBX32FPx4)`, linear working space,
      scaled to the requested output size while still linear.
 3. `toOutputImage()` (ColorManagement, lcms2): working space → chosen output
@@ -424,10 +431,13 @@ Implemented 2026-06 — see `docs/adr/0006-rhi-migration-single-renderer-core.md
 - Tile cache with LRU eviction.
 - Async tile upload via PBO (Pixel Buffer Objects).
 
-### Milestone 7 — Local Adjustments
+### Milestone 7 — Local Adjustments ✅
 
-Design resolved 2026-06-15. See `docs/adr/0008` (parametric masks, arraw-native
-storage). Per-region develop edits with a real-time preview.
+Design resolved 2026-06-15; implemented 2026-06 (Linear + Radial v1). See
+`docs/adr/0010` (parametric masks, arraw-native storage). Per-region develop
+edits with a real-time preview — both mask types support numeric and on-image
+(drag-handle) editing, render live and in export, persist to the arraw XMP
+namespace, and sit on the shared undo stack.
 
 - **Mask model — parametric ("described"), not painted.** A [[Local Adjustment]]
   is a [[Mask]] plus the tonal/colour delta subset (exposure, contrast,

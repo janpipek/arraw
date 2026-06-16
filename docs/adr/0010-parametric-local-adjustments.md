@@ -47,3 +47,14 @@ temperature, tint, saturation, vibrance) — no geometry, no tone curve.
   delete / slider tweak each a step), unlike culling marks which stay off it.
 - Pure logic — per-type mask weight, handle ↔ normalised-coordinate maths,
   namespace load/save — extracts to `arraw_core` for headless TDD.
+- The shared delta subset is modelled as a `SharedAdjustment` base struct that
+  both `GlobalAdjustment` (the develop params) and `LocalAdjustment` derive from;
+  the mask is a `std::variant` value type (`LinearMask` in v1) visited into the
+  flat, type-tagged GPU uniform slot. Inheritance shares the field *declarations*
+  while keeping the `Ubuf`/XMP mirrors byte-explicit; the per-pixel transform
+  *logic* is shared by parameterising the `image.frag` functions.
+- A local adjustment's **`temperature` is a relative −100..100 shift, not absolute
+  Kelvin** like the global `crs:Temperature`. A warming graduated filter is a
+  delta around zero ("no change"), which absolute Kelvin cannot express; this is
+  why the field lives in the arraw namespace and why the two structs do not share
+  a single `temperature`.

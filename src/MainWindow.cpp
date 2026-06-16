@@ -7,6 +7,7 @@
 #include "ExportDialog.h"
 #include "FilmStrip.h"
 #include "ImageViewport.h"
+#include "LocalAdjustmentPanel.h"
 #include "ProofingPanel.h"
 #include "RawProcessor.h"
 #include "StandardImageLoader.h"
@@ -44,12 +45,12 @@
 #include <QtConcurrent/QtConcurrent>
 
 // ---------------------------------------------------------------------------
-// Undo command: captures before/after AdjustmentParams for a single gesture.
+// Undo command: captures before/after GlobalAdjustment for a single gesture.
 // ---------------------------------------------------------------------------
 class AdjustmentCommand : public QUndoCommand {
 public:
     AdjustmentCommand(
-        AdjustmentPanel* panel, const AdjustmentParams& before, const AdjustmentParams& after)
+        AdjustmentPanel* panel, const GlobalAdjustment& before, const GlobalAdjustment& after)
         : panel(panel),
           before(before),
           after(after) {}
@@ -60,7 +61,30 @@ public:
 
 private:
     AdjustmentPanel* panel;
-    AdjustmentParams before, after;
+    GlobalAdjustment before, after;
+};
+
+// ---------------------------------------------------------------------------
+// Undo command for local adjustments — add / delete / move-handle / tweak.
+// Restores the whole list (which re-renders), mirroring AdjustmentCommand.
+// ---------------------------------------------------------------------------
+class LocalAdjustmentCommand : public QUndoCommand {
+public:
+    LocalAdjustmentCommand(
+        LocalAdjustmentPanel* panel,
+        std::vector<LocalAdjustment> before,
+        std::vector<LocalAdjustment> after)
+        : panel(panel),
+          before(std::move(before)),
+          after(std::move(after)) {}
+
+    void undo() override { panel->setLocalAdjustments(before); }
+
+    void redo() override { panel->setLocalAdjustments(after); }
+
+private:
+    LocalAdjustmentPanel* panel;
+    std::vector<LocalAdjustment> before, after;
 };
 
 // ---------------------------------------------------------------------------
@@ -99,16 +123,16 @@ MainWindow::MainWindow(QWidget* parent)
         });
 
     connect(viewport, &ImageViewport::rotationCommitted, this, [this](float degrees) {
-        AdjustmentParams before = adjPanel->params();
-        AdjustmentParams after = before;
+        GlobalAdjustment before = adjPanel->params();
+        GlobalAdjustment after = before;
         after.rotation = degrees;
         if (after != before)
             undoStack->push(new AdjustmentCommand(adjPanel, before, after));
     });
 
     connect(viewport, &ImageViewport::whiteBalanceCommitted, this, [this](float kelvin, float tint) {
-        AdjustmentParams before = adjPanel->params();
-        AdjustmentParams after = before;
+        GlobalAdjustment before = adjPanel->params();
+        GlobalAdjustment after = before;
         after.temperature = kelvin;
         after.tint = tint;
         if (after != before)
@@ -123,11 +147,42 @@ MainWindow::MainWindow(QWidget* parent)
         adjPanel,
         &AdjustmentPanel::adjustmentCommitted,
         this,
-        [this](const AdjustmentParams& before, const AdjustmentParams& after) {
+        [this](const GlobalAdjustment& before, const GlobalAdjustment& after) {
             undoStack->push(new AdjustmentCommand(adjPanel, before, after));
         });
 
-    connect(adjPanel, &AdjustmentPanel::paramsChanged, viewport, &ImageViewport::setAdjustments);
+    connect(adjPanel, &AdjustmentPanel::paramsChanged, this, [this] { pushParamsToViewport(); });
+
+    connect(localPanel, &LocalAdjustmentPanel::changed, this, [this] { pushParamsToViewport(); });
+
+    // Panel selection drives which mask the on-image tool edits; on-image drags
+    // write the geometry back into the panel.
+    connect(
+        localPanel,
+        &LocalAdjustmentPanel::activeIndexChanged,
+        viewport,
+        &ImageViewport::setActiveLocalAdjustment);
+    connect(
+        viewport,
+        &ImageViewport::localMaskChanged,
+        localPanel,
+        &LocalAdjustmentPanel::updateMaskGeometry);
+
+    // Local edits join the shared undo stack: add / delete / tweak / numeric
+    // geometry all commit through the panel; an on-image handle drag commits on
+    // release.
+    connect(
+        localPanel,
+        &LocalAdjustmentPanel::committed,
+        this,
+        [this](const std::vector<LocalAdjustment>& before, const std::vector<LocalAdjustment>& after) {
+            undoStack->push(new LocalAdjustmentCommand(localPanel, before, after));
+        });
+    connect(
+        viewport,
+        &ImageViewport::localMaskEditFinished,
+        localPanel,
+        &LocalAdjustmentPanel::commitMaskEdit);
 
     connect(
         viewport, &ImageViewport::histogramsReady, adjPanel, &AdjustmentPanel::setHistogramSamples);
@@ -349,12 +404,16 @@ void MainWindow::setupToolbar() {
     cropAction = addTool("Crop", Qt::Key_C);
     straightenAction = addTool("Straighten", {});
     wbAction = addTool("White Bal.", {});
+    maskAction = addTool("Masks", Qt::Key_M);
 
     connect(toolGroup, &QActionGroup::triggered, this, [this](QAction* a) {
         using T = ImageViewport::ActiveTool;
         T t = T::None;
         if (a->isChecked())
-            t = a == cropAction ? T::Crop : a == straightenAction ? T::Straighten : T::WhiteBalance;
+            t = a == cropAction         ? T::Crop
+                : a == straightenAction ? T::Straighten
+                : a == maskAction       ? T::LocalMask
+                                        : T::WhiteBalance;
         viewport->setActiveTool(t);
     });
 
@@ -437,6 +496,11 @@ void MainWindow::syncToolActions() {
     cropAction->setChecked(cropOn);
     straightenAction->setChecked(t == ImageViewport::ActiveTool::Straighten);
     wbAction->setChecked(t == ImageViewport::ActiveTool::WhiteBalance);
+    maskAction->setChecked(t == ImageViewport::ActiveTool::LocalMask);
+
+    // Raise the Masks tab while the LocalMask tool is active.
+    if (t == ImageViewport::ActiveTool::LocalMask && rightTabs && masksTabIndex >= 0)
+        rightTabs->setCurrentIndex(masksTabIndex);
 
     // The aspect lock only applies while cropping. Reflect whatever the viewport
     // restored from the persisted crop: check the matching preset, or uncheck all
@@ -542,9 +606,17 @@ void MainWindow::setupDocks() {
     adjScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     tabs->addTab(adjScroll, "Adjustments");
 
+    localPanel = new LocalAdjustmentPanel(tabs);
+    auto* localScroll = new QScrollArea(tabs);
+    localScroll->setWidget(localPanel);
+    localScroll->setWidgetResizable(true);
+    localScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    masksTabIndex = tabs->addTab(localScroll, "Masks");
+
     exifPanel = new ExifPanel(tabs);
     tabs->addTab(exifPanel, "EXIF");
 
+    rightTabs = tabs;
     rightDock->setWidget(tabs);
     addDockWidget(Qt::RightDockWidgetArea, rightDock);
 
@@ -664,10 +736,12 @@ void MainWindow::onLoadFinished() {
     exifPanel->setMetadata(result.metadata);
     undoStack->clear();
 
-    AdjustmentParams saved = XmpSidecar::loadAdjustments(currentPath);
+    GlobalAdjustment saved = XmpSidecar::loadAdjustments(currentPath);
     if (!QFileInfo::exists(XmpSidecar::pathFor(currentPath)))
         saved.cropRect = result.defaultCrop;
     adjPanel->setParams(saved);
+    localPanel->setLocalAdjustments(saved.localAdjustments);
+    pushParamsToViewport();
 
     statusLabel->setText(QString("%1  —  %2 × %3")
                              .arg(QFileInfo(currentPath).fileName())
@@ -746,11 +820,21 @@ void MainWindow::rebuildDisplayLut() {
     proofLabel->setVisible(proofing);
 }
 
+GlobalAdjustment MainWindow::currentParams() const {
+    GlobalAdjustment p = adjPanel->params();
+    p.localAdjustments = localPanel->localAdjustments();
+    return p;
+}
+
+void MainWindow::pushParamsToViewport() {
+    viewport->setAdjustments(currentParams());
+}
+
 void MainWindow::saveAdjustments() {
     if (currentPath.isEmpty())
         return;
     viewport->commitActiveTool(); // fold any pending crop into the params first
-    if (XmpSidecar::saveAdjustments(currentPath, adjPanel->params()))
+    if (XmpSidecar::saveAdjustments(currentPath, currentParams()))
         statusLabel->setText("Saved: " + XmpSidecar::pathFor(currentPath));
     else
         QMessageBox::warning(
@@ -806,7 +890,7 @@ void MainWindow::exportFile() {
     }
 
     viewport->commitActiveTool(); // fold any pending crop into the params first
-    const AdjustmentParams p = adjPanel->params();
+    const GlobalAdjustment p = currentParams();
 
     // Natural output size = full-res pixels inside the crop rect (shared with
     // the crop overlay's live readout so the two can never disagree).

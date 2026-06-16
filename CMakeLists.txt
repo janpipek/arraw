@@ -91,6 +91,7 @@ set(CORE_SOURCES
     src/ImageViewport.cpp
     src/RendererCore.cpp
     src/AdjustmentPanel.cpp
+    src/LocalAdjustmentPanel.cpp
     src/AdjustmentSpinBox.cpp
     src/CollapsiblePane.cpp
     src/ToneCurveWidget.cpp
@@ -100,6 +101,7 @@ set(CORE_SOURCES
     src/RawProcessor.cpp
     src/StandardImageLoader.cpp
     src/ImagePipeline.cpp
+    src/LocalAdjustment.cpp
     src/FieldSpec.cpp
     src/ColorManagement.cpp
     src/ProofingPanel.cpp

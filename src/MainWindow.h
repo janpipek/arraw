@@ -8,6 +8,7 @@
 
 class ImageViewport;
 class AdjustmentPanel;
+class LocalAdjustmentPanel;
 class ProofingPanel;
 class ExifPanel;
 class FilmStrip;
@@ -19,6 +20,7 @@ class QToolButton;
 class QToolBar;
 class QActionGroup;
 class QAction;
+class QTabWidget;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -58,6 +60,12 @@ private:
     void setLoadingState(bool loading);
     void updateZoomStatus(float zoom);
 
+    // The full develop params = global edits (adjPanel) + local adjustments
+    // (localPanel) merged into one GlobalAdjustment for render, save, export.
+    GlobalAdjustment currentParams() const;
+    // Feed currentParams() to the viewport (after a global or local change).
+    void pushParamsToViewport();
+
     // Rebuild the viewport's display LUT from the current soft-proofing
     // settings and monitor profile (no LUT when both are off).
     void rebuildDisplayLut();
@@ -69,6 +77,7 @@ private:
 
     ImageViewport* viewport;
     AdjustmentPanel* adjPanel;
+    LocalAdjustmentPanel* localPanel;
     ProofingPanel* proofPanel;
     ExifPanel* exifPanel;
     FilmStrip* filmStrip;
@@ -85,6 +94,9 @@ private:
     QAction* cropAction;
     QAction* straightenAction;
     QAction* wbAction;
+    QAction* maskAction;             // LocalMask tool toggle
+    QTabWidget* rightTabs = nullptr; // Adjustments / Masks / EXIF
+    int masksTabIndex = -1;
 
     // Crop aspect-ratio lock UI + its transient state (mirrors the viewport's).
     QToolButton* aspectButton = nullptr;

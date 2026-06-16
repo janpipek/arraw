@@ -20,6 +20,8 @@ add_executable(arraw_tests
     test_FilmStripModel.cpp
     test_FilmStripLayout.cpp
     test_FieldSpec.cpp
+    test_LocalAdjustment.cpp
+    test_LocalAdjustmentPanel.cpp
     test_CollapsiblePane.cpp
     test_CropGeometry.cpp
 )

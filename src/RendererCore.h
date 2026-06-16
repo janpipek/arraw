@@ -35,9 +35,23 @@ struct Ubuf {
     qint32 hslActive;
     qint32 wbInput;
     qint32 clipWarn; // clipping overlay bits: 1 = highlights, 2 = shadows
+    // Local adjustments (docs/adr/0010), 16-mask cap. Flat floats here ↔ vec4[16]
+    // arrays in the shaders (tight std140 packing, like hslHue). Layout:
+    //   laGeom  = Linear (p0.x, p0.y, p1.x, p1.y) | Radial (cx, cy, rx, ry)
+    //   laGeom2 = Radial (angle, feather, invert, spare); unused for Linear
+    //   laTone  = (exposure, contrast, highlights, shadows)
+    //   laTone2 = (whites, blacks, tempShift, tint)
+    //   laColor = (saturation, vibrance, maskType, spare)  maskType 0=Linear 1=Radial
+    float laGeom[64];
+    float laTone[64];
+    float laTone2[64];
+    float laColor[64];
+    float laGeom2[64];
+    qint32 numLocalAdj;
+    qint32 pad_[3]; // round the block up to a 16-byte multiple (std140)
 };
 
-static_assert(sizeof(Ubuf) == 272);
+static_assert(sizeof(Ubuf) == 1568);
 
 // The one place the shader pipeline is recorded (ADR 0006): the widget's
 // on-screen pass, the export render, and the histogram samples all go
@@ -64,7 +78,7 @@ public:
         bool gamutWarn = false;
         bool clipHighlights = false; // sRGB-relative clipping overlay (docs/adr/0009)
         bool clipShadows = false;
-        AdjustmentParams adjustments;
+        GlobalAdjustment adjustments;
     };
 
     void initialize(QRhi* rhi); // idempotent; re-creates on a new QRhi
