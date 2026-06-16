@@ -57,9 +57,10 @@ C:\dev\vcpkg\vcpkg.exe install qtbase qttools qtshadertools "libraw[openmp]" lcm
 `libraw[openmp]` builds libraw with OpenMP so the demosaic (`dcraw_process`) runs
 multithreaded — roughly 3× faster on a multi-core CPU (≈3s → ≈0.9s on the reference
 machine). It adds a dependency on the OpenMP runtime `vcomp140.dll`, which ships with
-the same VC++ redistributable noted in §7. To profile the load yourself, set
-`ARRAW_TIME_LOAD=1` before launching `arraw.exe` for a per-stage `[arraw load]`
-breakdown on stderr.
+the same VC++ redistributable noted in §7. To profile, set the `ARRAW_TRACE`
+environment variable before launching `arraw.exe`; expensive operations (RAW load
+stages, colour transforms, LUT builds) print a `[trace] <label> N ms` line on stderr
+(see `src/Trace.h`).
 
 Verify they landed:
 

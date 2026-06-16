@@ -1,13 +1,12 @@
 #include "RawProcessor.h"
 #include "ColorManagement.h"
 #include "ImageMetadata.h"
+#include "Trace.h"
 #include <algorithm>
 #include <cmath>
-#include <cstdio>
 #include <libraw/libraw.h>
 #include <memory>
 #include <vector>
-#include <QElapsedTimer>
 #include <QImage>
 #include <QRectF>
 
@@ -133,31 +132,20 @@ LoadResult RawProcessor::load(
     auto cancelled = [&] { return cancel && cancel->load(); };
     auto raw = std::make_unique<LibRaw>();
 
-    // Per-stage timing for diagnosing slow loads. Set ARRAW_TIME_LOAD=1 to enable.
-    const bool timing = qEnvironmentVariableIsSet("ARRAW_TIME_LOAD");
-    QElapsedTimer timer;
-    if (timing)
-        timer.start();
-    auto lap = [&](const char* stage) {
-        if (timing) {
-            std::fprintf(
-                stderr, "[arraw load] %-16s %5lld ms\n", stage,
-                static_cast<long long>(timer.restart()));
-            std::fflush(stderr);
-        }
-    };
+    // Per-stage timing for diagnosing slow loads. Set ARRAW_TRACE to enable.
+    trace::Laps timer;
 
     int ret = raw->open_file(path.toLocal8Bit().constData());
     if (ret != LIBRAW_SUCCESS)
         return {{}, {}, {}, QString("open_file: %1").arg(libraw_strerror(ret))};
-    lap("open_file");
+    timer.lap("raw open_file");
 
     // Extract embedded preview on the same open handle, before the slow unpack.
     if (onEmbeddedPreview) {
         ImageBuffer buf = extractThumb(*raw);
         if (buf.valid())
             onEmbeddedPreview(std::move(buf));
-        lap("embedded_preview");
+        timer.lap("raw embedded_preview");
     }
 
     if (cancelled())
@@ -166,7 +154,7 @@ LoadResult RawProcessor::load(
     ret = raw->unpack();
     if (ret != LIBRAW_SUCCESS)
         return {{}, {}, {}, QString("unpack: %1").arg(libraw_strerror(ret))};
-    lap("unpack");
+    timer.lap("raw unpack");
 
     if (cancelled())
         return {};
@@ -184,7 +172,7 @@ LoadResult RawProcessor::load(
     ret = raw->dcraw_process();
     if (ret != LIBRAW_SUCCESS)
         return {{}, {}, {}, QString("dcraw_process: %1").arg(libraw_strerror(ret))};
-    lap("dcraw_process");
+    timer.lap("raw dcraw_process");
 
     libraw_processed_image_t* img = raw->dcraw_make_mem_image(&ret);
     if (!img || ret != LIBRAW_SUCCESS)
@@ -204,12 +192,12 @@ LoadResult RawProcessor::load(
         fullRes.data[i] = src[i] * scale;
 
     LibRaw::dcraw_clear_mem(img);
-    lap("make+convert");
+    timer.lap("raw make+convert");
 
     const QRectF defaultCrop = defaultCropRect(*raw, fullRes.width, fullRes.height);
     normalizeRawExposure(fullRes);
-    lap("normalize");
+    timer.lap("raw normalize");
     ImageBuffer preview = downsample2x(fullRes);
-    lap("downsample");
+    timer.lap("raw downsample");
     return {std::move(fullRes), std::move(preview), metadata, {}, defaultCrop};
 }

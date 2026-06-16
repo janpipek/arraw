@@ -1,4 +1,5 @@
 #include "ColorManagement.h"
+#include "Trace.h"
 #include <algorithm>
 #include <cmath>
 #include <lcms2.h>
@@ -78,6 +79,7 @@ QColorSpace outputColorSpace(OutputProfile profile) {
 ImageBuffer toWorkingSpaceBuffer(const QImage& img) {
     if (img.isNull())
         return {};
+    const trace::Scope trace_("toWorkingSpaceBuffer");
 
     ProfilePtr src = makeProfile(nullptr);
     if (const QByteArray icc = img.colorSpace().iccProfile(); !icc.isEmpty())
@@ -107,6 +109,7 @@ ImageBuffer toWorkingSpaceBuffer(const QImage& img) {
 QImage toOutputImage(const QImage& linearWorking, OutputProfile profile, bool sixteenBit) {
     if (linearWorking.isNull() || linearWorking.format() != QImage::Format_RGBX32FPx4)
         return {};
+    const trace::Scope trace_("toOutputImage");
 
     const ProfilePtr work = workingProfile();
     const ProfilePtr out = outputProfile(profile);
@@ -164,6 +167,7 @@ DisplayLut buildDisplayLut(
     ProofIntent intent,
     bool blackPointCompensation,
     const QString& monitorIcc) {
+    const trace::Scope trace_("buildDisplayLut");
     // Own context: the gamut pass sets alarm codes, which are context state.
     using ContextPtr
         = std::unique_ptr<std::remove_pointer_t<cmsContext>, decltype(&cmsDeleteContext)>;
