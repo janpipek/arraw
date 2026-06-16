@@ -3,9 +3,11 @@
 #include "ImageMetadata.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <libraw/libraw.h>
 #include <memory>
 #include <vector>
+#include <QElapsedTimer>
 #include <QImage>
 #include <QRectF>
 
@@ -39,10 +41,20 @@ QImage RawProcessor::extractThumbImage(LibRaw& raw) {
     return img;
 }
 
+// Cameras often embed a full-resolution (20+ MP) JPEG preview. Converting that to
+// working space with lcms costs several seconds — for an image that is replaced by
+// the full demosaic moments later. Cap the preview to a display-sized edge before
+// the colour transform; this is the single biggest win for perceived load time.
+static constexpr int kPreviewMaxEdge = 2048;
+
 // Embedded thumbnail as a working-space ImageBuffer. Does not require
 // unpack() to have been called first.
 static ImageBuffer extractThumb(LibRaw& raw) {
-    return toWorkingSpaceBuffer(RawProcessor::extractThumbImage(raw));
+    QImage thumb = RawProcessor::extractThumbImage(raw);
+    if (thumb.width() > kPreviewMaxEdge || thumb.height() > kPreviewMaxEdge)
+        thumb = thumb.scaled(
+            kPreviewMaxEdge, kPreviewMaxEdge, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    return toWorkingSpaceBuffer(thumb);
 }
 
 ImageBuffer RawProcessor::loadEmbeddedPreview(const QString& path) {
@@ -121,15 +133,31 @@ LoadResult RawProcessor::load(
     auto cancelled = [&] { return cancel && cancel->load(); };
     auto raw = std::make_unique<LibRaw>();
 
+    // Per-stage timing for diagnosing slow loads. Set ARRAW_TIME_LOAD=1 to enable.
+    const bool timing = qEnvironmentVariableIsSet("ARRAW_TIME_LOAD");
+    QElapsedTimer timer;
+    if (timing)
+        timer.start();
+    auto lap = [&](const char* stage) {
+        if (timing) {
+            std::fprintf(
+                stderr, "[arraw load] %-16s %5lld ms\n", stage,
+                static_cast<long long>(timer.restart()));
+            std::fflush(stderr);
+        }
+    };
+
     int ret = raw->open_file(path.toLocal8Bit().constData());
     if (ret != LIBRAW_SUCCESS)
         return {{}, {}, {}, QString("open_file: %1").arg(libraw_strerror(ret))};
+    lap("open_file");
 
     // Extract embedded preview on the same open handle, before the slow unpack.
     if (onEmbeddedPreview) {
         ImageBuffer buf = extractThumb(*raw);
         if (buf.valid())
             onEmbeddedPreview(std::move(buf));
+        lap("embedded_preview");
     }
 
     if (cancelled())
@@ -138,6 +166,7 @@ LoadResult RawProcessor::load(
     ret = raw->unpack();
     if (ret != LIBRAW_SUCCESS)
         return {{}, {}, {}, QString("unpack: %1").arg(libraw_strerror(ret))};
+    lap("unpack");
 
     if (cancelled())
         return {};
@@ -155,6 +184,7 @@ LoadResult RawProcessor::load(
     ret = raw->dcraw_process();
     if (ret != LIBRAW_SUCCESS)
         return {{}, {}, {}, QString("dcraw_process: %1").arg(libraw_strerror(ret))};
+    lap("dcraw_process");
 
     libraw_processed_image_t* img = raw->dcraw_make_mem_image(&ret);
     if (!img || ret != LIBRAW_SUCCESS)
@@ -174,9 +204,12 @@ LoadResult RawProcessor::load(
         fullRes.data[i] = src[i] * scale;
 
     LibRaw::dcraw_clear_mem(img);
+    lap("make+convert");
 
     const QRectF defaultCrop = defaultCropRect(*raw, fullRes.width, fullRes.height);
     normalizeRawExposure(fullRes);
+    lap("normalize");
     ImageBuffer preview = downsample2x(fullRes);
+    lap("downsample");
     return {std::move(fullRes), std::move(preview), metadata, {}, defaultCrop};
 }
