@@ -134,3 +134,21 @@ _Avoid_: deskew, level, auto-rotate
 **Rotation**:
 The signed angle (±45°) applied to the image, exposed as a slider and also set
 by Straighten. The stored value, not the gesture.
+
+**Crop**:
+The axis-aligned rectangular region of the rotated display frame that is kept;
+everything outside it is discarded from the developed and exported image.
+Defined in the display frame so it survives [[Rotation]] (crop after rotation),
+and stored as normalised edges. The stored value (the rectangle), as distinct
+from the gesture of dragging its handles.
+_Avoid_: trim, frame, mask ([[Mask]] is the local-adjustment stencil)
+
+**Aspect Ratio Lock**:
+A *transient* crop-tool state that constrains the [[Crop]] rectangle to a fixed
+width:height while dragging — Free (unconstrained), Original (the image's own
+proportions), or a preset (1:1, 2:3, 3:4, 4:5, 16:9), with an orientation toggle
+that swaps width and height. It shapes the rectangle but is **not** persisted:
+closing the crop tool forgets the lock; only the resulting [[Crop]] rectangle is
+saved. The proportions of a committed crop are therefore implicit in the
+rectangle, never stored as a separate "constrain" flag.
+_Avoid_: constrain, fix ratio, crop preset

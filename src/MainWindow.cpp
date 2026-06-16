@@ -2,6 +2,7 @@
 #include "AdjustmentPanel.h"
 #include "CollapsiblePane.h"
 #include "ColorManagement.h"
+#include "CropGeometry.h"
 #include "ExifPanel.h"
 #include "ExportDialog.h"
 #include "FilmStrip.h"
@@ -733,11 +734,11 @@ void MainWindow::exportFile() {
     viewport->commitActiveTool(); // fold any pending crop into the params first
     const AdjustmentParams p = adjPanel->params();
 
-    // Natural output size = full-res pixels inside the crop rect
-    const int naturalW = int(fullRes.width * p.cropRect.width() + 0.5);
-    const int naturalH = int(fullRes.height * p.cropRect.height() + 0.5);
+    // Natural output size = full-res pixels inside the crop rect (shared with
+    // the crop overlay's live readout so the two can never disagree).
+    const QSize natural = crop::cropPixelSize(fullRes.width, fullRes.height, p.cropRect);
 
-    ExportDialog optDlg(naturalW, naturalH, this);
+    ExportDialog optDlg(natural.width(), natural.height(), this);
     if (optDlg.exec() != QDialog::Accepted)
         return;
 
