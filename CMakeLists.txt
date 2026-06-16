@@ -111,6 +111,7 @@ set(CORE_SOURCES
     src/FilmStripLayout.cpp
     src/ThumbnailCache.cpp
     src/ExportDialog.cpp
+    src/CropGeometry.cpp
 )
 
 add_library(arraw_core STATIC ${CORE_SOURCES})

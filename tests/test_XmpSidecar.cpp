@@ -199,6 +199,20 @@ TEST_CASE("loading drops local adjustments beyond the 16-mask cap", "[xmp][arraw
     REQUIRE(XmpSidecar::loadAdjustments(rawPath).localAdjustments.size() == 16);
 }
 
+TEST_CASE("crop aspect-lock flag round-trips via crs:CropConstrainAspectRatio", "[xmp][crs]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("shot.arw");
+
+    AdjustmentParams locked;
+    locked.cropConstrained = true;
+    REQUIRE(XmpSidecar::saveAdjustments(rawPath, locked));
+    REQUIRE(XmpSidecar::loadAdjustments(rawPath).cropConstrained);
+
+    AdjustmentParams unlocked; // default: not constrained
+    REQUIRE(XmpSidecar::saveAdjustments(rawPath, unlocked));
+    REQUIRE_FALSE(XmpSidecar::loadAdjustments(rawPath).cropConstrained);
+}
+
 TEST_CASE("default params round-trip to defaults", "[xmp]") {
     QTemporaryDir dir;
     const QString rawPath = dir.filePath("untouched.nef");

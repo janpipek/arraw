@@ -59,6 +59,7 @@ struct GlobalAdjustment : SharedAdjustment {
     // Geometry
     float rotation = 0.0f;                  // degrees, -45 .. +45
     QRectF cropRect = {0.0, 0.0, 1.0, 1.0}; // normalised UV, full image by default
+    bool cropConstrained = false;           // crop is locked to its aspect ratio
 
     // Local adjustments — arraw-native, capped at 16 (docs/adr/0010).
     std::vector<LocalAdjustment> localAdjustments;
