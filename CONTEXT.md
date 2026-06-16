@@ -134,3 +134,23 @@ _Avoid_: deskew, level, auto-rotate
 **Rotation**:
 The signed angle (±45°) applied to the image, exposed as a slider and also set
 by Straighten. The stored value, not the gesture.
+
+**Crop**:
+The axis-aligned rectangular region of the rotated display frame that is kept;
+everything outside it is discarded from the developed and exported image.
+Defined in the display frame so it survives [[Rotation]] (crop after rotation),
+and stored as normalised edges. The stored value (the rectangle), as distinct
+from the gesture of dragging its handles.
+_Avoid_: trim, frame, mask ([[Mask]] is the local-adjustment stencil)
+
+**Aspect Ratio Lock**:
+A crop-tool state that constrains the [[Crop]] rectangle to a fixed width:height
+while dragging — Free (unconstrained), Original (the image's own proportions), or
+a preset (1:1, 2:3, 3:4, 4:5, 16:9), with an orientation toggle that swaps width
+and height. *Whether* a crop is locked is persisted, as the Lightroom-compatible
+`crs:CropConstrainAspectRatio` flag; on reload the lock re-engages at the stored
+rectangle's ratio. The exact preset is **not** stored — the ratio lives in the
+rectangle, and the preset name is re-derived on load (a ratio matching no preset,
+e.g. from a foreign editor, round-trips as a nameless "locked" state). Free is the
+absence of the flag.
+_Avoid_: constrain, fix ratio, crop preset

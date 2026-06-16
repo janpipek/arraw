@@ -64,6 +64,7 @@ struct AdjustmentParams {
     // Geometry
     float rotation = 0.0f;                  // degrees, -45 .. +45
     QRectF cropRect = {0.0, 0.0, 1.0, 1.0}; // normalised UV, full image by default
+    bool cropConstrained = false;           // crop is locked to its aspect ratio
 
     bool operator==(const AdjustmentParams&) const = default;
 };

@@ -119,6 +119,11 @@ SidecarData XmpSidecar::load(const QString& rawPath) {
                 attr("CropTop", 0.0f),
                 attr("CropRight", 1.0f) - attr("CropLeft", 0.0f),
                 attr("CropBottom", 1.0f) - attr("CropTop", 0.0f));
+            p.cropConstrained = xml.attributes()
+                                    .value(kNsCrs, "CropConstrainAspectRatio")
+                                    .toString()
+                                    .compare("true", Qt::CaseInsensitive)
+                                == 0;
 
             // HSL attributes
             for (int i = 0; i < 8; ++i) {
@@ -226,6 +231,7 @@ static bool writeFile(const QString& rawPath, const SidecarData& data) {
     write("CropTop", float(p.cropRect.top()));
     write("CropRight", float(p.cropRect.right()));
     write("CropBottom", float(p.cropRect.bottom()));
+    xml.writeAttribute(kNsCrs, "CropConstrainAspectRatio", p.cropConstrained ? "True" : "False");
 
     // HSL
     for (int i = 0; i < 8; ++i) {

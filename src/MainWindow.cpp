@@ -2,6 +2,7 @@
 #include "AdjustmentPanel.h"
 #include "CollapsiblePane.h"
 #include "ColorManagement.h"
+#include "CropGeometry.h"
 #include "ExifPanel.h"
 #include "ExportDialog.h"
 #include "FilmStrip.h"
@@ -25,6 +26,7 @@
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QLabel>
+#include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QScrollArea>
@@ -86,12 +88,15 @@ MainWindow::MainWindow(QWidget* parent)
 
     connect(viewport, &ImageViewport::zoomChanged, this, &MainWindow::updateZoomStatus);
 
-    connect(viewport, &ImageViewport::cropCommitted, this, [this](const QRectF& rect) {
-        AdjustmentParams before = adjPanel->params();
-        AdjustmentParams after = before;
-        after.cropRect = rect;
-        undoStack->push(new AdjustmentCommand(adjPanel, before, after));
-    });
+    connect(
+        viewport, &ImageViewport::cropCommitted, this, [this](const QRectF& rect, bool constrained) {
+            AdjustmentParams before = adjPanel->params();
+            AdjustmentParams after = before;
+            after.cropRect = rect;
+            after.cropConstrained = constrained;
+            if (after != before)
+                undoStack->push(new AdjustmentCommand(adjPanel, before, after));
+        });
 
     connect(viewport, &ImageViewport::rotationCommitted, this, [this](float degrees) {
         AdjustmentParams before = adjPanel->params();
@@ -353,6 +358,8 @@ void MainWindow::setupToolbar() {
         viewport->setActiveTool(t);
     });
 
+    setupAspectMenu(tb);
+
     // Spacer pushes the action group to the right edge.
     auto* spacer = new QWidget(tb);
     spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
@@ -367,13 +374,81 @@ void MainWindow::setupToolbar() {
     setToolsEnabled(false);
 }
 
+void MainWindow::setupAspectMenu(QToolBar* tb) {
+    aspectButton = new QToolButton(tb);
+    aspectButton->setText("Aspect");
+    aspectButton->setPopupMode(QToolButton::InstantPopup);
+    aspectButton->setEnabled(false); // only meaningful while cropping
+
+    auto* menu = new QMenu(aspectButton);
+    aspectGroup = new QActionGroup(menu);
+    // Optional exclusion: a restored custom ratio (no named preset) leaves every
+    // item unchecked while the lock is still active.
+    aspectGroup->setExclusionPolicy(QActionGroup::ExclusionPolicy::ExclusiveOptional);
+
+    struct PresetItem {
+        const char* label;
+        crop::AspectPreset preset;
+    };
+
+    const PresetItem items[] = {
+        {"Free", crop::AspectPreset::Free},
+        {"Original", crop::AspectPreset::Original},
+        {"1:1", crop::AspectPreset::Square},
+        {"2:3", crop::AspectPreset::R2x3},
+        {"3:4", crop::AspectPreset::R3x4},
+        {"4:5", crop::AspectPreset::R4x5},
+        {"16:9", crop::AspectPreset::R16x9},
+    };
+    for (const PresetItem& item : items) {
+        QAction* a = menu->addAction(item.label);
+        a->setCheckable(true);
+        a->setActionGroup(aspectGroup);
+        a->setChecked(item.preset == crop::AspectPreset::Free);
+        a->setData(int(item.preset)); // looked up by syncToolActions to reflect a restored lock
+        const crop::AspectPreset preset = item.preset;
+        connect(a, &QAction::triggered, this, [this, preset] {
+            aspectPreset = preset;
+            applyAspectLock();
+        });
+    }
+
+    menu->addSeparator();
+    orientationAction = menu->addAction("Flip Orientation");
+    orientationAction->setShortcut(Qt::Key_X);
+    connect(orientationAction, &QAction::triggered, this, [this] {
+        aspectLandscape = !aspectLandscape;
+        applyAspectLock();
+    });
+
+    aspectButton->setMenu(menu);
+    tb->addWidget(aspectButton);
+}
+
+void MainWindow::applyAspectLock() {
+    viewport->setAspectLock(aspectPreset, aspectLandscape);
+}
+
 void MainWindow::syncToolActions() {
     const ImageViewport::ActiveTool t = viewport->activeTool();
     // setChecked doesn't emit QActionGroup::triggered, but block toggled too.
     const QSignalBlocker b1(cropAction), b2(straightenAction), b3(wbAction);
-    cropAction->setChecked(t == ImageViewport::ActiveTool::Crop);
+    const bool cropOn = t == ImageViewport::ActiveTool::Crop;
+    cropAction->setChecked(cropOn);
     straightenAction->setChecked(t == ImageViewport::ActiveTool::Straighten);
     wbAction->setChecked(t == ImageViewport::ActiveTool::WhiteBalance);
+
+    // The aspect lock only applies while cropping. Reflect whatever the viewport
+    // restored from the persisted crop: check the matching preset, or uncheck all
+    // for a custom (unnamed) ratio while the lock still holds.
+    aspectButton->setEnabled(cropOn);
+    if (cropOn) {
+        const crop::PresetMatch m = viewport->currentLockMatch();
+        aspectPreset = m.preset;
+        aspectLandscape = m.landscape;
+        for (QAction* a : aspectGroup->actions())
+            a->setChecked(m.matched && a->data().toInt() == int(m.preset));
+    }
 }
 
 void MainWindow::setToolsEnabled(bool on) {
@@ -733,11 +808,11 @@ void MainWindow::exportFile() {
     viewport->commitActiveTool(); // fold any pending crop into the params first
     const AdjustmentParams p = adjPanel->params();
 
-    // Natural output size = full-res pixels inside the crop rect
-    const int naturalW = int(fullRes.width * p.cropRect.width() + 0.5);
-    const int naturalH = int(fullRes.height * p.cropRect.height() + 0.5);
+    // Natural output size = full-res pixels inside the crop rect (shared with
+    // the crop overlay's live readout so the two can never disagree).
+    const QSize natural = crop::cropPixelSize(fullRes.width, fullRes.height, p.cropRect);
 
-    ExportDialog optDlg(naturalW, naturalH, this);
+    ExportDialog optDlg(natural.width(), natural.height(), this);
     if (optDlg.exec() != QDialog::Accepted)
         return;
 
