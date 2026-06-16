@@ -1,4 +1,5 @@
 #pragma once
+#include "CropGeometry.h"
 #include "ImagePipeline.h"
 #include <atomic>
 #include <memory>
@@ -48,6 +49,11 @@ private:
     void setupToolbar();
     void syncToolActions();        // reflect viewport->activeTool() in the buttons
     void setToolsEnabled(bool on); // image-dependent toolbar items
+
+    // Crop aspect-ratio menu (enabled only while the crop tool is active). The
+    // chosen preset/orientation is pushed to the viewport as a transient lock.
+    void setupAspectMenu(QToolBar* tb);
+    void applyAspectLock(); // forward aspectPreset/aspectLandscape to the viewport
     void loadImage(const QString& path);
     void setLoadingState(bool loading);
     void updateZoomStatus(float zoom);
@@ -79,6 +85,13 @@ private:
     QAction* cropAction;
     QAction* straightenAction;
     QAction* wbAction;
+
+    // Crop aspect-ratio lock UI + its transient state (mirrors the viewport's).
+    QToolButton* aspectButton = nullptr;
+    QActionGroup* aspectGroup = nullptr; // exclusive preset actions; first is Free
+    QAction* orientationAction = nullptr;
+    crop::AspectPreset aspectPreset = crop::AspectPreset::Free;
+    bool aspectLandscape = true;
     QAction* saveAction;
     QAction* exportAction;
     QAction* clipHighlightsAction; // View → Show Highlight Clipping

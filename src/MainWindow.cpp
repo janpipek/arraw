@@ -26,6 +26,7 @@
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QLabel>
+#include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QScrollArea>
@@ -354,6 +355,8 @@ void MainWindow::setupToolbar() {
         viewport->setActiveTool(t);
     });
 
+    setupAspectMenu(tb);
+
     // Spacer pushes the action group to the right edge.
     auto* spacer = new QWidget(tb);
     spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
@@ -368,13 +371,75 @@ void MainWindow::setupToolbar() {
     setToolsEnabled(false);
 }
 
+void MainWindow::setupAspectMenu(QToolBar* tb) {
+    aspectButton = new QToolButton(tb);
+    aspectButton->setText("Aspect");
+    aspectButton->setPopupMode(QToolButton::InstantPopup);
+    aspectButton->setEnabled(false); // only meaningful while cropping
+
+    auto* menu = new QMenu(aspectButton);
+    aspectGroup = new QActionGroup(menu);
+    aspectGroup->setExclusive(true);
+
+    struct PresetItem {
+        const char* label;
+        crop::AspectPreset preset;
+    };
+
+    const PresetItem items[] = {
+        {"Free", crop::AspectPreset::Free},
+        {"Original", crop::AspectPreset::Original},
+        {"1:1", crop::AspectPreset::Square},
+        {"2:3", crop::AspectPreset::R2x3},
+        {"3:4", crop::AspectPreset::R3x4},
+        {"4:5", crop::AspectPreset::R4x5},
+        {"16:9", crop::AspectPreset::R16x9},
+    };
+    for (const PresetItem& item : items) {
+        QAction* a = menu->addAction(item.label);
+        a->setCheckable(true);
+        a->setActionGroup(aspectGroup);
+        a->setChecked(item.preset == crop::AspectPreset::Free);
+        const crop::AspectPreset preset = item.preset;
+        connect(a, &QAction::triggered, this, [this, preset] {
+            aspectPreset = preset;
+            applyAspectLock();
+        });
+    }
+
+    menu->addSeparator();
+    orientationAction = menu->addAction("Flip Orientation");
+    orientationAction->setShortcut(Qt::Key_X);
+    connect(orientationAction, &QAction::triggered, this, [this] {
+        aspectLandscape = !aspectLandscape;
+        applyAspectLock();
+    });
+
+    aspectButton->setMenu(menu);
+    tb->addWidget(aspectButton);
+}
+
+void MainWindow::applyAspectLock() {
+    viewport->setAspectLock(aspectPreset, aspectLandscape);
+}
+
 void MainWindow::syncToolActions() {
     const ImageViewport::ActiveTool t = viewport->activeTool();
     // setChecked doesn't emit QActionGroup::triggered, but block toggled too.
     const QSignalBlocker b1(cropAction), b2(straightenAction), b3(wbAction);
-    cropAction->setChecked(t == ImageViewport::ActiveTool::Crop);
+    const bool cropOn = t == ImageViewport::ActiveTool::Crop;
+    cropAction->setChecked(cropOn);
     straightenAction->setChecked(t == ImageViewport::ActiveTool::Straighten);
     wbAction->setChecked(t == ImageViewport::ActiveTool::WhiteBalance);
+
+    // The aspect lock is transient: it only applies while cropping and resets to
+    // Free on each entry, mirroring ImageViewport::enterCrop.
+    aspectButton->setEnabled(cropOn);
+    if (cropOn) {
+        aspectPreset = crop::AspectPreset::Free;
+        aspectLandscape = true;
+        aspectGroup->actions().constFirst()->setChecked(true); // Free
+    }
 }
 
 void MainWindow::setToolsEnabled(bool on) {

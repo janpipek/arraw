@@ -1,5 +1,6 @@
 #pragma once
 #include "ColorManagement.h"
+#include "CropGeometry.h"
 #include "ImagePipeline.h"
 #include "RendererCore.h"
 #include <QImage>
@@ -26,6 +27,12 @@ public:
     void setFullResImage(const ImageBuffer& fullRes);
     void setAdjustments(const AdjustmentParams& p);
     void setStraightenActive(bool active);
+
+    // Constrain the crop being edited to a fixed aspect ratio (transient tool
+    // state — forgotten when the crop tool closes). Reshapes the current crop to
+    // the new ratio immediately (shrink-to-fit, centred). No effect unless the
+    // crop tool is active.
+    void setAspectLock(crop::AspectPreset preset, bool landscape);
 
     // Active-tool state machine. setActiveTool switches tools, committing any
     // pending edit of the tool being left (commit-on-leave); commitActiveTool
@@ -207,4 +214,9 @@ private:
     int cropDragHandle = -2; // which handle is dragged
     QPointF cropDragStart;
     QRectF cropDragStartRect;
+
+    // Aspect Ratio Lock — transient, reset to Free on each crop entry. When not
+    // Free, corner drags preserve the ratio and edge handles are inactive.
+    crop::AspectPreset cropAspect = crop::AspectPreset::Free;
+    bool cropLandscape = true;
 };
