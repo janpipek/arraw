@@ -431,10 +431,13 @@ Implemented 2026-06 — see `docs/adr/0006-rhi-migration-single-renderer-core.md
 - Tile cache with LRU eviction.
 - Async tile upload via PBO (Pixel Buffer Objects).
 
-### Milestone 7 — Local Adjustments
+### Milestone 7 — Local Adjustments ✅
 
-Design resolved 2026-06-15. See `docs/adr/0008` (parametric masks, arraw-native
-storage). Per-region develop edits with a real-time preview.
+Design resolved 2026-06-15; implemented 2026-06 (Linear + Radial v1). See
+`docs/adr/0010` (parametric masks, arraw-native storage). Per-region develop
+edits with a real-time preview — both mask types support numeric and on-image
+(drag-handle) editing, render live and in export, persist to the arraw XMP
+namespace, and sit on the shared undo stack.
 
 - **Mask model — parametric ("described"), not painted.** A [[Local Adjustment]]
   is a [[Mask]] plus the tonal/colour delta subset (exposure, contrast,
