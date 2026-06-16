@@ -1,3 +1,4 @@
+#include "ImagePipeline.h"
 #include "XmpSidecar.h"
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
@@ -203,12 +204,12 @@ TEST_CASE("crop aspect-lock flag round-trips via crs:CropConstrainAspectRatio", 
     QTemporaryDir dir;
     const QString rawPath = dir.filePath("shot.arw");
 
-    AdjustmentParams locked;
+    GlobalAdjustment locked;
     locked.cropConstrained = true;
     REQUIRE(XmpSidecar::saveAdjustments(rawPath, locked));
     REQUIRE(XmpSidecar::loadAdjustments(rawPath).cropConstrained);
 
-    AdjustmentParams unlocked; // default: not constrained
+    GlobalAdjustment unlocked; // default: not constrained
     REQUIRE(XmpSidecar::saveAdjustments(rawPath, unlocked));
     REQUIRE_FALSE(XmpSidecar::loadAdjustments(rawPath).cropConstrained);
 }

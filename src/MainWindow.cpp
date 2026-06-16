@@ -114,8 +114,8 @@ MainWindow::MainWindow(QWidget* parent)
 
     connect(
         viewport, &ImageViewport::cropCommitted, this, [this](const QRectF& rect, bool constrained) {
-            AdjustmentParams before = adjPanel->params();
-            AdjustmentParams after = before;
+            GlobalAdjustment before = adjPanel->params();
+            GlobalAdjustment after = before;
             after.cropRect = rect;
             after.cropConstrained = constrained;
             if (after != before)
