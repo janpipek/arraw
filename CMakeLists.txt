@@ -170,8 +170,14 @@ qt6_add_shaders(arraw_core "arraw_shaders"
 )
 
 # resources/icon.qrc bakes the window-icon PNGs (generated from resources/icon.svg
-# by tools/render_icons.py — see ADR 0013) in via AUTORCC.
-add_executable(arraw src/main.cpp resources/icon.qrc)
+# by tools/render_icons.py — see ADR 0013) in via AUTORCC. On Windows, arraw.rc
+# additionally embeds arraw.ico as the executable's Win32 icon (Explorer/taskbar).
+set(arraw_platform_sources "")
+if(WIN32)
+    enable_language(RC)
+    set(arraw_platform_sources resources/arraw.rc)
+endif()
+add_executable(arraw src/main.cpp resources/icon.qrc ${arraw_platform_sources})
 arraw_enable_warnings(arraw)
 
 target_link_libraries(arraw PRIVATE arraw_core)

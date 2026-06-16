@@ -1,0 +1,4 @@
+// Windows application icon, embedded into arraw.exe (Explorer, taskbar, title bar).
+// ID 1 (lowest) so the shell picks it as the executable's icon. arraw.ico is
+// generated from resources/icon.svg by tools/render_icons.py — do not hand-edit.
+1 ICON "arraw.ico"
