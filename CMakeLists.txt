@@ -177,7 +177,11 @@ if(WIN32)
     enable_language(RC)
     set(arraw_platform_sources resources/arraw.rc)
 endif()
-add_executable(arraw src/main.cpp resources/icon.qrc ${arraw_platform_sources})
+# WIN32: build as a GUI-subsystem app so double-clicking does not pop a console
+# window. Qt6::EntryPoint (pulled in via Qt6::Core) supplies WinMain -> main. The
+# keyword is ignored on non-Windows platforms. With no console attached, redirect
+# ARRAW_TRACE output to a file when profiling: arraw.exe 2> trace.txt
+add_executable(arraw WIN32 src/main.cpp resources/icon.qrc ${arraw_platform_sources})
 arraw_enable_warnings(arraw)
 
 target_link_libraries(arraw PRIVATE arraw_core)
