@@ -5,6 +5,8 @@
 #include <limits>
 
 namespace {
+constexpr double kPi = 3.14159265358979323846;
+
 // Squared distance between two normalised points in aspect-corrected space.
 double aspectDist2(QPointF a, QPointF b, double aspect) {
     const double dx = (a.x() - b.x()) * aspect;
@@ -86,6 +88,47 @@ float radialMaskWeight(const RadialMask& m, QPointF uv, float aspect) {
     if (m.invert)
         w = 1.0 - w;
     return static_cast<float>(w);
+}
+
+QPointF radialHandlePos(const RadialMask& m, RadialHandle h, float aspect) {
+    const double a = m.angle * kPi / 180.0;
+    const double ca = std::cos(a);
+    const double sa = std::sin(a);
+    switch (h) {
+    case RadialHandle::RadiusX:
+        // +X axis end (angle+0); x divided by aspect to return to UV space.
+        return {m.center.x() + m.radiusX * ca / aspect,
+                m.center.y() + m.radiusX * sa};
+    case RadialHandle::RadiusY:
+        // +Y axis end (angle+90): direction (-sin a, cos a).
+        return {m.center.x() - m.radiusY * sa / aspect,
+                m.center.y() + m.radiusY * ca};
+    case RadialHandle::Center:
+    default:
+        return m.center;
+    }
+}
+
+RadialMask moveRadialHandle(RadialMask m, RadialHandle h, QPointF to, float aspect) {
+    const double dx = (to.x() - m.center.x()) * aspect;
+    const double dy = to.y() - m.center.y();
+    switch (h) {
+    case RadialHandle::Center:
+        m.center = to;
+        break;
+    case RadialHandle::RadiusX:
+        m.radiusX = std::sqrt(dx * dx + dy * dy);
+        m.angle = std::atan2(dy, dx) * 180.0 / kPi;
+        break;
+    case RadialHandle::RadiusY: {
+        const double a = m.angle * kPi / 180.0;
+        m.radiusY = std::abs(-dx * std::sin(a) + dy * std::cos(a));  // onto +Y axis
+        break;
+    }
+    case RadialHandle::None:
+        break;
+    }
+    return m;
 }
 
 LinearMask moveHandle(LinearMask m, LinearHandle h, QPointF to) {

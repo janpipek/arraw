@@ -234,11 +234,79 @@ void ImageViewport::drawLocalMaskOverlay(QPainter& p) const {
     handle(c, true);    // centre — drag to move the whole mask
 }
 
+const RadialMask* ImageViewport::activeRadialMask() const {
+    if (activeLocalAdj < 0 || activeLocalAdj >= int(params.localAdjustments.size()))
+        return nullptr;
+    return std::get_if<RadialMask>(&params.localAdjustments[activeLocalAdj].mask);
+}
+
+RadialHandle ImageViewport::hitTestRadialMask(QPointF pos) const {
+    const RadialMask* m = activeRadialMask();
+    if (!m)
+        return RadialHandle::None;
+    const float a = displayAspect();
+    const RadialHandle order[3] = {RadialHandle::RadiusX, RadialHandle::RadiusY,
+                                   RadialHandle::Center};
+    RadialHandle best = RadialHandle::None;
+    double bestD2 = double(kMaskHandleRadius) * kMaskHandleRadius;
+    for (RadialHandle h : order) {
+        const QPointF uv = radialHandlePos(*m, h, a);
+        const QPointF d = pos - cropUVToViewport(float(uv.x()), float(uv.y()));
+        const double d2 = QPointF::dotProduct(d, d);
+        if (d2 < bestD2) {
+            best = h;
+            bestD2 = d2;
+        }
+    }
+    return best;
+}
+
+void ImageViewport::drawRadialMaskOverlay(QPainter& p) const {
+    const RadialMask* m = activeRadialMask();
+    if (!m)
+        return;
+    const float aspect = displayAspect();
+    const double rad = m->angle * 3.14159265358979 / 180.0;
+    const double ca = std::cos(rad), sa = std::sin(rad);
+
+    // Oval boundary as a polygon, sampled in aspect-corrected space.
+    QPolygonF oval;
+    const int kSeg = 48;
+    for (int k = 0; k <= kSeg; ++k) {
+        const double t = 2.0 * 3.14159265358979 * k / kSeg;
+        const double ex = m->radiusX * std::cos(t);
+        const double ey = m->radiusY * std::sin(t);
+        const double rx = ex * ca - ey * sa;   // rotate by angle
+        const double ry = ex * sa + ey * ca;
+        oval << cropUVToViewport(float(m->center.x() + rx / aspect),
+                                 float(m->center.y() + ry));
+    }
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.setPen(QPen(QColor(255, 255, 255, 200), 1.5));
+    p.setBrush(Qt::NoBrush);
+    p.drawPolyline(oval);
+
+    auto handle = [&](RadialHandle h, bool filled) {
+        const QPointF uv = radialHandlePos(*m, h, aspect);
+        const QPointF pt = cropUVToViewport(float(uv.x()), float(uv.y()));
+        p.setBrush(filled ? QBrush(QColor(255, 255, 255, 220))
+                          : QBrush(QColor(0, 0, 0, 60)));
+        p.setPen(QPen(QColor(0, 0, 0, 180), 1.0));
+        p.drawEllipse(pt, kMaskHandleRadius, kMaskHandleRadius);
+    };
+    handle(RadialHandle::RadiusX, false);
+    handle(RadialHandle::RadiusY, false);
+    handle(RadialHandle::Center, true);
+}
+
 void ImageViewport::paintOverlay(QPainter& p) const {
     if (cropMode()) {
         drawCropOverlay(p);
     } else if (localMaskMode()) {
-        drawLocalMaskOverlay(p);
+        if (activeRadialMask())
+            drawRadialMaskOverlay(p);
+        else
+            drawLocalMaskOverlay(p);
     } else if (shouldShowAlignGrid()) {
         drawAlignGrid(p);
         if (tool == ActiveTool::Straighten && straightenDragging)
@@ -847,7 +915,10 @@ void ImageViewport::mousePressEvent(QMouseEvent* e) {
         return;   // tool stays active for further picks
     }
     if (localMaskMode() && e->button() == Qt::LeftButton) {
-        localDragHandle = hitTestLocalMask(e->position());
+        if (activeRadialMask())
+            radialDragHandle = hitTestRadialMask(e->position());
+        else
+            localDragHandle = hitTestLocalMask(e->position());
         return;   // no create-on-drag: empty space does nothing
     }
     if (e->button() == Qt::MiddleButton ||
@@ -867,12 +938,19 @@ void ImageViewport::mouseMoveEvent(QMouseEvent* e) {
         update();
         return;
     }
-    if (localMaskMode() && (e->buttons() & Qt::LeftButton) &&
-        localDragHandle != LinearHandle::None) {
-        if (const LinearMask* m = activeLinearMask()) {
-            const LinearMask moved =
-                moveHandle(*m, localDragHandle, viewportToCropUV(e->position()));
+    if (localMaskMode() && (e->buttons() & Qt::LeftButton)) {
+        const QPointF uv = viewportToCropUV(e->position());
+        if (const RadialMask* r = activeRadialMask();
+            r && radialDragHandle != RadialHandle::None) {
+            const RadialMask moved =
+                moveRadialHandle(*r, radialDragHandle, uv, displayAspect());
             params.localAdjustments[activeLocalAdj].mask = moved;  // echo for overlay
+            emit localMaskChanged(activeLocalAdj, moved);
+            update();
+        } else if (const LinearMask* m = activeLinearMask();
+                   m && localDragHandle != LinearHandle::None) {
+            const LinearMask moved = moveHandle(*m, localDragHandle, uv);
+            params.localAdjustments[activeLocalAdj].mask = moved;
             emit localMaskChanged(activeLocalAdj, moved);
             update();
         }
@@ -900,10 +978,12 @@ void ImageViewport::mouseReleaseEvent(QMouseEvent* e) {
         return;
     }
     if (localMaskMode() && e->button() == Qt::LeftButton) {
-        if (localDragHandle != LinearHandle::None) {
-            localDragHandle = LinearHandle::None;
+        const bool wasDragging = localDragHandle != LinearHandle::None
+                              || radialDragHandle != RadialHandle::None;
+        localDragHandle = LinearHandle::None;
+        radialDragHandle = RadialHandle::None;
+        if (wasDragging)
             emit localMaskEditFinished();   // one undo step per drag gesture
-        }
         return;
     }
     dragging = false;

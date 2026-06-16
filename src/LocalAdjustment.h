@@ -79,6 +79,18 @@ LinearHandle nearestHandle(const LinearMask& m, QPointF cursor, float aspect,
 // `uv`. Aspect-corrected so the oval is round-on-screen when radiusX == radiusY.
 float radialMaskWeight(const RadialMask& m, QPointF uv, float aspect);
 
+// Draggable handles of a Radial mask: centre (move) and the +X / +Y axis ends
+// (resize; the X handle also sets the angle from the centre→handle direction).
+enum class RadialHandle { None, Center, RadiusX, RadiusY };
+
+// UV position of a Radial handle, for drawing and hit-testing (aspect-corrected).
+QPointF radialHandlePos(const RadialMask& m, RadialHandle h, float aspect);
+
+// Move a Radial handle to `to` (normalised UV): Centre translates; RadiusX sets
+// radiusX + angle from the centre→cursor vector; RadiusY sets radiusY along the
+// perpendicular axis. `aspect` keeps the geometry isotropic.
+RadialMask moveRadialHandle(RadialMask m, RadialHandle h, QPointF to, float aspect);
+
 // Reposition a handle of `m` so it lands on `to` (normalised display coords).
 // P0/P1 move that endpoint; Center translates both points (preserving
 // orientation and spread). None returns the mask unchanged. No clamping.

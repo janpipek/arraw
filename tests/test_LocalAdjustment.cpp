@@ -76,6 +76,45 @@ TEST_CASE("Radial mask weight is aspect-corrected", "[localadj]") {
     REQUIRE_THAT(radialMaskWeight(m, {0.8, 0.5}, 1.0f), WithinAbs(1.0, 1e-6));
 }
 
+TEST_CASE("radial handles sit on the axis ends", "[localadj]") {
+    RadialMask m{ .center = {0.5, 0.5}, .radiusX = 0.4, .radiusY = 0.2,
+                  .angle = 0.0, .feather = 0.5, .invert = false };
+
+    const QPointF cx = radialHandlePos(m, RadialHandle::Center, 1.0f);
+    CHECK_THAT(cx.x(), WithinAbs(0.5, 1e-6));
+    CHECK_THAT(cx.y(), WithinAbs(0.5, 1e-6));
+    const QPointF rx = radialHandlePos(m, RadialHandle::RadiusX, 1.0f);
+    CHECK_THAT(rx.x(), WithinAbs(0.9, 1e-6));   // +0.4 along x
+    CHECK_THAT(rx.y(), WithinAbs(0.5, 1e-6));
+    const QPointF ry = radialHandlePos(m, RadialHandle::RadiusY, 1.0f);
+    CHECK_THAT(ry.x(), WithinAbs(0.5, 1e-6));
+    CHECK_THAT(ry.y(), WithinAbs(0.7, 1e-6));   // +0.2 along y
+    // aspect=2 halves the x offset in UV.
+    const QPointF rxA = radialHandlePos(m, RadialHandle::RadiusX, 2.0f);
+    CHECK_THAT(rxA.x(), WithinAbs(0.7, 1e-6));
+}
+
+TEST_CASE("moveRadialHandle moves, resizes, and rotates", "[localadj]") {
+    RadialMask m{ .center = {0.5, 0.5}, .radiusX = 0.4, .radiusY = 0.2,
+                  .angle = 0.0, .feather = 0.5, .invert = false };
+
+    SECTION("centre translates") {
+        const RadialMask r = moveRadialHandle(m, RadialHandle::Center, {0.6, 0.4}, 1.0f);
+        CHECK_THAT(r.center.x(), WithinAbs(0.6, 1e-6));
+        CHECK_THAT(r.center.y(), WithinAbs(0.4, 1e-6));
+    }
+    SECTION("radiusX handle sets radius and angle from the centre vector") {
+        const RadialMask r = moveRadialHandle(m, RadialHandle::RadiusX, {0.5, 0.9}, 1.0f);
+        CHECK_THAT(r.radiusX, WithinAbs(0.4, 1e-6));
+        CHECK_THAT(r.angle,   WithinAbs(90.0, 1e-6));
+    }
+    SECTION("radiusY handle sets radius along the perpendicular") {
+        const RadialMask r = moveRadialHandle(m, RadialHandle::RadiusY, {0.5, 0.75}, 1.0f);
+        CHECK_THAT(r.radiusY, WithinAbs(0.25, 1e-6));
+        CHECK_THAT(r.angle,   WithinAbs(0.0, 1e-6));   // unchanged
+    }
+}
+
 TEST_CASE("nearestHandle picks the closest endpoint or the derived center",
           "[localadj]") {
     LinearMask m{ .p0 = {0.2, 0.5}, .p1 = {0.8, 0.5} };  // center = (0.5, 0.5)

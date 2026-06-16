@@ -82,8 +82,8 @@ signals:
     void rotationCommitted(float degrees);          // Straighten tool result
     void whiteBalanceCommitted(float kelvin, float tint);   // WB picker result
     void activeToolChanged(ImageViewport::ActiveTool tool);
-    // Live geometry of the active Linear mask while its handles are dragged.
-    void localMaskChanged(int index, const LinearMask& mask);
+    // Live geometry of the active mask (either type) while its handles are dragged.
+    void localMaskChanged(int index, const Mask& mask);
     // A handle drag finished — fold it into one undo step.
     void localMaskEditFinished();
     void zoomChanged(float pixelZoom);
@@ -147,9 +147,12 @@ private:
     // Local-mask tool: edit the active Linear mask's handles on the image.
     bool localMaskMode() const { return tool == ActiveTool::LocalMask; }
     const LinearMask* activeLinearMask() const;
+    const RadialMask* activeRadialMask() const;
     QPointF localHandleViewport(LinearHandle h) const;   // p0/p1/center → screen
     LinearHandle hitTestLocalMask(QPointF viewportPos) const;
-    void drawLocalMaskOverlay(QPainter& p) const;
+    RadialHandle hitTestRadialMask(QPointF viewportPos) const;
+    void drawLocalMaskOverlay(QPainter& p) const;        // Linear
+    void drawRadialMaskOverlay(QPainter& p) const;
 
     // Crop is just one of the active tools; this keeps the crop code readable.
     bool cropMode() const { return tool == ActiveTool::Crop; }
@@ -208,6 +211,7 @@ private:
     static constexpr float kMaskHandleRadius = 8.0f;
     int          activeLocalAdj = -1;
     LinearHandle localDragHandle = LinearHandle::None;
+    RadialHandle radialDragHandle = RadialHandle::None;
 
     // Straighten: endpoints of the level line being dragged (viewport pixels).
     bool     straightenDragging = false;
