@@ -117,12 +117,37 @@ The kind of parametric [[Mask]]: Linear (a graduated fade across the frame) and
 Radial (an oval) in v1; Luminance range and Colour range are the planned next
 set. The brush, if added, becomes a further type.
 
+**Develop Group**:
+One selectable unit in the [[Copy Settings]] / [[Develop Preset]] checklist —
+the granularity at which develop settings travel between photos. The seven
+groups partition every global field: White Balance, Tone, Tone Curve, Colour,
+HSL, Detail, and Geometry ([[Rotation]] + [[Crop]] + [[Aspect Ratio Lock]]
+together). [[Local Adjustment]]s are deliberately *not* a group — masks pinned
+to one photo's framing rarely transfer (a freehand-mapping scheme is a possible
+future). Applying a group **replaces** every field in it on the target,
+including resetting to defaults when the source group is unedited.
+_Avoid_: section, category, panel
+
+**Copy Settings**:
+Snapshotting the open photo's chosen [[Develop Group]]s into an in-memory
+clipboard (one slot, session-only, never the OS clipboard). Copy opens the
+group checklist; [[Paste Settings]] later applies them. There is no implicit
+"copy from the previous photo" gesture — propagation is always explicit.
+_Avoid_: yank, duplicate, sync
+
+**Paste Settings**:
+Applying the [[Copy Settings]] clipboard onto the open photo as a single undo
+step. Paste opens its own checklist bounded by what was copied — you may narrow
+(uncheck) but never paste a [[Develop Group]] that was not copied.
+_Avoid_: sync, merge (paste replaces each group, it does not merge)
+
 **Develop Preset**:
-A saved, named bundle of develop settings, applied to any photo through the same
-"pick which groups travel" list used by copy/paste. Local Adjustments may be
-included but are off by default (a mask pinned to one photo's geometry rarely
-generalises). Stored as arraw-native files in the app data directory, not as a
-develop sidecar and not Lightroom-compatible.
+A saved, named bundle of selected [[Develop Group]]s, applied to any photo in
+one click (no apply-time checklist — narrowing happens only at save). The file
+is **partial**: it stores exactly the groups chosen at save, so its contents are
+the groups it sets and nothing else. [[Local Adjustment]]s are never included.
+Stored as one arraw-native JSON file per preset in the app data directory — not
+a develop sidecar, not Lightroom-compatible.
 _Avoid_: profile (that is a colour or camera profile), template, style
 
 **Straighten**:

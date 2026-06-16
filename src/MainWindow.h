@@ -1,8 +1,11 @@
 #pragma once
 #include "CropGeometry.h"
 #include "ImagePipeline.h"
+#include "PresetStore.h"
+#include "SettingsClipboard.h"
 #include <atomic>
 #include <memory>
+#include <optional>
 #include <QFutureWatcher>
 #include <QMainWindow>
 
@@ -21,6 +24,7 @@ class QToolBar;
 class QActionGroup;
 class QAction;
 class QTabWidget;
+class QMenu;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -43,6 +47,13 @@ private slots:
     void onLoadFinished();
     void onFullResNeeded();
 
+    // Settings Propagation (Milestone 8). Copy/Paste use the session-only
+    // settingsClipboard; presets persist via presetStore.
+    void copySettings();
+    void pasteSettings();
+    void saveCurrentAsPreset();
+    void managePresets();
+
 private:
     void setupMenus();
     void setupImageMenu();
@@ -59,6 +70,12 @@ private:
     void loadImage(const QString& path);
     void setLoadingState(bool loading);
     void updateZoomStatus(float zoom);
+
+    // Apply a develop change to the global params as one undo step (the source
+    // of truth for copy/paste and preset apply). No-op if nothing changed.
+    void applyDevelopChange(const GlobalAdjustment& after);
+    void applyPreset(const DevelopPreset& preset);
+    void rebuildPresetsMenu(); // re-list saved presets after save/delete
 
     // The full develop params = global edits (adjPanel) + local adjustments
     // (localPanel) merged into one GlobalAdjustment for render, save, export.
@@ -108,6 +125,12 @@ private:
     QAction* exportAction;
     QAction* clipHighlightsAction; // View → Show Highlight Clipping
     QAction* clipShadowsAction;    // View → Show Shadow Clipping
+
+    // Settings Propagation state (Milestone 8).
+    std::optional<SettingsClipboard> settingsClipboard; // session-only, never the OS clipboard
+    GroupSelection lastCopySelection = allGroups();     // remembers the last checklist
+    PresetStore presetStore;
+    QMenu* presetsMenu = nullptr;
 
     QString monitorProfilePath; // empty = assume sRGB
 

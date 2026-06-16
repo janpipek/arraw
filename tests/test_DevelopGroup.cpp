@@ -1,0 +1,137 @@
+#include "DevelopGroup.h"
+
+#include <catch2/catch_test_macros.hpp>
+
+#include <QRectF>
+
+// A GlobalAdjustment with a distinct non-default value in *every* global field,
+// so a copy that misses a field is detectable. localAdjustments is left empty
+// here and exercised separately.
+static GlobalAdjustment fullyEdited() {
+    GlobalAdjustment g;
+    // White Balance
+    g.temperature = 7200.0f;
+    g.tint = 12.0f;
+    // Tone (SharedAdjustment)
+    g.exposure = 1.5f;
+    g.contrast = 20.0f;
+    g.highlights = -30.0f;
+    g.shadows = 40.0f;
+    g.whites = 10.0f;
+    g.blacks = -15.0f;
+    // Colour
+    g.saturation = 25.0f;
+    g.vibrance = -8.0f;
+    // Tone Curve
+    g.curveLuma.points = {{0.0, 0.0}, {0.4, 0.5}, {1.0, 1.0}};
+    g.curveR.points = {{0.0, 0.1}, {1.0, 1.0}};
+    g.curveG.points = {{0.0, 0.0}, {1.0, 0.9}};
+    g.curveB.points = {{0.0, 0.05}, {1.0, 0.95}};
+    // HSL
+    g.hslHue = {1, 2, 3, 4, 5, 6, 7, 8};
+    g.hslSat = {-1, -2, -3, -4, -5, -6, -7, -8};
+    g.hslLum = {9, 8, 7, 6, 5, 4, 3, 2};
+    // Detail
+    g.sharpening = 55.0f;
+    // Geometry
+    g.rotation = 7.5f;
+    g.cropRect = {0.1, 0.2, 0.7, 0.6};
+    g.cropConstrained = true;
+    return g;
+}
+
+static GroupSelection only(DevelopGroup g) {
+    GroupSelection s;
+    s.set(static_cast<size_t>(g));
+    return s;
+}
+
+TEST_CASE("Empty selection leaves the target unchanged", "[developgroup]") {
+    const GlobalAdjustment target; // defaults
+    const GlobalAdjustment source = fullyEdited();
+
+    REQUIRE(applyGroups(target, source, GroupSelection{}) == target);
+}
+
+TEST_CASE("Selecting one group copies only that group's fields", "[developgroup]") {
+    const GlobalAdjustment target; // defaults
+    const GlobalAdjustment source = fullyEdited();
+
+    const GlobalAdjustment result = applyGroups(target, source, only(DevelopGroup::Tone));
+
+    // The Tone fields came across...
+    CHECK(result.exposure == source.exposure);
+    CHECK(result.contrast == source.contrast);
+    CHECK(result.highlights == source.highlights);
+    CHECK(result.shadows == source.shadows);
+    CHECK(result.whites == source.whites);
+    CHECK(result.blacks == source.blacks);
+
+    // ...and nothing outside Tone moved.
+    CHECK(result.temperature == target.temperature);
+    CHECK(result.tint == target.tint);
+    CHECK(result.saturation == target.saturation);
+    CHECK(result.vibrance == target.vibrance);
+    CHECK(result.sharpening == target.sharpening);
+    CHECK(result.rotation == target.rotation);
+    CHECK(result.curveLuma == target.curveLuma);
+}
+
+TEST_CASE("Replace is wholesale: pasting a default group resets the target", "[developgroup]") {
+    const GlobalAdjustment source;           // unedited Tone (all defaults)
+    GlobalAdjustment target = fullyEdited(); // target has heavy Tone edits
+
+    const GlobalAdjustment result = applyGroups(target, source, only(DevelopGroup::Tone));
+
+    // Pasting an unedited Tone group resets the target's Tone to defaults.
+    CHECK(result.exposure == 0.0f);
+    CHECK(result.contrast == 0.0f);
+    CHECK(result.blacks == 0.0f);
+    // Untouched groups survive.
+    CHECK(result.saturation == target.saturation);
+}
+
+TEST_CASE("Geometry moves rotation, crop, and the aspect-lock flag together", "[developgroup]") {
+    const GlobalAdjustment target; // defaults: no rotation, full-frame crop
+    const GlobalAdjustment source = fullyEdited();
+
+    const GlobalAdjustment result = applyGroups(target, source, only(DevelopGroup::Geometry));
+
+    CHECK(result.rotation == source.rotation);
+    CHECK(result.cropRect == source.cropRect);
+    CHECK(result.cropConstrained == source.cropConstrained);
+    // Geometry must not drag tonal fields along.
+    CHECK(result.exposure == target.exposure);
+}
+
+TEST_CASE("White Balance carries temperature and tint", "[developgroup]") {
+    const GlobalAdjustment target;
+    const GlobalAdjustment source = fullyEdited();
+
+    const GlobalAdjustment result = applyGroups(target, source, only(DevelopGroup::WhiteBalance));
+
+    CHECK(result.temperature == source.temperature);
+    CHECK(result.tint == source.tint);
+    CHECK(result.saturation == target.saturation); // tint is WB, sat is Colour
+}
+
+TEST_CASE(
+    "All seven groups reproduce the source's globals but never its local adjustments",
+    "[developgroup]") {
+    // Exhaustiveness guard: if any global field belongs to no group, it stays at
+    // the target's value and this fails — enforcing "no field silently fails to
+    // copy" as a test, not a hope.
+    GlobalAdjustment target; // defaults...
+    LocalAdjustment keep;    // ...plus a local adjustment to protect
+    keep.exposure = 0.3f;
+    target.localAdjustments = {keep};
+
+    const GlobalAdjustment source = fullyEdited();
+
+    const GlobalAdjustment result = applyGroups(target, source, allGroups());
+
+    // Every global field now matches the source...
+    GlobalAdjustment expected = source;
+    expected.localAdjustments = target.localAdjustments; // ...except the LA list,
+    CHECK(result == expected);                           // which is the target's.
+}
