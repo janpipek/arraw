@@ -119,9 +119,9 @@ Brief overview:
 - `RawProcessor` — libraw wrapper, runs on a background thread via `QtConcurrent::run`
 - `RendererCore` — owns all RHI resources; the single place the shader pass is recorded (preview, export, histograms)
 - `ImageViewport` — `QRhiWidget` with zoom/pan/crop logic, delegating all drawing to `RendererCore`
-- `AdjustmentPanel` — slider UI, emits `paramsChanged(AdjustmentParams)` on every change
+- `AdjustmentPanel` — slider UI, emits `paramsChanged(GlobalAdjustment)` on every change
 - `XmpSidecar` — reads/writes `.xmp` files using Adobe Camera Raw field names
 - `FileBrowser` — folder-scoped filename list dock
 - `MainWindow` — wires everything together; owns the `QUndoStack`
 
-All adjustments live in `AdjustmentParams` (a plain struct). The GLSL fragment shader is the single source of truth for all *adjustments* — the same shader runs during preview and export, always in linear Rec.2020. Only the final color encode differs per destination: in-shader for the display, lcms2 on the CPU for export (see `docs/adr/0002`).
+All adjustments live in `GlobalAdjustment` (a plain struct). The GLSL fragment shader is the single source of truth for all *adjustments* — the same shader runs during preview and export, always in linear Rec.2020. Only the final color encode differs per destination: in-shader for the display, lcms2 on the CPU for export (see `docs/adr/0002`).

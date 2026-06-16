@@ -1,5 +1,6 @@
 #pragma once
 #include "ImageMetadata.h"
+#include "LocalAdjustment.h"
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -32,14 +33,10 @@ struct CurvePoints {
     bool operator==(const CurvePoints&) const = default;
 };
 
-struct AdjustmentParams {
-    // Tone
-    float exposure = 0.0f;   // -5.0 .. +5.0 EV
-    float contrast = 0.0f;   // -100 .. +100
-    float highlights = 0.0f; // -100 .. +100
-    float shadows = 0.0f;    // -100 .. +100
-    float whites = 0.0f;     // -100 .. +100
-    float blacks = 0.0f;     // -100 .. +100
+struct GlobalAdjustment : SharedAdjustment {
+    // Tone (exposure, contrast, highlights, shadows, whites, blacks) and
+    // tint/saturation/vibrance live in SharedAdjustment, shared with
+    // LocalAdjustment (docs/adr/0010).
 
     // Tone curve (Luma + per-channel R/G/B), control points in [0,1]×[0,1]
     CurvePoints curveLuma;
@@ -47,11 +44,9 @@ struct AdjustmentParams {
     CurvePoints curveG;
     CurvePoints curveB;
 
-    // Color
+    // Color — temperature is global-only, in absolute Kelvin (a local adjustment's
+    // temperature is a relative -100..100 shift instead; see LocalAdjustment).
     float temperature = 5500.0f; // Kelvin, 2000 .. 12000
-    float tint = 0.0f;           // -100 .. +100
-    float saturation = 0.0f;     // -100 .. +100
-    float vibrance = 0.0f;       // -100 .. +100
 
     // HSL: 8 ranges [Red, Orange, Yellow, Green, Aqua, Blue, Purple, Magenta], -100..+100
     std::array<float, 8> hslHue = {};
@@ -64,8 +59,12 @@ struct AdjustmentParams {
     // Geometry
     float rotation = 0.0f;                  // degrees, -45 .. +45
     QRectF cropRect = {0.0, 0.0, 1.0, 1.0}; // normalised UV, full image by default
+    bool cropConstrained = false;           // crop is locked to its aspect ratio
 
-    bool operator==(const AdjustmentParams&) const = default;
+    // Local adjustments — arraw-native, capped at 16 (docs/adr/0010).
+    std::vector<LocalAdjustment> localAdjustments;
+
+    bool operator==(const GlobalAdjustment&) const = default;
 };
 
 // Linear float32 RGB image buffer, interleaved, [0..1] nominal.

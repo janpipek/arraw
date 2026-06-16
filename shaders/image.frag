@@ -34,6 +34,18 @@ layout(std140, binding = 0) uniform buf {
     int   hslActive;
     int   wbInput;       // stop before temperature/tint, output linear (WB picker)
     int   clipWarn;      // clipping overlay bits: 1 = highlights, 2 = shadows (docs/adr/0009)
+    // Local adjustments (docs/adr/0010), 16-mask cap. Packed parallel vec4 arrays:
+    //   laGeom  = Linear (p0.x, p0.y, p1.x, p1.y) | Radial (cx, cy, rx, ry)
+    //   laGeom2 = Radial (angle, feather, invert, spare); unused for Linear
+    //   laTone  = (exposure, contrast, highlights, shadows)
+    //   laTone2 = (whites, blacks, tempShift, tint)
+    //   laColor = (saturation, vibrance, maskType, spare)  maskType 0=Linear 1=Radial
+    vec4  laGeom[16];
+    vec4  laTone[16];
+    vec4  laTone2[16];
+    vec4  laColor[16];
+    vec4  laGeom2[16];
+    int   numLocalAdj;
 } u;
 
 layout(binding = 1) uniform sampler2D uTexture;
@@ -58,8 +70,8 @@ const float kHslCenters[8] = float[8](
     0.889   // Magenta(320°)
 );
 
-vec3 applyExposure(vec3 c) {
-    return c * pow(2.0, u.exposure);
+vec3 applyExposure(vec3 c, float exposure) {
+    return c * pow(2.0, exposure);
 }
 
 vec3 applyBaseLook(vec3 c) {
@@ -72,14 +84,15 @@ vec3 applyBaseLook(vec3 c) {
     return mix(vec3(luma), c, satBoost);
 }
 
-vec3 applyContrast(vec3 c) {
-    if (abs(u.contrast) < 0.001) return c;
-    return (c - 0.5) * (1.0 + u.contrast * 0.8) + 0.5;
+vec3 applyContrast(vec3 c, float contrast) {
+    if (abs(contrast) < 0.001) return c;
+    return (c - 0.5) * (1.0 + contrast * 0.8) + 0.5;
 }
 
-vec3 applyToneRegions(vec3 c) {
-    if (abs(u.highlights) < 0.001 && abs(u.shadows) < 0.001 &&
-        abs(u.whites) < 0.001 && abs(u.blacks) < 0.001)
+vec3 applyToneRegions(vec3 c, float highlights, float shadows,
+                      float whites, float blacks) {
+    if (abs(highlights) < 0.001 && abs(shadows) < 0.001 &&
+        abs(whites) < 0.001 && abs(blacks) < 0.001)
         return c;
 
     float y = dot(c, kLuma);
@@ -90,10 +103,10 @@ vec3 applyToneRegions(vec3 c) {
     float w  = smoothstep(0.52, 0.97, y);
     float b  = 1.0 - smoothstep(0.03, 0.48, y);
 
-    float delta = u.highlights * 0.5 * hl
-                + u.shadows   * 0.5 * sh
-                + u.whites    * 0.25 * w
-                + u.blacks    * 0.25 * b;
+    float delta = highlights * 0.5 * hl
+                + shadows    * 0.5 * sh
+                + whites     * 0.25 * w
+                + blacks     * 0.25 * b;
 
     float y2 = max(y + delta, 0.0);
     return c * (y2 / max(y, 1e-5));
@@ -122,17 +135,23 @@ vec3 applyCurve(vec3 c) {
     return srgbToLinear(c);
 }
 
-vec3 applyTemperature(vec3 c) {
-    float t = (u.temperature - 5500.0) / 5500.0;
+// Core red/blue shift for a normalised temperature `t` (0 = neutral). Shared by
+// the global path (t from absolute Kelvin) and local adjustments (t from a
+// relative -100..100 shift) — see docs/adr/0010.
+vec3 applyTempShift(vec3 c, float t) {
     if (abs(t) < 0.0001) return c;
     c.r += t * 0.15;
     c.b -= t * 0.15;
     return c;
 }
 
-vec3 applyTint(vec3 c) {
-    if (abs(u.tint) < 0.001) return c;
-    c.g += u.tint * 0.05;
+vec3 applyTemperature(vec3 c) {
+    return applyTempShift(c, (u.temperature - 5500.0) / 5500.0);
+}
+
+vec3 applyTint(vec3 c, float tint) {
+    if (abs(tint) < 0.001) return c;
+    c.g += tint * 0.05;
     return c;
 }
 
@@ -202,17 +221,17 @@ vec3 applyHsl(vec3 c) {
     return hsv2rgb(hsv);
 }
 
-vec3 applySaturation(vec3 c) {
-    if (abs(u.saturation) < 0.001) return c;
+vec3 applySaturation(vec3 c, float saturation) {
+    if (abs(saturation) < 0.001) return c;
     float luma = dot(c, kLuma);
-    return mix(vec3(luma), c, 1.0 + u.saturation);
+    return mix(vec3(luma), c, 1.0 + saturation);
 }
 
-vec3 applyVibrance(vec3 c) {
-    if (abs(u.vibrance) < 0.001) return c;
+vec3 applyVibrance(vec3 c, float vibrance) {
+    if (abs(vibrance) < 0.001) return c;
     float luma = dot(c, kLuma);
     float sat  = length(c - vec3(luma));
-    return mix(vec3(luma), c, 1.0 + u.vibrance * (1.0 - sat));
+    return mix(vec3(luma), c, 1.0 + vibrance * (1.0 - sat));
 }
 
 // Display transform: linear Rec.2020 → sRGB display (docs/adr/0002).
@@ -246,6 +265,87 @@ vec3 displayLut(vec3 c) {
     return v.rgb;
 }
 
+// Linear (graduated) mask weight in [0,1] — a line-for-line port of the CPU
+// maskWeight in src/LocalAdjustment.cpp (the CPU/GPU contract the goldens
+// enforce). Aspect-corrected so the gradient is perpendicular to its line on
+// screen; smoothstep falloff.
+float linearMaskWeight(int i, vec2 uv, float aspect) {
+    vec2 p0 = u.laGeom[i].xy;
+    vec2 p1 = u.laGeom[i].zw;
+    float dx = (p1.x - p0.x) * aspect;
+    float dy = p1.y - p0.y;
+    float len2 = dx * dx + dy * dy;
+    if (len2 <= 0.0) return 0.0;
+    float px = (uv.x - p0.x) * aspect;
+    float py = uv.y - p0.y;
+    float t = clamp((px * dx + py * dy) / len2, 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
+}
+
+// Radial (oval) mask weight — port of radialMaskWeight in src/LocalAdjustment.cpp.
+float radialMaskWeight(int i, vec2 uv, float aspect) {
+    vec2  center = u.laGeom[i].xy;
+    float rx = u.laGeom[i].z;
+    float ry = u.laGeom[i].w;
+    float angle   = u.laGeom2[i].x;
+    float feather = u.laGeom2[i].y;
+    float invert  = u.laGeom2[i].z;
+
+    float dx = (uv.x - center.x) * aspect;
+    float dy = uv.y - center.y;
+    if (angle != 0.0) {
+        float rad = angle * 3.14159265 / 180.0;
+        float cs = cos(rad), sn = sin(rad);
+        float rotX =  dx * cs + dy * sn;
+        float rotY = -dx * sn + dy * cs;
+        dx = rotX;
+        dy = rotY;
+    }
+    if (rx <= 0.0 || ry <= 0.0)
+        return 0.0;
+    float nx = dx / rx;
+    float ny = dy / ry;
+    float d = sqrt(nx * nx + ny * ny);
+
+    float inner = 1.0 - feather;
+    float sm;
+    if (feather <= 0.0)
+        sm = d >= 1.0 ? 1.0 : 0.0;
+    else {
+        float t = clamp((d - inner) / feather, 0.0, 1.0);
+        sm = t * t * (3.0 - 2.0 * t);
+    }
+    float w = 1.0 - sm;
+    if (invert > 0.5)
+        w = 1.0 - w;
+    return w;
+}
+
+// Dispatch on the mask type tag (laColor.z): 0 = Linear, 1 = Radial.
+float maskWeight(int i, vec2 uv, float aspect) {
+    if (int(u.laColor[i].z + 0.5) == 1)
+        return radialMaskWeight(i, uv, aspect);
+    return linearMaskWeight(i, uv, aspect);
+}
+
+// Apply every local adjustment in array order, each blended by its mask weight
+// (w = 0 leaves the pixel untouched). Reuses the same parameterised tone/colour
+// functions as the global path — the deltas just arrive scaled by w.
+vec3 applyLocalAdjustments(vec3 c, vec2 uv, float aspect) {
+    for (int i = 0; i < u.numLocalAdj; ++i) {
+        float w = maskWeight(i, uv, aspect);
+        c = applyExposure(c, w * u.laTone[i].x);
+        c = applyContrast(c, w * u.laTone[i].y);
+        c = applyToneRegions(c, w * u.laTone[i].z, w * u.laTone[i].w,
+                                w * u.laTone2[i].x, w * u.laTone2[i].y);
+        c = applyTempShift(c, w * u.laTone2[i].z);
+        c = applyTint(c, w * u.laTone2[i].w);
+        c = applySaturation(c, w * u.laColor[i].x);
+        c = applyVibrance(c, w * u.laColor[i].y);
+    }
+    return c;
+}
+
 // Processing order (the authoritative definition — DESIGN.md mirrors it).
 // Everything up to the final encode operates in linear Rec.2020:
 //   base look → exposure → contrast → tone regions → tone curves
@@ -264,9 +364,9 @@ void main() {
     vec3 c = texture(uTexture, vUV).rgb;
     if (u.baseLook != 0)
         c = applyBaseLook(c);
-    c = applyExposure(c);
-    c = applyContrast(c);
-    c = applyToneRegions(c);
+    c = applyExposure(c, u.exposure);
+    c = applyContrast(c, u.contrast);
+    c = applyToneRegions(c, u.highlights, u.shadows, u.whites, u.blacks);
     if (u.curveInput != 0) {
         fragColor = vec4(linearToSRGB(c), 1.0);
         return;
@@ -277,11 +377,16 @@ void main() {
         return;
     }
     c = applyTemperature(c);
-    c = applyTint(c);
+    c = applyTint(c, u.tint);
     if (u.hslActive != 0)
         c = applyHsl(c);
-    c = applySaturation(c);
-    c = applyVibrance(c);
+    c = applySaturation(c, u.saturation);
+    c = applyVibrance(c, u.vibrance);
+
+    // Local adjustments — analytic, single-pass, after the global colour section
+    // and before encode (docs/adr/0010).
+    c = applyLocalAdjustments(c, vUV, u.aspect);
+
     if (u.displayEncode == 0) {
         fragColor = vec4(clamp(c, 0.0, 1.0), 1.0);          // export readback
         return;

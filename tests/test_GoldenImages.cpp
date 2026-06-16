@@ -5,9 +5,9 @@
 //   ARRAW_UPDATE_GOLDENS=1 ./build/tests/arraw_tests "[golden]"
 
 #include "ImageViewport.h"
+#include "TestApp.h"
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
-#include <QApplication>
 #include <QDir>
 #include <QFile>
 #include <QImage>
@@ -21,13 +21,10 @@ constexpr float kMaxChannelMean = 0.3f / 255.0f;
 // ── Realized viewport (QApplication + shown widget = live RHI) ───────────────
 
 ImageViewport* goldenViewport() {
-    static int argc = 1;
-    static char arg0[] = "arraw_tests";
-    static char* argv[] = {arg0, nullptr};
-    static QApplication app(argc, argv);
+    testApp(); // ensure the shared QApplication exists (and is destroyed last)
 
-    // Declared after `app` so it is destroyed first — tearing down a live
-    // render widget after QApplication segfaults in the platform plugin.
+    // Declared after the app is constructed so it is destroyed first — tearing
+    // down a live render widget after QApplication segfaults in the platform plugin.
     static std::unique_ptr<ImageViewport> vp = [] {
         auto v = std::make_unique<ImageViewport>();
         v->resize(128, 96);
@@ -139,7 +136,7 @@ DiffStats diff(const QImage& a, const QImage& b) {
 
 struct Scenario {
     const char* name;
-    AdjustmentParams params;
+    GlobalAdjustment params;
 };
 
 std::vector<Scenario> scenarios() {
@@ -147,7 +144,7 @@ std::vector<Scenario> scenarios() {
 
     list.push_back({"neutral", {}});
 
-    AdjustmentParams p;
+    GlobalAdjustment p;
     p.exposure = 1.5f;
     list.push_back({"exposure_plus15ev", p});
 
@@ -234,6 +231,82 @@ TEST_CASE("shader pipeline matches golden renders", "[gpu][golden]") {
     }
 }
 
+// Local adjustments (docs/adr/0010): a behavioural check of the whole GPU chain
+// — std140 packing, fillUbuf, the shader loop, and the GLSL maskWeight port.
+// A +1 EV local exposure on a Linear mask must brighten only the masked region.
+TEST_CASE("a local exposure mask brightens only the masked region", "[gpu][localadj]") {
+    ImageViewport* vp = goldenViewport();
+    if (!vp)
+        SKIP("no OpenGL context available on this machine");
+
+    // Flat mid-grey scene, so any brightness difference is the mask's doing.
+    ImageBuffer scene;
+    scene.width = 64;
+    scene.height = 48;
+    scene.data.assign(size_t(scene.width) * scene.height * 3, 0.3f);
+
+    GlobalAdjustment p;
+    LocalAdjustment la;
+    // Vertical gradient line near centre: left of x=0.4 → weight 0,
+    // right of x=0.6 → weight 1.
+    la.mask = LinearMask{{0.4, 0.5}, {0.6, 0.5}};
+    la.exposure = 1.0f; // +1 EV on the masked side
+    p.localAdjustments.push_back(la);
+
+    vp->setAdjustments(p);
+    const QImage got = vp->renderToImage(scene, p, scene.width, scene.height);
+    REQUIRE_FALSE(got.isNull());
+    REQUIRE(got.format() == QImage::Format_RGBX32FPx4);
+
+    auto value = [&](float fx, int y) {
+        const float* px = reinterpret_cast<const float*>(got.constScanLine(y));
+        return px[int(fx * scene.width) * 4]; // grey scene → R channel suffices
+    };
+    const int y = scene.height / 2;
+    const float unmasked = value(0.1f, y); // weight ~0, untouched
+    const float masked = value(0.9f, y);   // weight ~1, +1 EV
+
+    INFO("unmasked=" << unmasked << " masked=" << masked);
+    CHECK(masked > unmasked + 0.1f); // +1 EV ≈ doubles the linear value
+}
+
+TEST_CASE("a local radial mask brightens only inside the oval", "[gpu][localadj]") {
+    ImageViewport* vp = goldenViewport();
+    if (!vp)
+        SKIP("no OpenGL context available on this machine");
+
+    ImageBuffer scene;
+    scene.width = 64;
+    scene.height = 48;
+    scene.data.assign(size_t(scene.width) * scene.height * 3, 0.3f);
+
+    GlobalAdjustment p;
+    LocalAdjustment la;
+    la.mask = RadialMask{
+        .center = {0.5, 0.5},
+        .radiusX = 0.3,
+        .radiusY = 0.3,
+        .angle = 0.0,
+        .feather = 0.3,
+        .invert = false};
+    la.exposure = 1.0f;
+    p.localAdjustments.push_back(la);
+
+    vp->setAdjustments(p);
+    const QImage got = vp->renderToImage(scene, p, scene.width, scene.height);
+    REQUIRE_FALSE(got.isNull());
+
+    auto value = [&](float fx, float fy) {
+        const float* px = reinterpret_cast<const float*>(got.constScanLine(int(fy * scene.height)));
+        return px[int(fx * scene.width) * 4];
+    };
+    const float inside = value(0.5f, 0.5f);    // centre of the oval, +1 EV
+    const float outside = value(0.05f, 0.05f); // corner, well outside
+
+    INFO("inside=" << inside << " outside=" << outside);
+    CHECK(inside > outside + 0.1f);
+}
+
 // Clipping overlay (docs/adr/0009): rendered through the display path (sRGB
 // encode) with both overlays on. The synthetic scene spans pure white, near
 // black, and saturated single-channel bars, so this one golden locks the
@@ -249,7 +322,7 @@ TEST_CASE("clipping overlay matches golden render", "[gpu][golden]") {
     if (update)
         QDir().mkpath(goldenDir);
 
-    AdjustmentParams p; // neutral: clipping reflects the scene itself
+    GlobalAdjustment p; // neutral: clipping reflects the scene itself
     vp->setAdjustments(p);
     const QImage got = vp->renderClipSample(
         scene,

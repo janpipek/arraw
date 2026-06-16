@@ -2,6 +2,8 @@
 #include "ImagePipeline.h"
 #include <algorithm>
 #include <cmath>
+#include <variant>
+#include <QFontMetrics>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPaintEvent>
@@ -21,6 +23,27 @@ static QPointF rotateTexUV(float u, float v, float degrees, float aspect, float 
     const float rx = c * dx - s * dy;
     const float ry = s * dx + c * dy;
     return {rx / aspect + cx, ry + cy};
+}
+
+// Short ratio tag shown in the crop readout, oriented to the current toggle.
+static QString aspectLabel(crop::AspectPreset preset, bool landscape) {
+    switch (preset) {
+    case crop::AspectPreset::Free:
+        return {};
+    case crop::AspectPreset::Original:
+        return QStringLiteral("Orig");
+    case crop::AspectPreset::Square:
+        return QStringLiteral("1:1");
+    case crop::AspectPreset::R2x3:
+        return landscape ? QStringLiteral("3:2") : QStringLiteral("2:3");
+    case crop::AspectPreset::R3x4:
+        return landscape ? QStringLiteral("4:3") : QStringLiteral("3:4");
+    case crop::AspectPreset::R4x5:
+        return landscape ? QStringLiteral("5:4") : QStringLiteral("4:5");
+    case crop::AspectPreset::R16x9:
+        return landscape ? QStringLiteral("16:9") : QStringLiteral("9:16");
+    }
+    return {};
 }
 
 // QRhiWidget content cannot be painted over with QPainter (unlike
@@ -142,7 +165,7 @@ void ImageViewport::render(QRhiCommandBuffer* cb) {
     }
     ensureCurveLut();
 
-    const AdjustmentParams& p = showOriginal ? AdjustmentParams{} : params;
+    const GlobalAdjustment& p = showOriginal ? GlobalAdjustment{} : params;
     const float viewportAspect = float(width()) / float(height());
 
     RendererCore::FrameParams fp;
@@ -161,9 +184,151 @@ void ImageViewport::render(QRhiCommandBuffer* cb) {
     core.record(cb, renderTarget(), activeSlot(), fp);
 }
 
+void ImageViewport::setActiveLocalAdjustment(int index) {
+    activeLocalAdj = index;
+    update();
+}
+
+const LinearMask* ImageViewport::activeLinearMask() const {
+    if (activeLocalAdj < 0 || activeLocalAdj >= int(params.localAdjustments.size()))
+        return nullptr;
+    return std::get_if<LinearMask>(&params.localAdjustments[activeLocalAdj].mask);
+}
+
+QPointF ImageViewport::localHandleViewport(LinearHandle h) const {
+    const LinearMask* m = activeLinearMask();
+    if (!m)
+        return {};
+    QPointF uv;
+    switch (h) {
+    case LinearHandle::P0:
+        uv = m->p0;
+        break;
+    case LinearHandle::P1:
+        uv = m->p1;
+        break;
+    case LinearHandle::Center:
+        uv = (m->p0 + m->p1) / 2.0;
+        break;
+    default:
+        return {};
+    }
+    return cropUVToViewport(float(uv.x()), float(uv.y()));
+}
+
+// Screen-space pick (constant-pixel target regardless of zoom). Endpoints win
+// ties over the centre, matching the CPU nearestHandle convention.
+LinearHandle ImageViewport::hitTestLocalMask(QPointF pos) const {
+    if (!activeLinearMask())
+        return LinearHandle::None;
+    const LinearHandle order[3] = {LinearHandle::P0, LinearHandle::P1, LinearHandle::Center};
+    LinearHandle best = LinearHandle::None;
+    double bestD2 = double(kMaskHandleRadius) * kMaskHandleRadius;
+    for (LinearHandle h : order) {
+        const QPointF d = pos - localHandleViewport(h);
+        const double d2 = QPointF::dotProduct(d, d);
+        if (d2 < bestD2) {
+            best = h;
+            bestD2 = d2;
+        }
+    }
+    return best;
+}
+
+void ImageViewport::drawLocalMaskOverlay(QPainter& p) const {
+    const LinearMask* m = activeLinearMask();
+    if (!m)
+        return;
+    const QPointF a = localHandleViewport(LinearHandle::P0);
+    const QPointF b = localHandleViewport(LinearHandle::P1);
+    const QPointF c = localHandleViewport(LinearHandle::Center);
+
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.setPen(QPen(QColor(255, 255, 255, 200), 1.5));
+    p.setBrush(Qt::NoBrush);
+    p.drawLine(a, b);
+
+    auto handle = [&](QPointF pt, bool filled) {
+        p.setBrush(filled ? QBrush(QColor(255, 255, 255, 220)) : QBrush(QColor(0, 0, 0, 60)));
+        p.setPen(QPen(QColor(0, 0, 0, 180), 1.0));
+        p.drawEllipse(pt, kMaskHandleRadius, kMaskHandleRadius);
+    };
+    handle(a, false); // P0 (weight 0)
+    handle(b, false); // P1 (weight 1)
+    handle(c, true);  // centre — drag to move the whole mask
+}
+
+const RadialMask* ImageViewport::activeRadialMask() const {
+    if (activeLocalAdj < 0 || activeLocalAdj >= int(params.localAdjustments.size()))
+        return nullptr;
+    return std::get_if<RadialMask>(&params.localAdjustments[activeLocalAdj].mask);
+}
+
+RadialHandle ImageViewport::hitTestRadialMask(QPointF pos) const {
+    const RadialMask* m = activeRadialMask();
+    if (!m)
+        return RadialHandle::None;
+    const float a = displayAspect();
+    const RadialHandle order[3]
+        = {RadialHandle::RadiusX, RadialHandle::RadiusY, RadialHandle::Center};
+    RadialHandle best = RadialHandle::None;
+    double bestD2 = double(kMaskHandleRadius) * kMaskHandleRadius;
+    for (RadialHandle h : order) {
+        const QPointF uv = radialHandlePos(*m, h, a);
+        const QPointF d = pos - cropUVToViewport(float(uv.x()), float(uv.y()));
+        const double d2 = QPointF::dotProduct(d, d);
+        if (d2 < bestD2) {
+            best = h;
+            bestD2 = d2;
+        }
+    }
+    return best;
+}
+
+void ImageViewport::drawRadialMaskOverlay(QPainter& p) const {
+    const RadialMask* m = activeRadialMask();
+    if (!m)
+        return;
+    const float aspect = displayAspect();
+    const double rad = m->angle * 3.14159265358979 / 180.0;
+    const double ca = std::cos(rad), sa = std::sin(rad);
+
+    // Oval boundary as a polygon, sampled in aspect-corrected space.
+    QPolygonF oval;
+    const int kSeg = 48;
+    for (int k = 0; k <= kSeg; ++k) {
+        const double t = 2.0 * 3.14159265358979 * k / kSeg;
+        const double ex = m->radiusX * std::cos(t);
+        const double ey = m->radiusY * std::sin(t);
+        const double rx = ex * ca - ey * sa; // rotate by angle
+        const double ry = ex * sa + ey * ca;
+        oval << cropUVToViewport(float(m->center.x() + rx / aspect), float(m->center.y() + ry));
+    }
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.setPen(QPen(QColor(255, 255, 255, 200), 1.5));
+    p.setBrush(Qt::NoBrush);
+    p.drawPolyline(oval);
+
+    auto handle = [&](RadialHandle h, bool filled) {
+        const QPointF uv = radialHandlePos(*m, h, aspect);
+        const QPointF pt = cropUVToViewport(float(uv.x()), float(uv.y()));
+        p.setBrush(filled ? QBrush(QColor(255, 255, 255, 220)) : QBrush(QColor(0, 0, 0, 60)));
+        p.setPen(QPen(QColor(0, 0, 0, 180), 1.0));
+        p.drawEllipse(pt, kMaskHandleRadius, kMaskHandleRadius);
+    };
+    handle(RadialHandle::RadiusX, false);
+    handle(RadialHandle::RadiusY, false);
+    handle(RadialHandle::Center, true);
+}
+
 void ImageViewport::paintOverlay(QPainter& p) const {
     if (cropMode()) {
         drawCropOverlay(p);
+    } else if (localMaskMode()) {
+        if (activeRadialMask())
+            drawRadialMaskOverlay(p);
+        else
+            drawLocalMaskOverlay(p);
     } else if (shouldShowAlignGrid()) {
         drawAlignGrid(p);
         if (tool == ActiveTool::Straighten && straightenDragging)
@@ -309,6 +474,19 @@ void ImageViewport::applyCropDrag(QPointF viewportPos) {
     float u = float(std::clamp(uv.x(), 0.0, 1.0));
     float v = float(std::clamp(uv.y(), 0.0, 1.0));
 
+    // Under an Aspect Ratio Lock, corner drags preserve the ratio (anchored at
+    // the opposite corner) and edge handles are inactive; the move handle (-1)
+    // still translates via the free path below.
+    if (lockedRatio > 0.0 && cropDragHandle >= 0) {
+        const QRectF locked = crop::lockedResize(
+            cropDragHandle, cropDragStartRect, QPointF(u, v), lockedRatio, imageAspect);
+        if (cropInsideImage(locked)) {
+            activeCrop = locked;
+            update();
+        }
+        return;
+    }
+
     QRectF r = cropDragStartRect;
     const float kMinSize = 0.02f;
 
@@ -396,6 +574,39 @@ void ImageViewport::drawCropOverlay(QPainter& p) const {
         p.drawRect(QRectF(
             hp.x() - kHandleRadius, hp.y() - kHandleRadius, kHandleRadius * 2, kHandleRadius * 2));
     }
+
+    // Live readout: output pixel size (shared with export via cropPixelSize) and,
+    // when locked, the ratio tag. Pixel size needs the known full-res dimensions.
+    QString label;
+    if (hasKnownOriginalSize()) {
+        const QSize px = crop::cropPixelSize(originalWidth, originalHeight, activeCrop);
+        label = QStringLiteral("%1 × %2").arg(px.width()).arg(px.height());
+    }
+    if (lockedRatio > 0.0) {
+        const crop::PresetMatch m = crop::matchPreset(lockedRatio, imageAspect);
+        const QString tag = m.matched ? aspectLabel(m.preset, m.landscape)
+                                      : QStringLiteral("locked");
+        label = label.isEmpty() ? tag : label + QStringLiteral("  ·  ") + tag;
+    }
+    if (!label.isEmpty()) {
+        const QFontMetrics fm(p.font());
+        const QRectF textRect = fm.boundingRect(label);
+        const qreal padX = 8.0;
+        const qreal padY = 4.0;
+        const qreal boxW = textRect.width() + 2 * padX;
+        const qreal boxH = textRect.height() + 2 * padY;
+        // Centred just inside the crop's top edge; nudged down if it would clip.
+        qreal boxX = cropVP.center().x() - boxW / 2.0;
+        qreal boxY = cropVP.top() + 8.0;
+        boxX = std::clamp(boxX, 0.0, qreal(width()) - boxW);
+        boxY = std::clamp(boxY, 0.0, qreal(height()) - boxH);
+        const QRectF box(boxX, boxY, boxW, boxH);
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(0, 0, 0, 150));
+        p.drawRoundedRect(box, 4.0, 4.0);
+        p.setPen(Qt::white);
+        p.drawText(box, Qt::AlignCenter, label);
+    }
 }
 
 // ── Public setters ────────────────────────────────────────────────────────────
@@ -421,7 +632,7 @@ void ImageViewport::setFullResImage(const ImageBuffer& buf) {
         update();
 }
 
-void ImageViewport::setAdjustments(const AdjustmentParams& p) {
+void ImageViewport::setAdjustments(const GlobalAdjustment& p) {
     if (p.curveLuma != params.curveLuma || p.curveR != params.curveR || p.curveG != params.curveG
         || p.curveB != params.curveB)
         curveLutDirty = true;
@@ -439,6 +650,24 @@ void ImageViewport::setStraightenActive(bool active) {
         return;
     straightenActive = active;
     update();
+}
+
+void ImageViewport::setAspectLock(crop::AspectPreset preset, bool landscape) {
+    if (!cropMode())
+        return;
+    lockedRatio = crop::presetRatio(preset, landscape, imageAspect);
+    // Reshape the current crop to the new ratio: shrink-to-fit keeps it inside
+    // the already-valid rectangle, so the rotation guard is satisfied for free.
+    if (lockedRatio > 0.0) {
+        const QRectF r = crop::fitRatioInside(activeCrop, lockedRatio, imageAspect);
+        if (cropInsideImage(r))
+            activeCrop = r;
+    }
+    update();
+}
+
+crop::PresetMatch ImageViewport::currentLockMatch() const {
+    return crop::matchPreset(lockedRatio, imageAspect);
 }
 
 // ── Active-tool state machine ─────────────────────────────────────────────────
@@ -478,6 +707,9 @@ void ImageViewport::cancelActiveTool() {
 void ImageViewport::enterCrop() {
     cancelCrop = params.cropRect;
     activeCrop = params.cropRect;
+    // Restore the Aspect Ratio Lock from the persisted flag: a constrained crop
+    // re-locks to its stored rectangle's ratio (the preset name is re-derived).
+    lockedRatio = params.cropConstrained ? crop::cropPixelRatio(activeCrop, imageAspect) : 0.0;
     // A rotation set before cropping (e.g. via Straighten) can leave the stored
     // crop covering empty corners — pull it in to the largest valid rectangle.
     if (!cropInsideImage(activeCrop))
@@ -486,7 +718,8 @@ void ImageViewport::enterCrop() {
 
 void ImageViewport::commitCrop() {
     params.cropRect = activeCrop;
-    emit cropCommitted(params.cropRect);
+    params.cropConstrained = lockedRatio > 0.0;
+    emit cropCommitted(params.cropRect, params.cropConstrained);
     emit zoomChanged(pixelZoom());
 }
 
@@ -662,7 +895,7 @@ bool ImageViewport::hasKnownOriginalSize() const {
 // ── Offscreen export render ───────────────────────────────────────────────────
 
 QImage ImageViewport::renderToImage(
-    const ImageBuffer& buf, const AdjustmentParams& p, int outW, int outH) {
+    const ImageBuffer& buf, const GlobalAdjustment& p, int outW, int outH) {
     if (!core.ready() || !buf.valid())
         return {};
 
@@ -701,7 +934,7 @@ QImage ImageViewport::renderToImage(
 }
 
 QImage ImageViewport::renderClipSample(
-    const ImageBuffer& buf, const AdjustmentParams& p, bool clipHighlights, bool clipShadows) {
+    const ImageBuffer& buf, const GlobalAdjustment& p, bool clipHighlights, bool clipShadows) {
     if (!core.ready() || !buf.valid())
         return {};
 
@@ -797,6 +1030,13 @@ void ImageViewport::mousePressEvent(QMouseEvent* e) {
             emit whiteBalanceCommitted(kelvin, tintOut);
         return; // tool stays active for further picks
     }
+    if (localMaskMode() && e->button() == Qt::LeftButton) {
+        if (activeRadialMask())
+            radialDragHandle = hitTestRadialMask(e->position());
+        else
+            localDragHandle = hitTestLocalMask(e->position());
+        return; // no create-on-drag: empty space does nothing
+    }
     if (e->button() == Qt::MiddleButton
         || (e->button() == Qt::LeftButton && e->modifiers() & Qt::AltModifier)) {
         dragging = true;
@@ -812,6 +1052,21 @@ void ImageViewport::mouseMoveEvent(QMouseEvent* e) {
     if (tool == ActiveTool::Straighten && straightenDragging) {
         straightenEnd = e->position();
         update();
+        return;
+    }
+    if (localMaskMode() && (e->buttons() & Qt::LeftButton)) {
+        const QPointF uv = viewportToCropUV(e->position());
+        if (const RadialMask* r = activeRadialMask(); r && radialDragHandle != RadialHandle::None) {
+            const RadialMask moved = moveRadialHandle(*r, radialDragHandle, uv, displayAspect());
+            params.localAdjustments[activeLocalAdj].mask = moved; // echo for overlay
+            emit localMaskChanged(activeLocalAdj, moved);
+            update();
+        } else if (const LinearMask* m = activeLinearMask(); m && localDragHandle != LinearHandle::None) {
+            const LinearMask moved = moveHandle(*m, localDragHandle, uv);
+            params.localAdjustments[activeLocalAdj].mask = moved;
+            emit localMaskChanged(activeLocalAdj, moved);
+            update();
+        }
         return;
     }
     if (!dragging)
@@ -833,6 +1088,15 @@ void ImageViewport::mouseReleaseEvent(QMouseEvent* e) {
         straightenDragging = false;
         applyStraightenLine(); // tool stays active; redraw the line to retry
         update();
+        return;
+    }
+    if (localMaskMode() && e->button() == Qt::LeftButton) {
+        const bool wasDragging = localDragHandle != LinearHandle::None
+                                 || radialDragHandle != RadialHandle::None;
+        localDragHandle = LinearHandle::None;
+        radialDragHandle = RadialHandle::None;
+        if (wasDragging)
+            emit localMaskEditFinished(); // one undo step per drag gesture
         return;
     }
     dragging = false;

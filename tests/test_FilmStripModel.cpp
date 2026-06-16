@@ -1,21 +1,17 @@
 #include "FilmStripModel.h"
+#include "TestApp.h"
 #include "UserMetadata.h"
 #include <catch2/catch_test_macros.hpp>
 
-#include <QCoreApplication>
 #include <QImage>
 
-// QAbstractListModel needs a QCoreApplication for its meta-object machinery
-// (dataChanged, QSignalSpy). A lazy static instance mirrors the pattern in
-// test_GoldenImages.cpp; ctest runs each case in its own process, so only the
-// app the selected test touches is ever constructed.
+// QAbstractListModel needs an application object for its meta-object machinery
+// (dataChanged, QSignalSpy). Use the one shared QApplication: running the test
+// binary directly executes every case in one process, so a separate
+// QCoreApplication here would collide with the widget tests' QApplication.
 namespace {
 void ensureApp() {
-    static int argc = 1;
-    static char arg0[] = "arraw_tests";
-    static char* argv[] = {arg0, nullptr};
-    static QCoreApplication app(argc, argv);
-    (void) app;
+    testApp();
 }
 } // namespace
 

@@ -121,6 +121,7 @@ set(CORE_SOURCES
     src/ImageViewport.cpp
     src/RendererCore.cpp
     src/AdjustmentPanel.cpp
+    src/LocalAdjustmentPanel.cpp
     src/AdjustmentSpinBox.cpp
     src/CollapsiblePane.cpp
     src/ToneCurveWidget.cpp
@@ -130,6 +131,7 @@ set(CORE_SOURCES
     src/RawProcessor.cpp
     src/StandardImageLoader.cpp
     src/ImagePipeline.cpp
+    src/LocalAdjustment.cpp
     src/FieldSpec.cpp
     src/ColorManagement.cpp
     src/ProofingPanel.cpp
@@ -139,6 +141,7 @@ set(CORE_SOURCES
     src/FilmStripLayout.cpp
     src/ThumbnailCache.cpp
     src/ExportDialog.cpp
+    src/CropGeometry.cpp
 )
 
 add_library(arraw_core STATIC ${CORE_SOURCES})

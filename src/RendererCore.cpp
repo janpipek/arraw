@@ -1,5 +1,7 @@
 #include "RendererCore.h"
+#include <algorithm>
 #include <cstring>
+#include <variant>
 #include <QFile>
 
 // Fullscreen quad, interleaved (x, y, u, v). V is flipped (bottom vertices get
@@ -261,6 +263,28 @@ QRhiGraphicsPipeline* RendererCore::pipelineFor(QRhiRenderPassDescriptor* rpDesc
 
 // ── Uniforms ──────────────────────────────────────────────────────────────────
 
+namespace {
+// Normalise the nine shared scalars to shader-uniform units. Used by both the
+// global fill and each local adjustment, so the mapping lives exactly once.
+struct SharedUniform {
+    float exposure, contrast, highlights, shadows, whites, blacks, tint, saturation, vibrance;
+};
+
+SharedUniform toUniform(const SharedAdjustment& s) {
+    return {
+        s.exposure,
+        s.contrast / kToneSliderToUniform,
+        s.highlights / kToneSliderToUniform,
+        s.shadows / kToneSliderToUniform,
+        s.whites / kToneSliderToUniform,
+        s.blacks / kToneSliderToUniform,
+        s.tint / 100.0f,
+        s.saturation / 100.0f,
+        s.vibrance / 100.0f,
+    };
+}
+} // namespace
+
 void RendererCore::fillUbuf(Ubuf& ub, const FrameParams& fp) const {
     const QMatrix4x4 corr = rhi->clipSpaceCorrMatrix();
     std::memcpy(ub.clipCorr, corr.constData(), sizeof(ub.clipCorr));
@@ -274,7 +298,7 @@ void RendererCore::fillUbuf(Ubuf& ub, const FrameParams& fp) const {
     ub.cropRect[2] = float(fp.cropRect.right());
     ub.cropRect[3] = float(fp.cropRect.bottom());
 
-    const AdjustmentParams& a = fp.adjustments;
+    const GlobalAdjustment& a = fp.adjustments;
     bool hslActive = false;
     for (int i = 0; i < 8; ++i) {
         ub.hslHue[i] = a.hslHue[i] / 100.0f;
@@ -284,18 +308,19 @@ void RendererCore::fillUbuf(Ubuf& ub, const FrameParams& fp) const {
             hslActive = true;
     }
 
+    const SharedUniform g = toUniform(a);
     ub.rotation = a.rotation;
     ub.aspect = fp.aspect;
-    ub.exposure = a.exposure;
-    ub.contrast = a.contrast / kToneSliderToUniform;
-    ub.highlights = a.highlights / kToneSliderToUniform;
-    ub.shadows = a.shadows / kToneSliderToUniform;
-    ub.whites = a.whites / kToneSliderToUniform;
-    ub.blacks = a.blacks / kToneSliderToUniform;
+    ub.exposure = g.exposure;
+    ub.contrast = g.contrast;
+    ub.highlights = g.highlights;
+    ub.shadows = g.shadows;
+    ub.whites = g.whites;
+    ub.blacks = g.blacks;
     ub.temperature = a.temperature;
-    ub.tint = a.tint / 100.0f;
-    ub.saturation = a.saturation / 100.0f;
-    ub.vibrance = a.vibrance / 100.0f;
+    ub.tint = g.tint;
+    ub.saturation = g.saturation;
+    ub.vibrance = g.vibrance;
 
     ub.useLut = fp.useLut ? 1 : 0;
     ub.gamutWarn = fp.gamutWarn ? 1 : 0;
@@ -305,6 +330,48 @@ void RendererCore::fillUbuf(Ubuf& ub, const FrameParams& fp) const {
     ub.hslActive = hslActive ? 1 : 0;
     ub.wbInput = fp.wbInput ? 1 : 0;
     ub.clipWarn = (fp.clipHighlights ? 1 : 0) | (fp.clipShadows ? 2 : 0);
+
+    // Local adjustments (docs/adr/0010): pack into the parallel vec4 arrays,
+    // honouring the 16-mask cap. Deltas use the same scaling as the global path;
+    // local temperature is a relative -100..100 shift normalised like the global
+    // Kelvin path (÷100 → the shader's tempShift t).
+    const int n = std::min<int>(int(a.localAdjustments.size()), 16);
+    ub.numLocalAdj = n;
+    for (int i = 0; i < n; ++i) {
+        const LocalAdjustment& la = a.localAdjustments[i];
+        const SharedUniform d = toUniform(la);
+        const int k = i * 4;
+
+        float maskType = 0.0f; // 0 = Linear, 1 = Radial
+        if (const auto* m = std::get_if<LinearMask>(&la.mask)) {
+            ub.laGeom[k + 0] = float(m->p0.x());
+            ub.laGeom[k + 1] = float(m->p0.y());
+            ub.laGeom[k + 2] = float(m->p1.x());
+            ub.laGeom[k + 3] = float(m->p1.y());
+        } else if (const auto* r = std::get_if<RadialMask>(&la.mask)) {
+            maskType = 1.0f;
+            ub.laGeom[k + 0] = float(r->center.x());
+            ub.laGeom[k + 1] = float(r->center.y());
+            ub.laGeom[k + 2] = float(r->radiusX);
+            ub.laGeom[k + 3] = float(r->radiusY);
+            ub.laGeom2[k + 0] = float(r->angle);
+            ub.laGeom2[k + 1] = float(r->feather);
+            ub.laGeom2[k + 2] = r->invert ? 1.0f : 0.0f;
+            ub.laGeom2[k + 3] = 0.0f;
+        }
+        ub.laTone[k + 0] = d.exposure;
+        ub.laTone[k + 1] = d.contrast;
+        ub.laTone[k + 2] = d.highlights;
+        ub.laTone[k + 3] = d.shadows;
+        ub.laTone2[k + 0] = d.whites;
+        ub.laTone2[k + 1] = d.blacks;
+        ub.laTone2[k + 2] = la.temperature / 100.0f;
+        ub.laTone2[k + 3] = d.tint;
+        ub.laColor[k + 0] = d.saturation;
+        ub.laColor[k + 1] = d.vibrance;
+        ub.laColor[k + 2] = maskType;
+        ub.laColor[k + 3] = 0.0f;
+    }
 }
 
 // ── Pass recording — the single point the pipeline is drawn (ADR 0006) ───────

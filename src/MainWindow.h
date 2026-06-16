@@ -1,4 +1,5 @@
 #pragma once
+#include "CropGeometry.h"
 #include "ImagePipeline.h"
 #include <atomic>
 #include <memory>
@@ -7,6 +8,7 @@
 
 class ImageViewport;
 class AdjustmentPanel;
+class LocalAdjustmentPanel;
 class ProofingPanel;
 class ExifPanel;
 class FilmStrip;
@@ -18,6 +20,7 @@ class QToolButton;
 class QToolBar;
 class QActionGroup;
 class QAction;
+class QTabWidget;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -48,9 +51,20 @@ private:
     void setupToolbar();
     void syncToolActions();        // reflect viewport->activeTool() in the buttons
     void setToolsEnabled(bool on); // image-dependent toolbar items
+
+    // Crop aspect-ratio menu (enabled only while the crop tool is active). The
+    // chosen preset/orientation is pushed to the viewport as a transient lock.
+    void setupAspectMenu(QToolBar* tb);
+    void applyAspectLock(); // forward aspectPreset/aspectLandscape to the viewport
     void loadImage(const QString& path);
     void setLoadingState(bool loading);
     void updateZoomStatus(float zoom);
+
+    // The full develop params = global edits (adjPanel) + local adjustments
+    // (localPanel) merged into one GlobalAdjustment for render, save, export.
+    GlobalAdjustment currentParams() const;
+    // Feed currentParams() to the viewport (after a global or local change).
+    void pushParamsToViewport();
 
     // Rebuild the viewport's display LUT from the current soft-proofing
     // settings and monitor profile (no LUT when both are off).
@@ -63,6 +77,7 @@ private:
 
     ImageViewport* viewport;
     AdjustmentPanel* adjPanel;
+    LocalAdjustmentPanel* localPanel;
     ProofingPanel* proofPanel;
     ExifPanel* exifPanel;
     FilmStrip* filmStrip;
@@ -79,6 +94,16 @@ private:
     QAction* cropAction;
     QAction* straightenAction;
     QAction* wbAction;
+    QAction* maskAction;             // LocalMask tool toggle
+    QTabWidget* rightTabs = nullptr; // Adjustments / Masks / EXIF
+    int masksTabIndex = -1;
+
+    // Crop aspect-ratio lock UI + its transient state (mirrors the viewport's).
+    QToolButton* aspectButton = nullptr;
+    QActionGroup* aspectGroup = nullptr; // exclusive preset actions; first is Free
+    QAction* orientationAction = nullptr;
+    crop::AspectPreset aspectPreset = crop::AspectPreset::Free;
+    bool aspectLandscape = true;
     QAction* saveAction;
     QAction* exportAction;
     QAction* clipHighlightsAction; // View → Show Highlight Clipping

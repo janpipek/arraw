@@ -119,7 +119,7 @@ Detailed architectural decisions are documented in the [docs/adr/](file:///home/
 6. `XmpSidecar::load()` reads the `.xmp` sidecar if present and calls `AdjustmentPanel::setParams()` to restore prior edits.
 
 ### 2. Real-Time GPU Preview
-* `AdjustmentPanel` emits `paramsChanged(AdjustmentParams)` on every slider move.
+* `AdjustmentPanel` emits `paramsChanged(GlobalAdjustment)` on every slider move.
 * `ImageViewport` receives this, stores the parameters, and calls `update()`.
 * In `render()`, all adjustments are sent in one uniform block (no CPU-based image processing occurs during preview).
 * The shader pipeline order is defined in [shaders/image.frag](file:///home/jan/code/my/arraw/shaders/image.frag) and detailed in [DESIGN.md](file:///home/jan/code/my/arraw/DESIGN.md).
@@ -140,12 +140,12 @@ Detailed architectural decisions are documented in the [docs/adr/](file:///home/
 * Tint and all other fields use the internal `-100..100` scale.
 * Sidecar files are stored in the same directory as the RAW file, with the same base name and a `.xmp` extension.
 
-### 6. AdjustmentParams ↔ Slider Scale
+### 6. GlobalAdjustment ↔ Slider Scale
 * `AdjustmentPanel` sliders use integers for Qt's `QSlider`:
   * `exposure`: slider × 0.01 = EV (slider range -500..500 → -5.0..5.0 EV).
   * `temperature`: slider value = Kelvin directly (range 2000..12000).
   * All other fields: slider value = float value directly (-100..100).
-* **Adding a new adjustment requires updating**: `AdjustmentParams` (struct), the slider in `AdjustmentPanel`, the uniform block in both `image.vert` and `image.frag`, the `Ubuf` mirror in `RendererCore.h` (must match std140 layout exactly), `RendererCore::fillUbuf()`, and `XmpSidecar` load/save.
+* **Adding a new adjustment requires updating**: `GlobalAdjustment` (struct), the slider in `AdjustmentPanel`, the uniform block in both `image.vert` and `image.frag`, the `Ubuf` mirror in `RendererCore.h` (must match std140 layout exactly), `RendererCore::fillUbuf()`, and `XmpSidecar` load/save.
 
 ---
 

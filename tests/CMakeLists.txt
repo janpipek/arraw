@@ -21,7 +21,10 @@ add_executable(arraw_tests
     test_FilmStripModel.cpp
     test_FilmStripLayout.cpp
     test_FieldSpec.cpp
+    test_LocalAdjustment.cpp
+    test_LocalAdjustmentPanel.cpp
     test_CollapsiblePane.cpp
+    test_CropGeometry.cpp
 )
 
 target_link_libraries(arraw_tests PRIVATE arraw_core Catch2::Catch2WithMain)
