@@ -329,6 +329,8 @@ void ImageViewport::paintOverlay(QPainter& p) const {
             drawRadialMaskOverlay(p);
         else
             drawLocalMaskOverlay(p);
+    } else if (spotToolMode()) {
+        drawSpotOverlay(p);
     } else if (shouldShowAlignGrid()) {
         drawAlignGrid(p);
         if (tool == ActiveTool::Straighten && straightenDragging)
@@ -1037,6 +1039,14 @@ void ImageViewport::mousePressEvent(QMouseEvent* e) {
             localDragHandle = hitTestLocalMask(e->position());
         return; // no create-on-drag: empty space does nothing
     }
+    if (spotToolMode() && e->button() == Qt::LeftButton) {
+        int idx = -1;
+        m_spotDragHandle = hitTestSpot(e->position(), idx);
+        m_spotDragIdx = idx;
+        if (m_spotDragHandle == SpotHandle::None)
+            emit spotRequested(viewportToBufferPixel(e->position()));
+        return;
+    }
     if (e->button() == Qt::MiddleButton
         || (e->button() == Qt::LeftButton && e->modifiers() & Qt::AltModifier)) {
         dragging = true;
@@ -1069,6 +1079,19 @@ void ImageViewport::mouseMoveEvent(QMouseEvent* e) {
         }
         return;
     }
+    if (spotToolMode() && (e->buttons() & Qt::LeftButton)
+        && m_spotDragHandle != SpotHandle::None
+        && m_spotDragIdx >= 0 && m_spotDragIdx < static_cast<int>(m_spots.size())) {
+        const QPointF bufPx = viewportToBufferPixel(e->position());
+        Spot& s = m_spots[m_spotDragIdx];
+        if (m_spotDragHandle == SpotHandle::Destination)
+            s.destination = bufPx;
+        else
+            s.source = bufPx;
+        emit spotHandleChanged(m_spotDragIdx, m_spotDragHandle, bufPx);
+        update();
+        return;
+    }
     if (!dragging)
         return;
     // pan is in NDC units (viewport spans -1..1), hence the ×2 / size.
@@ -1097,6 +1120,14 @@ void ImageViewport::mouseReleaseEvent(QMouseEvent* e) {
         radialDragHandle = RadialHandle::None;
         if (wasDragging)
             emit localMaskEditFinished(); // one undo step per drag gesture
+        return;
+    }
+    if (spotToolMode() && e->button() == Qt::LeftButton
+        && m_spotDragHandle != SpotHandle::None && m_spotDragIdx >= 0) {
+        const QPointF bufPx = viewportToBufferPixel(e->position());
+        emit spotHandleCommitted(m_spotDragIdx, m_spotDragHandle, bufPx);
+        m_spotDragHandle = SpotHandle::None;
+        m_spotDragIdx = -1;
         return;
     }
     dragging = false;
@@ -1136,5 +1167,104 @@ void ImageViewport::keyReleaseEvent(QKeyEvent* e) {
         update();
     } else {
         QRhiWidget::keyReleaseEvent(e);
+    }
+}
+
+// ── SpotTool ──────────────────────────────────────────────────────────────────
+
+void ImageViewport::setSpots(const std::vector<Spot>& spots) {
+    m_spots = spots;
+    update();
+}
+
+// viewport pos → original buffer pixel coords (docs/adr/0017).
+// Pipeline: viewport → crop-frame UV → full-image rotated UV → buffer UV → pixel.
+QPointF ImageViewport::viewportToBufferPixel(QPointF pos) const {
+    if (originalWidth <= 0 || originalHeight <= 0)
+        return {};
+    const QPointF cropUV = viewportToCropUV(pos);
+    const QRectF& cr = params.cropRect;
+    const float fu = float(cr.left() + cropUV.x() * cr.width());
+    const float fv = float(cr.top()  + cropUV.y() * cr.height());
+    const QPointF bufUV = rotateTexUV(fu, fv, params.rotation, imageAspect, 0.5f, 0.5f);
+    return {bufUV.x() * originalWidth, bufUV.y() * originalHeight};
+}
+
+// Original buffer pixel coords → viewport pos (inverse of viewportToBufferPixel).
+QPointF ImageViewport::bufferPixelToViewport(QPointF bufPx) const {
+    if (originalWidth <= 0 || originalHeight <= 0)
+        return {};
+    const float bu = float(bufPx.x()) / float(originalWidth);
+    const float bv = float(bufPx.y()) / float(originalHeight);
+    // Undo rotation: apply -rotation.
+    const QPointF fullUV = rotateTexUV(bu, bv, -params.rotation, imageAspect, 0.5f, 0.5f);
+    const QRectF& cr = params.cropRect;
+    const float cu = float((fullUV.x() - cr.left()) / cr.width());
+    const float cv = float((fullUV.y() - cr.top())  / cr.height());
+    return cropUVToViewport(cu, cv);
+}
+
+// Radius in buffer pixels → approximate radius in viewport pixels.
+double ImageViewport::bufRadiusToViewport(QPointF centerBufPx, double radius) const {
+    const QPointF a = bufferPixelToViewport(centerBufPx);
+    const QPointF b = bufferPixelToViewport({centerBufPx.x(), centerBufPx.y() + radius});
+    const QPointF d = b - a;
+    return std::sqrt(QPointF::dotProduct(d, d));
+}
+
+// Hit-test all spots. Returns the closest handle within kMaskHandleRadius pixels,
+// or SpotHandle::None. Sets outIdx to the matching spot index (-1 if none).
+ImageViewport::SpotHandle ImageViewport::hitTestSpot(QPointF viewportPos, int& outIdx) const {
+    outIdx = -1;
+    SpotHandle best = SpotHandle::None;
+    double bestD2 = double(kMaskHandleRadius) * kMaskHandleRadius;
+
+    for (int i = 0; i < static_cast<int>(m_spots.size()); ++i) {
+        for (SpotHandle h : {SpotHandle::Destination, SpotHandle::Source}) {
+            const QPointF pt = h == SpotHandle::Destination
+                ? bufferPixelToViewport(m_spots[i].destination)
+                : bufferPixelToViewport(m_spots[i].source);
+            const QPointF d = viewportPos - pt;
+            const double d2 = QPointF::dotProduct(d, d);
+            if (d2 < bestD2) {
+                bestD2 = d2;
+                best = h;
+                outIdx = i;
+            }
+        }
+    }
+    return best;
+}
+
+void ImageViewport::drawSpotOverlay(QPainter& p) const {
+    p.setRenderHint(QPainter::Antialiasing, true);
+
+    for (int i = 0; i < static_cast<int>(m_spots.size()); ++i) {
+        const Spot& s = m_spots[i];
+        const QPointF destPt  = bufferPixelToViewport(s.destination);
+        const QPointF srcPt   = bufferPixelToViewport(s.source);
+        const double  r       = bufRadiusToViewport(s.destination, s.radius);
+
+        // Connecting line
+        p.setPen(QPen(QColor(255, 255, 255, 160), 1.0, Qt::DashLine));
+        p.setBrush(Qt::NoBrush);
+        p.drawLine(destPt, srcPt);
+
+        // Destination circle (solid)
+        p.setPen(QPen(QColor(255, 255, 255, 220), 1.5));
+        p.drawEllipse(destPt, r, r);
+
+        // Source circle (dashed)
+        p.setPen(QPen(QColor(255, 255, 255, 160), 1.2, Qt::DashLine));
+        p.drawEllipse(srcPt, r, r);
+
+        // Centre handles
+        auto handle = [&](QPointF pt) {
+            p.setPen(QPen(QColor(0, 0, 0, 180), 1.0));
+            p.setBrush(QBrush(QColor(255, 255, 255, 220)));
+            p.drawEllipse(pt, kMaskHandleRadius, kMaskHandleRadius);
+        };
+        handle(destPt);
+        handle(srcPt);
     }
 }

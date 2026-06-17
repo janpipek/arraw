@@ -1,6 +1,7 @@
 #pragma once
 #include "ImageMetadata.h"
 #include "LocalAdjustment.h"
+#include "Spot.h"
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -64,6 +65,9 @@ struct GlobalAdjustment : SharedAdjustment {
 
     // Local adjustments — arraw-native, capped at 16 (docs/adr/0010).
     std::vector<LocalAdjustment> localAdjustments;
+
+    // Spots — clone-based pixel replacements applied before the shader (docs/adr/0017).
+    std::vector<Spot> spots;
 
     bool operator==(const GlobalAdjustment&) const = default;
 };

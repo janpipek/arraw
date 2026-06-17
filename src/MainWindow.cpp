@@ -11,6 +11,7 @@
 #include "GroupChecklistDialog.h"
 #include "ImageViewport.h"
 #include "LocalAdjustmentPanel.h"
+#include "SpotRemovalPanel.h"
 #include "ProofingPanel.h"
 #include "RawProcessor.h"
 #include "StandardImageLoader.h"
@@ -95,6 +96,35 @@ public:
 private:
     LocalAdjustmentPanel* panel;
     std::vector<LocalAdjustment> before, after;
+};
+
+// ---------------------------------------------------------------------------
+// Undo command for spots — add / delete / drag committed. Restores the whole
+// list so both SpotRemovalPanel and MainWindow::rebuildSpottedBuffers sync up.
+// ---------------------------------------------------------------------------
+class SpotListCommand : public QUndoCommand {
+public:
+    SpotListCommand(SpotRemovalPanel* panel, MainWindow* mw,
+                    std::vector<Spot> before, std::vector<Spot> after)
+        : panel(panel),
+          mainWindow(mw),
+          before(std::move(before)),
+          after(std::move(after)) {}
+
+    void undo() override {
+        panel->setSpots(before);
+        mainWindow->rebuildSpottedBuffers(true);
+    }
+
+    void redo() override {
+        panel->setSpots(after);
+        mainWindow->rebuildSpottedBuffers(true);
+    }
+
+private:
+    SpotRemovalPanel* panel;
+    MainWindow* mainWindow;
+    std::vector<Spot> before, after;
 };
 
 // ---------------------------------------------------------------------------
@@ -201,6 +231,61 @@ MainWindow::MainWindow(QWidget* parent)
         &ImageViewport::localMaskEditFinished,
         localPanel,
         &LocalAdjustmentPanel::commitMaskEdit);
+
+    // Spot-removal: live drag rebuilds preview only; commit on mouse-release.
+    connect(spotPanel, &SpotRemovalPanel::changed, this, [this](const std::vector<Spot>& spots) {
+        viewport->setSpots(spots);
+        rebuildSpottedBuffers(false);
+    });
+    connect(
+        spotPanel,
+        &SpotRemovalPanel::committed,
+        this,
+        [this](std::vector<Spot> before, std::vector<Spot> after) {
+            undoStack->push(new SpotListCommand(spotPanel, this, std::move(before), std::move(after)));
+        });
+    // Viewport signals: click places a new spot; handle drags move dest/source.
+    connect(viewport, &ImageViewport::spotRequested, this, [this](QPointF destBufPx) {
+        if (!preview.valid())
+            return;
+        const double offset = 0.1 * std::min(preview.width, preview.height);
+        const Spot s{
+            .destination = destBufPx,
+            .source      = autoSourcePosition(destBufPx, offset, preview.width, preview.height),
+            .radius      = offset * 0.5,
+            .feather     = 0.5,
+        };
+        spotPanel->addSpot(s);
+    });
+    connect(
+        viewport,
+        &ImageViewport::spotHandleChanged,
+        this,
+        [this](int idx, ImageViewport::SpotHandle h, QPointF bufPx) {
+            if (idx < 0 || idx >= static_cast<int>(spotPanel->spots().size()))
+                return;
+            auto updated = spotPanel->spots()[idx];
+            if (h == ImageViewport::SpotHandle::Destination)
+                updated.destination = bufPx;
+            else
+                updated.source = bufPx;
+            // updateSpot emits changed → rebuildSpottedBuffers(false) via connection.
+            spotPanel->updateSpot(idx, updated);
+        });
+    connect(
+        viewport,
+        &ImageViewport::spotHandleCommitted,
+        this,
+        [this](int idx, ImageViewport::SpotHandle h, QPointF bufPx) {
+            if (idx < 0 || idx >= static_cast<int>(spotPanel->spots().size()))
+                return;
+            auto updated = spotPanel->spots()[idx];
+            if (h == ImageViewport::SpotHandle::Destination)
+                updated.destination = bufPx;
+            else
+                updated.source = bufPx;
+            spotPanel->commitSpotEdit(idx, updated);
+        });
 
     connect(
         viewport, &ImageViewport::histogramsReady, adjPanel, &AdjustmentPanel::setHistogramSamples);
@@ -437,6 +522,7 @@ void MainWindow::setupToolbar() {
     straightenAction = addTool("Straighten", {});
     wbAction = addTool("White Bal.", {});
     maskAction = addTool("Masks", Qt::Key_M);
+    spotAction = addTool("Spots", Qt::Key_Q);
 
     connect(toolGroup, &QActionGroup::triggered, this, [this](QAction* a) {
         using T = ImageViewport::ActiveTool;
@@ -445,6 +531,7 @@ void MainWindow::setupToolbar() {
             t = a == cropAction         ? T::Crop
                 : a == straightenAction ? T::Straighten
                 : a == maskAction       ? T::LocalMask
+                : a == spotAction       ? T::SpotTool
                                         : T::WhiteBalance;
         viewport->setActiveTool(t);
     });
@@ -523,12 +610,13 @@ void MainWindow::applyAspectLock() {
 void MainWindow::syncToolActions() {
     const ImageViewport::ActiveTool t = viewport->activeTool();
     // setChecked doesn't emit QActionGroup::triggered, but block toggled too.
-    const QSignalBlocker b1(cropAction), b2(straightenAction), b3(wbAction);
+    const QSignalBlocker b1(cropAction), b2(straightenAction), b3(wbAction), b4(spotAction);
     const bool cropOn = t == ImageViewport::ActiveTool::Crop;
     cropAction->setChecked(cropOn);
     straightenAction->setChecked(t == ImageViewport::ActiveTool::Straighten);
     wbAction->setChecked(t == ImageViewport::ActiveTool::WhiteBalance);
     maskAction->setChecked(t == ImageViewport::ActiveTool::LocalMask);
+    spotAction->setChecked(t == ImageViewport::ActiveTool::SpotTool);
 
     // Raise the Masks tab while the LocalMask tool is active.
     if (t == ImageViewport::ActiveTool::LocalMask && rightTabs && masksTabIndex >= 0)
@@ -551,6 +639,8 @@ void MainWindow::setToolsEnabled(bool on) {
     cropAction->setEnabled(on);
     straightenAction->setEnabled(on);
     wbAction->setEnabled(on);
+    maskAction->setEnabled(on);
+    spotAction->setEnabled(on);
     saveAction->setEnabled(on);
     exportAction->setEnabled(on);
 }
@@ -644,6 +734,13 @@ void MainWindow::setupDocks() {
     localScroll->setWidgetResizable(true);
     localScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     masksTabIndex = tabs->addTab(localScroll, "Masks");
+
+    spotPanel = new SpotRemovalPanel(tabs);
+    auto* spotScroll = new QScrollArea(tabs);
+    spotScroll->setWidget(spotPanel);
+    spotScroll->setWidgetResizable(true);
+    spotScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    tabs->addTab(spotScroll, "Spots");
 
     exifPanel = new ExifPanel(tabs);
     tabs->addTab(exifPanel, "EXIF");
@@ -805,8 +902,14 @@ void MainWindow::applyLoadResult(const QString& path, const LoadResult& result) 
     GlobalAdjustment saved = XmpSidecar::resolveAdjustments(path, result.defaultCrop);
     adjPanel->setParams(saved);
     localPanel->setLocalAdjustments(saved.localAdjustments);
+    // setSpots emits changed → rebuildSpottedBuffers(false); but buffers are
+    // already valid here and we rebuild fully below, so that preview rebuild is
+    // a benign no-op if it fires (m_baseLook is already set).
+    m_baseLook = true;
+    spotPanel->setSpots(saved.spots);
+    viewport->setSpots(saved.spots);
 
-    viewport->setImage(preview, true); // the real demosaiced preview (base look on)
+    rebuildSpottedBuffers(true);
     pushParamsToViewport();
 
     exifPanel->setMetadata(result.metadata);
@@ -820,9 +923,41 @@ void MainWindow::applyLoadResult(const QString& path, const LoadResult& result) 
     setToolsEnabled(true);
 }
 
+// Spots are stored in full-res pixel coordinates (docs/adr/0017). Scale them
+// down when applying to the half-res preview buffer.
+static std::vector<Spot> scaleSpots(const std::vector<Spot>& spots, double sx, double sy) {
+    std::vector<Spot> out = spots;
+    for (Spot& s : out) {
+        s.destination = {s.destination.x() * sx, s.destination.y() * sy};
+        s.source      = {s.source.x() * sx,      s.source.y() * sy};
+        s.radius      *= sx; // pixels are square
+    }
+    return out;
+}
+
+void MainWindow::rebuildSpottedBuffers(bool fullResOnly) {
+    const auto& spots = spotPanel->spots();
+
+    if (preview.valid()) {
+        const double sx = (fullRes.valid() && fullRes.width > 0)
+            ? double(preview.width) / fullRes.width : 1.0;
+        const double sy = (fullRes.valid() && fullRes.height > 0)
+            ? double(preview.height) / fullRes.height : 1.0;
+        viewport->setImage(applySpots(preview, scaleSpots(spots, sx, sy)), m_baseLook);
+    }
+
+    if (fullResOnly && fullRes.valid()) {
+        spottedFullRes = applySpots(fullRes, spots);
+        viewport->setFullResImage(spottedFullRes);
+    }
+}
+
 void MainWindow::onFullResNeeded() {
-    if (fullRes.valid())
-        viewport->setFullResImage(fullRes);
+    if (!fullRes.valid())
+        return;
+    if (!spottedFullRes.valid())
+        spottedFullRes = applySpots(fullRes, spotPanel->spots());
+    viewport->setFullResImage(spottedFullRes);
 }
 
 void MainWindow::updateZoomStatus(float zoom) {
@@ -1013,6 +1148,7 @@ void MainWindow::rebuildPresetsMenu() {
 GlobalAdjustment MainWindow::currentParams() const {
     GlobalAdjustment p = adjPanel->params();
     p.localAdjustments = localPanel->localAdjustments();
+    p.spots = spotPanel->spots();
     return p;
 }
 
@@ -1145,7 +1281,8 @@ void MainWindow::exportFile() {
     QApplication::processEvents(); // repaint the status bar before the render blocks the UI
 
     // Linear working-space render → output profile (lcms2) → sharpen → save.
-    QImage out = viewport->renderToImage(fullRes, p, opts.width, opts.height);
+    const ImageBuffer& exportBuf = spottedFullRes.valid() ? spottedFullRes : fullRes;
+    QImage out = viewport->renderToImage(exportBuf, p, opts.width, opts.height);
     out = toOutputImage(out, opts.profile, opts.bitDepth == 16);
     out = applyUnsharpMask(std::move(out), opts.sharpening);
 

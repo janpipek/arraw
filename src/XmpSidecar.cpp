@@ -153,6 +153,44 @@ static LocalAdjustment parseLocalAdjustmentLi(QXmlStreamReader& xml) {
     return la;
 }
 
+// Parse one rdf:li (parseType="Resource") of the arraw:Spots Seq.
+static Spot parseSpotLi(QXmlStreamReader& xml) {
+    Spot s;
+    while (!xml.atEnd()) {
+        xml.readNext();
+        if (xml.isEndElement() && xml.qualifiedName() == "rdf:li")
+            break;
+        if (!xml.isStartElement())
+            continue;
+        const auto name = xml.qualifiedName().toString();
+        const QString text = xml.readElementText();
+        bool ok = false;
+        const double v = text.toDouble(&ok);
+        if (!ok)
+            continue;
+        if (name == "arraw:DestX")        s.destination.setX(v);
+        else if (name == "arraw:DestY")   s.destination.setY(v);
+        else if (name == "arraw:SourceX") s.source.setX(v);
+        else if (name == "arraw:SourceY") s.source.setY(v);
+        else if (name == "arraw:Radius")  s.radius = v;
+        else if (name == "arraw:Feather") s.feather = v;
+    }
+    return s;
+}
+
+// Parse the arraw:Spots Seq into a list. Positioned on the Spots start element.
+static std::vector<Spot> parseSpots(QXmlStreamReader& xml) {
+    std::vector<Spot> out;
+    while (!xml.atEnd()) {
+        xml.readNext();
+        if (xml.isEndElement() && xml.qualifiedName() == "arraw:Spots")
+            break;
+        if (xml.isStartElement() && xml.qualifiedName() == "rdf:li")
+            out.push_back(parseSpotLi(xml));
+    }
+    return out;
+}
+
 // Parse the arraw:LocalAdjustments Seq into a list. Positioned on the
 // LocalAdjustments start element. Honours the 16-mask cap (docs/adr/0010).
 static std::vector<LocalAdjustment> parseLocalAdjustments(QXmlStreamReader& xml) {
@@ -257,6 +295,9 @@ SidecarData XmpSidecar::load(const QString& rawPath) {
             // arraw-native local adjustments (docs/adr/0010).
             if (name == "arraw:LocalAdjustments")
                 p.localAdjustments = parseLocalAdjustments(xml);
+            // arraw-native spots (docs/adr/0017).
+            if (name == "arraw:Spots")
+                p.spots = parseSpots(xml);
         }
     }
     return data;
@@ -278,6 +319,29 @@ static void writeCurve(QXmlStreamWriter& xml, const char* elemName, const std::v
     }
     xml.writeEndElement(); // Seq
     xml.writeEndElement(); // curve element
+}
+
+// Writes arraw-native spots as a Seq of struct resources (docs/adr/0017).
+// Each li carries destination + source pixel coordinates, radius, and feather.
+static void writeSpots(QXmlStreamWriter& xml, const std::vector<Spot>& spots) {
+    if (spots.empty())
+        return;
+    auto num = [](double v) { return QString::number(v, 'f', 4); };
+    xml.writeStartElement(kNsArraw, "Spots");
+    xml.writeStartElement(kNsRdf, "Seq");
+    for (const auto& s : spots) {
+        xml.writeStartElement(kNsRdf, "li");
+        xml.writeAttribute(kNsRdf, "parseType", "Resource");
+        xml.writeTextElement(kNsArraw, "DestX",   num(s.destination.x()));
+        xml.writeTextElement(kNsArraw, "DestY",   num(s.destination.y()));
+        xml.writeTextElement(kNsArraw, "SourceX", num(s.source.x()));
+        xml.writeTextElement(kNsArraw, "SourceY", num(s.source.y()));
+        xml.writeTextElement(kNsArraw, "Radius",  num(s.radius));
+        xml.writeTextElement(kNsArraw, "Feather", num(s.feather));
+        xml.writeEndElement(); // rdf:li
+    }
+    xml.writeEndElement(); // rdf:Seq
+    xml.writeEndElement(); // arraw:Spots
 }
 
 // Writes the arraw-native local adjustments as a Seq of struct resources
@@ -404,6 +468,8 @@ static bool writeFile(const QString& rawPath, const SidecarData& data) {
 
     // arraw-native local adjustments (docs/adr/0010).
     writeLocalAdjustments(xml, p.localAdjustments);
+    // arraw-native spots (docs/adr/0017).
+    writeSpots(xml, p.spots);
 
     xml.writeEndElement(); // rdf:Description
     xml.writeEndElement(); // rdf:RDF

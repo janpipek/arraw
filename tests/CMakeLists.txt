@@ -30,6 +30,7 @@ add_executable(arraw_tests
     test_DevelopPreset.cpp
     test_GroupChecklistDialog.cpp
     test_PresetStore.cpp
+    test_Spot.cpp
 )
 
 target_link_libraries(arraw_tests PRIVATE arraw_core Catch2::Catch2WithMain)
