@@ -83,7 +83,7 @@ void SpotRemovalPanel::rebuildList() {
     spotList->clear();
     for (int i = 0; i < static_cast<int>(m_spots.size()); ++i)
         spotList->addItem(QString("Spot %1").arg(i + 1));
-    const int next = std::clamp(cur, 0, static_cast<int>(m_spots.size()) - 1);
-    spotList->setCurrentRow(m_spots.empty() ? -1 : next);
+    const int next = m_spots.empty() ? -1 : std::clamp(cur, 0, static_cast<int>(m_spots.size()) - 1);
+    spotList->setCurrentRow(next);
     deleteButton->setEnabled(activeIndex() >= 0);
 }

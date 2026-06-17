@@ -923,26 +923,41 @@ void MainWindow::applyLoadResult(const QString& path, const LoadResult& result) 
     setToolsEnabled(true);
 }
 
+// Spots are stored in full-res pixel coordinates (docs/adr/0017). Scale them
+// down when applying to the half-res preview buffer.
+static std::vector<Spot> scaleSpots(const std::vector<Spot>& spots, double sx, double sy) {
+    std::vector<Spot> out = spots;
+    for (Spot& s : out) {
+        s.destination = {s.destination.x() * sx, s.destination.y() * sy};
+        s.source      = {s.source.x() * sx,      s.source.y() * sy};
+        s.radius      *= sx; // pixels are square
+    }
+    return out;
+}
+
 void MainWindow::rebuildSpottedBuffers(bool fullResOnly) {
     const auto& spots = spotPanel->spots();
-    if (!fullResOnly && preview.valid()) {
-        viewport->setImage(applySpots(preview, spots), m_baseLook);
+
+    if (preview.valid()) {
+        const double sx = (fullRes.valid() && fullRes.width > 0)
+            ? double(preview.width) / fullRes.width : 1.0;
+        const double sy = (fullRes.valid() && fullRes.height > 0)
+            ? double(preview.height) / fullRes.height : 1.0;
+        viewport->setImage(applySpots(preview, scaleSpots(spots, sx, sy)), m_baseLook);
     }
+
     if (fullResOnly && fullRes.valid()) {
         spottedFullRes = applySpots(fullRes, spots);
         viewport->setFullResImage(spottedFullRes);
-        if (preview.valid())
-            viewport->setImage(applySpots(preview, spots), m_baseLook);
     }
 }
 
 void MainWindow::onFullResNeeded() {
-    if (spottedFullRes.valid())
-        viewport->setFullResImage(spottedFullRes);
-    else if (fullRes.valid()) {
+    if (!fullRes.valid())
+        return;
+    if (!spottedFullRes.valid())
         spottedFullRes = applySpots(fullRes, spotPanel->spots());
-        viewport->setFullResImage(spottedFullRes);
-    }
+    viewport->setFullResImage(spottedFullRes);
 }
 
 void MainWindow::updateZoomStatus(float zoom) {
