@@ -107,7 +107,7 @@ def stage_app(build: Path, stage: Path, env: dict[str, str]) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--build-dir", default="build-release", help="Release build directory")
-    parser.add_argument("--out-dir", default="dist", help="output directory for the ZIP")
+    parser.add_argument("--out-dir", default="dist", help="output directory for the ZIP and installer")
     parser.add_argument("--vcvars", default=DEFAULT_VCVARS, help="path to vcvars64.bat")
     parser.add_argument("--toolchain", default=DEFAULT_TOOLCHAIN, help="vcpkg CMake toolchain file")
     parser.add_argument("--vcpkg-installed", default=DEFAULT_VCPKG_INSTALLED, help="vcpkg installed tree")
@@ -117,7 +117,8 @@ def main() -> None:
     args = parser.parse_args()
 
     build = REPO / args.build_dir
-    stage_name = f"arraw-{project_version()}-windows-x64"
+    version = project_version()
+    stage_name = f"arraw-{version}-windows-x64"
 
     env = msvc_env(Path(args.vcvars))
     if not args.skip_build:
@@ -151,7 +152,7 @@ def main() -> None:
         iss = REPO / "tools" / "installer" / "arraw.iss"
         run([
             "ISCC",
-            f"/DAppVersion={project_version()}",
+            f"/DAppVersion={version}",
             f"/DStageDir={stage}",
             f"/DOutputDir={out}",
             str(iss),
