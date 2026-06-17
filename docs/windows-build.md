@@ -246,6 +246,10 @@ contains `arraw.exe`, the Release Qt/libraw/lcms runtime DLLs, and the `platform
 `imageformats\` plugin folders plus `jpeg62.dll` — i.e. everything the deploy step
 (§6.2) places next to the binary, in its Release variant.
 
+To also build the installer, install Inno Setup (`scoop install inno-setup`, so
+`ISCC` is on PATH) and run `python tools/package_windows.py --installer`. It writes
+`dist/arraw-<version>-windows-x64-setup.exe` (per-user, no admin; see ADR 0016).
+
 > **VC++ runtime:** the ZIP does *not* include the MSVC C++ runtime
 > (`vcruntime140.dll`, `vcruntime140_1.dll`, `msvcp140.dll`). Target machines need the
 > "Microsoft Visual C++ 2015–2022 Redistributable (x64)" installed. To make the ZIP
