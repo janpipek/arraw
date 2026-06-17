@@ -179,3 +179,16 @@ rectangle, and the preset name is re-derived on load (a ratio matching no preset
 e.g. from a foreign editor, round-trips as a nameless "locked" state). Free is the
 absence of the flag.
 _Avoid_: constrain, fix ratio, crop preset
+
+**Spot**:
+A clone-based pixel replacement applied to the decoded [[ImageBuffer]] before the
+shader pipeline. A destination circle (centre + radius) is filled with pixels
+sampled from a source circle (same radius, user-placed offset), feathered at the
+boundary. Coordinates are normalised to the original image buffer dimensions
+(not the display frame) — the same pixel is addressed regardless of [[Rotation]]
+or [[Crop]], because those are shader operations applied after. Applied CPU-side
+to the clean decoded buffer; the shader sees only the result. Distinct from
+[[Local Adjustment]], which is a tonal/colour delta evaluated in the shader — a
+Spot carries no tonal parameters and is not a parametric mask.
+_Avoid_: heal (implies Poisson blending, which is not implemented), clone stamp
+(tool name, not the data), local adjustment (different pipeline stage)
