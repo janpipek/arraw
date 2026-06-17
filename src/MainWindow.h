@@ -139,4 +139,7 @@ private:
 
     std::shared_ptr<std::atomic<bool>> loadCancel;
     QFutureWatcher<LoadResult> loadWatcher;
+
+    // Debounces develop-thumbnail regeneration after edits settle.
+    QTimer* thumbTimer = nullptr;
 };

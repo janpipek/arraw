@@ -37,6 +37,7 @@
 #include <QStatusBar>
 #include <QStyle>
 #include <QTabWidget>
+#include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
 #include <QUndoCommand>
@@ -154,6 +155,13 @@ MainWindow::MainWindow(QWidget* parent)
     connect(adjPanel, &AdjustmentPanel::paramsChanged, this, [this] { pushParamsToViewport(); });
 
     connect(localPanel, &LocalAdjustmentPanel::changed, this, [this] { pushParamsToViewport(); });
+
+    // Develop-thumbnail regeneration is debounced: every param change restarts the
+    // timer (in pushParamsToViewport), so it fires only once edits settle.
+    thumbTimer = new QTimer(this);
+    thumbTimer->setSingleShot(true);
+    thumbTimer->setInterval(750);
+    connect(thumbTimer, &QTimer::timeout, this, &MainWindow::generateDevelopedThumbnail);
 
     // Panel selection drives which mask the on-image tool edits; on-image drags
     // write the geometry back into the panel.
@@ -865,6 +873,28 @@ GlobalAdjustment MainWindow::currentParams() const {
 
 void MainWindow::pushParamsToViewport() {
     viewport->setAdjustments(currentParams());
+    if (thumbTimer)
+        thumbTimer->start(); // refresh the develop thumbnail once edits settle
+}
+
+void MainWindow::generateDevelopedThumbnail() {
+    // Don't snapshot a half-loaded image: the buffers/params may be mid-swap.
+    if (loadWatcher.isRunning())
+        return;
+    if (currentPath.isEmpty() || !preview.valid() || !viewport->rendererReady())
+        return;
+
+    const GlobalAdjustment p = currentParams();
+    const QSize sz = developedThumbSize(preview.width, preview.height, p.cropRect, 512);
+
+    // Same pipeline as export: linear working-space render → output transform.
+    QImage lin = viewport->renderToImage(preview, p, sz.width(), sz.height());
+    if (lin.isNull())
+        return;
+    const QImage srgb = toOutputImage(lin, OutputProfile::SRgb, /*sixteenBit=*/false);
+
+    ThumbnailCache::store(currentPath, srgb); // persist (overwrites the embedded one)
+    filmStrip->setThumbnail(currentPath, srgb); // live strip update
 }
 
 void MainWindow::saveAdjustments() {
