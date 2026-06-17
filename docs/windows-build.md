@@ -56,8 +56,9 @@ C:\dev\vcpkg\vcpkg.exe install qtbase qttools qtshadertools "libraw[openmp]" lcm
 
 `libraw[openmp]` builds libraw with OpenMP so the demosaic (`dcraw_process`) runs
 multithreaded — roughly 3× faster on a multi-core CPU (≈3s → ≈0.9s on the reference
-machine). It adds a dependency on the OpenMP runtime `vcomp140.dll`, which ships with
-the same VC++ redistributable noted in §7. To profile, set the `ARRAW_TRACE`
+machine). It adds a dependency on the OpenMP runtime `vcomp140.dll`, which the
+packaging bundles app-local alongside the CRT DLLs (see §7 / ADR 0016) — no separate
+redistributable is required on the target machine. To profile, set the `ARRAW_TRACE`
 environment variable before launching `arraw.exe`; expensive operations (RAW load
 stages, colour transforms, LUT builds) print a `[trace] <label> N ms` line on stderr
 (see `src/Trace.h`).
@@ -246,11 +247,16 @@ contains `arraw.exe`, the Release Qt/libraw/lcms runtime DLLs, and the `platform
 `imageformats\` plugin folders plus `jpeg62.dll` — i.e. everything the deploy step
 (§6.2) places next to the binary, in its Release variant.
 
-> **VC++ runtime:** the ZIP does *not* include the MSVC C++ runtime
-> (`vcruntime140.dll`, `vcruntime140_1.dll`, `msvcp140.dll`). Target machines need the
-> "Microsoft Visual C++ 2015–2022 Redistributable (x64)" installed. To make the ZIP
-> fully self-contained instead, copy those three DLLs (from
-> `VC\Redist\MSVC\<ver>\x64\Microsoft.VC143.CRT\`) next to `arraw.exe` before zipping.
+To also build the installer, install Inno Setup (`scoop install inno-setup`, so
+`ISCC` is on PATH) and run `python tools/package_windows.py --installer`. It writes
+`dist/arraw-<version>-windows-x64-setup.exe` (per-user, no admin; see ADR 0016).
+
+> **VC++ runtime:** the packaging bundles the CRT and OpenMP runtime DLLs
+> (`vcruntime140.dll`, `vcruntime140_1.dll`, `msvcp140.dll`, `vcomp140.dll`) app-local,
+> sourced from the VS redist tree (`VC\Redist\MSVC\<ver>\x64\Microsoft.VC*.CRT\` and
+> `…Microsoft.VC*.OpenMP\`). Both the ZIP and the installer are therefore
+> self-contained — target machines need no separately installed "Microsoft Visual C++
+> 2015–2022 Redistributable". (Decision of record: ADR 0016.)
 
 ---
 

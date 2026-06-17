@@ -65,7 +65,7 @@ posture-B store path.
 
 Full rationale and rejected options: [ADR 0014](adr/0014-linux-distribution-appimage-ubuntu-aqt.md).
 
-## Windows — BUILD + PORTABLE ZIP DONE (installer deferred)
+## Windows — BUILD + PORTABLE ZIP + INSTALLER DONE (signing/CI deferred)
 
 The *build* is established and documented in [windows-build.md](windows-build.md):
 MSVC 2022 + vcpkg (`qtbase qttools qtshadertools libraw[openmp] lcms`,
@@ -81,26 +81,22 @@ MSVC 2022 + vcpkg (`qtbase qttools qtshadertools libraw[openmp] lcms`,
 
 A **portable `.zip`** is implemented: `tools/package_windows.py` builds Release and
 bundles the runnable app to `dist/arraw-<version>-windows-x64.zip` (exe + Release
-runtime DLLs + plugin folders). It does **not** bundle the MSVC/OpenMP runtime
-(`vcruntime140*.dll`, `msvcp140.dll`, `vcomp140.dll`); the target needs the VC++
-2015–2022 x64 redistributable, or those DLLs copied in app-local. This is the
-posture-A portable artifact; an installer remains the open design below.
+runtime DLLs + plugin folders). As of ADR 0016 the stage also bundles the MSVC/OpenMP runtime app-local
+(`vcruntime140*.dll`, `msvcp140.dll`, `vcomp140.dll`), so the ZIP is now
+**self-contained** — no separate VC++ redistributable needed on the target.
 
-**Installer is not yet designed.** Open questions to resume on, with leanings:
+**Installer — DONE (see [ADR 0016](adr/0016-windows-installer-inno-setup.md)).**
+A per-user **Inno Setup** `setup.exe` is built by `python tools/package_windows.py
+--installer` (needs `ISCC` on PATH — `scoop install inno-setup`) over the same
+stage as the ZIP. No UAC (`{localappdata}\Programs\arraw`), opt-in RAW file
+associations, app-local runtime. Still deferred:
 
-- **Installer format** — Inno Setup / NSIS / WiX (MSI) / MSIX. Leaning Inno Setup
-  (simple, scriptable, no MSI ceremony) for posture A; revisit MSIX/winget for
-  posture B. The portable `.zip` above already covers the "no-install" case.
-- **Qt/dependency deployment** — the dev/zip path deploys plugins manually because
-  this vcpkg port set ships no `windeployqt`. For the installer, evaluate adding
-  `windeployqt` (e.g. via an aqtinstall Qt) to bundle Qt + plugins + the CRT/OpenMP
-  runtimes in one step, superseding the manual copy. Pin which DLLs (Release) ship.
-- **Code signing** — unsigned installers trip SmartScreen ("unknown publisher").
-  An Authenticode cert costs money/identity verification. Decision deferred; may
-  ship unsigned with a documented "more info → run anyway" note initially.
-- **CI** — GitHub Actions `windows-latest` + vcpkg. The slow Qt-from-source build
-  makes **vcpkg binary caching** (e.g. GitHub Actions cache / NuGet feed) the key
-  concern, or switch to aqtinstall to skip building Qt.
+- **Code signing** — ships unsigned; users click through SmartScreen ("More info →
+  Run anyway"). Revisit with an Authenticode cert at posture B.
+- **CI** — local build for now; a tag-triggered GitHub Actions leg is a follow-on
+  (vcpkg binary caching / aqtinstall is the key concern).
+- **MSIX / winget / Scoop** — posture-B channels; Scoop is near-free now that the
+  ZIP is self-contained.
 - **Arch** — x64 only.
 
 ## macOS — TENTATIVE LEANINGS (not decided)
