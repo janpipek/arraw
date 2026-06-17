@@ -474,22 +474,38 @@ namespace, and sit on the shared undo stack.
 
 ### Milestone 8 — Settings Propagation (single-target)
 
-Design resolved 2026-06-15. Move develop settings between photos without a
-catalogue. Batch/multi-photo application is explicitly **out of scope here** —
-see Milestone 10.
+Design resolved 2026-06-15; refined 2026-06-16 (grilling session). Move develop
+settings between photos without a catalogue. Batch/multi-photo application is
+explicitly **out of scope here** — see Milestone 10.
 
-- **Copy → Paste, pick-what-copies, paste replaces.** Copy opens a group
-  checklist (WB, Tone, Color, Curve, Detail, Vignette/Grain/Clarity, Local
-  Adjustments, Crop…); paste overwrites exactly those groups on the open photo,
-  leaving unchecked groups untouched.
-- **Develop Presets.** Save a named bundle through the same checklist; apply to
-  any photo. Stored as arraw-native files in `QStandardPaths::AppDataLocation`,
-  listed in a Presets menu. Local Adjustments includable but off by default. Not
-  Lightroom preset files (internal convenience, not an interop surface).
-- **Paste Previous.** One-key "apply the previously-edited photo's settings to
-  this one," no explicit copy step.
-- Auto-apply-on-load is **deferred** (avoids the "what counts as never-edited"
-  edge cases).
+- **Seven Develop Groups partition every global field:** White Balance, Tone,
+  Tone Curve, Colour, HSL, Detail, and **Geometry** (rotation + crop +
+  aspect-lock flag bundled). The taxonomy mirrors the AdjustmentPanel groups and
+  is exhaustive, so no field can silently fail to copy. **Local Adjustments are
+  not a group** — masks pinned to one photo's framing rarely transfer; a
+  mask-mapping scheme is deferred as a speculative future extension.
+- **Apply = replace wholesale.** Applying a group overwrites every field in it on
+  the target with the source's values, *including resetting to defaults* when the
+  source group is unedited. Makes `applyGroups(target, source, selection)` a pure
+  field-copy with no special cases — the single code path behind copy/paste and
+  preset apply.
+- **Copy → Paste, both checklisted.** Copy opens a checklist and snapshots the
+  chosen groups + their values into an in-memory, session-only clipboard (one
+  slot, not the OS clipboard). Paste opens its own checklist **bounded by what was
+  copied** (you may narrow, never widen). Applying is one `QUndoStack` step via
+  the existing `AdjustmentCommand(before, after)`.
+- **Develop Presets.** Save a named bundle through the same checklist; apply in
+  one click (no apply-time checklist — narrowing happened at save). Stored as one
+  **partial JSON** file per preset under `QStandardPaths::AppDataLocation/presets/`
+  (only the saved groups are written; presence in the file *is* the active-group
+  flag), listed in a top-level **Presets** menu. Not Lightroom preset files — a
+  clean break from the `crs:` sidecar contract (internal convenience, not an
+  interop surface). See `docs/adr/0015`.
+- **UI:** Edit menu gains *Copy Settings…* (Ctrl+Shift+C) and *Paste Settings…*
+  (Ctrl+Shift+V); a new Presets menu holds *Save Current Settings as Preset…*,
+  *Manage Presets…*, and the saved-preset list.
+- **Dropped from the original sketch:** *Paste Previous* (propagation is always
+  explicit — no implicit "copy from the previous photo") and auto-apply-on-load.
 
 ### Milestone 9 — Develop Depth (new adjustments)
 

@@ -143,6 +143,10 @@ set(CORE_SOURCES
     src/DecodeCache.cpp
     src/ExportDialog.cpp
     src/CropGeometry.cpp
+    src/DevelopGroup.cpp
+    src/DevelopPreset.cpp
+    src/GroupChecklistDialog.cpp
+    src/PresetStore.cpp
 )
 
 add_library(arraw_core STATIC ${CORE_SOURCES})
