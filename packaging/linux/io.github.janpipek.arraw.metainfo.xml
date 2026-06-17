@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.janpipek.arraw</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>arraw</name>
+  <summary>Lightweight RAW photo editor with a real-time GPU preview</summary>
+  <developer id="io.github.janpipek">
+    <name>Jan Pipek</name>
+  </developer>
+  <description>
+    <p>
+      arraw is a lightweight, cross-platform RAW photo editor with a
+      Lightroom-style development workflow: open a folder, edit
+      non-destructively with a real-time GPU preview, and export. It is an
+      editor for developing and culling photos, not a catalogue or
+      digital-asset manager.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>Non-destructive editing with Lightroom-compatible XMP sidecars</li>
+      <li>Real-time GPU preview of every adjustment</li>
+      <li>Tone curves, local adjustments, crop and straighten</li>
+      <li>Culling with ratings and colour labels</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">io.github.janpipek.arraw.desktop</launchable>
+  <content_rating type="oars-1.1"/>
+  <url type="homepage">https://github.com/janpipek/arraw</url>
+  <url type="bugtracker">https://github.com/janpipek/arraw/issues</url>
+  <releases>
+    <release version="0.1.0" date="2026-06-17"/>
+  </releases>
+</component>

@@ -19,22 +19,51 @@ AppStream metainfo) but build none of the store machinery yet.
   stays `arraw` (don't move existing QSettings).
 - **Version is single-sourced from `CMakeLists.txt`** `project(VERSION …)`. A CI
   guard fails the release if the pushed `vX.Y.Z` tag disagrees. The value is
-  threaded into `setApplicationVersion` and a new `--version` flag. *(Not yet
-  wired — `main.cpp` currently sets no version.)*
+  threaded into `setApplicationVersion` and a `--version` flag (via the
+  `ARRAW_VERSION` compile definition and `QCommandLineParser`).
 - **Build & release via GitHub Actions**, tag-triggered: one workflow, one matrix
   leg per OS, all attaching to the same Release.
 - **x86_64** baseline everywhere (macOS additionally needs Apple Silicon).
 - **No auto-update** for v0.x — users re-download from Releases.
 
-## Linux — DECIDED (see ADR 0014)
+## Linux — IMPLEMENTED (see ADR 0014)
 
-Single-file **AppImage**, built in CI on a **KDE neon (Ubuntu 24.04 / glibc 2.39)**
-base, bundling Qt 6.8 + LibRaw + lcms2, reaching every desktop from Ubuntu 24.04
-LTS forward. Qt stays at 6.8 (the viewport needs `QRhiWidget`, 6.7+). Carries a
+Single-file **AppImage**, built in CI on a **stock `ubuntu-24.04` runner (glibc
+2.39)** with **Qt 6.8 from aqtinstall**, bundling Qt + LibRaw + lcms2, reaching
+every desktop from Ubuntu 24.04 LTS forward. Qt stays at 6.8 (the viewport needs
+`QRhiWidget`, 6.7+; 24.04's distro Qt is only 6.4, so we bring our own). Carries a
 `.desktop` launcher, the existing icons, and an AppStream `metainfo.xml`; file
 associations and zsync auto-update are deferred. x86_64 only.
 
-Full rationale and rejected options: [ADR 0014](adr/0014-linux-distribution-appimage-on-neon.md).
+> The original plan built on a KDE neon container for "system Qt 6.8." That
+> premise turned out false (neon's image is jammy / Qt 6.7.2 with an empty
+> private-dev), so the build host pivoted to aqtinstall on Ubuntu 24.04 — see the
+> correction section in ADR 0014.
+
+What's wired:
+
+- **`.github/workflows/release.yml`** — tag-triggered (`v*`). Installs Qt 6.8.3 via
+  `jurplel/install-qt-action` on `ubuntu-24.04` plus the X/xkb/Vulkan/fontconfig
+  `-dev` packages official Qt's CMake targets reference, builds, bundles via
+  `linuxdeploy` + `linuxdeploy-plugin-qt` (`NO_STRIP=1`,
+  `EXTRA_PLATFORM_PLUGINS=libqoffscreen.so`), then **smoke-tests the AppImage on a
+  clean `ubuntu-24.04` runner** (`--version` under `QT_QPA_PLATFORM=offscreen`,
+  with the host glvnd/fontconfig/X11 baseline installed) to prove self-containment
+  before publishing.
+- **CMake `install()` rules** (`UNIX AND NOT APPLE`) stage a standard AppDir:
+  `usr/bin/arraw`, the `io.github.janpipek.arraw` `.desktop` + `metainfo.xml`, and
+  the existing icons renamed into `hicolor/<size>/apps`. `find_package` resolves
+  `Qt6::GuiPrivate` portably across official-Qt/vcpkg (target via Gui) and Fedora
+  (separate component).
+- **Packaging assets** live in `packaging/linux/`; a `LICENSE` (GPL-3.0) backs the
+  metainfo's `<project_license>`.
+
+The full build + smoke pipeline was reproduced locally in `ubuntu:24.04` containers
+before merge (`arraw 0.1.0` under offscreen, on a clean 24.04 baseline). Open
+follow-ups: screenshots in the metainfo and a zsync update feed are deferred to the
+posture-B store path.
+
+Full rationale and rejected options: [ADR 0014](adr/0014-linux-distribution-appimage-ubuntu-aqt.md).
 
 ## Windows — BUILD + PORTABLE ZIP DONE (installer deferred)
 
