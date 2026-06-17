@@ -28,6 +28,27 @@ DEFAULT_VCVARS = r"C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Au
 DEFAULT_TOOLCHAIN = "C:/dev/vcpkg/scripts/buildsystems/vcpkg.cmake"
 DEFAULT_VCPKG_INSTALLED = "C:/dev/vcpkg/installed/x64-windows"
 
+# CRT + OpenMP runtime, bundled app-local so the package needs no system VC++ redist.
+RUNTIME_DLLS = ("vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll", "vcomp140.dll")
+
+
+def copy_runtime_dlls(env: dict[str, str], stage: Path) -> None:
+    """Copy the MSVC/OpenMP runtime DLLs from the VS redist tree into `stage`."""
+    redist_root = env.get("VCToolsRedistDir")
+    if not redist_root:
+        sys.exit("VCToolsRedistDir not set; run from the MSVC env (vcvars64.bat) to locate the CRT runtime.")
+    redist_x64 = Path(redist_root) / "x64"
+    found: dict[str, Path] = {}
+    for pattern in ("Microsoft.VC*.CRT/*.dll", "Microsoft.VC*.OpenMP/*.dll"):
+        for dll in redist_x64.glob(pattern):
+            if dll.name.lower() in RUNTIME_DLLS:
+                found[dll.name.lower()] = dll
+    missing = [name for name in RUNTIME_DLLS if name not in found]
+    if missing:
+        sys.exit(f"Runtime DLLs not found under {redist_x64}: {missing}")
+    for dll in found.values():
+        shutil.copy2(dll, stage)
+
 
 def msvc_env(vcvars: Path) -> dict[str, str]:
     """Return the environment after sourcing vcvars64.bat (rc.exe/mt.exe, INCLUDE/LIB)."""
@@ -64,6 +85,25 @@ def run(cmd: list[str], env: dict[str, str] | None = None) -> None:
     subprocess.run(cmd, env=env, check=True)
 
 
+def stage_app(build: Path, stage: Path, env: dict[str, str]) -> None:
+    """Stage the runnable app: exe + build runtime DLLs + Qt plugin dirs + CRT runtime."""
+    exe = build / "arraw.exe"
+    if not exe.is_file():
+        sys.exit(f"arraw.exe not found in {build} - build first (omit --skip-build).")
+    if stage.exists():
+        shutil.rmtree(stage)
+    stage.mkdir(parents=True)
+
+    shutil.copy2(exe, stage)
+    for dll in build.glob("*.dll"):
+        shutil.copy2(dll, stage)
+    for plugin_dir in ("platforms", "imageformats"):
+        src = build / plugin_dir
+        if src.is_dir():
+            shutil.copytree(src, stage / plugin_dir, ignore=shutil.ignore_patterns("*.pdb"))
+    copy_runtime_dlls(env, stage)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--build-dir", default="build-release", help="Release build directory")
@@ -77,8 +117,8 @@ def main() -> None:
     build = REPO / args.build_dir
     stage_name = f"arraw-{project_version()}-windows-x64"
 
+    env = msvc_env(Path(args.vcvars))
     if not args.skip_build:
-        env = msvc_env(Path(args.vcvars))
         run(
             [
                 "cmake", "-S", str(REPO), "-B", str(build), "-G", "Ninja",
@@ -92,24 +132,8 @@ def main() -> None:
         )
         run(["cmake", "--build", str(build)], env=env)
 
-    exe = build / "arraw.exe"
-    if not exe.is_file():
-        sys.exit(f"arraw.exe not found in {build} - build first (omit --skip-build).")
-
-    # Stage runnable files only: exe + runtime DLLs + Qt plugin dirs. No .lib/.pdb,
-    # no CMake build artifacts.
     stage = build / "_package" / stage_name
-    if stage.exists():
-        shutil.rmtree(stage)
-    stage.mkdir(parents=True)
-
-    shutil.copy2(exe, stage)
-    for dll in build.glob("*.dll"):
-        shutil.copy2(dll, stage)
-    for plugin_dir in ("platforms", "imageformats"):
-        src = build / plugin_dir
-        if src.is_dir():
-            shutil.copytree(src, stage / plugin_dir, ignore=shutil.ignore_patterns("*.pdb"))
+    stage_app(build, stage, env)
 
     # Compress to dist/<stage_name>.zip, keeping the top-level folder inside the archive.
     out = REPO / args.out_dir
