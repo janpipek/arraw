@@ -3,6 +3,7 @@
 #include "CropGeometry.h"
 #include "ImagePipeline.h"
 #include "RendererCore.h"
+#include "Spot.h"
 #include <QImage>
 #include <QPointF>
 #include <QRectF>
@@ -17,8 +18,11 @@ public:
     // Mutually-exclusive viewport tools. Crop edits a rectangle; Straighten
     // draws a level line; WhiteBalance samples a neutral pixel. Only one is
     // active at a time — the toolbar is a thin control surface over this.
-    enum class ActiveTool { None, Crop, Straighten, WhiteBalance, LocalMask };
+    enum class ActiveTool { None, Crop, Straighten, WhiteBalance, LocalMask, SpotTool };
     Q_ENUM(ActiveTool)
+
+    // Which part of a Spot the user is dragging in SpotTool mode.
+    enum class SpotHandle { None, Destination, Source };
 
     explicit ImageViewport(QWidget* parent = nullptr);
     ~ImageViewport() override;
@@ -55,6 +59,11 @@ public:
     // Which local adjustment the LocalMask tool edits on the image (-1 = none).
     // Driven by the Masks panel selection.
     void setActiveLocalAdjustment(int index);
+
+    // Spot-tool overlay: set the list the viewport draws and hit-tests.
+    // Does not rebuild the spotted image buffer — that is MainWindow's job.
+    void setSpots(const std::vector<Spot>& spots);
+    bool spotToolMode() const { return tool == ActiveTool::SpotTool; }
 
     void resetView();
     void setZoom(float value);
@@ -104,6 +113,11 @@ signals:
     void localMaskChanged(int index, const Mask& mask);
     // A handle drag finished — fold it into one undo step.
     void localMaskEditFinished();
+
+    // SpotTool signals. All coordinates are original buffer pixels (docs/adr/0017).
+    void spotRequested(QPointF destBufPx);          // user clicked to place a new spot
+    void spotHandleChanged(int idx, SpotHandle, QPointF newBufPx); // drag (live)
+    void spotHandleCommitted(int idx, SpotHandle, QPointF newBufPx); // mouse release
     void zoomChanged(float pixelZoom);
     // Small shader-rendered samples for histogramming (docs/adr/0004):
     // finalSample is the full pipeline, curveInputSample stops after tone
@@ -173,6 +187,13 @@ private:
     void drawLocalMaskOverlay(QPainter& p) const; // Linear
     void drawRadialMaskOverlay(QPainter& p) const;
 
+    // SpotTool coordinate transforms and overlay.
+    QPointF viewportToBufferPixel(QPointF viewportPos) const;
+    QPointF bufferPixelToViewport(QPointF bufPx) const;
+    double bufRadiusToViewport(QPointF centerBufPx, double radius) const;
+    SpotHandle hitTestSpot(QPointF viewportPos, int& outIdx) const;
+    void drawSpotOverlay(QPainter& p) const;
+
     // Crop is just one of the active tools; this keeps the crop code readable.
     bool cropMode() const { return tool == ActiveTool::Crop; }
 
@@ -232,6 +253,11 @@ private:
     int activeLocalAdj = -1;
     LinearHandle localDragHandle = LinearHandle::None;
     RadialHandle radialDragHandle = RadialHandle::None;
+
+    // SpotTool state.
+    std::vector<Spot> m_spots;
+    int m_spotDragIdx = -1;
+    SpotHandle m_spotDragHandle = SpotHandle::None;
 
     // Straighten: endpoints of the level line being dragged (viewport pixels).
     bool straightenDragging = false;

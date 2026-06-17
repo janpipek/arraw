@@ -160,6 +160,7 @@ set(CORE_SOURCES
     src/GroupChecklistDialog.cpp
     src/PresetStore.cpp
     src/Spot.cpp
+    src/SpotRemovalPanel.cpp
 )
 
 add_library(arraw_core STATIC ${CORE_SOURCES})
