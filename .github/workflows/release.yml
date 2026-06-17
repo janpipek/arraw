@@ -1,0 +1,165 @@
+name: Release
+
+# Tag-triggered release (ADR 0014 / docs/distribution.md). A pushed vX.Y.Z tag
+# builds the Linux AppImage on a KDE neon base, smoke-tests it on a clean Ubuntu
+# 24.04 runner to prove the glibc-2.39 floor, then attaches it to the GitHub
+# Release. Other OS legs (Windows, macOS) attach to the same Release later.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  linux-appimage:
+    name: Build Linux AppImage (Qt 6.8 via aqt)
+    # Build on stock Ubuntu 24.04 (glibc 2.39) so the binary's glibc floor reaches
+    # 24.04 LTS forward (ADR 0014). Qt 6.8 comes from aqtinstall — 24.04 ships only
+    # Qt 6.4, and KDE neon's Docker image turned out to be jammy + Qt 6.7.2 with an
+    # empty private-dev (see ADR 0014's correction). LibRaw/lcms2 are taken from the
+    # 24.04 apt repo (their glibc 2.39 floor matches the binary's).
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt 6.8
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          host: linux
+          target: desktop
+          arch: linux_gcc_64
+          modules: qtshadertools
+          cache: true
+          # Do NOT set `archives:` — the default full qtbase carries the GuiPrivate
+          # CMake config (Qt6GuiPrivateConfig.cmake) that ADR 0006's QRhiWidget needs.
+          # Restricting archives silently drops it and find_package(... GuiPrivate) fails.
+
+      - name: Install system build dependencies
+        # arraw's own deps (LibRaw, lcms2) plus the X/xkb/Vulkan/fontconfig -dev
+        # packages that official Qt's imported CMake targets (e.g. Qt6::GuiPrivate
+        # -> XKB::XKB) reference. Without them, find_package(Qt6) fails at generate
+        # time even though the headers compile. appstream provides appstreamcli.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build file appstream libdbus-1-3 \
+            libraw-dev liblcms2-dev \
+            libgl1-mesa-dev libglu1-mesa-dev libvulkan-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libfontconfig1-dev libfreetype-dev \
+            libx11-dev libx11-xcb-dev libxext-dev libxfixes-dev libxi-dev libxrender-dev \
+            libxcb1-dev libxcb-cursor-dev libxcb-glx0-dev libxcb-keysyms1-dev \
+            libxcb-image0-dev libxcb-shm0-dev libxcb-icccm4-dev libxcb-sync-dev \
+            libxcb-xfixes0-dev libxcb-shape0-dev libxcb-randr0-dev \
+            libxcb-render-util0-dev libxcb-util-dev libxcb-xinerama0-dev libxcb-xkb-dev
+
+      - name: Verify tag matches project version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          ver="$(grep -Po 'project\(arraw VERSION \K[0-9]+\.[0-9]+\.[0-9]+' CMakeLists.txt)"
+          echo "tag=$tag project_version=$ver"
+          if [ "$tag" != "$ver" ]; then
+            echo "::error::Tag v$tag disagrees with project(VERSION $ver) in CMakeLists.txt"
+            exit 1
+          fi
+          echo "ARRAW_VERSION=$ver" >> "$GITHUB_ENV"
+
+      - name: Validate AppStream metainfo
+        run: appstreamcli validate --no-net packaging/linux/io.github.janpipek.arraw.metainfo.xml
+
+      - name: Configure and build (Release)
+        run: |
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DARRAW_BUILD_TESTS=OFF \
+            -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
+          ninja -C build arraw
+
+      - name: Stage AppDir
+        run: DESTDIR="$PWD/AppDir" cmake --install build --prefix /usr
+
+      - name: Build AppImage
+        env:
+          # GitHub runners have no usable FUSE; tell every tool AppImage to self-extract.
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+          # Bundle the offscreen platform plugin so the headless CLI (ADR 0012)
+          # works over SSH, alongside the xcb plugin the qt plugin bundles by default.
+          # Platform plugins use EXTRA_PLATFORM_PLUGINS; EXTRA_QT_PLUGINS is for
+          # generic plugin groups (svg, etc.) and silently ignores platform names.
+          EXTRA_PLATFORM_PLUGINS: libqoffscreen.so
+          # linuxdeploy bundles an old binutils `strip` that cannot parse the
+          # .relr.dyn (DT_RELR) section in libraries from modern distros (Ubuntu
+          # 24.04, Fedora 40+), aborting the run. Skip stripping; the bundle is a
+          # little larger but builds reliably across distros.
+          NO_STRIP: '1'
+          # qmake from the aqt-installed Qt, so linuxdeploy-plugin-qt bundles that Qt.
+          QMAKE: ${{ env.QT_ROOT_DIR }}/bin/qmake
+          OUTPUT: arraw-${{ env.ARRAW_VERSION }}-x86_64.AppImage
+        run: |
+          base="https://github.com/linuxdeploy"
+          wget -q "$base/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage"
+          wget -q "$base/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage"
+          chmod +x linuxdeploy*.AppImage
+          ./linuxdeploy-x86_64.AppImage \
+            --appdir AppDir \
+            --plugin qt \
+            --output appimage
+          ls -lh arraw-*.AppImage
+
+      - name: Upload AppImage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-appimage
+          path: arraw-*.AppImage
+          if-no-files-found: error
+
+  smoke-test:
+    name: Smoke-test AppImage on clean Ubuntu 24.04
+    needs: linux-appimage
+    # The whole ADR rests on the AppImage running on stock Ubuntu 24.04 LTS with no
+    # build deps and no Qt — only the standard host baseline an AppImage borrows
+    # (glibc, the glvnd graphics stack, fontconfig, X11, dbus, glib; everything the
+    # AppImage "excludelist" assumes present). offscreen needs no display, so it is
+    # the headless-safe check.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-appimage
+
+      - name: Install host baseline an AppImage relies on
+        # Pinned explicitly rather than trusting whatever the runner image happens
+        # to preinstall, so this job actually tests bundle self-containment. A bare
+        # ubuntu:24.04 lacks the glvnd GL stack and fontconfig; a real desktop has them.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgl1 libglx0 libopengl0 libegl1 libglvnd0 \
+            libfontconfig1 libfreetype6 libdbus-1-3 libglib2.0-0t64 \
+            libx11-6 libx11-xcb1 libxcb1 libxkbcommon0 libxkbcommon-x11-0 \
+            libxrender1 libxext6 libxi6 libxfixes3 libsm6 libice6
+
+      - name: Run --version under offscreen
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          chmod +x arraw-*.AppImage
+          out="$(./arraw-*.AppImage --version)"
+          echo "$out"
+          echo "$out" | grep -q '^arraw '
+
+  release:
+    name: Attach AppImage to GitHub Release
+    needs: smoke-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-appimage
+
+      - name: Publish to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: arraw-*.AppImage
+          fail_on_unmatched_files: true

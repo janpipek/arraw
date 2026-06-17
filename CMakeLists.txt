@@ -20,9 +20,21 @@ function(arraw_enable_warnings target)
     endif()
 endfunction()
 
-# 6.8: QRhiWidget (6.7) + LTS. ShaderTools provides qt6_add_shaders (qsb);
-# GuiPrivate provides the semi-public RHI headers (rhi/qrhi.h).
-find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets Concurrent ShaderTools GuiPrivate)
+# 6.8: QRhiWidget (6.7) + LTS. ShaderTools provides qt6_add_shaders (qsb).
+find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets Concurrent ShaderTools)
+
+# Qt6::GuiPrivate exposes the semi-public RHI headers (rhi/qrhi.h) that ADR 0006's
+# QRhiWidget pipeline needs. Packagings disagree on how they expose it: official Qt
+# binaries (aqtinstall, used by the Linux release CI) and vcpkg ship the target
+# inside the Gui package, pulled in transitively by Widgets above; Fedora's system
+# Qt splits it into a separate GuiPrivate *component* with its own config file that
+# must be requested explicitly, and does NOT define the target via Gui. Requesting
+# GuiPrivate-as-component unconditionally breaks on official Qt (no such config);
+# relying on the transitive target breaks on Fedora. So take the target if it is
+# already here, and only request the component when it is not.
+if(NOT TARGET Qt6::GuiPrivate)
+    find_package(Qt6 6.8 REQUIRED COMPONENTS GuiPrivate)
+endif()
 
 # On Windows (vcpkg) the Qt DLLs are deployed next to the binary by vcpkg's
 # applocal step, but the Qt plugins are not. Without the platform plugin Qt aborts
@@ -190,6 +202,30 @@ arraw_enable_warnings(arraw)
 
 target_link_libraries(arraw PRIVATE arraw_core)
 arraw_deploy_qt_plugins(arraw)
+
+# Single-source the version from project(VERSION) into the binary (ADR 0014):
+# setApplicationVersion + the --version flag both read this. A CI guard fails the
+# release if the pushed vX.Y.Z tag disagrees with it.
+target_compile_definitions(arraw PRIVATE ARRAW_VERSION="${PROJECT_VERSION}")
+
+# Linux desktop integration + AppDir staging. `DESTDIR=AppDir cmake --install`
+# lays out a standard AppDir (usr/bin, usr/share/...) that linuxdeploy turns into
+# the bundled AppImage in CI. The reverse-DNS id io.github.janpipek.arraw names the
+# .desktop, the metainfo, and the installed icons. Desktop-only, so guarded off
+# macOS (which gets a .app bundle later).
+if(UNIX AND NOT APPLE)
+    include(GNUInstallDirs)
+    install(TARGETS arraw RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    install(FILES packaging/linux/io.github.janpipek.arraw.desktop
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+    install(FILES packaging/linux/io.github.janpipek.arraw.metainfo.xml
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo)
+    foreach(icon_size 16 24 32 48 64 128 256)
+        install(FILES resources/icons/arraw-${icon_size}.png
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/${icon_size}x${icon_size}/apps
+            RENAME io.github.janpipek.arraw.png)
+    endforeach()
+endif()
 
 if(ARRAW_BUILD_TESTS)
     add_subdirectory(tests)

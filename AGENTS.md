@@ -23,6 +23,8 @@ ninja -C build
 # Run
 ./build/arraw
 ```
+For the release **AppImage** (built in CI on Ubuntu 24.04 with Qt 6.8 via aqtinstall)
+and the Linux packaging gotchas, see the **[Linux build & deployment guide](docs/linux-build.md)**.
 
 #### macOS (Homebrew)
 ```bash
