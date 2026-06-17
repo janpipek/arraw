@@ -670,6 +670,14 @@ void MainWindow::openFile() {
         loadImage(path);
 }
 
+// Decode-cache key: path + size + mtime, so an externally modified file misses
+// and re-decodes (mirrors ThumbnailCache's keying).
+static QString decodeKey(const QString& path) {
+    const QFileInfo fi(path);
+    return fi.canonicalFilePath() + '|' + QString::number(fi.size()) + '|'
+           + QString::number(fi.lastModified().toMSecsSinceEpoch());
+}
+
 void MainWindow::loadImage(const QString& path) {
     // Cancel any in-progress load so it stops before dcraw_process.
     if (loadCancel)
@@ -687,13 +695,22 @@ void MainWindow::loadImage(const QString& path) {
     filmStrip->setDirectory(QFileInfo(path).absolutePath());
     filmStrip->setCurrentFile(path);
 
-    // Sync: show cached thumbnail immediately while the background task runs
-    if (QImage cached = ThumbnailCache::loadFromDisk(path); !cached.isNull())
-        viewport->setImage(toWorkingSpaceBuffer(cached));
+    // Resolve the new image's develop params up front, so its first paint wears
+    // its own edits, not the previous image's. Crop is a placeholder (full frame)
+    // until the demosaic yields the real DefaultCrop for never-edited RAWs.
+    pendingParams = XmpSidecar::resolveAdjustments(path, QRectF(0.0, 0.0, 1.0, 1.0));
 
-    // Single background task: extract embedded preview on the same open file
-    // handle (unpack_thumb only), dispatch it to the main thread, then
-    // continue with the full demosaic.  Sequential I/O avoids contention.
+    // Re-opening a recently viewed image: a cached decode skips the background
+    // task entirely — instant, and correct (straight to the demosaiced image).
+    const QString key = decodeKey(path);
+    if (const LoadResult* hit = decodeCache.get(key)) {
+        decodeCache.pin(key);
+        applyLoadResult(path, *hit);
+        return;
+    }
+
+    // Cache miss: keep the previous image on screen until the new image's embedded
+    // preview (or full demosaic) is ready, then swap pixels + params atomically.
     loadWatcher.setFuture(QtConcurrent::run([this, path, cancel]() -> LoadResult {
         auto onPreview = [this, path, cancel](ImageBuffer buf) {
             if (cancel->load())
@@ -701,8 +718,10 @@ void MainWindow::loadImage(const QString& path) {
             QMetaObject::invokeMethod(
                 this,
                 [this, path, buf = std::move(buf)]() mutable {
-                    if (currentPath == path)
-                        viewport->setImage(buf);
+                    if (currentPath == path) {
+                        applyPendingParams();    // new image's params, before the paint
+                        viewport->setImage(buf); // embedded preview (camera look, base off)
+                    }
                 },
                 Qt::QueuedConnection);
         };
@@ -719,32 +738,50 @@ void MainWindow::onLoadFinished() {
     if (!result.fullRes.valid() && result.error.isEmpty())
         return;
 
-    setLoadingState(false);
-
     if (!result.error.isEmpty()) {
+        setLoadingState(false);
         QMessageBox::critical(this, "Load Error", result.error);
         statusLabel->setText("Load failed.");
         exifPanel->clear();
         return;
     }
 
-    fullRes = std::move(result.fullRes);
-    preview = std::move(result.preview);
+    // Cache the decode (authoritative copy) and pin it as the current image, then
+    // display it through the same path a cache hit takes.
+    const QString key = decodeKey(currentPath);
+    decodeCache.insert(key, std::move(result));
+    decodeCache.pin(key);
+    if (const LoadResult* cached = decodeCache.get(key))
+        applyLoadResult(currentPath, *cached);
+}
 
+void MainWindow::applyPendingParams() {
+    adjPanel->setParams(pendingParams);
+    localPanel->setLocalAdjustments(pendingParams.localAdjustments);
+    pushParamsToViewport();
+}
+
+void MainWindow::applyLoadResult(const QString& path, const LoadResult& result) {
+    fullRes = result.fullRes;
+    preview = result.preview;
+
+    setLoadingState(false);
     viewport->setOriginalImageSize(fullRes.width, fullRes.height);
-    viewport->setImage(preview, true);
+
+    // Re-read the sidecar every time (params are never cached) so edits made in
+    // another app — or a prior session — are always reflected.
+    GlobalAdjustment saved = XmpSidecar::resolveAdjustments(path, result.defaultCrop);
+    adjPanel->setParams(saved);
+    localPanel->setLocalAdjustments(saved.localAdjustments);
+
+    viewport->setImage(preview, true); // the real demosaiced preview (base look on)
+    pushParamsToViewport();
+
     exifPanel->setMetadata(result.metadata);
     undoStack->clear();
 
-    GlobalAdjustment saved = XmpSidecar::loadAdjustments(currentPath);
-    if (!QFileInfo::exists(XmpSidecar::pathFor(currentPath)))
-        saved.cropRect = result.defaultCrop;
-    adjPanel->setParams(saved);
-    localPanel->setLocalAdjustments(saved.localAdjustments);
-    pushParamsToViewport();
-
     statusLabel->setText(QString("%1  —  %2 × %3")
-                             .arg(QFileInfo(currentPath).fileName())
+                             .arg(QFileInfo(path).fileName())
                              .arg(fullRes.width)
                              .arg(fullRes.height));
 

@@ -107,3 +107,48 @@ ImageBuffer downsample2x(const ImageBuffer& src) {
     }
     return dst;
 }
+
+QSize developedThumbSize(int srcW, int srcH, const QRectF& crop, int maxEdge) {
+    const int cw = std::max(1, int(std::lround(srcW * crop.width())));
+    const int ch = std::max(1, int(std::lround(srcH * crop.height())));
+
+    const int longEdge = std::max(cw, ch);
+    if (longEdge <= maxEdge)
+        return {cw, ch}; // never upscale
+
+    const double s = double(maxEdge) / double(longEdge);
+    return {std::max(1, int(std::lround(cw * s))), std::max(1, int(std::lround(ch * s)))};
+}
+
+void normalizeExposure(ImageBuffer& buf) {
+    if (!buf.valid())
+        return;
+
+    std::vector<float> luma;
+    luma.reserve(size_t(buf.width * buf.height / 16 + 1));
+
+    constexpr int kStride = 16;
+
+    const int pixels = buf.width * buf.height;
+    for (int i = 0; i < pixels; i += kStride) {
+        const float* p = buf.data.data() + i * 3;
+        const float y = p[0] * kLumaR + p[1] * kLumaG + p[2] * kLumaB;
+        if (std::isfinite(y) && y > 0.0f)
+            luma.push_back(y);
+    }
+
+    if (luma.empty())
+        return;
+
+    const size_t idx = std::min(luma.size() - 1, size_t(luma.size() * 0.995f));
+    std::nth_element(luma.begin(), luma.begin() + idx, luma.end());
+
+    const float highlight = luma[idx];
+    if (highlight <= 0.0f)
+        return;
+
+    constexpr float kTargetHighlight = 0.78f;
+    const float gain = std::clamp(kTargetHighlight / highlight, 0.5f, 4.0f);
+    for (float& v : buf.data)
+        v = std::max(0.0f, v * gain);
+}

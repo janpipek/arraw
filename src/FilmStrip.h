@@ -7,6 +7,7 @@ class QListView;
 class FilmStripModel;
 class ThumbnailCache;
 class QModelIndex;
+class QImage;
 
 // Horizontal thumbnail strip for one directory. A thin shell over FilmStripModel
 // + QListView; the testable logic lives in FilmStripModel / FilmStripLayout.
@@ -19,6 +20,10 @@ public:
     void setDirectory(const QString& dir);
     void setCurrentFile(const QString& path);
     void selectFirst();
+
+    // Replace a row's thumbnail with a freshly developed one. No-op if the path
+    // is not in the current directory listing.
+    void setThumbnail(const QString& path, const QImage& image);
 
     // Navigate ±1 from current selection. Returns false if already at boundary.
     bool navigateBy(int delta);

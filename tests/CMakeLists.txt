@@ -25,6 +25,7 @@ add_executable(arraw_tests
     test_LocalAdjustmentPanel.cpp
     test_CollapsiblePane.cpp
     test_CropGeometry.cpp
+    test_DecodeCache.cpp
 )
 
 target_link_libraries(arraw_tests PRIVATE arraw_core Catch2::Catch2WithMain)

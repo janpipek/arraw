@@ -53,7 +53,11 @@ static ImageBuffer extractThumb(LibRaw& raw) {
     if (thumb.width() > kPreviewMaxEdge || thumb.height() > kPreviewMaxEdge)
         thumb = thumb.scaled(
             kPreviewMaxEdge, kPreviewMaxEdge, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-    return toWorkingSpaceBuffer(thumb);
+    ImageBuffer buf = toWorkingSpaceBuffer(thumb);
+    // Match the demosaic's exposure target so the preview doesn't pop in brightness
+    // when the full-res image replaces it.
+    normalizeExposure(buf);
+    return buf;
 }
 
 ImageBuffer RawProcessor::loadEmbeddedPreview(const QString& path) {
@@ -61,44 +65,6 @@ ImageBuffer RawProcessor::loadEmbeddedPreview(const QString& path) {
     if (raw->open_file(path.toLocal8Bit().constData()) != LIBRAW_SUCCESS)
         return {};
     return extractThumb(*raw);
-}
-
-// With no_auto_bright and linear gamma, libraw output brightness varies a lot
-// between shots (often very dark). Scale the image so its near-maximum luma
-// (99.5th percentile, ignoring outliers like specular highlights) lands at a
-// fixed target, giving every photo a comparable starting exposure. The gain is
-// clamped so a failed estimate can't blow the image out or crush it.
-static void normalizeRawExposure(ImageBuffer& buf) {
-    if (!buf.valid())
-        return;
-
-    std::vector<float> luma;
-    luma.reserve(size_t(buf.width * buf.height / 16 + 1));
-
-    constexpr int kStride = 16;
-
-    const int pixels = buf.width * buf.height;
-    for (int i = 0; i < pixels; i += kStride) {
-        const float* p = buf.data.data() + i * 3;
-        const float y = p[0] * kLumaR + p[1] * kLumaG + p[2] * kLumaB;
-        if (std::isfinite(y) && y > 0.0f)
-            luma.push_back(y);
-    }
-
-    if (luma.empty())
-        return;
-
-    const size_t idx = std::min(luma.size() - 1, size_t(luma.size() * 0.995f));
-    std::nth_element(luma.begin(), luma.begin() + idx, luma.end());
-
-    const float highlight = luma[idx];
-    if (highlight <= 0.0f)
-        return;
-
-    constexpr float kTargetHighlight = 0.78f;
-    const float gain = std::clamp(kTargetHighlight / highlight, 0.5f, 4.0f);
-    for (float& v : buf.data)
-        v = std::max(0.0f, v * gain);
 }
 
 // DNG DefaultCrop tag as a normalised rect: {x, y, w, h} in pixels of the
@@ -195,7 +161,7 @@ LoadResult RawProcessor::load(
     timer.lap("raw make+convert");
 
     const QRectF defaultCrop = defaultCropRect(*raw, fullRes.width, fullRes.height);
-    normalizeRawExposure(fullRes);
+    normalizeExposure(fullRes);
     timer.lap("raw normalize");
     ImageBuffer preview = downsample2x(fullRes);
     timer.lap("raw downsample");

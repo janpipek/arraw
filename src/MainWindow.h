@@ -1,5 +1,6 @@
 #pragma once
 #include "CropGeometry.h"
+#include "DecodeCache.h"
 #include "ImagePipeline.h"
 #include <atomic>
 #include <memory>
@@ -21,6 +22,7 @@ class QToolBar;
 class QActionGroup;
 class QAction;
 class QTabWidget;
+class QTimer;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -57,6 +59,13 @@ private:
     void setupAspectMenu(QToolBar* tb);
     void applyAspectLock(); // forward aspectPreset/aspectLandscape to the viewport
     void loadImage(const QString& path);
+    // Single place a finished decode (or a cache hit) becomes the displayed
+    // image: stores buffers, re-reads the sidecar, restores exif. Used by both
+    // onLoadFinished and the decode-cache hit path in loadImage.
+    void applyLoadResult(const QString& path, const LoadResult& result);
+    // Push the pending image's resolved params to the panels + viewport, so the
+    // first paint of a new image wears its own edits (not the previous image's).
+    void applyPendingParams();
     void setLoadingState(bool loading);
     void updateZoomStatus(float zoom);
 
@@ -65,6 +74,10 @@ private:
     GlobalAdjustment currentParams() const;
     // Feed currentParams() to the viewport (after a global or local change).
     void pushParamsToViewport();
+
+    // Re-render the current image's filmstrip thumbnail through the develop
+    // pipeline (debounced after edits), so the strip reflects the edits.
+    void generateDevelopedThumbnail();
 
     // Rebuild the viewport's display LUT from the current soft-proofing
     // settings and monitor profile (no LUT when both are off).
@@ -114,6 +127,15 @@ private:
     ImageBuffer fullRes;
     ImageBuffer preview;
     QString currentPath;
+
+    // Params of the image currently being loaded, resolved up front from its
+    // sidecar and applied atomically with the first paint of that image.
+    GlobalAdjustment pendingParams;
+
+    // Session decode cache: skips the multi-second demosaic when re-opening a
+    // recently viewed image. ~1.5 GiB of decoded buffers, LRU, current pinned.
+    static constexpr size_t kDecodeCacheBudget = size_t(1536) * 1024 * 1024;
+    DecodeCache decodeCache{kDecodeCacheBudget};
 
     std::shared_ptr<std::atomic<bool>> loadCancel;
     QFutureWatcher<LoadResult> loadWatcher;
