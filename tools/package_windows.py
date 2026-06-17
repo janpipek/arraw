@@ -112,6 +112,8 @@ def main() -> None:
     parser.add_argument("--toolchain", default=DEFAULT_TOOLCHAIN, help="vcpkg CMake toolchain file")
     parser.add_argument("--vcpkg-installed", default=DEFAULT_VCPKG_INSTALLED, help="vcpkg installed tree")
     parser.add_argument("--skip-build", action="store_true", help="package an existing build instead of rebuilding")
+    parser.add_argument("--installer", action="store_true", help="also build the Inno Setup installer (needs ISCC on PATH)")
+    parser.add_argument("--skip-zip", action="store_true", help="do not build the portable ZIP")
     args = parser.parse_args()
 
     build = REPO / args.build_dir
@@ -135,15 +137,27 @@ def main() -> None:
     stage = build / "_package" / stage_name
     stage_app(build, stage, env)
 
-    # Compress to dist/<stage_name>.zip, keeping the top-level folder inside the archive.
     out = REPO / args.out_dir
     out.mkdir(parents=True, exist_ok=True)
-    zip_base = out / stage_name
-    archive = shutil.make_archive(str(zip_base), "zip", root_dir=stage.parent, base_dir=stage_name)
 
-    size_mb = round(Path(archive).stat().st_size / (1024 * 1024), 1)
-    file_count = sum(1 for _ in stage.rglob("*") if _.is_file())
-    print(f"==> Created {archive} ({size_mb} MB, {file_count} files)")
+    if not args.skip_zip:
+        zip_base = out / stage_name
+        archive = shutil.make_archive(str(zip_base), "zip", root_dir=stage.parent, base_dir=stage_name)
+        size_mb = round(Path(archive).stat().st_size / (1024 * 1024), 1)
+        file_count = sum(1 for _ in stage.rglob("*") if _.is_file())
+        print(f"==> Created {archive} ({size_mb} MB, {file_count} files)")
+
+    if args.installer:
+        iss = REPO / "tools" / "installer" / "arraw.iss"
+        run([
+            "ISCC",
+            f"/DAppVersion={project_version()}",
+            f"/DStageDir={stage}",
+            f"/DOutputDir={out}",
+            str(iss),
+        ])
+        setup = out / f"{stage_name}-setup.exe"
+        print(f"==> Created {setup}")
 
 
 if __name__ == "__main__":
