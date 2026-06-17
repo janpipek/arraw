@@ -6,6 +6,59 @@
 
 using Catch::Matchers::WithinAbs;
 
+// ── normalizeExposure ─────────────────────────────────────────────────────────
+
+namespace {
+ImageBuffer uniformBuffer(float value) {
+    // Rec.2020 luma coeffs sum to 1, so a neutral grey's luma equals its value.
+    ImageBuffer buf;
+    buf.width = 64;
+    buf.height = 64;
+    buf.data.assign(size_t(buf.width) * buf.height * 3, value);
+    return buf;
+}
+} // namespace
+
+TEST_CASE("normalizeExposure scales the near-max luma to the 0.78 target", "[pipeline]") {
+    ImageBuffer buf = uniformBuffer(0.39f); // gain 0.78/0.39 = 2.0 (within clamp)
+    normalizeExposure(buf);
+    CHECK_THAT(buf.data.front(), WithinAbs(0.78f, 1e-3));
+}
+
+TEST_CASE("normalizeExposure clamps the gain to [0.5, 4.0]", "[pipeline]") {
+    ImageBuffer dark = uniformBuffer(0.05f); // gain would be 15.6 → clamped to 4.0
+    normalizeExposure(dark);
+    CHECK_THAT(dark.data.front(), WithinAbs(0.20f, 1e-3)); // 0.05 * 4.0
+
+    ImageBuffer bright = uniformBuffer(2.0f); // gain would be 0.39 → clamped to 0.5
+    normalizeExposure(bright);
+    CHECK_THAT(bright.data.front(), WithinAbs(1.0f, 1e-3)); // 2.0 * 0.5
+}
+
+// ── developedThumbSize ────────────────────────────────────────────────────────
+
+TEST_CASE("developedThumbSize scales an uncropped image to the max edge, keeping aspect",
+          "[pipeline]") {
+    const QSize s = developedThumbSize(4000, 3000, QRectF(0.0, 0.0, 1.0, 1.0), 512);
+    CHECK(s.width() == 512);
+    CHECK(s.height() == 384); // 3000/4000 * 512
+}
+
+TEST_CASE("developedThumbSize reflects the cropped aspect, not the source aspect",
+          "[pipeline]") {
+    // A square source cropped to a tall half → 500×1000 → long edge 1000 > 512.
+    const QSize s = developedThumbSize(1000, 1000, QRectF(0.0, 0.0, 0.5, 1.0), 512);
+    CHECK(s.width() == 256);  // 500 * (512/1000)
+    CHECK(s.height() == 512); // 1000 * (512/1000)
+}
+
+TEST_CASE("developedThumbSize never upscales a source smaller than the max edge",
+          "[pipeline]") {
+    const QSize s = developedThumbSize(300, 200, QRectF(0.0, 0.0, 1.0, 1.0), 512);
+    CHECK(s.width() == 300);
+    CHECK(s.height() == 200);
+}
+
 // ── computeCurveLUT ───────────────────────────────────────────────────────────
 
 TEST_CASE("identity curve produces identity LUT", "[curve]") {

@@ -71,6 +71,13 @@ QString ThumbnailCache::cachePathFor(const QString& rawPath) {
     return cachePath(root, cacheKey(fi));
 }
 
+bool ThumbnailCache::store(const QString& rawPath, const QImage& image) {
+    const QString outPath = cachePathFor(rawPath);
+    if (outPath.isEmpty() || image.isNull())
+        return false;
+    return saveJpeg(scaleDown(image, kMaxThumbPx), outPath);
+}
+
 QImage ThumbnailCache::loadFromDisk(const QString& rawPath) {
     const QString path = cachePathFor(rawPath);
     if (path.isEmpty() || !QFile::exists(path))

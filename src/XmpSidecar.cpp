@@ -51,6 +51,14 @@ QString XmpSidecar::pathFor(const QString& rawPath) {
     return fi.dir().filePath(fi.completeBaseName() + ".xmp");
 }
 
+GlobalAdjustment XmpSidecar::resolveAdjustments(const QString& rawPath, const QRectF& defaultCrop) {
+    if (QFileInfo::exists(pathFor(rawPath)))
+        return loadAdjustments(rawPath);
+    GlobalAdjustment defaults;
+    defaults.cropRect = defaultCrop;
+    return defaults;
+}
+
 // Parse "x, y" pairs from an rdf:Seq element into control points (0..255 scale → 0..1).
 static std::vector<QPointF> parseCurveSeq(QXmlStreamReader& xml) {
     std::vector<QPointF> pts;

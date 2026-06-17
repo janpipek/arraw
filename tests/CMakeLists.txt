@@ -25,6 +25,7 @@ add_executable(arraw_tests
     test_LocalAdjustmentPanel.cpp
     test_CollapsiblePane.cpp
     test_CropGeometry.cpp
+    test_DecodeCache.cpp
     test_DevelopGroup.cpp
     test_DevelopPreset.cpp
     test_GroupChecklistDialog.cpp

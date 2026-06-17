@@ -234,6 +234,10 @@ void FilmStrip::selectFirst() {
         list->setCurrentIndex(model->index(0)); // fires currentChanged → fileSelected
 }
 
+void FilmStrip::setThumbnail(const QString& path, const QImage& image) {
+    model->setThumbnail(path, image); // no-op if path isn't in the current listing
+}
+
 bool FilmStrip::navigateBy(int delta) {
     const QModelIndex cur = list->currentIndex();
     const int next = (cur.isValid() ? cur.row() : -1) + delta;

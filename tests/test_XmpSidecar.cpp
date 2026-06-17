@@ -84,6 +84,32 @@ TEST_CASE("missing sidecar loads default params", "[xmp]") {
     REQUIRE(XmpSidecar::loadAdjustments(dir.filePath("nothing-here.arw")) == GlobalAdjustment{});
 }
 
+TEST_CASE("resolveAdjustments returns the sidecar params when present, ignoring defaultCrop",
+          "[xmp]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("shot.arw");
+    REQUIRE(XmpSidecar::saveAdjustments(rawPath, sampleParams()));
+
+    // A defaultCrop that must NOT win — the sidecar's own crop should be kept.
+    const QRectF defaultCrop(0.0, 0.0, 0.123, 0.456);
+    const auto resolved = XmpSidecar::resolveAdjustments(rawPath, defaultCrop);
+
+    checkClose(resolved, sampleParams()); // crop comes from the sidecar, not defaultCrop
+}
+
+TEST_CASE("resolveAdjustments falls back to defaults with defaultCrop when no sidecar",
+          "[xmp]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("never-edited.arw"); // no .xmp written
+
+    const QRectF defaultCrop(0.1, 0.2, 0.7, 0.6);
+    const auto resolved = XmpSidecar::resolveAdjustments(rawPath, defaultCrop);
+
+    GlobalAdjustment expected; // defaults
+    expected.cropRect = defaultCrop;
+    REQUIRE(resolved == expected);
+}
+
 TEST_CASE("save then load round-trips all params", "[xmp]") {
     QTemporaryDir dir;
     const QString rawPath = dir.filePath("shot.arw");

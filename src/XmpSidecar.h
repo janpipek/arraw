@@ -28,6 +28,10 @@ public:
 
     static UserMetadata loadMetadata(const QString& rawPath) { return load(rawPath).metadata; }
 
+    // The adjustments to apply when opening rawPath: the sidecar's if one exists,
+    // otherwise defaults with the crop set to defaultCrop (e.g. a DNG DefaultCrop).
+    static GlobalAdjustment resolveAdjustments(const QString& rawPath, const QRectF& defaultCrop);
+
     // Namespace-scoped, read-first saves: each replaces only its own half of the
     // sidecar and preserves the other half already on disk (docs/adr/0007).
     static bool saveAdjustments(const QString& rawPath, const GlobalAdjustment& params);

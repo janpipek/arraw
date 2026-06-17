@@ -17,6 +17,10 @@ public:
     static QImage loadFromDisk(const QString& rawPath);
     static QString cachePathFor(const QString& rawPath);
 
+    // Overwrite the cache entry for rawPath with a developed thumbnail (one that
+    // reflects the current edits), replacing the camera-embedded thumbnail.
+    static bool store(const QString& rawPath, const QImage& image);
+
 signals:
     void thumbnailReady(const QString& rawPath, const QImage& image);
 
