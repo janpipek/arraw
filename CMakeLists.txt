@@ -161,6 +161,8 @@ set(CORE_SOURCES
     src/PresetStore.cpp
     src/Spot.cpp
     src/SpotRemovalPanel.cpp
+    src/BatchPaste.cpp
+    src/BatchProgressDialog.cpp
 )
 
 add_library(arraw_core STATIC ${CORE_SOURCES})

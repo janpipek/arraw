@@ -373,7 +373,7 @@ for the panel histogram, and a "stop after tone regions, gamma-encode" pass
 - 256-entry LUT uploaded as a 1D texture uniform; applied in gamma space.
 - Stored in XMP as `crs:ToneCurvePV2012*` point lists.
 
-### Milestone 3 — Horizontal Filmstrip
+### Milestone 3 — Horizontal Filmstrip ✅
 
 The current `FileBrowser` is a vertical icon **grid** in a left-side dock
 (`QListWidget`, square 128px icons, inline path edit). This milestone turns it
@@ -472,7 +472,7 @@ namespace, and sit on the shared undo stack.
 - **Pure logic to `arraw_core`** (TDD): mask weight evaluation per type, the
   parametric-handle ↔ normalised-coordinate maths, and namespace load/save.
 
-### Milestone 8 — Settings Propagation (single-target)
+### Milestone 8 — Settings Propagation (single-target) ✅
 
 Design resolved 2026-06-15; refined 2026-06-16 (grilling session). Move develop
 settings between photos without a catalogue. Batch/multi-photo application is
@@ -529,15 +529,30 @@ Design resolved 2026-06-15. Splits by pipeline cost.
 
 ### Milestone 10 — Multi-select & Batch Operations
 
-Design resolved 2026-06-15. Revisits the Milestone 3 **single-select** filmstrip
-decision deliberately, in one place, because three features need it.
+Design resolved 2026-06-18 (grilling session). Revisits the Milestone 3
+**single-select** filmstrip decision deliberately. Scope: **batch paste + batch
+export**. Batch culling marks deferred.
 
-- **Scoped multi-select in the filmstrip:** a selection of several files as a
-  batch target, while a single **active** photo still drives the viewport.
-- **Unlocks:** batch paste / sync of develop settings (Milestone 8 across many
-  photos), batch culling marks (rating/label on a selection), and batch export.
-- Kept out of Milestones 7–9 so the recently-designed single-select filmstrip is
-  changed once, on purpose, rather than quietly overturned.
+- **Multi-select model (LR-style):** last-clicked item = **active** (drives the
+  viewport and is always part of the selection); `QListView` `ExtendedSelection`
+  (Ctrl+click, Shift+click) = batch target. Active item has a visually distinct
+  highlight from the rest of the selection. Navigation arrows move the active item
+  and collapse the selection to it.
+- **Batch paste:** *Paste Settings* applies to all selected files including the
+  active one. At paste time, the before-state `GlobalAdjustment` for each
+  non-active file is read synchronously from its XMP sidecar (files are tiny;
+  synchronous is fine for normal selection sizes). All N sidecars are written
+  immediately — auto-save on paste, not on slider moves. One
+  `BatchAdjustmentCommand` on the undo stack with `setText("Paste Settings
+  (N files)")`.
+- **Batch export:** same format/quality/profile/size controls as single-file
+  export, but the output path becomes a **directory** picker; each file is saved
+  as `<basename>.<ext>`. Single-file export keeps its current "save as" dialog.
+  A **modal progress dialog with cancel** covers the run; the same widget will
+  serve future long operations.
+- **Undo descriptions:** all `QUndoCommand` subclasses must have meaningful
+  `setText()` so the Edit menu shows "Undo Paste Settings (6 files)" etc.
+  Audit existing single-file commands at the same time.
 
 ### Milestone 11 — Headless CLI
 
