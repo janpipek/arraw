@@ -205,7 +205,7 @@ MainWindow::MainWindow(QWidget* parent)
 
     connect(
         viewport, &ImageViewport::cropCommitted, this, [this](const QRectF& rect, bool constrained) {
-            GlobalAdjustment before = adjPanel->params();
+            GlobalAdjustment before = currentParams();
             GlobalAdjustment after = before;
             after.cropRect = rect;
             after.cropConstrained = constrained;
@@ -214,7 +214,7 @@ MainWindow::MainWindow(QWidget* parent)
         });
 
     connect(viewport, &ImageViewport::rotationCommitted, this, [this](float degrees) {
-        GlobalAdjustment before = adjPanel->params();
+        GlobalAdjustment before = currentParams();
         GlobalAdjustment after = before;
         after.rotation = degrees;
         if (after != before)
@@ -222,7 +222,7 @@ MainWindow::MainWindow(QWidget* parent)
     });
 
     connect(viewport, &ImageViewport::whiteBalanceCommitted, this, [this](float kelvin, float tint) {
-        GlobalAdjustment before = adjPanel->params();
+        GlobalAdjustment before = currentParams();
         GlobalAdjustment after = before;
         after.temperature = kelvin;
         after.tint = tint;
@@ -298,6 +298,7 @@ MainWindow::MainWindow(QWidget* parent)
 
     // Spot-removal: live drag rebuilds preview only; commit on mouse-release.
     connect(spotPanel, &SpotRemovalPanel::changed, this, [this](const std::vector<Spot>& spots) {
+        session->setSpots(spots);
         viewport->setSpots(spots);
         rebuildSpottedBuffers(false);
     });
@@ -983,8 +984,6 @@ void MainWindow::applyLoadResult(const QString& path, const LoadResult& result) 
 }
 
 void MainWindow::rebuildSpottedBuffers(bool fullResOnly) {
-    session->setSpots(spotPanel->spots());
-
     if (session->previewForDisplay().valid())
         viewport->setImage(session->previewForDisplay(), session->baseLook());
 
@@ -1063,7 +1062,7 @@ void MainWindow::rebuildDisplayLut() {
 }
 
 void MainWindow::applyDevelopChange(const GlobalAdjustment& after) {
-    const GlobalAdjustment before = adjPanel->params();
+    const GlobalAdjustment before = currentParams();
     if (after != before)
         pushGlobalAdjustmentCommand(before, after);
 }
@@ -1081,7 +1080,7 @@ void MainWindow::copySettings() {
         return;
 
     lastCopySelection = chosen;
-    settingsClipboard = SettingsClipboard{adjPanel->params(), chosen};
+    settingsClipboard = SettingsClipboard{currentParams(), chosen};
 }
 
 void MainWindow::pasteSettings() {
@@ -1099,7 +1098,7 @@ void MainWindow::pasteSettings() {
 
     if (targets.size() <= 1) {
         // Single file: apply to the active image in memory only.
-        applyDevelopChange(applyGroups(adjPanel->params(), settingsClipboard->snapshot, chosen));
+        applyDevelopChange(applyGroups(currentParams(), settingsClipboard->snapshot, chosen));
         return;
     }
 
@@ -1110,7 +1109,7 @@ void MainWindow::pasteSettings() {
     records.reserve(targets.size());
     for (const QString& path : targets) {
         const GlobalAdjustment before
-            = (path == session->path()) ? adjPanel->params() : XmpSidecar::loadAdjustments(path);
+            = (path == session->path()) ? currentParams() : XmpSidecar::loadAdjustments(path);
         records.append({path, before, applyGroups(before, settingsClipboard->snapshot, chosen)});
     }
     undoStack->push(new BatchAdjustmentCommand(adjPanel, session->path(), records));
@@ -1140,7 +1139,7 @@ void MainWindow::saveCurrentAsPreset() {
     DevelopPreset preset;
     preset.name = name;
     preset.groups = chosen;
-    preset.values = adjPanel->params();
+    preset.values = currentParams();
     if (!presetStore.save(preset)) {
         QMessageBox::warning(this, tr("Save Preset"), tr("Could not write the preset file."));
         return;
@@ -1151,7 +1150,7 @@ void MainWindow::saveCurrentAsPreset() {
 void MainWindow::applyPreset(const DevelopPreset& preset) {
     if (session->path().isEmpty())
         return;
-    applyDevelopChange(applyGroups(adjPanel->params(), preset.values, preset.groups));
+    applyDevelopChange(applyGroups(currentParams(), preset.values, preset.groups));
 }
 
 void MainWindow::managePresets() {
