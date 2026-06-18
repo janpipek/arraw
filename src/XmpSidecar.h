@@ -15,12 +15,29 @@ struct SidecarData {
     UserMetadata metadata;
 };
 
+enum class SidecarLoadStatus {
+    Missing,
+    Loaded,
+    ParseError,
+};
+
+struct SidecarLoadResult {
+    SidecarData data;
+    SidecarLoadStatus status = SidecarLoadStatus::Missing;
+};
+
+struct SidecarAdjustmentResult {
+    GlobalAdjustment adjustments;
+    SidecarLoadStatus status = SidecarLoadStatus::Missing;
+};
+
 class XmpSidecar {
 public:
     static QString pathFor(const QString& rawPath);
 
     // Reads the whole sidecar. Returns defaults if it doesn't exist or can't be parsed.
     static SidecarData load(const QString& rawPath);
+    static SidecarLoadResult loadWithStatus(const QString& rawPath);
 
     static GlobalAdjustment loadAdjustments(const QString& rawPath) {
         return load(rawPath).adjustments;
@@ -31,6 +48,8 @@ public:
     // The adjustments to apply when opening rawPath: the sidecar's if one exists,
     // otherwise defaults with the crop set to defaultCrop (e.g. a DNG DefaultCrop).
     static GlobalAdjustment resolveAdjustments(const QString& rawPath, const QRectF& defaultCrop);
+    static SidecarAdjustmentResult resolveAdjustmentsWithStatus(
+        const QString& rawPath, const QRectF& defaultCrop);
 
     // Namespace-scoped, read-first saves: each replaces only its own half of the
     // sidecar and preserves the other half already on disk (docs/adr/0007).

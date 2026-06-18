@@ -61,6 +61,20 @@
 #include <QWindow>
 #include <QtConcurrent/QtConcurrent>
 
+namespace {
+DevelopSession::SidecarState toSessionSidecarState(SidecarLoadStatus status) {
+    switch (status) {
+    case SidecarLoadStatus::Missing:
+        return DevelopSession::SidecarState::Missing;
+    case SidecarLoadStatus::Loaded:
+        return DevelopSession::SidecarState::Loaded;
+    case SidecarLoadStatus::ParseError:
+        return DevelopSession::SidecarState::ParseError;
+    }
+    return DevelopSession::SidecarState::Unknown;
+}
+} // namespace
+
 // ---------------------------------------------------------------------------
 // Undo command: captures before/after GlobalAdjustment for a single gesture.
 // ---------------------------------------------------------------------------
@@ -966,8 +980,9 @@ void MainWindow::applyLoadResult(const QString& path, const LoadResult& result) 
 
     // Re-read the sidecar every time (params are never cached) so edits made in
     // another app — or a prior session — are always reflected.
-    GlobalAdjustment saved = XmpSidecar::resolveAdjustments(path, result.defaultCrop);
-    session->setLoadedImage(path, result, saved, DevelopSession::SidecarState::Loaded);
+    const SidecarAdjustmentResult saved
+        = XmpSidecar::resolveAdjustmentsWithStatus(path, result.defaultCrop);
+    session->setLoadedImage(path, result, saved.adjustments, toSessionSidecarState(saved.status));
     session->setBaseLook(true);
     syncSessionToEditors();
     syncSessionSpotsToEditors(true);
@@ -975,10 +990,13 @@ void MainWindow::applyLoadResult(const QString& path, const LoadResult& result) 
     exifPanel->setMetadata(result.metadata);
     undoStack->clear();
 
-    statusLabel->setText(QString("%1  —  %2 × %3")
-                             .arg(QFileInfo(path).fileName())
-                             .arg(session->fullRes().width)
-                             .arg(session->fullRes().height));
+    QString status = QString("%1  —  %2 × %3")
+                         .arg(QFileInfo(path).fileName())
+                         .arg(session->fullRes().width)
+                         .arg(session->fullRes().height);
+    if (session->sidecarState() == DevelopSession::SidecarState::ParseError)
+        status += "  —  Sidecar unreadable; defaults applied";
+    statusLabel->setText(status);
 
     setToolsEnabled(true);
 }
