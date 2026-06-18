@@ -11,10 +11,11 @@ class QPushButton;
 // spot list; geometry is placed and dragged on the image (ImageViewport).
 class SpotRemovalPanel : public QWidget {
     Q_OBJECT
+    Q_DISABLE_COPY_MOVE(SpotRemovalPanel)
 public:
     explicit SpotRemovalPanel(QWidget* parent = nullptr);
 
-    const std::vector<Spot>& spots() const { return m_spots; }
+    const std::vector<Spot>& spots() const { return spotEntries; }
 
     // Replace the whole list (XMP load / undo / redo). Emits changed, not committed.
     void setSpots(const std::vector<Spot>& spots);
@@ -43,6 +44,6 @@ private:
 
     QListWidget* spotList;
     QPushButton* deleteButton;
-    std::vector<Spot> m_spots;
-    std::vector<Spot> m_committedState; // baseline for the next undo step
+    std::vector<Spot> spotEntries;
+    std::vector<Spot> committedState; // baseline for the next undo step
 };

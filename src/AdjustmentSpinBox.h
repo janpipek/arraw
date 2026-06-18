@@ -8,6 +8,7 @@
 // the FieldSpec so the rules live in exactly one place (and stay unit-tested).
 class AdjustmentSpinBox : public QDoubleSpinBox {
     Q_OBJECT
+    Q_DISABLE_COPY_MOVE(AdjustmentSpinBox)
 public:
     explicit AdjustmentSpinBox(const FieldSpec& spec, QWidget* parent = nullptr);
 

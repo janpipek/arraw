@@ -9,6 +9,7 @@ class QPainter;
 
 class ToneCurveWidget : public QWidget {
     Q_OBJECT
+    Q_DISABLE_COPY_MOVE(ToneCurveWidget)
 public:
     enum class Channel { Luma, Red, Green, Blue };
 

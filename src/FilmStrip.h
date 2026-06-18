@@ -17,6 +17,7 @@ class QMouseEvent;
 // Public API mirrors the former FileBrowser so MainWindow wiring is unchanged.
 class FilmStrip : public QWidget {
     Q_OBJECT
+    Q_DISABLE_COPY_MOVE(FilmStrip)
 public:
     explicit FilmStrip(QWidget* parent = nullptr);
 

@@ -10,6 +10,7 @@
 // directory in display order; the QListView + delegate are thin views over it.
 class FilmStripModel : public QAbstractListModel {
     Q_OBJECT
+    Q_DISABLE_COPY_MOVE(FilmStripModel)
 public:
     enum Roles {
         PathRole = Qt::UserRole + 1,

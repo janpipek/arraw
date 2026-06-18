@@ -11,6 +11,7 @@
 // group keys (developGroupKey), for headless testing.
 class GroupChecklistDialog : public QDialog {
     Q_OBJECT
+    Q_DISABLE_COPY_MOVE(GroupChecklistDialog)
 public:
     GroupChecklistDialog(
         const QString& title,

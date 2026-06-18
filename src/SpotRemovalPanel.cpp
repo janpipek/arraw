@@ -29,37 +29,37 @@ SpotRemovalPanel::SpotRemovalPanel(QWidget* parent)
 }
 
 void SpotRemovalPanel::setSpots(const std::vector<Spot>& spots) {
-    m_spots = spots;
-    m_committedState = spots;
+    spotEntries = spots;
+    committedState = spots;
     rebuildList();
-    emit changed(m_spots);
+    emit changed(spotEntries);
 }
 
 void SpotRemovalPanel::addSpot(const Spot& spot) {
-    auto before = m_spots;
-    m_spots.push_back(spot);
-    m_committedState = m_spots;
+    auto before = spotEntries;
+    spotEntries.push_back(spot);
+    committedState = spotEntries;
     rebuildList();
-    spotList->setCurrentRow(static_cast<int>(m_spots.size()) - 1);
-    emit changed(m_spots);
-    emit committed(std::move(before), m_spots);
+    spotList->setCurrentRow(static_cast<int>(spotEntries.size()) - 1);
+    emit changed(spotEntries);
+    emit committed(std::move(before), spotEntries);
 }
 
 void SpotRemovalPanel::updateSpot(int idx, const Spot& updated) {
-    if (idx < 0 || idx >= static_cast<int>(m_spots.size()))
+    if (idx < 0 || idx >= static_cast<int>(spotEntries.size()))
         return;
-    m_spots[idx] = updated;
-    emit changed(m_spots);
+    spotEntries[idx] = updated;
+    emit changed(spotEntries);
 }
 
 void SpotRemovalPanel::commitSpotEdit(int idx, const Spot& updated) {
-    if (idx < 0 || idx >= static_cast<int>(m_spots.size()))
+    if (idx < 0 || idx >= static_cast<int>(spotEntries.size()))
         return;
-    auto before = m_committedState;
-    m_spots[idx] = updated;
-    m_committedState = m_spots;
-    emit changed(m_spots);
-    emit committed(std::move(before), m_spots);
+    auto before = committedState;
+    spotEntries[idx] = updated;
+    committedState = spotEntries;
+    emit changed(spotEntries);
+    emit committed(std::move(before), spotEntries);
 }
 
 int SpotRemovalPanel::activeIndex() const {
@@ -68,22 +68,25 @@ int SpotRemovalPanel::activeIndex() const {
 
 void SpotRemovalPanel::deleteActive() {
     const int idx = activeIndex();
-    if (idx < 0 || idx >= static_cast<int>(m_spots.size()))
+    if (idx < 0 || idx >= static_cast<int>(spotEntries.size()))
         return;
-    auto before = m_spots;
-    m_spots.erase(m_spots.begin() + idx);
-    m_committedState = m_spots;
+    auto before = spotEntries;
+    spotEntries.erase(spotEntries.begin() + idx);
+    committedState = spotEntries;
     rebuildList();
-    emit changed(m_spots);
-    emit committed(std::move(before), m_spots);
+    emit changed(spotEntries);
+    emit committed(std::move(before), spotEntries);
 }
 
 void SpotRemovalPanel::rebuildList() {
     const int cur = spotList->currentRow();
     spotList->clear();
-    for (int i = 0; i < static_cast<int>(m_spots.size()); ++i)
+    for (int i = 0; i < static_cast<int>(spotEntries.size()); ++i)
         spotList->addItem(QString("Spot %1").arg(i + 1));
-    const int next = m_spots.empty() ? -1 : std::clamp(cur, 0, static_cast<int>(m_spots.size()) - 1);
+    const int next
+        = spotEntries.empty()
+            ? -1
+            : std::clamp(cur, 0, static_cast<int>(spotEntries.size()) - 1);
     spotList->setCurrentRow(next);
     deleteButton->setEnabled(activeIndex() >= 0);
 }

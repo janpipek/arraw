@@ -84,6 +84,17 @@ TEST_CASE("missing sidecar loads default params", "[xmp]") {
     REQUIRE(XmpSidecar::loadAdjustments(dir.filePath("nothing-here.arw")) == GlobalAdjustment{});
 }
 
+TEST_CASE("malformed sidecar loads default params", "[xmp]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("broken.arw");
+    QFile f(XmpSidecar::pathFor(rawPath));
+    REQUIRE(f.open(QIODevice::WriteOnly));
+    REQUIRE(f.write("<x:xmpmeta><rdf:RDF><rdf:Description crs:Exposure2012=\"2.0\"") > 0);
+    f.close();
+
+    REQUIRE(XmpSidecar::loadAdjustments(rawPath) == GlobalAdjustment{});
+}
+
 TEST_CASE("resolveAdjustments returns the sidecar params when present, ignoring defaultCrop",
           "[xmp]") {
     QTemporaryDir dir;

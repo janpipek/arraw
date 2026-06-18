@@ -5,6 +5,7 @@
 
 class Histogram : public QWidget {
     Q_OBJECT
+    Q_DISABLE_COPY_MOVE(Histogram)
 public:
     explicit Histogram(QWidget* parent = nullptr);
 

@@ -20,10 +20,11 @@ class AdjustmentSpinBox;
 // relative ±100 shift, not the global Kelvin slider.
 class LocalAdjustmentPanel : public QWidget {
     Q_OBJECT
+    Q_DISABLE_COPY_MOVE(LocalAdjustmentPanel)
 public:
     explicit LocalAdjustmentPanel(QWidget* parent = nullptr);
 
-    std::vector<LocalAdjustment> localAdjustments() const { return adjustments; }
+    const std::vector<LocalAdjustment>& localAdjustments() const { return adjustments; }
 
     // Replace the whole list (XMP load / undo). Does not emit changed/committed.
     void setLocalAdjustments(const std::vector<LocalAdjustment>& list);

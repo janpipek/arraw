@@ -14,6 +14,7 @@ class ViewportOverlay;
 
 class ImageViewport : public QRhiWidget {
     Q_OBJECT
+    Q_DISABLE_COPY_MOVE(ImageViewport)
 public:
     // Mutually-exclusive viewport tools. Crop edits a rectangle; Straighten
     // draws a level line; WhiteBalance samples a neutral pixel. Only one is
@@ -255,9 +256,9 @@ private:
     RadialHandle radialDragHandle = RadialHandle::None;
 
     // SpotTool state.
-    std::vector<Spot> m_spots;
-    int m_spotDragIdx = -1;
-    SpotHandle m_spotDragHandle = SpotHandle::None;
+    std::vector<Spot> spots;
+    int spotDragIdx = -1;
+    SpotHandle spotDragHandle = SpotHandle::None;
 
     // Straighten: endpoints of the level line being dragged (viewport pixels).
     bool straightenDragging = false;

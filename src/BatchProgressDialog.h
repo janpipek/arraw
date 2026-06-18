@@ -11,6 +11,7 @@ class QPushButton;
 // polls wasCancelled() between items and aborts the loop when true.
 class BatchProgressDialog : public QDialog {
     Q_OBJECT
+    Q_DISABLE_COPY_MOVE(BatchProgressDialog)
 public:
     explicit BatchProgressDialog(int total, QWidget* parent = nullptr);
 

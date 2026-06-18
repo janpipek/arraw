@@ -22,6 +22,7 @@ struct ExportOptions {
 
 class ExportDialog : public QDialog {
     Q_OBJECT
+    Q_DISABLE_COPY_MOVE(ExportDialog)
 public:
     // srcW/srcH: natural pixel dimensions after crop (used as default output size)
     ExportDialog(int srcW, int srcH, QWidget* parent = nullptr);

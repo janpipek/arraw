@@ -300,6 +300,8 @@ SidecarData XmpSidecar::load(const QString& rawPath) {
                 p.spots = parseSpots(xml);
         }
     }
+    if (xml.hasError())
+        return {};
     return data;
 }
 

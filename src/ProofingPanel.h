@@ -10,6 +10,7 @@ class QCheckBox;
 // All settings persist via QSettings.
 class ProofingPanel : public QWidget {
     Q_OBJECT
+    Q_DISABLE_COPY_MOVE(ProofingPanel)
 public:
     explicit ProofingPanel(QWidget* parent = nullptr);
 

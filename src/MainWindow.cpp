@@ -915,8 +915,8 @@ void MainWindow::applyLoadResult(const QString& path, const LoadResult& result) 
     localPanel->setLocalAdjustments(saved.localAdjustments);
     // setSpots emits changed → rebuildSpottedBuffers(false); but buffers are
     // already valid here and we rebuild fully below, so that preview rebuild is
-    // a benign no-op if it fires (m_baseLook is already set).
-    m_baseLook = true;
+    // a benign no-op if it fires (baseLook is already set).
+    baseLook = true;
     spotPanel->setSpots(saved.spots);
     viewport->setSpots(saved.spots);
 
@@ -954,7 +954,7 @@ void MainWindow::rebuildSpottedBuffers(bool fullResOnly) {
             ? double(preview.width) / fullRes.width : 1.0;
         const double sy = (fullRes.valid() && fullRes.height > 0)
             ? double(preview.height) / fullRes.height : 1.0;
-        viewport->setImage(applySpots(preview, scaleSpots(spots, sx, sy)), m_baseLook);
+        viewport->setImage(applySpots(preview, scaleSpots(spots, sx, sy)), baseLook);
     }
 
     if (fullResOnly && fullRes.valid()) {

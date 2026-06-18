@@ -32,6 +32,7 @@ class QMenu;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
+    Q_DISABLE_COPY_MOVE(MainWindow)
 public:
     explicit MainWindow(QWidget* parent = nullptr);
     ~MainWindow() override; // out-of-line for unique_ptr<CollapsiblePane>
@@ -161,7 +162,7 @@ private:
     ImageBuffer fullRes;         // clean decoded full-res buffer; never mutated
     ImageBuffer preview;         // clean decoded preview buffer; never mutated
     ImageBuffer spottedFullRes;  // fullRes with all spots applied (docs/adr/0017)
-    bool m_baseLook = false;     // whether the current preview was loaded with baseLook on
+    bool baseLook = false;       // whether the current preview was loaded with baseLook on
     QString currentPath;
 
     // Params of the image currently being loaded, resolved up front from its

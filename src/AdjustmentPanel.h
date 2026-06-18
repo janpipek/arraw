@@ -19,6 +19,7 @@ class AdjustmentSpinBox;
 
 class AdjustmentPanel : public QWidget {
     Q_OBJECT
+    Q_DISABLE_COPY_MOVE(AdjustmentPanel)
 public:
     explicit AdjustmentPanel(QWidget* parent = nullptr);
 

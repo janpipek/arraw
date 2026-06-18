@@ -8,6 +8,7 @@ class QLabel;
 
 class ExifPanel : public QWidget {
     Q_OBJECT
+    Q_DISABLE_COPY_MOVE(ExifPanel)
 public:
     explicit ExifPanel(QWidget* parent = nullptr);
 
