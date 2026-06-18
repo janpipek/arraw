@@ -991,16 +991,13 @@ void MainWindow::applyLoadResult(const QString& path, const LoadResult& result) 
 
     // Re-read the sidecar every time (params are never cached) so edits made in
     // another app — or a prior session — are always reflected.
-    const SidecarLoadResult sidecar = XmpSidecar::loadWithStatus(path);
-    GlobalAdjustment saved = sidecar.data.adjustments;
-    UserMetadata savedMetadata = sidecar.data.metadata;
-    if (sidecar.status != SidecarLoadStatus::Loaded) {
-        saved = GlobalAdjustment{};
-        saved.cropRect = result.defaultCrop;
-        savedMetadata = {};
-    }
+    const SidecarLoadResult sidecar = XmpSidecar::resolveForImage(path, result.defaultCrop);
     session->setLoadedImage(
-        path, result, saved, toSessionSidecarState(sidecar.status), savedMetadata);
+        path,
+        result,
+        sidecar.data.adjustments,
+        toSessionSidecarState(sidecar.status),
+        sidecar.data.metadata);
     session->setBaseLook(true);
     syncSessionToEditors();
     syncSessionSpotsToEditors(true);

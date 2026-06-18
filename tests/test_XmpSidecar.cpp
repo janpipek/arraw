@@ -115,6 +115,20 @@ TEST_CASE("resolveAdjustments returns the sidecar params when present, ignoring 
     checkClose(resolvedWithStatus.adjustments, sampleParams());
 }
 
+TEST_CASE("resolveForImage returns sidecar adjustments and metadata when present", "[xmp]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("shot.arw");
+    REQUIRE(XmpSidecar::saveAdjustments(rawPath, sampleParams()));
+    REQUIRE(XmpSidecar::saveMetadata(rawPath, {4, ColourLabel::Purple}));
+
+    const QRectF defaultCrop(0.0, 0.0, 0.123, 0.456);
+    const auto resolved = XmpSidecar::resolveForImage(rawPath, defaultCrop);
+
+    CHECK(resolved.status == SidecarLoadStatus::Loaded);
+    checkClose(resolved.data.adjustments, sampleParams());
+    CHECK(resolved.data.metadata == UserMetadata{4, ColourLabel::Purple});
+}
+
 TEST_CASE("resolveAdjustments falls back to defaults with defaultCrop when no sidecar",
           "[xmp]") {
     QTemporaryDir dir;
@@ -146,6 +160,24 @@ TEST_CASE("resolveAdjustments reports malformed sidecar and falls back to defaul
     expected.cropRect = defaultCrop;
     CHECK(resolved.status == SidecarLoadStatus::ParseError);
     REQUIRE(resolved.adjustments == expected);
+}
+
+TEST_CASE("resolveForImage drops metadata from malformed sidecar", "[xmp]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("broken.arw");
+    QFile f(XmpSidecar::pathFor(rawPath));
+    REQUIRE(f.open(QIODevice::WriteOnly));
+    REQUIRE(f.write("<x:xmpmeta><rdf:RDF><rdf:Description xmp:Rating=\"5\"") > 0);
+    f.close();
+
+    const QRectF defaultCrop(0.2, 0.3, 0.4, 0.5);
+    const auto resolved = XmpSidecar::resolveForImage(rawPath, defaultCrop);
+
+    GlobalAdjustment expected;
+    expected.cropRect = defaultCrop;
+    CHECK(resolved.status == SidecarLoadStatus::ParseError);
+    CHECK(resolved.data.adjustments == expected);
+    CHECK(resolved.data.metadata == UserMetadata{});
 }
 
 TEST_CASE("save then load round-trips all params", "[xmp]") {

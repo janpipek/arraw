@@ -55,16 +55,21 @@ GlobalAdjustment XmpSidecar::resolveAdjustments(const QString& rawPath, const QR
     return resolveAdjustmentsWithStatus(rawPath, defaultCrop).adjustments;
 }
 
+SidecarLoadResult XmpSidecar::resolveForImage(const QString& rawPath, const QRectF& defaultCrop) {
+    SidecarLoadResult loaded = loadWithStatus(rawPath);
+    if (loaded.status == SidecarLoadStatus::Loaded)
+        return loaded;
+
+    loaded.data = {};
+    loaded.data.adjustments.cropRect = defaultCrop;
+    return loaded;
+}
+
 SidecarAdjustmentResult XmpSidecar::resolveAdjustmentsWithStatus(
     const QString& rawPath,
     const QRectF& defaultCrop) {
-    const SidecarLoadResult loaded = loadWithStatus(rawPath);
-    if (loaded.status == SidecarLoadStatus::Loaded)
-        return {loaded.data.adjustments, loaded.status};
-
-    GlobalAdjustment defaults;
-    defaults.cropRect = defaultCrop;
-    return {defaults, loaded.status};
+    const SidecarLoadResult loaded = resolveForImage(rawPath, defaultCrop);
+    return {loaded.data.adjustments, loaded.status};
 }
 
 // Parse "x, y" pairs from an rdf:Seq element into control points (0..255 scale → 0..1).

@@ -47,6 +47,7 @@ public:
 
     // The adjustments to apply when opening rawPath: the sidecar's if one exists,
     // otherwise defaults with the crop set to defaultCrop (e.g. a DNG DefaultCrop).
+    static SidecarLoadResult resolveForImage(const QString& rawPath, const QRectF& defaultCrop);
     static GlobalAdjustment resolveAdjustments(const QString& rawPath, const QRectF& defaultCrop);
     static SidecarAdjustmentResult resolveAdjustmentsWithStatus(
         const QString& rawPath, const QRectF& defaultCrop);
