@@ -86,11 +86,23 @@ void DevelopSession::setBaseLook(bool on) {
 void DevelopSession::markDevelopSaved() {
     savedAdjustments = adjustments;
     isDevelopDirty = false;
+    sidecar = SidecarState::Loaded;
+}
+
+void DevelopSession::markDevelopSaveFailed() {
+    isDevelopDirty = adjustments != savedAdjustments;
+    sidecar = SidecarState::WriteError;
 }
 
 void DevelopSession::markMetadataSaved() {
     savedMetadata = metadata_;
     isMetadataDirty = false;
+    sidecar = SidecarState::Loaded;
+}
+
+void DevelopSession::markMetadataSaveFailed() {
+    isMetadataDirty = metadata_ != savedMetadata;
+    sidecar = SidecarState::WriteError;
 }
 
 void DevelopSession::rebuildSpotBuffers() {

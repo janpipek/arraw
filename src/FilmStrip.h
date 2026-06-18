@@ -66,7 +66,7 @@ signals:
     // Batch operations (paste, export) read this to find their target set.
     void selectionChanged(const QStringList& paths);
     void directoryChanged(const QString& dir);
-    void marksChanged(const QString& path, const UserMetadata& marks);
+    void marksChanged(const QString& path, const UserMetadata& marks, bool saved);
 
 protected:
     // Watches the list viewport for resizes (fired after its geometry is final,

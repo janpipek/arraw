@@ -48,7 +48,9 @@ public:
     void setUserMetadata(const UserMetadata& metadata);
     void setBaseLook(bool on);
     void markDevelopSaved();
+    void markDevelopSaveFailed();
     void markMetadataSaved();
+    void markMetadataSaveFailed();
 
 private:
     LoadState state = LoadState::Empty;

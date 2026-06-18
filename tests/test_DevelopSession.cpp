@@ -116,6 +116,63 @@ TEST_CASE("DevelopSession tracks user metadata dirty state separately", "[develo
     CHECK_FALSE(session.metadataDirty());
 }
 
+TEST_CASE("DevelopSession records sidecar write failures without clearing dirty state",
+          "[develop-session]") {
+    DevelopSession session;
+    LoadResult result;
+    result.preview = ImageBuffer{{0.1f, 0.2f, 0.3f}, 1, 1};
+    session.setLoadedImage(
+        "/photos/IMG_0001.dng",
+        result,
+        GlobalAdjustment{},
+        DevelopSession::SidecarState::Loaded,
+        UserMetadata{});
+
+    GlobalAdjustment edited = session.params();
+    edited.exposure = 0.5f;
+    session.setParams(edited);
+    session.markDevelopSaveFailed();
+
+    CHECK(session.sidecarState() == DevelopSession::SidecarState::WriteError);
+    CHECK(session.developDirty());
+
+    UserMetadata metadata;
+    metadata.rating = 5;
+    session.setUserMetadata(metadata);
+    session.markMetadataSaveFailed();
+
+    CHECK(session.sidecarState() == DevelopSession::SidecarState::WriteError);
+    CHECK(session.metadataDirty());
+}
+
+TEST_CASE("DevelopSession successful saves mark the sidecar loaded", "[develop-session]") {
+    DevelopSession session;
+    LoadResult result;
+    result.preview = ImageBuffer{{0.1f, 0.2f, 0.3f}, 1, 1};
+    session.setLoadedImage(
+        "/photos/IMG_0001.dng",
+        result,
+        GlobalAdjustment{},
+        DevelopSession::SidecarState::Missing,
+        UserMetadata{});
+
+    GlobalAdjustment edited = session.params();
+    edited.exposure = 0.5f;
+    session.setParams(edited);
+    session.markDevelopSaved();
+
+    CHECK(session.sidecarState() == DevelopSession::SidecarState::Loaded);
+    CHECK_FALSE(session.developDirty());
+
+    UserMetadata metadata;
+    metadata.rating = 4;
+    session.setUserMetadata(metadata);
+    session.markMetadataSaved();
+
+    CHECK(session.sidecarState() == DevelopSession::SidecarState::Loaded);
+    CHECK_FALSE(session.metadataDirty());
+}
+
 TEST_CASE("DevelopSession exposes spot-applied buffers by display and export intent",
           "[develop-session]") {
     DevelopSession session;

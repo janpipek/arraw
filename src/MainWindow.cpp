@@ -221,11 +221,16 @@ MainWindow::MainWindow(QWidget* parent)
         filmStrip,
         &FilmStrip::marksChanged,
         this,
-        [this](const QString& path, const UserMetadata& metadata) {
+        [this](const QString& path, const UserMetadata& metadata, bool saved) {
             if (path != session->path())
                 return;
             session->setUserMetadata(metadata);
-            session->markMetadataSaved();
+            if (saved) {
+                session->markMetadataSaved();
+            } else {
+                session->markMetadataSaveFailed();
+                statusLabel->setText("Could not write " + XmpSidecar::pathFor(session->path()));
+            }
         });
 
     connect(
@@ -1106,8 +1111,12 @@ void MainWindow::applyCurrentUserMetadata(const UserMetadata& metadata) {
         return;
     session->setUserMetadata(metadata);
     filmStrip->setMarks(session->path(), metadata);
-    if (XmpSidecar::saveMetadata(session->path(), metadata))
+    if (XmpSidecar::saveMetadata(session->path(), metadata)) {
         session->markMetadataSaved();
+    } else {
+        session->markMetadataSaveFailed();
+        statusLabel->setText("Could not write " + XmpSidecar::pathFor(session->path()));
+    }
 }
 
 void MainWindow::setCurrentRating(int rating) {
@@ -1336,6 +1345,7 @@ void MainWindow::saveAdjustments() {
         session->markDevelopSaved();
         statusLabel->setText("Saved: " + XmpSidecar::pathFor(session->path()));
     } else {
+        session->markDevelopSaveFailed();
         QMessageBox::warning(
             this, "Save Error", "Could not write " + XmpSidecar::pathFor(session->path()));
     }

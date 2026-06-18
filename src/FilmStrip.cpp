@@ -334,8 +334,8 @@ void FilmStrip::setLabel(const QString& path, ColourLabel label) {
 // immediately, no Ctrl-S).
 void FilmStrip::applyMarks(const QString& path, const UserMetadata& marks) {
     model->setMarks(path, marks);
-    XmpSidecar::saveMetadata(path, marks);
-    emit marksChanged(path, marks);
+    const bool saved = XmpSidecar::saveMetadata(path, marks);
+    emit marksChanged(path, marks, saved);
 }
 
 void FilmStrip::loadMarks(const QStringList& paths) {
