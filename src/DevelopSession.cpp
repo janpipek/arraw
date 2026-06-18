@@ -63,6 +63,11 @@ void DevelopSession::setParams(const GlobalAdjustment& params) {
     isDevelopDirty = adjustments != savedAdjustments;
 }
 
+void DevelopSession::setLocalAdjustments(std::vector<LocalAdjustment> localAdjustments) {
+    adjustments.localAdjustments = std::move(localAdjustments);
+    isDevelopDirty = adjustments != savedAdjustments;
+}
+
 void DevelopSession::setSpots(std::vector<Spot> spots) {
     adjustments.spots = std::move(spots);
     rebuildSpotBuffers();

@@ -43,6 +43,7 @@ public:
         SidecarState sidecarState,
         const UserMetadata& metadata = {});
     void setParams(const GlobalAdjustment& params);
+    void setLocalAdjustments(std::vector<LocalAdjustment> localAdjustments);
     void setSpots(std::vector<Spot> spots);
     void setUserMetadata(const UserMetadata& metadata);
     void setBaseLook(bool on);

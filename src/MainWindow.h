@@ -48,6 +48,10 @@ public:
     // Public so SpotListCommand can call it on undo/redo.
     void rebuildSpottedBuffers(bool fullResOnly = false);
 
+    // Mirror the canonical session params into editor widgets and the viewport.
+    // Public so undo commands can update views after mutating the session.
+    void syncSessionToEditors();
+
 protected:
     void closeEvent(QCloseEvent* e) override;
     void keyPressEvent(QKeyEvent* e) override;

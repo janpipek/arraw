@@ -66,6 +66,28 @@ TEST_CASE("DevelopSession tracks dirty develop edits against the saved baseline"
     CHECK_FALSE(session.metadataDirty());
 }
 
+TEST_CASE("DevelopSession tracks local adjustments as canonical develop edits",
+          "[develop-session]") {
+    DevelopSession session;
+    LoadResult result;
+    result.preview = ImageBuffer{{0.1f, 0.2f, 0.3f}, 1, 1};
+    session.setLoadedImage(
+        "/photos/IMG_0001.dng",
+        result,
+        GlobalAdjustment{},
+        DevelopSession::SidecarState::Loaded);
+
+    LocalAdjustment adjustment;
+    adjustment.exposure = 0.75f;
+    adjustment.mask = LinearMask{{0.0, 0.0}, {1.0, 1.0}};
+    session.setLocalAdjustments({adjustment});
+
+    REQUIRE(session.params().localAdjustments.size() == 1);
+    CHECK(session.params().localAdjustments[0].exposure == 0.75f);
+    CHECK(session.developDirty());
+    CHECK_FALSE(session.metadataDirty());
+}
+
 TEST_CASE("DevelopSession tracks user metadata dirty state separately", "[develop-session]") {
     DevelopSession session;
     LoadResult result;

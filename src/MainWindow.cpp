@@ -90,21 +90,24 @@ private:
 class LocalAdjustmentCommand : public QUndoCommand {
 public:
     LocalAdjustmentCommand(
-        LocalAdjustmentPanel* panel,
+        DevelopSession* session,
+        MainWindow* mainWindow,
         std::vector<LocalAdjustment> before,
         std::vector<LocalAdjustment> after)
-        : panel(panel),
+        : session(session),
+          mainWindow(mainWindow),
           before(std::move(before)),
           after(std::move(after)) {
         setText("Adjust Local");
     }
 
-    void undo() override { panel->setLocalAdjustments(before); }
+    void undo() override;
 
-    void redo() override { panel->setLocalAdjustments(after); }
+    void redo() override;
 
 private:
-    LocalAdjustmentPanel* panel;
+    DevelopSession* session;
+    MainWindow* mainWindow;
     std::vector<LocalAdjustment> before, after;
 };
 
@@ -138,6 +141,17 @@ private:
     MainWindow* mainWindow;
     std::vector<Spot> before, after;
 };
+
+// ---------------------------------------------------------------------------
+void LocalAdjustmentCommand::undo() {
+    session->setLocalAdjustments(before);
+    mainWindow->syncSessionToEditors();
+}
+
+void LocalAdjustmentCommand::redo() {
+    session->setLocalAdjustments(after);
+    mainWindow->syncSessionToEditors();
+}
 
 // ---------------------------------------------------------------------------
 MainWindow::MainWindow(QWidget* parent)
@@ -237,7 +251,7 @@ MainWindow::MainWindow(QWidget* parent)
         &LocalAdjustmentPanel::committed,
         this,
         [this](const std::vector<LocalAdjustment>& before, const std::vector<LocalAdjustment>& after) {
-            undoStack->push(new LocalAdjustmentCommand(localPanel, before, after));
+            undoStack->push(new LocalAdjustmentCommand(session, this, before, after));
         });
     connect(
         viewport,
@@ -1159,6 +1173,14 @@ GlobalAdjustment MainWindow::currentParams() const {
     p.localAdjustments = localPanel->localAdjustments();
     p.spots = spotPanel->spots();
     return p;
+}
+
+void MainWindow::syncSessionToEditors() {
+    adjPanel->setParams(session->params());
+    localPanel->setLocalAdjustments(session->params().localAdjustments);
+    viewport->setAdjustments(session->params());
+    if (thumbTimer)
+        thumbTimer->start();
 }
 
 void MainWindow::pushParamsToViewport() {
