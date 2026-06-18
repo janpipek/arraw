@@ -944,7 +944,8 @@ void MainWindow::loadImage(const QString& path) {
     // Resolve the new image's develop params up front, so its first paint wears
     // its own edits, not the previous image's. Crop is a placeholder (full frame)
     // until the demosaic yields the real DefaultCrop for never-edited RAWs.
-    pendingParams = resolveImageAdjustments(path, QRectF(0.0, 0.0, 1.0, 1.0));
+    pendingPreviewParams
+        = XmpSidecar::resolveForImage(path, QRectF(0.0, 0.0, 1.0, 1.0)).data.adjustments;
 
     // Re-opening a recently viewed image: a cached decode skips the background
     // task entirely — instant, and correct (straight to the demosaiced image).
@@ -965,7 +966,8 @@ void MainWindow::loadImage(const QString& path) {
                 this,
                 [this, path, buf = std::move(buf)]() mutable {
                     if (session->path() == path) {
-                        applyPendingParams();    // new image's params, before the paint
+                        // New image's params, before the embedded-preview paint.
+                        applyPendingPreviewParams();
                         viewport->setImage(buf); // embedded preview (camera look, base off)
                     }
                 },
@@ -1001,8 +1003,8 @@ void MainWindow::onLoadFinished() {
         applyLoadResult(session->path(), *cached);
 }
 
-void MainWindow::applyPendingParams() {
-    session->setParams(pendingParams);
+void MainWindow::applyPendingPreviewParams() {
+    session->setParams(pendingPreviewParams);
     syncSessionToEditors();
     {
         QSignalBlocker block(spotPanel);

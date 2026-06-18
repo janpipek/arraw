@@ -91,9 +91,9 @@ private:
     // image: stores buffers, re-reads the sidecar, restores exif. Used by both
     // onLoadFinished and the decode-cache hit path in loadImage.
     void applyLoadResult(const QString& path, const LoadResult& result);
-    // Push the pending image's resolved params to the panels + viewport, so the
+    // Push the pending preview's resolved params to the panels + viewport, so the
     // first paint of a new image wears its own edits (not the previous image's).
-    void applyPendingParams();
+    void applyPendingPreviewParams();
     void setLoadingState(bool loading);
     void updateZoomStatus(float zoom);
 
@@ -174,7 +174,7 @@ private:
 
     // Params of the image currently being loaded, resolved up front from its
     // sidecar and applied atomically with the first paint of that image.
-    GlobalAdjustment pendingParams;
+    GlobalAdjustment pendingPreviewParams;
 
     // Session decode cache: skips the multi-second demosaic when re-opening a
     // recently viewed image. ~1.5 GiB of decoded buffers, LRU, current pinned.
