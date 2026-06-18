@@ -3,6 +3,7 @@ clang_format := env_var_or_default("CLANG_FORMAT", "clang-format")
 clazy := env_var_or_default("CLAZY", "clazy")
 run_clang_tidy := env_var_or_default("RUN_CLANG_TIDY", "run-clang-tidy")
 clang_tidy := env_var_or_default("CLANG_TIDY", "clang-tidy")
+container_backend := env_var_or_default("CONTAINER_BACKEND", "")
 
 # List available tasks
 default:
@@ -51,3 +52,20 @@ rebuild:
 # Rebuild and run the application
 rerun: rebuild
     ./build/arraw
+
+appimage:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    backend="{{container_backend}}"
+    if [[ -z "$backend" ]]; then
+        backend=$(command -v podman 2>/dev/null || command -v docker 2>/dev/null || true)
+    fi
+    [[ -n "$backend" ]] || { echo "error: install podman or docker (or set CONTAINER_BACKEND)"; exit 1; }
+    mkdir -p dist
+    "$backend" build -t arraw-appimage-builder \
+        -f packaging/linux/Containerfile packaging/linux
+    "$backend" run --rm \
+        -v "$PWD:/src:ro,z" \
+        -v "$PWD/dist:/dist:z" \
+        arraw-appimage-builder \
+        bash /src/packaging/linux/build-appimage.sh

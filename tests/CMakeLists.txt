@@ -18,8 +18,11 @@ add_executable(arraw_tests
     test_RawProcessor.cpp
     test_StandardImageLoader.cpp
     test_GoldenImages.cpp
+    test_ImageMetadata.cpp
     test_FilmStripModel.cpp
     test_FilmStripLayout.cpp
+    test_FilmStripTooltip.cpp
+    test_ThumbnailCache.cpp
     test_FieldSpec.cpp
     test_LocalAdjustment.cpp
     test_LocalAdjustmentPanel.cpp
@@ -30,6 +33,9 @@ add_executable(arraw_tests
     test_DevelopPreset.cpp
     test_GroupChecklistDialog.cpp
     test_PresetStore.cpp
+    test_Spot.cpp
+    test_BatchPaste.cpp
+    test_FilmStrip.cpp
 )
 
 target_link_libraries(arraw_tests PRIVATE arraw_core Catch2::Catch2WithMain)

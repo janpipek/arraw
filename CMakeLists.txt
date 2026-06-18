@@ -139,6 +139,7 @@ set(CORE_SOURCES
     src/ToneCurveWidget.cpp
     src/ExifPanel.cpp
     src/ImageMetadata.cpp
+    src/FilmStripTooltip.cpp
     src/Histogram.cpp
     src/RawProcessor.cpp
     src/StandardImageLoader.cpp
@@ -159,6 +160,10 @@ set(CORE_SOURCES
     src/DevelopPreset.cpp
     src/GroupChecklistDialog.cpp
     src/PresetStore.cpp
+    src/Spot.cpp
+    src/SpotRemovalPanel.cpp
+    src/BatchPaste.cpp
+    src/BatchProgressDialog.cpp
 )
 
 add_library(arraw_core STATIC ${CORE_SOURCES})

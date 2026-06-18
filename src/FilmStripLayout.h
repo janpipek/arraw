@@ -5,8 +5,8 @@
 // can be unit-tested without constructing the view.
 namespace filmstrip {
 
-// Width of a cell that shows an image of `imageSize` at the strip's content
-// height, preserving aspect ratio. Degenerate sizes fall back to a square cell.
+// Side length of a square cell at the strip's content height. The image size is
+// accepted so callers can keep the same path before thumbnails are loaded.
 int cellWidth(int contentHeight, QSize imageSize);
 
 } // namespace filmstrip

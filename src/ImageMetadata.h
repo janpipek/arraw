@@ -1,4 +1,5 @@
 #pragma once
+#include <QJsonDocument>
 #include <QPair>
 #include <QString>
 #include <QVector>
@@ -13,3 +14,5 @@ struct ImageMetadata {
 };
 
 ImageMetadata extractMetadata(const LibRaw& raw);
+QJsonDocument toJson(const ImageMetadata& meta);
+ImageMetadata fromJson(const QJsonDocument& doc);

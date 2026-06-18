@@ -4,6 +4,7 @@
 #include "ImagePipeline.h"
 #include "PresetStore.h"
 #include "SettingsClipboard.h"
+#include "Spot.h"
 #include <atomic>
 #include <memory>
 #include <optional>
@@ -13,6 +14,7 @@
 class ImageViewport;
 class AdjustmentPanel;
 class LocalAdjustmentPanel;
+class SpotRemovalPanel;
 class ProofingPanel;
 class ExifPanel;
 class FilmStrip;
@@ -38,6 +40,12 @@ public:
     // Accepts a RAW file path or a directory.
     void openPath(const QString& path);
 
+    // Apply all spots to the clean decoded buffers and push spotted textures to
+    // the viewport. fullResOnly=false rebuilds only the preview (live drag);
+    // fullResOnly=true also rebuilds spottedFullRes (release / undo / load).
+    // Public so SpotListCommand can call it on undo/redo.
+    void rebuildSpottedBuffers(bool fullResOnly = false);
+
 protected:
     void closeEvent(QCloseEvent* e) override;
     void keyPressEvent(QKeyEvent* e) override;
@@ -46,6 +54,7 @@ private slots:
     void openFile();
     void saveAdjustments();
     void exportFile();
+    void exportBatch(const QStringList& paths);
     void onLoadFinished();
     void onFullResNeeded();
 
@@ -87,7 +96,7 @@ private:
     void rebuildPresetsMenu(); // re-list saved presets after save/delete
 
     // The full develop params = global edits (adjPanel) + local adjustments
-    // (localPanel) merged into one GlobalAdjustment for render, save, export.
+    // (localPanel) + spots (spotPanel) merged into one GlobalAdjustment for save/export.
     GlobalAdjustment currentParams() const;
     // Feed currentParams() to the viewport (after a global or local change).
     void pushParamsToViewport();
@@ -108,6 +117,7 @@ private:
     ImageViewport* viewport;
     AdjustmentPanel* adjPanel;
     LocalAdjustmentPanel* localPanel;
+    SpotRemovalPanel* spotPanel;
     ProofingPanel* proofPanel;
     ExifPanel* exifPanel;
     FilmStrip* filmStrip;
@@ -125,6 +135,7 @@ private:
     QAction* straightenAction;
     QAction* wbAction;
     QAction* maskAction;             // LocalMask tool toggle
+    QAction* spotAction;             // SpotTool toggle
     QTabWidget* rightTabs = nullptr; // Adjustments / Masks / EXIF
     int masksTabIndex = -1;
 
@@ -147,8 +158,10 @@ private:
 
     QString monitorProfilePath; // empty = assume sRGB
 
-    ImageBuffer fullRes;
-    ImageBuffer preview;
+    ImageBuffer fullRes;         // clean decoded full-res buffer; never mutated
+    ImageBuffer preview;         // clean decoded preview buffer; never mutated
+    ImageBuffer spottedFullRes;  // fullRes with all spots applied (docs/adr/0017)
+    bool m_baseLook = false;     // whether the current preview was loaded with baseLook on
     QString currentPath;
 
     // Params of the image currently being loaded, resolved up front from its
