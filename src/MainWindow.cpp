@@ -73,6 +73,27 @@ DevelopSession::SidecarState toSessionSidecarState(SidecarLoadStatus status) {
     }
     return DevelopSession::SidecarState::Unknown;
 }
+
+GlobalAdjustment resolveImageAdjustments(const QString& path, const QRectF& defaultCrop) {
+    return XmpSidecar::resolveForImage(path, defaultCrop).data.adjustments;
+}
+
+QString sidecarWriteErrorText(const QString& path) {
+    return "Could not write " + XmpSidecar::pathFor(path);
+}
+
+QString loadedImageStatusText(
+    const QString& path,
+    const ImageBuffer& fullRes,
+    DevelopSession::SidecarState sidecarState) {
+    QString status = QString("%1  —  %2 × %3")
+                         .arg(QFileInfo(path).fileName())
+                         .arg(fullRes.width)
+                         .arg(fullRes.height);
+    if (sidecarState == DevelopSession::SidecarState::ParseError)
+        status += "  —  Sidecar unreadable; defaults applied";
+    return status;
+}
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -229,7 +250,7 @@ MainWindow::MainWindow(QWidget* parent)
                 session->markMetadataSaved();
             } else {
                 session->markMetadataSaveFailed();
-                statusLabel->setText("Could not write " + XmpSidecar::pathFor(session->path()));
+                statusLabel->setText(sidecarWriteErrorText(session->path()));
             }
         });
 
@@ -923,7 +944,7 @@ void MainWindow::loadImage(const QString& path) {
     // Resolve the new image's develop params up front, so its first paint wears
     // its own edits, not the previous image's. Crop is a placeholder (full frame)
     // until the demosaic yields the real DefaultCrop for never-edited RAWs.
-    pendingParams = XmpSidecar::resolveAdjustments(path, QRectF(0.0, 0.0, 1.0, 1.0));
+    pendingParams = resolveImageAdjustments(path, QRectF(0.0, 0.0, 1.0, 1.0));
 
     // Re-opening a recently viewed image: a cached decode skips the background
     // task entirely — instant, and correct (straight to the demosaiced image).
@@ -1011,13 +1032,7 @@ void MainWindow::applyLoadResult(const QString& path, const LoadResult& result) 
     exifPanel->setMetadata(result.metadata);
     undoStack->clear();
 
-    QString status = QString("%1  —  %2 × %3")
-                         .arg(QFileInfo(path).fileName())
-                         .arg(session->fullRes().width)
-                         .arg(session->fullRes().height);
-    if (session->sidecarState() == DevelopSession::SidecarState::ParseError)
-        status += "  —  Sidecar unreadable; defaults applied";
-    statusLabel->setText(status);
+    statusLabel->setText(loadedImageStatusText(path, session->fullRes(), session->sidecarState()));
 
     setToolsEnabled(true);
 }
@@ -1115,7 +1130,7 @@ void MainWindow::applyCurrentUserMetadata(const UserMetadata& metadata) {
         session->markMetadataSaved();
     } else {
         session->markMetadataSaveFailed();
-        statusLabel->setText("Could not write " + XmpSidecar::pathFor(session->path()));
+        statusLabel->setText(sidecarWriteErrorText(session->path()));
     }
 }
 
@@ -1346,8 +1361,7 @@ void MainWindow::saveAdjustments() {
         statusLabel->setText("Saved: " + XmpSidecar::pathFor(session->path()));
     } else {
         session->markDevelopSaveFailed();
-        QMessageBox::warning(
-            this, "Save Error", "Could not write " + XmpSidecar::pathFor(session->path()));
+        QMessageBox::warning(this, "Save Error", sidecarWriteErrorText(session->path()));
     }
 }
 
@@ -1548,7 +1562,7 @@ void MainWindow::exportBatch(const QStringList& paths) {
 
         const GlobalAdjustment p = (rawPath == session->path())
             ? activeParams
-            : XmpSidecar::resolveAdjustments(rawPath, QRectF(0, 0, 1, 1));
+            : resolveImageAdjustments(rawPath, QRectF(0, 0, 1, 1));
 
         // Apply spots stored in the adjustment (ADR 0017).
         const ImageBuffer renderBuf = p.spots.empty()
