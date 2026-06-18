@@ -28,6 +28,7 @@ public:
     // Replace a row's thumbnail with a freshly developed one. No-op if the path
     // is not in the current directory listing.
     void setThumbnail(const QString& path, const QImage& image);
+    void setMarks(const QString& path, const UserMetadata& marks);
 
     // Navigate ±1 from current selection. Returns false if already at boundary.
     bool navigateBy(int delta);
@@ -65,6 +66,7 @@ signals:
     // Batch operations (paste, export) read this to find their target set.
     void selectionChanged(const QStringList& paths);
     void directoryChanged(const QString& dir);
+    void marksChanged(const QString& path, const UserMetadata& marks);
 
 protected:
     // Watches the list viewport for resizes (fired after its geometry is final,

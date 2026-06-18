@@ -280,6 +280,10 @@ void FilmStrip::setThumbnail(const QString& path, const QImage& image) {
     model->setThumbnail(path, image); // no-op if path isn't in the current listing
 }
 
+void FilmStrip::setMarks(const QString& path, const UserMetadata& marks) {
+    model->setMarks(path, marks);
+}
+
 bool FilmStrip::navigateBy(int delta) {
     const QModelIndex cur = list->currentIndex();
     const int next = (cur.isValid() ? cur.row() : -1) + delta;
@@ -331,6 +335,7 @@ void FilmStrip::setLabel(const QString& path, ColourLabel label) {
 void FilmStrip::applyMarks(const QString& path, const UserMetadata& marks) {
     model->setMarks(path, marks);
     XmpSidecar::saveMetadata(path, marks);
+    emit marksChanged(path, marks);
 }
 
 void FilmStrip::loadMarks(const QStringList& paths) {

@@ -5,6 +5,7 @@
 #include "PresetStore.h"
 #include "SettingsClipboard.h"
 #include "Spot.h"
+#include "UserMetadata.h"
 #include <atomic>
 #include <memory>
 #include <optional>
@@ -102,6 +103,9 @@ private:
     void applyDevelopChange(const GlobalAdjustment& after);
     void applyPreset(const DevelopPreset& preset);
     void rebuildPresetsMenu(); // re-list saved presets after save/delete
+    void applyCurrentUserMetadata(const UserMetadata& metadata);
+    void setCurrentRating(int rating);
+    void setCurrentLabel(ColourLabel label);
 
     // The full develop params for save/export. DevelopSession is canonical;
     // panels mirror/edit this state but do not answer "what is current?"

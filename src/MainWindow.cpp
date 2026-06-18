@@ -218,6 +218,17 @@ MainWindow::MainWindow(QWidget* parent)
     connect(viewport, &ImageViewport::zoomChanged, this, &MainWindow::updateZoomStatus);
 
     connect(
+        filmStrip,
+        &FilmStrip::marksChanged,
+        this,
+        [this](const QString& path, const UserMetadata& metadata) {
+            if (path != session->path())
+                return;
+            session->setUserMetadata(metadata);
+            session->markMetadataSaved();
+        });
+
+    connect(
         viewport, &ImageViewport::cropCommitted, this, [this](const QRectF& rect, bool constrained) {
             GlobalAdjustment before = currentParams();
             GlobalAdjustment after = before;
@@ -506,7 +517,7 @@ void MainWindow::setupImageMenu() {
     auto* rateMenu = image->addMenu("Rating");
     QList<QPair<QAction*, int>> rateActions;
     auto addRate = [&](const QString& text, int n, QKeySequence key) {
-        QAction* a = rateMenu->addAction(text, this, [this, n] { filmStrip->rateCurrent(n); });
+        QAction* a = rateMenu->addAction(text, this, [this, n] { setCurrentRating(n); });
         a->setShortcut(key);
         a->setCheckable(true);
         rateActions.append({a, n});
@@ -533,7 +544,7 @@ void MainWindow::setupImageMenu() {
           {"Blue", ColourLabel::Blue, Qt::Key_B},
           {"Purple", ColourLabel::Purple, Qt::Key_P}}) {
         QAction* a = labelMenu->addAction(tr(name), this, [this, value] {
-            filmStrip->labelCurrent(value);
+            setCurrentLabel(value);
         });
         a->setShortcut(key);
         a->setCheckable(true);
@@ -541,11 +552,11 @@ void MainWindow::setupImageMenu() {
     }
     labelMenu->addSeparator();
     // labelCurrent(None) always clears (toggling None off is still None).
-    labelMenu->addAction(tr("None"), this, [this] { filmStrip->labelCurrent(ColourLabel::None); });
+    labelMenu->addAction(tr("None"), this, [this] { setCurrentLabel(ColourLabel::None); });
 
     // Reflect the current file's marks each time the menu opens.
     connect(image, &QMenu::aboutToShow, this, [this, rateActions, labelActions] {
-        const UserMetadata m = filmStrip->currentMarks();
+        const UserMetadata m = session->hasImage() ? session->userMetadata() : filmStrip->currentMarks();
         for (const auto& [a, n] : rateActions)
             a->setChecked(m.rating == n);
         for (const auto& [a, value] : labelActions)
@@ -980,12 +991,20 @@ void MainWindow::applyLoadResult(const QString& path, const LoadResult& result) 
 
     // Re-read the sidecar every time (params are never cached) so edits made in
     // another app — or a prior session — are always reflected.
-    const SidecarAdjustmentResult saved
-        = XmpSidecar::resolveAdjustmentsWithStatus(path, result.defaultCrop);
-    session->setLoadedImage(path, result, saved.adjustments, toSessionSidecarState(saved.status));
+    const SidecarLoadResult sidecar = XmpSidecar::loadWithStatus(path);
+    GlobalAdjustment saved = sidecar.data.adjustments;
+    UserMetadata savedMetadata = sidecar.data.metadata;
+    if (sidecar.status != SidecarLoadStatus::Loaded) {
+        saved = GlobalAdjustment{};
+        saved.cropRect = result.defaultCrop;
+        savedMetadata = {};
+    }
+    session->setLoadedImage(
+        path, result, saved, toSessionSidecarState(sidecar.status), savedMetadata);
     session->setBaseLook(true);
     syncSessionToEditors();
     syncSessionSpotsToEditors(true);
+    filmStrip->setMarks(path, session->userMetadata());
 
     exifPanel->setMetadata(result.metadata);
     undoStack->clear();
@@ -1083,6 +1102,28 @@ void MainWindow::applyDevelopChange(const GlobalAdjustment& after) {
     const GlobalAdjustment before = currentParams();
     if (after != before)
         pushGlobalAdjustmentCommand(before, after);
+}
+
+void MainWindow::applyCurrentUserMetadata(const UserMetadata& metadata) {
+    if (session->path().isEmpty())
+        return;
+    session->setUserMetadata(metadata);
+    filmStrip->setMarks(session->path(), metadata);
+    if (XmpSidecar::saveMetadata(session->path(), metadata))
+        session->markMetadataSaved();
+}
+
+void MainWindow::setCurrentRating(int rating) {
+    UserMetadata metadata = session->userMetadata();
+    metadata.rating = rating;
+    applyCurrentUserMetadata(metadata);
+}
+
+void MainWindow::setCurrentLabel(ColourLabel label) {
+    UserMetadata metadata = session->userMetadata();
+    metadata.label
+        = (label == ColourLabel::None || metadata.label != label) ? label : ColourLabel::None;
+    applyCurrentUserMetadata(metadata);
 }
 
 void MainWindow::copySettings() {
