@@ -21,6 +21,19 @@ decisions that follow from it.
   in the delegate (active highlight vs. selection highlight). Navigation arrows
   move the active item and collapse the selection to it.
 
+  **One deliberate deviation from Lightroom:** in LR a Ctrl/Shift+click makes
+  the clicked photo *active* (it loads into Develop). Here Ctrl/Shift+click only
+  edits the batch selection and leaves the active image pinned — only a plain
+  single click changes the active image. The reason is cost: every active change
+  triggers a full decode, an undo-stack reset, and a viewport swap, so making
+  each batch-assembly click reload would be jarring and slow. `FilmStrip`
+  intercepts modifier-clicks on the list viewport (`handleModifierClick`) and
+  drives the selection model itself, never moving the current index; Qt's default
+  `ExtendedSelection` would otherwise move current and fire `fileSelected`.
+  Consequence: the active image can never be toggled *out* of the selection — a
+  Ctrl+click on the active item keeps it selected — since it is by definition an
+  edit target.
+
 **Batch paste before-state capture**
 
 - **Lazy / async:** load before-state from sidecar only if the user actually

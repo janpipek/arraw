@@ -1,4 +1,5 @@
 #include "FilmStrip.h"
+#include "FilmStripModel.h"
 #include "TestApp.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -8,6 +9,7 @@
 #include <QItemSelectionModel>
 #include <QMouseEvent>
 #include <QTemporaryDir>
+#include <QThreadPool>
 
 namespace {
 
@@ -20,6 +22,15 @@ FilmStrip* makeStripWithFiles(const QTemporaryDir& dir, int n) {
     strip->setDirectory(dir.path());
     qApp->processEvents();
     return strip;
+}
+
+// The strip kicks off background thumbnail/marks decodes that capture the cache
+// and post results back via queued invokeMethod. Deleting it mid-flight would
+// dereference freed memory, so drain the pool and queued events before teardown.
+void destroyStrip(FilmStrip* strip) {
+    QThreadPool::globalInstance()->waitForDone();
+    qApp->processEvents();
+    delete strip;
 }
 
 } // namespace
@@ -47,10 +58,33 @@ TEST_CASE("FilmStrip: programmatic multi-select populates selectedPaths", "[film
     CHECK(listView->selectionModel()->selectedIndexes().size() == 2);
     CHECK(strip->selectedPaths().size() == 2);
 
-    delete strip;
+    destroyStrip(strip);
 }
 
-TEST_CASE("FilmStrip: synthetic Ctrl+click mouse event adds to selection", "[filmstrip][multiselect]") {
+namespace {
+
+// Returns false (with a WARN) when the item has no laid-out geometry, e.g. on the
+// offscreen platform where the strip never gets a real layout pass.
+bool clickItem(QListView* view, int row, Qt::KeyboardModifiers mods) {
+    const QModelIndex idx = view->model()->index(row, 0);
+    const QRect rect = view->visualRect(idx);
+    if (!rect.isValid())
+        return false;
+    const QPoint pos = rect.center();
+    const QPoint global = view->viewport()->mapToGlobal(pos);
+    QMouseEvent press(QEvent::MouseButtonPress, pos, global,
+                      Qt::LeftButton, Qt::LeftButton, mods);
+    QMouseEvent release(QEvent::MouseButtonRelease, pos, global,
+                        Qt::LeftButton, Qt::LeftButton, mods);
+    QApplication::sendEvent(view->viewport(), &press);
+    QApplication::sendEvent(view->viewport(), &release);
+    qApp->processEvents();
+    return true;
+}
+
+} // namespace
+
+TEST_CASE("FilmStrip: Ctrl+click adds to selection but keeps the active image", "[filmstrip][multiselect]") {
     testApp();
 
     QTemporaryDir dir;
@@ -62,33 +96,81 @@ TEST_CASE("FilmStrip: synthetic Ctrl+click mouse event adds to selection", "[fil
 
     auto* listView = strip->findChild<QListView*>();
     REQUIRE(listView != nullptr);
-
     listView->resize(800, 100);
     qApp->processEvents();
 
-    const QModelIndex second = listView->model()->index(1, 0);
-    const QRect rect = listView->visualRect(second);
-    if (!rect.isValid()) {
+    const QModelIndex activeBefore = listView->currentIndex();
+    REQUIRE(activeBefore.row() == 0);
+
+    if (!clickItem(listView, 1, Qt::ControlModifier)) {
         WARN("visualRect not valid — item not laid out (offscreen?), skipping mouse test");
-        delete strip;
+        destroyStrip(strip);
         return;
     }
 
-    // Simulate Ctrl+click by posting mouse press and release events
-    const QPoint pos = rect.center();
-    QMouseEvent press(QEvent::MouseButtonPress, pos, listView->viewport()->mapToGlobal(pos),
-                      Qt::LeftButton, Qt::LeftButton, Qt::ControlModifier);
-    QMouseEvent release(QEvent::MouseButtonRelease, pos, listView->viewport()->mapToGlobal(pos),
-                        Qt::LeftButton, Qt::LeftButton, Qt::ControlModifier);
-    QApplication::sendEvent(listView->viewport(), &press);
-    QApplication::sendEvent(listView->viewport(), &release);
+    // Both files are now batch targets...
+    CHECK(strip->selectedPaths().size() == 2);
+    // ...but the active image (current index / viewport target) must NOT move.
+    CHECK(listView->currentIndex().row() == 0);
+
+    destroyStrip(strip);
+}
+
+TEST_CASE("FilmStrip: Ctrl+click never deselects the active image", "[filmstrip][multiselect]") {
+    testApp();
+
+    QTemporaryDir dir;
+    REQUIRE(dir.isValid());
+    auto* strip = makeStripWithFiles(dir, 4);
+
+    strip->selectFirst();
     qApp->processEvents();
 
-    INFO("selectedIndexes: " << listView->selectionModel()->selectedIndexes().size());
-    INFO("selectedPaths: " << strip->selectedPaths().size());
-    CHECK(strip->selectedPaths().size() == 2);
+    auto* listView = strip->findChild<QListView*>();
+    REQUIRE(listView != nullptr);
+    listView->resize(800, 100);
+    qApp->processEvents();
 
-    delete strip;
+    // Ctrl+click the active item itself: toggle would drop it, but it must stay.
+    if (!clickItem(listView, 0, Qt::ControlModifier)) {
+        WARN("visualRect not valid — skipping");
+        destroyStrip(strip);
+        return;
+    }
+
+    CHECK(strip->selectedPaths().contains(
+        listView->model()->index(0, 0).data(FilmStripModel::PathRole).toString()));
+    CHECK(listView->currentIndex().row() == 0);
+
+    destroyStrip(strip);
+}
+
+TEST_CASE("FilmStrip: Shift+click selects a contiguous range, active pinned", "[filmstrip][multiselect]") {
+    testApp();
+
+    QTemporaryDir dir;
+    REQUIRE(dir.isValid());
+    auto* strip = makeStripWithFiles(dir, 5);
+
+    strip->selectFirst();
+    qApp->processEvents();
+
+    auto* listView = strip->findChild<QListView*>();
+    REQUIRE(listView != nullptr);
+    listView->resize(1000, 100);
+    qApp->processEvents();
+
+    if (!clickItem(listView, 3, Qt::ShiftModifier)) {
+        WARN("visualRect not valid — skipping");
+        destroyStrip(strip);
+        return;
+    }
+
+    // Rows 0..3 inclusive = 4 files.
+    CHECK(strip->selectedPaths().size() == 4);
+    CHECK(listView->currentIndex().row() == 0);
+
+    destroyStrip(strip);
 }
 
 TEST_CASE("FilmStrip: selectFirst collapses any prior multi-selection", "[filmstrip][multiselect]") {
@@ -115,5 +197,5 @@ TEST_CASE("FilmStrip: selectFirst collapses any prior multi-selection", "[filmst
     qApp->processEvents();
     CHECK(strip->selectedPaths().size() == 1);
 
-    delete strip;
+    destroyStrip(strip);
 }

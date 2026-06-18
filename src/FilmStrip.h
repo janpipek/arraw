@@ -8,6 +8,7 @@ class FilmStripModel;
 class ThumbnailCache;
 class QModelIndex;
 class QImage;
+class QMouseEvent;
 
 // Horizontal thumbnail strip for one directory. A thin shell over FilmStripModel
 // + QListView; the testable logic lives in FilmStripModel / FilmStripLayout.
@@ -71,6 +72,9 @@ private:
     void requestVisibleThumbnails();
     void updateThumbHeight();
     bool handleMarkKey(int key);              // maps a culling key to a mark; false if not one
+    // Ctrl/Shift-click only changes the batch selection, never the active image.
+    // Returns true when it handled the press (so the view doesn't move current).
+    bool handleModifierClick(QMouseEvent* e);
     void loadMarks(const QStringList& paths); // background sidecar scan
     void setRating(const QString& path, int rating);
     void setLabel(const QString& path, ColourLabel label); // toggles off if already set

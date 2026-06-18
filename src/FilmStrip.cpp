@@ -14,6 +14,7 @@
 #include <QKeyEvent>
 #include <QListView>
 #include <QMenu>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QScrollBar>
 #include <QSignalBlocker>
@@ -410,6 +411,14 @@ bool FilmStrip::eventFilter(QObject* watched, QEvent* event) {
     if (watched == list->viewport() && event->type() == QEvent::Resize)
         updateThumbHeight();
 
+    // A Ctrl/Shift-click is a batch-selection gesture, not a navigation. Handle it
+    // ourselves so the active image (current index) stays put — otherwise the view
+    // would move current to the clicked item and MainWindow would reload it.
+    if (watched == list->viewport() && event->type() == QEvent::MouseButtonPress) {
+        if (handleModifierClick(static_cast<QMouseEvent*>(event)))
+            return true;
+    }
+
     // Culling keys: handle them on the list before QListView's type-ahead search
     // (which the view's shortcut-override otherwise steals — e.g. X jumping to a
     // filename) can run. Navigation keys fall through to the view as normal.
@@ -447,6 +456,41 @@ bool FilmStrip::handleMarkKey(int key) {
         return true;
     }
     return false;
+}
+
+bool FilmStrip::handleModifierClick(QMouseEvent* e) {
+    if (e->button() != Qt::LeftButton)
+        return false;
+    const Qt::KeyboardModifiers mods = e->modifiers();
+    const bool ctrl = mods & Qt::ControlModifier;
+    const bool shift = mods & Qt::ShiftModifier;
+    if (!ctrl && !shift)
+        return false; // plain click: let the view drive navigation as usual
+
+    const QModelIndex idx = list->indexAt(e->position().toPoint());
+    if (!idx.isValid())
+        return false; // click on empty space: leave to the view
+
+    // Anchor the gesture on the active image (current index) and never move it,
+    // so the viewport keeps showing the file being edited.
+    auto* sm = list->selectionModel();
+    const QModelIndex anchor = list->currentIndex();
+
+    if (shift) {
+        // Contiguous range from the active image to the clicked one.
+        const int a = anchor.isValid() ? anchor.row() : idx.row();
+        const QModelIndex top = model->index(std::min(a, idx.row()));
+        const QModelIndex bottom = model->index(std::max(a, idx.row()));
+        sm->select(QItemSelection(top, bottom), QItemSelectionModel::ClearAndSelect);
+    } else { // ctrl
+        sm->select(idx, QItemSelectionModel::Toggle);
+        // The active image must always remain part of the selection.
+        if (anchor.isValid())
+            sm->select(anchor, QItemSelectionModel::Select);
+    }
+
+    list->scrollTo(idx, QAbstractItemView::PositionAtCenter);
+    return true; // consume: don't let the view move current / reload the image
 }
 
 void FilmStrip::updateThumbHeight() {
