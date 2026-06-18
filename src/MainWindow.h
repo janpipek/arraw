@@ -51,6 +51,7 @@ public:
     // Mirror the canonical session params into editor widgets and the viewport.
     // Public so undo commands can update views after mutating the session.
     void syncSessionToEditors();
+    void syncSessionSpotsToEditors(bool fullResOnly = true);
 
 protected:
     void closeEvent(QCloseEvent* e) override;

@@ -122,27 +122,24 @@ private:
 // ---------------------------------------------------------------------------
 class SpotListCommand : public QUndoCommand {
 public:
-    SpotListCommand(SpotRemovalPanel* panel, MainWindow* mw,
-                    std::vector<Spot> before, std::vector<Spot> after)
-        : panel(panel),
-          mainWindow(mw),
+    SpotListCommand(
+        DevelopSession* session,
+        MainWindow* mainWindow,
+        std::vector<Spot> before,
+        std::vector<Spot> after)
+        : session(session),
+          mainWindow(mainWindow),
           before(std::move(before)),
           after(std::move(after)) {
         setText("Edit Spot");
     }
 
-    void undo() override {
-        panel->setSpots(before);
-        mainWindow->rebuildSpottedBuffers(true);
-    }
+    void undo() override;
 
-    void redo() override {
-        panel->setSpots(after);
-        mainWindow->rebuildSpottedBuffers(true);
-    }
+    void redo() override;
 
 private:
-    SpotRemovalPanel* panel;
+    DevelopSession* session;
     MainWindow* mainWindow;
     std::vector<Spot> before, after;
 };
@@ -167,6 +164,16 @@ void LocalAdjustmentCommand::undo() {
 void LocalAdjustmentCommand::redo() {
     session->setLocalAdjustments(after);
     mainWindow->syncSessionToEditors();
+}
+
+void SpotListCommand::undo() {
+    session->setSpots(before);
+    mainWindow->syncSessionSpotsToEditors(true);
+}
+
+void SpotListCommand::redo() {
+    session->setSpots(after);
+    mainWindow->syncSessionSpotsToEditors(true);
 }
 
 // ---------------------------------------------------------------------------
@@ -285,7 +292,7 @@ MainWindow::MainWindow(QWidget* parent)
         &SpotRemovalPanel::committed,
         this,
         [this](std::vector<Spot> before, std::vector<Spot> after) {
-            undoStack->push(new SpotListCommand(spotPanel, this, std::move(before), std::move(after)));
+            undoStack->push(new SpotListCommand(session, this, std::move(before), std::move(after)));
         });
     // Viewport signals: click places a new spot; handle drags move dest/source.
     connect(viewport, &ImageViewport::spotRequested, this, [this](QPointF destBufPx) {
@@ -1197,6 +1204,15 @@ void MainWindow::syncSessionToEditors() {
     viewport->setAdjustments(session->params());
     if (thumbTimer)
         thumbTimer->start();
+}
+
+void MainWindow::syncSessionSpotsToEditors(bool fullResOnly) {
+    {
+        QSignalBlocker block(spotPanel);
+        spotPanel->setSpots(session->params().spots);
+    }
+    viewport->setSpots(session->params().spots);
+    rebuildSpottedBuffers(fullResOnly);
 }
 
 void MainWindow::pushGlobalAdjustmentCommand(
