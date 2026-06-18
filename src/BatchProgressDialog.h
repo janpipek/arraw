@@ -22,6 +22,11 @@ public:
 
     bool wasCancelled() const { return cancelled; }
 
+signals:
+    // Emitted the moment Cancel is clicked, so a caller waiting on a background
+    // task can abort it promptly (wasCancelled() only reports the state after).
+    void cancelRequested();
+
 private:
     QProgressBar* bar;
     QLabel* fileLabel;

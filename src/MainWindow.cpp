@@ -51,6 +51,7 @@
 #include <QTabWidget>
 #include <QTimer>
 #include <QElapsedTimer>
+#include <QEventLoop>
 #include <QToolBar>
 #include <QToolButton>
 #include <QUndoCommand>
@@ -1359,10 +1360,10 @@ void MainWindow::exportBatch(const QStringList& paths) {
     progress.show();
     // A freshly shown top-level window is not painted within a single
     // processEvents() pass: the map/expose handshake with the window manager is
-    // asynchronous. Without waiting, the first (multi-second) decode below blocks
-    // the UI thread while the dialog is still blank, so it only appears once the
-    // first file is done. Spin the loop until the window is actually on screen,
-    // bounded so a missing compositor can't hang us.
+    // asynchronous. Spin the loop until the window is actually on screen so it is
+    // visible before any work begins (the per-file decode waits in its own nested
+    // event loop below, which also paints, but the active image renders straight
+    // away with no such wait). Bounded so a missing compositor can't hang us.
     if (QWindow* handle = progress.windowHandle()) {
         QElapsedTimer t;
         t.start();
@@ -1372,6 +1373,7 @@ void MainWindow::exportBatch(const QStringList& paths) {
     }
 
     int exported = 0;
+    auto cancel = std::make_shared<std::atomic<bool>>(false);
     for (int i = 0; i < paths.size(); ++i) {
         if (progress.wasCancelled())
             break;
@@ -1381,15 +1383,32 @@ void MainWindow::exportBatch(const QStringList& paths) {
         progress.setValue(i);
         QApplication::processEvents();
 
-        // Load the decoded buffer: use the in-memory buffer for the active
-        // image (already decoded); reload from disk for all others.
+        // Decode the buffer. The active image is already in memory; everything
+        // else is decoded on a worker thread while a nested event loop keeps the
+        // window servicing events — so it stays responsive (no "not responding"
+        // from the window manager) while the modal dialog blocks user input.
+        // The GPU render + encode below are short and must stay on the GUI thread
+        // (renderToImage needs the RHI context).
         LoadResult loaded;
         if (rawPath == currentPath) {
             loaded.fullRes = fullRes;
         } else {
-            loaded = StandardImageLoader::canLoad(rawPath)
-                ? StandardImageLoader::load(rawPath, nullptr)
-                : RawProcessor::load(rawPath, nullptr, nullptr);
+            QFutureWatcher<LoadResult> watcher;
+            QEventLoop wait;
+            connect(&watcher, &QFutureWatcher<LoadResult>::finished, &wait, &QEventLoop::quit);
+            connect(&progress, &BatchProgressDialog::cancelRequested, &wait, [&] {
+                cancel->store(true); // abort the in-flight decode
+                wait.quit();
+            });
+            watcher.setFuture(QtConcurrent::run([rawPath, cancel]() -> LoadResult {
+                return StandardImageLoader::canLoad(rawPath)
+                    ? StandardImageLoader::load(rawPath, cancel)
+                    : RawProcessor::load(rawPath, nullptr, cancel);
+            }));
+            wait.exec();
+            if (progress.wasCancelled())
+                break; // leave the future to finish and be discarded (cancel is set)
+            loaded = watcher.result();
             if (!loaded.error.isEmpty())
                 continue;
         }

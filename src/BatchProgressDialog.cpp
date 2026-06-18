@@ -27,6 +27,7 @@ BatchProgressDialog::BatchProgressDialog(int total, QWidget* parent)
 
     connect(cancelBtn, &QPushButton::clicked, this, [this] {
         cancelled = true;
+        emit cancelRequested();
         close();
     });
 }
