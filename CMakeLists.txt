@@ -139,6 +139,7 @@ set(CORE_SOURCES
     src/ToneCurveWidget.cpp
     src/ExifPanel.cpp
     src/ImageMetadata.cpp
+    src/FilmStripTooltip.cpp
     src/Histogram.cpp
     src/RawProcessor.cpp
     src/StandardImageLoader.cpp

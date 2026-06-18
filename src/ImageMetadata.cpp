@@ -2,6 +2,8 @@
 #include <cmath>
 #include <libraw/libraw.h>
 #include <QDateTime>
+#include <QJsonArray>
+#include <QJsonObject>
 
 namespace {
 
@@ -121,6 +123,33 @@ QString gpsString(const libraw_gps_info_t& gps) {
 }
 
 } // namespace
+
+QJsonDocument toJson(const ImageMetadata& meta) {
+    QJsonArray rows;
+    for (const auto& [label, value] : meta.rows) {
+        QJsonObject row;
+        row.insert("label", label);
+        row.insert("value", value);
+        rows.append(row);
+    }
+
+    QJsonObject root;
+    root.insert("rows", rows);
+    return QJsonDocument(root);
+}
+
+ImageMetadata fromJson(const QJsonDocument& doc) {
+    ImageMetadata meta;
+    const QJsonArray rows = doc.object().value("rows").toArray();
+    for (const QJsonValue& value : rows) {
+        const QJsonObject row = value.toObject();
+        const QString label = row.value("label").toString();
+        if (label.isEmpty())
+            continue;
+        meta.rows.append(qMakePair(label, row.value("value").toString()));
+    }
+    return meta;
+}
 
 ImageMetadata extractMetadata(const LibRaw& raw) {
     ImageMetadata meta;

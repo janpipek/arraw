@@ -1,5 +1,6 @@
 #pragma once
 #include "UserMetadata.h"
+#include <QSet>
 #include <QString>
 #include <QWidget>
 
@@ -8,6 +9,7 @@ class FilmStripModel;
 class ThumbnailCache;
 class QModelIndex;
 class QImage;
+class QHelpEvent;
 class QMouseEvent;
 
 // Horizontal thumbnail strip for one directory. A thin shell over FilmStripModel
@@ -71,7 +73,9 @@ protected:
 private:
     void requestVisibleThumbnails();
     void updateThumbHeight();
-    bool handleMarkKey(int key);              // maps a culling key to a mark; false if not one
+    bool handleMarkKey(int key); // maps a culling key to a mark; false if not one
+    bool handleTooltip(QHelpEvent* event);
+    void requestTooltipMetadata(const QString& path, const QPoint& globalPos);
     // Ctrl/Shift-click only changes the batch selection, never the active image.
     // Returns true when it handled the press (so the view doesn't move current).
     bool handleModifierClick(QMouseEvent* e);
@@ -86,6 +90,7 @@ private:
     FilmStripModel* model;
     ThumbnailCache* thumbs;
     QString currentDir;
+    QSet<QString> metadataPending;
 
     static QStringList scanImageFiles(const QString& dir);
 };

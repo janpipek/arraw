@@ -1,4 +1,5 @@
 #pragma once
+#include "ImageMetadata.h"
 #include "UserMetadata.h"
 #include <QAbstractListModel>
 #include <QHash>
@@ -28,6 +29,12 @@ public:
     // No-op if the path is not in the current file list.
     void setMarks(const QString& path, const UserMetadata& marks);
 
+    // Attaches cached EXIF metadata to a row for tooltip display.
+    // No-op if the path is not in the current file list.
+    void setMetadata(const QString& path, const ImageMetadata& metadata);
+
+    bool hasMetadata(const QString& path) const { return metadata.contains(path); }
+
     // The marks currently held for a path (defaults if none / unknown path).
     UserMetadata marksFor(const QString& path) const { return marks.value(path); }
 
@@ -39,6 +46,7 @@ public:
 
 private:
     QStringList files;
-    QHash<QString, QImage> thumbnails;  // keyed by path, survives reordering
-    QHash<QString, UserMetadata> marks; // keyed by path, survives reordering
+    QHash<QString, QImage> thumbnails;      // keyed by path, survives reordering
+    QHash<QString, UserMetadata> marks;     // keyed by path, survives reordering
+    QHash<QString, ImageMetadata> metadata; // keyed by path, survives reordering
 };
