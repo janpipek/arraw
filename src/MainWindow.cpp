@@ -10,10 +10,12 @@
 #include "DevelopSession.h"
 #include "ExifPanel.h"
 #include "ExportDialog.h"
+#include "ExportWorkflow.h"
 #include "FilmStrip.h"
 #include "GroupChecklistDialog.h"
 #include "ImageViewport.h"
 #include "LocalAdjustmentPanel.h"
+#include "MainWindowStatus.h"
 #include "SpotRemovalPanel.h"
 #include "ProofingPanel.h"
 #include "RawProcessor.h"
@@ -76,23 +78,6 @@ DevelopSession::SidecarState toSessionSidecarState(SidecarLoadStatus status) {
 
 GlobalAdjustment resolveImageAdjustments(const QString& path, const QRectF& defaultCrop) {
     return XmpSidecar::resolveForImage(path, defaultCrop).data.adjustments;
-}
-
-QString sidecarWriteErrorText(const QString& path) {
-    return "Could not write " + XmpSidecar::pathFor(path);
-}
-
-QString loadedImageStatusText(
-    const QString& path,
-    const ImageBuffer& fullRes,
-    DevelopSession::SidecarState sidecarState) {
-    QString status = QString("%1  —  %2 × %3")
-                         .arg(QFileInfo(path).fileName())
-                         .arg(fullRes.width)
-                         .arg(fullRes.height);
-    if (sidecarState == DevelopSession::SidecarState::ParseError)
-        status += "  —  Sidecar unreadable; defaults applied";
-    return status;
 }
 } // namespace
 
@@ -1367,48 +1352,6 @@ void MainWindow::saveAdjustments() {
     }
 }
 
-// Simple unsharp mask: radius ≈ 1% of image width, amount 0..100.
-// The blur is approximated by a smooth downscale + upscale round-trip,
-// which is much cheaper than a real Gaussian at these radii.
-// Runs in encoded (output-profile) space — Format_RGB888 or Format_RGBA64.
-static QImage applyUnsharpMask(QImage img, int amount) {
-    if (amount == 0)
-        return img;
-    const float a = amount / 100.0f;
-    int r = std::max(1, img.width() / 100);
-    QImage blurred
-        = img.scaled(
-                 img.width() / (r + 1),
-                 img.height() / (r + 1),
-                 Qt::IgnoreAspectRatio,
-                 Qt::SmoothTransformation)
-              .scaled(img.width(), img.height(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
-    if (img.format() == QImage::Format_RGBA64) {
-        for (int y = 0; y < img.height(); ++y) {
-            const auto* src = reinterpret_cast<const quint16*>(img.constScanLine(y));
-            const auto* blr = reinterpret_cast<const quint16*>(blurred.constScanLine(y));
-            auto* dst = reinterpret_cast<quint16*>(img.scanLine(y));
-            for (int x = 0; x < img.width() * 4; ++x) {
-                if ((x & 3) == 3)
-                    continue; // leave alpha alone
-                int v = int(src[x]) + int(a * (int(src[x]) - int(blr[x])));
-                dst[x] = quint16(std::clamp(v, 0, 65535));
-            }
-        }
-        return img;
-    }
-    for (int y = 0; y < img.height(); ++y) {
-        const uchar* src = img.constScanLine(y);
-        const uchar* blr = blurred.constScanLine(y);
-        uchar* dst = img.scanLine(y);
-        for (int x = 0; x < img.width() * 3; ++x) {
-            int v = int(src[x]) + int(a * (int(src[x]) - int(blr[x])));
-            dst[x] = uchar(std::clamp(v, 0, 255));
-        }
-    }
-    return img;
-}
-
 void MainWindow::exportFile() {
     if (!session->fullRes().valid()) {
         QMessageBox::information(this, "Export", "No image loaded.");
@@ -1435,48 +1378,25 @@ void MainWindow::exportFile() {
 
     const ExportOptions opts = optDlg.options();
 
-    QString suffix, filter;
-    switch (opts.format) {
-    case ExportOptions::Format::JPEG:
-        suffix = "jpg";
-        filter = "JPEG (*.jpg *.jpeg)";
-        break;
-    case ExportOptions::Format::PNG:
-        suffix = "png";
-        filter = "PNG (*.png)";
-        break;
-    case ExportOptions::Format::TIFF:
-        suffix = "tif";
-        filter = "TIFF (*.tif *.tiff)";
-        break;
-    }
+    const ExportFormatSpec formatSpec = exportFormatSpec(opts.format);
 
     QFileDialog fileDlg(this, "Export Image", QFileInfo(session->path()).absolutePath());
     fileDlg.setAcceptMode(QFileDialog::AcceptSave);
-    fileDlg.setNameFilter(filter);
-    fileDlg.setDefaultSuffix(suffix);
+    fileDlg.setNameFilter(formatSpec.nameFilter);
+    fileDlg.setDefaultSuffix(formatSpec.suffix);
     if (fileDlg.exec() != QDialog::Accepted)
         return;
 
-    QString path = fileDlg.selectedFiles().constFirst();
-    if (QFileInfo(path).suffix().isEmpty())
-        path += "." + suffix;
+    const QString path = withExportSuffix(fileDlg.selectedFiles().constFirst(), opts.format);
 
     statusLabel->setText("Exporting…");
     QApplication::processEvents(); // repaint the status bar before the render blocks the UI
 
     // Linear working-space render → output profile (lcms2) → sharpen → save.
     QImage out = viewport->renderToImage(session->fullResForExport(), p, opts.width, opts.height);
-    out = toOutputImage(out, opts.profile, opts.bitDepth == 16);
-    out = applyUnsharpMask(std::move(out), opts.sharpening);
+    out = prepareExportImage(std::move(out), opts);
 
-    bool ok;
-    if (opts.format == ExportOptions::Format::JPEG)
-        ok = out.save(path, "JPEG", opts.quality);
-    else
-        ok = out.save(path);
-
-    if (!ok)
+    if (!saveExportImage(out, path, opts))
         QMessageBox::critical(this, "Export Error", "Failed to save " + path);
     else
         statusLabel->setText("Exported: " + QFileInfo(path).fileName());
@@ -1492,13 +1412,6 @@ void MainWindow::exportBatch(const QStringList& paths) {
     if (optDlg.exec() != QDialog::Accepted)
         return;
     const ExportOptions opts = optDlg.options();
-
-    QString suffix;
-    switch (opts.format) {
-    case ExportOptions::Format::JPEG: suffix = "jpg"; break;
-    case ExportOptions::Format::PNG:  suffix = "png"; break;
-    case ExportOptions::Format::TIFF: suffix = "tif"; break;
-    }
 
     const QString outputDir = QFileDialog::getExistingDirectory(
         this, tr("Export to Folder"), QFileInfo(session->path()).absolutePath());
@@ -1578,20 +1491,15 @@ void MainWindow::exportBatch(const QStringList& paths) {
         const int outH = opts.height > 0 ? opts.height : perFileNatural.height();
 
         QImage out = viewport->renderToImage(renderBuf, p, outW, outH);
-        out = toOutputImage(out, opts.profile, opts.bitDepth == 16);
-        out = applyUnsharpMask(std::move(out), opts.sharpening);
+        out = prepareExportImage(std::move(out), opts);
 
-        const QString outPath = outputDir + "/"
-            + QFileInfo(rawPath).completeBaseName() + "." + suffix;
-        const bool ok = opts.format == ExportOptions::Format::JPEG
-            ? out.save(outPath, "JPEG", opts.quality)
-            : out.save(outPath);
+        const QString outPath = batchExportPath(outputDir, rawPath, opts.format);
+        const bool ok = saveExportImage(out, outPath, opts);
 
         if (ok)
             ++exported;
     }
 
     progress.close();
-    statusLabel->setText(
-        tr("Exported %1 of %2 file(s)").arg(exported).arg(paths.size()));
+    statusLabel->setText(batchExportStatusText(exported, paths.size()));
 }

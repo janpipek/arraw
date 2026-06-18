@@ -1,5 +1,5 @@
 #pragma once
-#include "ColorManagement.h"
+#include "ExportOptions.h"
 #include <QDialog>
 
 class QComboBox;
@@ -8,17 +8,6 @@ class QSlider;
 class QCheckBox;
 class QGroupBox;
 class QLabel;
-
-struct ExportOptions {
-    enum class Format { JPEG, PNG, TIFF };
-    Format format = Format::JPEG;
-    int width = 0;
-    int height = 0;
-    int quality = 90;
-    int sharpening = 0;
-    OutputProfile profile = OutputProfile::SRgb;
-    int bitDepth = 8; // 16 only for TIFF
-};
 
 /**
  * Modal dialog that gathers export settings for the current render.

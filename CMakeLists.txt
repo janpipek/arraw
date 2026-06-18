@@ -138,6 +138,7 @@ set(CORE_SOURCES
     src/CollapsiblePane.cpp
     src/ToneCurveWidget.cpp
     src/ExifPanel.cpp
+    src/ExportWorkflow.cpp
     src/ImageMetadata.cpp
     src/FilmStripTooltip.cpp
     src/Histogram.cpp
@@ -165,6 +166,7 @@ set(CORE_SOURCES
     src/SpotRemovalPanel.cpp
     src/BatchPaste.cpp
     src/BatchProgressDialog.cpp
+    src/MainWindowStatus.cpp
 )
 
 add_library(arraw_core STATIC ${CORE_SOURCES})
