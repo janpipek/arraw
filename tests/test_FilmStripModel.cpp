@@ -45,11 +45,25 @@ TEST_CASE("model exposes full path and a null thumbnail before load", "[filmstri
     REQUIRE(model.data(idx, Qt::DecorationRole).value<QImage>().isNull());
 }
 
-TEST_CASE("model offers the filename as the tooltip", "[filmstrip]") {
+TEST_CASE("model offers the filename as the tooltip before metadata is loaded", "[filmstrip]") {
     ensureApp();
     FilmStripModel model;
     model.setFiles({"/photos/a.dng"});
     REQUIRE(model.data(model.index(0), Qt::ToolTipRole).toString() == "a.dng");
+}
+
+TEST_CASE("model formats cached metadata as the tooltip", "[filmstrip][tooltip]") {
+    ensureApp();
+    FilmStripModel model;
+    model.setFiles({"/photos/a.dng"});
+
+    ImageMetadata meta;
+    meta.rows.append(qMakePair(QString("Model"), QString("Leica Q3")));
+    meta.rows.append(qMakePair(QString("ISO"), QString("100")));
+
+    model.setMetadata("/photos/a.dng", meta);
+
+    REQUIRE(model.data(model.index(0), Qt::ToolTipRole).toString() == "a.dng\nLeica Q3\nISO 100");
 }
 
 TEST_CASE("indexForPath locates a known path and rejects an unknown one", "[filmstrip]") {

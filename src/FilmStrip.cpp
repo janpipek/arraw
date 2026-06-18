@@ -1,31 +1,38 @@
 #include "FilmStrip.h"
 #include "FilmStripLayout.h"
 #include "FilmStripModel.h"
+#include "ImageMetadata.h"
 #include "ThumbnailCache.h"
 #include "XmpSidecar.h"
 
 #include <algorithm>
+#include <libraw/libraw.h>
+#include <memory>
+#include <optional>
 #include <QDir>
 #include <QEvent>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFutureWatcher>
 #include <QHBoxLayout>
+#include <QHelpEvent>
 #include <QKeyEvent>
 #include <QListView>
 #include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPointer>
 #include <QScrollBar>
 #include <QSignalBlocker>
 #include <QStyledItemDelegate>
 #include <QTimer>
+#include <QToolTip>
 #include <QtConcurrent>
 
 namespace {
 
-constexpr int kCellPad = 4;         // padding around each thumbnail
-constexpr int kBorderWidth = 2;     // current-item highlight border
+constexpr int kCellPad = 6;         // padding around each thumbnail
+constexpr int kBorderWidth = 4;     // current-item highlight border
 constexpr int kMarksMinHeight = 64; // below this, stars are illegible: swatch only
 
 // Swatch colours for the five labels (None never drawn).
@@ -84,14 +91,15 @@ void paintMarks(
     painter->drawText(bar, Qt::AlignCenter, glyphs);
 }
 
-// Paints aspect-correct thumbnails at the strip's content height.
+// Paints aspect-correct thumbnails inside square filmstrip cells.
 // Active item (current index) gets a full-brightness highlight border;
 // other selected items get a dimmer version so the batch target is visible
 // but the editing focus is unambiguous.
 class ThumbnailDelegate : public QStyledItemDelegate {
 public:
     explicit ThumbnailDelegate(QListView* view, QObject* parent = nullptr)
-        : QStyledItemDelegate(parent), view(view) {}
+        : QStyledItemDelegate(parent),
+          view(view) {}
 
     void setThumbHeight(int h) { thumbHeight = h; }
 
@@ -167,7 +175,7 @@ FilmStrip::FilmStrip(QWidget* parent)
     list->setFlow(QListView::LeftToRight);
     list->setWrapping(false);
     list->setMovement(QListView::Static);
-    list->setUniformItemSizes(false); // cell width varies with aspect
+    list->setUniformItemSizes(true);
     list->setSelectionMode(QAbstractItemView::ExtendedSelection);
     list->setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);
     list->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -278,7 +286,7 @@ bool FilmStrip::navigateBy(int delta) {
     if (next < 0 || next >= model->rowCount())
         return false;
     const QModelIndex idx = model->index(next);
-    list->setCurrentIndex(idx);                               // fires currentChanged → fileSelected
+    list->setCurrentIndex(idx); // fires currentChanged → fileSelected
     list->selectionModel()->select(idx, QItemSelectionModel::ClearAndSelect);
     list->scrollTo(idx, QAbstractItemView::PositionAtCenter); // keyboard nav centres
     return true;
@@ -411,6 +419,9 @@ bool FilmStrip::eventFilter(QObject* watched, QEvent* event) {
     if (watched == list->viewport() && event->type() == QEvent::Resize)
         updateThumbHeight();
 
+    if (watched == list->viewport() && event->type() == QEvent::ToolTip)
+        return handleTooltip(static_cast<QHelpEvent*>(event));
+
     // A Ctrl/Shift-click is a batch-selection gesture, not a navigation. Handle it
     // ourselves so the active image (current index) stays put — otherwise the view
     // would move current to the clicked item and MainWindow would reload it.
@@ -428,6 +439,60 @@ bool FilmStrip::eventFilter(QObject* watched, QEvent* event) {
             return true;
     }
     return QWidget::eventFilter(watched, event);
+}
+
+bool FilmStrip::handleTooltip(QHelpEvent* event) {
+    const QModelIndex idx = list->indexAt(event->pos());
+    if (!idx.isValid()) {
+        QToolTip::hideText();
+        return true;
+    }
+
+    const QString path = idx.data(FilmStripModel::PathRole).toString();
+    if (!model->hasMetadata(path)) {
+        if (const std::optional<ImageMetadata> cached = ThumbnailCache::loadMetadata(path))
+            model->setMetadata(path, *cached);
+        else
+            requestTooltipMetadata(path, event->globalPos());
+    }
+
+    QToolTip::showText(event->globalPos(), idx.data(Qt::ToolTipRole).toString(), list->viewport());
+    return true;
+}
+
+void FilmStrip::requestTooltipMetadata(const QString& path, const QPoint& globalPos) {
+    if (metadataPending.contains(path))
+        return;
+    metadataPending.insert(path);
+
+    QPointer<FilmStrip> self(this);
+    (void) QtConcurrent::run([self, path, globalPos]() {
+        std::optional<ImageMetadata> metadata;
+        auto raw = std::make_unique<LibRaw>();
+        if (raw->open_file(path.toLocal8Bit().constData()) == LIBRAW_SUCCESS) {
+            metadata = extractMetadata(*raw);
+            ThumbnailCache::storeMetadata(path, *metadata);
+        }
+
+        if (!self)
+            return;
+
+        QMetaObject::invokeMethod(
+            self,
+            [self, path, globalPos, metadata = std::move(metadata)]() mutable {
+                if (!self)
+                    return;
+                self->metadataPending.remove(path);
+                if (!metadata.has_value())
+                    return;
+                self->model->setMetadata(path, *metadata);
+                QToolTip::showText(
+                    globalPos,
+                    self->model->indexForPath(path).data(Qt::ToolTipRole).toString(),
+                    self->list->viewport());
+            },
+            Qt::QueuedConnection);
+    });
 }
 
 bool FilmStrip::handleMarkKey(int key) {
