@@ -133,12 +133,14 @@ public:
             const int o = kBorderWidth / 2;
             painter->drawRect(option.rect.adjusted(o, o, -o - 1, -o - 1));
         } else if (selected) {
-            // Selected-but-not-active: dimmer border (batch target)
+            // Selected-but-not-active: same weight as active but at 60% opacity so
+            // the batch target is clearly visible while editing focus stays unambiguous.
             QColor dim = option.palette.highlight().color();
-            dim.setAlphaF(0.45);
-            painter->setPen(QPen(dim, 1));
+            dim.setAlphaF(0.6);
+            const int o = kBorderWidth / 2;
+            painter->setPen(QPen(dim, kBorderWidth));
             painter->setBrush(Qt::NoBrush);
-            painter->drawRect(option.rect.adjusted(1, 1, -2, -2));
+            painter->drawRect(option.rect.adjusted(o, o, -o - 1, -o - 1));
         }
         painter->restore();
     }
