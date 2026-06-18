@@ -242,9 +242,23 @@ MainWindow::MainWindow(QWidget* parent)
             pushGlobalAdjustmentCommand(before, after);
         });
 
-    connect(adjPanel, &AdjustmentPanel::paramsChanged, this, [this] { pushParamsToViewport(); });
+    connect(
+        adjPanel,
+        &AdjustmentPanel::paramsChanged,
+        this,
+        [this](const GlobalAdjustment& params) {
+            session->setParams(applyGroups(session->params(), params, allGroups()));
+            pushParamsToViewport();
+        });
 
-    connect(localPanel, &LocalAdjustmentPanel::changed, this, [this] { pushParamsToViewport(); });
+    connect(
+        localPanel,
+        &LocalAdjustmentPanel::changed,
+        this,
+        [this](const std::vector<LocalAdjustment>& localAdjustments) {
+            session->setLocalAdjustments(localAdjustments);
+            pushParamsToViewport();
+        });
 
     // Develop-thumbnail regeneration is debounced: every param change restarts the
     // timer (in pushParamsToViewport), so it fires only once edits settle.
@@ -936,9 +950,13 @@ void MainWindow::onLoadFinished() {
 }
 
 void MainWindow::applyPendingParams() {
-    adjPanel->setParams(pendingParams);
-    localPanel->setLocalAdjustments(pendingParams.localAdjustments);
-    pushParamsToViewport();
+    session->setParams(pendingParams);
+    syncSessionToEditors();
+    {
+        QSignalBlocker block(spotPanel);
+        spotPanel->setSpots(session->params().spots);
+    }
+    viewport->setSpots(session->params().spots);
 }
 
 void MainWindow::applyLoadResult(const QString& path, const LoadResult& result) {
@@ -950,16 +968,8 @@ void MainWindow::applyLoadResult(const QString& path, const LoadResult& result) 
     GlobalAdjustment saved = XmpSidecar::resolveAdjustments(path, result.defaultCrop);
     session->setLoadedImage(path, result, saved, DevelopSession::SidecarState::Loaded);
     session->setBaseLook(true);
-    adjPanel->setParams(saved);
-    localPanel->setLocalAdjustments(saved.localAdjustments);
-    // setSpots emits changed → rebuildSpottedBuffers(false); but buffers are
-    // already valid here and we rebuild fully below, so that preview rebuild is
-    // a benign no-op if it fires (the session's baseLook is already set).
-    spotPanel->setSpots(saved.spots);
-    viewport->setSpots(saved.spots);
-
-    rebuildSpottedBuffers(true);
-    pushParamsToViewport();
+    syncSessionToEditors();
+    syncSessionSpotsToEditors(true);
 
     exifPanel->setMetadata(result.metadata);
     undoStack->clear();
@@ -1192,15 +1202,18 @@ void MainWindow::rebuildPresetsMenu() {
 }
 
 GlobalAdjustment MainWindow::currentParams() const {
-    GlobalAdjustment p = adjPanel->params();
-    p.localAdjustments = localPanel->localAdjustments();
-    p.spots = spotPanel->spots();
-    return p;
+    return session->params();
 }
 
 void MainWindow::syncSessionToEditors() {
-    adjPanel->setParams(session->params());
-    localPanel->setLocalAdjustments(session->params().localAdjustments);
+    {
+        QSignalBlocker block(adjPanel);
+        adjPanel->setParams(session->params());
+    }
+    {
+        QSignalBlocker block(localPanel);
+        localPanel->setLocalAdjustments(session->params().localAdjustments);
+    }
     viewport->setAdjustments(session->params());
     if (thumbTimer)
         thumbTimer->start();
@@ -1226,7 +1239,6 @@ void MainWindow::pushGlobalAdjustmentCommand(
 }
 
 void MainWindow::pushParamsToViewport() {
-    session->setParams(currentParams());
     viewport->setAdjustments(session->params());
     if (thumbTimer)
         thumbTimer->start(); // refresh the develop thumbnail once edits settle

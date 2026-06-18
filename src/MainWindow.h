@@ -103,10 +103,10 @@ private:
     void applyPreset(const DevelopPreset& preset);
     void rebuildPresetsMenu(); // re-list saved presets after save/delete
 
-    // The full develop params = global edits (adjPanel) + local adjustments
-    // (localPanel) + spots (spotPanel) merged into one GlobalAdjustment for save/export.
+    // The full develop params for save/export. DevelopSession is canonical;
+    // panels mirror/edit this state but do not answer "what is current?"
     GlobalAdjustment currentParams() const;
-    // Feed currentParams() to the viewport (after a global or local change).
+    // Feed the session params to the viewport after an edit.
     void pushParamsToViewport();
 
     // Re-render the current image's filmstrip thumbnail through the develop
