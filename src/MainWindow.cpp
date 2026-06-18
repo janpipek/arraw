@@ -67,19 +67,24 @@
 class AdjustmentCommand : public QUndoCommand {
 public:
     AdjustmentCommand(
-        AdjustmentPanel* panel, const GlobalAdjustment& before, const GlobalAdjustment& after)
-        : panel(panel),
+        DevelopSession* session,
+        MainWindow* mainWindow,
+        const GlobalAdjustment& before,
+        const GlobalAdjustment& after)
+        : session(session),
+          mainWindow(mainWindow),
           before(before),
           after(after) {
         setText("Adjust");
     }
 
-    void undo() override { panel->setParams(before); }
+    void undo() override;
 
-    void redo() override { panel->setParams(after); }
+    void redo() override;
 
 private:
-    AdjustmentPanel* panel;
+    DevelopSession* session;
+    MainWindow* mainWindow;
     GlobalAdjustment before, after;
 };
 
@@ -143,6 +148,17 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+void AdjustmentCommand::undo() {
+    session->setParams(before);
+    mainWindow->syncSessionToEditors();
+}
+
+void AdjustmentCommand::redo() {
+    session->setParams(after);
+    mainWindow->syncSessionToEditors();
+}
+
+// ---------------------------------------------------------------------------
 void LocalAdjustmentCommand::undo() {
     session->setLocalAdjustments(before);
     mainWindow->syncSessionToEditors();
@@ -187,7 +203,7 @@ MainWindow::MainWindow(QWidget* parent)
             after.cropRect = rect;
             after.cropConstrained = constrained;
             if (after != before)
-                undoStack->push(new AdjustmentCommand(adjPanel, before, after));
+                undoStack->push(new AdjustmentCommand(session, this, before, after));
         });
 
     connect(viewport, &ImageViewport::rotationCommitted, this, [this](float degrees) {
@@ -195,7 +211,7 @@ MainWindow::MainWindow(QWidget* parent)
         GlobalAdjustment after = before;
         after.rotation = degrees;
         if (after != before)
-            undoStack->push(new AdjustmentCommand(adjPanel, before, after));
+            undoStack->push(new AdjustmentCommand(session, this, before, after));
     });
 
     connect(viewport, &ImageViewport::whiteBalanceCommitted, this, [this](float kelvin, float tint) {
@@ -204,7 +220,7 @@ MainWindow::MainWindow(QWidget* parent)
         after.temperature = kelvin;
         after.tint = tint;
         if (after != before)
-            undoStack->push(new AdjustmentCommand(adjPanel, before, after));
+            undoStack->push(new AdjustmentCommand(session, this, before, after));
     });
 
     connect(viewport, &ImageViewport::activeToolChanged, this, [this](ImageViewport::ActiveTool) {
@@ -216,7 +232,7 @@ MainWindow::MainWindow(QWidget* parent)
         &AdjustmentPanel::adjustmentCommitted,
         this,
         [this](const GlobalAdjustment& before, const GlobalAdjustment& after) {
-            undoStack->push(new AdjustmentCommand(adjPanel, before, after));
+            undoStack->push(new AdjustmentCommand(session, this, before, after));
         });
 
     connect(adjPanel, &AdjustmentPanel::paramsChanged, this, [this] { pushParamsToViewport(); });
@@ -1032,7 +1048,7 @@ void MainWindow::rebuildDisplayLut() {
 void MainWindow::applyDevelopChange(const GlobalAdjustment& after) {
     const GlobalAdjustment before = adjPanel->params();
     if (after != before)
-        undoStack->push(new AdjustmentCommand(adjPanel, before, after));
+        undoStack->push(new AdjustmentCommand(session, this, before, after));
 }
 
 void MainWindow::copySettings() {
