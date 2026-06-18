@@ -162,6 +162,7 @@ set(CORE_SOURCES
     src/Spot.cpp
     src/SpotRemovalPanel.cpp
     src/BatchPaste.cpp
+    src/BatchProgressDialog.cpp
 )
 
 add_library(arraw_core STATIC ${CORE_SOURCES})

@@ -1,5 +1,7 @@
 #include "MainWindow.h"
 #include "AdjustmentPanel.h"
+#include "BatchPaste.h"
+#include "BatchProgressDialog.h"
 #include "CollapsiblePane.h"
 #include "ColorManagement.h"
 #include "CropGeometry.h"
@@ -64,7 +66,9 @@ public:
         AdjustmentPanel* panel, const GlobalAdjustment& before, const GlobalAdjustment& after)
         : panel(panel),
           before(before),
-          after(after) {}
+          after(after) {
+        setText("Adjust");
+    }
 
     void undo() override { panel->setParams(before); }
 
@@ -87,7 +91,9 @@ public:
         std::vector<LocalAdjustment> after)
         : panel(panel),
           before(std::move(before)),
-          after(std::move(after)) {}
+          after(std::move(after)) {
+        setText("Adjust Local");
+    }
 
     void undo() override { panel->setLocalAdjustments(before); }
 
@@ -109,7 +115,9 @@ public:
         : panel(panel),
           mainWindow(mw),
           before(std::move(before)),
-          after(std::move(after)) {}
+          after(std::move(after)) {
+        setText("Edit Spot");
+    }
 
     void undo() override {
         panel->setSpots(before);
@@ -1056,8 +1064,27 @@ void MainWindow::pasteSettings() {
     if (dlg.exec() != QDialog::Accepted)
         return;
 
-    applyDevelopChange(
-        applyGroups(adjPanel->params(), settingsClipboard->snapshot, dlg.selectedGroups()));
+    const GroupSelection chosen = dlg.selectedGroups();
+    const QStringList targets = filmStrip->selectedPaths();
+
+    if (targets.size() <= 1) {
+        // Single file: apply to the active image in memory only.
+        applyDevelopChange(applyGroups(adjPanel->params(), settingsClipboard->snapshot, chosen));
+        return;
+    }
+
+    // Multi-file: read before-state from each file's sidecar (or from memory
+    // for the active file, which may have unsaved edits), then push one macro
+    // undo step that auto-saves XMP for all targets (ADR 0018).
+    QVector<BatchPasteRecord> records;
+    records.reserve(targets.size());
+    for (const QString& path : targets) {
+        const GlobalAdjustment before
+            = (path == currentPath) ? adjPanel->params()
+                                    : XmpSidecar::loadAdjustments(path);
+        records.append({path, before, applyGroups(before, settingsClipboard->snapshot, chosen)});
+    }
+    undoStack->push(new BatchAdjustmentCommand(adjPanel, currentPath, records));
 }
 
 void MainWindow::saveCurrentAsPreset() {
@@ -1237,6 +1264,12 @@ void MainWindow::exportFile() {
         return;
     }
 
+    const QStringList targets = filmStrip->selectedPaths();
+    if (targets.size() > 1) {
+        exportBatch(targets);
+        return;
+    }
+
     viewport->commitActiveTool(); // fold any pending crop into the params first
     const GlobalAdjustment p = currentParams();
 
@@ -1296,4 +1329,87 @@ void MainWindow::exportFile() {
         QMessageBox::critical(this, "Export Error", "Failed to save " + path);
     else
         statusLabel->setText("Exported: " + QFileInfo(path).fileName());
+}
+
+void MainWindow::exportBatch(const QStringList& paths) {
+    viewport->commitActiveTool();
+    const GlobalAdjustment activeParams = currentParams();
+    const QSize natural = crop::cropPixelSize(fullRes.width, fullRes.height, activeParams.cropRect);
+
+    ExportDialog optDlg(natural.width(), natural.height(), this);
+    if (optDlg.exec() != QDialog::Accepted)
+        return;
+    const ExportOptions opts = optDlg.options();
+
+    QString suffix;
+    switch (opts.format) {
+    case ExportOptions::Format::JPEG: suffix = "jpg"; break;
+    case ExportOptions::Format::PNG:  suffix = "png"; break;
+    case ExportOptions::Format::TIFF: suffix = "tif"; break;
+    }
+
+    const QString outputDir = QFileDialog::getExistingDirectory(
+        this, tr("Export to Folder"), QFileInfo(currentPath).absolutePath());
+    if (outputDir.isEmpty())
+        return;
+
+    BatchProgressDialog progress(paths.size(), this);
+    progress.show();
+    QApplication::processEvents();
+
+    int exported = 0;
+    for (int i = 0; i < paths.size(); ++i) {
+        if (progress.wasCancelled())
+            break;
+
+        const QString& rawPath = paths[i];
+        progress.setCurrentFile(QFileInfo(rawPath).fileName());
+        progress.setValue(i);
+        QApplication::processEvents();
+
+        // Load the decoded buffer: use the in-memory buffer for the active
+        // image (already decoded); reload from disk for all others.
+        LoadResult loaded;
+        if (rawPath == currentPath) {
+            loaded.fullRes = fullRes;
+        } else {
+            loaded = StandardImageLoader::canLoad(rawPath)
+                ? StandardImageLoader::load(rawPath, nullptr)
+                : RawProcessor::load(rawPath, nullptr, nullptr);
+            if (!loaded.error.isEmpty())
+                continue;
+        }
+
+        const GlobalAdjustment p = (rawPath == currentPath)
+            ? activeParams
+            : XmpSidecar::resolveAdjustments(rawPath, QRectF(0, 0, 1, 1));
+
+        // Apply spots stored in the adjustment (ADR 0017).
+        const ImageBuffer renderBuf = p.spots.empty()
+            ? loaded.fullRes
+            : applySpots(loaded.fullRes, p.spots);
+
+        // Compute output size: use per-file natural size when opts is zero.
+        const QSize perFileNatural = crop::cropPixelSize(
+            loaded.fullRes.width, loaded.fullRes.height, p.cropRect);
+        const int outW = opts.width  > 0 ? opts.width  : perFileNatural.width();
+        const int outH = opts.height > 0 ? opts.height : perFileNatural.height();
+
+        QImage out = viewport->renderToImage(renderBuf, p, outW, outH);
+        out = toOutputImage(out, opts.profile, opts.bitDepth == 16);
+        out = applyUnsharpMask(std::move(out), opts.sharpening);
+
+        const QString outPath = outputDir + "/"
+            + QFileInfo(rawPath).completeBaseName() + "." + suffix;
+        const bool ok = opts.format == ExportOptions::Format::JPEG
+            ? out.save(outPath, "JPEG", opts.quality)
+            : out.save(outPath);
+
+        if (ok)
+            ++exported;
+    }
+
+    progress.close();
+    statusLabel->setText(
+        tr("Exported %1 of %2 file(s)").arg(exported).arg(paths.size()));
 }

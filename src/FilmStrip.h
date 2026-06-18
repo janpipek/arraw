@@ -38,6 +38,11 @@ public:
     // reflect the current file's rating/label.
     UserMetadata currentMarks() const;
 
+    // All file paths currently in the selection (may be more than one when
+    // the user has Ctrl/Shift-clicked). The active file (currentPath) is
+    // always a member of this list when any selection exists.
+    QStringList selectedPaths() const;
+
     QString directory() const { return currentDir; }
 
     // Modest default height so the dock doesn't inherit QListView's tall hint.
@@ -49,7 +54,12 @@ public slots:
     void promptForDirectory();
 
 signals:
+    // Emitted when the active image changes (last single-clicked item).
+    // Always triggers image load in MainWindow.
     void fileSelected(const QString& path);
+    // Emitted whenever the multi-selection changes (add/remove with Ctrl/Shift).
+    // Batch operations (paste, export) read this to find their target set.
+    void selectionChanged(const QStringList& paths);
     void directoryChanged(const QString& dir);
 
 protected:

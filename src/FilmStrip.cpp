@@ -83,12 +83,14 @@ void paintMarks(
     painter->drawText(bar, Qt::AlignCenter, glyphs);
 }
 
-// Paints aspect-correct thumbnails at the strip's content height, with a
-// highlight border on the current item. Cell width comes from FilmStripLayout
-// so the geometry stays in one tested place.
+// Paints aspect-correct thumbnails at the strip's content height.
+// Active item (current index) gets a full-brightness highlight border;
+// other selected items get a dimmer version so the batch target is visible
+// but the editing focus is unambiguous.
 class ThumbnailDelegate : public QStyledItemDelegate {
 public:
-    using QStyledItemDelegate::QStyledItemDelegate;
+    explicit ThumbnailDelegate(QListView* view, QObject* parent = nullptr)
+        : QStyledItemDelegate(parent), view(view) {}
 
     void setThumbHeight(int h) { thumbHeight = h; }
 
@@ -102,6 +104,7 @@ public:
         const override {
         painter->save();
         const bool selected = option.state & QStyle::State_Selected;
+        const bool active = selected && (index == view->currentIndex());
 
         const QRect inner = option.rect.adjusted(kCellPad, kCellPad, -kCellPad, -kCellPad);
         const QImage img = index.data(Qt::DecorationRole).value<QImage>();
@@ -123,15 +126,24 @@ public:
             index.data(FilmStripModel::RatingRole).toInt(),
             ColourLabel(index.data(FilmStripModel::LabelRole).toInt()));
 
-        if (selected) {
+        if (active) {
+            // Active (editing) item: full-brightness border
             painter->setPen(QPen(option.palette.highlight().color(), kBorderWidth));
-            painter->setBrush(Qt::NoBrush); // paintMarks left the swatch colour set
+            painter->setBrush(Qt::NoBrush);
             const int o = kBorderWidth / 2;
             painter->drawRect(option.rect.adjusted(o, o, -o - 1, -o - 1));
+        } else if (selected) {
+            // Selected-but-not-active: dimmer border (batch target)
+            QColor dim = option.palette.highlight().color();
+            dim.setAlphaF(0.45);
+            painter->setPen(QPen(dim, 1));
+            painter->setBrush(Qt::NoBrush);
+            painter->drawRect(option.rect.adjusted(1, 1, -2, -2));
         }
         painter->restore();
     }
 
+    QListView* view;
     int thumbHeight = 96;
 };
 
@@ -148,12 +160,12 @@ FilmStrip::FilmStrip(QWidget* parent)
 
     list = new QListView(this);
     list->setModel(model);
-    list->setItemDelegate(new ThumbnailDelegate(list));
+    list->setItemDelegate(new ThumbnailDelegate(list, list));
     list->setFlow(QListView::LeftToRight);
     list->setWrapping(false);
     list->setMovement(QListView::Static);
     list->setUniformItemSizes(false); // cell width varies with aspect
-    list->setSelectionMode(QAbstractItemView::SingleSelection);
+    list->setSelectionMode(QAbstractItemView::ExtendedSelection);
     list->setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);
     list->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     list->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
@@ -170,6 +182,14 @@ FilmStrip::FilmStrip(QWidget* parent)
         [this](const QModelIndex& current, const QModelIndex&) {
             if (current.isValid())
                 emit fileSelected(current.data(FilmStripModel::PathRole).toString());
+        });
+
+    connect(
+        list->selectionModel(),
+        &QItemSelectionModel::selectionChanged,
+        this,
+        [this](const QItemSelection&, const QItemSelection&) {
+            emit selectionChanged(selectedPaths());
         });
 
     // Centre the clicked thumbnail — but only after the click finishes
@@ -225,13 +245,24 @@ void FilmStrip::setCurrentFile(const QString& path) {
         return;
     QSignalBlocker block(list->selectionModel()); // don't re-enter loadImage
     list->setCurrentIndex(idx);
+    list->selectionModel()->select(idx, QItemSelectionModel::ClearAndSelect);
     list->scrollTo(idx, QAbstractItemView::PositionAtCenter);
     requestVisibleThumbnails();
 }
 
+QStringList FilmStrip::selectedPaths() const {
+    QStringList paths;
+    for (const QModelIndex& idx : list->selectionModel()->selectedIndexes())
+        paths << idx.data(FilmStripModel::PathRole).toString();
+    return paths;
+}
+
 void FilmStrip::selectFirst() {
-    if (model->rowCount() > 0)
-        list->setCurrentIndex(model->index(0)); // fires currentChanged → fileSelected
+    if (model->rowCount() > 0) {
+        const QModelIndex idx = model->index(0);
+        list->setCurrentIndex(idx); // fires currentChanged → fileSelected
+        list->selectionModel()->select(idx, QItemSelectionModel::ClearAndSelect);
+    }
 }
 
 void FilmStrip::setThumbnail(const QString& path, const QImage& image) {
@@ -245,6 +276,7 @@ bool FilmStrip::navigateBy(int delta) {
         return false;
     const QModelIndex idx = model->index(next);
     list->setCurrentIndex(idx);                               // fires currentChanged → fileSelected
+    list->selectionModel()->select(idx, QItemSelectionModel::ClearAndSelect);
     list->scrollTo(idx, QAbstractItemView::PositionAtCenter); // keyboard nav centres
     return true;
 }

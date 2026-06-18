@@ -1,4 +1,5 @@
 #include "BatchPaste.h"
+#include "AdjustmentPanel.h"
 #include "XmpSidecar.h"
 
 BatchAdjustmentCommand::BatchAdjustmentCommand(
@@ -9,11 +10,17 @@ BatchAdjustmentCommand::BatchAdjustmentCommand(
 }
 
 void BatchAdjustmentCommand::redo() {
-    for (const auto& rec : records)
+    for (const auto& rec : records) {
         XmpSidecar::saveAdjustments(rec.path, rec.after);
+        if (panel && rec.path == activePath)
+            panel->setParams(rec.after);
+    }
 }
 
 void BatchAdjustmentCommand::undo() {
-    for (const auto& rec : records)
+    for (const auto& rec : records) {
         XmpSidecar::saveAdjustments(rec.path, rec.before);
+        if (panel && rec.path == activePath)
+            panel->setParams(rec.before);
+    }
 }

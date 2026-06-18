@@ -54,6 +54,7 @@ private slots:
     void openFile();
     void saveAdjustments();
     void exportFile();
+    void exportBatch(const QStringList& paths);
     void onLoadFinished();
     void onFullResNeeded();
 
