@@ -50,11 +50,13 @@
 #include <QStyle>
 #include <QTabWidget>
 #include <QTimer>
+#include <QElapsedTimer>
 #include <QToolBar>
 #include <QToolButton>
 #include <QUndoCommand>
 #include <QUndoStack>
 #include <QVBoxLayout>
+#include <QWindow>
 #include <QtConcurrent/QtConcurrent>
 
 // ---------------------------------------------------------------------------
@@ -1355,7 +1357,19 @@ void MainWindow::exportBatch(const QStringList& paths) {
 
     BatchProgressDialog progress(paths.size(), this);
     progress.show();
-    QApplication::processEvents();
+    // A freshly shown top-level window is not painted within a single
+    // processEvents() pass: the map/expose handshake with the window manager is
+    // asynchronous. Without waiting, the first (multi-second) decode below blocks
+    // the UI thread while the dialog is still blank, so it only appears once the
+    // first file is done. Spin the loop until the window is actually on screen,
+    // bounded so a missing compositor can't hang us.
+    if (QWindow* handle = progress.windowHandle()) {
+        QElapsedTimer t;
+        t.start();
+        while (!handle->isExposed() && t.elapsed() < 1000)
+            QApplication::processEvents(
+                QEventLoop::WaitForMoreEvents | QEventLoop::ExcludeUserInputEvents, 20);
+    }
 
     int exported = 0;
     for (int i = 0; i < paths.size(); ++i) {
