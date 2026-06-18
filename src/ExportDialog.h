@@ -20,6 +20,14 @@ struct ExportOptions {
     int bitDepth = 8; // 16 only for TIFF
 };
 
+/**
+ * Modal dialog that gathers export settings for the current render.
+ *
+ * ExportDialog owns only the temporary UI state for one export operation:
+ * format, dimensions, quality, sharpening, output profile, and TIFF bit depth.
+ * Rendering and file writing stay with MainWindow/ImageViewport and the colour
+ * pipeline.
+ */
 class ExportDialog : public QDialog {
     Q_OBJECT
     Q_DISABLE_COPY_MOVE(ExportDialog)

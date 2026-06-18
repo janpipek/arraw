@@ -12,6 +12,15 @@
 
 class ViewportOverlay;
 
+/**
+ * GPU-backed image view and on-image editing surface.
+ *
+ * ImageViewport displays the current preview/full-resolution textures through
+ * RendererCore and handles gestures for crop, straighten, white balance, local
+ * mask geometry, and spot handles. It owns interaction state and renderer
+ * resources, but the durable develop state is committed back to DevelopSession
+ * through MainWindow.
+ */
 class ImageViewport : public QRhiWidget {
     Q_OBJECT
     Q_DISABLE_COPY_MOVE(ImageViewport)

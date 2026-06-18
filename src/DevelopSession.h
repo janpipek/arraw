@@ -6,6 +6,14 @@
 #include <QObject>
 #include <QString>
 
+/**
+ * Canonical state for the image currently open in the develop view.
+ *
+ * DevelopSession owns the active file path, decoded buffers, user metadata,
+ * read-only EXIF metadata, develop parameters, sidecar status, and dirty
+ * baselines. GUI widgets should mirror or edit this state through MainWindow;
+ * they should not be treated as the source of truth for "the current image".
+ */
 class DevelopSession : public QObject {
     Q_OBJECT
     Q_DISABLE_COPY_MOVE(DevelopSession)

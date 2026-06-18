@@ -12,9 +12,14 @@ class QImage;
 class QHelpEvent;
 class QMouseEvent;
 
-// Horizontal thumbnail strip for one directory. A thin shell over FilmStripModel
-// + QListView; the testable logic lives in FilmStripModel / FilmStripLayout.
-// Public API mirrors the former FileBrowser so MainWindow wiring is unchanged.
+/**
+ * Horizontal thumbnail strip for the open directory.
+ *
+ * FilmStrip is a thin QWidget shell over FilmStripModel, QListView, thumbnail
+ * loading, and selection gestures. It owns directory-level browser state and may
+ * write culling marks for non-active files; when the active file changes,
+ * DevelopSession remains the canonical owner of that image's metadata.
+ */
 class FilmStrip : public QWidget {
     Q_OBJECT
     Q_DISABLE_COPY_MOVE(FilmStrip)

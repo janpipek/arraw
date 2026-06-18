@@ -4,11 +4,14 @@
 
 #include <QDialog>
 
-// The "pick which Develop Groups travel" checklist behind Copy Settings, Paste
-// Settings, and Save Preset (Milestone 8). One checkbox per *available* group,
-// so the returned selection is structurally bounded by `available` — that is how
-// paste "narrows but never widens" the copied set. Checkbox objectNames are the
-// group keys (developGroupKey), for headless testing.
+/**
+ * Checklist dialog for choosing which Develop Groups travel together.
+ *
+ * GroupChecklistDialog is used by Copy Settings, Paste Settings, and Save Preset.
+ * It presents one checkbox per available group and returns a selection bounded
+ * by that availability, which lets paste narrow but never widen the copied set.
+ * Checkbox objectNames are developGroupKey values for headless tests.
+ */
 class GroupChecklistDialog : public QDialog {
     Q_OBJECT
     Q_DISABLE_COPY_MOVE(GroupChecklistDialog)

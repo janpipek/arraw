@@ -32,6 +32,14 @@ class QTimer;
 class QMenu;
 class DevelopSession;
 
+/**
+ * Top-level Qt Widgets shell for the editor.
+ *
+ * MainWindow owns the visible widgets, menus, docks, undo stack, decode jobs,
+ * and signal wiring. It is intentionally GUI glue: the current image state
+ * lives in DevelopSession, while editor panels and ImageViewport mirror that
+ * state and report user intent back through signals.
+ */
 class MainWindow : public QMainWindow {
     Q_OBJECT
     Q_DISABLE_COPY_MOVE(MainWindow)

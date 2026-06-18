@@ -17,6 +17,14 @@ class QEvent;
 class Histogram;
 class AdjustmentSpinBox;
 
+/**
+ * Global develop editor shown in the Adjustments tab.
+ *
+ * AdjustmentPanel presents sliders, spin boxes, histograms, and tone-curve
+ * controls for GlobalAdjustment. It keeps only the transient widget copy needed
+ * to emit live changes and commit boundaries; DevelopSession owns the canonical
+ * parameters for the active image.
+ */
 class AdjustmentPanel : public QWidget {
     Q_OBJECT
     Q_DISABLE_COPY_MOVE(AdjustmentPanel)

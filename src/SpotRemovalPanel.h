@@ -6,9 +6,14 @@
 class QListWidget;
 class QPushButton;
 
-// Panel for managing Spot Removal entries (docs/adr/0017). Each Spot is a
-// clone-based pixel replacement applied before the shader. This panel owns the
-// spot list; geometry is placed and dragged on the image (ImageViewport).
+/**
+ * Panel for managing Spot Removal entries (docs/adr/0017).
+ *
+ * Each Spot describes a clone-based pixel replacement applied before the shader.
+ * SpotRemovalPanel owns the editable list copy and selection UI; ImageViewport
+ * edits spot geometry on the image, and DevelopSession owns the active image's
+ * canonical spots plus the clean/spotted buffers.
+ */
 class SpotRemovalPanel : public QWidget {
     Q_OBJECT
     Q_DISABLE_COPY_MOVE(SpotRemovalPanel)
