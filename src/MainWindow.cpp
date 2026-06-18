@@ -7,6 +7,7 @@
 #include "CropGeometry.h"
 #include "DevelopGroup.h"
 #include "DevelopPreset.h"
+#include "DevelopSession.h"
 #include "ExifPanel.h"
 #include "ExportDialog.h"
 #include "FilmStrip.h"
@@ -145,6 +146,7 @@ MainWindow::MainWindow(QWidget* parent)
     setWindowTitle("arraw");
 
     viewport = new ImageViewport(this);
+    session = new DevelopSession(this);
     undoStack = new QUndoStack(this);
     setCentralWidget(viewport);
 
@@ -257,8 +259,9 @@ MainWindow::MainWindow(QWidget* parent)
         });
     // Viewport signals: click places a new spot; handle drags move dest/source.
     connect(viewport, &ImageViewport::spotRequested, this, [this](QPointF destBufPx) {
-        if (!preview.valid())
+        if (!session->preview().valid())
             return;
+        const ImageBuffer& preview = session->preview();
         const double offset = 0.1 * std::min(preview.width, preview.height);
         const Spot s{
             .destination = destBufPx,
@@ -825,7 +828,7 @@ void MainWindow::loadImage(const QString& path) {
     loadCancel = std::make_shared<std::atomic<bool>>(false);
     auto cancel = loadCancel;
 
-    currentPath = path;
+    session->beginLoading(path);
     exifPanel->clear();
     viewport->cancelActiveTool(); // discard any in-progress tool from the last image
     viewport->setOriginalImageSize(0, 0);
@@ -858,7 +861,7 @@ void MainWindow::loadImage(const QString& path) {
             QMetaObject::invokeMethod(
                 this,
                 [this, path, buf = std::move(buf)]() mutable {
-                    if (currentPath == path) {
+                    if (session->path() == path) {
                         applyPendingParams();    // new image's params, before the paint
                         viewport->setImage(buf); // embedded preview (camera look, base off)
                     }
@@ -888,11 +891,11 @@ void MainWindow::onLoadFinished() {
 
     // Cache the decode (authoritative copy) and pin it as the current image, then
     // display it through the same path a cache hit takes.
-    const QString key = decodeKey(currentPath);
+    const QString key = decodeKey(session->path());
     decodeCache.insert(key, std::move(result));
     decodeCache.pin(key);
     if (const LoadResult* cached = decodeCache.get(key))
-        applyLoadResult(currentPath, *cached);
+        applyLoadResult(session->path(), *cached);
 }
 
 void MainWindow::applyPendingParams() {
@@ -902,21 +905,19 @@ void MainWindow::applyPendingParams() {
 }
 
 void MainWindow::applyLoadResult(const QString& path, const LoadResult& result) {
-    fullRes = result.fullRes;
-    preview = result.preview;
-
     setLoadingState(false);
-    viewport->setOriginalImageSize(fullRes.width, fullRes.height);
+    viewport->setOriginalImageSize(result.fullRes.width, result.fullRes.height);
 
     // Re-read the sidecar every time (params are never cached) so edits made in
     // another app — or a prior session — are always reflected.
     GlobalAdjustment saved = XmpSidecar::resolveAdjustments(path, result.defaultCrop);
+    session->setLoadedImage(path, result, saved, DevelopSession::SidecarState::Loaded);
+    session->setBaseLook(true);
     adjPanel->setParams(saved);
     localPanel->setLocalAdjustments(saved.localAdjustments);
     // setSpots emits changed → rebuildSpottedBuffers(false); but buffers are
     // already valid here and we rebuild fully below, so that preview rebuild is
-    // a benign no-op if it fires (baseLook is already set).
-    baseLook = true;
+    // a benign no-op if it fires (the session's baseLook is already set).
     spotPanel->setSpots(saved.spots);
     viewport->setSpots(saved.spots);
 
@@ -928,47 +929,26 @@ void MainWindow::applyLoadResult(const QString& path, const LoadResult& result) 
 
     statusLabel->setText(QString("%1  —  %2 × %3")
                              .arg(QFileInfo(path).fileName())
-                             .arg(fullRes.width)
-                             .arg(fullRes.height));
+                             .arg(session->fullRes().width)
+                             .arg(session->fullRes().height));
 
     setToolsEnabled(true);
 }
 
-// Spots are stored in full-res pixel coordinates (docs/adr/0017). Scale them
-// down when applying to the half-res preview buffer.
-static std::vector<Spot> scaleSpots(const std::vector<Spot>& spots, double sx, double sy) {
-    std::vector<Spot> out = spots;
-    for (Spot& s : out) {
-        s.destination = {s.destination.x() * sx, s.destination.y() * sy};
-        s.source      = {s.source.x() * sx,      s.source.y() * sy};
-        s.radius      *= sx; // pixels are square
-    }
-    return out;
-}
-
 void MainWindow::rebuildSpottedBuffers(bool fullResOnly) {
-    const auto& spots = spotPanel->spots();
+    session->setSpots(spotPanel->spots());
 
-    if (preview.valid()) {
-        const double sx = (fullRes.valid() && fullRes.width > 0)
-            ? double(preview.width) / fullRes.width : 1.0;
-        const double sy = (fullRes.valid() && fullRes.height > 0)
-            ? double(preview.height) / fullRes.height : 1.0;
-        viewport->setImage(applySpots(preview, scaleSpots(spots, sx, sy)), baseLook);
-    }
+    if (session->previewForDisplay().valid())
+        viewport->setImage(session->previewForDisplay(), session->baseLook());
 
-    if (fullResOnly && fullRes.valid()) {
-        spottedFullRes = applySpots(fullRes, spots);
-        viewport->setFullResImage(spottedFullRes);
-    }
+    if (fullResOnly && session->fullResForExport().valid())
+        viewport->setFullResImage(session->fullResForExport());
 }
 
 void MainWindow::onFullResNeeded() {
-    if (!fullRes.valid())
+    if (!session->fullResForExport().valid())
         return;
-    if (!spottedFullRes.valid())
-        spottedFullRes = applySpots(fullRes, spotPanel->spots());
-    viewport->setFullResImage(spottedFullRes);
+    viewport->setFullResImage(session->fullResForExport());
 }
 
 void MainWindow::updateZoomStatus(float zoom) {
@@ -985,7 +965,7 @@ void MainWindow::setLoadingState(bool loading) {
     if (loading)
         setToolsEnabled(false); // re-enabled in onLoadFinished on success
     statusLabel->setText(
-        loading ? QString("Loading %1...").arg(QFileInfo(currentPath).fileName()) : QString());
+        loading ? QString("Loading %1...").arg(QFileInfo(session->path()).fileName()) : QString());
 }
 
 void MainWindow::applyClipping() {
@@ -1042,7 +1022,7 @@ void MainWindow::applyDevelopChange(const GlobalAdjustment& after) {
 }
 
 void MainWindow::copySettings() {
-    if (currentPath.isEmpty())
+    if (session->path().isEmpty())
         return;
     viewport->commitActiveTool(); // fold any pending crop into the params first
 
@@ -1058,7 +1038,7 @@ void MainWindow::copySettings() {
 }
 
 void MainWindow::pasteSettings() {
-    if (currentPath.isEmpty() || !settingsClipboard)
+    if (session->path().isEmpty() || !settingsClipboard)
         return;
 
     // Paste's checklist is bounded by what was copied (narrow only).
@@ -1083,15 +1063,14 @@ void MainWindow::pasteSettings() {
     records.reserve(targets.size());
     for (const QString& path : targets) {
         const GlobalAdjustment before
-            = (path == currentPath) ? adjPanel->params()
-                                    : XmpSidecar::loadAdjustments(path);
+            = (path == session->path()) ? adjPanel->params() : XmpSidecar::loadAdjustments(path);
         records.append({path, before, applyGroups(before, settingsClipboard->snapshot, chosen)});
     }
-    undoStack->push(new BatchAdjustmentCommand(adjPanel, currentPath, records));
+    undoStack->push(new BatchAdjustmentCommand(adjPanel, session->path(), records));
 }
 
 void MainWindow::saveCurrentAsPreset() {
-    if (currentPath.isEmpty())
+    if (session->path().isEmpty())
         return;
     viewport->commitActiveTool();
 
@@ -1123,7 +1102,7 @@ void MainWindow::saveCurrentAsPreset() {
 }
 
 void MainWindow::applyPreset(const DevelopPreset& preset) {
-    if (currentPath.isEmpty())
+    if (session->path().isEmpty())
         return;
     applyDevelopChange(applyGroups(adjPanel->params(), preset.values, preset.groups));
 }
@@ -1183,7 +1162,8 @@ GlobalAdjustment MainWindow::currentParams() const {
 }
 
 void MainWindow::pushParamsToViewport() {
-    viewport->setAdjustments(currentParams());
+    session->setParams(currentParams());
+    viewport->setAdjustments(session->params());
     if (thumbTimer)
         thumbTimer->start(); // refresh the develop thumbnail once edits settle
 }
@@ -1192,10 +1172,12 @@ void MainWindow::generateDevelopedThumbnail() {
     // Don't snapshot a half-loaded image: the buffers/params may be mid-swap.
     if (loadWatcher.isRunning())
         return;
-    if (currentPath.isEmpty() || !preview.valid() || !viewport->rendererReady())
+    if (session->path().isEmpty() || !session->previewForDisplay().valid()
+        || !viewport->rendererReady())
         return;
 
     const GlobalAdjustment p = currentParams();
+    const ImageBuffer& preview = session->previewForDisplay();
     const QSize sz = developedThumbSize(preview.width, preview.height, p.cropRect, 512);
 
     // Same pipeline as export: linear working-space render → output transform.
@@ -1204,19 +1186,21 @@ void MainWindow::generateDevelopedThumbnail() {
         return;
     const QImage srgb = toOutputImage(lin, OutputProfile::SRgb, /*sixteenBit=*/false);
 
-    ThumbnailCache::store(currentPath, srgb); // persist (overwrites the embedded one)
-    filmStrip->setThumbnail(currentPath, srgb); // live strip update
+    ThumbnailCache::store(session->path(), srgb); // persist (overwrites the embedded one)
+    filmStrip->setThumbnail(session->path(), srgb); // live strip update
 }
 
 void MainWindow::saveAdjustments() {
-    if (currentPath.isEmpty())
+    if (session->path().isEmpty())
         return;
     viewport->commitActiveTool(); // fold any pending crop into the params first
-    if (XmpSidecar::saveAdjustments(currentPath, currentParams()))
-        statusLabel->setText("Saved: " + XmpSidecar::pathFor(currentPath));
-    else
+    if (XmpSidecar::saveAdjustments(session->path(), currentParams())) {
+        session->markDevelopSaved();
+        statusLabel->setText("Saved: " + XmpSidecar::pathFor(session->path()));
+    } else {
         QMessageBox::warning(
-            this, "Save Error", "Could not write " + XmpSidecar::pathFor(currentPath));
+            this, "Save Error", "Could not write " + XmpSidecar::pathFor(session->path()));
+    }
 }
 
 // Simple unsharp mask: radius ≈ 1% of image width, amount 0..100.
@@ -1262,7 +1246,7 @@ static QImage applyUnsharpMask(QImage img, int amount) {
 }
 
 void MainWindow::exportFile() {
-    if (!fullRes.valid()) {
+    if (!session->fullRes().valid()) {
         QMessageBox::information(this, "Export", "No image loaded.");
         return;
     }
@@ -1278,7 +1262,8 @@ void MainWindow::exportFile() {
 
     // Natural output size = full-res pixels inside the crop rect (shared with
     // the crop overlay's live readout so the two can never disagree).
-    const QSize natural = crop::cropPixelSize(fullRes.width, fullRes.height, p.cropRect);
+    const QSize natural
+        = crop::cropPixelSize(session->fullRes().width, session->fullRes().height, p.cropRect);
 
     ExportDialog optDlg(natural.width(), natural.height(), this);
     if (optDlg.exec() != QDialog::Accepted)
@@ -1302,7 +1287,7 @@ void MainWindow::exportFile() {
         break;
     }
 
-    QFileDialog fileDlg(this, "Export Image", QFileInfo(currentPath).absolutePath());
+    QFileDialog fileDlg(this, "Export Image", QFileInfo(session->path()).absolutePath());
     fileDlg.setAcceptMode(QFileDialog::AcceptSave);
     fileDlg.setNameFilter(filter);
     fileDlg.setDefaultSuffix(suffix);
@@ -1317,8 +1302,7 @@ void MainWindow::exportFile() {
     QApplication::processEvents(); // repaint the status bar before the render blocks the UI
 
     // Linear working-space render → output profile (lcms2) → sharpen → save.
-    const ImageBuffer& exportBuf = spottedFullRes.valid() ? spottedFullRes : fullRes;
-    QImage out = viewport->renderToImage(exportBuf, p, opts.width, opts.height);
+    QImage out = viewport->renderToImage(session->fullResForExport(), p, opts.width, opts.height);
     out = toOutputImage(out, opts.profile, opts.bitDepth == 16);
     out = applyUnsharpMask(std::move(out), opts.sharpening);
 
@@ -1337,7 +1321,8 @@ void MainWindow::exportFile() {
 void MainWindow::exportBatch(const QStringList& paths) {
     viewport->commitActiveTool();
     const GlobalAdjustment activeParams = currentParams();
-    const QSize natural = crop::cropPixelSize(fullRes.width, fullRes.height, activeParams.cropRect);
+    const QSize natural = crop::cropPixelSize(
+        session->fullRes().width, session->fullRes().height, activeParams.cropRect);
 
     ExportDialog optDlg(natural.width(), natural.height(), this);
     if (optDlg.exec() != QDialog::Accepted)
@@ -1352,7 +1337,7 @@ void MainWindow::exportBatch(const QStringList& paths) {
     }
 
     const QString outputDir = QFileDialog::getExistingDirectory(
-        this, tr("Export to Folder"), QFileInfo(currentPath).absolutePath());
+        this, tr("Export to Folder"), QFileInfo(session->path()).absolutePath());
     if (outputDir.isEmpty())
         return;
 
@@ -1390,8 +1375,8 @@ void MainWindow::exportBatch(const QStringList& paths) {
         // The GPU render + encode below are short and must stay on the GUI thread
         // (renderToImage needs the RHI context).
         LoadResult loaded;
-        if (rawPath == currentPath) {
-            loaded.fullRes = fullRes;
+        if (rawPath == session->path()) {
+            loaded.fullRes = session->fullRes();
         } else {
             QFutureWatcher<LoadResult> watcher;
             QEventLoop wait;
@@ -1413,7 +1398,7 @@ void MainWindow::exportBatch(const QStringList& paths) {
                 continue;
         }
 
-        const GlobalAdjustment p = (rawPath == currentPath)
+        const GlobalAdjustment p = (rawPath == session->path())
             ? activeParams
             : XmpSidecar::resolveAdjustments(rawPath, QRectF(0, 0, 1, 1));
 

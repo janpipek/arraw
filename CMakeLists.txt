@@ -154,6 +154,7 @@ set(CORE_SOURCES
     src/FilmStripLayout.cpp
     src/ThumbnailCache.cpp
     src/DecodeCache.cpp
+    src/DevelopSession.cpp
     src/ExportDialog.cpp
     src/CropGeometry.cpp
     src/DevelopGroup.cpp

@@ -29,6 +29,7 @@ class QAction;
 class QTabWidget;
 class QTimer;
 class QMenu;
+class DevelopSession;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -42,8 +43,8 @@ public:
     void openPath(const QString& path);
 
     // Apply all spots to the clean decoded buffers and push spotted textures to
-    // the viewport. fullResOnly=false rebuilds only the preview (live drag);
-    // fullResOnly=true also rebuilds spottedFullRes (release / undo / load).
+    // the viewport. fullResOnly=false pushes only the preview (live drag);
+    // fullResOnly=true also pushes the full-res export buffer (release / undo / load).
     // Public so SpotListCommand can call it on undo/redo.
     void rebuildSpottedBuffers(bool fullResOnly = false);
 
@@ -159,11 +160,7 @@ private:
 
     QString monitorProfilePath; // empty = assume sRGB
 
-    ImageBuffer fullRes;         // clean decoded full-res buffer; never mutated
-    ImageBuffer preview;         // clean decoded preview buffer; never mutated
-    ImageBuffer spottedFullRes;  // fullRes with all spots applied (docs/adr/0017)
-    bool baseLook = false;       // whether the current preview was loaded with baseLook on
-    QString currentPath;
+    DevelopSession* session;
 
     // Params of the image currently being loaded, resolved up front from its
     // sidecar and applied atomically with the first paint of that image.
