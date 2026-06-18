@@ -1130,7 +1130,14 @@ void MainWindow::pasteSettings() {
             = (path == session->path()) ? currentParams() : XmpSidecar::loadAdjustments(path);
         records.append({path, before, applyGroups(before, settingsClipboard->snapshot, chosen)});
     }
-    undoStack->push(new BatchAdjustmentCommand(adjPanel, session->path(), records));
+    undoStack->push(new BatchAdjustmentCommand(
+        session->path(),
+        records,
+        [this](const GlobalAdjustment& params) {
+            session->setParams(params);
+            syncSessionToEditors();
+            syncSessionSpotsToEditors(true);
+        }));
 }
 
 void MainWindow::saveCurrentAsPreset() {
