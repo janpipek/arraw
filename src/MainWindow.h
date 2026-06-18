@@ -97,6 +97,7 @@ private:
 
     // Apply a develop change to the global params as one undo step (the source
     // of truth for copy/paste and preset apply). No-op if nothing changed.
+    void pushGlobalAdjustmentCommand(const GlobalAdjustment& before, const GlobalAdjustment& after);
     void applyDevelopChange(const GlobalAdjustment& after);
     void applyPreset(const DevelopPreset& preset);
     void rebuildPresetsMenu(); // re-list saved presets after save/delete

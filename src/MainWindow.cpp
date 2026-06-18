@@ -203,7 +203,7 @@ MainWindow::MainWindow(QWidget* parent)
             after.cropRect = rect;
             after.cropConstrained = constrained;
             if (after != before)
-                undoStack->push(new AdjustmentCommand(session, this, before, after));
+                pushGlobalAdjustmentCommand(before, after);
         });
 
     connect(viewport, &ImageViewport::rotationCommitted, this, [this](float degrees) {
@@ -211,7 +211,7 @@ MainWindow::MainWindow(QWidget* parent)
         GlobalAdjustment after = before;
         after.rotation = degrees;
         if (after != before)
-            undoStack->push(new AdjustmentCommand(session, this, before, after));
+            pushGlobalAdjustmentCommand(before, after);
     });
 
     connect(viewport, &ImageViewport::whiteBalanceCommitted, this, [this](float kelvin, float tint) {
@@ -220,7 +220,7 @@ MainWindow::MainWindow(QWidget* parent)
         after.temperature = kelvin;
         after.tint = tint;
         if (after != before)
-            undoStack->push(new AdjustmentCommand(session, this, before, after));
+            pushGlobalAdjustmentCommand(before, after);
     });
 
     connect(viewport, &ImageViewport::activeToolChanged, this, [this](ImageViewport::ActiveTool) {
@@ -232,7 +232,7 @@ MainWindow::MainWindow(QWidget* parent)
         &AdjustmentPanel::adjustmentCommitted,
         this,
         [this](const GlobalAdjustment& before, const GlobalAdjustment& after) {
-            undoStack->push(new AdjustmentCommand(session, this, before, after));
+            pushGlobalAdjustmentCommand(before, after);
         });
 
     connect(adjPanel, &AdjustmentPanel::paramsChanged, this, [this] { pushParamsToViewport(); });
@@ -1048,7 +1048,7 @@ void MainWindow::rebuildDisplayLut() {
 void MainWindow::applyDevelopChange(const GlobalAdjustment& after) {
     const GlobalAdjustment before = adjPanel->params();
     if (after != before)
-        undoStack->push(new AdjustmentCommand(session, this, before, after));
+        pushGlobalAdjustmentCommand(before, after);
 }
 
 void MainWindow::copySettings() {
@@ -1197,6 +1197,16 @@ void MainWindow::syncSessionToEditors() {
     viewport->setAdjustments(session->params());
     if (thumbTimer)
         thumbTimer->start();
+}
+
+void MainWindow::pushGlobalAdjustmentCommand(
+    const GlobalAdjustment& before,
+    const GlobalAdjustment& after) {
+    const GlobalAdjustment current = session->params();
+    const GlobalAdjustment beforeSnapshot = applyGroups(current, before, allGroups());
+    const GlobalAdjustment afterSnapshot = applyGroups(current, after, allGroups());
+    if (afterSnapshot != beforeSnapshot)
+        undoStack->push(new AdjustmentCommand(session, this, beforeSnapshot, afterSnapshot));
 }
 
 void MainWindow::pushParamsToViewport() {

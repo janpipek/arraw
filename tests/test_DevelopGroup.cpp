@@ -116,15 +116,20 @@ TEST_CASE("White Balance carries temperature and tint", "[developgroup]") {
 }
 
 TEST_CASE(
-    "All seven groups reproduce the source's globals but never its local adjustments",
+    "All seven groups reproduce the source's globals but never per-image edits",
     "[developgroup]") {
     // Exhaustiveness guard: if any global field belongs to no group, it stays at
     // the target's value and this fails — enforcing "no field silently fails to
     // copy" as a test, not a hope.
     GlobalAdjustment target; // defaults...
-    LocalAdjustment keep;    // ...plus a local adjustment to protect
+    LocalAdjustment keep;    // ...plus per-image edits to protect
     keep.exposure = 0.3f;
     target.localAdjustments = {keep};
+    Spot spot;
+    spot.destination = {12.0, 20.0};
+    spot.source = {18.0, 20.0};
+    spot.radius = 4.0;
+    target.spots = {spot};
 
     const GlobalAdjustment source = fullyEdited();
 
@@ -132,6 +137,7 @@ TEST_CASE(
 
     // Every global field now matches the source...
     GlobalAdjustment expected = source;
-    expected.localAdjustments = target.localAdjustments; // ...except the LA list,
-    CHECK(result == expected);                           // which is the target's.
+    expected.localAdjustments = target.localAdjustments;
+    expected.spots = target.spots;
+    CHECK(result == expected);
 }
