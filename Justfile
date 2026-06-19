@@ -1,3 +1,5 @@
+set windows-powershell := true
+
 qt_flag := if os() == "macos" { "-DCMAKE_PREFIX_PATH=" + `brew --prefix qt` } else { "" }
 clang_format := env_var_or_default("CLANG_FORMAT", "clang-format")
 clazy := env_var_or_default("CLAZY", "clazy")
