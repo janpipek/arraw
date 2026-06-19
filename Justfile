@@ -55,6 +55,7 @@ rebuild:
 rerun: rebuild
     ./build/arraw
 
+# Create an appimage for linux
 appimage:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -71,3 +72,8 @@ appimage:
         -v "$PWD/dist:/dist:z" \
         arraw-appimage-builder \
         bash /src/packaging/linux/build-appimage.sh
+
+# Create a windows-installer (.exe)
+windows-installer:
+    # Inno setup must be present
+    uv run tools/package_windows.py --installer
