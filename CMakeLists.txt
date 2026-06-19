@@ -131,6 +131,7 @@ endif()
 set(CORE_SOURCES
     src/MainWindow.cpp
     src/ImageViewport.cpp
+    src/ViewportGeometry.cpp
     src/RendererCore.cpp
     src/AdjustmentPanel.cpp
     src/LocalAdjustmentPanel.cpp

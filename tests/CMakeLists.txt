@@ -13,6 +13,7 @@ endif()
 
 add_executable(arraw_tests
     test_ImagePipeline.cpp
+    test_ViewportGeometry.cpp
     test_XmpSidecar.cpp
     test_ColorManagement.cpp
     test_RawProcessor.cpp

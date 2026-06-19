@@ -11,20 +11,6 @@
 #include <QPainterPath>
 #include <QWheelEvent>
 
-// CPU mirror of the rotation in image.vert (keep in sync). UV space is not
-// square, so x is scaled by the image aspect before rotating to make the
-// rotation isotropic in pixel space, then scaled back.
-static QPointF rotateTexUV(float u, float v, float degrees, float aspect, float cx, float cy) {
-    float dx = (u - cx) * aspect;
-    float dy = v - cy;
-    const float rad = degrees * float(M_PI) / 180.0f;
-    const float c = std::cos(rad);
-    const float s = std::sin(rad);
-    const float rx = c * dx - s * dy;
-    const float ry = s * dx + c * dy;
-    return {rx / aspect + cx, ry + cy};
-}
-
 // Short ratio tag shown in the crop readout, oriented to the current toggle.
 static QString aspectLabel(crop::AspectPreset preset, bool landscape) {
     switch (preset) {
@@ -122,7 +108,7 @@ float ImageViewport::fitZoom() const {
         return 1.0f;
 
     const float viewportAspect = float(width()) / float(height());
-    return std::min(1.0f, viewportAspect / aspect);
+    return (std::min) (1.0f, viewportAspect / aspect);
 }
 
 float ImageViewport::displayOriginalPixelHeight() const {
@@ -131,6 +117,19 @@ float ImageViewport::displayOriginalPixelHeight() const {
     if (cropMode() || showOriginal)
         return float(originalHeight);
     return float(originalHeight) * float(params.cropRect.height());
+}
+
+viewport::Geometry ImageViewport::geometry() const {
+    viewport::Geometry g;
+    g.viewportSize = size();
+    g.originalSize = QSize(originalWidth, originalHeight);
+    g.imageAspect = imageAspect;
+    g.displayAspect = displayAspect();
+    g.zoom = zoom;
+    g.pan = pan;
+    g.cropRect = params.cropRect;
+    g.rotation = params.rotation;
+    return g;
 }
 
 RendererCore::Slot ImageViewport::activeSlot() const {
@@ -344,27 +343,15 @@ void ImageViewport::paintOverlay(QPainter& p) const {
 // crop is axis-aligned in this frame; the shader rotates the sampled image
 // underneath it (crop after rotation), so the overlay must not rotate.
 QPointF ImageViewport::cropUVToViewport(float u, float v) const {
-    const float viewportAspect = float(width()) / float(height());
-    const float sx = zoom * (displayAspect() / viewportAspect);
-    const float sy = zoom;
-    const float ndcX = (u * 2.0f - 1.0f) * sx + float(pan.x());
-    const float ndcY = (1.0f - 2.0f * v) * sy + float(pan.y());
-    return {(ndcX + 1.0f) * width() / 2.0f, (1.0f - ndcY) * height() / 2.0f};
+    return geometry().cropUvToViewport(u, v);
 }
 
 QPointF ImageViewport::viewportToCropUV(QPointF pos) const {
-    const float viewportAspect = float(width()) / float(height());
-    const float sx = zoom * (displayAspect() / viewportAspect);
-    const float sy = zoom;
-    const float ndcX = float(pos.x()) * 2.0f / width() - 1.0f;
-    const float ndcY = 1.0f - float(pos.y()) * 2.0f / height();
-    const float u = ((ndcX - float(pan.x())) / sx + 1.0f) / 2.0f;
-    const float v = (1.0f - (ndcY - float(pan.y())) / sy) / 2.0f;
-    return {u, v};
+    return geometry().viewportToCropUv(pos);
 }
 
 // A display-frame point shows real image pixels iff, after the shader's
-// rotation, it lands inside the source [0,1] (rotateTexUV mirrors image.vert).
+// rotation, it lands inside the source [0,1] (rotateTextureUv mirrors image.vert).
 bool ImageViewport::cropInsideImage(const QRectF& cropUV) const {
     if (std::abs(params.rotation) <= 0.0001f)
         return true; // no rotation: the whole display frame is real
@@ -376,8 +363,8 @@ bool ImageViewport::cropInsideImage(const QRectF& cropUV) const {
     };
     const float eps = 1e-4f;
     for (const QPointF& c : corners) {
-        const QPointF s
-            = rotateTexUV(float(c.x()), float(c.y()), params.rotation, imageAspect, 0.5f, 0.5f);
+        const QPointF s = viewport::rotateTextureUv(
+            float(c.x()), float(c.y()), params.rotation, imageAspect, 0.5f, 0.5f);
         if (s.x() < -eps || s.x() > 1.0f + eps || s.y() < -eps || s.y() > 1.0f + eps)
             return false;
     }
@@ -418,8 +405,8 @@ void ImageViewport::drawAlignGrid(QPainter& p) const {
     const int h = height();
     const int cx = w / 2;
     const int cy = h / 2;
-    const int hSpacing = qMax(32, h / 10);
-    const int vSpacing = qMax(32, w / 10);
+    const int hSpacing = (std::max) (32, h / 10);
+    const int vSpacing = (std::max) (32, w / 10);
 
     const QPen minorPen(QColor(255, 255, 255, 45), 0.5, Qt::DashLine);
     const QPen majorPen(QColor(255, 255, 255, 110), 1.0, Qt::DashLine);
@@ -495,31 +482,34 @@ void ImageViewport::applyCropDrag(QPointF viewportPos) {
     switch (cropDragHandle) {
     case 0:
         r.setTopLeft(
-            {std::min(u, float(r.right()) - kMinSize), std::min(v, float(r.bottom()) - kMinSize)});
+            {(std::min) (u, float(r.right()) - kMinSize),
+             (std::min) (v, float(r.bottom()) - kMinSize)});
         break;
     case 1:
-        r.setTop(std::min(v, float(r.bottom()) - kMinSize));
+        r.setTop((std::min) (v, float(r.bottom()) - kMinSize));
         break;
     case 2:
         r.setTopRight(
-            {std::max(u, float(r.left()) + kMinSize), std::min(v, float(r.bottom()) - kMinSize)});
+            {(std::max) (u, float(r.left()) + kMinSize),
+             (std::min) (v, float(r.bottom()) - kMinSize)});
         break;
     case 3:
-        r.setRight(std::max(u, float(r.left()) + kMinSize));
+        r.setRight((std::max) (u, float(r.left()) + kMinSize));
         break;
     case 4:
         r.setBottomRight(
-            {std::max(u, float(r.left()) + kMinSize), std::max(v, float(r.top()) + kMinSize)});
+            {(std::max) (u, float(r.left()) + kMinSize), (std::max) (v, float(r.top()) + kMinSize)});
         break;
     case 5:
-        r.setBottom(std::max(v, float(r.top()) + kMinSize));
+        r.setBottom((std::max) (v, float(r.top()) + kMinSize));
         break;
     case 6:
         r.setBottomLeft(
-            {std::min(u, float(r.right()) - kMinSize), std::max(v, float(r.top()) + kMinSize)});
+            {(std::min) (u, float(r.right()) - kMinSize),
+             (std::max) (v, float(r.top()) + kMinSize)});
         break;
     case 7:
-        r.setLeft(std::min(u, float(r.right()) - kMinSize));
+        r.setLeft((std::min) (u, float(r.right()) - kMinSize));
         break;
     case -1: { // move
         QPointF startUV = viewportToCropUV(cropDragStart);
@@ -856,7 +846,7 @@ void ImageViewport::resetView() {
 }
 
 void ImageViewport::setZoom(float value) {
-    const float newZoom = qBound(0.05f, value, 32.0f);
+    const float newZoom = std::clamp(value, 0.05f, 32.0f);
     if (newZoom >= kFullResZoomThreshold && zoom < kFullResZoomThreshold && !hasFullRes)
         emit fullResNeeded();
 
@@ -905,8 +895,8 @@ QImage ImageViewport::renderToImage(
     ensureCurveLut();
 
     const QRectF& cr = p.cropRect;
-    const int cropW = qMax(1, int(cr.width() * buf.width + 0.5f));
-    const int cropH = qMax(1, int(cr.height() * buf.height + 0.5f));
+    const int cropW = (std::max) (1, int(cr.width() * buf.width + 0.5f));
+    const int cropH = (std::max) (1, int(cr.height() * buf.height + 0.5f));
 
     // Offscreen target at cropped pixel size. Float format: the readback stays
     // in linear working space; the output transform happens on the CPU (lcms2).
@@ -946,8 +936,8 @@ QImage ImageViewport::renderClipSample(
     // clipping overlay actually runs — renderToImage uses the linear export
     // path where it is forced off. Used by the clipping golden test (adr/0009).
     const QRectF& cr = p.cropRect;
-    const int cropW = qMax(1, int(cr.width() * buf.width + 0.5f));
-    const int cropH = qMax(1, int(cr.height() * buf.height + 0.5f));
+    const int cropW = (std::max) (1, int(cr.width() * buf.width + 0.5f));
+    const int cropH = (std::max) (1, int(cr.height() * buf.height + 0.5f));
 
     RendererCore::FrameParams fp;
     fp.transform = QVector4D(1.0f, 1.0f, 0.0f, 0.0f);
@@ -1121,8 +1111,8 @@ void ImageViewport::mouseReleaseEvent(QMouseEvent* e) {
             emit localMaskEditFinished(); // one undo step per drag gesture
         return;
     }
-    if (spotToolMode() && e->button() == Qt::LeftButton
-        && spotDragHandle != SpotHandle::None && spotDragIdx >= 0) {
+    if (spotToolMode() && e->button() == Qt::LeftButton && spotDragHandle != SpotHandle::None
+        && spotDragIdx >= 0) {
         const QPointF bufPx = viewportToBufferPixel(e->position());
         emit spotHandleCommitted(spotDragIdx, spotDragHandle, bufPx);
         spotDragHandle = SpotHandle::None;
@@ -1179,36 +1169,17 @@ void ImageViewport::setSpots(const std::vector<Spot>& spots) {
 // viewport pos → original buffer pixel coords (docs/adr/0017).
 // Pipeline: viewport → crop-frame UV → full-image rotated UV → buffer UV → pixel.
 QPointF ImageViewport::viewportToBufferPixel(QPointF pos) const {
-    if (originalWidth <= 0 || originalHeight <= 0)
-        return {};
-    const QPointF cropUV = viewportToCropUV(pos);
-    const QRectF& cr = params.cropRect;
-    const float fu = float(cr.left() + cropUV.x() * cr.width());
-    const float fv = float(cr.top() + cropUV.y() * cr.height());
-    const QPointF bufUV = rotateTexUV(fu, fv, params.rotation, imageAspect, 0.5f, 0.5f);
-    return {bufUV.x() * originalWidth, bufUV.y() * originalHeight};
+    return geometry().viewportToBufferPixel(pos);
 }
 
 // Original buffer pixel coords → viewport pos (inverse of viewportToBufferPixel).
 QPointF ImageViewport::bufferPixelToViewport(QPointF bufPx) const {
-    if (originalWidth <= 0 || originalHeight <= 0)
-        return {};
-    const float bu = float(bufPx.x()) / float(originalWidth);
-    const float bv = float(bufPx.y()) / float(originalHeight);
-    // Undo rotation: apply -rotation.
-    const QPointF fullUV = rotateTexUV(bu, bv, -params.rotation, imageAspect, 0.5f, 0.5f);
-    const QRectF& cr = params.cropRect;
-    const float cu = float((fullUV.x() - cr.left()) / cr.width());
-    const float cv = float((fullUV.y() - cr.top()) / cr.height());
-    return cropUVToViewport(cu, cv);
+    return geometry().bufferPixelToViewport(bufPx);
 }
 
 // Radius in buffer pixels → approximate radius in viewport pixels.
 double ImageViewport::bufRadiusToViewport(QPointF centerBufPx, double radius) const {
-    const QPointF a = bufferPixelToViewport(centerBufPx);
-    const QPointF b = bufferPixelToViewport({centerBufPx.x(), centerBufPx.y() + radius});
-    const QPointF d = b - a;
-    return std::sqrt(QPointF::dotProduct(d, d));
+    return geometry().bufferRadiusToViewport(centerBufPx, radius);
 }
 
 // Hit-test all spots. Returns the closest handle within kMaskHandleRadius pixels,
@@ -1221,8 +1192,8 @@ ImageViewport::SpotHandle ImageViewport::hitTestSpot(QPointF viewportPos, int& o
     for (int i = 0; i < static_cast<int>(spots.size()); ++i) {
         for (SpotHandle h : {SpotHandle::Destination, SpotHandle::Source}) {
             const QPointF pt = h == SpotHandle::Destination
-                ? bufferPixelToViewport(spots[i].destination)
-                : bufferPixelToViewport(spots[i].source);
+                                   ? bufferPixelToViewport(spots[i].destination)
+                                   : bufferPixelToViewport(spots[i].source);
             const QPointF d = viewportPos - pt;
             const double d2 = QPointF::dotProduct(d, d);
             if (d2 < bestD2) {
