@@ -40,6 +40,10 @@ ResolvedLoadedImage resolveLoadedImage(const QString& path, const LoadResult& re
     };
 }
 
+bool shouldConfirmLeavingImage(const DevelopSession& session) {
+    return session.hasImage() && (session.developDirty() || session.metadataDirty());
+}
+
 LoadResult decodeImage(
     const QString& path,
     EmbeddedPreviewCallback onPreview,

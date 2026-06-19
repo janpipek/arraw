@@ -173,6 +173,9 @@ set(CORE_SOURCES
 
 add_library(arraw_core STATIC ${CORE_SOURCES})
 arraw_enable_warnings(arraw_core)
+if(ARRAW_BUILD_TESTS)
+    target_compile_definitions(arraw_core PUBLIC ARRAW_TESTING)
+endif()
 
 target_include_directories(arraw_core PUBLIC src)
 

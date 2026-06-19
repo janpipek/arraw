@@ -26,6 +26,12 @@ public:
     // reflects the current edits), replacing the camera-embedded thumbnail.
     static bool store(const QString& rawPath, const QImage& image);
 
+#ifdef ARRAW_TESTING
+    static quint64 cacheGenerationForTesting(const QString& rawPath);
+    static bool storeIfGenerationMatchesForTesting(
+        const QString& rawPath, const QImage& image, quint64 generation);
+#endif
+
     static bool storeMetadata(const QString& rawPath, const ImageMetadata& metadata);
     static std::optional<ImageMetadata> loadMetadata(const QString& rawPath);
 

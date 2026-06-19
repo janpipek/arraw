@@ -28,7 +28,6 @@ class QToolBar;
 class QActionGroup;
 class QAction;
 class QTabWidget;
-class QTimer;
 class QMenu;
 class DevelopSession;
 
@@ -95,6 +94,8 @@ private:
     void setupAspectMenu(QToolBar* tb);
     void applyAspectLock(); // forward aspectPreset/aspectLandscape to the viewport
     void loadImage(const QString& path);
+    bool confirmLeavingCurrentImage();
+    bool saveDirtySidecar(bool forceDevelopSave = false);
     // Single place a finished decode (or a cache hit) becomes the displayed
     // image: stores buffers, re-reads the sidecar, restores exif. Used by both
     // onLoadFinished and the decode-cache hit path in loadImage.
@@ -122,7 +123,7 @@ private:
     void pushParamsToViewport();
 
     // Re-render the current image's filmstrip thumbnail through the develop
-    // pipeline (debounced after edits), so the strip reflects the edits.
+    // pipeline. Called only for saved/resolved sidecar state.
     void generateDevelopedThumbnail();
 
     // Rebuild the viewport's display LUT from the current soft-proofing
@@ -191,7 +192,5 @@ private:
 
     std::shared_ptr<std::atomic<bool>> loadCancel;
     QFutureWatcher<LoadResult> loadWatcher;
-
-    // Debounces develop-thumbnail regeneration after edits settle.
-    QTimer* thumbTimer = nullptr;
+    bool leaveConfirmationSatisfied = false;
 };

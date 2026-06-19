@@ -29,6 +29,7 @@ DevelopSession::SidecarState toSessionSidecarState(SidecarLoadStatus status);
 GlobalAdjustment resolvePendingPreviewParams(const QString& path);
 GlobalAdjustment resolveImageAdjustments(const QString& path, const QRectF& defaultCrop);
 ResolvedLoadedImage resolveLoadedImage(const QString& path, const LoadResult& result);
+bool shouldConfirmLeavingImage(const DevelopSession& session);
 LoadResult decodeImage(
     const QString& path,
     EmbeddedPreviewCallback onPreview,

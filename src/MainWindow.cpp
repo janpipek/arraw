@@ -17,8 +17,8 @@
 #include "ImageViewport.h"
 #include "LocalAdjustmentPanel.h"
 #include "MainWindowStatus.h"
-#include "SpotRemovalPanel.h"
 #include "ProofingPanel.h"
+#include "SpotRemovalPanel.h"
 #include "ThumbnailCache.h"
 #include "XmpSidecar.h"
 #include <algorithm>
@@ -31,6 +31,8 @@
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QDockWidget>
+#include <QElapsedTimer>
+#include <QEventLoop>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QHBoxLayout>
@@ -51,9 +53,6 @@
 #include <QStatusBar>
 #include <QStyle>
 #include <QTabWidget>
-#include <QTimer>
-#include <QElapsedTimer>
-#include <QEventLoop>
 #include <QToolBar>
 #include <QToolButton>
 #include <QUndoCommand>
@@ -259,14 +258,10 @@ MainWindow::MainWindow(QWidget* parent)
             pushGlobalAdjustmentCommand(before, after);
         });
 
-    connect(
-        adjPanel,
-        &AdjustmentPanel::paramsChanged,
-        this,
-        [this](const GlobalAdjustment& params) {
-            session->setParams(applyGroups(session->params(), params, allGroups()));
-            pushParamsToViewport();
-        });
+    connect(adjPanel, &AdjustmentPanel::paramsChanged, this, [this](const GlobalAdjustment& params) {
+        session->setParams(applyGroups(session->params(), params, allGroups()));
+        pushParamsToViewport();
+    });
 
     connect(
         localPanel,
@@ -276,13 +271,6 @@ MainWindow::MainWindow(QWidget* parent)
             session->setLocalAdjustments(localAdjustments);
             pushParamsToViewport();
         });
-
-    // Develop-thumbnail regeneration is debounced: every param change restarts the
-    // timer (in pushParamsToViewport), so it fires only once edits settle.
-    thumbTimer = new QTimer(this);
-    thumbTimer->setSingleShot(true);
-    thumbTimer->setInterval(750);
-    connect(thumbTimer, &QTimer::timeout, this, &MainWindow::generateDevelopedThumbnail);
 
     // Panel selection drives which mask the on-image tool edits; on-image drags
     // write the geometry back into the panel.
@@ -334,9 +322,9 @@ MainWindow::MainWindow(QWidget* parent)
         const double offset = 0.1 * std::min(preview.width, preview.height);
         const Spot s{
             .destination = destBufPx,
-            .source      = autoSourcePosition(destBufPx, offset, preview.width, preview.height),
-            .radius      = offset * 0.5,
-            .feather     = 0.5,
+            .source = autoSourcePosition(destBufPx, offset, preview.width, preview.height),
+            .radius = offset * 0.5,
+            .feather = 0.5,
         };
         spotPanel->addSpot(s);
     });
@@ -390,6 +378,11 @@ MainWindow::MainWindow(QWidget* parent)
 }
 
 void MainWindow::closeEvent(QCloseEvent* e) {
+    if (!confirmLeavingCurrentImage()) {
+        e->ignore();
+        return;
+    }
+
     QSettings s;
     s.setValue("geometry", saveGeometry());
     s.setValue("windowState", saveState());
@@ -535,9 +528,7 @@ void MainWindow::setupImageMenu() {
           {"Green", ColourLabel::Green, Qt::Key_G},
           {"Blue", ColourLabel::Blue, Qt::Key_B},
           {"Purple", ColourLabel::Purple, Qt::Key_P}}) {
-        QAction* a = labelMenu->addAction(tr(name), this, [this, value] {
-            setCurrentLabel(value);
-        });
+        QAction* a = labelMenu->addAction(tr(name), this, [this, value] { setCurrentLabel(value); });
         a->setShortcut(key);
         a->setCheckable(true);
         labelActions.append({a, value});
@@ -548,7 +539,8 @@ void MainWindow::setupImageMenu() {
 
     // Reflect the current file's marks each time the menu opens.
     connect(image, &QMenu::aboutToShow, this, [this, rateActions, labelActions] {
-        const UserMetadata m = session->hasImage() ? session->userMetadata() : filmStrip->currentMarks();
+        const UserMetadata m = session->hasImage() ? session->userMetadata()
+                                                   : filmStrip->currentMarks();
         for (const auto& [a, n] : rateActions)
             a->setChecked(m.rating == n);
         for (const auto& [a, value] : labelActions)
@@ -859,8 +851,12 @@ void MainWindow::openPath(const QString& path) {
         return;
 
     if (fi.isDir()) {
+        if (!confirmLeavingCurrentImage())
+            return;
+        leaveConfirmationSatisfied = true;
         filmStrip->setDirectory(fi.absoluteFilePath());
         filmStrip->selectFirst();
+        leaveConfirmationSatisfied = false;
     } else {
         loadImage(fi.absoluteFilePath());
     }
@@ -882,7 +878,74 @@ void MainWindow::openFile() {
         loadImage(path);
 }
 
+bool MainWindow::saveDirtySidecar(bool forceDevelopSave) {
+    if (session->path().isEmpty())
+        return true;
+
+    bool saved = true;
+    if (forceDevelopSave || session->developDirty()) {
+        if (XmpSidecar::saveAdjustments(session->path(), currentParams())) {
+            session->markDevelopSaved();
+        } else {
+            session->markDevelopSaveFailed();
+            saved = false;
+        }
+    }
+    if (session->metadataDirty()) {
+        if (XmpSidecar::saveMetadata(session->path(), session->userMetadata())) {
+            session->markMetadataSaved();
+        } else {
+            session->markMetadataSaveFailed();
+            saved = false;
+        }
+    }
+
+    if (saved) {
+        statusLabel->setText("Saved: " + XmpSidecar::pathFor(session->path()));
+        generateDevelopedThumbnail();
+    } else {
+        QMessageBox::warning(this, "Save Error", sidecarWriteErrorText(session->path()));
+    }
+    return saved;
+}
+
+bool MainWindow::confirmLeavingCurrentImage() {
+    viewport->commitActiveTool();
+    if (!shouldConfirmLeavingImage(*session))
+        return true;
+
+    QMessageBox box(this);
+    box.setIcon(QMessageBox::Warning);
+    box.setWindowTitle(tr("Unsaved Changes"));
+    box.setText(tr("%1 has unsaved XMP changes.").arg(QFileInfo(session->path()).fileName()));
+    box.setInformativeText(tr("Save those changes before leaving this image?"));
+    QPushButton* save = box.addButton(tr("Save"), QMessageBox::AcceptRole);
+    box.addButton(tr("Discard"), QMessageBox::DestructiveRole);
+    QPushButton* cancel = box.addButton(tr("Cancel"), QMessageBox::RejectRole);
+    box.setDefaultButton(save);
+    box.setEscapeButton(cancel);
+    box.exec();
+
+    if (box.clickedButton() == cancel)
+        return false;
+    if (box.clickedButton() == save)
+        return saveDirtySidecar();
+    return true;
+}
+
 void MainWindow::loadImage(const QString& path) {
+    if (path == session->path())
+        return;
+
+    const QString previousPath = session->path();
+    const bool needsConfirmation = !leaveConfirmationSatisfied;
+    leaveConfirmationSatisfied = false;
+    if (needsConfirmation && !confirmLeavingCurrentImage()) {
+        if (!previousPath.isEmpty())
+            filmStrip->setCurrentFile(previousPath);
+        return;
+    }
+
     // Cancel any in-progress load so it stops before dcraw_process.
     if (loadCancel)
         loadCancel->store(true);
@@ -976,11 +1039,7 @@ void MainWindow::applyLoadResult(const QString& path, const LoadResult& result) 
     // another app — or a prior session — are always reflected.
     const ResolvedLoadedImage resolved = resolveLoadedImage(path, result);
     session->setLoadedImage(
-        path,
-        result,
-        resolved.adjustments,
-        resolved.sidecarState,
-        resolved.metadata);
+        path, result, resolved.adjustments, resolved.sidecarState, resolved.metadata);
     session->setBaseLook(true);
     syncSessionToEditors();
     syncSessionSpotsToEditors(true);
@@ -992,6 +1051,7 @@ void MainWindow::applyLoadResult(const QString& path, const LoadResult& result) 
     statusLabel->setText(loadedImageStatusText(path, session->fullRes(), session->sidecarState()));
 
     setToolsEnabled(true);
+    generateDevelopedThumbnail();
 }
 
 void MainWindow::rebuildSpottedBuffers(bool fullResOnly) {
@@ -1099,8 +1159,8 @@ void MainWindow::setCurrentRating(int rating) {
 
 void MainWindow::setCurrentLabel(ColourLabel label) {
     UserMetadata metadata = session->userMetadata();
-    metadata.label
-        = (label == ColourLabel::None || metadata.label != label) ? label : ColourLabel::None;
+    metadata.label = (label == ColourLabel::None || metadata.label != label) ? label
+                                                                             : ColourLabel::None;
     applyCurrentUserMetadata(metadata);
 }
 
@@ -1145,14 +1205,13 @@ void MainWindow::pasteSettings() {
     QVector<BatchPasteRecord> records;
     records.reserve(targets.size());
     for (const QString& path : targets) {
-        const GlobalAdjustment before
-            = (path == session->path()) ? currentParams() : XmpSidecar::loadAdjustments(path);
+        const GlobalAdjustment before = (path == session->path())
+                                            ? currentParams()
+                                            : XmpSidecar::loadAdjustments(path);
         records.append({path, before, applyGroups(before, settingsClipboard->snapshot, chosen)});
     }
-    undoStack->push(new BatchAdjustmentCommand(
-        session->path(),
-        records,
-        [this](const GlobalAdjustment& params) {
+    undoStack->push(
+        new BatchAdjustmentCommand(session->path(), records, [this](const GlobalAdjustment& params) {
             session->setParams(params);
             syncSessionToEditors();
             syncSessionSpotsToEditors(true);
@@ -1258,8 +1317,6 @@ void MainWindow::syncSessionToEditors() {
         localPanel->setLocalAdjustments(session->params().localAdjustments);
     }
     viewport->setAdjustments(session->params());
-    if (thumbTimer)
-        thumbTimer->start();
 }
 
 void MainWindow::syncSessionSpotsToEditors(bool fullResOnly) {
@@ -1272,8 +1329,7 @@ void MainWindow::syncSessionSpotsToEditors(bool fullResOnly) {
 }
 
 void MainWindow::pushGlobalAdjustmentCommand(
-    const GlobalAdjustment& before,
-    const GlobalAdjustment& after) {
+    const GlobalAdjustment& before, const GlobalAdjustment& after) {
     const GlobalAdjustment current = session->params();
     const GlobalAdjustment beforeSnapshot = applyGroups(current, before, allGroups());
     const GlobalAdjustment afterSnapshot = applyGroups(current, after, allGroups());
@@ -1283,8 +1339,6 @@ void MainWindow::pushGlobalAdjustmentCommand(
 
 void MainWindow::pushParamsToViewport() {
     viewport->setAdjustments(session->params());
-    if (thumbTimer)
-        thumbTimer->start(); // refresh the develop thumbnail once edits settle
 }
 
 void MainWindow::generateDevelopedThumbnail() {
@@ -1305,7 +1359,7 @@ void MainWindow::generateDevelopedThumbnail() {
         return;
     const QImage srgb = toOutputImage(lin, OutputProfile::SRgb, /*sixteenBit=*/false);
 
-    ThumbnailCache::store(session->path(), srgb); // persist (overwrites the embedded one)
+    ThumbnailCache::store(session->path(), srgb);   // persist (overwrites the embedded one)
     filmStrip->setThumbnail(session->path(), srgb); // live strip update
 }
 
@@ -1313,13 +1367,7 @@ void MainWindow::saveAdjustments() {
     if (session->path().isEmpty())
         return;
     viewport->commitActiveTool(); // fold any pending crop into the params first
-    if (XmpSidecar::saveAdjustments(session->path(), currentParams())) {
-        session->markDevelopSaved();
-        statusLabel->setText("Saved: " + XmpSidecar::pathFor(session->path()));
-    } else {
-        session->markDevelopSaveFailed();
-        QMessageBox::warning(this, "Save Error", sidecarWriteErrorText(session->path()));
-    }
+    saveDirtySidecar(true);
 }
 
 void MainWindow::exportFile() {
@@ -1432,8 +1480,9 @@ void MainWindow::exportBatch(const QStringList& paths) {
                 cancel->store(true); // abort the in-flight decode
                 wait.quit();
             });
-            watcher.setFuture(QtConcurrent::run(
-                [rawPath, cancel]() -> LoadResult { return decodeImage(rawPath, nullptr, cancel); }));
+            watcher.setFuture(QtConcurrent::run([rawPath, cancel]() -> LoadResult {
+                return decodeImage(rawPath, nullptr, cancel);
+            }));
             wait.exec();
             if (progress.wasCancelled())
                 break; // leave the future to finish and be discarded (cancel is set)
@@ -1443,18 +1492,17 @@ void MainWindow::exportBatch(const QStringList& paths) {
         }
 
         const GlobalAdjustment p = (rawPath == session->path())
-            ? activeParams
-            : resolveImageAdjustments(rawPath, QRectF(0, 0, 1, 1));
+                                       ? activeParams
+                                       : resolveImageAdjustments(rawPath, QRectF(0, 0, 1, 1));
 
         // Apply spots stored in the adjustment (ADR 0017).
-        const ImageBuffer renderBuf = p.spots.empty()
-            ? loaded.fullRes
-            : applySpots(loaded.fullRes, p.spots);
+        const ImageBuffer renderBuf = p.spots.empty() ? loaded.fullRes
+                                                      : applySpots(loaded.fullRes, p.spots);
 
         // Compute output size: use per-file natural size when opts is zero.
-        const QSize perFileNatural = crop::cropPixelSize(
-            loaded.fullRes.width, loaded.fullRes.height, p.cropRect);
-        const int outW = opts.width  > 0 ? opts.width  : perFileNatural.width();
+        const QSize perFileNatural
+            = crop::cropPixelSize(loaded.fullRes.width, loaded.fullRes.height, p.cropRect);
+        const int outW = opts.width > 0 ? opts.width : perFileNatural.width();
         const int outH = opts.height > 0 ? opts.height : perFileNatural.height();
 
         QImage out = viewport->renderToImage(renderBuf, p, outW, outH);
