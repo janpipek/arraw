@@ -4,6 +4,7 @@
 #include "ImagePipeline.h"
 #include "RendererCore.h"
 #include "Spot.h"
+#include "ViewportGeometry.h"
 #include <QImage>
 #include <QPointF>
 #include <QRectF>
@@ -73,6 +74,7 @@ public:
     // Spot-tool overlay: set the list the viewport draws and hit-tests.
     // Does not rebuild the spotted image buffer — that is MainWindow's job.
     void setSpots(const std::vector<Spot>& spots);
+
     bool spotToolMode() const { return tool == ActiveTool::SpotTool; }
 
     void resetView();
@@ -125,8 +127,8 @@ signals:
     void localMaskEditFinished();
 
     // SpotTool signals. All coordinates are original buffer pixels (docs/adr/0017).
-    void spotRequested(QPointF destBufPx);          // user clicked to place a new spot
-    void spotHandleChanged(int idx, SpotHandle, QPointF newBufPx); // drag (live)
+    void spotRequested(QPointF destBufPx); // user clicked to place a new spot
+    void spotHandleChanged(int idx, SpotHandle, QPointF newBufPx);   // drag (live)
     void spotHandleCommitted(int idx, SpotHandle, QPointF newBufPx); // mouse release
     void zoomChanged(float pixelZoom);
     // Small shader-rendered samples for histogramming (docs/adr/0004):
@@ -222,6 +224,7 @@ private:
     float displayAspect() const;
     float fitZoom() const;
     float displayOriginalPixelHeight() const;
+    viewport::Geometry geometry() const;
 
     // ── Render state ──────────────────────────────────────────────────────
     RendererCore core;
