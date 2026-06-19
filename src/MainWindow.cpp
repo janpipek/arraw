@@ -768,6 +768,8 @@ void MainWindow::setupDocks() {
     toggleFilmStrip->setShortcut(Qt::Key_F9);
 
     connect(filmStrip, &FilmStrip::fileSelected, this, &MainWindow::loadImage);
+    connect(filmStrip, &FilmStrip::pasteSettingsRequested, this, &MainWindow::pasteSettingsToPaths);
+    connect(filmStrip, &FilmStrip::exportRequested, this, &MainWindow::exportPaths);
 
     // Adjustments + EXIF (right). Collapses to a thin edge strip (ADR 0012).
     auto* rightDock = adjustmentsDock = new QDockWidget("Adjustments", this);
@@ -1181,8 +1183,14 @@ void MainWindow::copySettings() {
 }
 
 void MainWindow::pasteSettings() {
+    pasteSettingsToPaths(filmStrip->selectedPaths());
+}
+
+void MainWindow::pasteSettingsToPaths(QStringList targets) {
     if (session->path().isEmpty() || !settingsClipboard)
         return;
+    if (targets.isEmpty())
+        targets = {session->path()};
 
     // Paste's checklist is bounded by what was copied (narrow only).
     GroupChecklistDialog
@@ -1191,17 +1199,16 @@ void MainWindow::pasteSettings() {
         return;
 
     const GroupSelection chosen = dlg.selectedGroups();
-    const QStringList targets = filmStrip->selectedPaths();
 
-    if (targets.size() <= 1) {
+    if (targets.size() == 1 && targets.constFirst() == session->path()) {
         // Single file: apply to the active image in memory only.
         applyDevelopChange(applyGroups(currentParams(), settingsClipboard->snapshot, chosen));
         return;
     }
 
-    // Multi-file: read before-state from each file's sidecar (or from memory
-    // for the active file, which may have unsaved edits), then push one macro
-    // undo step that auto-saves XMP for all targets (ADR 0018).
+    // Context or multi-file paste: read before-state from each file's sidecar
+    // (or from memory for the active file, which may have unsaved edits), then
+    // push one undo step that auto-saves XMP for all targets (ADR 0018).
     QVector<BatchPasteRecord> records;
     records.reserve(targets.size());
     for (const QString& path : targets) {
@@ -1371,13 +1378,21 @@ void MainWindow::saveAdjustments() {
 }
 
 void MainWindow::exportFile() {
+    exportPaths(filmStrip->selectedPaths());
+}
+
+void MainWindow::exportPaths(const QStringList& paths) {
     if (!session->fullRes().valid()) {
         QMessageBox::information(this, "Export", "No image loaded.");
         return;
     }
 
-    const QStringList targets = filmStrip->selectedPaths();
+    const QStringList targets = paths.isEmpty() ? QStringList{session->path()} : paths;
     if (targets.size() > 1) {
+        exportBatch(targets);
+        return;
+    }
+    if (targets.constFirst() != session->path()) {
         exportBatch(targets);
         return;
     }

@@ -34,6 +34,13 @@ decisions that follow from it.
   Ctrl+click on the active item keeps it selected — since it is by definition an
   edit target.
 
+- **Right-click context target (chosen):** right-clicking a thumbnail opens a
+  context menu for that thumbnail without making it active. If the thumbnail is
+  already selected, context operations use the whole current selection; if it is
+  not selected, they use only the right-clicked file. This keeps batch paste and
+  batch export available from the strip while preserving the rule that only a
+  plain left-click changes the active image.
+
 **Batch paste before-state capture**
 
 - **Lazy / async:** load before-state from sidecar only if the user actually

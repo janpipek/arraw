@@ -9,6 +9,7 @@
 #include <libraw/libraw.h>
 #include <memory>
 #include <optional>
+#include <QContextMenuEvent>
 #include <QDir>
 #include <QEvent>
 #include <QFileDialog>
@@ -182,8 +183,6 @@ FilmStrip::FilmStrip(QWidget* parent)
     list->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     list->viewport()->installEventFilter(this);
     list->installEventFilter(this); // intercept culling keys before type-ahead
-    list->viewport()->setContextMenuPolicy(Qt::CustomContextMenu);
-    connect(list->viewport(), &QWidget::customContextMenuRequested, this, &FilmStrip::showContextMenu);
     layout->addWidget(list, 1);
 
     connect(
@@ -338,6 +337,13 @@ void FilmStrip::applyMarks(const QString& path, const UserMetadata& marks) {
     emit marksChanged(path, marks, saved);
 }
 
+QStringList FilmStrip::contextTargetPaths(const QString& path) const {
+    QStringList targets = selectedPaths();
+    if (targets.contains(path))
+        return targets;
+    return {path};
+}
+
 void FilmStrip::loadMarks(const QStringList& paths) {
     using Marks = QList<QPair<QString, UserMetadata>>;
     auto* watcher = new QFutureWatcher<Marks>(this);
@@ -362,9 +368,20 @@ void FilmStrip::showContextMenu(const QPoint& pos) {
     if (!idx.isValid())
         return;
     const QString path = idx.data(FilmStripModel::PathRole).toString();
+    const QStringList targets = contextTargetPaths(path);
     const UserMetadata cur = model->marksFor(path);
 
     QMenu menu(this);
+    QAction* paste = menu.addAction(tr("Paste Settings"));
+    connect(paste, &QAction::triggered, this, [this, targets] {
+        emit pasteSettingsRequested(targets);
+    });
+    QAction* exportAction = menu.addAction(tr("Export..."));
+    connect(exportAction, &QAction::triggered, this, [this, targets] {
+        emit exportRequested(targets);
+    });
+    menu.addSeparator();
+
     QMenu* rate = menu.addMenu(tr("Rating"));
     for (int n = 5; n >= 1; --n) {
         QAction* a = rate->addAction(QString(n, QChar(0x2605)));
@@ -426,6 +443,19 @@ bool FilmStrip::eventFilter(QObject* watched, QEvent* event) {
 
     if (watched == list->viewport() && event->type() == QEvent::ToolTip)
         return handleTooltip(static_cast<QHelpEvent*>(event));
+
+    if (watched == list->viewport() && event->type() == QEvent::ContextMenu) {
+        showContextMenu(static_cast<QContextMenuEvent*>(event)->pos());
+        return true;
+    }
+
+    if (watched == list->viewport()
+        && (event->type() == QEvent::MouseButtonPress
+            || event->type() == QEvent::MouseButtonRelease)) {
+        auto* mouse = static_cast<QMouseEvent*>(event);
+        if (mouse->button() == Qt::RightButton)
+            return true;
+    }
 
     // A Ctrl/Shift-click is a batch-selection gesture, not a navigation. Handle it
     // ourselves so the active image (current index) stays put — otherwise the view

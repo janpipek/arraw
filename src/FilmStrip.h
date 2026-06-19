@@ -70,6 +70,8 @@ signals:
     // Emitted whenever the multi-selection changes (add/remove with Ctrl/Shift).
     // Batch operations (paste, export) read this to find their target set.
     void selectionChanged(const QStringList& paths);
+    void pasteSettingsRequested(const QStringList& paths);
+    void exportRequested(const QStringList& paths);
     void directoryChanged(const QString& dir);
     void marksChanged(const QString& path, const UserMetadata& marks, bool saved);
 
@@ -91,6 +93,7 @@ private:
     void setRating(const QString& path, int rating);
     void setLabel(const QString& path, ColourLabel label); // toggles off if already set
     void applyMarks(const QString& path, const UserMetadata& marks);
+    QStringList contextTargetPaths(const QString& path) const;
     void showContextMenu(const QPoint& pos);
     QString currentPath() const;
 
