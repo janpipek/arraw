@@ -39,7 +39,10 @@ decisions that follow from it.
   already selected, context operations use the whole current selection; if it is
   not selected, they use only the right-clicked file. This keeps batch paste and
   batch export available from the strip while preserving the rule that only a
-  plain left-click changes the active image.
+  plain left-click changes the active image. Copy Settings is intentionally
+  single-source only: it is disabled when the current selection contains multiple
+  images, or when the source has default develop settings. Apply Preset follows
+  the same target rule as Paste Settings.
 
 **Batch paste before-state capture**
 

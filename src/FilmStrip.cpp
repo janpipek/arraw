@@ -372,15 +372,7 @@ void FilmStrip::showContextMenu(const QPoint& pos) {
     const UserMetadata cur = model->marksFor(path);
 
     QMenu menu(this);
-    QAction* paste = menu.addAction(tr("Paste Settings"));
-    connect(paste, &QAction::triggered, this, [this, targets] {
-        emit pasteSettingsRequested(targets);
-    });
-    QAction* exportAction = menu.addAction(tr("Export..."));
-    connect(exportAction, &QAction::triggered, this, [this, targets] {
-        emit exportRequested(targets);
-    });
-    menu.addSeparator();
+    emit populateContextMenu(path, targets, &menu);
 
     QMenu* rate = menu.addMenu(tr("Rating"));
     for (int n = 5; n >= 1; --n) {
