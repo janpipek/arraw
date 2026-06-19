@@ -102,6 +102,11 @@ private:
     ThumbnailCache* thumbs;
     QString currentDir;
     QSet<QString> metadataPending;
+    // Guards against re-entrant resize: changing the cell height relays the view,
+    // which can toggle the horizontal scrollbar, which resizes the viewport again
+    // (see updateThumbHeight). Without this the resize→layout→resize loop recurses
+    // until the stack overflows.
+    bool updatingThumbHeight = false;
 
     static QStringList scanImageFiles(const QString& dir);
 };
