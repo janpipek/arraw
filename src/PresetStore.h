@@ -7,7 +7,7 @@
 #include <QString>
 
 // Reads and writes Develop Presets as one JSON file per preset in a directory
-// (Milestone 8; docs/adr/0015). The directory is injected so the store is
+// (Milestone 8; docs/adr/0023). The directory is injected so the store is
 // testable headlessly; MainWindow constructs it with
 // QStandardPaths::AppDataLocation/"presets". A preset's display name is the
 // `name` inside the JSON — the filename is only storage, derived + sanitised.

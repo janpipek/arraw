@@ -11,7 +11,7 @@ the thumbnail's `<hash>.jpg` and under the identical `SHA256(path|size|mtime)`
 key. Same key ⇒ same automatic invalidation (a modified file misses and
 regenerates). The tooltip reads the sidecar, so it is instant and opens no files
 on hover for any already-thumbnailed frame. This extends the file-per-entry
-cache of [ADR 0016](0016-developed-thumbnail-and-decode-caches.md).
+cache of [ADR 0024](0024-developed-thumbnail-and-decode-caches.md).
 
 ## Considered Options
 
@@ -38,7 +38,7 @@ cache of [ADR 0016](0016-developed-thumbnail-and-decode-caches.md).
   shows only filename + pixel dimensions. RAW-grade EXIF for these would need a
   separate reader (e.g. exiv2) and is left as future work.
 - `~/.arraw/cache` still has **no eviction**; a JSON sidecar is tiny (well under a
-  KB) and one-per-file, so it does not change the growth story ADR 0016 already
+  KB) and one-per-file, so it does not change the growth story ADR 0024 already
   left for the deferred disk-half-res work.
 - These are caching/pipeline internals, not domain language: `CONTEXT.md` is
   untouched.

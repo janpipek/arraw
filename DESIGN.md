@@ -466,7 +466,7 @@ namespace, and sit on the shared undo stack.
   does not slide masks around.
 - **Live preview + undo:** rendered every frame (unlike export-only sharpening);
   add/move/delete a mask and its slider tweaks are `QUndoStack` steps (unlike the
-  culling marks of `docs/adr/0007-culling-marks-in-develop-sidecar`).
+  culling marks of `docs/adr/0008-culling-marks-in-develop-sidecar`).
 - **Persistence:** arraw-native XMP namespace in the same sidecar. Global edits,
   rating, and label remain Lightroom-compatible; local edits are arraw-only.
 - **Pure logic to `arraw_core`** (TDD): mask weight evaluation per type, the
@@ -500,7 +500,7 @@ explicitly **out of scope here** — see Milestone 10.
   (only the saved groups are written; presence in the file *is* the active-group
   flag), listed in a top-level **Presets** menu. Not Lightroom preset files — a
   clean break from the `crs:` sidecar contract (internal convenience, not an
-  interop surface). See `docs/adr/0015`.
+  interop surface). See `docs/adr/0023`.
 - **UI:** Edit menu gains *Copy Settings…* (Ctrl+Shift+C) and *Paste Settings…*
   (Ctrl+Shift+V); a new Presets menu holds *Save Current Settings as Preset…*,
   *Manage Presets…*, and the saved-preset list.
@@ -556,7 +556,7 @@ export**. Batch culling marks deferred.
 
 ### Milestone 11 — Headless CLI
 
-Design resolved 2026-06-15 in `docs/adr/0012-headless-cli-batch-export.md`. A
+Design resolved 2026-06-15 in `docs/adr/0022-headless-cli-batch-export.md`. A
 windowless `arraw-cli` executable renders RAW → export with no GUI, reusing the
 shipped pipeline so the CLI and app cannot diverge.
 
