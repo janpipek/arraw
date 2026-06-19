@@ -73,6 +73,40 @@ TEST_CASE(
     CHECK(resolved.adjustments.cropRect == result.defaultCrop);
 }
 
+TEST_CASE("leaving an image only needs confirmation when loaded state is dirty", "[loadworkflow]") {
+    DevelopSession session;
+
+    CHECK_FALSE(shouldConfirmLeavingImage(session));
+
+    LoadResult result;
+    result.preview = ImageBuffer{{0.1f, 0.2f, 0.3f}, 1, 1};
+    session.setLoadedImage(
+        "/photos/IMG_0001.CR3",
+        result,
+        GlobalAdjustment{},
+        DevelopSession::SidecarState::Loaded,
+        UserMetadata{});
+
+    CHECK_FALSE(shouldConfirmLeavingImage(session));
+
+    GlobalAdjustment edited = session.params();
+    edited.exposure = 1.0f;
+    session.setParams(edited);
+
+    CHECK(shouldConfirmLeavingImage(session));
+
+    session.markDevelopSaved();
+    UserMetadata metadata;
+    metadata.rating = 4;
+    session.setUserMetadata(metadata);
+
+    CHECK(shouldConfirmLeavingImage(session));
+
+    session.beginLoading("/photos/IMG_0002.CR3");
+
+    CHECK_FALSE(shouldConfirmLeavingImage(session));
+}
+
 TEST_CASE(
     "decodeImage loads standard image formats without embedded preview callback", "[loadworkflow]") {
     QTemporaryDir dir;
