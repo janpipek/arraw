@@ -6,6 +6,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QHash>
 #include <QJsonParseError>
 #include <QMutexLocker>
 #include <QSaveFile>
@@ -84,6 +85,39 @@ bool saveJpeg(const QImage& img, const QString& path) {
     return img.save(path, "JPEG", kJpegQuality);
 }
 
+QMutex generationMutex;
+QHash<QString, quint64> generations;
+
+quint64 generationForCachePath(const QString& path) {
+    QMutexLocker lock(&generationMutex);
+    return generations.value(path);
+}
+
+bool storeNextGeneration(const QString& path, const QImage& image) {
+    QMutexLocker lock(&generationMutex);
+    const quint64 next = generations.value(path) + 1;
+    generations.insert(path, next);
+    return saveJpeg(scaleDown(image, kMaxThumbPx), path);
+}
+
+bool generationStillCurrentUnlocked(const QString& path, quint64 generation) {
+    return generations.value(path) == generation;
+}
+
+bool generationStillCurrent(const QString& path, quint64 generation) {
+    QMutexLocker lock(&generationMutex);
+    return generationStillCurrentUnlocked(path, generation);
+}
+
+bool storeIfGenerationMatches(const QString& outPath, const QImage& image, quint64 generation) {
+    if (outPath.isEmpty() || image.isNull())
+        return false;
+    QMutexLocker lock(&generationMutex);
+    if (!generationStillCurrentUnlocked(outPath, generation))
+        return false;
+    return saveJpeg(scaleDown(image, kMaxThumbPx), outPath);
+}
+
 } // namespace
 
 ThumbnailCache::ThumbnailCache(QObject* parent)
@@ -100,8 +134,20 @@ bool ThumbnailCache::store(const QString& rawPath, const QImage& image) {
     const QString outPath = cachePathFor(rawPath);
     if (outPath.isEmpty() || image.isNull())
         return false;
-    return saveJpeg(scaleDown(image, kMaxThumbPx), outPath);
+    return storeNextGeneration(outPath, image);
 }
+
+#ifdef ARRAW_TESTING
+quint64 ThumbnailCache::cacheGenerationForTesting(const QString& rawPath) {
+    const QString path = cachePathFor(rawPath);
+    return path.isEmpty() ? 0 : generationForCachePath(path);
+}
+
+bool ThumbnailCache::storeIfGenerationMatchesForTesting(
+    const QString& rawPath, const QImage& image, quint64 generation) {
+    return storeIfGenerationMatches(cachePathFor(rawPath), image, generation);
+}
+#endif
 
 QImage ThumbnailCache::loadFromDisk(const QString& rawPath) {
     const QString path = cachePathFor(rawPath);
@@ -157,20 +203,23 @@ void ThumbnailCache::request(const QString& rawPath) {
         pending.insert(rawPath);
     }
 
-    (void) QtConcurrent::run([this, rawPath]() {
+    const QString outPath = cachePathFor(rawPath);
+    const quint64 generation = outPath.isEmpty() ? 0 : generationForCachePath(outPath);
+
+    (void) QtConcurrent::run([this, rawPath, outPath, generation]() {
         QImage img = decodeEmbeddedThumb(rawPath);
-        const QString outPath = cachePathFor(rawPath);
-        if (!img.isNull() && !outPath.isEmpty())
-            saveJpeg(img, outPath);
+        if (!img.isNull())
+            storeIfGenerationMatches(outPath, img, generation);
 
         QMetaObject::invokeMethod(
             this,
-            [this, rawPath, img = std::move(img)]() {
+            [this, rawPath, outPath, generation, img = std::move(img)]() {
                 {
                     QMutexLocker lock(&pendingMutex);
                     pending.remove(rawPath);
                 }
-                if (!img.isNull())
+                if (!img.isNull() && !outPath.isEmpty()
+                    && generationStillCurrent(outPath, generation))
                     emit thumbnailReady(rawPath, img);
             },
             Qt::QueuedConnection);
