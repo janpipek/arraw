@@ -24,5 +24,5 @@ float spotWeight(const Spot& spot, QPointF px);
 ImageBuffer applySpots(const ImageBuffer& buf, const std::vector<Spot>& spots);
 
 // Auto-place a source circle for a newly placed spot at `destination`.
-// Offsets right by 10% of min(bufW, bufH), clamped inside the buffer.
-QPointF autoSourcePosition(QPointF destination, double radius, int bufW, int bufH);
+// Offsets right by `offset` buffer pixels, clamped inside the buffer.
+QPointF autoSourcePosition(QPointF destination, double offset, int bufW, int bufH);
