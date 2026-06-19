@@ -169,6 +169,7 @@ set(CORE_SOURCES
     src/BatchPaste.cpp
     src/BatchProgressDialog.cpp
     src/MainWindowStatus.cpp
+    src/ChromeHider.cpp
 )
 
 add_library(arraw_core STATIC ${CORE_SOURCES})

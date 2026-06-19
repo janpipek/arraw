@@ -194,6 +194,9 @@ MainWindow::MainWindow(QWidget* parent)
     setupStatusBar();
     setupToolbar();
 
+    chromeHider.emplace(std::vector<QWidget*>{
+        menuBar(), mainToolBar, adjustmentsStrip, statusBar(), filmStripDock, adjustmentsDock});
+
     connect(proofPanel, &ProofingPanel::proofingChanged, this, &MainWindow::rebuildDisplayLut);
     rebuildDisplayLut();
 
@@ -387,6 +390,8 @@ void MainWindow::closeEvent(QCloseEvent* e) {
         return;
     }
 
+    restoreFocusModes();
+
     QSettings s;
     s.setValue("geometry", saveGeometry());
     s.setValue("windowState", saveState());
@@ -398,6 +403,12 @@ void MainWindow::closeEvent(QCloseEvent* e) {
 }
 
 void MainWindow::keyPressEvent(QKeyEvent* e) {
+    if (e->key() == Qt::Key_Escape
+        && ((chromeHider && chromeHider->hidden()) || isFullScreen())) {
+        restoreFocusModes();
+        return;
+    }
+
     // Culling marks (0-5, X, r/y/g/b/p) are owned by the Image menu's actions —
     // window-level shortcuts that fire whether the strip or the image has focus.
     if (e->key() == Qt::Key_Left)
@@ -454,6 +465,16 @@ void MainWindow::setupMenus() {
     toggleAdjustments->setShortcut(Qt::Key_F8);
     view->addSeparator();
     view->addAction("Reset Zoom", Qt::CTRL | Qt::Key_0, viewport, &ImageViewport::resetView);
+    view->addSeparator();
+
+    fullScreenAction = view->addAction("&Full Screen", this, &MainWindow::toggleFullScreen);
+    fullScreenAction->setCheckable(true);
+    fullScreenAction->setShortcut(Qt::Key_F11);
+
+    lightsOutAction = view->addAction("&Hide Panels", this, &MainWindow::toggleChrome);
+    lightsOutAction->setCheckable(true);
+    lightsOutAction->setShortcut(Qt::Key_F12);
+
     view->addSeparator();
 
     // Clipping overlay (docs/adr/0009). Two independent toggles; J (handled in
@@ -579,6 +600,7 @@ void MainWindow::setupStatusBar() {
 
 void MainWindow::setupToolbar() {
     auto* tb = new QToolBar("Tools", this);
+    mainToolBar = tb;
     tb->setObjectName("ToolsToolBar");
     tb->setMovable(false);
     tb->setToolButtonStyle(Qt::ToolButtonTextOnly);
@@ -833,6 +855,7 @@ void MainWindow::setupDocks() {
     // Reveal strip: a vertical toolbar pinned to the right edge, visible only
     // while the dock is collapsed; its chevron re-opens the panel (ADR 0012).
     auto* strip = new QToolBar("Adjustments Strip", this);
+    adjustmentsStrip = strip;
     strip->setObjectName("AdjustmentsStrip"); // saveState/restoreState key
     strip->setMovable(false);
     strip->setFloatable(false);
@@ -1105,6 +1128,44 @@ void MainWindow::toggleClipping() {
     const bool anyOn = clipHighlightsAction->isChecked() || clipShadowsAction->isChecked();
     clipHighlightsAction->setChecked(!anyOn);
     clipShadowsAction->setChecked(!anyOn); // toggled() drives applyClipping()
+}
+
+void MainWindow::toggleFullScreen() {
+    if (isFullScreen()) {
+        if (wasMaximized)
+            showMaximized();
+        else
+            showNormal();
+    } else {
+        wasMaximized = isMaximized();
+        showFullScreen();
+    }
+    fullScreenAction->setChecked(isFullScreen());
+}
+
+void MainWindow::toggleChrome() {
+    if (!chromeHider)
+        return;
+
+    if (chromeHider->hidden())
+        chromeHider->restore();
+    else
+        chromeHider->hide();
+    lightsOutAction->setChecked(chromeHider->hidden());
+}
+
+void MainWindow::restoreFocusModes() {
+    if (chromeHider && chromeHider->hidden()) {
+        chromeHider->restore();
+        lightsOutAction->setChecked(false);
+    }
+    if (isFullScreen()) {
+        if (wasMaximized)
+            showMaximized();
+        else
+            showNormal();
+        fullScreenAction->setChecked(false);
+    }
 }
 
 void MainWindow::rebuildDisplayLut() {
