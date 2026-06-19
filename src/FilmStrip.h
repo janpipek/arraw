@@ -12,11 +12,17 @@ class QImage;
 class QHelpEvent;
 class QMouseEvent;
 
-// Horizontal thumbnail strip for one directory. A thin shell over FilmStripModel
-// + QListView; the testable logic lives in FilmStripModel / FilmStripLayout.
-// Public API mirrors the former FileBrowser so MainWindow wiring is unchanged.
+/**
+ * Horizontal thumbnail strip for the open directory.
+ *
+ * FilmStrip is a thin QWidget shell over FilmStripModel, QListView, thumbnail
+ * loading, and selection gestures. It owns directory-level browser state and may
+ * write culling marks for non-active files; when the active file changes,
+ * DevelopSession remains the canonical owner of that image's metadata.
+ */
 class FilmStrip : public QWidget {
     Q_OBJECT
+    Q_DISABLE_COPY_MOVE(FilmStrip)
 public:
     explicit FilmStrip(QWidget* parent = nullptr);
 
@@ -27,6 +33,7 @@ public:
     // Replace a row's thumbnail with a freshly developed one. No-op if the path
     // is not in the current directory listing.
     void setThumbnail(const QString& path, const QImage& image);
+    void setMarks(const QString& path, const UserMetadata& marks);
 
     // Navigate ±1 from current selection. Returns false if already at boundary.
     bool navigateBy(int delta);
@@ -64,6 +71,7 @@ signals:
     // Batch operations (paste, export) read this to find their target set.
     void selectionChanged(const QStringList& paths);
     void directoryChanged(const QString& dir);
+    void marksChanged(const QString& path, const UserMetadata& marks, bool saved);
 
 protected:
     // Watches the list viewport for resizes (fired after its geometry is final,

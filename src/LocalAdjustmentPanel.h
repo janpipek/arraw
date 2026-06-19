@@ -13,17 +13,22 @@ class QCheckBox;
 class QStackedWidget;
 class AdjustmentSpinBox;
 
-// The "Masks" tab: manage a photo's Local Adjustments (docs/adr/0010) — add,
-// select, and delete masks, and edit the active mask's tonal/colour deltas.
-// Mask geometry is placed and dragged on the image (ImageViewport); this panel
-// owns the list and the delta sliders. The temperature slider here is a
-// relative ±100 shift, not the global Kelvin slider.
+/**
+ * The Masks tab for local develop edits (docs/adr/0010).
+ *
+ * LocalAdjustmentPanel lets the user add, select, delete, and tune Local
+ * Adjustments. It owns the panel-local list copy and delta controls for editing,
+ * while ImageViewport edits mask geometry on the image and DevelopSession owns
+ * the active image's canonical list. The temperature slider here is a relative
+ * +/-100 shift, not the global Kelvin slider.
+ */
 class LocalAdjustmentPanel : public QWidget {
     Q_OBJECT
+    Q_DISABLE_COPY_MOVE(LocalAdjustmentPanel)
 public:
     explicit LocalAdjustmentPanel(QWidget* parent = nullptr);
 
-    std::vector<LocalAdjustment> localAdjustments() const { return adjustments; }
+    const std::vector<LocalAdjustment>& localAdjustments() const { return adjustments; }
 
     // Replace the whole list (XMP load / undo). Does not emit changed/committed.
     void setLocalAdjustments(const std::vector<LocalAdjustment>& list);

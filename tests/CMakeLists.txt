@@ -18,10 +18,13 @@ add_executable(arraw_tests
     test_RawProcessor.cpp
     test_StandardImageLoader.cpp
     test_GoldenImages.cpp
+    test_ImageLoadWorkflow.cpp
     test_ImageMetadata.cpp
     test_FilmStripModel.cpp
     test_FilmStripLayout.cpp
     test_FilmStripTooltip.cpp
+    test_ExportWorkflow.cpp
+    test_MainWindowStatus.cpp
     test_ThumbnailCache.cpp
     test_FieldSpec.cpp
     test_LocalAdjustment.cpp
@@ -29,6 +32,7 @@ add_executable(arraw_tests
     test_CollapsiblePane.cpp
     test_CropGeometry.cpp
     test_DecodeCache.cpp
+    test_DevelopSession.cpp
     test_DevelopGroup.cpp
     test_DevelopPreset.cpp
     test_GroupChecklistDialog.cpp

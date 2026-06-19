@@ -138,12 +138,14 @@ set(CORE_SOURCES
     src/CollapsiblePane.cpp
     src/ToneCurveWidget.cpp
     src/ExifPanel.cpp
+    src/ExportWorkflow.cpp
     src/ImageMetadata.cpp
     src/FilmStripTooltip.cpp
     src/Histogram.cpp
     src/RawProcessor.cpp
     src/StandardImageLoader.cpp
     src/ImagePipeline.cpp
+    src/ImageLoadWorkflow.cpp
     src/LocalAdjustment.cpp
     src/FieldSpec.cpp
     src/ColorManagement.cpp
@@ -154,6 +156,7 @@ set(CORE_SOURCES
     src/FilmStripLayout.cpp
     src/ThumbnailCache.cpp
     src/DecodeCache.cpp
+    src/DevelopSession.cpp
     src/ExportDialog.cpp
     src/CropGeometry.cpp
     src/DevelopGroup.cpp
@@ -164,6 +167,7 @@ set(CORE_SOURCES
     src/SpotRemovalPanel.cpp
     src/BatchPaste.cpp
     src/BatchProgressDialog.cpp
+    src/MainWindowStatus.cpp
 )
 
 add_library(arraw_core STATIC ${CORE_SOURCES})

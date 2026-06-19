@@ -2,9 +2,14 @@
 
 class QWidget;
 
-// Owns the collapse semantics for a pair of widgets that are always opposite:
-// the expanded content and the thin reveal strip shown in its place. The single
-// place that knows "exactly one of the two is visible" (ADR 0012).
+/**
+ * Small helper that owns the visibility invariant for a collapsible pane.
+ *
+ * CollapsiblePane keeps an expanded widget and its thin reveal strip mutually
+ * exclusive: exactly one is visible at a time (ADR 0012). It is intentionally a
+ * plain C++ helper, not a QObject/controller, because it only applies this local
+ * widget invariant.
+ */
 class CollapsiblePane {
 public:
     CollapsiblePane(QWidget* expanded, QWidget* strip);

@@ -1,21 +1,19 @@
-#include "AdjustmentPanel.h"
 #include "BatchPaste.h"
 #include "XmpSidecar.h"
 
-#include "TestApp.h"
 #include <catch2/catch_test_macros.hpp>
 
 #include <QTemporaryDir>
 
 TEST_CASE("BatchAdjustmentCommand text pluralises for multiple files", "[batchpaste]") {
     QVector<BatchPasteRecord> records(3);
-    BatchAdjustmentCommand cmd(nullptr, QString{}, records);
+    BatchAdjustmentCommand cmd(QString{}, records);
     REQUIRE(cmd.text() == "Paste Settings (3 files)");
 }
 
 TEST_CASE("BatchAdjustmentCommand text uses singular for one file", "[batchpaste]") {
     QVector<BatchPasteRecord> records(1);
-    BatchAdjustmentCommand cmd(nullptr, QString{}, records);
+    BatchAdjustmentCommand cmd(QString{}, records);
     REQUIRE(cmd.text() == "Paste Settings (1 file)");
 }
 
@@ -32,7 +30,7 @@ TEST_CASE("BatchAdjustmentCommand redo writes after-state XMP for each record", 
     after2.exposure = -0.5f;
 
     QVector<BatchPasteRecord> records = {{raw1, before1, after1}, {raw2, before2, after2}};
-    BatchAdjustmentCommand cmd(nullptr, QString{}, records);
+    BatchAdjustmentCommand cmd(QString{}, records);
     cmd.redo();
 
     CHECK(XmpSidecar::loadAdjustments(raw1).exposure == after1.exposure);
@@ -53,7 +51,7 @@ TEST_CASE("BatchAdjustmentCommand undo restores before-state XMP for each record
     after2.exposure = 2.0f;
 
     QVector<BatchPasteRecord> records = {{raw1, before1, after1}, {raw2, before2, after2}};
-    BatchAdjustmentCommand cmd(nullptr, QString{}, records);
+    BatchAdjustmentCommand cmd(QString{}, records);
     cmd.redo();
     cmd.undo();
 
@@ -61,8 +59,7 @@ TEST_CASE("BatchAdjustmentCommand undo restores before-state XMP for each record
     CHECK(XmpSidecar::loadAdjustments(raw2).exposure == before2.exposure);
 }
 
-TEST_CASE("BatchAdjustmentCommand redo/undo update the active file's AdjustmentPanel", "[batchpaste]") {
-    testApp();
+TEST_CASE("BatchAdjustmentCommand redo/undo updates the active file via callback", "[batchpaste]") {
     QTemporaryDir dir;
     REQUIRE(dir.isValid());
 
@@ -73,18 +70,18 @@ TEST_CASE("BatchAdjustmentCommand redo/undo update the active file's AdjustmentP
     activeBefore.exposure = 0.1f;
     activeAfter.exposure  = 2.0f;
 
-    AdjustmentPanel panel;
-    panel.setParams(activeBefore);
+    GlobalAdjustment activeState = activeBefore;
 
     QVector<BatchPasteRecord> records = {
         {activeRaw, activeBefore, activeAfter},
         {otherRaw,  GlobalAdjustment{}, GlobalAdjustment{}},
     };
-    BatchAdjustmentCommand cmd(&panel, activeRaw, records);
+    BatchAdjustmentCommand cmd(
+        activeRaw, records, [&activeState](const GlobalAdjustment& p) { activeState = p; });
 
     cmd.redo();
-    CHECK(panel.params().exposure == activeAfter.exposure);
+    CHECK(activeState.exposure == activeAfter.exposure);
 
     cmd.undo();
-    CHECK(panel.params().exposure == activeBefore.exposure);
+    CHECK(activeState.exposure == activeBefore.exposure);
 }

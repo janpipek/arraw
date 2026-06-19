@@ -6,11 +6,16 @@ class QProgressBar;
 class QLabel;
 class QPushButton;
 
-// Modal progress dialog for long batch operations (export, etc.). Shows a
-// progress bar, a per-item filename label, and a Cancel button. The caller
-// polls wasCancelled() between items and aborts the loop when true.
+/**
+ * Modal progress dialog for long batch operations.
+ *
+ * BatchProgressDialog presents progress, the current filename, and cancellation
+ * state. It deliberately does not run work itself; the caller advances it,
+ * listens for cancelRequested, and polls wasCancelled() between batch items.
+ */
 class BatchProgressDialog : public QDialog {
     Q_OBJECT
+    Q_DISABLE_COPY_MOVE(BatchProgressDialog)
 public:
     explicit BatchProgressDialog(int total, QWidget* parent = nullptr);
 

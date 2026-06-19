@@ -5,6 +5,7 @@
 #include "PresetStore.h"
 #include "SettingsClipboard.h"
 #include "Spot.h"
+#include "UserMetadata.h"
 #include <atomic>
 #include <memory>
 #include <optional>
@@ -29,9 +30,19 @@ class QAction;
 class QTabWidget;
 class QTimer;
 class QMenu;
+class DevelopSession;
 
+/**
+ * Top-level Qt Widgets shell for the editor.
+ *
+ * MainWindow owns the visible widgets, menus, docks, undo stack, decode jobs,
+ * and signal wiring. It is intentionally GUI glue: the current image state
+ * lives in DevelopSession, while editor panels and ImageViewport mirror that
+ * state and report user intent back through signals.
+ */
 class MainWindow : public QMainWindow {
     Q_OBJECT
+    Q_DISABLE_COPY_MOVE(MainWindow)
 public:
     explicit MainWindow(QWidget* parent = nullptr);
     ~MainWindow() override; // out-of-line for unique_ptr<CollapsiblePane>
@@ -41,10 +52,15 @@ public:
     void openPath(const QString& path);
 
     // Apply all spots to the clean decoded buffers and push spotted textures to
-    // the viewport. fullResOnly=false rebuilds only the preview (live drag);
-    // fullResOnly=true also rebuilds spottedFullRes (release / undo / load).
+    // the viewport. fullResOnly=false pushes only the preview (live drag);
+    // fullResOnly=true also pushes the full-res export buffer (release / undo / load).
     // Public so SpotListCommand can call it on undo/redo.
     void rebuildSpottedBuffers(bool fullResOnly = false);
+
+    // Mirror the canonical session params into editor widgets and the viewport.
+    // Public so undo commands can update views after mutating the session.
+    void syncSessionToEditors();
+    void syncSessionSpotsToEditors(bool fullResOnly = true);
 
 protected:
     void closeEvent(QCloseEvent* e) override;
@@ -83,22 +99,26 @@ private:
     // image: stores buffers, re-reads the sidecar, restores exif. Used by both
     // onLoadFinished and the decode-cache hit path in loadImage.
     void applyLoadResult(const QString& path, const LoadResult& result);
-    // Push the pending image's resolved params to the panels + viewport, so the
+    // Push the pending preview's resolved params to the panels + viewport, so the
     // first paint of a new image wears its own edits (not the previous image's).
-    void applyPendingParams();
+    void applyPendingPreviewParams();
     void setLoadingState(bool loading);
     void updateZoomStatus(float zoom);
 
     // Apply a develop change to the global params as one undo step (the source
     // of truth for copy/paste and preset apply). No-op if nothing changed.
+    void pushGlobalAdjustmentCommand(const GlobalAdjustment& before, const GlobalAdjustment& after);
     void applyDevelopChange(const GlobalAdjustment& after);
     void applyPreset(const DevelopPreset& preset);
     void rebuildPresetsMenu(); // re-list saved presets after save/delete
+    void applyCurrentUserMetadata(const UserMetadata& metadata);
+    void setCurrentRating(int rating);
+    void setCurrentLabel(ColourLabel label);
 
-    // The full develop params = global edits (adjPanel) + local adjustments
-    // (localPanel) + spots (spotPanel) merged into one GlobalAdjustment for save/export.
+    // The full develop params for save/export. DevelopSession is canonical;
+    // panels mirror/edit this state but do not answer "what is current?"
     GlobalAdjustment currentParams() const;
-    // Feed currentParams() to the viewport (after a global or local change).
+    // Feed the session params to the viewport after an edit.
     void pushParamsToViewport();
 
     // Re-render the current image's filmstrip thumbnail through the develop
@@ -158,15 +178,11 @@ private:
 
     QString monitorProfilePath; // empty = assume sRGB
 
-    ImageBuffer fullRes;         // clean decoded full-res buffer; never mutated
-    ImageBuffer preview;         // clean decoded preview buffer; never mutated
-    ImageBuffer spottedFullRes;  // fullRes with all spots applied (docs/adr/0017)
-    bool m_baseLook = false;     // whether the current preview was loaded with baseLook on
-    QString currentPath;
+    DevelopSession* session;
 
     // Params of the image currently being loaded, resolved up front from its
     // sidecar and applied atomically with the first paint of that image.
-    GlobalAdjustment pendingParams;
+    GlobalAdjustment pendingPreviewParams;
 
     // Session decode cache: skips the multi-second demosaic when re-opening a
     // recently viewed image. ~1.5 GiB of decoded buffers, LRU, current pinned.

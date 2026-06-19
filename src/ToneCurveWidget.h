@@ -7,8 +7,17 @@
 
 class QPainter;
 
+/**
+ * Interactive tone-curve editor used by AdjustmentPanel.
+ *
+ * ToneCurveWidget owns the editable curve points and histogram backdrop for the
+ * selected luma/R/G/B channel, emits live curve changes, and marks edit
+ * boundaries for undo. AdjustmentPanel translates those widget edits into
+ * GlobalAdjustment; DevelopSession owns the committed active-image parameters.
+ */
 class ToneCurveWidget : public QWidget {
     Q_OBJECT
+    Q_DISABLE_COPY_MOVE(ToneCurveWidget)
 public:
     enum class Channel { Luma, Red, Green, Blue };
 

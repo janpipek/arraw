@@ -7,6 +7,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonParseError>
+#include <QMutexLocker>
 #include <QSaveFile>
 #include <QStandardPaths>
 #include <QtConcurrent/QtConcurrent>
@@ -149,9 +150,12 @@ void ThumbnailCache::request(const QString& rawPath) {
         return;
     }
 
-    if (pending.contains(rawPath))
-        return;
-    pending.insert(rawPath);
+    {
+        QMutexLocker lock(&pendingMutex);
+        if (pending.contains(rawPath))
+            return;
+        pending.insert(rawPath);
+    }
 
     (void) QtConcurrent::run([this, rawPath]() {
         QImage img = decodeEmbeddedThumb(rawPath);
@@ -162,7 +166,10 @@ void ThumbnailCache::request(const QString& rawPath) {
         QMetaObject::invokeMethod(
             this,
             [this, rawPath, img = std::move(img)]() {
-                pending.remove(rawPath);
+                {
+                    QMutexLocker lock(&pendingMutex);
+                    pending.remove(rawPath);
+                }
                 if (!img.isNull())
                     emit thumbnailReady(rawPath, img);
             },

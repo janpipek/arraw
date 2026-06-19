@@ -1041,9 +1041,9 @@ void ImageViewport::mousePressEvent(QMouseEvent* e) {
     }
     if (spotToolMode() && e->button() == Qt::LeftButton) {
         int idx = -1;
-        m_spotDragHandle = hitTestSpot(e->position(), idx);
-        m_spotDragIdx = idx;
-        if (m_spotDragHandle == SpotHandle::None)
+        spotDragHandle = hitTestSpot(e->position(), idx);
+        spotDragIdx = idx;
+        if (spotDragHandle == SpotHandle::None)
             emit spotRequested(viewportToBufferPixel(e->position()));
         return;
     }
@@ -1079,16 +1079,15 @@ void ImageViewport::mouseMoveEvent(QMouseEvent* e) {
         }
         return;
     }
-    if (spotToolMode() && (e->buttons() & Qt::LeftButton)
-        && m_spotDragHandle != SpotHandle::None
-        && m_spotDragIdx >= 0 && m_spotDragIdx < static_cast<int>(m_spots.size())) {
+    if (spotToolMode() && (e->buttons() & Qt::LeftButton) && spotDragHandle != SpotHandle::None
+        && spotDragIdx >= 0 && spotDragIdx < static_cast<int>(spots.size())) {
         const QPointF bufPx = viewportToBufferPixel(e->position());
-        Spot& s = m_spots[m_spotDragIdx];
-        if (m_spotDragHandle == SpotHandle::Destination)
+        Spot& s = spots[spotDragIdx];
+        if (spotDragHandle == SpotHandle::Destination)
             s.destination = bufPx;
         else
             s.source = bufPx;
-        emit spotHandleChanged(m_spotDragIdx, m_spotDragHandle, bufPx);
+        emit spotHandleChanged(spotDragIdx, spotDragHandle, bufPx);
         update();
         return;
     }
@@ -1123,11 +1122,11 @@ void ImageViewport::mouseReleaseEvent(QMouseEvent* e) {
         return;
     }
     if (spotToolMode() && e->button() == Qt::LeftButton
-        && m_spotDragHandle != SpotHandle::None && m_spotDragIdx >= 0) {
+        && spotDragHandle != SpotHandle::None && spotDragIdx >= 0) {
         const QPointF bufPx = viewportToBufferPixel(e->position());
-        emit spotHandleCommitted(m_spotDragIdx, m_spotDragHandle, bufPx);
-        m_spotDragHandle = SpotHandle::None;
-        m_spotDragIdx = -1;
+        emit spotHandleCommitted(spotDragIdx, spotDragHandle, bufPx);
+        spotDragHandle = SpotHandle::None;
+        spotDragIdx = -1;
         return;
     }
     dragging = false;
@@ -1173,7 +1172,7 @@ void ImageViewport::keyReleaseEvent(QKeyEvent* e) {
 // ── SpotTool ──────────────────────────────────────────────────────────────────
 
 void ImageViewport::setSpots(const std::vector<Spot>& spots) {
-    m_spots = spots;
+    this->spots = spots;
     update();
 }
 
@@ -1185,7 +1184,7 @@ QPointF ImageViewport::viewportToBufferPixel(QPointF pos) const {
     const QPointF cropUV = viewportToCropUV(pos);
     const QRectF& cr = params.cropRect;
     const float fu = float(cr.left() + cropUV.x() * cr.width());
-    const float fv = float(cr.top()  + cropUV.y() * cr.height());
+    const float fv = float(cr.top() + cropUV.y() * cr.height());
     const QPointF bufUV = rotateTexUV(fu, fv, params.rotation, imageAspect, 0.5f, 0.5f);
     return {bufUV.x() * originalWidth, bufUV.y() * originalHeight};
 }
@@ -1200,7 +1199,7 @@ QPointF ImageViewport::bufferPixelToViewport(QPointF bufPx) const {
     const QPointF fullUV = rotateTexUV(bu, bv, -params.rotation, imageAspect, 0.5f, 0.5f);
     const QRectF& cr = params.cropRect;
     const float cu = float((fullUV.x() - cr.left()) / cr.width());
-    const float cv = float((fullUV.y() - cr.top())  / cr.height());
+    const float cv = float((fullUV.y() - cr.top()) / cr.height());
     return cropUVToViewport(cu, cv);
 }
 
@@ -1219,11 +1218,11 @@ ImageViewport::SpotHandle ImageViewport::hitTestSpot(QPointF viewportPos, int& o
     SpotHandle best = SpotHandle::None;
     double bestD2 = double(kMaskHandleRadius) * kMaskHandleRadius;
 
-    for (int i = 0; i < static_cast<int>(m_spots.size()); ++i) {
+    for (int i = 0; i < static_cast<int>(spots.size()); ++i) {
         for (SpotHandle h : {SpotHandle::Destination, SpotHandle::Source}) {
             const QPointF pt = h == SpotHandle::Destination
-                ? bufferPixelToViewport(m_spots[i].destination)
-                : bufferPixelToViewport(m_spots[i].source);
+                ? bufferPixelToViewport(spots[i].destination)
+                : bufferPixelToViewport(spots[i].source);
             const QPointF d = viewportPos - pt;
             const double d2 = QPointF::dotProduct(d, d);
             if (d2 < bestD2) {
@@ -1239,11 +1238,11 @@ ImageViewport::SpotHandle ImageViewport::hitTestSpot(QPointF viewportPos, int& o
 void ImageViewport::drawSpotOverlay(QPainter& p) const {
     p.setRenderHint(QPainter::Antialiasing, true);
 
-    for (int i = 0; i < static_cast<int>(m_spots.size()); ++i) {
-        const Spot& s = m_spots[i];
-        const QPointF destPt  = bufferPixelToViewport(s.destination);
-        const QPointF srcPt   = bufferPixelToViewport(s.source);
-        const double  r       = bufRadiusToViewport(s.destination, s.radius);
+    for (int i = 0; i < static_cast<int>(spots.size()); ++i) {
+        const Spot& s = spots[i];
+        const QPointF destPt = bufferPixelToViewport(s.destination);
+        const QPointF srcPt = bufferPixelToViewport(s.source);
+        const double r = bufRadiusToViewport(s.destination, s.radius);
 
         // Connecting line
         p.setPen(QPen(QColor(255, 255, 255, 160), 1.0, Qt::DashLine));

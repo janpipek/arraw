@@ -7,16 +7,18 @@
 #include "CropGeometry.h"
 #include "DevelopGroup.h"
 #include "DevelopPreset.h"
+#include "DevelopSession.h"
 #include "ExifPanel.h"
 #include "ExportDialog.h"
+#include "ExportWorkflow.h"
 #include "FilmStrip.h"
 #include "GroupChecklistDialog.h"
+#include "ImageLoadWorkflow.h"
 #include "ImageViewport.h"
 #include "LocalAdjustmentPanel.h"
+#include "MainWindowStatus.h"
 #include "SpotRemovalPanel.h"
 #include "ProofingPanel.h"
-#include "RawProcessor.h"
-#include "StandardImageLoader.h"
 #include "ThumbnailCache.h"
 #include "XmpSidecar.h"
 #include <algorithm>
@@ -66,19 +68,24 @@
 class AdjustmentCommand : public QUndoCommand {
 public:
     AdjustmentCommand(
-        AdjustmentPanel* panel, const GlobalAdjustment& before, const GlobalAdjustment& after)
-        : panel(panel),
+        DevelopSession* session,
+        MainWindow* mainWindow,
+        const GlobalAdjustment& before,
+        const GlobalAdjustment& after)
+        : session(session),
+          mainWindow(mainWindow),
           before(before),
           after(after) {
         setText("Adjust");
     }
 
-    void undo() override { panel->setParams(before); }
+    void undo() override;
 
-    void redo() override { panel->setParams(after); }
+    void redo() override;
 
 private:
-    AdjustmentPanel* panel;
+    DevelopSession* session;
+    MainWindow* mainWindow;
     GlobalAdjustment before, after;
 };
 
@@ -89,21 +96,24 @@ private:
 class LocalAdjustmentCommand : public QUndoCommand {
 public:
     LocalAdjustmentCommand(
-        LocalAdjustmentPanel* panel,
+        DevelopSession* session,
+        MainWindow* mainWindow,
         std::vector<LocalAdjustment> before,
         std::vector<LocalAdjustment> after)
-        : panel(panel),
+        : session(session),
+          mainWindow(mainWindow),
           before(std::move(before)),
           after(std::move(after)) {
         setText("Adjust Local");
     }
 
-    void undo() override { panel->setLocalAdjustments(before); }
+    void undo() override;
 
-    void redo() override { panel->setLocalAdjustments(after); }
+    void redo() override;
 
 private:
-    LocalAdjustmentPanel* panel;
+    DevelopSession* session;
+    MainWindow* mainWindow;
     std::vector<LocalAdjustment> before, after;
 };
 
@@ -113,30 +123,59 @@ private:
 // ---------------------------------------------------------------------------
 class SpotListCommand : public QUndoCommand {
 public:
-    SpotListCommand(SpotRemovalPanel* panel, MainWindow* mw,
-                    std::vector<Spot> before, std::vector<Spot> after)
-        : panel(panel),
-          mainWindow(mw),
+    SpotListCommand(
+        DevelopSession* session,
+        MainWindow* mainWindow,
+        std::vector<Spot> before,
+        std::vector<Spot> after)
+        : session(session),
+          mainWindow(mainWindow),
           before(std::move(before)),
           after(std::move(after)) {
         setText("Edit Spot");
     }
 
-    void undo() override {
-        panel->setSpots(before);
-        mainWindow->rebuildSpottedBuffers(true);
-    }
+    void undo() override;
 
-    void redo() override {
-        panel->setSpots(after);
-        mainWindow->rebuildSpottedBuffers(true);
-    }
+    void redo() override;
 
 private:
-    SpotRemovalPanel* panel;
+    DevelopSession* session;
     MainWindow* mainWindow;
     std::vector<Spot> before, after;
 };
+
+// ---------------------------------------------------------------------------
+void AdjustmentCommand::undo() {
+    session->setParams(before);
+    mainWindow->syncSessionToEditors();
+}
+
+void AdjustmentCommand::redo() {
+    session->setParams(after);
+    mainWindow->syncSessionToEditors();
+}
+
+// ---------------------------------------------------------------------------
+void LocalAdjustmentCommand::undo() {
+    session->setLocalAdjustments(before);
+    mainWindow->syncSessionToEditors();
+}
+
+void LocalAdjustmentCommand::redo() {
+    session->setLocalAdjustments(after);
+    mainWindow->syncSessionToEditors();
+}
+
+void SpotListCommand::undo() {
+    session->setSpots(before);
+    mainWindow->syncSessionSpotsToEditors(true);
+}
+
+void SpotListCommand::redo() {
+    session->setSpots(after);
+    mainWindow->syncSessionSpotsToEditors(true);
+}
 
 // ---------------------------------------------------------------------------
 MainWindow::MainWindow(QWidget* parent)
@@ -145,6 +184,7 @@ MainWindow::MainWindow(QWidget* parent)
     setWindowTitle("arraw");
 
     viewport = new ImageViewport(this);
+    session = new DevelopSession(this);
     undoStack = new QUndoStack(this);
     setCentralWidget(viewport);
 
@@ -165,30 +205,46 @@ MainWindow::MainWindow(QWidget* parent)
     connect(viewport, &ImageViewport::zoomChanged, this, &MainWindow::updateZoomStatus);
 
     connect(
+        filmStrip,
+        &FilmStrip::marksChanged,
+        this,
+        [this](const QString& path, const UserMetadata& metadata, bool saved) {
+            if (path != session->path())
+                return;
+            session->setUserMetadata(metadata);
+            if (saved) {
+                session->markMetadataSaved();
+            } else {
+                session->markMetadataSaveFailed();
+                statusLabel->setText(sidecarWriteErrorText(session->path()));
+            }
+        });
+
+    connect(
         viewport, &ImageViewport::cropCommitted, this, [this](const QRectF& rect, bool constrained) {
-            GlobalAdjustment before = adjPanel->params();
+            GlobalAdjustment before = currentParams();
             GlobalAdjustment after = before;
             after.cropRect = rect;
             after.cropConstrained = constrained;
             if (after != before)
-                undoStack->push(new AdjustmentCommand(adjPanel, before, after));
+                pushGlobalAdjustmentCommand(before, after);
         });
 
     connect(viewport, &ImageViewport::rotationCommitted, this, [this](float degrees) {
-        GlobalAdjustment before = adjPanel->params();
+        GlobalAdjustment before = currentParams();
         GlobalAdjustment after = before;
         after.rotation = degrees;
         if (after != before)
-            undoStack->push(new AdjustmentCommand(adjPanel, before, after));
+            pushGlobalAdjustmentCommand(before, after);
     });
 
     connect(viewport, &ImageViewport::whiteBalanceCommitted, this, [this](float kelvin, float tint) {
-        GlobalAdjustment before = adjPanel->params();
+        GlobalAdjustment before = currentParams();
         GlobalAdjustment after = before;
         after.temperature = kelvin;
         after.tint = tint;
         if (after != before)
-            undoStack->push(new AdjustmentCommand(adjPanel, before, after));
+            pushGlobalAdjustmentCommand(before, after);
     });
 
     connect(viewport, &ImageViewport::activeToolChanged, this, [this](ImageViewport::ActiveTool) {
@@ -200,12 +256,26 @@ MainWindow::MainWindow(QWidget* parent)
         &AdjustmentPanel::adjustmentCommitted,
         this,
         [this](const GlobalAdjustment& before, const GlobalAdjustment& after) {
-            undoStack->push(new AdjustmentCommand(adjPanel, before, after));
+            pushGlobalAdjustmentCommand(before, after);
         });
 
-    connect(adjPanel, &AdjustmentPanel::paramsChanged, this, [this] { pushParamsToViewport(); });
+    connect(
+        adjPanel,
+        &AdjustmentPanel::paramsChanged,
+        this,
+        [this](const GlobalAdjustment& params) {
+            session->setParams(applyGroups(session->params(), params, allGroups()));
+            pushParamsToViewport();
+        });
 
-    connect(localPanel, &LocalAdjustmentPanel::changed, this, [this] { pushParamsToViewport(); });
+    connect(
+        localPanel,
+        &LocalAdjustmentPanel::changed,
+        this,
+        [this](const std::vector<LocalAdjustment>& localAdjustments) {
+            session->setLocalAdjustments(localAdjustments);
+            pushParamsToViewport();
+        });
 
     // Develop-thumbnail regeneration is debounced: every param change restarts the
     // timer (in pushParamsToViewport), so it fires only once edits settle.
@@ -235,7 +305,7 @@ MainWindow::MainWindow(QWidget* parent)
         &LocalAdjustmentPanel::committed,
         this,
         [this](const std::vector<LocalAdjustment>& before, const std::vector<LocalAdjustment>& after) {
-            undoStack->push(new LocalAdjustmentCommand(localPanel, before, after));
+            undoStack->push(new LocalAdjustmentCommand(session, this, before, after));
         });
     connect(
         viewport,
@@ -245,6 +315,7 @@ MainWindow::MainWindow(QWidget* parent)
 
     // Spot-removal: live drag rebuilds preview only; commit on mouse-release.
     connect(spotPanel, &SpotRemovalPanel::changed, this, [this](const std::vector<Spot>& spots) {
+        session->setSpots(spots);
         viewport->setSpots(spots);
         rebuildSpottedBuffers(false);
     });
@@ -253,12 +324,13 @@ MainWindow::MainWindow(QWidget* parent)
         &SpotRemovalPanel::committed,
         this,
         [this](std::vector<Spot> before, std::vector<Spot> after) {
-            undoStack->push(new SpotListCommand(spotPanel, this, std::move(before), std::move(after)));
+            undoStack->push(new SpotListCommand(session, this, std::move(before), std::move(after)));
         });
     // Viewport signals: click places a new spot; handle drags move dest/source.
     connect(viewport, &ImageViewport::spotRequested, this, [this](QPointF destBufPx) {
-        if (!preview.valid())
+        if (!session->preview().valid())
             return;
+        const ImageBuffer& preview = session->preview();
         const double offset = 0.1 * std::min(preview.width, preview.height);
         const Spot s{
             .destination = destBufPx,
@@ -437,7 +509,7 @@ void MainWindow::setupImageMenu() {
     auto* rateMenu = image->addMenu("Rating");
     QList<QPair<QAction*, int>> rateActions;
     auto addRate = [&](const QString& text, int n, QKeySequence key) {
-        QAction* a = rateMenu->addAction(text, this, [this, n] { filmStrip->rateCurrent(n); });
+        QAction* a = rateMenu->addAction(text, this, [this, n] { setCurrentRating(n); });
         a->setShortcut(key);
         a->setCheckable(true);
         rateActions.append({a, n});
@@ -464,7 +536,7 @@ void MainWindow::setupImageMenu() {
           {"Blue", ColourLabel::Blue, Qt::Key_B},
           {"Purple", ColourLabel::Purple, Qt::Key_P}}) {
         QAction* a = labelMenu->addAction(tr(name), this, [this, value] {
-            filmStrip->labelCurrent(value);
+            setCurrentLabel(value);
         });
         a->setShortcut(key);
         a->setCheckable(true);
@@ -472,11 +544,11 @@ void MainWindow::setupImageMenu() {
     }
     labelMenu->addSeparator();
     // labelCurrent(None) always clears (toggling None off is still None).
-    labelMenu->addAction(tr("None"), this, [this] { filmStrip->labelCurrent(ColourLabel::None); });
+    labelMenu->addAction(tr("None"), this, [this] { setCurrentLabel(ColourLabel::None); });
 
     // Reflect the current file's marks each time the menu opens.
     connect(image, &QMenu::aboutToShow, this, [this, rateActions, labelActions] {
-        const UserMetadata m = filmStrip->currentMarks();
+        const UserMetadata m = session->hasImage() ? session->userMetadata() : filmStrip->currentMarks();
         for (const auto& [a, n] : rateActions)
             a->setChecked(m.rating == n);
         for (const auto& [a, value] : labelActions)
@@ -810,14 +882,6 @@ void MainWindow::openFile() {
         loadImage(path);
 }
 
-// Decode-cache key: path + size + mtime, so an externally modified file misses
-// and re-decodes (mirrors ThumbnailCache's keying).
-static QString decodeKey(const QString& path) {
-    const QFileInfo fi(path);
-    return fi.canonicalFilePath() + '|' + QString::number(fi.size()) + '|'
-           + QString::number(fi.lastModified().toMSecsSinceEpoch());
-}
-
 void MainWindow::loadImage(const QString& path) {
     // Cancel any in-progress load so it stops before dcraw_process.
     if (loadCancel)
@@ -825,7 +889,7 @@ void MainWindow::loadImage(const QString& path) {
     loadCancel = std::make_shared<std::atomic<bool>>(false);
     auto cancel = loadCancel;
 
-    currentPath = path;
+    session->beginLoading(path);
     exifPanel->clear();
     viewport->cancelActiveTool(); // discard any in-progress tool from the last image
     viewport->setOriginalImageSize(0, 0);
@@ -838,11 +902,11 @@ void MainWindow::loadImage(const QString& path) {
     // Resolve the new image's develop params up front, so its first paint wears
     // its own edits, not the previous image's. Crop is a placeholder (full frame)
     // until the demosaic yields the real DefaultCrop for never-edited RAWs.
-    pendingParams = XmpSidecar::resolveAdjustments(path, QRectF(0.0, 0.0, 1.0, 1.0));
+    pendingPreviewParams = resolvePendingPreviewParams(path);
 
     // Re-opening a recently viewed image: a cached decode skips the background
     // task entirely — instant, and correct (straight to the demosaiced image).
-    const QString key = decodeKey(path);
+    const QString key = decodeCacheKey(path);
     if (const LoadResult* hit = decodeCache.get(key)) {
         decodeCache.pin(key);
         applyLoadResult(path, *hit);
@@ -858,16 +922,15 @@ void MainWindow::loadImage(const QString& path) {
             QMetaObject::invokeMethod(
                 this,
                 [this, path, buf = std::move(buf)]() mutable {
-                    if (currentPath == path) {
-                        applyPendingParams();    // new image's params, before the paint
+                    if (session->path() == path) {
+                        // New image's params, before the embedded-preview paint.
+                        applyPendingPreviewParams();
                         viewport->setImage(buf); // embedded preview (camera look, base off)
                     }
                 },
                 Qt::QueuedConnection);
         };
-        if (StandardImageLoader::canLoad(path))
-            return StandardImageLoader::load(path, cancel);
-        return RawProcessor::load(path, std::move(onPreview), cancel);
+        return decodeImage(path, std::move(onPreview), cancel);
     }));
 }
 
@@ -888,87 +951,61 @@ void MainWindow::onLoadFinished() {
 
     // Cache the decode (authoritative copy) and pin it as the current image, then
     // display it through the same path a cache hit takes.
-    const QString key = decodeKey(currentPath);
+    const QString key = decodeCacheKey(session->path());
     decodeCache.insert(key, std::move(result));
     decodeCache.pin(key);
     if (const LoadResult* cached = decodeCache.get(key))
-        applyLoadResult(currentPath, *cached);
+        applyLoadResult(session->path(), *cached);
 }
 
-void MainWindow::applyPendingParams() {
-    adjPanel->setParams(pendingParams);
-    localPanel->setLocalAdjustments(pendingParams.localAdjustments);
-    pushParamsToViewport();
+void MainWindow::applyPendingPreviewParams() {
+    session->setParams(pendingPreviewParams);
+    syncSessionToEditors();
+    {
+        QSignalBlocker block(spotPanel);
+        spotPanel->setSpots(session->params().spots);
+    }
+    viewport->setSpots(session->params().spots);
 }
 
 void MainWindow::applyLoadResult(const QString& path, const LoadResult& result) {
-    fullRes = result.fullRes;
-    preview = result.preview;
-
     setLoadingState(false);
-    viewport->setOriginalImageSize(fullRes.width, fullRes.height);
+    viewport->setOriginalImageSize(result.fullRes.width, result.fullRes.height);
 
     // Re-read the sidecar every time (params are never cached) so edits made in
     // another app — or a prior session — are always reflected.
-    GlobalAdjustment saved = XmpSidecar::resolveAdjustments(path, result.defaultCrop);
-    adjPanel->setParams(saved);
-    localPanel->setLocalAdjustments(saved.localAdjustments);
-    // setSpots emits changed → rebuildSpottedBuffers(false); but buffers are
-    // already valid here and we rebuild fully below, so that preview rebuild is
-    // a benign no-op if it fires (m_baseLook is already set).
-    m_baseLook = true;
-    spotPanel->setSpots(saved.spots);
-    viewport->setSpots(saved.spots);
-
-    rebuildSpottedBuffers(true);
-    pushParamsToViewport();
+    const ResolvedLoadedImage resolved = resolveLoadedImage(path, result);
+    session->setLoadedImage(
+        path,
+        result,
+        resolved.adjustments,
+        resolved.sidecarState,
+        resolved.metadata);
+    session->setBaseLook(true);
+    syncSessionToEditors();
+    syncSessionSpotsToEditors(true);
+    filmStrip->setMarks(path, session->userMetadata());
 
     exifPanel->setMetadata(result.metadata);
     undoStack->clear();
 
-    statusLabel->setText(QString("%1  —  %2 × %3")
-                             .arg(QFileInfo(path).fileName())
-                             .arg(fullRes.width)
-                             .arg(fullRes.height));
+    statusLabel->setText(loadedImageStatusText(path, session->fullRes(), session->sidecarState()));
 
     setToolsEnabled(true);
 }
 
-// Spots are stored in full-res pixel coordinates (docs/adr/0017). Scale them
-// down when applying to the half-res preview buffer.
-static std::vector<Spot> scaleSpots(const std::vector<Spot>& spots, double sx, double sy) {
-    std::vector<Spot> out = spots;
-    for (Spot& s : out) {
-        s.destination = {s.destination.x() * sx, s.destination.y() * sy};
-        s.source      = {s.source.x() * sx,      s.source.y() * sy};
-        s.radius      *= sx; // pixels are square
-    }
-    return out;
-}
-
 void MainWindow::rebuildSpottedBuffers(bool fullResOnly) {
-    const auto& spots = spotPanel->spots();
+    if (session->previewForDisplay().valid())
+        viewport->setImage(session->previewForDisplay(), session->baseLook());
 
-    if (preview.valid()) {
-        const double sx = (fullRes.valid() && fullRes.width > 0)
-            ? double(preview.width) / fullRes.width : 1.0;
-        const double sy = (fullRes.valid() && fullRes.height > 0)
-            ? double(preview.height) / fullRes.height : 1.0;
-        viewport->setImage(applySpots(preview, scaleSpots(spots, sx, sy)), m_baseLook);
-    }
-
-    if (fullResOnly && fullRes.valid()) {
-        spottedFullRes = applySpots(fullRes, spots);
-        viewport->setFullResImage(spottedFullRes);
-    }
+    if (fullResOnly && session->fullResForExport().valid())
+        viewport->setFullResImage(session->fullResForExport());
 }
 
 void MainWindow::onFullResNeeded() {
-    if (!fullRes.valid())
+    if (!session->fullResForExport().valid())
         return;
-    if (!spottedFullRes.valid())
-        spottedFullRes = applySpots(fullRes, spotPanel->spots());
-    viewport->setFullResImage(spottedFullRes);
+    viewport->setFullResImage(session->fullResForExport());
 }
 
 void MainWindow::updateZoomStatus(float zoom) {
@@ -985,7 +1022,7 @@ void MainWindow::setLoadingState(bool loading) {
     if (loading)
         setToolsEnabled(false); // re-enabled in onLoadFinished on success
     statusLabel->setText(
-        loading ? QString("Loading %1...").arg(QFileInfo(currentPath).fileName()) : QString());
+        loading ? QString("Loading %1...").arg(QFileInfo(session->path()).fileName()) : QString());
 }
 
 void MainWindow::applyClipping() {
@@ -1036,13 +1073,39 @@ void MainWindow::rebuildDisplayLut() {
 }
 
 void MainWindow::applyDevelopChange(const GlobalAdjustment& after) {
-    const GlobalAdjustment before = adjPanel->params();
+    const GlobalAdjustment before = currentParams();
     if (after != before)
-        undoStack->push(new AdjustmentCommand(adjPanel, before, after));
+        pushGlobalAdjustmentCommand(before, after);
+}
+
+void MainWindow::applyCurrentUserMetadata(const UserMetadata& metadata) {
+    if (session->path().isEmpty())
+        return;
+    session->setUserMetadata(metadata);
+    filmStrip->setMarks(session->path(), metadata);
+    if (XmpSidecar::saveMetadata(session->path(), metadata)) {
+        session->markMetadataSaved();
+    } else {
+        session->markMetadataSaveFailed();
+        statusLabel->setText(sidecarWriteErrorText(session->path()));
+    }
+}
+
+void MainWindow::setCurrentRating(int rating) {
+    UserMetadata metadata = session->userMetadata();
+    metadata.rating = rating;
+    applyCurrentUserMetadata(metadata);
+}
+
+void MainWindow::setCurrentLabel(ColourLabel label) {
+    UserMetadata metadata = session->userMetadata();
+    metadata.label
+        = (label == ColourLabel::None || metadata.label != label) ? label : ColourLabel::None;
+    applyCurrentUserMetadata(metadata);
 }
 
 void MainWindow::copySettings() {
-    if (currentPath.isEmpty())
+    if (session->path().isEmpty())
         return;
     viewport->commitActiveTool(); // fold any pending crop into the params first
 
@@ -1054,11 +1117,11 @@ void MainWindow::copySettings() {
         return;
 
     lastCopySelection = chosen;
-    settingsClipboard = SettingsClipboard{adjPanel->params(), chosen};
+    settingsClipboard = SettingsClipboard{currentParams(), chosen};
 }
 
 void MainWindow::pasteSettings() {
-    if (currentPath.isEmpty() || !settingsClipboard)
+    if (session->path().isEmpty() || !settingsClipboard)
         return;
 
     // Paste's checklist is bounded by what was copied (narrow only).
@@ -1072,7 +1135,7 @@ void MainWindow::pasteSettings() {
 
     if (targets.size() <= 1) {
         // Single file: apply to the active image in memory only.
-        applyDevelopChange(applyGroups(adjPanel->params(), settingsClipboard->snapshot, chosen));
+        applyDevelopChange(applyGroups(currentParams(), settingsClipboard->snapshot, chosen));
         return;
     }
 
@@ -1083,15 +1146,21 @@ void MainWindow::pasteSettings() {
     records.reserve(targets.size());
     for (const QString& path : targets) {
         const GlobalAdjustment before
-            = (path == currentPath) ? adjPanel->params()
-                                    : XmpSidecar::loadAdjustments(path);
+            = (path == session->path()) ? currentParams() : XmpSidecar::loadAdjustments(path);
         records.append({path, before, applyGroups(before, settingsClipboard->snapshot, chosen)});
     }
-    undoStack->push(new BatchAdjustmentCommand(adjPanel, currentPath, records));
+    undoStack->push(new BatchAdjustmentCommand(
+        session->path(),
+        records,
+        [this](const GlobalAdjustment& params) {
+            session->setParams(params);
+            syncSessionToEditors();
+            syncSessionSpotsToEditors(true);
+        }));
 }
 
 void MainWindow::saveCurrentAsPreset() {
-    if (currentPath.isEmpty())
+    if (session->path().isEmpty())
         return;
     viewport->commitActiveTool();
 
@@ -1114,7 +1183,7 @@ void MainWindow::saveCurrentAsPreset() {
     DevelopPreset preset;
     preset.name = name;
     preset.groups = chosen;
-    preset.values = adjPanel->params();
+    preset.values = currentParams();
     if (!presetStore.save(preset)) {
         QMessageBox::warning(this, tr("Save Preset"), tr("Could not write the preset file."));
         return;
@@ -1123,9 +1192,9 @@ void MainWindow::saveCurrentAsPreset() {
 }
 
 void MainWindow::applyPreset(const DevelopPreset& preset) {
-    if (currentPath.isEmpty())
+    if (session->path().isEmpty())
         return;
-    applyDevelopChange(applyGroups(adjPanel->params(), preset.values, preset.groups));
+    applyDevelopChange(applyGroups(currentParams(), preset.values, preset.groups));
 }
 
 void MainWindow::managePresets() {
@@ -1176,14 +1245,44 @@ void MainWindow::rebuildPresetsMenu() {
 }
 
 GlobalAdjustment MainWindow::currentParams() const {
-    GlobalAdjustment p = adjPanel->params();
-    p.localAdjustments = localPanel->localAdjustments();
-    p.spots = spotPanel->spots();
-    return p;
+    return session->params();
+}
+
+void MainWindow::syncSessionToEditors() {
+    {
+        QSignalBlocker block(adjPanel);
+        adjPanel->setParams(session->params());
+    }
+    {
+        QSignalBlocker block(localPanel);
+        localPanel->setLocalAdjustments(session->params().localAdjustments);
+    }
+    viewport->setAdjustments(session->params());
+    if (thumbTimer)
+        thumbTimer->start();
+}
+
+void MainWindow::syncSessionSpotsToEditors(bool fullResOnly) {
+    {
+        QSignalBlocker block(spotPanel);
+        spotPanel->setSpots(session->params().spots);
+    }
+    viewport->setSpots(session->params().spots);
+    rebuildSpottedBuffers(fullResOnly);
+}
+
+void MainWindow::pushGlobalAdjustmentCommand(
+    const GlobalAdjustment& before,
+    const GlobalAdjustment& after) {
+    const GlobalAdjustment current = session->params();
+    const GlobalAdjustment beforeSnapshot = applyGroups(current, before, allGroups());
+    const GlobalAdjustment afterSnapshot = applyGroups(current, after, allGroups());
+    if (afterSnapshot != beforeSnapshot)
+        undoStack->push(new AdjustmentCommand(session, this, beforeSnapshot, afterSnapshot));
 }
 
 void MainWindow::pushParamsToViewport() {
-    viewport->setAdjustments(currentParams());
+    viewport->setAdjustments(session->params());
     if (thumbTimer)
         thumbTimer->start(); // refresh the develop thumbnail once edits settle
 }
@@ -1192,10 +1291,12 @@ void MainWindow::generateDevelopedThumbnail() {
     // Don't snapshot a half-loaded image: the buffers/params may be mid-swap.
     if (loadWatcher.isRunning())
         return;
-    if (currentPath.isEmpty() || !preview.valid() || !viewport->rendererReady())
+    if (session->path().isEmpty() || !session->previewForDisplay().valid()
+        || !viewport->rendererReady())
         return;
 
     const GlobalAdjustment p = currentParams();
+    const ImageBuffer& preview = session->previewForDisplay();
     const QSize sz = developedThumbSize(preview.width, preview.height, p.cropRect, 512);
 
     // Same pipeline as export: linear working-space render → output transform.
@@ -1204,65 +1305,25 @@ void MainWindow::generateDevelopedThumbnail() {
         return;
     const QImage srgb = toOutputImage(lin, OutputProfile::SRgb, /*sixteenBit=*/false);
 
-    ThumbnailCache::store(currentPath, srgb); // persist (overwrites the embedded one)
-    filmStrip->setThumbnail(currentPath, srgb); // live strip update
+    ThumbnailCache::store(session->path(), srgb); // persist (overwrites the embedded one)
+    filmStrip->setThumbnail(session->path(), srgb); // live strip update
 }
 
 void MainWindow::saveAdjustments() {
-    if (currentPath.isEmpty())
+    if (session->path().isEmpty())
         return;
     viewport->commitActiveTool(); // fold any pending crop into the params first
-    if (XmpSidecar::saveAdjustments(currentPath, currentParams()))
-        statusLabel->setText("Saved: " + XmpSidecar::pathFor(currentPath));
-    else
-        QMessageBox::warning(
-            this, "Save Error", "Could not write " + XmpSidecar::pathFor(currentPath));
-}
-
-// Simple unsharp mask: radius ≈ 1% of image width, amount 0..100.
-// The blur is approximated by a smooth downscale + upscale round-trip,
-// which is much cheaper than a real Gaussian at these radii.
-// Runs in encoded (output-profile) space — Format_RGB888 or Format_RGBA64.
-static QImage applyUnsharpMask(QImage img, int amount) {
-    if (amount == 0)
-        return img;
-    const float a = amount / 100.0f;
-    int r = std::max(1, img.width() / 100);
-    QImage blurred
-        = img.scaled(
-                 img.width() / (r + 1),
-                 img.height() / (r + 1),
-                 Qt::IgnoreAspectRatio,
-                 Qt::SmoothTransformation)
-              .scaled(img.width(), img.height(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
-    if (img.format() == QImage::Format_RGBA64) {
-        for (int y = 0; y < img.height(); ++y) {
-            const auto* src = reinterpret_cast<const quint16*>(img.constScanLine(y));
-            const auto* blr = reinterpret_cast<const quint16*>(blurred.constScanLine(y));
-            auto* dst = reinterpret_cast<quint16*>(img.scanLine(y));
-            for (int x = 0; x < img.width() * 4; ++x) {
-                if ((x & 3) == 3)
-                    continue; // leave alpha alone
-                int v = int(src[x]) + int(a * (int(src[x]) - int(blr[x])));
-                dst[x] = quint16(std::clamp(v, 0, 65535));
-            }
-        }
-        return img;
+    if (XmpSidecar::saveAdjustments(session->path(), currentParams())) {
+        session->markDevelopSaved();
+        statusLabel->setText("Saved: " + XmpSidecar::pathFor(session->path()));
+    } else {
+        session->markDevelopSaveFailed();
+        QMessageBox::warning(this, "Save Error", sidecarWriteErrorText(session->path()));
     }
-    for (int y = 0; y < img.height(); ++y) {
-        const uchar* src = img.constScanLine(y);
-        const uchar* blr = blurred.constScanLine(y);
-        uchar* dst = img.scanLine(y);
-        for (int x = 0; x < img.width() * 3; ++x) {
-            int v = int(src[x]) + int(a * (int(src[x]) - int(blr[x])));
-            dst[x] = uchar(std::clamp(v, 0, 255));
-        }
-    }
-    return img;
 }
 
 void MainWindow::exportFile() {
-    if (!fullRes.valid()) {
+    if (!session->fullRes().valid()) {
         QMessageBox::information(this, "Export", "No image loaded.");
         return;
     }
@@ -1278,7 +1339,8 @@ void MainWindow::exportFile() {
 
     // Natural output size = full-res pixels inside the crop rect (shared with
     // the crop overlay's live readout so the two can never disagree).
-    const QSize natural = crop::cropPixelSize(fullRes.width, fullRes.height, p.cropRect);
+    const QSize natural
+        = crop::cropPixelSize(session->fullRes().width, session->fullRes().height, p.cropRect);
 
     ExportDialog optDlg(natural.width(), natural.height(), this);
     if (optDlg.exec() != QDialog::Accepted)
@@ -1286,49 +1348,25 @@ void MainWindow::exportFile() {
 
     const ExportOptions opts = optDlg.options();
 
-    QString suffix, filter;
-    switch (opts.format) {
-    case ExportOptions::Format::JPEG:
-        suffix = "jpg";
-        filter = "JPEG (*.jpg *.jpeg)";
-        break;
-    case ExportOptions::Format::PNG:
-        suffix = "png";
-        filter = "PNG (*.png)";
-        break;
-    case ExportOptions::Format::TIFF:
-        suffix = "tif";
-        filter = "TIFF (*.tif *.tiff)";
-        break;
-    }
+    const ExportFormatSpec formatSpec = exportFormatSpec(opts.format);
 
-    QFileDialog fileDlg(this, "Export Image", QFileInfo(currentPath).absolutePath());
+    QFileDialog fileDlg(this, "Export Image", QFileInfo(session->path()).absolutePath());
     fileDlg.setAcceptMode(QFileDialog::AcceptSave);
-    fileDlg.setNameFilter(filter);
-    fileDlg.setDefaultSuffix(suffix);
+    fileDlg.setNameFilter(formatSpec.nameFilter);
+    fileDlg.setDefaultSuffix(formatSpec.suffix);
     if (fileDlg.exec() != QDialog::Accepted)
         return;
 
-    QString path = fileDlg.selectedFiles().constFirst();
-    if (QFileInfo(path).suffix().isEmpty())
-        path += "." + suffix;
+    const QString path = withExportSuffix(fileDlg.selectedFiles().constFirst(), opts.format);
 
     statusLabel->setText("Exporting…");
     QApplication::processEvents(); // repaint the status bar before the render blocks the UI
 
     // Linear working-space render → output profile (lcms2) → sharpen → save.
-    const ImageBuffer& exportBuf = spottedFullRes.valid() ? spottedFullRes : fullRes;
-    QImage out = viewport->renderToImage(exportBuf, p, opts.width, opts.height);
-    out = toOutputImage(out, opts.profile, opts.bitDepth == 16);
-    out = applyUnsharpMask(std::move(out), opts.sharpening);
+    QImage out = viewport->renderToImage(session->fullResForExport(), p, opts.width, opts.height);
+    out = prepareExportImage(std::move(out), opts);
 
-    bool ok;
-    if (opts.format == ExportOptions::Format::JPEG)
-        ok = out.save(path, "JPEG", opts.quality);
-    else
-        ok = out.save(path);
-
-    if (!ok)
+    if (!saveExportImage(out, path, opts))
         QMessageBox::critical(this, "Export Error", "Failed to save " + path);
     else
         statusLabel->setText("Exported: " + QFileInfo(path).fileName());
@@ -1337,22 +1375,16 @@ void MainWindow::exportFile() {
 void MainWindow::exportBatch(const QStringList& paths) {
     viewport->commitActiveTool();
     const GlobalAdjustment activeParams = currentParams();
-    const QSize natural = crop::cropPixelSize(fullRes.width, fullRes.height, activeParams.cropRect);
+    const QSize natural = crop::cropPixelSize(
+        session->fullRes().width, session->fullRes().height, activeParams.cropRect);
 
     ExportDialog optDlg(natural.width(), natural.height(), this);
     if (optDlg.exec() != QDialog::Accepted)
         return;
     const ExportOptions opts = optDlg.options();
 
-    QString suffix;
-    switch (opts.format) {
-    case ExportOptions::Format::JPEG: suffix = "jpg"; break;
-    case ExportOptions::Format::PNG:  suffix = "png"; break;
-    case ExportOptions::Format::TIFF: suffix = "tif"; break;
-    }
-
     const QString outputDir = QFileDialog::getExistingDirectory(
-        this, tr("Export to Folder"), QFileInfo(currentPath).absolutePath());
+        this, tr("Export to Folder"), QFileInfo(session->path()).absolutePath());
     if (outputDir.isEmpty())
         return;
 
@@ -1390,8 +1422,8 @@ void MainWindow::exportBatch(const QStringList& paths) {
         // The GPU render + encode below are short and must stay on the GUI thread
         // (renderToImage needs the RHI context).
         LoadResult loaded;
-        if (rawPath == currentPath) {
-            loaded.fullRes = fullRes;
+        if (rawPath == session->path()) {
+            loaded.fullRes = session->fullRes();
         } else {
             QFutureWatcher<LoadResult> watcher;
             QEventLoop wait;
@@ -1400,11 +1432,8 @@ void MainWindow::exportBatch(const QStringList& paths) {
                 cancel->store(true); // abort the in-flight decode
                 wait.quit();
             });
-            watcher.setFuture(QtConcurrent::run([rawPath, cancel]() -> LoadResult {
-                return StandardImageLoader::canLoad(rawPath)
-                    ? StandardImageLoader::load(rawPath, cancel)
-                    : RawProcessor::load(rawPath, nullptr, cancel);
-            }));
+            watcher.setFuture(QtConcurrent::run(
+                [rawPath, cancel]() -> LoadResult { return decodeImage(rawPath, nullptr, cancel); }));
             wait.exec();
             if (progress.wasCancelled())
                 break; // leave the future to finish and be discarded (cancel is set)
@@ -1413,9 +1442,9 @@ void MainWindow::exportBatch(const QStringList& paths) {
                 continue;
         }
 
-        const GlobalAdjustment p = (rawPath == currentPath)
+        const GlobalAdjustment p = (rawPath == session->path())
             ? activeParams
-            : XmpSidecar::resolveAdjustments(rawPath, QRectF(0, 0, 1, 1));
+            : resolveImageAdjustments(rawPath, QRectF(0, 0, 1, 1));
 
         // Apply spots stored in the adjustment (ADR 0017).
         const ImageBuffer renderBuf = p.spots.empty()
@@ -1429,20 +1458,15 @@ void MainWindow::exportBatch(const QStringList& paths) {
         const int outH = opts.height > 0 ? opts.height : perFileNatural.height();
 
         QImage out = viewport->renderToImage(renderBuf, p, outW, outH);
-        out = toOutputImage(out, opts.profile, opts.bitDepth == 16);
-        out = applyUnsharpMask(std::move(out), opts.sharpening);
+        out = prepareExportImage(std::move(out), opts);
 
-        const QString outPath = outputDir + "/"
-            + QFileInfo(rawPath).completeBaseName() + "." + suffix;
-        const bool ok = opts.format == ExportOptions::Format::JPEG
-            ? out.save(outPath, "JPEG", opts.quality)
-            : out.save(outPath);
+        const QString outPath = batchExportPath(outputDir, rawPath, opts.format);
+        const bool ok = saveExportImage(out, outPath, opts);
 
         if (ok)
             ++exported;
     }
 
     progress.close();
-    statusLabel->setText(
-        tr("Exported %1 of %2 file(s)").arg(exported).arg(paths.size()));
+    statusLabel->setText(batchExportStatusText(exported, paths.size()));
 }

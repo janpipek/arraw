@@ -82,6 +82,21 @@ TEST_CASE("sidecar path replaces the RAW extension with .xmp", "[xmp]") {
 TEST_CASE("missing sidecar loads default params", "[xmp]") {
     QTemporaryDir dir;
     REQUIRE(XmpSidecar::loadAdjustments(dir.filePath("nothing-here.arw")) == GlobalAdjustment{});
+    CHECK(
+        XmpSidecar::loadWithStatus(dir.filePath("nothing-here.arw")).status
+        == SidecarLoadStatus::Missing);
+}
+
+TEST_CASE("malformed sidecar loads default params", "[xmp]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("broken.arw");
+    QFile f(XmpSidecar::pathFor(rawPath));
+    REQUIRE(f.open(QIODevice::WriteOnly));
+    REQUIRE(f.write("<x:xmpmeta><rdf:RDF><rdf:Description crs:Exposure2012=\"2.0\"") > 0);
+    f.close();
+
+    REQUIRE(XmpSidecar::loadAdjustments(rawPath) == GlobalAdjustment{});
+    CHECK(XmpSidecar::loadWithStatus(rawPath).status == SidecarLoadStatus::ParseError);
 }
 
 TEST_CASE("resolveAdjustments returns the sidecar params when present, ignoring defaultCrop",
@@ -93,8 +108,25 @@ TEST_CASE("resolveAdjustments returns the sidecar params when present, ignoring 
     // A defaultCrop that must NOT win — the sidecar's own crop should be kept.
     const QRectF defaultCrop(0.0, 0.0, 0.123, 0.456);
     const auto resolved = XmpSidecar::resolveAdjustments(rawPath, defaultCrop);
+    const auto resolvedWithStatus = XmpSidecar::resolveAdjustmentsWithStatus(rawPath, defaultCrop);
 
     checkClose(resolved, sampleParams()); // crop comes from the sidecar, not defaultCrop
+    CHECK(resolvedWithStatus.status == SidecarLoadStatus::Loaded);
+    checkClose(resolvedWithStatus.adjustments, sampleParams());
+}
+
+TEST_CASE("resolveForImage returns sidecar adjustments and metadata when present", "[xmp]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("shot.arw");
+    REQUIRE(XmpSidecar::saveAdjustments(rawPath, sampleParams()));
+    REQUIRE(XmpSidecar::saveMetadata(rawPath, {4, ColourLabel::Purple}));
+
+    const QRectF defaultCrop(0.0, 0.0, 0.123, 0.456);
+    const auto resolved = XmpSidecar::resolveForImage(rawPath, defaultCrop);
+
+    CHECK(resolved.status == SidecarLoadStatus::Loaded);
+    checkClose(resolved.data.adjustments, sampleParams());
+    CHECK(resolved.data.metadata == UserMetadata{4, ColourLabel::Purple});
 }
 
 TEST_CASE("resolveAdjustments falls back to defaults with defaultCrop when no sidecar",
@@ -104,10 +136,48 @@ TEST_CASE("resolveAdjustments falls back to defaults with defaultCrop when no si
 
     const QRectF defaultCrop(0.1, 0.2, 0.7, 0.6);
     const auto resolved = XmpSidecar::resolveAdjustments(rawPath, defaultCrop);
+    const auto resolvedWithStatus = XmpSidecar::resolveAdjustmentsWithStatus(rawPath, defaultCrop);
 
     GlobalAdjustment expected; // defaults
     expected.cropRect = defaultCrop;
     REQUIRE(resolved == expected);
+    CHECK(resolvedWithStatus.status == SidecarLoadStatus::Missing);
+    REQUIRE(resolvedWithStatus.adjustments == expected);
+}
+
+TEST_CASE("resolveAdjustments reports malformed sidecar and falls back to defaultCrop", "[xmp]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("broken.arw");
+    QFile f(XmpSidecar::pathFor(rawPath));
+    REQUIRE(f.open(QIODevice::WriteOnly));
+    REQUIRE(f.write("<x:xmpmeta><rdf:RDF><rdf:Description crs:Exposure2012=\"2.0\"") > 0);
+    f.close();
+
+    const QRectF defaultCrop(0.2, 0.3, 0.4, 0.5);
+    const auto resolved = XmpSidecar::resolveAdjustmentsWithStatus(rawPath, defaultCrop);
+
+    GlobalAdjustment expected;
+    expected.cropRect = defaultCrop;
+    CHECK(resolved.status == SidecarLoadStatus::ParseError);
+    REQUIRE(resolved.adjustments == expected);
+}
+
+TEST_CASE("resolveForImage drops metadata from malformed sidecar", "[xmp]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("broken.arw");
+    QFile f(XmpSidecar::pathFor(rawPath));
+    REQUIRE(f.open(QIODevice::WriteOnly));
+    REQUIRE(f.write("<x:xmpmeta><rdf:RDF><rdf:Description xmp:Rating=\"5\"") > 0);
+    f.close();
+
+    const QRectF defaultCrop(0.2, 0.3, 0.4, 0.5);
+    const auto resolved = XmpSidecar::resolveForImage(rawPath, defaultCrop);
+
+    GlobalAdjustment expected;
+    expected.cropRect = defaultCrop;
+    CHECK(resolved.status == SidecarLoadStatus::ParseError);
+    CHECK(resolved.data.adjustments == expected);
+    CHECK(resolved.data.metadata == UserMetadata{});
 }
 
 TEST_CASE("save then load round-trips all params", "[xmp]") {

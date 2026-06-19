@@ -52,11 +52,24 @@ QString XmpSidecar::pathFor(const QString& rawPath) {
 }
 
 GlobalAdjustment XmpSidecar::resolveAdjustments(const QString& rawPath, const QRectF& defaultCrop) {
-    if (QFileInfo::exists(pathFor(rawPath)))
-        return loadAdjustments(rawPath);
-    GlobalAdjustment defaults;
-    defaults.cropRect = defaultCrop;
-    return defaults;
+    return resolveAdjustmentsWithStatus(rawPath, defaultCrop).adjustments;
+}
+
+SidecarLoadResult XmpSidecar::resolveForImage(const QString& rawPath, const QRectF& defaultCrop) {
+    SidecarLoadResult loaded = loadWithStatus(rawPath);
+    if (loaded.status == SidecarLoadStatus::Loaded)
+        return loaded;
+
+    loaded.data = {};
+    loaded.data.adjustments.cropRect = defaultCrop;
+    return loaded;
+}
+
+SidecarAdjustmentResult XmpSidecar::resolveAdjustmentsWithStatus(
+    const QString& rawPath,
+    const QRectF& defaultCrop) {
+    const SidecarLoadResult loaded = resolveForImage(rawPath, defaultCrop);
+    return {loaded.data.adjustments, loaded.status};
 }
 
 // Parse "x, y" pairs from an rdf:Seq element into control points (0..255 scale → 0..1).
@@ -206,9 +219,15 @@ static std::vector<LocalAdjustment> parseLocalAdjustments(QXmlStreamReader& xml)
 }
 
 SidecarData XmpSidecar::load(const QString& rawPath) {
+    return loadWithStatus(rawPath).data;
+}
+
+SidecarLoadResult XmpSidecar::loadWithStatus(const QString& rawPath) {
     QFile f(pathFor(rawPath));
+    if (!f.exists())
+        return {{}, SidecarLoadStatus::Missing};
     if (!f.open(QIODevice::ReadOnly))
-        return {};
+        return {{}, SidecarLoadStatus::ParseError};
 
     SidecarData data;
     GlobalAdjustment& p = data.adjustments;
@@ -300,7 +319,9 @@ SidecarData XmpSidecar::load(const QString& rawPath) {
                 p.spots = parseSpots(xml);
         }
     }
-    return data;
+    if (xml.hasError())
+        return {{}, SidecarLoadStatus::ParseError};
+    return {data, SidecarLoadStatus::Loaded};
 }
 
 static void writeCurve(QXmlStreamWriter& xml, const char* elemName, const std::vector<QPointF>& pts) {

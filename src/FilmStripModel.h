@@ -6,10 +6,17 @@
 #include <QImage>
 #include <QStringList>
 
-// Backing model for the horizontal filmstrip. Holds the raw files of one
-// directory in display order; the QListView + delegate are thin views over it.
+/**
+ * Backing model for the horizontal filmstrip.
+ *
+ * FilmStripModel holds the raw files of one directory in display order plus
+ * cached thumbnails, culling marks, and tooltip metadata keyed by path. It has
+ * no sidecar I/O and no selection policy; FilmStrip performs those duties around
+ * the standard Qt item-model contract.
+ */
 class FilmStripModel : public QAbstractListModel {
     Q_OBJECT
+    Q_DISABLE_COPY_MOVE(FilmStripModel)
 public:
     enum Roles {
         PathRole = Qt::UserRole + 1,

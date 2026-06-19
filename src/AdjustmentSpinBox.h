@@ -2,12 +2,16 @@
 #include "FieldSpec.h"
 #include <QDoubleSpinBox>
 
-// A QDoubleSpinBox that presents an adjustment in its FieldSpec's display units:
-// conditional '+' sign on positives, units suffix, and tolerant parsing (the
-// user may leave the suffix in or drop it). All formatting/parsing delegates to
-// the FieldSpec so the rules live in exactly one place (and stay unit-tested).
+/**
+ * Spin box that displays a develop adjustment through a FieldSpec.
+ *
+ * AdjustmentSpinBox centralises unit suffixes, positive signs, and tolerant
+ * parsing for numeric editor rows. Formatting/parsing delegates to FieldSpec so
+ * the conversion rules stay close to the adjustment definitions and tests.
+ */
 class AdjustmentSpinBox : public QDoubleSpinBox {
     Q_OBJECT
+    Q_DISABLE_COPY_MOVE(AdjustmentSpinBox)
 public:
     explicit AdjustmentSpinBox(const FieldSpec& spec, QWidget* parent = nullptr);
 

@@ -3,6 +3,7 @@
 
 #include <optional>
 #include <QImage>
+#include <QMutex>
 #include <QObject>
 #include <QSet>
 #include <QString>
@@ -11,6 +12,7 @@
 // Stores up-to-512px JPEG thumbnails and JSON EXIF metadata sidecars.
 class ThumbnailCache : public QObject {
     Q_OBJECT
+    Q_DISABLE_COPY_MOVE(ThumbnailCache)
 public:
     explicit ThumbnailCache(QObject* parent = nullptr);
 
@@ -32,5 +34,6 @@ signals:
 
 private:
     QString cacheRoot;
+    QMutex pendingMutex;
     QSet<QString> pending;
 };

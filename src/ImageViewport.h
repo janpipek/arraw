@@ -12,8 +12,18 @@
 
 class ViewportOverlay;
 
+/**
+ * GPU-backed image view and on-image editing surface.
+ *
+ * ImageViewport displays the current preview/full-resolution textures through
+ * RendererCore and handles gestures for crop, straighten, white balance, local
+ * mask geometry, and spot handles. It owns interaction state and renderer
+ * resources, but the durable develop state is committed back to DevelopSession
+ * through MainWindow.
+ */
 class ImageViewport : public QRhiWidget {
     Q_OBJECT
+    Q_DISABLE_COPY_MOVE(ImageViewport)
 public:
     // Mutually-exclusive viewport tools. Crop edits a rectangle; Straighten
     // draws a level line; WhiteBalance samples a neutral pixel. Only one is
@@ -255,9 +265,9 @@ private:
     RadialHandle radialDragHandle = RadialHandle::None;
 
     // SpotTool state.
-    std::vector<Spot> m_spots;
-    int m_spotDragIdx = -1;
-    SpotHandle m_spotDragHandle = SpotHandle::None;
+    std::vector<Spot> spots;
+    int spotDragIdx = -1;
+    SpotHandle spotDragHandle = SpotHandle::None;
 
     // Straighten: endpoints of the level line being dragged (viewport pixels).
     bool straightenDragging = false;
