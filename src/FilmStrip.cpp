@@ -586,13 +586,23 @@ bool FilmStrip::handleModifierClick(QMouseEvent* e) {
 }
 
 void FilmStrip::updateThumbHeight() {
+    // Square cells size to the viewport height, so re-laying the view can push the
+    // total width across the horizontal scrollbar's appear/disappear threshold.
+    // The scrollbar then steals (or returns) viewport height, delivering another
+    // synchronous resize that re-enters here — an unbounded recursion that
+    // overflows the stack (most visible when enlarging the window). Bail out of
+    // the nested call so the height the outer call computed simply stands.
+    if (updatingThumbHeight)
+        return;
     auto* delegate = static_cast<ThumbnailDelegate*>(list->itemDelegate());
     const int h = std::max(32, list->viewport()->height() - 2 * kCellPad);
     if (h == delegate->thumbHeight)
         return;
+    updatingThumbHeight = true;
     delegate->setThumbHeight(h);
     list->doItemsLayout();
     requestVisibleThumbnails();
+    updatingThumbHeight = false;
 }
 
 void FilmStrip::requestVisibleThumbnails() {

@@ -1,3 +1,5 @@
+set windows-powershell := true
+
 qt_flag := if os() == "macos" { "-DCMAKE_PREFIX_PATH=" + `brew --prefix qt` } else { "" }
 clang_format := env_var_or_default("CLANG_FORMAT", "clang-format")
 clazy := env_var_or_default("CLAZY", "clazy")
@@ -53,6 +55,7 @@ rebuild:
 rerun: rebuild
     ./build/arraw
 
+# Create an appimage for linux
 appimage:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -69,3 +72,8 @@ appimage:
         -v "$PWD/dist:/dist:z" \
         arraw-appimage-builder \
         bash /src/packaging/linux/build-appimage.sh
+
+# Create a windows-installer (.exe)
+windows-installer:
+    # Inno setup must be present
+    uv run tools/package_windows.py --installer
