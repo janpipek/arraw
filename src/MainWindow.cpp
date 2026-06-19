@@ -13,13 +13,12 @@
 #include "ExportWorkflow.h"
 #include "FilmStrip.h"
 #include "GroupChecklistDialog.h"
+#include "ImageLoadWorkflow.h"
 #include "ImageViewport.h"
 #include "LocalAdjustmentPanel.h"
 #include "MainWindowStatus.h"
 #include "SpotRemovalPanel.h"
 #include "ProofingPanel.h"
-#include "RawProcessor.h"
-#include "StandardImageLoader.h"
 #include "ThumbnailCache.h"
 #include "XmpSidecar.h"
 #include <algorithm>
@@ -62,24 +61,6 @@
 #include <QVBoxLayout>
 #include <QWindow>
 #include <QtConcurrent/QtConcurrent>
-
-namespace {
-DevelopSession::SidecarState toSessionSidecarState(SidecarLoadStatus status) {
-    switch (status) {
-    case SidecarLoadStatus::Missing:
-        return DevelopSession::SidecarState::Missing;
-    case SidecarLoadStatus::Loaded:
-        return DevelopSession::SidecarState::Loaded;
-    case SidecarLoadStatus::ParseError:
-        return DevelopSession::SidecarState::ParseError;
-    }
-    return DevelopSession::SidecarState::Unknown;
-}
-
-GlobalAdjustment resolveImageAdjustments(const QString& path, const QRectF& defaultCrop) {
-    return XmpSidecar::resolveForImage(path, defaultCrop).data.adjustments;
-}
-} // namespace
 
 // ---------------------------------------------------------------------------
 // Undo command: captures before/after GlobalAdjustment for a single gesture.
@@ -901,14 +882,6 @@ void MainWindow::openFile() {
         loadImage(path);
 }
 
-// Decode-cache key: path + size + mtime, so an externally modified file misses
-// and re-decodes (mirrors ThumbnailCache's keying).
-static QString decodeKey(const QString& path) {
-    const QFileInfo fi(path);
-    return fi.canonicalFilePath() + '|' + QString::number(fi.size()) + '|'
-           + QString::number(fi.lastModified().toMSecsSinceEpoch());
-}
-
 void MainWindow::loadImage(const QString& path) {
     // Cancel any in-progress load so it stops before dcraw_process.
     if (loadCancel)
@@ -929,12 +902,11 @@ void MainWindow::loadImage(const QString& path) {
     // Resolve the new image's develop params up front, so its first paint wears
     // its own edits, not the previous image's. Crop is a placeholder (full frame)
     // until the demosaic yields the real DefaultCrop for never-edited RAWs.
-    pendingPreviewParams
-        = XmpSidecar::resolveForImage(path, QRectF(0.0, 0.0, 1.0, 1.0)).data.adjustments;
+    pendingPreviewParams = resolvePendingPreviewParams(path);
 
     // Re-opening a recently viewed image: a cached decode skips the background
     // task entirely — instant, and correct (straight to the demosaiced image).
-    const QString key = decodeKey(path);
+    const QString key = decodeCacheKey(path);
     if (const LoadResult* hit = decodeCache.get(key)) {
         decodeCache.pin(key);
         applyLoadResult(path, *hit);
@@ -958,9 +930,7 @@ void MainWindow::loadImage(const QString& path) {
                 },
                 Qt::QueuedConnection);
         };
-        if (StandardImageLoader::canLoad(path))
-            return StandardImageLoader::load(path, cancel);
-        return RawProcessor::load(path, std::move(onPreview), cancel);
+        return decodeImage(path, std::move(onPreview), cancel);
     }));
 }
 
@@ -981,7 +951,7 @@ void MainWindow::onLoadFinished() {
 
     // Cache the decode (authoritative copy) and pin it as the current image, then
     // display it through the same path a cache hit takes.
-    const QString key = decodeKey(session->path());
+    const QString key = decodeCacheKey(session->path());
     decodeCache.insert(key, std::move(result));
     decodeCache.pin(key);
     if (const LoadResult* cached = decodeCache.get(key))
@@ -1004,13 +974,13 @@ void MainWindow::applyLoadResult(const QString& path, const LoadResult& result) 
 
     // Re-read the sidecar every time (params are never cached) so edits made in
     // another app — or a prior session — are always reflected.
-    const SidecarLoadResult sidecar = XmpSidecar::resolveForImage(path, result.defaultCrop);
+    const ResolvedLoadedImage resolved = resolveLoadedImage(path, result);
     session->setLoadedImage(
         path,
         result,
-        sidecar.data.adjustments,
-        toSessionSidecarState(sidecar.status),
-        sidecar.data.metadata);
+        resolved.adjustments,
+        resolved.sidecarState,
+        resolved.metadata);
     session->setBaseLook(true);
     syncSessionToEditors();
     syncSessionSpotsToEditors(true);
@@ -1462,11 +1432,8 @@ void MainWindow::exportBatch(const QStringList& paths) {
                 cancel->store(true); // abort the in-flight decode
                 wait.quit();
             });
-            watcher.setFuture(QtConcurrent::run([rawPath, cancel]() -> LoadResult {
-                return StandardImageLoader::canLoad(rawPath)
-                    ? StandardImageLoader::load(rawPath, cancel)
-                    : RawProcessor::load(rawPath, nullptr, cancel);
-            }));
+            watcher.setFuture(QtConcurrent::run(
+                [rawPath, cancel]() -> LoadResult { return decodeImage(rawPath, nullptr, cancel); }));
             wait.exec();
             if (progress.wasCancelled())
                 break; // leave the future to finish and be discarded (cancel is set)
