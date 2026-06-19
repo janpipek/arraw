@@ -123,16 +123,15 @@ TEST_CASE("applySpots applies two spots independently", "[spot]") {
 // autoSourcePosition
 // ---------------------------------------------------------------------------
 
-TEST_CASE("autoSourcePosition offsets right by 10% of min dimension", "[spot]") {
-    // 200×100 buffer: min dimension = 100, offset = 10px
-    const QPointF src = autoSourcePosition({50.0, 50.0}, 5.0, 200, 100);
+TEST_CASE("autoSourcePosition offsets right by the given offset", "[spot]") {
+    const QPointF src = autoSourcePosition({50.0, 50.0}, 10.0, 200, 100);
     REQUIRE_THAT(src.x(), WithinAbs(60.0, 1e-6));
     REQUIRE_THAT(src.y(), WithinAbs(50.0, 1e-6));
 }
 
 TEST_CASE("autoSourcePosition clamps inside buffer", "[spot]") {
     // Destination near the right edge: offset would push source outside
-    const QPointF src = autoSourcePosition({195.0, 50.0}, 5.0, 200, 100);
+    const QPointF src = autoSourcePosition({195.0, 50.0}, 10.0, 200, 100);
     REQUIRE(src.x() <= 199.0);
     REQUIRE(src.x() >= 0.0);
 }
