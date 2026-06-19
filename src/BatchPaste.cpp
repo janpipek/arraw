@@ -4,12 +4,13 @@
 #include <utility>
 
 BatchAdjustmentCommand::BatchAdjustmentCommand(
-    QString activePath, QVector<BatchPasteRecord> records, ApplyActive applyActive)
+    QString activePath, QVector<BatchPasteRecord> records, ApplyActive applyActive, QString text)
     : activePath(std::move(activePath)),
       records(std::move(records)),
-      applyActive(std::move(applyActive)) {
+      applyActive(std::move(applyActive)),
+      textPrefix(std::move(text)) {
     const qsizetype n = this->records.size();
-    setText(QString("Paste Settings (%1 %2)").arg(n).arg(n == 1 ? "file" : "files"));
+    setText(QString("%1 (%2 %3)").arg(textPrefix).arg(n).arg(n == 1 ? "file" : "files"));
 }
 
 void BatchAdjustmentCommand::redo() {

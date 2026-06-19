@@ -768,6 +768,8 @@ void MainWindow::setupDocks() {
     toggleFilmStrip->setShortcut(Qt::Key_F9);
 
     connect(filmStrip, &FilmStrip::fileSelected, this, &MainWindow::loadImage);
+    connect(
+        filmStrip, &FilmStrip::populateContextMenu, this, &MainWindow::populateFilmStripContextMenu);
 
     // Adjustments + EXIF (right). Collapses to a thin edge strip (ADR 0012).
     auto* rightDock = adjustmentsDock = new QDockWidget("Adjustments", this);
@@ -1180,9 +1182,70 @@ void MainWindow::copySettings() {
     settingsClipboard = SettingsClipboard{currentParams(), chosen};
 }
 
+void MainWindow::populateFilmStripContextMenu(
+    const QString& path, const QStringList& targets, QMenu* menu) {
+    const bool multipleSelected = filmStrip->selectedPaths().size() > 1;
+    const bool singleTarget = targets.size() == 1;
+    const GlobalAdjustment sourceParams = singleTarget ? paramsForPath(path) : GlobalAdjustment{};
+    const bool copyEnabled = singleTarget && !multipleSelected
+                             && !isDefaultDevelopSettings(path, sourceParams);
+
+    QAction* copy = menu->addAction(tr("Copy Settings"));
+    copy->setEnabled(copyEnabled);
+    connect(copy, &QAction::triggered, this, [this, path] { copySettingsFromPath(path); });
+
+    QAction* paste = menu->addAction(tr("Paste Settings"));
+    paste->setEnabled(settingsClipboard.has_value());
+    connect(paste, &QAction::triggered, this, [this, targets] { pasteSettingsToPaths(targets); });
+
+    QMenu* presets = menu->addMenu(tr("Apply Preset"));
+    const std::vector<DevelopPreset> savedPresets = presetStore.loadAll();
+    presets->setEnabled(!savedPresets.empty());
+    if (savedPresets.empty()) {
+        QAction* none = presets->addAction(tr("(No presets saved)"));
+        none->setEnabled(false);
+    } else {
+        for (const DevelopPreset& preset : savedPresets)
+            presets->addAction(preset.name, this, [this, preset, targets] {
+                applyPresetToPaths(preset, targets);
+            });
+    }
+
+    QAction* exportAction = menu->addAction(tr("Export..."));
+    connect(exportAction, &QAction::triggered, this, [this, targets] { exportPaths(targets); });
+    menu->addSeparator();
+}
+
+void MainWindow::copySettingsFromPath(const QString& path) {
+    if (path.isEmpty())
+        return;
+    if (path == session->path())
+        viewport->commitActiveTool(); // fold any pending crop into the params first
+
+    const GlobalAdjustment source = paramsForPath(path);
+    if (isDefaultDevelopSettings(path, source))
+        return;
+
+    GroupChecklistDialog dlg(tr("Copy Settings"), allGroups(), lastCopySelection, this);
+    if (dlg.exec() != QDialog::Accepted)
+        return;
+    const GroupSelection chosen = dlg.selectedGroups();
+    if (chosen.none())
+        return;
+
+    lastCopySelection = chosen;
+    settingsClipboard = SettingsClipboard{source, chosen};
+}
+
 void MainWindow::pasteSettings() {
+    pasteSettingsToPaths(filmStrip->selectedPaths());
+}
+
+void MainWindow::pasteSettingsToPaths(QStringList targets) {
     if (session->path().isEmpty() || !settingsClipboard)
         return;
+    if (targets.isEmpty())
+        targets = {session->path()};
 
     // Paste's checklist is bounded by what was copied (narrow only).
     GroupChecklistDialog
@@ -1191,17 +1254,16 @@ void MainWindow::pasteSettings() {
         return;
 
     const GroupSelection chosen = dlg.selectedGroups();
-    const QStringList targets = filmStrip->selectedPaths();
 
-    if (targets.size() <= 1) {
+    if (targets.size() == 1 && targets.constFirst() == session->path()) {
         // Single file: apply to the active image in memory only.
         applyDevelopChange(applyGroups(currentParams(), settingsClipboard->snapshot, chosen));
         return;
     }
 
-    // Multi-file: read before-state from each file's sidecar (or from memory
-    // for the active file, which may have unsaved edits), then push one macro
-    // undo step that auto-saves XMP for all targets (ADR 0018).
+    // Context or multi-file paste: read before-state from each file's sidecar
+    // (or from memory for the active file, which may have unsaved edits), then
+    // push one undo step that auto-saves XMP for all targets (ADR 0018).
     QVector<BatchPasteRecord> records;
     records.reserve(targets.size());
     for (const QString& path : targets) {
@@ -1216,6 +1278,34 @@ void MainWindow::pasteSettings() {
             syncSessionToEditors();
             syncSessionSpotsToEditors(true);
         }));
+}
+
+void MainWindow::applyPresetToPaths(const DevelopPreset& preset, QStringList targets) {
+    if (session->path().isEmpty())
+        return;
+    if (targets.isEmpty())
+        targets = {session->path()};
+
+    if (targets.size() == 1 && targets.constFirst() == session->path()) {
+        applyPreset(preset);
+        return;
+    }
+
+    QVector<BatchPasteRecord> records;
+    records.reserve(targets.size());
+    for (const QString& path : targets) {
+        const GlobalAdjustment before = paramsForPath(path);
+        records.append({path, before, applyGroups(before, preset.values, preset.groups)});
+    }
+    undoStack->push(new BatchAdjustmentCommand(
+        session->path(),
+        records,
+        [this](const GlobalAdjustment& params) {
+            session->setParams(params);
+            syncSessionToEditors();
+            syncSessionSpotsToEditors(true);
+        },
+        tr("Apply Preset")));
 }
 
 void MainWindow::saveCurrentAsPreset() {
@@ -1307,6 +1397,19 @@ GlobalAdjustment MainWindow::currentParams() const {
     return session->params();
 }
 
+GlobalAdjustment MainWindow::paramsForPath(const QString& path) const {
+    if (path == session->path())
+        return currentParams();
+    return XmpSidecar::loadAdjustments(path);
+}
+
+bool MainWindow::isDefaultDevelopSettings(const QString& path, const GlobalAdjustment& params) const {
+    GlobalAdjustment defaults;
+    if (path == session->path())
+        defaults.cropRect = session->defaultCrop();
+    return params == defaults;
+}
+
 void MainWindow::syncSessionToEditors() {
     {
         QSignalBlocker block(adjPanel);
@@ -1371,13 +1474,21 @@ void MainWindow::saveAdjustments() {
 }
 
 void MainWindow::exportFile() {
+    exportPaths(filmStrip->selectedPaths());
+}
+
+void MainWindow::exportPaths(const QStringList& paths) {
     if (!session->fullRes().valid()) {
         QMessageBox::information(this, "Export", "No image loaded.");
         return;
     }
 
-    const QStringList targets = filmStrip->selectedPaths();
+    const QStringList targets = paths.isEmpty() ? QStringList{session->path()} : paths;
     if (targets.size() > 1) {
+        exportBatch(targets);
+        return;
+    }
+    if (targets.constFirst() != session->path()) {
         exportBatch(targets);
         return;
     }

@@ -110,11 +110,18 @@ private:
     // of truth for copy/paste and preset apply). No-op if nothing changed.
     void pushGlobalAdjustmentCommand(const GlobalAdjustment& before, const GlobalAdjustment& after);
     void applyDevelopChange(const GlobalAdjustment& after);
+    void populateFilmStripContextMenu(const QString& path, const QStringList& targets, QMenu* menu);
+    void copySettingsFromPath(const QString& path);
+    void pasteSettingsToPaths(QStringList targets);
+    void applyPresetToPaths(const DevelopPreset& preset, QStringList targets);
+    void exportPaths(const QStringList& paths);
     void applyPreset(const DevelopPreset& preset);
     void rebuildPresetsMenu(); // re-list saved presets after save/delete
     void applyCurrentUserMetadata(const UserMetadata& metadata);
     void setCurrentRating(int rating);
     void setCurrentLabel(ColourLabel label);
+    GlobalAdjustment paramsForPath(const QString& path) const;
+    bool isDefaultDevelopSettings(const QString& path, const GlobalAdjustment& params) const;
 
     // The full develop params for save/export. DevelopSession is canonical;
     // panels mirror/edit this state but do not answer "what is current?"

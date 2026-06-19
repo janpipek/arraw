@@ -17,6 +17,12 @@ TEST_CASE("BatchAdjustmentCommand text uses singular for one file", "[batchpaste
     REQUIRE(cmd.text() == "Paste Settings (1 file)");
 }
 
+TEST_CASE("BatchAdjustmentCommand accepts a custom undo label", "[batchpaste]") {
+    QVector<BatchPasteRecord> records(2);
+    BatchAdjustmentCommand cmd(QString{}, records, {}, "Apply Preset");
+    REQUIRE(cmd.text() == "Apply Preset (2 files)");
+}
+
 TEST_CASE("BatchAdjustmentCommand redo writes after-state XMP for each record", "[batchpaste]") {
     QTemporaryDir dir;
     REQUIRE(dir.isValid());
@@ -64,20 +70,21 @@ TEST_CASE("BatchAdjustmentCommand redo/undo updates the active file via callback
     REQUIRE(dir.isValid());
 
     const QString activeRaw = dir.filePath("active.CR3");
-    const QString otherRaw  = dir.filePath("other.CR3");
+    const QString otherRaw = dir.filePath("other.CR3");
 
     GlobalAdjustment activeBefore, activeAfter;
     activeBefore.exposure = 0.1f;
-    activeAfter.exposure  = 2.0f;
+    activeAfter.exposure = 2.0f;
 
     GlobalAdjustment activeState = activeBefore;
 
     QVector<BatchPasteRecord> records = {
         {activeRaw, activeBefore, activeAfter},
-        {otherRaw,  GlobalAdjustment{}, GlobalAdjustment{}},
+        {otherRaw, GlobalAdjustment{}, GlobalAdjustment{}},
     };
-    BatchAdjustmentCommand cmd(
-        activeRaw, records, [&activeState](const GlobalAdjustment& p) { activeState = p; });
+    BatchAdjustmentCommand cmd(activeRaw, records, [&activeState](const GlobalAdjustment& p) {
+        activeState = p;
+    });
 
     cmd.redo();
     CHECK(activeState.exposure == activeAfter.exposure);

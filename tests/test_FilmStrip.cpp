@@ -5,8 +5,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <QDir>
 #include <QFile>
-#include <QListView>
 #include <QItemSelectionModel>
+#include <QListView>
 #include <QMouseEvent>
 #include <QTemporaryDir>
 #include <QThreadPool>
@@ -14,8 +14,10 @@
 namespace {
 
 FilmStrip* makeStripWithFiles(const QTemporaryDir& dir, int n) {
-    for (int i = 1; i <= n; ++i)
-        { QFile f(dir.filePath(QString("IMG_000%1.jpg").arg(i))); (void)f.open(QIODevice::WriteOnly); }
+    for (int i = 1; i <= n; ++i) {
+        QFile f(dir.filePath(QString("IMG_000%1.jpg").arg(i)));
+        (void) f.open(QIODevice::WriteOnly);
+    }
     auto* strip = new FilmStrip;
     strip->resize(800, 100);
     strip->show();
@@ -35,7 +37,8 @@ void destroyStrip(FilmStrip* strip) {
 
 } // namespace
 
-TEST_CASE("FilmStrip: programmatic multi-select populates selectedPaths", "[filmstrip][multiselect]") {
+TEST_CASE(
+    "FilmStrip: programmatic multi-select populates selectedPaths", "[filmstrip][multiselect]") {
     testApp();
 
     QTemporaryDir dir;
@@ -72,10 +75,26 @@ bool clickItem(QListView* view, int row, Qt::KeyboardModifiers mods) {
         return false;
     const QPoint pos = rect.center();
     const QPoint global = view->viewport()->mapToGlobal(pos);
-    QMouseEvent press(QEvent::MouseButtonPress, pos, global,
-                      Qt::LeftButton, Qt::LeftButton, mods);
-    QMouseEvent release(QEvent::MouseButtonRelease, pos, global,
-                        Qt::LeftButton, Qt::LeftButton, mods);
+    QMouseEvent press(QEvent::MouseButtonPress, pos, global, Qt::LeftButton, Qt::LeftButton, mods);
+    QMouseEvent
+        release(QEvent::MouseButtonRelease, pos, global, Qt::LeftButton, Qt::LeftButton, mods);
+    QApplication::sendEvent(view->viewport(), &press);
+    QApplication::sendEvent(view->viewport(), &release);
+    qApp->processEvents();
+    return true;
+}
+
+bool rightClickItem(QListView* view, int row) {
+    const QModelIndex idx = view->model()->index(row, 0);
+    const QRect rect = view->visualRect(idx);
+    if (!rect.isValid())
+        return false;
+    const QPoint pos = rect.center();
+    const QPoint global = view->viewport()->mapToGlobal(pos);
+    QMouseEvent press(
+        QEvent::MouseButtonPress, pos, global, Qt::RightButton, Qt::RightButton, Qt::NoModifier);
+    QMouseEvent release(
+        QEvent::MouseButtonRelease, pos, global, Qt::RightButton, Qt::NoButton, Qt::NoModifier);
     QApplication::sendEvent(view->viewport(), &press);
     QApplication::sendEvent(view->viewport(), &release);
     qApp->processEvents();
@@ -84,7 +103,9 @@ bool clickItem(QListView* view, int row, Qt::KeyboardModifiers mods) {
 
 } // namespace
 
-TEST_CASE("FilmStrip: Ctrl+click adds to selection but keeps the active image", "[filmstrip][multiselect]") {
+TEST_CASE(
+    "FilmStrip: Ctrl+click adds to selection but keeps the active image",
+    "[filmstrip][multiselect]") {
     testApp();
 
     QTemporaryDir dir;
@@ -145,7 +166,8 @@ TEST_CASE("FilmStrip: Ctrl+click never deselects the active image", "[filmstrip]
     destroyStrip(strip);
 }
 
-TEST_CASE("FilmStrip: Shift+click selects a contiguous range, active pinned", "[filmstrip][multiselect]") {
+TEST_CASE(
+    "FilmStrip: Shift+click selects a contiguous range, active pinned", "[filmstrip][multiselect]") {
     testApp();
 
     QTemporaryDir dir;
@@ -195,6 +217,35 @@ TEST_CASE("FilmStrip: selectFirst collapses any prior multi-selection", "[filmst
     // selectFirst should collapse back to 1
     strip->selectFirst();
     qApp->processEvents();
+    CHECK(strip->selectedPaths().size() == 1);
+
+    destroyStrip(strip);
+}
+
+TEST_CASE("FilmStrip: right-click does not change the active image", "[filmstrip][contextmenu]") {
+    testApp();
+
+    QTemporaryDir dir;
+    REQUIRE(dir.isValid());
+    auto* strip = makeStripWithFiles(dir, 4);
+
+    strip->selectFirst();
+    qApp->processEvents();
+
+    auto* listView = strip->findChild<QListView*>();
+    REQUIRE(listView != nullptr);
+    listView->resize(800, 100);
+    qApp->processEvents();
+
+    REQUIRE(listView->currentIndex().row() == 0);
+
+    if (!rightClickItem(listView, 1)) {
+        WARN("visualRect not valid — skipping");
+        destroyStrip(strip);
+        return;
+    }
+
+    CHECK(listView->currentIndex().row() == 0);
     CHECK(strip->selectedPaths().size() == 1);
 
     destroyStrip(strip);

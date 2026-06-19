@@ -3,8 +3,8 @@
 #include "ImagePipeline.h"
 
 #include <functional>
-#include <QUndoCommand>
 #include <QString>
+#include <QUndoCommand>
 #include <QVector>
 
 struct BatchPasteRecord {
@@ -24,7 +24,8 @@ public:
     BatchAdjustmentCommand(
         QString activePath,
         QVector<BatchPasteRecord> records,
-        ApplyActive applyActive = {});
+        ApplyActive applyActive = {},
+        QString text = "Paste Settings");
 
     void redo() override;
     void undo() override;
@@ -33,4 +34,5 @@ private:
     QString activePath;
     QVector<BatchPasteRecord> records;
     ApplyActive applyActive;
+    QString textPrefix;
 };
