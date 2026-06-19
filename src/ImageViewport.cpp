@@ -746,8 +746,9 @@ void ImageViewport::drawStraightenLine(QPainter& p) const {
 }
 
 // Read the pre-WB pixel value the shader produces under `pos` (GPU tap, same
-// readback rationale as the histograms — docs/adr/0004) and invert the additive
-// white-balance model from image.frag to the temperature/tint that neutralise it.
+// readback rationale as the histograms — docs/adr/0004) and invert the
+// blackbody white-balance gain (docs/adr/0025) to the temperature/tint that
+// neutralise it.
 bool ImageViewport::sampleWhiteBalance(QPointF pos, float& kelvin, float& tintOut) {
     if (!hasImage || !core.ready())
         return false;
@@ -792,14 +793,9 @@ bool ImageViewport::sampleWhiteBalance(QPointF pos, float& kelvin, float& tintOu
     if (r + g + b < 1e-4) // clicked off the image (black) — ignore
         return false;
 
-    // Invert image.frag's additive WB (keep these constants in sync with it):
-    //   applyTemperature: t=(K-5500)/5500; r += t*0.15; b -= t*0.15
-    //   applyTint:        g += (tint/100)*0.05
-    // Solve r==g==b: t balances R/B; the grey level is r1=(r+b)/2; tint lifts G.
-    const double t = (b - r) / 0.3; // 0.3 = 2*0.15
-    const double r1 = 0.5 * (r + b);
-    kelvin = float(std::clamp(5500.0 * (1.0 + t), 2000.0, 12000.0));
-    tintOut = float(std::clamp((r1 - g) * 2000.0, -100.0, 100.0)); // 2000 = 100/0.05
+    // Invert the same blackbody gain the render uses (docs/adr/0025): find the
+    // kelvin/tint whose gain would neutralise this sampled pre-WB pixel.
+    whiteBalanceFromNeutral(float(r), float(g), float(b), kelvin, tintOut);
     return true;
 }
 

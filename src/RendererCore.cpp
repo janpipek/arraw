@@ -317,8 +317,12 @@ void RendererCore::fillUbuf(Ubuf& ub, const FrameParams& fp) const {
     ub.shadows = g.shadows;
     ub.whites = g.whites;
     ub.blacks = g.blacks;
-    ub.temperature = a.temperature;
-    ub.tint = g.tint;
+    // White balance: blackbody-derived per-channel gain, computed CPU-side and
+    // applied as a multiply in the shader so black stays black (docs/adr/0025).
+    const auto wb = whiteBalanceGain(a.temperature, a.tint);
+    ub.wbGainR = wb[0];
+    ub.wbGainG = wb[1];
+    ub.wbGainB = wb[2];
     ub.saturation = g.saturation;
     ub.vibrance = g.vibrance;
 
@@ -334,8 +338,7 @@ void RendererCore::fillUbuf(Ubuf& ub, const FrameParams& fp) const {
 
     // Local adjustments (docs/adr/0010): pack into the parallel vec4 arrays,
     // honouring the 16-mask cap. Deltas use the same scaling as the global path;
-    // local temperature is a relative -100..100 shift normalised like the global
-    // Kelvin path (÷100 → the shader's tempShift t).
+    // local white balance becomes a per-channel gain (see below, docs/adr/0025).
     const int n = std::min<int>(int(a.localAdjustments.size()), 16);
     ub.numLocalAdj = n;
     for (int i = 0; i < n; ++i) {
@@ -366,12 +369,18 @@ void RendererCore::fillUbuf(Ubuf& ub, const FrameParams& fp) const {
         ub.laTone[k + 3] = d.shadows;
         ub.laTone2[k + 0] = d.whites;
         ub.laTone2[k + 1] = d.blacks;
-        ub.laTone2[k + 2] = la.temperature / 100.0f;
-        ub.laTone2[k + 3] = d.tint;
+        // Local white balance: the relative -100..100 shift maps to an effective
+        // Kelvin and reuses the global blackbody gain (docs/adr/0025); the three
+        // gain channels ride in the spare laTone2.zw / laColor.w slots.
+        constexpr float kLocalTempKelvinPerUnit = 30.0f; // ±100 → 2500..8500 K
+        const auto lwb =
+            whiteBalanceGain(5500.0f + la.temperature * kLocalTempKelvinPerUnit, la.tint);
+        ub.laTone2[k + 2] = lwb[0];
+        ub.laTone2[k + 3] = lwb[1];
         ub.laColor[k + 0] = d.saturation;
         ub.laColor[k + 1] = d.vibrance;
         ub.laColor[k + 2] = maskType;
-        ub.laColor[k + 3] = 0.0f;
+        ub.laColor[k + 3] = lwb[2];
     }
 }
 

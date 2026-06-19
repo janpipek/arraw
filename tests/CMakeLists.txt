@@ -16,6 +16,7 @@ add_executable(arraw_tests
     test_ViewportGeometry.cpp
     test_XmpSidecar.cpp
     test_ColorManagement.cpp
+    test_WhiteBalance.cpp
     test_RawProcessor.cpp
     test_StandardImageLoader.cpp
     test_GoldenImages.cpp

@@ -21,8 +21,9 @@ layout(std140, binding = 0) uniform buf {
     float shadows;       // -0.2..+0.2
     float whites;        // -0.2..+0.2
     float blacks;        // -0.2..+0.2
-    float temperature;   // Kelvin, 2000..12000 (5500 = neutral)
-    float tint;          // -1..+1
+    float wbGainR;       // white-balance per-channel gain (docs/adr/0025); 5500K/tint0 = 1
+    float wbGainG;
+    float wbGainB;
     float saturation;    // -1..+1
     float vibrance;      // -1..+1
     int   useLut;
@@ -32,14 +33,14 @@ layout(std140, binding = 0) uniform buf {
                          // 0: output clamped linear working space (export readback)
     int   curveInput;    // stop after tone regions + gamma-encode (histograms)
     int   hslActive;
-    int   wbInput;       // stop before temperature/tint, output linear (WB picker)
+    int   wbInput;       // stop before white balance, output linear (WB picker)
     int   clipWarn;      // clipping overlay bits: 1 = highlights, 2 = shadows (docs/adr/0009)
     // Local adjustments (docs/adr/0010), 16-mask cap. Packed parallel vec4 arrays:
     //   laGeom  = Linear (p0.x, p0.y, p1.x, p1.y) | Radial (cx, cy, rx, ry)
     //   laGeom2 = Radial (angle, feather, invert, spare); unused for Linear
     //   laTone  = (exposure, contrast, highlights, shadows)
-    //   laTone2 = (whites, blacks, tempShift, tint)
-    //   laColor = (saturation, vibrance, maskType, spare)  maskType 0=Linear 1=Radial
+    //   laTone2 = (whites, blacks, wbGainR, wbGainG)   white-balance gain (docs/adr/0025)
+    //   laColor = (saturation, vibrance, maskType, wbGainB)  maskType 0=Linear 1=Radial
     vec4  laGeom[16];
     vec4  laTone[16];
     vec4  laTone2[16];
@@ -136,25 +137,11 @@ vec3 applyCurve(vec3 c) {
     return srgbToLinear(c);
 }
 
-// Core red/blue shift for a normalised temperature `t` (0 = neutral). Shared by
-// the global path (t from absolute Kelvin) and local adjustments (t from a
-// relative -100..100 shift) — see docs/adr/0010.
-vec3 applyTempShift(vec3 c, float t) {
-    if (abs(t) < 0.0001) return c;
-    c.r += t * 0.15;
-    c.b -= t * 0.15;
-    return c;
-}
-
-vec3 applyTemperature(vec3 c) {
-    return applyTempShift(c, (u.temperature - 5500.0) / 5500.0);
-}
-
-vec3 applyTint(vec3 c, float tint) {
-    if (abs(tint) < 0.001) return c;
-    c.g += tint * 0.05;
-    return c;
-}
+// White balance is now a per-channel multiplicative gain (docs/adr/0025),
+// precomputed on the CPU (blackbody-derived) and applied as c *= gain — so a
+// black pixel can never acquire colour. The global gain arrives in u.wbGain*;
+// each local adjustment's gain is packed into its (laTone2.z, laTone2.w,
+// laColor.w) slots and blended by the mask weight in applyLocalAdjustments.
 
 // ── HSL ───────────────────────────────────────────────────────────────────────
 
@@ -339,8 +326,8 @@ vec3 applyLocalAdjustments(vec3 c, vec2 uv, float aspect) {
         c = applyContrast(c, w * u.laTone[i].y);
         c = applyToneRegions(c, w * u.laTone[i].z, w * u.laTone[i].w,
                                 w * u.laTone2[i].x, w * u.laTone2[i].y);
-        c = applyTempShift(c, w * u.laTone2[i].z);
-        c = applyTint(c, w * u.laTone2[i].w);
+        vec3 lg = vec3(u.laTone2[i].z, u.laTone2[i].w, u.laColor[i].w);
+        c *= mix(vec3(1.0), lg, w); // local white balance: mask-weighted gain (docs/adr/0025)
         c = applySaturation(c, w * u.laColor[i].x);
         c = applyVibrance(c, w * u.laColor[i].y);
     }
@@ -350,7 +337,7 @@ vec3 applyLocalAdjustments(vec3 c, vec2 uv, float aspect) {
 // Processing order (the authoritative definition — DESIGN.md mirrors it).
 // Everything up to the final encode operates in linear Rec.2020:
 //   base look → exposure → contrast → tone regions → tone curves
-//   → temperature → tint → HSL → saturation → vibrance → display transform
+//   → white balance (gain) → HSL → saturation → vibrance → display transform
 // Crop/rotation happen earlier in image.vert. For export, displayEncode is
 // 0: the offscreen readback stays in linear working space and the output
 // transform runs on the CPU (lcms2, MainWindow::exportFile).
@@ -374,11 +361,10 @@ void main() {
     }
     c = applyCurve(c);
     if (u.wbInput != 0) {
-        fragColor = vec4(c, 1.0);   // linear value the WB picker inverts (pre-temp/tint)
+        fragColor = vec4(c, 1.0);   // linear value the WB picker inverts (pre white balance)
         return;
     }
-    c = applyTemperature(c);
-    c = applyTint(c, u.tint);
+    c *= vec3(u.wbGainR, u.wbGainG, u.wbGainB); // white balance: per-channel gain (docs/adr/0025)
     if (u.hslActive != 0)
         c = applyHsl(c);
     c = applySaturation(c, u.saturation);
