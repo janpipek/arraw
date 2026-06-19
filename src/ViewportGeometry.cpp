@@ -1,5 +1,6 @@
 #include "ViewportGeometry.h"
 
+#include <numbers>
 #include <cmath>
 
 namespace viewport {
@@ -7,7 +8,7 @@ namespace viewport {
 QPointF rotateTextureUv(float u, float v, float degrees, float aspect, float cx, float cy) {
     float dx = (u - cx) * aspect;
     float dy = v - cy;
-    const float rad = degrees * float(M_PI) / 180.0f;
+    const float rad = degrees * float(std::numbers::pi) / 180.0f;
     const float c = std::cos(rad);
     const float s = std::sin(rad);
     const float rx = c * dx - s * dy;
