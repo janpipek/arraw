@@ -38,7 +38,7 @@ temperature, tint, saturation, vibrance) — no geometry, no tone curve.
 - Local edits are **arraw-only**: Lightroom will not show them and we do not read
   Lightroom's. Global develop settings, rating, and label remain Lightroom-
   compatible as before. The boundary is explicit, consistent with
-  `0007-culling-marks-in-develop-sidecar` (we do not round-trip foreign tags).
+  `0008-culling-marks-in-develop-sidecar` (we do not round-trip foreign tags).
 - The 16-mask cap is **raisable** (bump the synced constant, rebuild the shader)
   but must **never be lowered below counts a saved file already uses** — surplus
   masks would silently drop on load. The arraw-native sidecar stores a plain

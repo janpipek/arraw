@@ -189,7 +189,7 @@ larger but builds reliably.
 
 ### 6.4 The offscreen plugin needs `EXTRA_PLATFORM_PLUGINS`
 
-ADR 0012's future headless CLI needs the **offscreen** Qt platform plugin in the
+ADR 0022's future headless CLI needs the **offscreen** Qt platform plugin in the
 bundle. `linuxdeploy-plugin-qt` bundles the `xcb` platform by default; extra platform
 plugins go in **`EXTRA_PLATFORM_PLUGINS=libqoffscreen.so`**. The generic
 `EXTRA_QT_PLUGINS` variable is for plugin *groups* (svg, imageformats, …) and

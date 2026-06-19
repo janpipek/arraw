@@ -10,7 +10,7 @@
 // checklist — the granularity at which develop settings travel between photos
 // (Milestone 8). The seven groups exhaustively partition every *global* field of
 // GlobalAdjustment; Local Adjustments are deliberately not a group (masks pinned
-// to one photo's framing rarely transfer). See docs/adr/0015 and CONTEXT.md.
+// to one photo's framing rarely transfer). See docs/adr/0023 and CONTEXT.md.
 enum class DevelopGroup {
     WhiteBalance, // temperature (Kelvin) + tint
     Tone,         // exposure, contrast, highlights, shadows, whites, blacks
@@ -41,11 +41,11 @@ inline bool hasGroup(GroupSelection s, DevelopGroup g) {
 // (replace-wholesale: a selected group whose source is at default resets that
 // group on the target). Unselected groups, and the localAdjustments list, are
 // always taken from `target` unchanged. This is the single pure function behind
-// copy/paste and preset apply (docs/adr/0015, [[spot-for-algorithms]]).
+// copy/paste and preset apply (docs/adr/0023, [[spot-for-algorithms]]).
 GlobalAdjustment applyGroups(
     const GlobalAdjustment& target, const GlobalAdjustment& source, GroupSelection selection);
 
-// Stable machine key for a group — used as the JSON object key (docs/adr/0015)
+// Stable machine key for a group — used as the JSON object key (docs/adr/0023)
 // and as the checklist checkbox objectName. Never localised; never reordered.
 const char* developGroupKey(DevelopGroup g);
 

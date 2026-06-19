@@ -10,7 +10,7 @@ file *is* the flag that says "apply me." This deliberately does not reuse the
 
 The sidecar is `crs:` XMP on purpose — it is the Lightroom-compatibility surface
 for global edits (`0010-parametric-local-adjustments`,
-`0014-crop-aspect-lock-lightroom-flag`). Presets are the opposite: an internal
+`0021-crop-aspect-lock-lightroom-flag`). Presets are the opposite: an internal
 convenience, explicitly *not* a Lightroom interop surface, and now (Milestone 8)
 they store only the groups the user picked rather than a whole settings snapshot.
 

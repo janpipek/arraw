@@ -96,7 +96,7 @@ older glibc — rides along without raising it.
   definition to `setApplicationVersion` and a `--version` flag; a CI guard fails the
   release if the pushed `vX.Y.Z` tag disagrees.
 - The Linux build bundles the **offscreen** platform plugin (via linuxdeploy's
-  `EXTRA_PLATFORM_PLUGINS`) so the (future) headless CLI of ADR 0012 works over
+  `EXTRA_PLATFORM_PLUGINS`) so the (future) headless CLI of ADR 0022 works over
   SSH; arg pass-through is automatic.
 - linuxdeploy runs with **`NO_STRIP=1`**: its bundled binutils `strip` cannot parse
   the `.relr.dyn` (DT_RELR) section in libraries from modern distros and aborts.

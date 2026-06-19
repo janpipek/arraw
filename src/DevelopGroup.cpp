@@ -49,7 +49,7 @@ QString developGroupLabel(DevelopGroup g) {
 // Each group overwrites exactly its own fields on `result` from `source`. The
 // groups partition every global field of GlobalAdjustment; localAdjustments is
 // intentionally absent from every arm, so it always rides through from `target`
-// (docs/adr/0015, CONTEXT.md "Develop Group").
+// (docs/adr/0023, CONTEXT.md "Develop Group").
 GlobalAdjustment applyGroups(
     const GlobalAdjustment& target, const GlobalAdjustment& source, GroupSelection selection) {
     GlobalAdjustment result = target;
