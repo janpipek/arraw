@@ -46,6 +46,7 @@ layout(std140, binding = 0) uniform buf {
     vec4  laColor[16];
     vec4  laGeom2[16];
     int   numLocalAdj;
+    int   histoRaw;  // 1: output pre-clamp sRGB-linear for overflow binning
 } u;
 
 layout(binding = 1) uniform sampler2D uTexture;
@@ -386,6 +387,11 @@ void main() {
     // Local adjustments — analytic, single-pass, after the global colour section
     // and before encode (docs/adr/0010).
     c = applyLocalAdjustments(c, vUV, u.aspect);
+
+    if (u.histoRaw != 0) {
+        fragColor = vec4(kRec2020ToSRGB * c, 1.0); // pre-clamp sRGB-linear
+        return;
+    }
 
     if (u.displayEncode == 0) {
         fragColor = vec4(clamp(c, 0.0, 1.0), 1.0);          // export readback

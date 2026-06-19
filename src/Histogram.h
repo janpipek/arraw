@@ -27,5 +27,7 @@ private:
     static constexpr int kBins = 256;
 
     std::array<int, kBins> r{}, g{}, b{};
+    int rOver = 0, gOver = 0, bOver = 0;
+    int rUnder = 0, gUnder = 0, bUnder = 0;
     int peak = 1;
 };

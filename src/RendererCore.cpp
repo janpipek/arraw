@@ -330,6 +330,7 @@ void RendererCore::fillUbuf(Ubuf& ub, const FrameParams& fp) const {
     ub.hslActive = hslActive ? 1 : 0;
     ub.wbInput = fp.wbInput ? 1 : 0;
     ub.clipWarn = (fp.clipHighlights ? 1 : 0) | (fp.clipShadows ? 2 : 0);
+    ub.histoRaw = fp.histoRaw ? 1 : 0;
 
     // Local adjustments (docs/adr/0010): pack into the parallel vec4 arrays,
     // honouring the 16-mask cap. Deltas use the same scaling as the global path;

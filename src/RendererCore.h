@@ -48,7 +48,8 @@ struct Ubuf {
     float laColor[64];
     float laGeom2[64];
     qint32 numLocalAdj;
-    qint32 pad_[3]; // round the block up to a 16-byte multiple (std140)
+    qint32 histoRaw; // 1: emit pre-clamp sRGB-linear for overflow histogram
+    qint32 pad_[2];  // round the block up to a 16-byte multiple (std140)
 };
 
 static_assert(sizeof(Ubuf) == 1568);
@@ -78,6 +79,7 @@ public:
         bool gamutWarn = false;
         bool clipHighlights = false; // sRGB-relative clipping overlay (docs/adr/0009)
         bool clipShadows = false;
+        bool histoRaw = false; // emit pre-clamp sRGB-linear for overflow histogram
         GlobalAdjustment adjustments;
     };
 

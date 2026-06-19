@@ -990,8 +990,9 @@ void ImageViewport::renderHistograms() {
         = core.renderOffscreen(RendererCore::Slot::Preview, fp, QSize(w, h), QRhiTexture::RGBA8);
 
     fp.curveInput = false;
+    fp.histoRaw = true;
     const QImage finalSample
-        = core.renderOffscreen(RendererCore::Slot::Preview, fp, QSize(w, h), QRhiTexture::RGBA8);
+        = core.renderOffscreen(RendererCore::Slot::Preview, fp, QSize(w, h), QRhiTexture::RGBA32F);
 
     emit histogramsReady(finalSample, curveInput);
 }
