@@ -62,8 +62,7 @@ ImageBuffer applySpots(const ImageBuffer& buf, const std::vector<Spot>& spots) {
     return result;
 }
 
-QPointF autoSourcePosition(QPointF destination, double radius, int bufW, int bufH) {
-    const double offset = 0.1 * std::min(bufW, bufH);
+QPointF autoSourcePosition(QPointF destination, double offset, int bufW, int bufH) {
     const double x = std::clamp(destination.x() + offset, 0.0, static_cast<double>(bufW - 1));
     const double y = std::clamp(destination.y(),           0.0, static_cast<double>(bufH - 1));
     return {x, y};

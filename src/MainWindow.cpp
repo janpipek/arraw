@@ -318,11 +318,15 @@ MainWindow::MainWindow(QWidget* parent)
     connect(viewport, &ImageViewport::spotRequested, this, [this](QPointF destBufPx) {
         if (!session->preview().valid())
             return;
-        const ImageBuffer& preview = session->preview();
-        const double offset = 0.1 * std::min(preview.width, preview.height);
+        // Spots are stored in full-res buffer coordinates (destBufPx already is),
+        // so the auto source offset and clamp bounds must use full-res dimensions.
+        const ImageBuffer& full = session->fullRes();
+        const int bufW = full.valid() ? full.width : session->preview().width;
+        const int bufH = full.valid() ? full.height : session->preview().height;
+        const double offset = 0.1 * std::min(bufW, bufH);
         const Spot s{
             .destination = destBufPx,
-            .source = autoSourcePosition(destBufPx, offset, preview.width, preview.height),
+            .source = autoSourcePosition(destBufPx, offset, bufW, bufH),
             .radius = offset * 0.5,
             .feather = 0.5,
         };
