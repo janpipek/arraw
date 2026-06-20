@@ -122,7 +122,7 @@ jobs:
             libx11-dev libx11-xcb-dev libxext-dev libxfixes-dev libxi-dev libxrender-dev \
             libxcb1-dev libxcb-cursor-dev libxcb-glx0-dev libxcb-keysyms1-dev \
             libxcb-image0-dev libxcb-shm0-dev libxcb-icccm4-dev libxcb-sync-dev \
-            libxcb-xfixes-dev libxcb-shape0-dev libxcb-randr0-dev \
+            libxcb-xfixes0-dev libxcb-shape0-dev libxcb-randr0-dev \
             libxcb-render-util0-dev libxcb-util-dev libxcb-xinerama0-dev libxcb-xkb-dev
 
       - name: Validate AppStream metainfo
@@ -212,7 +212,9 @@ jobs:
           persist-credentials: false
 
       - name: Build and validate RPMs
-        run: bash tools/package_fedora.sh
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          bash tools/package_fedora.sh
 
       - name: Upload Fedora package artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
