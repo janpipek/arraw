@@ -66,6 +66,13 @@ private:
     std::vector<QPointF>& pointsFor(Channel ch);
     const std::array<float, 256>& lutFor(Channel ch);
 
+    // Abandon any in-progress drag. dragIndex is only validated against the
+    // current points at press time, so it must be cleared whenever the points
+    // it indexes are replaced or the current channel switches (e.g. an undo or
+    // a channel shortcut fired mid-drag) — otherwise the next mouse-move would
+    // index a stale/shorter vector out of bounds.
+    void cancelDrag();
+
     static QColor channelColor(Channel ch);
 
     Channel currentChannel = Channel::Luma;

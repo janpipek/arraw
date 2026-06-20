@@ -85,14 +85,21 @@ QColor ToneCurveWidget::channelColor(Channel ch) {
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
+void ToneCurveWidget::cancelDrag() {
+    dragging = false;
+    dragIndex = -1;
+}
+
 void ToneCurveWidget::setChannel(Channel ch) {
     if (currentChannel == ch)
         return;
+    cancelDrag(); // dragIndex belonged to the outgoing channel's points
     currentChannel = ch;
     update();
 }
 
 void ToneCurveWidget::setPoints(Channel ch, const std::vector<QPointF>& pts) {
+    cancelDrag(); // replacing the points invalidates any drag indexing them
     pointsFor(ch) = pts;
     update();
 }
