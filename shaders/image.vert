@@ -44,6 +44,7 @@ layout(std140, binding = 0) uniform buf {
     vec4  laColor[16];
     vec4  laGeom2[16];
     int   numLocalAdj;
+    int   histoRaw;      // unused here; present so the block matches image.frag and Ubuf
 } u;
 
 void main() {

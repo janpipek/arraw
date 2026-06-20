@@ -76,6 +76,14 @@ ninja -C build-release
 #### Shaders
 Shaders are Vulkan-dialect GLSL in `shaders/`, compiled at build time by `qsb` and baked into the binary as Qt resources (`:/shaders/*.qsb`). Modifying them requires a rebuild (see architectural records in [docs/adr/](file:///home/jan/code/my/arraw/docs/adr/)).
 
+**The uniform block `buf` must be declared identically in three places: `image.vert`, `image.frag`, and the `Ubuf` struct in `RendererCore.h` — same fields, same order, same std140 layout, byte-for-byte.** This holds even for a field a stage never reads: the OpenGL RHI backend links the vertex and fragment stages into one program, and *any* divergence in the shared block makes linking fail at runtime with:
+
+```
+Failed to link shader program: error: uniform 'u' declared as type 'buf' and type 'buf'
+```
+
+When that happens the viewport shader never loads, so the **image area renders black** (often with stale, vertically-flipped framebuffer contents showing through) while the rest of the Qt widget UI looks fine. The headless golden-render tests are skipped without a GPU, so the test suite will **not** catch this — after any change to the uniform block, do a manual GPU smoke-run (launch the app, confirm the viewport renders) and watch stderr for the link error. When adding a field, add it to all three declarations in the same change, even if only one stage uses it.
+
 #### Diagnostics
 Set the `ARRAW_TRACE` environment variable to print per-operation timings (`[trace] <label> N ms` on stderr) for expensive work — RAW load stages, the standard image loader, and the lcms colour transforms. The facility is in `src/Trace.h` (`trace::Scope` for a whole scope, `trace::Laps` for multi-stage ops); it is free when the variable is unset. On Windows the app is a GUI-subsystem binary with no attached console, so redirect to capture it: `arraw.exe 2> trace.txt`.
 
@@ -161,7 +169,7 @@ Detailed architectural decisions are documented in the [docs/adr/](file:///home/
   * `exposure`: slider × 0.01 = EV (slider range -500..500 → -5.0..5.0 EV).
   * `temperature`: slider value = Kelvin directly (range 2000..12000).
   * All other fields: slider value = float value directly (-100..100).
-* **Adding a new adjustment requires updating**: `GlobalAdjustment` (struct), the slider in `AdjustmentPanel`, the uniform block in both `image.vert` and `image.frag`, the `Ubuf` mirror in `RendererCore.h` (must match std140 layout exactly), `RendererCore::fillUbuf()`, and `XmpSidecar` load/save.
+* **Adding a new adjustment requires updating**: `GlobalAdjustment` (struct), the slider in `AdjustmentPanel`, the uniform block in **both** `image.vert` **and** `image.frag`, the `Ubuf` mirror in `RendererCore.h` (must match std140 layout exactly), `RendererCore::fillUbuf()`, and `XmpSidecar` load/save. Update all three uniform-block declarations in the same change even if a stage never reads the field — a mismatch fails shader linking and blanks the viewport (see [Shaders](#shaders) above).
 
 ---
 
