@@ -4,6 +4,7 @@
 #include <QButtonGroup>
 #include <QComboBox>
 #include <QEvent>
+#include <QFont>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -29,6 +30,14 @@ static const FieldSpec kEffectShapeSpec{0, 100, 50, 1.0f, 1.0f, 0, {}, false, 1.
 static const FieldSpec kGrainAmountSpec{0, 100, 0, 1.0f, 1.0f, 0, {}, false, 1.0f};
 static const FieldSpec
     kRotationSpec{-4500, 4500, 0, 0.01f, 0.01f, 2, QString::fromUtf8("\xc2\xb0"), true, 0.10f};
+
+// Grain's hidden per-image seed is minted the first time Grain is enabled, and
+// must never be zero (0 marks "uninitialised"). Centralise the invariant so the
+// two places that surface a GlobalAdjustment can't diverge.
+static void ensureGrainSeed(GlobalAdjustment& a) {
+    if (a.grainAmount > 0.0f && a.grainSeed == 0)
+        a.grainSeed = QRandomGenerator::global()->generate() | 1U;
+}
 
 struct WBPreset {
     const char* name;
@@ -197,12 +206,20 @@ AdjustmentPanel::AdjustmentPanel(QWidget* parent)
 
     // ── Effects ───────────────────────────────────────────────────────────────
     auto* effects = makeGroup("Effects");
-    effects->addWidget(new QLabel("Vignette", this));
+    auto subHeader = [this](QVBoxLayout* group, const QString& title) {
+        auto* lbl = new QLabel(title, this);
+        QFont f = lbl->font();
+        f.setBold(true);
+        lbl->setFont(f);
+        group->addWidget(lbl);
+    };
+    subHeader(effects, "Vignette");
     vignetteAmount = addSlider(effects, "Amount", kEffectAmountSpec);
     vignetteMidpoint = addSlider(effects, "Midpoint", kEffectShapeSpec);
     vignetteFeather = addSlider(effects, "Feather", kEffectShapeSpec);
-    effects->addWidget(new QLabel("Grain", this));
+    subHeader(effects, "Grain");
     grainAmount = addSlider(effects, "Amount", kGrainAmountSpec);
+    grainAmount.slider->setObjectName("grainAmountSlider"); // drives the Grain-seed lifecycle test
     grainSize = addSlider(effects, "Size", kEffectShapeSpec);
     grainRoughness = addSlider(effects, "Roughness", kEffectShapeSpec);
 
@@ -286,8 +303,7 @@ void AdjustmentPanel::syncParams() {
     adjustments.grainAmount = v(grainAmount);
     adjustments.grainSize = v(grainSize);
     adjustments.grainRoughness = v(grainRoughness);
-    if (adjustments.grainAmount > 0.0f && adjustments.grainSeed == 0)
-        adjustments.grainSeed = QRandomGenerator::global()->generate() | 1U;
+    ensureGrainSeed(adjustments);
     for (int i = 0; i < 8; ++i) {
         adjustments.hslHue[i] = v(hslHue[i]);
         adjustments.hslSat[i] = v(hslSat[i]);
@@ -457,8 +473,7 @@ void AdjustmentPanel::setParams(const GlobalAdjustment& p) {
     toneCurve->setPoints(ToneCurveWidget::Channel::Blue, p.curveB.points);
 
     adjustments = p;
-    if (adjustments.grainAmount > 0.0f && adjustments.grainSeed == 0)
-        adjustments.grainSeed = QRandomGenerator::global()->generate() | 1U;
+    ensureGrainSeed(adjustments);
     committed = adjustments;
     updateCurveChannelIndicators();
     emit paramsChanged(adjustments);

@@ -337,10 +337,26 @@ void RendererCore::fillUbuf(Ubuf& ub, const FrameParams& fp) const {
     const float size = std::clamp(a.grainSize / 100.0f, 0.0f, 1.0f);
     ub.grainSize = std::exp2(std::lerp(std::log2(0.5f / 2048.0f), std::log2(4.0f / 2048.0f), size));
     ub.grainRoughness = std::clamp(a.grainRoughness / 100.0f, 0.0f, 1.0f);
-    // A foreign crs sidecar can enable Grain without arraw:GrainSeed. Render it
-    // immediately with a stable fallback; the active editor assigns and later
-    // persists a unique seed when that image is opened.
-    ub.grainSeed = a.grainAmount > 0.0f && a.grainSeed == 0 ? 0x6d2b79f5U : a.grainSeed;
+    // A foreign crs sidecar can enable Grain without arraw:GrainSeed. Until the
+    // editor opens that image and mints a persistent seed, render with a stable
+    // fallback derived from the image's own geometry, so distinct photos in a
+    // grid don't all share one grain pattern.
+    if (a.grainAmount > 0.0f && a.grainSeed == 0) {
+        quint32 h = 0x6d2b79f5U;
+        auto mix = [&h](float f) {
+            quint32 bits;
+            std::memcpy(&bits, &f, sizeof(bits));
+            h ^= bits + 0x9e3779b9U + (h << 6) + (h >> 2);
+        };
+        mix(fp.aspect);
+        mix(float(a.cropRect.left()));
+        mix(float(a.cropRect.top()));
+        mix(float(a.cropRect.right()));
+        mix(float(a.cropRect.bottom()));
+        ub.grainSeed = h | 1U;
+    } else {
+        ub.grainSeed = a.grainSeed;
+    }
 
     ub.useLut = fp.useLut ? 1 : 0;
     ub.gamutWarn = fp.gamutWarn ? 1 : 0;
