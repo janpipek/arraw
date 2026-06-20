@@ -264,8 +264,11 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-      id-token: write
-      attestations: write
+      # id-token / attestations writes are only needed for the attestation step,
+      # which is disabled while the repo is private (see "Generate build-provenance
+      # attestations" below). Re-enable both when turning attestations back on.
+      # id-token: write
+      # attestations: write
     steps:
       - name: Download AppImage
         if: inputs.build_appimage
@@ -298,7 +301,11 @@ jobs:
           cd release-assets
           sha256sum arraw-* >SHA256SUMS
 
+      # TODO: re-enable build-provenance attestations once the repo is public.
+      # Attestations require a public repo (or GitHub Advanced Security) to be
+      # publicly verifiable, so this step is disabled while the repo is private.
       - name: Generate build-provenance attestations
+        if: false
         uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
         with:
           subject-path: release-assets/*
