@@ -11,8 +11,9 @@ will define private reporting and supported-version policy.
 - **Surface:** GitHub Release assets for every platform.
 - **Threat:** A compromised maintainer token or workflow could replace a published
   artifact or move its tag, leaving different binaries under the same version.
-- **Current mitigation:** Publication is manual, isolated behind a protected
-  environment, and write permission is limited to the publish job. Existing assets
+- **Current mitigation:** Publication is manual, routed through the `release`
+  environment, and write permission is limited to the publish job. Repository
+  maintainers must configure that environment to require review. Existing assets
   require an explicit replacement input. Checksums and provenance attestations make
   replacement detectable to users who verify them.
 - **Intended resolution:** Enable GitHub release immutability, upload complete

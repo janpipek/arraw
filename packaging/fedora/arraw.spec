@@ -23,7 +23,7 @@ Requires:       qt6-qtimageformats%{?_isa}
 
 %description
 Arraw is a lightweight RAW photo editor with a real-time GPU preview,
-non-destructive XMP sidecars, colour-managed output, culling, tone curves,
+non-destructive XMP sidecars, color-managed output, culling, tone curves,
 local adjustments, crop, and straighten tools.
 
 %prep

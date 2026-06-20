@@ -266,3 +266,26 @@ just rpm-smoke
 # Release artifacts: manually dispatch .github/workflows/release.yml for a tag
 # and explicitly select AppImage and/or Fedora RPM.
 ```
+
+## 10. Manual release workflow security
+
+The release workflow must be selected from the repository's default branch. Its
+`release_tag` is the source input; AppImage and Fedora RPM booleans default to off,
+and dispatch fails when neither is selected. Every selected build and smoke test
+must pass before the publish job runs.
+
+Configure an environment named `release` under repository **Settings → Environments**
+and require a reviewer for deployments. Build jobs have read-only repository access;
+only the environment-gated publish job receives `contents: write`. Existing assets
+are not replaced unless `replace_existing_assets` is explicitly selected. GitHub
+Actions are pinned to full commit SHAs and Dependabot proposes pin updates.
+
+The workflow attests the selected artifacts before publishing. Verify a downloaded
+file's provenance with:
+
+```bash
+gh attestation verify arraw-0.1.0-1.fc44.x86_64.rpm --repo janpipek/arraw
+```
+
+RPM signing and immutable releases remain deferred security work; see
+[the security risk register](security.md).

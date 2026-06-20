@@ -67,7 +67,7 @@ posture-B store path.
 
 Full rationale and rejected options: [ADR 0014](adr/0014-linux-distribution-appimage-ubuntu-aqt.md).
 
-## Fedora RPM — DESIGNED (see ADR 0025)
+## Fedora RPM — IMPLEMENTED (see ADR 0025)
 
 Fedora 44 x86_64 is the initial native-package target. A conventional spec builds
 an RPM and SRPM against Fedora system dependencies, with local snapshot builds from
