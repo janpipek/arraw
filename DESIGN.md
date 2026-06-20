@@ -41,6 +41,9 @@ Color:      temperature (Kelvin, 2000–12000), tint (-100..100),
             saturation, vibrance (-100..100)
 Detail:     sharpening (0..100)
 Geometry:   rotation (degrees, -45..45), cropRect (normalised 0..1 QRectF)
+Effects:    vignetteAmount (-100..100), vignetteMidpoint, vignetteFeather,
+            grainAmount, grainSize, grainRoughness (all 0..100),
+            grainSeed (hidden per-image identity; 0 means uninitialised)
 ```
 
 ### `ImageBuffer`
@@ -89,6 +92,9 @@ MainWindow (QMainWindow)
     │   └── Sharpening slider
     ├── Geometry group
     │   └── Rotation slider (±45°)
+    ├── Effects group
+    │   ├── Vignette: Amount, Midpoint, Feather sliders
+    │   └── Grain: Amount, Size, Roughness sliders
     └── Reset All button
 ```
 
