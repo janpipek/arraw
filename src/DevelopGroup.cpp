@@ -18,6 +18,8 @@ const char* developGroupKey(DevelopGroup g) {
         return "detail";
     case DevelopGroup::Geometry:
         return "geometry";
+    case DevelopGroup::Effects:
+        return "effects";
     case DevelopGroup::Count_:
         break;
     }
@@ -40,16 +42,17 @@ QString developGroupLabel(DevelopGroup g) {
         return QObject::tr("Detail");
     case DevelopGroup::Geometry:
         return QObject::tr("Geometry");
+    case DevelopGroup::Effects:
+        return QObject::tr("Effects");
     case DevelopGroup::Count_:
         break;
     }
     return {};
 }
 
-// Each group overwrites exactly its own fields on `result` from `source`. The
-// groups partition every global field of GlobalAdjustment; localAdjustments is
-// intentionally absent from every arm, so it always rides through from `target`
-// (docs/adr/0023, CONTEXT.md "Develop Group").
+// Each group overwrites exactly its visible controls on `result` from `source`.
+// Per-image state (localAdjustments, spots, Grain seed) is intentionally absent,
+// so it always rides through from `target` (docs/adr/0023, docs/adr/0026).
 GlobalAdjustment applyGroups(
     const GlobalAdjustment& target, const GlobalAdjustment& source, GroupSelection selection) {
     GlobalAdjustment result = target;
@@ -88,6 +91,14 @@ GlobalAdjustment applyGroups(
         result.rotation = source.rotation;
         result.cropRect = source.cropRect;
         result.cropConstrained = source.cropConstrained;
+    }
+    if (hasGroup(selection, DevelopGroup::Effects)) {
+        result.vignetteAmount = source.vignetteAmount;
+        result.vignetteMidpoint = source.vignetteMidpoint;
+        result.vignetteFeather = source.vignetteFeather;
+        result.grainAmount = source.grainAmount;
+        result.grainSize = source.grainSize;
+        result.grainRoughness = source.grainRoughness;
     }
 
     return result;

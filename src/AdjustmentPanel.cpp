@@ -8,6 +8,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
+#include <QRandomGenerator>
 #include <QScrollArea>
 #include <QSignalBlocker>
 #include <QSlider>
@@ -23,6 +24,9 @@ static const FieldSpec kBipolarSpec{-100, 100, 0, 1.0f, 1.0f, 0, {}, true, 1.0f}
 static const FieldSpec
     kHslHueSpec{-100, 100, 0, 1.0f, 0.3f, 1, QString::fromUtf8("\xc2\xb0"), true, 0.3f};
 static const FieldSpec kSharpenSpec{0, 100, 0, 1.0f, 1.0f, 0, {}, false, 1.0f};
+static const FieldSpec kEffectAmountSpec{-100, 100, 0, 1.0f, 1.0f, 0, {}, true, 1.0f};
+static const FieldSpec kEffectShapeSpec{0, 100, 50, 1.0f, 1.0f, 0, {}, false, 1.0f};
+static const FieldSpec kGrainAmountSpec{0, 100, 0, 1.0f, 1.0f, 0, {}, false, 1.0f};
 static const FieldSpec
     kRotationSpec{-4500, 4500, 0, 0.01f, 0.01f, 2, QString::fromUtf8("\xc2\xb0"), true, 0.10f};
 
@@ -191,6 +195,17 @@ AdjustmentPanel::AdjustmentPanel(QWidget* parent)
     auto* geo = makeGroup("Geometry");
     rotation = addSlider(geo, "Rotation", kRotationSpec);
 
+    // ── Effects ───────────────────────────────────────────────────────────────
+    auto* effects = makeGroup("Effects");
+    effects->addWidget(new QLabel("Vignette", this));
+    vignetteAmount = addSlider(effects, "Amount", kEffectAmountSpec);
+    vignetteMidpoint = addSlider(effects, "Midpoint", kEffectShapeSpec);
+    vignetteFeather = addSlider(effects, "Feather", kEffectShapeSpec);
+    effects->addWidget(new QLabel("Grain", this));
+    grainAmount = addSlider(effects, "Amount", kGrainAmountSpec);
+    grainSize = addSlider(effects, "Size", kEffectShapeSpec);
+    grainRoughness = addSlider(effects, "Roughness", kEffectShapeSpec);
+
     auto* resetBtn = new QPushButton("Reset All", this);
     root->addWidget(resetBtn);
     root->addStretch();
@@ -265,6 +280,14 @@ void AdjustmentPanel::syncParams() {
     adjustments.vibrance = v(vibrance);
     adjustments.sharpening = v(sharpening);
     adjustments.rotation = v(rotation);
+    adjustments.vignetteAmount = v(vignetteAmount);
+    adjustments.vignetteMidpoint = v(vignetteMidpoint);
+    adjustments.vignetteFeather = v(vignetteFeather);
+    adjustments.grainAmount = v(grainAmount);
+    adjustments.grainSize = v(grainSize);
+    adjustments.grainRoughness = v(grainRoughness);
+    if (adjustments.grainAmount > 0.0f && adjustments.grainSeed == 0)
+        adjustments.grainSeed = QRandomGenerator::global()->generate() | 1U;
     for (int i = 0; i < 8; ++i) {
         adjustments.hslHue[i] = v(hslHue[i]);
         adjustments.hslSat[i] = v(hslSat[i]);
@@ -287,7 +310,13 @@ std::vector<AdjustmentPanel::SliderRow*> AdjustmentPanel::allRows() {
            &saturation,
            &vibrance,
            &sharpening,
-           &rotation};
+           &rotation,
+           &vignetteAmount,
+           &vignetteMidpoint,
+           &vignetteFeather,
+           &grainAmount,
+           &grainSize,
+           &grainRoughness};
     for (int i = 0; i < 8; ++i) {
         rows.push_back(&hslHue[i]);
         rows.push_back(&hslSat[i]);
@@ -401,6 +430,12 @@ void AdjustmentPanel::setParams(const GlobalAdjustment& p) {
     set(vibrance, p.vibrance);
     set(sharpening, p.sharpening);
     set(rotation, p.rotation);
+    set(vignetteAmount, p.vignetteAmount);
+    set(vignetteMidpoint, p.vignetteMidpoint);
+    set(vignetteFeather, p.vignetteFeather);
+    set(grainAmount, p.grainAmount);
+    set(grainSize, p.grainSize);
+    set(grainRoughness, p.grainRoughness);
     for (int i = 0; i < 8; ++i) {
         set(hslHue[i], p.hslHue[i]);
         set(hslSat[i], p.hslSat[i]);
@@ -422,7 +457,9 @@ void AdjustmentPanel::setParams(const GlobalAdjustment& p) {
     toneCurve->setPoints(ToneCurveWidget::Channel::Blue, p.curveB.points);
 
     adjustments = p;
-    committed = p;
+    if (adjustments.grainAmount > 0.0f && adjustments.grainSeed == 0)
+        adjustments.grainSeed = QRandomGenerator::global()->generate() | 1U;
+    committed = adjustments;
     updateCurveChannelIndicators();
     emit paramsChanged(adjustments);
 }

@@ -1,5 +1,6 @@
 #include "RendererCore.h"
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <variant>
 #include <QFile>
@@ -299,6 +300,10 @@ void RendererCore::fillUbuf(Ubuf& ub, const FrameParams& fp) const {
     ub.cropRect[3] = float(fp.cropRect.bottom());
 
     const GlobalAdjustment& a = fp.adjustments;
+    ub.effectRect[0] = float(a.cropRect.left());
+    ub.effectRect[1] = float(a.cropRect.top());
+    ub.effectRect[2] = float(a.cropRect.right());
+    ub.effectRect[3] = float(a.cropRect.bottom());
     bool hslActive = false;
     for (int i = 0; i < 8; ++i) {
         ub.hslHue[i] = a.hslHue[i] / 100.0f;
@@ -325,6 +330,17 @@ void RendererCore::fillUbuf(Ubuf& ub, const FrameParams& fp) const {
     ub.wbGainB = wb[2];
     ub.saturation = g.saturation;
     ub.vibrance = g.vibrance;
+    ub.vignetteAmount = a.vignetteAmount / 50.0f;
+    ub.vignetteMidpoint = std::clamp(a.vignetteMidpoint / 100.0f, 0.0f, 1.0f);
+    ub.vignetteFeather = std::clamp(a.vignetteFeather / 100.0f, 0.0f, 1.0f);
+    ub.grainAmount = std::clamp(a.grainAmount / 100.0f, 0.0f, 1.0f) * 0.08f;
+    const float size = std::clamp(a.grainSize / 100.0f, 0.0f, 1.0f);
+    ub.grainSize = std::exp2(std::lerp(std::log2(0.5f / 2048.0f), std::log2(4.0f / 2048.0f), size));
+    ub.grainRoughness = std::clamp(a.grainRoughness / 100.0f, 0.0f, 1.0f);
+    // A foreign crs sidecar can enable Grain without arraw:GrainSeed. Render it
+    // immediately with a stable fallback; the active editor assigns and later
+    // persists a unique seed when that image is opened.
+    ub.grainSeed = a.grainAmount > 0.0f && a.grainSeed == 0 ? 0x6d2b79f5U : a.grainSeed;
 
     ub.useLut = fp.useLut ? 1 : 0;
     ub.gamutWarn = fp.gamutWarn ? 1 : 0;
@@ -373,8 +389,8 @@ void RendererCore::fillUbuf(Ubuf& ub, const FrameParams& fp) const {
         // Kelvin and reuses the global blackbody gain (docs/adr/0025); the three
         // gain channels ride in the spare laTone2.zw / laColor.w slots.
         constexpr float kLocalTempKelvinPerUnit = 30.0f; // ±100 → 2500..8500 K
-        const auto lwb =
-            whiteBalanceGain(5500.0f + la.temperature * kLocalTempKelvinPerUnit, la.tint);
+        const auto lwb
+            = whiteBalanceGain(5500.0f + la.temperature * kLocalTempKelvinPerUnit, la.tint);
         ub.laTone2[k + 2] = lwb[0];
         ub.laTone2[k + 3] = lwb[1];
         ub.laColor[k + 0] = d.saturation;
