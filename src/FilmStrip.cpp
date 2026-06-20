@@ -1,6 +1,7 @@
 #include "FilmStrip.h"
 #include "FilmStripLayout.h"
 #include "FilmStripModel.h"
+#include "ImageGrouping.h"
 #include "ImageMetadata.h"
 #include "ThumbnailCache.h"
 #include "XmpSidecar.h"
@@ -92,6 +93,32 @@ void paintMarks(
     painter->drawText(bar, Qt::AlignCenter, glyphs);
 }
 
+// A small chip in the top-right corner naming the companion file(s) of a
+// RAW+JPEG group (e.g. "JPG"), so a one-cell shot still advertises its
+// hidden companion. Drawn only when the cell holds the camera companion.
+void paintCompanionBadge(QPainter* painter, const QRect& inner, const QString& text) {
+    if (text.isEmpty())
+        return;
+
+    QFont f = painter->font();
+    f.setPixelSize(std::max(9, inner.height() / 12));
+    f.setBold(true);
+    painter->setFont(f);
+
+    const QFontMetrics fm(f);
+    const int padX = 4;
+    const int padY = 2;
+    const QSize ts = fm.size(Qt::TextSingleLine, text);
+    QRect chip(0, 0, ts.width() + (2 * padX), ts.height() + (2 * padY));
+    chip.moveTopRight(inner.topRight() + QPoint(-2, 2));
+
+    painter->setPen(Qt::NoPen);
+    painter->setBrush(QColor(0, 0, 0, 150));
+    painter->drawRoundedRect(chip, 3, 3);
+    painter->setPen(QColor(0xF0, 0xF0, 0xF0));
+    painter->drawText(chip, Qt::AlignCenter, text);
+}
+
 // Paints aspect-correct thumbnails inside square filmstrip cells.
 // Active item (current index) gets a full-brightness highlight border;
 // other selected items get a dimmer version so the batch target is visible
@@ -135,6 +162,11 @@ public:
             thumbHeight,
             index.data(FilmStripModel::RatingRole).toInt(),
             ColourLabel(index.data(FilmStripModel::LabelRole).toInt()));
+
+        paintCompanionBadge(
+            painter,
+            inner,
+            companionBadgeText(index.data(FilmStripModel::CompanionsRole).toStringList()));
 
         if (active) {
             // Active (editing) item: full-brightness border
@@ -233,9 +265,20 @@ void FilmStrip::setDirectory(const QString& dir) {
 
     currentDir = clean;
     emit directoryChanged(clean);
-    const QStringList files = scanImageFiles(clean);
-    model->setFiles(files);
-    loadMarks(files);
+
+    // Collapse RAW+JPEG captures into one cell each: the RAW is the primary
+    // shown and culled, its same-stem standard images ride along as companions.
+    const QList<ImageGroup> groups = groupImageFiles(scanImageFiles(clean));
+    QStringList primaries;
+    QHash<QString, QStringList> companions;
+    primaries.reserve(groups.size());
+    for (const ImageGroup& group : groups) {
+        primaries.append(group.primary);
+        if (!group.companions.isEmpty())
+            companions.insert(group.primary, group.companions);
+    }
+    model->setFiles(primaries, companions);
+    loadMarks(primaries);
 
     // Deferred: cell geometry isn't laid out yet, so visibility tests would be
     // wrong if run synchronously here.
