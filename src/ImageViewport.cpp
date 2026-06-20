@@ -579,7 +579,8 @@ void ImageViewport::drawCropOverlay(QPainter& p) const {
     // when locked, the ratio tag. Pixel size needs the known full-res dimensions.
     QString label;
     if (hasKnownOriginalSize()) {
-        const QSize px = crop::cropPixelSize(originalWidth, originalHeight, activeCrop);
+        const QSize px
+            = crop::cropPixelSize(originalWidth, originalHeight, activeCrop, params.orientation);
         label = QStringLiteral("%1 × %2").arg(px.width()).arg(px.height());
     }
     if (lockedRatio > 0.0) {

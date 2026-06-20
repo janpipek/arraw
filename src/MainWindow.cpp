@@ -1530,8 +1530,8 @@ void MainWindow::exportPaths(const QStringList& paths) {
 
     // Natural output size = full-res pixels inside the crop rect (shared with
     // the crop overlay's live readout so the two can never disagree).
-    const QSize natural
-        = crop::cropPixelSize(session->fullRes().width, session->fullRes().height, p.cropRect);
+    const QSize natural = crop::cropPixelSize(
+        session->fullRes().width, session->fullRes().height, p.cropRect, p.orientation);
 
     ExportDialog optDlg(natural.width(), natural.height(), this);
     if (optDlg.exec() != QDialog::Accepted)
@@ -1567,7 +1567,10 @@ void MainWindow::exportBatch(const QStringList& paths) {
     viewport->commitActiveTool();
     const GlobalAdjustment activeParams = currentParams();
     const QSize natural = crop::cropPixelSize(
-        session->fullRes().width, session->fullRes().height, activeParams.cropRect);
+        session->fullRes().width,
+        session->fullRes().height,
+        activeParams.cropRect,
+        activeParams.orientation);
 
     ExportDialog optDlg(natural.width(), natural.height(), this);
     if (optDlg.exec() != QDialog::Accepted)
@@ -1643,8 +1646,8 @@ void MainWindow::exportBatch(const QStringList& paths) {
                                                       : applySpots(loaded.fullRes, p.spots);
 
         // Compute output size: use per-file natural size when opts is zero.
-        const QSize perFileNatural
-            = crop::cropPixelSize(loaded.fullRes.width, loaded.fullRes.height, p.cropRect);
+        const QSize perFileNatural = crop::cropPixelSize(
+            loaded.fullRes.width, loaded.fullRes.height, p.cropRect, p.orientation);
         const int outW = opts.width > 0 ? opts.width : perFileNatural.width();
         const int outH = opts.height > 0 ? opts.height : perFileNatural.height();
 

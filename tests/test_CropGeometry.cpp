@@ -39,6 +39,13 @@ TEST_CASE("cropPixelSize scales full-image pixels by the crop rectangle", "[crop
     REQUIRE(crop::cropPixelSize(6000, 4000, QRectF(0.25, 0.25, 0.5, 0.5)) == QSize(3000, 2000));
 }
 
+TEST_CASE("cropPixelSize swaps to the oriented dimensions on a 90° turn", "[crop]") {
+    // 6000×4000 native, turned 90° → a full crop is 4000×6000 oriented pixels.
+    REQUIRE(
+        crop::cropPixelSize(6000, 4000, QRectF(0, 0, 1, 1), orient::Orientation{1, false})
+        == QSize(4000, 6000));
+}
+
 TEST_CASE("cropPixelSize rounds to the nearest pixel", "[crop]") {
     // 0.3333 * 6000 = 1999.8 -> 2000
     REQUIRE(crop::cropPixelSize(6000, 4000, QRectF(0, 0, 1.0 / 3.0, 0.5)) == QSize(2000, 2000));
