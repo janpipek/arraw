@@ -23,7 +23,8 @@ AppStream metainfo) but build none of the store machinery yet.
   `ARRAW_VERSION` compile definition and `QCommandLineParser`).
 - **Build & release via GitHub Actions**, manually dispatched for an existing tag:
   each platform is explicitly selected and all successful artifacts attach to the
-  same Release.
+  same Release. Protected-environment setup is tracked in
+  [GitHub issue #38](https://github.com/janpipek/arraw/issues/38).
 - **x86_64** baseline everywhere (macOS additionally needs Apple Silicon).
 - **No auto-update** for v0.x — users re-download from Releases.
 

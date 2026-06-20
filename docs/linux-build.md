@@ -274,11 +274,13 @@ The release workflow must be selected from the repository's default branch. Its
 and dispatch fails when neither is selected. Every selected build and smoke test
 must pass before the publish job runs.
 
-Configure an environment named `release` under repository **Settings → Environments**
-and require a reviewer for deployments. Build jobs have read-only repository access;
-only the environment-gated publish job receives `contents: write`. Existing assets
-are not replaced unless `replace_existing_assets` is explicitly selected. GitHub
-Actions are pinned to full commit SHAs and Dependabot proposes pin updates.
+This single environment protects the shared publish job for every selected platform;
+individual build jobs remain read-only and do not need separate environments. Only
+the environment-gated publish job receives `contents: write`. Existing assets are
+not replaced unless `replace_existing_assets` is explicitly selected. GitHub Actions
+are pinned to full commit SHAs and Dependabot proposes pin updates. Creating and
+verifying the protected environment is tracked in
+[GitHub issue #38](https://github.com/janpipek/arraw/issues/38).
 
 The workflow attests the selected artifacts before publishing. Verify a downloaded
 file's provenance with:

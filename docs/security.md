@@ -19,6 +19,21 @@ will define private reporting and supported-version policy.
 - **Intended resolution:** Enable GitHub release immutability, upload complete
   releases as drafts, and publish once. Treat corrections as new releases.
 
+### Release environment protection is not configured
+
+- **Status:** Open — [GitHub issue #38](https://github.com/janpipek/arraw/issues/38).
+- **Surface:** The shared publish job for AppImage, Fedora RPM, and future platform
+  artifacts.
+- **Threat:** Naming an environment in workflow YAML does not itself require an
+  approval. Until repository protection rules are configured, a maintainer who can
+  dispatch the workflow can reach the write-enabled publication job directly.
+- **Current mitigation:** Build jobs remain read-only, dispatch is restricted to the
+  default branch, and same-named asset replacement requires an explicit input.
+- **Required setup:** Create one `release` environment, require reviewer approval,
+  prevent self-review where available, and restrict deployment to the default
+  branch. All platform builds converge on this one publication boundary; separate
+  build environments are unnecessary.
+
 ### Unsigned native packages
 
 - **Surface:** Self-hosted Fedora RPM and future native packages.
