@@ -35,9 +35,9 @@ Other distros: install the equivalent `qt6-base`, `qt6-base-private`,
 
 ## 2. How the release AppImage is built
 
-The release is a single self-contained **AppImage**, cut by GitHub Actions
-(`.github/workflows/release.yml`) when a `vX.Y.Z` tag is pushed, and attached to the
-matching GitHub Release. The job:
+The release is a single self-contained **AppImage**, cut by a manually dispatched
+GitHub Actions workflow (`.github/workflows/release.yml`) for an existing `vX.Y.Z`
+tag and attached to the matching GitHub Release. The job:
 
 1. Runs on a stock **`ubuntu-24.04`** runner (glibc 2.39) — this sets the AppImage's
    glibc floor, so the binary runs on every desktop from Ubuntu 24.04 LTS forward.
@@ -223,14 +223,46 @@ bug.
 
 ---
 
-## 8. Quick reference
+## 8. Fedora RPM packaging
+
+Fedora 44 x86_64 has a native package in addition to the AppImage. It uses Fedora's
+system libraries and therefore targets one Fedora release, unlike the bundled
+AppImage.
+
+Build an RPM and SRPM from clean, committed `HEAD`:
+
+```bash
+just rpm
+```
+
+The command never installs packages. If build dependencies are absent, it prints
+the exact `sudo dnf install ...` command and exits. Untagged commits get a snapshot
+release containing the commit date and SHA; an exact `vX.Y.Z` tag produces the
+normal `Release: 1.fc44` package. Results and `SHA256SUMS` are written below
+`dist/fedora/`.
+
+The package build is offline and runs the full test suite plus desktop and AppStream
+validation. Run the clean installation test separately:
+
+```bash
+just rpm-smoke
+```
+
+That command uses Podman by default (Docker is also accepted), installs the RPM in a
+clean `fedora:44` container, runs `arraw --version` offscreen, and checks its desktop
+MIME registration. See [ADR 0025](adr/0025-self-hosted-fedora-rpm.md) for the design
+and [the security risk register](security.md) for unsigned-package and release risks.
+
+## 9. Quick reference
 
 ```bash
 # Dev build (Fedora system Qt)
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug && ninja -C build && ./build/arraw
 
-# Release AppImage: push a tag, CI does the rest
-git tag v0.1.0 && git push origin v0.1.0
-# -> .github/workflows/release.yml builds, smoke-tests, and attaches
-#    arraw-0.1.0-x86_64.AppImage to the GitHub Release.
+# Native Fedora package from committed HEAD
+just rpm
+just rpm-smoke
+
+# Release artifacts: manually dispatch .github/workflows/release.yml for a tag
+# and explicitly select AppImage and/or Fedora RPM.
 ```
