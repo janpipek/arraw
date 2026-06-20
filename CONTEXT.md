@@ -157,8 +157,28 @@ not the stored value (that is Rotation).
 _Avoid_: deskew, level, auto-rotate
 
 **Rotation**:
-The signed angle (±45°) applied to the image, exposed as a slider and also set
-by Straighten. The stored value, not the gesture.
+The signed *fine* angle (±45°) applied to the image to level it, exposed as a
+slider and also set by [[Straighten]]. The continuous tilt only — coarse 90°
+turns and mirroring are a separate concept (see Coarse Orientation below), so
+this value never leaves the ±45° band. The stored value, not the gesture.
+
+**Orientation**:
+The *coarse*, discrete framing of the image: one of four 90° quarter-turns
+(0/90/180/270) optionally combined with a horizontal or vertical mirror — the
+eight states the EXIF Orientation tag encodes. Distinct from [[Rotation]] (the
+continuous ±45° level): Orientation is "which way up / which way round the frame
+sits," set by the camera at capture and by the Rotate 90° and [[Flip]] commands;
+Rotation is the fine tilt on top of it. Lossless and exact (no resampling — a
+90° turn swaps the axes, a mirror negates one). Seeds from the camera's EXIF tag
+on load so a portrait shot opens upright. Not to be confused with the crop tool's
+[[Flip Aspect]], which orients the *crop ratio*, not the image.
+_Avoid_: rotation (that is the fine ±45° angle), flip (one operation, not the state)
+
+**Flip**:
+Mirroring the image horizontally or vertically — a state of [[Orientation]], not
+its own axis. Distinct from [[Flip Aspect]] (which swaps the crop ratio's
+width:height and never touches pixels).
+_Avoid_: mirror (UI may say "Flip"), reflect
 
 **Crop**:
 The axis-aligned rectangular region of the rotated display frame that is kept;
@@ -171,14 +191,20 @@ _Avoid_: trim, frame, mask ([[Mask]] is the local-adjustment stencil)
 **Aspect Ratio Lock**:
 A crop-tool state that constrains the [[Crop]] rectangle to a fixed width:height
 while dragging — Free (unconstrained), Original (the image's own proportions), or
-a preset (1:1, 2:3, 3:4, 4:5, 16:9), with an orientation toggle that swaps width
-and height. *Whether* a crop is locked is persisted, as the Lightroom-compatible
+a preset (1:1, 2:3, 3:4, 4:5, 16:9), with a [[Flip Aspect]] toggle that swaps
+width and height. *Whether* a crop is locked is persisted, as the Lightroom-compatible
 `crs:CropConstrainAspectRatio` flag; on reload the lock re-engages at the stored
 rectangle's ratio. The exact preset is **not** stored — the ratio lives in the
 rectangle, and the preset name is re-derived on load (a ratio matching no preset,
 e.g. from a foreign editor, round-trips as a nameless "locked" state). Free is the
 absence of the flag.
 _Avoid_: constrain, fix ratio, crop preset
+
+**Flip Aspect**:
+The crop-tool toggle that swaps the [[Aspect Ratio Lock]]'s target width:height
+(landscape ↔ portrait). Reshapes the crop rectangle only; never touches image
+pixels or [[Orientation]]. Was historically mislabelled "Flip Orientation".
+_Avoid_: flip orientation (collides with image [[Orientation]]), rotate crop
 
 **Spot**:
 A clone-based pixel replacement applied to the decoded [[ImageBuffer]] before the
