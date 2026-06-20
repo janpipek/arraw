@@ -1,31 +1,108 @@
 name: Release
+run-name: Release ${{ inputs.release_tag }}
 
-# Tag-triggered release (ADR 0014 / docs/distribution.md). A pushed vX.Y.Z tag
-# builds the Linux AppImage on a KDE neon base, smoke-tests it on a clean Ubuntu
-# 24.04 runner to prove the glibc-2.39 floor, then attaches it to the GitHub
-# Release. Other OS legs (Windows, macOS) attach to the same Release later.
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing vX.Y.Z tag to build
+        required: true
+        type: string
+      build_appimage:
+        description: Build the Linux AppImage
+        required: true
+        default: false
+        type: boolean
+      build_fedora_rpm:
+        description: Build the Fedora 44 RPM and SRPM
+        required: true
+        default: false
+        type: boolean
+      replace_existing_assets:
+        description: Replace same-named assets on a mutable release
+        required: true
+        default: false
+        type: boolean
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.release_tag }}
+  cancel-in-progress: false
 
 jobs:
+  validate:
+    name: Validate release request
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Require dispatch from the default branch
+        env:
+          DISPATCH_REF: ${{ github.ref_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if [ "$DISPATCH_REF" != "$DEFAULT_BRANCH" ]; then
+            echo "::error::Dispatch this workflow from $DEFAULT_BRANCH, not $DISPATCH_REF"
+            exit 1
+          fi
+
+      - name: Require at least one build target
+        env:
+          BUILD_APPIMAGE: ${{ inputs.build_appimage }}
+          BUILD_FEDORA_RPM: ${{ inputs.build_fedora_rpm }}
+        run: |
+          if [ "$BUILD_APPIMAGE" != true ] && [ "$BUILD_FEDORA_RPM" != true ]; then
+            echo "::error::Select at least one release artifact"
+            exit 1
+          fi
+
+      - name: Validate tag syntax
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          if ! [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::release_tag must have the form vX.Y.Z"
+            exit 1
+          fi
+
+      - name: Check out release tag
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.release_tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify tag, CMake, and RPM versions
+        id: version
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          tag_version="${RELEASE_TAG#v}"
+          cmake_version="$(sed -nE 's/^project\(arraw VERSION ([0-9]+\.[0-9]+\.[0-9]+).*$/\1/p' CMakeLists.txt)"
+          rpm_version="$(sed -nE 's/^Version:[[:space:]]+([^[:space:]]+).*$/\1/p' packaging/fedora/arraw.spec)"
+          echo "tag=$tag_version cmake=$cmake_version rpm=$rpm_version"
+          if [ "$tag_version" != "$cmake_version" ] || [ "$tag_version" != "$rpm_version" ]; then
+            echo "::error::Release tag, CMake version, and RPM version must agree"
+            exit 1
+          fi
+          echo "version=$tag_version" >> "$GITHUB_OUTPUT"
+
   linux-appimage:
-    name: Build Linux AppImage (Qt 6.8 via aqt)
-    # Build on stock Ubuntu 24.04 (glibc 2.39) so the binary's glibc floor reaches
-    # 24.04 LTS forward (ADR 0014). Qt 6.8 comes from aqtinstall — 24.04 ships only
-    # Qt 6.4, and KDE neon's Docker image turned out to be jammy + Qt 6.7.2 with an
-    # empty private-dev (see ADR 0014's correction). LibRaw/lcms2 are taken from the
-    # 24.04 apt repo (their glibc 2.39 floor matches the binary's).
+    name: Build Linux AppImage
+    if: inputs.build_appimage
+    needs: validate
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out release tag
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.release_tag }}
+          persist-credentials: false
 
       - name: Install Qt 6.8
-        uses: jurplel/install-qt-action@v4
+        uses: jurplel/install-qt-action@d325aaf2a8baeeda41ad0b5d39f84a6af9bcf005 # v4.3.0
         with:
           version: '6.8.3'
           host: linux
@@ -33,15 +110,8 @@ jobs:
           arch: linux_gcc_64
           modules: qtshadertools
           cache: true
-          # Do NOT set `archives:` — the default full qtbase carries the GuiPrivate
-          # CMake config (Qt6GuiPrivateConfig.cmake) that ADR 0006's QRhiWidget needs.
-          # Restricting archives silently drops it and find_package(... GuiPrivate) fails.
 
       - name: Install system build dependencies
-        # arraw's own deps (LibRaw, lcms2) plus the X/xkb/Vulkan/fontconfig -dev
-        # packages that official Qt's imported CMake targets (e.g. Qt6::GuiPrivate
-        # -> XKB::XKB) reference. Without them, find_package(Qt6) fails at generate
-        # time even though the headers compile. appstream provides appstreamcli.
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -52,24 +122,13 @@ jobs:
             libx11-dev libx11-xcb-dev libxext-dev libxfixes-dev libxi-dev libxrender-dev \
             libxcb1-dev libxcb-cursor-dev libxcb-glx0-dev libxcb-keysyms1-dev \
             libxcb-image0-dev libxcb-shm0-dev libxcb-icccm4-dev libxcb-sync-dev \
-            libxcb-xfixes0-dev libxcb-shape0-dev libxcb-randr0-dev \
+            libxcb-xfixes-dev libxcb-shape0-dev libxcb-randr0-dev \
             libxcb-render-util0-dev libxcb-util-dev libxcb-xinerama0-dev libxcb-xkb-dev
-
-      - name: Verify tag matches project version
-        run: |
-          tag="${GITHUB_REF_NAME#v}"
-          ver="$(grep -Po 'project\(arraw VERSION \K[0-9]+\.[0-9]+\.[0-9]+' CMakeLists.txt)"
-          echo "tag=$tag project_version=$ver"
-          if [ "$tag" != "$ver" ]; then
-            echo "::error::Tag v$tag disagrees with project(VERSION $ver) in CMakeLists.txt"
-            exit 1
-          fi
-          echo "ARRAW_VERSION=$ver" >> "$GITHUB_ENV"
 
       - name: Validate AppStream metainfo
         run: appstreamcli validate --no-net packaging/linux/io.github.janpipek.arraw.metainfo.xml
 
-      - name: Configure and build (Release)
+      - name: Configure and build
         run: |
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DARRAW_BUILD_TESTS=OFF \
             -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
@@ -80,21 +139,11 @@ jobs:
 
       - name: Build AppImage
         env:
-          # GitHub runners have no usable FUSE; tell every tool AppImage to self-extract.
           APPIMAGE_EXTRACT_AND_RUN: '1'
-          # Bundle the offscreen platform plugin so the headless CLI (ADR 0012)
-          # works over SSH, alongside the xcb plugin the qt plugin bundles by default.
-          # Platform plugins use EXTRA_PLATFORM_PLUGINS; EXTRA_QT_PLUGINS is for
-          # generic plugin groups (svg, etc.) and silently ignores platform names.
           EXTRA_PLATFORM_PLUGINS: libqoffscreen.so
-          # linuxdeploy bundles an old binutils `strip` that cannot parse the
-          # .relr.dyn (DT_RELR) section in libraries from modern distros (Ubuntu
-          # 24.04, Fedora 40+), aborting the run. Skip stripping; the bundle is a
-          # little larger but builds reliably across distros.
           NO_STRIP: '1'
-          # qmake from the aqt-installed Qt, so linuxdeploy-plugin-qt bundles that Qt.
           QMAKE: ${{ env.QT_ROOT_DIR }}/bin/qmake
-          OUTPUT: arraw-${{ env.ARRAW_VERSION }}-x86_64.AppImage
+          OUTPUT: arraw-${{ needs.validate.outputs.version }}-x86_64.AppImage
         run: |
           base="https://github.com/linuxdeploy"
           wget -q "$base/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage"
@@ -104,33 +153,26 @@ jobs:
             --appdir AppDir \
             --plugin qt \
             --output appimage
-          ls -lh arraw-*.AppImage
 
       - name: Upload AppImage artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: linux-appimage
           path: arraw-*.AppImage
           if-no-files-found: error
 
-  smoke-test:
-    name: Smoke-test AppImage on clean Ubuntu 24.04
-    needs: linux-appimage
-    # The whole ADR rests on the AppImage running on stock Ubuntu 24.04 LTS with no
-    # build deps and no Qt — only the standard host baseline an AppImage borrows
-    # (glibc, the glvnd graphics stack, fontconfig, X11, dbus, glib; everything the
-    # AppImage "excludelist" assumes present). offscreen needs no display, so it is
-    # the headless-safe check.
+  appimage-smoke:
+    name: Smoke-test AppImage on Ubuntu 24.04
+    if: inputs.build_appimage
+    needs: [validate, linux-appimage]
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/download-artifact@v4
+      - name: Download AppImage
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: linux-appimage
 
-      - name: Install host baseline an AppImage relies on
-        # Pinned explicitly rather than trusting whatever the runner image happens
-        # to preinstall, so this job actually tests bundle self-containment. A bare
-        # ubuntu:24.04 lacks the glvnd GL stack and fontconfig; a real desktop has them.
+      - name: Install AppImage host baseline
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -139,27 +181,169 @@ jobs:
             libx11-6 libx11-xcb1 libxcb1 libxkbcommon0 libxkbcommon-x11-0 \
             libxrender1 libxext6 libxi6 libxfixes3 libsm6 libice6
 
-      - name: Run --version under offscreen
+      - name: Run AppImage offscreen
         env:
           APPIMAGE_EXTRACT_AND_RUN: '1'
           QT_QPA_PLATFORM: offscreen
         run: |
           chmod +x arraw-*.AppImage
-          out="$(./arraw-*.AppImage --version)"
-          echo "$out"
-          echo "$out" | grep -q '^arraw '
+          ./arraw-*.AppImage --version | grep -q '^arraw '
 
-  release:
-    name: Attach AppImage to GitHub Release
-    needs: smoke-test
-    runs-on: ubuntu-latest
+  fedora-rpm:
+    name: Build Fedora 44 RPM
+    if: inputs.build_fedora_rpm
+    needs: validate
+    runs-on: ubuntu-24.04
+    container: fedora:44
     steps:
-      - uses: actions/download-artifact@v4
+      - name: Install Fedora packaging dependencies
+        run: |
+          dnf install -y \
+            appstream catch-devel cmake desktop-file-utils findutils gcc-c++ git gzip \
+            lcms2-devel LibRaw-devel ninja-build qt6-qtbase-devel \
+            qt6-qtbase-private-devel qt6-qtimageformats qt6-qtshadertools-devel \
+            redhat-rpm-config rpm-build rpmlint
+
+      - name: Check out release tag
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.release_tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Build and validate RPMs
+        run: bash tools/package_fedora.sh
+
+      - name: Upload Fedora package artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fedora-rpms
+          path: |
+            dist/fedora/*.rpm
+            dist/fedora/SHA256SUMS
+            dist/fedora/BINARY_RPM
+          if-no-files-found: error
+
+  fedora-smoke:
+    name: Smoke-test RPM on clean Fedora 44
+    if: inputs.build_fedora_rpm
+    needs: [validate, fedora-rpm]
+    runs-on: ubuntu-24.04
+    container: fedora:44
+    steps:
+      - name: Download Fedora packages
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: fedora-rpms
+          path: fedora-rpms
+
+      - name: Install and verify RPM
+        run: |
+          rpm_name="$(cat fedora-rpms/BINARY_RPM)"
+          dnf install -y --setopt=install_weak_deps=False \
+            desktop-file-utils glib2 "fedora-rpms/$rpm_name"
+          QT_QPA_PLATFORM=offscreen arraw --version | grep -q '^arraw '
+          desktop-file-validate \
+            /usr/share/applications/io.github.janpipek.arraw.desktop
+          grep -q 'image/x-canon-cr3' \
+            /usr/share/applications/io.github.janpipek.arraw.desktop
+          grep -q 'image/webp' \
+            /usr/share/applications/io.github.janpipek.arraw.desktop
+          gio mime image/x-canon-cr3 | grep -q io.github.janpipek.arraw.desktop
+
+  attest:
+    name: Prepare and attest release artifacts
+    if: >-
+      always() &&
+      needs.validate.result == 'success' &&
+      (inputs.build_appimage == false || needs.appimage-smoke.result == 'success') &&
+      (inputs.build_fedora_rpm == false || needs.fedora-smoke.result == 'success')
+    needs: [validate, appimage-smoke, fedora-smoke]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download AppImage
+        if: inputs.build_appimage
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: linux-appimage
+          path: appimage
 
-      - name: Publish to Release
-        uses: softprops/action-gh-release@v2
+      - name: Download Fedora packages
+        if: inputs.build_fedora_rpm
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          files: arraw-*.AppImage
+          name: fedora-rpms
+          path: fedora-rpms
+
+      - name: Select public release artifacts
+        env:
+          BUILD_APPIMAGE: ${{ inputs.build_appimage }}
+          BUILD_FEDORA_RPM: ${{ inputs.build_fedora_rpm }}
+        run: |
+          mkdir release-assets
+          if [ "$BUILD_APPIMAGE" = true ]; then
+            cp appimage/arraw-*.AppImage release-assets/
+          fi
+          if [ "$BUILD_FEDORA_RPM" = true ]; then
+            rpm_name="$(cat fedora-rpms/BINARY_RPM)"
+            cp "fedora-rpms/$rpm_name" release-assets/
+            cp fedora-rpms/arraw-*.src.rpm release-assets/
+          fi
+          cd release-assets
+          sha256sum arraw-* >SHA256SUMS
+
+      - name: Generate build-provenance attestations
+        uses: actions/attest@c32b4b8b198b65d0bd9d63490e847ff7b53989d4 # v4.0.0
+        with:
+          subject-path: release-assets/*
+
+      - name: Upload attested release set
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-assets
+          path: release-assets/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release assets
+    needs: attest
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - name: Download attested release set
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-assets
+          path: release-assets
+
+      - name: Refuse implicit asset replacement
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          REPLACE_EXISTING: ${{ inputs.replace_existing_assets }}
+        run: |
+          existing="$(gh api "/repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
+            --jq '.assets[].name' 2>/dev/null || true)"
+          if [ "$REPLACE_EXISTING" != true ]; then
+            while IFS= read -r path; do
+              name="$(basename "$path")"
+              if grep -Fxq "$name" <<<"$existing"; then
+                echo "::error::Release asset '$name' already exists; explicitly allow replacement to overwrite it"
+                exit 1
+              fi
+            done < <(find release-assets -maxdepth 1 -type f -print)
+          fi
+
+      - name: Publish selected assets
+        uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2.5.0
+        with:
+          tag_name: ${{ inputs.release_tag }}
+          files: release-assets/*
           fail_on_unmatched_files: true
+          overwrite_files: ${{ inputs.replace_existing_assets }}

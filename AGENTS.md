@@ -25,6 +25,9 @@ ninja -C build
 ```
 For the release **AppImage** (built in CI on Ubuntu 24.04 with Qt 6.8 via aqtinstall)
 and the Linux packaging gotchas, see the **[Linux build & deployment guide](docs/linux-build.md)**.
+For the native Fedora package, run `just rpm` from a clean committed checkout, then
+`just rpm-smoke` to verify installation in a clean Fedora 44 container. Artifacts
+are written to `dist/fedora/`.
 
 #### macOS (Homebrew)
 ```bash

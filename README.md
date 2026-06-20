@@ -71,6 +71,11 @@ ninja -C build
 ./build/arraw
 ```
 
+Build the native Fedora RPM/SRPM from a clean, committed checkout with `just rpm`.
+Run `just rpm-smoke` to install and verify it in a clean Fedora 44 container. The
+commands, required packages, and release workflow are documented in
+[the Linux build guide](docs/linux-build.md).
+
 ### macOS (Homebrew)
 
 ```bash
