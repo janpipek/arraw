@@ -59,6 +59,7 @@
 #include <QUndoStack>
 #include <QVBoxLayout>
 #include <QWindow>
+#include <QWindowStateChangeEvent>
 #include <QtConcurrent/QtConcurrent>
 
 // ---------------------------------------------------------------------------
@@ -194,8 +195,10 @@ MainWindow::MainWindow(QWidget* parent)
     setupStatusBar();
     setupToolbar();
 
-    chromeHider.emplace(std::vector<QWidget*>{
-        menuBar(), mainToolBar, adjustmentsStrip, statusBar(), filmStripDock, adjustmentsDock});
+    // The adjustments dock + reveal strip are NOT listed here: they are a
+    // CollapsiblePane pair (ADR 0012), so lights-out drives them through
+    // adjustmentsPane->hide()/show() to keep that invariant intact.
+    chromeHider.emplace(std::vector<QWidget*>{menuBar(), mainToolBar, statusBar(), filmStripDock});
 
     connect(proofPanel, &ProofingPanel::proofingChanged, this, &MainWindow::rebuildDisplayLut);
     rebuildDisplayLut();
@@ -403,10 +406,18 @@ void MainWindow::closeEvent(QCloseEvent* e) {
 }
 
 void MainWindow::keyPressEvent(QKeyEvent* e) {
-    if (e->key() == Qt::Key_Escape
-        && ((chromeHider && chromeHider->hidden()) || isFullScreen())) {
-        restoreFocusModes();
-        return;
+    if (e->key() == Qt::Key_Escape) {
+        // A modal tool's own cancel wins so Escape behaves the same whether or
+        // not the viewport holds focus; only with no tool active does Escape act
+        // as the focus-mode "give me my UI back" panic key (docs/adr/0025).
+        if (viewport->activeTool() != ImageViewport::ActiveTool::None) {
+            viewport->cancelActiveTool();
+            return;
+        }
+        if ((chromeHider && chromeHider->hidden()) || isFullScreen()) {
+            restoreFocusModes();
+            return;
+        }
     }
 
     // Culling marks (0-5, X, r/y/g/b/p) are owned by the Image menu's actions —
@@ -474,6 +485,15 @@ void MainWindow::setupMenus() {
     lightsOutAction = view->addAction("&Hide Panels", this, &MainWindow::toggleChrome);
     lightsOutAction->setCheckable(true);
     lightsOutAction->setShortcut(Qt::Key_F12);
+
+    // A QAction's shortcut only fires while one of its host widgets is visible
+    // and enabled. These live on the View menu, which lights-out (F12) hides and
+    // image loading disables — so also host them on the window itself, which
+    // stays visible/enabled, or F8/F11/F12 would die exactly when needed
+    // (docs/adr/0025).
+    addAction(toggleAdjustments);
+    addAction(fullScreenAction);
+    addAction(lightsOutAction);
 
     view->addSeparator();
 
@@ -855,7 +875,6 @@ void MainWindow::setupDocks() {
     // Reveal strip: a vertical toolbar pinned to the right edge, visible only
     // while the dock is collapsed; its chevron re-opens the panel (ADR 0012).
     auto* strip = new QToolBar("Adjustments Strip", this);
-    adjustmentsStrip = strip;
     strip->setObjectName("AdjustmentsStrip"); // saveState/restoreState key
     strip->setMovable(false);
     strip->setFloatable(false);
@@ -1131,41 +1150,58 @@ void MainWindow::toggleClipping() {
 }
 
 void MainWindow::toggleFullScreen() {
-    if (isFullScreen()) {
-        if (wasMaximized)
-            showMaximized();
-        else
-            showNormal();
-    } else {
-        wasMaximized = isMaximized();
+    // The View → Full Screen check and wasMaximized are updated from
+    // changeEvent(), which sees the window-manager's real (possibly async)
+    // state, not the value isFullScreen()/isMaximized() report on this line.
+    if (isFullScreen())
+        exitFullScreen();
+    else
         showFullScreen();
-    }
-    fullScreenAction->setChecked(isFullScreen());
+}
+
+void MainWindow::exitFullScreen() {
+    if (wasMaximized)
+        showMaximized();
+    else
+        showNormal();
 }
 
 void MainWindow::toggleChrome() {
     if (!chromeHider)
         return;
 
-    if (chromeHider->hidden())
+    if (chromeHider->hidden()) {
         chromeHider->restore();
-    else
+        adjustmentsPane->show();
+    } else {
         chromeHider->hide();
+        adjustmentsPane->hide();
+    }
     lightsOutAction->setChecked(chromeHider->hidden());
 }
 
 void MainWindow::restoreFocusModes() {
     if (chromeHider && chromeHider->hidden()) {
         chromeHider->restore();
+        adjustmentsPane->show();
         lightsOutAction->setChecked(false);
     }
-    if (isFullScreen()) {
-        if (wasMaximized)
-            showMaximized();
-        else
-            showNormal();
-        fullScreenAction->setChecked(false);
+    if (isFullScreen())
+        exitFullScreen(); // fullScreenAction check is cleared by changeEvent()
+}
+
+void MainWindow::changeEvent(QEvent* e) {
+    if (e->type() == QEvent::WindowStateChange) {
+        const auto previous = static_cast<QWindowStateChangeEvent*>(e)->oldState();
+        // Capture the pre-fullscreen state from the WM's own transition so
+        // exitFullScreen() can return to the right place — more reliable than
+        // polling isMaximized() before showFullScreen() (docs/adr/0025).
+        if (isFullScreen() && !previous.testFlag(Qt::WindowFullScreen))
+            wasMaximized = previous.testFlag(Qt::WindowMaximized);
+        if (fullScreenAction)
+            fullScreenAction->setChecked(isFullScreen());
     }
+    QMainWindow::changeEvent(e);
 }
 
 void MainWindow::rebuildDisplayLut() {

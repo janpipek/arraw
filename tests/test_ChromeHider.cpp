@@ -100,3 +100,21 @@ TEST_CASE("nullptr widgets are ignored", "[chrome]") {
 
     CHECK_FALSE(a->isHidden());
 }
+
+// A nullptr before a real widget would break a parallel-array implementation
+// that indexed the snapshot separately; the per-widget Entry pairing must keep
+// the real widget's saved visibility aligned regardless of nullptr ordering.
+TEST_CASE("a nullptr ahead of a real widget keeps the snapshot aligned", "[chrome]") {
+    ensureApp();
+    QWidget host;
+    auto* alreadyHidden = new QWidget(&host);
+    auto* shown = new QWidget(&host);
+    alreadyHidden->hide();
+    ChromeHider hider({nullptr, alreadyHidden, shown});
+
+    hider.hide();
+    hider.restore();
+
+    CHECK(alreadyHidden->isHidden()); // was hidden -> stays hidden
+    CHECK_FALSE(shown->isHidden());   // was visible -> restored visible
+}

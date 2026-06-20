@@ -65,6 +65,7 @@ public:
 protected:
     void closeEvent(QCloseEvent* e) override;
     void keyPressEvent(QKeyEvent* e) override;
+    void changeEvent(QEvent* e) override; // tracks WM-driven fullscreen state (docs/adr/0025)
 
 private slots:
     void openFile();
@@ -143,6 +144,7 @@ private:
     void applyClipping();
     void toggleClipping();
     void toggleFullScreen();
+    void exitFullScreen(); // leave fullscreen, restoring the prior maximized/normal state
     void toggleChrome();
     void restoreFocusModes();
 
@@ -157,7 +159,6 @@ private:
     QDockWidget* adjustmentsDock;                     // right; collapses to a strip
     std::unique_ptr<CollapsiblePane> adjustmentsPane; // adjustmentsDock ↔ edge strip
     QToolBar* mainToolBar = nullptr;
-    QToolBar* adjustmentsStrip = nullptr;
     QUndoStack* undoStack;
     QLabel* statusLabel;
     QLabel* proofLabel;
