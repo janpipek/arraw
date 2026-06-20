@@ -21,7 +21,7 @@ function(arraw_enable_warnings target)
 endfunction()
 
 # 6.8: QRhiWidget (6.7) + LTS. ShaderTools provides qt6_add_shaders (qsb).
-find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets Concurrent ShaderTools)
+find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets Concurrent ShaderTools Xml)
 
 # Qt6::GuiPrivate exposes the semi-public RHI headers (rhi/qrhi.h) that ADR 0006's
 # QRhiWidget pipeline needs. Packagings disagree on how they expose it: official Qt
@@ -185,6 +185,7 @@ target_link_libraries(arraw_core PUBLIC
     Qt6::Widgets
     Qt6::GuiPrivate
     Qt6::Concurrent
+    Qt6::Xml
     PkgConfig::LIBRAW
     PkgConfig::LCMS2
 )

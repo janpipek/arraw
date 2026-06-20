@@ -34,6 +34,14 @@ XMP (`xmp:`/`dc:`) alongside the develop settings. Distinct from the read-only
 camera EXIF shown in the Exif panel, which the user never edits.
 _Avoid_: image metadata (that name is the read-only EXIF rows), tags, catalogue data
 
+**XMP Property Ownership**:
+The rule for which shared-sidecar properties arraw may replace: the complete
+`arraw:` namespace, its modeled develop properties in `crs:`, and Rating plus
+Colour Label in `xmp:`. Every other property belongs to the wider XMP ecosystem
+and must survive arraw saves semantically.
+_Avoid_: namespace ownership (`crs:` and `xmp:` are shared), digiKam metadata
+(the rule applies to every XMP editor)
+
 **Working color space**:
 The color space all pixels live in from RAW decode until the final display/output
 transform: linear-light Rec.2020 primaries. Every adjustment operates in this space.

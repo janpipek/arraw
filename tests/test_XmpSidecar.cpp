@@ -2,8 +2,12 @@
 #include "XmpSidecar.h"
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
+#include <QDomDocument>
 #include <QFile>
 #include <QTemporaryDir>
+#ifndef Q_OS_WIN
+#include <unistd.h>
+#endif
 
 using Catch::Matchers::WithinAbs;
 
@@ -93,6 +97,94 @@ TEST_CASE("sidecar path replaces the RAW extension with .xmp", "[xmp]") {
     REQUIRE(XmpSidecar::pathFor("/photos/IMG_0042.dng") == "/photos/IMG_0042.xmp");
 }
 
+TEST_CASE("an existing extension-specific sidecar is used", "[xmp][compatibility]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("catalogued.nef");
+    const QString sidecarPath = rawPath + ".xmp";
+    QFile sidecar(sidecarPath);
+    REQUIRE(sidecar.open(QIODevice::WriteOnly));
+    REQUIRE(sidecar.write(R"xml(<?xml version="1.0"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+      xmp:Rating="2"/>
+  </rdf:RDF>
+</x:xmpmeta>)xml") > 0);
+    sidecar.close();
+
+    CHECK(XmpSidecar::pathFor(rawPath) == sidecarPath);
+    CHECK(XmpSidecar::loadMetadata(rawPath).rating == 2);
+    REQUIRE(XmpSidecar::saveMetadata(rawPath, {5, ColourLabel::Green}));
+    CHECK(XmpSidecar::loadMetadata(rawPath) == UserMetadata{5, ColourLabel::Green});
+    CHECK_FALSE(QFile::exists(dir.filePath("catalogued.xmp")));
+}
+
+TEST_CASE("loadAdjustments reads an extension-specific sidecar", "[xmp][compatibility]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("catalogued.nef");
+    QFile sidecar(rawPath + ".xmp");
+    REQUIRE(sidecar.open(QIODevice::WriteOnly));
+    REQUIRE(sidecar.write(R"xml(<?xml version="1.0"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description rdf:about=""
+      xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+      crs:Exposure2012="0.8500"/>
+  </rdf:RDF>
+</x:xmpmeta>)xml") > 0);
+    sidecar.close();
+
+    CHECK_THAT(XmpSidecar::loadAdjustments(rawPath).exposure, WithinAbs(0.85, 1e-5));
+}
+
+TEST_CASE("a save with no existing sidecar creates the stem-named file", "[xmp][compatibility]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("fresh.nef");
+
+    REQUIRE(XmpSidecar::saveAdjustments(rawPath, sampleParams()));
+
+    CHECK(QFile::exists(dir.filePath("fresh.xmp")));
+    CHECK_FALSE(QFile::exists(rawPath + ".xmp"));
+}
+
+TEST_CASE("two sidecar naming variants are ambiguous", "[xmp][compatibility]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("ambiguous.nef");
+    const QString stemPath = dir.filePath("ambiguous.xmp");
+    const QString extensionPath = rawPath + ".xmp";
+    const QByteArray stemPacket = R"xml(<?xml version="1.0"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+      xmp:Rating="1"/>
+  </rdf:RDF>
+</x:xmpmeta>)xml";
+    const QByteArray extensionPacket = R"xml(<?xml version="1.0"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+      xmp:Rating="2"/>
+  </rdf:RDF>
+</x:xmpmeta>)xml";
+    QFile stem(stemPath);
+    REQUIRE(stem.open(QIODevice::WriteOnly));
+    REQUIRE(stem.write(stemPacket) == stemPacket.size());
+    stem.close();
+    QFile extension(extensionPath);
+    REQUIRE(extension.open(QIODevice::WriteOnly));
+    REQUIRE(extension.write(extensionPacket) == extensionPacket.size());
+    extension.close();
+
+    CHECK(XmpSidecar::loadWithStatus(rawPath).status == SidecarLoadStatus::ParseError);
+    CHECK_FALSE(XmpSidecar::saveMetadata(rawPath, {5, ColourLabel::Purple}));
+    CHECK_FALSE(XmpSidecar::saveAdjustments(rawPath, sampleParams()));
+
+    REQUIRE(stem.open(QIODevice::ReadOnly));
+    CHECK(stem.readAll() == stemPacket);
+    REQUIRE(extension.open(QIODevice::ReadOnly));
+    CHECK(extension.readAll() == extensionPacket);
+}
+
 TEST_CASE("missing sidecar loads default params", "[xmp]") {
     QTemporaryDir dir;
     REQUIRE(XmpSidecar::loadAdjustments(dir.filePath("nothing-here.arw")) == GlobalAdjustment{});
@@ -111,6 +203,60 @@ TEST_CASE("malformed sidecar loads default params", "[xmp]") {
 
     REQUIRE(XmpSidecar::loadAdjustments(rawPath) == GlobalAdjustment{});
     CHECK(XmpSidecar::loadWithStatus(rawPath).status == SidecarLoadStatus::ParseError);
+}
+
+TEST_CASE("saves never replace an existing malformed sidecar", "[xmp][compatibility]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("broken.nef");
+    const QByteArray malformed
+        = "<x:xmpmeta><rdf:RDF><rdf:Description crs:Exposure2012=\"2.0\"";
+    QFile sidecar(XmpSidecar::pathFor(rawPath));
+    REQUIRE(sidecar.open(QIODevice::WriteOnly));
+    REQUIRE(sidecar.write(malformed) == malformed.size());
+    sidecar.close();
+
+    CHECK_FALSE(XmpSidecar::saveMetadata(rawPath, {5, ColourLabel::Purple}));
+    CHECK_FALSE(XmpSidecar::saveAdjustments(rawPath, sampleParams()));
+
+    REQUIRE(sidecar.open(QIODevice::ReadOnly));
+    CHECK(sidecar.readAll() == malformed);
+}
+
+TEST_CASE("a failed save preserves the original sidecar atomically", "[xmp][compatibility]") {
+#ifdef Q_OS_WIN
+    SKIP("read-only directory does not reliably block QSaveFile on Windows");
+#else
+    if (::geteuid() == 0)
+        SKIP("root bypasses directory write permissions");
+
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("locked.nef");
+    const QByteArray original = R"xml(<?xml version="1.0"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description rdf:about=""
+      xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+      crs:Exposure2012="2.0000"/>
+  </rdf:RDF>
+</x:xmpmeta>)xml";
+    QFile sidecar(XmpSidecar::pathFor(rawPath));
+    REQUIRE(sidecar.open(QIODevice::WriteOnly));
+    REQUIRE(sidecar.write(original) == original.size());
+    sidecar.close();
+
+    // Strip write permission from the directory so QSaveFile cannot create or
+    // rename its temporary file. QSaveFile does not fall back to a direct
+    // write, so a doomed save must leave the original bytes untouched.
+    REQUIRE(QFile::setPermissions(dir.path(), QFileDevice::ReadOwner | QFileDevice::ExeOwner));
+    const bool saved = XmpSidecar::saveAdjustments(rawPath, sampleParams());
+    // Restore permissions so QTemporaryDir can clean up regardless of outcome.
+    QFile::setPermissions(
+        dir.path(), QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+
+    CHECK_FALSE(saved);
+    REQUIRE(sidecar.open(QIODevice::ReadOnly));
+    CHECK(sidecar.readAll() == original);
+#endif
 }
 
 TEST_CASE(
@@ -478,4 +624,126 @@ TEST_CASE("saveAdjustments preserves existing marks", "[xmp][marks]") {
     CHECK(
         XmpSidecar::loadMetadata(rawPath) == UserMetadata{3, ColourLabel::Yellow}); // marks survived
     checkClose(XmpSidecar::loadAdjustments(rawPath), sampleParams());
+}
+
+TEST_CASE("saveMetadata preserves foreign XMP properties", "[xmp][compatibility]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("catalogued.nef");
+    QFile sidecar(XmpSidecar::pathFor(rawPath));
+    REQUIRE(sidecar.open(QIODevice::WriteOnly));
+    REQUIRE(sidecar.write(R"xml(<?xml version="1.0"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description rdf:about=""
+      xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+      xmlns:dc="http://purl.org/dc/elements/1.1/"
+      dc:format="image/x-nikon-nef">
+      <dc:subject><rdf:Bag><rdf:li>Family</rdf:li></rdf:Bag></dc:subject>
+    </rdf:Description>
+  </rdf:RDF>
+</x:xmpmeta>)xml") > 0);
+    sidecar.close();
+
+    REQUIRE(XmpSidecar::saveMetadata(rawPath, {4, ColourLabel::Blue}));
+
+    REQUIRE(sidecar.open(QIODevice::ReadOnly));
+    const QString saved = QString::fromUtf8(sidecar.readAll());
+    CHECK(saved.contains(R"(dc:format="image/x-nikon-nef")"));
+    QDomDocument document;
+    REQUIRE(bool(document.setContent(saved, QDomDocument::ParseOption::UseNamespaceProcessing)));
+    const QDomNodeList subjects
+        = document.elementsByTagNameNS("http://purl.org/dc/elements/1.1/", "subject");
+    REQUIRE(subjects.size() == 1);
+    CHECK(subjects.at(0).toElement().text() == "Family");
+    CHECK(XmpSidecar::loadMetadata(rawPath) == UserMetadata{4, ColourLabel::Blue});
+}
+
+TEST_CASE("saveAdjustments preserves unowned XMP properties", "[xmp][compatibility]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("catalogued.nef");
+    QFile sidecar(XmpSidecar::pathFor(rawPath));
+    REQUIRE(sidecar.open(QIODevice::WriteOnly));
+    REQUIRE(sidecar.write(R"xml(<?xml version="1.0"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description rdf:about=""
+      xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+      xmlns:dc="http://purl.org/dc/elements/1.1/"
+      crs:Exposure2012="-2.0"
+      crs:AlreadyApplied="True">
+      <dc:subject><rdf:Bag><rdf:li>Travel</rdf:li></rdf:Bag></dc:subject>
+    </rdf:Description>
+  </rdf:RDF>
+</x:xmpmeta>)xml") > 0);
+    sidecar.close();
+
+    auto edits = sampleParams();
+    edits.exposure = 1.5f;
+    REQUIRE(XmpSidecar::saveAdjustments(rawPath, edits));
+
+    REQUIRE(sidecar.open(QIODevice::ReadOnly));
+    QDomDocument document;
+    REQUIRE(bool(document.setContent(
+        sidecar.readAll(), QDomDocument::ParseOption::UseNamespaceProcessing)));
+    const QDomElement description = document
+                                        .elementsByTagNameNS(
+                                            "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+                                            "Description")
+                                        .at(0)
+                                        .toElement();
+    CHECK(
+        description.attributeNS(
+            "http://ns.adobe.com/camera-raw-settings/1.0/", "AlreadyApplied")
+        == "True");
+    CHECK(
+        description.attributeNS(
+            "http://ns.adobe.com/camera-raw-settings/1.0/", "Exposure2012")
+        == "1.5000");
+    const QDomNodeList subjects
+        = document.elementsByTagNameNS("http://purl.org/dc/elements/1.1/", "subject");
+    REQUIRE(subjects.size() == 1);
+    CHECK(subjects.at(0).toElement().text() == "Travel");
+}
+
+TEST_CASE("saveAdjustments replaces all arraw namespace content", "[xmp][compatibility]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("previous-version.nef");
+    QFile sidecar(XmpSidecar::pathFor(rawPath));
+    REQUIRE(sidecar.open(QIODevice::WriteOnly));
+    REQUIRE(sidecar.write(R"xml(<?xml version="1.0"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description rdf:about=""
+      xmlns:arraw="http://ns.arraw.app/1.0/"
+      arraw:LegacyVersion="0">
+      <arraw:Obsolete><rdf:Bag arraw:LegacyFlag="1"/></arraw:Obsolete>
+    </rdf:Description>
+  </rdf:RDF>
+</x:xmpmeta>)xml") > 0);
+    sidecar.close();
+
+    GlobalAdjustment edits;
+    LocalAdjustment local;
+    local.mask = LinearMask{{0.1, 0.2}, {0.8, 0.9}};
+    local.exposure = 0.75f;
+    edits.localAdjustments.push_back(local);
+    REQUIRE(XmpSidecar::saveAdjustments(rawPath, edits));
+
+    REQUIRE(sidecar.open(QIODevice::ReadOnly));
+    QDomDocument document;
+    REQUIRE(bool(document.setContent(
+        sidecar.readAll(), QDomDocument::ParseOption::UseNamespaceProcessing)));
+    constexpr auto arrawNamespace = "http://ns.arraw.app/1.0/";
+    CHECK(document.elementsByTagNameNS(arrawNamespace, "Obsolete").isEmpty());
+    CHECK(document.elementsByTagNameNS(arrawNamespace, "LocalAdjustments").size() == 1);
+    CHECK(document.elementsByTagNameNS(arrawNamespace, "Exposure").size() == 1);
+
+    const QDomNodeList elements = document.elementsByTagName("*");
+    for (int i = 0; i < elements.size(); ++i) {
+        const QDomNamedNodeMap attributes = elements.at(i).attributes();
+        for (int j = 0; j < attributes.size(); ++j)
+            CHECK_FALSE((
+                attributes.item(j).namespaceURI() == arrawNamespace
+                && attributes.item(j).localName().startsWith("Legacy")));
+    }
 }
