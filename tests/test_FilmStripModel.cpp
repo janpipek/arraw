@@ -45,6 +45,23 @@ TEST_CASE("model exposes full path and a null thumbnail before load", "[filmstri
     REQUIRE(model.data(idx, Qt::DecorationRole).value<QImage>().isNull());
 }
 
+TEST_CASE("model exposes the companions attached to a primary", "[filmstrip]") {
+    ensureApp();
+    FilmStripModel model;
+    model.setFiles({"/photos/a.cr2"}, {{"/photos/a.cr2", {"/photos/a.jpg"}}});
+
+    const QStringList companions
+        = model.data(model.index(0), FilmStripModel::CompanionsRole).toStringList();
+    REQUIRE(companions == QStringList{"/photos/a.jpg"});
+}
+
+TEST_CASE("a primary with no companions reports an empty companion list", "[filmstrip]") {
+    ensureApp();
+    FilmStripModel model;
+    model.setFiles({"/photos/a.dng"});
+    REQUIRE(model.data(model.index(0), FilmStripModel::CompanionsRole).toStringList().isEmpty());
+}
+
 TEST_CASE("model offers the filename as the tooltip before metadata is loaded", "[filmstrip]") {
     ensureApp();
     FilmStripModel model;

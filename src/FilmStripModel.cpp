@@ -57,13 +57,14 @@ int compareNatural(const QString& left, const QString& right) {
 FilmStripModel::FilmStripModel(QObject* parent)
     : QAbstractListModel(parent) {}
 
-void FilmStripModel::setFiles(QStringList paths) {
+void FilmStripModel::setFiles(QStringList paths, QHash<QString, QStringList> companionsByPrimary) {
     std::sort(paths.begin(), paths.end(), [](const QString& a, const QString& b) {
         return compareNatural(QFileInfo(a).fileName(), QFileInfo(b).fileName()) < 0;
     });
 
     beginResetModel();
     files = std::move(paths);
+    companions = std::move(companionsByPrimary);
     endResetModel();
 }
 
@@ -91,6 +92,8 @@ QVariant FilmStripModel::data(const QModelIndex& index, int role) const {
         return marks.value(path).rating;
     if (role == LabelRole)
         return int(marks.value(path).label);
+    if (role == CompanionsRole)
+        return companions.value(path);
     return {};
 }
 
