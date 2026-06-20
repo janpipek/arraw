@@ -60,7 +60,7 @@ fi
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/arraw-rpm.XXXXXX")
 trap 'rm -rf "$work_dir"' EXIT
 top_dir="$work_dir/rpmbuild"
-mkdir -p "$top_dir"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
+mkdir -p "$top_dir"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS,TMP}
 
 source_archive="$top_dir/SOURCES/arraw-${version}.tar.gz"
 git archive --format=tar --prefix="arraw-${version}/" HEAD \
@@ -69,6 +69,7 @@ cp "$spec" "$top_dir/SPECS/arraw.spec"
 
 rpmbuild -ba "$top_dir/SPECS/arraw.spec" \
     --define "_topdir $top_dir" \
+    --define "_tmppath $top_dir/TMP" \
     "${release_args[@]}"
 
 output_dir="$repo_root/dist/fedora"
