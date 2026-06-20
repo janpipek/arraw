@@ -1,6 +1,6 @@
 #include "XmpSidecar.h"
-#include <QDir>
 #include <QBuffer>
+#include <QDir>
 #include <QDomDocument>
 #include <QFile>
 #include <QFileInfo>
@@ -19,6 +19,33 @@ static constexpr char kNsXmp[] = "http://ns.adobe.com/xap/1.0/";
 // arraw-native develop data that has no Lightroom equivalent — local adjustments
 // (docs/adr/0010). Versioned in the URI like Adobe's namespaces.
 static constexpr char kNsArraw[] = "http://ns.arraw.app/1.0/";
+
+namespace {
+
+enum class SidecarPathStatus { Missing, Selected, Ambiguous };
+
+struct ResolvedSidecarPath {
+    QString path;
+    SidecarPathStatus status = SidecarPathStatus::Missing;
+};
+
+ResolvedSidecarPath resolveSidecarPath(const QString& rawPath) {
+    const QFileInfo rawInfo(rawPath);
+    const QString stemPath = rawInfo.dir().filePath(rawInfo.completeBaseName() + ".xmp");
+    const QString extensionPath = rawPath + ".xmp";
+    const bool stemExists = QFileInfo::exists(stemPath);
+    const bool extensionExists = QFileInfo::exists(extensionPath);
+
+    if (stemExists && extensionExists && stemPath != extensionPath)
+        return {stemPath, SidecarPathStatus::Ambiguous};
+    if (extensionExists)
+        return {extensionPath, SidecarPathStatus::Selected};
+    if (stemExists)
+        return {stemPath, SidecarPathStatus::Selected};
+    return {stemPath, SidecarPathStatus::Missing};
+}
+
+} // namespace
 
 // crs: attribute names for the 8 HSL ranges, indexed like GlobalAdjustment::hslHue etc.
 static constexpr const char* kHslHueNames[8]
@@ -50,8 +77,7 @@ static constexpr const char* kHslLumNames[8]
        "LuminanceAdjustmentMagenta"};
 
 QString XmpSidecar::pathFor(const QString& rawPath) {
-    QFileInfo fi(rawPath);
-    return fi.dir().filePath(fi.completeBaseName() + ".xmp");
+    return resolveSidecarPath(rawPath).path;
 }
 
 GlobalAdjustment XmpSidecar::resolveAdjustments(const QString& rawPath, const QRectF& defaultCrop) {
@@ -226,9 +252,12 @@ SidecarData XmpSidecar::load(const QString& rawPath) {
 }
 
 SidecarLoadResult XmpSidecar::loadWithStatus(const QString& rawPath) {
-    QFile f(pathFor(rawPath));
-    if (!f.exists())
+    const ResolvedSidecarPath resolved = resolveSidecarPath(rawPath);
+    if (resolved.status == SidecarPathStatus::Ambiguous)
+        return {{}, SidecarLoadStatus::ParseError};
+    if (resolved.status == SidecarPathStatus::Missing)
         return {{}, SidecarLoadStatus::Missing};
+    QFile f(resolved.path);
     if (!f.open(QIODevice::ReadOnly))
         return {{}, SidecarLoadStatus::ParseError};
 
@@ -627,7 +656,10 @@ static bool mergeOwnedPacket(QDomDocument& document, const QByteArray& packet, S
 }
 
 static bool writeFile(const QString& rawPath, const SidecarData& data, SaveScope scope) {
-    const QString path = XmpSidecar::pathFor(rawPath);
+    const ResolvedSidecarPath resolved = resolveSidecarPath(rawPath);
+    if (resolved.status == SidecarPathStatus::Ambiguous)
+        return false;
+    const QString& path = resolved.path;
     const QByteArray packet = ownedPacket(data);
     if (packet.isEmpty())
         return false;
