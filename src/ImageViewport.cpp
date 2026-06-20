@@ -928,15 +928,23 @@ QImage ImageViewport::renderToImage(
     ensureCurveLut();
 
     const QRectF& cr = p.cropRect;
-    const int cropW = (std::max) (1, int(cr.width() * buf.width + 0.5f));
-    const int cropH = (std::max) (1, int(cr.height() * buf.height + 0.5f));
+    // The crop is normalised in the oriented display frame, so an odd quarter-turn
+    // presents the buffer with width/height swapped (docs/adr/0025). Size the
+    // offscreen target and the rotation aspect to the oriented frame, else the
+    // oriented content is squished into a native-shaped texture.
+    int orientedW = buf.width;
+    int orientedH = buf.height;
+    if (orient::swapsAspect(p.orientation))
+        std::swap(orientedW, orientedH);
+    const int cropW = (std::max) (1, int(cr.width() * orientedW + 0.5f));
+    const int cropH = (std::max) (1, int(cr.height() * orientedH + 0.5f));
 
     // Offscreen target at cropped pixel size. Float format: the readback stays
     // in linear working space; the output transform happens on the CPU (lcms2).
     RendererCore::FrameParams fp;
     fp.transform = QVector4D(1.0f, 1.0f, 0.0f, 0.0f);
     fp.cropRect = cr;
-    fp.aspect = float(buf.width) / float(buf.height);
+    fp.aspect = float(orientedW) / float(orientedH);
     fp.baseLook = true;
     fp.displayEncode = false;
     fp.curveInput = false;
