@@ -246,19 +246,20 @@ that file is the source of truth; keep this list in sync with it.
                      proportionally, preserves hue), then per-channel R/G/B.
                      Applied on gamma-encoded values (docs/adr/0003), then
                      decoded back to linear
-11. Temperature      Kelvin → red/blue shift relative to 5500K neutral
-12. Tint             green axis shift
-13. HSL color mix    8 hue ranges, smoothstep-weighted hue/sat/lum shifts
-14. Saturation       luma-preserving saturation scale
-15. Vibrance         saturation boost weighted toward desaturated pixels
-16. Local adjustments per-mask weighted tone/colour deltas (docs/adr/0010):
+11. White balance    per-channel multiplicative gain in linear Rec.2020,
+                     blackbody-derived from temperature (Kelvin) + tint and
+                     computed CPU-side, so black stays black (docs/adr/0025)
+12. HSL color mix    8 hue ranges, smoothstep-weighted hue/sat/lum shifts
+13. Saturation       luma-preserving saturation scale
+14. Vibrance         saturation boost weighted toward desaturated pixels
+15. Local adjustments per-mask weighted tone/colour deltas (docs/adr/0010):
                      each Local Adjustment's deltas reuse the same parameterised
-                     functions (steps 7–15, minus curve/HSL), scaled by an
+                     functions (steps 7–14, minus curve/HSL), scaled by an
                      analytic mask weight. Single-pass, in array order. Skipped
                      by the curve-input and WB-picker readbacks (which return
                      earlier); included on screen, in export, and the panel
                      histogram
-17. Encode           u.displayEncode on (screen):
+16. Encode           u.displayEncode on (screen):
                        u.useLut off — display transform: Rec.2020→sRGB matrix
                        + true piecewise sRGB curve (sRGB monitor assumed)
                        u.useLut on — 33³ LUT texture baked by lcms2
@@ -275,12 +276,12 @@ that file is the source of truth; keep this list in sync with it.
 **Export only — CPU, after the offscreen readback (`MainWindow::exportFile`)**
 
 ```
-18. Resize           linear-light float scale to the chosen dimensions
-19. Output transform lcms2: working space → sRGB / Display P3 / Adobe RGB,
+17. Resize           linear-light float scale to the chosen dimensions
+18. Output transform lcms2: working space → sRGB / Display P3 / Adobe RGB,
                      8-bit (RGB888) or 16-bit (RGBA64, TIFF only)
-20. Sharpening       unsharp mask in encoded space (the Sharpen slider has no
+19. Sharpening       unsharp mask in encoded space (the Sharpen slider has no
                      preview effect — it is applied only here)
-21. Save             JPEG/PNG/TIFF with the output ICC profile embedded
+20. Save             JPEG/PNG/TIFF with the output ICC profile embedded
 ```
 
 Histograms are exact: `ImageViewport::renderHistograms()` renders the preview

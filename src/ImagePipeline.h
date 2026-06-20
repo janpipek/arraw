@@ -106,7 +106,7 @@ std::array<float, 256> computeCurveLUT(const std::vector<QPointF>& pts);
 // (docs/adr/0025): the gain is blackbody-derived so the Kelvin numbers mean
 // something, normalised so neutral (5500 K, tint 0) returns {1,1,1}. Applied as
 // c *= gain, so a black pixel stays black by construction. `kelvin` is absolute
-// (2000..12000), `tint` is in slider units (-100..100, + = magenta, - = green).
+// (2000..12000), `tint` is in slider units (-100..100, + = green, - = magenta).
 std::array<float, 3> whiteBalanceGain(float kelvin, float tint);
 
 // Inverse of whiteBalanceGain for the WB picker: given a pre-WB pixel that the

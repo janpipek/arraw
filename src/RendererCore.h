@@ -42,8 +42,8 @@ struct Ubuf {
     //   laGeom  = Linear (p0.x, p0.y, p1.x, p1.y) | Radial (cx, cy, rx, ry)
     //   laGeom2 = Radial (angle, feather, invert, spare); unused for Linear
     //   laTone  = (exposure, contrast, highlights, shadows)
-    //   laTone2 = (whites, blacks, tempShift, tint)
-    //   laColor = (saturation, vibrance, maskType, spare)  maskType 0=Linear 1=Radial
+    //   laTone2 = (whites, blacks, wbGainR, wbGainG)  white-balance gain (docs/adr/0025)
+    //   laColor = (saturation, vibrance, maskType, wbGainB)  maskType 0=Linear 1=Radial
     float laGeom[64];
     float laTone[64];
     float laTone2[64];
