@@ -218,7 +218,7 @@ bug.
 | AppImage runs, but `QT_QPA_PLATFORM=offscreen` segfaults / `no Qt platform plugin` | offscreen plugin not bundled | Set `EXTRA_PLATFORM_PLUGINS=libqoffscreen.so` (§6.4); confirm `usr/plugins/platforms/libqoffscreen.so` is inside the AppImage. |
 | AppImage: `error while loading shared libraries: libGLX.so.0` / `libfontconfig.so.1` | Running on a host missing the excludelist baseline (e.g. bare container) | Install the host baseline: `libgl1 libglx0 libopengl0 libegl1 libglvnd0 libfontconfig1 …` (§6.5). Any real desktop already has it. |
 | AppImage built on Fedora won't start on Ubuntu 24.04 | glibc 2.40 floor from the Fedora build host | Build the shippable AppImage on Ubuntu 24.04 (§3 warning). |
-| Release workflow fails at *Verify tag matches project version* | Pushed tag `vX.Y.Z` ≠ `project(VERSION …)` | Bump `project(VERSION …)` in `CMakeLists.txt` to match the tag (or retag). |
+| Release workflow fails at *Verify tag, CMake, and RPM versions* | Selected tag `vX.Y.Z` disagrees with CMake or the RPM spec | Bump both version declarations before creating the tag, or select the correct tag. |
 | `appstreamcli validate` fails | Edited `metainfo.xml` | Fix per the validator output; `metadata_license`/`project_license` must be SPDX ids. |
 
 ---

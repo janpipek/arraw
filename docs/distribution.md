@@ -109,7 +109,7 @@ associations, app-local runtime. Still deferred:
 
 - **Code signing** — ships unsigned; users click through SmartScreen ("More info →
   Run anyway"). Revisit with an Authenticode cert at posture B.
-- **CI** — local build for now; a tag-triggered GitHub Actions leg is a follow-on
+- **CI** — local build for now; a manually dispatched GitHub Actions leg is a follow-on
   (vcpkg binary caching / aqtinstall is the key concern).
 - **MSIX / winget / Scoop** — posture-B channels; Scoop is near-free now that the
   ZIP is self-contained.
