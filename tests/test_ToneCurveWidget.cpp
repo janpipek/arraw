@@ -25,6 +25,31 @@ QPointF widgetPos(const QWidget& w, QPointF curve, int pad = 10) {
 
 } // namespace
 
+// Regression: clicking the identity curve inserts a point and immediately
+// begins dragging it. The first insert reallocates the 2-element vector, so the
+// drag index must be computed without relying on the unsequenced
+// `insert() - begin()`; otherwise the drag starts on a garbage index and the
+// next mouse-move aborts out of bounds.
+TEST_CASE("insert-then-drag a fresh point does not crash", "[tonecurve]") {
+    testApp();
+    ToneCurveWidget w;
+    w.resize(220, 180);
+
+    // Click mid-diagonal on the default identity curve to insert a point.
+    const QPointF grab = widgetPos(w, {0.5, 0.5});
+    sendMouse(w, QEvent::MouseButtonPress, grab, Qt::LeftButton);
+    REQUIRE(w.points(Channel::Luma).size() == 3);
+
+    // Drag the new (interior) point upward; this is where a bad index aborts.
+    for (int d = 1; d <= 20; ++d)
+        sendMouse(w, QEvent::MouseMove, grab + QPointF(d, -d), Qt::NoButton);
+    sendMouse(w, QEvent::MouseButtonRelease, grab + QPointF(20, -20), Qt::LeftButton);
+
+    const auto pts = w.points(Channel::Luma);
+    REQUIRE(pts.size() == 3);
+    CHECK(pts[1].y() > 0.5); // the dragged point moved up
+}
+
 // Regression: an undo (setPoints) firing mid-drag replaces the points the drag
 // is indexing. The stale dragIndex must not survive into the next mouse-move,
 // which would otherwise index the shorter vector out of bounds and abort.

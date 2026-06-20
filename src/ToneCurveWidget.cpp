@@ -251,7 +251,12 @@ int ToneCurveWidget::insertPointOnCurve(QPointF pos) {
     auto it = std::lower_bound(pts.begin(), pts.end(), cp, [](const QPointF& a, const QPointF& b) {
         return a.x() < b.x();
     });
-    return int(pts.insert(it, cp) - pts.begin());
+    // Capture the index before inserting: `insert(it, cp) - pts.begin()` is
+    // unsequenced, so a reallocation can leave begin() pointing at the freed
+    // buffer while insert() returns the new one, yielding a garbage index.
+    const int index = int(it - pts.begin());
+    pts.insert(it, cp);
+    return index;
 }
 
 void ToneCurveWidget::mousePressEvent(QMouseEvent* e) {
