@@ -2,6 +2,7 @@
 #include "ColorManagement.h"
 #include "ImagePipeline.h"
 #include <array>
+#include <cstddef>
 #include <memory>
 #include <rhi/qrhi.h>
 #include <QImage>
@@ -9,10 +10,11 @@
 // std140 mirror of the uniform block in shaders/image.vert and image.frag —
 // the three definitions must stay identical (ADR 0006).
 struct Ubuf {
-    float clipCorr[16]; // QRhi::clipSpaceCorrMatrix(), column-major
-    float transform[4]; // (scaleX, scaleY, panX, panY)
-    float cropRect[4];  // UV bounds: (left, top, right, bottom)
-    float hslHue[8];    // -1..+1 per range (vec4[2] in the shader)
+    float clipCorr[16];  // QRhi::clipSpaceCorrMatrix(), column-major
+    float transform[4];  // (scaleX, scaleY, panX, panY)
+    float cropRect[4];   // UV bounds: (left, top, right, bottom)
+    float effectRect[4]; // final adjustment crop, including while editing Crop
+    float hslHue[8];     // -1..+1 per range (vec4[2] in the shader)
     float hslSat[8];
     float hslLum[8];
     float rotation; // degrees
@@ -26,8 +28,15 @@ struct Ubuf {
     float wbGainR; // white-balance per-channel gain (docs/adr/0025), 5500K/tint0 = 1
     float wbGainG;
     float wbGainB;
-    float saturation; // -1..+1
-    float vibrance;   // -1..+1
+    float saturation;       // -1..+1
+    float vibrance;         // -1..+1
+    float vignetteAmount;   // -2..+2 EV at maximum falloff
+    float vignetteMidpoint; // 0..1
+    float vignetteFeather;  // 0..1
+    float grainAmount;      // encoded-value standard deviation, 0..0.08
+    float grainSize;        // grain diameter as a fraction of crop long edge
+    float grainRoughness;   // 0..1
+    quint32 grainSeed;      // deterministic per-image seed
     qint32 useLut;
     qint32 gamutWarn;
     qint32 baseLook;
@@ -35,8 +44,7 @@ struct Ubuf {
     qint32 curveInput;
     qint32 hslActive;
     qint32 wbInput;
-    qint32 clipWarn;     // clipping overlay bits: 1 = highlights, 2 = shadows
-    qint32 wbPad_[3];    // std140: pad the scalar region to 16B before the vec4[16] arrays
+    qint32 clipWarn; // clipping overlay bits: 1 = highlights, 2 = shadows
     // Local adjustments (docs/adr/0010), 16-mask cap. Flat floats here ↔ vec4[16]
     // arrays in the shaders (tight std140 packing, like hslHue). Layout:
     //   laGeom  = Linear (p0.x, p0.y, p1.x, p1.y) | Radial (cx, cy, rx, ry)
@@ -54,7 +62,11 @@ struct Ubuf {
     qint32 pad_[2];  // round the block up to a 16-byte multiple (std140)
 };
 
-static_assert(sizeof(Ubuf) == 1584);
+static_assert(sizeof(Ubuf) == 1616);
+static_assert(offsetof(Ubuf, effectRect) == 96);
+static_assert(offsetof(Ubuf, grainSeed) == 284);
+static_assert(offsetof(Ubuf, laGeom) == 320);
+static_assert(offsetof(Ubuf, numLocalAdj) == 1600);
 
 // The one place the shader pipeline is recorded (ADR 0006): the widget's
 // on-screen pass, the export render, and the histogram samples all go

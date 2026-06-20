@@ -78,7 +78,8 @@ clean-container installation are validated before publication.
 
 The public release contains the installable RPM, SRPM, and checksums. Debug packages
 remain workflow artifacts. Packages are unsigned initially; provenance attestations
-record their build origin. COPR, older Fedora releases, and Debian packaging are
+that record their build origin are temporarily disabled while the repository is
+private and will be re-enabled when it is published. COPR, older Fedora releases, and Debian packaging are
 deferred. The security posture and remaining work are tracked in
 [the security risk register](security.md).
 

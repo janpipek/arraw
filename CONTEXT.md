@@ -138,13 +138,13 @@ set. The brush, if added, becomes a further type.
 
 **Develop Group**:
 One selectable unit in the [[Copy Settings]] / [[Develop Preset]] checklist —
-the granularity at which develop settings travel between photos. The seven
+the granularity at which develop settings travel between photos. The eight
 groups partition every global field: White Balance, Tone, Tone Curve, Colour,
-HSL, Detail, and Geometry ([[Rotation]] + [[Crop]] + [[Aspect Ratio Lock]]
-together). [[Local Adjustment]]s are deliberately *not* a group — masks pinned
-to one photo's framing rarely transfer (a freehand-mapping scheme is a possible
-future). Applying a group **replaces** every field in it on the target,
-including resetting to defaults when the source group is unedited.
+HSL, Detail, Geometry ([[Rotation]] + [[Crop]] + [[Aspect Ratio Lock]] together),
+and Effects ([[Vignette]] + [[Grain]]). Per-image state such as a Grain's hidden
+seed and [[Local Adjustment]] masks does not travel with a group. Applying a
+group **replaces** every visible field in it on the target, including resetting
+to defaults when the source group is unedited.
 _Avoid_: section, category, panel
 
 **Copy Settings**:
@@ -198,6 +198,18 @@ rectangle, and the preset name is re-derived on load (a ratio matching no preset
 e.g. from a foreign editor, round-trips as a nameless "locked" state). Free is the
 absence of the flag.
 _Avoid_: constrain, fix ratio, crop preset
+
+**Vignette**:
+A global develop effect that darkens or lightens the outside of the final
+[[Crop]] with a centred elliptical falloff. Its Amount, Midpoint, and Feather
+travel together in the Effects [[Develop Group]].
+_Avoid_: edge burn, radial mask (a [[Mask]] is a Local Adjustment stencil)
+
+**Grain**:
+A monochromatic, zero-mean texture applied as the last develop effect in a
+perceptual encoding. Its pattern is deterministic for one image and anchored to
+the cropped frame, so it does not swim during preview or change on reopen.
+_Avoid_: noise reduction, sensor noise, digital noise
 
 **Spot**:
 A clone-based pixel replacement applied to the decoded [[ImageBuffer]] before the

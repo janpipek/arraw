@@ -265,7 +265,9 @@ MainWindow::MainWindow(QWidget* parent)
         });
 
     connect(adjPanel, &AdjustmentPanel::paramsChanged, this, [this](const GlobalAdjustment& params) {
-        session->setParams(applyGroups(session->params(), params, allGroups()));
+        GlobalAdjustment next = applyGroups(session->params(), params, allGroups());
+        next.grainSeed = params.grainSeed; // per-image identity still changes within this image
+        session->setParams(next);
         pushParamsToViewport();
     });
 
@@ -1535,8 +1537,10 @@ void MainWindow::syncSessionSpotsToEditors(bool fullResOnly) {
 void MainWindow::pushGlobalAdjustmentCommand(
     const GlobalAdjustment& before, const GlobalAdjustment& after) {
     const GlobalAdjustment current = session->params();
-    const GlobalAdjustment beforeSnapshot = applyGroups(current, before, allGroups());
-    const GlobalAdjustment afterSnapshot = applyGroups(current, after, allGroups());
+    GlobalAdjustment beforeSnapshot = applyGroups(current, before, allGroups());
+    GlobalAdjustment afterSnapshot = applyGroups(current, after, allGroups());
+    beforeSnapshot.grainSeed = before.grainSeed;
+    afterSnapshot.grainSeed = after.grainSeed;
     if (afterSnapshot != beforeSnapshot)
         undoStack->push(new AdjustmentCommand(session, this, beforeSnapshot, afterSnapshot));
 }

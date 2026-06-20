@@ -122,7 +122,7 @@ jobs:
             libx11-dev libx11-xcb-dev libxext-dev libxfixes-dev libxi-dev libxrender-dev \
             libxcb1-dev libxcb-cursor-dev libxcb-glx0-dev libxcb-keysyms1-dev \
             libxcb-image0-dev libxcb-shm0-dev libxcb-icccm4-dev libxcb-sync-dev \
-            libxcb-xfixes-dev libxcb-shape0-dev libxcb-randr0-dev \
+            libxcb-xfixes0-dev libxcb-shape0-dev libxcb-randr0-dev \
             libxcb-render-util0-dev libxcb-util-dev libxcb-xinerama0-dev libxcb-xkb-dev
 
       - name: Validate AppStream metainfo
@@ -212,7 +212,9 @@ jobs:
           persist-credentials: false
 
       - name: Build and validate RPMs
-        run: bash tools/package_fedora.sh
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          bash tools/package_fedora.sh
 
       - name: Upload Fedora package artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -262,8 +264,11 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-      id-token: write
-      attestations: write
+      # id-token / attestations writes are only needed for the attestation step,
+      # which is disabled while the repo is private (see "Generate build-provenance
+      # attestations" below). Re-enable both when turning attestations back on.
+      # id-token: write
+      # attestations: write
     steps:
       - name: Download AppImage
         if: inputs.build_appimage
@@ -296,7 +301,11 @@ jobs:
           cd release-assets
           sha256sum arraw-* >SHA256SUMS
 
+      # TODO: re-enable build-provenance attestations once the repo is public.
+      # Attestations require a public repo (or GitHub Advanced Security) to be
+      # publicly verifiable, so this step is disabled while the repo is private.
       - name: Generate build-provenance attestations
+        if: false
         uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
         with:
           subject-path: release-assets/*

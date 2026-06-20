@@ -63,6 +63,16 @@ struct GlobalAdjustment : SharedAdjustment {
     QRectF cropRect = {0.0, 0.0, 1.0, 1.0}; // normalised UV, full image by default
     bool cropConstrained = false;           // crop is locked to its aspect ratio
 
+    // Effects (docs/adr/0026). The seed is per-image identity: copy/paste and
+    // presets transfer the six visible controls but preserve the target seed.
+    float vignetteAmount = 0.0f;    // -100 .. +100, mapped to -2 .. +2 EV
+    float vignetteMidpoint = 50.0f; // 0 .. 100
+    float vignetteFeather = 50.0f;  // 0 .. 100
+    float grainAmount = 0.0f;       // 0 .. 100
+    float grainSize = 50.0f;        // 0 .. 100
+    float grainRoughness = 50.0f;   // 0 .. 100
+    std::uint32_t grainSeed = 0;    // 0 = uninitialised
+
     // Local adjustments — arraw-native, capped at 16 (docs/adr/0010).
     std::vector<LocalAdjustment> localAdjustments;
 
