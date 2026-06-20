@@ -18,12 +18,11 @@ QPointF rotateTextureUv(float u, float v, float degrees, float aspect, float cx,
 
 QRectF shrinkInsideRotation(const QRectF& cropRect, float degrees, float aspect) {
     const auto inside = [&](const QRectF& r) {
-        const QPointF corners[4]
-            = {r.topLeft(), r.topRight(), r.bottomRight(), r.bottomLeft()};
+        const QPointF corners[4] = {r.topLeft(), r.topRight(), r.bottomRight(), r.bottomLeft()};
         const float eps = 1e-4f;
         for (const QPointF& c : corners) {
-            const QPointF s = rotateTextureUv(
-                float(c.x()), float(c.y()), degrees, aspect, 0.5f, 0.5f);
+            const QPointF s
+                = rotateTextureUv(float(c.x()), float(c.y()), degrees, aspect, 0.5f, 0.5f);
             if (s.x() < -eps || s.x() > 1.0f + eps || s.y() < -eps || s.y() > 1.0f + eps)
                 return false;
         }
@@ -39,8 +38,11 @@ QRectF shrinkInsideRotation(const QRectF& cropRect, float degrees, float aspect)
     const double halfW = cropRect.width() / 2.0;
     const double halfH = cropRect.height() / 2.0;
     const auto scaled = [&](double s) {
-        return QRectF(centre.x() - halfW * s, centre.y() - halfH * s,
-            cropRect.width() * s, cropRect.height() * s);
+        return QRectF(
+            centre.x() - halfW * s,
+            centre.y() - halfH * s,
+            cropRect.width() * s,
+            cropRect.height() * s);
     };
     double lo = 0.0;
     double hi = 1.0;

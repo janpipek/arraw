@@ -180,7 +180,7 @@ private:
 
     // Settings Propagation state (Milestone 8).
     std::optional<SettingsClipboard> settingsClipboard; // session-only, never the OS clipboard
-    GroupSelection lastCopySelection = allGroups();     // remembers the last checklist
+    GroupSelection lastCopySelection = defaultCopySelection(); // Geometry off by default
     PresetStore presetStore;
     QMenu* presetsMenu = nullptr;
 

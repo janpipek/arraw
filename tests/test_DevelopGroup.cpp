@@ -47,6 +47,17 @@ static GroupSelection only(DevelopGroup g) {
     return s;
 }
 
+TEST_CASE("the default copy selection checks every group except Geometry", "[developgroup]") {
+    const GroupSelection sel = defaultCopySelection();
+    for (int i = 0; i < kDevelopGroupCount; ++i) {
+        const DevelopGroup g = static_cast<DevelopGroup>(i);
+        if (g == DevelopGroup::Geometry)
+            CHECK_FALSE(hasGroup(sel, g));
+        else
+            CHECK(hasGroup(sel, g));
+    }
+}
+
 TEST_CASE("Empty selection leaves the target unchanged", "[developgroup]") {
     const GlobalAdjustment target; // defaults
     const GlobalAdjustment source = fullyEdited();

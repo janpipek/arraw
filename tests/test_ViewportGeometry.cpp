@@ -16,11 +16,10 @@ TEST_CASE("shrinkInsideRotation leaves an interior crop untouched at 0°", "[vie
 
 namespace {
 bool cornersInside(const QRectF& r, float degrees, float aspect) {
-    const QPointF corners[4]
-        = {r.topLeft(), r.topRight(), r.bottomRight(), r.bottomLeft()};
+    const QPointF corners[4] = {r.topLeft(), r.topRight(), r.bottomRight(), r.bottomLeft()};
     for (const QPointF& c : corners) {
-        const QPointF s = viewport::rotateTextureUv(
-            float(c.x()), float(c.y()), degrees, aspect, 0.5f, 0.5f);
+        const QPointF s
+            = viewport::rotateTextureUv(float(c.x()), float(c.y()), degrees, aspect, 0.5f, 0.5f);
         if (s.x() < -1e-4f || s.x() > 1.0f + 1e-4f || s.y() < -1e-4f || s.y() > 1.0f + 1e-4f)
             return false;
     }
@@ -28,17 +27,18 @@ bool cornersInside(const QRectF& r, float degrees, float aspect) {
 }
 } // namespace
 
-TEST_CASE("shrinkInsideRotation pulls an over-large crop inside, keeping centre and aspect",
+TEST_CASE(
+    "shrinkInsideRotation pulls an over-large crop inside, keeping centre and aspect",
     "[viewportgeometry]") {
     const float aspect = 1.5f;
     const float degrees = 18.0f;
-    const QRectF crop{0.04, 0.04, 0.92, 0.92}; // nearly the whole frame
+    const QRectF crop{0.04, 0.04, 0.92, 0.92};           // nearly the whole frame
     REQUIRE_FALSE(cornersInside(crop, degrees, aspect)); // precondition: it pokes out
 
     const QRectF out = viewport::shrinkInsideRotation(crop, degrees, aspect);
 
-    REQUIRE(cornersInside(out, degrees, aspect));          // now fits
-    REQUIRE(out.width() < crop.width());                   // it actually shrank
+    REQUIRE(cornersInside(out, degrees, aspect));           // now fits
+    REQUIRE(out.width() < crop.width());                    // it actually shrank
     REQUIRE(out.center().x() == Approx(crop.center().x())); // centre held
     REQUIRE(out.center().y() == Approx(crop.center().y()));
     // aspect ratio preserved
