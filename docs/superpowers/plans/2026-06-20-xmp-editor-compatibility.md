@@ -64,9 +64,9 @@ exercise only public `XmpSidecar` behavior and parse output semantically.
 4. Review the diff against ADR 0026 and this behavior list.
 5. Commit the implementation and documentation on branch `digikam`.
 
-## Current worktree state
+## Status
 
-The branch contains an uncommitted first-pass DOM merge, Qt Xml linkage, and
-the first preservation/naming tests. Treat that code as disposable TDD work:
-reconcile it against each slice above, keep only behavior justified by a GREEN
-test, and do not commit until the complete plan passes.
+All eight slices are implemented and committed on `digikam`, each covered by a
+GREEN `[xmp]` test. Slice 8 forces a write failure with a read-only directory
+(skipped on Windows and when running as root) and verifies the original bytes
+survive. The full `ctest` suite passes.

@@ -5,6 +5,9 @@
 #include <QDomDocument>
 #include <QFile>
 #include <QTemporaryDir>
+#ifndef Q_OS_WIN
+#include <unistd.h>
+#endif
 
 using Catch::Matchers::WithinAbs;
 
@@ -203,6 +206,43 @@ TEST_CASE("saves never replace an existing malformed sidecar", "[xmp][compatibil
 
     REQUIRE(sidecar.open(QIODevice::ReadOnly));
     CHECK(sidecar.readAll() == malformed);
+}
+
+TEST_CASE("a failed save preserves the original sidecar atomically", "[xmp][compatibility]") {
+#ifdef Q_OS_WIN
+    SKIP("read-only directory does not reliably block QSaveFile on Windows");
+#else
+    if (::geteuid() == 0)
+        SKIP("root bypasses directory write permissions");
+
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("locked.nef");
+    const QByteArray original = R"xml(<?xml version="1.0"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description rdf:about=""
+      xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+      crs:Exposure2012="2.0000"/>
+  </rdf:RDF>
+</x:xmpmeta>)xml";
+    QFile sidecar(XmpSidecar::pathFor(rawPath));
+    REQUIRE(sidecar.open(QIODevice::WriteOnly));
+    REQUIRE(sidecar.write(original) == original.size());
+    sidecar.close();
+
+    // Strip write permission from the directory so QSaveFile cannot create or
+    // rename its temporary file. QSaveFile does not fall back to a direct
+    // write, so a doomed save must leave the original bytes untouched.
+    REQUIRE(QFile::setPermissions(dir.path(), QFileDevice::ReadOwner | QFileDevice::ExeOwner));
+    const bool saved = XmpSidecar::saveAdjustments(rawPath, sampleParams());
+    // Restore permissions so QTemporaryDir can clean up regardless of outcome.
+    QFile::setPermissions(
+        dir.path(), QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+
+    CHECK_FALSE(saved);
+    REQUIRE(sidecar.open(QIODevice::ReadOnly));
+    CHECK(sidecar.readAll() == original);
+#endif
 }
 
 TEST_CASE("resolveAdjustments returns the sidecar params when present, ignoring defaultCrop",
