@@ -7,9 +7,9 @@
 struct ImageBuffer; // defined in ImagePipeline.h
 
 struct Spot {
-    QPointF destination; // buffer pixel coordinates
-    QPointF source;      // buffer pixel coordinates
-    double radius = 0.0; // pixels in original buffer
+    QPointF destination;  // buffer pixel coordinates
+    QPointF source;       // buffer pixel coordinates
+    double radius = 0.0;  // pixels in original buffer
     double feather = 0.5; // 0..1 falloff band: inner = radius*(1-feather), outer = radius
     bool operator==(const Spot&) const = default;
 };

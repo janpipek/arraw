@@ -35,6 +35,20 @@ DevelopPreset samplePreset() {
 
 } // namespace
 
+TEST_CASE("A Geometry preset round-trips orientation through JSON", "[preset]") {
+    DevelopPreset p;
+    p.name = "Turned";
+    p.groups = groups({DevelopGroup::Geometry});
+    p.values.orientation = orient::Orientation{1, true};
+    p.values.rotation = 3.0f;
+
+    bool ok = false;
+    const DevelopPreset loaded = parseDevelopPreset(serializeDevelopPreset(p), &ok);
+
+    REQUIRE(ok);
+    CHECK(loaded.values.orientation == p.values.orientation);
+}
+
 TEST_CASE("Develop preset round-trips through JSON", "[preset]") {
     const DevelopPreset p = samplePreset();
 

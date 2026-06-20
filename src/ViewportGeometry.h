@@ -11,6 +11,14 @@ namespace viewport {
 // rotation isotropic in pixel space, then scaled back.
 QPointF rotateTextureUv(float u, float v, float degrees, float aspect, float cx, float cy);
 
+// Shrink a normalised crop rectangle about its own centre — preserving its UV
+// aspect ratio — just enough that all four corners, after the fine ±45° Rotation
+// (mirrored from image.vert via rotateTextureUv), land inside the real image
+// [0,1]². This is the auto-refit applied when a Straighten exposes the rotation's
+// empty corners (CONTEXT.md, docs/adr/0025). Shrink-only: a crop already inside
+// is returned unchanged — it never grows back. `aspect` is the image width/height.
+QRectF shrinkInsideRotation(const QRectF& cropRect, float degrees, float aspect);
+
 // Pure geometry used by ImageViewport tool overlays and hit-tests. It has no Qt
 // widget or renderer dependency, so crop/mask/spot tools can share one mapping
 // contract and exercise it directly in tests.

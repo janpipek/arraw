@@ -17,8 +17,7 @@ std::vector<Spot> scaleSpots(const std::vector<Spot>& spots, double sx, double s
 } // namespace
 
 DevelopSession::DevelopSession(QObject* parent)
-    : QObject(parent) {
-}
+    : QObject(parent) {}
 
 void DevelopSession::beginLoading(QString path) {
     currentPath = std::move(path);
@@ -113,11 +112,11 @@ void DevelopSession::rebuildSpotBuffers() {
     }
     if (previewBuffer.valid()) {
         const double sx = (fullResBuffer.valid() && fullResBuffer.width > 0)
-            ? double(previewBuffer.width) / fullResBuffer.width
-            : 1.0;
+                              ? double(previewBuffer.width) / fullResBuffer.width
+                              : 1.0;
         const double sy = (fullResBuffer.valid() && fullResBuffer.height > 0)
-            ? double(previewBuffer.height) / fullResBuffer.height
-            : 1.0;
+                              ? double(previewBuffer.height) / fullResBuffer.height
+                              : 1.0;
         spottedPreviewBuffer = applySpots(previewBuffer, scaleSpots(adjustments.spots, sx, sy));
     } else {
         spottedPreviewBuffer = {};

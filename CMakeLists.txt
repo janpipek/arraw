@@ -160,6 +160,7 @@ set(CORE_SOURCES
     src/DevelopSession.cpp
     src/ExportDialog.cpp
     src/CropGeometry.cpp
+    src/Orientation.cpp
     src/DevelopGroup.cpp
     src/DevelopPreset.cpp
     src/GroupChecklistDialog.cpp

@@ -74,6 +74,16 @@ void checkCurveClose(const CurvePoints& a, const CurvePoints& b) {
 
 } // namespace
 
+TEST_CASE("orientation round-trips through the sidecar as tiff:Orientation", "[xmp]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("IMG_0001.arw");
+    GlobalAdjustment p;
+    p.orientation = orient::Orientation{1, true}; // a turned-and-mirrored state (EXIF 5)
+    REQUIRE(XmpSidecar::saveAdjustments(rawPath, p));
+    const GlobalAdjustment loaded = XmpSidecar::loadAdjustments(rawPath);
+    REQUIRE(loaded.orientation == p.orientation);
+}
+
 TEST_CASE("sidecar path replaces the RAW extension with .xmp", "[xmp]") {
     REQUIRE(XmpSidecar::pathFor("/photos/IMG_0042.ARW") == "/photos/IMG_0042.xmp");
     REQUIRE(XmpSidecar::pathFor("/photos/IMG_0042.dng") == "/photos/IMG_0042.xmp");
@@ -99,8 +109,8 @@ TEST_CASE("malformed sidecar loads default params", "[xmp]") {
     CHECK(XmpSidecar::loadWithStatus(rawPath).status == SidecarLoadStatus::ParseError);
 }
 
-TEST_CASE("resolveAdjustments returns the sidecar params when present, ignoring defaultCrop",
-          "[xmp]") {
+TEST_CASE(
+    "resolveAdjustments returns the sidecar params when present, ignoring defaultCrop", "[xmp]") {
     QTemporaryDir dir;
     const QString rawPath = dir.filePath("shot.arw");
     REQUIRE(XmpSidecar::saveAdjustments(rawPath, sampleParams()));
@@ -129,8 +139,7 @@ TEST_CASE("resolveForImage returns sidecar adjustments and metadata when present
     CHECK(resolved.data.metadata == UserMetadata{4, ColourLabel::Purple});
 }
 
-TEST_CASE("resolveAdjustments falls back to defaults with defaultCrop when no sidecar",
-          "[xmp]") {
+TEST_CASE("resolveAdjustments falls back to defaults with defaultCrop when no sidecar", "[xmp]") {
     QTemporaryDir dir;
     const QString rawPath = dir.filePath("never-edited.arw"); // no .xmp written
 

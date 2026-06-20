@@ -85,6 +85,7 @@ GlobalAdjustment applyGroups(
         result.sharpening = source.sharpening;
     }
     if (hasGroup(selection, DevelopGroup::Geometry)) {
+        result.orientation = source.orientation;
         result.rotation = source.rotation;
         result.cropRect = source.cropRect;
         result.cropConstrained = source.cropConstrained;

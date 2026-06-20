@@ -34,6 +34,7 @@ static GlobalAdjustment fullyEdited() {
     // Detail
     g.sharpening = 55.0f;
     // Geometry
+    g.orientation = orient::Orientation{3, true};
     g.rotation = 7.5f;
     g.cropRect = {0.1, 0.2, 0.7, 0.6};
     g.cropConstrained = true;
@@ -97,6 +98,7 @@ TEST_CASE("Geometry moves rotation, crop, and the aspect-lock flag together", "[
 
     const GlobalAdjustment result = applyGroups(target, source, only(DevelopGroup::Geometry));
 
+    CHECK(result.orientation == source.orientation);
     CHECK(result.rotation == source.rotation);
     CHECK(result.cropRect == source.cropRect);
     CHECK(result.cropConstrained == source.cropConstrained);
@@ -116,8 +118,7 @@ TEST_CASE("White Balance carries temperature and tint", "[developgroup]") {
 }
 
 TEST_CASE(
-    "All seven groups reproduce the source's globals but never per-image edits",
-    "[developgroup]") {
+    "All seven groups reproduce the source's globals but never per-image edits", "[developgroup]") {
     // Exhaustiveness guard: if any global field belongs to no group, it stays at
     // the target's value and this fails — enforcing "no field silently fails to
     // copy" as a test, not a hope.

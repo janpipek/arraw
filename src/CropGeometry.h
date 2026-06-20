@@ -58,4 +58,12 @@ struct PresetMatch {
 
 PresetMatch matchPreset(double pixelRatio, double imageAspect);
 
+// Rotate a normalised crop rectangle by `quarterTurnsCW` 90° clockwise steps
+// within the unit square, so it keeps framing the same subject when the image is
+// turned (CONTEXT.md: Orientation rotates the crop with the content). A single
+// CW step maps a point (u,v) → (1-v,u); width and height swap. The result is
+// axis-aligned and normalised; the aspect-lock ratio is re-derived from it by the
+// caller (docs/adr/0021), so no separate lock handling is needed here.
+QRectF rotateQuarterTurns(const QRectF& cropRect, int quarterTurnsCW);
+
 } // namespace crop

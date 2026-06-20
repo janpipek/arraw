@@ -16,6 +16,22 @@ void requireRect(const QRectF& got, double x, double y, double w, double h) {
 }
 } // namespace
 
+TEST_CASE("rotateQuarterTurns turns a crop 90° CW, swapping width and height", "[crop]") {
+    // (u,v) → (1-v,u): corners (0.1,0.2) and (0.4,0.6) map to (0.8,0.1) and
+    // (0.4,0.4); normalised that is x=0.4, y=0.1, w=0.4, h=0.3.
+    requireRect(crop::rotateQuarterTurns({0.1, 0.2, 0.3, 0.4}, 1), 0.4, 0.1, 0.4, 0.3);
+}
+
+TEST_CASE("rotateQuarterTurns is 4-periodic and normalises negative turns", "[crop]") {
+    const QRectF r{0.1, 0.2, 0.3, 0.4};
+    requireRect(crop::rotateQuarterTurns(r, 0), r.x(), r.y(), r.width(), r.height());
+    requireRect(crop::rotateQuarterTurns(r, 4), r.x(), r.y(), r.width(), r.height());
+    // -1 CW == 3 CW == one CCW step; both must agree.
+    const QRectF ccw = crop::rotateQuarterTurns(r, -1);
+    const QRectF cw3 = crop::rotateQuarterTurns(r, 3);
+    requireRect(ccw, cw3.x(), cw3.y(), cw3.width(), cw3.height());
+}
+
 TEST_CASE("cropPixelSize scales full-image pixels by the crop rectangle", "[crop]") {
     // Full crop keeps every pixel.
     REQUIRE(crop::cropPixelSize(6000, 4000, QRectF(0, 0, 1, 1)) == QSize(6000, 4000));

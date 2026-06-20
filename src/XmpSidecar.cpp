@@ -16,6 +16,7 @@ static constexpr char kNsXmp[] = "http://ns.adobe.com/xap/1.0/";
 // arraw-native develop data that has no Lightroom equivalent — local adjustments
 // (docs/adr/0010). Versioned in the URI like Adobe's namespaces.
 static constexpr char kNsArraw[] = "http://ns.arraw.app/1.0/";
+static constexpr char kNsTiff[] = "http://ns.adobe.com/tiff/1.0/";
 
 // crs: attribute names for the 8 HSL ranges, indexed like GlobalAdjustment::hslHue etc.
 static constexpr const char* kHslHueNames[8]
@@ -66,8 +67,7 @@ SidecarLoadResult XmpSidecar::resolveForImage(const QString& rawPath, const QRec
 }
 
 SidecarAdjustmentResult XmpSidecar::resolveAdjustmentsWithStatus(
-    const QString& rawPath,
-    const QRectF& defaultCrop) {
+    const QString& rawPath, const QRectF& defaultCrop) {
     const SidecarLoadResult loaded = resolveForImage(rawPath, defaultCrop);
     return {loaded.data.adjustments, loaded.status};
 }
@@ -181,12 +181,18 @@ static Spot parseSpotLi(QXmlStreamReader& xml) {
         const double v = text.toDouble(&ok);
         if (!ok)
             continue;
-        if (name == "arraw:DestX")        s.destination.setX(v);
-        else if (name == "arraw:DestY")   s.destination.setY(v);
-        else if (name == "arraw:SourceX") s.source.setX(v);
-        else if (name == "arraw:SourceY") s.source.setY(v);
-        else if (name == "arraw:Radius")  s.radius = v;
-        else if (name == "arraw:Feather") s.feather = v;
+        if (name == "arraw:DestX")
+            s.destination.setX(v);
+        else if (name == "arraw:DestY")
+            s.destination.setY(v);
+        else if (name == "arraw:SourceX")
+            s.source.setX(v);
+        else if (name == "arraw:SourceY")
+            s.source.setY(v);
+        else if (name == "arraw:Radius")
+            s.radius = v;
+        else if (name == "arraw:Feather")
+            s.feather = v;
     }
     return s;
 }
@@ -266,7 +272,16 @@ SidecarLoadResult XmpSidecar::loadWithStatus(const QString& rawPath) {
             p.saturation = attr("Saturation", 0.0f);
             p.vibrance = attr("Vibrance", 0.0f);
             p.sharpening = attr("Sharpness", 0.0f);
-            p.rotation = attr("StraightenAngle", 0.0f);
+            p.rotation = attr("CropAngle", 0.0f);
+            // Coarse orientation: the standard EXIF/tiff enum. Absent means the
+            // decode layer seeds it from EXIF instead (docs/adr/0025), so leave
+            // the default identity here when the attribute is missing.
+            if (auto o = xml.attributes().value(kNsTiff, "Orientation"); !o.isEmpty()) {
+                bool ok = false;
+                const int exif = o.toInt(&ok);
+                if (ok)
+                    p.orientation = orient::fromExif(exif);
+            }
             // crs stores the crop as normalised edges (left/top/right/bottom),
             // QRectF wants x/y/width/height.
             p.cropRect = QRectF(
@@ -353,11 +368,11 @@ static void writeSpots(QXmlStreamWriter& xml, const std::vector<Spot>& spots) {
     for (const auto& s : spots) {
         xml.writeStartElement(kNsRdf, "li");
         xml.writeAttribute(kNsRdf, "parseType", "Resource");
-        xml.writeTextElement(kNsArraw, "DestX",   num(s.destination.x()));
-        xml.writeTextElement(kNsArraw, "DestY",   num(s.destination.y()));
+        xml.writeTextElement(kNsArraw, "DestX", num(s.destination.x()));
+        xml.writeTextElement(kNsArraw, "DestY", num(s.destination.y()));
         xml.writeTextElement(kNsArraw, "SourceX", num(s.source.x()));
         xml.writeTextElement(kNsArraw, "SourceY", num(s.source.y()));
-        xml.writeTextElement(kNsArraw, "Radius",  num(s.radius));
+        xml.writeTextElement(kNsArraw, "Radius", num(s.radius));
         xml.writeTextElement(kNsArraw, "Feather", num(s.feather));
         xml.writeEndElement(); // rdf:li
     }
@@ -443,6 +458,7 @@ static bool writeFile(const QString& rawPath, const SidecarData& data) {
     xml.writeNamespace(kNsCrs, "crs");
     xml.writeNamespace(kNsXmp, "xmp");
     xml.writeNamespace(kNsArraw, "arraw");
+    xml.writeNamespace(kNsTiff, "tiff");
     xml.writeStartElement(kNsRdf, "Description");
     xml.writeAttribute(kNsRdf, "about", "");
 
@@ -467,12 +483,14 @@ static bool writeFile(const QString& rawPath, const SidecarData& data) {
     write("Saturation", p.saturation);
     write("Vibrance", p.vibrance);
     write("Sharpness", p.sharpening);
-    write("StraightenAngle", p.rotation);
+    write("CropAngle", p.rotation); // Adobe's real straighten field (docs/adr/0025)
     write("CropLeft", float(p.cropRect.left()));
     write("CropTop", float(p.cropRect.top()));
     write("CropRight", float(p.cropRect.right()));
     write("CropBottom", float(p.cropRect.bottom()));
     xml.writeAttribute(kNsCrs, "CropConstrainAspectRatio", p.cropConstrained ? "True" : "False");
+    // Coarse orientation as the standard EXIF/tiff enum 1..8 (docs/adr/0025).
+    xml.writeAttribute(kNsTiff, "Orientation", QString::number(orient::toExif(p.orientation)));
 
     // HSL
     for (int i = 0; i < 8; ++i) {

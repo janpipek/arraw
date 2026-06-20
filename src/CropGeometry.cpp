@@ -128,4 +128,16 @@ PresetMatch matchPreset(double pixelRatio, double imageAspect) {
     return {AspectPreset::Free, true, false};
 }
 
+QRectF rotateQuarterTurns(const QRectF& cropRect, int quarterTurnsCW) {
+    QRectF r = cropRect;
+    const int turns = ((quarterTurnsCW % 4) + 4) % 4; // normalise to 0..3
+    for (int i = 0; i < turns; ++i) {
+        // One CW step maps a point (u,v) → (1-v,u). The two opposite corners
+        // (x,y) and (x+w,y+h) become (1-y,x) and (1-(y+h),x+w); the new
+        // axis-aligned rect takes the min corner and swaps the extents.
+        r = QRectF(1.0 - (r.y() + r.height()), r.x(), r.height(), r.width());
+    }
+    return r;
+}
+
 } // namespace crop

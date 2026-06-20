@@ -27,14 +27,17 @@ inline void log(const char* label, qint64 ms) {
 // RAII: reports the wall time of the enclosing scope on destruction.
 class Scope {
 public:
-    explicit Scope(const char* label) : label(label) {
+    explicit Scope(const char* label)
+        : label(label) {
         if (enabled())
             timer.start();
     }
+
     ~Scope() {
         if (enabled() && timer.isValid())
             log(label, timer.elapsed());
     }
+
     Scope(const Scope&) = delete;
     Scope& operator=(const Scope&) = delete;
 
@@ -51,6 +54,7 @@ public:
         if (enabled())
             timer.start();
     }
+
     void lap(const char* stage) {
         if (enabled() && timer.isValid())
             log(stage, timer.restart());

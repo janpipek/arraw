@@ -1,6 +1,7 @@
 #pragma once
 #include "ImageMetadata.h"
 #include "LocalAdjustment.h"
+#include "Orientation.h"
 #include "Spot.h"
 #include <array>
 #include <cmath>
@@ -59,7 +60,8 @@ struct GlobalAdjustment : SharedAdjustment {
     float sharpening = 0.0f; // 0 .. 100
 
     // Geometry
-    float rotation = 0.0f;                  // degrees, -45 .. +45
+    orient::Orientation orientation;        // coarse 90°/flip, seeded from EXIF (docs/adr/0025)
+    float rotation = 0.0f;                  // degrees, -45 .. +45 (fine straighten)
     QRectF cropRect = {0.0, 0.0, 1.0, 1.0}; // normalised UV, full image by default
     bool cropConstrained = false;           // crop is locked to its aspect ratio
 
