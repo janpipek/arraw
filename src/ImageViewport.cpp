@@ -114,9 +114,13 @@ float ImageViewport::fitZoom() const {
 float ImageViewport::displayOriginalPixelHeight() const {
     if (!hasKnownOriginalSize())
         return 0.0f;
+    // The displayed frame is oriented: an odd quarter-turn makes the native width
+    // the displayed height (docs/adr/0025), so the 1:1 zoom readout stays honest.
+    const float orientedHeight = orient::swapsAspect(params.orientation) ? float(originalWidth)
+                                                                         : float(originalHeight);
     if (cropMode() || showOriginal)
-        return float(originalHeight);
-    return float(originalHeight) * float(params.cropRect.height());
+        return orientedHeight;
+    return orientedHeight * float(params.cropRect.height());
 }
 
 viewport::Geometry ImageViewport::geometry() const {
@@ -977,13 +981,17 @@ QImage ImageViewport::renderClipSample(
     // clipping overlay actually runs — renderToImage uses the linear export
     // path where it is forced off. Used by the clipping golden test (adr/0009).
     const QRectF& cr = p.cropRect;
-    const int cropW = (std::max) (1, int(cr.width() * buf.width + 0.5f));
-    const int cropH = (std::max) (1, int(cr.height() * buf.height + 0.5f));
+    int orientedW = buf.width;
+    int orientedH = buf.height;
+    if (orient::swapsAspect(p.orientation)) // oriented frame (docs/adr/0025)
+        std::swap(orientedW, orientedH);
+    const int cropW = (std::max) (1, int(cr.width() * orientedW + 0.5f));
+    const int cropH = (std::max) (1, int(cr.height() * orientedH + 0.5f));
 
     RendererCore::FrameParams fp;
     fp.transform = QVector4D(1.0f, 1.0f, 0.0f, 0.0f);
     fp.cropRect = cr;
-    fp.aspect = float(buf.width) / float(buf.height);
+    fp.aspect = float(orientedW) / float(orientedH);
     fp.baseLook = true;
     fp.displayEncode = true;
     fp.curveInput = false;
