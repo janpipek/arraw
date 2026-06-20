@@ -85,14 +85,21 @@ QColor ToneCurveWidget::channelColor(Channel ch) {
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
+void ToneCurveWidget::cancelDrag() {
+    dragging = false;
+    dragIndex = -1;
+}
+
 void ToneCurveWidget::setChannel(Channel ch) {
     if (currentChannel == ch)
         return;
+    cancelDrag(); // dragIndex belonged to the outgoing channel's points
     currentChannel = ch;
     update();
 }
 
 void ToneCurveWidget::setPoints(Channel ch, const std::vector<QPointF>& pts) {
+    cancelDrag(); // replacing the points invalidates any drag indexing them
     pointsFor(ch) = pts;
     update();
 }
@@ -244,7 +251,12 @@ int ToneCurveWidget::insertPointOnCurve(QPointF pos) {
     auto it = std::lower_bound(pts.begin(), pts.end(), cp, [](const QPointF& a, const QPointF& b) {
         return a.x() < b.x();
     });
-    return int(pts.insert(it, cp) - pts.begin());
+    // Capture the index before inserting: `insert(it, cp) - pts.begin()` is
+    // unsequenced, so a reallocation can leave begin() pointing at the freed
+    // buffer while insert() returns the new one, yielding a garbage index.
+    const int index = int(it - pts.begin());
+    pts.insert(it, cp);
+    return index;
 }
 
 void ToneCurveWidget::mousePressEvent(QMouseEvent* e) {
