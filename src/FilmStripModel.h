@@ -20,13 +20,17 @@ class FilmStripModel : public QAbstractListModel {
 public:
     enum Roles {
         PathRole = Qt::UserRole + 1,
-        RatingRole, // int: 0 unrated, -1 reject, 1..5 stars
-        LabelRole,  // int: a ColourLabel value
+        RatingRole,     // int: 0 unrated, -1 reject, 1..5 stars
+        LabelRole,      // int: a ColourLabel value
+        CompanionsRole, // QStringList: same-shot files attached to this primary (e.g. the JPEG)
     };
 
     explicit FilmStripModel(QObject* parent = nullptr);
 
-    void setFiles(QStringList paths);
+    // Sets the rows to the given primary paths. `companions` maps a primary path
+    // to the same-shot files grouped under it (see ImageGrouping); primaries
+    // absent from the map have no companions.
+    void setFiles(QStringList paths, QHash<QString, QStringList> companions = {});
 
     // Attaches a loaded thumbnail to its row, emitting dataChanged for it.
     // No-op if the path is not in the current file list.
@@ -53,6 +57,7 @@ public:
 
 private:
     QStringList files;
+    QHash<QString, QStringList> companions; // keyed by primary path
     QHash<QString, QImage> thumbnails;      // keyed by path, survives reordering
     QHash<QString, UserMetadata> marks;     // keyed by path, survives reordering
     QHash<QString, ImageMetadata> metadata; // keyed by path, survives reordering

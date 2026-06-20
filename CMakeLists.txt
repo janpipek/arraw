@@ -154,6 +154,7 @@ set(CORE_SOURCES
     src/XmpSidecar.cpp
     src/FilmStrip.cpp
     src/FilmStripModel.cpp
+    src/ImageGrouping.cpp
     src/FilmStripLayout.cpp
     src/ThumbnailCache.cpp
     src/DecodeCache.cpp

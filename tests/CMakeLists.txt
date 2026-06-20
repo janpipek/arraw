@@ -44,6 +44,7 @@ add_executable(arraw_tests
     test_Spot.cpp
     test_BatchPaste.cpp
     test_FilmStrip.cpp
+    test_ImageGrouping.cpp
     test_ToneCurveWidget.cpp
 )
 
