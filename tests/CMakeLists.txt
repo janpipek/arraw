@@ -32,6 +32,7 @@ add_executable(arraw_tests
     test_LocalAdjustment.cpp
     test_LocalAdjustmentPanel.cpp
     test_CollapsiblePane.cpp
+    test_ChromeHider.cpp
     test_CropGeometry.cpp
     test_DecodeCache.cpp
     test_DevelopSession.cpp

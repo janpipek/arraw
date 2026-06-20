@@ -53,10 +53,20 @@ for the complete walkthrough and troubleshooting. In short:
 # Install dependencies (libraw[openmp] multithreads the demosaic — much faster loads)
 vcpkg install qtbase qttools qtshadertools libraw[openmp] lcms --triplet x64-windows
 
-# From "Developer PowerShell for VS 2022" (so rc.exe/mt.exe are on PATH):
-cmake --preset default   # CMakePresets.json carries the vcpkg toolchain path
+# From "Developer PowerShell for VS 2022" (so rc.exe/mt.exe are on PATH), or
+# import vcvars64.bat into the current PowerShell as shown in docs/windows-build.md.
+#
+# CMakePresets.json is local and untracked because it contains machine-specific
+# vcpkg paths. Create it per docs/windows-build.md, then:
+cmake --preset default
 cmake --build build
 ctest --test-dir build --output-on-failure
+```
+Without a local preset, configure by passing the vcpkg toolchain directly:
+```powershell
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug `
+  -DCMAKE_TOOLCHAIN_FILE=C:/dev/vcpkg/scripts/buildsystems/vcpkg.cmake `
+  -DVCPKG_TARGET_TRIPLET=x64-windows
 ```
 A release ZIP of the runnable app is produced by `python tools/package_windows.py`.
 

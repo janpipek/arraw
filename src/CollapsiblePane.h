@@ -19,10 +19,19 @@ public:
     void toggle();
     bool isCollapsed() const;
 
+    // Lights-out (docs/adr/0025): hide both widgets together, remembering the
+    // collapsed state, and later restore exactly that state. While hidden,
+    // collapse/expand/toggle update the remembered state without revealing
+    // anything, so the dock/strip invariant survives a lights-out cycle.
+    void hide();
+    void show();
+    bool isHidden() const;
+
 private:
-    void setCollapsed(bool); // the one place the invariant is applied
+    void apply(); // the one place the dock/strip visibility invariant is applied
 
     QWidget* expanded;
     QWidget* strip;
     bool collapsed = false;
+    bool hidden = false;
 };
