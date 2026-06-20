@@ -66,8 +66,7 @@ SidecarLoadResult XmpSidecar::resolveForImage(const QString& rawPath, const QRec
 }
 
 SidecarAdjustmentResult XmpSidecar::resolveAdjustmentsWithStatus(
-    const QString& rawPath,
-    const QRectF& defaultCrop) {
+    const QString& rawPath, const QRectF& defaultCrop) {
     const SidecarLoadResult loaded = resolveForImage(rawPath, defaultCrop);
     return {loaded.data.adjustments, loaded.status};
 }
@@ -181,12 +180,18 @@ static Spot parseSpotLi(QXmlStreamReader& xml) {
         const double v = text.toDouble(&ok);
         if (!ok)
             continue;
-        if (name == "arraw:DestX")        s.destination.setX(v);
-        else if (name == "arraw:DestY")   s.destination.setY(v);
-        else if (name == "arraw:SourceX") s.source.setX(v);
-        else if (name == "arraw:SourceY") s.source.setY(v);
-        else if (name == "arraw:Radius")  s.radius = v;
-        else if (name == "arraw:Feather") s.feather = v;
+        if (name == "arraw:DestX")
+            s.destination.setX(v);
+        else if (name == "arraw:DestY")
+            s.destination.setY(v);
+        else if (name == "arraw:SourceX")
+            s.source.setX(v);
+        else if (name == "arraw:SourceY")
+            s.source.setY(v);
+        else if (name == "arraw:Radius")
+            s.radius = v;
+        else if (name == "arraw:Feather")
+            s.feather = v;
     }
     return s;
 }
@@ -267,6 +272,18 @@ SidecarLoadResult XmpSidecar::loadWithStatus(const QString& rawPath) {
             p.vibrance = attr("Vibrance", 0.0f);
             p.sharpening = attr("Sharpness", 0.0f);
             p.rotation = attr("StraightenAngle", 0.0f);
+            p.vignetteAmount = attr("PostCropVignetteAmount", 0.0f);
+            p.vignetteMidpoint = attr("PostCropVignetteMidpoint", 50.0f);
+            p.vignetteFeather = attr("PostCropVignetteFeather", 50.0f);
+            p.grainAmount = attr("GrainAmount", 0.0f);
+            p.grainSize = attr("GrainSize", 50.0f);
+            p.grainRoughness = attr("GrainFrequency", 50.0f);
+            if (const auto seed = xml.attributes().value(kNsArraw, "GrainSeed"); !seed.isEmpty()) {
+                bool ok = false;
+                const auto value = seed.toUInt(&ok);
+                if (ok)
+                    p.grainSeed = value;
+            }
             // crs stores the crop as normalised edges (left/top/right/bottom),
             // QRectF wants x/y/width/height.
             p.cropRect = QRectF(
@@ -353,11 +370,11 @@ static void writeSpots(QXmlStreamWriter& xml, const std::vector<Spot>& spots) {
     for (const auto& s : spots) {
         xml.writeStartElement(kNsRdf, "li");
         xml.writeAttribute(kNsRdf, "parseType", "Resource");
-        xml.writeTextElement(kNsArraw, "DestX",   num(s.destination.x()));
-        xml.writeTextElement(kNsArraw, "DestY",   num(s.destination.y()));
+        xml.writeTextElement(kNsArraw, "DestX", num(s.destination.x()));
+        xml.writeTextElement(kNsArraw, "DestY", num(s.destination.y()));
         xml.writeTextElement(kNsArraw, "SourceX", num(s.source.x()));
         xml.writeTextElement(kNsArraw, "SourceY", num(s.source.y()));
-        xml.writeTextElement(kNsArraw, "Radius",  num(s.radius));
+        xml.writeTextElement(kNsArraw, "Radius", num(s.radius));
         xml.writeTextElement(kNsArraw, "Feather", num(s.feather));
         xml.writeEndElement(); // rdf:li
     }
@@ -468,6 +485,14 @@ static bool writeFile(const QString& rawPath, const SidecarData& data) {
     write("Vibrance", p.vibrance);
     write("Sharpness", p.sharpening);
     write("StraightenAngle", p.rotation);
+    write("PostCropVignetteAmount", p.vignetteAmount);
+    write("PostCropVignetteMidpoint", p.vignetteMidpoint);
+    write("PostCropVignetteFeather", p.vignetteFeather);
+    write("GrainAmount", p.grainAmount);
+    write("GrainSize", p.grainSize);
+    write("GrainFrequency", p.grainRoughness);
+    if (p.grainSeed != 0)
+        xml.writeAttribute(kNsArraw, "GrainSeed", QString::number(p.grainSeed));
     write("CropLeft", float(p.cropRect.left()));
     write("CropTop", float(p.cropRect.top()));
     write("CropRight", float(p.cropRect.right()));

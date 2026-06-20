@@ -31,6 +31,7 @@ add_executable(arraw_tests
     test_FieldSpec.cpp
     test_LocalAdjustment.cpp
     test_LocalAdjustmentPanel.cpp
+    test_AdjustmentPanel.cpp
     test_CollapsiblePane.cpp
     test_ChromeHider.cpp
     test_CropGeometry.cpp
@@ -44,6 +45,7 @@ add_executable(arraw_tests
     test_BatchPaste.cpp
     test_FilmStrip.cpp
     test_ImageGrouping.cpp
+    test_ToneCurveWidget.cpp
 )
 
 target_link_libraries(arraw_tests PRIVATE arraw_core Catch2::Catch2WithMain)
