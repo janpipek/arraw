@@ -217,7 +217,7 @@ private:
     void drawStraightenLine(QPainter& p) const;
 
     // WB picker: read the pre-WB pixel value under pos (GPU tap, docs/adr/0004)
-    // and invert the additive WB model into kelvin/tint. False if pos is off-image.
+    // and invert the blackbody WB gain into kelvin/tint. False if pos is off-image.
     bool sampleWhiteBalance(QPointF pos, float& kelvin, float& tintOut);
 
     // Aspect ratio of the region currently shown (accounts for committed crop).

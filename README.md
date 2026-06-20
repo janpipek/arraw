@@ -54,6 +54,11 @@ CR2, CR3, NEF, ARW, DNG, RAF, ORF, RW2, PEF, SRW (via libraw)
 
 Zoom: scroll wheel (0.05×–32×). Pan: Alt+drag or middle-button drag.
 
+## FAQ
+
+Common runtime questions — including making arraw render on a laptop's discrete
+GPU instead of the integrated one — are in [docs/faq.md](docs/faq.md).
+
 ## Building
 
 ### Linux (Fedora)

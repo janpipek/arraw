@@ -23,8 +23,9 @@ layout(std140, binding = 0) uniform buf {
     float shadows;       // -0.2..+0.2
     float whites;        // -0.2..+0.2
     float blacks;        // -0.2..+0.2
-    float temperature;   // Kelvin, 2000..12000 (5500 = neutral)
-    float tint;          // -1..+1
+    float wbGainR;       // white-balance per-channel gain (docs/adr/0025); 5500K/tint0 = 1
+    float wbGainG;
+    float wbGainB;
     float saturation;    // -1..+1
     float vibrance;      // -1..+1
     int   useLut;
@@ -34,7 +35,7 @@ layout(std140, binding = 0) uniform buf {
                          // 0: output clamped linear working space (export readback)
     int   curveInput;    // stop after tone regions + gamma-encode (histograms)
     int   hslActive;
-    int   wbInput;       // stop before temperature/tint, output linear (WB picker)
+    int   wbInput;       // stop before white balance, output linear (WB picker)
     int   clipWarn;      // clipping overlay bits: 1 = highlights, 2 = shadows (docs/adr/0009)
     // Local adjustments (docs/adr/0010) — unused here, but the block must match
     // image.frag and Ubuf byte-for-byte (std140).

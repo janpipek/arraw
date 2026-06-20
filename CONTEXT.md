@@ -77,6 +77,17 @@ outside the proofed output profile's gamut — a chroma-reproduction warning,
 not a tonal one. Distinct from [[Clipping]].
 _Avoid_: clipping, out-of-range
 
+**White Balance**:
+Neutralising an unwanted colour cast by scaling each colour channel by its own
+gain in the [[Working color space]] — the channels are *multiplied*, never
+offset, so a pixel carrying no light (black) keeps carrying none and can never
+acquire colour. Two controls: **Temperature**, the warm↔cool axis named in
+Kelvin (lower = warmer, higher = cooler), and **Tint**, the orthogonal
+green↔magenta axis. Neutral (5500 K, tint 0) leaves the image untouched.
+Available globally and, as a relative nudge, per [[Local Adjustment]].
+_Avoid_: colour balance (informal slider name), additive shift, colour cast
+(that is the defect White Balance removes, not the control itself)
+
 **Tone Curve**:
 A user-editable remapping of gamma-encoded (display-space) values, defined by
 control points in [0,1]². One Luma Curve plus three Channel Curves per image.

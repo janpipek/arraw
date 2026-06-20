@@ -23,10 +23,11 @@ struct Ubuf {
     float shadows;
     float whites;
     float blacks;
-    float temperature; // Kelvin
-    float tint;        // -1..+1
-    float saturation;  // -1..+1
-    float vibrance;    // -1..+1
+    float wbGainR; // white-balance per-channel gain (docs/adr/0025), 5500K/tint0 = 1
+    float wbGainG;
+    float wbGainB;
+    float saturation; // -1..+1
+    float vibrance;   // -1..+1
     qint32 useLut;
     qint32 gamutWarn;
     qint32 baseLook;
@@ -34,14 +35,15 @@ struct Ubuf {
     qint32 curveInput;
     qint32 hslActive;
     qint32 wbInput;
-    qint32 clipWarn; // clipping overlay bits: 1 = highlights, 2 = shadows
+    qint32 clipWarn;     // clipping overlay bits: 1 = highlights, 2 = shadows
+    qint32 wbPad_[3];    // std140: pad the scalar region to 16B before the vec4[16] arrays
     // Local adjustments (docs/adr/0010), 16-mask cap. Flat floats here ↔ vec4[16]
     // arrays in the shaders (tight std140 packing, like hslHue). Layout:
     //   laGeom  = Linear (p0.x, p0.y, p1.x, p1.y) | Radial (cx, cy, rx, ry)
     //   laGeom2 = Radial (angle, feather, invert, spare); unused for Linear
     //   laTone  = (exposure, contrast, highlights, shadows)
-    //   laTone2 = (whites, blacks, tempShift, tint)
-    //   laColor = (saturation, vibrance, maskType, spare)  maskType 0=Linear 1=Radial
+    //   laTone2 = (whites, blacks, wbGainR, wbGainG)  white-balance gain (docs/adr/0025)
+    //   laColor = (saturation, vibrance, maskType, wbGainB)  maskType 0=Linear 1=Radial
     float laGeom[64];
     float laTone[64];
     float laTone2[64];
@@ -52,7 +54,7 @@ struct Ubuf {
     qint32 pad_[2];  // round the block up to a 16-byte multiple (std140)
 };
 
-static_assert(sizeof(Ubuf) == 1568);
+static_assert(sizeof(Ubuf) == 1584);
 
 // The one place the shader pipeline is recorded (ADR 0006): the widget's
 // on-screen pass, the export render, and the histogram samples all go

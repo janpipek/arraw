@@ -231,6 +231,38 @@ TEST_CASE("shader pipeline matches golden renders", "[gpu][golden]") {
     }
 }
 
+// White balance is a multiplicative gain (docs/adr/0025): a black pixel can
+// never acquire colour, however extreme the temperature/tint. The additive
+// model this replaced turned black into saturated red at 12000 K. This drives
+// the whole GPU chain (std140 packing, fillUbuf, the shader multiply).
+TEST_CASE("black stays black through the white-balance gain", "[gpu][whitebalance]") {
+    ImageViewport* vp = goldenViewport();
+    if (!vp)
+        SKIP("no OpenGL context available on this machine");
+
+    const ImageBuffer scene = syntheticScene(); // x==0, top half is pure black
+
+    for (const float tint : {-100.0f, 0.0f, 100.0f}) {
+        for (const float kelvin : {2000.0f, 12000.0f}) {
+            DYNAMIC_SECTION("K=" << kelvin << " tint=" << tint) {
+                GlobalAdjustment p;
+                p.temperature = kelvin;
+                p.tint = tint;
+                vp->setAdjustments(p);
+                const QImage got = vp->renderToImage(scene, p, scene.width, scene.height);
+                REQUIRE_FALSE(got.isNull());
+
+                // Black column (x == 0) in the top (grey-ramp) half stays black.
+                const float* px = reinterpret_cast<const float*>(got.constScanLine(5));
+                INFO("black pixel -> (" << px[0] << ", " << px[1] << ", " << px[2] << ")");
+                CHECK(px[0] <= 1e-4f);
+                CHECK(px[1] <= 1e-4f);
+                CHECK(px[2] <= 1e-4f);
+            }
+        }
+    }
+}
+
 // Local adjustments (docs/adr/0010): a behavioural check of the whole GPU chain
 // — std140 packing, fillUbuf, the shader loop, and the GLSL maskWeight port.
 // A +1 EV local exposure on a Linear mask must brighten only the masked region.
