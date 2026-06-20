@@ -1485,7 +1485,8 @@ void MainWindow::generateDevelopedThumbnail() {
 
     const GlobalAdjustment p = currentParams();
     const ImageBuffer& preview = session->previewForDisplay();
-    const QSize sz = developedThumbSize(preview.width, preview.height, p.cropRect, 512);
+    const QSize sz
+        = developedThumbSize(preview.width, preview.height, p.cropRect, 512, p.orientation);
 
     // Same pipeline as export: linear working-space render → output transform.
     QImage lin = viewport->renderToImage(preview, p, sz.width(), sz.height());

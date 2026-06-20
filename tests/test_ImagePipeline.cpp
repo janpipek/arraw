@@ -51,6 +51,14 @@ TEST_CASE("developedThumbSize reflects the cropped aspect, not the source aspect
     CHECK(s.height() == 512); // 1000 * (512/1000)
 }
 
+TEST_CASE("developedThumbSize swaps to the oriented aspect on a 90° turn", "[pipeline]") {
+    // 4000×3000 landscape native, turned 90° → the thumbnail must be portrait.
+    const QSize s = developedThumbSize(
+        4000, 3000, QRectF(0.0, 0.0, 1.0, 1.0), 512, orient::Orientation{1, false});
+    CHECK(s.width() == 384); // 3000 * (512/4000)
+    CHECK(s.height() == 512);
+}
+
 TEST_CASE("developedThumbSize never upscales a source smaller than the max edge", "[pipeline]") {
     const QSize s = developedThumbSize(300, 200, QRectF(0.0, 0.0, 1.0, 1.0), 512);
     CHECK(s.width() == 300);
