@@ -31,6 +31,7 @@ add_executable(arraw_tests
     test_FieldSpec.cpp
     test_LocalAdjustment.cpp
     test_LocalAdjustmentPanel.cpp
+    test_AdjustmentPanel.cpp
     test_CollapsiblePane.cpp
     test_ChromeHider.cpp
     test_CropGeometry.cpp

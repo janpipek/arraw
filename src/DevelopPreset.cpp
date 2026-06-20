@@ -77,6 +77,14 @@ QJsonObject groupToJson(DevelopGroup g, const GlobalAdjustment& v) {
             = QJsonArray{v.cropRect.x(), v.cropRect.y(), v.cropRect.width(), v.cropRect.height()};
         o["constrained"] = v.cropConstrained;
         break;
+    case DevelopGroup::Effects:
+        o["vignetteAmount"] = v.vignetteAmount;
+        o["vignetteMidpoint"] = v.vignetteMidpoint;
+        o["vignetteFeather"] = v.vignetteFeather;
+        o["grainAmount"] = v.grainAmount;
+        o["grainSize"] = v.grainSize;
+        o["grainRoughness"] = v.grainRoughness;
+        break;
     case DevelopGroup::Count_:
         break;
     }
@@ -128,6 +136,14 @@ void groupFromJson(DevelopGroup g, const QJsonObject& o, GlobalAdjustment& v) {
         v.cropConstrained = o.value("constrained").toBool(v.cropConstrained);
         break;
     }
+    case DevelopGroup::Effects:
+        v.vignetteAmount = f("vignetteAmount", v.vignetteAmount);
+        v.vignetteMidpoint = f("vignetteMidpoint", v.vignetteMidpoint);
+        v.vignetteFeather = f("vignetteFeather", v.vignetteFeather);
+        v.grainAmount = f("grainAmount", v.grainAmount);
+        v.grainSize = f("grainSize", v.grainSize);
+        v.grainRoughness = f("grainRoughness", v.grainRoughness);
+        break;
     case DevelopGroup::Count_:
         break;
     }

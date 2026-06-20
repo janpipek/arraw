@@ -41,6 +41,9 @@ Color:      temperature (Kelvin, 2000–12000), tint (-100..100),
             saturation, vibrance (-100..100)
 Detail:     sharpening (0..100)
 Geometry:   rotation (degrees, -45..45), cropRect (normalised 0..1 QRectF)
+Effects:    vignetteAmount (-100..100), vignetteMidpoint, vignetteFeather,
+            grainAmount, grainSize, grainRoughness (all 0..100),
+            grainSeed (hidden per-image identity; 0 means uninitialised)
 ```
 
 ### `ImageBuffer`
@@ -89,6 +92,9 @@ MainWindow (QMainWindow)
     │   └── Sharpening slider
     ├── Geometry group
     │   └── Rotation slider (±45°)
+    ├── Effects group
+    │   ├── Vignette: Amount, Midpoint, Feather sliders
+    │   └── Grain: Amount, Size, Roughness sliders
     └── Reset All button
 ```
 
@@ -259,7 +265,17 @@ that file is the source of truth; keep this list in sync with it.
                      by the curve-input and WB-picker readbacks (which return
                      earlier); included on screen, in export, and the panel
                      histogram
-16. Encode           u.displayEncode on (screen):
+16. Vignette         centred elliptical falloff in crop-frame coordinates,
+                     after local colour work. Amount maps -100..100 to -2..+2
+                     EV at maximum falloff; Midpoint and Feather shape the
+                     transition. Applied as a hue-preserving linear multiplier
+17. Grain            final develop adjustment (docs/adr/0026). Working values
+                     are temporarily passed through the sRGB transfer curve,
+                     monochromatic zero-mean grain is added, then values are
+                     decoded back to linear working space. The continuous noise
+                     field is keyed by crop-frame position + a per-image seed,
+                     so preview and export sample the same pattern
+18. Encode           u.displayEncode on (screen):
                        u.useLut off — display transform: Rec.2020→sRGB matrix
                        + true piecewise sRGB curve (sRGB monitor assumed)
                        u.useLut on — 33³ LUT texture baked by lcms2
@@ -276,12 +292,12 @@ that file is the source of truth; keep this list in sync with it.
 **Export only — CPU, after the offscreen readback (`MainWindow::exportFile`)**
 
 ```
-17. Resize           linear-light float scale to the chosen dimensions
-18. Output transform lcms2: working space → sRGB / Display P3 / Adobe RGB,
+19. Resize           linear-light float scale to the chosen dimensions
+20. Output transform lcms2: working space → sRGB / Display P3 / Adobe RGB,
                      8-bit (RGB888) or 16-bit (RGBA64, TIFF only)
-19. Sharpening       unsharp mask in encoded space (the Sharpen slider has no
+21. Sharpening       unsharp mask in encoded space (the Sharpen slider has no
                      preview effect — it is applied only here)
-20. Save             JPEG/PNG/TIFF with the output ICC profile embedded
+22. Save             JPEG/PNG/TIFF with the output ICC profile embedded
 ```
 
 Histograms are exact: `ImageViewport::renderHistograms()` renders the preview
@@ -479,12 +495,12 @@ Design resolved 2026-06-15; refined 2026-06-16 (grilling session). Move develop
 settings between photos without a catalogue. Batch/multi-photo application is
 explicitly **out of scope here** — see Milestone 10.
 
-- **Seven Develop Groups partition every global field:** White Balance, Tone,
-  Tone Curve, Colour, HSL, Detail, and **Geometry** (rotation + crop +
-  aspect-lock flag bundled). The taxonomy mirrors the AdjustmentPanel groups and
-  is exhaustive, so no field can silently fail to copy. **Local Adjustments are
-  not a group** — masks pinned to one photo's framing rarely transfer; a
-  mask-mapping scheme is deferred as a speculative future extension.
+- **Develop Groups partition every global field.** Milestone 8 introduced White
+  Balance, Tone, Tone Curve, Colour, HSL, Detail, and **Geometry** (rotation +
+  crop + aspect-lock flag bundled); Milestone 9 adds **Effects**. The taxonomy
+  mirrors the AdjustmentPanel groups and is exhaustive, so no visible field can
+  silently fail to copy. Per-image state such as Local Adjustment masks and the
+  hidden Grain seed is not transferred by a group.
 - **Apply = replace wholesale.** Applying a group overwrites every field in it on
   the target with the source's values, *including resetting to defaults* when the
   source group is unedited. Makes `applyGroups(target, source, selection)` a pure
@@ -510,16 +526,38 @@ explicitly **out of scope here** — see Milestone 10.
 
 ### Milestone 9 — Develop Depth (new adjustments)
 
-Design resolved 2026-06-15. Splits by pipeline cost.
+Design resolved 2026-06-15; Vignette and Grain controls resolved 2026-06-20.
+Splits by pipeline cost.
 
 - **Cheap & honest (in this milestone): Post-crop Vignette + Grain.** Per-pixel
-  uniforms, no neighbour reads, preview truthfully at quarter-res, slot into the
-  existing single-pass shader and the add-an-adjustment ritual. Pipeline
-  placement: vignette near the end in the cropped frame (post-colour); grain last,
-  on encoded values.
+  uniforms, no neighbour reads, and live preview through the existing main pass.
+  They form an **Effects** panel after Geometry and an eighth Develop Group; the
+  group copies the six visible controls but preserves each target image's hidden
+  Grain seed. See `docs/adr/0026`.
+  - **Vignette:** Amount -100..100 (negative darkens, positive lightens) maps to
+    -2..+2 EV at maximum falloff. Midpoint and Feather are 0..100. Defaults are
+    Amount 0, Midpoint 50, Feather 50. The centred ellipse is evaluated in the
+    final cropped frame, not source-image UVs, so crop and rotation cannot shift
+    or truncate it.
+  - **Grain:** monochromatic and zero-mean. Amount 0..100 maps linearly to
+    0..0.08 standard deviation in perceptually encoded values. Size 0..100 maps
+    logarithmically to about 0.5..4 pixels per 2048 pixels of crop-edge length;
+    Roughness 0..100 blends multiple noise scales from uniform/fine to irregular/
+    clustered. Defaults are Amount 0, Size 50, Roughness 50.
+  - **Stable pattern:** a continuous procedural noise field uses cropped-frame
+    coordinates and a hidden per-image seed. The seed is generated on the first
+    transition from an unseeded state to non-zero Amount, survives Amount returning
+    to zero, and is cleared only by Reset All. Preview, repaint, reopen, thumbnails,
+    and export therefore sample the same field; undersampling may soften fine Grain
+    but never rearranges it.
+  - **Persistence:** visible fields use Lightroom-compatible `crs:` attributes
+    (`PostCropVignetteAmount`, `PostCropVignetteMidpoint`,
+    `PostCropVignetteFeather`, `GrainAmount`, `GrainSize`, and `GrainFrequency`;
+    Grain Roughness maps to Adobe's `GrainFrequency` name). The seed uses
+    `arraw:GrainSeed`. Develop Presets serialize the six controls, never the seed.
 - **Clarity / Texture (in this milestone, spatial): live preview via a blur
   pass.** Local-contrast control. Needs a blurred copy of the image, so it adds
-  the **first multi-pass step to the preview pipeline** — see `docs/adr/0009`.
+  the **first multi-pass step to the preview pipeline** — see `docs/adr/0011`.
   Quarter-res is faithful for this broad, low-frequency effect (unlike fine
   sharpening, which stays export-only). The blur pass is reusable groundwork for
   the deferred items below.

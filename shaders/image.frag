@@ -4,17 +4,19 @@
 // image.vert exactly (std140).
 
 layout(location = 0) in vec2 vUV;
+layout(location = 1) in vec2 vFrameUV;
 layout(location = 0) out vec4 fragColor;
 
 layout(std140, binding = 0) uniform buf {
     mat4  clipCorr;      // QRhi::clipSpaceCorrMatrix() — GL-style NDC → backend NDC
     vec4  transform;     // (scaleX, scaleY, panX, panY)
     vec4  cropRect;      // UV bounds: (left, top, right, bottom)
+    vec4  effectRect;    // final adjustment crop, even while the Crop tool shows full frame
     vec4  hslHue[2];     // 8 floats, -1..+1 per range (std140: packed as vec4 pairs)
     vec4  hslSat[2];
     vec4  hslLum[2];
     float rotation;      // degrees
-    float aspect;        // crop width / height in pixels (for isotropic rotation)
+    float aspect;        // source image width / height (for isotropic rotation)
     float exposure;      // EV stops
     float contrast;      // -0.2..+0.2 (slider ±100 / kToneSliderToUniform)
     float highlights;    // -0.2..+0.2
@@ -26,6 +28,13 @@ layout(std140, binding = 0) uniform buf {
     float wbGainB;
     float saturation;    // -1..+1
     float vibrance;      // -1..+1
+    float vignetteAmount;   // -2..+2 EV at maximum falloff
+    float vignetteMidpoint; // 0..1
+    float vignetteFeather;  // 0..1
+    float grainAmount;      // encoded-value standard deviation, 0..0.08
+    float grainSize;        // grain diameter as a fraction of the crop long edge
+    float grainRoughness;   // 0..1
+    uint  grainSeed;        // deterministic per-image seed; 0 disables identity
     int   useLut;
     int   gamutWarn;
     int   baseLook;
@@ -222,6 +231,85 @@ vec3 applyVibrance(vec3 c, float vibrance) {
     return mix(vec3(luma), c, 1.0 + vibrance * (1.0 - sat));
 }
 
+// Effects (docs/adr/0026) use crop-frame coordinates, not source UVs. The
+// corner-normalised radius fits a centred ellipse to any crop aspect ratio.
+vec3 applyVignette(vec3 c, vec2 frameUV) {
+    if (abs(u.vignetteAmount) < 0.0001)
+        return c;
+    vec2 q = (frameUV - vec2(0.5)) * 2.0;
+    float radius = length(q) * 0.70710678; // corners = 1
+    float inner = u.vignetteMidpoint * 0.85;
+    float outer = mix(inner, 1.0, u.vignetteFeather);
+    float weight = u.vignetteFeather < 0.0001
+                       ? step(inner, radius)
+                       : smoothstep(inner, max(outer, inner + 0.0001), radius);
+    return c * exp2(u.vignetteAmount * weight);
+}
+
+uint grainHash(uvec2 p, uint seed) {
+    uint h = p.x * 0x8da6b343u ^ p.y * 0xd8163841u ^ seed * 0xcb1ab31fu;
+    h ^= h >> 16;
+    h *= 0x7feb352du;
+    h ^= h >> 15;
+    h *= 0x846ca68bu;
+    return h ^ (h >> 16);
+}
+
+float grainRandom(ivec2 p, uint seed) {
+    return float(grainHash(uvec2(p), seed)) / 4294967295.0;
+}
+
+float grainValueNoise(vec2 p, uint seed) {
+    ivec2 cell = ivec2(floor(p));
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = grainRandom(cell, seed);
+    float b = grainRandom(cell + ivec2(1, 0), seed);
+    float c = grainRandom(cell + ivec2(0, 1), seed);
+    float d = grainRandom(cell + ivec2(1, 1), seed);
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+float grainEncode(float v) {
+    return v <= 0.0031308 ? 12.92 * v : 1.055 * pow(v, 1.0 / 2.4) - 0.055;
+}
+
+float grainDecode(float v) {
+    return v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4);
+}
+
+vec3 grainEncode(vec3 c) {
+    return vec3(grainEncode(c.r), grainEncode(c.g), grainEncode(c.b));
+}
+
+vec3 grainDecode(vec3 c) {
+    return vec3(grainDecode(c.r), grainDecode(c.g), grainDecode(c.b));
+}
+
+vec3 applyGrain(vec3 c, vec2 frameUV) {
+    if (u.grainAmount < 0.00001 || u.grainSeed == 0u)
+        return c;
+
+    float cropAspect = u.aspect * (u.effectRect.z - u.effectRect.x)
+                                / max(u.effectRect.w - u.effectRect.y, 0.0001);
+    vec2 longEdgeUV = cropAspect >= 1.0
+                          ? vec2(frameUV.x, frameUV.y / cropAspect)
+                          : vec2(frameUV.x * cropAspect, frameUV.y);
+    vec2 p = longEdgeUV / max(u.grainSize, 0.00001);
+
+    // Value-noise standard deviation is normalised approximately to one. As
+    // Roughness rises, progressively coarser octaves introduce clustered grain.
+    float n0 = (grainValueNoise(p, u.grainSeed) - 0.5) * 4.9;
+    float n1 = (grainValueNoise(p * 0.53 + vec2(17.0), u.grainSeed ^ 0x9e3779b9u) - 0.5) * 4.9;
+    float n2 = (grainValueNoise(p * 0.23 + vec2(41.0), u.grainSeed ^ 0x85ebca6bu) - 0.5) * 4.9;
+    float rough = (0.60 * n0 + 0.30 * n1 + 0.10 * n2) / sqrt(0.46);
+    float noise = mix(n0, rough, u.grainRoughness);
+
+    vec3 encoded = grainEncode(c);
+    encoded += vec3(noise * u.grainAmount);
+    return grainDecode(encoded);
+}
+
 // Display transform: linear Rec.2020 → sRGB display (docs/adr/0002).
 // Columns of the Rec.2020 → Rec.709/sRGB primaries matrix (GLSL is column-major).
 const mat3 kRec2020ToSRGB = mat3(
@@ -337,7 +425,8 @@ vec3 applyLocalAdjustments(vec3 c, vec2 uv, float aspect) {
 // Processing order (the authoritative definition — DESIGN.md mirrors it).
 // Everything up to the final encode operates in linear Rec.2020:
 //   base look → exposure → contrast → tone regions → tone curves
-//   → white balance (gain) → HSL → saturation → vibrance → display transform
+//   → white balance (gain) → HSL → saturation → vibrance → local adjustments
+//   → vignette → grain → display transform
 // Crop/rotation happen earlier in image.vert. For export, displayEncode is
 // 0: the offscreen readback stays in linear working space and the output
 // transform runs on the CPU (lcms2, MainWindow::exportFile).
@@ -373,6 +462,8 @@ void main() {
     // Local adjustments — analytic, single-pass, after the global colour section
     // and before encode (docs/adr/0010).
     c = applyLocalAdjustments(c, vUV, u.aspect);
+    c = applyVignette(c, vFrameUV);
+    c = applyGrain(c, vFrameUV);
 
     if (u.histoRaw != 0) {
         fragColor = vec4(kRec2020ToSRGB * c, 1.0); // pre-clamp sRGB-linear
