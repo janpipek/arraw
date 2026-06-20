@@ -237,6 +237,19 @@ MainWindow::MainWindow(QWidget* parent)
             pushGlobalAdjustmentCommand(before, after);
     });
 
+    connect(
+        viewport,
+        &ImageViewport::orientationCommitted,
+        this,
+        [this](orient::Orientation orientation, const QRectF& cropRect) {
+            GlobalAdjustment before = currentParams();
+            GlobalAdjustment after = before;
+            after.orientation = orientation;
+            after.cropRect = cropRect; // crop rotated/mirrored with the content
+            if (after != before)
+                pushGlobalAdjustmentCommand(before, after);
+        });
+
     connect(viewport, &ImageViewport::whiteBalanceCommitted, this, [this](float kelvin, float tint) {
         GlobalAdjustment before = currentParams();
         GlobalAdjustment after = before;
@@ -602,6 +615,20 @@ void MainWindow::setupToolbar() {
     wbAction = addTool("White Bal.", {});
     maskAction = addTool("Masks", Qt::Key_M);
     spotAction = addTool("Spots", Qt::Key_Q);
+
+    // Coarse Orientation (docs/adr/0025). Momentary actions (not modal tools);
+    // final home is beside the Rotation slider, but the toolbar gives a handle now.
+    tb->addSeparator();
+    auto* rotateCwAction = tb->addAction(tr("Rotate ⟳"));
+    rotateCwAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+]")));
+    connect(rotateCwAction, &QAction::triggered, this, [this] { viewport->rotate90(true); });
+    auto* rotateCcwAction = tb->addAction(tr("Rotate ⟲"));
+    rotateCcwAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+[")));
+    connect(rotateCcwAction, &QAction::triggered, this, [this] { viewport->rotate90(false); });
+    auto* flipHAction = tb->addAction(tr("Flip H"));
+    connect(flipHAction, &QAction::triggered, this, [this] { viewport->flip(true); });
+    auto* flipVAction = tb->addAction(tr("Flip V"));
+    connect(flipVAction, &QAction::triggered, this, [this] { viewport->flip(false); });
 
     connect(toolGroup, &QActionGroup::triggered, this, [this](QAction* a) {
         using T = ImageViewport::ActiveTool;

@@ -31,9 +31,21 @@ Orientation had to fit that invariant rather than break it.
   undo stack, in the sidecar — exactly like Rotation/Crop. RAW and JPEG take one
   path. Applied as an exact corner-permutation/negation of the quad UVs plus an
   aspect swap, *in front of* the unchanged ±45° shader rotation, so 90°/flip are
-  bit-exact (no resampling) and the fragile `image.vert` ↔ `rotateTextureUv`
-  mirror does not grow a new transcendental branch. The buffer-space invariant
-  holds: Spot/masks still see native pixels.
+  bit-exact (no resampling). The buffer-space invariant holds: Spot/masks still
+  see native pixels.
+
+  **Correction (during implementation).** The "shader stays *untouched*" framing
+  did not survive the pipeline. Crop and the ±45° rotation both run in the
+  oriented display frame (`0007`), so Orientation must map the *final* oriented-
+  frame UV → native buffer — it applies to `vUV` *after* the rotation, which can
+  only happen in the shader. Permuting the quad's `aUV` instead fights the
+  crop-in-oriented-frame rule, and a mirror cannot be folded into `cropRect`/
+  `rotation`/`aspect`. So `image.vert` gains ~4 lines applying `orientedToBuffer`
+  to `vUV`, plus two ints (`orientQuarterTurns`, `orientMirrored`) reusing the old
+  `pad_[2]` slot in the std140 block (size unchanged, all offsets preserved). It
+  is still exact and still the *only* arbiter of rotation/orientation; the CPU
+  `viewport::Geometry` mirror applies the identical formula at the identical
+  point, pinned by a buffer↔viewport round-trip test.
 - **Bake orientation into the buffer at decode (rejected).** Keep libraw
   orienting RAW, add `setAutoTransform(true)` for JPEG, treat only the user's
   *extra* 90° turns as an edit. Simpler rendering, but splits "Orientation" across

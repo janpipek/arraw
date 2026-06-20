@@ -92,7 +92,10 @@ QPointF Geometry::viewportToBufferPixel(QPointF pos) const {
     const QPointF cropUV = viewportToCropUv(pos);
     const float fu = float(cropRect.left() + cropUV.x() * cropRect.width());
     const float fv = float(cropRect.top() + cropUV.y() * cropRect.height());
-    const QPointF bufUV = rotateTextureUv(fu, fv, rotation, imageAspect, 0.5f, 0.5f);
+    const QPointF rotUV = rotateTextureUv(fu, fv, rotation, imageAspect, 0.5f, 0.5f);
+    // Orientation maps the oriented-frame UV to the native buffer, after the
+    // rotation — exactly as image.vert does (docs/adr/0025).
+    const QPointF bufUV = orient::orientedToBuffer(rotUV, orientation);
     return {bufUV.x() * originalSize.width(), bufUV.y() * originalSize.height()};
 }
 
@@ -101,7 +104,11 @@ QPointF Geometry::bufferPixelToViewport(QPointF bufPx) const {
         return {};
     const float bu = float(bufPx.x()) / float(originalSize.width());
     const float bv = float(bufPx.y()) / float(originalSize.height());
-    const QPointF fullUV = rotateTextureUv(bu, bv, -rotation, imageAspect, 0.5f, 0.5f);
+    // Undo orientation first (native → oriented frame), then the rotation —
+    // the exact inverse of viewportToBufferPixel / image.vert.
+    const QPointF oriented = orient::bufferToOriented({bu, bv}, orientation);
+    const QPointF fullUV = rotateTextureUv(
+        float(oriented.x()), float(oriented.y()), -rotation, imageAspect, 0.5f, 0.5f);
     const float cu = float((fullUV.x() - cropRect.left()) / cropRect.width());
     const float cv = float((fullUV.y() - cropRect.top()) / cropRect.height());
     return cropUvToViewport(cu, cv);

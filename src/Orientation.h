@@ -31,8 +31,23 @@ int toExif(Orientation o);
 // overlay maths and the renderer.
 QPointF orientedToBuffer(QPointF uv, Orientation o);
 
+// Inverse of orientedToBuffer: map a native-buffer UV back to the oriented
+// display frame. Used by the viewport's buffer→screen mapping so overlays stay
+// in lock-step with the shader (docs/adr/0025).
+QPointF bufferToOriented(QPointF uv, Orientation o);
+
 // True when the orientation swaps width and height (an odd quarter-turn), so
 // callers must invert the image aspect for fitting and the ±45° rotation.
 bool swapsAspect(Orientation o);
+
+// The orientation after turning the *displayed* image 90° clockwise /
+// counter-clockwise. A mirror reverses the turn direction, so this is not a
+// plain increment of quarterTurnsCW (docs/adr/0025).
+Orientation turnedClockwise(Orientation o);
+Orientation turnedCounterClockwise(Orientation o);
+
+// The orientation after mirroring the displayed image horizontally (or, when
+// horizontal is false, vertically — a horizontal mirror plus a 180° turn).
+Orientation flipped(Orientation o, bool horizontal);
 
 } // namespace orient

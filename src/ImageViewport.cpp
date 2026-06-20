@@ -129,7 +129,15 @@ viewport::Geometry ImageViewport::geometry() const {
     g.pan = pan;
     g.cropRect = params.cropRect;
     g.rotation = params.rotation;
+    g.orientation = params.orientation;
     return g;
+}
+
+// The viewport works in the oriented display frame: an odd quarter-turn swaps
+// the image's effective width and height (docs/adr/0025).
+void ImageViewport::updateImageAspect() {
+    imageAspect = orient::swapsAspect(params.orientation) ? 1.0f / nativeImageAspect
+                                                          : nativeImageAspect;
 }
 
 RendererCore::Slot ImageViewport::activeSlot() const {
@@ -604,7 +612,8 @@ void ImageViewport::drawCropOverlay(QPainter& p) const {
 // ── Public setters ────────────────────────────────────────────────────────────
 
 void ImageViewport::setImage(const ImageBuffer& buf, bool baseLook) {
-    imageAspect = buf.valid() ? float(buf.width) / float(buf.height) : 1.0f;
+    nativeImageAspect = buf.valid() ? float(buf.width) / float(buf.height) : 1.0f;
+    updateImageAspect();
     hasImage = buf.valid();
     hasFullRes = false;
     useBaseLook = baseLook;
@@ -629,12 +638,35 @@ void ImageViewport::setAdjustments(const GlobalAdjustment& p) {
         || p.curveB != params.curveB)
         curveLutDirty = true;
     params = p;
+    updateImageAspect(); // orientation may have changed
     if (!cropMode())
         activeCrop = p.cropRect;
     if (hasImage)
         histoTimer.start();
     emit zoomChanged(pixelZoom());
     update();
+}
+
+void ImageViewport::rotate90(bool clockwise) {
+    if (!hasImage)
+        return;
+    const orient::Orientation next = clockwise ? orient::turnedClockwise(params.orientation)
+                                               : orient::turnedCounterClockwise(params.orientation);
+    // Rotate the committed crop with the content so it keeps framing the subject
+    // (docs/adr/0025); the aspect-lock inverts for free (re-derived from the rect).
+    const QRectF crop = crop::rotateQuarterTurns(params.cropRect, clockwise ? 1 : 3);
+    emit orientationCommitted(next, crop);
+}
+
+void ImageViewport::flip(bool horizontal) {
+    if (!hasImage)
+        return;
+    const orient::Orientation next = orient::flipped(params.orientation, horizontal);
+    // Mirror the crop on the same axis so it stays on the same content.
+    const QRectF c = params.cropRect;
+    const QRectF crop = horizontal ? QRectF(1.0 - c.x() - c.width(), c.y(), c.width(), c.height())
+                                   : QRectF(c.x(), 1.0 - c.y() - c.height(), c.width(), c.height());
+    emit orientationCommitted(next, crop);
 }
 
 void ImageViewport::setStraightenActive(bool active) {

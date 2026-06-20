@@ -54,6 +54,42 @@ TEST_CASE("90° CW: display corners sample the native corners turned back") {
     REQUIRE(uvEq(orient::orientedToBuffer({1.0, 0.0}, cw), {0.0, 0.0})); // TR ← native TL
 }
 
+TEST_CASE("turning and flipping compose with the expected group invariants") {
+    for (int exif = 1; exif <= 8; ++exif) {
+        const Orientation o = orient::fromExif(exif);
+        INFO("exif = " << exif);
+        // Four 90° turns return to the start.
+        Orientation t = o;
+        for (int i = 0; i < 4; ++i)
+            t = orient::turnedClockwise(t);
+        REQUIRE(t == o);
+        // CW then CCW is a no-op.
+        REQUIRE(orient::turnedCounterClockwise(orient::turnedClockwise(o)) == o);
+        // Mirroring twice (either axis) returns to the start.
+        REQUIRE(orient::flipped(orient::flipped(o, true), true) == o);
+        REQUIRE(orient::flipped(orient::flipped(o, false), false) == o);
+    }
+}
+
+TEST_CASE("a clockwise turn from identity is a single CW quarter-turn") {
+    REQUIRE(orient::turnedClockwise(Orientation{0, false}) == Orientation{1, false});
+}
+
+TEST_CASE("a horizontal flip from identity sets the mirror") {
+    REQUIRE(orient::flipped(Orientation{0, false}, true) == Orientation{0, true});
+}
+
+TEST_CASE("bufferToOriented inverts orientedToBuffer for every orientation") {
+    const QPointF pts[3] = {{0.3, 0.7}, {0.1, 0.2}, {0.9, 0.55}};
+    for (int exif = 1; exif <= 8; ++exif) {
+        const Orientation o = orient::fromExif(exif);
+        for (const QPointF& p : pts) {
+            INFO("exif = " << exif);
+            REQUIRE(uvEq(orient::bufferToOriented(orient::orientedToBuffer(p, o), o), p));
+        }
+    }
+}
+
 TEST_CASE("only odd quarter-turns swap width and height") {
     REQUIRE_FALSE(orient::swapsAspect(Orientation{0, false}));
     REQUIRE(orient::swapsAspect(Orientation{1, false}));

@@ -48,8 +48,9 @@ struct Ubuf {
     float laColor[64];
     float laGeom2[64];
     qint32 numLocalAdj;
-    qint32 histoRaw; // 1: emit pre-clamp sRGB-linear for overflow histogram
-    qint32 pad_[2];  // round the block up to a 16-byte multiple (std140)
+    qint32 histoRaw;           // 1: emit pre-clamp sRGB-linear for overflow histogram
+    qint32 orientQuarterTurns; // coarse Orientation (docs/adr/0025); was pad_
+    qint32 orientMirrored;     // 1 = horizontal mirror; was pad_
 };
 
 static_assert(sizeof(Ubuf) == 1568);

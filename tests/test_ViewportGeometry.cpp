@@ -45,6 +45,23 @@ TEST_CASE(
     REQUIRE(out.width() / out.height() == Approx(crop.width() / crop.height()));
 }
 
+TEST_CASE("Geometry round-trips viewport<->buffer under a coarse orientation", "[viewportgeometry]") {
+    viewport::Geometry g;
+    g.viewportSize = {1200, 800};
+    g.originalSize = {600, 400};
+    g.imageAspect = 1.5f;
+    g.displayAspect = 1.5f;
+    g.zoom = 1.3f;
+    g.rotation = 6.0f;
+    g.orientation = orient::Orientation{1, true}; // turned + mirrored (EXIF 5)
+
+    const QPointF bufPx(137.0, 222.0);
+    const QPointF vp = g.bufferPixelToViewport(bufPx);
+    const QPointF back = g.viewportToBufferPixel(vp);
+    REQUIRE(back.x() == Approx(bufPx.x()).margin(1e-3));
+    REQUIRE(back.y() == Approx(bufPx.y()).margin(1e-3));
+}
+
 TEST_CASE("Viewport geometry round-trips crop UV through zoom and pan", "[viewportgeometry]") {
     viewport::Geometry g;
     g.viewportSize = {1200, 800};

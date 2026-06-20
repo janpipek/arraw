@@ -44,8 +44,49 @@ QPointF orientedToBuffer(QPointF uv, Orientation o) {
     return {u, v};
 }
 
+QPointF bufferToOriented(QPointF uv, Orientation o) {
+    double u = uv.x();
+    double v = uv.y();
+    // Inverse of orientedToBuffer: rotate forward CW (inverse of its CCW step),
+    // then re-apply the mirror last.
+    for (int i = 0; i < o.quarterTurnsCW; ++i) {
+        const double nu = 1.0 - v;
+        const double nv = u;
+        u = nu;
+        v = nv;
+    }
+    if (o.mirrored)
+        u = 1.0 - u;
+    return {u, v};
+}
+
 bool swapsAspect(Orientation o) {
     return (o.quarterTurnsCW % 2) != 0;
+}
+
+namespace {
+int wrap4(int q) {
+    return ((q % 4) + 4) % 4;
+}
+} // namespace
+
+Orientation turnedClockwise(Orientation o) {
+    // new = rotateCW ∘ (mirror^m ∘ rotateCW^r). With a mirror present,
+    // rotateCW ∘ mirror = mirror ∘ rotateCCW, so the turn direction reverses.
+    return {wrap4(o.quarterTurnsCW + (o.mirrored ? -1 : 1)), o.mirrored};
+}
+
+Orientation turnedCounterClockwise(Orientation o) {
+    return {wrap4(o.quarterTurnsCW + (o.mirrored ? 1 : -1)), o.mirrored};
+}
+
+Orientation flipped(Orientation o, bool horizontal) {
+    // A horizontal mirror is outermost, so it just toggles the mirror flag.
+    Orientation h{o.quarterTurnsCW, !o.mirrored};
+    if (horizontal)
+        return h;
+    // Vertical mirror = horizontal mirror then a 180° turn.
+    return turnedClockwise(turnedClockwise(h));
 }
 
 int toExif(Orientation o) {

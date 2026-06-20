@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Orientation.h"
+
 #include <QPointF>
 #include <QRectF>
 #include <QSize>
@@ -31,6 +33,11 @@ struct Geometry {
     QPointF pan = {0, 0};
     QRectF cropRect = {0, 0, 1, 1};
     float rotation = 0.0f;
+    // imageAspect and displayAspect are the *oriented* aspects (W/H swapped when
+    // the orientation is an odd quarter-turn); originalSize stays the *native*
+    // buffer pixel size. Orientation is applied after the rotation, matching the
+    // shader (docs/adr/0025), so buffer↔viewport stays in lock-step with the GPU.
+    orient::Orientation orientation;
 
     bool hasOriginalSize() const;
     QPointF cropUvToViewport(float u, float v) const;
