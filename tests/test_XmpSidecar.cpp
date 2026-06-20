@@ -2,6 +2,7 @@
 #include "XmpSidecar.h"
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
+#include <QDomDocument>
 #include <QFile>
 #include <QTemporaryDir>
 
@@ -77,6 +78,28 @@ void checkCurveClose(const CurvePoints& a, const CurvePoints& b) {
 TEST_CASE("sidecar path replaces the RAW extension with .xmp", "[xmp]") {
     REQUIRE(XmpSidecar::pathFor("/photos/IMG_0042.ARW") == "/photos/IMG_0042.xmp");
     REQUIRE(XmpSidecar::pathFor("/photos/IMG_0042.dng") == "/photos/IMG_0042.xmp");
+}
+
+TEST_CASE("an existing extension-specific sidecar is used", "[xmp][compatibility]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("catalogued.nef");
+    const QString sidecarPath = rawPath + ".xmp";
+    QFile sidecar(sidecarPath);
+    REQUIRE(sidecar.open(QIODevice::WriteOnly));
+    REQUIRE(sidecar.write(R"xml(<?xml version="1.0"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+      xmp:Rating="2"/>
+  </rdf:RDF>
+</x:xmpmeta>)xml") > 0);
+    sidecar.close();
+
+    CHECK(XmpSidecar::pathFor(rawPath) == sidecarPath);
+    CHECK(XmpSidecar::loadMetadata(rawPath).rating == 2);
+    REQUIRE(XmpSidecar::saveMetadata(rawPath, {5, ColourLabel::Green}));
+    CHECK(XmpSidecar::loadMetadata(rawPath) == UserMetadata{5, ColourLabel::Green});
+    CHECK_FALSE(QFile::exists(dir.filePath("catalogued.xmp")));
 }
 
 TEST_CASE("missing sidecar loads default params", "[xmp]") {
@@ -439,4 +462,36 @@ TEST_CASE("saveAdjustments preserves existing marks", "[xmp][marks]") {
     CHECK(
         XmpSidecar::loadMetadata(rawPath) == UserMetadata{3, ColourLabel::Yellow}); // marks survived
     checkClose(XmpSidecar::loadAdjustments(rawPath), sampleParams());
+}
+
+TEST_CASE("saveMetadata preserves foreign XMP properties", "[xmp][compatibility]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("catalogued.nef");
+    QFile sidecar(XmpSidecar::pathFor(rawPath));
+    REQUIRE(sidecar.open(QIODevice::WriteOnly));
+    REQUIRE(sidecar.write(R"xml(<?xml version="1.0"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description rdf:about=""
+      xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+      xmlns:dc="http://purl.org/dc/elements/1.1/"
+      dc:format="image/x-nikon-nef">
+      <dc:subject><rdf:Bag><rdf:li>Family</rdf:li></rdf:Bag></dc:subject>
+    </rdf:Description>
+  </rdf:RDF>
+</x:xmpmeta>)xml") > 0);
+    sidecar.close();
+
+    REQUIRE(XmpSidecar::saveMetadata(rawPath, {4, ColourLabel::Blue}));
+
+    REQUIRE(sidecar.open(QIODevice::ReadOnly));
+    const QString saved = QString::fromUtf8(sidecar.readAll());
+    CHECK(saved.contains(R"(dc:format="image/x-nikon-nef")"));
+    QDomDocument document;
+    REQUIRE(bool(document.setContent(saved, QDomDocument::ParseOption::UseNamespaceProcessing)));
+    const QDomNodeList subjects
+        = document.elementsByTagNameNS("http://purl.org/dc/elements/1.1/", "subject");
+    REQUIRE(subjects.size() == 1);
+    CHECK(subjects.at(0).toElement().text() == "Family");
+    CHECK(XmpSidecar::loadMetadata(rawPath) == UserMetadata{4, ColourLabel::Blue});
 }

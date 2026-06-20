@@ -1,8 +1,11 @@
 #include "XmpSidecar.h"
 #include <QDir>
+#include <QBuffer>
+#include <QDomDocument>
 #include <QFile>
 #include <QFileInfo>
 #include <QRectF>
+#include <QSaveFile>
 #include <QXmlStreamReader>
 #include <QXmlStreamWriter>
 
@@ -421,14 +424,14 @@ static void writeLocalAdjustments(QXmlStreamWriter& xml, const std::vector<Local
 // Writes the whole sidecar (both develop settings and user metadata) from one
 // SidecarData. The namespace-scoped public saves below read-modify-write through
 // this, so each preserves the half it doesn't touch (docs/adr/0007).
-static bool writeFile(const QString& rawPath, const SidecarData& data) {
+static QByteArray ownedPacket(const SidecarData& data) {
     const GlobalAdjustment& p = data.adjustments;
 
-    QFile f(XmpSidecar::pathFor(rawPath));
-    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate))
-        return false;
+    QByteArray bytes;
+    QBuffer buffer(&bytes);
+    buffer.open(QIODevice::WriteOnly);
 
-    QXmlStreamWriter xml(&f);
+    QXmlStreamWriter xml(&buffer);
     xml.setAutoFormatting(true);
     xml.writeStartDocument();
     xml.writeProcessingInstruction("xpacket", R"(begin="" id="W5M0MpCehiHzreSzNTczkc9d")");
@@ -498,17 +501,162 @@ static bool writeFile(const QString& rawPath, const SidecarData& data) {
     xml.writeProcessingInstruction("xpacket", "end=\"w\"");
     xml.writeEndDocument();
 
-    return f.error() == QFileDevice::NoError;
+    return xml.hasError() ? QByteArray{} : bytes;
+}
+
+enum class SaveScope { Adjustments, Metadata };
+
+static QDomElement firstDescription(QDomDocument& document) {
+    const QDomNodeList descriptions = document.elementsByTagNameNS(kNsRdf, "Description");
+    return descriptions.isEmpty() ? QDomElement{} : descriptions.at(0).toElement();
+}
+
+static bool parseDocument(const QByteArray& bytes, QDomDocument& document) {
+    return bool(document.setContent(bytes, QDomDocument::ParseOption::UseNamespaceProcessing));
+}
+
+static void removeNamespaceContent(QDomNode node, const QString& namespaceUri) {
+    if (node.isElement()) {
+        QDomElement element = node.toElement();
+        QDomNamedNodeMap attributes = element.attributes();
+        for (int i = attributes.size() - 1; i >= 0; --i) {
+            const QDomAttr attribute = attributes.item(i).toAttr();
+            if (attribute.namespaceURI() == namespaceUri)
+                element.removeAttributeNode(attribute);
+        }
+    }
+
+    for (QDomNode child = node.firstChild(); !child.isNull();) {
+        const QDomNode next = child.nextSibling();
+        if (child.isElement() && child.namespaceURI() == namespaceUri)
+            node.removeChild(child);
+        else
+            removeNamespaceContent(child, namespaceUri);
+        child = next;
+    }
+}
+
+static void removeOwnedAttributes(
+    QDomDocument& document, const QString& namespaceUri, const QStringList& names) {
+    const QDomNodeList descriptions = document.elementsByTagNameNS(kNsRdf, "Description");
+    for (int i = 0; i < descriptions.size(); ++i) {
+        QDomElement description = descriptions.at(i).toElement();
+        for (const QString& name : names)
+            description.removeAttributeNS(namespaceUri, name);
+    }
+}
+
+static void removeOwnedElements(
+    QDomDocument& document, const QString& namespaceUri, const QStringList& names) {
+    const QDomNodeList descriptions = document.elementsByTagNameNS(kNsRdf, "Description");
+    for (int i = 0; i < descriptions.size(); ++i) {
+        QDomElement description = descriptions.at(i).toElement();
+        for (QDomNode child = description.firstChild(); !child.isNull();) {
+            const QDomNode next = child.nextSibling();
+            if (child.namespaceURI() == namespaceUri && names.contains(child.localName()))
+                description.removeChild(child);
+            child = next;
+        }
+    }
+}
+
+static void importAttributes(
+    QDomDocument& destination,
+    QDomElement target,
+    const QDomElement& source,
+    const QString& namespaceUri,
+    const QStringList& names = {}) {
+    const QDomNamedNodeMap attributes = source.attributes();
+    for (int i = 0; i < attributes.size(); ++i) {
+        const QDomAttr attribute = attributes.item(i).toAttr();
+        if (attribute.namespaceURI() == namespaceUri
+            && (names.isEmpty() || names.contains(attribute.localName()))) {
+            target.setAttributeNodeNS(destination.importNode(attribute, true).toAttr());
+        }
+    }
+}
+
+static void importElements(
+    QDomDocument& destination,
+    QDomElement target,
+    const QDomElement& source,
+    const QString& namespaceUri,
+    const QStringList& names = {}) {
+    for (QDomNode child = source.firstChild(); !child.isNull(); child = child.nextSibling()) {
+        if (child.namespaceURI() == namespaceUri
+            && (names.isEmpty() || names.contains(child.localName()))) {
+            target.appendChild(destination.importNode(child, true));
+        }
+    }
+}
+
+static bool mergeOwnedPacket(QDomDocument& document, const QByteArray& packet, SaveScope scope) {
+    QDomDocument owned;
+    if (!parseDocument(packet, owned))
+        return false;
+
+    QDomElement target = firstDescription(document);
+    const QDomElement source = firstDescription(owned);
+    if (target.isNull() || source.isNull())
+        return false;
+
+    if (scope == SaveScope::Metadata) {
+        const QStringList names = {"Rating", "Label"};
+        removeOwnedAttributes(document, kNsXmp, names);
+        importAttributes(document, target, source, kNsXmp, names);
+        return true;
+    }
+
+    QStringList crsAttributes;
+    const QDomNamedNodeMap sourceAttributes = source.attributes();
+    for (int i = 0; i < sourceAttributes.size(); ++i) {
+        const QDomAttr attribute = sourceAttributes.item(i).toAttr();
+        if (attribute.namespaceURI() == kNsCrs)
+            crsAttributes.append(attribute.localName());
+    }
+    const QStringList crsElements = {
+        "ToneCurvePV2012", "ToneCurvePV2012Red", "ToneCurvePV2012Green", "ToneCurvePV2012Blue"};
+    removeOwnedAttributes(document, kNsCrs, crsAttributes);
+    removeOwnedElements(document, kNsCrs, crsElements);
+    removeNamespaceContent(document, kNsArraw);
+    importAttributes(document, target, source, kNsCrs);
+    importElements(document, target, source, kNsCrs, crsElements);
+    importAttributes(document, target, source, kNsArraw);
+    importElements(document, target, source, kNsArraw);
+    return true;
+}
+
+static bool writeFile(const QString& rawPath, const SidecarData& data, SaveScope scope) {
+    const QString path = XmpSidecar::pathFor(rawPath);
+    const QByteArray packet = ownedPacket(data);
+    if (packet.isEmpty())
+        return false;
+
+    QByteArray output = packet;
+    if (QFile::exists(path)) {
+        QFile existing(path);
+        if (!existing.open(QIODevice::ReadOnly))
+            return false;
+        QDomDocument document;
+        if (!parseDocument(existing.readAll(), document) || !mergeOwnedPacket(document, packet, scope))
+            return false;
+        output = document.toByteArray(2);
+    }
+
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly) || file.write(output) != output.size())
+        return false;
+    return file.commit();
 }
 
 bool XmpSidecar::saveAdjustments(const QString& rawPath, const GlobalAdjustment& params) {
     SidecarData data = load(rawPath); // preserve any existing xmp: marks
     data.adjustments = params;
-    return writeFile(rawPath, data);
+    return writeFile(rawPath, data, SaveScope::Adjustments);
 }
 
 bool XmpSidecar::saveMetadata(const QString& rawPath, const UserMetadata& metadata) {
     SidecarData data = load(rawPath); // preserve any existing crs: edits
     data.metadata = metadata;
-    return writeFile(rawPath, data);
+    return writeFile(rawPath, data, SaveScope::Metadata);
 }
