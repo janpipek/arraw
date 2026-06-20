@@ -28,6 +28,43 @@ Orientation fromExif(int exif) {
     }
 }
 
+Orientation fromLibrawFlip(int flip) {
+    switch (flip) {
+    case 3:
+        return {2, false}; // 180°
+    case 5:
+        return {3, false}; // 90° CCW
+    case 6:
+        return {1, false}; // 90° CW
+    default:
+        return {0, false}; // 0 / unknown
+    }
+}
+
+Orientation fromQtTransformation(int transformFlags) {
+    // QImageIOHandler::Transformation bits: Mirror=1, Flip=2, Rotate90=4.
+    enum { Mirror = 1, Flip = 2, Rotate90 = 4 };
+
+    switch (transformFlags) {
+    case Mirror:
+        return fromExif(2);
+    case Mirror | Flip:
+        return fromExif(3);
+    case Flip:
+        return fromExif(4);
+    case Mirror | Rotate90:
+        return fromExif(5);
+    case Rotate90:
+        return fromExif(6);
+    case Flip | Rotate90:
+        return fromExif(7);
+    case Mirror | Flip | Rotate90:
+        return fromExif(8);
+    default:
+        return fromExif(1);
+    }
+}
+
 QPointF orientedToBuffer(QPointF uv, Orientation o) {
     double u = uv.x();
     double v = uv.y();

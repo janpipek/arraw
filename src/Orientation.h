@@ -23,6 +23,14 @@ Orientation fromExif(int exif);
 // Canonical Orientation → EXIF / tiff:Orientation value (1..8).
 int toExif(Orientation o);
 
+// libraw's imgdata.sizes.flip (0/3/5/6) → Orientation. libraw encodes only the
+// four pure rotations: 0=none, 3=180°, 5=90° CCW, 6=90° CW.
+Orientation fromLibrawFlip(int flip);
+
+// Qt's QImageReader::transformation() flags (QImageIOHandler::Transformation,
+// Mirror=1, Flip=2, Rotate90=4) → Orientation, via the EXIF value they encode.
+Orientation fromQtTransformation(int transformFlags);
+
 // Map a point in the *oriented display frame's* UV [0,1]² to the UV it samples
 // from in the *native buffer*. The inverse of the display transform (which is
 // "rotate CW by quarterTurnsCW, then mirror horizontally if mirrored"), so it is

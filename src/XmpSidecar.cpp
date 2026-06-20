@@ -52,23 +52,28 @@ QString XmpSidecar::pathFor(const QString& rawPath) {
     return fi.dir().filePath(fi.completeBaseName() + ".xmp");
 }
 
-GlobalAdjustment XmpSidecar::resolveAdjustments(const QString& rawPath, const QRectF& defaultCrop) {
-    return resolveAdjustmentsWithStatus(rawPath, defaultCrop).adjustments;
+GlobalAdjustment XmpSidecar::resolveAdjustments(
+    const QString& rawPath, const QRectF& defaultCrop, orient::Orientation seededOrientation) {
+    return resolveAdjustmentsWithStatus(rawPath, defaultCrop, seededOrientation).adjustments;
 }
 
-SidecarLoadResult XmpSidecar::resolveForImage(const QString& rawPath, const QRectF& defaultCrop) {
+SidecarLoadResult XmpSidecar::resolveForImage(
+    const QString& rawPath, const QRectF& defaultCrop, orient::Orientation seededOrientation) {
     SidecarLoadResult loaded = loadWithStatus(rawPath);
-    if (loaded.status == SidecarLoadStatus::Loaded)
-        return loaded;
-
-    loaded.data = {};
-    loaded.data.adjustments.cropRect = defaultCrop;
+    if (loaded.status != SidecarLoadStatus::Loaded) {
+        loaded.data = {};
+        loaded.data.adjustments.cropRect = defaultCrop;
+    }
+    // Precedence (docs/adr/0025): a stored tiff:Orientation wins; otherwise seed
+    // from the file's EXIF — also the migration path for pre-orientation sidecars.
+    if (!loaded.data.orientationStored)
+        loaded.data.adjustments.orientation = seededOrientation;
     return loaded;
 }
 
 SidecarAdjustmentResult XmpSidecar::resolveAdjustmentsWithStatus(
-    const QString& rawPath, const QRectF& defaultCrop) {
-    const SidecarLoadResult loaded = resolveForImage(rawPath, defaultCrop);
+    const QString& rawPath, const QRectF& defaultCrop, orient::Orientation seededOrientation) {
+    const SidecarLoadResult loaded = resolveForImage(rawPath, defaultCrop, seededOrientation);
     return {loaded.data.adjustments, loaded.status};
 }
 
@@ -279,8 +284,10 @@ SidecarLoadResult XmpSidecar::loadWithStatus(const QString& rawPath) {
             if (auto o = xml.attributes().value(kNsTiff, "Orientation"); !o.isEmpty()) {
                 bool ok = false;
                 const int exif = o.toInt(&ok);
-                if (ok)
+                if (ok) {
                     p.orientation = orient::fromExif(exif);
+                    data.orientationStored = true;
+                }
             }
             // crs stores the crop as normalised edges (left/top/right/bottom),
             // QRectF wants x/y/width/height.

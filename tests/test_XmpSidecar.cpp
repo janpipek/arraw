@@ -84,6 +84,26 @@ TEST_CASE("orientation round-trips through the sidecar as tiff:Orientation", "[x
     REQUIRE(loaded.orientation == p.orientation);
 }
 
+TEST_CASE("orientation seeds from EXIF when the sidecar has none", "[xmp]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("nosidecar.arw"); // no .xmp on disk
+    const orient::Orientation seed{1, false};
+    const GlobalAdjustment p = XmpSidecar::resolveAdjustments(rawPath, QRectF(0, 0, 1, 1), seed);
+    REQUIRE(p.orientation == seed);
+}
+
+TEST_CASE("a stored orientation wins over the EXIF seed", "[xmp]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("stored.arw");
+    GlobalAdjustment saved;
+    saved.orientation = orient::Orientation{2, false}; // 180°, explicitly stored
+    REQUIRE(XmpSidecar::saveAdjustments(rawPath, saved));
+    // Resolve with a *different* seed — the stored value must win.
+    const GlobalAdjustment p
+        = XmpSidecar::resolveAdjustments(rawPath, QRectF(0, 0, 1, 1), orient::Orientation{1, true});
+    REQUIRE(p.orientation == saved.orientation);
+}
+
 TEST_CASE("sidecar path replaces the RAW extension with .xmp", "[xmp]") {
     REQUIRE(XmpSidecar::pathFor("/photos/IMG_0042.ARW") == "/photos/IMG_0042.xmp");
     REQUIRE(XmpSidecar::pathFor("/photos/IMG_0042.dng") == "/photos/IMG_0042.xmp");

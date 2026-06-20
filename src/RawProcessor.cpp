@@ -129,6 +129,9 @@ LoadResult RawProcessor::load(
 
     raw->imgdata.params.use_camera_wb = 1;
     raw->imgdata.params.no_auto_bright = 1;
+    // Decode in the *native* sensor orientation; Orientation is a develop edit
+    // applied downstream, seeded from the camera flag below (docs/adr/0025).
+    raw->imgdata.params.user_flip = 0;
     raw->imgdata.params.output_bps = 16;
     raw->imgdata.params.output_color = 8; // Rec.2020 working space (needs libraw ≥ 0.21)
     raw->imgdata.params.gamm[0] = 1.0;    // linear gamma
@@ -161,9 +164,11 @@ LoadResult RawProcessor::load(
     timer.lap("raw make+convert");
 
     const QRectF defaultCrop = defaultCropRect(*raw, fullRes.width, fullRes.height);
+    // What the camera intended (its flip code), used to seed the Orientation edit.
+    const orient::Orientation seeded = orient::fromLibrawFlip(raw->imgdata.sizes.flip);
     normalizeExposure(fullRes);
     timer.lap("raw normalize");
     ImageBuffer preview = downsample2x(fullRes);
     timer.lap("raw downsample");
-    return {std::move(fullRes), std::move(preview), metadata, {}, defaultCrop};
+    return {std::move(fullRes), std::move(preview), metadata, {}, defaultCrop, seeded};
 }

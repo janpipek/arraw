@@ -90,6 +90,10 @@ struct LoadResult {
     ImageMetadata metadata;
     QString error; // non-empty on failure
     QRectF defaultCrop = {0.0, 0.0, 1.0, 1.0};
+    // Coarse Orientation read from the file's EXIF/camera flag, used to seed the
+    // develop edit when the sidecar has none (docs/adr/0025). The decoded buffer
+    // stays in native orientation — this only records what the camera intended.
+    orient::Orientation seededOrientation = {};
 };
 
 // Box-filter 2× downsample (half W, half H). Safe to call off the main thread.

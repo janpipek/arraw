@@ -79,6 +79,23 @@ TEST_CASE("a horizontal flip from identity sets the mirror") {
     REQUIRE(orient::flipped(Orientation{0, false}, true) == Orientation{0, true});
 }
 
+TEST_CASE("fromLibrawFlip maps libraw's rotation codes") {
+    REQUIRE(orient::fromLibrawFlip(0) == Orientation{0, false}); // none
+    REQUIRE(orient::fromLibrawFlip(3) == Orientation{2, false}); // 180°
+    REQUIRE(orient::fromLibrawFlip(6) == Orientation{1, false}); // 90° CW
+    REQUIRE(orient::fromLibrawFlip(5) == Orientation{3, false}); // 90° CCW
+}
+
+TEST_CASE("fromQtTransformation maps Qt's flag combos through EXIF") {
+    // Mirror=1, Flip=2, Rotate90=4 (QImageIOHandler::Transformation).
+    REQUIRE(orient::fromQtTransformation(0) == orient::fromExif(1));         // none
+    REQUIRE(orient::fromQtTransformation(1) == orient::fromExif(2));         // mirror
+    REQUIRE(orient::fromQtTransformation(2 | 1) == orient::fromExif(3));     // 180
+    REQUIRE(orient::fromQtTransformation(2) == orient::fromExif(4));         // flip
+    REQUIRE(orient::fromQtTransformation(4) == orient::fromExif(6));         // rotate 90 CW
+    REQUIRE(orient::fromQtTransformation(4 | 2 | 1) == orient::fromExif(8)); // rotate 270
+}
+
 TEST_CASE("bufferToOriented inverts orientedToBuffer for every orientation") {
     const QPointF pts[3] = {{0.3, 0.7}, {0.1, 0.2}, {0.9, 0.55}};
     for (int exif = 1; exif <= 8; ++exif) {
