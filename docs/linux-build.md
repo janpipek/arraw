@@ -282,8 +282,10 @@ are pinned to full commit SHAs and Dependabot proposes pin updates. Creating and
 verifying the protected environment is tracked in
 [GitHub issue #38](https://github.com/janpipek/arraw/issues/38).
 
-The workflow attests the selected artifacts before publishing. Verify a downloaded
-file's provenance with:
+Build-provenance attestation is temporarily disabled while the repository is private
+(attestations are only publicly verifiable for public repos); the `actions/attest`
+step in the release workflow is gated off. Once the repository is public the step
+will be re-enabled, and a downloaded file's provenance can be verified with:
 
 ```bash
 gh attestation verify arraw-0.1.0-1.fc44.x86_64.rpm --repo janpipek/arraw

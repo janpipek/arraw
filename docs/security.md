@@ -14,8 +14,10 @@ will define private reporting and supported-version policy.
 - **Current mitigation:** Publication is manual, routed through the `release`
   environment, and write permission is limited to the publish job. Repository
   maintainers must configure that environment to require review. Existing assets
-  require an explicit replacement input. Checksums and provenance attestations make
-  replacement detectable to users who verify them.
+  require an explicit replacement input. Checksums make replacement detectable to
+  users who verify them. Build-provenance attestations are temporarily disabled
+  while the repository is private (see "Build-provenance attestations disabled while
+  private" below).
 - **Intended resolution:** Enable GitHub release immutability, upload complete
   releases as drafts, and publish once. Treat corrections as new releases.
 
@@ -39,8 +41,9 @@ will define private reporting and supported-version policy.
 - **Surface:** Self-hosted Fedora RPM and future native packages.
 - **Threat:** Package-manager workflows cannot authenticate an unsigned RPM through
   a project signing key.
-- **Current mitigation:** HTTPS transport through GitHub Releases, published
-  SHA-256 checksums, and GitHub build-provenance attestations.
+- **Current mitigation:** HTTPS transport through GitHub Releases and published
+  SHA-256 checksums. GitHub build-provenance attestations are temporarily disabled
+  while the repository is private (see below).
 - **Intended resolution:** Sign repository metadata and packages when COPR or
   another package repository is introduced. Document key rotation and revocation.
 
@@ -52,8 +55,8 @@ will define private reporting and supported-version policy.
   artifacts without a source change.
 - **Current mitigation:** GitHub Actions are pinned to full commit SHAs. Build jobs
   have read-only repository permissions. Fedora package builds are offline after
-  declared build dependencies are installed. Release artifacts receive provenance
-  attestations.
+  declared build dependencies are installed. Release artifacts will receive provenance
+  attestations again once the repository is public (currently disabled; see below).
 - **Intended resolution:** Pin and verify downloadable tools by digest, assess
   snapshot repositories or dependency manifests for reproducible builds, and add
   controlled automation for dependency-pin updates.
@@ -64,9 +67,27 @@ will define private reporting and supported-version policy.
 - **Threat:** Provenance identifies where an artifact was built but independent
   rebuilds cannot yet prove that the same source and inputs produce identical bytes.
 - **Current mitigation:** Builds start from an exact tag, validate version agreement,
-  and publish checksums plus provenance.
+  and publish checksums. Provenance attestations are temporarily disabled while the
+  repository is private (see below).
 - **Intended resolution:** Normalize timestamps and archive ordering, pin complete
   build inputs, and compare independent rebuilds.
+
+### Build-provenance attestations disabled while private
+
+- **Status:** Open — deferred until the repository is public.
+- **Surface:** AppImage, RPM, and SRPM release artifacts.
+- **Threat:** Without attestations, consumers cannot cryptographically verify which
+  workflow and commit produced an artifact; provenance claims elsewhere in this
+  register are not currently enforceable end to end.
+- **Reason disabled:** GitHub build-provenance attestations are only publicly
+  verifiable for public repositories (or with GitHub Advanced Security). While
+  `arraw` is private, the `actions/attest` step is gated off in
+  `.github/workflows/release.yml`.
+- **Current mitigation:** Published SHA-256 checksums let downloaders detect
+  tampering; release dispatch and publication remain manually authorized.
+- **Intended resolution:** Re-enable the "Generate build-provenance attestations"
+  step and restore the `id-token: write` / `attestations: write` permissions in the
+  `attest` job when the repository is made public.
 
 ## Resolved or actively enforced controls
 
