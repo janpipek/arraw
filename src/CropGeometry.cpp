@@ -8,7 +8,12 @@
 
 namespace crop {
 
-QSize cropPixelSize(int fullWidth, int fullHeight, const QRectF& cropRect) {
+QSize cropPixelSize(
+    int fullWidth, int fullHeight, const QRectF& cropRect, orient::Orientation orientation) {
+    // The crop is normalised in the oriented display frame, so an odd quarter-turn
+    // presents the buffer with its width and height swapped (docs/adr/0028).
+    if (orient::swapsAspect(orientation))
+        std::swap(fullWidth, fullHeight);
     return {int(fullWidth * cropRect.width() + 0.5), int(fullHeight * cropRect.height() + 0.5)};
 }
 
@@ -126,6 +131,18 @@ PresetMatch matchPreset(double pixelRatio, double imageAspect) {
         }
     }
     return {AspectPreset::Free, true, false};
+}
+
+QRectF rotateQuarterTurns(const QRectF& cropRect, int quarterTurnsCW) {
+    QRectF r = cropRect;
+    const int turns = ((quarterTurnsCW % 4) + 4) % 4; // normalise to 0..3
+    for (int i = 0; i < turns; ++i) {
+        // One CW step maps a point (u,v) → (1-v,u). The two opposite corners
+        // (x,y) and (x+w,y+h) become (1-y,x) and (1-(y+h),x+w); the new
+        // axis-aligned rect takes the min corner and swaps the extents.
+        r = QRectF(1.0 - (r.y() + r.height()), r.x(), r.height(), r.width());
+    }
+    return r;
 }
 
 } // namespace crop

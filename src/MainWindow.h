@@ -65,7 +65,7 @@ public:
 protected:
     void closeEvent(QCloseEvent* e) override;
     void keyPressEvent(QKeyEvent* e) override;
-    void changeEvent(QEvent* e) override; // tracks WM-driven fullscreen state (docs/adr/0025)
+    void changeEvent(QEvent* e) override; // tracks WM-driven fullscreen state (docs/adr/0027)
 
 private slots:
     void openFile();
@@ -191,7 +191,7 @@ private:
 
     // Settings Propagation state (Milestone 8).
     std::optional<SettingsClipboard> settingsClipboard; // session-only, never the OS clipboard
-    GroupSelection lastCopySelection = allGroups();     // remembers the last checklist
+    GroupSelection lastCopySelection = defaultCopySelection(); // Geometry off by default
     PresetStore presetStore;
     QMenu* presetsMenu = nullptr;
 

@@ -316,6 +316,8 @@ void RendererCore::fillUbuf(Ubuf& ub, const FrameParams& fp) const {
     const SharedUniform g = toUniform(a);
     ub.rotation = a.rotation;
     ub.aspect = fp.aspect;
+    ub.orientQuarterTurns = a.orientation.quarterTurnsCW;
+    ub.orientMirrored = a.orientation.mirrored ? 1 : 0;
     ub.exposure = g.exposure;
     ub.contrast = g.contrast;
     ub.highlights = g.highlights;

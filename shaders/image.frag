@@ -57,6 +57,8 @@ layout(std140, binding = 0) uniform buf {
     vec4  laGeom2[16];
     int   numLocalAdj;
     int   histoRaw;  // 1: output pre-clamp sRGB-linear for overflow binning
+    int   orientQuarterTurns; // coarse Orientation (docs/adr/0028); unused in frag
+    int   orientMirrored;
 } u;
 
 layout(binding = 1) uniform sampler2D uTexture;

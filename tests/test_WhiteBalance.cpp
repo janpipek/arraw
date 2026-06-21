@@ -60,7 +60,7 @@ TEST_CASE("picker round-trips Kelvin and tint", "[whitebalance]") {
         float k, tint;
         whiteBalanceFromNeutral(r, gr, b, k, tint);
         INFO("K=" << c[0] << " tint=" << c[1] << " -> k=" << k << " tint=" << tint);
-        CHECK_THAT(k, WithinAbs(c[0], 50.0));    // within 50 K
-        CHECK_THAT(tint, WithinAbs(c[1], 1.0));  // within 1 tint unit
+        CHECK_THAT(k, WithinAbs(c[0], 50.0));   // within 50 K
+        CHECK_THAT(tint, WithinAbs(c[1], 1.0)); // within 1 tint unit
     }
 }

@@ -43,6 +43,12 @@ public:
     void setAdjustments(const GlobalAdjustment& p);
     void setStraightenActive(bool active);
 
+    // Coarse Orientation edits (docs/adr/0028): turn 90° or mirror the image,
+    // rotating the committed crop to match, and emit orientationCommitted so the
+    // change lands as one undo step. No-op without an image.
+    void rotate90(bool clockwise);
+    void flip(bool horizontal);
+
     // Constrain the crop being edited to a fixed aspect ratio. Reshapes the
     // current crop to the new ratio immediately (shrink-to-fit, centred). No
     // effect unless the crop tool is active. The constraint persists with the
@@ -118,7 +124,10 @@ public:
 signals:
     void fullResNeeded();
     void cropCommitted(const QRectF& cropRect, bool constrained);
-    void rotationCommitted(float degrees);                // Straighten tool result
+    void rotationCommitted(float degrees); // Straighten tool result
+    // Coarse Orientation changed (Rotate 90° / Flip), with the crop rotated to
+    // match (docs/adr/0028). One signal so MainWindow folds it into one undo.
+    void orientationCommitted(orient::Orientation orientation, const QRectF& cropRect);
     void whiteBalanceCommitted(float kelvin, float tint); // WB picker result
     void activeToolChanged(ImageViewport::ActiveTool tool);
     // Live geometry of the active mask (either type) while its handles are dragged.
@@ -237,7 +246,12 @@ private:
 
     // ── Image state ───────────────────────────────────────────────────────
     GlobalAdjustment params;
-    float imageAspect = 1.0f; // width/height of the full uncropped image
+    // imageAspect is the *oriented* aspect (W/H swapped for an odd quarter-turn
+    // Orientation); nativeImageAspect is the buffer's own, before orientation.
+    // The whole viewport reasons in the oriented display frame (docs/adr/0028).
+    float imageAspect = 1.0f;
+    float nativeImageAspect = 1.0f;
+    void updateImageAspect(); // recompute imageAspect from native + orientation
     int originalWidth = 0;
     int originalHeight = 0;
     bool hasImage = false;

@@ -250,7 +250,7 @@ just rpm-smoke
 
 That command uses Podman by default (Docker is also accepted), installs the RPM in a
 clean `fedora:44` container, runs `arraw --version` offscreen, and checks its desktop
-MIME registration. See [ADR 0025](adr/0025-self-hosted-fedora-rpm.md) for the design
+MIME registration. See [ADR 0029](adr/0029-self-hosted-fedora-rpm.md) for the design
 and [the security risk register](security.md) for unsigned-package and release risks.
 
 ## 9. Quick reference

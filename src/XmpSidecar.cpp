@@ -19,6 +19,7 @@ static constexpr char kNsXmp[] = "http://ns.adobe.com/xap/1.0/";
 // arraw-native develop data that has no Lightroom equivalent — local adjustments
 // (docs/adr/0010). Versioned in the URI like Adobe's namespaces.
 static constexpr char kNsArraw[] = "http://ns.arraw.app/1.0/";
+static constexpr char kNsTiff[] = "http://ns.adobe.com/tiff/1.0/";
 
 namespace {
 
@@ -80,23 +81,28 @@ QString XmpSidecar::pathFor(const QString& rawPath) {
     return resolveSidecarPath(rawPath).path;
 }
 
-GlobalAdjustment XmpSidecar::resolveAdjustments(const QString& rawPath, const QRectF& defaultCrop) {
-    return resolveAdjustmentsWithStatus(rawPath, defaultCrop).adjustments;
+GlobalAdjustment XmpSidecar::resolveAdjustments(
+    const QString& rawPath, const QRectF& defaultCrop, orient::Orientation seededOrientation) {
+    return resolveAdjustmentsWithStatus(rawPath, defaultCrop, seededOrientation).adjustments;
 }
 
-SidecarLoadResult XmpSidecar::resolveForImage(const QString& rawPath, const QRectF& defaultCrop) {
+SidecarLoadResult XmpSidecar::resolveForImage(
+    const QString& rawPath, const QRectF& defaultCrop, orient::Orientation seededOrientation) {
     SidecarLoadResult loaded = loadWithStatus(rawPath);
-    if (loaded.status == SidecarLoadStatus::Loaded)
-        return loaded;
-
-    loaded.data = {};
-    loaded.data.adjustments.cropRect = defaultCrop;
+    if (loaded.status != SidecarLoadStatus::Loaded) {
+        loaded.data = {};
+        loaded.data.adjustments.cropRect = defaultCrop;
+    }
+    // Precedence (docs/adr/0028): a stored tiff:Orientation wins; otherwise seed
+    // from the file's EXIF — also the migration path for pre-orientation sidecars.
+    if (!loaded.data.orientationStored)
+        loaded.data.adjustments.orientation = seededOrientation;
     return loaded;
 }
 
 SidecarAdjustmentResult XmpSidecar::resolveAdjustmentsWithStatus(
-    const QString& rawPath, const QRectF& defaultCrop) {
-    const SidecarLoadResult loaded = resolveForImage(rawPath, defaultCrop);
+    const QString& rawPath, const QRectF& defaultCrop, orient::Orientation seededOrientation) {
+    const SidecarLoadResult loaded = resolveForImage(rawPath, defaultCrop, seededOrientation);
     return {loaded.data.adjustments, loaded.status};
 }
 
@@ -303,7 +309,7 @@ SidecarLoadResult XmpSidecar::loadWithStatus(const QString& rawPath) {
             p.saturation = attr("Saturation", 0.0f);
             p.vibrance = attr("Vibrance", 0.0f);
             p.sharpening = attr("Sharpness", 0.0f);
-            p.rotation = attr("StraightenAngle", 0.0f);
+            p.rotation = attr("CropAngle", 0.0f);
             p.vignetteAmount = attr("PostCropVignetteAmount", 0.0f);
             p.vignetteMidpoint = attr("PostCropVignetteMidpoint", 50.0f);
             p.vignetteFeather = attr("PostCropVignetteFeather", 50.0f);
@@ -315,6 +321,17 @@ SidecarLoadResult XmpSidecar::loadWithStatus(const QString& rawPath) {
                 const auto value = seed.toUInt(&ok);
                 if (ok)
                     p.grainSeed = value;
+            }
+            // Coarse orientation: the standard EXIF/tiff enum. Absent means the
+            // decode layer seeds it from EXIF instead (docs/adr/0028), so leave
+            // the default identity here when the attribute is missing.
+            if (auto o = xml.attributes().value(kNsTiff, "Orientation"); !o.isEmpty()) {
+                bool ok = false;
+                const int exif = o.toInt(&ok);
+                if (ok) {
+                    p.orientation = orient::fromExif(exif);
+                    data.orientationStored = true;
+                }
             }
             // crs stores the crop as normalised edges (left/top/right/bottom),
             // QRectF wants x/y/width/height.
@@ -492,6 +509,7 @@ static QByteArray ownedPacket(const SidecarData& data) {
     xml.writeNamespace(kNsCrs, "crs");
     xml.writeNamespace(kNsXmp, "xmp");
     xml.writeNamespace(kNsArraw, "arraw");
+    xml.writeNamespace(kNsTiff, "tiff");
     xml.writeStartElement(kNsRdf, "Description");
     xml.writeAttribute(kNsRdf, "about", "");
 
@@ -516,7 +534,7 @@ static QByteArray ownedPacket(const SidecarData& data) {
     write("Saturation", p.saturation);
     write("Vibrance", p.vibrance);
     write("Sharpness", p.sharpening);
-    write("StraightenAngle", p.rotation);
+    write("CropAngle", p.rotation); // Adobe's real straighten field (docs/adr/0028)
     write("PostCropVignetteAmount", p.vignetteAmount);
     write("PostCropVignetteMidpoint", p.vignetteMidpoint);
     write("PostCropVignetteFeather", p.vignetteFeather);
@@ -530,6 +548,8 @@ static QByteArray ownedPacket(const SidecarData& data) {
     write("CropRight", float(p.cropRect.right()));
     write("CropBottom", float(p.cropRect.bottom()));
     xml.writeAttribute(kNsCrs, "CropConstrainAspectRatio", p.cropConstrained ? "True" : "False");
+    // Coarse orientation as the standard EXIF/tiff enum 1..8 (docs/adr/0028).
+    xml.writeAttribute(kNsTiff, "Orientation", QString::number(orient::toExif(p.orientation)));
 
     // HSL
     for (int i = 0; i < 8; ++i) {

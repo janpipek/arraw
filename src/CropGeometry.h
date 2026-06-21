@@ -1,4 +1,6 @@
 #pragma once
+#include "Orientation.h"
+
 #include <QRectF>
 #include <QSize>
 
@@ -9,8 +11,11 @@ namespace crop {
 
 // Pixel dimensions of the kept region: the full-image pixel size scaled by the
 // normalised crop rectangle, rounded to the nearest pixel. Matches what the
-// export pipeline writes, so the overlay readout cannot disagree with it.
-QSize cropPixelSize(int fullWidth, int fullHeight, const QRectF& cropRect);
+// export pipeline writes, so the overlay readout cannot disagree with it. An odd
+// quarter-turn Orientation swaps the full dims first, since the crop is
+// normalised in the oriented frame (docs/adr/0028).
+QSize cropPixelSize(
+    int fullWidth, int fullHeight, const QRectF& cropRect, orient::Orientation orientation = {});
 
 // Largest rectangle of the given pixel aspect ratio (width:height) that fits
 // inside `rect`, keeping its centre — the reshape applied when an Aspect Ratio
@@ -57,5 +62,13 @@ struct PresetMatch {
 };
 
 PresetMatch matchPreset(double pixelRatio, double imageAspect);
+
+// Rotate a normalised crop rectangle by `quarterTurnsCW` 90° clockwise steps
+// within the unit square, so it keeps framing the same subject when the image is
+// turned (CONTEXT.md: Orientation rotates the crop with the content). A single
+// CW step maps a point (u,v) → (1-v,u); width and height swap. The result is
+// axis-aligned and normalised; the aspect-lock ratio is re-derived from it by the
+// caller (docs/adr/0021), so no separate lock handling is needed here.
+QRectF rotateQuarterTurns(const QRectF& cropRect, int quarterTurnsCW);
 
 } // namespace crop

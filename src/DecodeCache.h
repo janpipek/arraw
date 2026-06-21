@@ -38,8 +38,8 @@ private:
     static size_t sizeOf(const LoadResult& r);
     void evictToBudget();
 
-    std::list<Entry> entries;                          // most- to least-recently-used
-    QHash<QString, std::list<Entry>::iterator> index;  // key → position in entries
+    std::list<Entry> entries;                         // most- to least-recently-used
+    QHash<QString, std::list<Entry>::iterator> index; // key → position in entries
     size_t totalBytes = 0;
     size_t budget;
     QString pinnedKey;

@@ -23,8 +23,8 @@ TEST_CASE("DevelopSession stores a loaded image as clean active state", "[develo
     GlobalAdjustment params;
     params.exposure = 1.25f;
 
-    session.setLoadedImage(
-        "/photos/IMG_0001.dng", result, params, DevelopSession::SidecarState::Loaded);
+    session
+        .setLoadedImage("/photos/IMG_0001.dng", result, params, DevelopSession::SidecarState::Loaded);
 
     CHECK(session.loadState() == DevelopSession::LoadState::Loaded);
     CHECK(session.sidecarState() == DevelopSession::SidecarState::Loaded);
@@ -41,16 +41,16 @@ TEST_CASE("DevelopSession stores a loaded image as clean active state", "[develo
     CHECK_FALSE(session.metadataDirty());
 }
 
-TEST_CASE("DevelopSession tracks dirty develop edits against the saved baseline",
-          "[develop-session]") {
+TEST_CASE(
+    "DevelopSession tracks dirty develop edits against the saved baseline", "[develop-session]") {
     DevelopSession session;
     LoadResult result;
     result.preview = ImageBuffer{{0.1f, 0.2f, 0.3f}, 1, 1};
 
     GlobalAdjustment saved;
     saved.exposure = 0.5f;
-    session.setLoadedImage(
-        "/photos/IMG_0001.dng", result, saved, DevelopSession::SidecarState::Loaded);
+    session
+        .setLoadedImage("/photos/IMG_0001.dng", result, saved, DevelopSession::SidecarState::Loaded);
 
     GlobalAdjustment edited = saved;
     edited.exposure = 1.0f;
@@ -66,16 +66,12 @@ TEST_CASE("DevelopSession tracks dirty develop edits against the saved baseline"
     CHECK_FALSE(session.metadataDirty());
 }
 
-TEST_CASE("DevelopSession tracks local adjustments as canonical develop edits",
-          "[develop-session]") {
+TEST_CASE("DevelopSession tracks local adjustments as canonical develop edits", "[develop-session]") {
     DevelopSession session;
     LoadResult result;
     result.preview = ImageBuffer{{0.1f, 0.2f, 0.3f}, 1, 1};
     session.setLoadedImage(
-        "/photos/IMG_0001.dng",
-        result,
-        GlobalAdjustment{},
-        DevelopSession::SidecarState::Loaded);
+        "/photos/IMG_0001.dng", result, GlobalAdjustment{}, DevelopSession::SidecarState::Loaded);
 
     LocalAdjustment adjustment;
     adjustment.exposure = 0.75f;
@@ -116,8 +112,9 @@ TEST_CASE("DevelopSession tracks user metadata dirty state separately", "[develo
     CHECK_FALSE(session.metadataDirty());
 }
 
-TEST_CASE("DevelopSession records sidecar write failures without clearing dirty state",
-          "[develop-session]") {
+TEST_CASE(
+    "DevelopSession records sidecar write failures without clearing dirty state",
+    "[develop-session]") {
     DevelopSession session;
     LoadResult result;
     result.preview = ImageBuffer{{0.1f, 0.2f, 0.3f}, 1, 1};
@@ -173,17 +170,15 @@ TEST_CASE("DevelopSession successful saves mark the sidecar loaded", "[develop-s
     CHECK_FALSE(session.metadataDirty());
 }
 
-TEST_CASE("DevelopSession exposes spot-applied buffers by display and export intent",
-          "[develop-session]") {
+TEST_CASE(
+    "DevelopSession exposes spot-applied buffers by display and export intent",
+    "[develop-session]") {
     DevelopSession session;
     LoadResult result;
     result.preview = ImageBuffer{{0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f}, 2, 1};
     result.fullRes = result.preview;
     session.setLoadedImage(
-        "/photos/IMG_0001.dng",
-        result,
-        GlobalAdjustment{},
-        DevelopSession::SidecarState::Loaded);
+        "/photos/IMG_0001.dng", result, GlobalAdjustment{}, DevelopSession::SidecarState::Loaded);
 
     Spot spot;
     spot.destination = {0.0, 0.0};
@@ -198,33 +193,19 @@ TEST_CASE("DevelopSession exposes spot-applied buffers by display and export int
     CHECK(session.fullResForExport().data[0] == 1.0f);
 }
 
-TEST_CASE("DevelopSession scales full-res spot coordinates for preview display",
-          "[develop-session]") {
+TEST_CASE(
+    "DevelopSession scales full-res spot coordinates for preview display", "[develop-session]") {
     DevelopSession session;
     LoadResult result;
-    result.preview = ImageBuffer{
-        {0.0f, 0.0f, 0.0f,
-         0.0f, 0.0f, 0.0f,
-         1.0f, 0.0f, 0.0f,
-         0.0f, 1.0f, 0.0f},
-        4,
-        1};
+    result.preview
+        = ImageBuffer{{0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f}, 4, 1};
     result.fullRes = ImageBuffer{
-        {0.0f, 0.0f, 0.0f,
-         0.0f, 0.0f, 0.0f,
-         0.0f, 0.0f, 0.0f,
-         0.0f, 0.0f, 0.0f,
-         1.0f, 0.0f, 0.0f,
-         0.0f, 0.0f, 0.0f,
-         0.0f, 0.0f, 0.0f,
-         0.0f, 1.0f, 0.0f},
+        {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+         1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f},
         8,
         1};
     session.setLoadedImage(
-        "/photos/IMG_0001.dng",
-        result,
-        GlobalAdjustment{},
-        DevelopSession::SidecarState::Loaded);
+        "/photos/IMG_0001.dng", result, GlobalAdjustment{}, DevelopSession::SidecarState::Loaded);
 
     Spot spot;
     spot.destination = {0.0, 0.0};

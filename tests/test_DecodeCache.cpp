@@ -31,8 +31,7 @@ TEST_CASE("get returns the inserted result, nullptr on a miss", "[decodecache]")
     REQUIRE(cache.get("b") == nullptr);
 }
 
-TEST_CASE("inserting past the byte budget evicts the least-recently-used entry",
-          "[decodecache]") {
+TEST_CASE("inserting past the byte budget evicts the least-recently-used entry", "[decodecache]") {
     // Each makeResult(10,10) is 10*10*3*4 = 1200 bytes; budget holds two, not three.
     DecodeCache cache(2500);
     cache.insert("a", makeResult(10, 10));
@@ -44,8 +43,7 @@ TEST_CASE("inserting past the byte budget evicts the least-recently-used entry",
     REQUIRE(cache.get("c") != nullptr);
 }
 
-TEST_CASE("get refreshes recency so the accessed entry survives the next eviction",
-          "[decodecache]") {
+TEST_CASE("get refreshes recency so the accessed entry survives the next eviction", "[decodecache]") {
     DecodeCache cache(2500);
     cache.insert("a", makeResult(10, 10));
     cache.insert("b", makeResult(10, 10));
@@ -59,8 +57,7 @@ TEST_CASE("get refreshes recency so the accessed entry survives the next evictio
     REQUIRE(cache.get("c") != nullptr);
 }
 
-TEST_CASE("re-inserting a key replaces it without double-counting bytes",
-          "[decodecache]") {
+TEST_CASE("re-inserting a key replaces it without double-counting bytes", "[decodecache]") {
     DecodeCache cache(1u << 30);
     cache.insert("a", makeResult(10, 10)); // 1200 bytes
     cache.insert("a", makeResult(10, 10)); // replace — still one entry, 1200 bytes
@@ -69,8 +66,7 @@ TEST_CASE("re-inserting a key replaces it without double-counting bytes",
     REQUIRE(cache.get("a") != nullptr);
 }
 
-TEST_CASE("a pinned entry is never evicted, even as the least-recently-used",
-          "[decodecache]") {
+TEST_CASE("a pinned entry is never evicted, even as the least-recently-used", "[decodecache]") {
     DecodeCache cache(2500); // holds two 1200-byte entries
     cache.insert("a", makeResult(10, 10));
     cache.pin("a");                        // "a" is the current image

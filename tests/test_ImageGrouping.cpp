@@ -22,8 +22,7 @@ TEST_CASE("a lone RAW file is one group with no companions", "[grouping]") {
 }
 
 TEST_CASE("stem matching is case-insensitive", "[grouping]") {
-    const QList<ImageGroup> groups
-        = groupImageFiles({"/photos/IMG_001.CR2", "/photos/img_001.jpg"});
+    const QList<ImageGroup> groups = groupImageFiles({"/photos/IMG_001.CR2", "/photos/img_001.jpg"});
 
     REQUIRE(groups.size() == 1);
     REQUIRE(groups[0].primary == "/photos/IMG_001.CR2");
@@ -31,8 +30,7 @@ TEST_CASE("stem matching is case-insensitive", "[grouping]") {
 }
 
 TEST_CASE("same stem in different directories does not group", "[grouping]") {
-    const QList<ImageGroup> groups
-        = groupImageFiles({"/a/IMG_001.CR2", "/b/IMG_001.JPG"});
+    const QList<ImageGroup> groups = groupImageFiles({"/a/IMG_001.CR2", "/b/IMG_001.JPG"});
 
     REQUIRE(groups.size() == 2);
     REQUIRE(groups[0].companions.isEmpty());
@@ -45,8 +43,7 @@ TEST_CASE("one RAW owns every same-stem standard image as a companion", "[groupi
 
     REQUIRE(groups.size() == 1);
     REQUIRE(groups[0].primary == "/photos/IMG_001.CR2");
-    REQUIRE(groups[0].companions
-            == QStringList{"/photos/IMG_001.JPG", "/photos/IMG_001.PNG"});
+    REQUIRE(groups[0].companions == QStringList{"/photos/IMG_001.JPG", "/photos/IMG_001.PNG"});
 }
 
 TEST_CASE("two RAWs sharing a stem are ambiguous: all same-stem files stand alone", "[grouping]") {
@@ -59,8 +56,7 @@ TEST_CASE("two RAWs sharing a stem are ambiguous: all same-stem files stand alon
 }
 
 TEST_CASE("standard images with no RAW never merge, even on a shared stem", "[grouping]") {
-    const QList<ImageGroup> groups
-        = groupImageFiles({"/photos/IMG_001.JPG", "/photos/IMG_001.PNG"});
+    const QList<ImageGroup> groups = groupImageFiles({"/photos/IMG_001.JPG", "/photos/IMG_001.PNG"});
 
     REQUIRE(groups.size() == 2);
     REQUIRE(groups[0].primary == "/photos/IMG_001.JPG");
@@ -70,8 +66,7 @@ TEST_CASE("standard images with no RAW never merge, even on a shared stem", "[gr
 }
 
 TEST_CASE("a RAW and its same-stem JPEG form one group, RAW primary", "[grouping]") {
-    const QList<ImageGroup> groups
-        = groupImageFiles({"/photos/IMG_001.CR2", "/photos/IMG_001.JPG"});
+    const QList<ImageGroup> groups = groupImageFiles({"/photos/IMG_001.CR2", "/photos/IMG_001.JPG"});
 
     REQUIRE(groups.size() == 1);
     REQUIRE(groups[0].primary == "/photos/IMG_001.CR2");
