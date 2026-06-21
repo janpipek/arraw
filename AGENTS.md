@@ -176,6 +176,13 @@ Detailed architectural decisions are documented in the [docs/adr/](file:///home/
   * All other fields: slider value = float value directly (-100..100).
 * **Adding a new adjustment requires updating**: `GlobalAdjustment` (struct), the slider in `AdjustmentPanel`, the uniform block in **both** `image.vert` **and** `image.frag`, the `Ubuf` mirror in `RendererCore.h` (must match std140 layout exactly), `RendererCore::fillUbuf()`, and `XmpSidecar` load/save. Update all three uniform-block declarations in the same change even if a stage never reads the field — a mismatch fails shader linking and blanks the viewport (see [Shaders](#shaders) above).
 
+### 7. UI Theme & Colors
+* The neutral dark theme is applied once in `main()` via `Theme::apply()` (Fusion style + a dark `QPalette`), **before** any widget is constructed. Dark-only for now; the palette is built in one function so a light variant / user-settable colors slot in behind the same seam (ADR 0030).
+* **All UI colors are single-sourced in `src/ThemeColors.h`** (a dependency-free leaf header), read by both `Theme` (the palette) and `RendererCore` (the viewport surround, `kCanvas`). Add or change a chrome color *there*, not inline.
+* `kCanvas` must stay bit-identical to `0.15,0.15,0.15` — it backs the golden-image references (ADR 0005).
+* **Semantic / data-viz colors stay hardcoded with their feature** (histogram channels, filmstrip flags/ratings, curve channel buttons, viewport overlays & clipping warnings) — they encode meaning, not chrome, so don't route them through the theme.
+* Prefer the palette over QSS. Any QSS stays minimal and centralized in `Theme::apply()`; the per-widget sheet on the `AdjustmentPanel` curve buttons is the one sanctioned exception (semantic colors).
+
 ---
 
 ## Domain Vocabulary Constraints
