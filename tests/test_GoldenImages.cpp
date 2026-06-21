@@ -231,6 +231,38 @@ TEST_CASE("shader pipeline matches golden renders", "[gpu][golden]") {
     }
 }
 
+// White balance is a multiplicative gain (docs/adr/0025): a black pixel can
+// never acquire colour, however extreme the temperature/tint. The additive
+// model this replaced turned black into saturated red at 12000 K. This drives
+// the whole GPU chain (std140 packing, fillUbuf, the shader multiply).
+TEST_CASE("black stays black through the white-balance gain", "[gpu][whitebalance]") {
+    ImageViewport* vp = goldenViewport();
+    if (!vp)
+        SKIP("no OpenGL context available on this machine");
+
+    const ImageBuffer scene = syntheticScene(); // x==0, top half is pure black
+
+    for (const float tint : {-100.0f, 0.0f, 100.0f}) {
+        for (const float kelvin : {2000.0f, 12000.0f}) {
+            DYNAMIC_SECTION("K=" << kelvin << " tint=" << tint) {
+                GlobalAdjustment p;
+                p.temperature = kelvin;
+                p.tint = tint;
+                vp->setAdjustments(p);
+                const QImage got = vp->renderToImage(scene, p, scene.width, scene.height);
+                REQUIRE_FALSE(got.isNull());
+
+                // Black column (x == 0) in the top (grey-ramp) half stays black.
+                const float* px = reinterpret_cast<const float*>(got.constScanLine(5));
+                INFO("black pixel -> (" << px[0] << ", " << px[1] << ", " << px[2] << ")");
+                CHECK(px[0] <= 1e-4f);
+                CHECK(px[1] <= 1e-4f);
+                CHECK(px[2] <= 1e-4f);
+            }
+        }
+    }
+}
+
 // Local adjustments (docs/adr/0010): a behavioural check of the whole GPU chain
 // — std140 packing, fillUbuf, the shader loop, and the GLSL maskWeight port.
 // A +1 EV local exposure on a Linear mask must brighten only the masked region.
@@ -305,6 +337,70 @@ TEST_CASE("a local radial mask brightens only inside the oval", "[gpu][localadj]
 
     INFO("inside=" << inside << " outside=" << outside);
     CHECK(inside > outside + 0.1f);
+}
+
+TEST_CASE("post-crop Vignette darkens crop corners without moving its centre", "[gpu][effects]") {
+    ImageViewport* vp = goldenViewport();
+    if (!vp)
+        SKIP("no OpenGL context available on this machine");
+
+    ImageBuffer scene;
+    scene.width = 80;
+    scene.height = 60;
+    scene.data.assign(size_t(scene.width) * scene.height * 3, 0.5f);
+
+    GlobalAdjustment p;
+    p.cropRect = {0.2, 0.1, 0.6, 0.7};
+    p.vignetteAmount = -100.0f;
+    p.vignetteMidpoint = 50.0f;
+    p.vignetteFeather = 50.0f;
+    const int outW = int(p.cropRect.width() * scene.width);
+    const int outH = int(p.cropRect.height() * scene.height);
+
+    vp->setAdjustments(p);
+    const QImage got = vp->renderToImage(scene, p, outW, outH);
+    REQUIRE_FALSE(got.isNull());
+
+    auto value = [&](int x, int y) {
+        return reinterpret_cast<const float*>(got.constScanLine(y))[x * 4];
+    };
+    const float centre = value(got.width() / 2, got.height() / 2);
+    const float corner = value(0, 0);
+    INFO("centre=" << centre << " corner=" << corner);
+    CHECK(centre > 0.45f);
+    CHECK(corner < centre * 0.4f);
+}
+
+TEST_CASE("Grain is deterministic per seed and monochromatic", "[gpu][effects]") {
+    ImageViewport* vp = goldenViewport();
+    if (!vp)
+        SKIP("no OpenGL context available on this machine");
+
+    ImageBuffer scene;
+    scene.width = 64;
+    scene.height = 48;
+    scene.data.assign(size_t(scene.width) * scene.height * 3, 0.4f);
+
+    GlobalAdjustment p;
+    p.grainAmount = 60.0f;
+    p.grainSize = 50.0f;
+    p.grainRoughness = 75.0f;
+    p.grainSeed = 123456U;
+    vp->setAdjustments(p);
+    const QImage first = vp->renderToImage(scene, p, scene.width, scene.height);
+    const QImage second = vp->renderToImage(scene, p, scene.width, scene.height);
+    REQUIRE_FALSE(first.isNull());
+    CHECK(first == second);
+
+    const float* px = reinterpret_cast<const float*>(first.constScanLine(17));
+    CHECK(std::abs(px[23 * 4 + 0] - px[23 * 4 + 1]) < 1e-6f);
+    CHECK(std::abs(px[23 * 4 + 1] - px[23 * 4 + 2]) < 1e-6f);
+
+    p.grainSeed = 654321U;
+    vp->setAdjustments(p);
+    const QImage other = vp->renderToImage(scene, p, scene.width, scene.height);
+    REQUIRE_FALSE(other.isNull());
+    CHECK_FALSE(first == other);
 }
 
 // Clipping overlay (docs/adr/0009): rendered through the display path (sRGB

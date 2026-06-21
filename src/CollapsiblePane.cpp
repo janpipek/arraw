@@ -4,29 +4,46 @@
 CollapsiblePane::CollapsiblePane(QWidget* expanded, QWidget* strip)
     : expanded(expanded),
       strip(strip) {
-    setCollapsed(collapsed);
+    apply();
 }
 
 void CollapsiblePane::collapse() {
-    setCollapsed(true);
+    collapsed = true;
+    apply();
 }
 
 void CollapsiblePane::expand() {
-    setCollapsed(false);
+    collapsed = false;
+    apply();
 }
 
 void CollapsiblePane::toggle() {
-    setCollapsed(!collapsed);
+    collapsed = !collapsed;
+    apply();
 }
 
 bool CollapsiblePane::isCollapsed() const {
     return collapsed;
 }
 
-// Exactly one of the two widgets is visible; this is the only place that decides
-// which (ADR 0012).
-void CollapsiblePane::setCollapsed(bool c) {
-    collapsed = c;
-    expanded->setVisible(!c);
-    strip->setVisible(c);
+void CollapsiblePane::hide() {
+    hidden = true;
+    apply();
+}
+
+void CollapsiblePane::show() {
+    hidden = false;
+    apply();
+}
+
+bool CollapsiblePane::isHidden() const {
+    return hidden;
+}
+
+// The only place that decides the two widgets' visibility: while hidden, neither
+// shows (lights-out, ADR 0027); otherwise exactly one shows, opposite the other
+// (ADR 0012).
+void CollapsiblePane::apply() {
+    expanded->setVisible(!hidden && !collapsed);
+    strip->setVisible(!hidden && collapsed);
 }

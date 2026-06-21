@@ -60,10 +60,20 @@ struct GlobalAdjustment : SharedAdjustment {
     float sharpening = 0.0f; // 0 .. 100
 
     // Geometry
-    orient::Orientation orientation;        // coarse 90°/flip, seeded from EXIF (docs/adr/0025)
+    orient::Orientation orientation;        // coarse 90°/flip, seeded from EXIF (docs/adr/0028)
     float rotation = 0.0f;                  // degrees, -45 .. +45 (fine straighten)
     QRectF cropRect = {0.0, 0.0, 1.0, 1.0}; // normalised UV, full image by default
     bool cropConstrained = false;           // crop is locked to its aspect ratio
+
+    // Effects (docs/adr/0026). The seed is per-image identity: copy/paste and
+    // presets transfer the six visible controls but preserve the target seed.
+    float vignetteAmount = 0.0f;    // -100 .. +100, mapped to -2 .. +2 EV
+    float vignetteMidpoint = 50.0f; // 0 .. 100
+    float vignetteFeather = 50.0f;  // 0 .. 100
+    float grainAmount = 0.0f;       // 0 .. 100
+    float grainSize = 50.0f;        // 0 .. 100
+    float grainRoughness = 50.0f;   // 0 .. 100
+    std::uint32_t grainSeed = 0;    // 0 = uninitialised
 
     // Local adjustments — arraw-native, capped at 16 (docs/adr/0010).
     std::vector<LocalAdjustment> localAdjustments;
@@ -91,7 +101,7 @@ struct LoadResult {
     QString error; // non-empty on failure
     QRectF defaultCrop = {0.0, 0.0, 1.0, 1.0};
     // Coarse Orientation read from the file's EXIF/camera flag, used to seed the
-    // develop edit when the sidecar has none (docs/adr/0025). The decoded buffer
+    // develop edit when the sidecar has none (docs/adr/0028). The decoded buffer
     // stays in native orientation — this only records what the camera intended.
     orient::Orientation seededOrientation = {};
 };
@@ -108,10 +118,21 @@ void normalizeExposure(ImageBuffer& buf);
 // Compute a 256-entry output LUT from tone-curve control points (Fritsch-Carlson monotone spline).
 std::array<float, 256> computeCurveLUT(const std::vector<QPointF>& pts);
 
+// White balance as a per-channel multiplicative gain in linear Rec.2020
+// (docs/adr/0025): the gain is blackbody-derived so the Kelvin numbers mean
+// something, normalised so neutral (5500 K, tint 0) returns {1,1,1}. Applied as
+// c *= gain, so a black pixel stays black by construction. `kelvin` is absolute
+// (2000..12000), `tint` is in slider units (-100..100, + = green, - = magenta).
+std::array<float, 3> whiteBalanceGain(float kelvin, float tint);
+
+// Inverse of whiteBalanceGain for the WB picker: given a pre-WB pixel that the
+// user declares neutral, recover the kelvin/tint that would neutralise it.
+void whiteBalanceFromNeutral(float r, float g, float b, float& kelvin, float& tint);
+
 // Pixel size of a developed thumbnail: the source cropped to crop, scaled down so
 // its longer edge is at most maxEdge (never upscaled), aspect preserved.
 // Output pixel size of a developed thumbnail. `srcW`/`srcH` are the *native*
 // buffer dims; an odd quarter-turn Orientation swaps them so the thumbnail keeps
-// the oriented aspect (docs/adr/0025) — otherwise turned shots come out squished.
+// the oriented aspect (docs/adr/0028) — otherwise turned shots come out squished.
 QSize developedThumbSize(
     int srcW, int srcH, const QRectF& crop, int maxEdge, orient::Orientation orientation = {});

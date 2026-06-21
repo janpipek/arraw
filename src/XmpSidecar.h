@@ -14,7 +14,7 @@ struct SidecarData {
     GlobalAdjustment adjustments;
     UserMetadata metadata;
     // True when the sidecar carried an explicit tiff:Orientation. When false, the
-    // resolver seeds orientation from the file's EXIF instead (docs/adr/0025).
+    // resolver seeds orientation from the file's EXIF instead (docs/adr/0028).
     bool orientationStored = false;
 };
 
@@ -51,7 +51,7 @@ public:
     // The adjustments to apply when opening rawPath: the sidecar's if one exists,
     // otherwise defaults with the crop set to defaultCrop (e.g. a DNG DefaultCrop).
     // seededOrientation is applied when the sidecar has no explicit
-    // tiff:Orientation (e.g. read from the file's EXIF) — see docs/adr/0025.
+    // tiff:Orientation (e.g. read from the file's EXIF) — see docs/adr/0028.
     static SidecarLoadResult resolveForImage(
         const QString& rawPath,
         const QRectF& defaultCrop,

@@ -4,27 +4,37 @@
 // image.vert exactly (std140).
 
 layout(location = 0) in vec2 vUV;
+layout(location = 1) in vec2 vFrameUV;
 layout(location = 0) out vec4 fragColor;
 
 layout(std140, binding = 0) uniform buf {
     mat4  clipCorr;      // QRhi::clipSpaceCorrMatrix() — GL-style NDC → backend NDC
     vec4  transform;     // (scaleX, scaleY, panX, panY)
     vec4  cropRect;      // UV bounds: (left, top, right, bottom)
+    vec4  effectRect;    // final adjustment crop, even while the Crop tool shows full frame
     vec4  hslHue[2];     // 8 floats, -1..+1 per range (std140: packed as vec4 pairs)
     vec4  hslSat[2];
     vec4  hslLum[2];
     float rotation;      // degrees
-    float aspect;        // crop width / height in pixels (for isotropic rotation)
+    float aspect;        // source image width / height (for isotropic rotation)
     float exposure;      // EV stops
     float contrast;      // -0.2..+0.2 (slider ±100 / kToneSliderToUniform)
     float highlights;    // -0.2..+0.2
     float shadows;       // -0.2..+0.2
     float whites;        // -0.2..+0.2
     float blacks;        // -0.2..+0.2
-    float temperature;   // Kelvin, 2000..12000 (5500 = neutral)
-    float tint;          // -1..+1
+    float wbGainR;       // white-balance per-channel gain (docs/adr/0025); 5500K/tint0 = 1
+    float wbGainG;
+    float wbGainB;
     float saturation;    // -1..+1
     float vibrance;      // -1..+1
+    float vignetteAmount;   // -2..+2 EV at maximum falloff
+    float vignetteMidpoint; // 0..1
+    float vignetteFeather;  // 0..1
+    float grainAmount;      // encoded-value standard deviation, 0..0.08
+    float grainSize;        // grain diameter as a fraction of the crop long edge
+    float grainRoughness;   // 0..1
+    uint  grainSeed;        // deterministic per-image seed; 0 disables identity
     int   useLut;
     int   gamutWarn;
     int   baseLook;
@@ -32,14 +42,14 @@ layout(std140, binding = 0) uniform buf {
                          // 0: output clamped linear working space (export readback)
     int   curveInput;    // stop after tone regions + gamma-encode (histograms)
     int   hslActive;
-    int   wbInput;       // stop before temperature/tint, output linear (WB picker)
+    int   wbInput;       // stop before white balance, output linear (WB picker)
     int   clipWarn;      // clipping overlay bits: 1 = highlights, 2 = shadows (docs/adr/0009)
     // Local adjustments (docs/adr/0010), 16-mask cap. Packed parallel vec4 arrays:
     //   laGeom  = Linear (p0.x, p0.y, p1.x, p1.y) | Radial (cx, cy, rx, ry)
     //   laGeom2 = Radial (angle, feather, invert, spare); unused for Linear
     //   laTone  = (exposure, contrast, highlights, shadows)
-    //   laTone2 = (whites, blacks, tempShift, tint)
-    //   laColor = (saturation, vibrance, maskType, spare)  maskType 0=Linear 1=Radial
+    //   laTone2 = (whites, blacks, wbGainR, wbGainG)   white-balance gain (docs/adr/0025)
+    //   laColor = (saturation, vibrance, maskType, wbGainB)  maskType 0=Linear 1=Radial
     vec4  laGeom[16];
     vec4  laTone[16];
     vec4  laTone2[16];
@@ -47,7 +57,7 @@ layout(std140, binding = 0) uniform buf {
     vec4  laGeom2[16];
     int   numLocalAdj;
     int   histoRaw;  // 1: output pre-clamp sRGB-linear for overflow binning
-    int   orientQuarterTurns; // coarse Orientation (docs/adr/0025); unused in frag
+    int   orientQuarterTurns; // coarse Orientation (docs/adr/0028); unused in frag
     int   orientMirrored;
 } u;
 
@@ -138,25 +148,11 @@ vec3 applyCurve(vec3 c) {
     return srgbToLinear(c);
 }
 
-// Core red/blue shift for a normalised temperature `t` (0 = neutral). Shared by
-// the global path (t from absolute Kelvin) and local adjustments (t from a
-// relative -100..100 shift) — see docs/adr/0010.
-vec3 applyTempShift(vec3 c, float t) {
-    if (abs(t) < 0.0001) return c;
-    c.r += t * 0.15;
-    c.b -= t * 0.15;
-    return c;
-}
-
-vec3 applyTemperature(vec3 c) {
-    return applyTempShift(c, (u.temperature - 5500.0) / 5500.0);
-}
-
-vec3 applyTint(vec3 c, float tint) {
-    if (abs(tint) < 0.001) return c;
-    c.g += tint * 0.05;
-    return c;
-}
+// White balance is now a per-channel multiplicative gain (docs/adr/0025),
+// precomputed on the CPU (blackbody-derived) and applied as c *= gain — so a
+// black pixel can never acquire colour. The global gain arrives in u.wbGain*;
+// each local adjustment's gain is packed into its (laTone2.z, laTone2.w,
+// laColor.w) slots and blended by the mask weight in applyLocalAdjustments.
 
 // ── HSL ───────────────────────────────────────────────────────────────────────
 
@@ -235,6 +231,85 @@ vec3 applyVibrance(vec3 c, float vibrance) {
     float luma = dot(c, kLuma);
     float sat  = length(c - vec3(luma));
     return mix(vec3(luma), c, 1.0 + vibrance * (1.0 - sat));
+}
+
+// Effects (docs/adr/0026) use crop-frame coordinates, not source UVs. The
+// corner-normalised radius fits a centred ellipse to any crop aspect ratio.
+vec3 applyVignette(vec3 c, vec2 frameUV) {
+    if (abs(u.vignetteAmount) < 0.0001)
+        return c;
+    vec2 q = (frameUV - vec2(0.5)) * 2.0;
+    float radius = length(q) * 0.70710678; // corners = 1
+    float inner = u.vignetteMidpoint * 0.85;
+    float outer = mix(inner, 1.0, u.vignetteFeather);
+    float weight = u.vignetteFeather < 0.0001
+                       ? step(inner, radius)
+                       : smoothstep(inner, max(outer, inner + 0.0001), radius);
+    return c * exp2(u.vignetteAmount * weight);
+}
+
+uint grainHash(uvec2 p, uint seed) {
+    uint h = p.x * 0x8da6b343u ^ p.y * 0xd8163841u ^ seed * 0xcb1ab31fu;
+    h ^= h >> 16;
+    h *= 0x7feb352du;
+    h ^= h >> 15;
+    h *= 0x846ca68bu;
+    return h ^ (h >> 16);
+}
+
+float grainRandom(ivec2 p, uint seed) {
+    return float(grainHash(uvec2(p), seed)) / 4294967295.0;
+}
+
+float grainValueNoise(vec2 p, uint seed) {
+    ivec2 cell = ivec2(floor(p));
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = grainRandom(cell, seed);
+    float b = grainRandom(cell + ivec2(1, 0), seed);
+    float c = grainRandom(cell + ivec2(0, 1), seed);
+    float d = grainRandom(cell + ivec2(1, 1), seed);
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+float grainEncode(float v) {
+    return v <= 0.0031308 ? 12.92 * v : 1.055 * pow(v, 1.0 / 2.4) - 0.055;
+}
+
+float grainDecode(float v) {
+    return v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4);
+}
+
+vec3 grainEncode(vec3 c) {
+    return vec3(grainEncode(c.r), grainEncode(c.g), grainEncode(c.b));
+}
+
+vec3 grainDecode(vec3 c) {
+    return vec3(grainDecode(c.r), grainDecode(c.g), grainDecode(c.b));
+}
+
+vec3 applyGrain(vec3 c, vec2 frameUV) {
+    if (u.grainAmount < 0.00001 || u.grainSeed == 0u)
+        return c;
+
+    float cropAspect = u.aspect * (u.effectRect.z - u.effectRect.x)
+                                / max(u.effectRect.w - u.effectRect.y, 0.0001);
+    vec2 longEdgeUV = cropAspect >= 1.0
+                          ? vec2(frameUV.x, frameUV.y / cropAspect)
+                          : vec2(frameUV.x * cropAspect, frameUV.y);
+    vec2 p = longEdgeUV / max(u.grainSize, 0.00001);
+
+    // Value-noise standard deviation is normalised approximately to one. As
+    // Roughness rises, progressively coarser octaves introduce clustered grain.
+    float n0 = (grainValueNoise(p, u.grainSeed) - 0.5) * 4.9;
+    float n1 = (grainValueNoise(p * 0.53 + vec2(17.0), u.grainSeed ^ 0x9e3779b9u) - 0.5) * 4.9;
+    float n2 = (grainValueNoise(p * 0.23 + vec2(41.0), u.grainSeed ^ 0x85ebca6bu) - 0.5) * 4.9;
+    float rough = (0.60 * n0 + 0.30 * n1 + 0.10 * n2) / sqrt(0.46);
+    float noise = mix(n0, rough, u.grainRoughness);
+
+    vec3 encoded = grainEncode(c);
+    encoded += vec3(noise * u.grainAmount);
+    return grainDecode(encoded);
 }
 
 // Display transform: linear Rec.2020 → sRGB display (docs/adr/0002).
@@ -341,8 +416,8 @@ vec3 applyLocalAdjustments(vec3 c, vec2 uv, float aspect) {
         c = applyContrast(c, w * u.laTone[i].y);
         c = applyToneRegions(c, w * u.laTone[i].z, w * u.laTone[i].w,
                                 w * u.laTone2[i].x, w * u.laTone2[i].y);
-        c = applyTempShift(c, w * u.laTone2[i].z);
-        c = applyTint(c, w * u.laTone2[i].w);
+        vec3 lg = vec3(u.laTone2[i].z, u.laTone2[i].w, u.laColor[i].w);
+        c *= mix(vec3(1.0), lg, w); // local white balance: mask-weighted gain (docs/adr/0025)
         c = applySaturation(c, w * u.laColor[i].x);
         c = applyVibrance(c, w * u.laColor[i].y);
     }
@@ -352,7 +427,8 @@ vec3 applyLocalAdjustments(vec3 c, vec2 uv, float aspect) {
 // Processing order (the authoritative definition — DESIGN.md mirrors it).
 // Everything up to the final encode operates in linear Rec.2020:
 //   base look → exposure → contrast → tone regions → tone curves
-//   → temperature → tint → HSL → saturation → vibrance → display transform
+//   → white balance (gain) → HSL → saturation → vibrance → local adjustments
+//   → vignette → grain → display transform
 // Crop/rotation happen earlier in image.vert. For export, displayEncode is
 // 0: the offscreen readback stays in linear working space and the output
 // transform runs on the CPU (lcms2, MainWindow::exportFile).
@@ -376,11 +452,10 @@ void main() {
     }
     c = applyCurve(c);
     if (u.wbInput != 0) {
-        fragColor = vec4(c, 1.0);   // linear value the WB picker inverts (pre-temp/tint)
+        fragColor = vec4(c, 1.0);   // linear value the WB picker inverts (pre white balance)
         return;
     }
-    c = applyTemperature(c);
-    c = applyTint(c, u.tint);
+    c *= vec3(u.wbGainR, u.wbGainG, u.wbGainB); // white balance: per-channel gain (docs/adr/0025)
     if (u.hslActive != 0)
         c = applyHsl(c);
     c = applySaturation(c, u.saturation);
@@ -389,6 +464,8 @@ void main() {
     // Local adjustments — analytic, single-pass, after the global colour section
     // and before encode (docs/adr/0010).
     c = applyLocalAdjustments(c, vUV, u.aspect);
+    c = applyVignette(c, vFrameUV);
+    c = applyGrain(c, vFrameUV);
 
     if (u.histoRaw != 0) {
         fragColor = vec4(kRec2020ToSRGB * c, 1.0); // pre-clamp sRGB-linear

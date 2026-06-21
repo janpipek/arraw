@@ -154,6 +154,7 @@ set(CORE_SOURCES
     src/XmpSidecar.cpp
     src/FilmStrip.cpp
     src/FilmStripModel.cpp
+    src/ImageGrouping.cpp
     src/FilmStripLayout.cpp
     src/ThumbnailCache.cpp
     src/DecodeCache.cpp
@@ -170,6 +171,7 @@ set(CORE_SOURCES
     src/BatchPaste.cpp
     src/BatchProgressDialog.cpp
     src/MainWindowStatus.cpp
+    src/ChromeHider.cpp
 )
 
 add_library(arraw_core STATIC ${CORE_SOURCES})

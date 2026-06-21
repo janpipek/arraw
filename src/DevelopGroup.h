@@ -7,10 +7,10 @@
 #include <QString>
 
 // A Develop Group is one selectable unit in the Copy Settings / Develop Preset
-// checklist — the granularity at which develop settings travel between photos
-// (Milestone 8). The seven groups exhaustively partition every *global* field of
-// GlobalAdjustment; Local Adjustments are deliberately not a group (masks pinned
-// to one photo's framing rarely transfer). See docs/adr/0023 and CONTEXT.md.
+// checklist — the granularity at which develop settings travel between photos.
+// The groups exhaustively partition every visible global control; per-image
+// state (Local Adjustments, Spots, Grain seed) deliberately stays on the target.
+// See docs/adr/0023, docs/adr/0026, and CONTEXT.md.
 enum class DevelopGroup {
     WhiteBalance, // temperature (Kelvin) + tint
     Tone,         // exposure, contrast, highlights, shadows, whites, blacks
@@ -19,6 +19,7 @@ enum class DevelopGroup {
     Hsl,          // the 8-band hue/sat/lum mix
     Detail,       // sharpening
     Geometry,     // rotation + crop rect + aspect-lock flag, as one unit
+    Effects,      // vignette + grain controls; never the per-image grain seed
     Count_,       // sentinel — keep last
 };
 
@@ -39,7 +40,7 @@ inline bool hasGroup(GroupSelection s, DevelopGroup g) {
 
 // The copy/paste & preset checklist's initial selection: every group except
 // Geometry, which is per-image (orientation/rotation/crop) and rarely transfers,
-// so it ships unchecked and is opt-in (CONTEXT.md, docs/adr/0025).
+// so it ships unchecked and is opt-in (CONTEXT.md, docs/adr/0028).
 inline GroupSelection defaultCopySelection() {
     GroupSelection s = allGroups();
     s.reset(static_cast<size_t>(DevelopGroup::Geometry));

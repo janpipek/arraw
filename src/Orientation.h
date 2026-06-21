@@ -4,7 +4,7 @@
 
 // Coarse, lossless image orientation: one of the eight EXIF states (four 90°
 // quarter-turns × an optional horizontal mirror). Distinct from the fine ±45°
-// Rotation (CONTEXT.md, docs/adr/0025). Pure value type + EXIF mapping, so it
+// Rotation (CONTEXT.md, docs/adr/0028). Pure value type + EXIF mapping, so it
 // unit-tests headlessly and is the single source of truth shared by the decode
 // seed, the sidecar (tiff:Orientation), and the geometry remap.
 namespace orient {
@@ -41,7 +41,7 @@ QPointF orientedToBuffer(QPointF uv, Orientation o);
 
 // Inverse of orientedToBuffer: map a native-buffer UV back to the oriented
 // display frame. Used by the viewport's buffer→screen mapping so overlays stay
-// in lock-step with the shader (docs/adr/0025).
+// in lock-step with the shader (docs/adr/0028).
 QPointF bufferToOriented(QPointF uv, Orientation o);
 
 // True when the orientation swaps width and height (an odd quarter-turn), so
@@ -50,7 +50,7 @@ bool swapsAspect(Orientation o);
 
 // The orientation after turning the *displayed* image 90° clockwise /
 // counter-clockwise. A mirror reverses the turn direction, so this is not a
-// plain increment of quarterTurnsCW (docs/adr/0025).
+// plain increment of quarterTurnsCW (docs/adr/0028).
 Orientation turnedClockwise(Orientation o);
 Orientation turnedCounterClockwise(Orientation o);
 

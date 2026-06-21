@@ -73,6 +73,14 @@ appimage:
         arraw-appimage-builder \
         bash /src/packaging/linux/build-appimage.sh
 
+# Build Fedora RPM and SRPM from committed HEAD
+rpm:
+    bash tools/package_fedora.sh
+
+# Install and smoke-test the RPM in a clean Fedora 44 container
+rpm-smoke:
+    bash tools/smoke_fedora_rpm.sh
+
 # Create a windows-installer (.exe)
 windows-installer:
     # Inno setup must be present

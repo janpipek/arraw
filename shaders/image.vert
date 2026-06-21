@@ -7,26 +7,36 @@ layout(location = 0) in vec2 aPos;
 layout(location = 1) in vec2 aUV;
 
 layout(location = 0) out vec2 vUV;
+layout(location = 1) out vec2 vFrameUV;
 
 layout(std140, binding = 0) uniform buf {
     mat4  clipCorr;      // QRhi::clipSpaceCorrMatrix() — GL-style NDC → backend NDC
     vec4  transform;     // (scaleX, scaleY, panX, panY)
     vec4  cropRect;      // UV bounds: (left, top, right, bottom)
+    vec4  effectRect;    // final adjustment crop, even while the Crop tool shows full frame
     vec4  hslHue[2];     // 8 floats, -1..+1 per range (std140: packed as vec4 pairs)
     vec4  hslSat[2];
     vec4  hslLum[2];
     float rotation;      // degrees
-    float aspect;        // crop width / height in pixels (for isotropic rotation)
+    float aspect;        // source image width / height (for isotropic rotation)
     float exposure;      // EV stops
     float contrast;      // -0.2..+0.2 (slider ±100 / kToneSliderToUniform)
     float highlights;    // -0.2..+0.2
     float shadows;       // -0.2..+0.2
     float whites;        // -0.2..+0.2
     float blacks;        // -0.2..+0.2
-    float temperature;   // Kelvin, 2000..12000 (5500 = neutral)
-    float tint;          // -1..+1
+    float wbGainR;       // white-balance per-channel gain (docs/adr/0025); 5500K/tint0 = 1
+    float wbGainG;
+    float wbGainB;
     float saturation;    // -1..+1
     float vibrance;      // -1..+1
+    float vignetteAmount;   // -2..+2 EV at maximum falloff
+    float vignetteMidpoint; // 0..1
+    float vignetteFeather;  // 0..1
+    float grainAmount;      // encoded-value standard deviation, 0..0.08
+    float grainSize;        // grain diameter as a fraction of the crop long edge
+    float grainRoughness;   // 0..1
+    uint  grainSeed;        // deterministic per-image seed; 0 disables identity
     int   useLut;
     int   gamutWarn;
     int   baseLook;
@@ -34,7 +44,7 @@ layout(std140, binding = 0) uniform buf {
                          // 0: output clamped linear working space (export readback)
     int   curveInput;    // stop after tone regions + gamma-encode (histograms)
     int   hslActive;
-    int   wbInput;       // stop before temperature/tint, output linear (WB picker)
+    int   wbInput;       // stop before white balance, output linear (WB picker)
     int   clipWarn;      // clipping overlay bits: 1 = highlights, 2 = shadows (docs/adr/0009)
     // Local adjustments (docs/adr/0010) — unused here, but the block must match
     // image.frag and Ubuf byte-for-byte (std140).
@@ -44,8 +54,8 @@ layout(std140, binding = 0) uniform buf {
     vec4  laColor[16];
     vec4  laGeom2[16];
     int   numLocalAdj;
-    int   histoRaw;           // unused here; declared to keep std140 offsets
-    int   orientQuarterTurns; // coarse Orientation (docs/adr/0025)
+    int   histoRaw;           // unused here; present so the block matches image.frag and Ubuf
+    int   orientQuarterTurns; // coarse Orientation (docs/adr/0028)
     int   orientMirrored;     // 1 = horizontal mirror
 } u;
 
@@ -55,6 +65,7 @@ void main() {
 
     // Map quad UV to the crop region, rotate around image centre (fixed pivot)
     vec2 uv = mix(u.cropRect.xy, u.cropRect.zw, aUV);
+    vFrameUV = (uv - u.effectRect.xy) / max(u.effectRect.zw - u.effectRect.xy, vec2(0.0001));
     vec2 center = vec2(0.5, 0.5);
     vec2 d = uv - center;
     d.x *= u.aspect;
@@ -66,7 +77,7 @@ void main() {
     vUV = r + center;
 
     // Coarse Orientation maps the oriented display-frame UV to the native buffer
-    // (docs/adr/0025). Bit-exact mirror of orient::orientedToBuffer: undo the
+    // (docs/adr/0028). Bit-exact mirror of orient::orientedToBuffer: undo the
     // mirror first, then one quarter-turn (u,v)->(v,1-u) per step. Keeps GPU and
     // the CPU rotateTextureUv/Geometry overlays in lock-step.
     if (u.orientMirrored != 0)

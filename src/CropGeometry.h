@@ -13,7 +13,7 @@ namespace crop {
 // normalised crop rectangle, rounded to the nearest pixel. Matches what the
 // export pipeline writes, so the overlay readout cannot disagree with it. An odd
 // quarter-turn Orientation swaps the full dims first, since the crop is
-// normalised in the oriented frame (docs/adr/0025).
+// normalised in the oriented frame (docs/adr/0028).
 QSize cropPixelSize(
     int fullWidth, int fullHeight, const QRectF& cropRect, orient::Orientation orientation = {});
 

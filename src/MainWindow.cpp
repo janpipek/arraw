@@ -59,6 +59,7 @@
 #include <QUndoStack>
 #include <QVBoxLayout>
 #include <QWindow>
+#include <QWindowStateChangeEvent>
 #include <QtConcurrent/QtConcurrent>
 
 // ---------------------------------------------------------------------------
@@ -194,6 +195,11 @@ MainWindow::MainWindow(QWidget* parent)
     setupStatusBar();
     setupToolbar();
 
+    // The adjustments dock + reveal strip are NOT listed here: they are a
+    // CollapsiblePane pair (ADR 0012), so lights-out drives them through
+    // adjustmentsPane->hide()/show() to keep that invariant intact.
+    chromeHider.emplace(std::vector<QWidget*>{menuBar(), mainToolBar, statusBar(), filmStripDock});
+
     connect(proofPanel, &ProofingPanel::proofingChanged, this, &MainWindow::rebuildDisplayLut);
     rebuildDisplayLut();
 
@@ -272,7 +278,9 @@ MainWindow::MainWindow(QWidget* parent)
         });
 
     connect(adjPanel, &AdjustmentPanel::paramsChanged, this, [this](const GlobalAdjustment& params) {
-        session->setParams(applyGroups(session->params(), params, allGroups()));
+        GlobalAdjustment next = applyGroups(session->params(), params, allGroups());
+        next.grainSeed = params.grainSeed; // per-image identity still changes within this image
+        session->setParams(next);
         pushParamsToViewport();
     });
 
@@ -400,6 +408,8 @@ void MainWindow::closeEvent(QCloseEvent* e) {
         return;
     }
 
+    restoreFocusModes();
+
     QSettings s;
     s.setValue("geometry", saveGeometry());
     s.setValue("windowState", saveState());
@@ -411,6 +421,20 @@ void MainWindow::closeEvent(QCloseEvent* e) {
 }
 
 void MainWindow::keyPressEvent(QKeyEvent* e) {
+    if (e->key() == Qt::Key_Escape) {
+        // A modal tool's own cancel wins so Escape behaves the same whether or
+        // not the viewport holds focus; only with no tool active does Escape act
+        // as the focus-mode "give me my UI back" panic key (docs/adr/0027).
+        if (viewport->activeTool() != ImageViewport::ActiveTool::None) {
+            viewport->cancelActiveTool();
+            return;
+        }
+        if ((chromeHider && chromeHider->hidden()) || isFullScreen()) {
+            restoreFocusModes();
+            return;
+        }
+    }
+
     // Culling marks (0-5, X, r/y/g/b/p) are owned by the Image menu's actions —
     // window-level shortcuts that fire whether the strip or the image has focus.
     if (e->key() == Qt::Key_Left)
@@ -467,6 +491,25 @@ void MainWindow::setupMenus() {
     toggleAdjustments->setShortcut(Qt::Key_F8);
     view->addSeparator();
     view->addAction("Reset Zoom", Qt::CTRL | Qt::Key_0, viewport, &ImageViewport::resetView);
+    view->addSeparator();
+
+    fullScreenAction = view->addAction("&Full Screen", this, &MainWindow::toggleFullScreen);
+    fullScreenAction->setCheckable(true);
+    fullScreenAction->setShortcut(Qt::Key_F11);
+
+    lightsOutAction = view->addAction("&Hide Panels", this, &MainWindow::toggleChrome);
+    lightsOutAction->setCheckable(true);
+    lightsOutAction->setShortcut(Qt::Key_F12);
+
+    // A QAction's shortcut only fires while one of its host widgets is visible
+    // and enabled. These live on the View menu, which lights-out (F12) hides and
+    // image loading disables — so also host them on the window itself, which
+    // stays visible/enabled, or F8/F11/F12 would die exactly when needed
+    // (docs/adr/0027).
+    addAction(toggleAdjustments);
+    addAction(fullScreenAction);
+    addAction(lightsOutAction);
+
     view->addSeparator();
 
     // Clipping overlay (docs/adr/0009). Two independent toggles; J (handled in
@@ -592,6 +635,7 @@ void MainWindow::setupStatusBar() {
 
 void MainWindow::setupToolbar() {
     auto* tb = new QToolBar("Tools", this);
+    mainToolBar = tb;
     tb->setObjectName("ToolsToolBar");
     tb->setMovable(false);
     tb->setToolButtonStyle(Qt::ToolButtonTextOnly);
@@ -616,7 +660,7 @@ void MainWindow::setupToolbar() {
     maskAction = addTool("Masks", Qt::Key_M);
     spotAction = addTool("Spots", Qt::Key_Q);
 
-    // Coarse Orientation (docs/adr/0025). Momentary actions (not modal tools);
+    // Coarse Orientation (docs/adr/0028). Momentary actions (not modal tools);
     // final home is beside the Rotation slider, but the toolbar gives a handle now.
     tb->addSeparator();
     auto* rotateCwAction = tb->addAction(tr("Rotate ⟳"));
@@ -1134,6 +1178,61 @@ void MainWindow::toggleClipping() {
     clipShadowsAction->setChecked(!anyOn); // toggled() drives applyClipping()
 }
 
+void MainWindow::toggleFullScreen() {
+    // The View → Full Screen check and wasMaximized are updated from
+    // changeEvent(), which sees the window-manager's real (possibly async)
+    // state, not the value isFullScreen()/isMaximized() report on this line.
+    if (isFullScreen())
+        exitFullScreen();
+    else
+        showFullScreen();
+}
+
+void MainWindow::exitFullScreen() {
+    if (wasMaximized)
+        showMaximized();
+    else
+        showNormal();
+}
+
+void MainWindow::toggleChrome() {
+    if (!chromeHider)
+        return;
+
+    if (chromeHider->hidden()) {
+        chromeHider->restore();
+        adjustmentsPane->show();
+    } else {
+        chromeHider->hide();
+        adjustmentsPane->hide();
+    }
+    lightsOutAction->setChecked(chromeHider->hidden());
+}
+
+void MainWindow::restoreFocusModes() {
+    if (chromeHider && chromeHider->hidden()) {
+        chromeHider->restore();
+        adjustmentsPane->show();
+        lightsOutAction->setChecked(false);
+    }
+    if (isFullScreen())
+        exitFullScreen(); // fullScreenAction check is cleared by changeEvent()
+}
+
+void MainWindow::changeEvent(QEvent* e) {
+    if (e->type() == QEvent::WindowStateChange) {
+        const auto previous = static_cast<QWindowStateChangeEvent*>(e)->oldState();
+        // Capture the pre-fullscreen state from the WM's own transition so
+        // exitFullScreen() can return to the right place — more reliable than
+        // polling isMaximized() before showFullScreen() (docs/adr/0027).
+        if (isFullScreen() && !previous.testFlag(Qt::WindowFullScreen))
+            wasMaximized = previous.testFlag(Qt::WindowMaximized);
+        if (fullScreenAction)
+            fullScreenAction->setChecked(isFullScreen());
+    }
+    QMainWindow::changeEvent(e);
+}
+
 void MainWindow::rebuildDisplayLut() {
     const bool proofing = proofPanel->proofingEnabled();
     if (!proofing && monitorProfilePath.isEmpty()) {
@@ -1465,8 +1564,10 @@ void MainWindow::syncSessionSpotsToEditors(bool fullResOnly) {
 void MainWindow::pushGlobalAdjustmentCommand(
     const GlobalAdjustment& before, const GlobalAdjustment& after) {
     const GlobalAdjustment current = session->params();
-    const GlobalAdjustment beforeSnapshot = applyGroups(current, before, allGroups());
-    const GlobalAdjustment afterSnapshot = applyGroups(current, after, allGroups());
+    GlobalAdjustment beforeSnapshot = applyGroups(current, before, allGroups());
+    GlobalAdjustment afterSnapshot = applyGroups(current, after, allGroups());
+    beforeSnapshot.grainSeed = before.grainSeed;
+    afterSnapshot.grainSeed = after.grainSeed;
     if (afterSnapshot != beforeSnapshot)
         undoStack->push(new AdjustmentCommand(session, this, beforeSnapshot, afterSnapshot));
 }

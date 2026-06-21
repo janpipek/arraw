@@ -95,6 +95,30 @@ TEST_CASE("A group absent from the file loads as inactive", "[preset]") {
     CHECK(p.values.tint == -5.0f);
 }
 
+TEST_CASE("Effects preset round-trips controls but never serialises the Grain seed", "[preset]") {
+    DevelopPreset p;
+    p.name = "Film";
+    p.groups = groups({DevelopGroup::Effects});
+    p.values.vignetteAmount = -25.0f;
+    p.values.grainAmount = 30.0f;
+    p.values.grainSize = 65.0f;
+    p.values.grainRoughness = 80.0f;
+    p.values.grainSeed = 0xdeadbeefU;
+
+    const QByteArray json = serializeDevelopPreset(p);
+    CHECK_FALSE(json.contains("grainSeed"));
+
+    bool ok = false;
+    const DevelopPreset loaded = parseDevelopPreset(json, &ok);
+    REQUIRE(ok);
+    CHECK(hasGroup(loaded.groups, DevelopGroup::Effects));
+    CHECK(loaded.values.vignetteAmount == -25.0f);
+    CHECK(loaded.values.grainAmount == 30.0f);
+    CHECK(loaded.values.grainSize == 65.0f);
+    CHECK(loaded.values.grainRoughness == 80.0f);
+    CHECK(loaded.values.grainSeed == 0);
+}
+
 TEST_CASE("Unknown keys are tolerated (forward compatibility)", "[preset]") {
     const QByteArray json
         = R"({"name":"X","futureField":42,"groups":{"tone":{"exposure":1.0,"newKnob":9}}})";

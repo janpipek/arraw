@@ -1,4 +1,5 @@
 #pragma once
+#include "ChromeHider.h"
 #include "CropGeometry.h"
 #include "DecodeCache.h"
 #include "ImagePipeline.h"
@@ -64,6 +65,7 @@ public:
 protected:
     void closeEvent(QCloseEvent* e) override;
     void keyPressEvent(QKeyEvent* e) override;
+    void changeEvent(QEvent* e) override; // tracks WM-driven fullscreen state (docs/adr/0027)
 
 private slots:
     void openFile();
@@ -141,6 +143,10 @@ private:
     // (docs/adr/0009); toggleClipping flips both at once for the J key.
     void applyClipping();
     void toggleClipping();
+    void toggleFullScreen();
+    void exitFullScreen(); // leave fullscreen, restoring the prior maximized/normal state
+    void toggleChrome();
+    void restoreFocusModes();
 
     ImageViewport* viewport;
     AdjustmentPanel* adjPanel;
@@ -152,6 +158,7 @@ private:
     QDockWidget* filmStripDock;
     QDockWidget* adjustmentsDock;                     // right; collapses to a strip
     std::unique_ptr<CollapsiblePane> adjustmentsPane; // adjustmentsDock ↔ edge strip
+    QToolBar* mainToolBar = nullptr;
     QUndoStack* undoStack;
     QLabel* statusLabel;
     QLabel* proofLabel;
@@ -177,6 +184,10 @@ private:
     QAction* exportAction;
     QAction* clipHighlightsAction; // View → Show Highlight Clipping
     QAction* clipShadowsAction;    // View → Show Shadow Clipping
+    QAction* fullScreenAction = nullptr;
+    QAction* lightsOutAction = nullptr;
+    std::optional<ChromeHider> chromeHider;
+    bool wasMaximized = false;
 
     // Settings Propagation state (Milestone 8).
     std::optional<SettingsClipboard> settingsClipboard; // session-only, never the OS clipboard

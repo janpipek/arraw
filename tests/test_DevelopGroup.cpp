@@ -38,6 +38,14 @@ static GlobalAdjustment fullyEdited() {
     g.rotation = 7.5f;
     g.cropRect = {0.1, 0.2, 0.7, 0.6};
     g.cropConstrained = true;
+    // Effects (the seed is deliberately per-image, not part of the group)
+    g.vignetteAmount = -35.0f;
+    g.vignetteMidpoint = 62.0f;
+    g.vignetteFeather = 78.0f;
+    g.grainAmount = 24.0f;
+    g.grainSize = 40.0f;
+    g.grainRoughness = 71.0f;
+    g.grainSeed = 12345;
     return g;
 }
 
@@ -128,8 +136,25 @@ TEST_CASE("White Balance carries temperature and tint", "[developgroup]") {
     CHECK(result.saturation == target.saturation); // tint is WB, sat is Colour
 }
 
+TEST_CASE("Effects carries visible controls but preserves the target Grain seed", "[developgroup]") {
+    GlobalAdjustment target;
+    target.grainSeed = 99;
+    const GlobalAdjustment source = fullyEdited();
+
+    const GlobalAdjustment result = applyGroups(target, source, only(DevelopGroup::Effects));
+
+    CHECK(result.vignetteAmount == source.vignetteAmount);
+    CHECK(result.vignetteMidpoint == source.vignetteMidpoint);
+    CHECK(result.vignetteFeather == source.vignetteFeather);
+    CHECK(result.grainAmount == source.grainAmount);
+    CHECK(result.grainSize == source.grainSize);
+    CHECK(result.grainRoughness == source.grainRoughness);
+    CHECK(result.grainSeed == target.grainSeed);
+}
+
 TEST_CASE(
-    "All seven groups reproduce the source's globals but never per-image edits", "[developgroup]") {
+    "All groups reproduce the source's visible globals but never per-image state",
+    "[developgroup]") {
     // Exhaustiveness guard: if any global field belongs to no group, it stays at
     // the target's value and this fails — enforcing "no field silently fails to
     // copy" as a test, not a hope.
@@ -142,6 +167,7 @@ TEST_CASE(
     spot.source = {18.0, 20.0};
     spot.radius = 4.0;
     target.spots = {spot};
+    target.grainSeed = 9876;
 
     const GlobalAdjustment source = fullyEdited();
 
@@ -151,5 +177,6 @@ TEST_CASE(
     GlobalAdjustment expected = source;
     expected.localAdjustments = target.localAdjustments;
     expected.spots = target.spots;
+    expected.grainSeed = target.grainSeed;
     CHECK(result == expected);
 }

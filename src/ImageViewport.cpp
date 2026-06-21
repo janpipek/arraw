@@ -115,7 +115,7 @@ float ImageViewport::displayOriginalPixelHeight() const {
     if (!hasKnownOriginalSize())
         return 0.0f;
     // The displayed frame is oriented: an odd quarter-turn makes the native width
-    // the displayed height (docs/adr/0025), so the 1:1 zoom readout stays honest.
+    // the displayed height (docs/adr/0028), so the 1:1 zoom readout stays honest.
     const float orientedHeight = orient::swapsAspect(params.orientation) ? float(originalWidth)
                                                                          : float(originalHeight);
     if (cropMode() || showOriginal)
@@ -138,7 +138,7 @@ viewport::Geometry ImageViewport::geometry() const {
 }
 
 // The viewport works in the oriented display frame: an odd quarter-turn swaps
-// the image's effective width and height (docs/adr/0025).
+// the image's effective width and height (docs/adr/0028).
 void ImageViewport::updateImageAspect() {
     imageAspect = orient::swapsAspect(params.orientation) ? 1.0f / nativeImageAspect
                                                           : nativeImageAspect;
@@ -658,7 +658,7 @@ void ImageViewport::rotate90(bool clockwise) {
     const orient::Orientation next = clockwise ? orient::turnedClockwise(params.orientation)
                                                : orient::turnedCounterClockwise(params.orientation);
     // Rotate the committed crop with the content so it keeps framing the subject
-    // (docs/adr/0025); the aspect-lock inverts for free (re-derived from the rect).
+    // (docs/adr/0028); the aspect-lock inverts for free (re-derived from the rect).
     const QRectF crop = crop::rotateQuarterTurns(params.cropRect, clockwise ? 1 : 3);
     emit orientationCommitted(next, crop);
 }
@@ -783,8 +783,9 @@ void ImageViewport::drawStraightenLine(QPainter& p) const {
 }
 
 // Read the pre-WB pixel value the shader produces under `pos` (GPU tap, same
-// readback rationale as the histograms — docs/adr/0004) and invert the additive
-// white-balance model from image.frag to the temperature/tint that neutralise it.
+// readback rationale as the histograms — docs/adr/0004) and invert the
+// blackbody white-balance gain (docs/adr/0025) to the temperature/tint that
+// neutralise it.
 bool ImageViewport::sampleWhiteBalance(QPointF pos, float& kelvin, float& tintOut) {
     if (!hasImage || !core.ready())
         return false;
@@ -829,14 +830,9 @@ bool ImageViewport::sampleWhiteBalance(QPointF pos, float& kelvin, float& tintOu
     if (r + g + b < 1e-4) // clicked off the image (black) — ignore
         return false;
 
-    // Invert image.frag's additive WB (keep these constants in sync with it):
-    //   applyTemperature: t=(K-5500)/5500; r += t*0.15; b -= t*0.15
-    //   applyTint:        g += (tint/100)*0.05
-    // Solve r==g==b: t balances R/B; the grey level is r1=(r+b)/2; tint lifts G.
-    const double t = (b - r) / 0.3; // 0.3 = 2*0.15
-    const double r1 = 0.5 * (r + b);
-    kelvin = float(std::clamp(5500.0 * (1.0 + t), 2000.0, 12000.0));
-    tintOut = float(std::clamp((r1 - g) * 2000.0, -100.0, 100.0)); // 2000 = 100/0.05
+    // Invert the same blackbody gain the render uses (docs/adr/0025): find the
+    // kelvin/tint whose gain would neutralise this sampled pre-WB pixel.
+    whiteBalanceFromNeutral(float(r), float(g), float(b), kelvin, tintOut);
     return true;
 }
 
@@ -933,7 +929,7 @@ QImage ImageViewport::renderToImage(
 
     const QRectF& cr = p.cropRect;
     // The crop is normalised in the oriented display frame, so an odd quarter-turn
-    // presents the buffer with width/height swapped (docs/adr/0025). Size the
+    // presents the buffer with width/height swapped (docs/adr/0028). Size the
     // offscreen target and the rotation aspect to the oriented frame, else the
     // oriented content is squished into a native-shaped texture.
     int orientedW = buf.width;
@@ -983,7 +979,7 @@ QImage ImageViewport::renderClipSample(
     const QRectF& cr = p.cropRect;
     int orientedW = buf.width;
     int orientedH = buf.height;
-    if (orient::swapsAspect(p.orientation)) // oriented frame (docs/adr/0025)
+    if (orient::swapsAspect(p.orientation)) // oriented frame (docs/adr/0028)
         std::swap(orientedW, orientedH);
     const int cropW = (std::max) (1, int(cr.width() * orientedW + 0.5f));
     const int cropH = (std::max) (1, int(cr.height() * orientedH + 0.5f));

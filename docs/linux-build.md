@@ -35,9 +35,9 @@ Other distros: install the equivalent `qt6-base`, `qt6-base-private`,
 
 ## 2. How the release AppImage is built
 
-The release is a single self-contained **AppImage**, cut by GitHub Actions
-(`.github/workflows/release.yml`) when a `vX.Y.Z` tag is pushed, and attached to the
-matching GitHub Release. The job:
+The release is a single self-contained **AppImage**, cut by a manually dispatched
+GitHub Actions workflow (`.github/workflows/release.yml`) for an existing `vX.Y.Z`
+tag and attached to the matching GitHub Release. The job:
 
 1. Runs on a stock **`ubuntu-24.04`** runner (glibc 2.39) — this sets the AppImage's
    glibc floor, so the binary runs on every desktop from Ubuntu 24.04 LTS forward.
@@ -218,19 +218,78 @@ bug.
 | AppImage runs, but `QT_QPA_PLATFORM=offscreen` segfaults / `no Qt platform plugin` | offscreen plugin not bundled | Set `EXTRA_PLATFORM_PLUGINS=libqoffscreen.so` (§6.4); confirm `usr/plugins/platforms/libqoffscreen.so` is inside the AppImage. |
 | AppImage: `error while loading shared libraries: libGLX.so.0` / `libfontconfig.so.1` | Running on a host missing the excludelist baseline (e.g. bare container) | Install the host baseline: `libgl1 libglx0 libopengl0 libegl1 libglvnd0 libfontconfig1 …` (§6.5). Any real desktop already has it. |
 | AppImage built on Fedora won't start on Ubuntu 24.04 | glibc 2.40 floor from the Fedora build host | Build the shippable AppImage on Ubuntu 24.04 (§3 warning). |
-| Release workflow fails at *Verify tag matches project version* | Pushed tag `vX.Y.Z` ≠ `project(VERSION …)` | Bump `project(VERSION …)` in `CMakeLists.txt` to match the tag (or retag). |
+| Release workflow fails at *Verify tag, CMake, and RPM versions* | Selected tag `vX.Y.Z` disagrees with CMake or the RPM spec | Bump both version declarations before creating the tag, or select the correct tag. |
 | `appstreamcli validate` fails | Edited `metainfo.xml` | Fix per the validator output; `metadata_license`/`project_license` must be SPDX ids. |
 
 ---
 
-## 8. Quick reference
+## 8. Fedora RPM packaging
+
+Fedora 44 x86_64 has a native package in addition to the AppImage. It uses Fedora's
+system libraries and therefore targets one Fedora release, unlike the bundled
+AppImage.
+
+Build an RPM and SRPM from clean, committed `HEAD`:
+
+```bash
+just rpm
+```
+
+The command never installs packages. If build dependencies are absent, it prints
+the exact `sudo dnf install ...` command and exits. Untagged commits get a snapshot
+release containing the commit date and SHA; an exact `vX.Y.Z` tag produces the
+normal `Release: 1.fc44` package. Results and `SHA256SUMS` are written below
+`dist/fedora/`.
+
+The package build is offline and runs the full test suite plus desktop and AppStream
+validation. Run the clean installation test separately:
+
+```bash
+just rpm-smoke
+```
+
+That command uses Podman by default (Docker is also accepted), installs the RPM in a
+clean `fedora:44` container, runs `arraw --version` offscreen, and checks its desktop
+MIME registration. See [ADR 0029](adr/0029-self-hosted-fedora-rpm.md) for the design
+and [the security risk register](security.md) for unsigned-package and release risks.
+
+## 9. Quick reference
 
 ```bash
 # Dev build (Fedora system Qt)
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug && ninja -C build && ./build/arraw
 
-# Release AppImage: push a tag, CI does the rest
-git tag v0.1.0 && git push origin v0.1.0
-# -> .github/workflows/release.yml builds, smoke-tests, and attaches
-#    arraw-0.1.0-x86_64.AppImage to the GitHub Release.
+# Native Fedora package from committed HEAD
+just rpm
+just rpm-smoke
+
+# Release artifacts: manually dispatch .github/workflows/release.yml for a tag
+# and explicitly select AppImage and/or Fedora RPM.
 ```
+
+## 10. Manual release workflow security
+
+The release workflow must be selected from the repository's default branch. Its
+`release_tag` is the source input; AppImage and Fedora RPM booleans default to off,
+and dispatch fails when neither is selected. Every selected build and smoke test
+must pass before the publish job runs.
+
+This single environment protects the shared publish job for every selected platform;
+individual build jobs remain read-only and do not need separate environments. Only
+the environment-gated publish job receives `contents: write`. Existing assets are
+not replaced unless `replace_existing_assets` is explicitly selected. GitHub Actions
+are pinned to full commit SHAs and Dependabot proposes pin updates. Creating and
+verifying the protected environment is tracked in
+[GitHub issue #38](https://github.com/janpipek/arraw/issues/38).
+
+Build-provenance attestation is temporarily disabled while the repository is private
+(attestations are only publicly verifiable for public repos); the `actions/attest`
+step in the release workflow is gated off. Once the repository is public the step
+will be re-enabled, and a downloaded file's provenance can be verified with:
+
+```bash
+gh attestation verify arraw-0.1.0-1.fc44.x86_64.rpm --repo janpipek/arraw
+```
+
+RPM signing and immutable releases remain deferred security work; see
+[the security risk register](security.md).

@@ -29,6 +29,13 @@ GlobalAdjustment sampleParams() {
     p.sharpening = 40.0f;
     p.rotation = -2.5f;
     p.cropRect = QRectF(0.1, 0.2, 0.75, 0.6);
+    p.vignetteAmount = -28.0f;
+    p.vignetteMidpoint = 61.0f;
+    p.vignetteFeather = 73.0f;
+    p.grainAmount = 32.0f;
+    p.grainSize = 44.0f;
+    p.grainRoughness = 79.0f;
+    p.grainSeed = 3735928559U;
     for (int i = 0; i < 8; ++i) {
         p.hslHue[i] = float(i * 10 - 40);
         p.hslSat[i] = float(40 - i * 10);
@@ -53,6 +60,13 @@ void checkClose(const GlobalAdjustment& a, const GlobalAdjustment& b) {
     CHECK_THAT(a.vibrance, WithinAbs(b.vibrance, kScalarTol));
     CHECK_THAT(a.sharpening, WithinAbs(b.sharpening, kScalarTol));
     CHECK_THAT(a.rotation, WithinAbs(b.rotation, kScalarTol));
+    CHECK_THAT(a.vignetteAmount, WithinAbs(b.vignetteAmount, kScalarTol));
+    CHECK_THAT(a.vignetteMidpoint, WithinAbs(b.vignetteMidpoint, kScalarTol));
+    CHECK_THAT(a.vignetteFeather, WithinAbs(b.vignetteFeather, kScalarTol));
+    CHECK_THAT(a.grainAmount, WithinAbs(b.grainAmount, kScalarTol));
+    CHECK_THAT(a.grainSize, WithinAbs(b.grainSize, kScalarTol));
+    CHECK_THAT(a.grainRoughness, WithinAbs(b.grainRoughness, kScalarTol));
+    CHECK(a.grainSeed == b.grainSeed);
     CHECK_THAT(a.cropRect.left(), WithinAbs(b.cropRect.left(), kScalarTol));
     CHECK_THAT(a.cropRect.top(), WithinAbs(b.cropRect.top(), kScalarTol));
     CHECK_THAT(a.cropRect.right(), WithinAbs(b.cropRect.right(), 2 * kScalarTol));
@@ -364,6 +378,32 @@ TEST_CASE("writer emits crs:Temperature in absolute Kelvin", "[xmp][crs]") {
     CHECK(xml.contains(R"(crs:Temperature="6500.0000")"));
     CHECK(xml.contains(R"(crs:Exposure2012="0.8500")"));
     CHECK(xml.contains("http://ns.adobe.com/camera-raw-settings/1.0/"));
+}
+
+TEST_CASE("writer emits Effects controls in crs and Grain identity in arraw", "[xmp][crs]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("film.arw");
+    GlobalAdjustment p;
+    p.vignetteAmount = -28.0f;
+    p.vignetteMidpoint = 61.0f;
+    p.vignetteFeather = 73.0f;
+    p.grainAmount = 32.0f;
+    p.grainSize = 44.0f;
+    p.grainRoughness = 79.0f;
+    p.grainSeed = 3735928559U;
+    REQUIRE(XmpSidecar::saveAdjustments(rawPath, p));
+
+    QFile f(XmpSidecar::pathFor(rawPath));
+    REQUIRE(f.open(QIODevice::ReadOnly));
+    const QString xml = QString::fromUtf8(f.readAll());
+
+    CHECK(xml.contains(R"(crs:PostCropVignetteAmount="-28.0000")"));
+    CHECK(xml.contains(R"(crs:PostCropVignetteMidpoint="61.0000")"));
+    CHECK(xml.contains(R"(crs:PostCropVignetteFeather="73.0000")"));
+    CHECK(xml.contains(R"(crs:GrainAmount="32.0000")"));
+    CHECK(xml.contains(R"(crs:GrainSize="44.0000")"));
+    CHECK(xml.contains(R"(crs:GrainFrequency="79.0000")"));
+    CHECK(xml.contains(R"(arraw:GrainSeed="3735928559")"));
 }
 
 TEST_CASE("reader parses a Lightroom-style sidecar", "[xmp][crs]") {

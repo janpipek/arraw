@@ -54,6 +54,11 @@ CR2, CR3, NEF, ARW, DNG, RAF, ORF, RW2, PEF, SRW (via libraw)
 
 Zoom: scroll wheel (0.05×–32×). Pan: Alt+drag or middle-button drag.
 
+## FAQ
+
+Common runtime questions — including making arraw render on a laptop's discrete
+GPU instead of the integrated one — are in [docs/faq.md](docs/faq.md).
+
 ## Building
 
 ### Linux (Fedora)
@@ -65,6 +70,11 @@ cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
 ninja -C build
 ./build/arraw
 ```
+
+Build the native Fedora RPM/SRPM from a clean, committed checkout with `just rpm`.
+Run `just rpm-smoke` to install and verify it in a clean Fedora 44 container. The
+commands, required packages, and release workflow are documented in
+[the Linux build guide](docs/linux-build.md).
 
 ### macOS (Homebrew)
 

@@ -1,5 +1,10 @@
 # Linux distribution: a CI-built AppImage on Ubuntu 24.04, Qt 6.8 via aqtinstall
 
+> **Partially superseded by ADR 0029.** The AppImage design remains current, but
+> distro-native packages are no longer ruled out: Fedora RPMs are an additional
+> self-hosted artifact. Release CI is also manually dispatched rather than
+> tag-triggered.
+
 We distribute arraw on Linux as a single self-contained **AppImage**, cut by
 GitHub Actions on a tagged release and attached to a GitHub Release. The AppImage
 **bundles Qt 6.8, LibRaw, and lcms2** and borrows the host's standard baseline
@@ -82,7 +87,9 @@ older glibc — rides along without raising it.
   folder-of-RAWs workflow, plus runtime/manifest upkeep. The cheap door-openers
   for it are taken now anyway — the reverse-DNS app-id and AppStream metainfo.
 - **Distro-native `.rpm`/`.deb` in repos.** Per-distro packaging and Qt-version
-  skew, high upkeep, low payoff for a hobby release. Ruled out.
+  skew, high upkeep, low payoff for a hobby release. Originally ruled out;
+  superseded for self-hosted Fedora RPMs by ADR 0029. Distribution repositories
+  and Debian packages remain deferred.
 
 ## Consequences
 

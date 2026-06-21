@@ -77,6 +77,17 @@ outside the proofed output profile's gamut — a chroma-reproduction warning,
 not a tonal one. Distinct from [[Clipping]].
 _Avoid_: clipping, out-of-range
 
+**White Balance**:
+Neutralising an unwanted colour cast by scaling each colour channel by its own
+gain in the [[Working color space]] — the channels are *multiplied*, never
+offset, so a pixel carrying no light (black) keeps carrying none and can never
+acquire colour. Two controls: **Temperature**, the warm↔cool axis named in
+Kelvin (lower = warmer, higher = cooler), and **Tint**, the orthogonal
+green↔magenta axis. Neutral (5500 K, tint 0) leaves the image untouched.
+Available globally and, as a relative nudge, per [[Local Adjustment]].
+_Avoid_: colour balance (informal slider name), additive shift, colour cast
+(that is the defect White Balance removes, not the control itself)
+
 **Tone Curve**:
 A user-editable remapping of gamma-encoded (display-space) values, defined by
 control points in [0,1]². One Luma Curve plus three Channel Curves per image.
@@ -119,13 +130,13 @@ set. The brush, if added, becomes a further type.
 
 **Develop Group**:
 One selectable unit in the [[Copy Settings]] / [[Develop Preset]] checklist —
-the granularity at which develop settings travel between photos. The seven
+the granularity at which develop settings travel between photos. The eight
 groups partition every global field: White Balance, Tone, Tone Curve, Colour,
-HSL, Detail, and Geometry ([[Rotation]] + [[Crop]] + [[Aspect Ratio Lock]]
-together). [[Local Adjustment]]s are deliberately *not* a group — masks pinned
-to one photo's framing rarely transfer (a freehand-mapping scheme is a possible
-future). Applying a group **replaces** every field in it on the target,
-including resetting to defaults when the source group is unedited.
+HSL, Detail, Geometry ([[Rotation]] + [[Crop]] + [[Aspect Ratio Lock]] together),
+and Effects ([[Vignette]] + [[Grain]]). Per-image state such as a Grain's hidden
+seed and [[Local Adjustment]] masks does not travel with a group. Applying a
+group **replaces** every visible field in it on the target, including resetting
+to defaults when the source group is unedited.
 _Avoid_: section, category, panel
 
 **Copy Settings**:
@@ -205,6 +216,18 @@ The crop-tool toggle that swaps the [[Aspect Ratio Lock]]'s target width:height
 (landscape ↔ portrait). Reshapes the crop rectangle only; never touches image
 pixels or [[Orientation]]. Was historically mislabelled "Flip Orientation".
 _Avoid_: flip orientation (collides with image [[Orientation]]), rotate crop
+
+**Vignette**:
+A global develop effect that darkens or lightens the outside of the final
+[[Crop]] with a centred elliptical falloff. Its Amount, Midpoint, and Feather
+travel together in the Effects [[Develop Group]].
+_Avoid_: edge burn, radial mask (a [[Mask]] is a Local Adjustment stencil)
+
+**Grain**:
+A monochromatic, zero-mean texture applied as the last develop effect in a
+perceptual encoding. Its pattern is deterministic for one image and anchored to
+the cropped frame, so it does not swim during preview or change on reopen.
+_Avoid_: noise reduction, sensor noise, digital noise
 
 **Spot**:
 A clone-based pixel replacement applied to the decoded [[ImageBuffer]] before the

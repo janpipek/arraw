@@ -25,6 +25,22 @@
     </ul>
   </description>
   <launchable type="desktop-id">io.github.janpipek.arraw.desktop</launchable>
+  <provides>
+    <mediatype>image/x-canon-cr2</mediatype>
+    <mediatype>image/x-canon-cr3</mediatype>
+    <mediatype>image/x-nikon-nef</mediatype>
+    <mediatype>image/x-sony-arw</mediatype>
+    <mediatype>image/x-adobe-dng</mediatype>
+    <mediatype>image/x-fuji-raf</mediatype>
+    <mediatype>image/x-olympus-orf</mediatype>
+    <mediatype>image/x-panasonic-rw2</mediatype>
+    <mediatype>image/x-pentax-pef</mediatype>
+    <mediatype>image/jpeg</mediatype>
+    <mediatype>image/png</mediatype>
+    <mediatype>image/tiff</mediatype>
+    <mediatype>image/webp</mediatype>
+    <mediatype>image/bmp</mediatype>
+  </provides>
   <content_rating type="oars-1.1"/>
   <url type="homepage">https://github.com/janpipek/arraw</url>
   <url type="bugtracker">https://github.com/janpipek/arraw/issues</url>

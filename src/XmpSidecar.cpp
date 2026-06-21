@@ -64,7 +64,7 @@ SidecarLoadResult XmpSidecar::resolveForImage(
         loaded.data = {};
         loaded.data.adjustments.cropRect = defaultCrop;
     }
-    // Precedence (docs/adr/0025): a stored tiff:Orientation wins; otherwise seed
+    // Precedence (docs/adr/0028): a stored tiff:Orientation wins; otherwise seed
     // from the file's EXIF — also the migration path for pre-orientation sidecars.
     if (!loaded.data.orientationStored)
         loaded.data.adjustments.orientation = seededOrientation;
@@ -278,8 +278,20 @@ SidecarLoadResult XmpSidecar::loadWithStatus(const QString& rawPath) {
             p.vibrance = attr("Vibrance", 0.0f);
             p.sharpening = attr("Sharpness", 0.0f);
             p.rotation = attr("CropAngle", 0.0f);
+            p.vignetteAmount = attr("PostCropVignetteAmount", 0.0f);
+            p.vignetteMidpoint = attr("PostCropVignetteMidpoint", 50.0f);
+            p.vignetteFeather = attr("PostCropVignetteFeather", 50.0f);
+            p.grainAmount = attr("GrainAmount", 0.0f);
+            p.grainSize = attr("GrainSize", 50.0f);
+            p.grainRoughness = attr("GrainFrequency", 50.0f);
+            if (const auto seed = xml.attributes().value(kNsArraw, "GrainSeed"); !seed.isEmpty()) {
+                bool ok = false;
+                const auto value = seed.toUInt(&ok);
+                if (ok)
+                    p.grainSeed = value;
+            }
             // Coarse orientation: the standard EXIF/tiff enum. Absent means the
-            // decode layer seeds it from EXIF instead (docs/adr/0025), so leave
+            // decode layer seeds it from EXIF instead (docs/adr/0028), so leave
             // the default identity here when the attribute is missing.
             if (auto o = xml.attributes().value(kNsTiff, "Orientation"); !o.isEmpty()) {
                 bool ok = false;
@@ -490,13 +502,21 @@ static bool writeFile(const QString& rawPath, const SidecarData& data) {
     write("Saturation", p.saturation);
     write("Vibrance", p.vibrance);
     write("Sharpness", p.sharpening);
-    write("CropAngle", p.rotation); // Adobe's real straighten field (docs/adr/0025)
+    write("CropAngle", p.rotation); // Adobe's real straighten field (docs/adr/0028)
+    write("PostCropVignetteAmount", p.vignetteAmount);
+    write("PostCropVignetteMidpoint", p.vignetteMidpoint);
+    write("PostCropVignetteFeather", p.vignetteFeather);
+    write("GrainAmount", p.grainAmount);
+    write("GrainSize", p.grainSize);
+    write("GrainFrequency", p.grainRoughness);
+    if (p.grainSeed != 0)
+        xml.writeAttribute(kNsArraw, "GrainSeed", QString::number(p.grainSeed));
     write("CropLeft", float(p.cropRect.left()));
     write("CropTop", float(p.cropRect.top()));
     write("CropRight", float(p.cropRect.right()));
     write("CropBottom", float(p.cropRect.bottom()));
     xml.writeAttribute(kNsCrs, "CropConstrainAspectRatio", p.cropConstrained ? "True" : "False");
-    // Coarse orientation as the standard EXIF/tiff enum 1..8 (docs/adr/0025).
+    // Coarse orientation as the standard EXIF/tiff enum 1..8 (docs/adr/0028).
     xml.writeAttribute(kNsTiff, "Orientation", QString::number(orient::toExif(p.orientation)));
 
     // HSL

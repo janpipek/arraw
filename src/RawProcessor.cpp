@@ -130,7 +130,7 @@ LoadResult RawProcessor::load(
     raw->imgdata.params.use_camera_wb = 1;
     raw->imgdata.params.no_auto_bright = 1;
     // Decode in the *native* sensor orientation; Orientation is a develop edit
-    // applied downstream, seeded from the camera flag below (docs/adr/0025).
+    // applied downstream, seeded from the camera flag below (docs/adr/0028).
     raw->imgdata.params.user_flip = 0;
     raw->imgdata.params.output_bps = 16;
     raw->imgdata.params.output_color = 8; // Rec.2020 working space (needs libraw ≥ 0.21)

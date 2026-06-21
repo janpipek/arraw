@@ -21,19 +21,21 @@ AppStream metainfo) but build none of the store machinery yet.
   guard fails the release if the pushed `vX.Y.Z` tag disagrees. The value is
   threaded into `setApplicationVersion` and a `--version` flag (via the
   `ARRAW_VERSION` compile definition and `QCommandLineParser`).
-- **Build & release via GitHub Actions**, tag-triggered: one workflow, one matrix
-  leg per OS, all attaching to the same Release.
+- **Build & release via GitHub Actions**, manually dispatched for an existing tag:
+  each platform is explicitly selected and all successful artifacts attach to the
+  same Release. Protected-environment setup is tracked in
+  [GitHub issue #38](https://github.com/janpipek/arraw/issues/38).
 - **x86_64** baseline everywhere (macOS additionally needs Apple Silicon).
 - **No auto-update** for v0.x — users re-download from Releases.
 
-## Linux — IMPLEMENTED (see ADR 0014)
+## Linux AppImage — IMPLEMENTED (see ADR 0014)
 
 Single-file **AppImage**, built in CI on a **stock `ubuntu-24.04` runner (glibc
 2.39)** with **Qt 6.8 from aqtinstall**, bundling Qt + LibRaw + lcms2, reaching
 every desktop from Ubuntu 24.04 LTS forward. Qt stays at 6.8 (the viewport needs
 `QRhiWidget`, 6.7+; 24.04's distro Qt is only 6.4, so we bring our own). Carries a
-`.desktop` launcher, the existing icons, and an AppStream `metainfo.xml`; file
-associations and zsync auto-update are deferred. x86_64 only.
+`.desktop` launcher, the existing icons, and an AppStream `metainfo.xml`; zsync
+auto-update is deferred. x86_64 only.
 
 > The original plan built on a KDE neon container for "system Qt 6.8." That
 > premise turned out false (neon's image is jammy / Qt 6.7.2 with an empty
@@ -42,7 +44,8 @@ associations and zsync auto-update are deferred. x86_64 only.
 
 What's wired:
 
-- **`.github/workflows/release.yml`** — tag-triggered (`v*`). Installs Qt 6.8.3 via
+- **`.github/workflows/release.yml`** — manually dispatched for an existing tag and
+  selected platform targets. Installs Qt 6.8.3 via
   `jurplel/install-qt-action` on `ubuntu-24.04` plus the X/xkb/Vulkan/fontconfig
   `-dev` packages official Qt's CMake targets reference, builds, bundles via
   `linuxdeploy` + `linuxdeploy-plugin-qt` (`NO_STRIP=1`,
@@ -64,6 +67,21 @@ follow-ups: screenshots in the metainfo and a zsync update feed are deferred to 
 posture-B store path.
 
 Full rationale and rejected options: [ADR 0014](adr/0014-linux-distribution-appimage-ubuntu-aqt.md).
+
+## Fedora RPM — IMPLEMENTED (see ADR 0029)
+
+Fedora 44 x86_64 is the initial native-package target. A conventional spec builds
+an RPM and SRPM against Fedora system dependencies, with local snapshot builds from
+committed `HEAD` and tagged packages from the manual release workflow. The complete
+test suite, RPM metadata, desktop/AppStream data, private Qt ABI dependency, and a
+clean-container installation are validated before publication.
+
+The public release contains the installable RPM, SRPM, and checksums. Debug packages
+remain workflow artifacts. Packages are unsigned initially; provenance attestations
+that record their build origin are temporarily disabled while the repository is
+private and will be re-enabled when it is published. COPR, older Fedora releases, and Debian packaging are
+deferred. The security posture and remaining work are tracked in
+[the security risk register](security.md).
 
 ## Windows — BUILD + PORTABLE ZIP + INSTALLER DONE (signing/CI deferred)
 
@@ -93,7 +111,7 @@ associations, app-local runtime. Still deferred:
 
 - **Code signing** — ships unsigned; users click through SmartScreen ("More info →
   Run anyway"). Revisit with an Authenticode cert at posture B.
-- **CI** — local build for now; a tag-triggered GitHub Actions leg is a follow-on
+- **CI** — local build for now; a manually dispatched GitHub Actions leg is a follow-on
   (vcpkg binary caching / aqtinstall is the key concern).
 - **MSIX / winget / Scoop** — posture-B channels; Scoop is near-free now that the
   ZIP is self-contained.

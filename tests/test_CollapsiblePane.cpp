@@ -85,3 +85,58 @@ TEST_CASE("expand restores the content and hides the strip", "[collapsible]") {
     CHECK_FALSE(expanded->isHidden());
     CHECK(strip->isHidden());
 }
+
+TEST_CASE("hide conceals both widgets; show restores the expanded state", "[collapsible]") {
+    ensureApp();
+    QWidget host;
+    auto* expanded = new QWidget(&host);
+    auto* strip = new QWidget(&host);
+    CollapsiblePane pane(expanded, strip); // expanded
+
+    pane.hide();
+    CHECK(pane.isHidden());
+    CHECK(expanded->isHidden());
+    CHECK(strip->isHidden());
+
+    pane.show();
+    CHECK_FALSE(pane.isHidden());
+    CHECK_FALSE(expanded->isHidden()); // back to expanded
+    CHECK(strip->isHidden());
+}
+
+TEST_CASE("a hide/show cycle preserves the collapsed state", "[collapsible]") {
+    ensureApp();
+    QWidget host;
+    auto* expanded = new QWidget(&host);
+    auto* strip = new QWidget(&host);
+    CollapsiblePane pane(expanded, strip);
+    pane.collapse(); // strip showing
+
+    pane.hide();
+    CHECK(expanded->isHidden());
+    CHECK(strip->isHidden());
+
+    pane.show();
+    CHECK(pane.isCollapsed());
+    CHECK(expanded->isHidden());
+    CHECK_FALSE(strip->isHidden()); // returns collapsed, not expanded
+}
+
+TEST_CASE("toggling while hidden updates state without revealing a widget", "[collapsible]") {
+    ensureApp();
+    QWidget host;
+    auto* expanded = new QWidget(&host);
+    auto* strip = new QWidget(&host);
+    CollapsiblePane pane(expanded, strip); // expanded
+    pane.hide();
+
+    pane.toggle(); // flips remembered state to collapsed, but stays hidden
+
+    CHECK(pane.isCollapsed());
+    CHECK(expanded->isHidden());
+    CHECK(strip->isHidden()); // nothing pops back into view during lights-out
+
+    pane.show();
+    CHECK(pane.isCollapsed());
+    CHECK_FALSE(strip->isHidden());
+}

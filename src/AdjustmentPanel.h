@@ -81,6 +81,12 @@ private:
     SliderRow vibrance;
     SliderRow sharpening;
     SliderRow rotation;
+    SliderRow vignetteAmount;
+    SliderRow vignetteMidpoint;
+    SliderRow vignetteFeather;
+    SliderRow grainAmount;
+    SliderRow grainSize;
+    SliderRow grainRoughness;
 
     // HSL: 8 ranges per channel (Hue page=0, Sat page=1, Lum page=2)
     std::array<SliderRow, 8> hslHue;

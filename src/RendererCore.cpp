@@ -1,5 +1,6 @@
 #include "RendererCore.h"
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <variant>
 #include <QFile>
@@ -299,6 +300,10 @@ void RendererCore::fillUbuf(Ubuf& ub, const FrameParams& fp) const {
     ub.cropRect[3] = float(fp.cropRect.bottom());
 
     const GlobalAdjustment& a = fp.adjustments;
+    ub.effectRect[0] = float(a.cropRect.left());
+    ub.effectRect[1] = float(a.cropRect.top());
+    ub.effectRect[2] = float(a.cropRect.right());
+    ub.effectRect[3] = float(a.cropRect.bottom());
     bool hslActive = false;
     for (int i = 0; i < 8; ++i) {
         ub.hslHue[i] = a.hslHue[i] / 100.0f;
@@ -319,10 +324,41 @@ void RendererCore::fillUbuf(Ubuf& ub, const FrameParams& fp) const {
     ub.shadows = g.shadows;
     ub.whites = g.whites;
     ub.blacks = g.blacks;
-    ub.temperature = a.temperature;
-    ub.tint = g.tint;
+    // White balance: blackbody-derived per-channel gain, computed CPU-side and
+    // applied as a multiply in the shader so black stays black (docs/adr/0025).
+    const auto wb = whiteBalanceGain(a.temperature, a.tint);
+    ub.wbGainR = wb[0];
+    ub.wbGainG = wb[1];
+    ub.wbGainB = wb[2];
     ub.saturation = g.saturation;
     ub.vibrance = g.vibrance;
+    ub.vignetteAmount = a.vignetteAmount / 50.0f;
+    ub.vignetteMidpoint = std::clamp(a.vignetteMidpoint / 100.0f, 0.0f, 1.0f);
+    ub.vignetteFeather = std::clamp(a.vignetteFeather / 100.0f, 0.0f, 1.0f);
+    ub.grainAmount = std::clamp(a.grainAmount / 100.0f, 0.0f, 1.0f) * 0.08f;
+    const float size = std::clamp(a.grainSize / 100.0f, 0.0f, 1.0f);
+    ub.grainSize = std::exp2(std::lerp(std::log2(0.5f / 2048.0f), std::log2(4.0f / 2048.0f), size));
+    ub.grainRoughness = std::clamp(a.grainRoughness / 100.0f, 0.0f, 1.0f);
+    // A foreign crs sidecar can enable Grain without arraw:GrainSeed. Until the
+    // editor opens that image and mints a persistent seed, render with a stable
+    // fallback derived from the image's own geometry, so distinct photos in a
+    // grid don't all share one grain pattern.
+    if (a.grainAmount > 0.0f && a.grainSeed == 0) {
+        quint32 h = 0x6d2b79f5U;
+        auto mix = [&h](float f) {
+            quint32 bits;
+            std::memcpy(&bits, &f, sizeof(bits));
+            h ^= bits + 0x9e3779b9U + (h << 6) + (h >> 2);
+        };
+        mix(fp.aspect);
+        mix(float(a.cropRect.left()));
+        mix(float(a.cropRect.top()));
+        mix(float(a.cropRect.right()));
+        mix(float(a.cropRect.bottom()));
+        ub.grainSeed = h | 1U;
+    } else {
+        ub.grainSeed = a.grainSeed;
+    }
 
     ub.useLut = fp.useLut ? 1 : 0;
     ub.gamutWarn = fp.gamutWarn ? 1 : 0;
@@ -336,8 +372,7 @@ void RendererCore::fillUbuf(Ubuf& ub, const FrameParams& fp) const {
 
     // Local adjustments (docs/adr/0010): pack into the parallel vec4 arrays,
     // honouring the 16-mask cap. Deltas use the same scaling as the global path;
-    // local temperature is a relative -100..100 shift normalised like the global
-    // Kelvin path (÷100 → the shader's tempShift t).
+    // local white balance becomes a per-channel gain (see below, docs/adr/0025).
     const int n = std::min<int>(int(a.localAdjustments.size()), 16);
     ub.numLocalAdj = n;
     for (int i = 0; i < n; ++i) {
@@ -368,12 +403,18 @@ void RendererCore::fillUbuf(Ubuf& ub, const FrameParams& fp) const {
         ub.laTone[k + 3] = d.shadows;
         ub.laTone2[k + 0] = d.whites;
         ub.laTone2[k + 1] = d.blacks;
-        ub.laTone2[k + 2] = la.temperature / 100.0f;
-        ub.laTone2[k + 3] = d.tint;
+        // Local white balance: the relative -100..100 shift maps to an effective
+        // Kelvin and reuses the global blackbody gain (docs/adr/0025); the three
+        // gain channels ride in the spare laTone2.zw / laColor.w slots.
+        constexpr float kLocalTempKelvinPerUnit = 30.0f; // ±100 → 2500..8500 K
+        const auto lwb
+            = whiteBalanceGain(5500.0f + la.temperature * kLocalTempKelvinPerUnit, la.tint);
+        ub.laTone2[k + 2] = lwb[0];
+        ub.laTone2[k + 3] = lwb[1];
         ub.laColor[k + 0] = d.saturation;
         ub.laColor[k + 1] = d.vibrance;
         ub.laColor[k + 2] = maskType;
-        ub.laColor[k + 3] = 0.0f;
+        ub.laColor[k + 3] = lwb[2];
     }
 }
 
