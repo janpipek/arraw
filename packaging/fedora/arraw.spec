@@ -1,5 +1,5 @@
 Name:           arraw
-Version:        0.1.0
+Version:        0.2.0
 Release:        %{?snapshot_release}%{!?snapshot_release:1}%{?dist}
 Summary:        Lightweight RAW photo editor
 
@@ -54,5 +54,11 @@ appstreamcli validate --no-net \
 %{_datadir}/icons/hicolor/*/apps/io.github.janpipek.arraw.png
 
 %changelog
+* Sun Jun 21 2026 Jan Pipek <janpipek@users.noreply.github.com> - 0.2.0-1
+- Add image rotation, straightening, and EXIF orientation support
+- Add vignette and grain effects
+- Write digiKam-compatible XMP sidecars and group RAW+JPEG captures
+- Fix tone-curve crashes when points change mid-drag
+
 * Sat Jun 20 2026 Jan Pipek <janpipek@users.noreply.github.com> - 0.1.0-1
 - Add the first self-hosted Fedora package
