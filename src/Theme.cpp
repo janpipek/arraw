@@ -4,6 +4,7 @@
 
 #include <QApplication>
 #include <QPalette>
+#include <QString>
 #include <QStyleFactory>
 
 namespace Theme {
@@ -59,6 +60,20 @@ void apply(QApplication& app) {
     // platforms and inside the AppImage (ADR 0030).
     app.setStyle(QStyleFactory::create("Fusion"));
     app.setPalette(buildDarkPalette());
+
+    // Minimal, centralized QSS (ADR 0030): only for the handful of things the
+    // palette can't express well.
+    //   * QToolBar: Fusion frames the bar with a bright top/bottom border line;
+    //     flatten it so the toolbar blends into the chrome (background kept from
+    //     the palette, since styling a QToolBar otherwise drops it).
+    //   * QToolBar::separator: the vertical group dividers read as a bright bevel;
+    //     replace them with a dim, slightly inset 1px line.
+    // Colors are single-sourced from ThemeColors so they stay tunable.
+    app.setStyleSheet(
+        QStringLiteral("QToolBar { border: none; background: %1; } "
+                       "QToolBar::separator { background: %2; width: 1px; "
+                       "height: 1px; margin: 5px 6px; }")
+            .arg(ThemeColors::kWindow.name(), ThemeColors::kSeparator.name()));
 }
 
 } // namespace Theme

@@ -39,6 +39,10 @@ inline const QColor kBrightText = QColor(0xff, 0xff, 0xff);
 inline const QColor kDisabledText = QColor(0x6a, 0x6a, 0x6a);
 inline const QColor kPlaceholderText = QColor(0x80, 0x80, 0x80);
 
+// Toolbar separators / dividers. A dim divider only a touch off the window gray,
+// so group separators read as a gentle hint rather than a bright ridge.
+inline const QColor kSeparator = QColor(0x3a, 0x3a, 0x3a);
+
 // The single accent: a muted, desaturated steel blue. Legible for filmstrip
 // selection without flooding the screen with saturated color on multi-select.
 inline const QColor kHighlight = QColor(0x3b, 0x6e, 0xa5);
