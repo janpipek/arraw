@@ -93,9 +93,9 @@ GlobalAdjustment applyGroups(
         result.cropConstrained = source.cropConstrained;
     }
     if (hasGroup(selection, DevelopGroup::Effects)) {
-        result.vignetteAmount = source.vignetteAmount;
-        result.vignetteMidpoint = source.vignetteMidpoint;
-        result.vignetteFeather = source.vignetteFeather;
+        result.postCropVignetteAmount = source.postCropVignetteAmount;
+        result.postCropVignetteMidpoint = source.postCropVignetteMidpoint;
+        result.postCropVignetteFeather = source.postCropVignetteFeather;
         result.grainAmount = source.grainAmount;
         result.grainSize = source.grainSize;
         result.grainRoughness = source.grainRoughness;

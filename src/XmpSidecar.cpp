@@ -304,9 +304,9 @@ SidecarLoadResult XmpSidecar::loadWithStatus(const QString& rawPath) {
             p.vibrance = attr("Vibrance", 0.0f);
             p.sharpening = attr("Sharpness", 0.0f);
             p.rotation = attr("StraightenAngle", 0.0f);
-            p.vignetteAmount = attr("PostCropVignetteAmount", 0.0f);
-            p.vignetteMidpoint = attr("PostCropVignetteMidpoint", 50.0f);
-            p.vignetteFeather = attr("PostCropVignetteFeather", 50.0f);
+            p.postCropVignetteAmount = attr("PostCropVignetteAmount", 0.0f);
+            p.postCropVignetteMidpoint = attr("PostCropVignetteMidpoint", 50.0f);
+            p.postCropVignetteFeather = attr("PostCropVignetteFeather", 50.0f);
             p.grainAmount = attr("GrainAmount", 0.0f);
             p.grainSize = attr("GrainSize", 50.0f);
             p.grainRoughness = attr("GrainFrequency", 50.0f);
@@ -517,9 +517,9 @@ static QByteArray ownedPacket(const SidecarData& data) {
     write("Vibrance", p.vibrance);
     write("Sharpness", p.sharpening);
     write("StraightenAngle", p.rotation);
-    write("PostCropVignetteAmount", p.vignetteAmount);
-    write("PostCropVignetteMidpoint", p.vignetteMidpoint);
-    write("PostCropVignetteFeather", p.vignetteFeather);
+    write("PostCropVignetteAmount", p.postCropVignetteAmount);
+    write("PostCropVignetteMidpoint", p.postCropVignetteMidpoint);
+    write("PostCropVignetteFeather", p.postCropVignetteFeather);
     write("GrainAmount", p.grainAmount);
     write("GrainSize", p.grainSize);
     write("GrainFrequency", p.grainRoughness);

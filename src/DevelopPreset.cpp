@@ -78,9 +78,9 @@ QJsonObject groupToJson(DevelopGroup g, const GlobalAdjustment& v) {
         o["constrained"] = v.cropConstrained;
         break;
     case DevelopGroup::Effects:
-        o["vignetteAmount"] = v.vignetteAmount;
-        o["vignetteMidpoint"] = v.vignetteMidpoint;
-        o["vignetteFeather"] = v.vignetteFeather;
+        o["postCropVignetteAmount"] = v.postCropVignetteAmount;
+        o["postCropVignetteMidpoint"] = v.postCropVignetteMidpoint;
+        o["postCropVignetteFeather"] = v.postCropVignetteFeather;
         o["grainAmount"] = v.grainAmount;
         o["grainSize"] = v.grainSize;
         o["grainRoughness"] = v.grainRoughness;
@@ -137,9 +137,9 @@ void groupFromJson(DevelopGroup g, const QJsonObject& o, GlobalAdjustment& v) {
         break;
     }
     case DevelopGroup::Effects:
-        v.vignetteAmount = f("vignetteAmount", v.vignetteAmount);
-        v.vignetteMidpoint = f("vignetteMidpoint", v.vignetteMidpoint);
-        v.vignetteFeather = f("vignetteFeather", v.vignetteFeather);
+        v.postCropVignetteAmount = f("postCropVignetteAmount", v.postCropVignetteAmount);
+        v.postCropVignetteMidpoint = f("postCropVignetteMidpoint", v.postCropVignetteMidpoint);
+        v.postCropVignetteFeather = f("postCropVignetteFeather", v.postCropVignetteFeather);
         v.grainAmount = f("grainAmount", v.grainAmount);
         v.grainSize = f("grainSize", v.grainSize);
         v.grainRoughness = f("grainRoughness", v.grainRoughness);

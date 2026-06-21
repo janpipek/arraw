@@ -213,10 +213,10 @@ AdjustmentPanel::AdjustmentPanel(QWidget* parent)
         lbl->setFont(f);
         group->addWidget(lbl);
     };
-    subHeader(effects, "Vignette");
-    vignetteAmount = addSlider(effects, "Amount", kEffectAmountSpec);
-    vignetteMidpoint = addSlider(effects, "Midpoint", kEffectShapeSpec);
-    vignetteFeather = addSlider(effects, "Feather", kEffectShapeSpec);
+    subHeader(effects, "Post-Crop Vignette");
+    postCropVignetteAmount = addSlider(effects, "Amount", kEffectAmountSpec);
+    postCropVignetteMidpoint = addSlider(effects, "Midpoint", kEffectShapeSpec);
+    postCropVignetteFeather = addSlider(effects, "Feather", kEffectShapeSpec);
     subHeader(effects, "Grain");
     grainAmount = addSlider(effects, "Amount", kGrainAmountSpec);
     grainAmount.slider->setObjectName("grainAmountSlider"); // drives the Grain-seed lifecycle test
@@ -297,9 +297,9 @@ void AdjustmentPanel::syncParams() {
     adjustments.vibrance = v(vibrance);
     adjustments.sharpening = v(sharpening);
     adjustments.rotation = v(rotation);
-    adjustments.vignetteAmount = v(vignetteAmount);
-    adjustments.vignetteMidpoint = v(vignetteMidpoint);
-    adjustments.vignetteFeather = v(vignetteFeather);
+    adjustments.postCropVignetteAmount = v(postCropVignetteAmount);
+    adjustments.postCropVignetteMidpoint = v(postCropVignetteMidpoint);
+    adjustments.postCropVignetteFeather = v(postCropVignetteFeather);
     adjustments.grainAmount = v(grainAmount);
     adjustments.grainSize = v(grainSize);
     adjustments.grainRoughness = v(grainRoughness);
@@ -327,9 +327,9 @@ std::vector<AdjustmentPanel::SliderRow*> AdjustmentPanel::allRows() {
            &vibrance,
            &sharpening,
            &rotation,
-           &vignetteAmount,
-           &vignetteMidpoint,
-           &vignetteFeather,
+           &postCropVignetteAmount,
+           &postCropVignetteMidpoint,
+           &postCropVignetteFeather,
            &grainAmount,
            &grainSize,
            &grainRoughness};
@@ -446,9 +446,9 @@ void AdjustmentPanel::setParams(const GlobalAdjustment& p) {
     set(vibrance, p.vibrance);
     set(sharpening, p.sharpening);
     set(rotation, p.rotation);
-    set(vignetteAmount, p.vignetteAmount);
-    set(vignetteMidpoint, p.vignetteMidpoint);
-    set(vignetteFeather, p.vignetteFeather);
+    set(postCropVignetteAmount, p.postCropVignetteAmount);
+    set(postCropVignetteMidpoint, p.postCropVignetteMidpoint);
+    set(postCropVignetteFeather, p.postCropVignetteFeather);
     set(grainAmount, p.grainAmount);
     set(grainSize, p.grainSize);
     set(grainRoughness, p.grainRoughness);

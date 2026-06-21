@@ -81,9 +81,9 @@ private:
     SliderRow vibrance;
     SliderRow sharpening;
     SliderRow rotation;
-    SliderRow vignetteAmount;
-    SliderRow vignetteMidpoint;
-    SliderRow vignetteFeather;
+    SliderRow postCropVignetteAmount;
+    SliderRow postCropVignetteMidpoint;
+    SliderRow postCropVignetteFeather;
     SliderRow grainAmount;
     SliderRow grainSize;
     SliderRow grainRoughness;

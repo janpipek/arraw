@@ -330,9 +330,9 @@ void RendererCore::fillUbuf(Ubuf& ub, const FrameParams& fp) const {
     ub.wbGainB = wb[2];
     ub.saturation = g.saturation;
     ub.vibrance = g.vibrance;
-    ub.vignetteAmount = a.vignetteAmount / 50.0f;
-    ub.vignetteMidpoint = std::clamp(a.vignetteMidpoint / 100.0f, 0.0f, 1.0f);
-    ub.vignetteFeather = std::clamp(a.vignetteFeather / 100.0f, 0.0f, 1.0f);
+    ub.postCropVignetteAmount = a.postCropVignetteAmount / 50.0f;
+    ub.postCropVignetteMidpoint = std::clamp(a.postCropVignetteMidpoint / 100.0f, 0.0f, 1.0f);
+    ub.postCropVignetteFeather = std::clamp(a.postCropVignetteFeather / 100.0f, 0.0f, 1.0f);
     ub.grainAmount = std::clamp(a.grainAmount / 100.0f, 0.0f, 1.0f) * 0.08f;
     const float size = std::clamp(a.grainSize / 100.0f, 0.0f, 1.0f);
     ub.grainSize = std::exp2(std::lerp(std::log2(0.5f / 2048.0f), std::log2(4.0f / 2048.0f), size));

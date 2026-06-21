@@ -85,7 +85,7 @@ TEST_CASE("Effects preset round-trips controls but never serialises the Grain se
     DevelopPreset p;
     p.name = "Film";
     p.groups = groups({DevelopGroup::Effects});
-    p.values.vignetteAmount = -25.0f;
+    p.values.postCropVignetteAmount = -25.0f;
     p.values.grainAmount = 30.0f;
     p.values.grainSize = 65.0f;
     p.values.grainRoughness = 80.0f;
@@ -98,7 +98,7 @@ TEST_CASE("Effects preset round-trips controls but never serialises the Grain se
     const DevelopPreset loaded = parseDevelopPreset(json, &ok);
     REQUIRE(ok);
     CHECK(hasGroup(loaded.groups, DevelopGroup::Effects));
-    CHECK(loaded.values.vignetteAmount == -25.0f);
+    CHECK(loaded.values.postCropVignetteAmount == -25.0f);
     CHECK(loaded.values.grainAmount == 30.0f);
     CHECK(loaded.values.grainSize == 65.0f);
     CHECK(loaded.values.grainRoughness == 80.0f);

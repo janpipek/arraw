@@ -30,9 +30,9 @@ struct Ubuf {
     float wbGainB;
     float saturation;       // -1..+1
     float vibrance;         // -1..+1
-    float vignetteAmount;   // -2..+2 EV at maximum falloff
-    float vignetteMidpoint; // 0..1
-    float vignetteFeather;  // 0..1
+    float postCropVignetteAmount;   // -2..+2 EV at maximum falloff
+    float postCropVignetteMidpoint; // 0..1
+    float postCropVignetteFeather;  // 0..1
     float grainAmount;      // encoded-value standard deviation, 0..0.08
     float grainSize;        // grain diameter as a fraction of crop long edge
     float grainRoughness;   // 0..1

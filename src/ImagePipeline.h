@@ -58,6 +58,13 @@ struct GlobalAdjustment : SharedAdjustment {
     // Detail
     float sharpening = 0.0f; // 0 .. 100
 
+    // Lens Corrections (docs/adr/0027). Profile-driven, apply-once CPU corrections.
+    // Enable toggles only — the coefficients come from the lens profile
+    // (lensfun / embedded), so nothing numeric is stored here.
+    bool lensCorrectDistortion = false;
+    bool lensCorrectVignetting = false;
+    bool lensCorrectCA = false;
+
     // Geometry
     float rotation = 0.0f;                  // degrees, -45 .. +45
     QRectF cropRect = {0.0, 0.0, 1.0, 1.0}; // normalised UV, full image by default
@@ -65,9 +72,9 @@ struct GlobalAdjustment : SharedAdjustment {
 
     // Effects (docs/adr/0026). The seed is per-image identity: copy/paste and
     // presets transfer the six visible controls but preserve the target seed.
-    float vignetteAmount = 0.0f;    // -100 .. +100, mapped to -2 .. +2 EV
-    float vignetteMidpoint = 50.0f; // 0 .. 100
-    float vignetteFeather = 50.0f;  // 0 .. 100
+    float postCropVignetteAmount = 0.0f;    // -100 .. +100, mapped to -2 .. +2 EV
+    float postCropVignetteMidpoint = 50.0f; // 0 .. 100
+    float postCropVignetteFeather = 50.0f;  // 0 .. 100
     float grainAmount = 0.0f;       // 0 .. 100
     float grainSize = 50.0f;        // 0 .. 100
     float grainRoughness = 50.0f;   // 0 .. 100

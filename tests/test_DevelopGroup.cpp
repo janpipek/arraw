@@ -38,9 +38,9 @@ static GlobalAdjustment fullyEdited() {
     g.cropRect = {0.1, 0.2, 0.7, 0.6};
     g.cropConstrained = true;
     // Effects (the seed is deliberately per-image, not part of the group)
-    g.vignetteAmount = -35.0f;
-    g.vignetteMidpoint = 62.0f;
-    g.vignetteFeather = 78.0f;
+    g.postCropVignetteAmount = -35.0f;
+    g.postCropVignetteMidpoint = 62.0f;
+    g.postCropVignetteFeather = 78.0f;
     g.grainAmount = 24.0f;
     g.grainSize = 40.0f;
     g.grainRoughness = 71.0f;
@@ -130,9 +130,9 @@ TEST_CASE("Effects carries visible controls but preserves the target Grain seed"
 
     const GlobalAdjustment result = applyGroups(target, source, only(DevelopGroup::Effects));
 
-    CHECK(result.vignetteAmount == source.vignetteAmount);
-    CHECK(result.vignetteMidpoint == source.vignetteMidpoint);
-    CHECK(result.vignetteFeather == source.vignetteFeather);
+    CHECK(result.postCropVignetteAmount == source.postCropVignetteAmount);
+    CHECK(result.postCropVignetteMidpoint == source.postCropVignetteMidpoint);
+    CHECK(result.postCropVignetteFeather == source.postCropVignetteFeather);
     CHECK(result.grainAmount == source.grainAmount);
     CHECK(result.grainSize == source.grainSize);
     CHECK(result.grainRoughness == source.grainRoughness);
