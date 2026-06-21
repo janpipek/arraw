@@ -18,6 +18,8 @@ const char* developGroupKey(DevelopGroup g) {
         return "detail";
     case DevelopGroup::Geometry:
         return "geometry";
+    case DevelopGroup::LensCorrections:
+        return "lensCorrections";
     case DevelopGroup::Effects:
         return "effects";
     case DevelopGroup::Count_:
@@ -42,6 +44,8 @@ QString developGroupLabel(DevelopGroup g) {
         return QObject::tr("Detail");
     case DevelopGroup::Geometry:
         return QObject::tr("Geometry");
+    case DevelopGroup::LensCorrections:
+        return QObject::tr("Lens Corrections");
     case DevelopGroup::Effects:
         return QObject::tr("Effects");
     case DevelopGroup::Count_:
@@ -91,6 +95,11 @@ GlobalAdjustment applyGroups(
         result.rotation = source.rotation;
         result.cropRect = source.cropRect;
         result.cropConstrained = source.cropConstrained;
+    }
+    if (hasGroup(selection, DevelopGroup::LensCorrections)) {
+        result.lensCorrectDistortion = source.lensCorrectDistortion;
+        result.lensCorrectVignetting = source.lensCorrectVignetting;
+        result.lensCorrectCA = source.lensCorrectCA;
     }
     if (hasGroup(selection, DevelopGroup::Effects)) {
         result.postCropVignetteAmount = source.postCropVignetteAmount;

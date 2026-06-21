@@ -37,6 +37,10 @@ static GlobalAdjustment fullyEdited() {
     g.rotation = 7.5f;
     g.cropRect = {0.1, 0.2, 0.7, 0.6};
     g.cropConstrained = true;
+    // Lens Corrections
+    g.lensCorrectDistortion = true;
+    g.lensCorrectVignetting = true;
+    g.lensCorrectCA = true;
     // Effects (the seed is deliberately per-image, not part of the group)
     g.postCropVignetteAmount = -35.0f;
     g.postCropVignetteMidpoint = 62.0f;
@@ -110,6 +114,20 @@ TEST_CASE("Geometry moves rotation, crop, and the aspect-lock flag together", "[
     CHECK(result.cropConstrained == source.cropConstrained);
     // Geometry must not drag tonal fields along.
     CHECK(result.exposure == target.exposure);
+}
+
+TEST_CASE("Lens Corrections moves only its enable toggles", "[developgroup]") {
+    const GlobalAdjustment target; // defaults: all toggles off
+    const GlobalAdjustment source = fullyEdited();
+
+    const GlobalAdjustment result =
+        applyGroups(target, source, only(DevelopGroup::LensCorrections));
+
+    CHECK(result.lensCorrectDistortion == source.lensCorrectDistortion);
+    CHECK(result.lensCorrectVignetting == source.lensCorrectVignetting);
+    CHECK(result.lensCorrectCA == source.lensCorrectCA);
+    // Must not drag the post-crop vignette (a different group) along.
+    CHECK(result.postCropVignetteAmount == target.postCropVignetteAmount);
 }
 
 TEST_CASE("White Balance carries temperature and tint", "[developgroup]") {

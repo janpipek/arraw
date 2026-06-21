@@ -1517,6 +1517,7 @@ void MainWindow::syncSessionToEditors() {
     {
         QSignalBlocker block(adjPanel);
         adjPanel->setParams(session->params());
+        adjPanel->setLensProfileName(session->lensProfileName());
     }
     {
         QSignalBlocker block(localPanel);

@@ -124,11 +124,15 @@ false/`nullopt`.
     `spottedPreview` derive from the corrected buffer and `displayUVToBufferPixel`
     resolves to corrected-buffer pixels.
 
-## Persistence (XmpSidecar)
+## Persistence (XmpSidecar) — DONE
 
-13. Read/write `crs:LensProfileEnable`, `crs:LensProfileName`, the per-correction
-    toggles, and the corrective `crs:VignetteAmount` / `crs:VignetteMidpoint`.
-    Test the round-trip and that an absent profile loads as a clean no-op.
+13. ✅ **Done.** The three enable toggles round-trip as `arraw:LensCorrect{Distortion,
+    Vignetting,CA}` (arraw-owned namespace), written only when on, absent = off on
+    load. Decision: store toggles only — the profile *identity* and coefficients are
+    re-derived from the file on every load (more robust to DB updates), so no
+    `crs:LensProfile*` is persisted in M-a (Lightroom lens-profile interop, a
+    different model, is deferred). Round-trip + absent-loads-off tests in
+    `test_XmpSidecar.cpp`.
 
 ## The rename (mechanical, no data migration)
 
@@ -145,12 +149,17 @@ false/`nullopt`.
     (`lensCorrectDistortion` / `lensCorrectVignetting` / `lensCorrectCA`),
     setting up persistence (step 13) and the apply-time wiring (step 11).
 
-## UI
+## UI — DONE
 
-15. New **Lens Corrections** panel in `AdjustmentPanel`: three checkboxes + a
-    read-only profile-name label ("No profile available" when unmatched). New
-    ninth [[Develop Group]] in the Copy/Preset checklist (`DevelopGroup.cpp`) and
-    `DevelopPreset` JSON.
+15. ✅ **Done.** `AdjustmentPanel` has a **Lens Corrections** section: a profile-name
+    label ("No lens profile" when unmatched) + three checkboxes (Distortion,
+    Vignetting, Chromatic Aberration), disabled until `setLensProfileName` is given a
+    match. Toggling emits `paramsChanged` and commits one undo step. MainWindow feeds
+    the resolved name via `DevelopSession::lensProfileName()` in `syncSessionToEditors`.
+    Added the ninth **LensCorrections** [[Develop Group]] (`DevelopGroup` enum, key,
+    label, `applyGroups`) and its `DevelopPreset` JSON (`distortion`/`vignetting`/`ca`).
+    Tests: `[adjustpanel][lens]` (gating + drive), `[developgroup]` group isolation +
+    exhaustiveness, full suite 266.
 
 ## Packaging (the M-a cost — parallel track, ties to issue #38)
 

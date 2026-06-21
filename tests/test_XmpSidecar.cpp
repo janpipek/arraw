@@ -382,6 +382,33 @@ TEST_CASE("local adjustments round-trip through the arraw namespace", "[xmp][arr
     CHECK_THAT(r.temperature, WithinAbs(25.0, kScalarTol));
 }
 
+TEST_CASE("lens correction toggles round-trip through the arraw namespace", "[xmp][arraw][lens]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("lens.arw");
+
+    GlobalAdjustment p;
+    p.lensCorrectDistortion = true;
+    p.lensCorrectVignetting = false;
+    p.lensCorrectCA = true;
+
+    REQUIRE(XmpSidecar::saveAdjustments(rawPath, p));
+    const GlobalAdjustment loaded = XmpSidecar::loadAdjustments(rawPath);
+
+    CHECK(loaded.lensCorrectDistortion);
+    CHECK_FALSE(loaded.lensCorrectVignetting);
+    CHECK(loaded.lensCorrectCA);
+}
+
+TEST_CASE("absent lens correction toggles load as off", "[xmp][arraw][lens]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("plain.arw");
+    REQUIRE(XmpSidecar::saveAdjustments(rawPath, GlobalAdjustment{}));
+    const GlobalAdjustment loaded = XmpSidecar::loadAdjustments(rawPath);
+    CHECK_FALSE(loaded.lensCorrectDistortion);
+    CHECK_FALSE(loaded.lensCorrectVignetting);
+    CHECK_FALSE(loaded.lensCorrectCA);
+}
+
 // The arraw-native format contract — exact emitted fields, independent of our
 // reader. A matched reader/writer bug passes round-trip but fails this.
 TEST_CASE(

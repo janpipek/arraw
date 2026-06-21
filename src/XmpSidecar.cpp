@@ -316,6 +316,16 @@ SidecarLoadResult XmpSidecar::loadWithStatus(const QString& rawPath) {
                 if (ok)
                     p.grainSeed = value;
             }
+            // Lens Corrections enable toggles (docs/adr/0027). arraw-owned; the profile
+            // identity/coefficients are re-derived from the file on load, not stored.
+            const auto boolAttr = [&](const char* name) {
+                return xml.attributes().value(kNsArraw, name).toString().compare(
+                           "true", Qt::CaseInsensitive)
+                    == 0;
+            };
+            p.lensCorrectDistortion = boolAttr("LensCorrectDistortion");
+            p.lensCorrectVignetting = boolAttr("LensCorrectVignetting");
+            p.lensCorrectCA = boolAttr("LensCorrectCA");
             // crs stores the crop as normalised edges (left/top/right/bottom),
             // QRectF wants x/y/width/height.
             p.cropRect = QRectF(
@@ -525,6 +535,13 @@ static QByteArray ownedPacket(const SidecarData& data) {
     write("GrainFrequency", p.grainRoughness);
     if (p.grainSeed != 0)
         xml.writeAttribute(kNsArraw, "GrainSeed", QString::number(p.grainSeed));
+    // Lens Corrections toggles (docs/adr/0027); written only when on (default off).
+    if (p.lensCorrectDistortion)
+        xml.writeAttribute(kNsArraw, "LensCorrectDistortion", "True");
+    if (p.lensCorrectVignetting)
+        xml.writeAttribute(kNsArraw, "LensCorrectVignetting", "True");
+    if (p.lensCorrectCA)
+        xml.writeAttribute(kNsArraw, "LensCorrectCA", "True");
     write("CropLeft", float(p.cropRect.left()));
     write("CropTop", float(p.cropRect.top()));
     write("CropRight", float(p.cropRect.right()));

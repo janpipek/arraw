@@ -38,6 +38,8 @@ public:
     const ImageMetadata& metadata() const { return imageMetadata; }
     const UserMetadata& userMetadata() const { return metadata_; }
     const QRectF& defaultCrop() const { return imageDefaultCrop; }
+    // Resolved lens-profile name (empty when none matched), for the UI label.
+    const QString& lensProfileName() const { return lensModel.lensName; }
     const GlobalAdjustment& params() const { return adjustments; }
     bool baseLook() const { return useBaseLook; }
     bool developDirty() const { return isDevelopDirty; }

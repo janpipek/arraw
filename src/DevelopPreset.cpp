@@ -77,6 +77,11 @@ QJsonObject groupToJson(DevelopGroup g, const GlobalAdjustment& v) {
             = QJsonArray{v.cropRect.x(), v.cropRect.y(), v.cropRect.width(), v.cropRect.height()};
         o["constrained"] = v.cropConstrained;
         break;
+    case DevelopGroup::LensCorrections:
+        o["distortion"] = v.lensCorrectDistortion;
+        o["vignetting"] = v.lensCorrectVignetting;
+        o["ca"] = v.lensCorrectCA;
+        break;
     case DevelopGroup::Effects:
         o["postCropVignetteAmount"] = v.postCropVignetteAmount;
         o["postCropVignetteMidpoint"] = v.postCropVignetteMidpoint;
@@ -136,6 +141,11 @@ void groupFromJson(DevelopGroup g, const QJsonObject& o, GlobalAdjustment& v) {
         v.cropConstrained = o.value("constrained").toBool(v.cropConstrained);
         break;
     }
+    case DevelopGroup::LensCorrections:
+        v.lensCorrectDistortion = o.value("distortion").toBool(v.lensCorrectDistortion);
+        v.lensCorrectVignetting = o.value("vignetting").toBool(v.lensCorrectVignetting);
+        v.lensCorrectCA = o.value("ca").toBool(v.lensCorrectCA);
+        break;
     case DevelopGroup::Effects:
         v.postCropVignetteAmount = f("postCropVignetteAmount", v.postCropVignetteAmount);
         v.postCropVignetteMidpoint = f("postCropVignetteMidpoint", v.postCropVignetteMidpoint);
