@@ -56,6 +56,7 @@ appstreamcli validate --no-net \
 %changelog
 * Sun Jun 21 2026 Jan Pipek <janpipek@users.noreply.github.com> - 0.2.1-1
 - Improve platform-specific Just recipes and add a portable clean task
+- Embrace Qt fusion styling
 
 * Sun Jun 21 2026 Jan Pipek <janpipek@users.noreply.github.com> - 0.2.0-1
 - Add image rotation, straightening, and EXIF orientation support
