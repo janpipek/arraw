@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "Theme.h"
 #include <QApplication>
 #include <QCommandLineParser>
 #include <QDir>
@@ -10,6 +11,10 @@ int main(int argc, char* argv[]) {
     QApplication app(argc, argv);
     app.setApplicationName("arraw");
     app.setOrganizationName("arraw");
+
+    // Neutral dark photographer-friendly theme (ADR 0030). Must run before any
+    // widget is constructed so the Fusion style and palette cascade everywhere.
+    Theme::apply(app);
 
     // Reverse-DNS identity shared across platforms (ADR 0014). organizationDomain
     // backs the macOS QSettings domain and the AppStream/desktop id; on Linux
