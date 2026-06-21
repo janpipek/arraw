@@ -21,6 +21,8 @@ struct ImageGroup {
 // only on the path strings (no filesystem access).
 QList<ImageGroup> groupImageFiles(const QStringList& paths);
 
-// Short label for a primary's companions, e.g. "JPG" for one or "JPG+1" for two.
-// Empty when there are no companions. Used by the filmstrip cell badge.
-QString companionBadgeText(const QStringList& companions);
+// The filmstrip Format Label for a shot: the canonical format name of the
+// primary, then each companion's, joined by '+' with each format listed once —
+// e.g. "ARW", "JPEG", or "ARW+JPEG". jpg/jpeg map to JPEG and tif/tiff to TIFF;
+// other suffixes are uppercased. Describes the shot's own formats.
+QString formatLabelText(const ImageGroup& group);

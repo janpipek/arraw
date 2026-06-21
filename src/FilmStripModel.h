@@ -22,7 +22,8 @@ public:
         PathRole = Qt::UserRole + 1,
         RatingRole,     // int: 0 unrated, -1 reject, 1..5 stars
         LabelRole,      // int: a ColourLabel value
-        CompanionsRole, // QStringList: same-shot files attached to this primary (e.g. the JPEG)
+        CompanionsRole,  // QStringList: same-shot files attached to this primary (e.g. the JPEG)
+        FormatLabelRole, // QString: the shot's Format Label, e.g. "ARW" or "ARW+JPEG"
     };
 
     explicit FilmStripModel(QObject* parent = nullptr);
