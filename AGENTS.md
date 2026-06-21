@@ -6,6 +6,8 @@ This file provides guidance to AI coding assistants when working with code in th
 
 Use these commands for building, running, and testing the project.
 
+When a `Justfile` recipe needs more than a couple of commands, put the logic in a `tools/*.py` script (stdlib, argparse, styled like `tools/package_windows.py`) and make the recipe a thin `uv run tools/<name>.py {{args}}` wrapper — not an inline bash recipe, which isn't portable since the Justfile sets `windows-powershell := true`. See `bump`, `rpm`, and `windows-installer`.
+
 ### Build and Run
 
 #### Linux (Fedora)

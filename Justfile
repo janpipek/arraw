@@ -85,3 +85,7 @@ rpm-smoke:
 windows-installer:
     # Inno setup must be present
     uv run tools/package_windows.py --installer
+
+# Bump the version in CMake, the RPM spec, and the AppStream metainfo (no git)
+bump version:
+    uv run tools/bump_version.py {{version}}
