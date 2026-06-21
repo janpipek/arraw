@@ -41,8 +41,8 @@ layout(std140, binding = 0) uniform buf {
     int   gamutWarn;
     int   baseLook;
     int   displayEncode; // 1: encode for the (assumed sRGB) display;
-                         // 0: output clamped linear working space (export readback)
-    int   curveInput;    // stop after tone regions + gamma-encode (histograms)
+                         // 0: unbounded linear working-space export readback
+    int   curveInput;    // stop after Basic Tone + gamma-encode (histograms)
     int   hslActive;
     int   wbInput;       // stop before white balance, output linear (WB picker)
     int   clipWarn;      // clipping overlay bits: 1 = highlights, 2 = shadows (docs/adr/0009)

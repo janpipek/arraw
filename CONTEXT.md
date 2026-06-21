@@ -115,6 +115,27 @@ The histogram of the image as the tone curve receives it — after upstream
 adjustments, gamma-encoded — drawn behind the curve so its x-axis matches the
 curve's. Distinct from the panel Histogram, which shows the final image.
 
+**Exposure**:
+A broad, stop-like brightness adjustment concentrated through the perceptual
+midtones; black and white stay anchored. _Avoid_: scene-linear gain
+
+**Contrast**:
+Expansion or contraction of tones around perceptual middle grey while black and
+white stay anchored. _Avoid_: endpoint clipping
+
+**Shadows / Highlights**:
+Regional tone controls that separate or compress dark/bright detail while
+preserving the black/white endpoints. _Avoid_: black point, white point
+
+**Blacks / Whites**:
+The two clipping-point controls: Blacks deliberately changes shadow clipping and
+Whites deliberately changes highlight clipping. _Avoid_: Shadows, Highlights
+
+**Recoverable Headroom**:
+Developed working values above display white (1.0) that remain available to later
+adjustments and are clipped only by the display or a bounded output encoding.
+_Avoid_: already clipped, invalid values
+
 **Local Adjustment**:
 A develop edit that applies only within a masked region of one image — a
 *([[Mask]] + tonal/colour deltas)* pair, as opposed to the global adjustments
