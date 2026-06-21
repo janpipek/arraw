@@ -62,6 +62,16 @@ TEST_CASE("a primary with no companions reports an empty companion list", "[film
     REQUIRE(model.data(model.index(0), FilmStripModel::CompanionsRole).toStringList().isEmpty());
 }
 
+TEST_CASE("model reports the shot's format label", "[filmstrip]") {
+    ensureApp();
+    FilmStripModel model;
+    model.setFiles(
+        {"/photos/a.arw", "/photos/b.jpg"}, {{"/photos/a.arw", {"/photos/a.jpg"}}});
+
+    REQUIRE(model.data(model.index(0), FilmStripModel::FormatLabelRole).toString() == "ARW+JPEG");
+    REQUIRE(model.data(model.index(1), FilmStripModel::FormatLabelRole).toString() == "JPEG");
+}
+
 TEST_CASE("model offers the filename as the tooltip before metadata is loaded", "[filmstrip]") {
     ensureApp();
     FilmStripModel model;

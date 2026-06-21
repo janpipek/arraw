@@ -27,6 +27,22 @@ name in `xmp:Label` (matching Lightroom's default label set so the colours
 survive a round-trip). The meaning of each colour is the user's own convention.
 _Avoid_: tag, keyword, free-text label
 
+**Shot**:
+A single capture as the filmstrip presents it: one cell, even when the camera
+wrote several files sharing a base name (RAW + JPEG). The RAW is the primary —
+the file shown and edited — and same-stem standard images are its companions.
+Files that do not pair stand alone as their own shot.
+_Avoid_: group (overloaded with [[Develop Group]]), frame (a shot may be several files)
+
+**Format Label**:
+The chip on a filmstrip cell naming the image formats present in that [[Shot]],
+primary first — "ARW", "JPEG", or "ARW+JPEG" when a RAW carries companions.
+Always shown on every cell, one token per distinct canonical format name
+(jpg/jpeg → JPEG, tif/tiff → TIFF, RAW types as their extension). It describes
+the frame's own formats; it is not [[User Metadata]].
+_Avoid_: companion badge (the old name — it advertised only the hidden companion),
+extension, file type
+
 **User Metadata**:
 Writable, user-authored metadata that travels with an image — today the
 [[Rating]] and [[Colour Label]], plausibly caption/keywords later. Persisted as

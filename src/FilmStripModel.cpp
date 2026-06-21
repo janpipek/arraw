@@ -1,5 +1,6 @@
 #include "FilmStripModel.h"
 #include "FilmStripTooltip.h"
+#include "ImageGrouping.h"
 #include <algorithm>
 #include <QFileInfo>
 
@@ -94,6 +95,8 @@ QVariant FilmStripModel::data(const QModelIndex& index, int role) const {
         return int(marks.value(path).label);
     if (role == CompanionsRole)
         return companions.value(path);
+    if (role == FormatLabelRole)
+        return formatLabelText({path, companions.value(path)});
     return {};
 }
 
