@@ -36,8 +36,12 @@ std::optional<LensCorrectionModel> resolveLensfunModel(const QString& dbPath, co
         return std::nullopt;
 
     lfDatabase db;
-    if (!db.LoadDirectory(dbPath.toUtf8().constData()))
+    if (dbPath.isEmpty()) {
+        if (db.Load() != LF_NO_ERROR)
+            return std::nullopt; // no system database available
+    } else if (!db.LoadDirectory(dbPath.toUtf8().constData())) {
         return std::nullopt;
+    }
 
     const lfCamera** cams = db.FindCameras(query.cameraMaker.toUtf8().constData(),
                                            query.cameraModel.toUtf8().constData());

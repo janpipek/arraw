@@ -1,6 +1,7 @@
 #include "RawProcessor.h"
 #include "ColorManagement.h"
 #include "ImageMetadata.h"
+#include "LensfunSource.h"
 #include "Trace.h"
 #include <algorithm>
 #include <cmath>
@@ -165,5 +166,26 @@ LoadResult RawProcessor::load(
     timer.lap("raw normalize");
     ImageBuffer preview = downsample2x(fullRes);
     timer.lap("raw downsample");
-    return {std::move(fullRes), std::move(preview), metadata, {}, defaultCrop};
+
+    // Resolve a lens profile from EXIF (docs/adr/0027). Off the main thread; the
+    // correction itself is applied later, toggle-gated, in DevelopSession. An empty
+    // db path uses lensfun's system database; no match leaves the model empty.
+    LensCorrectionModel lensModel;
+    {
+        const auto& id = raw->imgdata.idata;
+        const auto& other = raw->imgdata.other;
+        LensQuery query;
+        query.cameraMaker = QString::fromUtf8(id.make);
+        query.cameraModel = QString::fromUtf8(id.model);
+        query.lensModel = QString::fromUtf8(raw->imgdata.lens.Lens);
+        query.focal = other.focal_len;
+        query.aperture = other.aperture;
+        query.width = fullRes.width;
+        query.height = fullRes.height;
+        if (auto resolved = resolveLensfunModel(QString(), query))
+            lensModel = std::move(*resolved);
+        timer.lap("lens profile resolve");
+    }
+
+    return {std::move(fullRes), std::move(preview), metadata, {}, defaultCrop, std::move(lensModel)};
 }

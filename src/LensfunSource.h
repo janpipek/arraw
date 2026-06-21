@@ -21,9 +21,10 @@ struct LensQuery {
 // True when arraw was built with lensfun support (ARRAW_HAS_LENSFUN).
 bool lensfunAvailable();
 
-// Resolve a per-shot LensCorrectionModel from a lensfun database directory (any
-// directory lfDatabase::LoadDirectory accepts, e.g. the system version_1 dir or a
-// test fixture). lensfun resolves its parametric model for this shot and we sample
+// Resolve a per-shot LensCorrectionModel from a lensfun database. An empty dbPath
+// uses lensfun's automatic system/user database discovery (production); a non-empty
+// dbPath loads exactly that directory (deterministic tests). lensfun resolves its
+// parametric model for this shot and we sample
 // the resolution into the model's RadialCurve LUTs, so the apply step stays
 // source-agnostic (docs/adr/0027). Returns nullopt when lensfun is unavailable, the
 // database fails to load, no lens matches, or the matched lens has no corrections.

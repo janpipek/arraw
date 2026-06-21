@@ -1,5 +1,6 @@
 #pragma once
 #include "ImageMetadata.h"
+#include "LensCorrection.h"
 #include "LocalAdjustment.h"
 #include "Spot.h"
 #include <array>
@@ -105,6 +106,9 @@ struct LoadResult {
     ImageMetadata metadata;
     QString error; // non-empty on failure
     QRectF defaultCrop = {0.0, 0.0, 1.0, 1.0};
+    // Lens profile resolved at decode (docs/adr/0027). Empty has* flags = no
+    // profile matched; correction is applied (toggle-gated) downstream.
+    LensCorrectionModel lensModel{};
 };
 
 // Box-filter 2× downsample (half W, half H). Safe to call off the main thread.

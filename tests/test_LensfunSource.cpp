@@ -1,9 +1,11 @@
 #include "LensCorrection.h"
 #include "LensfunSource.h"
+#include "RawProcessor.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
+#include <QFileInfo>
 #include <QString>
 
 using Catch::Matchers::WithinAbs;
@@ -95,4 +97,27 @@ TEST_CASE("system lensfun DB corrects the reference Sony rig", "[.][realdb]") {
     INFO("matched lens: " << model->lensName.toStdString());
     REQUIRE(model->lensName.contains("56mm"));
     REQUIRE((model->hasDistortion || model->hasVignetting || model->hasTCA));
+}
+
+// Hidden ([.]) end-to-end: decode a real RAW through RawProcessor, confirm the lens
+// profile resolves at load and that correction visibly changes the buffer.
+// Run explicitly: arraw_tests "[.realfile]".
+TEST_CASE("RawProcessor resolves and applies a lens profile end-to-end", "[.][realfile]") {
+    if (!lensfunAvailable())
+        SKIP("built without lensfun");
+    const QString raw = "/home/jan/Documents/foto/05-vlkancice/_A678886.ARW";
+    if (!QFileInfo::exists(raw))
+        SKIP("reference RAW not present");
+
+    const LoadResult result = RawProcessor::load(raw);
+    REQUIRE(result.error.isEmpty());
+    REQUIRE(result.fullRes.valid());
+
+    INFO("resolved lens: " << result.lensModel.lensName.toStdString());
+    REQUIRE((result.lensModel.hasDistortion || result.lensModel.hasVignetting
+             || result.lensModel.hasTCA));
+
+    const LensCorrectionToggles all{.distortion = true, .vignetting = true, .ca = true};
+    const ImageBuffer corrected = applyLensCorrection(result.fullRes, result.lensModel, all);
+    REQUIRE(corrected.data != result.fullRes.data); // correction actually changed pixels
 }

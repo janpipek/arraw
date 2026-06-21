@@ -103,9 +103,20 @@ false/`nullopt`.
 
 ## Wiring into the load flow
 
-11. **RawProcessor::load** builds the `LensCorrectionModel` (via lensfun),
-    applies enabled corrections to `fullRes` **before** `downsample2x` (so
-    `preview` is corrected for free and matches), and sets `LoadResult::defaultCrop`
+11. ✅ **Done.** `RawProcessor::load` builds a `LensQuery` from EXIF and resolves the
+    `LensCorrectionModel` (lensfun, system DB), storing it on `LoadResult`. Decision:
+    rather than apply in `RawProcessor` before `downsample2x`, the **toggle-gated
+    apply lives in `DevelopSession`** (mirroring spots) — it corrects the clean
+    preview *and* full-res independently into `correctedPreview/FullResBuffer`, and
+    spots now build on the corrected base (`clean → corrected → spotted → GPU`).
+    `previewForDisplay`/`fullResForExport` fall back spotted → corrected → clean.
+    `autoFillZoom` subsumes the distortion frame change, so `defaultCrop` needs no
+    extra handling. Validated headless (`[develop-session][lens]`) and end-to-end on
+    the real ARW (`[.realfile]`: resolves the Sigma + correction changes pixels).
+
+    (Original step-11 sketch, kept for context:)
+    ~~RawProcessor::load builds the model and applies before `downsample2x`, sets
+    `LoadResult::defaultCrop`~~
     from the refit. Clean buffer need not be retained — corrections are apply-once;
     re-derive on reload (revisit only if in-session toggling is requested).
 12. **DevelopSession** composes lens correction **before** spots:

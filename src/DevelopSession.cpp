@@ -1,5 +1,6 @@
 #include "DevelopSession.h"
 
+#include "LensCorrection.h"
 #include "Spot.h"
 
 #include <utility>
@@ -39,27 +40,36 @@ void DevelopSession::setLoadedImage(
     metadata_ = metadata;
     savedMetadata = metadata;
     imageDefaultCrop = result.defaultCrop;
+    lensModel = result.lensModel;
     adjustments = params;
     savedAdjustments = params;
     isDevelopDirty = false;
     isMetadataDirty = false;
     useBaseLook = false;
-    rebuildSpotBuffers();
+    rebuildDerivedBuffers();
     sidecar = sidecarState;
     state = LoadState::Loaded;
 }
 
 const ImageBuffer& DevelopSession::previewForDisplay() const {
-    return spottedPreviewBuffer.valid() ? spottedPreviewBuffer : previewBuffer;
+    if (spottedPreviewBuffer.valid())
+        return spottedPreviewBuffer;
+    if (correctedPreviewBuffer.valid())
+        return correctedPreviewBuffer;
+    return previewBuffer;
 }
 
 const ImageBuffer& DevelopSession::fullResForExport() const {
-    return spottedFullResBuffer.valid() ? spottedFullResBuffer : fullResBuffer;
+    if (spottedFullResBuffer.valid())
+        return spottedFullResBuffer;
+    if (correctedFullResBuffer.valid())
+        return correctedFullResBuffer;
+    return fullResBuffer;
 }
 
 void DevelopSession::setParams(const GlobalAdjustment& params) {
     adjustments = params;
-    rebuildSpotBuffers();
+    rebuildDerivedBuffers();
     isDevelopDirty = adjustments != savedAdjustments;
 }
 
@@ -105,23 +115,52 @@ void DevelopSession::markMetadataSaveFailed() {
     sidecar = SidecarState::WriteError;
 }
 
+void DevelopSession::rebuildDerivedBuffers() {
+    rebuildCorrectionBuffers();
+    rebuildSpotBuffers();
+}
+
+void DevelopSession::rebuildCorrectionBuffers() {
+    const LensCorrectionToggles toggles{
+        .distortion = adjustments.lensCorrectDistortion,
+        .vignetting = adjustments.lensCorrectVignetting,
+        .ca = adjustments.lensCorrectCA};
+    const bool active = (toggles.distortion && lensModel.hasDistortion)
+                        || (toggles.vignetting && lensModel.hasVignetting)
+                        || (toggles.ca && lensModel.hasTCA);
+    if (!active) {
+        correctedPreviewBuffer = {};
+        correctedFullResBuffer = {};
+        return;
+    }
+    correctedPreviewBuffer =
+        previewBuffer.valid() ? applyLensCorrection(previewBuffer, lensModel, toggles) : ImageBuffer{};
+    correctedFullResBuffer =
+        fullResBuffer.valid() ? applyLensCorrection(fullResBuffer, lensModel, toggles) : ImageBuffer{};
+}
+
 void DevelopSession::rebuildSpotBuffers() {
+    // Spots clone on the lens-corrected base when present, else on the clean buffer.
+    const ImageBuffer& basePreview =
+        correctedPreviewBuffer.valid() ? correctedPreviewBuffer : previewBuffer;
+    const ImageBuffer& baseFull =
+        correctedFullResBuffer.valid() ? correctedFullResBuffer : fullResBuffer;
+
     if (adjustments.spots.empty()) {
         spottedPreviewBuffer = {};
         spottedFullResBuffer = {};
         return;
     }
-    if (previewBuffer.valid()) {
-        const double sx = (fullResBuffer.valid() && fullResBuffer.width > 0)
-            ? double(previewBuffer.width) / fullResBuffer.width
+    if (basePreview.valid()) {
+        const double sx = (baseFull.valid() && baseFull.width > 0)
+            ? double(basePreview.width) / baseFull.width
             : 1.0;
-        const double sy = (fullResBuffer.valid() && fullResBuffer.height > 0)
-            ? double(previewBuffer.height) / fullResBuffer.height
+        const double sy = (baseFull.valid() && baseFull.height > 0)
+            ? double(basePreview.height) / baseFull.height
             : 1.0;
-        spottedPreviewBuffer = applySpots(previewBuffer, scaleSpots(adjustments.spots, sx, sy));
+        spottedPreviewBuffer = applySpots(basePreview, scaleSpots(adjustments.spots, sx, sy));
     } else {
         spottedPreviewBuffer = {};
     }
-    spottedFullResBuffer = fullResBuffer.valid() ? applySpots(fullResBuffer, adjustments.spots)
-                                                 : ImageBuffer{};
+    spottedFullResBuffer = baseFull.valid() ? applySpots(baseFull, adjustments.spots) : ImageBuffer{};
 }
