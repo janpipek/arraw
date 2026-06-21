@@ -1,5 +1,5 @@
 Name:           arraw
-Version:        0.2.0
+Version:        0.2.1
 Release:        %{?snapshot_release}%{!?snapshot_release:1}%{?dist}
 Summary:        Lightweight RAW photo editor
 
@@ -54,6 +54,9 @@ appstreamcli validate --no-net \
 %{_datadir}/icons/hicolor/*/apps/io.github.janpipek.arraw.png
 
 %changelog
+* Sun Jun 21 2026 Jan Pipek <janpipek@users.noreply.github.com> - 0.2.1-1
+- Improve platform-specific Just recipes and add a portable clean task
+
 * Sun Jun 21 2026 Jan Pipek <janpipek@users.noreply.github.com> - 0.2.0-1
 - Add image rotation, straightening, and EXIF orientation support
 - Add vignette and grain effects
