@@ -1,4 +1,5 @@
 #include "RendererCore.h"
+#include "ThemeColors.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -27,7 +28,10 @@ static const float kQuad[] = {
     0,
 };
 
-static const QColor kClearColor = QColor::fromRgbF(0.15f, 0.15f, 0.15f);
+// The viewport surround. Single-sourced from ThemeColors so the GPU clear color
+// and the widget palette never drift (ADR 0030). Value is bit-identical to the
+// historical 0.15 gray to keep the golden-image references valid (ADR 0005).
+static const QColor kClearColor = ThemeColors::kCanvas;
 
 static QShader loadShader(const QString& path) {
     QFile f(path);

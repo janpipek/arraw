@@ -1,4 +1,5 @@
 #include "Histogram.h"
+#include "ThemeColors.h"
 #include <algorithm>
 #include <cmath>
 #include <QPainter>
@@ -81,7 +82,7 @@ void Histogram::setSample(const QImage& img) {
 
 void Histogram::paintEvent(QPaintEvent*) {
     QPainter p(this);
-    p.fillRect(rect(), QColor(30, 30, 30));
+    p.fillRect(rect(), ThemeColors::kBase); // recessed panel background (ADR 0030)
 
     // Log-scale the bar heights so sparse bins stay visible next to the peak.
     const float yScale = float(height()) / std::log1p(float(peak));

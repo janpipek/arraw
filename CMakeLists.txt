@@ -129,6 +129,7 @@ endif()
 # Everything except main.cpp lives in a static library so test executables
 # can link the real code (see DESIGN.md "Testing Strategy").
 set(CORE_SOURCES
+    src/Theme.cpp
     src/MainWindow.cpp
     src/ImageViewport.cpp
     src/ViewportGeometry.cpp
