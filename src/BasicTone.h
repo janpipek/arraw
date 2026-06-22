@@ -2,11 +2,26 @@
 
 #include "ImagePipeline.h"
 #include <array>
+#include <cmath>
 
 namespace tone {
 
 inline constexpr int kLutSize = 256;
 inline constexpr int kLutRows = 17; // global + the 16 Local Adjustment cap
+
+// Perceptual encoding exponent. The LUT is indexed by the gamma-encoded
+// coordinate x = luminance^(1/kGamma) so its 256 samples are spread evenly
+// across perception — most of them where the tone controls actually act —
+// instead of bunching in the bright linear values. The shader must encode the
+// same way before sampling (see shaders/image.frag, applyBasicTone).
+inline constexpr float kGamma = 2.2f;
+
+// Linear luminance that maps to LUT column `index`. Inverse of the shader's
+// encode step; shared so tests reason about the texture the GPU samples.
+inline float lutIndexToLuminance(int index) {
+    const float encoded = float(index) / float(kLutSize - 1);
+    return std::pow(encoded, kGamma);
+}
 
 struct LutAtlas {
     // R = mapped luminance, G = slope above 1, B/A reserved.

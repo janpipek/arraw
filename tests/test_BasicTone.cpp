@@ -1,9 +1,24 @@
 #include "BasicTone.h"
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
+#include <cmath>
 #include <vector>
 
 using Catch::Matchers::WithinAbs;
+
+// Samples the LUT atlas the way the shader does: encode to the perceptual
+// coordinate, then linearly interpolate between the two nearest columns.
+static float sampleToneLut(const tone::LutAtlas& atlas, int row, float luminance) {
+    const float encoded = std::pow(std::clamp(luminance, 0.0f, 1.0f), 1.0f / tone::kGamma);
+    const float pos = encoded * float(tone::kLutSize - 1);
+    const int i0 = std::clamp(int(std::floor(pos)), 0, tone::kLutSize - 1);
+    const int i1 = std::min(i0 + 1, tone::kLutSize - 1);
+    const float frac = pos - float(i0);
+    const float lo = atlas.rgba[size_t(row * tone::kLutSize + i0) * 4];
+    const float hi = atlas.rgba[size_t(row * tone::kLutSize + i1) * 4];
+    return lo + (hi - lo) * frac;
+}
 
 TEST_CASE("positive Shadows stretches near-black detail without lifting black", "[tone]") {
     SharedAdjustment adjustment;
@@ -100,8 +115,9 @@ TEST_CASE("Basic Tone LUT carries the tested global curve", "[tone]") {
     adjustment.shadows = 100.0f;
     const tone::LutAtlas atlas = tone::makeLutAtlas(adjustment);
 
+    // Columns are indexed in the perceptual (gamma-encoded) domain.
     constexpr int index = 32;
-    const float input = index / float(tone::kLutSize - 1);
+    const float input = tone::lutIndexToLuminance(index);
     const float stored = atlas.rgba[index * 4];
     CHECK_THAT(stored, WithinAbs(tone::mapLuminance(input, adjustment), 1e-6f));
 }
@@ -118,6 +134,24 @@ TEST_CASE("Basic Tone LUT gives each Local Adjustment its own curve row", "[tone
     const float stored = atlas.rgba[(localRow * tone::kLutSize + index) * 4];
     CHECK(stored < 1.0f);
     CHECK_THAT(stored, WithinAbs(tone::mapLuminance(1.0f, local), 1e-6f));
+}
+
+TEST_CASE("Basic Tone LUT resolves deep-shadow detail the shader samples", "[tone]") {
+    GlobalAdjustment adjustment;
+    adjustment.shadows = 100.0f; // works hardest in the darkest tones
+    const tone::LutAtlas atlas = tone::makeLutAtlas(adjustment);
+
+    // Perceptual indexing spends columns where the controls act, so a GPU-style
+    // lookup tracks the exact model even in near-black values that a
+    // linear-indexed LUT would have collapsed into its first one or two columns.
+    for (const float luminance : {0.0005f, 0.002f, 0.01f}) {
+        const float sampled = sampleToneLut(atlas, 0, luminance);
+        const float exact = tone::mapLuminance(luminance, adjustment);
+        CHECK_THAT(sampled, WithinAbs(exact, 0.002f));
+    }
+
+    // Distinct deep-shadow inputs remain distinguishable after the lookup.
+    CHECK(sampleToneLut(atlas, 0, 0.002f) > sampleToneLut(atlas, 0, 0.0005f));
 }
 
 TEST_CASE("Basic Tone controls remain monotonic at their extremes", "[tone]") {

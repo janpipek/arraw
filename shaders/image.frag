@@ -99,7 +99,10 @@ vec3 applyBaseLook(vec3 c) {
 // recoverable headroom above 1. Row 0 is global and rows 1..16 are local.
 vec3 applyBasicTone(vec3 c, int row) {
     float y = dot(c, kLuma);
-    float x = (clamp(y, 0.0, 1.0) * 255.0 + 0.5) / 256.0;
+    // Index by the gamma-encoded coordinate (matches tone::kGamma): the LUT's
+    // 256 columns sit where the controls act instead of bunching in highlights.
+    float encoded = pow(clamp(y, 0.0, 1.0), 1.0 / 2.2);
+    float x = (encoded * 255.0 + 0.5) / 256.0;
     float rowY = (float(row) + 0.5) / 17.0;
     vec4 sampleValue = texture(uToneLUT, vec2(x, rowY));
     float y2 = sampleValue.r;

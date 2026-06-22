@@ -13,7 +13,6 @@ float smoothstep(float edge0, float edge1, float value) {
 } // namespace
 
 float mapLuminance(float luminance, const SharedAdjustment& adjustment) {
-    constexpr float kGamma = 2.2f;
     constexpr float kSoftAnchor = 0.1f;
     constexpr float kMaxRegionalShift = 0.1f;
 
@@ -58,12 +57,15 @@ LutAtlas makeLutAtlas(const GlobalAdjustment& adjustment) {
         else if (row <= int(adjustment.localAdjustments.size()))
             rowAdjustment = &adjustment.localAdjustments[size_t(row - 1)];
 
-        constexpr float step = 1.0f / float(kLutSize - 1);
+        // The slope above white is measured in linear luminance, since the
+        // shader extrapolates headroom as (luminance - 1) * slope.
+        constexpr float headroomStep = 1.0f / float(kLutSize - 1);
         const float endpoint = mapLuminance(1.0f, *rowAdjustment);
-        const float highSlope = (mapLuminance(1.0f + step, *rowAdjustment) - endpoint) / step;
+        const float highSlope =
+            (mapLuminance(1.0f + headroomStep, *rowAdjustment) - endpoint) / headroomStep;
         for (int i = 0; i < kLutSize; ++i) {
             const int offset = (row * kLutSize + i) * 4;
-            atlas.rgba[offset] = mapLuminance(i * step, *rowAdjustment);
+            atlas.rgba[offset] = mapLuminance(lutIndexToLuminance(i), *rowAdjustment);
             atlas.rgba[offset + 1] = highSlope;
             atlas.rgba[offset + 3] = 1.0f;
         }

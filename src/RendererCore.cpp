@@ -70,7 +70,7 @@ void RendererCore::initialize(QRhi* r) {
 
     toneLutTex.reset(rhi->newTexture(QRhiTexture::RGBA32F, QSize(tone::kLutSize, tone::kLutRows)));
     toneLutTex->create();
-    toneLutSource.reset();
+    toneLutSource.clear();
     ++generation;
 
     // The 3D sampler binding must always reference a valid texture, even with
@@ -142,30 +142,30 @@ bool RendererCore::hasImage(Slot slot) const {
     return pendingImageDirty[i] || imageTex[i];
 }
 
-static bool sameToneFields(const SharedAdjustment& a, const SharedAdjustment& b) {
-    return a.exposure == b.exposure && a.contrast == b.contrast && a.highlights == b.highlights
-           && a.shadows == b.shadows && a.whites == b.whites && a.blacks == b.blacks;
-}
-
-static bool sameToneSettings(const GlobalAdjustment& a, const GlobalAdjustment& b) {
-    if (!sameToneFields(a, b))
-        return false;
-    const int aCount = std::min<int>(int(a.localAdjustments.size()), 16);
-    const int bCount = std::min<int>(int(b.localAdjustments.size()), 16);
-    if (aCount != bCount)
-        return false;
-    for (int i = 0; i < aCount; ++i)
-        if (!sameToneFields(a.localAdjustments[i], b.localAdjustments[i]))
-            return false;
-    return true;
+// The LUT depends only on the six Basic Tone fields of the global fill and each
+// Local Adjustment — not on mask geometry or colour. Snapshot just those so the
+// dirty-check is a cheap value compare and avoids copying mask variants.
+static std::vector<std::array<float, 6>> toneSignature(const GlobalAdjustment& a) {
+    auto fields = [](const SharedAdjustment& s) {
+        return std::array<float, 6>{
+            s.exposure, s.contrast, s.highlights, s.shadows, s.whites, s.blacks};
+    };
+    const int n = std::min<int>(int(a.localAdjustments.size()), 16);
+    std::vector<std::array<float, 6>> sig;
+    sig.reserve(size_t(n) + 1);
+    sig.push_back(fields(a));
+    for (int i = 0; i < n; ++i)
+        sig.push_back(fields(a.localAdjustments[i]));
+    return sig;
 }
 
 void RendererCore::prepareToneLut(const GlobalAdjustment& adjustment) {
-    if (toneLutSource && sameToneSettings(*toneLutSource, adjustment))
+    std::vector<std::array<float, 6>> signature = toneSignature(adjustment);
+    if (signature == toneLutSource) // never empty once built (always has the global row)
         return;
     pendingToneLut = tone::makeLutAtlas(adjustment);
     toneLutDirty = true;
-    toneLutSource = adjustment;
+    toneLutSource = std::move(signature);
 }
 
 void RendererCore::setCurveLut(const std::array<float, 256 * 4>& rgba) {

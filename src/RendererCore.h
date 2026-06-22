@@ -5,8 +5,8 @@
 #include <array>
 #include <cstddef>
 #include <memory>
-#include <optional>
 #include <rhi/qrhi.h>
+#include <vector>
 #include <QImage>
 
 // std140 mirror of the uniform block in shaders/image.vert and image.frag —
@@ -182,7 +182,7 @@ private:
     bool curveLutDirty = false;
     tone::LutAtlas pendingToneLut;
     bool toneLutDirty = false;
-    std::optional<GlobalAdjustment> toneLutSource;
+    std::vector<std::array<float, 6>> toneLutSource; // tone fields the LUT was built from
     DisplayLut pendingDisplayLut;
     bool displayLutDirty = false;
 };

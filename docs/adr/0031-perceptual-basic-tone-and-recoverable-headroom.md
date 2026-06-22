@@ -89,6 +89,15 @@ each Local Adjustment. The shader samples those rows, so CPU tests exercise the
 model that supplies the real renderer rather than a separately reimplemented
 approximation.
 
+Each row's 256 columns are indexed by the **gamma-encoded** coordinate
+`x = luminance^(1/2.2)`, not by linear luminance. Because the mapping operates in
+that perceptual space — and most of its action (Shadows, Blacks, the dark side of
+Contrast) lives in the darkest linear values — a linear-indexed LUT would have
+spent almost all its resolution on highlights and collapsed deep-shadow detail
+into one or two columns. Perceptual indexing spreads the samples where the
+controls work; the shader encodes the same way before the lookup. Headroom above
+1 is still handled in linear luminance via the stored slope (below).
+
 A Local Adjustment blends its fully mapped result with the incoming pixel using
 the Mask weight. This makes a 50% Mask a 50% visual blend and lets later Local
 Adjustments operate on the result of earlier ones.
