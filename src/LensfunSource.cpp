@@ -15,6 +15,9 @@ std::optional<LensCorrectionModel> resolveLensfunModel(const QString&, const Len
 
 #include <lensfun.h>
 
+#include <QCoreApplication>
+#include <QDir>
+
 #include <cmath>
 
 bool lensfunAvailable() {
@@ -29,6 +32,28 @@ float radius(float x, float y, float cx, float cy) {
     return std::hypot(x - cx, y - cy);
 }
 
+// A lens database bundled next to the executable, so distributed builds (AppImage,
+// portable Windows tree) resolve lenses without a system lensfun install — the
+// AppImage is self-contained and Windows has no system path at all (issue #53).
+// Returns the first existing candidate directory that holds DB XML, or an empty
+// string to fall back to lensfun's own system/user discovery (dev builds and the
+// Fedora RPM, which depends on the system `lensfun` package for the DB).
+QString bundledLensfunDbDir() {
+    const QString appDir = QCoreApplication::applicationDirPath();
+    if (appDir.isEmpty())
+        return QString(); // no QCoreApplication (e.g. unit tests) — use system DB
+    const QStringList candidates = {
+        appDir + QStringLiteral("/../share/lensfun/db"), // AppImage: usr/bin → usr/share
+        appDir + QStringLiteral("/lensfun/db"),          // portable tree beside the exe
+    };
+    for (const QString& candidate : candidates) {
+        const QDir dir(candidate);
+        if (dir.exists() && !dir.entryList({QStringLiteral("*.xml")}, QDir::Files).isEmpty())
+            return dir.absolutePath();
+    }
+    return QString();
+}
+
 } // namespace
 
 std::optional<LensCorrectionModel> resolveLensfunModel(const QString& dbPath, const LensQuery& query) {
@@ -36,10 +61,15 @@ std::optional<LensCorrectionModel> resolveLensfunModel(const QString& dbPath, co
         return std::nullopt;
 
     lfDatabase db;
-    if (dbPath.isEmpty()) {
+    // An explicit dbPath (deterministic tests) wins; otherwise prefer a DB bundled
+    // next to the executable, and only then fall back to lensfun's system discovery.
+    QString dir = dbPath;
+    if (dir.isEmpty())
+        dir = bundledLensfunDbDir();
+    if (dir.isEmpty()) {
         if (db.Load() != LF_NO_ERROR)
             return std::nullopt; // no system database available
-    } else if (!db.LoadDirectory(dbPath.toUtf8().constData())) {
+    } else if (!db.LoadDirectory(dir.toUtf8().constData())) {
         return std::nullopt;
     }
 

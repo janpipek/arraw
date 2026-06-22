@@ -164,10 +164,17 @@ false/`nullopt`.
 ## Packaging (the M-a cost — parallel track, ties to issue #38)
 
 16. Ship liblensfun + a DB snapshot per platform:
-    - **Fedora RPM**: depend on `lensfun` (DB included). Easiest.
-    - **macOS**: `brew install lensfun`; verify DB path in the bundle.
-    - **AppImage** (Ubuntu aqt): bundle `liblensfun.so` + the `version_1` XML dir;
-      set the DB load path at runtime (don't rely on system paths).
+    - ✅ **Runtime DB discovery (shared).** `resolveLensfunModel` with an empty path now
+      prefers a DB bundled next to the executable (`../share/lensfun/db` for the AppImage,
+      `lensfun/db` for a portable tree) and only then falls back to lensfun's system
+      discovery — so relocatable builds don't depend on `/usr/share/lensfun`.
+    - ✅ **Fedora RPM**: `BuildRequires: pkgconfig(lensfun)`, `Requires: lensfun` (DB
+      included), built with `-DARRAW_WITH_LENSFUN=ON` so it can never silently drop the
+      feature. The DB resolves via lensfun's system path from the `lensfun` dependency.
+    - ✅ **AppImage** (Ubuntu aqt): build with `liblensfun-dev` + `-DARRAW_WITH_LENSFUN=ON`;
+      linuxdeploy bundles `liblensfun.so` (+ glib); a CI step stages the `version_1` XML
+      into `usr/share/lensfun/db/`; the smoke job asserts both are inside the AppImage.
+    - **macOS**: `brew install lensfun`; verify DB path in the bundle. (Pending.)
     - **Windows (vcpkg)**: verify the lensfun port builds; bundle DB; confirm path
       resolution. Riskiest leg — spike early. Detailed checklist + tracking: **issue #53**.
 

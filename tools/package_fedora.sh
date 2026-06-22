@@ -27,6 +27,7 @@ required_packages=(
     desktop-file-utils
     gcc-c++
     lcms2-devel
+    lensfun-devel
     LibRaw-devel
     ninja-build
     qt6-qtbase-devel

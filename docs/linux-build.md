@@ -18,7 +18,7 @@ The day-to-day dev setup uses the distro's system Qt. On Fedora:
 
 ```bash
 sudo dnf install qt6-qtbase-devel qt6-qtbase-private-devel qt6-qtshadertools-devel \
-    qt6-qttools-devel LibRaw-devel lcms2-devel cmake ninja-build
+    qt6-qttools-devel LibRaw-devel lcms2-devel lensfun-devel cmake ninja-build
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
 ninja -C build
 ./build/arraw
@@ -94,7 +94,7 @@ glibc floor is correct:
 export DEBIAN_FRONTEND=noninteractive
 apt-get update && apt-get install -y --no-install-recommends \
   build-essential cmake ninja-build file wget ca-certificates \
-  libraw-dev liblcms2-dev appstream libdbus-1-3 \
+  libraw-dev liblcms2-dev liblensfun-dev liblensfun-data-v1 appstream libdbus-1-3 \
   libgl1-mesa-dev libglu1-mesa-dev libvulkan-dev \
   libxkbcommon-dev libxkbcommon-x11-dev libfontconfig1-dev libfreetype-dev \
   libx11-dev libx11-xcb-dev libxext-dev libxfixes-dev libxi-dev libxrender-dev \
@@ -110,9 +110,14 @@ export QT=/opt/qt/6.8.3/gcc_64
 
 # Build, stage, bundle:
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DARRAW_BUILD_TESTS=OFF \
-  -DCMAKE_PREFIX_PATH="$QT"
+  -DARRAW_WITH_LENSFUN=ON -DCMAKE_PREFIX_PATH="$QT"
 ninja -C build arraw
 DESTDIR="$PWD/AppDir" cmake --install build --prefix /usr
+
+# linuxdeploy bundles liblensfun (+ glib) but not the lens database, so stage it
+# into the AppDir; arraw loads it relative to the executable (usr/bin → ../share):
+mkdir -p AppDir/usr/share/lensfun/db
+cp /usr/share/lensfun/version_1/*.xml AppDir/usr/share/lensfun/db/
 
 wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
 wget -q https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
@@ -145,6 +150,7 @@ usr/bin/arraw
 usr/share/applications/io.github.janpipek.arraw.desktop
 usr/share/metainfo/io.github.janpipek.arraw.metainfo.xml
 usr/share/icons/hicolor/<size>/apps/io.github.janpipek.arraw.png   (16–256)
+usr/share/lensfun/db/*.xml                                         (staged in CI, see §6.6)
 ```
 
 The `.desktop` and `.metainfo.xml` sources live in `packaging/linux/`. Validate them
@@ -219,6 +225,19 @@ X11, `dbus`, `glib`. So the AppImage runs on a real Ubuntu 24.04 desktop (and th
 smoke-test runner, which installs that baseline) but **not** on a stripped-down
 container that lacks those libs. This is normal AppImage behaviour, not a packaging
 bug.
+
+### 6.6 The lensfun lens database is staged, not auto-bundled
+
+Lens corrections (ADR 0027) need two things at runtime: `liblensfun` and the lens
+**database**. `linuxdeploy` carries the library (and its `glib` dependency) because
+the binary links it, but the database is plain data under `/usr/share/lensfun/` that
+`linuxdeploy` does not follow. So the build configures with `-DARRAW_WITH_LENSFUN=ON`
+(a missing `liblensfun-dev` then fails the build instead of silently shipping without
+corrections) and a *Bundle the lensfun database* step copies
+`/usr/share/lensfun/version_1/*.xml` into `AppDir/usr/share/lensfun/db/`. At runtime
+`LensfunSource.cpp` resolves the DB relative to the executable (`usr/bin` → `../share`),
+never the host's `/usr/share`, so the AppImage stays self-contained. The smoke-test
+job extracts the AppImage and asserts both the library and the DB are present.
 
 ---
 

@@ -126,26 +126,41 @@ if(NOT TARGET PkgConfig::LCMS2)
     )
 endif()
 
-# lensfun: optional. When present, the lensfun lens-correction source is built and
-# ARRAW_HAS_LENSFUN is defined; otherwise lens correction degrades to "no profile
-# available" (docs/adr/0027). pkg-config-first, same strategy as libraw/lcms2.
-if(PkgConfig_FOUND)
-    pkg_check_modules(LENSFUN IMPORTED_TARGET lensfun)
-endif()
-if(NOT TARGET PkgConfig::LENSFUN)
-    find_library(LENSFUN_LIB NAMES lensfun)
-    find_path(LENSFUN_INCLUDE_DIR lensfun.h PATH_SUFFIXES lensfun)
-    if(LENSFUN_LIB AND LENSFUN_INCLUDE_DIR)
-        add_library(PkgConfig::LENSFUN INTERFACE IMPORTED)
-        set_target_properties(PkgConfig::LENSFUN PROPERTIES
-            INTERFACE_LINK_LIBRARIES "${LENSFUN_LIB}"
-            INTERFACE_INCLUDE_DIRECTORIES "${LENSFUN_INCLUDE_DIR}"
-        )
+# lensfun: optional lens-correction source (docs/adr/0027). ARRAW_WITH_LENSFUN is a
+# tri-state that decides whether it is compiled in:
+#   AUTO (default) — build it when lensfun is found, silently degrade when it is not
+#   ON             — require lensfun; hard-error if it is missing (use for release
+#                    builds so a distributed binary never silently ships without it)
+#   OFF            — compile lens correction out entirely
+# When enabled, ARRAW_HAS_LENSFUN is defined and the lensfun source links the library;
+# otherwise lens correction degrades to "no profile available". Detection is
+# pkg-config-first, same strategy as libraw/lcms2.
+set(ARRAW_WITH_LENSFUN "AUTO" CACHE STRING
+    "Lens-correction lensfun support: AUTO (use if found), ON (require), OFF (disable)")
+set_property(CACHE ARRAW_WITH_LENSFUN PROPERTY STRINGS AUTO ON OFF)
+
+if(NOT ARRAW_WITH_LENSFUN STREQUAL "OFF")
+    if(PkgConfig_FOUND)
+        pkg_check_modules(LENSFUN IMPORTED_TARGET lensfun)
+    endif()
+    if(NOT TARGET PkgConfig::LENSFUN)
+        find_library(LENSFUN_LIB NAMES lensfun)
+        find_path(LENSFUN_INCLUDE_DIR lensfun.h PATH_SUFFIXES lensfun)
+        if(LENSFUN_LIB AND LENSFUN_INCLUDE_DIR)
+            add_library(PkgConfig::LENSFUN INTERFACE IMPORTED)
+            set_target_properties(PkgConfig::LENSFUN PROPERTIES
+                INTERFACE_LINK_LIBRARIES "${LENSFUN_LIB}"
+                INTERFACE_INCLUDE_DIRECTORIES "${LENSFUN_INCLUDE_DIR}"
+            )
+        endif()
     endif()
 endif()
 if(TARGET PkgConfig::LENSFUN)
     set(ARRAW_HAVE_LENSFUN ON)
     message(STATUS "lensfun found — building lens-correction lensfun source")
+elseif(ARRAW_WITH_LENSFUN STREQUAL "ON")
+    message(FATAL_ERROR "ARRAW_WITH_LENSFUN=ON but lensfun was not found "
+        "(install lensfun's development package, e.g. lensfun-devel / liblensfun-dev)")
 else()
     set(ARRAW_HAVE_LENSFUN OFF)
     message(STATUS "lensfun NOT found — lens correction will report no profile")

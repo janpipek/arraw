@@ -14,12 +14,16 @@ BuildRequires:  desktop-file-utils
 BuildRequires:  gcc-c++
 BuildRequires:  ninja-build
 BuildRequires:  pkgconfig(lcms2)
+BuildRequires:  pkgconfig(lensfun)
 BuildRequires:  pkgconfig(libraw) >= 0.21
 BuildRequires:  qt6-qtbase-devel >= 6.8
 BuildRequires:  qt6-qtbase-private-devel >= 6.8
 BuildRequires:  qt6-qtshadertools-devel >= 6.8
 
 Requires:       qt6-qtimageformats%{?_isa}
+# lensfun ships the lens database under /usr/share/lensfun that arraw loads at
+# runtime; the soname dep pulls the library, this guarantees the DB is present too.
+Requires:       lensfun
 
 %description
 Arraw is a lightweight RAW photo editor with a real-time GPU preview,
@@ -32,6 +36,7 @@ local adjustments, crop, and straighten tools.
 %build
 %cmake -G Ninja \
     -DARRAW_BUILD_TESTS=ON \
+    -DARRAW_WITH_LENSFUN=ON \
     -DFETCHCONTENT_FULLY_DISCONNECTED=ON
 %cmake_build
 

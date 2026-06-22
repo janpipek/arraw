@@ -173,7 +173,8 @@ LoadResult RawProcessor::load(
     timer.lap("raw downsample");
     // Resolve a lens profile from EXIF (docs/adr/0027). Off the main thread; the
     // correction itself is applied later, toggle-gated, in DevelopSession. An empty
-    // db path uses lensfun's system database; no match leaves the model empty.
+    // db path lets resolveLensfunModel pick a bundled DB (AppImage/Windows) and else
+    // lensfun's system database; no match leaves the model empty.
     LensCorrectionModel lensModel;
     {
         const auto& id = raw->imgdata.idata;
