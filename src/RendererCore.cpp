@@ -1,10 +1,12 @@
 #include "RendererCore.h"
+#include "NoiseReduction.h"
 #include "ThemeColors.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <variant>
 #include <QFile>
+#include <QMatrix4x4>
 
 // Fullscreen quad, interleaved (x, y, u, v). V is flipped (bottom vertices get
 // v=1) because NDC Y points up (GL convention, kept by QRhi) while image row 0
@@ -48,12 +50,21 @@ void RendererCore::initialize(QRhi* r) {
     vs = loadShader(QStringLiteral(":/shaders/image.vert.qsb"));
     fs = loadShader(QStringLiteral(":/shaders/image.frag.qsb"));
 
+    nrVs = loadShader(QStringLiteral(":/shaders/nr.vert.qsb"));
+    nrExtractFs = loadShader(QStringLiteral(":/shaders/nr_extract.frag.qsb"));
+    nrBlurHFs = loadShader(QStringLiteral(":/shaders/nr_blur_h.frag.qsb"));
+    nrBlurVFs = loadShader(QStringLiteral(":/shaders/nr_blur_v.frag.qsb"));
+    nrRecombineFs = loadShader(QStringLiteral(":/shaders/nr_recombine.frag.qsb"));
+
     vbuf.reset(rhi->newBuffer(QRhiBuffer::Immutable, QRhiBuffer::VertexBuffer, sizeof(kQuad)));
     vbuf->create();
     needQuadUpload = true;
 
     ubuf.reset(rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, sizeof(Ubuf)));
     ubuf->create();
+
+    nrUbuf.reset(rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, sizeof(NrUbuf)));
+    nrUbuf->create();
 
     sampler.reset(rhi->newSampler(
         QRhiSampler::Linear,
@@ -98,6 +109,17 @@ void RendererCore::release() {
     srb.reset();
     srbImageTex = nullptr;
     srbGeneration = -1;
+    nrPipeExtract.reset();
+    nrPipeBlurH.reset();
+    nrPipeBlurV.reset();
+    nrPipeRecombine.reset();
+    nrSrbExtract.reset();
+    nrSrbBlurH.reset();
+    nrSrbBlurV.reset();
+    nrSrbRecombine.reset();
+    nrUbuf.reset();
+    for (NrSlot& s : nrSlot)
+        s = NrSlot{};
     imageTex[0].reset();
     imageTex[1].reset();
     displayLutTex.reset();
@@ -497,6 +519,149 @@ void RendererCore::recordPass(
     cb->endPass();
 }
 
+// ── Colour Noise Reduction pre-pass (docs/adr/0032) ──────────────────────────
+
+void RendererCore::ensureNrResources() {
+    if (nrRpDesc)
+        return;
+    // A standalone RGBA32F render-pass descriptor, kept independent of any slot's
+    // textures so the NR pipelines stay valid across slot resizes. Built from a
+    // throwaway 1×1 target; the descriptor outlives it.
+    std::unique_ptr<QRhiTexture> tmp(
+        rhi->newTexture(QRhiTexture::RGBA32F, QSize(1, 1), 1, QRhiTexture::RenderTarget));
+    tmp->create();
+    QRhiColorAttachment att(tmp.get());
+    std::unique_ptr<QRhiTextureRenderTarget> tmpRt(rhi->newTextureRenderTarget({att}));
+    nrRpDesc.reset(tmpRt->newCompatibleRenderPassDescriptor());
+}
+
+void RendererCore::ensureNrSlot(int key, QSize fullSize) {
+    NrSlot& ns = nrSlot[key];
+    if (ns.denoised && ns.fullSize == fullSize && ns.gen == generation)
+        return;
+    ns.fullSize = fullSize;
+    const QSize quarter(std::max(1, fullSize.width() / 4), std::max(1, fullSize.height() / 4));
+
+    auto make = [&](std::unique_ptr<QRhiTexture>& tex,
+                    std::unique_ptr<QRhiTextureRenderTarget>& rt, QSize sz) {
+        tex.reset(rhi->newTexture(
+            QRhiTexture::RGBA32F, sz, 1,
+            QRhiTexture::RenderTarget | QRhiTexture::UsedAsTransferSource));
+        tex->create();
+        QRhiColorAttachment att(tex.get());
+        rt.reset(rhi->newTextureRenderTarget({att}));
+        rt->setRenderPassDescriptor(nrRpDesc.get());
+        rt->create();
+    };
+    make(ns.chromaA, ns.chromaART, quarter);
+    make(ns.chromaB, ns.chromaBRT, quarter);
+    make(ns.denoised, ns.denoisedRT, fullSize);
+    ns.amount = -1.0f; // textures changed → force a re-run
+    ns.gen = generation;
+}
+
+void RendererCore::nrPass(
+    QRhiCommandBuffer* cb,
+    QRhiTextureRenderTarget* rt,
+    QRhiGraphicsPipeline* pipe,
+    QRhiShaderResourceBindings* bindings,
+    QRhiResourceUpdateBatch* batch) {
+    cb->beginPass(rt, kClearColor, {1.0f, 0}, batch);
+    cb->setGraphicsPipeline(pipe);
+    const QSize sz = rt->pixelSize();
+    cb->setViewport({0, 0, float(sz.width()), float(sz.height())});
+    cb->setShaderResources(bindings);
+    const QRhiCommandBuffer::VertexInput vi(vbuf.get(), 0);
+    cb->setVertexInput(0, 1, &vi);
+    cb->draw(4);
+    cb->endPass();
+}
+
+QRhiTexture* RendererCore::ensureDenoised(
+    QRhiCommandBuffer* cb, int key, QRhiTexture* rawTex, float amount) {
+    ensureNrResources();
+    ensureNrSlot(key, rawTex->pixelSize());
+    NrSlot& ns = nrSlot[key];
+
+    if (ns.amount == amount && ns.gen == generation)
+        return ns.denoised.get(); // cached — reused for pan/zoom/other edits, no work
+    ns.amount = amount;
+
+    // SRBs point at the live textures; rebuilt each run (only on amount/texture
+    // change), kept as members so they outlive command-buffer submission.
+    auto bindUbufTex = [&](std::unique_ptr<QRhiShaderResourceBindings>& dst, QRhiTexture* t) {
+        dst.reset(rhi->newShaderResourceBindings());
+        dst->setBindings(
+            {QRhiShaderResourceBinding::uniformBuffer(
+                 0,
+                 QRhiShaderResourceBinding::VertexStage | QRhiShaderResourceBinding::FragmentStage,
+                 nrUbuf.get()),
+             QRhiShaderResourceBinding::sampledTexture(
+                 1, QRhiShaderResourceBinding::FragmentStage, t, sampler.get())});
+        dst->create();
+    };
+    bindUbufTex(nrSrbExtract, rawTex);
+    bindUbufTex(nrSrbBlurH, ns.chromaA.get());
+    bindUbufTex(nrSrbBlurV, ns.chromaB.get());
+    nrSrbRecombine.reset(rhi->newShaderResourceBindings());
+    nrSrbRecombine->setBindings(
+        {QRhiShaderResourceBinding::uniformBuffer(
+             0,
+             QRhiShaderResourceBinding::VertexStage | QRhiShaderResourceBinding::FragmentStage,
+             nrUbuf.get()),
+         QRhiShaderResourceBinding::sampledTexture(
+             1, QRhiShaderResourceBinding::FragmentStage, rawTex, sampler.get()),
+         QRhiShaderResourceBinding::sampledTexture(
+             2, QRhiShaderResourceBinding::FragmentStage, ns.chromaA.get(), sampler.get())});
+    nrSrbRecombine->create();
+
+    if (!nrPipeExtract) {
+        auto makePipe = [&](std::unique_ptr<QRhiGraphicsPipeline>& dst, const QShader& fsStage,
+                            QRhiShaderResourceBindings* layout) {
+            dst.reset(rhi->newGraphicsPipeline());
+            dst->setTopology(QRhiGraphicsPipeline::TriangleStrip);
+            dst->setShaderStages(
+                {{QRhiShaderStage::Vertex, nrVs}, {QRhiShaderStage::Fragment, fsStage}});
+            QRhiVertexInputLayout vl;
+            vl.setBindings({{4 * sizeof(float)}});
+            vl.setAttributes({
+                {0, 0, QRhiVertexInputAttribute::Float2, 0},
+                {0, 1, QRhiVertexInputAttribute::Float2, 2 * sizeof(float)},
+            });
+            dst->setVertexInputLayout(vl);
+            dst->setShaderResourceBindings(layout);
+            dst->setRenderPassDescriptor(nrRpDesc.get());
+            dst->create();
+        };
+        makePipe(nrPipeExtract, nrExtractFs, nrSrbExtract.get());
+        makePipe(nrPipeBlurH, nrBlurHFs, nrSrbBlurH.get());
+        makePipe(nrPipeBlurV, nrBlurVFs, nrSrbBlurV.get());
+        makePipe(nrPipeRecombine, nrRecombineFs, nrSrbRecombine.get());
+    }
+
+    // Sigma is calibrated in full-res pixels; the blur runs on quarter-res chroma.
+    const float sigmaQuarter = colorNoiseReductionSigmaPx(amount) / 4.0f;
+    NrUbuf nb{};
+    const QMatrix4x4 cc = rhi->clipSpaceCorrMatrix();
+    std::memcpy(nb.clipCorr, cc.constData(), sizeof(nb.clipCorr));
+    nb.invChroma[0] = 1.0f / float(ns.chromaA->pixelSize().width());
+    nb.invChroma[1] = 1.0f / float(ns.chromaA->pixelSize().height());
+    nb.sigma = sigmaQuarter;
+    nb.radius = std::clamp(int(std::ceil(3.0f * sigmaQuarter)), 1, 64);
+    // On a Y-up framebuffer (OpenGL) the rendered NR targets are V-flipped vs the
+    // uploaded image texture; the vertex shader mirrors the sampled V to cancel it.
+    nb.flipV = rhi->isYUpInFramebuffer() ? 1 : 0;
+
+    QRhiResourceUpdateBatch* b = rhi->nextResourceUpdateBatch();
+    b->updateDynamicBuffer(nrUbuf.get(), 0, sizeof(NrUbuf), &nb);
+
+    nrPass(cb, ns.chromaART.get(), nrPipeExtract.get(), nrSrbExtract.get(), b); // raw → chroma A
+    nrPass(cb, ns.chromaBRT.get(), nrPipeBlurH.get(), nrSrbBlurH.get(), nullptr);     // A → B (H)
+    nrPass(cb, ns.chromaART.get(), nrPipeBlurV.get(), nrSrbBlurV.get(), nullptr);     // B → A (V)
+    nrPass(cb, ns.denoisedRT.get(), nrPipeRecombine.get(), nrSrbRecombine.get(), nullptr); // → full
+    return ns.denoised.get();
+}
+
 void RendererCore::record(
     QRhiCommandBuffer* cb, QRhiRenderTarget* rt, Slot slot, const FrameParams& fp) {
     if (!hasImage(slot)) {
@@ -506,7 +671,13 @@ void RendererCore::record(
     prepareToneLut(fp.adjustments);
     QRhiResourceUpdateBatch* batch = rhi->nextResourceUpdateBatch();
     flushPendingUploads(batch); // creates/recreates the slot's texture
-    recordPass(cb, rt, imageTex[int(slot)].get(), fp, batch);
+    QRhiTexture* tex = imageTex[int(slot)].get();
+    if (fp.adjustments.colorNoiseReduction > 0.0f) {
+        cb->resourceUpdate(batch); // apply uploads before the NR pre-passes
+        tex = ensureDenoised(cb, int(slot), tex, fp.adjustments.colorNoiseReduction);
+        batch = rhi->nextResourceUpdateBatch(); // fresh batch for the main pass
+    }
+    recordPass(cb, rt, tex, fp, batch);
 }
 
 void RendererCore::clear(QRhiCommandBuffer* cb, QRhiRenderTarget* rt) {
@@ -558,6 +729,16 @@ QImage RendererCore::renderOffscreenTex(
     QRhiResourceUpdateBatch* batch = rhi->nextResourceUpdateBatch();
     flushPendingUploads(batch);
     QRhiTexture* tex = slotIndex >= 0 ? imageTex[slotIndex].get() : extTex;
+    if (fp.adjustments.colorNoiseReduction > 0.0f) {
+        // key 2 is the export/extTex scratch; its source texture changes every
+        // call, so force a recompute rather than trust the amount cache.
+        const int nrKey = slotIndex >= 0 ? slotIndex : 2;
+        if (nrKey == 2)
+            nrSlot[2].amount = -1.0f;
+        cb->resourceUpdate(batch);
+        tex = ensureDenoised(cb, nrKey, tex, fp.adjustments.colorNoiseReduction);
+        batch = rhi->nextResourceUpdateBatch();
+    }
     recordPass(cb, rt.get(), tex, fp, batch);
 
     QRhiReadbackResult rr;

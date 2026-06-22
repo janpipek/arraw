@@ -258,9 +258,9 @@ TEST_CASE("DevelopSession applies lens correction only when toggled", "[develop-
     session.setParams(params);
     const ImageBuffer& on = session.previewForDisplay();
     CHECK(on.data != result.preview.data);
-    CHECK(on.data[1] > 0.30f);                                 // corner (0,0) green brightened
+    CHECK(on.data[1] > 0.30f); // corner (0,0) green brightened
     CHECK(on.data[static_cast<size_t>((4 * 8 + 4) * 3 + 1)] < 0.30f); // near centre ~unchanged
-    CHECK(session.fullResForExport().data[1] > 0.30f);        // full-res corrected too
+    CHECK(session.fullResForExport().data[1] > 0.30f);                // full-res corrected too
 
     // Toggle back off → clean again.
     params.lensCorrectVignetting = false;

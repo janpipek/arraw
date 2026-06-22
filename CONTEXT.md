@@ -336,3 +336,19 @@ to the clean decoded buffer; the shader sees only the result. Distinct from
 Spot carries no tonal parameters and is not a parametric mask.
 _Avoid_: heal (implies Poisson blending, which is not implemented), clone stamp
 (tool name, not the data), local adjustment (different pipeline stage)
+
+**Colour Noise Reduction**:
+The removal of *chroma* noise — the coloured blotches of high-ISO captures — by
+smoothing colour while leaving luminance detail untouched. A single Amount control
+(0..100) drives a separable Gaussian blur of the unit-luma chroma ratio, run as a
+cached multi-pass GPU pre-pass inside [[RendererCore]] at quarter resolution,
+immediately before the main shader. It samples the already-uploaded
+lens-corrected/spotted texture, so it sits *last* in the pipeline — safe because the
+chroma ratio is unchanged by the achromatic vignette gain and geometry-only [[Spot]]
+clones. Sigma is calibrated in full-res pixels (the blur runs at sigma/4 on the
+quarter-res chroma). The recompute is debounced ~200 ms after the slider settles.
+Luminance noise reduction — the grainy brightness speckle — is a separate, deferred
+concept. The opposite of [[Grain]], which *adds* texture. Stored as
+`crs:ColorNoiseReduction`, default 0.
+_Avoid_: denoise (bare — say which kind), luminance NR (the deferred sibling),
+grain (the inverse operation), sharpening (a different Detail control)

@@ -309,6 +309,7 @@ SidecarLoadResult XmpSidecar::loadWithStatus(const QString& rawPath) {
             p.saturation = attr("Saturation", 0.0f);
             p.vibrance = attr("Vibrance", 0.0f);
             p.sharpening = attr("Sharpness", 0.0f);
+            p.colorNoiseReduction = attr("ColorNoiseReduction", 0.0f);
             p.rotation = attr("CropAngle", 0.0f);
             p.postCropVignetteAmount = attr("PostCropVignetteAmount", 0.0f);
             p.postCropVignetteMidpoint = attr("PostCropVignetteMidpoint", 50.0f);
@@ -325,9 +326,11 @@ SidecarLoadResult XmpSidecar::loadWithStatus(const QString& rawPath) {
             // Lens Corrections enable toggles (docs/adr/0027). arraw-owned; the profile
             // identity/coefficients are re-derived from the file on load, not stored.
             const auto boolAttr = [&](const char* name) {
-                return xml.attributes().value(kNsArraw, name).toString().compare(
-                           "true", Qt::CaseInsensitive)
-                    == 0;
+                return xml.attributes()
+                           .value(kNsArraw, name)
+                           .toString()
+                           .compare("true", Qt::CaseInsensitive)
+                       == 0;
             };
             p.lensCorrectDistortion = boolAttr("LensCorrectDistortion");
             p.lensCorrectVignetting = boolAttr("LensCorrectVignetting");
@@ -544,6 +547,7 @@ static QByteArray ownedPacket(const SidecarData& data) {
     write("Saturation", p.saturation);
     write("Vibrance", p.vibrance);
     write("Sharpness", p.sharpening);
+    write("ColorNoiseReduction", p.colorNoiseReduction);
     write("CropAngle", p.rotation); // Adobe's real straighten field (docs/adr/0028)
     write("PostCropVignetteAmount", p.postCropVignetteAmount);
     write("PostCropVignetteMidpoint", p.postCropVignetteMidpoint);
@@ -705,8 +709,8 @@ static bool mergeOwnedPacket(QDomDocument& document, const QByteArray& packet, S
         if (attribute.namespaceURI() == kNsCrs)
             crsAttributes.append(attribute.localName());
     }
-    const QStringList crsElements = {
-        "ToneCurvePV2012", "ToneCurvePV2012Red", "ToneCurvePV2012Green", "ToneCurvePV2012Blue"};
+    const QStringList crsElements
+        = {"ToneCurvePV2012", "ToneCurvePV2012Red", "ToneCurvePV2012Green", "ToneCurvePV2012Blue"};
     removeOwnedAttributes(document, kNsCrs, crsAttributes);
     removeOwnedElements(document, kNsCrs, crsElements);
     removeNamespaceContent(document, kNsArraw);
@@ -732,7 +736,8 @@ static bool writeFile(const QString& rawPath, const SidecarData& data, SaveScope
         if (!existing.open(QIODevice::ReadOnly))
             return false;
         QDomDocument document;
-        if (!parseDocument(existing.readAll(), document) || !mergeOwnedPacket(document, packet, scope))
+        if (!parseDocument(existing.readAll(), document)
+            || !mergeOwnedPacket(document, packet, scope))
             return false;
         output = document.toByteArray(2);
     }

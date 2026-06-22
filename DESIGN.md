@@ -563,10 +563,20 @@ Splits by pipeline cost.
   Quarter-res is faithful for this broad, low-frequency effect (unlike fine
   sharpening, which stays export-only). The blur pass is reusable groundwork for
   the deferred items below.
+- **Colour Noise Reduction (own milestone, shipped): cached GPU chroma pre-pass.**
+  Removes coloured high-ISO blotches by smoothing the unit-luma chroma ratio with
+  a separable Gaussian at quarter-res, run as a cached multi-pass GPU pre-pass in
+  `RendererCore` immediately before the main shader (the CPU version was abandoned
+  as too slow). It samples the already-uploaded lens-corrected/spotted texture, so
+  it sits **last** in the pipeline — safe because the chroma ratio is unchanged by
+  the achromatic vignette gain and geometry-only spots. Luma is preserved exactly
+  by construction; chroma stays faithful at quarter-res, so it needs no
+  full-res-to-judge handling. The recompute is debounced (~200 ms after the slider
+  settles). See `docs/adr/0032`.
 - **Deferred, listed with their cost:** Dehaze (spatial, heavier estimation pass),
-  Noise Reduction (wants full-res to judge, expensive per frame — closer to its
-  own milestone), and profile-based Lens Corrections (needs a lens-profile
-  database).
+  Luminance Noise Reduction (wants full-res to judge, destroys fine detail —
+  closer to its own milestone), and profile-based Lens Corrections (needs a
+  lens-profile database).
 
 ### Milestone 10 — Multi-select & Batch Operations
 

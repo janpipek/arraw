@@ -212,6 +212,7 @@ set(CORE_SOURCES
     src/PresetStore.cpp
     src/Spot.cpp
     src/SpotRemovalPanel.cpp
+    src/NoiseReduction.cpp
     src/LensCorrection.cpp
     src/LensfunSource.cpp
     src/BatchPaste.cpp
@@ -251,6 +252,8 @@ qt6_add_shaders(arraw_core "arraw_shaders"
     HLSL 50
     MSL 12
     FILES shaders/image.vert shaders/image.frag
+          shaders/nr.vert shaders/nr_extract.frag
+          shaders/nr_blur_h.frag shaders/nr_blur_v.frag shaders/nr_recombine.frag
 )
 
 # resources/icon.qrc bakes the window-icon PNGs (generated from resources/icon.svg

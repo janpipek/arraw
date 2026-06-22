@@ -264,6 +264,14 @@ private:
 
     QTimer histoTimer; // debounces histogram readbacks during slider drags
 
+    // The Colour Noise Reduction pre-pass is the one expensive GPU stage, so it
+    // is debounced: render() always denoises for nrAmountEffective (kept in the
+    // RendererCore cache), and nrTimer promotes the live slider value to it only
+    // once the slider has been still ~200ms. Export/full-res paths bypass this
+    // and always use the committed amount.
+    QTimer nrTimer;
+    float nrAmountEffective = 0.0f;
+
     // ── View state ────────────────────────────────────────────────────────
     float zoom = 1.0f;
     QPointF pan = {0, 0};
