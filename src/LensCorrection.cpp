@@ -5,6 +5,33 @@
 #include <algorithm>
 #include <cmath>
 
+#include <QList>
+#include <QThread>
+#include <QtConcurrent>
+
+namespace {
+// Run `body(y0, y1)` over disjoint row ranges in parallel (the warp/gain write each
+// output row independently and only read the source, so this is data-race free).
+template <typename Fn>
+void parallelRows(int height, Fn&& body) {
+    const int threads = std::max(1, QThread::idealThreadCount());
+    if (height < 64 || threads == 1) {
+        body(0, height);
+        return;
+    }
+    const int rowsPer = (height + threads - 1) / threads;
+    QList<int> starts;
+    for (int y = 0; y < height; y += rowsPer)
+        starts.append(y);
+    QtConcurrent::blockingMap(
+        starts, [&](int y0) { body(y0, std::min(y0 + rowsPer, height)); });
+}
+
+float length(float x, float y) {
+    return std::sqrt(x * x + y * y); // hot-path replacement for std::hypot
+}
+} // namespace
+
 float RadialCurve::sample(float r) const {
     r = std::clamp(r, 0.0f, 1.0f);
     const float pos = r * (N - 1);
@@ -41,16 +68,20 @@ static void applyVignetting(ImageBuffer& buf, const RadialCurve& gain, QPointF c
     if (maxR <= 0.0f)
         return;
 
-    for (int y = 0; y < buf.height; ++y) {
-        for (int x = 0; x < buf.width; ++x) {
-            const float r = dist(static_cast<float>(x) + 0.5f, static_cast<float>(y) + 0.5f) / maxR;
-            const float g = gain.sample(r);
-            const size_t i = static_cast<size_t>((y * buf.width + x) * 3);
-            buf.data[i] *= g;
-            buf.data[i + 1] *= g;
-            buf.data[i + 2] *= g;
+    parallelRows(buf.height, [&](int y0, int y1) {
+        for (int y = y0; y < y1; ++y) {
+            for (int x = 0; x < buf.width; ++x) {
+                const float r = length(static_cast<float>(x) + 0.5f - cx,
+                                       static_cast<float>(y) + 0.5f - cy)
+                    / maxR;
+                const float g = gain.sample(r);
+                const size_t i = static_cast<size_t>((y * buf.width + x) * 3);
+                buf.data[i] *= g;
+                buf.data[i + 1] *= g;
+                buf.data[i + 2] *= g;
+            }
         }
-    }
+    });
 }
 
 // Bilinear sample of one channel `c` of `src` at pixel position (px, py), where a
@@ -104,7 +135,7 @@ static void warpSource(const WarpFrame& f, const RadialCurve& distortion, bool d
                        float zoom, float vx, float vy, float& sx, float& sy, float& scale) {
     const float zx = vx / zoom;
     const float zy = vy / zoom;
-    const float r = std::hypot(zx, zy) / f.maxR;
+    const float r = length(zx, zy) / f.maxR;
     scale = doDistortion ? distortion.sample(r) : 1.0f;
     sx = f.cx + zx * scale;
     sy = f.cy + zy * scale;
@@ -120,28 +151,30 @@ static ImageBuffer applyWarp(const ImageBuffer& src, const LensCorrectionModel& 
     if (f.maxR <= 0.0f)
         return dst;
 
-    for (int y = 0; y < src.height; ++y) {
-        for (int x = 0; x < src.width; ++x) {
-            const float vx = static_cast<float>(x) + 0.5f - f.cx;
-            const float vy = static_cast<float>(y) + 0.5f - f.cy;
-            float gx = 0.0f, gy = 0.0f, base = 1.0f;
-            warpSource(f, model.distortion, doDistortion, zoom, vx, vy, gx, gy, base);
-            const size_t i = static_cast<size_t>((y * src.width + x) * 3);
-            dst.data[i + 1] = sampleChannel(src, gx, gy, 1); // green carries geometry
-            if (doTCA) {
-                const float zx = vx / zoom;
-                const float zy = vy / zoom;
-                const float r = std::hypot(zx, zy) / f.maxR;
-                const float sR = base * model.tcaR.sample(r);
-                const float sB = base * model.tcaB.sample(r);
-                dst.data[i] = sampleChannel(src, f.cx + zx * sR, f.cy + zy * sR, 0);
-                dst.data[i + 2] = sampleChannel(src, f.cx + zx * sB, f.cy + zy * sB, 2);
-            } else {
-                dst.data[i] = sampleChannel(src, gx, gy, 0);
-                dst.data[i + 2] = sampleChannel(src, gx, gy, 2);
+    parallelRows(src.height, [&](int y0, int y1) {
+        for (int y = y0; y < y1; ++y) {
+            for (int x = 0; x < src.width; ++x) {
+                const float vx = static_cast<float>(x) + 0.5f - f.cx;
+                const float vy = static_cast<float>(y) + 0.5f - f.cy;
+                float gx = 0.0f, gy = 0.0f, base = 1.0f;
+                warpSource(f, model.distortion, doDistortion, zoom, vx, vy, gx, gy, base);
+                const size_t i = static_cast<size_t>((y * src.width + x) * 3);
+                dst.data[i + 1] = sampleChannel(src, gx, gy, 1); // green carries geometry
+                if (doTCA) {
+                    const float zx = vx / zoom;
+                    const float zy = vy / zoom;
+                    const float r = length(zx, zy) / f.maxR;
+                    const float sR = base * model.tcaR.sample(r);
+                    const float sB = base * model.tcaB.sample(r);
+                    dst.data[i] = sampleChannel(src, f.cx + zx * sR, f.cy + zy * sR, 0);
+                    dst.data[i + 2] = sampleChannel(src, f.cx + zx * sB, f.cy + zy * sB, 2);
+                } else {
+                    dst.data[i] = sampleChannel(src, gx, gy, 0);
+                    dst.data[i + 2] = sampleChannel(src, gx, gy, 2);
+                }
             }
         }
-    }
+    });
     return dst;
 }
 

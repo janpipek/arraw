@@ -4,6 +4,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
+#include <chrono>
 #include <cmath>
 
 using Catch::Matchers::WithinAbs;
@@ -284,4 +285,29 @@ TEST_CASE("TCA moves red and blue along the radius while green stays put", "[len
     REQUIRE(pixelC(out, 63, 24, 0) < pixelC(out, 63, 24, 1));              // red < green
     REQUIRE_THAT(pixelC(out, 63, 24, 1), WithinAbs(1.0f, 0.02));           // green unchanged
     REQUIRE_THAT(pixelC(out, 63, 24, 2), WithinAbs(1.0f, 0.02));           // blue clamped at edge
+}
+
+// Hidden ([.]) micro-benchmark: time one preview-sized warp in this build config.
+// Run: arraw_tests "[.perf]"
+TEST_CASE("benchmark: preview-sized lens warp", "[.][perf]") {
+    ImageBuffer buf;
+    buf.width = 3096; // half of a 6192-wide Sony frame
+    buf.height = 2064;
+    buf.data.assign(static_cast<size_t>(buf.width * buf.height * 3), 0.5f);
+
+    LensCorrectionModel model;
+    model.distortion = RadialCurve::fromFn([](float r) { return 1.0f + 0.03f * r * r; });
+    model.tcaR = RadialCurve::fromFn([](float r) { return 1.0f + 0.001f * r; });
+    model.tcaB = RadialCurve::fromFn([](float r) { return 1.0f - 0.001f * r; });
+    model.vignette = RadialCurve::fromFn([](float r) { return 1.0f + 0.4f * r * r; });
+    model.hasDistortion = model.hasTCA = model.hasVignetting = true;
+    const LensCorrectionToggles all{.distortion = true, .vignetting = true, .ca = true};
+
+    const auto t0 = std::chrono::steady_clock::now();
+    const ImageBuffer out = applyLensCorrection(buf, model, all);
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - t0)
+                        .count();
+    REQUIRE(out.valid());
+    WARN("preview warp (3096x2064, all corrections): " << ms << " ms");
 }
