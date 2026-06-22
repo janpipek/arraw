@@ -112,64 +112,24 @@ jobs:
           cache: true
 
       - name: Install system build dependencies
+        # Package list shared with packaging/linux/Containerfile (apt-build-deps.txt)
+        # so the two AppImage build paths can't drift.
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential cmake ninja-build file appstream libdbus-1-3 \
-            libraw-dev liblcms2-dev liblensfun-dev liblensfun-data-v1 \
-            libgl1-mesa-dev libglu1-mesa-dev libvulkan-dev \
-            libxkbcommon-dev libxkbcommon-x11-dev libfontconfig1-dev libfreetype-dev \
-            libx11-dev libx11-xcb-dev libxext-dev libxfixes-dev libxi-dev libxrender-dev \
-            libxcb1-dev libxcb-cursor-dev libxcb-glx0-dev libxcb-keysyms1-dev \
-            libxcb-image0-dev libxcb-shm0-dev libxcb-icccm4-dev libxcb-sync-dev \
-            libxcb-xfixes0-dev libxcb-shape0-dev libxcb-randr0-dev \
-            libxcb-render-util0-dev libxcb-util-dev libxcb-xinerama0-dev libxcb-xkb-dev
-
-      - name: Validate AppStream metainfo
-        run: appstreamcli validate --no-net packaging/linux/io.github.janpipek.arraw.metainfo.xml
-
-      - name: Configure and build
-        run: |
-          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DARRAW_BUILD_TESTS=OFF \
-            -DARRAW_WITH_LENSFUN=ON \
-            -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
-          ninja -C build arraw
-
-      - name: Stage AppDir
-        run: DESTDIR="$PWD/AppDir" cmake --install build --prefix /usr
-
-      - name: Bundle the lensfun database
-        # linuxdeploy carries shared libraries (liblensfun + glib) but not arbitrary
-        # data dirs, so the lens DB has to be staged into the AppDir explicitly. The
-        # app loads it from a path relative to the executable (usr/bin → ../share),
-        # never the host's /usr/share, so the AppImage stays self-contained (#53).
-        run: |
-          db_src=/usr/share/lensfun/version_1
-          db_dst="$PWD/AppDir/usr/share/lensfun/db"
-          if [ ! -d "$db_src" ] || [ -z "$(ls -A "$db_src"/*.xml 2>/dev/null)" ]; then
-            echo "::error::lensfun database not found at $db_src"
-            exit 1
-          fi
-          mkdir -p "$db_dst"
-          cp "$db_src"/*.xml "$db_dst/"
-          echo "Staged $(ls "$db_dst"/*.xml | wc -l) lensfun DB files into the AppDir"
+          grep -vE '^[[:space:]]*(#|$)' packaging/linux/apt-build-deps.txt \
+            | xargs sudo apt-get install -y --no-install-recommends
 
       - name: Build AppImage
+        # Single source of truth shared with `just appimage` (build-appimage.sh):
+        # validate metainfo → cmake build → stage AppDir → stage lensfun DB →
+        # linuxdeploy. ARRAW_* map the script's container defaults onto the runner;
+        # QT_ROOT_DIR (from install-qt-action) is the Qt prefix; no /dist here, so
+        # the AppImage is left in the workspace for the upload step to pick up.
         env:
-          APPIMAGE_EXTRACT_AND_RUN: '1'
-          EXTRA_PLATFORM_PLUGINS: libqoffscreen.so
-          NO_STRIP: '1'
-          QMAKE: ${{ env.QT_ROOT_DIR }}/bin/qmake
-          OUTPUT: arraw-${{ needs.validate.outputs.version }}-x86_64.AppImage
-        run: |
-          base="https://github.com/linuxdeploy"
-          wget -q "$base/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage"
-          wget -q "$base/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage"
-          chmod +x linuxdeploy*.AppImage
-          ./linuxdeploy-x86_64.AppImage \
-            --appdir AppDir \
-            --plugin qt \
-            --output appimage
+          ARRAW_SRC: ${{ github.workspace }}
+          ARRAW_BUILD_DIR: ${{ github.workspace }}/build
+          ARRAW_APPDIR: ${{ github.workspace }}/AppDir
+        run: bash packaging/linux/build-appimage.sh
 
       - name: Upload AppImage artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
