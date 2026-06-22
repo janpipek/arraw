@@ -12,24 +12,36 @@ A lightweight, cross-platform RAW photo editor with a Lightroom-style developmen
 
 ## Features
 
-- **Real-time adjustments** — all edits run as GLSL uniforms; no CPU processing during preview
+- **Real-time adjustments** — global edits run as GLSL uniforms; no CPU processing during preview
 - **Non-destructive** — edits saved as `.xmp` sidecar files, Lightroom-compatible (`crs:` namespace)
 - **Color-managed** — linear Rec.2020 working space; export to sRGB, Display P3, or Adobe RGB (lcms2, ICC embedded); embedded profiles honoured on load
 - **Soft-proofing** — preview against any printer/paper ICC profile (`S`), Perceptual/Relative intent, black point compensation, gamut warning; monitor ICC profile support
+- **Local adjustments** — masked edits with Linear (graduated) and Radial masks (up to 16 per image)
+- **Lens corrections** — profile-driven distortion, vignetting, and chromatic-aberration correction (lensfun / embedded profiles)
+- **Spot removal** — clone-based spot/blemish healing
+- **Tone curve** — Luma curve plus independent R/G/B channel curves, drawn over a gamma-encoded input histogram
+- **Culling** — per-file rating (0–5 stars, reject) and colour labels, stored in the sidecar (no database)
+- **Develop presets** — named, partial bundles of develop settings (arraw-native)
+- **Copy / paste & batch** — copy settings between images, batch-paste, batch export, headless CLI export
 - **GPU export** — full-resolution offscreen readback through the same shader pipeline; JPEG, PNG, TIFF (8- or 16-bit) output
+- **Film strip** — thumbnail strip with EXIF tooltips and arrow-key navigation through a folder; EXIF panel for the current image
+- **Caching** — developed-thumbnail and decode caches for fast browsing
+- **Focus modes** — full-screen, lights-out (hide panels), and collapsible adjustment dock
 - **Dual-res textures** — quarter-res preview for interaction, full-res texture swapped in lazily at high zoom
 - **Undo/redo** — per-slider-drag coalescing via `QUndoStack`
-- **File browser** — filename list dock with arrow-key navigation through a folder
 
 ### Adjustments
 
 | Group | Controls |
 |---|---|
-| White Balance | Temperature (2000–12000 K), Tint; WB presets |
+| White Balance | Temperature (2000–12000 K), Tint; WB presets; neutral-pick tool |
 | Tone | Exposure (±5 EV), Contrast, Highlights, Shadows, Whites, Blacks |
-| Color | Saturation, Vibrance |
+| Tone Curve | Luma curve + per-channel R/G/B curves |
+| Color | Saturation, Vibrance; HSL (hue/sat/luminance across 8 colour ranges) |
 | Detail | Sharpening |
-| Geometry | Rotation (±45°), Crop |
+| Effects | Post-Crop Vignette (amount/midpoint/feather), Grain (amount/size/roughness) |
+| Lens | Distortion, Vignetting, Chromatic Aberration correction |
+| Geometry | Orientation (90° rotate / flip), Straighten (±45°), Crop (aspect presets) |
 
 ### Supported RAW formats
 
@@ -39,25 +51,34 @@ CR2, CR3, NEF, ARW, DNG, RAF, ORF, RW2, PEF, SRW (via libraw)
 
 | Key | Action |
 |---|---|
-| `Ctrl+O` | Open file |
-| `Ctrl+S` | Save XMP sidecar |
+| `Ctrl+O` / `Ctrl+Shift+O` | Open file / folder |
+| `Ctrl+S` | Save adjustments (XMP sidecar) |
 | `Ctrl+E` | Export |
 | `Ctrl+Z` / `Ctrl+Shift+Z` | Undo / Redo |
 | `Ctrl+0` | Reset zoom to fit |
 | `←` / `→` | Previous / next file in folder |
-| `C` | Enter crop mode |
-| `Enter` | Confirm crop |
-| `Escape` | Cancel crop |
-| `\` (hold) | Before/after toggle |
+| `C` / `M` / `Q` | Crop / Masks / Spots tool |
 | `S` | Toggle soft-proofing |
-| `R` | Reset all adjustments |
+| `J` | Toggle clipping overlay |
+| `\` (hold) | Before/after toggle |
+| `1`–`5`, `0`, `X` | Rating (stars / unrated / reject) |
+| `F11` / `F12` | Full screen / hide panels |
 
 Zoom: scroll wheel (0.05×–32×). Pan: Alt+drag or middle-button drag.
+
+See [docs/keybindings.md](docs/keybindings.md) for the complete list.
 
 ## FAQ
 
 Common runtime questions — including making arraw render on a laptop's discrete
 GPU instead of the integrated one — are in [docs/faq.md](docs/faq.md).
+
+## Installing
+
+Pre-built downloads (Linux AppImage / Fedora RPM, Windows installer or portable
+ZIP) are published on the [Releases page](https://github.com/janpipek/arraw/releases).
+See [docs/installation.md](docs/installation.md) for per-platform install steps.
+To build from source instead, follow the section below.
 
 ## Building
 
@@ -65,7 +86,7 @@ GPU instead of the integrated one — are in [docs/faq.md](docs/faq.md).
 
 ```bash
 sudo dnf install qt6-qtbase-devel qt6-qtbase-private-devel qt6-qtshadertools-devel \
-    qt6-qttools-devel LibRaw-devel lcms2-devel cmake ninja-build
+    qt6-qttools-devel LibRaw-devel lcms2-devel lensfun-devel cmake ninja-build
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
 ninja -C build
 ./build/arraw
@@ -79,7 +100,7 @@ commands, required packages, and release workflow are documented in
 ### macOS (Homebrew)
 
 ```bash
-brew install qt libraw little-cms2 cmake ninja
+brew install qt libraw little-cms2 lensfun cmake ninja
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
   -DCMAKE_PREFIX_PATH=$(brew --prefix qt)
 ninja -C build
@@ -116,6 +137,7 @@ the binary as resources — there is nothing to copy or deploy.
 - **Qt 6** ≥ 6.8 (Widgets, Concurrent; RHI via GuiPrivate; ShaderTools at build time)
 - **libraw** (≥ 0.21) — RAW decoding into the Rec.2020 working space
 - **lcms2** — output color transforms and ICC profile handling
+- **lensfun** — lens correction profiles (distortion, vignetting, CA)
 - GPU rendering via **Qt RHI** — Metal on macOS, D3D11 on Windows, OpenGL on
   Linux (Vulkan opt-in); no direct OpenGL dependency
 - CMake 3.21+, Ninja
@@ -131,7 +153,7 @@ Brief overview:
 - `ImageViewport` — `QRhiWidget` with zoom/pan/crop logic, delegating all drawing to `RendererCore`
 - `AdjustmentPanel` — slider UI, emits `paramsChanged(GlobalAdjustment)` on every change
 - `XmpSidecar` — reads/writes `.xmp` files using Adobe Camera Raw field names
-- `FileBrowser` — folder-scoped filename list dock
+- `FilmStrip` — folder-scoped thumbnail strip dock (navigation, culling marks, EXIF tooltips)
 - `MainWindow` — wires everything together; owns the `QUndoStack`
 
 All adjustments live in `GlobalAdjustment` (a plain struct). The GLSL fragment shader is the single source of truth for all *adjustments* — the same shader runs during preview and export, always in linear Rec.2020. Only the final color encode differs per destination: in-shader for the display, lcms2 on the CPU for export (see `docs/adr/0002`).
