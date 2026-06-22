@@ -299,7 +299,39 @@ TEST_CASE("a local exposure mask brightens only the masked region", "[gpu][local
     const float masked = value(0.9f, y);   // weight ~1, +1 EV
 
     INFO("unmasked=" << unmasked << " masked=" << masked);
-    CHECK(masked > unmasked + 0.1f); // +1 EV ≈ doubles the linear value
+    CHECK(masked > unmasked + 0.1f); // +1 EV gives a substantial perceptual lift
+}
+
+TEST_CASE("a later Local Adjustment can recover global white headroom", "[gpu][tone]") {
+    ImageViewport* vp = goldenViewport();
+    if (!vp)
+        SKIP("no OpenGL context available on this machine");
+
+    ImageBuffer scene;
+    scene.width = 16;
+    scene.height = 16;
+    scene.data.assign(size_t(scene.width) * scene.height * 3, 0.9f);
+
+    GlobalAdjustment globalOnly;
+    globalOnly.whites = 100.0f;
+    vp->setAdjustments(globalOnly);
+    const QImage over = vp->renderToImage(scene, globalOnly, scene.width, scene.height);
+    REQUIRE_FALSE(over.isNull());
+    const float overWhite = reinterpret_cast<const float*>(over.constScanLine(8))[8 * 4];
+    REQUIRE(overWhite > 1.0f);
+
+    GlobalAdjustment recovered = globalOnly;
+    LocalAdjustment local;
+    local.mask = LinearMask{{-2.0, 0.5}, {-1.0, 0.5}}; // weight 1 over the whole frame
+    local.whites = -100.0f;
+    recovered.localAdjustments.push_back(local);
+    vp->setAdjustments(recovered);
+    const QImage under = vp->renderToImage(scene, recovered, scene.width, scene.height);
+    REQUIRE_FALSE(under.isNull());
+    const float recoveredWhite = reinterpret_cast<const float*>(under.constScanLine(8))[8 * 4];
+
+    CHECK(recoveredWhite < 1.0f);
+    CHECK(recoveredWhite < overWhite);
 }
 
 TEST_CASE("a local radial mask brightens only inside the oval", "[gpu][localadj]") {

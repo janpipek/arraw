@@ -1003,7 +1003,7 @@ QImage ImageViewport::renderClipSample(
 // ── Histogram readback (docs/adr/0004) ────────────────────────────────────────
 
 // Render the preview texture through the real shader twice into a small
-// offscreen target — once with curveInput (pipeline stops after tone regions,
+// offscreen target — once with curveInput (pipeline stops after Basic Tone,
 // gamma-encoded) and once full — and hand both samples to whoever bins them.
 void ImageViewport::renderHistograms() {
     if (!hasImage || !core.ready() || !core.hasImage(RendererCore::Slot::Preview))

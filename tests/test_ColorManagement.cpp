@@ -82,6 +82,20 @@ TEST_CASE("16-bit export keeps white at full scale", "[color]") {
     CHECK(px.blue() >= 65500);
 }
 
+TEST_CASE("bounded export clips working-space headroom only at output encoding", "[color]") {
+    ImageBuffer overWhite;
+    overWhite.width = 1;
+    overWhite.height = 1;
+    overWhite.data = {1.2f, 1.2f, 1.2f};
+
+    const QImage out = toOutputImage(toLinearImage(overWhite), OutputProfile::SRgb, false);
+    REQUIRE(out.format() == QImage::Format_RGB888);
+    const QColor px = out.pixelColor(0, 0);
+    CHECK(px.red() == 255);
+    CHECK(px.green() == 255);
+    CHECK(px.blue() == 255);
+}
+
 TEST_CASE("sRGB through working space and back is identity within 8 bits", "[color]") {
     // toWorkingSpaceBuffer ∘ toOutputImage(SRgb) should reproduce the input —
     // this pins both directions of the lcms2 plumbing at once.
