@@ -169,7 +169,29 @@ false/`nullopt`.
     - **AppImage** (Ubuntu aqt): bundle `liblensfun.so` + the `version_1` XML dir;
       set the DB load path at runtime (don't rely on system paths).
     - **Windows (vcpkg)**: verify the lensfun port builds; bundle DB; confirm path
-      resolution. Riskiest leg — spike early.
+      resolution. Riskiest leg — spike early. Detailed checklist + tracking: **issue #53**.
+
+### Windows checklist (issue #53)
+
+The code is already portable — lensfun only resolves a `LensCorrectionModel` of LUTs
+in `LensfunSource.cpp`, the apply math is plain C++, and the whole source is optional
+via `ARRAW_HAS_LENSFUN`. Two gaps remain:
+
+1. **Runtime DB discovery — the real blocker.** `RawProcessor.cpp` calls
+   `resolveLensfunModel(QString(), query)`; the empty path makes `LensfunSource.cpp`
+   call `db.Load()`, which relies on lensfun's *system* paths (`/usr/share/lensfun/`
+   on Linux). Windows has no such location, so every lens silently returns `nullopt`.
+   Fix (one logic change, harmless on Linux): bundle the DB (`data/db/*.xml`) next to
+   `arraw.exe` and resolve a path that prefers the bundled dir (via `LoadDirectory`),
+   falling back to empty `db.Load()`.
+2. **glib link.** lensfun links `glib-2.0`. `vcpkg install lensfun` pulls it
+   transitively, so the vcpkg toolchain's `pkg_check_modules(LENSFUN …)` brings it in.
+   If the build falls through to the `find_library`/`find_path` fallback in
+   `CMakeLists.txt`, that fallback links only `lensfun` → unresolved glib symbols; it
+   needs a matching `find` for `glib-2.0` (+ `gobject-2.0`, `intl`).
+
+Verify: `lensfunAvailable()` true and the Sigma 56/1.4 reference shot resolves a
+non-null model with the bundled DB (assertion shape mirrors `test_LensfunSource.cpp`).
 
 ## Open / spike before coding
 
