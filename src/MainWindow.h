@@ -81,6 +81,7 @@ private slots:
     void pasteSettings();
     void saveCurrentAsPreset();
     void managePresets();
+    void showAboutDialog();
 
 private:
     void setupMenus();
