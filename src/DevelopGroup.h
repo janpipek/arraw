@@ -18,9 +18,10 @@ enum class DevelopGroup {
     Colour,       // saturation, vibrance
     Hsl,          // the 8-band hue/sat/lum mix
     Detail,       // sharpening
-    Geometry,     // rotation + crop rect + aspect-lock flag, as one unit
-    Effects,      // vignette + grain controls; never the per-image grain seed
-    Count_,       // sentinel — keep last
+    Geometry,        // rotation + crop rect + aspect-lock flag, as one unit
+    LensCorrections, // distortion + corrective vignetting + CA enable toggles
+    Effects,         // post-crop vignette + grain controls; never the per-image grain seed
+    Count_,          // sentinel — keep last
 };
 
 inline constexpr int kDevelopGroupCount = static_cast<int>(DevelopGroup::Count_);

@@ -2,6 +2,7 @@
 #include "AdjustmentSpinBox.h"
 #include "Histogram.h"
 #include <QButtonGroup>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QEvent>
 #include <QFont>
@@ -204,6 +205,28 @@ AdjustmentPanel::AdjustmentPanel(QWidget* parent)
     auto* geo = makeGroup("Geometry");
     rotation = addSlider(geo, "Rotation", kRotationSpec);
 
+    // ── Lens Corrections ────────────────────────────────────────────────────────
+    auto* lens = makeGroup("Lens Corrections");
+    lensProfileLabel = new QLabel("No lens profile", this);
+    lensProfileLabel->setObjectName("lensProfileLabel");
+    lensProfileLabel->setWordWrap(true);
+    lens->addWidget(lensProfileLabel);
+    auto addLensToggle = [this, lens](const QString& text, const char* objectName) {
+        auto* box = new QCheckBox(text, this);
+        box->setObjectName(objectName);
+        box->setEnabled(false); // enabled once a profile is set
+        lens->addWidget(box);
+        connect(box, &QCheckBox::toggled, this, [this] {
+            syncParams();
+            emit paramsChanged(adjustments);
+            commit();
+        });
+        return box;
+    };
+    lensCorrectDistortionBox = addLensToggle("Distortion", "lensCorrectDistortionBox");
+    lensCorrectVignettingBox = addLensToggle("Vignetting", "lensCorrectVignettingBox");
+    lensCorrectCABox = addLensToggle("Chromatic Aberration", "lensCorrectCABox");
+
     // ── Effects ───────────────────────────────────────────────────────────────
     auto* effects = makeGroup("Effects");
     auto subHeader = [this](QVBoxLayout* group, const QString& title) {
@@ -213,10 +236,10 @@ AdjustmentPanel::AdjustmentPanel(QWidget* parent)
         lbl->setFont(f);
         group->addWidget(lbl);
     };
-    subHeader(effects, "Vignette");
-    vignetteAmount = addSlider(effects, "Amount", kEffectAmountSpec);
-    vignetteMidpoint = addSlider(effects, "Midpoint", kEffectShapeSpec);
-    vignetteFeather = addSlider(effects, "Feather", kEffectShapeSpec);
+    subHeader(effects, "Post-Crop Vignette");
+    postCropVignetteAmount = addSlider(effects, "Amount", kEffectAmountSpec);
+    postCropVignetteMidpoint = addSlider(effects, "Midpoint", kEffectShapeSpec);
+    postCropVignetteFeather = addSlider(effects, "Feather", kEffectShapeSpec);
     subHeader(effects, "Grain");
     grainAmount = addSlider(effects, "Amount", kGrainAmountSpec);
     grainAmount.slider->setObjectName("grainAmountSlider"); // drives the Grain-seed lifecycle test
@@ -297,12 +320,15 @@ void AdjustmentPanel::syncParams() {
     adjustments.vibrance = v(vibrance);
     adjustments.sharpening = v(sharpening);
     adjustments.rotation = v(rotation);
-    adjustments.vignetteAmount = v(vignetteAmount);
-    adjustments.vignetteMidpoint = v(vignetteMidpoint);
-    adjustments.vignetteFeather = v(vignetteFeather);
+    adjustments.postCropVignetteAmount = v(postCropVignetteAmount);
+    adjustments.postCropVignetteMidpoint = v(postCropVignetteMidpoint);
+    adjustments.postCropVignetteFeather = v(postCropVignetteFeather);
     adjustments.grainAmount = v(grainAmount);
     adjustments.grainSize = v(grainSize);
     adjustments.grainRoughness = v(grainRoughness);
+    adjustments.lensCorrectDistortion = lensCorrectDistortionBox->isChecked();
+    adjustments.lensCorrectVignetting = lensCorrectVignettingBox->isChecked();
+    adjustments.lensCorrectCA = lensCorrectCABox->isChecked();
     ensureGrainSeed(adjustments);
     for (int i = 0; i < 8; ++i) {
         adjustments.hslHue[i] = v(hslHue[i]);
@@ -327,9 +353,9 @@ std::vector<AdjustmentPanel::SliderRow*> AdjustmentPanel::allRows() {
            &vibrance,
            &sharpening,
            &rotation,
-           &vignetteAmount,
-           &vignetteMidpoint,
-           &vignetteFeather,
+           &postCropVignetteAmount,
+           &postCropVignetteMidpoint,
+           &postCropVignetteFeather,
            &grainAmount,
            &grainSize,
            &grainRoughness};
@@ -446,9 +472,9 @@ void AdjustmentPanel::setParams(const GlobalAdjustment& p) {
     set(vibrance, p.vibrance);
     set(sharpening, p.sharpening);
     set(rotation, p.rotation);
-    set(vignetteAmount, p.vignetteAmount);
-    set(vignetteMidpoint, p.vignetteMidpoint);
-    set(vignetteFeather, p.vignetteFeather);
+    set(postCropVignetteAmount, p.postCropVignetteAmount);
+    set(postCropVignetteMidpoint, p.postCropVignetteMidpoint);
+    set(postCropVignetteFeather, p.postCropVignetteFeather);
     set(grainAmount, p.grainAmount);
     set(grainSize, p.grainSize);
     set(grainRoughness, p.grainRoughness);
@@ -466,6 +492,15 @@ void AdjustmentPanel::setParams(const GlobalAdjustment& p) {
         r->spin->blockSignals(false);
     }
 
+    // Lens-correction toggles (block signals so setParams doesn't emit/commit).
+    for (auto* box : {lensCorrectDistortionBox, lensCorrectVignettingBox, lensCorrectCABox})
+        box->blockSignals(true);
+    lensCorrectDistortionBox->setChecked(p.lensCorrectDistortion);
+    lensCorrectVignettingBox->setChecked(p.lensCorrectVignetting);
+    lensCorrectCABox->setChecked(p.lensCorrectCA);
+    for (auto* box : {lensCorrectDistortionBox, lensCorrectVignettingBox, lensCorrectCABox})
+        box->blockSignals(false);
+
     // Curve widget update (no signals needed — setPoints doesn't emit curveChanged)
     toneCurve->setPoints(ToneCurveWidget::Channel::Luma, p.curveLuma.points);
     toneCurve->setPoints(ToneCurveWidget::Channel::Red, p.curveR.points);
@@ -477,6 +512,13 @@ void AdjustmentPanel::setParams(const GlobalAdjustment& p) {
     committed = adjustments;
     updateCurveChannelIndicators();
     emit paramsChanged(adjustments);
+}
+
+void AdjustmentPanel::setLensProfileName(const QString& name) {
+    const bool available = !name.isEmpty();
+    lensProfileLabel->setText(available ? name : tr("No lens profile"));
+    for (auto* box : {lensCorrectDistortionBox, lensCorrectVignettingBox, lensCorrectCABox})
+        box->setEnabled(available);
 }
 
 // A "•" suffix marks channels whose curve is bent — otherwise a non-identity

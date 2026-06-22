@@ -383,9 +383,9 @@ TEST_CASE("post-crop Vignette darkens crop corners without moving its centre", "
 
     GlobalAdjustment p;
     p.cropRect = {0.2, 0.1, 0.6, 0.7};
-    p.vignetteAmount = -100.0f;
-    p.vignetteMidpoint = 50.0f;
-    p.vignetteFeather = 50.0f;
+    p.postCropVignetteAmount = -100.0f;
+    p.postCropVignetteMidpoint = 50.0f;
+    p.postCropVignetteFeather = 50.0f;
     const int outW = int(p.cropRect.width() * scene.width);
     const int outH = int(p.cropRect.height() * scene.height);
 

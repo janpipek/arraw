@@ -146,14 +146,26 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+// Lens correction is a CPU buffer change (like spots), so when its toggles flip the
+// viewport texture must be re-uploaded — uniform-only refresh isn't enough.
+static bool lensTogglesDiffer(const GlobalAdjustment& a, const GlobalAdjustment& b) {
+    return a.lensCorrectDistortion != b.lensCorrectDistortion
+           || a.lensCorrectVignetting != b.lensCorrectVignetting
+           || a.lensCorrectCA != b.lensCorrectCA;
+}
+
 void AdjustmentCommand::undo() {
     session->setParams(before);
     mainWindow->syncSessionToEditors();
+    if (lensTogglesDiffer(before, after))
+        mainWindow->rebuildSpottedBuffers(false);
 }
 
 void AdjustmentCommand::redo() {
     session->setParams(after);
     mainWindow->syncSessionToEditors();
+    if (lensTogglesDiffer(before, after))
+        mainWindow->rebuildSpottedBuffers(false);
 }
 
 // ---------------------------------------------------------------------------
@@ -278,9 +290,15 @@ MainWindow::MainWindow(QWidget* parent)
         });
 
     connect(adjPanel, &AdjustmentPanel::paramsChanged, this, [this](const GlobalAdjustment& params) {
-        GlobalAdjustment next = applyGroups(session->params(), params, allGroups());
+        const GlobalAdjustment prev = session->params();
+        GlobalAdjustment next = applyGroups(prev, params, allGroups());
         next.grainSeed = params.grainSeed; // per-image identity still changes within this image
         session->setParams(next);
+        // Lens correction edits the decoded buffer (like spots); re-upload the
+        // corrected preview when a toggle flips (full-res is recomputed lazily on
+        // export/zoom). Uniform refresh alone won't show it.
+        if (lensTogglesDiffer(prev, next))
+            rebuildSpottedBuffers(false);
         pushParamsToViewport();
     });
 
@@ -1544,6 +1562,7 @@ void MainWindow::syncSessionToEditors() {
     {
         QSignalBlocker block(adjPanel);
         adjPanel->setParams(session->params());
+        adjPanel->setLensProfileName(session->lensProfileName());
     }
     {
         QSignalBlocker block(localPanel);

@@ -230,3 +230,40 @@ TEST_CASE("DevelopSession records the image being loaded", "[develop-session]") 
     CHECK_FALSE(session.developDirty());
     CHECK_FALSE(session.metadataDirty());
 }
+
+TEST_CASE("DevelopSession applies lens correction only when toggled", "[develop-session][lens]") {
+    DevelopSession session;
+    LoadResult result;
+    const auto flat = [](int w, int h, float v) {
+        ImageBuffer b;
+        b.width = w;
+        b.height = h;
+        b.data.assign(static_cast<size_t>(w * h * 3), v);
+        return b;
+    };
+    result.fullRes = flat(8, 8, 0.25f);
+    result.preview = flat(8, 8, 0.25f);
+    // A vignette gain profile: identity at the centre, brightening toward the corners.
+    result.lensModel.vignette = RadialCurve::fromFn([](float r) { return 1.0f + r; });
+    result.lensModel.hasVignetting = true;
+
+    GlobalAdjustment params; // all lens toggles default off
+    session.setLoadedImage("/p.arw", result, params, DevelopSession::SidecarState::Loaded);
+
+    // Toggle off → display is the clean buffer untouched.
+    CHECK(session.previewForDisplay().data == result.preview.data);
+
+    // Toggle on → corner brightened, centre ~unchanged; display is the corrected buffer.
+    params.lensCorrectVignetting = true;
+    session.setParams(params);
+    const ImageBuffer& on = session.previewForDisplay();
+    CHECK(on.data != result.preview.data);
+    CHECK(on.data[1] > 0.30f);                                 // corner (0,0) green brightened
+    CHECK(on.data[static_cast<size_t>((4 * 8 + 4) * 3 + 1)] < 0.30f); // near centre ~unchanged
+    CHECK(session.fullResForExport().data[1] > 0.30f);        // full-res corrected too
+
+    // Toggle back off → clean again.
+    params.lensCorrectVignetting = false;
+    session.setParams(params);
+    CHECK(session.previewForDisplay().data == result.preview.data);
+}

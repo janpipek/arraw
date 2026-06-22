@@ -1,5 +1,6 @@
 #pragma once
 #include "ImageMetadata.h"
+#include "LensCorrection.h"
 #include "LocalAdjustment.h"
 #include "Orientation.h"
 #include "Spot.h"
@@ -59,6 +60,13 @@ struct GlobalAdjustment : SharedAdjustment {
     // Detail
     float sharpening = 0.0f; // 0 .. 100
 
+    // Lens Corrections (docs/adr/0027). Profile-driven, apply-once CPU corrections.
+    // Enable toggles only — the coefficients come from the lens profile
+    // (lensfun / embedded), so nothing numeric is stored here.
+    bool lensCorrectDistortion = false;
+    bool lensCorrectVignetting = false;
+    bool lensCorrectCA = false;
+
     // Geometry
     orient::Orientation orientation;        // coarse 90°/flip, seeded from EXIF (docs/adr/0028)
     float rotation = 0.0f;                  // degrees, -45 .. +45 (fine straighten)
@@ -67,9 +75,9 @@ struct GlobalAdjustment : SharedAdjustment {
 
     // Effects (docs/adr/0026). The seed is per-image identity: copy/paste and
     // presets transfer the six visible controls but preserve the target seed.
-    float vignetteAmount = 0.0f;    // -100 .. +100, mapped to -2 .. +2 EV
-    float vignetteMidpoint = 50.0f; // 0 .. 100
-    float vignetteFeather = 50.0f;  // 0 .. 100
+    float postCropVignetteAmount = 0.0f;    // -100 .. +100, mapped to -2 .. +2 EV
+    float postCropVignetteMidpoint = 50.0f; // 0 .. 100
+    float postCropVignetteFeather = 50.0f;  // 0 .. 100
     float grainAmount = 0.0f;       // 0 .. 100
     float grainSize = 50.0f;        // 0 .. 100
     float grainRoughness = 50.0f;   // 0 .. 100
@@ -100,6 +108,9 @@ struct LoadResult {
     ImageMetadata metadata;
     QString error; // non-empty on failure
     QRectF defaultCrop = {0.0, 0.0, 1.0, 1.0};
+    // Lens profile resolved at decode (docs/adr/0027). Empty has* flags = no
+    // profile matched; correction is applied (toggle-gated) downstream.
+    LensCorrectionModel lensModel{};
     // Coarse Orientation read from the file's EXIF/camera flag, used to seed the
     // develop edit when the sidecar has none (docs/adr/0028). The decoded buffer
     // stays in native orientation — this only records what the camera intended.

@@ -33,9 +33,9 @@ GlobalAdjustment sampleParams() {
     p.sharpening = 40.0f;
     p.rotation = -2.5f;
     p.cropRect = QRectF(0.1, 0.2, 0.75, 0.6);
-    p.vignetteAmount = -28.0f;
-    p.vignetteMidpoint = 61.0f;
-    p.vignetteFeather = 73.0f;
+    p.postCropVignetteAmount = -28.0f;
+    p.postCropVignetteMidpoint = 61.0f;
+    p.postCropVignetteFeather = 73.0f;
     p.grainAmount = 32.0f;
     p.grainSize = 44.0f;
     p.grainRoughness = 79.0f;
@@ -64,9 +64,9 @@ void checkClose(const GlobalAdjustment& a, const GlobalAdjustment& b) {
     CHECK_THAT(a.vibrance, WithinAbs(b.vibrance, kScalarTol));
     CHECK_THAT(a.sharpening, WithinAbs(b.sharpening, kScalarTol));
     CHECK_THAT(a.rotation, WithinAbs(b.rotation, kScalarTol));
-    CHECK_THAT(a.vignetteAmount, WithinAbs(b.vignetteAmount, kScalarTol));
-    CHECK_THAT(a.vignetteMidpoint, WithinAbs(b.vignetteMidpoint, kScalarTol));
-    CHECK_THAT(a.vignetteFeather, WithinAbs(b.vignetteFeather, kScalarTol));
+    CHECK_THAT(a.postCropVignetteAmount, WithinAbs(b.postCropVignetteAmount, kScalarTol));
+    CHECK_THAT(a.postCropVignetteMidpoint, WithinAbs(b.postCropVignetteMidpoint, kScalarTol));
+    CHECK_THAT(a.postCropVignetteFeather, WithinAbs(b.postCropVignetteFeather, kScalarTol));
     CHECK_THAT(a.grainAmount, WithinAbs(b.grainAmount, kScalarTol));
     CHECK_THAT(a.grainSize, WithinAbs(b.grainSize, kScalarTol));
     CHECK_THAT(a.grainRoughness, WithinAbs(b.grainRoughness, kScalarTol));
@@ -412,6 +412,33 @@ TEST_CASE("local adjustments round-trip through the arraw namespace", "[xmp][arr
     CHECK_THAT(r.temperature, WithinAbs(25.0, kScalarTol));
 }
 
+TEST_CASE("lens correction toggles round-trip through the arraw namespace", "[xmp][arraw][lens]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("lens.arw");
+
+    GlobalAdjustment p;
+    p.lensCorrectDistortion = true;
+    p.lensCorrectVignetting = false;
+    p.lensCorrectCA = true;
+
+    REQUIRE(XmpSidecar::saveAdjustments(rawPath, p));
+    const GlobalAdjustment loaded = XmpSidecar::loadAdjustments(rawPath);
+
+    CHECK(loaded.lensCorrectDistortion);
+    CHECK_FALSE(loaded.lensCorrectVignetting);
+    CHECK(loaded.lensCorrectCA);
+}
+
+TEST_CASE("absent lens correction toggles load as off", "[xmp][arraw][lens]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("plain.arw");
+    REQUIRE(XmpSidecar::saveAdjustments(rawPath, GlobalAdjustment{}));
+    const GlobalAdjustment loaded = XmpSidecar::loadAdjustments(rawPath);
+    CHECK_FALSE(loaded.lensCorrectDistortion);
+    CHECK_FALSE(loaded.lensCorrectVignetting);
+    CHECK_FALSE(loaded.lensCorrectCA);
+}
+
 // The arraw-native format contract — exact emitted fields, independent of our
 // reader. A matched reader/writer bug passes round-trip but fails this.
 TEST_CASE(
@@ -530,9 +557,9 @@ TEST_CASE("writer emits Effects controls in crs and Grain identity in arraw", "[
     QTemporaryDir dir;
     const QString rawPath = dir.filePath("film.arw");
     GlobalAdjustment p;
-    p.vignetteAmount = -28.0f;
-    p.vignetteMidpoint = 61.0f;
-    p.vignetteFeather = 73.0f;
+    p.postCropVignetteAmount = -28.0f;
+    p.postCropVignetteMidpoint = 61.0f;
+    p.postCropVignetteFeather = 73.0f;
     p.grainAmount = 32.0f;
     p.grainSize = 44.0f;
     p.grainRoughness = 79.0f;

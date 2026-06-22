@@ -9,6 +9,7 @@
 
 class QSlider;
 class QLabel;
+class QCheckBox;
 class QComboBox;
 class QPushButton;
 class QVBoxLayout;
@@ -37,6 +38,10 @@ public:
 
     void setParams(const GlobalAdjustment& p);
     void resetAll();
+
+    // The resolved lens-profile name for the active image, shown beside the Lens
+    // Corrections toggles. Empty disables the toggles and shows "No lens profile".
+    void setLensProfileName(const QString& name);
 
 signals:
     void paramsChanged(const GlobalAdjustment&);
@@ -81,9 +86,13 @@ private:
     SliderRow vibrance;
     SliderRow sharpening;
     SliderRow rotation;
-    SliderRow vignetteAmount;
-    SliderRow vignetteMidpoint;
-    SliderRow vignetteFeather;
+    QCheckBox* lensCorrectDistortionBox;
+    QCheckBox* lensCorrectVignettingBox;
+    QCheckBox* lensCorrectCABox;
+    QLabel* lensProfileLabel;
+    SliderRow postCropVignetteAmount;
+    SliderRow postCropVignetteMidpoint;
+    SliderRow postCropVignetteFeather;
     SliderRow grainAmount;
     SliderRow grainSize;
     SliderRow grainRoughness;

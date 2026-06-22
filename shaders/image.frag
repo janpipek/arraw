@@ -28,9 +28,9 @@ layout(std140, binding = 0) uniform buf {
     float wbGainB;
     float saturation;    // -1..+1
     float vibrance;      // -1..+1
-    float vignetteAmount;   // -2..+2 EV at maximum falloff
-    float vignetteMidpoint; // 0..1
-    float vignetteFeather;  // 0..1
+    float postCropVignetteAmount;   // -2..+2 EV at maximum falloff
+    float postCropVignetteMidpoint; // 0..1
+    float postCropVignetteFeather;  // 0..1
     float grainAmount;      // encoded-value standard deviation, 0..0.08
     float grainSize;        // grain diameter as a fraction of the crop long edge
     float grainRoughness;   // 0..1
@@ -234,16 +234,16 @@ vec3 applyVibrance(vec3 c, float vibrance) {
 // Effects (docs/adr/0026) use crop-frame coordinates, not source UVs. The
 // corner-normalised radius fits a centred ellipse to any crop aspect ratio.
 vec3 applyVignette(vec3 c, vec2 frameUV) {
-    if (abs(u.vignetteAmount) < 0.0001)
+    if (abs(u.postCropVignetteAmount) < 0.0001)
         return c;
     vec2 q = (frameUV - vec2(0.5)) * 2.0;
     float radius = length(q) * 0.70710678; // corners = 1
-    float inner = u.vignetteMidpoint * 0.85;
-    float outer = mix(inner, 1.0, u.vignetteFeather);
-    float weight = u.vignetteFeather < 0.0001
+    float inner = u.postCropVignetteMidpoint * 0.85;
+    float outer = mix(inner, 1.0, u.postCropVignetteFeather);
+    float weight = u.postCropVignetteFeather < 0.0001
                        ? step(inner, radius)
                        : smoothstep(inner, max(outer, inner + 0.0001), radius);
-    return c * exp2(u.vignetteAmount * weight);
+    return c * exp2(u.postCropVignetteAmount * weight);
 }
 
 uint grainHash(uvec2 p, uint seed) {

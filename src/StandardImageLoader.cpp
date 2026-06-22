@@ -30,5 +30,5 @@ LoadResult StandardImageLoader::load(const QString& path, std::shared_ptr<std::a
         return {{}, {}, {}, QString("Failed to decode: %1").arg(path)};
 
     ImageBuffer preview = downsample2x(fullRes);
-    return {std::move(fullRes), std::move(preview), {}, {}, {0.0, 0.0, 1.0, 1.0}, seeded};
+    return {std::move(fullRes), std::move(preview), {}, {}, {0.0, 0.0, 1.0, 1.0}, {}, seeded};
 }

@@ -310,9 +310,9 @@ SidecarLoadResult XmpSidecar::loadWithStatus(const QString& rawPath) {
             p.vibrance = attr("Vibrance", 0.0f);
             p.sharpening = attr("Sharpness", 0.0f);
             p.rotation = attr("CropAngle", 0.0f);
-            p.vignetteAmount = attr("PostCropVignetteAmount", 0.0f);
-            p.vignetteMidpoint = attr("PostCropVignetteMidpoint", 50.0f);
-            p.vignetteFeather = attr("PostCropVignetteFeather", 50.0f);
+            p.postCropVignetteAmount = attr("PostCropVignetteAmount", 0.0f);
+            p.postCropVignetteMidpoint = attr("PostCropVignetteMidpoint", 50.0f);
+            p.postCropVignetteFeather = attr("PostCropVignetteFeather", 50.0f);
             p.grainAmount = attr("GrainAmount", 0.0f);
             p.grainSize = attr("GrainSize", 50.0f);
             p.grainRoughness = attr("GrainFrequency", 50.0f);
@@ -322,6 +322,16 @@ SidecarLoadResult XmpSidecar::loadWithStatus(const QString& rawPath) {
                 if (ok)
                     p.grainSeed = value;
             }
+            // Lens Corrections enable toggles (docs/adr/0027). arraw-owned; the profile
+            // identity/coefficients are re-derived from the file on load, not stored.
+            const auto boolAttr = [&](const char* name) {
+                return xml.attributes().value(kNsArraw, name).toString().compare(
+                           "true", Qt::CaseInsensitive)
+                    == 0;
+            };
+            p.lensCorrectDistortion = boolAttr("LensCorrectDistortion");
+            p.lensCorrectVignetting = boolAttr("LensCorrectVignetting");
+            p.lensCorrectCA = boolAttr("LensCorrectCA");
             // Coarse orientation: the standard EXIF/tiff enum. Absent means the
             // decode layer seeds it from EXIF instead (docs/adr/0028), so leave
             // the default identity here when the attribute is missing.
@@ -535,14 +545,21 @@ static QByteArray ownedPacket(const SidecarData& data) {
     write("Vibrance", p.vibrance);
     write("Sharpness", p.sharpening);
     write("CropAngle", p.rotation); // Adobe's real straighten field (docs/adr/0028)
-    write("PostCropVignetteAmount", p.vignetteAmount);
-    write("PostCropVignetteMidpoint", p.vignetteMidpoint);
-    write("PostCropVignetteFeather", p.vignetteFeather);
+    write("PostCropVignetteAmount", p.postCropVignetteAmount);
+    write("PostCropVignetteMidpoint", p.postCropVignetteMidpoint);
+    write("PostCropVignetteFeather", p.postCropVignetteFeather);
     write("GrainAmount", p.grainAmount);
     write("GrainSize", p.grainSize);
     write("GrainFrequency", p.grainRoughness);
     if (p.grainSeed != 0)
         xml.writeAttribute(kNsArraw, "GrainSeed", QString::number(p.grainSeed));
+    // Lens Corrections toggles (docs/adr/0027); written only when on (default off).
+    if (p.lensCorrectDistortion)
+        xml.writeAttribute(kNsArraw, "LensCorrectDistortion", "True");
+    if (p.lensCorrectVignetting)
+        xml.writeAttribute(kNsArraw, "LensCorrectVignetting", "True");
+    if (p.lensCorrectCA)
+        xml.writeAttribute(kNsArraw, "LensCorrectCA", "True");
     write("CropLeft", float(p.cropRect.left()));
     write("CropTop", float(p.cropRect.top()));
     write("CropRight", float(p.cropRect.right()));

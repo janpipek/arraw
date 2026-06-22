@@ -47,7 +47,8 @@ public:
     const UserMetadata& userMetadata() const { return metadata_; }
 
     const QRectF& defaultCrop() const { return imageDefaultCrop; }
-
+    // Resolved lens-profile name (empty when none matched), for the UI label.
+    const QString& lensProfileName() const { return lensModel.lensName; }
     const GlobalAdjustment& params() const { return adjustments; }
 
     bool baseLook() const { return useBaseLook; }
@@ -79,8 +80,17 @@ private:
     QString currentPath;
     ImageBuffer previewBuffer;
     ImageBuffer fullResBuffer;
+    // Lens-corrected derivatives of the clean buffers (docs/adr/0027); empty when no
+    // profile or all toggles off, in which case the clean buffer is the base. The
+    // preview derivatives are eager (cheap, drives the live view); the full-res ones
+    // are computed lazily on first access (export / deep zoom) because warping a
+    // 25 MP buffer on every toggle would freeze the UI.
+    LensCorrectionModel lensModel;
+    ImageBuffer correctedPreviewBuffer;
     ImageBuffer spottedPreviewBuffer;
-    ImageBuffer spottedFullResBuffer;
+    mutable ImageBuffer correctedFullResBuffer;
+    mutable ImageBuffer spottedFullResBuffer;
+    mutable bool fullResDerivedDirty = true;
     ImageMetadata imageMetadata;
     UserMetadata metadata_;
     UserMetadata savedMetadata;
@@ -91,5 +101,9 @@ private:
     bool isMetadataDirty = false;
     bool useBaseLook = false;
 
-    void rebuildSpotBuffers();
+    // Rebuild the eager preview derivatives (lens-corrected then spotted) and mark the
+    // lazy full-res derivatives dirty. Spots build on the lens-corrected base.
+    void rebuildDerivedBuffers();
+    void rebuildPreviewDerived();
+    void ensureFullResDerived() const;
 };

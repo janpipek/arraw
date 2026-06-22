@@ -78,10 +78,15 @@ QJsonObject groupToJson(DevelopGroup g, const GlobalAdjustment& v) {
             = QJsonArray{v.cropRect.x(), v.cropRect.y(), v.cropRect.width(), v.cropRect.height()};
         o["constrained"] = v.cropConstrained;
         break;
+    case DevelopGroup::LensCorrections:
+        o["distortion"] = v.lensCorrectDistortion;
+        o["vignetting"] = v.lensCorrectVignetting;
+        o["ca"] = v.lensCorrectCA;
+        break;
     case DevelopGroup::Effects:
-        o["vignetteAmount"] = v.vignetteAmount;
-        o["vignetteMidpoint"] = v.vignetteMidpoint;
-        o["vignetteFeather"] = v.vignetteFeather;
+        o["postCropVignetteAmount"] = v.postCropVignetteAmount;
+        o["postCropVignetteMidpoint"] = v.postCropVignetteMidpoint;
+        o["postCropVignetteFeather"] = v.postCropVignetteFeather;
         o["grainAmount"] = v.grainAmount;
         o["grainSize"] = v.grainSize;
         o["grainRoughness"] = v.grainRoughness;
@@ -139,10 +144,15 @@ void groupFromJson(DevelopGroup g, const QJsonObject& o, GlobalAdjustment& v) {
         v.cropConstrained = o.value("constrained").toBool(v.cropConstrained);
         break;
     }
+    case DevelopGroup::LensCorrections:
+        v.lensCorrectDistortion = o.value("distortion").toBool(v.lensCorrectDistortion);
+        v.lensCorrectVignetting = o.value("vignetting").toBool(v.lensCorrectVignetting);
+        v.lensCorrectCA = o.value("ca").toBool(v.lensCorrectCA);
+        break;
     case DevelopGroup::Effects:
-        v.vignetteAmount = f("vignetteAmount", v.vignetteAmount);
-        v.vignetteMidpoint = f("vignetteMidpoint", v.vignetteMidpoint);
-        v.vignetteFeather = f("vignetteFeather", v.vignetteFeather);
+        v.postCropVignetteAmount = f("postCropVignetteAmount", v.postCropVignetteAmount);
+        v.postCropVignetteMidpoint = f("postCropVignetteMidpoint", v.postCropVignetteMidpoint);
+        v.postCropVignetteFeather = f("postCropVignetteFeather", v.postCropVignetteFeather);
         v.grainAmount = f("grainAmount", v.grainAmount);
         v.grainSize = f("grainSize", v.grainSize);
         v.grainRoughness = f("grainRoughness", v.grainRoughness);

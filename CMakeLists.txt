@@ -126,6 +126,31 @@ if(NOT TARGET PkgConfig::LCMS2)
     )
 endif()
 
+# lensfun: optional. When present, the lensfun lens-correction source is built and
+# ARRAW_HAS_LENSFUN is defined; otherwise lens correction degrades to "no profile
+# available" (docs/adr/0027). pkg-config-first, same strategy as libraw/lcms2.
+if(PkgConfig_FOUND)
+    pkg_check_modules(LENSFUN IMPORTED_TARGET lensfun)
+endif()
+if(NOT TARGET PkgConfig::LENSFUN)
+    find_library(LENSFUN_LIB NAMES lensfun)
+    find_path(LENSFUN_INCLUDE_DIR lensfun.h PATH_SUFFIXES lensfun)
+    if(LENSFUN_LIB AND LENSFUN_INCLUDE_DIR)
+        add_library(PkgConfig::LENSFUN INTERFACE IMPORTED)
+        set_target_properties(PkgConfig::LENSFUN PROPERTIES
+            INTERFACE_LINK_LIBRARIES "${LENSFUN_LIB}"
+            INTERFACE_INCLUDE_DIRECTORIES "${LENSFUN_INCLUDE_DIR}"
+        )
+    endif()
+endif()
+if(TARGET PkgConfig::LENSFUN)
+    set(ARRAW_HAVE_LENSFUN ON)
+    message(STATUS "lensfun found — building lens-correction lensfun source")
+else()
+    set(ARRAW_HAVE_LENSFUN OFF)
+    message(STATUS "lensfun NOT found — lens correction will report no profile")
+endif()
+
 # Everything except main.cpp lives in a static library so test executables
 # can link the real code (see DESIGN.md "Testing Strategy").
 set(CORE_SOURCES
@@ -170,6 +195,8 @@ set(CORE_SOURCES
     src/PresetStore.cpp
     src/Spot.cpp
     src/SpotRemovalPanel.cpp
+    src/LensCorrection.cpp
+    src/LensfunSource.cpp
     src/BatchPaste.cpp
     src/BatchProgressDialog.cpp
     src/MainWindowStatus.cpp
@@ -180,6 +207,10 @@ add_library(arraw_core STATIC ${CORE_SOURCES})
 arraw_enable_warnings(arraw_core)
 if(ARRAW_BUILD_TESTS)
     target_compile_definitions(arraw_core PUBLIC ARRAW_TESTING)
+endif()
+if(ARRAW_HAVE_LENSFUN)
+    target_compile_definitions(arraw_core PUBLIC ARRAW_HAS_LENSFUN)
+    target_link_libraries(arraw_core PUBLIC PkgConfig::LENSFUN)
 endif()
 
 target_include_directories(arraw_core PUBLIC src)

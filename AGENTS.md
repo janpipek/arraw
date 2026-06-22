@@ -14,7 +14,7 @@ When a `Justfile` recipe needs more than a couple of commands, put the logic in 
 ```bash
 # Install dependencies
 sudo dnf install qt6-qtbase-devel qt6-qtbase-private-devel qt6-qtshadertools-devel \
-    qt6-qttools-devel LibRaw-devel lcms2-devel cmake ninja-build
+    qt6-qttools-devel LibRaw-devel lcms2-devel lensfun-devel cmake ninja-build
 
 # Configure
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
@@ -34,7 +34,7 @@ are written to `dist/fedora/`.
 #### macOS (Homebrew)
 ```bash
 # Install dependencies
-brew install qt libraw little-cms2 cmake ninja
+brew install qt libraw little-cms2 lensfun cmake ninja
 
 # Configure
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \

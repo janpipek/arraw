@@ -175,10 +175,11 @@ set. The brush, if added, becomes a further type.
 
 **Develop Group**:
 One selectable unit in the [[Copy Settings]] / [[Develop Preset]] checklist —
-the granularity at which develop settings travel between photos. The eight
+the granularity at which develop settings travel between photos. The nine
 groups partition every global field: White Balance, Tone, Tone Curve, Colour,
 HSL, Detail, Geometry ([[Rotation]] + [[Crop]] + [[Aspect Ratio Lock]] together),
-and Effects ([[Vignette]] + [[Grain]]). Per-image state such as a Grain's hidden
+[[Lens Corrections]] ([[Distortion]] + corrective [[Vignetting]] + [[Chromatic
+Aberration]]), and Effects ([[Post-Crop Vignette]] + [[Grain]]). Per-image state such as a Grain's hidden
 seed and [[Local Adjustment]] masks does not travel with a group. Applying a
 group **replaces** every visible field in it on the target, including resetting
 to defaults when the source group is unedited.
@@ -262,11 +263,59 @@ The crop-tool toggle that swaps the [[Aspect Ratio Lock]]'s target width:height
 pixels or [[Orientation]]. Was historically mislabelled "Flip Orientation".
 _Avoid_: flip orientation (collides with image [[Orientation]]), rotate crop
 
-**Vignette**:
-A global develop effect that darkens or lightens the outside of the final
-[[Crop]] with a centred elliptical falloff. Its Amount, Midpoint, and Feather
-travel together in the Effects [[Develop Group]].
-_Avoid_: edge burn, radial mask (a [[Mask]] is a Local Adjustment stencil)
+**Post-Crop Vignette**:
+A global develop *effect* that darkens or lightens the outside of the final
+[[Crop]] with a centred elliptical falloff, for creative emphasis. Its Amount,
+Midpoint, and Feather travel together in the Effects [[Develop Group]] and are
+stored as `crs:PostCropVignette*`. Distinct from corrective [[Vignetting]], which
+*removes* a lens's light falloff in sensor space; this one *adds* falloff for
+look, post-crop.
+_Avoid_: Vignette (bare — collides with corrective [[Vignetting]]), edge burn,
+radial mask (a [[Mask]] is a Local Adjustment stencil)
+
+**Lens Corrections**:
+The [[Develop Group]] that removes a lens's optical defects using a [[Lens
+Profile]], so the developed image reflects the scene rather than the glass.
+Holds three profile-driven corrections — [[Distortion]], corrective
+[[Vignetting]], and [[Chromatic Aberration]] — each an independent on/off toggle.
+Not creative controls and not sliders the user drags: the strength comes from the
+profile. Applied CPU-side to the decoded [[ImageBuffer]] before [[Spot]]s and the
+shader (the corrected negative), so everything downstream develops on corrected
+pixels.
+_Avoid_: lens profile (that is the data source, [[Lens Profile]]), optics, profile
+corrections
+
+**Lens Profile**:
+The data that describes one lens's defects at the shot's focal length and
+aperture — the distortion polynomial, vignette falloff, and per-channel
+chromatic scale that drive [[Lens Corrections]]. Sourced either from data
+**embedded** in the RAW (DNG opcodes or maker notes) or from the external
+**lensfun** database, matched via the lens identity in the EXIF. The sidecar
+records *which* profile and source were used plus the per-correction toggles; the
+coefficients are re-derived on load, never stored.
+_Avoid_: lens database, calibration, [[Develop Preset]] (unrelated)
+
+**Distortion**:
+The [[Lens Corrections]] component that straightens barrel/pincushion geometry by
+resampling pixels along the profile's radial polynomial. Because it moves pixels,
+the corrected frame is auto-scaled to fill and the default [[Crop]] is refit to
+the largest clean rectangle (as with [[Rotation]]).
+_Avoid_: warp, geometry (that is the [[Crop]]/[[Rotation]] group), perspective
+
+**Vignetting**:
+The corrective [[Lens Corrections]] component that *removes* a lens's corner
+light falloff by applying the profile's radial gain — the inverse of what
+[[Post-Crop Vignette]] adds. Stored as `crs:VignetteAmount` / `crs:VignetteMidpoint`.
+_Avoid_: vignette (bare), Post-Crop Vignette (the creative effect), edge darkening
+
+**Chromatic Aberration**:
+The corrective [[Lens Corrections]] component that removes *lateral* (transverse)
+colour fringing by scaling the red and blue channels radially per the profile, so
+edge colours realign. Covers fringing caused by the lens geometry, not *axial*
+(defocus) purple/green fringing, which is a deferred heuristic defringe with no
+profile.
+_Avoid_: CA (expand on first use), defringe (the deferred axial heuristic),
+purple fringing (the axial defect this does not fix)
 
 **Grain**:
 A monochromatic, zero-mean texture applied as the last develop effect in a
@@ -276,9 +325,10 @@ _Avoid_: noise reduction, sensor noise, digital noise
 
 **Spot**:
 A clone-based pixel replacement applied to the decoded [[ImageBuffer]] before the
-shader pipeline. A destination circle (centre + radius) is filled with pixels
+shader pipeline (but after [[Lens Corrections]], so the buffer it addresses is the
+corrected negative). A destination circle (centre + radius) is filled with pixels
 sampled from a source circle (same radius, user-placed offset), feathered at the
-boundary. Coordinates are normalised to the original image buffer dimensions
+boundary. Coordinates are normalised to the (corrected) image buffer dimensions
 (not the display frame) — the same pixel is addressed regardless of [[Rotation]]
 or [[Crop]], because those are shader operations applied after. Applied CPU-side
 to the clean decoded buffer; the shader sees only the result. Distinct from

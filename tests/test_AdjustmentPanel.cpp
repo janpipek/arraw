@@ -2,6 +2,7 @@
 #include "TestApp.h"
 #include <catch2/catch_test_macros.hpp>
 
+#include <QCheckBox>
 #include <QSlider>
 
 // The Grain seed is a hidden per-image identity (docs/adr/0026). It is minted
@@ -69,4 +70,46 @@ TEST_CASE("setParams mints a seed for a foreign Grain import", "[adjustpanel][gr
     seeded.grainSeed = 0xABCDEF01U;
     panel.setParams(seeded);
     CHECK(panel.params().grainSeed == 0xABCDEF01U); // an existing seed is preserved
+}
+
+TEST_CASE("Lens correction toggles are gated by a profile and drive params", "[adjustpanel][lens]") {
+    testApp();
+    AdjustmentPanel panel;
+    auto* dist = panel.findChild<QCheckBox*>("lensCorrectDistortionBox");
+    auto* ca = panel.findChild<QCheckBox*>("lensCorrectCABox");
+    REQUIRE(dist != nullptr);
+    REQUIRE(ca != nullptr);
+
+    // No profile yet → toggles disabled.
+    CHECK_FALSE(dist->isEnabled());
+
+    panel.setLensProfileName("Sigma 56mm F1.4 DC DN | Contemporary 018");
+    CHECK(dist->isEnabled());
+    CHECK(ca->isEnabled());
+
+    int emitted = 0;
+    QObject::connect(&panel, &AdjustmentPanel::paramsChanged, [&] { ++emitted; });
+    dist->setChecked(true);
+    CHECK(panel.params().lensCorrectDistortion);
+    CHECK_FALSE(panel.params().lensCorrectVignetting);
+    CHECK(emitted >= 1);
+
+    // Clearing the profile disables the toggles again.
+    panel.setLensProfileName(QString());
+    CHECK_FALSE(dist->isEnabled());
+}
+
+TEST_CASE("setParams reflects lens toggle state into the checkboxes", "[adjustpanel][lens]") {
+    testApp();
+    AdjustmentPanel panel;
+    panel.setLensProfileName("Some Lens");
+
+    GlobalAdjustment p;
+    p.lensCorrectVignetting = true;
+    panel.setParams(p);
+
+    auto* vig = panel.findChild<QCheckBox*>("lensCorrectVignettingBox");
+    REQUIRE(vig != nullptr);
+    CHECK(vig->isChecked());
+    CHECK(panel.params().lensCorrectVignetting);
 }
