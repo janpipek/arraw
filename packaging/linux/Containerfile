@@ -21,7 +21,7 @@ RUN apt-get update -q && \
     apt-get install -y --no-install-recommends \
         build-essential cmake ninja-build file wget ca-certificates \
         python3-pip appstream libdbus-1-3 \
-        libraw-dev liblcms2-dev \
+        libraw-dev liblcms2-dev liblensfun-dev liblensfun-data-v1 \
         libgl1-mesa-dev libglu1-mesa-dev libvulkan-dev \
         libxkbcommon-dev libxkbcommon-x11-dev libfontconfig1-dev libfreetype-dev \
         libx11-dev libx11-xcb-dev libxext-dev libxfixes-dev \
