@@ -44,6 +44,7 @@ add_executable(arraw_tests
     test_GroupChecklistDialog.cpp
     test_PresetStore.cpp
     test_Spot.cpp
+    test_NoiseReduction.cpp
     test_LensCorrection.cpp
     test_LensfunSource.cpp
     test_BatchPaste.cpp

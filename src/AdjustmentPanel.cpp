@@ -200,6 +200,7 @@ AdjustmentPanel::AdjustmentPanel(QWidget* parent)
     // ── Detail ────────────────────────────────────────────────────────────────
     auto* detail = makeGroup("Detail");
     sharpening = addSlider(detail, "Sharpen", kSharpenSpec);
+    colorNoiseReduction = addSlider(detail, "Color Noise", kSharpenSpec);
 
     // ── Geometry ──────────────────────────────────────────────────────────────
     auto* geo = makeGroup("Geometry");
@@ -319,6 +320,7 @@ void AdjustmentPanel::syncParams() {
     adjustments.saturation = v(saturation);
     adjustments.vibrance = v(vibrance);
     adjustments.sharpening = v(sharpening);
+    adjustments.colorNoiseReduction = v(colorNoiseReduction);
     adjustments.rotation = v(rotation);
     adjustments.postCropVignetteAmount = v(postCropVignetteAmount);
     adjustments.postCropVignetteMidpoint = v(postCropVignetteMidpoint);
@@ -352,6 +354,7 @@ std::vector<AdjustmentPanel::SliderRow*> AdjustmentPanel::allRows() {
            &saturation,
            &vibrance,
            &sharpening,
+           &colorNoiseReduction,
            &rotation,
            &postCropVignetteAmount,
            &postCropVignetteMidpoint,
@@ -471,6 +474,7 @@ void AdjustmentPanel::setParams(const GlobalAdjustment& p) {
     set(saturation, p.saturation);
     set(vibrance, p.vibrance);
     set(sharpening, p.sharpening);
+    set(colorNoiseReduction, p.colorNoiseReduction);
     set(rotation, p.rotation);
     set(postCropVignetteAmount, p.postCropVignetteAmount);
     set(postCropVignetteMidpoint, p.postCropVignetteMidpoint);

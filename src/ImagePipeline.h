@@ -59,6 +59,9 @@ struct GlobalAdjustment : SharedAdjustment {
 
     // Detail
     float sharpening = 0.0f; // 0 .. 100
+    // Colour (chroma) Noise Reduction — Amount 0..100, applied as a cached GPU
+    // chroma pre-pass in RendererCore (see NoiseReduction.h, docs/adr/0032).
+    float colorNoiseReduction = 0.0f; // 0 .. 100
 
     // Lens Corrections (docs/adr/0027). Profile-driven, apply-once CPU corrections.
     // Enable toggles only — the coefficients come from the lens profile
@@ -78,10 +81,10 @@ struct GlobalAdjustment : SharedAdjustment {
     float postCropVignetteAmount = 0.0f;    // -100 .. +100, mapped to -2 .. +2 EV
     float postCropVignetteMidpoint = 50.0f; // 0 .. 100
     float postCropVignetteFeather = 50.0f;  // 0 .. 100
-    float grainAmount = 0.0f;       // 0 .. 100
-    float grainSize = 50.0f;        // 0 .. 100
-    float grainRoughness = 50.0f;   // 0 .. 100
-    std::uint32_t grainSeed = 0;    // 0 = uninitialised
+    float grainAmount = 0.0f;               // 0 .. 100
+    float grainSize = 50.0f;                // 0 .. 100
+    float grainRoughness = 50.0f;           // 0 .. 100
+    std::uint32_t grainSeed = 0;            // 0 = uninitialised
 
     // Local adjustments — arraw-native, capped at 16 (docs/adr/0010).
     std::vector<LocalAdjustment> localAdjustments;

@@ -49,6 +49,21 @@ TEST_CASE("A Geometry preset round-trips orientation through JSON", "[preset]") 
     CHECK(loaded.values.orientation == p.values.orientation);
 }
 
+TEST_CASE("A Detail preset round-trips Colour Noise Reduction through JSON", "[preset]") {
+    DevelopPreset p;
+    p.name = "Clean";
+    p.groups = groups({DevelopGroup::Detail});
+    p.values.sharpening = 30.0f;
+    p.values.colorNoiseReduction = 65.0f;
+
+    bool ok = false;
+    const DevelopPreset loaded = parseDevelopPreset(serializeDevelopPreset(p), &ok);
+
+    REQUIRE(ok);
+    CHECK(loaded.values.colorNoiseReduction == 65.0f);
+    CHECK(loaded.values.sharpening == 30.0f);
+}
+
 TEST_CASE("Develop preset round-trips through JSON", "[preset]") {
     const DevelopPreset p = samplePreset();
 

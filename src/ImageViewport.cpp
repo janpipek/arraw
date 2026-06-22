@@ -65,6 +65,15 @@ ImageViewport::ImageViewport(QWidget* parent)
     histoTimer.setSingleShot(true);
     histoTimer.setInterval(150);
     connect(&histoTimer, &QTimer::timeout, this, &ImageViewport::renderHistograms);
+
+    // Promote the live Colour-NR slider value to the rendered amount once the
+    // slider has settled, then repaint to run the denoise pre-pass for it.
+    nrTimer.setSingleShot(true);
+    nrTimer.setInterval(200);
+    connect(&nrTimer, &QTimer::timeout, this, [this] {
+        nrAmountEffective = params.colorNoiseReduction;
+        update();
+    });
 }
 
 ImageViewport::~ImageViewport() = default;
@@ -191,6 +200,10 @@ void ImageViewport::render(QRhiCommandBuffer* cb) {
     fp.clipHighlights = clipHighlights;
     fp.clipShadows = clipShadows;
     fp.adjustments = p;
+    // The denoise pre-pass is debounced (nrTimer): render the settled amount,
+    // not the live slider, so dragging doesn't trigger a recompute every tick.
+    if (!showOriginal)
+        fp.adjustments.colorNoiseReduction = nrAmountEffective;
 
     core.record(cb, renderTarget(), activeSlot(), fp);
 }
@@ -642,6 +655,10 @@ void ImageViewport::setAdjustments(const GlobalAdjustment& p) {
     if (p.curveLuma != params.curveLuma || p.curveR != params.curveR || p.curveG != params.curveG
         || p.curveB != params.curveB)
         curveLutDirty = true;
+    // Debounce the Colour-NR pre-pass: defer adopting the new amount until the
+    // slider settles (nrTimer). render() keeps using nrAmountEffective meanwhile.
+    if (p.colorNoiseReduction != params.colorNoiseReduction)
+        nrTimer.start();
     params = p;
     updateImageAspect(); // orientation may have changed
     if (!cropMode())

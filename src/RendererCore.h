@@ -71,6 +71,20 @@ static_assert(offsetof(Ubuf, grainSeed) == 284);
 static_assert(offsetof(Ubuf, laGeom) == 320);
 static_assert(offsetof(Ubuf, numLocalAdj) == 1600);
 
+// std140 mirror of the `nrbuf` block in shaders/nr.vert and nr_blur_*.frag — the
+// Colour Noise Reduction pre-pass uniform (docs/adr/0032). Constant for a whole
+// frame (direction is hardcoded per blur shader), so all NR passes share it.
+struct NrUbuf {
+    float clipCorr[16]; // QRhi::clipSpaceCorrMatrix(), column-major
+    float invChroma[2]; // 1 / quarter-res chroma size
+    float sigma;        // Gaussian sigma in quarter-res pixels
+    qint32 radius;      // tap radius (capped at 64, matching the shader)
+    qint32 flipV;       // 1 on a Y-up framebuffer (OpenGL): mirror the sampled V so
+                        // the rendered NR targets keep the uploaded image's orientation
+    qint32 pad_[3];     // std140 pads the block to a 16-byte multiple
+};
+static_assert(sizeof(NrUbuf) == 96);
+
 // The one place the shader pipeline is recorded (ADR 0006): the widget's
 // on-screen pass, the export render, and the histogram samples all go
 // through record()/renderOffscreen(). Owns every RHI resource — buffers,
@@ -148,6 +162,19 @@ private:
     QRhiShaderResourceBindings* bindingsFor(QRhiTexture* imageTex);
     void fillUbuf(Ubuf& ub, const FrameParams& fp) const;
 
+    // Colour Noise Reduction (docs/adr/0032). Runs a cached GPU pre-pass that
+    // denoises chroma into denoisedTex; the main pass then samples that instead of
+    // the raw slot. Returns the texture the main pass should sample.
+    QRhiTexture* ensureDenoised(QRhiCommandBuffer* cb, int key, QRhiTexture* rawTex, float amount);
+    void ensureNrResources();
+    void ensureNrSlot(int key, QSize fullSize);
+    void nrPass(
+        QRhiCommandBuffer* cb,
+        QRhiTextureRenderTarget* rt,
+        QRhiGraphicsPipeline* pipe,
+        QRhiShaderResourceBindings* bindings,
+        QRhiResourceUpdateBatch* batch);
+
     QRhi* rhi = nullptr;
 
     std::unique_ptr<QRhiBuffer> vbuf;
@@ -185,4 +212,25 @@ private:
     std::vector<std::array<float, 6>> toneLutSource; // tone fields the LUT was built from
     DisplayLut pendingDisplayLut;
     bool displayLutDirty = false;
+
+    // ── Colour Noise Reduction GPU resources (docs/adr/0032) ─────────────────
+    QShader nrVs, nrExtractFs, nrBlurHFs, nrBlurVFs, nrRecombineFs;
+    std::unique_ptr<QRhiBuffer> nrUbuf;
+    std::unique_ptr<QRhiGraphicsPipeline> nrPipeExtract, nrPipeBlurH, nrPipeBlurV, nrPipeRecombine;
+    // Rebuilt each time the pre-pass runs (only on amount/texture change), kept as
+    // members so they outlive command-buffer submission.
+    std::unique_ptr<QRhiShaderResourceBindings> nrSrbExtract, nrSrbBlurH, nrSrbBlurV, nrSrbRecombine;
+    // One stable RGBA32F render-pass descriptor shared by every NR target and
+    // pipeline, so pipelines never dangle when a slot's textures are resized.
+    std::unique_ptr<QRhiRenderPassDescriptor> nrRpDesc;
+
+    struct NrSlot {
+        std::unique_ptr<QRhiTexture> chromaA, chromaB, denoised; // chroma ¼-res; denoised full-res
+        std::unique_ptr<QRhiTextureRenderTarget> chromaART, chromaBRT, denoisedRT;
+        QSize fullSize;
+        float amount = -1.0f; // Amount the cached denoised texture was built for
+        int gen = -1;         // texture generation it was built against
+    };
+    // [0]=Preview, [1]=FullRes, [2]=export's temporary full-res texture.
+    NrSlot nrSlot[3];
 };
