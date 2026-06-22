@@ -187,6 +187,7 @@ set(CORE_SOURCES
     src/DecodeCache.cpp
     src/DevelopSession.cpp
     src/ExportDialog.cpp
+    src/AboutDialog.cpp
     src/CropGeometry.cpp
     src/Orientation.cpp
     src/DevelopGroup.cpp

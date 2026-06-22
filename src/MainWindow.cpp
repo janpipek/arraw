@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "AboutDialog.h"
 #include "AdjustmentPanel.h"
 #include "BatchPaste.h"
 #include "BatchProgressDialog.h"
@@ -568,6 +569,9 @@ void MainWindow::setupMenus() {
     for (const IccProfileInfo& info : scanSystemProfiles())
         if (info.isDisplayClass)
             addMonitorAction(info.description, info.path);
+
+    auto* help = menuBar()->addMenu("&Help");
+    help->addAction("&About...", this, &MainWindow::showAboutDialog);
 }
 
 void MainWindow::setupImageMenu() {
@@ -955,6 +959,11 @@ void MainWindow::openPath(const QString& path) {
     } else {
         loadImage(fi.absoluteFilePath());
     }
+}
+
+void MainWindow::showAboutDialog() {
+    AboutDialog dlg(this);
+    dlg.exec();
 }
 
 void MainWindow::openFile() {
