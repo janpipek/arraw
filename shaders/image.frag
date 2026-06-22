@@ -455,8 +455,13 @@ void main() {
     c = applyVibrance(c, u.vibrance);
 
     // Local adjustments — analytic, single-pass, after the global colour section
-    // and before encode (docs/adr/0010).
-    c = applyLocalAdjustments(c, vUV, u.aspect);
+    // and before encode (docs/adr/0010). Masks live in the cropped/rotated display
+    // frame (vFrameUV) — the same frame the overlay draws in — aspect-corrected by
+    // the crop's on-screen aspect, NOT the rotated source UV (vUV) / source aspect,
+    // which only coincide when there is no crop or rotation.
+    float maskAspect = u.aspect * (u.effectRect.z - u.effectRect.x)
+                                / max(u.effectRect.w - u.effectRect.y, 0.0001);
+    c = applyLocalAdjustments(c, vFrameUV, maskAspect);
     c = applyVignette(c, vFrameUV);
     c = applyGrain(c, vFrameUV);
 

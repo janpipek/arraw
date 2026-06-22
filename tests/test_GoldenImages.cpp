@@ -371,6 +371,53 @@ TEST_CASE("a local radial mask brightens only inside the oval", "[gpu][localadj]
     CHECK(inside > outside + 0.1f);
 }
 
+// Regression (weird-mask-positions): masks live in the cropped/rotated display
+// frame, the same frame the overlay draws in. A radial mask centred at (0.5,0.5)
+// must brighten the centre of the *cropped* output — not the spot the un-cropped
+// source UV lands on. Before the fix the shader fed the mask the rotated source
+// UV and the source aspect, so a crop slid the brightening off the drawn circle.
+TEST_CASE("a radial mask follows the crop frame", "[gpu][localadj]") {
+    ImageViewport* vp = goldenViewport();
+    if (!vp)
+        SKIP("no OpenGL context available on this machine");
+
+    ImageBuffer scene;
+    scene.width = 64;
+    scene.height = 48;
+    scene.data.assign(size_t(scene.width) * scene.height * 3, 0.3f);
+
+    GlobalAdjustment p;
+    p.cropRect = QRectF(0.5, 0.5, 0.5, 0.5); // bottom-right quadrant of the source
+    LocalAdjustment la;
+    la.mask = RadialMask{
+        .center = {0.5, 0.5}, // centre of the *crop* frame
+        .radiusX = 0.2,
+        .radiusY = 0.2,
+        .angle = 0.0,
+        .feather = 0.2,
+        .invert = false};
+    la.exposure = 1.0f;
+    p.localAdjustments.push_back(la);
+
+    vp->setAdjustments(p);
+    const int outW = int(std::lround(p.cropRect.width() * scene.width));
+    const int outH = int(std::lround(p.cropRect.height() * scene.height));
+    const QImage got = vp->renderToImage(scene, p, outW, outH);
+    REQUIRE_FALSE(got.isNull());
+
+    auto value = [&](float fx, float fy) {
+        const float* px = reinterpret_cast<const float*>(got.constScanLine(int(fy * outH)));
+        return px[int(fx * outW) * 4];
+    };
+    const float center = value(0.5f, 0.5f);   // mask centre in the crop frame → +1 EV
+    const float corner = value(0.05f, 0.05f); // crop corner, outside the oval
+
+    // With the old source-UV mapping the bright blob lands in the corner and the
+    // centre is untouched, inverting this inequality.
+    INFO("center=" << center << " corner=" << corner);
+    CHECK(center > corner + 0.1f);
+}
+
 TEST_CASE("post-crop Vignette darkens crop corners without moving its centre", "[gpu][effects]") {
     ImageViewport* vp = goldenViewport();
     if (!vp)
