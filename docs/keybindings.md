@@ -51,15 +51,16 @@ Zoom: scroll wheel (0.05×–32×). Pan: `Alt`+drag or middle-button drag.
 | Key | Action |
 |---|---|
 | `C` | Crop tool (toggle) |
-| `M` | Masks (local adjustments) tool |
-| `Q` | Spots (clone) tool |
+| `M` | Select the Masks tab and show its on-image controls |
+| `Q` | Select the Spots tab and show its on-image controls |
 | `Enter` | Commit the active tool |
 | `Esc` | Cancel the active tool |
 | `Ctrl+]` | Rotate 90° clockwise |
 | `Ctrl+[` | Rotate 90° counter-clockwise |
 | `X` | Flip crop orientation (portrait ↔ landscape, while cropping) |
 
-The Straighten and White Balance picker tools are activated from the toolbar.
+Mask and Spot controls are shown while their adjustment tab is selected. The
+Straighten and White Balance picker tools are activated from the toolbar.
 
 ## Culling
 

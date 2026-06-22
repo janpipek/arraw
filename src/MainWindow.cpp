@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 #include "AdjustmentPanel.h"
+#include "AdjustmentTabTool.h"
 #include "BatchPaste.h"
 #include "BatchProgressDialog.h"
 #include "CollapsiblePane.h"
@@ -310,7 +311,6 @@ MainWindow::MainWindow(QWidget* parent)
             session->setLocalAdjustments(localAdjustments);
             pushParamsToViewport();
         });
-
     // Panel selection drives which mask the on-image tool edits; on-image drags
     // write the geometry back into the panel.
     connect(
@@ -675,8 +675,21 @@ void MainWindow::setupToolbar() {
     cropAction = addTool("Crop", Qt::Key_C);
     straightenAction = addTool("Straighten", {});
     wbAction = addTool("White Bal.", {});
-    maskAction = addTool("Masks", Qt::Key_M);
-    spotAction = addTool("Spots", Qt::Key_Q);
+
+    // Masks and Spots are selected through the adjustment tabs. These actions
+    // provide window-scoped shortcuts without adding duplicate toolbar buttons.
+    masksTabShortcut = new QAction(this);
+    masksTabShortcut->setShortcut(Qt::Key_M);
+    addAction(masksTabShortcut);
+    connect(masksTabShortcut, &QAction::triggered, this, [this] {
+        selectAdjustmentTab(masksTabIndex);
+    });
+    spotsTabShortcut = new QAction(this);
+    spotsTabShortcut->setShortcut(Qt::Key_Q);
+    addAction(spotsTabShortcut);
+    connect(spotsTabShortcut, &QAction::triggered, this, [this] {
+        selectAdjustmentTab(spotsTabIndex);
+    });
 
     // Coarse Orientation (docs/adr/0028). Momentary actions (not modal tools);
     // final home is beside the Rotation slider, but the toolbar gives a handle now.
@@ -696,11 +709,7 @@ void MainWindow::setupToolbar() {
         using T = ImageViewport::ActiveTool;
         T t = T::None;
         if (a->isChecked())
-            t = a == cropAction         ? T::Crop
-                : a == straightenAction ? T::Straighten
-                : a == maskAction       ? T::LocalMask
-                : a == spotAction       ? T::SpotTool
-                                        : T::WhiteBalance;
+            t = a == cropAction ? T::Crop : a == straightenAction ? T::Straighten : T::WhiteBalance;
         viewport->setActiveTool(t);
     });
 
@@ -778,17 +787,11 @@ void MainWindow::applyAspectLock() {
 void MainWindow::syncToolActions() {
     const ImageViewport::ActiveTool t = viewport->activeTool();
     // setChecked doesn't emit QActionGroup::triggered, but block toggled too.
-    const QSignalBlocker b1(cropAction), b2(straightenAction), b3(wbAction), b4(spotAction);
+    const QSignalBlocker b1(cropAction), b2(straightenAction), b3(wbAction);
     const bool cropOn = t == ImageViewport::ActiveTool::Crop;
     cropAction->setChecked(cropOn);
     straightenAction->setChecked(t == ImageViewport::ActiveTool::Straighten);
     wbAction->setChecked(t == ImageViewport::ActiveTool::WhiteBalance);
-    maskAction->setChecked(t == ImageViewport::ActiveTool::LocalMask);
-    spotAction->setChecked(t == ImageViewport::ActiveTool::SpotTool);
-
-    // Raise the Masks tab while the LocalMask tool is active.
-    if (t == ImageViewport::ActiveTool::LocalMask && rightTabs && masksTabIndex >= 0)
-        rightTabs->setCurrentIndex(masksTabIndex);
 
     // The aspect lock only applies while cropping. Reflect whatever the viewport
     // restored from the persisted crop: check the matching preset, or uncheck all
@@ -803,14 +806,36 @@ void MainWindow::syncToolActions() {
     }
 }
 
+void MainWindow::syncAdjustmentTabTool() {
+    if (!rightTabs)
+        return;
+    const auto next = toolForAdjustmentTab(
+        rightTabs->currentIndex(),
+        masksTabIndex,
+        spotsTabIndex,
+        viewport->activeTool(),
+        toolsEnabled);
+    viewport->setActiveTool(next);
+}
+
+void MainWindow::selectAdjustmentTab(int index) {
+    if (!rightTabs || index < 0)
+        return;
+    rightTabs->setCurrentIndex(index);
+    // currentChanged is not emitted when the requested tab is already selected.
+    syncAdjustmentTabTool();
+}
+
 void MainWindow::setToolsEnabled(bool on) {
+    toolsEnabled = on;
     cropAction->setEnabled(on);
     straightenAction->setEnabled(on);
     wbAction->setEnabled(on);
-    maskAction->setEnabled(on);
-    spotAction->setEnabled(on);
+    masksTabShortcut->setEnabled(on);
+    spotsTabShortcut->setEnabled(on);
     saveAction->setEnabled(on);
     exportAction->setEnabled(on);
+    syncAdjustmentTabTool();
 }
 
 void MainWindow::setupDocks() {
@@ -910,12 +935,13 @@ void MainWindow::setupDocks() {
     spotScroll->setWidget(spotPanel);
     spotScroll->setWidgetResizable(true);
     spotScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    tabs->addTab(spotScroll, "Spots");
+    spotsTabIndex = tabs->addTab(spotScroll, "Spots");
 
     exifPanel = new ExifPanel(tabs);
     tabs->addTab(exifPanel, "EXIF");
 
     rightTabs = tabs;
+    connect(tabs, &QTabWidget::currentChanged, this, [this] { syncAdjustmentTabTool(); });
     rightDock->setWidget(tabs);
     addDockWidget(Qt::RightDockWidgetArea, rightDock);
 

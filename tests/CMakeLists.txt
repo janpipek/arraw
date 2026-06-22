@@ -33,6 +33,7 @@ add_executable(arraw_tests
     test_LocalAdjustment.cpp
     test_LocalAdjustmentPanel.cpp
     test_AdjustmentPanel.cpp
+    test_AdjustmentTabTool.cpp
     test_CollapsiblePane.cpp
     test_ChromeHider.cpp
     test_CropGeometry.cpp
