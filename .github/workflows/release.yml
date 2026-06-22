@@ -116,7 +116,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential cmake ninja-build file appstream libdbus-1-3 \
-            libraw-dev liblcms2-dev \
+            libraw-dev liblcms2-dev liblensfun-dev liblensfun-data-v1 \
             libgl1-mesa-dev libglu1-mesa-dev libvulkan-dev \
             libxkbcommon-dev libxkbcommon-x11-dev libfontconfig1-dev libfreetype-dev \
             libx11-dev libx11-xcb-dev libxext-dev libxfixes-dev libxi-dev libxrender-dev \
@@ -131,11 +131,28 @@ jobs:
       - name: Configure and build
         run: |
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DARRAW_BUILD_TESTS=OFF \
+            -DARRAW_WITH_LENSFUN=ON \
             -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
           ninja -C build arraw
 
       - name: Stage AppDir
         run: DESTDIR="$PWD/AppDir" cmake --install build --prefix /usr
+
+      - name: Bundle the lensfun database
+        # linuxdeploy carries shared libraries (liblensfun + glib) but not arbitrary
+        # data dirs, so the lens DB has to be staged into the AppDir explicitly. The
+        # app loads it from a path relative to the executable (usr/bin → ../share),
+        # never the host's /usr/share, so the AppImage stays self-contained (#53).
+        run: |
+          db_src=/usr/share/lensfun/version_1
+          db_dst="$PWD/AppDir/usr/share/lensfun/db"
+          if [ ! -d "$db_src" ] || [ -z "$(ls -A "$db_src"/*.xml 2>/dev/null)" ]; then
+            echo "::error::lensfun database not found at $db_src"
+            exit 1
+          fi
+          mkdir -p "$db_dst"
+          cp "$db_src"/*.xml "$db_dst/"
+          echo "Staged $(ls "$db_dst"/*.xml | wc -l) lensfun DB files into the AppDir"
 
       - name: Build AppImage
         env:
@@ -181,6 +198,22 @@ jobs:
             libx11-6 libx11-xcb1 libxcb1 libxkbcommon0 libxkbcommon-x11-0 \
             libxrender1 libxext6 libxi6 libxfixes3 libsm6 libice6
 
+      - name: Verify lensfun is bundled
+        # Prove lens correction actually shipped: the library (linuxdeploy) and the
+        # lens DB (our staging step) must both be inside the AppImage (#53).
+        run: |
+          chmod +x arraw-*.AppImage
+          ./arraw-*.AppImage --appimage-extract >/dev/null
+          if ! ls squashfs-root/usr/lib/liblensfun*.so* >/dev/null 2>&1; then
+            echo "::error::liblensfun is not bundled in the AppImage"
+            exit 1
+          fi
+          if [ -z "$(ls -A squashfs-root/usr/share/lensfun/db/*.xml 2>/dev/null)" ]; then
+            echo "::error::lensfun database is not bundled in the AppImage"
+            exit 1
+          fi
+          rm -rf squashfs-root
+
       - name: Run AppImage offscreen
         env:
           APPIMAGE_EXTRACT_AND_RUN: '1'
@@ -200,7 +233,7 @@ jobs:
         run: |
           dnf install -y \
             appstream catch-devel cmake desktop-file-utils findutils gcc-c++ git gzip \
-            lcms2-devel LibRaw-devel ninja-build qt6-qtbase-devel \
+            lcms2-devel lensfun-devel LibRaw-devel ninja-build qt6-qtbase-devel \
             qt6-qtbase-private-devel qt6-qtimageformats qt6-qtshadertools-devel \
             redhat-rpm-config rpm-build rpmlint
 
