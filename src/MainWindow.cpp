@@ -158,14 +158,14 @@ void AdjustmentCommand::undo() {
     session->setParams(before);
     mainWindow->syncSessionToEditors();
     if (lensTogglesDiffer(before, after))
-        mainWindow->rebuildSpottedBuffers(true);
+        mainWindow->rebuildSpottedBuffers(false);
 }
 
 void AdjustmentCommand::redo() {
     session->setParams(after);
     mainWindow->syncSessionToEditors();
     if (lensTogglesDiffer(before, after))
-        mainWindow->rebuildSpottedBuffers(true);
+        mainWindow->rebuildSpottedBuffers(false);
 }
 
 // ---------------------------------------------------------------------------
