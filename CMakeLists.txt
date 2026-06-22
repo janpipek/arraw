@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(arraw VERSION 0.2.1 LANGUAGES CXX)
+project(arraw VERSION 0.2.2 LANGUAGES CXX)
 
 option(ARRAW_BUILD_TESTS "Build arraw tests" ON)
 if(ARRAW_BUILD_TESTS)

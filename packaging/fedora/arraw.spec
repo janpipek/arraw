@@ -1,5 +1,5 @@
 Name:           arraw
-Version:        0.2.1
+Version:        0.2.2
 Release:        %{?snapshot_release}%{!?snapshot_release:1}%{?dist}
 Summary:        Lightweight RAW photo editor
 
@@ -54,6 +54,10 @@ appstreamcli validate --no-net \
 %{_datadir}/icons/hicolor/*/apps/io.github.janpipek.arraw.png
 
 %changelog
+* Sun Jun 22 2026 Jan Pipek <janpipek@users.noreply.github.com> - 0.2.2-1
+- Index the tone LUT in the perceptual domain for better shadow detail
+- Show a format label (ARW/JPEG/ARW+JPEG) on every filmstrip cell
+
 * Sun Jun 21 2026 Jan Pipek <janpipek@users.noreply.github.com> - 0.2.1-1
 - Improve platform-specific Just recipes and add a portable clean task
 - Embrace Qt fusion styling
