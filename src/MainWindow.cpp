@@ -255,6 +255,19 @@ MainWindow::MainWindow(QWidget* parent)
             pushGlobalAdjustmentCommand(before, after);
     });
 
+    connect(
+        viewport,
+        &ImageViewport::orientationCommitted,
+        this,
+        [this](orient::Orientation orientation, const QRectF& cropRect) {
+            GlobalAdjustment before = currentParams();
+            GlobalAdjustment after = before;
+            after.orientation = orientation;
+            after.cropRect = cropRect; // crop rotated/mirrored with the content
+            if (after != before)
+                pushGlobalAdjustmentCommand(before, after);
+        });
+
     connect(viewport, &ImageViewport::whiteBalanceCommitted, this, [this](float kelvin, float tint) {
         GlobalAdjustment before = currentParams();
         GlobalAdjustment after = before;
@@ -429,7 +442,7 @@ void MainWindow::keyPressEvent(QKeyEvent* e) {
     if (e->key() == Qt::Key_Escape) {
         // A modal tool's own cancel wins so Escape behaves the same whether or
         // not the viewport holds focus; only with no tool active does Escape act
-        // as the focus-mode "give me my UI back" panic key (docs/adr/0025).
+        // as the focus-mode "give me my UI back" panic key (docs/adr/0027).
         if (viewport->activeTool() != ImageViewport::ActiveTool::None) {
             viewport->cancelActiveTool();
             return;
@@ -510,7 +523,7 @@ void MainWindow::setupMenus() {
     // and enabled. These live on the View menu, which lights-out (F12) hides and
     // image loading disables — so also host them on the window itself, which
     // stays visible/enabled, or F8/F11/F12 would die exactly when needed
-    // (docs/adr/0025).
+    // (docs/adr/0027).
     addAction(toggleAdjustments);
     addAction(fullScreenAction);
     addAction(lightsOutAction);
@@ -664,6 +677,20 @@ void MainWindow::setupToolbar() {
     wbAction = addTool("White Bal.", {});
     maskAction = addTool("Masks", Qt::Key_M);
     spotAction = addTool("Spots", Qt::Key_Q);
+
+    // Coarse Orientation (docs/adr/0028). Momentary actions (not modal tools);
+    // final home is beside the Rotation slider, but the toolbar gives a handle now.
+    tb->addSeparator();
+    auto* rotateCwAction = tb->addAction(tr("Rotate ⟳"));
+    rotateCwAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+]")));
+    connect(rotateCwAction, &QAction::triggered, this, [this] { viewport->rotate90(true); });
+    auto* rotateCcwAction = tb->addAction(tr("Rotate ⟲"));
+    rotateCcwAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+[")));
+    connect(rotateCcwAction, &QAction::triggered, this, [this] { viewport->rotate90(false); });
+    auto* flipHAction = tb->addAction(tr("Flip H"));
+    connect(flipHAction, &QAction::triggered, this, [this] { viewport->flip(true); });
+    auto* flipVAction = tb->addAction(tr("Flip V"));
+    connect(flipVAction, &QAction::triggered, this, [this] { viewport->flip(false); });
 
     connect(toolGroup, &QActionGroup::triggered, this, [this](QAction* a) {
         using T = ImageViewport::ActiveTool;
@@ -1215,7 +1242,7 @@ void MainWindow::changeEvent(QEvent* e) {
         const auto previous = static_cast<QWindowStateChangeEvent*>(e)->oldState();
         // Capture the pre-fullscreen state from the WM's own transition so
         // exitFullScreen() can return to the right place — more reliable than
-        // polling isMaximized() before showFullScreen() (docs/adr/0025).
+        // polling isMaximized() before showFullScreen() (docs/adr/0027).
         if (isFullScreen() && !previous.testFlag(Qt::WindowFullScreen))
             wasMaximized = previous.testFlag(Qt::WindowMaximized);
         if (fullScreenAction)
@@ -1578,7 +1605,8 @@ void MainWindow::generateDevelopedThumbnail() {
 
     const GlobalAdjustment p = currentParams();
     const ImageBuffer& preview = session->previewForDisplay();
-    const QSize sz = developedThumbSize(preview.width, preview.height, p.cropRect, 512);
+    const QSize sz
+        = developedThumbSize(preview.width, preview.height, p.cropRect, 512, p.orientation);
 
     // Same pipeline as export: linear working-space render → output transform.
     QImage lin = viewport->renderToImage(preview, p, sz.width(), sz.height());
@@ -1622,8 +1650,8 @@ void MainWindow::exportPaths(const QStringList& paths) {
 
     // Natural output size = full-res pixels inside the crop rect (shared with
     // the crop overlay's live readout so the two can never disagree).
-    const QSize natural
-        = crop::cropPixelSize(session->fullRes().width, session->fullRes().height, p.cropRect);
+    const QSize natural = crop::cropPixelSize(
+        session->fullRes().width, session->fullRes().height, p.cropRect, p.orientation);
 
     ExportDialog optDlg(natural.width(), natural.height(), this);
     if (optDlg.exec() != QDialog::Accepted)
@@ -1659,7 +1687,10 @@ void MainWindow::exportBatch(const QStringList& paths) {
     viewport->commitActiveTool();
     const GlobalAdjustment activeParams = currentParams();
     const QSize natural = crop::cropPixelSize(
-        session->fullRes().width, session->fullRes().height, activeParams.cropRect);
+        session->fullRes().width,
+        session->fullRes().height,
+        activeParams.cropRect,
+        activeParams.orientation);
 
     ExportDialog optDlg(natural.width(), natural.height(), this);
     if (optDlg.exec() != QDialog::Accepted)
@@ -1735,8 +1766,8 @@ void MainWindow::exportBatch(const QStringList& paths) {
                                                       : applySpots(loaded.fullRes, p.spots);
 
         // Compute output size: use per-file natural size when opts is zero.
-        const QSize perFileNatural
-            = crop::cropPixelSize(loaded.fullRes.width, loaded.fullRes.height, p.cropRect);
+        const QSize perFileNatural = crop::cropPixelSize(
+            loaded.fullRes.width, loaded.fullRes.height, p.cropRect, p.orientation);
         const int outW = opts.width > 0 ? opts.width : perFileNatural.width();
         const int outH = opts.height > 0 ? opts.height : perFileNatural.height();
 

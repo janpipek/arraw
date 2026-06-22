@@ -32,7 +32,8 @@ GlobalAdjustment resolveImageAdjustments(const QString& path, const QRectF& defa
 }
 
 ResolvedLoadedImage resolveLoadedImage(const QString& path, const LoadResult& result) {
-    const SidecarLoadResult sidecar = XmpSidecar::resolveForImage(path, result.defaultCrop);
+    const SidecarLoadResult sidecar
+        = XmpSidecar::resolveForImage(path, result.defaultCrop, result.seededOrientation);
     return {
         sidecar.data.adjustments,
         sidecar.data.metadata,

@@ -114,9 +114,13 @@ float ImageViewport::fitZoom() const {
 float ImageViewport::displayOriginalPixelHeight() const {
     if (!hasKnownOriginalSize())
         return 0.0f;
+    // The displayed frame is oriented: an odd quarter-turn makes the native width
+    // the displayed height (docs/adr/0028), so the 1:1 zoom readout stays honest.
+    const float orientedHeight = orient::swapsAspect(params.orientation) ? float(originalWidth)
+                                                                         : float(originalHeight);
     if (cropMode() || showOriginal)
-        return float(originalHeight);
-    return float(originalHeight) * float(params.cropRect.height());
+        return orientedHeight;
+    return orientedHeight * float(params.cropRect.height());
 }
 
 viewport::Geometry ImageViewport::geometry() const {
@@ -129,7 +133,15 @@ viewport::Geometry ImageViewport::geometry() const {
     g.pan = pan;
     g.cropRect = params.cropRect;
     g.rotation = params.rotation;
+    g.orientation = params.orientation;
     return g;
+}
+
+// The viewport works in the oriented display frame: an odd quarter-turn swaps
+// the image's effective width and height (docs/adr/0028).
+void ImageViewport::updateImageAspect() {
+    imageAspect = orient::swapsAspect(params.orientation) ? 1.0f / nativeImageAspect
+                                                          : nativeImageAspect;
 }
 
 RendererCore::Slot ImageViewport::activeSlot() const {
@@ -571,7 +583,8 @@ void ImageViewport::drawCropOverlay(QPainter& p) const {
     // when locked, the ratio tag. Pixel size needs the known full-res dimensions.
     QString label;
     if (hasKnownOriginalSize()) {
-        const QSize px = crop::cropPixelSize(originalWidth, originalHeight, activeCrop);
+        const QSize px
+            = crop::cropPixelSize(originalWidth, originalHeight, activeCrop, params.orientation);
         label = QStringLiteral("%1 × %2").arg(px.width()).arg(px.height());
     }
     if (lockedRatio > 0.0) {
@@ -604,7 +617,8 @@ void ImageViewport::drawCropOverlay(QPainter& p) const {
 // ── Public setters ────────────────────────────────────────────────────────────
 
 void ImageViewport::setImage(const ImageBuffer& buf, bool baseLook) {
-    imageAspect = buf.valid() ? float(buf.width) / float(buf.height) : 1.0f;
+    nativeImageAspect = buf.valid() ? float(buf.width) / float(buf.height) : 1.0f;
+    updateImageAspect();
     hasImage = buf.valid();
     hasFullRes = false;
     useBaseLook = baseLook;
@@ -629,12 +643,35 @@ void ImageViewport::setAdjustments(const GlobalAdjustment& p) {
         || p.curveB != params.curveB)
         curveLutDirty = true;
     params = p;
+    updateImageAspect(); // orientation may have changed
     if (!cropMode())
         activeCrop = p.cropRect;
     if (hasImage)
         histoTimer.start();
     emit zoomChanged(pixelZoom());
     update();
+}
+
+void ImageViewport::rotate90(bool clockwise) {
+    if (!hasImage)
+        return;
+    const orient::Orientation next = clockwise ? orient::turnedClockwise(params.orientation)
+                                               : orient::turnedCounterClockwise(params.orientation);
+    // Rotate the committed crop with the content so it keeps framing the subject
+    // (docs/adr/0028); the aspect-lock inverts for free (re-derived from the rect).
+    const QRectF crop = crop::rotateQuarterTurns(params.cropRect, clockwise ? 1 : 3);
+    emit orientationCommitted(next, crop);
+}
+
+void ImageViewport::flip(bool horizontal) {
+    if (!hasImage)
+        return;
+    const orient::Orientation next = orient::flipped(params.orientation, horizontal);
+    // Mirror the crop on the same axis so it stays on the same content.
+    const QRectF c = params.cropRect;
+    const QRectF crop = horizontal ? QRectF(1.0 - c.x() - c.width(), c.y(), c.width(), c.height())
+                                   : QRectF(c.x(), 1.0 - c.y() - c.height(), c.width(), c.height());
+    emit orientationCommitted(next, crop);
 }
 
 void ImageViewport::setStraightenActive(bool active) {
@@ -891,15 +928,23 @@ QImage ImageViewport::renderToImage(
     ensureCurveLut();
 
     const QRectF& cr = p.cropRect;
-    const int cropW = (std::max) (1, int(cr.width() * buf.width + 0.5f));
-    const int cropH = (std::max) (1, int(cr.height() * buf.height + 0.5f));
+    // The crop is normalised in the oriented display frame, so an odd quarter-turn
+    // presents the buffer with width/height swapped (docs/adr/0028). Size the
+    // offscreen target and the rotation aspect to the oriented frame, else the
+    // oriented content is squished into a native-shaped texture.
+    int orientedW = buf.width;
+    int orientedH = buf.height;
+    if (orient::swapsAspect(p.orientation))
+        std::swap(orientedW, orientedH);
+    const int cropW = (std::max) (1, int(cr.width() * orientedW + 0.5f));
+    const int cropH = (std::max) (1, int(cr.height() * orientedH + 0.5f));
 
     // Offscreen target at cropped pixel size. Float format: the readback stays
     // in linear working space; the output transform happens on the CPU (lcms2).
     RendererCore::FrameParams fp;
     fp.transform = QVector4D(1.0f, 1.0f, 0.0f, 0.0f);
     fp.cropRect = cr;
-    fp.aspect = float(buf.width) / float(buf.height);
+    fp.aspect = float(orientedW) / float(orientedH);
     fp.baseLook = true;
     fp.displayEncode = false;
     fp.curveInput = false;
@@ -932,13 +977,17 @@ QImage ImageViewport::renderClipSample(
     // clipping overlay actually runs — renderToImage uses the linear export
     // path where it is forced off. Used by the clipping golden test (adr/0009).
     const QRectF& cr = p.cropRect;
-    const int cropW = (std::max) (1, int(cr.width() * buf.width + 0.5f));
-    const int cropH = (std::max) (1, int(cr.height() * buf.height + 0.5f));
+    int orientedW = buf.width;
+    int orientedH = buf.height;
+    if (orient::swapsAspect(p.orientation)) // oriented frame (docs/adr/0028)
+        std::swap(orientedW, orientedH);
+    const int cropW = (std::max) (1, int(cr.width() * orientedW + 0.5f));
+    const int cropH = (std::max) (1, int(cr.height() * orientedH + 0.5f));
 
     RendererCore::FrameParams fp;
     fp.transform = QVector4D(1.0f, 1.0f, 0.0f, 0.0f);
     fp.cropRect = cr;
-    fp.aspect = float(buf.width) / float(buf.height);
+    fp.aspect = float(orientedW) / float(orientedH);
     fp.baseLook = true;
     fp.displayEncode = true;
     fp.curveInput = false;
@@ -954,7 +1003,7 @@ QImage ImageViewport::renderClipSample(
 // ── Histogram readback (docs/adr/0004) ────────────────────────────────────────
 
 // Render the preview texture through the real shader twice into a small
-// offscreen target — once with curveInput (pipeline stops after tone regions,
+// offscreen target — once with curveInput (pipeline stops after Basic Tone,
 // gamma-encoded) and once full — and hand both samples to whoever bins them.
 void ImageViewport::renderHistograms() {
     if (!hasImage || !core.ready() || !core.hasImage(RendererCore::Slot::Preview))

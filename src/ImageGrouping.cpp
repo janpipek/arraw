@@ -10,6 +10,18 @@ bool isRawExtension(const QString& suffix) {
     return raw.contains(suffix.toLower());
 }
 
+// The canonical, displayed name of a file's format. Folds the legacy/long
+// spellings of a format onto one token (jpg/jpeg -> JPEG, tif/tiff -> TIFF);
+// every other suffix (RAW types included) is its own uppercased extension.
+QString canonicalFormatName(const QString& suffix) {
+    const QString s = suffix.toLower();
+    if (s == "jpg" || s == "jpeg")
+        return "JPEG";
+    if (s == "tif" || s == "tiff")
+        return "TIFF";
+    return suffix.toUpper();
+}
+
 // Files of one capture: same directory, same case-insensitive base name.
 QString captureKey(const QFileInfo& fi) {
     return fi.path() + "\n" + fi.completeBaseName().toLower();
@@ -46,11 +58,15 @@ QList<ImageGroup> groupImageFiles(const QStringList& paths) {
     return groups;
 }
 
-QString companionBadgeText(const QStringList& companions) {
-    if (companions.isEmpty())
-        return {};
-    QString badge = QFileInfo(companions.front()).suffix().toUpper();
-    if (companions.size() > 1)
-        badge += "+" + QString::number(companions.size() - 1);
-    return badge;
+QString formatLabelText(const ImageGroup& group) {
+    QStringList tokens;
+    const auto addFormat = [&tokens](const QString& path) {
+        const QString name = canonicalFormatName(QFileInfo(path).suffix());
+        if (!name.isEmpty() && !tokens.contains(name))
+            tokens.append(name);
+    };
+    addFormat(group.primary);
+    for (const QString& companion : group.companions)
+        addFormat(companion);
+    return tokens.join('+');
 }

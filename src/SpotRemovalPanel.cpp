@@ -22,8 +22,9 @@ SpotRemovalPanel::SpotRemovalPanel(QWidget* parent)
     col->addStretch();
 
     connect(deleteButton, &QPushButton::clicked, this, &SpotRemovalPanel::deleteActive);
-    connect(spotList, &QListWidget::currentRowChanged, this,
-            [this](int) { deleteButton->setEnabled(activeIndex() >= 0); });
+    connect(spotList, &QListWidget::currentRowChanged, this, [this](int) {
+        deleteButton->setEnabled(activeIndex() >= 0);
+    });
 
     deleteButton->setEnabled(false);
 }
@@ -83,10 +84,9 @@ void SpotRemovalPanel::rebuildList() {
     spotList->clear();
     for (int i = 0; i < static_cast<int>(spotEntries.size()); ++i)
         spotList->addItem(QString("Spot %1").arg(i + 1));
-    const int next
-        = spotEntries.empty()
-            ? -1
-            : std::clamp(cur, 0, static_cast<int>(spotEntries.size()) - 1);
+    const int next = spotEntries.empty()
+                         ? -1
+                         : std::clamp(cur, 0, static_cast<int>(spotEntries.size()) - 1);
     spotList->setCurrentRow(next);
     deleteButton->setEnabled(activeIndex() >= 0);
 }

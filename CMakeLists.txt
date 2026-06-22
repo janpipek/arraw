@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(arraw VERSION 0.1.0 LANGUAGES CXX)
+project(arraw VERSION 0.2.1 LANGUAGES CXX)
 
 option(ARRAW_BUILD_TESTS "Build arraw tests" ON)
 if(ARRAW_BUILD_TESTS)
@@ -154,6 +154,8 @@ endif()
 # Everything except main.cpp lives in a static library so test executables
 # can link the real code (see DESIGN.md "Testing Strategy").
 set(CORE_SOURCES
+    src/BasicTone.cpp
+    src/Theme.cpp
     src/MainWindow.cpp
     src/ImageViewport.cpp
     src/ViewportGeometry.cpp
@@ -186,6 +188,7 @@ set(CORE_SOURCES
     src/DevelopSession.cpp
     src/ExportDialog.cpp
     src/CropGeometry.cpp
+    src/Orientation.cpp
     src/DevelopGroup.cpp
     src/DevelopPreset.cpp
     src/GroupChecklistDialog.cpp

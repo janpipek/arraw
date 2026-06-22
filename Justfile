@@ -56,6 +56,7 @@ rerun: rebuild
     ./build/arraw
 
 # Create an appimage for linux
+[unix]
 appimage:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -74,14 +75,43 @@ appimage:
         bash /src/packaging/linux/build-appimage.sh
 
 # Build Fedora RPM and SRPM from committed HEAD
+[unix]
 rpm:
     bash tools/package_fedora.sh
 
 # Install and smoke-test the RPM in a clean Fedora 44 container
+[unix]
 rpm-smoke:
     bash tools/smoke_fedora_rpm.sh
 
+# --- Windows stubs: the recipes above are Linux-only; fail fast with a clear message ---
+
+[windows]
+appimage:
+    @echo "appimage is a Linux-only task; build it on a Linux host or via CI."; exit 1
+
+[windows]
+rpm:
+    @echo "rpm is a Linux-only task (Fedora packaging); run it on a Linux host."; exit 1
+
+[windows]
+rpm-smoke:
+    @echo "rpm-smoke is a Linux-only task (Fedora container); run it on a Linux host."; exit 1
+
 # Create a windows-installer (.exe)
+[windows]
 windows-installer:
     # Inno setup must be present
     uv run tools/package_windows.py --installer
+
+[unix]
+windows-installer:
+    @echo "windows-installer is a Windows-only task (builds an .exe); run it on Windows."; exit 1
+
+# Remove all build and distribution artifacts
+clean:
+    uv run tools/clean.py
+
+# Bump the version in CMake, the RPM spec, and the AppStream metainfo (no git)
+bump version:
+    uv run tools/bump_version.py {{version}}

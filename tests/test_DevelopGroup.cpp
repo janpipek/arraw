@@ -34,6 +34,7 @@ static GlobalAdjustment fullyEdited() {
     // Detail
     g.sharpening = 55.0f;
     // Geometry
+    g.orientation = orient::Orientation{3, true};
     g.rotation = 7.5f;
     g.cropRect = {0.1, 0.2, 0.7, 0.6};
     g.cropConstrained = true;
@@ -56,6 +57,17 @@ static GroupSelection only(DevelopGroup g) {
     GroupSelection s;
     s.set(static_cast<size_t>(g));
     return s;
+}
+
+TEST_CASE("the default copy selection checks every group except Geometry", "[developgroup]") {
+    const GroupSelection sel = defaultCopySelection();
+    for (int i = 0; i < kDevelopGroupCount; ++i) {
+        const DevelopGroup g = static_cast<DevelopGroup>(i);
+        if (g == DevelopGroup::Geometry)
+            CHECK_FALSE(hasGroup(sel, g));
+        else
+            CHECK(hasGroup(sel, g));
+    }
 }
 
 TEST_CASE("Empty selection leaves the target unchanged", "[developgroup]") {
@@ -109,6 +121,7 @@ TEST_CASE("Geometry moves rotation, crop, and the aspect-lock flag together", "[
 
     const GlobalAdjustment result = applyGroups(target, source, only(DevelopGroup::Geometry));
 
+    CHECK(result.orientation == source.orientation);
     CHECK(result.rotation == source.rotation);
     CHECK(result.cropRect == source.cropRect);
     CHECK(result.cropConstrained == source.cropConstrained);

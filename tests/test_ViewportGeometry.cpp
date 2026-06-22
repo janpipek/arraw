@@ -5,6 +5,63 @@
 
 using Catch::Approx;
 
+TEST_CASE("shrinkInsideRotation leaves an interior crop untouched at 0°", "[viewportgeometry]") {
+    const QRectF crop{0.2, 0.2, 0.5, 0.5};
+    const QRectF out = viewport::shrinkInsideRotation(crop, 0.0f, 1.5f);
+    REQUIRE(out.x() == Approx(crop.x()));
+    REQUIRE(out.y() == Approx(crop.y()));
+    REQUIRE(out.width() == Approx(crop.width()));
+    REQUIRE(out.height() == Approx(crop.height()));
+}
+
+namespace {
+bool cornersInside(const QRectF& r, float degrees, float aspect) {
+    const QPointF corners[4] = {r.topLeft(), r.topRight(), r.bottomRight(), r.bottomLeft()};
+    for (const QPointF& c : corners) {
+        const QPointF s
+            = viewport::rotateTextureUv(float(c.x()), float(c.y()), degrees, aspect, 0.5f, 0.5f);
+        if (s.x() < -1e-4f || s.x() > 1.0f + 1e-4f || s.y() < -1e-4f || s.y() > 1.0f + 1e-4f)
+            return false;
+    }
+    return true;
+}
+} // namespace
+
+TEST_CASE(
+    "shrinkInsideRotation pulls an over-large crop inside, keeping centre and aspect",
+    "[viewportgeometry]") {
+    const float aspect = 1.5f;
+    const float degrees = 18.0f;
+    const QRectF crop{0.04, 0.04, 0.92, 0.92};           // nearly the whole frame
+    REQUIRE_FALSE(cornersInside(crop, degrees, aspect)); // precondition: it pokes out
+
+    const QRectF out = viewport::shrinkInsideRotation(crop, degrees, aspect);
+
+    REQUIRE(cornersInside(out, degrees, aspect));           // now fits
+    REQUIRE(out.width() < crop.width());                    // it actually shrank
+    REQUIRE(out.center().x() == Approx(crop.center().x())); // centre held
+    REQUIRE(out.center().y() == Approx(crop.center().y()));
+    // aspect ratio preserved
+    REQUIRE(out.width() / out.height() == Approx(crop.width() / crop.height()));
+}
+
+TEST_CASE("Geometry round-trips viewport<->buffer under a coarse orientation", "[viewportgeometry]") {
+    viewport::Geometry g;
+    g.viewportSize = {1200, 800};
+    g.originalSize = {600, 400};
+    g.imageAspect = 1.5f;
+    g.displayAspect = 1.5f;
+    g.zoom = 1.3f;
+    g.rotation = 6.0f;
+    g.orientation = orient::Orientation{1, true}; // turned + mirrored (EXIF 5)
+
+    const QPointF bufPx(137.0, 222.0);
+    const QPointF vp = g.bufferPixelToViewport(bufPx);
+    const QPointF back = g.viewportToBufferPixel(vp);
+    REQUIRE(back.x() == Approx(bufPx.x()).margin(1e-3));
+    REQUIRE(back.y() == Approx(bufPx.y()).margin(1e-3));
+}
+
 TEST_CASE("Viewport geometry round-trips crop UV through zoom and pan", "[viewportgeometry]") {
     viewport::Geometry g;
     g.viewportSize = {1200, 800};

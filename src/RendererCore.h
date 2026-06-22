@@ -1,10 +1,12 @@
 #pragma once
+#include "BasicTone.h"
 #include "ColorManagement.h"
 #include "ImagePipeline.h"
 #include <array>
 #include <cstddef>
 #include <memory>
 #include <rhi/qrhi.h>
+#include <vector>
 #include <QImage>
 
 // std140 mirror of the uniform block in shaders/image.vert and image.frag —
@@ -49,8 +51,8 @@ struct Ubuf {
     // arrays in the shaders (tight std140 packing, like hslHue). Layout:
     //   laGeom  = Linear (p0.x, p0.y, p1.x, p1.y) | Radial (cx, cy, rx, ry)
     //   laGeom2 = Radial (angle, feather, invert, spare); unused for Linear
-    //   laTone  = (exposure, contrast, highlights, shadows)
-    //   laTone2 = (whites, blacks, wbGainR, wbGainG)  white-balance gain (docs/adr/0025)
+    //   laTone  = legacy tone packing (actual tone comes from LUT row, docs/adr/0031)
+    //   laTone2 = (legacy whites, legacy blacks, wbGainR, wbGainG)
     //   laColor = (saturation, vibrance, maskType, wbGainB)  maskType 0=Linear 1=Radial
     float laGeom[64];
     float laTone[64];
@@ -58,8 +60,9 @@ struct Ubuf {
     float laColor[64];
     float laGeom2[64];
     qint32 numLocalAdj;
-    qint32 histoRaw; // 1: emit pre-clamp sRGB-linear for overflow histogram
-    qint32 pad_[2];  // round the block up to a 16-byte multiple (std140)
+    qint32 histoRaw;           // 1: emit pre-clamp sRGB-linear for overflow histogram
+    qint32 orientQuarterTurns; // coarse Orientation (docs/adr/0028); was pad_
+    qint32 orientMirrored;     // 1 = horizontal mirror; was pad_
 };
 
 static_assert(sizeof(Ubuf) == 1616);
@@ -126,6 +129,7 @@ private:
     };
 
     static QByteArray expandToRgba(const ImageBuffer& buf);
+    void prepareToneLut(const GlobalAdjustment& adjustment);
     void flushPendingUploads(QRhiResourceUpdateBatch* batch);
     void recordPass(
         QRhiCommandBuffer* cb,
@@ -149,6 +153,7 @@ private:
     std::unique_ptr<QRhiBuffer> vbuf;
     std::unique_ptr<QRhiBuffer> ubuf;
     std::unique_ptr<QRhiSampler> sampler;
+    std::unique_ptr<QRhiTexture> toneLutTex;    // 256×17: global + local Basic Tone
     std::unique_ptr<QRhiTexture> curveLutTex;   // 256×1 RGBA32F (L R G B)
     std::unique_ptr<QRhiTexture> displayLutTex; // N³ RGBA32F (1×1×1 dummy when unused)
     std::unique_ptr<QRhiTexture> imageTex[2];   // indexed by Slot
@@ -175,6 +180,9 @@ private:
     bool pendingImageDirty[2] = {false, false};
     std::array<float, 256 * 4> pendingCurveLut{};
     bool curveLutDirty = false;
+    tone::LutAtlas pendingToneLut;
+    bool toneLutDirty = false;
+    std::vector<std::array<float, 6>> toneLutSource; // tone fields the LUT was built from
     DisplayLut pendingDisplayLut;
     bool displayLutDirty = false;
 };

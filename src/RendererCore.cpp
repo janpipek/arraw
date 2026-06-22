@@ -1,4 +1,5 @@
 #include "RendererCore.h"
+#include "ThemeColors.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -27,7 +28,10 @@ static const float kQuad[] = {
     0,
 };
 
-static const QColor kClearColor = QColor::fromRgbF(0.15f, 0.15f, 0.15f);
+// The viewport surround. Single-sourced from ThemeColors so the GPU clear color
+// and the widget palette never drift (ADR 0030). Value is bit-identical to the
+// historical 0.15 gray to keep the golden-image references valid (ADR 0005).
+static const QColor kClearColor = ThemeColors::kCanvas;
 
 static QShader loadShader(const QString& path) {
     QFile f(path);
@@ -64,6 +68,11 @@ void RendererCore::initialize(QRhi* r) {
     curveLutTex->create();
     ++generation;
 
+    toneLutTex.reset(rhi->newTexture(QRhiTexture::RGBA32F, QSize(tone::kLutSize, tone::kLutRows)));
+    toneLutTex->create();
+    toneLutSource.clear();
+    ++generation;
+
     // The 3D sampler binding must always reference a valid texture, even with
     // useLut off — start with a 1×1×1 dummy.
     if (!displayLutDirty) {
@@ -93,6 +102,7 @@ void RendererCore::release() {
     imageTex[1].reset();
     displayLutTex.reset();
     curveLutTex.reset();
+    toneLutTex.reset();
     sampler.reset();
     ubuf.reset();
     vbuf.reset();
@@ -130,6 +140,32 @@ void RendererCore::setImage(Slot slot, const ImageBuffer& buf) {
 bool RendererCore::hasImage(Slot slot) const {
     const int i = int(slot);
     return pendingImageDirty[i] || imageTex[i];
+}
+
+// The LUT depends only on the six Basic Tone fields of the global fill and each
+// Local Adjustment — not on mask geometry or colour. Snapshot just those so the
+// dirty-check is a cheap value compare and avoids copying mask variants.
+static std::vector<std::array<float, 6>> toneSignature(const GlobalAdjustment& a) {
+    auto fields = [](const SharedAdjustment& s) {
+        return std::array<float, 6>{
+            s.exposure, s.contrast, s.highlights, s.shadows, s.whites, s.blacks};
+    };
+    const int n = std::min<int>(int(a.localAdjustments.size()), 16);
+    std::vector<std::array<float, 6>> sig;
+    sig.reserve(size_t(n) + 1);
+    sig.push_back(fields(a));
+    for (int i = 0; i < n; ++i)
+        sig.push_back(fields(a.localAdjustments[i]));
+    return sig;
+}
+
+void RendererCore::prepareToneLut(const GlobalAdjustment& adjustment) {
+    std::vector<std::array<float, 6>> signature = toneSignature(adjustment);
+    if (signature == toneLutSource) // never empty once built (always has the global row)
+        return;
+    pendingToneLut = tone::makeLutAtlas(adjustment);
+    toneLutDirty = true;
+    toneLutSource = std::move(signature);
 }
 
 void RendererCore::setCurveLut(const std::array<float, 256 * 4>& rgba) {
@@ -175,6 +211,17 @@ void RendererCore::flushPendingUploads(QRhiResourceUpdateBatch* batch) {
             QRhiTextureUploadDescription(
                 QRhiTextureUploadEntry(0, 0, QRhiTextureSubresourceUploadDescription(data))));
         curveLutDirty = false;
+    }
+
+    if (toneLutDirty) {
+        const QByteArray data(
+            reinterpret_cast<const char*>(pendingToneLut.rgba.data()),
+            qsizetype(pendingToneLut.rgba.size() * sizeof(float)));
+        batch->uploadTexture(
+            toneLutTex.get(),
+            QRhiTextureUploadDescription(
+                QRhiTextureUploadEntry(0, 0, QRhiTextureSubresourceUploadDescription(data))));
+        toneLutDirty = false;
     }
 
     if (displayLutDirty) {
@@ -231,6 +278,8 @@ QRhiShaderResourceBindings* RendererCore::bindingsFor(QRhiTexture* tex) {
             2, QRhiShaderResourceBinding::FragmentStage, curveLutTex.get(), sampler.get()),
         QRhiShaderResourceBinding::sampledTexture(
             3, QRhiShaderResourceBinding::FragmentStage, displayLutTex.get(), sampler.get()),
+        QRhiShaderResourceBinding::sampledTexture(
+            4, QRhiShaderResourceBinding::FragmentStage, toneLutTex.get(), sampler.get()),
     });
     srb->create();
     srbImageTex = tex;
@@ -265,8 +314,10 @@ QRhiGraphicsPipeline* RendererCore::pipelineFor(QRhiRenderPassDescriptor* rpDesc
 // ── Uniforms ──────────────────────────────────────────────────────────────────
 
 namespace {
-// Normalise the nine shared scalars to shader-uniform units. Used by both the
-// global fill and each local adjustment, so the mapping lives exactly once.
+// Normalise the shared colour scalars and retain the pre-ADR-0031 tone packing.
+// Basic Tone itself is sourced from the LUT atlas; leaving these slots populated
+// avoids a risky uniform-layout migration while laTone2/laColor still carry WB
+// and colour values used by Local Adjustments.
 struct SharedUniform {
     float exposure, contrast, highlights, shadows, whites, blacks, tint, saturation, vibrance;
 };
@@ -316,6 +367,8 @@ void RendererCore::fillUbuf(Ubuf& ub, const FrameParams& fp) const {
     const SharedUniform g = toUniform(a);
     ub.rotation = a.rotation;
     ub.aspect = fp.aspect;
+    ub.orientQuarterTurns = a.orientation.quarterTurnsCW;
+    ub.orientMirrored = a.orientation.mirrored ? 1 : 0;
     ub.exposure = g.exposure;
     ub.contrast = g.contrast;
     ub.highlights = g.highlights;
@@ -368,9 +421,9 @@ void RendererCore::fillUbuf(Ubuf& ub, const FrameParams& fp) const {
     ub.clipWarn = (fp.clipHighlights ? 1 : 0) | (fp.clipShadows ? 2 : 0);
     ub.histoRaw = fp.histoRaw ? 1 : 0;
 
-    // Local adjustments (docs/adr/0010): pack into the parallel vec4 arrays,
-    // honouring the 16-mask cap. Deltas use the same scaling as the global path;
-    // local white balance becomes a per-channel gain (see below, docs/adr/0025).
+    // Local adjustments (docs/adr/0010): pack geometry and colour values into
+    // the parallel vec4 arrays, honouring the 16-mask cap. Tone comes from the
+    // matching LUT row (docs/adr/0031); white balance remains a channel gain.
     const int n = std::min<int>(int(a.localAdjustments.size()), 16);
     ub.numLocalAdj = n;
     for (int i = 0; i < n; ++i) {
@@ -450,6 +503,7 @@ void RendererCore::record(
         clear(cb, rt);
         return;
     }
+    prepareToneLut(fp.adjustments);
     QRhiResourceUpdateBatch* batch = rhi->nextResourceUpdateBatch();
     flushPendingUploads(batch); // creates/recreates the slot's texture
     recordPass(cb, rt, imageTex[int(slot)].get(), fp, batch);
@@ -500,6 +554,7 @@ QImage RendererCore::renderOffscreenTex(
     QRhiCommandBuffer* cb = nullptr;
     if (rhi->beginOffscreenFrame(&cb) != QRhi::FrameOpSuccess)
         return {};
+    prepareToneLut(fp.adjustments);
     QRhiResourceUpdateBatch* batch = rhi->nextResourceUpdateBatch();
     flushPendingUploads(batch);
     QRhiTexture* tex = slotIndex >= 0 ? imageTex[slotIndex].get() : extTex;

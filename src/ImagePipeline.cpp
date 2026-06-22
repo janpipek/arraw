@@ -108,7 +108,12 @@ ImageBuffer downsample2x(const ImageBuffer& src) {
     return dst;
 }
 
-QSize developedThumbSize(int srcW, int srcH, const QRectF& crop, int maxEdge) {
+QSize developedThumbSize(
+    int srcW, int srcH, const QRectF& crop, int maxEdge, orient::Orientation orientation) {
+    // An odd quarter-turn presents the buffer with width and height swapped, and
+    // the crop is normalised in that oriented frame (docs/adr/0028).
+    if (orient::swapsAspect(orientation))
+        std::swap(srcW, srcH);
     const int cw = std::max(1, int(std::lround(srcW * crop.width())));
     const int ch = std::max(1, int(std::lround(srcH * crop.height())));
 
@@ -247,6 +252,6 @@ void whiteBalanceFromNeutral(float r, float g, float b, float& kelvin, float& ti
     const auto gk = whiteBalanceGain(kelvin, 0.0f);
     const double m = 0.5 * (double(r) * gk[0] + double(b) * gk[2]); // balanced R/B level
     const double tintGain = (g > 1e-6) ? m / double(g) : 1.0;
-    tint = float(std::clamp(100.0 * std::log2(std::max(tintGain, 1e-6)) / kTintGainExp,
-                            -100.0, 100.0));
+    tint = float(
+        std::clamp(100.0 * std::log2(std::max(tintGain, 1e-6)) / kTintGainExp, -100.0, 100.0));
 }

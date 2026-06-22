@@ -39,16 +39,16 @@ layout(std140, binding = 0) uniform buf {
     int   gamutWarn;
     int   baseLook;
     int   displayEncode; // 1: encode for the (assumed sRGB) display;
-                         // 0: output clamped linear working space (export readback)
-    int   curveInput;    // stop after tone regions + gamma-encode (histograms)
+                         // 0: unbounded linear working-space export readback
+    int   curveInput;    // stop after Basic Tone + gamma-encode (histograms)
     int   hslActive;
     int   wbInput;       // stop before white balance, output linear (WB picker)
     int   clipWarn;      // clipping overlay bits: 1 = highlights, 2 = shadows (docs/adr/0009)
     // Local adjustments (docs/adr/0010), 16-mask cap. Packed parallel vec4 arrays:
     //   laGeom  = Linear (p0.x, p0.y, p1.x, p1.y) | Radial (cx, cy, rx, ry)
     //   laGeom2 = Radial (angle, feather, invert, spare); unused for Linear
-    //   laTone  = (exposure, contrast, highlights, shadows)
-    //   laTone2 = (whites, blacks, wbGainR, wbGainG)   white-balance gain (docs/adr/0025)
+    //   laTone  = legacy tone packing (tone samples row i+1, docs/adr/0031)
+    //   laTone2 = (legacy whites, legacy blacks, wbGainR, wbGainG)
     //   laColor = (saturation, vibrance, maskType, wbGainB)  maskType 0=Linear 1=Radial
     vec4  laGeom[16];
     vec4  laTone[16];
@@ -57,6 +57,8 @@ layout(std140, binding = 0) uniform buf {
     vec4  laGeom2[16];
     int   numLocalAdj;
     int   histoRaw;  // 1: output pre-clamp sRGB-linear for overflow binning
+    int   orientQuarterTurns; // coarse Orientation (docs/adr/0028); unused in frag
+    int   orientMirrored;
 } u;
 
 layout(binding = 1) uniform sampler2D uTexture;
@@ -64,6 +66,7 @@ layout(binding = 2) uniform sampler2D uCurveLUT;   // 256×1 RGBA32F: R=luma, G=
 layout(binding = 3) uniform sampler3D uLut3D;      // display LUT (soft-proof / monitor profile):
                                                    // indexed by sRGB-encoded working RGB,
                                                    // RGB=display output, A=in-gamut flag
+layout(binding = 4) uniform sampler2D uToneLUT;    // 256×17: global + 16 Local Adjustments
 
 // Rec.2020 luma — the whole pipeline works in linear Rec.2020 (docs/adr/0001).
 // Must match kLumaR/G/B in src/ImagePipeline.h.
@@ -81,10 +84,6 @@ const float kHslCenters[8] = float[8](
     0.889   // Magenta(320°)
 );
 
-vec3 applyExposure(vec3 c, float exposure) {
-    return c * pow(2.0, exposure);
-}
-
 vec3 applyBaseLook(vec3 c) {
     float y = dot(c, kLuma);
     float y2 = mix(y, smoothstep(0.0, 1.0, y), 0.35);
@@ -95,40 +94,41 @@ vec3 applyBaseLook(vec3 c) {
     return mix(vec3(luma), c, satBoost);
 }
 
-vec3 applyContrast(vec3 c, float contrast) {
-    if (abs(contrast) < 0.001) return c;
-    return (c - 0.5) * (1.0 + contrast * 0.8) + 0.5;
-}
-
-vec3 applyToneRegions(vec3 c, float highlights, float shadows,
-                      float whites, float blacks) {
-    if (abs(highlights) < 0.001 && abs(shadows) < 0.001 &&
-        abs(whites) < 0.001 && abs(blacks) < 0.001)
-        return c;
-
+// BasicTone.cpp generates this LUT, so the CPU-tested tone equations are the
+// values sampled here. R is mapped luminance; G is the slope used to retain
+// recoverable headroom above 1. Row 0 is global and rows 1..16 are local.
+vec3 applyBasicTone(vec3 c, int row) {
     float y = dot(c, kLuma);
-
-    // Luma masks for each tone region (hand-tuned ramp bounds).
-    float hl = smoothstep(0.28, 0.88, y);
-    float sh = 1.0 - smoothstep(0.12, 0.78, y);
-    float w  = smoothstep(0.52, 0.97, y);
-    float b  = 1.0 - smoothstep(0.03, 0.48, y);
-
-    float delta = highlights * 0.5 * hl
-                + shadows    * 0.5 * sh
-                + whites     * 0.25 * w
-                + blacks     * 0.25 * b;
-
-    float y2 = max(y + delta, 0.0);
-    return c * (y2 / max(y, 1e-5));
+    // Index by the gamma-encoded coordinate (matches tone::kGamma): the LUT's
+    // 256 columns sit where the controls act instead of bunching in highlights.
+    float encoded = pow(clamp(y, 0.0, 1.0), 1.0 / 2.2);
+    float x = (encoded * 255.0 + 0.5) / 256.0;
+    float rowY = (float(row) + 0.5) / 17.0;
+    vec4 sampleValue = texture(uToneLUT, vec2(x, rowY));
+    float y2 = sampleValue.r;
+    if (y > 1.0)
+        y2 += (y - 1.0) * sampleValue.g;
+    if (y <= 1e-5)
+        return vec3(y2); // lifted Blacks gives hue-less black a neutral value
+    return c * (y2 / y);
 }
 
 vec3 linearToSRGB(vec3 c) {
-    return pow(clamp(c, 0.0, 1.0), vec3(1.0 / 2.2));
+    return pow(max(c, vec3(0.0)), vec3(1.0 / 2.2));
 }
 
 vec3 srgbToLinear(vec3 c) {
-    return pow(clamp(c, 0.0, 1.0), vec3(2.2));
+    return pow(max(c, vec3(0.0)), vec3(2.2));
+}
+
+float sampleCurveExtended(float value, int channel) {
+    if (value <= 1.0)
+        return texture(uCurveLUT, vec2(max(value, 0.0), 0.5))[channel];
+
+    vec4 endpoint = texelFetch(uCurveLUT, ivec2(255, 0), 0);
+    vec4 previous = texelFetch(uCurveLUT, ivec2(254, 0), 0);
+    float slope = (endpoint[channel] - previous[channel]) * 255.0;
+    return endpoint[channel] + (value - 1.0) * slope;
 }
 
 // Tone curve: sample RGBA LUT — R=luma, G=red, B=green, A=blue.
@@ -138,11 +138,11 @@ vec3 srgbToLinear(vec3 c) {
 vec3 applyCurve(vec3 c) {
     c = linearToSRGB(c);
     float y  = dot(c, kLuma);
-    float y2 = texture(uCurveLUT, vec2(y, 0.5)).r;
+    float y2 = sampleCurveExtended(y, 0);
     if (y > 1e-5) c *= y2 / y;
-    c.r = texture(uCurveLUT, vec2(clamp(c.r, 0.0, 1.0), 0.5)).g;
-    c.g = texture(uCurveLUT, vec2(clamp(c.g, 0.0, 1.0), 0.5)).b;
-    c.b = texture(uCurveLUT, vec2(clamp(c.b, 0.0, 1.0), 0.5)).a;
+    c.r = sampleCurveExtended(c.r, 1);
+    c.g = sampleCurveExtended(c.g, 2);
+    c.b = sampleCurveExtended(c.b, 3);
     return srgbToLinear(c);
 }
 
@@ -213,7 +213,7 @@ vec3 applyHsl(vec3 c) {
     float wInv = 1.0 / totalW;
     hsv.x = fract(hsv.x + totalHue * wInv / 12.0);                    // ±100 → max ±30°
     hsv.y = clamp(hsv.y * (1.0 + totalSat * wInv * 0.5), 0.0, 1.0);  // ±100 → ±50% sat
-    hsv.z = clamp(hsv.z + totalLum * wInv * 0.5, 0.0, 1.0);          // ±100 → ±0.5 V
+    hsv.z = max(hsv.z + totalLum * wInv * 0.5, 0.0); // preserve recoverable >1 headroom
 
     return hsv2rgb(hsv);
 }
@@ -410,10 +410,7 @@ float maskWeight(int i, vec2 uv, float aspect) {
 vec3 applyLocalAdjustments(vec3 c, vec2 uv, float aspect) {
     for (int i = 0; i < u.numLocalAdj; ++i) {
         float w = maskWeight(i, uv, aspect);
-        c = applyExposure(c, w * u.laTone[i].x);
-        c = applyContrast(c, w * u.laTone[i].y);
-        c = applyToneRegions(c, w * u.laTone[i].z, w * u.laTone[i].w,
-                                w * u.laTone2[i].x, w * u.laTone2[i].y);
+        c = mix(c, applyBasicTone(c, i + 1), w);
         vec3 lg = vec3(u.laTone2[i].z, u.laTone2[i].w, u.laColor[i].w);
         c *= mix(vec3(1.0), lg, w); // local white balance: mask-weighted gain (docs/adr/0025)
         c = applySaturation(c, w * u.laColor[i].x);
@@ -424,13 +421,13 @@ vec3 applyLocalAdjustments(vec3 c, vec2 uv, float aspect) {
 
 // Processing order (the authoritative definition — DESIGN.md mirrors it).
 // Everything up to the final encode operates in linear Rec.2020:
-//   base look → exposure → contrast → tone regions → tone curves
+//   base look → Basic Tone LUT → tone curves
 //   → white balance (gain) → HSL → saturation → vibrance → local adjustments
 //   → vignette → grain → display transform
 // Crop/rotation happen earlier in image.vert. For export, displayEncode is
 // 0: the offscreen readback stays in linear working space and the output
 // transform runs on the CPU (lcms2, MainWindow::exportFile).
-// With curveInput set, the pipeline stops after tone regions and
+// With curveInput set, the pipeline stops after Basic Tone and
 // gamma-encodes — the curve input histogram readback (docs/adr/0004).
 void main() {
     if (any(lessThan(vUV, vec2(0.0))) || any(greaterThan(vUV, vec2(1.0)))) {
@@ -441,9 +438,7 @@ void main() {
     vec3 c = texture(uTexture, vUV).rgb;
     if (u.baseLook != 0)
         c = applyBaseLook(c);
-    c = applyExposure(c, u.exposure);
-    c = applyContrast(c, u.contrast);
-    c = applyToneRegions(c, u.highlights, u.shadows, u.whites, u.blacks);
+    c = applyBasicTone(c, 0);
     if (u.curveInput != 0) {
         fragColor = vec4(linearToSRGB(c), 1.0);
         return;
@@ -471,7 +466,7 @@ void main() {
     }
 
     if (u.displayEncode == 0) {
-        fragColor = vec4(clamp(c, 0.0, 1.0), 1.0);          // export readback
+        fragColor = vec4(c, 1.0); // float export readback; bounded output encoding clips last
         return;
     }
 

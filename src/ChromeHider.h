@@ -5,7 +5,7 @@ class QWidget;
 
 // Hides a fixed set of chrome widgets together and restores each to exactly the
 // visibility it had before. This is the snapshot/restore mechanism behind
-// lights-out mode (docs/adr/0025), kept independent of CollapsiblePane so the
+// lights-out mode (docs/adr/0027), kept independent of CollapsiblePane so the
 // dock/strip state machine remains untouched.
 class ChromeHider {
 public:

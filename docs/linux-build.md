@@ -66,6 +66,21 @@ tag and attached to the matching GitHub Release. The job:
   compile definition → `setApplicationVersion` and the `--version` flag. The CI guard
   fails the release if the tag disagrees.
 
+### Cutting a release
+
+Three declarations must agree, or the release workflow's *Verify tag, CMake, and RPM
+versions* step fails: `project(VERSION …)` in `CMakeLists.txt`, `Version:` in
+`packaging/fedora/arraw.spec`, and the pushed `vX.Y.Z` tag. The AppStream `metainfo.xml`
+also wants a dated `<release>` entry per version (the guard doesn't check it, but
+`appstreamcli validate` does). `just bump X.Y.Z` rewrites all three files in lockstep:
+
+1. `just bump X.Y.Z` — edits `CMakeLists.txt`, `arraw.spec`, and `metainfo.xml`. The
+   Windows installer, RPM, and smoke scripts read the version from CMake, so they need
+   no edit.
+2. Add a `%changelog` entry in `packaging/fedora/arraw.spec` (the prose stays manual).
+3. Commit, then `git tag vX.Y.Z && git push origin vX.Y.Z`.
+4. Dispatch `.github/workflows/release.yml` for the tag.
+
 ---
 
 ## 3. Reproducing the AppImage build locally
@@ -218,7 +233,7 @@ bug.
 | AppImage runs, but `QT_QPA_PLATFORM=offscreen` segfaults / `no Qt platform plugin` | offscreen plugin not bundled | Set `EXTRA_PLATFORM_PLUGINS=libqoffscreen.so` (§6.4); confirm `usr/plugins/platforms/libqoffscreen.so` is inside the AppImage. |
 | AppImage: `error while loading shared libraries: libGLX.so.0` / `libfontconfig.so.1` | Running on a host missing the excludelist baseline (e.g. bare container) | Install the host baseline: `libgl1 libglx0 libopengl0 libegl1 libglvnd0 libfontconfig1 …` (§6.5). Any real desktop already has it. |
 | AppImage built on Fedora won't start on Ubuntu 24.04 | glibc 2.40 floor from the Fedora build host | Build the shippable AppImage on Ubuntu 24.04 (§3 warning). |
-| Release workflow fails at *Verify tag, CMake, and RPM versions* | Selected tag `vX.Y.Z` disagrees with CMake or the RPM spec | Bump both version declarations before creating the tag, or select the correct tag. |
+| Release workflow fails at *Verify tag, CMake, and RPM versions* | Selected tag `vX.Y.Z` disagrees with CMake or the RPM spec | Run `just bump X.Y.Z` (§Cutting a release) before tagging, or select the correct tag. |
 | `appstreamcli validate` fails | Edited `metainfo.xml` | Fix per the validator output; `metadata_license`/`project_license` must be SPDX ids. |
 
 ---
@@ -250,7 +265,7 @@ just rpm-smoke
 
 That command uses Podman by default (Docker is also accepted), installs the RPM in a
 clean `fedora:44` container, runs `arraw --version` offscreen, and checks its desktop
-MIME registration. See [ADR 0025](adr/0025-self-hosted-fedora-rpm.md) for the design
+MIME registration. See [ADR 0029](adr/0029-self-hosted-fedora-rpm.md) for the design
 and [the security risk register](security.md) for unsigned-package and release risks.
 
 ## 9. Quick reference

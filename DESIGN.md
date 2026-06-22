@@ -244,44 +244,46 @@ that file is the source of truth; keep this list in sync with it.
  6. Base look        fixed S-curve + slight sat boost (u.baseLook; on for the
                      final image and export, off for interim embedded-preview
                      display and the before/after view)
- 7. Exposure         pow(2, u.exposure) multiply
- 8. Contrast         linear scale around 0.5
- 9. Tone regions     highlights, shadows, whites, blacks — luma-masked
-                     (smoothstep ramps), applied as one combined luma delta
-10. Tone curves      256×1 LUT texture: luma curve first (scales RGB
+ 7. Basic Tone       256×17 CPU-generated LUT atlas (docs/adr/0031): gamma-domain
+                     logistic Exposure, log-odds Contrast, endpoint-anchored
+                     Shadows/Highlights, and clipping-point Blacks/Whites.
+                     Row 0 is global; rows 1–16 serve Local Adjustments.
+ 8. Tone curves      256×1 LUT texture: luma curve first (scales RGB
                      proportionally, preserves hue), then per-channel R/G/B.
-                     Applied on gamma-encoded values (docs/adr/0003), then
-                     decoded back to linear
-11. White balance    per-channel multiplicative gain in linear Rec.2020,
+                     Applied on gamma-encoded values (docs/adr/0003), decoded
+                     back to linear, and extrapolated above 1 by final slope.
+ 9. White balance    per-channel multiplicative gain in linear Rec.2020,
                      blackbody-derived from temperature (Kelvin) + tint and
                      computed CPU-side, so black stays black (docs/adr/0025)
-12. HSL color mix    8 hue ranges, smoothstep-weighted hue/sat/lum shifts
-13. Saturation       luma-preserving saturation scale
-14. Vibrance         saturation boost weighted toward desaturated pixels
-15. Local adjustments per-mask weighted tone/colour deltas (docs/adr/0010):
-                     each Local Adjustment's deltas reuse the same parameterised
-                     functions (steps 7–14, minus curve/HSL), scaled by an
-                     analytic mask weight. Single-pass, in array order. Skipped
+10. HSL color mix    8 hue ranges, smoothstep-weighted hue/sat/lum shifts
+11. Saturation       luma-preserving saturation scale
+12. Vibrance         saturation boost weighted toward desaturated pixels
+13. Local adjustments per-mask tone/colour edits (docs/adr/0010, 0031): each
+                     tone row maps the incoming luminance and blends by analytic
+                     Mask weight; remaining colour deltas use the same weight.
+                     Single-pass, in array order. Skipped
                      by the curve-input and WB-picker readbacks (which return
                      earlier); included on screen, in export, and the panel
                      histogram
-16. Vignette         centred elliptical falloff in crop-frame coordinates,
+14. Vignette         centred elliptical falloff in crop-frame coordinates,
                      after local colour work. Amount maps -100..100 to -2..+2
                      EV at maximum falloff; Midpoint and Feather shape the
                      transition. Applied as a hue-preserving linear multiplier
-17. Grain            final develop adjustment (docs/adr/0026). Working values
+15. Grain            final develop adjustment (docs/adr/0026). Working values
                      are temporarily passed through the sRGB transfer curve,
                      monochromatic zero-mean grain is added, then values are
                      decoded back to linear working space. The continuous noise
                      field is keyed by crop-frame position + a per-image seed,
                      so preview and export sample the same pattern
-18. Encode           u.displayEncode on (screen):
+16. Encode           u.displayEncode on (screen):
                        u.useLut off — display transform: Rec.2020→sRGB matrix
                        + true piecewise sRGB curve (sRGB monitor assumed)
                        u.useLut on — 33³ LUT texture baked by lcms2
                        (soft-proofing and/or monitor ICC profile; LUT alpha
                        carries the in-gamut flag for the gamut warning)
-                     u.displayEncode off (export): clamped linear working space
+                     u.displayEncode off (export): unbounded float linear
+                       working space; bounded output encoding clips only after
+                       the CPU output transform (docs/adr/0031)
                      Clipping overlay (u.clipWarn, on-screen only — forced off
                        for export and histogram readbacks): judged sRGB-relative
                        from the pre-clamp value, painted last so it wins over the
@@ -304,7 +306,7 @@ Histograms are exact: `ImageViewport::renderHistograms()` renders the preview
 through the real shader into a small offscreen target (debounced on parameter
 changes) and reads back two samples — the full pipeline (display transform,
 `u.useLut` off, so the histogram is output-sRGB regardless of soft-proofing)
-for the panel histogram, and a "stop after tone regions, gamma-encode" pass
+for the panel histogram, and a "stop after Basic Tone, gamma-encode" pass
 (`u.curveInput`) for the histogram behind the tone curve (docs/adr/0004).
 
 ---

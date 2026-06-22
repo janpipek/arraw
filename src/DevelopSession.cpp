@@ -18,8 +18,7 @@ std::vector<Spot> scaleSpots(const std::vector<Spot>& spots, double sx, double s
 } // namespace
 
 DevelopSession::DevelopSession(QObject* parent)
-    : QObject(parent) {
-}
+    : QObject(parent) {}
 
 void DevelopSession::beginLoading(QString path) {
     currentPath = std::move(path);

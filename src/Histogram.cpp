@@ -1,4 +1,5 @@
 #include "Histogram.h"
+#include "ThemeColors.h"
 #include <algorithm>
 #include <cmath>
 #include <QPainter>
@@ -10,8 +11,7 @@ static int srgbBin(float v) {
         std::array<uint8_t, 4096> t{};
         for (int i = 0; i < 4096; ++i) {
             float u = float(i) / 4095.0f;
-            float enc = (u <= 0.0031308f) ? u * 12.92f
-                                          : 1.055f * std::pow(u, 1.0f / 2.4f) - 0.055f;
+            float enc = (u <= 0.0031308f) ? u * 12.92f : 1.055f * std::pow(u, 1.0f / 2.4f) - 0.055f;
             t[i] = uint8_t(int(enc * 255.0f + 0.5f));
         }
         return t;
@@ -40,9 +40,24 @@ void Histogram::setSample(const QImage& img) {
                 const float rv = line[x * 4 + 0];
                 const float gv = line[x * 4 + 1];
                 const float bv = line[x * 4 + 2];
-                if (rv < 0.0f) ++rUnder; else if (rv > 1.0f) ++rOver; else ++r[srgbBin(rv)];
-                if (gv < 0.0f) ++gUnder; else if (gv > 1.0f) ++gOver; else ++g[srgbBin(gv)];
-                if (bv < 0.0f) ++bUnder; else if (bv > 1.0f) ++bOver; else ++b[srgbBin(bv)];
+                if (rv < 0.0f)
+                    ++rUnder;
+                else if (rv > 1.0f)
+                    ++rOver;
+                else
+                    ++r[srgbBin(rv)];
+                if (gv < 0.0f)
+                    ++gUnder;
+                else if (gv > 1.0f)
+                    ++gOver;
+                else
+                    ++g[srgbBin(gv)];
+                if (bv < 0.0f)
+                    ++bUnder;
+                else if (bv > 1.0f)
+                    ++bOver;
+                else
+                    ++b[srgbBin(bv)];
             }
         }
     } else {
@@ -67,7 +82,7 @@ void Histogram::setSample(const QImage& img) {
 
 void Histogram::paintEvent(QPaintEvent*) {
     QPainter p(this);
-    p.fillRect(rect(), QColor(30, 30, 30));
+    p.fillRect(rect(), ThemeColors::kBase); // recessed panel background (ADR 0030)
 
     // Log-scale the bar heights so sparse bins stay visible next to the peak.
     const float yScale = float(height()) / std::log1p(float(peak));

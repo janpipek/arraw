@@ -28,21 +28,33 @@ public:
     explicit DevelopSession(QObject* parent = nullptr);
 
     LoadState loadState() const { return state; }
+
     SidecarState sidecarState() const { return sidecar; }
+
     const QString& path() const { return currentPath; }
+
     bool hasImage() const { return state == LoadState::Loaded && previewBuffer.valid(); }
+
     const ImageBuffer& preview() const { return previewBuffer; }
+
     const ImageBuffer& fullRes() const { return fullResBuffer; }
+
     const ImageBuffer& previewForDisplay() const;
     const ImageBuffer& fullResForExport() const;
+
     const ImageMetadata& metadata() const { return imageMetadata; }
+
     const UserMetadata& userMetadata() const { return metadata_; }
+
     const QRectF& defaultCrop() const { return imageDefaultCrop; }
     // Resolved lens-profile name (empty when none matched), for the UI label.
     const QString& lensProfileName() const { return lensModel.lensName; }
     const GlobalAdjustment& params() const { return adjustments; }
+
     bool baseLook() const { return useBaseLook; }
+
     bool developDirty() const { return isDevelopDirty; }
+
     bool metadataDirty() const { return isMetadataDirty; }
 
     void beginLoading(QString path);

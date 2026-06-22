@@ -4,7 +4,7 @@
 
 **Goal:** Add two composable, session-transient view modes to `MainWindow` — OS fullscreen (`F11`) and lights-out hide-all-chrome (`F12`) — with `Escape` as a restore-all panic key.
 
-**Architecture:** The snapshot/restore mechanism described in ADR 0025 as `setChromeVisible(bool)` is extracted into a small, widget-agnostic `ChromeHider` class so it can be unit-tested with plain `QWidget`s (MainWindow itself is not unit-testable — it builds an RHI-backed `ImageViewport`, which is why only the `MainWindowStatus` helper is tested today). `MainWindow` owns one `ChromeHider` wired to its six chrome widgets, plus thin fullscreen logic that Qt provides directly. Both modes are wired to checkable View-menu actions whose `QAction` shortcuts remain live even when the menu bar is hidden.
+**Architecture:** The snapshot/restore mechanism described in ADR 0027 as `setChromeVisible(bool)` is extracted into a small, widget-agnostic `ChromeHider` class so it can be unit-tested with plain `QWidget`s (MainWindow itself is not unit-testable — it builds an RHI-backed `ImageViewport`, which is why only the `MainWindowStatus` helper is tested today). `MainWindow` owns one `ChromeHider` wired to its six chrome widgets, plus thin fullscreen logic that Qt provides directly. Both modes are wired to checkable View-menu actions whose `QAction` shortcuts remain live even when the menu bar is hidden.
 
 **Tech Stack:** C++20, Qt 6 Widgets, Catch2 v3, CMake + Ninja.
 
@@ -15,7 +15,7 @@
 - **`const` by default; `auto` where the type is obvious.** (from AGENTS.md)
 - **No new compiler warnings** in touched code (`/W4` MSVC, `-Wall -Wextra -Wpedantic` elsewhere). (from AGENTS.md)
 - **Catch2 v3 tests** live in `tests/`, link `arraw_core`, and are registered in `tests/CMakeLists.txt`'s `add_executable(arraw_tests ...)` list. Each test runs as its own ctest process with `QT_QPA_PLATFORM=offscreen`.
-- **Design source of truth:** `docs/adr/0025-lights-out-and-fullscreen-modes.md`. Modes must **not** persist across restarts; `closeEvent` must restore chrome before `saveState()`.
+- **Design source of truth:** `docs/adr/0027-lights-out-and-fullscreen-modes.md`. Modes must **not** persist across restarts; `closeEvent` must restore chrome before `saveState()`.
 
 ### Build & test commands (Windows, per AGENTS.md + project memory)
 
@@ -186,7 +186,7 @@ class QWidget;
 
 // Hides a fixed set of chrome widgets together and restores each to exactly the
 // visibility it had before — the snapshot/restore mechanism behind the lights-out
-// mode (docs/adr/0025). Deliberately widget-agnostic so it is unit-testable with
+// mode (docs/adr/0027). Deliberately widget-agnostic so it is unit-testable with
 // plain QWidgets, and so it only flips raw visibility: it never drives
 // CollapsiblePane's dock/strip state machine, preserving the ADR 0012 invariant.
 class ChromeHider {
@@ -271,7 +271,7 @@ git add src/ChromeHider.h src/ChromeHider.cpp tests/test_ChromeHider.cpp CMakeLi
 git commit -m @'
 Add ChromeHider: snapshot/restore of chrome visibility
 
-The testable mechanism behind lights-out mode (ADR 0025). Hides a set of
+The testable mechanism behind lights-out mode (ADR 0027). Hides a set of
 widgets together and restores each to its exact prior visibility, never
 touching CollapsiblePane's state machine.
 
@@ -304,7 +304,7 @@ In `src/MainWindow.h`, add the include near the top (after line 11, `#include <o
 In the private members section, after line 154 (`std::unique_ptr<CollapsiblePane> adjustmentsPane;`), add:
 
 ```cpp
-    // Focus modes (docs/adr/0025): fullscreen and lights-out hide-chrome.
+    // Focus modes (docs/adr/0027): fullscreen and lights-out hide-chrome.
     QToolBar* toolBar_ = nullptr;          // main "Tools" toolbar
     QToolBar* adjustmentsStrip_ = nullptr; // ADR 0012 reveal strip
     QAction* fullScreenAction = nullptr;   // View -> Full Screen (F11)
@@ -316,7 +316,7 @@ In the private members section, after line 154 (`std::unique_ptr<CollapsiblePane
 In the private methods section, after line 143 (`void toggleClipping();`), add:
 
 ```cpp
-    // Focus modes (docs/adr/0025).
+    // Focus modes (docs/adr/0027).
     void toggleFullScreen();   // F11: OS fullscreen <-> prior windowed state
     void toggleChrome();       // F12: hide all chrome <-> restore
     void restoreFocusModes();  // Escape / closeEvent: exit both modes
@@ -353,7 +353,7 @@ to:
 Then, in the constructor (`MainWindow::MainWindow`), after the four `setup*()` calls (after line 195, `setupToolbar();`), add — at this point `menuBar()`, `statusBar()`, both docks, and both toolbars all exist:
 
 ```cpp
-    // ADR 0025: the full set of chrome that lights-out (F12) hides together.
+    // ADR 0027: the full set of chrome that lights-out (F12) hides together.
     chromeHider.emplace(std::vector<QWidget*>{
         menuBar(), toolBar_, adjustmentsStrip_, statusBar(),
         filmStripDock, adjustmentsDock});
@@ -424,7 +424,7 @@ In `src/MainWindow.cpp`, `keyPressEvent()` (lines 400-413), add an Escape branch
 
 ```cpp
 void MainWindow::keyPressEvent(QKeyEvent* e) {
-    // ADR 0025: Escape is a "give me my UI back" panic key — only consumed
+    // ADR 0027: Escape is a "give me my UI back" panic key — only consumed
     // while a focus mode is active, so other Escape uses are unaffected.
     if (e->key() == Qt::Key_Escape
         && ((chromeHider && chromeHider->hidden()) || isFullScreen())) {
@@ -452,7 +452,7 @@ void MainWindow::keyPressEvent(QKeyEvent* e) {
 In `src/MainWindow.cpp`, `closeEvent()` (lines 384-398), add a restore call before the `saveState()` block so the saved layout reflects the real arrangement, not the focus mode. After the `confirmLeavingCurrentImage()` guard (after line 388) and before `QSettings s;` (line 390), insert:
 
 ```cpp
-    // ADR 0025: never persist a transient focus mode — restore real chrome and
+    // ADR 0027: never persist a transient focus mode — restore real chrome and
     // window state before saveGeometry()/saveState() snapshot them.
     restoreFocusModes();
 ```
@@ -483,7 +483,7 @@ Add lights-out (F12) and fullscreen (F11) focus modes
 
 Wire ChromeHider into MainWindow with two checkable View actions. Escape
 restores both at once; closeEvent restores chrome before saveState so the
-transient modes never persist. Implements ADR 0025.
+transient modes never persist. Implements ADR 0027.
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
 '@
@@ -493,7 +493,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
 
 ## Self-Review
 
-**Spec coverage (against ADR 0025):**
+**Spec coverage (against ADR 0027):**
 - Fullscreen F11 + restore maximized/normal → Task 2 Steps 4-5 (`toggleFullScreen`, `wasMaximized_`). ✓
 - Lights-out F12 hides all six chrome elements → Task 2 Step 3 (ChromeHider widget set) + Step 4-5. ✓
 - Exact-visibility restore incl. pre-collapsed dock, no CollapsiblePane perturbation → Task 1 (raw visibility snapshot) + tests. ✓

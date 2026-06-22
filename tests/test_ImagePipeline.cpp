@@ -37,23 +37,29 @@ TEST_CASE("normalizeExposure clamps the gain to [0.5, 4.0]", "[pipeline]") {
 
 // ── developedThumbSize ────────────────────────────────────────────────────────
 
-TEST_CASE("developedThumbSize scales an uncropped image to the max edge, keeping aspect",
-          "[pipeline]") {
+TEST_CASE(
+    "developedThumbSize scales an uncropped image to the max edge, keeping aspect", "[pipeline]") {
     const QSize s = developedThumbSize(4000, 3000, QRectF(0.0, 0.0, 1.0, 1.0), 512);
     CHECK(s.width() == 512);
     CHECK(s.height() == 384); // 3000/4000 * 512
 }
 
-TEST_CASE("developedThumbSize reflects the cropped aspect, not the source aspect",
-          "[pipeline]") {
+TEST_CASE("developedThumbSize reflects the cropped aspect, not the source aspect", "[pipeline]") {
     // A square source cropped to a tall half → 500×1000 → long edge 1000 > 512.
     const QSize s = developedThumbSize(1000, 1000, QRectF(0.0, 0.0, 0.5, 1.0), 512);
     CHECK(s.width() == 256);  // 500 * (512/1000)
     CHECK(s.height() == 512); // 1000 * (512/1000)
 }
 
-TEST_CASE("developedThumbSize never upscales a source smaller than the max edge",
-          "[pipeline]") {
+TEST_CASE("developedThumbSize swaps to the oriented aspect on a 90° turn", "[pipeline]") {
+    // 4000×3000 landscape native, turned 90° → the thumbnail must be portrait.
+    const QSize s = developedThumbSize(
+        4000, 3000, QRectF(0.0, 0.0, 1.0, 1.0), 512, orient::Orientation{1, false});
+    CHECK(s.width() == 384); // 3000 * (512/4000)
+    CHECK(s.height() == 512);
+}
+
+TEST_CASE("developedThumbSize never upscales a source smaller than the max edge", "[pipeline]") {
     const QSize s = developedThumbSize(300, 200, QRectF(0.0, 0.0, 1.0, 1.0), 512);
     CHECK(s.width() == 300);
     CHECK(s.height() == 200);

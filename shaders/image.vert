@@ -41,8 +41,8 @@ layout(std140, binding = 0) uniform buf {
     int   gamutWarn;
     int   baseLook;
     int   displayEncode; // 1: encode for the (assumed sRGB) display;
-                         // 0: output clamped linear working space (export readback)
-    int   curveInput;    // stop after tone regions + gamma-encode (histograms)
+                         // 0: unbounded linear working-space export readback
+    int   curveInput;    // stop after Basic Tone + gamma-encode (histograms)
     int   hslActive;
     int   wbInput;       // stop before white balance, output linear (WB picker)
     int   clipWarn;      // clipping overlay bits: 1 = highlights, 2 = shadows (docs/adr/0009)
@@ -54,7 +54,9 @@ layout(std140, binding = 0) uniform buf {
     vec4  laColor[16];
     vec4  laGeom2[16];
     int   numLocalAdj;
-    int   histoRaw;      // unused here; present so the block matches image.frag and Ubuf
+    int   histoRaw;           // unused here; present so the block matches image.frag and Ubuf
+    int   orientQuarterTurns; // coarse Orientation (docs/adr/0028)
+    int   orientMirrored;     // 1 = horizontal mirror
 } u;
 
 void main() {
@@ -73,4 +75,13 @@ void main() {
     vec2 r = vec2(c * d.x - s * d.y, s * d.x + c * d.y);
     r.x /= u.aspect;
     vUV = r + center;
+
+    // Coarse Orientation maps the oriented display-frame UV to the native buffer
+    // (docs/adr/0028). Bit-exact mirror of orient::orientedToBuffer: undo the
+    // mirror first, then one quarter-turn (u,v)->(v,1-u) per step. Keeps GPU and
+    // the CPU rotateTextureUv/Geometry overlays in lock-step.
+    if (u.orientMirrored != 0)
+        vUV.x = 1.0 - vUV.x;
+    for (int i = 0; i < u.orientQuarterTurns; ++i)
+        vUV = vec2(vUV.y, 1.0 - vUV.x);
 }

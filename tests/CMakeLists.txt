@@ -12,6 +12,7 @@ if(NOT Catch2_FOUND)
 endif()
 
 add_executable(arraw_tests
+    test_BasicTone.cpp
     test_ImagePipeline.cpp
     test_ViewportGeometry.cpp
     test_XmpSidecar.cpp
@@ -39,6 +40,7 @@ add_executable(arraw_tests
     test_DevelopSession.cpp
     test_DevelopGroup.cpp
     test_DevelopPreset.cpp
+    test_Orientation.cpp
     test_GroupChecklistDialog.cpp
     test_PresetStore.cpp
     test_Spot.cpp

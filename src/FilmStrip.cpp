@@ -93,10 +93,10 @@ void paintMarks(
     painter->drawText(bar, Qt::AlignCenter, glyphs);
 }
 
-// A small chip in the top-right corner naming the companion file(s) of a
-// RAW+JPEG group (e.g. "JPG"), so a one-cell shot still advertises its
-// hidden companion. Drawn only when the cell holds the camera companion.
-void paintCompanionBadge(QPainter* painter, const QRect& inner, const QString& text) {
+// A small chip in the top-right corner naming the formats present in the shot
+// (e.g. "ARW", "JPEG", or "ARW+JPEG"). See formatLabelText. Drawn on every cell,
+// but suppressed by the caller when the cell is too short to read text.
+void paintFormatLabel(QPainter* painter, const QRect& inner, const QString& text) {
     if (text.isEmpty())
         return;
 
@@ -163,10 +163,9 @@ public:
             index.data(FilmStripModel::RatingRole).toInt(),
             ColourLabel(index.data(FilmStripModel::LabelRole).toInt()));
 
-        paintCompanionBadge(
-            painter,
-            inner,
-            companionBadgeText(index.data(FilmStripModel::CompanionsRole).toStringList()));
+        if (thumbHeight >= kMarksMinHeight) // text chip needs a readable cell, like the stars
+            paintFormatLabel(
+                painter, inner, index.data(FilmStripModel::FormatLabelRole).toString());
 
         if (active) {
             // Active (editing) item: full-brightness border

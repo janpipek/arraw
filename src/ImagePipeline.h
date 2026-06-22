@@ -2,6 +2,7 @@
 #include "ImageMetadata.h"
 #include "LensCorrection.h"
 #include "LocalAdjustment.h"
+#include "Orientation.h"
 #include "Spot.h"
 #include <array>
 #include <cmath>
@@ -67,7 +68,8 @@ struct GlobalAdjustment : SharedAdjustment {
     bool lensCorrectCA = false;
 
     // Geometry
-    float rotation = 0.0f;                  // degrees, -45 .. +45
+    orient::Orientation orientation;        // coarse 90°/flip, seeded from EXIF (docs/adr/0028)
+    float rotation = 0.0f;                  // degrees, -45 .. +45 (fine straighten)
     QRectF cropRect = {0.0, 0.0, 1.0, 1.0}; // normalised UV, full image by default
     bool cropConstrained = false;           // crop is locked to its aspect ratio
 
@@ -109,6 +111,10 @@ struct LoadResult {
     // Lens profile resolved at decode (docs/adr/0027). Empty has* flags = no
     // profile matched; correction is applied (toggle-gated) downstream.
     LensCorrectionModel lensModel{};
+    // Coarse Orientation read from the file's EXIF/camera flag, used to seed the
+    // develop edit when the sidecar has none (docs/adr/0028). The decoded buffer
+    // stays in native orientation — this only records what the camera intended.
+    orient::Orientation seededOrientation = {};
 };
 
 // Box-filter 2× downsample (half W, half H). Safe to call off the main thread.
@@ -136,4 +142,8 @@ void whiteBalanceFromNeutral(float r, float g, float b, float& kelvin, float& ti
 
 // Pixel size of a developed thumbnail: the source cropped to crop, scaled down so
 // its longer edge is at most maxEdge (never upscaled), aspect preserved.
-QSize developedThumbSize(int srcW, int srcH, const QRectF& crop, int maxEdge);
+// Output pixel size of a developed thumbnail. `srcW`/`srcH` are the *native*
+// buffer dims; an odd quarter-turn Orientation swaps them so the thumbnail keeps
+// the oriented aspect (docs/adr/0028) — otherwise turned shots come out squished.
+QSize developedThumbSize(
+    int srcW, int srcH, const QRectF& crop, int maxEdge, orient::Orientation orientation = {});
