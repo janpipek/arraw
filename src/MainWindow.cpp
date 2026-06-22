@@ -282,9 +282,10 @@ MainWindow::MainWindow(QWidget* parent)
         next.grainSeed = params.grainSeed; // per-image identity still changes within this image
         session->setParams(next);
         // Lens correction edits the decoded buffer (like spots); re-upload the
-        // corrected texture when a toggle flips — uniform refresh alone won't show it.
+        // corrected preview when a toggle flips (full-res is recomputed lazily on
+        // export/zoom). Uniform refresh alone won't show it.
         if (lensTogglesDiffer(prev, next))
-            rebuildSpottedBuffers(true);
+            rebuildSpottedBuffers(false);
         pushParamsToViewport();
     });
 

@@ -60,6 +60,7 @@ const ImageBuffer& DevelopSession::previewForDisplay() const {
 }
 
 const ImageBuffer& DevelopSession::fullResForExport() const {
+    ensureFullResDerived();
     if (spottedFullResBuffer.valid())
         return spottedFullResBuffer;
     if (correctedFullResBuffer.valid())
@@ -68,6 +69,8 @@ const ImageBuffer& DevelopSession::fullResForExport() const {
 }
 
 void DevelopSession::setParams(const GlobalAdjustment& params) {
+    if (params == adjustments)
+        return; // no-op: avoids re-warping buffers when the undo command replays the same state
     adjustments = params;
     rebuildDerivedBuffers();
     isDevelopDirty = adjustments != savedAdjustments;
@@ -80,7 +83,7 @@ void DevelopSession::setLocalAdjustments(std::vector<LocalAdjustment> localAdjus
 
 void DevelopSession::setSpots(std::vector<Spot> spots) {
     adjustments.spots = std::move(spots);
-    rebuildSpotBuffers();
+    rebuildDerivedBuffers();
     isDevelopDirty = adjustments != savedAdjustments;
 }
 
@@ -115,52 +118,53 @@ void DevelopSession::markMetadataSaveFailed() {
     sidecar = SidecarState::WriteError;
 }
 
+namespace {
+LensCorrectionToggles togglesOf(const GlobalAdjustment& a) {
+    return {.distortion = a.lensCorrectDistortion,
+            .vignetting = a.lensCorrectVignetting,
+            .ca = a.lensCorrectCA};
+}
+bool correctionActive(const LensCorrectionModel& m, const LensCorrectionToggles& t) {
+    return (t.distortion && m.hasDistortion) || (t.vignetting && m.hasVignetting)
+           || (t.ca && m.hasTCA);
+}
+} // namespace
+
 void DevelopSession::rebuildDerivedBuffers() {
-    rebuildCorrectionBuffers();
-    rebuildSpotBuffers();
+    rebuildPreviewDerived();
+    fullResDerivedDirty = true; // full-res is recomputed lazily on next access
 }
 
-void DevelopSession::rebuildCorrectionBuffers() {
-    const LensCorrectionToggles toggles{
-        .distortion = adjustments.lensCorrectDistortion,
-        .vignetting = adjustments.lensCorrectVignetting,
-        .ca = adjustments.lensCorrectCA};
-    const bool active = (toggles.distortion && lensModel.hasDistortion)
-                        || (toggles.vignetting && lensModel.hasVignetting)
-                        || (toggles.ca && lensModel.hasTCA);
-    if (!active) {
-        correctedPreviewBuffer = {};
-        correctedFullResBuffer = {};
-        return;
-    }
-    correctedPreviewBuffer =
-        previewBuffer.valid() ? applyLensCorrection(previewBuffer, lensModel, toggles) : ImageBuffer{};
-    correctedFullResBuffer =
-        fullResBuffer.valid() ? applyLensCorrection(fullResBuffer, lensModel, toggles) : ImageBuffer{};
-}
+void DevelopSession::rebuildPreviewDerived() {
+    const LensCorrectionToggles toggles = togglesOf(adjustments);
+    correctedPreviewBuffer = (correctionActive(lensModel, toggles) && previewBuffer.valid())
+        ? applyLensCorrection(previewBuffer, lensModel, toggles)
+        : ImageBuffer{};
 
-void DevelopSession::rebuildSpotBuffers() {
     // Spots clone on the lens-corrected base when present, else on the clean buffer.
-    const ImageBuffer& basePreview =
+    const ImageBuffer& base =
         correctedPreviewBuffer.valid() ? correctedPreviewBuffer : previewBuffer;
-    const ImageBuffer& baseFull =
-        correctedFullResBuffer.valid() ? correctedFullResBuffer : fullResBuffer;
-
-    if (adjustments.spots.empty()) {
-        spottedPreviewBuffer = {};
-        spottedFullResBuffer = {};
-        return;
-    }
-    if (basePreview.valid()) {
-        const double sx = (baseFull.valid() && baseFull.width > 0)
-            ? double(basePreview.width) / baseFull.width
-            : 1.0;
-        const double sy = (baseFull.valid() && baseFull.height > 0)
-            ? double(basePreview.height) / baseFull.height
-            : 1.0;
-        spottedPreviewBuffer = applySpots(basePreview, scaleSpots(adjustments.spots, sx, sy));
+    if (!adjustments.spots.empty() && base.valid() && fullResBuffer.width > 0) {
+        const double sx = double(base.width) / fullResBuffer.width;
+        const double sy = double(base.height) / fullResBuffer.height;
+        spottedPreviewBuffer = applySpots(base, scaleSpots(adjustments.spots, sx, sy));
     } else {
         spottedPreviewBuffer = {};
     }
-    spottedFullResBuffer = baseFull.valid() ? applySpots(baseFull, adjustments.spots) : ImageBuffer{};
+}
+
+void DevelopSession::ensureFullResDerived() const {
+    if (!fullResDerivedDirty)
+        return;
+    fullResDerivedDirty = false;
+
+    const LensCorrectionToggles toggles = togglesOf(adjustments);
+    correctedFullResBuffer = (correctionActive(lensModel, toggles) && fullResBuffer.valid())
+        ? applyLensCorrection(fullResBuffer, lensModel, toggles)
+        : ImageBuffer{};
+    const ImageBuffer& base =
+        correctedFullResBuffer.valid() ? correctedFullResBuffer : fullResBuffer;
+    spottedFullResBuffer =
+        (!adjustments.spots.empty() && base.valid()) ? applySpots(base, adjustments.spots)
+                                                     : ImageBuffer{};
 }

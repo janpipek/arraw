@@ -69,12 +69,16 @@ private:
     ImageBuffer previewBuffer;
     ImageBuffer fullResBuffer;
     // Lens-corrected derivatives of the clean buffers (docs/adr/0027); empty when no
-    // profile or all toggles off, in which case the clean buffer is the base.
+    // profile or all toggles off, in which case the clean buffer is the base. The
+    // preview derivatives are eager (cheap, drives the live view); the full-res ones
+    // are computed lazily on first access (export / deep zoom) because warping a
+    // 25 MP buffer on every toggle would freeze the UI.
     LensCorrectionModel lensModel;
     ImageBuffer correctedPreviewBuffer;
-    ImageBuffer correctedFullResBuffer;
     ImageBuffer spottedPreviewBuffer;
-    ImageBuffer spottedFullResBuffer;
+    mutable ImageBuffer correctedFullResBuffer;
+    mutable ImageBuffer spottedFullResBuffer;
+    mutable bool fullResDerivedDirty = true;
     ImageMetadata imageMetadata;
     UserMetadata metadata_;
     UserMetadata savedMetadata;
@@ -85,9 +89,9 @@ private:
     bool isMetadataDirty = false;
     bool useBaseLook = false;
 
-    // Rebuild the corrected-then-spotted derivatives from the clean buffers. Spots
-    // build on the lens-corrected base, so this rebuilds both layers in order.
+    // Rebuild the eager preview derivatives (lens-corrected then spotted) and mark the
+    // lazy full-res derivatives dirty. Spots build on the lens-corrected base.
     void rebuildDerivedBuffers();
-    void rebuildCorrectionBuffers();
-    void rebuildSpotBuffers();
+    void rebuildPreviewDerived();
+    void ensureFullResDerived() const;
 };
