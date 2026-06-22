@@ -89,7 +89,9 @@ private:
     void setupDocks();
     void setupStatusBar();
     void setupToolbar();
-    void syncToolActions();        // reflect viewport->activeTool() in the buttons
+    void syncToolActions();       // reflect viewport->activeTool() in the buttons
+    void syncAdjustmentTabTool(); // reflect the selected Masks/Spots tab in the viewport
+    void selectAdjustmentTab(int index);
     void setToolsEnabled(bool on); // image-dependent toolbar items
 
     // Crop aspect-ratio menu (enabled only while the crop tool is active). The
@@ -170,10 +172,12 @@ private:
     QAction* cropAction;
     QAction* straightenAction;
     QAction* wbAction;
-    QAction* maskAction;             // LocalMask tool toggle
-    QAction* spotAction;             // SpotTool toggle
-    QTabWidget* rightTabs = nullptr; // Adjustments / Masks / EXIF
+    QAction* masksTabShortcut;
+    QAction* spotsTabShortcut;
+    QTabWidget* rightTabs = nullptr; // Adjustments / Masks / Spots / EXIF
     int masksTabIndex = -1;
+    int spotsTabIndex = -1;
+    bool toolsEnabled = false;
 
     // Crop aspect-ratio lock UI + its transient state (mirrors the viewport's).
     QToolButton* aspectButton = nullptr;

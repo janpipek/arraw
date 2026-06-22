@@ -161,6 +161,7 @@ set(CORE_SOURCES
     src/ViewportGeometry.cpp
     src/RendererCore.cpp
     src/AdjustmentPanel.cpp
+    src/AdjustmentTabTool.cpp
     src/LocalAdjustmentPanel.cpp
     src/AdjustmentSpinBox.cpp
     src/CollapsiblePane.cpp

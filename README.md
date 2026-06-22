@@ -57,7 +57,8 @@ CR2, CR3, NEF, ARW, DNG, RAF, ORF, RW2, PEF, SRW (via libraw)
 | `Ctrl+Z` / `Ctrl+Shift+Z` | Undo / Redo |
 | `Ctrl+0` | Reset zoom to fit |
 | `←` / `→` | Previous / next file in folder |
-| `C` / `M` / `Q` | Crop / Masks / Spots tool |
+| `C` | Toggle the Crop tool |
+| `M` / `Q` | Select the Masks / Spots adjustment tab |
 | `S` | Toggle soft-proofing |
 | `J` | Toggle clipping overlay |
 | `\` (hold) | Before/after toggle |
