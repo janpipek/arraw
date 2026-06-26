@@ -207,6 +207,25 @@ Stored as one arraw-native JSON file per preset in the app data directory — no
 a develop sidecar, not Lightroom-compatible.
 _Avoid_: profile (that is a colour or camera profile), template, style
 
+**History**:
+The session-only, linear list of every develop edit step taken since the open
+photo was loaded, newest at the bottom. Clicking a step rolls the develop state
+back (or forward) to that point. It is the visible face of the develop undo
+stack — not persisted to the sidecar, reset on load, with the develop *state*
+(not its step list) restored from the sidecar.
+_Avoid_: undo log, timeline, audit trail
+
+**Snapshot**:
+A named, persisted capture of the open photo's complete develop state, taken at
+a moment the photographer chooses, used to compare alternative development paths
+(A/B) by switching between them. Restoring a snapshot replaces the current
+develop state as a single [[History]] step (undoable); creating, renaming, and
+deleting snapshots edit the persisted list directly and are not History steps.
+Stored per-image in the `arraw:` namespace of the develop sidecar. Unlike a
+[[Develop Preset]], a snapshot is whole-state (it always carries every field,
+including [[Local Adjustment]] masks and spots) and belongs to one photo.
+_Avoid_: version, checkpoint, preset, bookmark
+
 **Straighten**:
 Leveling the image by drawing a reference line along something that should be
 horizontal or vertical; the line's angle is written to Rotation. The gesture,
