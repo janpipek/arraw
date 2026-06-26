@@ -1,4 +1,5 @@
 #include "RawProcessor.h"
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
 
@@ -20,12 +21,19 @@ TEST_CASE("DNG fixture decodes to full-res plus half-res preview", "[raw][fixtur
     REQUIRE(r.preview.valid());
     CHECK(r.preview.width == r.fullRes.width / 2);
     CHECK(r.preview.height == r.fullRes.height / 2);
+    REQUIRE(r.sensorClipFullRes.valid());
+    CHECK(r.sensorClipFullRes.width == r.fullRes.width);
+    CHECK(r.sensorClipFullRes.height == r.fullRes.height);
+    REQUIRE(r.sensorClipPreview.valid());
+    CHECK(r.sensorClipPreview.width == r.preview.width);
+    CHECK(r.sensorClipPreview.height == r.preview.height);
     CHECK(r.defaultCrop == QRectF(0.0, 0.0, 1.0, 1.0));
 
     for (float v : r.fullRes.data) {
         REQUIRE(std::isfinite(v));
         REQUIRE(v >= 0.0f);
     }
+    CHECK(std::ranges::any_of(r.sensorClipFullRes.data, [](float v) { return v > 0.0f; }));
 }
 
 TEST_CASE("decoded gradient keeps left-to-right ordering", "[raw][fixtures]") {

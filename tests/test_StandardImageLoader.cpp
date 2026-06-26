@@ -39,6 +39,8 @@ TEST_CASE("StandardImageLoader decodes a JPEG without error", "[loader]") {
 
     CHECK(result.error.isEmpty());
     CHECK(result.fullRes.valid());
+    CHECK_FALSE(result.sensorClipFullRes.valid());
+    CHECK_FALSE(result.sensorClipPreview.valid());
 
     QFile::remove(path);
 }

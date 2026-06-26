@@ -147,6 +147,7 @@ private:
     // (docs/adr/0009); toggleClipping flips both at once for the J key.
     void applyClipping();
     void toggleClipping();
+    void applySensorClipping();
     void toggleFullScreen();
     void exitFullScreen(); // leave fullscreen, restoring the prior maximized/normal state
     void toggleChrome();
@@ -190,6 +191,7 @@ private:
     QAction* exportAction;
     QAction* clipHighlightsAction; // View → Show Highlight Clipping
     QAction* clipShadowsAction;    // View → Show Shadow Clipping
+    QAction* sensorClipAction;     // View → Show Sensor Clipping
     QAction* fullScreenAction = nullptr;
     QAction* lightsOutAction = nullptr;
     std::optional<ChromeHider> chromeHider;

@@ -112,6 +112,10 @@ struct ImageBuffer {
 struct LoadResult {
     ImageBuffer fullRes; // stored for export only
     ImageBuffer preview; // 1/4-res (half W, half H) — used for viewport + histogram
+    // Sensor Clipping mask from RAW mosaic values, before demosaic,
+    // normalisation, and develop settings. Invalid for standard images.
+    ImageBuffer sensorClipFullRes;
+    ImageBuffer sensorClipPreview;
     ImageMetadata metadata;
     UserMetadata embeddedMetadata; // descriptive User Metadata from embedded XMP, if any
     UserMetadataPresence embeddedMetadataPresence;
