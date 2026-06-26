@@ -54,13 +54,22 @@ public:
     // Apply all spots to the clean decoded buffers and push spotted textures to
     // the viewport. fullResOnly=false pushes only the preview (live drag);
     // fullResOnly=true also pushes the full-res export buffer (release / undo / load).
-    // Public so SpotListCommand can call it on undo/redo.
-    void rebuildSpottedBuffers(bool fullResOnly = false);
+    // preserveView keeps the current zoom/pan instead of refitting — for an
+    // in-place re-decode of the same image (docs/adr/0033). Public so SpotListCommand
+    // can call it on undo/redo.
+    void rebuildSpottedBuffers(bool fullResOnly = false, bool preserveView = false);
 
     // Mirror the canonical session params into editor widgets and the viewport.
     // Public so undo commands can update views after mutating the session.
     void syncSessionToEditors();
     void syncSessionSpotsToEditors(bool fullResOnly = true);
+
+    // Re-decode the current image with the session's current demosaic algorithm,
+    // swapping the decoded buffers in place while keeping the develop edit on
+    // screen (docs/adr/0033). A cached algorithm (re-pick / undo / redo) is
+    // instant; a never-tried one decodes asynchronously. Public so the develop
+    // undo command can trigger it on undo/redo of a demosaic change.
+    void redecodeForDemosaicChange();
 
 protected:
     void closeEvent(QCloseEvent* e) override;
@@ -73,6 +82,7 @@ private slots:
     void exportFile();
     void exportBatch(const QStringList& paths);
     void onLoadFinished();
+    void onRedecodeFinished();
     void onFullResNeeded();
 
     // Settings Propagation (Milestone 8). Copy/Paste use the session-only
@@ -218,5 +228,11 @@ private:
 
     std::shared_ptr<std::atomic<bool>> loadCancel;
     QFutureWatcher<LoadResult> loadWatcher;
+    // A demosaic re-decode runs on its own watcher (its finish swaps buffers in
+    // place rather than going through applyLoadResult, which would reset the edit
+    // and the undo stack). Cache key it is decoding, for the finish handler.
+    QFutureWatcher<LoadResult> redecodeWatcher;
+    std::shared_ptr<std::atomic<bool>> redecodeCancel;
+    QString redecodeKey;
     bool leaveConfirmationSatisfied = false;
 };

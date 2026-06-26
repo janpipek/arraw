@@ -39,8 +39,16 @@ public:
     ~ImageViewport() override;
 
     void setImage(const ImageBuffer& preview, bool baseLookEnabled = false);
+    // Swap the displayed preview texture (and its sensor-clip mask). By default
+    // this fits the image to the window (resetView) — correct for a freshly
+    // loaded image. preserveView keeps the current zoom and pan, for an in-place
+    // swap of the *same* image (e.g. a demosaic re-decode, docs/adr/0033), so A/B
+    // comparison stays put.
     void setImage(
-        const ImageBuffer& preview, const ImageBuffer& sensorClipMask, bool baseLookEnabled = false);
+        const ImageBuffer& preview,
+        const ImageBuffer& sensorClipMask,
+        bool baseLookEnabled = false,
+        bool preserveView = false);
     void setFullResImage(const ImageBuffer& fullRes);
     void setFullResImage(const ImageBuffer& fullRes, const ImageBuffer& sensorClipMask);
     void setAdjustments(const GlobalAdjustment& p);

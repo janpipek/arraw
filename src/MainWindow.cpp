@@ -163,11 +163,19 @@ static bool lensTogglesDiffer(const GlobalAdjustment& a, const GlobalAdjustment&
            || a.lensCorrectCA != b.lensCorrectCA;
 }
 
+// Demosaic is a decode-time choice (docs/adr/0033): when it changes the decoded
+// buffers must be regenerated through the load path, not a shader/CPU refresh.
+static bool demosaicDiffers(const GlobalAdjustment& a, const GlobalAdjustment& b) {
+    return a.demosaicAlgorithm != b.demosaicAlgorithm;
+}
+
 void AdjustmentCommand::undo() {
     session->setParams(before);
     mainWindow->syncSessionToEditors();
     if (lensTogglesDiffer(before, after))
         mainWindow->rebuildSpottedBuffers(false);
+    if (demosaicDiffers(before, after))
+        mainWindow->redecodeForDemosaicChange();
 }
 
 void AdjustmentCommand::redo() {
@@ -175,6 +183,8 @@ void AdjustmentCommand::redo() {
     mainWindow->syncSessionToEditors();
     if (lensTogglesDiffer(before, after))
         mainWindow->rebuildSpottedBuffers(false);
+    if (demosaicDiffers(before, after))
+        mainWindow->redecodeForDemosaicChange();
 }
 
 // ---------------------------------------------------------------------------
@@ -225,6 +235,11 @@ MainWindow::MainWindow(QWidget* parent)
     rebuildDisplayLut();
 
     connect(&loadWatcher, &QFutureWatcher<LoadResult>::finished, this, &MainWindow::onLoadFinished);
+    connect(
+        &redecodeWatcher,
+        &QFutureWatcher<LoadResult>::finished,
+        this,
+        &MainWindow::onRedecodeFinished);
 
     connect(viewport, &ImageViewport::fullResNeeded, this, &MainWindow::onFullResNeeded);
 
@@ -1123,9 +1138,12 @@ void MainWindow::loadImage(const QString& path) {
         return;
     }
 
-    // Cancel any in-progress load so it stops before dcraw_process.
+    // Cancel any in-progress load (or demosaic re-decode) so it stops before
+    // dcraw_process and does not clobber the new image's state.
     if (loadCancel)
         loadCancel->store(true);
+    if (redecodeCancel)
+        redecodeCancel->store(true);
     loadCancel = std::make_shared<std::atomic<bool>>(false);
     auto cancel = loadCancel;
 
@@ -1144,9 +1162,14 @@ void MainWindow::loadImage(const QString& path) {
     // until the demosaic yields the real DefaultCrop for never-edited RAWs.
     pendingPreviewParams = resolvePendingPreviewParams(path);
 
+    // The demosaic algorithm parameterises the decode and its cache key, so it is
+    // read from the up-front resolved params (docs/adr/0033).
+    const DemosaicAlgorithm algo = pendingPreviewParams.demosaicAlgorithm;
+
     // Re-opening a recently viewed image: a cached decode skips the background
     // task entirely — instant, and correct (straight to the demosaiced image).
-    const QString key = decodeCacheKey(path);
+    // Each algorithm caches independently, so switching among tried ones is free.
+    const QString key = decodeCacheKey(path, algo);
     if (const LoadResult* hit = decodeCache.get(key)) {
         decodeCache.pin(key);
         applyLoadResult(path, *hit);
@@ -1155,7 +1178,7 @@ void MainWindow::loadImage(const QString& path) {
 
     // Cache miss: keep the previous image on screen until the new image's embedded
     // preview (or full demosaic) is ready, then swap pixels + params atomically.
-    loadWatcher.setFuture(QtConcurrent::run([this, path, cancel]() -> LoadResult {
+    loadWatcher.setFuture(QtConcurrent::run([this, path, cancel, algo]() -> LoadResult {
         auto onPreview = [this, path, cancel](ImageBuffer buf) {
             if (cancel->load())
                 return;
@@ -1170,7 +1193,7 @@ void MainWindow::loadImage(const QString& path) {
                 },
                 Qt::QueuedConnection);
         };
-        return decodeImage(path, std::move(onPreview), cancel);
+        return decodeImage(path, std::move(onPreview), cancel, algo);
     }));
 }
 
@@ -1190,12 +1213,81 @@ void MainWindow::onLoadFinished() {
     }
 
     // Cache the decode (authoritative copy) and pin it as the current image, then
-    // display it through the same path a cache hit takes.
-    const QString key = decodeCacheKey(session->path());
+    // display it through the same path a cache hit takes. The key must carry the
+    // algorithm the decode actually ran with (the up-front resolved one).
+    const QString key = decodeCacheKey(session->path(), pendingPreviewParams.demosaicAlgorithm);
     decodeCache.insert(key, std::move(result));
     decodeCache.pin(key);
     if (const LoadResult* cached = decodeCache.get(key))
         applyLoadResult(session->path(), *cached);
+}
+
+void MainWindow::redecodeForDemosaicChange() {
+    const QString path = session->path();
+    if (path.isEmpty() || !session->hasImage())
+        return;
+
+    const DemosaicAlgorithm algo = session->params().demosaicAlgorithm;
+    const QString key = decodeCacheKey(path, algo);
+
+    // This choice supersedes any in-flight re-decode (e.g. an undo lands while a
+    // never-tried algorithm is still decoding).
+    if (redecodeCancel)
+        redecodeCancel->store(true);
+
+    // A cache hit (algorithm already tried, incl. undo/redo, or a standard image
+    // that has no demosaic stage) swaps in instantly, no decode. Clear any busy
+    // state a superseded miss-decode left behind, then restore the normal status.
+    if (const LoadResult* hit = decodeCache.get(key)) {
+        decodeCache.pin(key);
+        session->swapDecodedBuffers(*hit);
+        rebuildSpottedBuffers(true, /*preserveView=*/true);
+        setLoadingState(false);
+        setToolsEnabled(true);
+        statusLabel->setText(
+            loadedImageStatusText(path, session->fullRes(), session->sidecarState()));
+        return;
+    }
+
+    // Never-tried algorithm: decode on a worker thread, keeping the current image
+    // on screen until it swaps in.
+    redecodeCancel = std::make_shared<std::atomic<bool>>(false);
+    auto cancel = redecodeCancel;
+    redecodeKey = key;
+    setLoadingState(true);
+    redecodeWatcher.setFuture(QtConcurrent::run([path, cancel, algo]() -> LoadResult {
+        return decodeImage(path, nullptr, cancel, algo);
+    }));
+}
+
+void MainWindow::onRedecodeFinished() {
+    LoadResult result = redecodeWatcher.result();
+
+    // Empty result = cancelled (a newer re-decode or an image switch superseded
+    // it); leave the UI to whatever superseded it.
+    if (!result.fullRes.valid() && result.error.isEmpty())
+        return;
+
+    // The session may have moved on (image switch) while this decoded; only apply
+    // when it still matches the image+algorithm we decoded for.
+    if (decodeCacheKey(session->path(), session->params().demosaicAlgorithm) != redecodeKey)
+        return;
+
+    setLoadingState(false);
+    setToolsEnabled(true);
+    if (!result.error.isEmpty()) {
+        statusLabel->setText("Re-decode failed.");
+        return;
+    }
+
+    decodeCache.insert(redecodeKey, std::move(result));
+    decodeCache.pin(redecodeKey);
+    if (const LoadResult* cached = decodeCache.get(redecodeKey)) {
+        session->swapDecodedBuffers(*cached);
+        rebuildSpottedBuffers(true, /*preserveView=*/true);
+    }
+    statusLabel->setText(
+        loadedImageStatusText(session->path(), session->fullRes(), session->sidecarState()));
 }
 
 void MainWindow::applyPendingPreviewParams() {
@@ -1227,6 +1319,9 @@ void MainWindow::applyLoadResult(const QString& path, const LoadResult& result) 
     session->setBaseLook(true);
     syncSessionToEditors();
     syncSessionSpotsToEditors(true);
+    // Demosaic selection applies only to Bayer sensors; disable it (with an
+    // explanation) for X-Trans/Foveon/standard images (docs/adr/0033).
+    adjPanel->setDemosaicAvailable(sensorSupportsDemosaicSelection(result.filters));
     filmStrip->setMarks(path, ratingAndLabelOnly(session->userMetadata()));
 
     infoPanel->setUserMetadata(session->userMetadata());
@@ -1239,12 +1334,13 @@ void MainWindow::applyLoadResult(const QString& path, const LoadResult& result) 
     generateDevelopedThumbnail();
 }
 
-void MainWindow::rebuildSpottedBuffers(bool fullResOnly) {
+void MainWindow::rebuildSpottedBuffers(bool fullResOnly, bool preserveView) {
     if (session->previewForDisplay().valid())
         viewport->setImage(
             session->previewForDisplay(),
             session->sensorClipPreviewForDisplay(),
-            session->baseLook());
+            session->baseLook(),
+            preserveView);
 
     if (fullResOnly && session->fullResForExport().valid())
         viewport
@@ -1842,6 +1938,11 @@ void MainWindow::exportBatch(const QStringList& paths) {
         if (rawPath == session->path()) {
             loaded.fullRes = session->fullRes();
         } else {
+            // Resolve the per-image demosaic algorithm up front so the exported
+            // file matches the on-screen preview (docs/adr/0033) — it parameterises
+            // the decode, unlike the other develop fields applied downstream.
+            const DemosaicAlgorithm algo
+                = resolveImageAdjustments(rawPath, QRectF(0, 0, 1, 1)).demosaicAlgorithm;
             QFutureWatcher<LoadResult> watcher;
             QEventLoop wait;
             connect(&watcher, &QFutureWatcher<LoadResult>::finished, &wait, &QEventLoop::quit);
@@ -1849,8 +1950,8 @@ void MainWindow::exportBatch(const QStringList& paths) {
                 cancel->store(true); // abort the in-flight decode
                 wait.quit();
             });
-            watcher.setFuture(QtConcurrent::run([rawPath, cancel]() -> LoadResult {
-                return decodeImage(rawPath, nullptr, cancel);
+            watcher.setFuture(QtConcurrent::run([rawPath, cancel, algo]() -> LoadResult {
+                return decodeImage(rawPath, nullptr, cancel, algo);
             }));
             wait.exec();
             if (progress.wasCancelled())

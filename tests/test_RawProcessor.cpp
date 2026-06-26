@@ -1,4 +1,5 @@
 #include "RawProcessor.h"
+#include "DemosaicAlgorithm.h"
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
@@ -56,6 +57,24 @@ TEST_CASE("decoded gradient keeps left-to-right ordering", "[raw][fixtures]") {
     const double left = meanLuma(0, b.width / 4);
     const double right = meanLuma(b.width * 3 / 4, b.width);
     CHECK(right > left * 2.0);
+}
+
+TEST_CASE("decoding honours an explicit demosaic algorithm", "[raw][fixtures]") {
+    // A non-default algorithm must thread through to libraw without breaking the
+    // decode. (The gradient fixture is linear, so the algorithm cannot change
+    // pixels here — the visual difference is verified by eye on real Bayer RAWs.)
+    const LoadResult r = RawProcessor::load(kDng, nullptr, nullptr, DemosaicAlgorithm::VNG);
+    REQUIRE(r.error.isEmpty());
+    REQUIRE(r.fullRes.valid());
+    CHECK(r.fullRes.width == 32);
+    CHECK(r.fullRes.height == 24);
+}
+
+TEST_CASE("LoadResult surfaces the sensor mosaic for the disable gate", "[raw][fixtures]") {
+    const LoadResult r = RawProcessor::load(kDng);
+    REQUIRE(r.error.isEmpty());
+    // The linear gradient DNG has no Bayer mosaic, so selection is unavailable.
+    CHECK_FALSE(sensorSupportsDemosaicSelection(r.filters));
 }
 
 TEST_CASE("missing file reports an error, not a crash", "[raw]") {

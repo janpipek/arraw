@@ -80,6 +80,16 @@ const ImageBuffer& DevelopSession::fullResForExport() const {
     return fullResBuffer;
 }
 
+void DevelopSession::swapDecodedBuffers(const LoadResult& result) {
+    previewBuffer = result.preview;
+    fullResBuffer = result.fullRes;
+    // The sensor-clip mask comes from pre-demosaic mosaic values, so it is the
+    // same across algorithms — refresh it anyway to keep the buffers consistent.
+    sensorClipPreviewBuffer = result.sensorClipPreview;
+    sensorClipFullResBuffer = result.sensorClipFullRes;
+    rebuildDerivedBuffers(); // re-derive lens/spot buffers over the new pixels
+}
+
 const ImageBuffer& DevelopSession::sensorClipPreviewForDisplay() const {
     if (correctedSensorClipPreviewBuffer.valid())
         return correctedSensorClipPreviewBuffer;

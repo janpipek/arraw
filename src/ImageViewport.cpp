@@ -638,7 +638,9 @@ void ImageViewport::setImage(const ImageBuffer& buf, bool baseLook) {
 }
 
 void ImageViewport::setImage(
-    const ImageBuffer& buf, const ImageBuffer& sensorClipMask, bool baseLook) {
+    const ImageBuffer& buf, const ImageBuffer& sensorClipMask, bool baseLook, bool preserveView) {
+    const float savedZoom = zoom;
+    const QPointF savedPan = pan;
     nativeImageAspect = buf.valid() ? float(buf.width) / float(buf.height) : 1.0f;
     updateImageAspect();
     hasImage = buf.valid();
@@ -648,7 +650,15 @@ void ImageViewport::setImage(
     core.setSensorClipMask(RendererCore::Slot::Preview, sensorClipMask);
     core.setImage(RendererCore::Slot::FullRes, {});
     core.setSensorClipMask(RendererCore::Slot::FullRes, {});
-    resetView();
+    if (preserveView && hasImage) {
+        // In-place swap of the same image: hold the user's zoom/pan instead of
+        // refitting. The full-res slot was just cleared, so a re-upload (via
+        // setFullResImage) follows when zoomed past the preview threshold.
+        setZoom(savedZoom);
+        pan = savedPan;
+    } else {
+        resetView();
+    }
     histoTimer.start();
     update();
 }

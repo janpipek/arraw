@@ -182,7 +182,8 @@ static LoadResult rawError(const QString& message) {
 LoadResult RawProcessor::load(
     const QString& path,
     std::function<void(ImageBuffer)> onEmbeddedPreview,
-    std::shared_ptr<std::atomic<bool>> cancel) {
+    std::shared_ptr<std::atomic<bool>> cancel,
+    DemosaicAlgorithm algo) {
     auto cancelled = [&] { return cancel && cancel->load(); };
     auto raw = std::make_unique<LibRaw>();
 
@@ -230,6 +231,10 @@ LoadResult RawProcessor::load(
     raw->imgdata.params.gamm[0] = 1.0;    // linear gamma
     raw->imgdata.params.gamm[1] = 1.0;
     raw->imgdata.params.bright = 1.0;
+    // Per-image demosaic algorithm (docs/adr/0033, issue #22). On X-Trans libraw
+    // reinterprets this as Markesteijn — the UI gates the choice to Bayer sensors
+    // (sensorSupportsDemosaicSelection) so that only Bayer values reach here.
+    raw->imgdata.params.user_qual = librawUserQual(algo);
 
     ret = raw->dcraw_process();
     if (ret != LIBRAW_SUCCESS)
@@ -260,6 +265,8 @@ LoadResult RawProcessor::load(
     const QRectF defaultCrop = defaultCropRect(*raw, fullRes.width, fullRes.height);
     // What the camera intended (its flip code), used to seed the Orientation edit.
     const orient::Orientation seeded = orient::fromLibrawFlip(raw->imgdata.sizes.flip);
+    // The sensor mosaic, surfaced so the UI can gate demosaic selection (ADR 0033).
+    const unsigned filters = raw->imgdata.idata.filters;
     normalizeExposure(fullRes);
     timer.lap("raw normalize");
     ImageBuffer preview = downsample2x(fullRes);
@@ -296,5 +303,6 @@ LoadResult RawProcessor::load(
         {},
         defaultCrop,
         std::move(lensModel),
-        seeded};
+        seeded,
+        filters};
 }

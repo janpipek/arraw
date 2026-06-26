@@ -70,6 +70,11 @@ public:
         SidecarState sidecarState,
         const UserMetadata& metadata = {},
         const UserMetadataPresence& presence = {});
+    // Replace the decoded pixel buffers in place, keeping the current develop
+    // params, dirty state, and path. Used by a demosaic re-decode (docs/adr/0033):
+    // the algorithm change is one undo-able edit, not a fresh load. Geometry
+    // (defaultCrop, lens profile) is unaffected by demosaic, so it is left as-is.
+    void swapDecodedBuffers(const LoadResult& result);
     void setParams(const GlobalAdjustment& params);
     void setLocalAdjustments(std::vector<LocalAdjustment> localAdjustments);
     void setSpots(std::vector<Spot> spots);

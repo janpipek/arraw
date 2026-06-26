@@ -43,6 +43,10 @@ public:
     // Corrections toggles. Empty disables the toggles and shows "No lens profile".
     void setLensProfileName(const QString& name);
 
+    // Enable/disable the Demosaic combo. Disabled (with an explanation) for
+    // non-Bayer sensors, where the Bayer algorithms do not apply (docs/adr/0033).
+    void setDemosaicAvailable(bool available);
+
 signals:
     void paramsChanged(const GlobalAdjustment&);
     void adjustmentCommitted(const GlobalAdjustment& before, const GlobalAdjustment& after);
@@ -84,6 +88,7 @@ private:
     SliderRow tint;
     SliderRow saturation;
     SliderRow vibrance;
+    QComboBox* demosaicCombo;
     SliderRow sharpening;
     SliderRow colorNoiseReduction; // Strength (issue #59)
     SliderRow colorNoiseReductionSmoothness;
