@@ -5,6 +5,7 @@
 #include "LocalAdjustment.h"
 #include "Orientation.h"
 #include "Spot.h"
+#include "UserMetadata.h"
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -121,7 +122,9 @@ struct LoadResult {
     ImageBuffer sensorClipFullRes;
     ImageBuffer sensorClipPreview;
     ImageMetadata metadata;
-    QString error; // non-empty on failure
+    UserMetadata embeddedMetadata; // descriptive User Metadata from embedded XMP, if any
+    UserMetadataPresence embeddedMetadataPresence;
+    QString error;                 // non-empty on failure
     QRectF defaultCrop = {0.0, 0.0, 1.0, 1.0};
     // Lens profile resolved at decode (docs/adr/0027). Empty has* flags = no
     // profile matched; correction is applied (toggle-gated) downstream.

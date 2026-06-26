@@ -181,7 +181,7 @@ set(CORE_SOURCES
     src/AdjustmentSpinBox.cpp
     src/CollapsiblePane.cpp
     src/ToneCurveWidget.cpp
-    src/ExifPanel.cpp
+    src/InfoPanel.cpp
     src/ExportWorkflow.cpp
     src/ImageMetadata.cpp
     src/FilmStripTooltip.cpp

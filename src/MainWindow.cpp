@@ -10,13 +10,13 @@
 #include "DevelopGroup.h"
 #include "DevelopPreset.h"
 #include "DevelopSession.h"
-#include "ExifPanel.h"
 #include "ExportDialog.h"
 #include "ExportWorkflow.h"
 #include "FilmStrip.h"
 #include "GroupChecklistDialog.h"
 #include "ImageLoadWorkflow.h"
 #include "ImageViewport.h"
+#include "InfoPanel.h"
 #include "LocalAdjustmentPanel.h"
 #include "MainWindowStatus.h"
 #include "ProofingPanel.h"
@@ -63,6 +63,13 @@
 #include <QWindow>
 #include <QWindowStateChangeEvent>
 #include <QtConcurrent/QtConcurrent>
+
+static UserMetadata ratingAndLabelOnly(const UserMetadata& metadata) {
+    UserMetadata result;
+    result.rating = metadata.rating;
+    result.label = metadata.label;
+    return result;
+}
 
 // ---------------------------------------------------------------------------
 // Undo command: captures before/after GlobalAdjustment for a single gesture.
@@ -245,7 +252,11 @@ MainWindow::MainWindow(QWidget* parent)
         [this](const QString& path, const UserMetadata& metadata, bool saved) {
             if (path != session->path())
                 return;
-            session->setUserMetadata(metadata);
+            UserMetadata current = session->userMetadata();
+            current.rating = metadata.rating;
+            current.label = metadata.label;
+            session->setUserMetadata(current);
+            infoPanel->setUserMetadata(current);
             if (saved) {
                 session->markMetadataSaved();
             } else {
@@ -932,7 +943,7 @@ void MainWindow::setupDocks() {
     connect(
         filmStrip, &FilmStrip::populateContextMenu, this, &MainWindow::populateFilmStripContextMenu);
 
-    // Adjustments + EXIF (right). Collapses to a thin edge strip (ADR 0012).
+    // Adjustments + metadata (right). Collapses to a thin edge strip (ADR 0012).
     auto* rightDock = adjustmentsDock = new QDockWidget("Adjustments", this);
     rightDock->setObjectName("AdjustmentsDock"); // saveState/restoreState key
     rightDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
@@ -980,8 +991,15 @@ void MainWindow::setupDocks() {
     spotScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     spotsTabIndex = tabs->addTab(spotScroll, "Spots");
 
-    exifPanel = new ExifPanel(tabs);
-    tabs->addTab(exifPanel, "EXIF");
+    infoPanel = new InfoPanel(tabs);
+    tabs->addTab(infoPanel, "Info");
+    connect(
+        infoPanel,
+        &InfoPanel::userMetadataCommitted,
+        this,
+        [this](const UserMetadata& m, const UserMetadataPresence& changedFields) {
+            applyCurrentUserMetadata(m, changedFields);
+        });
 
     rightTabs = tabs;
     connect(tabs, &QTabWidget::currentChanged, this, [this] { syncAdjustmentTabTool(); });
@@ -1050,6 +1068,7 @@ void MainWindow::openFile() {
 bool MainWindow::saveDirtySidecar(bool forceDevelopSave) {
     if (session->path().isEmpty())
         return true;
+    infoPanel->flushPendingEdits();
 
     bool saved = true;
     if (forceDevelopSave || session->developDirty()) {
@@ -1061,7 +1080,8 @@ bool MainWindow::saveDirtySidecar(bool forceDevelopSave) {
         }
     }
     if (session->metadataDirty()) {
-        if (XmpSidecar::saveMetadata(session->path(), session->userMetadata())) {
+        if (XmpSidecar::saveMetadata(
+                session->path(), session->userMetadata(), session->userMetadataPresence())) {
             session->markMetadataSaved();
         } else {
             session->markMetadataSaveFailed();
@@ -1080,6 +1100,7 @@ bool MainWindow::saveDirtySidecar(bool forceDevelopSave) {
 
 bool MainWindow::confirmLeavingCurrentImage() {
     viewport->commitActiveTool();
+    infoPanel->flushPendingEdits();
     if (!shouldConfirmLeavingImage(*session))
         return true;
 
@@ -1107,6 +1128,8 @@ void MainWindow::loadImage(const QString& path) {
         return;
 
     const QString previousPath = session->path();
+    if (!previousPath.isEmpty())
+        infoPanel->flushPendingEdits();
     const bool needsConfirmation = !leaveConfirmationSatisfied;
     leaveConfirmationSatisfied = false;
     if (needsConfirmation && !confirmLeavingCurrentImage()) {
@@ -1125,7 +1148,7 @@ void MainWindow::loadImage(const QString& path) {
     auto cancel = loadCancel;
 
     session->beginLoading(path);
-    exifPanel->clear();
+    infoPanel->clear();
     viewport->cancelActiveTool(); // discard any in-progress tool from the last image
     viewport->setOriginalImageSize(0, 0);
     setLoadingState(true);
@@ -1185,7 +1208,7 @@ void MainWindow::onLoadFinished() {
         setLoadingState(false);
         QMessageBox::critical(this, "Load Error", result.error);
         statusLabel->setText("Load failed.");
-        exifPanel->clear();
+        infoPanel->clear();
         return;
     }
 
@@ -1287,16 +1310,22 @@ void MainWindow::applyLoadResult(const QString& path, const LoadResult& result) 
     // another app — or a prior session — are always reflected.
     const ResolvedLoadedImage resolved = resolveLoadedImage(path, result);
     session->setLoadedImage(
-        path, result, resolved.adjustments, resolved.sidecarState, resolved.metadata);
+        path,
+        result,
+        resolved.adjustments,
+        resolved.sidecarState,
+        resolved.metadata,
+        resolved.metadataPresence);
     session->setBaseLook(true);
     syncSessionToEditors();
     syncSessionSpotsToEditors(true);
     // Demosaic selection applies only to Bayer sensors; disable it (with an
     // explanation) for X-Trans/Foveon/standard images (docs/adr/0033).
     adjPanel->setDemosaicAvailable(sensorSupportsDemosaicSelection(result.filters));
-    filmStrip->setMarks(path, session->userMetadata());
+    filmStrip->setMarks(path, ratingAndLabelOnly(session->userMetadata()));
 
-    exifPanel->setMetadata(result.metadata);
+    infoPanel->setUserMetadata(session->userMetadata());
+    infoPanel->setImageMetadata(result.metadata);
     undoStack->clear();
 
     statusLabel->setText(loadedImageStatusText(path, session->fullRes(), session->sidecarState()));
@@ -1334,7 +1363,7 @@ void MainWindow::updateZoomStatus(float zoom) {
 void MainWindow::setLoadingState(bool loading) {
     menuBar()->setEnabled(!loading);
     adjPanel->setEnabled(!loading);
-    exifPanel->setEnabled(!loading);
+    infoPanel->setEnabled(!loading);
     if (loading)
         setToolsEnabled(false); // re-enabled in onLoadFinished on success
     statusLabel->setText(
@@ -1456,12 +1485,14 @@ void MainWindow::applyDevelopChange(const GlobalAdjustment& after) {
         pushGlobalAdjustmentCommand(before, after);
 }
 
-void MainWindow::applyCurrentUserMetadata(const UserMetadata& metadata) {
+void MainWindow::applyCurrentUserMetadata(
+    const UserMetadata& metadata, const UserMetadataPresence& changedFields) {
     if (session->path().isEmpty())
         return;
-    session->setUserMetadata(metadata);
-    filmStrip->setMarks(session->path(), metadata);
-    if (XmpSidecar::saveMetadata(session->path(), metadata)) {
+    session->setUserMetadata(metadata, changedFields);
+    filmStrip->setMarks(session->path(), ratingAndLabelOnly(metadata));
+    infoPanel->setUserMetadata(metadata);
+    if (XmpSidecar::saveMetadata(session->path(), metadata, changedFields)) {
         session->markMetadataSaved();
     } else {
         session->markMetadataSaveFailed();

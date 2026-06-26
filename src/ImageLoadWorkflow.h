@@ -20,6 +20,7 @@
 struct ResolvedLoadedImage {
     GlobalAdjustment adjustments;
     UserMetadata metadata;
+    UserMetadataPresence metadataPresence;
     DevelopSession::SidecarState sidecarState = DevelopSession::SidecarState::Unknown;
 };
 

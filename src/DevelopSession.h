@@ -47,6 +47,7 @@ public:
     const ImageMetadata& metadata() const { return imageMetadata; }
 
     const UserMetadata& userMetadata() const { return metadata_; }
+    const UserMetadataPresence& userMetadataPresence() const { return metadataPresence; }
 
     const QRectF& defaultCrop() const { return imageDefaultCrop; }
 
@@ -67,7 +68,8 @@ public:
         const LoadResult& result,
         const GlobalAdjustment& params,
         SidecarState sidecarState,
-        const UserMetadata& metadata = {});
+        const UserMetadata& metadata = {},
+        const UserMetadataPresence& presence = {});
     // Replace the decoded pixel buffers in place, keeping the current develop
     // params, dirty state, and path. Used by a demosaic re-decode (docs/adr/0033):
     // the algorithm change is one undo-able edit, not a fresh load. Geometry
@@ -76,7 +78,7 @@ public:
     void setParams(const GlobalAdjustment& params);
     void setLocalAdjustments(std::vector<LocalAdjustment> localAdjustments);
     void setSpots(std::vector<Spot> spots);
-    void setUserMetadata(const UserMetadata& metadata);
+    void setUserMetadata(const UserMetadata& metadata, const UserMetadataPresence& changedFields = {});
     void setBaseLook(bool on);
     void markDevelopSaved();
     void markDevelopSaveFailed();
@@ -107,6 +109,8 @@ private:
     ImageMetadata imageMetadata;
     UserMetadata metadata_;
     UserMetadata savedMetadata;
+    UserMetadataPresence metadataPresence;
+    UserMetadataPresence savedMetadataPresence;
     QRectF imageDefaultCrop{0.0, 0.0, 1.0, 1.0};
     GlobalAdjustment adjustments;
     GlobalAdjustment savedAdjustments;
