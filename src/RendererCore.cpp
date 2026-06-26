@@ -120,6 +120,10 @@ void RendererCore::release() {
     nrUbuf.reset();
     for (NrSlot& s : nrSlot)
         s = NrSlot{};
+    // Destroy any in-flight readback targets before the QRhi goes away: this
+    // frees each QRhiReadbackResult so a pending `completed` lambda can never
+    // fire against a torn-down RendererCore (docs/adr/0033).
+    readbackPool.clear();
     imageTex[0].reset();
     imageTex[1].reset();
     displayLutTex.reset();
@@ -543,9 +547,12 @@ void RendererCore::ensureNrSlot(int key, QSize fullSize) {
     const QSize quarter(std::max(1, fullSize.width() / 4), std::max(1, fullSize.height() / 4));
 
     auto make = [&](std::unique_ptr<QRhiTexture>& tex,
-                    std::unique_ptr<QRhiTextureRenderTarget>& rt, QSize sz) {
+                    std::unique_ptr<QRhiTextureRenderTarget>& rt,
+                    QSize sz) {
         tex.reset(rhi->newTexture(
-            QRhiTexture::RGBA32F, sz, 1,
+            QRhiTexture::RGBA32F,
+            sz,
+            1,
             QRhiTexture::RenderTarget | QRhiTexture::UsedAsTransferSource));
         tex->create();
         QRhiColorAttachment att(tex.get());
@@ -618,7 +625,8 @@ QRhiTexture* RendererCore::ensureDenoised(
     nrSrbRecombine->create();
 
     if (!nrPipeExtract) {
-        auto makePipe = [&](std::unique_ptr<QRhiGraphicsPipeline>& dst, const QShader& fsStage,
+        auto makePipe = [&](std::unique_ptr<QRhiGraphicsPipeline>& dst,
+                            const QShader& fsStage,
                             QRhiShaderResourceBindings* layout) {
             dst.reset(rhi->newGraphicsPipeline());
             dst->setTopology(QRhiGraphicsPipeline::TriangleStrip);
@@ -659,9 +667,9 @@ QRhiTexture* RendererCore::ensureDenoised(
     QRhiResourceUpdateBatch* b = rhi->nextResourceUpdateBatch();
     b->updateDynamicBuffer(nrUbuf.get(), 0, sizeof(NrUbuf), &nb);
 
-    nrPass(cb, ns.chromaART.get(), nrPipeExtract.get(), nrSrbExtract.get(), b); // raw → chroma A
-    nrPass(cb, ns.chromaBRT.get(), nrPipeBlurH.get(), nrSrbBlurH.get(), nullptr);     // A → B (H)
-    nrPass(cb, ns.chromaART.get(), nrPipeBlurV.get(), nrSrbBlurV.get(), nullptr);     // B → A (V)
+    nrPass(cb, ns.chromaART.get(), nrPipeExtract.get(), nrSrbExtract.get(), b);   // raw → chroma A
+    nrPass(cb, ns.chromaBRT.get(), nrPipeBlurH.get(), nrSrbBlurH.get(), nullptr); // A → B (H)
+    nrPass(cb, ns.chromaART.get(), nrPipeBlurV.get(), nrSrbBlurV.get(), nullptr); // B → A (V)
     nrPass(cb, ns.denoisedRT.get(), nrPipeRecombine.get(), nrSrbRecombine.get(), nullptr); // → full
     return ns.denoised.get();
 }
@@ -686,7 +694,10 @@ void RendererCore::record(
     if (nrActive(fp.adjustments)) {
         cb->resourceUpdate(batch); // apply uploads before the NR pre-passes
         tex = ensureDenoised(
-            cb, int(slot), tex, fp.adjustments.colorNoiseReductionSmoothness,
+            cb,
+            int(slot),
+            tex,
+            fp.adjustments.colorNoiseReductionSmoothness,
             fp.adjustments.colorNoiseReduction);
         batch = rhi->nextResourceUpdateBatch(); // fresh batch for the main pass
     }
@@ -750,7 +761,10 @@ QImage RendererCore::renderOffscreenTex(
             nrSlot[2].smoothness = -1.0f;
         cb->resourceUpdate(batch);
         tex = ensureDenoised(
-            cb, nrKey, tex, fp.adjustments.colorNoiseReductionSmoothness,
+            cb,
+            nrKey,
+            tex,
+            fp.adjustments.colorNoiseReductionSmoothness,
             fp.adjustments.colorNoiseReduction);
         batch = rhi->nextResourceUpdateBatch();
     }
@@ -788,4 +802,77 @@ QImage RendererCore::renderOffscreen(
     // same-address allocation alias it.
     srbImageTex = nullptr;
     return out;
+}
+
+// ── Non-blocking offscreen render + async readback (docs/adr/0033) ────────────
+
+RendererCore::ReadbackTarget* RendererCore::ensureReadbackTarget(
+    QSize size, QRhiTexture::Format fmt) {
+    for (const std::unique_ptr<ReadbackTarget>& t : readbackPool)
+        if (t->size == size && t->fmt == fmt)
+            return t.get();
+
+    auto t = std::make_unique<ReadbackTarget>();
+    t->size = size;
+    t->fmt = fmt;
+    t->tex.reset(
+        rhi->newTexture(fmt, size, 1, QRhiTexture::RenderTarget | QRhiTexture::UsedAsTransferSource));
+    if (!t->tex->create())
+        return nullptr;
+    QRhiColorAttachment att(t->tex.get());
+    t->rt.reset(rhi->newTextureRenderTarget({att}));
+    t->rp.reset(t->rt->newCompatibleRenderPassDescriptor());
+    t->rt->setRenderPassDescriptor(t->rp.get());
+    if (!t->rt->create())
+        return nullptr;
+    readbackPool.push_back(std::move(t));
+    return readbackPool.back().get();
+}
+
+bool RendererCore::recordOffscreenReadback(
+    QRhiCommandBuffer* cb,
+    Slot slot,
+    const FrameParams& fp,
+    QSize size,
+    QRhiTexture::Format fmt,
+    std::function<void(QImage)> onReady) {
+    if (!rhi || !hasImage(slot))
+        return false;
+    ReadbackTarget* t = ensureReadbackTarget(size, fmt);
+    if (!t || t->inFlight)
+        return false; // back-pressure: drop this refresh, the debounce retries
+
+    // Mirrors renderOffscreenTex's body minus the frame open/close: record the
+    // pass into the caller's in-flight `cb`, reusing this frame's cached NR
+    // denoised texture (ADR 0032) so the sample matches the live preview.
+    prepareToneLut(fp.adjustments);
+    QRhiResourceUpdateBatch* batch = rhi->nextResourceUpdateBatch();
+    flushPendingUploads(batch);
+    QRhiTexture* tex = imageTex[int(slot)].get();
+    if (nrActive(fp.adjustments)) {
+        cb->resourceUpdate(batch);
+        tex = ensureDenoised(
+            cb,
+            int(slot),
+            tex,
+            fp.adjustments.colorNoiseReductionSmoothness,
+            fp.adjustments.colorNoiseReduction);
+        batch = rhi->nextResourceUpdateBatch();
+    }
+    recordPass(cb, t->rt.get(), tex, fp, batch);
+
+    QRhiResourceUpdateBatch* readBatch = rhi->nextResourceUpdateBatch();
+    readBatch->readBackTexture(QRhiReadbackDescription(t->tex.get()), &t->rr);
+    t->inFlight = true;
+    // `t` is a stable pooled address owned by this RendererCore; the pool (and
+    // each QRhiReadbackResult) outlives the in-flight window. On teardown the
+    // pool is cleared, destroying the result before it can fire — so the capture
+    // never dangles. `completed` runs on the GUI thread during frame processing.
+    t->rr.completed = [this, t, onReady = std::move(onReady)]() {
+        QImage img = readbackToImage(t->rr);
+        t->inFlight = false;
+        onReady(img);
+    };
+    cb->resourceUpdate(readBatch);
+    return true;
 }

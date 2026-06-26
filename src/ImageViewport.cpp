@@ -64,7 +64,13 @@ ImageViewport::ImageViewport(QWidget* parent)
 
     histoTimer.setSingleShot(true);
     histoTimer.setInterval(150);
-    connect(&histoTimer, &QTimer::timeout, this, &ImageViewport::renderHistograms);
+    // Don't render here: flag the next frame so the histogram passes ride the
+    // viewport's own in-flight frame instead of a blocking offscreen one
+    // (docs/adr/0033). Mirrors the nrTimer precedent below.
+    connect(&histoTimer, &QTimer::timeout, this, [this] {
+        histogramsDirty = true;
+        update();
+    });
 
     // Promote the live Colour-NR slider value to the rendered amount once the
     // slider has settled, then repaint to run the denoise pre-pass for it.
@@ -209,6 +215,47 @@ void ImageViewport::render(QRhiCommandBuffer* cb) {
     }
 
     core.record(cb, renderTarget(), activeSlot(), fp);
+
+    // Async histogram readback (docs/adr/0033): when the debounce has flagged a
+    // refresh, enqueue the two sample passes into *this* frame — after the main
+    // record() so they reuse its cached NR texture — and read them back via
+    // RendererCore's completion callbacks. Each pass into a pooled target may be
+    // skipped if its previous readback is still in flight; only clear the flag
+    // once both were enqueued, so a skipped one retries next frame.
+    if (histogramsDirty && core.hasImage(RendererCore::Slot::Preview)) {
+        int w = 0, h = 0;
+        const RendererCore::FrameParams base = histogramFrameParams(w, h);
+        const quint64 gen = ++histoGen;
+        pendingHisto.supersede(gen);
+
+        RendererCore::FrameParams curveFp = base;
+        curveFp.curveInput = true;
+        const bool curveEnq = core.recordOffscreenReadback(
+            cb,
+            RendererCore::Slot::Preview,
+            curveFp,
+            QSize(w, h),
+            QRhiTexture::RGBA8,
+            [this, gen](const QImage& img) {
+                onHistogramSample(gen, PendingHistogramPair::Kind::CurveInput, img);
+            });
+
+        RendererCore::FrameParams finalFp = base;
+        finalFp.curveInput = false;
+        finalFp.histoRaw = true;
+        const bool finalEnq = core.recordOffscreenReadback(
+            cb,
+            RendererCore::Slot::Preview,
+            finalFp,
+            QSize(w, h),
+            QRhiTexture::RGBA32F,
+            [this, gen](const QImage& img) {
+                onHistogramSample(gen, PendingHistogramPair::Kind::Final, img);
+            });
+
+        if (curveEnq && finalEnq)
+            histogramsDirty = false;
+    }
 }
 
 void ImageViewport::setActiveLocalAdjustment(int index) {
@@ -1022,21 +1069,13 @@ QImage ImageViewport::renderClipSample(
     return core.renderOffscreen(buf, fp, QSize(cropW, cropH), QRhiTexture::RGBA32F);
 }
 
-// ── Histogram readback (docs/adr/0004) ────────────────────────────────────────
+// ── Histogram readback (docs/adr/0004, async per docs/adr/0033) ───────────────
 
-// Render the preview texture through the real shader twice into a small
-// offscreen target — once with curveInput (pipeline stops after Basic Tone,
-// gamma-encoded) and once full — and hand both samples to whoever bins them.
-void ImageViewport::renderHistograms() {
-    if (!hasImage || !core.ready() || !core.hasImage(RendererCore::Slot::Preview))
-        return;
-
-    ensureCurveLut();
-
+RendererCore::FrameParams ImageViewport::histogramFrameParams(int& outW, int& outH) const {
     const QRectF& cr = params.cropRect;
     const float aspect = imageAspect * float(cr.width() / cr.height());
-    const int w = 256;
-    const int h = std::clamp(int(w / aspect + 0.5f), 16, 1024);
+    outW = 256;
+    outH = std::clamp(int(outW / aspect + 0.5f), 16, 1024);
 
     RendererCore::FrameParams fp;
     fp.transform = QVector4D(1.0f, 1.0f, 0.0f, 0.0f);
@@ -1051,17 +1090,18 @@ void ImageViewport::renderHistograms() {
     fp.clipHighlights = false; // overlays never poison the histogram readback
     fp.clipShadows = false;
     fp.adjustments = params;
+    // Use the effective (debounced) NR values so the histogram passes hit the
+    // same cached denoised texture the preview just used (docs/adr/0032), rather
+    // than forcing a recompute for the live slider value mid-frame.
+    fp.adjustments.colorNoiseReduction = nrStrengthEffective;
+    fp.adjustments.colorNoiseReductionSmoothness = nrSmoothnessEffective;
+    return fp;
+}
 
-    fp.curveInput = true;
-    const QImage curveInput
-        = core.renderOffscreen(RendererCore::Slot::Preview, fp, QSize(w, h), QRhiTexture::RGBA8);
-
-    fp.curveInput = false;
-    fp.histoRaw = true;
-    const QImage finalSample
-        = core.renderOffscreen(RendererCore::Slot::Preview, fp, QSize(w, h), QRhiTexture::RGBA32F);
-
-    emit histogramsReady(finalSample, curveInput);
+void ImageViewport::onHistogramSample(
+    quint64 gen, PendingHistogramPair::Kind kind, const QImage& img) {
+    if (auto pair = pendingHisto.offer(gen, kind, img))
+        emit histogramsReady(pair->finalSample, pair->curveInput);
 }
 
 // ── Input events ──────────────────────────────────────────────────────────────

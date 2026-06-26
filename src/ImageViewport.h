@@ -2,6 +2,7 @@
 #include "ColorManagement.h"
 #include "CropGeometry.h"
 #include "ImagePipeline.h"
+#include "PendingHistogram.h"
 #include "RendererCore.h"
 #include "Spot.h"
 #include "ViewportGeometry.h"
@@ -170,7 +171,16 @@ private:
     void update();
 
     void ensureCurveLut();
-    void renderHistograms();
+
+    // Build the base FrameParams shared by both histogram passes, and the sample
+    // size (256×h, h fit to the cropped aspect). NR is pinned to the effective
+    // (debounced) values so the passes reuse the frame's cached denoised texture
+    // and the sample matches the preview (docs/adr/0033).
+    RendererCore::FrameParams histogramFrameParams(int& outW, int& outH) const;
+    // GUI-thread completion for one async histogram readback: feed it to the
+    // generation matcher and emit histogramsReady once a full pair lands.
+    void onHistogramSample(quint64 gen, PendingHistogramPair::Kind kind, const QImage& img);
+
     RendererCore::Slot activeSlot() const;
     void paintOverlay(QPainter& p) const;
 
@@ -262,7 +272,15 @@ private:
     // Request the full-res texture a bit earlier so it is ready in time.
     static constexpr float kFullResZoomThreshold = 1.5f;
 
-    QTimer histoTimer; // debounces histogram readbacks during slider drags
+    QTimer histoTimer; // debounces histogram refreshes during slider drags
+
+    // Async histogram readback (docs/adr/0033). histoTimer no longer renders;
+    // it sets histogramsDirty + update(), and render(cb) enqueues the two passes
+    // into the live frame. histoGen tags each enqueued pair so pendingHisto can
+    // drop stale completions and only emit a matched (final, curve-input) pair.
+    bool histogramsDirty = false;
+    quint64 histoGen = 0;
+    PendingHistogramPair pendingHisto;
 
     // The Colour Noise Reduction pre-pass is the one expensive GPU stage, so it
     // is debounced: render() always denoises for the effective (Smoothness,

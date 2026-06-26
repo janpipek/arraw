@@ -4,6 +4,7 @@
 #include "ImagePipeline.h"
 #include <array>
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <rhi/qrhi.h>
 #include <vector>
@@ -30,15 +31,15 @@ struct Ubuf {
     float wbGainR; // white-balance per-channel gain (docs/adr/0025), 5500K/tint0 = 1
     float wbGainG;
     float wbGainB;
-    float saturation;       // -1..+1
-    float vibrance;         // -1..+1
+    float saturation;               // -1..+1
+    float vibrance;                 // -1..+1
     float postCropVignetteAmount;   // -2..+2 EV at maximum falloff
     float postCropVignetteMidpoint; // 0..1
     float postCropVignetteFeather;  // 0..1
-    float grainAmount;      // encoded-value standard deviation, 0..0.08
-    float grainSize;        // grain diameter as a fraction of crop long edge
-    float grainRoughness;   // 0..1
-    quint32 grainSeed;      // deterministic per-image seed
+    float grainAmount;              // encoded-value standard deviation, 0..0.08
+    float grainSize;                // grain diameter as a fraction of crop long edge
+    float grainRoughness;           // 0..1
+    quint32 grainSeed;              // deterministic per-image seed
     qint32 useLut;
     qint32 gamutWarn;
     qint32 baseLook;
@@ -84,6 +85,7 @@ struct NrUbuf {
     float strength;     // recombine blend factor 0..1 (Strength); read only by nr_recombine
     qint32 pad_[2];     // std140 pads the block to a 16-byte multiple
 };
+
 static_assert(sizeof(NrUbuf) == 96);
 static_assert(offsetof(NrUbuf, strength) == 84);
 
@@ -138,6 +140,23 @@ public:
     QImage renderOffscreen(
         const ImageBuffer& buf, const FrameParams& fp, QSize size, QRhiTexture::Format fmt);
 
+    // Non-blocking sibling of renderOffscreen (docs/adr/0033): records one shader
+    // pass into a pooled offscreen target and enqueues a readback into the
+    // caller's already-open frame `cb` — no beginOffscreenFrame, no flush, so the
+    // GUI thread never waits on the GPU. `onReady(QImage)` fires on the GUI thread
+    // when QRhi processes the frame (a frame or two later). Returns false without
+    // recording if the pooled target for (size, fmt) is still mid-readback
+    // (back-pressure: the caller drops this refresh and retries on its next
+    // debounce). Used only for the histogram hot path; export/WB/clip keep the
+    // blocking path.
+    bool recordOffscreenReadback(
+        QRhiCommandBuffer* cb,
+        Slot slot,
+        const FrameParams& fp,
+        QSize size,
+        QRhiTexture::Format fmt,
+        std::function<void(QImage)> onReady);
+
 private:
     struct PendingImage {
         QByteArray rgba; // RGB float buffer expanded to RGBA
@@ -160,6 +179,28 @@ private:
         QSize size,
         QRhiTexture::Format fmt);
     QImage readbackToImage(const QRhiReadbackResult& rr) const;
+
+    // A reusable offscreen target for non-blocking histogram readbacks (ADR
+    // 0033). Pooled (rather than allocated per refresh) and kept alive across the
+    // in-flight frame window: the QRhiReadbackResult and its `completed` lambda
+    // must outlive the frame they were recorded in. `inFlight` is the skip-guard
+    // that drops a new request while a previous readback is still pending.
+    struct ReadbackTarget {
+        std::unique_ptr<QRhiTexture> tex;
+        std::unique_ptr<QRhiTextureRenderTarget> rt;
+        std::unique_ptr<QRhiRenderPassDescriptor> rp;
+        QRhiReadbackResult rr;
+        QSize size;
+        QRhiTexture::Format fmt = QRhiTexture::RGBA8;
+        bool inFlight = false;
+    };
+
+    // Returns the pooled target for (size, fmt), creating it on first use, or
+    // nullptr if its GPU resources fail to create. Entries live in unique_ptrs so
+    // their addresses stay stable for the captured `completed` lambda even as the
+    // pool grows.
+    ReadbackTarget* ensureReadbackTarget(QSize size, QRhiTexture::Format fmt);
+
     QRhiGraphicsPipeline* pipelineFor(QRhiRenderPassDescriptor* rpDesc);
     QRhiShaderResourceBindings* bindingsFor(QRhiTexture* imageTex);
     void fillUbuf(Ubuf& ub, const FrameParams& fp) const;
@@ -222,7 +263,8 @@ private:
     std::unique_ptr<QRhiGraphicsPipeline> nrPipeExtract, nrPipeBlurH, nrPipeBlurV, nrPipeRecombine;
     // Rebuilt each time the pre-pass runs (only on amount/texture change), kept as
     // members so they outlive command-buffer submission.
-    std::unique_ptr<QRhiShaderResourceBindings> nrSrbExtract, nrSrbBlurH, nrSrbBlurV, nrSrbRecombine;
+    std::unique_ptr<QRhiShaderResourceBindings> nrSrbExtract, nrSrbBlurH, nrSrbBlurV,
+        nrSrbRecombine;
     // One stable RGBA32F render-pass descriptor shared by every NR target and
     // pipeline, so pipelines never dangle when a slot's textures are resized.
     std::unique_ptr<QRhiRenderPassDescriptor> nrRpDesc;
@@ -235,6 +277,11 @@ private:
         float strength = -1.0f;   // Strength it was built for (issue #59)
         int gen = -1;             // texture generation it was built against
     };
+
     // [0]=Preview, [1]=FullRes, [2]=export's temporary full-res texture.
     NrSlot nrSlot[3];
+
+    // Pooled offscreen targets for non-blocking histogram readbacks (ADR 0033),
+    // one per distinct (size, fmt). Few and small, so they are never evicted.
+    std::vector<std::unique_ptr<ReadbackTarget>> readbackPool;
 };

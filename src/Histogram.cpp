@@ -26,6 +26,11 @@ Histogram::Histogram(QWidget* parent)
 }
 
 void Histogram::setSample(const QImage& img) {
+    bins.bin(img);
+    update();
+}
+
+void HistogramBins::bin(const QImage& img) {
     r.fill(0);
     g.fill(0);
     b.fill(0);
@@ -76,8 +81,6 @@ void Histogram::setSample(const QImage& img) {
     for (int i = 0; i < kBins; ++i)
         peak = std::max({peak, r[i], g[i], b[i]});
     peak = std::max({peak, rOver, gOver, bOver, rUnder, gUnder, bUnder});
-
-    update();
 }
 
 void Histogram::paintEvent(QPaintEvent*) {
@@ -85,20 +88,20 @@ void Histogram::paintEvent(QPaintEvent*) {
     p.fillRect(rect(), ThemeColors::kBase); // recessed panel background (ADR 0030)
 
     // Log-scale the bar heights so sparse bins stay visible next to the peak.
-    const float yScale = float(height()) / std::log1p(float(peak));
+    const float yScale = float(height()) / std::log1p(float(bins.peak));
 
     // Layout: [overflowColW | gap | main bins | gap | overflowColW]
     const int overflowColW = 8;
     const int gap = 2;
     const int mainW = width() - 2 * (overflowColW + gap);
     const int mainX = overflowColW + gap;
-    const float xScale = float(mainW) / kBins;
+    const float xScale = float(mainW) / HistogramBins::kBins;
 
-    auto drawBins = [&](const std::array<int, kBins>& ch, QColor col) {
+    auto drawBins = [&](const std::array<int, HistogramBins::kBins>& ch, QColor col) {
         col.setAlpha(160);
         p.setPen(Qt::NoPen);
         p.setBrush(col);
-        for (int i = 0; i < kBins; ++i) {
+        for (int i = 0; i < HistogramBins::kBins; ++i) {
             float h = std::log1p(float(ch[i])) * yScale;
             p.drawRect(QRectF(mainX + i * xScale, height() - h, xScale, h));
         }
@@ -114,19 +117,19 @@ void Histogram::paintEvent(QPaintEvent*) {
         p.drawRect(QRectF(x, height() - h, w, h));
     };
 
-    drawBins(r, QColor(220, 60, 60));
-    drawBins(g, QColor(60, 180, 60));
-    drawBins(b, QColor(60, 100, 220));
+    drawBins(bins.r, QColor(220, 60, 60));
+    drawBins(bins.g, QColor(60, 180, 60));
+    drawBins(bins.b, QColor(60, 100, 220));
 
     // Underflow columns (left) — per-channel, stacked in the same narrow column.
     const float underX = 0.0f;
-    drawOverflow(rUnder, underX, overflowColW, QColor(220, 60, 60));
-    drawOverflow(gUnder, underX, overflowColW, QColor(60, 180, 60));
-    drawOverflow(bUnder, underX, overflowColW, QColor(60, 100, 220));
+    drawOverflow(bins.rUnder, underX, overflowColW, QColor(220, 60, 60));
+    drawOverflow(bins.gUnder, underX, overflowColW, QColor(60, 180, 60));
+    drawOverflow(bins.bUnder, underX, overflowColW, QColor(60, 100, 220));
 
     // Overflow columns (right) — per-channel.
     const float overX = float(mainX + mainW + gap);
-    drawOverflow(rOver, overX, overflowColW, QColor(220, 60, 60));
-    drawOverflow(gOver, overX, overflowColW, QColor(60, 180, 60));
-    drawOverflow(bOver, overX, overflowColW, QColor(60, 100, 220));
+    drawOverflow(bins.rOver, overX, overflowColW, QColor(220, 60, 60));
+    drawOverflow(bins.gOver, overX, overflowColW, QColor(60, 180, 60));
+    drawOverflow(bins.bOver, overX, overflowColW, QColor(60, 100, 220));
 }
