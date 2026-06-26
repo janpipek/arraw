@@ -147,56 +147,112 @@ DevelopGroup developParameterGroup(DevelopParameter p) {
     }
 }
 
-bool developParameterDiffers(
-    DevelopParameter p, const GlobalAdjustment& before, const GlobalAdjustment& after) {
-    const GlobalAdjustment& a = before; // terse aliases for the long comparison switch
-    const GlobalAdjustment& b = after;
+std::optional<FieldSpec> developParameterSpec(DevelopParameter p) {
+    // Three specs cover most sliders; the named locals match AdjustmentPanel's
+    // former constants (now sourced from here, so the numbers live in one place).
+    const FieldSpec bipolar{-100, 100, 0, 1.0f, 1.0f, 0, {}, true, 1.0f};
+    const FieldSpec unipolar0{0, 100, 0, 1.0f, 1.0f, 0, {}, false, 1.0f};
+    const FieldSpec unipolar50{0, 100, 50, 1.0f, 1.0f, 0, {}, false, 1.0f};
+    const QString degrees = QString::fromUtf8("\xc2\xb0");
+    if (isHsl(p)) // Hue reads in degrees (±30°); Saturation/Luminance are bipolar
+        return hslOffset(p) % 3 == 0
+            ? FieldSpec{-100, 100, 0, 1.0f, 0.3f, 1, degrees, true, 0.3f}
+            : bipolar;
+    switch (p) {
+    case DevelopParameter::Temperature: return FieldSpec{2000, 12000, 5500, 1.0f, 1.0f, 0, " K", false, 50.0f};
+    case DevelopParameter::Exposure: return FieldSpec{-500, 500, 0, 0.01f, 0.01f, 2, " EV", true, 0.05f};
+    case DevelopParameter::Tint:
+    case DevelopParameter::Contrast:
+    case DevelopParameter::Highlights:
+    case DevelopParameter::Shadows:
+    case DevelopParameter::Whites:
+    case DevelopParameter::Blacks:
+    case DevelopParameter::Saturation:
+    case DevelopParameter::Vibrance:
+    case DevelopParameter::PostCropVignetteAmount: return bipolar;
+    case DevelopParameter::Sharpening:
+    case DevelopParameter::ColorNoiseReduction:
+    case DevelopParameter::GrainAmount: return unipolar0;
+    case DevelopParameter::ColorNoiseReductionSmoothness:
+    case DevelopParameter::PostCropVignetteMidpoint:
+    case DevelopParameter::PostCropVignetteFeather:
+    case DevelopParameter::GrainSize:
+    case DevelopParameter::GrainRoughness: return unipolar50;
+    case DevelopParameter::Straighten:
+        return FieldSpec{-4500, 4500, 0, 0.01f, 0.01f, 2, degrees, true, 0.10f};
+    default: return std::nullopt; // curves, crop, orientation, lens toggles
+    }
+}
+
+float developParameterValue(DevelopParameter p, const GlobalAdjustment& s) {
     if (isHsl(p)) {
         const int off = hslOffset(p);
         const int band = off / 3;
         switch (off % 3) {
-        case 0: return a.hslHue[band] != b.hslHue[band];
-        case 1: return a.hslSat[band] != b.hslSat[band];
-        default: return a.hslLum[band] != b.hslLum[band];
+        case 0: return s.hslHue[band];
+        case 1: return s.hslSat[band];
+        default: return s.hslLum[band];
         }
     }
     switch (p) {
-    case DevelopParameter::Temperature: return a.temperature != b.temperature;
-    case DevelopParameter::Tint: return a.tint != b.tint;
-    case DevelopParameter::Exposure: return a.exposure != b.exposure;
-    case DevelopParameter::Contrast: return a.contrast != b.contrast;
-    case DevelopParameter::Highlights: return a.highlights != b.highlights;
-    case DevelopParameter::Shadows: return a.shadows != b.shadows;
-    case DevelopParameter::Whites: return a.whites != b.whites;
-    case DevelopParameter::Blacks: return a.blacks != b.blacks;
-    case DevelopParameter::Saturation: return a.saturation != b.saturation;
-    case DevelopParameter::Vibrance: return a.vibrance != b.vibrance;
+    case DevelopParameter::Temperature: return s.temperature;
+    case DevelopParameter::Tint: return s.tint;
+    case DevelopParameter::Exposure: return s.exposure;
+    case DevelopParameter::Contrast: return s.contrast;
+    case DevelopParameter::Highlights: return s.highlights;
+    case DevelopParameter::Shadows: return s.shadows;
+    case DevelopParameter::Whites: return s.whites;
+    case DevelopParameter::Blacks: return s.blacks;
+    case DevelopParameter::Saturation: return s.saturation;
+    case DevelopParameter::Vibrance: return s.vibrance;
+    case DevelopParameter::Sharpening: return s.sharpening;
+    case DevelopParameter::ColorNoiseReduction: return s.colorNoiseReduction;
+    case DevelopParameter::ColorNoiseReductionSmoothness: return s.colorNoiseReductionSmoothness;
+    case DevelopParameter::Straighten: return s.rotation;
+    case DevelopParameter::PostCropVignetteAmount: return s.postCropVignetteAmount;
+    case DevelopParameter::PostCropVignetteMidpoint: return s.postCropVignetteMidpoint;
+    case DevelopParameter::PostCropVignetteFeather: return s.postCropVignetteFeather;
+    case DevelopParameter::GrainAmount: return s.grainAmount;
+    case DevelopParameter::GrainSize: return s.grainSize;
+    case DevelopParameter::GrainRoughness: return s.grainRoughness;
+    default: return 0.0f; // curves, crop, orientation, lens toggles
+    }
+}
+
+QString developParameterValueText(DevelopParameter p, const GlobalAdjustment& s) {
+    const auto onOff = [](bool on) {
+        return on ? QCoreApplication::translate("DevelopParameter", "on")
+                  : QCoreApplication::translate("DevelopParameter", "off");
+    };
+    switch (p) {
+    case DevelopParameter::LensDistortion: return onOff(s.lensCorrectDistortion);
+    case DevelopParameter::LensVignetting: return onOff(s.lensCorrectVignetting);
+    case DevelopParameter::LensChromaticAberration: return onOff(s.lensCorrectCA);
+    default: break;
+    }
+    const std::optional<FieldSpec> spec = developParameterSpec(p);
+    if (!spec)
+        return {}; // curves, crop, orientation — no single value to show
+    return spec->format(spec->fromParam(developParameterValue(p, s)));
+}
+
+bool developParameterDiffers(
+    DevelopParameter p, const GlobalAdjustment& before, const GlobalAdjustment& after) {
+    const GlobalAdjustment& a = before; // terse aliases for the comparison switch
+    const GlobalAdjustment& b = after;
+    switch (p) {
     case DevelopParameter::CurveLuma: return a.curveLuma != b.curveLuma;
     case DevelopParameter::CurveRed: return a.curveR != b.curveR;
     case DevelopParameter::CurveGreen: return a.curveG != b.curveG;
     case DevelopParameter::CurveBlue: return a.curveB != b.curveB;
-    case DevelopParameter::Sharpening: return a.sharpening != b.sharpening;
-    case DevelopParameter::ColorNoiseReduction:
-        return a.colorNoiseReduction != b.colorNoiseReduction;
-    case DevelopParameter::ColorNoiseReductionSmoothness:
-        return a.colorNoiseReductionSmoothness != b.colorNoiseReductionSmoothness;
     case DevelopParameter::LensDistortion: return a.lensCorrectDistortion != b.lensCorrectDistortion;
     case DevelopParameter::LensVignetting: return a.lensCorrectVignetting != b.lensCorrectVignetting;
     case DevelopParameter::LensChromaticAberration: return a.lensCorrectCA != b.lensCorrectCA;
     case DevelopParameter::Orientation: return !(a.orientation == b.orientation);
-    case DevelopParameter::Straighten: return a.rotation != b.rotation;
     case DevelopParameter::Crop:
         return a.cropRect != b.cropRect || a.cropConstrained != b.cropConstrained;
-    case DevelopParameter::PostCropVignetteAmount:
-        return a.postCropVignetteAmount != b.postCropVignetteAmount;
-    case DevelopParameter::PostCropVignetteMidpoint:
-        return a.postCropVignetteMidpoint != b.postCropVignetteMidpoint;
-    case DevelopParameter::PostCropVignetteFeather:
-        return a.postCropVignetteFeather != b.postCropVignetteFeather;
-    case DevelopParameter::GrainAmount: return a.grainAmount != b.grainAmount;
-    case DevelopParameter::GrainSize: return a.grainSize != b.grainSize;
-    case DevelopParameter::GrainRoughness: return a.grainRoughness != b.grainRoughness;
-    default: return false;
+    // Every scalar parameter (incl. HSL) is its single backing value.
+    default: return developParameterValue(p, a) != developParameterValue(p, b);
     }
 }
 
@@ -215,8 +271,12 @@ QString developChangeLabel(const GlobalAdjustment& before, const GlobalAdjustmen
     const std::vector<DevelopParameter> changed = changedParameters(before, after);
     if (changed.empty())
         return QCoreApplication::translate("DevelopParameter", "Adjust");
-    if (changed.size() == 1)
-        return developParameterLabel(changed.front());
+    if (changed.size() == 1) {
+        const DevelopParameter p = changed.front();
+        const QString label = developParameterLabel(p);
+        const QString value = developParameterValueText(p, after);
+        return value.isEmpty() ? label : label + ' ' + value;
+    }
 
     // Several parameters moved at once (a reset, paste, preset, or WB pick). If
     // they share a group, name the group; otherwise fall back to the generic verb.

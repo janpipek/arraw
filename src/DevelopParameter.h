@@ -1,8 +1,10 @@
 #pragma once
 
 #include "DevelopGroup.h"
+#include "FieldSpec.h"
 #include "ImagePipeline.h"
 
+#include <optional>
 #include <vector>
 
 #include <QString>
@@ -93,6 +95,20 @@ QString developParameterLabel(DevelopParameter p);
 // The group this parameter belongs to. The parameter→group map and applyGroups'
 // group→field map are kept consistent by a partition test (test_DevelopParameter).
 DevelopGroup developParameterGroup(DevelopParameter p);
+
+// The slider number-handling spec (range, scales, format) for a scalar
+// parameter, or nullopt for parameters with no single numeric value (curves,
+// crop, orientation, the boolean lens toggles). This is the single source of
+// truth for slider numerics, also consumed by AdjustmentPanel's sliders.
+std::optional<FieldSpec> developParameterSpec(DevelopParameter p);
+
+// The current stored value of a scalar parameter (0 for non-scalar parameters).
+float developParameterValue(DevelopParameter p, const GlobalAdjustment& state);
+
+// A short human value for the parameter in this state, formatted exactly as the
+// panel shows it ("+1.00 EV", "+9.0°", "6200 K", "on"); empty for parameters with
+// no single value (a curve, crop, or orientation edit).
+QString developParameterValueText(DevelopParameter p, const GlobalAdjustment& state);
 
 // Does this single parameter's backing field differ between two develop states?
 bool developParameterDiffers(

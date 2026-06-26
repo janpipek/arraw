@@ -1,5 +1,6 @@
 #include "AdjustmentPanel.h"
 #include "AdjustmentSpinBox.h"
+#include "DevelopParameter.h"
 #include "Histogram.h"
 #include <QButtonGroup>
 #include <QCheckBox>
@@ -17,22 +18,25 @@
 #include <QStackedWidget>
 #include <QVBoxLayout>
 
-// Per-row number handling lives in exactly one place (see FieldSpec).
-// {min, max, def, paramScale, displayScale, decimals, suffix, signed, step}
-static const FieldSpec kExposureSpec{-500, 500, 0, 0.01f, 0.01f, 2, " EV", true, 0.05f};
-static const FieldSpec kToneSpec{-100, 100, 0, 1.0f, 1.0f, 0, {}, true, 1.0f};
-static const FieldSpec kTempSpec{2000, 12000, 5500, 1.0f, 1.0f, 0, " K", false, 50.0f};
-static const FieldSpec kBipolarSpec{-100, 100, 0, 1.0f, 1.0f, 0, {}, true, 1.0f};
-static const FieldSpec
-    kHslHueSpec{-100, 100, 0, 1.0f, 0.3f, 1, QString::fromUtf8("\xc2\xb0"), true, 0.3f};
-static const FieldSpec kSharpenSpec{0, 100, 0, 1.0f, 1.0f, 0, {}, false, 1.0f};
-// Colour-NR Smoothness resets to 50 (Lightroom parity), unlike Strength's 0.
-static const FieldSpec kColorSmoothnessSpec{0, 100, 50, 1.0f, 1.0f, 0, {}, false, 1.0f};
-static const FieldSpec kEffectAmountSpec{-100, 100, 0, 1.0f, 1.0f, 0, {}, true, 1.0f};
-static const FieldSpec kEffectShapeSpec{0, 100, 50, 1.0f, 1.0f, 0, {}, false, 1.0f};
-static const FieldSpec kGrainAmountSpec{0, 100, 0, 1.0f, 1.0f, 0, {}, false, 1.0f};
-static const FieldSpec
-    kRotationSpec{-4500, 4500, 0, 0.01f, 0.01f, 2, QString::fromUtf8("\xc2\xb0"), true, 0.10f};
+// Per-row number handling lives in exactly one place: developParameterSpec()
+// (DevelopParameter.h). These name the spec for each kind of slider by a
+// representative parameter, so the panel and the History labels read identical
+// numbers. (Colour-NR Smoothness, like the post-crop/grain shape sliders, resets
+// to 50 — Lightroom parity — unlike Strength's 0.)
+static const FieldSpec kExposureSpec = developParameterSpec(DevelopParameter::Exposure).value();
+static const FieldSpec kToneSpec = developParameterSpec(DevelopParameter::Contrast).value();
+static const FieldSpec kTempSpec = developParameterSpec(DevelopParameter::Temperature).value();
+static const FieldSpec kBipolarSpec = developParameterSpec(DevelopParameter::Tint).value();
+static const FieldSpec kHslHueSpec = developParameterSpec(DevelopParameter::HslRedHue).value();
+static const FieldSpec kSharpenSpec = developParameterSpec(DevelopParameter::Sharpening).value();
+static const FieldSpec kColorSmoothnessSpec
+    = developParameterSpec(DevelopParameter::ColorNoiseReductionSmoothness).value();
+static const FieldSpec kEffectAmountSpec
+    = developParameterSpec(DevelopParameter::PostCropVignetteAmount).value();
+static const FieldSpec kEffectShapeSpec
+    = developParameterSpec(DevelopParameter::PostCropVignetteMidpoint).value();
+static const FieldSpec kGrainAmountSpec = developParameterSpec(DevelopParameter::GrainAmount).value();
+static const FieldSpec kRotationSpec = developParameterSpec(DevelopParameter::Straighten).value();
 
 // Grain's hidden per-image seed is minted the first time Grain is enabled, and
 // must never be zero (0 marks "uninitialised"). Centralise the invariant so the

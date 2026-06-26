@@ -117,7 +117,45 @@ TEST_CASE("developChangeLabel names a single edit by its parameter", "[developpa
     GlobalAdjustment a;
     GlobalAdjustment b;
     b.contrast = 15.0f;
-    CHECK(developChangeLabel(a, b) == "Contrast");
+    CHECK(developChangeLabel(a, b) == "Contrast +15");
+}
+
+TEST_CASE("developChangeLabel appends the new value, formatted as the panel shows it",
+    "[developparameter]") {
+    GlobalAdjustment a;
+    {
+        GlobalAdjustment b;
+        b.exposure = 1.0f; // paramScale 0.01, 2 decimals, signed, " EV" suffix
+        CHECK(developChangeLabel(a, b) == "Exposure +1.00 EV");
+    }
+    {
+        GlobalAdjustment b;
+        b.contrast = -15.0f;
+        CHECK(developChangeLabel(a, b) == "Contrast -15");
+    }
+    {
+        GlobalAdjustment b;
+        b.temperature = 6200.0f; // unsigned, " K" suffix
+        CHECK(developChangeLabel(a, b) == "Temperature 6200 K");
+    }
+    {
+        GlobalAdjustment b;
+        b.hslHue[5] = 30.0f; // Blue hue: displayScale 0.3 → +9.0°
+        CHECK(developChangeLabel(a, b) == "Blue Hue +9.0\xc2\xb0");
+    }
+    {
+        GlobalAdjustment b;
+        b.lensCorrectDistortion = true; // boolean → on/off
+        CHECK(developChangeLabel(a, b) == "Distortion Correction on");
+    }
+}
+
+TEST_CASE("developChangeLabel omits a value for parameters that have none",
+    "[developparameter]") {
+    GlobalAdjustment a;
+    GlobalAdjustment b;
+    b.cropRect = {0.1, 0.1, 0.8, 0.8}; // a crop has no single scalar to show
+    CHECK(developChangeLabel(a, b) == "Crop");
 }
 
 TEST_CASE("developChangeLabel collapses a multi-field group edit to the group name",
