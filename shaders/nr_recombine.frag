@@ -12,7 +12,9 @@ layout(location = 0) out vec4 fragColor;
 layout(binding = 1) uniform sampler2D srcTex;    // full-res raw slot
 layout(binding = 2) uniform sampler2D chromaTex; // quarter-res blurred chroma ratio
 
-// Must match `nrbuf` in nr.vert exactly (std140); only strength is read here.
+// Shares the `nrbuf` prefix with nr.vert (std140); this stage additionally reads
+// the trailing `strength`, which the other passes don't declare. Std140 keeps the
+// shared members at the same offsets, so the buffer stays compatible.
 layout(std140, binding = 0) uniform nrbuf {
     mat4  clipCorr;
     vec2  invChroma;
