@@ -309,7 +309,8 @@ SidecarLoadResult XmpSidecar::loadWithStatus(const QString& rawPath) {
             p.saturation = attr("Saturation", 0.0f);
             p.vibrance = attr("Vibrance", 0.0f);
             p.sharpening = attr("Sharpness", 0.0f);
-            p.colorNoiseReduction = attr("ColorNoiseReduction", 0.0f);
+            p.colorNoiseReduction = attr("ColorNoiseReduction", 0.0f); // Strength (issue #59)
+            p.colorNoiseReductionSmoothness = attr("ColorNoiseReductionSmoothness", 50.0f);
             p.rotation = attr("CropAngle", 0.0f);
             p.postCropVignetteAmount = attr("PostCropVignetteAmount", 0.0f);
             p.postCropVignetteMidpoint = attr("PostCropVignetteMidpoint", 50.0f);
@@ -547,7 +548,8 @@ static QByteArray ownedPacket(const SidecarData& data) {
     write("Saturation", p.saturation);
     write("Vibrance", p.vibrance);
     write("Sharpness", p.sharpening);
-    write("ColorNoiseReduction", p.colorNoiseReduction);
+    write("ColorNoiseReduction", p.colorNoiseReduction); // Strength (issue #59)
+    write("ColorNoiseReductionSmoothness", p.colorNoiseReductionSmoothness);
     write("CropAngle", p.rotation); // Adobe's real straighten field (docs/adr/0028)
     write("PostCropVignetteAmount", p.postCropVignetteAmount);
     write("PostCropVignetteMidpoint", p.postCropVignetteMidpoint);

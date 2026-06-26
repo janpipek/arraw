@@ -26,6 +26,8 @@ static const FieldSpec kBipolarSpec{-100, 100, 0, 1.0f, 1.0f, 0, {}, true, 1.0f}
 static const FieldSpec
     kHslHueSpec{-100, 100, 0, 1.0f, 0.3f, 1, QString::fromUtf8("\xc2\xb0"), true, 0.3f};
 static const FieldSpec kSharpenSpec{0, 100, 0, 1.0f, 1.0f, 0, {}, false, 1.0f};
+// Colour-NR Smoothness resets to 50 (Lightroom parity), unlike Strength's 0.
+static const FieldSpec kColorSmoothnessSpec{0, 100, 50, 1.0f, 1.0f, 0, {}, false, 1.0f};
 static const FieldSpec kEffectAmountSpec{-100, 100, 0, 1.0f, 1.0f, 0, {}, true, 1.0f};
 static const FieldSpec kEffectShapeSpec{0, 100, 50, 1.0f, 1.0f, 0, {}, false, 1.0f};
 static const FieldSpec kGrainAmountSpec{0, 100, 0, 1.0f, 1.0f, 0, {}, false, 1.0f};
@@ -74,6 +76,15 @@ AdjustmentPanel::AdjustmentPanel(QWidget* parent)
         layout->setSpacing(2);
         root->addWidget(box);
         return layout;
+    };
+    // A bold sub-label that splits one group box into named sub-sections (e.g.
+    // Detail's Color Noise, Effects' Post-Crop Vignette / Grain).
+    auto subHeader = [this](QVBoxLayout* group, const QString& title) {
+        auto* lbl = new QLabel(title, this);
+        QFont f = lbl->font();
+        f.setBold(true);
+        lbl->setFont(f);
+        group->addWidget(lbl);
     };
 
     // ── White Balance ─────────────────────────────────────────────────────────
@@ -200,7 +211,9 @@ AdjustmentPanel::AdjustmentPanel(QWidget* parent)
     // ── Detail ────────────────────────────────────────────────────────────────
     auto* detail = makeGroup("Detail");
     sharpening = addSlider(detail, "Sharpen", kSharpenSpec);
-    colorNoiseReduction = addSlider(detail, "Color Noise", kSharpenSpec);
+    subHeader(detail, "Color Noise");
+    colorNoiseReduction = addSlider(detail, "Strength", kSharpenSpec);
+    colorNoiseReductionSmoothness = addSlider(detail, "Smoothness", kColorSmoothnessSpec);
 
     // ── Geometry ──────────────────────────────────────────────────────────────
     auto* geo = makeGroup("Geometry");
@@ -230,13 +243,6 @@ AdjustmentPanel::AdjustmentPanel(QWidget* parent)
 
     // ── Effects ───────────────────────────────────────────────────────────────
     auto* effects = makeGroup("Effects");
-    auto subHeader = [this](QVBoxLayout* group, const QString& title) {
-        auto* lbl = new QLabel(title, this);
-        QFont f = lbl->font();
-        f.setBold(true);
-        lbl->setFont(f);
-        group->addWidget(lbl);
-    };
     subHeader(effects, "Post-Crop Vignette");
     postCropVignetteAmount = addSlider(effects, "Amount", kEffectAmountSpec);
     postCropVignetteMidpoint = addSlider(effects, "Midpoint", kEffectShapeSpec);
@@ -320,7 +326,8 @@ void AdjustmentPanel::syncParams() {
     adjustments.saturation = v(saturation);
     adjustments.vibrance = v(vibrance);
     adjustments.sharpening = v(sharpening);
-    adjustments.colorNoiseReduction = v(colorNoiseReduction);
+    adjustments.colorNoiseReduction = v(colorNoiseReduction); // Strength (issue #59)
+    adjustments.colorNoiseReductionSmoothness = v(colorNoiseReductionSmoothness);
     adjustments.rotation = v(rotation);
     adjustments.postCropVignetteAmount = v(postCropVignetteAmount);
     adjustments.postCropVignetteMidpoint = v(postCropVignetteMidpoint);
@@ -355,6 +362,7 @@ std::vector<AdjustmentPanel::SliderRow*> AdjustmentPanel::allRows() {
            &vibrance,
            &sharpening,
            &colorNoiseReduction,
+           &colorNoiseReductionSmoothness,
            &rotation,
            &postCropVignetteAmount,
            &postCropVignetteMidpoint,
@@ -474,7 +482,8 @@ void AdjustmentPanel::setParams(const GlobalAdjustment& p) {
     set(saturation, p.saturation);
     set(vibrance, p.vibrance);
     set(sharpening, p.sharpening);
-    set(colorNoiseReduction, p.colorNoiseReduction);
+    set(colorNoiseReduction, p.colorNoiseReduction); // Strength (issue #59)
+    set(colorNoiseReductionSmoothness, p.colorNoiseReductionSmoothness);
     set(rotation, p.rotation);
     set(postCropVignetteAmount, p.postCropVignetteAmount);
     set(postCropVignetteMidpoint, p.postCropVignetteMidpoint);

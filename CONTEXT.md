@@ -339,16 +339,21 @@ _Avoid_: heal (implies Poisson blending, which is not implemented), clone stamp
 
 **Colour Noise Reduction**:
 The removal of *chroma* noise — the coloured blotches of high-ISO captures — by
-smoothing colour while leaving luminance detail untouched. A single Amount control
-(0..100) drives a separable Gaussian blur of the unit-luma chroma ratio, run as a
-cached multi-pass GPU pre-pass inside [[RendererCore]] at quarter resolution,
-immediately before the main shader. It samples the already-uploaded
-lens-corrected/spotted texture, so it sits *last* in the pipeline — safe because the
-chroma ratio is unchanged by the achromatic vignette gain and geometry-only [[Spot]]
-clones. Sigma is calibrated in full-res pixels (the blur runs at sigma/4 on the
-quarter-res chroma). The recompute is debounced ~200 ms after the slider settles.
-Luminance noise reduction — the grainy brightness speckle — is a separate, deferred
-concept. The opposite of [[Grain]], which *adds* texture. Stored as
-`crs:ColorNoiseReduction`, default 0.
-_Avoid_: denoise (bare — say which kind), luminance NR (the deferred sibling),
-grain (the inverse operation), sharpening (a different Detail control)
+smoothing colour while leaving luminance detail untouched. Two controls:
+**Smoothness**, the scale of the colour blobs smoothed (drives the Gaussian sigma,
+0..100 → 0..25 full-res px), and **Strength**, how much of the smoothed chroma is
+blended back over the original — the effect's opacity. Run as a cached multi-pass
+GPU pre-pass inside [[RendererCore]] at quarter resolution, immediately before the
+main shader. It samples the already-uploaded lens-corrected/spotted texture, so it
+sits *last* in the pipeline — safe because the chroma ratio is unchanged by the
+achromatic vignette gain and geometry-only [[Spot]] clones. Luminance is preserved
+exactly at any Strength by construction (the blend is of unit-luma chroma ratios).
+The recompute is debounced ~200 ms after a slider settles. Luminance noise
+reduction — the grainy brightness speckle — is a separate, deferred concept. The
+opposite of [[Grain]], which *adds* texture. Stored as `crs:ColorNoiseReduction`
+(Strength, default 0) and `crs:ColorNoiseReductionSmoothness` (Smoothness, default
+50); the Strength field is Lightroom's "Color" amount, so existing arraw edits that
+predate the split reinterpret their old single value as Strength.
+_Avoid_: denoise (bare — say which kind), Amount (the old single control, now split
+into Smoothness + Strength), luminance NR (the deferred sibling), grain (the inverse
+operation), sharpening (a different Detail control)

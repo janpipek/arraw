@@ -81,9 +81,11 @@ struct NrUbuf {
     qint32 radius;      // tap radius (capped at 64, matching the shader)
     qint32 flipV;       // 1 on a Y-up framebuffer (OpenGL): mirror the sampled V so
                         // the rendered NR targets keep the uploaded image's orientation
-    qint32 pad_[3];     // std140 pads the block to a 16-byte multiple
+    float strength;     // recombine blend factor 0..1 (Strength); read only by nr_recombine
+    qint32 pad_[2];     // std140 pads the block to a 16-byte multiple
 };
 static_assert(sizeof(NrUbuf) == 96);
+static_assert(offsetof(NrUbuf, strength) == 84);
 
 // The one place the shader pipeline is recorded (ADR 0006): the widget's
 // on-screen pass, the export render, and the histogram samples all go
@@ -165,7 +167,8 @@ private:
     // Colour Noise Reduction (docs/adr/0032). Runs a cached GPU pre-pass that
     // denoises chroma into denoisedTex; the main pass then samples that instead of
     // the raw slot. Returns the texture the main pass should sample.
-    QRhiTexture* ensureDenoised(QRhiCommandBuffer* cb, int key, QRhiTexture* rawTex, float amount);
+    QRhiTexture* ensureDenoised(
+        QRhiCommandBuffer* cb, int key, QRhiTexture* rawTex, float smoothness, float strength);
     void ensureNrResources();
     void ensureNrSlot(int key, QSize fullSize);
     void nrPass(
@@ -228,8 +231,9 @@ private:
         std::unique_ptr<QRhiTexture> chromaA, chromaB, denoised; // chroma ¼-res; denoised full-res
         std::unique_ptr<QRhiTextureRenderTarget> chromaART, chromaBRT, denoisedRT;
         QSize fullSize;
-        float amount = -1.0f; // Amount the cached denoised texture was built for
-        int gen = -1;         // texture generation it was built against
+        float smoothness = -1.0f; // Smoothness the cached denoised texture was built for
+        float strength = -1.0f;   // Strength it was built for (issue #59)
+        int gen = -1;             // texture generation it was built against
     };
     // [0]=Preview, [1]=FullRes, [2]=export's temporary full-res texture.
     NrSlot nrSlot[3];
