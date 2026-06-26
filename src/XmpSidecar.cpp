@@ -258,6 +258,132 @@ static std::vector<LocalAdjustment> parseLocalAdjustments(QXmlStreamReader& xml)
     return out;
 }
 
+// Reads a curve seq nested under a snapshot's crs:ToneCurve* element. Mirrors the
+// whitespace-skipping dance the top-level loader does before parseCurveSeq.
+static void readSnapshotCurve(QXmlStreamReader& xml, CurvePoints& target) {
+    do {
+        xml.readNext();
+    } while (xml.isWhitespace());
+    if (xml.isStartElement() && xml.qualifiedName() == "rdf:Seq")
+        target.points = parseCurveSeq(xml);
+}
+
+// Parse one rdf:li (parseType="Resource") of the arraw:Snapshots Seq — a name
+// plus the whole develop state, written as arraw:-named child elements with the
+// curves/local-adjustments/spots sub-blocks reused from the top-level format
+// (docs/adr/0033). Consumes the subtree so its nested crs:/arraw: elements never
+// reach the top-level loader's (unscoped) curve/mask/spot detectors.
+static Snapshot parseSnapshotLi(QXmlStreamReader& xml) {
+    Snapshot snap;
+    GlobalAdjustment& p = snap.state;
+    double cropX = 0.0, cropY = 0.0, cropW = 1.0, cropH = 1.0;
+    auto f = [&]() { return xml.readElementText().toFloat(); };
+    auto isTrue = [&]() { return xml.readElementText() == "1"; };
+    while (!xml.atEnd()) {
+        xml.readNext();
+        if (xml.isEndElement() && xml.qualifiedName() == "rdf:li")
+            break;
+        if (!xml.isStartElement())
+            continue;
+        const auto name = xml.qualifiedName().toString();
+        if (name == "arraw:Name")
+            snap.name = xml.readElementText();
+        else if (name == "arraw:Exposure")
+            p.exposure = f();
+        else if (name == "arraw:Contrast")
+            p.contrast = f();
+        else if (name == "arraw:Highlights")
+            p.highlights = f();
+        else if (name == "arraw:Shadows")
+            p.shadows = f();
+        else if (name == "arraw:Whites")
+            p.whites = f();
+        else if (name == "arraw:Blacks")
+            p.blacks = f();
+        else if (name == "arraw:Temperature")
+            p.temperature = f();
+        else if (name == "arraw:Tint")
+            p.tint = f();
+        else if (name == "arraw:Saturation")
+            p.saturation = f();
+        else if (name == "arraw:Vibrance")
+            p.vibrance = f();
+        else if (name == "arraw:Sharpness")
+            p.sharpening = f();
+        else if (name == "arraw:ColorNoiseReduction")
+            p.colorNoiseReduction = f();
+        else if (name == "arraw:ColorNoiseReductionSmoothness")
+            p.colorNoiseReductionSmoothness = f();
+        else if (name == "arraw:CropAngle")
+            p.rotation = f();
+        else if (name == "arraw:PostCropVignetteAmount")
+            p.postCropVignetteAmount = f();
+        else if (name == "arraw:PostCropVignetteMidpoint")
+            p.postCropVignetteMidpoint = f();
+        else if (name == "arraw:PostCropVignetteFeather")
+            p.postCropVignetteFeather = f();
+        else if (name == "arraw:GrainAmount")
+            p.grainAmount = f();
+        else if (name == "arraw:GrainSize")
+            p.grainSize = f();
+        else if (name == "arraw:GrainFrequency")
+            p.grainRoughness = f();
+        else if (name == "arraw:GrainSeed")
+            p.grainSeed = xml.readElementText().toUInt();
+        else if (name == "arraw:LensCorrectDistortion")
+            p.lensCorrectDistortion = isTrue();
+        else if (name == "arraw:LensCorrectVignetting")
+            p.lensCorrectVignetting = isTrue();
+        else if (name == "arraw:LensCorrectCA")
+            p.lensCorrectCA = isTrue();
+        else if (name == "arraw:Orientation")
+            p.orientation = orient::fromExif(xml.readElementText().toInt());
+        else if (name == "arraw:CropX")
+            cropX = xml.readElementText().toDouble();
+        else if (name == "arraw:CropY")
+            cropY = xml.readElementText().toDouble();
+        else if (name == "arraw:CropW")
+            cropW = xml.readElementText().toDouble();
+        else if (name == "arraw:CropH")
+            cropH = xml.readElementText().toDouble();
+        else if (name == "arraw:CropConstrained")
+            p.cropConstrained = isTrue();
+        else if (name.startsWith("arraw:HslHue"))
+            p.hslHue[name.mid(12).toInt()] = f();
+        else if (name.startsWith("arraw:HslSat"))
+            p.hslSat[name.mid(12).toInt()] = f();
+        else if (name.startsWith("arraw:HslLum"))
+            p.hslLum[name.mid(12).toInt()] = f();
+        else if (name == "crs:ToneCurvePV2012")
+            readSnapshotCurve(xml, p.curveLuma);
+        else if (name == "crs:ToneCurvePV2012Red")
+            readSnapshotCurve(xml, p.curveR);
+        else if (name == "crs:ToneCurvePV2012Green")
+            readSnapshotCurve(xml, p.curveG);
+        else if (name == "crs:ToneCurvePV2012Blue")
+            readSnapshotCurve(xml, p.curveB);
+        else if (name == "arraw:LocalAdjustments")
+            p.localAdjustments = parseLocalAdjustments(xml);
+        else if (name == "arraw:Spots")
+            p.spots = parseSpots(xml);
+    }
+    p.cropRect = QRectF(cropX, cropY, cropW, cropH);
+    return snap;
+}
+
+// Parse the arraw:Snapshots Seq into a list. Positioned on the Snapshots start.
+static std::vector<Snapshot> parseSnapshots(QXmlStreamReader& xml) {
+    std::vector<Snapshot> out;
+    while (!xml.atEnd()) {
+        xml.readNext();
+        if (xml.isEndElement() && xml.qualifiedName() == "arraw:Snapshots")
+            break;
+        if (xml.isStartElement() && xml.qualifiedName() == "rdf:li")
+            out.push_back(parseSnapshotLi(xml));
+    }
+    return out;
+}
+
 SidecarData XmpSidecar::load(const QString& rawPath) {
     return loadWithStatus(rawPath).data;
 }
@@ -397,6 +523,11 @@ SidecarLoadResult XmpSidecar::loadWithStatus(const QString& rawPath) {
             // arraw-native spots (docs/adr/0017).
             if (name == "arraw:Spots")
                 p.spots = parseSpots(xml);
+            // arraw-native snapshots (docs/adr/0033). parseSnapshots consumes the
+            // whole subtree, so the nested curve/mask/spot elements above never
+            // reach these (unscoped) detectors as top-level state.
+            if (name == "arraw:Snapshots")
+                data.snapshots = parseSnapshots(xml);
         }
     }
     if (xml.hasError())
@@ -498,6 +629,81 @@ static void writeLocalAdjustments(QXmlStreamWriter& xml, const std::vector<Local
     xml.writeEndElement(); // arraw:LocalAdjustments
 }
 
+// Writes one Snapshot's complete develop state as arraw:-named child elements,
+// reusing the curve / local-adjustment / spot sub-blocks from the top-level
+// format (docs/adr/0033). All fields live in the arraw: namespace (this is
+// arraw-owned content, not the Lightroom-shared crs: current state), except the
+// reused crs:ToneCurve* curve elements, which ride inside the arraw:Snapshots
+// element and are replaced wholesale with it on save.
+static void writeSnapshotState(QXmlStreamWriter& xml, const GlobalAdjustment& p) {
+    auto num = [](float v) { return QString::number(double(v), 'f', 4); };
+    auto el = [&](const char* name, float v) { xml.writeTextElement(kNsArraw, name, num(v)); };
+    auto flag
+        = [&](const char* name, bool v) { xml.writeTextElement(kNsArraw, name, v ? "1" : "0"); };
+    el("Exposure", p.exposure);
+    el("Contrast", p.contrast);
+    el("Highlights", p.highlights);
+    el("Shadows", p.shadows);
+    el("Whites", p.whites);
+    el("Blacks", p.blacks);
+    el("Temperature", p.temperature);
+    el("Tint", p.tint);
+    el("Saturation", p.saturation);
+    el("Vibrance", p.vibrance);
+    el("Sharpness", p.sharpening);
+    el("ColorNoiseReduction", p.colorNoiseReduction);
+    el("ColorNoiseReductionSmoothness", p.colorNoiseReductionSmoothness);
+    el("CropAngle", p.rotation);
+    el("PostCropVignetteAmount", p.postCropVignetteAmount);
+    el("PostCropVignetteMidpoint", p.postCropVignetteMidpoint);
+    el("PostCropVignetteFeather", p.postCropVignetteFeather);
+    el("GrainAmount", p.grainAmount);
+    el("GrainSize", p.grainSize);
+    el("GrainFrequency", p.grainRoughness);
+    if (p.grainSeed != 0)
+        xml.writeTextElement(kNsArraw, "GrainSeed", QString::number(p.grainSeed));
+    flag("LensCorrectDistortion", p.lensCorrectDistortion);
+    flag("LensCorrectVignetting", p.lensCorrectVignetting);
+    flag("LensCorrectCA", p.lensCorrectCA);
+    xml.writeTextElement(kNsArraw, "Orientation", QString::number(orient::toExif(p.orientation)));
+    xml.writeTextElement(kNsArraw, "CropX", QString::number(p.cropRect.left(), 'f', 4));
+    xml.writeTextElement(kNsArraw, "CropY", QString::number(p.cropRect.top(), 'f', 4));
+    xml.writeTextElement(kNsArraw, "CropW", QString::number(p.cropRect.width(), 'f', 4));
+    xml.writeTextElement(kNsArraw, "CropH", QString::number(p.cropRect.height(), 'f', 4));
+    flag("CropConstrained", p.cropConstrained);
+    for (int i = 0; i < 8; ++i) {
+        xml.writeTextElement(kNsArraw, QStringLiteral("HslHue%1").arg(i), num(p.hslHue[i]));
+        xml.writeTextElement(kNsArraw, QStringLiteral("HslSat%1").arg(i), num(p.hslSat[i]));
+        xml.writeTextElement(kNsArraw, QStringLiteral("HslLum%1").arg(i), num(p.hslLum[i]));
+    }
+    writeCurve(xml, "ToneCurvePV2012", p.curveLuma.points);
+    writeCurve(xml, "ToneCurvePV2012Red", p.curveR.points);
+    writeCurve(xml, "ToneCurvePV2012Green", p.curveG.points);
+    writeCurve(xml, "ToneCurvePV2012Blue", p.curveB.points);
+    writeLocalAdjustments(xml, p.localAdjustments);
+    writeSpots(xml, p.spots);
+}
+
+// Writes the named A/B Snapshots as an arraw:Snapshots Seq of struct resources
+// (docs/adr/0033). Omitted entirely when there are none, so clean sidecars stay
+// clean. arraw owns the whole arraw: namespace, so this rides the existing
+// namespace-replacement merge on save (docs/adr/0026) with no special handling.
+static void writeSnapshots(QXmlStreamWriter& xml, const std::vector<Snapshot>& snapshots) {
+    if (snapshots.empty())
+        return;
+    xml.writeStartElement(kNsArraw, "Snapshots");
+    xml.writeStartElement(kNsRdf, "Seq");
+    for (const auto& snap : snapshots) {
+        xml.writeStartElement(kNsRdf, "li");
+        xml.writeAttribute(kNsRdf, "parseType", "Resource");
+        xml.writeTextElement(kNsArraw, "Name", snap.name);
+        writeSnapshotState(xml, snap.state);
+        xml.writeEndElement(); // rdf:li
+    }
+    xml.writeEndElement(); // rdf:Seq
+    xml.writeEndElement(); // arraw:Snapshots
+}
+
 // Writes the whole sidecar (both develop settings and user metadata) from one
 // SidecarData. The namespace-scoped public saves below read-modify-write through
 // this, so each preserves the half it doesn't touch (docs/adr/0007).
@@ -591,6 +797,8 @@ static QByteArray ownedPacket(const SidecarData& data) {
     writeLocalAdjustments(xml, p.localAdjustments);
     // arraw-native spots (docs/adr/0017).
     writeSpots(xml, p.spots);
+    // arraw-native snapshots (docs/adr/0033).
+    writeSnapshots(xml, data.snapshots);
 
     xml.writeEndElement(); // rdf:Description
     xml.writeEndElement(); // rdf:RDF
@@ -753,6 +961,14 @@ static bool writeFile(const QString& rawPath, const SidecarData& data, SaveScope
 bool XmpSidecar::saveAdjustments(const QString& rawPath, const GlobalAdjustment& params) {
     SidecarData data = load(rawPath); // preserve any existing xmp: marks
     data.adjustments = params;
+    return writeFile(rawPath, data, SaveScope::Adjustments);
+}
+
+bool XmpSidecar::saveAdjustments(
+    const QString& rawPath, const GlobalAdjustment& params, const std::vector<Snapshot>& snapshots) {
+    SidecarData data = load(rawPath); // preserve any existing xmp: marks
+    data.adjustments = params;
+    data.snapshots = snapshots;
     return writeFile(rawPath, data, SaveScope::Adjustments);
 }
 

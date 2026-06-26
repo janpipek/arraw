@@ -38,6 +38,7 @@ ResolvedLoadedImage resolveLoadedImage(const QString& path, const LoadResult& re
         sidecar.data.adjustments,
         sidecar.data.metadata,
         toSessionSidecarState(sidecar.status),
+        sidecar.data.snapshots,
     };
 }
 

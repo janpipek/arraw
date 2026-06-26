@@ -14,6 +14,7 @@
 #include "ExportDialog.h"
 #include "ExportWorkflow.h"
 #include "FilmStrip.h"
+#include "HistoryPanel.h"
 #include "GroupChecklistDialog.h"
 #include "ImageLoadWorkflow.h"
 #include "ImageViewport.h"
@@ -148,6 +149,37 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+// Undo command for restoring a Snapshot (docs/adr/0033). A snapshot is a whole
+// develop state, so unlike AdjustmentCommand this fully refreshes both editors
+// and re-uploads the spotted/corrected buffers — masks, spots, and lens
+// corrections can all change in one swap.
+// ---------------------------------------------------------------------------
+class SnapshotRestoreCommand : public QUndoCommand {
+public:
+    SnapshotRestoreCommand(
+        DevelopSession* session,
+        MainWindow* mainWindow,
+        GlobalAdjustment before,
+        GlobalAdjustment after,
+        const QString& name)
+        : session(session),
+          mainWindow(mainWindow),
+          before(std::move(before)),
+          after(std::move(after)) {
+        setText(QObject::tr("Restore Snapshot \"%1\"").arg(name));
+    }
+
+    void undo() override;
+
+    void redo() override;
+
+private:
+    DevelopSession* session;
+    MainWindow* mainWindow;
+    GlobalAdjustment before, after;
+};
+
+// ---------------------------------------------------------------------------
 // Lens correction is a CPU buffer change (like spots), so when its toggles flip the
 // viewport texture must be re-uploaded — uniform-only refresh isn't enough.
 static bool lensTogglesDiffer(const GlobalAdjustment& a, const GlobalAdjustment& b) {
@@ -191,6 +223,18 @@ void SpotListCommand::redo() {
     mainWindow->syncSessionSpotsToEditors(true);
 }
 
+void SnapshotRestoreCommand::undo() {
+    session->setParams(before);
+    mainWindow->syncSessionToEditors();
+    mainWindow->syncSessionSpotsToEditors(true); // re-upload buffers + spot panel
+}
+
+void SnapshotRestoreCommand::redo() {
+    session->setParams(after);
+    mainWindow->syncSessionToEditors();
+    mainWindow->syncSessionSpotsToEditors(true);
+}
+
 // ---------------------------------------------------------------------------
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent),
@@ -212,7 +256,8 @@ MainWindow::MainWindow(QWidget* parent)
     // The adjustments dock + reveal strip are NOT listed here: they are a
     // CollapsiblePane pair (ADR 0012), so lights-out drives them through
     // adjustmentsPane->hide()/show() to keep that invariant intact.
-    chromeHider.emplace(std::vector<QWidget*>{menuBar(), mainToolBar, statusBar(), filmStripDock});
+    chromeHider.emplace(
+        std::vector<QWidget*>{menuBar(), mainToolBar, statusBar(), filmStripDock, historyDock});
 
     connect(proofPanel, &ProofingPanel::proofingChanged, this, &MainWindow::rebuildDisplayLut);
     rebuildDisplayLut();
@@ -893,6 +938,23 @@ void MainWindow::setupDocks() {
     connect(
         filmStrip, &FilmStrip::populateContextMenu, this, &MainWindow::populateFilmStripContextMenu);
 
+    // History + Snapshots (left), Lightroom-style, visible while editing (ADR 0033).
+    historyDock = new QDockWidget("History", this);
+    historyDock->setObjectName("HistoryDock"); // saveState/restoreState key
+    historyDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
+    historyDock->setFeatures(
+        QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable
+        | QDockWidget::DockWidgetClosable);
+    historyPanel = new HistoryPanel(undoStack, historyDock);
+    historyDock->setWidget(historyPanel);
+    addDockWidget(Qt::LeftDockWidgetArea, historyDock);
+    historyDock->toggleViewAction()->setText("History");
+
+    connect(historyPanel, &HistoryPanel::addRequested, this, &MainWindow::addCurrentAsSnapshot);
+    connect(historyPanel, &HistoryPanel::restoreRequested, this, &MainWindow::restoreSnapshot);
+    connect(historyPanel, &HistoryPanel::renameRequested, this, &MainWindow::renameSnapshot);
+    connect(historyPanel, &HistoryPanel::deleteRequested, this, &MainWindow::deleteSnapshot);
+
     // Adjustments + EXIF (right). Collapses to a thin edge strip (ADR 0012).
     auto* rightDock = adjustmentsDock = new QDockWidget("Adjustments", this);
     rightDock->setObjectName("AdjustmentsDock"); // saveState/restoreState key
@@ -1014,7 +1076,7 @@ bool MainWindow::saveDirtySidecar(bool forceDevelopSave) {
 
     bool saved = true;
     if (forceDevelopSave || session->developDirty()) {
-        if (XmpSidecar::saveAdjustments(session->path(), currentParams())) {
+        if (XmpSidecar::saveAdjustments(session->path(), currentParams(), session->snapshots())) {
             session->markDevelopSaved();
         } else {
             session->markDevelopSaveFailed();
@@ -1169,14 +1231,20 @@ void MainWindow::applyLoadResult(const QString& path, const LoadResult& result) 
     // another app — or a prior session — are always reflected.
     const ResolvedLoadedImage resolved = resolveLoadedImage(path, result);
     session->setLoadedImage(
-        path, result, resolved.adjustments, resolved.sidecarState, resolved.metadata);
+        path,
+        result,
+        resolved.adjustments,
+        resolved.sidecarState,
+        resolved.metadata,
+        resolved.snapshots);
     session->setBaseLook(true);
     syncSessionToEditors();
     syncSessionSpotsToEditors(true);
     filmStrip->setMarks(path, session->userMetadata());
+    historyPanel->setSnapshots(session->snapshots());
 
     exifPanel->setMetadata(result.metadata);
-    undoStack->clear();
+    undoStack->clear(); // History is session-only — it resets per image (ADR 0033)
 
     statusLabel->setText(loadedImageStatusText(path, session->fullRes(), session->sidecarState()));
 

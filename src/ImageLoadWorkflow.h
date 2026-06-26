@@ -20,6 +20,7 @@ struct ResolvedLoadedImage {
     GlobalAdjustment adjustments;
     UserMetadata metadata;
     DevelopSession::SidecarState sidecarState = DevelopSession::SidecarState::Unknown;
+    std::vector<Snapshot> snapshots; // named A/B develop states (docs/adr/0033)
 };
 
 using EmbeddedPreviewCallback = std::function<void(ImageBuffer)>;

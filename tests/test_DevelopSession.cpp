@@ -2,6 +2,9 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <QUndoCommand>
+#include <QUndoStack>
+
 TEST_CASE("DevelopSession starts empty", "[develop-session]") {
     DevelopSession session;
 
@@ -229,6 +232,126 @@ TEST_CASE("DevelopSession records the image being loaded", "[develop-session]") 
     CHECK_FALSE(session.hasImage());
     CHECK_FALSE(session.developDirty());
     CHECK_FALSE(session.metadataDirty());
+}
+
+TEST_CASE(
+    "DevelopSession manages snapshots and tracks them as develop edits",
+    "[develop-session][snapshots]") {
+    DevelopSession session;
+    LoadResult result;
+    result.preview = ImageBuffer{{0.1f, 0.2f, 0.3f}, 1, 1};
+    session.setLoadedImage(
+        "/photos/IMG_0001.dng", result, GlobalAdjustment{}, DevelopSession::SidecarState::Loaded);
+
+    CHECK(session.snapshots().empty());
+    CHECK_FALSE(session.developDirty());
+
+    GlobalAdjustment warm;
+    warm.temperature = 8000.0f;
+    session.addSnapshot("Warm look", warm);
+
+    REQUIRE(session.snapshots().size() == 1);
+    CHECK(session.snapshots()[0].name == "Warm look");
+    CHECK(session.snapshots()[0].state.temperature == 8000.0f);
+    CHECK(session.developDirty()); // a new snapshot is a pending sidecar change
+
+    session.markDevelopSaved();
+    CHECK_FALSE(session.developDirty());
+
+    session.renameSnapshot(0, "Golden hour");
+    CHECK(session.snapshots()[0].name == "Golden hour");
+    CHECK(session.developDirty());
+
+    session.markDevelopSaved();
+    session.removeSnapshot(0);
+    CHECK(session.snapshots().empty());
+    CHECK(session.developDirty());
+}
+
+TEST_CASE(
+    "DevelopSession seeds snapshots from the sidecar as a clean baseline",
+    "[develop-session][snapshots]") {
+    DevelopSession session;
+    LoadResult result;
+    result.preview = ImageBuffer{{0.1f, 0.2f, 0.3f}, 1, 1};
+
+    Snapshot snap;
+    snap.name = "Loaded";
+    snap.state.exposure = 1.0f;
+    session.setLoadedImage(
+        "/photos/IMG_0001.dng",
+        result,
+        GlobalAdjustment{},
+        DevelopSession::SidecarState::Loaded,
+        {},
+        {snap});
+
+    REQUIRE(session.snapshots().size() == 1);
+    CHECK(session.snapshots()[0].name == "Loaded");
+    CHECK_FALSE(session.developDirty()); // loaded snapshots are not a pending edit
+}
+
+// Restoring a snapshot is a single, undoable develop edit (docs/adr/0033):
+// MainWindow pushes a before/after full-state swap onto the shared QUndoStack.
+// This exercises the model side of that contract — that the swap and its undo
+// are lossless even with masks and spots, which is what makes A/B + Ctrl+Z
+// trustworthy. The MainWindow widget wiring itself is GUI-verified.
+namespace {
+class RestoreSnapshotCommand : public QUndoCommand {
+public:
+    RestoreSnapshotCommand(DevelopSession& session, GlobalAdjustment before, GlobalAdjustment after)
+        : session(session), before(std::move(before)), after(std::move(after)) {}
+    void undo() override { session.setParams(before); }
+    void redo() override { session.setParams(after); }
+
+private:
+    DevelopSession& session;
+    GlobalAdjustment before, after;
+};
+} // namespace
+
+TEST_CASE("restoring a snapshot is a lossless, undoable full-state swap", "[develop-session][snapshots]") {
+    DevelopSession session;
+    LoadResult result;
+    result.preview = ImageBuffer{{0.1f, 0.2f, 0.3f}, 1, 1};
+
+    // Start from a masked, spotted develop state A.
+    GlobalAdjustment a;
+    a.exposure = 0.3f;
+    LocalAdjustment la;
+    la.mask = LinearMask{{0.0, 0.0}, {1.0, 1.0}};
+    la.exposure = 0.4f;
+    a.localAdjustments.push_back(la);
+    a.spots.push_back(Spot{{10.0, 20.0}, {30.0, 40.0}, 5.0, 0.3});
+    session.setLoadedImage("/p.dng", result, a, DevelopSession::SidecarState::Loaded);
+
+    // Snapshot a different state B (radial mask, no spots, warmer).
+    GlobalAdjustment b;
+    b.temperature = 8000.0f;
+    LocalAdjustment radial;
+    radial.mask = RadialMask{{0.5, 0.5}, 0.2, 0.2, 0.0, 0.4, false};
+    radial.exposure = -0.6f;
+    b.localAdjustments.push_back(radial);
+    session.addSnapshot("Variant B", b);
+
+    QUndoStack stack;
+    stack.push(new RestoreSnapshotCommand(session, session.params(), session.snapshots()[0].state));
+
+    // Restored to B exactly — masks swapped, spots cleared.
+    CHECK(session.params() == b);
+    CHECK(session.params().spots.empty());
+    REQUIRE(session.params().localAdjustments.size() == 1);
+    CHECK(std::holds_alternative<RadialMask>(session.params().localAdjustments[0].mask));
+
+    // Undo returns to A exactly — masks and spots come back.
+    stack.undo();
+    CHECK(session.params() == a);
+    REQUIRE(session.params().spots.size() == 1);
+    CHECK(std::holds_alternative<LinearMask>(session.params().localAdjustments[0].mask));
+
+    // Redo swaps back to B.
+    stack.redo();
+    CHECK(session.params() == b);
 }
 
 TEST_CASE("DevelopSession applies lens correction only when toggled", "[develop-session][lens]") {
