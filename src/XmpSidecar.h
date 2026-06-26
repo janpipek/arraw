@@ -14,9 +14,15 @@
 struct SidecarData {
     GlobalAdjustment adjustments;
     UserMetadata metadata;
+    UserMetadataPresence metadataPresence;
     // True when the sidecar carried an explicit tiff:Orientation. When false, the
     // resolver seeds orientation from the file's EXIF instead (docs/adr/0028).
     bool orientationStored = false;
+};
+
+struct XmpPacketMetadata {
+    UserMetadata metadata;
+    UserMetadataPresence presence;
 };
 
 enum class SidecarLoadStatus {
@@ -42,6 +48,7 @@ public:
     // Parses descriptive User Metadata from an XMP packet embedded in an image file.
     // Returns empty metadata for malformed or absent packets.
     static UserMetadata metadataFromPacket(const QByteArray& packet);
+    static XmpPacketMetadata metadataPacketFromPacket(const QByteArray& packet);
 
     // Reads the whole sidecar. Returns defaults if it doesn't exist or can't be parsed.
     static SidecarData load(const QString& rawPath);
@@ -74,4 +81,6 @@ public:
     // sidecar and preserves the other half already on disk (docs/adr/0007).
     static bool saveAdjustments(const QString& rawPath, const GlobalAdjustment& params);
     static bool saveMetadata(const QString& rawPath, const UserMetadata& metadata);
+    static bool saveMetadata(
+        const QString& rawPath, const UserMetadata& metadata, const UserMetadataPresence& descriptiveFields);
 };

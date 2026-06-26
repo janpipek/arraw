@@ -21,6 +21,7 @@ static constexpr char kNsXmp[] = "http://ns.adobe.com/xap/1.0/";
 // (docs/adr/0010). Versioned in the URI like Adobe's namespaces.
 static constexpr char kNsArraw[] = "http://ns.arraw.app/1.0/";
 static constexpr char kNsTiff[] = "http://ns.adobe.com/tiff/1.0/";
+static constexpr char kArrawClearedDcFields[] = "ClearedDcFields";
 
 static bool parseDocument(const QByteArray& bytes, QDomDocument& document);
 static QDomElement firstDescription(QDomDocument& document);
@@ -80,22 +81,103 @@ QStringList rdfLiTexts(const QDomElement& element) {
     return values;
 }
 
-void readDcUserMetadata(QDomDocument& document, UserMetadata& metadata) {
+void setPresence(UserMetadataPresence& presence, const QString& name, bool on = true) {
+    if (name == QLatin1String("title"))
+        presence.title = on;
+    else if (name == QLatin1String("description"))
+        presence.caption = on;
+    else if (name == QLatin1String("subject"))
+        presence.keywords = on;
+    else if (name == QLatin1String("creator"))
+        presence.creator = on;
+    else if (name == QLatin1String("rights"))
+        presence.copyright = on;
+}
+
+void clearMetadataField(UserMetadata& metadata, const QString& name) {
+    if (name == QLatin1String("title"))
+        metadata.title.clear();
+    else if (name == QLatin1String("description"))
+        metadata.caption.clear();
+    else if (name == QLatin1String("subject"))
+        metadata.keywords.clear();
+    else if (name == QLatin1String("creator"))
+        metadata.creator.clear();
+    else if (name == QLatin1String("rights"))
+        metadata.copyright.clear();
+}
+
+void applyClearedDcFields(
+    UserMetadata& metadata, UserMetadataPresence& presence, const QString& namesText) {
+    const QStringList names = namesText.split(' ', Qt::SkipEmptyParts);
+    for (const QString& name : names) {
+        clearMetadataField(metadata, name);
+        setPresence(presence, name);
+    }
+}
+
+QStringList clearedDcFields(const UserMetadata& metadata, const UserMetadataPresence& presence) {
+    QStringList names;
+    if (presence.title && metadata.title.isEmpty())
+        names.append("title");
+    if (presence.caption && metadata.caption.isEmpty())
+        names.append("description");
+    if (presence.keywords && metadata.keywords.isEmpty())
+        names.append("subject");
+    if (presence.creator && metadata.creator.isEmpty())
+        names.append("creator");
+    if (presence.copyright && metadata.copyright.isEmpty())
+        names.append("rights");
+    return names;
+}
+
+UserMetadataPresence nonEmptyDescriptiveFields(const UserMetadata& metadata) {
+    return {
+        !metadata.title.isEmpty(),
+        !metadata.caption.isEmpty(),
+        !metadata.keywords.isEmpty(),
+        !metadata.creator.isEmpty(),
+        !metadata.copyright.isEmpty(),
+    };
+}
+
+void readDcUserMetadata(
+    QDomDocument& document, UserMetadata& metadata, UserMetadataPresence& presence) {
     auto firstElement = [&](const char* localName) {
         const QDomNodeList nodes = document.elementsByTagNameNS(kNsDc, localName);
         return nodes.isEmpty() ? QDomElement{} : nodes.at(0).toElement();
     };
+    const QDomElement description = firstDescription(document);
 
-    if (const QDomElement title = firstElement("title"); !title.isNull())
-        metadata.title = firstRdfLiText(title);
-    if (const QDomElement description = firstElement("description"); !description.isNull())
-        metadata.caption = firstRdfLiText(description);
-    if (const QDomElement subject = firstElement("subject"); !subject.isNull())
+    auto readText = [&](const char* localName, QString& target, bool UserMetadataPresence::*field) {
+        if (const QDomElement element = firstElement(localName); !element.isNull()) {
+            presence.*field = true;
+            target = firstRdfLiText(element);
+        } else if (!description.isNull() && description.hasAttributeNS(kNsDc, localName)) {
+            presence.*field = true;
+            target = description.attributeNS(kNsDc, localName).trimmed();
+        }
+    };
+
+    readText("title", metadata.title, &UserMetadataPresence::title);
+    readText("description", metadata.caption, &UserMetadataPresence::caption);
+    if (const QDomElement subject = firstElement("subject"); !subject.isNull()) {
+        presence.keywords = true;
         metadata.keywords = rdfLiTexts(subject);
-    if (const QDomElement creator = firstElement("creator"); !creator.isNull())
-        metadata.creator = firstRdfLiText(creator);
-    if (const QDomElement rights = firstElement("rights"); !rights.isNull())
-        metadata.copyright = firstRdfLiText(rights);
+    } else if (!description.isNull() && description.hasAttributeNS(kNsDc, "subject")) {
+        presence.keywords = true;
+        const QString value = description.attributeNS(kNsDc, "subject").trimmed();
+        metadata.keywords = value.isEmpty() ? QStringList{} : QStringList{value};
+    }
+    readText("creator", metadata.creator, &UserMetadataPresence::creator);
+    readText("rights", metadata.copyright, &UserMetadataPresence::copyright);
+
+    if (!description.isNull() && description.hasAttributeNS(kNsArraw, kArrawClearedDcFields))
+        applyClearedDcFields(
+            metadata,
+            presence,
+            description.attributeNS(kNsArraw, kArrawClearedDcFields));
+
 }
 
 } // namespace
@@ -315,14 +397,18 @@ SidecarData XmpSidecar::load(const QString& rawPath) {
 }
 
 UserMetadata XmpSidecar::metadataFromPacket(const QByteArray& packet) {
+    return metadataPacketFromPacket(packet).metadata;
+}
+
+XmpPacketMetadata XmpSidecar::metadataPacketFromPacket(const QByteArray& packet) {
     if (packet.isEmpty())
         return {};
     QDomDocument document;
     if (!parseDocument(packet, document))
         return {};
-    UserMetadata metadata;
-    readDcUserMetadata(document, metadata);
-    return metadata;
+    XmpPacketMetadata packetMetadata;
+    readDcUserMetadata(document, packetMetadata.metadata, packetMetadata.presence);
+    return packetMetadata;
 }
 
 SidecarLoadResult XmpSidecar::loadWithStatus(const QString& rawPath) {
@@ -338,7 +424,9 @@ SidecarLoadResult XmpSidecar::loadWithStatus(const QString& rawPath) {
 
     SidecarData data;
     GlobalAdjustment& p = data.adjustments;
-    data.metadata = metadataFromPacket(bytes);
+    const XmpPacketMetadata packetMetadata = metadataPacketFromPacket(bytes);
+    data.metadata = packetMetadata.metadata;
+    data.metadataPresence = packetMetadata.presence;
 
     QXmlStreamReader xml(bytes);
 
@@ -364,6 +452,10 @@ SidecarLoadResult XmpSidecar::loadWithStatus(const QString& rawPath) {
             }
             data.metadata.label = colourLabelFromString(
                 xml.attributes().value(kNsXmp, "Label").toString());
+            const QString clearedDcFields
+                = xml.attributes().value(kNsArraw, kArrawClearedDcFields).toString();
+            if (!clearedDcFields.isEmpty())
+                applyClearedDcFields(data.metadata, data.metadataPresence, clearedDcFields);
             p.exposure = attr("Exposure2012", 0.0f);
             p.contrast = attr("Contrast2012", 0.0f);
             p.highlights = attr("Highlights2012", 0.0f);
@@ -641,6 +733,9 @@ static QByteArray ownedPacket(const SidecarData& data) {
         xml.writeAttribute(kNsXmp, "Rating", QString::number(data.metadata.rating));
     if (data.metadata.label != ColourLabel::None)
         xml.writeAttribute(kNsXmp, "Label", colourLabelToString(data.metadata.label));
+    const QStringList cleared = clearedDcFields(data.metadata, data.metadataPresence);
+    if (!cleared.isEmpty())
+        xml.writeAttribute(kNsArraw, kArrawClearedDcFields, cleared.join(' '));
 
     auto write = [&](const char* name, float v) {
         xml.writeAttribute(kNsCrs, name, QString::number(double(v), 'f', 4));
@@ -689,11 +784,16 @@ static QByteArray ownedPacket(const SidecarData& data) {
         write(kHslLumNames[i], p.hslLum[i]);
     }
 
-    writeAltText(xml, "title", data.metadata.title);
-    writeAltText(xml, "description", data.metadata.caption);
-    writeBag(xml, "subject", data.metadata.keywords);
-    writeSeqText(xml, "creator", data.metadata.creator);
-    writeAltText(xml, "rights", data.metadata.copyright);
+    if (data.metadataPresence.title)
+        writeAltText(xml, "title", data.metadata.title);
+    if (data.metadataPresence.caption)
+        writeAltText(xml, "description", data.metadata.caption);
+    if (data.metadataPresence.keywords)
+        writeBag(xml, "subject", data.metadata.keywords);
+    if (data.metadataPresence.creator)
+        writeSeqText(xml, "creator", data.metadata.creator);
+    if (data.metadataPresence.copyright)
+        writeAltText(xml, "rights", data.metadata.copyright);
 
     // Tone curves (child elements, written after attributes)
     writeCurve(xml, "ToneCurvePV2012", p.curveLuma.points);
@@ -814,10 +914,13 @@ static bool mergeOwnedPacket(QDomDocument& document, const QByteArray& packet, S
     if (scope == SaveScope::Metadata) {
         const QStringList xmpNames = {"Rating", "Label"};
         const QStringList dcNames = {"title", "description", "subject", "creator", "rights"};
+        const QStringList arrawNames = {kArrawClearedDcFields};
         removeOwnedAttributes(document, kNsXmp, xmpNames);
+        removeOwnedAttributes(document, kNsArraw, arrawNames);
         removeOwnedAttributes(document, kNsDc, dcNames);
         removeOwnedElements(document, kNsDc, dcNames);
         importAttributes(document, target, source, kNsXmp, xmpNames);
+        importAttributes(document, target, source, kNsArraw, arrawNames);
         importElements(document, target, source, kNsDc, dcNames);
         return true;
     }
@@ -875,7 +978,33 @@ bool XmpSidecar::saveAdjustments(const QString& rawPath, const GlobalAdjustment&
 }
 
 bool XmpSidecar::saveMetadata(const QString& rawPath, const UserMetadata& metadata) {
+    return saveMetadata(rawPath, metadata, nonEmptyDescriptiveFields(metadata));
+}
+
+bool XmpSidecar::saveMetadata(
+    const QString& rawPath, const UserMetadata& metadata, const UserMetadataPresence& descriptiveFields) {
     SidecarData data = load(rawPath); // preserve any existing crs: edits
-    data.metadata = metadata;
+    data.metadata.rating = metadata.rating;
+    data.metadata.label = metadata.label;
+    if (descriptiveFields.title) {
+        data.metadata.title = metadata.title;
+        data.metadataPresence.title = true;
+    }
+    if (descriptiveFields.caption) {
+        data.metadata.caption = metadata.caption;
+        data.metadataPresence.caption = true;
+    }
+    if (descriptiveFields.keywords) {
+        data.metadata.keywords = metadata.keywords;
+        data.metadataPresence.keywords = true;
+    }
+    if (descriptiveFields.creator) {
+        data.metadata.creator = metadata.creator;
+        data.metadataPresence.creator = true;
+    }
+    if (descriptiveFields.copyright) {
+        data.metadata.copyright = metadata.copyright;
+        data.metadataPresence.copyright = true;
+    }
     return writeFile(rawPath, data, SaveScope::Metadata);
 }

@@ -64,6 +64,13 @@
 #include <QWindowStateChangeEvent>
 #include <QtConcurrent/QtConcurrent>
 
+static UserMetadata ratingAndLabelOnly(const UserMetadata& metadata) {
+    UserMetadata result;
+    result.rating = metadata.rating;
+    result.label = metadata.label;
+    return result;
+}
+
 // ---------------------------------------------------------------------------
 // Undo command: captures before/after GlobalAdjustment for a single gesture.
 // ---------------------------------------------------------------------------
@@ -230,7 +237,11 @@ MainWindow::MainWindow(QWidget* parent)
         [this](const QString& path, const UserMetadata& metadata, bool saved) {
             if (path != session->path())
                 return;
-            session->setUserMetadata(metadata);
+            UserMetadata current = session->userMetadata();
+            current.rating = metadata.rating;
+            current.label = metadata.label;
+            session->setUserMetadata(current);
+            infoPanel->setUserMetadata(current);
             if (saved) {
                 session->markMetadataSaved();
             } else {
@@ -943,9 +954,13 @@ void MainWindow::setupDocks() {
 
     infoPanel = new InfoPanel(tabs);
     tabs->addTab(infoPanel, "Info");
-    connect(infoPanel, &InfoPanel::userMetadataCommitted, this, [this](const UserMetadata& m) {
-        applyCurrentUserMetadata(m);
-    });
+    connect(
+        infoPanel,
+        &InfoPanel::userMetadataCommitted,
+        this,
+        [this](const UserMetadata& m, const UserMetadataPresence& changedFields) {
+            applyCurrentUserMetadata(m, changedFields);
+        });
 
     rightTabs = tabs;
     connect(tabs, &QTabWidget::currentChanged, this, [this] { syncAdjustmentTabTool(); });
@@ -1026,7 +1041,8 @@ bool MainWindow::saveDirtySidecar(bool forceDevelopSave) {
         }
     }
     if (session->metadataDirty()) {
-        if (XmpSidecar::saveMetadata(session->path(), session->userMetadata())) {
+        if (XmpSidecar::saveMetadata(
+                session->path(), session->userMetadata(), session->userMetadataPresence())) {
             session->markMetadataSaved();
         } else {
             session->markMetadataSaveFailed();
@@ -1176,11 +1192,16 @@ void MainWindow::applyLoadResult(const QString& path, const LoadResult& result) 
     // another app — or a prior session — are always reflected.
     const ResolvedLoadedImage resolved = resolveLoadedImage(path, result);
     session->setLoadedImage(
-        path, result, resolved.adjustments, resolved.sidecarState, resolved.metadata);
+        path,
+        result,
+        resolved.adjustments,
+        resolved.sidecarState,
+        resolved.metadata,
+        resolved.metadataPresence);
     session->setBaseLook(true);
     syncSessionToEditors();
     syncSessionSpotsToEditors(true);
-    filmStrip->setMarks(path, session->userMetadata());
+    filmStrip->setMarks(path, ratingAndLabelOnly(session->userMetadata()));
 
     infoPanel->setUserMetadata(session->userMetadata());
     infoPanel->setImageMetadata(result.metadata);
@@ -1331,13 +1352,14 @@ void MainWindow::applyDevelopChange(const GlobalAdjustment& after) {
         pushGlobalAdjustmentCommand(before, after);
 }
 
-void MainWindow::applyCurrentUserMetadata(const UserMetadata& metadata) {
+void MainWindow::applyCurrentUserMetadata(
+    const UserMetadata& metadata, const UserMetadataPresence& changedFields) {
     if (session->path().isEmpty())
         return;
-    session->setUserMetadata(metadata);
-    filmStrip->setMarks(session->path(), metadata);
+    session->setUserMetadata(metadata, changedFields);
+    filmStrip->setMarks(session->path(), ratingAndLabelOnly(metadata));
     infoPanel->setUserMetadata(metadata);
-    if (XmpSidecar::saveMetadata(session->path(), metadata)) {
+    if (XmpSidecar::saveMetadata(session->path(), metadata, changedFields)) {
         session->markMetadataSaved();
     } else {
         session->markMetadataSaveFailed();

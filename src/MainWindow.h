@@ -122,7 +122,8 @@ private:
     void exportPaths(const QStringList& paths);
     void applyPreset(const DevelopPreset& preset);
     void rebuildPresetsMenu(); // re-list saved presets after save/delete
-    void applyCurrentUserMetadata(const UserMetadata& metadata);
+    void applyCurrentUserMetadata(
+        const UserMetadata& metadata, const UserMetadataPresence& changedFields = {});
     void setCurrentRating(int rating);
     void setCurrentLabel(ColourLabel label);
     GlobalAdjustment paramsForPath(const QString& path) const;

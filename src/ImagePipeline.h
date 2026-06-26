@@ -114,6 +114,7 @@ struct LoadResult {
     ImageBuffer preview; // 1/4-res (half W, half H) — used for viewport + histogram
     ImageMetadata metadata;
     UserMetadata embeddedMetadata; // descriptive User Metadata from embedded XMP, if any
+    UserMetadataPresence embeddedMetadataPresence;
     QString error;                 // non-empty on failure
     QRectF defaultCrop = {0.0, 0.0, 1.0, 1.0};
     // Lens profile resolved at decode (docs/adr/0027). Empty has* flags = no

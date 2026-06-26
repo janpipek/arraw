@@ -30,7 +30,8 @@ public:
     void clear();
 
 signals:
-    void userMetadataCommitted(const UserMetadata& metadata);
+    void userMetadataCommitted(
+        const UserMetadata& metadata, const UserMetadataPresence& changedFields);
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;

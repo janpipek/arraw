@@ -21,6 +21,16 @@ struct UserMetadata {
     bool operator==(const UserMetadata&) const = default;
 };
 
+struct UserMetadataPresence {
+    bool title = false;
+    bool caption = false;
+    bool keywords = false;
+    bool creator = false;
+    bool copyright = false;
+
+    bool operator==(const UserMetadataPresence&) const = default;
+};
+
 // Canonical English colour names, matching Lightroom's default label set so the
 // label survives a round-trip. None maps to an empty string (the attribute is
 // absent), and any unrecognised string reads back as None.

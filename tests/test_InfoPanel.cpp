@@ -15,10 +15,16 @@ TEST_CASE("InfoPanel commits descriptive User Metadata without losing culling ma
 
     int commits = 0;
     UserMetadata committed;
-    QObject::connect(&panel, &InfoPanel::userMetadataCommitted, &panel, [&](const UserMetadata& m) {
-        ++commits;
-        committed = m;
-    });
+    UserMetadataPresence changedFields;
+    QObject::connect(
+        &panel,
+        &InfoPanel::userMetadataCommitted,
+        &panel,
+        [&](const UserMetadata& m, const UserMetadataPresence& fields) {
+            ++commits;
+            committed = m;
+            changedFields = fields;
+        });
 
     auto* title = panel.findChild<QLineEdit*>("titleEdit");
     auto* caption = panel.findChild<QPlainTextEdit*>("captionEdit");
@@ -38,4 +44,9 @@ TEST_CASE("InfoPanel commits descriptive User Metadata without losing culling ma
     CHECK(committed.title == "A title");
     CHECK(committed.caption == "A caption");
     CHECK(committed.keywords == QStringList{"family", "travel"});
+    CHECK(changedFields.title);
+    CHECK(changedFields.caption);
+    CHECK(changedFields.keywords);
+    CHECK_FALSE(changedFields.creator);
+    CHECK_FALSE(changedFields.copyright);
 }

@@ -15,32 +15,40 @@ QString metadataRowValue(const ImageMetadata& metadata, const QString& label) {
     return {};
 }
 
-UserMetadata resolveUserMetadata(const UserMetadata& sidecar, const LoadResult& result) {
+struct ResolvedUserMetadata {
+    UserMetadata metadata;
+    UserMetadataPresence presence;
+};
+
+ResolvedUserMetadata resolveUserMetadata(const SidecarData& sidecar, const LoadResult& result) {
     UserMetadata resolved;
     resolved.caption = metadataRowValue(result.metadata, QStringLiteral("Description"));
     resolved.creator = metadataRowValue(result.metadata, QStringLiteral("Artist"));
 
-    auto overlay = [](QString& target, const QString& value) {
-        if (!value.isEmpty())
+    auto overlay = [](QString& target, const QString& value, bool present) {
+        if (present)
             target = value;
     };
 
-    overlay(resolved.title, result.embeddedMetadata.title);
-    overlay(resolved.caption, result.embeddedMetadata.caption);
-    if (!result.embeddedMetadata.keywords.isEmpty())
+    overlay(resolved.title, result.embeddedMetadata.title, result.embeddedMetadataPresence.title);
+    overlay(resolved.caption, result.embeddedMetadata.caption, result.embeddedMetadataPresence.caption);
+    if (result.embeddedMetadataPresence.keywords)
         resolved.keywords = result.embeddedMetadata.keywords;
-    overlay(resolved.creator, result.embeddedMetadata.creator);
-    overlay(resolved.copyright, result.embeddedMetadata.copyright);
+    overlay(resolved.creator, result.embeddedMetadata.creator, result.embeddedMetadataPresence.creator);
+    overlay(
+        resolved.copyright,
+        result.embeddedMetadata.copyright,
+        result.embeddedMetadataPresence.copyright);
 
-    resolved.rating = sidecar.rating;
-    resolved.label = sidecar.label;
-    overlay(resolved.title, sidecar.title);
-    overlay(resolved.caption, sidecar.caption);
-    if (!sidecar.keywords.isEmpty())
-        resolved.keywords = sidecar.keywords;
-    overlay(resolved.creator, sidecar.creator);
-    overlay(resolved.copyright, sidecar.copyright);
-    return resolved;
+    resolved.rating = sidecar.metadata.rating;
+    resolved.label = sidecar.metadata.label;
+    overlay(resolved.title, sidecar.metadata.title, sidecar.metadataPresence.title);
+    overlay(resolved.caption, sidecar.metadata.caption, sidecar.metadataPresence.caption);
+    if (sidecar.metadataPresence.keywords)
+        resolved.keywords = sidecar.metadata.keywords;
+    overlay(resolved.creator, sidecar.metadata.creator, sidecar.metadataPresence.creator);
+    overlay(resolved.copyright, sidecar.metadata.copyright, sidecar.metadataPresence.copyright);
+    return {resolved, sidecar.metadataPresence};
 }
 
 } // namespace
@@ -74,9 +82,11 @@ GlobalAdjustment resolveImageAdjustments(const QString& path, const QRectF& defa
 ResolvedLoadedImage resolveLoadedImage(const QString& path, const LoadResult& result) {
     const SidecarLoadResult sidecar
         = XmpSidecar::resolveForImage(path, result.defaultCrop, result.seededOrientation);
+    const ResolvedUserMetadata metadata = resolveUserMetadata(sidecar.data, result);
     return {
         sidecar.data.adjustments,
-        resolveUserMetadata(sidecar.data.metadata, result),
+        metadata.metadata,
+        metadata.presence,
         toSessionSidecarState(sidecar.status),
     };
 }

@@ -126,8 +126,15 @@ void InfoPanel::flushPendingEdits() {
 
     if (next == currentMetadata)
         return;
+    const UserMetadataPresence changedFields{
+        next.title != currentMetadata.title,
+        next.caption != currentMetadata.caption,
+        next.keywords != currentMetadata.keywords,
+        next.creator != currentMetadata.creator,
+        next.copyright != currentMetadata.copyright,
+    };
     currentMetadata = next;
-    emit userMetadataCommitted(currentMetadata);
+    emit userMetadataCommitted(currentMetadata, changedFields);
 }
 
 void InfoPanel::clear() {

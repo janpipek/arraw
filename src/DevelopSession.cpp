@@ -15,6 +15,14 @@ std::vector<Spot> scaleSpots(const std::vector<Spot>& spots, double sx, double s
     }
     return out;
 }
+
+void mergePresence(UserMetadataPresence& target, const UserMetadataPresence& changedFields) {
+    target.title = target.title || changedFields.title;
+    target.caption = target.caption || changedFields.caption;
+    target.keywords = target.keywords || changedFields.keywords;
+    target.creator = target.creator || changedFields.creator;
+    target.copyright = target.copyright || changedFields.copyright;
+}
 } // namespace
 
 DevelopSession::DevelopSession(QObject* parent)
@@ -31,13 +39,16 @@ void DevelopSession::setLoadedImage(
     const LoadResult& result,
     const GlobalAdjustment& params,
     SidecarState sidecarState,
-    const UserMetadata& metadata) {
+    const UserMetadata& metadata,
+    const UserMetadataPresence& presence) {
     currentPath = std::move(path);
     previewBuffer = result.preview;
     fullResBuffer = result.fullRes;
     imageMetadata = result.metadata;
     metadata_ = metadata;
     savedMetadata = metadata;
+    metadataPresence = presence;
+    savedMetadataPresence = presence;
     imageDefaultCrop = result.defaultCrop;
     lensModel = result.lensModel;
     adjustments = params;
@@ -86,9 +97,11 @@ void DevelopSession::setSpots(std::vector<Spot> spots) {
     isDevelopDirty = adjustments != savedAdjustments;
 }
 
-void DevelopSession::setUserMetadata(const UserMetadata& metadata) {
+void DevelopSession::setUserMetadata(
+    const UserMetadata& metadata, const UserMetadataPresence& changedFields) {
     metadata_ = metadata;
-    isMetadataDirty = metadata_ != savedMetadata;
+    mergePresence(metadataPresence, changedFields);
+    isMetadataDirty = metadata_ != savedMetadata || metadataPresence != savedMetadataPresence;
 }
 
 void DevelopSession::setBaseLook(bool on) {
@@ -108,12 +121,13 @@ void DevelopSession::markDevelopSaveFailed() {
 
 void DevelopSession::markMetadataSaved() {
     savedMetadata = metadata_;
+    savedMetadataPresence = metadataPresence;
     isMetadataDirty = false;
     sidecar = SidecarState::Loaded;
 }
 
 void DevelopSession::markMetadataSaveFailed() {
-    isMetadataDirty = metadata_ != savedMetadata;
+    isMetadataDirty = metadata_ != savedMetadata || metadataPresence != savedMetadataPresence;
     sidecar = SidecarState::WriteError;
 }
 

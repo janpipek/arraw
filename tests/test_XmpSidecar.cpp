@@ -804,6 +804,31 @@ TEST_CASE("embedded XMP packets parse descriptive User Metadata", "[xmp][metadat
     CHECK(metadata.copyright == "Embedded rights");
 }
 
+TEST_CASE("Dublin Core property attributes parse as descriptive User Metadata", "[xmp][metadata][dc]") {
+    const QByteArray packet = R"xml(<?xml version="1.0"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description rdf:about=""
+      xmlns:dc="http://purl.org/dc/elements/1.1/"
+      dc:title="Attribute title"
+      dc:description="Attribute caption"
+      dc:creator="Attribute creator"
+      dc:rights="Attribute rights" />
+  </rdf:RDF>
+</x:xmpmeta>)xml";
+
+    const XmpPacketMetadata metadata = XmpSidecar::metadataPacketFromPacket(packet);
+
+    CHECK(metadata.metadata.title == "Attribute title");
+    CHECK(metadata.metadata.caption == "Attribute caption");
+    CHECK(metadata.metadata.creator == "Attribute creator");
+    CHECK(metadata.metadata.copyright == "Attribute rights");
+    CHECK(metadata.presence.title);
+    CHECK(metadata.presence.caption);
+    CHECK(metadata.presence.creator);
+    CHECK(metadata.presence.copyright);
+}
+
 TEST_CASE(
     "descriptive User Metadata writes the Lightroom-compatible RDF containers",
     "[xmp][metadata][dc]") {
@@ -844,6 +869,38 @@ TEST_CASE(
     REQUIRE(keywordItems.size() == 2);
     CHECK(keywordItems.at(0).toElement().text() == "One");
     CHECK(keywordItems.at(1).toElement().text() == "Two");
+}
+
+TEST_CASE("rating-only metadata saves preserve descriptive Dublin Core fields", "[xmp][metadata][dc]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("described.arw");
+    UserMetadata metadata;
+    metadata.caption = "Caption";
+    UserMetadataPresence fields;
+    fields.caption = true;
+    REQUIRE(XmpSidecar::saveMetadata(rawPath, metadata, fields));
+
+    UserMetadata ratingOnly;
+    ratingOnly.rating = 5;
+    REQUIRE(XmpSidecar::saveMetadata(rawPath, ratingOnly));
+
+    const UserMetadata roundTripped = XmpSidecar::loadMetadata(rawPath);
+    CHECK(roundTripped.rating == 5);
+    CHECK(roundTripped.caption == "Caption");
+}
+
+TEST_CASE("authored empty Dublin Core fields suppress fallback reads", "[xmp][metadata][dc]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("described.arw");
+    UserMetadata metadata;
+    UserMetadataPresence fields;
+    fields.caption = true;
+    REQUIRE(XmpSidecar::saveMetadata(rawPath, metadata, fields));
+
+    const SidecarData sidecar = XmpSidecar::load(rawPath);
+
+    CHECK(sidecar.metadata.caption.isEmpty());
+    CHECK(sidecar.metadataPresence.caption);
 }
 
 TEST_CASE("saveAdjustments preserves unowned XMP properties", "[xmp][compatibility]") {
