@@ -54,8 +54,10 @@ public:
     // Apply all spots to the clean decoded buffers and push spotted textures to
     // the viewport. fullResOnly=false pushes only the preview (live drag);
     // fullResOnly=true also pushes the full-res export buffer (release / undo / load).
-    // Public so SpotListCommand can call it on undo/redo.
-    void rebuildSpottedBuffers(bool fullResOnly = false);
+    // preserveView keeps the current zoom/pan instead of refitting — for an
+    // in-place re-decode of the same image (docs/adr/0033). Public so SpotListCommand
+    // can call it on undo/redo.
+    void rebuildSpottedBuffers(bool fullResOnly = false, bool preserveView = false);
 
     // Mirror the canonical session params into editor widgets and the viewport.
     // Public so undo commands can update views after mutating the session.

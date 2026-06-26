@@ -632,7 +632,9 @@ void ImageViewport::drawCropOverlay(QPainter& p) const {
 
 // ── Public setters ────────────────────────────────────────────────────────────
 
-void ImageViewport::setImage(const ImageBuffer& buf, bool baseLook) {
+void ImageViewport::setImage(const ImageBuffer& buf, bool baseLook, bool preserveView) {
+    const float savedZoom = zoom;
+    const QPointF savedPan = pan;
     nativeImageAspect = buf.valid() ? float(buf.width) / float(buf.height) : 1.0f;
     updateImageAspect();
     hasImage = buf.valid();
@@ -640,7 +642,15 @@ void ImageViewport::setImage(const ImageBuffer& buf, bool baseLook) {
     useBaseLook = baseLook;
     core.setImage(RendererCore::Slot::Preview, buf);
     core.setImage(RendererCore::Slot::FullRes, {});
-    resetView();
+    if (preserveView && hasImage) {
+        // In-place swap of the same image: hold the user's zoom/pan instead of
+        // refitting. The full-res slot was just cleared, so a re-upload (via
+        // setFullResImage) follows when zoomed past the preview threshold.
+        setZoom(savedZoom);
+        pan = savedPan;
+    } else {
+        resetView();
+    }
     histoTimer.start();
     update();
 }

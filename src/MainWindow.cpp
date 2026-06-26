@@ -1194,7 +1194,7 @@ void MainWindow::redecodeForDemosaicChange() {
     if (const LoadResult* hit = decodeCache.get(key)) {
         decodeCache.pin(key);
         session->swapDecodedBuffers(*hit);
-        rebuildSpottedBuffers(true);
+        rebuildSpottedBuffers(true, /*preserveView=*/true);
         setLoadingState(false);
         setToolsEnabled(true);
         statusLabel->setText(
@@ -1237,7 +1237,7 @@ void MainWindow::onRedecodeFinished() {
     decodeCache.pin(redecodeKey);
     if (const LoadResult* cached = decodeCache.get(redecodeKey)) {
         session->swapDecodedBuffers(*cached);
-        rebuildSpottedBuffers(true);
+        rebuildSpottedBuffers(true, /*preserveView=*/true);
     }
     statusLabel->setText(
         loadedImageStatusText(session->path(), session->fullRes(), session->sidecarState()));
@@ -1279,9 +1279,9 @@ void MainWindow::applyLoadResult(const QString& path, const LoadResult& result) 
     generateDevelopedThumbnail();
 }
 
-void MainWindow::rebuildSpottedBuffers(bool fullResOnly) {
+void MainWindow::rebuildSpottedBuffers(bool fullResOnly, bool preserveView) {
     if (session->previewForDisplay().valid())
-        viewport->setImage(session->previewForDisplay(), session->baseLook());
+        viewport->setImage(session->previewForDisplay(), session->baseLook(), preserveView);
 
     if (fullResOnly && session->fullResForExport().valid())
         viewport->setFullResImage(session->fullResForExport());
