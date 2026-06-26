@@ -207,6 +207,7 @@ set(CORE_SOURCES
     src/CropGeometry.cpp
     src/Orientation.cpp
     src/DevelopGroup.cpp
+    src/DevelopParameter.cpp
     src/DevelopPreset.cpp
     src/GroupChecklistDialog.cpp
     src/PresetStore.cpp

@@ -40,6 +40,7 @@ add_executable(arraw_tests
     test_DecodeCache.cpp
     test_DevelopSession.cpp
     test_DevelopGroup.cpp
+    test_DevelopParameter.cpp
     test_DevelopPreset.cpp
     test_Orientation.cpp
     test_GroupChecklistDialog.cpp

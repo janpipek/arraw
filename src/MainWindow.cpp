@@ -8,6 +8,7 @@
 #include "ColorManagement.h"
 #include "CropGeometry.h"
 #include "DevelopGroup.h"
+#include "DevelopParameter.h"
 #include "DevelopPreset.h"
 #include "DevelopSession.h"
 #include "ExifPanel.h"
@@ -79,7 +80,9 @@ public:
           mainWindow(mainWindow),
           before(before),
           after(after) {
-        setText("Adjust");
+        // Name the step by what actually changed ("Exposure", "Blue Hue", "Crop")
+        // so the History list reads as edits, not a wall of "Adjust".
+        setText(developChangeLabel(before, after));
     }
 
     void undo() override;
