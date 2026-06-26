@@ -38,12 +38,19 @@ public:
     explicit ImageViewport(QWidget* parent = nullptr);
     ~ImageViewport() override;
 
-    // Swap the displayed preview texture. By default this fits the image to the
-    // window (resetView) — correct for a freshly loaded image. preserveView keeps
-    // the current zoom and pan, for an in-place swap of the *same* image (e.g. a
-    // demosaic re-decode, docs/adr/0033), so A/B comparison stays put.
-    void setImage(const ImageBuffer& preview, bool baseLookEnabled = false, bool preserveView = false);
+    void setImage(const ImageBuffer& preview, bool baseLookEnabled = false);
+    // Swap the displayed preview texture (and its sensor-clip mask). By default
+    // this fits the image to the window (resetView) — correct for a freshly
+    // loaded image. preserveView keeps the current zoom and pan, for an in-place
+    // swap of the *same* image (e.g. a demosaic re-decode, docs/adr/0033), so A/B
+    // comparison stays put.
+    void setImage(
+        const ImageBuffer& preview,
+        const ImageBuffer& sensorClipMask,
+        bool baseLookEnabled = false,
+        bool preserveView = false);
     void setFullResImage(const ImageBuffer& fullRes);
+    void setFullResImage(const ImageBuffer& fullRes, const ImageBuffer& sensorClipMask);
     void setAdjustments(const GlobalAdjustment& p);
     void setStraightenActive(bool active);
 
@@ -108,6 +115,9 @@ public:
     // Clipping overlay (docs/adr/0009): paint highlight clips red, shadow clips
     // blue on the on-screen preview. View state only — never exported.
     void setClipWarnings(bool highlights, bool shadows);
+    // Sensor Clipping overlay: paint RAW mosaic saturation magenta. View state
+    // only — never exported, and unavailable for standard image formats.
+    void setSensorClipWarning(bool on);
 
     // Render buf through the full shader pipeline into an offscreen target.
     // Returns a *linear working-space* float QImage (Format_RGBX32FPx4),
@@ -246,6 +256,7 @@ private:
     bool gamutWarn = false;
     bool clipHighlights = false;
     bool clipShadows = false;
+    bool sensorClipWarning = false;
     ViewportOverlay* overlay = nullptr;
 
     // ── Image state ───────────────────────────────────────────────────────

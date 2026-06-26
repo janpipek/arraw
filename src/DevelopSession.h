@@ -41,14 +41,18 @@ public:
 
     const ImageBuffer& previewForDisplay() const;
     const ImageBuffer& fullResForExport() const;
+    const ImageBuffer& sensorClipPreviewForDisplay() const;
+    const ImageBuffer& sensorClipFullResForDisplay() const;
 
     const ImageMetadata& metadata() const { return imageMetadata; }
 
     const UserMetadata& userMetadata() const { return metadata_; }
 
     const QRectF& defaultCrop() const { return imageDefaultCrop; }
+
     // Resolved lens-profile name (empty when none matched), for the UI label.
     const QString& lensProfileName() const { return lensModel.lensName; }
+
     const GlobalAdjustment& params() const { return adjustments; }
 
     bool baseLook() const { return useBaseLook; }
@@ -85,6 +89,8 @@ private:
     QString currentPath;
     ImageBuffer previewBuffer;
     ImageBuffer fullResBuffer;
+    ImageBuffer sensorClipPreviewBuffer;
+    ImageBuffer sensorClipFullResBuffer;
     // Lens-corrected derivatives of the clean buffers (docs/adr/0027); empty when no
     // profile or all toggles off, in which case the clean buffer is the base. The
     // preview derivatives are eager (cheap, drives the live view); the full-res ones
@@ -95,6 +101,8 @@ private:
     ImageBuffer spottedPreviewBuffer;
     mutable ImageBuffer correctedFullResBuffer;
     mutable ImageBuffer spottedFullResBuffer;
+    ImageBuffer correctedSensorClipPreviewBuffer;
+    mutable ImageBuffer correctedSensorClipFullResBuffer;
     mutable bool fullResDerivedDirty = true;
     ImageMetadata imageMetadata;
     UserMetadata metadata_;

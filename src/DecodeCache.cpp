@@ -4,7 +4,9 @@ DecodeCache::DecodeCache(size_t byteBudget)
     : budget(byteBudget) {}
 
 size_t DecodeCache::sizeOf(const LoadResult& r) {
-    return (r.fullRes.data.size() + r.preview.data.size()) * sizeof(float);
+    return (r.fullRes.data.size() + r.preview.data.size() + r.sensorClipFullRes.data.size()
+            + r.sensorClipPreview.data.size())
+           * sizeof(float);
 }
 
 void DecodeCache::insert(const QString& key, LoadResult result) {

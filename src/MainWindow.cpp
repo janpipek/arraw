@@ -551,14 +551,38 @@ void MainWindow::setupMenus() {
     QSettings clipSettings;
     clipHighlightsAction = view->addAction("Show &Highlight Clipping");
     clipHighlightsAction->setCheckable(true);
+    clipHighlightsAction->setToolTip(
+        "Show rendered highlight clipping in red: pixels that hit white after the current edits "
+        "and display transform.");
+    clipHighlightsAction->setStatusTip(
+        "Rendered clipping: marks output highlights that are clipped by the current develop "
+        "settings.");
     clipHighlightsAction->setChecked(clipSettings.value("view/clipHighlights", false).toBool());
     connect(clipHighlightsAction, &QAction::toggled, this, &MainWindow::applyClipping);
 
     clipShadowsAction = view->addAction("Show &Shadow Clipping");
     clipShadowsAction->setCheckable(true);
+    clipShadowsAction->setToolTip(
+        "Show rendered shadow clipping in blue: pixels that hit black after the current edits "
+        "and display transform.");
+    clipShadowsAction->setStatusTip(
+        "Rendered clipping: marks output shadows that are clipped by the current develop "
+        "settings.");
     clipShadowsAction->setChecked(clipSettings.value("view/clipShadows", false).toBool());
     connect(clipShadowsAction, &QAction::toggled, this, &MainWindow::applyClipping);
     applyClipping(); // push the restored state to the viewport
+
+    sensorClipAction = view->addAction("Show &Sensor Clipping");
+    sensorClipAction->setCheckable(true);
+    sensorClipAction->setToolTip(
+        "Show sensor clipping in magenta: RAW photosites that were saturated before demosaic, "
+        "exposure recovery, or other edits.");
+    sensorClipAction->setStatusTip(
+        "Sensor clipping: marks RAW data saturation, where highlight detail may be unrecoverable.");
+    sensorClipAction->setChecked(clipSettings.value("view/sensorClip", false).toBool());
+    sensorClipAction->setEnabled(false);
+    connect(sensorClipAction, &QAction::toggled, this, &MainWindow::applySensorClipping);
+    applySensorClipping();
     view->addSeparator();
 
     // Monitor profile: how the preview is encoded for this screen.
@@ -1256,6 +1280,8 @@ void MainWindow::applyPendingPreviewParams() {
 void MainWindow::applyLoadResult(const QString& path, const LoadResult& result) {
     setLoadingState(false);
     viewport->setOriginalImageSize(result.fullRes.width, result.fullRes.height);
+    sensorClipAction->setEnabled(result.sensorClipPreview.valid());
+    applySensorClipping();
 
     // Re-read the sidecar every time (params are never cached) so edits made in
     // another app — or a prior session — are always reflected.
@@ -1281,16 +1307,21 @@ void MainWindow::applyLoadResult(const QString& path, const LoadResult& result) 
 
 void MainWindow::rebuildSpottedBuffers(bool fullResOnly, bool preserveView) {
     if (session->previewForDisplay().valid())
-        viewport->setImage(session->previewForDisplay(), session->baseLook(), preserveView);
+        viewport->setImage(
+            session->previewForDisplay(),
+            session->sensorClipPreviewForDisplay(),
+            session->baseLook(),
+            preserveView);
 
     if (fullResOnly && session->fullResForExport().valid())
-        viewport->setFullResImage(session->fullResForExport());
+        viewport
+            ->setFullResImage(session->fullResForExport(), session->sensorClipFullResForDisplay());
 }
 
 void MainWindow::onFullResNeeded() {
     if (!session->fullResForExport().valid())
         return;
-    viewport->setFullResImage(session->fullResForExport());
+    viewport->setFullResImage(session->fullResForExport(), session->sensorClipFullResForDisplay());
 }
 
 void MainWindow::updateZoomStatus(float zoom) {
@@ -1324,6 +1355,13 @@ void MainWindow::toggleClipping() {
     const bool anyOn = clipHighlightsAction->isChecked() || clipShadowsAction->isChecked();
     clipHighlightsAction->setChecked(!anyOn);
     clipShadowsAction->setChecked(!anyOn); // toggled() drives applyClipping()
+}
+
+void MainWindow::applySensorClipping() {
+    const bool on = sensorClipAction->isChecked();
+    viewport->setSensorClipWarning(on && sensorClipAction->isEnabled());
+    QSettings s;
+    s.setValue("view/sensorClip", on);
 }
 
 void MainWindow::toggleFullScreen() {

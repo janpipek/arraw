@@ -35,6 +35,8 @@ void DevelopSession::setLoadedImage(
     currentPath = std::move(path);
     previewBuffer = result.preview;
     fullResBuffer = result.fullRes;
+    sensorClipPreviewBuffer = result.sensorClipPreview;
+    sensorClipFullResBuffer = result.sensorClipFullRes;
     imageMetadata = result.metadata;
     metadata_ = metadata;
     savedMetadata = metadata;
@@ -70,7 +72,24 @@ const ImageBuffer& DevelopSession::fullResForExport() const {
 void DevelopSession::swapDecodedBuffers(const LoadResult& result) {
     previewBuffer = result.preview;
     fullResBuffer = result.fullRes;
+    // The sensor-clip mask comes from pre-demosaic mosaic values, so it is the
+    // same across algorithms — refresh it anyway to keep the buffers consistent.
+    sensorClipPreviewBuffer = result.sensorClipPreview;
+    sensorClipFullResBuffer = result.sensorClipFullRes;
     rebuildDerivedBuffers(); // re-derive lens/spot buffers over the new pixels
+}
+
+const ImageBuffer& DevelopSession::sensorClipPreviewForDisplay() const {
+    if (correctedSensorClipPreviewBuffer.valid())
+        return correctedSensorClipPreviewBuffer;
+    return sensorClipPreviewBuffer;
+}
+
+const ImageBuffer& DevelopSession::sensorClipFullResForDisplay() const {
+    ensureFullResDerived();
+    if (correctedSensorClipFullResBuffer.valid())
+        return correctedSensorClipFullResBuffer;
+    return sensorClipFullResBuffer;
 }
 
 void DevelopSession::setParams(const GlobalAdjustment& params) {
@@ -125,10 +144,12 @@ void DevelopSession::markMetadataSaveFailed() {
 
 namespace {
 LensCorrectionToggles togglesOf(const GlobalAdjustment& a) {
-    return {.distortion = a.lensCorrectDistortion,
-            .vignetting = a.lensCorrectVignetting,
-            .ca = a.lensCorrectCA};
+    return {
+        .distortion = a.lensCorrectDistortion,
+        .vignetting = a.lensCorrectVignetting,
+        .ca = a.lensCorrectCA};
 }
+
 bool correctionActive(const LensCorrectionModel& m, const LensCorrectionToggles& t) {
     return (t.distortion && m.hasDistortion) || (t.vignetting && m.hasVignetting)
            || (t.ca && m.hasTCA);
@@ -143,12 +164,16 @@ void DevelopSession::rebuildDerivedBuffers() {
 void DevelopSession::rebuildPreviewDerived() {
     const LensCorrectionToggles toggles = togglesOf(adjustments);
     correctedPreviewBuffer = (correctionActive(lensModel, toggles) && previewBuffer.valid())
-        ? applyLensCorrection(previewBuffer, lensModel, toggles)
-        : ImageBuffer{};
+                                 ? applyLensCorrection(previewBuffer, lensModel, toggles)
+                                 : ImageBuffer{};
+    correctedSensorClipPreviewBuffer
+        = (correctionActive(lensModel, toggles) && sensorClipPreviewBuffer.valid())
+              ? applyLensCorrection(sensorClipPreviewBuffer, lensModel, toggles)
+              : ImageBuffer{};
 
     // Spots clone on the lens-corrected base when present, else on the clean buffer.
-    const ImageBuffer& base =
-        correctedPreviewBuffer.valid() ? correctedPreviewBuffer : previewBuffer;
+    const ImageBuffer& base = correctedPreviewBuffer.valid() ? correctedPreviewBuffer
+                                                             : previewBuffer;
     if (!adjustments.spots.empty() && base.valid() && fullResBuffer.width > 0) {
         const double sx = double(base.width) / fullResBuffer.width;
         const double sy = double(base.height) / fullResBuffer.height;
@@ -165,11 +190,15 @@ void DevelopSession::ensureFullResDerived() const {
 
     const LensCorrectionToggles toggles = togglesOf(adjustments);
     correctedFullResBuffer = (correctionActive(lensModel, toggles) && fullResBuffer.valid())
-        ? applyLensCorrection(fullResBuffer, lensModel, toggles)
-        : ImageBuffer{};
-    const ImageBuffer& base =
-        correctedFullResBuffer.valid() ? correctedFullResBuffer : fullResBuffer;
-    spottedFullResBuffer =
-        (!adjustments.spots.empty() && base.valid()) ? applySpots(base, adjustments.spots)
-                                                     : ImageBuffer{};
+                                 ? applyLensCorrection(fullResBuffer, lensModel, toggles)
+                                 : ImageBuffer{};
+    correctedSensorClipFullResBuffer
+        = (correctionActive(lensModel, toggles) && sensorClipFullResBuffer.valid())
+              ? applyLensCorrection(sensorClipFullResBuffer, lensModel, toggles)
+              : ImageBuffer{};
+    const ImageBuffer& base = correctedFullResBuffer.valid() ? correctedFullResBuffer
+                                                             : fullResBuffer;
+    spottedFullResBuffer = (!adjustments.spots.empty() && base.valid())
+                               ? applySpots(base, adjustments.spots)
+                               : ImageBuffer{};
 }
