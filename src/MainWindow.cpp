@@ -1694,6 +1694,70 @@ void MainWindow::pushGlobalAdjustmentCommand(
         undoStack->push(new AdjustmentCommand(session, this, beforeSnapshot, afterSnapshot));
 }
 
+// ---------------------------------------------------------------------------
+// Snapshot management (docs/adr/0033). Add/rename/delete edit the persisted list
+// directly and save immediately; restore replays a whole develop state as one
+// undoable step on the shared stack so it shows up in History like any edit.
+void MainWindow::addCurrentAsSnapshot() {
+    if (session->path().isEmpty())
+        return;
+    viewport->commitActiveTool();
+
+    bool ok = false;
+    const QString suggestion = tr("Snapshot %1").arg(session->snapshots().size() + 1);
+    const QString name
+        = QInputDialog::getText(
+              this, tr("Add Snapshot"), tr("Snapshot name:"), QLineEdit::Normal, suggestion, &ok)
+              .trimmed();
+    if (!ok || name.isEmpty())
+        return;
+
+    session->addSnapshot(name, currentParams());
+    historyPanel->setSnapshots(session->snapshots());
+    saveSnapshotsNow();
+}
+
+void MainWindow::restoreSnapshot(int index) {
+    const auto& snapshots = session->snapshots();
+    if (index < 0 || index >= static_cast<int>(snapshots.size()))
+        return;
+    viewport->commitActiveTool();
+
+    const GlobalAdjustment before = currentParams();
+    const GlobalAdjustment after = snapshots[index].state;
+    if (after != before)
+        undoStack->push(
+            new SnapshotRestoreCommand(session, this, before, after, snapshots[index].name));
+}
+
+void MainWindow::renameSnapshot(int index, const QString& name) {
+    const auto& snapshots = session->snapshots();
+    if (index < 0 || index >= static_cast<int>(snapshots.size()))
+        return;
+    const QString trimmed = name.trimmed();
+    if (trimmed.isEmpty()) {
+        historyPanel->setSnapshots(snapshots); // reject the empty edit, restore the old name
+        return;
+    }
+    session->renameSnapshot(index, trimmed);
+    historyPanel->setSnapshots(session->snapshots());
+    saveSnapshotsNow();
+}
+
+void MainWindow::deleteSnapshot(int index) {
+    if (index < 0 || index >= static_cast<int>(session->snapshots().size()))
+        return;
+    session->removeSnapshot(index);
+    historyPanel->setSnapshots(session->snapshots());
+    saveSnapshotsNow();
+}
+
+void MainWindow::saveSnapshotsNow() {
+    // Snapshot edits mark the develop state dirty, so the shared sidecar save
+    // persists them (and surfaces any write failure) like any other develop edit.
+    saveDirtySidecar();
+}
+
 void MainWindow::pushParamsToViewport() {
     viewport->setAdjustments(session->params());
 }

@@ -212,6 +212,7 @@ set(CORE_SOURCES
     src/PresetStore.cpp
     src/Spot.cpp
     src/SpotRemovalPanel.cpp
+    src/HistoryPanel.cpp
     src/NoiseReduction.cpp
     src/LensCorrection.cpp
     src/LensfunSource.cpp
