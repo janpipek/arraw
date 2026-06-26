@@ -13,6 +13,7 @@
 #include <variant>
 
 static constexpr char kNsCrs[] = "http://ns.adobe.com/camera-raw-settings/1.0/";
+static constexpr char kNsDc[] = "http://purl.org/dc/elements/1.1/";
 static constexpr char kNsRdf[] = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 static constexpr char kNsX[] = "adobe:ns:meta/";
 static constexpr char kNsXmp[] = "http://ns.adobe.com/xap/1.0/";
@@ -20,6 +21,9 @@ static constexpr char kNsXmp[] = "http://ns.adobe.com/xap/1.0/";
 // (docs/adr/0010). Versioned in the URI like Adobe's namespaces.
 static constexpr char kNsArraw[] = "http://ns.arraw.app/1.0/";
 static constexpr char kNsTiff[] = "http://ns.adobe.com/tiff/1.0/";
+
+static bool parseDocument(const QByteArray& bytes, QDomDocument& document);
+static QDomElement firstDescription(QDomDocument& document);
 
 namespace {
 
@@ -44,6 +48,54 @@ ResolvedSidecarPath resolveSidecarPath(const QString& rawPath) {
     if (stemExists)
         return {stemPath, SidecarPathStatus::Selected};
     return {stemPath, SidecarPathStatus::Missing};
+}
+
+QString firstRdfLiText(const QDomElement& element) {
+    const QDomNodeList items = element.elementsByTagNameNS(kNsRdf, "li");
+    if (items.isEmpty())
+        return element.text().trimmed();
+
+    for (int i = 0; i < items.size(); ++i) {
+        const QDomElement item = items.at(i).toElement();
+        if (item.attributeNS("http://www.w3.org/XML/1998/namespace", "lang")
+            == QLatin1String("x-default"))
+            return item.text().trimmed();
+    }
+    return items.at(0).toElement().text().trimmed();
+}
+
+QStringList rdfLiTexts(const QDomElement& element) {
+    QStringList values;
+    const QDomNodeList items = element.elementsByTagNameNS(kNsRdf, "li");
+    for (int i = 0; i < items.size(); ++i) {
+        const QString value = items.at(i).toElement().text().trimmed();
+        if (!value.isEmpty())
+            values.append(value);
+    }
+    if (values.isEmpty()) {
+        const QString value = element.text().trimmed();
+        if (!value.isEmpty())
+            values.append(value);
+    }
+    return values;
+}
+
+void readDcUserMetadata(QDomDocument& document, UserMetadata& metadata) {
+    auto firstElement = [&](const char* localName) {
+        const QDomNodeList nodes = document.elementsByTagNameNS(kNsDc, localName);
+        return nodes.isEmpty() ? QDomElement{} : nodes.at(0).toElement();
+    };
+
+    if (const QDomElement title = firstElement("title"); !title.isNull())
+        metadata.title = firstRdfLiText(title);
+    if (const QDomElement description = firstElement("description"); !description.isNull())
+        metadata.caption = firstRdfLiText(description);
+    if (const QDomElement subject = firstElement("subject"); !subject.isNull())
+        metadata.keywords = rdfLiTexts(subject);
+    if (const QDomElement creator = firstElement("creator"); !creator.isNull())
+        metadata.creator = firstRdfLiText(creator);
+    if (const QDomElement rights = firstElement("rights"); !rights.isNull())
+        metadata.copyright = firstRdfLiText(rights);
 }
 
 } // namespace
@@ -262,6 +314,17 @@ SidecarData XmpSidecar::load(const QString& rawPath) {
     return loadWithStatus(rawPath).data;
 }
 
+UserMetadata XmpSidecar::metadataFromPacket(const QByteArray& packet) {
+    if (packet.isEmpty())
+        return {};
+    QDomDocument document;
+    if (!parseDocument(packet, document))
+        return {};
+    UserMetadata metadata;
+    readDcUserMetadata(document, metadata);
+    return metadata;
+}
+
 SidecarLoadResult XmpSidecar::loadWithStatus(const QString& rawPath) {
     const ResolvedSidecarPath resolved = resolveSidecarPath(rawPath);
     if (resolved.status == SidecarPathStatus::Ambiguous)
@@ -271,10 +334,13 @@ SidecarLoadResult XmpSidecar::loadWithStatus(const QString& rawPath) {
     QFile f(resolved.path);
     if (!f.open(QIODevice::ReadOnly))
         return {{}, SidecarLoadStatus::ParseError};
+    const QByteArray bytes = f.readAll();
 
     SidecarData data;
     GlobalAdjustment& p = data.adjustments;
-    QXmlStreamReader xml(&f);
+    data.metadata = metadataFromPacket(bytes);
+
+    QXmlStreamReader xml(bytes);
 
     while (!xml.atEnd()) {
         xml.readNext();
@@ -445,6 +511,47 @@ static void writeSpots(QXmlStreamWriter& xml, const std::vector<Spot>& spots) {
     xml.writeEndElement(); // arraw:Spots
 }
 
+static void writeAltText(QXmlStreamWriter& xml, const char* name, const QString& value) {
+    if (value.isEmpty())
+        return;
+    xml.writeStartElement(kNsDc, name);
+    xml.writeStartElement(kNsRdf, "Alt");
+    xml.writeStartElement(kNsRdf, "li");
+    xml.writeAttribute("xml:lang", "x-default");
+    xml.writeCharacters(value);
+    xml.writeEndElement(); // rdf:li
+    xml.writeEndElement(); // rdf:Alt
+    xml.writeEndElement(); // dc:*
+}
+
+static void writeBag(QXmlStreamWriter& xml, const char* name, const QStringList& values) {
+    QStringList clean;
+    for (const QString& value : values) {
+        const QString trimmed = value.trimmed();
+        if (!trimmed.isEmpty())
+            clean.append(trimmed);
+    }
+    if (clean.isEmpty())
+        return;
+
+    xml.writeStartElement(kNsDc, name);
+    xml.writeStartElement(kNsRdf, "Bag");
+    for (const QString& value : clean)
+        xml.writeTextElement(kNsRdf, "li", value);
+    xml.writeEndElement(); // rdf:Bag
+    xml.writeEndElement(); // dc:*
+}
+
+static void writeSeqText(QXmlStreamWriter& xml, const char* name, const QString& value) {
+    if (value.isEmpty())
+        return;
+    xml.writeStartElement(kNsDc, name);
+    xml.writeStartElement(kNsRdf, "Seq");
+    xml.writeTextElement(kNsRdf, "li", value);
+    xml.writeEndElement(); // rdf:Seq
+    xml.writeEndElement(); // dc:*
+}
+
 // Writes the arraw-native local adjustments as a Seq of struct resources
 // (docs/adr/0010). Each li carries the mask type + geometry and the shared
 // delta subset; Temperature here is a relative -100..100 shift, not Kelvin.
@@ -521,6 +628,7 @@ static QByteArray ownedPacket(const SidecarData& data) {
 
     xml.writeNamespace(kNsRdf, "rdf");
     xml.writeNamespace(kNsCrs, "crs");
+    xml.writeNamespace(kNsDc, "dc");
     xml.writeNamespace(kNsXmp, "xmp");
     xml.writeNamespace(kNsArraw, "arraw");
     xml.writeNamespace(kNsTiff, "tiff");
@@ -580,6 +688,12 @@ static QByteArray ownedPacket(const SidecarData& data) {
         write(kHslSatNames[i], p.hslSat[i]);
         write(kHslLumNames[i], p.hslLum[i]);
     }
+
+    writeAltText(xml, "title", data.metadata.title);
+    writeAltText(xml, "description", data.metadata.caption);
+    writeBag(xml, "subject", data.metadata.keywords);
+    writeSeqText(xml, "creator", data.metadata.creator);
+    writeAltText(xml, "rights", data.metadata.copyright);
 
     // Tone curves (child elements, written after attributes)
     writeCurve(xml, "ToneCurvePV2012", p.curveLuma.points);
@@ -698,9 +812,13 @@ static bool mergeOwnedPacket(QDomDocument& document, const QByteArray& packet, S
         return false;
 
     if (scope == SaveScope::Metadata) {
-        const QStringList names = {"Rating", "Label"};
-        removeOwnedAttributes(document, kNsXmp, names);
-        importAttributes(document, target, source, kNsXmp, names);
+        const QStringList xmpNames = {"Rating", "Label"};
+        const QStringList dcNames = {"title", "description", "subject", "creator", "rights"};
+        removeOwnedAttributes(document, kNsXmp, xmpNames);
+        removeOwnedAttributes(document, kNsDc, dcNames);
+        removeOwnedElements(document, kNsDc, dcNames);
+        importAttributes(document, target, source, kNsXmp, xmpNames);
+        importElements(document, target, source, kNsDc, dcNames);
         return true;
     }
 

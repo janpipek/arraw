@@ -4,6 +4,7 @@
 #include "LocalAdjustment.h"
 #include "Orientation.h"
 #include "Spot.h"
+#include "UserMetadata.h"
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -112,7 +113,8 @@ struct LoadResult {
     ImageBuffer fullRes; // stored for export only
     ImageBuffer preview; // 1/4-res (half W, half H) — used for viewport + histogram
     ImageMetadata metadata;
-    QString error; // non-empty on failure
+    UserMetadata embeddedMetadata; // descriptive User Metadata from embedded XMP, if any
+    QString error;                 // non-empty on failure
     QRectF defaultCrop = {0.0, 0.0, 1.0, 1.0};
     // Lens profile resolved at decode (docs/adr/0027). Empty has* flags = no
     // profile matched; correction is applied (toggle-gated) downstream.

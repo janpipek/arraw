@@ -1,17 +1,22 @@
 #pragma once
 #include <QString>
+#include <QStringList>
 
-// User-authored, writable metadata that travels with an image (the culling
-// marks: rating + colour label). Distinct from the read-only camera EXIF in
-// ImageMetadata. Persisted as xmp:Rating / xmp:Label in the develop sidecar
-// (docs/adr/0007). Bounded named fields, not a free string map — new XMP
-// properties (caption, keywords) become new fields here when supported.
+// User-authored, writable metadata that travels with an image. Distinct from
+// the read-only camera EXIF in ImageMetadata. Persisted in the develop sidecar
+// as xmp:Rating / xmp:Label plus the descriptive Dublin Core fields owned by
+// arraw (docs/adr/0033). Bounded named fields, not a free string map.
 
 enum class ColourLabel { None, Red, Yellow, Green, Blue, Purple };
 
 struct UserMetadata {
     int rating = 0; // 0 unrated, -1 reject, 1..5 stars
     ColourLabel label = ColourLabel::None;
+    QString title;
+    QString caption;
+    QStringList keywords;
+    QString creator;
+    QString copyright;
 
     bool operator==(const UserMetadata&) const = default;
 };

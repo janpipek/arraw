@@ -1,6 +1,7 @@
 #pragma once
 #include "ImagePipeline.h"
 #include "UserMetadata.h"
+#include <QByteArray>
 #include <QString>
 
 // Reads and writes the XMP sidecar file: develop settings (crs: namespace) and
@@ -37,6 +38,10 @@ struct SidecarAdjustmentResult {
 class XmpSidecar {
 public:
     static QString pathFor(const QString& rawPath);
+
+    // Parses descriptive User Metadata from an XMP packet embedded in an image file.
+    // Returns empty metadata for malformed or absent packets.
+    static UserMetadata metadataFromPacket(const QByteArray& packet);
 
     // Reads the whole sidecar. Returns defaults if it doesn't exist or can't be parsed.
     static SidecarData load(const QString& rawPath);

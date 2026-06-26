@@ -18,7 +18,7 @@ class AdjustmentPanel;
 class LocalAdjustmentPanel;
 class SpotRemovalPanel;
 class ProofingPanel;
-class ExifPanel;
+class InfoPanel;
 class FilmStrip;
 class CollapsiblePane;
 class QDockWidget;
@@ -156,7 +156,7 @@ private:
     LocalAdjustmentPanel* localPanel;
     SpotRemovalPanel* spotPanel;
     ProofingPanel* proofPanel;
-    ExifPanel* exifPanel;
+    InfoPanel* infoPanel;
     FilmStrip* filmStrip;
     QDockWidget* filmStripDock;
     QDockWidget* adjustmentsDock;                     // right; collapses to a strip
@@ -174,7 +174,7 @@ private:
     QAction* wbAction;
     QAction* masksTabShortcut;
     QAction* spotsTabShortcut;
-    QTabWidget* rightTabs = nullptr; // Adjustments / Masks / Spots / EXIF
+    QTabWidget* rightTabs = nullptr; // Adjustments / Masks / Spots / Info
     int masksTabIndex = -1;
     int spotsTabIndex = -1;
     bool toolsEnabled = false;

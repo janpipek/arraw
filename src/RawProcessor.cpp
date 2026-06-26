@@ -3,6 +3,7 @@
 #include "ImageMetadata.h"
 #include "LensfunSource.h"
 #include "Trace.h"
+#include "XmpSidecar.h"
 #include <algorithm>
 #include <cmath>
 #include <libraw/libraw.h>
@@ -104,7 +105,7 @@ LoadResult RawProcessor::load(
 
     int ret = raw->open_file(path.toLocal8Bit().constData());
     if (ret != LIBRAW_SUCCESS)
-        return {{}, {}, {}, QString("open_file: %1").arg(libraw_strerror(ret))};
+        return {{}, {}, {}, {}, QString("open_file: %1").arg(libraw_strerror(ret))};
     timer.lap("raw open_file");
 
     // Extract embedded preview on the same open handle, before the slow unpack.
@@ -120,13 +121,18 @@ LoadResult RawProcessor::load(
 
     ret = raw->unpack();
     if (ret != LIBRAW_SUCCESS)
-        return {{}, {}, {}, QString("unpack: %1").arg(libraw_strerror(ret))};
+        return {{}, {}, {}, {}, QString("unpack: %1").arg(libraw_strerror(ret))};
     timer.lap("raw unpack");
 
     if (cancelled())
         return {};
 
     const ImageMetadata metadata = extractMetadata(*raw);
+    const auto& id = raw->imgdata.idata;
+    const QByteArray embeddedXmp(
+        id.xmpdata && id.xmplen > 0 ? id.xmpdata : nullptr,
+        id.xmpdata && id.xmplen > 0 ? int(id.xmplen) : 0);
+    const UserMetadata embeddedMetadata = XmpSidecar::metadataFromPacket(embeddedXmp);
 
     raw->imgdata.params.use_camera_wb = 1;
     raw->imgdata.params.no_auto_bright = 1;
@@ -141,12 +147,12 @@ LoadResult RawProcessor::load(
 
     ret = raw->dcraw_process();
     if (ret != LIBRAW_SUCCESS)
-        return {{}, {}, {}, QString("dcraw_process: %1").arg(libraw_strerror(ret))};
+        return {{}, {}, {}, {}, QString("dcraw_process: %1").arg(libraw_strerror(ret))};
     timer.lap("raw dcraw_process");
 
     libraw_processed_image_t* img = raw->dcraw_make_mem_image(&ret);
     if (!img || ret != LIBRAW_SUCCESS)
-        return {{}, {}, {}, QString("dcraw_make_mem_image: %1").arg(libraw_strerror(ret))};
+        return {{}, {}, {}, {}, QString("dcraw_make_mem_image: %1").arg(libraw_strerror(ret))};
 
     const int w = img->width;
     const int h = img->height;
@@ -177,7 +183,6 @@ LoadResult RawProcessor::load(
     // lensfun's system database; no match leaves the model empty.
     LensCorrectionModel lensModel;
     {
-        const auto& id = raw->imgdata.idata;
         const auto& other = raw->imgdata.other;
         LensQuery query;
         query.cameraMaker = QString::fromUtf8(id.make);
@@ -192,6 +197,13 @@ LoadResult RawProcessor::load(
         timer.lap("lens profile resolve");
     }
 
-    return {std::move(fullRes), std::move(preview),  metadata, {},
-            defaultCrop,        std::move(lensModel), seeded};
+    return {
+        std::move(fullRes),
+        std::move(preview),
+        metadata,
+        embeddedMetadata,
+        {},
+        defaultCrop,
+        std::move(lensModel),
+        seeded};
 }

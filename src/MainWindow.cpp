@@ -10,13 +10,13 @@
 #include "DevelopGroup.h"
 #include "DevelopPreset.h"
 #include "DevelopSession.h"
-#include "ExifPanel.h"
 #include "ExportDialog.h"
 #include "ExportWorkflow.h"
 #include "FilmStrip.h"
 #include "GroupChecklistDialog.h"
 #include "ImageLoadWorkflow.h"
 #include "ImageViewport.h"
+#include "InfoPanel.h"
 #include "LocalAdjustmentPanel.h"
 #include "MainWindowStatus.h"
 #include "ProofingPanel.h"
@@ -893,7 +893,7 @@ void MainWindow::setupDocks() {
     connect(
         filmStrip, &FilmStrip::populateContextMenu, this, &MainWindow::populateFilmStripContextMenu);
 
-    // Adjustments + EXIF (right). Collapses to a thin edge strip (ADR 0012).
+    // Adjustments + metadata (right). Collapses to a thin edge strip (ADR 0012).
     auto* rightDock = adjustmentsDock = new QDockWidget("Adjustments", this);
     rightDock->setObjectName("AdjustmentsDock"); // saveState/restoreState key
     rightDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
@@ -941,8 +941,11 @@ void MainWindow::setupDocks() {
     spotScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     spotsTabIndex = tabs->addTab(spotScroll, "Spots");
 
-    exifPanel = new ExifPanel(tabs);
-    tabs->addTab(exifPanel, "EXIF");
+    infoPanel = new InfoPanel(tabs);
+    tabs->addTab(infoPanel, "Info");
+    connect(infoPanel, &InfoPanel::userMetadataCommitted, this, [this](const UserMetadata& m) {
+        applyCurrentUserMetadata(m);
+    });
 
     rightTabs = tabs;
     connect(tabs, &QTabWidget::currentChanged, this, [this] { syncAdjustmentTabTool(); });
@@ -1011,6 +1014,7 @@ void MainWindow::openFile() {
 bool MainWindow::saveDirtySidecar(bool forceDevelopSave) {
     if (session->path().isEmpty())
         return true;
+    infoPanel->flushPendingEdits();
 
     bool saved = true;
     if (forceDevelopSave || session->developDirty()) {
@@ -1041,6 +1045,7 @@ bool MainWindow::saveDirtySidecar(bool forceDevelopSave) {
 
 bool MainWindow::confirmLeavingCurrentImage() {
     viewport->commitActiveTool();
+    infoPanel->flushPendingEdits();
     if (!shouldConfirmLeavingImage(*session))
         return true;
 
@@ -1068,6 +1073,8 @@ void MainWindow::loadImage(const QString& path) {
         return;
 
     const QString previousPath = session->path();
+    if (!previousPath.isEmpty())
+        infoPanel->flushPendingEdits();
     const bool needsConfirmation = !leaveConfirmationSatisfied;
     leaveConfirmationSatisfied = false;
     if (needsConfirmation && !confirmLeavingCurrentImage()) {
@@ -1083,7 +1090,7 @@ void MainWindow::loadImage(const QString& path) {
     auto cancel = loadCancel;
 
     session->beginLoading(path);
-    exifPanel->clear();
+    infoPanel->clear();
     viewport->cancelActiveTool(); // discard any in-progress tool from the last image
     viewport->setOriginalImageSize(0, 0);
     setLoadingState(true);
@@ -1138,7 +1145,7 @@ void MainWindow::onLoadFinished() {
         setLoadingState(false);
         QMessageBox::critical(this, "Load Error", result.error);
         statusLabel->setText("Load failed.");
-        exifPanel->clear();
+        infoPanel->clear();
         return;
     }
 
@@ -1175,7 +1182,8 @@ void MainWindow::applyLoadResult(const QString& path, const LoadResult& result) 
     syncSessionSpotsToEditors(true);
     filmStrip->setMarks(path, session->userMetadata());
 
-    exifPanel->setMetadata(result.metadata);
+    infoPanel->setUserMetadata(session->userMetadata());
+    infoPanel->setImageMetadata(result.metadata);
     undoStack->clear();
 
     statusLabel->setText(loadedImageStatusText(path, session->fullRes(), session->sidecarState()));
@@ -1208,7 +1216,7 @@ void MainWindow::updateZoomStatus(float zoom) {
 void MainWindow::setLoadingState(bool loading) {
     menuBar()->setEnabled(!loading);
     adjPanel->setEnabled(!loading);
-    exifPanel->setEnabled(!loading);
+    infoPanel->setEnabled(!loading);
     if (loading)
         setToolsEnabled(false); // re-enabled in onLoadFinished on success
     statusLabel->setText(
@@ -1328,6 +1336,7 @@ void MainWindow::applyCurrentUserMetadata(const UserMetadata& metadata) {
         return;
     session->setUserMetadata(metadata);
     filmStrip->setMarks(session->path(), metadata);
+    infoPanel->setUserMetadata(metadata);
     if (XmpSidecar::saveMetadata(session->path(), metadata)) {
         session->markMetadataSaved();
     } else {
