@@ -5,7 +5,12 @@
 // header owns only the tested Amount→sigma calibration that the renderer uploads
 // as a uniform, keeping that logic single-sourced and headlessly testable.
 
-// Amount slider (0..100) → Gaussian sigma in full-res pixels. Amount 0 maps to
-// sigma 0 (the renderer treats that as "NR off"). Larger amounts smooth larger
-// colour blobs.
-float colorNoiseReductionSigmaPx(float amount);
+// Smoothness slider (0..100) → Gaussian sigma in full-res pixels. Smoothness 0
+// maps to sigma 0 (the renderer treats that as "no blur"). Larger values smooth
+// larger colour blobs. (Was the single Amount slider before issue #59.)
+float colorNoiseReductionSigmaPx(float smoothness);
+
+// Strength slider (0..100) → recombine blend factor in [0,1]: the opacity of the
+// denoised chroma over the original. The renderer uploads this as a uniform and
+// the recombine shader mixes raw vs blurred chroma by it. Clamped to [0,1].
+float colorNoiseReductionStrengthMix(float strength);

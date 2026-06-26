@@ -85,7 +85,8 @@ private:
     SliderRow saturation;
     SliderRow vibrance;
     SliderRow sharpening;
-    SliderRow colorNoiseReduction;
+    SliderRow colorNoiseReduction; // Strength (issue #59)
+    SliderRow colorNoiseReductionSmoothness;
     SliderRow rotation;
     QCheckBox* lensCorrectDistortionBox;
     QCheckBox* lensCorrectVignettingBox;

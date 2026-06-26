@@ -37,12 +37,14 @@ Working space is linear Rec.2020. For each pixel, luminance is
 1). The pixel is decomposed into `Y` and a **unit-luma chroma ratio** `r = c / Y`
 (near-black pixels get a neutral ratio). A two-pass **separable Gaussian** blurs
 the ratio (horizontal then vertical), and the pixel is recombined as
-`c' = Y · blurredRatio`.
+`c' = Y · mix(r, blurredRatio, strength)` — the **Strength** control blends the
+smoothed chroma back over the original ratio (Strength 1 = fully denoised, 0 =
+untouched).
 
-Per-pixel luma is preserved **exactly, by construction**: the blurred ratio is a
-convex combination of unit-luma vectors, so it still has luma 1, and multiplying
-by the original `Y` restores it. Only colour is smoothed; detail (which lives in
-luma) is mathematically untouched.
+Per-pixel luma is preserved **exactly, by construction, at any Strength**: both
+`r` and `blurredRatio` are unit-luma vectors, so their convex `mix` is too, and
+multiplying by the original `Y` restores it. Only colour is smoothed; detail
+(which lives in luma) is mathematically untouched.
 
 This maps to **four shader passes** over three textures (one `NrUbuf` shared by
 all of them, since each blur shader hardcodes its direction so the uniform is
@@ -52,20 +54,30 @@ constant for the frame):
 2. `nr_blur_h.frag` → quarter-res `chromaB`: horizontal Gaussian over `r`.
 3. `nr_blur_v.frag` → quarter-res `chromaA`: vertical Gaussian.
 4. `nr_recombine.frag` → full-res `denoised`: read the raw pixel's `Y` and the
-   bilinearly-upsampled blurred ratio, output `Y · r`.
+   bilinearly-upsampled blurred ratio, output `Y · mix(r, blurredRatio, strength)`
+   — equivalently `mix(c0, Y·blurredRatio, strength)` on the raw colour `c0`.
 
-`Amount` (0..100) maps linearly to a Gaussian **sigma in full-res pixels**
-(0..25, `colorNoiseReductionSigmaPx`). Pixels are the correct unit because noise
-grain is a fixed sensor-pixel size, independent of image dimensions — a
-fraction-of-long-edge radius would denoise a high-MP capture more strongly than a
-low-MP one of the same grain, and cropping would change the strength. The blur
-runs at quarter res, so the kernel uses `sigma / 4`; the tap radius is clamped to
-`[1, 64]` (the shader's compile-time cap). `Amount 0` is an exact no-op — the
-pre-pass is skipped and the main pass samples the raw slot directly.
+The single `Amount` slider that originally shipped is split into two controls
+(issue #59), separating "how big" from "how much":
 
-`colorNoiseReductionSigmaPx` is the **single source of truth** for the mapping —
-one tested C++ function the shader takes a scalar from, not a formula duplicated
-in GLSL.
+- **Smoothness** (0..100) maps linearly to a Gaussian **sigma in full-res pixels**
+  (0..25, `colorNoiseReductionSigmaPx`) — the scale of the colour blobs smoothed,
+  exactly what `Amount` drove before. Pixels are the correct unit because noise
+  grain is a fixed sensor-pixel size, independent of image dimensions — a
+  fraction-of-long-edge radius would denoise a high-MP capture more strongly than
+  a low-MP one of the same grain, and cropping would change the result. The blur
+  runs at quarter res, so the kernel uses `sigma / 4`; the tap radius is clamped
+  to `[1, 64]` (the shader's compile-time cap).
+- **Strength** (0..100) maps to the recombine `mix` factor (0..1,
+  `colorNoiseReductionStrengthMix`) — the opacity of the denoised chroma.
+
+The pre-pass is an exact no-op and is **skipped** (the main pass samples the raw
+slot directly) whenever `Strength == 0` **or** `Smoothness == 0` — either yields
+an identity (nothing blended back, or a zero-sigma blur).
+
+`colorNoiseReductionSigmaPx` and `colorNoiseReductionStrengthMix` are the **single
+source of truth** for their mappings — tested C++ functions the shader takes
+scalars from, not formulae duplicated in GLSL.
 
 ## Placement: last, and why that is safe
 
@@ -89,10 +101,13 @@ contained, `image.frag`-free shader stage.
 
 ## Caching and debounce
 
-The denoised texture is **cached per slot, keyed by `(amount, generation)`** —
-`generation` bumps whenever the source texture is recreated. Pan, zoom, exposure,
-and every other per-pixel edit reuse the cached texture; only an Amount change or
-a new upload triggers the four passes. There are three slots: `[0]` Preview,
+The denoised texture is **cached per slot, keyed by `(smoothness, strength,
+generation)`** — `generation` bumps whenever the source texture is recreated. Pan,
+zoom, exposure, and every other per-pixel edit reuse the cached texture; only a
+Smoothness or Strength change or a new upload triggers the four passes. A
+Strength-only change still reruns all four (the blur is the cheap quarter-res
+work, and the recompute is debounced anyway), rather than caching the blurred
+chroma separately to rerun only the recombine. There are three slots: `[0]` Preview,
 `[1]` FullRes, `[2]` export's temporary full-res texture (forced to recompute
 each export call since its source changes every time).
 
@@ -100,11 +115,12 @@ A stable 1×1 throwaway render target defines one `nrRpDesc` shared by every NR
 target and pipeline, so pipelines never dangle when a slot's textures are resized.
 
 Because the pre-pass is the one expensive GPU stage, the **viewport debounces**
-it: `ImageViewport` renders for `nrAmountEffective` (kept in the cache) and only
-promotes the live slider value after the slider has been still ~200 ms
-(`nrTimer`). Dragging the slider repaints cheaply against the cached texture; the
-recompute fires once, when the user settles. Export and full-res-readback paths
-bypass the debounce and always use the committed Amount.
+it: `ImageViewport` renders for the effective (Smoothness, Strength) pair kept in
+the cache and only promotes the live slider values after a slider has been still
+~200 ms (`nrTimer`). Both controls debounce, since either reruns the four passes.
+Dragging a slider repaints cheaply against the cached texture; the recompute fires
+once, when the user settles. Export and full-res-readback paths bypass the
+debounce and always use the committed values.
 
 ## Consequences
 
@@ -124,10 +140,20 @@ bypass the debounce and always use the committed Amount.
 - The result is **GPU-only** — golden-image tests for it skip on machines without
   a GPU, so the math that *is* unit-tested is the sigma mapping and the XMP
   round-trip; the spatial result is verified visually.
-- Persisted as Lightroom-compatible `crs:ColorNoiseReduction` (Amount 0..100),
-  **default 0** — arraw stays neutral on import rather than mirroring Adobe's
-  default 25 (the `0031` precedent: same field name, our interpretation). Carried
-  in Develop Presets under the Detail group; one undo command per change.
+- Persisted as two Lightroom-compatible fields (issue #59): **Strength** as
+  `crs:ColorNoiseReduction` — Lightroom's "Color" amount — **default 0** (arraw
+  stays neutral on import rather than mirroring Adobe's default 25, the `0031`
+  precedent: same field name, our interpretation); and **Smoothness** as
+  `crs:ColorNoiseReductionSmoothness`, **default 50** (Lightroom parity, so
+  enabling Strength alone yields a useful mid-scale blur). Carried in Develop
+  Presets under the Detail group; one undo command per change. **Accepted break:**
+  this remaps `crs:ColorNoiseReduction` from the old sigma driver to Strength, so
+  edits saved by the original single-`Amount` build reinterpret that value as
+  Strength (with Smoothness at its default) and may render differently. The break
+  is accepted because the Colour NR milestone had only just merged when the split
+  landed — the real-world footprint of pre-split edits is effectively nil — and a
+  reliable migration is impossible (an arraw sigma value and a Lightroom amount are
+  indistinguishable in the same field).
 - Plain separable Gaussian can bleed colour across hard saturated edges; accepted
   for these broad, low-frequency blobs. Luma-guided edge protection and a Detail
   sub-control are the natural follow-up, alongside the deferred luminance NR.

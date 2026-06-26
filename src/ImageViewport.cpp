@@ -71,7 +71,8 @@ ImageViewport::ImageViewport(QWidget* parent)
     nrTimer.setSingleShot(true);
     nrTimer.setInterval(200);
     connect(&nrTimer, &QTimer::timeout, this, [this] {
-        nrAmountEffective = params.colorNoiseReduction;
+        nrStrengthEffective = params.colorNoiseReduction;
+        nrSmoothnessEffective = params.colorNoiseReductionSmoothness;
         update();
     });
 }
@@ -200,10 +201,12 @@ void ImageViewport::render(QRhiCommandBuffer* cb) {
     fp.clipHighlights = clipHighlights;
     fp.clipShadows = clipShadows;
     fp.adjustments = p;
-    // The denoise pre-pass is debounced (nrTimer): render the settled amount,
-    // not the live slider, so dragging doesn't trigger a recompute every tick.
-    if (!showOriginal)
-        fp.adjustments.colorNoiseReduction = nrAmountEffective;
+    // The denoise pre-pass is debounced (nrTimer): render the settled values,
+    // not the live sliders, so dragging doesn't trigger a recompute every tick.
+    if (!showOriginal) {
+        fp.adjustments.colorNoiseReduction = nrStrengthEffective;
+        fp.adjustments.colorNoiseReductionSmoothness = nrSmoothnessEffective;
+    }
 
     core.record(cb, renderTarget(), activeSlot(), fp);
 }
@@ -655,9 +658,11 @@ void ImageViewport::setAdjustments(const GlobalAdjustment& p) {
     if (p.curveLuma != params.curveLuma || p.curveR != params.curveR || p.curveG != params.curveG
         || p.curveB != params.curveB)
         curveLutDirty = true;
-    // Debounce the Colour-NR pre-pass: defer adopting the new amount until the
-    // slider settles (nrTimer). render() keeps using nrAmountEffective meanwhile.
-    if (p.colorNoiseReduction != params.colorNoiseReduction)
+    // Debounce the Colour-NR pre-pass: defer adopting the new Strength/Smoothness
+    // until the slider settles (nrTimer). render() keeps using the effective
+    // values meanwhile. Either control restarts the timer (issue #59).
+    if (p.colorNoiseReduction != params.colorNoiseReduction
+        || p.colorNoiseReductionSmoothness != params.colorNoiseReductionSmoothness)
         nrTimer.start();
     params = p;
     updateImageAspect(); // orientation may have changed

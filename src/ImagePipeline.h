@@ -59,9 +59,12 @@ struct GlobalAdjustment : SharedAdjustment {
 
     // Detail
     float sharpening = 0.0f; // 0 .. 100
-    // Colour (chroma) Noise Reduction — Amount 0..100, applied as a cached GPU
-    // chroma pre-pass in RendererCore (see NoiseReduction.h, docs/adr/0032).
-    float colorNoiseReduction = 0.0f; // 0 .. 100
+    // Colour (chroma) Noise Reduction — a cached GPU chroma pre-pass in
+    // RendererCore (see NoiseReduction.h, docs/adr/0032, issue #59). Strength is
+    // the blend opacity (Lightroom's "Color" amount, crs:ColorNoiseReduction);
+    // Smoothness drives the Gaussian sigma (crs:ColorNoiseReductionSmoothness).
+    float colorNoiseReduction = 0.0f;            // Strength, 0 .. 100
+    float colorNoiseReductionSmoothness = 50.0f; // 0 .. 100
 
     // Lens Corrections (docs/adr/0027). Profile-driven, apply-once CPU corrections.
     // Enable toggles only — the coefficients come from the lens profile

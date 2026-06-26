@@ -90,7 +90,8 @@ GlobalAdjustment applyGroups(
     }
     if (hasGroup(selection, DevelopGroup::Detail)) {
         result.sharpening = source.sharpening;
-        result.colorNoiseReduction = source.colorNoiseReduction;
+        result.colorNoiseReduction = source.colorNoiseReduction; // Strength (issue #59)
+        result.colorNoiseReductionSmoothness = source.colorNoiseReductionSmoothness;
     }
     if (hasGroup(selection, DevelopGroup::Geometry)) {
         result.orientation = source.orientation;

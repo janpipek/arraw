@@ -556,7 +556,8 @@ void RendererCore::ensureNrSlot(int key, QSize fullSize) {
     make(ns.chromaA, ns.chromaART, quarter);
     make(ns.chromaB, ns.chromaBRT, quarter);
     make(ns.denoised, ns.denoisedRT, fullSize);
-    ns.amount = -1.0f; // textures changed → force a re-run
+    ns.smoothness = -1.0f; // textures changed → force a re-run
+    ns.strength = -1.0f;
     ns.gen = generation;
 }
 
@@ -578,14 +579,15 @@ void RendererCore::nrPass(
 }
 
 QRhiTexture* RendererCore::ensureDenoised(
-    QRhiCommandBuffer* cb, int key, QRhiTexture* rawTex, float amount) {
+    QRhiCommandBuffer* cb, int key, QRhiTexture* rawTex, float smoothness, float strength) {
     ensureNrResources();
     ensureNrSlot(key, rawTex->pixelSize());
     NrSlot& ns = nrSlot[key];
 
-    if (ns.amount == amount && ns.gen == generation)
+    if (ns.smoothness == smoothness && ns.strength == strength && ns.gen == generation)
         return ns.denoised.get(); // cached — reused for pan/zoom/other edits, no work
-    ns.amount = amount;
+    ns.smoothness = smoothness;
+    ns.strength = strength;
 
     // SRBs point at the live textures; rebuilt each run (only on amount/texture
     // change), kept as members so they outlive command-buffer submission.
@@ -639,8 +641,9 @@ QRhiTexture* RendererCore::ensureDenoised(
         makePipe(nrPipeRecombine, nrRecombineFs, nrSrbRecombine.get());
     }
 
-    // Sigma is calibrated in full-res pixels; the blur runs on quarter-res chroma.
-    const float sigmaQuarter = colorNoiseReductionSigmaPx(amount) / 4.0f;
+    // Smoothness drives the sigma (calibrated in full-res pixels; the blur runs on
+    // quarter-res chroma); Strength drives the recombine blend (issue #59).
+    const float sigmaQuarter = colorNoiseReductionSigmaPx(smoothness) / 4.0f;
     NrUbuf nb{};
     const QMatrix4x4 cc = rhi->clipSpaceCorrMatrix();
     std::memcpy(nb.clipCorr, cc.constData(), sizeof(nb.clipCorr));
@@ -648,6 +651,7 @@ QRhiTexture* RendererCore::ensureDenoised(
     nb.invChroma[1] = 1.0f / float(ns.chromaA->pixelSize().height());
     nb.sigma = sigmaQuarter;
     nb.radius = std::clamp(int(std::ceil(3.0f * sigmaQuarter)), 1, 64);
+    nb.strength = colorNoiseReductionStrengthMix(strength);
     // On a Y-up framebuffer (OpenGL) the rendered NR targets are V-flipped vs the
     // uploaded image texture; the vertex shader mirrors the sampled V to cancel it.
     nb.flipV = rhi->isYUpInFramebuffer() ? 1 : 0;
@@ -662,6 +666,13 @@ QRhiTexture* RendererCore::ensureDenoised(
     return ns.denoised.get();
 }
 
+// Colour NR is an exact no-op (the pre-pass is skipped, the main pass samples the
+// raw slot) unless both controls are positive: Strength 0 blends nothing back, and
+// Smoothness 0 is a zero-sigma identity blur (issue #59).
+static bool nrActive(const GlobalAdjustment& a) {
+    return a.colorNoiseReduction > 0.0f && a.colorNoiseReductionSmoothness > 0.0f;
+}
+
 void RendererCore::record(
     QRhiCommandBuffer* cb, QRhiRenderTarget* rt, Slot slot, const FrameParams& fp) {
     if (!hasImage(slot)) {
@@ -672,9 +683,11 @@ void RendererCore::record(
     QRhiResourceUpdateBatch* batch = rhi->nextResourceUpdateBatch();
     flushPendingUploads(batch); // creates/recreates the slot's texture
     QRhiTexture* tex = imageTex[int(slot)].get();
-    if (fp.adjustments.colorNoiseReduction > 0.0f) {
+    if (nrActive(fp.adjustments)) {
         cb->resourceUpdate(batch); // apply uploads before the NR pre-passes
-        tex = ensureDenoised(cb, int(slot), tex, fp.adjustments.colorNoiseReduction);
+        tex = ensureDenoised(
+            cb, int(slot), tex, fp.adjustments.colorNoiseReductionSmoothness,
+            fp.adjustments.colorNoiseReduction);
         batch = rhi->nextResourceUpdateBatch(); // fresh batch for the main pass
     }
     recordPass(cb, rt, tex, fp, batch);
@@ -729,14 +742,16 @@ QImage RendererCore::renderOffscreenTex(
     QRhiResourceUpdateBatch* batch = rhi->nextResourceUpdateBatch();
     flushPendingUploads(batch);
     QRhiTexture* tex = slotIndex >= 0 ? imageTex[slotIndex].get() : extTex;
-    if (fp.adjustments.colorNoiseReduction > 0.0f) {
+    if (nrActive(fp.adjustments)) {
         // key 2 is the export/extTex scratch; its source texture changes every
-        // call, so force a recompute rather than trust the amount cache.
+        // call, so force a recompute rather than trust the (smoothness,strength) cache.
         const int nrKey = slotIndex >= 0 ? slotIndex : 2;
         if (nrKey == 2)
-            nrSlot[2].amount = -1.0f;
+            nrSlot[2].smoothness = -1.0f;
         cb->resourceUpdate(batch);
-        tex = ensureDenoised(cb, nrKey, tex, fp.adjustments.colorNoiseReduction);
+        tex = ensureDenoised(
+            cb, nrKey, tex, fp.adjustments.colorNoiseReductionSmoothness,
+            fp.adjustments.colorNoiseReduction);
         batch = rhi->nextResourceUpdateBatch();
     }
     recordPass(cb, rt.get(), tex, fp, batch);
