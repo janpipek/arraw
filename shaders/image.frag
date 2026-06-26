@@ -59,6 +59,10 @@ layout(std140, binding = 0) uniform buf {
     int   histoRaw;  // 1: output pre-clamp sRGB-linear for overflow binning
     int   orientQuarterTurns; // coarse Orientation (docs/adr/0028); unused in frag
     int   orientMirrored;
+    int   sensorClipWarn; // Sensor Clipping overlay from RAW mosaic samples
+    int   pad0;
+    int   pad1;
+    int   pad2;
 } u;
 
 layout(binding = 1) uniform sampler2D uTexture;
@@ -67,6 +71,7 @@ layout(binding = 3) uniform sampler3D uLut3D;      // display LUT (soft-proof / 
                                                    // indexed by sRGB-encoded working RGB,
                                                    // RGB=display output, A=in-gamut flag
 layout(binding = 4) uniform sampler2D uToneLUT;    // 256×17: global + 16 Local Adjustments
+layout(binding = 5) uniform sampler2D uSensorClip; // RAW sensor clipping mask, same geometry as image
 
 // Rec.2020 luma — the whole pipeline works in linear Rec.2020 (docs/adr/0001).
 // Must match kLumaR/G/B in src/ImagePipeline.h.
@@ -489,5 +494,7 @@ void main() {
         else if ((u.clipWarn & 2) != 0 && any(lessThanEqual(s, vec3(0.0))))
             outc = vec3(0.0, 0.0, 1.0);                     // shadow clip
     }
+    if (u.sensorClipWarn != 0 && any(greaterThan(texture(uSensorClip, vUV).rgb, vec3(0.01))))
+        outc = vec3(1.0, 0.0, 1.0);                         // sensor clip
     fragColor = vec4(outc, 1.0);
 }

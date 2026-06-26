@@ -111,6 +111,10 @@ struct ImageBuffer {
 struct LoadResult {
     ImageBuffer fullRes; // stored for export only
     ImageBuffer preview; // 1/4-res (half W, half H) — used for viewport + histogram
+    // Sensor Clipping mask from RAW mosaic values, before demosaic,
+    // normalisation, and develop settings. Invalid for standard images.
+    ImageBuffer sensorClipFullRes;
+    ImageBuffer sensorClipPreview;
     ImageMetadata metadata;
     QString error; // non-empty on failure
     QRectF defaultCrop = {0.0, 0.0, 1.0, 1.0};

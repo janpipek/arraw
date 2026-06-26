@@ -1,6 +1,7 @@
 #include "DecodeCache.h"
 #include "ImagePipeline.h"
 #include <catch2/catch_test_macros.hpp>
+#include <utility>
 
 namespace {
 
@@ -64,6 +65,17 @@ TEST_CASE("re-inserting a key replaces it without double-counting bytes", "[deco
 
     REQUIRE(cache.byteSize() == 1200);
     REQUIRE(cache.get("a") != nullptr);
+}
+
+TEST_CASE("sensor clipping masks count toward the byte budget", "[decodecache]") {
+    LoadResult result = makeResult(10, 10);                // 1200 bytes
+    result.sensorClipFullRes = makeResult(10, 10).fullRes; // +1200 bytes
+    result.sensorClipPreview = makeResult(5, 5).fullRes;   // +300 bytes
+
+    DecodeCache cache(3000);
+    cache.insert("a", std::move(result));
+
+    REQUIRE(cache.byteSize() == 2700);
 }
 
 TEST_CASE("a pinned entry is never evicted, even as the least-recently-used", "[decodecache]") {
