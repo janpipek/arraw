@@ -4,6 +4,7 @@
 #include "LensfunSource.h"
 #include "Trace.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <libraw/libraw.h>
 #include <memory>
@@ -92,21 +93,22 @@ static QRectF defaultCropRect(const LibRaw& raw, int imageWidth, int imageHeight
         double(h) / double(imageHeight)};
 }
 
-static unsigned sensorClipThreshold(const LibRaw& raw, int channel) {
+// The saturation level per LibRaw channel (0=R, 1=G, 2=B, 3=G2). Constant for a
+// whole image, so resolve it once before the per-pixel loops rather than per pixel.
+static std::array<unsigned, 4> sensorClipThresholds(const LibRaw& raw) {
     const auto& color = raw.imgdata.color;
-    if (channel >= 0 && channel < 4 && color.linear_max[channel] > 0)
-        return color.linear_max[channel];
-    if (color.maximum > 0)
-        return color.maximum;
-    if (color.data_maximum > 0)
-        return color.data_maximum;
-    return 65535;
+    const unsigned fallback
+        = color.maximum > 0 ? color.maximum : (color.data_maximum > 0 ? color.data_maximum : 65535u);
+    std::array<unsigned, 4> thresh{};
+    for (int c = 0; c < 4; ++c)
+        thresh[size_t(c)] = color.linear_max[c] > 0 ? unsigned(color.linear_max[c]) : fallback;
+    return thresh;
 }
 
 static void markSensorClipPixel(ImageBuffer& mask, int x, int y, int channel) {
     if (channel < 0 || channel > 3)
         return;
-    const int outChannel = std::min(channel, 2); // LibRaw uses channel 3 for the second green.
+    const int outChannel = channel == 3 ? 1 : channel; // LibRaw channel 3 is the second green.
     mask.data[(size_t(y) * size_t(mask.width) + size_t(x)) * 3u + size_t(outChannel)] = 1.0f;
 }
 
@@ -119,6 +121,7 @@ static ImageBuffer sensorClipMask(LibRaw& raw, int width, int height) {
     mask.height = height;
     mask.data.assign(size_t(width) * size_t(height) * 3u, 0.0f);
 
+    const std::array<unsigned, 4> thresh = sensorClipThresholds(raw);
     const auto& sizes = raw.imgdata.sizes;
     const auto& rawdata = raw.imgdata.rawdata;
     if (rawdata.raw_image && sizes.raw_width > 0 && sizes.raw_height > 0) {
@@ -135,7 +138,7 @@ static ImageBuffer sensorClipMask(LibRaw& raw, int width, int height) {
                 const int channel = raw.COLOR(rawY, rawX);
                 const ushort value
                     = rawdata.raw_image[size_t(rawY) * sizes.raw_width + size_t(rawX)];
-                if (value >= sensorClipThreshold(raw, channel))
+                if (value >= thresh[size_t(channel)])
                     markSensorClipPixel(mask, x, y, channel);
             }
         }
@@ -147,7 +150,7 @@ static ImageBuffer sensorClipMask(LibRaw& raw, int width, int height) {
             for (int x = 0; x < width; ++x) {
                 const auto& px = rawdata.color3_image[size_t(y) * size_t(width) + size_t(x)];
                 for (int c = 0; c < 3; ++c)
-                    if (px[c] >= sensorClipThreshold(raw, c))
+                    if (px[c] >= thresh[size_t(c)])
                         markSensorClipPixel(mask, x, y, c);
             }
         }
@@ -159,7 +162,7 @@ static ImageBuffer sensorClipMask(LibRaw& raw, int width, int height) {
             for (int x = 0; x < width; ++x) {
                 const auto& px = rawdata.color4_image[size_t(y) * size_t(width) + size_t(x)];
                 for (int c = 0; c < 4; ++c)
-                    if (px[c] >= sensorClipThreshold(raw, c))
+                    if (px[c] >= thresh[size_t(c)])
                         markSensorClipPixel(mask, x, y, c);
             }
         }
