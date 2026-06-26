@@ -46,6 +46,7 @@ add_executable(arraw_tests
     test_PresetStore.cpp
     test_Spot.cpp
     test_NoiseReduction.cpp
+    test_DemosaicAlgorithm.cpp
     test_LensCorrection.cpp
     test_LensfunSource.cpp
     test_BatchPaste.cpp

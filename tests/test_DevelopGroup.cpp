@@ -32,6 +32,7 @@ static GlobalAdjustment fullyEdited() {
     g.hslSat = {-1, -2, -3, -4, -5, -6, -7, -8};
     g.hslLum = {9, 8, 7, 6, 5, 4, 3, 2};
     // Detail
+    g.demosaicAlgorithm = DemosaicAlgorithm::VNG;
     g.sharpening = 55.0f;
     // Geometry
     g.orientation = orient::Orientation{3, true};
@@ -127,6 +128,19 @@ TEST_CASE("Geometry moves rotation, crop, and the aspect-lock flag together", "[
     CHECK(result.cropConstrained == source.cropConstrained);
     // Geometry must not drag tonal fields along.
     CHECK(result.exposure == target.exposure);
+}
+
+TEST_CASE("Detail carries the demosaic algorithm; reset returns AHD", "[developgroup]") {
+    const GlobalAdjustment target; // defaults: demosaicAlgorithm == AHD
+    const GlobalAdjustment source = fullyEdited();
+
+    const GlobalAdjustment result = applyGroups(target, source, only(DevelopGroup::Detail));
+    CHECK(result.demosaicAlgorithm == source.demosaicAlgorithm);
+    CHECK(result.sharpening == source.sharpening);
+
+    // Pasting an unedited Detail group (Replace semantics) resets it back to AHD.
+    const GlobalAdjustment reset = applyGroups(source, GlobalAdjustment{}, only(DevelopGroup::Detail));
+    CHECK(reset.demosaicAlgorithm == DemosaicAlgorithm::AHD);
 }
 
 TEST_CASE("Lens Corrections moves only its enable toggles", "[developgroup]") {

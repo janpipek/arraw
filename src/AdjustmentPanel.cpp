@@ -28,6 +28,23 @@ static const FieldSpec
 static const FieldSpec kSharpenSpec{0, 100, 0, 1.0f, 1.0f, 0, {}, false, 1.0f};
 // Colour-NR Smoothness resets to 50 (Lightroom parity), unlike Strength's 0.
 static const FieldSpec kColorSmoothnessSpec{0, 100, 50, 1.0f, 1.0f, 0, {}, false, 1.0f};
+
+// Demosaic algorithms in the combo, ordered soft → sharp (Linear is a diagnostic
+// baseline, kept last). Label + tooltip + enum; AHD is the default (docs/adr/0033).
+struct DemosaicChoice {
+    DemosaicAlgorithm algo;
+    const char* label;
+    const char* tooltip;
+};
+static const DemosaicChoice kDemosaicChoices[] = {
+    {DemosaicAlgorithm::VNG, "VNG", "Smooth and noise-tolerant; softer detail."},
+    {DemosaicAlgorithm::AHD, "AHD (default)", "Balanced default — arraw's original decode."},
+    {DemosaicAlgorithm::PPG, "PPG", "Fast and a touch sharper than VNG; mild maze artifacts."},
+    {DemosaicAlgorithm::DCB, "DCB", "Detail-oriented; occasional artifacts."},
+    {DemosaicAlgorithm::AAHD, "AAHD", "Aliasing-aware AHD variant."},
+    {DemosaicAlgorithm::DHT, "DHT", "High detail; slower and noisier on high-ISO frames."},
+    {DemosaicAlgorithm::Linear, "Linear", "Bilinear baseline; mainly diagnostic."},
+};
 static const FieldSpec kEffectAmountSpec{-100, 100, 0, 1.0f, 1.0f, 0, {}, true, 1.0f};
 static const FieldSpec kEffectShapeSpec{0, 100, 50, 1.0f, 1.0f, 0, {}, false, 1.0f};
 static const FieldSpec kGrainAmountSpec{0, 100, 0, 1.0f, 1.0f, 0, {}, false, 1.0f};
@@ -210,6 +227,18 @@ AdjustmentPanel::AdjustmentPanel(QWidget* parent)
 
     // ── Detail ────────────────────────────────────────────────────────────────
     auto* detail = makeGroup("Detail");
+    subHeader(detail, "Demosaic");
+    demosaicCombo = new QComboBox(this);
+    demosaicCombo->setObjectName("demosaicCombo");
+    for (const auto& choice : kDemosaicChoices)
+        demosaicCombo->addItem(
+            choice.label, static_cast<int>(choice.algo)); // tooltip set per item below
+    for (int i = 0; i < demosaicCombo->count(); ++i)
+        demosaicCombo->setItemData(i, kDemosaicChoices[i].tooltip, Qt::ToolTipRole);
+    // Default selection matches GlobalAdjustment's default (AHD); set before the
+    // change handler is connected, so it raises no spurious commit/re-decode.
+    demosaicCombo->setCurrentIndex(demosaicCombo->findData(static_cast<int>(kDefaultDemosaic)));
+    detail->addWidget(demosaicCombo);
     sharpening = addSlider(detail, "Sharpen", kSharpenSpec);
     subHeader(detail, "Color Noise");
     colorNoiseReduction = addSlider(detail, "Strength", kSharpenSpec);
@@ -264,6 +293,15 @@ AdjustmentPanel::AdjustmentPanel(QWidget* parent)
         temperature.slider->setValue(kWBPresets[i].kelvin);
         tint.slider->setValue(kWBPresets[i].tint);
         commit(); // one undo entry for the whole preset
+    });
+    // A demosaic change is a discrete decode-time choice (not a drag): it commits
+    // immediately as one undo entry. MainWindow turns the commit into a re-decode.
+    connect(demosaicCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int i) {
+        if (i < 0)
+            return;
+        syncParams();
+        emit paramsChanged(adjustments);
+        commit();
     });
     connect(rotation.slider, &QSlider::sliderPressed, this, [this] { emit straightenActive(true); });
     connect(rotation.slider, &QSlider::sliderReleased, this, [this] {
@@ -325,6 +363,9 @@ void AdjustmentPanel::syncParams() {
     adjustments.tint = v(tint);
     adjustments.saturation = v(saturation);
     adjustments.vibrance = v(vibrance);
+    if (const int i = demosaicCombo->currentIndex(); i >= 0)
+        adjustments.demosaicAlgorithm
+            = static_cast<DemosaicAlgorithm>(demosaicCombo->itemData(i).toInt());
     adjustments.sharpening = v(sharpening);
     adjustments.colorNoiseReduction = v(colorNoiseReduction); // Strength (issue #59)
     adjustments.colorNoiseReductionSmoothness = v(colorNoiseReductionSmoothness);
@@ -514,6 +555,14 @@ void AdjustmentPanel::setParams(const GlobalAdjustment& p) {
     for (auto* box : {lensCorrectDistortionBox, lensCorrectVignettingBox, lensCorrectCABox})
         box->blockSignals(false);
 
+    // Demosaic combo (block signals so setParams doesn't emit/commit/re-decode).
+    {
+        QSignalBlocker block(demosaicCombo);
+        const int idx = demosaicCombo->findData(static_cast<int>(p.demosaicAlgorithm));
+        if (idx >= 0)
+            demosaicCombo->setCurrentIndex(idx);
+    }
+
     // Curve widget update (no signals needed — setPoints doesn't emit curveChanged)
     toneCurve->setPoints(ToneCurveWidget::Channel::Luma, p.curveLuma.points);
     toneCurve->setPoints(ToneCurveWidget::Channel::Red, p.curveR.points);
@@ -532,6 +581,13 @@ void AdjustmentPanel::setLensProfileName(const QString& name) {
     lensProfileLabel->setText(available ? name : tr("No lens profile"));
     for (auto* box : {lensCorrectDistortionBox, lensCorrectVignettingBox, lensCorrectCABox})
         box->setEnabled(available);
+}
+
+void AdjustmentPanel::setDemosaicAvailable(bool available) {
+    demosaicCombo->setEnabled(available);
+    demosaicCombo->setToolTip(
+        available ? tr("Choose the RAW demosaic algorithm. Changing it re-decodes the image.")
+                  : tr("This sensor uses its own decode — Bayer demosaic algorithms do not apply."));
 }
 
 // A "•" suffix marks channels whose curve is bent — otherwise a non-identity

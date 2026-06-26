@@ -5,10 +5,10 @@
 
 #include <QFileInfo>
 
-QString decodeCacheKey(const QString& path) {
+QString decodeCacheKey(const QString& path, DemosaicAlgorithm algo) {
     const QFileInfo file(path);
     return file.canonicalFilePath() + '|' + QString::number(file.size()) + '|'
-           + QString::number(file.lastModified().toMSecsSinceEpoch());
+           + QString::number(file.lastModified().toMSecsSinceEpoch()) + '|' + demosaicToken(algo);
 }
 
 DevelopSession::SidecarState toSessionSidecarState(SidecarLoadStatus status) {
@@ -48,8 +48,9 @@ bool shouldConfirmLeavingImage(const DevelopSession& session) {
 LoadResult decodeImage(
     const QString& path,
     EmbeddedPreviewCallback onPreview,
-    const std::shared_ptr<std::atomic<bool>>& cancel) {
+    const std::shared_ptr<std::atomic<bool>>& cancel,
+    DemosaicAlgorithm algo) {
     if (StandardImageLoader::canLoad(path))
         return StandardImageLoader::load(path, cancel);
-    return RawProcessor::load(path, std::move(onPreview), cancel);
+    return RawProcessor::load(path, std::move(onPreview), cancel, algo);
 }

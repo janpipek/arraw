@@ -333,6 +333,9 @@ SidecarLoadResult XmpSidecar::loadWithStatus(const QString& rawPath) {
                            .compare("true", Qt::CaseInsensitive)
                        == 0;
             };
+            // Demosaic algorithm (docs/adr/0033): absent/unknown → AHD silently.
+            p.demosaicAlgorithm = demosaicFromToken(
+                xml.attributes().value(kNsArraw, "DemosaicAlgorithm").toString());
             p.lensCorrectDistortion = boolAttr("LensCorrectDistortion");
             p.lensCorrectVignetting = boolAttr("LensCorrectVignetting");
             p.lensCorrectCA = boolAttr("LensCorrectCA");
@@ -559,6 +562,11 @@ static QByteArray ownedPacket(const SidecarData& data) {
     write("GrainFrequency", p.grainRoughness);
     if (p.grainSeed != 0)
         xml.writeAttribute(kNsArraw, "GrainSeed", QString::number(p.grainSeed));
+    // Demosaic algorithm token (docs/adr/0033). Written only when non-default so
+    // AHD sidecars (and every pre-feature file) stay byte-identical and resolve
+    // to AHD via the silent fallback in demosaicFromToken.
+    if (p.demosaicAlgorithm != kDefaultDemosaic)
+        xml.writeAttribute(kNsArraw, "DemosaicAlgorithm", demosaicToken(p.demosaicAlgorithm));
     // Lens Corrections toggles (docs/adr/0027); written only when on (default off).
     if (p.lensCorrectDistortion)
         xml.writeAttribute(kNsArraw, "LensCorrectDistortion", "True");

@@ -1,4 +1,5 @@
 #include "ImageLoadWorkflow.h"
+#include "DemosaicAlgorithm.h"
 #include "XmpSidecar.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -22,6 +23,30 @@ TEST_CASE("decodeCacheKey changes when file metadata changes", "[loadworkflow]")
     file.close();
 
     CHECK(decodeCacheKey(path) != first);
+}
+
+TEST_CASE("decodeCacheKey distinguishes demosaic algorithms for the same file", "[loadworkflow]") {
+    QTemporaryDir dir;
+    REQUIRE(dir.isValid());
+    const QString path = dir.filePath("image.jpg");
+
+    QFile file(path);
+    REQUIRE(file.open(QIODevice::WriteOnly));
+    file.write("pixels");
+    file.close();
+
+    const QString ahd = decodeCacheKey(path, DemosaicAlgorithm::AHD);
+    const QString vng = decodeCacheKey(path, DemosaicAlgorithm::VNG);
+
+    // Each algorithm's decode caches independently (ADR 0033).
+    CHECK(ahd != vng);
+    // ...but the key is stable for the same (path, algo) so A/B switching hits.
+    CHECK(decodeCacheKey(path, DemosaicAlgorithm::VNG) == vng);
+    // The token is what disambiguates.
+    CHECK(ahd.endsWith("|" + demosaicToken(DemosaicAlgorithm::AHD)));
+    CHECK(vng.endsWith("|" + demosaicToken(DemosaicAlgorithm::VNG)));
+    // Default argument == kDefaultDemosaic, so the no-algo overload matches AHD.
+    CHECK(decodeCacheKey(path) == ahd);
 }
 
 TEST_CASE("resolvePendingPreviewParams uses a full-frame placeholder crop", "[loadworkflow]") {

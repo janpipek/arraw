@@ -67,6 +67,12 @@ const ImageBuffer& DevelopSession::fullResForExport() const {
     return fullResBuffer;
 }
 
+void DevelopSession::swapDecodedBuffers(const LoadResult& result) {
+    previewBuffer = result.preview;
+    fullResBuffer = result.fullRes;
+    rebuildDerivedBuffers(); // re-derive lens/spot buffers over the new pixels
+}
+
 void DevelopSession::setParams(const GlobalAdjustment& params) {
     if (params == adjustments)
         return; // no-op: avoids re-warping buffers when the undo command replays the same state
