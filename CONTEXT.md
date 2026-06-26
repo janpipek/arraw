@@ -357,3 +357,22 @@ predate the split reinterpret their old single value as Strength.
 _Avoid_: denoise (bare — say which kind), Amount (the old single control, now split
 into Smoothness + Strength), luminance NR (the deferred sibling), grain (the inverse
 operation), sharpening (a different Detail control)
+
+**Demosaic Algorithm**:
+The per-image choice of which interpolation method reconstructs full RGB from the
+sensor's Bayer/X-Trans mosaic during RAW decode — a member of the Detail [[Develop
+Group]] alongside Sharpen and [[Colour Noise Reduction]], so it travels with them in
+[[Copy Settings]] and [[Develop Preset]]s. Unlike its shader-based neighbours it is a
+*decode-time* choice made inside the RAW decode itself, upstream of every adjustment;
+changing it re-runs the decode rather than updating live. The menu is the small set
+libraw can produce in the LGPL build (AHD/VNG/PPG/DCB/DHT/AAHD/Linear), with **AHD**
+the default — the algorithm arraw has always decoded with. The menu applies to **Bayer**
+sensors; on X-Trans (libraw substitutes its own Markesteijn decode), Foveon, and
+non-RAW images the control is shown disabled rather than offering labels that would not
+apply — a proper X-Trans (Markesteijn) menu is a later extension. Stored as a stable token in
+`arraw:DemosaicAlgorithm` (not libraw's integer); an absent or unrecognised token falls
+back silently to AHD. AMaZE and RCD, named in issue #22, need a GPL demosaic-pack arraw
+does not build and are a documented later extension.
+_Avoid_: demosaicing (the process, not the choice), interpolation (overloaded — masks
+and curves interpolate too), Detail (the group, not this control), RAW decoding (broader
+— also exposure and white balance), AMaZE/RCD (algorithms not in the LGPL build)
