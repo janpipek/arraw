@@ -3,6 +3,7 @@
 #include "ImageMetadata.h"
 #include "LensfunSource.h"
 #include "Trace.h"
+#include "XmpSidecar.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -213,6 +214,11 @@ LoadResult RawProcessor::load(
         return {};
 
     const ImageMetadata metadata = extractMetadata(*raw);
+    const auto& id = raw->imgdata.idata;
+    const QByteArray embeddedXmp(
+        id.xmpdata && id.xmplen > 0 ? id.xmpdata : nullptr,
+        id.xmpdata && id.xmplen > 0 ? int(id.xmplen) : 0);
+    const XmpPacketMetadata embeddedMetadata = XmpSidecar::metadataPacketFromPacket(embeddedXmp);
 
     raw->imgdata.params.use_camera_wb = 1;
     raw->imgdata.params.no_auto_bright = 1;
@@ -265,7 +271,6 @@ LoadResult RawProcessor::load(
     // lensfun's system database; no match leaves the model empty.
     LensCorrectionModel lensModel;
     {
-        const auto& id = raw->imgdata.idata;
         const auto& other = raw->imgdata.other;
         LensQuery query;
         query.cameraMaker = QString::fromUtf8(id.make);
@@ -286,6 +291,8 @@ LoadResult RawProcessor::load(
         std::move(sensorClipFullRes),
         std::move(sensorClipPreview),
         metadata,
+        embeddedMetadata.metadata,
+        embeddedMetadata.presence,
         {},
         defaultCrop,
         std::move(lensModel),

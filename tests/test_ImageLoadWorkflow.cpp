@@ -54,6 +54,55 @@ TEST_CASE("resolveLoadedImage maps loaded sidecars to session state", "[loadwork
     CHECK(resolved.metadata.rating == 4);
 }
 
+TEST_CASE("resolveLoadedImage applies User Metadata read precedence", "[loadworkflow]") {
+    QTemporaryDir dir;
+    REQUIRE(dir.isValid());
+    const QString rawPath = dir.filePath("IMG_0001.CR3");
+
+    LoadResult result;
+    result.defaultCrop = QRectF(0.0, 0.0, 1.0, 1.0);
+    result.metadata.rows.append(qMakePair(QString("Description"), QString("EXIF caption")));
+    result.metadata.rows.append(qMakePair(QString("Artist"), QString("EXIF creator")));
+    result.embeddedMetadata.caption = "Embedded caption";
+    result.embeddedMetadata.creator = "Embedded creator";
+    result.embeddedMetadataPresence.caption = true;
+    result.embeddedMetadataPresence.creator = true;
+
+    ResolvedLoadedImage resolved = resolveLoadedImage(rawPath, result);
+    CHECK(resolved.metadata.caption == "Embedded caption");
+    CHECK(resolved.metadata.creator == "Embedded creator");
+
+    UserMetadata sidecarMetadata;
+    sidecarMetadata.caption = "Sidecar caption";
+    REQUIRE(XmpSidecar::saveMetadata(rawPath, sidecarMetadata));
+
+    resolved = resolveLoadedImage(rawPath, result);
+    CHECK(resolved.metadata.caption == "Sidecar caption");
+    CHECK(resolved.metadata.creator == "Embedded creator");
+}
+
+TEST_CASE("resolveLoadedImage honours sidecar-authored empty User Metadata", "[loadworkflow]") {
+    QTemporaryDir dir;
+    REQUIRE(dir.isValid());
+    const QString rawPath = dir.filePath("IMG_0001.CR3");
+
+    LoadResult result;
+    result.defaultCrop = QRectF(0.0, 0.0, 1.0, 1.0);
+    result.metadata.rows.append(qMakePair(QString("Description"), QString("EXIF caption")));
+    result.embeddedMetadata.caption = "Embedded caption";
+    result.embeddedMetadataPresence.caption = true;
+
+    UserMetadata metadata;
+    UserMetadataPresence fields;
+    fields.caption = true;
+    REQUIRE(XmpSidecar::saveMetadata(rawPath, metadata, fields));
+
+    const ResolvedLoadedImage resolved = resolveLoadedImage(rawPath, result);
+
+    CHECK(resolved.metadata.caption.isEmpty());
+    CHECK(resolved.metadataPresence.caption);
+}
+
 TEST_CASE(
     "resolveLoadedImage reports malformed sidecars and applies default crop", "[loadworkflow]") {
     QTemporaryDir dir;

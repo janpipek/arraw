@@ -100,6 +100,56 @@ QString meteringMode(short mode) {
     }
 }
 
+QString colorSpace(ushort value) {
+    switch (value) {
+    case 1:
+        return "sRGB";
+    case 2:
+        return "Adobe RGB";
+    case 65535:
+        return "Uncalibrated";
+    default:
+        return value > 0 ? QString::number(value) : QString();
+    }
+}
+
+QString driveMode(short mode) {
+    switch (mode) {
+    case 1:
+        return "Continuous low";
+    case 2:
+        return "Continuous high";
+    default:
+        return mode > 0 ? QString::number(mode) : QString();
+    }
+}
+
+QString focusMode(short mode) {
+    switch (mode) {
+    case 1:
+        return "Manual";
+    case 2:
+        return "AF-S";
+    case 3:
+        return "AF-C";
+    case 4:
+        return "AF-A";
+    default:
+        return mode > 0 ? QString::number(mode) : QString();
+    }
+}
+
+QString exposureMode(short mode) {
+    switch (mode) {
+    case 1:
+        return "Manual exposure";
+    case 2:
+        return "Auto bracket";
+    default:
+        return mode > 0 ? QString::number(mode) : QString();
+    }
+}
+
 QString gpsString(const libraw_gps_info_t& gps) {
     if (!gps.gpsparsed)
         return {};
@@ -158,6 +208,7 @@ ImageMetadata extractMetadata(const LibRaw& raw) {
     const auto& other = raw.imgdata.other;
     const auto& lens = raw.imgdata.lens;
     const auto& shoot = raw.imgdata.shootinginfo;
+    const auto& common = raw.imgdata.makernotes.common;
 
     add(meta, "Make", id.make);
     add(meta, "Model", id.model);
@@ -178,12 +229,25 @@ ImageMetadata extractMetadata(const LibRaw& raw) {
         add(meta, "Focal length (35mm)", QString("%1 mm").arg(lens.FocalLengthIn35mmFormat));
 
     add(meta, "Exposure program", exposureProgram(shoot.ExposureProgram));
+    if (shoot.ExposureMode > 0)
+        add(meta, "Exposure mode", exposureMode(shoot.ExposureMode));
     add(meta, "Metering", meteringMode(shoot.MeteringMode));
+    if (shoot.DriveMode > 0)
+        add(meta, "Drive mode", driveMode(shoot.DriveMode));
+    if (shoot.FocusMode > 0)
+        add(meta, "Focus mode", focusMode(shoot.FocusMode));
     add(meta, "Body serial", shoot.BodySerial);
+    add(meta, "Internal body serial", shoot.InternalBodySerial);
 
     add(meta, "Artist", other.artist);
     add(meta, "Description", other.desc);
+    if (other.shot_order > 0)
+        add(meta, "Shot order", QString::number(other.shot_order));
     add(meta, "GPS", gpsString(other.parsed_gps));
+    if (std::abs(common.FlashEC) > 1e-6f)
+        add(meta, "Flash exposure compensation", QString("%1 EV").arg(common.FlashEC, 0, 'f', 2));
+    add(meta, "Color space", colorSpace(common.ColorSpace));
+    add(meta, "Firmware", common.firmware);
 
     add(meta, "RAW size", QString("%1 × %2").arg(sz.raw_width).arg(sz.raw_height));
     add(meta, "Active area", QString("%1 × %2").arg(sz.width).arg(sz.height));
