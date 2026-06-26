@@ -4,10 +4,11 @@
 #include <QLabel>
 #include <QListWidget>
 #include <QPushButton>
-#include <QUndoView>
+#include <QUndoStack>
 #include <QVBoxLayout>
 
-HistoryPanel::HistoryPanel(QUndoStack* undoStack, QWidget* parent) : QWidget(parent) {
+HistoryPanel::HistoryPanel(QUndoStack* undoStack, QWidget* parent)
+    : QWidget(parent), undoStack(undoStack) {
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(6, 6, 6, 6);
 
@@ -31,8 +32,23 @@ HistoryPanel::HistoryPanel(QUndoStack* undoStack, QWidget* parent) : QWidget(par
     layout->addLayout(buttons);
 
     layout->addWidget(new QLabel(tr("History"), this));
-    auto* historyView = new QUndoView(undoStack, this);
-    layout->addWidget(historyView, /*stretch=*/1);
+    // A reversed view of the undo stack: most recent edit on top, the base "Load"
+    // state pinned at the bottom. (QUndoView can't reverse, hence the hand-rolled
+    // list.) Selecting a row rolls the stack to that point via setIndex().
+    historyList = new QListWidget(this);
+    historyList->setSelectionMode(QAbstractItemView::SingleSelection);
+    layout->addWidget(historyList, /*stretch=*/1);
+
+    connect(historyList, &QListWidget::currentRowChanged, this, [this](int row) {
+        if (historyRefreshing || row < 0)
+            return;
+        // Row 0 is the newest edit (stack at count); the last row is "Load"
+        // (stack at 0). See rebuildHistory() for the mapping.
+        this->undoStack->setIndex(this->undoStack->count() - row);
+    });
+    connect(undoStack, &QUndoStack::indexChanged, this, [this] { rebuildHistory(); });
+    connect(undoStack, &QUndoStack::cleanChanged, this, [this] { rebuildHistory(); });
+    rebuildHistory();
 
     auto syncButtons = [this] {
         const bool hasSelection = selectedRow() >= 0;
@@ -74,6 +90,20 @@ void HistoryPanel::setSnapshots(const std::vector<Snapshot>& snapshots) {
     refreshing = false;
     restoreButton->setEnabled(selectedRow() >= 0);
     deleteButton->setEnabled(selectedRow() >= 0);
+}
+
+void HistoryPanel::rebuildHistory() {
+    historyRefreshing = true;
+    historyList->clear();
+    const int count = undoStack->count();
+    // Newest first: command (count-1) down to command 0, then the base state.
+    for (int i = count - 1; i >= 0; --i)
+        new QListWidgetItem(undoStack->text(i), historyList);
+    new QListWidgetItem(tr("Load"), historyList);
+    // Stack index 0..count maps to row count-index, so the top row is the fully
+    // redone state and the bottom row ("Load") is the as-loaded state.
+    historyList->setCurrentRow(count - undoStack->index());
+    historyRefreshing = false;
 }
 
 int HistoryPanel::selectedRow() const {

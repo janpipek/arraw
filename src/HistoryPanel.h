@@ -35,9 +35,16 @@ signals:
 private:
     int selectedRow() const;
 
+    // Repopulate the History list from the stack: newest edit at the top, the
+    // base "Load" state at the bottom, the current position highlighted.
+    void rebuildHistory();
+
+    QUndoStack* undoStack;
     QListWidget* snapshotList;
+    QListWidget* historyList;
     QPushButton* addButton;
     QPushButton* restoreButton;
     QPushButton* deleteButton;
-    bool refreshing = false; // guards itemChanged during programmatic refills
+    bool refreshing = false;        // guards snapshot itemChanged during refills
+    bool historyRefreshing = false; // guards history currentRowChanged during refills
 };
