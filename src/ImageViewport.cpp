@@ -200,6 +200,7 @@ void ImageViewport::render(QRhiCommandBuffer* cb) {
     fp.gamutWarn = gamutWarn;
     fp.clipHighlights = clipHighlights;
     fp.clipShadows = clipShadows;
+    fp.sensorClip = sensorClipWarning;
     fp.adjustments = p;
     // The denoise pre-pass is debounced (nrTimer): render the settled values,
     // not the live sliders, so dragging doesn't trigger a recompute every tick.
@@ -633,23 +634,35 @@ void ImageViewport::drawCropOverlay(QPainter& p) const {
 // ── Public setters ────────────────────────────────────────────────────────────
 
 void ImageViewport::setImage(const ImageBuffer& buf, bool baseLook) {
+    setImage(buf, {}, baseLook);
+}
+
+void ImageViewport::setImage(
+    const ImageBuffer& buf, const ImageBuffer& sensorClipMask, bool baseLook) {
     nativeImageAspect = buf.valid() ? float(buf.width) / float(buf.height) : 1.0f;
     updateImageAspect();
     hasImage = buf.valid();
     hasFullRes = false;
     useBaseLook = baseLook;
     core.setImage(RendererCore::Slot::Preview, buf);
+    core.setSensorClipMask(RendererCore::Slot::Preview, sensorClipMask);
     core.setImage(RendererCore::Slot::FullRes, {});
+    core.setSensorClipMask(RendererCore::Slot::FullRes, {});
     resetView();
     histoTimer.start();
     update();
 }
 
 void ImageViewport::setFullResImage(const ImageBuffer& buf) {
+    setFullResImage(buf, {});
+}
+
+void ImageViewport::setFullResImage(const ImageBuffer& buf, const ImageBuffer& sensorClipMask) {
     if (buf.valid())
         setOriginalImageSize(buf.width, buf.height);
     hasFullRes = buf.valid();
     core.setImage(RendererCore::Slot::FullRes, buf);
+    core.setSensorClipMask(RendererCore::Slot::FullRes, sensorClipMask);
     if (zoom >= kFullResZoomThreshold)
         update();
 }
@@ -891,6 +904,13 @@ void ImageViewport::setClipWarnings(bool highlights, bool shadows) {
         return;
     clipHighlights = highlights;
     clipShadows = shadows;
+    update();
+}
+
+void ImageViewport::setSensorClipWarning(bool on) {
+    if (sensorClipWarning == on)
+        return;
+    sensorClipWarning = on;
     update();
 }
 
