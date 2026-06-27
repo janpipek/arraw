@@ -115,7 +115,7 @@ MainWindow (QMainWindow)
 - **Demosaic cost:** `dcraw_process` dominates the full-res load. libraw built with
   OpenMP multithreads it (the vcpkg `libraw[openmp]` feature on Windows; the system
   libraw on Linux/macOS). Set `ARRAW_TRACE` to print per-stage load timings (see
-  `src/Trace.h`).
+  `src/core/Trace.h`).
 
 ### `ImagePipeline`
 - `GlobalAdjustment` and `ImageBuffer` struct definitions.

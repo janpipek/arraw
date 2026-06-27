@@ -90,7 +90,7 @@ Failed to link shader program: error: uniform 'u' declared as type 'buf' and typ
 When that happens the viewport shader never loads, so the **image area renders black** (often with stale, vertically-flipped framebuffer contents showing through) while the rest of the Qt widget UI looks fine. The headless golden-render tests are skipped without a GPU, so the test suite will **not** catch this — after any change to the uniform block, do a manual GPU smoke-run (launch the app, confirm the viewport renders) and watch stderr for the link error. When adding a field, add it to all three declarations in the same change, even if only one stage uses it.
 
 #### Diagnostics
-Set the `ARRAW_TRACE` environment variable to print per-operation timings (`[trace] <label> N ms` on stderr) for expensive work — RAW load stages, the standard image loader, and the lcms colour transforms. The facility is in `src/Trace.h` (`trace::Scope` for a whole scope, `trace::Laps` for multi-stage ops); it is free when the variable is unset. On Windows the app is a GUI-subsystem binary with no attached console, so redirect to capture it: `arraw.exe 2> trace.txt`.
+Set the `ARRAW_TRACE` environment variable to print per-operation timings (`[trace] <label> N ms` on stderr) for expensive work — RAW load stages, the standard image loader, and the lcms colour transforms. The facility is in `src/core/Trace.h` (`trace::Scope` for a whole scope, `trace::Laps` for multi-stage ops); it is free when the variable is unset. On Windows the app is a GUI-subsystem binary with no attached console, so redirect to capture it: `arraw.exe 2> trace.txt`.
 
 ### Tests
 Use `just` or direct `ctest` execution:
@@ -139,6 +139,31 @@ For complete styling paradigms and developer guidelines, see [docs/code_guidelin
 
 Detailed architectural decisions are documented in the [docs/adr/](file:///home/jan/code/my/arraw/docs/adr/) directory.
 
+### 0. Source Layout
+
+`src/` is organised into six dependency-ordered layers, with the application
+shell (`main.cpp`, `MainWindow`, and the workflow/orchestration helpers
+`ExportWorkflow`, `ImageLoadWorkflow`, `BatchPaste`, `MainWindowStatus`,
+`ChromeHider`) left at the `src/` root. The un-foldered root **is** the
+application; each subdirectory is a layer it is built from (ADR 0036):
+
+| layer | holds | may depend on |
+|---|---|---|
+| `core/` | shared value types + pure geometry math (`ImageBuffer`, `WorkingSpace`, `ImageMetadata`, `CropGeometry`, `Orientation`, `Trace`) | — |
+| `develop/` | the adjustments model (`GlobalAdjustment`, `DevelopParameter/Group/Session/Preset`, `LocalAdjustment`, `Spot`, `DemosaicAlgorithm`, `FieldSpec`) | `core` |
+| `pipeline/` | CPU pixel compute (`RawProcessor`, `ColorManagement`, `OkLab`, `BasicTone`, `NoiseReduction`, `LensCorrection`, `LoadResult`, the `ImagePipeline` free functions) | `core`, `develop` |
+| `render/` | the GPU engine (`RendererCore`, `ViewportGeometry`) — shaders live in repo-root `shaders/` | `core`, `develop` |
+| `io/` | persistence (`XmpSidecar`, `PresetStore`, `DecodeCache`, `ThumbnailCache`) | `core`, `develop` |
+| `ui/` | reusable widgets/panels/dialogs (`ImageViewport`, every `*Panel`, `FilmStrip*`, `Theme*`, …) | all of the above |
+
+**Includes are layer-qualified from the `src/` root** (`#include
+"develop/GlobalAdjustment.h"`), so a file's include block is a dependency
+manifest and a downward violation is greppable (e.g. `grep -rn '"ui/'
+src/pipeline` must return nothing). One file per *concept* (a primary type
+carries its small satellites); existing functional namespaces (`crop::`,
+`orient::`, `tone::`, …) mark pure, headless modules. `MainWindow` and
+`ImageViewport` are known internal-decomposition targets, deferred (ADR 0036).
+
 ### 1. Data Flow: Open → Display
 1. `MainWindow::loadImage()` fires a `QtConcurrent::run` background task.
 2. `RawProcessor::load()` (background thread) calls libraw, produces a linear float32 RGB `ImageBuffer` (`fullRes`), and calls `downsample2x()` to produce the `preview` (half width, half height).
@@ -178,7 +203,7 @@ Detailed architectural decisions are documented in the [docs/adr/](file:///home/
 
 ### 7. UI Theme & Colors
 * The neutral dark theme is applied once in `main()` via `Theme::apply()` (Fusion style + a dark `QPalette`), **before** any widget is constructed. Dark-only for now; the palette is built in one function so a light variant / user-settable colors slot in behind the same seam (ADR 0030).
-* **All UI colors are single-sourced in `src/ThemeColors.h`** (a dependency-free leaf header), read by both `Theme` (the palette) and `RendererCore` (the viewport surround, `kCanvas`). Add or change a chrome color *there*, not inline.
+* **All UI colors are single-sourced in `src/ui/ThemeColors.h`** (a dependency-free leaf header), read by both `Theme` (the palette) and `RendererCore` (the viewport surround, `kCanvas`). Add or change a chrome color *there*, not inline.
 * `kCanvas` must stay bit-identical to `0.15,0.15,0.15` — it backs the golden-image references (ADR 0005).
 * **Semantic / data-viz colors stay hardcoded with their feature** (histogram channels, filmstrip flags/ratings, curve channel buttons, viewport overlays & clipping warnings) — they encode meaning, not chrome, so don't route them through the theme.
 * Prefer the palette over QSS. Any QSS stays minimal and centralized in `Theme::apply()`; the per-widget sheet on the `AdjustmentPanel` curve buttons is the one sanctioned exception (semantic colors).
