@@ -111,7 +111,7 @@ float shoulderMap(float luminance, float amount) {
     return knee + (1.0f - knee) * c;
 }
 
-Rgb applyHighlightRolloff(const Rgb& rgb, float amount) {
+Rgb applyFilmicHighlights(const Rgb& rgb, float amount) {
     if (amount <= 0.0f)
         return rgb;
     const float y = luma(rgb);

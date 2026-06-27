@@ -466,9 +466,11 @@ SidecarLoadResult XmpSidecar::loadWithStatus(const QString& rawPath) {
             p.sharpening = attr("Sharpness", 0.0f);
             p.colorNoiseReduction = attr("ColorNoiseReduction", 0.0f); // Strength (issue #59)
             p.colorNoiseReductionSmoothness = attr("ColorNoiseReductionSmoothness", 50.0f);
-            // Highlight Roll-off (docs/adr/0035): arraw-native; absent → 0 (off).
-            p.highlightRolloff
-                = xml.attributes().value(kNsArraw, "HighlightRolloff").toString().toFloat();
+            // Filmic Highlights (docs/adr/0035): arraw-native, default 25 (on).
+            // Absent → the default, so files predating this attribute get the
+            // standard shoulder; an explicit 0 (user turned it off) is honoured.
+            if (const auto fh = xml.attributes().value(kNsArraw, "FilmicHighlights"); !fh.isEmpty())
+                p.filmicHighlights = fh.toFloat();
             p.rotation = attr("CropAngle", 0.0f);
             p.postCropVignetteAmount = attr("PostCropVignetteAmount", 0.0f);
             p.postCropVignetteMidpoint = attr("PostCropVignetteMidpoint", 50.0f);
@@ -765,11 +767,11 @@ static QByteArray ownedPacket(const SidecarData& data) {
     write("GrainFrequency", p.grainRoughness);
     if (p.grainSeed != 0)
         xml.writeAttribute(kNsArraw, "GrainSeed", QString::number(p.grainSeed));
-    // Highlight Roll-off (docs/adr/0035). arraw-native, no crs: equivalent; written
-    // only when on (default 0) so pre-feature sidecars stay byte-identical.
-    if (p.highlightRolloff != 0.0f)
-        xml.writeAttribute(
-            kNsArraw, "HighlightRolloff", QString::number(double(p.highlightRolloff), 'f', 4));
+    // Filmic Highlights (docs/adr/0035). arraw-native, no crs: equivalent. Written
+    // unconditionally: the default is 25 (on), so an explicit 0 (off) must persist
+    // — a skip-when-zero would read back as the default and silently re-enable it.
+    xml.writeAttribute(
+        kNsArraw, "FilmicHighlights", QString::number(double(p.filmicHighlights), 'f', 4));
     // Demosaic algorithm token (docs/adr/0033). Written only when non-default so
     // AHD sidecars (and every pre-feature file) stay byte-identical and resolve
     // to AHD via the silent fallback in demosaicFromToken.

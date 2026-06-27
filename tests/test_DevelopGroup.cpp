@@ -19,7 +19,7 @@ static GlobalAdjustment fullyEdited() {
     g.shadows = 40.0f;
     g.whites = 10.0f;
     g.blacks = -15.0f;
-    g.highlightRolloff = 60.0f;
+    g.filmicHighlights = 60.0f;
     // Colour
     g.saturation = 25.0f;
     g.vibrance = -8.0f;
@@ -92,7 +92,7 @@ TEST_CASE("Selecting one group copies only that group's fields", "[developgroup]
     CHECK(result.shadows == source.shadows);
     CHECK(result.whites == source.whites);
     CHECK(result.blacks == source.blacks);
-    CHECK(result.highlightRolloff == source.highlightRolloff);
+    CHECK(result.filmicHighlights == source.filmicHighlights);
 
     // ...and nothing outside Tone moved.
     CHECK(result.temperature == target.temperature);

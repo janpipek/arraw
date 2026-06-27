@@ -58,7 +58,7 @@ layout(std140, binding = 0) uniform buf {
     int   orientQuarterTurns; // coarse Orientation (docs/adr/0028)
     int   orientMirrored;     // 1 = horizontal mirror
     int   sensorClipWarn;     // unused here; RAW mosaic saturation overlay flag
-    float highlightRolloff;   // unused here; present so the block matches image.frag and Ubuf
+    float filmicHighlights;   // unused here; present so the block matches image.frag and Ubuf
     int   pad1;
     int   pad2;
 } u;

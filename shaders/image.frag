@@ -60,7 +60,7 @@ layout(std140, binding = 0) uniform buf {
     int   orientQuarterTurns; // coarse Orientation (docs/adr/0028); unused in frag
     int   orientMirrored;
     int   sensorClipWarn; // Sensor Clipping overlay from RAW mosaic samples
-    float highlightRolloff; // 0..1: shoulder + path to white (docs/adr/0035); was pad0
+    float filmicHighlights; // 0..1: shoulder + path to white (docs/adr/0035); was pad0
     int   pad1;
     int   pad2;
 } u;
@@ -284,7 +284,7 @@ vec3 applyVibrance(vec3 c, float vibrance) {
 }
 
 // ── Highlight roll-off: shoulder + path to white (docs/adr/0035) ─────────────
-// Mirrors colour::shoulderMap / applyHighlightRolloff in src/OkLab.cpp.
+// Mirrors colour::shoulderMap / applyFilmicHighlights in src/OkLab.cpp.
 float shoulderMap(float y, float amount) {
     if (amount <= 0.0) return y;
     float a = clamp(amount, 0.0, 1.0);
@@ -294,7 +294,7 @@ float shoulderMap(float y, float amount) {
     return knee + (1.0 - knee) * (x / (1.0 + x)); // slope 1 at knee, -> 1 as x -> inf
 }
 
-vec3 applyHighlightRolloff(vec3 c, float amount) {
+vec3 applyFilmicHighlights(vec3 c, float amount) {
     if (amount <= 0.0) return c;
     float y = dot(c, kLuma);
     if (y <= 1e-5) return c;
@@ -499,7 +499,7 @@ vec3 applyLocalAdjustments(vec3 c, vec2 uv, float aspect) {
 // Everything up to the final encode operates in linear Rec.2020:
 //   base look → Basic Tone LUT → tone curves
 //   → white balance (gain) → HSL → saturation → vibrance (Oklab) → local adjustments
-//   → vignette → grain → highlight roll-off → display transform
+//   → vignette → grain → filmic highlights → display transform
 // Crop/rotation happen earlier in image.vert. For export, displayEncode is
 // 0: the offscreen readback stays in linear working space and the output
 // transform runs on the CPU (lcms2, MainWindow::exportFile).
@@ -544,7 +544,7 @@ void main() {
     // Highlight roll-off — the last develop step, in the shared chain before the
     // display/export fork so preview and export agree (docs/adr/0035). Catches
     // headroom from every upstream control, including Local Adjustments.
-    c = applyHighlightRolloff(c, u.highlightRolloff);
+    c = applyFilmicHighlights(c, u.filmicHighlights);
 
     if (u.histoRaw != 0) {
         fragColor = vec4(kRec2020ToSRGB * c, 1.0); // pre-clamp sRGB-linear

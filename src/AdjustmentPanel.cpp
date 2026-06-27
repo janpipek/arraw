@@ -26,6 +26,9 @@ static const FieldSpec kBipolarSpec{-100, 100, 0, 1.0f, 1.0f, 0, {}, true, 1.0f}
 static const FieldSpec
     kHslHueSpec{-100, 100, 0, 1.0f, 0.3f, 1, QString::fromUtf8("\xc2\xb0"), true, 0.3f};
 static const FieldSpec kSharpenSpec{0, 100, 0, 1.0f, 1.0f, 0, {}, false, 1.0f};
+// Filmic Highlights resets to 25 (a gentle shoulder on by default), unlike the
+// other 0..100 controls that rest at 0 (docs/adr/0035).
+static const FieldSpec kFilmicHighlightsSpec{0, 100, 25, 1.0f, 1.0f, 0, {}, false, 1.0f};
 // Colour-NR Smoothness resets to 50 (Lightroom parity), unlike Strength's 0.
 static const FieldSpec kColorSmoothnessSpec{0, 100, 50, 1.0f, 1.0f, 0, {}, false, 1.0f};
 
@@ -116,15 +119,49 @@ AdjustmentPanel::AdjustmentPanel(QWidget* parent)
 
     // ── Tone ──────────────────────────────────────────────────────────────────
     auto* tone = makeGroup("Tone");
-    exposure = addSlider(tone, "Exposure", kExposureSpec);
-    contrast = addSlider(tone, "Contrast", kToneSpec);
-    highlights = addSlider(tone, "Highlights", kToneSpec);
-    shadows = addSlider(tone, "Shadows", kToneSpec);
-    whites = addSlider(tone, "Whites", kToneSpec);
-    blacks = addSlider(tone, "Blacks", kToneSpec);
-    // Highlight Roll-off (docs/adr/0035): 0 = off (hard clip), up to a filmic
-    // shoulder + path to white. 0..100 like Sharpen.
-    highlightRolloff = addSlider(tone, "Roll-off", kSharpenSpec);
+    exposure = addSlider(
+        tone,
+        "Exposure",
+        kExposureSpec,
+        "Overall brightness, in stops (EV). Shifts the whole image up or down.");
+    contrast = addSlider(
+        tone,
+        "Contrast",
+        kToneSpec,
+        "Strengthens or softens the difference between light and dark tones, "
+        "pivoting around the midtones.");
+    highlights = addSlider(
+        tone,
+        "Highlights",
+        kToneSpec,
+        "Recovers or brightens the brighter tones, leaving shadows mostly untouched. "
+        "Pull it down to bring back detail in skies and bright areas.");
+    shadows = addSlider(
+        tone,
+        "Shadows",
+        kToneSpec,
+        "Lifts or deepens the darker tones, leaving highlights mostly untouched. "
+        "Raise it to open up detail in shadow areas.");
+    whites = addSlider(
+        tone,
+        "Whites",
+        kToneSpec,
+        "Sets the white point — how bright a tone has to be before it clips to pure "
+        "white. Raise for punchier highlights, lower to protect them.");
+    blacks = addSlider(
+        tone,
+        "Blacks",
+        kToneSpec,
+        "Sets the black point — how dark a tone has to be before it crushes to pure "
+        "black. Lower for deeper blacks, raise for a lifted, matte look.");
+    // Filmic Highlights (docs/adr/0035): default 25 (gentle shoulder on); 0 = off.
+    filmicHighlights = addSlider(
+        tone,
+        "Filmic Highlights",
+        kFilmicHighlightsSpec,
+        "Eases the brightest tones gracefully toward white instead of hard-clipping, "
+        "fading their colour the way film does. On by default; set to 0 to turn it "
+        "off (a hard digital clip).");
 
     // ── Tone Curve ────────────────────────────────────────────────────────────
     {
@@ -326,7 +363,7 @@ AdjustmentPanel::AdjustmentPanel(QWidget* parent)
 // ── Slider factory ────────────────────────────────────────────────────────────
 
 AdjustmentPanel::SliderRow AdjustmentPanel::addSlider(
-    QVBoxLayout* layout, const QString& name, const FieldSpec& spec) {
+    QVBoxLayout* layout, const QString& name, const FieldSpec& spec, const QString& tooltip) {
     auto* row = new QWidget(this);
     auto* hbox = new QHBoxLayout(row);
     hbox->setContentsMargins(0, 0, 0, 0);
@@ -340,6 +377,14 @@ AdjustmentPanel::SliderRow AdjustmentPanel::addSlider(
     auto* spin = new AdjustmentSpinBox(spec, row);
     spin->setValue(spec.rawToDisplay(spec.def));
     spin->setFixedWidth(64);
+
+    // One tooltip across the whole row (label, track, and spin) so it shows
+    // wherever the pointer rests, not just over the name.
+    if (!tooltip.isEmpty()) {
+        lbl->setToolTip(tooltip);
+        sl->setToolTip(tooltip);
+        spin->setToolTip(tooltip);
+    }
 
     hbox->addWidget(lbl);
     hbox->addWidget(sl, 1);
@@ -363,7 +408,7 @@ void AdjustmentPanel::syncParams() {
     adjustments.shadows = v(shadows);
     adjustments.whites = v(whites);
     adjustments.blacks = v(blacks);
-    adjustments.highlightRolloff = v(highlightRolloff);
+    adjustments.filmicHighlights = v(filmicHighlights);
     adjustments.temperature = v(temperature);
     adjustments.tint = v(tint);
     adjustments.saturation = v(saturation);
@@ -402,7 +447,7 @@ std::vector<AdjustmentPanel::SliderRow*> AdjustmentPanel::allRows() {
            &shadows,
            &whites,
            &blacks,
-           &highlightRolloff,
+           &filmicHighlights,
            &temperature,
            &tint,
            &saturation,
@@ -524,7 +569,7 @@ void AdjustmentPanel::setParams(const GlobalAdjustment& p) {
     set(shadows, p.shadows);
     set(whites, p.whites);
     set(blacks, p.blacks);
-    set(highlightRolloff, p.highlightRolloff);
+    set(filmicHighlights, p.filmicHighlights);
     set(temperature, p.temperature);
     set(tint, p.tint);
     set(saturation, p.saturation);

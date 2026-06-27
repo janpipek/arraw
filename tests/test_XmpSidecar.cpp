@@ -26,7 +26,7 @@ GlobalAdjustment sampleParams() {
     p.shadows = 42.0f;
     p.whites = 7.0f;
     p.blacks = -3.25f;
-    p.highlightRolloff = 65.0f;
+    p.filmicHighlights = 65.0f;
     p.temperature = 7200.0f;
     p.tint = -12.0f;
     p.saturation = 15.0f;
@@ -59,7 +59,7 @@ void checkClose(const GlobalAdjustment& a, const GlobalAdjustment& b) {
     CHECK_THAT(a.shadows, WithinAbs(b.shadows, kScalarTol));
     CHECK_THAT(a.whites, WithinAbs(b.whites, kScalarTol));
     CHECK_THAT(a.blacks, WithinAbs(b.blacks, kScalarTol));
-    CHECK_THAT(a.highlightRolloff, WithinAbs(b.highlightRolloff, kScalarTol));
+    CHECK_THAT(a.filmicHighlights, WithinAbs(b.filmicHighlights, kScalarTol));
     CHECK_THAT(a.temperature, WithinAbs(b.temperature, kScalarTol));
     CHECK_THAT(a.tint, WithinAbs(b.tint, kScalarTol));
     CHECK_THAT(a.saturation, WithinAbs(b.saturation, kScalarTol));

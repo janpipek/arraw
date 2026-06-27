@@ -178,23 +178,25 @@ Developed working values above display white (1.0) that remain available to late
 adjustments and are clipped only by the display or a bounded output encoding.
 _Avoid_: already clipped, invalid values
 
-**Highlight Roll-off**:
-A single tone control (0 = off, the default) that softens the approach to white:
-instead of the hard clip at the display boundary, the upper range — including
-[[Recoverable Headroom]] — is compressed smoothly into range with a film-like
-*shoulder*, and bright saturated colour fades toward white (its [[Path to White]])
-rather than skewing hue or staying neon. The last develop step, applied before
-display *and* export so both agree. Part of the Tone [[Develop Group]]. Distinct
-from Whites (which deliberately *sets* the clipping point) and from the Exposure
-sigmoid (which rolls off only that one control). _Avoid_: tone mapping (the
-process, not this control), filmic curve, shoulder (one half of it)
+**Filmic Highlights**:
+A single tone control (0..100, default 25 = a gentle shoulder on) that softens the
+approach to white: instead of the hard clip at the display boundary, the upper
+range — including [[Recoverable Headroom]] — is compressed smoothly into range with
+a film-like *shoulder*, and bright saturated colour fades toward white (its
+[[Path to White]]) rather than skewing hue or staying neon. The last develop step,
+applied before display *and* export so both agree. On by default, like the baked
+roll-off in Lightroom/Capture One; 0 restores the hard digital clip. Part of the
+Tone [[Develop Group]]. Distinct from Whites (which deliberately *sets* the
+clipping point) and from the Exposure sigmoid (which rolls off only that one
+control). _Avoid_: tone mapping (the process, not this control), highlight roll-off
+/ highlight compression (earlier names), shoulder (one half of it)
 
 **Path to White**:
-The desaturation half of [[Highlight Roll-off]]: as a colour climbs into the
+The desaturation half of [[Filmic Highlights]]: as a colour climbs into the
 shoulder it loses chroma toward white, so a bright red highlight reads as
 red→pink→white rather than red→orange (channel clipping) or a flat neon red
 (luminance-only roll-off). Not its own control in v1 — its strength is coupled to
-the Roll-off amount. _Avoid_: highlight desaturation (informal), bleach
+the Filmic Highlights amount. _Avoid_: highlight desaturation (informal), bleach
 
 **Saturation**:
 A global colourfulness control that scales chroma in a perceptual space (Oklab)

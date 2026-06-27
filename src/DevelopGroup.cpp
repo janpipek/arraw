@@ -72,7 +72,7 @@ GlobalAdjustment applyGroups(
         result.shadows = source.shadows;
         result.whites = source.whites;
         result.blacks = source.blacks;
-        result.highlightRolloff = source.highlightRolloff;
+        result.filmicHighlights = source.filmicHighlights;
     }
     if (hasGroup(selection, DevelopGroup::ToneCurve)) {
         result.curveLuma = source.curveLuma;

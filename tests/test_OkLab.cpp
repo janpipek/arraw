@@ -96,12 +96,12 @@ TEST_CASE("Vibrance at 0 is identity", "[oklab][vibrance]") {
 
 // ── Highlight roll-off shoulder (scalar luminance map) ───────────────────────
 
-TEST_CASE("shoulder at amount 0 is the identity, even above white", "[rolloff]") {
+TEST_CASE("shoulder at amount 0 is the identity, even above white", "[filmic]") {
     for (float y : {0.0f, 0.18f, 0.5f, 1.0f, 2.5f, 8.0f})
         CHECK_THAT(colour::shoulderMap(y, 0.0f), WithinAbs(y, 1e-6f));
 }
 
-TEST_CASE("shoulder anchors black, is monotonic, and caps at white", "[rolloff]") {
+TEST_CASE("shoulder anchors black, is monotonic, and caps at white", "[filmic]") {
     const float amount = 0.7f;
     CHECK_THAT(colour::shoulderMap(0.0f, amount), WithinAbs(0.0f, 1e-6f));
 
@@ -114,7 +114,7 @@ TEST_CASE("shoulder anchors black, is monotonic, and caps at white", "[rolloff]"
     }
 }
 
-TEST_CASE("shoulder barely touches midtones but compresses headroom", "[rolloff]") {
+TEST_CASE("shoulder barely touches midtones but compresses headroom", "[filmic]") {
     const float amount = 0.6f;
     CHECK_THAT(colour::shoulderMap(0.18f, amount), WithinAbs(0.18f, 0.02f));
     CHECK(colour::shoulderMap(4.0f, amount) < 1.0f); // headroom rolled into range
@@ -123,25 +123,25 @@ TEST_CASE("shoulder barely touches midtones but compresses headroom", "[rolloff]
 
 // ── Full roll-off: shoulder + path to white ──────────────────────────────────
 
-TEST_CASE("roll-off at amount 0 is identity", "[rolloff]") {
+TEST_CASE("roll-off at amount 0 is identity", "[filmic]") {
     const Rgb c{1.4f, 0.3f, 0.2f};
-    const Rgb out = colour::applyHighlightRolloff(c, 0.0f);
+    const Rgb out = colour::applyFilmicHighlights(c, 0.0f);
     CHECK_THAT(out[0], WithinAbs(c[0], 1e-6f));
     CHECK_THAT(out[1], WithinAbs(c[1], 1e-6f));
     CHECK_THAT(out[2], WithinAbs(c[2], 1e-6f));
 }
 
-TEST_CASE("a blown saturated highlight rolls down in luma and fades toward white", "[rolloff]") {
+TEST_CASE("a blown saturated highlight rolls down in luma and fades toward white", "[filmic]") {
     const Rgb hotRed{3.0f, 0.4f, 0.25f}; // well above white, strongly coloured
-    const Rgb out = colour::applyHighlightRolloff(hotRed, 0.8f);
+    const Rgb out = colour::applyFilmicHighlights(hotRed, 0.8f);
 
     CHECK(lightness(out) < lightness(hotRed)); // shoulder pulled it down
     CHECK(chroma(out) < chroma(hotRed));       // path to white desaturated it
 }
 
-TEST_CASE("roll-off leaves a midtone essentially untouched", "[rolloff]") {
+TEST_CASE("roll-off leaves a midtone essentially untouched", "[filmic]") {
     const Rgb mid{0.22f, 0.18f, 0.15f};
-    const Rgb out = colour::applyHighlightRolloff(mid, 0.8f);
+    const Rgb out = colour::applyFilmicHighlights(mid, 0.8f);
     CHECK_THAT(out[0], WithinAbs(mid[0], 0.02f));
     CHECK_THAT(out[1], WithinAbs(mid[1], 0.02f));
     CHECK_THAT(out[2], WithinAbs(mid[2], 0.02f));

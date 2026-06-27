@@ -33,7 +33,7 @@ Rgb applySaturation(const Rgb& rgb, float amount);
 // move more than already-vivid ones; amount in [-1, 1].
 Rgb applyVibrance(const Rgb& rgb, float amount);
 
-// Highlight roll-off (docs/adr/0035).
+// Filmic Highlights (docs/adr/0035).
 //
 // shoulderMap is the scalar luminance shoulder: amount 0 is the exact identity
 // (including values above 1); amount in (0, 1] bends the approach to white,
@@ -41,10 +41,10 @@ Rgb applyVibrance(const Rgb& rgb, float amount);
 // compressing all headroom smoothly below 1.
 float shoulderMap(float luminance, float amount);
 
-// applyHighlightRolloff runs the shoulder on luminance (scaling RGB by the
+// applyFilmicHighlights runs the shoulder on luminance (scaling RGB by the
 // luminance ratio, so hue is preserved by the compression) and then the
 // Path to White: it fades chroma toward white in proportion to how hard the
 // shoulder pulled the tone down. amount 0 is the exact identity.
-Rgb applyHighlightRolloff(const Rgb& rgb, float amount);
+Rgb applyFilmicHighlights(const Rgb& rgb, float amount);
 
 } // namespace colour
