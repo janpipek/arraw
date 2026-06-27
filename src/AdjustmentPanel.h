@@ -84,6 +84,7 @@ private:
     SliderRow shadows;
     SliderRow whites;
     SliderRow blacks;
+    SliderRow highlightRolloff;
     SliderRow temperature;
     SliderRow tint;
     SliderRow saturation;

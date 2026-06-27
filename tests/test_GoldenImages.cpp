@@ -179,6 +179,14 @@ std::vector<Scenario> scenarios() {
     p.rotation = 10.0f;
     list.push_back({"crop_rotate", p});
 
+    // Highlight roll-off (docs/adr/0035): push exposure to generate headroom and
+    // saturated highlights, then exercise the shoulder + path to white.
+    p = {};
+    p.exposure = 1.5f;
+    p.saturation = 30.0f;
+    p.highlightRolloff = 80.0f;
+    list.push_back({"highlight_rolloff", p});
+
     return list;
 }
 

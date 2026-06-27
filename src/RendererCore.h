@@ -64,7 +64,8 @@ struct Ubuf {
     qint32 orientQuarterTurns; // coarse Orientation (docs/adr/0028); was pad_
     qint32 orientMirrored;     // 1 = horizontal mirror; was pad_
     qint32 sensorClipWarn;     // Sensor Clipping overlay from RAW mosaic samples
-    qint32 pad_[3];
+    float highlightRolloff;    // 0..1: shoulder + path to white (docs/adr/0035); was pad_[0]
+    qint32 pad_[2];
 };
 
 static_assert(sizeof(Ubuf) == 1632);
@@ -73,6 +74,7 @@ static_assert(offsetof(Ubuf, grainSeed) == 284);
 static_assert(offsetof(Ubuf, laGeom) == 320);
 static_assert(offsetof(Ubuf, numLocalAdj) == 1600);
 static_assert(offsetof(Ubuf, sensorClipWarn) == 1616);
+static_assert(offsetof(Ubuf, highlightRolloff) == 1620);
 
 // std140 mirror of the `nrbuf` block in shaders/nr.vert and nr_blur_*.frag — the
 // Colour Noise Reduction pre-pass uniform (docs/adr/0032). Constant for a whole

@@ -149,7 +149,7 @@ void readDcUserMetadata(
     };
     const QDomElement description = firstDescription(document);
 
-    auto readText = [&](const char* localName, QString& target, bool UserMetadataPresence::*field) {
+    auto readText = [&](const char* localName, QString& target, bool UserMetadataPresence::* field) {
         if (const QDomElement element = firstElement(localName); !element.isNull()) {
             presence.*field = true;
             target = firstRdfLiText(element);
@@ -174,10 +174,7 @@ void readDcUserMetadata(
 
     if (!description.isNull() && description.hasAttributeNS(kNsArraw, kArrawClearedDcFields))
         applyClearedDcFields(
-            metadata,
-            presence,
-            description.attributeNS(kNsArraw, kArrawClearedDcFields));
-
+            metadata, presence, description.attributeNS(kNsArraw, kArrawClearedDcFields));
 }
 
 } // namespace
@@ -469,6 +466,9 @@ SidecarLoadResult XmpSidecar::loadWithStatus(const QString& rawPath) {
             p.sharpening = attr("Sharpness", 0.0f);
             p.colorNoiseReduction = attr("ColorNoiseReduction", 0.0f); // Strength (issue #59)
             p.colorNoiseReductionSmoothness = attr("ColorNoiseReductionSmoothness", 50.0f);
+            // Highlight Roll-off (docs/adr/0035): arraw-native; absent → 0 (off).
+            p.highlightRolloff
+                = xml.attributes().value(kNsArraw, "HighlightRolloff").toString().toFloat();
             p.rotation = attr("CropAngle", 0.0f);
             p.postCropVignetteAmount = attr("PostCropVignetteAmount", 0.0f);
             p.postCropVignetteMidpoint = attr("PostCropVignetteMidpoint", 50.0f);
@@ -765,6 +765,11 @@ static QByteArray ownedPacket(const SidecarData& data) {
     write("GrainFrequency", p.grainRoughness);
     if (p.grainSeed != 0)
         xml.writeAttribute(kNsArraw, "GrainSeed", QString::number(p.grainSeed));
+    // Highlight Roll-off (docs/adr/0035). arraw-native, no crs: equivalent; written
+    // only when on (default 0) so pre-feature sidecars stay byte-identical.
+    if (p.highlightRolloff != 0.0f)
+        xml.writeAttribute(
+            kNsArraw, "HighlightRolloff", QString::number(double(p.highlightRolloff), 'f', 4));
     // Demosaic algorithm token (docs/adr/0033). Written only when non-default so
     // AHD sidecars (and every pre-feature file) stay byte-identical and resolve
     // to AHD via the silent fallback in demosaicFromToken.
@@ -990,7 +995,9 @@ bool XmpSidecar::saveMetadata(const QString& rawPath, const UserMetadata& metada
 }
 
 bool XmpSidecar::saveMetadata(
-    const QString& rawPath, const UserMetadata& metadata, const UserMetadataPresence& descriptiveFields) {
+    const QString& rawPath,
+    const UserMetadata& metadata,
+    const UserMetadataPresence& descriptiveFields) {
     SidecarData data = load(rawPath); // preserve any existing crs: edits
     data.metadata.rating = metadata.rating;
     data.metadata.label = metadata.label;

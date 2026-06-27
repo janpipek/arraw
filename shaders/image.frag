@@ -60,7 +60,7 @@ layout(std140, binding = 0) uniform buf {
     int   orientQuarterTurns; // coarse Orientation (docs/adr/0028); unused in frag
     int   orientMirrored;
     int   sensorClipWarn; // Sensor Clipping overlay from RAW mosaic samples
-    int   pad0;
+    float highlightRolloff; // 0..1: shoulder + path to white (docs/adr/0035); was pad0
     int   pad1;
     int   pad2;
 } u;
@@ -223,17 +223,88 @@ vec3 applyHsl(vec3 c) {
     return hsv2rgb(hsv);
 }
 
+// ── Oklab perceptual colour (docs/adr/0034) ─────────────────────────────────
+// A line-for-line mirror of src/OkLab.cpp — the CPU model is the tested source
+// of truth ([[spot-for-algorithms]]). Oklab is defined from linear Rec.709, so
+// we hop Rec.2020 -> Rec.709 with mutually-inverse matrices first. Scaling only
+// the a/b chroma axes changes colourfulness while holding lightness and hue.
+vec3 rec2020ToRec709(vec3 c) {
+    return vec3(
+        1.660491 * c.r - 0.587641 * c.g - 0.072850 * c.b,
+       -0.124550 * c.r + 1.132900 * c.g - 0.008349 * c.b,
+       -0.018151 * c.r - 0.100579 * c.g + 1.118730 * c.b);
+}
+vec3 rec709ToRec2020(vec3 c) {
+    return vec3(
+        0.627404 * c.r + 0.329283 * c.g + 0.043313 * c.b,
+        0.069097 * c.r + 0.919541 * c.g + 0.011362 * c.b,
+        0.016391 * c.r + 0.088013 * c.g + 0.895595 * c.b);
+}
+float cbrtf(float x) { return sign(x) * pow(abs(x), 1.0 / 3.0); } // std::cbrt parity (neg ok)
+
+// Oklab packed as (L, a, b).
+vec3 rgbToOklab(vec3 rgb) {
+    vec3 c = rec2020ToRec709(rgb);
+    float l = 0.4122214708 * c.r + 0.5363325363 * c.g + 0.0514459929 * c.b;
+    float m = 0.2119034982 * c.r + 0.6806995451 * c.g + 0.1073969566 * c.b;
+    float s = 0.0883024619 * c.r + 0.2817188376 * c.g + 0.6299787005 * c.b;
+    float l_ = cbrtf(l), m_ = cbrtf(m), s_ = cbrtf(s);
+    return vec3(
+        0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_,
+        1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_,
+        0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_);
+}
+vec3 oklabToRgb(vec3 lab) {
+    float l_ = lab.x + 0.3963377774 * lab.y + 0.2158037573 * lab.z;
+    float m_ = lab.x - 0.1055613458 * lab.y - 0.0638541728 * lab.z;
+    float s_ = lab.x - 0.0894841775 * lab.y - 1.2914855480 * lab.z;
+    float l = l_ * l_ * l_, m = m_ * m_ * m_, s = s_ * s_ * s_;
+    vec3 c709 = vec3(
+        4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+       -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+       -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s);
+    return rec709ToRec2020(c709);
+}
+
 vec3 applySaturation(vec3 c, float saturation) {
     if (abs(saturation) < 0.001) return c;
-    float luma = dot(c, kLuma);
-    return mix(vec3(luma), c, 1.0 + saturation);
+    vec3 lab = rgbToOklab(c);
+    float scale = 1.0 + saturation;       // -1 -> greyscale, +1 -> double chroma
+    lab.yz *= scale;
+    return oklabToRgb(lab);
 }
 
 vec3 applyVibrance(vec3 c, float vibrance) {
     if (abs(vibrance) < 0.001) return c;
-    float luma = dot(c, kLuma);
-    float sat  = length(c - vec3(luma));
-    return mix(vec3(luma), c, 1.0 + vibrance * (1.0 - sat));
+    vec3 lab = rgbToOklab(c);
+    float chroma = length(lab.yz);
+    float weight = 0.2 / (0.2 + chroma);  // kVibranceHalf: muted -> 1, vivid -> small
+    lab.yz *= 1.0 + vibrance * weight;
+    return oklabToRgb(lab);
+}
+
+// ── Highlight roll-off: shoulder + path to white (docs/adr/0035) ─────────────
+// Mirrors colour::shoulderMap / applyHighlightRolloff in src/OkLab.cpp.
+float shoulderMap(float y, float amount) {
+    if (amount <= 0.0) return y;
+    float a = clamp(amount, 0.0, 1.0);
+    float knee = 1.0 - 0.5 * a;           // a=1 -> 0.5; small a -> ~1 (headroom only)
+    if (y <= knee) return y;              // shadows + midtones untouched
+    float x = (y - knee) / (1.0 - knee);
+    return knee + (1.0 - knee) * (x / (1.0 + x)); // slope 1 at knee, -> 1 as x -> inf
+}
+
+vec3 applyHighlightRolloff(vec3 c, float amount) {
+    if (amount <= 0.0) return c;
+    float y = dot(c, kLuma);
+    if (y <= 1e-5) return c;
+    float y2 = shoulderMap(y, amount);
+    float ratio = y2 / y;                 // <= 1 in highlights, 1 in shadows/midtones
+    vec3 outc = c * ratio;                // luminance shoulder, hue preserved
+    if (ratio > 0.999) return outc;
+    vec3 lab = rgbToOklab(outc);
+    lab.yz *= pow(ratio, 1.5);            // kPathToWhite: fade chroma toward white
+    return oklabToRgb(lab);
 }
 
 // Effects (docs/adr/0026) use crop-frame coordinates, not source UVs. The
@@ -427,8 +498,8 @@ vec3 applyLocalAdjustments(vec3 c, vec2 uv, float aspect) {
 // Processing order (the authoritative definition — DESIGN.md mirrors it).
 // Everything up to the final encode operates in linear Rec.2020:
 //   base look → Basic Tone LUT → tone curves
-//   → white balance (gain) → HSL → saturation → vibrance → local adjustments
-//   → vignette → grain → display transform
+//   → white balance (gain) → HSL → saturation → vibrance (Oklab) → local adjustments
+//   → vignette → grain → highlight roll-off → display transform
 // Crop/rotation happen earlier in image.vert. For export, displayEncode is
 // 0: the offscreen readback stays in linear working space and the output
 // transform runs on the CPU (lcms2, MainWindow::exportFile).
@@ -469,6 +540,11 @@ void main() {
     c = applyLocalAdjustments(c, vFrameUV, maskAspect);
     c = applyVignette(c, vFrameUV);
     c = applyGrain(c, vFrameUV);
+
+    // Highlight roll-off — the last develop step, in the shared chain before the
+    // display/export fork so preview and export agree (docs/adr/0035). Catches
+    // headroom from every upstream control, including Local Adjustments.
+    c = applyHighlightRolloff(c, u.highlightRolloff);
 
     if (u.histoRaw != 0) {
         fragColor = vec4(kRec2020ToSRGB * c, 1.0); // pre-clamp sRGB-linear

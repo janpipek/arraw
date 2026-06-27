@@ -36,6 +36,7 @@ struct DemosaicChoice {
     const char* label;
     const char* tooltip;
 };
+
 static const DemosaicChoice kDemosaicChoices[] = {
     {DemosaicAlgorithm::VNG, "VNG", "Smooth and noise-tolerant; softer detail."},
     {DemosaicAlgorithm::AHD, "AHD (default)", "Balanced default — arraw's original decode."},
@@ -121,6 +122,9 @@ AdjustmentPanel::AdjustmentPanel(QWidget* parent)
     shadows = addSlider(tone, "Shadows", kToneSpec);
     whites = addSlider(tone, "Whites", kToneSpec);
     blacks = addSlider(tone, "Blacks", kToneSpec);
+    // Highlight Roll-off (docs/adr/0035): 0 = off (hard clip), up to a filmic
+    // shoulder + path to white. 0..100 like Sharpen.
+    highlightRolloff = addSlider(tone, "Roll-off", kSharpenSpec);
 
     // ── Tone Curve ────────────────────────────────────────────────────────────
     {
@@ -231,8 +235,8 @@ AdjustmentPanel::AdjustmentPanel(QWidget* parent)
     demosaicCombo = new QComboBox(this);
     demosaicCombo->setObjectName("demosaicCombo");
     for (const auto& choice : kDemosaicChoices)
-        demosaicCombo->addItem(
-            choice.label, static_cast<int>(choice.algo)); // tooltip set per item below
+        demosaicCombo
+            ->addItem(choice.label, static_cast<int>(choice.algo)); // tooltip set per item below
     for (int i = 0; i < demosaicCombo->count(); ++i)
         demosaicCombo->setItemData(i, kDemosaicChoices[i].tooltip, Qt::ToolTipRole);
     // Default selection matches GlobalAdjustment's default (AHD); set before the
@@ -359,13 +363,14 @@ void AdjustmentPanel::syncParams() {
     adjustments.shadows = v(shadows);
     adjustments.whites = v(whites);
     adjustments.blacks = v(blacks);
+    adjustments.highlightRolloff = v(highlightRolloff);
     adjustments.temperature = v(temperature);
     adjustments.tint = v(tint);
     adjustments.saturation = v(saturation);
     adjustments.vibrance = v(vibrance);
     if (const int i = demosaicCombo->currentIndex(); i >= 0)
-        adjustments.demosaicAlgorithm
-            = static_cast<DemosaicAlgorithm>(demosaicCombo->itemData(i).toInt());
+        adjustments.demosaicAlgorithm = static_cast<DemosaicAlgorithm>(
+            demosaicCombo->itemData(i).toInt());
     adjustments.sharpening = v(sharpening);
     adjustments.colorNoiseReduction = v(colorNoiseReduction); // Strength (issue #59)
     adjustments.colorNoiseReductionSmoothness = v(colorNoiseReductionSmoothness);
@@ -397,6 +402,7 @@ std::vector<AdjustmentPanel::SliderRow*> AdjustmentPanel::allRows() {
            &shadows,
            &whites,
            &blacks,
+           &highlightRolloff,
            &temperature,
            &tint,
            &saturation,
@@ -518,6 +524,7 @@ void AdjustmentPanel::setParams(const GlobalAdjustment& p) {
     set(shadows, p.shadows);
     set(whites, p.whites);
     set(blacks, p.blacks);
+    set(highlightRolloff, p.highlightRolloff);
     set(temperature, p.temperature);
     set(tint, p.tint);
     set(saturation, p.saturation);
@@ -586,8 +593,9 @@ void AdjustmentPanel::setLensProfileName(const QString& name) {
 void AdjustmentPanel::setDemosaicAvailable(bool available) {
     demosaicCombo->setEnabled(available);
     demosaicCombo->setToolTip(
-        available ? tr("Choose the RAW demosaic algorithm. Changing it re-decodes the image.")
-                  : tr("This sensor uses its own decode — Bayer demosaic algorithms do not apply."));
+        available
+            ? tr("Choose the RAW demosaic algorithm. Changing it re-decodes the image.")
+            : tr("This sensor uses its own decode — Bayer demosaic algorithms do not apply."));
 }
 
 // A "•" suffix marks channels whose curve is bent — otherwise a non-identity

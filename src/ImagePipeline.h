@@ -44,6 +44,12 @@ struct GlobalAdjustment : SharedAdjustment {
     // tint/saturation/vibrance live in SharedAdjustment, shared with
     // LocalAdjustment (docs/adr/0010).
 
+    // Highlight Roll-off — a global-only Tone control (0..100, default 0 = off):
+    // the shoulder + path-to-white stage applied last in the develop chain
+    // (docs/adr/0035). Travels in the Tone Develop Group; stored arraw-native
+    // (arraw:HighlightRolloff) as it has no Lightroom-compatible equivalent.
+    float highlightRolloff = 0.0f;
+
     // Tone curve (Luma + per-channel R/G/B), control points in [0,1]×[0,1]
     CurvePoints curveLuma;
     CurvePoints curveR;
@@ -124,7 +130,7 @@ struct LoadResult {
     ImageMetadata metadata;
     UserMetadata embeddedMetadata; // descriptive User Metadata from embedded XMP, if any
     UserMetadataPresence embeddedMetadataPresence;
-    QString error;                 // non-empty on failure
+    QString error; // non-empty on failure
     QRectF defaultCrop = {0.0, 0.0, 1.0, 1.0};
     // Lens profile resolved at decode (docs/adr/0027). Empty has* flags = no
     // profile matched; correction is applied (toggle-gated) downstream.

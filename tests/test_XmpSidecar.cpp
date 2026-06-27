@@ -26,6 +26,7 @@ GlobalAdjustment sampleParams() {
     p.shadows = 42.0f;
     p.whites = 7.0f;
     p.blacks = -3.25f;
+    p.highlightRolloff = 65.0f;
     p.temperature = 7200.0f;
     p.tint = -12.0f;
     p.saturation = 15.0f;
@@ -58,6 +59,7 @@ void checkClose(const GlobalAdjustment& a, const GlobalAdjustment& b) {
     CHECK_THAT(a.shadows, WithinAbs(b.shadows, kScalarTol));
     CHECK_THAT(a.whites, WithinAbs(b.whites, kScalarTol));
     CHECK_THAT(a.blacks, WithinAbs(b.blacks, kScalarTol));
+    CHECK_THAT(a.highlightRolloff, WithinAbs(b.highlightRolloff, kScalarTol));
     CHECK_THAT(a.temperature, WithinAbs(b.temperature, kScalarTol));
     CHECK_THAT(a.tint, WithinAbs(b.tint, kScalarTol));
     CHECK_THAT(a.saturation, WithinAbs(b.saturation, kScalarTol));
@@ -804,7 +806,8 @@ TEST_CASE("embedded XMP packets parse descriptive User Metadata", "[xmp][metadat
     CHECK(metadata.copyright == "Embedded rights");
 }
 
-TEST_CASE("Dublin Core property attributes parse as descriptive User Metadata", "[xmp][metadata][dc]") {
+TEST_CASE(
+    "Dublin Core property attributes parse as descriptive User Metadata", "[xmp][metadata][dc]") {
     const QByteArray packet = R"xml(<?xml version="1.0"?>
 <x:xmpmeta xmlns:x="adobe:ns:meta/">
   <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
@@ -871,7 +874,8 @@ TEST_CASE(
     CHECK(keywordItems.at(1).toElement().text() == "Two");
 }
 
-TEST_CASE("rating-only metadata saves preserve descriptive Dublin Core fields", "[xmp][metadata][dc]") {
+TEST_CASE(
+    "rating-only metadata saves preserve descriptive Dublin Core fields", "[xmp][metadata][dc]") {
     QTemporaryDir dir;
     const QString rawPath = dir.filePath("described.arw");
     UserMetadata metadata;
