@@ -267,3 +267,34 @@ TEST_CASE("DevelopSession applies lens correction only when toggled", "[develop-
     session.setParams(params);
     CHECK(session.previewForDisplay().data == result.preview.data);
 }
+
+TEST_CASE(
+    "DevelopSession keeps the corrected buffer when only shader-side params change",
+    "[develop-session][lens]") {
+    DevelopSession session;
+    LoadResult result;
+    const auto flat = [](int w, int h, float v) {
+        ImageBuffer b;
+        b.width = w;
+        b.height = h;
+        b.data.assign(static_cast<size_t>(w * h * 3), v);
+        return b;
+    };
+    result.fullRes = flat(8, 8, 0.25f);
+    result.preview = flat(8, 8, 0.25f);
+    result.lensModel.vignette = RadialCurve::fromFn([](float r) { return 1.0f + r; });
+    result.lensModel.hasVignetting = true;
+
+    GlobalAdjustment params;
+    params.lensCorrectVignetting = true;
+    session.setLoadedImage("/p.arw", result, params, DevelopSession::SidecarState::Loaded);
+    const std::vector<float> corrected = session.previewForDisplay().data;
+    REQUIRE(corrected != result.preview.data); // correction is active
+
+    // A tone edit must not disturb the lens-corrected buffer: the warp is a pure
+    // function of the lens inputs, so dragging Exposure should leave it untouched
+    // (and, crucially, not re-run the costly resample on every slider tick).
+    params.exposure = 1.0f;
+    session.setParams(params);
+    CHECK(session.previewForDisplay().data == corrected);
+}

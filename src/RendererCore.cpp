@@ -288,16 +288,14 @@ void RendererCore::flushPendingUploads(QRhiResourceUpdateBatch* batch) {
 
 // ── Pipeline / bindings ───────────────────────────────────────────────────────
 
-QRhiShaderResourceBindings* RendererCore::bindingsFor(QRhiTexture* tex) {
-    if (srb && srbImageTex == tex && srbGeneration == generation)
-        return srb.get();
-
-    srb.reset(rhi->newShaderResourceBindings());
-    srb->setBindings({
+void RendererCore::buildBindings(
+    std::unique_ptr<QRhiShaderResourceBindings>& dst, QRhiBuffer* ub, QRhiTexture* tex) {
+    dst.reset(rhi->newShaderResourceBindings());
+    dst->setBindings({
         QRhiShaderResourceBinding::uniformBuffer(
             0,
             QRhiShaderResourceBinding::VertexStage | QRhiShaderResourceBinding::FragmentStage,
-            ubuf.get()),
+            ub),
         QRhiShaderResourceBinding::sampledTexture(
             1, QRhiShaderResourceBinding::FragmentStage, tex, sampler.get()),
         QRhiShaderResourceBinding::sampledTexture(
@@ -307,7 +305,14 @@ QRhiShaderResourceBindings* RendererCore::bindingsFor(QRhiTexture* tex) {
         QRhiShaderResourceBinding::sampledTexture(
             4, QRhiShaderResourceBinding::FragmentStage, toneLutTex.get(), sampler.get()),
     });
-    srb->create();
+    dst->create();
+}
+
+QRhiShaderResourceBindings* RendererCore::bindingsFor(QRhiTexture* tex) {
+    if (srb && srbImageTex == tex && srbGeneration == generation)
+        return srb.get();
+
+    buildBindings(srb, ubuf.get(), tex);
     srbImageTex = tex;
     srbGeneration = generation;
     return srb.get();
@@ -499,17 +504,19 @@ void RendererCore::fillUbuf(Ubuf& ub, const FrameParams& fp) const {
 
 // `batch` must already contain the pending uploads (flushPendingUploads can
 // recreate image textures, so the sampled texture is resolved only afterwards).
-void RendererCore::recordPass(
+void RendererCore::recordPassWith(
     QRhiCommandBuffer* cb,
     QRhiRenderTarget* rt,
-    QRhiTexture* tex,
     const FrameParams& fp,
-    QRhiResourceUpdateBatch* batch) {
-    Ubuf ub{};
-    fillUbuf(ub, fp);
-    batch->updateDynamicBuffer(ubuf.get(), 0, sizeof(Ubuf), &ub);
+    QRhiResourceUpdateBatch* batch,
+    QRhiBuffer* ub,
+    QRhiShaderResourceBindings* bindings) {
+    Ubuf u{};
+    fillUbuf(u, fp);
+    batch->updateDynamicBuffer(ub, 0, sizeof(Ubuf), &u);
 
-    QRhiShaderResourceBindings* bindings = bindingsFor(tex);
+    // The pipeline carries only the bindings *layout*; `bindings` is bound per
+    // draw and need only be layout-compatible (same as the on-screen srb).
     QRhiGraphicsPipeline* pipe = pipelineFor(rt->renderPassDescriptor());
 
     cb->beginPass(rt, kClearColor, {1.0f, 0}, batch);
@@ -521,6 +528,15 @@ void RendererCore::recordPass(
     cb->setVertexInput(0, 1, &vi);
     cb->draw(4);
     cb->endPass();
+}
+
+void RendererCore::recordPass(
+    QRhiCommandBuffer* cb,
+    QRhiRenderTarget* rt,
+    QRhiTexture* tex,
+    const FrameParams& fp,
+    QRhiResourceUpdateBatch* batch) {
+    recordPassWith(cb, rt, fp, batch, ubuf.get(), bindingsFor(tex));
 }
 
 // ── Colour Noise Reduction pre-pass (docs/adr/0032) ──────────────────────────
@@ -815,6 +831,9 @@ RendererCore::ReadbackTarget* RendererCore::ensureReadbackTarget(
     auto t = std::make_unique<ReadbackTarget>();
     t->size = size;
     t->fmt = fmt;
+    t->ubuf.reset(rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, sizeof(Ubuf)));
+    if (!t->ubuf->create())
+        return nullptr;
     t->tex.reset(
         rhi->newTexture(fmt, size, 1, QRhiTexture::RenderTarget | QRhiTexture::UsedAsTransferSource));
     if (!t->tex->create())
@@ -859,7 +878,15 @@ bool RendererCore::recordOffscreenReadback(
             fp.adjustments.colorNoiseReduction);
         batch = rhi->nextResourceUpdateBatch();
     }
-    recordPass(cb, t->rt.get(), tex, fp, batch);
+    // Record with the target's own uniform buffer + bindings — never the shared
+    // on-screen `ubuf` — so this pass cannot clobber the main pass's uniforms
+    // within the frame they share (see ReadbackTarget::ubuf).
+    if (!t->srb || t->srbImageTex != tex || t->srbGeneration != generation) {
+        buildBindings(t->srb, t->ubuf.get(), tex);
+        t->srbImageTex = tex;
+        t->srbGeneration = generation;
+    }
+    recordPassWith(cb, t->rt.get(), fp, batch, t->ubuf.get(), t->srb.get());
 
     QRhiResourceUpdateBatch* readBatch = rhi->nextResourceUpdateBatch();
     readBatch->readBackTexture(QRhiReadbackDescription(t->tex.get()), &t->rr);

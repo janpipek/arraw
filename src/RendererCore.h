@@ -172,6 +172,18 @@ private:
         QRhiTexture* imageTex,
         const FrameParams& fp,
         QRhiResourceUpdateBatch* batch);
+    // recordPass variant driving an explicit uniform buffer + bindings, so a pass
+    // sharing the command buffer with the on-screen pass can keep its own uniforms
+    // (the histogram readbacks; see ReadbackTarget::ubuf).
+    void recordPassWith(
+        QRhiCommandBuffer* cb,
+        QRhiRenderTarget* rt,
+        const FrameParams& fp,
+        QRhiResourceUpdateBatch* batch,
+        QRhiBuffer* ub,
+        QRhiShaderResourceBindings* bindings);
+    void buildBindings(
+        std::unique_ptr<QRhiShaderResourceBindings>& dst, QRhiBuffer* ub, QRhiTexture* imageTex);
     QImage renderOffscreenTex(
         int slotIndex,
         QRhiTexture* extTex,
@@ -193,6 +205,15 @@ private:
         QSize size;
         QRhiTexture::Format fmt = QRhiTexture::RGBA8;
         bool inFlight = false;
+        // A dedicated uniform buffer and bindings per target: a Dynamic uniform
+        // buffer is double-buffered per frame-in-flight, not per pass, so a
+        // readback pass sharing the on-screen `ubuf` would overwrite the main
+        // pass's uniforms within the same frame (stretched preview). Each
+        // concurrent pass in a frame needs its own buffer (QRhiBuffer docs).
+        std::unique_ptr<QRhiBuffer> ubuf;
+        std::unique_ptr<QRhiShaderResourceBindings> srb;
+        QRhiTexture* srbImageTex = nullptr;
+        int srbGeneration = -1;
     };
 
     // Returns the pooled target for (size, fmt), creating it on first use, or
