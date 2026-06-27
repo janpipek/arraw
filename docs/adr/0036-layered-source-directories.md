@@ -82,6 +82,9 @@ follow-ups rather than bundle risky surgery into a layout change:
   session bundles the loaded image (a pipeline output) with develop state
   (ADR 0020). A real `develop → pipeline` dependency; revisit when decomposing
   the session.
-- **`render/RendererCore` → `ui/ThemeColors`** — `ThemeColors` is a
-  dependency-free colour-constant leaf that probably belongs in `core/`; moving
-  it would clear the one `render → ui` edge.
+
+The one other edge the qualified includes exposed has since been closed:
+`render/RendererCore` read `ThemeColors` (the GPU clear colour, single-sourced
+with the widget palette so the viewport surround and chrome never drift). The
+header is a dependency-free `<QColor>` leaf, so it moved `ui/ → core/` — both
+`Theme` (ui) and `RendererCore` (render) now depend *down* on it, no inversion.

@@ -3,7 +3,7 @@
 #include "pipeline/ImagePipeline.h"
 #include "render/RendererCore.h"
 #include "pipeline/NoiseReduction.h"
-#include "ui/ThemeColors.h"
+#include "core/ThemeColors.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>

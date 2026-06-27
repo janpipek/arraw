@@ -1,5 +1,5 @@
 #include "ui/Histogram.h"
-#include "ui/ThemeColors.h"
+#include "core/ThemeColors.h"
 #include <algorithm>
 #include <cmath>
 #include <QPainter>

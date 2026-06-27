@@ -149,12 +149,12 @@ application; each subdirectory is a layer it is built from (ADR 0036):
 
 | layer | holds | may depend on |
 |---|---|---|
-| `core/` | shared value types + pure geometry math (`ImageBuffer`, `WorkingSpace`, `ImageMetadata`, `CropGeometry`, `Orientation`, `Trace`) | — |
+| `core/` | shared value types + pure geometry math + dependency-free leaves (`ImageBuffer`, `WorkingSpace`, `ImageMetadata`, `CropGeometry`, `Orientation`, `Trace`, `ThemeColors`) | — |
 | `develop/` | the adjustments model (`GlobalAdjustment`, `DevelopParameter/Group/Session/Preset`, `LocalAdjustment`, `Spot`, `DemosaicAlgorithm`, `FieldSpec`) | `core` |
 | `pipeline/` | CPU pixel compute (`RawProcessor`, `ColorManagement`, `OkLab`, `BasicTone`, `NoiseReduction`, `LensCorrection`, `LoadResult`, the `ImagePipeline` free functions) | `core`, `develop` |
 | `render/` | the GPU engine (`RendererCore`, `ViewportGeometry`) — shaders live in repo-root `shaders/` | `core`, `develop` |
 | `io/` | persistence (`XmpSidecar`, `PresetStore`, `DecodeCache`, `ThumbnailCache`) | `core`, `develop` |
-| `ui/` | reusable widgets/panels/dialogs (`ImageViewport`, every `*Panel`, `FilmStrip*`, `Theme*`, …) | all of the above |
+| `ui/` | reusable widgets/panels/dialogs (`ImageViewport`, every `*Panel`, `FilmStrip*`, `Theme`, …) | all of the above |
 
 **Includes are layer-qualified from the `src/` root** (`#include
 "develop/GlobalAdjustment.h"`), so a file's include block is a dependency
@@ -203,7 +203,7 @@ carries its small satellites); existing functional namespaces (`crop::`,
 
 ### 7. UI Theme & Colors
 * The neutral dark theme is applied once in `main()` via `Theme::apply()` (Fusion style + a dark `QPalette`), **before** any widget is constructed. Dark-only for now; the palette is built in one function so a light variant / user-settable colors slot in behind the same seam (ADR 0030).
-* **All UI colors are single-sourced in `src/ui/ThemeColors.h`** (a dependency-free leaf header), read by both `Theme` (the palette) and `RendererCore` (the viewport surround, `kCanvas`). Add or change a chrome color *there*, not inline.
+* **All UI colors are single-sourced in `src/core/ThemeColors.h`** (a dependency-free leaf header), read by both `Theme` (the palette) and `RendererCore` (the viewport surround, `kCanvas`). Add or change a chrome color *there*, not inline.
 * `kCanvas` must stay bit-identical to `0.15,0.15,0.15` — it backs the golden-image references (ADR 0005).
 * **Semantic / data-viz colors stay hardcoded with their feature** (histogram channels, filmstrip flags/ratings, curve channel buttons, viewport overlays & clipping warnings) — they encode meaning, not chrome, so don't route them through the theme.
 * Prefer the palette over QSS. Any QSS stays minimal and centralized in `Theme::apply()`; the per-widget sheet on the `AdjustmentPanel` curve buttons is the one sanctioned exception (semantic colors).

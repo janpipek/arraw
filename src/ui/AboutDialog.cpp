@@ -1,5 +1,5 @@
 #include "ui/AboutDialog.h"
-#include "ui/ThemeColors.h"
+#include "core/ThemeColors.h"
 
 #include <QApplication>
 #include <QDialogButtonBox>
