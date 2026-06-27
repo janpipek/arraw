@@ -10,13 +10,13 @@
 #include "DevelopGroup.h"
 #include "DevelopPreset.h"
 #include "DevelopSession.h"
-#include "ExifPanel.h"
 #include "ExportDialog.h"
 #include "ExportWorkflow.h"
 #include "FilmStrip.h"
 #include "GroupChecklistDialog.h"
 #include "ImageLoadWorkflow.h"
 #include "ImageViewport.h"
+#include "InfoPanel.h"
 #include "LocalAdjustmentPanel.h"
 #include "MainWindowStatus.h"
 #include "ProofingPanel.h"
@@ -63,6 +63,13 @@
 #include <QWindow>
 #include <QWindowStateChangeEvent>
 #include <QtConcurrent/QtConcurrent>
+
+static UserMetadata ratingAndLabelOnly(const UserMetadata& metadata) {
+    UserMetadata result;
+    result.rating = metadata.rating;
+    result.label = metadata.label;
+    return result;
+}
 
 // ---------------------------------------------------------------------------
 // Undo command: captures before/after GlobalAdjustment for a single gesture.
@@ -156,11 +163,19 @@ static bool lensTogglesDiffer(const GlobalAdjustment& a, const GlobalAdjustment&
            || a.lensCorrectCA != b.lensCorrectCA;
 }
 
+// Demosaic is a decode-time choice (docs/adr/0033): when it changes the decoded
+// buffers must be regenerated through the load path, not a shader/CPU refresh.
+static bool demosaicDiffers(const GlobalAdjustment& a, const GlobalAdjustment& b) {
+    return a.demosaicAlgorithm != b.demosaicAlgorithm;
+}
+
 void AdjustmentCommand::undo() {
     session->setParams(before);
     mainWindow->syncSessionToEditors();
     if (lensTogglesDiffer(before, after))
         mainWindow->rebuildSpottedBuffers(false);
+    if (demosaicDiffers(before, after))
+        mainWindow->redecodeForDemosaicChange();
 }
 
 void AdjustmentCommand::redo() {
@@ -168,6 +183,8 @@ void AdjustmentCommand::redo() {
     mainWindow->syncSessionToEditors();
     if (lensTogglesDiffer(before, after))
         mainWindow->rebuildSpottedBuffers(false);
+    if (demosaicDiffers(before, after))
+        mainWindow->redecodeForDemosaicChange();
 }
 
 // ---------------------------------------------------------------------------
@@ -218,6 +235,11 @@ MainWindow::MainWindow(QWidget* parent)
     rebuildDisplayLut();
 
     connect(&loadWatcher, &QFutureWatcher<LoadResult>::finished, this, &MainWindow::onLoadFinished);
+    connect(
+        &redecodeWatcher,
+        &QFutureWatcher<LoadResult>::finished,
+        this,
+        &MainWindow::onRedecodeFinished);
 
     connect(viewport, &ImageViewport::fullResNeeded, this, &MainWindow::onFullResNeeded);
 
@@ -230,7 +252,11 @@ MainWindow::MainWindow(QWidget* parent)
         [this](const QString& path, const UserMetadata& metadata, bool saved) {
             if (path != session->path())
                 return;
-            session->setUserMetadata(metadata);
+            UserMetadata current = session->userMetadata();
+            current.rating = metadata.rating;
+            current.label = metadata.label;
+            session->setUserMetadata(current);
+            infoPanel->setUserMetadata(current);
             if (saved) {
                 session->markMetadataSaved();
             } else {
@@ -536,14 +562,38 @@ void MainWindow::setupMenus() {
     QSettings clipSettings;
     clipHighlightsAction = view->addAction("Show &Highlight Clipping");
     clipHighlightsAction->setCheckable(true);
+    clipHighlightsAction->setToolTip(
+        "Show rendered highlight clipping in red: pixels that hit white after the current edits "
+        "and display transform.");
+    clipHighlightsAction->setStatusTip(
+        "Rendered clipping: marks output highlights that are clipped by the current develop "
+        "settings.");
     clipHighlightsAction->setChecked(clipSettings.value("view/clipHighlights", false).toBool());
     connect(clipHighlightsAction, &QAction::toggled, this, &MainWindow::applyClipping);
 
     clipShadowsAction = view->addAction("Show &Shadow Clipping");
     clipShadowsAction->setCheckable(true);
+    clipShadowsAction->setToolTip(
+        "Show rendered shadow clipping in blue: pixels that hit black after the current edits "
+        "and display transform.");
+    clipShadowsAction->setStatusTip(
+        "Rendered clipping: marks output shadows that are clipped by the current develop "
+        "settings.");
     clipShadowsAction->setChecked(clipSettings.value("view/clipShadows", false).toBool());
     connect(clipShadowsAction, &QAction::toggled, this, &MainWindow::applyClipping);
     applyClipping(); // push the restored state to the viewport
+
+    sensorClipAction = view->addAction("Show &Sensor Clipping");
+    sensorClipAction->setCheckable(true);
+    sensorClipAction->setToolTip(
+        "Show sensor clipping in magenta: RAW photosites that were saturated before demosaic, "
+        "exposure recovery, or other edits.");
+    sensorClipAction->setStatusTip(
+        "Sensor clipping: marks RAW data saturation, where highlight detail may be unrecoverable.");
+    sensorClipAction->setChecked(clipSettings.value("view/sensorClip", false).toBool());
+    sensorClipAction->setEnabled(false);
+    connect(sensorClipAction, &QAction::toggled, this, &MainWindow::applySensorClipping);
+    applySensorClipping();
     view->addSeparator();
 
     // Monitor profile: how the preview is encoded for this screen.
@@ -893,7 +943,7 @@ void MainWindow::setupDocks() {
     connect(
         filmStrip, &FilmStrip::populateContextMenu, this, &MainWindow::populateFilmStripContextMenu);
 
-    // Adjustments + EXIF (right). Collapses to a thin edge strip (ADR 0012).
+    // Adjustments + metadata (right). Collapses to a thin edge strip (ADR 0012).
     auto* rightDock = adjustmentsDock = new QDockWidget("Adjustments", this);
     rightDock->setObjectName("AdjustmentsDock"); // saveState/restoreState key
     rightDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
@@ -941,8 +991,15 @@ void MainWindow::setupDocks() {
     spotScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     spotsTabIndex = tabs->addTab(spotScroll, "Spots");
 
-    exifPanel = new ExifPanel(tabs);
-    tabs->addTab(exifPanel, "EXIF");
+    infoPanel = new InfoPanel(tabs);
+    tabs->addTab(infoPanel, "Info");
+    connect(
+        infoPanel,
+        &InfoPanel::userMetadataCommitted,
+        this,
+        [this](const UserMetadata& m, const UserMetadataPresence& changedFields) {
+            applyCurrentUserMetadata(m, changedFields);
+        });
 
     rightTabs = tabs;
     connect(tabs, &QTabWidget::currentChanged, this, [this] { syncAdjustmentTabTool(); });
@@ -1011,6 +1068,7 @@ void MainWindow::openFile() {
 bool MainWindow::saveDirtySidecar(bool forceDevelopSave) {
     if (session->path().isEmpty())
         return true;
+    infoPanel->flushPendingEdits();
 
     bool saved = true;
     if (forceDevelopSave || session->developDirty()) {
@@ -1022,7 +1080,8 @@ bool MainWindow::saveDirtySidecar(bool forceDevelopSave) {
         }
     }
     if (session->metadataDirty()) {
-        if (XmpSidecar::saveMetadata(session->path(), session->userMetadata())) {
+        if (XmpSidecar::saveMetadata(
+                session->path(), session->userMetadata(), session->userMetadataPresence())) {
             session->markMetadataSaved();
         } else {
             session->markMetadataSaveFailed();
@@ -1041,6 +1100,7 @@ bool MainWindow::saveDirtySidecar(bool forceDevelopSave) {
 
 bool MainWindow::confirmLeavingCurrentImage() {
     viewport->commitActiveTool();
+    infoPanel->flushPendingEdits();
     if (!shouldConfirmLeavingImage(*session))
         return true;
 
@@ -1068,6 +1128,8 @@ void MainWindow::loadImage(const QString& path) {
         return;
 
     const QString previousPath = session->path();
+    if (!previousPath.isEmpty())
+        infoPanel->flushPendingEdits();
     const bool needsConfirmation = !leaveConfirmationSatisfied;
     leaveConfirmationSatisfied = false;
     if (needsConfirmation && !confirmLeavingCurrentImage()) {
@@ -1076,14 +1138,17 @@ void MainWindow::loadImage(const QString& path) {
         return;
     }
 
-    // Cancel any in-progress load so it stops before dcraw_process.
+    // Cancel any in-progress load (or demosaic re-decode) so it stops before
+    // dcraw_process and does not clobber the new image's state.
     if (loadCancel)
         loadCancel->store(true);
+    if (redecodeCancel)
+        redecodeCancel->store(true);
     loadCancel = std::make_shared<std::atomic<bool>>(false);
     auto cancel = loadCancel;
 
     session->beginLoading(path);
-    exifPanel->clear();
+    infoPanel->clear();
     viewport->cancelActiveTool(); // discard any in-progress tool from the last image
     viewport->setOriginalImageSize(0, 0);
     setLoadingState(true);
@@ -1097,9 +1162,14 @@ void MainWindow::loadImage(const QString& path) {
     // until the demosaic yields the real DefaultCrop for never-edited RAWs.
     pendingPreviewParams = resolvePendingPreviewParams(path);
 
+    // The demosaic algorithm parameterises the decode and its cache key, so it is
+    // read from the up-front resolved params (docs/adr/0033).
+    const DemosaicAlgorithm algo = pendingPreviewParams.demosaicAlgorithm;
+
     // Re-opening a recently viewed image: a cached decode skips the background
     // task entirely — instant, and correct (straight to the demosaiced image).
-    const QString key = decodeCacheKey(path);
+    // Each algorithm caches independently, so switching among tried ones is free.
+    const QString key = decodeCacheKey(path, algo);
     if (const LoadResult* hit = decodeCache.get(key)) {
         decodeCache.pin(key);
         applyLoadResult(path, *hit);
@@ -1108,7 +1178,7 @@ void MainWindow::loadImage(const QString& path) {
 
     // Cache miss: keep the previous image on screen until the new image's embedded
     // preview (or full demosaic) is ready, then swap pixels + params atomically.
-    loadWatcher.setFuture(QtConcurrent::run([this, path, cancel]() -> LoadResult {
+    loadWatcher.setFuture(QtConcurrent::run([this, path, cancel, algo]() -> LoadResult {
         auto onPreview = [this, path, cancel](ImageBuffer buf) {
             if (cancel->load())
                 return;
@@ -1123,7 +1193,7 @@ void MainWindow::loadImage(const QString& path) {
                 },
                 Qt::QueuedConnection);
         };
-        return decodeImage(path, std::move(onPreview), cancel);
+        return decodeImage(path, std::move(onPreview), cancel, algo);
     }));
 }
 
@@ -1138,17 +1208,86 @@ void MainWindow::onLoadFinished() {
         setLoadingState(false);
         QMessageBox::critical(this, "Load Error", result.error);
         statusLabel->setText("Load failed.");
-        exifPanel->clear();
+        infoPanel->clear();
         return;
     }
 
     // Cache the decode (authoritative copy) and pin it as the current image, then
-    // display it through the same path a cache hit takes.
-    const QString key = decodeCacheKey(session->path());
+    // display it through the same path a cache hit takes. The key must carry the
+    // algorithm the decode actually ran with (the up-front resolved one).
+    const QString key = decodeCacheKey(session->path(), pendingPreviewParams.demosaicAlgorithm);
     decodeCache.insert(key, std::move(result));
     decodeCache.pin(key);
     if (const LoadResult* cached = decodeCache.get(key))
         applyLoadResult(session->path(), *cached);
+}
+
+void MainWindow::redecodeForDemosaicChange() {
+    const QString path = session->path();
+    if (path.isEmpty() || !session->hasImage())
+        return;
+
+    const DemosaicAlgorithm algo = session->params().demosaicAlgorithm;
+    const QString key = decodeCacheKey(path, algo);
+
+    // This choice supersedes any in-flight re-decode (e.g. an undo lands while a
+    // never-tried algorithm is still decoding).
+    if (redecodeCancel)
+        redecodeCancel->store(true);
+
+    // A cache hit (algorithm already tried, incl. undo/redo, or a standard image
+    // that has no demosaic stage) swaps in instantly, no decode. Clear any busy
+    // state a superseded miss-decode left behind, then restore the normal status.
+    if (const LoadResult* hit = decodeCache.get(key)) {
+        decodeCache.pin(key);
+        session->swapDecodedBuffers(*hit);
+        rebuildSpottedBuffers(true, /*preserveView=*/true);
+        setLoadingState(false);
+        setToolsEnabled(true);
+        statusLabel->setText(
+            loadedImageStatusText(path, session->fullRes(), session->sidecarState()));
+        return;
+    }
+
+    // Never-tried algorithm: decode on a worker thread, keeping the current image
+    // on screen until it swaps in.
+    redecodeCancel = std::make_shared<std::atomic<bool>>(false);
+    auto cancel = redecodeCancel;
+    redecodeKey = key;
+    setLoadingState(true);
+    redecodeWatcher.setFuture(QtConcurrent::run([path, cancel, algo]() -> LoadResult {
+        return decodeImage(path, nullptr, cancel, algo);
+    }));
+}
+
+void MainWindow::onRedecodeFinished() {
+    LoadResult result = redecodeWatcher.result();
+
+    // Empty result = cancelled (a newer re-decode or an image switch superseded
+    // it); leave the UI to whatever superseded it.
+    if (!result.fullRes.valid() && result.error.isEmpty())
+        return;
+
+    // The session may have moved on (image switch) while this decoded; only apply
+    // when it still matches the image+algorithm we decoded for.
+    if (decodeCacheKey(session->path(), session->params().demosaicAlgorithm) != redecodeKey)
+        return;
+
+    setLoadingState(false);
+    setToolsEnabled(true);
+    if (!result.error.isEmpty()) {
+        statusLabel->setText("Re-decode failed.");
+        return;
+    }
+
+    decodeCache.insert(redecodeKey, std::move(result));
+    decodeCache.pin(redecodeKey);
+    if (const LoadResult* cached = decodeCache.get(redecodeKey)) {
+        session->swapDecodedBuffers(*cached);
+        rebuildSpottedBuffers(true, /*preserveView=*/true);
+    }
+    statusLabel->setText(
+        loadedImageStatusText(session->path(), session->fullRes(), session->sidecarState()));
 }
 
 void MainWindow::applyPendingPreviewParams() {
@@ -1164,18 +1303,29 @@ void MainWindow::applyPendingPreviewParams() {
 void MainWindow::applyLoadResult(const QString& path, const LoadResult& result) {
     setLoadingState(false);
     viewport->setOriginalImageSize(result.fullRes.width, result.fullRes.height);
+    sensorClipAction->setEnabled(result.sensorClipPreview.valid());
+    applySensorClipping();
 
     // Re-read the sidecar every time (params are never cached) so edits made in
     // another app — or a prior session — are always reflected.
     const ResolvedLoadedImage resolved = resolveLoadedImage(path, result);
     session->setLoadedImage(
-        path, result, resolved.adjustments, resolved.sidecarState, resolved.metadata);
+        path,
+        result,
+        resolved.adjustments,
+        resolved.sidecarState,
+        resolved.metadata,
+        resolved.metadataPresence);
     session->setBaseLook(true);
     syncSessionToEditors();
     syncSessionSpotsToEditors(true);
-    filmStrip->setMarks(path, session->userMetadata());
+    // Demosaic selection applies only to Bayer sensors; disable it (with an
+    // explanation) for X-Trans/Foveon/standard images (docs/adr/0033).
+    adjPanel->setDemosaicAvailable(sensorSupportsDemosaicSelection(result.filters));
+    filmStrip->setMarks(path, ratingAndLabelOnly(session->userMetadata()));
 
-    exifPanel->setMetadata(result.metadata);
+    infoPanel->setUserMetadata(session->userMetadata());
+    infoPanel->setImageMetadata(result.metadata);
     undoStack->clear();
 
     statusLabel->setText(loadedImageStatusText(path, session->fullRes(), session->sidecarState()));
@@ -1184,18 +1334,23 @@ void MainWindow::applyLoadResult(const QString& path, const LoadResult& result) 
     generateDevelopedThumbnail();
 }
 
-void MainWindow::rebuildSpottedBuffers(bool fullResOnly) {
+void MainWindow::rebuildSpottedBuffers(bool fullResOnly, bool preserveView) {
     if (session->previewForDisplay().valid())
-        viewport->setImage(session->previewForDisplay(), session->baseLook());
+        viewport->setImage(
+            session->previewForDisplay(),
+            session->sensorClipPreviewForDisplay(),
+            session->baseLook(),
+            preserveView);
 
     if (fullResOnly && session->fullResForExport().valid())
-        viewport->setFullResImage(session->fullResForExport());
+        viewport
+            ->setFullResImage(session->fullResForExport(), session->sensorClipFullResForDisplay());
 }
 
 void MainWindow::onFullResNeeded() {
     if (!session->fullResForExport().valid())
         return;
-    viewport->setFullResImage(session->fullResForExport());
+    viewport->setFullResImage(session->fullResForExport(), session->sensorClipFullResForDisplay());
 }
 
 void MainWindow::updateZoomStatus(float zoom) {
@@ -1208,7 +1363,7 @@ void MainWindow::updateZoomStatus(float zoom) {
 void MainWindow::setLoadingState(bool loading) {
     menuBar()->setEnabled(!loading);
     adjPanel->setEnabled(!loading);
-    exifPanel->setEnabled(!loading);
+    infoPanel->setEnabled(!loading);
     if (loading)
         setToolsEnabled(false); // re-enabled in onLoadFinished on success
     statusLabel->setText(
@@ -1229,6 +1384,13 @@ void MainWindow::toggleClipping() {
     const bool anyOn = clipHighlightsAction->isChecked() || clipShadowsAction->isChecked();
     clipHighlightsAction->setChecked(!anyOn);
     clipShadowsAction->setChecked(!anyOn); // toggled() drives applyClipping()
+}
+
+void MainWindow::applySensorClipping() {
+    const bool on = sensorClipAction->isChecked();
+    viewport->setSensorClipWarning(on && sensorClipAction->isEnabled());
+    QSettings s;
+    s.setValue("view/sensorClip", on);
 }
 
 void MainWindow::toggleFullScreen() {
@@ -1323,12 +1485,14 @@ void MainWindow::applyDevelopChange(const GlobalAdjustment& after) {
         pushGlobalAdjustmentCommand(before, after);
 }
 
-void MainWindow::applyCurrentUserMetadata(const UserMetadata& metadata) {
+void MainWindow::applyCurrentUserMetadata(
+    const UserMetadata& metadata, const UserMetadataPresence& changedFields) {
     if (session->path().isEmpty())
         return;
-    session->setUserMetadata(metadata);
-    filmStrip->setMarks(session->path(), metadata);
-    if (XmpSidecar::saveMetadata(session->path(), metadata)) {
+    session->setUserMetadata(metadata, changedFields);
+    filmStrip->setMarks(session->path(), ratingAndLabelOnly(metadata));
+    infoPanel->setUserMetadata(metadata);
+    if (XmpSidecar::saveMetadata(session->path(), metadata, changedFields)) {
         session->markMetadataSaved();
     } else {
         session->markMetadataSaveFailed();
@@ -1774,6 +1938,11 @@ void MainWindow::exportBatch(const QStringList& paths) {
         if (rawPath == session->path()) {
             loaded.fullRes = session->fullRes();
         } else {
+            // Resolve the per-image demosaic algorithm up front so the exported
+            // file matches the on-screen preview (docs/adr/0033) — it parameterises
+            // the decode, unlike the other develop fields applied downstream.
+            const DemosaicAlgorithm algo
+                = resolveImageAdjustments(rawPath, QRectF(0, 0, 1, 1)).demosaicAlgorithm;
             QFutureWatcher<LoadResult> watcher;
             QEventLoop wait;
             connect(&watcher, &QFutureWatcher<LoadResult>::finished, &wait, &QEventLoop::quit);
@@ -1781,8 +1950,8 @@ void MainWindow::exportBatch(const QStringList& paths) {
                 cancel->store(true); // abort the in-flight decode
                 wait.quit();
             });
-            watcher.setFuture(QtConcurrent::run([rawPath, cancel]() -> LoadResult {
-                return decodeImage(rawPath, nullptr, cancel);
+            watcher.setFuture(QtConcurrent::run([rawPath, cancel, algo]() -> LoadResult {
+                return decodeImage(rawPath, nullptr, cancel, algo);
             }));
             wait.exec();
             if (progress.wasCancelled())

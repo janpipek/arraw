@@ -1,4 +1,5 @@
 #include "ImageLoadWorkflow.h"
+#include "DemosaicAlgorithm.h"
 #include "XmpSidecar.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -22,6 +23,30 @@ TEST_CASE("decodeCacheKey changes when file metadata changes", "[loadworkflow]")
     file.close();
 
     CHECK(decodeCacheKey(path) != first);
+}
+
+TEST_CASE("decodeCacheKey distinguishes demosaic algorithms for the same file", "[loadworkflow]") {
+    QTemporaryDir dir;
+    REQUIRE(dir.isValid());
+    const QString path = dir.filePath("image.jpg");
+
+    QFile file(path);
+    REQUIRE(file.open(QIODevice::WriteOnly));
+    file.write("pixels");
+    file.close();
+
+    const QString ahd = decodeCacheKey(path, DemosaicAlgorithm::AHD);
+    const QString vng = decodeCacheKey(path, DemosaicAlgorithm::VNG);
+
+    // Each algorithm's decode caches independently (ADR 0033).
+    CHECK(ahd != vng);
+    // ...but the key is stable for the same (path, algo) so A/B switching hits.
+    CHECK(decodeCacheKey(path, DemosaicAlgorithm::VNG) == vng);
+    // The token is what disambiguates.
+    CHECK(ahd.endsWith("|" + demosaicToken(DemosaicAlgorithm::AHD)));
+    CHECK(vng.endsWith("|" + demosaicToken(DemosaicAlgorithm::VNG)));
+    // Default argument == kDefaultDemosaic, so the no-algo overload matches AHD.
+    CHECK(decodeCacheKey(path) == ahd);
 }
 
 TEST_CASE("resolvePendingPreviewParams uses a full-frame placeholder crop", "[loadworkflow]") {
@@ -52,6 +77,55 @@ TEST_CASE("resolveLoadedImage maps loaded sidecars to session state", "[loadwork
     CHECK(resolved.sidecarState == DevelopSession::SidecarState::Loaded);
     CHECK(resolved.adjustments.exposure == 1.5f);
     CHECK(resolved.metadata.rating == 4);
+}
+
+TEST_CASE("resolveLoadedImage applies User Metadata read precedence", "[loadworkflow]") {
+    QTemporaryDir dir;
+    REQUIRE(dir.isValid());
+    const QString rawPath = dir.filePath("IMG_0001.CR3");
+
+    LoadResult result;
+    result.defaultCrop = QRectF(0.0, 0.0, 1.0, 1.0);
+    result.metadata.rows.append(qMakePair(QString("Description"), QString("EXIF caption")));
+    result.metadata.rows.append(qMakePair(QString("Artist"), QString("EXIF creator")));
+    result.embeddedMetadata.caption = "Embedded caption";
+    result.embeddedMetadata.creator = "Embedded creator";
+    result.embeddedMetadataPresence.caption = true;
+    result.embeddedMetadataPresence.creator = true;
+
+    ResolvedLoadedImage resolved = resolveLoadedImage(rawPath, result);
+    CHECK(resolved.metadata.caption == "Embedded caption");
+    CHECK(resolved.metadata.creator == "Embedded creator");
+
+    UserMetadata sidecarMetadata;
+    sidecarMetadata.caption = "Sidecar caption";
+    REQUIRE(XmpSidecar::saveMetadata(rawPath, sidecarMetadata));
+
+    resolved = resolveLoadedImage(rawPath, result);
+    CHECK(resolved.metadata.caption == "Sidecar caption");
+    CHECK(resolved.metadata.creator == "Embedded creator");
+}
+
+TEST_CASE("resolveLoadedImage honours sidecar-authored empty User Metadata", "[loadworkflow]") {
+    QTemporaryDir dir;
+    REQUIRE(dir.isValid());
+    const QString rawPath = dir.filePath("IMG_0001.CR3");
+
+    LoadResult result;
+    result.defaultCrop = QRectF(0.0, 0.0, 1.0, 1.0);
+    result.metadata.rows.append(qMakePair(QString("Description"), QString("EXIF caption")));
+    result.embeddedMetadata.caption = "Embedded caption";
+    result.embeddedMetadataPresence.caption = true;
+
+    UserMetadata metadata;
+    UserMetadataPresence fields;
+    fields.caption = true;
+    REQUIRE(XmpSidecar::saveMetadata(rawPath, metadata, fields));
+
+    const ResolvedLoadedImage resolved = resolveLoadedImage(rawPath, result);
+
+    CHECK(resolved.metadata.caption.isEmpty());
+    CHECK(resolved.metadataPresence.caption);
 }
 
 TEST_CASE(

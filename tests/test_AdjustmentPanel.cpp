@@ -1,8 +1,10 @@
 #include "AdjustmentPanel.h"
+#include "DemosaicAlgorithm.h"
 #include "TestApp.h"
 #include <catch2/catch_test_macros.hpp>
 
 #include <QCheckBox>
+#include <QComboBox>
 #include <QSlider>
 
 // The Grain seed is a hidden per-image identity (docs/adr/0026). It is minted
@@ -97,6 +99,60 @@ TEST_CASE("Lens correction toggles are gated by a profile and drive params", "[a
     // Clearing the profile disables the toggles again.
     panel.setLensProfileName(QString());
     CHECK_FALSE(dist->isEnabled());
+}
+
+// ── Demosaic algorithm combo (issue #22, ADR 0033) ──────────────────────────
+
+TEST_CASE("the demosaic combo round-trips the algorithm through params", "[adjustpanel][demosaic]") {
+    testApp();
+    AdjustmentPanel panel;
+    auto* combo = panel.findChild<QComboBox*>("demosaicCombo");
+    REQUIRE(combo != nullptr);
+
+    // Every Bayer algorithm is offered exactly once.
+    CHECK(combo->count() == 7);
+
+    // setParams pushes the stored algorithm into the combo selection...
+    GlobalAdjustment p;
+    p.demosaicAlgorithm = DemosaicAlgorithm::DCB;
+    panel.setParams(p);
+    CHECK(panel.params().demosaicAlgorithm == DemosaicAlgorithm::DCB);
+
+    // ...and choosing a different entry drives params + emits a commit (one undo
+    // entry) carrying the new algorithm, like the lens toggles.
+    int committed = 0;
+    GlobalAdjustment after;
+    QObject::connect(
+        &panel,
+        &AdjustmentPanel::adjustmentCommitted,
+        [&](const GlobalAdjustment&, const GlobalAdjustment& a) {
+            ++committed;
+            after = a;
+        });
+
+    const int vngIndex = combo->findData(static_cast<int>(DemosaicAlgorithm::VNG));
+    REQUIRE(vngIndex >= 0);
+    combo->setCurrentIndex(vngIndex);
+
+    CHECK(panel.params().demosaicAlgorithm == DemosaicAlgorithm::VNG);
+    CHECK(committed >= 1);
+    CHECK(after.demosaicAlgorithm == DemosaicAlgorithm::VNG);
+}
+
+TEST_CASE("the demosaic combo is disabled for non-Bayer sensors", "[adjustpanel][demosaic]") {
+    testApp();
+    AdjustmentPanel panel;
+    auto* combo = panel.findChild<QComboBox*>("demosaicCombo");
+    REQUIRE(combo != nullptr);
+
+    panel.setDemosaicAvailable(true);
+    CHECK(combo->isEnabled());
+
+    // X-Trans / Foveon / standard image: the control is shown but disabled, with
+    // an explanation rather than offering Bayer labels that would not run.
+    panel.setDemosaicAvailable(false);
+    CHECK_FALSE(combo->isEnabled());
+    CHECK_FALSE(combo->toolTip().isEmpty());
 }
 
 TEST_CASE("setParams reflects lens toggle state into the checkboxes", "[adjustpanel][lens]") {

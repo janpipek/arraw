@@ -89,6 +89,7 @@ GlobalAdjustment applyGroups(
         result.hslLum = source.hslLum;
     }
     if (hasGroup(selection, DevelopGroup::Detail)) {
+        result.demosaicAlgorithm = source.demosaicAlgorithm; // re-decodes on apply (issue #22)
         result.sharpening = source.sharpening;
         result.colorNoiseReduction = source.colorNoiseReduction; // Strength (issue #59)
         result.colorNoiseReductionSmoothness = source.colorNoiseReductionSmoothness;

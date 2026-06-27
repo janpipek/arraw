@@ -1,5 +1,6 @@
 #pragma once
 
+#include "DemosaicAlgorithm.h"
 #include "DevelopSession.h"
 #include "ImagePipeline.h"
 #include "XmpSidecar.h"
@@ -19,12 +20,16 @@
 struct ResolvedLoadedImage {
     GlobalAdjustment adjustments;
     UserMetadata metadata;
+    UserMetadataPresence metadataPresence;
     DevelopSession::SidecarState sidecarState = DevelopSession::SidecarState::Unknown;
 };
 
 using EmbeddedPreviewCallback = std::function<void(ImageBuffer)>;
 
-QString decodeCacheKey(const QString& path);
+// The demosaic algorithm is part of the key: each algorithm's decode caches
+// independently, so only a never-tried algorithm pays the decode cost while
+// switching among tried ones (or undo/redo) is instant (ADR 0033).
+QString decodeCacheKey(const QString& path, DemosaicAlgorithm algo = kDefaultDemosaic);
 DevelopSession::SidecarState toSessionSidecarState(SidecarLoadStatus status);
 GlobalAdjustment resolvePendingPreviewParams(const QString& path);
 GlobalAdjustment resolveImageAdjustments(const QString& path, const QRectF& defaultCrop);
@@ -33,4 +38,5 @@ bool shouldConfirmLeavingImage(const DevelopSession& session);
 LoadResult decodeImage(
     const QString& path,
     EmbeddedPreviewCallback onPreview,
-    const std::shared_ptr<std::atomic<bool>>& cancel);
+    const std::shared_ptr<std::atomic<bool>>& cancel,
+    DemosaicAlgorithm algo = kDefaultDemosaic);

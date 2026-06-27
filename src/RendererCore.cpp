@@ -79,6 +79,11 @@ void RendererCore::initialize(QRhi* r) {
     curveLutTex->create();
     ++generation;
 
+    sensorClipDummyTex.reset(rhi->newTexture(QRhiTexture::RGBA32F, QSize(1, 1)));
+    sensorClipDummyTex->create();
+    sensorClipDummyDirty = true;
+    ++generation;
+
     toneLutTex.reset(rhi->newTexture(QRhiTexture::RGBA32F, QSize(tone::kLutSize, tone::kLutRows)));
     toneLutTex->create();
     toneLutSource.clear();
@@ -108,6 +113,7 @@ void RendererCore::release() {
     pipelines.clear();
     srb.reset();
     srbImageTex = nullptr;
+    srbSensorClipTex = nullptr;
     srbGeneration = -1;
     nrPipeExtract.reset();
     nrPipeBlurH.reset();
@@ -126,6 +132,9 @@ void RendererCore::release() {
     readbackPool.clear();
     imageTex[0].reset();
     imageTex[1].reset();
+    sensorClipTex[0].reset();
+    sensorClipTex[1].reset();
+    sensorClipDummyTex.reset();
     displayLutTex.reset();
     curveLutTex.reset();
     toneLutTex.reset();
@@ -161,6 +170,19 @@ void RendererCore::setImage(Slot slot, const ImageBuffer& buf) {
     }
     pendingImage[i] = {expandToRgba(buf), QSize(buf.width, buf.height)};
     pendingImageDirty[i] = true;
+}
+
+void RendererCore::setSensorClipMask(Slot slot, const ImageBuffer& buf) {
+    const int i = int(slot);
+    if (!buf.valid()) {
+        sensorClipTex[i].reset();
+        pendingSensorClip[i] = {};
+        pendingSensorClipDirty[i] = false;
+        ++generation;
+        return;
+    }
+    pendingSensorClip[i] = {expandToRgba(buf), QSize(buf.width, buf.height)};
+    pendingSensorClipDirty[i] = true;
 }
 
 bool RendererCore::hasImage(Slot slot) const {
@@ -228,6 +250,32 @@ void RendererCore::flushPendingUploads(QRhiResourceUpdateBatch* batch) {
         pendingImageDirty[i] = false;
     }
 
+    for (int i = 0; i < 2; ++i) {
+        if (!pendingSensorClipDirty[i])
+            continue;
+        if (!sensorClipTex[i] || sensorClipTex[i]->pixelSize() != pendingSensorClip[i].size) {
+            sensorClipTex[i].reset(rhi->newTexture(QRhiTexture::RGBA32F, pendingSensorClip[i].size));
+            sensorClipTex[i]->create();
+            ++generation;
+        }
+        batch->uploadTexture(
+            sensorClipTex[i].get(),
+            QRhiTextureUploadDescription(QRhiTextureUploadEntry(
+                0, 0, QRhiTextureSubresourceUploadDescription(pendingSensorClip[i].rgba))));
+        pendingSensorClip[i] = {};
+        pendingSensorClipDirty[i] = false;
+    }
+
+    if (sensorClipDummyDirty) {
+        const std::array<float, 4> black{};
+        const QByteArray data(reinterpret_cast<const char*>(black.data()), qsizetype(sizeof(black)));
+        batch->uploadTexture(
+            sensorClipDummyTex.get(),
+            QRhiTextureUploadDescription(
+                QRhiTextureUploadEntry(0, 0, QRhiTextureSubresourceUploadDescription(data))));
+        sensorClipDummyDirty = false;
+    }
+
     if (curveLutDirty) {
         const QByteArray data(
             reinterpret_cast<const char*>(pendingCurveLut.data()),
@@ -289,7 +337,10 @@ void RendererCore::flushPendingUploads(QRhiResourceUpdateBatch* batch) {
 // ── Pipeline / bindings ───────────────────────────────────────────────────────
 
 void RendererCore::buildBindings(
-    std::unique_ptr<QRhiShaderResourceBindings>& dst, QRhiBuffer* ub, QRhiTexture* tex) {
+    std::unique_ptr<QRhiShaderResourceBindings>& dst,
+    QRhiBuffer* ub,
+    QRhiTexture* tex,
+    QRhiTexture* sensorTex) {
     dst.reset(rhi->newShaderResourceBindings());
     dst->setBindings({
         QRhiShaderResourceBinding::uniformBuffer(
@@ -304,16 +355,19 @@ void RendererCore::buildBindings(
             3, QRhiShaderResourceBinding::FragmentStage, displayLutTex.get(), sampler.get()),
         QRhiShaderResourceBinding::sampledTexture(
             4, QRhiShaderResourceBinding::FragmentStage, toneLutTex.get(), sampler.get()),
+        QRhiShaderResourceBinding::sampledTexture(
+            5, QRhiShaderResourceBinding::FragmentStage, sensorTex, sampler.get()),
     });
     dst->create();
 }
 
-QRhiShaderResourceBindings* RendererCore::bindingsFor(QRhiTexture* tex) {
-    if (srb && srbImageTex == tex && srbGeneration == generation)
+QRhiShaderResourceBindings* RendererCore::bindingsFor(QRhiTexture* tex, QRhiTexture* sensorTex) {
+    if (srb && srbImageTex == tex && srbSensorClipTex == sensorTex && srbGeneration == generation)
         return srb.get();
 
-    buildBindings(srb, ubuf.get(), tex);
+    buildBindings(srb, ubuf.get(), tex, sensorTex);
     srbImageTex = tex;
+    srbSensorClipTex = sensorTex;
     srbGeneration = generation;
     return srb.get();
 }
@@ -451,6 +505,7 @@ void RendererCore::fillUbuf(Ubuf& ub, const FrameParams& fp) const {
     ub.wbInput = fp.wbInput ? 1 : 0;
     ub.clipWarn = (fp.clipHighlights ? 1 : 0) | (fp.clipShadows ? 2 : 0);
     ub.histoRaw = fp.histoRaw ? 1 : 0;
+    ub.sensorClipWarn = fp.sensorClip ? 1 : 0;
 
     // Local adjustments (docs/adr/0010): pack geometry and colour values into
     // the parallel vec4 arrays, honouring the 16-mask cap. Tone comes from the
@@ -534,9 +589,10 @@ void RendererCore::recordPass(
     QRhiCommandBuffer* cb,
     QRhiRenderTarget* rt,
     QRhiTexture* tex,
+    QRhiTexture* sensorTex,
     const FrameParams& fp,
     QRhiResourceUpdateBatch* batch) {
-    recordPassWith(cb, rt, fp, batch, ubuf.get(), bindingsFor(tex));
+    recordPassWith(cb, rt, fp, batch, ubuf.get(), bindingsFor(tex, sensorTex));
 }
 
 // ── Colour Noise Reduction pre-pass (docs/adr/0032) ──────────────────────────
@@ -706,18 +762,21 @@ void RendererCore::record(
     prepareToneLut(fp.adjustments);
     QRhiResourceUpdateBatch* batch = rhi->nextResourceUpdateBatch();
     flushPendingUploads(batch); // creates/recreates the slot's texture
-    QRhiTexture* tex = imageTex[int(slot)].get();
+    const int slotIndex = int(slot);
+    QRhiTexture* tex = imageTex[slotIndex].get();
+    QRhiTexture* sensorTex = sensorClipTex[slotIndex] ? sensorClipTex[slotIndex].get()
+                                                      : sensorClipDummyTex.get();
     if (nrActive(fp.adjustments)) {
         cb->resourceUpdate(batch); // apply uploads before the NR pre-passes
         tex = ensureDenoised(
             cb,
-            int(slot),
+            slotIndex,
             tex,
             fp.adjustments.colorNoiseReductionSmoothness,
             fp.adjustments.colorNoiseReduction);
         batch = rhi->nextResourceUpdateBatch(); // fresh batch for the main pass
     }
-    recordPass(cb, rt, tex, fp, batch);
+    recordPass(cb, rt, tex, sensorTex, fp, batch);
 }
 
 void RendererCore::clear(QRhiCommandBuffer* cb, QRhiRenderTarget* rt) {
@@ -769,6 +828,9 @@ QImage RendererCore::renderOffscreenTex(
     QRhiResourceUpdateBatch* batch = rhi->nextResourceUpdateBatch();
     flushPendingUploads(batch);
     QRhiTexture* tex = slotIndex >= 0 ? imageTex[slotIndex].get() : extTex;
+    QRhiTexture* sensorTex = slotIndex >= 0 && sensorClipTex[slotIndex]
+                                 ? sensorClipTex[slotIndex].get()
+                                 : sensorClipDummyTex.get();
     if (nrActive(fp.adjustments)) {
         // key 2 is the export/extTex scratch; its source texture changes every
         // call, so force a recompute rather than trust the (smoothness,strength) cache.
@@ -784,7 +846,7 @@ QImage RendererCore::renderOffscreenTex(
             fp.adjustments.colorNoiseReduction);
         batch = rhi->nextResourceUpdateBatch();
     }
-    recordPass(cb, rt.get(), tex, fp, batch);
+    recordPass(cb, rt.get(), tex, sensorTex, fp, batch);
 
     QRhiReadbackResult rr;
     QRhiResourceUpdateBatch* readBatch = rhi->nextResourceUpdateBatch();
@@ -867,12 +929,15 @@ bool RendererCore::recordOffscreenReadback(
     prepareToneLut(fp.adjustments);
     QRhiResourceUpdateBatch* batch = rhi->nextResourceUpdateBatch();
     flushPendingUploads(batch);
-    QRhiTexture* tex = imageTex[int(slot)].get();
+    const int slotIndex = int(slot);
+    QRhiTexture* tex = imageTex[slotIndex].get();
+    QRhiTexture* sensorTex = sensorClipTex[slotIndex] ? sensorClipTex[slotIndex].get()
+                                                      : sensorClipDummyTex.get();
     if (nrActive(fp.adjustments)) {
         cb->resourceUpdate(batch);
         tex = ensureDenoised(
             cb,
-            int(slot),
+            slotIndex,
             tex,
             fp.adjustments.colorNoiseReductionSmoothness,
             fp.adjustments.colorNoiseReduction);
@@ -881,9 +946,11 @@ bool RendererCore::recordOffscreenReadback(
     // Record with the target's own uniform buffer + bindings — never the shared
     // on-screen `ubuf` — so this pass cannot clobber the main pass's uniforms
     // within the frame they share (see ReadbackTarget::ubuf).
-    if (!t->srb || t->srbImageTex != tex || t->srbGeneration != generation) {
-        buildBindings(t->srb, t->ubuf.get(), tex);
+    if (!t->srb || t->srbImageTex != tex || t->srbSensorTex != sensorTex
+        || t->srbGeneration != generation) {
+        buildBindings(t->srb, t->ubuf.get(), tex, sensorTex);
         t->srbImageTex = tex;
+        t->srbSensorTex = sensorTex;
         t->srbGeneration = generation;
     }
     recordPassWith(cb, t->rt.get(), fp, batch, t->ubuf.get(), t->srb.get());

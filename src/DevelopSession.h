@@ -41,14 +41,19 @@ public:
 
     const ImageBuffer& previewForDisplay() const;
     const ImageBuffer& fullResForExport() const;
+    const ImageBuffer& sensorClipPreviewForDisplay() const;
+    const ImageBuffer& sensorClipFullResForDisplay() const;
 
     const ImageMetadata& metadata() const { return imageMetadata; }
 
     const UserMetadata& userMetadata() const { return metadata_; }
+    const UserMetadataPresence& userMetadataPresence() const { return metadataPresence; }
 
     const QRectF& defaultCrop() const { return imageDefaultCrop; }
+
     // Resolved lens-profile name (empty when none matched), for the UI label.
     const QString& lensProfileName() const { return lensModel.lensName; }
+
     const GlobalAdjustment& params() const { return adjustments; }
 
     bool baseLook() const { return useBaseLook; }
@@ -63,11 +68,17 @@ public:
         const LoadResult& result,
         const GlobalAdjustment& params,
         SidecarState sidecarState,
-        const UserMetadata& metadata = {});
+        const UserMetadata& metadata = {},
+        const UserMetadataPresence& presence = {});
+    // Replace the decoded pixel buffers in place, keeping the current develop
+    // params, dirty state, and path. Used by a demosaic re-decode (docs/adr/0033):
+    // the algorithm change is one undo-able edit, not a fresh load. Geometry
+    // (defaultCrop, lens profile) is unaffected by demosaic, so it is left as-is.
+    void swapDecodedBuffers(const LoadResult& result);
     void setParams(const GlobalAdjustment& params);
     void setLocalAdjustments(std::vector<LocalAdjustment> localAdjustments);
     void setSpots(std::vector<Spot> spots);
-    void setUserMetadata(const UserMetadata& metadata);
+    void setUserMetadata(const UserMetadata& metadata, const UserMetadataPresence& changedFields = {});
     void setBaseLook(bool on);
     void markDevelopSaved();
     void markDevelopSaveFailed();
@@ -80,6 +91,8 @@ private:
     QString currentPath;
     ImageBuffer previewBuffer;
     ImageBuffer fullResBuffer;
+    ImageBuffer sensorClipPreviewBuffer;
+    ImageBuffer sensorClipFullResBuffer;
     // Lens-corrected derivatives of the clean buffers (docs/adr/0027); empty when no
     // profile or all toggles off, in which case the clean buffer is the base. The
     // preview derivatives are eager (cheap, drives the live view); the full-res ones
@@ -90,10 +103,14 @@ private:
     ImageBuffer spottedPreviewBuffer;
     mutable ImageBuffer correctedFullResBuffer;
     mutable ImageBuffer spottedFullResBuffer;
+    ImageBuffer correctedSensorClipPreviewBuffer;
+    mutable ImageBuffer correctedSensorClipFullResBuffer;
     mutable bool fullResDerivedDirty = true;
     ImageMetadata imageMetadata;
     UserMetadata metadata_;
     UserMetadata savedMetadata;
+    UserMetadataPresence metadataPresence;
+    UserMetadataPresence savedMetadataPresence;
     QRectF imageDefaultCrop{0.0, 0.0, 1.0, 1.0};
     GlobalAdjustment adjustments;
     GlobalAdjustment savedAdjustments;

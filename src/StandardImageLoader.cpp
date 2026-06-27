@@ -19,16 +19,33 @@ LoadResult StandardImageLoader::load(const QString& path, std::shared_ptr<std::a
     const orient::Orientation seeded = orient::fromQtTransformation(int(reader.transformation()));
 
     QImage img(path);
-    if (img.isNull())
-        return {{}, {}, {}, QString("Failed to load: %1").arg(path)};
+    if (img.isNull()) {
+        LoadResult result;
+        result.error = QString("Failed to load: %1").arg(path);
+        return result;
+    }
 
     if (cancel && cancel->load())
         return {};
 
     ImageBuffer fullRes = toWorkingSpaceBuffer(img);
-    if (!fullRes.valid())
-        return {{}, {}, {}, QString("Failed to decode: %1").arg(path)};
+    if (!fullRes.valid()) {
+        LoadResult result;
+        result.error = QString("Failed to decode: %1").arg(path);
+        return result;
+    }
 
     ImageBuffer preview = downsample2x(fullRes);
-    return {std::move(fullRes), std::move(preview), {}, {}, {0.0, 0.0, 1.0, 1.0}, {}, seeded};
+    return {
+        std::move(fullRes),
+        std::move(preview),
+        {}, // sensorClipFullRes
+        {}, // sensorClipPreview
+        {}, // metadata
+        {}, // embeddedMetadata
+        {}, // embeddedMetadataPresence
+        {}, // error
+        {0.0, 0.0, 1.0, 1.0}, // defaultCrop
+        {}, // lensModel
+        seeded};
 }

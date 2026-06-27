@@ -64,13 +64,16 @@ struct Ubuf {
     qint32 histoRaw;           // 1: emit pre-clamp sRGB-linear for overflow histogram
     qint32 orientQuarterTurns; // coarse Orientation (docs/adr/0028); was pad_
     qint32 orientMirrored;     // 1 = horizontal mirror; was pad_
+    qint32 sensorClipWarn;     // Sensor Clipping overlay from RAW mosaic samples
+    qint32 pad_[3];
 };
 
-static_assert(sizeof(Ubuf) == 1616);
+static_assert(sizeof(Ubuf) == 1632);
 static_assert(offsetof(Ubuf, effectRect) == 96);
 static_assert(offsetof(Ubuf, grainSeed) == 284);
 static_assert(offsetof(Ubuf, laGeom) == 320);
 static_assert(offsetof(Ubuf, numLocalAdj) == 1600);
+static_assert(offsetof(Ubuf, sensorClipWarn) == 1616);
 
 // std140 mirror of the `nrbuf` block in shaders/nr.vert and nr_blur_*.frag — the
 // Colour Noise Reduction pre-pass uniform (docs/adr/0032). Constant for a whole
@@ -114,7 +117,8 @@ public:
         bool gamutWarn = false;
         bool clipHighlights = false; // sRGB-relative clipping overlay (docs/adr/0009)
         bool clipShadows = false;
-        bool histoRaw = false; // emit pre-clamp sRGB-linear for overflow histogram
+        bool sensorClip = false; // RAW mosaic saturation overlay, display-only
+        bool histoRaw = false;   // emit pre-clamp sRGB-linear for overflow histogram
         GlobalAdjustment adjustments;
     };
 
@@ -123,7 +127,8 @@ public:
 
     bool ready() const { return rhi != nullptr; }
 
-    void setImage(Slot slot, const ImageBuffer& buf); // invalid buf clears
+    void setImage(Slot slot, const ImageBuffer& buf);          // invalid buf clears
+    void setSensorClipMask(Slot slot, const ImageBuffer& buf); // invalid buf clears
     bool hasImage(Slot slot) const;
 
     void setCurveLut(const std::array<float, 256 * 4>& rgba);
@@ -170,6 +175,7 @@ private:
         QRhiCommandBuffer* cb,
         QRhiRenderTarget* rt,
         QRhiTexture* imageTex,
+        QRhiTexture* sensorClipTex,
         const FrameParams& fp,
         QRhiResourceUpdateBatch* batch);
     // recordPass variant driving an explicit uniform buffer + bindings, so a pass
@@ -183,7 +189,10 @@ private:
         QRhiBuffer* ub,
         QRhiShaderResourceBindings* bindings);
     void buildBindings(
-        std::unique_ptr<QRhiShaderResourceBindings>& dst, QRhiBuffer* ub, QRhiTexture* imageTex);
+        std::unique_ptr<QRhiShaderResourceBindings>& dst,
+        QRhiBuffer* ub,
+        QRhiTexture* imageTex,
+        QRhiTexture* sensorClipTex);
     QImage renderOffscreenTex(
         int slotIndex,
         QRhiTexture* extTex,
@@ -213,6 +222,7 @@ private:
         std::unique_ptr<QRhiBuffer> ubuf;
         std::unique_ptr<QRhiShaderResourceBindings> srb;
         QRhiTexture* srbImageTex = nullptr;
+        QRhiTexture* srbSensorTex = nullptr;
         int srbGeneration = -1;
     };
 
@@ -223,7 +233,7 @@ private:
     ReadbackTarget* ensureReadbackTarget(QSize size, QRhiTexture::Format fmt);
 
     QRhiGraphicsPipeline* pipelineFor(QRhiRenderPassDescriptor* rpDesc);
-    QRhiShaderResourceBindings* bindingsFor(QRhiTexture* imageTex);
+    QRhiShaderResourceBindings* bindingsFor(QRhiTexture* imageTex, QRhiTexture* sensorClipTex);
     void fillUbuf(Ubuf& ub, const FrameParams& fp) const;
 
     // Colour Noise Reduction (docs/adr/0032). Runs a cached GPU pre-pass that
@@ -245,15 +255,18 @@ private:
     std::unique_ptr<QRhiBuffer> vbuf;
     std::unique_ptr<QRhiBuffer> ubuf;
     std::unique_ptr<QRhiSampler> sampler;
-    std::unique_ptr<QRhiTexture> toneLutTex;    // 256×17: global + local Basic Tone
-    std::unique_ptr<QRhiTexture> curveLutTex;   // 256×1 RGBA32F (L R G B)
-    std::unique_ptr<QRhiTexture> displayLutTex; // N³ RGBA32F (1×1×1 dummy when unused)
-    std::unique_ptr<QRhiTexture> imageTex[2];   // indexed by Slot
+    std::unique_ptr<QRhiTexture> toneLutTex;       // 256×17: global + local Basic Tone
+    std::unique_ptr<QRhiTexture> curveLutTex;      // 256×1 RGBA32F (L R G B)
+    std::unique_ptr<QRhiTexture> displayLutTex;    // N³ RGBA32F (1×1×1 dummy when unused)
+    std::unique_ptr<QRhiTexture> imageTex[2];      // indexed by Slot
+    std::unique_ptr<QRhiTexture> sensorClipTex[2]; // indexed by Slot
+    std::unique_ptr<QRhiTexture> sensorClipDummyTex;
 
     // One srb, rebuilt when the sampled image texture or a LUT texture object
     // changes; layout is constant so it stays pipeline-compatible.
     std::unique_ptr<QRhiShaderResourceBindings> srb;
     QRhiTexture* srbImageTex = nullptr;
+    QRhiTexture* srbSensorClipTex = nullptr;
     int srbGeneration = -1;
     int generation = 0; // bumped whenever any texture is (re)created
 
@@ -270,6 +283,9 @@ private:
     QByteArray extraUploadData;
     PendingImage pendingImage[2];
     bool pendingImageDirty[2] = {false, false};
+    PendingImage pendingSensorClip[2];
+    bool pendingSensorClipDirty[2] = {false, false};
+    bool sensorClipDummyDirty = false;
     std::array<float, 256 * 4> pendingCurveLut{};
     bool curveLutDirty = false;
     tone::LutAtlas pendingToneLut;

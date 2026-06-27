@@ -181,7 +181,7 @@ set(CORE_SOURCES
     src/AdjustmentSpinBox.cpp
     src/CollapsiblePane.cpp
     src/ToneCurveWidget.cpp
-    src/ExifPanel.cpp
+    src/InfoPanel.cpp
     src/ExportWorkflow.cpp
     src/ImageMetadata.cpp
     src/FilmStripTooltip.cpp
@@ -207,6 +207,7 @@ set(CORE_SOURCES
     src/CropGeometry.cpp
     src/Orientation.cpp
     src/DevelopGroup.cpp
+    src/DemosaicAlgorithm.cpp
     src/DevelopPreset.cpp
     src/GroupChecklistDialog.cpp
     src/PresetStore.cpp
