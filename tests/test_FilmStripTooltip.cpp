@@ -1,4 +1,4 @@
-#include "FilmStripTooltip.h"
+#include "ui/FilmStripTooltip.h"
 #include <catch2/catch_test_macros.hpp>
 
 TEST_CASE("tooltipText orders cached EXIF rows and omits absent lines", "[filmstrip][tooltip]") {

@@ -1,6 +1,6 @@
 #include "ImageLoadWorkflow.h"
-#include "DemosaicAlgorithm.h"
-#include "XmpSidecar.h"
+#include "pipeline/DemosaicAlgorithm.h"
+#include "io/XmpSidecar.h"
 
 #include <catch2/catch_test_macros.hpp>
 

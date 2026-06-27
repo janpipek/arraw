@@ -1,5 +1,5 @@
-#include "RawProcessor.h"
-#include "DemosaicAlgorithm.h"
+#include "pipeline/RawProcessor.h"
+#include "pipeline/DemosaicAlgorithm.h"
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>

@@ -3,7 +3,7 @@
 // they are binned — these pin the binning so a plumbing change can't silently
 // corrupt the histogram. HistogramBins is the pure value type the Histogram
 // widget delegates to; testing it keeps the GPU out of the loop.
-#include "Histogram.h"
+#include "ui/Histogram.h"
 #include <catch2/catch_test_macros.hpp>
 #include <QImage>
 

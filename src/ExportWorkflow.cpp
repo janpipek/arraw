@@ -1,6 +1,6 @@
 #include "ExportWorkflow.h"
 
-#include "ColorManagement.h"
+#include "pipeline/ColorManagement.h"
 
 #include <algorithm>
 #include <QFileInfo>

@@ -1,6 +1,6 @@
-#include "LensCorrection.h"
-#include "LensfunSource.h"
-#include "RawProcessor.h"
+#include "pipeline/LensCorrection.h"
+#include "pipeline/LensfunSource.h"
+#include "pipeline/RawProcessor.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>

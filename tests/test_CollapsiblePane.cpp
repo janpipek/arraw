@@ -2,7 +2,7 @@
 // opposite" invariant (ADR 0012). Tested through plain QWidgets via isHidden()
 // — the explicit-hidden flag, which is meaningful even when no window is shown.
 
-#include "CollapsiblePane.h"
+#include "ui/CollapsiblePane.h"
 #include <catch2/catch_test_macros.hpp>
 #include <QApplication>
 #include <QWidget>

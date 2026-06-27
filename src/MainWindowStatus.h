@@ -1,7 +1,7 @@
 #pragma once
 
-#include "DevelopSession.h"
-#include "ImagePipeline.h"
+#include "develop/DevelopSession.h"
+#include "pipeline/ImagePipeline.h"
 
 #include <QString>
 

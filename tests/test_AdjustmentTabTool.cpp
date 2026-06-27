@@ -1,4 +1,4 @@
-#include "AdjustmentTabTool.h"
+#include "ui/AdjustmentTabTool.h"
 #include <catch2/catch_test_macros.hpp>
 
 TEST_CASE("selecting the Masks tab activates the local Mask tool", "[adjustment-tabs][tools]") {

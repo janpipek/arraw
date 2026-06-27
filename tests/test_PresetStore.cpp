@@ -1,5 +1,5 @@
-#include "DevelopGroup.h"
-#include "PresetStore.h"
+#include "develop/DevelopGroup.h"
+#include "io/PresetStore.h"
 
 #include <catch2/catch_test_macros.hpp>
 

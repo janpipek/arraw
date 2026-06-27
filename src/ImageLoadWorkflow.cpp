@@ -1,7 +1,7 @@
 #include "ImageLoadWorkflow.h"
 
-#include "RawProcessor.h"
-#include "StandardImageLoader.h"
+#include "pipeline/RawProcessor.h"
+#include "pipeline/StandardImageLoader.h"
 
 #include <QFileInfo>
 

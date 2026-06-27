@@ -1,5 +1,5 @@
-#include "ImagePipeline.h"
-#include "XmpSidecar.h"
+#include "pipeline/ImagePipeline.h"
+#include "io/XmpSidecar.h"
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include <QTemporaryDir>

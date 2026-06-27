@@ -1,5 +1,5 @@
-#include "DevelopGroup.h"
-#include "GroupChecklistDialog.h"
+#include "develop/DevelopGroup.h"
+#include "ui/GroupChecklistDialog.h"
 #include "TestApp.h"
 
 #include <catch2/catch_test_macros.hpp>

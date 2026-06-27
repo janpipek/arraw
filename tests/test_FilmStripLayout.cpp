@@ -1,4 +1,4 @@
-#include "FilmStripLayout.h"
+#include "ui/FilmStripLayout.h"
 #include <catch2/catch_test_macros.hpp>
 
 #include <QSize>

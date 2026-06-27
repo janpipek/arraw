@@ -1,5 +1,5 @@
-#include "AdjustmentPanel.h"
-#include "DemosaicAlgorithm.h"
+#include "ui/AdjustmentPanel.h"
+#include "pipeline/DemosaicAlgorithm.h"
 #include "TestApp.h"
 #include <catch2/catch_test_macros.hpp>
 

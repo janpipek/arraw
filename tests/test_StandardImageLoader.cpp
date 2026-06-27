@@ -3,7 +3,7 @@
 // QImage returns null and load() reports "Failed to load" — the symptom users hit
 // for every JPG on Windows. PNG is built into Qt Gui, so it never surfaced this.
 
-#include "StandardImageLoader.h"
+#include "pipeline/StandardImageLoader.h"
 #include <catch2/catch_test_macros.hpp>
 #include <QApplication>
 #include <QDir>

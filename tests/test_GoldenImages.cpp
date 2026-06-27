@@ -4,7 +4,7 @@
 //
 //   ARRAW_UPDATE_GOLDENS=1 ./build/tests/arraw_tests "[golden]"
 
-#include "ImageViewport.h"
+#include "ui/ImageViewport.h"
 #include "TestApp.h"
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>

@@ -1,7 +1,7 @@
-#include "DemosaicAlgorithm.h"
+#include "pipeline/DemosaicAlgorithm.h"
 
-#include "ImagePipeline.h"
-#include "XmpSidecar.h"
+#include "pipeline/ImagePipeline.h"
+#include "io/XmpSidecar.h"
 
 #include <catch2/catch_test_macros.hpp>
 

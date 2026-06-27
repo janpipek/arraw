@@ -1,9 +1,9 @@
 #pragma once
 
-#include "DemosaicAlgorithm.h"
-#include "DevelopSession.h"
-#include "ImagePipeline.h"
-#include "XmpSidecar.h"
+#include "pipeline/DemosaicAlgorithm.h"
+#include "develop/DevelopSession.h"
+#include "pipeline/ImagePipeline.h"
+#include "io/XmpSidecar.h"
 
 #include <atomic>
 #include <functional>

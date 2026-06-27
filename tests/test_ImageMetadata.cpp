@@ -1,4 +1,4 @@
-#include "ImageMetadata.h"
+#include "core/ImageMetadata.h"
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstring>

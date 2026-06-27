@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ImagePipeline.h"
+#include "pipeline/ImagePipeline.h"
 
 #include <functional>
 #include <QString>
