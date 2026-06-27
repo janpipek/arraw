@@ -93,23 +93,24 @@ follow-ups rather than bundle risky surgery into a layout change:
   independently testable and remove pipeline compute from the session. Deferred:
   it is performance-sensitive live-view code and the golden tests are GPU-skipped,
   so it warrants its own focused pass.
-- **`pipeline/RawProcessor` → `io/XmpSidecar`** — the one remaining cross-layer
-  edge. `RawProcessor` parses the XMP packet embedded in a RAW file via
-  `XmpSidecar::metadataPacketFromPacket`. The clean fix is control inversion:
-  decode emits the raw XMP *bytes* in `LoadResult`, and `ImageLoadWorkflow`
-  (shell) parses them. Deferred because the parse helper is entangled with the
-  1247-line sidecar parser (extracting it risks XMP correctness, and duplicating
-  it would violate the single-source rule), and the inversion ripples into the
-  workflow tests that inject already-parsed metadata. It is a single **acyclic**
-  edge — `io` no longer depends back on `pipeline` — so it is a contained,
-  documented debt, not a cycle.
+- **`pipeline/RawProcessor` → `io/XmpSidecar`** — _closed in #70._ This was the
+  one remaining cross-layer edge: `RawProcessor` parsed the XMP packet embedded
+  in a RAW file via `XmpSidecar::metadataPacketFromPacket`. The fix was control
+  inversion — decode now emits the raw XMP *bytes* in `LoadResult`
+  (`embeddedXmpPacket`), and `ImageLoadWorkflow` (shell, where the sidecar is
+  already parsed) interprets them, colocated with the sidecar merge. The merge
+  itself (`resolveUserMetadata`) was promoted to a pure, header-declared seam
+  taking the already-parsed packet, so it stays independently testable with no
+  XMP bytes in the test. `grep -rn '#include "io/' src/pipeline` now returns
+  nothing — the standing invariant for this layering.
 
 ## Audited edges, and what was reclassified to close them
 
 The qualified includes exposed several cross-layer edges the flat layout had
 hidden (the original "zero upward edges" check missed *sibling* edges between
-`pipeline`, `render`, and `io` — corrected here). All but the one above are
-closed, every one by **reclassifying a misfiled file**, not by relaxing a rule:
+`pipeline`, `render`, and `io` — corrected here). All are now closed — the
+sibling edges below by **reclassifying a misfiled file**, not by relaxing a
+rule, and the final `pipeline → io` edge by control inversion (#70, above):
 
 - `render → ui` (`ThemeColors`, the GPU clear colour): a dependency-free `<QColor>`
   leaf → **`core/`**.
@@ -125,4 +126,5 @@ closed, every one by **reclassifying a misfiled file**, not by relaxing a rule:
 - `io ↔ pipeline` **cycle** (`ThumbnailCache`/`DecodeCache` → `RawProcessor` →
   `XmpSidecar`): the decoded-buffer caches are session/orchestration state, not
   persistence → **`src/` root**. That severs the `io → pipeline` arm, breaking
-  the cycle and leaving only the acyclic `pipeline → io` edge above.
+  the cycle and leaving only the acyclic `pipeline → io` edge above — itself then
+  closed by the inversion in #70.
