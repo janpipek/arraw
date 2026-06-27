@@ -44,6 +44,14 @@ struct GlobalAdjustment : SharedAdjustment {
     // tint/saturation/vibrance live in SharedAdjustment, shared with
     // LocalAdjustment (docs/adr/0010).
 
+    // Filmic Highlights — a global-only Tone control (0..100, default 25; 0 = off):
+    // the shoulder + path-to-white stage applied last in the develop chain
+    // (docs/adr/0035). On by default with a gentle shoulder, like the baked
+    // highlight roll-off in Lightroom/Capture One — most photos read better with
+    // graceful highlights than a hard digital clip. Travels in the Tone Develop
+    // Group; stored arraw-native (arraw:FilmicHighlights), no Lightroom equivalent.
+    float filmicHighlights = 25.0f;
+
     // Tone curve (Luma + per-channel R/G/B), control points in [0,1]×[0,1]
     CurvePoints curveLuma;
     CurvePoints curveR;
@@ -124,7 +132,7 @@ struct LoadResult {
     ImageMetadata metadata;
     UserMetadata embeddedMetadata; // descriptive User Metadata from embedded XMP, if any
     UserMetadataPresence embeddedMetadataPresence;
-    QString error;                 // non-empty on failure
+    QString error; // non-empty on failure
     QRectF defaultCrop = {0.0, 0.0, 1.0, 1.0};
     // Lens profile resolved at decode (docs/adr/0027). Empty has* flags = no
     // profile matched; correction is applied (toggle-gated) downstream.

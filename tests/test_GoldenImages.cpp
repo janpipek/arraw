@@ -179,6 +179,14 @@ std::vector<Scenario> scenarios() {
     p.rotation = 10.0f;
     list.push_back({"crop_rotate", p});
 
+    // Filmic Highlights (docs/adr/0035): push exposure to generate headroom and
+    // saturated highlights, then exercise the shoulder + path to white.
+    p = {};
+    p.exposure = 1.5f;
+    p.saturation = 30.0f;
+    p.filmicHighlights = 80.0f;
+    list.push_back({"filmic_highlights", p});
+
     return list;
 }
 
@@ -314,6 +322,10 @@ TEST_CASE("a later Local Adjustment can recover global white headroom", "[gpu][t
 
     GlobalAdjustment globalOnly;
     globalOnly.whites = 100.0f;
+    // Isolate the headroom/recovery mechanism from the end-of-chain shoulder:
+    // Filmic Highlights defaults to 25 (docs/adr/0035) and would compress the
+    // over-white value back below 1.0, masking the headroom this test checks.
+    globalOnly.filmicHighlights = 0.0f;
     vp->setAdjustments(globalOnly);
     const QImage over = vp->renderToImage(scene, globalOnly, scene.width, scene.height);
     REQUIRE_FALSE(over.isNull());

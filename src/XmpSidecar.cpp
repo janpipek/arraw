@@ -149,7 +149,7 @@ void readDcUserMetadata(
     };
     const QDomElement description = firstDescription(document);
 
-    auto readText = [&](const char* localName, QString& target, bool UserMetadataPresence::*field) {
+    auto readText = [&](const char* localName, QString& target, bool UserMetadataPresence::* field) {
         if (const QDomElement element = firstElement(localName); !element.isNull()) {
             presence.*field = true;
             target = firstRdfLiText(element);
@@ -174,10 +174,7 @@ void readDcUserMetadata(
 
     if (!description.isNull() && description.hasAttributeNS(kNsArraw, kArrawClearedDcFields))
         applyClearedDcFields(
-            metadata,
-            presence,
-            description.attributeNS(kNsArraw, kArrawClearedDcFields));
-
+            metadata, presence, description.attributeNS(kNsArraw, kArrawClearedDcFields));
 }
 
 } // namespace
@@ -434,6 +431,8 @@ static Snapshot parseSnapshotLi(QXmlStreamReader& xml) {
             p.whites = f();
         else if (name == "arraw:Blacks")
             p.blacks = f();
+        else if (name == "arraw:FilmicHighlights")
+            p.filmicHighlights = f();
         else if (name == "arraw:Temperature")
             p.temperature = f();
         else if (name == "arraw:Tint")
@@ -595,6 +594,11 @@ SidecarLoadResult XmpSidecar::loadWithStatus(const QString& rawPath) {
             p.sharpening = attr("Sharpness", 0.0f);
             p.colorNoiseReduction = attr("ColorNoiseReduction", 0.0f); // Strength (issue #59)
             p.colorNoiseReductionSmoothness = attr("ColorNoiseReductionSmoothness", 50.0f);
+            // Filmic Highlights (docs/adr/0035): arraw-native, default 25 (on).
+            // Absent → the default, so files predating this attribute get the
+            // standard shoulder; an explicit 0 (user turned it off) is honoured.
+            if (const auto fh = xml.attributes().value(kNsArraw, "FilmicHighlights"); !fh.isEmpty())
+                p.filmicHighlights = fh.toFloat();
             p.rotation = attr("CropAngle", 0.0f);
             p.postCropVignetteAmount = attr("PostCropVignetteAmount", 0.0f);
             p.postCropVignetteMidpoint = attr("PostCropVignetteMidpoint", 50.0f);
@@ -840,14 +844,16 @@ static void writeLocalAdjustments(QXmlStreamWriter& xml, const std::vector<Local
 static void writeSnapshotState(QXmlStreamWriter& xml, const GlobalAdjustment& p) {
     auto num = [](float v) { return QString::number(double(v), 'f', 4); };
     auto el = [&](const char* name, float v) { xml.writeTextElement(kNsArraw, name, num(v)); };
-    auto flag
-        = [&](const char* name, bool v) { xml.writeTextElement(kNsArraw, name, v ? "1" : "0"); };
+    auto flag = [&](const char* name, bool v) {
+        xml.writeTextElement(kNsArraw, name, v ? "1" : "0");
+    };
     el("Exposure", p.exposure);
     el("Contrast", p.contrast);
     el("Highlights", p.highlights);
     el("Shadows", p.shadows);
     el("Whites", p.whites);
     el("Blacks", p.blacks);
+    el("FilmicHighlights", p.filmicHighlights);
     el("Temperature", p.temperature);
     el("Tint", p.tint);
     el("Saturation", p.saturation);
@@ -971,6 +977,11 @@ static QByteArray ownedPacket(const SidecarData& data) {
     write("GrainFrequency", p.grainRoughness);
     if (p.grainSeed != 0)
         xml.writeAttribute(kNsArraw, "GrainSeed", QString::number(p.grainSeed));
+    // Filmic Highlights (docs/adr/0035). arraw-native, no crs: equivalent. Written
+    // unconditionally: the default is 25 (on), so an explicit 0 (off) must persist
+    // — a skip-when-zero would read back as the default and silently re-enable it.
+    xml.writeAttribute(
+        kNsArraw, "FilmicHighlights", QString::number(double(p.filmicHighlights), 'f', 4));
     // Demosaic algorithm token (docs/adr/0033). Written only when non-default so
     // AHD sidecars (and every pre-feature file) stay byte-identical and resolve
     // to AHD via the silent fallback in demosaicFromToken.
@@ -1206,7 +1217,9 @@ bool XmpSidecar::saveMetadata(const QString& rawPath, const UserMetadata& metada
 }
 
 bool XmpSidecar::saveMetadata(
-    const QString& rawPath, const UserMetadata& metadata, const UserMetadataPresence& descriptiveFields) {
+    const QString& rawPath,
+    const UserMetadata& metadata,
+    const UserMetadataPresence& descriptiveFields) {
     SidecarData data = load(rawPath); // preserve any existing crs: edits
     data.metadata.rating = metadata.rating;
     data.metadata.label = metadata.label;

@@ -19,6 +19,7 @@ static GlobalAdjustment fullyEdited() {
     g.shadows = 40.0f;
     g.whites = 10.0f;
     g.blacks = -15.0f;
+    g.filmicHighlights = 60.0f;
     // Colour
     g.saturation = 25.0f;
     g.vibrance = -8.0f;
@@ -91,6 +92,7 @@ TEST_CASE("Selecting one group copies only that group's fields", "[developgroup]
     CHECK(result.shadows == source.shadows);
     CHECK(result.whites == source.whites);
     CHECK(result.blacks == source.blacks);
+    CHECK(result.filmicHighlights == source.filmicHighlights);
 
     // ...and nothing outside Tone moved.
     CHECK(result.temperature == target.temperature);
@@ -139,7 +141,8 @@ TEST_CASE("Detail carries the demosaic algorithm; reset returns AHD", "[developg
     CHECK(result.sharpening == source.sharpening);
 
     // Pasting an unedited Detail group (Replace semantics) resets it back to AHD.
-    const GlobalAdjustment reset = applyGroups(source, GlobalAdjustment{}, only(DevelopGroup::Detail));
+    const GlobalAdjustment reset
+        = applyGroups(source, GlobalAdjustment{}, only(DevelopGroup::Detail));
     CHECK(reset.demosaicAlgorithm == DemosaicAlgorithm::AHD);
 }
 
@@ -147,8 +150,7 @@ TEST_CASE("Lens Corrections moves only its enable toggles", "[developgroup]") {
     const GlobalAdjustment target; // defaults: all toggles off
     const GlobalAdjustment source = fullyEdited();
 
-    const GlobalAdjustment result =
-        applyGroups(target, source, only(DevelopGroup::LensCorrections));
+    const GlobalAdjustment result = applyGroups(target, source, only(DevelopGroup::LensCorrections));
 
     CHECK(result.lensCorrectDistortion == source.lensCorrectDistortion);
     CHECK(result.lensCorrectVignetting == source.lensCorrectVignetting);

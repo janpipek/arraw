@@ -468,6 +468,8 @@ void RendererCore::fillUbuf(Ubuf& ub, const FrameParams& fp) const {
     ub.wbGainB = wb[2];
     ub.saturation = g.saturation;
     ub.vibrance = g.vibrance;
+    // Highlight roll-off shoulder + path to white (docs/adr/0035); 0 = off.
+    ub.filmicHighlights = std::clamp(a.filmicHighlights / 100.0f, 0.0f, 1.0f);
     ub.postCropVignetteAmount = a.postCropVignetteAmount / 50.0f;
     ub.postCropVignetteMidpoint = std::clamp(a.postCropVignetteMidpoint / 100.0f, 0.0f, 1.0f);
     ub.postCropVignetteFeather = std::clamp(a.postCropVignetteFeather / 100.0f, 0.0f, 1.0f);

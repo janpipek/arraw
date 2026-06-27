@@ -37,78 +37,146 @@ const char* developParameterKey(DevelopParameter p) {
         return key.c_str();
     }
     switch (p) {
-    case DevelopParameter::Temperature: return "temperature";
-    case DevelopParameter::Tint: return "tint";
-    case DevelopParameter::Exposure: return "exposure";
-    case DevelopParameter::Contrast: return "contrast";
-    case DevelopParameter::Highlights: return "highlights";
-    case DevelopParameter::Shadows: return "shadows";
-    case DevelopParameter::Whites: return "whites";
-    case DevelopParameter::Blacks: return "blacks";
-    case DevelopParameter::Saturation: return "saturation";
-    case DevelopParameter::Vibrance: return "vibrance";
-    case DevelopParameter::CurveLuma: return "curveLuma";
-    case DevelopParameter::CurveRed: return "curveRed";
-    case DevelopParameter::CurveGreen: return "curveGreen";
-    case DevelopParameter::CurveBlue: return "curveBlue";
-    case DevelopParameter::Demosaic: return "demosaic";
-    case DevelopParameter::Sharpening: return "sharpening";
-    case DevelopParameter::ColorNoiseReduction: return "colorNoiseReduction";
-    case DevelopParameter::ColorNoiseReductionSmoothness: return "colorNoiseReductionSmoothness";
-    case DevelopParameter::LensDistortion: return "lensDistortion";
-    case DevelopParameter::LensVignetting: return "lensVignetting";
-    case DevelopParameter::LensChromaticAberration: return "lensChromaticAberration";
-    case DevelopParameter::Orientation: return "orientation";
-    case DevelopParameter::Straighten: return "straighten";
-    case DevelopParameter::Crop: return "crop";
-    case DevelopParameter::PostCropVignetteAmount: return "postCropVignetteAmount";
-    case DevelopParameter::PostCropVignetteMidpoint: return "postCropVignetteMidpoint";
-    case DevelopParameter::PostCropVignetteFeather: return "postCropVignetteFeather";
-    case DevelopParameter::GrainAmount: return "grainAmount";
-    case DevelopParameter::GrainSize: return "grainSize";
-    case DevelopParameter::GrainRoughness: return "grainRoughness";
-    default: return "";
+    case DevelopParameter::Temperature:
+        return "temperature";
+    case DevelopParameter::Tint:
+        return "tint";
+    case DevelopParameter::Exposure:
+        return "exposure";
+    case DevelopParameter::Contrast:
+        return "contrast";
+    case DevelopParameter::Highlights:
+        return "highlights";
+    case DevelopParameter::Shadows:
+        return "shadows";
+    case DevelopParameter::Whites:
+        return "whites";
+    case DevelopParameter::Blacks:
+        return "blacks";
+    case DevelopParameter::FilmicHighlights:
+        return "filmicHighlights";
+    case DevelopParameter::Saturation:
+        return "saturation";
+    case DevelopParameter::Vibrance:
+        return "vibrance";
+    case DevelopParameter::CurveLuma:
+        return "curveLuma";
+    case DevelopParameter::CurveRed:
+        return "curveRed";
+    case DevelopParameter::CurveGreen:
+        return "curveGreen";
+    case DevelopParameter::CurveBlue:
+        return "curveBlue";
+    case DevelopParameter::Demosaic:
+        return "demosaic";
+    case DevelopParameter::Sharpening:
+        return "sharpening";
+    case DevelopParameter::ColorNoiseReduction:
+        return "colorNoiseReduction";
+    case DevelopParameter::ColorNoiseReductionSmoothness:
+        return "colorNoiseReductionSmoothness";
+    case DevelopParameter::LensDistortion:
+        return "lensDistortion";
+    case DevelopParameter::LensVignetting:
+        return "lensVignetting";
+    case DevelopParameter::LensChromaticAberration:
+        return "lensChromaticAberration";
+    case DevelopParameter::Orientation:
+        return "orientation";
+    case DevelopParameter::Straighten:
+        return "straighten";
+    case DevelopParameter::Crop:
+        return "crop";
+    case DevelopParameter::PostCropVignetteAmount:
+        return "postCropVignetteAmount";
+    case DevelopParameter::PostCropVignetteMidpoint:
+        return "postCropVignetteMidpoint";
+    case DevelopParameter::PostCropVignetteFeather:
+        return "postCropVignetteFeather";
+    case DevelopParameter::GrainAmount:
+        return "grainAmount";
+    case DevelopParameter::GrainSize:
+        return "grainSize";
+    case DevelopParameter::GrainRoughness:
+        return "grainRoughness";
+    default:
+        return "";
     }
 }
 
 QString developParameterLabel(DevelopParameter p) {
-    const auto trDev = [](const char* s) { return QCoreApplication::translate("DevelopParameter", s); };
+    const auto trDev = [](const char* s) {
+        return QCoreApplication::translate("DevelopParameter", s);
+    };
     if (isHsl(p)) {
         const int off = hslOffset(p);
         return trDev(kHslBandLabels[off / 3]) + ' ' + trDev(kHslComponentLabels[off % 3]);
     }
     switch (p) {
-    case DevelopParameter::Temperature: return trDev("Temperature");
-    case DevelopParameter::Tint: return trDev("Tint");
-    case DevelopParameter::Exposure: return trDev("Exposure");
-    case DevelopParameter::Contrast: return trDev("Contrast");
-    case DevelopParameter::Highlights: return trDev("Highlights");
-    case DevelopParameter::Shadows: return trDev("Shadows");
-    case DevelopParameter::Whites: return trDev("Whites");
-    case DevelopParameter::Blacks: return trDev("Blacks");
-    case DevelopParameter::Saturation: return trDev("Saturation");
-    case DevelopParameter::Vibrance: return trDev("Vibrance");
-    case DevelopParameter::CurveLuma: return trDev("Luma Curve");
-    case DevelopParameter::CurveRed: return trDev("Red Curve");
-    case DevelopParameter::CurveGreen: return trDev("Green Curve");
-    case DevelopParameter::CurveBlue: return trDev("Blue Curve");
-    case DevelopParameter::Demosaic: return trDev("Demosaic");
-    case DevelopParameter::Sharpening: return trDev("Sharpening");
-    case DevelopParameter::ColorNoiseReduction: return trDev("Color Noise Reduction");
-    case DevelopParameter::ColorNoiseReductionSmoothness: return trDev("Color NR Smoothness");
-    case DevelopParameter::LensDistortion: return trDev("Distortion Correction");
-    case DevelopParameter::LensVignetting: return trDev("Vignetting Correction");
-    case DevelopParameter::LensChromaticAberration: return trDev("CA Correction");
-    case DevelopParameter::Orientation: return trDev("Orientation");
-    case DevelopParameter::Straighten: return trDev("Straighten");
-    case DevelopParameter::Crop: return trDev("Crop");
-    case DevelopParameter::PostCropVignetteAmount: return trDev("Post-Crop Vignette Amount");
-    case DevelopParameter::PostCropVignetteMidpoint: return trDev("Post-Crop Vignette Midpoint");
-    case DevelopParameter::PostCropVignetteFeather: return trDev("Post-Crop Vignette Feather");
-    case DevelopParameter::GrainAmount: return trDev("Grain Amount");
-    case DevelopParameter::GrainSize: return trDev("Grain Size");
-    case DevelopParameter::GrainRoughness: return trDev("Grain Roughness");
-    default: return {};
+    case DevelopParameter::Temperature:
+        return trDev("Temperature");
+    case DevelopParameter::Tint:
+        return trDev("Tint");
+    case DevelopParameter::Exposure:
+        return trDev("Exposure");
+    case DevelopParameter::Contrast:
+        return trDev("Contrast");
+    case DevelopParameter::Highlights:
+        return trDev("Highlights");
+    case DevelopParameter::Shadows:
+        return trDev("Shadows");
+    case DevelopParameter::Whites:
+        return trDev("Whites");
+    case DevelopParameter::Blacks:
+        return trDev("Blacks");
+    case DevelopParameter::FilmicHighlights:
+        return trDev("Filmic Highlights");
+    case DevelopParameter::Saturation:
+        return trDev("Saturation");
+    case DevelopParameter::Vibrance:
+        return trDev("Vibrance");
+    case DevelopParameter::CurveLuma:
+        return trDev("Luma Curve");
+    case DevelopParameter::CurveRed:
+        return trDev("Red Curve");
+    case DevelopParameter::CurveGreen:
+        return trDev("Green Curve");
+    case DevelopParameter::CurveBlue:
+        return trDev("Blue Curve");
+    case DevelopParameter::Demosaic:
+        return trDev("Demosaic");
+    case DevelopParameter::Sharpening:
+        return trDev("Sharpening");
+    case DevelopParameter::ColorNoiseReduction:
+        return trDev("Color Noise Reduction");
+    case DevelopParameter::ColorNoiseReductionSmoothness:
+        return trDev("Color NR Smoothness");
+    case DevelopParameter::LensDistortion:
+        return trDev("Distortion Correction");
+    case DevelopParameter::LensVignetting:
+        return trDev("Vignetting Correction");
+    case DevelopParameter::LensChromaticAberration:
+        return trDev("CA Correction");
+    case DevelopParameter::Orientation:
+        return trDev("Orientation");
+    case DevelopParameter::Straighten:
+        return trDev("Straighten");
+    case DevelopParameter::Crop:
+        return trDev("Crop");
+    case DevelopParameter::PostCropVignetteAmount:
+        return trDev("Post-Crop Vignette Amount");
+    case DevelopParameter::PostCropVignetteMidpoint:
+        return trDev("Post-Crop Vignette Midpoint");
+    case DevelopParameter::PostCropVignetteFeather:
+        return trDev("Post-Crop Vignette Feather");
+    case DevelopParameter::GrainAmount:
+        return trDev("Grain Amount");
+    case DevelopParameter::GrainSize:
+        return trDev("Grain Size");
+    case DevelopParameter::GrainRoughness:
+        return trDev("Grain Roughness");
+    default:
+        return {};
     }
 }
 
@@ -117,36 +185,46 @@ DevelopGroup developParameterGroup(DevelopParameter p) {
         return DevelopGroup::Hsl;
     switch (p) {
     case DevelopParameter::Temperature:
-    case DevelopParameter::Tint: return DevelopGroup::WhiteBalance;
+    case DevelopParameter::Tint:
+        return DevelopGroup::WhiteBalance;
     case DevelopParameter::Exposure:
     case DevelopParameter::Contrast:
     case DevelopParameter::Highlights:
     case DevelopParameter::Shadows:
     case DevelopParameter::Whites:
-    case DevelopParameter::Blacks: return DevelopGroup::Tone;
+    case DevelopParameter::Blacks:
+    case DevelopParameter::FilmicHighlights:
+        return DevelopGroup::Tone;
     case DevelopParameter::Saturation:
-    case DevelopParameter::Vibrance: return DevelopGroup::Colour;
+    case DevelopParameter::Vibrance:
+        return DevelopGroup::Colour;
     case DevelopParameter::CurveLuma:
     case DevelopParameter::CurveRed:
     case DevelopParameter::CurveGreen:
-    case DevelopParameter::CurveBlue: return DevelopGroup::ToneCurve;
+    case DevelopParameter::CurveBlue:
+        return DevelopGroup::ToneCurve;
     case DevelopParameter::Demosaic:
     case DevelopParameter::Sharpening:
     case DevelopParameter::ColorNoiseReduction:
-    case DevelopParameter::ColorNoiseReductionSmoothness: return DevelopGroup::Detail;
+    case DevelopParameter::ColorNoiseReductionSmoothness:
+        return DevelopGroup::Detail;
     case DevelopParameter::LensDistortion:
     case DevelopParameter::LensVignetting:
-    case DevelopParameter::LensChromaticAberration: return DevelopGroup::LensCorrections;
+    case DevelopParameter::LensChromaticAberration:
+        return DevelopGroup::LensCorrections;
     case DevelopParameter::Orientation:
     case DevelopParameter::Straighten:
-    case DevelopParameter::Crop: return DevelopGroup::Geometry;
+    case DevelopParameter::Crop:
+        return DevelopGroup::Geometry;
     case DevelopParameter::PostCropVignetteAmount:
     case DevelopParameter::PostCropVignetteMidpoint:
     case DevelopParameter::PostCropVignetteFeather:
     case DevelopParameter::GrainAmount:
     case DevelopParameter::GrainSize:
-    case DevelopParameter::GrainRoughness: return DevelopGroup::Effects;
-    default: return DevelopGroup::Tone;
+    case DevelopParameter::GrainRoughness:
+        return DevelopGroup::Effects;
+    default:
+        return DevelopGroup::Tone;
     }
 }
 
@@ -155,15 +233,17 @@ std::optional<FieldSpec> developParameterSpec(DevelopParameter p) {
     // former constants (now sourced from here, so the numbers live in one place).
     const FieldSpec bipolar{-100, 100, 0, 1.0f, 1.0f, 0, {}, true, 1.0f};
     const FieldSpec unipolar0{0, 100, 0, 1.0f, 1.0f, 0, {}, false, 1.0f};
+    const FieldSpec unipolar25{0, 100, 25, 1.0f, 1.0f, 0, {}, false, 1.0f};
     const FieldSpec unipolar50{0, 100, 50, 1.0f, 1.0f, 0, {}, false, 1.0f};
     const QString degrees = QString::fromUtf8("\xc2\xb0");
     if (isHsl(p)) // Hue reads in degrees (±30°); Saturation/Luminance are bipolar
-        return hslOffset(p) % 3 == 0
-            ? FieldSpec{-100, 100, 0, 1.0f, 0.3f, 1, degrees, true, 0.3f}
-            : bipolar;
+        return hslOffset(p) % 3 == 0 ? FieldSpec{-100, 100, 0, 1.0f, 0.3f, 1, degrees, true, 0.3f}
+                                     : bipolar;
     switch (p) {
-    case DevelopParameter::Temperature: return FieldSpec{2000, 12000, 5500, 1.0f, 1.0f, 0, " K", false, 50.0f};
-    case DevelopParameter::Exposure: return FieldSpec{-500, 500, 0, 0.01f, 0.01f, 2, " EV", true, 0.05f};
+    case DevelopParameter::Temperature:
+        return FieldSpec{2000, 12000, 5500, 1.0f, 1.0f, 0, " K", false, 50.0f};
+    case DevelopParameter::Exposure:
+        return FieldSpec{-500, 500, 0, 0.01f, 0.01f, 2, " EV", true, 0.05f};
     case DevelopParameter::Tint:
     case DevelopParameter::Contrast:
     case DevelopParameter::Highlights:
@@ -172,18 +252,24 @@ std::optional<FieldSpec> developParameterSpec(DevelopParameter p) {
     case DevelopParameter::Blacks:
     case DevelopParameter::Saturation:
     case DevelopParameter::Vibrance:
-    case DevelopParameter::PostCropVignetteAmount: return bipolar;
+    case DevelopParameter::PostCropVignetteAmount:
+        return bipolar;
     case DevelopParameter::Sharpening:
     case DevelopParameter::ColorNoiseReduction:
-    case DevelopParameter::GrainAmount: return unipolar0;
+    case DevelopParameter::GrainAmount:
+        return unipolar0;
+    case DevelopParameter::FilmicHighlights:
+        return unipolar25;
     case DevelopParameter::ColorNoiseReductionSmoothness:
     case DevelopParameter::PostCropVignetteMidpoint:
     case DevelopParameter::PostCropVignetteFeather:
     case DevelopParameter::GrainSize:
-    case DevelopParameter::GrainRoughness: return unipolar50;
+    case DevelopParameter::GrainRoughness:
+        return unipolar50;
     case DevelopParameter::Straighten:
         return FieldSpec{-4500, 4500, 0, 0.01f, 0.01f, 2, degrees, true, 0.10f};
-    default: return std::nullopt; // curves, crop, orientation, lens toggles
+    default:
+        return std::nullopt; // curves, crop, orientation, lens toggles
     }
 }
 
@@ -192,33 +278,59 @@ float developParameterValue(DevelopParameter p, const GlobalAdjustment& s) {
         const int off = hslOffset(p);
         const int band = off / 3;
         switch (off % 3) {
-        case 0: return s.hslHue[band];
-        case 1: return s.hslSat[band];
-        default: return s.hslLum[band];
+        case 0:
+            return s.hslHue[band];
+        case 1:
+            return s.hslSat[band];
+        default:
+            return s.hslLum[band];
         }
     }
     switch (p) {
-    case DevelopParameter::Temperature: return s.temperature;
-    case DevelopParameter::Tint: return s.tint;
-    case DevelopParameter::Exposure: return s.exposure;
-    case DevelopParameter::Contrast: return s.contrast;
-    case DevelopParameter::Highlights: return s.highlights;
-    case DevelopParameter::Shadows: return s.shadows;
-    case DevelopParameter::Whites: return s.whites;
-    case DevelopParameter::Blacks: return s.blacks;
-    case DevelopParameter::Saturation: return s.saturation;
-    case DevelopParameter::Vibrance: return s.vibrance;
-    case DevelopParameter::Sharpening: return s.sharpening;
-    case DevelopParameter::ColorNoiseReduction: return s.colorNoiseReduction;
-    case DevelopParameter::ColorNoiseReductionSmoothness: return s.colorNoiseReductionSmoothness;
-    case DevelopParameter::Straighten: return s.rotation;
-    case DevelopParameter::PostCropVignetteAmount: return s.postCropVignetteAmount;
-    case DevelopParameter::PostCropVignetteMidpoint: return s.postCropVignetteMidpoint;
-    case DevelopParameter::PostCropVignetteFeather: return s.postCropVignetteFeather;
-    case DevelopParameter::GrainAmount: return s.grainAmount;
-    case DevelopParameter::GrainSize: return s.grainSize;
-    case DevelopParameter::GrainRoughness: return s.grainRoughness;
-    default: return 0.0f; // curves, crop, orientation, lens toggles
+    case DevelopParameter::Temperature:
+        return s.temperature;
+    case DevelopParameter::Tint:
+        return s.tint;
+    case DevelopParameter::Exposure:
+        return s.exposure;
+    case DevelopParameter::Contrast:
+        return s.contrast;
+    case DevelopParameter::Highlights:
+        return s.highlights;
+    case DevelopParameter::Shadows:
+        return s.shadows;
+    case DevelopParameter::Whites:
+        return s.whites;
+    case DevelopParameter::Blacks:
+        return s.blacks;
+    case DevelopParameter::FilmicHighlights:
+        return s.filmicHighlights;
+    case DevelopParameter::Saturation:
+        return s.saturation;
+    case DevelopParameter::Vibrance:
+        return s.vibrance;
+    case DevelopParameter::Sharpening:
+        return s.sharpening;
+    case DevelopParameter::ColorNoiseReduction:
+        return s.colorNoiseReduction;
+    case DevelopParameter::ColorNoiseReductionSmoothness:
+        return s.colorNoiseReductionSmoothness;
+    case DevelopParameter::Straighten:
+        return s.rotation;
+    case DevelopParameter::PostCropVignetteAmount:
+        return s.postCropVignetteAmount;
+    case DevelopParameter::PostCropVignetteMidpoint:
+        return s.postCropVignetteMidpoint;
+    case DevelopParameter::PostCropVignetteFeather:
+        return s.postCropVignetteFeather;
+    case DevelopParameter::GrainAmount:
+        return s.grainAmount;
+    case DevelopParameter::GrainSize:
+        return s.grainSize;
+    case DevelopParameter::GrainRoughness:
+        return s.grainRoughness;
+    default:
+        return 0.0f; // curves, crop, orientation, lens toggles
     }
 }
 
@@ -228,11 +340,16 @@ QString developParameterValueText(DevelopParameter p, const GlobalAdjustment& s)
                   : QCoreApplication::translate("DevelopParameter", "off");
     };
     switch (p) {
-    case DevelopParameter::Demosaic: return demosaicToken(s.demosaicAlgorithm);
-    case DevelopParameter::LensDistortion: return onOff(s.lensCorrectDistortion);
-    case DevelopParameter::LensVignetting: return onOff(s.lensCorrectVignetting);
-    case DevelopParameter::LensChromaticAberration: return onOff(s.lensCorrectCA);
-    default: break;
+    case DevelopParameter::Demosaic:
+        return demosaicToken(s.demosaicAlgorithm);
+    case DevelopParameter::LensDistortion:
+        return onOff(s.lensCorrectDistortion);
+    case DevelopParameter::LensVignetting:
+        return onOff(s.lensCorrectVignetting);
+    case DevelopParameter::LensChromaticAberration:
+        return onOff(s.lensCorrectCA);
+    default:
+        break;
     }
     const std::optional<FieldSpec> spec = developParameterSpec(p);
     if (!spec)
@@ -245,19 +362,29 @@ bool developParameterDiffers(
     const GlobalAdjustment& a = before; // terse aliases for the comparison switch
     const GlobalAdjustment& b = after;
     switch (p) {
-    case DevelopParameter::Demosaic: return a.demosaicAlgorithm != b.demosaicAlgorithm;
-    case DevelopParameter::CurveLuma: return a.curveLuma != b.curveLuma;
-    case DevelopParameter::CurveRed: return a.curveR != b.curveR;
-    case DevelopParameter::CurveGreen: return a.curveG != b.curveG;
-    case DevelopParameter::CurveBlue: return a.curveB != b.curveB;
-    case DevelopParameter::LensDistortion: return a.lensCorrectDistortion != b.lensCorrectDistortion;
-    case DevelopParameter::LensVignetting: return a.lensCorrectVignetting != b.lensCorrectVignetting;
-    case DevelopParameter::LensChromaticAberration: return a.lensCorrectCA != b.lensCorrectCA;
-    case DevelopParameter::Orientation: return !(a.orientation == b.orientation);
+    case DevelopParameter::Demosaic:
+        return a.demosaicAlgorithm != b.demosaicAlgorithm;
+    case DevelopParameter::CurveLuma:
+        return a.curveLuma != b.curveLuma;
+    case DevelopParameter::CurveRed:
+        return a.curveR != b.curveR;
+    case DevelopParameter::CurveGreen:
+        return a.curveG != b.curveG;
+    case DevelopParameter::CurveBlue:
+        return a.curveB != b.curveB;
+    case DevelopParameter::LensDistortion:
+        return a.lensCorrectDistortion != b.lensCorrectDistortion;
+    case DevelopParameter::LensVignetting:
+        return a.lensCorrectVignetting != b.lensCorrectVignetting;
+    case DevelopParameter::LensChromaticAberration:
+        return a.lensCorrectCA != b.lensCorrectCA;
+    case DevelopParameter::Orientation:
+        return !(a.orientation == b.orientation);
     case DevelopParameter::Crop:
         return a.cropRect != b.cropRect || a.cropConstrained != b.cropConstrained;
     // Every scalar parameter (incl. HSL) is its single backing value.
-    default: return developParameterValue(p, a) != developParameterValue(p, b);
+    default:
+        return developParameterValue(p, a) != developParameterValue(p, b);
     }
 }
 

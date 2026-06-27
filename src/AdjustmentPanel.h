@@ -63,7 +63,11 @@ private:
         FieldSpec spec;
     };
 
-    SliderRow addSlider(QVBoxLayout* layout, const QString& name, const FieldSpec& spec);
+    SliderRow addSlider(
+        QVBoxLayout* layout,
+        const QString& name,
+        const FieldSpec& spec,
+        const QString& tooltip = {});
     std::vector<SliderRow*> allRows();
     void connectRow(SliderRow& row);
     void connectCurve();
@@ -84,6 +88,7 @@ private:
     SliderRow shadows;
     SliderRow whites;
     SliderRow blacks;
+    SliderRow filmicHighlights;
     SliderRow temperature;
     SliderRow tint;
     SliderRow saturation;

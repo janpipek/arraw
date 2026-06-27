@@ -27,6 +27,7 @@ enum class DevelopParameter {
     Shadows,
     Whites,
     Blacks,
+    FilmicHighlights,
     // Colour
     Saturation,
     Vibrance,

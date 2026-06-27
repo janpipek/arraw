@@ -170,6 +170,7 @@ endif()
 # can link the real code (see DESIGN.md "Testing Strategy").
 set(CORE_SOURCES
     src/BasicTone.cpp
+    src/OkLab.cpp
     src/Theme.cpp
     src/MainWindow.cpp
     src/ImageViewport.cpp

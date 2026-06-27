@@ -19,6 +19,7 @@ static GlobalAdjustment fullyEdited() {
     g.shadows = 40.0f;
     g.whites = 10.0f;
     g.blacks = -15.0f;
+    g.filmicHighlights = 60.0f; // distinct from the default 25 so the Tone group is testable
     g.saturation = 25.0f;
     g.vibrance = -8.0f;
     g.curveLuma.points = {{0.0, 0.0}, {0.4, 0.5}, {1.0, 1.0}};
@@ -121,7 +122,8 @@ TEST_CASE("developChangeLabel names a single edit by its parameter", "[developpa
     CHECK(developChangeLabel(a, b) == "Contrast +15");
 }
 
-TEST_CASE("developChangeLabel appends the new value, formatted as the panel shows it",
+TEST_CASE(
+    "developChangeLabel appends the new value, formatted as the panel shows it",
     "[developparameter]") {
     GlobalAdjustment a;
     {
@@ -156,15 +158,15 @@ TEST_CASE("developChangeLabel appends the new value, formatted as the panel show
     }
 }
 
-TEST_CASE("developChangeLabel omits a value for parameters that have none",
-    "[developparameter]") {
+TEST_CASE("developChangeLabel omits a value for parameters that have none", "[developparameter]") {
     GlobalAdjustment a;
     GlobalAdjustment b;
     b.cropRect = {0.1, 0.1, 0.8, 0.8}; // a crop has no single scalar to show
     CHECK(developChangeLabel(a, b) == "Crop");
 }
 
-TEST_CASE("developChangeLabel collapses a multi-field group edit to the group name",
+TEST_CASE(
+    "developChangeLabel collapses a multi-field group edit to the group name",
     "[developparameter]") {
     GlobalAdjustment a;
     GlobalAdjustment b; // a white-balance pick moves temperature and tint together
@@ -173,13 +175,12 @@ TEST_CASE("developChangeLabel collapses a multi-field group edit to the group na
     CHECK(developChangeLabel(a, b) == developGroupLabel(DevelopGroup::WhiteBalance));
 }
 
-TEST_CASE("developChangeLabel falls back to a generic verb across groups",
-    "[developparameter]") {
+TEST_CASE("developChangeLabel falls back to a generic verb across groups", "[developparameter]") {
     GlobalAdjustment a;
     GlobalAdjustment b;
-    b.exposure = 1.0f;        // Tone
+    b.exposure = 1.0f; // Tone
     b.cropRect = {0, 0, 1, 1};
-    b.rotation = 3.0f;        // Geometry
+    b.rotation = 3.0f; // Geometry
     CHECK(developChangeLabel(a, b) == "Adjust");
 }
 

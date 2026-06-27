@@ -22,20 +22,24 @@
 // (DevelopParameter.h). These name the spec for each kind of slider by a
 // representative parameter, so the panel and the History labels read identical
 // numbers. (Colour-NR Smoothness, like the post-crop/grain shape sliders, resets
-// to 50 — Lightroom parity — unlike Strength's 0.)
+// to 50 — Lightroom parity — unlike Strength's 0; Filmic Highlights resets to 25,
+// a gentle shoulder on by default — docs/adr/0035.)
 static const FieldSpec kExposureSpec = developParameterSpec(DevelopParameter::Exposure).value();
 static const FieldSpec kToneSpec = developParameterSpec(DevelopParameter::Contrast).value();
 static const FieldSpec kTempSpec = developParameterSpec(DevelopParameter::Temperature).value();
 static const FieldSpec kBipolarSpec = developParameterSpec(DevelopParameter::Tint).value();
 static const FieldSpec kHslHueSpec = developParameterSpec(DevelopParameter::HslRedHue).value();
 static const FieldSpec kSharpenSpec = developParameterSpec(DevelopParameter::Sharpening).value();
+static const FieldSpec kFilmicHighlightsSpec
+    = developParameterSpec(DevelopParameter::FilmicHighlights).value();
 static const FieldSpec kColorSmoothnessSpec
     = developParameterSpec(DevelopParameter::ColorNoiseReductionSmoothness).value();
 static const FieldSpec kEffectAmountSpec
     = developParameterSpec(DevelopParameter::PostCropVignetteAmount).value();
 static const FieldSpec kEffectShapeSpec
     = developParameterSpec(DevelopParameter::PostCropVignetteMidpoint).value();
-static const FieldSpec kGrainAmountSpec = developParameterSpec(DevelopParameter::GrainAmount).value();
+static const FieldSpec kGrainAmountSpec
+    = developParameterSpec(DevelopParameter::GrainAmount).value();
 static const FieldSpec kRotationSpec = developParameterSpec(DevelopParameter::Straighten).value();
 
 // Demosaic algorithms in the combo, ordered soft → sharp (Linear is a diagnostic
@@ -45,6 +49,7 @@ struct DemosaicChoice {
     const char* label;
     const char* tooltip;
 };
+
 static const DemosaicChoice kDemosaicChoices[] = {
     {DemosaicAlgorithm::VNG, "VNG", "Smooth and noise-tolerant; softer detail."},
     {DemosaicAlgorithm::AHD, "AHD (default)", "Balanced default — arraw's original decode."},
@@ -119,12 +124,49 @@ AdjustmentPanel::AdjustmentPanel(QWidget* parent)
 
     // ── Tone ──────────────────────────────────────────────────────────────────
     auto* tone = makeGroup("Tone");
-    exposure = addSlider(tone, "Exposure", kExposureSpec);
-    contrast = addSlider(tone, "Contrast", kToneSpec);
-    highlights = addSlider(tone, "Highlights", kToneSpec);
-    shadows = addSlider(tone, "Shadows", kToneSpec);
-    whites = addSlider(tone, "Whites", kToneSpec);
-    blacks = addSlider(tone, "Blacks", kToneSpec);
+    exposure = addSlider(
+        tone,
+        "Exposure",
+        kExposureSpec,
+        "Overall brightness, in stops (EV). Shifts the whole image up or down.");
+    contrast = addSlider(
+        tone,
+        "Contrast",
+        kToneSpec,
+        "Strengthens or softens the difference between light and dark tones, "
+        "pivoting around the midtones.");
+    highlights = addSlider(
+        tone,
+        "Highlights",
+        kToneSpec,
+        "Recovers or brightens the brighter tones, leaving shadows mostly untouched. "
+        "Pull it down to bring back detail in skies and bright areas.");
+    shadows = addSlider(
+        tone,
+        "Shadows",
+        kToneSpec,
+        "Lifts or deepens the darker tones, leaving highlights mostly untouched. "
+        "Raise it to open up detail in shadow areas.");
+    whites = addSlider(
+        tone,
+        "Whites",
+        kToneSpec,
+        "Sets the white point — how bright a tone has to be before it clips to pure "
+        "white. Raise for punchier highlights, lower to protect them.");
+    blacks = addSlider(
+        tone,
+        "Blacks",
+        kToneSpec,
+        "Sets the black point — how dark a tone has to be before it crushes to pure "
+        "black. Lower for deeper blacks, raise for a lifted, matte look.");
+    // Filmic Highlights (docs/adr/0035): default 25 (gentle shoulder on); 0 = off.
+    filmicHighlights = addSlider(
+        tone,
+        "Filmic Highlights",
+        kFilmicHighlightsSpec,
+        "Eases the brightest tones gracefully toward white instead of hard-clipping, "
+        "fading their colour the way film does. On by default; set to 0 to turn it "
+        "off (a hard digital clip).");
 
     // ── Tone Curve ────────────────────────────────────────────────────────────
     {
@@ -235,8 +277,8 @@ AdjustmentPanel::AdjustmentPanel(QWidget* parent)
     demosaicCombo = new QComboBox(this);
     demosaicCombo->setObjectName("demosaicCombo");
     for (const auto& choice : kDemosaicChoices)
-        demosaicCombo->addItem(
-            choice.label, static_cast<int>(choice.algo)); // tooltip set per item below
+        demosaicCombo
+            ->addItem(choice.label, static_cast<int>(choice.algo)); // tooltip set per item below
     for (int i = 0; i < demosaicCombo->count(); ++i)
         demosaicCombo->setItemData(i, kDemosaicChoices[i].tooltip, Qt::ToolTipRole);
     // Default selection matches GlobalAdjustment's default (AHD); set before the
@@ -326,7 +368,7 @@ AdjustmentPanel::AdjustmentPanel(QWidget* parent)
 // ── Slider factory ────────────────────────────────────────────────────────────
 
 AdjustmentPanel::SliderRow AdjustmentPanel::addSlider(
-    QVBoxLayout* layout, const QString& name, const FieldSpec& spec) {
+    QVBoxLayout* layout, const QString& name, const FieldSpec& spec, const QString& tooltip) {
     auto* row = new QWidget(this);
     auto* hbox = new QHBoxLayout(row);
     hbox->setContentsMargins(0, 0, 0, 0);
@@ -340,6 +382,14 @@ AdjustmentPanel::SliderRow AdjustmentPanel::addSlider(
     auto* spin = new AdjustmentSpinBox(spec, row);
     spin->setValue(spec.rawToDisplay(spec.def));
     spin->setFixedWidth(64);
+
+    // One tooltip across the whole row (label, track, and spin) so it shows
+    // wherever the pointer rests, not just over the name.
+    if (!tooltip.isEmpty()) {
+        lbl->setToolTip(tooltip);
+        sl->setToolTip(tooltip);
+        spin->setToolTip(tooltip);
+    }
 
     hbox->addWidget(lbl);
     hbox->addWidget(sl, 1);
@@ -363,13 +413,14 @@ void AdjustmentPanel::syncParams() {
     adjustments.shadows = v(shadows);
     adjustments.whites = v(whites);
     adjustments.blacks = v(blacks);
+    adjustments.filmicHighlights = v(filmicHighlights);
     adjustments.temperature = v(temperature);
     adjustments.tint = v(tint);
     adjustments.saturation = v(saturation);
     adjustments.vibrance = v(vibrance);
     if (const int i = demosaicCombo->currentIndex(); i >= 0)
-        adjustments.demosaicAlgorithm
-            = static_cast<DemosaicAlgorithm>(demosaicCombo->itemData(i).toInt());
+        adjustments.demosaicAlgorithm = static_cast<DemosaicAlgorithm>(
+            demosaicCombo->itemData(i).toInt());
     adjustments.sharpening = v(sharpening);
     adjustments.colorNoiseReduction = v(colorNoiseReduction); // Strength (issue #59)
     adjustments.colorNoiseReductionSmoothness = v(colorNoiseReductionSmoothness);
@@ -401,6 +452,7 @@ std::vector<AdjustmentPanel::SliderRow*> AdjustmentPanel::allRows() {
            &shadows,
            &whites,
            &blacks,
+           &filmicHighlights,
            &temperature,
            &tint,
            &saturation,
@@ -522,6 +574,7 @@ void AdjustmentPanel::setParams(const GlobalAdjustment& p) {
     set(shadows, p.shadows);
     set(whites, p.whites);
     set(blacks, p.blacks);
+    set(filmicHighlights, p.filmicHighlights);
     set(temperature, p.temperature);
     set(tint, p.tint);
     set(saturation, p.saturation);
@@ -590,8 +643,9 @@ void AdjustmentPanel::setLensProfileName(const QString& name) {
 void AdjustmentPanel::setDemosaicAvailable(bool available) {
     demosaicCombo->setEnabled(available);
     demosaicCombo->setToolTip(
-        available ? tr("Choose the RAW demosaic algorithm. Changing it re-decodes the image.")
-                  : tr("This sensor uses its own decode — Bayer demosaic algorithms do not apply."));
+        available
+            ? tr("Choose the RAW demosaic algorithm. Changing it re-decodes the image.")
+            : tr("This sensor uses its own decode — Bayer demosaic algorithms do not apply."));
 }
 
 // A "•" suffix marks channels whose curve is bent — otherwise a non-identity
