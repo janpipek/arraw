@@ -1,5 +1,7 @@
-#include "DevelopGroup.h"
-#include "DevelopPreset.h"
+#include "core/Orientation.h"
+#include "develop/GlobalAdjustment.h"
+#include "develop/DevelopGroup.h"
+#include "develop/DevelopPreset.h"
 
 #include <catch2/catch_test_macros.hpp>
 

@@ -1,4 +1,4 @@
-#include "ImageGrouping.h"
+#include "ui/ImageGrouping.h"
 #include <catch2/catch_test_macros.hpp>
 
 TEST_CASE("format label names a standalone file's canonical format", "[grouping]") {

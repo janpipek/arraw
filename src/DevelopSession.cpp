@@ -1,7 +1,11 @@
+#include "develop/LocalAdjustment.h"
+#include "develop/UserMetadata.h"
+#include "develop/GlobalAdjustment.h"
+#include "pipeline/LoadResult.h"
 #include "DevelopSession.h"
 
-#include "LensCorrection.h"
-#include "Spot.h"
+#include "pipeline/LensCorrection.h"
+#include "develop/Spot.h"
 
 #include <utility>
 

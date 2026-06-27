@@ -2,7 +2,7 @@
 // issue #51). The readbacks complete independently and possibly out of order;
 // this pins the matching/staleness logic that guards against emitting a
 // mismatched pair — the one failure mode the GPU smoke-run can't reliably catch.
-#include "PendingHistogram.h"
+#include "render/PendingHistogram.h"
 #include <catch2/catch_test_macros.hpp>
 #include <QImage>
 

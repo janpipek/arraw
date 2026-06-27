@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ImagePipeline.h"
+#include "develop/GlobalAdjustment.h"
 
 #include <functional>
 #include <QString>

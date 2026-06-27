@@ -1,8 +1,13 @@
 #pragma once
+#include "core/ImageMetadata.h"
+#include "develop/LocalAdjustment.h"
+#include "develop/Spot.h"
+#include "pipeline/LensCorrection.h"
 
-#include "ImagePipeline.h"
-#include "Snapshot.h"
-#include "UserMetadata.h"
+#include "develop/GlobalAdjustment.h"
+#include "pipeline/LoadResult.h"
+#include "develop/Snapshot.h"
+#include "develop/UserMetadata.h"
 
 #include <QObject>
 #include <QString>

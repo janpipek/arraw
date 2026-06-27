@@ -1,5 +1,5 @@
 #pragma once
-#include "ImagePipeline.h"
+#include "pipeline/LoadResult.h"
 #include <list>
 #include <QHash>
 #include <QString>

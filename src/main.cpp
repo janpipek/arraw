@@ -1,5 +1,5 @@
 #include "MainWindow.h"
-#include "Theme.h"
+#include "ui/Theme.h"
 #include <QApplication>
 #include <QCommandLineParser>
 #include <QDir>

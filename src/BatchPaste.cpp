@@ -1,5 +1,5 @@
 #include "BatchPaste.h"
-#include "XmpSidecar.h"
+#include "io/XmpSidecar.h"
 
 #include <utility>
 

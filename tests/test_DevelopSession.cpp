@@ -1,3 +1,10 @@
+#include "develop/DemosaicAlgorithm.h"
+#include "develop/LocalAdjustment.h"
+#include "develop/Spot.h"
+#include "develop/UserMetadata.h"
+#include "pipeline/LensCorrection.h"
+#include "develop/GlobalAdjustment.h"
+#include "pipeline/LoadResult.h"
 #include "DevelopSession.h"
 
 #include <catch2/catch_test_macros.hpp>

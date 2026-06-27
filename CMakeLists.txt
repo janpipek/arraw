@@ -169,58 +169,59 @@ endif()
 # Everything except main.cpp lives in a static library so test executables
 # can link the real code (see DESIGN.md "Testing Strategy").
 set(CORE_SOURCES
-    src/BasicTone.cpp
-    src/OkLab.cpp
-    src/Theme.cpp
+    src/develop/BasicTone.cpp
+    src/develop/WhiteBalance.cpp
+    src/pipeline/OkLab.cpp
+    src/ui/Theme.cpp
     src/MainWindow.cpp
-    src/ImageViewport.cpp
-    src/ViewportGeometry.cpp
-    src/RendererCore.cpp
-    src/AdjustmentPanel.cpp
-    src/AdjustmentTabTool.cpp
-    src/LocalAdjustmentPanel.cpp
-    src/AdjustmentSpinBox.cpp
-    src/CollapsiblePane.cpp
-    src/ToneCurveWidget.cpp
-    src/InfoPanel.cpp
+    src/ui/ImageViewport.cpp
+    src/render/ViewportGeometry.cpp
+    src/render/RendererCore.cpp
+    src/ui/AdjustmentPanel.cpp
+    src/ui/AdjustmentTabTool.cpp
+    src/ui/LocalAdjustmentPanel.cpp
+    src/ui/AdjustmentSpinBox.cpp
+    src/ui/CollapsiblePane.cpp
+    src/ui/ToneCurveWidget.cpp
+    src/ui/InfoPanel.cpp
     src/ExportWorkflow.cpp
-    src/ImageMetadata.cpp
-    src/FilmStripTooltip.cpp
-    src/Histogram.cpp
-    src/RawProcessor.cpp
-    src/StandardImageLoader.cpp
-    src/ImagePipeline.cpp
+    src/core/ImageMetadata.cpp
+    src/ui/FilmStripTooltip.cpp
+    src/ui/Histogram.cpp
+    src/pipeline/RawProcessor.cpp
+    src/pipeline/StandardImageLoader.cpp
+    src/pipeline/ImagePipeline.cpp
     src/ImageLoadWorkflow.cpp
-    src/LocalAdjustment.cpp
-    src/FieldSpec.cpp
-    src/ColorManagement.cpp
-    src/ProofingPanel.cpp
-    src/XmpSidecar.cpp
-    src/FilmStrip.cpp
-    src/FilmStripModel.cpp
-    src/ImageGrouping.cpp
-    src/FilmStripLayout.cpp
+    src/develop/LocalAdjustment.cpp
+    src/develop/FieldSpec.cpp
+    src/pipeline/ColorManagement.cpp
+    src/ui/ProofingPanel.cpp
+    src/io/XmpSidecar.cpp
+    src/ui/FilmStrip.cpp
+    src/ui/FilmStripModel.cpp
+    src/ui/ImageGrouping.cpp
+    src/ui/FilmStripLayout.cpp
     src/ThumbnailCache.cpp
     src/DecodeCache.cpp
     src/DevelopSession.cpp
-    src/ExportDialog.cpp
-    src/AboutDialog.cpp
-    src/CropGeometry.cpp
-    src/Orientation.cpp
-    src/DevelopGroup.cpp
-    src/DevelopParameter.cpp
-    src/DemosaicAlgorithm.cpp
-    src/DevelopPreset.cpp
-    src/GroupChecklistDialog.cpp
-    src/PresetStore.cpp
-    src/Spot.cpp
-    src/SpotRemovalPanel.cpp
-    src/HistoryPanel.cpp
-    src/NoiseReduction.cpp
-    src/LensCorrection.cpp
-    src/LensfunSource.cpp
+    src/ui/ExportDialog.cpp
+    src/ui/AboutDialog.cpp
+    src/core/CropGeometry.cpp
+    src/core/Orientation.cpp
+    src/develop/DevelopGroup.cpp
+    src/develop/DevelopParameter.cpp
+    src/develop/DemosaicAlgorithm.cpp
+    src/develop/DevelopPreset.cpp
+    src/ui/GroupChecklistDialog.cpp
+    src/io/PresetStore.cpp
+    src/develop/Spot.cpp
+    src/ui/SpotRemovalPanel.cpp
+    src/ui/HistoryPanel.cpp
+    src/core/NoiseReduction.cpp
+    src/pipeline/LensCorrection.cpp
+    src/pipeline/LensfunSource.cpp
     src/BatchPaste.cpp
-    src/BatchProgressDialog.cpp
+    src/ui/BatchProgressDialog.cpp
     src/MainWindowStatus.cpp
     src/ChromeHider.cpp
 )

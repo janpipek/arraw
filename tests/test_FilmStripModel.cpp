@@ -1,6 +1,7 @@
-#include "FilmStripModel.h"
+#include "core/ImageMetadata.h"
+#include "ui/FilmStripModel.h"
 #include "TestApp.h"
-#include "UserMetadata.h"
+#include "develop/UserMetadata.h"
 #include <catch2/catch_test_macros.hpp>
 
 #include <QImage>

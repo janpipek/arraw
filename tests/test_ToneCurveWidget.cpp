@@ -1,5 +1,5 @@
 #include "TestApp.h"
-#include "ToneCurveWidget.h"
+#include "ui/ToneCurveWidget.h"
 #include <catch2/catch_test_macros.hpp>
 #include <QApplication>
 #include <QMouseEvent>

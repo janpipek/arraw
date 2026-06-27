@@ -1,5 +1,5 @@
 #pragma once
-#include "ImageMetadata.h"
+#include "core/ImageMetadata.h"
 
 #include <optional>
 #include <QImage>

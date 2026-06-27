@@ -1,5 +1,6 @@
+#include "core/ImageMetadata.h"
 #include "ThumbnailCache.h"
-#include "RawProcessor.h"
+#include "pipeline/RawProcessor.h"
 #include <libraw/libraw.h>
 #include <memory>
 #include <QCryptographicHash>

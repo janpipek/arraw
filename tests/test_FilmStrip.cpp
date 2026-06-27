@@ -1,5 +1,5 @@
-#include "FilmStrip.h"
-#include "FilmStripModel.h"
+#include "ui/FilmStrip.h"
+#include "ui/FilmStripModel.h"
 #include "TestApp.h"
 
 #include <catch2/catch_test_macros.hpp>

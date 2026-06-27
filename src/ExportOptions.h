@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ColorManagement.h"
+#include "pipeline/ColorManagement.h"
 
 struct ExportOptions {
     enum class Format { JPEG, PNG, TIFF };

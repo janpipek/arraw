@@ -1,10 +1,13 @@
+#include "develop/LocalAdjustment.h"
+#include "core/ImageBuffer.h"
+#include "develop/GlobalAdjustment.h"
 // Golden-image tests for the GLSL pipeline, via the real export path
 // (ImageViewport::renderToImage) — policy, thresholds, and format are
 // docs/adr/0005. Regenerate goldens with:
 //
 //   ARRAW_UPDATE_GOLDENS=1 ./build/tests/arraw_tests "[golden]"
 
-#include "ImageViewport.h"
+#include "ui/ImageViewport.h"
 #include "TestApp.h"
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>

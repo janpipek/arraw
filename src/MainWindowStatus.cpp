@@ -1,6 +1,7 @@
+#include "core/ImageBuffer.h"
 #include "MainWindowStatus.h"
 
-#include "XmpSidecar.h"
+#include "io/XmpSidecar.h"
 
 #include <QFileInfo>
 

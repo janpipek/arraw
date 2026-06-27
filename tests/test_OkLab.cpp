@@ -1,4 +1,4 @@
-#include "OkLab.h"
+#include "pipeline/OkLab.h"
 
 #include <array>
 #include <cmath>

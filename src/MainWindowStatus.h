@@ -1,7 +1,7 @@
 #pragma once
 
 #include "DevelopSession.h"
-#include "ImagePipeline.h"
+#include "core/ImageBuffer.h"
 
 #include <QString>
 

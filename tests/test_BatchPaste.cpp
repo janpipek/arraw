@@ -1,5 +1,6 @@
+#include "develop/GlobalAdjustment.h"
 #include "BatchPaste.h"
-#include "XmpSidecar.h"
+#include "io/XmpSidecar.h"
 
 #include <catch2/catch_test_macros.hpp>
 

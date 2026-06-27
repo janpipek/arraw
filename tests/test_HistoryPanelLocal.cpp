@@ -1,5 +1,6 @@
-#include "HistoryPanel.h"
-#include "LocalAdjustmentPanel.h"
+#include "develop/LocalAdjustment.h"
+#include "ui/HistoryPanel.h"
+#include "ui/LocalAdjustmentPanel.h"
 #include "TestApp.h"
 
 #include <catch2/catch_test_macros.hpp>

@@ -1,4 +1,9 @@
-#include "DevelopGroup.h"
+#include "core/Orientation.h"
+#include "develop/DemosaicAlgorithm.h"
+#include "develop/LocalAdjustment.h"
+#include "develop/Spot.h"
+#include "develop/GlobalAdjustment.h"
+#include "develop/DevelopGroup.h"
 
 #include <catch2/catch_test_macros.hpp>
 
