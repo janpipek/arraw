@@ -53,6 +53,7 @@ add_executable(arraw_tests
     test_FilmStrip.cpp
     test_ImageGrouping.cpp
     test_ToneCurveWidget.cpp
+    test_HistoryPanelLocal.cpp
 )
 
 target_link_libraries(arraw_tests PRIVATE arraw_core Catch2::Catch2WithMain)

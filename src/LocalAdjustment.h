@@ -1,8 +1,12 @@
 #pragma once
 
+#include "FieldSpec.h"
+
 #include <QPointF>
+#include <QString>
 
 #include <variant>
+#include <vector>
 
 // A graduated ("Linear") mask: the weight ramps from 0 at p0 to 1 at p1 along
 // the line between them. Endpoints are normalised coordinates in the
@@ -94,3 +98,30 @@ RadialMask moveRadialHandle(RadialMask m, RadialHandle h, QPointF to, float aspe
 // P0/P1 move that endpoint; Center translates both points (preserving
 // orientation and spread). None returns the mask unchanged. No clamping.
 LinearMask moveHandle(LinearMask m, LinearHandle h, QPointF to);
+
+// One editable delta row of a Local Adjustment: its label, slider number-handling
+// (FieldSpec), and the field it drives. The single source of truth for the Masks
+// panel's delta sliders and for History labelling ([[spot-for-algorithms]]).
+struct LocalDeltaField {
+    const char* label; // shown in the Masks panel and the History list
+    FieldSpec spec;
+    float LocalAdjustment::* member;
+};
+
+// The delta rows in panel order (Exposure first, then the ±100 tone/colour
+// shifts plus the relative temperature).
+const std::vector<LocalDeltaField>& localDeltaFields();
+
+// The display name of the mask at `index`, matching the Masks panel list
+// ("Linear 2", "Radial 1") — the per-type ordinal in list order.
+QString maskDisplayName(const std::vector<LocalAdjustment>& list, int index);
+
+// One human label for a local-adjustment edit, derived from what changed between
+// two mask lists — descriptive, so each step is distinct in the History list:
+//   • a mask added            → "Add Linear Mask" / "Add Radial Mask"
+//   • a mask removed          → "Delete Linear Mask" / "Delete Radial Mask"
+//   • one mask's geometry moved → "Linear 2 Geometry"
+//   • one delta changed       → "Linear 2 — Exposure +0.50 EV"
+//   • anything else / nothing → "Adjust Local"
+QString localChangeLabel(
+    const std::vector<LocalAdjustment>& before, const std::vector<LocalAdjustment>& after);

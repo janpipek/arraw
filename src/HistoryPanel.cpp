@@ -36,6 +36,7 @@ HistoryPanel::HistoryPanel(QUndoStack* undoStack, QWidget* parent)
     // state pinned at the bottom. (QUndoView can't reverse, hence the hand-rolled
     // list.) Selecting a row rolls the stack to that point via setIndex().
     historyList = new QListWidget(this);
+    historyList->setObjectName("historyList");
     historyList->setSelectionMode(QAbstractItemView::SingleSelection);
     layout->addWidget(historyList, /*stretch=*/1);
 

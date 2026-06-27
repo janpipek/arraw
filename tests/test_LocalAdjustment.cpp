@@ -185,3 +185,57 @@ TEST_CASE("moveHandle repositions endpoints and translates via center", "[locala
         REQUIRE_THAT(r.p1.y(), WithinAbs(0.5, 1e-9));
     }
 }
+
+// --- History labelling: each local edit reads distinctly (docs/adr/0033) ------
+
+TEST_CASE("localChangeLabel names an added mask by its kind", "[localadj]") {
+    std::vector<LocalAdjustment> before;
+    std::vector<LocalAdjustment> after(1); // one default (Linear) mask
+    CHECK(localChangeLabel(before, after) == "Add Linear Mask");
+
+    LocalAdjustment radial;
+    radial.mask = RadialMask{};
+    CHECK(localChangeLabel(before, {radial}) == "Add Radial Mask");
+}
+
+TEST_CASE("localChangeLabel names a removed mask by its kind", "[localadj]") {
+    LocalAdjustment radial;
+    radial.mask = RadialMask{};
+    CHECK(localChangeLabel({radial}, {}) == "Delete Radial Mask");
+}
+
+TEST_CASE("localChangeLabel names a single delta change with its value", "[localadj]") {
+    std::vector<LocalAdjustment> before(1);
+    std::vector<LocalAdjustment> after(1);
+    after[0].exposure = 0.5f; // EV, signed, two decimals
+    CHECK(localChangeLabel(before, after) == QString::fromUtf8("Linear 1 \xe2\x80\x94 Exposure +0.50 EV"));
+
+    after[0] = LocalAdjustment{};
+    after[0].contrast = -20.0f;
+    CHECK(localChangeLabel(before, after) == QString::fromUtf8("Linear 1 \xe2\x80\x94 Contrast -20"));
+}
+
+TEST_CASE("localChangeLabel names a geometry move", "[localadj]") {
+    std::vector<LocalAdjustment> before(1);
+    std::vector<LocalAdjustment> after(1);
+    after[0].mask = LinearMask{{0.1, 0.1}, {0.9, 0.9}};
+    CHECK(localChangeLabel(before, after) == "Linear 1 Geometry");
+}
+
+TEST_CASE("localChangeLabel uses the panel ordinal for the changed mask", "[localadj]") {
+    // Two Linear masks then a Radial; editing the second Linear reads "Linear 2".
+    std::vector<LocalAdjustment> before(3);
+    before[2].mask = RadialMask{};
+    auto after = before;
+    after[1].shadows = 30.0f;
+    CHECK(localChangeLabel(before, after) == QString::fromUtf8("Linear 2 \xe2\x80\x94 Shadows +30"));
+}
+
+TEST_CASE("localChangeLabel falls back to the generic verb when ambiguous", "[localadj]") {
+    std::vector<LocalAdjustment> before(2);
+    auto after = before;
+    after[0].exposure = 0.5f;
+    after[1].exposure = 0.5f; // two masks changed at once
+    CHECK(localChangeLabel(before, after) == "Adjust Local");
+    CHECK(localChangeLabel(before, before) == "Adjust Local"); // nothing changed
+}

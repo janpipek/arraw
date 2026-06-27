@@ -110,7 +110,7 @@ public:
           mainWindow(mainWindow),
           before(std::move(before)),
           after(std::move(after)) {
-        setText("Adjust Local");
+        setText(localChangeLabel(this->before, this->after));
     }
 
     void undo() override;
