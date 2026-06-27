@@ -1,3 +1,4 @@
+#include "develop/GlobalAdjustment.h"
 #include "BatchPaste.h"
 #include "io/XmpSidecar.h"
 

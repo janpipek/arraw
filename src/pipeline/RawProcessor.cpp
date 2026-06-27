@@ -1,3 +1,8 @@
+#include "core/Orientation.h"
+#include "develop/DemosaicAlgorithm.h"
+#include "pipeline/LensCorrection.h"
+#include "pipeline/ImagePipeline.h"
+#include "pipeline/LoadResult.h"
 #include "pipeline/RawProcessor.h"
 #include "pipeline/ColorManagement.h"
 #include "core/ImageMetadata.h"

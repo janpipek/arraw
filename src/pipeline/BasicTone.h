@@ -1,6 +1,7 @@
 #pragma once
+#include "develop/LocalAdjustment.h"
 
-#include "pipeline/ImagePipeline.h"
+#include "develop/GlobalAdjustment.h"
 #include <array>
 #include <cmath>
 

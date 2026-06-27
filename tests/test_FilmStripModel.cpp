@@ -1,3 +1,4 @@
+#include "core/ImageMetadata.h"
 #include "ui/FilmStripModel.h"
 #include "TestApp.h"
 #include "develop/UserMetadata.h"

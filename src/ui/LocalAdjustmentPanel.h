@@ -1,6 +1,6 @@
 #pragma once
+#include "develop/LocalAdjustment.h"
 #include "develop/FieldSpec.h"
-#include "pipeline/ImagePipeline.h"
 #include <array>
 #include <vector>
 #include <QWidget>

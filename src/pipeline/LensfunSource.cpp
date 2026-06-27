@@ -1,3 +1,4 @@
+#include "pipeline/LensCorrection.h"
 #include "pipeline/LensfunSource.h"
 
 #ifndef ARRAW_HAS_LENSFUN

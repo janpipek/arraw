@@ -1,3 +1,4 @@
+#include "core/Orientation.h"
 #include "render/ViewportGeometry.h"
 
 #include <catch2/catch_approx.hpp>

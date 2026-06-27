@@ -1,5 +1,9 @@
+#include "core/Orientation.h"
+#include "develop/LocalAdjustment.h"
+#include "develop/Spot.h"
 #include "ui/ImageViewport.h"
 #include "pipeline/ImagePipeline.h"
+#include "develop/GlobalAdjustment.h"
 #include <algorithm>
 #include <cmath>
 #include <variant>

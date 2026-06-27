@@ -1,5 +1,5 @@
 #include "io/DecodeCache.h"
-#include "pipeline/ImagePipeline.h"
+#include "pipeline/LoadResult.h"
 #include <catch2/catch_test_macros.hpp>
 #include <utility>
 

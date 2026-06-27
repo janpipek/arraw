@@ -1,3 +1,5 @@
+#include "develop/DemosaicAlgorithm.h"
+#include "develop/GlobalAdjustment.h"
 #include "develop/DevelopParameter.h"
 
 #include <array>

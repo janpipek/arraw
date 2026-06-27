@@ -1,3 +1,8 @@
+#include "core/ImageMetadata.h"
+#include "develop/DemosaicAlgorithm.h"
+#include "develop/UserMetadata.h"
+#include "develop/GlobalAdjustment.h"
+#include "pipeline/LoadResult.h"
 #include "ImageLoadWorkflow.h"
 
 #include "pipeline/RawProcessor.h"

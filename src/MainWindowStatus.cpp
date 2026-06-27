@@ -1,3 +1,4 @@
+#include "core/ImageBuffer.h"
 #include "MainWindowStatus.h"
 
 #include "io/XmpSidecar.h"

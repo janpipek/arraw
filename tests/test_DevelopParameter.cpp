@@ -1,3 +1,6 @@
+#include "core/Orientation.h"
+#include "develop/DemosaicAlgorithm.h"
+#include "develop/GlobalAdjustment.h"
 #include "develop/DevelopParameter.h"
 
 #include <catch2/catch_test_macros.hpp>

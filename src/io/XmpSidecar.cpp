@@ -1,3 +1,6 @@
+#include "develop/DemosaicAlgorithm.h"
+#include "develop/UserMetadata.h"
+#include "develop/GlobalAdjustment.h"
 #include "io/XmpSidecar.h"
 #include <QBuffer>
 #include <QDir>

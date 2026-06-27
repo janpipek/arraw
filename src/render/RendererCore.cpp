@@ -1,3 +1,6 @@
+#include "develop/LocalAdjustment.h"
+#include "develop/GlobalAdjustment.h"
+#include "pipeline/ImagePipeline.h"
 #include "render/RendererCore.h"
 #include "pipeline/NoiseReduction.h"
 #include "ui/ThemeColors.h"
@@ -7,6 +10,9 @@
 #include <variant>
 #include <QFile>
 #include <QMatrix4x4>
+
+// Slider ±100 → shader uniform ±0.2 (gentler than dividing by 100 alone).
+static constexpr float kToneSliderToUniform = 500.0f;
 
 // Fullscreen quad, interleaved (x, y, u, v). V is flipped (bottom vertices get
 // v=1) because NDC Y points up (GL convention, kept by QRhi) while image row 0

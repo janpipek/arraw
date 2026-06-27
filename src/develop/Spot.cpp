@@ -1,5 +1,5 @@
 #include "develop/Spot.h"
-#include "pipeline/ImagePipeline.h"
+#include "core/ImageBuffer.h"
 
 #include <algorithm>
 #include <cmath>

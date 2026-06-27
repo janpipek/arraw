@@ -209,7 +209,7 @@ set(CORE_SOURCES
     src/core/Orientation.cpp
     src/develop/DevelopGroup.cpp
     src/develop/DevelopParameter.cpp
-    src/pipeline/DemosaicAlgorithm.cpp
+    src/develop/DemosaicAlgorithm.cpp
     src/develop/DevelopPreset.cpp
     src/ui/GroupChecklistDialog.cpp
     src/io/PresetStore.cpp

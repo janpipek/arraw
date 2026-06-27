@@ -1,3 +1,4 @@
+#include "pipeline/LoadResult.h"
 #include "pipeline/LensCorrection.h"
 #include "pipeline/LensfunSource.h"
 #include "pipeline/RawProcessor.h"

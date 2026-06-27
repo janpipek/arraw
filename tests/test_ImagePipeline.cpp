@@ -1,4 +1,7 @@
+#include "core/Orientation.h"
 #include "pipeline/ImagePipeline.h"
+#include "core/WorkingSpace.h"
+#include "develop/GlobalAdjustment.h"
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include <QFile>

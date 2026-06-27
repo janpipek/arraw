@@ -1,3 +1,4 @@
+#include "pipeline/LoadResult.h"
 // StandardImageLoader decodes non-RAW images via QImage. JPEG decoding depends on
 // Qt's qjpeg imageformats plugin being deployed next to the binary; without it
 // QImage returns null and load() reports "Failed to load" — the symptom users hit

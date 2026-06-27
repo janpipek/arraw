@@ -1,3 +1,4 @@
+#include "core/Orientation.h"
 #include "core/CropGeometry.h"
 
 #include <QPointF>

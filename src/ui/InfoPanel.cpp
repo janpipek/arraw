@@ -1,3 +1,5 @@
+#include "core/ImageMetadata.h"
+#include "develop/UserMetadata.h"
 #include "ui/InfoPanel.h"
 
 #include <QEvent>

@@ -1,3 +1,4 @@
+#include "develop/Spot.h"
 #include "ui/SpotRemovalPanel.h"
 
 #include <algorithm>

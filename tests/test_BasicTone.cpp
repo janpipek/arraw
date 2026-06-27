@@ -1,3 +1,5 @@
+#include "develop/LocalAdjustment.h"
+#include "develop/GlobalAdjustment.h"
 #include "pipeline/BasicTone.h"
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>

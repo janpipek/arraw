@@ -1,4 +1,5 @@
-#include "pipeline/DemosaicAlgorithm.h"
+#include <QString>
+#include "develop/DemosaicAlgorithm.h"
 
 int librawUserQual(DemosaicAlgorithm algo) {
     switch (algo) {

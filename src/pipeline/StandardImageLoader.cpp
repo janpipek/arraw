@@ -1,3 +1,6 @@
+#include "core/Orientation.h"
+#include "pipeline/ImagePipeline.h"
+#include "pipeline/LoadResult.h"
 #include "pipeline/StandardImageLoader.h"
 #include "pipeline/ColorManagement.h"
 #include "core/Trace.h"

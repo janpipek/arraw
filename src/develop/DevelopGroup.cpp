@@ -1,3 +1,4 @@
+#include "develop/GlobalAdjustment.h"
 #include "develop/DevelopGroup.h"
 
 #include <QObject>

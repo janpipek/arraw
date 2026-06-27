@@ -1,4 +1,6 @@
+#include "core/Orientation.h"
 #include "pipeline/ImagePipeline.h"
+#include "core/WorkingSpace.h"
 #include <algorithm>
 #include <cmath>
 

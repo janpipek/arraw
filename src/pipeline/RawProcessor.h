@@ -1,5 +1,6 @@
 #pragma once
-#include "pipeline/ImagePipeline.h"
+#include "develop/DemosaicAlgorithm.h"
+#include "pipeline/LoadResult.h"
 #include <atomic>
 #include <functional>
 #include <memory>

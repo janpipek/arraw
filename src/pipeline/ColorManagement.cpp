@@ -1,3 +1,4 @@
+#include "core/ImageBuffer.h"
 #include "pipeline/ColorManagement.h"
 #include "core/Trace.h"
 #include <algorithm>

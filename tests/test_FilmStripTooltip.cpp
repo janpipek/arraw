@@ -1,3 +1,4 @@
+#include "core/ImageMetadata.h"
 #include "ui/FilmStripTooltip.h"
 #include <catch2/catch_test_macros.hpp>
 

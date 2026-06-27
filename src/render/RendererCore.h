@@ -1,7 +1,8 @@
 #pragma once
 #include "pipeline/BasicTone.h"
 #include "pipeline/ColorManagement.h"
-#include "pipeline/ImagePipeline.h"
+#include "core/ImageBuffer.h"
+#include "develop/GlobalAdjustment.h"
 #include <array>
 #include <cstddef>
 #include <functional>

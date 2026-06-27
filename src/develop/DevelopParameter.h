@@ -2,7 +2,7 @@
 
 #include "develop/DevelopGroup.h"
 #include "develop/FieldSpec.h"
-#include "pipeline/ImagePipeline.h"
+#include "develop/GlobalAdjustment.h"
 
 #include <optional>
 #include <vector>

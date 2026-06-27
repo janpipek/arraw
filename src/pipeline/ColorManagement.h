@@ -1,5 +1,5 @@
 #pragma once
-#include "pipeline/ImagePipeline.h"
+#include "core/ImageBuffer.h"
 #include <QImage>
 #include <QList>
 

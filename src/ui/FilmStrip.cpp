@@ -1,3 +1,4 @@
+#include "develop/UserMetadata.h"
 #include "ui/FilmStrip.h"
 #include "ui/FilmStripLayout.h"
 #include "ui/FilmStripModel.h"

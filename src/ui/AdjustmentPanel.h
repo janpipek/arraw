@@ -1,6 +1,6 @@
 #pragma once
 #include "develop/FieldSpec.h"
-#include "pipeline/ImagePipeline.h"
+#include "develop/GlobalAdjustment.h"
 #include "ui/ToneCurveWidget.h"
 #include <array>
 #include <vector>

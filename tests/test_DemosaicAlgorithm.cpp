@@ -1,6 +1,6 @@
-#include "pipeline/DemosaicAlgorithm.h"
+#include "develop/DemosaicAlgorithm.h"
 
-#include "pipeline/ImagePipeline.h"
+#include "develop/GlobalAdjustment.h"
 #include "io/XmpSidecar.h"
 
 #include <catch2/catch_test_macros.hpp>

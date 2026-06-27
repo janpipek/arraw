@@ -1,3 +1,4 @@
+#include "core/WorkingSpace.h"
 #include "pipeline/OkLab.h"
 
 #include <algorithm>

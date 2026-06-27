@@ -1,3 +1,5 @@
+#include "develop/DemosaicAlgorithm.h"
+#include "develop/GlobalAdjustment.h"
 #include "ui/AdjustmentPanel.h"
 #include "ui/AdjustmentSpinBox.h"
 #include "develop/DevelopParameter.h"

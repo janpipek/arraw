@@ -1,5 +1,7 @@
+#include "core/WorkingSpace.h"
+#include "pipeline/LoadResult.h"
 #include "pipeline/RawProcessor.h"
-#include "pipeline/DemosaicAlgorithm.h"
+#include "develop/DemosaicAlgorithm.h"
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>

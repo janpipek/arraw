@@ -1,4 +1,5 @@
 #pragma once
+#include "core/ImageBuffer.h"
 
 #include <QPointF>
 #include <QString>

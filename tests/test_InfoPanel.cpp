@@ -1,3 +1,4 @@
+#include "develop/UserMetadata.h"
 #include "ui/InfoPanel.h"
 #include "TestApp.h"
 #include <catch2/catch_test_macros.hpp>

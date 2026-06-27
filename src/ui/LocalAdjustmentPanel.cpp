@@ -1,3 +1,4 @@
+#include "develop/LocalAdjustment.h"
 #include "ui/LocalAdjustmentPanel.h"
 #include "ui/AdjustmentSpinBox.h"
 

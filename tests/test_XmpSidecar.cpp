@@ -1,4 +1,8 @@
-#include "pipeline/ImagePipeline.h"
+#include "core/Orientation.h"
+#include "develop/LocalAdjustment.h"
+#include "develop/Spot.h"
+#include "develop/UserMetadata.h"
+#include "develop/GlobalAdjustment.h"
 #include "develop/Snapshot.h"
 #include "io/XmpSidecar.h"
 #include <catch2/catch_test_macros.hpp>

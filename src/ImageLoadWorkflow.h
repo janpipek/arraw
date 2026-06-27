@@ -1,8 +1,10 @@
 #pragma once
+#include "develop/UserMetadata.h"
 
-#include "pipeline/DemosaicAlgorithm.h"
+#include "develop/DemosaicAlgorithm.h"
 #include "develop/DevelopSession.h"
-#include "pipeline/ImagePipeline.h"
+#include "develop/GlobalAdjustment.h"
+#include "pipeline/LoadResult.h"
 #include "io/XmpSidecar.h"
 
 #include <atomic>

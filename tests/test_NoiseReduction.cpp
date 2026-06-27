@@ -1,4 +1,4 @@
-#include "pipeline/ImagePipeline.h"
+#include "develop/GlobalAdjustment.h"
 #include "pipeline/NoiseReduction.h"
 #include "io/XmpSidecar.h"
 

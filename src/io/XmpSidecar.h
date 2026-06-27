@@ -1,5 +1,6 @@
 #pragma once
-#include "pipeline/ImagePipeline.h"
+#include "core/Orientation.h"
+#include "develop/GlobalAdjustment.h"
 #include "develop/Snapshot.h"
 #include "develop/UserMetadata.h"
 #include <QByteArray>

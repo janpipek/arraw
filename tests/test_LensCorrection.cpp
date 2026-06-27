@@ -1,4 +1,4 @@
-#include "pipeline/ImagePipeline.h"
+#include "core/ImageBuffer.h"
 #include "pipeline/LensCorrection.h"
 
 #include <catch2/catch_test_macros.hpp>

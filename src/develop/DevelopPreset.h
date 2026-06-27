@@ -1,4 +1,5 @@
 #pragma once
+#include "develop/GlobalAdjustment.h"
 
 #include "develop/DevelopGroup.h"
 

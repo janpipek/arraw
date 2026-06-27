@@ -1,10 +1,14 @@
+#include "develop/UserMetadata.h"
+#include "develop/GlobalAdjustment.h"
+#include "pipeline/LoadResult.h"
 #include "ImageLoadWorkflow.h"
-#include "pipeline/DemosaicAlgorithm.h"
+#include "develop/DemosaicAlgorithm.h"
 #include "io/XmpSidecar.h"
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <QFile>
+#include <QImage>
 #include <QTemporaryDir>
 
 TEST_CASE("decodeCacheKey changes when file metadata changes", "[loadworkflow]") {

@@ -1,6 +1,11 @@
 #pragma once
+#include "core/ImageMetadata.h"
+#include "develop/LocalAdjustment.h"
+#include "develop/Spot.h"
+#include "pipeline/LensCorrection.h"
 
-#include "pipeline/ImagePipeline.h"
+#include "develop/GlobalAdjustment.h"
+#include "pipeline/LoadResult.h"
 #include "develop/Snapshot.h"
 #include "develop/UserMetadata.h"
 

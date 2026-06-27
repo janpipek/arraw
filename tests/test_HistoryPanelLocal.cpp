@@ -1,3 +1,4 @@
+#include "develop/LocalAdjustment.h"
 #include "ui/HistoryPanel.h"
 #include "ui/LocalAdjustmentPanel.h"
 #include "TestApp.h"

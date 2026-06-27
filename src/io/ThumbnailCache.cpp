@@ -1,3 +1,4 @@
+#include "core/ImageMetadata.h"
 #include "io/ThumbnailCache.h"
 #include "pipeline/RawProcessor.h"
 #include <libraw/libraw.h>
