@@ -5,7 +5,7 @@
 #include "pipeline/LensCorrection.h"
 #include "develop/GlobalAdjustment.h"
 #include "pipeline/LoadResult.h"
-#include "develop/DevelopSession.h"
+#include "DevelopSession.h"
 
 #include <catch2/catch_test_macros.hpp>
 

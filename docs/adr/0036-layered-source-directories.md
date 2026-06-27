@@ -78,13 +78,24 @@ follow-ups rather than bundle risky surgery into a layout change:
   `RendererCore`, ADR 0006); a tool-state-machine extraction is the obvious next
   cut. `MainWindow`'s already-extracted workflow helpers show the peel-off
   pattern to continue.
-- **`develop/DevelopSession` → `pipeline/LoadResult` + `LensCorrection`** — the
-  session bundles the loaded image (a pipeline output) with develop state
-  (ADR 0020). A real `develop → pipeline` dependency; revisit when decomposing
-  the session.
+- **`DevelopSession`'s derived-buffer cache** — the session still runs CPU
+  pipeline compute internally (`applyLensCorrection` → `applySpots`, with eager
+  preview / lazy full-res caching). Extracting that into a `pipeline/`
+  "corrected negative" component (ADR 0027) would make the subtle caching
+  independently testable and remove pipeline compute from the session. Deferred:
+  it is performance-sensitive live-view code and the golden tests are GPU-skipped,
+  so it warrants its own focused pass.
 
-The one other edge the qualified includes exposed has since been closed:
-`render/RendererCore` read `ThemeColors` (the GPU clear colour, single-sourced
-with the widget palette so the viewport surround and chrome never drift). The
-header is a dependency-free `<QColor>` leaf, so it moved `ui/ → core/` — both
-`Theme` (ui) and `RendererCore` (render) now depend *down* on it, no inversion.
+Two edges the qualified includes exposed have since been closed:
+
+- `render/RendererCore` read `ThemeColors` (the GPU clear colour, single-sourced
+  with the widget palette so the viewport surround and chrome never drift). The
+  header is a dependency-free `<QColor>` leaf, so it moved `ui/ → core/` — both
+  `Theme` (ui) and `RendererCore` (render) now depend *down* on it.
+- `develop/DevelopSession` → `pipeline/{LoadResult,LensCorrection}` was a
+  layering inversion only because the class was misfiled. `DevelopSession` is not
+  a develop-*model* type (those are the plain serializable structs it holds); it
+  is the application's current-image aggregate — a `QObject` owning the load
+  state machine, decoded buffers, and edit state, consumed only by the shell. It
+  moved to the **`src/` root** (shell tier), where depending on `pipeline` is
+  correct. `develop/` now has no upward edges at all.

@@ -2,7 +2,7 @@
 #include "develop/UserMetadata.h"
 
 #include "develop/DemosaicAlgorithm.h"
-#include "develop/DevelopSession.h"
+#include "DevelopSession.h"
 #include "develop/GlobalAdjustment.h"
 #include "pipeline/LoadResult.h"
 #include "io/XmpSidecar.h"

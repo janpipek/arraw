@@ -142,15 +142,15 @@ Detailed architectural decisions are documented in the [docs/adr/](file:///home/
 ### 0. Source Layout
 
 `src/` is organised into six dependency-ordered layers, with the application
-shell (`main.cpp`, `MainWindow`, and the workflow/orchestration helpers
-`ExportWorkflow`, `ImageLoadWorkflow`, `BatchPaste`, `MainWindowStatus`,
-`ChromeHider`) left at the `src/` root. The un-foldered root **is** the
+shell (`main.cpp`, `MainWindow`, the current-image aggregate `DevelopSession`,
+and the workflow/orchestration helpers `ExportWorkflow`, `ImageLoadWorkflow`,
+`BatchPaste`, `MainWindowStatus`, `ChromeHider`) left at the `src/` root. The un-foldered root **is** the
 application; each subdirectory is a layer it is built from (ADR 0036):
 
 | layer | holds | may depend on |
 |---|---|---|
 | `core/` | shared value types + pure geometry math + dependency-free leaves (`ImageBuffer`, `WorkingSpace`, `ImageMetadata`, `CropGeometry`, `Orientation`, `Trace`, `ThemeColors`) | — |
-| `develop/` | the adjustments model (`GlobalAdjustment`, `DevelopParameter/Group/Session/Preset`, `LocalAdjustment`, `Spot`, `DemosaicAlgorithm`, `FieldSpec`) | `core` |
+| `develop/` | the adjustments model (`GlobalAdjustment`, `DevelopParameter/Group/Preset`, `LocalAdjustment`, `Spot`, `Snapshot`, `DemosaicAlgorithm`, `FieldSpec`) | `core` |
 | `pipeline/` | CPU pixel compute (`RawProcessor`, `ColorManagement`, `OkLab`, `BasicTone`, `NoiseReduction`, `LensCorrection`, `LoadResult`, the `ImagePipeline` free functions) | `core`, `develop` |
 | `render/` | the GPU engine (`RendererCore`, `ViewportGeometry`) — shaders live in repo-root `shaders/` | `core`, `develop` |
 | `io/` | persistence (`XmpSidecar`, `PresetStore`, `DecodeCache`, `ThumbnailCache`) | `core`, `develop` |

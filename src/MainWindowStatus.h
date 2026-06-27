@@ -1,6 +1,6 @@
 #pragma once
 
-#include "develop/DevelopSession.h"
+#include "DevelopSession.h"
 #include "core/ImageBuffer.h"
 
 #include <QString>

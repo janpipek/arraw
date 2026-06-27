@@ -18,7 +18,7 @@
 #include "develop/DevelopGroup.h"
 #include "develop/DevelopParameter.h"
 #include "develop/DevelopPreset.h"
-#include "develop/DevelopSession.h"
+#include "DevelopSession.h"
 #include "ui/ExportDialog.h"
 #include "ExportWorkflow.h"
 #include "ui/FilmStrip.h"

@@ -202,7 +202,7 @@ set(CORE_SOURCES
     src/ui/FilmStripLayout.cpp
     src/io/ThumbnailCache.cpp
     src/io/DecodeCache.cpp
-    src/develop/DevelopSession.cpp
+    src/DevelopSession.cpp
     src/ui/ExportDialog.cpp
     src/ui/AboutDialog.cpp
     src/core/CropGeometry.cpp

@@ -2,7 +2,7 @@
 #include "develop/UserMetadata.h"
 #include "develop/GlobalAdjustment.h"
 #include "pipeline/LoadResult.h"
-#include "develop/DevelopSession.h"
+#include "DevelopSession.h"
 
 #include "pipeline/LensCorrection.h"
 #include "develop/Spot.h"
