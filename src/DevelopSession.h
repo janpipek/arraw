@@ -1,10 +1,13 @@
 #pragma once
 
 #include "ImagePipeline.h"
+#include "Snapshot.h"
 #include "UserMetadata.h"
 
 #include <QObject>
 #include <QString>
+
+#include <vector>
 
 /**
  * Canonical state for the image currently open in the develop view.
@@ -56,6 +59,10 @@ public:
 
     const GlobalAdjustment& params() const { return adjustments; }
 
+    // Named A/B develop states for this photo (docs/adr/0033). Persisted in the
+    // develop sidecar; mutating them marks the develop state dirty.
+    const std::vector<Snapshot>& snapshots() const { return snapshots_; }
+
     bool baseLook() const { return useBaseLook; }
 
     bool developDirty() const { return isDevelopDirty; }
@@ -69,7 +76,8 @@ public:
         const GlobalAdjustment& params,
         SidecarState sidecarState,
         const UserMetadata& metadata = {},
-        const UserMetadataPresence& presence = {});
+        const UserMetadataPresence& presence = {},
+        std::vector<Snapshot> snapshots = {});
     // Replace the decoded pixel buffers in place, keeping the current develop
     // params, dirty state, and path. Used by a demosaic re-decode (docs/adr/0033):
     // the algorithm change is one undo-able edit, not a fresh load. Geometry
@@ -78,6 +86,12 @@ public:
     void setParams(const GlobalAdjustment& params);
     void setLocalAdjustments(std::vector<LocalAdjustment> localAdjustments);
     void setSpots(std::vector<Spot> spots);
+    // Snapshot management (docs/adr/0033). Each marks the develop state dirty;
+    // MainWindow saves immediately. addSnapshot captures the given develop state
+    // under `name`; restoring a snapshot is a separate, undoable develop edit.
+    void addSnapshot(QString name, GlobalAdjustment state);
+    void renameSnapshot(int index, QString name);
+    void removeSnapshot(int index);
     void setUserMetadata(const UserMetadata& metadata, const UserMetadataPresence& changedFields = {});
     void setBaseLook(bool on);
     void markDevelopSaved();
@@ -114,6 +128,8 @@ private:
     QRectF imageDefaultCrop{0.0, 0.0, 1.0, 1.0};
     GlobalAdjustment adjustments;
     GlobalAdjustment savedAdjustments;
+    std::vector<Snapshot> snapshots_;
+    std::vector<Snapshot> savedSnapshots;
     bool isDevelopDirty = false;
     bool isMetadataDirty = false;
     bool useBaseLook = false;
@@ -123,4 +139,7 @@ private:
     void rebuildDerivedBuffers();
     void rebuildPreviewDerived();
     void ensureFullResDerived() const;
+    // Develop is dirty when either the params or the snapshot list differ from
+    // their saved baselines (docs/adr/0033).
+    void recomputeDevelopDirty();
 };

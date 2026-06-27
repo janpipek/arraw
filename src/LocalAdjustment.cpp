@@ -4,6 +4,8 @@
 #include <cmath>
 #include <limits>
 
+#include <QCoreApplication>
+
 namespace {
 constexpr double kPi = 3.14159265358979323846;
 
@@ -147,4 +149,99 @@ LinearMask moveHandle(LinearMask m, LinearHandle h, QPointF to) {
         break;
     }
     return m;
+}
+
+namespace {
+// All local deltas are ±100 except exposure (EV); local temperature is a relative
+// ±100 shift, not Kelvin. These two specs match the global sliders' number format.
+const FieldSpec kLocalExposureSpec{-500, 500, 0, 0.01f, 0.01f, 2, " EV", true, 0.05f};
+const FieldSpec kLocalBipolarSpec{-100, 100, 0, 1.0f, 1.0f, 0, {}, true, 1.0f};
+
+// Untranslated "Linear" / "Radial" for a mask's kind.
+const char* maskKindKey(const Mask& mask) {
+    return std::holds_alternative<RadialMask>(mask) ? "Radial" : "Linear";
+}
+
+QString trLocal(const char* text) {
+    return QCoreApplication::translate("LocalAdjustment", text);
+}
+} // namespace
+
+const std::vector<LocalDeltaField>& localDeltaFields() {
+    static const std::vector<LocalDeltaField> fields = {
+        {"Exposure", kLocalExposureSpec, &LocalAdjustment::exposure},
+        {"Contrast", kLocalBipolarSpec, &LocalAdjustment::contrast},
+        {"Highlights", kLocalBipolarSpec, &LocalAdjustment::highlights},
+        {"Shadows", kLocalBipolarSpec, &LocalAdjustment::shadows},
+        {"Whites", kLocalBipolarSpec, &LocalAdjustment::whites},
+        {"Blacks", kLocalBipolarSpec, &LocalAdjustment::blacks},
+        {"Temp", kLocalBipolarSpec, &LocalAdjustment::temperature},
+        {"Tint", kLocalBipolarSpec, &LocalAdjustment::tint},
+        {"Saturation", kLocalBipolarSpec, &LocalAdjustment::saturation},
+        {"Vibrance", kLocalBipolarSpec, &LocalAdjustment::vibrance},
+    };
+    return fields;
+}
+
+QString maskDisplayName(const std::vector<LocalAdjustment>& list, int index) {
+    if (index < 0 || index >= static_cast<int>(list.size()))
+        return {};
+    const char* kind = maskKindKey(list[index].mask);
+    int ordinal = 0; // count same-type masks up to and including this one
+    for (int i = 0; i <= index; ++i)
+        if (maskKindKey(list[i].mask) == kind)
+            ++ordinal;
+    return QStringLiteral("%1 %2").arg(trLocal(kind)).arg(ordinal);
+}
+
+QString localChangeLabel(
+    const std::vector<LocalAdjustment>& before, const std::vector<LocalAdjustment>& after) {
+    const QString generic = trLocal("Adjust Local");
+    if (before == after)
+        return generic;
+
+    // A mask added: the new mask is the first index where the lists diverge.
+    if (after.size() == before.size() + 1) {
+        size_t i = 0;
+        while (i < before.size() && before[i] == after[i])
+            ++i;
+        return trLocal("Add %1 Mask").arg(trLocal(maskKindKey(after[i].mask)));
+    }
+    // A mask removed.
+    if (before.size() == after.size() + 1) {
+        size_t i = 0;
+        while (i < after.size() && before[i] == after[i])
+            ++i;
+        return trLocal("Delete %1 Mask").arg(trLocal(maskKindKey(before[i].mask)));
+    }
+    if (before.size() != after.size())
+        return generic;
+
+    // Same count: name the change only if exactly one mask differs.
+    int changed = -1;
+    for (size_t i = 0; i < before.size(); ++i)
+        if (!(before[i] == after[i])) {
+            if (changed != -1)
+                return generic;
+            changed = static_cast<int>(i);
+        }
+    if (changed < 0)
+        return generic;
+
+    const LocalAdjustment& a = before[changed];
+    const LocalAdjustment& b = after[changed];
+    const QString name = maskDisplayName(after, changed);
+
+    // Geometry (endpoints / centre / radii / angle / feather / invert) moved.
+    if (!(a.mask == b.mask))
+        return trLocal("%1 Geometry").arg(name);
+
+    // A delta field changed → name it with its new value, as the panel shows it.
+    // (Each commit touches one field, so the first difference is the edit.)
+    for (const LocalDeltaField& f : localDeltaFields())
+        if (a.*(f.member) != b.*(f.member)) {
+            const QString value = f.spec.format(f.spec.fromParam(b.*(f.member)));
+            return QStringLiteral("%1 — %2 %3").arg(name, trLocal(f.label), value);
+        }
+    return generic;
 }

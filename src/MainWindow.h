@@ -19,6 +19,7 @@ class LocalAdjustmentPanel;
 class SpotRemovalPanel;
 class ProofingPanel;
 class InfoPanel;
+class HistoryPanel;
 class FilmStrip;
 class CollapsiblePane;
 class QDockWidget;
@@ -163,14 +164,26 @@ private:
     void toggleChrome();
     void restoreFocusModes();
 
+    // Snapshot management (docs/adr/0033). addCurrentAsSnapshot prompts for a
+    // name and captures the current develop state; restoreSnapshot replays one as
+    // an undoable develop step; rename/delete edit the persisted list. Each saves
+    // the sidecar immediately and refreshes the History panel.
+    void addCurrentAsSnapshot();
+    void restoreSnapshot(int index);
+    void renameSnapshot(int index, const QString& name);
+    void deleteSnapshot(int index);
+    void saveSnapshotsNow();
+
     ImageViewport* viewport;
     AdjustmentPanel* adjPanel;
     LocalAdjustmentPanel* localPanel;
     SpotRemovalPanel* spotPanel;
     ProofingPanel* proofPanel;
     InfoPanel* infoPanel;
+    HistoryPanel* historyPanel;
     FilmStrip* filmStrip;
     QDockWidget* filmStripDock;
+    QDockWidget* historyDock; // left; History list + Snapshots (docs/adr/0033)
     QDockWidget* adjustmentsDock;                     // right; collapses to a strip
     std::unique_ptr<CollapsiblePane> adjustmentsPane; // adjustmentsDock ↔ edge strip
     QToolBar* mainToolBar = nullptr;

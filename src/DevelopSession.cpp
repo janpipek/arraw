@@ -40,7 +40,8 @@ void DevelopSession::setLoadedImage(
     const GlobalAdjustment& params,
     SidecarState sidecarState,
     const UserMetadata& metadata,
-    const UserMetadataPresence& presence) {
+    const UserMetadataPresence& presence,
+    std::vector<Snapshot> snapshots) {
     currentPath = std::move(path);
     previewBuffer = result.preview;
     fullResBuffer = result.fullRes;
@@ -55,6 +56,8 @@ void DevelopSession::setLoadedImage(
     lensModel = result.lensModel;
     adjustments = params;
     savedAdjustments = params;
+    snapshots_ = snapshots;
+    savedSnapshots = std::move(snapshots);
     isDevelopDirty = false;
     isMetadataDirty = false;
     useBaseLook = false;
@@ -108,18 +111,41 @@ void DevelopSession::setParams(const GlobalAdjustment& params) {
         return; // no-op: avoids re-warping buffers when the undo command replays the same state
     adjustments = params;
     rebuildDerivedBuffers();
-    isDevelopDirty = adjustments != savedAdjustments;
+    recomputeDevelopDirty();
 }
 
 void DevelopSession::setLocalAdjustments(std::vector<LocalAdjustment> localAdjustments) {
     adjustments.localAdjustments = std::move(localAdjustments);
-    isDevelopDirty = adjustments != savedAdjustments;
+    recomputeDevelopDirty();
 }
 
 void DevelopSession::setSpots(std::vector<Spot> spots) {
     adjustments.spots = std::move(spots);
     rebuildDerivedBuffers();
-    isDevelopDirty = adjustments != savedAdjustments;
+    recomputeDevelopDirty();
+}
+
+void DevelopSession::addSnapshot(QString name, GlobalAdjustment state) {
+    snapshots_.push_back(Snapshot{std::move(name), std::move(state)});
+    recomputeDevelopDirty();
+}
+
+void DevelopSession::renameSnapshot(int index, QString name) {
+    if (index < 0 || index >= static_cast<int>(snapshots_.size()))
+        return;
+    snapshots_[static_cast<size_t>(index)].name = std::move(name);
+    recomputeDevelopDirty();
+}
+
+void DevelopSession::removeSnapshot(int index) {
+    if (index < 0 || index >= static_cast<int>(snapshots_.size()))
+        return;
+    snapshots_.erase(snapshots_.begin() + index);
+    recomputeDevelopDirty();
+}
+
+void DevelopSession::recomputeDevelopDirty() {
+    isDevelopDirty = adjustments != savedAdjustments || snapshots_ != savedSnapshots;
 }
 
 void DevelopSession::setUserMetadata(
@@ -135,12 +161,13 @@ void DevelopSession::setBaseLook(bool on) {
 
 void DevelopSession::markDevelopSaved() {
     savedAdjustments = adjustments;
+    savedSnapshots = snapshots_;
     isDevelopDirty = false;
     sidecar = SidecarState::Loaded;
 }
 
 void DevelopSession::markDevelopSaveFailed() {
-    isDevelopDirty = adjustments != savedAdjustments;
+    recomputeDevelopDirty();
     sidecar = SidecarState::WriteError;
 }
 

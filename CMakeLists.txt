@@ -207,12 +207,14 @@ set(CORE_SOURCES
     src/CropGeometry.cpp
     src/Orientation.cpp
     src/DevelopGroup.cpp
+    src/DevelopParameter.cpp
     src/DemosaicAlgorithm.cpp
     src/DevelopPreset.cpp
     src/GroupChecklistDialog.cpp
     src/PresetStore.cpp
     src/Spot.cpp
     src/SpotRemovalPanel.cpp
+    src/HistoryPanel.cpp
     src/NoiseReduction.cpp
     src/LensCorrection.cpp
     src/LensfunSource.cpp
