@@ -1,8 +1,8 @@
 #include "develop/LocalAdjustment.h"
 #include "develop/GlobalAdjustment.h"
-#include "pipeline/ImagePipeline.h"
+#include "develop/WhiteBalance.h"
 #include "render/RendererCore.h"
-#include "pipeline/NoiseReduction.h"
+#include "core/NoiseReduction.h"
 #include "core/ThemeColors.h"
 #include <algorithm>
 #include <cmath>

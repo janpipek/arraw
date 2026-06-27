@@ -15,14 +15,22 @@ root** (`main.cpp`, `MainWindow`, and the orchestration helpers `ExportWorkflow`
 
 ```
 src/
-├── <shell>     main.cpp, MainWindow, the workflow helpers
-├── core/       shared value types + pure geometry math   (no deps)
-├── develop/    the adjustments model                      depends: core
-├── pipeline/   CPU pixel compute                          depends: core, develop
-├── render/     the GPU engine                             depends: core, develop
-├── io/         persistence                                depends: core, develop
-└── ui/         reusable widgets/panels/dialogs            depends: all of the above
+├── <shell>     main.cpp, MainWindow, DevelopSession, the caches, workflow helpers
+├── core/       shared value types + pure geometry + leaf constants   (no deps)
+├── develop/    the adjustments model + model→GPU math      depends: core
+├── pipeline/   CPU pixel compute                           depends: core, develop
+├── render/     the GPU engine                              depends: core, develop
+├── io/         persistence                                 depends: core, develop
+└── ui/         reusable widgets/panels/dialogs             depends: all of the above
 ```
+
+`pipeline` and `render` are **siblings** — neither depends on the other. The
+GPU-upload math the renderer needs (`BasicTone`'s tone-LUT atlas, `WhiteBalance`'s
+gain, the `DisplayLut` value type, the `NoiseReduction` param mapping) is pure
+*model→GPU numbers*, not CPU pixel work, so it lives in `develop`/`core`, **not**
+`pipeline`. That keeps `render → {core, develop}` only. The decoded-buffer caches
+(`DecodeCache`, `ThumbnailCache`) are session/orchestration state, not
+persistence, so they sit at the shell root, not in `io`.
 
 The un-foldered root **is** the application; each subdirectory is a layer the app
 is built *from*. We deliberately did **not** create an `app/` directory: it would
@@ -85,17 +93,36 @@ follow-ups rather than bundle risky surgery into a layout change:
   independently testable and remove pipeline compute from the session. Deferred:
   it is performance-sensitive live-view code and the golden tests are GPU-skipped,
   so it warrants its own focused pass.
+- **`pipeline/RawProcessor` → `io/XmpSidecar`** — the one remaining cross-layer
+  edge. `RawProcessor` parses the XMP packet embedded in a RAW file via
+  `XmpSidecar::metadataPacketFromPacket`. The clean fix is control inversion:
+  decode emits the raw XMP *bytes* in `LoadResult`, and `ImageLoadWorkflow`
+  (shell) parses them. Deferred because the parse helper is entangled with the
+  1247-line sidecar parser (extracting it risks XMP correctness, and duplicating
+  it would violate the single-source rule), and the inversion ripples into the
+  workflow tests that inject already-parsed metadata. It is a single **acyclic**
+  edge — `io` no longer depends back on `pipeline` — so it is a contained,
+  documented debt, not a cycle.
 
-Two edges the qualified includes exposed have since been closed:
+## Audited edges, and what was reclassified to close them
 
-- `render/RendererCore` read `ThemeColors` (the GPU clear colour, single-sourced
-  with the widget palette so the viewport surround and chrome never drift). The
-  header is a dependency-free `<QColor>` leaf, so it moved `ui/ → core/` — both
-  `Theme` (ui) and `RendererCore` (render) now depend *down* on it.
-- `develop/DevelopSession` → `pipeline/{LoadResult,LensCorrection}` was a
-  layering inversion only because the class was misfiled. `DevelopSession` is not
-  a develop-*model* type (those are the plain serializable structs it holds); it
-  is the application's current-image aggregate — a `QObject` owning the load
-  state machine, decoded buffers, and edit state, consumed only by the shell. It
-  moved to the **`src/` root** (shell tier), where depending on `pipeline` is
-  correct. `develop/` now has no upward edges at all.
+The qualified includes exposed several cross-layer edges the flat layout had
+hidden (the original "zero upward edges" check missed *sibling* edges between
+`pipeline`, `render`, and `io` — corrected here). All but the one above are
+closed, every one by **reclassifying a misfiled file**, not by relaxing a rule:
+
+- `render → ui` (`ThemeColors`, the GPU clear colour): a dependency-free `<QColor>`
+  leaf → **`core/`**.
+- `render → pipeline` (`BasicTone`, `whiteBalanceGain`, `DisplayLut`,
+  `NoiseReduction`): all pure *model→GPU* math/types, not pixel work →
+  **`develop/`** (`BasicTone`, new `WhiteBalance`) and **`core/`** (`DisplayLut`,
+  `NoiseReduction`). `render` now depends only on `core`+`develop`.
+- `develop → pipeline` (`DevelopSession`): the class is the application's
+  current-image aggregate (`QObject` owning the load state machine, decoded
+  buffers, edit state; consumed only by the shell), **not** a develop-*model*
+  type (those are the plain serializable structs it holds). → **`src/` root**.
+  `develop/` now has no upward edges at all.
+- `io ↔ pipeline` **cycle** (`ThumbnailCache`/`DecodeCache` → `RawProcessor` →
+  `XmpSidecar`): the decoded-buffer caches are session/orchestration state, not
+  persistence → **`src/` root**. That severs the `io → pipeline` arm, breaking
+  the cycle and leaving only the acyclic `pipeline → io` edge above.

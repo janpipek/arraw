@@ -143,17 +143,18 @@ Detailed architectural decisions are documented in the [docs/adr/](file:///home/
 
 `src/` is organised into six dependency-ordered layers, with the application
 shell (`main.cpp`, `MainWindow`, the current-image aggregate `DevelopSession`,
-and the workflow/orchestration helpers `ExportWorkflow`, `ImageLoadWorkflow`,
+the decoded-buffer caches `DecodeCache`/`ThumbnailCache`, and the
+workflow/orchestration helpers `ExportWorkflow`, `ImageLoadWorkflow`,
 `BatchPaste`, `MainWindowStatus`, `ChromeHider`) left at the `src/` root. The un-foldered root **is** the
 application; each subdirectory is a layer it is built from (ADR 0036):
 
 | layer | holds | may depend on |
 |---|---|---|
-| `core/` | shared value types + pure geometry math + dependency-free leaves (`ImageBuffer`, `WorkingSpace`, `ImageMetadata`, `CropGeometry`, `Orientation`, `Trace`, `ThemeColors`) | — |
-| `develop/` | the adjustments model (`GlobalAdjustment`, `DevelopParameter/Group/Preset`, `LocalAdjustment`, `Spot`, `Snapshot`, `DemosaicAlgorithm`, `FieldSpec`) | `core` |
-| `pipeline/` | CPU pixel compute (`RawProcessor`, `ColorManagement`, `OkLab`, `BasicTone`, `NoiseReduction`, `LensCorrection`, `LoadResult`, the `ImagePipeline` free functions) | `core`, `develop` |
-| `render/` | the GPU engine (`RendererCore`, `ViewportGeometry`) — shaders live in repo-root `shaders/` | `core`, `develop` |
-| `io/` | persistence (`XmpSidecar`, `PresetStore`, `DecodeCache`, `ThumbnailCache`) | `core`, `develop` |
+| `core/` | shared value types + pure geometry + dependency-free leaves (`ImageBuffer`, `WorkingSpace`, `ImageMetadata`, `CropGeometry`, `Orientation`, `Trace`, `ThemeColors`, `DisplayLut`, `NoiseReduction`) | — |
+| `develop/` | the adjustments model + model→GPU math (`GlobalAdjustment`, `DevelopParameter/Group/Preset`, `LocalAdjustment`, `Spot`, `Snapshot`, `DemosaicAlgorithm`, `FieldSpec`, `BasicTone`, `WhiteBalance`) | `core` |
+| `pipeline/` | CPU pixel compute (`RawProcessor`, `ColorManagement`, `OkLab`, `LensCorrection`, `LoadResult`, the `ImagePipeline` free functions) | `core`, `develop` |
+| `render/` | the GPU engine (`RendererCore`, `ViewportGeometry`) — shaders live in repo-root `shaders/`. Sibling of `pipeline`, not above it | `core`, `develop` |
+| `io/` | persistence (`XmpSidecar`, `PresetStore`) | `core`, `develop` |
 | `ui/` | reusable widgets/panels/dialogs (`ImageViewport`, every `*Panel`, `FilmStrip*`, `Theme`, …) | all of the above |
 
 **Includes are layer-qualified from the `src/` root** (`#include

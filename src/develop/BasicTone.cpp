@@ -1,6 +1,6 @@
 #include "develop/LocalAdjustment.h"
 #include "develop/GlobalAdjustment.h"
-#include "pipeline/BasicTone.h"
+#include "develop/BasicTone.h"
 #include <algorithm>
 #include <cmath>
 

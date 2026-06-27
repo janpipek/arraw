@@ -169,7 +169,8 @@ endif()
 # Everything except main.cpp lives in a static library so test executables
 # can link the real code (see DESIGN.md "Testing Strategy").
 set(CORE_SOURCES
-    src/pipeline/BasicTone.cpp
+    src/develop/BasicTone.cpp
+    src/develop/WhiteBalance.cpp
     src/pipeline/OkLab.cpp
     src/ui/Theme.cpp
     src/MainWindow.cpp
@@ -200,8 +201,8 @@ set(CORE_SOURCES
     src/ui/FilmStripModel.cpp
     src/ui/ImageGrouping.cpp
     src/ui/FilmStripLayout.cpp
-    src/io/ThumbnailCache.cpp
-    src/io/DecodeCache.cpp
+    src/ThumbnailCache.cpp
+    src/DecodeCache.cpp
     src/DevelopSession.cpp
     src/ui/ExportDialog.cpp
     src/ui/AboutDialog.cpp
@@ -216,7 +217,7 @@ set(CORE_SOURCES
     src/develop/Spot.cpp
     src/ui/SpotRemovalPanel.cpp
     src/ui/HistoryPanel.cpp
-    src/pipeline/NoiseReduction.cpp
+    src/core/NoiseReduction.cpp
     src/pipeline/LensCorrection.cpp
     src/pipeline/LensfunSource.cpp
     src/BatchPaste.cpp

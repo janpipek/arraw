@@ -1,6 +1,6 @@
 #pragma once
-#include "pipeline/BasicTone.h"
-#include "pipeline/ColorManagement.h"
+#include "develop/BasicTone.h"
+#include "core/DisplayLut.h"
 #include "core/ImageBuffer.h"
 #include "develop/GlobalAdjustment.h"
 #include <array>

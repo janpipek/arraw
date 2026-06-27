@@ -19,17 +19,6 @@ void normalizeExposure(ImageBuffer& buf);
 // Compute a 256-entry output LUT from tone-curve control points (Fritsch-Carlson monotone spline).
 std::array<float, 256> computeCurveLUT(const std::vector<QPointF>& pts);
 
-// White balance as a per-channel multiplicative gain in linear Rec.2020
-// (docs/adr/0025): the gain is blackbody-derived so the Kelvin numbers mean
-// something, normalised so neutral (5500 K, tint 0) returns {1,1,1}. Applied as
-// c *= gain, so a black pixel stays black by construction. `kelvin` is absolute
-// (2000..12000), `tint` is in slider units (-100..100, + = green, - = magenta).
-std::array<float, 3> whiteBalanceGain(float kelvin, float tint);
-
-// Inverse of whiteBalanceGain for the WB picker: given a pre-WB pixel that the
-// user declares neutral, recover the kelvin/tint that would neutralise it.
-void whiteBalanceFromNeutral(float r, float g, float b, float& kelvin, float& tint);
-
 // Pixel size of a developed thumbnail: the source cropped to crop, scaled down so
 // its longer edge is at most maxEdge (never upscaled), aspect preserved.
 // Output pixel size of a developed thumbnail. `srcW`/`srcH` are the *native*

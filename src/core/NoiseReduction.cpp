@@ -1,4 +1,4 @@
-#include "pipeline/NoiseReduction.h"
+#include "core/NoiseReduction.h"
 
 #include <algorithm>
 

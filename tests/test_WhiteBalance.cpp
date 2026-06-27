@@ -1,7 +1,7 @@
 // White balance is a per-channel multiplicative gain (docs/adr/0025): black
 // stays black by construction, and the Kelvin numbers are blackbody-derived.
 // These exercise the CPU gain function directly — no GPU context required.
-#include "pipeline/ImagePipeline.h"
+#include "develop/WhiteBalance.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>

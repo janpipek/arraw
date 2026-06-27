@@ -31,7 +31,7 @@
 #include "MainWindowStatus.h"
 #include "ui/ProofingPanel.h"
 #include "ui/SpotRemovalPanel.h"
-#include "io/ThumbnailCache.h"
+#include "ThumbnailCache.h"
 #include "io/XmpSidecar.h"
 #include <algorithm>
 #include <cmath>

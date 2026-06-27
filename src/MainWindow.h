@@ -1,7 +1,7 @@
 #pragma once
 #include "ChromeHider.h"
 #include "core/CropGeometry.h"
-#include "io/DecodeCache.h"
+#include "DecodeCache.h"
 #include "develop/GlobalAdjustment.h"
 #include "pipeline/LoadResult.h"
 #include "io/PresetStore.h"

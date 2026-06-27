@@ -4,7 +4,7 @@
 #include "ui/FilmStripModel.h"
 #include "ui/ImageGrouping.h"
 #include "core/ImageMetadata.h"
-#include "io/ThumbnailCache.h"
+#include "ThumbnailCache.h"
 #include "io/XmpSidecar.h"
 
 #include <algorithm>

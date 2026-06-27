@@ -1,4 +1,5 @@
 #pragma once
+#include "core/DisplayLut.h"
 #include "core/ImageBuffer.h"
 #include <QImage>
 #include <QList>
@@ -21,15 +22,8 @@ QImage toOutputImage(const QImage& linearWorking, OutputProfile profile, bool si
 
 enum class ProofIntent { Perceptual, RelativeColorimetric };
 
-// 3D display LUT sampled as the shader's final stage. Indexed by sRGB-encoded
-// working-space RGB (shaper — concentrates resolution in the shadows);
-// RGB = display-encoded output, A = 1 in-gamut / 0 out-of-gamut.
-struct DisplayLut {
-    std::vector<float> data; // size³ × RGBA, red axis fastest
-    int size = 0;
-
-    bool valid() const { return size > 0 && !data.empty(); }
-};
+// DisplayLut (the 3D display LUT this builds) now lives in core/ so the renderer
+// can consume the type without a render→pipeline edge.
 
 // Build the working→[proof→]display LUT. Empty proofIcc = no proofing (plain
 // working→display, gamut alpha all 1); empty monitorIcc = sRGB display.

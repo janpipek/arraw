@@ -3,6 +3,7 @@
 #include "develop/Spot.h"
 #include "ui/ImageViewport.h"
 #include "pipeline/ImagePipeline.h"
+#include "develop/WhiteBalance.h"
 #include "develop/GlobalAdjustment.h"
 #include <algorithm>
 #include <cmath>
