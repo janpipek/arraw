@@ -6,6 +6,17 @@
 #include <utility>
 
 namespace {
+// The lens-corrected and spotted buffers are a pure function of the source
+// buffers, the lens profile, the three lens-correction toggles, and the spots
+// list — never of tone/colour/curve/WB/crop, which the GPU shader applies live.
+// Re-warping them is expensive (a full-resolution CPU resample), so it must run
+// only when one of these inputs actually changes, not on every slider tick.
+bool derivedBufferInputsDiffer(const GlobalAdjustment& a, const GlobalAdjustment& b) {
+    return a.lensCorrectDistortion != b.lensCorrectDistortion
+           || a.lensCorrectVignetting != b.lensCorrectVignetting
+           || a.lensCorrectCA != b.lensCorrectCA || a.spots != b.spots;
+}
+
 std::vector<Spot> scaleSpots(const std::vector<Spot>& spots, double sx, double sy) {
     std::vector<Spot> out = spots;
     for (Spot& s : out) {
@@ -109,8 +120,10 @@ const ImageBuffer& DevelopSession::sensorClipFullResForDisplay() const {
 void DevelopSession::setParams(const GlobalAdjustment& params) {
     if (params == adjustments)
         return; // no-op: avoids re-warping buffers when the undo command replays the same state
+    const bool rebuild = derivedBufferInputsDiffer(adjustments, params);
     adjustments = params;
-    rebuildDerivedBuffers();
+    if (rebuild)
+        rebuildDerivedBuffers(); // skip the costly warp when only shader-side params changed
     recomputeDevelopDirty();
 }
 
