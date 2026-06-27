@@ -1,5 +1,5 @@
 Name:           arraw
-Version:        0.2.2
+Version:        0.2.3
 Release:        %{?snapshot_release}%{!?snapshot_release:1}%{?dist}
 Summary:        Lightweight RAW photo editor
 
@@ -59,6 +59,19 @@ appstreamcli validate --no-net \
 %{_datadir}/icons/hicolor/*/apps/io.github.janpipek.arraw.png
 
 %changelog
+* Sat Jun 27 2026 Jan Pipek <janpipek@users.noreply.github.com> - 0.2.3-1
+- Add lensfun-backed lens corrections for distortion, vignetting, and chromatic aberration
+- Add GPU Colour Noise Reduction with separate Strength and Smoothness controls
+- Add a RAW sensor clipping overlay for saturated photosites
+- Add Demosaic Algorithm selection with re-decode through the load path
+- Add editable descriptive User Metadata in the Info Panel
+- Add a History panel with descriptive per-adjustment step labels
+- Drive Mask and Spot on-image tools from their adjustment tabs
+- Fix local-adjustment mask placement when crop or rotation is active
+- Preserve zoom and pan across demosaic re-decodes
+- Ship lensfun support and its profile database in Linux release artifacts
+- Add an About dialog and refresh installation, shortcut, and README documentation
+
 * Sun Jun 22 2026 Jan Pipek <janpipek@users.noreply.github.com> - 0.2.2-1
 - Index the tone LUT in the perceptual domain for better shadow detail
 - Show a format label (ARW/JPEG/ARW+JPEG) on every filmstrip cell
