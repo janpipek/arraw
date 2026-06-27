@@ -20,7 +20,8 @@ public:
     static LoadResult load(
         const QString& path,
         std::function<void(ImageBuffer)> onEmbeddedPreview = nullptr,
-        std::shared_ptr<std::atomic<bool>> cancel = nullptr);
+        std::shared_ptr<std::atomic<bool>> cancel = nullptr,
+        DemosaicAlgorithm algo = kDefaultDemosaic);
 
     // Standalone fast path: extracts the embedded preview without demosaicing.
     static ImageBuffer loadEmbeddedPreview(const QString& path);

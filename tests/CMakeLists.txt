@@ -33,6 +33,7 @@ add_executable(arraw_tests
     test_LocalAdjustment.cpp
     test_LocalAdjustmentPanel.cpp
     test_AdjustmentPanel.cpp
+    test_InfoPanel.cpp
     test_AdjustmentTabTool.cpp
     test_CollapsiblePane.cpp
     test_ChromeHider.cpp
@@ -47,6 +48,7 @@ add_executable(arraw_tests
     test_PresetStore.cpp
     test_Spot.cpp
     test_NoiseReduction.cpp
+    test_DemosaicAlgorithm.cpp
     test_LensCorrection.cpp
     test_LensfunSource.cpp
     test_BatchPaste.cpp

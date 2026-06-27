@@ -15,6 +15,14 @@ std::vector<Spot> scaleSpots(const std::vector<Spot>& spots, double sx, double s
     }
     return out;
 }
+
+void mergePresence(UserMetadataPresence& target, const UserMetadataPresence& changedFields) {
+    target.title = target.title || changedFields.title;
+    target.caption = target.caption || changedFields.caption;
+    target.keywords = target.keywords || changedFields.keywords;
+    target.creator = target.creator || changedFields.creator;
+    target.copyright = target.copyright || changedFields.copyright;
+}
 } // namespace
 
 DevelopSession::DevelopSession(QObject* parent)
@@ -32,13 +40,18 @@ void DevelopSession::setLoadedImage(
     const GlobalAdjustment& params,
     SidecarState sidecarState,
     const UserMetadata& metadata,
+    const UserMetadataPresence& presence,
     std::vector<Snapshot> snapshots) {
     currentPath = std::move(path);
     previewBuffer = result.preview;
     fullResBuffer = result.fullRes;
+    sensorClipPreviewBuffer = result.sensorClipPreview;
+    sensorClipFullResBuffer = result.sensorClipFullRes;
     imageMetadata = result.metadata;
     metadata_ = metadata;
     savedMetadata = metadata;
+    metadataPresence = presence;
+    savedMetadataPresence = presence;
     imageDefaultCrop = result.defaultCrop;
     lensModel = result.lensModel;
     adjustments = params;
@@ -68,6 +81,29 @@ const ImageBuffer& DevelopSession::fullResForExport() const {
     if (correctedFullResBuffer.valid())
         return correctedFullResBuffer;
     return fullResBuffer;
+}
+
+void DevelopSession::swapDecodedBuffers(const LoadResult& result) {
+    previewBuffer = result.preview;
+    fullResBuffer = result.fullRes;
+    // The sensor-clip mask comes from pre-demosaic mosaic values, so it is the
+    // same across algorithms — refresh it anyway to keep the buffers consistent.
+    sensorClipPreviewBuffer = result.sensorClipPreview;
+    sensorClipFullResBuffer = result.sensorClipFullRes;
+    rebuildDerivedBuffers(); // re-derive lens/spot buffers over the new pixels
+}
+
+const ImageBuffer& DevelopSession::sensorClipPreviewForDisplay() const {
+    if (correctedSensorClipPreviewBuffer.valid())
+        return correctedSensorClipPreviewBuffer;
+    return sensorClipPreviewBuffer;
+}
+
+const ImageBuffer& DevelopSession::sensorClipFullResForDisplay() const {
+    ensureFullResDerived();
+    if (correctedSensorClipFullResBuffer.valid())
+        return correctedSensorClipFullResBuffer;
+    return sensorClipFullResBuffer;
 }
 
 void DevelopSession::setParams(const GlobalAdjustment& params) {
@@ -112,9 +148,11 @@ void DevelopSession::recomputeDevelopDirty() {
     isDevelopDirty = adjustments != savedAdjustments || snapshots_ != savedSnapshots;
 }
 
-void DevelopSession::setUserMetadata(const UserMetadata& metadata) {
+void DevelopSession::setUserMetadata(
+    const UserMetadata& metadata, const UserMetadataPresence& changedFields) {
     metadata_ = metadata;
-    isMetadataDirty = metadata_ != savedMetadata;
+    mergePresence(metadataPresence, changedFields);
+    isMetadataDirty = metadata_ != savedMetadata || metadataPresence != savedMetadataPresence;
 }
 
 void DevelopSession::setBaseLook(bool on) {
@@ -135,21 +173,24 @@ void DevelopSession::markDevelopSaveFailed() {
 
 void DevelopSession::markMetadataSaved() {
     savedMetadata = metadata_;
+    savedMetadataPresence = metadataPresence;
     isMetadataDirty = false;
     sidecar = SidecarState::Loaded;
 }
 
 void DevelopSession::markMetadataSaveFailed() {
-    isMetadataDirty = metadata_ != savedMetadata;
+    isMetadataDirty = metadata_ != savedMetadata || metadataPresence != savedMetadataPresence;
     sidecar = SidecarState::WriteError;
 }
 
 namespace {
 LensCorrectionToggles togglesOf(const GlobalAdjustment& a) {
-    return {.distortion = a.lensCorrectDistortion,
-            .vignetting = a.lensCorrectVignetting,
-            .ca = a.lensCorrectCA};
+    return {
+        .distortion = a.lensCorrectDistortion,
+        .vignetting = a.lensCorrectVignetting,
+        .ca = a.lensCorrectCA};
 }
+
 bool correctionActive(const LensCorrectionModel& m, const LensCorrectionToggles& t) {
     return (t.distortion && m.hasDistortion) || (t.vignetting && m.hasVignetting)
            || (t.ca && m.hasTCA);
@@ -164,12 +205,16 @@ void DevelopSession::rebuildDerivedBuffers() {
 void DevelopSession::rebuildPreviewDerived() {
     const LensCorrectionToggles toggles = togglesOf(adjustments);
     correctedPreviewBuffer = (correctionActive(lensModel, toggles) && previewBuffer.valid())
-        ? applyLensCorrection(previewBuffer, lensModel, toggles)
-        : ImageBuffer{};
+                                 ? applyLensCorrection(previewBuffer, lensModel, toggles)
+                                 : ImageBuffer{};
+    correctedSensorClipPreviewBuffer
+        = (correctionActive(lensModel, toggles) && sensorClipPreviewBuffer.valid())
+              ? applyLensCorrection(sensorClipPreviewBuffer, lensModel, toggles)
+              : ImageBuffer{};
 
     // Spots clone on the lens-corrected base when present, else on the clean buffer.
-    const ImageBuffer& base =
-        correctedPreviewBuffer.valid() ? correctedPreviewBuffer : previewBuffer;
+    const ImageBuffer& base = correctedPreviewBuffer.valid() ? correctedPreviewBuffer
+                                                             : previewBuffer;
     if (!adjustments.spots.empty() && base.valid() && fullResBuffer.width > 0) {
         const double sx = double(base.width) / fullResBuffer.width;
         const double sy = double(base.height) / fullResBuffer.height;
@@ -186,11 +231,15 @@ void DevelopSession::ensureFullResDerived() const {
 
     const LensCorrectionToggles toggles = togglesOf(adjustments);
     correctedFullResBuffer = (correctionActive(lensModel, toggles) && fullResBuffer.valid())
-        ? applyLensCorrection(fullResBuffer, lensModel, toggles)
-        : ImageBuffer{};
-    const ImageBuffer& base =
-        correctedFullResBuffer.valid() ? correctedFullResBuffer : fullResBuffer;
-    spottedFullResBuffer =
-        (!adjustments.spots.empty() && base.valid()) ? applySpots(base, adjustments.spots)
-                                                     : ImageBuffer{};
+                                 ? applyLensCorrection(fullResBuffer, lensModel, toggles)
+                                 : ImageBuffer{};
+    correctedSensorClipFullResBuffer
+        = (correctionActive(lensModel, toggles) && sensorClipFullResBuffer.valid())
+              ? applyLensCorrection(sensorClipFullResBuffer, lensModel, toggles)
+              : ImageBuffer{};
+    const ImageBuffer& base = correctedFullResBuffer.valid() ? correctedFullResBuffer
+                                                             : fullResBuffer;
+    spottedFullResBuffer = (!adjustments.spots.empty() && base.valid())
+                               ? applySpots(base, adjustments.spots)
+                               : ImageBuffer{};
 }

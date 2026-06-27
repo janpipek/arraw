@@ -134,13 +134,15 @@ TEST_CASE("an existing extension-specific sidecar is used", "[xmp][compatibility
     const QString sidecarPath = rawPath + ".xmp";
     QFile sidecar(sidecarPath);
     REQUIRE(sidecar.open(QIODevice::WriteOnly));
-    REQUIRE(sidecar.write(R"xml(<?xml version="1.0"?>
+    REQUIRE(
+        sidecar.write(R"xml(<?xml version="1.0"?>
 <x:xmpmeta xmlns:x="adobe:ns:meta/">
   <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
     <rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/"
       xmp:Rating="2"/>
   </rdf:RDF>
-</x:xmpmeta>)xml") > 0);
+</x:xmpmeta>)xml")
+        > 0);
     sidecar.close();
 
     CHECK(XmpSidecar::pathFor(rawPath) == sidecarPath);
@@ -155,14 +157,16 @@ TEST_CASE("loadAdjustments reads an extension-specific sidecar", "[xmp][compatib
     const QString rawPath = dir.filePath("catalogued.nef");
     QFile sidecar(rawPath + ".xmp");
     REQUIRE(sidecar.open(QIODevice::WriteOnly));
-    REQUIRE(sidecar.write(R"xml(<?xml version="1.0"?>
+    REQUIRE(
+        sidecar.write(R"xml(<?xml version="1.0"?>
 <x:xmpmeta xmlns:x="adobe:ns:meta/">
   <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
     <rdf:Description rdf:about=""
       xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
       crs:Exposure2012="0.8500"/>
   </rdf:RDF>
-</x:xmpmeta>)xml") > 0);
+</x:xmpmeta>)xml")
+        > 0);
     sidecar.close();
 
     CHECK_THAT(XmpSidecar::loadAdjustments(rawPath).exposure, WithinAbs(0.85, 1e-5));
@@ -239,8 +243,7 @@ TEST_CASE("malformed sidecar loads default params", "[xmp]") {
 TEST_CASE("saves never replace an existing malformed sidecar", "[xmp][compatibility]") {
     QTemporaryDir dir;
     const QString rawPath = dir.filePath("broken.nef");
-    const QByteArray malformed
-        = "<x:xmpmeta><rdf:RDF><rdf:Description crs:Exposure2012=\"2.0\"";
+    const QByteArray malformed = "<x:xmpmeta><rdf:RDF><rdf:Description crs:Exposure2012=\"2.0\"";
     QFile sidecar(XmpSidecar::pathFor(rawPath));
     REQUIRE(sidecar.open(QIODevice::WriteOnly));
     REQUIRE(sidecar.write(malformed) == malformed.size());
@@ -656,6 +659,11 @@ TEST_CASE("default marks are not written to the sidecar", "[xmp][marks]") {
     const QString xml = QString::fromUtf8(f.readAll());
     CHECK_FALSE(xml.contains("xmp:Rating"));
     CHECK_FALSE(xml.contains("xmp:Label"));
+    CHECK_FALSE(xml.contains("dc:title"));
+    CHECK_FALSE(xml.contains("dc:description"));
+    CHECK_FALSE(xml.contains("dc:subject"));
+    CHECK_FALSE(xml.contains("dc:creator"));
+    CHECK_FALSE(xml.contains("dc:rights"));
 }
 
 // The clobber guarantee (docs/adr/0007): the two namespace-scoped saves are
@@ -689,17 +697,19 @@ TEST_CASE("saveMetadata preserves foreign XMP properties", "[xmp][compatibility]
     const QString rawPath = dir.filePath("catalogued.nef");
     QFile sidecar(XmpSidecar::pathFor(rawPath));
     REQUIRE(sidecar.open(QIODevice::WriteOnly));
-    REQUIRE(sidecar.write(R"xml(<?xml version="1.0"?>
+    REQUIRE(
+        sidecar.write(R"xml(<?xml version="1.0"?>
 <x:xmpmeta xmlns:x="adobe:ns:meta/">
   <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
     <rdf:Description rdf:about=""
       xmlns:xmp="http://ns.adobe.com/xap/1.0/"
       xmlns:dc="http://purl.org/dc/elements/1.1/"
       dc:format="image/x-nikon-nef">
-      <dc:subject><rdf:Bag><rdf:li>Family</rdf:li></rdf:Bag></dc:subject>
+      <dc:coverage>Prague</dc:coverage>
     </rdf:Description>
   </rdf:RDF>
-</x:xmpmeta>)xml") > 0);
+</x:xmpmeta>)xml")
+        > 0);
     sidecar.close();
 
     REQUIRE(XmpSidecar::saveMetadata(rawPath, {4, ColourLabel::Blue}));
@@ -709,11 +719,189 @@ TEST_CASE("saveMetadata preserves foreign XMP properties", "[xmp][compatibility]
     CHECK(saved.contains(R"(dc:format="image/x-nikon-nef")"));
     QDomDocument document;
     REQUIRE(bool(document.setContent(saved, QDomDocument::ParseOption::UseNamespaceProcessing)));
-    const QDomNodeList subjects
-        = document.elementsByTagNameNS("http://purl.org/dc/elements/1.1/", "subject");
-    REQUIRE(subjects.size() == 1);
-    CHECK(subjects.at(0).toElement().text() == "Family");
+    const QDomNodeList coverage
+        = document.elementsByTagNameNS("http://purl.org/dc/elements/1.1/", "coverage");
+    REQUIRE(coverage.size() == 1);
+    CHECK(coverage.at(0).toElement().text() == "Prague");
     CHECK(XmpSidecar::loadMetadata(rawPath) == UserMetadata{4, ColourLabel::Blue});
+}
+
+TEST_CASE(
+    "descriptive User Metadata replaces owned Dublin Core properties and preserves foreign "
+    "metadata",
+    "[xmp][metadata][dc]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("catalogued.nef");
+    QFile sidecar(XmpSidecar::pathFor(rawPath));
+    REQUIRE(sidecar.open(QIODevice::WriteOnly));
+    REQUIRE(
+        sidecar.write(R"xml(<?xml version="1.0"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description rdf:about=""
+      xmlns:dc="http://purl.org/dc/elements/1.1/"
+      xmlns:lr="http://ns.adobe.com/lightroom/1.0/">
+      <dc:subject><rdf:Bag><rdf:li>Old</rdf:li></rdf:Bag></dc:subject>
+      <dc:format>image/x-nikon-nef</dc:format>
+      <lr:hierarchicalSubject>
+        <rdf:Bag><rdf:li>Places|Prague</rdf:li></rdf:Bag>
+      </lr:hierarchicalSubject>
+    </rdf:Description>
+  </rdf:RDF>
+</x:xmpmeta>)xml")
+        > 0);
+    sidecar.close();
+
+    UserMetadata loaded = XmpSidecar::loadMetadata(rawPath);
+    CHECK(loaded.keywords == QStringList{"Old"});
+
+    loaded.keywords = {"Family", "Travel"};
+    loaded.title = "Summer edits";
+    REQUIRE(XmpSidecar::saveMetadata(rawPath, loaded));
+
+    const UserMetadata roundTripped = XmpSidecar::loadMetadata(rawPath);
+    CHECK(roundTripped.title == "Summer edits");
+    CHECK(roundTripped.keywords == QStringList{"Family", "Travel"});
+
+    REQUIRE(sidecar.open(QIODevice::ReadOnly));
+    QDomDocument document;
+    REQUIRE(
+        bool(document
+                 .setContent(sidecar.readAll(), QDomDocument::ParseOption::UseNamespaceProcessing)));
+    constexpr auto dcNamespace = "http://purl.org/dc/elements/1.1/";
+    constexpr auto lrNamespace = "http://ns.adobe.com/lightroom/1.0/";
+    const QDomNodeList subjects = document.elementsByTagNameNS(dcNamespace, "subject");
+    REQUIRE(subjects.size() == 1);
+    CHECK(subjects.at(0).toElement().text() == "FamilyTravel");
+    const QDomNodeList formats = document.elementsByTagNameNS(dcNamespace, "format");
+    REQUIRE(formats.size() == 1);
+    CHECK(formats.at(0).toElement().text() == "image/x-nikon-nef");
+    const QDomNodeList hierarchical
+        = document.elementsByTagNameNS(lrNamespace, "hierarchicalSubject");
+    REQUIRE(hierarchical.size() == 1);
+    CHECK(hierarchical.at(0).toElement().text() == "Places|Prague");
+}
+
+TEST_CASE("embedded XMP packets parse descriptive User Metadata", "[xmp][metadata][dc]") {
+    const QByteArray packet = R"xml(<?xml version="1.0"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/">
+      <dc:title><rdf:Alt><rdf:li xml:lang="x-default">Embedded title</rdf:li></rdf:Alt></dc:title>
+      <dc:description><rdf:Alt><rdf:li xml:lang="x-default">Embedded caption</rdf:li></rdf:Alt></dc:description>
+      <dc:subject><rdf:Bag><rdf:li>One</rdf:li><rdf:li>Two</rdf:li></rdf:Bag></dc:subject>
+      <dc:creator><rdf:Seq><rdf:li>Embedded creator</rdf:li></rdf:Seq></dc:creator>
+      <dc:rights><rdf:Alt><rdf:li xml:lang="x-default">Embedded rights</rdf:li></rdf:Alt></dc:rights>
+    </rdf:Description>
+  </rdf:RDF>
+</x:xmpmeta>)xml";
+
+    const UserMetadata metadata = XmpSidecar::metadataFromPacket(packet);
+
+    CHECK(metadata.title == "Embedded title");
+    CHECK(metadata.caption == "Embedded caption");
+    CHECK(metadata.keywords == QStringList{"One", "Two"});
+    CHECK(metadata.creator == "Embedded creator");
+    CHECK(metadata.copyright == "Embedded rights");
+}
+
+TEST_CASE("Dublin Core property attributes parse as descriptive User Metadata", "[xmp][metadata][dc]") {
+    const QByteArray packet = R"xml(<?xml version="1.0"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description rdf:about=""
+      xmlns:dc="http://purl.org/dc/elements/1.1/"
+      dc:title="Attribute title"
+      dc:description="Attribute caption"
+      dc:creator="Attribute creator"
+      dc:rights="Attribute rights" />
+  </rdf:RDF>
+</x:xmpmeta>)xml";
+
+    const XmpPacketMetadata metadata = XmpSidecar::metadataPacketFromPacket(packet);
+
+    CHECK(metadata.metadata.title == "Attribute title");
+    CHECK(metadata.metadata.caption == "Attribute caption");
+    CHECK(metadata.metadata.creator == "Attribute creator");
+    CHECK(metadata.metadata.copyright == "Attribute rights");
+    CHECK(metadata.presence.title);
+    CHECK(metadata.presence.caption);
+    CHECK(metadata.presence.creator);
+    CHECK(metadata.presence.copyright);
+}
+
+TEST_CASE(
+    "descriptive User Metadata writes the Lightroom-compatible RDF containers",
+    "[xmp][metadata][dc]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("described.arw");
+    UserMetadata metadata;
+    metadata.title = "Title";
+    metadata.caption = "Caption";
+    metadata.keywords = {"One", "Two"};
+    metadata.creator = "Creator";
+    metadata.copyright = "Copyright";
+
+    REQUIRE(XmpSidecar::saveMetadata(rawPath, metadata));
+
+    QFile sidecar(XmpSidecar::pathFor(rawPath));
+    REQUIRE(sidecar.open(QIODevice::ReadOnly));
+    QDomDocument document;
+    REQUIRE(
+        bool(document
+                 .setContent(sidecar.readAll(), QDomDocument::ParseOption::UseNamespaceProcessing)));
+    constexpr auto dcNamespace = "http://purl.org/dc/elements/1.1/";
+    constexpr auto rdfNamespace = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+
+    auto childContainer = [&](const char* dcName) {
+        const QDomNodeList nodes = document.elementsByTagNameNS(dcNamespace, dcName);
+        REQUIRE(nodes.size() == 1);
+        return nodes.at(0).firstChildElement();
+    };
+
+    CHECK(childContainer("title").localName() == "Alt");
+    CHECK(childContainer("description").localName() == "Alt");
+    CHECK(childContainer("rights").localName() == "Alt");
+    CHECK(childContainer("subject").localName() == "Bag");
+    CHECK(childContainer("creator").localName() == "Seq");
+
+    const QDomNodeList keywordItems
+        = childContainer("subject").elementsByTagNameNS(rdfNamespace, "li");
+    REQUIRE(keywordItems.size() == 2);
+    CHECK(keywordItems.at(0).toElement().text() == "One");
+    CHECK(keywordItems.at(1).toElement().text() == "Two");
+}
+
+TEST_CASE("rating-only metadata saves preserve descriptive Dublin Core fields", "[xmp][metadata][dc]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("described.arw");
+    UserMetadata metadata;
+    metadata.caption = "Caption";
+    UserMetadataPresence fields;
+    fields.caption = true;
+    REQUIRE(XmpSidecar::saveMetadata(rawPath, metadata, fields));
+
+    UserMetadata ratingOnly;
+    ratingOnly.rating = 5;
+    REQUIRE(XmpSidecar::saveMetadata(rawPath, ratingOnly));
+
+    const UserMetadata roundTripped = XmpSidecar::loadMetadata(rawPath);
+    CHECK(roundTripped.rating == 5);
+    CHECK(roundTripped.caption == "Caption");
+}
+
+TEST_CASE("authored empty Dublin Core fields suppress fallback reads", "[xmp][metadata][dc]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("described.arw");
+    UserMetadata metadata;
+    UserMetadataPresence fields;
+    fields.caption = true;
+    REQUIRE(XmpSidecar::saveMetadata(rawPath, metadata, fields));
+
+    const SidecarData sidecar = XmpSidecar::load(rawPath);
+
+    CHECK(sidecar.metadata.caption.isEmpty());
+    CHECK(sidecar.metadataPresence.caption);
 }
 
 TEST_CASE("saveAdjustments preserves unowned XMP properties", "[xmp][compatibility]") {
@@ -721,7 +909,8 @@ TEST_CASE("saveAdjustments preserves unowned XMP properties", "[xmp][compatibili
     const QString rawPath = dir.filePath("catalogued.nef");
     QFile sidecar(XmpSidecar::pathFor(rawPath));
     REQUIRE(sidecar.open(QIODevice::WriteOnly));
-    REQUIRE(sidecar.write(R"xml(<?xml version="1.0"?>
+    REQUIRE(
+        sidecar.write(R"xml(<?xml version="1.0"?>
 <x:xmpmeta xmlns:x="adobe:ns:meta/">
   <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
     <rdf:Description rdf:about=""
@@ -732,7 +921,8 @@ TEST_CASE("saveAdjustments preserves unowned XMP properties", "[xmp][compatibili
       <dc:subject><rdf:Bag><rdf:li>Travel</rdf:li></rdf:Bag></dc:subject>
     </rdf:Description>
   </rdf:RDF>
-</x:xmpmeta>)xml") > 0);
+</x:xmpmeta>)xml")
+        > 0);
     sidecar.close();
 
     auto edits = sampleParams();
@@ -741,21 +931,18 @@ TEST_CASE("saveAdjustments preserves unowned XMP properties", "[xmp][compatibili
 
     REQUIRE(sidecar.open(QIODevice::ReadOnly));
     QDomDocument document;
-    REQUIRE(bool(document.setContent(
-        sidecar.readAll(), QDomDocument::ParseOption::UseNamespaceProcessing)));
-    const QDomElement description = document
-                                        .elementsByTagNameNS(
-                                            "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
-                                            "Description")
-                                        .at(0)
-                                        .toElement();
+    REQUIRE(
+        bool(document
+                 .setContent(sidecar.readAll(), QDomDocument::ParseOption::UseNamespaceProcessing)));
+    const QDomElement description
+        = document.elementsByTagNameNS("http://www.w3.org/1999/02/22-rdf-syntax-ns#", "Description")
+              .at(0)
+              .toElement();
     CHECK(
-        description.attributeNS(
-            "http://ns.adobe.com/camera-raw-settings/1.0/", "AlreadyApplied")
+        description.attributeNS("http://ns.adobe.com/camera-raw-settings/1.0/", "AlreadyApplied")
         == "True");
     CHECK(
-        description.attributeNS(
-            "http://ns.adobe.com/camera-raw-settings/1.0/", "Exposure2012")
+        description.attributeNS("http://ns.adobe.com/camera-raw-settings/1.0/", "Exposure2012")
         == "1.5000");
     const QDomNodeList subjects
         = document.elementsByTagNameNS("http://purl.org/dc/elements/1.1/", "subject");
@@ -768,7 +955,8 @@ TEST_CASE("saveAdjustments replaces all arraw namespace content", "[xmp][compati
     const QString rawPath = dir.filePath("previous-version.nef");
     QFile sidecar(XmpSidecar::pathFor(rawPath));
     REQUIRE(sidecar.open(QIODevice::WriteOnly));
-    REQUIRE(sidecar.write(R"xml(<?xml version="1.0"?>
+    REQUIRE(
+        sidecar.write(R"xml(<?xml version="1.0"?>
 <x:xmpmeta xmlns:x="adobe:ns:meta/">
   <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
     <rdf:Description rdf:about=""
@@ -777,7 +965,8 @@ TEST_CASE("saveAdjustments replaces all arraw namespace content", "[xmp][compati
       <arraw:Obsolete><rdf:Bag arraw:LegacyFlag="1"/></arraw:Obsolete>
     </rdf:Description>
   </rdf:RDF>
-</x:xmpmeta>)xml") > 0);
+</x:xmpmeta>)xml")
+        > 0);
     sidecar.close();
 
     GlobalAdjustment edits;
@@ -789,8 +978,9 @@ TEST_CASE("saveAdjustments replaces all arraw namespace content", "[xmp][compati
 
     REQUIRE(sidecar.open(QIODevice::ReadOnly));
     QDomDocument document;
-    REQUIRE(bool(document.setContent(
-        sidecar.readAll(), QDomDocument::ParseOption::UseNamespaceProcessing)));
+    REQUIRE(
+        bool(document
+                 .setContent(sidecar.readAll(), QDomDocument::ParseOption::UseNamespaceProcessing)));
     constexpr auto arrawNamespace = "http://ns.arraw.app/1.0/";
     CHECK(document.elementsByTagNameNS(arrawNamespace, "Obsolete").isEmpty());
     CHECK(document.elementsByTagNameNS(arrawNamespace, "LocalAdjustments").size() == 1);
@@ -800,9 +990,9 @@ TEST_CASE("saveAdjustments replaces all arraw namespace content", "[xmp][compati
     for (int i = 0; i < elements.size(); ++i) {
         const QDomNamedNodeMap attributes = elements.at(i).attributes();
         for (int j = 0; j < attributes.size(); ++j)
-            CHECK_FALSE((
-                attributes.item(j).namespaceURI() == arrawNamespace
-                && attributes.item(j).localName().startsWith("Legacy")));
+            CHECK_FALSE(
+                (attributes.item(j).namespaceURI() == arrawNamespace
+                 && attributes.item(j).localName().startsWith("Legacy")));
     }
 }
 

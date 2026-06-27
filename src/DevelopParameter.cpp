@@ -51,6 +51,7 @@ const char* developParameterKey(DevelopParameter p) {
     case DevelopParameter::CurveRed: return "curveRed";
     case DevelopParameter::CurveGreen: return "curveGreen";
     case DevelopParameter::CurveBlue: return "curveBlue";
+    case DevelopParameter::Demosaic: return "demosaic";
     case DevelopParameter::Sharpening: return "sharpening";
     case DevelopParameter::ColorNoiseReduction: return "colorNoiseReduction";
     case DevelopParameter::ColorNoiseReductionSmoothness: return "colorNoiseReductionSmoothness";
@@ -91,6 +92,7 @@ QString developParameterLabel(DevelopParameter p) {
     case DevelopParameter::CurveRed: return trDev("Red Curve");
     case DevelopParameter::CurveGreen: return trDev("Green Curve");
     case DevelopParameter::CurveBlue: return trDev("Blue Curve");
+    case DevelopParameter::Demosaic: return trDev("Demosaic");
     case DevelopParameter::Sharpening: return trDev("Sharpening");
     case DevelopParameter::ColorNoiseReduction: return trDev("Color Noise Reduction");
     case DevelopParameter::ColorNoiseReductionSmoothness: return trDev("Color NR Smoothness");
@@ -128,6 +130,7 @@ DevelopGroup developParameterGroup(DevelopParameter p) {
     case DevelopParameter::CurveRed:
     case DevelopParameter::CurveGreen:
     case DevelopParameter::CurveBlue: return DevelopGroup::ToneCurve;
+    case DevelopParameter::Demosaic:
     case DevelopParameter::Sharpening:
     case DevelopParameter::ColorNoiseReduction:
     case DevelopParameter::ColorNoiseReductionSmoothness: return DevelopGroup::Detail;
@@ -225,6 +228,7 @@ QString developParameterValueText(DevelopParameter p, const GlobalAdjustment& s)
                   : QCoreApplication::translate("DevelopParameter", "off");
     };
     switch (p) {
+    case DevelopParameter::Demosaic: return demosaicToken(s.demosaicAlgorithm);
     case DevelopParameter::LensDistortion: return onOff(s.lensCorrectDistortion);
     case DevelopParameter::LensVignetting: return onOff(s.lensCorrectVignetting);
     case DevelopParameter::LensChromaticAberration: return onOff(s.lensCorrectCA);
@@ -241,6 +245,7 @@ bool developParameterDiffers(
     const GlobalAdjustment& a = before; // terse aliases for the comparison switch
     const GlobalAdjustment& b = after;
     switch (p) {
+    case DevelopParameter::Demosaic: return a.demosaicAlgorithm != b.demosaicAlgorithm;
     case DevelopParameter::CurveLuma: return a.curveLuma != b.curveLuma;
     case DevelopParameter::CurveRed: return a.curveR != b.curveR;
     case DevelopParameter::CurveGreen: return a.curveG != b.curveG;

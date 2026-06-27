@@ -1,4 +1,6 @@
 #include "RawProcessor.h"
+#include "DemosaicAlgorithm.h"
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
 
@@ -20,12 +22,19 @@ TEST_CASE("DNG fixture decodes to full-res plus half-res preview", "[raw][fixtur
     REQUIRE(r.preview.valid());
     CHECK(r.preview.width == r.fullRes.width / 2);
     CHECK(r.preview.height == r.fullRes.height / 2);
+    REQUIRE(r.sensorClipFullRes.valid());
+    CHECK(r.sensorClipFullRes.width == r.fullRes.width);
+    CHECK(r.sensorClipFullRes.height == r.fullRes.height);
+    REQUIRE(r.sensorClipPreview.valid());
+    CHECK(r.sensorClipPreview.width == r.preview.width);
+    CHECK(r.sensorClipPreview.height == r.preview.height);
     CHECK(r.defaultCrop == QRectF(0.0, 0.0, 1.0, 1.0));
 
     for (float v : r.fullRes.data) {
         REQUIRE(std::isfinite(v));
         REQUIRE(v >= 0.0f);
     }
+    CHECK(std::ranges::any_of(r.sensorClipFullRes.data, [](float v) { return v > 0.0f; }));
 }
 
 TEST_CASE("decoded gradient keeps left-to-right ordering", "[raw][fixtures]") {
@@ -48,6 +57,24 @@ TEST_CASE("decoded gradient keeps left-to-right ordering", "[raw][fixtures]") {
     const double left = meanLuma(0, b.width / 4);
     const double right = meanLuma(b.width * 3 / 4, b.width);
     CHECK(right > left * 2.0);
+}
+
+TEST_CASE("decoding honours an explicit demosaic algorithm", "[raw][fixtures]") {
+    // A non-default algorithm must thread through to libraw without breaking the
+    // decode. (The gradient fixture is linear, so the algorithm cannot change
+    // pixels here — the visual difference is verified by eye on real Bayer RAWs.)
+    const LoadResult r = RawProcessor::load(kDng, nullptr, nullptr, DemosaicAlgorithm::VNG);
+    REQUIRE(r.error.isEmpty());
+    REQUIRE(r.fullRes.valid());
+    CHECK(r.fullRes.width == 32);
+    CHECK(r.fullRes.height == 24);
+}
+
+TEST_CASE("LoadResult surfaces the sensor mosaic for the disable gate", "[raw][fixtures]") {
+    const LoadResult r = RawProcessor::load(kDng);
+    REQUIRE(r.error.isEmpty());
+    // The linear gradient DNG has no Bayer mosaic, so selection is unavailable.
+    CHECK_FALSE(sensorSupportsDemosaicSelection(r.filters));
 }
 
 TEST_CASE("missing file reports an error, not a crash", "[raw]") {

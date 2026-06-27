@@ -45,6 +45,41 @@ TEST_CASE("DevelopSession stores a loaded image as clean active state", "[develo
 }
 
 TEST_CASE(
+    "swapDecodedBuffers replaces pixels in place, preserving develop state",
+    "[develop-session]") {
+    // A demosaic change re-decodes and swaps the buffers, but the develop edit
+    // (the new algorithm and everything else) and the dirty flag must survive —
+    // it is one undo-able edit, not a fresh load (docs/adr/0033).
+    DevelopSession session;
+    LoadResult first;
+    first.preview = ImageBuffer{{0.1f, 0.2f, 0.3f}, 1, 1};
+    first.fullRes = ImageBuffer{{0.1f, 0.2f, 0.3f}, 1, 1};
+
+    GlobalAdjustment saved;
+    saved.exposure = 0.5f;
+    session.setLoadedImage("/photos/IMG_0001.dng", first, saved, DevelopSession::SidecarState::Loaded);
+
+    GlobalAdjustment edited = saved;
+    edited.demosaicAlgorithm = DemosaicAlgorithm::VNG;
+    session.setParams(edited);
+    REQUIRE(session.developDirty());
+
+    LoadResult redecoded;
+    redecoded.preview = ImageBuffer{{0.7f, 0.8f, 0.9f}, 1, 1};
+    redecoded.fullRes = ImageBuffer{{0.7f, 0.8f, 0.9f}, 1, 1};
+    session.swapDecodedBuffers(redecoded);
+
+    // New pixels are in...
+    CHECK(session.preview().data == redecoded.preview.data);
+    CHECK(session.fullRes().data == redecoded.fullRes.data);
+    // ...the path is unchanged, and the develop edit + dirty flag are intact.
+    CHECK(session.path() == "/photos/IMG_0001.dng");
+    CHECK(session.params().demosaicAlgorithm == DemosaicAlgorithm::VNG);
+    CHECK(session.params().exposure == 0.5f);
+    CHECK(session.developDirty());
+}
+
+TEST_CASE(
     "DevelopSession tracks dirty develop edits against the saved baseline", "[develop-session]") {
     DevelopSession session;
     LoadResult result;
@@ -283,6 +318,7 @@ TEST_CASE(
         result,
         GlobalAdjustment{},
         DevelopSession::SidecarState::Loaded,
+        {},
         {},
         {snap});
 

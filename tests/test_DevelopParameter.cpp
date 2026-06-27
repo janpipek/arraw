@@ -28,6 +28,7 @@ static GlobalAdjustment fullyEdited() {
     g.hslHue = {1, 2, 3, 4, 5, 6, 7, 8};
     g.hslSat = {-1, -2, -3, -4, -5, -6, -7, -8};
     g.hslLum = {9, 8, 7, 6, 5, 4, 3, 2};
+    g.demosaicAlgorithm = DemosaicAlgorithm::DCB;
     g.sharpening = 55.0f;
     g.colorNoiseReduction = 30.0f;
     g.colorNoiseReductionSmoothness = 70.0f;
@@ -147,6 +148,11 @@ TEST_CASE("developChangeLabel appends the new value, formatted as the panel show
         GlobalAdjustment b;
         b.lensCorrectDistortion = true; // boolean → on/off
         CHECK(developChangeLabel(a, b) == "Distortion Correction on");
+    }
+    {
+        GlobalAdjustment b;
+        b.demosaicAlgorithm = DemosaicAlgorithm::DCB; // enum → persistence token
+        CHECK(developChangeLabel(a, b) == "Demosaic DCB");
     }
 }
 

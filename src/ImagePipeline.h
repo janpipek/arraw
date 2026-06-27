@@ -1,9 +1,11 @@
 #pragma once
+#include "DemosaicAlgorithm.h"
 #include "ImageMetadata.h"
 #include "LensCorrection.h"
 #include "LocalAdjustment.h"
 #include "Orientation.h"
 #include "Spot.h"
+#include "UserMetadata.h"
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -58,6 +60,10 @@ struct GlobalAdjustment : SharedAdjustment {
     std::array<float, 8> hslLum = {};
 
     // Detail
+    // Demosaic algorithm — a decode-time choice, not a shader uniform: changing
+    // it re-runs the libraw decode through the load path (docs/adr/0033, issue
+    // #22). Persisted as a token in arraw:DemosaicAlgorithm; AHD is the default.
+    DemosaicAlgorithm demosaicAlgorithm = kDefaultDemosaic;
     float sharpening = 0.0f; // 0 .. 100
     // Colour (chroma) Noise Reduction — a cached GPU chroma pre-pass in
     // RendererCore (see NoiseReduction.h, docs/adr/0032, issue #59). Strength is
@@ -111,8 +117,14 @@ struct ImageBuffer {
 struct LoadResult {
     ImageBuffer fullRes; // stored for export only
     ImageBuffer preview; // 1/4-res (half W, half H) — used for viewport + histogram
+    // Sensor Clipping mask from RAW mosaic values, before demosaic,
+    // normalisation, and develop settings. Invalid for standard images.
+    ImageBuffer sensorClipFullRes;
+    ImageBuffer sensorClipPreview;
     ImageMetadata metadata;
-    QString error; // non-empty on failure
+    UserMetadata embeddedMetadata; // descriptive User Metadata from embedded XMP, if any
+    UserMetadataPresence embeddedMetadataPresence;
+    QString error;                 // non-empty on failure
     QRectF defaultCrop = {0.0, 0.0, 1.0, 1.0};
     // Lens profile resolved at decode (docs/adr/0027). Empty has* flags = no
     // profile matched; correction is applied (toggle-gated) downstream.
@@ -121,6 +133,10 @@ struct LoadResult {
     // develop edit when the sidecar has none (docs/adr/0028). The decoded buffer
     // stays in native orientation — this only records what the camera intended.
     orient::Orientation seededOrientation = {};
+    // libraw's `imgdata.idata.filters` mosaic mask, surfaced so the UI can gate
+    // the demosaic control to Bayer sensors (ADR 0033). 0 for non-RAW/standard
+    // images and non-mosaic sensors; see sensorSupportsDemosaicSelection.
+    unsigned filters = 0;
 };
 
 // Box-filter 2× downsample (half W, half H). Safe to call off the main thread.

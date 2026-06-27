@@ -44,19 +44,45 @@ _Avoid_: companion badge (the old name — it advertised only the hidden compani
 extension, file type
 
 **User Metadata**:
-Writable, user-authored metadata that travels with an image — today the
-[[Rating]] and [[Colour Label]], plausibly caption/keywords later. Persisted as
-XMP (`xmp:`/`dc:`) alongside the develop settings. Distinct from the read-only
-camera EXIF shown in the Exif panel, which the user never edits.
+Writable, user-authored metadata that travels with an image — the [[Rating]] and
+[[Colour Label]] (the culling marks) plus the descriptive fields shown in the
+[[Info Panel]]: Title, Caption, [[Keywords]], Creator, and Copyright. Persisted as
+XMP alongside the develop settings — the culling marks as `xmp:Rating`/`xmp:Label`,
+the descriptive fields in Dublin Core (`dc:title`, `dc:description`, `dc:subject`,
+`dc:creator`, `dc:rights`). Edited in place and saved immediately when a field is
+committed (focus-out / Enter), never on the develop undo stack. Distinct from the
+read-only camera EXIF, which the user never edits; a descriptive field pre-fills
+from the matching read-only value (e.g. Caption from the EXIF description) only
+until the user authors its own `dc:` value.
 _Avoid_: image metadata (that name is the read-only EXIF rows), tags, catalogue data
 
 **XMP Property Ownership**:
 The rule for which shared-sidecar properties arraw may replace: the complete
-`arraw:` namespace, its modeled develop properties in `crs:`, and Rating plus
-Colour Label in `xmp:`. Every other property belongs to the wider XMP ecosystem
-and must survive arraw saves semantically.
-_Avoid_: namespace ownership (`crs:` and `xmp:` are shared), digiKam metadata
-(the rule applies to every XMP editor)
+`arraw:` namespace, its modeled develop properties in `crs:`, Rating plus Colour
+Label in `xmp:`, and the five descriptive [[User Metadata]] properties in Dublin
+Core (`dc:title`, `dc:description`, `dc:subject`, `dc:creator`, `dc:rights`). Every
+other property — including any other `dc:` property — belongs to the wider XMP
+ecosystem and must survive arraw saves semantically.
+_Avoid_: namespace ownership (`crs:`, `xmp:`, and `dc:` are all shared), digiKam
+metadata (the rule applies to every XMP editor)
+
+**Info Panel**:
+The sidebar tab — renamed from "Exif" — presenting one image's metadata in two
+sections: the editable [[User Metadata]] descriptive fields on top, the read-only
+camera EXIF rows below. Only the top section accepts edits (writing `dc:` to the
+sidecar); the EXIF section is never editable.
+_Avoid_: Exif tab/panel (the tab is no longer EXIF-only — "Exif" now names just the
+read-only section within it)
+
+**Keywords**:
+A flat, unordered set of free-text tags the user attaches to an image, stored as
+`dc:subject`; part of [[User Metadata]]. Flat by deliberate choice — arraw never
+authors a keyword hierarchy (`lr:hierarchicalSubject`), which would be cataloguing,
+though an existing hierarchy from another tool survives untouched ([[XMP Property
+Ownership]]). Distinct from [[Colour Label]] (one value from a fixed set, not free
+text).
+_Avoid_: tags (informal), hierarchical keywords / keyword tree (a DAM feature arraw
+disclaims), [[Colour Label]]
 
 **Working color space**:
 The color space all pixels live in from RAW decode until the final display/output
@@ -376,3 +402,22 @@ predate the split reinterpret their old single value as Strength.
 _Avoid_: denoise (bare — say which kind), Amount (the old single control, now split
 into Smoothness + Strength), luminance NR (the deferred sibling), grain (the inverse
 operation), sharpening (a different Detail control)
+
+**Demosaic Algorithm**:
+The per-image choice of which interpolation method reconstructs full RGB from the
+sensor's Bayer/X-Trans mosaic during RAW decode — a member of the Detail [[Develop
+Group]] alongside Sharpen and [[Colour Noise Reduction]], so it travels with them in
+[[Copy Settings]] and [[Develop Preset]]s. Unlike its shader-based neighbours it is a
+*decode-time* choice made inside the RAW decode itself, upstream of every adjustment;
+changing it re-runs the decode rather than updating live. The menu is the small set
+libraw can produce in the LGPL build (AHD/VNG/PPG/DCB/DHT/AAHD/Linear), with **AHD**
+the default — the algorithm arraw has always decoded with. The menu applies to **Bayer**
+sensors; on X-Trans (libraw substitutes its own Markesteijn decode), Foveon, and
+non-RAW images the control is shown disabled rather than offering labels that would not
+apply — a proper X-Trans (Markesteijn) menu is a later extension. Stored as a stable token in
+`arraw:DemosaicAlgorithm` (not libraw's integer); an absent or unrecognised token falls
+back silently to AHD. AMaZE and RCD, named in issue #22, need a GPL demosaic-pack arraw
+does not build and are a documented later extension.
+_Avoid_: demosaicing (the process, not the choice), interpolation (overloaded — masks
+and curves interpolate too), Detail (the group, not this control), RAW decoding (broader
+— also exposure and white balance), AMaZE/RCD (algorithms not in the LGPL build)
