@@ -1,4 +1,5 @@
 #include "ImagePipeline.h"
+#include "Snapshot.h"
 #include "XmpSidecar.h"
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
@@ -993,4 +994,149 @@ TEST_CASE("saveAdjustments replaces all arraw namespace content", "[xmp][compati
                 (attributes.item(j).namespaceURI() == arrawNamespace
                  && attributes.item(j).localName().startsWith("Legacy")));
     }
+}
+
+// ---------------------------------------------------------------------------
+// Snapshots (docs/adr/0033): named, persisted A/B develop states living in the
+// arraw: namespace as an arraw:Snapshots Seq of whole-develop-state resources.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("snapshots round-trip through the sidecar with full state", "[xmp][snapshots]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("ab.dng");
+
+    Snapshot warm;
+    warm.name = "Warm look";
+    warm.state = sampleParams();
+    warm.state.temperature = 8000.0f;
+    // Fields checkClose() doesn't cover — asserted explicitly below so the
+    // snapshot encoding is guarded for the *whole* develop state, not a subset.
+    warm.state.colorNoiseReduction = 40.0f;
+    warm.state.colorNoiseReductionSmoothness = 65.0f;
+    warm.state.lensCorrectDistortion = true;
+    warm.state.lensCorrectCA = true;
+    warm.state.orientation = orient::Orientation{1, true}; // turned + mirrored (EXIF 5)
+    warm.state.cropConstrained = true;
+
+    Snapshot cool;
+    cool.name = "Cool look";
+    cool.state.temperature = 4200.0f;
+    cool.state.tint = 8.0f;
+
+    REQUIRE(XmpSidecar::saveAdjustments(rawPath, GlobalAdjustment{}, {warm, cool}));
+    const SidecarData loaded = XmpSidecar::load(rawPath);
+
+    REQUIRE(loaded.snapshots.size() == 2);
+    CHECK(loaded.snapshots[0].name == "Warm look");
+    CHECK(loaded.snapshots[1].name == "Cool look");
+    checkClose(loaded.snapshots[0].state, warm.state);
+    checkCurveClose(loaded.snapshots[0].state.curveLuma, warm.state.curveLuma);
+    checkCurveClose(loaded.snapshots[0].state.curveR, warm.state.curveR);
+    CHECK_THAT(loaded.snapshots[0].state.colorNoiseReduction, WithinAbs(40.0, kScalarTol));
+    CHECK_THAT(loaded.snapshots[0].state.colorNoiseReductionSmoothness, WithinAbs(65.0, kScalarTol));
+    CHECK(loaded.snapshots[0].state.lensCorrectDistortion);
+    CHECK_FALSE(loaded.snapshots[0].state.lensCorrectVignetting);
+    CHECK(loaded.snapshots[0].state.lensCorrectCA);
+    CHECK(loaded.snapshots[0].state.orientation == warm.state.orientation);
+    CHECK(loaded.snapshots[0].state.cropConstrained);
+    checkClose(loaded.snapshots[1].state, cool.state);
+}
+
+TEST_CASE("a snapshot carries its local adjustments and spots losslessly", "[xmp][snapshots]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("masked-snap.dng");
+
+    Snapshot snap;
+    snap.name = "Dodged sky";
+    LocalAdjustment la;
+    la.mask = RadialMask{{0.4, 0.6}, 0.3, 0.2, 30.0, 0.4, true};
+    la.exposure = -0.75f;
+    la.temperature = 25.0f; // relative
+    snap.state.localAdjustments.push_back(la);
+    snap.state.spots.push_back(Spot{{120.0, 80.0}, {200.0, 150.0}, 18.0, 0.3});
+
+    REQUIRE(XmpSidecar::saveAdjustments(rawPath, GlobalAdjustment{}, {snap}));
+    const SidecarData loaded = XmpSidecar::load(rawPath);
+
+    // The top-level develop state stays clean — snapshot content must not leak up.
+    CHECK(loaded.adjustments.localAdjustments.empty());
+    CHECK(loaded.adjustments.spots.empty());
+
+    REQUIRE(loaded.snapshots.size() == 1);
+    const GlobalAdjustment& s = loaded.snapshots[0].state;
+    REQUIRE(s.localAdjustments.size() == 1);
+    REQUIRE(std::holds_alternative<RadialMask>(s.localAdjustments[0].mask));
+    const RadialMask& m = std::get<RadialMask>(s.localAdjustments[0].mask);
+    CHECK_THAT(m.center.x(), WithinAbs(0.4, kScalarTol));
+    CHECK(m.invert);
+    CHECK_THAT(s.localAdjustments[0].exposure, WithinAbs(-0.75, kScalarTol));
+    CHECK_THAT(s.localAdjustments[0].temperature, WithinAbs(25.0, kScalarTol));
+    REQUIRE(s.spots.size() == 1);
+    CHECK_THAT(s.spots[0].destination.x(), WithinAbs(120.0, kScalarTol));
+    CHECK_THAT(s.spots[0].source.y(), WithinAbs(150.0, kScalarTol));
+    CHECK_THAT(s.spots[0].radius, WithinAbs(18.0, kScalarTol));
+}
+
+TEST_CASE("no snapshots writes no arraw:Snapshots element", "[xmp][snapshots]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("clean.dng");
+    REQUIRE(XmpSidecar::saveAdjustments(rawPath, sampleParams(), {}));
+
+    QFile f(XmpSidecar::pathFor(rawPath));
+    REQUIRE(f.open(QIODevice::ReadOnly));
+    const QString xml = QString::fromUtf8(f.readAll());
+    CHECK_FALSE(xml.contains("Snapshots"));
+}
+
+TEST_CASE("the 2-arg saveAdjustments preserves existing snapshots", "[xmp][snapshots]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("keep-snaps.dng");
+
+    Snapshot snap;
+    snap.name = "Keeper";
+    snap.state.exposure = 1.0f;
+    REQUIRE(XmpSidecar::saveAdjustments(rawPath, GlobalAdjustment{}, {snap}));
+
+    // A plain develop save (no snapshot argument) must not drop them.
+    GlobalAdjustment edits;
+    edits.contrast = 20.0f;
+    REQUIRE(XmpSidecar::saveAdjustments(rawPath, edits));
+
+    const SidecarData loaded = XmpSidecar::load(rawPath);
+    CHECK_THAT(loaded.adjustments.contrast, WithinAbs(20.0, kScalarTol));
+    REQUIRE(loaded.snapshots.size() == 1);
+    CHECK(loaded.snapshots[0].name == "Keeper");
+    CHECK_THAT(loaded.snapshots[0].state.exposure, WithinAbs(1.0, kScalarTol));
+}
+
+TEST_CASE("saving snapshots preserves foreign XMP properties", "[xmp][snapshots][compatibility]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("catalogued.nef");
+    QFile sidecar(XmpSidecar::pathFor(rawPath));
+    REQUIRE(sidecar.open(QIODevice::WriteOnly));
+    REQUIRE(sidecar.write(R"xml(<?xml version="1.0"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description rdf:about=""
+      xmlns:dc="http://purl.org/dc/elements/1.1/">
+      <dc:subject><rdf:Bag><rdf:li>Travel</rdf:li></rdf:Bag></dc:subject>
+    </rdf:Description>
+  </rdf:RDF>
+</x:xmpmeta>)xml") > 0);
+    sidecar.close();
+
+    Snapshot snap;
+    snap.name = "Warm look";
+    snap.state.temperature = 8000.0f;
+    REQUIRE(XmpSidecar::saveAdjustments(rawPath, GlobalAdjustment{}, {snap}));
+
+    REQUIRE(sidecar.open(QIODevice::ReadOnly));
+    QDomDocument document;
+    REQUIRE(bool(document.setContent(
+        sidecar.readAll(), QDomDocument::ParseOption::UseNamespaceProcessing)));
+    const QDomNodeList subjects
+        = document.elementsByTagNameNS("http://purl.org/dc/elements/1.1/", "subject");
+    REQUIRE(subjects.size() == 1);
+    CHECK(subjects.at(0).toElement().text() == "Travel");
+    CHECK(XmpSidecar::load(rawPath).snapshots.size() == 1);
 }

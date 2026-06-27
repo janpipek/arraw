@@ -8,11 +8,13 @@
 #include "ColorManagement.h"
 #include "CropGeometry.h"
 #include "DevelopGroup.h"
+#include "DevelopParameter.h"
 #include "DevelopPreset.h"
 #include "DevelopSession.h"
 #include "ExportDialog.h"
 #include "ExportWorkflow.h"
 #include "FilmStrip.h"
+#include "HistoryPanel.h"
 #include "GroupChecklistDialog.h"
 #include "ImageLoadWorkflow.h"
 #include "ImageViewport.h"
@@ -85,7 +87,9 @@ public:
           mainWindow(mainWindow),
           before(before),
           after(after) {
-        setText("Adjust");
+        // Name the step by what actually changed ("Exposure", "Blue Hue", "Crop")
+        // so the History list reads as edits, not a wall of "Adjust".
+        setText(developChangeLabel(before, after));
     }
 
     void undo() override;
@@ -113,7 +117,7 @@ public:
           mainWindow(mainWindow),
           before(std::move(before)),
           after(std::move(after)) {
-        setText("Adjust Local");
+        setText(localChangeLabel(this->before, this->after));
     }
 
     void undo() override;
@@ -152,6 +156,37 @@ private:
     DevelopSession* session;
     MainWindow* mainWindow;
     std::vector<Spot> before, after;
+};
+
+// ---------------------------------------------------------------------------
+// Undo command for restoring a Snapshot (docs/adr/0033). A snapshot is a whole
+// develop state, so unlike AdjustmentCommand this fully refreshes both editors
+// and re-uploads the spotted/corrected buffers — masks, spots, and lens
+// corrections can all change in one swap.
+// ---------------------------------------------------------------------------
+class SnapshotRestoreCommand : public QUndoCommand {
+public:
+    SnapshotRestoreCommand(
+        DevelopSession* session,
+        MainWindow* mainWindow,
+        GlobalAdjustment before,
+        GlobalAdjustment after,
+        const QString& name)
+        : session(session),
+          mainWindow(mainWindow),
+          before(std::move(before)),
+          after(std::move(after)) {
+        setText(QObject::tr("Restore Snapshot \"%1\"").arg(name));
+    }
+
+    void undo() override;
+
+    void redo() override;
+
+private:
+    DevelopSession* session;
+    MainWindow* mainWindow;
+    GlobalAdjustment before, after;
 };
 
 // ---------------------------------------------------------------------------
@@ -208,6 +243,18 @@ void SpotListCommand::redo() {
     mainWindow->syncSessionSpotsToEditors(true);
 }
 
+void SnapshotRestoreCommand::undo() {
+    session->setParams(before);
+    mainWindow->syncSessionToEditors();
+    mainWindow->syncSessionSpotsToEditors(true); // re-upload buffers + spot panel
+}
+
+void SnapshotRestoreCommand::redo() {
+    session->setParams(after);
+    mainWindow->syncSessionToEditors();
+    mainWindow->syncSessionSpotsToEditors(true);
+}
+
 // ---------------------------------------------------------------------------
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent),
@@ -229,7 +276,8 @@ MainWindow::MainWindow(QWidget* parent)
     // The adjustments dock + reveal strip are NOT listed here: they are a
     // CollapsiblePane pair (ADR 0012), so lights-out drives them through
     // adjustmentsPane->hide()/show() to keep that invariant intact.
-    chromeHider.emplace(std::vector<QWidget*>{menuBar(), mainToolBar, statusBar(), filmStripDock});
+    chromeHider.emplace(
+        std::vector<QWidget*>{menuBar(), mainToolBar, statusBar(), filmStripDock, historyDock});
 
     connect(proofPanel, &ProofingPanel::proofingChanged, this, &MainWindow::rebuildDisplayLut);
     rebuildDisplayLut();
@@ -943,6 +991,23 @@ void MainWindow::setupDocks() {
     connect(
         filmStrip, &FilmStrip::populateContextMenu, this, &MainWindow::populateFilmStripContextMenu);
 
+    // History + Snapshots (left), Lightroom-style, visible while editing (ADR 0033).
+    historyDock = new QDockWidget("History", this);
+    historyDock->setObjectName("HistoryDock"); // saveState/restoreState key
+    historyDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
+    historyDock->setFeatures(
+        QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable
+        | QDockWidget::DockWidgetClosable);
+    historyPanel = new HistoryPanel(undoStack, historyDock);
+    historyDock->setWidget(historyPanel);
+    addDockWidget(Qt::LeftDockWidgetArea, historyDock);
+    historyDock->toggleViewAction()->setText("History");
+
+    connect(historyPanel, &HistoryPanel::addRequested, this, &MainWindow::addCurrentAsSnapshot);
+    connect(historyPanel, &HistoryPanel::restoreRequested, this, &MainWindow::restoreSnapshot);
+    connect(historyPanel, &HistoryPanel::renameRequested, this, &MainWindow::renameSnapshot);
+    connect(historyPanel, &HistoryPanel::deleteRequested, this, &MainWindow::deleteSnapshot);
+
     // Adjustments + metadata (right). Collapses to a thin edge strip (ADR 0012).
     auto* rightDock = adjustmentsDock = new QDockWidget("Adjustments", this);
     rightDock->setObjectName("AdjustmentsDock"); // saveState/restoreState key
@@ -1072,7 +1137,7 @@ bool MainWindow::saveDirtySidecar(bool forceDevelopSave) {
 
     bool saved = true;
     if (forceDevelopSave || session->developDirty()) {
-        if (XmpSidecar::saveAdjustments(session->path(), currentParams())) {
+        if (XmpSidecar::saveAdjustments(session->path(), currentParams(), session->snapshots())) {
             session->markDevelopSaved();
         } else {
             session->markDevelopSaveFailed();
@@ -1315,7 +1380,8 @@ void MainWindow::applyLoadResult(const QString& path, const LoadResult& result) 
         resolved.adjustments,
         resolved.sidecarState,
         resolved.metadata,
-        resolved.metadataPresence);
+        resolved.metadataPresence,
+        resolved.snapshots);
     session->setBaseLook(true);
     syncSessionToEditors();
     syncSessionSpotsToEditors(true);
@@ -1323,10 +1389,11 @@ void MainWindow::applyLoadResult(const QString& path, const LoadResult& result) 
     // explanation) for X-Trans/Foveon/standard images (docs/adr/0033).
     adjPanel->setDemosaicAvailable(sensorSupportsDemosaicSelection(result.filters));
     filmStrip->setMarks(path, ratingAndLabelOnly(session->userMetadata()));
+    historyPanel->setSnapshots(session->snapshots());
 
     infoPanel->setUserMetadata(session->userMetadata());
     infoPanel->setImageMetadata(result.metadata);
-    undoStack->clear();
+    undoStack->clear(); // History is session-only — it resets per image (ADR 0033)
 
     statusLabel->setText(loadedImageStatusText(path, session->fullRes(), session->sidecarState()));
 
@@ -1788,6 +1855,70 @@ void MainWindow::pushGlobalAdjustmentCommand(
     afterSnapshot.grainSeed = after.grainSeed;
     if (afterSnapshot != beforeSnapshot)
         undoStack->push(new AdjustmentCommand(session, this, beforeSnapshot, afterSnapshot));
+}
+
+// ---------------------------------------------------------------------------
+// Snapshot management (docs/adr/0033). Add/rename/delete edit the persisted list
+// directly and save immediately; restore replays a whole develop state as one
+// undoable step on the shared stack so it shows up in History like any edit.
+void MainWindow::addCurrentAsSnapshot() {
+    if (session->path().isEmpty())
+        return;
+    viewport->commitActiveTool();
+
+    bool ok = false;
+    const QString suggestion = tr("Snapshot %1").arg(session->snapshots().size() + 1);
+    const QString name
+        = QInputDialog::getText(
+              this, tr("Add Snapshot"), tr("Snapshot name:"), QLineEdit::Normal, suggestion, &ok)
+              .trimmed();
+    if (!ok || name.isEmpty())
+        return;
+
+    session->addSnapshot(name, currentParams());
+    historyPanel->setSnapshots(session->snapshots());
+    saveSnapshotsNow();
+}
+
+void MainWindow::restoreSnapshot(int index) {
+    const auto& snapshots = session->snapshots();
+    if (index < 0 || index >= static_cast<int>(snapshots.size()))
+        return;
+    viewport->commitActiveTool();
+
+    const GlobalAdjustment before = currentParams();
+    const GlobalAdjustment after = snapshots[index].state;
+    if (after != before)
+        undoStack->push(
+            new SnapshotRestoreCommand(session, this, before, after, snapshots[index].name));
+}
+
+void MainWindow::renameSnapshot(int index, const QString& name) {
+    const auto& snapshots = session->snapshots();
+    if (index < 0 || index >= static_cast<int>(snapshots.size()))
+        return;
+    const QString trimmed = name.trimmed();
+    if (trimmed.isEmpty()) {
+        historyPanel->setSnapshots(snapshots); // reject the empty edit, restore the old name
+        return;
+    }
+    session->renameSnapshot(index, trimmed);
+    historyPanel->setSnapshots(session->snapshots());
+    saveSnapshotsNow();
+}
+
+void MainWindow::deleteSnapshot(int index) {
+    if (index < 0 || index >= static_cast<int>(session->snapshots().size()))
+        return;
+    session->removeSnapshot(index);
+    historyPanel->setSnapshots(session->snapshots());
+    saveSnapshotsNow();
+}
+
+void MainWindow::saveSnapshotsNow() {
+    // Snapshot edits mark the develop state dirty, so the shared sidecar save
+    // persists them (and surfaces any write failure) like any other develop edit.
+    saveDirtySidecar();
 }
 
 void MainWindow::pushParamsToViewport() {
