@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(arraw VERSION 0.2.2 LANGUAGES CXX)
+project(arraw VERSION 0.2.3 LANGUAGES CXX)
 
 option(ARRAW_BUILD_TESTS "Build arraw tests" ON)
 if(ARRAW_BUILD_TESTS)
@@ -208,12 +208,14 @@ set(CORE_SOURCES
     src/CropGeometry.cpp
     src/Orientation.cpp
     src/DevelopGroup.cpp
+    src/DevelopParameter.cpp
     src/DemosaicAlgorithm.cpp
     src/DevelopPreset.cpp
     src/GroupChecklistDialog.cpp
     src/PresetStore.cpp
     src/Spot.cpp
     src/SpotRemovalPanel.cpp
+    src/HistoryPanel.cpp
     src/NoiseReduction.cpp
     src/LensCorrection.cpp
     src/LensfunSource.cpp

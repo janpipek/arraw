@@ -1,8 +1,10 @@
 #pragma once
 #include "ImagePipeline.h"
+#include "Snapshot.h"
 #include "UserMetadata.h"
 #include <QByteArray>
 #include <QString>
+#include <vector>
 
 // Reads and writes the XMP sidecar file: develop settings (crs: namespace) and
 // user-authored culling marks (xmp:Rating / xmp:Label). See docs/adr/0007.
@@ -15,6 +17,8 @@ struct SidecarData {
     GlobalAdjustment adjustments;
     UserMetadata metadata;
     UserMetadataPresence metadataPresence;
+    // Named A/B develop states, persisted in the arraw: namespace (docs/adr/0033).
+    std::vector<Snapshot> snapshots;
     // True when the sidecar carried an explicit tiff:Orientation. When false, the
     // resolver seeds orientation from the file's EXIF instead (docs/adr/0028).
     bool orientationStored = false;
@@ -80,6 +84,13 @@ public:
     // Namespace-scoped, read-first saves: each replaces only its own half of the
     // sidecar and preserves the other half already on disk (docs/adr/0007).
     static bool saveAdjustments(const QString& rawPath, const GlobalAdjustment& params);
+    // Saves develop settings together with the photo's named Snapshots
+    // (docs/adr/0033). The 2-arg form above preserves whatever snapshots are
+    // already on disk; this form replaces them.
+    static bool saveAdjustments(
+        const QString& rawPath,
+        const GlobalAdjustment& params,
+        const std::vector<Snapshot>& snapshots);
     static bool saveMetadata(const QString& rawPath, const UserMetadata& metadata);
     static bool saveMetadata(
         const QString& rawPath, const UserMetadata& metadata, const UserMetadataPresence& descriptiveFields);

@@ -4,6 +4,7 @@
 #include "ImagePipeline.h"
 #include <array>
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <rhi/qrhi.h>
 #include <vector>
@@ -146,6 +147,23 @@ public:
     QImage renderOffscreen(
         const ImageBuffer& buf, const FrameParams& fp, QSize size, QRhiTexture::Format fmt);
 
+    // Non-blocking sibling of renderOffscreen (docs/adr/0033): records one shader
+    // pass into a pooled offscreen target and enqueues a readback into the
+    // caller's already-open frame `cb` — no beginOffscreenFrame, no flush, so the
+    // GUI thread never waits on the GPU. `onReady(QImage)` fires on the GUI thread
+    // when QRhi processes the frame (a frame or two later). Returns false without
+    // recording if the pooled target for (size, fmt) is still mid-readback
+    // (back-pressure: the caller drops this refresh and retries on its next
+    // debounce). Used only for the histogram hot path; export/WB/clip keep the
+    // blocking path.
+    bool recordOffscreenReadback(
+        QRhiCommandBuffer* cb,
+        Slot slot,
+        const FrameParams& fp,
+        QSize size,
+        QRhiTexture::Format fmt,
+        std::function<void(QImage)> onReady);
+
 private:
     struct PendingImage {
         QByteArray rgba; // RGB float buffer expanded to RGBA
@@ -162,6 +180,21 @@ private:
         QRhiTexture* sensorClipTex,
         const FrameParams& fp,
         QRhiResourceUpdateBatch* batch);
+    // recordPass variant driving an explicit uniform buffer + bindings, so a pass
+    // sharing the command buffer with the on-screen pass can keep its own uniforms
+    // (the histogram readbacks; see ReadbackTarget::ubuf).
+    void recordPassWith(
+        QRhiCommandBuffer* cb,
+        QRhiRenderTarget* rt,
+        const FrameParams& fp,
+        QRhiResourceUpdateBatch* batch,
+        QRhiBuffer* ub,
+        QRhiShaderResourceBindings* bindings);
+    void buildBindings(
+        std::unique_ptr<QRhiShaderResourceBindings>& dst,
+        QRhiBuffer* ub,
+        QRhiTexture* imageTex,
+        QRhiTexture* sensorClipTex);
     QImage renderOffscreenTex(
         int slotIndex,
         QRhiTexture* extTex,
@@ -169,6 +202,38 @@ private:
         QSize size,
         QRhiTexture::Format fmt);
     QImage readbackToImage(const QRhiReadbackResult& rr) const;
+
+    // A reusable offscreen target for non-blocking histogram readbacks (ADR
+    // 0033). Pooled (rather than allocated per refresh) and kept alive across the
+    // in-flight frame window: the QRhiReadbackResult and its `completed` lambda
+    // must outlive the frame they were recorded in. `inFlight` is the skip-guard
+    // that drops a new request while a previous readback is still pending.
+    struct ReadbackTarget {
+        std::unique_ptr<QRhiTexture> tex;
+        std::unique_ptr<QRhiTextureRenderTarget> rt;
+        std::unique_ptr<QRhiRenderPassDescriptor> rp;
+        QRhiReadbackResult rr;
+        QSize size;
+        QRhiTexture::Format fmt = QRhiTexture::RGBA8;
+        bool inFlight = false;
+        // A dedicated uniform buffer and bindings per target: a Dynamic uniform
+        // buffer is double-buffered per frame-in-flight, not per pass, so a
+        // readback pass sharing the on-screen `ubuf` would overwrite the main
+        // pass's uniforms within the same frame (stretched preview). Each
+        // concurrent pass in a frame needs its own buffer (QRhiBuffer docs).
+        std::unique_ptr<QRhiBuffer> ubuf;
+        std::unique_ptr<QRhiShaderResourceBindings> srb;
+        QRhiTexture* srbImageTex = nullptr;
+        QRhiTexture* srbSensorTex = nullptr;
+        int srbGeneration = -1;
+    };
+
+    // Returns the pooled target for (size, fmt), creating it on first use, or
+    // nullptr if its GPU resources fail to create. Entries live in unique_ptrs so
+    // their addresses stay stable for the captured `completed` lambda even as the
+    // pool grows.
+    ReadbackTarget* ensureReadbackTarget(QSize size, QRhiTexture::Format fmt);
+
     QRhiGraphicsPipeline* pipelineFor(QRhiRenderPassDescriptor* rpDesc);
     QRhiShaderResourceBindings* bindingsFor(QRhiTexture* imageTex, QRhiTexture* sensorClipTex);
     void fillUbuf(Ubuf& ub, const FrameParams& fp) const;
@@ -254,4 +319,8 @@ private:
 
     // [0]=Preview, [1]=FullRes, [2]=export's temporary full-res texture.
     NrSlot nrSlot[3];
+
+    // Pooled offscreen targets for non-blocking histogram readbacks (ADR 0033),
+    // one per distinct (size, fmt). Few and small, so they are never evicted.
+    std::vector<std::unique_ptr<ReadbackTarget>> readbackPool;
 };

@@ -126,6 +126,10 @@ void RendererCore::release() {
     nrUbuf.reset();
     for (NrSlot& s : nrSlot)
         s = NrSlot{};
+    // Destroy any in-flight readback targets before the QRhi goes away: this
+    // frees each QRhiReadbackResult so a pending `completed` lambda can never
+    // fire against a torn-down RendererCore (docs/adr/0033).
+    readbackPool.clear();
     imageTex[0].reset();
     imageTex[1].reset();
     sensorClipTex[0].reset();
@@ -332,16 +336,17 @@ void RendererCore::flushPendingUploads(QRhiResourceUpdateBatch* batch) {
 
 // ── Pipeline / bindings ───────────────────────────────────────────────────────
 
-QRhiShaderResourceBindings* RendererCore::bindingsFor(QRhiTexture* tex, QRhiTexture* sensorTex) {
-    if (srb && srbImageTex == tex && srbSensorClipTex == sensorTex && srbGeneration == generation)
-        return srb.get();
-
-    srb.reset(rhi->newShaderResourceBindings());
-    srb->setBindings({
+void RendererCore::buildBindings(
+    std::unique_ptr<QRhiShaderResourceBindings>& dst,
+    QRhiBuffer* ub,
+    QRhiTexture* tex,
+    QRhiTexture* sensorTex) {
+    dst.reset(rhi->newShaderResourceBindings());
+    dst->setBindings({
         QRhiShaderResourceBinding::uniformBuffer(
             0,
             QRhiShaderResourceBinding::VertexStage | QRhiShaderResourceBinding::FragmentStage,
-            ubuf.get()),
+            ub),
         QRhiShaderResourceBinding::sampledTexture(
             1, QRhiShaderResourceBinding::FragmentStage, tex, sampler.get()),
         QRhiShaderResourceBinding::sampledTexture(
@@ -353,7 +358,14 @@ QRhiShaderResourceBindings* RendererCore::bindingsFor(QRhiTexture* tex, QRhiText
         QRhiShaderResourceBinding::sampledTexture(
             5, QRhiShaderResourceBinding::FragmentStage, sensorTex, sampler.get()),
     });
-    srb->create();
+    dst->create();
+}
+
+QRhiShaderResourceBindings* RendererCore::bindingsFor(QRhiTexture* tex, QRhiTexture* sensorTex) {
+    if (srb && srbImageTex == tex && srbSensorClipTex == sensorTex && srbGeneration == generation)
+        return srb.get();
+
+    buildBindings(srb, ubuf.get(), tex, sensorTex);
     srbImageTex = tex;
     srbSensorClipTex = sensorTex;
     srbGeneration = generation;
@@ -549,18 +561,19 @@ void RendererCore::fillUbuf(Ubuf& ub, const FrameParams& fp) const {
 
 // `batch` must already contain the pending uploads (flushPendingUploads can
 // recreate image textures, so the sampled texture is resolved only afterwards).
-void RendererCore::recordPass(
+void RendererCore::recordPassWith(
     QRhiCommandBuffer* cb,
     QRhiRenderTarget* rt,
-    QRhiTexture* tex,
-    QRhiTexture* sensorTex,
     const FrameParams& fp,
-    QRhiResourceUpdateBatch* batch) {
-    Ubuf ub{};
-    fillUbuf(ub, fp);
-    batch->updateDynamicBuffer(ubuf.get(), 0, sizeof(Ubuf), &ub);
+    QRhiResourceUpdateBatch* batch,
+    QRhiBuffer* ub,
+    QRhiShaderResourceBindings* bindings) {
+    Ubuf u{};
+    fillUbuf(u, fp);
+    batch->updateDynamicBuffer(ub, 0, sizeof(Ubuf), &u);
 
-    QRhiShaderResourceBindings* bindings = bindingsFor(tex, sensorTex);
+    // The pipeline carries only the bindings *layout*; `bindings` is bound per
+    // draw and need only be layout-compatible (same as the on-screen srb).
     QRhiGraphicsPipeline* pipe = pipelineFor(rt->renderPassDescriptor());
 
     cb->beginPass(rt, kClearColor, {1.0f, 0}, batch);
@@ -572,6 +585,16 @@ void RendererCore::recordPass(
     cb->setVertexInput(0, 1, &vi);
     cb->draw(4);
     cb->endPass();
+}
+
+void RendererCore::recordPass(
+    QRhiCommandBuffer* cb,
+    QRhiRenderTarget* rt,
+    QRhiTexture* tex,
+    QRhiTexture* sensorTex,
+    const FrameParams& fp,
+    QRhiResourceUpdateBatch* batch) {
+    recordPassWith(cb, rt, fp, batch, ubuf.get(), bindingsFor(tex, sensorTex));
 }
 
 // ── Colour Noise Reduction pre-pass (docs/adr/0032) ──────────────────────────
@@ -859,4 +882,93 @@ QImage RendererCore::renderOffscreen(
     // same-address allocation alias it.
     srbImageTex = nullptr;
     return out;
+}
+
+// ── Non-blocking offscreen render + async readback (docs/adr/0033) ────────────
+
+RendererCore::ReadbackTarget* RendererCore::ensureReadbackTarget(
+    QSize size, QRhiTexture::Format fmt) {
+    for (const std::unique_ptr<ReadbackTarget>& t : readbackPool)
+        if (t->size == size && t->fmt == fmt)
+            return t.get();
+
+    auto t = std::make_unique<ReadbackTarget>();
+    t->size = size;
+    t->fmt = fmt;
+    t->ubuf.reset(rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, sizeof(Ubuf)));
+    if (!t->ubuf->create())
+        return nullptr;
+    t->tex.reset(
+        rhi->newTexture(fmt, size, 1, QRhiTexture::RenderTarget | QRhiTexture::UsedAsTransferSource));
+    if (!t->tex->create())
+        return nullptr;
+    QRhiColorAttachment att(t->tex.get());
+    t->rt.reset(rhi->newTextureRenderTarget({att}));
+    t->rp.reset(t->rt->newCompatibleRenderPassDescriptor());
+    t->rt->setRenderPassDescriptor(t->rp.get());
+    if (!t->rt->create())
+        return nullptr;
+    readbackPool.push_back(std::move(t));
+    return readbackPool.back().get();
+}
+
+bool RendererCore::recordOffscreenReadback(
+    QRhiCommandBuffer* cb,
+    Slot slot,
+    const FrameParams& fp,
+    QSize size,
+    QRhiTexture::Format fmt,
+    std::function<void(QImage)> onReady) {
+    if (!rhi || !hasImage(slot))
+        return false;
+    ReadbackTarget* t = ensureReadbackTarget(size, fmt);
+    if (!t || t->inFlight)
+        return false; // back-pressure: drop this refresh, the debounce retries
+
+    // Mirrors renderOffscreenTex's body minus the frame open/close: record the
+    // pass into the caller's in-flight `cb`, reusing this frame's cached NR
+    // denoised texture (ADR 0032) so the sample matches the live preview.
+    prepareToneLut(fp.adjustments);
+    QRhiResourceUpdateBatch* batch = rhi->nextResourceUpdateBatch();
+    flushPendingUploads(batch);
+    const int slotIndex = int(slot);
+    QRhiTexture* tex = imageTex[slotIndex].get();
+    QRhiTexture* sensorTex = sensorClipTex[slotIndex] ? sensorClipTex[slotIndex].get()
+                                                      : sensorClipDummyTex.get();
+    if (nrActive(fp.adjustments)) {
+        cb->resourceUpdate(batch);
+        tex = ensureDenoised(
+            cb,
+            slotIndex,
+            tex,
+            fp.adjustments.colorNoiseReductionSmoothness,
+            fp.adjustments.colorNoiseReduction);
+        batch = rhi->nextResourceUpdateBatch();
+    }
+    // Record with the target's own uniform buffer + bindings — never the shared
+    // on-screen `ubuf` — so this pass cannot clobber the main pass's uniforms
+    // within the frame they share (see ReadbackTarget::ubuf).
+    if (!t->srb || t->srbImageTex != tex || t->srbSensorTex != sensorTex
+        || t->srbGeneration != generation) {
+        buildBindings(t->srb, t->ubuf.get(), tex, sensorTex);
+        t->srbImageTex = tex;
+        t->srbSensorTex = sensorTex;
+        t->srbGeneration = generation;
+    }
+    recordPassWith(cb, t->rt.get(), fp, batch, t->ubuf.get(), t->srb.get());
+
+    QRhiResourceUpdateBatch* readBatch = rhi->nextResourceUpdateBatch();
+    readBatch->readBackTexture(QRhiReadbackDescription(t->tex.get()), &t->rr);
+    t->inFlight = true;
+    // `t` is a stable pooled address owned by this RendererCore; the pool (and
+    // each QRhiReadbackResult) outlives the in-flight window. On teardown the
+    // pool is cleared, destroying the result before it can fire — so the capture
+    // never dangles. `completed` runs on the GUI thread during frame processing.
+    t->rr.completed = [this, t, onReady = std::move(onReady)]() {
+        QImage img = readbackToImage(t->rr);
+        t->inFlight = false;
+        onReady(img);
+    };
+    cb->resourceUpdate(readBatch);
+    return true;
 }

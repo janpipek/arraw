@@ -14,12 +14,6 @@
 #include <QStackedWidget>
 #include <QVBoxLayout>
 
-namespace {
-// Per-row number handling (see FieldSpec). All local deltas are ±100 except
-// exposure (EV); local temperature is a relative ±100 shift, not Kelvin.
-const FieldSpec kExposureSpec{-500, 500, 0, 0.01f, 0.01f, 2, " EV", true, 0.05f};
-const FieldSpec kBipolarSpec{-100, 100, 0, 1.0f, 1.0f, 0, {}, true, 1.0f};
-} // namespace
 
 LocalAdjustmentPanel::LocalAdjustmentPanel(QWidget* parent)
     : QWidget(parent) {
@@ -95,31 +89,14 @@ LocalAdjustmentPanel::LocalAdjustmentPanel(QWidget* parent)
 
     col->addWidget(geomStack);
 
-    // Delta sliders for the active mask — one row per SharedAdjustment field
-    // plus the relative temperature.
-    struct RowDef {
-        const char* name;
-        FieldSpec spec;
-        float LocalAdjustment::* member;
-    };
-
-    const RowDef defs[] = {
-        {"Exposure", kExposureSpec, &LocalAdjustment::exposure},
-        {"Contrast", kBipolarSpec, &LocalAdjustment::contrast},
-        {"Highlights", kBipolarSpec, &LocalAdjustment::highlights},
-        {"Shadows", kBipolarSpec, &LocalAdjustment::shadows},
-        {"Whites", kBipolarSpec, &LocalAdjustment::whites},
-        {"Blacks", kBipolarSpec, &LocalAdjustment::blacks},
-        {"Temp", kBipolarSpec, &LocalAdjustment::temperature},
-        {"Tint", kBipolarSpec, &LocalAdjustment::tint},
-        {"Saturation", kBipolarSpec, &LocalAdjustment::saturation},
-        {"Vibrance", kBipolarSpec, &LocalAdjustment::vibrance},
-    };
-    for (const RowDef& d : defs) {
+    // Delta sliders for the active mask — one row per shared develop field plus
+    // the relative temperature. The rows (label, number handling, target field)
+    // come from the single source shared with History labelling.
+    for (const LocalDeltaField& d : localDeltaFields()) {
         auto* row = new QWidget(this);
         auto* hbox = new QHBoxLayout(row);
         hbox->setContentsMargins(0, 0, 0, 0);
-        auto* lbl = new QLabel(d.name, row);
+        auto* lbl = new QLabel(d.label, row);
         lbl->setFixedWidth(72);
         auto* sl = new QSlider(Qt::Horizontal, row);
         sl->setRange(d.spec.min, d.spec.max);
@@ -257,13 +234,8 @@ void LocalAdjustmentPanel::rebuildList() {
     QSignalBlocker block(maskList);
     const int keep = maskList->currentRow();
     maskList->clear();
-    int linearN = 0, radialN = 0;
-    for (const LocalAdjustment& la : adjustments) {
-        const QString label = std::holds_alternative<RadialMask>(la.mask)
-                                  ? QStringLiteral("Radial %1").arg(++radialN)
-                                  : QStringLiteral("Linear %1").arg(++linearN);
-        maskList->addItem(label);
-    }
+    for (int i = 0; i < int(adjustments.size()); ++i)
+        maskList->addItem(maskDisplayName(adjustments, i));
     if (keep >= 0 && keep < int(adjustments.size()))
         maskList->setCurrentRow(keep);
 }
