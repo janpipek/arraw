@@ -17,7 +17,7 @@ struct LoadResult {
     ImageBuffer sensorClipPreview;
     ImageMetadata metadata;
     // Raw XMP packet bytes embedded in the file (DNG/maker XMP), unparsed. The
-    // shell parses these (docs/adr/0036): decode emits bytes, persistence
+    // shell parses these (docs/adr/0041): decode emits bytes, persistence
     // interprets them. Empty for standard images and files with no embedded XMP.
     QByteArray embeddedXmpPacket;
     QString error; // non-empty on failure

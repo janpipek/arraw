@@ -220,7 +220,7 @@ LoadResult RawProcessor::load(
 
     const ImageMetadata metadata = extractMetadata(*raw);
     const auto& id = raw->imgdata.idata;
-    // Emit the raw XMP packet bytes; the shell parses them (docs/adr/0036).
+    // Emit the raw XMP packet bytes; the shell parses them (docs/adr/0041).
     QByteArray embeddedXmp(
         id.xmpdata && id.xmplen > 0 ? id.xmpdata : nullptr,
         id.xmpdata && id.xmplen > 0 ? int(id.xmplen) : 0);
