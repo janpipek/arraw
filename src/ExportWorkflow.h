@@ -1,6 +1,8 @@
 #pragma once
 
+#include "ExportMetadata.h"
 #include "ExportOptions.h"
+#include "develop/UserMetadata.h"
 
 #include <QImage>
 #include <QString>
@@ -27,3 +29,20 @@ QString batchExportPath(
 QImage applyUnsharpMask(QImage image, int amount);
 QImage prepareExportImage(QImage linearWorkingImage, const ExportOptions& options);
 bool saveExportImage(const QImage& image, const QString& path, const ExportOptions& options);
+
+// The off-GUI-thread tail of an export (docs/adr/0045). Given the rendered
+// linear working-space image, run the output transform + sharpen, encode and
+// write the file, then best-effort embed metadata (only when the write
+// succeeded). Pure CPU/IO over value inputs — no RHI, no DevelopSession — so it
+// runs on a worker thread and is unit-testable.
+struct ExportTailResult {
+    bool saved = false;
+    ExportMetadataStatus metadata = ExportMetadataStatus::SkippedNoBackend;
+};
+
+ExportTailResult runExportTail(
+    QImage linearWorkingImage,
+    const ExportOptions& options,
+    const QString& outputPath,
+    const QString& sourcePath,
+    const UserMetadata& metadata);

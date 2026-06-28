@@ -2067,14 +2067,15 @@ void MainWindow::generateDevelopedThumbnail() {
     const QSize sz
         = developedThumbSize(preview.width, preview.height, p.cropRect, 512, p.orientation);
 
-    // Same pipeline as export: linear working-space render → output transform.
-    QImage lin = viewport->renderToImage(preview, p, sz.width(), sz.height());
+    // Render the linear working-space thumbnail on the GUI thread (RHI-bound),
+    // then hand it off: the output transform, JPEG encode and disk write run on
+    // a worker, and the strip updates via thumbnailReady — so an edit→save burst
+    // never stalls the UI (docs/adr/0045). The generation guard inside
+    // ThumbnailCache keeps the newest render authoritative.
+    const QImage lin = viewport->renderToImage(preview, p, sz.width(), sz.height());
     if (lin.isNull())
         return;
-    const QImage srgb = toOutputImage(lin, OutputProfile::SRgb, /*sixteenBit=*/false);
-
-    ThumbnailCache::store(session->path(), srgb);   // persist (overwrites the embedded one)
-    filmStrip->setThumbnail(session->path(), srgb); // live strip update
+    filmStrip->cacheDevelopedThumbnail(session->path(), lin);
 }
 
 void MainWindow::saveAdjustments() {
@@ -2128,24 +2129,37 @@ void MainWindow::exportPaths(const QStringList& paths) {
         return;
 
     const QString path = withExportSuffix(fileDlg.selectedFiles().constFirst(), opts.format);
+    const QString fileName = QFileInfo(path).fileName();
 
-    statusLabel->setText("Exporting…");
-    QApplication::processEvents(); // repaint the status bar before the render blocks the UI
-
-    // Linear working-space render → output profile (lcms2) → sharpen → save.
+    // Render the linear working-space image on the GUI thread (RHI-bound), then
+    // run the CPU tail — output transform, sharpen, encode, metadata embed, disk
+    // write — on a worker so the UI stays live and the user can keep editing
+    // (docs/adr/0045). The rendered QImage and value-copied inputs are a complete
+    // snapshot, so the worker never touches the session.
     QImage out = viewport->renderToImage(session->fullResForExport(), p, opts.width, opts.height);
-    out = prepareExportImage(std::move(out), opts);
+    const QString sourcePath = session->path();
+    const UserMetadata metadata = session->userMetadata();
+    statusLabel->setText("Exporting " + fileName + "…");
 
-    if (!saveExportImage(out, path, opts)) {
-        QMessageBox::critical(this, "Export Error", "Failed to save " + path);
-    } else {
-        const ExportMetadataResult metadataResult
-            = embedExportMetadata(path, session->path(), session->userMetadata(), opts.metadata);
-        QString status = "Exported: " + QFileInfo(path).fileName();
-        if (metadataResult.status == ExportMetadataStatus::Failed)
-            status += " (metadata skipped)";
-        statusLabel->setText(status);
-    }
+    (void) QtConcurrent::run(
+        [this, out = std::move(out), opts, path, sourcePath, metadata, fileName]() mutable {
+            const ExportTailResult result
+                = runExportTail(std::move(out), opts, path, sourcePath, metadata);
+            QMetaObject::invokeMethod(
+                this,
+                [this, result, path, fileName]() {
+                    if (!result.saved) {
+                        statusLabel->setText("Export failed.");
+                        QMessageBox::critical(this, "Export Error", "Failed to save " + path);
+                        return;
+                    }
+                    QString status = "Exported: " + fileName;
+                    if (result.metadata == ExportMetadataStatus::Failed)
+                        status += " (metadata skipped)";
+                    statusLabel->setText(status);
+                },
+                Qt::QueuedConnection);
+        });
 }
 
 void MainWindow::exportBatch(const QStringList& paths) {
@@ -2186,6 +2200,33 @@ void MainWindow::exportBatch(const QStringList& paths) {
     int exported = 0;
     int metadataFailures = 0;
     auto cancel = std::make_shared<std::atomic<bool>>(false);
+
+    // Depth-1 pipeline (docs/adr/0045): the CPU tail (transform + encode +
+    // metadata + write) of the previous file runs on a worker while this file
+    // decodes and renders on the GUI thread. We hold at most one tail in flight —
+    // each carries a full-res buffer (RGBA32F, ~384 MB at 24 MP), so wider
+    // fan-out would risk OOM — and tally its result when we drain it before
+    // starting the next one.
+    QFuture<ExportTailResult> pendingTail;
+    bool hasPendingTail = false;
+    auto drainPendingTail = [&]() {
+        if (!hasPendingTail)
+            return;
+        QFutureWatcher<ExportTailResult> watcher;
+        QEventLoop wait;
+        connect(&watcher, &QFutureWatcher<ExportTailResult>::finished, &wait, &QEventLoop::quit);
+        watcher.setFuture(pendingTail);
+        if (watcher.isRunning())
+            wait.exec(); // keep the dialog painting while the tail finishes
+        const ExportTailResult result = watcher.result();
+        if (result.saved) {
+            ++exported;
+            if (result.metadata == ExportMetadataStatus::Failed)
+                ++metadataFailures;
+        }
+        hasPendingTail = false;
+    };
+
     for (int i = 0; i < paths.size(); ++i) {
         if (progress.wasCancelled())
             break;
@@ -2199,8 +2240,8 @@ void MainWindow::exportBatch(const QStringList& paths) {
         // else is decoded on a worker thread while a nested event loop keeps the
         // window servicing events — so it stays responsive (no "not responding"
         // from the window manager) while the modal dialog blocks user input.
-        // The GPU render + encode below are short and must stay on the GUI thread
-        // (renderToImage needs the RHI context).
+        // The GPU render must stay on the GUI thread (renderToImage needs the RHI
+        // context); the encode tail is handed to a worker below.
         LoadResult loaded;
         if (rawPath == session->path()) {
             loaded.fullRes = session->fullRes();
@@ -2243,22 +2284,24 @@ void MainWindow::exportBatch(const QStringList& paths) {
         const int outH = opts.height > 0 ? opts.height : perFileNatural.height();
 
         QImage out = viewport->renderToImage(renderBuf, p, outW, outH);
-        out = prepareExportImage(std::move(out), opts);
-
         const QString outPath = batchExportPath(outputDir, rawPath, opts.format);
-        const bool ok = saveExportImage(out, outPath, opts);
+        const UserMetadata metadata = (rawPath == session->path())
+                                          ? session->userMetadata()
+                                          : resolveLoadedImage(rawPath, loaded).metadata;
 
-        if (ok) {
-            const UserMetadata metadata = (rawPath == session->path())
-                                              ? session->userMetadata()
-                                              : resolveLoadedImage(rawPath, loaded).metadata;
-            const ExportMetadataResult metadataResult
-                = embedExportMetadata(outPath, rawPath, metadata, opts.metadata);
-            if (metadataResult.status == ExportMetadataStatus::Failed)
-                ++metadataFailures;
-            ++exported;
-        }
+        // One tail in flight at a time: finish (and tally) the previous file's
+        // before encoding this one.
+        drainPendingTail();
+        pendingTail = QtConcurrent::run(
+            [out = std::move(out), opts, outPath, rawPath, metadata]() mutable {
+                return runExportTail(std::move(out), opts, outPath, rawPath, metadata);
+            });
+        hasPendingTail = true;
     }
+
+    // Let the last (or, on cancel, the in-flight) tail finish — encode/write do
+    // not interrupt cleanly, so we never leave a half-written file.
+    drainPendingTail();
 
     progress.close();
     QString status = batchExportStatusText(exported, paths.size());

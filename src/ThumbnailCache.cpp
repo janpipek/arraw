@@ -1,5 +1,6 @@
-#include "core/ImageMetadata.h"
 #include "ThumbnailCache.h"
+#include "core/ImageMetadata.h"
+#include "pipeline/ColorManagement.h"
 #include "pipeline/RawProcessor.h"
 #include <libraw/libraw.h>
 #include <memory>
@@ -101,6 +102,16 @@ bool storeNextGeneration(const QString& path, const QImage& image) {
     return saveJpeg(scaleDown(image, kMaxThumbPx), path);
 }
 
+// Claim the next generation for a path without writing — the asynchronous
+// developed-thumbnail store bumps here on the GUI thread so any older tail
+// still in flight loses, then writes from its worker via storeIfGenerationMatches.
+quint64 reserveGeneration(const QString& path) {
+    QMutexLocker lock(&generationMutex);
+    const quint64 next = generations.value(path) + 1;
+    generations.insert(path, next);
+    return next;
+}
+
 bool generationStillCurrentUnlocked(const QString& path, quint64 generation) {
     return generations.value(path) == generation;
 }
@@ -136,6 +147,31 @@ bool ThumbnailCache::store(const QString& rawPath, const QImage& image) {
     if (outPath.isEmpty() || image.isNull())
         return false;
     return storeNextGeneration(outPath, image);
+}
+
+void ThumbnailCache::storeDevelopedAsync(const QString& rawPath, QImage linearWorkingImage) {
+    const QString outPath = cachePathFor(rawPath);
+    if (outPath.isEmpty() || linearWorkingImage.isNull())
+        return;
+
+    // Bump the generation now (GUI thread) so a slower older tail is already
+    // stale by the time it tries to write; the worker re-checks under the lock.
+    const quint64 generation = reserveGeneration(outPath);
+
+    (void) QtConcurrent::run(
+        [this, rawPath, outPath, generation, linear = std::move(linearWorkingImage)]() mutable {
+            QImage srgb = toOutputImage(linear, OutputProfile::SRgb, /*sixteenBit=*/false);
+            if (!storeIfGenerationMatches(outPath, srgb, generation))
+                return; // superseded mid-flight — leave disk and strip untouched
+
+            QMetaObject::invokeMethod(
+                this,
+                [this, rawPath, outPath, generation, srgb = std::move(srgb)]() {
+                    if (generationStillCurrent(outPath, generation))
+                        emit thumbnailReady(rawPath, srgb);
+                },
+                Qt::QueuedConnection);
+        });
 }
 
 #ifdef ARRAW_TESTING

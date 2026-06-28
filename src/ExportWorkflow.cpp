@@ -81,3 +81,18 @@ bool saveExportImage(const QImage& image, const QString& path, const ExportOptio
         return image.save(path, spec.saveFormat, options.quality);
     return image.save(path);
 }
+
+ExportTailResult runExportTail(
+    QImage linearWorkingImage,
+    const ExportOptions& options,
+    const QString& outputPath,
+    const QString& sourcePath,
+    const UserMetadata& metadata) {
+    const QImage output = prepareExportImage(std::move(linearWorkingImage), options);
+    if (!saveExportImage(output, outputPath, options))
+        return {}; // saved = false; metadata never attempted on a failed write
+
+    const ExportMetadataResult embedded
+        = embedExportMetadata(outputPath, sourcePath, metadata, options.metadata);
+    return {true, embedded.status};
+}

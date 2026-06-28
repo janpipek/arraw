@@ -26,6 +26,15 @@ public:
     // reflects the current edits), replacing the camera-embedded thumbnail.
     static bool store(const QString& rawPath, const QImage& image);
 
+    // Asynchronous sibling of store() for the develop view (docs/adr/0045): the
+    // GUI thread renders the linear working-space thumbnail and hands it here;
+    // the output transform, JPEG encode and disk write run on a worker so an
+    // edit→save burst never stalls the UI. Reuses the same per-path generation
+    // guard as store()/request(), so a stale tail updates neither the disk cache
+    // nor the strip — the newest render always wins. Emits thumbnailReady on the
+    // GUI thread when it is still the current generation.
+    void storeDevelopedAsync(const QString& rawPath, QImage linearWorkingImage);
+
 #ifdef ARRAW_TESTING
     static quint64 cacheGenerationForTesting(const QString& rawPath);
     static bool storeIfGenerationMatchesForTesting(
