@@ -55,6 +55,24 @@ rebuild:
 rerun: rebuild
     ./build/arraw
 
+# Build the development sandbox container image (ADR 0044)
+[unix]
+sandbox-build:
+    uv run tools/sandbox.py build
+
+# Run the dev sandbox (autonomous agent); pass --shell, --gui, --photos DIR
+[unix]
+sandbox *args:
+    uv run tools/sandbox.py run {{args}}
+
+[windows]
+sandbox-build:
+    @echo "sandbox is Linux-only (rootless Podman + Wayland); run it on a Linux host."; exit 1
+
+[windows]
+sandbox *args:
+    @echo "sandbox is Linux-only (rootless Podman + Wayland); run it on a Linux host."; exit 1
+
 # Create an appimage for linux
 [unix]
 appimage:

@@ -51,8 +51,13 @@ single `build/` valid whether the last `cmake` ran on the host or in the
 container — no forced reconfigure when switching between them. The cost is that
 host and container must not configure `build/` with *incompatible* toolchains at
 the same time; we accept this because both are Fedora 44 with the same compiler,
-and a stray reconfigure is cheap. SELinux relabelling (`:Z`) is applied to the
-mount so the container can read and write under enforcing mode.
+and a stray reconfigure is cheap. Under enforcing SELinux the container runs with
+`--security-opt label=disable` rather than relabelling the mounts (`:Z`):
+relabelling recursively rewrites the SELinux context of every bind-mounted file,
+which is both invasive to host directories and prohibitively slow for a large
+read-only photo library. Disabling the container's SELinux label leaves the
+user-namespace and filesystem scoping — the boundary we actually rely on —
+intact.
 
 ## Identity: map to the host user (`keep-id`)
 

@@ -1,0 +1,45 @@
+# Development sandbox image for arraw (ADR 0044).
+#
+# Fedora 44 to match the development host, so an AI coding agent (or a
+# contributor) builds against the same Qt6/Mesa/LibRaw versions that run
+# natively. Distinct from packaging/linux/Containerfile, which targets
+# ubuntu:24.04 for AppImage glibc parity (ADR 0014) — this one optimises for
+# host parity and interactive iteration.
+#
+# Build once (cached); the working tree is bind-mounted at run time, so code
+# changes never invalidate the image. Used by tools/sandbox.py and by
+# .devcontainer/devcontainer.json (VS Code / JetBrains / Zed).
+FROM fedora:44
+
+# One layer: the AGENTS.md build deps (gcc/cmake/ninja + Qt6 + RAW/colour/lens
+# libraries), the full lint/analysis set (clang-format, clazy, clang-tidy via
+# clang-tools-extra), the Justfile's helpers (just, uv), node/npm for the agent,
+# and the GUI runtime bits (qtwayland + Mesa) used only when started with --gui.
+RUN dnf install -y --setopt=install_weak_deps=False \
+        gcc-c++ cmake ninja-build git pkgconf-pkg-config \
+        qt6-qtbase-devel qt6-qtbase-private-devel qt6-qtshadertools-devel \
+        qt6-qttools-devel \
+        LibRaw-devel lcms2-devel lensfun-devel \
+        clang clang-tools-extra clazy \
+        just uv nodejs npm \
+        qt6-qtwayland mesa-dri-drivers mesa-vulkan-drivers \
+        libglvnd-glx libglvnd-egl \
+    && dnf clean all
+
+# Claude Code, global so it is on PATH for any runtime user.
+RUN npm install -g @anthropic-ai/claude-code
+
+# The bind-mounted repo has host ownership; without this git refuses to operate
+# on it ("dubious ownership"). System-wide so it holds for every user/IDE.
+RUN git config --system --add safe.directory '*'
+
+# A world-writable HOME that works whatever UID we run as. The sandbox launches
+# with --userns=keep-id, so the process runs as the host user's UID, which need
+# not own a normal home; pointing HOME/caches here keeps tools happy regardless.
+RUN install -d -m 0777 /home/dev /home/dev/.cache /home/dev/.npm
+ENV HOME=/home/dev \
+    XDG_CACHE_HOME=/home/dev/.cache \
+    npm_config_cache=/home/dev/.npm
+
+# Headless by default; tools/sandbox.py --gui adds the Wayland/GPU wiring.
+CMD ["bash"]
