@@ -1108,6 +1108,15 @@ void MainWindow::setupDocks() {
     toggleFilmStrip->setShortcut(Qt::Key_F9);
 
     connect(filmStrip, &FilmStrip::fileSelected, this, &MainWindow::loadImage);
+    // Gate strip navigation (click/arrows) on the unsaved-changes prompt before it
+    // commits, so "Cancel" keeps the active image put. Allowing marks the decision
+    // satisfied so the load that follows doesn't prompt a second time.
+    filmStrip->setLeaveGuard([this] {
+        if (!confirmLeavingCurrentImage())
+            return false;
+        leaveConfirmationSatisfied = true;
+        return true;
+    });
     connect(
         filmStrip, &FilmStrip::populateContextMenu, this, &MainWindow::populateFilmStripContextMenu);
 
@@ -1309,8 +1318,10 @@ bool MainWindow::confirmLeavingCurrentImage() {
 }
 
 void MainWindow::loadImage(const QString& path) {
-    if (path == session->path())
+    if (path == session->path()) {
+        leaveConfirmationSatisfied = false; // consume any pre-satisfied gate; nothing to load
         return;
+    }
 
     const QString previousPath = session->path();
     if (!previousPath.isEmpty())

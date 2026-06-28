@@ -321,6 +321,14 @@ void FilmStrip::setCurrentFile(const QString& path) {
     requestVisibleThumbnails();
 }
 
+void FilmStrip::setLeaveGuard(std::function<bool()> guard) {
+    leaveGuard = std::move(guard);
+}
+
+bool FilmStrip::mayLeaveCurrent() {
+    return !leaveGuard || leaveGuard();
+}
+
 FilmStripFilter FilmStrip::filter() const {
     return proxy->filter();
 }
@@ -402,6 +410,8 @@ bool FilmStrip::navigateBy(int delta) {
     const int next = (cur.isValid() ? cur.row() : -1) + delta;
     if (next < 0 || next >= proxy->rowCount()) // ±1 over visible rows only
         return false;
+    if (!mayLeaveCurrent())
+        return false; // user cancelled leaving the active image: stay put
     const QModelIndex idx = proxy->index(next, 0);
     list->setCurrentIndex(idx); // fires currentChanged → fileSelected
     list->selectionModel()->select(idx, QItemSelectionModel::ClearAndSelect);
@@ -575,17 +585,40 @@ bool FilmStrip::eventFilter(QObject* watched, QEvent* event) {
     // ourselves so the active image (current index) stays put — otherwise the view
     // would move current to the clicked item and MainWindow would reload it.
     if (watched == list->viewport() && event->type() == QEvent::MouseButtonPress) {
-        if (handleModifierClick(static_cast<QMouseEvent*>(event)))
+        auto* me = static_cast<QMouseEvent*>(event);
+        if (handleModifierClick(me))
             return true;
+        // A plain left-click on a different thumbnail is an intent to leave the
+        // active image. Ask first; a veto swallows the press so the view never
+        // moves current — far cleaner than letting it move and undoing it after,
+        // which the view's own selection handling clobbers.
+        if (me->button() == Qt::LeftButton) {
+            const QModelIndex idx = list->indexAt(me->position().toPoint());
+            if (idx.isValid() && idx != list->currentIndex() && !mayLeaveCurrent())
+                return true;
+        }
     }
 
     // Culling keys: handle them on the list before QListView's type-ahead search
     // (which the view's shortcut-override otherwise steals — e.g. X jumping to a
-    // filename) can run. Navigation keys fall through to the view as normal.
+    // filename) can run.
     if (watched == list && event->type() == QEvent::KeyPress) {
         auto* ke = static_cast<QKeyEvent*>(event);
-        if (ke->modifiers() == Qt::NoModifier && handleMarkKey(ke->key()))
-            return true;
+        if (ke->modifiers() == Qt::NoModifier) {
+            // Route arrow navigation through navigateBy so it passes the same
+            // leave-guard as a click; the view's native move would otherwise
+            // skip the prompt (and clobber any after-the-fact restore).
+            if (ke->key() == Qt::Key_Left || ke->key() == Qt::Key_Up) {
+                navigateBy(-1);
+                return true;
+            }
+            if (ke->key() == Qt::Key_Right || ke->key() == Qt::Key_Down) {
+                navigateBy(+1);
+                return true;
+            }
+            if (handleMarkKey(ke->key()))
+                return true;
+        }
     }
     return QWidget::eventFilter(watched, event);
 }

@@ -5,6 +5,7 @@
 #include <QSet>
 #include <QString>
 #include <QWidget>
+#include <functional>
 
 // Swatch colour for a label (transparent for None). Shared by the strip's cell
 // delegate and the title-bar filter swatches so the palette is defined once
@@ -39,6 +40,12 @@ public:
     void setDirectory(const QString& dir);
     void setCurrentFile(const QString& path);
     void selectFirst();
+
+    // Gate run before any user gesture (click or arrow key) moves off the active
+    // image. The guard returns true to allow the move, false to veto it; a veto
+    // swallows the gesture so the view never leaves the current image. MainWindow
+    // wires this to its unsaved-changes prompt so "Cancel" keeps the image put.
+    void setLeaveGuard(std::function<bool()> guard);
 
     // Apply the rating/colour viewing filter (ADR 0042). Hides non-matching
     // cells; if the active image stops matching, jumps to the nearest remaining
@@ -110,6 +117,9 @@ private:
     // Ctrl/Shift-click only changes the batch selection, never the active image.
     // Returns true when it handled the press (so the view doesn't move current).
     bool handleModifierClick(QMouseEvent* e);
+    // Asks the leave-guard whether the active image may be left now. True (allow)
+    // when no guard is set, so non-GUI callers and tests navigate freely.
+    bool mayLeaveCurrent();
     void loadMarks(const QStringList& paths); // background sidecar scan
     void setRating(const QString& path, int rating);
     void setLabel(const QString& path, ColourLabel label); // toggles off if already set
@@ -129,6 +139,7 @@ private:
     FilmStripFilterModel* proxy; // hides rows that don't match the filter
     QLabel* emptyHint;           // overlay shown when the filter hides everything
     ThumbnailCache* thumbs;
+    std::function<bool()> leaveGuard; // veto for leaving the active image; see setLeaveGuard
     QString currentDir;
     QSet<QString> metadataPending;
     // Guards against re-entrant resize: changing the cell height relays the view,
