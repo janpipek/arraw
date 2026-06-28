@@ -13,8 +13,8 @@ of RAW files read-only for GUI verification.
 
 Examples:
     python tools/sandbox.py build              # build the image (cached)
-    python tools/sandbox.py run                # autonomous Claude shell
-    python tools/sandbox.py run --shell        # plain bash, no agent
+    python tools/sandbox.py run                # plain bash shell (default)
+    python tools/sandbox.py run --claude       # autonomous Claude (skips permissions)
     python tools/sandbox.py run --gui --photos ~/Pictures/raw
     python tools/sandbox.py run -- just test   # one-shot command, then exit
 """
@@ -109,11 +109,11 @@ def run(cli: str, args: argparse.Namespace) -> int:
 
     if args.command:
         cmd += args.command
-    elif args.shell:
-        cmd += ["bash"]
-    else:
+    elif args.claude:
         # The container is the boundary, so the agent runs unattended (ADR 0044).
         cmd += ["claude", "--dangerously-skip-permissions"]
+    else:
+        cmd += ["bash"]
 
     print("+", " ".join(cmd))
     if args.dry_run:
@@ -130,7 +130,7 @@ def main(argv: list[str] | None = None) -> int:
     run_p = sub.add_parser("run", help="run the sandbox (default)")
     run_p.add_argument("--gui", action="store_true", help="wire up Wayland + GPU so the Qt viewport can render")
     run_p.add_argument("--photos", metavar="DIR", help="mount a folder of RAW files read-only (for GUI testing)")
-    run_p.add_argument("--shell", action="store_true", help="drop into bash instead of launching the agent")
+    run_p.add_argument("--claude", action="store_true", help="launch autonomous Claude (--dangerously-skip-permissions) instead of a shell")
     run_p.add_argument("--dry-run", action="store_true", help="print the container command without running it")
     run_p.add_argument("command", nargs=argparse.REMAINDER, help="optional one-shot command (after --)")
 
