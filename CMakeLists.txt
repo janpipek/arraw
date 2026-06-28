@@ -199,6 +199,7 @@ set(CORE_SOURCES
     src/io/XmpSidecar.cpp
     src/ui/FilmStrip.cpp
     src/ui/FilmStripModel.cpp
+    src/ui/FilmStripFilterModel.cpp
     src/ui/ImageGrouping.cpp
     src/ui/FilmStripLayout.cpp
     src/ThumbnailCache.cpp
