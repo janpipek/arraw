@@ -13,7 +13,7 @@
 // ---------------------------------------------------------------------------
 // librawUserQual — the DemosaicAlgorithm → libraw user_qual integer mapping.
 // This is the single source of truth the decode reads; the documented integers
-// (ADR 0033) must never drift.
+// (ADR 0036) must never drift.
 // ---------------------------------------------------------------------------
 
 TEST_CASE("librawUserQual maps each algorithm to its documented user_qual", "[demosaic]") {
@@ -58,7 +58,7 @@ TEST_CASE("demosaicFromToken falls back silently to AHD for unusable tokens", "[
 }
 
 // ---------------------------------------------------------------------------
-// sensorSupportsDemosaicSelection — the Bayer-only gate (ADR 0033). Driven by
+// sensorSupportsDemosaicSelection — the Bayer-only gate (ADR 0036). Driven by
 // libraw's imgdata.idata.filters; the UI disables the control when it is false.
 // ---------------------------------------------------------------------------
 

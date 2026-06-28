@@ -76,7 +76,7 @@ QJsonObject groupToJson(DevelopGroup g, const GlobalAdjustment& v) {
         o["colorNoiseReductionSmoothness"] = v.colorNoiseReductionSmoothness;
         break;
     case DevelopGroup::Geometry:
-        o["orientation"] = orient::toExif(v.orientation); // EXIF 1..8 (docs/adr/0028)
+        o["orientation"] = orient::toExif(v.orientation); // EXIF 1..8 (docs/adr/0029)
         o["rotation"] = v.rotation;
         o["crop"]
             = QJsonArray{v.cropRect.x(), v.cropRect.y(), v.cropRect.width(), v.cropRect.height()};

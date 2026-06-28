@@ -64,7 +64,7 @@ public:
 
     const GlobalAdjustment& params() const { return adjustments; }
 
-    // Named A/B develop states for this photo (docs/adr/0033). Persisted in the
+    // Named A/B develop states for this photo (docs/adr/0038). Persisted in the
     // develop sidecar; mutating them marks the develop state dirty.
     const std::vector<Snapshot>& snapshots() const { return snapshots_; }
 
@@ -84,14 +84,14 @@ public:
         const UserMetadataPresence& presence = {},
         std::vector<Snapshot> snapshots = {});
     // Replace the decoded pixel buffers in place, keeping the current develop
-    // params, dirty state, and path. Used by a demosaic re-decode (docs/adr/0033):
+    // params, dirty state, and path. Used by a demosaic re-decode (docs/adr/0036):
     // the algorithm change is one undo-able edit, not a fresh load. Geometry
     // (defaultCrop, lens profile) is unaffected by demosaic, so it is left as-is.
     void swapDecodedBuffers(const LoadResult& result);
     void setParams(const GlobalAdjustment& params);
     void setLocalAdjustments(std::vector<LocalAdjustment> localAdjustments);
     void setSpots(std::vector<Spot> spots);
-    // Snapshot management (docs/adr/0033). Each marks the develop state dirty;
+    // Snapshot management (docs/adr/0038). Each marks the develop state dirty;
     // MainWindow saves immediately. addSnapshot captures the given develop state
     // under `name`; restoring a snapshot is a separate, undoable develop edit.
     void addSnapshot(QString name, GlobalAdjustment state);
@@ -112,7 +112,7 @@ private:
     ImageBuffer fullResBuffer;
     ImageBuffer sensorClipPreviewBuffer;
     ImageBuffer sensorClipFullResBuffer;
-    // Lens-corrected derivatives of the clean buffers (docs/adr/0027); empty when no
+    // Lens-corrected derivatives of the clean buffers (docs/adr/0032); empty when no
     // profile or all toggles off, in which case the clean buffer is the base. The
     // preview derivatives are eager (cheap, drives the live view); the full-res ones
     // are computed lazily on first access (export / deep zoom) because warping a
@@ -145,6 +145,6 @@ private:
     void rebuildPreviewDerived();
     void ensureFullResDerived() const;
     // Develop is dirty when either the params or the snapshot list differ from
-    // their saved baselines (docs/adr/0033).
+    // their saved baselines (docs/adr/0038).
     void recomputeDevelopDirty();
 };

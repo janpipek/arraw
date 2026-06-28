@@ -1,6 +1,6 @@
 # Linux distribution: a CI-built AppImage on Ubuntu 24.04, Qt 6.8 via aqtinstall
 
-> **Partially superseded by ADR 0029.** The AppImage design remains current, but
+> **Partially superseded by ADR 0030.** The AppImage design remains current, but
 > distro-native packages are no longer ruled out: Fedora RPMs are an additional
 > self-hosted artifact. Release CI is also manually dispatched rather than
 > tag-triggered.
@@ -88,7 +88,7 @@ older glibc — rides along without raising it.
   for it are taken now anyway — the reverse-DNS app-id and AppStream metainfo.
 - **Distro-native `.rpm`/`.deb` in repos.** Per-distro packaging and Qt-version
   skew, high upkeep, low payoff for a hobby release. Originally ruled out;
-  superseded for self-hosted Fedora RPMs by ADR 0029. Distribution repositories
+  superseded for self-hosted Fedora RPMs by ADR 0030. Distribution repositories
   and Debian packages remain deferred.
 
 ## Consequences

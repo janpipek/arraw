@@ -37,7 +37,7 @@ static const float kQuad[] = {
 };
 
 // The viewport surround. Single-sourced from ThemeColors so the GPU clear color
-// and the widget palette never drift (ADR 0030). Value is bit-identical to the
+// and the widget palette never drift (ADR 0031). Value is bit-identical to the
 // historical 0.15 gray to keep the golden-image references valid (ADR 0005).
 static const QColor kClearColor = ThemeColors::kCanvas;
 
@@ -134,7 +134,7 @@ void RendererCore::release() {
         s = NrSlot{};
     // Destroy any in-flight readback targets before the QRhi goes away: this
     // frees each QRhiReadbackResult so a pending `completed` lambda can never
-    // fire against a torn-down RendererCore (docs/adr/0033).
+    // fire against a torn-down RendererCore (docs/adr/0035).
     readbackPool.clear();
     imageTex[0].reset();
     imageTex[1].reset();
@@ -405,7 +405,7 @@ QRhiGraphicsPipeline* RendererCore::pipelineFor(QRhiRenderPassDescriptor* rpDesc
 // ── Uniforms ──────────────────────────────────────────────────────────────────
 
 namespace {
-// Normalise the shared colour scalars and retain the pre-ADR-0031 tone packing.
+// Normalise the shared colour scalars and retain the pre-ADR-0033 tone packing.
 // Basic Tone itself is sourced from the LUT atlas; leaving these slots populated
 // avoids a risky uniform-layout migration while laTone2/laColor still carry WB
 // and colour values used by Local Adjustments.
@@ -474,7 +474,7 @@ void RendererCore::fillUbuf(Ubuf& ub, const FrameParams& fp) const {
     ub.wbGainB = wb[2];
     ub.saturation = g.saturation;
     ub.vibrance = g.vibrance;
-    // Highlight roll-off shoulder + path to white (docs/adr/0035); 0 = off.
+    // Highlight roll-off shoulder + path to white (docs/adr/0040); 0 = off.
     ub.filmicHighlights = std::clamp(a.filmicHighlights / 100.0f, 0.0f, 1.0f);
     ub.postCropVignetteAmount = a.postCropVignetteAmount / 50.0f;
     ub.postCropVignetteMidpoint = std::clamp(a.postCropVignetteMidpoint / 100.0f, 0.0f, 1.0f);
@@ -517,7 +517,7 @@ void RendererCore::fillUbuf(Ubuf& ub, const FrameParams& fp) const {
 
     // Local adjustments (docs/adr/0010): pack geometry and colour values into
     // the parallel vec4 arrays, honouring the 16-mask cap. Tone comes from the
-    // matching LUT row (docs/adr/0031); white balance remains a channel gain.
+    // matching LUT row (docs/adr/0033); white balance remains a channel gain.
     const int n = std::min<int>(int(a.localAdjustments.size()), 16);
     ub.numLocalAdj = n;
     for (int i = 0; i < n; ++i) {
@@ -603,7 +603,7 @@ void RendererCore::recordPass(
     recordPassWith(cb, rt, fp, batch, ubuf.get(), bindingsFor(tex, sensorTex));
 }
 
-// ── Colour Noise Reduction pre-pass (docs/adr/0032) ──────────────────────────
+// ── Colour Noise Reduction pre-pass (docs/adr/0034) ──────────────────────────
 
 void RendererCore::ensureNrResources() {
     if (nrRpDesc)
@@ -890,7 +890,7 @@ QImage RendererCore::renderOffscreen(
     return out;
 }
 
-// ── Non-blocking offscreen render + async readback (docs/adr/0033) ────────────
+// ── Non-blocking offscreen render + async readback (docs/adr/0035) ────────────
 
 RendererCore::ReadbackTarget* RendererCore::ensureReadbackTarget(
     QSize size, QRhiTexture::Format fmt) {
@@ -933,7 +933,7 @@ bool RendererCore::recordOffscreenReadback(
 
     // Mirrors renderOffscreenTex's body minus the frame open/close: record the
     // pass into the caller's in-flight `cb`, reusing this frame's cached NR
-    // denoised texture (ADR 0032) so the sample matches the live preview.
+    // denoised texture (ADR 0034) so the sample matches the live preview.
     prepareToneLut(fp.adjustments);
     QRhiResourceUpdateBatch* batch = rhi->nextResourceUpdateBatch();
     flushPendingUploads(batch);

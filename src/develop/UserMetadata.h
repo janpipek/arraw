@@ -5,7 +5,7 @@
 // User-authored, writable metadata that travels with an image. Distinct from
 // the read-only camera EXIF in ImageMetadata. Persisted in the develop sidecar
 // as xmp:Rating / xmp:Label plus the descriptive Dublin Core fields owned by
-// arraw (docs/adr/0033). Bounded named fields, not a free string map.
+// arraw (docs/adr/0037). Bounded named fields, not a free string map.
 
 enum class ColourLabel { None, Red, Yellow, Green, Blue, Purple };
 

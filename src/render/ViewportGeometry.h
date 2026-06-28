@@ -17,7 +17,7 @@ QPointF rotateTextureUv(float u, float v, float degrees, float aspect, float cx,
 // aspect ratio — just enough that all four corners, after the fine ±45° Rotation
 // (mirrored from image.vert via rotateTextureUv), land inside the real image
 // [0,1]². This is the auto-refit applied when a Straighten exposes the rotation's
-// empty corners (CONTEXT.md, docs/adr/0028). Shrink-only: a crop already inside
+// empty corners (CONTEXT.md, docs/adr/0029). Shrink-only: a crop already inside
 // is returned unchanged — it never grows back. `aspect` is the image width/height.
 QRectF shrinkInsideRotation(const QRectF& cropRect, float degrees, float aspect);
 
@@ -36,7 +36,7 @@ struct Geometry {
     // imageAspect and displayAspect are the *oriented* aspects (W/H swapped when
     // the orientation is an odd quarter-turn); originalSize stays the *native*
     // buffer pixel size. Orientation is applied after the rotation, matching the
-    // shader (docs/adr/0028), so buffer↔viewport stays in lock-step with the GPU.
+    // shader (docs/adr/0029), so buffer↔viewport stays in lock-step with the GPU.
     orient::Orientation orientation;
 
     bool hasOriginalSize() const;

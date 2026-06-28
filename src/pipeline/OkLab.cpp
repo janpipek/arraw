@@ -43,7 +43,7 @@ Rgb rec709ToRec2020(const Rgb& c) {
 constexpr float kVibranceHalf = 0.2f;
 
 // Path to White exponent: >1 so only deep highlights bleach toward white
-// (docs/adr/0035).
+// (docs/adr/0040).
 constexpr float kPathToWhite = 1.5f;
 
 } // namespace
@@ -102,7 +102,7 @@ Rgb applyVibrance(const Rgb& rgb, float amount) {
 
 float shoulderMap(float luminance, float amount) {
     if (amount <= 0.0f)
-        return luminance; // exact identity, headroom included (docs/adr/0035)
+        return luminance; // exact identity, headroom included (docs/adr/0040)
     const float a = std::clamp(amount, 0.0f, 1.0f);
     const float knee = 1.0f - 0.5f * a; // a=1 -> 0.5; small a -> ~1 (only headroom rolled)
     if (luminance <= knee)

@@ -71,7 +71,7 @@ ImageViewport::ImageViewport(QWidget* parent)
     histoTimer.setInterval(150);
     // Don't render here: flag the next frame so the histogram passes ride the
     // viewport's own in-flight frame instead of a blocking offscreen one
-    // (docs/adr/0033). Mirrors the nrTimer precedent below.
+    // (docs/adr/0035). Mirrors the nrTimer precedent below.
     connect(&histoTimer, &QTimer::timeout, this, [this] {
         histogramsDirty = true;
         update();
@@ -136,7 +136,7 @@ float ImageViewport::displayOriginalPixelHeight() const {
     if (!hasKnownOriginalSize())
         return 0.0f;
     // The displayed frame is oriented: an odd quarter-turn makes the native width
-    // the displayed height (docs/adr/0028), so the 1:1 zoom readout stays honest.
+    // the displayed height (docs/adr/0029), so the 1:1 zoom readout stays honest.
     const float orientedHeight = orient::swapsAspect(params.orientation) ? float(originalWidth)
                                                                          : float(originalHeight);
     if (cropMode() || showOriginal)
@@ -159,7 +159,7 @@ viewport::Geometry ImageViewport::geometry() const {
 }
 
 // The viewport works in the oriented display frame: an odd quarter-turn swaps
-// the image's effective width and height (docs/adr/0028).
+// the image's effective width and height (docs/adr/0029).
 void ImageViewport::updateImageAspect() {
     imageAspect = orient::swapsAspect(params.orientation) ? 1.0f / nativeImageAspect
                                                           : nativeImageAspect;
@@ -222,7 +222,7 @@ void ImageViewport::render(QRhiCommandBuffer* cb) {
 
     core.record(cb, renderTarget(), activeSlot(), fp);
 
-    // Async histogram readback (docs/adr/0033): when the debounce has flagged a
+    // Async histogram readback (docs/adr/0035): when the debounce has flagged a
     // refresh, enqueue the two sample passes into *this* frame — after the main
     // record() so they reuse its cached NR texture — and read them back via
     // RendererCore's completion callbacks. Each pass into a pooled target may be
@@ -755,7 +755,7 @@ void ImageViewport::rotate90(bool clockwise) {
     const orient::Orientation next = clockwise ? orient::turnedClockwise(params.orientation)
                                                : orient::turnedCounterClockwise(params.orientation);
     // Rotate the committed crop with the content so it keeps framing the subject
-    // (docs/adr/0028); the aspect-lock inverts for free (re-derived from the rect).
+    // (docs/adr/0029); the aspect-lock inverts for free (re-derived from the rect).
     const QRectF crop = crop::rotateQuarterTurns(params.cropRect, clockwise ? 1 : 3);
     emit orientationCommitted(next, crop);
 }
@@ -1033,7 +1033,7 @@ QImage ImageViewport::renderToImage(
 
     const QRectF& cr = p.cropRect;
     // The crop is normalised in the oriented display frame, so an odd quarter-turn
-    // presents the buffer with width/height swapped (docs/adr/0028). Size the
+    // presents the buffer with width/height swapped (docs/adr/0029). Size the
     // offscreen target and the rotation aspect to the oriented frame, else the
     // oriented content is squished into a native-shaped texture.
     int orientedW = buf.width;
@@ -1083,7 +1083,7 @@ QImage ImageViewport::renderClipSample(
     const QRectF& cr = p.cropRect;
     int orientedW = buf.width;
     int orientedH = buf.height;
-    if (orient::swapsAspect(p.orientation)) // oriented frame (docs/adr/0028)
+    if (orient::swapsAspect(p.orientation)) // oriented frame (docs/adr/0029)
         std::swap(orientedW, orientedH);
     const int cropW = (std::max) (1, int(cr.width() * orientedW + 0.5f));
     const int cropH = (std::max) (1, int(cr.height() * orientedH + 0.5f));
@@ -1104,7 +1104,7 @@ QImage ImageViewport::renderClipSample(
     return core.renderOffscreen(buf, fp, QSize(cropW, cropH), QRhiTexture::RGBA32F);
 }
 
-// ── Histogram readback (docs/adr/0004, async per docs/adr/0033) ───────────────
+// ── Histogram readback (docs/adr/0004, async per docs/adr/0035) ───────────────
 
 RendererCore::FrameParams ImageViewport::histogramFrameParams(int& outW, int& outH) const {
     const QRectF& cr = params.cropRect;
@@ -1126,7 +1126,7 @@ RendererCore::FrameParams ImageViewport::histogramFrameParams(int& outW, int& ou
     fp.clipShadows = false;
     fp.adjustments = params;
     // Use the effective (debounced) NR values so the histogram passes hit the
-    // same cached denoised texture the preview just used (docs/adr/0032), rather
+    // same cached denoised texture the preview just used (docs/adr/0034), rather
     // than forcing a recompute for the live slider value mid-frame.
     fp.adjustments.colorNoiseReduction = nrStrengthEffective;
     fp.adjustments.colorNoiseReductionSmoothness = nrSmoothnessEffective;

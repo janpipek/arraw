@@ -1,6 +1,6 @@
 # Filmic Highlights: a shoulder with a path to white, last in the develop chain
 
-ADR 0031 gave Exposure a log-odds sigmoid that compresses *that control* toward
+ADR 0033 gave Exposure a log-odds sigmoid that compresses *that control* toward
 white, and made working values above 1 [[Recoverable Headroom]] that stay live
 until a final boundary. But the final boundary for preview is still a hard
 `clamp()` in the display transform, and any control after Exposure (Whites,
@@ -20,7 +20,7 @@ pipeline is byte-for-byte the old hard-clip behaviour. Above 0 it, in one stage:
    headroom (and values near 1) smoothly into range. RGB is scaled by the
    luminance ratio, so hue is preserved by the compression itself.
 2. **Path to white** — desaturates toward white as luminance climbs into the
-   shoulder, reusing the Oklab chroma machinery from ADR 0034. This is what stops
+   shoulder, reusing the Oklab chroma machinery from ADR 0039. This is what stops
    a bright saturated red from skewing to orange (per-channel clipping) or staying
    an unphotographic neon (luminance-only roll-off).
 
@@ -85,7 +85,7 @@ prior art considered.
 - The shoulder is a scalar luminance map, unit-tested as a pure function
   (anchors 0; monotonic; ≤1 for all finite input; identity at amount 0). It is
   *not* folded into the Basic Tone LUT, which is applied first and cannot see the
-  final value. Path to white reuses the tested `src/OkLab.h` module (ADR 0034).
+  final value. Path to white reuses the tested `src/OkLab.h` module (ADR 0039).
 - New uniform field `filmicHighlights`. Per the standing gotcha it must be added
   to **all three** std140 declarations — `image.vert`, `image.frag`, and `Ubuf`
   in `RendererCore.h` — in the same change, even though only the fragment stage

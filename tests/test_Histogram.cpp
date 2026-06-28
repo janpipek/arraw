@@ -1,5 +1,5 @@
 // Regression guard for the readback→bin contract (docs/adr/0004, issue #51).
-// The async readback path (ADR 0033) changes *when* samples arrive, not how
+// The async readback path (ADR 0035) changes *when* samples arrive, not how
 // they are binned — these pin the binning so a plumbing change can't silently
 // corrupt the histogram. HistogramBins is the pure value type the Histogram
 // widget delegates to; testing it keeps the GPU out of the loop.

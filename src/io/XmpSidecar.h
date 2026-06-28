@@ -18,10 +18,10 @@ struct SidecarData {
     GlobalAdjustment adjustments;
     UserMetadata metadata;
     UserMetadataPresence metadataPresence;
-    // Named A/B develop states, persisted in the arraw: namespace (docs/adr/0033).
+    // Named A/B develop states, persisted in the arraw: namespace (docs/adr/0038).
     std::vector<Snapshot> snapshots;
     // True when the sidecar carried an explicit tiff:Orientation. When false, the
-    // resolver seeds orientation from the file's EXIF instead (docs/adr/0028).
+    // resolver seeds orientation from the file's EXIF instead (docs/adr/0029).
     bool orientationStored = false;
 };
 
@@ -68,7 +68,7 @@ public:
     // The adjustments to apply when opening rawPath: the sidecar's if one exists,
     // otherwise defaults with the crop set to defaultCrop (e.g. a DNG DefaultCrop).
     // seededOrientation is applied when the sidecar has no explicit
-    // tiff:Orientation (e.g. read from the file's EXIF) — see docs/adr/0028.
+    // tiff:Orientation (e.g. read from the file's EXIF) — see docs/adr/0029.
     static SidecarLoadResult resolveForImage(
         const QString& rawPath,
         const QRectF& defaultCrop,
@@ -86,7 +86,7 @@ public:
     // sidecar and preserves the other half already on disk (docs/adr/0007).
     static bool saveAdjustments(const QString& rawPath, const GlobalAdjustment& params);
     // Saves develop settings together with the photo's named Snapshots
-    // (docs/adr/0033). The 2-arg form above preserves whatever snapshots are
+    // (docs/adr/0038). The 2-arg form above preserves whatever snapshots are
     // already on disk; this form replaces them.
     static bool saveAdjustments(
         const QString& rawPath,

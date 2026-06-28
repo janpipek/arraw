@@ -6,7 +6,7 @@
 
 // A named, persisted capture of one photo's complete develop state, used to
 // compare alternative development paths (A/B) by switching between them
-// (docs/adr/0033). Unlike a Develop Preset, a Snapshot is whole-state — it
+// (docs/adr/0038). Unlike a Develop Preset, a Snapshot is whole-state — it
 // always carries every field, including Local Adjustment masks and spots — and
 // belongs to a single photo. Stored in the arraw: namespace of the develop
 // sidecar (see XmpSidecar). Restoring one is an undoable History step; creating,

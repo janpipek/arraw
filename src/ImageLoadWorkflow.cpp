@@ -80,7 +80,7 @@ GlobalAdjustment resolveImageAdjustments(const QString& path, const QRectF& defa
 ResolvedLoadedImage resolveLoadedImage(const QString& path, const LoadResult& result) {
     const SidecarLoadResult sidecar
         = XmpSidecar::resolveForImage(path, result.defaultCrop, result.seededOrientation);
-    // Decode emitted raw XMP bytes; parsing them is the shell's job (docs/adr/0036).
+    // Decode emitted raw XMP bytes; parsing them is the shell's job (docs/adr/0041).
     const XmpPacketMetadata embedded = XmpSidecar::metadataPacketFromPacket(result.embeddedXmpPacket);
     const ResolvedUserMetadata metadata = resolveUserMetadata(sidecar.data, result.metadata, embedded);
     return {

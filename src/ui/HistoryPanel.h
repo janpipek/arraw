@@ -8,7 +8,7 @@ class QPushButton;
 class QUndoStack;
 
 /**
- * Left-dock panel pairing the develop History with named Snapshots (docs/adr/0033).
+ * Left-dock panel pairing the develop History with named Snapshots (docs/adr/0038).
  *
  * The History list is a QUndoView over MainWindow's shared develop QUndoStack —
  * the session-only, linear list of every edit step, click-to-revisit. The
