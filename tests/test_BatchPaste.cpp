@@ -1,5 +1,5 @@
-#include "develop/GlobalAdjustment.h"
 #include "BatchPaste.h"
+#include "develop/GlobalAdjustment.h"
 #include "io/XmpSidecar.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -64,6 +64,43 @@ TEST_CASE("BatchAdjustmentCommand undo restores before-state XMP for each record
 
     CHECK(XmpSidecar::loadAdjustments(raw1).exposure == before1.exposure);
     CHECK(XmpSidecar::loadAdjustments(raw2).exposure == before2.exposure);
+}
+
+TEST_CASE("writeBatchAfter persists after-state XMP for every record", "[batchpaste]") {
+    QTemporaryDir dir;
+    REQUIRE(dir.isValid());
+
+    const QString raw1 = dir.filePath("IMG_0001.CR3");
+    const QString raw2 = dir.filePath("IMG_0002.CR3");
+
+    GlobalAdjustment after1, after2;
+    after1.exposure = 1.25f;
+    after2.exposure = -0.4f;
+
+    QVector<BatchPasteRecord> records = {
+        {raw1, GlobalAdjustment{}, after1},
+        {raw2, GlobalAdjustment{}, after2},
+    };
+    writeBatchAfter(records);
+
+    CHECK(XmpSidecar::loadAdjustments(raw1).exposure == after1.exposure);
+    CHECK(XmpSidecar::loadAdjustments(raw2).exposure == after2.exposure);
+}
+
+TEST_CASE("batchTouchesActive is true when a record targets the active image", "[batchpaste]") {
+    QVector<BatchPasteRecord> records = {
+        {"/photos/other.CR3", GlobalAdjustment{}, GlobalAdjustment{}},
+        {"/photos/active.CR3", GlobalAdjustment{}, GlobalAdjustment{}},
+    };
+    CHECK(batchTouchesActive(records, "/photos/active.CR3"));
+}
+
+TEST_CASE("batchTouchesActive is false when no record targets the active image", "[batchpaste]") {
+    QVector<BatchPasteRecord> records = {
+        {"/photos/one.CR3", GlobalAdjustment{}, GlobalAdjustment{}},
+        {"/photos/two.CR3", GlobalAdjustment{}, GlobalAdjustment{}},
+    };
+    CHECK_FALSE(batchTouchesActive(records, "/photos/active.CR3"));
 }
 
 TEST_CASE("BatchAdjustmentCommand redo/undo updates the active file via callback", "[batchpaste]") {

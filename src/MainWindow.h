@@ -1,4 +1,5 @@
 #pragma once
+#include "BatchPaste.h"
 #include "ChromeHider.h"
 #include "DecodeCache.h"
 #include "core/CropGeometry.h"
@@ -135,6 +136,10 @@ private:
     void copySettingsFromPath(const QString& path);
     void pasteSettingsToPaths(QStringList targets);
     void applyPresetToPaths(const DevelopPreset& preset, QStringList targets);
+    // Commit a multi-file batch (paste / preset). Pushes one undo step onto the
+    // session History only when the batch touches the open image; otherwise it
+    // auto-saves the off-image XMP directly, keeping that per-image History clean.
+    void commitBatchAdjustment(QVector<BatchPasteRecord> records, const QString& text);
     void exportPaths(const QStringList& paths);
     void applyPreset(const DevelopPreset& preset);
     void rebuildPresetsMenu(); // re-list saved presets after save/delete

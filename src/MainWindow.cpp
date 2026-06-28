@@ -1803,12 +1803,7 @@ void MainWindow::pasteSettingsToPaths(QStringList targets) {
                                             : XmpSidecar::loadAdjustments(path);
         records.append({path, before, applyGroups(before, settingsClipboard->snapshot, chosen)});
     }
-    undoStack->push(
-        new BatchAdjustmentCommand(session->path(), records, [this](const GlobalAdjustment& params) {
-            session->setParams(params);
-            syncSessionToEditors();
-            syncSessionSpotsToEditors(true);
-        }));
+    commitBatchAdjustment(std::move(records), tr("Paste Settings"));
 }
 
 void MainWindow::applyPresetToPaths(const DevelopPreset& preset, QStringList targets) {
@@ -1828,15 +1823,27 @@ void MainWindow::applyPresetToPaths(const DevelopPreset& preset, QStringList tar
         const GlobalAdjustment before = paramsForPath(path);
         records.append({path, before, applyGroups(before, preset.values, preset.groups)});
     }
+    commitBatchAdjustment(std::move(records), tr("Apply Preset"));
+}
+
+void MainWindow::commitBatchAdjustment(QVector<BatchPasteRecord> records, const QString& text) {
+    // A batch belongs on the session History only if it touches the open image
+    // (History is per-image, ADR 0038). An off-image batch still auto-saves XMP,
+    // but pushing it would litter the current photo's History with a step that
+    // does not change it — so apply it directly instead.
+    if (!batchTouchesActive(records, session->path())) {
+        writeBatchAfter(records);
+        return;
+    }
     undoStack->push(new BatchAdjustmentCommand(
         session->path(),
-        records,
+        std::move(records),
         [this](const GlobalAdjustment& params) {
             session->setParams(params);
             syncSessionToEditors();
             syncSessionSpotsToEditors(true);
         },
-        tr("Apply Preset")));
+        text));
 }
 
 void MainWindow::saveCurrentAsPreset() {
