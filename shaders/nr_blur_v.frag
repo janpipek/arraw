@@ -12,7 +12,8 @@ layout(std140, binding = 0) uniform nrbuf {
     vec2  invChroma;
     float sigma;
     int   radius;
-    int   flipV; // unused here; the block must match nr.vert exactly (std140)
+    int   flipV;     // unused here; the block must match nr.vert exactly (std140)
+    float strength;  // unused here; same reason
 } u;
 
 const int kMaxRadius = 64;
