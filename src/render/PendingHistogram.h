@@ -3,7 +3,7 @@
 #include <QImage>
 
 /**
- * Generation-keyed matcher for the two async histogram readbacks (docs/adr/0033).
+ * Generation-keyed matcher for the two async histogram readbacks (docs/adr/0035).
  *
  * The curve-input and final samples are read back independently and complete in
  * separate frames, possibly out of order. Every render that enqueues a fresh

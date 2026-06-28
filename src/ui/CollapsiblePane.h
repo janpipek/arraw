@@ -19,7 +19,7 @@ public:
     void toggle();
     bool isCollapsed() const;
 
-    // Lights-out (docs/adr/0027): hide both widgets together, remembering the
+    // Lights-out (docs/adr/0028): hide both widgets together, remembering the
     // collapsed state, and later restore exactly that state. While hidden,
     // collapse/expand/toggle update the remembered state without revealing
     // anything, so the dock/strip invariant survives a lights-out cycle.

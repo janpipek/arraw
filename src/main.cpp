@@ -12,7 +12,7 @@ int main(int argc, char* argv[]) {
     app.setApplicationName("arraw");
     app.setOrganizationName("arraw");
 
-    // Neutral dark photographer-friendly theme (ADR 0030). Must run before any
+    // Neutral dark photographer-friendly theme (ADR 0031). Must run before any
     // widget is constructed so the Fusion style and palette cascade everywhere.
     Theme::apply(app);
 

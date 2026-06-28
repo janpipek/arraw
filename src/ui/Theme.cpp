@@ -57,11 +57,11 @@ QPalette buildDarkPalette() {
 
 void apply(QApplication& app) {
     // Fusion is the only style that reliably paints from the palette across all
-    // platforms and inside the AppImage (ADR 0030).
+    // platforms and inside the AppImage (ADR 0031).
     app.setStyle(QStyleFactory::create("Fusion"));
     app.setPalette(buildDarkPalette());
 
-    // Minimal, centralized QSS (ADR 0030): only for the handful of things the
+    // Minimal, centralized QSS (ADR 0031): only for the handful of things the
     // palette can't express well.
     //   * QToolBar: Fusion frames the bar with a bright top/bottom border line;
     //     flatten it so the toolbar blends into the chrome (background kept from

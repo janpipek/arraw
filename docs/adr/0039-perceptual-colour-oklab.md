@@ -28,7 +28,7 @@ tools adopted for exactly this job.
   while costing complexity. Revisit only if/when arraw gains an HDR output path.
 - **CIECAM16** (the RawTherapee route) — a full colour-appearance model;
   powerful, but heavy and hard to make predictable and testable. Against the
-  "equations we own and can test" stance of ADR 0031.
+  "equations we own and can test" stance of ADR 0033.
 - **Keep the linear lerp** — that *is* the defect.
 
 ## Consequences
@@ -43,10 +43,10 @@ tools adopted for exactly this job.
   Tests pin the folded matrices against a reference grey and a saturated primary.
 - **Contrast is deliberately *not* moved.** Issue #22 lumps contrast in with
   saturation, but arraw's Contrast already runs in perceptual log-odds luminance
-  and scales RGB proportionally (ADR 0031), so it does not thin colour. Only the
+  and scales RGB proportionally (ADR 0033), so it does not thin colour. Only the
   two chroma controls change.
 - **HSL stays as-is.** The 8-band HSL mix is an HSV-space hue/sat/lum tool, a
   distinct concept with its own per-hue masks; it is out of scope here.
 - Existing sidecars with non-zero Saturation/Vibrance render differently after
-  this change — as with ADR 0031, the field names and slider values are unchanged
+  this change — as with ADR 0033, the field names and slider values are unchanged
   but their interpretation is improved. No version flag or migration.

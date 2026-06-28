@@ -46,7 +46,7 @@ public:
     // Swap the displayed preview texture (and its sensor-clip mask). By default
     // this fits the image to the window (resetView) — correct for a freshly
     // loaded image. preserveView keeps the current zoom and pan, for an in-place
-    // swap of the *same* image (e.g. a demosaic re-decode, docs/adr/0033), so A/B
+    // swap of the *same* image (e.g. a demosaic re-decode, docs/adr/0036), so A/B
     // comparison stays put.
     void setImage(
         const ImageBuffer& preview,
@@ -58,7 +58,7 @@ public:
     void setAdjustments(const GlobalAdjustment& p);
     void setStraightenActive(bool active);
 
-    // Coarse Orientation edits (docs/adr/0028): turn 90° or mirror the image,
+    // Coarse Orientation edits (docs/adr/0029): turn 90° or mirror the image,
     // rotating the committed crop to match, and emit orientationCommitted so the
     // change lands as one undo step. No-op without an image.
     void rotate90(bool clockwise);
@@ -144,7 +144,7 @@ signals:
     void cropCommitted(const QRectF& cropRect, bool constrained);
     void rotationCommitted(float degrees); // Straighten tool result
     // Coarse Orientation changed (Rotate 90° / Flip), with the crop rotated to
-    // match (docs/adr/0028). One signal so MainWindow folds it into one undo.
+    // match (docs/adr/0029). One signal so MainWindow folds it into one undo.
     void orientationCommitted(orient::Orientation orientation, const QRectF& cropRect);
     void whiteBalanceCommitted(float kelvin, float tint); // WB picker result
     void activeToolChanged(ImageViewport::ActiveTool tool);
@@ -192,7 +192,7 @@ private:
     // Build the base FrameParams shared by both histogram passes, and the sample
     // size (256×h, h fit to the cropped aspect). NR is pinned to the effective
     // (debounced) values so the passes reuse the frame's cached denoised texture
-    // and the sample matches the preview (docs/adr/0033).
+    // and the sample matches the preview (docs/adr/0035).
     RendererCore::FrameParams histogramFrameParams(int& outW, int& outH) const;
     // GUI-thread completion for one async histogram readback: feed it to the
     // generation matcher and emit histogramsReady once a full pair lands.
@@ -276,7 +276,7 @@ private:
     GlobalAdjustment params;
     // imageAspect is the *oriented* aspect (W/H swapped for an odd quarter-turn
     // Orientation); nativeImageAspect is the buffer's own, before orientation.
-    // The whole viewport reasons in the oriented display frame (docs/adr/0028).
+    // The whole viewport reasons in the oriented display frame (docs/adr/0029).
     float imageAspect = 1.0f;
     float nativeImageAspect = 1.0f;
     void updateImageAspect(); // recompute imageAspect from native + orientation
@@ -292,7 +292,7 @@ private:
 
     QTimer histoTimer; // debounces histogram refreshes during slider drags
 
-    // Async histogram readback (docs/adr/0033). histoTimer no longer renders;
+    // Async histogram readback (docs/adr/0035). histoTimer no longer renders;
     // it sets histogramsDirty + update(), and render(cb) enqueues the two passes
     // into the live frame. histoGen tags each enqueued pair so pendingHisto can
     // drop stale completions and only emit a matched (final, curve-input) pair.

@@ -1,7 +1,7 @@
 #pragma once
 #include <QColor>
 
-// Single source of truth for arraw's UI colors (ADR 0030). A dependency-free
+// Single source of truth for arraw's UI colors (ADR 0031). A dependency-free
 // leaf header so both the GPU renderer (RendererCore, for the viewport surround)
 // and the widget theme (Theme, which builds the QPalette) can read the same
 // values without any layering inversion. This is also the one place a future

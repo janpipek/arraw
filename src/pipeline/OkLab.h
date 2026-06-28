@@ -2,8 +2,8 @@
 
 #include <array>
 
-// Perceptual colour for arraw's adjustments (docs/adr/0034) and the highlight
-// roll-off (docs/adr/0035). Everything here is the CPU reference that the shader
+// Perceptual colour for arraw's adjustments (docs/adr/0039) and the highlight
+// roll-off (docs/adr/0040). Everything here is the CPU reference that the shader
 // (shaders/image.frag) mirrors line-for-line — the [[spot-for-algorithms]]
 // contract the golden-image tests enforce. All RGB triples are linear-light
 // Rec.2020, the working space (docs/adr/0001).
@@ -33,7 +33,7 @@ Rgb applySaturation(const Rgb& rgb, float amount);
 // move more than already-vivid ones; amount in [-1, 1].
 Rgb applyVibrance(const Rgb& rgb, float amount);
 
-// Filmic Highlights (docs/adr/0035).
+// Filmic Highlights (docs/adr/0040).
 //
 // shoulderMap is the scalar luminance shoulder: amount 0 is the exact identity
 // (including values above 1); amount in (0, 1] bends the approach to white,

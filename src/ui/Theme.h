@@ -2,7 +2,7 @@
 
 class QApplication;
 
-// Applies arraw's neutral dark photographer-friendly theme (ADR 0030): forces the
+// Applies arraw's neutral dark photographer-friendly theme (ADR 0031): forces the
 // Fusion style (the only style that reliably honors a custom palette across
 // Fedora/Windows/macOS and inside the AppImage) and installs the dark QPalette
 // built from ThemeColors. Call once from main() BEFORE constructing any widget so

@@ -57,7 +57,7 @@ public:
     // the viewport. fullResOnly=false pushes only the preview (live drag);
     // fullResOnly=true also pushes the full-res export buffer (release / undo / load).
     // preserveView keeps the current zoom/pan instead of refitting — for an
-    // in-place re-decode of the same image (docs/adr/0033). Public so SpotListCommand
+    // in-place re-decode of the same image (docs/adr/0036). Public so SpotListCommand
     // can call it on undo/redo.
     void rebuildSpottedBuffers(bool fullResOnly = false, bool preserveView = false);
 
@@ -68,7 +68,7 @@ public:
 
     // Re-decode the current image with the session's current demosaic algorithm,
     // swapping the decoded buffers in place while keeping the develop edit on
-    // screen (docs/adr/0033). A cached algorithm (re-pick / undo / redo) is
+    // screen (docs/adr/0036). A cached algorithm (re-pick / undo / redo) is
     // instant; a never-tried one decodes asynchronously. Public so the develop
     // undo command can trigger it on undo/redo of a demosaic change.
     void redecodeForDemosaicChange();
@@ -76,7 +76,7 @@ public:
 protected:
     void closeEvent(QCloseEvent* e) override;
     void keyPressEvent(QKeyEvent* e) override;
-    void changeEvent(QEvent* e) override; // tracks WM-driven fullscreen state (docs/adr/0027)
+    void changeEvent(QEvent* e) override; // tracks WM-driven fullscreen state (docs/adr/0028)
 
 private slots:
     void openFile();
@@ -165,7 +165,7 @@ private:
     void toggleChrome();
     void restoreFocusModes();
 
-    // Snapshot management (docs/adr/0033). addCurrentAsSnapshot prompts for a
+    // Snapshot management (docs/adr/0038). addCurrentAsSnapshot prompts for a
     // name and captures the current develop state; restoreSnapshot replays one as
     // an undoable develop step; rename/delete edit the persisted list. Each saves
     // the sidecar immediately and refreshes the History panel.
@@ -184,7 +184,7 @@ private:
     HistoryPanel* historyPanel;
     FilmStrip* filmStrip;
     QDockWidget* filmStripDock;
-    QDockWidget* historyDock; // left; History list + Snapshots (docs/adr/0033)
+    QDockWidget* historyDock; // left; History list + Snapshots (docs/adr/0038)
     QDockWidget* adjustmentsDock;                     // right; collapses to a strip
     std::unique_ptr<CollapsiblePane> adjustmentsPane; // adjustmentsDock ↔ edge strip
     QToolBar* mainToolBar = nullptr;

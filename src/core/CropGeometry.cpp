@@ -12,7 +12,7 @@ namespace crop {
 QSize cropPixelSize(
     int fullWidth, int fullHeight, const QRectF& cropRect, orient::Orientation orientation) {
     // The crop is normalised in the oriented display frame, so an odd quarter-turn
-    // presents the buffer with its width and height swapped (docs/adr/0028).
+    // presents the buffer with its width and height swapped (docs/adr/0029).
     if (orient::swapsAspect(orientation))
         std::swap(fullWidth, fullHeight);
     return {int(fullWidth * cropRect.width() + 0.5), int(fullHeight * cropRect.height() + 0.5)};

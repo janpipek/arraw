@@ -113,7 +113,7 @@ ImageBuffer downsample2x(const ImageBuffer& src) {
 QSize developedThumbSize(
     int srcW, int srcH, const QRectF& crop, int maxEdge, orient::Orientation orientation) {
     // An odd quarter-turn presents the buffer with width and height swapped, and
-    // the crop is normalised in that oriented frame (docs/adr/0028).
+    // the crop is normalised in that oriented frame (docs/adr/0029).
     if (orient::swapsAspect(orientation))
         std::swap(srcW, srcH);
     const int cw = std::max(1, int(std::lround(srcW * crop.width())));

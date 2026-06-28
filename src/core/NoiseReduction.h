@@ -1,7 +1,7 @@
 #pragma once
 
 // Colour (chroma) Noise Reduction — parameter mapping. The spatial filter itself
-// runs on the GPU as a cached pre-pass inside RendererCore (docs/adr/0032); this
+// runs on the GPU as a cached pre-pass inside RendererCore (docs/adr/0034); this
 // header owns only the tested Amount→sigma calibration that the renderer uploads
 // as a uniform, keeping that logic single-sourced and headlessly testable.
 

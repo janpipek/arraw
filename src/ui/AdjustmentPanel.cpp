@@ -25,7 +25,7 @@
 // representative parameter, so the panel and the History labels read identical
 // numbers. (Colour-NR Smoothness, like the post-crop/grain shape sliders, resets
 // to 50 — Lightroom parity — unlike Strength's 0; Filmic Highlights resets to 25,
-// a gentle shoulder on by default — docs/adr/0035.)
+// a gentle shoulder on by default — docs/adr/0040.)
 static const FieldSpec kExposureSpec = developParameterSpec(DevelopParameter::Exposure).value();
 static const FieldSpec kToneSpec = developParameterSpec(DevelopParameter::Contrast).value();
 static const FieldSpec kTempSpec = developParameterSpec(DevelopParameter::Temperature).value();
@@ -45,7 +45,7 @@ static const FieldSpec kGrainAmountSpec
 static const FieldSpec kRotationSpec = developParameterSpec(DevelopParameter::Straighten).value();
 
 // Demosaic algorithms in the combo, ordered soft → sharp (Linear is a diagnostic
-// baseline, kept last). Label + tooltip + enum; AHD is the default (docs/adr/0033).
+// baseline, kept last). Label + tooltip + enum; AHD is the default (docs/adr/0036).
 struct DemosaicChoice {
     DemosaicAlgorithm algo;
     const char* label;
@@ -161,7 +161,7 @@ AdjustmentPanel::AdjustmentPanel(QWidget* parent)
         kToneSpec,
         "Sets the black point — how dark a tone has to be before it crushes to pure "
         "black. Lower for deeper blacks, raise for a lifted, matte look.");
-    // Filmic Highlights (docs/adr/0035): default 25 (gentle shoulder on); 0 = off.
+    // Filmic Highlights (docs/adr/0040): default 25 (gentle shoulder on); 0 = off.
     filmicHighlights = addSlider(
         tone,
         "Filmic Highlights",

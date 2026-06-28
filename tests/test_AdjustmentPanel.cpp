@@ -102,7 +102,7 @@ TEST_CASE("Lens correction toggles are gated by a profile and drive params", "[a
     CHECK_FALSE(dist->isEnabled());
 }
 
-// ── Demosaic algorithm combo (issue #22, ADR 0033) ──────────────────────────
+// ── Demosaic algorithm combo (issue #22, ADR 0036) ──────────────────────────
 
 TEST_CASE("the demosaic combo round-trips the algorithm through params", "[adjustpanel][demosaic]") {
     testApp();

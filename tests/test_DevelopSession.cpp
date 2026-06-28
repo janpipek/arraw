@@ -56,7 +56,7 @@ TEST_CASE(
     "[develop-session]") {
     // A demosaic change re-decodes and swaps the buffers, but the develop edit
     // (the new algorithm and everything else) and the dirty flag must survive —
-    // it is one undo-able edit, not a fresh load (docs/adr/0033).
+    // it is one undo-able edit, not a fresh load (docs/adr/0036).
     DevelopSession session;
     LoadResult first;
     first.preview = ImageBuffer{{0.1f, 0.2f, 0.3f}, 1, 1};
@@ -334,7 +334,7 @@ TEST_CASE(
     CHECK_FALSE(session.developDirty()); // loaded snapshots are not a pending edit
 }
 
-// Restoring a snapshot is a single, undoable develop edit (docs/adr/0033):
+// Restoring a snapshot is a single, undoable develop edit (docs/adr/0038):
 // MainWindow pushes a before/after full-state swap onto the shared QUndoStack.
 // This exercises the model side of that contract — that the swap and its undo
 // are lossless even with masks and spots, which is what makes A/B + Ctrl+Z
