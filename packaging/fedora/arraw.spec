@@ -1,5 +1,5 @@
 Name:           arraw
-Version:        0.2.3
+Version:        0.2.4
 Release:        %{?snapshot_release}%{!?snapshot_release:1}%{?dist}
 Summary:        Lightweight RAW photo editor
 
@@ -61,6 +61,16 @@ appstreamcli validate --no-net \
 %{_datadir}/icons/hicolor/*/apps/io.github.janpipek.arraw.png
 
 %changelog
+* Sun Jun 28 2026 Jan Pipek <janpipek@users.noreply.github.com> - 0.2.4-1
+- Add Oklab perceptual saturation and vibrance with filmic highlight roll-off (on by default)
+- Add rating and colour-label filtering to the film strip
+- Embed corrected EXIF and XMP metadata in exported images
+- Async histogram readback; fix slider-drag jank and stretched-preview regression
+- Run export and developed-thumbnail work off the GUI thread to avoid UI hangs
+- Add descriptive preset History step labels and keep off-image preset/paste out of per-image History
+- Keep the active image in place when leaving is cancelled
+- Fix the Colour Noise Reduction shader
+
 * Sat Jun 27 2026 Jan Pipek <janpipek@users.noreply.github.com> - 0.2.3-1
 - Add lensfun-backed lens corrections for distortion, vignetting, and chromatic aberration
 - Add GPU Colour Noise Reduction with separate Strength and Smoothness controls
