@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 #include "BatchPaste.h"
 #include "DevelopSession.h"
+#include "ExportMetadata.h"
 #include "ExportWorkflow.h"
 #include "ImageLoadWorkflow.h"
 #include "MainWindowStatus.h"
@@ -2123,10 +2124,16 @@ void MainWindow::exportPaths(const QStringList& paths) {
     QImage out = viewport->renderToImage(session->fullResForExport(), p, opts.width, opts.height);
     out = prepareExportImage(std::move(out), opts);
 
-    if (!saveExportImage(out, path, opts))
+    if (!saveExportImage(out, path, opts)) {
         QMessageBox::critical(this, "Export Error", "Failed to save " + path);
-    else
-        statusLabel->setText("Exported: " + QFileInfo(path).fileName());
+    } else {
+        const ExportMetadataResult metadataResult
+            = embedExportMetadata(path, session->path(), session->userMetadata(), opts.metadata);
+        QString status = "Exported: " + QFileInfo(path).fileName();
+        if (metadataResult.status == ExportMetadataStatus::Failed)
+            status += " (metadata skipped)";
+        statusLabel->setText(status);
+    }
 }
 
 void MainWindow::exportBatch(const QStringList& paths) {
@@ -2165,6 +2172,7 @@ void MainWindow::exportBatch(const QStringList& paths) {
     }
 
     int exported = 0;
+    int metadataFailures = 0;
     auto cancel = std::make_shared<std::atomic<bool>>(false);
     for (int i = 0; i < paths.size(); ++i) {
         if (progress.wasCancelled())
@@ -2228,10 +2236,21 @@ void MainWindow::exportBatch(const QStringList& paths) {
         const QString outPath = batchExportPath(outputDir, rawPath, opts.format);
         const bool ok = saveExportImage(out, outPath, opts);
 
-        if (ok)
+        if (ok) {
+            const UserMetadata metadata = (rawPath == session->path())
+                                              ? session->userMetadata()
+                                              : resolveLoadedImage(rawPath, loaded).metadata;
+            const ExportMetadataResult metadataResult
+                = embedExportMetadata(outPath, rawPath, metadata, opts.metadata);
+            if (metadataResult.status == ExportMetadataStatus::Failed)
+                ++metadataFailures;
             ++exported;
+        }
     }
 
     progress.close();
-    statusLabel->setText(batchExportStatusText(exported, paths.size()));
+    QString status = batchExportStatusText(exported, paths.size());
+    if (metadataFailures > 0)
+        status += QStringLiteral(" (%1 metadata skipped)").arg(metadataFailures);
+    statusLabel->setText(status);
 }

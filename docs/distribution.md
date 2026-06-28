@@ -31,7 +31,7 @@ AppStream metainfo) but build none of the store machinery yet.
 ## Linux AppImage — IMPLEMENTED (see ADR 0014)
 
 Single-file **AppImage**, built in CI on a **stock `ubuntu-24.04` runner (glibc
-2.39)** with **Qt 6.8 from aqtinstall**, bundling Qt + LibRaw + lcms2, reaching
+2.39)** with **Qt 6.8 from aqtinstall**, bundling Qt + LibRaw + lcms2 + exiv2, reaching
 every desktop from Ubuntu 24.04 LTS forward. Qt stays at 6.8 (the viewport needs
 `QRhiWidget`, 6.7+; 24.04's distro Qt is only 6.4, so we bring our own). Carries a
 `.desktop` launcher, the existing icons, and an AppStream `metainfo.xml`; zsync
@@ -86,7 +86,7 @@ deferred. The security posture and remaining work are tracked in
 ## Windows — BUILD + PORTABLE ZIP + INSTALLER DONE (signing/CI deferred)
 
 The *build* is established and documented in [windows-build.md](windows-build.md):
-MSVC 2022 + vcpkg (`qtbase qttools qtshadertools libraw[openmp] lcms`,
+MSVC 2022 + vcpkg (`qtbase qttools qtshadertools libraw[openmp] lcms exiv2`,
 `x64-windows`). Several Windows-specific fixes live in CMake:
 
 - per-config libraw DLL selection (`rawd` in Debug, so the right DLL is deployed);

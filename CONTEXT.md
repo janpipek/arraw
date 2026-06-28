@@ -99,6 +99,25 @@ The conversion from working color space to the color profile chosen for an expor
 file (sRGB, Display P3, AdobeRGB).
 _Avoid_: export color conversion
 
+**Exported Metadata**:
+The metadata arraw *emits into* an exported file — the emit-side counterpart to
+[[User Metadata]], which arraw *persists in* the sidecar. A selectable bundle the
+photographer chooses per export from three independent groups: **Camera & capture
+info** (the original capture EXIF — make/model, lens, exposure, date — copied
+through from the source RAW, on by default), **Location** (the GPS tags, off by
+default because deliverables are shared), and **Descriptive metadata** (arraw's
+[[User Metadata]] — Title, Caption, [[Keywords]], Creator, Copyright plus
+[[Rating]]/[[Colour Label]] — written as XMP, on by default). The capture EXIF is a
+*corrected* passthrough: tags that would describe the RAW rather than the developed
+output are fixed (EXIF Orientation forced to upright, stale dimensions and the RAW's
+embedded thumbnail dropped, Software set to arraw), while DateTimeOriginal and the
+rest survive. Written into JPEG, TIFF, and PNG after the pixels are encoded, so a
+metadata failure never costs the rendered image (best-effort embed). Distinct from
+the [[Output transform]]'s ICC profile, which is its own colour tag and must coexist
+untouched.
+_Avoid_: image metadata (that is the read-only EXIF rows), export tags, sidecar
+(the sidecar is the persist side, not the emit side)
+
 **Soft-proofing**:
 A preview mode that temporarily replaces the display transform with a simulation of
 a printer/paper profile, so the screen predicts the print.

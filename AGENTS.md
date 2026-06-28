@@ -14,7 +14,7 @@ When a `Justfile` recipe needs more than a couple of commands, put the logic in 
 ```bash
 # Install dependencies
 sudo dnf install qt6-qtbase-devel qt6-qtbase-private-devel qt6-qtshadertools-devel \
-    qt6-qttools-devel LibRaw-devel lcms2-devel lensfun-devel cmake ninja-build
+    qt6-qttools-devel LibRaw-devel lcms2-devel lensfun-devel exiv2-devel cmake ninja-build
 
 # Configure
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
@@ -34,7 +34,7 @@ are written to `dist/fedora/`.
 #### macOS (Homebrew)
 ```bash
 # Install dependencies
-brew install qt libraw little-cms2 lensfun cmake ninja
+brew install qt libraw little-cms2 lensfun exiv2 cmake ninja
 
 # Configure
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
@@ -53,7 +53,7 @@ deployment quirks). See the dedicated **[Windows build guide](docs/windows-build
 for the complete walkthrough and troubleshooting. In short:
 ```powershell
 # Install dependencies (libraw[openmp] multithreads the demosaic — much faster loads)
-vcpkg install qtbase qttools qtshadertools libraw[openmp] lcms --triplet x64-windows
+vcpkg install qtbase qttools qtshadertools libraw[openmp] lcms exiv2 --triplet x64-windows
 
 # From "Developer PowerShell for VS 2022" (so rc.exe/mt.exe are on PATH), or
 # import vcvars64.bat into the current PowerShell as shown in docs/windows-build.md.

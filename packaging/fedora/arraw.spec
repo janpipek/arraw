@@ -13,6 +13,7 @@ BuildRequires:  cmake >= 3.21
 BuildRequires:  desktop-file-utils
 BuildRequires:  gcc-c++
 BuildRequires:  ninja-build
+BuildRequires:  pkgconfig(exiv2)
 BuildRequires:  pkgconfig(lcms2)
 BuildRequires:  pkgconfig(lensfun)
 BuildRequires:  pkgconfig(libraw) >= 0.21
@@ -37,6 +38,7 @@ local adjustments, crop, and straighten tools.
 %cmake -G Ninja \
     -DARRAW_BUILD_TESTS=ON \
     -DARRAW_WITH_LENSFUN=ON \
+    -DARRAW_WITH_EXIV2=ON \
     -DFETCHCONTENT_FULLY_DISCONNECTED=ON
 %cmake_build
 

@@ -166,6 +166,40 @@ else()
     message(STATUS "lensfun NOT found — lens correction will report no profile")
 endif()
 
+# exiv2: optional exported-metadata writer (docs/adr/0043). Same tri-state shape as
+# lensfun: AUTO builds metadata embedding when available, ON requires it for
+# release/package builds, OFF compiles the best-effort no-backend path.
+set(ARRAW_WITH_EXIV2 "AUTO" CACHE STRING
+    "Exported-metadata exiv2 support: AUTO (use if found), ON (require), OFF (disable)")
+set_property(CACHE ARRAW_WITH_EXIV2 PROPERTY STRINGS AUTO ON OFF)
+
+if(NOT ARRAW_WITH_EXIV2 STREQUAL "OFF")
+    if(PkgConfig_FOUND)
+        pkg_check_modules(EXIV2 IMPORTED_TARGET exiv2)
+    endif()
+    if(NOT TARGET PkgConfig::EXIV2)
+        find_library(EXIV2_LIB NAMES exiv2)
+        find_path(EXIV2_INCLUDE_DIR exiv2/exiv2.hpp)
+        if(EXIV2_LIB AND EXIV2_INCLUDE_DIR)
+            add_library(PkgConfig::EXIV2 INTERFACE IMPORTED)
+            set_target_properties(PkgConfig::EXIV2 PROPERTIES
+                INTERFACE_LINK_LIBRARIES "${EXIV2_LIB}"
+                INTERFACE_INCLUDE_DIRECTORIES "${EXIV2_INCLUDE_DIR}"
+            )
+        endif()
+    endif()
+endif()
+if(TARGET PkgConfig::EXIV2)
+    set(ARRAW_HAVE_EXIV2 ON)
+    message(STATUS "exiv2 found — building exported-metadata writer")
+elseif(ARRAW_WITH_EXIV2 STREQUAL "ON")
+    message(FATAL_ERROR "ARRAW_WITH_EXIV2=ON but exiv2 was not found "
+        "(install exiv2's development package, e.g. exiv2-devel / libexiv2-dev)")
+else()
+    set(ARRAW_HAVE_EXIV2 OFF)
+    message(STATUS "exiv2 NOT found — exports will omit embedded metadata")
+endif()
+
 # Everything except main.cpp lives in a static library so test executables
 # can link the real code (see DESIGN.md "Testing Strategy").
 set(CORE_SOURCES
@@ -185,6 +219,7 @@ set(CORE_SOURCES
     src/ui/ToneCurveWidget.cpp
     src/ui/InfoPanel.cpp
     src/ExportWorkflow.cpp
+    src/ExportMetadata.cpp
     src/core/ImageMetadata.cpp
     src/ui/FilmStripTooltip.cpp
     src/ui/Histogram.cpp
@@ -235,6 +270,10 @@ endif()
 if(ARRAW_HAVE_LENSFUN)
     target_compile_definitions(arraw_core PUBLIC ARRAW_HAS_LENSFUN)
     target_link_libraries(arraw_core PUBLIC PkgConfig::LENSFUN)
+endif()
+if(ARRAW_HAVE_EXIV2)
+    target_compile_definitions(arraw_core PUBLIC ARRAW_HAS_EXIV2)
+    target_link_libraries(arraw_core PUBLIC PkgConfig::EXIV2)
 endif()
 
 target_include_directories(arraw_core PUBLIC src)

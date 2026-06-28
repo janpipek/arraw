@@ -26,6 +26,7 @@ required_packages=(
     cmake
     desktop-file-utils
     gcc-c++
+    exiv2-devel
     lcms2-devel
     lensfun-devel
     LibRaw-devel

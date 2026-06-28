@@ -45,4 +45,7 @@ private:
     QSpinBox* qualitySpin;
     QSlider* sharpenSlider;
     QSpinBox* sharpenSpin;
+    QCheckBox* captureInfoCheck;
+    QCheckBox* locationCheck;
+    QCheckBox* descriptiveCheck;
 };

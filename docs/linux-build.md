@@ -18,7 +18,7 @@ The day-to-day dev setup uses the distro's system Qt. On Fedora:
 
 ```bash
 sudo dnf install qt6-qtbase-devel qt6-qtbase-private-devel qt6-qtshadertools-devel \
-    qt6-qttools-devel LibRaw-devel lcms2-devel lensfun-devel cmake ninja-build
+    qt6-qttools-devel LibRaw-devel lcms2-devel lensfun-devel exiv2-devel cmake ninja-build
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
 ninja -C build
 ./build/arraw
@@ -29,7 +29,8 @@ semi-public RHI headers (`rhi/qrhi.h`) from Qt's private Gui module. See §6.1 f
 this package is requested differently across distros.
 
 Other distros: install the equivalent `qt6-base`, `qt6-base-private`,
-`qt6-shadertools`, `qt6-tools`, `libraw`, and `lcms2` development packages.
+`qt6-shadertools`, `qt6-tools`, `libraw`, `lcms2`, `lensfun`, and `exiv2`
+development packages.
 
 ---
 
@@ -94,7 +95,7 @@ glibc floor is correct:
 export DEBIAN_FRONTEND=noninteractive
 apt-get update && apt-get install -y --no-install-recommends \
   build-essential cmake ninja-build file wget ca-certificates \
-  libraw-dev liblcms2-dev liblensfun-dev liblensfun-data-v1 appstream libdbus-1-3 \
+  libraw-dev liblcms2-dev liblensfun-dev liblensfun-data-v1 libexiv2-dev appstream libdbus-1-3 \
   libgl1-mesa-dev libglu1-mesa-dev libvulkan-dev \
   libxkbcommon-dev libxkbcommon-x11-dev libfontconfig1-dev libfreetype-dev \
   libx11-dev libx11-xcb-dev libxext-dev libxfixes-dev libxi-dev libxrender-dev \
@@ -110,7 +111,7 @@ export QT=/opt/qt/6.8.3/gcc_64
 
 # Build, stage, bundle:
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DARRAW_BUILD_TESTS=OFF \
-  -DARRAW_WITH_LENSFUN=ON -DCMAKE_PREFIX_PATH="$QT"
+  -DARRAW_WITH_LENSFUN=ON -DARRAW_WITH_EXIV2=ON -DCMAKE_PREFIX_PATH="$QT"
 ninja -C build arraw
 DESTDIR="$PWD/AppDir" cmake --install build --prefix /usr
 
@@ -218,7 +219,7 @@ silently ignores platform-plugin names — a value there does nothing.
 
 ### 6.5 What the AppImage bundles vs. borrows
 
-`linuxdeploy` bundles Qt, LibRaw, lcms2 and their non-system dependencies, and
+`linuxdeploy` bundles Qt, LibRaw, lcms2, exiv2 and their non-system dependencies, and
 *excludes* a standard "excludelist" of libraries assumed present on any desktop:
 glibc, the **glvnd** GL stack (`libGL`/`libGLX`/`libOpenGL`/`libEGL`), `fontconfig`,
 X11, `dbus`, `glib`. So the AppImage runs on a real Ubuntu 24.04 desktop (and the CI
