@@ -250,3 +250,101 @@ TEST_CASE("FilmStrip: right-click does not change the active image", "[filmstrip
 
     destroyStrip(strip);
 }
+
+TEST_CASE(
+    "FilmStrip: a vetoing leave-guard keeps the active image on a plain click",
+    "[filmstrip][leaveguard]") {
+    testApp();
+
+    QTemporaryDir dir;
+    REQUIRE(dir.isValid());
+    auto* strip = makeStripWithFiles(dir, 4);
+
+    strip->selectFirst();
+    qApp->processEvents();
+
+    auto* listView = strip->findChild<QListView*>();
+    REQUIRE(listView != nullptr);
+    listView->resize(800, 100);
+    qApp->processEvents();
+    REQUIRE(listView->currentIndex().row() == 0);
+
+    int guardCalls = 0;
+    strip->setLeaveGuard([&] {
+        ++guardCalls;
+        return false; // user "Cancel": don't leave the active image
+    });
+    int selectedCount = 0;
+    QObject::connect(strip, &FilmStrip::fileSelected, strip, [&] { ++selectedCount; });
+
+    if (!clickItem(listView, 1, Qt::NoModifier)) {
+        WARN("visualRect not valid — skipping");
+        destroyStrip(strip);
+        return;
+    }
+
+    CHECK(guardCalls == 1);                     // the click asked first
+    CHECK(listView->currentIndex().row() == 0); // ...and the veto kept us put
+    CHECK(selectedCount == 0);                  // no image load was triggered
+
+    destroyStrip(strip);
+}
+
+TEST_CASE(
+    "FilmStrip: an allowing leave-guard lets a plain click move the active image",
+    "[filmstrip][leaveguard]") {
+    testApp();
+
+    QTemporaryDir dir;
+    REQUIRE(dir.isValid());
+    auto* strip = makeStripWithFiles(dir, 4);
+
+    strip->selectFirst();
+    qApp->processEvents();
+
+    auto* listView = strip->findChild<QListView*>();
+    REQUIRE(listView != nullptr);
+    listView->resize(800, 100);
+    qApp->processEvents();
+    REQUIRE(listView->currentIndex().row() == 0);
+
+    strip->setLeaveGuard([] { return true; }); // "Save"/"Discard": go ahead
+
+    if (!clickItem(listView, 1, Qt::NoModifier)) {
+        WARN("visualRect not valid — skipping");
+        destroyStrip(strip);
+        return;
+    }
+
+    CHECK(listView->currentIndex().row() == 1);
+
+    destroyStrip(strip);
+}
+
+TEST_CASE(
+    "FilmStrip: navigateBy honours the leave-guard", "[filmstrip][leaveguard]") {
+    testApp();
+
+    QTemporaryDir dir;
+    REQUIRE(dir.isValid());
+    auto* strip = makeStripWithFiles(dir, 4);
+
+    strip->selectFirst();
+    qApp->processEvents();
+
+    auto* listView = strip->findChild<QListView*>();
+    REQUIRE(listView != nullptr);
+    REQUIRE(listView->currentIndex().row() == 0);
+
+    bool allow = false;
+    strip->setLeaveGuard([&] { return allow; });
+
+    CHECK_FALSE(strip->navigateBy(+1));         // vetoed: stays at the boundary item
+    CHECK(listView->currentIndex().row() == 0);
+
+    allow = true;
+    CHECK(strip->navigateBy(+1));               // allowed: advances
+    CHECK(listView->currentIndex().row() == 1);
+
+    destroyStrip(strip);
+}
