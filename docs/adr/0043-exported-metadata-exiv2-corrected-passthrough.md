@@ -2,12 +2,12 @@
 
 arraw embeds [[Exported Metadata]] into every exported JPEG, TIFF, and PNG: the
 original capture EXIF copied through from the source RAW, plus arraw's
-[[User Metadata]] written as XMP. This builds the feature ADR 0033 deliberately
+[[User Metadata]] written as XMP. This builds the feature ADR 0037 deliberately
 **deferred** ("Embedding metadata into exported JPEGs … needs a metadata *writer*
 for in-file segments, which Qt does not provide … Tracked in the plan, not built
 here"). The governing constraint is unchanged from the rest of the codebase: the
 metadata *resolution* logic exists once ([[spot-for-algorithms]]) — the same
-sidecar `dc:` → embedded XMP → EXIF resolver the [[Info Panel]] uses (ADR 0033)
+sidecar `dc:` → embedded XMP → EXIF resolver the [[Info Panel]] uses (ADR 0037)
 supplies the User Metadata an export writes.
 
 ## Payload: corrected EXIF passthrough + arraw XMP
@@ -45,7 +45,7 @@ would surprise.
 Qt's image writers cannot write EXIF/XMP/IPTC; `libexif` does EXIF but not XMP.
 **exiv2** writes EXIF + XMP + IPTC across JPEG/TIFF/PNG and copies EXIF
 source→dest natively (which *is* the passthrough), so the writer is largely
-format-shared. It is wired exactly like lensfun (ADR 0027): pkg-config-first,
+format-shared. It is wired exactly like lensfun (ADR 0032): pkg-config-first,
 `ARRAW_WITH_EXIV2=AUTO|ON|OFF`, an `ARRAW_HAS_EXIV2` compile define guarding one
 isolated module. Dev builds without exiv2 still compile and simply export plain
 images; **release/packaged builds set `ON`** so the shipped app always embeds.
@@ -70,7 +70,7 @@ surfaced non-fatally. Batch never aborts on a metadata hiccup.
 
 ## exiv2 authors the export XMP
 
-ADR 0033 pins exact RDF container shapes for the `dc:` fields, and `XmpSidecar`
+ADR 0037 pins exact RDF container shapes for the `dc:` fields, and `XmpSidecar`
 already serializes them. For the *exported* packet we hand the values to exiv2 and
 let it author standards-compliant `dc:` XMP, rather than injecting arraw's own
 serialized packet. The exported file is a write-once leaf — never round-tripped
@@ -115,6 +115,6 @@ the *interop* packets arraw reads back.
   [[Output transform]] — colour tag and metadata coexist.
 - Batch export resolves each non-active file's User Metadata through the existing
   `XmpSidecar` resolver (sidecar `dc:` → embedded XMP → EXIF) — no new read path.
-- Editing metadata on standalone non-RAW files (the other half of ADR 0033's
+- Editing metadata on standalone non-RAW files (the other half of ADR 0037's
   deferral) remains deferred; it needs the same in-file writer but is a separate
   edit surface.

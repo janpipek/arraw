@@ -2,7 +2,7 @@
 
 Red-first plan for embedding [[Exported Metadata]] into exported JPEG/TIFF/PNG.
 Architecture and rationale are in [ADR 0043](adr/0043-exported-metadata-exiv2-corrected-passthrough.md)
-(builds the deferral in [ADR 0033](adr/0033-editable-dc-user-metadata-ownership.md));
+(builds the deferral in [ADR 0037](adr/0037-editable-dc-user-metadata-ownership.md));
 vocabulary in [CONTEXT.md](../CONTEXT.md) (**Exported Metadata**, **User Metadata**).
 Designed via a grilling session; this file is the resume point.
 
@@ -83,7 +83,7 @@ image, embeds, then reads back with exiv2 to assert. Guard the suite on
 
 ## Deferred (documented, not built here)
 
-- **Edit metadata on standalone non-RAW files** (ADR 0033's other deferred half) —
+- **Edit metadata on standalone non-RAW files** (ADR 0037's other deferred half) —
   same in-file writer, separate edit surface.
 - **Person/region info** stripping; **per-field** metadata selection.
 - Headless **CLI** flags land when `arraw-cli` itself is built (ADR 0022 not yet
