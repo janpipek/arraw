@@ -1,8 +1,12 @@
 #include "ExportWorkflow.h"
 
+#include "ExportMetadata.h"
+#include "develop/UserMetadata.h"
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <QFileInfo>
+#include <QImage>
 #include <QTemporaryDir>
 
 TEST_CASE("exportFormatSpec maps formats to suffixes and save filters", "[export]") {
@@ -62,4 +66,39 @@ TEST_CASE("saveExportImage applies JPEG quality path", "[export]") {
     const QString path = dir.filePath("out.jpg");
     REQUIRE(saveExportImage(image, path, options));
     CHECK(QFileInfo(path).isFile());
+}
+
+TEST_CASE("runExportTail renders, encodes and writes a file", "[export]") {
+    QTemporaryDir dir;
+    REQUIRE(dir.isValid());
+
+    QImage linear(4, 4, QImage::Format_RGBX32FPx4);
+    linear.fill(QColor(128, 128, 128));
+
+    ExportOptions options;
+    options.format = ExportOptions::Format::JPEG;
+
+    const QString out = dir.filePath("out.jpg");
+    const ExportTailResult result = runExportTail(linear, options, out, QString(), UserMetadata{});
+
+    CHECK(result.saved);
+    CHECK(QFileInfo(out).isFile());
+}
+
+TEST_CASE("runExportTail reports failure when the write fails", "[export]") {
+    QTemporaryDir dir;
+    REQUIRE(dir.isValid());
+
+    QImage linear(4, 4, QImage::Format_RGBX32FPx4);
+    linear.fill(QColor(128, 128, 128));
+
+    ExportOptions options;
+    options.format = ExportOptions::Format::JPEG;
+
+    // Parent directory does not exist, so the encode/write cannot succeed.
+    const QString out = dir.filePath("missing-subdir/out.jpg");
+    const ExportTailResult result = runExportTail(linear, options, out, QString(), UserMetadata{});
+
+    CHECK_FALSE(result.saved);
+    CHECK_FALSE(QFileInfo(out).exists());
 }

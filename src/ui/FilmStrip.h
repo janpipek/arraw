@@ -49,6 +49,12 @@ public:
     // Replace a row's thumbnail with a freshly developed one. No-op if the path
     // is not in the current directory listing.
     void setThumbnail(const QString& path, const QImage& image);
+
+    // Persist + display a freshly developed thumbnail asynchronously: the caller
+    // renders the linear working-space image on the GUI thread, the encode and
+    // disk write happen on a worker, and the strip updates via thumbnailReady
+    // once the write is the current generation (docs/adr/0045).
+    void cacheDevelopedThumbnail(const QString& path, const QImage& linearWorkingImage);
     void setMarks(const QString& path, const UserMetadata& marks);
 
     // Navigate ±1 from current selection. Returns false if already at boundary.

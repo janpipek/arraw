@@ -389,6 +389,10 @@ void FilmStrip::setThumbnail(const QString& path, const QImage& image) {
     model->setThumbnail(path, image); // no-op if path isn't in the current listing
 }
 
+void FilmStrip::cacheDevelopedThumbnail(const QString& path, const QImage& linearWorkingImage) {
+    thumbs->storeDevelopedAsync(path, linearWorkingImage);
+}
+
 void FilmStrip::setMarks(const QString& path, const UserMetadata& marks) {
     model->setMarks(path, marks);
 }
