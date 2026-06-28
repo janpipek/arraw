@@ -91,14 +91,17 @@ public:
         DevelopSession* session,
         MainWindow* mainWindow,
         const GlobalAdjustment& before,
-        const GlobalAdjustment& after)
+        const GlobalAdjustment& after,
+        const QString& label = {})
         : session(session),
           mainWindow(mainWindow),
           before(before),
           after(after) {
-        // Name the step by what actually changed ("Exposure", "Blue Hue", "Crop")
-        // so the History list reads as edits, not a wall of "Adjust".
-        setText(developChangeLabel(before, after));
+        // A caller-supplied label names whole-bundle edits the auto-namer can't
+        // ("Apply Preset Punchy"); otherwise name the step by what actually
+        // changed ("Exposure", "Blue Hue", "Crop") so the History list reads as
+        // edits, not a wall of "Adjust".
+        setText(label.isEmpty() ? developChangeLabel(before, after) : label);
     }
 
     void undo() override;
@@ -1663,10 +1666,10 @@ void MainWindow::rebuildDisplayLut() {
     proofLabel->setVisible(proofing);
 }
 
-void MainWindow::applyDevelopChange(const GlobalAdjustment& after) {
+void MainWindow::applyDevelopChange(const GlobalAdjustment& after, const QString& label) {
     const GlobalAdjustment before = currentParams();
     if (after != before)
-        pushGlobalAdjustmentCommand(before, after);
+        pushGlobalAdjustmentCommand(before, after, label);
 }
 
 void MainWindow::applyCurrentUserMetadata(
@@ -1803,12 +1806,7 @@ void MainWindow::pasteSettingsToPaths(QStringList targets) {
                                             : XmpSidecar::loadAdjustments(path);
         records.append({path, before, applyGroups(before, settingsClipboard->snapshot, chosen)});
     }
-    undoStack->push(
-        new BatchAdjustmentCommand(session->path(), records, [this](const GlobalAdjustment& params) {
-            session->setParams(params);
-            syncSessionToEditors();
-            syncSessionSpotsToEditors(true);
-        }));
+    commitBatchAdjustment(std::move(records), tr("Paste Settings"));
 }
 
 void MainWindow::applyPresetToPaths(const DevelopPreset& preset, QStringList targets) {
@@ -1828,15 +1826,27 @@ void MainWindow::applyPresetToPaths(const DevelopPreset& preset, QStringList tar
         const GlobalAdjustment before = paramsForPath(path);
         records.append({path, before, applyGroups(before, preset.values, preset.groups)});
     }
+    commitBatchAdjustment(std::move(records), tr("Apply Preset"));
+}
+
+void MainWindow::commitBatchAdjustment(QVector<BatchPasteRecord> records, const QString& text) {
+    // A batch belongs on the session History only if it touches the open image
+    // (History is per-image, ADR 0038). An off-image batch still auto-saves XMP,
+    // but pushing it would litter the current photo's History with a step that
+    // does not change it — so apply it directly instead.
+    if (!batchTouchesActive(records, session->path())) {
+        writeBatchAfter(records);
+        return;
+    }
     undoStack->push(new BatchAdjustmentCommand(
         session->path(),
-        records,
+        std::move(records),
         [this](const GlobalAdjustment& params) {
             session->setParams(params);
             syncSessionToEditors();
             syncSessionSpotsToEditors(true);
         },
-        tr("Apply Preset")));
+        text));
 }
 
 void MainWindow::saveCurrentAsPreset() {
@@ -1874,7 +1884,9 @@ void MainWindow::saveCurrentAsPreset() {
 void MainWindow::applyPreset(const DevelopPreset& preset) {
     if (session->path().isEmpty())
         return;
-    applyDevelopChange(applyGroups(currentParams(), preset.values, preset.groups));
+    applyDevelopChange(
+        applyGroups(currentParams(), preset.values, preset.groups),
+        tr("Apply Preset %1").arg(preset.name));
 }
 
 void MainWindow::managePresets() {
@@ -1964,14 +1976,14 @@ void MainWindow::syncSessionSpotsToEditors(bool fullResOnly) {
 }
 
 void MainWindow::pushGlobalAdjustmentCommand(
-    const GlobalAdjustment& before, const GlobalAdjustment& after) {
+    const GlobalAdjustment& before, const GlobalAdjustment& after, const QString& label) {
     const GlobalAdjustment current = session->params();
     GlobalAdjustment beforeSnapshot = applyGroups(current, before, allGroups());
     GlobalAdjustment afterSnapshot = applyGroups(current, after, allGroups());
     beforeSnapshot.grainSeed = before.grainSeed;
     afterSnapshot.grainSeed = after.grainSeed;
     if (afterSnapshot != beforeSnapshot)
-        undoStack->push(new AdjustmentCommand(session, this, beforeSnapshot, afterSnapshot));
+        undoStack->push(new AdjustmentCommand(session, this, beforeSnapshot, afterSnapshot, label));
 }
 
 // ---------------------------------------------------------------------------

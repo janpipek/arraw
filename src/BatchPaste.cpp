@@ -1,7 +1,19 @@
 #include "BatchPaste.h"
 #include "io/XmpSidecar.h"
 
+#include <algorithm>
 #include <utility>
+
+bool batchTouchesActive(const QVector<BatchPasteRecord>& records, const QString& activePath) {
+    return std::any_of(records.cbegin(), records.cend(), [&](const BatchPasteRecord& rec) {
+        return rec.path == activePath;
+    });
+}
+
+void writeBatchAfter(const QVector<BatchPasteRecord>& records) {
+    for (const auto& rec : records)
+        XmpSidecar::saveAdjustments(rec.path, rec.after);
+}
 
 BatchAdjustmentCommand::BatchAdjustmentCommand(
     QString activePath, QVector<BatchPasteRecord> records, ApplyActive applyActive, QString text)
@@ -14,11 +26,11 @@ BatchAdjustmentCommand::BatchAdjustmentCommand(
 }
 
 void BatchAdjustmentCommand::redo() {
-    for (const auto& rec : records) {
-        XmpSidecar::saveAdjustments(rec.path, rec.after);
-        if (applyActive && rec.path == activePath)
-            applyActive(rec.after);
-    }
+    writeBatchAfter(records);
+    if (applyActive)
+        for (const auto& rec : records)
+            if (rec.path == activePath)
+                applyActive(rec.after);
 }
 
 void BatchAdjustmentCommand::undo() {

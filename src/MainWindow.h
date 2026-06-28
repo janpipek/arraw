@@ -1,4 +1,5 @@
 #pragma once
+#include "BatchPaste.h"
 #include "ChromeHider.h"
 #include "DecodeCache.h"
 #include "core/CropGeometry.h"
@@ -128,13 +129,20 @@ private:
     void updateZoomStatus(float zoom);
 
     // Apply a develop change to the global params as one undo step (the source
-    // of truth for copy/paste and preset apply). No-op if nothing changed.
-    void pushGlobalAdjustmentCommand(const GlobalAdjustment& before, const GlobalAdjustment& after);
-    void applyDevelopChange(const GlobalAdjustment& after);
+    // of truth for copy/paste and preset apply). No-op if nothing changed. An
+    // explicit label names the History step (e.g. "Apply Preset Punchy"); when
+    // empty the step is auto-named from what changed (developChangeLabel).
+    void pushGlobalAdjustmentCommand(
+        const GlobalAdjustment& before, const GlobalAdjustment& after, const QString& label = {});
+    void applyDevelopChange(const GlobalAdjustment& after, const QString& label = {});
     void populateFilmStripContextMenu(const QString& path, const QStringList& targets, QMenu* menu);
     void copySettingsFromPath(const QString& path);
     void pasteSettingsToPaths(QStringList targets);
     void applyPresetToPaths(const DevelopPreset& preset, QStringList targets);
+    // Commit a multi-file batch (paste / preset). Pushes one undo step onto the
+    // session History only when the batch touches the open image; otherwise it
+    // auto-saves the off-image XMP directly, keeping that per-image History clean.
+    void commitBatchAdjustment(QVector<BatchPasteRecord> records, const QString& text);
     void exportPaths(const QStringList& paths);
     void applyPreset(const DevelopPreset& preset);
     void rebuildPresetsMenu(); // re-list saved presets after save/delete
