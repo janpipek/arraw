@@ -26,6 +26,6 @@ bool lensfunAvailable();
 // dbPath loads exactly that directory (deterministic tests). lensfun resolves its
 // parametric model for this shot and we sample
 // the resolution into the model's RadialCurve LUTs, so the apply step stays
-// source-agnostic (docs/adr/0027). Returns nullopt when lensfun is unavailable, the
+// source-agnostic (docs/adr/0032). Returns nullopt when lensfun is unavailable, the
 // database fails to load, no lens matches, or the matched lens has no corrections.
 std::optional<LensCorrectionModel> resolveLensfunModel(const QString& dbPath, const LensQuery& query);

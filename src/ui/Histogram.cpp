@@ -11,7 +11,7 @@ static int srgbBin(float v) {
         std::array<uint8_t, 4096> t{};
         for (int i = 0; i < 4096; ++i) {
             float u = float(i) / 4095.0f;
-            float enc = (u <= 0.0031308f) ? u * 12.92f : 1.055f * std::pow(u, 1.0f / 2.4f) - 0.055f;
+            float enc = (u <= 0.0033308f) ? u * 12.92f : 1.055f * std::pow(u, 1.0f / 2.4f) - 0.055f;
             t[i] = uint8_t(int(enc * 255.0f + 0.5f));
         }
         return t;
@@ -85,7 +85,7 @@ void HistogramBins::bin(const QImage& img) {
 
 void Histogram::paintEvent(QPaintEvent*) {
     QPainter p(this);
-    p.fillRect(rect(), ThemeColors::kBase); // recessed panel background (ADR 0030)
+    p.fillRect(rect(), ThemeColors::kBase); // recessed panel background (ADR 0031)
 
     // Log-scale the bar heights so sparse bins stay visible next to the peak.
     const float yScale = float(height()) / std::log1p(float(bins.peak));

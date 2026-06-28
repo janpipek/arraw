@@ -167,7 +167,7 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-// Undo command for restoring a Snapshot (docs/adr/0033). A snapshot is a whole
+// Undo command for restoring a Snapshot (docs/adr/0038). A snapshot is a whole
 // develop state, so unlike AdjustmentCommand this fully refreshes both editors
 // and re-uploads the spotted/corrected buffers — masks, spots, and lens
 // corrections can all change in one swap.
@@ -206,7 +206,7 @@ static bool lensTogglesDiffer(const GlobalAdjustment& a, const GlobalAdjustment&
            || a.lensCorrectCA != b.lensCorrectCA;
 }
 
-// Demosaic is a decode-time choice (docs/adr/0033): when it changes the decoded
+// Demosaic is a decode-time choice (docs/adr/0036): when it changes the decoded
 // buffers must be regenerated through the load path, not a shader/CPU refresh.
 static bool demosaicDiffers(const GlobalAdjustment& a, const GlobalAdjustment& b) {
     return a.demosaicAlgorithm != b.demosaicAlgorithm;
@@ -525,7 +525,7 @@ void MainWindow::keyPressEvent(QKeyEvent* e) {
     if (e->key() == Qt::Key_Escape) {
         // A modal tool's own cancel wins so Escape behaves the same whether or
         // not the viewport holds focus; only with no tool active does Escape act
-        // as the focus-mode "give me my UI back" panic key (docs/adr/0027).
+        // as the focus-mode "give me my UI back" panic key (docs/adr/0028).
         if (viewport->activeTool() != ImageViewport::ActiveTool::None) {
             viewport->cancelActiveTool();
             return;
@@ -606,7 +606,7 @@ void MainWindow::setupMenus() {
     // and enabled. These live on the View menu, which lights-out (F12) hides and
     // image loading disables — so also host them on the window itself, which
     // stays visible/enabled, or F8/F11/F12 would die exactly when needed
-    // (docs/adr/0027).
+    // (docs/adr/0028).
     addAction(toggleAdjustments);
     addAction(fullScreenAction);
     addAction(lightsOutAction);
@@ -801,7 +801,7 @@ void MainWindow::setupToolbar() {
         selectAdjustmentTab(spotsTabIndex);
     });
 
-    // Coarse Orientation (docs/adr/0028). Momentary actions (not modal tools);
+    // Coarse Orientation (docs/adr/0029). Momentary actions (not modal tools);
     // final home is beside the Rotation slider, but the toolbar gives a handle now.
     tb->addSeparator();
     auto* rotateCwAction = tb->addAction(tr("Rotate ⟳"));
@@ -999,7 +999,7 @@ void MainWindow::setupDocks() {
     connect(
         filmStrip, &FilmStrip::populateContextMenu, this, &MainWindow::populateFilmStripContextMenu);
 
-    // History + Snapshots (left), Lightroom-style, visible while editing (ADR 0033).
+    // History + Snapshots (left), Lightroom-style, visible while editing (ADR 0038).
     historyDock = new QDockWidget("History", this);
     historyDock->setObjectName("HistoryDock"); // saveState/restoreState key
     historyDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
@@ -1236,7 +1236,7 @@ void MainWindow::loadImage(const QString& path) {
     pendingPreviewParams = resolvePendingPreviewParams(path);
 
     // The demosaic algorithm parameterises the decode and its cache key, so it is
-    // read from the up-front resolved params (docs/adr/0033).
+    // read from the up-front resolved params (docs/adr/0036).
     const DemosaicAlgorithm algo = pendingPreviewParams.demosaicAlgorithm;
 
     // Re-opening a recently viewed image: a cached decode skips the background
@@ -1394,14 +1394,14 @@ void MainWindow::applyLoadResult(const QString& path, const LoadResult& result) 
     syncSessionToEditors();
     syncSessionSpotsToEditors(true);
     // Demosaic selection applies only to Bayer sensors; disable it (with an
-    // explanation) for X-Trans/Foveon/standard images (docs/adr/0033).
+    // explanation) for X-Trans/Foveon/standard images (docs/adr/0036).
     adjPanel->setDemosaicAvailable(sensorSupportsDemosaicSelection(result.filters));
     filmStrip->setMarks(path, ratingAndLabelOnly(session->userMetadata()));
     historyPanel->setSnapshots(session->snapshots());
 
     infoPanel->setUserMetadata(session->userMetadata());
     infoPanel->setImageMetadata(result.metadata);
-    undoStack->clear(); // History is session-only — it resets per image (ADR 0033)
+    undoStack->clear(); // History is session-only — it resets per image (ADR 0038)
 
     statusLabel->setText(loadedImageStatusText(path, session->fullRes(), session->sidecarState()));
 
@@ -1514,7 +1514,7 @@ void MainWindow::changeEvent(QEvent* e) {
         const auto previous = static_cast<QWindowStateChangeEvent*>(e)->oldState();
         // Capture the pre-fullscreen state from the WM's own transition so
         // exitFullScreen() can return to the right place — more reliable than
-        // polling isMaximized() before showFullScreen() (docs/adr/0027).
+        // polling isMaximized() before showFullScreen() (docs/adr/0028).
         if (isFullScreen() && !previous.testFlag(Qt::WindowFullScreen))
             wasMaximized = previous.testFlag(Qt::WindowMaximized);
         if (fullScreenAction)
@@ -1866,7 +1866,7 @@ void MainWindow::pushGlobalAdjustmentCommand(
 }
 
 // ---------------------------------------------------------------------------
-// Snapshot management (docs/adr/0033). Add/rename/delete edit the persisted list
+// Snapshot management (docs/adr/0038). Add/rename/delete edit the persisted list
 // directly and save immediately; restore replays a whole develop state as one
 // undoable step on the shared stack so it shows up in History like any edit.
 void MainWindow::addCurrentAsSnapshot() {
@@ -2078,7 +2078,7 @@ void MainWindow::exportBatch(const QStringList& paths) {
             loaded.fullRes = session->fullRes();
         } else {
             // Resolve the per-image demosaic algorithm up front so the exported
-            // file matches the on-screen preview (docs/adr/0033) — it parameterises
+            // file matches the on-screen preview (docs/adr/0036) — it parameterises
             // the decode, unlike the other develop fields applied downstream.
             const DemosaicAlgorithm algo
                 = resolveImageAdjustments(rawPath, QRectF(0, 0, 1, 1)).demosaicAlgorithm;

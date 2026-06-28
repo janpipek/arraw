@@ -20,7 +20,7 @@ undoable History step (a plain `AdjustmentCommand`); creating, renaming, and
 deleting snapshots edit the persisted list directly and are not History steps.
 
 Snapshots are stored in arraw's own `arraw:Snapshots` RDF Seq, not Adobe's
-`crs:Snapshots`. arraw owns the complete `arraw:` namespace (ADR 0026), and a
+`crs:Snapshots`. arraw owns the complete `arraw:` namespace (ADR 0027), and a
 self-contained `arraw:`-named encoding of the full develop state is lossless for
 arraw-only fields. Adobe's `crs:Snapshots` string format cannot represent
 arraw's local adjustments or spots, so a faithful round-trip there would
@@ -36,6 +36,6 @@ solo-developer tool.
   masks/spots — for marginal interop value.
 - **JSON blob inside XMP.** Rejected: would reuse one serializer but embeds
   opaque JSON inside an otherwise structured-RDF sidecar, inconsistent with the
-  namespace-aware modeling of ADR 0026.
+  namespace-aware modeling of ADR 0027.
 - **Side-by-side split-view A/B.** Deferred: a major RendererCore/viewport
   change (two live pipelines). Click-to-switch delivers A/B without it.

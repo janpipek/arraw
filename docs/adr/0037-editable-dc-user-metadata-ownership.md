@@ -3,7 +3,7 @@
 arraw makes Title, Caption, Keywords, Creator, and Copyright editable in the
 [[Info Panel]] and writes them to the develop sidecar as Dublin Core: `dc:title`,
 `dc:description`, `dc:subject`, `dc:creator`, `dc:rights`. This **amends
-[ADR 0026](0026-shared-xmp-property-ownership.md)**, which previously listed only
+[ADR 0027](0027-shared-xmp-property-ownership.md)**, which previously listed only
 the `arraw:` namespace, the modeled `crs:` properties, and `xmp:Rating`/`xmp:Label`
 as owned. arraw now also owns exactly these five `dc:` properties; every other
 `dc:` property (and the whole rest of the packet) is still preserved semantically,
@@ -36,7 +36,7 @@ switching images.
 
 - **Own the whole `dc:` namespace.** Simpler merge, but would erase any `dc:`
   property arraw does not model — including `lr:`-adjacent keyword hierarchies and
-  fields written by digiKam/Lightroom. Rejected for the same reason ADR 0026
+  fields written by digiKam/Lightroom. Rejected for the same reason ADR 0027
   rejected owning whole `crs:`/`xmp:`.
 - **Own nothing in `dc:` (display-only).** Keeps the merge trivial but makes the
   feature impossible — there would be nowhere standards-compliant to write
@@ -53,7 +53,7 @@ switching images.
   their correct RDF containers: `dc:title`/`dc:description`/`dc:rights` as
   `rdf:Alt` (`x-default`), `dc:subject` as `rdf:Bag`, `dc:creator` as `rdf:Seq`.
 - A `dc:`-only save replaces just these five properties and preserves the rest of
-  the packet, exactly as ADR 0026 already requires for owned properties.
+  the packet, exactly as ADR 0027 already requires for owned properties.
 - Embedding metadata into **exported JPEGs**, and editing metadata on **standalone
   non-RAW files** (whose metadata is embedded, not in a sidecar), are deliberately
   **deferred** — both need a metadata *writer* for in-file segments, which Qt does

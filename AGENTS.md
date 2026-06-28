@@ -146,7 +146,7 @@ shell (`main.cpp`, `MainWindow`, the current-image aggregate `DevelopSession`,
 the decoded-buffer caches `DecodeCache`/`ThumbnailCache`, and the
 workflow/orchestration helpers `ExportWorkflow`, `ImageLoadWorkflow`,
 `BatchPaste`, `MainWindowStatus`, `ChromeHider`) left at the `src/` root. The un-foldered root **is** the
-application; each subdirectory is a layer it is built from (ADR 0036):
+application; each subdirectory is a layer it is built from (ADR 0041):
 
 | layer | holds | may depend on |
 |---|---|---|
@@ -163,7 +163,7 @@ manifest and a downward violation is greppable (e.g. `grep -rn '"ui/'
 src/pipeline` must return nothing). One file per *concept* (a primary type
 carries its small satellites); existing functional namespaces (`crop::`,
 `orient::`, `tone::`, …) mark pure, headless modules. `MainWindow` and
-`ImageViewport` are known internal-decomposition targets, deferred (ADR 0036).
+`ImageViewport` are known internal-decomposition targets, deferred (ADR 0041).
 
 ### 1. Data Flow: Open → Display
 1. `MainWindow::loadImage()` fires a `QtConcurrent::run` background task.
@@ -203,7 +203,7 @@ carries its small satellites); existing functional namespaces (`crop::`,
 * **Adding a new adjustment requires updating**: `GlobalAdjustment` (struct), the slider in `AdjustmentPanel`, the uniform block in **both** `image.vert` **and** `image.frag`, the `Ubuf` mirror in `RendererCore.h` (must match std140 layout exactly), `RendererCore::fillUbuf()`, and `XmpSidecar` load/save. Update all three uniform-block declarations in the same change even if a stage never reads the field — a mismatch fails shader linking and blanks the viewport (see [Shaders](#shaders) above).
 
 ### 7. UI Theme & Colors
-* The neutral dark theme is applied once in `main()` via `Theme::apply()` (Fusion style + a dark `QPalette`), **before** any widget is constructed. Dark-only for now; the palette is built in one function so a light variant / user-settable colors slot in behind the same seam (ADR 0030).
+* The neutral dark theme is applied once in `main()` via `Theme::apply()` (Fusion style + a dark `QPalette`), **before** any widget is constructed. Dark-only for now; the palette is built in one function so a light variant / user-settable colors slot in behind the same seam (ADR 0031).
 * **All UI colors are single-sourced in `src/core/ThemeColors.h`** (a dependency-free leaf header), read by both `Theme` (the palette) and `RendererCore` (the viewport surround, `kCanvas`). Add or change a chrome color *there*, not inline.
 * `kCanvas` must stay bit-identical to `0.15,0.15,0.15` — it backs the golden-image references (ADR 0005).
 * **Semantic / data-viz colors stay hardcoded with their feature** (histogram channels, filmstrip flags/ratings, curve channel buttons, viewport overlays & clipping warnings) — they encode meaning, not chrome, so don't route them through the theme.

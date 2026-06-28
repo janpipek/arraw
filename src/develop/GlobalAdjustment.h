@@ -31,7 +31,7 @@ struct GlobalAdjustment : SharedAdjustment {
 
     // Filmic Highlights — a global-only Tone control (0..100, default 25; 0 = off):
     // the shoulder + path-to-white stage applied last in the develop chain
-    // (docs/adr/0035). On by default with a gentle shoulder, like the baked
+    // (docs/adr/0040). On by default with a gentle shoulder, like the baked
     // highlight roll-off in Lightroom/Capture One — most photos read better with
     // graceful highlights than a hard digital clip. Travels in the Tone Develop
     // Group; stored arraw-native (arraw:FilmicHighlights), no Lightroom equivalent.
@@ -54,18 +54,18 @@ struct GlobalAdjustment : SharedAdjustment {
 
     // Detail
     // Demosaic algorithm — a decode-time choice, not a shader uniform: changing
-    // it re-runs the libraw decode through the load path (docs/adr/0033, issue
+    // it re-runs the libraw decode through the load path (docs/adr/0036, issue
     // #22). Persisted as a token in arraw:DemosaicAlgorithm; AHD is the default.
     DemosaicAlgorithm demosaicAlgorithm = kDefaultDemosaic;
     float sharpening = 0.0f; // 0 .. 100
     // Colour (chroma) Noise Reduction — a cached GPU chroma pre-pass in
-    // RendererCore (see NoiseReduction.h, docs/adr/0032, issue #59). Strength is
+    // RendererCore (see NoiseReduction.h, docs/adr/0034, issue #59). Strength is
     // the blend opacity (Lightroom's "Color" amount, crs:ColorNoiseReduction);
     // Smoothness drives the Gaussian sigma (crs:ColorNoiseReductionSmoothness).
     float colorNoiseReduction = 0.0f;            // Strength, 0 .. 100
     float colorNoiseReductionSmoothness = 50.0f; // 0 .. 100
 
-    // Lens Corrections (docs/adr/0027). Profile-driven, apply-once CPU corrections.
+    // Lens Corrections (docs/adr/0032). Profile-driven, apply-once CPU corrections.
     // Enable toggles only — the coefficients come from the lens profile
     // (lensfun / embedded), so nothing numeric is stored here.
     bool lensCorrectDistortion = false;
@@ -73,7 +73,7 @@ struct GlobalAdjustment : SharedAdjustment {
     bool lensCorrectCA = false;
 
     // Geometry
-    orient::Orientation orientation;        // coarse 90°/flip, seeded from EXIF (docs/adr/0028)
+    orient::Orientation orientation;        // coarse 90°/flip, seeded from EXIF (docs/adr/0029)
     float rotation = 0.0f;                  // degrees, -45 .. +45 (fine straighten)
     QRectF cropRect = {0.0, 0.0, 1.0, 1.0}; // normalised UV, full image by default
     bool cropConstrained = false;           // crop is locked to its aspect ratio

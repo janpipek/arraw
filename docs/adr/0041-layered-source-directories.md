@@ -89,7 +89,7 @@ follow-ups rather than bundle risky surgery into a layout change:
 - **`DevelopSession`'s derived-buffer cache** — the session still runs CPU
   pipeline compute internally (`applyLensCorrection` → `applySpots`, with eager
   preview / lazy full-res caching). Extracting that into a `pipeline/`
-  "corrected negative" component (ADR 0027) would make the subtle caching
+  "corrected negative" component (ADR 0032) would make the subtle caching
   independently testable and remove pipeline compute from the session. Deferred:
   it is performance-sensitive live-view code and the golden tests are GPU-skipped,
   so it warrants its own focused pass.

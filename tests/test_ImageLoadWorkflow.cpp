@@ -42,7 +42,7 @@ TEST_CASE("decodeCacheKey distinguishes demosaic algorithms for the same file", 
     const QString ahd = decodeCacheKey(path, DemosaicAlgorithm::AHD);
     const QString vng = decodeCacheKey(path, DemosaicAlgorithm::VNG);
 
-    // Each algorithm's decode caches independently (ADR 0033).
+    // Each algorithm's decode caches independently (ADR 0036).
     CHECK(ahd != vng);
     // ...but the key is stable for the same (path, algo) so A/B switching hits.
     CHECK(decodeCacheKey(path, DemosaicAlgorithm::VNG) == vng);

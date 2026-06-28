@@ -1,4 +1,4 @@
-// The generation-keyed matcher for the two async histogram readbacks (ADR 0033,
+// The generation-keyed matcher for the two async histogram readbacks (ADR 0035,
 // issue #51). The readbacks complete independently and possibly out of order;
 // this pins the matching/staleness logic that guards against emitting a
 // mismatched pair — the one failure mode the GPU smoke-run can't reliably catch.

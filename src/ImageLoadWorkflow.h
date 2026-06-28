@@ -24,14 +24,14 @@ struct ResolvedLoadedImage {
     UserMetadata metadata;
     UserMetadataPresence metadataPresence;
     DevelopSession::SidecarState sidecarState = DevelopSession::SidecarState::Unknown;
-    std::vector<Snapshot> snapshots; // named A/B develop states (docs/adr/0033)
+    std::vector<Snapshot> snapshots; // named A/B develop states (docs/adr/0038)
 };
 
 using EmbeddedPreviewCallback = std::function<void(ImageBuffer)>;
 
 // The demosaic algorithm is part of the key: each algorithm's decode caches
 // independently, so only a never-tried algorithm pays the decode cost while
-// switching among tried ones (or undo/redo) is instant (ADR 0033).
+// switching among tried ones (or undo/redo) is instant (ADR 0036).
 QString decodeCacheKey(const QString& path, DemosaicAlgorithm algo = kDefaultDemosaic);
 DevelopSession::SidecarState toSessionSidecarState(SidecarLoadStatus status);
 GlobalAdjustment resolvePendingPreviewParams(const QString& path);

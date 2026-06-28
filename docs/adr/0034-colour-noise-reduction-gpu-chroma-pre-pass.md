@@ -17,7 +17,7 @@ a denoised texture that the main pass samples instead of the raw slot.
 
 The first design was a CPU separable Gaussian on the decoded `ImageBuffer`,
 recomputed once per Amount change (the same exception as Spot removal `0017` and
-the lens-corrected negative `0027`). It was **abandoned after benchmarking**: a
+the lens-corrected negative `0032`). It was **abandoned after benchmarking**: a
 large-radius full-res Gaussian took ~minutes per recompute — sigma reaches 25
 full-res pixels, so the kernel is ~150 taps in each direction, and the cost is
 paid synchronously on the buffer chain. "Slow as hell" in practice; unusable as
@@ -83,7 +83,7 @@ scalars from, not formulae duplicated in GLSL.
 
 Colour NR is the **last** pipeline stage before display, not the first. The GPU
 pre-pass samples the texture that was already uploaded — i.e. after lens
-correction (`0027`) and spot removal (`0017`) baked into the decoded buffer. That
+correction (`0032`) and spot removal (`0017`) baked into the decoded buffer. That
 is the opposite end of the pipeline from the abandoned CPU design, and it is
 order-independent for chroma:
 
@@ -142,7 +142,7 @@ debounce and always use the committed values.
   round-trip; the spatial result is verified visually.
 - Persisted as two Lightroom-compatible fields (issue #59): **Strength** as
   `crs:ColorNoiseReduction` — Lightroom's "Color" amount — **default 0** (arraw
-  stays neutral on import rather than mirroring Adobe's default 25, the `0031`
+  stays neutral on import rather than mirroring Adobe's default 25, the `0033`
   precedent: same field name, our interpretation); and **Smoothness** as
   `crs:ColorNoiseReductionSmoothness`, **default 50** (Lightroom parity, so
   enabling Strength alone yields a useful mid-scale blur). Carried in Develop
