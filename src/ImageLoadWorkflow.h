@@ -27,6 +27,20 @@ struct ResolvedLoadedImage {
     std::vector<Snapshot> snapshots; // named A/B develop states (docs/adr/0038)
 };
 
+// The descriptive User Metadata to show for a loaded image, plus which fields the
+// sidecar authored (so downstream knows what is sidecar-owned vs prefilled).
+struct ResolvedUserMetadata {
+    UserMetadata metadata;
+    UserMetadataPresence presence;
+};
+
+// Merges the descriptive User Metadata read precedence for one image: EXIF rows
+// prefill, overlaid by the embedded XMP packet, overlaid by the sidecar. Pure
+// policy over already-parsed inputs — no disk, no XMP parsing — so it is the
+// independently testable seam between decode and persistence.
+ResolvedUserMetadata resolveUserMetadata(
+    const SidecarData& sidecar, const ImageMetadata& exif, const XmpPacketMetadata& embedded);
+
 using EmbeddedPreviewCallback = std::function<void(ImageBuffer)>;
 
 // The demosaic algorithm is part of the key: each algorithm's decode caches

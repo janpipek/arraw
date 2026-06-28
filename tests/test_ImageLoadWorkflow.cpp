@@ -1,3 +1,4 @@
+#include "core/ImageMetadata.h"
 #include "develop/UserMetadata.h"
 #include "develop/GlobalAdjustment.h"
 #include "pipeline/LoadResult.h"
@@ -83,53 +84,51 @@ TEST_CASE("resolveLoadedImage maps loaded sidecars to session state", "[loadwork
     CHECK(resolved.metadata.rating == 4);
 }
 
-TEST_CASE("resolveLoadedImage applies User Metadata read precedence", "[loadworkflow]") {
-    QTemporaryDir dir;
-    REQUIRE(dir.isValid());
-    const QString rawPath = dir.filePath("IMG_0001.CR3");
+// User Metadata read precedence is pure merge policy — EXIF prefill, overlaid by
+// the embedded XMP packet, overlaid by the sidecar. It is exercised directly on
+// the resolveUserMetadata seam with in-memory inputs (no disk, no XMP parsing),
+// which is the merge's actual contract; resolveLoadedImage just feeds it.
+TEST_CASE("resolveUserMetadata applies User Metadata read precedence", "[loadworkflow]") {
+    ImageMetadata exif;
+    exif.rows.append(qMakePair(QString("Description"), QString("EXIF caption")));
+    exif.rows.append(qMakePair(QString("Artist"), QString("EXIF creator")));
 
-    LoadResult result;
-    result.defaultCrop = QRectF(0.0, 0.0, 1.0, 1.0);
-    result.metadata.rows.append(qMakePair(QString("Description"), QString("EXIF caption")));
-    result.metadata.rows.append(qMakePair(QString("Artist"), QString("EXIF creator")));
-    result.embeddedMetadata.caption = "Embedded caption";
-    result.embeddedMetadata.creator = "Embedded creator";
-    result.embeddedMetadataPresence.caption = true;
-    result.embeddedMetadataPresence.creator = true;
+    XmpPacketMetadata embedded;
+    embedded.metadata.caption = "Embedded caption";
+    embedded.metadata.creator = "Embedded creator";
+    embedded.presence.caption = true;
+    embedded.presence.creator = true;
 
-    ResolvedLoadedImage resolved = resolveLoadedImage(rawPath, result);
-    CHECK(resolved.metadata.caption == "Embedded caption");
-    CHECK(resolved.metadata.creator == "Embedded creator");
+    // No sidecar: the embedded packet overlays the EXIF prefill.
+    SidecarData sidecar;
+    UserMetadata resolved = resolveUserMetadata(sidecar, exif, embedded).metadata;
+    CHECK(resolved.caption == "Embedded caption");
+    CHECK(resolved.creator == "Embedded creator");
 
-    UserMetadata sidecarMetadata;
-    sidecarMetadata.caption = "Sidecar caption";
-    REQUIRE(XmpSidecar::saveMetadata(rawPath, sidecarMetadata));
-
-    resolved = resolveLoadedImage(rawPath, result);
-    CHECK(resolved.metadata.caption == "Sidecar caption");
-    CHECK(resolved.metadata.creator == "Embedded creator");
+    // Sidecar caption present: it overlays the embedded value; creator, absent
+    // from the sidecar, stays the embedded one.
+    sidecar.metadata.caption = "Sidecar caption";
+    sidecar.metadataPresence.caption = true;
+    resolved = resolveUserMetadata(sidecar, exif, embedded).metadata;
+    CHECK(resolved.caption == "Sidecar caption");
+    CHECK(resolved.creator == "Embedded creator");
 }
 
-TEST_CASE("resolveLoadedImage honours sidecar-authored empty User Metadata", "[loadworkflow]") {
-    QTemporaryDir dir;
-    REQUIRE(dir.isValid());
-    const QString rawPath = dir.filePath("IMG_0001.CR3");
+TEST_CASE("resolveUserMetadata honours sidecar-authored empty User Metadata", "[loadworkflow]") {
+    ImageMetadata exif;
+    exif.rows.append(qMakePair(QString("Description"), QString("EXIF caption")));
 
-    LoadResult result;
-    result.defaultCrop = QRectF(0.0, 0.0, 1.0, 1.0);
-    result.metadata.rows.append(qMakePair(QString("Description"), QString("EXIF caption")));
-    result.embeddedMetadata.caption = "Embedded caption";
-    result.embeddedMetadataPresence.caption = true;
+    XmpPacketMetadata embedded;
+    embedded.metadata.caption = "Embedded caption";
+    embedded.presence.caption = true;
 
-    UserMetadata metadata;
-    UserMetadataPresence fields;
-    fields.caption = true;
-    REQUIRE(XmpSidecar::saveMetadata(rawPath, metadata, fields));
+    // The sidecar authored caption as an explicit empty value: present but blank.
+    SidecarData sidecar;
+    sidecar.metadataPresence.caption = true;
 
-    const ResolvedLoadedImage resolved = resolveLoadedImage(rawPath, result);
-
+    const ResolvedUserMetadata resolved = resolveUserMetadata(sidecar, exif, embedded);
     CHECK(resolved.metadata.caption.isEmpty());
-    CHECK(resolved.metadataPresence.caption);
+    CHECK(resolved.presence.caption);
 }
 
 TEST_CASE(

@@ -45,8 +45,7 @@ LoadResult StandardImageLoader::load(const QString& path, std::shared_ptr<std::a
         {}, // sensorClipFullRes
         {}, // sensorClipPreview
         {}, // metadata
-        {}, // embeddedMetadata
-        {}, // embeddedMetadataPresence
+        {}, // embeddedXmpPacket (standard images carry no embedded XMP)
         {}, // error
         {0.0, 0.0, 1.0, 1.0}, // defaultCrop
         {}, // lensModel
