@@ -25,6 +25,8 @@ add_executable(arraw_tests
     test_ImageLoadWorkflow.cpp
     test_ImageMetadata.cpp
     test_FilmStripModel.cpp
+    test_FilmStripFilter.cpp
+    test_FilmStripFilterModel.cpp
     test_FilmStripLayout.cpp
     test_FilmStripTooltip.cpp
     test_ExportWorkflow.cpp

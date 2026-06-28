@@ -1,13 +1,13 @@
 #pragma once
 #include "ChromeHider.h"
-#include "core/CropGeometry.h"
 #include "DecodeCache.h"
+#include "core/CropGeometry.h"
 #include "develop/GlobalAdjustment.h"
-#include "pipeline/LoadResult.h"
-#include "io/PresetStore.h"
 #include "develop/SettingsClipboard.h"
 #include "develop/Spot.h"
 #include "develop/UserMetadata.h"
+#include "io/PresetStore.h"
+#include "pipeline/LoadResult.h"
 #include <atomic>
 #include <memory>
 #include <optional>
@@ -27,6 +27,7 @@ class QDockWidget;
 class QUndoStack;
 class QLabel;
 class QToolButton;
+class QHBoxLayout;
 class QToolBar;
 class QActionGroup;
 class QAction;
@@ -99,6 +100,9 @@ private:
     void setupMenus();
     void setupImageMenu();
     void setupDocks();
+    // Builds the rating/colour filter controls and appends them to the film-strip
+    // title bar (ADR 0042). Wires each control to FilmStrip::setFilter.
+    void addFilmStripFilterControls(QHBoxLayout* into);
     void setupStatusBar();
     void setupToolbar();
     void syncToolActions();       // reflect viewport->activeTool() in the buttons
@@ -184,8 +188,8 @@ private:
     HistoryPanel* historyPanel;
     FilmStrip* filmStrip;
     QDockWidget* filmStripDock;
-    QDockWidget* historyDock; // left; History list + Snapshots (docs/adr/0038)
-    QDockWidget* adjustmentsDock;                     // right; collapses to a strip
+    QDockWidget* historyDock;     // left; History list + Snapshots (docs/adr/0038)
+    QDockWidget* adjustmentsDock; // right; collapses to a strip
     std::unique_ptr<CollapsiblePane> adjustmentsPane; // adjustmentsDock ↔ edge strip
     QToolBar* mainToolBar = nullptr;
     QUndoStack* undoStack;
