@@ -8,7 +8,6 @@
 #include "core/ImageMetadata.h"
 #include "pipeline/LensfunSource.h"
 #include "core/Trace.h"
-#include "io/XmpSidecar.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -221,10 +220,10 @@ LoadResult RawProcessor::load(
 
     const ImageMetadata metadata = extractMetadata(*raw);
     const auto& id = raw->imgdata.idata;
-    const QByteArray embeddedXmp(
+    // Emit the raw XMP packet bytes; the shell parses them (docs/adr/0036).
+    QByteArray embeddedXmp(
         id.xmpdata && id.xmplen > 0 ? id.xmpdata : nullptr,
         id.xmpdata && id.xmplen > 0 ? int(id.xmplen) : 0);
-    const XmpPacketMetadata embeddedMetadata = XmpSidecar::metadataPacketFromPacket(embeddedXmp);
 
     raw->imgdata.params.use_camera_wb = 1;
     raw->imgdata.params.no_auto_bright = 1;
@@ -303,8 +302,7 @@ LoadResult RawProcessor::load(
         std::move(sensorClipFullRes),
         std::move(sensorClipPreview),
         metadata,
-        embeddedMetadata.metadata,
-        embeddedMetadata.presence,
+        std::move(embeddedXmp),
         {},
         defaultCrop,
         std::move(lensModel),
