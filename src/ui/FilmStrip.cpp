@@ -1,11 +1,12 @@
-#include "develop/UserMetadata.h"
 #include "ui/FilmStrip.h"
+#include "ThumbnailCache.h"
+#include "core/ImageMetadata.h"
+#include "develop/UserMetadata.h"
+#include "io/XmpSidecar.h"
+#include "ui/FilmStripFilterModel.h"
 #include "ui/FilmStripLayout.h"
 #include "ui/FilmStripModel.h"
 #include "ui/ImageGrouping.h"
-#include "core/ImageMetadata.h"
-#include "ThumbnailCache.h"
-#include "io/XmpSidecar.h"
 
 #include <algorithm>
 #include <libraw/libraw.h>
@@ -20,6 +21,7 @@
 #include <QHBoxLayout>
 #include <QHelpEvent>
 #include <QKeyEvent>
+#include <QLabel>
 #include <QListView>
 #include <QMenu>
 #include <QMouseEvent>
@@ -37,25 +39,6 @@ namespace {
 constexpr int kCellPad = 6;         // padding around each thumbnail
 constexpr int kBorderWidth = 4;     // current-item highlight border
 constexpr int kMarksMinHeight = 64; // below this, stars are illegible: swatch only
-
-// Swatch colours for the five labels (None never drawn).
-QColor labelColour(ColourLabel label) {
-    switch (label) {
-    case ColourLabel::Red:
-        return QColor(0xD6, 0x45, 0x41);
-    case ColourLabel::Yellow:
-        return QColor(0xF5, 0xD8, 0x20);
-    case ColourLabel::Green:
-        return QColor(0x4C, 0xAF, 0x50);
-    case ColourLabel::Blue:
-        return QColor(0x3B, 0x82, 0xF6);
-    case ColourLabel::Purple:
-        return QColor(0x9B, 0x59, 0xB6);
-    case ColourLabel::None:
-        break;
-    }
-    return Qt::transparent;
-}
 
 // Overlay the culling marks on a thumbnail cell: a colour swatch top-left, and
 // (when the cell is tall enough to read them) filled stars on a translucent
@@ -165,8 +148,7 @@ public:
             ColourLabel(index.data(FilmStripModel::LabelRole).toInt()));
 
         if (thumbHeight >= kMarksMinHeight) // text chip needs a readable cell, like the stars
-            paintFormatLabel(
-                painter, inner, index.data(FilmStripModel::FormatLabelRole).toString());
+            paintFormatLabel(painter, inner, index.data(FilmStripModel::FormatLabelRole).toString());
 
         if (active) {
             // Active (editing) item: full-brightness border
@@ -193,9 +175,30 @@ public:
 
 } // namespace
 
+// Swatch colours for the five labels (None is transparent / never drawn).
+QColor labelColour(ColourLabel label) {
+    switch (label) {
+    case ColourLabel::Red:
+        return QColor(0xD6, 0x45, 0x41);
+    case ColourLabel::Yellow:
+        return QColor(0xF5, 0xD8, 0x20);
+    case ColourLabel::Green:
+        return QColor(0x4C, 0xAF, 0x50);
+    case ColourLabel::Blue:
+        return QColor(0x3B, 0x82, 0xF6);
+    case ColourLabel::Purple:
+        return QColor(0x9B, 0x59, 0xB6);
+    case ColourLabel::None:
+        break;
+    }
+    return Qt::transparent;
+}
+
 FilmStrip::FilmStrip(QWidget* parent)
     : QWidget(parent) {
     model = new FilmStripModel(this);
+    proxy = new FilmStripFilterModel(this);
+    proxy->setSourceModel(model);
     thumbs = new ThumbnailCache(this);
 
     auto* layout = new QHBoxLayout(this);
@@ -203,7 +206,7 @@ FilmStrip::FilmStrip(QWidget* parent)
     layout->setSpacing(0);
 
     list = new QListView(this);
-    list->setModel(model);
+    list->setModel(proxy);
     list->setItemDelegate(new ThumbnailDelegate(list, list));
     list->setFlow(QListView::LeftToRight);
     list->setWrapping(false);
@@ -216,6 +219,21 @@ FilmStrip::FilmStrip(QWidget* parent)
     list->viewport()->installEventFilter(this);
     list->installEventFilter(this); // intercept culling keys before type-ahead
     layout->addWidget(list, 1);
+
+    // Overlay shown when an active filter hides every cell. Transparent to the
+    // mouse so it never swallows clicks on the (empty) viewport.
+    emptyHint = new QLabel(tr("No shots match the filter"), list->viewport());
+    emptyHint->setAlignment(Qt::AlignCenter);
+    emptyHint->setAttribute(Qt::WA_TransparentForMouseEvents);
+    emptyHint->setStyleSheet(QStringLiteral("color: gray;"));
+    emptyHint->hide();
+
+    // The proxy adds/removes rows as the filter or marks change; keep the hint in
+    // sync with whatever ends up visible.
+    for (auto signal : {&QAbstractItemModel::rowsInserted, &QAbstractItemModel::rowsRemoved})
+        connect(proxy, signal, this, [this] { updateEmptyHint(); });
+    connect(proxy, &QAbstractItemModel::modelReset, this, [this] { updateEmptyHint(); });
+    connect(proxy, &QAbstractItemModel::layoutChanged, this, [this] { updateEmptyHint(); });
 
     connect(
         list->selectionModel(),
@@ -286,9 +304,9 @@ void FilmStrip::setDirectory(const QString& dir) {
 }
 
 void FilmStrip::setCurrentFile(const QString& path) {
-    const QModelIndex idx = model->indexForPath(path);
+    const QModelIndex idx = proxy->mapFromSource(model->indexForPath(path));
     if (!idx.isValid())
-        return;
+        return; // not in this directory, or currently hidden by the filter
     // Called from MainWindow::loadImage on every selection. When it already
     // matches the view's current item — the common case, a click or keyboard
     // nav that originated here — there's nothing to do, and scrolling now would
@@ -303,6 +321,55 @@ void FilmStrip::setCurrentFile(const QString& path) {
     requestVisibleThumbnails();
 }
 
+FilmStripFilter FilmStrip::filter() const {
+    return proxy->filter();
+}
+
+void FilmStrip::setFilter(const FilmStripFilter& newFilter) {
+    const QString active = currentPath(); // capture before re-filtering drops the row
+    proxy->setFilter(newFilter);
+    updateEmptyHint(); // covers a filter change that leaves the row count at zero
+
+    if (active.isEmpty())
+        return; // nothing was open; don't force a selection
+
+    const QModelIndex stillThere = proxy->mapFromSource(model->indexForPath(active));
+    if (stillThere.isValid()) {
+        // The active image still matches: keep it, just re-centre it.
+        list->scrollTo(stillThere, QAbstractItemView::PositionAtCenter);
+        requestVisibleThumbnails();
+        return;
+    }
+    // The active image was hidden by the new filter: jump to the nearest match.
+    selectNearestVisible(model->indexForPath(active).row());
+}
+
+// Selects the nearest still-visible row to a source row, biased forward. The
+// proxy preserves source order, so the first visible row whose source position
+// is at/after `sourceRow` is the nearest forward match; if none, the last
+// visible row is the nearest backward fallback. Used by both the filter-change
+// jump and the re-rate auto-advance (ADR 0042).
+void FilmStrip::selectNearestVisible(int sourceRow) {
+    const int n = proxy->rowCount();
+    if (n == 0) {
+        // Nothing matches: clear the strip's selection, leave the viewport be.
+        list->selectionModel()->clear();
+        return;
+    }
+    int chosen = n - 1; // fallback: last visible (all matches precede sourceRow)
+    for (int row = 0; row < n; ++row) {
+        if (proxy->mapToSource(proxy->index(row, 0)).row() >= sourceRow) {
+            chosen = row;
+            break;
+        }
+    }
+    const QModelIndex idx = proxy->index(chosen, 0);
+    list->setCurrentIndex(idx); // fires currentChanged → fileSelected → loadImage
+    list->selectionModel()->select(idx, QItemSelectionModel::ClearAndSelect);
+    list->scrollTo(idx, QAbstractItemView::PositionAtCenter);
+    requestVisibleThumbnails();
+}
+
 QStringList FilmStrip::selectedPaths() const {
     QStringList paths;
     for (const QModelIndex& idx : list->selectionModel()->selectedIndexes())
@@ -311,9 +378,9 @@ QStringList FilmStrip::selectedPaths() const {
 }
 
 void FilmStrip::selectFirst() {
-    if (model->rowCount() > 0) {
-        const QModelIndex idx = model->index(0);
-        list->setCurrentIndex(idx); // fires currentChanged → fileSelected
+    if (proxy->rowCount() > 0) {
+        const QModelIndex idx = proxy->index(0, 0); // first visible row
+        list->setCurrentIndex(idx);                 // fires currentChanged → fileSelected
         list->selectionModel()->select(idx, QItemSelectionModel::ClearAndSelect);
     }
 }
@@ -329,9 +396,9 @@ void FilmStrip::setMarks(const QString& path, const UserMetadata& marks) {
 bool FilmStrip::navigateBy(int delta) {
     const QModelIndex cur = list->currentIndex();
     const int next = (cur.isValid() ? cur.row() : -1) + delta;
-    if (next < 0 || next >= model->rowCount())
+    if (next < 0 || next >= proxy->rowCount()) // ±1 over visible rows only
         return false;
-    const QModelIndex idx = model->index(next);
+    const QModelIndex idx = proxy->index(next, 0);
     list->setCurrentIndex(idx); // fires currentChanged → fileSelected
     list->selectionModel()->select(idx, QItemSelectionModel::ClearAndSelect);
     list->scrollTo(idx, QAbstractItemView::PositionAtCenter); // keyboard nav centres
@@ -375,7 +442,12 @@ void FilmStrip::setLabel(const QString& path, ColourLabel label) {
 // write it straight through to the sidecar (docs/adr/0007 — marks persist
 // immediately, no Ctrl-S).
 void FilmStrip::applyMarks(const QString& path, const UserMetadata& marks) {
-    model->setMarks(path, marks);
+    const bool wasActive = (path == currentPath());
+    model->setMarks(path, marks); // dynamic proxy may now hide this row
+    // If you re-rated the open image out of the active filter, auto-advance to
+    // the next match so culling stays a single-key rhythm (ADR 0042).
+    if (wasActive && !proxy->mapFromSource(model->indexForPath(path)).isValid())
+        selectNearestVisible(model->indexForPath(path).row());
     const bool saved = XmpSidecar::saveMetadata(path, marks);
     emit marksChanged(path, marks, saved);
 }
@@ -473,8 +545,11 @@ void FilmStrip::promptForDirectory() {
 }
 
 bool FilmStrip::eventFilter(QObject* watched, QEvent* event) {
-    if (watched == list->viewport() && event->type() == QEvent::Resize)
+    if (watched == list->viewport() && event->type() == QEvent::Resize) {
         updateThumbHeight();
+        if (emptyHint->isVisible())
+            emptyHint->setGeometry(list->viewport()->rect());
+    }
 
     if (watched == list->viewport() && event->type() == QEvent::ToolTip)
         return handleTooltip(static_cast<QHelpEvent*>(event));
@@ -614,8 +689,8 @@ bool FilmStrip::handleModifierClick(QMouseEvent* e) {
     if (shift) {
         // Contiguous range from the active image to the clicked one.
         const int a = anchor.isValid() ? anchor.row() : idx.row();
-        const QModelIndex top = model->index(std::min(a, idx.row()));
-        const QModelIndex bottom = model->index(std::max(a, idx.row()));
+        const QModelIndex top = proxy->index(std::min(a, idx.row()), 0);
+        const QModelIndex bottom = proxy->index(std::max(a, idx.row()), 0);
         sm->select(QItemSelection(top, bottom), QItemSelectionModel::ClearAndSelect);
     } else { // ctrl
         sm->select(idx, QItemSelectionModel::Toggle);
@@ -650,14 +725,23 @@ void FilmStrip::updateThumbHeight() {
 
 void FilmStrip::requestVisibleThumbnails() {
     const QRect visible = list->viewport()->rect();
-    for (int row = 0; row < model->rowCount(); ++row) {
-        const QModelIndex idx = model->index(row);
+    for (int row = 0; row < proxy->rowCount(); ++row) { // visible rows only
+        const QModelIndex idx = proxy->index(row, 0);
         if (!idx.data(Qt::DecorationRole).value<QImage>().isNull())
             continue;
         if (!visible.intersects(list->visualRect(idx)))
             continue;
         thumbs->request(idx.data(FilmStripModel::PathRole).toString());
     }
+}
+
+void FilmStrip::updateEmptyHint() {
+    const bool show = proxy->filter().isActive() && proxy->rowCount() == 0;
+    if (show) {
+        emptyHint->setGeometry(list->viewport()->rect());
+        emptyHint->raise();
+    }
+    emptyHint->setVisible(show);
 }
 
 QStringList FilmStrip::scanImageFiles(const QString& dir) {

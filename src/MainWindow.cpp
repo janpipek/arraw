@@ -1,38 +1,38 @@
+#include "MainWindow.h"
+#include "BatchPaste.h"
+#include "DevelopSession.h"
+#include "ExportWorkflow.h"
+#include "ImageLoadWorkflow.h"
+#include "MainWindowStatus.h"
+#include "ThumbnailCache.h"
+#include "core/CropGeometry.h"
 #include "core/Orientation.h"
 #include "develop/DemosaicAlgorithm.h"
-#include "develop/LocalAdjustment.h"
-#include "develop/Spot.h"
-#include "develop/UserMetadata.h"
-#include "develop/GlobalAdjustment.h"
-#include "pipeline/ImagePipeline.h"
-#include "pipeline/LoadResult.h"
-#include "MainWindow.h"
-#include "ui/AboutDialog.h"
-#include "ui/AdjustmentPanel.h"
-#include "ui/AdjustmentTabTool.h"
-#include "BatchPaste.h"
-#include "ui/BatchProgressDialog.h"
-#include "ui/CollapsiblePane.h"
-#include "pipeline/ColorManagement.h"
-#include "core/CropGeometry.h"
 #include "develop/DevelopGroup.h"
 #include "develop/DevelopParameter.h"
 #include "develop/DevelopPreset.h"
-#include "DevelopSession.h"
+#include "develop/GlobalAdjustment.h"
+#include "develop/LocalAdjustment.h"
+#include "develop/Spot.h"
+#include "develop/UserMetadata.h"
+#include "io/XmpSidecar.h"
+#include "pipeline/ColorManagement.h"
+#include "pipeline/ImagePipeline.h"
+#include "pipeline/LoadResult.h"
+#include "ui/AboutDialog.h"
+#include "ui/AdjustmentPanel.h"
+#include "ui/AdjustmentTabTool.h"
+#include "ui/BatchProgressDialog.h"
+#include "ui/CollapsiblePane.h"
 #include "ui/ExportDialog.h"
-#include "ExportWorkflow.h"
 #include "ui/FilmStrip.h"
-#include "ui/HistoryPanel.h"
 #include "ui/GroupChecklistDialog.h"
-#include "ImageLoadWorkflow.h"
+#include "ui/HistoryPanel.h"
 #include "ui/ImageViewport.h"
 #include "ui/InfoPanel.h"
 #include "ui/LocalAdjustmentPanel.h"
-#include "MainWindowStatus.h"
 #include "ui/ProofingPanel.h"
 #include "ui/SpotRemovalPanel.h"
-#include "ThumbnailCache.h"
-#include "io/XmpSidecar.h"
 #include <algorithm>
 #include <cmath>
 #include <QAction>
@@ -948,6 +948,112 @@ void MainWindow::setToolsEnabled(bool on) {
     syncAdjustmentTabTool();
 }
 
+void MainWindow::addFilmStripFilterControls(QHBoxLayout* into) {
+    QWidget* host = into->parentWidget();
+
+    into->addWidget(new QLabel(tr("Filter:"), host));
+
+    // Star filter: a row of ✗ | 1..5. Each is a toggle and at most one is active;
+    // clicking the active button again clears the rating filter, so no separate
+    // "off" button is needed. ✗ shows only rejects; 1..5 mean "≥ N stars" (ADR 0042).
+    QList<QPair<QToolButton*, int>> starButtons; // id: -1 = rejects-only, 1..5 = ≥ N
+    auto addStar = [&](const QString& text, int id, const QString& tip) {
+        auto* b = new QToolButton(host);
+        b->setText(text);
+        b->setCheckable(true);
+        b->setAutoRaise(true);
+        b->setToolTip(tip);
+        into->addWidget(b);
+        starButtons.append({b, id});
+    };
+    addStar(QStringLiteral("✗"), -1, tr("Show only rejects"));
+    for (int n = 1; n <= 5; ++n)
+        addStar(QString::number(n) + QChar(0x2605), n, tr("%n star and up", nullptr, n));
+
+    // Colour swatches: independent toggles, OR-combined. Tinted from the shared
+    // labelColour() palette so the strip and the filter agree.
+    struct Swatch {
+        const char* tip;
+        ColourLabel value;
+    };
+
+    QList<QPair<QToolButton*, ColourLabel>> colourButtons;
+    for (auto [tip, value] :
+         {Swatch{"Red", ColourLabel::Red},
+          {"Yellow", ColourLabel::Yellow},
+          {"Green", ColourLabel::Green},
+          {"Blue", ColourLabel::Blue},
+          {"Purple", ColourLabel::Purple}}) {
+        auto* b = new QToolButton(host);
+        b->setCheckable(true);
+        b->setAutoRaise(true);
+        b->setToolTip(tr(tip));
+        b->setFixedSize(18, 18);
+        b->setStyleSheet(QStringLiteral(
+                             "QToolButton{border:1px solid #555;border-radius:3px;background:%1;}"
+                             "QToolButton:checked{border:2px solid white;}")
+                             .arg(labelColour(value).name()));
+        into->addWidget(b);
+        colourButtons.append({b, value});
+    }
+
+    auto* clearBtn = new QToolButton(host);
+    clearBtn->setText(tr("Clear"));
+    clearBtn->setAutoRaise(true);
+    clearBtn->setToolTip(tr("Clear all filters"));
+    clearBtn->setEnabled(false);
+    into->addWidget(clearBtn);
+
+    // Rebuild the filter from the controls and push it to the strip.
+    auto apply = [this, starButtons, colourButtons, clearBtn] {
+        FilmStripFilter f;
+        for (const auto& [btn, id] : starButtons)
+            if (btn->isChecked()) {
+                if (id == -1)
+                    f.rejectsOnly = true;
+                else
+                    f.minRating = id;
+                break; // at most one star button is ever checked
+            }
+        for (const auto& [btn, value] : colourButtons)
+            if (btn->isChecked())
+                f.colours.insert(value);
+        clearBtn->setEnabled(f.isActive());
+        filmStrip->setFilter(f);
+    };
+
+    // Single-selection with toggle-off: a click that leaves a star button checked
+    // clears the others; a click that unchecks it leaves no rating filter. We use
+    // `clicked` (user only), so the programmatic setChecked below never re-enters.
+    for (const auto& entry : starButtons) {
+        QToolButton* btn = entry.first;
+        connect(btn, &QToolButton::clicked, this, [starButtons, btn, apply] {
+            if (btn->isChecked())
+                for (const auto& [other, id] : starButtons)
+                    if (other != btn)
+                        other->setChecked(false);
+            apply();
+        });
+    }
+
+    for (const auto& entry : colourButtons) {
+        QToolButton* btn = entry.first;
+        connect(btn, &QToolButton::toggled, this, [apply](bool) { apply(); });
+    }
+
+    connect(clearBtn, &QToolButton::clicked, this, [starButtons, colourButtons, apply] {
+        for (const auto& [btn, id] : starButtons) {
+            QSignalBlocker block(btn);
+            btn->setChecked(false);
+        }
+        for (const auto& [btn, value] : colourButtons) {
+            QSignalBlocker block(btn); // toggled would call apply per swatch
+            btn->setChecked(false);
+        }
+        apply();
+    });
+}
+
 void MainWindow::setupDocks() {
     // Film strip (bottom): a horizontal thumbnail strip under the viewport.
     filmStripDock = new QDockWidget("Film Strip", this);
@@ -982,7 +1088,9 @@ void MainWindow::setupDocks() {
 
     auto* pathLabel = new QLabel("No folder", stripTitle);
     pathLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    pathLabel->setMinimumWidth(0); // yield space to the filter controls when tight
     stripTitleLayout->addWidget(pathLabel, 1);
+    addFilmStripFilterControls(stripTitleLayout);
     filmStripDock->setTitleBarWidget(stripTitle);
 
     connect(filmStrip, &FilmStrip::directoryChanged, this, [pathLabel](const QString& dir) {

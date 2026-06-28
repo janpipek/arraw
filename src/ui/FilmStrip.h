@@ -1,11 +1,20 @@
 #pragma once
 #include "develop/UserMetadata.h"
+#include "ui/FilmStripFilter.h"
+#include <QColor>
 #include <QSet>
 #include <QString>
 #include <QWidget>
 
+// Swatch colour for a label (transparent for None). Shared by the strip's cell
+// delegate and the title-bar filter swatches so the palette is defined once
+// (ADR 0042).
+QColor labelColour(ColourLabel label);
+
 class QListView;
+class QLabel;
 class FilmStripModel;
+class FilmStripFilterModel;
 class ThumbnailCache;
 class QModelIndex;
 class QImage;
@@ -30,6 +39,12 @@ public:
     void setDirectory(const QString& dir);
     void setCurrentFile(const QString& path);
     void selectFirst();
+
+    // Apply the rating/colour viewing filter (ADR 0042). Hides non-matching
+    // cells; if the active image stops matching, jumps to the nearest remaining
+    // match. Session-sticky: survives setDirectory, never persisted.
+    void setFilter(const FilmStripFilter& filter);
+    FilmStripFilter filter() const;
 
     // Replace a row's thumbnail with a freshly developed one. No-op if the path
     // is not in the current directory listing.
@@ -97,8 +112,16 @@ private:
     void showContextMenu(const QPoint& pos);
     QString currentPath() const;
 
+    // Selects the nearest still-visible row to a source row, biased forward
+    // (ADR 0042 jump/auto-advance). No-op if nothing is visible.
+    void selectNearestVisible(int sourceRow);
+    // Shows the "no shots match" overlay when an active filter empties the strip.
+    void updateEmptyHint();
+
     QListView* list;
-    FilmStripModel* model;
+    FilmStripModel* model;       // source: holds every file in the directory
+    FilmStripFilterModel* proxy; // hides rows that don't match the filter
+    QLabel* emptyHint;           // overlay shown when the filter hides everything
     ThumbnailCache* thumbs;
     QString currentDir;
     QSet<QString> metadataPending;
