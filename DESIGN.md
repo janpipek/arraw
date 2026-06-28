@@ -244,7 +244,7 @@ that file is the source of truth; keep this list in sync with it.
  6. Base look        fixed S-curve + slight sat boost (u.baseLook; on for the
                      final image and export, off for interim embedded-preview
                      display and the before/after view)
- 7. Basic Tone       256×17 CPU-generated LUT atlas (docs/adr/0031): gamma-domain
+ 7. Basic Tone       256×17 CPU-generated LUT atlas (docs/adr/0033): gamma-domain
                      logistic Exposure, log-odds Contrast, endpoint-anchored
                      Shadows/Highlights, and clipping-point Blacks/Whites.
                      Row 0 is global; rows 1–16 serve Local Adjustments.
@@ -258,7 +258,7 @@ that file is the source of truth; keep this list in sync with it.
 10. HSL color mix    8 hue ranges, smoothstep-weighted hue/sat/lum shifts
 11. Saturation       luma-preserving saturation scale
 12. Vibrance         saturation boost weighted toward desaturated pixels
-13. Local adjustments per-mask tone/colour edits (docs/adr/0010, 0031): each
+13. Local adjustments per-mask tone/colour edits (docs/adr/0010, 0033): each
                      tone row maps the incoming luminance and blends by analytic
                      Mask weight; remaining colour deltas use the same weight.
                      Single-pass, in array order. Skipped
@@ -283,7 +283,7 @@ that file is the source of truth; keep this list in sync with it.
                        carries the in-gamut flag for the gamut warning)
                      u.displayEncode off (export): unbounded float linear
                        working space; bounded output encoding clips only after
-                       the CPU output transform (docs/adr/0031)
+                       the CPU output transform (docs/adr/0033)
                      Clipping overlay (u.clipWarn, on-screen only — forced off
                        for export and histogram readbacks): judged sRGB-relative
                        from the pre-clamp value, painted last so it wins over the
@@ -572,7 +572,7 @@ Splits by pipeline cost.
   the achromatic vignette gain and geometry-only spots. Luma is preserved exactly
   by construction; chroma stays faithful at quarter-res, so it needs no
   full-res-to-judge handling. The recompute is debounced (~200 ms after the slider
-  settles). See `docs/adr/0032`.
+  settles). See `docs/adr/0034`.
 - **Deferred, listed with their cost:** Dehaze (spatial, heavier estimation pass),
   Luminance Noise Reduction (wants full-res to judge, destroys fine detail —
   closer to its own milestone), and profile-based Lens Corrections (needs a

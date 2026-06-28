@@ -41,7 +41,7 @@ inline bool hasGroup(GroupSelection s, DevelopGroup g) {
 
 // The copy/paste & preset checklist's initial selection: every group except
 // Geometry, which is per-image (orientation/rotation/crop) and rarely transfers,
-// so it ships unchecked and is opt-in (CONTEXT.md, docs/adr/0028).
+// so it ships unchecked and is opt-in (CONTEXT.md, docs/adr/0029).
 inline GroupSelection defaultCopySelection() {
     GroupSelection s = allGroups();
     s.reset(static_cast<size_t>(DevelopGroup::Geometry));

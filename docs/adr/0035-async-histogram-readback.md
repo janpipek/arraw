@@ -45,7 +45,7 @@ idle on the main thread.
   calls `update()`. `ImageViewport::render(cb)`, after the main `core.record(...)`,
   enqueues the two histogram passes (curve-input RGBA8, final RGBA32F) into the
   same `cb` when the flag is set, then clears it. This mirrors the existing
-  `nrTimer` → effective-values → `update()` precedent (`0032`) and lets the
+  `nrTimer` → effective-values → `update()` precedent (`0034`) and lets the
   histogram passes reuse the same frame's **cached NR denoised texture** (slot-
   keyed) for free, so the sample still matches the preview.
 

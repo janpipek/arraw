@@ -23,6 +23,6 @@ std::array<float, 256> computeCurveLUT(const std::vector<QPointF>& pts);
 // its longer edge is at most maxEdge (never upscaled), aspect preserved.
 // Output pixel size of a developed thumbnail. `srcW`/`srcH` are the *native*
 // buffer dims; an odd quarter-turn Orientation swaps them so the thumbnail keeps
-// the oriented aspect (docs/adr/0028) — otherwise turned shots come out squished.
+// the oriented aspect (docs/adr/0029) — otherwise turned shots come out squished.
 QSize developedThumbSize(
     int srcW, int srcH, const QRectF& crop, int maxEdge, orient::Orientation orientation = {});

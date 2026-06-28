@@ -227,7 +227,7 @@ SidecarLoadResult XmpSidecar::resolveForImage(
         loaded.data = {};
         loaded.data.adjustments.cropRect = defaultCrop;
     }
-    // Precedence (docs/adr/0028): a stored tiff:Orientation wins; otherwise seed
+    // Precedence (docs/adr/0029): a stored tiff:Orientation wins; otherwise seed
     // from the file's EXIF — also the migration path for pre-orientation sidecars.
     if (!loaded.data.orientationStored)
         loaded.data.adjustments.orientation = seededOrientation;
@@ -405,7 +405,7 @@ static void readSnapshotCurve(QXmlStreamReader& xml, CurvePoints& target) {
 // Parse one rdf:li (parseType="Resource") of the arraw:Snapshots Seq — a name
 // plus the whole develop state, written as arraw:-named child elements with the
 // curves/local-adjustments/spots sub-blocks reused from the top-level format
-// (docs/adr/0033). Consumes the subtree so its nested crs:/arraw: elements never
+// (docs/adr/0038). Consumes the subtree so its nested crs:/arraw: elements never
 // reach the top-level loader's (unscoped) curve/mask/spot detectors.
 static Snapshot parseSnapshotLi(QXmlStreamReader& xml) {
     Snapshot snap;
@@ -597,7 +597,7 @@ SidecarLoadResult XmpSidecar::loadWithStatus(const QString& rawPath) {
             p.sharpening = attr("Sharpness", 0.0f);
             p.colorNoiseReduction = attr("ColorNoiseReduction", 0.0f); // Strength (issue #59)
             p.colorNoiseReductionSmoothness = attr("ColorNoiseReductionSmoothness", 50.0f);
-            // Filmic Highlights (docs/adr/0035): arraw-native, default 25 (on).
+            // Filmic Highlights (docs/adr/0040): arraw-native, default 25 (on).
             // Absent → the default, so files predating this attribute get the
             // standard shoulder; an explicit 0 (user turned it off) is honoured.
             if (const auto fh = xml.attributes().value(kNsArraw, "FilmicHighlights"); !fh.isEmpty())
@@ -615,7 +615,7 @@ SidecarLoadResult XmpSidecar::loadWithStatus(const QString& rawPath) {
                 if (ok)
                     p.grainSeed = value;
             }
-            // Lens Corrections enable toggles (docs/adr/0027). arraw-owned; the profile
+            // Lens Corrections enable toggles (docs/adr/0032). arraw-owned; the profile
             // identity/coefficients are re-derived from the file on load, not stored.
             const auto boolAttr = [&](const char* name) {
                 return xml.attributes()
@@ -624,14 +624,14 @@ SidecarLoadResult XmpSidecar::loadWithStatus(const QString& rawPath) {
                            .compare("true", Qt::CaseInsensitive)
                        == 0;
             };
-            // Demosaic algorithm (docs/adr/0033): absent/unknown → AHD silently.
+            // Demosaic algorithm (docs/adr/0036): absent/unknown → AHD silently.
             p.demosaicAlgorithm = demosaicFromToken(
                 xml.attributes().value(kNsArraw, "DemosaicAlgorithm").toString());
             p.lensCorrectDistortion = boolAttr("LensCorrectDistortion");
             p.lensCorrectVignetting = boolAttr("LensCorrectVignetting");
             p.lensCorrectCA = boolAttr("LensCorrectCA");
             // Coarse orientation: the standard EXIF/tiff enum. Absent means the
-            // decode layer seeds it from EXIF instead (docs/adr/0028), so leave
+            // decode layer seeds it from EXIF instead (docs/adr/0029), so leave
             // the default identity here when the attribute is missing.
             if (auto o = xml.attributes().value(kNsTiff, "Orientation"); !o.isEmpty()) {
                 bool ok = false;
@@ -691,7 +691,7 @@ SidecarLoadResult XmpSidecar::loadWithStatus(const QString& rawPath) {
             // arraw-native spots (docs/adr/0017).
             if (name == "arraw:Spots")
                 p.spots = parseSpots(xml);
-            // arraw-native snapshots (docs/adr/0033). parseSnapshots consumes the
+            // arraw-native snapshots (docs/adr/0038). parseSnapshots consumes the
             // whole subtree, so the nested curve/mask/spot elements above never
             // reach these (unscoped) detectors as top-level state.
             if (name == "arraw:Snapshots")
@@ -840,7 +840,7 @@ static void writeLocalAdjustments(QXmlStreamWriter& xml, const std::vector<Local
 
 // Writes one Snapshot's complete develop state as arraw:-named child elements,
 // reusing the curve / local-adjustment / spot sub-blocks from the top-level
-// format (docs/adr/0033). All fields live in the arraw: namespace (this is
+// format (docs/adr/0038). All fields live in the arraw: namespace (this is
 // arraw-owned content, not the Lightroom-shared crs: current state), except the
 // reused crs:ToneCurve* curve elements, which ride inside the arraw:Snapshots
 // element and are replaced wholesale with it on save.
@@ -896,9 +896,9 @@ static void writeSnapshotState(QXmlStreamWriter& xml, const GlobalAdjustment& p)
 }
 
 // Writes the named A/B Snapshots as an arraw:Snapshots Seq of struct resources
-// (docs/adr/0033). Omitted entirely when there are none, so clean sidecars stay
+// (docs/adr/0038). Omitted entirely when there are none, so clean sidecars stay
 // clean. arraw owns the whole arraw: namespace, so this rides the existing
-// namespace-replacement merge on save (docs/adr/0026) with no special handling.
+// namespace-replacement merge on save (docs/adr/0027) with no special handling.
 static void writeSnapshots(QXmlStreamWriter& xml, const std::vector<Snapshot>& snapshots) {
     if (snapshots.empty())
         return;
@@ -971,7 +971,7 @@ static QByteArray ownedPacket(const SidecarData& data) {
     write("Sharpness", p.sharpening);
     write("ColorNoiseReduction", p.colorNoiseReduction); // Strength (issue #59)
     write("ColorNoiseReductionSmoothness", p.colorNoiseReductionSmoothness);
-    write("CropAngle", p.rotation); // Adobe's real straighten field (docs/adr/0028)
+    write("CropAngle", p.rotation); // Adobe's real straighten field (docs/adr/0029)
     write("PostCropVignetteAmount", p.postCropVignetteAmount);
     write("PostCropVignetteMidpoint", p.postCropVignetteMidpoint);
     write("PostCropVignetteFeather", p.postCropVignetteFeather);
@@ -980,17 +980,17 @@ static QByteArray ownedPacket(const SidecarData& data) {
     write("GrainFrequency", p.grainRoughness);
     if (p.grainSeed != 0)
         xml.writeAttribute(kNsArraw, "GrainSeed", QString::number(p.grainSeed));
-    // Filmic Highlights (docs/adr/0035). arraw-native, no crs: equivalent. Written
+    // Filmic Highlights (docs/adr/0040). arraw-native, no crs: equivalent. Written
     // unconditionally: the default is 25 (on), so an explicit 0 (off) must persist
     // — a skip-when-zero would read back as the default and silently re-enable it.
     xml.writeAttribute(
         kNsArraw, "FilmicHighlights", QString::number(double(p.filmicHighlights), 'f', 4));
-    // Demosaic algorithm token (docs/adr/0033). Written only when non-default so
+    // Demosaic algorithm token (docs/adr/0036). Written only when non-default so
     // AHD sidecars (and every pre-feature file) stay byte-identical and resolve
     // to AHD via the silent fallback in demosaicFromToken.
     if (p.demosaicAlgorithm != kDefaultDemosaic)
         xml.writeAttribute(kNsArraw, "DemosaicAlgorithm", demosaicToken(p.demosaicAlgorithm));
-    // Lens Corrections toggles (docs/adr/0027); written only when on (default off).
+    // Lens Corrections toggles (docs/adr/0032); written only when on (default off).
     if (p.lensCorrectDistortion)
         xml.writeAttribute(kNsArraw, "LensCorrectDistortion", "True");
     if (p.lensCorrectVignetting)
@@ -1002,7 +1002,7 @@ static QByteArray ownedPacket(const SidecarData& data) {
     write("CropRight", float(p.cropRect.right()));
     write("CropBottom", float(p.cropRect.bottom()));
     xml.writeAttribute(kNsCrs, "CropConstrainAspectRatio", p.cropConstrained ? "True" : "False");
-    // Coarse orientation as the standard EXIF/tiff enum 1..8 (docs/adr/0028).
+    // Coarse orientation as the standard EXIF/tiff enum 1..8 (docs/adr/0029).
     xml.writeAttribute(kNsTiff, "Orientation", QString::number(orient::toExif(p.orientation)));
 
     // HSL
@@ -1033,7 +1033,7 @@ static QByteArray ownedPacket(const SidecarData& data) {
     writeLocalAdjustments(xml, p.localAdjustments);
     // arraw-native spots (docs/adr/0017).
     writeSpots(xml, p.spots);
-    // arraw-native snapshots (docs/adr/0033).
+    // arraw-native snapshots (docs/adr/0038).
     writeSnapshots(xml, data.snapshots);
 
     xml.writeEndElement(); // rdf:Description

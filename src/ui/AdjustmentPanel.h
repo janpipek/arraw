@@ -44,7 +44,7 @@ public:
     void setLensProfileName(const QString& name);
 
     // Enable/disable the Demosaic combo. Disabled (with an explanation) for
-    // non-Bayer sensors, where the Bayer algorithms do not apply (docs/adr/0033).
+    // non-Bayer sensors, where the Bayer algorithms do not apply (docs/adr/0036).
     void setDemosaicAvailable(bool available);
 
 signals:

@@ -8,7 +8,6 @@
 #include "core/ImageMetadata.h"
 #include "pipeline/LensfunSource.h"
 #include "core/Trace.h"
-#include "io/XmpSidecar.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -221,22 +220,22 @@ LoadResult RawProcessor::load(
 
     const ImageMetadata metadata = extractMetadata(*raw);
     const auto& id = raw->imgdata.idata;
-    const QByteArray embeddedXmp(
+    // Emit the raw XMP packet bytes; the shell parses them (docs/adr/0041).
+    QByteArray embeddedXmp(
         id.xmpdata && id.xmplen > 0 ? id.xmpdata : nullptr,
         id.xmpdata && id.xmplen > 0 ? int(id.xmplen) : 0);
-    const XmpPacketMetadata embeddedMetadata = XmpSidecar::metadataPacketFromPacket(embeddedXmp);
 
     raw->imgdata.params.use_camera_wb = 1;
     raw->imgdata.params.no_auto_bright = 1;
     // Decode in the *native* sensor orientation; Orientation is a develop edit
-    // applied downstream, seeded from the camera flag below (docs/adr/0028).
+    // applied downstream, seeded from the camera flag below (docs/adr/0029).
     raw->imgdata.params.user_flip = 0;
     raw->imgdata.params.output_bps = 16;
     raw->imgdata.params.output_color = 8; // Rec.2020 working space (needs libraw ≥ 0.21)
     raw->imgdata.params.gamm[0] = 1.0;    // linear gamma
     raw->imgdata.params.gamm[1] = 1.0;
     raw->imgdata.params.bright = 1.0;
-    // Per-image demosaic algorithm (docs/adr/0033, issue #22). On X-Trans libraw
+    // Per-image demosaic algorithm (docs/adr/0036, issue #22). On X-Trans libraw
     // reinterprets this as Markesteijn — the UI gates the choice to Bayer sensors
     // (sensorSupportsDemosaicSelection) so that only Bayer values reach here.
     raw->imgdata.params.user_qual = librawUserQual(algo);
@@ -270,14 +269,14 @@ LoadResult RawProcessor::load(
     const QRectF defaultCrop = defaultCropRect(*raw, fullRes.width, fullRes.height);
     // What the camera intended (its flip code), used to seed the Orientation edit.
     const orient::Orientation seeded = orient::fromLibrawFlip(raw->imgdata.sizes.flip);
-    // The sensor mosaic, surfaced so the UI can gate demosaic selection (ADR 0033).
+    // The sensor mosaic, surfaced so the UI can gate demosaic selection (ADR 0036).
     const unsigned filters = raw->imgdata.idata.filters;
     normalizeExposure(fullRes);
     timer.lap("raw normalize");
     ImageBuffer preview = downsample2x(fullRes);
     ImageBuffer sensorClipPreview = downsample2x(sensorClipFullRes);
     timer.lap("raw downsample");
-    // Resolve a lens profile from EXIF (docs/adr/0027). Off the main thread; the
+    // Resolve a lens profile from EXIF (docs/adr/0032). Off the main thread; the
     // correction itself is applied later, toggle-gated, in DevelopSession. An empty
     // db path lets resolveLensfunModel pick a bundled DB (AppImage/Windows) and else
     // lensfun's system database; no match leaves the model empty.
@@ -303,8 +302,7 @@ LoadResult RawProcessor::load(
         std::move(sensorClipFullRes),
         std::move(sensorClipPreview),
         metadata,
-        embeddedMetadata.metadata,
-        embeddedMetadata.presence,
+        std::move(embeddedXmp),
         {},
         defaultCrop,
         std::move(lensModel),

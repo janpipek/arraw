@@ -53,7 +53,7 @@ struct Ubuf {
     // arrays in the shaders (tight std140 packing, like hslHue). Layout:
     //   laGeom  = Linear (p0.x, p0.y, p1.x, p1.y) | Radial (cx, cy, rx, ry)
     //   laGeom2 = Radial (angle, feather, invert, spare); unused for Linear
-    //   laTone  = legacy tone packing (actual tone comes from LUT row, docs/adr/0031)
+    //   laTone  = legacy tone packing (actual tone comes from LUT row, docs/adr/0033)
     //   laTone2 = (legacy whites, legacy blacks, wbGainR, wbGainG)
     //   laColor = (saturation, vibrance, maskType, wbGainB)  maskType 0=Linear 1=Radial
     float laGeom[64];
@@ -63,10 +63,10 @@ struct Ubuf {
     float laGeom2[64];
     qint32 numLocalAdj;
     qint32 histoRaw;           // 1: emit pre-clamp sRGB-linear for overflow histogram
-    qint32 orientQuarterTurns; // coarse Orientation (docs/adr/0028); was pad_
+    qint32 orientQuarterTurns; // coarse Orientation (docs/adr/0029); was pad_
     qint32 orientMirrored;     // 1 = horizontal mirror; was pad_
     qint32 sensorClipWarn;     // Sensor Clipping overlay from RAW mosaic samples
-    float filmicHighlights;    // 0..1: shoulder + path to white (docs/adr/0035); was pad_[0]
+    float filmicHighlights;    // 0..1: shoulder + path to white (docs/adr/0040); was pad_[0]
     qint32 pad_[2];
 };
 
@@ -79,7 +79,7 @@ static_assert(offsetof(Ubuf, sensorClipWarn) == 1616);
 static_assert(offsetof(Ubuf, filmicHighlights) == 1620);
 
 // std140 mirror of the `nrbuf` block in shaders/nr.vert and nr_blur_*.frag — the
-// Colour Noise Reduction pre-pass uniform (docs/adr/0032). Constant for a whole
+// Colour Noise Reduction pre-pass uniform (docs/adr/0034). Constant for a whole
 // frame (direction is hardcoded per blur shader), so all NR passes share it.
 struct NrUbuf {
     float clipCorr[16]; // QRhi::clipSpaceCorrMatrix(), column-major
@@ -148,7 +148,7 @@ public:
     QImage renderOffscreen(
         const ImageBuffer& buf, const FrameParams& fp, QSize size, QRhiTexture::Format fmt);
 
-    // Non-blocking sibling of renderOffscreen (docs/adr/0033): records one shader
+    // Non-blocking sibling of renderOffscreen (docs/adr/0035): records one shader
     // pass into a pooled offscreen target and enqueues a readback into the
     // caller's already-open frame `cb` — no beginOffscreenFrame, no flush, so the
     // GUI thread never waits on the GPU. `onReady(QImage)` fires on the GUI thread
@@ -205,7 +205,7 @@ private:
     QImage readbackToImage(const QRhiReadbackResult& rr) const;
 
     // A reusable offscreen target for non-blocking histogram readbacks (ADR
-    // 0033). Pooled (rather than allocated per refresh) and kept alive across the
+    // 0035). Pooled (rather than allocated per refresh) and kept alive across the
     // in-flight frame window: the QRhiReadbackResult and its `completed` lambda
     // must outlive the frame they were recorded in. `inFlight` is the skip-guard
     // that drops a new request while a previous readback is still pending.
@@ -239,7 +239,7 @@ private:
     QRhiShaderResourceBindings* bindingsFor(QRhiTexture* imageTex, QRhiTexture* sensorClipTex);
     void fillUbuf(Ubuf& ub, const FrameParams& fp) const;
 
-    // Colour Noise Reduction (docs/adr/0032). Runs a cached GPU pre-pass that
+    // Colour Noise Reduction (docs/adr/0034). Runs a cached GPU pre-pass that
     // denoises chroma into denoisedTex; the main pass then samples that instead of
     // the raw slot. Returns the texture the main pass should sample.
     QRhiTexture* ensureDenoised(
@@ -297,7 +297,7 @@ private:
     DisplayLut pendingDisplayLut;
     bool displayLutDirty = false;
 
-    // ── Colour Noise Reduction GPU resources (docs/adr/0032) ─────────────────
+    // ── Colour Noise Reduction GPU resources (docs/adr/0034) ─────────────────
     QShader nrVs, nrExtractFs, nrBlurHFs, nrBlurVFs, nrRecombineFs;
     std::unique_ptr<QRhiBuffer> nrUbuf;
     std::unique_ptr<QRhiGraphicsPipeline> nrPipeExtract, nrPipeBlurH, nrPipeBlurV, nrPipeRecombine;
@@ -321,7 +321,7 @@ private:
     // [0]=Preview, [1]=FullRes, [2]=export's temporary full-res texture.
     NrSlot nrSlot[3];
 
-    // Pooled offscreen targets for non-blocking histogram readbacks (ADR 0033),
+    // Pooled offscreen targets for non-blocking histogram readbacks (ADR 0035),
     // one per distinct (size, fmt). Few and small, so they are never evicted.
     std::vector<std::unique_ptr<ReadbackTarget>> readbackPool;
 };

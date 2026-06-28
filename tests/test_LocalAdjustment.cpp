@@ -186,7 +186,7 @@ TEST_CASE("moveHandle repositions endpoints and translates via center", "[locala
     }
 }
 
-// --- History labelling: each local edit reads distinctly (docs/adr/0033) ------
+// --- History labelling: each local edit reads distinctly (docs/adr/0038) ------
 
 TEST_CASE("localChangeLabel names an added mask by its kind", "[localadj]") {
     std::vector<LocalAdjustment> before;

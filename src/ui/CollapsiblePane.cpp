@@ -41,7 +41,7 @@ bool CollapsiblePane::isHidden() const {
 }
 
 // The only place that decides the two widgets' visibility: while hidden, neither
-// shows (lights-out, ADR 0027); otherwise exactly one shows, opposite the other
+// shows (lights-out, ADR 0028); otherwise exactly one shows, opposite the other
 // (ADR 0012).
 void CollapsiblePane::apply() {
     expanded->setVisible(!hidden && !collapsed);

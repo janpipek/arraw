@@ -48,7 +48,7 @@ Colour Noise Reduction.
 
 Every other develop adjustment is a real-time shader uniform. Demosaic is the
 **decode itself** — `RawProcessor::load` / `dcraw_process` — upstream of the
-decoded `ImageBuffer` that lens correction (`0027`), spots (`0017`), and the
+decoded `ImageBuffer` that lens correction (`0032`), spots (`0017`), and the
 whole shader chain operate on. Changing it cannot be a uniform tweak; it must
 **re-run the multi-second decode**.
 
@@ -110,7 +110,7 @@ real value for Fuji shooters, but a separate sensor-specific design.
   other develop field.
 - **Geometry is unaffected.** All algorithms output the same dimensions, so
   `defaultCrop`, orientation seeding, and the preview downsample are untouched —
-  unlike Distortion (`0027`), a demosaic change never refits the crop.
+  unlike Distortion (`0032`), a demosaic change never refits the crop.
 - **Memory.** Caching multiple algorithms per image multiplies decoded-buffer
   footprint, but only for algorithms actually tried, and the existing LRU budget
   bounds it; the pinned current decode is never evicted.

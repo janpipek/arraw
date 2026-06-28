@@ -1005,7 +1005,7 @@ TEST_CASE("saveAdjustments replaces all arraw namespace content", "[xmp][compati
 }
 
 // ---------------------------------------------------------------------------
-// Snapshots (docs/adr/0033): named, persisted A/B develop states living in the
+// Snapshots (docs/adr/0038): named, persisted A/B develop states living in the
 // arraw: namespace as an arraw:Snapshots Seq of whole-develop-state resources.
 // ---------------------------------------------------------------------------
 

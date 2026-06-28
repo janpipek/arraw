@@ -126,7 +126,7 @@ if(NOT TARGET PkgConfig::LCMS2)
     )
 endif()
 
-# lensfun: optional lens-correction source (docs/adr/0027). ARRAW_WITH_LENSFUN is a
+# lensfun: optional lens-correction source (docs/adr/0032). ARRAW_WITH_LENSFUN is a
 # tri-state that decides whether it is compiled in:
 #   AUTO (default) — build it when lensfun is found, silently degrade when it is not
 #   ON             — require lensfun; hard-error if it is missing (use for release

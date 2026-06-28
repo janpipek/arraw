@@ -95,7 +95,7 @@ QPointF Geometry::viewportToBufferPixel(QPointF pos) const {
     const float fv = float(cropRect.top() + cropUV.y() * cropRect.height());
     const QPointF rotUV = rotateTextureUv(fu, fv, rotation, imageAspect, 0.5f, 0.5f);
     // Orientation maps the oriented-frame UV to the native buffer, after the
-    // rotation — exactly as image.vert does (docs/adr/0028).
+    // rotation — exactly as image.vert does (docs/adr/0029).
     const QPointF bufUV = orient::orientedToBuffer(rotUV, orientation);
     return {bufUV.x() * originalSize.width(), bufUV.y() * originalSize.height()};
 }

@@ -228,7 +228,7 @@ bug.
 
 ### 6.6 The lensfun lens database is staged, not auto-bundled
 
-Lens corrections (ADR 0027) need two things at runtime: `liblensfun` and the lens
+Lens corrections (ADR 0032) need two things at runtime: `liblensfun` and the lens
 **database**. `linuxdeploy` carries the library (and its `glib` dependency) because
 the binary links it, but the database is plain data under `/usr/share/lensfun/` that
 `linuxdeploy` does not follow. So the build configures with `-DARRAW_WITH_LENSFUN=ON`
@@ -284,7 +284,7 @@ just rpm-smoke
 
 That command uses Podman by default (Docker is also accepted), installs the RPM in a
 clean `fedora:44` container, runs `arraw --version` offscreen, and checks its desktop
-MIME registration. See [ADR 0029](adr/0029-self-hosted-fedora-rpm.md) for the design
+MIME registration. See [ADR 0030](adr/0030-self-hosted-fedora-rpm.md) for the design
 and [the security risk register](security.md) for unsigned-package and release risks.
 
 ## 9. Quick reference

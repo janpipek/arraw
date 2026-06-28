@@ -15,7 +15,7 @@ struct ImageBuffer; // defined in ImagePipeline.h
 // `tcaR`/`tcaB` are radial scales applied to the vector from the optical centre
 // (so geometry warp and chromatic correction share one mechanism). Both lensfun
 // (M-a) and embedded/Sony (M-b) sources resolve into this shape, so the apply step
-// never sees a polynomial or a knot table (docs/adr/0027).
+// never sees a polynomial or a knot table (docs/adr/0032).
 struct RadialCurve {
     static constexpr int N = 64;
     std::array<float, N> lut{}; // default-constructed: all zero
@@ -41,7 +41,7 @@ struct LensCorrectionModel {
     bool hasVignetting = false;
     QPointF center{0.5, 0.5}; // optical centre in normalised image coordinates
 
-    // Provenance, for the sidecar profile identity (docs/adr/0027). Not used by the
+    // Provenance, for the sidecar profile identity (docs/adr/0032). Not used by the
     // apply step.
     enum class Source { Lensfun, Embedded };
     Source source = Source::Lensfun;
@@ -57,7 +57,7 @@ struct LensCorrectionToggles {
 
 // The smallest zoom (>= 1) that keeps every corrected pixel sampling within the
 // source after distortion, so the frame fills without invalid/smeared edges
-// ("auto-scale to fill", docs/adr/0027). Returns 1.0 when the distortion only
+// ("auto-scale to fill", docs/adr/0032). Returns 1.0 when the distortion only
 // shrinks (corners already in-bounds) or when there is no distortion. Depends only
 // on the distortion curve, optical centre, and dimensions — TCA's sub-pixel deltas
 // do not affect framing.

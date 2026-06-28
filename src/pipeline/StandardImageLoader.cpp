@@ -17,7 +17,7 @@ LoadResult StandardImageLoader::load(const QString& path, std::shared_ptr<std::a
     const trace::Scope trace_("StandardImageLoader::load");
     // Read the EXIF orientation but do NOT auto-apply it (autoTransform stays
     // off): the buffer stays native and Orientation is seeded as a develop edit,
-    // matching the RAW path (docs/adr/0028).
+    // matching the RAW path (docs/adr/0029).
     QImageReader reader(path);
     const orient::Orientation seeded = orient::fromQtTransformation(int(reader.transformation()));
 
@@ -45,8 +45,7 @@ LoadResult StandardImageLoader::load(const QString& path, std::shared_ptr<std::a
         {}, // sensorClipFullRes
         {}, // sensorClipPreview
         {}, // metadata
-        {}, // embeddedMetadata
-        {}, // embeddedMetadataPresence
+        {}, // embeddedXmpPacket (standard images carry no embedded XMP)
         {}, // error
         {0.0, 0.0, 1.0, 1.0}, // defaultCrop
         {}, // lensModel
