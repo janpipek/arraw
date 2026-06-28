@@ -2,8 +2,8 @@
 #include "core/ImageBuffer.h"
 #include "core/ImageMetadata.h"
 #include "core/Orientation.h"
-#include "develop/UserMetadata.h"
 #include "pipeline/LensCorrection.h"
+#include <QByteArray>
 #include <QRectF>
 #include <QString>
 
@@ -16,8 +16,10 @@ struct LoadResult {
     ImageBuffer sensorClipFullRes;
     ImageBuffer sensorClipPreview;
     ImageMetadata metadata;
-    UserMetadata embeddedMetadata; // descriptive User Metadata from embedded XMP, if any
-    UserMetadataPresence embeddedMetadataPresence;
+    // Raw XMP packet bytes embedded in the file (DNG/maker XMP), unparsed. The
+    // shell parses these (docs/adr/0036): decode emits bytes, persistence
+    // interprets them. Empty for standard images and files with no embedded XMP.
+    QByteArray embeddedXmpPacket;
     QString error; // non-empty on failure
     QRectF defaultCrop = {0.0, 0.0, 1.0, 1.0};
     // Lens profile resolved at decode (docs/adr/0027). Empty has* flags = no

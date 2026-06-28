@@ -20,30 +20,25 @@ QString metadataRowValue(const ImageMetadata& metadata, const QString& label) {
     return {};
 }
 
-struct ResolvedUserMetadata {
-    UserMetadata metadata;
-    UserMetadataPresence presence;
-};
+} // namespace
 
-ResolvedUserMetadata resolveUserMetadata(const SidecarData& sidecar, const LoadResult& result) {
+ResolvedUserMetadata resolveUserMetadata(
+    const SidecarData& sidecar, const ImageMetadata& exif, const XmpPacketMetadata& embedded) {
     UserMetadata resolved;
-    resolved.caption = metadataRowValue(result.metadata, QStringLiteral("Description"));
-    resolved.creator = metadataRowValue(result.metadata, QStringLiteral("Artist"));
+    resolved.caption = metadataRowValue(exif, QStringLiteral("Description"));
+    resolved.creator = metadataRowValue(exif, QStringLiteral("Artist"));
 
     auto overlay = [](QString& target, const QString& value, bool present) {
         if (present)
             target = value;
     };
 
-    overlay(resolved.title, result.embeddedMetadata.title, result.embeddedMetadataPresence.title);
-    overlay(resolved.caption, result.embeddedMetadata.caption, result.embeddedMetadataPresence.caption);
-    if (result.embeddedMetadataPresence.keywords)
-        resolved.keywords = result.embeddedMetadata.keywords;
-    overlay(resolved.creator, result.embeddedMetadata.creator, result.embeddedMetadataPresence.creator);
-    overlay(
-        resolved.copyright,
-        result.embeddedMetadata.copyright,
-        result.embeddedMetadataPresence.copyright);
+    overlay(resolved.title, embedded.metadata.title, embedded.presence.title);
+    overlay(resolved.caption, embedded.metadata.caption, embedded.presence.caption);
+    if (embedded.presence.keywords)
+        resolved.keywords = embedded.metadata.keywords;
+    overlay(resolved.creator, embedded.metadata.creator, embedded.presence.creator);
+    overlay(resolved.copyright, embedded.metadata.copyright, embedded.presence.copyright);
 
     resolved.rating = sidecar.metadata.rating;
     resolved.label = sidecar.metadata.label;
@@ -55,8 +50,6 @@ ResolvedUserMetadata resolveUserMetadata(const SidecarData& sidecar, const LoadR
     overlay(resolved.copyright, sidecar.metadata.copyright, sidecar.metadataPresence.copyright);
     return {resolved, sidecar.metadataPresence};
 }
-
-} // namespace
 
 QString decodeCacheKey(const QString& path, DemosaicAlgorithm algo) {
     const QFileInfo file(path);
@@ -87,7 +80,9 @@ GlobalAdjustment resolveImageAdjustments(const QString& path, const QRectF& defa
 ResolvedLoadedImage resolveLoadedImage(const QString& path, const LoadResult& result) {
     const SidecarLoadResult sidecar
         = XmpSidecar::resolveForImage(path, result.defaultCrop, result.seededOrientation);
-    const ResolvedUserMetadata metadata = resolveUserMetadata(sidecar.data, result);
+    // Decode emitted raw XMP bytes; parsing them is the shell's job (docs/adr/0036).
+    const XmpPacketMetadata embedded = XmpSidecar::metadataPacketFromPacket(result.embeddedXmpPacket);
+    const ResolvedUserMetadata metadata = resolveUserMetadata(sidecar.data, result.metadata, embedded);
     return {
         sidecar.data.adjustments,
         metadata.metadata,
