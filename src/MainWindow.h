@@ -129,9 +129,12 @@ private:
     void updateZoomStatus(float zoom);
 
     // Apply a develop change to the global params as one undo step (the source
-    // of truth for copy/paste and preset apply). No-op if nothing changed.
-    void pushGlobalAdjustmentCommand(const GlobalAdjustment& before, const GlobalAdjustment& after);
-    void applyDevelopChange(const GlobalAdjustment& after);
+    // of truth for copy/paste and preset apply). No-op if nothing changed. An
+    // explicit label names the History step (e.g. "Apply Preset Punchy"); when
+    // empty the step is auto-named from what changed (developChangeLabel).
+    void pushGlobalAdjustmentCommand(
+        const GlobalAdjustment& before, const GlobalAdjustment& after, const QString& label = {});
+    void applyDevelopChange(const GlobalAdjustment& after, const QString& label = {});
     void populateFilmStripContextMenu(const QString& path, const QStringList& targets, QMenu* menu);
     void copySettingsFromPath(const QString& path);
     void pasteSettingsToPaths(QStringList targets);

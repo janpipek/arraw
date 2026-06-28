@@ -91,14 +91,17 @@ public:
         DevelopSession* session,
         MainWindow* mainWindow,
         const GlobalAdjustment& before,
-        const GlobalAdjustment& after)
+        const GlobalAdjustment& after,
+        const QString& label = {})
         : session(session),
           mainWindow(mainWindow),
           before(before),
           after(after) {
-        // Name the step by what actually changed ("Exposure", "Blue Hue", "Crop")
-        // so the History list reads as edits, not a wall of "Adjust".
-        setText(developChangeLabel(before, after));
+        // A caller-supplied label names whole-bundle edits the auto-namer can't
+        // ("Apply Preset Punchy"); otherwise name the step by what actually
+        // changed ("Exposure", "Blue Hue", "Crop") so the History list reads as
+        // edits, not a wall of "Adjust".
+        setText(label.isEmpty() ? developChangeLabel(before, after) : label);
     }
 
     void undo() override;
@@ -1663,10 +1666,10 @@ void MainWindow::rebuildDisplayLut() {
     proofLabel->setVisible(proofing);
 }
 
-void MainWindow::applyDevelopChange(const GlobalAdjustment& after) {
+void MainWindow::applyDevelopChange(const GlobalAdjustment& after, const QString& label) {
     const GlobalAdjustment before = currentParams();
     if (after != before)
-        pushGlobalAdjustmentCommand(before, after);
+        pushGlobalAdjustmentCommand(before, after, label);
 }
 
 void MainWindow::applyCurrentUserMetadata(
@@ -1881,7 +1884,9 @@ void MainWindow::saveCurrentAsPreset() {
 void MainWindow::applyPreset(const DevelopPreset& preset) {
     if (session->path().isEmpty())
         return;
-    applyDevelopChange(applyGroups(currentParams(), preset.values, preset.groups));
+    applyDevelopChange(
+        applyGroups(currentParams(), preset.values, preset.groups),
+        tr("Apply Preset %1").arg(preset.name));
 }
 
 void MainWindow::managePresets() {
@@ -1971,14 +1976,14 @@ void MainWindow::syncSessionSpotsToEditors(bool fullResOnly) {
 }
 
 void MainWindow::pushGlobalAdjustmentCommand(
-    const GlobalAdjustment& before, const GlobalAdjustment& after) {
+    const GlobalAdjustment& before, const GlobalAdjustment& after, const QString& label) {
     const GlobalAdjustment current = session->params();
     GlobalAdjustment beforeSnapshot = applyGroups(current, before, allGroups());
     GlobalAdjustment afterSnapshot = applyGroups(current, after, allGroups());
     beforeSnapshot.grainSeed = before.grainSeed;
     afterSnapshot.grainSeed = after.grainSeed;
     if (afterSnapshot != beforeSnapshot)
-        undoStack->push(new AdjustmentCommand(session, this, beforeSnapshot, afterSnapshot));
+        undoStack->push(new AdjustmentCommand(session, this, beforeSnapshot, afterSnapshot, label));
 }
 
 // ---------------------------------------------------------------------------
