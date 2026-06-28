@@ -60,7 +60,7 @@ rerun: rebuild
 sandbox-build:
     uv run tools/sandbox.py build
 
-# Run the dev sandbox (autonomous agent); pass --shell, --gui, --photos DIR
+# Run the dev sandbox (bash shell); pass --claude for the agent, plus --gui, --photos DIR
 [unix]
 sandbox *args:
     uv run tools/sandbox.py run {{args}}
