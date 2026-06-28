@@ -14,7 +14,7 @@ If you would rather build from source, see the README's
 
 ## Linux (AppImage)
 
-The Linux build is a single-file **AppImage** that bundles Qt, LibRaw, and lcms2,
+The Linux build is a single-file **AppImage** that bundles Qt, LibRaw, lcms2, and exiv2,
 built for x86_64 and reaching every desktop from Ubuntu 24.04 LTS forward.
 
 ```bash

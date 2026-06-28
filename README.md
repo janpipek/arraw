@@ -87,7 +87,7 @@ To build from source instead, follow the section below.
 
 ```bash
 sudo dnf install qt6-qtbase-devel qt6-qtbase-private-devel qt6-qtshadertools-devel \
-    qt6-qttools-devel LibRaw-devel lcms2-devel lensfun-devel cmake ninja-build
+    qt6-qttools-devel LibRaw-devel lcms2-devel lensfun-devel exiv2-devel cmake ninja-build
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
 ninja -C build
 ./build/arraw
@@ -101,7 +101,7 @@ commands, required packages, and release workflow are documented in
 ### macOS (Homebrew)
 
 ```bash
-brew install qt libraw little-cms2 lensfun cmake ninja
+brew install qt libraw little-cms2 lensfun exiv2 cmake ninja
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
   -DCMAKE_PREFIX_PATH=$(brew --prefix qt)
 ninja -C build
@@ -114,7 +114,7 @@ Install vcpkg using the [vcpkg installation guide](https://learn.microsoft.com/e
 (Note: scoop-based install did not work for me)
 
 ```bat
-vcpkg install qtbase qttools qtshadertools libraw[openmp] lcms
+vcpkg install qtbase qttools qtshadertools libraw[openmp] lcms exiv2
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
   -DCMAKE_TOOLCHAIN_FILE=path/to/vcpkg/scripts/buildsystems/vcpkg.cmake
 ninja -C build
@@ -139,6 +139,7 @@ the binary as resources — there is nothing to copy or deploy.
 - **libraw** (≥ 0.21) — RAW decoding into the Rec.2020 working space
 - **lcms2** — output color transforms and ICC profile handling
 - **lensfun** — lens correction profiles (distortion, vignetting, CA)
+- **exiv2** — exported EXIF/XMP metadata embedding
 - GPU rendering via **Qt RHI** — Metal on macOS, D3D11 on Windows, OpenGL on
   Linux (Vulkan opt-in); no direct OpenGL dependency
 - CMake 3.21+, Ninja

@@ -28,6 +28,7 @@ add_executable(arraw_tests
     test_FilmStripLayout.cpp
     test_FilmStripTooltip.cpp
     test_ExportWorkflow.cpp
+    test_ExportMetadata.cpp
     test_MainWindowStatus.cpp
     test_ThumbnailCache.cpp
     test_FieldSpec.cpp

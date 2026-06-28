@@ -33,6 +33,7 @@ cmake -B "$build_dir" -S "$src" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DARRAW_BUILD_TESTS=OFF \
     -DARRAW_WITH_LENSFUN=ON \
+    -DARRAW_WITH_EXIV2=ON \
     -DCMAKE_PREFIX_PATH="$qt"
 ninja -C "$build_dir" arraw
 

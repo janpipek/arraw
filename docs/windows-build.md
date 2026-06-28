@@ -48,7 +48,7 @@ Install the ports arraw needs, for the `x64-windows` triplet (this is a long fir
 build — Qt is large):
 
 ```powershell
-C:\dev\vcpkg\vcpkg.exe install qtbase qttools qtshadertools "libraw[openmp]" lcms --triplet x64-windows
+C:\dev\vcpkg\vcpkg.exe install qtbase qttools qtshadertools "libraw[openmp]" lcms exiv2 --triplet x64-windows
 ```
 
 `qtshadertools` is required: it provides `qsb`, which compiles the GLSL shaders in
@@ -69,8 +69,8 @@ Verify they landed:
 C:\dev\vcpkg\vcpkg.exe list
 ```
 
-You should see `qtbase`, `qttools`, `qtshadertools`, `libraw`, and `lcms` among the
-output.
+You should see `qtbase`, `qttools`, `qtshadertools`, `libraw`, `lcms`, and `exiv2`
+among the output.
 
 ---
 

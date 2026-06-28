@@ -2,6 +2,14 @@
 
 #include "pipeline/ColorManagement.h"
 
+struct ExportMetadataSelection {
+    bool includeCaptureInfo = true;
+    bool includeLocation = false;
+    bool includeDescriptive = true;
+
+    bool operator==(const ExportMetadataSelection&) const = default;
+};
+
 struct ExportOptions {
     enum class Format { JPEG, PNG, TIFF };
     Format format = Format::JPEG;
@@ -11,4 +19,5 @@ struct ExportOptions {
     int sharpening = 0;
     OutputProfile profile = OutputProfile::SRgb;
     int bitDepth = 8; // 16 only for TIFF
+    ExportMetadataSelection metadata;
 };

@@ -104,6 +104,26 @@ ExportDialog::ExportDialog(int srcW, int srcH, QWidget* parent)
 
     root->addSpacing(8);
 
+    // ── Metadata ────────────────────────────────────────────────────────────
+    auto* metadataGroup = new QGroupBox("Metadata");
+    auto* metadataLayout = new QVBoxLayout(metadataGroup);
+
+    captureInfoCheck = new QCheckBox("Camera && capture info");
+    captureInfoCheck->setChecked(true);
+
+    locationCheck = new QCheckBox("Location");
+    locationCheck->setChecked(false);
+
+    descriptiveCheck = new QCheckBox("Descriptive metadata");
+    descriptiveCheck->setChecked(true);
+
+    metadataLayout->addWidget(captureInfoCheck);
+    metadataLayout->addWidget(locationCheck);
+    metadataLayout->addWidget(descriptiveCheck);
+    root->addWidget(metadataGroup);
+
+    root->addSpacing(8);
+
     // ── Buttons ──────────────────────────────────────────────────────────────
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
     buttons->button(QDialogButtonBox::Ok)->setText("Export");
@@ -173,6 +193,9 @@ ExportOptions ExportDialog::options() const {
         break;
     }
     o.bitDepth = (o.format == ExportOptions::Format::TIFF && sixteenBitCheck->isChecked()) ? 16 : 8;
+    o.metadata.includeCaptureInfo = captureInfoCheck->isChecked();
+    o.metadata.includeLocation = locationCheck->isChecked();
+    o.metadata.includeDescriptive = descriptiveCheck->isChecked();
     return o;
 }
 
