@@ -211,6 +211,18 @@ static constexpr const char* kHslLumNames[8]
        "LuminanceAdjustmentPurple",
        "LuminanceAdjustmentMagenta"};
 
+// crs: attribute names for the 8 Black & White mixer bands (docs/adr/0048),
+// indexed like GlobalAdjustment::bwMix. Lightroom-compatible (crs:GrayMixer*).
+static constexpr const char* kGrayMixerNames[8]
+    = {"GrayMixerRed",
+       "GrayMixerOrange",
+       "GrayMixerYellow",
+       "GrayMixerGreen",
+       "GrayMixerAqua",
+       "GrayMixerBlue",
+       "GrayMixerPurple",
+       "GrayMixerMagenta"};
+
 QString XmpSidecar::pathFor(const QString& rawPath) {
     return resolveSidecarPath(rawPath).path;
 }
@@ -500,6 +512,10 @@ static Snapshot parseSnapshotLi(QXmlStreamReader& xml) {
             p.hslSat[name.mid(12).toInt()] = f();
         else if (name.startsWith("arraw:HslLum"))
             p.hslLum[name.mid(12).toInt()] = f();
+        else if (name == "arraw:ConvertToGrayscale")
+            p.convertToGrayscale = isTrue();
+        else if (name.startsWith("arraw:BwMix"))
+            p.bwMix[name.mid(11).toInt()] = f();
         else if (name == "crs:ToneCurvePV2012")
             readSnapshotCurve(xml, p.curveLuma);
         else if (name == "crs:ToneCurvePV2012Red")
@@ -675,6 +691,17 @@ SidecarLoadResult XmpSidecar::loadWithStatus(const QString& rawPath) {
                 p.hslSat[i] = attr(kHslSatNames[i], 0.0f);
                 p.hslLum[i] = attr(kHslLumNames[i], 0.0f);
             }
+
+            // Black & White (docs/adr/0048): the treatment toggle plus the mixer.
+            // The mix loads regardless of the toggle, so it survives a round-trip
+            // through a colour edit.
+            p.convertToGrayscale = xml.attributes()
+                                       .value(kNsCrs, "ConvertToGrayscale")
+                                       .toString()
+                                       .compare("true", Qt::CaseInsensitive)
+                                   == 0;
+            for (int i = 0; i < 8; ++i)
+                p.bwMix[i] = attr(kGrayMixerNames[i], 0.0f);
         }
 
         // Tone curve child elements (inside rdf:Description)
@@ -907,6 +934,9 @@ static void writeSnapshotState(QXmlStreamWriter& xml, const GlobalAdjustment& p)
         xml.writeTextElement(kNsArraw, QStringLiteral("HslSat%1").arg(i), num(p.hslSat[i]));
         xml.writeTextElement(kNsArraw, QStringLiteral("HslLum%1").arg(i), num(p.hslLum[i]));
     }
+    flag("ConvertToGrayscale", p.convertToGrayscale);
+    for (int i = 0; i < 8; ++i)
+        xml.writeTextElement(kNsArraw, QStringLiteral("BwMix%1").arg(i), num(p.bwMix[i]));
     writeCurve(xml, "ToneCurvePV2012", p.curveLuma.points);
     writeCurve(xml, "ToneCurvePV2012Red", p.curveR.points);
     writeCurve(xml, "ToneCurvePV2012Green", p.curveG.points);
@@ -1036,6 +1066,13 @@ static QByteArray ownedPacket(const SidecarData& data) {
         write(kHslSatNames[i], p.hslSat[i]);
         write(kHslLumNames[i], p.hslLum[i]);
     }
+
+    // Black & White (docs/adr/0048). The toggle is always written (Lightroom
+    // round-trip); the mixer bands ride alongside the HSL bands and persist
+    // independently of the toggle.
+    xml.writeAttribute(kNsCrs, "ConvertToGrayscale", p.convertToGrayscale ? "True" : "False");
+    for (int i = 0; i < 8; ++i)
+        write(kGrayMixerNames[i], p.bwMix[i]);
 
     if (data.metadataPresence.title)
         writeAltText(xml, "title", data.metadata.title);

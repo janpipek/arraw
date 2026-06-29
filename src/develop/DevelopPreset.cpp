@@ -70,6 +70,10 @@ QJsonObject groupToJson(DevelopGroup g, const GlobalAdjustment& v) {
         o["sat"] = bandsToJson(v.hslSat);
         o["lum"] = bandsToJson(v.hslLum);
         break;
+    case DevelopGroup::BlackAndWhite:
+        o["convertToGrayscale"] = v.convertToGrayscale;
+        o["mix"] = bandsToJson(v.bwMix);
+        break;
     case DevelopGroup::Detail:
         o["texture"] = v.texture;
         o["clarity"] = v.clarity;
@@ -138,6 +142,10 @@ void groupFromJson(DevelopGroup g, const QJsonObject& o, GlobalAdjustment& v) {
         bandsFromJson(o["hue"].toArray(), v.hslHue);
         bandsFromJson(o["sat"].toArray(), v.hslSat);
         bandsFromJson(o["lum"].toArray(), v.hslLum);
+        break;
+    case DevelopGroup::BlackAndWhite:
+        v.convertToGrayscale = o.value("convertToGrayscale").toBool(v.convertToGrayscale);
+        bandsFromJson(o["mix"].toArray(), v.bwMix);
         break;
     case DevelopGroup::Detail:
         v.texture = f("texture", v.texture);

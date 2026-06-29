@@ -1,5 +1,5 @@
-#include "core/WorkingSpace.h"
 #include "pipeline/OkLab.h"
+#include "core/WorkingSpace.h"
 
 #include <algorithm>
 #include <cmath>
@@ -45,6 +45,41 @@ constexpr float kVibranceHalf = 0.2f;
 // Path to White exponent: >1 so only deep highlights bleach toward white
 // (docs/adr/0040).
 constexpr float kPathToWhite = 1.5f;
+
+// Black & White hue mixer (docs/adr/0048). Hue centres (0..1) for Red, Orange,
+// Yellow, Green, Aqua, Blue, Purple, Magenta — must match kHslCenters in
+// shaders/image.frag.
+constexpr std::array<float, 8> kBwHueCenters
+    = {0.0f, 0.083f, 0.167f, 0.333f, 0.5f, 0.611f, 0.778f, 0.889f};
+
+// A fully-saturated pixel under a +/-100 band scales its grey by up to +/-100%
+// (gain in 0..2); the move is proportional to saturation so neutrals never shift.
+constexpr float kBwBandStrength = 1.0f;
+
+// HSV hue (0..1) and saturation (0..1) — mirrors rgb2hsv in shaders/image.frag.
+// Used only to weight the mixer; the conversion result itself is achromatic.
+struct HueSat {
+    float h;
+    float s;
+};
+
+HueSat hueSat(const Rgb& c) {
+    const float maxC = std::max({c[0], c[1], c[2]});
+    const float minC = std::min({c[0], c[1], c[2]});
+    const float delta = maxC - minC;
+    float h = 0.0f;
+    if (delta > 1e-5f) {
+        if (maxC == c[0])
+            h = (c[1] - c[2]) / delta + (c[1] < c[2] ? 6.0f : 0.0f);
+        else if (maxC == c[1])
+            h = (c[2] - c[0]) / delta + 2.0f;
+        else
+            h = (c[0] - c[1]) / delta + 4.0f;
+        h /= 6.0f;
+    }
+    const float s = (maxC > 1e-5f) ? delta / maxC : 0.0f;
+    return {h, s};
+}
 
 } // namespace
 
@@ -98,6 +133,35 @@ Rgb applyVibrance(const Rgb& rgb, float amount) {
     lab.a *= scale;
     lab.b *= scale;
     return fromOklab(lab);
+}
+
+Rgb applyBlackAndWhite(const Rgb& rgb, const std::array<float, 8>& mix) {
+    const float base = luma(rgb);
+    const HueSat hs = hueSat(rgb);
+
+    // Blend the band weights by hue proximity, mirroring applyHsl: a smoothstep
+    // window with +/-60 degrees of support, normalised by the total weight.
+    float weighted = 0.0f;
+    float totalW = 0.0f;
+    for (int i = 0; i < 8; ++i) {
+        float d = std::abs(hs.h - kBwHueCenters[i]);
+        if (d > 0.5f)
+            d = 1.0f - d; // circular wrap
+        float w = std::max(0.0f, 1.0f - d * 6.0f);
+        w = w * w * (3.0f - 2.0f * w); // smoothstep
+        if (w > 1e-3f) {
+            weighted += mix[i] * w;
+            totalW += w;
+        }
+    }
+
+    float gain = 1.0f;
+    if (totalW > 1e-3f) {
+        const float blended = weighted / totalW; // -100..100, the hue's net weight
+        gain = 1.0f + kBwBandStrength * (blended / 100.0f) * hs.s;
+    }
+    const float grey = std::max(base * gain, 0.0f); // headroom kept; never negative
+    return {grey, grey, grey};
 }
 
 float shoulderMap(float luminance, float amount) {

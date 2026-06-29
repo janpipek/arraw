@@ -52,6 +52,15 @@ struct GlobalAdjustment : SharedAdjustment {
     std::array<float, 8> hslSat = {};
     std::array<float, 8> hslLum = {};
 
+    // Black & White (docs/adr/0048). A treatment toggle plus the 8-band hue mixer
+    // (the same Red..Magenta bands as HSL, -100..+100 each): each band darkens or
+    // lightens the greys made from pixels of its hue. The two travel together as
+    // the Black & White Develop Group. The mix persists independently of the
+    // toggle, so switching Colour<->B&W keeps the dialled-in weights. Stored
+    // Lightroom-compatibly as crs:ConvertToGrayscale / crs:GrayMixer*.
+    bool convertToGrayscale = false;
+    std::array<float, 8> bwMix = {};
+
     // Detail
     // Demosaic algorithm — a decode-time choice, not a shader uniform: changing
     // it re-runs the libraw decode through the load path (docs/adr/0036, issue

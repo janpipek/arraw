@@ -15,6 +15,8 @@ const char* developGroupKey(DevelopGroup g) {
         return "colour";
     case DevelopGroup::Hsl:
         return "hsl";
+    case DevelopGroup::BlackAndWhite:
+        return "blackAndWhite";
     case DevelopGroup::Detail:
         return "detail";
     case DevelopGroup::Geometry:
@@ -41,6 +43,8 @@ QString developGroupLabel(DevelopGroup g) {
         return QObject::tr("Colour");
     case DevelopGroup::Hsl:
         return QObject::tr("HSL");
+    case DevelopGroup::BlackAndWhite:
+        return QObject::tr("Black & White");
     case DevelopGroup::Detail:
         return QObject::tr("Detail");
     case DevelopGroup::Geometry:
@@ -89,6 +93,10 @@ GlobalAdjustment applyGroups(
         result.hslHue = source.hslHue;
         result.hslSat = source.hslSat;
         result.hslLum = source.hslLum;
+    }
+    if (hasGroup(selection, DevelopGroup::BlackAndWhite)) {
+        result.convertToGrayscale = source.convertToGrayscale; // toggle + mix travel as one unit
+        result.bwMix = source.bwMix;
     }
     if (hasGroup(selection, DevelopGroup::Detail)) {
         result.demosaicAlgorithm = source.demosaicAlgorithm; // re-decodes on apply (issue #22)

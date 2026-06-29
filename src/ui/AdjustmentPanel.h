@@ -14,6 +14,8 @@ class QComboBox;
 class QPushButton;
 class QVBoxLayout;
 class QStackedWidget;
+class QGroupBox;
+class QButtonGroup;
 class QEvent;
 class Histogram;
 class AdjustmentSpinBox;
@@ -72,6 +74,9 @@ private:
     void connectRow(SliderRow& row);
     void connectCurve();
     void syncParams();
+    // Show the Colour + HSL panels in Colour treatment, or the B&W Mix panel in
+    // Black & White (docs/adr/0048), per adjustments.convertToGrayscale.
+    void applyTreatmentVisibility();
     void commit();
     void resetRow(SliderRow& row);
     void updateCurveChannelIndicators();
@@ -118,6 +123,14 @@ private:
     std::array<SliderRow, 8> hslHue;
     std::array<SliderRow, 8> hslSat;
     std::array<SliderRow, 8> hslLum;
+
+    // Black & White (docs/adr/0048): a Colour|B&W treatment switch and the 8-band
+    // mixer. The treatment toggles which of colorBox/hslBox vs bwMixBox is shown.
+    QButtonGroup* treatmentGroup; // id 0 = Colour, id 1 = Black & White
+    QGroupBox* colorBox;
+    QGroupBox* hslBox;
+    QGroupBox* bwMixBox;
+    std::array<SliderRow, 8> bwMix;
 
     GlobalAdjustment adjustments;
     GlobalAdjustment committed; // last committed state — baseline for the next undo entry
