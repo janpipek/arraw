@@ -492,14 +492,8 @@ void ImageViewport::drawBrushCursor(QPainter& p) const {
     const QPointF b = bufferPixelToViewport({cBuf.x() + rBuf, cBuf.y()});
     const double rScreen = std::hypot(b.x() - a.x(), b.y() - a.y());
 
-    // With the overlay on, fill the footprint translucently so the dab a click
-    // would add is visible on hover, before any painting (docs/adr/0047). During a
-    // stroke the path preview already fills, so only the ring trails the cursor.
-    if (maskOverlayVisible && !brushPainting) {
-        p.setPen(Qt::NoPen);
-        p.setBrush(brushErase ? QColor(90, 170, 255, 90) : QColor(255, 40, 40, 90));
-        p.drawEllipse(brushCursorPos, rScreen, rScreen);
-    }
+    // Just the outline ring (size/position); the painted region itself is shown by
+    // the mask overlay, not a fill under the cursor (docs/adr/0047).
     p.setPen(QPen(brushErase ? QColor(255, 140, 140) : Qt::white, 1.0));
     p.setBrush(Qt::NoBrush);
     p.drawEllipse(brushCursorPos, rScreen, rScreen);
