@@ -467,9 +467,42 @@ Spot carries no tonal parameters and is not a parametric mask.
 _Avoid_: heal (implies Poisson blending, which is not implemented), clone stamp
 (tool name, not the data), local adjustment (different pipeline stage)
 
+**Noise Reduction**:
+The removal of high-ISO sensor noise, split into two halves that are *orthogonal
+by construction*: [[Luminance Noise Reduction]] smooths the luminance channel and
+preserves the chroma ratio exactly, while [[Colour Noise Reduction]] smooths the
+chroma ratio and preserves luminance exactly — so each touches only its own axis
+and the two never contaminate each other (order between them is irrelevant). Both
+run as one unified, cached, debounced GPU pre-pass in [[RendererCore]], last in the
+pipeline before the main shader, decomposing each pixel into luma `Y` and unit-luma
+chroma ratio `r = c/Y`, smoothing one or both, and recombining. Part of the Detail
+[[Develop Group]]. The opposite of [[Grain]], which *adds* texture.
+_Avoid_: denoise (bare — say which half, or "Noise Reduction" for the pair),
+sharpening (a different Detail control), grain (the inverse operation)
+
+**Luminance Noise Reduction**:
+The [[Noise Reduction]] half that removes *luminance* noise — the grainy brightness
+speckle of high-ISO captures — by **edge-aware** smoothing of the luminance channel
+(`Y`) while preserving the chroma ratio exactly and protecting detail edges, so flat
+areas clean up without turning fine texture to mush. The exact dual of [[Colour
+Noise Reduction]]. Two controls: **Amount**, the master strength / blend opacity
+(`crs:LuminanceSmoothing`, default 0), and **Detail**, the edge-protection threshold
+that decides what counts as an edge to preserve versus noise to smooth
+(`crs:LuminanceNoiseReductionDetail`, default 50). The v1 filter is a separable
+**bilateral** whose edge-stop measures luma differences in the perceptual
+(`tone::kGamma`-encoded) domain — so shadow noise, where it lives, is protected like
+midtone noise — but the filter algorithm sits behind a **swappable strategy** seam
+(guided filter / wavelet / non-local means are future implementations). Runs at the
+active slot's **native resolution** (full-res on the FullRes slot, the half-res
+buffer on Preview), so it is approximate at fit-zoom and judged at **1:1** — the
+standard pixel-peeping workflow. Lightroom's third knob, Contrast, is deferred.
+_Avoid_: denoise (bare), Smoothness (that names the [[Colour Noise Reduction]]
+knob), luma smoothing (informal), [[Grain]] (the inverse), sharpening
+
 **Colour Noise Reduction**:
-The removal of *chroma* noise — the coloured blotches of high-ISO captures — by
-smoothing colour while leaving luminance detail untouched. Two controls:
+The [[Noise Reduction]] half that removes *chroma* noise — the coloured blotches of
+high-ISO captures — by smoothing colour while leaving luminance detail untouched.
+Two controls:
 **Smoothness**, the scale of the colour blobs smoothed (drives the Gaussian sigma,
 0..100 → 0..25 full-res px), and **Strength**, how much of the smoothed chroma is
 blended back over the original — the effect's opacity. Run as a cached multi-pass
@@ -478,14 +511,14 @@ main shader. It samples the already-uploaded lens-corrected/spotted texture, so 
 sits *last* in the pipeline — safe because the chroma ratio is unchanged by the
 achromatic vignette gain and geometry-only [[Spot]] clones. Luminance is preserved
 exactly at any Strength by construction (the blend is of unit-luma chroma ratios).
-The recompute is debounced ~200 ms after a slider settles. Luminance noise
-reduction — the grainy brightness speckle — is a separate, deferred concept. The
+The recompute is debounced ~200 ms after a slider settles. Its sibling half,
+[[Luminance Noise Reduction]], smooths the grainy brightness speckle. The
 opposite of [[Grain]], which *adds* texture. Stored as `crs:ColorNoiseReduction`
 (Strength, default 0) and `crs:ColorNoiseReductionSmoothness` (Smoothness, default
 50); the Strength field is Lightroom's "Color" amount, so existing arraw edits that
 predate the split reinterpret their old single value as Strength.
 _Avoid_: denoise (bare — say which kind), Amount (the old single control, now split
-into Smoothness + Strength), luminance NR (the deferred sibling), grain (the inverse
+into Smoothness + Strength), luminance NR (the sibling half, [[Luminance Noise Reduction]]), grain (the inverse
 operation), sharpening (a different Detail control)
 
 **Demosaic Algorithm**:
