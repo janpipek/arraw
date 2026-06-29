@@ -64,6 +64,9 @@ enum class DevelopParameter {
     HslMagentaLuminance,
     // Detail
     Demosaic,
+    Texture,
+    Clarity,
+    Dehaze,
     Sharpening,
     ColorNoiseReduction,
     ColorNoiseReductionSmoothness,

@@ -231,6 +231,38 @@ colours move more than already-saturated ones — the gentler control that resis
 over-cooking skin tones. Also available per [[Local Adjustment]].
 _Avoid_: saturation (the unweighted sibling), vividness
 
+**Spatial Global Adjustment**:
+A develop control that affects the whole image but computes each pixel from a
+neighbourhood rather than from that pixel alone. [[Texture]], [[Clarity]], and
+[[Dehaze]] are Spatial Global Adjustments: they live in the Detail [[Develop Group]]
+and copy/paste like global settings, even though their renderer implementation
+uses blur or neighbourhood sampling. Distinct from a [[Local Adjustment]], which
+means a user-authored masked edit.
+_Avoid_: local adjustment, filter, layer
+
+**Texture**:
+A fine-detail [[Spatial Global Adjustment]] that boosts or suppresses small-scale
+luminance detail by comparing each pixel with a small-radius local average. Positive
+Texture emphasises pores, fabric, foliage, and crisp surface detail; negative
+Texture smooths fine detail without deliberately changing broad tonal contrast.
+Part of the Detail [[Develop Group]].
+_Avoid_: sharpening (edge-acutance control), clarity (larger-radius midtone contrast)
+
+**Clarity**:
+A midtone, larger-radius [[Spatial Global Adjustment]] that boosts or suppresses
+local luminance contrast around regional edges and texture fields. Positive
+Clarity gives the image more punch; negative Clarity softens local transitions.
+Part of the Detail [[Develop Group]].
+_Avoid_: contrast (global tone pivot), texture (fine detail)
+
+**Dehaze**:
+A haze-compensation [[Spatial Global Adjustment]] that reduces or increases
+veiling light across the whole image. Mathematically related to the atmospheric
+scattering model `I(x) = J(x)t(x) + A(1 - t(x))`, where recovering `J` depends on
+local estimates of transmission `t(x)` and atmospheric light `A`. In arraw it is
+a global Detail control, not a masked [[Local Adjustment]].
+_Avoid_: fog filter, local adjustment
+
 **Local Adjustment**:
 A develop edit that applies only within a masked region of one image — a
 *([[Mask]] + tonal/colour deltas)* pair, as opposed to the global adjustments

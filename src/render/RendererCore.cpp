@@ -1,9 +1,9 @@
-#include "develop/LocalAdjustment.h"
-#include "develop/GlobalAdjustment.h"
-#include "develop/WhiteBalance.h"
 #include "render/RendererCore.h"
 #include "core/NoiseReduction.h"
 #include "core/ThemeColors.h"
+#include "develop/GlobalAdjustment.h"
+#include "develop/LocalAdjustment.h"
+#include "develop/WhiteBalance.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -55,6 +55,7 @@ void RendererCore::initialize(QRhi* r) {
 
     vs = loadShader(QStringLiteral(":/shaders/image.vert.qsb"));
     fs = loadShader(QStringLiteral(":/shaders/image.frag.qsb"));
+    spatialExtractFs = loadShader(QStringLiteral(":/shaders/spatial_extract.frag.qsb"));
 
     nrVs = loadShader(QStringLiteral(":/shaders/nr.vert.qsb"));
     nrExtractFs = loadShader(QStringLiteral(":/shaders/nr_extract.frag.qsb"));
@@ -71,6 +72,10 @@ void RendererCore::initialize(QRhi* r) {
 
     nrUbuf.reset(rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, sizeof(NrUbuf)));
     nrUbuf->create();
+
+    spatialUbuf.reset(
+        rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, sizeof(NrUbuf)));
+    spatialUbuf->create();
 
     sampler.reset(rhi->newSampler(
         QRhiSampler::Linear,
@@ -120,6 +125,7 @@ void RendererCore::release() {
     srb.reset();
     srbImageTex = nullptr;
     srbSensorClipTex = nullptr;
+    srbSpatialTex = nullptr;
     srbGeneration = -1;
     nrPipeExtract.reset();
     nrPipeBlurH.reset();
@@ -129,9 +135,21 @@ void RendererCore::release() {
     nrSrbBlurH.reset();
     nrSrbBlurV.reset();
     nrSrbRecombine.reset();
+    spatialPipeExtract.reset();
+    spatialPipeBlurH.reset();
+    spatialPipeBlurV.reset();
+    spatialSrbExtract.reset();
+    spatialSrbBlurH.reset();
+    spatialSrbBlurV.reset();
+    spatialSrbExtractTex = nullptr;
+    spatialSrbBlurHTex = nullptr;
+    spatialSrbBlurVTex = nullptr;
     nrUbuf.reset();
+    spatialUbuf.reset();
     for (NrSlot& s : nrSlot)
         s = NrSlot{};
+    for (SpatialSlot& s : spatialSlot)
+        s = SpatialSlot{};
     // Destroy any in-flight readback targets before the QRhi goes away: this
     // frees each QRhiReadbackResult so a pending `completed` lambda can never
     // fire against a torn-down RendererCore (docs/adr/0035).
@@ -346,13 +364,12 @@ void RendererCore::buildBindings(
     std::unique_ptr<QRhiShaderResourceBindings>& dst,
     QRhiBuffer* ub,
     QRhiTexture* tex,
-    QRhiTexture* sensorTex) {
+    QRhiTexture* sensorTex,
+    QRhiTexture* spatialTex) {
     dst.reset(rhi->newShaderResourceBindings());
     dst->setBindings({
         QRhiShaderResourceBinding::uniformBuffer(
-            0,
-            QRhiShaderResourceBinding::VertexStage | QRhiShaderResourceBinding::FragmentStage,
-            ub),
+            0, QRhiShaderResourceBinding::VertexStage | QRhiShaderResourceBinding::FragmentStage, ub),
         QRhiShaderResourceBinding::sampledTexture(
             1, QRhiShaderResourceBinding::FragmentStage, tex, sampler.get()),
         QRhiShaderResourceBinding::sampledTexture(
@@ -363,17 +380,22 @@ void RendererCore::buildBindings(
             4, QRhiShaderResourceBinding::FragmentStage, toneLutTex.get(), sampler.get()),
         QRhiShaderResourceBinding::sampledTexture(
             5, QRhiShaderResourceBinding::FragmentStage, sensorTex, sampler.get()),
+        QRhiShaderResourceBinding::sampledTexture(
+            6, QRhiShaderResourceBinding::FragmentStage, spatialTex, sampler.get()),
     });
     dst->create();
 }
 
-QRhiShaderResourceBindings* RendererCore::bindingsFor(QRhiTexture* tex, QRhiTexture* sensorTex) {
-    if (srb && srbImageTex == tex && srbSensorClipTex == sensorTex && srbGeneration == generation)
+QRhiShaderResourceBindings* RendererCore::bindingsFor(
+    QRhiTexture* tex, QRhiTexture* sensorTex, QRhiTexture* spatialTex) {
+    if (srb && srbImageTex == tex && srbSensorClipTex == sensorTex && srbSpatialTex == spatialTex
+        && srbGeneration == generation)
         return srb.get();
 
-    buildBindings(srb, ubuf.get(), tex, sensorTex);
+    buildBindings(srb, ubuf.get(), tex, sensorTex, spatialTex);
     srbImageTex = tex;
     srbSensorClipTex = sensorTex;
+    srbSpatialTex = spatialTex;
     srbGeneration = generation;
     return srb.get();
 }
@@ -476,6 +498,9 @@ void RendererCore::fillUbuf(Ubuf& ub, const FrameParams& fp) const {
     ub.vibrance = g.vibrance;
     // Highlight roll-off shoulder + path to white (docs/adr/0040); 0 = off.
     ub.filmicHighlights = std::clamp(a.filmicHighlights / 100.0f, 0.0f, 1.0f);
+    ub.textureAmount = std::clamp(a.texture / 100.0f, -1.0f, 1.0f);
+    ub.clarity = std::clamp(a.clarity / 100.0f, -1.0f, 1.0f);
+    ub.dehaze = std::clamp(a.dehaze / 100.0f, -1.0f, 1.0f);
     ub.postCropVignetteAmount = a.postCropVignetteAmount / 50.0f;
     ub.postCropVignetteMidpoint = std::clamp(a.postCropVignetteMidpoint / 100.0f, 0.0f, 1.0f);
     ub.postCropVignetteFeather = std::clamp(a.postCropVignetteFeather / 100.0f, 0.0f, 1.0f);
@@ -598,9 +623,10 @@ void RendererCore::recordPass(
     QRhiRenderTarget* rt,
     QRhiTexture* tex,
     QRhiTexture* sensorTex,
+    QRhiTexture* spatialTex,
     const FrameParams& fp,
     QRhiResourceUpdateBatch* batch) {
-    recordPassWith(cb, rt, fp, batch, ubuf.get(), bindingsFor(tex, sensorTex));
+    recordPassWith(cb, rt, fp, batch, ubuf.get(), bindingsFor(tex, sensorTex, spatialTex));
 }
 
 // ── Colour Noise Reduction pre-pass (docs/adr/0034) ──────────────────────────
@@ -761,6 +787,104 @@ static bool nrActive(const GlobalAdjustment& a) {
     return a.colorNoiseReduction > 0.0f && a.colorNoiseReductionSmoothness > 0.0f;
 }
 
+static bool spatialContextActive(const GlobalAdjustment& a) {
+    return a.clarity != 0.0f || a.dehaze != 0.0f;
+}
+
+void RendererCore::ensureSpatialSlot(int key, QSize fullSize) {
+    SpatialSlot& ss = spatialSlot[key];
+    if (ss.lumaB && ss.fullSize == fullSize && ss.gen == generation)
+        return;
+    ss.fullSize = fullSize;
+    const QSize quarter(std::max(1, fullSize.width() / 4), std::max(1, fullSize.height() / 4));
+
+    auto make = [&](std::unique_ptr<QRhiTexture>& tex,
+                    std::unique_ptr<QRhiTextureRenderTarget>& rt) {
+        tex.reset(rhi->newTexture(
+            QRhiTexture::RGBA32F,
+            quarter,
+            1,
+            QRhiTexture::RenderTarget | QRhiTexture::UsedAsTransferSource));
+        tex->create();
+        QRhiColorAttachment att(tex.get());
+        rt.reset(rhi->newTextureRenderTarget({att}));
+        rt->setRenderPassDescriptor(nrRpDesc.get());
+        rt->create();
+    };
+    make(ss.lumaA, ss.lumaART);
+    make(ss.lumaB, ss.lumaBRT);
+    ss.gen = generation;
+    spatialSrbBlurHTex = nullptr;
+    spatialSrbBlurVTex = nullptr;
+}
+
+QRhiTexture* RendererCore::ensureSpatialContext(QRhiCommandBuffer* cb, int key, QRhiTexture* rawTex) {
+    ensureNrResources(); // shares the same RGBA32F render-pass descriptor and nrUbuf layout
+    ensureSpatialSlot(key, rawTex->pixelSize());
+    SpatialSlot& ss = spatialSlot[key];
+
+    auto bindUbufTex = [&](std::unique_ptr<QRhiShaderResourceBindings>& dst,
+                           QRhiTexture*& cachedTex,
+                           QRhiTexture* t) {
+        if (dst && cachedTex == t)
+            return;
+        dst.reset(rhi->newShaderResourceBindings());
+        dst->setBindings(
+            {QRhiShaderResourceBinding::uniformBuffer(
+                 0,
+                 QRhiShaderResourceBinding::VertexStage | QRhiShaderResourceBinding::FragmentStage,
+                 spatialUbuf.get()),
+             QRhiShaderResourceBinding::sampledTexture(
+                 1, QRhiShaderResourceBinding::FragmentStage, t, sampler.get())});
+        dst->create();
+        cachedTex = t;
+    };
+    bindUbufTex(spatialSrbExtract, spatialSrbExtractTex, rawTex);
+    bindUbufTex(spatialSrbBlurH, spatialSrbBlurHTex, ss.lumaA.get());
+    bindUbufTex(spatialSrbBlurV, spatialSrbBlurVTex, ss.lumaB.get());
+
+    if (!spatialPipeExtract) {
+        auto makePipe = [&](std::unique_ptr<QRhiGraphicsPipeline>& dst,
+                            const QShader& fsStage,
+                            QRhiShaderResourceBindings* layout) {
+            dst.reset(rhi->newGraphicsPipeline());
+            dst->setTopology(QRhiGraphicsPipeline::TriangleStrip);
+            dst->setShaderStages(
+                {{QRhiShaderStage::Vertex, nrVs}, {QRhiShaderStage::Fragment, fsStage}});
+            QRhiVertexInputLayout vl;
+            vl.setBindings({{4 * sizeof(float)}});
+            vl.setAttributes({
+                {0, 0, QRhiVertexInputAttribute::Float2, 0},
+                {0, 1, QRhiVertexInputAttribute::Float2, 2 * sizeof(float)},
+            });
+            dst->setVertexInputLayout(vl);
+            dst->setShaderResourceBindings(layout);
+            dst->setRenderPassDescriptor(nrRpDesc.get());
+            dst->create();
+        };
+        makePipe(spatialPipeExtract, spatialExtractFs, spatialSrbExtract.get());
+        makePipe(spatialPipeBlurH, nrBlurHFs, spatialSrbBlurH.get());
+        makePipe(spatialPipeBlurV, nrBlurVFs, spatialSrbBlurV.get());
+    }
+
+    NrUbuf nb{};
+    const QMatrix4x4 cc = rhi->clipSpaceCorrMatrix();
+    std::memcpy(nb.clipCorr, cc.constData(), sizeof(nb.clipCorr));
+    nb.invChroma[0] = 1.0f / float(ss.lumaA->pixelSize().width());
+    nb.invChroma[1] = 1.0f / float(ss.lumaA->pixelSize().height());
+    nb.sigma = 2.5f;
+    nb.radius = 8;
+    nb.flipV = rhi->isYUpInFramebuffer() ? 1 : 0;
+
+    QRhiResourceUpdateBatch* b = rhi->nextResourceUpdateBatch();
+    b->updateDynamicBuffer(spatialUbuf.get(), 0, sizeof(NrUbuf), &nb);
+
+    nrPass(cb, ss.lumaART.get(), spatialPipeExtract.get(), spatialSrbExtract.get(), b);
+    nrPass(cb, ss.lumaBRT.get(), spatialPipeBlurH.get(), spatialSrbBlurH.get(), nullptr);
+    nrPass(cb, ss.lumaART.get(), spatialPipeBlurV.get(), spatialSrbBlurV.get(), nullptr);
+    return ss.lumaA.get();
+}
+
 void RendererCore::record(
     QRhiCommandBuffer* cb, QRhiRenderTarget* rt, Slot slot, const FrameParams& fp) {
     if (!hasImage(slot)) {
@@ -774,6 +898,7 @@ void RendererCore::record(
     QRhiTexture* tex = imageTex[slotIndex].get();
     QRhiTexture* sensorTex = sensorClipTex[slotIndex] ? sensorClipTex[slotIndex].get()
                                                       : sensorClipDummyTex.get();
+    QRhiTexture* spatialTex = sensorClipDummyTex.get();
     if (nrActive(fp.adjustments)) {
         cb->resourceUpdate(batch); // apply uploads before the NR pre-passes
         tex = ensureDenoised(
@@ -784,7 +909,12 @@ void RendererCore::record(
             fp.adjustments.colorNoiseReduction);
         batch = rhi->nextResourceUpdateBatch(); // fresh batch for the main pass
     }
-    recordPass(cb, rt, tex, sensorTex, fp, batch);
+    if (spatialContextActive(fp.adjustments)) {
+        cb->resourceUpdate(batch);
+        spatialTex = ensureSpatialContext(cb, slotIndex, tex);
+        batch = rhi->nextResourceUpdateBatch();
+    }
+    recordPass(cb, rt, tex, sensorTex, spatialTex, fp, batch);
 }
 
 void RendererCore::clear(QRhiCommandBuffer* cb, QRhiRenderTarget* rt) {
@@ -839,6 +969,7 @@ QImage RendererCore::renderOffscreenTex(
     QRhiTexture* sensorTex = slotIndex >= 0 && sensorClipTex[slotIndex]
                                  ? sensorClipTex[slotIndex].get()
                                  : sensorClipDummyTex.get();
+    QRhiTexture* spatialTex = sensorClipDummyTex.get();
     if (nrActive(fp.adjustments)) {
         // key 2 is the export/extTex scratch; its source texture changes every
         // call, so force a recompute rather than trust the (smoothness,strength) cache.
@@ -854,7 +985,13 @@ QImage RendererCore::renderOffscreenTex(
             fp.adjustments.colorNoiseReduction);
         batch = rhi->nextResourceUpdateBatch();
     }
-    recordPass(cb, rt.get(), tex, sensorTex, fp, batch);
+    if (spatialContextActive(fp.adjustments)) {
+        const int spatialKey = slotIndex >= 0 ? slotIndex : 2;
+        cb->resourceUpdate(batch);
+        spatialTex = ensureSpatialContext(cb, spatialKey, tex);
+        batch = rhi->nextResourceUpdateBatch();
+    }
+    recordPass(cb, rt.get(), tex, sensorTex, spatialTex, fp, batch);
 
     QRhiReadbackResult rr;
     QRhiResourceUpdateBatch* readBatch = rhi->nextResourceUpdateBatch();
@@ -941,6 +1078,7 @@ bool RendererCore::recordOffscreenReadback(
     QRhiTexture* tex = imageTex[slotIndex].get();
     QRhiTexture* sensorTex = sensorClipTex[slotIndex] ? sensorClipTex[slotIndex].get()
                                                       : sensorClipDummyTex.get();
+    QRhiTexture* spatialTex = sensorClipDummyTex.get();
     if (nrActive(fp.adjustments)) {
         cb->resourceUpdate(batch);
         tex = ensureDenoised(
@@ -951,14 +1089,20 @@ bool RendererCore::recordOffscreenReadback(
             fp.adjustments.colorNoiseReduction);
         batch = rhi->nextResourceUpdateBatch();
     }
+    if (spatialContextActive(fp.adjustments)) {
+        cb->resourceUpdate(batch);
+        spatialTex = ensureSpatialContext(cb, slotIndex, tex);
+        batch = rhi->nextResourceUpdateBatch();
+    }
     // Record with the target's own uniform buffer + bindings — never the shared
     // on-screen `ubuf` — so this pass cannot clobber the main pass's uniforms
     // within the frame they share (see ReadbackTarget::ubuf).
     if (!t->srb || t->srbImageTex != tex || t->srbSensorTex != sensorTex
-        || t->srbGeneration != generation) {
-        buildBindings(t->srb, t->ubuf.get(), tex, sensorTex);
+        || t->srbSpatialTex != spatialTex || t->srbGeneration != generation) {
+        buildBindings(t->srb, t->ubuf.get(), tex, sensorTex, spatialTex);
         t->srbImageTex = tex;
         t->srbSensorTex = sensorTex;
+        t->srbSpatialTex = spatialTex;
         t->srbGeneration = generation;
     }
     recordPassWith(cb, t->rt.get(), fp, batch, t->ubuf.get(), t->srb.get());

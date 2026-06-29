@@ -1,6 +1,6 @@
+#include "develop/DevelopParameter.h"
 #include "develop/DemosaicAlgorithm.h"
 #include "develop/GlobalAdjustment.h"
-#include "develop/DevelopParameter.h"
 
 #include <array>
 #include <string>
@@ -71,6 +71,12 @@ const char* developParameterKey(DevelopParameter p) {
         return "curveBlue";
     case DevelopParameter::Demosaic:
         return "demosaic";
+    case DevelopParameter::Texture:
+        return "texture";
+    case DevelopParameter::Clarity:
+        return "clarity";
+    case DevelopParameter::Dehaze:
+        return "dehaze";
     case DevelopParameter::Sharpening:
         return "sharpening";
     case DevelopParameter::ColorNoiseReduction:
@@ -147,6 +153,12 @@ QString developParameterLabel(DevelopParameter p) {
         return trDev("Blue Curve");
     case DevelopParameter::Demosaic:
         return trDev("Demosaic");
+    case DevelopParameter::Texture:
+        return trDev("Texture");
+    case DevelopParameter::Clarity:
+        return trDev("Clarity");
+    case DevelopParameter::Dehaze:
+        return trDev("Dehaze");
     case DevelopParameter::Sharpening:
         return trDev("Sharpening");
     case DevelopParameter::ColorNoiseReduction:
@@ -206,6 +218,9 @@ DevelopGroup developParameterGroup(DevelopParameter p) {
     case DevelopParameter::CurveBlue:
         return DevelopGroup::ToneCurve;
     case DevelopParameter::Demosaic:
+    case DevelopParameter::Texture:
+    case DevelopParameter::Clarity:
+    case DevelopParameter::Dehaze:
     case DevelopParameter::Sharpening:
     case DevelopParameter::ColorNoiseReduction:
     case DevelopParameter::ColorNoiseReductionSmoothness:
@@ -254,6 +269,9 @@ std::optional<FieldSpec> developParameterSpec(DevelopParameter p) {
     case DevelopParameter::Blacks:
     case DevelopParameter::Saturation:
     case DevelopParameter::Vibrance:
+    case DevelopParameter::Texture:
+    case DevelopParameter::Clarity:
+    case DevelopParameter::Dehaze:
     case DevelopParameter::PostCropVignetteAmount:
         return bipolar;
     case DevelopParameter::Sharpening:
@@ -311,6 +329,12 @@ float developParameterValue(DevelopParameter p, const GlobalAdjustment& s) {
         return s.saturation;
     case DevelopParameter::Vibrance:
         return s.vibrance;
+    case DevelopParameter::Texture:
+        return s.texture;
+    case DevelopParameter::Clarity:
+        return s.clarity;
+    case DevelopParameter::Dehaze:
+        return s.dehaze;
     case DevelopParameter::Sharpening:
         return s.sharpening;
     case DevelopParameter::ColorNoiseReduction:

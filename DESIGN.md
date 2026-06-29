@@ -557,12 +557,14 @@ Splits by pipeline cost.
     `PostCropVignetteFeather`, `GrainAmount`, `GrainSize`, and `GrainFrequency`;
     Grain Roughness maps to Adobe's `GrainFrequency` name). The seed uses
     `arraw:GrainSeed`. Develop Presets serialize the six controls, never the seed.
-- **Clarity / Texture (in this milestone, spatial): live preview via a blur
-  pass.** Local-contrast control. Needs a blurred copy of the image, so it adds
-  the **first multi-pass step to the preview pipeline** — see `docs/adr/0011`.
-  Quarter-res is faithful for this broad, low-frequency effect (unlike fine
-  sharpening, which stays export-only). The blur pass is reusable groundwork for
-  the deferred items below.
+- **Texture / Clarity / Dehaze (spatial global Detail controls): live preview via
+  a shared context pass.** These controls affect the whole image, but each pixel
+  needs neighbourhood context rather than only its own value. Texture uses
+  small-neighbourhood luminance taps in the main shader; Clarity and the practical
+  Dehaze approximation share a reduced-resolution blurred luminance context
+  recorded by `RendererCore` before the main shader — see `docs/adr/0011`.
+  Reduced-resolution context is faithful enough for these broad tune-by-eye
+  controls (unlike fine sharpening, which stays export-only).
 - **Colour Noise Reduction (own milestone, shipped): cached GPU chroma pre-pass.**
   Removes coloured high-ISO blotches by smoothing the unit-luma chroma ratio with
   a separable Gaussian at quarter-res, run as a cached multi-pass GPU pre-pass in
@@ -573,10 +575,9 @@ Splits by pipeline cost.
   by construction; chroma stays faithful at quarter-res, so it needs no
   full-res-to-judge handling. The recompute is debounced (~200 ms after the slider
   settles). See `docs/adr/0034`.
-- **Deferred, listed with their cost:** Dehaze (spatial, heavier estimation pass),
-  Luminance Noise Reduction (wants full-res to judge, destroys fine detail —
-  closer to its own milestone), and profile-based Lens Corrections (needs a
-  lens-profile database).
+- **Deferred, listed with their cost:** Luminance Noise Reduction (wants full-res
+  to judge, destroys fine detail — closer to its own milestone), and profile-based
+  Lens Corrections (needs a lens-profile database).
 
 ### Milestone 10 — Multi-select & Batch Operations
 

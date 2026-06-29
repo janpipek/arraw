@@ -1,8 +1,8 @@
-#include "develop/DemosaicAlgorithm.h"
-#include "develop/GlobalAdjustment.h"
 #include "ui/AdjustmentPanel.h"
-#include "ui/AdjustmentSpinBox.h"
+#include "develop/DemosaicAlgorithm.h"
 #include "develop/DevelopParameter.h"
+#include "develop/GlobalAdjustment.h"
+#include "ui/AdjustmentSpinBox.h"
 #include "ui/Histogram.h"
 #include <QButtonGroup>
 #include <QCheckBox>
@@ -287,6 +287,23 @@ AdjustmentPanel::AdjustmentPanel(QWidget* parent)
     // change handler is connected, so it raises no spurious commit/re-decode.
     demosaicCombo->setCurrentIndex(demosaicCombo->findData(static_cast<int>(kDefaultDemosaic)));
     detail->addWidget(demosaicCombo);
+    texture = addSlider(
+        detail,
+        "Texture",
+        kBipolarSpec,
+        "Emphasises or smooths fine luminance detail without deliberately changing broad "
+        "local contrast.");
+    clarity = addSlider(
+        detail,
+        "Clarity",
+        kBipolarSpec,
+        "Changes midtone local contrast: positive values add punch, negative values soften "
+        "regional transitions.");
+    dehaze = addSlider(
+        detail,
+        "Dehaze",
+        kBipolarSpec,
+        "Reduces or adds veiling light using spatial luminance context.");
     sharpening = addSlider(detail, "Sharpen", kSharpenSpec);
     subHeader(detail, "Color Noise");
     colorNoiseReduction = addSlider(detail, "Strength", kSharpenSpec);
@@ -423,6 +440,9 @@ void AdjustmentPanel::syncParams() {
     if (const int i = demosaicCombo->currentIndex(); i >= 0)
         adjustments.demosaicAlgorithm = static_cast<DemosaicAlgorithm>(
             demosaicCombo->itemData(i).toInt());
+    adjustments.texture = v(texture);
+    adjustments.clarity = v(clarity);
+    adjustments.dehaze = v(dehaze);
     adjustments.sharpening = v(sharpening);
     adjustments.colorNoiseReduction = v(colorNoiseReduction); // Strength (issue #59)
     adjustments.colorNoiseReductionSmoothness = v(colorNoiseReductionSmoothness);
@@ -459,6 +479,9 @@ std::vector<AdjustmentPanel::SliderRow*> AdjustmentPanel::allRows() {
            &tint,
            &saturation,
            &vibrance,
+           &texture,
+           &clarity,
+           &dehaze,
            &sharpening,
            &colorNoiseReduction,
            &colorNoiseReductionSmoothness,
@@ -581,6 +604,9 @@ void AdjustmentPanel::setParams(const GlobalAdjustment& p) {
     set(tint, p.tint);
     set(saturation, p.saturation);
     set(vibrance, p.vibrance);
+    set(texture, p.texture);
+    set(clarity, p.clarity);
+    set(dehaze, p.dehaze);
     set(sharpening, p.sharpening);
     set(colorNoiseReduction, p.colorNoiseReduction); // Strength (issue #59)
     set(colorNoiseReductionSmoothness, p.colorNoiseReductionSmoothness);

@@ -1,6 +1,6 @@
+#include "develop/DevelopPreset.h"
 #include "core/Orientation.h"
 #include "develop/GlobalAdjustment.h"
-#include "develop/DevelopPreset.h"
 
 #include <array>
 
@@ -71,6 +71,9 @@ QJsonObject groupToJson(DevelopGroup g, const GlobalAdjustment& v) {
         o["lum"] = bandsToJson(v.hslLum);
         break;
     case DevelopGroup::Detail:
+        o["texture"] = v.texture;
+        o["clarity"] = v.clarity;
+        o["dehaze"] = v.dehaze;
         o["sharpening"] = v.sharpening;
         o["colorNoiseReduction"] = v.colorNoiseReduction; // Strength (issue #59)
         o["colorNoiseReductionSmoothness"] = v.colorNoiseReductionSmoothness;
@@ -135,10 +138,13 @@ void groupFromJson(DevelopGroup g, const QJsonObject& o, GlobalAdjustment& v) {
         bandsFromJson(o["lum"].toArray(), v.hslLum);
         break;
     case DevelopGroup::Detail:
+        v.texture = f("texture", v.texture);
+        v.clarity = f("clarity", v.clarity);
+        v.dehaze = f("dehaze", v.dehaze);
         v.sharpening = f("sharpening", v.sharpening);
         v.colorNoiseReduction = f("colorNoiseReduction", v.colorNoiseReduction); // Strength
-        v.colorNoiseReductionSmoothness =
-            f("colorNoiseReductionSmoothness", v.colorNoiseReductionSmoothness);
+        v.colorNoiseReductionSmoothness
+            = f("colorNoiseReductionSmoothness", v.colorNoiseReductionSmoothness);
         break;
     case DevelopGroup::Geometry: {
         if (o.contains("orientation"))

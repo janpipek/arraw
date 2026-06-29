@@ -1,7 +1,7 @@
+#include "TestApp.h"
+#include "develop/DemosaicAlgorithm.h"
 #include "develop/GlobalAdjustment.h"
 #include "ui/AdjustmentPanel.h"
-#include "develop/DemosaicAlgorithm.h"
-#include "TestApp.h"
 #include <catch2/catch_test_macros.hpp>
 
 #include <QCheckBox>
@@ -169,4 +169,20 @@ TEST_CASE("setParams reflects lens toggle state into the checkboxes", "[adjustpa
     REQUIRE(vig != nullptr);
     CHECK(vig->isChecked());
     CHECK(panel.params().lensCorrectVignetting);
+}
+
+TEST_CASE(
+    "Detail sliders round-trip spatial global controls through params", "[adjustpanel][detail]") {
+    testApp();
+    AdjustmentPanel panel;
+
+    GlobalAdjustment p;
+    p.texture = 18.0f;
+    p.clarity = 22.0f;
+    p.dehaze = -12.0f;
+    panel.setParams(p);
+
+    CHECK(panel.params().texture == 18.0f);
+    CHECK(panel.params().clarity == 22.0f);
+    CHECK(panel.params().dehaze == -12.0f);
 }

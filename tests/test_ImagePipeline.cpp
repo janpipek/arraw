@@ -1,7 +1,7 @@
 #include "core/Orientation.h"
-#include "pipeline/ImagePipeline.h"
 #include "core/WorkingSpace.h"
 #include "develop/GlobalAdjustment.h"
+#include "pipeline/ImagePipeline.h"
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include <QFile>
@@ -201,4 +201,16 @@ TEST_CASE("kLuma constants match shaders/image.frag", "[shader-consts]") {
     REQUIRE_THAT(m.captured(1).toFloat(), WithinAbs(kLumaR, 1e-6));
     REQUIRE_THAT(m.captured(2).toFloat(), WithinAbs(kLumaG, 1e-6));
     REQUIRE_THAT(m.captured(3).toFloat(), WithinAbs(kLumaB, 1e-6));
+}
+
+TEST_CASE("image shader avoids sampler builtin names in uniform block", "[shader-consts]") {
+    for (const auto path :
+         {QStringLiteral(ARRAW_SOURCE_DIR "/shaders/image.vert"),
+          QStringLiteral(ARRAW_SOURCE_DIR "/shaders/image.frag")}) {
+        QFile shader(path);
+        REQUIRE(shader.open(QIODevice::ReadOnly));
+        const QString source = QString::fromUtf8(shader.readAll());
+        INFO(path.toStdString());
+        CHECK_FALSE(source.contains(QRegularExpression(R"(\bfloat\s+texture\s*;)")));
+    }
 }
