@@ -28,6 +28,10 @@ test: build
 format:
     find src tests \( -name '*.cpp' -o -name '*.h' \) -print | xargs {{clang_format}} -i
 
+# Regenerate app icon PNGs and resources/arraw.ico from resources/icon.svg
+icons:
+    uv run tools/render_icons.py
+
 # Check formatting without modifying files
 format-check:
     find src tests \( -name '*.cpp' -o -name '*.h' \) -print | xargs {{clang_format}} --dry-run --Werror

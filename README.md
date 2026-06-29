@@ -133,6 +133,9 @@ ninja -C build-release
 Shaders are compiled at build time by `qsb` (Qt ShaderTools) and baked into
 the binary as resources — there is nothing to copy or deploy.
 
+Developer maintenance commands, including regenerating app icons after editing
+`resources/icon.svg`, are documented in [docs/development.md](docs/development.md).
+
 ## Dependencies
 
 - **Qt 6** ≥ 6.8 (Widgets, Concurrent; RHI via GuiPrivate; ShaderTools at build time)
