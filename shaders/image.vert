@@ -62,9 +62,10 @@ layout(std140, binding = 0) uniform buf {
     float textureAmount;      // unused here; fine-detail local contrast
     float clarity;            // unused here; midtone local contrast
     float dehaze;             // unused here; haze compensation
-    int   pad1;
+    int   convertToGrayscale; // unused here; was pad1
     int   pad2;
     int   pad3;
+    vec4  bwMix[2];           // unused here; 8 B&W hue-mixer weights (std140 vec4 pairs)
 } u;
 
 void main() {

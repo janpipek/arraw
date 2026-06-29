@@ -1,14 +1,14 @@
-#include "develop/LocalAdjustment.h"
 #include "core/ImageBuffer.h"
 #include "develop/GlobalAdjustment.h"
+#include "develop/LocalAdjustment.h"
 // Golden-image tests for the GLSL pipeline, via the real export path
 // (ImageViewport::renderToImage) — policy, thresholds, and format are
 // docs/adr/0005. Regenerate goldens with:
 //
 //   ARRAW_UPDATE_GOLDENS=1 ./build/tests/arraw_tests "[golden]"
 
-#include "ui/ImageViewport.h"
 #include "TestApp.h"
+#include "ui/ImageViewport.h"
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
 #include <QDir>
@@ -189,6 +189,14 @@ std::vector<Scenario> scenarios() {
     p.saturation = 30.0f;
     p.filmicHighlights = 80.0f;
     list.push_back({"filmic_highlights", p});
+
+    // Black & White (docs/adr/0048): the hue mixer lightens the red bar and
+    // darkens the blue one, and every output pixel must be neutral grey. Mirrors
+    // colour::applyBlackAndWhite, so this enforces CPU/GPU parity for the mixer.
+    p = {};
+    p.convertToGrayscale = true;
+    p.bwMix = {60.0f, 0.0f, 0.0f, 0.0f, 0.0f, -80.0f, 0.0f, 0.0f};
+    list.push_back({"black_and_white", p});
 
     return list;
 }

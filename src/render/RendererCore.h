@@ -70,10 +70,12 @@ struct Ubuf {
     float textureAmount;       // -1..+1 fine-detail local contrast
     float clarity;             // -1..+1 midtone local contrast
     float dehaze;              // -1..+1 practical haze compensation
-    qint32 pad_[3];
+    qint32 convertToGrayscale; // 1: Black & White treatment on (docs/adr/0048); was pad_[0]
+    qint32 pad_[2];            // align bwMix to a 16-byte boundary
+    float bwMix[8];            // 8 B&W hue-mixer weights, -100..+100 (vec4[2] in the shaders)
 };
 
-static_assert(sizeof(Ubuf) == 1648);
+static_assert(sizeof(Ubuf) == 1680);
 static_assert(offsetof(Ubuf, effectRect) == 96);
 static_assert(offsetof(Ubuf, grainSeed) == 284);
 static_assert(offsetof(Ubuf, laGeom) == 320);
@@ -83,6 +85,8 @@ static_assert(offsetof(Ubuf, filmicHighlights) == 1620);
 static_assert(offsetof(Ubuf, textureAmount) == 1624);
 static_assert(offsetof(Ubuf, clarity) == 1628);
 static_assert(offsetof(Ubuf, dehaze) == 1632);
+static_assert(offsetof(Ubuf, convertToGrayscale) == 1636);
+static_assert(offsetof(Ubuf, bwMix) == 1648);
 
 // std140 mirror of the `nrbuf` block in shaders/nr.vert and nr_blur_*.frag — the
 // Colour Noise Reduction pre-pass uniform (docs/adr/0034). Constant for a whole

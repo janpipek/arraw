@@ -496,6 +496,11 @@ void RendererCore::fillUbuf(Ubuf& ub, const FrameParams& fp) const {
     ub.wbGainB = wb[2];
     ub.saturation = g.saturation;
     ub.vibrance = g.vibrance;
+    // Black & White (docs/adr/0048): the treatment toggle plus the raw -100..+100
+    // mixer weights (the shader divides by 100, mirroring colour::applyBlackAndWhite).
+    ub.convertToGrayscale = a.convertToGrayscale ? 1 : 0;
+    for (int i = 0; i < 8; ++i)
+        ub.bwMix[i] = a.bwMix[i];
     // Highlight roll-off shoulder + path to white (docs/adr/0040); 0 = off.
     ub.filmicHighlights = std::clamp(a.filmicHighlights / 100.0f, 0.0f, 1.0f);
     ub.textureAmount = std::clamp(a.texture / 100.0f, -1.0f, 1.0f);
