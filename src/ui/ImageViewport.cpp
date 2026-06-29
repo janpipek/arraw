@@ -270,14 +270,21 @@ void ImageViewport::render(QRhiCommandBuffer* cb) {
 }
 
 void ImageViewport::setActiveLocalAdjustment(int index) {
+    if (index == activeLocalAdj) {
+        // Same mask re-synced (a slider commit / undo / redo re-applies the list).
+        // Keep the overlay and cursor state so the O toggle and the slider-driven
+        // auto-hide survive the commit.
+        update();
+        return;
+    }
     activeLocalAdj = index;
-    // Abort any in-progress stroke and drop the brush cursor ring — switching the
-    // active mask (incl. on image change) must not carry brush state over.
+    // A genuine selection change: abort any in-progress stroke, drop the brush
+    // cursor, and show the newly selected mask's overlay.
     brushPainting = false;
     brushCoverage.clear();
     brushStrokeViewportPts.clear();
     brushCursorValid = false;
-    maskOverlayVisible = true; // a freshly selected mask shows its overlay
+    maskOverlayVisible = true;
     update();
 }
 
