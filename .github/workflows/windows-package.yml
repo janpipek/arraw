@@ -1,0 +1,125 @@
+name: Windows Package
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: windows-package-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  VCPKG_ROOT: C:\vcpkg
+  VCPKG_BINARY_SOURCES: clear;x-gha,readwrite
+  VCPKG_DEFAULT_TRIPLET: x64-windows
+  VCPKG_INSTALLED: C:\vcpkg\installed\x64-windows
+  VCPKG_TOOLCHAIN: C:\vcpkg\scripts\buildsystems\vcpkg.cmake
+  VCVARS: C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat
+
+jobs:
+  package:
+    name: Build portable ZIP
+    runs-on: windows-2022
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Cache vcpkg downloads
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+        with:
+          path: C:\vcpkg\downloads
+          key: vcpkg-downloads-windows-2022-${{ hashFiles('.github/workflows/windows-package.yml', 'CMakeLists.txt') }}
+          restore-keys: |
+            vcpkg-downloads-windows-2022-
+
+      - name: Export GitHub Actions cache settings for vcpkg
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      - name: Install Windows dependencies
+        shell: pwsh
+        run: |
+          & "$env:VCPKG_ROOT\vcpkg.exe" install `
+            qtbase qttools qtshadertools `
+            "libraw[openmp]" lcms lensfun exiv2 `
+            --triplet x64-windows
+
+      - name: Configure focused test build
+        shell: pwsh
+        run: |
+          cmake -S . -B build -G Ninja `
+            -DCMAKE_BUILD_TYPE=Debug `
+            "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_TOOLCHAIN" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows `
+            "-DARRAW_VCPKG_INSTALLED=$env:VCPKG_INSTALLED" `
+            -DARRAW_WITH_LENSFUN=ON
+
+      - name: Build focused test binary
+        shell: pwsh
+        run: cmake --build build --target arraw_tests
+
+      - name: Run lensfun tests
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: .\build\tests\arraw_tests.exe "[lensfun]"
+
+      - name: Build portable Windows ZIP
+        shell: pwsh
+        run: |
+          python tools/package_windows.py `
+            --vcvars "$env:VCVARS" `
+            --toolchain "$env:VCPKG_TOOLCHAIN" `
+            --vcpkg-installed "$env:VCPKG_INSTALLED"
+
+      - name: Sanity-check packaged tree
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          $stage = Get-ChildItem -Path build-release\_package -Directory -Filter "arraw-*-windows-x64" |
+            Select-Object -First 1
+          if (-not $stage) {
+            throw "Packaged staging directory was not found"
+          }
+
+          $exe = Join-Path $stage.FullName "arraw.exe"
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
+            throw "arraw.exe is missing from the package"
+          }
+
+          $lensfunDll = Join-Path $stage.FullName "lensfun.dll"
+          if (-not (Test-Path -LiteralPath $lensfunDll -PathType Leaf)) {
+            throw "lensfun.dll is missing from the package"
+          }
+
+          $lensfunXml = Get-ChildItem -Path (Join-Path $stage.FullName "lensfun\db") -Filter "*.xml" -File -ErrorAction SilentlyContinue
+          if (-not $lensfunXml) {
+            throw "lensfun database XML files are missing from the package"
+          }
+
+          & $exe --version
+          if ($LASTEXITCODE -ne 0) {
+            throw "arraw.exe --version failed with exit code $LASTEXITCODE"
+          }
+
+          $zip = Get-ChildItem -Path dist -File -Filter "arraw-*-windows-x64.zip" | Select-Object -First 1
+          if (-not $zip) {
+            throw "Portable ZIP was not created"
+          }
+
+      - name: Upload portable ZIP
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-portable-zip
+          path: dist/arraw-*-windows-x64.zip
+          if-no-files-found: error
