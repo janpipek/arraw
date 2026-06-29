@@ -328,6 +328,7 @@ private:
         int height = 0;
         std::vector<QByteArray> layers; // per local-adjustment R8 bytes (zero = unpainted/non-brush)
     };
+
     PendingBrushMasks pendingBrushMasks;
     bool brushMasksDirty = false;
     std::vector<const void*> brushMaskSource;

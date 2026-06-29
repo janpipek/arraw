@@ -426,6 +426,11 @@ MainWindow::MainWindow(QWidget* parent)
         &ImageViewport::localMaskEditFinished,
         localPanel,
         &LocalAdjustmentPanel::commitMaskEdit);
+    connect(
+        localPanel,
+        &LocalAdjustmentPanel::brushSettingsChanged,
+        viewport,
+        &ImageViewport::setBrushSettings);
 
     // Spot-removal: live drag rebuilds preview only; commit on mouse-release.
     connect(spotPanel, &SpotRemovalPanel::changed, this, [this](const std::vector<Spot>& spots) {

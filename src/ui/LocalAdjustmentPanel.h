@@ -43,6 +43,7 @@ public:
 public slots:
     void addLinearMask();
     void addRadialMask();
+    void addBrushMask();
     void deleteActive();
     // Commit a finished on-image drag as one undo step (called on mouse release).
     void commitMaskEdit();
@@ -53,6 +54,9 @@ signals:
         const std::vector<LocalAdjustment>& before, // one undo step
         const std::vector<LocalAdjustment>& after);
     void activeIndexChanged(int index);
+    // Brush tool settings (docs/adr/0047): radius as a fraction of the buffer long
+    // edge, feather/flow 0..1, and the Add/Erase mode. Tool state, not per-mask.
+    void brushSettingsChanged(double radiusFraction, double feather, double flow, bool erase);
 
 private:
     struct SliderRow {
@@ -69,6 +73,7 @@ private:
     void syncActiveGeometry(); // geometry fields -> active mask
     void setSlidersEnabled(bool on);
     void commit();
+    void emitBrushSettings(); // push the brush page values to the viewport
     LocalAdjustment* active();
 
     QListWidget* maskList;
@@ -80,6 +85,11 @@ private:
     std::array<QDoubleSpinBox*, 4> linSpins; // Linear: p0.x, p0.y, p1.x, p1.y
     std::array<QDoubleSpinBox*, 6> radSpins; // Radial: cx, cy, rx, ry, angle, feather
     QCheckBox* radInvert;
+    // Brush page (docs/adr/0047): tool settings shown when a Brush mask is active.
+    QSlider* brushSizeSlider;
+    QSlider* brushFeatherSlider;
+    QSlider* brushFlowSlider;
+    QCheckBox* brushErase;
 
     std::vector<LocalAdjustment> adjustments;
     std::vector<LocalAdjustment> committedState; // undo baseline

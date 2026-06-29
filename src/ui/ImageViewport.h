@@ -92,6 +92,10 @@ public:
     // Driven by the Masks panel selection.
     void setActiveLocalAdjustment(int index);
 
+    // Brush controls from the Masks panel (docs/adr/0047): radius as a fraction of
+    // the buffer long edge, feather/flow 0..1, and the Add/Erase mode.
+    void setBrushSettings(double radiusFraction, double feather, double flow, bool erase);
+
     // Spot-tool overlay: set the list the viewport draws and hit-tests.
     // Does not rebuild the spotted image buffer — that is MainWindow's job.
     void setSpots(const std::vector<Spot>& spots);
@@ -229,6 +233,16 @@ private:
 
     const LinearMask* activeLinearMask() const;
     const RadialMask* activeRadialMask() const;
+    const BrushMask* activeBrushMask() const;
+
+    // Brush painting (docs/adr/0047): the raster is built in buffer UV space and
+    // sampled at vUV, so a stroke stays glued to the image pixels. A stroke stamps
+    // onto a copy captured at press, re-stamping the whole path per move so the
+    // within-stroke max accumulation and live preview are correct.
+    QSize brushRasterSize() const; // from nativeImageAspect + kBrushRasterLongEdge
+    void beginBrushStroke(QPointF viewportPos);
+    void extendBrushStroke(QPointF viewportPos);
+    void drawBrushCursor(QPainter& p) const;
     QPointF localHandleViewport(LinearHandle h) const; // p0/p1/center → screen
     LinearHandle hitTestLocalMask(QPointF viewportPos) const;
     RadialHandle hitTestRadialMask(QPointF viewportPos) const;
@@ -326,6 +340,19 @@ private:
     int activeLocalAdj = -1;
     LinearHandle localDragHandle = LinearHandle::None;
     RadialHandle radialDragHandle = RadialHandle::None;
+
+    // Brush-mask painting state (docs/adr/0047). Radius/feather/flow/erase mirror
+    // the panel's brush controls; radius is a fraction of the buffer long edge.
+    static constexpr int kBrushRasterLongEdge = 2048;
+    double brushRadiusFraction = 0.06;
+    double brushFeather = 0.5;
+    double brushFlow = 0.5;
+    bool brushErase = false;
+    bool brushPainting = false;
+    BrushRaster brushStrokeBase;          // raster captured at stroke start
+    std::vector<QPointF> brushStrokePath; // dab centres in raster pixels
+    QPointF brushCursorPos;               // last cursor (viewport px) for the size ring
+    bool brushCursorValid = false;
 
     // SpotTool state.
     std::vector<Spot> spots;
