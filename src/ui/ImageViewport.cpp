@@ -1,10 +1,10 @@
+#include "ui/ImageViewport.h"
 #include "core/Orientation.h"
+#include "develop/GlobalAdjustment.h"
 #include "develop/LocalAdjustment.h"
 #include "develop/Spot.h"
-#include "ui/ImageViewport.h"
-#include "pipeline/ImagePipeline.h"
 #include "develop/WhiteBalance.h"
-#include "develop/GlobalAdjustment.h"
+#include "pipeline/ImagePipeline.h"
 #include <algorithm>
 #include <cmath>
 #include <variant>
@@ -84,6 +84,8 @@ ImageViewport::ImageViewport(QWidget* parent)
     connect(&nrTimer, &QTimer::timeout, this, [this] {
         nrStrengthEffective = params.colorNoiseReduction;
         nrSmoothnessEffective = params.colorNoiseReductionSmoothness;
+        nrLumaAmountEffective = params.luminanceNoiseReduction;
+        nrLumaDetailEffective = params.luminanceNoiseReductionDetail;
         update();
     });
 }
@@ -218,6 +220,8 @@ void ImageViewport::render(QRhiCommandBuffer* cb) {
     if (!showOriginal) {
         fp.adjustments.colorNoiseReduction = nrStrengthEffective;
         fp.adjustments.colorNoiseReductionSmoothness = nrSmoothnessEffective;
+        fp.adjustments.luminanceNoiseReduction = nrLumaAmountEffective;
+        fp.adjustments.luminanceNoiseReductionDetail = nrLumaDetailEffective;
     }
 
     core.record(cb, renderTarget(), activeSlot(), fp);
@@ -737,7 +741,9 @@ void ImageViewport::setAdjustments(const GlobalAdjustment& p) {
     // until the slider settles (nrTimer). render() keeps using the effective
     // values meanwhile. Either control restarts the timer (issue #59).
     if (p.colorNoiseReduction != params.colorNoiseReduction
-        || p.colorNoiseReductionSmoothness != params.colorNoiseReductionSmoothness)
+        || p.colorNoiseReductionSmoothness != params.colorNoiseReductionSmoothness
+        || p.luminanceNoiseReduction != params.luminanceNoiseReduction
+        || p.luminanceNoiseReductionDetail != params.luminanceNoiseReductionDetail)
         nrTimer.start();
     params = p;
     updateImageAspect(); // orientation may have changed
@@ -1130,6 +1136,8 @@ RendererCore::FrameParams ImageViewport::histogramFrameParams(int& outW, int& ou
     // than forcing a recompute for the live slider value mid-frame.
     fp.adjustments.colorNoiseReduction = nrStrengthEffective;
     fp.adjustments.colorNoiseReductionSmoothness = nrSmoothnessEffective;
+    fp.adjustments.luminanceNoiseReduction = nrLumaAmountEffective;
+    fp.adjustments.luminanceNoiseReductionDetail = nrLumaDetailEffective;
     return fp;
 }
 

@@ -84,22 +84,27 @@ static_assert(offsetof(Ubuf, textureAmount) == 1624);
 static_assert(offsetof(Ubuf, clarity) == 1628);
 static_assert(offsetof(Ubuf, dehaze) == 1632);
 
-// std140 mirror of the `nrbuf` block in shaders/nr.vert and nr_blur_*.frag — the
-// Colour Noise Reduction pre-pass uniform (docs/adr/0034). Constant for a whole
-// frame (direction is hardcoded per blur shader), so all NR passes share it.
+// std140 mirror of the `nrbuf` block in shaders/nr.vert and the NR fragment shaders
+// — the unified Noise Reduction pre-pass uniform (docs/adr/0034, 0046). Filled twice
+// per frame into two buffers: a chroma-context buffer (quarter-res blur + recombine)
+// and a luma-context buffer (full-res bilateral), so invChroma/sigma/radius carry
+// that buffer's values.
 struct NrUbuf {
     float clipCorr[16]; // QRhi::clipSpaceCorrMatrix(), column-major
-    float invChroma[2]; // 1 / quarter-res chroma size
-    float sigma;        // Gaussian sigma in quarter-res pixels
+    float invChroma[2]; // 1 / this buffer's blur-target size
+    float sigma;        // spatial Gaussian sigma in that target's pixels
     qint32 radius;      // tap radius (capped at 64, matching the shader)
     qint32 flipV;       // 1 on a Y-up framebuffer (OpenGL): mirror the sampled V so
                         // the rendered NR targets keep the uploaded image's orientation
-    float strength;     // recombine blend factor 0..1 (Strength); read only by nr_recombine
-    qint32 pad_[2];     // std140 pads the block to a 16-byte multiple
+    float strength;     // chroma recombine blend 0..1 (Strength); read by nr_recombine
+    float rangeSigma;   // bilateral range sigma, perceptual; read by lum_bilateral_*
+    float amount;       // luma recombine blend 0..1 (Amount); read by nr_recombine
 };
 
 static_assert(sizeof(NrUbuf) == 96);
 static_assert(offsetof(NrUbuf, strength) == 84);
+static_assert(offsetof(NrUbuf, rangeSigma) == 88);
+static_assert(offsetof(NrUbuf, amount) == 92);
 
 // The one place the shader pipeline is recorded (ADR 0006): the widget's
 // on-screen pass, the export render, and the histogram samples all go
@@ -259,7 +264,13 @@ private:
     // denoises chroma into denoisedTex; the main pass then samples that instead of
     // the raw slot. Returns the texture the main pass should sample.
     QRhiTexture* ensureDenoised(
-        QRhiCommandBuffer* cb, int key, QRhiTexture* rawTex, float smoothness, float strength);
+        QRhiCommandBuffer* cb,
+        int key,
+        QRhiTexture* rawTex,
+        float smoothness,
+        float strength,
+        float lumaAmount,
+        float lumaDetail);
     void ensureNrResources();
     void ensureNrSlot(int key, QSize fullSize);
     void nrPass(
@@ -314,15 +325,19 @@ private:
     DisplayLut pendingDisplayLut;
     bool displayLutDirty = false;
 
-    // ── Colour Noise Reduction GPU resources (docs/adr/0034) ─────────────────
+    // ── Noise Reduction GPU resources (docs/adr/0034, 0046) ──────────────────
     QShader nrVs, nrExtractFs, nrBlurHFs, nrBlurVFs, nrRecombineFs;
-    std::unique_ptr<QRhiBuffer> nrUbuf;
+    QShader nrBilateralHFs, nrBilateralVFs; // luma bilateral (docs/adr/0046)
+    std::unique_ptr<QRhiBuffer> nrUbuf;     // chroma-context buffer (blur + recombine)
+    std::unique_ptr<QRhiBuffer> nrLumaUbuf; // luma-context buffer (bilateral)
     std::unique_ptr<QRhiBuffer> spatialUbuf;
     std::unique_ptr<QRhiGraphicsPipeline> nrPipeExtract, nrPipeBlurH, nrPipeBlurV, nrPipeRecombine;
-    // Rebuilt each time the pre-pass runs (only on amount/texture change), kept as
+    std::unique_ptr<QRhiGraphicsPipeline> nrPipeBilateralH, nrPipeBilateralV;
+    // Rebuilt each time the pre-pass runs (only on param/texture change), kept as
     // members so they outlive command-buffer submission.
     std::unique_ptr<QRhiShaderResourceBindings> nrSrbExtract, nrSrbBlurH, nrSrbBlurV,
         nrSrbRecombine;
+    std::unique_ptr<QRhiShaderResourceBindings> nrSrbBilateralH, nrSrbBilateralV;
     // One stable RGBA32F render-pass descriptor shared by every NR target and
     // pipeline, so pipelines never dangle when a slot's textures are resized.
     std::unique_ptr<QRhiRenderPassDescriptor> nrRpDesc;
@@ -330,9 +345,13 @@ private:
     struct NrSlot {
         std::unique_ptr<QRhiTexture> chromaA, chromaB, denoised; // chroma ¼-res; denoised full-res
         std::unique_ptr<QRhiTextureRenderTarget> chromaART, chromaBRT, denoisedRT;
+        std::unique_ptr<QRhiTexture> lumaA, lumaB; // bilateral ping-pong, full-res (docs/adr/0046)
+        std::unique_ptr<QRhiTextureRenderTarget> lumaART, lumaBRT;
         QSize fullSize;
         float smoothness = -1.0f; // Smoothness the cached denoised texture was built for
         float strength = -1.0f;   // Strength it was built for (issue #59)
+        float lumaAmount = -1.0f; // Amount it was built for (docs/adr/0046)
+        float lumaDetail = -1.0f; // Detail it was built for
         int gen = -1;             // texture generation it was built against
     };
 

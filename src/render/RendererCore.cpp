@@ -62,6 +62,8 @@ void RendererCore::initialize(QRhi* r) {
     nrBlurHFs = loadShader(QStringLiteral(":/shaders/nr_blur_h.frag.qsb"));
     nrBlurVFs = loadShader(QStringLiteral(":/shaders/nr_blur_v.frag.qsb"));
     nrRecombineFs = loadShader(QStringLiteral(":/shaders/nr_recombine.frag.qsb"));
+    nrBilateralHFs = loadShader(QStringLiteral(":/shaders/lum_bilateral_h.frag.qsb"));
+    nrBilateralVFs = loadShader(QStringLiteral(":/shaders/lum_bilateral_v.frag.qsb"));
 
     vbuf.reset(rhi->newBuffer(QRhiBuffer::Immutable, QRhiBuffer::VertexBuffer, sizeof(kQuad)));
     vbuf->create();
@@ -72,6 +74,9 @@ void RendererCore::initialize(QRhi* r) {
 
     nrUbuf.reset(rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, sizeof(NrUbuf)));
     nrUbuf->create();
+
+    nrLumaUbuf.reset(rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, sizeof(NrUbuf)));
+    nrLumaUbuf->create();
 
     spatialUbuf.reset(
         rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, sizeof(NrUbuf)));
@@ -130,10 +135,14 @@ void RendererCore::release() {
     nrPipeExtract.reset();
     nrPipeBlurH.reset();
     nrPipeBlurV.reset();
+    nrPipeBilateralH.reset();
+    nrPipeBilateralV.reset();
     nrPipeRecombine.reset();
     nrSrbExtract.reset();
     nrSrbBlurH.reset();
     nrSrbBlurV.reset();
+    nrSrbBilateralH.reset();
+    nrSrbBilateralV.reset();
     nrSrbRecombine.reset();
     spatialPipeExtract.reset();
     spatialPipeBlurH.reset();
@@ -145,6 +154,7 @@ void RendererCore::release() {
     spatialSrbBlurHTex = nullptr;
     spatialSrbBlurVTex = nullptr;
     nrUbuf.reset();
+    nrLumaUbuf.reset();
     spatialUbuf.reset();
     for (NrSlot& s : nrSlot)
         s = NrSlot{};
@@ -669,8 +679,15 @@ void RendererCore::ensureNrSlot(int key, QSize fullSize) {
     make(ns.chromaA, ns.chromaART, quarter);
     make(ns.chromaB, ns.chromaBRT, quarter);
     make(ns.denoised, ns.denoisedRT, fullSize);
+    // Luma bilateral ping-pong runs at the slot's native (full) resolution, since
+    // luminance noise is high-frequency and the quarter-res reduction would average
+    // it away before filtering (docs/adr/0046).
+    make(ns.lumaA, ns.lumaART, fullSize);
+    make(ns.lumaB, ns.lumaBRT, fullSize);
     ns.smoothness = -1.0f; // textures changed → force a re-run
     ns.strength = -1.0f;
+    ns.lumaAmount = -1.0f;
+    ns.lumaDetail = -1.0f;
     ns.gen = generation;
 }
 
@@ -692,32 +709,51 @@ void RendererCore::nrPass(
 }
 
 QRhiTexture* RendererCore::ensureDenoised(
-    QRhiCommandBuffer* cb, int key, QRhiTexture* rawTex, float smoothness, float strength) {
+    QRhiCommandBuffer* cb,
+    int key,
+    QRhiTexture* rawTex,
+    float smoothness,
+    float strength,
+    float lumaAmount,
+    float lumaDetail) {
     ensureNrResources();
     ensureNrSlot(key, rawTex->pixelSize());
     NrSlot& ns = nrSlot[key];
 
-    if (ns.smoothness == smoothness && ns.strength == strength && ns.gen == generation)
+    if (ns.smoothness == smoothness && ns.strength == strength && ns.lumaAmount == lumaAmount
+        && ns.lumaDetail == lumaDetail && ns.gen == generation)
         return ns.denoised.get(); // cached — reused for pan/zoom/other edits, no work
     ns.smoothness = smoothness;
     ns.strength = strength;
+    ns.lumaAmount = lumaAmount;
+    ns.lumaDetail = lumaDetail;
 
-    // SRBs point at the live textures; rebuilt each run (only on amount/texture
-    // change), kept as members so they outlive command-buffer submission.
-    auto bindUbufTex = [&](std::unique_ptr<QRhiShaderResourceBindings>& dst, QRhiTexture* t) {
+    const bool chroma = colorNoiseReductionActive(strength, smoothness);
+    const bool luma = luminanceNoiseReductionActive(lumaAmount);
+
+    // SRBs point at the live textures; rebuilt each run (only on param/texture
+    // change), kept as members so they outlive command-buffer submission. The blur
+    // legs read the chroma-context buffer, the bilateral legs the luma-context one.
+    auto bindUbufTex = [&](std::unique_ptr<QRhiShaderResourceBindings>& dst,
+                           QRhiBuffer* ub,
+                           QRhiTexture* t) {
         dst.reset(rhi->newShaderResourceBindings());
         dst->setBindings(
             {QRhiShaderResourceBinding::uniformBuffer(
                  0,
                  QRhiShaderResourceBinding::VertexStage | QRhiShaderResourceBinding::FragmentStage,
-                 nrUbuf.get()),
+                 ub),
              QRhiShaderResourceBinding::sampledTexture(
                  1, QRhiShaderResourceBinding::FragmentStage, t, sampler.get())});
         dst->create();
     };
-    bindUbufTex(nrSrbExtract, rawTex);
-    bindUbufTex(nrSrbBlurH, ns.chromaA.get());
-    bindUbufTex(nrSrbBlurV, ns.chromaB.get());
+    bindUbufTex(nrSrbExtract, nrUbuf.get(), rawTex);
+    bindUbufTex(nrSrbBlurH, nrUbuf.get(), ns.chromaA.get());
+    bindUbufTex(nrSrbBlurV, nrUbuf.get(), ns.chromaB.get());
+    bindUbufTex(nrSrbBilateralH, nrLumaUbuf.get(), rawTex); // raw → Y, blurred to lumaA
+    bindUbufTex(nrSrbBilateralV, nrLumaUbuf.get(), ns.lumaA.get());
+    // Recombine reads raw + the blurred chroma ratio (chromaA) + the bilateral luma
+    // (lumaB), and blends each half by its weight (docs/adr/0046).
     nrSrbRecombine.reset(rhi->newShaderResourceBindings());
     nrSrbRecombine->setBindings(
         {QRhiShaderResourceBinding::uniformBuffer(
@@ -727,7 +763,9 @@ QRhiTexture* RendererCore::ensureDenoised(
          QRhiShaderResourceBinding::sampledTexture(
              1, QRhiShaderResourceBinding::FragmentStage, rawTex, sampler.get()),
          QRhiShaderResourceBinding::sampledTexture(
-             2, QRhiShaderResourceBinding::FragmentStage, ns.chromaA.get(), sampler.get())});
+             2, QRhiShaderResourceBinding::FragmentStage, ns.chromaA.get(), sampler.get()),
+         QRhiShaderResourceBinding::sampledTexture(
+             3, QRhiShaderResourceBinding::FragmentStage, ns.lumaB.get(), sampler.get())});
     nrSrbRecombine->create();
 
     if (!nrPipeExtract) {
@@ -752,39 +790,68 @@ QRhiTexture* RendererCore::ensureDenoised(
         makePipe(nrPipeExtract, nrExtractFs, nrSrbExtract.get());
         makePipe(nrPipeBlurH, nrBlurHFs, nrSrbBlurH.get());
         makePipe(nrPipeBlurV, nrBlurVFs, nrSrbBlurV.get());
+        makePipe(nrPipeBilateralH, nrBilateralHFs, nrSrbBilateralH.get());
+        makePipe(nrPipeBilateralV, nrBilateralVFs, nrSrbBilateralV.get());
         makePipe(nrPipeRecombine, nrRecombineFs, nrSrbRecombine.get());
     }
 
-    // Smoothness drives the sigma (calibrated in full-res pixels; the blur runs on
-    // quarter-res chroma); Strength drives the recombine blend (issue #59).
+    const QMatrix4x4 cc = rhi->clipSpaceCorrMatrix();
+    // On a Y-up framebuffer (OpenGL) the rendered NR targets are V-flipped vs the
+    // uploaded image texture; the vertex shader mirrors the sampled V to cancel it.
+    const qint32 flipV = rhi->isYUpInFramebuffer() ? 1 : 0;
+
+    // Chroma-context buffer: drives the quarter-res blur and carries both recombine
+    // blends (Strength and Amount), which the recombine pass reads from it.
     const float sigmaQuarter = colorNoiseReductionSigmaPx(smoothness) / 4.0f;
     NrUbuf nb{};
-    const QMatrix4x4 cc = rhi->clipSpaceCorrMatrix();
     std::memcpy(nb.clipCorr, cc.constData(), sizeof(nb.clipCorr));
     nb.invChroma[0] = 1.0f / float(ns.chromaA->pixelSize().width());
     nb.invChroma[1] = 1.0f / float(ns.chromaA->pixelSize().height());
     nb.sigma = sigmaQuarter;
     nb.radius = std::clamp(int(std::ceil(3.0f * sigmaQuarter)), 1, 64);
-    nb.strength = colorNoiseReductionStrengthMix(strength);
-    // On a Y-up framebuffer (OpenGL) the rendered NR targets are V-flipped vs the
-    // uploaded image texture; the vertex shader mirrors the sampled V to cancel it.
-    nb.flipV = rhi->isYUpInFramebuffer() ? 1 : 0;
-
+    nb.flipV = flipV;
+    nb.strength = chroma ? colorNoiseReductionStrengthMix(strength) : 0.0f;
+    nb.amount = luma ? luminanceNoiseReductionAmountMix(lumaAmount) : 0.0f;
     QRhiResourceUpdateBatch* b = rhi->nextResourceUpdateBatch();
     b->updateDynamicBuffer(nrUbuf.get(), 0, sizeof(NrUbuf), &nb);
 
-    nrPass(cb, ns.chromaART.get(), nrPipeExtract.get(), nrSrbExtract.get(), b);   // raw → chroma A
-    nrPass(cb, ns.chromaBRT.get(), nrPipeBlurH.get(), nrSrbBlurH.get(), nullptr); // A → B (H)
-    nrPass(cb, ns.chromaART.get(), nrPipeBlurV.get(), nrSrbBlurV.get(), nullptr); // B → A (V)
-    nrPass(cb, ns.denoisedRT.get(), nrPipeRecombine.get(), nrSrbRecombine.get(), nullptr); // → full
+    if (chroma) {
+        nrPass(cb, ns.chromaART.get(), nrPipeExtract.get(), nrSrbExtract.get(), b); // raw → A
+        b = nullptr;
+        nrPass(cb, ns.chromaBRT.get(), nrPipeBlurH.get(), nrSrbBlurH.get(), nullptr); // A → B (H)
+        nrPass(cb, ns.chromaART.get(), nrPipeBlurV.get(), nrSrbBlurV.get(), nullptr); // B → A (V)
+    }
+
+    if (luma) {
+        // Luma-context buffer: bilateral over full-res Y. Spatial sigma is the fixed
+        // reach in full-res px, halved on the half-res Preview slot ([0]); Detail
+        // drives the perceptual range sigma (docs/adr/0046).
+        const float spatialSigma = kLuminanceNoiseReductionSpatialSigmaPx
+                                   * (key == 0 ? 0.5f : 1.0f);
+        NrUbuf lb{};
+        std::memcpy(lb.clipCorr, cc.constData(), sizeof(lb.clipCorr));
+        lb.invChroma[0] = 1.0f / float(ns.lumaA->pixelSize().width());
+        lb.invChroma[1] = 1.0f / float(ns.lumaA->pixelSize().height());
+        lb.sigma = spatialSigma;
+        lb.radius = std::clamp(int(std::ceil(3.0f * spatialSigma)), 1, 64);
+        lb.flipV = flipV;
+        lb.rangeSigma = luminanceNoiseReductionRangeSigma(lumaDetail);
+        QRhiResourceUpdateBatch* lbatch = rhi->nextResourceUpdateBatch();
+        lbatch->updateDynamicBuffer(nrLumaUbuf.get(), 0, sizeof(NrUbuf), &lb);
+        nrPass(cb, ns.lumaART.get(), nrPipeBilateralH.get(), nrSrbBilateralH.get(), lbatch);
+        nrPass(cb, ns.lumaBRT.get(), nrPipeBilateralV.get(), nrSrbBilateralV.get(), nullptr);
+    }
+
+    nrPass(cb, ns.denoisedRT.get(), nrPipeRecombine.get(), nrSrbRecombine.get(), b); // → full
     return ns.denoised.get();
 }
 
 // Colour NR is an exact no-op (the pre-pass is skipped, the main pass samples the
-// raw slot) unless both controls are positive: Strength 0 blends nothing back, and
-// Smoothness 0 is a zero-sigma identity blur (issue #59).
+// raw slot) unless at least one half is active. The activation rules are
+// single-sourced in NoiseReduction.h so the renderer and tests agree (docs/adr/0046).
 static bool nrActive(const GlobalAdjustment& a) {
-    return a.colorNoiseReduction > 0.0f && a.colorNoiseReductionSmoothness > 0.0f;
+    return colorNoiseReductionActive(a.colorNoiseReduction, a.colorNoiseReductionSmoothness)
+           || luminanceNoiseReductionActive(a.luminanceNoiseReduction);
 }
 
 static bool spatialContextActive(const GlobalAdjustment& a) {
@@ -906,7 +973,9 @@ void RendererCore::record(
             slotIndex,
             tex,
             fp.adjustments.colorNoiseReductionSmoothness,
-            fp.adjustments.colorNoiseReduction);
+            fp.adjustments.colorNoiseReduction,
+            fp.adjustments.luminanceNoiseReduction,
+            fp.adjustments.luminanceNoiseReductionDetail);
         batch = rhi->nextResourceUpdateBatch(); // fresh batch for the main pass
     }
     if (spatialContextActive(fp.adjustments)) {
@@ -982,7 +1051,9 @@ QImage RendererCore::renderOffscreenTex(
             nrKey,
             tex,
             fp.adjustments.colorNoiseReductionSmoothness,
-            fp.adjustments.colorNoiseReduction);
+            fp.adjustments.colorNoiseReduction,
+            fp.adjustments.luminanceNoiseReduction,
+            fp.adjustments.luminanceNoiseReductionDetail);
         batch = rhi->nextResourceUpdateBatch();
     }
     if (spatialContextActive(fp.adjustments)) {
@@ -1086,7 +1157,9 @@ bool RendererCore::recordOffscreenReadback(
             slotIndex,
             tex,
             fp.adjustments.colorNoiseReductionSmoothness,
-            fp.adjustments.colorNoiseReduction);
+            fp.adjustments.colorNoiseReduction,
+            fp.adjustments.luminanceNoiseReduction,
+            fp.adjustments.luminanceNoiseReductionDetail);
         batch = rhi->nextResourceUpdateBatch();
     }
     if (spatialContextActive(fp.adjustments)) {

@@ -1,13 +1,13 @@
 #pragma once
-#include "core/Orientation.h"
-#include "develop/LocalAdjustment.h"
-#include "pipeline/ColorManagement.h"
 #include "core/CropGeometry.h"
 #include "core/ImageBuffer.h"
+#include "core/Orientation.h"
 #include "develop/GlobalAdjustment.h"
+#include "develop/LocalAdjustment.h"
+#include "develop/Spot.h"
+#include "pipeline/ColorManagement.h"
 #include "render/PendingHistogram.h"
 #include "render/RendererCore.h"
-#include "develop/Spot.h"
 #include "render/ViewportGeometry.h"
 #include <QImage>
 #include <QPointF>
@@ -300,15 +300,18 @@ private:
     quint64 histoGen = 0;
     PendingHistogramPair pendingHisto;
 
-    // The Colour Noise Reduction pre-pass is the one expensive GPU stage, so it
-    // is debounced: render() always denoises for the effective (Smoothness,
-    // Strength) pair (kept in the RendererCore cache), and nrTimer promotes the
-    // live slider values to them only once a slider has been still ~200ms. Both
-    // controls debounce, since either reruns the four passes (issue #59).
-    // Export/full-res paths bypass this and always use the committed values.
+    // The Noise Reduction pre-pass is the one expensive GPU stage, so it is
+    // debounced: render() always denoises for the effective parameter set (kept in
+    // the RendererCore cache), and nrTimer promotes the live slider values to them
+    // only once a slider has been still ~200ms. Every NR control debounces, since
+    // any reruns the pre-pass passes (issue #59; luma added in docs/adr/0046; the
+    // full-res bilateral is the most expensive stage). Export/full-res paths bypass
+    // this and always use the committed values.
     QTimer nrTimer;
     float nrStrengthEffective = 0.0f;
     float nrSmoothnessEffective = 50.0f;
+    float nrLumaAmountEffective = 0.0f;
+    float nrLumaDetailEffective = 50.0f;
 
     // ── View state ────────────────────────────────────────────────────────
     float zoom = 1.0f;

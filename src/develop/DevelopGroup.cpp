@@ -98,6 +98,8 @@ GlobalAdjustment applyGroups(
         result.sharpening = source.sharpening;
         result.colorNoiseReduction = source.colorNoiseReduction; // Strength (issue #59)
         result.colorNoiseReductionSmoothness = source.colorNoiseReductionSmoothness;
+        result.luminanceNoiseReduction = source.luminanceNoiseReduction; // Amount (docs/adr/0046)
+        result.luminanceNoiseReductionDetail = source.luminanceNoiseReductionDetail;
     }
     if (hasGroup(selection, DevelopGroup::Geometry)) {
         result.orientation = source.orientation;

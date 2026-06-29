@@ -1,27 +1,33 @@
 #version 440
-// Colour NR pre-pass 3: recombine at full resolution (docs/adr/0032, issue #59).
-// Takes the original full-res luma and the blurred quarter-res chroma (bilinearly
-// upsampled by the sampler), producing the denoised image the main pipeline samples
-// in place of the raw slot. Strength blends the denoised chroma back over the raw
-// colour. Luma is preserved exactly at any Strength (both the raw and blurred
-// ratios carry luma 1, so their mix does too); only colour is smoothed.
+// Unified Noise Reduction recombine, full resolution (docs/adr/0034, 0046). Builds
+// the denoised pixel from up to three inputs: the original colour, the blurred
+// quarter-res chroma ratio, and the bilateral-smoothed full-res luma. Reduces
+// exactly to the old chroma-only behaviour when Amount is 0, which guards the
+// colour-NR regression.
+//
+//   Yf = mix(Y,        Y',  amount)     // luma half: edge-aware-smoothed luma
+//   rf = mix(c/Y,      r',  strength)   // chroma half: smoothed chroma ratio
+//   out = Yf * rf
+//
+// Each half is sampled only when its weight is positive, so an inactive leg's
+// texture (which may be uninitialised) never poisons the result with NaNs.
 
 layout(location = 0) in vec2 vUV;
 layout(location = 0) out vec4 fragColor;
 
 layout(binding = 1) uniform sampler2D srcTex;    // full-res raw slot
 layout(binding = 2) uniform sampler2D chromaTex; // quarter-res blurred chroma ratio
+layout(binding = 3) uniform sampler2D lumaTex;   // full-res bilateral-smoothed luma (.r)
 
-// Shares the `nrbuf` prefix with nr.vert (std140); this stage additionally reads
-// the trailing `strength`, which the other passes don't declare. Std140 keeps the
-// shared members at the same offsets, so the buffer stays compatible.
 layout(std140, binding = 0) uniform nrbuf {
     mat4  clipCorr;
     vec2  invChroma;
     float sigma;
     int   radius;
     int   flipV;
-    float strength; // recombine blend factor 0..1 (Strength)
+    float strength;
+    float rangeSigma; // unused here; block must match nr.vert (std140)
+    float amount;
 } u;
 
 const vec3 kLuma = vec3(0.2627, 0.6780, 0.0593);
@@ -29,7 +35,17 @@ const vec3 kLuma = vec3(0.2627, 0.6780, 0.0593);
 void main() {
     vec3 c0 = texture(srcTex, vUV).rgb;
     float y = dot(c0, kLuma);
-    vec3 rb = texture(chromaTex, vUV).rgb; // bilinear upsample
-    // mix(c0, y*rb, strength): Strength 1 = fully denoised, 0 = untouched.
-    fragColor = vec4(mix(c0, y * rb, u.strength), 1.0);
+    vec3 ratio = y > 1e-6 ? c0 / y : vec3(1.0); // unit-luma chroma ratio
+
+    float yf = y;
+    if (u.amount > 0.0) {
+        float yDenoised = texture(lumaTex, vUV).r; // bilateral output
+        yf = mix(y, yDenoised, u.amount);
+    }
+    vec3 rf = ratio;
+    if (u.strength > 0.0) {
+        vec3 rb = texture(chromaTex, vUV).rgb; // bilinear upsample of blurred ratio
+        rf = mix(ratio, rb, u.strength);
+    }
+    fragColor = vec4(yf * rf, 1.0);
 }

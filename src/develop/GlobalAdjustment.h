@@ -67,6 +67,13 @@ struct GlobalAdjustment : SharedAdjustment {
     // Smoothness drives the Gaussian sigma (crs:ColorNoiseReductionSmoothness).
     float colorNoiseReduction = 0.0f;            // Strength, 0 .. 100
     float colorNoiseReductionSmoothness = 50.0f; // 0 .. 100
+    // Luminance Noise Reduction — the dual of chroma NR: an edge-aware bilateral
+    // smooths luma Y while preserving the chroma ratio (see NoiseReduction.h,
+    // docs/adr/0046). Amount is the blend opacity (crs:LuminanceSmoothing); Detail
+    // is the bilateral range-sigma / edge-protection threshold
+    // (crs:LuminanceNoiseReductionDetail).
+    float luminanceNoiseReduction = 0.0f;        // Amount, 0 .. 100
+    float luminanceNoiseReductionDetail = 50.0f; // 0 .. 100
 
     // Lens Corrections (docs/adr/0032). Profile-driven, apply-once CPU corrections.
     // Enable toggles only — the coefficients come from the lens profile

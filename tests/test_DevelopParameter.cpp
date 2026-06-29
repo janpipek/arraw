@@ -39,6 +39,8 @@ static GlobalAdjustment fullyEdited() {
     g.sharpening = 55.0f;
     g.colorNoiseReduction = 30.0f;
     g.colorNoiseReductionSmoothness = 70.0f;
+    g.luminanceNoiseReduction = 35.0f;
+    g.luminanceNoiseReductionDetail = 65.0f;
     g.lensCorrectDistortion = true;
     g.lensCorrectVignetting = true;
     g.lensCorrectCA = true;

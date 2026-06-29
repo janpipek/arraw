@@ -61,6 +61,8 @@ TEST_CASE("A Detail preset round-trips Colour Noise Reduction through JSON", "[p
     p.values.sharpening = 30.0f;
     p.values.colorNoiseReduction = 65.0f; // Strength
     p.values.colorNoiseReductionSmoothness = 80.0f;
+    p.values.luminanceNoiseReduction = 45.0f; // Amount
+    p.values.luminanceNoiseReductionDetail = 60.0f;
 
     bool ok = false;
     const DevelopPreset loaded = parseDevelopPreset(serializeDevelopPreset(p), &ok);
@@ -71,6 +73,8 @@ TEST_CASE("A Detail preset round-trips Colour Noise Reduction through JSON", "[p
     CHECK(loaded.values.dehaze == -12.0f);
     CHECK(loaded.values.colorNoiseReduction == 65.0f);
     CHECK(loaded.values.colorNoiseReductionSmoothness == 80.0f);
+    CHECK(loaded.values.luminanceNoiseReduction == 45.0f);
+    CHECK(loaded.values.luminanceNoiseReductionDetail == 60.0f);
     CHECK(loaded.values.sharpening == 30.0f);
 }
 

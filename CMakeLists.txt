@@ -309,6 +309,7 @@ qt6_add_shaders(arraw_core "arraw_shaders"
     FILES shaders/image.vert shaders/image.frag
           shaders/nr.vert shaders/nr_extract.frag
           shaders/nr_blur_h.frag shaders/nr_blur_v.frag shaders/nr_recombine.frag
+          shaders/lum_bilateral_h.frag shaders/lum_bilateral_v.frag
           shaders/spatial_extract.frag
 )
 
