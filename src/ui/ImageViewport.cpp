@@ -274,6 +274,7 @@ void ImageViewport::setActiveLocalAdjustment(int index) {
     // active mask (incl. on image change) must not carry brush state over.
     brushPainting = false;
     brushCoverage.clear();
+    brushStrokeViewportPts.clear();
     brushCursorValid = false;
     maskOverlayVisible = true; // a freshly selected mask shows its overlay
     update();
@@ -283,6 +284,13 @@ void ImageViewport::setMaskOverlayVisible(bool on) {
     if (maskOverlayVisible == on)
         return;
     maskOverlayVisible = on;
+    update();
+}
+
+void ImageViewport::toggleMaskOverlay() {
+    if (!localMaskMode())
+        return;
+    maskOverlayVisible = !maskOverlayVisible;
     update();
 }
 
@@ -423,14 +431,18 @@ void ImageViewport::beginBrushStroke(QPointF viewportPos) {
     brushLastPoint = brushRasterPoint(viewportPos);
     stampSegmentCoverage(
         brushCoverage, sz.width(), sz.height(), brushLastPoint, brushLastPoint, brushStrokeDab);
-    commitStrokeRaster();
+    brushStrokeViewportPts.clear();
+    brushStrokeViewportPts.push_back(viewportPos);
+    overlay->update(); // draw the stroke preview only; the real mask lands on release
 }
 
 void ImageViewport::extendBrushStroke(QPointF viewportPos) {
     if (!brushPainting || activeLocalAdj < 0)
         return;
-    // Stamp only the new segment into the running coverage — O(segment), so a long
-    // drag stays cheap and the preview keeps up (was an O(path) re-stamp per move).
+    // Accumulate coverage (cheap CPU) and grow the on-screen preview, but DON'T
+    // rebuild the mask texture or re-run the develop pipeline while drawing — the
+    // developed result is only needed once the stroke is finished (applied in
+    // mouseRelease via commitStrokeRaster).
     const QPointF pt = brushRasterPoint(viewportPos);
     stampSegmentCoverage(
         brushCoverage,
@@ -440,7 +452,32 @@ void ImageViewport::extendBrushStroke(QPointF viewportPos) {
         pt,
         brushStrokeDab);
     brushLastPoint = pt;
-    commitStrokeRaster();
+    brushStrokeViewportPts.push_back(viewportPos);
+    overlay->update(); // cheap QPainter preview, no GPU re-render
+}
+
+void ImageViewport::drawBrushStrokePreview(QPainter& p) const {
+    if (!brushPainting || brushStrokeViewportPts.empty())
+        return;
+    // Brush footprint in screen pixels (same mapping as the cursor ring), drawn as
+    // a translucent round-capped stroke along the path the cursor has travelled.
+    const double rBuf = brushRadiusFraction * std::max(originalWidth, originalHeight);
+    const QPointF c = viewportToBufferPixel(brushStrokeViewportPts.front());
+    const QPointF a = bufferPixelToViewport(c);
+    const QPointF b = bufferPixelToViewport({c.x() + rBuf, c.y()});
+    const double rScreen = std::hypot(b.x() - a.x(), b.y() - a.y());
+
+    const QColor col = brushErase ? QColor(90, 170, 255, 110) : QColor(255, 40, 40, 110);
+    p.setPen(QPen(col, rScreen * 2.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    p.setBrush(Qt::NoBrush);
+    if (brushStrokeViewportPts.size() == 1) {
+        p.drawPoint(brushStrokeViewportPts.front());
+    } else {
+        QPainterPath path(brushStrokeViewportPts.front());
+        for (size_t i = 1; i < brushStrokeViewportPts.size(); ++i)
+            path.lineTo(brushStrokeViewportPts[i]);
+        p.drawPath(path);
+    }
 }
 
 void ImageViewport::drawBrushCursor(QPainter& p) const {
@@ -519,9 +556,10 @@ void ImageViewport::paintOverlay(QPainter& p) const {
     if (cropMode()) {
         drawCropOverlay(p);
     } else if (localMaskMode()) {
-        if (activeBrushMask())
+        if (activeBrushMask()) {
+            drawBrushStrokePreview(p); // in-progress stroke (defers the develop update)
             drawBrushCursor(p);
-        else if (activeRadialMask())
+        } else if (activeRadialMask())
             drawRadialMaskOverlay(p);
         else
             drawLocalMaskOverlay(p);
@@ -1376,10 +1414,14 @@ void ImageViewport::mouseReleaseEvent(QMouseEvent* e) {
     }
     if (localMaskMode() && e->button() == Qt::LeftButton) {
         if (brushPainting) {
+            // Apply the finished stroke now — the single GPU render + texture
+            // upload for the whole stroke (docs/adr/0047).
             brushPainting = false;
+            commitStrokeRaster();
+            emit localMaskEditFinished(); // one undo step per stroke
             brushStrokeBase = {};
             brushCoverage.clear();
-            emit localMaskEditFinished(); // one undo step per stroke (docs/adr/0047)
+            brushStrokeViewportPts.clear();
             return;
         }
         const bool wasDragging = localDragHandle != LinearHandle::None
@@ -1414,14 +1456,6 @@ void ImageViewport::keyPressEvent(QKeyEvent* e) {
         break;
     case Qt::Key_C:
         setActiveTool(cropMode() ? ActiveTool::None : ActiveTool::Crop);
-        break;
-    case Qt::Key_O:
-        if (localMaskMode()) { // toggle the mask overlay (docs/adr/0047)
-            maskOverlayVisible = !maskOverlayVisible;
-            update();
-        } else {
-            QRhiWidget::keyPressEvent(e);
-        }
         break;
     case Qt::Key_Return:
     case Qt::Key_Enter:

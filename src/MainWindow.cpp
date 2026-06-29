@@ -813,6 +813,13 @@ void MainWindow::setupToolbar() {
         selectAdjustmentTab(spotsTabIndex);
     });
 
+    // Toggle the mask overlay (docs/adr/0047), window-scoped so it works whatever
+    // has focus — no-op unless the mask tool is active.
+    auto* maskOverlayShortcut = new QAction(this);
+    maskOverlayShortcut->setShortcut(Qt::Key_O);
+    addAction(maskOverlayShortcut);
+    connect(maskOverlayShortcut, &QAction::triggered, viewport, &ImageViewport::toggleMaskOverlay);
+
     // Coarse Orientation (docs/adr/0029). Momentary actions (not modal tools);
     // final home is beside the Rotation slider, but the toolbar gives a handle now.
     tb->addSeparator();
