@@ -1,5 +1,5 @@
 Name:           arraw
-Version:        0.2.4
+Version:        0.3.0
 Release:        %{?snapshot_release}%{!?snapshot_release:1}%{?dist}
 Summary:        Lightweight RAW photo editor
 
@@ -61,6 +61,16 @@ appstreamcli validate --no-net \
 %{_datadir}/icons/hicolor/*/apps/io.github.janpipek.arraw.png
 
 %changelog
+* Mon Jun 29 2026 Jan Pipek <janpipek@users.noreply.github.com> - 0.3.0-1
+- Add a Brush Mask type for painting local-adjustment masks on the image
+- Add a Black & White treatment with a hue-mixer monochrome conversion
+- Add edge-aware Luminance Noise Reduction with Amount and Detail controls
+- Add spatial detail controls for local contrast and structure
+- Add a mask overlay with an O toggle, default-on, with slider auto-hide
+- Pin local-adjustment masks to subject coordinates across crop and rotation
+- Add a Windows package build workflow for release ZIPs
+- Add a toggle for the History panel
+
 * Sun Jun 28 2026 Jan Pipek <janpipek@users.noreply.github.com> - 0.2.4-1
 - Add Oklab perceptual saturation and vibrance with filmic highlight roll-off (on by default)
 - Add rating and colour-label filtering to the film strip
