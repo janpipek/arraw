@@ -130,7 +130,8 @@ TEST_CASE("a brush mask round-trips through the sidecar as base64 PNG", "[xmp]")
     // Paint a small non-trivial raster and hang it on a local adjustment.
     const std::array<QPointF, 1> path{QPointF{20, 20}};
     auto raster = std::make_shared<const BrushRaster>(stampStroke(
-        BrushRaster{40, 40, std::vector<uint8_t>(40 * 40, 0)}, path,
+        BrushRaster{40, 40, std::vector<uint8_t>(40 * 40, 0)},
+        path,
         BrushDab{.radius = 15.0, .feather = 0.6, .flow = 0.9}));
 
     GlobalAdjustment p;
