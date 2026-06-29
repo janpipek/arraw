@@ -1491,6 +1491,15 @@ void ImageViewport::keyReleaseEvent(QKeyEvent* e) {
     }
 }
 
+void ImageViewport::leaveEvent(QEvent* e) {
+    // Drop the brush cursor ring when the pointer leaves the viewport.
+    if (brushCursorValid) {
+        brushCursorValid = false;
+        overlay->update();
+    }
+    QRhiWidget::leaveEvent(e);
+}
+
 // ── SpotTool ──────────────────────────────────────────────────────────────────
 
 void ImageViewport::setSpots(const std::vector<Spot>& spots) {

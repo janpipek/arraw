@@ -185,6 +185,7 @@ protected:
     void mouseReleaseEvent(QMouseEvent* e) override;
     void keyPressEvent(QKeyEvent* e) override;
     void keyReleaseEvent(QKeyEvent* e) override;
+    void leaveEvent(QEvent* e) override; // hide the brush cursor when the mouse exits
 
 private:
     friend class ViewportOverlay;
