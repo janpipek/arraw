@@ -61,8 +61,12 @@ layout(std140, binding = 0) uniform buf {
     int   orientMirrored;
     int   sensorClipWarn; // Sensor Clipping overlay from RAW mosaic samples
     float filmicHighlights; // 0..1: shoulder + path to white (docs/adr/0035); was pad0
+    float textureAmount; // -1..+1 fine-detail local contrast
+    float clarity;  // -1..+1 midtone local contrast
+    float dehaze;   // -1..+1 practical haze compensation
     int   pad1;
     int   pad2;
+    int   pad3;
 } u;
 
 layout(binding = 1) uniform sampler2D uTexture;
@@ -72,6 +76,7 @@ layout(binding = 3) uniform sampler3D uLut3D;      // display LUT (soft-proof / 
                                                    // RGB=display output, A=in-gamut flag
 layout(binding = 4) uniform sampler2D uToneLUT;    // 256×17: global + 16 Local Adjustments
 layout(binding = 5) uniform sampler2D uSensorClip; // RAW sensor clipping mask, same geometry as image
+layout(binding = 6) uniform sampler2D uSpatialContext; // blurred source luminance for spatial globals
 
 // Rec.2020 luma — the whole pipeline works in linear Rec.2020 (docs/adr/0001).
 // Must match kLumaR/G/B in src/ImagePipeline.h.
@@ -281,6 +286,66 @@ vec3 applyVibrance(vec3 c, float vibrance) {
     float weight = 0.2 / (0.2 + chroma);  // kVibranceHalf: muted -> 1, vivid -> small
     lab.yz *= 1.0 + vibrance * weight;
     return oklabToRgb(lab);
+}
+
+vec3 setLuma(vec3 c, float y2) {
+    float y = dot(c, kLuma);
+    y2 = max(y2, 0.0);
+    if (y <= 1e-5)
+        return vec3(y2);
+    return c * (y2 / y);
+}
+
+vec3 applyTexture(vec3 c, vec2 uv) {
+    if (abs(u.textureAmount) < 0.001)
+        return c;
+    vec2 texel = 1.0 / vec2(textureSize(uTexture, 0));
+    float center = dot(texture(uTexture, uv).rgb, kLuma);
+    float y = dot(c, kLuma);
+    vec2 r1 = texel * 2.0;
+    vec2 r2 = texel * 4.0;
+    float n = dot(texture(uTexture, uv + vec2( r1.x, 0.0)).rgb, kLuma);
+    float s = dot(texture(uTexture, uv + vec2(-r1.x, 0.0)).rgb, kLuma);
+    float e = dot(texture(uTexture, uv + vec2(0.0,  r1.y)).rgb, kLuma);
+    float w = dot(texture(uTexture, uv + vec2(0.0, -r1.y)).rgb, kLuma);
+    float ne = dot(texture(uTexture, uv + vec2( r2.x,  r2.y)).rgb, kLuma);
+    float nw = dot(texture(uTexture, uv + vec2(-r2.x,  r2.y)).rgb, kLuma);
+    float se = dot(texture(uTexture, uv + vec2( r2.x, -r2.y)).rgb, kLuma);
+    float sw = dot(texture(uTexture, uv + vec2(-r2.x, -r2.y)).rgb, kLuma);
+    float localMean = (n + s + e + w + 0.5 * (ne + nw + se + sw)) / 6.0;
+    float detail = center - localMean;
+    detail = detail / (1.0 + abs(detail) * 2.5); // restrain halos on hard edges
+    return setLuma(c, y + u.textureAmount * 1.8 * detail);
+}
+
+vec3 applyClarity(vec3 c, vec2 uv) {
+    if (abs(u.clarity) < 0.001)
+        return c;
+    float y = dot(c, kLuma);
+    float localMean = texture(uSpatialContext, uv).r;
+    float detail = y - localMean;
+    float mid = 1.0 - abs(clamp(y, 0.0, 1.0) * 2.0 - 1.0);
+    mid = smoothstep(0.0, 0.8, mid);
+    return setLuma(c, y + u.clarity * 0.85 * mid * detail);
+}
+
+vec3 applyDehaze(vec3 c, vec2 uv) {
+    if (abs(u.dehaze) < 0.001)
+        return c;
+    float y = dot(c, kLuma);
+    float localMean = texture(uSpatialContext, uv).r;
+    float detail = y - localMean;
+    float veil = smoothstep(0.05, 0.75, localMean) * (1.0 - smoothstep(0.75, 1.25, y));
+    float y2 = y + u.dehaze * (0.45 * detail - 0.08 * veil);
+    vec3 outc = setLuma(c, y2);
+    return applySaturation(outc, u.dehaze * 0.16);
+}
+
+vec3 applySpatialGlobals(vec3 c, vec2 uv) {
+    c = applyTexture(c, uv);
+    c = applyClarity(c, uv);
+    c = applyDehaze(c, uv);
+    return c;
 }
 
 // ── Highlight roll-off: shoulder + path to white (docs/adr/0035) ─────────────
@@ -498,7 +563,8 @@ vec3 applyLocalAdjustments(vec3 c, vec2 uv, float aspect) {
 // Processing order (the authoritative definition — DESIGN.md mirrors it).
 // Everything up to the final encode operates in linear Rec.2020:
 //   base look → Basic Tone LUT → tone curves
-//   → white balance (gain) → HSL → saturation → vibrance (Oklab) → local adjustments
+//   → white balance (gain) → HSL → saturation → vibrance (Oklab)
+//   → spatial global adjustments → local adjustments
 //   → vignette → grain → filmic highlights → display transform
 // Crop/rotation happen earlier in image.vert. For export, displayEncode is
 // 0: the offscreen readback stays in linear working space and the output
@@ -529,6 +595,7 @@ void main() {
         c = applyHsl(c);
     c = applySaturation(c, u.saturation);
     c = applyVibrance(c, u.vibrance);
+    c = applySpatialGlobals(c, vUV);
 
     // Local adjustments — analytic, single-pass, after the global colour section
     // and before encode (docs/adr/0010). Masks live in the cropped/rotated display

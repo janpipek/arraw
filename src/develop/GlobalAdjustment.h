@@ -57,6 +57,9 @@ struct GlobalAdjustment : SharedAdjustment {
     // it re-runs the libraw decode through the load path (docs/adr/0036, issue
     // #22). Persisted as a token in arraw:DemosaicAlgorithm; AHD is the default.
     DemosaicAlgorithm demosaicAlgorithm = kDefaultDemosaic;
+    float texture = 0.0f;    // -100 .. +100, fine-detail local contrast
+    float clarity = 0.0f;    // -100 .. +100, midtone local contrast
+    float dehaze = 0.0f;     // -100 .. +100, haze compensation / veiling-light control
     float sharpening = 0.0f; // 0 .. 100
     // Colour (chroma) Noise Reduction — a cached GPU chroma pre-pass in
     // RendererCore (see NoiseReduction.h, docs/adr/0034, issue #59). Strength is

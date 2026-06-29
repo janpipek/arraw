@@ -12,12 +12,12 @@
 // state (Local Adjustments, Spots, Grain seed) deliberately stays on the target.
 // See docs/adr/0023, docs/adr/0026, and CONTEXT.md.
 enum class DevelopGroup {
-    WhiteBalance, // temperature (Kelvin) + tint
-    Tone,         // exposure, contrast, highlights, shadows, whites, blacks
-    ToneCurve,    // Luma + R/G/B curves
-    Colour,       // saturation, vibrance
-    Hsl,          // the 8-band hue/sat/lum mix
-    Detail,       // sharpening
+    WhiteBalance,    // temperature (Kelvin) + tint
+    Tone,            // exposure, contrast, highlights, shadows, whites, blacks
+    ToneCurve,       // Luma + R/G/B curves
+    Colour,          // saturation, vibrance
+    Hsl,             // the 8-band hue/sat/lum mix
+    Detail,          // demosaic + detail/local-contrast controls + colour noise reduction
     Geometry,        // rotation + crop rect + aspect-lock flag, as one unit
     LensCorrections, // distortion + corrective vignetting + CA enable toggles
     Effects,         // post-crop vignette + grain controls; never the per-image grain seed

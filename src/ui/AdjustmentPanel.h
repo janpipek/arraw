@@ -94,6 +94,9 @@ private:
     SliderRow saturation;
     SliderRow vibrance;
     QComboBox* demosaicCombo;
+    SliderRow texture;
+    SliderRow clarity;
+    SliderRow dehaze;
     SliderRow sharpening;
     SliderRow colorNoiseReduction; // Strength (issue #59)
     SliderRow colorNoiseReductionSmoothness;

@@ -1,7 +1,7 @@
 #include "core/Orientation.h"
 #include "develop/DemosaicAlgorithm.h"
-#include "develop/GlobalAdjustment.h"
 #include "develop/DevelopParameter.h"
+#include "develop/GlobalAdjustment.h"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -33,6 +33,9 @@ static GlobalAdjustment fullyEdited() {
     g.hslSat = {-1, -2, -3, -4, -5, -6, -7, -8};
     g.hslLum = {9, 8, 7, 6, 5, 4, 3, 2};
     g.demosaicAlgorithm = DemosaicAlgorithm::DCB;
+    g.texture = 18.0f;
+    g.clarity = 22.0f;
+    g.dehaze = -12.0f;
     g.sharpening = 55.0f;
     g.colorNoiseReduction = 30.0f;
     g.colorNoiseReductionSmoothness = 70.0f;

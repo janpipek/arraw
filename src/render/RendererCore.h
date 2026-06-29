@@ -1,7 +1,7 @@
 #pragma once
-#include "develop/BasicTone.h"
 #include "core/DisplayLut.h"
 #include "core/ImageBuffer.h"
+#include "develop/BasicTone.h"
 #include "develop/GlobalAdjustment.h"
 #include <array>
 #include <cstddef>
@@ -67,16 +67,22 @@ struct Ubuf {
     qint32 orientMirrored;     // 1 = horizontal mirror; was pad_
     qint32 sensorClipWarn;     // Sensor Clipping overlay from RAW mosaic samples
     float filmicHighlights;    // 0..1: shoulder + path to white (docs/adr/0040); was pad_[0]
-    qint32 pad_[2];
+    float textureAmount;       // -1..+1 fine-detail local contrast
+    float clarity;             // -1..+1 midtone local contrast
+    float dehaze;              // -1..+1 practical haze compensation
+    qint32 pad_[3];
 };
 
-static_assert(sizeof(Ubuf) == 1632);
+static_assert(sizeof(Ubuf) == 1648);
 static_assert(offsetof(Ubuf, effectRect) == 96);
 static_assert(offsetof(Ubuf, grainSeed) == 284);
 static_assert(offsetof(Ubuf, laGeom) == 320);
 static_assert(offsetof(Ubuf, numLocalAdj) == 1600);
 static_assert(offsetof(Ubuf, sensorClipWarn) == 1616);
 static_assert(offsetof(Ubuf, filmicHighlights) == 1620);
+static_assert(offsetof(Ubuf, textureAmount) == 1624);
+static_assert(offsetof(Ubuf, clarity) == 1628);
+static_assert(offsetof(Ubuf, dehaze) == 1632);
 
 // std140 mirror of the `nrbuf` block in shaders/nr.vert and nr_blur_*.frag — the
 // Colour Noise Reduction pre-pass uniform (docs/adr/0034). Constant for a whole
@@ -179,6 +185,7 @@ private:
         QRhiRenderTarget* rt,
         QRhiTexture* imageTex,
         QRhiTexture* sensorClipTex,
+        QRhiTexture* spatialTex,
         const FrameParams& fp,
         QRhiResourceUpdateBatch* batch);
     // recordPass variant driving an explicit uniform buffer + bindings, so a pass
@@ -195,7 +202,8 @@ private:
         std::unique_ptr<QRhiShaderResourceBindings>& dst,
         QRhiBuffer* ub,
         QRhiTexture* imageTex,
-        QRhiTexture* sensorClipTex);
+        QRhiTexture* sensorClipTex,
+        QRhiTexture* spatialTex);
     QImage renderOffscreenTex(
         int slotIndex,
         QRhiTexture* extTex,
@@ -226,6 +234,7 @@ private:
         std::unique_ptr<QRhiShaderResourceBindings> srb;
         QRhiTexture* srbImageTex = nullptr;
         QRhiTexture* srbSensorTex = nullptr;
+        QRhiTexture* srbSpatialTex = nullptr;
         int srbGeneration = -1;
     };
 
@@ -236,8 +245,15 @@ private:
     ReadbackTarget* ensureReadbackTarget(QSize size, QRhiTexture::Format fmt);
 
     QRhiGraphicsPipeline* pipelineFor(QRhiRenderPassDescriptor* rpDesc);
-    QRhiShaderResourceBindings* bindingsFor(QRhiTexture* imageTex, QRhiTexture* sensorClipTex);
+    QRhiShaderResourceBindings* bindingsFor(
+        QRhiTexture* imageTex, QRhiTexture* sensorClipTex, QRhiTexture* spatialTex);
     void fillUbuf(Ubuf& ub, const FrameParams& fp) const;
+
+    // Spatial Global Adjustments (docs/adr/0011). Builds one reduced-resolution
+    // blurred luminance texture shared by Clarity and Dehaze; Texture uses direct
+    // neighbourhood taps in the main shader. Returns a valid dummy when inactive.
+    QRhiTexture* ensureSpatialContext(QRhiCommandBuffer* cb, int key, QRhiTexture* rawTex);
+    void ensureSpatialSlot(int key, QSize fullSize);
 
     // Colour Noise Reduction (docs/adr/0034). Runs a cached GPU pre-pass that
     // denoises chroma into denoisedTex; the main pass then samples that instead of
@@ -270,6 +286,7 @@ private:
     std::unique_ptr<QRhiShaderResourceBindings> srb;
     QRhiTexture* srbImageTex = nullptr;
     QRhiTexture* srbSensorClipTex = nullptr;
+    QRhiTexture* srbSpatialTex = nullptr;
     int srbGeneration = -1;
     int generation = 0; // bumped whenever any texture is (re)created
 
@@ -277,7 +294,7 @@ private:
     // histogram RGBA8 offscreen).
     std::vector<std::pair<QVector<quint32>, std::unique_ptr<QRhiGraphicsPipeline>>> pipelines;
 
-    QShader vs, fs;
+    QShader vs, fs, spatialExtractFs;
 
     bool needQuadUpload = true;
     // Transient upload for export's temporary full-res texture, consumed by
@@ -300,6 +317,7 @@ private:
     // ── Colour Noise Reduction GPU resources (docs/adr/0034) ─────────────────
     QShader nrVs, nrExtractFs, nrBlurHFs, nrBlurVFs, nrRecombineFs;
     std::unique_ptr<QRhiBuffer> nrUbuf;
+    std::unique_ptr<QRhiBuffer> spatialUbuf;
     std::unique_ptr<QRhiGraphicsPipeline> nrPipeExtract, nrPipeBlurH, nrPipeBlurV, nrPipeRecombine;
     // Rebuilt each time the pre-pass runs (only on amount/texture change), kept as
     // members so they outlive command-buffer submission.
@@ -320,6 +338,20 @@ private:
 
     // [0]=Preview, [1]=FullRes, [2]=export's temporary full-res texture.
     NrSlot nrSlot[3];
+
+    struct SpatialSlot {
+        std::unique_ptr<QRhiTexture> lumaA, lumaB;
+        std::unique_ptr<QRhiTextureRenderTarget> lumaART, lumaBRT;
+        QSize fullSize;
+        int gen = -1;
+    };
+
+    SpatialSlot spatialSlot[3];
+    std::unique_ptr<QRhiGraphicsPipeline> spatialPipeExtract, spatialPipeBlurH, spatialPipeBlurV;
+    std::unique_ptr<QRhiShaderResourceBindings> spatialSrbExtract, spatialSrbBlurH, spatialSrbBlurV;
+    QRhiTexture* spatialSrbExtractTex = nullptr;
+    QRhiTexture* spatialSrbBlurHTex = nullptr;
+    QRhiTexture* spatialSrbBlurVTex = nullptr;
 
     // Pooled offscreen targets for non-blocking histogram readbacks (ADR 0035),
     // one per distinct (size, fmt). Few and small, so they are never evicted.

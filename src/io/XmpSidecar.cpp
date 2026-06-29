@@ -1,7 +1,7 @@
-#include "develop/DemosaicAlgorithm.h"
-#include "develop/UserMetadata.h"
-#include "develop/GlobalAdjustment.h"
 #include "io/XmpSidecar.h"
+#include "develop/DemosaicAlgorithm.h"
+#include "develop/GlobalAdjustment.h"
+#include "develop/UserMetadata.h"
 #include <QBuffer>
 #include <QDir>
 #include <QDomDocument>
@@ -444,6 +444,12 @@ static Snapshot parseSnapshotLi(QXmlStreamReader& xml) {
             p.saturation = f();
         else if (name == "arraw:Vibrance")
             p.vibrance = f();
+        else if (name == "arraw:Texture")
+            p.texture = f();
+        else if (name == "arraw:Clarity")
+            p.clarity = f();
+        else if (name == "arraw:Dehaze")
+            p.dehaze = f();
         else if (name == "arraw:Sharpness")
             p.sharpening = f();
         else if (name == "arraw:ColorNoiseReduction")
@@ -594,6 +600,9 @@ SidecarLoadResult XmpSidecar::loadWithStatus(const QString& rawPath) {
             p.tint = attr("Tint", 0.0f);
             p.saturation = attr("Saturation", 0.0f);
             p.vibrance = attr("Vibrance", 0.0f);
+            p.texture = attr("Texture", 0.0f);
+            p.clarity = attr("Clarity2012", 0.0f);
+            p.dehaze = attr("Dehaze", 0.0f);
             p.sharpening = attr("Sharpness", 0.0f);
             p.colorNoiseReduction = attr("ColorNoiseReduction", 0.0f); // Strength (issue #59)
             p.colorNoiseReductionSmoothness = attr("ColorNoiseReductionSmoothness", 50.0f);
@@ -861,6 +870,9 @@ static void writeSnapshotState(QXmlStreamWriter& xml, const GlobalAdjustment& p)
     el("Tint", p.tint);
     el("Saturation", p.saturation);
     el("Vibrance", p.vibrance);
+    el("Texture", p.texture);
+    el("Clarity", p.clarity);
+    el("Dehaze", p.dehaze);
     el("Sharpness", p.sharpening);
     el("ColorNoiseReduction", p.colorNoiseReduction);
     el("ColorNoiseReductionSmoothness", p.colorNoiseReductionSmoothness);
@@ -968,6 +980,9 @@ static QByteArray ownedPacket(const SidecarData& data) {
     write("Tint", p.tint);
     write("Saturation", p.saturation);
     write("Vibrance", p.vibrance);
+    write("Texture", p.texture);
+    write("Clarity2012", p.clarity);
+    write("Dehaze", p.dehaze);
     write("Sharpness", p.sharpening);
     write("ColorNoiseReduction", p.colorNoiseReduction); // Strength (issue #59)
     write("ColorNoiseReductionSmoothness", p.colorNoiseReductionSmoothness);

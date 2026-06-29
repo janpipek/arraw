@@ -1,9 +1,9 @@
 #include "core/Orientation.h"
+#include "develop/GlobalAdjustment.h"
 #include "develop/LocalAdjustment.h"
+#include "develop/Snapshot.h"
 #include "develop/Spot.h"
 #include "develop/UserMetadata.h"
-#include "develop/GlobalAdjustment.h"
-#include "develop/Snapshot.h"
 #include "io/XmpSidecar.h"
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
@@ -36,6 +36,9 @@ GlobalAdjustment sampleParams() {
     p.tint = -12.0f;
     p.saturation = 15.0f;
     p.vibrance = 33.0f;
+    p.texture = 18.0f;
+    p.clarity = 22.0f;
+    p.dehaze = -12.0f;
     p.sharpening = 40.0f;
     p.rotation = -2.5f;
     p.cropRect = QRectF(0.1, 0.2, 0.75, 0.6);
@@ -69,6 +72,9 @@ void checkClose(const GlobalAdjustment& a, const GlobalAdjustment& b) {
     CHECK_THAT(a.tint, WithinAbs(b.tint, kScalarTol));
     CHECK_THAT(a.saturation, WithinAbs(b.saturation, kScalarTol));
     CHECK_THAT(a.vibrance, WithinAbs(b.vibrance, kScalarTol));
+    CHECK_THAT(a.texture, WithinAbs(b.texture, kScalarTol));
+    CHECK_THAT(a.clarity, WithinAbs(b.clarity, kScalarTol));
+    CHECK_THAT(a.dehaze, WithinAbs(b.dehaze, kScalarTol));
     CHECK_THAT(a.sharpening, WithinAbs(b.sharpening, kScalarTol));
     CHECK_THAT(a.rotation, WithinAbs(b.rotation, kScalarTol));
     CHECK_THAT(a.postCropVignetteAmount, WithinAbs(b.postCropVignetteAmount, kScalarTol));
@@ -587,6 +593,24 @@ TEST_CASE("writer emits Effects controls in crs and Grain identity in arraw", "[
     CHECK(xml.contains(R"(crs:GrainSize="44.0000")"));
     CHECK(xml.contains(R"(crs:GrainFrequency="79.0000")"));
     CHECK(xml.contains(R"(arraw:GrainSeed="3735928559")"));
+}
+
+TEST_CASE("writer emits spatial global Detail controls in crs", "[xmp][crs][detail]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("detail.arw");
+    GlobalAdjustment p;
+    p.texture = 18.0f;
+    p.clarity = 22.0f;
+    p.dehaze = -12.0f;
+    REQUIRE(XmpSidecar::saveAdjustments(rawPath, p));
+
+    QFile f(XmpSidecar::pathFor(rawPath));
+    REQUIRE(f.open(QIODevice::ReadOnly));
+    const QString xml = QString::fromUtf8(f.readAll());
+
+    CHECK(xml.contains(R"(crs:Texture="18.0000")"));
+    CHECK(xml.contains(R"(crs:Clarity2012="22.0000")"));
+    CHECK(xml.contains(R"(crs:Dehaze="-12.0000")"));
 }
 
 TEST_CASE("reader parses a Lightroom-style sidecar", "[xmp][crs]") {
@@ -1122,7 +1146,8 @@ TEST_CASE("saving snapshots preserves foreign XMP properties", "[xmp][snapshots]
     const QString rawPath = dir.filePath("catalogued.nef");
     QFile sidecar(XmpSidecar::pathFor(rawPath));
     REQUIRE(sidecar.open(QIODevice::WriteOnly));
-    REQUIRE(sidecar.write(R"xml(<?xml version="1.0"?>
+    REQUIRE(
+        sidecar.write(R"xml(<?xml version="1.0"?>
 <x:xmpmeta xmlns:x="adobe:ns:meta/">
   <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
     <rdf:Description rdf:about=""
@@ -1130,7 +1155,8 @@ TEST_CASE("saving snapshots preserves foreign XMP properties", "[xmp][snapshots]
       <dc:subject><rdf:Bag><rdf:li>Travel</rdf:li></rdf:Bag></dc:subject>
     </rdf:Description>
   </rdf:RDF>
-</x:xmpmeta>)xml") > 0);
+</x:xmpmeta>)xml")
+        > 0);
     sidecar.close();
 
     Snapshot snap;
@@ -1140,8 +1166,9 @@ TEST_CASE("saving snapshots preserves foreign XMP properties", "[xmp][snapshots]
 
     REQUIRE(sidecar.open(QIODevice::ReadOnly));
     QDomDocument document;
-    REQUIRE(bool(document.setContent(
-        sidecar.readAll(), QDomDocument::ParseOption::UseNamespaceProcessing)));
+    REQUIRE(
+        bool(document
+                 .setContent(sidecar.readAll(), QDomDocument::ParseOption::UseNamespaceProcessing)));
     const QDomNodeList subjects
         = document.elementsByTagNameNS("http://purl.org/dc/elements/1.1/", "subject");
     REQUIRE(subjects.size() == 1);

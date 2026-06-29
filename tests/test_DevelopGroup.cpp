@@ -1,9 +1,9 @@
 #include "core/Orientation.h"
 #include "develop/DemosaicAlgorithm.h"
+#include "develop/DevelopGroup.h"
+#include "develop/GlobalAdjustment.h"
 #include "develop/LocalAdjustment.h"
 #include "develop/Spot.h"
-#include "develop/GlobalAdjustment.h"
-#include "develop/DevelopGroup.h"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -39,6 +39,9 @@ static GlobalAdjustment fullyEdited() {
     g.hslLum = {9, 8, 7, 6, 5, 4, 3, 2};
     // Detail
     g.demosaicAlgorithm = DemosaicAlgorithm::VNG;
+    g.texture = 18.0f;
+    g.clarity = 22.0f;
+    g.dehaze = -12.0f;
     g.sharpening = 55.0f;
     // Geometry
     g.orientation = orient::Orientation{3, true};
@@ -143,12 +146,18 @@ TEST_CASE("Detail carries the demosaic algorithm; reset returns AHD", "[developg
 
     const GlobalAdjustment result = applyGroups(target, source, only(DevelopGroup::Detail));
     CHECK(result.demosaicAlgorithm == source.demosaicAlgorithm);
+    CHECK(result.texture == source.texture);
+    CHECK(result.clarity == source.clarity);
+    CHECK(result.dehaze == source.dehaze);
     CHECK(result.sharpening == source.sharpening);
 
     // Pasting an unedited Detail group (Replace semantics) resets it back to AHD.
     const GlobalAdjustment reset
         = applyGroups(source, GlobalAdjustment{}, only(DevelopGroup::Detail));
     CHECK(reset.demosaicAlgorithm == DemosaicAlgorithm::AHD);
+    CHECK(reset.texture == 0.0f);
+    CHECK(reset.clarity == 0.0f);
+    CHECK(reset.dehaze == 0.0f);
 }
 
 TEST_CASE("Lens Corrections moves only its enable toggles", "[developgroup]") {

@@ -1,5 +1,5 @@
-#include "develop/GlobalAdjustment.h"
 #include "develop/DevelopGroup.h"
+#include "develop/GlobalAdjustment.h"
 
 #include <QObject>
 
@@ -92,6 +92,9 @@ GlobalAdjustment applyGroups(
     }
     if (hasGroup(selection, DevelopGroup::Detail)) {
         result.demosaicAlgorithm = source.demosaicAlgorithm; // re-decodes on apply (issue #22)
+        result.texture = source.texture;
+        result.clarity = source.clarity;
+        result.dehaze = source.dehaze;
         result.sharpening = source.sharpening;
         result.colorNoiseReduction = source.colorNoiseReduction; // Strength (issue #59)
         result.colorNoiseReductionSmoothness = source.colorNoiseReductionSmoothness;

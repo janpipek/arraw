@@ -1,7 +1,7 @@
 #include "core/Orientation.h"
-#include "develop/GlobalAdjustment.h"
 #include "develop/DevelopGroup.h"
 #include "develop/DevelopPreset.h"
+#include "develop/GlobalAdjustment.h"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -55,14 +55,20 @@ TEST_CASE("A Detail preset round-trips Colour Noise Reduction through JSON", "[p
     DevelopPreset p;
     p.name = "Clean";
     p.groups = groups({DevelopGroup::Detail});
+    p.values.texture = 18.0f;
+    p.values.clarity = 22.0f;
+    p.values.dehaze = -12.0f;
     p.values.sharpening = 30.0f;
-    p.values.colorNoiseReduction = 65.0f;          // Strength
+    p.values.colorNoiseReduction = 65.0f; // Strength
     p.values.colorNoiseReductionSmoothness = 80.0f;
 
     bool ok = false;
     const DevelopPreset loaded = parseDevelopPreset(serializeDevelopPreset(p), &ok);
 
     REQUIRE(ok);
+    CHECK(loaded.values.texture == 18.0f);
+    CHECK(loaded.values.clarity == 22.0f);
+    CHECK(loaded.values.dehaze == -12.0f);
     CHECK(loaded.values.colorNoiseReduction == 65.0f);
     CHECK(loaded.values.colorNoiseReductionSmoothness == 80.0f);
     CHECK(loaded.values.sharpening == 30.0f);
