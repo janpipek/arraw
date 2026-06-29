@@ -5,6 +5,7 @@
 
 layout(location = 0) in vec2 vUV;
 layout(location = 1) in vec2 vFrameUV;
+layout(location = 2) in vec2 vImageUV;
 layout(location = 0) out vec4 fragColor;
 
 layout(std140, binding = 0) uniform buf {
@@ -650,13 +651,11 @@ void main() {
     c = applySpatialGlobals(c, vUV);
 
     // Local adjustments — analytic, single-pass, after the global colour section
-    // and before encode (docs/adr/0010). Masks live in the cropped/rotated display
-    // frame (vFrameUV) — the same frame the overlay draws in — aspect-corrected by
-    // the crop's on-screen aspect, NOT the rotated source UV (vUV) / source aspect,
-    // which only coincide when there is no crop or rotation.
-    float maskAspect = u.aspect * (u.effectRect.z - u.effectRect.x)
-                                / max(u.effectRect.w - u.effectRect.y, 0.0001);
-    c = applyLocalAdjustments(c, vFrameUV, maskAspect);
+    // and before encode (docs/adr/0010). Masks live in the full post-lens-
+    // correction oriented image frame, before Crop and fine Rotation. The
+    // vertex shader exposes that subject-space UV before coarse Orientation maps
+    // it to the native texture coordinates used for sampling.
+    c = applyLocalAdjustments(c, vImageUV, u.aspect);
     c = applyVignette(c, vFrameUV);
     c = applyGrain(c, vFrameUV);
 
@@ -696,7 +695,7 @@ void main() {
     // red so the painted/parametric mask is visible. On-screen preview only —
     // maskOverlay is -1 for the export and histogram readbacks.
     if (u.maskOverlay >= 0 && u.maskOverlay < u.numLocalAdj) {
-        float mw = maskWeight(u.maskOverlay, vFrameUV, maskAspect);
+        float mw = maskWeight(u.maskOverlay, vImageUV, u.aspect);
         outc = mix(outc, vec3(1.0, 0.1, 0.1), mw * 0.75);
     }
     fragColor = vec4(outc, 1.0);

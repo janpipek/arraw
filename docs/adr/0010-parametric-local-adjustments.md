@@ -10,12 +10,16 @@ sidecar, capped at **16 per image**.
 Because masks are evaluated in the fragment shader, the preview stays single-pass
 (no per-edit compositing pass). The mask count is a fixed array bound mirrored
 across `image.frag`, the `Ubuf` mirror in `RendererCore.h` (std140, byte-
-identical), and `RendererCore::fillUbuf()` — the same discipline CLAUDE.md
-already requires for uniforms. Masks store normalised coordinates in the
-cropped/rotated display frame (`0007-crop-after-rotation-display-frame`) so
-recropping does not move them. The deltas are the dodge/burn + colour-grade
-subset only (exposure, contrast, highlights, shadows, whites, blacks,
-temperature, tint, saturation, vibrance) — no geometry, no tone curve.
+identical), and `RendererCore::fillUbuf()` — the same discipline `AGENTS.md`
+already requires for uniforms. Masks store normalised coordinates in the full
+post-lens-correction, oriented image frame, before [[Crop]] and fine
+[[Rotation]]. Crop and fine Rotation only project the mask into the viewport and
+do not rewrite mask geometry, so a mask placed on a subject stays on that subject
+when the crop or straightening changes. A coarse [[Orientation]] edit
+(90°/mirror) transforms existing mask geometry with the content. The deltas are
+the dodge/burn + colour-grade subset only (exposure, contrast, highlights,
+shadows, whites, blacks, temperature, tint, saturation, vibrance) — no geometry,
+no tone curve.
 
 ## Considered Options
 
@@ -45,6 +49,9 @@ temperature, tint, saturation, vibrance) — no geometry, no tone curve.
   list, so reading old files after a raise is safe.
 - Local adjustments preview live and sit on the develop `QUndoStack` (add / move /
   delete / slider tweak each a step), unlike culling marks which stay off it.
+- Lens correction is upstream of the mask coordinate frame. Toggling distortion
+  correction after a mask is placed may move the subject under the mask; we do
+  not attempt to warp Linear/Radial geometry through that nonlinear correction.
 - Pure logic — per-type mask weight, handle ↔ normalised-coordinate maths,
   namespace load/save — extracts to `arraw_core` for headless TDD.
 - The shared delta subset is modelled as a `SharedAdjustment` base struct that

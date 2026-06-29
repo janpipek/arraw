@@ -34,7 +34,7 @@ LocalAdjustmentPanel::LocalAdjustmentPanel(QWidget* parent)
     buttons->addWidget(deleteButton);
     col->addLayout(buttons);
 
-    // Geometry fields, normalised display-frame coords. The stacked widget shows
+    // Geometry fields, normalised subject-space image coords. The stacked widget shows
     // the page matching the active mask's type; values stay in sync with the
     // on-image handles. A coordinate spinbox helper keeps the two pages uniform.
     auto makeCoordSpin = [this](const char* name, double lo, double hi) {

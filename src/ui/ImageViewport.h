@@ -156,7 +156,10 @@ signals:
     void rotationCommitted(float degrees); // Straighten tool result
     // Coarse Orientation changed (Rotate 90° / Flip), with the crop rotated to
     // match (docs/adr/0029). One signal so MainWindow folds it into one undo.
-    void orientationCommitted(orient::Orientation orientation, const QRectF& cropRect);
+    void orientationCommitted(
+        orient::Orientation orientation,
+        const QRectF& cropRect,
+        const std::vector<LocalAdjustment>& localAdjustments);
     void whiteBalanceCommitted(float kelvin, float tint); // WB picker result
     void activeToolChanged(ImageViewport::ActiveTool tool);
     // Live geometry of the active mask (either type) while its handles are dragged.
@@ -236,7 +239,7 @@ private:
     void drawAlignGrid(QPainter& p) const;
     bool shouldShowAlignGrid() const;
 
-    // Local-mask tool: edit the active Linear mask's handles on the image.
+    // Local-mask tool: edit the active mask's subject-space handles on the image.
     bool localMaskMode() const { return tool == ActiveTool::LocalMask; }
 
     const LinearMask* activeLinearMask() const;
@@ -252,6 +255,8 @@ private:
     void extendBrushStroke(QPointF viewportPos);
     double brushScreenRadius(QPointF viewportCenter) const; // brush radius in screen px
     void drawBrushCursor(QPainter& p) const;
+    QPointF imageUVToViewport(QPointF uv) const;
+    QPointF viewportToImageUV(QPointF pos) const;
     QPointF localHandleViewport(LinearHandle h) const; // p0/p1/center → screen
     LinearHandle hitTestLocalMask(QPointF viewportPos) const;
     RadialHandle hitTestRadialMask(QPointF viewportPos) const;

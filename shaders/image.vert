@@ -8,6 +8,7 @@ layout(location = 1) in vec2 aUV;
 
 layout(location = 0) out vec2 vUV;
 layout(location = 1) out vec2 vFrameUV;
+layout(location = 2) out vec2 vImageUV;
 
 layout(std140, binding = 0) uniform buf {
     mat4  clipCorr;      // QRhi::clipSpaceCorrMatrix() — GL-style NDC → backend NDC
@@ -84,6 +85,7 @@ void main() {
     vec2 r = vec2(c * d.x - s * d.y, s * d.x + c * d.y);
     r.x /= u.aspect;
     vUV = r + center;
+    vImageUV = vUV;
 
     // Coarse Orientation maps the oriented display-frame UV to the native buffer
     // (docs/adr/0028). Bit-exact mirror of orient::orientedToBuffer: undo the

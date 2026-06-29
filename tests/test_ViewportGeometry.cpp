@@ -78,6 +78,24 @@ TEST_CASE("Viewport geometry round-trips crop UV through zoom and pan", "[viewpo
     CHECK(roundTrip.y() == Approx(uv.y()));
 }
 
+TEST_CASE("Viewport geometry round-trips image UV through crop and rotation", "[viewportgeometry]") {
+    viewport::Geometry g;
+    g.viewportSize = {1000, 700};
+    g.imageAspect = 1.5f;
+    g.displayAspect = 1.2f;
+    g.zoom = 1.35f;
+    g.pan = {-0.1, 0.2};
+    g.cropRect = {0.5, 0.5, 0.5, 0.5};
+    g.rotation = 11.0f;
+
+    const QPointF uv(0.52, 0.54);
+    const QPointF vp = g.imageUvToViewport(uv);
+    const QPointF roundTrip = g.viewportToImageUv(vp);
+
+    CHECK(roundTrip.x() == Approx(uv.x()).margin(1e-6));
+    CHECK(roundTrip.y() == Approx(uv.y()).margin(1e-6));
+}
+
 TEST_CASE(
     "Viewport geometry round-trips original buffer pixels through crop and rotation",
     "[viewportgeometry]") {
