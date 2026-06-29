@@ -54,6 +54,9 @@ GlobalAdjustment sampleParams() {
         p.hslSat[i] = float(40 - i * 10);
         p.hslLum[i] = float(i % 2 ? 25 : -25);
     }
+    p.convertToGrayscale = true;
+    for (int i = 0; i < 8; ++i)
+        p.bwMix[i] = float(i * 5 - 15);
     // Points on the 0..255 grid so quantisation is lossless
     p.curveLuma.points = {{0.0, 0.0}, {64 / 255.0, 32 / 255.0}, {1.0, 1.0}};
     p.curveR.points = {{0.0, 16 / 255.0}, {1.0, 240 / 255.0}};
@@ -92,7 +95,9 @@ void checkClose(const GlobalAdjustment& a, const GlobalAdjustment& b) {
         CHECK_THAT(a.hslHue[i], WithinAbs(b.hslHue[i], kScalarTol));
         CHECK_THAT(a.hslSat[i], WithinAbs(b.hslSat[i], kScalarTol));
         CHECK_THAT(a.hslLum[i], WithinAbs(b.hslLum[i], kScalarTol));
+        CHECK_THAT(a.bwMix[i], WithinAbs(b.bwMix[i], kScalarTol));
     }
+    CHECK(a.convertToGrayscale == b.convertToGrayscale);
 }
 
 void checkCurveClose(const CurvePoints& a, const CurvePoints& b) {
@@ -113,6 +118,20 @@ TEST_CASE("orientation round-trips through the sidecar as tiff:Orientation", "[x
     REQUIRE(XmpSidecar::saveAdjustments(rawPath, p));
     const GlobalAdjustment loaded = XmpSidecar::loadAdjustments(rawPath);
     REQUIRE(loaded.orientation == p.orientation);
+}
+
+TEST_CASE("the B&W mixer persists even when the treatment is off", "[xmp]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("mono.arw");
+    GlobalAdjustment saved;
+    saved.convertToGrayscale = false;               // colour treatment...
+    saved.bwMix = {-20, -5, 10, 0, 0, 35, -40, 15}; // ...but a dialled-in mix to keep
+    REQUIRE(XmpSidecar::saveAdjustments(rawPath, saved));
+
+    const GlobalAdjustment loaded = XmpSidecar::loadAdjustments(rawPath);
+    CHECK_FALSE(loaded.convertToGrayscale);
+    for (int i = 0; i < 8; ++i)
+        CHECK_THAT(loaded.bwMix[i], WithinAbs(saved.bwMix[i], kScalarTol));
 }
 
 TEST_CASE("orientation seeds from EXIF when the sidecar has none", "[xmp]") {

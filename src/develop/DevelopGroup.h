@@ -17,6 +17,7 @@ enum class DevelopGroup {
     ToneCurve,       // Luma + R/G/B curves
     Colour,          // saturation, vibrance
     Hsl,             // the 8-band hue/sat/lum mix
+    BlackAndWhite,   // monochrome treatment toggle + the 8-band B&W hue mixer (docs/adr/0048)
     Detail,          // demosaic + detail/local-contrast controls + colour noise reduction
     Geometry,        // rotation + crop rect + aspect-lock flag, as one unit
     LensCorrections, // distortion + corrective vignetting + CA enable toggles
