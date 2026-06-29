@@ -116,6 +116,7 @@ just tidy
 ```
 
 * **Formatter**: `clang-format` 18+ preferred. Keep formatting mechanical; do not mix broad formatting churn with behavioral changes unless the task is explicitly cleanup-focused.
+* **Touch only what you change**: never reformat, re-indent, or reorder includes in files unrelated to your task. Limit `just format` to the files you actually edited; whole-tree formatting passes that touch dozens of untouched files are not welcome in a feature PR — they bloat the diff and obscure the real change. If a file needs a cleanup-only reformat, do it in its own dedicated commit/PR.
 * **Warnings**: Treat compiler warnings as the primary lint baseline. Do not introduce new warnings in touched code.
 * **Qt analysis**: `clazy` is optional and advisory. `just clazy` rebuilds the application target only with tests disabled, because Catch/test diagnostics are noisy and not useful for Qt analysis. Fix clear Qt correctness/performance issues, but avoid large style rewrites just to satisfy analyzer output.
 * **General analysis**: `clang-tidy` is optional and advisory (config in `.clang-tidy`). `just tidy` runs it over `src/` using the compile database from the normal `build` dir (`CMAKE_EXPORT_COMPILE_COMMANDS`). The check set covers `bugprone/performance/modernize/readability`; it overlaps a little with clazy but catches non-Qt issues clazy ignores. Address clear bug/perf findings; do not chase every readability nit.

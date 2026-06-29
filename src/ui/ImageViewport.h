@@ -245,11 +245,12 @@ private:
 
     // Brush painting (docs/adr/0047): the raster is built in buffer UV space and
     // sampled at vUV, so a stroke stays glued to the image pixels. A stroke stamps
-    // onto a copy captured at press, re-stamping the whole path per move so the
-    // within-stroke max accumulation and live preview are correct.
+    // onto a copy captured at press, accumulating coverage one segment per move so
+    // the within-stroke max accumulation and live preview stay correct.
     QSize brushRasterSize() const; // from nativeImageAspect + kBrushRasterLongEdge
     void beginBrushStroke(QPointF viewportPos);
     void extendBrushStroke(QPointF viewportPos);
+    double brushScreenRadius(QPointF viewportCenter) const; // brush radius in screen px
     void drawBrushCursor(QPainter& p) const;
     QPointF localHandleViewport(LinearHandle h) const; // p0/p1/center → screen
     LinearHandle hitTestLocalMask(QPointF viewportPos) const;

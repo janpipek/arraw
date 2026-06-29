@@ -466,16 +466,22 @@ void ImageViewport::extendBrushStroke(QPointF viewportPos) {
     overlay->update(); // cheap QPainter preview, no GPU re-render
 }
 
+double ImageViewport::brushScreenRadius(QPointF viewportCenter) const {
+    // Map the brush radius (buffer pixels) to a screen radius via the buffer↔
+    // viewport transform, so the footprint tracks zoom.
+    const double rBuf = brushRadiusFraction * std::max(originalWidth, originalHeight);
+    const QPointF cBuf = viewportToBufferPixel(viewportCenter);
+    const QPointF a = bufferPixelToViewport(cBuf);
+    const QPointF b = bufferPixelToViewport({cBuf.x() + rBuf, cBuf.y()});
+    return std::hypot(b.x() - a.x(), b.y() - a.y());
+}
+
 void ImageViewport::drawBrushStrokePreview(QPainter& p) const {
     if (!brushPainting || brushStrokeViewportPts.empty())
         return;
     // Brush footprint in screen pixels (same mapping as the cursor ring), drawn as
     // a translucent round-capped stroke along the path the cursor has travelled.
-    const double rBuf = brushRadiusFraction * std::max(originalWidth, originalHeight);
-    const QPointF c = viewportToBufferPixel(brushStrokeViewportPts.front());
-    const QPointF a = bufferPixelToViewport(c);
-    const QPointF b = bufferPixelToViewport({c.x() + rBuf, c.y()});
-    const double rScreen = std::hypot(b.x() - a.x(), b.y() - a.y());
+    const double rScreen = brushScreenRadius(brushStrokeViewportPts.front());
 
     const QColor col = brushErase ? QColor(90, 170, 255, 110) : QColor(255, 40, 40, 110);
     p.setPen(QPen(col, rScreen * 2.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
@@ -493,13 +499,7 @@ void ImageViewport::drawBrushStrokePreview(QPainter& p) const {
 void ImageViewport::drawBrushCursor(QPainter& p) const {
     if (!brushCursorValid || !activeBrushMask())
         return;
-    // Map the brush radius (buffer pixels) to a screen radius via the buffer↔
-    // viewport transform, so the ring tracks zoom.
-    const double rBuf = brushRadiusFraction * std::max(originalWidth, originalHeight);
-    const QPointF cBuf = viewportToBufferPixel(brushCursorPos);
-    const QPointF a = bufferPixelToViewport(cBuf);
-    const QPointF b = bufferPixelToViewport({cBuf.x() + rBuf, cBuf.y()});
-    const double rScreen = std::hypot(b.x() - a.x(), b.y() - a.y());
+    const double rScreen = brushScreenRadius(brushCursorPos);
 
     // Just the outline ring (size/position); the painted region itself is shown by
     // the mask overlay, not a fill under the cursor (docs/adr/0047).
