@@ -2,10 +2,14 @@
 #include "pipeline/LensCorrection.h"
 #include "pipeline/LensfunSource.h"
 #include "pipeline/RawProcessor.h"
+#include "TestApp.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
+#include <QCoreApplication>
+#include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QString>
 
@@ -26,6 +30,16 @@ static LensQuery miniQuery() {
     q.width = 600;
     q.height = 400;
     return q;
+}
+
+static QString copyMiniDbToBundledDir() {
+    testApp();
+    const QString dbDir = QCoreApplication::applicationDirPath() + "/lensfun/db";
+    REQUIRE(QDir().mkpath(dbDir));
+    const QString dest = dbDir + "/mini.xml";
+    QFile::remove(dest);
+    REQUIRE(QFile::copy(miniDbDir() + "/mini.xml", dest));
+    return dbDir;
 }
 
 TEST_CASE("resolveLensfunModel matches the fixture lens and fills the curves", "[lensfun]") {
@@ -75,6 +89,19 @@ TEST_CASE("resolveLensfunModel returns nullopt for an empty query", "[lensfun]")
         SKIP("built without lensfun");
 
     REQUIRE_FALSE(resolveLensfunModel(miniDbDir(), LensQuery{}).has_value());
+}
+
+TEST_CASE("resolveLensfunModel discovers a bundled database next to the executable", "[lensfun]") {
+    if (!lensfunAvailable())
+        SKIP("built without lensfun");
+
+    const QString dbDir = copyMiniDbToBundledDir();
+    INFO("bundled lensfun DB: " << dbDir.toStdString());
+
+    const auto model = resolveLensfunModel(QString(), miniQuery());
+    REQUIRE(model.has_value());
+    REQUIRE(model->source == LensCorrectionModel::Source::Lensfun);
+    REQUIRE(model->lensName.contains("TestLens"));
 }
 
 // Hidden ([.]) — needs the system lensfun database and is machine-specific. Run
