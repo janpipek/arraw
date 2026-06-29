@@ -1,5 +1,5 @@
-#include "develop/GlobalAdjustment.h"
 #include "core/NoiseReduction.h"
+#include "develop/GlobalAdjustment.h"
 #include "io/XmpSidecar.h"
 
 #include <catch2/catch_test_macros.hpp>

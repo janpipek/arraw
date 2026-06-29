@@ -1,5 +1,5 @@
-#include "core/Orientation.h"
 #include "core/CropGeometry.h"
+#include "core/Orientation.h"
 
 #include <QPointF>
 #include <QRectF>

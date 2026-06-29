@@ -1,11 +1,11 @@
 #pragma once
 #include "develop/UserMetadata.h"
 #include "ui/FilmStripFilter.h"
+#include <functional>
 #include <QColor>
 #include <QSet>
 #include <QString>
 #include <QWidget>
-#include <functional>
 
 // Swatch colour for a label (transparent for None). Shared by the strip's cell
 // delegate and the title-bar filter swatches so the palette is defined once

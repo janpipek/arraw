@@ -1,5 +1,5 @@
-#include "core/ImageMetadata.h"
 #include "ThumbnailCache.h"
+#include "core/ImageMetadata.h"
 #include <catch2/catch_test_macros.hpp>
 
 #include <QColor>

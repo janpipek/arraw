@@ -32,8 +32,12 @@ TEST_CASE("librawUserQual maps each algorithm to its documented user_qual", "[de
 
 namespace {
 constexpr DemosaicAlgorithm kAllAlgorithms[] = {
-    DemosaicAlgorithm::AHD, DemosaicAlgorithm::VNG,  DemosaicAlgorithm::PPG,
-    DemosaicAlgorithm::DCB, DemosaicAlgorithm::DHT,  DemosaicAlgorithm::AAHD,
+    DemosaicAlgorithm::AHD,
+    DemosaicAlgorithm::VNG,
+    DemosaicAlgorithm::PPG,
+    DemosaicAlgorithm::DCB,
+    DemosaicAlgorithm::DHT,
+    DemosaicAlgorithm::AAHD,
     DemosaicAlgorithm::Linear,
 };
 }

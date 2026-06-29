@@ -1,5 +1,5 @@
-#include "develop/LocalAdjustment.h"
 #include "ui/LocalAdjustmentPanel.h"
+#include "develop/LocalAdjustment.h"
 #include "ui/AdjustmentSpinBox.h"
 
 #include <algorithm>
@@ -14,7 +14,6 @@
 #include <QSlider>
 #include <QStackedWidget>
 #include <QVBoxLayout>
-
 
 LocalAdjustmentPanel::LocalAdjustmentPanel(QWidget* parent)
     : QWidget(parent) {

@@ -1,6 +1,6 @@
+#include "ui/FilmStripModel.h"
 #include "core/ImageMetadata.h"
 #include "develop/UserMetadata.h"
-#include "ui/FilmStripModel.h"
 #include "ui/FilmStripTooltip.h"
 #include "ui/ImageGrouping.h"
 #include <algorithm>

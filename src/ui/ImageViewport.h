@@ -1,13 +1,13 @@
 #pragma once
-#include "core/Orientation.h"
-#include "develop/LocalAdjustment.h"
-#include "pipeline/ColorManagement.h"
 #include "core/CropGeometry.h"
 #include "core/ImageBuffer.h"
+#include "core/Orientation.h"
 #include "develop/GlobalAdjustment.h"
+#include "develop/LocalAdjustment.h"
+#include "develop/Spot.h"
+#include "pipeline/ColorManagement.h"
 #include "render/PendingHistogram.h"
 #include "render/RendererCore.h"
-#include "develop/Spot.h"
 #include "render/ViewportGeometry.h"
 #include <QImage>
 #include <QPointF>

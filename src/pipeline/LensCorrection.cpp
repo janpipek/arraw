@@ -12,7 +12,7 @@
 namespace {
 // Run `body(y0, y1)` over disjoint row ranges in parallel (the warp/gain write each
 // output row independently and only read the source, so this is data-race free).
-template <typename Fn>
+template<typename Fn>
 void parallelRows(int height, Fn&& body) {
     const int threads = std::max(1, QThread::idealThreadCount());
     if (height < 64 || threads == 1) {
@@ -23,8 +23,7 @@ void parallelRows(int height, Fn&& body) {
     QList<int> starts;
     for (int y = 0; y < height; y += rowsPer)
         starts.append(y);
-    QtConcurrent::blockingMap(
-        starts, [&](int y0) { body(y0, std::min(y0 + rowsPer, height)); });
+    QtConcurrent::blockingMap(starts, [&](int y0) { body(y0, std::min(y0 + rowsPer, height)); });
 }
 
 float length(float x, float y) {
@@ -62,18 +61,20 @@ static void applyVignetting(ImageBuffer& buf, const RadialCurve& gain, QPointF c
     const float cx = static_cast<float>(center.x()) * static_cast<float>(buf.width);
     const float cy = static_cast<float>(center.y()) * static_cast<float>(buf.height);
     const auto dist = [&](float x, float y) { return std::hypot(x - cx, y - cy); };
-    const float maxR = std::max({dist(0.0f, 0.0f), dist(static_cast<float>(buf.width), 0.0f),
-                                 dist(0.0f, static_cast<float>(buf.height)),
-                                 dist(static_cast<float>(buf.width), static_cast<float>(buf.height))});
+    const float maxR = std::max(
+        {dist(0.0f, 0.0f),
+         dist(static_cast<float>(buf.width), 0.0f),
+         dist(0.0f, static_cast<float>(buf.height)),
+         dist(static_cast<float>(buf.width), static_cast<float>(buf.height))});
     if (maxR <= 0.0f)
         return;
 
     parallelRows(buf.height, [&](int y0, int y1) {
         for (int y = y0; y < y1; ++y) {
             for (int x = 0; x < buf.width; ++x) {
-                const float r = length(static_cast<float>(x) + 0.5f - cx,
-                                       static_cast<float>(y) + 0.5f - cy)
-                    / maxR;
+                const float r
+                    = length(static_cast<float>(x) + 0.5f - cx, static_cast<float>(y) + 0.5f - cy)
+                      / maxR;
                 const float g = gain.sample(r);
                 const size_t i = static_cast<size_t>((y * buf.width + x) * 3);
                 buf.data[i] *= g;
@@ -123,16 +124,26 @@ static WarpFrame warpFrame(const LensCorrectionModel& model, int width, int heig
     f.cx = static_cast<float>(model.center.x()) * static_cast<float>(width);
     f.cy = static_cast<float>(model.center.y()) * static_cast<float>(height);
     const auto dist = [&](float x, float y) { return std::hypot(x - f.cx, y - f.cy); };
-    f.maxR = std::max({dist(0.0f, 0.0f), dist(static_cast<float>(width), 0.0f),
-                       dist(0.0f, static_cast<float>(height)),
-                       dist(static_cast<float>(width), static_cast<float>(height))});
+    f.maxR = std::max(
+        {dist(0.0f, 0.0f),
+         dist(static_cast<float>(width), 0.0f),
+         dist(0.0f, static_cast<float>(height)),
+         dist(static_cast<float>(width), static_cast<float>(height))});
     return f;
 }
 
 // Source position a corrected output pixel at vector (vx, vy) from the centre samples
 // from: the vector is divided by the fill zoom, then scaled by the distortion curve.
-static void warpSource(const WarpFrame& f, const RadialCurve& distortion, bool doDistortion,
-                       float zoom, float vx, float vy, float& sx, float& sy, float& scale) {
+static void warpSource(
+    const WarpFrame& f,
+    const RadialCurve& distortion,
+    bool doDistortion,
+    float zoom,
+    float vx,
+    float vy,
+    float& sx,
+    float& sy,
+    float& scale) {
     const float zx = vx / zoom;
     const float zy = vy / zoom;
     const float r = length(zx, zy) / f.maxR;
@@ -144,8 +155,12 @@ static void warpSource(const WarpFrame& f, const RadialCurve& distortion, bool d
 // Geometric warp: for each output pixel, scale its vector from the optical centre and
 // resample the source there. Green carries the distortion scale; red and blue add
 // the per-channel TCA scale on top, so distortion and lateral CA share one resample.
-static ImageBuffer applyWarp(const ImageBuffer& src, const LensCorrectionModel& model,
-                             bool doDistortion, bool doTCA, float zoom) {
+static ImageBuffer applyWarp(
+    const ImageBuffer& src,
+    const LensCorrectionModel& model,
+    bool doDistortion,
+    bool doTCA,
+    float zoom) {
     const WarpFrame f = warpFrame(model, src.width, src.height);
     ImageBuffer dst = src;
     if (f.maxR <= 0.0f)
@@ -227,8 +242,8 @@ float autoFillZoom(const LensCorrectionModel& model, int width, int height) {
     return hi;
 }
 
-ImageBuffer applyLensCorrection(const ImageBuffer& buf, const LensCorrectionModel& model,
-                                const LensCorrectionToggles& toggles) {
+ImageBuffer applyLensCorrection(
+    const ImageBuffer& buf, const LensCorrectionModel& model, const LensCorrectionToggles& toggles) {
     ImageBuffer out = buf;
     if (!out.valid())
         return out;

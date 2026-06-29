@@ -22,10 +22,11 @@ namespace ThemeColors {
 inline const QColor kCanvas = QColor::fromRgbF(0.15f, 0.15f, 0.15f); // ~#262626
 
 // Neutral chrome surfaces, built relative to the canvas.
-inline const QColor kWindow = QColor(0x2e, 0x2e, 0x2e);      // docks, toolbars, window — slightly lighter than canvas
+inline const QColor kWindow
+    = QColor(0x2e, 0x2e, 0x2e); // docks, toolbars, window — slightly lighter than canvas
 inline const QColor kPanelRaised = QColor(0x36, 0x36, 0x36); // group boxes / raised panels
 inline const QColor kButton = QColor(0x3a, 0x3a, 0x3a);      // buttons — a touch of affordance lift
-inline const QColor kBase = QColor(0x1e, 0x1e, 0x1e);        // recessed surfaces: text entry, histogram bg
+inline const QColor kBase = QColor(0x1e, 0x1e, 0x1e); // recessed surfaces: text entry, histogram bg
 inline const QColor kAlternateBase = QColor(0x262626);
 
 // Borders / bevels (Fusion uses Mid/Dark/Light/Shadow for these).

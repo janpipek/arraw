@@ -3,9 +3,9 @@
 #include "develop/GlobalAdjustment.h"
 #include "develop/Snapshot.h"
 #include "develop/UserMetadata.h"
+#include <vector>
 #include <QByteArray>
 #include <QString>
-#include <vector>
 
 // Reads and writes the XMP sidecar file: develop settings (crs: namespace) and
 // user-authored culling marks (xmp:Rating / xmp:Label). See docs/adr/0007.
@@ -94,5 +94,7 @@ public:
         const std::vector<Snapshot>& snapshots);
     static bool saveMetadata(const QString& rawPath, const UserMetadata& metadata);
     static bool saveMetadata(
-        const QString& rawPath, const UserMetadata& metadata, const UserMetadataPresence& descriptiveFields);
+        const QString& rawPath,
+        const UserMetadata& metadata,
+        const UserMetadataPresence& descriptiveFields);
 };

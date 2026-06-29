@@ -1,5 +1,5 @@
-#include "core/ImageMetadata.h"
 #include "ui/FilmStripTooltip.h"
+#include "core/ImageMetadata.h"
 
 #include <QStringList>
 

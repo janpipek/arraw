@@ -8,7 +8,8 @@
 #include <QVBoxLayout>
 
 HistoryPanel::HistoryPanel(QUndoStack* undoStack, QWidget* parent)
-    : QWidget(parent), undoStack(undoStack) {
+    : QWidget(parent),
+      undoStack(undoStack) {
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(6, 6, 6, 6);
 
@@ -109,7 +110,7 @@ void HistoryPanel::rebuildHistory() {
 
 int HistoryPanel::selectedRow() const {
     return snapshotList->currentRow() >= 0 && snapshotList->currentItem()
-               && snapshotList->currentItem()->isSelected()
-        ? snapshotList->currentRow()
-        : -1;
+                   && snapshotList->currentItem()->isSelected()
+               ? snapshotList->currentRow()
+               : -1;
 }

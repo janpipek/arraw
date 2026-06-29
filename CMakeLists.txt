@@ -251,6 +251,7 @@ set(CORE_SOURCES
     src/ui/GroupChecklistDialog.cpp
     src/io/PresetStore.cpp
     src/develop/Spot.cpp
+    src/develop/BrushMask.cpp
     src/ui/SpotRemovalPanel.cpp
     src/ui/HistoryPanel.cpp
     src/core/NoiseReduction.cpp

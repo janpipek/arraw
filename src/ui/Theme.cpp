@@ -69,11 +69,11 @@ void apply(QApplication& app) {
     //   * QToolBar::separator: the vertical group dividers read as a bright bevel;
     //     replace them with a dim, slightly inset 1px line.
     // Colors are single-sourced from ThemeColors so they stay tunable.
-    app.setStyleSheet(
-        QStringLiteral("QToolBar { border: none; background: %1; } "
-                       "QToolBar::separator { background: %2; width: 1px; "
-                       "height: 1px; margin: 5px 6px; }")
-            .arg(ThemeColors::kWindow.name(), ThemeColors::kSeparator.name()));
+    app.setStyleSheet(QStringLiteral(
+                          "QToolBar { border: none; background: %1; } "
+                          "QToolBar::separator { background: %2; width: 1px; "
+                          "height: 1px; margin: 5px 6px; }")
+                          .arg(ThemeColors::kWindow.name(), ThemeColors::kSeparator.name()));
 }
 
 } // namespace Theme

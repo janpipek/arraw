@@ -1,7 +1,7 @@
+#include "TestApp.h"
 #include "develop/LocalAdjustment.h"
 #include "ui/HistoryPanel.h"
 #include "ui/LocalAdjustmentPanel.h"
-#include "TestApp.h"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -16,10 +16,13 @@ namespace {
 class MaskCmd : public QUndoCommand {
 public:
     MaskCmd(std::vector<LocalAdjustment> b, std::vector<LocalAdjustment> a)
-        : before(std::move(b)), after(std::move(a)) {
+        : before(std::move(b)),
+          after(std::move(a)) {
         setText(localChangeLabel(before, after));
     }
+
     void undo() override {}
+
     void redo() override {}
 
 private:
@@ -37,7 +40,9 @@ TEST_CASE("adding a mask shows a descriptive row in History", "[historylocal]") 
     LocalAdjustmentPanel panel;
     HistoryPanel history(&stack);
 
-    QObject::connect(&panel, &LocalAdjustmentPanel::committed,
+    QObject::connect(
+        &panel,
+        &LocalAdjustmentPanel::committed,
         [&](const std::vector<LocalAdjustment>& b, const std::vector<LocalAdjustment>& a) {
             stack.push(new MaskCmd(b, a));
         });

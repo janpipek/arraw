@@ -33,9 +33,9 @@ struct RadialCurve {
 // The resolved lens correction for one shot. Populated by a source (lensfun or
 // embedded); the apply step is source-agnostic.
 struct LensCorrectionModel {
-    RadialCurve distortion;   // radial displacement
-    RadialCurve tcaR, tcaB;   // per-channel radial scale (green = reference)
-    RadialCurve vignette;     // radial gain
+    RadialCurve distortion; // radial displacement
+    RadialCurve tcaR, tcaB; // per-channel radial scale (green = reference)
+    RadialCurve vignette;   // radial gain
     bool hasDistortion = false;
     bool hasTCA = false;
     bool hasVignetting = false;
@@ -67,5 +67,5 @@ float autoFillZoom(const LensCorrectionModel& model, int width, int height);
 // mutated. A correction runs only when both its model flag and its toggle are set,
 // so an empty model or all-off toggles is an exact no-op. When distortion is active
 // the warp is auto-zoomed (see autoFillZoom) so the corrected frame fills.
-ImageBuffer applyLensCorrection(const ImageBuffer& buf, const LensCorrectionModel& model,
-                                const LensCorrectionToggles& toggles);
+ImageBuffer applyLensCorrection(
+    const ImageBuffer& buf, const LensCorrectionModel& model, const LensCorrectionToggles& toggles);

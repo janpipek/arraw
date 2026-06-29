@@ -1,5 +1,5 @@
-#include <QString>
 #include "develop/DemosaicAlgorithm.h"
+#include <QString>
 
 int librawUserQual(DemosaicAlgorithm algo) {
     switch (algo) {
@@ -49,10 +49,14 @@ bool sensorSupportsDemosaicSelection(unsigned filters) {
 }
 
 DemosaicAlgorithm demosaicFromToken(const QString& token) {
-    for (const DemosaicAlgorithm algo : {DemosaicAlgorithm::AHD, DemosaicAlgorithm::VNG,
-                                         DemosaicAlgorithm::PPG, DemosaicAlgorithm::DCB,
-                                         DemosaicAlgorithm::DHT, DemosaicAlgorithm::AAHD,
-                                         DemosaicAlgorithm::Linear}) {
+    for (const DemosaicAlgorithm algo :
+         {DemosaicAlgorithm::AHD,
+          DemosaicAlgorithm::VNG,
+          DemosaicAlgorithm::PPG,
+          DemosaicAlgorithm::DCB,
+          DemosaicAlgorithm::DHT,
+          DemosaicAlgorithm::AAHD,
+          DemosaicAlgorithm::Linear}) {
         if (token == demosaicToken(algo)) {
             return algo;
         }

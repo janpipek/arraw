@@ -208,11 +208,14 @@ TEST_CASE("localChangeLabel names a single delta change with its value", "[local
     std::vector<LocalAdjustment> before(1);
     std::vector<LocalAdjustment> after(1);
     after[0].exposure = 0.5f; // EV, signed, two decimals
-    CHECK(localChangeLabel(before, after) == QString::fromUtf8("Linear 1 \xe2\x80\x94 Exposure +0.50 EV"));
+    CHECK(
+        localChangeLabel(before, after)
+        == QString::fromUtf8("Linear 1 \xe2\x80\x94 Exposure +0.50 EV"));
 
     after[0] = LocalAdjustment{};
     after[0].contrast = -20.0f;
-    CHECK(localChangeLabel(before, after) == QString::fromUtf8("Linear 1 \xe2\x80\x94 Contrast -20"));
+    CHECK(
+        localChangeLabel(before, after) == QString::fromUtf8("Linear 1 \xe2\x80\x94 Contrast -20"));
 }
 
 TEST_CASE("localChangeLabel names a geometry move", "[localadj]") {

@@ -1,6 +1,6 @@
-#include "develop/LocalAdjustment.h"
-#include "develop/GlobalAdjustment.h"
 #include "develop/BasicTone.h"
+#include "develop/GlobalAdjustment.h"
+#include "develop/LocalAdjustment.h"
 #include <algorithm>
 #include <cmath>
 
@@ -63,8 +63,8 @@ LutAtlas makeLutAtlas(const GlobalAdjustment& adjustment) {
         // shader extrapolates headroom as (luminance - 1) * slope.
         constexpr float headroomStep = 1.0f / float(kLutSize - 1);
         const float endpoint = mapLuminance(1.0f, *rowAdjustment);
-        const float highSlope =
-            (mapLuminance(1.0f + headroomStep, *rowAdjustment) - endpoint) / headroomStep;
+        const float highSlope = (mapLuminance(1.0f + headroomStep, *rowAdjustment) - endpoint)
+                                / headroomStep;
         for (int i = 0; i < kLutSize; ++i) {
             const int offset = (row * kLutSize + i) * 4;
             atlas.rgba[offset] = mapLuminance(lutIndexToLuminance(i), *rowAdjustment);

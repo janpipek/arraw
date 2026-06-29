@@ -1,10 +1,10 @@
-#include "core/ImageMetadata.h"
-#include "develop/UserMetadata.h"
-#include "develop/GlobalAdjustment.h"
-#include "pipeline/LoadResult.h"
 #include "ImageLoadWorkflow.h"
+#include "core/ImageMetadata.h"
 #include "develop/DemosaicAlgorithm.h"
+#include "develop/GlobalAdjustment.h"
+#include "develop/UserMetadata.h"
 #include "io/XmpSidecar.h"
+#include "pipeline/LoadResult.h"
 
 #include <catch2/catch_test_macros.hpp>
 

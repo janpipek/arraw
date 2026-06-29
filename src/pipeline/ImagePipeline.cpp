@@ -1,5 +1,5 @@
-#include "core/Orientation.h"
 #include "pipeline/ImagePipeline.h"
+#include "core/Orientation.h"
 #include "core/WorkingSpace.h"
 #include <algorithm>
 #include <cmath>
@@ -159,4 +159,3 @@ void normalizeExposure(ImageBuffer& buf) {
     for (float& v : buf.data)
         v = std::max(0.0f, v * gain);
 }
-

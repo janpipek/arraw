@@ -1,5 +1,5 @@
-#include "core/WorkingSpace.h"
 #include "pipeline/OkLab.h"
+#include "core/WorkingSpace.h"
 
 #include <algorithm>
 #include <cmath>
