@@ -68,7 +68,7 @@ bool isStaleDimensionTag(const Exiv2::Exifdatum& datum) {
 void applySourceExif(
     Exiv2::Image& output, const QString& sourcePath, const ExportMetadataSelection& selection) {
     auto source = Exiv2::ImageFactory::open(utf8(sourcePath));
-    if (!source)
+    if (source.get() == nullptr)
         throw Exiv2::Error(Exiv2::ErrorCode::kerInputDataReadFailed);
 
     source->readMetadata();
@@ -104,7 +104,7 @@ ExportMetadataResult embedExportMetadata(
 #else
     try {
         auto output = Exiv2::ImageFactory::open(utf8(outputPath));
-        if (!output)
+        if (output.get() == nullptr)
             return {ExportMetadataStatus::Failed, QStringLiteral("exiv2 could not open output")};
 
         output->readMetadata();
