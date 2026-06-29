@@ -179,6 +179,7 @@ private:
 
     static QByteArray expandToRgba(const ImageBuffer& buf);
     void prepareToneLut(const GlobalAdjustment& adjustment);
+    void prepareBrushMasks(const GlobalAdjustment& adjustment);
     void flushPendingUploads(QRhiResourceUpdateBatch* batch);
     void recordPass(
         QRhiCommandBuffer* cb,
@@ -280,6 +281,12 @@ private:
     std::unique_ptr<QRhiTexture> imageTex[2];      // indexed by Slot
     std::unique_ptr<QRhiTexture> sensorClipTex[2]; // indexed by Slot
     std::unique_ptr<QRhiTexture> sensorClipDummyTex;
+    // Painted Brush masks (docs/adr/0047): an R8 sampler2DArray with one layer per
+    // local adjustment, sampled at vUV. Null when no brush mask exists, in which
+    // case the 1×1 single-layer dummy is bound to satisfy the binding.
+    std::unique_ptr<QRhiTexture> brushMaskArrayTex;
+    std::unique_ptr<QRhiTexture> brushMaskDummyTex;
+    bool brushMaskDummyDirty = false;
 
     // One srb, rebuilt when the sampled image texture or a LUT texture object
     // changes; layout is constant so it stays pipeline-compatible.
@@ -313,6 +320,17 @@ private:
     std::vector<std::array<float, 6>> toneLutSource; // tone fields the LUT was built from
     DisplayLut pendingDisplayLut;
     bool displayLutDirty = false;
+
+    // Brush-mask array upload (docs/adr/0047): rebuilt only when the set of brush
+    // rasters changes (tracked by raster pointer identity per layer).
+    struct PendingBrushMasks {
+        int width = 0;
+        int height = 0;
+        std::vector<QByteArray> layers; // per local-adjustment R8 bytes (zero = unpainted/non-brush)
+    };
+    PendingBrushMasks pendingBrushMasks;
+    bool brushMasksDirty = false;
+    std::vector<const void*> brushMaskSource;
 
     // ── Colour Noise Reduction GPU resources (docs/adr/0034) ─────────────────
     QShader nrVs, nrExtractFs, nrBlurHFs, nrBlurVFs, nrRecombineFs;

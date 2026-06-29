@@ -77,6 +77,8 @@ layout(binding = 3) uniform sampler3D uLut3D;      // display LUT (soft-proof / 
 layout(binding = 4) uniform sampler2D uToneLUT;    // 256×17: global + 16 Local Adjustments
 layout(binding = 5) uniform sampler2D uSensorClip; // RAW sensor clipping mask, same geometry as image
 layout(binding = 6) uniform sampler2D uSpatialContext; // blurred source luminance for spatial globals
+layout(binding = 7) uniform sampler2DArray uBrushMasks; // painted Brush masks (docs/adr/0047),
+                                                        // one R8 layer per local adjustment slot
 
 // Rec.2020 luma — the whole pipeline works in linear Rec.2020 (docs/adr/0001).
 // Must match kLumaR/G/B in src/ImagePipeline.h.
@@ -538,9 +540,14 @@ float radialMaskWeight(int i, vec2 uv, float aspect) {
     return w;
 }
 
-// Dispatch on the mask type tag (laColor.z): 0 = Linear, 1 = Radial.
+// Dispatch on the mask type tag (laColor.z): 0 = Linear, 1 = Radial, 2 = Brush.
+// The painted Brush samples its raster at vUV — buffer space, glued to the image
+// pixels through crop/rotation/orientation (docs/adr/0047) — at layer i.
 float maskWeight(int i, vec2 uv, float aspect) {
-    if (int(u.laColor[i].z + 0.5) == 1)
+    int type = int(u.laColor[i].z + 0.5);
+    if (type == 2)
+        return texture(uBrushMasks, vec3(vUV, float(i))).r;
+    if (type == 1)
         return radialMaskWeight(i, uv, aspect);
     return linearMaskWeight(i, uv, aspect);
 }

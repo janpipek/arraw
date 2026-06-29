@@ -95,6 +95,12 @@ void RendererCore::initialize(QRhi* r) {
     sensorClipDummyDirty = true;
     ++generation;
 
+    // A 1×1 single-layer R8 array bound whenever no brush mask exists (adr 0047).
+    brushMaskDummyTex.reset(rhi->newTextureArray(QRhiTexture::R8, 1, QSize(1, 1)));
+    brushMaskDummyTex->create();
+    brushMaskDummyDirty = true;
+    ++generation;
+
     toneLutTex.reset(rhi->newTexture(QRhiTexture::RGBA32F, QSize(tone::kLutSize, tone::kLutRows)));
     toneLutTex->create();
     toneLutSource.clear();
@@ -159,6 +165,8 @@ void RendererCore::release() {
     sensorClipTex[0].reset();
     sensorClipTex[1].reset();
     sensorClipDummyTex.reset();
+    brushMaskArrayTex.reset();
+    brushMaskDummyTex.reset();
     displayLutTex.reset();
     curveLutTex.reset();
     toneLutTex.reset();
@@ -238,6 +246,59 @@ void RendererCore::prepareToneLut(const GlobalAdjustment& adjustment) {
     pendingToneLut = tone::makeLutAtlas(adjustment);
     toneLutDirty = true;
     toneLutSource = std::move(signature);
+}
+
+// Identity of each local adjustment's brush raster (nullptr for non-brush or
+// unpainted), so the array is rebuilt only when a stroke swaps in a new raster.
+static std::vector<const void*> brushSignature(const GlobalAdjustment& a) {
+    const int n = std::min<int>(int(a.localAdjustments.size()), 16);
+    std::vector<const void*> sig;
+    sig.reserve(n);
+    for (int i = 0; i < n; ++i) {
+        const auto* b = std::get_if<BrushMask>(&a.localAdjustments[i].mask);
+        sig.push_back(b && b->raster ? static_cast<const void*>(b->raster.get()) : nullptr);
+    }
+    return sig;
+}
+
+void RendererCore::prepareBrushMasks(const GlobalAdjustment& adjustment) {
+    std::vector<const void*> signature = brushSignature(adjustment);
+    if (signature == brushMaskSource)
+        return;
+
+    const int n = int(signature.size());
+    // The array size comes from the first painted raster; every brush raster of an
+    // image shares the buffer-derived resolution (docs/adr/0047). Without any
+    // brush mask the array stays empty and the dummy is bound.
+    int w = 0, h = 0;
+    for (int i = 0; i < n; ++i) {
+        const auto* b = std::get_if<BrushMask>(&adjustment.localAdjustments[i].mask);
+        if (b && b->raster && b->raster->width > 0) {
+            w = b->raster->width;
+            h = b->raster->height;
+            break;
+        }
+    }
+
+    PendingBrushMasks pending;
+    if (w > 0 && h > 0) {
+        pending.width = w;
+        pending.height = h;
+        pending.layers.resize(n);
+        const QByteArray zero(qsizetype(w) * h, '\0');
+        for (int i = 0; i < n; ++i) {
+            const auto* b = std::get_if<BrushMask>(&adjustment.localAdjustments[i].mask);
+            if (b && b->raster && b->raster->width == w && b->raster->height == h)
+                pending.layers[i] = QByteArray(
+                    reinterpret_cast<const char*>(b->raster->data.data()),
+                    qsizetype(b->raster->data.size()));
+            else
+                pending.layers[i] = zero;
+        }
+    }
+    pendingBrushMasks = std::move(pending);
+    brushMasksDirty = true;
+    brushMaskSource = std::move(signature);
 }
 
 void RendererCore::setCurveLut(const std::array<float, 256 * 4>& rgba) {
@@ -348,6 +409,43 @@ void RendererCore::flushPendingUploads(QRhiResourceUpdateBatch* batch) {
         displayLutDirty = false;
     }
 
+    if (brushMaskDummyDirty) {
+        const QByteArray data(1, '\0');
+        batch->uploadTexture(
+            brushMaskDummyTex.get(),
+            QRhiTextureUploadDescription(
+                QRhiTextureUploadEntry(0, 0, QRhiTextureSubresourceUploadDescription(data))));
+        brushMaskDummyDirty = false;
+    }
+
+    if (brushMasksDirty) {
+        const int layers = int(pendingBrushMasks.layers.size());
+        const QSize sz(pendingBrushMasks.width, pendingBrushMasks.height);
+        if (layers == 0 || sz.isEmpty()) {
+            if (brushMaskArrayTex) { // no brush mask left — fall back to the dummy
+                brushMaskArrayTex.reset();
+                ++generation;
+            }
+        } else {
+            if (!brushMaskArrayTex || brushMaskArrayTex->pixelSize() != sz
+                || brushMaskArrayTex->arraySize() != layers) {
+                brushMaskArrayTex.reset(rhi->newTextureArray(QRhiTexture::R8, layers, sz));
+                brushMaskArrayTex->create();
+                ++generation;
+            }
+            std::vector<QRhiTextureUploadEntry> entries;
+            entries.reserve(layers);
+            for (int i = 0; i < layers; ++i)
+                entries.emplace_back(
+                    i, 0, QRhiTextureSubresourceUploadDescription(pendingBrushMasks.layers[i]));
+            QRhiTextureUploadDescription desc;
+            desc.setEntries(entries.begin(), entries.end());
+            batch->uploadTexture(brushMaskArrayTex.get(), desc);
+        }
+        pendingBrushMasks = {};
+        brushMasksDirty = false;
+    }
+
     if (extraUploadTex) {
         batch->uploadTexture(
             extraUploadTex,
@@ -382,6 +480,11 @@ void RendererCore::buildBindings(
             5, QRhiShaderResourceBinding::FragmentStage, sensorTex, sampler.get()),
         QRhiShaderResourceBinding::sampledTexture(
             6, QRhiShaderResourceBinding::FragmentStage, spatialTex, sampler.get()),
+        QRhiShaderResourceBinding::sampledTexture(
+            7,
+            QRhiShaderResourceBinding::FragmentStage,
+            brushMaskArrayTex ? brushMaskArrayTex.get() : brushMaskDummyTex.get(),
+            sampler.get()),
     });
     dst->create();
 }
@@ -550,8 +653,12 @@ void RendererCore::fillUbuf(Ubuf& ub, const FrameParams& fp) const {
         const SharedUniform d = toUniform(la);
         const int k = i * 4;
 
-        float maskType = 0.0f; // 0 = Linear, 1 = Radial
-        if (const auto* m = std::get_if<LinearMask>(&la.mask)) {
+        float maskType = 0.0f; // 0 = Linear, 1 = Radial, 2 = Brush
+        if (std::holds_alternative<BrushMask>(la.mask)) {
+            // Geometry slots unused; the raster is sampled at vUV from the brush
+            // array's layer i (docs/adr/0047).
+            maskType = 2.0f;
+        } else if (const auto* m = std::get_if<LinearMask>(&la.mask)) {
             ub.laGeom[k + 0] = float(m->p0.x());
             ub.laGeom[k + 1] = float(m->p0.y());
             ub.laGeom[k + 2] = float(m->p1.x());
@@ -892,6 +999,7 @@ void RendererCore::record(
         return;
     }
     prepareToneLut(fp.adjustments);
+    prepareBrushMasks(fp.adjustments);
     QRhiResourceUpdateBatch* batch = rhi->nextResourceUpdateBatch();
     flushPendingUploads(batch); // creates/recreates the slot's texture
     const int slotIndex = int(slot);
@@ -963,6 +1071,7 @@ QImage RendererCore::renderOffscreenTex(
     if (rhi->beginOffscreenFrame(&cb) != QRhi::FrameOpSuccess)
         return {};
     prepareToneLut(fp.adjustments);
+    prepareBrushMasks(fp.adjustments);
     QRhiResourceUpdateBatch* batch = rhi->nextResourceUpdateBatch();
     flushPendingUploads(batch);
     QRhiTexture* tex = slotIndex >= 0 ? imageTex[slotIndex].get() : extTex;
@@ -1072,6 +1181,7 @@ bool RendererCore::recordOffscreenReadback(
     // pass into the caller's in-flight `cb`, reusing this frame's cached NR
     // denoised texture (ADR 0034) so the sample matches the live preview.
     prepareToneLut(fp.adjustments);
+    prepareBrushMasks(fp.adjustments);
     QRhiResourceUpdateBatch* batch = rhi->nextResourceUpdateBatch();
     flushPendingUploads(batch);
     const int slotIndex = int(slot);
