@@ -114,7 +114,7 @@ Install vcpkg using the [vcpkg installation guide](https://learn.microsoft.com/e
 (Note: scoop-based install did not work for me)
 
 ```bat
-vcpkg install qtbase qttools qtshadertools libraw[openmp] lcms exiv2
+vcpkg install qtbase qttools qtshadertools libraw[openmp] lcms lensfun exiv2
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
   -DCMAKE_TOOLCHAIN_FILE=path/to/vcpkg/scripts/buildsystems/vcpkg.cmake
 ninja -C build

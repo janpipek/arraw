@@ -48,7 +48,7 @@ Install the ports arraw needs, for the `x64-windows` triplet (this is a long fir
 build — Qt is large):
 
 ```powershell
-C:\dev\vcpkg\vcpkg.exe install qtbase qttools qtshadertools "libraw[openmp]" lcms exiv2 --triplet x64-windows
+C:\dev\vcpkg\vcpkg.exe install qtbase qttools qtshadertools "libraw[openmp]" lcms lensfun exiv2 --triplet x64-windows
 ```
 
 `qtshadertools` is required: it provides `qsb`, which compiles the GLSL shaders in
@@ -69,8 +69,8 @@ Verify they landed:
 C:\dev\vcpkg\vcpkg.exe list
 ```
 
-You should see `qtbase`, `qttools`, `qtshadertools`, `libraw`, `lcms`, and `exiv2`
-among the output.
+You should see `qtbase`, `qttools`, `qtshadertools`, `libraw`, `lcms`, `lensfun`,
+and `exiv2` among the output.
 
 ---
 
@@ -242,10 +242,16 @@ python tools/package_windows.py
 ```
 
 Useful flags: `--skip-build` (zip an existing `build-release/` without rebuilding),
-`--vcvars`, `--toolchain`, `--vcpkg-installed`, `--build-dir`, `--out-dir`. The archive
-contains `arraw.exe`, the Release Qt/libraw/lcms runtime DLLs, and the `platforms\` /
-`imageformats\` plugin folders plus `jpeg62.dll` — i.e. everything the deploy step
-(§6.2) places next to the binary, in its Release variant.
+`--vcvars`, `--toolchain`, `--vcpkg-installed`, `--lensfun-db-dir`, `--build-dir`,
+`--out-dir`. The archive contains `arraw.exe`, the Release Qt/libraw/lcms/lensfun
+runtime DLLs, the `platforms\` / `imageformats\` plugin folders plus `jpeg62.dll`,
+and the bundled lensfun database under `lensfun\db\`. The package build configures
+with `ARRAW_WITH_LENSFUN=ON`, so it fails instead of silently shipping lens
+correction compiled out.
+
+The script usually finds the lensfun XML database automatically from vcpkg. If your
+vcpkg layout is different, pass `--lensfun-db-dir` with the directory containing the
+database XML files.
 
 To also build the installer, install Inno Setup (`scoop install inno-setup`, so
 `ISCC` is on PATH) and run `python tools/package_windows.py --installer`. It writes

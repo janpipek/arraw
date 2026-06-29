@@ -85,7 +85,52 @@ def run(cmd: list[str], env: dict[str, str] | None = None) -> None:
     subprocess.run(cmd, env=env, check=True)
 
 
-def stage_app(build: Path, stage: Path, env: dict[str, str]) -> None:
+def has_lensfun_xml(path: Path) -> bool:
+    return path.is_dir() and any(path.glob("*.xml"))
+
+
+def infer_vcpkg_root(toolchain: Path) -> Path | None:
+    parts = toolchain.parts
+    for i, part in enumerate(parts):
+        if part.lower() == "scripts" and i > 0:
+            return Path(*parts[:i])
+    return None
+
+
+def lensfun_db_candidates(vcpkg_installed: Path, toolchain: Path, explicit: Path | None) -> list[Path]:
+    candidates: list[Path] = []
+    if explicit is not None:
+        candidates.append(explicit)
+    candidates.extend(
+        [
+            vcpkg_installed / "share" / "lensfun" / "db",
+            vcpkg_installed / "share" / "lensfun" / "version_1",
+            vcpkg_installed / "share" / "lensfun",
+        ]
+    )
+    vcpkg_root = infer_vcpkg_root(toolchain)
+    if vcpkg_root is not None:
+        candidates.extend(sorted((vcpkg_root / "buildtrees" / "lensfun" / "src").glob("*/data/db")))
+    return candidates
+
+
+def copy_lensfun_db(stage: Path, vcpkg_installed: Path, toolchain: Path, explicit: Path | None) -> None:
+    for candidate in lensfun_db_candidates(vcpkg_installed, toolchain, explicit):
+        if has_lensfun_xml(candidate):
+            dest = stage / "lensfun" / "db"
+            shutil.copytree(candidate, dest, dirs_exist_ok=True, ignore=shutil.ignore_patterns("*.pyc", "__pycache__"))
+            copied = sum(1 for _ in dest.glob("*.xml"))
+            print(f"==> Copied lensfun DB from {candidate} ({copied} XML files)")
+            return
+    searched = "\n  ".join(str(path) for path in lensfun_db_candidates(vcpkg_installed, toolchain, explicit))
+    sys.exit(
+        "lensfun database XML files not found. Install the lensfun vcpkg port or pass "
+        f"--lensfun-db-dir.\nSearched:\n  {searched}"
+    )
+
+
+def stage_app(build: Path, stage: Path, env: dict[str, str], vcpkg_installed: Path,
+              toolchain: Path, lensfun_db_dir: Path | None) -> None:
     """Stage the runnable app: exe + build runtime DLLs + Qt plugin dirs + CRT runtime."""
     exe = build / "arraw.exe"
     if not exe.is_file():
@@ -102,6 +147,7 @@ def stage_app(build: Path, stage: Path, env: dict[str, str]) -> None:
         if src.is_dir():
             shutil.copytree(src, stage / plugin_dir, ignore=shutil.ignore_patterns("*.pdb"))
     copy_runtime_dlls(env, stage)
+    copy_lensfun_db(stage, vcpkg_installed, toolchain, lensfun_db_dir)
 
 
 def main() -> None:
@@ -111,6 +157,7 @@ def main() -> None:
     parser.add_argument("--vcvars", default=DEFAULT_VCVARS, help="path to vcvars64.bat")
     parser.add_argument("--toolchain", default=DEFAULT_TOOLCHAIN, help="vcpkg CMake toolchain file")
     parser.add_argument("--vcpkg-installed", default=DEFAULT_VCPKG_INSTALLED, help="vcpkg installed tree")
+    parser.add_argument("--lensfun-db-dir", help="directory containing lensfun database XML files")
     parser.add_argument("--skip-build", action="store_true", help="package an existing build instead of rebuilding")
     parser.add_argument("--installer", action="store_true", help="also build the Inno Setup installer (needs ISCC on PATH)")
     parser.add_argument("--skip-zip", action="store_true", help="do not build the portable ZIP")
@@ -130,13 +177,21 @@ def main() -> None:
                 "-DVCPKG_TARGET_TRIPLET=x64-windows",
                 f"-DARRAW_VCPKG_INSTALLED={args.vcpkg_installed}",
                 "-DARRAW_BUILD_TESTS=OFF",
+                "-DARRAW_WITH_LENSFUN=ON",
             ],
             env=env,
         )
         run(["cmake", "--build", str(build)], env=env)
 
     stage = build / "_package" / stage_name
-    stage_app(build, stage, env)
+    stage_app(
+        build,
+        stage,
+        env,
+        Path(args.vcpkg_installed),
+        Path(args.toolchain),
+        Path(args.lensfun_db_dir) if args.lensfun_db_dir else None,
+    )
 
     out = REPO / args.out_dir
     out.mkdir(parents=True, exist_ok=True)
