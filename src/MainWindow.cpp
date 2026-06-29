@@ -285,11 +285,11 @@ MainWindow::MainWindow(QWidget* parent)
     setupStatusBar();
     setupToolbar();
 
-    // The adjustments dock + reveal strip are NOT listed here: they are a
-    // CollapsiblePane pair (ADR 0012), so lights-out drives them through
-    // adjustmentsPane->hide()/show() to keep that invariant intact.
+    // The collapsible dock + reveal-strip pairs are NOT listed here: lights-out
+    // drives them through CollapsiblePane so each collapsed/expanded state
+    // survives a hide/show cycle.
     chromeHider.emplace(
-        std::vector<QWidget*>{menuBar(), mainToolBar, statusBar(), filmStripDock, historyDock});
+        std::vector<QWidget*>{menuBar(), mainToolBar, statusBar(), filmStripDock});
 
     connect(proofPanel, &ProofingPanel::proofingChanged, this, &MainWindow::rebuildDisplayLut);
     rebuildDisplayLut();
@@ -499,8 +499,12 @@ MainWindow::MainWindow(QWidget* parent)
     restoreGeometry(s.value("geometry").toByteArray());
     restoreState(s.value("windowState").toByteArray());
 
-    // restoreState may have brought the Adjustments dock back collapsed; align
-    // the pane's internal state with the widgets it just restored.
+    // restoreState may have brought the side panes back collapsed; align each
+    // pane's internal state with the widgets it just restored.
+    if (historyDock->isHidden())
+        historyPane->collapse();
+    else
+        historyPane->expand();
     if (adjustmentsDock->isHidden())
         adjustmentsPane->collapse();
     else
@@ -590,6 +594,10 @@ void MainWindow::setupMenus() {
 
     auto* view = menuBar()->addMenu("&View");
     view->addAction(filmStripDock->toggleViewAction());
+    auto* toggleHistory = view->addAction("History Panel", this, [this] {
+        historyPane->toggle();
+    });
+    toggleHistory->setShortcut(Qt::Key_F7);
     auto* toggleAdjustments = view->addAction("Adjustments Panel", this, [this] {
         adjustmentsPane->toggle();
     });
@@ -609,8 +617,9 @@ void MainWindow::setupMenus() {
     // A QAction's shortcut only fires while one of its host widgets is visible
     // and enabled. These live on the View menu, which lights-out (F12) hides and
     // image loading disables — so also host them on the window itself, which
-    // stays visible/enabled, or F8/F11/F12 would die exactly when needed
+    // stays visible/enabled, or F7/F8/F11/F12 would die exactly when needed
     // (docs/adr/0028).
+    addAction(toggleHistory);
     addAction(toggleAdjustments);
     addAction(fullScreenAction);
     addAction(lightsOutAction);
@@ -1121,21 +1130,44 @@ void MainWindow::setupDocks() {
         filmStrip, &FilmStrip::populateContextMenu, this, &MainWindow::populateFilmStripContextMenu);
 
     // History + Snapshots (left), Lightroom-style, visible while editing (ADR 0038).
+    // Like Adjustments, it collapses to a thin reveal strip so the viewport can
+    // reclaim horizontal space without making the panel undiscoverable.
     historyDock = new QDockWidget("History", this);
     historyDock->setObjectName("HistoryDock"); // saveState/restoreState key
     historyDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
-    historyDock->setFeatures(
-        QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable
-        | QDockWidget::DockWidgetClosable);
+    historyDock->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable);
+
+    auto* historyTitle = new QWidget(historyDock);
+    auto* historyTitleLayout = new QHBoxLayout(historyTitle);
+    historyTitleLayout->setContentsMargins(4, 2, 6, 2);
+    auto* historyCollapseBtn = new QToolButton(historyTitle);
+    historyCollapseBtn->setAutoRaise(true);
+    historyCollapseBtn->setText("‹"); // toward the edge: click to collapse
+    historyCollapseBtn->setToolTip("Collapse panel (F7)");
+    historyTitleLayout->addWidget(historyCollapseBtn);
+    historyTitleLayout->addWidget(new QLabel("History", historyTitle), 1);
+    historyDock->setTitleBarWidget(historyTitle);
+
     historyPanel = new HistoryPanel(undoStack, historyDock);
     historyDock->setWidget(historyPanel);
     addDockWidget(Qt::LeftDockWidgetArea, historyDock);
-    historyDock->toggleViewAction()->setText("History");
 
     connect(historyPanel, &HistoryPanel::addRequested, this, &MainWindow::addCurrentAsSnapshot);
     connect(historyPanel, &HistoryPanel::restoreRequested, this, &MainWindow::restoreSnapshot);
     connect(historyPanel, &HistoryPanel::renameRequested, this, &MainWindow::renameSnapshot);
     connect(historyPanel, &HistoryPanel::deleteRequested, this, &MainWindow::deleteSnapshot);
+
+    auto* historyStrip = new QToolBar("History Strip", this);
+    historyStrip->setObjectName("HistoryStrip"); // saveState/restoreState key
+    historyStrip->setMovable(false);
+    historyStrip->setFloatable(false);
+    auto* historyExpandAction = historyStrip->addAction("›"); // toward the centre: click to expand
+    historyExpandAction->setToolTip("Expand panel (F7)");
+    addToolBar(Qt::LeftToolBarArea, historyStrip);
+
+    historyPane = std::make_unique<CollapsiblePane>(historyDock, historyStrip);
+    connect(historyCollapseBtn, &QToolButton::clicked, this, [this] { historyPane->collapse(); });
+    connect(historyExpandAction, &QAction::triggered, this, [this] { historyPane->expand(); });
 
     // Adjustments + metadata (right). Collapses to a thin edge strip (ADR 0012).
     auto* rightDock = adjustmentsDock = new QDockWidget("Adjustments", this);
@@ -1614,9 +1646,11 @@ void MainWindow::toggleChrome() {
 
     if (chromeHider->hidden()) {
         chromeHider->restore();
+        historyPane->show();
         adjustmentsPane->show();
     } else {
         chromeHider->hide();
+        historyPane->hide();
         adjustmentsPane->hide();
     }
     lightsOutAction->setChecked(chromeHider->hidden());
@@ -1625,6 +1659,7 @@ void MainWindow::toggleChrome() {
 void MainWindow::restoreFocusModes() {
     if (chromeHider && chromeHider->hidden()) {
         chromeHider->restore();
+        historyPane->show();
         adjustmentsPane->show();
         lightsOutAction->setChecked(false);
     }

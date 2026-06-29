@@ -197,7 +197,8 @@ private:
     FilmStrip* filmStrip;
     QDockWidget* filmStripDock;
     QDockWidget* historyDock;     // left; History list + Snapshots (docs/adr/0038)
-    QDockWidget* adjustmentsDock; // right; collapses to a strip
+    QDockWidget* adjustmentsDock; // right; Adjustments/Masks/Spots/Info
+    std::unique_ptr<CollapsiblePane> historyPane;     // historyDock ↔ edge strip
     std::unique_ptr<CollapsiblePane> adjustmentsPane; // adjustmentsDock ↔ edge strip
     QToolBar* mainToolBar = nullptr;
     QUndoStack* undoStack;
