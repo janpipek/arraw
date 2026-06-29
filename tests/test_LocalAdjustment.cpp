@@ -277,6 +277,29 @@ TEST_CASE("localChangeLabel names a geometry move", "[localadj]") {
     CHECK(localChangeLabel(before, after) == "Linear 1 Geometry");
 }
 
+TEST_CASE("localChangeLabel names a brush mask by its kind", "[localadj]") {
+    LocalAdjustment brush;
+    brush.mask = BrushMask{};
+    CHECK(localChangeLabel({}, {brush}) == "Add Brush Mask");
+    CHECK(localChangeLabel({brush}, {}) == "Delete Brush Mask");
+}
+
+TEST_CASE("localChangeLabel calls a brush raster change a Stroke, not Geometry", "[localadj]") {
+    std::vector<LocalAdjustment> before(1);
+    before[0].mask = BrushMask{}; // empty raster
+    auto after = before;
+    after[0].mask = BrushMask{std::make_shared<const BrushRaster>(BrushRaster{4, 4, {}})};
+    CHECK(localChangeLabel(before, after) == QString::fromUtf8("Brush 1 \xe2\x80\x94 Stroke"));
+}
+
+TEST_CASE("maskDisplayName names brush masks with their own ordinal", "[localadj]") {
+    std::vector<LocalAdjustment> list(2);
+    list[0].mask = BrushMask{};
+    list[1].mask = BrushMask{};
+    CHECK(maskDisplayName(list, 0) == "Brush 1");
+    CHECK(maskDisplayName(list, 1) == "Brush 2");
+}
+
 TEST_CASE("localChangeLabel uses the panel ordinal for the changed mask", "[localadj]") {
     // Two Linear masks then a Radial; editing the second Linear reads "Linear 2".
     std::vector<LocalAdjustment> before(3);

@@ -26,9 +26,11 @@ LocalAdjustmentPanel::LocalAdjustmentPanel(QWidget* parent)
     auto* buttons = new QHBoxLayout;
     auto* addLinearButton = new QPushButton("Add Linear", this);
     auto* addRadialButton = new QPushButton("Add Radial", this);
+    auto* addBrushButton = new QPushButton("Add Brush", this);
     deleteButton = new QPushButton("Delete", this);
     buttons->addWidget(addLinearButton);
     buttons->addWidget(addRadialButton);
+    buttons->addWidget(addBrushButton);
     buttons->addWidget(deleteButton);
     col->addLayout(buttons);
 
@@ -87,6 +89,26 @@ LocalAdjustmentPanel::LocalAdjustmentPanel(QWidget* parent)
     radGrid->addWidget(radInvert, 3, 0, 1, 4);
     geomStack->addWidget(radPage);
 
+    // Brush page (docs/adr/0047): tool settings — Size, Feather, Flow, and the
+    // Add/Erase mode. These are not stored on the mask; they drive painting.
+    auto* brushPage = new QWidget(this);
+    auto* brushGrid = new QGridLayout(brushPage);
+    auto makeBrushSlider = [brushGrid,
+                            brushPage](const char* label, int row, int lo, int hi, int val) {
+        brushGrid->addWidget(new QLabel(label, brushPage), row, 0);
+        auto* sl = new QSlider(Qt::Horizontal, brushPage);
+        sl->setRange(lo, hi);
+        sl->setValue(val);
+        brushGrid->addWidget(sl, row, 1);
+        return sl;
+    };
+    brushSizeSlider = makeBrushSlider("Size", 0, 1, 100, 20);
+    brushFeatherSlider = makeBrushSlider("Feather", 1, 0, 100, 50);
+    brushFlowSlider = makeBrushSlider("Flow", 2, 1, 100, 50);
+    brushErase = new QCheckBox("Erase", brushPage);
+    brushGrid->addWidget(brushErase, 3, 0, 1, 2);
+    geomStack->addWidget(brushPage);
+
     col->addWidget(geomStack);
 
     // Delta sliders for the active mask — one row per shared develop field plus
@@ -120,7 +142,12 @@ LocalAdjustmentPanel::LocalAdjustmentPanel(QWidget* parent)
             spin->setValue(spec.rawToDisplay(v));
             syncActiveFromSliders();
         });
-        connect(slider, &QSlider::sliderReleased, this, [this] { commit(); });
+        // Suppress the mask overlay only while the handle is held, then restore.
+        connect(slider, &QSlider::sliderPressed, this, [this] { emit maskOverlaySuppressed(true); });
+        connect(slider, &QSlider::sliderReleased, this, [this] {
+            emit maskOverlaySuppressed(false);
+            commit();
+        });
         connect(
             spin,
             qOverload<double>(&QDoubleSpinBox::valueChanged),
@@ -152,7 +179,12 @@ LocalAdjustmentPanel::LocalAdjustmentPanel(QWidget* parent)
 
     connect(addLinearButton, &QPushButton::clicked, this, &LocalAdjustmentPanel::addLinearMask);
     connect(addRadialButton, &QPushButton::clicked, this, &LocalAdjustmentPanel::addRadialMask);
+    connect(addBrushButton, &QPushButton::clicked, this, &LocalAdjustmentPanel::addBrushMask);
     connect(deleteButton, &QPushButton::clicked, this, &LocalAdjustmentPanel::deleteActive);
+
+    for (QSlider* s : {brushSizeSlider, brushFeatherSlider, brushFlowSlider})
+        connect(s, &QSlider::valueChanged, this, [this] { emitBrushSettings(); });
+    connect(brushErase, &QCheckBox::toggled, this, [this] { emitBrushSettings(); });
     connect(maskList, &QListWidget::currentRowChanged, this, [this](int row) {
         loadActiveIntoSliders();
         setSlidersEnabled(row >= 0);
@@ -219,6 +251,20 @@ void LocalAdjustmentPanel::addRadialMask() {
     addMask(la);
 }
 
+void LocalAdjustmentPanel::addBrushMask() {
+    LocalAdjustment la;
+    la.mask = BrushMask{}; // empty raster; paint it on the image (docs/adr/0047)
+    addMask(la);
+}
+
+void LocalAdjustmentPanel::emitBrushSettings() {
+    // Size maps to a fraction of the buffer long edge (max 30%); feather/flow 0..1.
+    const double radiusFraction = brushSizeSlider->value() / 100.0 * 0.30;
+    const double feather = brushFeatherSlider->value() / 100.0;
+    const double flow = brushFlowSlider->value() / 100.0;
+    emit brushSettingsChanged(radiusFraction, feather, flow, brushErase->isChecked());
+}
+
 void LocalAdjustmentPanel::deleteActive() {
     const int i = activeIndex();
     if (i < 0 || i >= int(adjustments.size()))
@@ -251,7 +297,10 @@ void LocalAdjustmentPanel::loadActiveIntoSliders() {
     }
 
     // Geometry — show and load the page matching the active mask's type.
-    if (a && std::holds_alternative<RadialMask>(a->mask)) {
+    if (a && std::holds_alternative<BrushMask>(a->mask)) {
+        geomStack->setCurrentIndex(2);
+        emitBrushSettings(); // sync the viewport's brush tool to the panel values
+    } else if (a && std::holds_alternative<RadialMask>(a->mask)) {
         const RadialMask& r = std::get<RadialMask>(a->mask);
         geomStack->setCurrentIndex(1);
         const double vals[6]

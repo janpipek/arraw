@@ -1,9 +1,9 @@
+#include "pipeline/StandardImageLoader.h"
 #include "core/Orientation.h"
+#include "core/Trace.h"
+#include "pipeline/ColorManagement.h"
 #include "pipeline/ImagePipeline.h"
 #include "pipeline/LoadResult.h"
-#include "pipeline/StandardImageLoader.h"
-#include "pipeline/ColorManagement.h"
-#include "core/Trace.h"
 #include <QFileInfo>
 #include <QImage>
 #include <QImageReader>
@@ -42,12 +42,12 @@ LoadResult StandardImageLoader::load(const QString& path, std::shared_ptr<std::a
     return {
         std::move(fullRes),
         std::move(preview),
-        {}, // sensorClipFullRes
-        {}, // sensorClipPreview
-        {}, // metadata
-        {}, // embeddedXmpPacket (standard images carry no embedded XMP)
-        {}, // error
+        {},                   // sensorClipFullRes
+        {},                   // sensorClipPreview
+        {},                   // metadata
+        {},                   // embeddedXmpPacket (standard images carry no embedded XMP)
+        {},                   // error
         {0.0, 0.0, 1.0, 1.0}, // defaultCrop
-        {}, // lensModel
+        {},                   // lensModel
         seeded};
 }

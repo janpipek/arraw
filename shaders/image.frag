@@ -65,8 +65,8 @@ layout(std140, binding = 0) uniform buf {
     float textureAmount; // -1..+1 fine-detail local contrast
     float clarity;  // -1..+1 midtone local contrast
     float dehaze;   // -1..+1 practical haze compensation
-    int   convertToGrayscale; // 1: Black & White treatment on (docs/adr/0048); was pad1
-    int   pad2;
+    int   maskOverlay; // index of the mask to tint red while editing, -1 = off; was pad1
+    int   convertToGrayscale; // 1: Black & White treatment on (docs/adr/0048); was pad2
     int   pad3;
     vec4  bwMix[2];  // 8 B&W hue-mixer weights, -100..+100 (std140: vec4 pairs, like hslHue)
 } u;
@@ -79,6 +79,8 @@ layout(binding = 3) uniform sampler3D uLut3D;      // display LUT (soft-proof / 
 layout(binding = 4) uniform sampler2D uToneLUT;    // 256×17: global + 16 Local Adjustments
 layout(binding = 5) uniform sampler2D uSensorClip; // RAW sensor clipping mask, same geometry as image
 layout(binding = 6) uniform sampler2D uSpatialContext; // blurred source luminance for spatial globals
+layout(binding = 7) uniform sampler2DArray uBrushMasks; // painted Brush masks (docs/adr/0047),
+                                                        // one R8 layer per local adjustment slot
 
 // Rec.2020 luma — the whole pipeline works in linear Rec.2020 (docs/adr/0001).
 // Must match kLumaR/G/B in src/ImagePipeline.h.
@@ -572,9 +574,14 @@ float radialMaskWeight(int i, vec2 uv, float aspect) {
     return w;
 }
 
-// Dispatch on the mask type tag (laColor.z): 0 = Linear, 1 = Radial.
+// Dispatch on the mask type tag (laColor.z): 0 = Linear, 1 = Radial, 2 = Brush.
+// The painted Brush samples its raster at vUV — buffer space, glued to the image
+// pixels through crop/rotation/orientation (docs/adr/0047) — at layer i.
 float maskWeight(int i, vec2 uv, float aspect) {
-    if (int(u.laColor[i].z + 0.5) == 1)
+    int type = int(u.laColor[i].z + 0.5);
+    if (type == 2)
+        return texture(uBrushMasks, vec3(vUV, float(i))).r;
+    if (type == 1)
         return radialMaskWeight(i, uv, aspect);
     return linearMaskWeight(i, uv, aspect);
 }
@@ -683,5 +690,13 @@ void main() {
     }
     if (u.sensorClipWarn != 0 && any(greaterThan(texture(uSensorClip, vUV).rgb, vec3(0.01))))
         outc = vec3(1.0, 0.0, 1.0);                         // sensor clip
+
+    // Mask overlay (docs/adr/0047): while a mask is being edited, tint its region
+    // red so the painted/parametric mask is visible. On-screen preview only —
+    // maskOverlay is -1 for the export and histogram readbacks.
+    if (u.maskOverlay >= 0 && u.maskOverlay < u.numLocalAdj) {
+        float mw = maskWeight(u.maskOverlay, vImageUV, u.aspect);
+        outc = mix(outc, vec3(1.0, 0.1, 0.1), mw * 0.75);
+    }
     fragColor = vec4(outc, 1.0);
 }

@@ -1,6 +1,6 @@
-#include "develop/Spot.h"
 #include "core/ImageBuffer.h"
 #include "develop/GlobalAdjustment.h"
+#include "develop/Spot.h"
 #include "io/XmpSidecar.h"
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>

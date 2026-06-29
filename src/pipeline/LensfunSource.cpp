@@ -1,5 +1,5 @@
-#include "pipeline/LensCorrection.h"
 #include "pipeline/LensfunSource.h"
+#include "pipeline/LensCorrection.h"
 
 #ifndef ARRAW_HAS_LENSFUN
 
@@ -57,7 +57,8 @@ QString bundledLensfunDbDir() {
 
 } // namespace
 
-std::optional<LensCorrectionModel> resolveLensfunModel(const QString& dbPath, const LensQuery& query) {
+std::optional<LensCorrectionModel> resolveLensfunModel(
+    const QString& dbPath, const LensQuery& query) {
     if (query.width <= 0 || query.height <= 0 || query.focal <= 0.0f)
         return std::nullopt;
 
@@ -74,8 +75,8 @@ std::optional<LensCorrectionModel> resolveLensfunModel(const QString& dbPath, co
         return std::nullopt;
     }
 
-    const lfCamera** cams = db.FindCameras(query.cameraMaker.toUtf8().constData(),
-                                           query.cameraModel.toUtf8().constData());
+    const lfCamera** cams = db.FindCameras(
+        query.cameraMaker.toUtf8().constData(), query.cameraModel.toUtf8().constData());
     const lfCamera* cam = (cams && cams[0]) ? cams[0] : nullptr;
 
     const lfLens** lenses = db.FindLenses(cam, nullptr, query.lensModel.toUtf8().constData());
@@ -111,8 +112,16 @@ std::optional<LensCorrectionModel> resolveLensfunModel(const QString& dbPath, co
     // Distortion → radial scale LUT.
     {
         lfModifier mod(lens, crop, W, H);
-        const int eff = mod.Initialize(lens, LF_PF_F32, query.focal, aperture, distance, 1.0f,
-                                       lens->Type, LF_MODIFY_DISTORTION, false);
+        const int eff = mod.Initialize(
+            lens,
+            LF_PF_F32,
+            query.focal,
+            aperture,
+            distance,
+            1.0f,
+            lens->Type,
+            LF_MODIFY_DISTORTION,
+            false);
         if (eff & LF_MODIFY_DISTORTION) {
             model.hasDistortion = true;
             for (int i = 0; i < kLut; ++i) {
@@ -131,8 +140,8 @@ std::optional<LensCorrectionModel> resolveLensfunModel(const QString& dbPath, co
     // Lateral TCA → per-channel radial scale LUTs (red/blue relative to green).
     {
         lfModifier mod(lens, crop, W, H);
-        const int eff = mod.Initialize(lens, LF_PF_F32, query.focal, aperture, distance, 1.0f,
-                                       lens->Type, LF_MODIFY_TCA, false);
+        const int eff = mod.Initialize(
+            lens, LF_PF_F32, query.focal, aperture, distance, 1.0f, lens->Type, LF_MODIFY_TCA, false);
         if (eff & LF_MODIFY_TCA) {
             model.hasTCA = true;
             for (int i = 0; i < kLut; ++i) {
@@ -154,8 +163,16 @@ std::optional<LensCorrectionModel> resolveLensfunModel(const QString& dbPath, co
     // Vignetting → radial gain LUT: correcting a unit pixel yields the gain directly.
     {
         lfModifier mod(lens, crop, W, H);
-        const int eff = mod.Initialize(lens, LF_PF_F32, query.focal, aperture, distance, 1.0f,
-                                       lens->Type, LF_MODIFY_VIGNETTING, false);
+        const int eff = mod.Initialize(
+            lens,
+            LF_PF_F32,
+            query.focal,
+            aperture,
+            distance,
+            1.0f,
+            lens->Type,
+            LF_MODIFY_VIGNETTING,
+            false);
         if (eff & LF_MODIFY_VIGNETTING) {
             model.hasVignetting = true;
             for (int i = 0; i < kLut; ++i) {
@@ -163,8 +180,14 @@ std::optional<LensCorrectionModel> resolveLensfunModel(const QString& dbPath, co
                 outPixel(i, ox, oy);
                 float px[3] = {1.0f, 1.0f, 1.0f};
                 float g = 1.0f;
-                if (mod.ApplyColorModification(px, ox, oy, 1, 1, LF_CR_3(RED, GREEN, BLUE),
-                                               3 * static_cast<int>(sizeof(float))))
+                if (mod.ApplyColorModification(
+                        px,
+                        ox,
+                        oy,
+                        1,
+                        1,
+                        LF_CR_3(RED, GREEN, BLUE),
+                        3 * static_cast<int>(sizeof(float))))
                     g = px[1];
                 model.vignette.lut[i] = g;
             }

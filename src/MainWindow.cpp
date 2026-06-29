@@ -432,6 +432,16 @@ MainWindow::MainWindow(QWidget* parent)
         &ImageViewport::localMaskEditFinished,
         localPanel,
         &LocalAdjustmentPanel::commitMaskEdit);
+    connect(
+        localPanel,
+        &LocalAdjustmentPanel::brushSettingsChanged,
+        viewport,
+        &ImageViewport::setBrushSettings);
+    connect(
+        localPanel,
+        &LocalAdjustmentPanel::maskOverlaySuppressed,
+        viewport,
+        &ImageViewport::setMaskOverlaySuppressed); // hide while a delta slider is dragged
 
     // Spot-removal: live drag rebuilds preview only; commit on mouse-release.
     connect(spotPanel, &SpotRemovalPanel::changed, this, [this](const std::vector<Spot>& spots) {
@@ -817,6 +827,13 @@ void MainWindow::setupToolbar() {
     connect(spotsTabShortcut, &QAction::triggered, this, [this] {
         selectAdjustmentTab(spotsTabIndex);
     });
+
+    // Toggle the mask overlay (docs/adr/0047), window-scoped so it works whatever
+    // has focus — no-op unless the mask tool is active.
+    auto* maskOverlayShortcut = new QAction(this);
+    maskOverlayShortcut->setShortcut(Qt::Key_O);
+    addAction(maskOverlayShortcut);
+    connect(maskOverlayShortcut, &QAction::triggered, viewport, &ImageViewport::toggleMaskOverlay);
 
     // Coarse Orientation (docs/adr/0029). Momentary actions (not modal tools);
     // final home is beside the Rotation slider, but the toolbar gives a handle now.
@@ -2014,6 +2031,10 @@ void MainWindow::syncSessionToEditors() {
         localPanel->setLocalAdjustments(session->params().localAdjustments);
     }
     viewport->setAdjustments(session->params());
+    // The panel update is signal-blocked, so propagate its (clamped) selection to
+    // the viewport explicitly — otherwise switching images leaves the viewport
+    // pointing at the previous image's mask (stale overlay / brush cursor).
+    viewport->setActiveLocalAdjustment(localPanel->activeIndex());
 }
 
 void MainWindow::syncSessionSpotsToEditors(bool fullResOnly) {

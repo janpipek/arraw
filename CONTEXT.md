@@ -306,14 +306,29 @@ source, not the concept itself)
 
 **Mask**:
 The stencil that says *where* a [[Local Adjustment]] applies — value 0 (none) to
-1 (full), grey in between. In v1 it is *described* parametrically (a shape or a
-value range), not painted; a freehand brush is a documented later extension.
+1 (full), grey in between. Most masks are *described* parametrically (a shape or a
+value range); the [[Brush Mask]] is the one *painted* kind. A mask is one kind at
+a time, not a composite of several.
 _Avoid_: selection, channel, cut-out
 
 **Mask Type**:
-The kind of parametric [[Mask]]: Linear (a graduated fade across the frame) and
-Radial (an oval) in v1; Luminance range and Colour range are the planned next
-set. The brush, if added, becomes a further type.
+The kind of [[Mask]] on a [[Local Adjustment]]: Linear (a graduated fade across
+the frame), Radial (an oval), and the painted [[Brush Mask]]. Luminance range and
+Colour range are the planned next set. Linear and Radial are *composition-
+anchored* (fixed to the upright cropped frame); the Brush is *content-anchored*
+(fixed to the image pixels).
+
+**Brush Mask**:
+The painted [[Mask Type]]: a freehand stencil the photographer brushes directly
+onto the image, glued to the corrected-image pixels so it follows the subject
+through a later [[Crop]] or [[Straighten]] — unlike the composition-anchored
+Linear and Radial masks. Controlled by Size, Feather, and Flow with an Add/Erase
+toggle; one completed stroke is one [[History]] step. A raster, not a shape, so
+unlike the other mask types it is resolution-bound and arraw-only (never
+round-trips to Lightroom). Shares the per-image mask cap with the parametric
+types.
+_Avoid_: adjustment brush (the tool, not the mask), selection, paint layer,
+parametric mask (the Linear/Radial siblings it is deliberately unlike)
 
 **Develop Group**:
 One selectable unit in the [[Copy Settings]] / [[Develop Preset]] checklist —

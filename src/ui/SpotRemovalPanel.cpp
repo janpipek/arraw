@@ -1,5 +1,5 @@
-#include "develop/Spot.h"
 #include "ui/SpotRemovalPanel.h"
+#include "develop/Spot.h"
 
 #include <algorithm>
 #include <QHBoxLayout>

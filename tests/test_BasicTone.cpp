@@ -1,6 +1,6 @@
-#include "develop/LocalAdjustment.h"
-#include "develop/GlobalAdjustment.h"
 #include "develop/BasicTone.h"
+#include "develop/GlobalAdjustment.h"
+#include "develop/LocalAdjustment.h"
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>

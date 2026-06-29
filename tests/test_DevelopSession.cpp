@@ -1,11 +1,11 @@
+#include "DevelopSession.h"
 #include "develop/DemosaicAlgorithm.h"
+#include "develop/GlobalAdjustment.h"
 #include "develop/LocalAdjustment.h"
 #include "develop/Spot.h"
 #include "develop/UserMetadata.h"
 #include "pipeline/LensCorrection.h"
-#include "develop/GlobalAdjustment.h"
 #include "pipeline/LoadResult.h"
-#include "DevelopSession.h"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -52,8 +52,7 @@ TEST_CASE("DevelopSession stores a loaded image as clean active state", "[develo
 }
 
 TEST_CASE(
-    "swapDecodedBuffers replaces pixels in place, preserving develop state",
-    "[develop-session]") {
+    "swapDecodedBuffers replaces pixels in place, preserving develop state", "[develop-session]") {
     // A demosaic change re-decodes and swaps the buffers, but the develop edit
     // (the new algorithm and everything else) and the dirty flag must survive —
     // it is one undo-able edit, not a fresh load (docs/adr/0036).
@@ -64,7 +63,8 @@ TEST_CASE(
 
     GlobalAdjustment saved;
     saved.exposure = 0.5f;
-    session.setLoadedImage("/photos/IMG_0001.dng", first, saved, DevelopSession::SidecarState::Loaded);
+    session
+        .setLoadedImage("/photos/IMG_0001.dng", first, saved, DevelopSession::SidecarState::Loaded);
 
     GlobalAdjustment edited = saved;
     edited.demosaicAlgorithm = DemosaicAlgorithm::VNG;
@@ -343,8 +343,12 @@ namespace {
 class RestoreSnapshotCommand : public QUndoCommand {
 public:
     RestoreSnapshotCommand(DevelopSession& session, GlobalAdjustment before, GlobalAdjustment after)
-        : session(session), before(std::move(before)), after(std::move(after)) {}
+        : session(session),
+          before(std::move(before)),
+          after(std::move(after)) {}
+
     void undo() override { session.setParams(before); }
+
     void redo() override { session.setParams(after); }
 
 private:
@@ -353,7 +357,8 @@ private:
 };
 } // namespace
 
-TEST_CASE("restoring a snapshot is a lossless, undoable full-state swap", "[develop-session][snapshots]") {
+TEST_CASE(
+    "restoring a snapshot is a lossless, undoable full-state swap", "[develop-session][snapshots]") {
     DevelopSession session;
     LoadResult result;
     result.preview = ImageBuffer{{0.1f, 0.2f, 0.3f}, 1, 1};

@@ -1,5 +1,5 @@
-#include "core/ImageBuffer.h"
 #include "MainWindowStatus.h"
+#include "core/ImageBuffer.h"
 
 #include <catch2/catch_test_macros.hpp>
 

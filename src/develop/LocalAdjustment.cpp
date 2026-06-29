@@ -193,6 +193,9 @@ Mask rotateMaskQuarterTurns(const Mask& mask, int quarterTurnsCW, float oldAspec
             };
             if constexpr (std::is_same_v<T, LinearMask>)
                 return transformLinearMask(m, map);
+            else if constexpr (std::is_same_v<T, BrushMask>)
+                return m; // buffer-anchored raster sampled at vUV — orientation is
+                          // handled in-shader, so the raster is invariant (adr 0047)
             else
                 return transformRadialMask(m, map, oldAspect, newAspect);
         },
@@ -206,6 +209,9 @@ Mask flipMask(const Mask& mask, bool horizontal, float aspect) {
             const auto map = [horizontal](QPointF p) { return flipPoint(p, horizontal); };
             if constexpr (std::is_same_v<T, LinearMask>)
                 return transformLinearMask(m, map);
+            else if constexpr (std::is_same_v<T, BrushMask>)
+                return m; // buffer-anchored raster sampled at vUV — orientation is
+                          // handled in-shader, so the raster is invariant (adr 0047)
             else
                 return transformRadialMask(m, map, aspect, aspect);
         },
@@ -218,9 +224,13 @@ namespace {
 const FieldSpec kLocalExposureSpec{-500, 500, 0, 0.01f, 0.01f, 2, " EV", true, 0.05f};
 const FieldSpec kLocalBipolarSpec{-100, 100, 0, 1.0f, 1.0f, 0, {}, true, 1.0f};
 
-// Untranslated "Linear" / "Radial" for a mask's kind.
+// Untranslated "Linear" / "Radial" / "Brush" for a mask's kind.
 const char* maskKindKey(const Mask& mask) {
-    return std::holds_alternative<RadialMask>(mask) ? "Radial" : "Linear";
+    if (std::holds_alternative<RadialMask>(mask))
+        return "Radial";
+    if (std::holds_alternative<BrushMask>(mask))
+        return "Brush";
+    return "Linear";
 }
 
 QString trLocal(const char* text) {
@@ -293,9 +303,13 @@ QString localChangeLabel(
     const LocalAdjustment& b = after[changed];
     const QString name = maskDisplayName(after, changed);
 
-    // Geometry (endpoints / centre / radii / angle / feather / invert) moved.
-    if (!(a.mask == b.mask))
+    // The mask itself changed. For a brush that is a paint stroke (the raster
+    // pointer swapped); for the parametric kinds it is a handle move.
+    if (!(a.mask == b.mask)) {
+        if (std::holds_alternative<BrushMask>(b.mask))
+            return QStringLiteral("%1 — %2").arg(name, trLocal("Stroke"));
         return trLocal("%1 Geometry").arg(name);
+    }
 
     // A delta field changed → name it with its new value, as the panel shows it.
     // (Each commit touches one field, so the first difference is the edit.)

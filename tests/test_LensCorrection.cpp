@@ -107,7 +107,8 @@ TEST_CASE("vignetting applies the radial gain: centre unchanged, corners brighte
 
     LensCorrectionModel model;
     model.center = {0.5, 0.5};
-    model.vignette = RadialCurve::fromFn([](float r) { return 1.0f + r; }); // gain 1.0 (centre) .. 2.0 (corner)
+    model.vignette = RadialCurve::fromFn(
+        [](float r) { return 1.0f + r; }); // gain 1.0 (centre) .. 2.0 (corner)
     model.hasVignetting = true;
     const LensCorrectionToggles vigOn{.distortion = false, .vignetting = true, .ca = false};
 
@@ -178,7 +179,8 @@ TEST_CASE("a uniform inward scale magnifies: edges sample from nearer the centre
     const ImageBuffer buf = makeHRampBuffer(64, 48);
     LensCorrectionModel model;
     model.center = {0.5, 0.5}; // centre at column 32
-    model.distortion = RadialCurve::fromFn([](float) { return 0.5f; }); // src = centre + 0.5*(dst-centre)
+    model.distortion = RadialCurve::fromFn(
+        [](float) { return 0.5f; }); // src = centre + 0.5*(dst-centre)
     model.hasDistortion = true;
     const LensCorrectionToggles distOn{.distortion = true, .vignetting = false, .ca = false};
 
@@ -214,7 +216,7 @@ TEST_CASE("autoFillZoom is 1.0 when there is nothing to fill", "[lens]") {
 
 TEST_CASE("autoFillZoom solves the binding edge for an expanding distortion", "[lens]") {
     LensCorrectionModel model;
-    model.center = {0.5, 0.5}; // centre column 32 of 64
+    model.center = {0.5, 0.5};                                          // centre column 32 of 64
     model.distortion = RadialCurve::fromFn([](float) { return 2.0f; }); // 2x magnification
     model.hasDistortion = true;
     // Left/right edges bind: src.x = 32 +/- 63/z must stay in [0,64] → z = 63/32.
@@ -269,7 +271,7 @@ TEST_CASE("identity TCA scales leave the image unchanged", "[lens]") {
 TEST_CASE("TCA moves red and blue along the radius while green stays put", "[lens]") {
     const ImageBuffer buf = makeHRampBuffer(64, 48); // R == G == B everywhere
     LensCorrectionModel model;
-    model.center = {0.5, 0.5}; // centre column 32
+    model.center = {0.5, 0.5};                                    // centre column 32
     model.tcaR = RadialCurve::fromFn([](float) { return 0.5f; }); // red sampled nearer centre
     model.tcaB = RadialCurve::fromFn([](float) { return 2.0f; }); // blue sampled farther out
     model.hasTCA = true;

@@ -1,6 +1,6 @@
-#include "pipeline/LoadResult.h"
 #include "pipeline/LensCorrection.h"
 #include "pipeline/LensfunSource.h"
+#include "pipeline/LoadResult.h"
 #include "pipeline/RawProcessor.h"
 #include "TestApp.h"
 
@@ -142,8 +142,9 @@ TEST_CASE("RawProcessor resolves and applies a lens profile end-to-end", "[.][re
     REQUIRE(result.fullRes.valid());
 
     INFO("resolved lens: " << result.lensModel.lensName.toStdString());
-    REQUIRE((result.lensModel.hasDistortion || result.lensModel.hasVignetting
-             || result.lensModel.hasTCA));
+    REQUIRE(
+        (result.lensModel.hasDistortion || result.lensModel.hasVignetting
+         || result.lensModel.hasTCA));
 
     const LensCorrectionToggles all{.distortion = true, .vignetting = true, .ca = true};
     const ImageBuffer corrected = applyLensCorrection(result.fullRes, result.lensModel, all);

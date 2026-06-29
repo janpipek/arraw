@@ -5,9 +5,9 @@
 #include "pipeline/LensCorrection.h"
 
 #include "develop/GlobalAdjustment.h"
-#include "pipeline/LoadResult.h"
 #include "develop/Snapshot.h"
 #include "develop/UserMetadata.h"
+#include "pipeline/LoadResult.h"
 
 #include <QObject>
 #include <QString>
@@ -55,6 +55,7 @@ public:
     const ImageMetadata& metadata() const { return imageMetadata; }
 
     const UserMetadata& userMetadata() const { return metadata_; }
+
     const UserMetadataPresence& userMetadataPresence() const { return metadataPresence; }
 
     const QRectF& defaultCrop() const { return imageDefaultCrop; }
@@ -97,7 +98,8 @@ public:
     void addSnapshot(QString name, GlobalAdjustment state);
     void renameSnapshot(int index, QString name);
     void removeSnapshot(int index);
-    void setUserMetadata(const UserMetadata& metadata, const UserMetadataPresence& changedFields = {});
+    void setUserMetadata(
+        const UserMetadata& metadata, const UserMetadataPresence& changedFields = {});
     void setBaseLook(bool on);
     void markDevelopSaved();
     void markDevelopSaveFailed();

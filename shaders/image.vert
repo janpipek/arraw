@@ -63,8 +63,8 @@ layout(std140, binding = 0) uniform buf {
     float textureAmount;      // unused here; fine-detail local contrast
     float clarity;            // unused here; midtone local contrast
     float dehaze;             // unused here; haze compensation
-    int   convertToGrayscale; // unused here; was pad1
-    int   pad2;
+    int   maskOverlay;        // unused here; matches image.frag and Ubuf (std140)
+    int   convertToGrayscale; // unused here; matches image.frag and Ubuf
     int   pad3;
     vec4  bwMix[2];           // unused here; 8 B&W hue-mixer weights (std140 vec4 pairs)
 } u;

@@ -51,6 +51,7 @@ add_executable(arraw_tests
     test_GroupChecklistDialog.cpp
     test_PresetStore.cpp
     test_Spot.cpp
+    test_BrushMask.cpp
     test_NoiseReduction.cpp
     test_DemosaicAlgorithm.cpp
     test_LensCorrection.cpp

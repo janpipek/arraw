@@ -88,6 +88,7 @@ private:
 ImageViewport::ImageViewport(QWidget* parent)
     : QRhiWidget(parent) {
     setFocusPolicy(Qt::StrongFocus);
+    setMouseTracking(true); // hover moves (no button) so the brush cursor tracks live
     overlay = new ViewportOverlay(this);
 
     histoTimer.setSingleShot(true);
@@ -236,6 +237,11 @@ void ImageViewport::render(QRhiCommandBuffer* cb) {
     fp.clipHighlights = clipHighlights;
     fp.clipShadows = clipShadows;
     fp.sensorClip = sensorClipWarning;
+    // Tint the active mask's region red (docs/adr/0047): on by default for the
+    // selected mask, toggled with O, and transiently suppressed while a delta
+    // slider is dragged so the effect is judged unobscured. Preview only; no export.
+    const bool overlayOn = maskOverlayVisible && !maskOverlaySuppressed;
+    fp.maskOverlay = (localMaskMode() && !showOriginal && overlayOn) ? activeLocalAdj : -1;
     fp.adjustments = p;
     // The denoise pre-pass is debounced (nrTimer): render the settled values,
     // not the live sliders, so dragging doesn't trigger a recompute every tick.
@@ -291,7 +297,36 @@ void ImageViewport::render(QRhiCommandBuffer* cb) {
 }
 
 void ImageViewport::setActiveLocalAdjustment(int index) {
+    if (index == activeLocalAdj) {
+        // Same mask re-synced (a slider commit / undo / redo re-applies the list).
+        // Keep the overlay and cursor state so the O toggle and the slider-driven
+        // auto-hide survive the commit.
+        update();
+        return;
+    }
     activeLocalAdj = index;
+    // A genuine selection change: abort any in-progress stroke, drop the brush
+    // cursor, and show the newly selected mask's overlay.
+    brushPainting = false;
+    brushCoverage.clear();
+    brushStrokeViewportPts.clear();
+    brushCursorValid = false;
+    maskOverlayVisible = true;
+    maskOverlaySuppressed = false;
+    update();
+}
+
+void ImageViewport::setMaskOverlaySuppressed(bool on) {
+    if (maskOverlaySuppressed == on)
+        return;
+    maskOverlaySuppressed = on; // transient; the persistent on/off state is untouched
+    update();
+}
+
+void ImageViewport::toggleMaskOverlay() {
+    if (!localMaskMode())
+        return;
+    maskOverlayVisible = !maskOverlayVisible;
     update();
 }
 
@@ -378,6 +413,135 @@ const RadialMask* ImageViewport::activeRadialMask() const {
     return std::get_if<RadialMask>(&params.localAdjustments[activeLocalAdj].mask);
 }
 
+const BrushMask* ImageViewport::activeBrushMask() const {
+    if (activeLocalAdj < 0 || activeLocalAdj >= int(params.localAdjustments.size()))
+        return nullptr;
+    return std::get_if<BrushMask>(&params.localAdjustments[activeLocalAdj].mask);
+}
+
+void ImageViewport::setBrushSettings(double radiusFraction, double feather, double flow, bool erase) {
+    brushRadiusFraction = radiusFraction;
+    brushFeather = feather;
+    brushFlow = flow;
+    brushErase = erase;
+    if (localMaskMode() && activeBrushMask())
+        overlay->update(); // refresh the size ring
+}
+
+QSize ImageViewport::brushRasterSize() const {
+    const double a = nativeImageAspect > 0.0f ? double(nativeImageAspect) : 1.0;
+    const int longEdge = kBrushRasterLongEdge;
+    if (a >= 1.0)
+        return {longEdge, std::max(1, int(std::lround(longEdge / a)))};
+    return {std::max(1, int(std::lround(longEdge * a))), longEdge};
+}
+
+QPointF ImageViewport::brushRasterPoint(QPointF viewportPos) const {
+    // Cursor → native-buffer pixel → buffer UV → raster pixel: the same buffer UV
+    // the shader samples at vUV, so painting and rendering align (docs/adr/0047).
+    const QPointF bufPx = viewportToBufferPixel(viewportPos);
+    return {
+        bufPx.x() / std::max(1, originalWidth) * brushStrokeBase.width,
+        bufPx.y() / std::max(1, originalHeight) * brushStrokeBase.height};
+}
+
+void ImageViewport::commitStrokeRaster() {
+    Mask m = BrushMask{std::make_shared<const BrushRaster>(
+        compositeStroke(brushStrokeBase, brushCoverage, brushStrokeDab.erase))};
+    params.localAdjustments[activeLocalAdj].mask = m;
+    emit localMaskChanged(activeLocalAdj, m);
+    update();
+}
+
+void ImageViewport::beginBrushStroke(QPointF viewportPos) {
+    const BrushMask* bm = activeBrushMask();
+    if (!bm)
+        return;
+    const QSize sz = brushRasterSize();
+    // Start from the existing raster (so strokes accumulate), or a fresh blank one
+    // sized to the buffer when the mask is unpainted or the resolution changed.
+    if (bm->raster && bm->raster->width == sz.width() && bm->raster->height == sz.height())
+        brushStrokeBase = *bm->raster;
+    else
+        brushStrokeBase = BrushRaster{
+            sz.width(), sz.height(), std::vector<uint8_t>(size_t(sz.width()) * sz.height(), 0)};
+    brushCoverage.assign(size_t(sz.width()) * sz.height(), 0.0f);
+    brushStrokeDab = BrushDab{
+        .radius = brushRadiusFraction * kBrushRasterLongEdge,
+        .feather = brushFeather,
+        .flow = brushFlow,
+        .erase = brushErase};
+    brushPainting = true;
+    brushLastPoint = brushRasterPoint(viewportPos);
+    stampSegmentCoverage(
+        brushCoverage, sz.width(), sz.height(), brushLastPoint, brushLastPoint, brushStrokeDab);
+    brushStrokeViewportPts.clear();
+    brushStrokeViewportPts.push_back(viewportPos);
+    overlay->update(); // draw the stroke preview only; the real mask lands on release
+}
+
+void ImageViewport::extendBrushStroke(QPointF viewportPos) {
+    if (!brushPainting || activeLocalAdj < 0)
+        return;
+    // Accumulate coverage (cheap CPU) and grow the on-screen preview, but DON'T
+    // rebuild the mask texture or re-run the develop pipeline while drawing — the
+    // developed result is only needed once the stroke is finished (applied in
+    // mouseRelease via commitStrokeRaster).
+    const QPointF pt = brushRasterPoint(viewportPos);
+    stampSegmentCoverage(
+        brushCoverage,
+        brushStrokeBase.width,
+        brushStrokeBase.height,
+        brushLastPoint,
+        pt,
+        brushStrokeDab);
+    brushLastPoint = pt;
+    brushStrokeViewportPts.push_back(viewportPos);
+    overlay->update(); // cheap QPainter preview, no GPU re-render
+}
+
+double ImageViewport::brushScreenRadius(QPointF viewportCenter) const {
+    // Map the brush radius (buffer pixels) to a screen radius via the buffer↔
+    // viewport transform, so the footprint tracks zoom.
+    const double rBuf = brushRadiusFraction * std::max(originalWidth, originalHeight);
+    const QPointF cBuf = viewportToBufferPixel(viewportCenter);
+    const QPointF a = bufferPixelToViewport(cBuf);
+    const QPointF b = bufferPixelToViewport({cBuf.x() + rBuf, cBuf.y()});
+    return std::hypot(b.x() - a.x(), b.y() - a.y());
+}
+
+void ImageViewport::drawBrushStrokePreview(QPainter& p) const {
+    if (!brushPainting || brushStrokeViewportPts.empty())
+        return;
+    // Brush footprint in screen pixels (same mapping as the cursor ring), drawn as
+    // a translucent round-capped stroke along the path the cursor has travelled.
+    const double rScreen = brushScreenRadius(brushStrokeViewportPts.front());
+
+    const QColor col = brushErase ? QColor(90, 170, 255, 110) : QColor(255, 40, 40, 110);
+    p.setPen(QPen(col, rScreen * 2.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    p.setBrush(Qt::NoBrush);
+    if (brushStrokeViewportPts.size() == 1) {
+        p.drawPoint(brushStrokeViewportPts.front());
+    } else {
+        QPainterPath path(brushStrokeViewportPts.front());
+        for (size_t i = 1; i < brushStrokeViewportPts.size(); ++i)
+            path.lineTo(brushStrokeViewportPts[i]);
+        p.drawPath(path);
+    }
+}
+
+void ImageViewport::drawBrushCursor(QPainter& p) const {
+    if (!brushCursorValid || !activeBrushMask())
+        return;
+    const double rScreen = brushScreenRadius(brushCursorPos);
+
+    // Just the outline ring (size/position); the painted region itself is shown by
+    // the mask overlay, not a fill under the cursor (docs/adr/0047).
+    p.setPen(QPen(brushErase ? QColor(255, 140, 140) : Qt::white, 1.0));
+    p.setBrush(Qt::NoBrush);
+    p.drawEllipse(brushCursorPos, rScreen, rScreen);
+}
+
 RadialHandle ImageViewport::hitTestRadialMask(QPointF pos) const {
     const RadialMask* m = activeRadialMask();
     if (!m)
@@ -439,7 +603,10 @@ void ImageViewport::paintOverlay(QPainter& p) const {
     if (cropMode()) {
         drawCropOverlay(p);
     } else if (localMaskMode()) {
-        if (activeRadialMask())
+        if (activeBrushMask()) {
+            drawBrushStrokePreview(p); // in-progress stroke (defers the develop update)
+            drawBrushCursor(p);
+        } else if (activeRadialMask())
             drawRadialMaskOverlay(p);
         else
             drawLocalMaskOverlay(p);
@@ -1208,6 +1375,10 @@ void ImageViewport::mousePressEvent(QMouseEvent* e) {
         return; // tool stays active for further picks
     }
     if (localMaskMode() && e->button() == Qt::LeftButton) {
+        if (activeBrushMask()) {
+            beginBrushStroke(e->position()); // paint a stroke (docs/adr/0047)
+            return;
+        }
         if (activeRadialMask())
             radialDragHandle = hitTestRadialMask(e->position());
         else
@@ -1230,6 +1401,15 @@ void ImageViewport::mousePressEvent(QMouseEvent* e) {
 }
 
 void ImageViewport::mouseMoveEvent(QMouseEvent* e) {
+    if (localMaskMode() && activeBrushMask()) {
+        brushCursorPos = e->position(); // track for the size ring
+        brushCursorValid = true;
+        if (e->buttons() & Qt::LeftButton)
+            extendBrushStroke(e->position());
+        else
+            overlay->update();
+        return;
+    }
     if (cropMode() && (e->buttons() & Qt::LeftButton) && cropDragHandle > -2) {
         applyCropDrag(e->position());
         return;
@@ -1288,6 +1468,17 @@ void ImageViewport::mouseReleaseEvent(QMouseEvent* e) {
         return;
     }
     if (localMaskMode() && e->button() == Qt::LeftButton) {
+        if (brushPainting) {
+            // Apply the finished stroke now — the single GPU render + texture
+            // upload for the whole stroke (docs/adr/0047).
+            brushPainting = false;
+            commitStrokeRaster();
+            emit localMaskEditFinished(); // one undo step per stroke
+            brushStrokeBase = {};
+            brushCoverage.clear();
+            brushStrokeViewportPts.clear();
+            return;
+        }
         const bool wasDragging = localDragHandle != LinearHandle::None
                                  || radialDragHandle != RadialHandle::None;
         localDragHandle = LinearHandle::None;
@@ -1342,6 +1533,15 @@ void ImageViewport::keyReleaseEvent(QKeyEvent* e) {
     } else {
         QRhiWidget::keyReleaseEvent(e);
     }
+}
+
+void ImageViewport::leaveEvent(QEvent* e) {
+    // Drop the brush cursor ring when the pointer leaves the viewport.
+    if (brushCursorValid) {
+        brushCursorValid = false;
+        overlay->update();
+    }
+    QRhiWidget::leaveEvent(e);
 }
 
 // ── SpotTool ──────────────────────────────────────────────────────────────────

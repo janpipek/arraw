@@ -1,7 +1,7 @@
-#include "core/ImageMetadata.h"
-#include "ui/FilmStripModel.h"
 #include "TestApp.h"
+#include "core/ImageMetadata.h"
 #include "develop/UserMetadata.h"
+#include "ui/FilmStripModel.h"
 #include <catch2/catch_test_macros.hpp>
 
 #include <QImage>
@@ -66,8 +66,7 @@ TEST_CASE("a primary with no companions reports an empty companion list", "[film
 TEST_CASE("model reports the shot's format label", "[filmstrip]") {
     ensureApp();
     FilmStripModel model;
-    model.setFiles(
-        {"/photos/a.arw", "/photos/b.jpg"}, {{"/photos/a.arw", {"/photos/a.jpg"}}});
+    model.setFiles({"/photos/a.arw", "/photos/b.jpg"}, {{"/photos/a.arw", {"/photos/a.jpg"}}});
 
     REQUIRE(model.data(model.index(0), FilmStripModel::FormatLabelRole).toString() == "ARW+JPEG");
     REQUIRE(model.data(model.index(1), FilmStripModel::FormatLabelRole).toString() == "JPEG");

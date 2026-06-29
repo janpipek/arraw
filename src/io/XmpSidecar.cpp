@@ -285,6 +285,7 @@ static LocalAdjustment parseLocalAdjustmentLi(QXmlStreamReader& xml) {
     QPointF center{0.5, 0.5};
     double radiusX = 0.25, radiusY = 0.25, angle = 0.0, feather = 0.5;
     bool invert = false;
+    QString brushData;
     while (!xml.atEnd()) {
         xml.readNext();
         if (xml.isEndElement() && xml.qualifiedName() == "rdf:li")
@@ -296,6 +297,8 @@ static LocalAdjustment parseLocalAdjustmentLi(QXmlStreamReader& xml) {
         const float v = text.toFloat();
         if (name == "arraw:MaskType")
             maskType = text.trimmed();
+        else if (name == "arraw:BrushMaskData")
+            brushData = text.trimmed();
         else if (name == "arraw:P0x")
             p0.setX(v);
         else if (name == "arraw:P0y")
@@ -341,6 +344,8 @@ static LocalAdjustment parseLocalAdjustmentLi(QXmlStreamReader& xml) {
     }
     if (maskType == "Radial")
         la.mask = RadialMask{center, radiusX, radiusY, angle, feather, invert};
+    else if (maskType == "Brush")
+        la.mask = BrushMask{std::make_shared<const BrushRaster>(decodeBrushRaster(brushData))};
     else
         la.mask = LinearMask{p0, p1};
     return la;
@@ -859,6 +864,12 @@ static void writeLocalAdjustments(QXmlStreamWriter& xml, const std::vector<Local
                     xml.writeTextElement(kNsArraw, "Angle", num(mask.angle));
                     xml.writeTextElement(kNsArraw, "Feather", num(mask.feather));
                     xml.writeTextElement(kNsArraw, "Invert", mask.invert ? "1" : "0");
+                } else if constexpr (std::is_same_v<T, BrushMask>) {
+                    // The painted raster rides as a base64 PNG blob (docs/adr/0047).
+                    xml.writeTextElement(kNsArraw, "MaskType", "Brush");
+                    if (mask.raster)
+                        xml.writeTextElement(
+                            kNsArraw, "BrushMaskData", encodeBrushRaster(*mask.raster));
                 }
             },
             la.mask);

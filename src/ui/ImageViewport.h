@@ -92,6 +92,17 @@ public:
     // Driven by the Masks panel selection.
     void setActiveLocalAdjustment(int index);
 
+    // Brush controls from the Masks panel (docs/adr/0047): radius as a fraction of
+    // the buffer long edge, feather/flow 0..1, and the Add/Erase mode.
+    void setBrushSettings(double radiusFraction, double feather, double flow, bool erase);
+
+    // The red mask overlay (docs/adr/0047) is on by default for the selected mask
+    // and toggled with the O key. Dragging a delta slider *suppresses* it (so the
+    // effect is judged unobscured) without changing the on/off state, which is
+    // restored when the drag ends.
+    void toggleMaskOverlay();               // O shortcut; no-op outside the mask tool
+    void setMaskOverlaySuppressed(bool on); // transient hide while a slider is dragged
+
     // Spot-tool overlay: set the list the viewport draws and hit-tests.
     // Does not rebuild the spotted image buffer — that is MainWindow's job.
     void setSpots(const std::vector<Spot>& spots);
@@ -178,6 +189,7 @@ protected:
     void mouseReleaseEvent(QMouseEvent* e) override;
     void keyPressEvent(QKeyEvent* e) override;
     void keyReleaseEvent(QKeyEvent* e) override;
+    void leaveEvent(QEvent* e) override; // hide the brush cursor when the mouse exits
 
 private:
     friend class ViewportOverlay;
@@ -232,6 +244,17 @@ private:
 
     const LinearMask* activeLinearMask() const;
     const RadialMask* activeRadialMask() const;
+    const BrushMask* activeBrushMask() const;
+
+    // Brush painting (docs/adr/0047): the raster is built in buffer UV space and
+    // sampled at vUV, so a stroke stays glued to the image pixels. A stroke stamps
+    // onto a copy captured at press, accumulating coverage one segment per move so
+    // the within-stroke max accumulation and live preview stay correct.
+    QSize brushRasterSize() const; // from nativeImageAspect + kBrushRasterLongEdge
+    void beginBrushStroke(QPointF viewportPos);
+    void extendBrushStroke(QPointF viewportPos);
+    double brushScreenRadius(QPointF viewportCenter) const; // brush radius in screen px
+    void drawBrushCursor(QPainter& p) const;
     QPointF imageUVToViewport(QPointF uv) const;
     QPointF viewportToImageUV(QPointF pos) const;
     QPointF localHandleViewport(LinearHandle h) const; // p0/p1/center → screen
@@ -334,6 +357,28 @@ private:
     int activeLocalAdj = -1;
     LinearHandle localDragHandle = LinearHandle::None;
     RadialHandle radialDragHandle = RadialHandle::None;
+
+    // Brush-mask painting state (docs/adr/0047). Radius/feather/flow/erase mirror
+    // the panel's brush controls; radius is a fraction of the buffer long edge.
+    static constexpr int kBrushRasterLongEdge = 2048;
+    double brushRadiusFraction = 0.06;
+    double brushFeather = 0.5;
+    double brushFlow = 0.5;
+    bool brushErase = false;
+    bool brushPainting = false;
+    BrushRaster brushStrokeBase;                 // raster captured at stroke start
+    std::vector<float> brushCoverage;            // running per-stroke coverage (raster grid)
+    BrushDab brushStrokeDab;                     // dab settings fixed at press
+    QPointF brushLastPoint;                      // previous dab centre (raster pixels)
+    std::vector<QPointF> brushStrokeViewportPts; // stroke path (screen px) for the live preview
+    QPointF brushCursorPos;                      // last cursor (viewport px) for the size ring
+    bool brushCursorValid = false;
+    bool maskOverlayVisible = true;     // persistent on/off for the selected mask (O toggles)
+    bool maskOverlaySuppressed = false; // transient hide while a delta slider is dragged
+
+    QPointF brushRasterPoint(QPointF viewportPos) const; // cursor → raster pixel
+    void commitStrokeRaster(); // composite coverage onto base, push as the active mask
+    void drawBrushStrokePreview(QPainter& p) const; // cheap in-progress stroke (no GPU re-render)
 
     // SpotTool state.
     std::vector<Spot> spots;

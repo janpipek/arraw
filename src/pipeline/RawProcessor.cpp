@@ -1,13 +1,13 @@
-#include "core/Orientation.h"
-#include "develop/DemosaicAlgorithm.h"
-#include "pipeline/LensCorrection.h"
-#include "pipeline/ImagePipeline.h"
-#include "pipeline/LoadResult.h"
 #include "pipeline/RawProcessor.h"
-#include "pipeline/ColorManagement.h"
 #include "core/ImageMetadata.h"
-#include "pipeline/LensfunSource.h"
+#include "core/Orientation.h"
 #include "core/Trace.h"
+#include "develop/DemosaicAlgorithm.h"
+#include "pipeline/ColorManagement.h"
+#include "pipeline/ImagePipeline.h"
+#include "pipeline/LensCorrection.h"
+#include "pipeline/LensfunSource.h"
+#include "pipeline/LoadResult.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -102,8 +102,9 @@ static QRectF defaultCropRect(const LibRaw& raw, int imageWidth, int imageHeight
 // whole image, so resolve it once before the per-pixel loops rather than per pixel.
 static std::array<unsigned, 4> sensorClipThresholds(const LibRaw& raw) {
     const auto& color = raw.imgdata.color;
-    const unsigned fallback
-        = color.maximum > 0 ? color.maximum : (color.data_maximum > 0 ? color.data_maximum : 65535u);
+    const unsigned fallback = color.maximum > 0
+                                  ? color.maximum
+                                  : (color.data_maximum > 0 ? color.data_maximum : 65535u);
     std::array<unsigned, 4> thresh{};
     for (int c = 0; c < 4; ++c)
         thresh[size_t(c)] = color.linear_max[c] > 0 ? unsigned(color.linear_max[c]) : fallback;

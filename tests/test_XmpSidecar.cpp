@@ -142,6 +142,36 @@ TEST_CASE("orientation seeds from EXIF when the sidecar has none", "[xmp]") {
     REQUIRE(p.orientation == seed);
 }
 
+TEST_CASE("a brush mask round-trips through the sidecar as base64 PNG", "[xmp]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("brush.arw");
+
+    // Paint a small non-trivial raster and hang it on a local adjustment.
+    const std::array<QPointF, 1> path{QPointF{20, 20}};
+    auto raster = std::make_shared<const BrushRaster>(stampStroke(
+        BrushRaster{40, 40, std::vector<uint8_t>(40 * 40, 0)},
+        path,
+        BrushDab{.radius = 15.0, .feather = 0.6, .flow = 0.9}));
+
+    GlobalAdjustment p;
+    LocalAdjustment la;
+    la.mask = BrushMask{raster};
+    la.exposure = 0.5f;
+    p.localAdjustments.push_back(la);
+
+    REQUIRE(XmpSidecar::saveAdjustments(rawPath, p));
+    const GlobalAdjustment loaded = XmpSidecar::loadAdjustments(rawPath);
+
+    REQUIRE(loaded.localAdjustments.size() == 1);
+    const auto* bm = std::get_if<BrushMask>(&loaded.localAdjustments[0].mask);
+    REQUIRE(bm != nullptr);
+    REQUIRE(bm->raster != nullptr);
+    REQUIRE(bm->raster->width == 40);
+    REQUIRE(bm->raster->height == 40);
+    REQUIRE(bm->raster->data == raster->data);
+    CHECK_THAT(loaded.localAdjustments[0].exposure, WithinAbs(0.5, 1e-4));
+}
+
 TEST_CASE("a stored orientation wins over the EXIF seed", "[xmp]") {
     QTemporaryDir dir;
     const QString rawPath = dir.filePath("stored.arw");

@@ -70,8 +70,9 @@ struct Ubuf {
     float textureAmount;       // -1..+1 fine-detail local contrast
     float clarity;             // -1..+1 midtone local contrast
     float dehaze;              // -1..+1 practical haze compensation
-    qint32 convertToGrayscale; // 1: Black & White treatment on (docs/adr/0048); was pad_[0]
-    qint32 pad_[2];            // align bwMix to a 16-byte boundary
+    qint32 maskOverlay;        // index of the mask to tint red while editing, -1 = off; was pad_[0]
+    qint32 convertToGrayscale; // 1: Black & White treatment on (docs/adr/0048); was pad_[1]
+    qint32 pad_[1];            // align bwMix to a 16-byte boundary
     float bwMix[8];            // 8 B&W hue-mixer weights, -100..+100 (vec4[2] in the shaders)
 };
 
@@ -85,7 +86,8 @@ static_assert(offsetof(Ubuf, filmicHighlights) == 1620);
 static_assert(offsetof(Ubuf, textureAmount) == 1624);
 static_assert(offsetof(Ubuf, clarity) == 1628);
 static_assert(offsetof(Ubuf, dehaze) == 1632);
-static_assert(offsetof(Ubuf, convertToGrayscale) == 1636);
+static_assert(offsetof(Ubuf, maskOverlay) == 1636);
+static_assert(offsetof(Ubuf, convertToGrayscale) == 1640);
 static_assert(offsetof(Ubuf, bwMix) == 1648);
 
 // std140 mirror of the `nrbuf` block in shaders/nr.vert and the NR fragment shaders
@@ -137,6 +139,7 @@ public:
         bool clipShadows = false;
         bool sensorClip = false; // RAW mosaic saturation overlay, display-only
         bool histoRaw = false;   // emit pre-clamp sRGB-linear for overflow histogram
+        int maskOverlay = -1;    // tint this mask's region red (on-screen edit only); -1 = off
         GlobalAdjustment adjustments;
     };
 
@@ -188,6 +191,7 @@ private:
 
     static QByteArray expandToRgba(const ImageBuffer& buf);
     void prepareToneLut(const GlobalAdjustment& adjustment);
+    void prepareBrushMasks(const GlobalAdjustment& adjustment);
     void flushPendingUploads(QRhiResourceUpdateBatch* batch);
     void recordPass(
         QRhiCommandBuffer* cb,
@@ -295,6 +299,12 @@ private:
     std::unique_ptr<QRhiTexture> imageTex[2];      // indexed by Slot
     std::unique_ptr<QRhiTexture> sensorClipTex[2]; // indexed by Slot
     std::unique_ptr<QRhiTexture> sensorClipDummyTex;
+    // Painted Brush masks (docs/adr/0047): an R8 sampler2DArray with one layer per
+    // local adjustment, sampled at vUV. Null when no brush mask exists, in which
+    // case the 1×1 single-layer dummy is bound to satisfy the binding.
+    std::unique_ptr<QRhiTexture> brushMaskArrayTex;
+    std::unique_ptr<QRhiTexture> brushMaskDummyTex;
+    bool brushMaskDummyDirty = false;
 
     // One srb, rebuilt when the sampled image texture or a LUT texture object
     // changes; layout is constant so it stays pipeline-compatible.
@@ -328,6 +338,18 @@ private:
     std::vector<std::array<float, 6>> toneLutSource; // tone fields the LUT was built from
     DisplayLut pendingDisplayLut;
     bool displayLutDirty = false;
+
+    // Brush-mask array upload (docs/adr/0047): rebuilt only when the set of brush
+    // rasters changes (tracked by raster pointer identity per layer).
+    struct PendingBrushMasks {
+        int width = 0;
+        int height = 0;
+        std::vector<QByteArray> layers; // per local-adjustment R8 bytes (zero = unpainted/non-brush)
+    };
+
+    PendingBrushMasks pendingBrushMasks;
+    bool brushMasksDirty = false;
+    std::vector<const void*> brushMaskSource;
 
     // ── Noise Reduction GPU resources (docs/adr/0034, 0046) ──────────────────
     QShader nrVs, nrExtractFs, nrBlurHFs, nrBlurVFs, nrRecombineFs;

@@ -1,5 +1,5 @@
-#include "pipeline/LoadResult.h"
 #include "DecodeCache.h"
+#include "pipeline/LoadResult.h"
 
 DecodeCache::DecodeCache(size_t byteBudget)
     : budget(byteBudget) {}

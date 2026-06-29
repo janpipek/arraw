@@ -1,9 +1,9 @@
+#include "ImageLoadWorkflow.h"
 #include "core/ImageMetadata.h"
 #include "develop/DemosaicAlgorithm.h"
-#include "develop/UserMetadata.h"
 #include "develop/GlobalAdjustment.h"
+#include "develop/UserMetadata.h"
 #include "pipeline/LoadResult.h"
-#include "ImageLoadWorkflow.h"
 
 #include "pipeline/RawProcessor.h"
 #include "pipeline/StandardImageLoader.h"
@@ -81,8 +81,10 @@ ResolvedLoadedImage resolveLoadedImage(const QString& path, const LoadResult& re
     const SidecarLoadResult sidecar
         = XmpSidecar::resolveForImage(path, result.defaultCrop, result.seededOrientation);
     // Decode emitted raw XMP bytes; parsing them is the shell's job (docs/adr/0041).
-    const XmpPacketMetadata embedded = XmpSidecar::metadataPacketFromPacket(result.embeddedXmpPacket);
-    const ResolvedUserMetadata metadata = resolveUserMetadata(sidecar.data, result.metadata, embedded);
+    const XmpPacketMetadata embedded = XmpSidecar::metadataPacketFromPacket(
+        result.embeddedXmpPacket);
+    const ResolvedUserMetadata metadata
+        = resolveUserMetadata(sidecar.data, result.metadata, embedded);
     return {
         sidecar.data.adjustments,
         metadata.metadata,

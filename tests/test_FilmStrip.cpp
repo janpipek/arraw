@@ -1,6 +1,6 @@
+#include "TestApp.h"
 #include "ui/FilmStrip.h"
 #include "ui/FilmStripModel.h"
-#include "TestApp.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <QDir>
@@ -321,8 +321,7 @@ TEST_CASE(
     destroyStrip(strip);
 }
 
-TEST_CASE(
-    "FilmStrip: navigateBy honours the leave-guard", "[filmstrip][leaveguard]") {
+TEST_CASE("FilmStrip: navigateBy honours the leave-guard", "[filmstrip][leaveguard]") {
     testApp();
 
     QTemporaryDir dir;
@@ -339,11 +338,11 @@ TEST_CASE(
     bool allow = false;
     strip->setLeaveGuard([&] { return allow; });
 
-    CHECK_FALSE(strip->navigateBy(+1));         // vetoed: stays at the boundary item
+    CHECK_FALSE(strip->navigateBy(+1)); // vetoed: stays at the boundary item
     CHECK(listView->currentIndex().row() == 0);
 
     allow = true;
-    CHECK(strip->navigateBy(+1));               // allowed: advances
+    CHECK(strip->navigateBy(+1)); // allowed: advances
     CHECK(listView->currentIndex().row() == 1);
 
     destroyStrip(strip);
