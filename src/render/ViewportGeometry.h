@@ -42,6 +42,8 @@ struct Geometry {
     bool hasOriginalSize() const;
     QPointF cropUvToViewport(float u, float v) const;
     QPointF viewportToCropUv(QPointF pos) const;
+    QPointF imageUvToViewport(QPointF uv) const;
+    QPointF viewportToImageUv(QPointF pos) const;
     QPointF viewportToBufferPixel(QPointF pos) const;
     QPointF bufferPixelToViewport(QPointF bufPx) const;
     double bufferRadiusToViewport(QPointF centerBufPx, double radius) const;

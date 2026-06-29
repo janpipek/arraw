@@ -18,10 +18,10 @@ is not any rotation angle; a 70° tilt breaks the ±45° crop-inscribe assumptio
 `StandardImageLoader` never set `QImageReader::setAutoTransform`, so JPEGs came
 out **sideways**. Any orientation feature had to unify those paths.
 
-The existing pipeline already promises that Spot and Local-Adjustment masks
-address the image in *buffer space*, "the same pixel regardless of [[Rotation]]
-or [[Crop]], because those are shader operations applied after" (CONTEXT.md).
-Orientation had to fit that invariant rather than break it.
+The pipeline promise is that Spot and Local-Adjustment geometry is anchored to
+image content before [[Rotation]] or [[Crop]] are projected for display: Spots
+use corrected-buffer pixels, and Local-Adjustment masks use normalised corrected-
+image UVs (ADR 0010). Orientation had to fit that invariant rather than break it.
 
 ## Considered options
 
@@ -67,11 +67,14 @@ Orientation had to fit that invariant rather than break it.
   use the stored value (the user edited it). This is also the migration path for
   old sidecars.
 - **Compose order is Orientation → Rotation → Crop.** Crop stays stored in the
-  oriented+rotated display frame (consistent with `0007`). A 90° turn rotates the
-  committed crop *with* the content (keeps the subject framed), the fine Rotation
-  rides underneath unchanged, and the [[Aspect Ratio Lock]] swaps landscape↔
-  portrait. A straighten that exposes the rotation's empty corners auto-refits the
-  crop (shrink-only, centre + ratio preserved) on the *same* undo command.
+  oriented+rotated display frame (consistent with `0007`). Local-Adjustment masks
+  store subject-space coordinates in the full oriented image frame, before Crop
+  and fine Rotation (`0010`). A 90° turn or mirror rotates/mirrors both the
+  committed crop and existing masks *with* the content (keeps the subject framed
+  and masked), while fine Rotation rides underneath unchanged. The [[Aspect Ratio
+  Lock]] swaps landscape↔portrait. A straighten that exposes the rotation's empty
+  corners auto-refits the crop (shrink-only, centre + ratio preserved) on the
+  *same* undo command.
 - **Persistence:** Orientation as `tiff:Orientation` 1–8. Separately, Rotation's
   field is renamed `crs:StraightenAngle` → `crs:CropAngle` (the former does not
   exist in Adobe's schema; the latter is the real one). Full Adobe round-trip of

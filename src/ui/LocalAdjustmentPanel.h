@@ -1,6 +1,6 @@
 #pragma once
-#include "develop/LocalAdjustment.h"
 #include "develop/FieldSpec.h"
+#include "develop/LocalAdjustment.h"
 #include <array>
 #include <vector>
 #include <QWidget>
@@ -74,7 +74,7 @@ private:
     QListWidget* maskList;
     QPushButton* deleteButton;
     std::vector<SliderRow> rows;
-    // Geometry fields, normalised display-frame coords (docs/adr/0010). A stacked
+    // Geometry fields, normalised subject-space image coords (docs/adr/0010). A stacked
     // widget shows the page matching the active mask's type.
     QStackedWidget* geomStack;
     std::array<QDoubleSpinBox*, 4> linSpins; // Linear: p0.x, p0.y, p1.x, p1.y

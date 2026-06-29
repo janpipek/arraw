@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <type_traits>
 
 #include <QCoreApplication>
 
@@ -149,6 +150,66 @@ LinearMask moveHandle(LinearMask m, LinearHandle h, QPointF to) {
         break;
     }
     return m;
+}
+
+namespace {
+QPointF rotatePointQuarterTurns(QPointF p, int quarterTurnsCW) {
+    const int turns = ((quarterTurnsCW % 4) + 4) % 4;
+    for (int i = 0; i < turns; ++i)
+        p = {1.0 - p.y(), p.x()};
+    return p;
+}
+
+QPointF flipPoint(QPointF p, bool horizontal) {
+    return horizontal ? QPointF{1.0 - p.x(), p.y()} : QPointF{p.x(), 1.0 - p.y()};
+}
+
+template<typename Fn>
+LinearMask transformLinearMask(LinearMask m, Fn&& map) {
+    m.p0 = map(m.p0);
+    m.p1 = map(m.p1);
+    return m;
+}
+
+template<typename Fn>
+RadialMask transformRadialMask(RadialMask m, Fn&& map, float oldAspect, float newAspect) {
+    const QPointF center = map(m.center);
+    const QPointF radiusX = map(radialHandlePos(m, RadialHandle::RadiusX, oldAspect));
+    const QPointF radiusY = map(radialHandlePos(m, RadialHandle::RadiusY, oldAspect));
+
+    m.center = center;
+    m = moveRadialHandle(m, RadialHandle::RadiusX, radiusX, newAspect);
+    m = moveRadialHandle(m, RadialHandle::RadiusY, radiusY, newAspect);
+    return m;
+}
+} // namespace
+
+Mask rotateMaskQuarterTurns(const Mask& mask, int quarterTurnsCW, float oldAspect, float newAspect) {
+    return std::visit(
+        [&](const auto& m) -> Mask {
+            using T = std::decay_t<decltype(m)>;
+            const auto map = [quarterTurnsCW](QPointF p) {
+                return rotatePointQuarterTurns(p, quarterTurnsCW);
+            };
+            if constexpr (std::is_same_v<T, LinearMask>)
+                return transformLinearMask(m, map);
+            else
+                return transformRadialMask(m, map, oldAspect, newAspect);
+        },
+        mask);
+}
+
+Mask flipMask(const Mask& mask, bool horizontal, float aspect) {
+    return std::visit(
+        [&](const auto& m) -> Mask {
+            using T = std::decay_t<decltype(m)>;
+            const auto map = [horizontal](QPointF p) { return flipPoint(p, horizontal); };
+            if constexpr (std::is_same_v<T, LinearMask>)
+                return transformLinearMask(m, map);
+            else
+                return transformRadialMask(m, map, aspect, aspect);
+        },
+        mask);
 }
 
 namespace {
