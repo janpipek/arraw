@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QPointF>
+#include <QString>
 
 #include <cstdint>
 #include <span>
@@ -42,3 +43,11 @@ float brushDabProfile(double dist, double radius, double feather);
 // Add: min(1, base + coverage); Erase: max(0, base - coverage) (docs/adr/0047).
 BrushRaster stampStroke(
     const BrushRaster& base, std::span<const QPointF> path, const BrushDab& brush);
+
+// Serialise a raster as a base64-encoded Grayscale8 PNG for the `arraw:` sidecar
+// (docs/adr/0047). Soft/empty masks compress small. An empty raster yields "".
+QString encodeBrushRaster(const BrushRaster& raster);
+
+// Inverse of encodeBrushRaster: decode a base64 PNG back to a raster (dimensions
+// come from the PNG). Returns an empty raster on malformed input.
+BrushRaster decodeBrushRaster(const QString& base64Png);

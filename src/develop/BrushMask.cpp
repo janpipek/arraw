@@ -1,5 +1,9 @@
 #include "develop/BrushMask.h"
 
+#include <QBuffer>
+#include <QByteArray>
+#include <QImage>
+
 #include <algorithm>
 #include <cmath>
 
@@ -69,4 +73,43 @@ BrushRaster stampStroke(
         out.data[i] = static_cast<uint8_t>(std::lround(result * 255.0f));
     }
     return out;
+}
+
+QString encodeBrushRaster(const BrushRaster& raster) {
+    if (raster.width <= 0 || raster.height <= 0
+        || raster.data.size() != static_cast<size_t>(raster.width) * raster.height)
+        return {};
+
+    QImage img(raster.width, raster.height, QImage::Format_Grayscale8);
+    for (int y = 0; y < raster.height; ++y)
+        std::copy_n(
+            raster.data.data() + static_cast<size_t>(y) * raster.width,
+            raster.width,
+            img.scanLine(y));
+
+    QByteArray png;
+    QBuffer buffer(&png);
+    buffer.open(QIODevice::WriteOnly);
+    if (!img.save(&buffer, "PNG"))
+        return {};
+    return QString::fromLatin1(png.toBase64());
+}
+
+BrushRaster decodeBrushRaster(const QString& base64Png) {
+    const QByteArray png = QByteArray::fromBase64(base64Png.toLatin1());
+    QImage img;
+    if (!img.loadFromData(png, "PNG"))
+        return {};
+    img = img.convertToFormat(QImage::Format_Grayscale8);
+
+    BrushRaster raster{
+        img.width(),
+        img.height(),
+        std::vector<uint8_t>(static_cast<size_t>(img.width()) * img.height(), 0)};
+    for (int y = 0; y < raster.height; ++y)
+        std::copy_n(
+            img.constScanLine(y),
+            raster.width,
+            raster.data.data() + static_cast<size_t>(y) * raster.width);
+    return raster;
 }

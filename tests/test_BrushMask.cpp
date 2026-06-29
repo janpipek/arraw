@@ -109,3 +109,27 @@ TEST_CASE("stampStroke fills the interior of a path between far-apart points", "
     REQUIRE(at(out, 50, 50) == 255); // midpoint, on the centreline → full coverage
     REQUIRE(at(out, 50, 70) == 0);   // 20 px off the line → outside radius 10
 }
+
+// ---------------------------------------------------------------------------
+// encodeBrushRaster / decodeBrushRaster — base64 PNG for the sidecar (adr 0047)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("brush raster survives a base64-PNG round trip", "[brush]") {
+    // A painted raster with a feathered gradient (non-trivial pixel values).
+    const std::array<QPointF, 1> path{QPointF{40, 40}};
+    const BrushRaster painted
+        = stampStroke(blankRaster(80), path, BrushDab{.radius = 30.0, .feather = 0.7, .flow = 0.9});
+
+    const QString encoded = encodeBrushRaster(painted);
+    REQUIRE_FALSE(encoded.isEmpty());
+
+    const BrushRaster back = decodeBrushRaster(encoded);
+    REQUIRE(back.width == painted.width);
+    REQUIRE(back.height == painted.height);
+    REQUIRE(back.data == painted.data);
+}
+
+TEST_CASE("brush raster codec handles empty and malformed input", "[brush]") {
+    REQUIRE(encodeBrushRaster(BrushRaster{}).isEmpty());                // nothing to encode
+    REQUIRE(decodeBrushRaster(QStringLiteral("not png")).data.empty()); // garbage in
+}
