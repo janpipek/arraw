@@ -1,5 +1,5 @@
-#include "develop/GlobalAdjustment.h"
 #include "core/NoiseReduction.h"
+#include "develop/GlobalAdjustment.h"
 #include "io/XmpSidecar.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -43,6 +43,45 @@ TEST_CASE("colorNoiseReductionStrengthMix maps Strength 0..100 to a 0..1 mix fac
 TEST_CASE("colorNoiseReductionStrengthMix clamps out-of-range Strength to [0,1]", "[nr]") {
     REQUIRE(colorNoiseReductionStrengthMix(-10.0f) == 0.0f);
     REQUIRE(colorNoiseReductionStrengthMix(150.0f) == 1.0f);
+}
+
+// ---------------------------------------------------------------------------
+// luminanceNoiseReductionAmountMix — Amount→[0,1] blend factor for the luma
+// recombine (the dual of the chroma Strength mix; ADR 0046).
+// ---------------------------------------------------------------------------
+
+TEST_CASE("luminanceNoiseReductionAmountMix maps Amount 0 to 0 (luma NR off)", "[nr]") {
+    REQUIRE(luminanceNoiseReductionAmountMix(0.0f) == 0.0f);
+}
+
+TEST_CASE("luminanceNoiseReductionAmountMix maps Amount 0..100 to a 0..1 mix factor", "[nr]") {
+    REQUIRE_THAT(luminanceNoiseReductionAmountMix(50.0f), WithinAbs(0.5f, 1e-6));
+    REQUIRE(luminanceNoiseReductionAmountMix(100.0f) == 1.0f);
+}
+
+TEST_CASE("luminanceNoiseReductionAmountMix clamps out-of-range Amount to [0,1]", "[nr]") {
+    REQUIRE(luminanceNoiseReductionAmountMix(-10.0f) == 0.0f);
+    REQUIRE(luminanceNoiseReductionAmountMix(150.0f) == 1.0f);
+}
+
+// ---------------------------------------------------------------------------
+// luminanceNoiseReductionRangeSigma — Detail→bilateral range sigma, measured in
+// the perceptual (tone::kGamma-encoded) luma domain. Higher Detail protects more
+// detail, i.e. a tighter edge-stop (smaller sigma); never zero (ADR 0046).
+// ---------------------------------------------------------------------------
+
+TEST_CASE("luminanceNoiseReductionRangeSigma decreases as Detail rises", "[nr]") {
+    const float lo = luminanceNoiseReductionRangeSigma(0.0f);
+    const float mid = luminanceNoiseReductionRangeSigma(50.0f);
+    const float hi = luminanceNoiseReductionRangeSigma(100.0f);
+    REQUIRE(lo > mid);
+    REQUIRE(mid > hi);
+    REQUIRE(hi > 0.0f); // a zero range sigma would smooth nothing
+}
+
+TEST_CASE("luminanceNoiseReductionRangeSigma clamps out-of-range Detail", "[nr]") {
+    REQUIRE(luminanceNoiseReductionRangeSigma(-10.0f) == luminanceNoiseReductionRangeSigma(0.0f));
+    REQUIRE(luminanceNoiseReductionRangeSigma(150.0f) == luminanceNoiseReductionRangeSigma(100.0f));
 }
 
 // ---------------------------------------------------------------------------
