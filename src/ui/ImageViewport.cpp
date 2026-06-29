@@ -65,6 +65,7 @@ private:
 ImageViewport::ImageViewport(QWidget* parent)
     : QRhiWidget(parent) {
     setFocusPolicy(Qt::StrongFocus);
+    setMouseTracking(true); // hover moves (no button) so the brush cursor tracks live
     overlay = new ViewportOverlay(this);
 
     histoTimer.setSingleShot(true);
@@ -490,6 +491,15 @@ void ImageViewport::drawBrushCursor(QPainter& p) const {
     const QPointF a = bufferPixelToViewport(cBuf);
     const QPointF b = bufferPixelToViewport({cBuf.x() + rBuf, cBuf.y()});
     const double rScreen = std::hypot(b.x() - a.x(), b.y() - a.y());
+
+    // With the overlay on, fill the footprint translucently so the dab a click
+    // would add is visible on hover, before any painting (docs/adr/0047). During a
+    // stroke the path preview already fills, so only the ring trails the cursor.
+    if (maskOverlayVisible && !brushPainting) {
+        p.setPen(Qt::NoPen);
+        p.setBrush(brushErase ? QColor(90, 170, 255, 90) : QColor(255, 40, 40, 90));
+        p.drawEllipse(brushCursorPos, rScreen, rScreen);
+    }
     p.setPen(QPen(brushErase ? QColor(255, 140, 140) : Qt::white, 1.0));
     p.setBrush(Qt::NoBrush);
     p.drawEllipse(brushCursorPos, rScreen, rScreen);
