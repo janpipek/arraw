@@ -652,7 +652,7 @@ void main() {
     // maskOverlay is -1 for the export and histogram readbacks.
     if (u.maskOverlay >= 0 && u.maskOverlay < u.numLocalAdj) {
         float mw = maskWeight(u.maskOverlay, vFrameUV, maskAspect);
-        outc = mix(outc, vec3(1.0, 0.15, 0.15), mw * 0.5);
+        outc = mix(outc, vec3(1.0, 0.1, 0.1), mw * 0.75);
     }
     fragColor = vec4(outc, 1.0);
 }

@@ -212,9 +212,13 @@ void ImageViewport::render(QRhiCommandBuffer* cb) {
     fp.clipHighlights = clipHighlights;
     fp.clipShadows = clipShadows;
     fp.sensorClip = sensorClipWarning;
-    // Tint the active mask's region red while editing, so the painted/parametric
-    // mask is visible (docs/adr/0047). On-screen preview only; never on export.
-    fp.maskOverlay = (localMaskMode() && !showOriginal) ? activeLocalAdj : -1;
+    // Tint the active mask's region red, but only while directly manipulating it
+    // (painting a stroke or dragging a handle) — so it shows what's being shaped
+    // yet clears the moment you move to the delta sliders and want to judge the
+    // effect unobscured (docs/adr/0047). On-screen preview only; never on export.
+    const bool editingMask = brushPainting || localDragHandle != LinearHandle::None
+                             || radialDragHandle != RadialHandle::None;
+    fp.maskOverlay = (localMaskMode() && !showOriginal && editingMask) ? activeLocalAdj : -1;
     fp.adjustments = p;
     // The denoise pre-pass is debounced (nrTimer): render the settled values,
     // not the live sliders, so dragging doesn't trigger a recompute every tick.
