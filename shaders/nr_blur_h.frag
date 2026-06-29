@@ -16,6 +16,8 @@ layout(std140, binding = 0) uniform nrbuf {
     int   radius;
     int   flipV;     // unused here; the block must match nr.vert exactly (std140)
     float strength;  // unused here; same reason
+    float rangeSigma; // unused here; same reason
+    float amount;     // unused here; same reason
 } u;
 
 const int kMaxRadius = 64;

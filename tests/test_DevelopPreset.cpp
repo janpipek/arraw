@@ -51,6 +51,21 @@ TEST_CASE("A Geometry preset round-trips orientation through JSON", "[preset]") 
     CHECK(loaded.values.orientation == p.values.orientation);
 }
 
+TEST_CASE("A Black & White preset round-trips the toggle and mixer through JSON", "[preset]") {
+    DevelopPreset p;
+    p.name = "Mono";
+    p.groups = groups({DevelopGroup::BlackAndWhite});
+    p.values.convertToGrayscale = true;
+    p.values.bwMix = {-30, -10, 5, 15, 25, -45, 60, 0};
+
+    bool ok = false;
+    const DevelopPreset loaded = parseDevelopPreset(serializeDevelopPreset(p), &ok);
+
+    REQUIRE(ok);
+    CHECK(loaded.values.convertToGrayscale);
+    CHECK(loaded.values.bwMix == p.values.bwMix);
+}
+
 TEST_CASE("A Detail preset round-trips Colour Noise Reduction through JSON", "[preset]") {
     DevelopPreset p;
     p.name = "Clean";
@@ -61,6 +76,8 @@ TEST_CASE("A Detail preset round-trips Colour Noise Reduction through JSON", "[p
     p.values.sharpening = 30.0f;
     p.values.colorNoiseReduction = 65.0f; // Strength
     p.values.colorNoiseReductionSmoothness = 80.0f;
+    p.values.luminanceNoiseReduction = 45.0f; // Amount
+    p.values.luminanceNoiseReductionDetail = 60.0f;
 
     bool ok = false;
     const DevelopPreset loaded = parseDevelopPreset(serializeDevelopPreset(p), &ok);
@@ -71,6 +88,8 @@ TEST_CASE("A Detail preset round-trips Colour Noise Reduction through JSON", "[p
     CHECK(loaded.values.dehaze == -12.0f);
     CHECK(loaded.values.colorNoiseReduction == 65.0f);
     CHECK(loaded.values.colorNoiseReductionSmoothness == 80.0f);
+    CHECK(loaded.values.luminanceNoiseReduction == 45.0f);
+    CHECK(loaded.values.luminanceNoiseReductionDetail == 60.0f);
     CHECK(loaded.values.sharpening == 30.0f);
 }
 

@@ -190,6 +190,14 @@ std::vector<Scenario> scenarios() {
     p.filmicHighlights = 80.0f;
     list.push_back({"filmic_highlights", p});
 
+    // Black & White (docs/adr/0048): the hue mixer lightens the red bar and
+    // darkens the blue one, and every output pixel must be neutral grey. Mirrors
+    // colour::applyBlackAndWhite, so this enforces CPU/GPU parity for the mixer.
+    p = {};
+    p.convertToGrayscale = true;
+    p.bwMix = {60.0f, 0.0f, 0.0f, 0.0f, 0.0f, -80.0f, 0.0f, 0.0f};
+    list.push_back({"black_and_white", p});
+
     return list;
 }
 

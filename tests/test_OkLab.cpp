@@ -18,6 +18,18 @@ float chroma(const Rgb& rgb) {
 float lightness(const Rgb& rgb) {
     return colour::toOklab(rgb).L;
 }
+
+using Mix = std::array<float, 8>;
+constexpr Mix kFlatMix = {};
+
+enum Band { Red, Orange, Yellow, Green, Aqua, Blue, Purple, Magenta };
+
+// Assert the conversion is achromatic, then return the single grey value.
+float grey(const Rgb& c) {
+    REQUIRE_THAT(c[1], WithinAbs(c[0], 1e-6f));
+    REQUIRE_THAT(c[2], WithinAbs(c[0], 1e-6f));
+    return c[0];
+}
 } // namespace
 
 // ── Oklab round trip (the SPOT contract: one tested transform feeds the GPU) ──
@@ -145,4 +157,70 @@ TEST_CASE("roll-off leaves a midtone essentially untouched", "[filmic]") {
     CHECK_THAT(out[0], WithinAbs(mid[0], 0.02f));
     CHECK_THAT(out[1], WithinAbs(mid[1], 0.02f));
     CHECK_THAT(out[2], WithinAbs(mid[2], 0.02f));
+}
+
+// ── Black & White hue mixer (docs/adr/0048) ──────────────────────────────────
+
+TEST_CASE("B&W conversion is achromatic for any input and mix", "[bw]") {
+    Mix mix{};
+    mix[Blue] = -80.0f;
+    mix[Red] = 60.0f;
+    for (const Rgb& c : {Rgb{0.6f, 0.06f, 0.05f}, Rgb{0.05f, 0.07f, 0.6f}, Rgb{0.2f, 0.5f, 0.1f}}) {
+        const Rgb out = colour::applyBlackAndWhite(c, mix);
+        CHECK_THAT(out[1], WithinAbs(out[0], 1e-6f));
+        CHECK_THAT(out[2], WithinAbs(out[0], 1e-6f));
+    }
+}
+
+TEST_CASE("a neutral pixel is unchanged by any B&W mix", "[bw]") {
+    Mix loud{};
+    loud[Blue] = 100.0f;
+    loud[Red] = -100.0f;
+    const Rgb out = colour::applyBlackAndWhite({0.4f, 0.4f, 0.4f}, loud);
+    CHECK_THAT(grey(out), WithinAbs(0.4f, 1e-6f)); // neutrals never shift
+}
+
+TEST_CASE("an all-zero mix yields the Rec.2020 luminance grey", "[bw]") {
+    const Rgb c{0.05f, 0.07f, 0.6f};
+    const float expected = 0.2627f * c[0] + 0.6780f * c[1] + 0.0593f * c[2];
+    CHECK_THAT(grey(colour::applyBlackAndWhite(c, kFlatMix)), WithinAbs(expected, 1e-6f));
+}
+
+TEST_CASE("a band darkens its own hue and leaves other hues untouched", "[bw]") {
+    Mix blueDown{};
+    blueDown[Blue] = -100.0f;
+    const Rgb blue{0.05f, 0.07f, 0.6f};
+    const Rgb red{0.6f, 0.06f, 0.05f};
+
+    // The red-filter-darkens-the-sky test: pulling Blue down darkens a blue pixel...
+    CHECK(
+        grey(colour::applyBlackAndWhite(blue, blueDown))
+        < grey(colour::applyBlackAndWhite(blue, kFlatMix)));
+    // ...while a red pixel, outside the Blue band, is untouched.
+    CHECK_THAT(
+        grey(colour::applyBlackAndWhite(red, blueDown)),
+        WithinAbs(grey(colour::applyBlackAndWhite(red, kFlatMix)), 1e-6f));
+}
+
+TEST_CASE("a positive band lightens its hue", "[bw]") {
+    Mix blueUp{};
+    blueUp[Blue] = 100.0f;
+    const Rgb blue{0.05f, 0.07f, 0.6f};
+    CHECK(
+        grey(colour::applyBlackAndWhite(blue, blueUp))
+        > grey(colour::applyBlackAndWhite(blue, kFlatMix)));
+}
+
+TEST_CASE("the mixer shift scales with saturation", "[bw]") {
+    Mix blueUp{};
+    blueUp[Blue] = 100.0f;
+    const Rgb fullBlue{0.05f, 0.07f, 0.6f};
+    const Rgb halfBlue{0.30f, 0.32f, 0.60f}; // same hue, lower saturation
+
+    const float fullGain = grey(colour::applyBlackAndWhite(fullBlue, blueUp))
+                           / grey(colour::applyBlackAndWhite(fullBlue, kFlatMix));
+    const float halfGain = grey(colour::applyBlackAndWhite(halfBlue, blueUp))
+                           / grey(colour::applyBlackAndWhite(halfBlue, kFlatMix));
+    CHECK(fullGain > halfGain); // a saturated blue moves further than a muted one
+    CHECK(halfGain > 1.0f);     // ...but the muted one still moves
 }

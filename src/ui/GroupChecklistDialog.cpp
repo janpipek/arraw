@@ -18,7 +18,9 @@ GroupChecklistDialog::GroupChecklistDialog(
         const auto g = static_cast<DevelopGroup>(i);
         if (!hasGroup(available, g))
             continue;
-        auto* check = new QCheckBox(developGroupLabel(g), this);
+        // Escape any '&' (e.g. "Black & White") so QCheckBox shows it literally
+        // instead of treating the next letter as a mnemonic.
+        auto* check = new QCheckBox(developGroupLabel(g).replace('&', "&&"), this);
         check->setObjectName(developGroupKey(g));
         check->setChecked(hasGroup(preselected, g));
         layout->addWidget(check);

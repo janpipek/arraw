@@ -70,6 +70,10 @@ QJsonObject groupToJson(DevelopGroup g, const GlobalAdjustment& v) {
         o["sat"] = bandsToJson(v.hslSat);
         o["lum"] = bandsToJson(v.hslLum);
         break;
+    case DevelopGroup::BlackAndWhite:
+        o["convertToGrayscale"] = v.convertToGrayscale;
+        o["mix"] = bandsToJson(v.bwMix);
+        break;
     case DevelopGroup::Detail:
         o["texture"] = v.texture;
         o["clarity"] = v.clarity;
@@ -77,6 +81,8 @@ QJsonObject groupToJson(DevelopGroup g, const GlobalAdjustment& v) {
         o["sharpening"] = v.sharpening;
         o["colorNoiseReduction"] = v.colorNoiseReduction; // Strength (issue #59)
         o["colorNoiseReductionSmoothness"] = v.colorNoiseReductionSmoothness;
+        o["luminanceNoiseReduction"] = v.luminanceNoiseReduction; // Amount (docs/adr/0046)
+        o["luminanceNoiseReductionDetail"] = v.luminanceNoiseReductionDetail;
         break;
     case DevelopGroup::Geometry:
         o["orientation"] = orient::toExif(v.orientation); // EXIF 1..8 (docs/adr/0029)
@@ -137,6 +143,10 @@ void groupFromJson(DevelopGroup g, const QJsonObject& o, GlobalAdjustment& v) {
         bandsFromJson(o["sat"].toArray(), v.hslSat);
         bandsFromJson(o["lum"].toArray(), v.hslLum);
         break;
+    case DevelopGroup::BlackAndWhite:
+        v.convertToGrayscale = o.value("convertToGrayscale").toBool(v.convertToGrayscale);
+        bandsFromJson(o["mix"].toArray(), v.bwMix);
+        break;
     case DevelopGroup::Detail:
         v.texture = f("texture", v.texture);
         v.clarity = f("clarity", v.clarity);
@@ -145,6 +155,9 @@ void groupFromJson(DevelopGroup g, const QJsonObject& o, GlobalAdjustment& v) {
         v.colorNoiseReduction = f("colorNoiseReduction", v.colorNoiseReduction); // Strength
         v.colorNoiseReductionSmoothness
             = f("colorNoiseReductionSmoothness", v.colorNoiseReductionSmoothness);
+        v.luminanceNoiseReduction = f("luminanceNoiseReduction", v.luminanceNoiseReduction); // Amt
+        v.luminanceNoiseReductionDetail
+            = f("luminanceNoiseReductionDetail", v.luminanceNoiseReductionDetail);
         break;
     case DevelopGroup::Geometry: {
         if (o.contains("orientation"))

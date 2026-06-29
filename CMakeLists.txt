@@ -147,9 +147,19 @@ if(NOT ARRAW_WITH_LENSFUN STREQUAL "OFF")
         find_library(LENSFUN_LIB NAMES lensfun)
         find_path(LENSFUN_INCLUDE_DIR lensfun.h PATH_SUFFIXES lensfun)
         if(LENSFUN_LIB AND LENSFUN_INCLUDE_DIR)
+            find_library(GLIB2_LIB NAMES glib-2.0)
+            find_library(GOBJECT2_LIB NAMES gobject-2.0)
+            find_library(INTL_LIB NAMES intl)
+            find_library(ICONV_LIB NAMES iconv)
             add_library(PkgConfig::LENSFUN INTERFACE IMPORTED)
+            set(LENSFUN_LINK_LIBS "${LENSFUN_LIB}")
+            foreach(dep GLIB2_LIB GOBJECT2_LIB INTL_LIB ICONV_LIB)
+                if(${dep})
+                    list(APPEND LENSFUN_LINK_LIBS "${${dep}}")
+                endif()
+            endforeach()
             set_target_properties(PkgConfig::LENSFUN PROPERTIES
-                INTERFACE_LINK_LIBRARIES "${LENSFUN_LIB}"
+                INTERFACE_LINK_LIBRARIES "${LENSFUN_LINK_LIBS}"
                 INTERFACE_INCLUDE_DIRECTORIES "${LENSFUN_INCLUDE_DIR}"
             )
         endif()
@@ -300,6 +310,7 @@ qt6_add_shaders(arraw_core "arraw_shaders"
     FILES shaders/image.vert shaders/image.frag
           shaders/nr.vert shaders/nr_extract.frag
           shaders/nr_blur_h.frag shaders/nr_blur_v.frag shaders/nr_recombine.frag
+          shaders/lum_bilateral_h.frag shaders/lum_bilateral_v.frag
           shaders/spatial_extract.frag
 )
 

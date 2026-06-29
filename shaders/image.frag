@@ -64,9 +64,10 @@ layout(std140, binding = 0) uniform buf {
     float textureAmount; // -1..+1 fine-detail local contrast
     float clarity;  // -1..+1 midtone local contrast
     float dehaze;   // -1..+1 practical haze compensation
-    int   maskOverlay; // index of the mask to tint red while editing, -1 = off
-    int   pad2;
+    int   maskOverlay; // index of the mask to tint red while editing, -1 = off; was pad1
+    int   convertToGrayscale; // 1: Black & White treatment on (docs/adr/0048); was pad2
     int   pad3;
+    vec4  bwMix[2];  // 8 B&W hue-mixer weights, -100..+100 (std140: vec4 pairs, like hslHue)
 } u;
 
 layout(binding = 1) uniform sampler2D uTexture;
@@ -288,6 +289,38 @@ vec3 applyVibrance(vec3 c, float vibrance) {
     float weight = 0.2 / (0.2 + chroma);  // kVibranceHalf: muted -> 1, vivid -> small
     lab.yz *= 1.0 + vibrance * weight;
     return oklabToRgb(lab);
+}
+
+// Black & White hue mixer (docs/adr/0048) — a line-for-line mirror of
+// colour::applyBlackAndWhite in src/pipeline/OkLab.cpp ([[spot-for-algorithms]]).
+// Collapses a pixel to grey: the base is the Rec.2020 luminance, weighted up or
+// down by the per-hue mixer band(s) for the pixel's hue, scaled by saturation so
+// neutrals never shift. u.bwMix carries -100..+100, divided by 100 here as in CPU.
+vec3 applyBlackAndWhite(vec3 c) {
+    float base = dot(c, kLuma);
+    vec3 hsv = rgb2hsv(c);
+    float h = hsv.x;
+    float s = hsv.y;
+
+    float weighted = 0.0;
+    float totalW = 0.0;
+    for (int i = 0; i < 8; ++i) {
+        float d = abs(h - kHslCenters[i]);
+        if (d > 0.5) d = 1.0 - d;           // circular wrap
+        float w = max(0.0, 1.0 - d * 6.0);  // ±60° support
+        w = w * w * (3.0 - 2.0 * w);        // smoothstep
+        if (w > 0.001) {
+            weighted += u.bwMix[i >> 2][i & 3] * w;
+            totalW += w;
+        }
+    }
+
+    float gain = 1.0;
+    if (totalW > 0.001) {
+        float blended = weighted / totalW;  // -100..100, the hue's net weight
+        gain = 1.0 + (blended / 100.0) * s;
+    }
+    return vec3(max(base * gain, 0.0));
 }
 
 vec3 setLuma(vec3 c, float y2) {
@@ -559,10 +592,15 @@ vec3 applyLocalAdjustments(vec3 c, vec2 uv, float aspect) {
     for (int i = 0; i < u.numLocalAdj; ++i) {
         float w = maskWeight(i, uv, aspect);
         c = mix(c, applyBasicTone(c, i + 1), w);
-        vec3 lg = vec3(u.laTone2[i].z, u.laTone2[i].w, u.laColor[i].w);
-        c *= mix(vec3(1.0), lg, w); // local white balance: mask-weighted gain (docs/adr/0025)
-        c = applySaturation(c, w * u.laColor[i].x);
-        c = applyVibrance(c, w * u.laColor[i].y);
+        // Monochrome is total: suppress a local adjustment's colour deltas (local
+        // white balance, saturation, vibrance) while Black & White is on, so a
+        // masked region stays neutral grey (docs/adr/0048). Tone still applies.
+        if (u.convertToGrayscale == 0) {
+            vec3 lg = vec3(u.laTone2[i].z, u.laTone2[i].w, u.laColor[i].w);
+            c *= mix(vec3(1.0), lg, w); // local white balance: mask-weighted gain (docs/adr/0025)
+            c = applySaturation(c, w * u.laColor[i].x);
+            c = applyVibrance(c, w * u.laColor[i].y);
+        }
     }
     return c;
 }
@@ -598,10 +636,17 @@ void main() {
         return;
     }
     c *= vec3(u.wbGainR, u.wbGainG, u.wbGainB); // white balance: per-channel gain (docs/adr/0025)
-    if (u.hslActive != 0)
-        c = applyHsl(c);
-    c = applySaturation(c, u.saturation);
-    c = applyVibrance(c, u.vibrance);
+    if (u.convertToGrayscale != 0) {
+        // Black & White treatment (docs/adr/0048): collapse to grey right after
+        // white balance, so the mix responds to Temperature/Tint, and skip the
+        // colour stage (HSL/sat/vibrance are no-ops on an achromatic signal).
+        c = applyBlackAndWhite(c);
+    } else {
+        if (u.hslActive != 0)
+            c = applyHsl(c);
+        c = applySaturation(c, u.saturation);
+        c = applyVibrance(c, u.vibrance);
+    }
     c = applySpatialGlobals(c, vUV);
 
     // Local adjustments — analytic, single-pass, after the global colour section

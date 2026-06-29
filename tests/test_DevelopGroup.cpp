@@ -37,6 +37,9 @@ static GlobalAdjustment fullyEdited() {
     g.hslHue = {1, 2, 3, 4, 5, 6, 7, 8};
     g.hslSat = {-1, -2, -3, -4, -5, -6, -7, -8};
     g.hslLum = {9, 8, 7, 6, 5, 4, 3, 2};
+    // Black & White
+    g.convertToGrayscale = true;
+    g.bwMix = {10, 20, 30, 40, 50, 60, 70, 80};
     // Detail
     g.demosaicAlgorithm = DemosaicAlgorithm::VNG;
     g.texture = 18.0f;
@@ -171,6 +174,24 @@ TEST_CASE("Lens Corrections moves only its enable toggles", "[developgroup]") {
     CHECK(result.lensCorrectCA == source.lensCorrectCA);
     // Must not drag the post-crop vignette (a different group) along.
     CHECK(result.postCropVignetteAmount == target.postCropVignetteAmount);
+}
+
+TEST_CASE("Black & White carries the treatment toggle and the mixer together", "[developgroup]") {
+    const GlobalAdjustment target; // defaults: colour treatment, flat mix
+    const GlobalAdjustment source = fullyEdited();
+
+    const GlobalAdjustment result = applyGroups(target, source, only(DevelopGroup::BlackAndWhite));
+    CHECK(result.convertToGrayscale == source.convertToGrayscale);
+    CHECK(result.bwMix == source.bwMix);
+    // The mono treatment must not drag colour-image controls along.
+    CHECK(result.saturation == target.saturation);
+    CHECK(result.hslSat == target.hslSat);
+
+    // Replace-wholesale: pasting an unedited B&W group turns mono back off.
+    const GlobalAdjustment reset
+        = applyGroups(source, GlobalAdjustment{}, only(DevelopGroup::BlackAndWhite));
+    CHECK_FALSE(reset.convertToGrayscale);
+    CHECK(reset.bwMix == GlobalAdjustment{}.bwMix);
 }
 
 TEST_CASE("White Balance carries temperature and tint", "[developgroup]") {

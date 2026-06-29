@@ -52,6 +52,15 @@ struct GlobalAdjustment : SharedAdjustment {
     std::array<float, 8> hslSat = {};
     std::array<float, 8> hslLum = {};
 
+    // Black & White (docs/adr/0048). A treatment toggle plus the 8-band hue mixer
+    // (the same Red..Magenta bands as HSL, -100..+100 each): each band darkens or
+    // lightens the greys made from pixels of its hue. The two travel together as
+    // the Black & White Develop Group. The mix persists independently of the
+    // toggle, so switching Colour<->B&W keeps the dialled-in weights. Stored
+    // Lightroom-compatibly as crs:ConvertToGrayscale / crs:GrayMixer*.
+    bool convertToGrayscale = false;
+    std::array<float, 8> bwMix = {};
+
     // Detail
     // Demosaic algorithm — a decode-time choice, not a shader uniform: changing
     // it re-runs the libraw decode through the load path (docs/adr/0036, issue
@@ -67,6 +76,13 @@ struct GlobalAdjustment : SharedAdjustment {
     // Smoothness drives the Gaussian sigma (crs:ColorNoiseReductionSmoothness).
     float colorNoiseReduction = 0.0f;            // Strength, 0 .. 100
     float colorNoiseReductionSmoothness = 50.0f; // 0 .. 100
+    // Luminance Noise Reduction — the dual of chroma NR: an edge-aware bilateral
+    // smooths luma Y while preserving the chroma ratio (see NoiseReduction.h,
+    // docs/adr/0046). Amount is the blend opacity (crs:LuminanceSmoothing); Detail
+    // is the bilateral range-sigma / edge-protection threshold
+    // (crs:LuminanceNoiseReductionDetail).
+    float luminanceNoiseReduction = 0.0f;        // Amount, 0 .. 100
+    float luminanceNoiseReductionDetail = 50.0f; // 0 .. 100
 
     // Lens Corrections (docs/adr/0032). Profile-driven, apply-once CPU corrections.
     // Enable toggles only — the coefficients come from the lens profile

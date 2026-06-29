@@ -192,7 +192,7 @@ jobs:
       - name: Install Fedora packaging dependencies
         run: |
           dnf install -y \
-            appstream catch-devel cmake desktop-file-utils findutils gcc-c++ git gzip \
+            appstream catch-devel cmake desktop-file-utils exiv2-devel findutils gcc-c++ git gzip \
             lcms2-devel lensfun-devel LibRaw-devel ninja-build qt6-qtbase-devel \
             qt6-qtbase-private-devel qt6-qtimageformats qt6-qtshadertools-devel \
             redhat-rpm-config rpm-build rpmlint

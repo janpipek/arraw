@@ -6,6 +6,8 @@
 
 #include <QCheckBox>
 #include <QComboBox>
+#include <QGroupBox>
+#include <QPushButton>
 #include <QSlider>
 
 // The Grain seed is a hidden per-image identity (docs/adr/0026). It is minted
@@ -185,4 +187,73 @@ TEST_CASE(
     CHECK(panel.params().texture == 18.0f);
     CHECK(panel.params().clarity == 22.0f);
     CHECK(panel.params().dehaze == -12.0f);
+}
+
+// ── Black & White treatment (docs/adr/0048) ─────────────────────────────────
+// The mixer math is tested headless in test_OkLab; these cover the panel wiring:
+// the switch flips the model flag, swaps which colour panels are shown, and lands
+// one undo entry.
+
+TEST_CASE("the Treatment switch toggles Black & White and swaps the panels", "[adjustpanel][bw]") {
+    testApp();
+    AdjustmentPanel panel;
+
+    auto* colorBox = panel.findChild<QGroupBox*>("colorGroup");
+    auto* hslBox = panel.findChild<QGroupBox*>("hslGroup");
+    auto* bwBox = panel.findChild<QGroupBox*>("bwMixGroup");
+    auto* bwBtn = panel.findChild<QPushButton*>("treatmentBw");
+    auto* colourBtn = panel.findChild<QPushButton*>("treatmentColour");
+    REQUIRE(colorBox);
+    REQUIRE(hslBox);
+    REQUIRE(bwBox);
+    REQUIRE(bwBtn);
+    REQUIRE(colourBtn);
+
+    // Default treatment is Colour: B&W Mix hidden, Color + HSL shown.
+    CHECK_FALSE(panel.params().convertToGrayscale);
+    CHECK(bwBox->isHidden());
+    CHECK_FALSE(colorBox->isHidden());
+    CHECK_FALSE(hslBox->isHidden());
+
+    int committed = 0;
+    QObject::connect(
+        &panel,
+        &AdjustmentPanel::adjustmentCommitted,
+        [&](const GlobalAdjustment&, const GlobalAdjustment&) { ++committed; });
+
+    bwBtn->click(); // switch to Black & White
+    CHECK(panel.params().convertToGrayscale);
+    CHECK_FALSE(bwBox->isHidden());
+    CHECK(colorBox->isHidden());
+    CHECK(hslBox->isHidden());
+    CHECK(committed == 1); // one undo entry for the treatment change
+
+    // A mixer band slider feeds the model.
+    const QList<QSlider*> bands = bwBox->findChildren<QSlider*>();
+    REQUIRE(bands.size() == 8);
+    bands[0]->setValue(40);
+    CHECK(panel.params().bwMix[0] == 40.0f);
+
+    colourBtn->click(); // back to Colour
+    CHECK_FALSE(panel.params().convertToGrayscale);
+    CHECK(bwBox->isHidden());
+    CHECK_FALSE(colorBox->isHidden());
+}
+
+TEST_CASE(
+    "setParams restores the Black & White treatment and reveals the mixer", "[adjustpanel][bw]") {
+    testApp();
+    AdjustmentPanel panel;
+
+    GlobalAdjustment p;
+    p.convertToGrayscale = true;
+    p.bwMix = {10, -20, 30, -40, 50, -60, 70, -80};
+    panel.setParams(p);
+
+    CHECK(panel.params().convertToGrayscale);
+    for (int i = 0; i < 8; ++i)
+        CHECK(panel.params().bwMix[i] == p.bwMix[i]);
+    CHECK_FALSE(panel.findChild<QGroupBox*>("bwMixGroup")->isHidden());
+    CHECK(panel.findChild<QGroupBox*>("hslGroup")->isHidden());
+    CHECK(panel.findChild<QGroupBox*>("colorGroup")->isHidden());
 }

@@ -222,7 +222,9 @@ A global colourfulness control that scales chroma in a perceptual space (Oklab)
 so changing it holds perceived lightness and hue — unlike a naive pull toward
 grey, which thins the colours. Also available per [[Local Adjustment]]. Distinct
 from [[Vibrance]] (which protects already-vivid colours) and from the [[HSL]]
-per-band saturation. _Avoid_: colourfulness (the perceptual quantity, not the
+per-band saturation. Pulling Saturation to −100 gives a *flat, hue-blind*
+greyscale; the hue-aware monochrome conversion is a different control,
+[[Black & White]]. _Avoid_: colourfulness (the perceptual quantity, not the
 slider), chroma (the axis it scales)
 
 **Vibrance**:
@@ -230,6 +232,35 @@ Like [[Saturation]], a perceptual (Oklab) chroma scale, but weighted so muted
 colours move more than already-saturated ones — the gentler control that resists
 over-cooking skin tones. Also available per [[Local Adjustment]].
 _Avoid_: saturation (the unweighted sibling), vividness
+
+**Black & White**:
+A develop *treatment* that renders the image achromatic through the [[B&W Mixer]]
+rather than by removing chroma — the digital analogue of shooting black-and-white
+film through a coloured filter, where each original hue is weighted into its own
+grey. A single toggle (Colour ↔ Black & White) at the top of the develop stack
+beside [[White Balance]]; turning it on hides the [[Colour]]/[[HSL]] panels (whose
+colour controls are inert on an achromatic signal) and reveals the [[B&W Mixer]].
+The conversion runs immediately after [[White Balance]], so the mix responds to
+Temperature/Tint; everything downstream develops on the grey signal, and even a
+[[Local Adjustment]]'s colour deltas (temperature/tint/saturation/vibrance) are
+suppressed so the result is neutral grey everywhere. Its own [[Develop Group]].
+Stored Lightroom-compatibly as `crs:ConvertToGrayscale`; the mix weights persist
+independently of the toggle, so switching back to Colour and forward again keeps
+the dialled-in mix.
+_Avoid_: greyscale (the flat [[Saturation]] −100 result), monochrome (the sensor
+type in [[Demosaic Algorithm]]), desaturation
+
+**B&W Mixer**:
+The eight per-hue-band controls (Red, Orange, Yellow, Green, Aqua, Blue, Purple,
+Magenta — the same bands as [[HSL]]) that decide how each original hue maps to a
+grey value under the [[Black & White]] treatment: each band darkens (−100) or
+lightens (+100) the greys made from pixels of that hue, weighted by how saturated
+they are, so neutrals never shift and all-zero weights give the standard Rec.2020
+luminance. Stored as `crs:GrayMixer{Band}`. Distinct from [[HSL]] per-band
+saturation (which thins colour without converting) and from the rejected
+three-channel model.
+_Avoid_: channel mixer (the 3-channel R/G/B model arraw rejected), grayscale mix,
+HSL (the colour-image sibling)
 
 **Spatial Global Adjustment**:
 A develop control that affects the whole image but computes each pixel from a
@@ -301,9 +332,10 @@ parametric mask (the Linear/Radial siblings it is deliberately unlike)
 
 **Develop Group**:
 One selectable unit in the [[Copy Settings]] / [[Develop Preset]] checklist —
-the granularity at which develop settings travel between photos. The nine
+the granularity at which develop settings travel between photos. The ten
 groups partition every global field: White Balance, Tone, Tone Curve, Colour,
-HSL, Detail, Geometry ([[Rotation]] + [[Crop]] + [[Aspect Ratio Lock]] together),
+HSL, [[Black & White]] (the treatment toggle + [[B&W Mixer]] weights together),
+Detail, Geometry ([[Rotation]] + [[Crop]] + [[Aspect Ratio Lock]] together),
 [[Lens Corrections]] ([[Distortion]] + corrective [[Vignetting]] + [[Chromatic
 Aberration]]), and Effects ([[Post-Crop Vignette]] + [[Grain]]). Per-image state such as a Grain's hidden
 seed and [[Local Adjustment]] masks does not travel with a group. Applying a
@@ -482,9 +514,42 @@ Spot carries no tonal parameters and is not a parametric mask.
 _Avoid_: heal (implies Poisson blending, which is not implemented), clone stamp
 (tool name, not the data), local adjustment (different pipeline stage)
 
+**Noise Reduction**:
+The removal of high-ISO sensor noise, split into two halves that are *orthogonal
+by construction*: [[Luminance Noise Reduction]] smooths the luminance channel and
+preserves the chroma ratio exactly, while [[Colour Noise Reduction]] smooths the
+chroma ratio and preserves luminance exactly — so each touches only its own axis
+and the two never contaminate each other (order between them is irrelevant). Both
+run as one unified, cached, debounced GPU pre-pass in [[RendererCore]], last in the
+pipeline before the main shader, decomposing each pixel into luma `Y` and unit-luma
+chroma ratio `r = c/Y`, smoothing one or both, and recombining. Part of the Detail
+[[Develop Group]]. The opposite of [[Grain]], which *adds* texture.
+_Avoid_: denoise (bare — say which half, or "Noise Reduction" for the pair),
+sharpening (a different Detail control), grain (the inverse operation)
+
+**Luminance Noise Reduction**:
+The [[Noise Reduction]] half that removes *luminance* noise — the grainy brightness
+speckle of high-ISO captures — by **edge-aware** smoothing of the luminance channel
+(`Y`) while preserving the chroma ratio exactly and protecting detail edges, so flat
+areas clean up without turning fine texture to mush. The exact dual of [[Colour
+Noise Reduction]]. Two controls: **Amount**, the master strength / blend opacity
+(`crs:LuminanceSmoothing`, default 0), and **Detail**, the edge-protection threshold
+that decides what counts as an edge to preserve versus noise to smooth
+(`crs:LuminanceNoiseReductionDetail`, default 50). The v1 filter is a separable
+**bilateral** whose edge-stop measures luma differences in the perceptual
+(`tone::kGamma`-encoded) domain — so shadow noise, where it lives, is protected like
+midtone noise — but the filter algorithm sits behind a **swappable strategy** seam
+(guided filter / wavelet / non-local means are future implementations). Runs at the
+active slot's **native resolution** (full-res on the FullRes slot, the half-res
+buffer on Preview), so it is approximate at fit-zoom and judged at **1:1** — the
+standard pixel-peeping workflow. Lightroom's third knob, Contrast, is deferred.
+_Avoid_: denoise (bare), Smoothness (that names the [[Colour Noise Reduction]]
+knob), luma smoothing (informal), [[Grain]] (the inverse), sharpening
+
 **Colour Noise Reduction**:
-The removal of *chroma* noise — the coloured blotches of high-ISO captures — by
-smoothing colour while leaving luminance detail untouched. Two controls:
+The [[Noise Reduction]] half that removes *chroma* noise — the coloured blotches of
+high-ISO captures — by smoothing colour while leaving luminance detail untouched.
+Two controls:
 **Smoothness**, the scale of the colour blobs smoothed (drives the Gaussian sigma,
 0..100 → 0..25 full-res px), and **Strength**, how much of the smoothed chroma is
 blended back over the original — the effect's opacity. Run as a cached multi-pass
@@ -493,14 +558,14 @@ main shader. It samples the already-uploaded lens-corrected/spotted texture, so 
 sits *last* in the pipeline — safe because the chroma ratio is unchanged by the
 achromatic vignette gain and geometry-only [[Spot]] clones. Luminance is preserved
 exactly at any Strength by construction (the blend is of unit-luma chroma ratios).
-The recompute is debounced ~200 ms after a slider settles. Luminance noise
-reduction — the grainy brightness speckle — is a separate, deferred concept. The
+The recompute is debounced ~200 ms after a slider settles. Its sibling half,
+[[Luminance Noise Reduction]], smooths the grainy brightness speckle. The
 opposite of [[Grain]], which *adds* texture. Stored as `crs:ColorNoiseReduction`
 (Strength, default 0) and `crs:ColorNoiseReductionSmoothness` (Smoothness, default
 50); the Strength field is Lightroom's "Color" amount, so existing arraw edits that
 predate the split reinterpret their old single value as Strength.
 _Avoid_: denoise (bare — say which kind), Amount (the old single control, now split
-into Smoothness + Strength), luminance NR (the deferred sibling), grain (the inverse
+into Smoothness + Strength), luminance NR (the sibling half, [[Luminance Noise Reduction]]), grain (the inverse
 operation), sharpening (a different Detail control)
 
 **Demosaic Algorithm**:

@@ -36,6 +36,8 @@ static const FieldSpec kFilmicHighlightsSpec
     = developParameterSpec(DevelopParameter::FilmicHighlights).value();
 static const FieldSpec kColorSmoothnessSpec
     = developParameterSpec(DevelopParameter::ColorNoiseReductionSmoothness).value();
+static const FieldSpec kLumDetailSpec
+    = developParameterSpec(DevelopParameter::LuminanceNoiseReductionDetail).value();
 static const FieldSpec kEffectAmountSpec
     = developParameterSpec(DevelopParameter::PostCropVignetteAmount).value();
 static const FieldSpec kEffectShapeSpec
@@ -114,6 +116,34 @@ AdjustmentPanel::AdjustmentPanel(QWidget* parent)
         lbl->setFont(f);
         group->addWidget(lbl);
     };
+
+    // ── Treatment (Colour | Black & White) ──────────────────────────────────────
+    // A mode switch at the top, beside White Balance (docs/adr/0048). Black & White
+    // hides the Color + HSL panels (their controls are inert on an achromatic
+    // signal) and reveals the B&W Mix. White Balance never hides, so the switch
+    // always has a stable home and can never hide itself.
+    {
+        auto* row = new QWidget(this);
+        auto* hb = new QHBoxLayout(row);
+        hb->setContentsMargins(0, 0, 0, 0);
+        hb->setSpacing(2);
+        auto* lbl = new QLabel("Treatment", row);
+        lbl->setFixedWidth(72);
+        hb->addWidget(lbl);
+        treatmentGroup = new QButtonGroup(this);
+        auto addTreatBtn = [&](const QString& text, int id, const char* objName) {
+            auto* btn = new QPushButton(text, row);
+            btn->setObjectName(objName);
+            btn->setCheckable(true);
+            btn->setFixedHeight(20);
+            treatmentGroup->addButton(btn, id);
+            hb->addWidget(btn, 1);
+        };
+        addTreatBtn("Colour", 0, "treatmentColour");
+        addTreatBtn("B&&W", 1, "treatmentBw"); // && renders a literal & on the button
+        treatmentGroup->button(0)->setChecked(true);
+        root->addWidget(row);
+    }
 
     // ── White Balance ─────────────────────────────────────────────────────────
     auto* wbLayout = makeGroup("White Balance");
@@ -221,12 +251,16 @@ AdjustmentPanel::AdjustmentPanel(QWidget* parent)
 
     // ── Color ─────────────────────────────────────────────────────────────────
     auto* color = makeGroup("Color");
+    colorBox = qobject_cast<QGroupBox*>(color->parentWidget()); // hidden in B&W treatment
+    colorBox->setObjectName("colorGroup");
     saturation = addSlider(color, "Saturation", kBipolarSpec);
     vibrance = addSlider(color, "Vibrance", kBipolarSpec);
 
     // ── HSL / Color Mix ───────────────────────────────────────────────────────
     {
         auto* box = new QGroupBox("HSL / Color Mix", this);
+        hslBox = box; // hidden in B&W treatment
+        hslBox->setObjectName("hslGroup");
         auto* layout = new QVBoxLayout(box);
         layout->setSpacing(4);
         root->addWidget(box);
@@ -273,6 +307,24 @@ AdjustmentPanel::AdjustmentPanel(QWidget* parent)
         connect(tabGroup, &QButtonGroup::idClicked, hslStack, &QStackedWidget::setCurrentIndex);
     }
 
+    // ── Black & White Mix ───────────────────────────────────────────────────────
+    // The hue mixer (docs/adr/0048): one bipolar slider per HSL band deciding how
+    // that hue maps to grey. Shown only in Black & White treatment, in place of the
+    // Color + HSL panels. Reuses the same band slider rows as HSL.
+    {
+        auto* box = new QGroupBox("Black && White", this); // && → literal & in the title
+        bwMixBox = box;
+        bwMixBox->setObjectName("bwMixGroup");
+        auto* layout = new QVBoxLayout(box);
+        layout->setSpacing(1);
+        auto* hint = new QLabel("How each colour becomes grey: drag a band darker or lighter.", box);
+        hint->setWordWrap(true);
+        layout->addWidget(hint);
+        for (int i = 0; i < 8; ++i)
+            bwMix[i] = addSlider(layout, kHslRangeNames[i], kBipolarSpec);
+        root->addWidget(box);
+    }
+
     // ── Detail ────────────────────────────────────────────────────────────────
     auto* detail = makeGroup("Detail");
     subHeader(detail, "Demosaic");
@@ -305,6 +357,19 @@ AdjustmentPanel::AdjustmentPanel(QWidget* parent)
         kBipolarSpec,
         "Reduces or adds veiling light using spatial luminance context.");
     sharpening = addSlider(detail, "Sharpen", kSharpenSpec);
+    // Noise Reduction: two orthogonal halves (docs/adr/0046). Luminance first, to
+    // match Lightroom's panel order.
+    subHeader(detail, "Luminance Noise");
+    luminanceNoiseReduction = addSlider(
+        detail,
+        "Amount",
+        kSharpenSpec,
+        "Edge-aware smoothing of luminance noise (grainy brightness speckle); judge at 1:1.");
+    luminanceNoiseReductionDetail = addSlider(
+        detail,
+        "Detail",
+        kLumDetailSpec,
+        "Edge-protection threshold: higher keeps more fine detail, lower smooths more.");
     subHeader(detail, "Color Noise");
     colorNoiseReduction = addSlider(detail, "Strength", kSharpenSpec);
     colorNoiseReductionSmoothness = addSlider(detail, "Smoothness", kColorSmoothnessSpec);
@@ -372,6 +437,13 @@ AdjustmentPanel::AdjustmentPanel(QWidget* parent)
     connect(rotation.slider, &QSlider::sliderReleased, this, [this] {
         emit straightenActive(false);
     });
+    // Treatment switch: flip mono on/off, swap the visible panels, one undo entry.
+    connect(treatmentGroup, &QButtonGroup::idClicked, this, [this](int) {
+        syncParams();
+        applyTreatmentVisibility();
+        emit paramsChanged(adjustments);
+        commit();
+    });
 
     // Wire every row and register double-click-to-reset on its slider and label.
     for (SliderRow* r : allRows()) {
@@ -382,6 +454,7 @@ AdjustmentPanel::AdjustmentPanel(QWidget* parent)
         resetTargets.insert(r->nameLabel, r);
     }
     connectCurve();
+    applyTreatmentVisibility(); // default treatment is Colour: B&W Mix starts hidden
 }
 
 // ── Slider factory ────────────────────────────────────────────────────────────
@@ -444,6 +517,8 @@ void AdjustmentPanel::syncParams() {
     adjustments.clarity = v(clarity);
     adjustments.dehaze = v(dehaze);
     adjustments.sharpening = v(sharpening);
+    adjustments.luminanceNoiseReduction = v(luminanceNoiseReduction); // Amount (docs/adr/0046)
+    adjustments.luminanceNoiseReductionDetail = v(luminanceNoiseReductionDetail);
     adjustments.colorNoiseReduction = v(colorNoiseReduction); // Strength (issue #59)
     adjustments.colorNoiseReductionSmoothness = v(colorNoiseReductionSmoothness);
     adjustments.rotation = v(rotation);
@@ -462,6 +537,17 @@ void AdjustmentPanel::syncParams() {
         adjustments.hslSat[i] = v(hslSat[i]);
         adjustments.hslLum[i] = v(hslLum[i]);
     }
+    adjustments.convertToGrayscale = treatmentGroup->checkedId() == 1;
+    for (int i = 0; i < 8; ++i)
+        adjustments.bwMix[i] = v(bwMix[i]);
+}
+
+// Black & White swaps which colour panels are visible (docs/adr/0048).
+void AdjustmentPanel::applyTreatmentVisibility() {
+    const bool mono = adjustments.convertToGrayscale;
+    colorBox->setVisible(!mono);
+    hslBox->setVisible(!mono);
+    bwMixBox->setVisible(mono);
 }
 
 // ── Connect helpers ───────────────────────────────────────────────────────────
@@ -483,6 +569,8 @@ std::vector<AdjustmentPanel::SliderRow*> AdjustmentPanel::allRows() {
            &clarity,
            &dehaze,
            &sharpening,
+           &luminanceNoiseReduction,
+           &luminanceNoiseReductionDetail,
            &colorNoiseReduction,
            &colorNoiseReductionSmoothness,
            &rotation,
@@ -496,6 +584,7 @@ std::vector<AdjustmentPanel::SliderRow*> AdjustmentPanel::allRows() {
         rows.push_back(&hslHue[i]);
         rows.push_back(&hslSat[i]);
         rows.push_back(&hslLum[i]);
+        rows.push_back(&bwMix[i]);
     }
     return rows;
 }
@@ -608,6 +697,8 @@ void AdjustmentPanel::setParams(const GlobalAdjustment& p) {
     set(clarity, p.clarity);
     set(dehaze, p.dehaze);
     set(sharpening, p.sharpening);
+    set(luminanceNoiseReduction, p.luminanceNoiseReduction); // Amount (docs/adr/0046)
+    set(luminanceNoiseReductionDetail, p.luminanceNoiseReductionDetail);
     set(colorNoiseReduction, p.colorNoiseReduction); // Strength (issue #59)
     set(colorNoiseReductionSmoothness, p.colorNoiseReductionSmoothness);
     set(rotation, p.rotation);
@@ -621,6 +712,7 @@ void AdjustmentPanel::setParams(const GlobalAdjustment& p) {
         set(hslHue[i], p.hslHue[i]);
         set(hslSat[i], p.hslSat[i]);
         set(hslLum[i], p.hslLum[i]);
+        set(bwMix[i], p.bwMix[i]);
     }
     // Mirror each slider tick into its spinbox.
     for (auto* r : rows)
@@ -657,6 +749,10 @@ void AdjustmentPanel::setParams(const GlobalAdjustment& p) {
     adjustments = p;
     ensureGrainSeed(adjustments);
     committed = adjustments;
+    // Treatment switch: setChecked on a QButtonGroup button emits no idClicked
+    // (only user clicks do), so this raises no spurious commit.
+    treatmentGroup->button(adjustments.convertToGrayscale ? 1 : 0)->setChecked(true);
+    applyTreatmentVisibility();
     updateCurveChannelIndicators();
     emit paramsChanged(adjustments);
 }
