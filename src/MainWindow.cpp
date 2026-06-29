@@ -431,9 +431,11 @@ MainWindow::MainWindow(QWidget* parent)
         &LocalAdjustmentPanel::brushSettingsChanged,
         viewport,
         &ImageViewport::setBrushSettings);
-    connect(localPanel, &LocalAdjustmentPanel::maskDeltaEdited, viewport, [this] {
-        viewport->setMaskOverlayVisible(false); // judging a delta — clear the red wash
-    });
+    connect(
+        localPanel,
+        &LocalAdjustmentPanel::maskOverlaySuppressed,
+        viewport,
+        &ImageViewport::setMaskOverlaySuppressed); // hide while a delta slider is dragged
 
     // Spot-removal: live drag rebuilds preview only; commit on mouse-release.
     connect(spotPanel, &SpotRemovalPanel::changed, this, [this](const std::vector<Spot>& spots) {

@@ -142,7 +142,12 @@ LocalAdjustmentPanel::LocalAdjustmentPanel(QWidget* parent)
             spin->setValue(spec.rawToDisplay(v));
             syncActiveFromSliders();
         });
-        connect(slider, &QSlider::sliderReleased, this, [this] { commit(); });
+        // Suppress the mask overlay only while the handle is held, then restore.
+        connect(slider, &QSlider::sliderPressed, this, [this] { emit maskOverlaySuppressed(true); });
+        connect(slider, &QSlider::sliderReleased, this, [this] {
+            emit maskOverlaySuppressed(false);
+            commit();
+        });
         connect(
             spin,
             qOverload<double>(&QDoubleSpinBox::valueChanged),
@@ -328,7 +333,6 @@ void LocalAdjustmentPanel::syncActiveFromSliders() {
         return;
     for (SliderRow& r : rows)
         a->*(r.member) = r.spec.toParam(r.slider->value());
-    emit maskDeltaEdited(); // hide the mask overlay so the effect is visible
     emit changed(adjustments);
 }
 

@@ -97,10 +97,11 @@ public:
     void setBrushSettings(double radiusFraction, double feather, double flow, bool erase);
 
     // The red mask overlay (docs/adr/0047) is on by default for the selected mask
-    // and toggled with the O key; moving a delta slider hides it so the effect is
-    // judged unobscured (setMaskOverlayVisible(false)).
-    void setMaskOverlayVisible(bool on);
-    void toggleMaskOverlay(); // O shortcut; no-op outside the mask tool
+    // and toggled with the O key. Dragging a delta slider *suppresses* it (so the
+    // effect is judged unobscured) without changing the on/off state, which is
+    // restored when the drag ends.
+    void toggleMaskOverlay();               // O shortcut; no-op outside the mask tool
+    void setMaskOverlaySuppressed(bool on); // transient hide while a slider is dragged
 
     // Spot-tool overlay: set the list the viewport draws and hit-tests.
     // Does not rebuild the spotted image buffer — that is MainWindow's job.
@@ -363,7 +364,8 @@ private:
     std::vector<QPointF> brushStrokeViewportPts; // stroke path (screen px) for the live preview
     QPointF brushCursorPos;                      // last cursor (viewport px) for the size ring
     bool brushCursorValid = false;
-    bool maskOverlayVisible = true; // red overlay for the selected mask (O toggles)
+    bool maskOverlayVisible = true;     // persistent on/off for the selected mask (O toggles)
+    bool maskOverlaySuppressed = false; // transient hide while a delta slider is dragged
 
     QPointF brushRasterPoint(QPointF viewportPos) const; // cursor → raster pixel
     void commitStrokeRaster(); // composite coverage onto base, push as the active mask

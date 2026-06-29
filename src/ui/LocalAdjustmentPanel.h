@@ -57,9 +57,10 @@ signals:
     // Brush tool settings (docs/adr/0047): radius as a fraction of the buffer long
     // edge, feather/flow 0..1, and the Add/Erase mode. Tool state, not per-mask.
     void brushSettingsChanged(double radiusFraction, double feather, double flow, bool erase);
-    // A delta slider for the selected mask moved — hide the mask overlay so the
-    // effect is judged unobscured (docs/adr/0047).
-    void maskDeltaEdited();
+    // A delta slider is being dragged (pressed → released) — suppress the mask
+    // overlay while held so the effect is judged unobscured, then restore the
+    // prior on/off state (docs/adr/0047).
+    void maskOverlaySuppressed(bool suppressed);
 
 private:
     struct SliderRow {

@@ -214,9 +214,10 @@ void ImageViewport::render(QRhiCommandBuffer* cb) {
     fp.clipShadows = clipShadows;
     fp.sensorClip = sensorClipWarning;
     // Tint the active mask's region red (docs/adr/0047): on by default for the
-    // selected mask, toggled with O, and auto-hidden once a delta slider moves so
-    // the effect is judged unobscured. On-screen preview only; never on export.
-    fp.maskOverlay = (localMaskMode() && !showOriginal && maskOverlayVisible) ? activeLocalAdj : -1;
+    // selected mask, toggled with O, and transiently suppressed while a delta
+    // slider is dragged so the effect is judged unobscured. Preview only; no export.
+    const bool overlayOn = maskOverlayVisible && !maskOverlaySuppressed;
+    fp.maskOverlay = (localMaskMode() && !showOriginal && overlayOn) ? activeLocalAdj : -1;
     fp.adjustments = p;
     // The denoise pre-pass is debounced (nrTimer): render the settled values,
     // not the live sliders, so dragging doesn't trigger a recompute every tick.
@@ -285,13 +286,14 @@ void ImageViewport::setActiveLocalAdjustment(int index) {
     brushStrokeViewportPts.clear();
     brushCursorValid = false;
     maskOverlayVisible = true;
+    maskOverlaySuppressed = false;
     update();
 }
 
-void ImageViewport::setMaskOverlayVisible(bool on) {
-    if (maskOverlayVisible == on)
+void ImageViewport::setMaskOverlaySuppressed(bool on) {
+    if (maskOverlaySuppressed == on)
         return;
-    maskOverlayVisible = on;
+    maskOverlaySuppressed = on; // transient; the persistent on/off state is untouched
     update();
 }
 
