@@ -212,13 +212,10 @@ void ImageViewport::render(QRhiCommandBuffer* cb) {
     fp.clipHighlights = clipHighlights;
     fp.clipShadows = clipShadows;
     fp.sensorClip = sensorClipWarning;
-    // Tint the active mask's region red, but only while directly manipulating it
-    // (painting a stroke or dragging a handle) — so it shows what's being shaped
-    // yet clears the moment you move to the delta sliders and want to judge the
-    // effect unobscured (docs/adr/0047). On-screen preview only; never on export.
-    const bool editingMask = brushPainting || localDragHandle != LinearHandle::None
-                             || radialDragHandle != RadialHandle::None;
-    fp.maskOverlay = (localMaskMode() && !showOriginal && editingMask) ? activeLocalAdj : -1;
+    // Tint the active mask's region red (docs/adr/0047): on by default for the
+    // selected mask, toggled with O, and auto-hidden once a delta slider moves so
+    // the effect is judged unobscured. On-screen preview only; never on export.
+    fp.maskOverlay = (localMaskMode() && !showOriginal && maskOverlayVisible) ? activeLocalAdj : -1;
     fp.adjustments = p;
     // The denoise pre-pass is debounced (nrTimer): render the settled values,
     // not the live sliders, so dragging doesn't trigger a recompute every tick.
@@ -278,6 +275,14 @@ void ImageViewport::setActiveLocalAdjustment(int index) {
     brushPainting = false;
     brushCoverage.clear();
     brushCursorValid = false;
+    maskOverlayVisible = true; // a freshly selected mask shows its overlay
+    update();
+}
+
+void ImageViewport::setMaskOverlayVisible(bool on) {
+    if (maskOverlayVisible == on)
+        return;
+    maskOverlayVisible = on;
     update();
 }
 
@@ -1409,6 +1414,14 @@ void ImageViewport::keyPressEvent(QKeyEvent* e) {
         break;
     case Qt::Key_C:
         setActiveTool(cropMode() ? ActiveTool::None : ActiveTool::Crop);
+        break;
+    case Qt::Key_O:
+        if (localMaskMode()) { // toggle the mask overlay (docs/adr/0047)
+            maskOverlayVisible = !maskOverlayVisible;
+            update();
+        } else {
+            QRhiWidget::keyPressEvent(e);
+        }
         break;
     case Qt::Key_Return:
     case Qt::Key_Enter:

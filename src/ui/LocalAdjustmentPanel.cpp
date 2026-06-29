@@ -328,6 +328,7 @@ void LocalAdjustmentPanel::syncActiveFromSliders() {
         return;
     for (SliderRow& r : rows)
         a->*(r.member) = r.spec.toParam(r.slider->value());
+    emit maskDeltaEdited(); // hide the mask overlay so the effect is visible
     emit changed(adjustments);
 }
 

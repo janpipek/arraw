@@ -96,6 +96,11 @@ public:
     // the buffer long edge, feather/flow 0..1, and the Add/Erase mode.
     void setBrushSettings(double radiusFraction, double feather, double flow, bool erase);
 
+    // The red mask overlay (docs/adr/0047) is on by default for the selected mask
+    // and toggled with the O key; moving a delta slider hides it so the effect is
+    // judged unobscured (setMaskOverlayVisible(false)).
+    void setMaskOverlayVisible(bool on);
+
     // Spot-tool overlay: set the list the viewport draws and hit-tests.
     // Does not rebuild the spotted image buffer — that is MainWindow's job.
     void setSpots(const std::vector<Spot>& spots);
@@ -355,6 +360,7 @@ private:
     QPointF brushLastPoint;           // previous dab centre (raster pixels)
     QPointF brushCursorPos;           // last cursor (viewport px) for the size ring
     bool brushCursorValid = false;
+    bool maskOverlayVisible = true; // red overlay for the selected mask (O toggles)
 
     QPointF brushRasterPoint(QPointF viewportPos) const; // cursor → raster pixel
     void commitStrokeRaster(); // composite coverage onto base, push as the active mask
