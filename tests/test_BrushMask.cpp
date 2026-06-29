@@ -110,6 +110,23 @@ TEST_CASE("stampStroke fills the interior of a path between far-apart points", "
     REQUIRE(at(out, 50, 70) == 0);   // 20 px off the line → outside radius 10
 }
 
+TEST_CASE("incremental segment stamping matches a whole-path stroke", "[brush]") {
+    // A stroke built segment-by-segment (as live painting does) must equal one
+    // built from the whole path at once.
+    const std::array<QPointF, 4>
+        path{QPointF{20, 20}, QPointF{60, 30}, QPointF{60, 70}, QPointF{30, 80}};
+    const BrushDab brush{.radius = 12.0, .feather = 0.5, .flow = 0.6};
+
+    const BrushRaster whole = stampStroke(blankRaster(100), path, brush);
+
+    std::vector<float> coverage(100 * 100, 0.0f);
+    for (size_t i = 1; i < path.size(); ++i)
+        stampSegmentCoverage(coverage, 100, 100, path[i - 1], path[i], brush);
+    const BrushRaster incremental = compositeStroke(blankRaster(100), coverage, brush.erase);
+
+    REQUIRE(incremental.data == whole.data);
+}
+
 // ---------------------------------------------------------------------------
 // encodeBrushRaster / decodeBrushRaster — base64 PNG for the sidecar (adr 0047)
 // ---------------------------------------------------------------------------

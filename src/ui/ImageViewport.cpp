@@ -272,7 +272,7 @@ void ImageViewport::setActiveLocalAdjustment(int index) {
     // Abort any in-progress stroke and drop the brush cursor ring — switching the
     // active mask (incl. on image change) must not carry brush state over.
     brushPainting = false;
-    brushStrokePath.clear();
+    brushCoverage.clear();
     brushCursorValid = false;
     update();
 }
@@ -375,6 +375,23 @@ QSize ImageViewport::brushRasterSize() const {
     return {std::max(1, int(std::lround(longEdge * a))), longEdge};
 }
 
+QPointF ImageViewport::brushRasterPoint(QPointF viewportPos) const {
+    // Cursor → native-buffer pixel → buffer UV → raster pixel: the same buffer UV
+    // the shader samples at vUV, so painting and rendering align (docs/adr/0047).
+    const QPointF bufPx = viewportToBufferPixel(viewportPos);
+    return {
+        bufPx.x() / std::max(1, originalWidth) * brushStrokeBase.width,
+        bufPx.y() / std::max(1, originalHeight) * brushStrokeBase.height};
+}
+
+void ImageViewport::commitStrokeRaster() {
+    Mask m = BrushMask{std::make_shared<const BrushRaster>(
+        compositeStroke(brushStrokeBase, brushCoverage, brushStrokeDab.erase))};
+    params.localAdjustments[activeLocalAdj].mask = m;
+    emit localMaskChanged(activeLocalAdj, m);
+    update();
+}
+
 void ImageViewport::beginBrushStroke(QPointF viewportPos) {
     const BrushMask* bm = activeBrushMask();
     if (!bm)
@@ -387,32 +404,34 @@ void ImageViewport::beginBrushStroke(QPointF viewportPos) {
     else
         brushStrokeBase = BrushRaster{
             sz.width(), sz.height(), std::vector<uint8_t>(size_t(sz.width()) * sz.height(), 0)};
-    brushStrokePath.clear();
+    brushCoverage.assign(size_t(sz.width()) * sz.height(), 0.0f);
+    brushStrokeDab = BrushDab{
+        .radius = brushRadiusFraction * kBrushRasterLongEdge,
+        .feather = brushFeather,
+        .flow = brushFlow,
+        .erase = brushErase};
     brushPainting = true;
-    extendBrushStroke(viewportPos);
+    brushLastPoint = brushRasterPoint(viewportPos);
+    stampSegmentCoverage(
+        brushCoverage, sz.width(), sz.height(), brushLastPoint, brushLastPoint, brushStrokeDab);
+    commitStrokeRaster();
 }
 
 void ImageViewport::extendBrushStroke(QPointF viewportPos) {
     if (!brushPainting || activeLocalAdj < 0)
         return;
-    const QSize sz(brushStrokeBase.width, brushStrokeBase.height);
-    // Cursor → native-buffer pixel → buffer UV → raster pixel: the same buffer UV
-    // the shader samples at vUV, so painting and rendering align (docs/adr/0047).
-    const QPointF bufPx = viewportToBufferPixel(viewportPos);
-    brushStrokePath.push_back(
-        {bufPx.x() / std::max(1, originalWidth) * sz.width(),
-         bufPx.y() / std::max(1, originalHeight) * sz.height()});
-
-    const BrushDab
-        dab{.radius = brushRadiusFraction * kBrushRasterLongEdge,
-            .feather = brushFeather,
-            .flow = brushFlow,
-            .erase = brushErase};
-    Mask m = BrushMask{
-        std::make_shared<const BrushRaster>(stampStroke(brushStrokeBase, brushStrokePath, dab))};
-    params.localAdjustments[activeLocalAdj].mask = m;
-    emit localMaskChanged(activeLocalAdj, m);
-    update();
+    // Stamp only the new segment into the running coverage — O(segment), so a long
+    // drag stays cheap and the preview keeps up (was an O(path) re-stamp per move).
+    const QPointF pt = brushRasterPoint(viewportPos);
+    stampSegmentCoverage(
+        brushCoverage,
+        brushStrokeBase.width,
+        brushStrokeBase.height,
+        brushLastPoint,
+        pt,
+        brushStrokeDab);
+    brushLastPoint = pt;
+    commitStrokeRaster();
 }
 
 void ImageViewport::drawBrushCursor(QPainter& p) const {
@@ -1350,7 +1369,7 @@ void ImageViewport::mouseReleaseEvent(QMouseEvent* e) {
         if (brushPainting) {
             brushPainting = false;
             brushStrokeBase = {};
-            brushStrokePath.clear();
+            brushCoverage.clear();
             emit localMaskEditFinished(); // one undo step per stroke (docs/adr/0047)
             return;
         }

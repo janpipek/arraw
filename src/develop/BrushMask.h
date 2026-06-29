@@ -55,6 +55,17 @@ float brushDabProfile(double dist, double radius, double feather);
 BrushRaster stampStroke(
     const BrushRaster& base, std::span<const QPointF> path, const BrushDab& brush);
 
+// Stamp every dab along the segment [a,b] (raster pixels) into `coverage`
+// (row-major w*h, 0..1) by max(), capped at brush.flow — the within-stroke
+// accumulation. Lets a stroke be built one segment per mouse move without
+// re-stamping the whole path (docs/adr/0047).
+void stampSegmentCoverage(
+    std::span<float> coverage, int width, int height, QPointF a, QPointF b, const BrushDab& brush);
+
+// Composite a stroke's `coverage` onto `base` → new raster. Add: base + coverage;
+// Erase: base - coverage; clamped to [0,1].
+BrushRaster compositeStroke(const BrushRaster& base, std::span<const float> coverage, bool erase);
+
 // Serialise a raster as a base64-encoded Grayscale8 PNG for the `arraw:` sidecar
 // (docs/adr/0047). Soft/empty masks compress small. An empty raster yields "".
 QString encodeBrushRaster(const BrushRaster& raster);

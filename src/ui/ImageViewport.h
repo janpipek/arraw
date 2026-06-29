@@ -349,10 +349,15 @@ private:
     double brushFlow = 0.5;
     bool brushErase = false;
     bool brushPainting = false;
-    BrushRaster brushStrokeBase;          // raster captured at stroke start
-    std::vector<QPointF> brushStrokePath; // dab centres in raster pixels
-    QPointF brushCursorPos;               // last cursor (viewport px) for the size ring
+    BrushRaster brushStrokeBase;      // raster captured at stroke start
+    std::vector<float> brushCoverage; // running per-stroke coverage (raster grid)
+    BrushDab brushStrokeDab;          // dab settings fixed at press
+    QPointF brushLastPoint;           // previous dab centre (raster pixels)
+    QPointF brushCursorPos;           // last cursor (viewport px) for the size ring
     bool brushCursorValid = false;
+
+    QPointF brushRasterPoint(QPointF viewportPos) const; // cursor → raster pixel
+    void commitStrokeRaster(); // composite coverage onto base, push as the active mask
 
     // SpotTool state.
     std::vector<Spot> spots;
