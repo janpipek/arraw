@@ -74,3 +74,18 @@ Lightroom does on `V`) is out of scope; conversion defaults to a flat mix.
   glossary terms; the former is a flat desaturation, the latter a hue-aware
   conversion. We accept that both exist.
 - Copy Settings / Develop Preset / the group checklist all grow a tenth row.
+- **The mixer is sensitive to every upstream chroma operation, not just White
+  Balance.** Because the conversion reads each pixel's hue and saturation, *any*
+  earlier step that alters chroma shifts which band a pixel lands in and how far
+  it moves — White Balance by design, but also Colour Noise Reduction and lateral
+  CA correction. This is intrinsic to choosing the hue-aware mixer over the
+  rejected three-channel model: a hue-aware conversion that ignored upstream
+  chroma would be a contradiction. The practical edge is noise — on a noisy frame
+  each chroma-noise pixel lands in a random band, so the mixer can **amplify
+  chroma noise into luminance speckle**. Colour Noise Reduction, a chroma pre-pass
+  that runs before the main shader (ADR 0034), smooths the hue signal the mixer
+  reads and largely removes that speckle. So CNR is deliberately left reachable
+  under Black & White (the UI hides only the Colour and HSL panels, not Detail):
+  it is a useful lever for the mix, not dead UI. On a clean image CNR barely moves
+  the conversion; it matters only where there is chroma noise — which is where you
+  want it to.
