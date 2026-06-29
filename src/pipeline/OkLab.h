@@ -33,6 +33,15 @@ Rgb applySaturation(const Rgb& rgb, float amount);
 // move more than already-vivid ones; amount in [-1, 1].
 Rgb applyVibrance(const Rgb& rgb, float amount);
 
+// Black & White (docs/adr/0048): convert to an achromatic (R==G==B) grey through
+// an 8-band hue mixer. `mix` holds the per-hue-band weights (-100..100) for Red,
+// Orange, Yellow, Green, Aqua, Blue, Purple, Magenta — the same bands as HSL. The
+// base grey is the Rec.2020 luminance; each band darkens (<0) or lightens (>0) the
+// greys made from pixels of its hue, scaled by the pixel's saturation, so neutrals
+// never shift and an all-zero mix is the plain luminance. The shader mirrors this
+// immediately after white balance.
+Rgb applyBlackAndWhite(const Rgb& rgb, const std::array<float, 8>& mix);
+
 // Filmic Highlights (docs/adr/0040).
 //
 // shoulderMap is the scalar luminance shoulder: amount 0 is the exact identity
