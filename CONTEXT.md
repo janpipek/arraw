@@ -222,7 +222,9 @@ A global colourfulness control that scales chroma in a perceptual space (Oklab)
 so changing it holds perceived lightness and hue — unlike a naive pull toward
 grey, which thins the colours. Also available per [[Local Adjustment]]. Distinct
 from [[Vibrance]] (which protects already-vivid colours) and from the [[HSL]]
-per-band saturation. _Avoid_: colourfulness (the perceptual quantity, not the
+per-band saturation. Pulling Saturation to −100 gives a *flat, hue-blind*
+greyscale; the hue-aware monochrome conversion is a different control,
+[[Black & White]]. _Avoid_: colourfulness (the perceptual quantity, not the
 slider), chroma (the axis it scales)
 
 **Vibrance**:
@@ -230,6 +232,35 @@ Like [[Saturation]], a perceptual (Oklab) chroma scale, but weighted so muted
 colours move more than already-saturated ones — the gentler control that resists
 over-cooking skin tones. Also available per [[Local Adjustment]].
 _Avoid_: saturation (the unweighted sibling), vividness
+
+**Black & White**:
+A develop *treatment* that renders the image achromatic through the [[B&W Mixer]]
+rather than by removing chroma — the digital analogue of shooting black-and-white
+film through a coloured filter, where each original hue is weighted into its own
+grey. A single toggle (Colour ↔ Black & White) at the top of the develop stack
+beside [[White Balance]]; turning it on hides the [[Colour]]/[[HSL]] panels (whose
+colour controls are inert on an achromatic signal) and reveals the [[B&W Mixer]].
+The conversion runs immediately after [[White Balance]], so the mix responds to
+Temperature/Tint; everything downstream develops on the grey signal, and even a
+[[Local Adjustment]]'s colour deltas (temperature/tint/saturation/vibrance) are
+suppressed so the result is neutral grey everywhere. Its own [[Develop Group]].
+Stored Lightroom-compatibly as `crs:ConvertToGrayscale`; the mix weights persist
+independently of the toggle, so switching back to Colour and forward again keeps
+the dialled-in mix.
+_Avoid_: greyscale (the flat [[Saturation]] −100 result), monochrome (the sensor
+type in [[Demosaic Algorithm]]), desaturation
+
+**B&W Mixer**:
+The eight per-hue-band controls (Red, Orange, Yellow, Green, Aqua, Blue, Purple,
+Magenta — the same bands as [[HSL]]) that decide how each original hue maps to a
+grey value under the [[Black & White]] treatment: each band darkens (−100) or
+lightens (+100) the greys made from pixels of that hue, weighted by how saturated
+they are, so neutrals never shift and all-zero weights give the standard Rec.2020
+luminance. Stored as `crs:GrayMixer{Band}`. Distinct from [[HSL]] per-band
+saturation (which thins colour without converting) and from the rejected
+three-channel model.
+_Avoid_: channel mixer (the 3-channel R/G/B model arraw rejected), grayscale mix,
+HSL (the colour-image sibling)
 
 **Spatial Global Adjustment**:
 A develop control that affects the whole image but computes each pixel from a
@@ -286,9 +317,10 @@ set. The brush, if added, becomes a further type.
 
 **Develop Group**:
 One selectable unit in the [[Copy Settings]] / [[Develop Preset]] checklist —
-the granularity at which develop settings travel between photos. The nine
+the granularity at which develop settings travel between photos. The ten
 groups partition every global field: White Balance, Tone, Tone Curve, Colour,
-HSL, Detail, Geometry ([[Rotation]] + [[Crop]] + [[Aspect Ratio Lock]] together),
+HSL, [[Black & White]] (the treatment toggle + [[B&W Mixer]] weights together),
+Detail, Geometry ([[Rotation]] + [[Crop]] + [[Aspect Ratio Lock]] together),
 [[Lens Corrections]] ([[Distortion]] + corrective [[Vignetting]] + [[Chromatic
 Aberration]]), and Effects ([[Post-Crop Vignette]] + [[Grain]]). Per-image state such as a Grain's hidden
 seed and [[Local Adjustment]] masks does not travel with a group. Applying a
