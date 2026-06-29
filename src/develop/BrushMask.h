@@ -4,6 +4,7 @@
 #include <QString>
 
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <vector>
 
@@ -18,6 +19,16 @@ struct BrushRaster {
     int height = 0;
     std::vector<uint8_t> data;
     bool operator==(const BrushRaster&) const = default;
+};
+
+// The painted Mask Type's variant arm (docs/adr/0047): an immutable raster held
+// by shared_ptr so a LocalAdjustment stays cheap to copy on the undo stack and a
+// new stroke just swaps in a new raster. Equality is pointer identity (two masks
+// are equal iff they share the same raster object), which the undo-diffing relies
+// on. A null raster is an empty (unpainted) brush mask.
+struct BrushMask {
+    std::shared_ptr<const BrushRaster> raster;
+    bool operator==(const BrushMask&) const = default;
 };
 
 // One stroke's brush settings (docs/adr/0047). `radius`/`center` units are buffer

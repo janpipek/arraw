@@ -1,5 +1,6 @@
 #pragma once
 
+#include "develop/BrushMask.h"
 #include "develop/FieldSpec.h"
 
 #include <QPointF>
@@ -33,11 +34,12 @@ struct RadialMask {
     bool operator==(const RadialMask&) const = default;
 };
 
-// The kind of parametric mask. Each alternative is a small value struct with its
-// own geometry; a new mask type is an additive new arm. The GPU flattens
-// whichever arm into a type-tagged uniform slot (docs/adr/0010). LinearMask stays
+// The kind of mask. Each alternative is a small value struct with its own
+// geometry; a new mask type is an additive new arm. The GPU flattens whichever
+// arm into a type-tagged uniform slot (docs/adr/0010), and for the painted
+// BrushMask also samples its raster at vUV (docs/adr/0047). LinearMask stays
 // first so a default-constructed Mask is Linear.
-using Mask = std::variant<LinearMask, RadialMask>;
+using Mask = std::variant<LinearMask, RadialMask, BrushMask>;
 
 // The dodge/burn + colour-grade scalar subset shared by global and local develop
 // edits (docs/adr/0010). Zero = no change for every field. `exposure` is in EV;
