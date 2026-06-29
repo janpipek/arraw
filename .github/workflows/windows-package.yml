@@ -13,7 +13,8 @@ concurrency:
 
 env:
   VCPKG_ROOT: C:\vcpkg
-  VCPKG_BINARY_SOURCES: clear;x-gha,readwrite
+  VCPKG_BINARY_CACHE: C:\vcpkg\binary-cache
+  VCPKG_BINARY_SOURCES: clear;files,C:\vcpkg\binary-cache,readwrite
   VCPKG_DEFAULT_TRIPLET: x64-windows
   VCPKG_INSTALLED: C:\vcpkg\installed\x64-windows
   VCPKG_TOOLCHAIN: C:\vcpkg\scripts\buildsystems\vcpkg.cmake
@@ -38,16 +39,18 @@ jobs:
           restore-keys: |
             vcpkg-downloads-windows-2022-
 
-      - name: Export GitHub Actions cache settings for vcpkg
-        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+      - name: Cache vcpkg binary packages
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
-          script: |
-            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
-            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+          path: C:\vcpkg\binary-cache
+          key: vcpkg-binary-cache-windows-2022-${{ github.run_id }}
+          restore-keys: |
+            vcpkg-binary-cache-windows-2022-
 
       - name: Install Windows dependencies
         shell: pwsh
         run: |
+          New-Item -ItemType Directory -Force -Path "$env:VCPKG_BINARY_CACHE" | Out-Null
           & "$env:VCPKG_ROOT\vcpkg.exe" install `
             qtbase qttools qtshadertools `
             "libraw[openmp]" lcms lensfun exiv2 `
@@ -56,16 +59,20 @@ jobs:
       - name: Configure focused test build
         shell: pwsh
         run: |
-          cmake -S . -B build -G Ninja `
-            -DCMAKE_BUILD_TYPE=Debug `
-            "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_TOOLCHAIN" `
-            -DVCPKG_TARGET_TRIPLET=x64-windows `
-            "-DARRAW_VCPKG_INSTALLED=$env:VCPKG_INSTALLED" `
-            -DARRAW_WITH_LENSFUN=ON
+          $command = 'call "{0}" && cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl -DCMAKE_TOOLCHAIN_FILE="{1}" -DVCPKG_TARGET_TRIPLET=x64-windows -DARRAW_VCPKG_INSTALLED="{2}" -DARRAW_WITH_LENSFUN=ON' -f $env:VCVARS, $env:VCPKG_TOOLCHAIN, $env:VCPKG_INSTALLED
+          cmd /c $command
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
 
       - name: Build focused test binary
         shell: pwsh
-        run: cmake --build build --target arraw_tests
+        run: |
+          $command = 'call "{0}" && cmake --build build --target arraw_tests' -f $env:VCVARS
+          cmd /c $command
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
 
       - name: Run lensfun tests
         shell: pwsh
