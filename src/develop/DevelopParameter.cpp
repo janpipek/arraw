@@ -83,6 +83,10 @@ const char* developParameterKey(DevelopParameter p) {
         return "colorNoiseReduction";
     case DevelopParameter::ColorNoiseReductionSmoothness:
         return "colorNoiseReductionSmoothness";
+    case DevelopParameter::LuminanceNoiseReduction:
+        return "luminanceNoiseReduction";
+    case DevelopParameter::LuminanceNoiseReductionDetail:
+        return "luminanceNoiseReductionDetail";
     case DevelopParameter::LensDistortion:
         return "lensDistortion";
     case DevelopParameter::LensVignetting:
@@ -165,6 +169,10 @@ QString developParameterLabel(DevelopParameter p) {
         return trDev("Color Noise Reduction");
     case DevelopParameter::ColorNoiseReductionSmoothness:
         return trDev("Color NR Smoothness");
+    case DevelopParameter::LuminanceNoiseReduction:
+        return trDev("Luminance Noise Reduction");
+    case DevelopParameter::LuminanceNoiseReductionDetail:
+        return trDev("Luminance NR Detail");
     case DevelopParameter::LensDistortion:
         return trDev("Distortion Correction");
     case DevelopParameter::LensVignetting:
@@ -224,6 +232,8 @@ DevelopGroup developParameterGroup(DevelopParameter p) {
     case DevelopParameter::Sharpening:
     case DevelopParameter::ColorNoiseReduction:
     case DevelopParameter::ColorNoiseReductionSmoothness:
+    case DevelopParameter::LuminanceNoiseReduction:
+    case DevelopParameter::LuminanceNoiseReductionDetail:
         return DevelopGroup::Detail;
     case DevelopParameter::LensDistortion:
     case DevelopParameter::LensVignetting:
@@ -276,11 +286,13 @@ std::optional<FieldSpec> developParameterSpec(DevelopParameter p) {
         return bipolar;
     case DevelopParameter::Sharpening:
     case DevelopParameter::ColorNoiseReduction:
+    case DevelopParameter::LuminanceNoiseReduction:
     case DevelopParameter::GrainAmount:
         return unipolar0;
     case DevelopParameter::FilmicHighlights:
         return unipolar25;
     case DevelopParameter::ColorNoiseReductionSmoothness:
+    case DevelopParameter::LuminanceNoiseReductionDetail:
     case DevelopParameter::PostCropVignetteMidpoint:
     case DevelopParameter::PostCropVignetteFeather:
     case DevelopParameter::GrainSize:
@@ -341,6 +353,10 @@ float developParameterValue(DevelopParameter p, const GlobalAdjustment& s) {
         return s.colorNoiseReduction;
     case DevelopParameter::ColorNoiseReductionSmoothness:
         return s.colorNoiseReductionSmoothness;
+    case DevelopParameter::LuminanceNoiseReduction:
+        return s.luminanceNoiseReduction;
+    case DevelopParameter::LuminanceNoiseReductionDetail:
+        return s.luminanceNoiseReductionDetail;
     case DevelopParameter::Straighten:
         return s.rotation;
     case DevelopParameter::PostCropVignetteAmount:

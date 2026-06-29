@@ -124,6 +124,54 @@ TEST_CASE("colorNoiseReduction (Strength) defaults to 0 when absent from the sid
     REQUIRE_THAT(loaded.colorNoiseReduction, WithinAbs(0.0f, 1e-6));
 }
 
+TEST_CASE("luminanceNoiseReduction (Amount) survives an XMP round-trip", "[nr]") {
+    QTemporaryDir dir;
+    REQUIRE(dir.isValid());
+    const QString raw = dir.filePath("test.CR3");
+
+    GlobalAdjustment params;
+    params.luminanceNoiseReduction = 42.5f;
+    REQUIRE(XmpSidecar::saveAdjustments(raw, params));
+
+    const GlobalAdjustment loaded = XmpSidecar::loadAdjustments(raw);
+    REQUIRE_THAT(loaded.luminanceNoiseReduction, WithinAbs(42.5f, 1e-4));
+}
+
+TEST_CASE("luminanceNoiseReductionDetail survives an XMP round-trip", "[nr]") {
+    QTemporaryDir dir;
+    REQUIRE(dir.isValid());
+    const QString raw = dir.filePath("test.CR3");
+
+    GlobalAdjustment params;
+    params.luminanceNoiseReductionDetail = 73.0f;
+    REQUIRE(XmpSidecar::saveAdjustments(raw, params));
+
+    const GlobalAdjustment loaded = XmpSidecar::loadAdjustments(raw);
+    REQUIRE_THAT(loaded.luminanceNoiseReductionDetail, WithinAbs(73.0f, 1e-4));
+}
+
+TEST_CASE("luminanceNoiseReduction (Amount) defaults to 0 when absent", "[nr]") {
+    QTemporaryDir dir;
+    REQUIRE(dir.isValid());
+    const QString raw = dir.filePath("test.CR3");
+    GlobalAdjustment params; // luminanceNoiseReduction (Amount) defaults to 0
+    REQUIRE(XmpSidecar::saveAdjustments(raw, params));
+    const GlobalAdjustment loaded = XmpSidecar::loadAdjustments(raw);
+    REQUIRE_THAT(loaded.luminanceNoiseReduction, WithinAbs(0.0f, 1e-6));
+}
+
+TEST_CASE("luminanceNoiseReductionDetail defaults to 50 when absent", "[nr]") {
+    QTemporaryDir dir;
+    REQUIRE(dir.isValid());
+    const QString raw = dir.filePath("test.CR3");
+    // A sidecar with no crs:LuminanceNoiseReductionDetail falls back to the default.
+    GlobalAdjustment params;
+    params.luminanceNoiseReductionDetail = 50.0f; // default; saved value matches fallback
+    REQUIRE(XmpSidecar::saveAdjustments(raw, params));
+    const GlobalAdjustment loaded = XmpSidecar::loadAdjustments(raw);
+    REQUIRE_THAT(loaded.luminanceNoiseReductionDetail, WithinAbs(50.0f, 1e-6));
+}
+
 TEST_CASE("colorNoiseReductionSmoothness defaults to 50 in a pre-split sidecar", "[nr]") {
     QTemporaryDir dir;
     REQUIRE(dir.isValid());

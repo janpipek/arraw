@@ -70,6 +70,8 @@ enum class DevelopParameter {
     Sharpening,
     ColorNoiseReduction,
     ColorNoiseReductionSmoothness,
+    LuminanceNoiseReduction,
+    LuminanceNoiseReductionDetail,
     // Lens Corrections
     LensDistortion,
     LensVignetting,

@@ -456,6 +456,10 @@ static Snapshot parseSnapshotLi(QXmlStreamReader& xml) {
             p.colorNoiseReduction = f();
         else if (name == "arraw:ColorNoiseReductionSmoothness")
             p.colorNoiseReductionSmoothness = f();
+        else if (name == "arraw:LuminanceSmoothing")
+            p.luminanceNoiseReduction = f();
+        else if (name == "arraw:LuminanceNoiseReductionDetail")
+            p.luminanceNoiseReductionDetail = f();
         else if (name == "arraw:CropAngle")
             p.rotation = f();
         else if (name == "arraw:PostCropVignetteAmount")
@@ -606,6 +610,8 @@ SidecarLoadResult XmpSidecar::loadWithStatus(const QString& rawPath) {
             p.sharpening = attr("Sharpness", 0.0f);
             p.colorNoiseReduction = attr("ColorNoiseReduction", 0.0f); // Strength (issue #59)
             p.colorNoiseReductionSmoothness = attr("ColorNoiseReductionSmoothness", 50.0f);
+            p.luminanceNoiseReduction = attr("LuminanceSmoothing", 0.0f); // Amount (docs/adr/0046)
+            p.luminanceNoiseReductionDetail = attr("LuminanceNoiseReductionDetail", 50.0f);
             // Filmic Highlights (docs/adr/0040): arraw-native, default 25 (on).
             // Absent → the default, so files predating this attribute get the
             // standard shoulder; an explicit 0 (user turned it off) is honoured.
@@ -876,6 +882,8 @@ static void writeSnapshotState(QXmlStreamWriter& xml, const GlobalAdjustment& p)
     el("Sharpness", p.sharpening);
     el("ColorNoiseReduction", p.colorNoiseReduction);
     el("ColorNoiseReductionSmoothness", p.colorNoiseReductionSmoothness);
+    el("LuminanceSmoothing", p.luminanceNoiseReduction);
+    el("LuminanceNoiseReductionDetail", p.luminanceNoiseReductionDetail);
     el("CropAngle", p.rotation);
     el("PostCropVignetteAmount", p.postCropVignetteAmount);
     el("PostCropVignetteMidpoint", p.postCropVignetteMidpoint);
@@ -986,6 +994,8 @@ static QByteArray ownedPacket(const SidecarData& data) {
     write("Sharpness", p.sharpening);
     write("ColorNoiseReduction", p.colorNoiseReduction); // Strength (issue #59)
     write("ColorNoiseReductionSmoothness", p.colorNoiseReductionSmoothness);
+    write("LuminanceSmoothing", p.luminanceNoiseReduction); // Amount (docs/adr/0046)
+    write("LuminanceNoiseReductionDetail", p.luminanceNoiseReductionDetail);
     write("CropAngle", p.rotation); // Adobe's real straighten field (docs/adr/0029)
     write("PostCropVignetteAmount", p.postCropVignetteAmount);
     write("PostCropVignetteMidpoint", p.postCropVignetteMidpoint);

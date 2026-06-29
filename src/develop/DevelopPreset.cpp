@@ -77,6 +77,8 @@ QJsonObject groupToJson(DevelopGroup g, const GlobalAdjustment& v) {
         o["sharpening"] = v.sharpening;
         o["colorNoiseReduction"] = v.colorNoiseReduction; // Strength (issue #59)
         o["colorNoiseReductionSmoothness"] = v.colorNoiseReductionSmoothness;
+        o["luminanceNoiseReduction"] = v.luminanceNoiseReduction; // Amount (docs/adr/0046)
+        o["luminanceNoiseReductionDetail"] = v.luminanceNoiseReductionDetail;
         break;
     case DevelopGroup::Geometry:
         o["orientation"] = orient::toExif(v.orientation); // EXIF 1..8 (docs/adr/0029)
@@ -145,6 +147,9 @@ void groupFromJson(DevelopGroup g, const QJsonObject& o, GlobalAdjustment& v) {
         v.colorNoiseReduction = f("colorNoiseReduction", v.colorNoiseReduction); // Strength
         v.colorNoiseReductionSmoothness
             = f("colorNoiseReductionSmoothness", v.colorNoiseReductionSmoothness);
+        v.luminanceNoiseReduction = f("luminanceNoiseReduction", v.luminanceNoiseReduction); // Amt
+        v.luminanceNoiseReductionDetail
+            = f("luminanceNoiseReductionDetail", v.luminanceNoiseReductionDetail);
         break;
     case DevelopGroup::Geometry: {
         if (o.contains("orientation"))
