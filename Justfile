@@ -11,13 +11,17 @@ container_backend := env_var_or_default("CONTAINER_BACKEND", "")
 default:
     @just --list
 
-# Configure and build (Debug)
-build:
+# Configure the Debug build directory
+configure:
     cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug {{qt_flag}}
+
+# Configure and build (Debug)
+build: configure
     ninja -C build
 
-# Build and run the application
-run: build
+# Build and run the application (skips the test target)
+run: configure
+    ninja -C build arraw
     ./build/arraw
 
 # Build and run the test suite
@@ -55,8 +59,9 @@ release:
 rebuild:
     ninja -C build
 
-# Rebuild and run the application
-rerun: rebuild
+# Rebuild and run the application (skips the test target)
+rerun:
+    ninja -C build arraw
     ./build/arraw
 
 # Build the development sandbox container image (ADR 0044)
