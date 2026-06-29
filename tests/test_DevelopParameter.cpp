@@ -32,6 +32,8 @@ static GlobalAdjustment fullyEdited() {
     g.hslHue = {1, 2, 3, 4, 5, 6, 7, 8};
     g.hslSat = {-1, -2, -3, -4, -5, -6, -7, -8};
     g.hslLum = {9, 8, 7, 6, 5, 4, 3, 2};
+    g.convertToGrayscale = true;
+    g.bwMix = {11, -22, 33, -44, 55, -66, 77, -88};
     g.demosaicAlgorithm = DemosaicAlgorithm::DCB;
     g.texture = 18.0f;
     g.clarity = 22.0f;
@@ -94,6 +96,27 @@ TEST_CASE("a single field change is reported as exactly that parameter", "[devel
     GlobalAdjustment d;
     d.cropConstrained = true; // still part of Crop
     REQUIRE(changedParameters(a, d) == std::vector{DevelopParameter::Crop});
+}
+
+TEST_CASE("Black & White controls name themselves in History", "[developparameter][bw]") {
+    CHECK(developParameterLabel(DevelopParameter::BlackAndWhite) == "Black & White");
+    CHECK(developParameterLabel(DevelopParameter::BwMixRed) == "B&W Red");
+    CHECK(developParameterLabel(DevelopParameter::BwMixBlue) == "B&W Blue");
+
+    // The treatment toggle and a single mixer band each report as their own param.
+    GlobalAdjustment a;
+    GlobalAdjustment b;
+    b.convertToGrayscale = true;
+    REQUIRE(changedParameters(a, b) == std::vector{DevelopParameter::BlackAndWhite});
+
+    GlobalAdjustment c;
+    c.bwMix[5] = 40.0f; // Blue band
+    REQUIRE(changedParameters(a, c) == std::vector{DevelopParameter::BwMixBlue});
+
+    // Flipping to B&W reads as "Black & White on"; a band reads with its value.
+    GlobalAdjustment mono;
+    mono.convertToGrayscale = true;
+    CHECK(developChangeLabel(a, mono) == "Black & White on");
 }
 
 TEST_CASE("identical states report no changed parameters", "[developparameter]") {

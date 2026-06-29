@@ -62,6 +62,18 @@ enum class DevelopParameter {
     HslMagentaHue,
     HslMagentaSaturation,
     HslMagentaLuminance,
+    // Black & White (docs/adr/0048): the treatment toggle plus the 8-band hue
+    // mixer. Keep the mixer block contiguous and right after the toggle: the band
+    // is derived from the offset from BwMixRed (see the .cpp).
+    BlackAndWhite,
+    BwMixRed,
+    BwMixOrange,
+    BwMixYellow,
+    BwMixGreen,
+    BwMixAqua,
+    BwMixBlue,
+    BwMixPurple,
+    BwMixMagenta,
     // Detail
     Demosaic,
     Texture,

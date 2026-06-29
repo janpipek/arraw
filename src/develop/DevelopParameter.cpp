@@ -27,6 +27,17 @@ bool isHsl(DevelopParameter p) {
     return p >= DevelopParameter::HslRedHue && p <= DevelopParameter::HslMagentaLuminance;
 }
 
+// The 8 Black & White mixer bands reuse the HSL band labels/keys; the band index
+// is the offset from BwMixRed. The treatment toggle (BlackAndWhite) sits just
+// before the block and is handled separately.
+int bwMixOffset(DevelopParameter p) {
+    return static_cast<int>(p) - static_cast<int>(DevelopParameter::BwMixRed);
+}
+
+bool isBwMix(DevelopParameter p) {
+    return p >= DevelopParameter::BwMixRed && p <= DevelopParameter::BwMixMagenta;
+}
+
 } // namespace
 
 const char* developParameterKey(DevelopParameter p) {
@@ -38,7 +49,14 @@ const char* developParameterKey(DevelopParameter p) {
         key = std::string("hsl") + kHslBandKeys[off / 3] + kHslComponentKeys[off % 3];
         return key.c_str();
     }
+    if (isBwMix(p)) {
+        static thread_local std::string key;
+        key = std::string("bwMix") + kHslBandKeys[bwMixOffset(p)];
+        return key.c_str();
+    }
     switch (p) {
+    case DevelopParameter::BlackAndWhite:
+        return "blackAndWhite";
     case DevelopParameter::Temperature:
         return "temperature";
     case DevelopParameter::Tint:
@@ -120,7 +138,11 @@ QString developParameterLabel(DevelopParameter p) {
         const int off = hslOffset(p);
         return trDev(kHslBandLabels[off / 3]) + ' ' + trDev(kHslComponentLabels[off % 3]);
     }
+    if (isBwMix(p)) // e.g. "B&W Blue" — the mixer's Blue band
+        return trDev("B&W") + ' ' + trDev(kHslBandLabels[bwMixOffset(p)]);
     switch (p) {
+    case DevelopParameter::BlackAndWhite:
+        return trDev("Black & White");
     case DevelopParameter::Temperature:
         return trDev("Temperature");
     case DevelopParameter::Tint:
@@ -197,7 +219,11 @@ QString developParameterLabel(DevelopParameter p) {
 DevelopGroup developParameterGroup(DevelopParameter p) {
     if (isHsl(p))
         return DevelopGroup::Hsl;
+    if (isBwMix(p))
+        return DevelopGroup::BlackAndWhite;
     switch (p) {
+    case DevelopParameter::BlackAndWhite:
+        return DevelopGroup::BlackAndWhite;
     case DevelopParameter::Temperature:
     case DevelopParameter::Tint:
         return DevelopGroup::WhiteBalance;
@@ -256,6 +282,8 @@ std::optional<FieldSpec> developParameterSpec(DevelopParameter p) {
     if (isHsl(p)) // Hue reads in degrees (±30°); Saturation/Luminance are bipolar
         return hslOffset(p) % 3 == 0 ? FieldSpec{-100, 100, 0, 1.0f, 0.3f, 1, degrees, true, 0.3f}
                                      : bipolar;
+    if (isBwMix(p)) // each mixer band is a bipolar -100..+100 weight
+        return bipolar;
     switch (p) {
     case DevelopParameter::Temperature:
         return FieldSpec{2000, 12000, 5500, 1.0f, 1.0f, 0, " K", false, 50.0f};
@@ -306,6 +334,8 @@ float developParameterValue(DevelopParameter p, const GlobalAdjustment& s) {
             return s.hslLum[band];
         }
     }
+    if (isBwMix(p))
+        return s.bwMix[bwMixOffset(p)];
     switch (p) {
     case DevelopParameter::Temperature:
         return s.temperature;
@@ -368,6 +398,8 @@ QString developParameterValueText(DevelopParameter p, const GlobalAdjustment& s)
     switch (p) {
     case DevelopParameter::Demosaic:
         return demosaicToken(s.demosaicAlgorithm);
+    case DevelopParameter::BlackAndWhite:
+        return onOff(s.convertToGrayscale);
     case DevelopParameter::LensDistortion:
         return onOff(s.lensCorrectDistortion);
     case DevelopParameter::LensVignetting:
@@ -390,6 +422,8 @@ bool developParameterDiffers(
     switch (p) {
     case DevelopParameter::Demosaic:
         return a.demosaicAlgorithm != b.demosaicAlgorithm;
+    case DevelopParameter::BlackAndWhite:
+        return a.convertToGrayscale != b.convertToGrayscale;
     case DevelopParameter::CurveLuma:
         return a.curveLuma != b.curveLuma;
     case DevelopParameter::CurveRed:
