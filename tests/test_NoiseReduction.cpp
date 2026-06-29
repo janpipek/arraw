@@ -85,6 +85,22 @@ TEST_CASE("luminanceNoiseReductionRangeSigma clamps out-of-range Detail", "[nr]"
 }
 
 // ---------------------------------------------------------------------------
+// Activation predicates — the dual no-op rules the renderer skips legs on (0046).
+// ---------------------------------------------------------------------------
+
+TEST_CASE("colorNoiseReductionActive needs both Strength and Smoothness positive", "[nr]") {
+    CHECK(colorNoiseReductionActive(50.0f, 50.0f));
+    CHECK_FALSE(colorNoiseReductionActive(0.0f, 50.0f)); // Strength 0: nothing blended
+    CHECK_FALSE(colorNoiseReductionActive(50.0f, 0.0f)); // Smoothness 0: identity blur
+}
+
+TEST_CASE("luminanceNoiseReductionActive is gated by Amount alone", "[nr]") {
+    CHECK(luminanceNoiseReductionActive(1.0f));
+    CHECK(luminanceNoiseReductionActive(100.0f));
+    CHECK_FALSE(luminanceNoiseReductionActive(0.0f)); // Detail cannot turn it on
+}
+
+// ---------------------------------------------------------------------------
 // Persistence
 // ---------------------------------------------------------------------------
 

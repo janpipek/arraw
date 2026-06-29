@@ -98,6 +98,8 @@ private:
     SliderRow clarity;
     SliderRow dehaze;
     SliderRow sharpening;
+    SliderRow luminanceNoiseReduction; // Amount (docs/adr/0046)
+    SliderRow luminanceNoiseReductionDetail;
     SliderRow colorNoiseReduction; // Strength (issue #59)
     SliderRow colorNoiseReductionSmoothness;
     SliderRow rotation;

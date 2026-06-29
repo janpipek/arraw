@@ -36,3 +36,16 @@ float luminanceNoiseReductionRangeSigma(float detail);
 // drives the blend and Detail the range term, so the user sees exactly two knobs
 // (docs/adr/0046). The renderer scales this per slot (half on the Preview buffer).
 inline constexpr float kLuminanceNoiseReductionSpatialSigmaPx = 2.0f;
+
+// --- Activation predicates (the dual no-op rules; docs/adr/0046) ----------------
+// The unified pre-pass skips the chroma legs when colour NR is inactive and the
+// luma legs when luminance NR is inactive; with both inactive the main pass samples
+// the raw slot directly. Single-sourced here so the renderer and tests agree.
+
+// Chroma is an exact no-op unless both controls are positive: Strength 0 blends
+// nothing back, Smoothness 0 is a zero-sigma identity blur (docs/adr/0034).
+bool colorNoiseReductionActive(float strength, float smoothness);
+
+// Luma is off at Amount 0; Detail only shapes the edge-stop and cannot turn the
+// effect on.
+bool luminanceNoiseReductionActive(float amount);

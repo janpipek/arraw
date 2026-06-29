@@ -36,6 +36,8 @@ static const FieldSpec kFilmicHighlightsSpec
     = developParameterSpec(DevelopParameter::FilmicHighlights).value();
 static const FieldSpec kColorSmoothnessSpec
     = developParameterSpec(DevelopParameter::ColorNoiseReductionSmoothness).value();
+static const FieldSpec kLumDetailSpec
+    = developParameterSpec(DevelopParameter::LuminanceNoiseReductionDetail).value();
 static const FieldSpec kEffectAmountSpec
     = developParameterSpec(DevelopParameter::PostCropVignetteAmount).value();
 static const FieldSpec kEffectShapeSpec
@@ -305,6 +307,19 @@ AdjustmentPanel::AdjustmentPanel(QWidget* parent)
         kBipolarSpec,
         "Reduces or adds veiling light using spatial luminance context.");
     sharpening = addSlider(detail, "Sharpen", kSharpenSpec);
+    // Noise Reduction: two orthogonal halves (docs/adr/0046). Luminance first, to
+    // match Lightroom's panel order.
+    subHeader(detail, "Luminance Noise");
+    luminanceNoiseReduction = addSlider(
+        detail,
+        "Amount",
+        kSharpenSpec,
+        "Edge-aware smoothing of luminance noise (grainy brightness speckle); judge at 1:1.");
+    luminanceNoiseReductionDetail = addSlider(
+        detail,
+        "Detail",
+        kLumDetailSpec,
+        "Edge-protection threshold: higher keeps more fine detail, lower smooths more.");
     subHeader(detail, "Color Noise");
     colorNoiseReduction = addSlider(detail, "Strength", kSharpenSpec);
     colorNoiseReductionSmoothness = addSlider(detail, "Smoothness", kColorSmoothnessSpec);
@@ -444,6 +459,8 @@ void AdjustmentPanel::syncParams() {
     adjustments.clarity = v(clarity);
     adjustments.dehaze = v(dehaze);
     adjustments.sharpening = v(sharpening);
+    adjustments.luminanceNoiseReduction = v(luminanceNoiseReduction); // Amount (docs/adr/0046)
+    adjustments.luminanceNoiseReductionDetail = v(luminanceNoiseReductionDetail);
     adjustments.colorNoiseReduction = v(colorNoiseReduction); // Strength (issue #59)
     adjustments.colorNoiseReductionSmoothness = v(colorNoiseReductionSmoothness);
     adjustments.rotation = v(rotation);
@@ -483,6 +500,8 @@ std::vector<AdjustmentPanel::SliderRow*> AdjustmentPanel::allRows() {
            &clarity,
            &dehaze,
            &sharpening,
+           &luminanceNoiseReduction,
+           &luminanceNoiseReductionDetail,
            &colorNoiseReduction,
            &colorNoiseReductionSmoothness,
            &rotation,
@@ -608,6 +627,8 @@ void AdjustmentPanel::setParams(const GlobalAdjustment& p) {
     set(clarity, p.clarity);
     set(dehaze, p.dehaze);
     set(sharpening, p.sharpening);
+    set(luminanceNoiseReduction, p.luminanceNoiseReduction); // Amount (docs/adr/0046)
+    set(luminanceNoiseReductionDetail, p.luminanceNoiseReductionDetail);
     set(colorNoiseReduction, p.colorNoiseReduction); // Strength (issue #59)
     set(colorNoiseReductionSmoothness, p.colorNoiseReductionSmoothness);
     set(rotation, p.rotation);

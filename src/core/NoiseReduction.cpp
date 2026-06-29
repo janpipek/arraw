@@ -19,6 +19,14 @@ float luminanceNoiseReductionAmountMix(float amount) {
     return std::clamp(amount, 0.0f, 100.0f) * 0.01f;
 }
 
+bool colorNoiseReductionActive(float strength, float smoothness) {
+    return strength > 0.0f && smoothness > 0.0f;
+}
+
+bool luminanceNoiseReductionActive(float amount) {
+    return amount > 0.0f;
+}
+
 float luminanceNoiseReductionRangeSigma(float detail) {
     // Detail 0..100 → bilateral range sigma, decreasing: Detail 0 is the loosest
     // edge-stop (smooths across most luma steps), Detail 100 the tightest (protects
