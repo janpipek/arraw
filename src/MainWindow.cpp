@@ -288,8 +288,7 @@ MainWindow::MainWindow(QWidget* parent)
     // The collapsible dock + reveal-strip pairs are NOT listed here: lights-out
     // drives them through CollapsiblePane so each collapsed/expanded state
     // survives a hide/show cycle.
-    chromeHider.emplace(
-        std::vector<QWidget*>{menuBar(), mainToolBar, statusBar(), filmStripDock});
+    chromeHider.emplace(std::vector<QWidget*>{menuBar(), mainToolBar, statusBar(), filmStripDock});
 
     connect(proofPanel, &ProofingPanel::proofingChanged, this, &MainWindow::rebuildDisplayLut);
     rebuildDisplayLut();
@@ -347,13 +346,20 @@ MainWindow::MainWindow(QWidget* parent)
         viewport,
         &ImageViewport::orientationCommitted,
         this,
-        [this](orient::Orientation orientation, const QRectF& cropRect) {
+        [this](
+            orient::Orientation orientation,
+            const QRectF& cropRect,
+            const std::vector<LocalAdjustment>& localAdjustments) {
             GlobalAdjustment before = currentParams();
             GlobalAdjustment after = before;
             after.orientation = orientation;
-            after.cropRect = cropRect; // crop rotated/mirrored with the content
+            after.cropRect = cropRect;                 // crop rotated/mirrored with the content
+            after.localAdjustments = localAdjustments; // masks rotate/mirror with the subject
+            // Orientation is a whole-image geometry edit: the crop and masks
+            // must travel with it. pushGlobalAdjustmentCommand applies develop
+            // group filtering, which intentionally excludes Local Adjustments.
             if (after != before)
-                pushGlobalAdjustmentCommand(before, after);
+                undoStack->push(new AdjustmentCommand(session, this, before, after));
         });
 
     connect(viewport, &ImageViewport::whiteBalanceCommitted, this, [this](float kelvin, float tint) {
@@ -594,9 +600,7 @@ void MainWindow::setupMenus() {
 
     auto* view = menuBar()->addMenu("&View");
     view->addAction(filmStripDock->toggleViewAction());
-    auto* toggleHistory = view->addAction("History Panel", this, [this] {
-        historyPane->toggle();
-    });
+    auto* toggleHistory = view->addAction("History Panel", this, [this] { historyPane->toggle(); });
     toggleHistory->setShortcut(Qt::Key_F7);
     auto* toggleAdjustments = view->addAction("Adjustments Panel", this, [this] {
         adjustmentsPane->toggle();

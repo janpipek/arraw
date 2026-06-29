@@ -1,9 +1,11 @@
 #include "develop/LocalAdjustment.h"
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include <QPointF>
 
+using Catch::Approx;
 using Catch::Matchers::WithinAbs;
 
 TEST_CASE("Linear mask weight ramps from 0 at p0 to 1 at p1", "[localadj]") {
@@ -186,6 +188,56 @@ TEST_CASE("moveHandle repositions endpoints and translates via center", "[locala
     }
 }
 
+TEST_CASE("mask geometry rotates with coarse Orientation", "[localadj]") {
+    {
+        const Mask rotated
+            = rotateMaskQuarterTurns(LinearMask{{0.2, 0.3}, {0.4, 0.7}}, 1, 1.5f, 1.0f / 1.5f);
+        REQUIRE(std::holds_alternative<LinearMask>(rotated));
+        const LinearMask& m = std::get<LinearMask>(rotated);
+        CHECK(m.p0.x() == Approx(0.7));
+        CHECK(m.p0.y() == Approx(0.2));
+        CHECK(m.p1.x() == Approx(0.3));
+        CHECK(m.p1.y() == Approx(0.4));
+    }
+
+    {
+        const float oldAspect = 1.5f;
+        const float newAspect = 1.0f / oldAspect;
+        RadialMask radial{
+            .center = {0.5, 0.5},
+            .radiusX = 0.3,
+            .radiusY = 0.2,
+            .angle = 20.0,
+            .feather = 0.4,
+            .invert = true};
+        const QPointF oldX = radialHandlePos(radial, RadialHandle::RadiusX, oldAspect);
+        const QPointF oldY = radialHandlePos(radial, RadialHandle::RadiusY, oldAspect);
+
+        const Mask rotatedMask = rotateMaskQuarterTurns(radial, 1, oldAspect, newAspect);
+        REQUIRE(std::holds_alternative<RadialMask>(rotatedMask));
+        const RadialMask rotated = std::get<RadialMask>(rotatedMask);
+
+        const QPointF newX = radialHandlePos(rotated, RadialHandle::RadiusX, newAspect);
+        const QPointF newY = radialHandlePos(rotated, RadialHandle::RadiusY, newAspect);
+        CHECK(newX.x() == Approx(1.0 - oldX.y()));
+        CHECK(newX.y() == Approx(oldX.x()));
+        CHECK(newY.x() == Approx(1.0 - oldY.y()));
+        CHECK(newY.y() == Approx(oldY.x()));
+        CHECK(rotated.feather == Approx(radial.feather));
+        CHECK(rotated.invert == radial.invert);
+    }
+}
+
+TEST_CASE("mask geometry flips with coarse Orientation", "[localadj]") {
+    const Mask flipped = flipMask(LinearMask{{0.2, 0.3}, {0.4, 0.7}}, true, 1.5f);
+    REQUIRE(std::holds_alternative<LinearMask>(flipped));
+    const LinearMask& m = std::get<LinearMask>(flipped);
+    CHECK(m.p0.x() == Approx(0.8));
+    CHECK(m.p0.y() == Approx(0.3));
+    CHECK(m.p1.x() == Approx(0.6));
+    CHECK(m.p1.y() == Approx(0.7));
+}
+
 // --- History labelling: each local edit reads distinctly (docs/adr/0038) ------
 
 TEST_CASE("localChangeLabel names an added mask by its kind", "[localadj]") {
@@ -208,11 +260,14 @@ TEST_CASE("localChangeLabel names a single delta change with its value", "[local
     std::vector<LocalAdjustment> before(1);
     std::vector<LocalAdjustment> after(1);
     after[0].exposure = 0.5f; // EV, signed, two decimals
-    CHECK(localChangeLabel(before, after) == QString::fromUtf8("Linear 1 \xe2\x80\x94 Exposure +0.50 EV"));
+    CHECK(
+        localChangeLabel(before, after)
+        == QString::fromUtf8("Linear 1 \xe2\x80\x94 Exposure +0.50 EV"));
 
     after[0] = LocalAdjustment{};
     after[0].contrast = -20.0f;
-    CHECK(localChangeLabel(before, after) == QString::fromUtf8("Linear 1 \xe2\x80\x94 Contrast -20"));
+    CHECK(
+        localChangeLabel(before, after) == QString::fromUtf8("Linear 1 \xe2\x80\x94 Contrast -20"));
 }
 
 TEST_CASE("localChangeLabel names a geometry move", "[localadj]") {

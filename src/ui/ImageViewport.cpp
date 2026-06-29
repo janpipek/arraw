@@ -16,6 +16,29 @@
 #include <QPainterPath>
 #include <QWheelEvent>
 
+namespace {
+float orientedAspect(float nativeAspect, orient::Orientation orientation) {
+    return orient::swapsAspect(orientation) ? 1.0f / nativeAspect : nativeAspect;
+}
+
+std::vector<LocalAdjustment> rotateLocalMasks(
+    std::vector<LocalAdjustment> localAdjustments,
+    int quarterTurnsCW,
+    float oldAspect,
+    float newAspect) {
+    for (LocalAdjustment& local : localAdjustments)
+        local.mask = rotateMaskQuarterTurns(local.mask, quarterTurnsCW, oldAspect, newAspect);
+    return localAdjustments;
+}
+
+std::vector<LocalAdjustment> flipLocalMasks(
+    std::vector<LocalAdjustment> localAdjustments, bool horizontal, float aspect) {
+    for (LocalAdjustment& local : localAdjustments)
+        local.mask = flipMask(local.mask, horizontal, aspect);
+    return localAdjustments;
+}
+} // namespace
+
 // Short ratio tag shown in the crop readout, oriented to the current toggle.
 static QString aspectLabel(crop::AspectPreset preset, bool landscape) {
     switch (preset) {
@@ -163,8 +186,7 @@ viewport::Geometry ImageViewport::geometry() const {
 // The viewport works in the oriented display frame: an odd quarter-turn swaps
 // the image's effective width and height (docs/adr/0029).
 void ImageViewport::updateImageAspect() {
-    imageAspect = orient::swapsAspect(params.orientation) ? 1.0f / nativeImageAspect
-                                                          : nativeImageAspect;
+    imageAspect = orientedAspect(nativeImageAspect, params.orientation);
 }
 
 RendererCore::Slot ImageViewport::activeSlot() const {
@@ -279,6 +301,14 @@ const LinearMask* ImageViewport::activeLinearMask() const {
     return std::get_if<LinearMask>(&params.localAdjustments[activeLocalAdj].mask);
 }
 
+QPointF ImageViewport::imageUVToViewport(QPointF uv) const {
+    return geometry().imageUvToViewport(uv);
+}
+
+QPointF ImageViewport::viewportToImageUV(QPointF pos) const {
+    return geometry().viewportToImageUv(pos);
+}
+
 QPointF ImageViewport::localHandleViewport(LinearHandle h) const {
     const LinearMask* m = activeLinearMask();
     if (!m)
@@ -297,7 +327,7 @@ QPointF ImageViewport::localHandleViewport(LinearHandle h) const {
     default:
         return {};
     }
-    return cropUVToViewport(float(uv.x()), float(uv.y()));
+    return imageUVToViewport(uv);
 }
 
 // Screen-space pick (constant-pixel target regardless of zoom). Endpoints win
@@ -352,14 +382,14 @@ RadialHandle ImageViewport::hitTestRadialMask(QPointF pos) const {
     const RadialMask* m = activeRadialMask();
     if (!m)
         return RadialHandle::None;
-    const float a = displayAspect();
+    const float a = imageAspect;
     const RadialHandle order[3]
         = {RadialHandle::RadiusX, RadialHandle::RadiusY, RadialHandle::Center};
     RadialHandle best = RadialHandle::None;
     double bestD2 = double(kMaskHandleRadius) * kMaskHandleRadius;
     for (RadialHandle h : order) {
         const QPointF uv = radialHandlePos(*m, h, a);
-        const QPointF d = pos - cropUVToViewport(float(uv.x()), float(uv.y()));
+        const QPointF d = pos - imageUVToViewport(uv);
         const double d2 = QPointF::dotProduct(d, d);
         if (d2 < bestD2) {
             best = h;
@@ -373,7 +403,7 @@ void ImageViewport::drawRadialMaskOverlay(QPainter& p) const {
     const RadialMask* m = activeRadialMask();
     if (!m)
         return;
-    const float aspect = displayAspect();
+    const float aspect = imageAspect;
     const double rad = m->angle * 3.14159265358979 / 180.0;
     const double ca = std::cos(rad), sa = std::sin(rad);
 
@@ -386,7 +416,7 @@ void ImageViewport::drawRadialMaskOverlay(QPainter& p) const {
         const double ey = m->radiusY * std::sin(t);
         const double rx = ex * ca - ey * sa; // rotate by angle
         const double ry = ex * sa + ey * ca;
-        oval << cropUVToViewport(float(m->center.x() + rx / aspect), float(m->center.y() + ry));
+        oval << imageUVToViewport({m->center.x() + rx / aspect, m->center.y() + ry});
     }
     p.setRenderHint(QPainter::Antialiasing, true);
     p.setPen(QPen(QColor(255, 255, 255, 200), 1.5));
@@ -395,7 +425,7 @@ void ImageViewport::drawRadialMaskOverlay(QPainter& p) const {
 
     auto handle = [&](RadialHandle h, bool filled) {
         const QPointF uv = radialHandlePos(*m, h, aspect);
-        const QPointF pt = cropUVToViewport(float(uv.x()), float(uv.y()));
+        const QPointF pt = imageUVToViewport(uv);
         p.setBrush(filled ? QBrush(QColor(255, 255, 255, 220)) : QBrush(QColor(0, 0, 0, 60)));
         p.setPen(QPen(QColor(0, 0, 0, 180), 1.0));
         p.drawEllipse(pt, kMaskHandleRadius, kMaskHandleRadius);
@@ -762,8 +792,11 @@ void ImageViewport::rotate90(bool clockwise) {
                                                : orient::turnedCounterClockwise(params.orientation);
     // Rotate the committed crop with the content so it keeps framing the subject
     // (docs/adr/0029); the aspect-lock inverts for free (re-derived from the rect).
-    const QRectF crop = crop::rotateQuarterTurns(params.cropRect, clockwise ? 1 : 3);
-    emit orientationCommitted(next, crop);
+    const int turns = clockwise ? 1 : 3;
+    const QRectF crop = crop::rotateQuarterTurns(params.cropRect, turns);
+    const float nextAspect = orientedAspect(nativeImageAspect, next);
+    emit orientationCommitted(
+        next, crop, rotateLocalMasks(params.localAdjustments, turns, imageAspect, nextAspect));
 }
 
 void ImageViewport::flip(bool horizontal) {
@@ -774,7 +807,8 @@ void ImageViewport::flip(bool horizontal) {
     const QRectF c = params.cropRect;
     const QRectF crop = horizontal ? QRectF(1.0 - c.x() - c.width(), c.y(), c.width(), c.height())
                                    : QRectF(c.x(), 1.0 - c.y() - c.height(), c.width(), c.height());
-    emit orientationCommitted(next, crop);
+    emit orientationCommitted(
+        next, crop, flipLocalMasks(params.localAdjustments, horizontal, imageAspect));
 }
 
 void ImageViewport::setStraightenActive(bool active) {
@@ -1206,9 +1240,9 @@ void ImageViewport::mouseMoveEvent(QMouseEvent* e) {
         return;
     }
     if (localMaskMode() && (e->buttons() & Qt::LeftButton)) {
-        const QPointF uv = viewportToCropUV(e->position());
+        const QPointF uv = viewportToImageUV(e->position());
         if (const RadialMask* r = activeRadialMask(); r && radialDragHandle != RadialHandle::None) {
-            const RadialMask moved = moveRadialHandle(*r, radialDragHandle, uv, displayAspect());
+            const RadialMask moved = moveRadialHandle(*r, radialDragHandle, uv, imageAspect);
             params.localAdjustments[activeLocalAdj].mask = moved; // echo for overlay
             emit localMaskChanged(activeLocalAdj, moved);
             update();

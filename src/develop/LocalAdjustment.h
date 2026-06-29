@@ -9,18 +9,19 @@
 #include <vector>
 
 // A graduated ("Linear") mask: the weight ramps from 0 at p0 to 1 at p1 along
-// the line between them. Endpoints are normalised coordinates in the
-// cropped/rotated display frame (docs/adr/0007), so recropping does not slide
-// the mask. Weight is evaluated in aspect-corrected space so a diagonally drawn
-// gradient stays perpendicular to its line on screen (see docs/adr/0010).
+// the line between them. Endpoints are normalised coordinates in the full
+// post-lens-correction oriented image frame, before Crop and fine Rotation, so
+// those geometry edits do not slide the mask off its subject. Weight is
+// evaluated in aspect-corrected space so a diagonally drawn gradient stays
+// perpendicular to its line on screen (see docs/adr/0010).
 struct LinearMask {
     QPointF p0; // weight 0
     QPointF p1; // weight 1
     bool operator==(const LinearMask&) const = default;
 };
 
-// A Radial (oval) mask. Geometry is normalised display-frame coords; the radii
-// and angle live in aspect-corrected space so the oval looks as drawn on screen.
+// A Radial (oval) mask. Geometry is normalised full-image coords; the radii and
+// angle live in aspect-corrected space so the oval looks as drawn on screen.
 // Weight is 1 inside, ramping to 0 at the boundary over `feather` (smoothstep);
 // `invert` flips inside/outside (docs/adr/0010).
 struct RadialMask {
@@ -64,7 +65,7 @@ struct LocalAdjustment : SharedAdjustment {
     bool operator==(const LocalAdjustment&) const = default;
 };
 
-// Mask weight in [0,1] for a pixel at normalised display-frame UV `uv`.
+// Mask weight in [0,1] for a pixel at normalised subject-space image UV `uv`.
 // `aspect` = displayWidth / displayHeight, applied so the geometry is isotropic.
 float maskWeight(const LinearMask& m, QPointF uv, float aspect);
 
@@ -78,7 +79,7 @@ enum class LinearHandle { None, P0, P1, Center };
 // circle is round on screen.
 LinearHandle nearestHandle(const LinearMask& m, QPointF cursor, float aspect, double pickRadius);
 
-// Radial (oval) mask weight in [0,1] for a pixel at normalised display-frame UV
+// Radial (oval) mask weight in [0,1] for a pixel at normalised image UV
 // `uv`. Aspect-corrected so the oval is round-on-screen when radiusX == radiusY.
 float radialMaskWeight(const RadialMask& m, QPointF uv, float aspect);
 
@@ -94,10 +95,17 @@ QPointF radialHandlePos(const RadialMask& m, RadialHandle h, float aspect);
 // perpendicular axis. `aspect` keeps the geometry isotropic.
 RadialMask moveRadialHandle(RadialMask m, RadialHandle h, QPointF to, float aspect);
 
-// Reposition a handle of `m` so it lands on `to` (normalised display coords).
+// Reposition a handle of `m` so it lands on `to` (normalised image coords).
 // P0/P1 move that endpoint; Center translates both points (preserving
 // orientation and spread). None returns the mask unchanged. No clamping.
 LinearMask moveHandle(LinearMask m, LinearHandle h, QPointF to);
+
+// Transform mask geometry when the oriented image frame changes, preserving
+// subject attachment. `oldAspect` and `newAspect` are the full oriented image
+// aspects before/after the transform; radial masks use them to preserve the
+// drawn ellipse in aspect-corrected space.
+Mask rotateMaskQuarterTurns(const Mask& mask, int quarterTurnsCW, float oldAspect, float newAspect);
+Mask flipMask(const Mask& mask, bool horizontal, float aspect);
 
 // One editable delta row of a Local Adjustment: its label, slider number-handling
 // (FieldSpec), and the field it drives. The single source of truth for the Masks

@@ -480,9 +480,11 @@ namespace, and sit on the shared undo stack.
   `image.frag`, the `Ubuf` mirror in `RendererCore.h` (std140, byte-identical),
   and `RendererCore::fillUbuf()`. Raisable later; never lower it below counts a
   saved file already uses (extra masks would drop on load).
-- **Coordinate frame:** masks store normalised coordinates in the cropped/rotated
-  display frame (`docs/adr/0007-crop-after-rotation-display-frame`), so recropping
-  does not slide masks around.
+- **Coordinate frame:** masks store normalised coordinates in the full
+  post-lens-correction, oriented image frame, before Crop and fine Rotation.
+  Crop/straighten project the mask into the viewport without rewriting it, so a
+  mask stays attached to its subject. Coarse Orientation edits rotate/mirror
+  masks with the content.
 - **Live preview + undo:** rendered every frame (unlike export-only sharpening);
   add/move/delete a mask and its slider tweaks are `QUndoStack` steps (unlike the
   culling marks of `docs/adr/0008-culling-marks-in-develop-sidecar`).

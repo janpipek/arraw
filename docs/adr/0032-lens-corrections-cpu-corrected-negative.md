@@ -87,12 +87,13 @@ coverage been unknown or absent.
 - Correcting distortion changes the usable frame, so the corrected image is
   **auto-scaled to fill** and `LoadResult::defaultCrop` is set to the largest
   inscribed rectangle, reusing the `maxInscribedCrop` machinery from ADR 0007.
-- Spots and local-adjustment masks are now placed on the *corrected* buffer, so
-  their pixel coordinates are corrected-frame coordinates. Toggling a correction
-  after placing spots would shift them; acceptable because corrections are an
-  apply-once load-time decision, but the [[Spot]] vocabulary and
-  `displayUVToBufferPixel` chain must treat the lens-corrected buffer as the
-  "original buffer".
+- Spots and local-adjustment masks are now placed on the *corrected* image.
+  Spots store corrected-buffer pixel coordinates; masks store normalised
+  corrected-image UVs in the oriented frame (ADR 0010). Toggling a correction
+  after placing them may shift the subject under the stored geometry; acceptable
+  because corrections are an apply-once load-time decision. The [[Spot]]
+  vocabulary and viewport coordinate chain must treat the lens-corrected buffer
+  as the "original buffer".
 - **Vignette is renamed to Post-Crop Vignette.** The existing creative effect
   (ADR 0026) collided in name with corrective vignetting. The creative control
   becomes **Post-Crop Vignette** (matching Lightroom); the new corrective control
