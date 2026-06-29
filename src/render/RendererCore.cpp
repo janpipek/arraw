@@ -648,6 +648,7 @@ void RendererCore::fillUbuf(Ubuf& ub, const FrameParams& fp) const {
     // matching LUT row (docs/adr/0033); white balance remains a channel gain.
     const int n = std::min<int>(int(a.localAdjustments.size()), 16);
     ub.numLocalAdj = n;
+    ub.maskOverlay = fp.maskOverlay < n ? fp.maskOverlay : -1; // tint the edited mask (adr 0047)
     for (int i = 0; i < n; ++i) {
         const LocalAdjustment& la = a.localAdjustments[i];
         const SharedUniform d = toUniform(la);

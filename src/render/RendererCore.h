@@ -70,7 +70,8 @@ struct Ubuf {
     float textureAmount;       // -1..+1 fine-detail local contrast
     float clarity;             // -1..+1 midtone local contrast
     float dehaze;              // -1..+1 practical haze compensation
-    qint32 pad_[3];
+    qint32 maskOverlay;        // index of the mask to tint red while editing, -1 = off; was pad_[0]
+    qint32 pad_[2];
 };
 
 static_assert(sizeof(Ubuf) == 1648);
@@ -128,6 +129,7 @@ public:
         bool clipShadows = false;
         bool sensorClip = false; // RAW mosaic saturation overlay, display-only
         bool histoRaw = false;   // emit pre-clamp sRGB-linear for overflow histogram
+        int maskOverlay = -1;    // tint this mask's region red (on-screen edit only); -1 = off
         GlobalAdjustment adjustments;
     };
 

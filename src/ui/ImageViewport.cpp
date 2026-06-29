@@ -212,6 +212,9 @@ void ImageViewport::render(QRhiCommandBuffer* cb) {
     fp.clipHighlights = clipHighlights;
     fp.clipShadows = clipShadows;
     fp.sensorClip = sensorClipWarning;
+    // Tint the active mask's region red while editing, so the painted/parametric
+    // mask is visible (docs/adr/0047). On-screen preview only; never on export.
+    fp.maskOverlay = (localMaskMode() && !showOriginal) ? activeLocalAdj : -1;
     fp.adjustments = p;
     // The denoise pre-pass is debounced (nrTimer): render the settled values,
     // not the live sliders, so dragging doesn't trigger a recompute every tick.
@@ -266,6 +269,11 @@ void ImageViewport::render(QRhiCommandBuffer* cb) {
 
 void ImageViewport::setActiveLocalAdjustment(int index) {
     activeLocalAdj = index;
+    // Abort any in-progress stroke and drop the brush cursor ring — switching the
+    // active mask (incl. on image change) must not carry brush state over.
+    brushPainting = false;
+    brushStrokePath.clear();
+    brushCursorValid = false;
     update();
 }
 

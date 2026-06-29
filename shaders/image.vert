@@ -62,7 +62,7 @@ layout(std140, binding = 0) uniform buf {
     float textureAmount;      // unused here; fine-detail local contrast
     float clarity;            // unused here; midtone local contrast
     float dehaze;             // unused here; haze compensation
-    int   pad1;
+    int   maskOverlay; // unused here; matches image.frag and Ubuf (std140)
     int   pad2;
     int   pad3;
 } u;

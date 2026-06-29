@@ -64,7 +64,7 @@ layout(std140, binding = 0) uniform buf {
     float textureAmount; // -1..+1 fine-detail local contrast
     float clarity;  // -1..+1 midtone local contrast
     float dehaze;   // -1..+1 practical haze compensation
-    int   pad1;
+    int   maskOverlay; // index of the mask to tint red while editing, -1 = off
     int   pad2;
     int   pad3;
 } u;
@@ -646,5 +646,13 @@ void main() {
     }
     if (u.sensorClipWarn != 0 && any(greaterThan(texture(uSensorClip, vUV).rgb, vec3(0.01))))
         outc = vec3(1.0, 0.0, 1.0);                         // sensor clip
+
+    // Mask overlay (docs/adr/0047): while a mask is being edited, tint its region
+    // red so the painted/parametric mask is visible. On-screen preview only —
+    // maskOverlay is -1 for the export and histogram readbacks.
+    if (u.maskOverlay >= 0 && u.maskOverlay < u.numLocalAdj) {
+        float mw = maskWeight(u.maskOverlay, vFrameUV, maskAspect);
+        outc = mix(outc, vec3(1.0, 0.15, 0.15), mw * 0.5);
+    }
     fragColor = vec4(outc, 1.0);
 }

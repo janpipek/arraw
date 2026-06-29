@@ -1980,6 +1980,10 @@ void MainWindow::syncSessionToEditors() {
         localPanel->setLocalAdjustments(session->params().localAdjustments);
     }
     viewport->setAdjustments(session->params());
+    // The panel update is signal-blocked, so propagate its (clamped) selection to
+    // the viewport explicitly — otherwise switching images leaves the viewport
+    // pointing at the previous image's mask (stale overlay / brush cursor).
+    viewport->setActiveLocalAdjustment(localPanel->activeIndex());
 }
 
 void MainWindow::syncSessionSpotsToEditors(bool fullResOnly) {
