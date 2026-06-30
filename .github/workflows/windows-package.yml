@@ -31,16 +31,21 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Cache vcpkg downloads
-        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+      # Restore only — the matching save steps run at the end with `if: always()`
+      # so an expensive vcpkg build is cached even when a later step (e.g. the
+      # sanity check) fails. actions/cache's built-in save is gated on job
+      # success, which would discard the build on any failure.
+      - name: Restore vcpkg downloads
+        id: cache-downloads
+        uses: actions/cache/restore@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
           path: C:\vcpkg\downloads
           key: vcpkg-downloads-windows-2022-${{ hashFiles('.github/workflows/windows-package.yml', 'CMakeLists.txt') }}
           restore-keys: |
             vcpkg-downloads-windows-2022-
 
-      - name: Cache vcpkg binary packages
-        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+      - name: Restore vcpkg binary packages
+        uses: actions/cache/restore@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
           path: C:\vcpkg\binary-cache
           key: vcpkg-binary-cache-windows-2022-${{ github.run_id }}
@@ -92,6 +97,11 @@ jobs:
         shell: pwsh
         env:
           QT_QPA_PLATFORM: offscreen
+          # arraw.exe is a GUI-subsystem (WIN32) binary, so QCommandLineParser
+          # renders --version in a blocking native message box instead of writing
+          # to stdout. Force it onto the stdout path so the smoke test can run
+          # headless without hanging on a dialog.
+          QT_COMMAND_LINE_PARSER_NO_GUI_MESSAGE_BOXES: "1"
         run: |
           $stage = Get-ChildItem -Path build-release\_package -Directory -Filter "arraw-*-windows-x64" |
             Select-Object -First 1
@@ -114,9 +124,15 @@ jobs:
             throw "lensfun database XML files are missing from the package"
           }
 
-          & $exe --version
-          if ($LASTEXITCODE -ne 0) {
-            throw "arraw.exe --version failed with exit code $LASTEXITCODE"
+          # Capture the output so PowerShell waits for the GUI-subsystem process
+          # to exit and populates $LASTEXITCODE. A bare `& $exe` returns
+          # immediately for a WIN32 binary, leaving $LASTEXITCODE unset ($null),
+          # which made this check throw with a blank exit code.
+          $versionOutput = & $exe --version 2>&1
+          $versionExit = $LASTEXITCODE
+          Write-Host ($versionOutput -join [Environment]::NewLine)
+          if ($versionExit -ne 0) {
+            throw "arraw.exe --version failed with exit code $versionExit"
           }
 
           $zip = Get-ChildItem -Path dist -File -Filter "arraw-*-windows-x64.zip" | Select-Object -First 1
@@ -130,3 +146,23 @@ jobs:
           name: windows-portable-zip
           path: dist/arraw-*-windows-x64.zip
           if-no-files-found: error
+
+      # Save the vcpkg caches even on failure so a partial or post-build break
+      # never throws away the multi-hour dependency build. Keys must match the
+      # restore steps above. The downloads save is skipped on an exact-key hit
+      # to avoid a redundant "cache already exists" warning; the binary cache is
+      # keyed on the unique run_id, so it always writes a fresh entry that later
+      # runs pick up via the restore-keys prefix.
+      - name: Save vcpkg downloads
+        if: always() && steps.cache-downloads.outputs.cache-hit != 'true'
+        uses: actions/cache/save@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+        with:
+          path: C:\vcpkg\downloads
+          key: vcpkg-downloads-windows-2022-${{ hashFiles('.github/workflows/windows-package.yml', 'CMakeLists.txt') }}
+
+      - name: Save vcpkg binary packages
+        if: always()
+        uses: actions/cache/save@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+        with:
+          path: C:\vcpkg\binary-cache
+          key: vcpkg-binary-cache-windows-2022-${{ github.run_id }}
