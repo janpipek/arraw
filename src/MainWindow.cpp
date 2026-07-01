@@ -5,6 +5,7 @@
 #include "ExportWorkflow.h"
 #include "ImageLoadWorkflow.h"
 #include "MainWindowStatus.h"
+#include "MainWindowZoom.h"
 #include "ThumbnailCache.h"
 #include "core/CropGeometry.h"
 #include "core/Orientation.h"
@@ -303,6 +304,7 @@ MainWindow::MainWindow(QWidget* parent)
     connect(viewport, &ImageViewport::fullResNeeded, this, &MainWindow::onFullResNeeded);
 
     connect(viewport, &ImageViewport::zoomChanged, this, &MainWindow::updateZoomStatus);
+    connect(viewport, &ImageViewport::zoomChanged, this, &MainWindow::updateZoomMenuState);
 
     connect(
         filmStrip,
@@ -574,6 +576,32 @@ void MainWindow::keyPressEvent(QKeyEvent* e) {
         QMainWindow::keyPressEvent(e);
 }
 
+MainWindow::ZoomMenuActions MainWindow::addZoomPresetActions(QMenu* menu, QActionGroup* group) {
+    ZoomMenuActions actions{};
+    actions.fit = menu->addAction(tr("Fit"), viewport, &ImageViewport::resetView);
+    menu->addSeparator();
+    for (size_t i = 0; i < kZoomPresets.size(); ++i) {
+        const float value = kZoomPresets[i];
+        QAction* a = menu->addAction(
+            QStringLiteral("%1 %").arg(qRound(value * 100.0f)), this, [this, value] {
+                viewport->setPixelZoom(value);
+            });
+        if (group) {
+            a->setCheckable(true);
+            a->setActionGroup(group);
+        }
+        actions.presets[i] = a;
+    }
+    return actions;
+}
+
+void MainWindow::updateZoomMenuState(float zoom) {
+    zoomMenu->setEnabled(zoom > 0.0f);
+    const int matched = matchingZoomPresetIndex(zoom);
+    for (size_t i = 0; i < zoomPresetActions.size(); ++i)
+        zoomPresetActions[i]->setChecked(int(i) == matched);
+}
+
 void MainWindow::setupMenus() {
     auto* file = menuBar()->addMenu("&File");
     file->addAction("&Open...", QKeySequence::Open, this, &MainWindow::openFile);
@@ -617,7 +645,27 @@ void MainWindow::setupMenus() {
     });
     toggleAdjustments->setShortcut(Qt::Key_F8);
     view->addSeparator();
-    view->addAction("Reset Zoom", Qt::CTRL | Qt::Key_0, viewport, &ImageViewport::resetView);
+    // Zoom (docs/superpowers/specs/2026-07-01-zoom-menu-design.md). Presets
+    // are shared with the status bar's zoom dropdown (setupStatusBar) via
+    // addZoomPresetActions. Only this Fit action gets Ctrl+0 — giving the
+    // status bar's Fit action the same shortcut makes it ambiguous, since
+    // both actions live in this same top-level window.
+    zoomMenu = view->addMenu(tr("&Zoom"));
+    auto* zoomInAction = zoomMenu->addAction(tr("Zoom In"), this, [this] {
+        viewport->setPixelZoom(viewport->pixelZoom() * 2.0f);
+    });
+    zoomInAction->setShortcut(QKeySequence::ZoomIn);
+    auto* zoomOutAction = zoomMenu->addAction(tr("Zoom Out"), this, [this] {
+        viewport->setPixelZoom(viewport->pixelZoom() / 2.0f);
+    });
+    zoomOutAction->setShortcut(QKeySequence::ZoomOut);
+    zoomMenu->addSeparator();
+    zoomPresetGroup = new QActionGroup(this);
+    zoomPresetGroup->setExclusive(true);
+    ZoomMenuActions zoomActions = addZoomPresetActions(zoomMenu, zoomPresetGroup);
+    zoomActions.fit->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_0));
+    zoomPresetActions = zoomActions.presets;
+    updateZoomMenuState(viewport->pixelZoom());
     view->addSeparator();
 
     fullScreenAction = view->addAction("&Full Screen", this, &MainWindow::toggleFullScreen);
@@ -776,13 +824,11 @@ void MainWindow::setupStatusBar() {
     zoomButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
     zoomButton->setAutoRaise(true);
 
-    auto* zoomMenu = new QMenu(zoomButton);
-    zoomMenu->addAction("Fit", viewport, &ImageViewport::resetView);
-    zoomMenu->addSeparator();
-    zoomMenu->addAction("50 %", this, [this] { viewport->setPixelZoom(0.5f); });
-    zoomMenu->addAction("100 %", this, [this] { viewport->setPixelZoom(1.0f); });
-    zoomMenu->addAction("200 %", this, [this] { viewport->setPixelZoom(2.0f); });
-    zoomButton->setMenu(zoomMenu);
+    // Same preset list as View > Zoom (setupMenus), via addZoomPresetActions —
+    // no group here, this dropdown doesn't show a checkmark.
+    auto* zoomPresetMenu = new QMenu(zoomButton);
+    addZoomPresetActions(zoomPresetMenu);
+    zoomButton->setMenu(zoomPresetMenu);
 
     statusBar()->addPermanentWidget(zoomButton);
     updateZoomStatus(viewport->pixelZoom());

@@ -2,6 +2,7 @@
 #include "BatchPaste.h"
 #include "ChromeHider.h"
 #include "DecodeCache.h"
+#include "MainWindowZoom.h"
 #include "core/CropGeometry.h"
 #include "develop/GlobalAdjustment.h"
 #include "develop/SettingsClipboard.h"
@@ -9,6 +10,7 @@
 #include "develop/UserMetadata.h"
 #include "io/PresetStore.h"
 #include "pipeline/LoadResult.h"
+#include <array>
 #include <atomic>
 #include <memory>
 #include <optional>
@@ -100,6 +102,20 @@ private slots:
 private:
     void setupMenus();
     void setupImageMenu();
+    // Appends "Fit" then one action per kZoomPresets entry to `menu`, wired to
+    // the viewport. If `group` is given, the preset actions (not Fit) are made
+    // checkable and exclusive, for the caller to drive from
+    // matchingZoomPresetIndex(). Shared by the View > Zoom submenu and the
+    // status bar's zoom dropdown so the two can't diverge
+    // (docs/superpowers/specs/2026-07-01-zoom-menu-design.md).
+    struct ZoomMenuActions {
+        QAction* fit;
+        std::array<QAction*, kZoomPresets.size()> presets;
+    };
+    ZoomMenuActions addZoomPresetActions(QMenu* menu, QActionGroup* group = nullptr);
+    // Enables/disables the Zoom submenu (no image => nothing to zoom, mirrors
+    // zoomButton's visibility) and checks whichever preset matches `zoom`.
+    void updateZoomMenuState(float zoom);
     void setupDocks();
     // Builds the rating/colour filter controls and appends them to the film-strip
     // title bar (ADR 0042). Wires each control to FilmStrip::setFilter.
@@ -205,6 +221,9 @@ private:
     QLabel* statusLabel;
     QLabel* proofLabel;
     QToolButton* zoomButton;
+    QMenu* zoomMenu = nullptr;                                     // View → Zoom submenu
+    QActionGroup* zoomPresetGroup = nullptr;                       // exclusive preset actions in zoomMenu
+    std::array<QAction*, kZoomPresets.size()> zoomPresetActions{}; // kZoomPresets order
 
     // Toolbar: modal tools (left) + immediate actions (right).
     QActionGroup* toolGroup;
