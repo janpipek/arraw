@@ -175,6 +175,7 @@ def main() -> None:
                 "-DCMAKE_BUILD_TYPE=Release",
                 f"-DCMAKE_TOOLCHAIN_FILE={args.toolchain}",
                 "-DVCPKG_TARGET_TRIPLET=x64-windows",
+                f"-DVCPKG_INSTALLED_DIR={args.vcpkg_installed}",
                 f"-DARRAW_VCPKG_INSTALLED={args.vcpkg_installed}",
                 "-DARRAW_BUILD_TESTS=OFF",
                 "-DARRAW_WITH_LENSFUN=ON",

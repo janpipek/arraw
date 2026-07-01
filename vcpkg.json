@@ -1,0 +1,15 @@
+{
+  "dependencies": [
+    "qtbase",
+    "qttools",
+    "qtshadertools",
+    {
+      "name": "libraw",
+      "features": ["openmp"]
+    },
+    "lcms",
+    "lensfun",
+    "exiv2"
+  ],
+  "builtin-baseline": "1f5e0348089e8a9b187f57d42866ebc871e815da"
+}

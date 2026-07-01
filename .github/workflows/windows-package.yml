@@ -40,7 +40,7 @@ jobs:
         uses: actions/cache/restore@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
           path: C:\vcpkg\downloads
-          key: vcpkg-downloads-windows-2022-${{ hashFiles('.github/workflows/windows-package.yml', 'CMakeLists.txt') }}
+          key: vcpkg-downloads-windows-2022-${{ hashFiles('.github/workflows/windows-package.yml', 'CMakeLists.txt', 'vcpkg.json') }}
           restore-keys: |
             vcpkg-downloads-windows-2022-
 
@@ -52,19 +52,11 @@ jobs:
           restore-keys: |
             vcpkg-binary-cache-windows-2022-
 
-      - name: Install Windows dependencies
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path "$env:VCPKG_BINARY_CACHE" | Out-Null
-          & "$env:VCPKG_ROOT\vcpkg.exe" install `
-            qtbase qttools qtshadertools `
-            "libraw[openmp]" lcms lensfun exiv2 `
-            --triplet x64-windows
-
       - name: Configure focused test build
         shell: pwsh
         run: |
-          $command = 'call "{0}" && cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl -DCMAKE_TOOLCHAIN_FILE="{1}" -DVCPKG_TARGET_TRIPLET=x64-windows -DARRAW_VCPKG_INSTALLED="{2}" -DARRAW_WITH_LENSFUN=ON' -f $env:VCVARS, $env:VCPKG_TOOLCHAIN, $env:VCPKG_INSTALLED
+          New-Item -ItemType Directory -Force -Path "$env:VCPKG_BINARY_CACHE" | Out-Null
+          $command = 'call "{0}" && cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl -DCMAKE_TOOLCHAIN_FILE="{1}" -DVCPKG_TARGET_TRIPLET=x64-windows -DVCPKG_INSTALLED_DIR="{2}" -DARRAW_VCPKG_INSTALLED="{2}" -DARRAW_WITH_LENSFUN=ON' -f $env:VCVARS, $env:VCPKG_TOOLCHAIN, $env:VCPKG_INSTALLED
           cmd /c $command
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
@@ -178,7 +170,7 @@ jobs:
         uses: actions/cache/save@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
           path: C:\vcpkg\downloads
-          key: vcpkg-downloads-windows-2022-${{ hashFiles('.github/workflows/windows-package.yml', 'CMakeLists.txt') }}
+          key: vcpkg-downloads-windows-2022-${{ hashFiles('.github/workflows/windows-package.yml', 'CMakeLists.txt', 'vcpkg.json') }}
 
       - name: Save vcpkg binary packages
         if: always()
