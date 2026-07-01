@@ -85,13 +85,14 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: .\build\tests\arraw_tests.exe "[lensfun]"
 
-      - name: Build portable Windows ZIP
+      - name: Build portable Windows ZIP and installer
         shell: pwsh
         run: |
           python tools/package_windows.py `
             --vcvars "$env:VCVARS" `
             --toolchain "$env:VCPKG_TOOLCHAIN" `
-            --vcpkg-installed "$env:VCPKG_INSTALLED"
+            --vcpkg-installed "$env:VCPKG_INSTALLED" `
+            --installer
 
       - name: Sanity-check packaged tree
         shell: pwsh
@@ -124,15 +125,22 @@ jobs:
             throw "lensfun database XML files are missing from the package"
           }
 
-          # Capture the output so PowerShell waits for the GUI-subsystem process
-          # to exit and populates $LASTEXITCODE. A bare `& $exe` returns
-          # immediately for a WIN32 binary, leaving $LASTEXITCODE unset ($null),
-          # which made this check throw with a blank exit code.
-          $versionOutput = & $exe --version 2>&1
-          $versionExit = $LASTEXITCODE
-          Write-Host ($versionOutput -join [Environment]::NewLine)
-          if ($versionExit -ne 0) {
-            throw "arraw.exe --version failed with exit code $versionExit"
+          # arraw.exe is a GUI-subsystem (WIN32) binary with no attached console.
+          # PowerShell's native-command invocation (`& $exe`, even piped through
+          # `2>&1` and assigned to a variable) does not reliably wait for such a
+          # process or populate $LASTEXITCODE - that only works for console
+          # subsystem binaries. Driving System.Diagnostics.Process directly waits
+          # on the OS process handle instead, which works regardless of subsystem.
+          $psi = [System.Diagnostics.ProcessStartInfo]::new($exe, "--version")
+          $psi.UseShellExecute = $false
+          $psi.RedirectStandardOutput = $true
+          $psi.RedirectStandardError = $true
+          $proc = [System.Diagnostics.Process]::Start($psi)
+          $versionOutput = $proc.StandardOutput.ReadToEnd() + $proc.StandardError.ReadToEnd()
+          $proc.WaitForExit()
+          Write-Host $versionOutput
+          if ($proc.ExitCode -ne 0) {
+            throw "arraw.exe --version failed with exit code $($proc.ExitCode)"
           }
 
           $zip = Get-ChildItem -Path dist -File -Filter "arraw-*-windows-x64.zip" | Select-Object -First 1
@@ -140,11 +148,23 @@ jobs:
             throw "Portable ZIP was not created"
           }
 
+          $setup = Get-ChildItem -Path dist -File -Filter "arraw-*-windows-x64-setup.exe" | Select-Object -First 1
+          if (-not $setup) {
+            throw "Installer was not created"
+          }
+
       - name: Upload portable ZIP
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: windows-portable-zip
           path: dist/arraw-*-windows-x64.zip
+          if-no-files-found: error
+
+      - name: Upload installer
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-installer
+          path: dist/arraw-*-windows-x64-setup.exe
           if-no-files-found: error
 
       # Save the vcpkg caches even on failure so a partial or post-build break
