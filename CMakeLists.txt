@@ -270,6 +270,7 @@ set(CORE_SOURCES
     src/BatchPaste.cpp
     src/ui/BatchProgressDialog.cpp
     src/MainWindowStatus.cpp
+    src/MainWindowZoom.cpp
     src/ChromeHider.cpp
 )
 
