@@ -1457,6 +1457,7 @@ void MainWindow::loadImage(const QString& path) {
     // its own edits, not the previous image's. Crop is a placeholder (full frame)
     // until the demosaic yields the real DefaultCrop for never-edited RAWs.
     pendingPreviewParams = resolvePendingPreviewParams(path);
+    pendingPreviewDisplayed = false;
 
     // The demosaic algorithm parameterises the decode and its cache key, so it is
     // read from the up-front resolved params (docs/adr/0036).
@@ -1485,6 +1486,7 @@ void MainWindow::loadImage(const QString& path) {
                         // New image's params, before the embedded-preview paint.
                         applyPendingPreviewParams();
                         viewport->setImage(buf); // embedded preview (camera look, base off)
+                        pendingPreviewDisplayed = true;
                     }
                 },
                 Qt::QueuedConnection);
@@ -1614,8 +1616,10 @@ void MainWindow::applyLoadResult(const QString& path, const LoadResult& result) 
         resolved.metadataPresence,
         resolved.snapshots);
     session->setBaseLook(true);
+    const bool preservePreviewView = pendingPreviewDisplayed && session->path() == path;
+    pendingPreviewDisplayed = false;
     syncSessionToEditors();
-    syncSessionSpotsToEditors(true);
+    syncSessionSpotsToEditors(true, preservePreviewView);
     // Demosaic selection applies only to Bayer sensors; disable it (with an
     // explanation) for X-Trans/Foveon/standard images (docs/adr/0036).
     adjPanel->setDemosaicAvailable(sensorSupportsDemosaicSelection(result.filters));
@@ -2084,13 +2088,13 @@ void MainWindow::syncSessionToEditors() {
     viewport->setActiveLocalAdjustment(localPanel->activeIndex());
 }
 
-void MainWindow::syncSessionSpotsToEditors(bool fullResOnly) {
+void MainWindow::syncSessionSpotsToEditors(bool fullResOnly, bool preserveView) {
     {
         QSignalBlocker block(spotPanel);
         spotPanel->setSpots(session->params().spots);
     }
     viewport->setSpots(session->params().spots);
-    rebuildSpottedBuffers(fullResOnly);
+    rebuildSpottedBuffers(fullResOnly, preserveView);
 }
 
 void MainWindow::pushGlobalAdjustmentCommand(
