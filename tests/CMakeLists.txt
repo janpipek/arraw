@@ -62,6 +62,7 @@ add_executable(arraw_tests
     test_ImageGrouping.cpp
     test_ToneCurveWidget.cpp
     test_Histogram.cpp
+    test_ImageViewport.cpp
     test_PendingHistogram.cpp
     test_HistoryPanelLocal.cpp
 )

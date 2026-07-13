@@ -221,7 +221,7 @@ void AdjustmentCommand::undo() {
     session->setParams(before);
     mainWindow->syncSessionToEditors();
     if (lensTogglesDiffer(before, after))
-        mainWindow->rebuildSpottedBuffers(false);
+        mainWindow->rebuildSpottedBuffers(false, /*preserveView=*/true);
     if (demosaicDiffers(before, after))
         mainWindow->redecodeForDemosaicChange();
 }
@@ -230,7 +230,7 @@ void AdjustmentCommand::redo() {
     session->setParams(after);
     mainWindow->syncSessionToEditors();
     if (lensTogglesDiffer(before, after))
-        mainWindow->rebuildSpottedBuffers(false);
+        mainWindow->rebuildSpottedBuffers(false, /*preserveView=*/true);
     if (demosaicDiffers(before, after))
         mainWindow->redecodeForDemosaicChange();
 }
@@ -392,9 +392,10 @@ MainWindow::MainWindow(QWidget* parent)
         session->setParams(next);
         // Lens correction edits the decoded buffer (like spots); re-upload the
         // corrected preview when a toggle flips (full-res is recomputed lazily on
-        // export/zoom). Uniform refresh alone won't show it.
+        // export/zoom), keeping the user's zoom/pan — an in-place swap of the
+        // same image. Uniform refresh alone won't show it.
         if (lensTogglesDiffer(prev, next))
-            rebuildSpottedBuffers(false);
+            rebuildSpottedBuffers(false, /*preserveView=*/true);
         pushParamsToViewport();
     });
 

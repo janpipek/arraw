@@ -905,10 +905,13 @@ void ImageViewport::setImage(
     core.setSensorClipMask(RendererCore::Slot::FullRes, {});
     if (preserveView && hasImage) {
         // In-place swap of the same image: hold the user's zoom/pan instead of
-        // refitting. The full-res slot was just cleared, so a re-upload (via
-        // setFullResImage) follows when zoomed past the preview threshold.
+        // refitting. The full-res slot was just cleared, and a held zoom never
+        // crosses the threshold inside setZoom, so re-request full-res here
+        // when the preserved zoom needs it.
         setZoom(savedZoom);
         pan = savedPan;
+        if (zoom >= kFullResZoomThreshold)
+            emit fullResNeeded();
     } else {
         resetView();
     }
