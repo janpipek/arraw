@@ -66,7 +66,7 @@ add_executable(arraw_tests
     test_HistoryPanelLocal.cpp
 )
 
-target_link_libraries(arraw_tests PRIVATE arraw_core Catch2::Catch2WithMain)
+target_link_libraries(arraw_tests PRIVATE arraw_ui Catch2::Catch2WithMain)
 
 target_compile_definitions(arraw_tests PRIVATE
     ARRAW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
