@@ -227,6 +227,7 @@ set(ENGINE_SOURCES
     src/develop/DevelopPreset.cpp
     src/develop/Spot.cpp
     src/develop/BrushMask.cpp
+    src/develop/CurveLut.cpp
     src/pipeline/OkLab.cpp
     src/pipeline/RawProcessor.cpp
     src/pipeline/StandardImageLoader.cpp

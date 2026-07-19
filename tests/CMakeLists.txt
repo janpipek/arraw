@@ -15,6 +15,7 @@ add_executable(arraw_tests
     test_BasicTone.cpp
     test_OkLab.cpp
     test_ImagePipeline.cpp
+    test_CurveLut.cpp
     test_ViewportGeometry.cpp
     test_XmpSidecar.cpp
     test_ColorManagement.cpp

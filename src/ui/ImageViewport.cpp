@@ -1,10 +1,10 @@
 #include "ui/ImageViewport.h"
 #include "core/Orientation.h"
+#include "develop/CurveLut.h"
 #include "develop/GlobalAdjustment.h"
 #include "develop/LocalAdjustment.h"
 #include "develop/Spot.h"
 #include "develop/WhiteBalance.h"
-#include "pipeline/ImagePipeline.h"
 #include <algorithm>
 #include <cmath>
 #include <variant>
