@@ -29,16 +29,26 @@ test: build
     ctest --test-dir build --output-on-failure
 
 # Format all source files with clang-format
+[unix]
 format:
     find src tests \( -name '*.cpp' -o -name '*.h' \) -print | xargs {{clang_format}} -i
+
+[windows]
+format:
+    & {{clang_format}} -i @(Get-ChildItem src,tests -Recurse -File -Include *.cpp,*.h | ForEach-Object FullName)
 
 # Regenerate app icon PNGs and resources/arraw.ico from resources/icon.svg
 icons:
     uv run tools/render_icons.py
 
 # Check formatting without modifying files
+[unix]
 format-check:
     find src tests \( -name '*.cpp' -o -name '*.h' \) -print | xargs {{clang_format}} --dry-run --Werror
+
+[windows]
+format-check:
+    & {{clang_format}} --dry-run --Werror @(Get-ChildItem src,tests -Recurse -File -Include *.cpp,*.h | ForEach-Object FullName)
 
 # Run clazy static analysis
 clazy:

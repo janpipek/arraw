@@ -603,7 +603,7 @@ void RendererCore::fillUbuf(Ubuf& ub, const FrameParams& fp) const {
     ub.blacks = g.blacks;
     // White balance: blackbody-derived per-channel gain, computed CPU-side and
     // applied as a multiply in the shader so black stays black (docs/adr/0025).
-    const auto wb = whiteBalanceGain(a.temperature, a.tint);
+    const auto wb = WhiteBalance{a.temperature, a.tint}.gain();
     ub.wbGainR = wb[0];
     ub.wbGainG = wb[1];
     ub.wbGainB = wb[2];
@@ -700,8 +700,9 @@ void RendererCore::fillUbuf(Ubuf& ub, const FrameParams& fp) const {
         // Kelvin and reuses the global blackbody gain (docs/adr/0025); the three
         // gain channels ride in the spare laTone2.zw / laColor.w slots.
         constexpr float kLocalTempKelvinPerUnit = 30.0f; // ±100 → 2500..8500 K
-        const auto lwb
-            = whiteBalanceGain(5500.0f + la.temperature * kLocalTempKelvinPerUnit, la.tint);
+        const WhiteBalance localWb{
+            WhiteBalance::kNeutralKelvin + la.temperature * kLocalTempKelvinPerUnit, la.tint};
+        const auto lwb = localWb.gain();
         ub.laTone2[k + 2] = lwb[0];
         ub.laTone2[k + 3] = lwb[1];
         ub.laColor[k + 0] = d.saturation;
