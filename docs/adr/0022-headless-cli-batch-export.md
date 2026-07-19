@@ -1,5 +1,13 @@
 # Headless CLI batch export: windowless QRhi, the shader stays the one truth
 
+> **Amended by ADR 0049** (executable shape, v1 surface, render-staging
+> extraction): the delivery is an `arraw [command]` front-end (a console/GUI
+> executable pair on Windows), v1 `export` takes multiple inputs with the full
+> `ExportOptions` flag surface, and the export render staging had to be
+> extracted from `ImageViewport` — "the only new processing code" claim below
+> was optimistic. The architectural core of this ADR (one shader as the single
+> truth, the engine/UI split, `renderOffscreen` reuse) stands.
+
 A second executable (`arraw-cli`) renders RAW → export from the command line with
 no window: decode, restore the sidecar, run the develop pipeline, write the file.
 It reuses the *exact* code the GUI already ships — `RawProcessor::load`,
