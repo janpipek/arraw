@@ -237,6 +237,7 @@ set(ENGINE_SOURCES
     src/pipeline/LensfunSource.cpp
     src/render/ViewportGeometry.cpp
     src/render/RendererCore.cpp
+    src/render/OffscreenRender.cpp
     src/io/XmpSidecar.cpp
     src/io/PresetStore.cpp
     src/DevelopSession.cpp
