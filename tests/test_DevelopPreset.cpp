@@ -93,6 +93,19 @@ TEST_CASE("A Detail preset round-trips Colour Noise Reduction through JSON", "[p
     CHECK(loaded.values.sharpening == 30.0f);
 }
 
+TEST_CASE("A Tone preset round-trips Filmic Highlights through JSON", "[preset]") {
+    DevelopPreset p;
+    p.name = "Shouldered";
+    p.groups = groups({DevelopGroup::Tone});
+    p.values.filmicHighlights = 60.0f;
+
+    bool ok = false;
+    const DevelopPreset loaded = parseDevelopPreset(serializeDevelopPreset(p), &ok);
+
+    REQUIRE(ok);
+    CHECK(loaded.values.filmicHighlights == 60.0f);
+}
+
 TEST_CASE("Develop preset round-trips through JSON", "[preset]") {
     const DevelopPreset p = samplePreset();
 

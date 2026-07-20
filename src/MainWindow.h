@@ -162,6 +162,9 @@ private:
     void exportPaths(const QStringList& paths);
     void applyPreset(const DevelopPreset& preset);
     void rebuildPresetsMenu(); // re-list saved presets after save/delete
+    // Read-only breakdown of a preset's carried groups (Manage Presets' Details
+    // button, CONTEXT.md Manage Presets, docs/adr/0049).
+    void showPresetDetails(const DevelopPreset& preset, QWidget* parent);
     void applyCurrentUserMetadata(
         const UserMetadata& metadata, const UserMetadataPresence& changedFields = {});
     void setCurrentRating(int rating);

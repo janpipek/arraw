@@ -1,4 +1,5 @@
 #include "develop/DevelopGroup.h"
+#include "develop/DevelopParameter.h"
 #include "develop/GlobalAdjustment.h"
 
 #include <QObject>
@@ -130,4 +131,23 @@ GlobalAdjustment applyGroups(
     }
 
     return result;
+}
+
+GroupSelection groupsWithNonDefaultValues(const GlobalAdjustment& v) {
+    GroupSelection sel;
+    for (DevelopParameter p : changedParameters(GlobalAdjustment{}, v))
+        sel.set(static_cast<size_t>(developParameterGroup(p)));
+    return sel;
+}
+
+QStringList describeGroupNonDefaults(DevelopGroup g, const GlobalAdjustment& v) {
+    QStringList lines;
+    for (DevelopParameter p : changedParameters(GlobalAdjustment{}, v)) {
+        if (developParameterGroup(p) != g)
+            continue;
+        const QString label = developParameterLabel(p);
+        const QString value = developParameterValueText(p, v);
+        lines << (value.isEmpty() ? label : label + ' ' + value);
+    }
+    return lines;
 }

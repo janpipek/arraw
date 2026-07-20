@@ -5,6 +5,7 @@
 #include <bitset>
 
 #include <QString>
+#include <QStringList>
 
 // A Develop Group is one selectable unit in the Copy Settings / Develop Preset
 // checklist — the granularity at which develop settings travel between photos.
@@ -56,6 +57,20 @@ inline GroupSelection defaultCopySelection() {
 // copy/paste and preset apply (docs/adr/0023, [[spot-for-algorithms]]).
 GlobalAdjustment applyGroups(
     const GlobalAdjustment& target, const GlobalAdjustment& source, GroupSelection selection);
+
+// Every group whose fields in `v` differ from GlobalAdjustment{}'s defaults —
+// the Save Preset checklist's initial selection (docs/adr/0049), independent of
+// Copy/Paste's sticky lastCopySelection.
+GroupSelection groupsWithNonDefaultValues(const GlobalAdjustment& v);
+
+// Human-readable lines describing the fields `g` carries in `v` that differ
+// from default — one line per changed DevelopParameter in that group ("Label"
+// or "Label value", matching developChangeLabel's convention), reusing
+// DevelopParameter as the single source of truth for what changed and how to
+// describe it. Empty when the group is entirely at default — the Manage
+// Presets details view (CONTEXT.md) renders that as "resets to defaults" since
+// applying the group always replaces every field.
+QStringList describeGroupNonDefaults(DevelopGroup g, const GlobalAdjustment& v);
 
 // Stable machine key for a group — used as the JSON object key (docs/adr/0023)
 // and as the checklist checkbox objectName. Never localised; never reordered.
