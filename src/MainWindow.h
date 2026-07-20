@@ -68,7 +68,7 @@ public:
     // Mirror the canonical session params into editor widgets and the viewport.
     // Public so undo commands can update views after mutating the session.
     void syncSessionToEditors();
-    void syncSessionSpotsToEditors(bool fullResOnly = true);
+    void syncSessionSpotsToEditors(bool fullResOnly = true, bool preserveView = false);
 
     // Re-decode the current image with the session's current demosaic algorithm,
     // swapping the decoded buffers in place while keeping the develop edit on
@@ -162,6 +162,9 @@ private:
     void exportPaths(const QStringList& paths);
     void applyPreset(const DevelopPreset& preset);
     void rebuildPresetsMenu(); // re-list saved presets after save/delete
+    // Read-only breakdown of a preset's carried groups (Manage Presets' Details
+    // button, CONTEXT.md Manage Presets, docs/adr/0049).
+    void showPresetDetails(const DevelopPreset& preset, QWidget* parent);
     void applyCurrentUserMetadata(
         const UserMetadata& metadata, const UserMetadataPresence& changedFields = {});
     void setCurrentRating(int rating);
@@ -229,7 +232,6 @@ private:
     QActionGroup* toolGroup;
     QAction* cropAction;
     QAction* straightenAction;
-    QAction* wbAction;
     QAction* masksTabShortcut;
     QAction* spotsTabShortcut;
     QTabWidget* rightTabs = nullptr; // Adjustments / Masks / Spots / Info
@@ -250,6 +252,8 @@ private:
     QAction* sensorClipAction;     // View → Show Sensor Clipping
     QAction* fullScreenAction = nullptr;
     QAction* lightsOutAction = nullptr;
+    QAction* toggleHistoryAction = nullptr;     // View → History Panel
+    QAction* toggleAdjustmentsAction = nullptr; // View → Adjustments Panel
     std::optional<ChromeHider> chromeHider;
     bool wasMaximized = false;
 
@@ -266,6 +270,10 @@ private:
     // Params of the image currently being loaded, resolved up front from its
     // sidecar and applied atomically with the first paint of that image.
     GlobalAdjustment pendingPreviewParams;
+    // True after the current async load has shown an embedded preview. The final
+    // decoded RAW swap should preserve the user's view in that case; cache hits
+    // and loads without an interim preview still fit normally.
+    bool pendingPreviewDisplayed = false;
 
     // Session decode cache: skips the multi-second demosaic when re-opening a
     // recently viewed image. ~1.5 GiB of decoded buffers, LRU, current pinned.

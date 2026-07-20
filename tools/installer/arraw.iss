@@ -43,6 +43,7 @@ ChangesEnvironment=yes
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
 Name: "assocraw"; Description: "Associate RAW files (.cr2, .nef, .arw, .dng, ...) with arraw"; GroupDescription: "File associations:"; Flags: unchecked
+Name: "assocfolders"; Description: "Add an Explorer folder context menu for arraw"; GroupDescription: "File associations:"; Flags: unchecked
 Name: "addtopath"; Description: "Add arraw to PATH for the current user (enables the 'arraw' command)"; GroupDescription: "Command line:"
 
 [Files]
@@ -60,6 +61,11 @@ Filename: "{app}\{#AppExe}"; Description: "Launch arraw"; Flags: nowait postinst
 Root: HKCU; Subkey: "Software\Classes\arraw.RawImage"; ValueType: string; ValueName: ""; ValueData: "arraw RAW image"; Flags: uninsdeletekey; Tasks: assocraw
 Root: HKCU; Subkey: "Software\Classes\arraw.RawImage\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\{#AppExe},0"; Tasks: assocraw
 Root: HKCU; Subkey: "Software\Classes\arraw.RawImage\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: assocraw
+; Add a non-default Explorer verb for folders. This passes the selected directory
+; path to arraw without replacing Explorer as the normal double-click opener.
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\arraw"; ValueType: string; ValueName: "MUIVerb"; ValueData: "Open with arraw"; Flags: uninsdeletekey; Tasks: assocfolders
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\arraw"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#AppExe},0"; Tasks: assocfolders
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\arraw\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: assocfolders
 ; Map each RAW extension to the ProgID. uninsdeletevalue removes our value on uninstall.
 Root: HKCU; Subkey: "Software\Classes\.cr2"; ValueType: string; ValueName: ""; ValueData: "arraw.RawImage"; Flags: uninsdeletevalue; Tasks: assocraw
 Root: HKCU; Subkey: "Software\Classes\.cr3"; ValueType: string; ValueName: ""; ValueData: "arraw.RawImage"; Flags: uninsdeletevalue; Tasks: assocraw

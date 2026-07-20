@@ -8,6 +8,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <QRectF>
+#include <QStringList>
 
 // A GlobalAdjustment with a distinct non-default value in *every* global field,
 // so a copy that misses a field is detectable. localAdjustments is left empty
@@ -70,6 +71,87 @@ static GroupSelection only(DevelopGroup g) {
     GroupSelection s;
     s.set(static_cast<size_t>(g));
     return s;
+}
+
+TEST_CASE(
+    "groupsWithNonDefaultValues is empty for an all-default GlobalAdjustment", "[developgroup]") {
+    CHECK(groupsWithNonDefaultValues(GlobalAdjustment{}).none());
+}
+
+TEST_CASE(
+    "groupsWithNonDefaultValues flags exactly Tone when only a Tone field changed",
+    "[developgroup]") {
+    GlobalAdjustment v;
+    v.contrast = 25.0f;
+
+    const GroupSelection sel = groupsWithNonDefaultValues(v);
+    CHECK(sel == only(DevelopGroup::Tone));
+}
+
+TEST_CASE("groupsWithNonDefaultValues flags Hsl when one band moved off zero", "[developgroup]") {
+    GlobalAdjustment v;
+    v.hslHue[0] = 15.0f; // Red hue band only
+
+    CHECK(groupsWithNonDefaultValues(v) == only(DevelopGroup::Hsl));
+}
+
+TEST_CASE(
+    "groupsWithNonDefaultValues flags ToneCurve when one curve is non-identity", "[developgroup]") {
+    GlobalAdjustment v;
+    v.curveLuma.points = {{0.0, 0.0}, {0.5, 0.6}, {1.0, 1.0}};
+
+    CHECK(groupsWithNonDefaultValues(v) == only(DevelopGroup::ToneCurve));
+}
+
+TEST_CASE(
+    "describeGroupNonDefaults reports a changed scalar field and omits the untouched one",
+    "[developgroup]") {
+    GlobalAdjustment v;
+    v.temperature = 6500.0f; // tint left at default
+
+    const QStringList lines = describeGroupNonDefaults(DevelopGroup::WhiteBalance, v);
+    REQUIRE(lines.size() == 1);
+    CHECK(lines[0].contains("Temperature"));
+    CHECK_FALSE(lines[0].contains("Tint"));
+}
+
+TEST_CASE("describeGroupNonDefaults lists only the non-zero HSL bands", "[developgroup]") {
+    GlobalAdjustment v;
+    v.hslHue[0] = 15.0f;  // Red Hue only
+    v.hslSat[5] = -20.0f; // Blue Saturation only
+
+    const QStringList lines = describeGroupNonDefaults(DevelopGroup::Hsl, v);
+    REQUIRE(lines.size() == 2);
+    CHECK(lines[0].contains("Red"));
+    CHECK(lines[1].contains("Blue"));
+    for (const QString& line : lines)
+        CHECK_FALSE(line.contains("Orange"));
+}
+
+TEST_CASE("describeGroupNonDefaults names only the modified curve", "[developgroup]") {
+    GlobalAdjustment v;
+    v.curveLuma.points = {{0.0, 0.0}, {0.5, 0.6}, {1.0, 1.0}};
+
+    const QStringList lines = describeGroupNonDefaults(DevelopGroup::ToneCurve, v);
+    REQUIRE(lines.size() == 1);
+    CHECK(lines[0].contains("Luma"));
+    CHECK_FALSE(lines[0].contains("Red"));
+}
+
+TEST_CASE(
+    "describeGroupNonDefaults lists only the enabled Lens Corrections toggles", "[developgroup]") {
+    GlobalAdjustment v;
+    v.lensCorrectDistortion = true;
+    // Vignetting and CA left off (default)
+
+    const QStringList lines = describeGroupNonDefaults(DevelopGroup::LensCorrections, v);
+    REQUIRE(lines.size() == 1);
+    CHECK(lines[0].contains("Distortion"));
+}
+
+TEST_CASE("describeGroupNonDefaults is empty for a group entirely at default", "[developgroup]") {
+    const GlobalAdjustment v; // fully default
+    CHECK(describeGroupNonDefaults(DevelopGroup::Effects, v).isEmpty());
 }
 
 TEST_CASE("the default copy selection checks every group except Geometry", "[developgroup]") {

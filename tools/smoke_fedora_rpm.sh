@@ -38,5 +38,8 @@ fi
             /usr/share/applications/io.github.janpipek.arraw.desktop
         grep -q "image/webp" \
             /usr/share/applications/io.github.janpipek.arraw.desktop
+        grep -q "inode/directory" \
+            /usr/share/applications/io.github.janpipek.arraw.desktop
         gio mime image/x-canon-cr3 | grep -q io.github.janpipek.arraw.desktop
+        gio mime inode/directory | grep -q io.github.janpipek.arraw.desktop
     ' bash "/dist/$rpm_name"

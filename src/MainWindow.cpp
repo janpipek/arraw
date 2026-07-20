@@ -221,7 +221,7 @@ void AdjustmentCommand::undo() {
     session->setParams(before);
     mainWindow->syncSessionToEditors();
     if (lensTogglesDiffer(before, after))
-        mainWindow->rebuildSpottedBuffers(false);
+        mainWindow->rebuildSpottedBuffers(false, /*preserveView=*/true);
     if (demosaicDiffers(before, after))
         mainWindow->redecodeForDemosaicChange();
 }
@@ -230,7 +230,7 @@ void AdjustmentCommand::redo() {
     session->setParams(after);
     mainWindow->syncSessionToEditors();
     if (lensTogglesDiffer(before, after))
-        mainWindow->rebuildSpottedBuffers(false);
+        mainWindow->rebuildSpottedBuffers(false, /*preserveView=*/true);
     if (demosaicDiffers(before, after))
         mainWindow->redecodeForDemosaicChange();
 }
@@ -377,6 +377,11 @@ MainWindow::MainWindow(QWidget* parent)
         syncToolActions();
     });
 
+    connect(adjPanel, &AdjustmentPanel::wbPickerToggled, this, [this](bool checked) {
+        using T = ImageViewport::ActiveTool;
+        viewport->setActiveTool(checked ? T::WhiteBalance : T::None);
+    });
+
     connect(
         adjPanel,
         &AdjustmentPanel::adjustmentCommitted,
@@ -392,9 +397,10 @@ MainWindow::MainWindow(QWidget* parent)
         session->setParams(next);
         // Lens correction edits the decoded buffer (like spots); re-upload the
         // corrected preview when a toggle flips (full-res is recomputed lazily on
-        // export/zoom). Uniform refresh alone won't show it.
+        // export/zoom), keeping the user's zoom/pan — an in-place swap of the
+        // same image. Uniform refresh alone won't show it.
         if (lensTogglesDiffer(prev, next))
-            rebuildSpottedBuffers(false);
+            rebuildSpottedBuffers(false, /*preserveView=*/true);
         pushParamsToViewport();
     });
 
@@ -527,6 +533,8 @@ MainWindow::MainWindow(QWidget* parent)
         adjustmentsPane->collapse();
     else
         adjustmentsPane->expand();
+    toggleHistoryAction->setChecked(!historyPane->isCollapsed());
+    toggleAdjustmentsAction->setChecked(!adjustmentsPane->isCollapsed());
 }
 
 void MainWindow::closeEvent(QCloseEvent* e) {
@@ -638,11 +646,18 @@ void MainWindow::setupMenus() {
 
     auto* view = menuBar()->addMenu("&View");
     view->addAction(filmStripDock->toggleViewAction());
-    auto* toggleHistory = view->addAction("History Panel", this, [this] { historyPane->toggle(); });
-    toggleHistory->setShortcut(Qt::Key_F7);
-    auto* toggleAdjustments = view->addAction("Adjustments Panel", this, [this] {
-        adjustmentsPane->toggle();
+    auto* toggleHistory = toggleHistoryAction = view->addAction("History Panel", this, [this] {
+        historyPane->toggle();
+        toggleHistoryAction->setChecked(!historyPane->isCollapsed());
     });
+    toggleHistory->setCheckable(true);
+    toggleHistory->setShortcut(Qt::Key_F7);
+    auto* toggleAdjustments = toggleAdjustmentsAction
+        = view->addAction("Adjustments Panel", this, [this] {
+              adjustmentsPane->toggle();
+              toggleAdjustmentsAction->setChecked(!adjustmentsPane->isCollapsed());
+          });
+    toggleAdjustments->setCheckable(true);
     toggleAdjustments->setShortcut(Qt::Key_F8);
     view->addSeparator();
     // Zoom (docs/superpowers/specs/2026-07-01-zoom-menu-design.md). Presets
@@ -857,7 +872,6 @@ void MainWindow::setupToolbar() {
     };
     cropAction = addTool("Crop", Qt::Key_C);
     straightenAction = addTool("Straighten", {});
-    wbAction = addTool("White Bal.", {});
 
     // Masks and Spots are selected through the adjustment tabs. These actions
     // provide window-scoped shortcuts without adding duplicate toolbar buttons.
@@ -899,7 +913,7 @@ void MainWindow::setupToolbar() {
         using T = ImageViewport::ActiveTool;
         T t = T::None;
         if (a->isChecked())
-            t = a == cropAction ? T::Crop : a == straightenAction ? T::Straighten : T::WhiteBalance;
+            t = a == cropAction ? T::Crop : T::Straighten;
         viewport->setActiveTool(t);
     });
 
@@ -977,11 +991,11 @@ void MainWindow::applyAspectLock() {
 void MainWindow::syncToolActions() {
     const ImageViewport::ActiveTool t = viewport->activeTool();
     // setChecked doesn't emit QActionGroup::triggered, but block toggled too.
-    const QSignalBlocker b1(cropAction), b2(straightenAction), b3(wbAction);
+    const QSignalBlocker b1(cropAction), b2(straightenAction);
     const bool cropOn = t == ImageViewport::ActiveTool::Crop;
     cropAction->setChecked(cropOn);
     straightenAction->setChecked(t == ImageViewport::ActiveTool::Straighten);
-    wbAction->setChecked(t == ImageViewport::ActiveTool::WhiteBalance);
+    adjPanel->setWbPickerChecked(t == ImageViewport::ActiveTool::WhiteBalance);
 
     // The aspect lock only applies while cropping. Reflect whatever the viewport
     // restored from the persisted crop: check the matching preset, or uncheck all
@@ -1020,7 +1034,7 @@ void MainWindow::setToolsEnabled(bool on) {
     toolsEnabled = on;
     cropAction->setEnabled(on);
     straightenAction->setEnabled(on);
-    wbAction->setEnabled(on);
+    adjPanel->setWbPickerEnabled(on);
     masksTabShortcut->setEnabled(on);
     spotsTabShortcut->setEnabled(on);
     saveAction->setEnabled(on);
@@ -1233,8 +1247,14 @@ void MainWindow::setupDocks() {
     addToolBar(Qt::LeftToolBarArea, historyStrip);
 
     historyPane = std::make_unique<CollapsiblePane>(historyDock, historyStrip);
-    connect(historyCollapseBtn, &QToolButton::clicked, this, [this] { historyPane->collapse(); });
-    connect(historyExpandAction, &QAction::triggered, this, [this] { historyPane->expand(); });
+    connect(historyCollapseBtn, &QToolButton::clicked, this, [this] {
+        historyPane->collapse();
+        toggleHistoryAction->setChecked(false);
+    });
+    connect(historyExpandAction, &QAction::triggered, this, [this] {
+        historyPane->expand();
+        toggleHistoryAction->setChecked(true);
+    });
 
     // Adjustments + metadata (right). Collapses to a thin edge strip (ADR 0012).
     auto* rightDock = adjustmentsDock = new QDockWidget("Adjustments", this);
@@ -1313,8 +1333,14 @@ void MainWindow::setupDocks() {
     // expanded (dock shown, strip hidden). A restored collapsed state is synced
     // back onto it after restoreState() in the constructor.
     adjustmentsPane = std::make_unique<CollapsiblePane>(rightDock, strip);
-    connect(collapseBtn, &QToolButton::clicked, this, [this] { adjustmentsPane->collapse(); });
-    connect(expandAction, &QAction::triggered, this, [this] { adjustmentsPane->expand(); });
+    connect(collapseBtn, &QToolButton::clicked, this, [this] {
+        adjustmentsPane->collapse();
+        toggleAdjustmentsAction->setChecked(false);
+    });
+    connect(expandAction, &QAction::triggered, this, [this] {
+        adjustmentsPane->expand();
+        toggleAdjustmentsAction->setChecked(true);
+    });
     // adjPanel → viewport paramsChanged wired in constructor (after both are created)
 }
 
@@ -1456,6 +1482,7 @@ void MainWindow::loadImage(const QString& path) {
     // its own edits, not the previous image's. Crop is a placeholder (full frame)
     // until the demosaic yields the real DefaultCrop for never-edited RAWs.
     pendingPreviewParams = resolvePendingPreviewParams(path);
+    pendingPreviewDisplayed = false;
 
     // The demosaic algorithm parameterises the decode and its cache key, so it is
     // read from the up-front resolved params (docs/adr/0036).
@@ -1484,6 +1511,7 @@ void MainWindow::loadImage(const QString& path) {
                         // New image's params, before the embedded-preview paint.
                         applyPendingPreviewParams();
                         viewport->setImage(buf); // embedded preview (camera look, base off)
+                        pendingPreviewDisplayed = true;
                     }
                 },
                 Qt::QueuedConnection);
@@ -1613,8 +1641,10 @@ void MainWindow::applyLoadResult(const QString& path, const LoadResult& result) 
         resolved.metadataPresence,
         resolved.snapshots);
     session->setBaseLook(true);
+    const bool preservePreviewView = pendingPreviewDisplayed && session->path() == path;
+    pendingPreviewDisplayed = false;
     syncSessionToEditors();
-    syncSessionSpotsToEditors(true);
+    syncSessionSpotsToEditors(true, preservePreviewView);
     // Demosaic selection applies only to Bayer sensors; disable it (with an
     // explanation) for X-Trans/Foveon/standard images (docs/adr/0036).
     adjPanel->setDemosaicAvailable(sensorSupportsDemosaicSelection(result.filters));
@@ -1967,13 +1997,23 @@ void MainWindow::saveCurrentAsPreset() {
         return;
     viewport->commitActiveTool();
 
-    GroupChecklistDialog dlg(tr("Save Preset"), allGroups(), lastCopySelection, this);
+    // Pre-checks only what this photo actually edited, independent of Copy/
+    // Paste's sticky lastCopySelection (docs/adr/0049) — a preset saved from an
+    // untouched photo no longer silently carries nine groups of resets.
+    const GlobalAdjustment params = currentParams();
+    GroupChecklistDialog
+        dlg(tr("Save Preset"), allGroups(), groupsWithNonDefaultValues(params), this);
     if (dlg.exec() != QDialog::Accepted)
         return;
     const GroupSelection chosen = dlg.selectedGroups();
-    if (chosen.none())
+    if (chosen.none()) {
+        // Reachable in normal use now that the checklist starts from what this
+        // photo actually edited rather than "everything but Geometry" — an
+        // untouched photo can open with nothing pre-checked.
+        QMessageBox::information(
+            this, tr("Save Preset"), tr("Nothing selected — no preset was saved."));
         return;
-    lastCopySelection = chosen;
+    }
 
     bool ok = false;
     const QString name
@@ -1983,10 +2023,18 @@ void MainWindow::saveCurrentAsPreset() {
     if (!ok || name.isEmpty())
         return;
 
+    if (presetStore.exists(name)
+        && QMessageBox::question(
+               this,
+               tr("Save Preset"),
+               tr("A preset named \"%1\" already exists. Replace it?").arg(name))
+               != QMessageBox::Yes)
+        return;
+
     DevelopPreset preset;
     preset.name = name;
     preset.groups = chosen;
-    preset.values = currentParams();
+    preset.values = params;
     if (!presetStore.save(preset)) {
         QMessageBox::warning(this, tr("Save Preset"), tr("Could not write the preset file."));
         return;
@@ -2013,13 +2061,61 @@ void MainWindow::managePresets() {
     layout->addWidget(list);
 
     auto* buttons = new QDialogButtonBox(&dlg);
+    auto* renameBtn = buttons->addButton(tr("Rename"), QDialogButtonBox::ActionRole);
+    auto* detailsBtn = buttons->addButton(tr("Details..."), QDialogButtonBox::ActionRole);
     auto* deleteBtn = buttons->addButton(tr("Delete"), QDialogButtonBox::DestructiveRole);
     buttons->addButton(QDialogButtonBox::Close);
     layout->addWidget(buttons);
 
-    connect(deleteBtn, &QPushButton::clicked, &dlg, [this, list] {
+    connect(renameBtn, &QPushButton::clicked, &dlg, [this, list, &dlg] {
         QListWidgetItem* item = list->currentItem();
         if (!item)
+            return;
+        const QString oldName = item->text();
+        bool ok = false;
+        const QString newName
+            = QInputDialog::getText(
+                  &dlg, tr("Rename Preset"), tr("Preset name:"), QLineEdit::Normal, oldName, &ok)
+                  .trimmed();
+        if (!ok || newName.isEmpty() || newName == oldName)
+            return;
+
+        if (presetStore.exists(newName, oldName)
+            && QMessageBox::question(
+                   &dlg,
+                   tr("Rename Preset"),
+                   tr("A preset named \"%1\" already exists. Replace it?").arg(newName))
+                   != QMessageBox::Yes)
+            return;
+
+        if (!presetStore.rename(oldName, newName)) {
+            QMessageBox::warning(&dlg, tr("Rename Preset"), tr("Could not rename the preset."));
+            return;
+        }
+        item->setText(newName);
+    });
+
+    connect(detailsBtn, &QPushButton::clicked, &dlg, [this, list, &dlg] {
+        QListWidgetItem* item = list->currentItem();
+        if (!item)
+            return;
+        for (const DevelopPreset& p : presetStore.loadAll()) {
+            if (p.name == item->text()) {
+                showPresetDetails(p, &dlg);
+                break;
+            }
+        }
+    });
+
+    connect(deleteBtn, &QPushButton::clicked, &dlg, [this, list, &dlg] {
+        QListWidgetItem* item = list->currentItem();
+        if (!item)
+            return;
+        if (QMessageBox::question(
+                &dlg,
+                tr("Delete Preset"),
+                tr("Delete preset \"%1\"? This cannot be undone.").arg(item->text()))
+            != QMessageBox::Yes)
             return;
         presetStore.remove(item->text());
         delete list->takeItem(list->row(item));
@@ -2028,6 +2124,43 @@ void MainWindow::managePresets() {
 
     dlg.exec();
     rebuildPresetsMenu();
+}
+
+void MainWindow::showPresetDetails(const DevelopPreset& preset, QWidget* parent) {
+    QDialog details(parent);
+    details.setWindowTitle(tr("Preset Details: %1").arg(preset.name));
+    details.resize(360, 420);
+    auto* layout = new QVBoxLayout(&details);
+
+    QStringList text;
+    for (int i = 0; i < kDevelopGroupCount; ++i) {
+        const auto g = static_cast<DevelopGroup>(i);
+        if (!hasGroup(preset.groups, g))
+            continue;
+        text << QString("<b>%1</b>").arg(developGroupLabel(g).toHtmlEscaped());
+        const QStringList lines = describeGroupNonDefaults(g, preset.values);
+        if (lines.isEmpty())
+            text << QString("&nbsp;&nbsp;%1").arg(tr("(resets to defaults)"));
+        else
+            for (const QString& line : lines)
+                text << QString("&nbsp;&nbsp;%1").arg(line.toHtmlEscaped());
+    }
+
+    auto* label = new QLabel(text.join("<br>"));
+    label->setTextFormat(Qt::RichText);
+    label->setWordWrap(true);
+
+    auto* scroll = new QScrollArea(&details);
+    scroll->setWidget(label);
+    scroll->setWidgetResizable(true);
+    layout->addWidget(scroll);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &details);
+    connect(buttons, &QDialogButtonBox::rejected, &details, &QDialog::reject);
+    connect(buttons, &QDialogButtonBox::accepted, &details, &QDialog::accept);
+    layout->addWidget(buttons);
+
+    details.exec();
 }
 
 void MainWindow::rebuildPresetsMenu() {
@@ -2083,13 +2216,13 @@ void MainWindow::syncSessionToEditors() {
     viewport->setActiveLocalAdjustment(localPanel->activeIndex());
 }
 
-void MainWindow::syncSessionSpotsToEditors(bool fullResOnly) {
+void MainWindow::syncSessionSpotsToEditors(bool fullResOnly, bool preserveView) {
     {
         QSignalBlocker block(spotPanel);
         spotPanel->setSpots(session->params().spots);
     }
     viewport->setSpots(session->params().spots);
-    rebuildSpottedBuffers(fullResOnly);
+    rebuildSpottedBuffers(fullResOnly, preserveView);
 }
 
 void MainWindow::pushGlobalAdjustmentCommand(

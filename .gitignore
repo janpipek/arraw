@@ -13,6 +13,7 @@ Makefile
 *.o
 *.a
 arraw
+__pycache__/
 
 .claude
 .antigravitycli

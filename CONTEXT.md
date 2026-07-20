@@ -361,9 +361,24 @@ A saved, named bundle of selected [[Develop Group]]s, applied to any photo in
 one click (no apply-time checklist — narrowing happens only at save). The file
 is **partial**: it stores exactly the groups chosen at save, so its contents are
 the groups it sets and nothing else. [[Local Adjustment]]s are never included.
-Stored as one arraw-native JSON file per preset in the app data directory — not
-a develop sidecar, not Lightroom-compatible.
+The **name is the preset's sole identity** — at most one preset per name, judged
+case-insensitively so every platform agrees; saving or renaming onto a taken
+name replaces that preset only after the user confirms. Stored as one
+arraw-native JSON file per preset in the app data directory — not a develop
+sidecar, not Lightroom-compatible.
 _Avoid_: profile (that is a colour or camera profile), template, style
+
+**Manage Presets**:
+The dialog listing every saved [[Develop Preset]] by name, offering Rename,
+Delete, and Details on the selected preset. Delete asks for confirmation
+(destructive and irreversible — it removes the backing file). Details opens a
+read-only breakdown of the preset's carried [[Develop Group]]s, listing only
+the fields that differ from default within each — a carried group with nothing
+non-default still appears, labelled as resetting to defaults, since applying a
+group always replaces every field in it. Rename reuses the Save Preset name
+prompt, including its confirm-to-overwrite behaviour when the new name
+collides with another preset.
+_Avoid_: preset browser, preset library
 
 **History**:
 The session-only, linear list of every develop edit step taken since the open

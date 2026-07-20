@@ -4,8 +4,9 @@ We ship a Windows installer as a **per-user Inno Setup `setup.exe`**, compiled b
 `ISCC` over the **same staged folder** `tools/package_windows.py` already assembles
 for the portable ZIP. The install is **per-user** (`PrivilegesRequired=lowest`) into
 `{localappdata}\Programs\arraw` — **no UAC, no admin** — with a Start Menu shortcut,
-an optional desktop shortcut, a standard uninstaller, and **opt-in RAW file
-associations**. It bundles the **MSVC/OpenMP runtime DLLs app-local**, and ships
+an optional desktop shortcut, a standard uninstaller, **opt-in RAW file
+associations**, and an **opt-in Explorer folder context menu**. It bundles the
+**MSVC/OpenMP runtime DLLs app-local**, and ships
 **unsigned** for v0.x. This round is the **local artifact only**; CI integration and
 code signing are deliberately deferred.
 
@@ -90,6 +91,9 @@ in `distribution.md`.
   (`cr2 cr3 nef arw dng raf orf rw2 pef srw`), behind an **unchecked** `Tasks`
   checkbox the user opts into. No admin; fully removed on uninstall. Standard image
   formats (jpg/png/tiff/…) are intentionally *not* claimed.
+- **Folder registration** adds an unchecked per-user Explorer context-menu verb at
+  `HKCU\Software\Classes\Directory\shell\arraw`, passing the selected directory to
+  the same executable. It does not replace Explorer as the default folder opener.
 - **Verification is a documented manual checklist** (packaging has no unit tests):
   build → install on a clean profile → launch → open a RAW → confirm the app-local
   DLLs resolve (no "VCRUNTIME140 missing") → confirm the Start Menu shortcut and the

@@ -894,10 +894,13 @@ void ImageViewport::setImage(
     core.setSensorClipMask(RendererCore::Slot::FullRes, {});
     if (preserveView && hasImage) {
         // In-place swap of the same image: hold the user's zoom/pan instead of
-        // refitting. The full-res slot was just cleared, so a re-upload (via
-        // setFullResImage) follows when zoomed past the preview threshold.
+        // refitting. The full-res slot was just cleared, and a held zoom never
+        // crosses the threshold inside setZoom, so re-request full-res here
+        // when the preserved zoom needs it.
         setZoom(savedZoom);
         pan = savedPan;
+        if (zoom >= kFullResZoomThreshold)
+            emit fullResNeeded();
     } else {
         resetView();
     }
@@ -1079,9 +1082,9 @@ void ImageViewport::drawStraightenLine(QPainter& p) const {
 // readback rationale as the histograms — docs/adr/0004) and invert the
 // blackbody white-balance gain (docs/adr/0025) to the temperature/tint that
 // neutralise it.
-bool ImageViewport::sampleWhiteBalance(QPointF pos, float& kelvin, float& tintOut) {
+std::optional<WhiteBalance> ImageViewport::sampleWhiteBalance(QPointF pos) {
     if (!hasImage || !core.ready())
-        return false;
+        return std::nullopt;
     ensureCurveLut();
 
     // Render the current on-screen framing with the pre-WB tap at 1:1 viewport
@@ -1098,7 +1101,7 @@ bool ImageViewport::sampleWhiteBalance(QPointF pos, float& kelvin, float& tintOu
 
     const QImage tap = core.renderOffscreen(activeSlot(), fp, size(), QRhiTexture::RGBA32F);
     if (tap.isNull())
-        return false;
+        return std::nullopt;
 
     // Average a small neighbourhood for noise robustness.
     const int x0 = int(pos.x()), y0 = int(pos.y()), rad = 2;
@@ -1118,15 +1121,14 @@ bool ImageViewport::sampleWhiteBalance(QPointF pos, float& kelvin, float& tintOu
         }
     }
     if (n == 0)
-        return false;
+        return std::nullopt;
     const double r = sr / n, g = sg / n, b = sb / n;
     if (r + g + b < 1e-4) // clicked off the image (black) — ignore
-        return false;
+        return std::nullopt;
 
     // Invert the same blackbody gain the render uses (docs/adr/0025): find the
     // kelvin/tint whose gain would neutralise this sampled pre-WB pixel.
-    whiteBalanceFromNeutral(float(r), float(g), float(b), kelvin, tintOut);
-    return true;
+    return WhiteBalance::fromNeutral(r, g, b);
 }
 
 void ImageViewport::setOriginalImageSize(int width, int height) {
@@ -1293,10 +1295,10 @@ void ImageViewport::mousePressEvent(QMouseEvent* e) {
         return;
     }
     if (tool == ActiveTool::WhiteBalance && e->button() == Qt::LeftButton) {
-        float kelvin, tintOut;
-        if (sampleWhiteBalance(e->position(), kelvin, tintOut))
-            emit whiteBalanceCommitted(kelvin, tintOut);
-        return; // tool stays active for further picks
+        if (const auto wb = sampleWhiteBalance(e->position()))
+            emit whiteBalanceCommitted(wb->kelvin, wb->tint);
+        setActiveTool(ActiveTool::None); // one-shot: pick once, then deactivate
+        return;
     }
     if (localMaskMode() && e->button() == Qt::LeftButton) {
         if (activeBrushMask()) {

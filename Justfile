@@ -19,8 +19,19 @@ configure:
 build: configure
     ninja -C build
 
+# Bundle the lensfun DB beside build/arraw.exe (Windows has no system lensfun
+# database path, see LensfunSource.cpp); vcpkg doesn't install it either, so
+# pull it from the vcpkg buildtrees. No-op on unix (system lensfun-data covers it).
+[windows]
+lensfun-db: configure
+    uv run tools/dev_lensfun_db.py
+
+[unix]
+lensfun-db:
+    @true
+
 # Build and run the application (skips the test target)
-run: configure
+run: configure lensfun-db
     ninja -C build arraw
     ./build/arraw
 
@@ -29,16 +40,26 @@ test: build
     ctest --test-dir build --output-on-failure
 
 # Format all source files with clang-format
+[unix]
 format:
     find src tests \( -name '*.cpp' -o -name '*.h' \) -print | xargs {{clang_format}} -i
+
+[windows]
+format:
+    & {{clang_format}} -i @(Get-ChildItem src,tests -Recurse -File -Include *.cpp,*.h | ForEach-Object FullName)
 
 # Regenerate app icon PNGs and resources/arraw.ico from resources/icon.svg
 icons:
     uv run tools/render_icons.py
 
 # Check formatting without modifying files
+[unix]
 format-check:
     find src tests \( -name '*.cpp' -o -name '*.h' \) -print | xargs {{clang_format}} --dry-run --Werror
+
+[windows]
+format-check:
+    & {{clang_format}} --dry-run --Werror @(Get-ChildItem src,tests -Recurse -File -Include *.cpp,*.h | ForEach-Object FullName)
 
 # Run clazy static analysis
 clazy:
@@ -60,7 +81,7 @@ rebuild:
     ninja -C build
 
 # Rebuild and run the application (skips the test target)
-rerun:
+rerun: lensfun-db
     ninja -C build arraw
     ./build/arraw
 
