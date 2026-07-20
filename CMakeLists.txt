@@ -210,17 +210,49 @@ else()
     message(STATUS "exiv2 NOT found — exports will omit embedded metadata")
 endif()
 
-# Everything except main.cpp lives in a static library so test executables
-# can link the real code (see DESIGN.md "Testing Strategy").
-set(CORE_SOURCES
+# Engine: everything the headless CLI and the tests need, and nothing that
+# needs QtWidgets (docs/adr/0022, 0049). The UI layer stacks on top.
+set(ENGINE_SOURCES
+    src/core/ImageMetadata.cpp
+    src/core/CropGeometry.cpp
+    src/core/Orientation.cpp
+    src/core/NoiseReduction.cpp
     src/develop/BasicTone.cpp
     src/develop/WhiteBalance.cpp
+    src/develop/LocalAdjustment.cpp
+    src/develop/FieldSpec.cpp
+    src/develop/DevelopGroup.cpp
+    src/develop/DevelopParameter.cpp
+    src/develop/DemosaicAlgorithm.cpp
+    src/develop/DevelopPreset.cpp
+    src/develop/Spot.cpp
+    src/develop/BrushMask.cpp
+    src/develop/CurveLut.cpp
     src/pipeline/OkLab.cpp
-    src/ui/Theme.cpp
-    src/MainWindow.cpp
-    src/ui/ImageViewport.cpp
+    src/pipeline/RawProcessor.cpp
+    src/pipeline/StandardImageLoader.cpp
+    src/pipeline/ImagePipeline.cpp
+    src/pipeline/ColorManagement.cpp
+    src/pipeline/LensCorrection.cpp
+    src/pipeline/LensfunSource.cpp
     src/render/ViewportGeometry.cpp
     src/render/RendererCore.cpp
+    src/render/OffscreenRender.cpp
+    src/render/HeadlessRenderContext.cpp
+    src/io/XmpSidecar.cpp
+    src/io/PresetStore.cpp
+    src/DevelopSession.cpp
+    src/DecodeCache.cpp
+    src/ThumbnailCache.cpp
+    src/ImageLoadWorkflow.cpp
+    src/ExportWorkflow.cpp
+    src/ExportMetadata.cpp
+    src/BatchPaste.cpp
+)
+
+set(UI_SOURCES
+    src/ui/Theme.cpp
+    src/ui/ImageViewport.cpp
     src/ui/AdjustmentPanel.cpp
     src/ui/AdjustmentTabTool.cpp
     src/ui/LocalAdjustmentPanel.cpp
@@ -228,70 +260,45 @@ set(CORE_SOURCES
     src/ui/CollapsiblePane.cpp
     src/ui/ToneCurveWidget.cpp
     src/ui/InfoPanel.cpp
-    src/ExportWorkflow.cpp
-    src/ExportMetadata.cpp
-    src/core/ImageMetadata.cpp
     src/ui/FilmStripTooltip.cpp
     src/ui/Histogram.cpp
-    src/pipeline/RawProcessor.cpp
-    src/pipeline/StandardImageLoader.cpp
-    src/pipeline/ImagePipeline.cpp
-    src/ImageLoadWorkflow.cpp
-    src/develop/LocalAdjustment.cpp
-    src/develop/FieldSpec.cpp
-    src/pipeline/ColorManagement.cpp
     src/ui/ProofingPanel.cpp
-    src/io/XmpSidecar.cpp
     src/ui/FilmStrip.cpp
     src/ui/FilmStripModel.cpp
     src/ui/FilmStripFilterModel.cpp
     src/ui/ImageGrouping.cpp
     src/ui/FilmStripLayout.cpp
-    src/ThumbnailCache.cpp
-    src/DecodeCache.cpp
-    src/DevelopSession.cpp
     src/ui/ExportDialog.cpp
     src/ui/AboutDialog.cpp
-    src/core/CropGeometry.cpp
-    src/core/Orientation.cpp
-    src/develop/DevelopGroup.cpp
-    src/develop/DevelopParameter.cpp
-    src/develop/DemosaicAlgorithm.cpp
-    src/develop/DevelopPreset.cpp
     src/ui/GroupChecklistDialog.cpp
-    src/io/PresetStore.cpp
-    src/develop/Spot.cpp
-    src/develop/BrushMask.cpp
     src/ui/SpotRemovalPanel.cpp
     src/ui/HistoryPanel.cpp
-    src/core/NoiseReduction.cpp
-    src/pipeline/LensCorrection.cpp
-    src/pipeline/LensfunSource.cpp
-    src/BatchPaste.cpp
     src/ui/BatchProgressDialog.cpp
+    src/MainWindow.cpp
     src/MainWindowStatus.cpp
     src/MainWindowZoom.cpp
     src/ChromeHider.cpp
+    src/GuiMain.cpp
 )
 
-add_library(arraw_core STATIC ${CORE_SOURCES})
-arraw_enable_warnings(arraw_core)
+add_library(arraw_engine STATIC ${ENGINE_SOURCES})
+arraw_enable_warnings(arraw_engine)
 if(ARRAW_BUILD_TESTS)
-    target_compile_definitions(arraw_core PUBLIC ARRAW_TESTING)
+    target_compile_definitions(arraw_engine PUBLIC ARRAW_TESTING)
 endif()
 if(ARRAW_HAVE_LENSFUN)
-    target_compile_definitions(arraw_core PUBLIC ARRAW_HAS_LENSFUN)
-    target_link_libraries(arraw_core PUBLIC PkgConfig::LENSFUN)
+    target_compile_definitions(arraw_engine PUBLIC ARRAW_HAS_LENSFUN)
+    target_link_libraries(arraw_engine PUBLIC PkgConfig::LENSFUN)
 endif()
 if(ARRAW_HAVE_EXIV2)
-    target_compile_definitions(arraw_core PUBLIC ARRAW_HAS_EXIV2)
-    target_link_libraries(arraw_core PUBLIC PkgConfig::EXIV2)
+    target_compile_definitions(arraw_engine PUBLIC ARRAW_HAS_EXIV2)
+    target_link_libraries(arraw_engine PUBLIC PkgConfig::EXIV2)
 endif()
 
-target_include_directories(arraw_core PUBLIC src)
+target_include_directories(arraw_engine PUBLIC src)
 
-target_link_libraries(arraw_core PUBLIC
-    Qt6::Widgets
+target_link_libraries(arraw_engine PUBLIC
+    Qt6::Gui
     Qt6::GuiPrivate
     Qt6::Concurrent
     Qt6::Xml
@@ -299,10 +306,29 @@ target_link_libraries(arraw_core PUBLIC
     PkgConfig::LCMS2
 )
 
+add_library(arraw_ui STATIC ${UI_SOURCES})
+arraw_enable_warnings(arraw_ui)
+target_link_libraries(arraw_ui PUBLIC Qt6::Widgets arraw_engine)
+target_compile_definitions(arraw_ui PRIVATE ARRAW_VERSION="${PROJECT_VERSION}")
+
+# Command front-end (docs/adr/0049): dispatch + the export command. Engine
+# only — never QtWidgets. CLI11 is vendored (vendor/CLI11, BSD-3), included
+# as SYSTEM so /W4 stays clean on third-party code.
+add_library(arraw_cli STATIC
+    src/cli/ExportArgs.cpp
+    src/cli/ExportPreflight.cpp
+    src/cli/ExportCommand.cpp
+    src/cli/Dispatch.cpp
+)
+arraw_enable_warnings(arraw_cli)
+target_link_libraries(arraw_cli PUBLIC arraw_engine)
+target_include_directories(arraw_cli SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/vendor/CLI11)
+target_compile_definitions(arraw_cli PRIVATE ARRAW_VERSION="${PROJECT_VERSION}")
+
 # Shaders are compiled by qsb at build time (Vulkan GLSL → SPIR-V →
 # MSL/HLSL/GLSL) and baked into resources as :/shaders/*.qsb (ADR 0006).
 # GLSL floor is 330/300es: the fragment shader needs textureSize + sampler3D.
-qt6_add_shaders(arraw_core "arraw_shaders"
+qt6_add_shaders(arraw_engine "arraw_shaders"
     PREFIX "/shaders"
     BASE shaders
     GLSL "300es,330"
@@ -315,28 +341,27 @@ qt6_add_shaders(arraw_core "arraw_shaders"
           shaders/spatial_extract.frag
 )
 
-# resources/icon.qrc bakes the window-icon PNGs (generated from resources/icon.svg
-# by tools/render_icons.py — see ADR 0013) in via AUTORCC. On Windows, arraw.rc
-# additionally embeds arraw.ico as the executable's Win32 icon (Explorer/taskbar).
-set(arraw_platform_sources "")
+# Executables (docs/adr/0049). One arraw binary on Linux/macOS (the ui
+# command runs in-process). On Windows the subsystem is fixed at link time,
+# so the grammar lives in a console arraw.exe (engine-only, no QtWidgets)
+# and the editor in a GUI-subsystem arraw-gui.exe that shortcuts and file
+# associations point at; `arraw ui` spawns it detached.
 if(WIN32)
     enable_language(RC)
-    set(arraw_platform_sources resources/arraw.rc)
+    add_executable(arraw src/cli/main.cpp resources/arraw.rc)
+    arraw_enable_warnings(arraw)
+    target_link_libraries(arraw PRIVATE arraw_cli)
+    arraw_deploy_qt_plugins(arraw)
+
+    add_executable(arraw-gui WIN32 src/main_gui_win.cpp resources/icon.qrc resources/arraw.rc)
+    arraw_enable_warnings(arraw-gui)
+    target_link_libraries(arraw-gui PRIVATE arraw_ui)
+    arraw_deploy_qt_plugins(arraw-gui)
+else()
+    add_executable(arraw src/cli/main.cpp resources/icon.qrc)
+    arraw_enable_warnings(arraw)
+    target_link_libraries(arraw PRIVATE arraw_cli arraw_ui)
 endif()
-# WIN32: build as a GUI-subsystem app so double-clicking does not pop a console
-# window. Qt6::EntryPoint (pulled in via Qt6::Core) supplies WinMain -> main. The
-# keyword is ignored on non-Windows platforms. With no console attached, redirect
-# ARRAW_TRACE output to a file when profiling: arraw.exe 2> trace.txt
-add_executable(arraw WIN32 src/main.cpp resources/icon.qrc ${arraw_platform_sources})
-arraw_enable_warnings(arraw)
-
-target_link_libraries(arraw PRIVATE arraw_core)
-arraw_deploy_qt_plugins(arraw)
-
-# Single-source the version from project(VERSION) into the binary (ADR 0014):
-# setApplicationVersion + the --version flag both read this. A CI guard fails the
-# release if the pushed vX.Y.Z tag disagrees with it.
-target_compile_definitions(arraw PRIVATE ARRAW_VERSION="${PROJECT_VERSION}")
 
 # Linux desktop integration + AppDir staging. `DESTDIR=AppDir cmake --install`
 # lays out a standard AppDir (usr/bin, usr/share/...) that linuxdeploy turns into

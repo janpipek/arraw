@@ -15,6 +15,7 @@ add_executable(arraw_tests
     test_BasicTone.cpp
     test_OkLab.cpp
     test_ImagePipeline.cpp
+    test_CurveLut.cpp
     test_ViewportGeometry.cpp
     test_XmpSidecar.cpp
     test_ColorManagement.cpp
@@ -22,6 +23,7 @@ add_executable(arraw_tests
     test_RawProcessor.cpp
     test_StandardImageLoader.cpp
     test_GoldenImages.cpp
+    test_HeadlessRenderContext.cpp
     test_ImageLoadWorkflow.cpp
     test_ImageMetadata.cpp
     test_FilmStripModel.cpp
@@ -65,9 +67,13 @@ add_executable(arraw_tests
     test_ImageViewport.cpp
     test_PendingHistogram.cpp
     test_HistoryPanelLocal.cpp
+    test_CliExportArgs.cpp
+    test_CliExportPreflight.cpp
+    test_CliExportCommand.cpp
+    test_CliDispatch.cpp
 )
 
-target_link_libraries(arraw_tests PRIVATE arraw_core Catch2::Catch2WithMain)
+target_link_libraries(arraw_tests PRIVATE arraw_cli arraw_ui Catch2::Catch2WithMain)
 
 target_compile_definitions(arraw_tests PRIVATE
     ARRAW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"

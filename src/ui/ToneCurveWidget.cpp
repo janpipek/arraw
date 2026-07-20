@@ -1,7 +1,7 @@
 #include "ui/ToneCurveWidget.h"
 #include "core/WorkingSpace.h"
+#include "develop/CurveLut.h"
 #include "develop/GlobalAdjustment.h"
-#include "pipeline/ImagePipeline.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>

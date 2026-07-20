@@ -131,15 +131,25 @@ def copy_lensfun_db(stage: Path, vcpkg_installed: Path, toolchain: Path, explici
 
 def stage_app(build: Path, stage: Path, env: dict[str, str], vcpkg_installed: Path,
               toolchain: Path, lensfun_db_dir: Path | None) -> None:
-    """Stage the runnable app: exe + build runtime DLLs + Qt plugin dirs + CRT runtime."""
+    """Stage the runnable app: both exes + build runtime DLLs + Qt plugin dirs + CRT runtime.
+
+    arraw.exe (console) is the command front-end; arraw-gui.exe (WIN32 subsystem) is the
+    editor that shortcuts, file associations and `arraw ui` launch. They share one build
+    directory, so their runtime DLLs and Qt plugin dirs (platforms/, imageformats/) are
+    staged once and cover both (docs/adr/0049).
+    """
     exe = build / "arraw.exe"
+    gui_exe = build / "arraw-gui.exe"
     if not exe.is_file():
         sys.exit(f"arraw.exe not found in {build} - build first (omit --skip-build).")
+    if not gui_exe.is_file():
+        sys.exit(f"arraw-gui.exe not found in {build} - build first (omit --skip-build).")
     if stage.exists():
         shutil.rmtree(stage)
     stage.mkdir(parents=True)
 
     shutil.copy2(exe, stage)
+    shutil.copy2(gui_exe, stage)
     for dll in build.glob("*.dll"):
         shutil.copy2(dll, stage)
     for plugin_dir in ("platforms", "imageformats"):

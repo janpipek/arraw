@@ -1,5 +1,6 @@
 #include "core/Orientation.h"
 #include "core/WorkingSpace.h"
+#include "develop/CurveLut.h"
 #include "develop/GlobalAdjustment.h"
 #include "pipeline/ImagePipeline.h"
 #include <catch2/catch_test_macros.hpp>

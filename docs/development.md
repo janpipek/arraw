@@ -34,3 +34,12 @@ This updates:
 - `resources/arraw.ico`
 
 Do not hand-edit the generated PNGs or `resources/arraw.ico` or any of the PNGs.
+
+### Build targets (docs/adr/0049)
+
+- `arraw_engine` — decode, develop model, RendererCore, IO. No QtWidgets.
+- `arraw_ui` — widgets, panels, MainWindow. Links `arraw_engine`.
+- `arraw_cli` — command dispatch and `export` (CLI11, vendored in
+  `vendor/CLI11/`). Links `arraw_engine` only.
+- `arraw` — the front-end binary. On Windows it is console-subsystem and is
+  joined by `arraw-gui` (GUI subsystem); on Linux/macOS it is the whole app.

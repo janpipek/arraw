@@ -1,10 +1,11 @@
 #include "ui/ImageViewport.h"
 #include "core/Orientation.h"
+#include "develop/CurveLut.h"
 #include "develop/GlobalAdjustment.h"
 #include "develop/LocalAdjustment.h"
 #include "develop/Spot.h"
 #include "develop/WhiteBalance.h"
-#include "pipeline/ImagePipeline.h"
+#include "render/OffscreenRender.h"
 #include <algorithm>
 #include <cmath>
 #include <variant>
@@ -199,19 +200,7 @@ RendererCore::Slot ImageViewport::activeSlot() const {
 void ImageViewport::ensureCurveLut() {
     if (!curveLutDirty)
         return;
-    const auto lumaLUT = computeCurveLUT(params.curveLuma.points);
-    const auto redLUT = computeCurveLUT(params.curveR.points);
-    const auto grnLUT = computeCurveLUT(params.curveG.points);
-    const auto bluLUT = computeCurveLUT(params.curveB.points);
-
-    std::array<float, 256 * 4> rgba{};
-    for (int i = 0; i < 256; ++i) {
-        rgba[i * 4 + 0] = lumaLUT[i];
-        rgba[i * 4 + 1] = redLUT[i];
-        rgba[i * 4 + 2] = grnLUT[i];
-        rgba[i * 4 + 3] = bluLUT[i];
-    }
-    core.setCurveLut(rgba);
+    core.setCurveLut(curveLutRgba(params));
     curveLutDirty = false;
 }
 
@@ -1234,83 +1223,18 @@ bool ImageViewport::hasKnownOriginalSize() const {
 
 QImage ImageViewport::renderToImage(
     const ImageBuffer& buf, const GlobalAdjustment& p, int outW, int outH) {
-    if (!core.ready() || !buf.valid())
-        return {};
-
-    // Ensure the curve LUT is current (params may have changed since last paint)
-    ensureCurveLut();
-
-    const QRectF& cr = p.cropRect;
-    // The crop is normalised in the oriented display frame, so an odd quarter-turn
-    // presents the buffer with width/height swapped (docs/adr/0029). Size the
-    // offscreen target and the rotation aspect to the oriented frame, else the
-    // oriented content is squished into a native-shaped texture.
-    int orientedW = buf.width;
-    int orientedH = buf.height;
-    if (orient::swapsAspect(p.orientation))
-        std::swap(orientedW, orientedH);
-    const int cropW = (std::max) (1, int(cr.width() * orientedW + 0.5f));
-    const int cropH = (std::max) (1, int(cr.height() * orientedH + 0.5f));
-
-    // Offscreen target at cropped pixel size. Float format: the readback stays
-    // in linear working space; the output transform happens on the CPU (lcms2).
-    RendererCore::FrameParams fp;
-    fp.transform = QVector4D(1.0f, 1.0f, 0.0f, 0.0f);
-    fp.cropRect = cr;
-    fp.aspect = float(orientedW) / float(orientedH);
-    fp.baseLook = true;
-    fp.displayEncode = false;
-    fp.curveInput = false;
-    fp.useLut = false;
-    fp.gamutWarn = false;
-    fp.clipHighlights = false; // overlays never leak into the export readback
-    fp.clipShadows = false;
-    fp.adjustments = p;
-
-    QImage result = core.renderOffscreen(buf, fp, QSize(cropW, cropH), QRhiTexture::RGBA32F);
-    if (result.isNull())
-        return {};
-
-    // Scale to requested output dimensions while still in linear light —
-    // gamma-space scaling darkens fine detail.
-    if (result.width() != outW || result.height() != outH)
-        result = result.scaled(outW, outH, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
-
+    QImage result = offscreen::renderToImage(core, buf, p, outW, outH);
+    // The export render above uploads a curve LUT built from `p`, which may not
+    // be the widget's live params — re-arm so the next render() re-uploads.
+    curveLutDirty = true;
     return result;
 }
 
 QImage ImageViewport::renderClipSample(
     const ImageBuffer& buf, const GlobalAdjustment& p, bool clipHighlights, bool clipShadows) {
-    if (!core.ready() || !buf.valid())
-        return {};
-
-    ensureCurveLut();
-
-    // The on-screen display path (sRGB encode, monitor/proof LUT off) so the
-    // clipping overlay actually runs — renderToImage uses the linear export
-    // path where it is forced off. Used by the clipping golden test (adr/0009).
-    const QRectF& cr = p.cropRect;
-    int orientedW = buf.width;
-    int orientedH = buf.height;
-    if (orient::swapsAspect(p.orientation)) // oriented frame (docs/adr/0029)
-        std::swap(orientedW, orientedH);
-    const int cropW = (std::max) (1, int(cr.width() * orientedW + 0.5f));
-    const int cropH = (std::max) (1, int(cr.height() * orientedH + 0.5f));
-
-    RendererCore::FrameParams fp;
-    fp.transform = QVector4D(1.0f, 1.0f, 0.0f, 0.0f);
-    fp.cropRect = cr;
-    fp.aspect = float(orientedW) / float(orientedH);
-    fp.baseLook = true;
-    fp.displayEncode = true;
-    fp.curveInput = false;
-    fp.useLut = false;
-    fp.gamutWarn = false;
-    fp.clipHighlights = clipHighlights;
-    fp.clipShadows = clipShadows;
-    fp.adjustments = p;
-
-    return core.renderOffscreen(buf, fp, QSize(cropW, cropH), QRhiTexture::RGBA32F);
+    QImage result = offscreen::renderClipSample(core, buf, p, clipHighlights, clipShadows);
+    curveLutDirty = true;
+    return result;
 }
 
 // ── Histogram readback (docs/adr/0004, async per docs/adr/0035) ───────────────

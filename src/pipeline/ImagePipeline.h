@@ -1,9 +1,6 @@
 #pragma once
 #include "core/ImageBuffer.h"
 #include "core/Orientation.h"
-#include <array>
-#include <vector>
-#include <QPointF>
 #include <QRectF>
 #include <QSize>
 
@@ -15,9 +12,6 @@ ImageBuffer downsample2x(const ImageBuffer& src);
 // [0.5, 4.0] so a bad estimate can't blow out or crush the image. Applied to both
 // the demosaiced full-res and the embedded preview, so the two match on load.
 void normalizeExposure(ImageBuffer& buf);
-
-// Compute a 256-entry output LUT from tone-curve control points (Fritsch-Carlson monotone spline).
-std::array<float, 256> computeCurveLUT(const std::vector<QPointF>& pts);
 
 // Pixel size of a developed thumbnail: the source cropped to crop, scaled down so
 // its longer edge is at most maxEdge (never upscaled), aspect preserved.
