@@ -278,6 +278,7 @@ set(UI_SOURCES
     src/MainWindowStatus.cpp
     src/MainWindowZoom.cpp
     src/ChromeHider.cpp
+    src/GuiMain.cpp
 )
 
 add_library(arraw_engine STATIC ${ENGINE_SOURCES})
@@ -308,6 +309,7 @@ target_link_libraries(arraw_engine PUBLIC
 add_library(arraw_ui STATIC ${UI_SOURCES})
 arraw_enable_warnings(arraw_ui)
 target_link_libraries(arraw_ui PUBLIC Qt6::Widgets arraw_engine)
+target_compile_definitions(arraw_ui PRIVATE ARRAW_VERSION="${PROJECT_VERSION}")
 
 # Command front-end (docs/adr/0049): dispatch + the export command. Engine
 # only — never QtWidgets. CLI11 is vendored (vendor/CLI11, BSD-3), included
@@ -339,28 +341,27 @@ qt6_add_shaders(arraw_engine "arraw_shaders"
           shaders/spatial_extract.frag
 )
 
-# resources/icon.qrc bakes the window-icon PNGs (generated from resources/icon.svg
-# by tools/render_icons.py — see ADR 0013) in via AUTORCC. On Windows, arraw.rc
-# additionally embeds arraw.ico as the executable's Win32 icon (Explorer/taskbar).
-set(arraw_platform_sources "")
+# Executables (docs/adr/0049). One arraw binary on Linux/macOS (the ui
+# command runs in-process). On Windows the subsystem is fixed at link time,
+# so the grammar lives in a console arraw.exe (engine-only, no QtWidgets)
+# and the editor in a GUI-subsystem arraw-gui.exe that shortcuts and file
+# associations point at; `arraw ui` spawns it detached.
 if(WIN32)
     enable_language(RC)
-    set(arraw_platform_sources resources/arraw.rc)
+    add_executable(arraw src/cli/main.cpp resources/arraw.rc)
+    arraw_enable_warnings(arraw)
+    target_link_libraries(arraw PRIVATE arraw_cli)
+    arraw_deploy_qt_plugins(arraw)
+
+    add_executable(arraw-gui WIN32 src/main_gui_win.cpp resources/icon.qrc resources/arraw.rc)
+    arraw_enable_warnings(arraw-gui)
+    target_link_libraries(arraw-gui PRIVATE arraw_ui)
+    arraw_deploy_qt_plugins(arraw-gui)
+else()
+    add_executable(arraw src/cli/main.cpp resources/icon.qrc)
+    arraw_enable_warnings(arraw)
+    target_link_libraries(arraw PRIVATE arraw_cli arraw_ui)
 endif()
-# WIN32: build as a GUI-subsystem app so double-clicking does not pop a console
-# window. Qt6::EntryPoint (pulled in via Qt6::Core) supplies WinMain -> main. The
-# keyword is ignored on non-Windows platforms. With no console attached, redirect
-# ARRAW_TRACE output to a file when profiling: arraw.exe 2> trace.txt
-add_executable(arraw WIN32 src/main.cpp resources/icon.qrc ${arraw_platform_sources})
-arraw_enable_warnings(arraw)
-
-target_link_libraries(arraw PRIVATE arraw_ui)
-arraw_deploy_qt_plugins(arraw)
-
-# Single-source the version from project(VERSION) into the binary (ADR 0014):
-# setApplicationVersion + the --version flag both read this. A CI guard fails the
-# release if the pushed vX.Y.Z tag disagrees with it.
-target_compile_definitions(arraw PRIVATE ARRAW_VERSION="${PROJECT_VERSION}")
 
 # Linux desktop integration + AppDir staging. `DESTDIR=AppDir cmake --install`
 # lays out a standard AppDir (usr/bin, usr/share/...) that linuxdeploy turns into

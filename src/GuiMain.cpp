@@ -1,3 +1,5 @@
+#include "GuiMain.h"
+
 #include "MainWindow.h"
 #include "ui/Theme.h"
 #include <QApplication>
@@ -7,7 +9,7 @@
 #include <QSettings>
 #include <QSurfaceFormat>
 
-int main(int argc, char* argv[]) {
+int runGuiMain(int& argc, char** argv, std::optional<QString> openPath) {
     QApplication app(argc, argv);
     app.setApplicationName("arraw");
     app.setOrganizationName("arraw");
@@ -51,15 +53,17 @@ int main(int argc, char* argv[]) {
     MainWindow w;
     w.show();
 
-    const QStringList args = parser.positionalArguments();
-    if (!args.isEmpty()) {
-        w.openPath(args.first());
+    if (!openPath) {
+        const QStringList args = parser.positionalArguments();
+        openPath = args.isEmpty() ? QString() : args.first();
+    }
+    if (!openPath->isEmpty()) {
+        w.openPath(*openPath);
     } else {
         QSettings s;
         QString lastDir = s.value("lastDir").toString();
-        if (!lastDir.isEmpty() && QDir(lastDir).exists()) {
+        if (!lastDir.isEmpty() && QDir(lastDir).exists())
             w.openPath(lastDir);
-        }
     }
 
     return app.exec();
