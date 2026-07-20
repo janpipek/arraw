@@ -73,11 +73,13 @@ static GroupSelection only(DevelopGroup g) {
     return s;
 }
 
-TEST_CASE("groupsWithNonDefaultValues is empty for an all-default GlobalAdjustment", "[developgroup]") {
+TEST_CASE(
+    "groupsWithNonDefaultValues is empty for an all-default GlobalAdjustment", "[developgroup]") {
     CHECK(groupsWithNonDefaultValues(GlobalAdjustment{}).none());
 }
 
-TEST_CASE("groupsWithNonDefaultValues flags exactly Tone when only a Tone field changed",
+TEST_CASE(
+    "groupsWithNonDefaultValues flags exactly Tone when only a Tone field changed",
     "[developgroup]") {
     GlobalAdjustment v;
     v.contrast = 25.0f;
@@ -86,16 +88,15 @@ TEST_CASE("groupsWithNonDefaultValues flags exactly Tone when only a Tone field 
     CHECK(sel == only(DevelopGroup::Tone));
 }
 
-TEST_CASE("groupsWithNonDefaultValues flags Hsl when one band moved off zero",
-    "[developgroup]") {
+TEST_CASE("groupsWithNonDefaultValues flags Hsl when one band moved off zero", "[developgroup]") {
     GlobalAdjustment v;
     v.hslHue[0] = 15.0f; // Red hue band only
 
     CHECK(groupsWithNonDefaultValues(v) == only(DevelopGroup::Hsl));
 }
 
-TEST_CASE("groupsWithNonDefaultValues flags ToneCurve when one curve is non-identity",
-    "[developgroup]") {
+TEST_CASE(
+    "groupsWithNonDefaultValues flags ToneCurve when one curve is non-identity", "[developgroup]") {
     GlobalAdjustment v;
     v.curveLuma.points = {{0.0, 0.0}, {0.5, 0.6}, {1.0, 1.0}};
 
@@ -138,8 +139,7 @@ TEST_CASE("describeGroupNonDefaults names only the modified curve", "[developgro
 }
 
 TEST_CASE(
-    "describeGroupNonDefaults lists only the enabled Lens Corrections toggles",
-    "[developgroup]") {
+    "describeGroupNonDefaults lists only the enabled Lens Corrections toggles", "[developgroup]") {
     GlobalAdjustment v;
     v.lensCorrectDistortion = true;
     // Vignetting and CA left off (default)

@@ -65,12 +65,24 @@ bool PresetStore::rename(const QString& oldName, const QString& newName) const {
     oldFile.close();
     if (!ok)
         return false;
-
-    if (!QFile::remove(dir.filePath(presetFileName(oldName))))
-        return false;
-
     p.name = newName;
-    return save(p);
+
+    // Write the new content to a temp path first — distinct from both oldName's
+    // and newName's file, so it can never alias either — before touching the
+    // old file. This way a write failure below never costs the original
+    // preset, and a case-only rename (where oldName/newName alias the same
+    // file on a case-insensitive filesystem) can't delete the just-written
+    // content when the old file is cleared.
+    const QString tempPath = dir.filePath(presetFileName(newName) + ".tmp");
+    QFile tempFile(tempPath);
+    if (!tempFile.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        return false;
+    tempFile.write(serializeDevelopPreset(p));
+    tempFile.close();
+
+    QFile::remove(dir.filePath(presetFileName(oldName)));
+    QFile::remove(dir.filePath(presetFileName(newName))); // clear any overwrite target
+    return QFile::rename(tempPath, dir.filePath(presetFileName(newName)));
 }
 
 bool PresetStore::exists(const QString& presetName, const QString& excluding) const {

@@ -1971,13 +1971,19 @@ void MainWindow::saveCurrentAsPreset() {
     // Paste's sticky lastCopySelection (docs/adr/0049) — a preset saved from an
     // untouched photo no longer silently carries nine groups of resets.
     const GlobalAdjustment params = currentParams();
-    GroupChecklistDialog dlg(
-        tr("Save Preset"), allGroups(), groupsWithNonDefaultValues(params), this);
+    GroupChecklistDialog
+        dlg(tr("Save Preset"), allGroups(), groupsWithNonDefaultValues(params), this);
     if (dlg.exec() != QDialog::Accepted)
         return;
     const GroupSelection chosen = dlg.selectedGroups();
-    if (chosen.none())
+    if (chosen.none()) {
+        // Reachable in normal use now that the checklist starts from what this
+        // photo actually edited rather than "everything but Geometry" — an
+        // untouched photo can open with nothing pre-checked.
+        QMessageBox::information(
+            this, tr("Save Preset"), tr("Nothing selected — no preset was saved."));
         return;
+    }
 
     bool ok = false;
     const QString name

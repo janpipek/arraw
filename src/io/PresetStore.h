@@ -30,11 +30,11 @@ public:
 
     // Renames `oldName` to `newName`, keeping its groups and values, and
     // overwriting anything already stored under `newName`. Returns false if
-    // `oldName` doesn't exist. The old file is removed before the new one is
-    // written, so a case-only rename is safe on both case-sensitive (Linux) and
-    // case-insensitive (Windows) filesystems — writing first then removing the
-    // old path could otherwise delete the just-renamed file on Windows, where
-    // the two paths alias the same file.
+    // `oldName` doesn't exist. Writes to a temp path before touching either the
+    // old or new file, so a write failure never costs the original preset, and
+    // a case-only rename is safe even where oldName/newName alias the same file
+    // (a case-insensitive filesystem, e.g. Windows) — the temp path can't alias
+    // either, so clearing the old file afterwards never risks the new content.
     bool rename(const QString& oldName, const QString& newName) const;
 
     // Whether a preset named `presetName` already exists — case-insensitively
