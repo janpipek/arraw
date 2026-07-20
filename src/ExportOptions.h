@@ -20,4 +20,6 @@ struct ExportOptions {
     OutputProfile profile = OutputProfile::SRgb;
     int bitDepth = 8; // 16 only for TIFF
     ExportMetadataSelection metadata;
+
+    bool operator==(const ExportOptions&) const = default;
 };

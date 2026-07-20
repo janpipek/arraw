@@ -309,6 +309,17 @@ add_library(arraw_ui STATIC ${UI_SOURCES})
 arraw_enable_warnings(arraw_ui)
 target_link_libraries(arraw_ui PUBLIC Qt6::Widgets arraw_engine)
 
+# Command front-end (docs/adr/0049): dispatch + the export command. Engine
+# only — never QtWidgets. CLI11 is vendored (vendor/CLI11, BSD-3), included
+# as SYSTEM so /W4 stays clean on third-party code.
+add_library(arraw_cli STATIC
+    src/cli/ExportArgs.cpp
+)
+arraw_enable_warnings(arraw_cli)
+target_link_libraries(arraw_cli PUBLIC arraw_engine)
+target_include_directories(arraw_cli SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/vendor/CLI11)
+target_compile_definitions(arraw_cli PRIVATE ARRAW_VERSION="${PROJECT_VERSION}")
+
 # Shaders are compiled by qsb at build time (Vulkan GLSL → SPIR-V →
 # MSL/HLSL/GLSL) and baked into resources as :/shaders/*.qsb (ADR 0006).
 # GLSL floor is 330/300es: the fragment shader needs textureSize + sampler3D.

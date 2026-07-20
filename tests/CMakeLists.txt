@@ -66,9 +66,10 @@ add_executable(arraw_tests
     test_Histogram.cpp
     test_PendingHistogram.cpp
     test_HistoryPanelLocal.cpp
+    test_CliExportArgs.cpp
 )
 
-target_link_libraries(arraw_tests PRIVATE arraw_ui Catch2::Catch2WithMain)
+target_link_libraries(arraw_tests PRIVATE arraw_cli arraw_ui Catch2::Catch2WithMain)
 
 target_compile_definitions(arraw_tests PRIVATE
     ARRAW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
