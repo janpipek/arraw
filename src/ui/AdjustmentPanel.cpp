@@ -150,7 +150,17 @@ AdjustmentPanel::AdjustmentPanel(QWidget* parent)
     wbPresets = new QComboBox(this);
     for (auto& p : kWBPresets)
         wbPresets->addItem(p.name);
-    wbLayout->addWidget(wbPresets);
+    wbPickerButton = new QPushButton("Pick", this);
+    wbPickerButton->setCheckable(true);
+    wbPickerButton->setToolTip(
+        "Pick a neutral grey or white area in the image to set white balance");
+    auto* wbRow = new QWidget(this);
+    auto* wbRowLayout = new QHBoxLayout(wbRow);
+    wbRowLayout->setContentsMargins(0, 0, 0, 0);
+    wbRowLayout->setSpacing(2);
+    wbRowLayout->addWidget(wbPresets, 1);
+    wbRowLayout->addWidget(wbPickerButton);
+    wbLayout->addWidget(wbRow);
     temperature = addSlider(wbLayout, "Temp", kTempSpec);
     tint = addSlider(wbLayout, "Tint", kBipolarSpec);
 
@@ -433,6 +443,7 @@ AdjustmentPanel::AdjustmentPanel(QWidget* parent)
         emit paramsChanged(adjustments);
         commit();
     });
+    connect(wbPickerButton, &QPushButton::toggled, this, &AdjustmentPanel::wbPickerToggled);
     connect(rotation.slider, &QSlider::sliderPressed, this, [this] { emit straightenActive(true); });
     connect(rotation.slider, &QSlider::sliderReleased, this, [this] {
         emit straightenActive(false);
@@ -770,6 +781,15 @@ void AdjustmentPanel::setDemosaicAvailable(bool available) {
         available
             ? tr("Choose the RAW demosaic algorithm. Changing it re-decodes the image.")
             : tr("This sensor uses its own decode — Bayer demosaic algorithms do not apply."));
+}
+
+void AdjustmentPanel::setWbPickerChecked(bool checked) {
+    const QSignalBlocker blocker(wbPickerButton);
+    wbPickerButton->setChecked(checked);
+}
+
+void AdjustmentPanel::setWbPickerEnabled(bool enabled) {
+    wbPickerButton->setEnabled(enabled);
 }
 
 // A "•" suffix marks channels whose curve is bent — otherwise a non-identity
