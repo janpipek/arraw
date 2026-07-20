@@ -88,13 +88,6 @@ jobs:
 
       - name: Sanity-check packaged tree
         shell: pwsh
-        env:
-          QT_QPA_PLATFORM: offscreen
-          # arraw.exe is a GUI-subsystem (WIN32) binary, so QCommandLineParser
-          # renders --version in a blocking native message box instead of writing
-          # to stdout. Force it onto the stdout path so the smoke test can run
-          # headless without hanging on a dialog.
-          QT_COMMAND_LINE_PARSER_NO_GUI_MESSAGE_BOXES: "1"
         run: |
           $stage = Get-ChildItem -Path build-release\_package -Directory -Filter "arraw-*-windows-x64" |
             Select-Object -First 1
@@ -107,6 +100,11 @@ jobs:
             throw "arraw.exe is missing from the package"
           }
 
+          $guiExe = Join-Path $stage.FullName "arraw-gui.exe"
+          if (-not (Test-Path -LiteralPath $guiExe -PathType Leaf)) {
+            throw "arraw-gui.exe is missing from the package"
+          }
+
           $lensfunDll = Join-Path $stage.FullName "lensfun.dll"
           if (-not (Test-Path -LiteralPath $lensfunDll -PathType Leaf)) {
             throw "lensfun.dll is missing from the package"
@@ -117,22 +115,37 @@ jobs:
             throw "lensfun database XML files are missing from the package"
           }
 
-          # arraw.exe is a GUI-subsystem (WIN32) binary with no attached console.
-          # PowerShell's native-command invocation (`& $exe`, even piped through
-          # `2>&1` and assigned to a variable) does not reliably wait for such a
-          # process or populate $LASTEXITCODE - that only works for console
-          # subsystem binaries. Driving System.Diagnostics.Process directly waits
-          # on the OS process handle instead, which works regardless of subsystem.
-          $psi = [System.Diagnostics.ProcessStartInfo]::new($exe, "--version")
-          $psi.UseShellExecute = $false
-          $psi.RedirectStandardOutput = $true
-          $psi.RedirectStandardError = $true
-          $proc = [System.Diagnostics.Process]::Start($psi)
-          $versionOutput = $proc.StandardOutput.ReadToEnd() + $proc.StandardError.ReadToEnd()
-          $proc.WaitForExit()
+          # arraw.exe is the console-subsystem command front-end (docs/adr/0049):
+          # unlike arraw-gui.exe it waits and writes to stdout natively, so a plain
+          # PowerShell native-command invocation captures it correctly - no
+          # System.Diagnostics.Process dance or QT_COMMAND_LINE_PARSER_NO_GUI_MESSAGE_BOXES
+          # workaround needed, and no risk of the pipe-inheritance hang that a bare
+          # `arraw.exe` (no args) invocation has via its detached `arraw-gui.exe` spawn.
+          $versionOutput = (& $exe version) -join "`n"
+          if ($LASTEXITCODE -ne 0) {
+            throw "arraw.exe version failed with exit code $LASTEXITCODE"
+          }
+          $expectedVersion = $stage.Name -replace '^arraw-', '' -replace '-windows-x64$', ''
+          $expected = "arraw $expectedVersion"
+          if ($versionOutput.Trim() -ne $expected) {
+            throw "arraw.exe version printed '$versionOutput', expected '$expected'"
+          }
           Write-Host $versionOutput
-          if ($proc.ExitCode -ne 0) {
-            throw "arraw.exe --version failed with exit code $($proc.ExitCode)"
+
+          # Launch-only smoke of the GUI binary: prove it starts and stays up (no
+          # missing-DLL/plugin failure) without asserting on window content or
+          # capturing output, since arraw-gui.exe is GUI-subsystem and may render a
+          # native dialog on error.
+          $guiProc = Start-Process -FilePath $guiExe -PassThru
+          try {
+            Start-Sleep -Seconds 3
+            if ($guiProc.HasExited) {
+              throw "arraw-gui.exe exited immediately (exit code $($guiProc.ExitCode))"
+            }
+          } finally {
+            if (-not $guiProc.HasExited) {
+              Stop-Process -Id $guiProc.Id -Force
+            }
           }
 
           $zip = Get-ChildItem -Path dist -File -Filter "arraw-*-windows-x64.zip" | Select-Object -First 1

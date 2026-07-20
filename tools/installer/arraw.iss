@@ -16,7 +16,7 @@
 #endif
 
 #define AppName "arraw"
-#define AppExe "arraw.exe"
+#define AppExe "arraw-gui.exe"
 
 [Setup]
 AppId=io.github.janpipek.arraw
@@ -38,10 +38,12 @@ WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 ChangesAssociations=yes
+ChangesEnvironment=yes
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
 Name: "assocraw"; Description: "Associate RAW files (.cr2, .nef, .arw, .dng, ...) with arraw"; GroupDescription: "File associations:"; Flags: unchecked
+Name: "addtopath"; Description: "Add arraw to PATH for the current user (enables the 'arraw' command)"; GroupDescription: "Command line:"
 
 [Files]
 Source: "{#StageDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
@@ -69,3 +71,32 @@ Root: HKCU; Subkey: "Software\Classes\.orf"; ValueType: string; ValueName: ""; V
 Root: HKCU; Subkey: "Software\Classes\.rw2"; ValueType: string; ValueName: ""; ValueData: "arraw.RawImage"; Flags: uninsdeletevalue; Tasks: assocraw
 Root: HKCU; Subkey: "Software\Classes\.pef"; ValueType: string; ValueName: ""; ValueData: "arraw.RawImage"; Flags: uninsdeletevalue; Tasks: assocraw
 Root: HKCU; Subkey: "Software\Classes\.srw"; ValueType: string; ValueName: ""; ValueData: "arraw.RawImage"; Flags: uninsdeletevalue; Tasks: assocraw
+; Append the install dir to the per-user PATH so a fresh terminal resolves `arraw`.
+Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; Tasks: addtopath; Check: NeedsAddPath(ExpandConstant('{app}'))
+
+[Code]
+function NeedsAddPath(Param: string): boolean;
+var
+  OrigPath: string;
+begin
+  if not RegQueryStringValue(HKCU, 'Environment', 'Path', OrigPath) then
+  begin
+    Result := True;
+    exit;
+  end;
+  Result := Pos(';' + Uppercase(Param) + ';', ';' + Uppercase(OrigPath) + ';') = 0;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  Path, App: string;
+  P: Integer;
+begin
+  if CurUninstallStep <> usPostUninstall then exit;
+  if not RegQueryStringValue(HKCU, 'Environment', 'Path', Path) then exit;
+  App := ExpandConstant('{app}');
+  P := Pos(';' + Uppercase(App), ';' + Uppercase(Path));
+  if P = 0 then exit;
+  Delete(Path, P, Length(App) + 1);
+  RegWriteExpandStringValue(HKCU, 'Environment', 'Path', Path);
+end;
