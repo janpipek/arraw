@@ -89,14 +89,16 @@ end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
-  Path, App: string;
+  Path, App, Padded: string;
   P: Integer;
 begin
   if CurUninstallStep <> usPostUninstall then exit;
   if not RegQueryStringValue(HKCU, 'Environment', 'Path', Path) then exit;
   App := ExpandConstant('{app}');
-  P := Pos(';' + Uppercase(App), ';' + Uppercase(Path));
+  Padded := ';' + Path + ';';
+  P := Pos(';' + Uppercase(App) + ';', Uppercase(Padded));
   if P = 0 then exit;
-  Delete(Path, P, Length(App) + 1);
+  Delete(Padded, P, Length(App) + 1);
+  Path := Copy(Padded, 2, Length(Padded) - 2);
   RegWriteExpandStringValue(HKCU, 'Environment', 'Path', Path);
 end;
