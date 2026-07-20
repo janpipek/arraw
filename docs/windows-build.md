@@ -140,6 +140,12 @@ cmd /c "`"$vcvars`" >nul 2>&1 && set" |
 After this, `rc`, `mt`, `cl`, and `link` all resolve. You can sanity-check with
 `Get-Command rc, mt, cl, link`.
 
+Compiling (`cl.exe`) can succeed without this environment — it only needs `INCLUDE`,
+which some setups pick up from elsewhere — while linking still fails, because `LIB`
+(needed to resolve bare Windows SDK library names like `d3d11.lib`) is missing. So a
+build that gets through every `.cpp` file and then fails only at the final link step
+is the same root cause as the compiler-check failure above; see §8.
+
 ---
 
 ## 5. Configure, build, run, test
@@ -272,6 +278,7 @@ To also build the installer, install Inno Setup (`scoop install inno-setup`, so
 |---|---|---|
 | `vcpkg.exe not found` | vcpkg installed somewhere other than `C:\dev\vcpkg` | Point the toolchain path in `CMakePresets.json` at your actual vcpkg root. |
 | CMake: *"compiler is not able to compile a simple test program"*, `rc ... no such file`, `CMAKE_MT-NOTFOUND` | MSVC developer environment not applied — SDK tools missing | Build from "Developer PowerShell for VS 2022", or import `vcvars64.bat` (§4). Then delete `build\` and reconfigure. |
+| `LINK : fatal error LNK1104: cannot open file 'd3d11.lib'` (or `dxgi.lib`/`dxguid.lib`/`d3d12.lib`) — all `.cpp` files compiled fine, only the final link fails | MSVC developer environment not applied — same root cause as the row above, but `LIB` is what's missing rather than `INCLUDE`/`rc`/`mt`, so compilation gets further before it fails (§4) | Import `vcvars64.bat` in the *same* shell you run the build in (env does not persist across separate tool/shell invocations), then re-run `ninja -C build` — no reconfigure needed. |
 | App/test exits immediately with `0xc0000135` | A required DLL is missing next to the exe (e.g. `raw.dll`) | Rebuild after a clean configure; the per-config libraw fix (§6.1) deploys the correct DLL. Confirm with `dumpbin /dependents build\arraw.exe`. |
 | *"no Qt platform plugin could be initialized"* | Qt plugins not deployed | Ensure `platforms\qwindowsd.dll` exists next to the exe; it is copied by the post-build step (§6.2). A fresh `cmake --build build` recreates it. |
 | **"Failed to load" for every JPG** (PNG works) | imageformats plugin (`qjpegd.dll`) and/or its codec (`jpeg62.dll`) not deployed | Both are copied by the post-build step (§6.2). Confirm `imageformats\qjpegd.dll` and `jpeg62.dll` sit next to the exe; check `ARRAW_VCPKG_INSTALLED` points at your vcpkg tree. |
