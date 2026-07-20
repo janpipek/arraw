@@ -1,6 +1,7 @@
 #include "GuiMain.h"
 
 #include "MainWindow.h"
+#include "core/AppIdentity.h"
 #include "ui/Theme.h"
 #include <QApplication>
 #include <QCommandLineParser>
@@ -11,8 +12,7 @@
 
 int runGuiMain(int& argc, char** argv, std::optional<QString> openPath) {
     QApplication app(argc, argv);
-    app.setApplicationName("arraw");
-    app.setOrganizationName("arraw");
+    applyApplicationIdentity(app);
 
     // Neutral dark photographer-friendly theme (ADR 0031). Must run before any
     // widget is constructed so the Fusion style and palette cascade everywhere.

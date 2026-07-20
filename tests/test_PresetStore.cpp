@@ -1,14 +1,29 @@
 #include "develop/DevelopGroup.h"
 #include "io/PresetStore.h"
 
+#include "TestApp.h"
+#include "core/AppIdentity.h"
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
 
 #include <QDir>
+#include <QFile>
+#include <QStandardPaths>
 #include <QTemporaryDir>
 
 namespace {
+
+// Diverts QStandardPaths::AppDataLocation to a throwaway sandbox for the
+// scope's lifetime, restored via RAII even if a REQUIRE fails mid-test — so
+// the identity/defaultPresetStore regression test below never touches the
+// developer machine's real preset directory.
+struct StandardPathsTestMode {
+    StandardPathsTestMode() { QStandardPaths::setTestModeEnabled(true); }
+
+    ~StandardPathsTestMode() { QStandardPaths::setTestModeEnabled(false); }
+};
 
 GroupSelection groups(std::initializer_list<DevelopGroup> gs) {
     GroupSelection s;
@@ -176,4 +191,27 @@ TEST_CASE("remove deletes the backing file", "[presetstore]") {
     CHECK(store.remove("Punchy"));
     CHECK(store.loadAll().empty());
     CHECK_FALSE(store.remove("Punchy")); // already gone
+}
+
+// Regression test: defaultPresetStore() must resolve under the same
+// AppDataLocation that GuiMain.cpp's QApplication produces once
+// applyApplicationIdentity has run — that agreement is the entire premise of
+// docs/adr/0051 ("the CLI must never point at a different location than the
+// Presets menu"), and it silently broke once already (main.cpp dispatched
+// `preset` commands without ever setting the app/org name, so
+// QStandardPaths::AppDataLocation resolved to a different, empty-named
+// directory and `arraw preset list` reported no presets despite the GUI
+// having some).
+TEST_CASE("defaultPresetStore resolves under the shared app identity", "[presetstore]") {
+    const StandardPathsTestMode testMode;
+    applyApplicationIdentity(testApp());
+
+    const PresetStore store = defaultPresetStore();
+    REQUIRE(store.save(preset("RegressionCheck")));
+
+    const QString expectedDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+                                + "/presets";
+    CHECK(QFile::exists(QDir(expectedDir).filePath(presetFileName("RegressionCheck"))));
+
+    store.remove("RegressionCheck");
 }
