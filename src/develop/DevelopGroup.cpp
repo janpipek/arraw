@@ -131,3 +131,67 @@ GlobalAdjustment applyGroups(
 
     return result;
 }
+
+namespace {
+
+// Whether any field `g` carries in `v` differs from GlobalAdjustment{}'s default —
+// exact equality for scalars/bools/arrays, CurvePoints::isIdentity() (its existing
+// tolerance) for the four tone curves (docs/adr/0049).
+bool groupDiffersFromDefault(DevelopGroup g, const GlobalAdjustment& v) {
+    static const GlobalAdjustment kDefault;
+    switch (g) {
+    case DevelopGroup::WhiteBalance:
+        return v.temperature != kDefault.temperature || v.tint != kDefault.tint;
+    case DevelopGroup::Tone:
+        return v.exposure != kDefault.exposure || v.contrast != kDefault.contrast
+               || v.highlights != kDefault.highlights || v.shadows != kDefault.shadows
+               || v.whites != kDefault.whites || v.blacks != kDefault.blacks
+               || v.filmicHighlights != kDefault.filmicHighlights;
+    case DevelopGroup::ToneCurve:
+        return !v.curveLuma.isIdentity() || !v.curveR.isIdentity() || !v.curveG.isIdentity()
+               || !v.curveB.isIdentity();
+    case DevelopGroup::Colour:
+        return v.saturation != kDefault.saturation || v.vibrance != kDefault.vibrance;
+    case DevelopGroup::Hsl:
+        return v.hslHue != kDefault.hslHue || v.hslSat != kDefault.hslSat
+               || v.hslLum != kDefault.hslLum;
+    case DevelopGroup::BlackAndWhite:
+        return v.convertToGrayscale != kDefault.convertToGrayscale || v.bwMix != kDefault.bwMix;
+    case DevelopGroup::Detail:
+        return v.demosaicAlgorithm != kDefault.demosaicAlgorithm
+               || v.texture != kDefault.texture || v.clarity != kDefault.clarity
+               || v.dehaze != kDefault.dehaze || v.sharpening != kDefault.sharpening
+               || v.colorNoiseReduction != kDefault.colorNoiseReduction
+               || v.colorNoiseReductionSmoothness != kDefault.colorNoiseReductionSmoothness
+               || v.luminanceNoiseReduction != kDefault.luminanceNoiseReduction
+               || v.luminanceNoiseReductionDetail != kDefault.luminanceNoiseReductionDetail;
+    case DevelopGroup::Geometry:
+        return v.orientation != kDefault.orientation || v.rotation != kDefault.rotation
+               || v.cropRect != kDefault.cropRect || v.cropConstrained != kDefault.cropConstrained;
+    case DevelopGroup::LensCorrections:
+        return v.lensCorrectDistortion != kDefault.lensCorrectDistortion
+               || v.lensCorrectVignetting != kDefault.lensCorrectVignetting
+               || v.lensCorrectCA != kDefault.lensCorrectCA;
+    case DevelopGroup::Effects:
+        return v.postCropVignetteAmount != kDefault.postCropVignetteAmount
+               || v.postCropVignetteMidpoint != kDefault.postCropVignetteMidpoint
+               || v.postCropVignetteFeather != kDefault.postCropVignetteFeather
+               || v.grainAmount != kDefault.grainAmount || v.grainSize != kDefault.grainSize
+               || v.grainRoughness != kDefault.grainRoughness;
+    case DevelopGroup::Count_:
+        break;
+    }
+    return false;
+}
+
+} // namespace
+
+GroupSelection groupsWithNonDefaultValues(const GlobalAdjustment& v) {
+    GroupSelection sel;
+    for (int i = 0; i < kDevelopGroupCount; ++i) {
+        const auto g = static_cast<DevelopGroup>(i);
+        if (groupDiffersFromDefault(g, v))
+            sel.set(static_cast<size_t>(i));
+    }
+    return sel;
+}

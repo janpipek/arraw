@@ -54,6 +54,7 @@ QJsonObject groupToJson(DevelopGroup g, const GlobalAdjustment& v) {
         o["shadows"] = v.shadows;
         o["whites"] = v.whites;
         o["blacks"] = v.blacks;
+        o["filmicHighlights"] = v.filmicHighlights;
         break;
     case DevelopGroup::ToneCurve:
         o["luma"] = curveToJson(v.curveLuma);
@@ -127,6 +128,7 @@ void groupFromJson(DevelopGroup g, const QJsonObject& o, GlobalAdjustment& v) {
         v.shadows = f("shadows", v.shadows);
         v.whites = f("whites", v.whites);
         v.blacks = f("blacks", v.blacks);
+        v.filmicHighlights = f("filmicHighlights", v.filmicHighlights);
         break;
     case DevelopGroup::ToneCurve:
         v.curveLuma = curveFromJson(o["luma"].toArray());

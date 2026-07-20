@@ -57,6 +57,11 @@ inline GroupSelection defaultCopySelection() {
 GlobalAdjustment applyGroups(
     const GlobalAdjustment& target, const GlobalAdjustment& source, GroupSelection selection);
 
+// Every group whose fields in `v` differ from GlobalAdjustment{}'s defaults —
+// the Save Preset checklist's initial selection (docs/adr/0049), independent of
+// Copy/Paste's sticky lastCopySelection.
+GroupSelection groupsWithNonDefaultValues(const GlobalAdjustment& v);
+
 // Stable machine key for a group — used as the JSON object key (docs/adr/0023)
 // and as the checklist checkbox objectName. Never localised; never reordered.
 const char* developGroupKey(DevelopGroup g);

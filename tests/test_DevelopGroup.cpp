@@ -72,6 +72,35 @@ static GroupSelection only(DevelopGroup g) {
     return s;
 }
 
+TEST_CASE("groupsWithNonDefaultValues is empty for an all-default GlobalAdjustment", "[developgroup]") {
+    CHECK(groupsWithNonDefaultValues(GlobalAdjustment{}).none());
+}
+
+TEST_CASE("groupsWithNonDefaultValues flags exactly Tone when only a Tone field changed",
+    "[developgroup]") {
+    GlobalAdjustment v;
+    v.contrast = 25.0f;
+
+    const GroupSelection sel = groupsWithNonDefaultValues(v);
+    CHECK(sel == only(DevelopGroup::Tone));
+}
+
+TEST_CASE("groupsWithNonDefaultValues flags Hsl when one band moved off zero",
+    "[developgroup]") {
+    GlobalAdjustment v;
+    v.hslHue[0] = 15.0f; // Red hue band only
+
+    CHECK(groupsWithNonDefaultValues(v) == only(DevelopGroup::Hsl));
+}
+
+TEST_CASE("groupsWithNonDefaultValues flags ToneCurve when one curve is non-identity",
+    "[developgroup]") {
+    GlobalAdjustment v;
+    v.curveLuma.points = {{0.0, 0.0}, {0.5, 0.6}, {1.0, 1.0}};
+
+    CHECK(groupsWithNonDefaultValues(v) == only(DevelopGroup::ToneCurve));
+}
+
 TEST_CASE("the default copy selection checks every group except Geometry", "[developgroup]") {
     const GroupSelection sel = defaultCopySelection();
     for (int i = 0; i < kDevelopGroupCount; ++i) {
