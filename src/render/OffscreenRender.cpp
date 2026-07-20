@@ -4,6 +4,7 @@
 #include "develop/CurveLut.h"
 #include "develop/GlobalAdjustment.h"
 #include "render/RendererCore.h"
+#include <algorithm>
 
 namespace offscreen {
 
