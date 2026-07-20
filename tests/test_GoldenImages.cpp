@@ -2,13 +2,15 @@
 #include "develop/GlobalAdjustment.h"
 #include "develop/LocalAdjustment.h"
 // Golden-image tests for the GLSL pipeline, via the real export path
-// (ImageViewport::renderToImage) — policy, thresholds, and format are
-// docs/adr/0005. Regenerate goldens with:
+// (offscreen::renderToImage, docs/adr/0049) — policy, thresholds, and format
+// are docs/adr/0005. Regenerate goldens with:
 //
 //   ARRAW_UPDATE_GOLDENS=1 ./build/tests/arraw_tests "[golden]"
 
 #include "TestApp.h"
-#include "ui/ImageViewport.h"
+#include "render/HeadlessRenderContext.h"
+#include "render/OffscreenRender.h"
+#include "render/RendererCore.h"
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
 #include <QDir>
@@ -21,22 +23,21 @@ namespace {
 constexpr float kMaxPixelDiff = 4.0f / 255.0f;
 constexpr float kMaxChannelMean = 0.3f / 255.0f;
 
-// ── Realized viewport (QApplication + shown widget = live RHI) ───────────────
+// ── Headless renderer (docs/adr/0049) — no widget, no event loop ─────────────
 
-ImageViewport* goldenViewport() {
-    testApp(); // ensure the shared QApplication exists (and is destroyed last)
+RendererCore* goldenCore() {
+    testApp(); // the platform plugin must exist before GL context creation
 
-    // Declared after the app is constructed so it is destroyed first — tearing
-    // down a live render widget after QApplication segfaults in the platform plugin.
-    static std::unique_ptr<ImageViewport> vp = [] {
-        auto v = std::make_unique<ImageViewport>();
-        v->resize(128, 96);
-        v->show();
-        for (int i = 0; i < 200 && !v->rendererReady(); ++i)
-            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        return v;
+    // ctx is declared before core so it is destroyed after it (reverse order):
+    // RendererCore's GPU resources must be released while the QRhi is alive.
+    static std::unique_ptr<HeadlessRenderContext> ctx = HeadlessRenderContext::create();
+    static std::unique_ptr<RendererCore> core = [] {
+        auto c = std::make_unique<RendererCore>();
+        if (ctx)
+            c->initialize(ctx->rhi());
+        return c;
     }();
-    return vp->rendererReady() ? vp.get() : nullptr;
+    return (ctx && core->ready()) ? core.get() : nullptr;
 }
 
 // ── Synthetic input: grey gradient over color bars (see ADR 0005) ────────────
@@ -204,8 +205,8 @@ std::vector<Scenario> scenarios() {
 } // namespace
 
 TEST_CASE("shader pipeline matches golden renders", "[gpu][golden]") {
-    ImageViewport* vp = goldenViewport();
-    if (!vp)
+    RendererCore* core = goldenCore();
+    if (!core)
         SKIP("no OpenGL context available on this machine");
 
     const ImageBuffer scene = syntheticScene();
@@ -219,10 +220,9 @@ TEST_CASE("shader pipeline matches golden renders", "[gpu][golden]") {
             const int outW = int(std::lround(sc.params.cropRect.width() * scene.width));
             const int outH = int(std::lround(sc.params.cropRect.height() * scene.height));
 
-            // Same sequence as MainWindow's export: params are applied to the
-            // viewport (curve LUT) before the offscreen render.
-            vp->setAdjustments(sc.params);
-            const QImage got = vp->renderToImage(scene, sc.params, outW, outH);
+            // Same sequence as MainWindow's export: offscreen::renderToImage
+            // sets the curve LUT from sc.params before the offscreen render.
+            const QImage got = offscreen::renderToImage(*core, scene, sc.params, outW, outH);
             REQUIRE_FALSE(got.isNull());
             REQUIRE(got.format() == QImage::Format_RGBX32FPx4);
 
@@ -255,8 +255,8 @@ TEST_CASE("shader pipeline matches golden renders", "[gpu][golden]") {
 // model this replaced turned black into saturated red at 12000 K. This drives
 // the whole GPU chain (std140 packing, fillUbuf, the shader multiply).
 TEST_CASE("black stays black through the white-balance gain", "[gpu][whitebalance]") {
-    ImageViewport* vp = goldenViewport();
-    if (!vp)
+    RendererCore* core = goldenCore();
+    if (!core)
         SKIP("no OpenGL context available on this machine");
 
     const ImageBuffer scene = syntheticScene(); // x==0, top half is pure black
@@ -267,8 +267,7 @@ TEST_CASE("black stays black through the white-balance gain", "[gpu][whitebalanc
                 GlobalAdjustment p;
                 p.temperature = kelvin;
                 p.tint = tint;
-                vp->setAdjustments(p);
-                const QImage got = vp->renderToImage(scene, p, scene.width, scene.height);
+                const QImage got = offscreen::renderToImage(*core, scene, p, scene.width, scene.height);
                 REQUIRE_FALSE(got.isNull());
 
                 // Black column (x == 0) in the top (grey-ramp) half stays black.
@@ -286,8 +285,8 @@ TEST_CASE("black stays black through the white-balance gain", "[gpu][whitebalanc
 // — std140 packing, fillUbuf, the shader loop, and the GLSL maskWeight port.
 // A +1 EV local exposure on a Linear mask must brighten only the masked region.
 TEST_CASE("a local exposure mask brightens only the masked region", "[gpu][localadj]") {
-    ImageViewport* vp = goldenViewport();
-    if (!vp)
+    RendererCore* core = goldenCore();
+    if (!core)
         SKIP("no OpenGL context available on this machine");
 
     // Flat mid-grey scene, so any brightness difference is the mask's doing.
@@ -304,8 +303,7 @@ TEST_CASE("a local exposure mask brightens only the masked region", "[gpu][local
     la.exposure = 1.0f; // +1 EV on the masked side
     p.localAdjustments.push_back(la);
 
-    vp->setAdjustments(p);
-    const QImage got = vp->renderToImage(scene, p, scene.width, scene.height);
+    const QImage got = offscreen::renderToImage(*core, scene, p, scene.width, scene.height);
     REQUIRE_FALSE(got.isNull());
     REQUIRE(got.format() == QImage::Format_RGBX32FPx4);
 
@@ -322,8 +320,8 @@ TEST_CASE("a local exposure mask brightens only the masked region", "[gpu][local
 }
 
 TEST_CASE("a later Local Adjustment can recover global white headroom", "[gpu][tone]") {
-    ImageViewport* vp = goldenViewport();
-    if (!vp)
+    RendererCore* core = goldenCore();
+    if (!core)
         SKIP("no OpenGL context available on this machine");
 
     ImageBuffer scene;
@@ -337,8 +335,7 @@ TEST_CASE("a later Local Adjustment can recover global white headroom", "[gpu][t
     // Filmic Highlights defaults to 25 (docs/adr/0040) and would compress the
     // over-white value back below 1.0, masking the headroom this test checks.
     globalOnly.filmicHighlights = 0.0f;
-    vp->setAdjustments(globalOnly);
-    const QImage over = vp->renderToImage(scene, globalOnly, scene.width, scene.height);
+    const QImage over = offscreen::renderToImage(*core, scene, globalOnly, scene.width, scene.height);
     REQUIRE_FALSE(over.isNull());
     const float overWhite = reinterpret_cast<const float*>(over.constScanLine(8))[8 * 4];
     REQUIRE(overWhite > 1.0f);
@@ -348,8 +345,7 @@ TEST_CASE("a later Local Adjustment can recover global white headroom", "[gpu][t
     local.mask = LinearMask{{-2.0, 0.5}, {-1.0, 0.5}}; // weight 1 over the whole frame
     local.whites = -100.0f;
     recovered.localAdjustments.push_back(local);
-    vp->setAdjustments(recovered);
-    const QImage under = vp->renderToImage(scene, recovered, scene.width, scene.height);
+    const QImage under = offscreen::renderToImage(*core, scene, recovered, scene.width, scene.height);
     REQUIRE_FALSE(under.isNull());
     const float recoveredWhite = reinterpret_cast<const float*>(under.constScanLine(8))[8 * 4];
 
@@ -358,8 +354,8 @@ TEST_CASE("a later Local Adjustment can recover global white headroom", "[gpu][t
 }
 
 TEST_CASE("a local radial mask brightens only inside the oval", "[gpu][localadj]") {
-    ImageViewport* vp = goldenViewport();
-    if (!vp)
+    RendererCore* core = goldenCore();
+    if (!core)
         SKIP("no OpenGL context available on this machine");
 
     ImageBuffer scene;
@@ -379,8 +375,7 @@ TEST_CASE("a local radial mask brightens only inside the oval", "[gpu][localadj]
     la.exposure = 1.0f;
     p.localAdjustments.push_back(la);
 
-    vp->setAdjustments(p);
-    const QImage got = vp->renderToImage(scene, p, scene.width, scene.height);
+    const QImage got = offscreen::renderToImage(*core, scene, p, scene.width, scene.height);
     REQUIRE_FALSE(got.isNull());
 
     auto value = [&](float fx, float fy) {
@@ -398,8 +393,8 @@ TEST_CASE("a local radial mask brightens only inside the oval", "[gpu][localadj]
 // current crop. A radial mask centred at full-image (0.5,0.5) must remain on
 // that subject when a later crop keeps only the bottom-right quadrant.
 TEST_CASE("a radial mask follows the subject through crop changes", "[gpu][localadj]") {
-    ImageViewport* vp = goldenViewport();
-    if (!vp)
+    RendererCore* core = goldenCore();
+    if (!core)
         SKIP("no OpenGL context available on this machine");
 
     ImageBuffer scene;
@@ -420,10 +415,9 @@ TEST_CASE("a radial mask follows the subject through crop changes", "[gpu][local
     la.exposure = 1.0f;
     p.localAdjustments.push_back(la);
 
-    vp->setAdjustments(p);
     const int outW = int(std::lround(p.cropRect.width() * scene.width));
     const int outH = int(std::lround(p.cropRect.height() * scene.height));
-    const QImage got = vp->renderToImage(scene, p, outW, outH);
+    const QImage got = offscreen::renderToImage(*core, scene, p, outW, outH);
     REQUIRE_FALSE(got.isNull());
 
     auto value = [&](float fx, float fy) {
@@ -440,8 +434,8 @@ TEST_CASE("a radial mask follows the subject through crop changes", "[gpu][local
 }
 
 TEST_CASE("post-crop Vignette darkens crop corners without moving its centre", "[gpu][effects]") {
-    ImageViewport* vp = goldenViewport();
-    if (!vp)
+    RendererCore* core = goldenCore();
+    if (!core)
         SKIP("no OpenGL context available on this machine");
 
     ImageBuffer scene;
@@ -457,8 +451,7 @@ TEST_CASE("post-crop Vignette darkens crop corners without moving its centre", "
     const int outW = int(p.cropRect.width() * scene.width);
     const int outH = int(p.cropRect.height() * scene.height);
 
-    vp->setAdjustments(p);
-    const QImage got = vp->renderToImage(scene, p, outW, outH);
+    const QImage got = offscreen::renderToImage(*core, scene, p, outW, outH);
     REQUIRE_FALSE(got.isNull());
 
     auto value = [&](int x, int y) {
@@ -472,8 +465,8 @@ TEST_CASE("post-crop Vignette darkens crop corners without moving its centre", "
 }
 
 TEST_CASE("Grain is deterministic per seed and monochromatic", "[gpu][effects]") {
-    ImageViewport* vp = goldenViewport();
-    if (!vp)
+    RendererCore* core = goldenCore();
+    if (!core)
         SKIP("no OpenGL context available on this machine");
 
     ImageBuffer scene;
@@ -486,9 +479,8 @@ TEST_CASE("Grain is deterministic per seed and monochromatic", "[gpu][effects]")
     p.grainSize = 50.0f;
     p.grainRoughness = 75.0f;
     p.grainSeed = 123456U;
-    vp->setAdjustments(p);
-    const QImage first = vp->renderToImage(scene, p, scene.width, scene.height);
-    const QImage second = vp->renderToImage(scene, p, scene.width, scene.height);
+    const QImage first = offscreen::renderToImage(*core, scene, p, scene.width, scene.height);
+    const QImage second = offscreen::renderToImage(*core, scene, p, scene.width, scene.height);
     REQUIRE_FALSE(first.isNull());
     CHECK(first == second);
 
@@ -497,8 +489,7 @@ TEST_CASE("Grain is deterministic per seed and monochromatic", "[gpu][effects]")
     CHECK(std::abs(px[23 * 4 + 1] - px[23 * 4 + 2]) < 1e-6f);
 
     p.grainSeed = 654321U;
-    vp->setAdjustments(p);
-    const QImage other = vp->renderToImage(scene, p, scene.width, scene.height);
+    const QImage other = offscreen::renderToImage(*core, scene, p, scene.width, scene.height);
     REQUIRE_FALSE(other.isNull());
     CHECK_FALSE(first == other);
 }
@@ -508,8 +499,8 @@ TEST_CASE("Grain is deterministic per seed and monochromatic", "[gpu][effects]")
 // black, and saturated single-channel bars, so this one golden locks the
 // any-channel rule, the red/blue colours, and highlight-wins-over-shadow ties.
 TEST_CASE("clipping overlay matches golden render", "[gpu][golden]") {
-    ImageViewport* vp = goldenViewport();
-    if (!vp)
+    RendererCore* core = goldenCore();
+    if (!core)
         SKIP("no OpenGL context available on this machine");
 
     const ImageBuffer scene = syntheticScene();
@@ -519,8 +510,8 @@ TEST_CASE("clipping overlay matches golden render", "[gpu][golden]") {
         QDir().mkpath(goldenDir);
 
     GlobalAdjustment p; // neutral: clipping reflects the scene itself
-    vp->setAdjustments(p);
-    const QImage got = vp->renderClipSample(
+    const QImage got = offscreen::renderClipSample(
+        *core,
         scene,
         p,
         /*highlights=*/true,
