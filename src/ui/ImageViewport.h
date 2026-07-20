@@ -5,10 +5,12 @@
 #include "develop/GlobalAdjustment.h"
 #include "develop/LocalAdjustment.h"
 #include "develop/Spot.h"
+#include "develop/WhiteBalance.h"
 #include "pipeline/ColorManagement.h"
 #include "render/PendingHistogram.h"
 #include "render/RendererCore.h"
 #include "render/ViewportGeometry.h"
+#include <optional>
 #include <QImage>
 #include <QPointF>
 #include <QRectF>
@@ -281,8 +283,8 @@ private:
     void drawStraightenLine(QPainter& p) const;
 
     // WB picker: read the pre-WB pixel value under pos (GPU tap, docs/adr/0004)
-    // and invert the blackbody WB gain into kelvin/tint. False if pos is off-image.
-    bool sampleWhiteBalance(QPointF pos, float& kelvin, float& tintOut);
+    // and invert the blackbody WB gain. Empty if pos is off-image.
+    std::optional<WhiteBalance> sampleWhiteBalance(QPointF pos);
 
     // Aspect ratio of the region currently shown (accounts for committed crop).
     float displayAspect() const;

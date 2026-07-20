@@ -107,7 +107,8 @@ runtime DLLs + plugin folders). As of ADR 0016 the stage also bundles the MSVC/O
 A per-user **Inno Setup** `setup.exe` is built by `python tools/package_windows.py
 --installer` (needs `ISCC` on PATH — `scoop install inno-setup`) over the same
 stage as the ZIP. No UAC (`{localappdata}\Programs\arraw`), opt-in RAW file
-associations, app-local runtime. Still deferred:
+associations, an opt-in Explorer folder context menu, app-local runtime. Still
+deferred:
 
 - **Code signing** — ships unsigned; users click through SmartScreen ("More info →
   Run anyway"). Revisit with an Authenticode cert at posture B.

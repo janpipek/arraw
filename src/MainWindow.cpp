@@ -528,6 +528,8 @@ MainWindow::MainWindow(QWidget* parent)
         adjustmentsPane->collapse();
     else
         adjustmentsPane->expand();
+    toggleHistoryAction->setChecked(!historyPane->isCollapsed());
+    toggleAdjustmentsAction->setChecked(!adjustmentsPane->isCollapsed());
 }
 
 void MainWindow::closeEvent(QCloseEvent* e) {
@@ -639,11 +641,18 @@ void MainWindow::setupMenus() {
 
     auto* view = menuBar()->addMenu("&View");
     view->addAction(filmStripDock->toggleViewAction());
-    auto* toggleHistory = view->addAction("History Panel", this, [this] { historyPane->toggle(); });
-    toggleHistory->setShortcut(Qt::Key_F7);
-    auto* toggleAdjustments = view->addAction("Adjustments Panel", this, [this] {
-        adjustmentsPane->toggle();
+    auto* toggleHistory = toggleHistoryAction = view->addAction("History Panel", this, [this] {
+        historyPane->toggle();
+        toggleHistoryAction->setChecked(!historyPane->isCollapsed());
     });
+    toggleHistory->setCheckable(true);
+    toggleHistory->setShortcut(Qt::Key_F7);
+    auto* toggleAdjustments = toggleAdjustmentsAction
+        = view->addAction("Adjustments Panel", this, [this] {
+              adjustmentsPane->toggle();
+              toggleAdjustmentsAction->setChecked(!adjustmentsPane->isCollapsed());
+          });
+    toggleAdjustments->setCheckable(true);
     toggleAdjustments->setShortcut(Qt::Key_F8);
     view->addSeparator();
     // Zoom (docs/superpowers/specs/2026-07-01-zoom-menu-design.md). Presets
@@ -1234,8 +1243,14 @@ void MainWindow::setupDocks() {
     addToolBar(Qt::LeftToolBarArea, historyStrip);
 
     historyPane = std::make_unique<CollapsiblePane>(historyDock, historyStrip);
-    connect(historyCollapseBtn, &QToolButton::clicked, this, [this] { historyPane->collapse(); });
-    connect(historyExpandAction, &QAction::triggered, this, [this] { historyPane->expand(); });
+    connect(historyCollapseBtn, &QToolButton::clicked, this, [this] {
+        historyPane->collapse();
+        toggleHistoryAction->setChecked(false);
+    });
+    connect(historyExpandAction, &QAction::triggered, this, [this] {
+        historyPane->expand();
+        toggleHistoryAction->setChecked(true);
+    });
 
     // Adjustments + metadata (right). Collapses to a thin edge strip (ADR 0012).
     auto* rightDock = adjustmentsDock = new QDockWidget("Adjustments", this);
@@ -1314,8 +1329,14 @@ void MainWindow::setupDocks() {
     // expanded (dock shown, strip hidden). A restored collapsed state is synced
     // back onto it after restoreState() in the constructor.
     adjustmentsPane = std::make_unique<CollapsiblePane>(rightDock, strip);
-    connect(collapseBtn, &QToolButton::clicked, this, [this] { adjustmentsPane->collapse(); });
-    connect(expandAction, &QAction::triggered, this, [this] { adjustmentsPane->expand(); });
+    connect(collapseBtn, &QToolButton::clicked, this, [this] {
+        adjustmentsPane->collapse();
+        toggleAdjustmentsAction->setChecked(false);
+    });
+    connect(expandAction, &QAction::triggered, this, [this] {
+        adjustmentsPane->expand();
+        toggleAdjustmentsAction->setChecked(true);
+    });
     // adjPanel → viewport paramsChanged wired in constructor (after both are created)
 }
 

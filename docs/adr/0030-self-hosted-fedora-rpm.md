@@ -41,8 +41,9 @@ an incompatible Qt minor update.
 
 The desktop launcher advertises the formats arraw deliberately opens. These are
 the nine RAW formats with MIME types supplied by Fedora (CR2, CR3, NEF, ARW, DNG,
-RAF, ORF, RW2, and PEF) and JPEG, PNG, TIFF, WebP, and BMP. Declaring a handler
-only makes arraw available through "Open With"; it does not change user defaults.
+RAF, ORF, RW2, and PEF), JPEG, PNG, TIFF, WebP, BMP, and directories. Declaring a
+handler only makes arraw available through "Open With"; it does not change user
+defaults.
 
 Samsung SRW remains supported through arraw's file chooser but is not advertised.
 Fedora's shared MIME database has no SRW definition, and current Gwenview likewise
