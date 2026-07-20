@@ -1967,13 +1967,17 @@ void MainWindow::saveCurrentAsPreset() {
         return;
     viewport->commitActiveTool();
 
-    GroupChecklistDialog dlg(tr("Save Preset"), allGroups(), lastCopySelection, this);
+    // Pre-checks only what this photo actually edited, independent of Copy/
+    // Paste's sticky lastCopySelection (docs/adr/0049) — a preset saved from an
+    // untouched photo no longer silently carries nine groups of resets.
+    const GlobalAdjustment params = currentParams();
+    GroupChecklistDialog dlg(
+        tr("Save Preset"), allGroups(), groupsWithNonDefaultValues(params), this);
     if (dlg.exec() != QDialog::Accepted)
         return;
     const GroupSelection chosen = dlg.selectedGroups();
     if (chosen.none())
         return;
-    lastCopySelection = chosen;
 
     bool ok = false;
     const QString name
@@ -1983,10 +1987,18 @@ void MainWindow::saveCurrentAsPreset() {
     if (!ok || name.isEmpty())
         return;
 
+    if (presetStore.exists(name)
+        && QMessageBox::question(
+               this,
+               tr("Save Preset"),
+               tr("A preset named \"%1\" already exists. Replace it?").arg(name))
+               != QMessageBox::Yes)
+        return;
+
     DevelopPreset preset;
     preset.name = name;
     preset.groups = chosen;
-    preset.values = currentParams();
+    preset.values = params;
     if (!presetStore.save(preset)) {
         QMessageBox::warning(this, tr("Save Preset"), tr("Could not write the preset file."));
         return;
@@ -2013,13 +2025,61 @@ void MainWindow::managePresets() {
     layout->addWidget(list);
 
     auto* buttons = new QDialogButtonBox(&dlg);
+    auto* renameBtn = buttons->addButton(tr("Rename"), QDialogButtonBox::ActionRole);
+    auto* detailsBtn = buttons->addButton(tr("Details..."), QDialogButtonBox::ActionRole);
     auto* deleteBtn = buttons->addButton(tr("Delete"), QDialogButtonBox::DestructiveRole);
     buttons->addButton(QDialogButtonBox::Close);
     layout->addWidget(buttons);
 
-    connect(deleteBtn, &QPushButton::clicked, &dlg, [this, list] {
+    connect(renameBtn, &QPushButton::clicked, &dlg, [this, list, &dlg] {
         QListWidgetItem* item = list->currentItem();
         if (!item)
+            return;
+        const QString oldName = item->text();
+        bool ok = false;
+        const QString newName
+            = QInputDialog::getText(
+                  &dlg, tr("Rename Preset"), tr("Preset name:"), QLineEdit::Normal, oldName, &ok)
+                  .trimmed();
+        if (!ok || newName.isEmpty() || newName == oldName)
+            return;
+
+        if (presetStore.exists(newName, oldName)
+            && QMessageBox::question(
+                   &dlg,
+                   tr("Rename Preset"),
+                   tr("A preset named \"%1\" already exists. Replace it?").arg(newName))
+                   != QMessageBox::Yes)
+            return;
+
+        if (!presetStore.rename(oldName, newName)) {
+            QMessageBox::warning(&dlg, tr("Rename Preset"), tr("Could not rename the preset."));
+            return;
+        }
+        item->setText(newName);
+    });
+
+    connect(detailsBtn, &QPushButton::clicked, &dlg, [this, list, &dlg] {
+        QListWidgetItem* item = list->currentItem();
+        if (!item)
+            return;
+        for (const DevelopPreset& p : presetStore.loadAll()) {
+            if (p.name == item->text()) {
+                showPresetDetails(p, &dlg);
+                break;
+            }
+        }
+    });
+
+    connect(deleteBtn, &QPushButton::clicked, &dlg, [this, list, &dlg] {
+        QListWidgetItem* item = list->currentItem();
+        if (!item)
+            return;
+        if (QMessageBox::question(
+                &dlg,
+                tr("Delete Preset"),
+                tr("Delete preset \"%1\"? This cannot be undone.").arg(item->text()))
+            != QMessageBox::Yes)
             return;
         presetStore.remove(item->text());
         delete list->takeItem(list->row(item));
@@ -2028,6 +2088,43 @@ void MainWindow::managePresets() {
 
     dlg.exec();
     rebuildPresetsMenu();
+}
+
+void MainWindow::showPresetDetails(const DevelopPreset& preset, QWidget* parent) {
+    QDialog details(parent);
+    details.setWindowTitle(tr("Preset Details: %1").arg(preset.name));
+    details.resize(360, 420);
+    auto* layout = new QVBoxLayout(&details);
+
+    QStringList text;
+    for (int i = 0; i < kDevelopGroupCount; ++i) {
+        const auto g = static_cast<DevelopGroup>(i);
+        if (!hasGroup(preset.groups, g))
+            continue;
+        text << QString("<b>%1</b>").arg(developGroupLabel(g).toHtmlEscaped());
+        const QStringList lines = describeGroupNonDefaults(g, preset.values);
+        if (lines.isEmpty())
+            text << QString("&nbsp;&nbsp;%1").arg(tr("(resets to defaults)"));
+        else
+            for (const QString& line : lines)
+                text << QString("&nbsp;&nbsp;%1").arg(line.toHtmlEscaped());
+    }
+
+    auto* label = new QLabel(text.join("<br>"));
+    label->setTextFormat(Qt::RichText);
+    label->setWordWrap(true);
+
+    auto* scroll = new QScrollArea(&details);
+    scroll->setWidget(label);
+    scroll->setWidgetResizable(true);
+    layout->addWidget(scroll);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &details);
+    connect(buttons, &QDialogButtonBox::rejected, &details, &QDialog::reject);
+    connect(buttons, &QDialogButtonBox::accepted, &details, &QDialog::accept);
+    layout->addWidget(buttons);
+
+    details.exec();
 }
 
 void MainWindow::rebuildPresetsMenu() {

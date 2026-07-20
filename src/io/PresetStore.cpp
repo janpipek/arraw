@@ -73,9 +73,11 @@ bool PresetStore::rename(const QString& oldName, const QString& newName) const {
     return save(p);
 }
 
-bool PresetStore::exists(const QString& presetName) const {
+bool PresetStore::exists(const QString& presetName, const QString& excluding) const {
     const QString candidateFile = presetFileName(presetName);
     for (const DevelopPreset& p : loadAll()) {
+        if (!excluding.isEmpty() && p.name == excluding)
+            continue;
         if (p.name.compare(presetName, Qt::CaseInsensitive) == 0)
             return true;
         if (presetFileName(p.name).compare(candidateFile, Qt::CaseInsensitive) == 0)

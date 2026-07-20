@@ -42,7 +42,10 @@ public:
     // which presetFileName both map to "a_b.json", count as a collision even
     // though they are distinct display names). Used to prompt before an
     // overwrite on save/rename (CONTEXT.md Develop Preset, docs/adr/0049).
-    bool exists(const QString& presetName) const;
+    // `excluding`, when given, skips the preset with that exact stored name —
+    // so renaming a preset onto a case/sanitisation variant of its own current
+    // name isn't reported as colliding with itself.
+    bool exists(const QString& presetName, const QString& excluding = {}) const;
 
 private:
     QString directory;

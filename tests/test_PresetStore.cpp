@@ -107,6 +107,18 @@ TEST_CASE("exists treats a sanitisation collision as taken", "[presetstore]") {
     CHECK(store.exists("a:b")); // also sanitises to "a_b.json" — a distinct name, same file
 }
 
+TEST_CASE("exists with excluding ignores the preset being renamed", "[presetstore]") {
+    QTemporaryDir dir;
+    const PresetStore store(dir.path());
+    store.save(preset("Punchy"));
+
+    // A case-only rename of Punchy onto itself must not read as a collision...
+    CHECK_FALSE(store.exists("punchy", "Punchy"));
+    // ...but a rename onto a name some other preset already holds still is.
+    store.save(preset("Vivid"));
+    CHECK(store.exists("Vivid", "Punchy"));
+}
+
 TEST_CASE("rename moves a preset to a new name, keeping its content", "[presetstore]") {
     QTemporaryDir dir;
     const PresetStore store(dir.path());
