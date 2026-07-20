@@ -49,9 +49,11 @@ available:
 - **Portable ZIP** — extract anywhere and run `arraw.exe` from the extracted
   folder. Everything Qt and the app need is bundled alongside the executable.
 
-arraw is a GUI-subsystem binary with no attached console; to capture diagnostic
-output redirect stderr (`arraw.exe 2> trace.txt`) — see the
-[Windows build guide](windows-build.md) and [diagnostics in AGENTS.md](../AGENTS.md#diagnostics).
+`arraw.exe` is a console-subsystem binary: run it bare to launch the editor
+(`arraw-gui.exe`), or give it a command — see [Command line](#command-line)
+below. The Start-menu / desktop shortcuts launch `arraw-gui.exe` directly, with
+no console. See the [Windows build guide](windows-build.md) and
+[diagnostics in AGENTS.md](../AGENTS.md#diagnostics).
 
 ## macOS
 
@@ -65,3 +67,20 @@ Every build reports its version (single-sourced from `CMakeLists.txt`):
 ```bash
 arraw --version
 ```
+
+## Command line
+
+`arraw` is also a command-line tool:
+
+    arraw                  # open the editor
+    arraw ui photo.arw     # open the editor on a file or folder
+    arraw export *.arw -o developed/   # render files through their develop
+                                       # sidecars, no window needed
+    arraw export --help    # format, quality, size, profile, metadata flags
+
+Exports use each file's `.xmp` develop sidecar exactly as the editor would —
+no sidecar means the same defaults a freshly opened photo shows. On Windows
+the installer's "Add arraw to PATH" option (on by default) makes the command
+available in new terminals; the Start-menu entry launches `arraw-gui.exe`,
+the editor itself. On a machine without a display, run with
+`QT_QPA_PLATFORM=offscreen`.
