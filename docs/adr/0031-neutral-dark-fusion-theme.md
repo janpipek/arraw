@@ -2,7 +2,7 @@
 
 Arraw ships a deliberate **neutral dark** UI: the Fusion style with a custom dark
 `QPalette`, applied once at startup. All UI colors are single-sourced from a
-dependency-free `src/ThemeColors.h`, anchored on the existing viewport surround
+dependency-free `src/core/ThemeColors.h`, anchored on the existing viewport surround
 gray so chrome and the GPU canvas can never drift apart.
 
 ## Context
@@ -30,10 +30,11 @@ editor wants the opposite of a colorful chromed UI:
   constructed so the style/palette cascade reaches every widget, including native
   dialogs. Forces `QStyleFactory::create("Fusion")` unconditionally, then installs
   a dark `QPalette` built in one function (`buildDarkPalette`).
-- **`src/ThemeColors.h`** — a leaf header of plain `QColor` constants with no
+- **`src/core/ThemeColors.h`** — a leaf header of plain `QColor` constants with no
   widget dependencies. Both `RendererCore` (viewport surround) and `Theme` (the
-  palette) read it. `ThemeColors::kCanvas` keeps the historical `0.15,0.15,0.15`
-  value bit-identical so the golden-image references (ADR 0005) stay valid.
+  palette) read it. `ThemeColors::kCanvas` is defined with explicit hex RGB
+  channels, and the golden-image references (ADR 0005) are regenerated if it
+  changes.
 - **Panels slightly lighter than the canvas.** Window/docks `#2e2e2e`, raised
   panels `#36`, recessed `Base` `#1e1e1e`; the `#262626` canvas remains the
   darkest large neutral. A single muted steel-blue accent (`#3b6ea5`) for
@@ -71,9 +72,9 @@ editor wants the opposite of a colorful chromed UI:
 
 - `Theme::apply()` must stay before any widget construction in `main()`; moving it
   later would leave early widgets unthemed.
-- `ThemeColors::kCanvas` must remain bit-identical to `0.15,0.15,0.15` — changing
-  it drifts every golden image with surround pixels (ADR 0005). It is a *move*, not
-  a *change*, of the value.
+- `ThemeColors::kCanvas` is part of the rendered output for any golden with
+  surround pixels; changing it requires regenerating the golden-image references
+  (ADR 0005).
 - Future readers should resist "theming" the semantic/data-viz colors; their fixed
   values are meaning, not styling.
 - This is a UI presentation concern only — no new domain term, so `CONTEXT.md` is
