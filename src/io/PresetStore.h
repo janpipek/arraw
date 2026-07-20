@@ -28,6 +28,22 @@ public:
     // Deletes the file backing `presetName`. Returns false if it was absent.
     bool remove(const QString& presetName) const;
 
+    // Renames `oldName` to `newName`, keeping its groups and values, and
+    // overwriting anything already stored under `newName`. Returns false if
+    // `oldName` doesn't exist. The old file is removed before the new one is
+    // written, so a case-only rename is safe on both case-sensitive (Linux) and
+    // case-insensitive (Windows) filesystems — writing first then removing the
+    // old path could otherwise delete the just-renamed file on Windows, where
+    // the two paths alias the same file.
+    bool rename(const QString& oldName, const QString& newName) const;
+
+    // Whether a preset named `presetName` already exists — case-insensitively
+    // (so every platform agrees) and post-sanitisation (so "a/b" and "a:b",
+    // which presetFileName both map to "a_b.json", count as a collision even
+    // though they are distinct display names). Used to prompt before an
+    // overwrite on save/rename (CONTEXT.md Develop Preset, docs/adr/0049).
+    bool exists(const QString& presetName) const;
+
 private:
     QString directory;
 };

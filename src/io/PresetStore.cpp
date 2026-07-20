@@ -54,3 +54,32 @@ std::vector<DevelopPreset> PresetStore::loadAll() const {
 bool PresetStore::remove(const QString& presetName) const {
     return QFile::remove(QDir(directory).filePath(presetFileName(presetName)));
 }
+
+bool PresetStore::rename(const QString& oldName, const QString& newName) const {
+    const QDir dir(directory);
+    QFile oldFile(dir.filePath(presetFileName(oldName)));
+    if (!oldFile.open(QIODevice::ReadOnly))
+        return false;
+    bool ok = false;
+    DevelopPreset p = parseDevelopPreset(oldFile.readAll(), &ok);
+    oldFile.close();
+    if (!ok)
+        return false;
+
+    if (!QFile::remove(dir.filePath(presetFileName(oldName))))
+        return false;
+
+    p.name = newName;
+    return save(p);
+}
+
+bool PresetStore::exists(const QString& presetName) const {
+    const QString candidateFile = presetFileName(presetName);
+    for (const DevelopPreset& p : loadAll()) {
+        if (p.name.compare(presetName, Qt::CaseInsensitive) == 0)
+            return true;
+        if (presetFileName(p.name).compare(candidateFile, Qt::CaseInsensitive) == 0)
+            return true;
+    }
+    return false;
+}
