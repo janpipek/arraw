@@ -250,6 +250,8 @@ private:
     QAction* sensorClipAction;     // View → Show Sensor Clipping
     QAction* fullScreenAction = nullptr;
     QAction* lightsOutAction = nullptr;
+    QAction* toggleHistoryAction = nullptr;     // View → History Panel
+    QAction* toggleAdjustmentsAction = nullptr; // View → Adjustments Panel
     std::optional<ChromeHider> chromeHider;
     bool wasMaximized = false;
 
