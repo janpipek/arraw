@@ -314,6 +314,7 @@ target_link_libraries(arraw_ui PUBLIC Qt6::Widgets arraw_engine)
 # as SYSTEM so /W4 stays clean on third-party code.
 add_library(arraw_cli STATIC
     src/cli/ExportArgs.cpp
+    src/cli/ExportPreflight.cpp
 )
 arraw_enable_warnings(arraw_cli)
 target_link_libraries(arraw_cli PUBLIC arraw_engine)
