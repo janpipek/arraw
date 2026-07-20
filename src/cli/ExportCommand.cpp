@@ -38,6 +38,8 @@ int runExport(const ExportInvocation& inv, QTextStream& out, QTextStream& err) {
     int failed = 0;
     const auto cancel = std::make_shared<std::atomic<bool>>(false);
 
+    out << "Exporting " << plan.items.size() << " images...\n";
+
     for (const ExportPlanItem& item : plan.items) {
         // Same recipe as the GUI batch export (src/MainWindow.cpp): the
         // demosaic choice parameterises the decode itself (docs/adr/0036).
@@ -86,7 +88,7 @@ int runExport(const ExportInvocation& inv, QTextStream& out, QTextStream& err) {
         if (tail.metadata == ExportMetadataStatus::Failed)
             err << item.input << ": warning: metadata embed failed (image written)\n";
 
-        out << item.input << " -> " << item.output << "\n";
+        out << "Exported: " << item.input << " -> " << item.output << "\n";
         out.flush(); // progress must appear per file, not at exit
         ++exported;
     }
