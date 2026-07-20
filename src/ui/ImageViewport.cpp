@@ -1370,7 +1370,8 @@ void ImageViewport::mousePressEvent(QMouseEvent* e) {
     if (tool == ActiveTool::WhiteBalance && e->button() == Qt::LeftButton) {
         if (const auto wb = sampleWhiteBalance(e->position()))
             emit whiteBalanceCommitted(wb->kelvin, wb->tint);
-        return; // tool stays active for further picks
+        setActiveTool(ActiveTool::None); // one-shot: pick once, then deactivate
+        return;
     }
     if (localMaskMode() && e->button() == Qt::LeftButton) {
         if (activeBrushMask()) {

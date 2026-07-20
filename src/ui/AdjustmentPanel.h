@@ -49,10 +49,15 @@ public:
     // non-Bayer sensors, where the Bayer algorithms do not apply (docs/adr/0036).
     void setDemosaicAvailable(bool available);
 
+    // Reflect the viewport's active tool without re-triggering wbPickerToggled.
+    void setWbPickerChecked(bool checked);
+    void setWbPickerEnabled(bool enabled);
+
 signals:
     void paramsChanged(const GlobalAdjustment&);
     void adjustmentCommitted(const GlobalAdjustment& before, const GlobalAdjustment& after);
     void straightenActive(bool active);
+    void wbPickerToggled(bool checked);
 
 protected:
     bool eventFilter(QObject* obj, QEvent* ev) override;
@@ -83,6 +88,7 @@ private:
 
     Histogram* histogram;
     QComboBox* wbPresets;
+    QPushButton* wbPickerButton;
     ToneCurveWidget* toneCurve;
     std::array<QPushButton*, 4> curveChannelBtns; // indexed by ToneCurveWidget::Channel
     QStackedWidget* hslStack;

@@ -377,6 +377,11 @@ MainWindow::MainWindow(QWidget* parent)
         syncToolActions();
     });
 
+    connect(adjPanel, &AdjustmentPanel::wbPickerToggled, this, [this](bool checked) {
+        using T = ImageViewport::ActiveTool;
+        viewport->setActiveTool(checked ? T::WhiteBalance : T::None);
+    });
+
     connect(
         adjPanel,
         &AdjustmentPanel::adjustmentCommitted,
@@ -866,7 +871,6 @@ void MainWindow::setupToolbar() {
     };
     cropAction = addTool("Crop", Qt::Key_C);
     straightenAction = addTool("Straighten", {});
-    wbAction = addTool("White Bal.", {});
 
     // Masks and Spots are selected through the adjustment tabs. These actions
     // provide window-scoped shortcuts without adding duplicate toolbar buttons.
@@ -908,7 +912,7 @@ void MainWindow::setupToolbar() {
         using T = ImageViewport::ActiveTool;
         T t = T::None;
         if (a->isChecked())
-            t = a == cropAction ? T::Crop : a == straightenAction ? T::Straighten : T::WhiteBalance;
+            t = a == cropAction ? T::Crop : T::Straighten;
         viewport->setActiveTool(t);
     });
 
@@ -986,11 +990,11 @@ void MainWindow::applyAspectLock() {
 void MainWindow::syncToolActions() {
     const ImageViewport::ActiveTool t = viewport->activeTool();
     // setChecked doesn't emit QActionGroup::triggered, but block toggled too.
-    const QSignalBlocker b1(cropAction), b2(straightenAction), b3(wbAction);
+    const QSignalBlocker b1(cropAction), b2(straightenAction);
     const bool cropOn = t == ImageViewport::ActiveTool::Crop;
     cropAction->setChecked(cropOn);
     straightenAction->setChecked(t == ImageViewport::ActiveTool::Straighten);
-    wbAction->setChecked(t == ImageViewport::ActiveTool::WhiteBalance);
+    adjPanel->setWbPickerChecked(t == ImageViewport::ActiveTool::WhiteBalance);
 
     // The aspect lock only applies while cropping. Reflect whatever the viewport
     // restored from the persisted crop: check the matching preset, or uncheck all
@@ -1029,7 +1033,7 @@ void MainWindow::setToolsEnabled(bool on) {
     toolsEnabled = on;
     cropAction->setEnabled(on);
     straightenAction->setEnabled(on);
-    wbAction->setEnabled(on);
+    adjPanel->setWbPickerEnabled(on);
     masksTabShortcut->setEnabled(on);
     spotsTabShortcut->setEnabled(on);
     saveAction->setEnabled(on);

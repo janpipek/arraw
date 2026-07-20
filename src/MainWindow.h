@@ -229,7 +229,6 @@ private:
     QActionGroup* toolGroup;
     QAction* cropAction;
     QAction* straightenAction;
-    QAction* wbAction;
     QAction* masksTabShortcut;
     QAction* spotsTabShortcut;
     QTabWidget* rightTabs = nullptr; // Adjustments / Masks / Spots / Info
