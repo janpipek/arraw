@@ -318,6 +318,8 @@ add_library(arraw_cli STATIC
     src/cli/ExportArgs.cpp
     src/cli/ExportPreflight.cpp
     src/cli/ExportCommand.cpp
+    src/cli/PresetArgs.cpp
+    src/cli/PresetCommand.cpp
     src/cli/Dispatch.cpp
 )
 arraw_enable_warnings(arraw_cli)

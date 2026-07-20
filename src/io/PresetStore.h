@@ -54,3 +54,10 @@ private:
 // The storage filename for a preset display name: name with filesystem-unsafe
 // characters replaced by '_', plus a ".json" suffix. Pure (no disk).
 QString presetFileName(const QString& presetName);
+
+// The one preset directory both front-ends read (docs/adr/0051):
+// QStandardPaths::AppDataLocation/"presets". The CLI must never point at a
+// different location than the Presets menu, so this is the single place the
+// path is assembled — MainWindow and the CLI both call it rather than each
+// inlining QStandardPaths themselves.
+PresetStore defaultPresetStore();

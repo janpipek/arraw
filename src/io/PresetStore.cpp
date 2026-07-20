@@ -4,6 +4,12 @@
 
 #include <QDir>
 #include <QFile>
+#include <QStandardPaths>
+
+PresetStore defaultPresetStore() {
+    return PresetStore(
+        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/presets");
+}
 
 QString presetFileName(const QString& presetName) {
     QString safe;

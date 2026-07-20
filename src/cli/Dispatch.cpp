@@ -1,6 +1,8 @@
 #include "cli/Dispatch.h"
 #include "cli/ExportArgs.h"
 #include "cli/ExportCommand.h"
+#include "cli/PresetArgs.h"
+#include "cli/PresetCommand.h"
 #include <QFileInfo>
 
 namespace {
@@ -10,6 +12,7 @@ constexpr const char* kUsage = R"(usage: arraw [command] [options]
 commands:
   ui [path]     open the editor on a file or folder (default with no command)
   export ...    render files through their develop sidecars; see 'arraw export --help'
+  preset ...    list, show, or apply Develop Presets; see 'arraw preset --help'
   version       print the version
   help          show this help
 )";
@@ -42,6 +45,22 @@ int dispatch(
             return parsed.exitCode;
         }
         return runExport(parsed.invocation, out, err);
+    }
+
+    if (cmd == QLatin1String("preset")) {
+        std::vector<std::string> args;
+        for (int i = 2; i < argc; ++i)
+            args.emplace_back(argv[i]);
+        const PresetParse parsed = parsePresetArgs(args);
+        if (parsed.exitCode == 0) {
+            out << parsed.message << "\n";
+            return 0;
+        }
+        if (parsed.exitCode > 0) {
+            err << parsed.message << "\n";
+            return parsed.exitCode;
+        }
+        return runPreset(parsed.invocation, out, err);
     }
 
     if (cmd == QLatin1String("version") || cmd == QLatin1String("--version")) {

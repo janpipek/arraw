@@ -63,7 +63,6 @@
 #include <QSettings>
 #include <QSignalBlocker>
 #include <QSizePolicy>
-#include <QStandardPaths>
 #include <QStatusBar>
 #include <QStyle>
 #include <QTabWidget>
@@ -271,7 +270,7 @@ void SnapshotRestoreCommand::redo() {
 // ---------------------------------------------------------------------------
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent),
-      presetStore(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/presets") {
+      presetStore(defaultPresetStore()) {
     setWindowTitle("arraw");
 
     viewport = new ImageViewport(this);
