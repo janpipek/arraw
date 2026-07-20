@@ -37,8 +37,8 @@ static const float kQuad[] = {
 };
 
 // The viewport surround. Single-sourced from ThemeColors so the GPU clear color
-// and the widget palette never drift (ADR 0031). Value is bit-identical to the
-// historical 0.15 gray to keep the golden-image references valid (ADR 0005).
+// and the widget palette never drift (ADR 0031). The value is baked into the
+// golden-image references (ADR 0005).
 static const QColor kClearColor = ThemeColors::kCanvas;
 
 static QShader loadShader(const QString& path) {

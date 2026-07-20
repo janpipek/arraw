@@ -16,10 +16,9 @@
 namespace ThemeColors {
 
 // The viewport surround / GPU clear color. Anchors the whole palette. This value
-// is also baked into the golden-image test references (ADR 0005), so it MUST stay
-// bit-identical to the historical 0.15 clear color — change it and the golden
-// suite drifts.
-inline const QColor kCanvas = QColor::fromRgbF(0.15f, 0.15f, 0.15f); // ~#262626
+// is also baked into the golden-image test references (ADR 0005), so changing it
+// requires regenerating the goldens.
+inline const QColor kCanvas = QColor(0x26, 0x26, 0x26);
 
 // Neutral chrome surfaces, built relative to the canvas.
 inline const QColor kWindow
@@ -27,7 +26,7 @@ inline const QColor kWindow
 inline const QColor kPanelRaised = QColor(0x36, 0x36, 0x36); // group boxes / raised panels
 inline const QColor kButton = QColor(0x3a, 0x3a, 0x3a);      // buttons — a touch of affordance lift
 inline const QColor kBase = QColor(0x1e, 0x1e, 0x1e); // recessed surfaces: text entry, histogram bg
-inline const QColor kAlternateBase = QColor(0x262626);
+inline const QColor kAlternateBase = QColor(0x26, 0x26, 0x26);
 
 // Borders / bevels (Fusion uses Mid/Dark/Light/Shadow for these).
 inline const QColor kBorder = QColor(0x1a, 0x1a, 0x1a);
