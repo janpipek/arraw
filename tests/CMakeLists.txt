@@ -68,6 +68,7 @@ add_executable(arraw_tests
     test_HistoryPanelLocal.cpp
     test_CliExportArgs.cpp
     test_CliExportPreflight.cpp
+    test_CliExportCommand.cpp
 )
 
 target_link_libraries(arraw_tests PRIVATE arraw_cli arraw_ui Catch2::Catch2WithMain)
