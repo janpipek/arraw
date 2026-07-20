@@ -68,7 +68,7 @@ public:
     // Mirror the canonical session params into editor widgets and the viewport.
     // Public so undo commands can update views after mutating the session.
     void syncSessionToEditors();
-    void syncSessionSpotsToEditors(bool fullResOnly = true);
+    void syncSessionSpotsToEditors(bool fullResOnly = true, bool preserveView = false);
 
     // Re-decode the current image with the session's current demosaic algorithm,
     // swapping the decoded buffers in place while keeping the develop edit on
@@ -270,6 +270,10 @@ private:
     // Params of the image currently being loaded, resolved up front from its
     // sidecar and applied atomically with the first paint of that image.
     GlobalAdjustment pendingPreviewParams;
+    // True after the current async load has shown an embedded preview. The final
+    // decoded RAW swap should preserve the user's view in that case; cache hits
+    // and loads without an interim preview still fit normally.
+    bool pendingPreviewDisplayed = false;
 
     // Session decode cache: skips the multi-second demosaic when re-opening a
     // recently viewed image. ~1.5 GiB of decoded buffers, LRU, current pinned.
