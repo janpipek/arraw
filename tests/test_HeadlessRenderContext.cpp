@@ -34,3 +34,27 @@ TEST_CASE("HeadlessRenderContext renders without a widget", "[golden]") {
     REQUIRE(img.height() == 8);
     REQUIRE(img.format() == QImage::Format_RGBX32FPx4);
 }
+
+TEST_CASE("ARRAW_RHI_BACKEND rejects unknown values with an error") {
+    testApp();
+
+    qputenv("ARRAW_RHI_BACKEND", "bogus");
+    QString error;
+    auto ctx = HeadlessRenderContext::create(&error);
+    qunsetenv("ARRAW_RHI_BACKEND");
+
+    REQUIRE_FALSE(ctx);
+    REQUIRE(error.contains("bogus"));
+}
+
+TEST_CASE("ARRAW_RHI_BACKEND=null creates the Null backend") {
+    testApp();
+
+    qputenv("ARRAW_RHI_BACKEND", "null");
+    QString error;
+    auto ctx = HeadlessRenderContext::create(&error);
+    qunsetenv("ARRAW_RHI_BACKEND");
+
+    REQUIRE(ctx);
+    REQUIRE(ctx->rhi()->backend() == QRhi::Null);
+}
