@@ -1,5 +1,6 @@
 #include "cli/PresetCommand.h"
 #include "develop/DevelopGroup.h"
+#include "develop/DevelopPreset.h"
 #include <catch2/catch_test_macros.hpp>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -89,4 +90,93 @@ TEST_CASE("list sorts presets case-insensitively, same as the store") {
     REQUIRE(cli::runPresetList(store, false, out) == 0);
 
     REQUIRE(outText.indexOf("Apple") < outText.indexOf("zebra"));
+}
+
+TEST_CASE("show table marks an all-default active group as resetting to defaults") {
+    QTemporaryDir dir;
+    const PresetStore store(dir.path());
+    store.save(preset("Neutral", {DevelopGroup::Tone})); // default GlobalAdjustment: no change
+
+    QString outText, errText;
+    QTextStream out(&outText), err(&errText);
+    REQUIRE(cli::runPresetShow(store, "Neutral", false, out, err) == 0);
+
+    REQUIRE(outText.contains("Neutral"));
+    REQUIRE(outText.contains("Tone"));
+    REQUIRE(outText.contains("(resets to defaults)"));
+}
+
+TEST_CASE("show table lists each changed field for a group") {
+    QTemporaryDir dir;
+    const PresetStore store(dir.path());
+    DevelopPreset p = preset("Punchy", {DevelopGroup::Tone});
+    p.values.exposure = 0.5f;
+    store.save(p);
+
+    QString outText, errText;
+    QTextStream out(&outText), err(&errText);
+    REQUIRE(cli::runPresetShow(store, "Punchy", false, out, err) == 0);
+
+    // Reuse the same describer the command calls, rather than hardcoding its
+    // label/formatting conventions here.
+    for (const QString& line : describeGroupNonDefaults(DevelopGroup::Tone, p.values))
+        REQUIRE(outText.contains(line));
+    REQUIRE_FALSE(outText.contains("(resets to defaults)"));
+}
+
+TEST_CASE("show --json emits the preset's native, round-trippable JSON") {
+    QTemporaryDir dir;
+    const PresetStore store(dir.path());
+    DevelopPreset p = preset("Punchy", {DevelopGroup::Tone, DevelopGroup::BlackAndWhite});
+    p.values.exposure = 0.5f;
+    p.values.convertToGrayscale = true;
+    store.save(p);
+
+    QString outText, errText;
+    QTextStream out(&outText), err(&errText);
+    REQUIRE(cli::runPresetShow(store, "Punchy", true, out, err) == 0);
+
+    bool ok = false;
+    const DevelopPreset roundTripped = parseDevelopPreset(outText.toUtf8(), &ok);
+    REQUIRE(ok);
+    CHECK(roundTripped.name == "Punchy");
+    CHECK(roundTripped.groups == p.groups);
+    CHECK(roundTripped.values.exposure == 0.5f);
+    CHECK(roundTripped.values.convertToGrayscale);
+}
+
+TEST_CASE("show matches an existing preset's name case-insensitively") {
+    QTemporaryDir dir;
+    const PresetStore store(dir.path());
+    store.save(preset("Punchy", {DevelopGroup::Tone}));
+
+    QString outText, errText;
+    QTextStream out(&outText), err(&errText);
+    REQUIRE(cli::runPresetShow(store, "punchy", false, out, err) == 0);
+    REQUIRE(outText.contains("Punchy")); // the stored display name, not the lookup casing
+}
+
+TEST_CASE("show on an unknown name lists the available presets on stderr and exits 2") {
+    QTemporaryDir dir;
+    const PresetStore store(dir.path());
+    store.save(preset("Alpha", {DevelopGroup::Tone}));
+    store.save(preset("Beta", {DevelopGroup::Tone}));
+
+    QString outText, errText;
+    QTextStream out(&outText), err(&errText);
+    REQUIRE(cli::runPresetShow(store, "Ghost", false, out, err) == 2);
+
+    REQUIRE(outText.isEmpty());
+    REQUIRE(errText.contains("Ghost"));
+    REQUIRE(errText.contains("Alpha"));
+    REQUIRE(errText.contains("Beta"));
+}
+
+TEST_CASE("show on an empty store says so and exits 2") {
+    const PresetStore store(QTemporaryDir().path());
+
+    QString outText, errText;
+    QTextStream out(&outText), err(&errText);
+    REQUIRE(cli::runPresetShow(store, "Anything", false, out, err) == 2);
+    REQUIRE(errText.contains("no presets saved"));
 }

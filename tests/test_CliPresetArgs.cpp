@@ -31,3 +31,22 @@ TEST_CASE("preset help exits 0 with text") {
     REQUIRE(r.exitCode == 0);
     REQUIRE(r.message.contains("list"));
 }
+
+TEST_CASE("preset show takes a name, json off by default") {
+    const auto r = parsePresetArgs({"show", "Punchy BW"});
+    REQUIRE(r.exitCode == -1);
+    REQUIRE(r.invocation.verb == PresetVerb::Show);
+    REQUIRE(r.invocation.name == "Punchy BW");
+    REQUIRE_FALSE(r.invocation.json);
+}
+
+TEST_CASE("preset show --json sets the json flag") {
+    const auto r = parsePresetArgs({"show", "Punchy", "--json"});
+    REQUIRE(r.exitCode == -1);
+    REQUIRE(r.invocation.json);
+    REQUIRE(r.invocation.name == "Punchy");
+}
+
+TEST_CASE("preset show with no name is a usage error") {
+    REQUIRE(parsePresetArgs({"show"}).exitCode == 2);
+}

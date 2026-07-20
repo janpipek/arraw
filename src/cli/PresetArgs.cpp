@@ -13,6 +13,12 @@ PresetParse parsePresetArgs(const std::vector<std::string>& args) {
     CLI::App* listCmd = app.add_subcommand("list", "List saved presets");
     listCmd->add_flag("--json", jsonList, "Emit a JSON array instead of a table");
 
+    bool jsonShow = false;
+    std::string showName;
+    CLI::App* showCmd = app.add_subcommand("show", "Show a preset's settings");
+    showCmd->add_option("name", showName, "Preset name")->required();
+    showCmd->add_flag("--json", jsonShow, "Emit the preset's native JSON instead of a details view");
+
     // CLI11's vector overload consumes back-to-front; hand it argc/argv.
     std::vector<const char*> argv;
     argv.push_back("arraw preset");
@@ -33,6 +39,10 @@ PresetParse parsePresetArgs(const std::vector<std::string>& args) {
     if (listCmd->parsed()) {
         res.invocation.verb = PresetVerb::List;
         res.invocation.json = jsonList;
+    } else if (showCmd->parsed()) {
+        res.invocation.verb = PresetVerb::Show;
+        res.invocation.json = jsonShow;
+        res.invocation.name = QString::fromStdString(showName);
     }
     return res;
 }
