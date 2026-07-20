@@ -238,6 +238,7 @@ set(ENGINE_SOURCES
     src/render/ViewportGeometry.cpp
     src/render/RendererCore.cpp
     src/render/OffscreenRender.cpp
+    src/render/HeadlessRenderContext.cpp
     src/io/XmpSidecar.cpp
     src/io/PresetStore.cpp
     src/DevelopSession.cpp

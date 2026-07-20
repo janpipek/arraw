@@ -23,6 +23,7 @@ add_executable(arraw_tests
     test_RawProcessor.cpp
     test_StandardImageLoader.cpp
     test_GoldenImages.cpp
+    test_HeadlessRenderContext.cpp
     test_ImageLoadWorkflow.cpp
     test_ImageMetadata.cpp
     test_FilmStripModel.cpp
