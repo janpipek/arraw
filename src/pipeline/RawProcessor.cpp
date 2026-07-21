@@ -14,8 +14,15 @@
 #include <libraw/libraw.h>
 #include <memory>
 #include <vector>
+#include <QFileInfo>
 #include <QImage>
 #include <QRectF>
+
+bool RawProcessor::canLoad(const QString& path) {
+    static const QStringList kExts
+        = {"cr2", "cr3", "nef", "arw", "dng", "raf", "orf", "rw2", "pef", "srw"};
+    return kExts.contains(QFileInfo(path).suffix().toLower());
+}
 
 QImage RawProcessor::extractThumbImage(LibRaw& raw) {
     if (raw.unpack_thumb() != LIBRAW_SUCCESS)

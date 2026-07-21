@@ -50,3 +50,26 @@ TEST_CASE("preset show --json sets the json flag") {
 TEST_CASE("preset show with no name is a usage error") {
     REQUIRE(parsePresetArgs({"show"}).exitCode == 2);
 }
+
+TEST_CASE("preset apply takes a name and one or more paths") {
+    const auto r = parsePresetArgs({"apply", "Punchy", "a.arw", "b.arw"});
+    REQUIRE(r.exitCode == -1);
+    REQUIRE(r.invocation.verb == PresetVerb::Apply);
+    REQUIRE(r.invocation.name == "Punchy");
+    REQUIRE(r.invocation.paths == QStringList{"a.arw", "b.arw"});
+    REQUIRE_FALSE(r.invocation.json);
+}
+
+TEST_CASE("preset apply --json sets the json flag") {
+    const auto r = parsePresetArgs({"apply", "Punchy", "a.arw", "--json"});
+    REQUIRE(r.exitCode == -1);
+    REQUIRE(r.invocation.json);
+}
+
+TEST_CASE("preset apply with no paths is a usage error") {
+    REQUIRE(parsePresetArgs({"apply", "Punchy"}).exitCode == 2);
+}
+
+TEST_CASE("preset apply with no arguments is a usage error") {
+    REQUIRE(parsePresetArgs({"apply"}).exitCode == 2);
+}

@@ -20,6 +20,22 @@ int runPresetList(const PresetStore& store, bool json, QTextStream& out);
 int runPresetShow(
     const PresetStore& store, const QString& name, bool json, QTextStream& out, QTextStream& err);
 
+// Applies `name`'s groups to every path's XMP sidecar, byte-for-byte the
+// GUI's batch apply: XmpSidecar::loadAdjustments -> applyGroups ->
+// XmpSidecar::saveAdjustments, preserving ratings/labels/snapshots
+// (docs/adr/0051). `paths` is pre-flighted as a whole first (exists, not a
+// directory, supported image extension) — any bad path or unknown preset
+// name refuses the entire run and returns 2, touching nothing. Otherwise
+// per-file write failures don't stop the batch: 1 if any failed, 0 if clean
+// (docs/adr/0050's exit tiers).
+int runPresetApply(
+    const PresetStore& store,
+    const QString& name,
+    const QStringList& paths,
+    bool json,
+    QTextStream& out,
+    QTextStream& err);
+
 // Dispatches `inv.verb` against the shared preset store (docs/adr/0051).
 int runPreset(const PresetInvocation& inv, QTextStream& out, QTextStream& err);
 

@@ -18,6 +18,11 @@ class QImage;
 
 class RawProcessor {
 public:
+    // Returns true when path has a supported RAW extension. Mirrors
+    // StandardImageLoader::canLoad; the two together are "is this a
+    // supported image" (docs/adr/0051).
+    static bool canLoad(const QString& path);
+
     static LoadResult load(
         const QString& path,
         std::function<void(ImageBuffer)> onEmbeddedPreview = nullptr,

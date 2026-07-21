@@ -14,6 +14,13 @@
 
 static const QString kDng = QStringLiteral(ARRAW_FIXTURE_DIR "/gradient-32x24.dng");
 
+TEST_CASE("canLoad recognises RAW extensions case-insensitively", "[raw]") {
+    CHECK(RawProcessor::canLoad("shot.CR3"));
+    CHECK(RawProcessor::canLoad("shot.dng"));
+    CHECK_FALSE(RawProcessor::canLoad("shot.jpg"));
+    CHECK_FALSE(RawProcessor::canLoad("shot"));
+}
+
 TEST_CASE("DNG fixture decodes to full-res plus half-res preview", "[raw][fixtures]") {
     const LoadResult r = RawProcessor::load(kDng);
 

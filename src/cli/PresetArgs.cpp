@@ -19,6 +19,14 @@ PresetParse parsePresetArgs(const std::vector<std::string>& args) {
     showCmd->add_option("name", showName, "Preset name")->required();
     showCmd->add_flag("--json", jsonShow, "Emit the preset's native JSON instead of a details view");
 
+    bool jsonApply = false;
+    std::string applyName;
+    std::vector<std::string> applyPaths;
+    CLI::App* applyCmd = app.add_subcommand("apply", "Apply a preset to files' XMP sidecars");
+    applyCmd->add_option("name", applyName, "Preset name")->required();
+    applyCmd->add_option("paths", applyPaths, "Files to update")->required();
+    applyCmd->add_flag("--json", jsonApply, "Emit a JSON result document instead of progress lines");
+
     // CLI11's vector overload consumes back-to-front; hand it argc/argv.
     std::vector<const char*> argv;
     argv.push_back("arraw preset");
@@ -43,6 +51,12 @@ PresetParse parsePresetArgs(const std::vector<std::string>& args) {
         res.invocation.verb = PresetVerb::Show;
         res.invocation.json = jsonShow;
         res.invocation.name = QString::fromStdString(showName);
+    } else if (applyCmd->parsed()) {
+        res.invocation.verb = PresetVerb::Apply;
+        res.invocation.json = jsonApply;
+        res.invocation.name = QString::fromStdString(applyName);
+        for (const std::string& p : applyPaths)
+            res.invocation.paths << QString::fromStdString(p);
     }
     return res;
 }
