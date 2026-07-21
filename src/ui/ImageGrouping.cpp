@@ -1,14 +1,9 @@
 #include "ui/ImageGrouping.h"
+#include "pipeline/RawProcessor.h"
 #include <QFileInfo>
 #include <QHash>
 
 namespace {
-
-bool isRawExtension(const QString& suffix) {
-    static const QStringList raw
-        = {"cr2", "cr3", "nef", "arw", "dng", "raf", "orf", "rw2", "pef", "srw"};
-    return raw.contains(suffix.toLower());
-}
 
 // The canonical, displayed name of a file's format. Folds the legacy/long
 // spellings of a format onto one token (jpg/jpeg -> JPEG, tif/tiff -> TIFF);
@@ -39,7 +34,7 @@ QList<ImageGroup> groupImageFiles(const QStringList& paths) {
     for (const QString& path : paths) {
         const QFileInfo fi(path);
         Bucket& bucket = buckets[captureKey(fi)];
-        if (isRawExtension(fi.suffix()))
+        if (RawProcessor::canLoad(path))
             bucket.raws.append(path);
         else
             bucket.standards.append(path);
