@@ -75,6 +75,19 @@ QJsonObject groupToJson(DevelopGroup g, const GlobalAdjustment& v) {
         o["convertToGrayscale"] = v.convertToGrayscale;
         o["mix"] = bandsToJson(v.bwMix);
         break;
+    case DevelopGroup::ColourGrading: {
+        QJsonArray hue;
+        QJsonArray sat;
+        for (int i = 0; i < 3; ++i) {
+            hue.append(v.colorGradeHue[i]);
+            sat.append(v.colorGradeSat[i]);
+        }
+        o["hue"] = hue;
+        o["sat"] = sat;
+        o["balance"] = v.colorGradeBalance;
+        o["blending"] = v.colorGradeBlending;
+        break;
+    }
     case DevelopGroup::Detail:
         o["texture"] = v.texture;
         o["clarity"] = v.clarity;
@@ -149,6 +162,17 @@ void groupFromJson(DevelopGroup g, const QJsonObject& o, GlobalAdjustment& v) {
         v.convertToGrayscale = o.value("convertToGrayscale").toBool(v.convertToGrayscale);
         bandsFromJson(o["mix"].toArray(), v.bwMix);
         break;
+    case DevelopGroup::ColourGrading: {
+        const QJsonArray hue = o["hue"].toArray();
+        const QJsonArray sat = o["sat"].toArray();
+        for (int i = 0; i < 3 && i < hue.size(); ++i)
+            v.colorGradeHue[i] = static_cast<float>(hue.at(i).toDouble(v.colorGradeHue[i]));
+        for (int i = 0; i < 3 && i < sat.size(); ++i)
+            v.colorGradeSat[i] = static_cast<float>(sat.at(i).toDouble(v.colorGradeSat[i]));
+        v.colorGradeBalance = f("balance", v.colorGradeBalance);
+        v.colorGradeBlending = f("blending", v.colorGradeBlending);
+        break;
+    }
     case DevelopGroup::Detail:
         v.texture = f("texture", v.texture);
         v.clarity = f("clarity", v.clarity);

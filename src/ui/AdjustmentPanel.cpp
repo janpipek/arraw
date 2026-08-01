@@ -45,6 +45,14 @@ static const FieldSpec kEffectShapeSpec
 static const FieldSpec kGrainAmountSpec
     = developParameterSpec(DevelopParameter::GrainAmount).value();
 static const FieldSpec kRotationSpec = developParameterSpec(DevelopParameter::Straighten).value();
+static const FieldSpec kColorGradeHueSpec
+    = developParameterSpec(DevelopParameter::ColorGradeShadowHue).value();
+static const FieldSpec kColorGradeSatSpec
+    = developParameterSpec(DevelopParameter::ColorGradeShadowSat).value();
+static const FieldSpec kColorGradeBalanceSpec
+    = developParameterSpec(DevelopParameter::ColorGradeBalance).value();
+static const FieldSpec kColorGradeBlendingSpec
+    = developParameterSpec(DevelopParameter::ColorGradeBlending).value();
 
 // Demosaic algorithms in the combo, ordered soft → sharp (Linear is a diagnostic
 // baseline, kept last). Label + tooltip + enum; AHD is the default (docs/adr/0036).
@@ -335,6 +343,30 @@ AdjustmentPanel::AdjustmentPanel(QWidget* parent)
         root->addWidget(box);
     }
 
+    // ── Colour Grading ──────────────────────────────────────────────────────────
+    // Three-zone hue/saturation toning (docs/adr/0052). Unlike Colour/HSL/B&W, it
+    // stays visible in both treatments — it tints the colour image or the B&W grey.
+    {
+        auto* colourGrade = makeGroup("Colour Grading");
+        const char* zoneNames[3] = {"Shadows", "Midtones", "Highlights"};
+        for (int i = 0; i < 3; ++i) {
+            subHeader(colourGrade, zoneNames[i]);
+            colorGradeHue[i] = addSlider(colourGrade, "Hue", kColorGradeHueSpec);
+            colorGradeSat[i] = addSlider(colourGrade, "Saturation", kColorGradeSatSpec);
+        }
+        subHeader(colourGrade, "Global");
+        colorGradeBalance = addSlider(
+            colourGrade,
+            "Balance",
+            kColorGradeBalanceSpec,
+            "Shifts the crossover between the Shadows and Highlights zones.");
+        colorGradeBlending = addSlider(
+            colourGrade,
+            "Blending",
+            kColorGradeBlendingSpec,
+            "Softens the width of the transitions between the three zones.");
+    }
+
     // ── Detail ────────────────────────────────────────────────────────────────
     auto* detail = makeGroup("Detail");
     subHeader(detail, "Demosaic");
@@ -551,6 +583,12 @@ void AdjustmentPanel::syncParams() {
     adjustments.convertToGrayscale = treatmentGroup->checkedId() == 1;
     for (int i = 0; i < 8; ++i)
         adjustments.bwMix[i] = v(bwMix[i]);
+    for (int i = 0; i < 3; ++i) {
+        adjustments.colorGradeHue[i] = v(colorGradeHue[i]);
+        adjustments.colorGradeSat[i] = v(colorGradeSat[i]);
+    }
+    adjustments.colorGradeBalance = v(colorGradeBalance);
+    adjustments.colorGradeBlending = v(colorGradeBlending);
 }
 
 // Black & White swaps which colour panels are visible (docs/adr/0048).
@@ -590,12 +628,18 @@ std::vector<AdjustmentPanel::SliderRow*> AdjustmentPanel::allRows() {
            &postCropVignetteFeather,
            &grainAmount,
            &grainSize,
-           &grainRoughness};
+           &grainRoughness,
+           &colorGradeBalance,
+           &colorGradeBlending};
     for (int i = 0; i < 8; ++i) {
         rows.push_back(&hslHue[i]);
         rows.push_back(&hslSat[i]);
         rows.push_back(&hslLum[i]);
         rows.push_back(&bwMix[i]);
+    }
+    for (int i = 0; i < 3; ++i) {
+        rows.push_back(&colorGradeHue[i]);
+        rows.push_back(&colorGradeSat[i]);
     }
     return rows;
 }
@@ -725,6 +769,12 @@ void AdjustmentPanel::setParams(const GlobalAdjustment& p) {
         set(hslLum[i], p.hslLum[i]);
         set(bwMix[i], p.bwMix[i]);
     }
+    for (int i = 0; i < 3; ++i) {
+        set(colorGradeHue[i], p.colorGradeHue[i]);
+        set(colorGradeSat[i], p.colorGradeSat[i]);
+    }
+    set(colorGradeBalance, p.colorGradeBalance);
+    set(colorGradeBlending, p.colorGradeBlending);
     // Mirror each slider tick into its spinbox.
     for (auto* r : rows)
         r->spin->setValue(r->spec.rawToDisplay(r->slider->value()));

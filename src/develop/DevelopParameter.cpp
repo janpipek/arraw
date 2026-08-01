@@ -38,6 +38,20 @@ bool isBwMix(DevelopParameter p) {
     return p >= DevelopParameter::BwMixRed && p <= DevelopParameter::BwMixMagenta;
 }
 
+// The six Colour Grading zone parameters (docs/adr/0052): three zones × (hue, sat),
+// zone-major. Balance and Blending sit just after and are handled separately.
+constexpr std::array<const char*, 3> kColorGradeZoneLabels = {"Shadows", "Midtones", "Highlights"};
+constexpr std::array<const char*, 3> kColorGradeZoneKeys = {"Shadow", "Midtone", "Highlight"};
+
+int colorGradeOffset(DevelopParameter p) {
+    return static_cast<int>(p) - static_cast<int>(DevelopParameter::ColorGradeShadowHue);
+}
+
+bool isColorGradeZone(DevelopParameter p) {
+    return p >= DevelopParameter::ColorGradeShadowHue
+           && p <= DevelopParameter::ColorGradeHighlightSat;
+}
+
 } // namespace
 
 const char* developParameterKey(DevelopParameter p) {
@@ -54,7 +68,18 @@ const char* developParameterKey(DevelopParameter p) {
         key = std::string("bwMix") + kHslBandKeys[bwMixOffset(p)];
         return key.c_str();
     }
+    if (isColorGradeZone(p)) {
+        static thread_local std::string key;
+        const int off = colorGradeOffset(p);
+        key = std::string("colorGrade") + kColorGradeZoneKeys[off / 2]
+              + (off % 2 == 0 ? "Hue" : "Sat");
+        return key.c_str();
+    }
     switch (p) {
+    case DevelopParameter::ColorGradeBalance:
+        return "colorGradeBalance";
+    case DevelopParameter::ColorGradeBlending:
+        return "colorGradeBlending";
     case DevelopParameter::BlackAndWhite:
         return "blackAndWhite";
     case DevelopParameter::Temperature:
@@ -144,7 +169,16 @@ QString developParameterLabel(DevelopParameter p) {
     }
     if (isBwMix(p)) // e.g. "B&W Blue" — the mixer's Blue band
         return trDev("B&W") + ' ' + trDev(kHslBandLabels[bwMixOffset(p)]);
+    if (isColorGradeZone(p)) { // e.g. "Grade Shadows Hue"
+        const int off = colorGradeOffset(p);
+        return trDev("Grade") + ' ' + trDev(kColorGradeZoneLabels[off / 2]) + ' '
+               + (off % 2 == 0 ? trDev("Hue") : trDev("Saturation"));
+    }
     switch (p) {
+    case DevelopParameter::ColorGradeBalance:
+        return trDev("Grade Balance");
+    case DevelopParameter::ColorGradeBlending:
+        return trDev("Grade Blending");
     case DevelopParameter::BlackAndWhite:
         return trDev("Black & White");
     case DevelopParameter::Temperature:
@@ -229,7 +263,12 @@ DevelopGroup developParameterGroup(DevelopParameter p) {
         return DevelopGroup::Hsl;
     if (isBwMix(p))
         return DevelopGroup::BlackAndWhite;
+    if (isColorGradeZone(p))
+        return DevelopGroup::ColourGrading;
     switch (p) {
+    case DevelopParameter::ColorGradeBalance:
+    case DevelopParameter::ColorGradeBlending:
+        return DevelopGroup::ColourGrading;
     case DevelopParameter::BlackAndWhite:
         return DevelopGroup::BlackAndWhite;
     case DevelopParameter::Temperature:
@@ -294,7 +333,15 @@ std::optional<FieldSpec> developParameterSpec(DevelopParameter p) {
                                      : bipolar;
     if (isBwMix(p)) // each mixer band is a bipolar -100..+100 weight
         return bipolar;
+    if (isColorGradeZone(p)) // Hue reads 0..360°; Saturation is unipolar 0..100
+        return colorGradeOffset(p) % 2 == 0
+                   ? FieldSpec{0, 360, 0, 1.0f, 1.0f, 0, degrees, false, 1.0f}
+                   : unipolar0;
     switch (p) {
+    case DevelopParameter::ColorGradeBalance:
+        return bipolar;
+    case DevelopParameter::ColorGradeBlending:
+        return unipolar50;
     case DevelopParameter::Temperature:
         return FieldSpec{2000, 12000, 5500, 1.0f, 1.0f, 0, " K", false, 50.0f};
     case DevelopParameter::Exposure:
@@ -348,7 +395,15 @@ float developParameterValue(DevelopParameter p, const GlobalAdjustment& s) {
     }
     if (isBwMix(p))
         return s.bwMix[bwMixOffset(p)];
+    if (isColorGradeZone(p)) {
+        const int off = colorGradeOffset(p);
+        return off % 2 == 0 ? s.colorGradeHue[off / 2] : s.colorGradeSat[off / 2];
+    }
     switch (p) {
+    case DevelopParameter::ColorGradeBalance:
+        return s.colorGradeBalance;
+    case DevelopParameter::ColorGradeBlending:
+        return s.colorGradeBlending;
     case DevelopParameter::Temperature:
         return s.temperature;
     case DevelopParameter::Tint:

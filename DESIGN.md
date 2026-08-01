@@ -258,24 +258,32 @@ that file is the source of truth; keep this list in sync with it.
 10. HSL color mix    8 hue ranges, smoothstep-weighted hue/sat/lum shifts
 11. Saturation       luma-preserving saturation scale
 12. Vibrance         saturation boost weighted toward desaturated pixels
-13. Local adjustments per-mask tone/colour edits (docs/adr/0010, 0033): each
+13. Colour grading   three-zone (Shadows/Midtones/Highlights) hue+saturation
+                     tint in Oklab (docs/adr/0052), after the Colour/Black &
+                     White branch merges so it tints a colour image or the B&W
+                     neutral grey. Perceptually-encoded luminance picks a
+                     normalised zone blend (Balance shifts the crossover,
+                     Blending widens the transitions); each zone adds an Oklab
+                     a/b offset, holding lightness fixed. Zero saturation is the
+                     exact identity
+14. Local adjustments per-mask tone/colour edits (docs/adr/0010, 0033): each
                      tone row maps the incoming luminance and blends by analytic
                      Mask weight; remaining colour deltas use the same weight.
                      Single-pass, in array order. Skipped
                      by the curve-input and WB-picker readbacks (which return
                      earlier); included on screen, in export, and the panel
                      histogram
-14. Vignette         centred elliptical falloff in crop-frame coordinates,
+15. Vignette         centred elliptical falloff in crop-frame coordinates,
                      after local colour work. Amount maps -100..100 to -2..+2
                      EV at maximum falloff; Midpoint and Feather shape the
                      transition. Applied as a hue-preserving linear multiplier
-15. Grain            final develop adjustment (docs/adr/0026). Working values
+16. Grain            final develop adjustment (docs/adr/0026). Working values
                      are temporarily passed through the sRGB transfer curve,
                      monochromatic zero-mean grain is added, then values are
                      decoded back to linear working space. The continuous noise
                      field is keyed by crop-frame position + a per-image seed,
                      so preview and export sample the same pattern
-16. Encode           u.displayEncode on (screen):
+17. Encode           u.displayEncode on (screen):
                        u.useLut off — display transform: Rec.2020→sRGB matrix
                        + true piecewise sRGB curve (sRGB monitor assumed)
                        u.useLut on — 33³ LUT texture baked by lcms2

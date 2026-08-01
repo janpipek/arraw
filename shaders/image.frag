@@ -69,6 +69,11 @@ layout(std140, binding = 0) uniform buf {
     int   convertToGrayscale; // 1: Black & White treatment on (docs/adr/0048); was pad2
     int   pad3;
     vec4  bwMix[2];  // 8 B&W hue-mixer weights, -100..+100 (std140: vec4 pairs, like hslHue)
+    // Colour Grading (docs/adr/0052), packed as two vec4s:
+    //   colorGrade[0] = (shadowHue, shadowSat, midtoneHue, midtoneSat)
+    //   colorGrade[1] = (highlightHue, highlightSat, balance, blending)
+    // Hue in degrees (0..360), Sat/Blending 0..100, Balance -100..+100.
+    vec4  colorGrade[2];
 } u;
 
 layout(binding = 1) uniform sampler2D uTexture;
@@ -322,6 +327,51 @@ vec3 applyBlackAndWhite(vec3 c) {
         gain = 1.0 + (blended / 100.0) * s;
     }
     return vec3(max(base * gain, 0.0));
+}
+
+// Colour Grading (docs/adr/0052) — a line-for-line mirror of
+// colour::applyColourGrading in src/pipeline/OkLab.cpp ([[spot-for-algorithms]]).
+// A three-zone hue+saturation tint in Oklab: the pixel's perceptually-encoded
+// luminance (shifted by Balance) picks a normalised blend of Shadows/Midtones/
+// Highlights lobes (widened by Blending), and each zone's (hue, sat) adds an
+// Oklab a/b offset, holding lightness fixed. Zero saturation is the exact identity.
+vec3 applyColourGrading(vec3 c) {
+    vec2 sat = vec2(u.colorGrade[0].y, u.colorGrade[0].w); // shadow, midtone
+    float satHigh = u.colorGrade[1].y;
+    if (abs(sat.x) < 1e-4 && abs(sat.y) < 1e-4 && abs(satHigh) < 1e-4)
+        return c;
+
+    float balance = u.colorGrade[1].z;
+    float blending = u.colorGrade[1].w;
+
+    float y = clamp(dot(c, kLuma), 0.0, 1.0);
+    float e = pow(y, 1.0 / 2.2);
+    float es = clamp(e - (balance / 100.0) * 0.25, 0.0, 1.0);
+
+    float blend = clamp(blending / 100.0, 0.0, 1.0);
+    float sigma = 0.18 + (0.45 - 0.18) * blend;
+    float ws = exp(-pow((es - 0.0) / sigma, 2.0));
+    float wm = exp(-pow((es - 0.5) / sigma, 2.0));
+    float wh = exp(-pow((es - 1.0) / sigma, 2.0));
+    float sum = ws + wm + wh;
+
+    vec3 hue = vec3(u.colorGrade[0].x, u.colorGrade[0].z, u.colorGrade[1].x);
+    vec3 satv = vec3(u.colorGrade[0].y, u.colorGrade[0].w, u.colorGrade[1].y);
+    vec3 w = vec3(ws, wm, wh) / sum;
+
+    float a = 0.0;
+    float b = 0.0;
+    for (int i = 0; i < 3; ++i) {
+        float rad = hue[i] * 3.14159265 / 180.0;
+        float mag = (satv[i] / 100.0) * 0.10 * w[i];
+        a += mag * cos(rad);
+        b += mag * sin(rad);
+    }
+
+    vec3 lab = rgbToOklab(c);
+    lab.y += a;
+    lab.z += b;
+    return oklabToRgb(lab);
 }
 
 vec3 setLuma(vec3 c, float y2) {
@@ -610,7 +660,7 @@ vec3 applyLocalAdjustments(vec3 c, vec2 uv, float aspect) {
 // Everything up to the final encode operates in linear Rec.2020:
 //   base look → Basic Tone LUT → tone curves
 //   → white balance (gain) → HSL → saturation → vibrance (Oklab)
-//   → spatial global adjustments → local adjustments
+//   → colour grading → spatial global adjustments → local adjustments
 //   → vignette → grain → filmic highlights → display transform
 // Crop/rotation happen earlier in image.vert. For export, displayEncode is
 // 0: the offscreen readback stays in linear working space and the output
@@ -648,6 +698,9 @@ void main() {
         c = applySaturation(c, u.saturation);
         c = applyVibrance(c, u.vibrance);
     }
+    // Colour Grading (docs/adr/0052): after the Colour/B&W branch merges, so it
+    // tints whichever signal results — a colour image or the B&W neutral grey.
+    c = applyColourGrading(c);
     c = applySpatialGlobals(c, vUV);
 
     // Local adjustments — analytic, single-pass, after the global colour section

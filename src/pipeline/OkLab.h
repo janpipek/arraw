@@ -42,6 +42,22 @@ Rgb applyVibrance(const Rgb& rgb, float amount);
 // immediately after white balance.
 Rgb applyBlackAndWhite(const Rgb& rgb, const std::array<float, 8>& mix);
 
+// Colour Grading (docs/adr/0052): a three-zone hue+saturation tint in Oklab. `hue`
+// and `sat` are indexed [Shadows, Midtones, Highlights]; hue is in degrees (0..360)
+// and sat in 0..100. A pixel's perceptually-encoded luminance selects a normalised
+// blend of the three zones (Balance, -100..100, shifts the shadow<->highlight
+// crossover; Blending, 0..100, widens the zone transitions), and each zone's
+// (hue, sat) contributes an Oklab a/b offset — so lightness and the tone/toning
+// separation are preserved, and a neutral grey can be tinted (sepia, split-toning).
+// An all-zero-saturation grade is the exact identity. The shader mirrors this after
+// the Colour/Black & White branch merges.
+Rgb applyColourGrading(
+    const Rgb& rgb,
+    const std::array<float, 3>& hue,
+    const std::array<float, 3>& sat,
+    float balance,
+    float blending);
+
 // Filmic Highlights (docs/adr/0040).
 //
 // shoulderMap is the scalar luminance shoulder: amount 0 is the exact identity

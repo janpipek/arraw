@@ -74,6 +74,18 @@ enum class DevelopParameter {
     BwMixBlue,
     BwMixPurple,
     BwMixMagenta,
+    // Colour Grading (docs/adr/0052): three zones × (hue, sat), then the two global
+    // shaping controls. Keep the zone block contiguous and zone-major (hue then sat)
+    // — the panel and persistence walk it as arrays indexed [Shadows, Midtones,
+    // Highlights].
+    ColorGradeShadowHue,
+    ColorGradeShadowSat,
+    ColorGradeMidtoneHue,
+    ColorGradeMidtoneSat,
+    ColorGradeHighlightHue,
+    ColorGradeHighlightSat,
+    ColorGradeBalance,
+    ColorGradeBlending,
     // Detail
     Demosaic,
     Texture,

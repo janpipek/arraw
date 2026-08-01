@@ -57,6 +57,10 @@ GlobalAdjustment sampleParams() {
     p.convertToGrayscale = true;
     for (int i = 0; i < 8; ++i)
         p.bwMix[i] = float(i * 5 - 15);
+    p.colorGradeHue = {35.0f, 215.0f, 300.0f};
+    p.colorGradeSat = {40.0f, 22.0f, 58.0f};
+    p.colorGradeBalance = -18.0f;
+    p.colorGradeBlending = 35.0f;
     // Points on the 0..255 grid so quantisation is lossless
     p.curveLuma.points = {{0.0, 0.0}, {64 / 255.0, 32 / 255.0}, {1.0, 1.0}};
     p.curveR.points = {{0.0, 16 / 255.0}, {1.0, 240 / 255.0}};
@@ -98,6 +102,12 @@ void checkClose(const GlobalAdjustment& a, const GlobalAdjustment& b) {
         CHECK_THAT(a.bwMix[i], WithinAbs(b.bwMix[i], kScalarTol));
     }
     CHECK(a.convertToGrayscale == b.convertToGrayscale);
+    for (int i = 0; i < 3; ++i) {
+        CHECK_THAT(a.colorGradeHue[i], WithinAbs(b.colorGradeHue[i], kScalarTol));
+        CHECK_THAT(a.colorGradeSat[i], WithinAbs(b.colorGradeSat[i], kScalarTol));
+    }
+    CHECK_THAT(a.colorGradeBalance, WithinAbs(b.colorGradeBalance, kScalarTol));
+    CHECK_THAT(a.colorGradeBlending, WithinAbs(b.colorGradeBlending, kScalarTol));
 }
 
 void checkCurveClose(const CurvePoints& a, const CurvePoints& b) {

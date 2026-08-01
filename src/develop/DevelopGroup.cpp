@@ -18,6 +18,8 @@ const char* developGroupKey(DevelopGroup g) {
         return "hsl";
     case DevelopGroup::BlackAndWhite:
         return "blackAndWhite";
+    case DevelopGroup::ColourGrading:
+        return "colourGrading";
     case DevelopGroup::Detail:
         return "detail";
     case DevelopGroup::Geometry:
@@ -46,6 +48,8 @@ QString developGroupLabel(DevelopGroup g) {
         return QObject::tr("HSL");
     case DevelopGroup::BlackAndWhite:
         return QObject::tr("Black & White");
+    case DevelopGroup::ColourGrading:
+        return QObject::tr("Colour Grading");
     case DevelopGroup::Detail:
         return QObject::tr("Detail");
     case DevelopGroup::Geometry:
@@ -98,6 +102,12 @@ GlobalAdjustment applyGroups(
     if (hasGroup(selection, DevelopGroup::BlackAndWhite)) {
         result.convertToGrayscale = source.convertToGrayscale; // toggle + mix travel as one unit
         result.bwMix = source.bwMix;
+    }
+    if (hasGroup(selection, DevelopGroup::ColourGrading)) {
+        result.colorGradeHue = source.colorGradeHue; // the eight values are one copy-together unit
+        result.colorGradeSat = source.colorGradeSat;
+        result.colorGradeBalance = source.colorGradeBalance;
+        result.colorGradeBlending = source.colorGradeBlending;
     }
     if (hasGroup(selection, DevelopGroup::Detail)) {
         result.demosaicAlgorithm = source.demosaicAlgorithm; // re-decodes on apply (issue #22)

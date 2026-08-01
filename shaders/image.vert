@@ -67,6 +67,7 @@ layout(std140, binding = 0) uniform buf {
     int   convertToGrayscale; // unused here; matches image.frag and Ubuf
     int   pad3;
     vec4  bwMix[2];           // unused here; 8 B&W hue-mixer weights (std140 vec4 pairs)
+    vec4  colorGrade[2];      // unused here; Colour Grading zones (std140, matches image.frag)
 } u;
 
 void main() {

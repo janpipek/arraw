@@ -56,6 +56,24 @@ constexpr std::array<float, 8> kBwHueCenters
 // (gain in 0..2); the move is proportional to saturation so neutrals never shift.
 constexpr float kBwBandStrength = 1.0f;
 
+// Colour Grading (docs/adr/0052). Zone weights index the tonal axis by the same
+// perceptually-encoded luminance as BasicTone's LUT (luminance^(1/kGamma)), so
+// "Shadows"/"Highlights" mean the same visual region as the tone sliders.
+constexpr float kColorGradeGamma = 2.2f;
+// Oklab a/b offset added by a fully-saturated (sat=100) zone. Oklab chroma tops out
+// near +/-0.4, so 0.10 is a firm-but-not-garish tint that reads clearly as sepia on
+// a neutral grey without clipping the round trip.
+constexpr float kColorGradeStrength = 0.10f;
+// Zone-lobe half-widths (Gaussian sigma) at Blending 0 and Blending 100. A larger
+// sigma overlaps the Shadows/Midtones/Highlights lobes, softening the transitions.
+constexpr float kColorGradeSigmaMin = 0.18f;
+constexpr float kColorGradeSigmaMax = 0.45f;
+// Balance slides the point sampled on the tonal axis, shifting where shadows give
+// way to highlights; +/-100 moves it a quarter of the range.
+constexpr float kColorGradeBalanceShift = 0.25f;
+// Matches the literal in shaders/image.frag so the CPU/GPU hue angles agree.
+constexpr float kPi = 3.14159265f;
+
 // HSV hue (0..1) and saturation (0..1) — mirrors rgb2hsv in shaders/image.frag.
 // Used only to weight the mixer; the conversion result itself is achromatic.
 struct HueSat {
@@ -162,6 +180,50 @@ Rgb applyBlackAndWhite(const Rgb& rgb, const std::array<float, 8>& mix) {
     }
     const float grey = std::max(base * gain, 0.0f); // headroom kept; never negative
     return {grey, grey, grey};
+}
+
+Rgb applyColourGrading(
+    const Rgb& rgb,
+    const std::array<float, 3>& hue,
+    const std::array<float, 3>& sat,
+    float balance,
+    float blending) {
+    // All-zero saturation is the exact identity — hue with no saturation tints
+    // nothing, and this keeps a default grade off the Oklab round trip entirely.
+    if (std::abs(sat[0]) < 1e-4f && std::abs(sat[1]) < 1e-4f && std::abs(sat[2]) < 1e-4f)
+        return rgb;
+
+    // Perceptually-encoded luminance, then Balance-shifted, is the tonal position
+    // the three zone lobes are evaluated at.
+    const float y = std::clamp(luma(rgb), 0.0f, 1.0f);
+    const float e = std::pow(y, 1.0f / kColorGradeGamma);
+    const float es = std::clamp(e - (balance / 100.0f) * kColorGradeBalanceShift, 0.0f, 1.0f);
+
+    const float blend = std::clamp(blending / 100.0f, 0.0f, 1.0f);
+    const float sigma = kColorGradeSigmaMin + (kColorGradeSigmaMax - kColorGradeSigmaMin) * blend;
+    const auto lobe = [&](float center) {
+        const float t = (es - center) / sigma;
+        return std::exp(-t * t);
+    };
+    const std::array<float, 3> centers = {0.0f, 0.5f, 1.0f}; // Shadows, Midtones, Highlights
+    float w[3] = {lobe(centers[0]), lobe(centers[1]), lobe(centers[2])};
+    const float sum = w[0] + w[1] + w[2];
+
+    // Each zone's (hue, sat) is an Oklab a/b vector; blend them by the normalised
+    // zone weights and add to the pixel's chroma, holding lightness fixed.
+    float a = 0.0f;
+    float b = 0.0f;
+    for (int i = 0; i < 3; ++i) {
+        const float rad = hue[i] * kPi / 180.0f;
+        const float mag = (sat[i] / 100.0f) * kColorGradeStrength * (w[i] / sum);
+        a += mag * std::cos(rad);
+        b += mag * std::sin(rad);
+    }
+
+    Lab lab = toOklab(rgb);
+    lab.a += a;
+    lab.b += b;
+    return fromOklab(lab);
 }
 
 float shoulderMap(float luminance, float amount) {

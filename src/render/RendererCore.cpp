@@ -614,6 +614,19 @@ void RendererCore::fillUbuf(Ubuf& ub, const FrameParams& fp) const {
     ub.convertToGrayscale = a.convertToGrayscale ? 1 : 0;
     for (int i = 0; i < 8; ++i)
         ub.bwMix[i] = a.bwMix[i];
+    // Colour Grading (docs/adr/0052): raw values passed through (hue in degrees,
+    // sat/blending 0..100, balance -100..+100); the shader mirrors the CPU
+    // normalisation in colour::applyColourGrading. Packed as vec4[2]:
+    //   [0..3] = shadow(hue,sat), midtone(hue,sat)
+    //   [4..7] = highlight(hue,sat), balance, blending
+    ub.colorGrade[0] = a.colorGradeHue[0];
+    ub.colorGrade[1] = a.colorGradeSat[0];
+    ub.colorGrade[2] = a.colorGradeHue[1];
+    ub.colorGrade[3] = a.colorGradeSat[1];
+    ub.colorGrade[4] = a.colorGradeHue[2];
+    ub.colorGrade[5] = a.colorGradeSat[2];
+    ub.colorGrade[6] = a.colorGradeBalance;
+    ub.colorGrade[7] = a.colorGradeBlending;
     // Highlight roll-off shoulder + path to white (docs/adr/0040); 0 = off.
     ub.filmicHighlights = std::clamp(a.filmicHighlights / 100.0f, 0.0f, 1.0f);
     ub.textureAmount = std::clamp(a.texture / 100.0f, -1.0f, 1.0f);
