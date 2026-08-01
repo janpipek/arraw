@@ -1,6 +1,8 @@
 #include "cli/Dispatch.h"
 #include "cli/ExportArgs.h"
 #include "cli/ExportCommand.h"
+#include "cli/InfoArgs.h"
+#include "cli/InfoCommand.h"
 #include "cli/PresetArgs.h"
 #include "cli/PresetCommand.h"
 #include <QFileInfo>
@@ -13,6 +15,7 @@ commands:
   ui [path]     open the editor on a file or folder (default with no command)
   export ...    render files through their develop sidecars; see 'arraw export --help'
   preset ...    list, show, or apply Develop Presets; see 'arraw preset --help'
+  info <paths>  report EXIF and edit state for files; see 'arraw info --help'
   version       print the version
   help          show this help
 )";
@@ -21,8 +24,7 @@ commands:
 
 namespace cli {
 
-int dispatch(
-    int argc, char** argv, const GuiLauncher& launchUi, QTextStream& out, QTextStream& err) {
+int dispatch(int argc, char** argv, const GuiLauncher& launchUi, QTextStream& out, QTextStream& err) {
     if (argc < 2)
         return launchUi(QString()); // rule 1: bare invocation opens the UI
 
@@ -61,6 +63,22 @@ int dispatch(
             return parsed.exitCode;
         }
         return runPreset(parsed.invocation, out, err);
+    }
+
+    if (cmd == QLatin1String("info")) {
+        std::vector<std::string> args;
+        for (int i = 2; i < argc; ++i)
+            args.emplace_back(argv[i]);
+        const InfoParse parsed = parseInfoArgs(args);
+        if (parsed.exitCode == 0) {
+            out << parsed.message << "\n";
+            return 0;
+        }
+        if (parsed.exitCode > 0) {
+            err << parsed.message << "\n";
+            return parsed.exitCode;
+        }
+        return runInfo(parsed.invocation.paths, parsed.invocation.json, out, err);
     }
 
     if (cmd == QLatin1String("version") || cmd == QLatin1String("--version")) {

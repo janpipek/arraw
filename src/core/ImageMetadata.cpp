@@ -174,6 +174,31 @@ QString gpsString(const libraw_gps_info_t& gps) {
 
 } // namespace
 
+QJsonObject toJson(const ExifData& exif) {
+    QJsonObject o;
+    const auto addString = [&](const char* key, const QString& value) {
+        if (!value.isEmpty())
+            o.insert(key, value);
+    };
+    const auto addNumber = [&](const char* key, double value) {
+        if (value > 0.0)
+            o.insert(key, value);
+    };
+
+    addString("make", exif.make);
+    addString("model", exif.model);
+    addString("lens", exif.lens);
+    addNumber("iso", exif.iso);
+    addNumber("apertureFNumber", exif.apertureFNumber);
+    addNumber("focalLengthMm", exif.focalLengthMm);
+    addNumber("shutterSpeedSeconds", exif.shutterSpeedSeconds);
+    if (exif.dateTaken.isValid())
+        o.insert("dateTaken", exif.dateTaken.toString(Qt::ISODate));
+    addNumber("width", exif.width);
+    addNumber("height", exif.height);
+    return o;
+}
+
 QJsonDocument toJson(const ImageMetadata& meta) {
     QJsonArray rows;
     for (const auto& [label, value] : meta.rows) {
@@ -201,6 +226,31 @@ ImageMetadata fromJson(const QJsonDocument& doc) {
     return meta;
 }
 
+ExifData extractExifData(const LibRaw& raw) {
+    const auto& id = raw.imgdata.idata;
+    const auto& sz = raw.imgdata.sizes;
+    const auto& other = raw.imgdata.other;
+    const auto& lens = raw.imgdata.lens;
+
+    ExifData data;
+    data.make = QString::fromUtf8(id.make);
+    data.model = QString::fromUtf8(id.model);
+    data.lens = QString::fromUtf8(lens.Lens);
+    if (other.iso_speed > 0.0f)
+        data.iso = int(std::lround(other.iso_speed));
+    if (other.aperture > 0.0f)
+        data.apertureFNumber = other.aperture;
+    if (other.focal_len > 0.0f)
+        data.focalLengthMm = other.focal_len;
+    if (other.shutter > 0.0f)
+        data.shutterSpeedSeconds = other.shutter;
+    if (other.timestamp > 0)
+        data.dateTaken = QDateTime::fromSecsSinceEpoch(other.timestamp);
+    data.width = sz.width;
+    data.height = sz.height;
+    return data;
+}
+
 ImageMetadata extractMetadata(const LibRaw& raw) {
     ImageMetadata meta;
     const auto& id = raw.imgdata.idata;
@@ -209,22 +259,21 @@ ImageMetadata extractMetadata(const LibRaw& raw) {
     const auto& lens = raw.imgdata.lens;
     const auto& shoot = raw.imgdata.shootinginfo;
     const auto& common = raw.imgdata.makernotes.common;
+    const ExifData data = extractExifData(raw);
 
-    add(meta, "Make", id.make);
-    add(meta, "Model", id.model);
-    add(meta, "Lens", lens.Lens);
+    add(meta, "Make", data.make);
+    add(meta, "Model", data.model);
+    add(meta, "Lens", data.lens);
     add(meta, "Software", id.software);
 
-    if (other.timestamp > 0) {
-        const QDateTime dt = QDateTime::fromSecsSinceEpoch(other.timestamp);
-        add(meta, "Date", dt.toString("yyyy-MM-dd HH:mm:ss"));
-    }
+    if (data.dateTaken.isValid())
+        add(meta, "Date", data.dateTaken.toString("yyyy-MM-dd HH:mm:ss"));
 
-    if (other.iso_speed > 0.0f)
-        add(meta, "ISO", QString::number(int(std::lround(other.iso_speed))));
-    add(meta, "Shutter", formatShutter(other.shutter));
-    add(meta, "Aperture", formatAperture(other.aperture));
-    add(meta, "Focal length", formatFocal(other.focal_len));
+    if (data.iso > 0)
+        add(meta, "ISO", QString::number(data.iso));
+    add(meta, "Shutter", formatShutter(data.shutterSpeedSeconds));
+    add(meta, "Aperture", formatAperture(data.apertureFNumber));
+    add(meta, "Focal length", formatFocal(data.focalLengthMm));
     if (lens.FocalLengthIn35mmFormat > 0)
         add(meta, "Focal length (35mm)", QString("%1 mm").arg(lens.FocalLengthIn35mmFormat));
 
@@ -250,7 +299,7 @@ ImageMetadata extractMetadata(const LibRaw& raw) {
     add(meta, "Firmware", common.firmware);
 
     add(meta, "RAW size", QString("%1 × %2").arg(sz.raw_width).arg(sz.raw_height));
-    add(meta, "Active area", QString("%1 × %2").arg(sz.width).arg(sz.height));
+    add(meta, "Active area", QString("%1 × %2").arg(data.width).arg(data.height));
     add(meta, "Orientation", flipLabel(sz.flip));
 
     if (id.colors > 0)

@@ -39,6 +39,8 @@ void bandsFromJson(const QJsonArray& arr, std::array<float, 8>& bands) {
         bands[i] = static_cast<float>(arr.at(i).toDouble());
 }
 
+} // namespace
+
 // Writes one group's fields from `v` into a fresh JSON object.
 QJsonObject groupToJson(DevelopGroup g, const GlobalAdjustment& v) {
     QJsonObject o;
@@ -110,6 +112,8 @@ QJsonObject groupToJson(DevelopGroup g, const GlobalAdjustment& v) {
     }
     return o;
 }
+
+namespace {
 
 // Reads one group's fields from `o` into `v` (leaving absent fields untouched).
 void groupFromJson(DevelopGroup g, const QJsonObject& o, GlobalAdjustment& v) {

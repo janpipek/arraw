@@ -1,0 +1,322 @@
+#include "cli/InfoCommand.h"
+#include "core/ImageMetadata.h"
+#include "develop/DevelopGroup.h"
+#include "io/XmpSidecar.h"
+#include <catch2/catch_test_macros.hpp>
+#include <libraw/libraw.h>
+#include <QDir>
+#include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QTemporaryDir>
+
+namespace {
+
+// The generated DNG fixture (tests/fixtures/make_test_dng.py): the only real
+// RAW in the tree, so the one file whose EXIF LibRaw can actually read.
+const QString kDng = QStringLiteral(ARRAW_FIXTURE_DIR "/gradient-32x24.dng");
+
+// A copy of the fixture in a writable dir, so a test can give it a sidecar
+// without dirtying the checked-in tree.
+QString dngCopy(const QString& dir, const QString& fileName) {
+    const QString path = QDir(dir).filePath(fileName);
+    REQUIRE(QFile::copy(kDng, path));
+    return path;
+}
+
+} // namespace
+
+TEST_CASE("info table heads each file's block with its path") {
+    QString outText, errText;
+    QTextStream out(&outText), err(&errText);
+
+    REQUIRE(cli::runInfo({kDng}, false, out, err) == 0);
+    REQUIRE(outText.contains(kDng));
+    REQUIRE(errText.isEmpty());
+}
+
+TEST_CASE("info refuses the whole run on a missing path, reading nothing") {
+    QTemporaryDir tmp;
+    const QString missing = QDir(tmp.path()).filePath("missing.arw");
+
+    QString outText, errText;
+    QTextStream out(&outText), err(&errText);
+    REQUIRE(cli::runInfo({kDng, missing}, false, out, err) == 2);
+
+    REQUIRE(outText.isEmpty()); // pre-flight ran before the readable file was touched
+    REQUIRE(errText.contains("missing.arw"));
+}
+
+TEST_CASE("info refuses a directory: no folder mode in v1") {
+    QTemporaryDir tmp;
+
+    QString outText, errText;
+    QTextStream out(&outText), err(&errText);
+    REQUIRE(cli::runInfo({tmp.path()}, false, out, err) == 2);
+
+    REQUIRE(outText.isEmpty());
+    REQUIRE(errText.contains("directory"));
+}
+
+TEST_CASE("info refuses a path the loaders don't recognise as an image") {
+    QTemporaryDir tmp;
+    const QString notes = QDir(tmp.path()).filePath("notes.txt");
+    {
+        QFile f(notes);
+        REQUIRE(f.open(QIODevice::WriteOnly));
+    }
+
+    QString outText, errText;
+    QTextStream out(&outText), err(&errText);
+    REQUIRE(cli::runInfo({notes}, false, out, err) == 2);
+
+    REQUIRE(outText.isEmpty());
+    REQUIRE(errText.contains("notes.txt"));
+}
+
+TEST_CASE("info table reports the camera EXIF the GUI's Info panel shows") {
+    QString outText, errText;
+    QTextStream out(&outText), err(&errText);
+
+    REQUIRE(cli::runInfo({kDng}, false, out, err) == 0);
+
+    // Assert against the same extractor the Info panel renders, rather than
+    // hardcoding the fixture's camera strings: the contract is "info shows
+    // what arraw knows", not "info shows these literals".
+    LibRaw raw;
+    REQUIRE(raw.open_file(kDng.toLocal8Bit().constData()) == LIBRAW_SUCCESS);
+    const ImageMetadata expected = extractMetadata(raw);
+    REQUIRE_FALSE(expected.empty());
+    for (const auto& [label, value] : expected.rows)
+        REQUIRE(outText.contains(label + ": " + value));
+}
+
+TEST_CASE("info table distinguishes a file with no sidecar from an edited one") {
+    QTemporaryDir tmp;
+    const QString bare = dngCopy(tmp.path(), "bare.dng");
+
+    QString outText, errText;
+    QTextStream out(&outText), err(&errText);
+    REQUIRE(cli::runInfo({bare}, false, out, err) == 0);
+
+    // A missing sidecar is not an error: it reads as all-default, and only the
+    // explicit flag separates that from "edited back to default" (docs/adr/0053).
+    REQUIRE(outText.contains("Sidecar: none"));
+    REQUIRE(errText.isEmpty());
+}
+
+TEST_CASE("info table reports the sidecar's User Metadata") {
+    QTemporaryDir tmp;
+    const QString rated = dngCopy(tmp.path(), "rated.dng");
+    UserMetadata meta;
+    meta.rating = 4;
+    meta.label = ColourLabel::Green;
+    meta.title = "Harbour at dawn";
+    meta.creator = "Jan Pipek";
+    meta.keywords = QStringList{"boats", "sunrise"};
+    REQUIRE(XmpSidecar::saveMetadata(rated, meta));
+
+    QString outText, errText;
+    QTextStream out(&outText), err(&errText);
+    REQUIRE(cli::runInfo({rated}, false, out, err) == 0);
+
+    REQUIRE(outText.contains("Sidecar: present"));
+    REQUIRE(outText.contains("Rating: 4"));
+    REQUIRE(outText.contains("Colour label: Green"));
+    REQUIRE(outText.contains("Title: Harbour at dawn"));
+    REQUIRE(outText.contains("Creator: Jan Pipek"));
+    REQUIRE(outText.contains("Keywords: boats, sunrise"));
+}
+
+TEST_CASE("info table names each non-default develop group and what it changed") {
+    QTemporaryDir tmp;
+    const QString edited = dngCopy(tmp.path(), "edited.dng");
+    GlobalAdjustment adjustments;
+    adjustments.exposure = 0.5f;    // Tone
+    adjustments.saturation = 20.0f; // Colour
+    REQUIRE(XmpSidecar::saveAdjustments(edited, adjustments));
+
+    QString outText, errText;
+    QTextStream out(&outText), err(&errText);
+    REQUIRE(cli::runInfo({edited}, false, out, err) == 0);
+
+    // Reuse the describer the GUI and `preset show` render, rather than
+    // restating its label/formatting conventions here.
+    REQUIRE(outText.contains(developGroupLabel(DevelopGroup::Tone)));
+    REQUIRE(outText.contains(developGroupLabel(DevelopGroup::Colour)));
+    for (const QString& line : describeGroupNonDefaults(DevelopGroup::Tone, adjustments))
+        REQUIRE(outText.contains(line));
+    for (const QString& line : describeGroupNonDefaults(DevelopGroup::Colour, adjustments))
+        REQUIRE(outText.contains(line));
+
+    // Untouched groups stay out of the report entirely.
+    REQUIRE_FALSE(outText.contains(developGroupLabel(DevelopGroup::Effects)));
+}
+
+TEST_CASE("info table says so when a file has no develop edits at all") {
+    QTemporaryDir tmp;
+    const QString bare = dngCopy(tmp.path(), "bare.dng");
+
+    QString outText, errText;
+    QTextStream out(&outText), err(&errText);
+    REQUIRE(cli::runInfo({bare}, false, out, err) == 0);
+
+    REQUIRE(outText.contains("Develop: no edits"));
+}
+
+TEST_CASE("info --json emits one array element per input path") {
+    QTemporaryDir tmp;
+    const QString a = dngCopy(tmp.path(), "a.dng");
+    const QString b = dngCopy(tmp.path(), "b.dng");
+
+    QString outText, errText;
+    QTextStream out(&outText), err(&errText);
+    REQUIRE(cli::runInfo({a, b}, true, out, err) == 0);
+
+    QJsonParseError parseErr{};
+    const QJsonDocument doc = QJsonDocument::fromJson(outText.toUtf8(), &parseErr);
+    REQUIRE(parseErr.error == QJsonParseError::NoError);
+    REQUIRE(doc.isArray()); // a listing of independent reports, not a batch-operation shape
+    const QJsonArray arr = doc.array();
+    REQUIRE(arr.size() == 2);
+    CHECK(arr.at(0).toObject()["path"].toString() == a);
+    CHECK(arr.at(1).toObject()["path"].toString() == b);
+}
+
+TEST_CASE("info --json types EXIF numbers as numbers, not display strings") {
+    QTemporaryDir tmp;
+    const QString path = dngCopy(tmp.path(), "a.dng");
+
+    QString outText, errText;
+    QTextStream out(&outText), err(&errText);
+    REQUIRE(cli::runInfo({path}, true, out, err) == 0);
+
+    const QJsonObject exif
+        = QJsonDocument::fromJson(outText.toUtf8()).array().at(0).toObject()["exif"].toObject();
+
+    // A script filtering `iso > 1600` must not have to parse "f/2.8" back into
+    // 2.8 (docs/adr/0053), so every numeric key is a JSON number.
+    LibRaw raw;
+    REQUIRE(raw.open_file(path.toLocal8Bit().constData()) == LIBRAW_SUCCESS);
+    const ExifData expected = extractExifData(raw);
+    CHECK(exif["width"].toInt() == expected.width);
+    CHECK(exif["height"].toInt() == expected.height);
+    CHECK(exif["make"].toString() == expected.make);
+    for (const QString& key : {QStringLiteral("width"), QStringLiteral("height")})
+        CHECK(exif[key].isDouble());
+}
+
+TEST_CASE("info --json keys develop groups by their stable machine keys") {
+    QTemporaryDir tmp;
+    const QString edited = dngCopy(tmp.path(), "edited.dng");
+    GlobalAdjustment adjustments;
+    adjustments.exposure = 0.5f;
+    REQUIRE(XmpSidecar::saveAdjustments(edited, adjustments));
+
+    QString outText, errText;
+    QTextStream out(&outText), err(&errText);
+    REQUIRE(cli::runInfo({edited}, true, out, err) == 0);
+
+    const QJsonObject report = QJsonDocument::fromJson(outText.toUtf8()).array().at(0).toObject();
+    CHECK(report["hasSidecar"].toBool());
+    CHECK(report["rating"].toInt() == 0);
+
+    // The same native group serialization `preset show --json` already exposes,
+    // keyed by developGroupKey — never a localised label (docs/adr/0050).
+    const QJsonObject groups = report["developGroups"].toObject();
+    REQUIRE(groups.contains(developGroupKey(DevelopGroup::Tone)));
+    CHECK(groups[developGroupKey(DevelopGroup::Tone)].toObject()["exposure"].toDouble() == 0.5);
+    CHECK_FALSE(groups.contains(developGroupKey(DevelopGroup::Effects)));
+}
+
+TEST_CASE("info --json reports a colour label by its canonical on-disk string") {
+    QTemporaryDir tmp;
+    const QString labelled = dngCopy(tmp.path(), "labelled.dng");
+    UserMetadata meta;
+    meta.label = ColourLabel::Purple;
+    REQUIRE(XmpSidecar::saveMetadata(labelled, meta));
+
+    QString outText, errText;
+    QTextStream out(&outText), err(&errText);
+    REQUIRE(cli::runInfo({labelled}, true, out, err) == 0);
+
+    const QJsonObject report = QJsonDocument::fromJson(outText.toUtf8()).array().at(0).toObject();
+    CHECK(report["colourLabel"].toString() == colourLabelToString(ColourLabel::Purple));
+}
+
+TEST_CASE("info --json marks a file with no sidecar as unedited, not as an error") {
+    QTemporaryDir tmp;
+    const QString bare = dngCopy(tmp.path(), "bare.dng");
+
+    QString outText, errText;
+    QTextStream out(&outText), err(&errText);
+    REQUIRE(cli::runInfo({bare}, true, out, err) == 0);
+
+    const QJsonObject report = QJsonDocument::fromJson(outText.toUtf8()).array().at(0).toObject();
+    CHECK_FALSE(report["hasSidecar"].toBool());
+    CHECK(report["developGroups"].toObject().isEmpty());
+    CHECK_FALSE(report.contains("error"));
+    CHECK(errText.isEmpty());
+}
+
+TEST_CASE("info fails only the corrupt file and still reports the others, exiting 1") {
+    QTemporaryDir tmp;
+    const QString good = dngCopy(tmp.path(), "good.dng");
+    const QString corrupt = QDir(tmp.path()).filePath("corrupt.dng");
+    {
+        QFile f(corrupt); // right extension, contents LibRaw cannot open
+        REQUIRE(f.open(QIODevice::WriteOnly));
+        f.write("not a raw file");
+    }
+
+    QString outText, errText;
+    QTextStream out(&outText), err(&errText);
+    // A batch-1 tier, not a refusal: files are independent, so one bad file
+    // must not hide the report on the other 299 (docs/adr/0053).
+    REQUIRE(cli::runInfo({corrupt, good}, false, out, err) == 1);
+
+    REQUIRE(outText.contains(good));
+    REQUIRE(errText.contains("corrupt.dng"));
+}
+
+TEST_CASE("info --json reports a failed file inline as well as on stderr") {
+    QTemporaryDir tmp;
+    const QString corrupt = QDir(tmp.path()).filePath("corrupt.dng");
+    {
+        QFile f(corrupt);
+        REQUIRE(f.open(QIODevice::WriteOnly));
+        f.write("not a raw file");
+    }
+
+    QString outText, errText;
+    QTextStream out(&outText), err(&errText);
+    REQUIRE(cli::runInfo({corrupt}, true, out, err) == 1);
+
+    const QJsonArray arr = QJsonDocument::fromJson(outText.toUtf8()).array();
+    REQUIRE(arr.size() == 1);
+    const QJsonObject report = arr.at(0).toObject();
+    CHECK(report["path"].toString() == corrupt);
+    CHECK_FALSE(report["error"].toString().isEmpty());
+    CHECK(errText.contains("corrupt.dng"));
+}
+
+TEST_CASE("info treats a standard image's absent EXIF as a gap, not a failure") {
+    QTemporaryDir tmp;
+    const QString jpeg = QDir(tmp.path()).filePath("shot.jpg");
+    {
+        QFile f(jpeg);
+        REQUIRE(f.open(QIODevice::WriteOnly));
+    }
+
+    QString outText, errText;
+    QTextStream out(&outText), err(&errText);
+    // StandardImageLoader extracts no EXIF today; that pre-existing gap is not
+    // this command's to close, and must not read as a per-file error.
+    REQUIRE(cli::runInfo({jpeg}, true, out, err) == 0);
+
+    const QJsonObject report = QJsonDocument::fromJson(outText.toUtf8()).array().at(0).toObject();
+    CHECK(report["exif"].toObject().isEmpty());
+    CHECK_FALSE(report.contains("error"));
+    CHECK(errText.isEmpty());
+}
