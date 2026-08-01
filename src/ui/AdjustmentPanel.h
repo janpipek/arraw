@@ -74,7 +74,8 @@ private:
         QVBoxLayout* layout,
         const QString& name,
         const FieldSpec& spec,
-        const QString& tooltip = {});
+        const QString& tooltip = {},
+        QWidget* trailing = nullptr); // extra widget between the slider and its spinbox
     std::vector<SliderRow*> allRows();
     void connectRow(SliderRow& row);
     void connectCurve();
@@ -145,6 +146,11 @@ private:
     std::array<SliderRow, 3> colorGradeSat;
     SliderRow colorGradeBalance;
     SliderRow colorGradeBlending;
+    // A small colour patch beside each Hue slider showing the tint direction, and
+    // repainted as the slider moves. The Hue groove itself is a static hue spectrum
+    // (set once in the constructor) so the handle sits on the colour it selects.
+    std::array<QLabel*, 3> colorGradeHueSwatch;
+    void updateHueSwatch(int zone, int hueDegrees);
 
     GlobalAdjustment adjustments;
     GlobalAdjustment committed; // last committed state — baseline for the next undo entry
