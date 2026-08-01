@@ -700,6 +700,50 @@ TEST_CASE("reader parses a Lightroom-style sidecar", "[xmp][crs]") {
     CHECK(p.curveR.isIdentity());
 }
 
+// docs/adr/0052: arraw models the Colour Grading Hue/Sat/Balance/Blending fields
+// but NOT the per-zone crs:ColorGrade*Lum brightness. A Lightroom-authored *Lum
+// value (and any other unmodeled crs field) must survive an arraw round-trip: the
+// read-first DOM merge only replaces the crs attributes arraw itself writes.
+TEST_CASE("an unmodeled crs:ColorGrade*Lum survives an arraw save", "[xmp][crs][grade]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("lr-graded.arw");
+
+    const QByteArray lightroom = R"(<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+    crs:Exposure2012="0.20"
+    crs:ColorGradeShadowHue="120"
+    crs:ColorGradeShadowSat="30"
+    crs:ColorGradeShadowLum="15"
+    crs:ColorGradeGlobalHue="210"/>
+ </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end="w"?>)";
+    {
+        QFile f(XmpSidecar::pathFor(rawPath));
+        REQUIRE(f.open(QIODevice::WriteOnly));
+        f.write(lightroom);
+    }
+
+    // arraw loads (ignoring *Lum), edits a modeled field, and writes back.
+    GlobalAdjustment p = XmpSidecar::loadAdjustments(rawPath);
+    CHECK_THAT(p.colorGradeHue[0], WithinAbs(120.0f, kScalarTol)); // Shadow Hue read
+    CHECK_THAT(p.colorGradeSat[0], WithinAbs(30.0f, kScalarTol));
+    p.exposure = 1.0f;
+    REQUIRE(XmpSidecar::saveAdjustments(rawPath, p));
+
+    QFile f(XmpSidecar::pathFor(rawPath));
+    REQUIRE(f.open(QIODevice::ReadOnly));
+    const QString xml = QString::fromUtf8(f.readAll());
+    // The unmodeled fields Lightroom wrote are still there, verbatim...
+    CHECK(xml.contains(R"(crs:ColorGradeShadowLum="15")"));
+    CHECK(xml.contains(R"(crs:ColorGradeGlobalHue="210")"));
+    // ...while the modeled Shadow Hue arraw owns was re-emitted.
+    CHECK(xml.contains(R"(crs:ColorGradeShadowHue="120.0000")"));
+}
+
 // ── User metadata: rating + colour label ────────────────────────────────────
 
 TEST_CASE("ColourLabel maps to and from the canonical English name", "[xmp][marks]") {
