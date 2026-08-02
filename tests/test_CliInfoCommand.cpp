@@ -320,3 +320,21 @@ TEST_CASE("info treats a standard image's absent EXIF as a gap, not a failure") 
     CHECK_FALSE(report.contains("error"));
     CHECK(errText.isEmpty());
 }
+
+TEST_CASE("info --json omits colourLabel entirely when the photo carries none") {
+    QTemporaryDir tmp;
+    const QString unlabelled = dngCopy(tmp.path(), "unlabelled.dng");
+    UserMetadata meta;
+    meta.rating = 3; // rated, but no colour label
+    REQUIRE(XmpSidecar::saveMetadata(unlabelled, meta));
+
+    QString outText, errText;
+    QTextStream out(&outText), err(&errText);
+    REQUIRE(cli::runInfo({unlabelled}, true, out, err) == 0);
+
+    // Absence is a missing key, the same as every other optional field —
+    // never an empty string a script has to treat as a third state.
+    const QJsonObject report = QJsonDocument::fromJson(outText.toUtf8()).array().at(0).toObject();
+    CHECK(report["rating"].toInt() == 3);
+    CHECK_FALSE(report.contains("colourLabel"));
+}

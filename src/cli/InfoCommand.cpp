@@ -130,7 +130,11 @@ QJsonObject toJson(const FileReport& report) {
     o["exif"] = toJson(report.exif);
     o["hasSidecar"] = report.hasSidecar;
     o["rating"] = report.metadata.rating;
-    o["colourLabel"] = colourLabelToString(report.metadata.label);
+    // Omitted rather than emitted as "" when unset, so absence reads the same
+    // way for every optional field and no script has to special-case a third,
+    // empty-string state.
+    if (report.metadata.label != ColourLabel::None)
+        o["colourLabel"] = colourLabelToString(report.metadata.label);
     if (!report.metadata.title.isEmpty())
         o["title"] = report.metadata.title;
     if (!report.metadata.caption.isEmpty())
