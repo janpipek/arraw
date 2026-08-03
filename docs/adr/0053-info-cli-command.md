@@ -90,6 +90,12 @@ Mask kind names come from `maskKindName`, deliberately **not** shared with
 the `arraw:MaskType` literals `XmpSidecar` writes: those are the on-disk
 format, and a display rename must never silently change the file format.
 
+Spots are the other per-image state outside the enum (ADR 0017), invisible
+for exactly the same reason — and get **a count, not a list**. Every field
+of a `Spot` is geometry (destination, source, radius, feather), so "how
+many" is the entire reportable content; `Spots: 3` in the table, `"spots":
+3` in `--json`, always present there so a script never tests for the key.
+
 ## `--json`: stable machine keys, not the GUI's display strings
 
 Both `ImageMetadata::rows` (`{"label": "Focal length (35mm)", "value": "50

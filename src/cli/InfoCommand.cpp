@@ -207,6 +207,15 @@ void writeTable(const FileReport& report, QTextStream& out, const TextStyle& sty
     writeUserMetadata(report.metadata, out, style);
     writeDevelopGroups(report, out, style);
     writeMasks(report, out, style);
+
+    // Spots are the other per-image state outside the DevelopGroup enum
+    // (docs/adr/0017, docs/adr/0023), so they are invisible for the same reason
+    // masks were. A count is the whole story here: a Spot is destination,
+    // source, radius and feather — all geometry, and geometry is not a report.
+    if (!report.adjustments.spots.empty()) {
+        writeRow(
+            out, style, QStringLiteral("Spots"), QString::number(report.adjustments.spots.size()));
+    }
 }
 
 QJsonObject toJson(const FileReport& report) {
@@ -263,6 +272,9 @@ QJsonObject toJson(const FileReport& report) {
         masks.append(m);
     }
     o["masks"] = masks;
+    // A number, not a list: every field of a Spot is geometry, so there is
+    // nothing per-spot a report could say that "how many" doesn't already.
+    o["spots"] = int(report.adjustments.spots.size());
     return o;
 }
 

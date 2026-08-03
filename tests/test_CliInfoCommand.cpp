@@ -2,6 +2,7 @@
 #include "core/ImageMetadata.h"
 #include "develop/DevelopGroup.h"
 #include "develop/LocalAdjustment.h"
+#include "develop/Spot.h"
 #include "io/XmpSidecar.h"
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -597,4 +598,52 @@ TEST_CASE("info --json always carries a masks array, empty when there are none")
     const QJsonObject report = QJsonDocument::fromJson(outText.toUtf8()).array().at(0).toObject();
     REQUIRE(report.contains("masks"));
     CHECK(report["masks"].toArray().isEmpty());
+}
+
+TEST_CASE("info counts the spots a photo carries") {
+    QTemporaryDir tmp;
+    const QString retouched = dngCopy(tmp.path(), "retouched.dng");
+    GlobalAdjustment adjustments;
+    adjustments.spots
+        = {Spot{.destination = {10, 10}, .source = {20, 20}, .radius = 5.0},
+           Spot{.destination = {30, 30}, .source = {40, 40}, .radius = 8.0}};
+    REQUIRE(XmpSidecar::saveAdjustments(retouched, adjustments));
+
+    QString outText, errText;
+    QTextStream out(&outText), err(&errText);
+    REQUIRE(cli::runInfo({retouched}, false, out, err) == 0);
+
+    // A count is the whole story: every field of a Spot is geometry, and the
+    // Develop groups can't mention them at all (docs/adr/0017, docs/adr/0023).
+    REQUIRE(outText.contains("Spots: 2"));
+}
+
+TEST_CASE("info omits the spot count for a photo that has none") {
+    QTemporaryDir tmp;
+    const QString plain = dngCopy(tmp.path(), "plain.dng");
+
+    QString outText, errText;
+    QTextStream out(&outText), err(&errText);
+    REQUIRE(cli::runInfo({plain}, false, out, err) == 0);
+
+    REQUIRE_FALSE(outText.contains("Spots:"));
+}
+
+TEST_CASE("info --json always reports a spot count, zero included") {
+    QTemporaryDir tmp;
+    const QString retouched = dngCopy(tmp.path(), "retouched.dng");
+    const QString plain = dngCopy(tmp.path(), "plain.dng");
+    GlobalAdjustment adjustments;
+    adjustments.spots = {Spot{.destination = {10, 10}, .source = {20, 20}, .radius = 5.0}};
+    REQUIRE(XmpSidecar::saveAdjustments(retouched, adjustments));
+
+    QString outText, errText;
+    QTextStream out(&outText), err(&errText);
+    REQUIRE(cli::runInfo({retouched, plain}, true, out, err) == 0);
+
+    const QJsonArray arr = QJsonDocument::fromJson(outText.toUtf8()).array();
+    CHECK(arr.at(0).toObject()["spots"].toInt() == 1);
+    // Present and zero rather than absent, so a script never tests for the key.
+    REQUIRE(arr.at(1).toObject().contains("spots"));
+    CHECK(arr.at(1).toObject()["spots"].toInt() == 0);
 }
