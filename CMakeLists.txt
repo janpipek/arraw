@@ -320,6 +320,11 @@ add_library(arraw_cli STATIC
     src/cli/ExportCommand.cpp
     src/cli/PresetArgs.cpp
     src/cli/PresetCommand.cpp
+    src/cli/ArgParse.cpp
+    src/cli/ImagePathPreflight.cpp
+    src/cli/InfoArgs.cpp
+    src/cli/InfoCommand.cpp
+    src/cli/TextStyle.cpp
     src/cli/Dispatch.cpp
 )
 arraw_enable_warnings(arraw_cli)

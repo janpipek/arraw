@@ -13,6 +13,7 @@ struct Harness {
         launches << p;
         return 0;
     };
+
     int run(std::vector<const char*> argv) {
         argv.insert(argv.begin(), "arraw");
         return cli::dispatch(int(argv.size()), const_cast<char**>(argv.data()), launcher, out, err);
@@ -49,7 +50,10 @@ TEST_CASE("unknown argument errors with exit 2, never launching the GUI (rule 3)
 TEST_CASE("an existing file as the unknown argument gets the ui suggestion") {
     QTemporaryDir tmp;
     const QString file = QDir(tmp.path()).filePath("shot.arw");
-    { QFile f(file); REQUIRE(f.open(QIODevice::WriteOnly)); }
+    {
+        QFile f(file);
+        REQUIRE(f.open(QIODevice::WriteOnly));
+    }
     const QByteArray fileBytes = file.toLocal8Bit();
 
     Harness h;
@@ -61,4 +65,40 @@ TEST_CASE("export usage errors surface through dispatch") {
     Harness h;
     REQUIRE(h.run({"export"}) == 2); // no inputs, no -o
     REQUIRE(h.errText.contains("arraw export"));
+}
+
+TEST_CASE("info is a reserved verb, dispatched with its paths") {
+    QTemporaryDir tmp;
+    const QString file = QDir(tmp.path()).filePath("shot.dng");
+    REQUIRE(QFile::copy(QStringLiteral(ARRAW_FIXTURE_DIR "/gradient-32x24.dng"), file));
+    const QByteArray fileBytes = file.toLocal8Bit();
+
+    Harness h;
+    REQUIRE(h.run({"info", fileBytes.constData()}) == 0);
+    REQUIRE(h.outText.contains(file));
+    REQUIRE(h.launches.isEmpty()); // never a silent GUI launch
+}
+
+TEST_CASE("info usage errors surface through dispatch") {
+    Harness h;
+    REQUIRE(h.run({"info"}) == 2); // paths are required
+    REQUIRE(h.outText.isEmpty());
+    REQUIRE(h.launches.isEmpty());
+}
+
+TEST_CASE("info --json reaches the command through dispatch") {
+    QTemporaryDir tmp;
+    const QString file = QDir(tmp.path()).filePath("shot.dng");
+    REQUIRE(QFile::copy(QStringLiteral(ARRAW_FIXTURE_DIR "/gradient-32x24.dng"), file));
+    const QByteArray fileBytes = file.toLocal8Bit();
+
+    Harness h;
+    REQUIRE(h.run({"info", "--json", fileBytes.constData()}) == 0);
+    REQUIRE(h.outText.trimmed().startsWith("["));
+}
+
+TEST_CASE("help lists info among the commands") {
+    Harness h;
+    REQUIRE(h.run({"help"}) == 0);
+    REQUIRE(h.outText.contains("info"));
 }

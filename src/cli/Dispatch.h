@@ -1,4 +1,5 @@
 #pragma once
+#include "cli/TextStyle.h"
 #include <functional>
 #include <QString>
 #include <QTextStream>
@@ -14,6 +15,14 @@ using GuiLauncher = std::function<int(const QString& openPath)>;
 // double-click path); a known command -> run it; anything else -> error
 // with a suggestion, exit 2 — never a silent GUI launch. The export branch
 // requires a QGuiApplication to already exist (the mains create it).
-int dispatch(int argc, char** argv, const GuiLauncher& launchUi, QTextStream& out, QTextStream& err);
+// `style` colours the human-readable tables; the default is plain text, which
+// is what anything but a real terminal should get.
+int dispatch(
+    int argc,
+    char** argv,
+    const GuiLauncher& launchUi,
+    QTextStream& out,
+    QTextStream& err,
+    const TextStyle& style = {});
 
 } // namespace cli

@@ -4,6 +4,7 @@
 #include "develop/DevelopGroup.h"
 
 #include <QByteArray>
+#include <QJsonObject>
 #include <QString>
 
 // A saved, named bundle of selected Develop Groups (Milestone 8; docs/adr/0023).
@@ -24,3 +25,9 @@ struct DevelopPreset {
 // and missing groups are tolerated (forward/backward compatibility seam).
 QByteArray serializeDevelopPreset(const DevelopPreset& preset);
 DevelopPreset parseDevelopPreset(const QByteArray& json, bool* ok = nullptr);
+
+// One group's fields from `values`, in the same native representation preset
+// files use — shared with `arraw info --json`, which reports a photo's
+// non-default groups with exactly the schema `preset show --json` already
+// exposes rather than inventing a second one (docs/adr/0053).
+QJsonObject groupToJson(DevelopGroup g, const GlobalAdjustment& values);

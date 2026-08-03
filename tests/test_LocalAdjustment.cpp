@@ -4,6 +4,7 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include <QPointF>
+#include <QSet>
 
 using Catch::Approx;
 using Catch::Matchers::WithinAbs;
@@ -316,4 +317,46 @@ TEST_CASE("localChangeLabel falls back to the generic verb when ambiguous", "[lo
     after[1].exposure = 0.5f; // two masks changed at once
     CHECK(localChangeLabel(before, after) == "Adjust Local");
     CHECK(localChangeLabel(before, before) == "Adjust Local"); // nothing changed
+}
+
+TEST_CASE("describeLocalNonDefaults lists only the deltas a mask actually changed", "[localadj]") {
+    LocalAdjustment local;
+    local.exposure = 0.5f;
+    local.shadows = -30.0f;
+
+    // Formatted through each field's own FieldSpec, so a mask's deltas read
+    // exactly as the Masks panel and the History list already write them.
+    CHECK(describeLocalNonDefaults(local) == QStringList{"Exposure +0.50 EV", "Shadows -30"});
+
+    // Zero is "no change" for every local field, so an untouched mask is silent.
+    CHECK(describeLocalNonDefaults(LocalAdjustment{}).isEmpty());
+}
+
+TEST_CASE("describeLocalNonDefaults keeps the panel's field order", "[localadj]") {
+    LocalAdjustment local;
+    local.vibrance = 10.0f; // last row
+    local.exposure = 0.25f; // first row
+    local.temperature = -5.0f;
+
+    CHECK(
+        describeLocalNonDefaults(local)
+        == QStringList{"Exposure +0.25 EV", "Temp -5", "Vibrance +10"});
+}
+
+TEST_CASE("maskKindName names each arm of the Mask variant", "[localadj]") {
+    CHECK(QString(maskKindName(LinearMask{})) == "Linear");
+    CHECK(QString(maskKindName(RadialMask{})) == "Radial");
+    CHECK(QString(maskKindName(BrushMask{})) == "Brush");
+}
+
+TEST_CASE("every local delta field carries a stable machine key", "[localadj]") {
+    // `info --json` keys masks by these, so a missing or duplicated one would
+    // silently drop a delta from the report (docs/adr/0050).
+    QStringList keys;
+    for (const LocalDeltaField& f : localDeltaFields()) {
+        REQUIRE(f.key != nullptr);
+        keys << QString::fromLatin1(f.key);
+    }
+    CHECK(keys.size() == QSet<QString>(keys.begin(), keys.end()).size());
+    CHECK(keys.contains("temperature")); // not "temp": the field, not its label
 }
