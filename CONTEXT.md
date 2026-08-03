@@ -266,7 +266,8 @@ HSL (the colour-image sibling)
 
 **Colour Grading**:
 A three-zone (Shadows/Midtones/Highlights) hue+saturation tint, plus two global
-shaping controls, Balance (shifts the shadow↔highlight crossover) and Blending
+shaping controls, Balance (shifts the shadow↔highlight crossover; negative
+favours Shadows, positive Highlights, as in Lightroom) and Blending
 (softens the width of the zone transitions). Runs in Oklab, after the
 Colour/[[Black & White]] branch merges and before Spatial Global Adjustments, so
 it tints either a colour image or the [[Black & White]] treatment's neutral

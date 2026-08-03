@@ -17,26 +17,6 @@ float luma(const Rgb& c) {
     return kLumaR * c[0] + kLumaG * c[1] + kLumaB * c[2];
 }
 
-// Oklab is defined from linear sRGB/Rec.709 (Ottosson 2020). arraw works in
-// linear Rec.2020, so we convert Rec.2020 -> Rec.709 first. These two primaries
-// matrices are mutual inverses (to ~6 decimals), which is what makes the Oklab
-// round trip exact; the shader mirrors the same constants.
-Rgb rec2020ToRec709(const Rgb& c) {
-    return {
-        1.660491f * c[0] - 0.587641f * c[1] - 0.072850f * c[2],
-        -0.124550f * c[0] + 1.132900f * c[1] - 0.008349f * c[2],
-        -0.018151f * c[0] - 0.100579f * c[1] + 1.118730f * c[2],
-    };
-}
-
-Rgb rec709ToRec2020(const Rgb& c) {
-    return {
-        0.627404f * c[0] + 0.329283f * c[1] + 0.043313f * c[2],
-        0.069097f * c[0] + 0.919541f * c[1] + 0.011362f * c[2],
-        0.016391f * c[0] + 0.088013f * c[1] + 0.895595f * c[2],
-    };
-}
-
 // Vibrance weight falls off with current chroma: muted colours weigh ~1, vivid
 // ones tail toward 0 (but never reach it, so a positive Vibrance always nudges).
 // kVibranceHalf is the Oklab chroma at which the weight is one half.
@@ -69,7 +49,9 @@ constexpr float kColorGradeStrength = 0.10f;
 constexpr float kColorGradeSigmaMin = 0.18f;
 constexpr float kColorGradeSigmaMax = 0.45f;
 // Balance slides the point sampled on the tonal axis, shifting where shadows give
-// way to highlights; +/-100 moves it a quarter of the range.
+// way to highlights; +/-100 moves it a quarter of the range. Sign follows
+// Lightroom's crs:ColorGradeBalance: negative gives the Shadows zone more of the
+// tonal range, positive gives it to the Highlights.
 constexpr float kColorGradeBalanceShift = 0.25f;
 // Matches the literal in shaders/image.frag so the CPU/GPU hue angles agree.
 constexpr float kPi = 3.14159265f;
@@ -100,6 +82,22 @@ HueSat hueSat(const Rgb& c) {
 }
 
 } // namespace
+
+Rgb rec2020ToRec709(const Rgb& c) {
+    return {
+        1.660491f * c[0] - 0.587641f * c[1] - 0.072850f * c[2],
+        -0.124550f * c[0] + 1.132900f * c[1] - 0.008349f * c[2],
+        -0.018151f * c[0] - 0.100579f * c[1] + 1.118730f * c[2],
+    };
+}
+
+Rgb rec709ToRec2020(const Rgb& c) {
+    return {
+        0.627404f * c[0] + 0.329283f * c[1] + 0.043313f * c[2],
+        0.069097f * c[0] + 0.919541f * c[1] + 0.011362f * c[2],
+        0.016391f * c[0] + 0.088013f * c[1] + 0.895595f * c[2],
+    };
+}
 
 Lab toOklab(const Rgb& rgb) {
     const Rgb c = rec2020ToRec709(rgb);
@@ -197,7 +195,7 @@ Rgb applyColourGrading(
     // the three zone lobes are evaluated at.
     const float y = std::clamp(luma(rgb), 0.0f, 1.0f);
     const float e = std::pow(y, 1.0f / kColorGradeGamma);
-    const float es = std::clamp(e - (balance / 100.0f) * kColorGradeBalanceShift, 0.0f, 1.0f);
+    const float es = std::clamp(e + (balance / 100.0f) * kColorGradeBalanceShift, 0.0f, 1.0f);
 
     const float blend = std::clamp(blending / 100.0f, 0.0f, 1.0f);
     const float sigma = kColorGradeSigmaMin + (kColorGradeSigmaMax - kColorGradeSigmaMin) * blend;

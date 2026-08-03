@@ -289,12 +289,15 @@ TEST_CASE("the grade hue steers the direction of the Oklab tint", "[grade]") {
     CHECK_THAT(alongB.a, WithinAbs(0.0f, 1e-3f));
 }
 
-TEST_CASE("Balance shifts a Shadows tint toward brighter tones", "[grade]") {
+TEST_CASE("Balance shifts the shadow/highlight crossover, Lightroom-style", "[grade]") {
     const Zone3 shadowOnly = {80.0f, 0.0f, 0.0f};
     const Rgb mid{0.35f, 0.35f, 0.35f};
-    // Positive Balance slides the sampled tonal position down, so a midtone reads
-    // more like a shadow and picks up more of the Shadows tint.
-    const float neutral = chroma(colour::applyColourGrading(mid, kNoZone, shadowOnly, 0.0f, 50.0f));
-    const float pushed = chroma(colour::applyColourGrading(mid, kNoZone, shadowOnly, 100.0f, 50.0f));
-    CHECK(pushed > neutral);
+    // Sign follows crs:ColorGradeBalance: negative hands more of the tonal range to
+    // the Shadows zone (a midtone picks up more of its tint), positive hands it to
+    // the Highlights (the midtone picks up less).
+    const auto tint = [&](float balance) {
+        return chroma(colour::applyColourGrading(mid, kNoZone, shadowOnly, balance, 50.0f));
+    };
+    CHECK(tint(-100.0f) > tint(0.0f));
+    CHECK(tint(100.0f) < tint(0.0f));
 }

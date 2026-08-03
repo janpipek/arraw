@@ -31,7 +31,10 @@ and the [[Tone Curve]].
   split-toning craft, without which the split sits at a fixed point that won't
   suit every photo. Blending softens the width of the zone transitions. Both are
   included (full Lightroom-panel parity) rather than deferring Blending, per
-  discussion during grilling.
+  discussion during grilling. Balance's **sign follows Lightroom's**: negative
+  hands more of the tonal range to the Shadows zone, positive to the Highlights.
+  Since the value is stored in Lightroom's own `crs:ColorGradeBalance`, an
+  inverted sign would silently mirror the grade on any imported sidecar.
 
 - **Its own Develop Group, "Colour Grading."** Groups go 10 → 11. Precedent is
   [[HSL]], which already has its own group distinct from [[Colour]] despite both

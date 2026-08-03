@@ -336,9 +336,8 @@ vec3 applyBlackAndWhite(vec3 c) {
 // Highlights lobes (widened by Blending), and each zone's (hue, sat) adds an
 // Oklab a/b offset, holding lightness fixed. Zero saturation is the exact identity.
 vec3 applyColourGrading(vec3 c) {
-    vec2 sat = vec2(u.colorGrade[0].y, u.colorGrade[0].w); // shadow, midtone
-    float satHigh = u.colorGrade[1].y;
-    if (abs(sat.x) < 1e-4 && abs(sat.y) < 1e-4 && abs(satHigh) < 1e-4)
+    vec3 satv = vec3(u.colorGrade[0].y, u.colorGrade[0].w, u.colorGrade[1].y);
+    if (abs(satv.x) < 1e-4 && abs(satv.y) < 1e-4 && abs(satv.z) < 1e-4)
         return c;
 
     float balance = u.colorGrade[1].z;
@@ -346,7 +345,7 @@ vec3 applyColourGrading(vec3 c) {
 
     float y = clamp(dot(c, kLuma), 0.0, 1.0);
     float e = pow(y, 1.0 / 2.2);
-    float es = clamp(e - (balance / 100.0) * 0.25, 0.0, 1.0);
+    float es = clamp(e + (balance / 100.0) * 0.25, 0.0, 1.0);
 
     float blend = clamp(blending / 100.0, 0.0, 1.0);
     float sigma = 0.18 + (0.45 - 0.18) * blend;
@@ -356,7 +355,6 @@ vec3 applyColourGrading(vec3 c) {
     float sum = ws + wm + wh;
 
     vec3 hue = vec3(u.colorGrade[0].x, u.colorGrade[0].z, u.colorGrade[1].x);
-    vec3 satv = vec3(u.colorGrade[0].y, u.colorGrade[0].w, u.colorGrade[1].y);
     vec3 w = vec3(ws, wm, wh) / sum;
 
     float a = 0.0;

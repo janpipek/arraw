@@ -20,6 +20,15 @@ struct Lab {
     float b;
 };
 
+// Linear Rec.2020 <-> linear Rec.709/sRGB primaries. Oklab is defined from linear
+// Rec.709 (Ottosson 2020) while arraw works in Rec.2020, so every conversion below
+// goes through these; they are mutual inverses to ~6 decimals, which is what makes
+// the Oklab round trip exact. Exposed because the UI needs the same matrix to show
+// a working-space colour on screen ([[spot-for-algorithms]]) — the shader mirrors
+// the same constants.
+Rgb rec2020ToRec709(const Rgb& c);
+Rgb rec709ToRec2020(const Rgb& c);
+
 // Linear Rec.2020 <-> Oklab. The Rec.2020->XYZ step is folded into Oklab's first
 // matrix (see OkLab.cpp), so this is a single matrix + cube root + matrix.
 Lab toOklab(const Rgb& rgb);
@@ -46,7 +55,8 @@ Rgb applyBlackAndWhite(const Rgb& rgb, const std::array<float, 8>& mix);
 // and `sat` are indexed [Shadows, Midtones, Highlights]; hue is in degrees (0..360)
 // and sat in 0..100. A pixel's perceptually-encoded luminance selects a normalised
 // blend of the three zones (Balance, -100..100, shifts the shadow<->highlight
-// crossover; Blending, 0..100, widens the zone transitions), and each zone's
+// crossover — negative gives the Shadows zone more of the tonal range, positive
+// the Highlights, as in Lightroom; Blending, 0..100, widens the transitions), and each zone's
 // (hue, sat) contributes an Oklab a/b offset — so lightness and the tone/toning
 // separation are preserved, and a neutral grey can be tinted (sepia, split-toning).
 // An all-zero-saturation grade is the exact identity. The shader mirrors this after
