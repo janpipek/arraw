@@ -113,16 +113,14 @@ static QColor gradeHueColour(float hueDegrees) {
     const float rad = hueDegrees * 3.14159265f / 180.0f;
     const colour::Rgb lin = colour::fromOklab(
         {kRefL, kRefChroma * std::cos(rad), kRefChroma * std::sin(rad)});
-    // Linear Rec.2020 -> linear Rec.709/sRGB (the same primaries matrix the shader
-    // and colour::toOklab use), then the sRGB transfer curve.
-    const float r = 1.660491f * lin[0] - 0.587641f * lin[1] - 0.072850f * lin[2];
-    const float g = -0.124550f * lin[0] + 1.132900f * lin[1] - 0.008349f * lin[2];
-    const float b = -0.018151f * lin[0] - 0.100579f * lin[1] + 1.118730f * lin[2];
+    // Working space (linear Rec.2020) -> linear sRGB primaries, then the sRGB
+    // transfer curve. The matrix is colour::rec2020ToRec709, not a copy of it.
+    const colour::Rgb srgb = colour::rec2020ToRec709(lin);
     const auto encode = [](float c) {
         c = std::clamp(c, 0.0f, 1.0f);
         return c <= 0.0031308f ? 12.92f * c : 1.055f * std::pow(c, 1.0f / 2.4f) - 0.055f;
     };
-    return QColor::fromRgbF(encode(r), encode(g), encode(b));
+    return QColor::fromRgbF(encode(srgb[0]), encode(srgb[1]), encode(srgb[2]));
 }
 
 // A static stylesheet that paints a Hue slider's groove as a full hue spectrum and
@@ -393,6 +391,7 @@ AdjustmentPanel::AdjustmentPanel(QWidget* parent)
     // stays visible in both treatments — it tints the colour image or the B&W grey.
     {
         auto* colourGrade = makeGroup("Colour Grading");
+        colourGrade->parentWidget()->setObjectName("colourGradingGroup");
         const QString grooveStyle = hueGrooveStyleSheet();
         const char* zoneNames[3] = {"Shadows", "Midtones", "Highlights"};
         for (int i = 0; i < 3; ++i) {

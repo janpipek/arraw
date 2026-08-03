@@ -257,3 +257,44 @@ TEST_CASE(
     CHECK(panel.findChild<QGroupBox*>("hslGroup")->isHidden());
     CHECK(panel.findChild<QGroupBox*>("colorGroup")->isHidden());
 }
+
+// ── Colour Grading (docs/adr/0052) ──────────────────────────────────────────
+// The tint maths is tested headless in test_OkLab; these cover the panel wiring.
+
+TEST_CASE("setParams round-trips the Colour Grading zones through params", "[adjustpanel][grade]") {
+    testApp();
+    AdjustmentPanel panel;
+
+    GlobalAdjustment p;
+    p.colorGradeHue = {35.0f, 210.0f, 300.0f};
+    p.colorGradeSat = {40.0f, 22.0f, 58.0f};
+    p.colorGradeBalance = -18.0f;
+    p.colorGradeBlending = 35.0f; // distinct from the default 50
+    panel.setParams(p);
+
+    for (int i = 0; i < 3; ++i) {
+        CHECK(panel.params().colorGradeHue[i] == p.colorGradeHue[i]);
+        CHECK(panel.params().colorGradeSat[i] == p.colorGradeSat[i]);
+    }
+    CHECK(panel.params().colorGradeBalance == p.colorGradeBalance);
+    CHECK(panel.params().colorGradeBlending == p.colorGradeBlending);
+}
+
+// Unlike Colour/HSL/B&W Mixer, Colour Grading grades whichever signal the branch
+// produced, so the treatment switch must never hide it (docs/adr/0052).
+TEST_CASE("Colour Grading stays visible in both treatments", "[adjustpanel][grade]") {
+    testApp();
+    AdjustmentPanel panel;
+    panel.show();
+    auto* gradeBox = panel.findChild<QGroupBox*>("colourGradingGroup");
+    REQUIRE(gradeBox != nullptr);
+
+    GlobalAdjustment colour;
+    panel.setParams(colour);
+    CHECK_FALSE(gradeBox->isHidden());
+
+    GlobalAdjustment mono;
+    mono.convertToGrayscale = true;
+    panel.setParams(mono);
+    CHECK_FALSE(gradeBox->isHidden()); // still there under Black & White
+}
