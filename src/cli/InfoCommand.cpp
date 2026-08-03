@@ -3,6 +3,7 @@
 #include "core/ImageMetadata.h"
 #include "develop/DevelopGroup.h"
 #include "develop/DevelopPreset.h"
+#include "develop/LocalAdjustment.h"
 #include "io/XmpSidecar.h"
 #include "pipeline/RawProcessor.h"
 #include <libraw/libraw.h>
@@ -171,6 +172,26 @@ void writeDevelopGroups(const FileReport& report, QTextStream& out, const TextSt
     }
 }
 
+// Local Adjustments are per-image state, deliberately outside the DevelopGroup
+// enum a preset carries (docs/adr/0023) — so groupsWithNonDefaultValues never
+// sees them, and a masked photo would otherwise report nothing about the masks
+// that are most of what was done to it. Listed short: name, kind and the deltas
+// each one applies, never its geometry (a brush raster is not a report).
+void writeMasks(const FileReport& report, QTextStream& out, const TextStyle& style) {
+    const auto& masks = report.adjustments.localAdjustments;
+    if (masks.empty())
+        return;
+
+    out << "  " << style.dim(QStringLiteral("Masks:")) << "\n";
+    for (int i = 0; i < int(masks.size()); ++i) {
+        const QStringList deltas = describeLocalNonDefaults(masks[i]);
+        out << "    " << style.paint(maskDisplayName(masks, i), Ink::Cyan);
+        // A mask carrying no deltas is drawn but doing nothing — worth seeing.
+        out << " — " << (deltas.isEmpty() ? QStringLiteral("no adjustments") : deltas.join(", "))
+            << "\n";
+    }
+}
+
 // One detail block per file, not a summary row: a file carries ~15-20 EXIF
 // rows plus sidecar fields plus per-group changed values — too much for
 // row/column shape (docs/adr/0053).
@@ -185,6 +206,7 @@ void writeTable(const FileReport& report, QTextStream& out, const TextStyle& sty
     writeRow(out, style, QStringLiteral("Sidecar"), sidecarPainted(report, style));
     writeUserMetadata(report.metadata, out, style);
     writeDevelopGroups(report, out, style);
+    writeMasks(report, out, style);
 }
 
 QJsonObject toJson(const FileReport& report) {
@@ -224,6 +246,23 @@ QJsonObject toJson(const FileReport& report) {
             groups[developGroupKey(g)] = groupToJson(g, report.adjustments);
     }
     o["developGroups"] = groups;
+
+    // Always emitted, empty array included: `masks` is a listing, and a script
+    // iterating it shouldn't have to test for the key first. Each mask carries
+    // its kind and only the deltas it actually changed, keyed exactly like the
+    // global fields of the same name (docs/adr/0010, docs/adr/0053).
+    QJsonArray masks;
+    for (const LocalAdjustment& local : report.adjustments.localAdjustments) {
+        QJsonObject m;
+        m["type"] = QString::fromLatin1(maskKindName(local.mask));
+        for (const LocalDeltaField& f : localDeltaFields()) {
+            const float value = local.*(f.member);
+            if (value != 0.0f)
+                m[f.key] = value;
+        }
+        masks.append(m);
+    }
+    o["masks"] = masks;
     return o;
 }
 

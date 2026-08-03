@@ -1,7 +1,9 @@
 #include "cli/InfoCommand.h"
 #include "core/ImageMetadata.h"
 #include "develop/DevelopGroup.h"
+#include "develop/LocalAdjustment.h"
 #include "io/XmpSidecar.h"
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <libraw/libraw.h>
 #include <QDir>
@@ -499,4 +501,100 @@ TEST_CASE("info colours the table only when asked, and never the JSON") {
     QTextStream json(&jsonText);
     REQUIRE(cli::runInfo({rated}, true, json, err, cli::TextStyle(true)) == 0);
     CHECK_FALSE(jsonText.contains(esc)); // machine output is never seasoned
+}
+
+TEST_CASE("info lists the local masks a photo carries, with what each one changes") {
+    QTemporaryDir tmp;
+    const QString masked = dngCopy(tmp.path(), "masked.dng");
+    GlobalAdjustment adjustments;
+    LocalAdjustment linear; // default-constructed Mask is Linear
+    linear.exposure = 0.5f;
+    linear.shadows = -30.0f;
+    LocalAdjustment radial;
+    radial.mask = RadialMask{};
+    radial.saturation = 20.0f;
+    adjustments.localAdjustments = {linear, radial};
+    REQUIRE(XmpSidecar::saveAdjustments(masked, adjustments));
+
+    QString outText, errText;
+    QTextStream out(&outText), err(&errText);
+    REQUIRE(cli::runInfo({masked}, false, out, err) == 0);
+
+    // Local Adjustments sit outside the DevelopGroup enum a preset carries
+    // (docs/adr/0023), so nothing in the Develop section would ever mention
+    // them — yet they are most of what was done to a masked photo.
+    REQUIRE(outText.contains("Masks:"));
+    REQUIRE(outText.contains(maskDisplayName(adjustments.localAdjustments, 0))); // "Linear 1"
+    REQUIRE(outText.contains(maskDisplayName(adjustments.localAdjustments, 1))); // "Radial 1"
+    // Reuse the describer rather than restating its formatting here.
+    for (const QString& delta : describeLocalNonDefaults(linear))
+        REQUIRE(outText.contains(delta));
+    REQUIRE(outText.contains(describeLocalNonDefaults(radial).join(", ")));
+}
+
+TEST_CASE("info says so when a mask is drawn but adjusts nothing") {
+    QTemporaryDir tmp;
+    const QString masked = dngCopy(tmp.path(), "masked.dng");
+    GlobalAdjustment adjustments;
+    adjustments.localAdjustments = {LocalAdjustment{}}; // drawn, all deltas zero
+    REQUIRE(XmpSidecar::saveAdjustments(masked, adjustments));
+
+    QString outText, errText;
+    QTextStream out(&outText), err(&errText);
+    REQUIRE(cli::runInfo({masked}, false, out, err) == 0);
+
+    REQUIRE(outText.contains("Linear 1 — no adjustments"));
+}
+
+TEST_CASE("info omits the Masks section entirely for a photo with none") {
+    QTemporaryDir tmp;
+    const QString plain = dngCopy(tmp.path(), "plain.dng");
+
+    QString outText, errText;
+    QTextStream out(&outText), err(&errText);
+    REQUIRE(cli::runInfo({plain}, false, out, err) == 0);
+
+    // Absence is absence: an unmasked file shouldn't grow a line saying so.
+    REQUIRE_FALSE(outText.contains("Masks:"));
+}
+
+TEST_CASE("info --json keys each mask by kind and reports only its changed deltas") {
+    QTemporaryDir tmp;
+    const QString masked = dngCopy(tmp.path(), "masked.dng");
+    GlobalAdjustment adjustments;
+    LocalAdjustment brush;
+    brush.mask = BrushMask{};
+    brush.exposure = -0.25f;
+    brush.temperature = -40.0f; // a relative shift here, never Kelvin
+    adjustments.localAdjustments = {brush};
+    REQUIRE(XmpSidecar::saveAdjustments(masked, adjustments));
+
+    QString outText, errText;
+    QTextStream out(&outText), err(&errText);
+    REQUIRE(cli::runInfo({masked}, true, out, err) == 0);
+
+    const QJsonObject report = QJsonDocument::fromJson(outText.toUtf8()).array().at(0).toObject();
+    const QJsonArray masks = report["masks"].toArray();
+    REQUIRE(masks.size() == 1);
+    const QJsonObject m = masks.at(0).toObject();
+    CHECK(m["type"].toString() == QString::fromLatin1(maskKindName(brush.mask)));
+    CHECK(m["exposure"].toDouble() == Catch::Approx(-0.25));
+    CHECK(m["temperature"].toDouble() == Catch::Approx(-40.0));
+    CHECK_FALSE(m.contains("vibrance")); // untouched deltas stay out
+    CHECK_FALSE(m.contains("mask"));     // geometry is not part of the report
+}
+
+TEST_CASE("info --json always carries a masks array, empty when there are none") {
+    QTemporaryDir tmp;
+    const QString plain = dngCopy(tmp.path(), "plain.dng");
+
+    QString outText, errText;
+    QTextStream out(&outText), err(&errText);
+    REQUIRE(cli::runInfo({plain}, true, out, err) == 0);
+
+    // A listing a script iterates: present and empty, never a missing key it
+    // has to test for first.
+    const QJsonObject report = QJsonDocument::fromJson(outText.toUtf8()).array().at(0).toObject();
+    REQUIRE(report.contains("masks"));
+    CHECK(report["masks"].toArray().isEmpty());
 }

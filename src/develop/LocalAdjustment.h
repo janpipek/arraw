@@ -5,6 +5,7 @@
 
 #include <QPointF>
 #include <QString>
+#include <QStringList>
 
 #include <variant>
 #include <vector>
@@ -114,6 +115,7 @@ Mask flipMask(const Mask& mask, bool horizontal, float aspect);
 // panel's delta sliders and for History labelling ([[spot-for-algorithms]]).
 struct LocalDeltaField {
     const char* label; // shown in the Masks panel and the History list
+    const char* key;   // stable machine identifier for `info --json` (ADR 0050)
     FieldSpec spec;
     float LocalAdjustment::* member;
 };
@@ -125,6 +127,17 @@ const std::vector<LocalDeltaField>& localDeltaFields();
 // The display name of the mask at `index`, matching the Masks panel list
 // ("Linear 2", "Radial 1") — the per-type ordinal in list order.
 QString maskDisplayName(const std::vector<LocalAdjustment>& list, int index);
+
+// Untranslated "Linear" / "Radial" / "Brush" for a mask's kind — the name the
+// Masks panel, History and `arraw info` all speak. Deliberately *not* what
+// XmpSidecar writes as arraw:MaskType: those literals are the on-disk format,
+// and a display rename must never silently change the file format.
+const char* maskKindName(const Mask& mask);
+
+// A mask's non-zero deltas, one "Exposure +0.50 EV" string each, in panel
+// order — the local-adjustment dual of describeGroupNonDefaults(). Zero is "no
+// change" for every local field, so an untouched delta yields no line.
+QStringList describeLocalNonDefaults(const LocalAdjustment& local);
 
 // One human label for a local-adjustment edit, derived from what changed between
 // two mask lists — descriptive, so each step is distinct in the History list:

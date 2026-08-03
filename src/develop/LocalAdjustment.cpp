@@ -224,8 +224,31 @@ namespace {
 const FieldSpec kLocalExposureSpec{-500, 500, 0, 0.01f, 0.01f, 2, " EV", true, 0.05f};
 const FieldSpec kLocalBipolarSpec{-100, 100, 0, 1.0f, 1.0f, 0, {}, true, 1.0f};
 
-// Untranslated "Linear" / "Radial" / "Brush" for a mask's kind.
-const char* maskKindKey(const Mask& mask) {
+QString trLocal(const char* text) {
+    return QCoreApplication::translate("LocalAdjustment", text);
+}
+} // namespace
+
+const std::vector<LocalDeltaField>& localDeltaFields() {
+    // The JSON keys match groupToJson's names for the same quantities, so a
+    // local delta and a global one read alike to a script — except "Temp",
+    // whose stored value is a relative shift, not the global's Kelvin.
+    static const std::vector<LocalDeltaField> fields = {
+        {"Exposure", "exposure", kLocalExposureSpec, &LocalAdjustment::exposure},
+        {"Contrast", "contrast", kLocalBipolarSpec, &LocalAdjustment::contrast},
+        {"Highlights", "highlights", kLocalBipolarSpec, &LocalAdjustment::highlights},
+        {"Shadows", "shadows", kLocalBipolarSpec, &LocalAdjustment::shadows},
+        {"Whites", "whites", kLocalBipolarSpec, &LocalAdjustment::whites},
+        {"Blacks", "blacks", kLocalBipolarSpec, &LocalAdjustment::blacks},
+        {"Temp", "temperature", kLocalBipolarSpec, &LocalAdjustment::temperature},
+        {"Tint", "tint", kLocalBipolarSpec, &LocalAdjustment::tint},
+        {"Saturation", "saturation", kLocalBipolarSpec, &LocalAdjustment::saturation},
+        {"Vibrance", "vibrance", kLocalBipolarSpec, &LocalAdjustment::vibrance},
+    };
+    return fields;
+}
+
+const char* maskKindName(const Mask& mask) {
     if (std::holds_alternative<RadialMask>(mask))
         return "Radial";
     if (std::holds_alternative<BrushMask>(mask))
@@ -233,34 +256,27 @@ const char* maskKindKey(const Mask& mask) {
     return "Linear";
 }
 
-QString trLocal(const char* text) {
-    return QCoreApplication::translate("LocalAdjustment", text);
-}
-} // namespace
-
-const std::vector<LocalDeltaField>& localDeltaFields() {
-    static const std::vector<LocalDeltaField> fields = {
-        {"Exposure", kLocalExposureSpec, &LocalAdjustment::exposure},
-        {"Contrast", kLocalBipolarSpec, &LocalAdjustment::contrast},
-        {"Highlights", kLocalBipolarSpec, &LocalAdjustment::highlights},
-        {"Shadows", kLocalBipolarSpec, &LocalAdjustment::shadows},
-        {"Whites", kLocalBipolarSpec, &LocalAdjustment::whites},
-        {"Blacks", kLocalBipolarSpec, &LocalAdjustment::blacks},
-        {"Temp", kLocalBipolarSpec, &LocalAdjustment::temperature},
-        {"Tint", kLocalBipolarSpec, &LocalAdjustment::tint},
-        {"Saturation", kLocalBipolarSpec, &LocalAdjustment::saturation},
-        {"Vibrance", kLocalBipolarSpec, &LocalAdjustment::vibrance},
-    };
-    return fields;
+QStringList describeLocalNonDefaults(const LocalAdjustment& local) {
+    QStringList lines;
+    for (const LocalDeltaField& f : localDeltaFields()) {
+        const float value = local.*(f.member);
+        if (value == 0.0f) // zero is "no change" for every local delta
+            continue;
+        // Through the field's own FieldSpec, so a mask's "Exposure +0.50 EV"
+        // reads exactly as the Masks panel and History already write it.
+        lines << QStringLiteral("%1 %2")
+                     .arg(trLocal(f.label), f.spec.format(f.spec.fromParam(value)));
+    }
+    return lines;
 }
 
 QString maskDisplayName(const std::vector<LocalAdjustment>& list, int index) {
     if (index < 0 || index >= static_cast<int>(list.size()))
         return {};
-    const char* kind = maskKindKey(list[index].mask);
+    const char* kind = maskKindName(list[index].mask);
     int ordinal = 0; // count same-type masks up to and including this one
     for (int i = 0; i <= index; ++i)
-        if (maskKindKey(list[i].mask) == kind)
+        if (maskKindName(list[i].mask) == kind)
             ++ordinal;
     return QStringLiteral("%1 %2").arg(trLocal(kind)).arg(ordinal);
 }
@@ -276,14 +292,14 @@ QString localChangeLabel(
         size_t i = 0;
         while (i < before.size() && before[i] == after[i])
             ++i;
-        return trLocal("Add %1 Mask").arg(trLocal(maskKindKey(after[i].mask)));
+        return trLocal("Add %1 Mask").arg(trLocal(maskKindName(after[i].mask)));
     }
     // A mask removed.
     if (before.size() == after.size() + 1) {
         size_t i = 0;
         while (i < after.size() && before[i] == after[i])
             ++i;
-        return trLocal("Delete %1 Mask").arg(trLocal(maskKindKey(before[i].mask)));
+        return trLocal("Delete %1 Mask").arg(trLocal(maskKindName(before[i].mask)));
     }
     if (before.size() != after.size())
         return generic;

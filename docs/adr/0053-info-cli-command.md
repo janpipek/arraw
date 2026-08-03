@@ -68,6 +68,28 @@ from `preset show`'s detail, but a *file's* edit state has no such
 companion to defer to — "what was actually done to this photo" is the
 entire point of asking.
 
+### Local Adjustments are reported too, and cannot come from the groups
+
+Masks live on `GlobalAdjustment` but deliberately *outside* the
+`DevelopGroup` enum: they are per-image state a preset never carries
+(ADR 0023). So `groupsWithNonDefaultValues` structurally cannot see them,
+and a heavily masked photo would otherwise report a near-empty Develop
+section while the masks did most of the work — the exact failure that
+prompted adding them.
+
+`info` lists them separately: each mask's panel name, its kind, and the
+deltas it applies, via `maskDisplayName` and a new
+`describeLocalNonDefaults` — the local dual of `describeGroupNonDefaults`,
+living beside `localDeltaFields()` in `LocalAdjustment.cpp` so the report,
+the Masks panel and History all format a delta the same way
+([[spot-for-algorithms]]). **Geometry is never reported**: a mask's
+endpoints are not something a person reads, and a brush raster is a PNG.
+The question `info` answers is *what does this mask change*, not *where*.
+
+Mask kind names come from `maskKindName`, deliberately **not** shared with
+the `arraw:MaskType` literals `XmpSidecar` writes: those are the on-disk
+format, and a display rename must never silently change the file format.
+
 ## `--json`: stable machine keys, not the GUI's display strings
 
 Both `ImageMetadata::rows` (`{"label": "Focal length (35mm)", "value": "50
@@ -89,6 +111,11 @@ instead uses:
   schema.
 - `colourLabelToString`'s existing canonical strings for colour label — the
   on-disk XMP representation already, zero new mapping.
+- A `masks` array, always present (empty when there are none, so a script
+  iterating it never tests for the key first), each entry carrying its
+  `type` and only the deltas it changed, keyed by `LocalDeltaField::key` —
+  the same names `groupToJson` uses for the same quantities, so a local
+  delta and a global one read alike.
 
 Top-level shape is a **flat array**, one element per input path — a
 listing of independent per-file reports (ADR 0050's "a listing emits an
