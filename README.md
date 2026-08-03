@@ -16,15 +16,22 @@ A lightweight, cross-platform RAW photo editor with a Lightroom-style developmen
 - **Non-destructive** — edits saved as `.xmp` sidecar files, Lightroom-compatible (`crs:` namespace)
 - **Color-managed** — linear Rec.2020 working space; export to sRGB, Display P3, or Adobe RGB (lcms2, ICC embedded); embedded profiles honoured on load
 - **Soft-proofing** — preview against any printer/paper ICC profile (`S`), Perceptual/Relative intent, black point compensation, gamut warning; monitor ICC profile support
-- **Local adjustments** — masked edits with Linear (graduated) and Radial masks (up to 16 per image)
+- **Local adjustments** — masked edits with Linear (graduated), Radial, and freehand Brush masks (up to 16 per image)
 - **Lens corrections** — profile-driven distortion, vignetting, and chromatic-aberration correction (lensfun / embedded profiles)
 - **Spot removal** — clone-based spot/blemish healing
 - **Tone curve** — Luma curve plus independent R/G/B channel curves, drawn over a gamma-encoded input histogram
+- **Black & White** — hue-aware monochrome treatment with an 8-band mixer, not a flat desaturation
+- **Colour grading** — three-zone (shadows/midtones/highlights) toning in Oklab, over colour or B&W
+- **Noise reduction** — orthogonal luminance and chroma halves, edge-aware, as a cached GPU pre-pass
 - **Culling** — per-file rating (0–5 stars, reject) and colour labels, stored in the sidecar (no database)
 - **Develop presets** — named, partial bundles of develop settings (arraw-native)
-- **Copy / paste & batch** — copy settings between images, batch-paste, batch export, headless CLI export
+- **Snapshots & history** — named A/B develop states saved per image; a session history of every edit step
+- **Copy / paste & batch** — copy settings between images, batch-paste, batch export
+- **Command line** — `arraw export`, `preset`, and `info` run headless; no window needed
 - **GPU export** — full-resolution offscreen readback through the same shader pipeline; JPEG, PNG, TIFF (8- or 16-bit) output
-- **Film strip** — thumbnail strip with EXIF tooltips and arrow-key navigation through a folder; EXIF panel for the current image
+- **Exported metadata** — corrected capture-EXIF passthrough plus your descriptive XMP, per-group opt-in (GPS off by default)
+- **Film strip** — thumbnail strip with EXIF tooltips, arrow-key folder navigation, and filtering by rating or colour label
+- **Info panel** — editable Title, Caption, Keywords, Creator, Copyright alongside the read-only camera EXIF
 - **Caching** — developed-thumbnail and decode caches for fast browsing
 - **Focus modes** — full-screen, lights-out (hide panels), and collapsible adjustment dock
 - **Dual-res textures** — quarter-res preview for interaction, full-res texture swapped in lazily at high zoom
@@ -32,16 +39,21 @@ A lightweight, cross-platform RAW photo editor with a Lightroom-style developmen
 
 ### Adjustments
 
+Listed in panel order. A Colour ↔ Black & White treatment switch sits at the top:
+turning on Black & White hides Color and HSL and reveals the B&W Mixer.
+
 | Group | Controls |
 |---|---|
 | White Balance | Temperature (2000–12000 K), Tint; WB presets; neutral-pick tool |
-| Tone | Exposure (±5 EV), Contrast, Highlights, Shadows, Whites, Blacks |
+| Tone | Exposure (±5 EV), Contrast, Highlights, Shadows, Whites, Blacks, Filmic Highlights |
 | Tone Curve | Luma curve + per-channel R/G/B curves |
 | Color | Saturation, Vibrance; HSL (hue/sat/luminance across 8 colour ranges) |
-| Detail | Sharpening |
-| Effects | Post-Crop Vignette (amount/midpoint/feather), Grain (amount/size/roughness) |
-| Lens | Distortion, Vignetting, Chromatic Aberration correction |
+| Black & White | 8-band hue mixer — each original hue weighted into its own grey |
+| Colour Grading | Shadows / Midtones / Highlights hue + saturation, plus Balance and Blending |
+| Detail | Demosaic algorithm; Texture, Clarity, Dehaze, Sharpen; Luminance Noise (amount/detail); Colour Noise (strength/smoothness) |
 | Geometry | Orientation (90° rotate / flip), Straighten (±45°), Crop (aspect presets) |
+| Lens Corrections | Distortion, Vignetting, Chromatic Aberration correction |
+| Effects | Post-Crop Vignette (amount/midpoint/feather), Grain (amount/size/roughness) |
 
 ### Supported RAW formats
 
@@ -68,6 +80,21 @@ CR2, CR3, NEF, ARW, DNG, RAF, ORF, RW2, PEF, SRW (via libraw)
 Zoom: scroll wheel (0.05×–32×). Pan: Alt+drag or middle-button drag.
 
 See [docs/keybindings.md](docs/keybindings.md) for the complete list.
+
+## Command line
+
+`arraw` is a command as well as an editor — the same shader pipeline, no window:
+
+```bash
+arraw                      # open the editor
+arraw ui photo.arw         # open the editor on a file or folder
+arraw export *.arw -o out/ # render through each file's develop sidecar
+arraw preset list          # list, show, or apply saved Develop Presets
+arraw info photo.arw       # report EXIF and edit state, read-only
+```
+
+Add `--json` to `info` for machine-readable output. Full flags are in
+[docs/installation.md](docs/installation.md#command-line).
 
 ## FAQ
 
