@@ -149,16 +149,14 @@ Developer maintenance commands, including regenerating app icons after editing
 
 ## Architecture
 
-See [`DESIGN.md`](DESIGN.md) for the full design document.
+All adjustments live in `GlobalAdjustment`, a plain struct. The GLSL fragment
+shader is the single source of truth for *adjustments* — the same shader runs
+during preview, export, and the CLI, always in linear Rec.2020. Only the final
+colour encode differs per destination: in-shader for the display, lcms2 on the CPU
+for export ([ADR 0002](docs/adr/0002-shader-adjustments-cpu-encode.md)).
 
-Brief overview:
-
-- `RawProcessor` — libraw wrapper, runs on a background thread via `QtConcurrent::run`
-- `RendererCore` — owns all RHI resources; the single place the shader pass is recorded (preview, export, histograms)
-- `ImageViewport` — `QRhiWidget` with zoom/pan/crop logic, delegating all drawing to `RendererCore`
-- `AdjustmentPanel` — slider UI, emits `paramsChanged(GlobalAdjustment)` on every change
-- `XmpSidecar` — reads/writes `.xmp` files using Adobe Camera Raw field names
-- `FilmStrip` — folder-scoped thumbnail strip dock (navigation, culling marks, EXIF tooltips)
-- `MainWindow` — wires everything together; owns the `QUndoStack`
-
-All adjustments live in `GlobalAdjustment` (a plain struct). The GLSL fragment shader is the single source of truth for all *adjustments* — the same shader runs during preview and export, always in linear Rec.2020. Only the final color encode differs per destination: in-shader for the display, lcms2 on the CPU for export (see `docs/adr/0002`).
+- [`DESIGN.md`](DESIGN.md) — components, threading model, and the full pixel
+  pipeline in execution order
+- [`CONTEXT.md`](CONTEXT.md) — the domain glossary
+- [`docs/adr/`](docs/adr/README.md) — why each hard-to-reverse choice was made
+- [`AGENTS.md`](AGENTS.md) — working agreements for contributors and AI assistants

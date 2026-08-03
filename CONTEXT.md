@@ -1,8 +1,20 @@
-# arraw
+# arraw — domain glossary
 
 A lightweight, cross-platform RAW photo editor with a Lightroom-style development
 workflow: open a folder, edit non-destructively with a real-time GPU preview,
 export. Not a DAM, not a catalogue.
+
+**This file is the single source of the project's vocabulary.** Every term below is
+binding in code, comments, UI strings, commit messages, and documentation; the
+`_Avoid_:` line records the words that were rejected and why. No other document
+restates this list — they link here.
+
+Adding a term: define it when you introduce the concept, in the same change. Say
+what it *is*, what it is *distinct from*, and where it is persisted; cross-link
+related terms with `[[Double Brackets]]`. Architectural reasoning behind a term
+belongs in an [ADR](docs/adr/README.md), not here — this file defines the word, the
+ADR defends the decision. See also [DESIGN.md](DESIGN.md) for how the concepts are
+implemented.
 
 ## Language
 

@@ -659,7 +659,7 @@ void MainWindow::setupMenus() {
     toggleAdjustments->setCheckable(true);
     toggleAdjustments->setShortcut(Qt::Key_F8);
     view->addSeparator();
-    // Zoom (docs/superpowers/specs/2026-07-01-zoom-menu-design.md). Presets
+    // Zoom (docs/adr/0056). Presets
     // are shared with the status bar's zoom dropdown (setupStatusBar) via
     // addZoomPresetActions. Only this Fit action gets Ctrl+0 — giving the
     // status bar's Fit action the same shortcut makes it ambiguous, since
@@ -1997,7 +1997,7 @@ void MainWindow::saveCurrentAsPreset() {
     viewport->commitActiveTool();
 
     // Pre-checks only what this photo actually edited, independent of Copy/
-    // Paste's sticky lastCopySelection (docs/adr/0049) — a preset saved from an
+    // Paste's sticky lastCopySelection (docs/adr/0055) — a preset saved from an
     // untouched photo no longer silently carries nine groups of resets.
     const GlobalAdjustment params = currentParams();
     GroupChecklistDialog

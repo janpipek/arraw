@@ -60,7 +60,7 @@ GlobalAdjustment applyGroups(
     const GlobalAdjustment& target, const GlobalAdjustment& source, GroupSelection selection);
 
 // Every group whose fields in `v` differ from GlobalAdjustment{}'s defaults —
-// the Save Preset checklist's initial selection (docs/adr/0049), independent of
+// the Save Preset checklist's initial selection (docs/adr/0055), independent of
 // Copy/Paste's sticky lastCopySelection.
 GroupSelection groupsWithNonDefaultValues(const GlobalAdjustment& v);
 

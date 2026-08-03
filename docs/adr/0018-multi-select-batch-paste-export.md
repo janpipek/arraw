@@ -1,9 +1,16 @@
 # Multi-select filmstrip: LR-style active/selected split for batch paste and batch export
 
-Milestone 10 adds two batch operations — paste settings and export — to the
-filmstrip. Both require selecting multiple files without losing the single-image
-develop workflow. This ADR records the selection model and the key behaviour
-decisions that follow from it.
+Two batch operations — paste settings and export — arrive on the filmstrip. Both
+require selecting multiple files without losing the single-image develop workflow.
+This ADR records the selection model and the key behaviour decisions that follow
+from it.
+
+It deliberately **reverses an earlier decision**. The filmstrip began as a
+left-side vertical icon grid, became a bottom-docked horizontal strip, and was
+single-select throughout: one click, one loaded image, no selection concept at all.
+That was right while every operation acted on the open photo; batch operations are
+what make a target *set* necessary, so the reversal is a response to new
+requirements rather than a correction.
 
 ## Considered Options
 

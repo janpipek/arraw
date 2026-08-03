@@ -18,7 +18,7 @@ ImageBuffer toWorkingSpaceBuffer(const QImage& img);
 // tagged with the matching QColorSpace so the profile is embedded on save.
 QImage toOutputImage(const QImage& linearWorking, OutputProfile profile, bool sixteenBit);
 
-// ── Soft-proofing / monitor profiles (DESIGN.md Milestone 4 Phase B) ─────────
+// ── Soft-proofing / monitor profiles (CONTEXT.md, DESIGN.md ColorManagement) ─
 
 enum class ProofIntent { Perceptual, RelativeColorimetric };
 
