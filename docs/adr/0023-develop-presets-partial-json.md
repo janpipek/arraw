@@ -11,8 +11,8 @@ file *is* the flag that says "apply me." This deliberately does not reuse the
 The sidecar is `crs:` XMP on purpose — it is the Lightroom-compatibility surface
 for global edits (`0010-parametric-local-adjustments`,
 `0021-crop-aspect-lock-lightroom-flag`). Presets are the opposite: an internal
-convenience, explicitly *not* a Lightroom interop surface, and now (Milestone 8)
-they store only the groups the user picked rather than a whole settings snapshot.
+convenience, explicitly *not* a Lightroom interop surface, and they store only the
+groups the user picked rather than a whole settings snapshot.
 
 ## Considered Options
 
@@ -41,9 +41,9 @@ they store only the groups the user picked rather than a whole settings snapshot
   where `groups` is exactly the set of keys present in the file. One apply path,
   one test surface, per [[spot-for-algorithms]].
 - Presets never carry [[Local Adjustment]]s — masks are pinned to one photo's
-  framing and are not a [[Develop Group]] (see Milestone 8).
+  framing and are not a [[Develop Group]].
 - The root carries a `"version": 1` stamp that the writer emits but the loader
-  **does not yet read** (Milestone 8). It is a deliberate placeholder, not a live
+  **does not yet read**. It is a deliberate placeholder, not a live
   guard: today the "tolerate unknown keys, missing groups" rule above already
   handles every *forward-compatible* change (a new optional group is harmless to
   an older reader), so version checking buys nothing yet. The field is reserved

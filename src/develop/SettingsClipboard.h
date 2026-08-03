@@ -3,7 +3,7 @@
 
 #include "develop/DevelopGroup.h"
 
-// The in-memory, session-only Copy Settings clipboard (Milestone 8; CONTEXT.md
+// The in-memory, session-only Copy Settings clipboard (CONTEXT.md
 // "Copy Settings"). One slot, held by MainWindow as a std::optional and never
 // written to the OS clipboard: the payload is an internal GlobalAdjustment, and
 // the deliberate durable/portable transfer channel is a Develop Preset instead.

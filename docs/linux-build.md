@@ -2,7 +2,7 @@
 
 This guide covers the Linux **development build** and, in more depth, how the
 **release AppImage** is produced and how to reproduce it locally. The short dev
-setup in [AGENTS.md](../AGENTS.md) is enough to compile and run arraw; this document
+setup in the [README](../README.md#linux-fedora) is enough to compile and run arraw; this document
 adds the packaging machinery and the non-obvious deployment gotchas behind it. The
 architectural rationale lives in [ADR 0014](adr/0014-linux-distribution-appimage-ubuntu-aqt.md).
 

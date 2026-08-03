@@ -20,8 +20,15 @@
     <ul>
       <li>Non-destructive editing with Lightroom-compatible XMP sidecars</li>
       <li>Real-time GPU preview of every adjustment</li>
-      <li>Tone curves, local adjustments, crop and straighten</li>
-      <li>Culling with ratings and colour labels</li>
+      <li>Colour-managed throughout: linear Rec.2020 working space, soft-proofing, and export to sRGB, Display P3 or Adobe RGB with the ICC profile embedded</li>
+      <li>Tone curves, white balance, black and white conversion, and three-zone colour grading</li>
+      <li>Local adjustments through graduated, radial and brush masks, plus clone-based spot removal</li>
+      <li>Profile-driven lens corrections for distortion, vignetting and chromatic aberration</li>
+      <li>Edge-aware luminance and colour noise reduction</li>
+      <li>Crop, straighten and lossless rotation</li>
+      <li>Culling with ratings and colour labels, and a filterable film strip</li>
+      <li>Develop presets, copy and paste between photos, and batch export</li>
+      <li>A command-line interface for headless export and inspection</li>
     </ul>
   </description>
   <launchable type="desktop-id">io.github.janpipek.arraw.desktop</launchable>
@@ -35,6 +42,7 @@
     <mediatype>image/x-olympus-orf</mediatype>
     <mediatype>image/x-panasonic-rw2</mediatype>
     <mediatype>image/x-pentax-pef</mediatype>
+    <mediatype>image/x-samsung-srw</mediatype>
     <mediatype>image/jpeg</mediatype>
     <mediatype>image/png</mediatype>
     <mediatype>image/tiff</mediatype>

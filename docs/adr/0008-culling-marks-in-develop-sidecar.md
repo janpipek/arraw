@@ -22,7 +22,7 @@ reparses and replaces only `xmp:`. The merge lives once, inside `XmpSidecar`.
   load-merge the *other* half first, duplicating the merge at each call site.
   Rejected in favour of two namespace-scoped saves so the merge is SPOT.
 - **Fold rating/label into `GlobalAdjustment`**: pollutes the "params are the
-  shader uniform" model and the CLAUDE.md add-an-adjustment ritual (a reader
+  shader uniform" model and the add-an-adjustment ritual (a reader
   would hunt for `rating` in `image.frag`). Rejected; marks are their own type.
 
 ## Consequences
