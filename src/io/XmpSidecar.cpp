@@ -440,6 +440,15 @@ static Snapshot parseSnapshotLi(QXmlStreamReader& xml) {
     double cropX = 0.0, cropY = 0.0, cropW = 1.0, cropH = 1.0;
     auto f = [&]() { return xml.readElementText().toFloat(); };
     auto isTrue = [&]() { return xml.readElementText() == "1"; };
+    // Element names ending in a band index (arraw:HslHue0 ... arraw:ColorGradeSat2)
+    // carry that index in file text, so it is untrusted: always consume the element,
+    // but drop an out-of-range index instead of writing past the array.
+    auto indexed = [&](auto& array, const QString& elementName, int prefixLength) {
+        const int i = QStringView(elementName).mid(prefixLength).toInt();
+        const float value = f();
+        if (i >= 0 && i < int(array.size()))
+            array[i] = value;
+    };
     while (!xml.atEnd()) {
         xml.readNext();
         if (xml.isEndElement() && xml.qualifiedName() == "rdf:li")
@@ -522,19 +531,19 @@ static Snapshot parseSnapshotLi(QXmlStreamReader& xml) {
         else if (name == "arraw:CropConstrained")
             p.cropConstrained = isTrue();
         else if (name.startsWith("arraw:HslHue"))
-            p.hslHue[name.mid(12).toInt()] = f();
+            indexed(p.hslHue, name, 12);
         else if (name.startsWith("arraw:HslSat"))
-            p.hslSat[name.mid(12).toInt()] = f();
+            indexed(p.hslSat, name, 12);
         else if (name.startsWith("arraw:HslLum"))
-            p.hslLum[name.mid(12).toInt()] = f();
+            indexed(p.hslLum, name, 12);
         else if (name == "arraw:ConvertToGrayscale")
             p.convertToGrayscale = isTrue();
         else if (name.startsWith("arraw:BwMix"))
-            p.bwMix[name.mid(11).toInt()] = f();
+            indexed(p.bwMix, name, 11);
         else if (name.startsWith("arraw:ColorGradeHue"))
-            p.colorGradeHue[name.mid(19).toInt()] = f();
+            indexed(p.colorGradeHue, name, 19);
         else if (name.startsWith("arraw:ColorGradeSat"))
-            p.colorGradeSat[name.mid(19).toInt()] = f();
+            indexed(p.colorGradeSat, name, 19);
         else if (name == "arraw:ColorGradeBalance")
             p.colorGradeBalance = f();
         else if (name == "arraw:ColorGradeBlending")

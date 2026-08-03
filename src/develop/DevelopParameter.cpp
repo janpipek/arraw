@@ -333,9 +333,11 @@ std::optional<FieldSpec> developParameterSpec(DevelopParameter p) {
                                      : bipolar;
     if (isBwMix(p)) // each mixer band is a bipolar -100..+100 weight
         return bipolar;
-    if (isColorGradeZone(p)) // Hue reads 0..360°; Saturation is unipolar 0..100
+    // Hue is an angle, so it stops at 359°: 360 would be a second tick for the same
+    // tint (and matches Lightroom's own crs:ColorGrade*Hue range). Sat is 0..100.
+    if (isColorGradeZone(p))
         return colorGradeOffset(p) % 2 == 0
-                   ? FieldSpec{0, 360, 0, 1.0f, 1.0f, 0, degrees, false, 1.0f}
+                   ? FieldSpec{0, 359, 0, 1.0f, 1.0f, 0, degrees, false, 1.0f}
                    : unipolar0;
     switch (p) {
     case DevelopParameter::ColorGradeBalance:

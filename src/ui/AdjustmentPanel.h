@@ -149,7 +149,7 @@ private:
     // A small colour patch beside each Hue slider showing the tint direction, and
     // repainted as the slider moves. The Hue groove itself is a static hue spectrum
     // (set once in the constructor) so the handle sits on the colour it selects.
-    std::array<QLabel*, 3> colorGradeHueSwatch;
+    std::array<QLabel*, 3> colorGradeHueSwatch = {};
     void updateHueSwatch(int zone, int hueDegrees);
 
     GlobalAdjustment adjustments;
