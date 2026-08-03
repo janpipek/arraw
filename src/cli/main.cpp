@@ -17,6 +17,10 @@ int main(int argc, char* argv[]) {
     QTextStream out(stdout);
     QTextStream err(stderr);
 
+    // Decided once, here at the edge, while stdout is still the process's own:
+    // everything downstream just carries the answer (src/cli/TextStyle.h).
+    const cli::TextStyle style = cli::TextStyle::forStdout();
+
 #if defined(Q_OS_WIN)
     // The GUI lives in its own GUI-subsystem executable beside this one
     // (docs/adr/0049): spawn it detached so the console prompt returns.
@@ -45,7 +49,7 @@ int main(int argc, char* argv[]) {
     if (argc >= 2 && std::strcmp(argv[1], "export") == 0) {
         QGuiApplication app(argc, argv);
         applyApplicationIdentity(app);
-        return cli::dispatch(argc, argv, launchUi, out, err);
+        return cli::dispatch(argc, argv, launchUi, out, err, style);
     }
 
     // preset reads/writes QStandardPaths::AppDataLocation (docs/adr/0051) via
@@ -56,7 +60,7 @@ int main(int argc, char* argv[]) {
     if (argc >= 2 && std::strcmp(argv[1], "preset") == 0) {
         QCoreApplication app(argc, argv);
         applyApplicationIdentity(app);
-        return cli::dispatch(argc, argv, launchUi, out, err);
+        return cli::dispatch(argc, argv, launchUi, out, err, style);
     }
-    return cli::dispatch(argc, argv, launchUi, out, err);
+    return cli::dispatch(argc, argv, launchUi, out, err, style);
 }

@@ -24,7 +24,9 @@ one-element case of the same input shape.
   correctly-extensioned but corrupt file that LibRaw can't open fails that
   file only — stderr line, continue, exit `1` overall — mirroring `apply`'s
   per-file write-failure handling. Files are independent; one bad file
-  shouldn't hide the report on the other 299.
+  shouldn't hide the report on the other 299. An unreadable sidecar is the
+  same tier for the same reason: the report is missing something real, and
+  a script that trusts exit `0` must not be told everything was fine.
 - **No directory/recursive mode**, matching `apply`'s deferral of the same
   question (ADR 0051): a folder-mode policy answered once should serve both
   commands, or neither.
@@ -47,6 +49,18 @@ one-element case of the same input shape.
    non-default, and their actual field values**. A missing sidecar is not an
    error; it reads as all-default, distinguished from "edited back to
    default" only by the explicit `hasSidecar` flag.
+
+The two halves are read **independently**, and neither failing blanks the
+other. A RAW LibRaw cannot open still reports the rating and develop groups
+its sidecar carries; only the `exif` half goes missing. Reporting less than
+was successfully read would be its own kind of wrong answer.
+
+A sidecar that exists but **won't parse** is a third state, not a synonym
+for either of the first two: reporting `XmpSidecar`'s fallback defaults as
+"no edits" would silently call an edited photo untouched. It reads as
+`Sidecar: unreadable` / `"sidecarUnreadable": true`, warns on stderr, and
+joins the per-file failure tier below — the same fact the GUI puts in the
+status bar as "Sidecar unreadable; defaults applied".
 
 Develop-group detail deliberately goes deeper than `preset list`'s
 names-only summary: a preset is a reusable definition one command-hop away
@@ -81,8 +95,10 @@ listing of independent per-file reports (ADR 0050's "a listing emits an
 array of objects"), not `apply`'s split-bucket batch-operation shape,
 because `info` performs no single combined action: `[{"path": ..., "exif":
 {...}, "hasSidecar": ..., "rating": ..., ..., "developGroups": {"tone":
-{...}}}, ...]`, or `{"path": ..., "error": ...}` inline for a file that
-failed to read (also mirrored to stderr).
+{...}}}, ...]`. A file whose EXIF failed carries `"error"` inline (also
+mirrored to stderr) in place of `"exif"` alone, keeping every sidecar key it
+did read; `"sidecarUnreadable"` appears only when it applies, like every
+other optional key.
 
 ## Table mode: one detail block per file, not a summary row
 
@@ -93,6 +109,19 @@ Table mode instead prints one detail block per file (path header, then
 key:value lines), reusing the same display formatting `InfoPanel` and
 `preset show` already use. A file with nothing noteworthy still gets its
 full EXIF block; there is no condensed "headline columns only" view in v1.
+Blocks are separated by a blank line and **stream as each file is read** —
+a folder's worth of files shouldn't sit silent until the last one opens.
+`--json` is the one shape that must buffer, because it emits one document.
+
+Blocks are seasoned with ANSI colour when — and only when — stdout is a
+terminal that wants it (`src/cli/TextStyle.h`: `isatty` on stdout's own
+descriptor, minus `NO_COLOR` and `TERM=dumb`, plus `CLICOLOR_FORCE` for
+`| less -R`). The decision is made once in `main` and passed down, because
+the stream a command writes to is a console in production and a `QString`
+under test, and only the edge can tell those apart. Colour never carries
+meaning alone: labels dim, the path bolds, a colour label prints in its own
+colour, and every one of those is decoration over text that already said
+it. `--json` is never coloured.
 
 ## Consequences
 
@@ -103,8 +132,13 @@ full EXIF block; there is no condensed "headline columns only" view in v1.
 - No field-selection flags (`--exif-only`, etc.) and no `--dry-run`-
   equivalent in v1 — `info` never writes, and the full report is the only
   report; both could be added compatibly later.
+- The pre-flight `preset apply` already had becomes the shared
+  `cli::preflightImagePaths`, and the CLI11 boilerplate every verb's parser
+  repeated becomes `cli::parseArgs` — one definition each of "a usable input
+  file" and "the exit tier a parse produces", rather than a third copy.
 - Tests (GPU-free, `arraw_cli` static lib): pre-flight refusals (missing
   path, directory, unsupported extension), per-file read-failure handling
   alongside successes in one batch, `--json` array shape and per-file key
-  stability, `hasSidecar` true/false, non-RAW formats reporting empty EXIF
-  without erroring, exit tiers.
+  stability, `hasSidecar` true/false/unreadable, non-RAW formats reporting
+  empty EXIF without erroring, exit tiers, the parser's own contract, and
+  the read-only promise itself (no sidecar appears, none is rewritten).

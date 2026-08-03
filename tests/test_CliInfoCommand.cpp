@@ -25,6 +25,13 @@ QString dngCopy(const QString& dir, const QString& fileName) {
     return path;
 }
 
+// A sidecar that exists but is not parseable XMP.
+void writeBrokenSidecar(const QString& imagePath) {
+    QFile f(XmpSidecar::pathFor(imagePath));
+    REQUIRE(f.open(QIODevice::WriteOnly));
+    f.write("<x:xmpmeta><this never closes");
+}
+
 } // namespace
 
 TEST_CASE("info table heads each file's block with its path") {
@@ -337,4 +344,159 @@ TEST_CASE("info --json omits colourLabel entirely when the photo carries none") 
     const QJsonObject report = QJsonDocument::fromJson(outText.toUtf8()).array().at(0).toObject();
     CHECK(report["rating"].toInt() == 3);
     CHECK_FALSE(report.contains("colourLabel"));
+}
+
+TEST_CASE("info reports an unreadable sidecar rather than calling it unedited") {
+    QTemporaryDir tmp;
+    const QString broken = dngCopy(tmp.path(), "broken.dng");
+    writeBrokenSidecar(broken);
+
+    QString outText, errText;
+    QTextStream out(&outText), err(&errText);
+    // A sidecar that exists but won't parse means the edit state below is
+    // defaults standing in for something real. Reporting it as "no edits"
+    // would be a silent wrong answer, so it joins the per-file failure tier —
+    // the same tier the GUI surfaces as "Sidecar unreadable; defaults applied".
+    REQUIRE(cli::runInfo({broken}, false, out, err) == 1);
+
+    REQUIRE(outText.contains("Sidecar: unreadable"));
+    REQUIRE_FALSE(outText.contains("Sidecar: present"));
+    REQUIRE(errText.contains("sidecar unreadable"));
+}
+
+TEST_CASE("info --json flags an unreadable sidecar with its own key") {
+    QTemporaryDir tmp;
+    const QString broken = dngCopy(tmp.path(), "broken.dng");
+    writeBrokenSidecar(broken);
+
+    QString outText, errText;
+    QTextStream out(&outText), err(&errText);
+    REQUIRE(cli::runInfo({broken}, true, out, err) == 1);
+
+    const QJsonObject report = QJsonDocument::fromJson(outText.toUtf8()).array().at(0).toObject();
+    CHECK(report["hasSidecar"].toBool());        // the file is there
+    CHECK(report["sidecarUnreadable"].toBool()); // ...but says nothing usable
+}
+
+TEST_CASE("info --json omits sidecarUnreadable when the sidecar parses") {
+    QTemporaryDir tmp;
+    const QString edited = dngCopy(tmp.path(), "edited.dng");
+    GlobalAdjustment adjustments;
+    adjustments.exposure = 0.5f;
+    REQUIRE(XmpSidecar::saveAdjustments(edited, adjustments));
+
+    QString outText, errText;
+    QTextStream out(&outText), err(&errText);
+    REQUIRE(cli::runInfo({edited}, true, out, err) == 0);
+
+    const QJsonObject report = QJsonDocument::fromJson(outText.toUtf8()).array().at(0).toObject();
+    CHECK_FALSE(report.contains("sidecarUnreadable"));
+}
+
+TEST_CASE("a file whose EXIF fails still reports the edit state its sidecar carries") {
+    QTemporaryDir tmp;
+    const QString corrupt = QDir(tmp.path()).filePath("corrupt.dng");
+    {
+        QFile f(corrupt); // right extension, contents LibRaw cannot open
+        REQUIRE(f.open(QIODevice::WriteOnly));
+        f.write("not a raw file");
+    }
+    UserMetadata meta;
+    meta.rating = 5;
+    REQUIRE(XmpSidecar::saveMetadata(corrupt, meta));
+
+    QString outText, errText;
+    QTextStream out(&outText), err(&errText);
+    // EXIF and sidecar are independent halves: losing the one LibRaw owns is
+    // no reason to drop the rating that parsed perfectly well.
+    REQUIRE(cli::runInfo({corrupt}, true, out, err) == 1);
+
+    const QJsonObject report = QJsonDocument::fromJson(outText.toUtf8()).array().at(0).toObject();
+    CHECK_FALSE(report["error"].toString().isEmpty());
+    CHECK_FALSE(report.contains("exif")); // the half that genuinely failed
+    CHECK(report["hasSidecar"].toBool());
+    CHECK(report["rating"].toInt() == 5);
+}
+
+TEST_CASE("info table gives a failed file a block with its error, not silence on stdout") {
+    QTemporaryDir tmp;
+    const QString corrupt = QDir(tmp.path()).filePath("corrupt.dng");
+    {
+        QFile f(corrupt);
+        REQUIRE(f.open(QIODevice::WriteOnly));
+        f.write("not a raw file");
+    }
+
+    QString outText, errText;
+    QTextStream out(&outText), err(&errText);
+    REQUIRE(cli::runInfo({corrupt}, false, out, err) == 1);
+
+    REQUIRE(outText.contains(corrupt)); // a reader piping stdout still sees it
+    REQUIRE(outText.contains("Error: cannot read image"));
+}
+
+TEST_CASE("info separates consecutive file blocks with a blank line") {
+    QTemporaryDir tmp;
+    const QString a = dngCopy(tmp.path(), "a.dng");
+    const QString b = dngCopy(tmp.path(), "b.dng");
+
+    QString outText, errText;
+    QTextStream out(&outText), err(&errText);
+    REQUIRE(cli::runInfo({a, b}, false, out, err) == 0);
+
+    REQUIRE_FALSE(outText.startsWith("\n")); // ...but never before the first
+    REQUIRE(outText.contains("\n\n" + b));
+}
+
+TEST_CASE("info never writes: no sidecar appears, and an existing one is untouched") {
+    QTemporaryDir tmp;
+    const QString bare = dngCopy(tmp.path(), "bare.dng");
+    const QString edited = dngCopy(tmp.path(), "edited.dng");
+    GlobalAdjustment adjustments;
+    adjustments.exposure = 0.5f;
+    REQUIRE(XmpSidecar::saveAdjustments(edited, adjustments));
+    const QByteArray before = [&] {
+        QFile f(XmpSidecar::pathFor(edited));
+        REQUIRE(f.open(QIODevice::ReadOnly));
+        return f.readAll();
+    }();
+
+    QString outText, errText;
+    QTextStream out(&outText), err(&errText);
+    REQUIRE(cli::runInfo({bare, edited}, false, out, err) == 0);
+
+    // The command's headline promise (docs/adr/0053): reading a file must
+    // never be what creates or rewrites its sidecar.
+    CHECK_FALSE(QFile::exists(XmpSidecar::pathFor(bare)));
+    QFile after(XmpSidecar::pathFor(edited));
+    REQUIRE(after.open(QIODevice::ReadOnly));
+    CHECK(after.readAll() == before);
+}
+
+TEST_CASE("info colours the table only when asked, and never the JSON") {
+    QTemporaryDir tmp;
+    const QString rated = dngCopy(tmp.path(), "rated.dng");
+    UserMetadata meta;
+    meta.rating = 4;
+    meta.label = ColourLabel::Green;
+    REQUIRE(XmpSidecar::saveMetadata(rated, meta));
+
+    const QString esc = QStringLiteral("\033[");
+
+    QString plainText, errText;
+    QTextStream plain(&plainText), err(&errText);
+    REQUIRE(cli::runInfo({rated}, false, plain, err) == 0);
+    CHECK_FALSE(plainText.contains(esc)); // the default every pipe gets
+
+    QString colourText;
+    QTextStream colour(&colourText);
+    REQUIRE(cli::runInfo({rated}, false, colour, err, cli::TextStyle(true)) == 0);
+    CHECK(colourText.contains(esc));
+    CHECK(colourText.contains("\033[1m" + rated + "\033[0m")); // path in bold
+    CHECK(colourText.contains("\033[32mGreen\033[0m"));        // a green label, in green
+
+    QString jsonText;
+    QTextStream json(&jsonText);
+    REQUIRE(cli::runInfo({rated}, true, json, err, cli::TextStyle(true)) == 0);
+    CHECK_FALSE(jsonText.contains(esc)); // machine output is never seasoned
 }

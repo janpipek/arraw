@@ -74,6 +74,7 @@ add_executable(arraw_tests
     test_CliPresetArgs.cpp
     test_CliPresetCommand.cpp
     test_CliInfoCommand.cpp
+    test_CliInfoArgs.cpp
 )
 
 target_link_libraries(arraw_tests PRIVATE arraw_cli arraw_ui Catch2::Catch2WithMain)

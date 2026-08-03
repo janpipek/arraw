@@ -1,4 +1,5 @@
 #include "cli/ExportArgs.h"
+#include "cli/ArgParse.h"
 #include <CLI11.hpp>
 #include <map>
 
@@ -48,22 +49,9 @@ ExportParse parseExportArgs(const std::vector<std::string>& args) {
         "--no-descriptive", [&opt] { opt.metadata.includeDescriptive = false; },
         "Omit title/caption/keywords/rating metadata (on by default)");
 
-    // CLI11's vector overload consumes back-to-front; hand it argc/argv.
-    std::vector<const char*> argv;
-    argv.push_back("arraw export");
-    for (const std::string& a : args)
-        argv.push_back(a.c_str());
-    try {
-        app.parse(int(argv.size()), argv.data());
-    } catch (const CLI::CallForHelp&) {
-        res.exitCode = 0;
-        res.message = QString::fromStdString(app.help());
+    res.exitCode = parseArgs(app, args, res.message);
+    if (res.exitCode >= 0)
         return res;
-    } catch (const CLI::ParseError& e) {
-        res.exitCode = 2;
-        res.message = QStringLiteral("arraw export: %1").arg(e.what());
-        return res;
-    }
 
     // A silently ignored flag is a lie (docs/adr/0049): error where the GUI
     // would merely disable the field.

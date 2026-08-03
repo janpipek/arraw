@@ -77,6 +77,15 @@ arraw --version
     arraw export *.arw -o developed/   # render files through their develop
                                        # sidecars, no window needed
     arraw export --help    # format, quality, size, profile, metadata flags
+    arraw preset list      # list, show, or apply saved Develop Presets
+    arraw info photo.arw   # report a file's EXIF and edit state, read-only
+    arraw info *.arw --json            # the same report as machine-readable
+                                       # JSON, one object per file
+
+`info` reads and never writes: it reports camera EXIF plus what the sidecar
+says — rating, colour label, descriptive fields, and which develop groups
+carry non-default values. The detail blocks pick up colour when they're
+going to a terminal, and stay plain when piped or when `NO_COLOR` is set.
 
 Exports use each file's `.xmp` develop sidecar exactly as the editor would —
 no sidecar means the same defaults a freshly opened photo shows. On Windows
