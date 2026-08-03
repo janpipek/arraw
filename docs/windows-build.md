@@ -5,7 +5,7 @@ dependencies and **MSVC 2022** as the compiler. It documents the exact toolchain
 the non-obvious environment requirements, and fixes for every error you are likely
 to hit. It reflects a working setup verified on Windows 11 (June 2026).
 
-> The Linux/macOS instructions in [AGENTS.md](../AGENTS.md) are simpler because their
+> The Linux/macOS instructions in the [README](../README.md#building) are simpler because their
 > package managers put compilers, SDK tools, and Qt plugins on a single path. On
 > Windows the toolchain is split across three providers (vcpkg, MSVC, scoop), so a
 > few extra steps are required.
