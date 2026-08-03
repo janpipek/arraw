@@ -34,6 +34,10 @@ static GlobalAdjustment fullyEdited() {
     g.hslLum = {9, 8, 7, 6, 5, 4, 3, 2};
     g.convertToGrayscale = true;
     g.bwMix = {11, -22, 33, -44, 55, -66, 77, -88};
+    g.colorGradeHue = {30.0f, 210.0f, 45.0f};
+    g.colorGradeSat = {40.0f, 25.0f, 60.0f};
+    g.colorGradeBalance = -20.0f;
+    g.colorGradeBlending = 35.0f; // distinct from the default 50 so the group is testable
     g.demosaicAlgorithm = DemosaicAlgorithm::DCB;
     g.texture = 18.0f;
     g.clarity = 22.0f;

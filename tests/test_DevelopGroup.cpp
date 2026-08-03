@@ -41,6 +41,11 @@ static GlobalAdjustment fullyEdited() {
     // Black & White
     g.convertToGrayscale = true;
     g.bwMix = {10, 20, 30, 40, 50, 60, 70, 80};
+    // Colour Grading
+    g.colorGradeHue = {30.0f, 210.0f, 45.0f};
+    g.colorGradeSat = {40.0f, 25.0f, 60.0f};
+    g.colorGradeBalance = -20.0f;
+    g.colorGradeBlending = 35.0f;
     // Detail
     g.demosaicAlgorithm = DemosaicAlgorithm::VNG;
     g.texture = 18.0f;
@@ -274,6 +279,26 @@ TEST_CASE("Black & White carries the treatment toggle and the mixer together", "
         = applyGroups(source, GlobalAdjustment{}, only(DevelopGroup::BlackAndWhite));
     CHECK_FALSE(reset.convertToGrayscale);
     CHECK(reset.bwMix == GlobalAdjustment{}.bwMix);
+}
+
+TEST_CASE("Colour Grading carries the three zones plus Balance and Blending", "[developgroup]") {
+    const GlobalAdjustment target; // defaults
+    const GlobalAdjustment source = fullyEdited();
+
+    const GlobalAdjustment result = applyGroups(target, source, only(DevelopGroup::ColourGrading));
+    CHECK(result.colorGradeHue == source.colorGradeHue);
+    CHECK(result.colorGradeSat == source.colorGradeSat);
+    CHECK(result.colorGradeBalance == source.colorGradeBalance);
+    CHECK(result.colorGradeBlending == source.colorGradeBlending);
+    // Must not drag other chroma groups (Colour, HSL, B&W) along.
+    CHECK(result.saturation == target.saturation);
+    CHECK(result.bwMix == target.bwMix);
+
+    // Replace-wholesale: pasting an unedited grade resets Blending to its default 50.
+    const GlobalAdjustment reset
+        = applyGroups(source, GlobalAdjustment{}, only(DevelopGroup::ColourGrading));
+    CHECK(reset.colorGradeBlending == GlobalAdjustment{}.colorGradeBlending);
+    CHECK(reset.colorGradeSat == GlobalAdjustment{}.colorGradeSat);
 }
 
 TEST_CASE("White Balance carries temperature and tint", "[developgroup]") {

@@ -61,6 +61,19 @@ struct GlobalAdjustment : SharedAdjustment {
     bool convertToGrayscale = false;
     std::array<float, 8> bwMix = {};
 
+    // Colour Grading (docs/adr/0052). A three-zone hue+saturation tint applied in
+    // Oklab after the Colour/Black & White branch merges, so it tints either a
+    // colour image or the B&W treatment's neutral grey (sepia, split-toning). The
+    // zones are indexed [Shadows, Midtones, Highlights]; hue is 0..360°, saturation
+    // 0..100. Balance shifts the shadow<->highlight crossover (-100..+100); Blending
+    // softens the width of the zone transitions (0..100). All eight travel together
+    // as the Colour Grading Develop Group. Stored Lightroom-compatibly as
+    // crs:ColorGrade{Shadow,Midtone,Highlight}{Hue,Sat} + ColorGradeBalance/Blending.
+    std::array<float, 3> colorGradeHue = {}; // degrees, [Shadows, Midtones, Highlights]
+    std::array<float, 3> colorGradeSat = {}; // 0..100, same order
+    float colorGradeBalance = 0.0f;          // -100..+100
+    float colorGradeBlending = 50.0f;        // 0..100
+
     // Detail
     // Demosaic algorithm — a decode-time choice, not a shader uniform: changing
     // it re-runs the libraw decode through the load path (docs/adr/0036, issue

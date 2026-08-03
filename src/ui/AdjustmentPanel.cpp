@@ -2,10 +2,13 @@
 #include "develop/DemosaicAlgorithm.h"
 #include "develop/DevelopParameter.h"
 #include "develop/GlobalAdjustment.h"
+#include "pipeline/OkLab.h"
 #include "ui/AdjustmentSpinBox.h"
 #include "ui/Histogram.h"
+#include <cmath>
 #include <QButtonGroup>
 #include <QCheckBox>
+#include <QColor>
 #include <QComboBox>
 #include <QEvent>
 #include <QFont>
@@ -45,6 +48,14 @@ static const FieldSpec kEffectShapeSpec
 static const FieldSpec kGrainAmountSpec
     = developParameterSpec(DevelopParameter::GrainAmount).value();
 static const FieldSpec kRotationSpec = developParameterSpec(DevelopParameter::Straighten).value();
+static const FieldSpec kColorGradeHueSpec
+    = developParameterSpec(DevelopParameter::ColorGradeShadowHue).value();
+static const FieldSpec kColorGradeSatSpec
+    = developParameterSpec(DevelopParameter::ColorGradeShadowSat).value();
+static const FieldSpec kColorGradeBalanceSpec
+    = developParameterSpec(DevelopParameter::ColorGradeBalance).value();
+static const FieldSpec kColorGradeBlendingSpec
+    = developParameterSpec(DevelopParameter::ColorGradeBlending).value();
 
 // Demosaic algorithms in the combo, ordered soft → sharp (Linear is a diagnostic
 // baseline, kept last). Label + tooltip + enum; AHD is the default (docs/adr/0036).
@@ -90,6 +101,46 @@ static const WBPreset kWBPresets[] = {
 
 static const char* kHslRangeNames[]
     = {"Reds", "Oranges", "Yellows", "Greens", "Aquas", "Blues", "Purples", "Magentas"};
+
+// The display colour a Colour Grading Hue angle tints toward. The angle is an
+// Oklab a/b direction (not an HSV hue), so the swatch/groove must be built from
+// the same Oklab math as colour::applyColourGrading — an HSV hue would show the
+// wrong colour. A fixed reference lightness+chroma keeps every hue legible; the
+// linear Rec.2020 result is taken to sRGB for the screen (docs/adr/0052).
+static QColor gradeHueColour(float hueDegrees) {
+    constexpr float kRefL = 0.72f;      // mid-tone lightness — a bright, readable patch
+    constexpr float kRefChroma = 0.12f; // vivid enough to name the hue at a glance
+    const float rad = hueDegrees * 3.14159265f / 180.0f;
+    const colour::Rgb lin = colour::fromOklab(
+        {kRefL, kRefChroma * std::cos(rad), kRefChroma * std::sin(rad)});
+    // Working space (linear Rec.2020) -> linear sRGB primaries, then the sRGB
+    // transfer curve. The matrix is colour::rec2020ToRec709, not a copy of it.
+    const colour::Rgb srgb = colour::rec2020ToRec709(lin);
+    const auto encode = [](float c) {
+        c = std::clamp(c, 0.0f, 1.0f);
+        return c <= 0.0031308f ? 12.92f * c : 1.055f * std::pow(c, 1.0f / 2.4f) - 0.055f;
+    };
+    return QColor::fromRgbF(encode(srgb[0]), encode(srgb[1]), encode(srgb[2]));
+}
+
+// A static stylesheet that paints a Hue slider's groove as a full hue spectrum and
+// keeps a light, visible handle over it (the sanctioned semantic-colour QSS escape
+// hatch, like the tone-curve channel buttons). The stops sample gradeHueColour so
+// the groove colour under the handle equals the swatch beside it.
+static QString hueGrooveStyleSheet() {
+    QStringList stops;
+    constexpr int kStops = 12;
+    for (int i = 0; i <= kStops; ++i) {
+        const float t = float(i) / kStops;
+        stops << QStringLiteral("stop:%1 %2").arg(t).arg(gradeHueColour(t * 360.0f).name());
+    }
+    return QStringLiteral(
+               "QSlider::groove:horizontal{height:6px;border-radius:3px;"
+               "background:qlineargradient(x1:0,y1:0,x2:1,y2:0,%1);}"
+               "QSlider::handle:horizontal{width:10px;margin:-4px 0;border-radius:5px;"
+               "background:#e6e6e6;border:1px solid #1a1a1a;}")
+        .arg(stops.join(','));
+}
 
 AdjustmentPanel::AdjustmentPanel(QWidget* parent)
     : QWidget(parent) {
@@ -335,6 +386,49 @@ AdjustmentPanel::AdjustmentPanel(QWidget* parent)
         root->addWidget(box);
     }
 
+    // ── Colour Grading ──────────────────────────────────────────────────────────
+    // Three-zone hue/saturation toning (docs/adr/0052). Unlike Colour/HSL/B&W, it
+    // stays visible in both treatments — it tints the colour image or the B&W grey.
+    {
+        auto* colourGrade = makeGroup("Colour Grading");
+        colourGrade->parentWidget()->setObjectName("colourGradingGroup");
+        const QString grooveStyle = hueGrooveStyleSheet();
+        const char* zoneNames[3] = {"Shadows", "Midtones", "Highlights"};
+        for (int i = 0; i < 3; ++i) {
+            subHeader(colourGrade, zoneNames[i]);
+            auto* swatch = new QLabel(this);
+            swatch->setFixedSize(18, 18);
+            swatch->setToolTip("The colour this zone tints toward at the current Hue.");
+            colorGradeHueSwatch[i] = swatch;
+            colorGradeHue[i] = addSlider(
+                colourGrade,
+                "Hue",
+                kColorGradeHueSpec,
+                "The colour the tint pushes toward. Drag until the swatch shows the "
+                "hue you want — the groove is a hue spectrum, so the handle sits on "
+                "its colour. Saturation below sets how strong the tint is.",
+                swatch);
+            // A static hue-spectrum groove; the swatch tracks the live value.
+            colorGradeHue[i].slider->setStyleSheet(grooveStyle);
+            connect(colorGradeHue[i].slider, &QSlider::valueChanged, this, [this, i](int v) {
+                updateHueSwatch(i, v);
+            });
+            updateHueSwatch(i, colorGradeHue[i].slider->value());
+            colorGradeSat[i] = addSlider(colourGrade, "Saturation", kColorGradeSatSpec);
+        }
+        subHeader(colourGrade, "Global");
+        colorGradeBalance = addSlider(
+            colourGrade,
+            "Balance",
+            kColorGradeBalanceSpec,
+            "Shifts the crossover between the Shadows and Highlights zones.");
+        colorGradeBlending = addSlider(
+            colourGrade,
+            "Blending",
+            kColorGradeBlendingSpec,
+            "Softens the width of the transitions between the three zones.");
+    }
+
     // ── Detail ────────────────────────────────────────────────────────────────
     auto* detail = makeGroup("Detail");
     subHeader(detail, "Demosaic");
@@ -471,7 +565,11 @@ AdjustmentPanel::AdjustmentPanel(QWidget* parent)
 // ── Slider factory ────────────────────────────────────────────────────────────
 
 AdjustmentPanel::SliderRow AdjustmentPanel::addSlider(
-    QVBoxLayout* layout, const QString& name, const FieldSpec& spec, const QString& tooltip) {
+    QVBoxLayout* layout,
+    const QString& name,
+    const FieldSpec& spec,
+    const QString& tooltip,
+    QWidget* trailing) {
     auto* row = new QWidget(this);
     auto* hbox = new QHBoxLayout(row);
     hbox->setContentsMargins(0, 0, 0, 0);
@@ -496,6 +594,10 @@ AdjustmentPanel::SliderRow AdjustmentPanel::addSlider(
 
     hbox->addWidget(lbl);
     hbox->addWidget(sl, 1);
+    if (trailing) {
+        trailing->setParent(row);
+        hbox->addWidget(trailing);
+    }
     hbox->addWidget(spin);
     layout->addWidget(row);
 
@@ -551,6 +653,20 @@ void AdjustmentPanel::syncParams() {
     adjustments.convertToGrayscale = treatmentGroup->checkedId() == 1;
     for (int i = 0; i < 8; ++i)
         adjustments.bwMix[i] = v(bwMix[i]);
+    for (int i = 0; i < 3; ++i) {
+        adjustments.colorGradeHue[i] = v(colorGradeHue[i]);
+        adjustments.colorGradeSat[i] = v(colorGradeSat[i]);
+    }
+    adjustments.colorGradeBalance = v(colorGradeBalance);
+    adjustments.colorGradeBlending = v(colorGradeBlending);
+}
+
+// Repaint a Colour Grading zone's Hue swatch to the tint the current angle selects
+// (docs/adr/0052). hueDegrees is the raw slider value (paramScale 1, so degrees).
+void AdjustmentPanel::updateHueSwatch(int zone, int hueDegrees) {
+    const QColor c = gradeHueColour(float(hueDegrees));
+    colorGradeHueSwatch[zone]->setStyleSheet(
+        QStringLiteral("background:%1;border:1px solid #1a1a1a;border-radius:3px;").arg(c.name()));
 }
 
 // Black & White swaps which colour panels are visible (docs/adr/0048).
@@ -590,12 +706,18 @@ std::vector<AdjustmentPanel::SliderRow*> AdjustmentPanel::allRows() {
            &postCropVignetteFeather,
            &grainAmount,
            &grainSize,
-           &grainRoughness};
+           &grainRoughness,
+           &colorGradeBalance,
+           &colorGradeBlending};
     for (int i = 0; i < 8; ++i) {
         rows.push_back(&hslHue[i]);
         rows.push_back(&hslSat[i]);
         rows.push_back(&hslLum[i]);
         rows.push_back(&bwMix[i]);
+    }
+    for (int i = 0; i < 3; ++i) {
+        rows.push_back(&colorGradeHue[i]);
+        rows.push_back(&colorGradeSat[i]);
     }
     return rows;
 }
@@ -725,6 +847,14 @@ void AdjustmentPanel::setParams(const GlobalAdjustment& p) {
         set(hslLum[i], p.hslLum[i]);
         set(bwMix[i], p.bwMix[i]);
     }
+    for (int i = 0; i < 3; ++i) {
+        set(colorGradeHue[i], p.colorGradeHue[i]);
+        set(colorGradeSat[i], p.colorGradeSat[i]);
+        // valueChanged is blocked here, so refresh the swatch explicitly.
+        updateHueSwatch(i, colorGradeHue[i].slider->value());
+    }
+    set(colorGradeBalance, p.colorGradeBalance);
+    set(colorGradeBlending, p.colorGradeBlending);
     // Mirror each slider tick into its spinbox.
     for (auto* r : rows)
         r->spin->setValue(r->spec.rawToDisplay(r->slider->value()));

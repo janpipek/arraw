@@ -8,6 +8,7 @@
 //   ARRAW_UPDATE_GOLDENS=1 ./build/tests/arraw_tests "[golden]"
 
 #include "TestApp.h"
+#include "pipeline/OkLab.h"
 #include "render/HeadlessRenderContext.h"
 #include "render/OffscreenRender.h"
 #include "render/RendererCore.h"
@@ -199,6 +200,25 @@ std::vector<Scenario> scenarios() {
     p.bwMix = {60.0f, 0.0f, 0.0f, 0.0f, 0.0f, -80.0f, 0.0f, 0.0f};
     list.push_back({"black_and_white", p});
 
+    // Colour Grading (docs/adr/0052): a live split tone — warm Shadows against cool
+    // Highlights, off-centre Balance and non-default Blending, so every term of the
+    // zone blend is exercised. Mirrors colour::applyColourGrading, so this is what
+    // enforces CPU/GPU parity for the grade (and that the vec4[2] uniform packing
+    // reaches the right shader components — a default grade is the identity and
+    // would render identically however the block were packed).
+    p = {};
+    p.colorGradeHue = {40.0f, 0.0f, 250.0f};
+    p.colorGradeSat = {70.0f, 0.0f, 55.0f};
+    p.colorGradeBalance = -30.0f;
+    p.colorGradeBlending = 25.0f;
+    list.push_back({"colour_grading", p});
+
+    // The same grade on the Black & White treatment — the feature's reason to
+    // exist (ADR 0048's deferred toning). Grading runs after the branch merges, so
+    // unlike HSL/Saturation it must still tint the neutral grey.
+    p.convertToGrayscale = true;
+    list.push_back({"colour_grading_bw", p});
+
     return list;
 }
 
@@ -317,6 +337,98 @@ TEST_CASE("a local exposure mask brightens only the masked region", "[gpu][local
 
     INFO("unmasked=" << unmasked << " masked=" << masked);
     CHECK(masked > unmasked + 0.1f); // +1 EV gives a substantial perceptual lift
+}
+
+// Colour Grading (docs/adr/0052): a behavioural check of the whole GPU chain —
+// the colorGrade vec4[2] std140 packing, fillUbuf's element order, and the
+// shader's mirror of colour::applyColourGrading. Worth having on top of the
+// golden renders: a *default* grade is the exact identity, so the shader linking
+// and rendering proves nothing about the packing. Scrambling hue with sat, or
+// balance with blending, still renders every existing golden byte-for-byte —
+// but breaks the zone selectivity below.
+TEST_CASE("colour grading tints the right tonal zones on the GPU", "[gpu][grade]") {
+    RendererCore* core = goldenCore();
+    if (!core)
+        SKIP("no OpenGL context available on this machine");
+
+    // Flat neutral scenes: default WB is a unit gain (5500K/tint 0), so any chroma
+    // in the output is the grade's doing and nothing else's.
+    auto flat = [](float level) {
+        ImageBuffer b;
+        b.width = 16;
+        b.height = 16;
+        b.data.assign(size_t(b.width) * b.height * 3, level);
+        return b;
+    };
+    const ImageBuffer dark = flat(0.02f);
+    const ImageBuffer mid = flat(0.18f);
+    const ImageBuffer bright = flat(0.7f);
+
+    // Oklab chroma of a centre pixel of the render.
+    auto chromaOf = [&](const ImageBuffer& scene, const GlobalAdjustment& p) {
+        const QImage got = offscreen::renderToImage(*core, scene, p, scene.width, scene.height);
+        REQUIRE_FALSE(got.isNull());
+        const auto* px = reinterpret_cast<const float*>(got.constScanLine(scene.height / 2));
+        const colour::Lab lab = colour::toOklab({px[0], px[1], px[2]});
+        return std::hypot(lab.a, lab.b);
+    };
+
+    const GlobalAdjustment ungraded;
+    CHECK(chromaOf(dark, ungraded) < 1e-3f); // neutral in, neutral out
+    CHECK(chromaOf(bright, ungraded) < 1e-3f);
+
+    SECTION("a Shadows-only grade tints dark tones more than bright ones") {
+        GlobalAdjustment p;
+        p.colorGradeHue = {40.0f, 0.0f, 0.0f};
+        p.colorGradeSat = {80.0f, 0.0f, 0.0f};
+        CHECK(chromaOf(dark, p) > chromaOf(bright, p));
+        CHECK(chromaOf(dark, p) > 0.01f);
+    }
+
+    SECTION("a Highlights-only grade tints bright tones more than dark ones") {
+        GlobalAdjustment p;
+        p.colorGradeHue = {0.0f, 0.0f, 250.0f};
+        p.colorGradeSat = {0.0f, 0.0f, 80.0f};
+        CHECK(chromaOf(bright, p) > chromaOf(dark, p));
+        CHECK(chromaOf(bright, p) > 0.01f);
+    }
+
+    // Balance and Blending live in the same vec4 as the Highlights zone, so these
+    // two are what catch a swap between them.
+    SECTION("Balance hands the tonal range to Shadows when negative") {
+        GlobalAdjustment p;
+        p.colorGradeSat = {80.0f, 0.0f, 0.0f};
+        p.colorGradeHue = {40.0f, 0.0f, 0.0f};
+        const float centred = chromaOf(mid, p);
+        p.colorGradeBalance = -100.0f;
+        CHECK(chromaOf(mid, p) > centred);
+        p.colorGradeBalance = 100.0f;
+        CHECK(chromaOf(mid, p) < centred);
+    }
+
+    SECTION("Blending widens a Shadows zone into the midtones") {
+        GlobalAdjustment p;
+        p.colorGradeSat = {80.0f, 0.0f, 0.0f};
+        p.colorGradeHue = {40.0f, 0.0f, 0.0f};
+        p.colorGradeBlending = 0.0f;
+        const float narrow = chromaOf(mid, p);
+        p.colorGradeBlending = 100.0f;
+        CHECK(chromaOf(mid, p) > narrow);
+    }
+
+    // The feature's reason to exist (docs/adr/0048's deferred toning): grading runs
+    // after the Colour/B&W branch merges, so unlike HSL/Saturation it must still
+    // reach the neutral grey the mixer produced.
+    SECTION("it tints the Black & White treatment's neutral grey") {
+        GlobalAdjustment mono;
+        mono.convertToGrayscale = true;
+        CHECK(chromaOf(mid, mono) < 1e-3f); // B&W alone is neutral
+
+        GlobalAdjustment toned = mono;
+        toned.colorGradeHue = {40.0f, 40.0f, 40.0f};
+        toned.colorGradeSat = {70.0f, 70.0f, 70.0f};
+        CHECK(chromaOf(mid, toned) > 0.01f); // sepia on the grey
+    }
 }
 
 TEST_CASE("a later Local Adjustment can recover global white headroom", "[gpu][tone]") {

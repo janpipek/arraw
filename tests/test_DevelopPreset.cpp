@@ -66,6 +66,25 @@ TEST_CASE("A Black & White preset round-trips the toggle and mixer through JSON"
     CHECK(loaded.values.bwMix == p.values.bwMix);
 }
 
+TEST_CASE("A Colour Grading preset round-trips the zones and shaping through JSON", "[preset]") {
+    DevelopPreset p;
+    p.name = "Sepia split";
+    p.groups = groups({DevelopGroup::ColourGrading});
+    p.values.colorGradeHue = {35.0f, 210.0f, 300.0f};
+    p.values.colorGradeSat = {40.0f, 22.0f, 58.0f};
+    p.values.colorGradeBalance = -18.0f;
+    p.values.colorGradeBlending = 35.0f; // distinct from the default 50
+
+    bool ok = false;
+    const DevelopPreset loaded = parseDevelopPreset(serializeDevelopPreset(p), &ok);
+
+    REQUIRE(ok);
+    CHECK(loaded.values.colorGradeHue == p.values.colorGradeHue);
+    CHECK(loaded.values.colorGradeSat == p.values.colorGradeSat);
+    CHECK(loaded.values.colorGradeBalance == p.values.colorGradeBalance);
+    CHECK(loaded.values.colorGradeBlending == p.values.colorGradeBlending);
+}
+
 TEST_CASE("A Detail preset round-trips Colour Noise Reduction through JSON", "[preset]") {
     DevelopPreset p;
     p.name = "Clean";
