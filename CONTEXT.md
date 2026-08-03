@@ -243,10 +243,12 @@ colour controls are inert on an achromatic signal) and reveals the [[B&W Mixer]]
 The conversion runs immediately after [[White Balance]], so the mix responds to
 Temperature/Tint; everything downstream develops on the grey signal, and even a
 [[Local Adjustment]]'s colour deltas (temperature/tint/saturation/vibrance) are
-suppressed so the result is neutral grey everywhere. Its own [[Develop Group]].
-Stored Lightroom-compatibly as `crs:ConvertToGrayscale`; the mix weights persist
-independently of the toggle, so switching back to Colour and forward again keeps
-the dialled-in mix.
+suppressed so the result is neutral grey everywhere. [[Colour Grading]] is the
+one exception: it runs after this treatment and may tint the neutral grey
+(sepia, split-toning) — the toning this decision deliberately deferred. Its own
+[[Develop Group]]. Stored Lightroom-compatibly as `crs:ConvertToGrayscale`; the
+mix weights persist independently of the toggle, so switching back to Colour and
+forward again keeps the dialled-in mix.
 _Avoid_: greyscale (the flat [[Saturation]] −100 result), monochrome (the sensor
 type in [[Demosaic Algorithm]]), desaturation
 
@@ -261,6 +263,26 @@ saturation (which thins colour without converting) and from the rejected
 three-channel model.
 _Avoid_: channel mixer (the 3-channel R/G/B model arraw rejected), grayscale mix,
 HSL (the colour-image sibling)
+
+**Colour Grading**:
+A three-zone (Shadows/Midtones/Highlights) hue+saturation tint, plus two global
+shaping controls, Balance (shifts the shadow↔highlight crossover; negative
+favours Shadows, positive Highlights, as in Lightroom) and Blending
+(softens the width of the zone transitions). Runs in Oklab, after the
+Colour/[[Black & White]] branch merges and before Spatial Global Adjustments, so
+it tints either a colour image or the [[Black & White]] treatment's neutral
+grey — the toning ADR 0048 deferred. Zone weights are computed from
+perceptually-encoded luminance, the same rationale as [[Basic Tone]]'s LUT, so
+"Shadows"/"Highlights" mean the same region here as in [[Shadows / Highlights]].
+Colour-only: no per-zone brightness control (that stays with tone controls) and
+no [[Local Adjustment]] variant (matches [[HSL]] and the [[B&W Mixer]]). Its own
+[[Develop Group]]. Stored Lightroom-compatibly as
+`crs:ColorGrade{Shadow,Midtone,Highlight}{Hue,Sat}`, `crs:ColorGradeBalance`,
+`crs:ColorGradeBlending` — the American `ColorGrade` prefix is Adobe's fixed
+field name, distinct from arraw's own British spelling of the term.
+_Avoid_: split toning (the classic two-zone sibling this supersedes), Color
+Grading (American spelling — the glossary term is British like [[Colour]]),
+per-zone luminance/brightness (tone, not toning)
 
 **Spatial Global Adjustment**:
 A develop control that affects the whole image but computes each pixel from a
@@ -332,12 +354,13 @@ parametric mask (the Linear/Radial siblings it is deliberately unlike)
 
 **Develop Group**:
 One selectable unit in the [[Copy Settings]] / [[Develop Preset]] checklist —
-the granularity at which develop settings travel between photos. The ten
+the granularity at which develop settings travel between photos. The eleven
 groups partition every global field: White Balance, Tone, Tone Curve, Colour,
 HSL, [[Black & White]] (the treatment toggle + [[B&W Mixer]] weights together),
-Detail, Geometry ([[Rotation]] + [[Crop]] + [[Aspect Ratio Lock]] together),
-[[Lens Corrections]] ([[Distortion]] + corrective [[Vignetting]] + [[Chromatic
-Aberration]]), and Effects ([[Post-Crop Vignette]] + [[Grain]]). Per-image state such as a Grain's hidden
+[[Colour Grading]], Detail, Geometry ([[Rotation]] + [[Crop]] + [[Aspect Ratio
+Lock]] together), [[Lens Corrections]] ([[Distortion]] + corrective
+[[Vignetting]] + [[Chromatic Aberration]]), and Effects ([[Post-Crop Vignette]] +
+[[Grain]]). Per-image state such as a Grain's hidden
 seed and [[Local Adjustment]] masks does not travel with a group. Applying a
 group **replaces** every visible field in it on the target, including resetting
 to defaults when the source group is unedited.
