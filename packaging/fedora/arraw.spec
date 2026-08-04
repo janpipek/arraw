@@ -69,9 +69,7 @@ appstreamcli validate --no-net \
 - Add Colour Grading: three-zone Oklab toning for colour and B&W images
 - Ship the Windows console/GUI executable pair, with PATH and shortcut installation
 - Split arraw_core into arraw_engine and arraw_ui (ADR 0049)
-- Fix Colour Grading Balance sign to match Lightroom
 - Fix an off-by-one in the installer's PATH cleanup on uninstall
-- Consolidate documentation onto three homes: README, AGENTS.md/CONTEXT.md/DESIGN.md, and the ADR index
 
 * Mon Jun 29 2026 Jan Pipek <janpipek@users.noreply.github.com> - 0.3.0-1
 - Add a Brush Mask type for painting local-adjustment masks on the image
