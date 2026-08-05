@@ -223,6 +223,16 @@ static constexpr const char* kGrayMixerNames[8]
        "GrayMixerPurple",
        "GrayMixerMagenta"};
 
+// crs: attribute names for the three Colour Grading zones (docs/adr/0052), indexed
+// like GlobalAdjustment::colorGradeHue/Sat ([Shadows, Midtones, Highlights]).
+// Lightroom-compatible (crs:ColorGrade{Shadow,Midtone,Highlight}{Hue,Sat}). The
+// crs:ColorGrade*Lum siblings are deliberately unmodeled — arraw owns no per-zone
+// brightness — so Lightroom's values there are left untouched (docs/adr/0052).
+static constexpr const char* kColorGradeHueNames[3]
+    = {"ColorGradeShadowHue", "ColorGradeMidtoneHue", "ColorGradeHighlightHue"};
+static constexpr const char* kColorGradeSatNames[3]
+    = {"ColorGradeShadowSat", "ColorGradeMidtoneSat", "ColorGradeHighlightSat"};
+
 QString XmpSidecar::pathFor(const QString& rawPath) {
     return resolveSidecarPath(rawPath).path;
 }
@@ -430,6 +440,15 @@ static Snapshot parseSnapshotLi(QXmlStreamReader& xml) {
     double cropX = 0.0, cropY = 0.0, cropW = 1.0, cropH = 1.0;
     auto f = [&]() { return xml.readElementText().toFloat(); };
     auto isTrue = [&]() { return xml.readElementText() == "1"; };
+    // Element names ending in a band index (arraw:HslHue0 ... arraw:ColorGradeSat2)
+    // carry that index in file text, so it is untrusted: always consume the element,
+    // but drop an out-of-range index instead of writing past the array.
+    auto indexed = [&](auto& array, const QString& elementName, int prefixLength) {
+        const int i = QStringView(elementName).mid(prefixLength).toInt();
+        const float value = f();
+        if (i >= 0 && i < int(array.size()))
+            array[i] = value;
+    };
     while (!xml.atEnd()) {
         xml.readNext();
         if (xml.isEndElement() && xml.qualifiedName() == "rdf:li")
@@ -512,15 +531,23 @@ static Snapshot parseSnapshotLi(QXmlStreamReader& xml) {
         else if (name == "arraw:CropConstrained")
             p.cropConstrained = isTrue();
         else if (name.startsWith("arraw:HslHue"))
-            p.hslHue[name.mid(12).toInt()] = f();
+            indexed(p.hslHue, name, 12);
         else if (name.startsWith("arraw:HslSat"))
-            p.hslSat[name.mid(12).toInt()] = f();
+            indexed(p.hslSat, name, 12);
         else if (name.startsWith("arraw:HslLum"))
-            p.hslLum[name.mid(12).toInt()] = f();
+            indexed(p.hslLum, name, 12);
         else if (name == "arraw:ConvertToGrayscale")
             p.convertToGrayscale = isTrue();
         else if (name.startsWith("arraw:BwMix"))
-            p.bwMix[name.mid(11).toInt()] = f();
+            indexed(p.bwMix, name, 11);
+        else if (name.startsWith("arraw:ColorGradeHue"))
+            indexed(p.colorGradeHue, name, 19);
+        else if (name.startsWith("arraw:ColorGradeSat"))
+            indexed(p.colorGradeSat, name, 19);
+        else if (name == "arraw:ColorGradeBalance")
+            p.colorGradeBalance = f();
+        else if (name == "arraw:ColorGradeBlending")
+            p.colorGradeBlending = f();
         else if (name == "crs:ToneCurvePV2012")
             readSnapshotCurve(xml, p.curveLuma);
         else if (name == "crs:ToneCurvePV2012Red")
@@ -707,6 +734,16 @@ SidecarLoadResult XmpSidecar::loadWithStatus(const QString& rawPath) {
                                    == 0;
             for (int i = 0; i < 8; ++i)
                 p.bwMix[i] = attr(kGrayMixerNames[i], 0.0f);
+
+            // Colour Grading (docs/adr/0052). Hue/Sat default 0; Balance 0;
+            // Blending 50 (Lightroom's default), so files predating the feature
+            // read as a no-op grade.
+            for (int i = 0; i < 3; ++i) {
+                p.colorGradeHue[i] = attr(kColorGradeHueNames[i], 0.0f);
+                p.colorGradeSat[i] = attr(kColorGradeSatNames[i], 0.0f);
+            }
+            p.colorGradeBalance = attr("ColorGradeBalance", 0.0f);
+            p.colorGradeBlending = attr("ColorGradeBlending", 50.0f);
         }
 
         // Tone curve child elements (inside rdf:Description)
@@ -948,6 +985,14 @@ static void writeSnapshotState(QXmlStreamWriter& xml, const GlobalAdjustment& p)
     flag("ConvertToGrayscale", p.convertToGrayscale);
     for (int i = 0; i < 8; ++i)
         xml.writeTextElement(kNsArraw, QStringLiteral("BwMix%1").arg(i), num(p.bwMix[i]));
+    for (int i = 0; i < 3; ++i) {
+        xml.writeTextElement(
+            kNsArraw, QStringLiteral("ColorGradeHue%1").arg(i), num(p.colorGradeHue[i]));
+        xml.writeTextElement(
+            kNsArraw, QStringLiteral("ColorGradeSat%1").arg(i), num(p.colorGradeSat[i]));
+    }
+    el("ColorGradeBalance", p.colorGradeBalance);
+    el("ColorGradeBlending", p.colorGradeBlending);
     writeCurve(xml, "ToneCurvePV2012", p.curveLuma.points);
     writeCurve(xml, "ToneCurvePV2012Red", p.curveR.points);
     writeCurve(xml, "ToneCurvePV2012Green", p.curveG.points);
@@ -1084,6 +1129,16 @@ static QByteArray ownedPacket(const SidecarData& data) {
     xml.writeAttribute(kNsCrs, "ConvertToGrayscale", p.convertToGrayscale ? "True" : "False");
     for (int i = 0; i < 8; ++i)
         write(kGrayMixerNames[i], p.bwMix[i]);
+
+    // Colour Grading (docs/adr/0052). Lightroom-compatible crs: fields; the *Lum
+    // siblings are not written, so any Lightroom-authored value there survives
+    // (arraw does not model per-zone brightness).
+    for (int i = 0; i < 3; ++i) {
+        write(kColorGradeHueNames[i], p.colorGradeHue[i]);
+        write(kColorGradeSatNames[i], p.colorGradeSat[i]);
+    }
+    write("ColorGradeBalance", p.colorGradeBalance);
+    write("ColorGradeBlending", p.colorGradeBlending);
 
     if (data.metadataPresence.title)
         writeAltText(xml, "title", data.metadata.title);

@@ -1,11 +1,9 @@
 #include "cli/PresetCommand.h"
+#include "cli/ImagePathPreflight.h"
 #include "develop/DevelopGroup.h"
 #include "io/XmpSidecar.h"
-#include "pipeline/RawProcessor.h"
-#include "pipeline/StandardImageLoader.h"
 #include <algorithm>
 #include <optional>
-#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -118,24 +116,6 @@ int showAsJson(const DevelopPreset& preset, QTextStream& out) {
     return 0;
 }
 
-// Every path must exist, not be a directory, and carry a supported image
-// extension, checked as a whole before any sidecar is touched (docs/adr/0051)
-// — refusing the run pre-flight is cheaper than half-applying a preset and
-// discovering the typo at file 30 of 40. Reuses the loaders' own extension
-// lists rather than growing a third definition of "image file".
-QString preflightApplyPaths(const QStringList& paths) {
-    for (const QString& path : paths) {
-        const QFileInfo fi(path);
-        if (!fi.exists())
-            return QStringLiteral("no such file: %1").arg(path);
-        if (fi.isDir())
-            return QStringLiteral("is a directory: %1").arg(path);
-        if (!StandardImageLoader::canLoad(path) && !RawProcessor::canLoad(path))
-            return QStringLiteral("not a supported image: %1").arg(path);
-    }
-    return {};
-}
-
 struct ApplyFailure {
     QString path;
     QString error;
@@ -222,7 +202,7 @@ int runPresetApply(
     if (!preset)
         return noSuchPreset(store, name, err);
 
-    const QString preflightError = preflightApplyPaths(paths);
+    const QString preflightError = preflightImagePaths(paths);
     if (!preflightError.isEmpty()) {
         err << "arraw preset apply: " << preflightError << "\n";
         return 2;

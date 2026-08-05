@@ -31,9 +31,9 @@ backend is chosen the same way the `appimage` recipe already does it — honour
 ## Base image: Fedora 44, host parity
 
 The base is **Fedora 44**, matching the development host. Dependencies install
-from the same `dnf` line documented in AGENTS.md, so the agent builds against the
-same Qt6/Mesa/LibRaw versions the developer runs natively — the point of a
-parity sandbox. The full toolchain is baked in (build deps + Catch2/ctest via
+from the same `dnf` line documented in the README's build guide, so the agent
+builds against the same Qt6/Mesa/LibRaw versions the developer runs natively —
+the point of a parity sandbox. The full toolchain is baked in (build deps + Catch2/ctest via
 CMake's network fetch, plus `clang-format`, `clazy`, `clang-tidy`, `uv`, `just`,
 and node/npm + Claude Code), so every Justfile recipe works inside. GUI runtime
 bits (`qtwayland`, Mesa drivers) are included but only matter in GUI mode below.

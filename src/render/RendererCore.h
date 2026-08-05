@@ -74,9 +74,13 @@ struct Ubuf {
     qint32 convertToGrayscale; // 1: Black & White treatment on (docs/adr/0048); was pad_[1]
     qint32 pad_[1];            // align bwMix to a 16-byte boundary
     float bwMix[8];            // 8 B&W hue-mixer weights, -100..+100 (vec4[2] in the shaders)
+    // Colour Grading (docs/adr/0052), packed as vec4[2] in the shaders:
+    //   [0..3] = (shadowHue, shadowSat, midtoneHue, midtoneSat)
+    //   [4..7] = (highlightHue, highlightSat, balance, blending)
+    float colorGrade[8];
 };
 
-static_assert(sizeof(Ubuf) == 1680);
+static_assert(sizeof(Ubuf) == 1712);
 static_assert(offsetof(Ubuf, effectRect) == 96);
 static_assert(offsetof(Ubuf, grainSeed) == 284);
 static_assert(offsetof(Ubuf, laGeom) == 320);
@@ -89,6 +93,7 @@ static_assert(offsetof(Ubuf, dehaze) == 1632);
 static_assert(offsetof(Ubuf, maskOverlay) == 1636);
 static_assert(offsetof(Ubuf, convertToGrayscale) == 1640);
 static_assert(offsetof(Ubuf, bwMix) == 1648);
+static_assert(offsetof(Ubuf, colorGrade) == 1680);
 
 // std140 mirror of the `nrbuf` block in shaders/nr.vert and the NR fragment shaders
 // — the unified Noise Reduction pre-pass uniform (docs/adr/0034, 0046). Filled twice

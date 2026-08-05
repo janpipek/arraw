@@ -1,4 +1,5 @@
 #include "cli/PresetArgs.h"
+#include "cli/ArgParse.h"
 #include <CLI11.hpp>
 
 namespace cli {
@@ -27,22 +28,9 @@ PresetParse parsePresetArgs(const std::vector<std::string>& args) {
     applyCmd->add_option("paths", applyPaths, "Files to update")->required();
     applyCmd->add_flag("--json", jsonApply, "Emit a JSON result document instead of progress lines");
 
-    // CLI11's vector overload consumes back-to-front; hand it argc/argv.
-    std::vector<const char*> argv;
-    argv.push_back("arraw preset");
-    for (const std::string& a : args)
-        argv.push_back(a.c_str());
-    try {
-        app.parse(int(argv.size()), argv.data());
-    } catch (const CLI::CallForHelp&) {
-        res.exitCode = 0;
-        res.message = QString::fromStdString(app.help());
+    res.exitCode = parseArgs(app, args, res.message);
+    if (res.exitCode >= 0)
         return res;
-    } catch (const CLI::ParseError& e) {
-        res.exitCode = 2;
-        res.message = QStringLiteral("arraw preset: %1").arg(e.what());
-        return res;
-    }
 
     if (listCmd->parsed()) {
         res.invocation.verb = PresetVerb::List;

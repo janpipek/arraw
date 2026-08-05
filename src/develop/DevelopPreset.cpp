@@ -39,6 +39,11 @@ void bandsFromJson(const QJsonArray& arr, std::array<float, 8>& bands) {
         bands[i] = static_cast<float>(arr.at(i).toDouble());
 }
 
+// The anonymous namespace closes here and reopens below: groupToJson is
+// declared in the header (shared with `arraw info --json`), so it needs
+// external linkage, while the helpers either side of it stay file-local.
+} // namespace
+
 // Writes one group's fields from `v` into a fresh JSON object.
 QJsonObject groupToJson(DevelopGroup g, const GlobalAdjustment& v) {
     QJsonObject o;
@@ -75,6 +80,19 @@ QJsonObject groupToJson(DevelopGroup g, const GlobalAdjustment& v) {
         o["convertToGrayscale"] = v.convertToGrayscale;
         o["mix"] = bandsToJson(v.bwMix);
         break;
+    case DevelopGroup::ColourGrading: {
+        QJsonArray hue;
+        QJsonArray sat;
+        for (int i = 0; i < 3; ++i) {
+            hue.append(v.colorGradeHue[i]);
+            sat.append(v.colorGradeSat[i]);
+        }
+        o["hue"] = hue;
+        o["sat"] = sat;
+        o["balance"] = v.colorGradeBalance;
+        o["blending"] = v.colorGradeBlending;
+        break;
+    }
     case DevelopGroup::Detail:
         o["texture"] = v.texture;
         o["clarity"] = v.clarity;
@@ -110,6 +128,8 @@ QJsonObject groupToJson(DevelopGroup g, const GlobalAdjustment& v) {
     }
     return o;
 }
+
+namespace { // file-local helpers again
 
 // Reads one group's fields from `o` into `v` (leaving absent fields untouched).
 void groupFromJson(DevelopGroup g, const QJsonObject& o, GlobalAdjustment& v) {
@@ -149,6 +169,17 @@ void groupFromJson(DevelopGroup g, const QJsonObject& o, GlobalAdjustment& v) {
         v.convertToGrayscale = o.value("convertToGrayscale").toBool(v.convertToGrayscale);
         bandsFromJson(o["mix"].toArray(), v.bwMix);
         break;
+    case DevelopGroup::ColourGrading: {
+        const QJsonArray hue = o["hue"].toArray();
+        const QJsonArray sat = o["sat"].toArray();
+        for (int i = 0; i < 3 && i < hue.size(); ++i)
+            v.colorGradeHue[i] = static_cast<float>(hue.at(i).toDouble(v.colorGradeHue[i]));
+        for (int i = 0; i < 3 && i < sat.size(); ++i)
+            v.colorGradeSat[i] = static_cast<float>(sat.at(i).toDouble(v.colorGradeSat[i]));
+        v.colorGradeBalance = f("balance", v.colorGradeBalance);
+        v.colorGradeBlending = f("blending", v.colorGradeBlending);
+        break;
+    }
     case DevelopGroup::Detail:
         v.texture = f("texture", v.texture);
         v.clarity = f("clarity", v.clarity);

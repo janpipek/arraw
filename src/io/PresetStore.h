@@ -7,7 +7,7 @@
 #include <QString>
 
 // Reads and writes Develop Presets as one JSON file per preset in a directory
-// (Milestone 8; docs/adr/0023). The directory is injected so the store is
+// (docs/adr/0023). The directory is injected so the store is
 // testable headlessly; MainWindow constructs it with
 // QStandardPaths::AppDataLocation/"presets". A preset's display name is the
 // `name` inside the JSON — the filename is only storage, derived + sanitised.
@@ -41,7 +41,7 @@ public:
     // (so every platform agrees) and post-sanitisation (so "a/b" and "a:b",
     // which presetFileName both map to "a_b.json", count as a collision even
     // though they are distinct display names). Used to prompt before an
-    // overwrite on save/rename (CONTEXT.md Develop Preset, docs/adr/0049).
+    // overwrite on save/rename (CONTEXT.md Develop Preset, docs/adr/0055).
     // `excluding`, when given, skips the preset with that exact stored name —
     // so renaming a preset onto a case/sanitisation variant of its own current
     // name isn't reported as colliding with itself.

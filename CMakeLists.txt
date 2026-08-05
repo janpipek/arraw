@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(arraw VERSION 0.3.0 LANGUAGES CXX)
+project(arraw VERSION 0.3.1 LANGUAGES CXX)
 
 option(ARRAW_BUILD_TESTS "Build arraw tests" ON)
 if(ARRAW_BUILD_TESTS)
@@ -320,6 +320,11 @@ add_library(arraw_cli STATIC
     src/cli/ExportCommand.cpp
     src/cli/PresetArgs.cpp
     src/cli/PresetCommand.cpp
+    src/cli/ArgParse.cpp
+    src/cli/ImagePathPreflight.cpp
+    src/cli/InfoArgs.cpp
+    src/cli/InfoCommand.cpp
+    src/cli/TextStyle.cpp
     src/cli/Dispatch.cpp
 )
 arraw_enable_warnings(arraw_cli)

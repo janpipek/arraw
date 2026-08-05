@@ -57,6 +57,10 @@ GlobalAdjustment sampleParams() {
     p.convertToGrayscale = true;
     for (int i = 0; i < 8; ++i)
         p.bwMix[i] = float(i * 5 - 15);
+    p.colorGradeHue = {35.0f, 215.0f, 300.0f};
+    p.colorGradeSat = {40.0f, 22.0f, 58.0f};
+    p.colorGradeBalance = -18.0f;
+    p.colorGradeBlending = 35.0f;
     // Points on the 0..255 grid so quantisation is lossless
     p.curveLuma.points = {{0.0, 0.0}, {64 / 255.0, 32 / 255.0}, {1.0, 1.0}};
     p.curveR.points = {{0.0, 16 / 255.0}, {1.0, 240 / 255.0}};
@@ -98,6 +102,12 @@ void checkClose(const GlobalAdjustment& a, const GlobalAdjustment& b) {
         CHECK_THAT(a.bwMix[i], WithinAbs(b.bwMix[i], kScalarTol));
     }
     CHECK(a.convertToGrayscale == b.convertToGrayscale);
+    for (int i = 0; i < 3; ++i) {
+        CHECK_THAT(a.colorGradeHue[i], WithinAbs(b.colorGradeHue[i], kScalarTol));
+        CHECK_THAT(a.colorGradeSat[i], WithinAbs(b.colorGradeSat[i], kScalarTol));
+    }
+    CHECK_THAT(a.colorGradeBalance, WithinAbs(b.colorGradeBalance, kScalarTol));
+    CHECK_THAT(a.colorGradeBlending, WithinAbs(b.colorGradeBlending, kScalarTol));
 }
 
 void checkCurveClose(const CurvePoints& a, const CurvePoints& b) {
@@ -688,6 +698,50 @@ TEST_CASE("reader parses a Lightroom-style sidecar", "[xmp][crs]") {
     CHECK_THAT(p.curveLuma.points[1].x(), WithinAbs(64 / 255.0, 1e-5));
     CHECK_THAT(p.curveLuma.points[1].y(), WithinAbs(48 / 255.0, 1e-5));
     CHECK(p.curveR.isIdentity());
+}
+
+// docs/adr/0052: arraw models the Colour Grading Hue/Sat/Balance/Blending fields
+// but NOT the per-zone crs:ColorGrade*Lum brightness. A Lightroom-authored *Lum
+// value (and any other unmodeled crs field) must survive an arraw round-trip: the
+// read-first DOM merge only replaces the crs attributes arraw itself writes.
+TEST_CASE("an unmodeled crs:ColorGrade*Lum survives an arraw save", "[xmp][crs][grade]") {
+    QTemporaryDir dir;
+    const QString rawPath = dir.filePath("lr-graded.arw");
+
+    const QByteArray lightroom = R"(<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+    crs:Exposure2012="0.20"
+    crs:ColorGradeShadowHue="120"
+    crs:ColorGradeShadowSat="30"
+    crs:ColorGradeShadowLum="15"
+    crs:ColorGradeGlobalHue="210"/>
+ </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end="w"?>)";
+    {
+        QFile f(XmpSidecar::pathFor(rawPath));
+        REQUIRE(f.open(QIODevice::WriteOnly));
+        f.write(lightroom);
+    }
+
+    // arraw loads (ignoring *Lum), edits a modeled field, and writes back.
+    GlobalAdjustment p = XmpSidecar::loadAdjustments(rawPath);
+    CHECK_THAT(p.colorGradeHue[0], WithinAbs(120.0f, kScalarTol)); // Shadow Hue read
+    CHECK_THAT(p.colorGradeSat[0], WithinAbs(30.0f, kScalarTol));
+    p.exposure = 1.0f;
+    REQUIRE(XmpSidecar::saveAdjustments(rawPath, p));
+
+    QFile f(XmpSidecar::pathFor(rawPath));
+    REQUIRE(f.open(QIODevice::ReadOnly));
+    const QString xml = QString::fromUtf8(f.readAll());
+    // The unmodeled fields Lightroom wrote are still there, verbatim...
+    CHECK(xml.contains(R"(crs:ColorGradeShadowLum="15")"));
+    CHECK(xml.contains(R"(crs:ColorGradeGlobalHue="210")"));
+    // ...while the modeled Shadow Hue arraw owns was re-emitted.
+    CHECK(xml.contains(R"(crs:ColorGradeShadowHue="120.0000")"));
 }
 
 // ── User metadata: rating + colour label ────────────────────────────────────
