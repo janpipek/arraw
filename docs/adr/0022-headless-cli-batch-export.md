@@ -72,7 +72,7 @@ That single fact decides everything below.
 - **CLI surface is intentionally minimal in v1**: `arraw-cli <raw> [-o out.jpg]`,
   reading the adjacent `.xmp` sidecar if present (identical resolution to the
   GUI). Batch/glob, format/quality flags, and override flags are follow-ons, not
-  v1 — and batch export also surfaces at the GUI level in Milestone 10.
+  v1 — and batch export also surfaces at the GUI level (ADR 0018).
 - **Readback row order and colour tagging are already handled** by
   `renderOffscreen` (Y-flip per `QRhi::isYUpInFramebuffer()`, output tagged
   `QColorSpace::SRgb`); the CLI inherits both for free.

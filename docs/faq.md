@@ -22,10 +22,13 @@ Don't trust Task Manager's per-GPU graphs alone — ask Qt directly. Run arraw f
 a terminal with the RHI logging category on; it prints the adapter it selected at
 startup.
 
-**Windows** (PowerShell):
+**Windows** (PowerShell). Launch **`arraw-gui.exe`**, not `arraw.exe`: the latter
+is the console front-end, and it starts the editor as a *detached* process whose
+output never reaches your console.
+
 ```powershell
 $env:QT_LOGGING_RULES = "qt.rhi.general=true"
-.\arraw.exe
+.\arraw-gui.exe 2> rhi.txt
 ```
 
 **Linux**:
@@ -36,18 +39,22 @@ QT_LOGGING_RULES="qt.rhi.general=true" ./arraw
 Look for a line naming the chosen adapter (e.g. `Using ... adapter: Intel(R) ...`
 vs `NVIDIA ...`). That is the ground truth.
 
-> On Windows, arraw is a GUI-subsystem binary with no attached console, so
-> redirect stderr to see the log: `arraw.exe 2> rhi.txt`.
+> On Windows `arraw-gui.exe` is a GUI-subsystem binary with no attached console,
+> which is why the command above redirects stderr to a file. (`arraw.exe`, the
+> console front-end, does attach a console — but it only launches the editor and
+> exits, so the RHI log is never its own.)
 
 ### Windows — force the discrete GPU
 
 Pick whichever you prefer; the OS setting and the vendor control panel do the same
-thing.
+thing. In both, register **`arraw-gui.exe`** — that is the process which creates
+the D3D11 device. Adding `arraw.exe` has no effect, because the front-end exits
+before any rendering happens.
 
 - **Windows Graphics settings** — Settings → System → Display → **Graphics** → add
-  `arraw.exe` → **Options** → **High performance**.
+  `arraw-gui.exe` → **Options** → **High performance**.
 - **NVIDIA Control Panel** — Manage 3D settings → **Program Settings** → add
-  `arraw.exe` → "Preferred graphics processor" → **High-performance NVIDIA
+  `arraw-gui.exe` → "Preferred graphics processor" → **High-performance NVIDIA
   processor**.
 
 To test without changing any system setting, force the DXGI adapter index for one
@@ -55,7 +62,7 @@ run (find the NVIDIA index from the RHI log above; it's usually `1`):
 
 ```powershell
 $env:QT_D3D_ADAPTER_INDEX = "1"
-.\arraw.exe
+.\arraw-gui.exe
 ```
 
 ### Linux — force the discrete GPU

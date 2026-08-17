@@ -91,7 +91,7 @@ private slots:
     void onRedecodeFinished();
     void onFullResNeeded();
 
-    // Settings Propagation (Milestone 8). Copy/Paste use the session-only
+    // Settings Propagation (docs/adr/0023). Copy/Paste use the session-only
     // settingsClipboard; presets persist via presetStore.
     void copySettings();
     void pasteSettings();
@@ -107,7 +107,7 @@ private:
     // checkable and exclusive, for the caller to drive from
     // matchingZoomPresetIndex(). Shared by the View > Zoom submenu and the
     // status bar's zoom dropdown so the two can't diverge
-    // (docs/superpowers/specs/2026-07-01-zoom-menu-design.md).
+    // (docs/adr/0056).
     struct ZoomMenuActions {
         QAction* fit;
         std::array<QAction*, kZoomPresets.size()> presets;
@@ -163,7 +163,7 @@ private:
     void applyPreset(const DevelopPreset& preset);
     void rebuildPresetsMenu(); // re-list saved presets after save/delete
     // Read-only breakdown of a preset's carried groups (Manage Presets' Details
-    // button, CONTEXT.md Manage Presets, docs/adr/0049).
+    // button, CONTEXT.md Manage Presets, docs/adr/0055).
     void showPresetDetails(const DevelopPreset& preset, QWidget* parent);
     void applyCurrentUserMetadata(
         const UserMetadata& metadata, const UserMetadataPresence& changedFields = {});
@@ -257,7 +257,7 @@ private:
     std::optional<ChromeHider> chromeHider;
     bool wasMaximized = false;
 
-    // Settings Propagation state (Milestone 8).
+    // Settings Propagation state (docs/adr/0023).
     std::optional<SettingsClipboard> settingsClipboard; // session-only, never the OS clipboard
     GroupSelection lastCopySelection = defaultCopySelection(); // Geometry off by default
     PresetStore presetStore;

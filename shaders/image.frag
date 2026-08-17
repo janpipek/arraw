@@ -711,7 +711,7 @@ void main() {
     c = applyGrain(c, vFrameUV);
 
     // Highlight roll-off — the last develop step, in the shared chain before the
-    // display/export fork so preview and export agree (docs/adr/0035). Catches
+    // display/export fork so preview and export agree (docs/adr/0040). Catches
     // headroom from every upstream control, including Local Adjustments.
     c = applyFilmicHighlights(c, u.filmicHighlights);
 

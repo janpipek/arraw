@@ -52,8 +52,8 @@ available:
 `arraw.exe` is a console-subsystem binary: run it bare to launch the editor
 (`arraw-gui.exe`), or give it a command — see [Command line](#command-line)
 below. The Start-menu / desktop shortcuts launch `arraw-gui.exe` directly, with
-no console. See the [Windows build guide](windows-build.md) and
-[diagnostics in AGENTS.md](../AGENTS.md#diagnostics).
+no console. If something misbehaves, the [FAQ](faq.md) covers the common runtime
+problems; to build it yourself see the [Windows build guide](windows-build.md).
 
 ## macOS
 

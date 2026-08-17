@@ -1,5 +1,5 @@
 Name:           arraw
-Version:        0.3.0
+Version:        0.3.1
 Release:        %{?snapshot_release}%{!?snapshot_release:1}%{?dist}
 Summary:        Lightweight RAW photo editor
 
@@ -61,6 +61,16 @@ appstreamcli validate --no-net \
 %{_datadir}/icons/hicolor/*/apps/io.github.janpipek.arraw.png
 
 %changelog
+* Tue Aug 04 2026 Jan Pipek <janpipek@users.noreply.github.com> - 0.3.1-1
+- Add the arraw command-line front end with export, preset, and info subcommands (ADR 0049/0050/0051/0053)
+- Add arraw export: sidecar-faithful headless batch export
+- Add arraw preset list/show/apply, plus in-app rename, delete, and details view
+- Add arraw info: report develop state, local masks, and spot counts per photo
+- Add Colour Grading: three-zone Oklab toning for colour and B&W images
+- Ship the Windows console/GUI executable pair, with PATH and shortcut installation
+- Split arraw_core into arraw_engine and arraw_ui (ADR 0049)
+- Fix an off-by-one in the installer's PATH cleanup on uninstall
+
 * Mon Jun 29 2026 Jan Pipek <janpipek@users.noreply.github.com> - 0.3.0-1
 - Add a Brush Mask type for painting local-adjustment masks on the image
 - Add a Black & White treatment with a hue-mixer monochrome conversion

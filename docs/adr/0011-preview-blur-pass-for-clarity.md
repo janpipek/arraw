@@ -1,7 +1,7 @@
 # Spatial global adjustments add a preview context pass
 
-CLAUDE.md and DESIGN.md state the preview invariant: *all adjustments travel in
-one uniform block, no CPU image processing, one draw*. Texture, Clarity, and
+arraw's preview invariant to this point was: *all adjustments travel in one
+uniform block, no CPU image processing, one draw*. Texture, Clarity, and
 Dehaze are spatial global controls, which mathematically need **neighbourhood
 context** — they cannot be computed correctly from each pixel in isolation. To
 preview them live we add an intermediate context pass feeding the main fragment
@@ -13,6 +13,26 @@ because it is fine, high-frequency detail that a quarter-res preview misrepresen
 Texture, Clarity, and Dehaze are different: they are "tune by eye until the photo
 reads right" controls, which are poor to set blind. So they get a live preview
 where Sharpen did not.
+
+## New adjustments are triaged by pipeline cost
+
+That fork generalises into the rule arraw uses whenever a batch of new adjustments
+is scoped — sort them by what the *preview* costs, not by what the panel looks
+like:
+
+1. **Per-pixel uniforms** — no neighbour reads, live preview through the existing
+   main pass, effectively free. Post-Crop Vignette and Grain shipped this way
+   (ADR 0026) and deliberately do **not** use the context pass introduced here.
+2. **Neighbourhood reads** — need context a single pixel does not have, so they
+   need this ADR's shared pre-pass. Texture, Clarity, Dehaze.
+3. **Needs full resolution to judge** — approximate at fit-zoom, so they want
+   caching, debouncing, and a 1:1 workflow. Deferred to their own milestones and
+   listed *with their cost* rather than dropped silently: Colour Noise Reduction
+   (ADR 0034), Luminance Noise Reduction (ADR 0046), profile-based Lens
+   Corrections (ADR 0032, which additionally needed a lens-profile database).
+
+Naming the cost tier up front is what keeps a cheap control from being blocked
+behind an expensive one that happens to sit near it in the UI.
 
 Dehaze deliberately starts as a **practical raw-editor approximation**, not a
 full atmospheric-scattering estimator. The physical model
@@ -50,10 +70,10 @@ contrast, and apply restrained chroma compensation.
   single place the pass(es) are recorded (`0006`) — grows to record the spatial
   pass before the main pass; export and histogram callers reuse the same path at
   their resolutions.
-- The "one uniform block, one draw" description in CLAUDE.md/DESIGN.md is now a
-  simplification true of every adjustment **except** spatial ones (Texture,
-  Clarity, and Dehaze now; Sharpen later). The pipeline order list in DESIGN.md
-  gains spatial context as an explicit step.
+- The "one uniform block, one draw" description is now a simplification, true of
+  every adjustment **except** spatial ones (Texture, Clarity, and Dehaze now;
+  Sharpen later). DESIGN.md's pipeline order list gains spatial context as an
+  explicit step.
 - Vignette and Grain, added in the same milestone, do **not** use this path —
   they remain per-pixel uniforms and preview single-pass.
 - Reduced-resolution preview is accepted as faithful enough for these broad

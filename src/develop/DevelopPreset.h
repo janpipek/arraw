@@ -7,7 +7,7 @@
 #include <QJsonObject>
 #include <QString>
 
-// A saved, named bundle of selected Develop Groups (Milestone 8; docs/adr/0023).
+// A saved, named bundle of selected Develop Groups (docs/adr/0023).
 // Invariant: `values` carries the source's fields only for the groups in
 // `groups`; every other group is left at its default. Serialisation is *partial*
 // — only the active groups are written, so a group's presence in the JSON file

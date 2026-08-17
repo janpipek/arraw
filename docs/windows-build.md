@@ -5,7 +5,7 @@ dependencies and **MSVC 2022** as the compiler. It documents the exact toolchain
 the non-obvious environment requirements, and fixes for every error you are likely
 to hit. It reflects a working setup verified on Windows 11 (June 2026).
 
-> The Linux/macOS instructions in [AGENTS.md](../AGENTS.md) are simpler because their
+> The Linux/macOS instructions in the [README](../README.md#building) are simpler because their
 > package managers put compilers, SDK tools, and Qt plugins on a single path. On
 > Windows the toolchain is split across three providers (vcpkg, MSVC, scoop), so a
 > few extra steps are required.
@@ -59,9 +59,11 @@ multithreaded — roughly 3× faster on a multi-core CPU (≈3s → ≈0.9s on t
 machine). It adds a dependency on the OpenMP runtime `vcomp140.dll`, which the
 packaging bundles app-local alongside the CRT DLLs (see §7 / ADR 0016) — no separate
 redistributable is required on the target machine. To profile, set the `ARRAW_TRACE`
-environment variable before launching `arraw.exe`; expensive operations (RAW load
-stages, colour transforms, LUT builds) print a `[trace] <label> N ms` line on stderr
-(see `src/Trace.h`).
+environment variable and launch `arraw-gui.exe` — the editor itself, redirecting
+stderr, since it is a GUI-subsystem binary with no console: `arraw-gui.exe 2>
+trace.txt`. (Launching `arraw.exe` starts the editor detached, so its trace never
+reaches your console.) Expensive operations (RAW load stages, colour transforms,
+LUT builds) print a `[trace] <label> N ms` line (see `src/core/Trace.h`).
 
 Verify they landed:
 
@@ -166,7 +168,8 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-A clean run builds `build\arraw.exe` and `build\tests\arraw_tests.exe`, and `ctest`
+A clean run builds `build\arraw.exe` (the console front-end), `build\arraw-gui.exe`
+(the editor), and `build\tests\arraw_tests.exe`, and `ctest`
 reports all tests passing. The two golden-image rendering tests are **skipped** under
 the headless offscreen platform used for tests — that is expected, not a failure (see
 §7).
@@ -249,7 +252,8 @@ python tools/package_windows.py
 
 Useful flags: `--skip-build` (zip an existing `build-release/` without rebuilding),
 `--vcvars`, `--toolchain`, `--vcpkg-installed`, `--lensfun-db-dir`, `--build-dir`,
-`--out-dir`. The archive contains `arraw.exe`, the Release Qt/libraw/lcms/lensfun
+`--out-dir`. The archive contains `arraw.exe` and `arraw-gui.exe`, the Release
+Qt/libraw/lcms/lensfun
 runtime DLLs, the `platforms\` / `imageformats\` plugin folders plus `jpeg62.dll`,
 and the bundled lensfun database under `lensfun\db\`. The package build configures
 with `ARRAW_WITH_LENSFUN=ON`, so it fails instead of silently shipping lens

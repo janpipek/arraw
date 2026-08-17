@@ -8,6 +8,11 @@ meaningless pixel values that surface as artifacts only after the output transfo
 Rec.2020 has all-real primaries and fully contains both target output gamuts
 (Display P3, AdobeRGB).
 
+**Camera input profiles (DCP/ICC) are explicitly out of scope.** arraw takes
+libraw's colorimetric decode as the input transform and does not apply a
+per-camera look profile. Adding one later would change the rendering of every
+existing sidecar, so it is a decision deferred deliberately, not an oversight.
+
 ## Consequences
 
 - Luma weights in `image.frag` change from Rec.709 (0.2126, 0.7152, 0.0722) to

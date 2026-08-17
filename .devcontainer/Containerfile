@@ -11,15 +11,15 @@
 # .devcontainer/devcontainer.json (VS Code / JetBrains / Zed).
 FROM fedora:44
 
-# One layer: the AGENTS.md build deps (gcc/cmake/ninja + Qt6 + RAW/colour/lens
-# libraries), the full lint/analysis set (clang-format, clazy, clang-tidy via
+# One layer: the AGENTS.md build deps (gcc/cmake/ninja + Qt6 + RAW/colour/lens/
+# metadata libraries), the full lint/analysis set (clang-format, clazy, clang-tidy via
 # clang-tools-extra), the Justfile's helpers (just, uv), node/npm for the agent,
 # and the GUI runtime bits (qtwayland + Mesa) used only when started with --gui.
 RUN dnf install -y --setopt=install_weak_deps=False \
         gcc-c++ cmake ninja-build git pkgconf-pkg-config \
         qt6-qtbase-devel qt6-qtbase-private-devel qt6-qtshadertools-devel \
         qt6-qttools-devel \
-        LibRaw-devel lcms2-devel lensfun-devel \
+        LibRaw-devel lcms2-devel lensfun-devel exiv2-devel \
         clang clang-tools-extra clazy \
         just uv nodejs npm \
         qt6-qtwayland mesa-dri-drivers mesa-vulkan-drivers \

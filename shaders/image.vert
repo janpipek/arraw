@@ -89,7 +89,7 @@ void main() {
     vImageUV = vUV;
 
     // Coarse Orientation maps the oriented display-frame UV to the native buffer
-    // (docs/adr/0028). Bit-exact mirror of orient::orientedToBuffer: undo the
+    // (docs/adr/0029). Bit-exact mirror of orient::orientedToBuffer: undo the
     // mirror first, then one quarter-turn (u,v)->(v,1-u) per step. Keeps GPU and
     // the CPU rotateTextureUv/Geometry overlays in lock-step.
     if (u.orientMirrored != 0)
