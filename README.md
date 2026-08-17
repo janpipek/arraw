@@ -2,7 +2,9 @@
 
 A lightweight, cross-platform RAW photo editor with a Lightroom-style development workflow. Real-time GPU preview, non-destructive editing, XMP sidecar output.
 
-⚠️✨ **WARNING** Though a lot of thinking and some basic knowledge of C++ and Qt has been put to the development, it is very heavily vibe-coded. Use at your own risk. ✨⚠️
+**WARNING** Though a lot of thinking and some basic knowledge of C++ and Qt has been put to the development, it is very heavily vibe-coded, including the documentation. Use at your own risk. ✨⚠️
+
+![Main window](docs/screenshots/main.png)
 
 ## Motivation
 
