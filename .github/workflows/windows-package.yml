@@ -27,7 +27,7 @@ jobs:
 
     steps:
       - name: Check out source
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -37,7 +37,7 @@ jobs:
       # success, which would discard the build on any failure.
       - name: Restore vcpkg downloads
         id: cache-downloads
-        uses: actions/cache/restore@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: C:\vcpkg\downloads
           key: vcpkg-downloads-windows-2022-${{ hashFiles('.github/workflows/windows-package.yml', 'CMakeLists.txt', 'vcpkg.json') }}
@@ -45,7 +45,7 @@ jobs:
             vcpkg-downloads-windows-2022-
 
       - name: Restore vcpkg binary packages
-        uses: actions/cache/restore@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: C:\vcpkg\binary-cache
           key: vcpkg-binary-cache-windows-2022-${{ github.run_id }}
@@ -180,14 +180,14 @@ jobs:
       # runs pick up via the restore-keys prefix.
       - name: Save vcpkg downloads
         if: always() && steps.cache-downloads.outputs.cache-hit != 'true'
-        uses: actions/cache/save@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: C:\vcpkg\downloads
           key: vcpkg-downloads-windows-2022-${{ hashFiles('.github/workflows/windows-package.yml', 'CMakeLists.txt', 'vcpkg.json') }}
 
       - name: Save vcpkg binary packages
         if: always()
-        uses: actions/cache/save@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: C:\vcpkg\binary-cache
           key: vcpkg-binary-cache-windows-2022-${{ github.run_id }}
