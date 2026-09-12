@@ -80,7 +80,9 @@ just clazy         # optional Qt-aware static analysis, requires clazy
 just tidy          # optional general static analysis, requires clang-tidy
 ```
 
-* **Formatter**: `clang-format` 18+ preferred. Keep formatting mechanical.
+* **Formatter**: `clang-format` 18+ preferred. Keep formatting mechanical. Prefer
+  running the just recipe to any concrete clang commands (which need human oversight
+  to be allowed). 
 * **Warnings** are the primary lint baseline — the normal CMake build enables
   `/W4` on MSVC, `-Wall -Wextra -Wpedantic` elsewhere. Do not introduce new
   warnings in touched code.
@@ -191,3 +193,8 @@ violated most:
 * Prefer the palette over QSS. Any QSS stays minimal and centralized in
   `Theme::apply()`; the per-widget sheet on the `AdjustmentPanel` curve buttons is
   the one sanctioned exception (semantic colours).
+
+## Computations & Algorithms
+* This software uses multiple reference frames when referring to the picture pixels,
+  valid at different stages of the image processing. Always make an informed decision
+  which reference frame to use whenever you need one.
