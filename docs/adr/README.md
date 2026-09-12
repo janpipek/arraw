@@ -53,6 +53,7 @@ no separate roadmap or milestone document to keep in sync.
 | [0035](0035-async-histogram-readback.md) | Histogram readback is async, recorded into the widget's own frame |
 | [0045](0045-async-export-and-thumbnail-cpu-tail.md) | Export and developed-thumbnail CPU tail runs off the GUI thread |
 | [0046](0046-luminance-noise-reduction-unified-edge-aware-pre-pass.md) | Luminance Noise Reduction unifies the NR pre-pass around an edge-aware luma filter |
+| [0058](0058-focus-peaking-full-res-post-adjustment.md) | Focus Peaking computes at full resolution, post-adjustment, and only while enabled |
 
 ### Develop model: geometry, masks, and corrections
 
