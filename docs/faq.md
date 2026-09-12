@@ -80,6 +80,29 @@ For an NVIDIA card on the PRIME render-offload setup, set these before launching
 __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia ./arraw
 ```
 
+> **On a Wayland desktop** (check with `echo $XDG_SESSION_TYPE` — this covers
+> GNOME, KDE Plasma's Wayland session, Hyprland, Sway, and similar), the
+> command above can fail instead of switching GPUs, with an error like
+> `QEGLPlatformContext: Failed to create context` and arraw reporting "no GPU
+> backend available." This isn't an arraw bug: your Wayland compositor runs on
+> the integrated GPU, and handing the *discrete* one to Qt for its own window
+> doesn't yet work reliably with every NVIDIA driver + compositor combination.
+>
+> Two ways around it, depending on what you're running:
+>
+> - **A headless command** (`system-info`, `export`, ...) doesn't need a window
+>   at all, so add `QT_QPA_PLATFORM=offscreen` and it always works:
+>   ```bash
+>   QT_QPA_PLATFORM=offscreen __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia arraw system-info
+>   ```
+> - **The editor itself** needs an actual window, so add `QT_QPA_PLATFORM=xcb`
+>   to run it through XWayland instead of native Wayland:
+>   ```bash
+>   QT_QPA_PLATFORM=xcb __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia ./arraw
+>   ```
+>   This is a workaround, not a fix — expect small differences from your usual
+>   Wayland session (e.g. no fractional scaling) while running this way.
+
 On an AMD/Mesa PRIME setup, use:
 
 ```bash
