@@ -18,9 +18,16 @@ integrated adapter to save power.
 
 ### First, confirm which GPU is actually in use
 
-Don't trust Task Manager's per-GPU graphs alone — ask Qt directly. Run arraw from
-a terminal with the RHI logging category on; it prints the adapter it selected at
-startup.
+Don't trust Task Manager's per-GPU graphs alone — ask Qt directly.
+
+The quickest way: open **Help > System Info...** in the GUI, or run
+`arraw system-info` (add `--json` for scripting) from a terminal. Both report
+the GPU backend and device Qt actually picked — no logging flags, no digging
+through a redirected log file.
+
+If you want the raw Qt RHI log instead (e.g. to see every adapter Qt
+considered, not just the one it picked), run arraw from a terminal with the
+RHI logging category on; it prints the adapter it selected at startup.
 
 **Windows** (PowerShell). Launch **`arraw-gui.exe`**, not `arraw.exe`: the latter
 is the console front-end, and it starts the editor as a *detached* process whose
