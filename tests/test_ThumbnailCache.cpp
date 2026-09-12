@@ -6,6 +6,18 @@
 #include <QFile>
 #include <QTemporaryDir>
 
+TEST_CASE(
+    "cacheRootPath reports the resolved cache directory, honouring ARRAW_CACHE_DIR",
+    "[thumbcache]") {
+    QTemporaryDir dir;
+    REQUIRE(dir.isValid());
+    qputenv("ARRAW_CACHE_DIR", dir.path().toLocal8Bit());
+
+    CHECK(ThumbnailCache::cacheRootPath() == dir.path());
+
+    qunsetenv("ARRAW_CACHE_DIR");
+}
+
 TEST_CASE("ThumbnailCache stores metadata sidecars keyed by file identity", "[thumbcache]") {
     QTemporaryDir dir;
     REQUIRE(dir.isValid());

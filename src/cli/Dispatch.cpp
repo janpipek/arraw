@@ -5,6 +5,8 @@
 #include "cli/InfoCommand.h"
 #include "cli/PresetArgs.h"
 #include "cli/PresetCommand.h"
+#include "cli/SystemInfoArgs.h"
+#include "cli/SystemInfoCommand.h"
 #include <string>
 #include <vector>
 #include <QFileInfo>
@@ -41,6 +43,7 @@ commands:
   export ...    render files through their develop sidecars; see 'arraw export --help'
   preset ...    list, show, or apply Develop Presets; see 'arraw preset --help'
   info <paths>  report EXIF and edit state for files; see 'arraw info --help'
+  system-info   report GPU backend, file locations, and versions
   version       print the version
   help          show this help
 )";
@@ -82,6 +85,16 @@ int dispatch(
         return runVerb(parseInfoArgs(verbArgs(argc, argv)), out, err, [&](const InfoInvocation& inv) {
             return runInfo(inv.paths, inv.json, out, err, style);
         });
+    }
+
+    if (cmd == QLatin1String("system-info")) {
+        return runVerb(
+            parseSystemInfoArgs(verbArgs(argc, argv)),
+            out,
+            err,
+            [&](const SystemInfoInvocation& inv) {
+                return runSystemInfo(inv.json, out, err, style);
+            });
     }
 
     if (cmd == QLatin1String("version") || cmd == QLatin1String("--version")) {

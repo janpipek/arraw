@@ -211,6 +211,7 @@ TEST_CASE("defaultPresetStore resolves under the shared app identity", "[presets
 
     const QString expectedDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
                                 + "/presets";
+    CHECK(store.directoryPath() == expectedDir);
     CHECK(QFile::exists(QDir(expectedDir).filePath(presetFileName("RegressionCheck"))));
 
     store.remove("RegressionCheck");

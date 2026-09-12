@@ -81,11 +81,17 @@ arraw --version
     arraw info photo.arw   # report a file's EXIF and edit state, read-only
     arraw info *.arw --json            # the same report as machine-readable
                                        # JSON, one object per file
+    arraw system-info      # report GPU backend, file locations, and versions
+    arraw system-info --json           # the same report as one JSON object
 
 `info` reads and never writes: it reports camera EXIF plus what the sidecar
 says — rating, colour label, descriptive fields, and which develop groups
 carry non-default values. The detail blocks pick up colour when they're
 going to a terminal, and stay plain when piped or when `NO_COLOR` is set.
+
+`system-info` is the headless counterpart of the editor's **Help > System
+Info...** dialog — useful for confirming which GPU backend/device arraw
+picked without opening a window (see [the FAQ](faq.md#my-laptop-has-a-discrete-gpu-but-arraw-seems-to-run-on-the-integrated-one)).
 
 Exports use each file's `.xmp` develop sidecar exactly as the editor would —
 no sidecar means the same defaults a freshly opened photo shows. On Windows

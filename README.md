@@ -29,7 +29,7 @@ A lightweight, cross-platform RAW photo editor with a Lightroom-style developmen
 - **Develop presets** — named, partial bundles of develop settings (arraw-native)
 - **Snapshots & history** — named A/B develop states saved per image; a session history of every edit step
 - **Copy / paste & batch** — copy settings between images, batch-paste, batch export
-- **Command line** — `arraw export`, `preset`, and `info` run headless; no window needed
+- **Command line** — `arraw export`, `preset`, `info`, and `system-info` run headless; no window needed
 - **GPU export** — full-resolution offscreen readback through the same shader pipeline; JPEG, PNG, TIFF (8- or 16-bit) output
 - **Exported metadata** — corrected capture-EXIF passthrough plus your descriptive XMP, per-group opt-in (GPS off by default)
 - **Film strip** — thumbnail strip with EXIF tooltips, arrow-key folder navigation, and filtering by rating or colour label
@@ -93,10 +93,11 @@ arraw ui photo.arw         # open the editor on a file or folder
 arraw export *.arw -o out/ # render through each file's develop sidecar
 arraw preset list          # list, show, or apply saved Develop Presets
 arraw info photo.arw       # report EXIF and edit state, read-only
+arraw system-info          # report GPU backend, file locations, and versions
 ```
 
-Add `--json` to `info` for machine-readable output. Full flags are in
-[docs/installation.md](docs/installation.md#command-line).
+Add `--json` to `info` or `system-info` for machine-readable output. Full
+flags are in [docs/installation.md](docs/installation.md#command-line).
 
 ## FAQ
 

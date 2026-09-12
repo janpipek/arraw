@@ -6,9 +6,9 @@
 #include <QTextStream>
 
 #if defined(Q_OS_WIN)
+#include <windows.h>
 #include <QFileInfo>
 #include <QProcess>
-#include <windows.h>
 #else
 #include "GuiMain.h"
 #endif
@@ -27,8 +27,8 @@ int main(int argc, char* argv[]) {
     const cli::GuiLauncher launchUi = [&err](const QString& openPath) {
         wchar_t self[MAX_PATH];
         GetModuleFileNameW(nullptr, self, MAX_PATH);
-        const QString gui
-            = QFileInfo(QString::fromWCharArray(self)).absolutePath() + "/arraw-gui.exe";
+        const QString gui = QFileInfo(QString::fromWCharArray(self)).absolutePath()
+                            + "/arraw-gui.exe";
         QStringList args;
         if (!openPath.isEmpty())
             args << openPath;
@@ -46,7 +46,11 @@ int main(int argc, char* argv[]) {
 
     // export renders on a QRhi, which needs a QGuiApplication and a platform
     // plugin (QT_QPA_PLATFORM=offscreen on display-less machines, ADR 0022).
-    if (argc >= 2 && std::strcmp(argv[1], "export") == 0) {
+    // system-info needs both for the same reason (its own headless QRhi,
+    // docs/adr/0057) plus the identity below for its QStandardPaths/QSettings
+    // facts to match the GUI's.
+    if (argc >= 2
+        && (std::strcmp(argv[1], "export") == 0 || std::strcmp(argv[1], "system-info") == 0)) {
         QGuiApplication app(argc, argv);
         applyApplicationIdentity(app);
         return cli::dispatch(argc, argv, launchUi, out, err, style);

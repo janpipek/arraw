@@ -78,6 +78,12 @@ public:
     // for a custom ratio with no named preset.
     crop::PresetMatch currentLockMatch() const;
 
+    // GPU backend/device diagnostics for Help > System Info (docs/adr/0057);
+    // nullopt until the QRhi has initialized (normally before first paint).
+    std::optional<QRhi::Implementation> graphicsBackend() const { return core.backend(); }
+
+    std::optional<QRhiDriverInfo> graphicsDriverInfo() const { return core.driverInfo(); }
+
     // Active-tool state machine. setActiveTool switches tools, committing any
     // pending edit of the tool being left (commit-on-leave); commitActiveTool
     // is setActiveTool(None); cancelActiveTool discards the pending edit (Esc).
