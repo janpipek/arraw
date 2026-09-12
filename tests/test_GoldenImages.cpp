@@ -9,6 +9,7 @@
 
 #include "TestApp.h"
 #include "pipeline/OkLab.h"
+#include "render/FocusPeaking.h"
 #include "render/HeadlessRenderContext.h"
 #include "render/OffscreenRender.h"
 #include "render/RendererCore.h"
@@ -650,4 +651,92 @@ TEST_CASE("clipping overlay matches golden render", "[gpu][golden]") {
     CHECK(d.maxDiff <= kMaxPixelDiff);
     for (int c = 0; c < 3; ++c)
         CHECK(std::abs(d.meanDiff[c]) <= kMaxChannelMean);
+}
+
+// Focus Peaking (docs/adr/0058): a property check rather than a pixel-diff
+// golden — there is no pre-existing reference image for a brand-new feature,
+// and creating one now would need an ARRAW_UPDATE_GOLDENS=1 step with nothing
+// yet to sanity-check it against. A synthetic scene with a hard black/white
+// edge on the left and a smooth linear gradient on the right: the edge column
+// should be flagged (pure yellow: R=G=1, B=0 — the overlay is a hard replace,
+// not a blend, see image.frag), the gradient column should not, and High
+// sensitivity should flag at least as much as Low.
+TEST_CASE("Focus Peaking flags a hard edge but not a smooth gradient", "[gpu][peaking]") {
+    RendererCore* core = goldenCore();
+    if (!core)
+        SKIP("no OpenGL context available on this machine");
+
+    const int w = 64, h = 32;
+    ImageBuffer scene;
+    scene.width = w;
+    scene.height = h;
+    scene.data.resize(size_t(w) * h * 3);
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            float v;
+            if (x < w / 2) {
+                v = x < w / 4 ? 0.0f : 1.0f; // hard edge at x == w/4
+            } else {
+                v = float(x - w / 2) / float(w / 2 - 1); // smooth ramp
+            }
+            const size_t i = (size_t(y) * w + x) * 3;
+            scene.data[i] = scene.data[i + 1] = scene.data[i + 2] = v;
+        }
+    }
+
+    GlobalAdjustment p; // neutral: peaking reflects the scene itself
+    const QImage got
+        = offscreen::renderFocusPeakingSample(*core, scene, p, FocusPeakingSensitivity::Mid);
+    REQUIRE_FALSE(got.isNull());
+    REQUIRE(got.format() == QImage::Format_RGBX32FPx4);
+
+    auto isYellow = [&](int x, int y) {
+        const float* px = reinterpret_cast<const float*>(got.constScanLine(y)) + x * 4;
+        return px[0] > 0.9f && px[1] > 0.9f && px[2] < 0.1f;
+    };
+
+    const int midY = h / 2;
+    bool edgeFlagged = false;
+    for (int x = w / 4 - 2; x <= w / 4 + 2; ++x)
+        edgeFlagged |= isYellow(x, midY);
+    CHECK(edgeFlagged);
+
+    bool flatFlagged = false;
+    for (int x = 2; x < w / 4 - 3; ++x)
+        flatFlagged |= isYellow(x, midY);
+    CHECK_FALSE(flatFlagged);
+}
+
+TEST_CASE("Focus Peaking High sensitivity flags at least as much as Low", "[gpu][peaking]") {
+    RendererCore* core = goldenCore();
+    if (!core)
+        SKIP("no OpenGL context available on this machine");
+
+    const int w = 64, h = 32;
+    ImageBuffer scene;
+    scene.width = w;
+    scene.height = h;
+    scene.data.resize(size_t(w) * h * 3);
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x) {
+            const float v = float(x) / float(w - 1); // one smooth ramp, low gradient magnitude
+            const size_t i = (size_t(y) * w + x) * 3;
+            scene.data[i] = scene.data[i + 1] = scene.data[i + 2] = v;
+        }
+
+    GlobalAdjustment p;
+    auto countFlagged = [&](FocusPeakingSensitivity s) {
+        const QImage got = offscreen::renderFocusPeakingSample(*core, scene, p, s);
+        REQUIRE_FALSE(got.isNull());
+        int n = 0;
+        for (int y = 0; y < got.height(); ++y) {
+            const float* row = reinterpret_cast<const float*>(got.constScanLine(y));
+            for (int x = 0; x < got.width(); ++x)
+                if (row[x * 4] > 0.9f && row[x * 4 + 1] > 0.9f && row[x * 4 + 2] < 0.1f)
+                    ++n;
+        }
+        return n;
+    };
+
+    CHECK(countFlagged(FocusPeakingSensitivity::High) >= countFlagged(FocusPeakingSensitivity::Low));
 }

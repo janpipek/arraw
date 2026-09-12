@@ -5,10 +5,12 @@
 TEST_CASE("Focus Peaking thresholds are ordered from least to most sensitive", "[peaking]") {
     // Low is the least sensitive (highest threshold, fewest edges flagged);
     // High is the most sensitive (lowest threshold, most edges flagged).
-    CHECK(kFocusPeakingThresholds[int(FocusPeakingSensitivity::Low)]
-          > kFocusPeakingThresholds[int(FocusPeakingSensitivity::Mid)]);
-    CHECK(kFocusPeakingThresholds[int(FocusPeakingSensitivity::Mid)]
-          > kFocusPeakingThresholds[int(FocusPeakingSensitivity::High)]);
+    CHECK(
+        kFocusPeakingThresholds[int(FocusPeakingSensitivity::Low)]
+        > kFocusPeakingThresholds[int(FocusPeakingSensitivity::Mid)]);
+    CHECK(
+        kFocusPeakingThresholds[int(FocusPeakingSensitivity::Mid)]
+        > kFocusPeakingThresholds[int(FocusPeakingSensitivity::High)]);
 }
 
 TEST_CASE("Focus Peaking thresholds stay in a sane normalised range", "[peaking]") {

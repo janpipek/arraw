@@ -250,10 +250,10 @@ private:
     bool aspectLandscape = true;
     QAction* saveAction;
     QAction* exportAction;
-    QAction* clipHighlightsAction; // View → Show Highlight Clipping
-    QAction* clipShadowsAction;    // View → Show Shadow Clipping
-    QAction* sensorClipAction;     // View → Show Sensor Clipping
-    QAction* focusPeakingAction;   // View → Show Focus Peaking
+    QAction* clipHighlightsAction;                          // View → Show Highlight Clipping
+    QAction* clipShadowsAction;                             // View → Show Shadow Clipping
+    QAction* sensorClipAction;                              // View → Show Sensor Clipping
+    QAction* focusPeakingAction;                            // View → Show Focus Peaking
     std::array<QAction*, 3> focusPeakingSensitivityActions; // Low/Mid/High submenu
     QAction* fullScreenAction = nullptr;
     QAction* lightsOutAction = nullptr;

@@ -1,4 +1,5 @@
 #pragma once
+#include "render/FocusPeaking.h"
 #include <QImage>
 
 struct GlobalAdjustment;
@@ -22,5 +23,16 @@ QImage renderClipSample(
     const GlobalAdjustment& p,
     bool clipHighlights,
     bool clipShadows);
+
+// The on-screen display path (sRGB encode) with Focus Peaking on, uploading
+// buf to Slot::FullRes explicitly — ensureFocusPeakingMask always samples
+// Slot::FullRes regardless of which slot the caller would normally draw
+// (docs/adr/0058), so the sample must land there rather than the temporary
+// texture the ImageBuffer overload of renderOffscreen/renderClipSample uses.
+QImage renderFocusPeakingSample(
+    RendererCore& core,
+    const ImageBuffer& buf,
+    const GlobalAdjustment& p,
+    FocusPeakingSensitivity sensitivity);
 
 } // namespace offscreen
