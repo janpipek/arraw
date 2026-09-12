@@ -217,6 +217,7 @@ set(ENGINE_SOURCES
     src/core/CropGeometry.cpp
     src/core/Orientation.cpp
     src/core/NoiseReduction.cpp
+    src/core/SystemInfo.cpp
     src/develop/BasicTone.cpp
     src/develop/WhiteBalance.cpp
     src/develop/LocalAdjustment.cpp
@@ -270,6 +271,7 @@ set(UI_SOURCES
     src/ui/FilmStripLayout.cpp
     src/ui/ExportDialog.cpp
     src/ui/AboutDialog.cpp
+    src/ui/SystemInfoDialog.cpp
     src/ui/GroupChecklistDialog.cpp
     src/ui/SpotRemovalPanel.cpp
     src/ui/HistoryPanel.cpp
@@ -324,6 +326,8 @@ add_library(arraw_cli STATIC
     src/cli/ImagePathPreflight.cpp
     src/cli/InfoArgs.cpp
     src/cli/InfoCommand.cpp
+    src/cli/SystemInfoArgs.cpp
+    src/cli/SystemInfoCommand.cpp
     src/cli/TextStyle.cpp
     src/cli/Dispatch.cpp
 )

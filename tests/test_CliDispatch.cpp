@@ -97,6 +97,23 @@ TEST_CASE("info --json reaches the command through dispatch") {
     REQUIRE(h.outText.trimmed().startsWith("["));
 }
 
+TEST_CASE("system-info is a reserved verb, dispatched with no paths") {
+    qputenv("ARRAW_RHI_BACKEND", "null"); // deterministic GPU facts, see docs/adr/0057
+    Harness h;
+    REQUIRE(h.run({"system-info"}) == 0);
+    REQUIRE(h.outText.contains("Backend"));
+    REQUIRE(h.launches.isEmpty());
+    qunsetenv("ARRAW_RHI_BACKEND");
+}
+
+TEST_CASE("system-info --json reaches the command through dispatch") {
+    qputenv("ARRAW_RHI_BACKEND", "null");
+    Harness h;
+    REQUIRE(h.run({"system-info", "--json"}) == 0);
+    REQUIRE(h.outText.trimmed().startsWith("{"));
+    qunsetenv("ARRAW_RHI_BACKEND");
+}
+
 TEST_CASE("help lists info among the commands") {
     Harness h;
     REQUIRE(h.run({"help"}) == 0);

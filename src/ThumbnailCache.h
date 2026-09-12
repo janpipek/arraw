@@ -22,6 +22,10 @@ public:
     static QImage loadFromDisk(const QString& rawPath);
     static QString cachePathFor(const QString& rawPath);
 
+    // The resolved cache root (honours the ARRAW_CACHE_DIR override), for
+    // Help > System Info (docs/adr/0057).
+    static QString cacheRootPath();
+
     // Overwrite the cache entry for rawPath with a developed thumbnail (one that
     // reflects the current edits), replacing the camera-embedded thumbnail.
     static bool store(const QString& rawPath, const QImage& image);

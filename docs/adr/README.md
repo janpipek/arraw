@@ -94,6 +94,7 @@ no separate roadmap or milestone document to keep in sync.
 | [0031](0031-neutral-dark-fusion-theme.md) | Neutral dark photographer-friendly theme via Fusion + a single-sourced palette |
 | [0042](0042-film-strip-rating-and-colour-filter.md) | Filtering the film strip by rating and colour label |
 | [0056](0056-zoom-presets-one-shared-list.md) | Zoom presets come from one shared list, with the preset match extracted as pure logic |
+| [0057](0057-system-info-dialog-pure-snapshot.md) | System Info dialog reports GPU, paths, and versions from one pure snapshot function |
 
 ### Command-line front-end
 

@@ -18,9 +18,16 @@ integrated adapter to save power.
 
 ### First, confirm which GPU is actually in use
 
-Don't trust Task Manager's per-GPU graphs alone — ask Qt directly. Run arraw from
-a terminal with the RHI logging category on; it prints the adapter it selected at
-startup.
+Don't trust Task Manager's per-GPU graphs alone — ask Qt directly.
+
+The quickest way: open **Help > System Info...** in the GUI, or run
+`arraw system-info` (add `--json` for scripting) from a terminal. Both report
+the GPU backend and device Qt actually picked — no logging flags, no digging
+through a redirected log file.
+
+If you want the raw Qt RHI log instead (e.g. to see every adapter Qt
+considered, not just the one it picked), run arraw from a terminal with the
+RHI logging category on; it prints the adapter it selected at startup.
 
 **Windows** (PowerShell). Launch **`arraw-gui.exe`**, not `arraw.exe`: the latter
 is the console front-end, and it starts the editor as a *detached* process whose
@@ -72,6 +79,29 @@ For an NVIDIA card on the PRIME render-offload setup, set these before launching
 ```bash
 __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia ./arraw
 ```
+
+> **On a Wayland desktop** (check with `echo $XDG_SESSION_TYPE` — this covers
+> GNOME, KDE Plasma's Wayland session, Hyprland, Sway, and similar), the
+> command above can fail instead of switching GPUs, with an error like
+> `QEGLPlatformContext: Failed to create context` and arraw reporting "no GPU
+> backend available." This isn't an arraw bug: your Wayland compositor runs on
+> the integrated GPU, and handing the *discrete* one to Qt for its own window
+> doesn't yet work reliably with every NVIDIA driver + compositor combination.
+>
+> Two ways around it, depending on what you're running:
+>
+> - **A headless command** (`system-info`, `export`, ...) doesn't need a window
+>   at all, so add `QT_QPA_PLATFORM=offscreen` and it always works:
+>   ```bash
+>   QT_QPA_PLATFORM=offscreen __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia arraw system-info
+>   ```
+> - **The editor itself** needs an actual window, so add `QT_QPA_PLATFORM=xcb`
+>   to run it through XWayland instead of native Wayland:
+>   ```bash
+>   QT_QPA_PLATFORM=xcb __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia ./arraw
+>   ```
+>   This is a workaround, not a fix — expect small differences from your usual
+>   Wayland session (e.g. no fractional scaling) while running this way.
 
 On an AMD/Mesa PRIME setup, use:
 

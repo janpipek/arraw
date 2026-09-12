@@ -98,10 +98,12 @@ private slots:
     void saveCurrentAsPreset();
     void managePresets();
     void showAboutDialog();
+    void showSystemInfoDialog();
 
 private:
     void setupMenus();
     void setupImageMenu();
+
     // Appends "Fit" then one action per kZoomPresets entry to `menu`, wired to
     // the viewport. If `group` is given, the preset actions (not Fit) are made
     // checkable and exclusive, for the caller to drive from
@@ -112,6 +114,7 @@ private:
         QAction* fit;
         std::array<QAction*, kZoomPresets.size()> presets;
     };
+
     ZoomMenuActions addZoomPresetActions(QMenu* menu, QActionGroup* group = nullptr);
     // Enables/disables the Zoom submenu (no image => nothing to zoom, mirrors
     // zoomButton's visibility) and checks whichever preset matches `zoom`.
@@ -218,17 +221,17 @@ private:
     HistoryPanel* historyPanel;
     FilmStrip* filmStrip;
     QDockWidget* filmStripDock;
-    QDockWidget* historyDock;     // left; History list + Snapshots (docs/adr/0038)
-    QDockWidget* adjustmentsDock; // right; Adjustments/Masks/Spots/Info
-    std::unique_ptr<CollapsiblePane> historyPane;     // historyDock ↔ edge strip
+    QDockWidget* historyDock;                     // left; History list + Snapshots (docs/adr/0038)
+    QDockWidget* adjustmentsDock;                 // right; Adjustments/Masks/Spots/Info
+    std::unique_ptr<CollapsiblePane> historyPane; // historyDock ↔ edge strip
     std::unique_ptr<CollapsiblePane> adjustmentsPane; // adjustmentsDock ↔ edge strip
     QToolBar* mainToolBar = nullptr;
     QUndoStack* undoStack;
     QLabel* statusLabel;
     QLabel* proofLabel;
     QToolButton* zoomButton;
-    QMenu* zoomMenu = nullptr;                                     // View → Zoom submenu
-    QActionGroup* zoomPresetGroup = nullptr;                       // exclusive preset actions in zoomMenu
+    QMenu* zoomMenu = nullptr;               // View → Zoom submenu
+    QActionGroup* zoomPresetGroup = nullptr; // exclusive preset actions in zoomMenu
     std::array<QAction*, kZoomPresets.size()> zoomPresetActions{}; // kZoomPresets order
 
     // Toolbar: modal tools (left) + immediate actions (right).
