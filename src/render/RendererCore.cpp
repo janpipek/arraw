@@ -64,6 +64,7 @@ void RendererCore::initialize(QRhi* r) {
     nrRecombineFs = loadShader(QStringLiteral(":/shaders/nr_recombine.frag.qsb"));
     nrBilateralHFs = loadShader(QStringLiteral(":/shaders/lum_bilateral_h.frag.qsb"));
     nrBilateralVFs = loadShader(QStringLiteral(":/shaders/lum_bilateral_v.frag.qsb"));
+    peakingEdgeFs = loadShader(QStringLiteral(":/shaders/peaking_edge.frag.qsb"));
 
     vbuf.reset(rhi->newBuffer(QRhiBuffer::Immutable, QRhiBuffer::VertexBuffer, sizeof(kQuad)));
     vbuf->create();
@@ -81,6 +82,14 @@ void RendererCore::initialize(QRhi* r) {
     spatialUbuf.reset(
         rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, sizeof(NrUbuf)));
     spatialUbuf->create();
+
+    focusPeakingSourceUbuf.reset(
+        rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, sizeof(Ubuf)));
+    focusPeakingSourceUbuf->create();
+
+    peakingEdgeUbuf.reset(
+        rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, sizeof(NrUbuf)));
+    peakingEdgeUbuf->create();
 
     sampler.reset(rhi->newSampler(
         QRhiSampler::Linear,
@@ -137,7 +146,15 @@ void RendererCore::release() {
     srbImageTex = nullptr;
     srbSensorClipTex = nullptr;
     srbSpatialTex = nullptr;
+    srbPeakingMaskTex = nullptr;
     srbGeneration = -1;
+    peakingEdgePipe.reset();
+    peakingEdgeSrb.reset();
+    peakingEdgeSrbTex = nullptr;
+    focusPeakingSourceSrb.reset();
+    focusPeakingSourceUbuf.reset();
+    peakingEdgeUbuf.reset();
+    focusPeakingSlot = FocusPeakingSlot{};
     nrPipeExtract.reset();
     nrPipeBlurH.reset();
     nrPipeBlurV.reset();
@@ -473,7 +490,8 @@ void RendererCore::buildBindings(
     QRhiBuffer* ub,
     QRhiTexture* tex,
     QRhiTexture* sensorTex,
-    QRhiTexture* spatialTex) {
+    QRhiTexture* spatialTex,
+    QRhiTexture* peakingMaskTex) {
     dst.reset(rhi->newShaderResourceBindings());
     dst->setBindings({
         QRhiShaderResourceBinding::uniformBuffer(
@@ -495,20 +513,23 @@ void RendererCore::buildBindings(
             QRhiShaderResourceBinding::FragmentStage,
             brushMaskArrayTex ? brushMaskArrayTex.get() : brushMaskDummyTex.get(),
             sampler.get()),
+        QRhiShaderResourceBinding::sampledTexture(
+            8, QRhiShaderResourceBinding::FragmentStage, peakingMaskTex, sampler.get()),
     });
     dst->create();
 }
 
 QRhiShaderResourceBindings* RendererCore::bindingsFor(
-    QRhiTexture* tex, QRhiTexture* sensorTex, QRhiTexture* spatialTex) {
+    QRhiTexture* tex, QRhiTexture* sensorTex, QRhiTexture* spatialTex, QRhiTexture* peakingMaskTex) {
     if (srb && srbImageTex == tex && srbSensorClipTex == sensorTex && srbSpatialTex == spatialTex
-        && srbGeneration == generation)
+        && srbPeakingMaskTex == peakingMaskTex && srbGeneration == generation)
         return srb.get();
 
-    buildBindings(srb, ubuf.get(), tex, sensorTex, spatialTex);
+    buildBindings(srb, ubuf.get(), tex, sensorTex, spatialTex, peakingMaskTex);
     srbImageTex = tex;
     srbSensorClipTex = sensorTex;
     srbSpatialTex = spatialTex;
+    srbPeakingMaskTex = peakingMaskTex;
     srbGeneration = generation;
     return srb.get();
 }
@@ -761,9 +782,11 @@ void RendererCore::recordPass(
     QRhiTexture* tex,
     QRhiTexture* sensorTex,
     QRhiTexture* spatialTex,
+    QRhiTexture* peakingMaskTex,
     const FrameParams& fp,
     QRhiResourceUpdateBatch* batch) {
-    recordPassWith(cb, rt, fp, batch, ubuf.get(), bindingsFor(tex, sensorTex, spatialTex));
+    recordPassWith(
+        cb, rt, fp, batch, ubuf.get(), bindingsFor(tex, sensorTex, spatialTex, peakingMaskTex));
 }
 
 // ── Colour Noise Reduction pre-pass (docs/adr/0034) ──────────────────────────
@@ -1079,6 +1102,144 @@ QRhiTexture* RendererCore::ensureSpatialContext(QRhiCommandBuffer* cb, int key, 
     return ss.lumaA.get();
 }
 
+// ── Focus Peaking (docs/adr/0058) ────────────────────────────────────────────
+
+void RendererCore::ensureFocusPeakingSlot(QSize fullSize) {
+    if (focusPeakingSlot.mask && focusPeakingSlot.size == fullSize
+        && focusPeakingSlot.gen == generation)
+        return;
+    focusPeakingSlot.size = fullSize;
+
+    auto make = [&](std::unique_ptr<QRhiTexture>& tex,
+                    std::unique_ptr<QRhiTextureRenderTarget>& rt) {
+        tex.reset(rhi->newTexture(
+            QRhiTexture::RGBA32F,
+            fullSize,
+            1,
+            QRhiTexture::RenderTarget | QRhiTexture::UsedAsTransferSource));
+        tex->create();
+        QRhiColorAttachment att(tex.get());
+        rt.reset(rhi->newTextureRenderTarget({att}));
+        rt->setRenderPassDescriptor(nrRpDesc.get()); // shared RGBA32F descriptor (ensureNrResources)
+        rt->create();
+    };
+    make(focusPeakingSlot.source, focusPeakingSlot.sourceRT);
+    make(focusPeakingSlot.mask, focusPeakingSlot.maskRT);
+    focusPeakingSlot.gen = generation;
+    peakingEdgeSrbTex = nullptr; // force the edge pass's srb to rebuild against the new source
+}
+
+QRhiTexture* RendererCore::ensureFocusPeakingMask(
+    QRhiCommandBuffer* cb, const FrameParams& fp, FocusPeakingSensitivity sensitivity) {
+    QRhiTexture* srcTex = imageTex[1].get(); // always FullRes (docs/adr/0058), never the preview
+    if (!srcTex)
+        return sensorClipDummyTex.get(); // caller already checked hasImage(Slot::FullRes)
+
+    ensureNrResources(); // shares nrRpDesc + NrUbuf layout this pass reuses
+
+    QRhiTexture* spatialTex = sensorClipDummyTex.get();
+    if (nrActive(fp.adjustments)) {
+        // Key 1 (FullRes) — shared with the on-screen path's own FullRes NR cache
+        // when the user is also zoomed to 100%+, so the pre-pass runs once, not
+        // twice, in that common case.
+        srcTex = ensureDenoised(
+            cb,
+            1,
+            srcTex,
+            fp.adjustments.colorNoiseReductionSmoothness,
+            fp.adjustments.colorNoiseReduction,
+            fp.adjustments.luminanceNoiseReduction,
+            fp.adjustments.luminanceNoiseReductionDetail);
+    }
+    if (spatialContextActive(fp.adjustments))
+        spatialTex = ensureSpatialContext(cb, 1, srcTex);
+
+    ensureFocusPeakingSlot(srcTex->pixelSize());
+
+    // Pass 1: the full develop pipeline, overlays off, soft-proof-independent
+    // (docs/adr/0058) — reuses image.frag/image.vert unmodified, just rendered
+    // into an offscreen full-res target instead of the on-screen widget target.
+    FrameParams fpSource = fp;
+    fpSource.useLut = false; // never the soft-proof LUT — peaking stays display-independent
+    fpSource.gamutWarn = false;
+    fpSource.clipHighlights = false;
+    fpSource.clipShadows = false;
+    fpSource.sensorClip = false;
+    fpSource.focusPeaking = false; // no-op anyway (dummy mask below), but explicit
+    fpSource.maskOverlay = -1;
+    fpSource.curveInput = false;
+    fpSource.wbInput = false;
+    fpSource.histoRaw = false;
+    fpSource.displayEncode = true;
+
+    QRhiResourceUpdateBatch* sourceBatch = rhi->nextResourceUpdateBatch();
+    buildBindings(
+        focusPeakingSourceSrb,
+        focusPeakingSourceUbuf.get(),
+        srcTex,
+        sensorClipDummyTex.get(),
+        spatialTex,
+        sensorClipDummyTex.get()); // dummy peaking mask: this pass must not self-reference
+    recordPassWith(
+        cb,
+        focusPeakingSlot.sourceRT.get(),
+        fpSource,
+        sourceBatch,
+        focusPeakingSourceUbuf.get(),
+        focusPeakingSourceSrb.get());
+
+    // Pass 2: Sobel gradient magnitude + threshold (shaders/peaking_edge.frag).
+    // Follows ensureSpatialContext/ensureDenoised's exact idiom: the srb is
+    // rebuilt whenever the sampled texture changes, but the pipeline object is
+    // created exactly once (its srb pointer only fixes the bindings *layout*).
+    if (!peakingEdgeSrb || peakingEdgeSrbTex != focusPeakingSlot.source.get()) {
+        peakingEdgeSrb.reset(rhi->newShaderResourceBindings());
+        peakingEdgeSrb->setBindings(
+            {QRhiShaderResourceBinding::uniformBuffer(
+                 0,
+                 QRhiShaderResourceBinding::VertexStage | QRhiShaderResourceBinding::FragmentStage,
+                 peakingEdgeUbuf.get()),
+             QRhiShaderResourceBinding::sampledTexture(
+                 1,
+                 QRhiShaderResourceBinding::FragmentStage,
+                 focusPeakingSlot.source.get(),
+                 sampler.get())});
+        peakingEdgeSrb->create();
+        peakingEdgeSrbTex = focusPeakingSlot.source.get();
+    }
+    if (!peakingEdgePipe) {
+        peakingEdgePipe.reset(rhi->newGraphicsPipeline());
+        peakingEdgePipe->setTopology(QRhiGraphicsPipeline::TriangleStrip);
+        peakingEdgePipe->setShaderStages(
+            {{QRhiShaderStage::Vertex, nrVs}, {QRhiShaderStage::Fragment, peakingEdgeFs}});
+        QRhiVertexInputLayout vl;
+        vl.setBindings({{4 * sizeof(float)}});
+        vl.setAttributes({
+            {0, 0, QRhiVertexInputAttribute::Float2, 0},
+            {0, 1, QRhiVertexInputAttribute::Float2, 2 * sizeof(float)},
+        });
+        peakingEdgePipe->setVertexInputLayout(vl);
+        peakingEdgePipe->setShaderResourceBindings(peakingEdgeSrb.get());
+        peakingEdgePipe->setRenderPassDescriptor(nrRpDesc.get());
+        peakingEdgePipe->create();
+    }
+
+    NrUbuf nb{};
+    const QMatrix4x4 cc = rhi->clipSpaceCorrMatrix();
+    std::memcpy(nb.clipCorr, cc.constData(), sizeof(nb.clipCorr));
+    const QSize srcSize = focusPeakingSlot.source->pixelSize();
+    nb.invChroma[0] = 1.0f / float(srcSize.width());
+    nb.invChroma[1] = 1.0f / float(srcSize.height());
+    nb.flipV = rhi->isYUpInFramebuffer() ? 1 : 0;
+    nb.strength = kFocusPeakingThresholds[int(sensitivity)];
+
+    QRhiResourceUpdateBatch* edgeBatch = rhi->nextResourceUpdateBatch();
+    edgeBatch->updateDynamicBuffer(peakingEdgeUbuf.get(), 0, sizeof(NrUbuf), &nb);
+    nrPass(cb, focusPeakingSlot.maskRT.get(), peakingEdgePipe.get(), peakingEdgeSrb.get(), edgeBatch);
+
+    return focusPeakingSlot.mask.get();
+}
+
 void RendererCore::record(
     QRhiCommandBuffer* cb, QRhiRenderTarget* rt, Slot slot, const FrameParams& fp) {
     if (!hasImage(slot)) {
@@ -1094,6 +1255,7 @@ void RendererCore::record(
     QRhiTexture* sensorTex = sensorClipTex[slotIndex] ? sensorClipTex[slotIndex].get()
                                                       : sensorClipDummyTex.get();
     QRhiTexture* spatialTex = sensorClipDummyTex.get();
+    QRhiTexture* peakingMaskTex = sensorClipDummyTex.get();
     if (nrActive(fp.adjustments)) {
         cb->resourceUpdate(batch); // apply uploads before the NR pre-passes
         tex = ensureDenoised(
@@ -1111,7 +1273,12 @@ void RendererCore::record(
         spatialTex = ensureSpatialContext(cb, slotIndex, tex);
         batch = rhi->nextResourceUpdateBatch();
     }
-    recordPass(cb, rt, tex, sensorTex, spatialTex, fp, batch);
+    if (fp.focusPeaking && hasImage(Slot::FullRes)) {
+        cb->resourceUpdate(batch);
+        peakingMaskTex = ensureFocusPeakingMask(cb, fp, fp.focusPeakingSensitivity);
+        batch = rhi->nextResourceUpdateBatch();
+    }
+    recordPass(cb, rt, tex, sensorTex, spatialTex, peakingMaskTex, fp, batch);
 }
 
 void RendererCore::clear(QRhiCommandBuffer* cb, QRhiRenderTarget* rt) {
@@ -1168,6 +1335,7 @@ QImage RendererCore::renderOffscreenTex(
                                  ? sensorClipTex[slotIndex].get()
                                  : sensorClipDummyTex.get();
     QRhiTexture* spatialTex = sensorClipDummyTex.get();
+    QRhiTexture* peakingMaskTex = sensorClipDummyTex.get();
     if (nrActive(fp.adjustments)) {
         // key 2 is the export/extTex scratch; its source texture changes every
         // call, so force a recompute rather than trust the (smoothness,strength) cache.
@@ -1191,7 +1359,12 @@ QImage RendererCore::renderOffscreenTex(
         spatialTex = ensureSpatialContext(cb, spatialKey, tex);
         batch = rhi->nextResourceUpdateBatch();
     }
-    recordPass(cb, rt.get(), tex, sensorTex, spatialTex, fp, batch);
+    if (fp.focusPeaking && hasImage(Slot::FullRes)) {
+        cb->resourceUpdate(batch);
+        peakingMaskTex = ensureFocusPeakingMask(cb, fp, fp.focusPeakingSensitivity);
+        batch = rhi->nextResourceUpdateBatch();
+    }
+    recordPass(cb, rt.get(), tex, sensorTex, spatialTex, peakingMaskTex, fp, batch);
 
     QRhiReadbackResult rr;
     QRhiResourceUpdateBatch* readBatch = rhi->nextResourceUpdateBatch();
@@ -1280,6 +1453,9 @@ bool RendererCore::recordOffscreenReadback(
     QRhiTexture* sensorTex = sensorClipTex[slotIndex] ? sensorClipTex[slotIndex].get()
                                                       : sensorClipDummyTex.get();
     QRhiTexture* spatialTex = sensorClipDummyTex.get();
+    // Focus Peaking never leaks into this readback (docs/adr/0058), same as
+    // clipWarn/sensorClipWarn — always the dummy, regardless of fp.focusPeaking.
+    QRhiTexture* peakingMaskTex = sensorClipDummyTex.get();
     if (nrActive(fp.adjustments)) {
         cb->resourceUpdate(batch);
         tex = ensureDenoised(
@@ -1301,11 +1477,13 @@ bool RendererCore::recordOffscreenReadback(
     // on-screen `ubuf` — so this pass cannot clobber the main pass's uniforms
     // within the frame they share (see ReadbackTarget::ubuf).
     if (!t->srb || t->srbImageTex != tex || t->srbSensorTex != sensorTex
-        || t->srbSpatialTex != spatialTex || t->srbGeneration != generation) {
-        buildBindings(t->srb, t->ubuf.get(), tex, sensorTex, spatialTex);
+        || t->srbSpatialTex != spatialTex || t->srbPeakingMaskTex != peakingMaskTex
+        || t->srbGeneration != generation) {
+        buildBindings(t->srb, t->ubuf.get(), tex, sensorTex, spatialTex, peakingMaskTex);
         t->srbImageTex = tex;
         t->srbSensorTex = sensorTex;
         t->srbSpatialTex = spatialTex;
+        t->srbPeakingMaskTex = peakingMaskTex;
         t->srbGeneration = generation;
     }
     recordPassWith(cb, t->rt.get(), fp, batch, t->ubuf.get(), t->srb.get());

@@ -3,6 +3,7 @@
 #include "core/ImageBuffer.h"
 #include "develop/BasicTone.h"
 #include "develop/GlobalAdjustment.h"
+#include "render/FocusPeaking.h"
 #include <array>
 #include <cstddef>
 #include <functional>
@@ -143,6 +144,8 @@ public:
         bool clipHighlights = false; // sRGB-relative clipping overlay (docs/adr/0009)
         bool clipShadows = false;
         bool sensorClip = false; // RAW mosaic saturation overlay, display-only
+        bool focusPeaking = false; // Sobel edge-detection overlay, display-only (docs/adr/0058)
+        FocusPeakingSensitivity focusPeakingSensitivity = FocusPeakingSensitivity::Mid;
         bool histoRaw = false;   // emit pre-clamp sRGB-linear for overflow histogram
         int maskOverlay = -1;    // tint this mask's region red (on-screen edit only); -1 = off
         GlobalAdjustment adjustments;
@@ -204,6 +207,7 @@ private:
         QRhiTexture* imageTex,
         QRhiTexture* sensorClipTex,
         QRhiTexture* spatialTex,
+        QRhiTexture* peakingMaskTex,
         const FrameParams& fp,
         QRhiResourceUpdateBatch* batch);
     // recordPass variant driving an explicit uniform buffer + bindings, so a pass
@@ -221,7 +225,8 @@ private:
         QRhiBuffer* ub,
         QRhiTexture* imageTex,
         QRhiTexture* sensorClipTex,
-        QRhiTexture* spatialTex);
+        QRhiTexture* spatialTex,
+        QRhiTexture* peakingMaskTex);
     QImage renderOffscreenTex(
         int slotIndex,
         QRhiTexture* extTex,
@@ -253,6 +258,7 @@ private:
         QRhiTexture* srbImageTex = nullptr;
         QRhiTexture* srbSensorTex = nullptr;
         QRhiTexture* srbSpatialTex = nullptr;
+        QRhiTexture* srbPeakingMaskTex = nullptr;
         int srbGeneration = -1;
     };
 
@@ -264,8 +270,21 @@ private:
 
     QRhiGraphicsPipeline* pipelineFor(QRhiRenderPassDescriptor* rpDesc);
     QRhiShaderResourceBindings* bindingsFor(
-        QRhiTexture* imageTex, QRhiTexture* sensorClipTex, QRhiTexture* spatialTex);
+        QRhiTexture* imageTex,
+        QRhiTexture* sensorClipTex,
+        QRhiTexture* spatialTex,
+        QRhiTexture* peakingMaskTex);
     void fillUbuf(Ubuf& ub, const FrameParams& fp) const;
+
+    // Focus Peaking (docs/adr/0058). Always reads imageTex[FullRes] regardless
+    // of which Slot is being drawn on screen — the overlay's whole point is to
+    // be accurate at any zoom. Two-pass: render the full develop pipeline
+    // (overlays off, soft-proof off) into a full-res offscreen target, then a
+    // Sobel-magnitude + threshold pass turns that into a 0/1 mask. Returns a
+    // valid dummy (all-zero) when the toggle is off or FullRes isn't loaded.
+    QRhiTexture* ensureFocusPeakingMask(
+        QRhiCommandBuffer* cb, const FrameParams& fp, FocusPeakingSensitivity sensitivity);
+    void ensureFocusPeakingSlot(QSize fullSize);
 
     // Spatial Global Adjustments (docs/adr/0011). Builds one reduced-resolution
     // blurred luminance texture shared by Clarity and Dehaze; Texture uses direct
@@ -317,6 +336,7 @@ private:
     QRhiTexture* srbImageTex = nullptr;
     QRhiTexture* srbSensorClipTex = nullptr;
     QRhiTexture* srbSpatialTex = nullptr;
+    QRhiTexture* srbPeakingMaskTex = nullptr;
     int srbGeneration = -1;
     int generation = 0; // bumped whenever any texture is (re)created
 
@@ -402,6 +422,31 @@ private:
     QRhiTexture* spatialSrbExtractTex = nullptr;
     QRhiTexture* spatialSrbBlurHTex = nullptr;
     QRhiTexture* spatialSrbBlurVTex = nullptr;
+
+    // ── Focus Peaking (docs/adr/0058) ────────────────────────────────────────
+    // Two full-res RGBA32F offscreen targets, always sized to imageTex[FullRes]
+    // regardless of the zoom level being drawn on screen: `source` holds the
+    // full develop pipeline's output (overlays/soft-proof off), `mask` the
+    // Sobel-threshold result sampled by the main pass's uFocusPeakingMask.
+    struct FocusPeakingSlot {
+        std::unique_ptr<QRhiTexture> source, mask;
+        std::unique_ptr<QRhiTextureRenderTarget> sourceRT, maskRT;
+        QSize size;
+        int gen = -1;
+    };
+    FocusPeakingSlot focusPeakingSlot;
+
+    QShader peakingEdgeFs;
+    // Dedicated Ubuf/srb for the source pass — never the shared on-screen
+    // `ubuf`/`srb`: a Dynamic uniform buffer is double-buffered per
+    // frame-in-flight, not per pass, so sharing them would clobber the main
+    // pass's uniforms within the same frame (see ReadbackTarget's own comment).
+    std::unique_ptr<QRhiBuffer> focusPeakingSourceUbuf;
+    std::unique_ptr<QRhiShaderResourceBindings> focusPeakingSourceSrb;
+    std::unique_ptr<QRhiBuffer> peakingEdgeUbuf; // NrUbuf-sized
+    std::unique_ptr<QRhiGraphicsPipeline> peakingEdgePipe;
+    std::unique_ptr<QRhiShaderResourceBindings> peakingEdgeSrb;
+    QRhiTexture* peakingEdgeSrbTex = nullptr;
 
     // Pooled offscreen targets for non-blocking histogram readbacks (ADR 0035),
     // one per distinct (size, fmt). Few and small, so they are never evicted.
