@@ -739,6 +739,36 @@ void MainWindow::setupMenus() {
     sensorClipAction->setEnabled(false);
     connect(sensorClipAction, &QAction::toggled, this, &MainWindow::applySensorClipping);
     applySensorClipping();
+
+    // Focus Peaking overlay (docs/adr/0058): on/off toggle + Low/Mid/High
+    // sensitivity, View-menu-only, no keybinding (same precedent as Sensor
+    // Clipping). Persisted in QSettings, never the sidecar.
+    focusPeakingAction = view->addAction("Show &Focus Peaking");
+    focusPeakingAction->setCheckable(true);
+    focusPeakingAction->setToolTip(
+        "Highlight sharp edges in yellow, computed at full resolution regardless of zoom.");
+    focusPeakingAction->setStatusTip(
+        "Focus Peaking: marks in-focus edges after the current develop settings, at any zoom.");
+    focusPeakingAction->setChecked(clipSettings.value("view/focusPeaking", false).toBool());
+    connect(focusPeakingAction, &QAction::toggled, this, &MainWindow::applyFocusPeaking);
+
+    auto* focusPeakingMenu = view->addMenu("Focus Peaking Sensitivity");
+    auto* focusPeakingGroup = new QActionGroup(this);
+    focusPeakingGroup->setExclusive(true);
+    const std::array<const char*, 3> kSensitivityLabels = {"&Low", "&Mid", "&High"};
+    const int savedSensitivity = std::clamp(
+        clipSettings.value("view/focusPeakingSensitivity", int(FocusPeakingSensitivity::Mid)).toInt(),
+        0,
+        2);
+    for (int i = 0; i < 3; ++i) {
+        QAction* a = focusPeakingMenu->addAction(tr(kSensitivityLabels[i]));
+        a->setCheckable(true);
+        a->setActionGroup(focusPeakingGroup);
+        a->setChecked(i == savedSensitivity);
+        connect(a, &QAction::triggered, this, &MainWindow::applyFocusPeaking);
+        focusPeakingSensitivityActions[size_t(i)] = a;
+    }
+    applyFocusPeaking(); // push the restored state to the viewport
     view->addSeparator();
 
     // Monitor profile: how the preview is encoded for this screen.
@@ -1717,6 +1747,18 @@ void MainWindow::applySensorClipping() {
     viewport->setSensorClipWarning(on && sensorClipAction->isEnabled());
     QSettings s;
     s.setValue("view/sensorClip", on);
+}
+
+void MainWindow::applyFocusPeaking() {
+    const bool on = focusPeakingAction->isChecked();
+    int sensitivity = int(FocusPeakingSensitivity::Mid);
+    for (size_t i = 0; i < focusPeakingSensitivityActions.size(); ++i)
+        if (focusPeakingSensitivityActions[i]->isChecked())
+            sensitivity = int(i);
+    viewport->setFocusPeaking(on, FocusPeakingSensitivity(sensitivity));
+    QSettings s;
+    s.setValue("view/focusPeaking", on);
+    s.setValue("view/focusPeakingSensitivity", sensitivity);
 }
 
 void MainWindow::toggleFullScreen() {
