@@ -143,11 +143,11 @@ public:
         bool gamutWarn = false;
         bool clipHighlights = false; // sRGB-relative clipping overlay (docs/adr/0009)
         bool clipShadows = false;
-        bool sensorClip = false; // RAW mosaic saturation overlay, display-only
+        bool sensorClip = false;   // RAW mosaic saturation overlay, display-only
         bool focusPeaking = false; // Sobel edge-detection overlay, display-only (docs/adr/0058)
         FocusPeakingSensitivity focusPeakingSensitivity = FocusPeakingSensitivity::Mid;
-        bool histoRaw = false;   // emit pre-clamp sRGB-linear for overflow histogram
-        int maskOverlay = -1;    // tint this mask's region red (on-screen edit only); -1 = off
+        bool histoRaw = false; // emit pre-clamp sRGB-linear for overflow histogram
+        int maskOverlay = -1;  // tint this mask's region red (on-screen edit only); -1 = off
         GlobalAdjustment adjustments;
     };
 
@@ -268,7 +268,8 @@ private:
     // pool grows.
     ReadbackTarget* ensureReadbackTarget(QSize size, QRhiTexture::Format fmt);
 
-    QRhiGraphicsPipeline* pipelineFor(QRhiRenderPassDescriptor* rpDesc);
+    QRhiGraphicsPipeline* pipelineFor(
+        QRhiRenderPassDescriptor* rpDesc, QRhiShaderResourceBindings* bindings);
     QRhiShaderResourceBindings* bindingsFor(
         QRhiTexture* imageTex,
         QRhiTexture* sensorClipTex,
@@ -434,6 +435,7 @@ private:
         QSize size;
         int gen = -1;
     };
+
     FocusPeakingSlot focusPeakingSlot;
 
     QShader peakingEdgeFs;

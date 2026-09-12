@@ -534,7 +534,8 @@ QRhiShaderResourceBindings* RendererCore::bindingsFor(
     return srb.get();
 }
 
-QRhiGraphicsPipeline* RendererCore::pipelineFor(QRhiRenderPassDescriptor* rpDesc) {
+QRhiGraphicsPipeline* RendererCore::pipelineFor(
+    QRhiRenderPassDescriptor* rpDesc, QRhiShaderResourceBindings* bindings) {
     const QVector<quint32> key = rpDesc->serializedFormat();
     for (const auto& [k, p] : pipelines)
         if (k == key)
@@ -550,7 +551,14 @@ QRhiGraphicsPipeline* RendererCore::pipelineFor(QRhiRenderPassDescriptor* rpDesc
         {0, 1, QRhiVertexInputAttribute::Float2, 2 * sizeof(float)},
     });
     pipe->setVertexInputLayout(layout);
-    pipe->setShaderResourceBindings(srb.get());
+    // Only fixes the pipeline's resource-binding *layout* (docs/adr/0006's "the
+    // pipeline carries only the bindings layout" — see recordPassWith); any
+    // layout-compatible srb can be bound per draw afterwards. Must be the
+    // caller's actual `bindings`, not always the shared on-screen `srb` member —
+    // that member may not exist yet the first time a given render-pass-descriptor
+    // format is requested via a caller (e.g. Focus Peaking's source pass, docs/adr/0058)
+    // other than the on-screen recordPass()/bindingsFor() path.
+    pipe->setShaderResourceBindings(bindings);
     pipe->setRenderPassDescriptor(rpDesc);
     pipe->create();
 
@@ -763,7 +771,7 @@ void RendererCore::recordPassWith(
 
     // The pipeline carries only the bindings *layout*; `bindings` is bound per
     // draw and need only be layout-compatible (same as the on-screen srb).
-    QRhiGraphicsPipeline* pipe = pipelineFor(rt->renderPassDescriptor());
+    QRhiGraphicsPipeline* pipe = pipelineFor(rt->renderPassDescriptor(), bindings);
 
     cb->beginPass(rt, kClearColor, {1.0f, 0}, batch);
     cb->setGraphicsPipeline(pipe);
