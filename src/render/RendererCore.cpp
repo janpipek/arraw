@@ -1,5 +1,6 @@
 #include "render/RendererCore.h"
 #include "core/NoiseReduction.h"
+#include "core/Orientation.h"
 #include "core/ThemeColors.h"
 #include "develop/GlobalAdjustment.h"
 #include "develop/LocalAdjustment.h"
@@ -1162,12 +1163,34 @@ QRhiTexture* RendererCore::ensureFocusPeakingMask(
     if (spatialContextActive(fp.adjustments))
         spatialTex = ensureSpatialContext(cb, 1, srcTex);
 
-    ensureFocusPeakingSlot(srcTex->pixelSize());
+    // imageTex[FullRes] is stored in *native* buffer layout (docs/adr/0029) —
+    // image.vert remaps the oriented display-frame UV to native-buffer UV, it
+    // never physically rotates the texture. The source/mask targets must be
+    // sized (and the source pass's geometry driven) in the *oriented*,
+    // *cropped* frame — the same frame renderToImage/renderClipSample already
+    // use — or a 90°/270° Orientation renders the whole oriented image into a
+    // native-shaped (transposed) target, producing a diagonal-flipped result.
+    const QSize nativeSize = srcTex->pixelSize();
+    int orientedW = nativeSize.width();
+    int orientedH = nativeSize.height();
+    if (orient::swapsAspect(fp.adjustments.orientation))
+        std::swap(orientedW, orientedH);
+    const QRectF& cr = fp.cropRect;
+    const int cropW = std::max(1, int(cr.width() * orientedW + 0.5f));
+    const int cropH = std::max(1, int(cr.height() * orientedH + 0.5f));
+    ensureFocusPeakingSlot(QSize(cropW, cropH));
 
     // Pass 1: the full develop pipeline, overlays off, soft-proof-independent
     // (docs/adr/0058) — reuses image.frag/image.vert unmodified, just rendered
     // into an offscreen full-res target instead of the on-screen widget target.
+    // transform/aspect are reset to a fixed, resolution-independent mapping
+    // (matching renderToImage/renderClipSample) rather than inherited from the
+    // caller: the on-screen fp.transform encodes the *on-screen viewport's*
+    // current zoom/pan/window-aspect, which has nothing to do with how the
+    // full-res source/mask targets are shaped.
     FrameParams fpSource = fp;
+    fpSource.transform = QVector4D(1.0f, 1.0f, 0.0f, 0.0f);
+    fpSource.aspect = float(orientedW) / float(orientedH);
     fpSource.useLut = false; // never the soft-proof LUT — peaking stays display-independent
     fpSource.gamutWarn = false;
     fpSource.clipHighlights = false;
@@ -1238,7 +1261,13 @@ QRhiTexture* RendererCore::ensureFocusPeakingMask(
     const QSize srcSize = focusPeakingSlot.source->pixelSize();
     nb.invChroma[0] = 1.0f / float(srcSize.width());
     nb.invChroma[1] = 1.0f / float(srcSize.height());
-    nb.flipV = rhi->isYUpInFramebuffer() ? 1 : 0;
+    // Unlike the other nr.vert consumers, this pass's source is not a raw
+    // backend-native NR-chain texture — it's focusPeakingSlot.source, rendered
+    // by image.vert/image.frag, which already compensates Y-up backends via
+    // kQuad's own baked-in V flip (see image.vert's header comment). Applying
+    // nr.vert's usual flipV on top double-corrects, sampling row (1-v) instead
+    // of v and mirroring the mask vertically (docs/adr/0058 follow-up).
+    nb.flipV = 0;
     nb.strength = kFocusPeakingThresholds[int(sensitivity)];
 
     QRhiResourceUpdateBatch* edgeBatch = rhi->nextResourceUpdateBatch();

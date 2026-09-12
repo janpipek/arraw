@@ -8,6 +8,7 @@
 //   ARRAW_UPDATE_GOLDENS=1 ./build/tests/arraw_tests "[golden]"
 
 #include "TestApp.h"
+#include "core/Orientation.h"
 #include "pipeline/OkLab.h"
 #include "render/FocusPeaking.h"
 #include "render/HeadlessRenderContext.h"
@@ -288,7 +289,8 @@ TEST_CASE("black stays black through the white-balance gain", "[gpu][whitebalanc
                 GlobalAdjustment p;
                 p.temperature = kelvin;
                 p.tint = tint;
-                const QImage got = offscreen::renderToImage(*core, scene, p, scene.width, scene.height);
+                const QImage got
+                    = offscreen::renderToImage(*core, scene, p, scene.width, scene.height);
                 REQUIRE_FALSE(got.isNull());
 
                 // Black column (x == 0) in the top (grey-ramp) half stays black.
@@ -448,7 +450,8 @@ TEST_CASE("a later Local Adjustment can recover global white headroom", "[gpu][t
     // Filmic Highlights defaults to 25 (docs/adr/0040) and would compress the
     // over-white value back below 1.0, masking the headroom this test checks.
     globalOnly.filmicHighlights = 0.0f;
-    const QImage over = offscreen::renderToImage(*core, scene, globalOnly, scene.width, scene.height);
+    const QImage over
+        = offscreen::renderToImage(*core, scene, globalOnly, scene.width, scene.height);
     REQUIRE_FALSE(over.isNull());
     const float overWhite = reinterpret_cast<const float*>(over.constScanLine(8))[8 * 4];
     REQUIRE(overWhite > 1.0f);
@@ -458,7 +461,8 @@ TEST_CASE("a later Local Adjustment can recover global white headroom", "[gpu][t
     local.mask = LinearMask{{-2.0, 0.5}, {-1.0, 0.5}}; // weight 1 over the whole frame
     local.whites = -100.0f;
     recovered.localAdjustments.push_back(local);
-    const QImage under = offscreen::renderToImage(*core, scene, recovered, scene.width, scene.height);
+    const QImage under
+        = offscreen::renderToImage(*core, scene, recovered, scene.width, scene.height);
     REQUIRE_FALSE(under.isNull());
     const float recoveredWhite = reinterpret_cast<const float*>(under.constScanLine(8))[8 * 4];
 
@@ -739,4 +743,68 @@ TEST_CASE("Focus Peaking High sensitivity flags at least as much as Low", "[gpu]
     };
 
     CHECK(countFlagged(FocusPeakingSensitivity::High) >= countFlagged(FocusPeakingSensitivity::Low));
+}
+
+// Regression test: imageTex[FullRes] is stored in *native* buffer layout
+// (docs/adr/0029) — image.vert remaps oriented-frame UV to native-buffer UV,
+// it never physically rotates the texture. ensureFocusPeakingMask's source/
+// mask targets must be sized and driven in the *oriented* frame or a 90°/270°
+// Orientation renders the oriented image into a native-shaped (transposed)
+// target, producing a diagonally-flipped overlay (reported after this feature
+// shipped — docs/adr/0058).
+//
+// Same native 64×32 hard-edge scene as the identity-orientation test above,
+// but rotated 90° CW. orient::bufferToOriented maps native (u, v=any) with
+// u=0.25 (the edge, at native x=16) to oriented (1-v, 0.25) — a horizontal
+// edge at oriented row y = 0.25 * orientedHeight, spanning the full oriented
+// width, in an output now 32 wide × 64 tall (orientation swaps the aspect).
+TEST_CASE(
+    "Focus Peaking respects a 90-degree Orientation, not the native buffer frame",
+    "[gpu][peaking]") {
+    RendererCore* core = goldenCore();
+    if (!core)
+        SKIP("no OpenGL context available on this machine");
+
+    const int nativeW = 64, nativeH = 32;
+    ImageBuffer scene;
+    scene.width = nativeW;
+    scene.height = nativeH;
+    scene.data.resize(size_t(nativeW) * nativeH * 3);
+    for (int y = 0; y < nativeH; ++y) {
+        for (int x = 0; x < nativeW; ++x) {
+            const float v = x < nativeW / 4 ? 0.0f : 1.0f; // hard edge at native x == 16
+            const size_t i = (size_t(y) * nativeW + x) * 3;
+            scene.data[i] = scene.data[i + 1] = scene.data[i + 2] = v;
+        }
+    }
+
+    GlobalAdjustment p;
+    p.orientation = orient::Orientation{1, false}; // 90° CW
+
+    const QImage got
+        = offscreen::renderFocusPeakingSample(*core, scene, p, FocusPeakingSensitivity::Mid);
+    REQUIRE_FALSE(got.isNull());
+    REQUIRE(got.format() == QImage::Format_RGBX32FPx4);
+    REQUIRE(got.width() == nativeH); // oriented dimensions: swapped
+    REQUIRE(got.height() == nativeW);
+
+    auto isYellow = [&](int x, int y) {
+        const float* px = reinterpret_cast<const float*>(got.constScanLine(y)) + x * 4;
+        return px[0] > 0.9f && px[1] > 0.9f && px[2] < 0.1f;
+    };
+
+    const int edgeRow = int(0.25f * got.height() + 0.5f); // == 16
+    bool edgeRowFlagged = false;
+    for (int x = 0; x < got.width(); ++x)
+        edgeRowFlagged |= isYellow(x, edgeRow);
+
+    CHECK(edgeRowFlagged);
+
+    // Far from the edge row, on either side, nothing should be flagged — a
+    // transposed/misaligned mask would instead show a *vertical* stripe here.
+    bool elsewhereFlagged = false;
+    for (int y : {2, edgeRow - 4, edgeRow + 4, got.height() - 3})
+        for (int x = 0; x < got.width(); ++x)
+            elsewhereFlagged |= isYellow(x, y);
+    CHECK_FALSE(elsewhereFlagged);
 }

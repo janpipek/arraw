@@ -737,7 +737,14 @@ void main() {
     // in this chain — Clipping/Gamut/Sensor-Clip below still win where they
     // coincide. Bound to an all-zero dummy texture when the toggle is off, so
     // no separate on/off uniform flag is needed.
-    if (texture(uFocusPeakingMask, vUV).r > 0.5)
+    //
+    // Sampled at vImageUV, not vUV: the mask is rendered in the *oriented,
+    // cropped* frame (RendererCore::ensureFocusPeakingMask sizes and drives it
+    // that way, matching renderToImage/renderClipSample), the same frame
+    // vImageUV addresses before coarse Orientation remaps to native-buffer
+    // space (docs/adr/0029) — the same reason Local Adjustment masks use
+    // vImageUV, not vUV, just above.
+    if (texture(uFocusPeakingMask, vImageUV).r > 0.5)
         outc = vec3(1.0, 1.0, 0.0);
 
     // Clipping overlay (docs/adr/0009): sRGB-relative, judged once here so it
