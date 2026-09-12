@@ -158,6 +158,16 @@ outside the proofed output profile's gamut — a chroma-reproduction warning,
 not a tonal one. Distinct from [[Clipping]].
 _Avoid_: clipping, out-of-range
 
+**Focus Peaking**:
+A preview overlay (yellow) marking sharp edges — a 3×3 Sobel gradient-magnitude
+threshold over the sRGB-encoded, post-adjustment luma — computed at full
+resolution regardless of the current zoom, since a downsampled preview would
+misrepresent the fine detail the overlay exists to show (docs/adr/0058). Stacks
+with [[Clipping]]/[[Gamut Warning]]/Sensor Clipping rather than excluding them;
+lowest precedence among them. Low/Mid/High sensitivity, `View`-menu-only, view
+state via `QSettings`, never the sidecar.
+_Avoid_: peaking (bare), sharpness overlay, focus mask
+
 **White Balance**:
 Neutralising an unwanted colour cast by scaling each colour channel by its own
 gain in the [[Working color space]] — the channels are *multiplied*, never
