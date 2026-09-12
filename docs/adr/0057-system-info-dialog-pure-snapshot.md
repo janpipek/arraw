@@ -64,6 +64,13 @@ Pro", "Microsoft Basic Render Driver" for WARP); on OpenGL it comes from
 shown; the raw `vendorId`/`deviceId` hex is a secondary "Device IDs" line for
 exact bug-report matching, not for naming.
 
+**Device IDs stay blank rather than show a fake zero.** Real-world testing
+against Mesa's OpenGL backend surfaced `vendorId == 0 && deviceId == 0` — Mesa
+never populates them — which would otherwise render as "vendor 0x0, device
+0x0", reading as a genuine (wrong) ID in a bug report. `gather()` treats that
+exact combination as "not reported" and leaves `gpuDeviceIds` empty, the same
+convention used when GPU info isn't known at all.
+
 **GPU fields fall back to a placeholder, not a crash**, when `backend`/`driverInfo`
 are `nullopt` — `ImageViewport` always exists as `MainWindow`'s central widget, so
 this only matters if its `QRhi` failed to initialize before the dialog opens (a
@@ -75,6 +82,23 @@ The dialog has a **Copy to Clipboard** button, serializing the same `Info` via
 producing something pasteable into a bug report, and full-selecting a grid of
 `QLabel`s is fiddly. No "open folder" buttons on the path rows: this stays a
 pure diagnostic surface.
+
+**CLI parity, `arraw system-info`.** The same snapshot needed a command-line
+surface — `sysinfo::gather()` was already decoupled from any widget, so
+nothing there needed to change for it. A new top-level verb follows
+`InfoCommand`'s existing shape (docs/adr/0053, docs/adr/0050): `TextStyle`-
+painted label:value rows by default, one `QJsonObject` under `--json`, exit 0
+(there is no per-item failure mode here, unlike `info`'s per-file reports).
+GPU facts come from `HeadlessRenderContext` — the same windowless `QRhi`
+`export` already creates (docs/adr/0022), respecting `ARRAW_RHI_BACKEND` —
+via the same `backend()`/`driverInfo()` accessors `RendererCore` gained for
+the dialog; `HeadlessRenderContext::create()` returning `nullptr` (no
+GPU/display) passes straight through as `std::nullopt`, landing on the same
+placeholder path the dialog uses. `main.cpp` only builds a `QGuiApplication`
+and calls `applyApplicationIdentity()` for the `export` and `preset` verbs
+today (hardcoded per-verb checks); `system-info` needs that too, or
+`QStandardPaths`/`QSettings` resolve under no application identity at all —
+the exact class of bug docs/adr/0051 already hit once for `preset`.
 
 ## Considered Options
 
@@ -116,5 +140,7 @@ pure diagnostic surface.
   `AboutDialog`.
 
 *The code is `src/core/SystemInfo.{h,cpp}` and `tests/test_SystemInfo.cpp`
-(the pure snapshot), with `src/ui/SystemInfoDialog.{h,cpp}` and the
-`MainWindow` `Help > System Info...` wiring landing in the same change.*
+(the pure snapshot), `src/ui/SystemInfoDialog.{h,cpp}` and the `MainWindow`
+`Help > System Info...` wiring (the GUI surface), and
+`src/cli/SystemInfoArgs.{h,cpp}`/`SystemInfoCommand.{h,cpp}` plus the
+`system-info` entry in `src/cli/Dispatch.cpp` (the CLI surface).*
