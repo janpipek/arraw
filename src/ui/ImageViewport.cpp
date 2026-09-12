@@ -226,6 +226,8 @@ void ImageViewport::render(QRhiCommandBuffer* cb) {
     fp.clipHighlights = clipHighlights;
     fp.clipShadows = clipShadows;
     fp.sensorClip = sensorClipWarning;
+    fp.focusPeaking = focusPeaking; // ungated by showOriginal, matching clipHighlights/sensorClip
+    fp.focusPeakingSensitivity = focusPeakingSensitivity;
     // Tint the active mask's region red (docs/adr/0047): on by default for the
     // selected mask, toggled with O, and transiently suppressed while a delta
     // slider is dragged so the effect is judged unobscured. Preview only; no export.
@@ -1171,6 +1173,16 @@ void ImageViewport::setSensorClipWarning(bool on) {
     if (sensorClipWarning == on)
         return;
     sensorClipWarning = on;
+    update();
+}
+
+void ImageViewport::setFocusPeaking(bool on, FocusPeakingSensitivity sensitivity) {
+    if (focusPeaking == on && focusPeakingSensitivity == sensitivity)
+        return;
+    focusPeaking = on;
+    focusPeakingSensitivity = sensitivity;
+    if (on && !hasFullRes)
+        emit fullResNeeded(); // same request the zoom threshold already uses (docs/adr/0056, 0058)
     update();
 }
 

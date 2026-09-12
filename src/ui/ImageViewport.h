@@ -7,6 +7,7 @@
 #include "develop/Spot.h"
 #include "develop/WhiteBalance.h"
 #include "pipeline/ColorManagement.h"
+#include "render/FocusPeaking.h"
 #include "render/PendingHistogram.h"
 #include "render/RendererCore.h"
 #include "render/ViewportGeometry.h"
@@ -135,6 +136,11 @@ public:
     // Sensor Clipping overlay: paint RAW mosaic saturation magenta. View state
     // only — never exported, and unavailable for standard image formats.
     void setSensorClipWarning(bool on);
+    // Focus Peaking overlay (docs/adr/0058): paint sharp-edge regions yellow,
+    // computed at full resolution regardless of the current zoom. Turning it
+    // on requests the FullRes texture (fullResNeeded) exactly like crossing
+    // the zoom threshold does, if it isn't already resident.
+    void setFocusPeaking(bool on, FocusPeakingSensitivity sensitivity);
 
     // Render buf through the full shader pipeline into an offscreen target.
     // Returns a *linear working-space* float QImage (Format_RGBX32FPx4),
@@ -300,6 +306,8 @@ private:
     bool clipHighlights = false;
     bool clipShadows = false;
     bool sensorClipWarning = false;
+    bool focusPeaking = false;
+    FocusPeakingSensitivity focusPeakingSensitivity = FocusPeakingSensitivity::Mid;
     ViewportOverlay* overlay = nullptr;
 
     // ── Image state ───────────────────────────────────────────────────────
