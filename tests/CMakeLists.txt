@@ -35,6 +35,7 @@ add_executable(arraw_tests
     test_ExportMetadata.cpp
     test_MainWindowStatus.cpp
     test_MainWindowZoom.cpp
+    test_FocusPeaking.cpp
     test_ThumbnailCache.cpp
     test_FieldSpec.cpp
     test_LocalAdjustment.cpp
