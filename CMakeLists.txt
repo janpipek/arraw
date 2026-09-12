@@ -217,6 +217,7 @@ set(ENGINE_SOURCES
     src/core/CropGeometry.cpp
     src/core/Orientation.cpp
     src/core/NoiseReduction.cpp
+    src/core/SystemInfo.cpp
     src/develop/BasicTone.cpp
     src/develop/WhiteBalance.cpp
     src/develop/LocalAdjustment.cpp
