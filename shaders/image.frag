@@ -86,6 +86,10 @@ layout(binding = 5) uniform sampler2D uSensorClip; // RAW sensor clipping mask, 
 layout(binding = 6) uniform sampler2D uSpatialContext; // blurred source luminance for spatial globals
 layout(binding = 7) uniform sampler2DArray uBrushMasks; // painted Brush masks (docs/adr/0047),
                                                         // one R8 layer per local adjustment slot
+layout(binding = 8) uniform sampler2D uFocusPeakingMask; // Focus Peaking edge mask (docs/adr/0058):
+                                                          // full-res, built regardless of the
+                                                          // current preview zoom; R=1 where sharp.
+                                                          // Bound to an all-zero dummy when off.
 
 // Rec.2020 luma — the whole pipeline works in linear Rec.2020 (docs/adr/0001).
 // Must match kLumaR/G/B in src/ImagePipeline.h.
@@ -727,6 +731,14 @@ void main() {
 
     vec3 outc = (u.useLut != 0) ? displayLut(c)             // proof / monitor ICC
                                 : displayTransform(c);      // assume-sRGB display
+
+    // Focus Peaking overlay (docs/adr/0058): yellow where the edge-detection
+    // pass (shaders/peaking_edge.frag) flagged a sharp edge. Lowest precedence
+    // in this chain — Clipping/Gamut/Sensor-Clip below still win where they
+    // coincide. Bound to an all-zero dummy texture when the toggle is off, so
+    // no separate on/off uniform flag is needed.
+    if (texture(uFocusPeakingMask, vUV).r > 0.5)
+        outc = vec3(1.0, 1.0, 0.0);
 
     // Clipping overlay (docs/adr/0009): sRGB-relative, judged once here so it
     // works in both encode paths and the clip colour wins over the gamut-warning
