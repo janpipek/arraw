@@ -271,6 +271,7 @@ set(UI_SOURCES
     src/ui/FilmStripLayout.cpp
     src/ui/ExportDialog.cpp
     src/ui/AboutDialog.cpp
+    src/ui/SystemInfoDialog.cpp
     src/ui/GroupChecklistDialog.cpp
     src/ui/SpotRemovalPanel.cpp
     src/ui/HistoryPanel.cpp

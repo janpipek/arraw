@@ -47,6 +47,9 @@ public:
     // name isn't reported as colliding with itself.
     bool exists(const QString& presetName, const QString& excluding = {}) const;
 
+    // The directory this store reads and writes (Help > System Info; docs/adr/0057).
+    QString directoryPath() const { return directory; }
+
 private:
     QString directory;
 };

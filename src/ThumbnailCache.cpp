@@ -142,6 +142,10 @@ QString ThumbnailCache::cachePathFor(const QString& rawPath) {
     return ::cachePathFor(rawPath, ".jpg");
 }
 
+QString ThumbnailCache::cacheRootPath() {
+    return ::cacheRoot();
+}
+
 bool ThumbnailCache::store(const QString& rawPath, const QImage& image) {
     const QString outPath = cachePathFor(rawPath);
     if (outPath.isEmpty() || image.isNull())

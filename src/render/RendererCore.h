@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <rhi/qrhi.h>
 #include <vector>
 #include <QImage>
@@ -152,6 +153,16 @@ public:
     void release();
 
     bool ready() const { return rhi != nullptr; }
+
+    // GPU backend/device diagnostics for Help > System Info (docs/adr/0057);
+    // nullopt until initialize() has run.
+    std::optional<QRhi::Implementation> backend() const {
+        return rhi != nullptr ? std::optional(rhi->backend()) : std::nullopt;
+    }
+
+    std::optional<QRhiDriverInfo> driverInfo() const {
+        return rhi != nullptr ? std::optional(rhi->driverInfo()) : std::nullopt;
+    }
 
     void setImage(Slot slot, const ImageBuffer& buf);          // invalid buf clears
     void setSensorClipMask(Slot slot, const ImageBuffer& buf); // invalid buf clears

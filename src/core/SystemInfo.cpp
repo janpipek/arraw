@@ -59,9 +59,14 @@ Info gather(
         if (info.gpuDeviceName.isEmpty())
             info.gpuDeviceName = kNotAvailable;
         info.gpuDeviceType = deviceTypeName(driverInfo->deviceType);
-        info.gpuDeviceIds = QStringLiteral("vendor 0x%1, device 0x%2")
-                                .arg(driverInfo->vendorId, 0, 16)
-                                .arg(driverInfo->deviceId, 0, 16);
+        // Some backends (Mesa's OpenGL, notably) never populate these and leave
+        // both at zero; showing "vendor 0x0, device 0x0" would misread as a real
+        // ID in a bug report, so treat that combination as "not reported".
+        if (driverInfo->vendorId != 0 || driverInfo->deviceId != 0) {
+            info.gpuDeviceIds = QStringLiteral("vendor 0x%1, device 0x%2")
+                                    .arg(driverInfo->vendorId, 0, 16)
+                                    .arg(driverInfo->deviceId, 0, 16);
+        }
     } else {
         info.gpuBackend = kNotAvailable;
         info.gpuDeviceName = kNotAvailable;

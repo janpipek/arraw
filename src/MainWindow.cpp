@@ -9,6 +9,7 @@
 #include "ThumbnailCache.h"
 #include "core/CropGeometry.h"
 #include "core/Orientation.h"
+#include "core/SystemInfo.h"
 #include "develop/DemosaicAlgorithm.h"
 #include "develop/DevelopGroup.h"
 #include "develop/DevelopParameter.h"
@@ -35,6 +36,7 @@
 #include "ui/LocalAdjustmentPanel.h"
 #include "ui/ProofingPanel.h"
 #include "ui/SpotRemovalPanel.h"
+#include "ui/SystemInfoDialog.h"
 #include <algorithm>
 #include <cmath>
 #include <QAction>
@@ -589,10 +591,10 @@ MainWindow::ZoomMenuActions MainWindow::addZoomPresetActions(QMenu* menu, QActio
     menu->addSeparator();
     for (size_t i = 0; i < kZoomPresets.size(); ++i) {
         const float value = kZoomPresets[i];
-        QAction* a = menu->addAction(
-            QStringLiteral("%1 %").arg(qRound(value * 100.0f)), this, [this, value] {
-                viewport->setPixelZoom(value);
-            });
+        QAction* a
+            = menu->addAction(QStringLiteral("%1 %").arg(qRound(value * 100.0f)), this, [this, value] {
+                  viewport->setPixelZoom(value);
+              });
         if (group) {
             a->setCheckable(true);
             a->setActionGroup(group);
@@ -767,6 +769,7 @@ void MainWindow::setupMenus() {
 
     auto* help = menuBar()->addMenu("&Help");
     help->addAction("&About...", this, &MainWindow::showAboutDialog);
+    help->addAction("&System Info...", this, &MainWindow::showSystemInfoDialog);
 }
 
 void MainWindow::setupImageMenu() {
@@ -1364,6 +1367,18 @@ void MainWindow::openPath(const QString& path) {
 
 void MainWindow::showAboutDialog() {
     AboutDialog dlg(this);
+    dlg.exec();
+}
+
+void MainWindow::showSystemInfoDialog() {
+    const sysinfo::Info info = sysinfo::gather(
+        viewport->graphicsBackend(),
+        viewport->graphicsDriverInfo(),
+        QSettings().fileName(),
+        presetStore.directoryPath(),
+        ThumbnailCache::cacheRootPath(),
+        qApp->applicationVersion());
+    SystemInfoDialog dlg(info, this);
     dlg.exec();
 }
 

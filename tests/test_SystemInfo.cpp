@@ -59,6 +59,28 @@ TEST_CASE("gather reports GPU details when backend and driver info are known", "
     REQUIRE(info.gpuDeviceIds.contains("2782"));
 }
 
+TEST_CASE(
+    "gather leaves Device IDs empty when the backend reports none (vendorId and "
+    "deviceId both zero, as Mesa's OpenGL backend does)",
+    "[sysinfo]") {
+    QRhiDriverInfo driver;
+    driver.deviceName = "Intel Mesa Intel(R) UHD Graphics";
+    driver.vendorId = 0;
+    driver.deviceId = 0;
+    driver.deviceType = QRhiDriverInfo::UnknownDevice;
+
+    const sysinfo::Info info = sysinfo::gather(
+        QRhi::OpenGLES2,
+        driver,
+        QStringLiteral("/settings/arraw.conf"),
+        QStringLiteral("/data/presets"),
+        QStringLiteral("/home/.arraw/cache"),
+        QStringLiteral("1.2.3"));
+
+    CHECK(info.gpuDeviceName == QStringLiteral("Intel Mesa Intel(R) UHD Graphics"));
+    CHECK(info.gpuDeviceIds.isEmpty());
+}
+
 TEST_CASE("gather reports a placeholder when GPU info is not yet available", "[sysinfo]") {
     const sysinfo::Info info = sysinfo::gather(
         std::nullopt,
