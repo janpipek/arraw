@@ -326,6 +326,8 @@ add_library(arraw_cli STATIC
     src/cli/ImagePathPreflight.cpp
     src/cli/InfoArgs.cpp
     src/cli/InfoCommand.cpp
+    src/cli/SystemInfoArgs.cpp
+    src/cli/SystemInfoCommand.cpp
     src/cli/TextStyle.cpp
     src/cli/Dispatch.cpp
 )
