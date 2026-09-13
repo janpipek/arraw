@@ -898,11 +898,10 @@ void ImageViewport::setImage(
         // In-place swap of the same image: hold the user's zoom/pan instead of
         // refitting. The full-res slot was just cleared, and a held zoom never
         // crosses the threshold inside setZoom, so re-request full-res here
-        // when the preserved zoom needs it.
+        // when the preserved zoom (or Focus Peaking) needs it.
         setZoom(savedZoom);
         pan = savedPan;
-        if (zoom >= kFullResZoomThreshold)
-            emit fullResNeeded();
+        requestFullResIfNeeded();
     } else {
         resetView();
     }
@@ -1181,8 +1180,7 @@ void ImageViewport::setFocusPeaking(bool on, FocusPeakingSensitivity sensitivity
         return;
     focusPeaking = on;
     focusPeakingSensitivity = sensitivity;
-    if (on && !hasFullRes)
-        emit fullResNeeded(); // same request the zoom threshold already uses (docs/adr/0056, 0058)
+    requestFullResIfNeeded();
     update();
 }
 
@@ -1190,6 +1188,12 @@ void ImageViewport::resetView() {
     setZoom(fitZoom());
     pan = {0, 0};
     update();
+    requestFullResIfNeeded();
+}
+
+void ImageViewport::requestFullResIfNeeded() {
+    if (!hasFullRes && (zoom >= kFullResZoomThreshold || focusPeaking))
+        emit fullResNeeded();
 }
 
 void ImageViewport::setZoom(float value) {

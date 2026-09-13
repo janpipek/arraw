@@ -218,6 +218,12 @@ private:
 
     void ensureCurveLut();
 
+    // Re-request full-res (docs/adr/0056, 0058) if either the zoom threshold
+    // or Focus Peaking currently needs it and it isn't resident yet. Shared
+    // by every path that may leave hasFullRes false while one of those two
+    // needs is still active, so neither can be forgotten independently.
+    void requestFullResIfNeeded();
+
     // Build the base FrameParams shared by both histogram passes, and the sample
     // size (256×h, h fit to the cropped aspect). NR is pinned to the effective
     // (debounced) values so the passes reuse the frame's cached denoised texture

@@ -68,3 +68,38 @@ TEST_CASE("preserved zoom below the full-res threshold requests nothing", "[view
     CHECK(vp.zoomFactor() == 1.2f);
     CHECK(requests == 0);
 }
+
+TEST_CASE("navigating to a new image re-requests full-res while Focus Peaking is on", "[viewport]") {
+    testApp();
+    ImageViewport vp;
+    vp.resize(200, 150);
+    vp.setImage(solidBuffer(64, 48), {}, false);
+    vp.setFullResImage(solidBuffer(64, 48));
+    vp.setFocusPeaking(true, FocusPeakingSensitivity::Mid);
+
+    int requests = 0;
+    QObject::connect(&vp, &ImageViewport::fullResNeeded, &vp, [&requests] { ++requests; });
+
+    // Plain navigation (no preserveView) refits below the threshold, so only
+    // Focus Peaking's own need for full-res should trigger the request.
+    vp.setImage(solidBuffer(64, 48), {}, false);
+    CHECK(requests == 1);
+}
+
+TEST_CASE(
+    "preserved sub-threshold zoom re-requests full-res while Focus Peaking is on", "[viewport]") {
+    testApp();
+    ImageViewport vp;
+    vp.resize(200, 150);
+    vp.setImage(solidBuffer(64, 48), {}, false);
+    vp.setFullResImage(solidBuffer(64, 48));
+    vp.setZoom(1.2f);
+    vp.setFocusPeaking(true, FocusPeakingSensitivity::Mid);
+
+    int requests = 0;
+    QObject::connect(&vp, &ImageViewport::fullResNeeded, &vp, [&requests] { ++requests; });
+
+    vp.setImage(solidBuffer(64, 48), {}, false, /*preserveView=*/true);
+    CHECK(vp.zoomFactor() == 1.2f);
+    CHECK(requests == 1);
+}
