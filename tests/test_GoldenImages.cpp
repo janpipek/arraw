@@ -808,3 +808,74 @@ TEST_CASE(
             elsewhereFlagged |= isYellow(x, y);
     CHECK_FALSE(elsewhereFlagged);
 }
+
+// Regression test: the Focus Peaking mask (docs/adr/0058) is a pre-composed
+// raster — Pass 1 (ensureFocusPeakingMask) bakes the fine "Straighten"
+// rotation into where each edge lands, exactly like a rendered export. On
+// screen, sampling that mask at vImageUV re-applies the *same* rotation warp
+// a second time (vImageUV is the source-sampling coordinate, not the display
+// coordinate), so the overlay drifts away from the actual edge as soon as
+// GlobalAdjustment::rotation is non-zero — independent of, and not fixed by,
+// the 90-degree Orientation regression test above.
+TEST_CASE("Focus Peaking tracks the edge under a fine Straighten rotation", "[gpu][peaking]") {
+    RendererCore* core = goldenCore();
+    if (!core)
+        SKIP("no OpenGL context available on this machine");
+
+    const int w = 64, h = 64;
+    ImageBuffer scene;
+    scene.width = w;
+    scene.height = h;
+    scene.data.resize(size_t(w) * h * 3);
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            const float v = x < w / 2 ? 0.0f : 1.0f; // hard vertical edge at x == w/2
+            const size_t i = (size_t(y) * w + x) * 3;
+            scene.data[i] = scene.data[i + 1] = scene.data[i + 2] = v;
+        }
+    }
+
+    GlobalAdjustment p;
+    p.rotation = 20.0f; // fine Straighten, well within -45..45
+
+    // The true, correctly-rotated edge column per row, read from the base
+    // image with the overlay switched off (same display path otherwise).
+    const QImage base = offscreen::renderClipSample(*core, scene, p, false, false);
+    REQUIRE_FALSE(base.isNull());
+
+    auto edgeColumn = [&](const QImage& img, int y) -> int {
+        const float* row = reinterpret_cast<const float*>(img.constScanLine(y));
+        for (int x = 1; x < img.width(); ++x)
+            if (row[(x - 1) * 4] < 0.5f && row[x * 4] >= 0.5f)
+                return x;
+        return -1;
+    };
+
+    const QImage got
+        = offscreen::renderFocusPeakingSample(*core, scene, p, FocusPeakingSensitivity::Mid);
+    REQUIRE_FALSE(got.isNull());
+    REQUIRE(got.size() == base.size());
+
+    auto isYellow = [&](int x, int y) {
+        const float* px = reinterpret_cast<const float*>(got.constScanLine(y)) + x * 4;
+        return px[0] > 0.9f && px[1] > 0.9f && px[2] < 0.1f;
+    };
+    auto flaggedColumn = [&](int y) -> int {
+        for (int x = 0; x < got.width(); ++x)
+            if (isYellow(x, y))
+                return x;
+        return -1;
+    };
+
+    int checked = 0;
+    for (int y = 16; y < h - 16; y += 4) {
+        const int trueX = edgeColumn(base, y);
+        if (trueX < 0)
+            continue; // edge rotated out of frame at this row
+        const int flagX = flaggedColumn(y);
+        REQUIRE(flagX >= 0);
+        CHECK(std::abs(flagX - trueX) <= 3);
+        ++checked;
+    }
+    CHECK(checked > 0);
+}

@@ -738,13 +738,18 @@ void main() {
     // coincide. Bound to an all-zero dummy texture when the toggle is off, so
     // no separate on/off uniform flag is needed.
     //
-    // Sampled at vImageUV, not vUV: the mask is rendered in the *oriented,
-    // cropped* frame (RendererCore::ensureFocusPeakingMask sizes and drives it
-    // that way, matching renderToImage/renderClipSample), the same frame
-    // vImageUV addresses before coarse Orientation remaps to native-buffer
-    // space (docs/adr/0029) — the same reason Local Adjustment masks use
-    // vImageUV, not vUV, just above.
-    if (texture(uFocusPeakingMask, vImageUV).r > 0.5)
+    // Sampled at vFrameUV, not vImageUV: unlike Local Adjustment masks (which
+    // are defined once in image space and must stay glued to the image as it
+    // rotates, so they need vImageUV's inverse-rotation sampling), the Focus
+    // Peaking mask is a *pre-composed* raster — ensureFocusPeakingMask's Pass 1
+    // renders it through this same shader, so fine Rotation is already baked
+    // into where each edge lands, exactly like a rendered export. vImageUV
+    // would re-apply that same rotation warp a second time, drifting the
+    // overlay away from the edge as soon as fine Rotation is non-zero.
+    // vFrameUV — the display-frame position before rotation, orientation, or
+    // native-buffer remapping — is the one coordinate both this on-screen pass
+    // and Pass 1's offscreen render agree on for a given displayed pixel.
+    if (texture(uFocusPeakingMask, vFrameUV).r > 0.5)
         outc = vec3(1.0, 1.0, 0.0);
 
     // Clipping overlay (docs/adr/0009): sRGB-relative, judged once here so it
