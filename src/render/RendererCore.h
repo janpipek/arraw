@@ -445,9 +445,30 @@ private:
         std::unique_ptr<QRhiTextureRenderTarget> sourceRT, maskRT;
         QSize size;
         int gen = -1;
+
+        // Change-detection cache for ensureFocusPeakingMask, mirroring
+        // NrSlot's pattern (ensureDenoised) but keyed on the whole adjustment
+        // set: Pass 1 re-renders the full develop pipeline, not one narrow
+        // effect, so nothing short of GlobalAdjustment::operator== is a safe
+        // cache key. rawSrcTex is imageTex[FullRes]'s identity, captured
+        // before ensureDenoised/ensureSpatialContext may reassign srcTex.
+        bool cacheValid = false;
+        QRhiTexture* cachedRawSrcTex = nullptr;
+        GlobalAdjustment cachedAdjustments;
+        QRectF cachedCropRect;
+        FocusPeakingSensitivity cachedSensitivity = FocusPeakingSensitivity::Mid;
+        int cachedGen = -1;
     };
 
     FocusPeakingSlot focusPeakingSlot;
+
+    // Dedicated render-pass descriptor for `mask` (R8, or RGBA32F where R8
+    // render targets aren't supported): backends that bake attachment format
+    // into pipeline/render-pass objects at creation time (e.g. Metal) can't
+    // safely reuse nrRpDesc, which was built from an RGBA32F throwaway target,
+    // for an R8 target — see ensureFocusPeakingSlot.
+    std::unique_ptr<QRhiRenderPassDescriptor> focusPeakingMaskRpDesc;
+    QRhiTexture::Format focusPeakingMaskFormat = QRhiTexture::R8;
 
     QShader peakingEdgeFs;
     // Dedicated Ubuf/srb for the source pass — never the shared on-screen
@@ -456,6 +477,8 @@ private:
     // pass's uniforms within the same frame (see ReadbackTarget's own comment).
     std::unique_ptr<QRhiBuffer> focusPeakingSourceUbuf;
     std::unique_ptr<QRhiShaderResourceBindings> focusPeakingSourceSrb;
+    QRhiTexture* focusPeakingSourceSrbTex = nullptr;
+    QRhiTexture* focusPeakingSourceSrbSpatialTex = nullptr;
     std::unique_ptr<QRhiBuffer> peakingEdgeUbuf; // NrUbuf-sized
     std::unique_ptr<QRhiGraphicsPipeline> peakingEdgePipe;
     std::unique_ptr<QRhiShaderResourceBindings> peakingEdgeSrb;
