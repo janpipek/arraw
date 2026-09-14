@@ -194,6 +194,9 @@ private:
     void applyClipping();
     void toggleClipping();
     void applySensorClipping();
+    // Push the Focus Peaking toggle + sensitivity to the viewport and persist
+    // it (docs/adr/0058) — no keybinding, View-menu-only like Sensor Clipping.
+    void applyFocusPeaking();
     void toggleFullScreen();
     void exitFullScreen(); // leave fullscreen, restoring the prior maximized/normal state
     void toggleChrome();
@@ -250,9 +253,11 @@ private:
     bool aspectLandscape = true;
     QAction* saveAction;
     QAction* exportAction;
-    QAction* clipHighlightsAction; // View → Show Highlight Clipping
-    QAction* clipShadowsAction;    // View → Show Shadow Clipping
-    QAction* sensorClipAction;     // View → Show Sensor Clipping
+    QAction* clipHighlightsAction;                          // View → Show Highlight Clipping
+    QAction* clipShadowsAction;                             // View → Show Shadow Clipping
+    QAction* sensorClipAction;                              // View → Show Sensor Clipping
+    QAction* focusPeakingAction;                            // View → Show Focus Peaking
+    std::array<QAction*, 3> focusPeakingSensitivityActions; // Low/Mid/High submenu
     QAction* fullScreenAction = nullptr;
     QAction* lightsOutAction = nullptr;
     QAction* toggleHistoryAction = nullptr;     // View → History Panel

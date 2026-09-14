@@ -226,6 +226,8 @@ void ImageViewport::render(QRhiCommandBuffer* cb) {
     fp.clipHighlights = clipHighlights;
     fp.clipShadows = clipShadows;
     fp.sensorClip = sensorClipWarning;
+    fp.focusPeaking = focusPeaking; // ungated by showOriginal, matching clipHighlights/sensorClip
+    fp.focusPeakingSensitivity = focusPeakingSensitivity;
     // Tint the active mask's region red (docs/adr/0047): on by default for the
     // selected mask, toggled with O, and transiently suppressed while a delta
     // slider is dragged so the effect is judged unobscured. Preview only; no export.
@@ -896,11 +898,10 @@ void ImageViewport::setImage(
         // In-place swap of the same image: hold the user's zoom/pan instead of
         // refitting. The full-res slot was just cleared, and a held zoom never
         // crosses the threshold inside setZoom, so re-request full-res here
-        // when the preserved zoom needs it.
+        // when the preserved zoom (or Focus Peaking) needs it.
         setZoom(savedZoom);
         pan = savedPan;
-        if (zoom >= kFullResZoomThreshold)
-            emit fullResNeeded();
+        requestFullResIfNeeded();
     } else {
         resetView();
     }
@@ -1174,10 +1175,25 @@ void ImageViewport::setSensorClipWarning(bool on) {
     update();
 }
 
+void ImageViewport::setFocusPeaking(bool on, FocusPeakingSensitivity sensitivity) {
+    if (focusPeaking == on && focusPeakingSensitivity == sensitivity)
+        return;
+    focusPeaking = on;
+    focusPeakingSensitivity = sensitivity;
+    requestFullResIfNeeded();
+    update();
+}
+
 void ImageViewport::resetView() {
     setZoom(fitZoom());
     pan = {0, 0};
     update();
+    requestFullResIfNeeded();
+}
+
+void ImageViewport::requestFullResIfNeeded() {
+    if (!hasFullRes && (zoom >= kFullResZoomThreshold || focusPeaking))
+        emit fullResNeeded();
 }
 
 void ImageViewport::setZoom(float value) {

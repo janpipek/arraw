@@ -94,4 +94,44 @@ QImage renderClipSample(
     return core.renderOffscreen(buf, fp, QSize(cropW, cropH), QRhiTexture::RGBA32F);
 }
 
+QImage renderFocusPeakingSample(
+    RendererCore& core,
+    const ImageBuffer& buf,
+    const GlobalAdjustment& p,
+    FocusPeakingSensitivity sensitivity) {
+    if (!core.ready() || !buf.valid())
+        return {};
+
+    core.setCurveLut(curveLutRgba(p));
+    // ensureFocusPeakingMask always reads imageTex[FullRes] (docs/adr/0058), so
+    // the sample must be uploaded to that slot explicitly — the ImageBuffer
+    // overload of renderOffscreen uploads to a temporary texture instead, which
+    // Focus Peaking would never see.
+    core.setImage(RendererCore::Slot::FullRes, buf);
+
+    const QRectF& cr = p.cropRect;
+    int orientedW = buf.width;
+    int orientedH = buf.height;
+    if (orient::swapsAspect(p.orientation))
+        std::swap(orientedW, orientedH);
+    const int cropW = (std::max) (1, int(cr.width() * orientedW + 0.5f));
+    const int cropH = (std::max) (1, int(cr.height() * orientedH + 0.5f));
+
+    RendererCore::FrameParams fp;
+    fp.transform = QVector4D(1.0f, 1.0f, 0.0f, 0.0f);
+    fp.cropRect = cr;
+    fp.aspect = float(orientedW) / float(orientedH);
+    fp.baseLook = true;
+    fp.displayEncode = true;
+    fp.curveInput = false;
+    fp.useLut = false;
+    fp.gamutWarn = false;
+    fp.focusPeaking = true;
+    fp.focusPeakingSensitivity = sensitivity;
+    fp.adjustments = p;
+
+    return core
+        .renderOffscreen(RendererCore::Slot::FullRes, fp, QSize(cropW, cropH), QRhiTexture::RGBA32F);
+}
+
 } // namespace offscreen

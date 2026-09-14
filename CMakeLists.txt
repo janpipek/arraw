@@ -349,7 +349,7 @@ qt6_add_shaders(arraw_engine "arraw_shaders"
           shaders/nr.vert shaders/nr_extract.frag
           shaders/nr_blur_h.frag shaders/nr_blur_v.frag shaders/nr_recombine.frag
           shaders/lum_bilateral_h.frag shaders/lum_bilateral_v.frag
-          shaders/spatial_extract.frag
+          shaders/spatial_extract.frag shaders/peaking_edge.frag
 )
 
 # Executables (docs/adr/0049). One arraw binary on Linux/macOS (the ui
