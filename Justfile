@@ -1,5 +1,7 @@
 set windows-powershell := true
 
+clang_format := env_var_or_default("CLANG_FORMAT", "clang-format")
+
 # List available tasks
 default:
     @just --list
@@ -21,6 +23,24 @@ run: configure
 cli *args: configure
     cmake --build --preset debug --target arraw-cli
     ./build/debug/arraw-cli {{args}}
+
+# Format C++ source/header files
+[unix]
+format:
+    find src \( -name '*.cpp' -o -name '*.h' \) -print | xargs {{clang_format}} -i
+
+[windows]
+format:
+    & {{clang_format}} -i @(Get-ChildItem src -Recurse -File -Include *.cpp,*.h | ForEach-Object FullName)
+
+# Check C++ formatting without modifying files
+[unix]
+format-check:
+    find src \( -name '*.cpp' -o -name '*.h' \) -print | xargs {{clang_format}} --dry-run --Werror
+
+[windows]
+format-check:
+    & {{clang_format}} --dry-run --Werror @(Get-ChildItem src -Recurse -File -Include *.cpp,*.h | ForEach-Object FullName)
 
 # Configure and build Release (build/release)
 release:
