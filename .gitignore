@@ -1,3 +1,5 @@
 /build
 /.cache
 /cmake-build-*
+/CLAUDE.local.md
+/AGENTS.local.md
