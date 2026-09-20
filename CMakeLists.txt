@@ -14,7 +14,7 @@ function(arraw_enable_warnings target)
     endif()
 endfunction()
 
-find_package(Qt6 6.10 REQUIRED COMPONENTS Widgets Concurrent ShaderTools Xml)
+find_package(Qt6 6.10 REQUIRED COMPONENTS Gui Widgets Concurrent ShaderTools Xml)
 
 qt_standard_project_setup()
 
@@ -29,6 +29,11 @@ add_library(arraw STATIC
 add_library(arraw::arraw ALIAS arraw)
 arraw_enable_warnings(arraw)
 target_include_directories(arraw PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+# Qt GUI holds QImage and the image codecs (QImageReader/QImageWriter); it needs
+# no display and no QGuiApplication, only a QCoreApplication for plugin paths.
+# Private: nothing in include/ mentions Qt, and CMake still propagates the link
+# requirement to consumers of this static library.
+target_link_libraries(arraw PRIVATE Qt6::Gui)
 # qt_standard_project_setup() turns AUTOMOC on globally; the engine has no Qt
 # types, so opting out keeps that honest (and saves a moc pass).
 set_target_properties(arraw PROPERTIES AUTOMOC OFF)
