@@ -14,9 +14,13 @@ endif()
 include(Catch)
 
 add_executable(arraw-tests
-        test_ImageBuffer.cpp)
+        main.cpp
+        support/TestImages.cpp
+        test_ImageBuffer.cpp
+        test_ImageExport.cpp)
 arraw_enable_warnings(arraw-tests)
-target_link_libraries(arraw-tests PRIVATE arraw Catch2::Catch2WithMain)
+# Catch2 (not Catch2WithMain): main.cpp runs the session inside a QCoreApplication.
+target_link_libraries(arraw-tests PRIVATE arraw Catch2::Catch2 Qt6::Core)
 set_target_properties(arraw-tests PROPERTIES AUTOMOC OFF)
 
 # Registers each TEST_CASE with CTest individually, so `ctest -R` can select one.
