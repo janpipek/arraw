@@ -18,7 +18,7 @@ using namespace std;
 /// @return The resolved file format.
 /// @throws std::invalid_argument if no format was requested and the extension
 /// is not one arraw writes.
-ImageFileFormat extractImageFileFormat(const std::filesystem::path& path,
+static ImageFileFormat extractImageFileFormat(const std::filesystem::path& path,
                                        const ExportOptions& options) {
     if (options.format.has_value()) {
         return *options.format;
@@ -44,7 +44,7 @@ ImageFileFormat extractImageFileFormat(const std::filesystem::path& path,
                           : "no image format requested and '" + extension + "' names none");
 }
 
-QByteArray fileFormatToString(ImageFileFormat format) {
+static QByteArray fileFormatToString(ImageFileFormat format) {
     switch (format) {
     case ImageFileFormat::Png:
         return "png";
@@ -81,7 +81,7 @@ static QImage::Format pixelFormatToQImageFormat(PixelFormat format) {
     return QImage::Format_Invalid;
 }
 
-QImage imageBufferToQImage(const ImageBuffer& imageBuffer) {
+static QImage imageBufferToQImage(const ImageBuffer& imageBuffer) {
     const uchar* data = reinterpret_cast<const uchar*>(imageBuffer.bytes().data());
     QImage result(data, imageBuffer.size().width, imageBuffer.size().height,
                   imageBuffer.rowStride(), pixelFormatToQImageFormat(imageBuffer.format()));
