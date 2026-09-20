@@ -3,6 +3,5 @@
 #include "DevelopSettings.h"
 
 namespace arraw {
-    struct Photo {
-    };
-}
+struct Photo {};
+} // namespace arraw

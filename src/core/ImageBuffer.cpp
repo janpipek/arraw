@@ -3,7 +3,7 @@
 using namespace std;
 using namespace arraw;
 
-constexpr static ImageSize validateSize(const ImageSize &size);
+constexpr static ImageSize validateSize(const ImageSize& size);
 
 static constexpr size_t checkedMultiply(std::size_t left, std::size_t right);
 
@@ -16,22 +16,21 @@ static ImageBuffer::Storage allocateStorage(std::size_t sampleCount, PixelFormat
 ImageBuffer::ImageBuffer(ImageSize size, PixelFormat format, ColorEncoding encoding)
     : size_(validateSize(size)), format_(format), encoding_(encoding),
       rowStride_(checkedMultiply(size_.width, bytesPerPixel(format_))),
-      storage_(allocateStorage(checkedSampleCount(size_, format_), format_)) {
-}
+      storage_(allocateStorage(checkedSampleCount(size_, format_), format_)) {}
 
 span<byte> ImageBuffer::bytes() noexcept {
-    return std::visit(
-        [](auto &samples) { return std::as_writable_bytes(std::span{samples}); }, storage_);
+    return std::visit([](auto& samples) { return std::as_writable_bytes(std::span{samples}); },
+                      storage_);
 }
 
 span<const byte> ImageBuffer::bytes() const noexcept {
-    return std::visit(
-        [](const auto &samples) { return std::as_bytes(std::span{samples}); }, storage_);
+    return std::visit([](const auto& samples) { return std::as_bytes(std::span{samples}); },
+                      storage_);
 }
 
 size_t ImageBuffer::byteSize() const noexcept {
     return std::visit(
-        [](const auto &samples) {
+        [](const auto& samples) {
             using Sample = typename std::decay_t<decltype(samples)>::value_type;
             return samples.size() * sizeof(Sample);
         },
@@ -39,31 +38,27 @@ size_t ImageBuffer::byteSize() const noexcept {
 }
 
 ImageBuffer ImageBuffer::clone() const {
-    ImageBuffer result(
-        this->size(),
-        this->format(),
-        this->encoding()
-    );
+    ImageBuffer result(this->size(), this->format(), this->encoding());
     result.storage_ = this->storage_;
     return result;
 }
 
 static ImageBuffer::Storage allocateStorage(std::size_t sampleCount, PixelFormat format) {
     switch (format) {
-        case PixelFormat::RgbU8:
-        case PixelFormat::RgbaU8:
-            return std::vector<std::uint8_t>(sampleCount);
-        case PixelFormat::RgbU16:
-        case PixelFormat::RgbaU16:
-            return std::vector<std::uint16_t>(sampleCount);
-        case PixelFormat::RgbF32:
-        case PixelFormat::RgbaF32:
-            return std::vector<float>(sampleCount);
+    case PixelFormat::RgbU8:
+    case PixelFormat::RgbaU8:
+        return std::vector<std::uint8_t>(sampleCount);
+    case PixelFormat::RgbU16:
+    case PixelFormat::RgbaU16:
+        return std::vector<std::uint16_t>(sampleCount);
+    case PixelFormat::RgbF32:
+    case PixelFormat::RgbaF32:
+        return std::vector<float>(sampleCount);
     }
     throw std::invalid_argument("unknown pixel format");
 }
 
-constexpr ImageSize validateSize(const ImageSize &size) {
+constexpr ImageSize validateSize(const ImageSize& size) {
     if (size.empty())
         throw std::invalid_argument("image dimensions must be non-zero");
     return size;

@@ -122,21 +122,26 @@ public:
     ~ImageBuffer() = default;
 
     /// @brief Pixel dimensions of the buffer.
-    [[nodiscard]] ImageSize size() const noexcept { return size_; }
+    [[nodiscard]] ImageSize size() const noexcept {
+        return size_;
+    }
 
     /// @brief Sample layout of the buffer.
-    [[nodiscard]] PixelFormat format() const noexcept { return format_; }
+    [[nodiscard]] PixelFormat format() const noexcept {
+        return format_;
+    }
 
     /// @brief Meaning of the buffer's RGB sample values.
-    [[nodiscard]] ColorEncoding encoding() const noexcept { return encoding_; }
+    [[nodiscard]] ColorEncoding encoding() const noexcept {
+        return encoding_;
+    }
 
     /// @brief Number of bytes between the start of consecutive rows.
-    [[nodiscard]] std::size_t rowStride() const noexcept { return rowStride_; }
+    [[nodiscard]] std::size_t rowStride() const noexcept {
+        return rowStride_;
+    }
 
-    /// @brief Total size of the sample storage, in bytes.(ImageSize size, PixelFormat format, ColorEncoding encoding);
-    //        : size_(validateSize(size)), format_(format), encoding_(encoding),
-    //          rowStride_(checkedMultiply(size_.width, bytesPerPixel(format_))),
-    //          storage_(allocateStorage(checkedSampleCount(size_, format_), format_)) {}
+    /// @brief Total size of the sample storage, in bytes.
     [[nodiscard]] std::size_t byteSize() const noexcept;
 
     /// @brief Zero-copy reinterpretation of the sample storage as raw bytes.
@@ -155,16 +160,14 @@ public:
     /// must agree with @ref format().
     /// @return A read-only view over the buffer's storage.
     /// @throws std::bad_variant_access if @p T does not match @ref format().
-    template <typename T>
-    [[nodiscard]] std::span<const T> samples() const {
+    template <typename T> [[nodiscard]] std::span<const T> samples() const {
         static_assert(isSupportedSample<T>);
         const auto& values = std::get<std::vector<T>>(storage_);
         return {values.data(), values.size()};
     }
 
     /// @copydoc samples() const
-    template <typename T>
-    [[nodiscard]] std::span<T> samples() {
+    template <typename T> [[nodiscard]] std::span<T> samples() {
         static_assert(isSupportedSample<T>);
         auto& values = std::get<std::vector<T>>(storage_);
         return {values.data(), values.size()};
@@ -180,13 +183,14 @@ public:
     /// views over the same memory: reading any object's representation as
     /// bytes is always allowed, but reinterpreting a raw byte buffer back as
     /// float (say) is not, without extra ceremony.
-    using Storage = std::variant<
-        std::vector<std::uint8_t>, std::vector<std::uint16_t>, std::vector<float>>;
+    using Storage =
+        std::variant<std::vector<std::uint8_t>, std::vector<std::uint16_t>, std::vector<float>>;
 
 private:
     template <typename T>
-    static constexpr bool isSupportedSample = std::is_same_v<T, std::uint8_t>
-        || std::is_same_v<T, std::uint16_t> || std::is_same_v<T, float>;
+    static constexpr bool isSupportedSample =
+        std::is_same_v<T, std::uint8_t> || std::is_same_v<T, std::uint16_t> ||
+        std::is_same_v<T, float>;
 
     ImageSize size_;
     PixelFormat format_;

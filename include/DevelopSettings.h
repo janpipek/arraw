@@ -1,7 +1,5 @@
 #pragma once
 
 namespace arraw {
-    struct DevelopSettings {
-
-    };
-}
+struct DevelopSettings {};
+} // namespace arraw

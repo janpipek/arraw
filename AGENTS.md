@@ -6,18 +6,24 @@ Communication:
 - Offer multiple solutions to a problem/question.
 
 Goals:
-
 - support on Linux (primary), Windows (secondary), MacOS (tertiary)
 - a library to support the operations, CLI app to
 - (eventually) Python or Lua scripting based on the library (and perhaps to drive the GUI app?)
 
 Setting:
-
 - This branch is a major rework of the "main" branch. You are allowed to look at the files there but you should not
   follow blindly, "clean slate" is an asset (see important files)
 
 Structure:
 - include: Public API
+- src: Three different parts
+  - core: all the machinery
+  - app: the Qt application
+  - cli: Command-line tool
+
+Tools:
+- `just` for task execution
+- `uv` for any Python
 
 Important documentation (all in /docs):
 

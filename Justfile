@@ -24,23 +24,28 @@ cli *args: configure
     cmake --build --preset debug --target arraw-cli
     ./build/debug/arraw-cli {{args}}
 
+# Build and run the test suite
+test *args: configure
+    cmake --build --preset debug --target arraw-tests
+    ctest --preset debug {{args}}
+
 # Format C++ source/header files
 [unix]
 format:
-    find src \( -name '*.cpp' -o -name '*.h' \) -print | xargs {{clang_format}} -i
+    find src include tests \( -name '*.cpp' -o -name '*.h' \) -print | xargs {{clang_format}} -i
 
 [windows]
 format:
-    & {{clang_format}} -i @(Get-ChildItem src -Recurse -File -Include *.cpp,*.h | ForEach-Object FullName)
+    & {{clang_format}} -i @(Get-ChildItem src,include,tests -Recurse -File -Include *.cpp,*.h | ForEach-Object FullName)
 
 # Check C++ formatting without modifying files
 [unix]
 format-check:
-    find src \( -name '*.cpp' -o -name '*.h' \) -print | xargs {{clang_format}} --dry-run --Werror
+    find src include tests \( -name '*.cpp' -o -name '*.h' \) -print | xargs {{clang_format}} --dry-run --Werror
 
 [windows]
 format-check:
-    & {{clang_format}} --dry-run --Werror @(Get-ChildItem src -Recurse -File -Include *.cpp,*.h | ForEach-Object FullName)
+    & {{clang_format}} --dry-run --Werror @(Get-ChildItem src,include,tests -Recurse -File -Include *.cpp,*.h | ForEach-Object FullName)
 
 # Configure and build Release (build/release)
 release:
