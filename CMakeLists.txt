@@ -24,8 +24,11 @@ qt_standard_project_setup()
 add_library(arraw STATIC
         include/DevelopSettings.h
         include/ImageBuffer.h
+        include/ImageExport.h
         include/Photo.h
-        src/core/ImageBuffer.cpp)
+        src/core/ImageBuffer.cpp
+        src/core/ImageExport.cpp
+)
 add_library(arraw::arraw ALIAS arraw)
 arraw_enable_warnings(arraw)
 target_include_directories(arraw PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
