@@ -95,7 +95,9 @@ misleads.
   not eliminate the overshoot; the output conversion clips what is left. Making
   that impossible would mean a per-channel transform, which this ADR rejects
   for the reason given above.
-- **The five controls are decided here and not yet built.** Only the shoulder
-  and its setting exist; the windows arrive with the perceptual crossing stage
-  they act in, which is also when `NamedEncoding` gains the name ADR 011 asks
-  for.
+- **The crossing is inside the tone stage, not a change of encoding.** Because
+  tone acts on luminance and the colour follows by ratio, what crosses into the
+  perceptual coordinate is one number rather than a pixel: the buffer stays in
+  the working encoding throughout. So `NamedEncoding` does not gain a member
+  here after all — the name ADR 011 asks for belongs to the curve-input tap,
+  whose samples really are a buffer in that coordinate, and arrives with it.

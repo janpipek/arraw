@@ -6,6 +6,7 @@
 #include <DevelopSettings.h>
 #include <Photo.h>
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 
@@ -43,9 +44,32 @@ struct ProcessingPlan {
 
     /// @brief Exponent the tone scale is raised to about middle grey.
     ///
-    /// The Contrast setting resolved into the one number the chain uses: the
-    /// perceptual slope at the pivot. One leaves the tone scale alone.
+    /// The Contrast setting resolved into the perceptual slope at the pivot.
+    /// One leaves the tone scale alone.
     float contrastSlope = 1.0F;
+
+    /// @brief What the raised value is multiplied by to bring grey back.
+    ///
+    /// `greyPivot^(1 - contrastSlope)`, worked out once: a power law through
+    /// the pivot written as a multiply and a power rather than as a divide, a
+    /// power and a multiply. With no contrast asked for it is exactly one, so
+    /// the stage returns precisely the value it was given.
+    float contrastScale = 1.0F;
+
+    /// @brief How far the dark tones move, at the peak of their region.
+    ///
+    /// In the perceptual coordinate, where the controls act. The window each
+    /// shift is spread over lives in the chain; the plan carries how far.
+    float shadowShift = 0.0F;
+
+    /// @copydoc shadowShift
+    float highlightShift = 0.0F;
+
+    /// @copydoc shadowShift
+    float blackShift = 0.0F;
+
+    /// @copydoc shadowShift
+    float whiteShift = 0.0F;
 
     /// @brief Luminance at which highlights begin to roll toward white.
     ///
@@ -103,17 +127,57 @@ struct ProcessingPlan {
 /// for exactly where it was.
 inline constexpr float greyPivot = 0.45865646F;
 
+/// @brief Smooth rise from zero to one between two edges.
+/// @param first Edge below which the result is zero.
+/// @param last Edge above which it is one.
+/// @param value Where to evaluate it.
+/// @return The eased fraction, never outside zero to one.
+[[nodiscard]] constexpr float smoothstep(float first, float last, float value) {
+    const float t = std::clamp((value - first) / (last - first), 0.0F, 1.0F);
+    return t * t * (3.0F - 2.0F * t);
+}
+
+/// @brief Weight of the Shadows region: zero at black, zero by the midtones.
+[[nodiscard]] constexpr float shadowWeight(float value) {
+    return smoothstep(0.0F, 0.3F, value) * (1.0F - smoothstep(0.3F, 0.6F, value));
+}
+
+/// @brief Weight of the Highlights region, reaching a little past white.
+[[nodiscard]] constexpr float highlightWeight(float value) {
+    return smoothstep(0.4F, 0.75F, value) * (1.0F - smoothstep(0.75F, 1.2F, value));
+}
+
+/// @brief Weight of the black end, full at black and gone by the shadows.
+[[nodiscard]] constexpr float blackWeight(float value) {
+    return 1.0F - smoothstep(0.0F, 0.35F, value);
+}
+
+/// @brief Weight of the white end, full at white and above.
+[[nodiscard]] constexpr float whiteWeight(float value) {
+    return smoothstep(0.6F, 1.0F, value);
+}
+
 /// @brief Shapes one luminance through the tone controls, in their fixed order.
 ///
 /// Contrast is a straight line in log--log through the grey pivot: monotone
 /// everywhere, never negative, and continuing smoothly past white rather than
-/// flattening into it (ADR 013). The regional controls join it here.
+/// flattening into it. The four regional controls are smooth windows added on
+/// top, each fading out where the next one's territory begins (ADR 013).
 /// @param plan Resolved settings.
 /// @param luminance Linear luminance to shape.
 /// @return The shaped linear luminance.
 [[nodiscard]] constexpr float shapeLuminance(const ProcessingPlan& plan, float luminance) {
-    const float value = toPerceptual(luminance);
-    return toLinear(greyPivot * std::pow(value / greyPivot, plan.contrastSlope));
+    float value = toPerceptual(luminance);
+    value = plan.contrastScale * std::pow(value, plan.contrastSlope);
+
+    // The global shape first, then the regions, then the ends -- each reading
+    // what the one before it left, and each moving its region by little enough
+    // that no combination can fold the tone scale back on itself (ADR 013).
+    value += plan.shadowShift * shadowWeight(value);
+    value += plan.highlightShift * highlightWeight(value);
+    value += plan.blackShift * blackWeight(value);
+    value += plan.whiteShift * whiteWeight(value);
+    return toLinear(std::max(value, 0.0F));
 }
 
 /// @brief Applies the tone controls to a colour, through its luminance.

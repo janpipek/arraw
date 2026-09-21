@@ -34,6 +34,16 @@ inline constexpr float flattestContrast = -100.0F;
 /// @copydoc flattestContrast
 inline constexpr float steepestContrast = 100.0F;
 
+/// @brief The range the four regional tone controls share.
+///
+/// Shadows, Highlights, Blacks and Whites each move their own region of the
+/// tone scale by at most a fixed amount, so one range serves all four; how far
+/// each reaches is the plan's business (ADR 013).
+inline constexpr float weakestToneControl = -100.0F;
+
+/// @copydoc weakestToneControl
+inline constexpr float strongestToneControl = 100.0F;
+
 /// @brief Weakest and strongest highlight roll-off arraw models.
 ///
 /// Zero is a true neutral — a photographer who wants a hard clip may have one
@@ -60,6 +70,27 @@ struct DevelopSettings {
     /// deliberately pushes bright values above white, which the highlight
     /// roll-off then catches.
     float contrast = 0.0F;
+
+    /// @brief How much the dark tones are lifted or deepened.
+    ///
+    /// A region rather than an end: it fades out at black, which is Blacks'
+    /// business, and at the midtones, which are Contrast's (ADR 013).
+    float shadows = 0.0F;
+
+    /// @brief How much the bright tones are recovered or pushed up.
+    ///
+    /// Reaches a little past white, so that recovery can take hold of the
+    /// headroom the roll-off is about to compress.
+    float highlights = 0.0F;
+
+    /// @brief Where the black point sits.
+    float blacks = 0.0F;
+
+    /// @brief Where the white point sits.
+    ///
+    /// Everything above white moves with it, rather than being crushed into
+    /// it: raising the white point is not the same as clipping to it.
+    float whites = 0.0F;
 
     /// @brief Which light the photograph is balanced for.
     WhiteBalanceMode whiteBalance = WhiteBalanceMode::AsShot;

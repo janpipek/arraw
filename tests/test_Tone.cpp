@@ -2,6 +2,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 
@@ -26,6 +28,23 @@ float rolled(float value, float amount) {
     return developPixel(plan, {value, value, value})[1];
 }
 
+/// @brief Checks that a value came back as good as unchanged.
+///
+/// Not bit-for-bit: a neutral colour's luminance is its channel value to
+/// within a float's last digit, not exactly, so a control that leaves a region
+/// alone leaves it alone to that precision -- a thousandth of the smallest
+/// step a sixteen-bit export can hold.
+bool unmoved(float value, float from) {
+    return std::abs(value - from) < 1e-6F;
+}
+
+/// @brief Develops one neutral value through settings of the caller's choosing.
+float toned(float value, DevelopSettings settings) {
+    settings.filmicHighlights = noFilmicHighlights;
+    const auto plan = planFor(ColorEncoding{workingEncoding}, settings);
+    return developPixel(plan, {value, value, value})[1];
+}
+
 /// @brief Shapes one neutral value, with the shoulder out of the way.
 float shaped(float value, float contrast) {
     const auto plan = planFor(ColorEncoding{workingEncoding},
@@ -34,6 +53,82 @@ float shaped(float value, float contrast) {
 }
 
 } // namespace
+
+TEST_CASE("Shadows lift the dark tones and leave the ends alone", "[tone]") {
+    /// A region, not an end: black stays black -- that is what Blacks is for
+    /// -- and white is untouched entirely (ADR 013).
+    REQUIRE(toned(0.0F, {.shadows = 100.0F}) == 0.0F);
+    REQUIRE(unmoved(toned(1.0F, {.shadows = 100.0F}), 1.0F));
+
+    REQUIRE(toned(0.01F, {.shadows = 100.0F}) > 0.01F);
+    REQUIRE(toned(0.01F, {.shadows = -100.0F}) < 0.01F);
+}
+
+TEST_CASE("Highlights recover the bright tones without reaching the shadows", "[tone]") {
+    REQUIRE(unmoved(toned(0.01F, {.highlights = -100.0F}), 0.01F));
+
+    REQUIRE(toned(0.8F, {.highlights = -100.0F}) < 0.8F);
+    REQUIRE(toned(0.8F, {.highlights = 100.0F}) > 0.8F);
+
+    /// Reaching a little past white, so recovery has hold of the headroom the
+    /// roll-off is about to compress.
+    REQUIRE(toned(1.5F, {.highlights = -100.0F}) < 1.5F);
+}
+
+TEST_CASE("Blacks move the black point", "[tone]") {
+    /// A black pixel has no colour to scale, so it takes the lifted value
+    /// neutrally rather than staying black while everything around it rises.
+    REQUIRE(toned(0.0F, {.blacks = 100.0F}) > 0.0F);
+    REQUIRE(toned(0.0F, {.blacks = -100.0F}) == 0.0F);
+
+    /// And the midtones are none of its business.
+    REQUIRE(unmoved(toned(0.18F, {.blacks = 100.0F}), 0.18F));
+}
+
+TEST_CASE("Whites move the white point and carry the headroom with them", "[tone]") {
+    REQUIRE(toned(1.0F, {.whites = 100.0F}) > 1.0F);
+    REQUIRE(toned(1.0F, {.whites = -100.0F}) < 1.0F);
+
+    /// Above white the weight stays full, so raising the white point lifts the
+    /// headroom rather than crushing it into white (ADR 013).
+    REQUIRE(toned(3.0F, {.whites = 100.0F}) > 3.0F);
+
+    REQUIRE(unmoved(toned(0.18F, {.whites = 100.0F}), 0.18F));
+}
+
+TEST_CASE("No combination of the tone controls can invert the scale", "[tone]") {
+    /// The property the amounts in ADR 013 were chosen for, checked at the
+    /// corners of the parameter space: a tone scale that folded back on itself
+    /// would render a gradient as a ridge, whatever the sliders said.
+    constexpr std::array corners{weakestToneControl, 0.0F, strongestToneControl};
+
+    float worstDrop = 0.0F;
+    for (const float contrast : corners) {
+        for (const float shadows : corners) {
+            for (const float highlights : corners) {
+                for (const float blacks : corners) {
+                    for (const float whites : corners) {
+                        const auto plan =
+                            planFor(ColorEncoding{workingEncoding}, {.contrast = contrast,
+                                                                     .shadows = shadows,
+                                                                     .highlights = highlights,
+                                                                     .blacks = blacks,
+                                                                     .whites = whites});
+                        float previous = 0.0F;
+                        for (int step = 0; step <= 400; ++step) {
+                            const float input = static_cast<float>(step) / 100.0F;
+                            const float output = developPixel(plan, {input, input, input})[1];
+                            worstDrop = std::min(worstDrop, output - previous);
+                            previous = output;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    REQUIRE(worstDrop >= 0.0F);
+}
 
 TEST_CASE("Contrast holds middle grey still", "[tone]") {
     /// What a photographer expects of a contrast control: the grey card does
