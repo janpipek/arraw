@@ -4,6 +4,7 @@
 
 #include <Diagnostics.h>
 #include <ImageBuffer.h>
+#include <ImageImport.h>
 
 /// @brief RAW decoding, over LibRaw.
 ///
@@ -38,6 +39,22 @@ namespace arraw::rawimport {
 /// @param path File to inspect.
 /// @return `true` if LibRaw recognises the content.
 [[nodiscard]] bool holdsRawImage(const std::filesystem::path& path);
+
+/// @brief Reads what a RAW file declares, without unpacking its pixels.
+///
+/// LibRaw fills its colour description from the file's headers, so the camera
+/// matrix, the daylight scale and the as-shot neutral are all available for
+/// the cost of an open — which is what lets a photograph be described, and a
+/// render planned, without a demosaic (ADR 012).
+///
+/// The dimensions are the visible frame's, before any orientation: ::load
+/// applies none, so they are the ones it will produce.
+///
+/// @param path File to describe.
+/// @param log Where to report a substituted white balance.
+/// @return The file's dimensions and its camera's colour.
+/// @throws std::runtime_error if the file cannot be opened or read.
+[[nodiscard]] ImageMetadata readMetadata(const std::filesystem::path& path, DiagnosticLog& log);
 
 /// @brief Decodes a RAW file into a buffer in the working encoding.
 ///

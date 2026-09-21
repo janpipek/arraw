@@ -1,3 +1,4 @@
+#include "Diagnostics.h"
 #include "ImageExport.h"
 #include "ImageImport.h"
 
@@ -321,6 +322,81 @@ TEST_CASE("A RAW extension arraw does not list is still decoded by arraw", "[int
     /// test is meaningful whether or not the plugin is installed.
     REQUIRE(image.size() == ImageSize{32, 24});
     REQUIRE(maxDifference(image, loadImage(test::fixture(neutralFixture))) == 0);
+}
+
+TEST_CASE("A photograph describes itself without being decoded", "[integration][raw]") {
+    /// The first step of ADR 012: a plan resolves from what a photograph
+    /// declares, and declaring it must not cost a demosaic. What the metadata
+    /// promises is therefore exactly what the decode delivers -- including for
+    /// the rotated fixture, whose orientation tag LibRaw would otherwise let
+    /// swap the dimensions.
+    for (const auto fixture : {neutralFixture, warmFixture, noWbFixture, bayerFixture,
+                               rotatedFixture, skewedFixture, previewFixture}) {
+        const auto path = test::fixture(fixture);
+        const auto metadata = readImageMetadata(path);
+        const auto decoded = loadImage(path);
+
+        REQUIRE(metadata.size == decoded.size());
+        REQUIRE(metadata.encoding == decoded.encoding());
+    }
+}
+
+TEST_CASE("Describing a photograph does not read its pixels", "[integration][raw]") {
+    /// The claim ADR 012 rests on, tested rather than asserted: half a RAW
+    /// file still describes itself, because the description comes out of the
+    /// headers, while decoding it fails for want of the sensor data. If a
+    /// regenerated fixture ever moved its headers past the halfway mark, this
+    /// fails at the metadata read rather than passing quietly.
+    const test::TempDir directory;
+    const auto truncated = copyAs(directory, neutralFixture, "half.dng");
+    std::filesystem::resize_file(truncated, std::filesystem::file_size(truncated) / 2);
+
+    const auto metadata = readImageMetadata(truncated);
+    REQUIRE(metadata.size == ImageSize{32, 24});
+
+    REQUIRE_THROWS_AS(loadImage(truncated), std::runtime_error);
+}
+
+TEST_CASE("A substituted white balance is reported before any pixel is read",
+          "[integration][raw][diagnostics]") {
+    /// The substitution is a fact about the file, not about the decode, so a
+    /// photographer can be told when the photograph opens rather than when it
+    /// first renders.
+    CollectedDiagnostics substituted;
+    const auto missing = readImageMetadata(test::fixture(noWbFixture), substituted);
+
+    REQUIRE(substituted.entries().size() == 1);
+    REQUIRE(substituted.entries().front().notice == Notice::SubstitutedWhiteBalance);
+    REQUIRE(substituted.entries().front().severity == Severity::Warning);
+    REQUIRE(std::get<CameraNative>(missing.encoding).asShotMultipliers == Gains{1.0F, 1.0F, 1.0F});
+
+    CollectedDiagnostics recorded;
+    const auto warm = readImageMetadata(test::fixture(warmFixture), recorded);
+
+    REQUIRE(recorded.entries().empty());
+    REQUIRE(std::get<CameraNative>(warm.encoding).asShotMultipliers[0] > 1.0F);
+}
+
+TEST_CASE("A photograph that is not a RAW declares the encoding it will arrive in",
+          "[integration][raw]") {
+    /// Anything Qt decodes is converted on the way in, so what a plan starts
+    /// from is the working encoding rather than the file's own space.
+    const auto metadata = readImageMetadata(test::fixture(testCard));
+
+    REQUIRE(metadata.size == ImageSize{61, 41});
+    REQUIRE(isWorkingEncoding(metadata.encoding));
+}
+
+TEST_CASE("A file that is neither an image nor a RAW describes nothing", "[integration][raw]") {
+    const test::TempDir directory;
+    const auto destination = directory.file("notes.png");
+    {
+        std::ofstream stream(destination, std::ios::binary);
+        stream << "not an image at all";
+        REQUIRE(stream.good());
+    }
+
+    REQUIRE_THROWS_AS(readImageMetadata(destination), std::runtime_error);
 }
 
 TEST_CASE("A file that is neither an image nor a RAW is refused", "[integration][raw]") {

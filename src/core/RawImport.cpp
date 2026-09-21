@@ -175,6 +175,35 @@ CameraNative cameraColour(const LibRaw& raw) {
     return camera;
 }
 
+/// @brief Describes an opened file, for a plan to be resolved against.
+///
+/// The dimensions are the visible frame's rather than `iwidth`/`iheight`,
+/// which LibRaw swaps when it applies an orientation; ::applyDecodeSettings
+/// tells it not to, so these are the ones the decode produces.
+/// @param raw Opened handle, before any processing.
+/// @return What the file declares about itself.
+ImageMetadata metadataOf(const LibRaw& raw) {
+    const auto& sizes = raw.imgdata.sizes;
+    return {.size = {sizes.width, sizes.height}, .encoding = cameraColour(raw)};
+}
+
+/// @brief Reports a white balance the camera did not record.
+///
+/// The frame will not look as its camera intended, and the temperature a
+/// photographer is shown is an estimate rather than a reading, so the
+/// substitution is said rather than left to be noticed (ADR 005).
+/// @param raw Opened handle.
+/// @param path File being read, to name in the diagnostic.
+/// @param log Where to report it.
+void reportSubstitutedWhiteBalance(const LibRaw& raw, const std::filesystem::path& path,
+                                   DiagnosticLog& log) {
+    if (!hasCameraNeutral(raw)) {
+        log.record({.notice = Notice::SubstitutedWhiteBalance,
+                    .severity = Severity::Warning,
+                    .subject = path});
+    }
+}
+
 ImageBuffer toBuffer(const libraw_processed_image_t& image, ColorEncoding encoding) {
     if (image.type != LIBRAW_IMAGE_BITMAP) {
         throw std::runtime_error("LibRaw returned a thumbnail rather than an image");
@@ -227,6 +256,19 @@ bool arraw::rawimport::holdsRawImage(const std::filesystem::path& path) {
     return openFile(raw, path) == LIBRAW_SUCCESS;
 }
 
+ImageMetadata arraw::rawimport::readMetadata(const std::filesystem::path& path,
+                                             DiagnosticLog& log) {
+    LibRaw raw;
+    if (const int code = openFile(raw, path); code != LIBRAW_SUCCESS) {
+        throw std::runtime_error(failureMessage(path, code));
+    }
+
+    // No unpack and no processing: the colour description comes out of the
+    // headers, and asking for it must not cost a demosaic.
+    reportSubstitutedWhiteBalance(raw, path, log);
+    return metadataOf(raw);
+}
+
 ImageBuffer arraw::rawimport::load(const std::filesystem::path& path, DiagnosticLog& log) {
     LibRaw raw;
     if (const int code = openFile(raw, path); code != LIBRAW_SUCCESS) {
@@ -239,14 +281,10 @@ ImageBuffer arraw::rawimport::load(const std::filesystem::path& path, Diagnostic
         throw std::runtime_error(failureMessage(path, code));
     }
 
-    // Before processing, which rewrites part of what this reads.
-    const CameraNative camera = cameraColour(raw);
-
-    if (!hasCameraNeutral(raw)) {
-        log.record({.notice = Notice::SubstitutedWhiteBalance,
-                    .severity = Severity::Warning,
-                    .subject = path});
-    }
+    // The same description a caller can ask for on its own, read here before
+    // processing, which rewrites part of what it reads.
+    const ImageMetadata metadata = metadataOf(raw);
+    reportSubstitutedWhiteBalance(raw, path, log);
 
     if (const int code = raw.dcraw_process(); code != LIBRAW_SUCCESS) {
         throw std::runtime_error(failureMessage(path, code));
@@ -257,5 +295,5 @@ ImageBuffer arraw::rawimport::load(const std::filesystem::path& path, Diagnostic
     if (!image) {
         throw std::runtime_error(failureMessage(path, code));
     }
-    return toBuffer(*image, camera);
+    return toBuffer(*image, metadata.encoding);
 }

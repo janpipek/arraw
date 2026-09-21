@@ -85,9 +85,11 @@ cached from it or reused against it.
   object is resolved from. `develop(source, settings)` stays what it is until
   then.
 - **`Photo` has to become a document before any of this executes.** It is an
-  empty struct today. The first step is splitting the metadata read from the
-  pixel decode in `RawImport`, so that a photo can be resolved without
-  demosaicing — real work with real tests, deliberately not done here.
+  empty struct today. The first step is done: `readImageMetadata` describes a
+  photograph — its dimensions and its camera's colour — from the headers alone,
+  and a truncated RAW proves it reads no pixels. What remains is the document
+  that holds that description beside a develop state, and the plan resolved
+  from it.
 - **A snapshot stays cheap only while develop state stays light.** When brush
   rasters and long spot lists live in it, a snapshot shares them rather than
   copying, and the plan compares them by revision, as ADR 011 already says for

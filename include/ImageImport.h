@@ -6,6 +6,41 @@
 #include <ImageBuffer.h>
 
 namespace arraw {
+
+/// @brief What a photograph declares about itself, read without decoding it.
+///
+/// What a plan is resolved from (ADR 012): a photograph can be described
+/// before any pixel is demosaiced, so opening a document does not cost a
+/// decode, and the description a render is planned against is the one the
+/// decode will honour.
+struct ImageMetadata {
+    /// @brief Pixel dimensions the decode will produce.
+    ImageSize size;
+
+    /// @brief Encoding the decoded samples will be in.
+    ///
+    /// A camera's own space for a RAW, because the conversion out of it
+    /// belongs to development (ADR 007); the working encoding for anything
+    /// else, which ::arraw::loadImage converts to on the way in.
+    ColorEncoding encoding;
+};
+
+/// @brief Reads what a file declares about itself, without decoding its pixels.
+///
+/// The same decoder decides as in ::arraw::loadImage, by the same rule, so a
+/// photograph is described by whatever will decode it. For a RAW this parses
+/// the file's headers; for anything else it reads the image header Qt's codec
+/// exposes. Neither unpacks a pixel.
+///
+/// @param path File to describe.
+/// @param log Where to report what a photographer should know about the file,
+/// such as a white balance it did not record.
+/// @return What the file declares.
+/// @throws std::runtime_error if the file cannot be opened or is not an image
+/// either decoder recognises.
+[[nodiscard]] ImageMetadata readImageMetadata(const std::filesystem::path& path,
+                                              DiagnosticLog& log = discardedDiagnostics());
+
 /// @brief Decodes an image file into a buffer in the working encoding.
 ///
 /// A RAW extension chooses the RAW decoder, and so does a file whose *content*
