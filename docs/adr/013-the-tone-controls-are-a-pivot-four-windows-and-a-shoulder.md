@@ -73,6 +73,26 @@ is pulled down by a ratio `r`, its chroma is scaled by `r^1.5` toward the
 neutral of the same luminance, because something genuinely overexposed loses
 colour as it brightens.
 
+**There is no toe, and the asymmetry is deliberate.** The shoulder is
+load-bearing because the input is unbounded above — exposure is a real multiply,
+and clipping destroys distinctions between values that were different. Below,
+luminance is bounded by zero: nothing arrives needing to be folded back in, and
+no distinction is lost. What a toe would buy is film character, hidden shadow
+noise, and one day a mapping onto a display's real black — all of them look or
+hygiene rather than correctness, and all of them already reachable through
+Blacks, Shadows and Contrast, which unlike a mandatory toe have a neutral. A
+toe has none: it either lifts black or flattens the slope into it, and whichever
+was chosen would be every photograph's default rendering.
+
+The question worth returning to is not a toe but a single sigmoid — `filmic
+rgb`, `sigmoid` and AgX make the display transform *be* the contrast, with its
+slope at the pivot as the photographer's control and a toe and shoulder falling
+out of the same curve. That is tighter than a power law plus a knee, and it is
+an ADR 010-level change: Contrast would stop being separable, and the default
+rendering would stop being neutral at the bottom. Deferred until there is a
+viewport to judge it in, because it argues well on paper and settles in ten
+minutes of looking at photographs.
+
 **Its amount may be zero**, and zero means a hard clip. The stage is always in
 the chain — that is what ADR 010's "mandatory" protects, and why the default is
 a gentle roll rather than none — but the control has a true neutral, because a
