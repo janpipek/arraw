@@ -13,10 +13,11 @@ namespace arraw::rawimport {
 
 /// @brief Checks whether a path's extension names a RAW format arraw decodes.
 ///
-/// Extension rather than content, because LibRaw opens ordinary TIFFs as
-/// happily as it opens camera files; asking it first would capture arraw's own
-/// TIFF exports. Content is consulted only when this returns `false` and Qt's
-/// codecs have already declined; see ::holdsRawImage.
+/// A fast path, not the decision: ::holdsRawImage asks the content of
+/// everything this declines, and asks it before Qt's codecs are offered
+/// anything. Naming the extension saves that second open in the common case,
+/// and gives a file named like a RAW the RAW decoder's error message when it
+/// turns out not to be one.
 /// @param path Path to inspect; its extension is compared case-insensitively.
 /// @return `true` for a recognised RAW extension.
 [[nodiscard]] bool namesRawFormat(const std::filesystem::path& path);
@@ -24,7 +25,15 @@ namespace arraw::rawimport {
 /// @brief Checks whether a file's content is a RAW image, whatever it is named.
 ///
 /// Parses the file's headers without unpacking any pixels, so it is cheap
-/// enough to use as a fallback for a file Qt could not read.
+/// enough to ask of every file — which ::arraw::loadImage does, before it
+/// offers anything to Qt. Asking afterwards is too late: a RAW container is
+/// usually a TIFF carrying an ordinary RGB preview, and a TIFF reader decodes
+/// that preview rather than failing, so a fallback for "Qt could not read it"
+/// never runs.
+///
+/// Safe to ask first because LibRaw claims camera files, not TIFFs: measured
+/// against 0.22.2, every multi-channel TIFF offered to it is declined,
+/// arraw's own exports included.
 /// @param path File to inspect.
 /// @return `true` if LibRaw recognises the content.
 [[nodiscard]] bool holdsRawImage(const std::filesystem::path& path);
@@ -32,10 +41,11 @@ namespace arraw::rawimport {
 /// @brief Decodes a RAW file into a buffer in the working encoding.
 ///
 /// The result is a *neutral development*, not sensor data: LibRaw demosaics,
-/// applies the camera's as-shot white balance, and converts through the
-/// camera's colour matrix into linear Rec.2020. White balance and demosaic are
-/// develop settings that this bakes in; see ADR 005 for why, and for what a
-/// later `RawLoadOptions` would reopen.
+/// applies the camera's as-shot white balance — or, for a file that declares
+/// none, the daylight multipliers its colour matrix implies — and converts
+/// through that matrix into linear Rec.2020. White balance, demosaic and
+/// highlight handling are develop settings that this bakes in; see ADR 005 for
+/// why, and for what a later `RawLoadOptions` would reopen.
 ///
 /// Orientation is not applied, matching ::arraw::loadImage: rotation stays a
 /// develop setting rather than something baked into the buffer.

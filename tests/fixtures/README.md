@@ -102,11 +102,35 @@ first of these.
 | `linear-32x24-warmwb.dng` | LinearRaw, 3 spp | (0.5, 1.0, 0.8) | none | `use_camera_wb` |
 | `linear-32x24-rotated.dng` | LinearRaw, 3 spp | unity | 6 (90° CW) | `user_flip = 0`, and *which decoder ran* |
 | `bayer-32x24.dng` | CFA RGGB, 1 spp | unity | none | demosaic actually runs |
+| `linear-32x24-highmax.dng` | LinearRaw, 3 spp | unity | none | `adjust_maximum_thr = 0` |
+| `linear-32x24-nowb.dng` | LinearRaw, 3 spp | **absent** | none | the missing-white-balance fallback |
+| `linear-32x24-nowb-dark.dng` | LinearRaw, 3 spp | **absent** | none | that the fallback ignores the frame |
+| `preview-32x24.dng` | RGB preview + LinearRaw sub-IFD | unity | none | *which image* was decoded |
 
-Three of these exist because the first cannot see what it does not contain. A
-LinearRaw file with unity white balance and no orientation decodes identically
-whether the decoder demosaics or not, honours the as-shot neutral or not, and
-rotates or not.
+All but the first exist because the first cannot see what it does not contain.
+A LinearRaw file with unity white balance and no orientation decodes
+identically whether the decoder demosaics or not, honours the as-shot neutral
+or not, and rotates or not.
+
+The last four came out of the review in `docs/reviews`, and each one pins a
+decode setting that was wrong while no fixture could tell:
+
+- **highmax** is two flat halves, 16000 and 52000, under a declared white level
+  of 65535. 52000 sits above LibRaw's `adjust_maximum_thr` of 0.75, so LibRaw
+  would take the frame's own maximum for the white level and stretch 16000 to
+  20164. The ramp fixtures reach 65535 and so have nothing to lower.
+- **nowb** and **nowb-dark** are the same flat (48000, 32000, 16000) field with
+  no `AsShotNeutral` tag, differing only in a darkened right half. A white
+  balance computed from the frame flattens the colour to grey *and* differs
+  between the two; the daylight fallback does neither. One file could only
+  observe the first half of that.
+- **preview** has the shape of a real camera file — an ordinary 8×6 RGB preview
+  in IFD0, the sensor data in a sub-IFD — and is the only fixture whose two
+  possible answers are both valid images. Every other RAW fixture here is
+  single-IFD, which no camera writes, and a single-IFD file cannot show a
+  decoder returning the preview instead of the photograph. Its sub-IFD repeats
+  the neutral ramp, so the photograph is identifiable pixel for pixel, and the
+  preview is flat magenta, which the ramp never is.
 
 **`linear-32x24-neutral.dng` carries the sharpest assertion in the suite.** It
 is a neutral linear ramp, so a correct decode has nothing to do but a
@@ -123,8 +147,10 @@ developer machines and absent in CI.
 
 The plugin claims files by **extension**, not signature — a renamed DNG is
 detected as `tiff` — so the discriminator only bites for an extension the plugin
-claims and `loadImage` does not route to LibRaw itself. `test_RawImport.cpp`
+claims and `loadImage` does not route to LibRaw by name. `test_RawImport.cpp`
 copies this fixture to `holiday.mrw` for exactly that reason; `.mrw` is one of
 eleven such extensions (`.mrw .srf .x3f .kdc .mos .raw .3fr .iiq .erf .nrw
-.crw`). A copy named `holiday.png` exercises the content fallback instead, and
-cannot tell the two decoders apart. See ADR 005.
+.crw`). A copy named `holiday.png` exercises the content check instead, and
+cannot tell the two decoders apart — which is what `preview-32x24.dng` is for:
+copied to those same names, it tells whether the content check ran *before* Qt
+or only after Qt failed. See ADR 005.

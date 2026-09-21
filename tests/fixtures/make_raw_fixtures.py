@@ -26,6 +26,7 @@ import pathlib
 import struct
 
 W, H = 32, 24
+PREVIEW_W, PREVIEW_H = 8, 6
 
 TYPE_BYTE, TYPE_ASCII, TYPE_SHORT, TYPE_LONG, TYPE_RATIONAL = 1, 2, 3, 4, 5
 TYPE_SRATIONAL = 10
@@ -33,6 +34,7 @@ TYPE_SIZE = {TYPE_BYTE: 1, TYPE_ASCII: 1, TYPE_SHORT: 2, TYPE_LONG: 4,
              TYPE_RATIONAL: 8, TYPE_SRATIONAL: 8}
 PACK = {TYPE_BYTE: "B", TYPE_SHORT: "H", TYPE_LONG: "I"}
 
+PHOTOMETRIC_RGB = 2
 PHOTOMETRIC_CFA = 32803
 PHOTOMETRIC_LINEAR_RAW = 34892
 
@@ -44,6 +46,7 @@ COLOR_MATRIX_1 = [3.2406, -1.5372, -0.4986,
                   0.0557, -0.2040, 1.0570]
 
 STRIP = ["STRIP"]  # placeholder patched with the strip's real offset
+SUBIFDS = ["SUBIFDS"]  # placeholder patched with the sub-IFD offsets
 
 
 def pack_values(vtype, values):
@@ -55,86 +58,142 @@ def pack_values(vtype, values):
     return b"".join(struct.pack("<" + PACK[vtype], v) for v in values)
 
 
-def write_dng(path: pathlib.Path, entries: list, pixels: bytes) -> None:
-    """Writes a single-IFD, uncompressed TIFF/DNG.
+def value_count(values, subifd_count: int) -> int:
+    """Number of values an entry holds, resolving the placeholders."""
+    if values == STRIP:
+        return 1
+    if values == SUBIFDS:
+        return subifd_count
+    return len(values)
 
-    ``entries`` is a list of ``(tag, type, values)`` and must be sorted by tag,
-    which the TIFF specification requires and some readers rely on.
+
+def write_tiff(path: pathlib.Path, ifds: list) -> None:
+    """Writes an uncompressed little-endian TIFF/DNG.
+
+    ``ifds`` is a list of ``(entries, pixels)`` pairs. The first is IFD0; any
+    others are written as its sub-IFDs, and IFD0 must then carry a ``SubIFDs``
+    entry whose values are the ``SUBIFDS`` placeholder. Each IFD's ``entries``
+    is a list of ``(tag, type, values)`` sorted by tag, which the TIFF
+    specification requires and some readers rely on, and its ``StripOffsets``
+    entry uses the ``STRIP`` placeholder.
+
+    The layout is every IFD (each followed by its own overflow area), then
+    every strip, in IFD order.
     """
-    assert entries == sorted(entries, key=lambda e: e[0]), "IFD entries must be sorted by tag"
+    subifd_count = len(ifds) - 1
+    for entries, _pixels in ifds:
+        assert entries == sorted(entries, key=lambda e: e[0]), "IFD entries must be sorted by tag"
 
-    ifd_offset = 8
-    data_offset = ifd_offset + 2 + len(entries) * 12 + 4
+    # First pass: where everything lands. Sizes are known without the offsets,
+    # because a placeholder's value count is known even when its value is not.
+    cursor = 8
+    ifd_offsets = []
+    blob_offsets = []
+    for entries, _pixels in ifds:
+        ifd_offsets.append(cursor)
+        cursor += 2 + len(entries) * 12 + 4
+        blobs = {}
+        for tag, vtype, values in entries:
+            size = value_count(values, subifd_count) * TYPE_SIZE[vtype]
+            if size > 4:
+                cursor += cursor % 2
+                blobs[tag] = cursor
+                cursor += size
+        blob_offsets.append(blobs)
+    strip_offsets = []
+    for _entries, pixels in ifds:
+        cursor += cursor % 2
+        strip_offsets.append(cursor)
+        cursor += len(pixels)
 
-    # First pass to know where the strip lands: everything that does not fit in
-    # a four-byte value field goes to the overflow area, pixels go last.
-    blobs = {}
-    cursor = data_offset
-    for tag, vtype, values in entries:
-        if values == STRIP:
-            continue
-        size = len(values) * TYPE_SIZE[vtype]
-        if size > 4:
-            cursor += cursor % 2
-            blobs[tag] = cursor
-            cursor += size
-    cursor += cursor % 2
-    strip_offset = cursor
+    # Second pass: the bytes themselves, placeholders resolved.
+    out = bytearray(struct.pack("<2sHI", b"II", 42, ifd_offsets[0]))
+    for index, (entries, _pixels) in enumerate(ifds):
+        assert len(out) == ifd_offsets[index]
+        cursor = ifd_offsets[index] + 2 + len(entries) * 12 + 4
+        ifd = struct.pack("<H", len(entries))
+        overflow = bytearray()
+        for tag, vtype, values in entries:
+            if values == STRIP:
+                values = [strip_offsets[index]]
+            elif values == SUBIFDS:
+                values = ifd_offsets[1:]
+            packed = pack_values(vtype, values)
+            if len(packed) <= 4:
+                value_field = packed.ljust(4, b"\0")
+            else:
+                if cursor % 2:
+                    overflow += b"\0"
+                    cursor += 1
+                assert blob_offsets[index][tag] == cursor
+                value_field = struct.pack("<I", cursor)
+                overflow += packed
+                cursor += len(packed)
+            ifd += struct.pack("<HHI", tag, vtype, value_count(values, subifd_count)) + value_field
+        ifd += struct.pack("<I", 0)  # IFDs are chained through SubIFDs, not here
+        out += ifd + overflow
+    for index, (_entries, pixels) in enumerate(ifds):
+        if len(out) % 2:
+            out += b"\0"
+        assert len(out) == strip_offsets[index]
+        out += pixels
 
-    cursor = data_offset
-    ifd = struct.pack("<H", len(entries))
-    overflow = bytearray()
-    for tag, vtype, values in entries:
-        if values == STRIP:
-            values = [strip_offset]
-        packed = pack_values(vtype, values)
-        if len(packed) <= 4:
-            value_field = packed.ljust(4, b"\0")
-        else:
-            if cursor % 2:
-                overflow += b"\0"
-                cursor += 1
-            assert blobs[tag] == cursor
-            value_field = struct.pack("<I", cursor)
-            overflow += packed
-            cursor += len(packed)
-        ifd += struct.pack("<HHI", tag, vtype, len(values)) + value_field
-    ifd += struct.pack("<I", 0)  # no next IFD
-    if cursor % 2:
-        overflow += b"\0"
-
-    path.write_bytes(struct.pack("<2sHI", b"II", 42, ifd_offset) + ifd + overflow + pixels)
+    path.write_bytes(bytes(out))
 
 
-def base_entries(*, pixel_bytes: int, samples_per_pixel: int, photometric: int,
-                 as_shot_neutral: tuple[float, float, float],
-                 orientation: int | None) -> list:
-    """Builds the tags every fixture shares, in tag order."""
-    entries = [
-        (254, TYPE_LONG, [0]),                              # NewSubfileType: main image
-        (256, TYPE_LONG, [W]),                              # ImageWidth
-        (257, TYPE_LONG, [H]),                              # ImageLength
-        (258, TYPE_SHORT, [16] * samples_per_pixel),        # BitsPerSample
+def write_dng(path: pathlib.Path, entries: list, pixels: bytes) -> None:
+    """Writes a single-IFD DNG -- the shape all but one fixture has."""
+    write_tiff(path, [(entries, pixels)])
+
+
+def image_entries(*, width: int, height: int, bits: int, samples_per_pixel: int,
+                  photometric: int, pixel_bytes: int, reduced: bool = False) -> list:
+    """Builds the structure tags that describe one uncompressed strip."""
+    return [
+        (254, TYPE_LONG, [1 if reduced else 0]),            # NewSubfileType
+        (256, TYPE_LONG, [width]),                          # ImageWidth
+        (257, TYPE_LONG, [height]),                         # ImageLength
+        (258, TYPE_SHORT, [bits] * samples_per_pixel),      # BitsPerSample
         (259, TYPE_SHORT, [1]),                             # Compression: none
         (262, TYPE_SHORT, [photometric]),                   # PhotometricInterpretation
         (273, TYPE_LONG, STRIP),                            # StripOffsets (patched)
-    ]
-    if orientation is not None:
-        entries.append((274, TYPE_SHORT, [orientation]))    # Orientation
-    entries += [
         (277, TYPE_SHORT, [samples_per_pixel]),             # SamplesPerPixel
-        (278, TYPE_LONG, [H]),                              # RowsPerStrip
+        (278, TYPE_LONG, [height]),                         # RowsPerStrip
         (279, TYPE_LONG, [pixel_bytes]),                    # StripByteCounts
         (284, TYPE_SHORT, [1]),                             # PlanarConfiguration
+    ]
+
+
+def camera_entries(as_shot_neutral: tuple[float, float, float] | None) -> list:
+    """Builds the DNG tags that describe the camera rather than the pixels.
+
+    ``as_shot_neutral`` of ``None`` omits the tag, leaving a file that declares
+    no camera white balance at all.
+    """
+    entries = [
         (50706, TYPE_BYTE, [1, 4, 0, 0]),                   # DNGVersion
         (50708, TYPE_ASCII, b"arraw-test\0"),               # UniqueCameraModel
-        (50717, TYPE_LONG, [65535]),                        # WhiteLevel
         (50721, TYPE_SRATIONAL,                             # ColorMatrix1
          [(round(v * 10000), 10000) for v in COLOR_MATRIX_1]),
-        (50728, TYPE_RATIONAL,                              # AsShotNeutral
-         [(round(v * 10000), 10000) for v in as_shot_neutral]),
         (50778, TYPE_SHORT, [21]),                          # CalibrationIlluminant1: D65
     ]
+    if as_shot_neutral is not None:
+        entries.append((50728, TYPE_RATIONAL,               # AsShotNeutral
+                        [(round(v * 10000), 10000) for v in as_shot_neutral]))
+    return entries
+
+
+def base_entries(*, pixel_bytes: int, samples_per_pixel: int, photometric: int,
+                 as_shot_neutral: tuple[float, float, float] | None,
+                 orientation: int | None) -> list:
+    """Builds the tags a single-IFD fixture carries, in tag order."""
+    entries = image_entries(width=W, height=H, bits=16,
+                            samples_per_pixel=samples_per_pixel,
+                            photometric=photometric, pixel_bytes=pixel_bytes)
+    if orientation is not None:
+        entries.append((274, TYPE_SHORT, [orientation]))    # Orientation
+    entries.append((50717, TYPE_LONG, [65535]))             # WhiteLevel
+    entries += camera_entries(as_shot_neutral)
     return sorted(entries, key=lambda e: e[0])
 
 
@@ -173,6 +232,43 @@ def bayer_flat() -> bytes:
                 value = green if x % 2 == 0 else blue
             pixels += struct.pack("<H", value)
     return bytes(pixels)
+
+
+def linear_halves(left: int, right: int) -> bytes:
+    """A neutral field of two flat halves, three 16-bit samples per pixel.
+
+    Both values are constants rather than a ramp, so what a decode did to them
+    is readable as a single number instead of a curve.
+    """
+    pixels = bytearray()
+    for _y in range(H):
+        for x in range(W):
+            value = left if x < W // 2 else right
+            pixels += struct.pack("<HHH", value, value, value)
+    return bytes(pixels)
+
+
+def linear_flat(red: int, green: int, blue: int, *, right_half: tuple[int, int, int] | None = None
+                ) -> bytes:
+    """A strongly non-neutral field, three 16-bit samples per pixel.
+
+    ``right_half`` replaces the right half of the frame, which changes the
+    channel sums an automatic white balance would be computed from while
+    leaving the left half's colour untouched.
+    """
+    left = struct.pack("<HHH", red, green, blue)
+    right = left if right_half is None else struct.pack("<HHH", *right_half)
+    row = left * (W // 2) + right * (W - W // 2)
+    return row * H
+
+
+def preview_rgb(width: int, height: int) -> bytes:
+    """An ordinary 8-bit RGB image, the kind any TIFF reader can decode.
+
+    Flat magenta: a colour the RAW beside it does not contain anywhere, so a
+    test that gets this image instead of the photograph can say so.
+    """
+    return bytes([255, 0, 255]) * (width * height)
 
 
 def main() -> None:
@@ -220,6 +316,60 @@ def main() -> None:
         (50714, TYPE_SHORT, [0]),             # BlackLevel
     ]
     write_dng(here / "bayer-32x24.dng", sorted(entries, key=lambda e: e[0]), bayer)
+
+    # A frame whose brightest value is below WhiteLevel but above LibRaw's
+    # adjust_maximum_thr of 0.75. Left to itself LibRaw lowers the white level
+    # to 52000 and stretches everything by 65535/52000, which is the per-frame
+    # brightness dependence no_auto_bright alone does not remove. The ramp
+    # fixtures cannot see it: they reach 65535, so there is nothing to lower.
+    halves = linear_halves(16000, 52000)
+    write_dng(here / "linear-32x24-highmax.dng",
+              base_entries(pixel_bytes=len(halves), samples_per_pixel=3,
+                           photometric=PHOTOMETRIC_LINEAR_RAW,
+                           as_shot_neutral=(1.0, 1.0, 1.0), orientation=None),
+              halves)
+
+    # No AsShotNeutral at all, over a strongly coloured field. LibRaw answers a
+    # missing camera white balance with an automatic one computed from the
+    # frame, which would pull this colour towards grey; arraw's daylight
+    # fallback leaves it alone. The colour is what makes the two visible apart.
+    flat = linear_flat(48000, 32000, 16000)
+    write_dng(here / "linear-32x24-nowb.dng",
+              base_entries(pixel_bytes=len(flat), samples_per_pixel=3,
+                           photometric=PHOTOMETRIC_LINEAR_RAW,
+                           as_shot_neutral=None, orientation=None),
+              flat)
+
+    # The same colour again, over a frame that is half dark. Daylight
+    # multipliers come from the colour matrix and cannot tell the two frames
+    # apart; an automatic white balance is computed from the channel sums and
+    # cannot help but. So the left half is the assertion: same pixels in, same
+    # pixels out, or the white balance moved with the content.
+    flat_dark = linear_flat(48000, 32000, 16000, right_half=(2000, 2000, 2000))
+    write_dng(here / "linear-32x24-nowb-dark.dng",
+              base_entries(pixel_bytes=len(flat_dark), samples_per_pixel=3,
+                           photometric=PHOTOMETRIC_LINEAR_RAW,
+                           as_shot_neutral=None, orientation=None),
+              flat_dark)
+
+    # The shape of a real RAW: an ordinary RGB preview in IFD0 and the sensor
+    # data in a sub-IFD. Every TIFF reader decodes the preview happily, so this
+    # is the fixture that can tell whether loadImage returned the photograph or
+    # a thumbnail of it. The sub-IFD holds the same ramp as the neutral
+    # fixture, so a correct decode is comparable against it pixel for pixel.
+    preview = preview_rgb(PREVIEW_W, PREVIEW_H)
+    preview_ifd = image_entries(width=PREVIEW_W, height=PREVIEW_H, bits=8,
+                                samples_per_pixel=3, photometric=PHOTOMETRIC_RGB,
+                                pixel_bytes=len(preview), reduced=True)
+    preview_ifd.append((330, TYPE_LONG, SUBIFDS))           # SubIFDs (patched)
+    preview_ifd += camera_entries((1.0, 1.0, 1.0))
+    raw_ifd = image_entries(width=W, height=H, bits=16, samples_per_pixel=3,
+                            photometric=PHOTOMETRIC_LINEAR_RAW,
+                            pixel_bytes=len(linear))
+    raw_ifd.append((50717, TYPE_LONG, [65535]))             # WhiteLevel
+    write_tiff(here / "preview-32x24.dng",
+               [(sorted(preview_ifd, key=lambda e: e[0]), preview),
+                (sorted(raw_ifd, key=lambda e: e[0]), linear)])
 
     for path in sorted(here.glob("*.dng")):
         print(f"{path.name}: {path.stat().st_size} bytes")

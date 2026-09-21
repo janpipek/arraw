@@ -1,3 +1,4 @@
+#include "ImageExport.h"
 #include "ImageImport.h"
 
 #include "support/Fixtures.h"
@@ -28,6 +29,11 @@ constexpr std::string_view neutralFixture = "linear-32x24-neutral.dng";
 constexpr std::string_view warmFixture = "linear-32x24-warmwb.dng";
 constexpr std::string_view rotatedFixture = "linear-32x24-rotated.dng";
 constexpr std::string_view bayerFixture = "bayer-32x24.dng";
+constexpr std::string_view highMaxFixture = "linear-32x24-highmax.dng";
+constexpr std::string_view noWbFixture = "linear-32x24-nowb.dng";
+constexpr std::string_view noWbDarkFixture = "linear-32x24-nowb-dark.dng";
+constexpr std::string_view previewFixture = "preview-32x24.dng";
+constexpr std::string_view testCard = "testcard-61x41-srgb8.png";
 
 /// @brief Reads one pixel's four samples from a 16-bit RGBA buffer.
 std::span<const std::uint16_t> pixelAt(const ImageBuffer& image, std::uint32_t x, std::uint32_t y) {
@@ -36,12 +42,12 @@ std::span<const std::uint16_t> pixelAt(const ImageBuffer& image, std::uint32_t x
     return samples.subspan(base, 4);
 }
 
-/// @brief The sample value the generator's ramp holds at a column.
+/// @brief Returns the sample value the generator's ramp holds at a column.
 std::uint16_t rampAt(std::uint32_t x, std::uint32_t width) {
     return static_cast<std::uint16_t>(std::lround(static_cast<double>(x) / (width - 1) * 65535.0));
 }
 
-/// @brief Largest absolute difference between two buffers of equal shape.
+/// @brief Returns the largest absolute difference between two buffers of equal shape.
 int maxDifference(const ImageBuffer& left, const ImageBuffer& right) {
     const auto a = left.samples<std::uint16_t>();
     const auto b = right.samples<std::uint16_t>();
@@ -208,4 +214,91 @@ TEST_CASE("A file that is neither an image nor a RAW is refused", "[integration]
     }
 
     REQUIRE_THROWS_AS(loadImage(destination), std::runtime_error);
+}
+
+TEST_CASE("A RAW that carries a preview decodes the photograph, not the preview",
+          "[integration][raw]") {
+    const auto image = loadImage(test::fixture(previewFixture));
+
+    /// The fixture has the shape of a real camera file: an ordinary 8x6 RGB
+    /// preview in IFD0, the sensor data in a sub-IFD. Its sub-IFD holds the
+    /// same ramp as the neutral fixture, so the photograph is recognisable
+    /// pixel for pixel -- and the preview, flat magenta, is unmistakably not.
+    REQUIRE(image.size() == ImageSize{32, 24});
+    REQUIRE(maxDifference(image, loadImage(test::fixture(neutralFixture))) == 0);
+}
+
+TEST_CASE("A preview-carrying RAW decodes the same under any name", "[integration][raw]") {
+    const test::TempDir directory;
+
+    /// A RAW container is a TIFF, and a TIFF reader decodes its preview
+    /// happily -- so a decoder chosen by extension alone hands back an 8x6
+    /// thumbnail for a file it does not recognise by name. Which is every
+    /// renamed file, and every RAW extension arraw does not list.
+    for (const auto* name : {"holiday.png", "holiday.mrw", "holiday.tif"}) {
+        CAPTURE(name);
+        const auto image = loadImage(copyAs(directory, previewFixture, name));
+        REQUIRE(image.size() == ImageSize{32, 24});
+        REQUIRE(maxDifference(image, loadImage(test::fixture(neutralFixture))) == 0);
+    }
+}
+
+TEST_CASE("One frame's brightest pixel does not change how it is exposed", "[integration][raw]") {
+    const auto image = loadImage(test::fixture(highMaxFixture));
+
+    /// Two flat neutral halves, 16000 and 52000, under a declared white level
+    /// of 65535. Both must arrive as they are stored. LibRaw would otherwise
+    /// lower the white level to the frame's own maximum whenever that maximum
+    /// sits above adjust_maximum_thr (0.75) of the declared one, stretching
+    /// 16000 to 20164 here -- the per-frame brightness dependence that
+    /// no_auto_bright is only half of.
+    const auto dark = pixelAt(image, 0, 0);
+    const auto bright = pixelAt(image, image.size().width - 1, 0);
+    CAPTURE(dark[0], bright[0]);
+    for (int channel = 0; channel < 3; ++channel) {
+        REQUIRE(std::abs(static_cast<int>(dark[channel]) - 16000) <= 1);
+        REQUIRE(std::abs(static_cast<int>(bright[channel]) - 52000) <= 1);
+    }
+}
+
+TEST_CASE("A RAW without a camera white balance keeps its colours", "[integration][raw]") {
+    const auto image = loadImage(test::fixture(noWbFixture));
+    const auto other = loadImage(test::fixture(noWbDarkFixture));
+
+    /// Two fixtures, both a flat (48000, 32000, 16000) field with no
+    /// AsShotNeutral tag, differing only in a right half the second one
+    /// darkens. arraw answers a missing as-shot neutral with the daylight
+    /// multipliers the camera's colour matrix implies, which the frame cannot
+    /// influence: the left half must decode the same in both. LibRaw's own
+    /// answer is a white balance computed from the frame, which fails both
+    /// assertions at once -- it differs between the two files, and it flattens
+    /// this colour to (47999, 48000, 48000), a neutral grey the sensor never
+    /// saw. Measured daylight result: (41346, 32922, 17934).
+    const auto pixel = pixelAt(image, 4, image.size().height / 2);
+    const auto same = pixelAt(other, 4, other.size().height / 2);
+    CAPTURE(pixel[0], pixel[1], pixel[2], same[0], same[1], same[2]);
+    for (int channel = 0; channel < 3; ++channel) {
+        REQUIRE(std::abs(static_cast<int>(pixel[channel]) - same[channel]) <= 1);
+    }
+    REQUIRE(pixel[0] > pixel[1]);
+    REQUIRE(pixel[1] > pixel[2]);
+    REQUIRE(pixel[0] - pixel[2] > 10000);
+}
+
+TEST_CASE("An exported TIFF is read as an image, not as sensor data", "[integration][raw]") {
+    const test::TempDir directory;
+    const auto destination = directory.file("export.tif");
+    const auto original = loadImage(test::fixture(testCard));
+    exportImage(original, destination, {.format = ImageFileFormat::Tiff, .bitDepth = 16});
+
+    const auto reloaded = loadImage(destination);
+
+    /// Content is consulted before Qt, so this pins what "content" may claim:
+    /// LibRaw opens camera files, not ordinary TIFFs, and arraw writes
+    /// ordinary TIFFs. Measured with LibRaw 0.22.2, which declines every
+    /// multi-channel TIFF offered to it. If a later LibRaw grows greedier,
+    /// this fails before a user notices their own exports decoding through
+    /// the wrong path.
+    REQUIRE(reloaded.size() == original.size());
+    REQUIRE(reloaded.format() == original.format());
 }

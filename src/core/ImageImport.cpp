@@ -50,8 +50,11 @@ PixelFormat chooseLayout(const QImage& image) {
 /// .mrw, .x3f and .crw. Left to it, those would be decoded with its processing
 /// choices rather than ours (it honours the camera's orientation, which arraw
 /// does not), with the metadata discarded, and only on machines where that
-/// package happens to be installed. Declining sends them to
-/// ::arraw::rawimport, so the file decodes the same either way.
+/// package happens to be installed.
+///
+/// ::arraw::loadImage now offers the file to LibRaw before reaching here, so
+/// the plugin no longer gets the chance; this stays as the second line of
+/// defence, for the day the plugin's LibRaw recognises a file ours does not.
 QImage decodeThroughQt(QFile& file, QString& error) {
     QImageReader reader(&file);
     if (reader.format() == "raw") {
@@ -65,7 +68,17 @@ QImage decodeThroughQt(QFile& file, QString& error) {
 } // namespace
 
 ImageBuffer arraw::loadImage(const std::filesystem::path& path) {
-    if (rawimport::namesRawFormat(path)) {
+    // Content has its say before Qt is asked, rather than after it fails.
+    // A RAW container is usually a TIFF carrying an ordinary RGB preview, and
+    // Qt's TIFF reader decodes that preview perfectly happily -- so a RAW
+    // under a name arraw does not recognise would arrive as a thumbnail of
+    // the photograph instead of the photograph, with nothing failing.
+    //
+    // Asking LibRaw first is safe because LibRaw claims camera files, not
+    // TIFFs: measured against LibRaw 0.22.2, every multi-channel TIFF offered
+    // to it is declined, arraw's own exports included. The extension is kept
+    // as the fast path in front of it, so the common case opens the file once.
+    if (rawimport::namesRawFormat(path) || rawimport::holdsRawImage(path)) {
         return rawimport::load(path);
     }
 
@@ -78,12 +91,8 @@ ImageBuffer arraw::loadImage(const std::filesystem::path& path) {
     QString readerError;
     QImage decoded = decodeThroughQt(sourceFile, readerError);
     if (decoded.isNull()) {
-        // The extension promised nothing and Qt could not read it. Content has
-        // the last word, so a RAW under a foreign name still loads.
-        sourceFile.close();
-        if (rawimport::holdsRawImage(path)) {
-            return rawimport::load(path);
-        }
+        // Neither decoder recognised it. LibRaw has already declined above, so
+        // there is nothing left to fall back to.
         throw std::runtime_error(sourceFile.fileName().toStdString() + ": " +
                                  readerError.toStdString());
     }

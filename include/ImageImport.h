@@ -7,11 +7,13 @@
 namespace arraw {
 /// @brief Decodes an image file into a buffer in the working encoding.
 ///
-/// A RAW extension chooses the RAW decoder; anything else is detected from the
-/// file's content, and a file that content detection cannot read is offered to
-/// the RAW decoder as a last resort. So a misnamed file still loads, only more
-/// slowly than a correctly named one. Extension decides which decoder, never
-/// which format a decoder then reads.
+/// A RAW extension chooses the RAW decoder, and so does a file whose *content*
+/// is a RAW, whatever it happens to be named — both before the general-purpose
+/// codecs are offered anything, because a RAW file usually carries a small
+/// preview image that those codecs would cheerfully decode in place of the
+/// photograph. Anything else is detected from its content as usual. A misnamed
+/// file still loads, only more slowly than a correctly named one. Extension
+/// decides which decoder, never which format a decoder then reads.
 ///
 /// An embedded ICC profile is honoured; a file without one is taken to be sRGB.
 /// Samples are converted into ::arraw::workingEncoding, and the result is
@@ -19,10 +21,11 @@ namespace arraw {
 /// cannot carry the shadows.
 ///
 /// A RAW file arrives as a *neutral development* rather than sensor data: it is
-/// demosaiced, carries the camera's as-shot white balance, and has been through
-/// the camera's colour matrix. White balance and demosaic are develop settings
-/// that this bakes in; ADR 005 records why, and what a later `RawLoadOptions`
-/// would reopen.
+/// demosaiced, carries the camera's as-shot white balance (or, if it declares
+/// none, a fixed daylight one rather than a guess from the frame), and has been
+/// through the camera's colour matrix. White balance, demosaic and highlight
+/// handling are develop settings that this bakes in; ADR 005 records why, and
+/// what a later `RawLoadOptions` would reopen.
 ///
 /// Orientation metadata is not applied, for RAW files as for any other: the
 /// pixels are returned as stored, and rotation remains a develop setting rather

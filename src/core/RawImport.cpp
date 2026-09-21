@@ -16,11 +16,14 @@ using namespace arraw;
 
 namespace {
 
-/// @brief Extensions ::arraw::loadImage routes to LibRaw.
+/// @brief Extensions ::arraw::loadImage routes to LibRaw by name.
 ///
-/// The set published in docs/desired-features.md, no wider: an extension here
-/// means "decode this with LibRaw and report a failure", so adding one that
-/// LibRaw cannot read would turn a fallback into an error.
+/// The set published in docs/desired-features.md, no wider -- and it does not
+/// need to be. ::holdsRawImage asks LibRaw about everything else before Qt is
+/// offered anything, so a .3fr, a .mrw or a renamed .dng reaches the same
+/// decoder one file open later. Widening the list would only move where the
+/// error for a non-RAW file comes from, and for an extension as generic as
+/// .raw it would report a RAW failure for a file Qt can read.
 constexpr std::array<std::string_view, 10> rawExtensions = {".cr2", ".cr3", ".nef", ".arw", ".dng",
                                                             ".raf", ".orf", ".rw2", ".pef", ".srw"};
 
@@ -35,7 +38,7 @@ constexpr int outputColorRec2020 = 8;
 /// @brief LibRaw's `user_qual` value for the AHD demosaic.
 constexpr int demosaicAhd = 3;
 
-/// @brief Releases an image allocated by `dcraw_make_mem_image`.
+/// @brief Deleter for images allocated by `dcraw_make_mem_image`.
 struct ProcessedImageDeleter {
     void operator()(libraw_processed_image_t* image) const {
         LibRaw::dcraw_clear_mem(image);
@@ -64,6 +67,8 @@ std::string describe(const std::filesystem::path& path, int code) {
 /// @brief Applies arraw's decode settings to an opened handle.
 ///
 /// Every value here is a decision rather than a default; ADR 005 records them.
+/// The handle must already be open: one of the decisions depends on what the
+/// file turned out to declare.
 void applyDecodeSettings(LibRaw& raw) {
     auto& params = raw.imgdata.params;
 
@@ -72,6 +77,13 @@ void applyDecodeSettings(LibRaw& raw) {
     // cannot have.
     params.no_auto_bright = 1;
 
+    // The same stretch reaches the image by a second route, and disabling one
+    // without the other leaves it there: LibRaw lowers the white level to the
+    // frame's own brightest sample whenever that sample lands within
+    // `adjust_maximum_thr` (0.75 by default) of the declared one. Two frames
+    // of a bracket would then scale differently.
+    params.adjust_maximum_thr = 0.0;
+
     // Linear light: the working space carries no transfer function, and the
     // shadows need the sixteen bits to be linear ones.
     params.gamm[0] = 1.0;
@@ -79,8 +91,21 @@ void applyDecodeSettings(LibRaw& raw) {
     params.output_bps = 16;
     params.output_color = outputColorRec2020;
 
-    // The camera's as-shot neutral, never LibRaw's guess from the histogram.
-    params.use_camera_wb = 1;
+    // The camera's as-shot neutral, never LibRaw's guess from the histogram --
+    // including when there is no as-shot neutral to apply. `use_camera_wb`
+    // alone does not say that: a file that declares none falls through to
+    // exactly the automatic white balance `use_auto_wb = 0` refuses, and a
+    // flat colour field comes back grey. Switching it off instead leaves the
+    // daylight multipliers the camera's colour matrix implies. A fixed wrong
+    // white balance beats a plausible-looking one that moves with the scene,
+    // because only the fixed one can be corrected once for a whole shoot.
+    //
+    // It should also be *said*: this is a silent substitution, and the frame
+    // will not look as its camera intended. It becomes a warning on the
+    // import path as soon as there is somewhere to put one.
+    const auto& colour = raw.imgdata.color;
+    const bool hasCameraNeutral = colour.cam_mul[0] > 0.0F && colour.cam_mul[2] > 0.0F;
+    params.use_camera_wb = hasCameraNeutral ? 1 : 0;
     params.use_auto_wb = 0;
 
     params.user_qual = demosaicAhd;
