@@ -16,6 +16,6 @@ namespace arraw::test {
 /// @return A freshly allocated buffer holding the sweep.
 [[nodiscard]] ImageBuffer rainbow(ImageSize size = {32, 32},
                                   PixelFormat format = PixelFormat::RgbaU8,
-                                  ColorEncoding encoding = ColorEncoding::Srgb);
+                                  NamedEncoding encoding = NamedEncoding::Srgb);
 
 } // namespace arraw::test

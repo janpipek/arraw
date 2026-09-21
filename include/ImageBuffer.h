@@ -1,5 +1,7 @@
 #pragma once
 
+#include <ColorEncoding.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -90,19 +92,13 @@ enum class PixelFormat {
     return channelCount(format) * bytesPerChannel(format);
 }
 
-/// @brief Meaning of an ::ImageBuffer's RGB sample values.
+/// @brief Sample layout that development happens in.
 ///
-/// Input profiles are converted to the working encoding while loading; named
-/// output encodings receive their matching ICC profile when exported.
-enum class ColorEncoding {
-    LinearRec2020, ///< Rec.2020 primaries with a linear transfer function.
-    Srgb,
-    DisplayP3,
-    AdobeRgb,
-};
-
-/// @brief Encoding that development happens in; see ADR 003.
-inline constexpr ColorEncoding workingEncoding = ColorEncoding::LinearRec2020;
+/// Exposure lifts samples above 1, white balance does the same, and the camera
+/// matrix produces negatives for sensor colours outside Rec.2020; none of that
+/// survives an integer layout. ADR 003's pattern applies here too: the
+/// enumerator names the layout, this constant names the role.
+inline constexpr PixelFormat workingFormat = PixelFormat::RgbaF32;
 
 /// @brief One tightly packed, CPU-resident colour raster.
 ///
@@ -135,7 +131,7 @@ public:
     }
 
     /// @brief Meaning of the buffer's RGB sample values.
-    [[nodiscard]] ColorEncoding encoding() const noexcept {
+    [[nodiscard]] const ColorEncoding& encoding() const noexcept {
         return encoding_;
     }
 

@@ -13,7 +13,7 @@ enum class ImageFileFormat { Jpeg, Png, Tiff };
 struct ExportOptions {
     std::optional<ImageFileFormat> format =
         std::nullopt;                             ///< Derived from the extension when absent.
-    ColorEncoding encoding = ColorEncoding::Srgb; ///< sRGB, Display P3, or Adobe RGB.
+    NamedEncoding encoding = NamedEncoding::Srgb; ///< sRGB, Display P3, or Adobe RGB.
     int bitDepth = 8;                             ///< Bits per channel: 8 or 16; JPEG requires 8.
     int quality = 90;                             ///< JPEG quality, 0–100; ignored for PNG/TIFF.
     bool embedProfile = true; ///< Embedded output ICC profile; conversion always applies.

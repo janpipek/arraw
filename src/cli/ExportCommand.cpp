@@ -144,11 +144,11 @@ std::optional<ExportRequest> buildRequest(const QCommandLineParser& parser, std:
     if (parser.isSet("encoding")) {
         const auto name = parser.value("encoding").toLower();
         if (name == "srgb") {
-            request.options.encoding = ColorEncoding::Srgb;
+            request.options.encoding = NamedEncoding::Srgb;
         } else if (name == "display-p3") {
-            request.options.encoding = ColorEncoding::DisplayP3;
+            request.options.encoding = NamedEncoding::DisplayP3;
         } else if (name == "adobe-rgb") {
-            request.options.encoding = ColorEncoding::AdobeRgb;
+            request.options.encoding = NamedEncoding::AdobeRgb;
         } else {
             code = usageError(err, "unknown encoding '" + name.toStdString() +
                                        "'; expected srgb, display-p3, or adobe-rgb");

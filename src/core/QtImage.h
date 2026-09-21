@@ -26,11 +26,15 @@ namespace arraw::qtimage {
 /// layout-compatible equivalent.
 [[nodiscard]] std::optional<PixelFormat> toPixelFormat(QImage::Format format);
 
-/// @brief Colour space a colour encoding names.
+/// @brief Colour space a named encoding stands for.
+///
+/// Camera-native encodings have no Qt equivalent: their primaries are per-body
+/// data, and a buffer carrying them has to pass white balance before anything
+/// here can describe it.
 /// @param encoding Encoding to resolve.
 /// @return The matching colour space.
 /// @throws std::invalid_argument if @p encoding is not a recognised value.
-[[nodiscard]] QColorSpace toColorSpace(ColorEncoding encoding);
+[[nodiscard]] QColorSpace toColorSpace(NamedEncoding encoding);
 
 /// @brief Read-only view of a buffer as a QImage, without copying its samples.
 ///

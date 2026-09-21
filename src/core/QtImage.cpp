@@ -39,17 +39,17 @@ std::optional<arraw::PixelFormat> arraw::qtimage::toPixelFormat(QImage::Format f
     }
 }
 
-QColorSpace arraw::qtimage::toColorSpace(ColorEncoding encoding) {
+QColorSpace arraw::qtimage::toColorSpace(NamedEncoding encoding) {
     switch (encoding) {
-    case ColorEncoding::LinearRec2020:
+    case NamedEncoding::LinearRec2020:
         // Real primaries containing both output gamuts, and a linear transfer
         // so exposure and blending are physically meaningful (ADR 003).
         return QColorSpace(QColorSpace::Primaries::Bt2020, QColorSpace::TransferFunction::Linear);
-    case ColorEncoding::Srgb:
+    case NamedEncoding::Srgb:
         return QColorSpace::SRgb;
-    case ColorEncoding::DisplayP3:
+    case NamedEncoding::DisplayP3:
         return QColorSpace::DisplayP3;
-    case ColorEncoding::AdobeRgb:
+    case NamedEncoding::AdobeRgb:
         return QColorSpace::AdobeRgb;
     }
     throw std::invalid_argument("Unknown colour encoding");

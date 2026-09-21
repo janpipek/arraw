@@ -14,7 +14,7 @@ static constexpr std::size_t checkedSampleCount(ImageSize size, PixelFormat form
 static ImageBuffer::Storage allocateStorage(std::size_t sampleCount, PixelFormat format);
 
 ImageBuffer::ImageBuffer(ImageSize size, PixelFormat format, ColorEncoding encoding)
-    : size_(validateSize(size)), format_(format), encoding_(encoding),
+    : size_(validateSize(size)), format_(format), encoding_(std::move(encoding)),
       rowStride_(checkedMultiply(size_.width, bytesPerPixel(format_))),
       storage_(allocateStorage(checkedSampleCount(size_, format_), format_)) {}
 

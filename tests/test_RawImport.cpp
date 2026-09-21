@@ -75,7 +75,7 @@ TEST_CASE("A RAW arrives in the working encoding as opaque 16-bit RGBA", "[integ
 
     REQUIRE(image.size() == ImageSize{32, 24});
     REQUIRE(image.format() == PixelFormat::RgbaU16);
-    REQUIRE(image.encoding() == workingEncoding);
+    REQUIRE(isWorkingEncoding(image.encoding()));
 
     /// LibRaw emits three channels; the fourth is synthesised so the buffer is
     /// in a layout exportImage can write back.

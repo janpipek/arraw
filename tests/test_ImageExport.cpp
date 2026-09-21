@@ -168,7 +168,7 @@ TEST_CASE("16-bit exports preserve precision and straight alpha", "[ImageExport]
     const auto format = GENERATE(ImageFileFormat::Png, ImageFileFormat::Tiff);
     const test::TempDir directory;
     const auto destination = directory.file("precision.bin");
-    ImageBuffer image({1, 1}, PixelFormat::RgbaU16, ColorEncoding::Srgb);
+    ImageBuffer image({1, 1}, PixelFormat::RgbaU16, NamedEncoding::Srgb);
     const std::array<std::uint16_t, 4> expected = {0x1234, 0x5678, 0x9ABC, 0x4567};
     std::ranges::copy(expected, image.samples<std::uint16_t>().begin());
 
@@ -223,6 +223,17 @@ TEST_CASE("The working encoding is refused as an output encoding", "[ImageExport
     REQUIRE_FALSE(std::filesystem::exists(destination));
 }
 
+TEST_CASE("A camera-native buffer is refused before the encoder", "[ImageExport]") {
+    // Its primaries belong to one sensor, so no output profile could describe
+    // them to a viewer. The buffer has to pass white balance first (ADR 007).
+    const test::TempDir directory;
+    const auto destination = directory.file("camera.png");
+    ImageBuffer image({2, 2}, PixelFormat::RgbaU16, CameraNative{});
+
+    REQUIRE_THROWS_AS(exportImage(image, destination, {}), std::invalid_argument);
+    REQUIRE_FALSE(std::filesystem::exists(destination));
+}
+
 TEST_CASE("JPEG rejects transparency before quantisation", "[ImageExport]") {
     const auto layout = GENERATE(PixelFormat::RgbaU8, PixelFormat::RgbaU16, PixelFormat::RgbaF32);
     const test::TempDir directory;
@@ -264,10 +275,10 @@ TEST_CASE("Export converts sRGB primaries and optionally embeds the output profi
           "[ImageExport]") {
     const auto format = GENERATE(ImageFileFormat::Png, ImageFileFormat::Tiff);
     const auto encoding =
-        GENERATE(ColorEncoding::Srgb, ColorEncoding::DisplayP3, ColorEncoding::AdobeRgb);
+        GENERATE(NamedEncoding::Srgb, NamedEncoding::DisplayP3, NamedEncoding::AdobeRgb);
     const test::TempDir directory;
     const auto destination = directory.file("colour.bin");
-    ImageBuffer image({1, 1}, PixelFormat::RgbaF32, ColorEncoding::Srgb);
+    ImageBuffer image({1, 1}, PixelFormat::RgbaF32, NamedEncoding::Srgb);
     const std::array<float, 4> red = {1.0F, 0.0F, 0.0F, 1.0F};
     std::ranges::copy(red, image.samples<float>().begin());
 
@@ -278,10 +289,10 @@ TEST_CASE("Export converts sRGB primaries and optionally embeds the output profi
     /// Reference values for sRGB red transformed via XYZ into the target RGB space.
     std::array<float, 3> expected = {1.0F, 0.0F, 0.0F};
     QColorSpace target(QColorSpace::SRgb);
-    if (encoding == ColorEncoding::DisplayP3) {
+    if (encoding == NamedEncoding::DisplayP3) {
         expected = {0.91749F, 0.20029F, 0.13856F};
         target = QColorSpace(QColorSpace::DisplayP3);
-    } else if (encoding == ColorEncoding::AdobeRgb) {
+    } else if (encoding == NamedEncoding::AdobeRgb) {
         expected = {0.8586F, 0.0F, 0.0F};
         target = QColorSpace(QColorSpace::AdobeRgb);
     }
@@ -300,11 +311,11 @@ TEST_CASE("Export converts sRGB primaries and optionally embeds the output profi
 }
 
 TEST_CASE("Export uses the source colour encoding", "[ImageExport]") {
-    const auto encoding = GENERATE(ColorEncoding::DisplayP3, ColorEncoding::AdobeRgb);
+    const auto encoding = GENERATE(NamedEncoding::DisplayP3, NamedEncoding::AdobeRgb);
     const test::TempDir directory;
     const auto destination = directory.file("source.png");
     ImageBuffer image({1, 1}, PixelFormat::RgbaF32, encoding);
-    const bool isP3 = encoding == ColorEncoding::DisplayP3;
+    const bool isP3 = encoding == NamedEncoding::DisplayP3;
     const std::array<float, 4> samples =
         isP3 ? std::array<float, 4>{0.91749F, 0.20029F, 0.13856F, 1.0F}
              : std::array<float, 4>{0.5F, 0.5F, 0.5F, 1.0F};
@@ -327,7 +338,7 @@ TEST_CASE("JPEG embeds the requested profile only when enabled", "[ImageExport]"
     const test::TempDir directory;
     const auto destination = directory.file("profile.jpg");
     exportImage(test::rainbow(), destination,
-                {.encoding = ColorEncoding::DisplayP3, .embedProfile = embedProfile});
+                {.encoding = NamedEncoding::DisplayP3, .embedProfile = embedProfile});
 
     const QImage decoded(QFile(destination).fileName());
     REQUIRE_FALSE(decoded.isNull());

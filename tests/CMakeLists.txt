@@ -18,6 +18,7 @@ add_executable(arraw-tests
         support/ImageCompare.cpp
         support/TestImages.cpp
         test_Cli.cpp
+        test_ColorEncoding.cpp
         test_ImageBuffer.cpp
         test_ImageExport.cpp
         test_RawImport.cpp

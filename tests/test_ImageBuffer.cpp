@@ -46,11 +46,11 @@ TEST_CASE("Image size", "[ImageBuffer]") {
 }
 
 TEST_CASE("A new buffer reports its geometry and starts zeroed", "[ImageBuffer]") {
-    const ImageBuffer buffer({6, 4}, PixelFormat::RgbaF32, ColorEncoding::LinearRec2020);
+    const ImageBuffer buffer({6, 4}, PixelFormat::RgbaF32, NamedEncoding::LinearRec2020);
 
     REQUIRE(buffer.size() == ImageSize{6, 4});
     REQUIRE(buffer.format() == PixelFormat::RgbaF32);
-    REQUIRE(buffer.encoding() == ColorEncoding::LinearRec2020);
+    REQUIRE(isWorkingEncoding(buffer.encoding()));
 
     SECTION("rows are tightly packed") {
         REQUIRE(buffer.rowStride() == 6 * 4 * sizeof(float));
@@ -66,25 +66,25 @@ TEST_CASE("A new buffer reports its geometry and starts zeroed", "[ImageBuffer]"
 
 TEST_CASE("Sample storage is allocated per format", "[ImageBuffer]") {
     SECTION("8-bit") {
-        const ImageBuffer buffer({2, 2}, PixelFormat::RgbU8, ColorEncoding::Srgb);
+        const ImageBuffer buffer({2, 2}, PixelFormat::RgbU8, NamedEncoding::Srgb);
         REQUIRE(buffer.samples<std::uint8_t>().size() == 2 * 2 * 3);
         REQUIRE(buffer.byteSize() == 12);
     }
 
     SECTION("16-bit") {
-        const ImageBuffer buffer({2, 2}, PixelFormat::RgbaU16, ColorEncoding::AdobeRgb);
+        const ImageBuffer buffer({2, 2}, PixelFormat::RgbaU16, NamedEncoding::AdobeRgb);
         REQUIRE(buffer.samples<std::uint16_t>().size() == 2 * 2 * 4);
         REQUIRE(buffer.byteSize() == 32);
     }
 
     SECTION("asking for the wrong sample type is an error, not a reinterpretation") {
-        const ImageBuffer buffer({2, 2}, PixelFormat::RgbU8, ColorEncoding::Srgb);
+        const ImageBuffer buffer({2, 2}, PixelFormat::RgbU8, NamedEncoding::Srgb);
         REQUIRE_THROWS_AS(buffer.samples<float>(), std::bad_variant_access);
     }
 }
 
 TEST_CASE("Byte and sample views address the same storage", "[ImageBuffer]") {
-    ImageBuffer buffer({2, 1}, PixelFormat::RgbF32, ColorEncoding::LinearRec2020);
+    ImageBuffer buffer({2, 1}, PixelFormat::RgbF32, NamedEncoding::LinearRec2020);
 
     const auto samples = buffer.samples<float>();
     samples[0] = 0.25F;
@@ -109,23 +109,23 @@ TEST_CASE("Byte and sample views address the same storage", "[ImageBuffer]") {
 }
 
 TEST_CASE("Degenerate dimensions are rejected", "[ImageBuffer]") {
-    REQUIRE_THROWS_AS(ImageBuffer({0, 4}, PixelFormat::RgbU8, ColorEncoding::Srgb),
+    REQUIRE_THROWS_AS(ImageBuffer({0, 4}, PixelFormat::RgbU8, NamedEncoding::Srgb),
                       std::invalid_argument);
-    REQUIRE_THROWS_AS(ImageBuffer({4, 0}, PixelFormat::RgbU8, ColorEncoding::Srgb),
+    REQUIRE_THROWS_AS(ImageBuffer({4, 0}, PixelFormat::RgbU8, NamedEncoding::Srgb),
                       std::invalid_argument);
-    REQUIRE_THROWS_AS(ImageBuffer({0, 0}, PixelFormat::RgbU8, ColorEncoding::Srgb),
+    REQUIRE_THROWS_AS(ImageBuffer({0, 0}, PixelFormat::RgbU8, NamedEncoding::Srgb),
                       std::invalid_argument);
 }
 
 TEST_CASE("An unrepresentable allocation fails before it is attempted", "[ImageBuffer]") {
     // 4e9 x 4e9 RGBA pixels is 6.4e19 samples, past the range of size_t.
     constexpr ImageSize absurd{4'000'000'000, 4'000'000'000};
-    REQUIRE_THROWS_AS(ImageBuffer(absurd, PixelFormat::RgbaU8, ColorEncoding::Srgb),
+    REQUIRE_THROWS_AS(ImageBuffer(absurd, PixelFormat::RgbaU8, NamedEncoding::Srgb),
                       std::length_error);
 }
 
 TEST_CASE("Cloning produces an independent buffer", "[ImageBuffer]") {
-    ImageBuffer original({2, 2}, PixelFormat::RgbF32, ColorEncoding::LinearRec2020);
+    ImageBuffer original({2, 2}, PixelFormat::RgbF32, NamedEncoding::LinearRec2020);
     original.samples<float>()[0] = 1.5F;
 
     ImageBuffer copy = original.clone();
@@ -149,7 +149,7 @@ TEST_CASE("Buffers move rather than copy", "[ImageBuffer]") {
     STATIC_REQUIRE(std::is_nothrow_move_constructible_v<ImageBuffer>);
     STATIC_REQUIRE(std::is_nothrow_move_assignable_v<ImageBuffer>);
 
-    ImageBuffer source({2, 2}, PixelFormat::RgbF32, ColorEncoding::LinearRec2020);
+    ImageBuffer source({2, 2}, PixelFormat::RgbF32, NamedEncoding::LinearRec2020);
     source.samples<float>()[3] = 2.5F;
     const float* const storage = source.samples<float>().data();
 

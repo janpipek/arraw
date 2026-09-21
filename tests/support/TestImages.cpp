@@ -58,7 +58,7 @@ void store(arraw::ImageBuffer& image, const std::vector<float>& components, floa
 } // namespace
 
 arraw::ImageBuffer arraw::test::rainbow(ImageSize size, PixelFormat format,
-                                        ColorEncoding encoding) {
+                                        NamedEncoding encoding) {
     ImageBuffer image(size, format, encoding);
 
     const std::size_t channels = channelCount(format);

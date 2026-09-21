@@ -30,6 +30,7 @@ qt_standard_project_setup()
 # thin front ends over it. Headers under include/ are the public API and are
 # propagated to consumers through target_link_libraries.
 add_library(arraw STATIC
+        include/ColorEncoding.h
         include/DevelopSettings.h
         include/ImageBuffer.h
         include/ImageExport.h

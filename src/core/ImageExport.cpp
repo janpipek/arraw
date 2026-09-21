@@ -15,6 +15,7 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <variant>
 
 using namespace arraw;
 
@@ -124,7 +125,15 @@ QImage::Format outputPixelFormat(ImageFileFormat format, int bitDepth, bool hasA
 /// @brief Converts colour and sample depth, and selects profile metadata for export.
 QImage prepareExportImage(const ImageBuffer& image, ImageFileFormat format,
                           const ExportOptions& options) {
-    const auto sourceSpace = qtimage::toColorSpace(image.encoding());
+    // A camera-native buffer has no colour space Qt could name, and no output
+    // profile could describe one sensor's primaries to a viewer. Refusing here
+    // says which stage is missing rather than which enumerator is unknown.
+    const auto* sourceEncoding = std::get_if<NamedEncoding>(&image.encoding());
+    if (sourceEncoding == nullptr) {
+        throw std::invalid_argument(
+            "A camera-native buffer must pass white balance before it can be exported");
+    }
+    const auto sourceSpace = qtimage::toColorSpace(*sourceEncoding);
     const auto targetSpace = qtimage::toColorSpace(options.encoding);
     QImage source = qtimage::toImage(image);
     if (source.isNull()) {
