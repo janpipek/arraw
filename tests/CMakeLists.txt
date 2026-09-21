@@ -27,6 +27,7 @@ add_executable(arraw-tests
         test_ProcessingPlan.cpp
         test_RawImport.cpp
         test_RoundTrip.cpp
+        test_Tone.cpp
         test_WhiteBalance.cpp)
 arraw_enable_warnings(arraw-tests)
 

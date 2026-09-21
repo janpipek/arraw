@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <variant>
 
@@ -72,6 +73,26 @@ Matrix3 toWorkingMatrix(const ColorEncoding& encoding, const DevelopSettings& se
         "Development starts from the working encoding or a camera's own primaries");
 }
 
+/// @brief Works out where the highlight roll-off bends.
+///
+/// The amount is where the knee sits: none leaves it out of reach, full brings
+/// it down to half of white. The plan carries the knee rather than the amount
+/// so that the chain has a comparison to make rather than a setting to
+/// interpret (ADR 011).
+/// @param settings Settings to resolve.
+/// @return The knee, in linear luminance.
+float shoulderKneeFor(const DevelopSettings& settings) {
+    if (!std::isfinite(settings.filmicHighlights)) {
+        throw std::invalid_argument("A highlight roll-off must be finite");
+    }
+    const float amount =
+        std::clamp(settings.filmicHighlights, noFilmicHighlights, fullFilmicHighlights);
+    if (amount <= noFilmicHighlights) {
+        return std::numeric_limits<float>::infinity();
+    }
+    return 1.0F - 0.5F * amount / fullFilmicHighlights;
+}
+
 } // namespace
 
 ProcessingPlan arraw::planFor(const ColorEncoding& encoding, const DevelopSettings& settings) {
@@ -82,7 +103,9 @@ ProcessingPlan arraw::planFor(const ColorEncoding& encoding, const DevelopSettin
     // reaches it, so that no pixel maths depends on a caller having checked
     // first (ADR 008).
     const float exposure = std::clamp(settings.exposure, darkestExposure, brightestExposure);
-    return {.toWorking = toWorkingMatrix(encoding, settings), .exposureGain = std::exp2(exposure)};
+    return {.toWorking = toWorkingMatrix(encoding, settings),
+            .exposureGain = std::exp2(exposure),
+            .shoulderKnee = shoulderKneeFor(settings)};
 }
 
 ProcessingPlan arraw::planFor(const Photo& photo) {

@@ -17,6 +17,13 @@ inline constexpr Matrix3 srgbToWorking{{0.6274039F, 0.3292830F, 0.0433131F, //
 /// @brief Linear Rec.2020 back to linear sRGB.
 inline constexpr Matrix3 workingToSrgb = srgbToWorking.inverse();
 
+/// @brief Relative luminance of a linear Rec.2020 colour, by channel.
+///
+/// The Rec.2020 coefficients, which sum to one — so a neutral colour's
+/// luminance is the value each of its channels holds, and a colour rolled to a
+/// given luminance has a neutral counterpart of exactly that value.
+inline constexpr Colour workingLuminance{0.2627F, 0.6780F, 0.0593F};
+
 /// @brief CIE XYZ (D65) to linear sRGB.
 inline constexpr Matrix3 xyzToSrgb{{3.2404542F, -1.5371385F, -0.4985314F, //
                                     -0.9692660F, 1.8760108F, 0.0415560F,  //

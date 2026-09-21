@@ -264,6 +264,40 @@ TEST_CASE("Exposure reaches the exported pixels", "[cli]") {
     REQUIRE(after.greenF() < before.greenF() * 0.8F);
 }
 
+TEST_CASE("The highlight roll-off reaches the exported pixels", "[cli]") {
+    /// On by default and turned off by asking for none, which is the one thing
+    /// about it a photographer can get wrong from the command line.
+    const test::TempDir directory;
+    const auto raw = test::fixture("linear-32x24-neutral.dng").string();
+    const auto exported = directory.file("linear-32x24-neutral.png").string();
+
+    REQUIRE(invoke({"export", raw, "-o", directory.path().string(), "--format", "png",
+                    "--bit-depth", "16", "--exposure", "2"})
+                .code == cli::Success);
+    const QImage rolled(QString::fromStdString(exported));
+
+    REQUIRE(
+        invoke({"export", raw, "-o", directory.path().string(), "--format", "png", "--bit-depth",
+                "16", "--exposure", "2", "--filmic-highlights", "0", "--overwrite"})
+            .code == cli::Success);
+    const QImage clipped(QString::fromStdString(exported));
+
+    REQUIRE_FALSE(rolled.isNull());
+    REQUIRE_FALSE(clipped.isNull());
+
+    /// Two stops up puts the upper half of the ramp above white. Clipped, they
+    /// are all the same white; rolled, they are still telling apart.
+    const auto clippedLeft = clipped.pixelColor(20, 12);
+    const auto clippedRight = clipped.pixelColor(31, 12);
+    REQUIRE(clippedLeft.greenF() == 1.0F);
+    REQUIRE(clippedRight.greenF() == 1.0F);
+
+    const auto rolledLeft = rolled.pixelColor(20, 12);
+    const auto rolledRight = rolled.pixelColor(31, 12);
+    REQUIRE(rolledLeft.greenF() < 1.0F);
+    REQUIRE(rolledLeft.greenF() < rolledRight.greenF());
+}
+
 TEST_CASE("White balance reaches the exported pixels", "[cli]") {
     const test::TempDir directory;
     const auto raw = test::fixture("linear-32x24-neutral.dng").string();
@@ -288,7 +322,7 @@ TEST_CASE("White balance reaches the exported pixels", "[cli]") {
 TEST_CASE("A develop setting outside its range is a usage error", "[cli]") {
     const test::TempDir directory;
     const auto raw = test::fixture("linear-32x24-neutral.dng").string();
-    const auto* flag = GENERATE("--exposure", "--temperature", "--tint");
+    const auto* flag = GENERATE("--exposure", "--temperature", "--tint", "--filmic-highlights");
 
     const auto tooBig = invoke({"export", raw, "-o", directory.path().string(), flag, "1000000"});
     const auto notANumber =

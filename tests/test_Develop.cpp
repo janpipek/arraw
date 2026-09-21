@@ -44,11 +44,14 @@ TEST_CASE("Development ends in the working encoding, whatever it started in", "[
     REQUIRE(raw.size() == ImageSize{32, 24});
 }
 
-TEST_CASE("Default settings convert a RAW and do nothing else", "[develop]") {
-    /// The flat, faithful rendering the command line's help text promises. The
+TEST_CASE("Converting a RAW is all that happens below the knee", "[develop]") {
+    /// The faithful conversion the command line's help text promises. The
     /// fixture's camera matrix is sRGB and its as-shot neutral is unity, so a
-    /// stored ramp must arrive as the same ramp in unit float.
-    const auto image = develop(loadImage(test::fixture(neutralFixture)), {});
+    /// stored ramp must arrive as the same ramp in unit float -- with the
+    /// highlight roll-off out of the way, since the conversion is what is
+    /// under test and the roll-off has a test of its own.
+    const auto image =
+        develop(loadImage(test::fixture(neutralFixture)), {.filmicHighlights = noFilmicHighlights});
     const auto width = image.size().width;
 
     float worst = 0.0F;
@@ -65,11 +68,14 @@ TEST_CASE("Default settings convert a RAW and do nothing else", "[develop]") {
 }
 
 TEST_CASE("Exposure is a doubling per stop", "[develop]") {
+    /// The multiply itself, with the shoulder off: it is the stage that bends
+    /// a doubling back toward white, and here the doubling is the point.
     const auto source = test::rainbow({4, 2}, PixelFormat::RgbaU16, workingEncoding);
 
-    const auto flat = develop(source, {});
-    const auto lifted = develop(source, {.exposure = 1.0F});
-    const auto dropped = develop(source, {.exposure = -1.0F});
+    const auto flat = develop(source, {.filmicHighlights = noFilmicHighlights});
+    const auto lifted = develop(source, {.exposure = 1.0F, .filmicHighlights = noFilmicHighlights});
+    const auto dropped =
+        develop(source, {.exposure = -1.0F, .filmicHighlights = noFilmicHighlights});
 
     for (std::size_t index = 0; index < flat.samples<float>().size(); index += 4) {
         for (std::size_t channel = 0; channel < 3; ++channel) {
@@ -78,6 +84,31 @@ TEST_CASE("Exposure is a doubling per stop", "[develop]") {
             REQUIRE(std::abs(dropped.samples<float>()[index + channel] - base * 0.5F) < 1e-5F);
         }
     }
+}
+
+TEST_CASE("Highlights roll by default, and a whole photograph survives it", "[develop][tone]") {
+    /// The shoulder is a stage of the chain rather than an effect to switch
+    /// on (ADR 010), so a photograph developed with nothing set still has its
+    /// brightest values bent toward white -- and everything below the knee
+    /// arrives exactly as the conversion left it.
+    const auto source = loadImage(test::fixture(neutralFixture));
+    const auto rolled = develop(source, {});
+    const auto clipping = develop(source, {.filmicHighlights = noFilmicHighlights});
+
+    const auto width = rolled.size().width;
+    bool anyRolled = false;
+    for (std::uint32_t x = 0; x < width; ++x) {
+        const float straight = pixelAt(clipping, x, 0)[1];
+        const float bent = pixelAt(rolled, x, 0)[1];
+        if (straight <= 0.875F) {
+            REQUIRE(bent == straight);
+        } else {
+            REQUIRE(bent < straight);
+            REQUIRE(bent < 1.0F);
+            anyRolled = true;
+        }
+    }
+    REQUIRE(anyRolled);
 }
 
 TEST_CASE("Exposure leaves alpha alone", "[develop]") {

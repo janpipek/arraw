@@ -36,8 +36,11 @@ struct RenderRequest {
 /// space is part of developing, not of decoding, because a white balance is
 /// only a white balance in the space the sensor recorded (ADR 007).
 ///
-/// With default settings a RAW is converted and nothing else, which is the
-/// flat, faithful rendering the command line's help text describes.
+/// With default settings a RAW is converted faithfully and its brightest
+/// values are rolled toward white: the shoulder is a stage of the chain rather
+/// than an effect a photographer switches on, because a real multiply puts
+/// values above white and something has to bring them back (ADR 010). Below
+/// its knee nothing else happens.
 ///
 /// @param source Decoded photograph, in the working or a camera encoding.
 /// @param settings Photographic settings to apply.

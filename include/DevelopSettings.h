@@ -25,6 +25,16 @@ inline constexpr float darkestExposure = -5.0F;
 /// @copydoc darkestExposure
 inline constexpr float brightestExposure = 5.0F;
 
+/// @brief Weakest and strongest highlight roll-off arraw models.
+///
+/// Zero is a true neutral — a photographer who wants a hard clip may have one
+/// — rather than a floor that would make the number mean something other than
+/// what it says (ADR 010).
+inline constexpr float noFilmicHighlights = 0.0F;
+
+/// @copydoc noFilmicHighlights
+inline constexpr float fullFilmicHighlights = 100.0F;
+
 /// @brief Photographic settings applied to one photograph, in domain units.
 ///
 /// Plain values: presentation decides how to show them, and a descriptor table
@@ -45,6 +55,20 @@ struct DevelopSettings {
 
     /// @brief How far off the line of glowing-object colours that light sits.
     std::optional<float> tint = std::nullopt;
+
+    /// @brief How much the brightest values roll toward white, 0 to 100.
+    ///
+    /// The shoulder that ends the chain (ADR 010). A sensor records a far
+    /// wider range than a file can hold, and exposure is a real multiply, so
+    /// values above white are ordinary; without a bend at the top they all
+    /// become the same flat white, with the hard edge that gives away. The
+    /// amount says where the bend starts: gentle catches only what would have
+    /// clipped, strong reaches down into the upper midtones.
+    ///
+    /// Not a switch. Its default is a gentle roll, because most photographs
+    /// read better with graceful highlights than with a digital clip, and a
+    /// photographer changes how much rather than whether.
+    float filmicHighlights = 25.0F;
 
     friend bool operator==(const DevelopSettings&, const DevelopSettings&) = default;
 };

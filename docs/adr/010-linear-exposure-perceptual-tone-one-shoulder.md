@@ -46,13 +46,19 @@ an adjustable amount, not an effect a photographer switches on. The feature
 brief calls it Filmic Highlights and words it as an extra; that wording is
 superseded here.
 
+What is mandatory is the stage, not a nonzero amount. The control has a true
+neutral, and a photographer who asks for none gets a hard clip — what this
+forbids is the shoulder arriving later as an optional effect, leaving every
+render before it to clip for want of one (ADR 013). Its default is a gentle
+roll, so an export clips only when asked to.
+
 ## Consequences
 
 - **A photograph at +1 EV will not match `main`.** Brighter highlights, less
   lifted shadows. At 18% grey the two agree exactly; by 0.6 linear `main` gives
   0.76 where this gives 1.2.
-- **Exports clip without the shoulder**, so it cannot be optional and cannot be
-  deferred past the first tone control.
+- **Exports clip without the shoulder**, so it cannot be deferred past the
+  first tone control — Contrast pushes values above white by design (ADR 013).
 - **Histograms live in the curve's space**, or the graph disagrees with the
   picture (`main` ADR 0003).
 - **Two encodings coexist deliberately**: scene-linear for Exposure, white
