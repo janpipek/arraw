@@ -18,11 +18,10 @@ find_package(Qt6 6.10 REQUIRED COMPONENTS Gui Widgets Concurrent ShaderTools Xml
 
 # RAW decoding, required rather than optional: an arraw built without it would
 # decode the same file differently from one built with it, which is the failure
-# mode ADR 005 exists to prevent. The reentrant variant (libraw_r) is the one to
-# link, because decoding belongs on a background thread. LibRaw ships
-# pkg-config files and no CMake package config.
+# mode ADR 005 exists to prevent. Prefer the reentrant pkg-config module when
+# LibRaw ships it; some distributions expose only the generic libraw module.
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(LibRaw REQUIRED IMPORTED_TARGET libraw_r)
+pkg_search_module(LibRaw REQUIRED IMPORTED_TARGET libraw_r libraw)
 
 qt_standard_project_setup()
 

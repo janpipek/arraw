@@ -25,7 +25,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            ninja-build catch2 libgl1-mesa-dev libvulkan-dev libxkbcommon-dev
+            ninja-build catch2 libgl1-mesa-dev libvulkan-dev libxkbcommon-dev \
+            libraw-dev
 
       # Ubuntu 24.04 ships Qt 6.4; arraw requires 6.10.
       - name: Install Qt

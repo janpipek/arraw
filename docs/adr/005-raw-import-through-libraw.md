@@ -16,10 +16,10 @@ would say so.
 
 ## Decision
 
-**LibRaw is linked directly and is a required dependency**, via
-`pkg_check_modules(... libraw_r)` — the reentrant variant, because decoding
-belongs on a background thread. Not optional behind a flag: a build flag would
-reintroduce exactly the divergence above, only as our own.
+**LibRaw is linked directly and is a required dependency**, via pkg-config. Prefer
+`libraw_r` when the distribution ships that module; accept `libraw` where it is
+the only pkg-config module available. Not optional behind a flag: a build flag
+would reintroduce exactly the divergence above, only as our own.
 
 **`loadImage` dispatches by extension, then by content, and only then asks
 Qt.** A RAW extension (the ten in `desired-features.md`) goes to LibRaw; so

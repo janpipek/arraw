@@ -12,9 +12,9 @@ with a Qt desktop application and a command line over it.
 
 ## Building
 
-Requires CMake 3.21+, a C++20 compiler, **Qt 6.10**, and **LibRaw** (the
-reentrant `libraw_r`; on Fedora, `LibRaw-devel`). LibRaw is required rather than
-optional, so that every build decodes a RAW identically — see
+Requires CMake 3.21+, a C++20 compiler, **Qt 6.10**, and **LibRaw** (`libraw-dev`
+on Ubuntu, `libraw-devel` on Fedora). LibRaw is required rather than optional, so
+that every build decodes a RAW identically — see
 [ADR 005](docs/adr/005-raw-import-through-libraw.md).
 
 ```bash
