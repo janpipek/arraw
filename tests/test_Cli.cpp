@@ -114,11 +114,16 @@ TEST_CASE("An unknown command is named and the real ones listed", "[cli]") {
     REQUIRE(result.out.empty());
 }
 
-TEST_CASE("The version is reported on stdout", "[cli]") {
-    const auto result = invoke({"--version"});
+TEST_CASE("The version carries the licence notice, on stdout", "[cli]") {
+    const auto requested = GENERATE(std::string{"--version"}, std::string{"-v"});
+    const auto result = invoke({requested});
 
     REQUIRE(result.code == cli::Success);
     REQUIRE_THAT(result.out, ContainsSubstring("arraw-cli "));
+    /// The GPL asks that a program be able to show this. README.md and LICENSE
+    /// are authoritative; this is for a user holding only the binary.
+    REQUIRE_THAT(result.out, ContainsSubstring("GPL-3.0-or-later"));
+    REQUIRE_THAT(result.out, ContainsSubstring("NO WARRANTY"));
     REQUIRE(result.err.empty());
 }
 

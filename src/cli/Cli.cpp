@@ -81,7 +81,15 @@ int arraw::cli::run(const std::vector<std::string>& arguments, std::ostream& out
         return Success;
     }
     if (first == "--version" || first == "-v") {
-        out << "arraw-cli " << ARRAW_VERSION << '\n';
+        // The notice the GPL asks a program to be able to show, in the shape
+        // GNU tools use. The authoritative statement is README.md and LICENSE;
+        // this is so that a user holding only the binary can still find it.
+        out << "arraw-cli " << ARRAW_VERSION << "\n"
+            << "Copyright (C) 2026 Jan Pipek\n"
+            << "License GPL-3.0-or-later: GNU GPL version 3 or later "
+               "<https://gnu.org/licenses/gpl.html>.\n"
+            << "This is free software: you are free to change and redistribute it.\n"
+            << "There is NO WARRANTY, to the extent permitted by law.\n";
         return Success;
     }
 
