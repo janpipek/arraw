@@ -225,9 +225,10 @@ and the fourth channel is copied — padding for a RAW, data for anything else.
   every slider tick invalidate the most expensive cache in the program. The
   user's delta is applied in the matrix instead. The cost is a slightly
   sub-optimal demosaic at extreme white balance settings.
-- Five test sites change `ColorEncoding::LinearRec2020` to
-  `NamedEncoding::LinearRec2020`, and `toColorSpace`'s switch becomes
-  exhaustive, losing its trailing `throw`.
+- The test sites change `ColorEncoding::LinearRec2020` to
+  `NamedEncoding::LinearRec2020`, and `toColorSpace` narrows to `NamedEncoding`
+  — keeping its trailing `throw`, which guards a value cast in from outside the
+  enumeration rather than an unhandled case.
 
 **Sixteen-bit floats would be worth having, later.** `RgbaF16` halves the
 working set against `RgbaF32` — 480 MB rather than 960 MB for a 60 MP frame —
