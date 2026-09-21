@@ -37,9 +37,13 @@ per-body data that no enumerator can name:
 ```cpp
 enum class NamedEncoding { LinearRec2020, Srgb, DisplayP3, AdobeRgb };
 
+using Gains = std::array<float, 3>;
+
 struct CameraNative {
-    Matrix3 toWorking;                    ///< Camera RGB to linear Rec.2020.
-    std::array<float, 3> asShotNeutral{}; ///< Multipliers the camera recorded.
+    Matrix3 toWorking;          ///< Camera RGB to linear Rec.2020.
+    Gains daylightScale{};      ///< Row scales LibRaw normalised out of toWorking.
+    Gains asShotMultipliers{};  ///< Gains the camera recorded, green == 1.
+    Gains appliedMultipliers{}; ///< Gains the decode actually applied.
 };
 
 using ColorEncoding = std::variant<NamedEncoding, CameraNative>;
@@ -51,14 +55,48 @@ state ADR 001 exists to prevent, and nothing downstream can recover the matrix
 from the samples.
 
 **The matrix is `imgdata.color.rgb_cam` composed with a fixed sRGB to Rec.2020
-matrix.** Measured against LibRaw 0.22.2: `rgb_cam`, `cmatrix` and `cam_mul`
-are populated by `open_file`, before `unpack`, so owning the demosaic costs
-nothing here. `cam_xyz` is *not* a safe source — it is filled from LibRaw's
-built-in table keyed on make and model, and reads as all zeros for any body the
-table does not know, our own test fixtures included. `dng_color[i].colormatrix`
-and `forwardmatrix` are left for the day two-illuminant interpolation by
-correlated colour temperature is wanted; `rgb_cam` is LibRaw's own resolution of
-that precedence and always has an answer.
+matrix — but `rgb_cam` alone is not enough.** Measured against LibRaw 0.22.2:
+`rgb_cam`, `cmatrix`, `cam_mul` and `pre_mul` are all populated by `open_file`,
+before `unpack`, so owning the demosaic costs nothing here. `cam_xyz` is *not* a
+safe source — it is filled from LibRaw's built-in table keyed on make and model,
+and reads as all zeros for any body the table does not know, our own test
+fixtures included. `dng_color[i].colormatrix` and `forwardmatrix` are left for
+the day two-illuminant interpolation by correlated colour temperature is wanted;
+`rgb_cam` is LibRaw's own resolution of that precedence and always has an
+answer.
+
+What `rgb_cam` has lost is the scale of each camera-response row.
+`cam_xyz_coeff` normalises the camera matrix so that `cam_rgb * (1,1,1)` is
+`(1,1,1)` before inverting it, and stores the divisors it used in `pre_mul`.
+Measured on two DNGs from this repository's own fixture writer, identical except
+that the second doubles the first row of `ColorMatrix1`:
+
+| After `open_file` | baseline | doubled row |
+|---|---|---|
+| `cam_mul` | 2.0000 1.0000 1.2500 | 2.0000 1.0000 1.2500 |
+| `rgb_cam[0]` | 1.0000 -0.0000 0.0000 | 1.0000 -0.0000 0.0000 |
+| `pre_mul` | **1.0000** 0.9999 1.0002 | **0.5000** 0.9999 1.0002 |
+
+Two different sensor calibrations that `rgb_cam` and `cam_mul` cannot tell
+apart. A Kelvin-to-gains solve built on them alone would treat every sensor as
+already balanced and return the same answer for both, which would break both
+as-shot Kelvin recovery and copying an absolute temperature between bodies. So
+`pre_mul` is stored too, as `daylightScale`, and the unnormalised camera matrix
+is reconstructed from the pair.
+
+**`pre_mul` is captured after `open_file` and before any processing**, because
+`scale_colors` overwrites it. Measured on the same file: `0.5000 0.9999 1.0002`
+at open, `1.0000 1.9999 2.0003 1.9999` after `dcraw_process`. Read late, it
+means something else entirely.
+
+**Recorded gains and applied gains are stored separately.** `asShotMultipliers`
+is what the camera wrote, in LibRaw's `cam_mul` convention — per-channel
+*multipliers* normalised so green is 1, not the DNG `AsShotNeutral` convention
+of neutral channel *values*, which is its reciprocal. `appliedMultipliers` is
+what the decode actually used, and the two differ for a file that declares no
+neutral, where ADR 005 substitutes the daylight multipliers the colour matrix
+implies. Anything computing a temperature from the buffer needs the applied
+ones; anything reporting what the camera saw needs the recorded ones.
 
 **Camera space is a region of the pipeline, not a transient:**
 
@@ -93,8 +131,15 @@ rendered and defaults to the whole frame at full size:
 ```cpp
 struct RenderRequest {
     std::optional<ImageSize> targetSize; ///< Fitted inside, after crop.
+    Upscale upscale = Upscale::Never;    ///< Never, or Allowed.
 };
 ```
+
+The upscale policy is part of the request rather than the caller's arithmetic,
+because resolving a requested size needs the post-crop dimensions, and only the
+pipeline knows those. A caller that clamped for itself would be reconstructing
+the geometry chain outside the library — which is how the command line and the
+interface drift apart.
 
 It is there from the start because resizing has two callers, not one. The
 feature brief promises "re-exporting a shoot in a different size or profile
@@ -129,11 +174,11 @@ Where the pipeline resamples is its own business, not the caller's — full size
 for an export, an early downsample for a preview — and that difference is the
 quality policy the plan's §9 names. `targetSize` is implemented when a
 `--resize` flag exists; region and quality join the same struct later without
-churning the signature. There is no state to own yet: nothing is cached and there
-is no GPU. It becomes a processor object at the first cache — ADR 001 already
-puts decoded and derived buffers in a processor's hands — and moves behind
-`Photo` and an editing session at the first sidecar. The signature is what a
-`render` member would have, so both promotions are mechanical.
+churning the signature. There is no state to own yet: nothing is cached and
+there is no GPU. It becomes a processor object at the first cache — ADR 001
+already puts decoded and derived buffers in a processor's hands — and moves
+behind `Photo` and an editing session at the first sidecar. The signature is
+what a `render` member would have, so both promotions are mechanical.
 
 **Development happens in `RgbaF32`, named by a constant.** Exposure pushes
 samples above 1, white-balance gains do the same, and the camera matrix
@@ -160,10 +205,14 @@ and the fourth channel is copied — padding for a RAW, data for anything else.
 - **Existing tests keep their meaning with a one-call insertion.**
   `develop(buffer, {})` is identity for a JPEG and the matrix alone for a RAW,
   so `exportImage(develop(loadImage(f), {}), ...)` still round-trips.
-- **The matrix path is untested until a fixture has a skewed `ColorMatrix1`.**
-  Every fixture today resolves to identity, so the matrix code could be deleted
-  and the suite would pass. It is a constant in `make_raw_fixtures.py`, but it
-  has to be a conscious addition.
+- **The matrix path is untested until the fixtures can see it.** Every fixture
+  today resolves to an identity `ColorMatrix1` and a unity daylight scale, so
+  the matrix code could be deleted and the suite would pass. Establishing this
+  contract needs four things the current set cannot show: a skewed
+  `ColorMatrix1`, a non-unity daylight scale, a non-unity as-shot neutral, and a
+  file declaring no neutral at all. All are constants in
+  `make_raw_fixtures.py`, but they have to be a conscious addition, together
+  with a temperature/tint -> gains -> temperature/tint round trip.
 - **Clipped highlights stay clipped.** `params.highlight = 0` clips at the
   camera white level before we see the pixels, so a white balance that scales a
   clipped channel gives coloured highlights. Only making the decode itself a

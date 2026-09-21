@@ -31,7 +31,6 @@ Reviews:
   - Creating this review document is authorized even for otherwise read-only reviews.
   - Do not modify production code during a review unless explicitly asked.
   - In the final response, link to the saved review
-  - When addressing the reviews, 
 
 Important documentation (all in /docs):
 - desired-features.md - a description of the features we want to support from the photographers perspective

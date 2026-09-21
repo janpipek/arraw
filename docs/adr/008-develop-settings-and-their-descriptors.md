@@ -23,8 +23,10 @@ it describes them:
 
 ```cpp
 struct DevelopSettings {
-    float exposure = 0.0F; ///< In EV.
-    float temperature = 0.0F;
+    float exposure = 0.0F;                  ///< In EV.
+    WhiteBalanceMode whiteBalance = WhiteBalanceMode::AsShot;
+    std::optional<float> temperature;       ///< Kelvin; set only when Custom.
+    std::optional<float> tint;
     // ...
 };
 
@@ -74,8 +76,9 @@ ADR 007 answers.
 **Temperature is anchored to the camera, and non-RAW images get a different
 setting.** For a RAW, `temperature` is the illuminant's correlated colour
 temperature in Kelvin, converted to camera multipliers through
-`CameraNative::toWorking`, and `asShotNeutral` inverts to the value shown when
-the file opens — so the slider reads the light the camera saw, not a dial
+`CameraNative`'s matrix and daylight scale, and `asShotMultipliers` inverts to
+the value shown when the file opens — so the slider reads the light the camera
+saw, not a dial
 centred on an arbitrary 5500 K. A JPEG or TIFF has no sensor to anchor to, so
 it carries `incrementalTemperature` and `incrementalTint` on a -100 to 100
 scale instead.
@@ -86,6 +89,22 @@ mapping is one-to-one onto `crs:Temperature` / `crs:Tint` and
 `crs:IncrementalTemperature` / `crs:IncrementalTint` — Lightroom's own model, so
 the sidecar needs no cleverness and a stored value means something without the
 photograph beside it.
+
+**As shot is a mode, not a number.** An absolute Kelvin has no defensible
+default: zero is not a temperature, and any fixed value — 5500 included — is
+wrong for every photograph not taken under that light. So the setting carries a
+mode, resolved *before* range validation: `AsShot` takes the illuminant from
+`CameraNative::asShotMultipliers`, `Custom` uses the stored Kelvin and tint, and
+the camera presets are named values of `Custom`. `crs:WhiteBalance` works the
+same way, so the sidecar mapping stays one-to-one.
+
+This is what keeps ADR 007's promise that `develop(buffer, {})` applies only the
+matrix to a RAW: default settings are `AsShot`, which resolves to the gains the
+decode already used, rather than to an unspecified number that range clamping
+would then drag to 2000 K. Three cases follow from it and are not left to the
+implementer: a reset returns to `AsShot`; a sidecar carrying no white balance
+reads as `AsShot`; and a partial preset that excludes white balance leaves the
+photograph's own mode and values untouched.
 
 **White balance therefore does not cross the RAW/non-RAW boundary.** Copy and
 paste, and presets, carry the setting that applies; the checklist reports white
