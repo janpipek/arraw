@@ -5,10 +5,11 @@ with a Qt desktop application and a command line over it.
 
 > **This branch is a ground-up rebuild.** Much of what
 > [`docs/desired-features.md`](docs/desired-features.md) describes is not
-> implemented here yet. Today the engine reads images (including RAW), carries
-> them through a linear Rec.2020 working space, and writes them back out.
-> Develop settings do not exist, so an export is currently a faithful conversion
-> rather than a rendered photograph.
+> implemented here yet. Today the engine reads images (including RAW), develops
+> them from the camera's own colour into a linear Rec.2020 working space, and
+> writes them back out. Exposure and white balance are the develop settings
+> that exist; with none of them set, an export is a faithful conversion rather
+> than a rendered photograph.
 
 ## Building
 
@@ -30,6 +31,7 @@ just fixtures  # regenerate the committed test fixtures (needs uv)
 arraw-cli --help                          # the commands that exist
 arraw-cli export *.arw -o out/            # render a shoot, JPEG by default
 arraw-cli export photo.dng -o out/ --format png --bit-depth 16
+arraw-cli export photo.arw -o out/ --exposure -0.5 --temperature 3200   # RAW only
 ```
 
 Inputs are files rather than directories; your shell expands the wildcards.

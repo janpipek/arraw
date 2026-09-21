@@ -3,6 +3,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <limits>
@@ -157,4 +158,25 @@ TEST_CASE("A light that is not a number is refused", "[whitebalance]") {
     REQUIRE_THROWS_AS(whiteBalanceGains(camera, {-infinite, 0.0F}), std::invalid_argument);
     REQUIRE_THROWS_AS(temperatureForGains(camera, {notANumber, 1.0F, 1.0F}), std::invalid_argument);
     REQUIRE_THROWS_AS(temperatureForGains(camera, {1.0F, 1.0F, 0.0F}), std::invalid_argument);
+}
+
+TEST_CASE("A light a narrow sensor cannot see is held to a floor", "[whitebalance]") {
+    /// A set of primaries as tight as sRGB's cannot represent a deep tungsten
+    /// glow with three positive numbers. Refusing would abandon a file for a
+    /// request a photographer would call ordinary, so the response is held to a
+    /// floor instead -- and the gain between channels is bounded with it.
+    CameraNative narrow = cameraSeeing(0.31272F, 0.32903F);
+    narrow.toWorking = Matrix3{{0.6274039F, 0.3292830F, 0.0433131F, //
+                                0.0690973F, 0.9195404F, 0.0113623F, //
+                                0.0163914F, 0.0880133F, 0.8955953F}};
+
+    const auto gains = whiteBalanceGains(narrow, {warmestKelvin, 0.0F});
+
+    for (const float gain : gains) {
+        REQUIRE(std::isfinite(gain));
+        REQUIRE(gain > 0.0F);
+    }
+    const auto widest = std::max({gains[0], gains[1], gains[2]});
+    const auto narrowest = std::min({gains[0], gains[1], gains[2]});
+    REQUIRE(widest / narrowest <= 1000.0F);
 }

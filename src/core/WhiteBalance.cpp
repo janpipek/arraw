@@ -258,13 +258,23 @@ Gains arraw::withGreenAtOne(Gains gains) {
 
 Gains arraw::whiteBalanceGains(const CameraNative& camera, ColourTemperature temperature) {
     // The light, as the sensor would have recorded it...
-    const std::array<float, 3> neutral =
+    std::array<float, 3> neutral =
         cameraToXyz(camera).inverse() * xyzOf(chromaticityFor(bounded(temperature)));
-    for (const float channel : neutral) {
-        if (channel <= 0.0F) {
-            throw std::invalid_argument("This camera cannot see that light as a colour");
-        }
+
+    // A sensor whose primaries are narrow cannot represent every light with
+    // three positive numbers -- a deep tungsten glow falls outside a set of
+    // primaries as tight as sRGB's. Rather than refuse a request a
+    // photographer would call ordinary, the response is held to a floor, which
+    // bounds the gain between channels at a thousand to one. Beyond that the
+    // colour is an extrapolation whichever way it is computed.
+    const float brightest = std::max({neutral[0], neutral[1], neutral[2]});
+    if (brightest <= 0.0F) {
+        throw std::invalid_argument("This camera cannot see that light as a colour");
     }
+    for (float& channel : neutral) {
+        channel = std::max(channel, brightest / 1000.0F);
+    }
+
     // ...and the gains that cancel it, which is division, one channel at a time.
     return withGreenAtOne({1.0F / neutral[0], 1.0F / neutral[1], 1.0F / neutral[2]});
 }

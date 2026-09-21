@@ -4,6 +4,9 @@
 #include "support/Fixtures.h"
 #include "support/TempDir.h"
 
+#include <QImage>
+#include <QString>
+
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
@@ -230,4 +233,81 @@ TEST_CASE("An existing output is refused unless overwriting is asked for", "[cli
     const auto replaced = invoke(overwriting);
     REQUIRE(replaced.code == cli::Success);
     REQUIRE(std::filesystem::file_size(destination) != original);
+}
+
+TEST_CASE("Exposure reaches the exported pixels", "[cli]") {
+    const test::TempDir directory;
+    const auto raw = test::fixture("linear-32x24-neutral.dng").string();
+
+    REQUIRE(invoke({"export", raw, "-o", directory.path().string(), "--format", "png",
+                    "--bit-depth", "16"})
+                .code == cli::Success);
+    const QImage flat(QString::fromStdString(directory.file("linear-32x24-neutral.png").string()));
+
+    REQUIRE(invoke({"export", raw, "-o", directory.path().string(), "--format", "png",
+                    "--bit-depth", "16", "--exposure", "-1", "--overwrite"})
+                .code == cli::Success);
+    const QImage darker(
+        QString::fromStdString(directory.file("linear-32x24-neutral.png").string()));
+
+    REQUIRE_FALSE(flat.isNull());
+    REQUIRE_FALSE(darker.isNull());
+
+    /// A stop down is half the light. The output is encoded rather than linear,
+    /// so the assertion is the direction and that it is a large move, not a
+    /// ratio -- the ratio belongs to the tests that can see linear values.
+    const auto before = flat.pixelColor(24, 12);
+    const auto after = darker.pixelColor(24, 12);
+    REQUIRE(after.greenF() < before.greenF() * 0.8F);
+}
+
+TEST_CASE("White balance reaches the exported pixels", "[cli]") {
+    const test::TempDir directory;
+    const auto raw = test::fixture("linear-32x24-neutral.dng").string();
+
+    REQUIRE(invoke({"export", raw, "-o", directory.path().string(), "--format", "png",
+                    "--temperature", "9000"})
+                .code == cli::Success);
+    const QImage cool(QString::fromStdString(directory.file("linear-32x24-neutral.png").string()));
+
+    REQUIRE(invoke({"export", raw, "-o", directory.path().string(), "--format", "png",
+                    "--temperature", "3000", "--overwrite"})
+                .code == cli::Success);
+    const QImage warm(QString::fromStdString(directory.file("linear-32x24-neutral.png").string()));
+
+    /// Naming a warm light takes red back out, so the picture cools.
+    const auto coolPixel = cool.pixelColor(24, 12);
+    const auto warmPixel = warm.pixelColor(24, 12);
+    REQUIRE(warmPixel.redF() < coolPixel.redF());
+    REQUIRE(warmPixel.blueF() > coolPixel.blueF());
+}
+
+TEST_CASE("A develop setting outside its range is a usage error", "[cli]") {
+    const test::TempDir directory;
+    const auto raw = test::fixture("linear-32x24-neutral.dng").string();
+    const auto* flag = GENERATE("--exposure", "--temperature", "--tint");
+
+    const auto tooBig = invoke({"export", raw, "-o", directory.path().string(), flag, "1000000"});
+    const auto notANumber =
+        invoke({"export", raw, "-o", directory.path().string(), flag, "quite bright"});
+
+    /// Refused before any file is touched, rather than clamped: the person who
+    /// typed it is present to be told (ADR 008).
+    REQUIRE(tooBig.code == cli::UsageError);
+    REQUIRE(notANumber.code == cli::UsageError);
+    REQUIRE_THAT(tooBig.err, ContainsSubstring(flag));
+    REQUIRE(std::filesystem::is_empty(directory.path()));
+}
+
+TEST_CASE("A temperature on a photograph with no sensor fails that file", "[cli]") {
+    const test::TempDir directory;
+
+    const auto result = invoke({"export", test::fixture("testcard-61x41-srgb8.png").string(), "-o",
+                                directory.path().string(), "--temperature", "5000"});
+
+    /// A JPEG or PNG has no sensor to measure kelvin against, so the file is
+    /// reported and the batch's exit status says something failed.
+    REQUIRE(result.code == cli::Failed);
+    REQUIRE_THAT(result.err, ContainsSubstring("sensor"));
+    REQUIRE(std::filesystem::is_empty(directory.path()));
 }

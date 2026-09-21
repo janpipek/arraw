@@ -2,6 +2,7 @@
 
 #include <WhiteBalance.h>
 
+#include <algorithm>
 #include <cmath>
 #include <stdexcept>
 #include <variant>
@@ -74,6 +75,12 @@ Matrix3 toWorkingMatrix(const ColorEncoding& encoding, const DevelopSettings& se
 } // namespace
 
 ProcessingPlan arraw::planFor(const ColorEncoding& encoding, const DevelopSettings& settings) {
-    return {.toWorking = toWorkingMatrix(encoding, settings),
-            .exposureGain = std::exp2(settings.exposure)};
+    if (!std::isfinite(settings.exposure)) {
+        throw std::invalid_argument("An exposure adjustment must be finite");
+    }
+    // Clamped rather than refused: the processing contract holds whatever
+    // reaches it, so that no pixel maths depends on a caller having checked
+    // first (ADR 008).
+    const float exposure = std::clamp(settings.exposure, darkestExposure, brightestExposure);
+    return {.toWorking = toWorkingMatrix(encoding, settings), .exposureGain = std::exp2(exposure)};
 }

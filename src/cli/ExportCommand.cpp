@@ -3,8 +3,10 @@
 #include "Cli.h"
 
 #include <Develop.h>
+#include <DevelopSettings.h>
 #include <ImageExport.h>
 #include <ImageImport.h>
+#include <WhiteBalance.h>
 
 #include <QCommandLineParser>
 #include <QString>
@@ -41,6 +43,7 @@ struct ExportRequest {
     std::vector<std::filesystem::path> inputs;
     std::filesystem::path outputDirectory;
     ImageFileFormat format = ImageFileFormat::Jpeg;
+    DevelopSettings settings;
     ExportOptions options;
     bool overwrite = false;
     bool quiet = false;
@@ -66,6 +69,33 @@ bool readInteger(const QCommandLineParser& parser, const char* name, int& value)
     return valid;
 }
 
+/// @brief Reads a named option as a number within its modelled range.
+///
+/// Out of range is refused rather than clamped: a photographer is present to
+/// be told, and nothing invalid should enter a session (ADR 008). The renderer
+/// clamps as well, for values that arrive from a file instead.
+/// @return `true` if the option was absent or acceptable; `false` otherwise.
+bool readSetting(const QCommandLineParser& parser, const char* name, float lowest, float highest,
+                 std::optional<float>& value, std::ostream& err, int& code) {
+    if (!parser.isSet(name)) {
+        return true;
+    }
+    bool valid = false;
+    const float parsed = parser.value(name).toFloat(&valid);
+    if (!valid) {
+        code = usageError(err, std::string("--") + name + " takes a number");
+        return false;
+    }
+    if (parsed < lowest || parsed > highest) {
+        code = usageError(err, std::string("--") + name + " accepts " +
+                                   QString::number(lowest).toStdString() + " to " +
+                                   QString::number(highest).toStdString());
+        return false;
+    }
+    value = parsed;
+    return true;
+}
+
 /// @brief Configures the command's own parser.
 ///
 /// In place rather than returned: QCommandLineParser is neither copyable nor
@@ -79,14 +109,18 @@ void configure(QCommandLineParser& parser) {
         "input is attempted, so one bad frame does not abandon an overnight batch. The\n"
         "exit status is 0 when all succeeded, 1 when any failed, 2 for a usage error.\n"
         "\n"
-        "Note: develop settings are not implemented yet, so an export is currently a\n"
-        "faithful conversion of the image as captured, not a rendered photograph.");
+        "With no develop settings an export is a faithful conversion of the image as\n"
+        "captured rather than a rendered photograph. Exposure and white balance are\n"
+        "implemented; the rest of the develop controls are not yet.");
     parser.addHelpOption();
     parser.addOption({{"o", "output"}, "Existing directory to write into.", "dir"});
     parser.addOption({"format", "png, jpeg, or tiff. Default: jpeg.", "name"});
     parser.addOption({"quality", "JPEG quality, 0-100. Default: 90.", "value"});
     parser.addOption({"bit-depth", "8 or 16. Default: 8.", "value"});
     parser.addOption({"encoding", "srgb, display-p3, or adobe-rgb. Default: srgb.", "name"});
+    parser.addOption({"exposure", "Exposure adjustment in EV, -5 to 5.", "stops"});
+    parser.addOption({"temperature", "White balance in kelvin, 2000 to 12000. RAW only.", "k"});
+    parser.addOption({"tint", "Green to magenta, -150 to 150. RAW only.", "amount"});
     parser.addOption({"no-profile", "Convert colour but do not embed the output profile."});
     parser.addOption({"overwrite", "Replace outputs that already exist."});
     parser.addOption({{"q", "quiet"}, "Do not report each file as it is written."});
@@ -163,6 +197,20 @@ std::optional<ExportRequest> buildRequest(const QCommandLineParser& parser, std:
         return std::nullopt;
     }
 
+    std::optional<float> exposure;
+    if (!readSetting(parser, "exposure", darkestExposure, brightestExposure, exposure, err, code) ||
+        !readSetting(parser, "temperature", warmestKelvin, coolestKelvin,
+                     request.settings.temperature, err, code) ||
+        !readSetting(parser, "tint", -tintLimit, tintLimit, request.settings.tint, err, code)) {
+        return std::nullopt;
+    }
+    request.settings.exposure = exposure.value_or(0.0F);
+    // Naming either half of a white balance is asking for a custom one; the
+    // half left unnamed stays as the camera recorded it.
+    if (request.settings.temperature.has_value() || request.settings.tint.has_value()) {
+        request.settings.whiteBalance = WhiteBalanceMode::Custom;
+    }
+
     request.options.embedProfile = !parser.isSet("no-profile");
     request.overwrite = parser.isSet("overwrite");
     request.quiet = parser.isSet("quiet");
@@ -186,7 +234,7 @@ int exportAll(const ExportRequest& request, std::ostream& err) {
                 throw std::runtime_error(destination.string() +
                                          " already exists; pass --overwrite to replace it");
             }
-            exportImage(develop(loadImage(input), {}), destination, request.options);
+            exportImage(develop(loadImage(input), request.settings), destination, request.options);
             if (!request.quiet) {
                 err << input.string() << " -> " << destination.string() << '\n';
             }

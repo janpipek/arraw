@@ -16,6 +16,15 @@ enum class WhiteBalanceMode {
     Custom,
 };
 
+/// @brief Darkest and brightest Exposure arraw models, in EV.
+///
+/// Named here rather than left to whatever a caller happens to pass; they
+/// become rows in the descriptor table of ADR 008 when it exists.
+inline constexpr float darkestExposure = -5.0F;
+
+/// @copydoc darkestExposure
+inline constexpr float brightestExposure = 5.0F;
+
 /// @brief Photographic settings applied to one photograph, in domain units.
 ///
 /// Plain values: presentation decides how to show them, and a descriptor table
