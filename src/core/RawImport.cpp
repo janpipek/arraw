@@ -1,5 +1,7 @@
 #include "RawImport.h"
 
+#include "ColorSpaces.h"
+
 #include <libraw/libraw.h>
 
 #include <algorithm>
@@ -27,13 +29,14 @@ namespace {
 constexpr std::array<std::string_view, 10> rawExtensions = {".cr2", ".cr3", ".nef", ".arw", ".dng",
                                                             ".raf", ".orf", ".rw2", ".pef", ".srw"};
 
-/// @brief LibRaw's `output_color` value for linear Rec.2020 primaries.
+/// @brief LibRaw's `output_color` value for "leave it in the camera's space".
 ///
 /// LibRaw inherits dcraw's bare integers here and validates nothing — an
 /// out-of-range value is silently treated as sRGB rather than reported — so the
 /// one value arraw uses is named once, next to the reason it is that value:
-/// it is ::arraw::workingEncoding.
-constexpr int outputColorRec2020 = 8;
+/// a per-channel gain is only a white balance in the space the sensor
+/// recorded, so the conversion out of it belongs to development (ADR 007).
+constexpr int outputColorCameraNative = 0;
 
 /// @brief LibRaw's `user_qual` value for the AHD demosaic.
 constexpr int demosaicAhd = 3;
@@ -69,6 +72,22 @@ std::string describe(const std::filesystem::path& path, int code) {
 /// Every value here is a decision rather than a default; ADR 005 records them.
 /// The handle must already be open: one of the decisions depends on what the
 /// file turned out to declare.
+/// @brief Checks whether the file declares an as-shot neutral LibRaw can use.
+/// @param raw Opened handle.
+/// @return `true` when the camera recorded a white balance.
+bool hasCameraNeutral(const LibRaw& raw) {
+    const auto& colour = raw.imgdata.color;
+    return colour.cam_mul[0] > 0.0F && colour.cam_mul[2] > 0.0F;
+}
+
+/// @brief Normalises per-channel gains so green is 1.
+/// @param gains Multipliers in camera channel order; green must be non-zero.
+/// @return The same ratios, with green at 1.
+Gains normalised(const float* gains) {
+    const float green = gains[1] > 0.0F ? gains[1] : 1.0F;
+    return {gains[0] / green, gains[1] / green, gains[2] / green};
+}
+
 void applyDecodeSettings(LibRaw& raw) {
     auto& params = raw.imgdata.params;
 
@@ -89,7 +108,7 @@ void applyDecodeSettings(LibRaw& raw) {
     params.gamm[0] = 1.0;
     params.gamm[1] = 1.0;
     params.output_bps = 16;
-    params.output_color = outputColorRec2020;
+    params.output_color = outputColorCameraNative;
 
     // The camera's as-shot neutral, never LibRaw's guess from the histogram --
     // including when there is no as-shot neutral to apply. `use_camera_wb`
@@ -103,9 +122,7 @@ void applyDecodeSettings(LibRaw& raw) {
     // It should also be *said*: this is a silent substitution, and the frame
     // will not look as its camera intended. It becomes a warning on the
     // import path as soon as there is somewhere to put one.
-    const auto& colour = raw.imgdata.color;
-    const bool hasCameraNeutral = colour.cam_mul[0] > 0.0F && colour.cam_mul[2] > 0.0F;
-    params.use_camera_wb = hasCameraNeutral ? 1 : 0;
+    params.use_camera_wb = hasCameraNeutral(raw) ? 1 : 0;
     params.use_auto_wb = 0;
 
     params.user_qual = demosaicAhd;
@@ -126,7 +143,39 @@ void applyDecodeSettings(LibRaw& raw) {
 /// LibRaw emits three (or, for a monochrome sensor, one) channels; arraw's
 /// wide layouts are RGBA, so the alpha channel is synthesised here rather than
 /// leaving the buffer in a layout ::arraw::exportImage cannot write back.
-ImageBuffer toBuffer(const libraw_processed_image_t& image) {
+/// @brief Describes the camera's colour, to travel with the decoded pixels.
+///
+/// Read after `unpack` and before any processing: `scale_colors` overwrites
+/// `pre_mul` with the gains it applied, and its original meaning — the row
+/// scales LibRaw normalised out of the camera matrix — is then gone. Those
+/// scales are not recoverable from `rgb_cam`, which is invariant to them, and
+/// without them a temperature cannot be resolved into channel gains (ADR 007).
+/// @param raw Unpacked handle.
+/// @return The sensor's encoding, including what the camera recorded and what
+/// the decode will apply.
+CameraNative cameraColour(const LibRaw& raw) {
+    const auto& colour = raw.imgdata.color;
+
+    Matrix3 cameraToSrgb;
+    for (std::size_t row = 0; row < 3; ++row) {
+        for (std::size_t column = 0; column < 3; ++column) {
+            cameraToSrgb.values[row * 3 + column] = colour.rgb_cam[row][column];
+        }
+    }
+
+    CameraNative camera;
+    camera.toWorking = colorspaces::srgbToWorking * cameraToSrgb;
+    camera.daylightScale = {colour.pre_mul[0], colour.pre_mul[1], colour.pre_mul[2]};
+    camera.asShotMultipliers =
+        hasCameraNeutral(raw) ? normalised(colour.cam_mul) : Gains{1.0F, 1.0F, 1.0F};
+    // `use_camera_wb` is off for a file that declares no neutral, and LibRaw
+    // then scales by the daylight multipliers its matrix implies (ADR 005).
+    camera.appliedMultipliers =
+        hasCameraNeutral(raw) ? camera.asShotMultipliers : normalised(colour.pre_mul);
+    return camera;
+}
+
+ImageBuffer toBuffer(const libraw_processed_image_t& image, ColorEncoding encoding) {
     if (image.type != LIBRAW_IMAGE_BITMAP) {
         throw std::runtime_error("LibRaw returned a thumbnail rather than an image");
     }
@@ -139,7 +188,7 @@ ImageBuffer toBuffer(const libraw_processed_image_t& image) {
                                  " channels, expected 1 or 3");
     }
 
-    ImageBuffer buffer({image.width, image.height}, PixelFormat::RgbaU16, workingEncoding);
+    ImageBuffer buffer({image.width, image.height}, PixelFormat::RgbaU16, std::move(encoding));
     const auto source =
         std::span(reinterpret_cast<const std::uint16_t*>(image.data),
                   static_cast<std::size_t>(image.data_size) / sizeof(std::uint16_t));
@@ -189,6 +238,10 @@ ImageBuffer arraw::rawimport::load(const std::filesystem::path& path) {
     if (const int code = raw.unpack(); code != LIBRAW_SUCCESS) {
         throw std::runtime_error(describe(path, code));
     }
+
+    // Before processing, which rewrites part of what this reads.
+    const CameraNative camera = cameraColour(raw);
+
     if (const int code = raw.dcraw_process(); code != LIBRAW_SUCCESS) {
         throw std::runtime_error(describe(path, code));
     }
@@ -198,5 +251,5 @@ ImageBuffer arraw::rawimport::load(const std::filesystem::path& path) {
     if (!image) {
         throw std::runtime_error(describe(path, code));
     }
-    return toBuffer(*image);
+    return toBuffer(*image, camera);
 }

@@ -15,6 +15,7 @@
 #include <span>
 #include <stdexcept>
 #include <string_view>
+#include <variant>
 
 using namespace arraw;
 
@@ -70,12 +71,27 @@ std::filesystem::path copyAs(const test::TempDir& directory, std::string_view fi
 
 } // namespace
 
-TEST_CASE("A RAW arrives in the working encoding as opaque 16-bit RGBA", "[integration][raw]") {
+TEST_CASE("A RAW arrives in its camera's own encoding as opaque 16-bit RGBA",
+          "[integration][raw]") {
     const auto image = loadImage(test::fixture(neutralFixture));
 
     REQUIRE(image.size() == ImageSize{32, 24});
     REQUIRE(image.format() == PixelFormat::RgbaU16);
-    REQUIRE(isWorkingEncoding(image.encoding()));
+
+    /// Not the working encoding: a white balance is a per-channel gain in the
+    /// space the sensor recorded, so the conversion out of it is development's
+    /// job rather than the decoder's (ADR 007).
+    REQUIRE_FALSE(isWorkingEncoding(image.encoding()));
+    const auto* camera = std::get_if<CameraNative>(&image.encoding());
+    REQUIRE(camera != nullptr);
+
+    /// Whatever the primaries, the transform out of them must leave white
+    /// alone, which is the statement that each row sums to one.
+    for (std::size_t row = 0; row < 3; ++row) {
+        const float sum = camera->toWorking.at(row, 0) + camera->toWorking.at(row, 1) +
+                          camera->toWorking.at(row, 2);
+        REQUIRE(std::abs(sum - 1.0F) < 1e-4F);
+    }
 
     /// LibRaw emits three channels; the fourth is synthesised so the buffer is
     /// in a layout exportImage can write back.
@@ -130,6 +146,49 @@ TEST_CASE("The camera's as-shot white balance is applied", "[integration][raw]")
 
     /// And it is genuinely a different decode, not a rounding difference.
     REQUIRE(maxDifference(neutral, warm) > 1000);
+}
+
+TEST_CASE("A RAW carries the gains its camera recorded", "[integration][raw]") {
+    const auto warm = loadImage(test::fixture(warmFixture));
+    const auto* camera = std::get_if<CameraNative>(&warm.encoding());
+    REQUIRE(camera != nullptr);
+
+    /// AsShotNeutral (0.5, 1.0, 0.8) is DNG's convention of neutral channel
+    /// values; arraw stores their reciprocals, normalised so green is 1.
+    REQUIRE(std::abs(camera->asShotMultipliers[0] - 2.0F) < 1e-3F);
+    REQUIRE(std::abs(camera->asShotMultipliers[1] - 1.0F) < 1e-3F);
+    REQUIRE(std::abs(camera->asShotMultipliers[2] - 1.25F) < 1e-3F);
+
+    /// The decode used exactly them, so nothing later has to guess whether the
+    /// buffer is balanced.
+    REQUIRE(camera->appliedMultipliers == camera->asShotMultipliers);
+}
+
+TEST_CASE("A RAW without an as-shot neutral says so, and what was used instead",
+          "[integration][raw]") {
+    const auto image = loadImage(test::fixture(noWbFixture));
+    const auto* camera = std::get_if<CameraNative>(&image.encoding());
+    REQUIRE(camera != nullptr);
+
+    /// The file declares no white balance, so LibRaw is given the daylight
+    /// multipliers its colour matrix implies instead (ADR 005). Recording both
+    /// is what lets a temperature be reported honestly rather than invented.
+    REQUIRE(camera->asShotMultipliers == Gains{1.0F, 1.0F, 1.0F});
+    REQUIRE(camera->appliedMultipliers[1] == 1.0F);
+}
+
+TEST_CASE("A RAW's daylight calibration survives the decode", "[integration][raw]") {
+    const auto image = loadImage(test::fixture(neutralFixture));
+    const auto* camera = std::get_if<CameraNative>(&image.encoding());
+    REQUIRE(camera != nullptr);
+
+    /// LibRaw normalises the camera matrix's rows before inverting it and
+    /// keeps the divisors in pre_mul, then overwrites pre_mul during
+    /// processing. Reading it too late loses the calibration entirely, and it
+    /// cannot be recovered from the matrix, which is invariant to it.
+    for (const float scale : camera->daylightScale) {
+        REQUIRE(scale > 0.0F);
+    }
 }
 
 TEST_CASE("A RAW's orientation tag is not baked into the buffer", "[integration][raw]") {

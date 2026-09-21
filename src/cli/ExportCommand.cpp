@@ -2,6 +2,7 @@
 
 #include "Cli.h"
 
+#include <Develop.h>
 #include <ImageExport.h>
 #include <ImageImport.h>
 
@@ -185,7 +186,7 @@ int exportAll(const ExportRequest& request, std::ostream& err) {
                 throw std::runtime_error(destination.string() +
                                          " already exists; pass --overwrite to replace it");
             }
-            exportImage(loadImage(input), destination, request.options);
+            exportImage(develop(loadImage(input), {}), destination, request.options);
             if (!request.quiet) {
                 err << input.string() << " -> " << destination.string() << '\n';
             }

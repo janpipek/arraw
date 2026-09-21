@@ -31,7 +31,10 @@ qt_standard_project_setup()
 # propagated to consumers through target_link_libraries.
 add_library(arraw STATIC
         include/ColorEncoding.h
+        include/Develop.h
         include/DevelopSettings.h
+        src/core/ColorSpaces.h
+        src/core/Develop.cpp
         include/ImageBuffer.h
         include/ImageExport.h
         include/Photo.h
