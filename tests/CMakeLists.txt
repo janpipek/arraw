@@ -15,10 +15,18 @@ include(Catch)
 
 add_executable(arraw-tests
         main.cpp
+        support/ImageCompare.cpp
         support/TestImages.cpp
         test_ImageBuffer.cpp
-        test_ImageExport.cpp)
+        test_ImageExport.cpp
+        test_RoundTrip.cpp)
 arraw_enable_warnings(arraw-tests)
+
+# The integration tests read committed fixtures (see tests/fixtures/README.md).
+# Baking the directory in beats resolving it against the working directory, so
+# the suite behaves the same from ctest, from an IDE, and from a shell.
+target_compile_definitions(arraw-tests
+        PRIVATE ARRAW_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 # Catch2 (not Catch2WithMain): main.cpp runs the session inside a QCoreApplication.
 target_link_libraries(arraw-tests PRIVATE arraw Catch2::Catch2 Qt6::Gui)
 set_target_properties(arraw-tests PROPERTIES AUTOMOC OFF)
