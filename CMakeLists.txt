@@ -16,6 +16,14 @@ endfunction()
 
 find_package(Qt6 6.10 REQUIRED COMPONENTS Gui Widgets Concurrent ShaderTools Xml)
 
+# RAW decoding, required rather than optional: an arraw built without it would
+# decode the same file differently from one built with it, which is the failure
+# mode ADR 005 exists to prevent. The reentrant variant (libraw_r) is the one to
+# link, because decoding belongs on a background thread. LibRaw ships
+# pkg-config files and no CMake package config.
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(LibRaw REQUIRED IMPORTED_TARGET libraw_r)
+
 qt_standard_project_setup()
 
 # The engine library. Everything photographic lives here; the executables are
@@ -32,6 +40,8 @@ add_library(arraw STATIC
         src/core/ImageImport.cpp
         src/core/QtImage.cpp
         src/core/QtImage.h
+        src/core/RawImport.cpp
+        src/core/RawImport.h
 )
 add_library(arraw::arraw ALIAS arraw)
 arraw_enable_warnings(arraw)
@@ -40,7 +50,7 @@ target_include_directories(arraw PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 # no display and no QGuiApplication, only a QCoreApplication for plugin paths.
 # Private: nothing in include/ mentions Qt, and CMake still propagates the link
 # requirement to consumers of this static library.
-target_link_libraries(arraw PRIVATE Qt6::Gui)
+target_link_libraries(arraw PRIVATE Qt6::Gui PkgConfig::LibRaw)
 # qt_standard_project_setup() turns AUTOMOC on globally; the engine has no Qt
 # types, so opting out keeps that honest (and saves a moc pass).
 set_target_properties(arraw PROPERTIES AUTOMOC OFF)

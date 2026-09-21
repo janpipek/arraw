@@ -1,15 +1,22 @@
 # Test fixtures
 
-Binary inputs for the test suite, together with the script that produces them.
+Binary inputs for the test suite, together with the scripts that produce them.
 
-The **PNGs are committed and are what the tests read**. `make_fixtures.py` is
-committed so that a reader can see what is in them and why, and so that new
-variants are cheap to add — it is not run by the build.
+Two generators, one per input kind:
 
-> Change `make_fixtures.py` → run `just fixtures` → commit the regenerated PNGs.
+| Script | Produces | Read by |
+|---|---|---|
+| `make_fixtures.py` | `*.png` — a 61×41 test card | `test_RoundTrip.cpp` |
+| `make_raw_fixtures.py` | `*.dng` — synthetic 32×24 RAWs | `test_RawImport.cpp` |
+
+The **generated files are committed and are what the tests read**. The scripts
+are committed so that a reader can see what is in them and why, and so that new
+variants are cheap to add — neither is run by the build.
+
+> Change a generator → run `just fixtures` → commit the regenerated files.
 >
 > Nothing enforces this. The tests read the committed files, so a forgotten
-> regeneration does not fail anything; it just leaves the script describing an
+> regeneration does not fail anything; it just leaves a script describing an
 > image that is no longer on disk.
 
 ## Why a generator rather than images written by Qt
@@ -78,3 +85,46 @@ branch:
   honouring the embedded profile is observable: it must decode to *different*
   colours. The profile is a minimal matrix/TRC v2 profile built by the script,
   because no dependency-free portable way to obtain a real one exists.
+
+## The RAW fixtures
+
+Synthetic DNGs — a DNG is a TIFF with extra tags, so `make_raw_fixtures.py`
+writes them with `struct` alone. All are 32×24, uncompressed, 16-bit, and
+declare camera space as linear sRGB via `ColorMatrix1`, so a neutral input stays
+neutral and any colour cast in a decode is a bug rather than an artefact.
+
+Adapted from `make_test_dng.py` on the `main` branch, which produced only the
+first of these.
+
+| File | Layout | As-shot neutral | Orientation | What it can observe |
+|---|---|---|---|---|
+| `linear-32x24-neutral.dng` | LinearRaw, 3 spp | unity | none | `no_auto_bright`, linear output gamma |
+| `linear-32x24-warmwb.dng` | LinearRaw, 3 spp | (0.5, 1.0, 0.8) | none | `use_camera_wb` |
+| `linear-32x24-rotated.dng` | LinearRaw, 3 spp | unity | 6 (90° CW) | `user_flip = 0`, and *which decoder ran* |
+| `bayer-32x24.dng` | CFA RGGB, 1 spp | unity | none | demosaic actually runs |
+
+Three of these exist because the first cannot see what it does not contain. A
+LinearRaw file with unity white balance and no orientation decodes identically
+whether the decoder demosaics or not, honours the as-shot neutral or not, and
+rotates or not.
+
+**`linear-32x24-neutral.dng` carries the sharpest assertion in the suite.** It
+is a neutral linear ramp, so a correct decode has nothing to do but a
+colour-space rotation: measured max error is **1 code in 65535**. An automatic
+brightness stretch would miss by thousands, a stray transfer function by tens of
+thousands.
+
+**`linear-32x24-rotated.dng` doubles as a decoder discriminator.** Where KDE's
+`kf6-kimageformats` is installed, its LibRaw-backed `kimg_raw.so` plugin
+registers with Qt and honours the orientation tag, returning 24×32; arraw must
+return 32×24. That is the only way to assert from outside `loadImage` that the
+plugin did not quietly win, and it matters because the plugin is present on some
+developer machines and absent in CI.
+
+The plugin claims files by **extension**, not signature — a renamed DNG is
+detected as `tiff` — so the discriminator only bites for an extension the plugin
+claims and `loadImage` does not route to LibRaw itself. `test_RawImport.cpp`
+copies this fixture to `holiday.mrw` for exactly that reason; `.mrw` is one of
+eleven such extensions (`.mrw .srf .x3f .kdc .mos .raw .3fr .iiq .erf .nrw
+.crw`). A copy named `holiday.png` exercises the content fallback instead, and
+cannot tell the two decoders apart. See ADR 005.

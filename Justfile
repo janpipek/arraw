@@ -32,6 +32,7 @@ test *args: configure
 # Regenerate the committed test fixtures (see tests/fixtures/README.md)
 fixtures:
     uv run tests/fixtures/make_fixtures.py
+    uv run tests/fixtures/make_raw_fixtures.py
 
 # Format C++ source/header files
 [unix]

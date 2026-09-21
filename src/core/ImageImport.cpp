@@ -1,6 +1,7 @@
 #include "ImageImport.h"
 
 #include "QtImage.h"
+#include "RawImport.h"
 
 #include <QColorSpace>
 #include <QFile>
@@ -38,22 +39,53 @@ PixelFormat chooseLayout(const QImage& image) {
     }
 }
 
+/// @brief Decodes through Qt's codecs, or returns a null image if they decline.
+///
+/// Reading from the device rather than a file name lets the reader detect the
+/// format from the content instead of trusting the extension.
+///
+/// A detected format of "raw" is treated as a decline. KDE's kimageformats
+/// installs a LibRaw-backed plugin into Qt's plugin directory, and it claims
+/// files by extension -- including RAW extensions arraw does not list, such as
+/// .mrw, .x3f and .crw. Left to it, those would be decoded with its processing
+/// choices rather than ours (it honours the camera's orientation, which arraw
+/// does not), with the metadata discarded, and only on machines where that
+/// package happens to be installed. Declining sends them to
+/// ::arraw::rawimport, so the file decodes the same either way.
+QImage decodeThroughQt(QFile& file, QString& error) {
+    QImageReader reader(&file);
+    if (reader.format() == "raw") {
+        return {};
+    }
+    QImage decoded = reader.read();
+    error = reader.errorString();
+    return decoded;
+}
+
 } // namespace
 
 ImageBuffer arraw::loadImage(const std::filesystem::path& path) {
+    if (rawimport::namesRawFormat(path)) {
+        return rawimport::load(path);
+    }
+
     QFile sourceFile(path);
     if (!sourceFile.open(QIODevice::ReadOnly)) {
         throw std::runtime_error(sourceFile.fileName().toStdString() + ": " +
                                  sourceFile.errorString().toStdString());
     }
 
-    // Reading from the device rather than a file name lets the reader detect
-    // the format from the content instead of trusting the extension.
-    QImageReader reader(&sourceFile);
-    QImage decoded = reader.read();
+    QString readerError;
+    QImage decoded = decodeThroughQt(sourceFile, readerError);
     if (decoded.isNull()) {
+        // The extension promised nothing and Qt could not read it. Content has
+        // the last word, so a RAW under a foreign name still loads.
+        sourceFile.close();
+        if (rawimport::holdsRawImage(path)) {
+            return rawimport::load(path);
+        }
         throw std::runtime_error(sourceFile.fileName().toStdString() + ": " +
-                                 reader.errorString().toStdString());
+                                 readerError.toStdString());
     }
 
     if (!decoded.colorSpace().isValid()) {

@@ -19,6 +19,7 @@ add_executable(arraw-tests
         support/TestImages.cpp
         test_ImageBuffer.cpp
         test_ImageExport.cpp
+        test_RawImport.cpp
         test_RoundTrip.cpp)
 arraw_enable_warnings(arraw-tests)
 
