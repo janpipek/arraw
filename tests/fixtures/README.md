@@ -105,7 +105,16 @@ first of these.
 | `linear-32x24-highmax.dng` | LinearRaw, 3 spp | unity | none | `adjust_maximum_thr = 0` |
 | `linear-32x24-nowb.dng` | LinearRaw, 3 spp | **absent** | none | the missing-white-balance fallback |
 | `linear-32x24-nowb-dark.dng` | LinearRaw, 3 spp | **absent** | none | that the fallback ignores the frame |
+| `linear-32x24-skewed.dng` | LinearRaw, 3 spp | (0.5, 1.0, 0.8) | none | the camera matrix and its daylight calibration |
 | `preview-32x24.dng` | RGB preview + LinearRaw sub-IFD | unity | none | *which image* was decoded |
+
+`linear-32x24-skewed.dng` is the only one whose camera is not sRGB. Its
+`ColorMatrix1` has scaled rows — red doubled, blue at four fifths — which LibRaw
+divides out of the matrix and keeps in `pre_mul`, so a decode that never stored
+that calibration would still pass every other fixture here while being unable to
+turn a temperature into channel gains. Its red row is also mixed with green, so
+the transform out of the sensor's primaries is a real one rather than the
+identity. See ADR 007.
 
 All but the first exist because the first cannot see what it does not contain.
 A LinearRaw file with unity white balance and no orientation decodes

@@ -31,9 +31,11 @@ qt_standard_project_setup()
 add_library(arraw STATIC
         include/ColorEncoding.h
         include/Develop.h
+        include/WhiteBalance.h
         include/DevelopSettings.h
         src/core/ColorSpaces.h
         src/core/Develop.cpp
+        src/core/WhiteBalance.cpp
         include/ImageBuffer.h
         include/ImageExport.h
         include/Photo.h

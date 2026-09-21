@@ -1,5 +1,6 @@
 #include "Develop.h"
 #include "ImageImport.h"
+#include "WhiteBalance.h"
 
 #include "support/Fixtures.h"
 #include "support/TestImages.h"
@@ -12,12 +13,14 @@
 #include <span>
 #include <stdexcept>
 #include <string_view>
+#include <variant>
 
 using namespace arraw;
 
 namespace {
 
 constexpr std::string_view neutralFixture = "linear-32x24-neutral.dng";
+constexpr std::string_view skewedFixture = "linear-32x24-skewed.dng";
 constexpr std::string_view testCard = "testcard-61x41-srgb8.png";
 
 /// @brief Reads one pixel's four samples from a developed buffer.
@@ -112,4 +115,90 @@ TEST_CASE("A requested size is refused while it is unimplemented", "[develop]") 
     const auto source = test::rainbow({4, 4}, PixelFormat::RgbaU16, workingEncoding);
 
     REQUIRE_THROWS_AS(develop(source, {}, {.targetSize = ImageSize{2, 2}}), std::invalid_argument);
+}
+
+TEST_CASE("Asking for the light the camera saw changes nothing", "[develop]") {
+    /// As Shot and a custom setting at the camera's own reading are the same
+    /// photograph: the gains a temperature wants are divided by the gains the
+    /// decode already applied, and those are the same numbers.
+    const auto source = loadImage(test::fixture(skewedFixture));
+    const auto* camera = std::get_if<CameraNative>(&source.encoding());
+    REQUIRE(camera != nullptr);
+    const auto asShot = asShotTemperature(*camera);
+
+    const auto left = develop(source, {});
+    const auto right = develop(source, {.whiteBalance = WhiteBalanceMode::Custom,
+                                        .temperature = asShot.kelvin,
+                                        .tint = asShot.tint});
+
+    const auto before = left.samples<float>();
+    const auto after = right.samples<float>();
+    for (std::size_t index = 0; index < before.size(); ++index) {
+        REQUIRE(std::abs(after[index] - before[index]) < 1e-4F);
+    }
+}
+
+TEST_CASE("A lower temperature cools the developed photograph", "[develop]") {
+    const auto source = loadImage(test::fixture(skewedFixture));
+
+    const auto warm = develop(
+        source, {.whiteBalance = WhiteBalanceMode::Custom, .temperature = 3000.0F, .tint = 0.0F});
+    const auto cool = develop(
+        source, {.whiteBalance = WhiteBalanceMode::Custom, .temperature = 9000.0F, .tint = 0.0F});
+
+    /// Naming a warm light tells arraw to take red back out of the picture.
+    const auto warmPixel = pixelAt(warm, 20, 12);
+    const auto coolPixel = pixelAt(cool, 20, 12);
+    REQUIRE(warmPixel[0] < coolPixel[0]);
+    REQUIRE(warmPixel[2] > coolPixel[2]);
+}
+
+TEST_CASE("Tint moves without disturbing the temperature", "[develop]") {
+    const auto source = loadImage(test::fixture(skewedFixture));
+
+    const auto neutral = develop(
+        source, {.whiteBalance = WhiteBalanceMode::Custom, .temperature = 5500.0F, .tint = 0.0F});
+    const auto magenta = develop(
+        source, {.whiteBalance = WhiteBalanceMode::Custom, .temperature = 5500.0F, .tint = 40.0F});
+
+    /// A magenta shift is red and blue rising against green. Green is pinned
+    /// at 1 in the *sensor's* channels, but the working space's green is a
+    /// mixture of all three of them, so it moves a little too -- which is why
+    /// the assertion is about the ratios rather than about green standing
+    /// still.
+    const auto before = pixelAt(neutral, 20, 12);
+    const auto after = pixelAt(magenta, 20, 12);
+    REQUIRE(after[0] / after[1] > before[0] / before[1]);
+    REQUIRE(after[2] / after[1] > before[2] / before[1]);
+}
+
+TEST_CASE("An unset temperature or tint keeps the camera's own", "[develop]") {
+    /// Two sliders, not one control: moving the temperature must not silently
+    /// reset the tint, so an absent value means "leave that one alone".
+    const auto source = loadImage(test::fixture(skewedFixture));
+    const auto* camera = std::get_if<CameraNative>(&source.encoding());
+    REQUIRE(camera != nullptr);
+    const auto asShot = asShotTemperature(*camera);
+
+    const auto partial =
+        develop(source, {.whiteBalance = WhiteBalanceMode::Custom, .temperature = 6000.0F});
+    const auto spelled = develop(
+        source,
+        {.whiteBalance = WhiteBalanceMode::Custom, .temperature = 6000.0F, .tint = asShot.tint});
+
+    const auto left = partial.samples<float>();
+    const auto right = spelled.samples<float>();
+    for (std::size_t index = 0; index < left.size(); ++index) {
+        REQUIRE(std::abs(left[index] - right[index]) < 1e-5F);
+    }
+}
+
+TEST_CASE("A temperature is refused on a photograph with no sensor", "[develop]") {
+    /// Kelvin is measured against a sensor's response. A JPEG has none, and
+    /// gets the incremental setting instead, which is not implemented yet.
+    const auto source = test::rainbow({2, 2}, PixelFormat::RgbaU16, workingEncoding);
+
+    REQUIRE_THROWS_AS(
+        develop(source, {.whiteBalance = WhiteBalanceMode::Custom, .temperature = 4000.0F}),
+        std::invalid_argument);
 }

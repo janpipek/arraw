@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstddef>
+#include <stdexcept>
 #include <variant>
 
 namespace arraw {
@@ -57,6 +58,26 @@ struct Matrix3 {
         return {at(0, 0) * colour[0] + at(0, 1) * colour[1] + at(0, 2) * colour[2],
                 at(1, 0) * colour[0] + at(1, 1) * colour[1] + at(1, 2) * colour[2],
                 at(2, 0) * colour[0] + at(2, 1) * colour[1] + at(2, 2) * colour[2]};
+    }
+
+    /// @brief Builds the transform that undoes this one.
+    /// @return The inverse transform.
+    /// @throws std::invalid_argument if the transform collapses a dimension
+    /// and cannot be undone.
+    [[nodiscard]] constexpr Matrix3 inverse() const {
+        const float a = at(0, 0), b = at(0, 1), c = at(0, 2);
+        const float d = at(1, 0), e = at(1, 1), f = at(1, 2);
+        const float g = at(2, 0), h = at(2, 1), i = at(2, 2);
+
+        const float determinant = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+        if (determinant == 0.0F) {
+            throw std::invalid_argument("A singular colour transform cannot be inverted");
+        }
+        const float scale = 1.0F / determinant;
+
+        return Matrix3{{(e * i - f * h) * scale, (c * h - b * i) * scale, (b * f - c * e) * scale,
+                        (f * g - d * i) * scale, (a * i - c * g) * scale, (c * d - a * f) * scale,
+                        (d * h - e * g) * scale, (b * g - a * h) * scale, (a * e - b * d) * scale}};
     }
 
     friend bool operator==(const Matrix3&, const Matrix3&) = default;

@@ -23,7 +23,8 @@ add_executable(arraw-tests
         test_ImageBuffer.cpp
         test_ImageExport.cpp
         test_RawImport.cpp
-        test_RoundTrip.cpp)
+        test_RoundTrip.cpp
+        test_WhiteBalance.cpp)
 arraw_enable_warnings(arraw-tests)
 
 # The integration tests read committed fixtures (see tests/fixtures/README.md).

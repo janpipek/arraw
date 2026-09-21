@@ -2,6 +2,8 @@
 
 #include "ColorSpaces.h"
 
+#include <WhiteBalance.h>
+
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -23,16 +25,54 @@ template <typename Sample> constexpr float toUnit(Sample value) {
     }
 }
 
+/// @brief Works out how far the white balance has to move from where it is.
+///
+/// The decode already multiplied the channels by something — the camera's own
+/// reading, or a substitute when the file recorded none. Asking for a light is
+/// therefore not asking for gains but for the *difference* between the gains
+/// that light wants and the ones already in the pixels. Leaving the mode at
+/// As Shot makes that difference exactly one, which is why developing with
+/// default settings cannot change a photograph's colour.
+/// @param camera Sensor the photograph came from.
+/// @param settings Settings to resolve.
+/// @return Per-channel multipliers to apply, with green at 1.
+Gains whiteBalanceDelta(const CameraNative& camera, const DevelopSettings& settings) {
+    if (settings.whiteBalance == WhiteBalanceMode::AsShot) {
+        return {1.0F, 1.0F, 1.0F};
+    }
+
+    // Moving only the tint leaves the temperature at the camera's reading, and
+    // the other way round, so neither slider drags the other with it.
+    const ColourTemperature asShot = asShotTemperature(camera);
+    const ColourTemperature wanted{settings.temperature.value_or(asShot.kelvin),
+                                   settings.tint.value_or(asShot.tint)};
+
+    const Gains wantedGains = whiteBalanceGains(camera, wanted);
+    const Gains applied = withGreenAtOne(camera.appliedMultipliers);
+    return withGreenAtOne(
+        {wantedGains[0] / applied[0], wantedGains[1] / applied[1], wantedGains[2] / applied[2]});
+}
+
 /// @brief Resolves the transform out of a source encoding into the working one.
 ///
-/// A camera encoding carries its own; the working encoding needs none. Any
-/// other named space is a decoding concern: import converts what it reads, so
-/// one arriving here means a buffer skipped that step.
-Matrix3 toWorkingMatrix(const ColorEncoding& encoding) {
+/// A camera encoding carries its own, with the white balance composed into it:
+/// two matrices multiplied once per photograph rather than two passes over
+/// every pixel. The working encoding needs neither. Any other named space is a
+/// decoding concern -- import converts what it reads, so one arriving here
+/// means a buffer skipped that step.
+Matrix3 toWorkingMatrix(const ColorEncoding& encoding, const DevelopSettings& settings) {
     if (const auto* camera = std::get_if<CameraNative>(&encoding)) {
-        return camera->toWorking;
+        return camera->toWorking * Matrix3::scale(whiteBalanceDelta(*camera, settings));
     }
     if (isWorkingEncoding(encoding)) {
+        if (settings.whiteBalance != WhiteBalanceMode::AsShot) {
+            // A temperature in kelvin is measured against a sensor's response.
+            // A photograph that arrived already in a standard colour space has
+            // no sensor behind it, and gets the incremental setting instead
+            // (ADR 008), which is not implemented yet.
+            throw std::invalid_argument(
+                "A temperature needs a sensor to measure against; this photograph has none");
+        }
         return Matrix3::identity();
     }
     throw std::invalid_argument(
@@ -73,7 +113,7 @@ ImageBuffer arraw::develop(const ImageBuffer& source, const DevelopSettings& set
         throw std::invalid_argument("Rendering to a requested size is not implemented yet");
     }
 
-    const Matrix3 matrix = toWorkingMatrix(source.encoding());
+    const Matrix3 matrix = toWorkingMatrix(source.encoding(), settings);
     const float gain = std::exp2(settings.exposure);
 
     ImageBuffer result(source.size(), workingFormat, workingEncoding);

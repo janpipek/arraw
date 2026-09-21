@@ -33,6 +33,7 @@ constexpr std::string_view bayerFixture = "bayer-32x24.dng";
 constexpr std::string_view highMaxFixture = "linear-32x24-highmax.dng";
 constexpr std::string_view noWbFixture = "linear-32x24-nowb.dng";
 constexpr std::string_view noWbDarkFixture = "linear-32x24-nowb-dark.dng";
+constexpr std::string_view skewedFixture = "linear-32x24-skewed.dng";
 constexpr std::string_view previewFixture = "preview-32x24.dng";
 constexpr std::string_view testCard = "testcard-61x41-srgb8.png";
 
@@ -188,6 +189,29 @@ TEST_CASE("A RAW's daylight calibration survives the decode", "[integration][raw
     /// cannot be recovered from the matrix, which is invariant to it.
     for (const float scale : camera->daylightScale) {
         REQUIRE(scale > 0.0F);
+    }
+}
+
+TEST_CASE("A camera that is not sRGB keeps both halves of its calibration", "[integration][raw]") {
+    const auto image = loadImage(test::fixture(skewedFixture));
+    const auto* camera = std::get_if<CameraNative>(&image.encoding());
+    REQUIRE(camera != nullptr);
+
+    /// The fixture's matrix has scaled rows, which LibRaw divides out and
+    /// keeps in pre_mul. Every other fixture here has a unity calibration, so
+    /// this is the only one that can tell whether it was stored at all.
+    REQUIRE(camera->daylightScale[0] < 0.6F);
+    REQUIRE(camera->daylightScale[2] > 1.2F);
+
+    /// And its red row is mixed with green, so the transform out of the
+    /// sensor's primaries is a real one rather than the identity.
+    REQUIRE_FALSE(camera->toWorking == Matrix3::identity());
+
+    /// It still has to leave white alone, mixed rows or not.
+    for (std::size_t row = 0; row < 3; ++row) {
+        const float sum = camera->toWorking.at(row, 0) + camera->toWorking.at(row, 1) +
+                          camera->toWorking.at(row, 2);
+        REQUIRE(std::abs(sum - 1.0F) < 1e-4F);
     }
 }
 

@@ -45,6 +45,18 @@ COLOR_MATRIX_1 = [3.2406, -1.5372, -0.4986,
                   -0.9689, 1.8758, 0.0415,
                   0.0557, -0.2040, 1.0570]
 
+# A camera that is *not* sRGB, for the colour maths the matrix above cannot
+# see. Two things are wrong with it deliberately. Its rows are scaled (red
+# doubled, blue at four fifths), which LibRaw divides out of the matrix and
+# keeps in pre_mul -- so a decoder that ignores pre_mul loses how unevenly this
+# sensor responds, and cannot turn a temperature into channel gains. And its
+# red row is mixed with green, so the matrix itself is not the identity and a
+# decode that skipped it would show. See ADR 007.
+SKEWED_COLOR_MATRIX_1 = [2 * (3.2406 + 0.1 * -0.9689), 2 * (-1.5372 + 0.1 * 1.8758),
+                         2 * (-0.4986 + 0.1 * 0.0415),
+                         -0.9689, 1.8758, 0.0415,
+                         0.8 * 0.0557, 0.8 * -0.2040, 0.8 * 1.0570]
+
 STRIP = ["STRIP"]  # placeholder patched with the strip's real offset
 SUBIFDS = ["SUBIFDS"]  # placeholder patched with the sub-IFD offsets
 
@@ -164,7 +176,8 @@ def image_entries(*, width: int, height: int, bits: int, samples_per_pixel: int,
     ]
 
 
-def camera_entries(as_shot_neutral: tuple[float, float, float] | None) -> list:
+def camera_entries(as_shot_neutral: tuple[float, float, float] | None,
+                   colour_matrix: list[float] | None = None) -> list:
     """Builds the DNG tags that describe the camera rather than the pixels.
 
     ``as_shot_neutral`` of ``None`` omits the tag, leaving a file that declares
@@ -174,7 +187,7 @@ def camera_entries(as_shot_neutral: tuple[float, float, float] | None) -> list:
         (50706, TYPE_BYTE, [1, 4, 0, 0]),                   # DNGVersion
         (50708, TYPE_ASCII, b"arraw-test\0"),               # UniqueCameraModel
         (50721, TYPE_SRATIONAL,                             # ColorMatrix1
-         [(round(v * 10000), 10000) for v in COLOR_MATRIX_1]),
+         [(round(v * 10000), 10000) for v in (colour_matrix or COLOR_MATRIX_1)]),
         (50778, TYPE_SHORT, [21]),                          # CalibrationIlluminant1: D65
     ]
     if as_shot_neutral is not None:
@@ -185,7 +198,7 @@ def camera_entries(as_shot_neutral: tuple[float, float, float] | None) -> list:
 
 def base_entries(*, pixel_bytes: int, samples_per_pixel: int, photometric: int,
                  as_shot_neutral: tuple[float, float, float] | None,
-                 orientation: int | None) -> list:
+                 orientation: int | None, colour_matrix: list[float] | None = None) -> list:
     """Builds the tags a single-IFD fixture carries, in tag order."""
     entries = image_entries(width=W, height=H, bits=16,
                             samples_per_pixel=samples_per_pixel,
@@ -193,7 +206,7 @@ def base_entries(*, pixel_bytes: int, samples_per_pixel: int, photometric: int,
     if orientation is not None:
         entries.append((274, TYPE_SHORT, [orientation]))    # Orientation
     entries.append((50717, TYPE_LONG, [65535]))             # WhiteLevel
-    entries += camera_entries(as_shot_neutral)
+    entries += camera_entries(as_shot_neutral, colour_matrix)
     return sorted(entries, key=lambda e: e[0])
 
 
@@ -316,6 +329,17 @@ def main() -> None:
         (50714, TYPE_SHORT, [0]),             # BlackLevel
     ]
     write_dng(here / "bayer-32x24.dng", sorted(entries, key=lambda e: e[0]), bayer)
+
+    # A camera that is not sRGB: scaled matrix rows, so the daylight calibration
+    # LibRaw keeps in pre_mul is not unity, and a red row mixed with green, so
+    # the matrix itself is not the identity. Every other fixture here would pass
+    # with the colour maths deleted; this one would not (ADR 007).
+    write_dng(here / "linear-32x24-skewed.dng",
+              base_entries(pixel_bytes=len(linear), samples_per_pixel=3,
+                           photometric=PHOTOMETRIC_LINEAR_RAW,
+                           as_shot_neutral=(0.5, 1.0, 0.8), orientation=None,
+                           colour_matrix=SKEWED_COLOR_MATRIX_1),
+              linear)
 
     # A frame whose brightest value is below WhiteLevel but above LibRaw's
     # adjust_maximum_thr of 0.75. Left to itself LibRaw lowers the white level
