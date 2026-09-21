@@ -155,7 +155,6 @@ will want.
 
 The dispatch order, `adjust_maximum_thr`, the missing-white-balance fallback
 and the two `output_color = 0` sentences above came out of a review of the
-first implementation:
-[`docs/reviews/gpt-6_2026-09-21_raw-image-loading.md`](../reviews/gpt-6_2026-09-21_raw-image-loading.md).
+first implementation.
 The measurements quoted here were reproduced against LibRaw 0.22.2 and are
 pinned by fixtures in `tests/fixtures` rather than left as prose.
