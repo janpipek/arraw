@@ -218,8 +218,8 @@ void configure(QCommandLineParser& parser) {
         "With no develop settings an export is a faithful conversion of the image as\n"
         "captured, save for a gentle roll-off that bends the brightest values toward\n"
         "white instead of clipping them flat; --filmic-highlights 0 turns it off.\n"
-        "Exposure and white balance are implemented; the rest of the develop controls\n"
-        "are not yet.");
+        "Exposure, Contrast and white balance are implemented; the rest of the develop\n"
+        "controls are not yet.");
     parser.addHelpOption();
     parser.addOption({{"o", "output"}, "Existing directory to write into.", "dir"});
     parser.addOption({"format", "png, jpeg, or tiff. Default: jpeg.", "name"});
@@ -227,6 +227,7 @@ void configure(QCommandLineParser& parser) {
     parser.addOption({"bit-depth", "8 or 16. Default: 8.", "value"});
     parser.addOption({"encoding", "srgb, display-p3, or adobe-rgb. Default: srgb.", "name"});
     parser.addOption({"exposure", "Exposure adjustment in EV, -5 to 5.", "stops"});
+    parser.addOption({"contrast", "Contrast, -100 to 100.", "amount"});
     parser.addOption({"temperature", "White balance in kelvin, 2000 to 12000. RAW only.", "k"});
     parser.addOption({"tint", "Green to magenta, -150 to 150. RAW only.", "amount"});
     parser.addOption({"filmic-highlights", "Highlight roll-off, 0 to 100. Default: 25.", "amount"});
@@ -308,8 +309,10 @@ std::optional<ExportRequest> buildRequest(const QCommandLineParser& parser, std:
     }
 
     std::optional<float> exposure;
+    std::optional<float> contrast;
     std::optional<float> filmicHighlights;
-    if (!readSetting(parser, "filmic-highlights", noFilmicHighlights, fullFilmicHighlights,
+    if (!readSetting(parser, "contrast", flattestContrast, steepestContrast, contrast, err, code) ||
+        !readSetting(parser, "filmic-highlights", noFilmicHighlights, fullFilmicHighlights,
                      filmicHighlights, err, code) ||
         !readSetting(parser, "exposure", darkestExposure, brightestExposure, exposure, err, code) ||
         !readSetting(parser, "temperature", warmestKelvin, coolestKelvin,
@@ -318,6 +321,7 @@ std::optional<ExportRequest> buildRequest(const QCommandLineParser& parser, std:
         return std::nullopt;
     }
     request.settings.exposure = exposure.value_or(0.0F);
+    request.settings.contrast = contrast.value_or(0.0F);
     request.settings.filmicHighlights =
         filmicHighlights.value_or(request.settings.filmicHighlights);
     // Naming either half of a white balance is asking for a custom one; the

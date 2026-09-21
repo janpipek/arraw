@@ -32,6 +32,21 @@ struct ProcessingPlan {
     /// @brief Linear gain that the Exposure setting asks for.
     float exposureGain = 1.0F;
 
+    /// @brief Whether any tone control asks for the scale to be shaped.
+    ///
+    /// Nothing set resolves to `false`, and the chain skips the crossing into
+    /// the perceptual coordinate and back — which costs two powers, and would
+    /// return a value a hair away from the one it was given. A setting that is
+    /// off falls out in the plan rather than as a test inside the loop
+    /// (ADR 011).
+    bool shapesTone = false;
+
+    /// @brief Exponent the tone scale is raised to about middle grey.
+    ///
+    /// The Contrast setting resolved into the one number the chain uses: the
+    /// perceptual slope at the pivot. One leaves the tone scale alone.
+    float contrastSlope = 1.0F;
+
     /// @brief Luminance at which highlights begin to roll toward white.
     ///
     /// Where the Filmic Highlights amount puts the bend, in linear luminance:
@@ -62,6 +77,70 @@ struct ProcessingPlan {
 /// @throws std::invalid_argument if the photograph's encoding or settings
 /// cannot be resolved.
 [[nodiscard]] ProcessingPlan planFor(const Photo& photo);
+
+/// @brief Perceptual coordinate the tone controls act in.
+///
+/// Tone shaping happens on `y^(1/2.2)` rather than on scene-linear luminance:
+/// linear 0.25 is upper-midtone grey, not the dark quarter, so a control that
+/// acted there would put its whole range in the highlights (ADR 010).
+/// @param luminance Linear luminance, zero or above.
+/// @return The same brightness, perceptually spaced.
+[[nodiscard]] constexpr float toPerceptual(float luminance) {
+    return std::pow(luminance, 1.0F / 2.2F);
+}
+
+/// @brief Returns a perceptual value to scene-linear luminance.
+/// @param value Perceptually spaced brightness.
+/// @return The linear luminance it stands for.
+[[nodiscard]] constexpr float toLinear(float value) {
+    return std::pow(value, 2.2F);
+}
+
+/// @brief Middle grey in the perceptual coordinate, which Contrast pivots on.
+///
+/// An eighteen percent grey card, encoded: `0.18^(1/2.2)`, to the nearest
+/// float, so that a contrast control leaves the value a photographer metered
+/// for exactly where it was.
+inline constexpr float greyPivot = 0.45865646F;
+
+/// @brief Shapes one luminance through the tone controls, in their fixed order.
+///
+/// Contrast is a straight line in log--log through the grey pivot: monotone
+/// everywhere, never negative, and continuing smoothly past white rather than
+/// flattening into it (ADR 013). The regional controls join it here.
+/// @param plan Resolved settings.
+/// @param luminance Linear luminance to shape.
+/// @return The shaped linear luminance.
+[[nodiscard]] constexpr float shapeLuminance(const ProcessingPlan& plan, float luminance) {
+    const float value = toPerceptual(luminance);
+    return toLinear(greyPivot * std::pow(value / greyPivot, plan.contrastSlope));
+}
+
+/// @brief Applies the tone controls to a colour, through its luminance.
+///
+/// Tone shapes brightness and the colour follows by the ratio, so hue and
+/// saturation come through untouched and colour work stays in Oklab where
+/// ADR 010 puts it. A colour with no brightness has no ratio to scale by, and
+/// takes the shaped value neutrally — which is what a lifted black is.
+/// @param plan Resolved settings.
+/// @param colour Colour in the working encoding.
+/// @return The colour with its tone shaped.
+[[nodiscard]] constexpr Colour shapeTone(const ProcessingPlan& plan, Colour colour) {
+    if (!plan.shapesTone) {
+        return colour;
+    }
+
+    const float luminance = colorspaces::workingLuminance[0] * colour[0] +
+                            colorspaces::workingLuminance[1] * colour[1] +
+                            colorspaces::workingLuminance[2] * colour[2];
+    if (!(luminance > 0.0F)) {
+        const float lifted = shapeLuminance(plan, 0.0F);
+        return {lifted, lifted, lifted};
+    }
+
+    const float ratio = shapeLuminance(plan, luminance) / luminance;
+    return {colour[0] * ratio, colour[1] * ratio, colour[2] * ratio};
+}
 
 /// @brief Rolls a colour's brightest values toward white rather than clipping.
 ///
@@ -113,6 +192,7 @@ struct ProcessingPlan {
     colour = plan.toWorking * colour;
     colour = {colour[0] * plan.exposureGain, colour[1] * plan.exposureGain,
               colour[2] * plan.exposureGain};
+    colour = shapeTone(plan, colour);
     return rollHighlights(plan, colour);
 }
 

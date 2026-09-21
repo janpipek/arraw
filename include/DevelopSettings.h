@@ -25,6 +25,15 @@ inline constexpr float darkestExposure = -5.0F;
 /// @copydoc darkestExposure
 inline constexpr float brightestExposure = 5.0F;
 
+/// @brief Flattest and steepest Contrast arraw models.
+///
+/// A perceptual slope of 0.71 or 1.41 at middle grey; the slider is the
+/// exponent's scale rather than the slope itself (ADR 013).
+inline constexpr float flattestContrast = -100.0F;
+
+/// @copydoc flattestContrast
+inline constexpr float steepestContrast = 100.0F;
+
 /// @brief Weakest and strongest highlight roll-off arraw models.
 ///
 /// Zero is a true neutral — a photographer who wants a hard clip may have one
@@ -42,6 +51,15 @@ inline constexpr float fullFilmicHighlights = 100.0F;
 struct DevelopSettings {
     /// @brief Exposure adjustment, in EV.
     float exposure = 0.0F;
+
+    /// @brief How steeply the tone scale rises through middle grey.
+    ///
+    /// The first of the tone controls and the only global one: it pivots about
+    /// the grey card, so that the value a photographer meters for does not
+    /// move while everything around it spreads or gathers (ADR 013). It
+    /// deliberately pushes bright values above white, which the highlight
+    /// roll-off then catches.
+    float contrast = 0.0F;
 
     /// @brief Which light the photograph is balanced for.
     WhiteBalanceMode whiteBalance = WhiteBalanceMode::AsShot;

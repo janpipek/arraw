@@ -73,6 +73,21 @@ Matrix3 toWorkingMatrix(const ColorEncoding& encoding, const DevelopSettings& se
         "Development starts from the working encoding or a camera's own primaries");
 }
 
+/// @brief Works out how steeply the tone scale rises through middle grey.
+///
+/// The slider is the exponent's scale: a hundred is a perceptual slope of
+/// 1.41 at the pivot, minus a hundred its reciprocal, so equal moves in
+/// either direction undo one another (ADR 013).
+/// @param settings Settings to resolve.
+/// @return The exponent the tone scale is raised to.
+float contrastSlopeFor(const DevelopSettings& settings) {
+    if (!std::isfinite(settings.contrast)) {
+        throw std::invalid_argument("A contrast adjustment must be finite");
+    }
+    const float contrast = std::clamp(settings.contrast, flattestContrast, steepestContrast);
+    return std::exp2(contrast / (2.0F * steepestContrast));
+}
+
 /// @brief Works out where the highlight roll-off bends.
 ///
 /// The amount is where the knee sits: none leaves it out of reach, full brings
@@ -105,6 +120,8 @@ ProcessingPlan arraw::planFor(const ColorEncoding& encoding, const DevelopSettin
     const float exposure = std::clamp(settings.exposure, darkestExposure, brightestExposure);
     return {.toWorking = toWorkingMatrix(encoding, settings),
             .exposureGain = std::exp2(exposure),
+            .shapesTone = settings.contrast != 0.0F,
+            .contrastSlope = contrastSlopeFor(settings),
             .shoulderKnee = shoulderKneeFor(settings)};
 }
 

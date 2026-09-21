@@ -26,7 +26,88 @@ float rolled(float value, float amount) {
     return developPixel(plan, {value, value, value})[1];
 }
 
+/// @brief Shapes one neutral value, with the shoulder out of the way.
+float shaped(float value, float contrast) {
+    const auto plan = planFor(ColorEncoding{workingEncoding},
+                              {.contrast = contrast, .filmicHighlights = noFilmicHighlights});
+    return developPixel(plan, {value, value, value})[1];
+}
+
 } // namespace
+
+TEST_CASE("Contrast holds middle grey still", "[tone]") {
+    /// What a photographer expects of a contrast control: the grey card does
+    /// not move, everything else pivots about it (ADR 013).
+    constexpr float grey = 0.18F;
+
+    REQUIRE(std::abs(shaped(grey, 100.0F) - grey) < 1e-6F);
+    REQUIRE(std::abs(shaped(grey, -100.0F) - grey) < 1e-6F);
+}
+
+TEST_CASE("Contrast pivots about grey in both directions", "[tone]") {
+    REQUIRE(shaped(0.05F, 100.0F) < 0.05F);
+    REQUIRE(shaped(0.5F, 100.0F) > 0.5F);
+
+    REQUIRE(shaped(0.05F, -100.0F) > 0.05F);
+    REQUIRE(shaped(0.5F, -100.0F) < 0.5F);
+}
+
+TEST_CASE("Contrast pushes bright values past white, for the shoulder to catch", "[tone]") {
+    /// Deliberate: an S that pinned white would flatten the headroom ADR 010
+    /// keeps live, which is clipping by another name (ADR 013).
+    REQUIRE(shaped(0.9F, 100.0F) > 1.0F);
+
+    /// And with the shoulder in the chain, it comes back below white.
+    const auto plan = planFor(ColorEncoding{workingEncoding}, {.contrast = 100.0F});
+    REQUIRE(developPixel(plan, {0.9F, 0.9F, 0.9F})[1] < 1.0F);
+}
+
+TEST_CASE("Contrast never inverts the tone scale", "[tone]") {
+    /// A power law is monotone by construction, and a tone scale that folded
+    /// back on itself would render a gradient as a ridge.
+    for (const float amount : {-100.0F, -50.0F, 50.0F, 100.0F}) {
+        float previous = -1.0F;
+        for (int step = 0; step <= 200; ++step) {
+            const float value = shaped(static_cast<float>(step) / 100.0F, amount);
+            REQUIRE(value > previous);
+            previous = value;
+        }
+    }
+}
+
+TEST_CASE("Contrast leaves colour where it was", "[tone]") {
+    /// Tone acts on luminance and the colour follows by ratio, so a contrast
+    /// control cannot shift a hue (ADR 013).
+    const auto plan = planFor(ColorEncoding{workingEncoding},
+                              {.contrast = 100.0F, .filmicHighlights = noFilmicHighlights});
+    constexpr Colour source{0.3F, 0.2F, 0.1F};
+
+    const Colour developed = developPixel(plan, source);
+    const float ratio = developed[0] / source[0];
+
+    REQUIRE(std::abs(developed[1] / source[1] - ratio) < 1e-5F);
+    REQUIRE(std::abs(developed[2] / source[2] - ratio) < 1e-5F);
+}
+
+TEST_CASE("The plan carries contrast as a slope, not as a slider", "[tone][plan]") {
+    const auto plan = planFor(ColorEncoding{workingEncoding}, {.contrast = 200.0F});
+
+    /// Clamped rather than refused, like every other setting (ADR 008).
+    REQUIRE(std::abs(plan.contrastSlope - std::sqrt(2.0F)) < 1e-5F);
+    REQUIRE(plan.shapesTone);
+}
+
+TEST_CASE("A photograph with no tone set is not shaped at all", "[tone][plan]") {
+    /// Not merely shaped by an identity: crossing into the perceptual
+    /// coordinate and back would return a value a hair from the one it was
+    /// given, and 'default settings change nothing' is meant exactly.
+    const auto plan = planFor(ColorEncoding{workingEncoding}, {});
+    constexpr Colour colour{0.25F, 0.5F, 0.7F};
+
+    REQUIRE_FALSE(plan.shapesTone);
+    REQUIRE(plan.contrastSlope == 1.0F);
+    REQUIRE(developPixel(plan, colour) == colour);
+}
 
 TEST_CASE("The shoulder leaves everything below its knee alone", "[tone]") {
     /// Its whole point: shadows and midtones are not a display transform's
