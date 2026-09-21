@@ -95,11 +95,14 @@ enum class PixelFormat {
 /// Input profiles are converted to the working encoding while loading; named
 /// output encodings receive their matching ICC profile when exported.
 enum class ColorEncoding {
-    LinearWorking,
+    LinearRec2020, ///< Rec.2020 primaries with a linear transfer function.
     Srgb,
     DisplayP3,
     AdobeRgb,
 };
+
+/// @brief Encoding that development happens in; see ADR 003.
+inline constexpr ColorEncoding workingEncoding = ColorEncoding::LinearRec2020;
 
 /// @brief One tightly packed, CPU-resident colour raster.
 ///

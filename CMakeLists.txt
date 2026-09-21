@@ -26,6 +26,8 @@ add_library(arraw STATIC
         include/ImageBuffer.h
         include/ImageExport.h
         include/Photo.h
+        src/core/ColorSpaces.cpp
+        src/core/ColorSpaces.h
         src/core/ImageBuffer.cpp
         src/core/ImageExport.cpp
         include/ImageImport.h

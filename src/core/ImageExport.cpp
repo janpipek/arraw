@@ -1,5 +1,7 @@
 #include <ImageExport.h>
 
+#include "ColorSpaces.h"
+
 #include <QColorSpace>
 #include <QFile>
 #include <QImage>
@@ -100,23 +102,11 @@ QImage imageBufferToQImage(const ImageBuffer& imageBuffer) {
     return result;
 }
 
-/// @brief Maps a defined RGB encoding to its colour space.
-QColorSpace colorSpaceFor(ColorEncoding encoding) {
-    switch (encoding) {
-    case ColorEncoding::Srgb:
-        return QColorSpace::SRgb;
-    case ColorEncoding::DisplayP3:
-        return QColorSpace::DisplayP3;
-    case ColorEncoding::AdobeRgb:
-        return QColorSpace::AdobeRgb;
-    case ColorEncoding::LinearWorking:
-        throw std::invalid_argument("LinearWorking has no defined export colour space");
-    }
-    throw std::invalid_argument("Unknown colour encoding");
-}
-
 /// @brief Validates the options applicable to the destination format.
 void validateExportOptions(ImageFileFormat format, const ExportOptions& options) {
+    if (options.encoding == workingEncoding) {
+        throw std::invalid_argument("The working encoding is internal, not an output one");
+    }
     if (options.bitDepth != 8 && options.bitDepth != 16) {
         throw std::invalid_argument("Export bit depth must be 8 or 16");
     }

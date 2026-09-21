@@ -189,7 +189,7 @@ TEST_CASE("Invalid export options preserve an existing destination", "[ImageExpo
                                   ExportOptions{.format = ImageFileFormat::Jpeg, .bitDepth = 16},
                                   ExportOptions{.format = ImageFileFormat::Jpeg, .quality = -1},
                                   ExportOptions{.format = ImageFileFormat::Jpeg, .quality = 101},
-                                  ExportOptions{.encoding = ColorEncoding::LinearWorking});
+                                  ExportOptions{.encoding = workingEncoding});
     const test::TempDir directory;
     const auto destination = directory.file("existing.png");
     const auto image = test::rainbow();
@@ -201,12 +201,25 @@ TEST_CASE("Invalid export options preserve an existing destination", "[ImageExpo
     REQUIRE(head(destination, original.size()) == original);
 }
 
-TEST_CASE("LinearWorking input is refused before creating a file", "[ImageExport]") {
+TEST_CASE("Working-space input is converted to the output encoding", "[ImageExport]") {
     const test::TempDir directory;
     const auto destination = directory.file("linear.png");
-    const auto image = test::rainbow({3, 2}, PixelFormat::RgbaF32, ColorEncoding::LinearWorking);
+    const auto image = test::rainbow({3, 2}, PixelFormat::RgbaF32, workingEncoding);
 
-    REQUIRE_THROWS_AS(exportImage(image, destination, {}), std::invalid_argument);
+    exportImage(image, destination, {});
+
+    REQUIRE(startsWith(destination, pngSignature));
+}
+
+TEST_CASE("The working encoding is refused as an output encoding", "[ImageExport]") {
+    const test::TempDir directory;
+    const auto destination = directory.file("linear.png");
+    const auto image = test::rainbow({3, 2}, PixelFormat::RgbaU8);
+
+    ExportOptions options;
+    options.encoding = workingEncoding;
+
+    REQUIRE_THROWS_AS(exportImage(image, destination, options), std::invalid_argument);
     REQUIRE_FALSE(std::filesystem::exists(destination));
 }
 

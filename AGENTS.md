@@ -25,13 +25,20 @@ Tools:
 - `just` for task execution
 - `uv` for any Python
 
+Reviews:
+  - When asked to review code, always write the final review to
+    `docs/reviews/<agent_model>_<YYYY-MM-DD>_<feature>.md`.
+  - Creating this review document is authorized even for otherwise read-only reviews.
+  - Do not modify production code during a review unless explicitly asked.
+  - In the final response, link to the saved review
+  - When addressing the reviews, 
+
 Important documentation (all in /docs):
 - desired-features.md - a description of the features we want to support from the photographers perspective
 - ideas/reimplementation-plan.md - some guidance on how we rebuild the app, differing from main
-- reviews - directory for any agentic reviews to keep track. Write your reviews there in (f"{agent_model}_{date}_{feature}.md")
+- reviews - directory for any agentic reviews to keep track.
 
 Code style:
-
 - Idiomatic C++20
 - Use standard library as much as possible
 - Use `arraw` namespace for public API

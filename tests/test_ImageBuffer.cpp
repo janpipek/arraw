@@ -46,11 +46,11 @@ TEST_CASE("Image size", "[ImageBuffer]") {
 }
 
 TEST_CASE("A new buffer reports its geometry and starts zeroed", "[ImageBuffer]") {
-    const ImageBuffer buffer({6, 4}, PixelFormat::RgbaF32, ColorEncoding::LinearWorking);
+    const ImageBuffer buffer({6, 4}, PixelFormat::RgbaF32, ColorEncoding::LinearRec2020);
 
     REQUIRE(buffer.size() == ImageSize{6, 4});
     REQUIRE(buffer.format() == PixelFormat::RgbaF32);
-    REQUIRE(buffer.encoding() == ColorEncoding::LinearWorking);
+    REQUIRE(buffer.encoding() == ColorEncoding::LinearRec2020);
 
     SECTION("rows are tightly packed") {
         REQUIRE(buffer.rowStride() == 6 * 4 * sizeof(float));
@@ -84,7 +84,7 @@ TEST_CASE("Sample storage is allocated per format", "[ImageBuffer]") {
 }
 
 TEST_CASE("Byte and sample views address the same storage", "[ImageBuffer]") {
-    ImageBuffer buffer({2, 1}, PixelFormat::RgbF32, ColorEncoding::LinearWorking);
+    ImageBuffer buffer({2, 1}, PixelFormat::RgbF32, ColorEncoding::LinearRec2020);
 
     const auto samples = buffer.samples<float>();
     samples[0] = 0.25F;
@@ -125,7 +125,7 @@ TEST_CASE("An unrepresentable allocation fails before it is attempted", "[ImageB
 }
 
 TEST_CASE("Cloning produces an independent buffer", "[ImageBuffer]") {
-    ImageBuffer original({2, 2}, PixelFormat::RgbF32, ColorEncoding::LinearWorking);
+    ImageBuffer original({2, 2}, PixelFormat::RgbF32, ColorEncoding::LinearRec2020);
     original.samples<float>()[0] = 1.5F;
 
     ImageBuffer copy = original.clone();
@@ -149,7 +149,7 @@ TEST_CASE("Buffers move rather than copy", "[ImageBuffer]") {
     STATIC_REQUIRE(std::is_nothrow_move_constructible_v<ImageBuffer>);
     STATIC_REQUIRE(std::is_nothrow_move_assignable_v<ImageBuffer>);
 
-    ImageBuffer source({2, 2}, PixelFormat::RgbF32, ColorEncoding::LinearWorking);
+    ImageBuffer source({2, 2}, PixelFormat::RgbF32, ColorEncoding::LinearRec2020);
     source.samples<float>()[3] = 2.5F;
     const float* const storage = source.samples<float>().data();
 

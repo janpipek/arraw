@@ -23,7 +23,7 @@ struct ExportOptions {
 /// @param image Source in RgbU8, RgbaU8, RgbaU16, or RgbaF32 layout, encoded
 /// as sRGB, Display P3, or Adobe RGB. JPEG requires fully opaque pixels.
 /// @param path Destination to create or replace after successful encoding.
-/// @param options Output settings; LinearWorking is not supported.
+/// @param options Output settings; the working encoding is not a valid output.
 /// @throws std::invalid_argument if the input, format, or options are unsupported.
 /// @throws std::runtime_error if image preparation, encoding, or file writing fails.
 void exportImage(const ImageBuffer& image, const std::filesystem::path& path,
