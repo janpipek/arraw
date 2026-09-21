@@ -20,7 +20,7 @@ add_executable(arraw-tests
         test_ImageExport.cpp)
 arraw_enable_warnings(arraw-tests)
 # Catch2 (not Catch2WithMain): main.cpp runs the session inside a QCoreApplication.
-target_link_libraries(arraw-tests PRIVATE arraw Catch2::Catch2 Qt6::Core)
+target_link_libraries(arraw-tests PRIVATE arraw Catch2::Catch2 Qt6::Gui)
 set_target_properties(arraw-tests PROPERTIES AUTOMOC OFF)
 
 # Registers each TEST_CASE with CTest individually, so `ctest -R` can select one.

@@ -156,6 +156,9 @@ public:
     [[nodiscard]] std::span<std::byte> bytes() noexcept;
 
     /// @brief Typed view over the buffer's sample storage.
+    ///
+    /// A sample is one channel value, rather than a complete pixel.
+    ///
     /// @tparam T Sample type; must be `uint8_t`, `uint16_t`, or `float`, and
     /// must agree with @ref format().
     /// @return A read-only view over the buffer's storage.

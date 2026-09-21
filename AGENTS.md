@@ -26,9 +26,9 @@ Tools:
 - `uv` for any Python
 
 Important documentation (all in /docs):
-
 - desired-features.md - a description of the features we want to support from the photographers perspective
 - ideas/reimplementation-plan.md - some guidance on how we rebuild the app, differing from main
+- reviews - directory for any agentic reviews to keep track. Write your reviews there in (f"{agent_model}_{date}_{feature}.md")
 
 Code style:
 
@@ -38,7 +38,7 @@ Code style:
 - OOP is fine, polymorphism is fine but do not overdo it (no AbstractConcreteFactoryCommand... classes)
 - Templates are okay but only if they significantly simplify the solution
 - .h (public in include, otherwise in src), .cpp files semantically organised
-- `clang-format` owns mechanical C++ formatting. Run `just format` only on files
+- `clang-format` owns mechanical C++ formatting. Run `just format` to avoid complex shell commands
   changed for the current task; use `just format-check` to verify formatting without changes.
 - Comments in Doxygen style, /// rather than /*. All briefs are noun-forms for classes and fields,
   verb forms for methods and functions (exception: booleans)
