@@ -28,6 +28,8 @@ add_library(arraw STATIC
         include/Photo.h
         src/core/ImageBuffer.cpp
         src/core/ImageExport.cpp
+        include/ImageImport.h
+        src/core/ImageImport.cpp
 )
 add_library(arraw::arraw ALIAS arraw)
 arraw_enable_warnings(arraw)
