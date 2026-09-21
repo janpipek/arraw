@@ -37,20 +37,27 @@ template <typename Sample> constexpr float toUnit(Sample value) {
 /// @param settings Settings to resolve.
 /// @return Per-channel multipliers to apply, with green at 1.
 Gains whiteBalanceDelta(const CameraNative& camera, const DevelopSettings& settings) {
-    if (settings.whiteBalance == WhiteBalanceMode::AsShot) {
+    // Custom with neither value named is As Shot by another route. Saying so
+    // here keeps it exactly unity rather than nearly so, and costs a round trip
+    // through the curve that would only introduce error.
+    const bool named = settings.temperature.has_value() || settings.tint.has_value();
+    if (settings.whiteBalance == WhiteBalanceMode::AsShot || !named) {
         return {1.0F, 1.0F, 1.0F};
     }
 
-    // Moving only the tint leaves the temperature at the camera's reading, and
-    // the other way round, so neither slider drags the other with it.
-    const ColourTemperature asShot = asShotTemperature(camera);
-    const ColourTemperature wanted{settings.temperature.value_or(asShot.kelvin),
-                                   settings.tint.value_or(asShot.tint)};
+    // Moving only the tint leaves the temperature where it was, and the other
+    // way round, so neither slider drags the other with it. The half that was
+    // not named comes from the balance the decode *applied*, not from what the
+    // camera recorded: for a file that declared no neutral those are different
+    // numbers, and the pixels went through the applied one (ADR 007).
+    const ColourTemperature effective = temperatureForGains(camera, camera.appliedMultipliers);
+    const ColourTemperature wanted{settings.temperature.value_or(effective.kelvin),
+                                   settings.tint.value_or(effective.tint)};
 
+    // Both sides are normalised about green, so their ratio is too.
     const Gains wantedGains = whiteBalanceGains(camera, wanted);
     const Gains applied = withGreenAtOne(camera.appliedMultipliers);
-    return withGreenAtOne(
-        {wantedGains[0] / applied[0], wantedGains[1] / applied[1], wantedGains[2] / applied[2]});
+    return {wantedGains[0] / applied[0], 1.0F, wantedGains[2] / applied[2]};
 }
 
 /// @brief Resolves the transform out of a source encoding into the working one.

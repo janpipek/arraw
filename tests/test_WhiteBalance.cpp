@@ -5,6 +5,7 @@
 
 #include <array>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 
 using namespace arraw;
@@ -127,9 +128,33 @@ TEST_CASE("Gains are rescaled about green", "[whitebalance]") {
     REQUIRE_THROWS_AS(withGreenAtOne({1.0F, 0.0F, 1.0F}), std::invalid_argument);
 }
 
-TEST_CASE("A light with no temperature is refused", "[whitebalance]") {
+TEST_CASE("A light outside the modelled range is brought inside it", "[whitebalance]") {
+    /// The processing contract clamps whatever reaches it, so that no pixel
+    /// maths depends on a caller having checked first (ADR 008). A sidecar
+    /// written by another editor with a wider range is the reason this matters.
     const CameraNative camera = cameraSeeing(0.31272F, 0.32903F);
 
-    REQUIRE_THROWS_AS(whiteBalanceGains(camera, {0.0F, 0.0F}), std::invalid_argument);
-    REQUIRE_THROWS_AS(whiteBalanceGains(camera, {-100.0F, 0.0F}), std::invalid_argument);
+    REQUIRE(whiteBalanceGains(camera, {1500.0F, 0.0F}) ==
+            whiteBalanceGains(camera, {warmestKelvin, 0.0F}));
+    REQUIRE(whiteBalanceGains(camera, {30000.0F, 0.0F}) ==
+            whiteBalanceGains(camera, {coolestKelvin, 0.0F}));
+    REQUIRE(whiteBalanceGains(camera, {0.0F, 0.0F}) ==
+            whiteBalanceGains(camera, {warmestKelvin, 0.0F}));
+    REQUIRE(whiteBalanceGains(camera, {5500.0F, 400.0F}) ==
+            whiteBalanceGains(camera, {5500.0F, tintLimit}));
+}
+
+TEST_CASE("A light that is not a number is refused", "[whitebalance]") {
+    /// Clamping cannot rescue these: there is no nearest valid temperature to
+    /// a NaN, and silently choosing one would put arbitrary colour in a file.
+    const CameraNative camera = cameraSeeing(0.31272F, 0.32903F);
+    const float notANumber = std::numeric_limits<float>::quiet_NaN();
+    const float infinite = std::numeric_limits<float>::infinity();
+
+    REQUIRE_THROWS_AS(whiteBalanceGains(camera, {notANumber, 0.0F}), std::invalid_argument);
+    REQUIRE_THROWS_AS(whiteBalanceGains(camera, {5500.0F, notANumber}), std::invalid_argument);
+    REQUIRE_THROWS_AS(whiteBalanceGains(camera, {infinite, 0.0F}), std::invalid_argument);
+    REQUIRE_THROWS_AS(whiteBalanceGains(camera, {-infinite, 0.0F}), std::invalid_argument);
+    REQUIRE_THROWS_AS(temperatureForGains(camera, {notANumber, 1.0F, 1.0F}), std::invalid_argument);
+    REQUIRE_THROWS_AS(temperatureForGains(camera, {1.0F, 1.0F, 0.0F}), std::invalid_argument);
 }

@@ -106,6 +106,7 @@ first of these.
 | `linear-32x24-nowb.dng` | LinearRaw, 3 spp | **absent** | none | the missing-white-balance fallback |
 | `linear-32x24-nowb-dark.dng` | LinearRaw, 3 spp | **absent** | none | that the fallback ignores the frame |
 | `linear-32x24-skewed.dng` | LinearRaw, 3 spp | (0.5, 1.0, 0.8) | none | the camera matrix and its daylight calibration |
+| `linear-32x24-skewed-nowb.dng` | LinearRaw, 3 spp | **absent** | none | recorded gains against the gains actually applied |
 | `preview-32x24.dng` | RGB preview + LinearRaw sub-IFD | unity | none | *which image* was decoded |
 
 `linear-32x24-skewed.dng` is the only one whose camera is not sRGB. Its

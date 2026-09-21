@@ -21,6 +21,7 @@ namespace {
 
 constexpr std::string_view neutralFixture = "linear-32x24-neutral.dng";
 constexpr std::string_view skewedFixture = "linear-32x24-skewed.dng";
+constexpr std::string_view skewedNoWbFixture = "linear-32x24-skewed-nowb.dng";
 constexpr std::string_view testCard = "testcard-61x41-srgb8.png";
 
 /// @brief Reads one pixel's four samples from a developed buffer.
@@ -201,4 +202,47 @@ TEST_CASE("A temperature is refused on a photograph with no sensor", "[develop]"
     REQUIRE_THROWS_AS(
         develop(source, {.whiteBalance = WhiteBalanceMode::Custom, .temperature = 4000.0F}),
         std::invalid_argument);
+}
+
+TEST_CASE("A file that recorded no white balance still develops from what it got", "[develop]") {
+    /// The camera recorded nothing, so the decode substituted the daylight
+    /// balance its matrix implies. What the photograph *is* balanced for is
+    /// that substitute, and an unnamed setting has to be resolved from it --
+    /// resolving from the recorded placeholder would move the colour the
+    /// moment a photographer touched the tint.
+    const auto source = loadImage(test::fixture(skewedNoWbFixture));
+    const auto* camera = std::get_if<CameraNative>(&source.encoding());
+    REQUIRE(camera != nullptr);
+
+    /// The two readings genuinely differ on this camera, which is what makes
+    /// the test able to fail.
+    const auto recorded = asShotTemperature(*camera);
+    const auto effective = temperatureForGains(*camera, camera->appliedMultipliers);
+    REQUIRE(std::abs(recorded.kelvin - effective.kelvin) > 1000.0F);
+
+    /// Naming only the tint must leave the temperature alone: the result has to
+    /// match spelling out the effective temperature by hand.
+    const auto partial = develop(source, {.whiteBalance = WhiteBalanceMode::Custom, .tint = 20.0F});
+    const auto spelled = develop(
+        source,
+        {.whiteBalance = WhiteBalanceMode::Custom, .temperature = effective.kelvin, .tint = 20.0F});
+
+    const auto left = partial.samples<float>();
+    const auto right = spelled.samples<float>();
+    for (std::size_t index = 0; index < left.size(); ++index) {
+        REQUIRE(std::abs(left[index] - right[index]) < 1e-5F);
+    }
+}
+
+TEST_CASE("Custom with nothing named is the photograph it already was", "[develop]") {
+    const auto source = loadImage(test::fixture(skewedNoWbFixture));
+
+    const auto asShot = develop(source, {});
+    const auto custom = develop(source, {.whiteBalance = WhiteBalanceMode::Custom});
+
+    const auto left = asShot.samples<float>();
+    const auto right = custom.samples<float>();
+    for (std::size_t index = 0; index < left.size(); ++index) {
+        REQUIRE(left[index] == right[index]);
+    }
 }

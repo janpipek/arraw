@@ -2,6 +2,7 @@
 
 #include "ColorSpaces.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -104,7 +105,7 @@ std::array<float, 3> xyzOf(Chromaticity point) {
     return {x / y, 1.0F, (1.0F - x - y) / y};
 }
 
-/// @brief Direction of the same-temperature line at one table entry.
+/// @brief Computes the unit direction of a table entry's same-temperature line.
 /// @param point Table entry.
 /// @return A unit-length direction.
 Chromaticity isothermDirection(const LocusPoint& point) {
@@ -112,7 +113,7 @@ Chromaticity isothermDirection(const LocusPoint& point) {
     return {1.0F / length, point.slope / length};
 }
 
-/// @brief Scales a direction back to unit length.
+/// @brief Rescales a direction to unit length.
 Chromaticity normalise(Chromaticity direction) {
     const float length = std::sqrt(direction.u * direction.u + direction.v * direction.v);
     if (length == 0.0F) {
@@ -206,6 +207,10 @@ ColourTemperature temperatureOf(Chromaticity point) {
     throw std::invalid_argument("That colour is not near the range of natural light");
 }
 
+/// @brief CIE XYZ to the working space, and back.
+constexpr Matrix3 xyzToWorking = colorspaces::srgbToWorking * colorspaces::xyzToSrgb;
+constexpr Matrix3 workingToXyz = xyzToWorking.inverse();
+
 /// @brief Rebuilds the sensor's true response to colour.
 ///
 /// The stored matrix has been through a normalisation that threw away how
@@ -213,23 +218,33 @@ ColourTemperature temperatureOf(Chromaticity point) {
 /// sensors can share it. @ref CameraNative::daylightScale holds what was
 /// divided out, so multiplying it back in recovers the real thing, which is
 /// what a temperature has to be measured against (ADR 007).
+///
+/// Built in this direction because it is the one the stored values already
+/// point in; the other direction is one inversion away.
 /// @param camera Sensor to describe.
-/// @return The transform from CIE XYZ into that sensor's channels.
-Matrix3 xyzToCamera(const CameraNative& camera) {
-    const Matrix3 cameraToSrgb = colorspaces::workingToSrgb * camera.toWorking;
-    Matrix3 srgbToCamera = cameraToSrgb.inverse();
-
-    for (std::size_t row = 0; row < 3; ++row) {
-        const float scale = camera.daylightScale[row];
+/// @return The transform from that sensor's channels into CIE XYZ.
+Matrix3 cameraToXyz(const CameraNative& camera) {
+    for (const float scale : camera.daylightScale) {
         if (scale <= 0.0F) {
             throw std::invalid_argument("The camera's calibration has a channel of zero");
         }
-        for (std::size_t column = 0; column < 3; ++column) {
-            srgbToCamera.values[row * 3 + column] /= scale;
-        }
     }
+    return workingToXyz * camera.toWorking * Matrix3::scale(camera.daylightScale);
+}
 
-    return srgbToCamera * colorspaces::xyzToSrgb;
+/// @brief Brings a light into the range arraw models.
+///
+/// The processing contract clamps whatever reaches it, so that no pixel maths
+/// depends on a caller having done so first (ADR 008). Values that are not
+/// finite are a different matter: no limit makes them mean anything.
+/// @param temperature Light to bound.
+/// @return The same light, inside the modelled range.
+ColourTemperature bounded(ColourTemperature temperature) {
+    if (!std::isfinite(temperature.kelvin) || !std::isfinite(temperature.tint)) {
+        throw std::invalid_argument("A light's temperature and tint must be finite");
+    }
+    return {std::clamp(temperature.kelvin, warmestKelvin, coolestKelvin),
+            std::clamp(temperature.tint, -tintLimit, tintLimit)};
 }
 
 } // namespace
@@ -243,7 +258,8 @@ Gains arraw::withGreenAtOne(Gains gains) {
 
 Gains arraw::whiteBalanceGains(const CameraNative& camera, ColourTemperature temperature) {
     // The light, as the sensor would have recorded it...
-    const std::array<float, 3> neutral = xyzToCamera(camera) * xyzOf(chromaticityFor(temperature));
+    const std::array<float, 3> neutral =
+        cameraToXyz(camera).inverse() * xyzOf(chromaticityFor(bounded(temperature)));
     for (const float channel : neutral) {
         if (channel <= 0.0F) {
             throw std::invalid_argument("This camera cannot see that light as a colour");
@@ -253,11 +269,20 @@ Gains arraw::whiteBalanceGains(const CameraNative& camera, ColourTemperature tem
     return withGreenAtOne({1.0F / neutral[0], 1.0F / neutral[1], 1.0F / neutral[2]});
 }
 
-ColourTemperature arraw::asShotTemperature(const CameraNative& camera) {
-    const Gains recorded = withGreenAtOne(camera.asShotMultipliers);
+ColourTemperature arraw::temperatureForGains(const CameraNative& camera, Gains gains) {
+    const Gains balanced = withGreenAtOne(gains);
+    for (const float channel : balanced) {
+        if (!std::isfinite(channel) || channel <= 0.0F) {
+            throw std::invalid_argument("White balance gains must be finite and above zero");
+        }
+    }
     // Undo everything whiteBalanceGains does, in reverse order: gains back to
     // the light the sensor saw, the sensor's channels back to CIE XYZ, and the
     // colour back to a place on the curve.
-    const std::array<float, 3> neutral{1.0F / recorded[0], 1.0F / recorded[1], 1.0F / recorded[2]};
-    return temperatureOf(chromaticityOf(xyzToCamera(camera).inverse() * neutral));
+    const std::array<float, 3> neutral{1.0F / balanced[0], 1.0F / balanced[1], 1.0F / balanced[2]};
+    return temperatureOf(chromaticityOf(cameraToXyz(camera) * neutral));
+}
+
+ColourTemperature arraw::asShotTemperature(const CameraNative& camera) {
+    return temperatureForGains(camera, camera.asShotMultipliers);
 }

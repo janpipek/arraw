@@ -7,6 +7,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -206,6 +207,41 @@ TEST_CASE("A camera that is not sRGB keeps both halves of its calibration", "[in
     /// And its red row is mixed with green, so the transform out of the
     /// sensor's primaries is a real one rather than the identity.
     REQUIRE_FALSE(camera->toWorking == Matrix3::identity());
+
+    /// Non-identity is a weak claim -- sRGB to Rec.2020 is non-identity too.
+    /// This is the strong one: rebuild both halves from the ColorMatrix1 the
+    /// fixture writes, following what LibRaw does to it (multiply into sRGB,
+    /// normalise each row by its own sum, invert), and require the decode to
+    /// have arrived at the same place.
+    constexpr Matrix3 skewedColorMatrix1{{6.28742F, -2.69924F, -0.98890F, //
+                                          -0.96890F, 1.87580F, 0.04150F,  //
+                                          0.04456F, -0.16320F, 0.84560F}};
+    constexpr Matrix3 srgbToXyz{{0.4123908F, 0.3575843F, 0.1804808F, //
+                                 0.2126390F, 0.7151687F, 0.0721923F, //
+                                 0.0193308F, 0.1191948F, 0.9505322F}};
+    constexpr Matrix3 srgbToRec2020{{0.6274039F, 0.3292830F, 0.0433131F, //
+                                     0.0690973F, 0.9195404F, 0.0113623F, //
+                                     0.0163914F, 0.0880133F, 0.8955953F}};
+
+    Matrix3 srgbToCamera = skewedColorMatrix1 * srgbToXyz;
+    std::array<float, 3> expectedScale{};
+    for (std::size_t row = 0; row < 3; ++row) {
+        const float sum =
+            srgbToCamera.at(row, 0) + srgbToCamera.at(row, 1) + srgbToCamera.at(row, 2);
+        expectedScale[row] = 1.0F / sum;
+        for (std::size_t column = 0; column < 3; ++column) {
+            srgbToCamera.values[row * 3 + column] /= sum;
+        }
+    }
+    const Matrix3 expectedToWorking = srgbToRec2020 * srgbToCamera.inverse();
+
+    for (std::size_t channel = 0; channel < 3; ++channel) {
+        REQUIRE(std::abs(camera->daylightScale[channel] - expectedScale[channel]) < 1e-3F);
+    }
+    for (std::size_t index = 0; index < 9; ++index) {
+        REQUIRE(std::abs(camera->toWorking.values[index] - expectedToWorking.values[index]) <
+                1e-3F);
+    }
 
     /// It still has to leave white alone, mixed rows or not.
     for (std::size_t row = 0; row < 3; ++row) {

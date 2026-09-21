@@ -341,6 +341,19 @@ def main() -> None:
                            colour_matrix=SKEWED_COLOR_MATRIX_1),
               linear)
 
+    # The skewed camera again, this time declaring no white balance at all. The
+    # decode substitutes the daylight multipliers its matrix implies, so the
+    # gains the file records and the gains the pixels went through are different
+    # numbers -- and with a calibration this far from unity, resolving a setting
+    # from the wrong one is visible. The other missing-neutral fixtures cannot
+    # show it: their calibration is near unity, so the two agree.
+    write_dng(here / "linear-32x24-skewed-nowb.dng",
+              base_entries(pixel_bytes=len(linear), samples_per_pixel=3,
+                           photometric=PHOTOMETRIC_LINEAR_RAW,
+                           as_shot_neutral=None, orientation=None,
+                           colour_matrix=SKEWED_COLOR_MATRIX_1),
+              linear)
+
     # A frame whose brightest value is below WhiteLevel but above LibRaw's
     # adjust_maximum_thr of 0.75. Left to itself LibRaw lowers the white level
     # to 52000 and stretches everything by 65535/52000, which is the per-frame
