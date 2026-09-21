@@ -1,6 +1,6 @@
 #include "Develop.h"
 
-#include "ColorSpaces.h"
+#include "ProcessingPlan.h"
 
 #include <WhiteBalance.h>
 
@@ -25,75 +25,14 @@ template <typename Sample> constexpr float toUnit(Sample value) {
     }
 }
 
-/// @brief Works out how far the white balance has to move from where it is.
+/// @brief Runs the pointwise chain over every pixel of one layout.
 ///
-/// The decode already multiplied the channels by something — the camera's own
-/// reading, or a substitute when the file recorded none. Asking for a light is
-/// therefore not asking for gains but for the *difference* between the gains
-/// that light wants and the ones already in the pixels. Leaving the mode at
-/// As Shot makes that difference exactly one, which is why developing with
-/// default settings cannot change a photograph's colour.
-/// @param camera Sensor the photograph came from.
-/// @param settings Settings to resolve.
-/// @return Per-channel multipliers to apply, with green at 1.
-Gains whiteBalanceDelta(const CameraNative& camera, const DevelopSettings& settings) {
-    // Custom with neither value named is As Shot by another route. Saying so
-    // here keeps it exactly unity rather than nearly so, and costs a round trip
-    // through the curve that would only introduce error.
-    const bool named = settings.temperature.has_value() || settings.tint.has_value();
-    if (settings.whiteBalance == WhiteBalanceMode::AsShot || !named) {
-        return {1.0F, 1.0F, 1.0F};
-    }
-
-    // Moving only the tint leaves the temperature where it was, and the other
-    // way round, so neither slider drags the other with it. The half that was
-    // not named comes from the balance the decode *applied*, not from what the
-    // camera recorded: for a file that declared no neutral those are different
-    // numbers, and the pixels went through the applied one (ADR 007).
-    const ColourTemperature effective = temperatureForGains(camera, camera.appliedMultipliers);
-    const ColourTemperature wanted{settings.temperature.value_or(effective.kelvin),
-                                   settings.tint.value_or(effective.tint)};
-
-    // Both sides are normalised about green, so their ratio is too.
-    const Gains wantedGains = whiteBalanceGains(camera, wanted);
-    const Gains applied = withGreenAtOne(camera.appliedMultipliers);
-    return {wantedGains[0] / applied[0], 1.0F, wantedGains[2] / applied[2]};
-}
-
-/// @brief Resolves the transform out of a source encoding into the working one.
-///
-/// A camera encoding carries its own, with the white balance composed into it:
-/// two matrices multiplied once per photograph rather than two passes over
-/// every pixel. The working encoding needs neither. Any other named space is a
-/// decoding concern -- import converts what it reads, so one arriving here
-/// means a buffer skipped that step.
-Matrix3 toWorkingMatrix(const ColorEncoding& encoding, const DevelopSettings& settings) {
-    if (const auto* camera = std::get_if<CameraNative>(&encoding)) {
-        return camera->toWorking * Matrix3::scale(whiteBalanceDelta(*camera, settings));
-    }
-    if (isWorkingEncoding(encoding)) {
-        if (settings.whiteBalance != WhiteBalanceMode::AsShot) {
-            // A temperature in kelvin is measured against a sensor's response.
-            // A photograph that arrived already in a standard colour space has
-            // no sensor behind it, and gets the incremental setting instead
-            // (ADR 008), which is not implemented yet.
-            throw std::invalid_argument(
-                "A temperature needs a sensor to measure against; this photograph has none");
-        }
-        return Matrix3::identity();
-    }
-    throw std::invalid_argument(
-        "Development starts from the working encoding or a camera's own primaries");
-}
-
-/// @brief Applies the transform and exposure to every pixel of one layout.
-///
-/// Exposure is a scalar, so it commutes with the colour transform and is
-/// folded into the same pass. Alpha is copied rather than scaled: no develop
-/// setting produces transparency, and a source that carried some keeps it.
+/// The order itself is in ::arraw::developPixel; this is only the traversal,
+/// deliberately small enough that nothing can hide in it. Alpha is copied
+/// rather than developed: no setting produces transparency, and a source that
+/// carried some keeps exactly what it had.
 template <typename Sample>
-void developSamples(const ImageBuffer& source, ImageBuffer& result, const Matrix3& matrix,
-                    float gain) {
+void developSamples(const ImageBuffer& source, ImageBuffer& result, const ProcessingPlan& plan) {
     const auto input = source.samples<Sample>();
     const auto output = result.samples<float>();
     const std::size_t channels = channelCount(source.format());
@@ -103,11 +42,10 @@ void developSamples(const ImageBuffer& source, ImageBuffer& result, const Matrix
         const auto* in = &input[pixel * channels];
         auto* out = &output[pixel * 4];
 
-        const std::array<float, 3> colour =
-            matrix * std::array<float, 3>{toUnit(in[0]), toUnit(in[1]), toUnit(in[2])};
-        out[0] = colour[0] * gain;
-        out[1] = colour[1] * gain;
-        out[2] = colour[2] * gain;
+        const Colour developed = developPixel(plan, {toUnit(in[0]), toUnit(in[1]), toUnit(in[2])});
+        out[0] = developed[0];
+        out[1] = developed[1];
+        out[2] = developed[2];
         out[3] = channels == 4 ? toUnit(in[3]) : 1.0F;
     }
 }
@@ -120,22 +58,21 @@ ImageBuffer arraw::develop(const ImageBuffer& source, const DevelopSettings& set
         throw std::invalid_argument("Rendering to a requested size is not implemented yet");
     }
 
-    const Matrix3 matrix = toWorkingMatrix(source.encoding(), settings);
-    const float gain = std::exp2(settings.exposure);
+    const ProcessingPlan plan = planFor(source.encoding(), settings);
 
     ImageBuffer result(source.size(), workingFormat, workingEncoding);
     switch (source.format()) {
     case PixelFormat::RgbU8:
     case PixelFormat::RgbaU8:
-        developSamples<std::uint8_t>(source, result, matrix, gain);
+        developSamples<std::uint8_t>(source, result, plan);
         break;
     case PixelFormat::RgbU16:
     case PixelFormat::RgbaU16:
-        developSamples<std::uint16_t>(source, result, matrix, gain);
+        developSamples<std::uint16_t>(source, result, plan);
         break;
     case PixelFormat::RgbF32:
     case PixelFormat::RgbaF32:
-        developSamples<float>(source, result, matrix, gain);
+        developSamples<float>(source, result, plan);
         break;
     }
     return result;

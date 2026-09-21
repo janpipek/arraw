@@ -35,6 +35,8 @@ add_library(arraw STATIC
         include/DevelopSettings.h
         src/core/ColorSpaces.h
         src/core/Develop.cpp
+        src/core/ProcessingPlan.cpp
+        src/core/ProcessingPlan.h
         src/core/WhiteBalance.cpp
         include/ImageBuffer.h
         include/ImageExport.h

@@ -22,10 +22,16 @@ add_executable(arraw-tests
         test_Develop.cpp
         test_ImageBuffer.cpp
         test_ImageExport.cpp
+        test_ProcessingPlan.cpp
         test_RawImport.cpp
         test_RoundTrip.cpp
         test_WhiteBalance.cpp)
 arraw_enable_warnings(arraw-tests)
+
+# The processing plan is engine-private: the order of the pointwise stages is
+# not something a caller sets, but it is the thing most worth testing directly
+# (ADR 011), so the tests see the engine's own headers.
+target_include_directories(arraw-tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src/core)
 
 # The integration tests read committed fixtures (see tests/fixtures/README.md).
 # Baking the directory in beats resolving it against the working directory, so

@@ -94,6 +94,9 @@ enum class NamedEncoding {
 /// @brief Per-channel multipliers, in camera channel order.
 using Gains = std::array<float, 3>;
 
+/// @brief One colour's three channel values, in whatever encoding holds it.
+using Colour = std::array<float, 3>;
+
 /// @brief Colour space of one camera's sensor, described by its own file.
 ///
 /// Neither the primaries nor the transfer function are standard, so the
