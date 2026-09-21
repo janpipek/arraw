@@ -38,7 +38,7 @@ using DiagnosticValue = std::variant<std::string, double>;
 
 /// @brief One thing that happened, in a form both a person and a program can read.
 struct Diagnostic {
-    Notice notice;
+    Notice notice = Notice::Exported;
     Severity severity = Severity::Info;
 
     /// @brief Photograph it concerns, empty when it concerns none.

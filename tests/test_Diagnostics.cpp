@@ -32,23 +32,27 @@ TEST_CASE("A RAW that recorded no white balance says so", "[diagnostics][integra
 TEST_CASE("A RAW that recorded one says nothing", "[diagnostics][integration]") {
     CollectedDiagnostics log;
 
-    loadImage(test::fixture("linear-32x24-warmwb.dng"), log);
+    const auto image = loadImage(test::fixture("linear-32x24-warmwb.dng"), log);
 
+    REQUIRE(image.size() == ImageSize{32, 24});
     REQUIRE(log.entries().empty());
 }
 
 TEST_CASE("A photograph that is not a RAW says nothing either", "[diagnostics][integration]") {
     CollectedDiagnostics log;
 
-    loadImage(test::fixture("testcard-61x41-srgb8.png"), log);
+    const auto image = loadImage(test::fixture("testcard-61x41-srgb8.png"), log);
 
+    REQUIRE(image.size() == ImageSize{61, 41});
     REQUIRE(log.entries().empty());
 }
 
 TEST_CASE("Loading without a log is allowed", "[diagnostics][integration]") {
     /// Nothing should have to find somewhere to report to before it can read a
     /// file, so the default is a log that listens and forgets.
-    REQUIRE_NOTHROW(loadImage(test::fixture("linear-32x24-nowb.dng")));
+    const auto image = loadImage(test::fixture("linear-32x24-nowb.dng"));
+
+    REQUIRE(image.size() == ImageSize{32, 24});
 }
 
 TEST_CASE("A diagnostic's details are values, not prose", "[diagnostics]") {
