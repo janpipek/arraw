@@ -2,6 +2,7 @@
 
 #include <filesystem>
 
+#include <Diagnostics.h>
 #include <ImageBuffer.h>
 
 namespace arraw {
@@ -32,10 +33,13 @@ namespace arraw {
 /// than something baked into the buffer.
 ///
 /// @param path File to decode.
+/// @param log Where to report what a photographer should know about the
+/// decode, such as a white balance the file did not record.
 /// @return A buffer holding the decoded pixels.
 /// @throws std::runtime_error if the file cannot be opened, decoded, or
 /// converted. Very large images are refused by the decoder's own allocation
 /// limit rather than being decoded.
-[[nodiscard]] ImageBuffer loadImage(const std::filesystem::path& path);
+[[nodiscard]] ImageBuffer loadImage(const std::filesystem::path& path,
+                                    DiagnosticLog& log = discardedDiagnostics());
 
 } // namespace arraw

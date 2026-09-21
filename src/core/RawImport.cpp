@@ -63,7 +63,7 @@ int openFile(LibRaw& raw, const std::filesystem::path& path) {
 }
 
 /// @brief Builds the message for a failed LibRaw call.
-std::string describe(const std::filesystem::path& path, int code) {
+std::string failureMessage(const std::filesystem::path& path, int code) {
     return path.string() + ": " + LibRaw::strerror(code);
 }
 
@@ -119,9 +119,9 @@ void applyDecodeSettings(LibRaw& raw) {
     // white balance beats a plausible-looking one that moves with the scene,
     // because only the fixed one can be corrected once for a whole shoot.
     //
-    // It should also be *said*: this is a silent substitution, and the frame
-    // will not look as its camera intended. It becomes a warning on the
-    // import path as soon as there is somewhere to put one.
+    // It is also *said*: the import path reports the substitution, because the
+    // frame will not look as its camera intended and the temperature a
+    // photographer is shown is an estimate rather than a reading.
     params.use_camera_wb = hasCameraNeutral(raw) ? 1 : 0;
     params.use_auto_wb = 0;
 
@@ -227,29 +227,35 @@ bool arraw::rawimport::holdsRawImage(const std::filesystem::path& path) {
     return openFile(raw, path) == LIBRAW_SUCCESS;
 }
 
-ImageBuffer arraw::rawimport::load(const std::filesystem::path& path) {
+ImageBuffer arraw::rawimport::load(const std::filesystem::path& path, DiagnosticLog& log) {
     LibRaw raw;
     if (const int code = openFile(raw, path); code != LIBRAW_SUCCESS) {
-        throw std::runtime_error(describe(path, code));
+        throw std::runtime_error(failureMessage(path, code));
     }
 
     applyDecodeSettings(raw);
 
     if (const int code = raw.unpack(); code != LIBRAW_SUCCESS) {
-        throw std::runtime_error(describe(path, code));
+        throw std::runtime_error(failureMessage(path, code));
     }
 
     // Before processing, which rewrites part of what this reads.
     const CameraNative camera = cameraColour(raw);
 
+    if (!hasCameraNeutral(raw)) {
+        log.record({.notice = Notice::SubstitutedWhiteBalance,
+                    .severity = Severity::Warning,
+                    .subject = path});
+    }
+
     if (const int code = raw.dcraw_process(); code != LIBRAW_SUCCESS) {
-        throw std::runtime_error(describe(path, code));
+        throw std::runtime_error(failureMessage(path, code));
     }
 
     int code = LIBRAW_SUCCESS;
     const ProcessedImage image(raw.dcraw_make_mem_image(&code));
     if (!image) {
-        throw std::runtime_error(describe(path, code));
+        throw std::runtime_error(failureMessage(path, code));
     }
     return toBuffer(*image, camera);
 }

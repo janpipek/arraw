@@ -67,7 +67,7 @@ QImage decodeThroughQt(QFile& file, QString& error) {
 
 } // namespace
 
-ImageBuffer arraw::loadImage(const std::filesystem::path& path) {
+ImageBuffer arraw::loadImage(const std::filesystem::path& path, DiagnosticLog& log) {
     // Content has its say before Qt is asked, rather than after it fails.
     // A RAW container is usually a TIFF carrying an ordinary RGB preview, and
     // Qt's TIFF reader decodes that preview perfectly happily -- so a RAW
@@ -79,7 +79,7 @@ ImageBuffer arraw::loadImage(const std::filesystem::path& path) {
     // to it is declined, arraw's own exports included. The extension is kept
     // as the fast path in front of it, so the common case opens the file once.
     if (rawimport::namesRawFormat(path) || rawimport::holdsRawImage(path)) {
-        return rawimport::load(path);
+        return rawimport::load(path, log);
     }
 
     QFile sourceFile(path);

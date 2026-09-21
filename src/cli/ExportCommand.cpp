@@ -4,11 +4,15 @@
 
 #include <Develop.h>
 #include <DevelopSettings.h>
+#include <Diagnostics.h>
 #include <ImageExport.h>
 #include <ImageImport.h>
 #include <WhiteBalance.h>
 
 #include <QCommandLineParser>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonValue>
 #include <QString>
 #include <QStringList>
 
@@ -38,6 +42,12 @@ std::string_view extensionFor(ImageFileFormat format) {
     return ".bin";
 }
 
+/// @brief How a log is written out.
+enum class LogFormat {
+    Text, ///< One sentence a person reads.
+    Json, ///< One object per line, for whatever reads the batch afterwards.
+};
+
 /// @brief Everything the command needs, once its arguments are understood.
 struct ExportRequest {
     std::vector<std::filesystem::path> inputs;
@@ -47,6 +57,94 @@ struct ExportRequest {
     ExportOptions options;
     bool overwrite = false;
     bool quiet = false;
+    LogFormat logFormat = LogFormat::Text;
+};
+
+/// @brief The name a log writes for a notice.
+///
+/// Stable, and not the sentence: this is what a script matches on. Exhaustive
+/// and without a default, so a new notice cannot be added without one.
+std::string nameOf(Notice notice) {
+    switch (notice) {
+    case Notice::SubstitutedWhiteBalance:
+        return "substituted_white_balance";
+    case Notice::Exported:
+        return "exported";
+    case Notice::InputFailed:
+        return "input_failed";
+    case Notice::BatchFinished:
+        return "batch_finished";
+    }
+    return "unknown";
+}
+
+/// @brief The name a log writes for a severity.
+std::string nameOf(Severity severity) {
+    switch (severity) {
+    case Severity::Info:
+        return "info";
+    case Severity::Warning:
+        return "warning";
+    case Severity::Error:
+        return "error";
+    }
+    return "unknown";
+}
+
+/// @brief Writes diagnostics to a stream as they happen.
+///
+/// Printing rather than collecting, because a batch that runs for an hour
+/// should say what it is doing while it does it.
+class StreamDiagnostics final : public DiagnosticLog {
+public:
+    StreamDiagnostics(std::ostream& stream, LogFormat format, bool quiet)
+        : stream_(stream), format_(format), quiet_(quiet) {}
+
+    /// @brief Drops the subject from a message that already begins with it.
+    ///
+    /// An exception carries its own context, because whoever catches it may
+    /// have no idea which file it came from. A log line does know, and says so
+    /// once.
+    static std::string withoutSubject(const Diagnostic& diagnostic) {
+        const std::string message = describe(diagnostic);
+        const std::string prefix = diagnostic.subject.string() + ": ";
+        if (!diagnostic.subject.empty() && message.starts_with(prefix)) {
+            return message.substr(prefix.size());
+        }
+        return message;
+    }
+
+    void record(const Diagnostic& diagnostic) override {
+        // --quiet drops the running commentary and keeps everything that went
+        // wrong, which is the distinction it has always drawn.
+        if (quiet_ && diagnostic.severity == Severity::Info) {
+            return;
+        }
+        if (format_ == LogFormat::Json) {
+            QJsonObject object;
+            object["notice"] = QString::fromStdString(nameOf(diagnostic.notice));
+            object["severity"] = QString::fromStdString(nameOf(diagnostic.severity));
+            object["file"] = QString::fromStdString(diagnostic.subject.string());
+            object["message"] = QString::fromStdString(withoutSubject(diagnostic));
+            stream_ << QJsonDocument(object).toJson(QJsonDocument::Compact).toStdString() << '\n';
+            return;
+        }
+        // A diagnostic about no particular photograph, such as a batch's own
+        // summary, has no file to name.
+        const std::string about =
+            diagnostic.subject.empty() ? std::string{} : diagnostic.subject.string() + ": ";
+        if (diagnostic.severity == Severity::Info) {
+            stream_ << about << withoutSubject(diagnostic) << '\n';
+            return;
+        }
+        stream_ << nameOf(diagnostic.severity) << ": " << about << withoutSubject(diagnostic)
+                << '\n';
+    }
+
+private:
+    std::ostream& stream_;
+    LogFormat format_;
+    bool quiet_;
 };
 
 /// @brief Reports a usage problem and the exit code that goes with it.
@@ -124,6 +222,7 @@ void configure(QCommandLineParser& parser) {
     parser.addOption({"no-profile", "Convert colour but do not embed the output profile."});
     parser.addOption({"overwrite", "Replace outputs that already exist."});
     parser.addOption({{"q", "quiet"}, "Do not report each file as it is written."});
+    parser.addOption({"log-format", "text or json. Default: text.", "name"});
     // The syntax carries the command word, which Qt's usage line otherwise
     // omits: it knows only argv[0], and the command is a positional we consumed.
     parser.addPositionalArgument("input", "Files to export.", "export <input>...");
@@ -211,6 +310,17 @@ std::optional<ExportRequest> buildRequest(const QCommandLineParser& parser, std:
         request.settings.whiteBalance = WhiteBalanceMode::Custom;
     }
 
+    if (parser.isSet("log-format")) {
+        const auto name = parser.value("log-format").toLower();
+        if (name == "json") {
+            request.logFormat = LogFormat::Json;
+        } else if (name != "text") {
+            code = usageError(err, "unknown log format '" + name.toStdString() +
+                                       "'; expected text or json");
+            return std::nullopt;
+        }
+    }
+
     request.options.embedProfile = !parser.isSet("no-profile");
     request.overwrite = parser.isSet("overwrite");
     request.quiet = parser.isSet("quiet");
@@ -219,6 +329,7 @@ std::optional<ExportRequest> buildRequest(const QCommandLineParser& parser, std:
 
 /// @brief Exports every input, continuing past the ones that fail.
 int exportAll(const ExportRequest& request, std::ostream& err) {
+    StreamDiagnostics log(err, request.logFormat, request.quiet);
     std::size_t failures = 0;
 
     for (const auto& input : request.inputs) {
@@ -234,18 +345,28 @@ int exportAll(const ExportRequest& request, std::ostream& err) {
                 throw std::runtime_error(destination.string() +
                                          " already exists; pass --overwrite to replace it");
             }
-            exportImage(develop(loadImage(input), request.settings), destination, request.options);
-            if (!request.quiet) {
-                err << input.string() << " -> " << destination.string() << '\n';
-            }
+            exportImage(develop(loadImage(input, log), request.settings), destination,
+                        request.options);
+            log.record({.notice = Notice::Exported,
+                        .severity = Severity::Info,
+                        .subject = input,
+                        .values = {destination.string()}});
         } catch (const std::exception& problem) {
-            err << "error: " << input.string() << ": " << problem.what() << '\n';
+            log.record({.notice = Notice::InputFailed,
+                        .severity = Severity::Error,
+                        .subject = input,
+                        .values = {std::string(problem.what())}});
             ++failures;
         }
     }
 
     if (failures > 0) {
-        err << failures << " of " << request.inputs.size() << " failed\n";
+        // Through the log like everything else, so that --log-format json emits
+        // nothing a JSON reader has to skip.
+        log.record({.notice = Notice::BatchFinished,
+                    .severity = Severity::Error,
+                    .values = {static_cast<double>(failures),
+                               static_cast<double>(request.inputs.size())}});
         return cli::Failed;
     }
     return cli::Success;

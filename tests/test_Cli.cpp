@@ -4,7 +4,10 @@
 #include "support/Fixtures.h"
 #include "support/TempDir.h"
 
+#include <QByteArray>
 #include <QImage>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QString>
 
 #include <catch2/catch_test_macros.hpp>
@@ -310,4 +313,62 @@ TEST_CASE("A temperature on a photograph with no sensor fails that file", "[cli]
     REQUIRE(result.code == cli::Failed);
     REQUIRE_THAT(result.err, ContainsSubstring("sensor"));
     REQUIRE(std::filesystem::is_empty(directory.path()));
+}
+
+TEST_CASE("A substituted white balance is reported per file", "[cli]") {
+    const test::TempDir directory;
+
+    const auto result = invoke({"export", test::fixture("linear-32x24-nowb.dng").string(), "-o",
+                                directory.path().string(), "--format", "png"});
+
+    REQUIRE(result.code == cli::Success);
+    REQUIRE_THAT(result.err, ContainsSubstring("warning:"));
+    REQUIRE_THAT(result.err, ContainsSubstring("linear-32x24-nowb.dng"));
+    REQUIRE_THAT(result.err, ContainsSubstring("no white balance"));
+}
+
+TEST_CASE("Quiet keeps the warnings and drops the commentary", "[cli]") {
+    const test::TempDir directory;
+
+    const auto result = invoke({"export", test::fixture("linear-32x24-nowb.dng").string(), "-o",
+                                directory.path().string(), "--format", "png", "--quiet"});
+
+    REQUIRE(result.code == cli::Success);
+    REQUIRE_THAT(result.err, ContainsSubstring("warning:"));
+    REQUIRE_THAT(result.err, !ContainsSubstring("written to"));
+}
+
+TEST_CASE("A JSON log is one object per line, and nothing else", "[cli]") {
+    /// The point of the format: whatever reads an overnight batch afterwards
+    /// should not have to skip a summary line that is not JSON.
+    const test::TempDir directory;
+
+    const auto result =
+        invoke({"export", test::fixture("linear-32x24-nowb.dng").string(),
+                (directory.path() / "absent.dng").string(), "-o", directory.path().string(),
+                "--format", "png", "--log-format", "json"});
+
+    REQUIRE(result.code == cli::Failed);
+    std::istringstream lines(result.err);
+    std::string line;
+    std::size_t objects = 0;
+    while (std::getline(lines, line)) {
+        if (line.empty()) {
+            continue;
+        }
+        const auto parsed = QJsonDocument::fromJson(QByteArray::fromStdString(line));
+        REQUIRE(parsed.isObject());
+        REQUIRE(parsed.object().contains("notice"));
+        ++objects;
+    }
+    REQUIRE(objects == 4); // the warning, the export, the failure, the summary
+}
+
+TEST_CASE("An unknown log format is a usage error", "[cli]") {
+    const test::TempDir directory;
+
+    const auto result = invoke({"export", test::fixture(card).string(), "-o",
+                                directory.path().string(), "--log-format", "yaml"});
+
+    REQUIRE(result.code == cli::UsageError);
 }

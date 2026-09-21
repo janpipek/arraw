@@ -2,6 +2,7 @@
 
 #include <filesystem>
 
+#include <Diagnostics.h>
 #include <ImageBuffer.h>
 
 /// @brief RAW decoding, over LibRaw.
@@ -51,10 +52,11 @@ namespace arraw::rawimport {
 /// develop setting rather than something baked into the buffer.
 ///
 /// @param path File to decode.
+/// @param log Where to report a substituted white balance.
 /// @return A buffer holding the decoded pixels, RGBA at sixteen bits per
 /// channel, opaque.
 /// @throws std::runtime_error if the file cannot be opened, decoded, or
 /// converted.
-[[nodiscard]] ImageBuffer load(const std::filesystem::path& path);
+[[nodiscard]] ImageBuffer load(const std::filesystem::path& path, DiagnosticLog& log);
 
 } // namespace arraw::rawimport

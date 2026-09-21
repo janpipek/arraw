@@ -31,10 +31,12 @@ qt_standard_project_setup()
 add_library(arraw STATIC
         include/ColorEncoding.h
         include/Develop.h
+        include/Diagnostics.h
         include/WhiteBalance.h
         include/DevelopSettings.h
         src/core/ColorSpaces.h
         src/core/Develop.cpp
+        src/core/Diagnostics.cpp
         src/core/ProcessingPlan.cpp
         src/core/ProcessingPlan.h
         src/core/WhiteBalance.cpp

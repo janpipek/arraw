@@ -95,8 +95,13 @@ collecting `argv`, and calling it. Adding a command is a row and a file.
   checked by hand rather than acted on for us.
 - **An export currently looks disappointing.** A RAW rendered with no develop
   settings is a flat, faithful conversion, not a photograph. That is stated in
-  the help text rather than left to be discovered, and it stops being true when
-  develop settings land.
+  the help text rather than left to be discovered, and it became less true when
+  Exposure and white balance landed.
+- **Everything the command says goes through a diagnostic log** rather than
+  being written to the stream by hand, so `--log-format json` costs one writer
+  and an overnight batch can be read by something other than a person. The
+  summary line goes through it too, or a JSON reader would have one line to
+  skip.
 - **`preset` and `info` are advertised but refuse to run**, exiting `2`. That is
   a deliberate trade: `--help` names two commands that do nothing, which is the
   cost of telling a reader following `desired-features.md` that the feature is
