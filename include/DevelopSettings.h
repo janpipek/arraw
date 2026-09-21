@@ -41,10 +41,10 @@ struct DevelopSettings {
     /// Absent means the camera's own reading, which is also what a photograph
     /// falls back to when only the tint was moved. Meaningless without a
     /// sensor to measure against, so it applies to RAW files alone (ADR 008).
-    std::optional<float> temperature;
+    std::optional<float> temperature = std::nullopt;
 
     /// @brief How far off the line of glowing-object colours that light sits.
-    std::optional<float> tint;
+    std::optional<float> tint = std::nullopt;
 
     friend bool operator==(const DevelopSettings&, const DevelopSettings&) = default;
 };

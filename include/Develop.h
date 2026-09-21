@@ -22,7 +22,7 @@ struct RenderRequest {
     /// @brief Size to fit the result inside, after the crop.
     ///
     /// Not yet honoured; see ::arraw::develop.
-    std::optional<ImageSize> targetSize;
+    std::optional<ImageSize> targetSize = std::nullopt;
 
     /// @brief Whether a target size larger than the photograph enlarges it.
     Upscale upscale = Upscale::Never;

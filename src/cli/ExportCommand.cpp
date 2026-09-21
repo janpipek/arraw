@@ -107,8 +107,11 @@ public:
     /// once.
     static std::string withoutSubject(const Diagnostic& diagnostic) {
         const std::string message = describe(diagnostic);
-        const std::string prefix = diagnostic.subject.string() + ": ";
-        if (!diagnostic.subject.empty() && message.starts_with(prefix)) {
+        if (!diagnostic.subject) {
+            return message;
+        }
+        const std::string prefix = diagnostic.subject->string() + ": ";
+        if (message.starts_with(prefix)) {
             return message.substr(prefix.size());
         }
         return message;
@@ -124,7 +127,11 @@ public:
             QJsonObject object;
             object["notice"] = QString::fromStdString(nameOf(diagnostic.notice));
             object["severity"] = QString::fromStdString(nameOf(diagnostic.severity));
-            object["file"] = QString::fromStdString(diagnostic.subject.string());
+            // Left out rather than emitted empty when there is no photograph
+            // to name: a reader asks whether the key is there.
+            if (diagnostic.subject) {
+                object["file"] = QString::fromStdString(diagnostic.subject->string());
+            }
             object["message"] = QString::fromStdString(withoutSubject(diagnostic));
             stream_ << QJsonDocument(object).toJson(QJsonDocument::Compact).toStdString() << '\n';
             return;
@@ -132,7 +139,7 @@ public:
         // A diagnostic about no particular photograph, such as a batch's own
         // summary, has no file to name.
         const std::string about =
-            diagnostic.subject.empty() ? std::string{} : diagnostic.subject.string() + ": ";
+            diagnostic.subject ? diagnostic.subject->string() + ": " : std::string{};
         if (diagnostic.severity == Severity::Info) {
             stream_ << about << withoutSubject(diagnostic) << '\n';
             return;

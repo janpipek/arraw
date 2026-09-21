@@ -10,12 +10,7 @@ function(arraw_enable_warnings target)
     if(MSVC)
         target_compile_options(${target} PRIVATE /W4)
     else()
-        # -Wmissing-field-initializers predates designated initialisers and
-        # fires on every use of them: leaving a member out is the point, and
-        # every aggregate here gives its members defaults, so an omitted one is
-        # explicitly defaulted rather than accidentally uninitialised.
-        target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic
-                -Wno-missing-field-initializers)
+        target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
     endif()
 endfunction()
 

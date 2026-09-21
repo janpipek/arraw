@@ -358,7 +358,11 @@ TEST_CASE("A JSON log is one object per line, and nothing else", "[cli]") {
         }
         const auto parsed = QJsonDocument::fromJson(QByteArray::fromStdString(line));
         REQUIRE(parsed.isObject());
-        REQUIRE(parsed.object().contains("notice"));
+        const auto object = parsed.object();
+        REQUIRE(object.contains("notice"));
+        // A diagnostic about no particular photograph names none: the summary
+        // has no file, every other line has one.
+        REQUIRE(object.contains("file") == (object["notice"] != "batch_finished"));
         ++objects;
     }
     REQUIRE(objects == 4); // the warning, the export, the failure, the summary

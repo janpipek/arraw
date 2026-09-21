@@ -25,7 +25,8 @@ TEST_CASE("A RAW that recorded no white balance says so", "[diagnostics][integra
     const auto& entry = log.entries().front();
     REQUIRE(entry.notice == Notice::SubstitutedWhiteBalance);
     REQUIRE(entry.severity == Severity::Warning);
-    REQUIRE(entry.subject.filename() == "linear-32x24-nowb.dng");
+    REQUIRE(entry.subject);
+    REQUIRE(entry.subject->filename() == "linear-32x24-nowb.dng");
     REQUIRE_THAT(describe(entry), ContainsSubstring("estimate"));
 }
 

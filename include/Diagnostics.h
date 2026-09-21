@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <variant>
 #include <vector>
@@ -38,14 +39,19 @@ using DiagnosticValue = std::variant<std::string, double>;
 
 /// @brief One thing that happened, in a form both a person and a program can read.
 struct Diagnostic {
-    Notice notice = Notice::Exported;
+    /// @brief What happened; the one member a caller has to name, because a
+    /// diagnostic that says nothing in particular is not one.
+    Notice notice;
+
+    /// @brief What a photographer should make of it.
     Severity severity = Severity::Info;
 
-    /// @brief Photograph it concerns, empty when it concerns none.
-    std::filesystem::path subject;
+    /// @brief Photograph it concerns, absent when it concerns none, as a
+    /// batch's own summary does not.
+    std::optional<std::filesystem::path> subject = std::nullopt;
 
     /// @brief Details the notice needs to be specific.
-    std::vector<DiagnosticValue> values;
+    std::vector<DiagnosticValue> values = {};
 };
 
 /// @brief Writes a diagnostic as a sentence.
