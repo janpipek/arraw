@@ -62,9 +62,26 @@ arraw_enable_warnings(arraw-ui)
 target_include_directories(arraw-ui PRIVATE src/app)
 target_link_libraries(arraw-ui PRIVATE arraw Qt6::Widgets)
 
+# The command line's behaviour, split from its main() so the tests can drive it
+# in-process and assert on what reaches each stream. See ADR 006.
+add_library(arraw-cli-core STATIC
+        src/cli/Cli.cpp
+        src/cli/Cli.h
+        src/cli/Command.cpp
+        src/cli/Command.h
+        src/cli/ExportCommand.cpp
+        src/cli/ExportCommand.h)
+arraw_enable_warnings(arraw-cli-core)
+target_include_directories(arraw-cli-core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/cli)
+# Qt Core only: the command line needs QCommandLineParser and, through main(),
+# a QCoreApplication for codec plugin paths. Widgets must never appear here.
+target_link_libraries(arraw-cli-core PUBLIC arraw PRIVATE Qt6::Core)
+target_compile_definitions(arraw-cli-core PRIVATE ARRAW_VERSION="${PROJECT_VERSION}")
+set_target_properties(arraw-cli-core PROPERTIES AUTOMOC OFF)
+
 add_executable(arraw-cli src/cli/main.cpp)
 arraw_enable_warnings(arraw-cli)
-target_link_libraries(arraw-cli PRIVATE arraw)
+target_link_libraries(arraw-cli PRIVATE arraw-cli-core Qt6::Core)
 
 if(ARRAW_BUILD_TESTS)
     enable_testing()
