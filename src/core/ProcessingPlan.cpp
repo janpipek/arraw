@@ -84,3 +84,7 @@ ProcessingPlan arraw::planFor(const ColorEncoding& encoding, const DevelopSettin
     const float exposure = std::clamp(settings.exposure, darkestExposure, brightestExposure);
     return {.toWorking = toWorkingMatrix(encoding, settings), .exposureGain = std::exp2(exposure)};
 }
+
+ProcessingPlan arraw::planFor(const Photo& photo) {
+    return planFor(photo.metadata().encoding, photo.settings());
+}

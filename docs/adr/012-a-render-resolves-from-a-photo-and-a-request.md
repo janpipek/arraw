@@ -84,12 +84,15 @@ cached from it or reused against it.
   `develop` "becomes a processor object at the first cache"; this says what that
   object is resolved from. `develop(source, settings)` stays what it is until
   then.
-- **`Photo` has to become a document before any of this executes.** It is an
-  empty struct today. The first step is done: `readImageMetadata` describes a
-  photograph — its dimensions and its camera's colour — from the headers alone,
-  and a truncated RAW proves it reads no pixels. What remains is the document
-  that holds that description beside a develop state, and the plan resolved
-  from it.
+- **`Photo` is a document now, and a plan resolves from it.**
+  `readImageMetadata` describes a photograph — its dimensions and its camera's
+  colour — from the headers alone, and a truncated RAW proves it reads no
+  pixels; `openPhoto` pairs that description with develop state, and
+  `planFor(photo)` resolves against the document rather than against a buffer
+  and a settings struct that travelled separately. What remains is the rest of
+  this ADR: a render request that reaches the plan's blocks, decoding as a
+  stage rather than a call a caller makes first, and the processor that caches
+  what those blocks describe.
 - **A snapshot stays cheap only while develop state stays light.** When brush
   rasters and long spot lists live in it, a snapshot shares them rather than
   copying, and the plan compares them by revision, as ADR 011 already says for

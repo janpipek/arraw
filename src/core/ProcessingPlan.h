@@ -2,6 +2,7 @@
 
 #include <ColorEncoding.h>
 #include <DevelopSettings.h>
+#include <Photo.h>
 
 namespace arraw {
 
@@ -37,6 +38,17 @@ struct ProcessingPlan {
 /// or the settings cannot be resolved against it.
 [[nodiscard]] ProcessingPlan planFor(const ColorEncoding& encoding,
                                      const DevelopSettings& settings);
+
+/// @brief Works out what a photograph's document means for its pixels.
+///
+/// What a render is planned against (ADR 012): the encoding comes from what
+/// the file declared and the settings from the document that declared it, so
+/// the two cannot arrive from different photographs.
+/// @param photo Document to resolve.
+/// @return The plan both backends execute.
+/// @throws std::invalid_argument if the photograph's encoding or settings
+/// cannot be resolved.
+[[nodiscard]] ProcessingPlan planFor(const Photo& photo);
 
 /// @brief Applies the pointwise stages to one colour, in their fixed order.
 ///

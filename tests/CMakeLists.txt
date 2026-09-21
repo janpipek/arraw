@@ -23,6 +23,7 @@ add_executable(arraw-tests
         test_Diagnostics.cpp
         test_ImageBuffer.cpp
         test_ImageExport.cpp
+        test_Photo.cpp
         test_ProcessingPlan.cpp
         test_RawImport.cpp
         test_RoundTrip.cpp

@@ -7,6 +7,7 @@
 #include <Diagnostics.h>
 #include <ImageExport.h>
 #include <ImageImport.h>
+#include <Photo.h>
 #include <WhiteBalance.h>
 
 #include <QCommandLineParser>
@@ -352,8 +353,13 @@ int exportAll(const ExportRequest& request, std::ostream& err) {
                 throw std::runtime_error(destination.string() +
                                          " already exists; pass --overwrite to replace it");
             }
-            exportImage(develop(loadImage(input, log), request.settings), destination,
-                        request.options);
+            // The document first: what the file declares, including a white
+            // balance it did not record, is said when the photograph opens
+            // rather than when its pixels arrive. The command line's settings
+            // are another snapshot of it, and the file on disk is untouched
+            // (ADR 012). The decode is then not asked to repeat the warning.
+            const Photo photo = openPhoto(input, log).with(request.settings);
+            exportImage(develop(loadImage(input), photo.settings()), destination, request.options);
             log.record({.notice = Notice::Exported,
                         .severity = Severity::Info,
                         .subject = input,

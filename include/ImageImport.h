@@ -23,6 +23,8 @@ struct ImageMetadata {
     /// belongs to development (ADR 007); the working encoding for anything
     /// else, which ::arraw::loadImage converts to on the way in.
     ColorEncoding encoding;
+
+    friend bool operator==(const ImageMetadata&, const ImageMetadata&) = default;
 };
 
 /// @brief Reads what a file declares about itself, without decoding its pixels.

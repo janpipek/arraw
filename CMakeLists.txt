@@ -43,6 +43,7 @@ add_library(arraw STATIC
         include/ImageBuffer.h
         include/ImageExport.h
         include/Photo.h
+        src/core/Photo.cpp
         src/core/ImageBuffer.cpp
         src/core/ImageExport.cpp
         include/ImageImport.h
