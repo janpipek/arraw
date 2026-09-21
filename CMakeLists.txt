@@ -26,12 +26,12 @@ add_library(arraw STATIC
         include/ImageBuffer.h
         include/ImageExport.h
         include/Photo.h
-        src/core/ColorSpaces.cpp
-        src/core/ColorSpaces.h
         src/core/ImageBuffer.cpp
         src/core/ImageExport.cpp
         include/ImageImport.h
         src/core/ImageImport.cpp
+        src/core/QtImage.cpp
+        src/core/QtImage.h
 )
 add_library(arraw::arraw ALIAS arraw)
 arraw_enable_warnings(arraw)

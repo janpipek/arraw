@@ -1,6 +1,6 @@
 #include <ImageExport.h>
 
-#include "ColorSpaces.h"
+#include "QtImage.h"
 
 #include <QColorSpace>
 #include <QFile>
@@ -65,43 +65,6 @@ QByteArray fileFormatToString(ImageFileFormat format) {
     throw std::invalid_argument("Unknown image file format");
 }
 
-/// @brief Maps a sample layout onto the QImage format with identical memory
-/// layout, so a buffer can be wrapped without converting it.
-/// @param format Sample layout to map.
-/// @return The matching QImage format, or `QImage::Format_Invalid` when QImage
-/// has no layout-compatible equivalent.
-QImage::Format pixelFormatToQImageFormat(PixelFormat format) {
-    switch (format) {
-    case PixelFormat::RgbU8:
-        return QImage::Format_RGB888;
-    case PixelFormat::RgbaU8:
-        return QImage::Format_RGBA8888;
-    case PixelFormat::RgbaU16:
-        return QImage::Format_RGBA64;
-    case PixelFormat::RgbaF32:
-        return QImage::Format_RGBA32FPx4;
-
-    // QImage has no three-channel 16-bit or 32-bit float format; these must be
-    // widened to four channels before they can be wrapped.
-    case PixelFormat::RgbU16:
-    case PixelFormat::RgbF32:
-        return QImage::Format_Invalid;
-    }
-    return QImage::Format_Invalid;
-}
-
-QImage imageBufferToQImage(const ImageBuffer& imageBuffer) {
-    if (!std::in_range<int>(imageBuffer.size().width) ||
-        !std::in_range<int>(imageBuffer.size().height) ||
-        !std::in_range<qsizetype>(imageBuffer.rowStride())) {
-        throw std::invalid_argument("Image dimensions exceed the encoder's limits");
-    }
-    const uchar* data = reinterpret_cast<const uchar*>(imageBuffer.bytes().data());
-    QImage result(data, imageBuffer.size().width, imageBuffer.size().height,
-                  imageBuffer.rowStride(), pixelFormatToQImageFormat(imageBuffer.format()));
-    return result;
-}
-
 /// @brief Validates the options applicable to the destination format.
 void validateExportOptions(ImageFileFormat format, const ExportOptions& options) {
     if (options.encoding == workingEncoding) {
@@ -161,9 +124,9 @@ QImage::Format outputPixelFormat(ImageFileFormat format, int bitDepth, bool hasA
 /// @brief Converts colour and sample depth, and selects profile metadata for export.
 QImage prepareExportImage(const ImageBuffer& image, ImageFileFormat format,
                           const ExportOptions& options) {
-    const auto sourceSpace = colorSpaceFor(image.encoding());
-    const auto targetSpace = colorSpaceFor(options.encoding);
-    QImage source = imageBufferToQImage(image);
+    const auto sourceSpace = qtimage::toColorSpace(image.encoding());
+    const auto targetSpace = qtimage::toColorSpace(options.encoding);
+    QImage source = qtimage::toImage(image);
     if (source.isNull()) {
         throw std::invalid_argument("Unsupported or invalid image buffer");
     }
