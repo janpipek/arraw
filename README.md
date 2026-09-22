@@ -7,9 +7,9 @@ with a Qt desktop application and a command line over it.
 > [`docs/desired-features.md`](docs/desired-features.md) describes is not
 > implemented here yet. Today the engine reads images (including RAW), develops
 > them from the camera's own colour into a linear Rec.2020 working space, and
-> writes them back out. Exposure and white balance are the develop settings
-> that exist; with none of them set, an export is a faithful conversion rather
-> than a rendered photograph.
+> writes them back out. Exposure, tone controls and white balance are implemented;
+> defaults include a gentle highlight roll-off. Geometry settings and CLI syntax
+> exist, but geometry rendering is not implemented yet.
 
 ## Building
 
@@ -37,6 +37,35 @@ arraw-cli export photo.arw -o out/ --exposure -0.5 --temperature 3200   # RAW on
 Inputs are files rather than directories; your shell expands the wildcards.
 Every input is attempted, so one bad frame does not abandon an overnight batch.
 See [ADR 006](docs/adr/006-the-command-line.md) for the full contract.
+
+Tone flags are `--exposure`, `--contrast`, `--shadows`, `--highlights`,
+`--blacks`, `--whites`, and `--filmic-highlights`. Colour flags are
+`--white-balance as-shot|custom`, `--temperature`, and `--tint`. Specifying
+temperature or tint implies custom white balance; combining either with an
+explicit `as-shot` is an error. Custom with neither value retains the applied
+white balance for RAW images. Temperature and tint require RAW input.
+
+The geometry syntax is defined now for future rendering:
+
+| Flag | Value |
+|---|---|
+| `--rotate` | Any finite clockwise angle in degrees, relative to camera orientation |
+| `--flip-horizontal`, `--flip-vertical` | Boolean flags, in final upright axes |
+| `--crop` | `auto` or normalised upright `left,top,right,bottom`, e.g. `0.1,0.2,0.8,0.9` |
+| `--crop-aspect` | `free`, `original`, or `width:height`, e.g. `3:2` or `2:3` |
+
+Rotation is split into the nearest quarter-turn and a straighten remainder
+within ±45°: `--rotate 100` gives 90° plus 10°, and `--rotate -20` gives 0°
+plus -20°. Full turns wrap. At exact half-quarter-turns, the reduced angle rounds away
+from zero: 45° gives 90° minus 45°, and -45° gives 270° plus 45°.
+
+Crop edges describe the final upright frame, regardless of argument order;
+they are not a sequence of crop and rotation commands. Aspect is a remembered
+constraint, not a substitute for crop edges. Checking that a crop fits valid
+image content and matches its aspect needs the future geometry resolver.
+For now, **any explicit geometry flag aborts export with exit code 2 before
+writing files**, after checking its syntax and numeric bounds. This includes
+neutral values such as `--rotate 0`; no geometry flag is silently ignored.
 
 ## Layout
 

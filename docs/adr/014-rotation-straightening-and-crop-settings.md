@@ -1,8 +1,10 @@
 # Rotation and straighten preserve framing; crop remembers its constraint
 
-This decision defines public values only. Geometry rendering, metadata
-orientation extraction, editing commands, validation, copying, serialization
-and CLI/GUI controls are not implemented here. The current renderer ignores
+This decision defines public values. Geometry rendering, metadata
+orientation extraction, editing commands, geometry-aware validation, copying,
+serialization and GUI controls are not implemented here. CLI flags now parse
+these values and check numeric bounds, but reject export until geometry rendering
+exists; see the README for syntax. The current library renderer ignores
 `DevelopSettings::geometry`, including when it is non-default.
 
 ## Decision
@@ -133,7 +135,8 @@ Direct invalid input is rejected per ADR 008. A finite out-of-range straighten
 loaded from storage may be clamped with a warning. An unusable crop (nonfinite,
 empty or inverted) falls back to automatic framing with a warning; an invalid
 aspect falls back to free. A usable rectangle that falls outside valid content
-is fitted with a warning. No validator is added yet.
+is fitted with a warning. CLI numeric validation exists; geometry-aware validation
+and storage-load recovery are not implemented yet.
 
 ## Consequences
 

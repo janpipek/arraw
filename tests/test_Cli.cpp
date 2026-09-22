@@ -1,5 +1,6 @@
 #include "Cli.h"
 #include "Command.h"
+#include "ExportCommand.h"
 
 #include "support/Fixtures.h"
 #include "support/TempDir.h"
@@ -15,6 +16,9 @@
 #include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <filesystem>
+#include <cmath>
+#include <limits>
+#include <stdexcept>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -346,6 +350,174 @@ TEST_CASE("A temperature on a photograph with no sensor fails that file", "[cli]
     /// reported and the batch's exit status says something failed.
     REQUIRE(result.code == cli::Failed);
     REQUIRE_THAT(result.err, ContainsSubstring("sensor"));
+    REQUIRE(std::filesystem::is_empty(directory.path()));
+}
+
+TEST_CASE("Geometry options are documented but cannot silently export unchanged pixels", "[cli]") {
+    const test::TempDir directory;
+    const auto options = GENERATE(
+        std::vector<std::string>{"--rotate", "90"},
+        std::vector<std::string>{"--rotate", "0"},
+        std::vector<std::string>{"--rotate", "180"},
+        std::vector<std::string>{"--rotate", "270"},
+        std::vector<std::string>{"--rotate", "45"},
+        std::vector<std::string>{"--rotate", "90.5"},
+        std::vector<std::string>{"--rotate", "-20"},
+        std::vector<std::string>{"--rotate", "730"},
+        std::vector<std::string>{"--rotate", "1e300"},
+        std::vector<std::string>{"--flip-horizontal"},
+        std::vector<std::string>{"--flip-vertical"},
+        std::vector<std::string>{"--rotate", "-45"},
+        std::vector<std::string>{"--crop", "0.1,0.2,0.8,0.9"},
+        std::vector<std::string>{"--crop", "auto"},
+        std::vector<std::string>{"--crop-aspect", "free"},
+        std::vector<std::string>{"--crop-aspect", "original"},
+        std::vector<std::string>{"--crop-aspect", "3:2"},
+        std::vector<std::string>{"--crop-aspect", "2:3"});
+    CAPTURE(options);
+    const auto help = invoke({"export", "--help"});
+    REQUIRE_THAT(help.out, ContainsSubstring(options.front()));
+
+    std::vector<std::string> arguments{"export", test::fixture(card).string(), "-o",
+                                        directory.path().string()};
+    arguments.insert(arguments.end(), options.begin(), options.end());
+    const auto result = invoke(arguments);
+    REQUIRE(result.code == cli::UsageError);
+    REQUIRE_THAT(result.err, ContainsSubstring("geometry rendering is not implemented yet"));
+    REQUIRE(result.out.empty());
+    REQUIRE(std::filesystem::is_empty(directory.path()));
+}
+
+TEST_CASE("Rotation angles split into equivalent quarter-turns and bounded straighten", "[cli]") {
+    struct Example {
+        double angle;
+        QuarterTurn rotation;
+        double straighten;
+    };
+    const Example examples[]{
+        {0.0, QuarterTurn::None, 0.0},
+        {100.0, QuarterTurn::Clockwise90, 10.0},
+        {90.5, QuarterTurn::Clockwise90, 0.5},
+        {-20.0, QuarterTurn::None, -20.0},
+        {-100.0, QuarterTurn::Clockwise270, -10.0},
+        {45.0, QuarterTurn::Clockwise90, -45.0},
+        {-45.0, QuarterTurn::Clockwise270, 45.0},
+        {135.0, QuarterTurn::Clockwise180, -45.0},
+        {315.0, QuarterTurn::None, -45.0},
+        {360.0, QuarterTurn::None, 0.0},
+        {-360.0, QuarterTurn::None, 0.0},
+        {730.0, QuarterTurn::None, 10.0},
+    };
+    for (const auto& example : examples) {
+        CAPTURE(example.angle);
+        GeometrySettings geometry;
+        geometry.flipHorizontal = true;
+        geometry.crop.rectangle = UprightCropRect{0.1, 0.2, 0.8, 0.9};
+        geometry.crop.aspect = CropRatio{1.5};
+        const auto crop = geometry.crop;
+        cli::setRotationAngle(geometry, example.angle);
+        REQUIRE(geometry.rotation == example.rotation);
+        REQUIRE(geometry.straighten == example.straighten);
+        REQUIRE(geometry.flipHorizontal);
+        REQUIRE(geometry.crop == crop);
+    }
+    for (const double angle : {1e300, -1e300, 44.999, 45.001, -44.999, -45.001}) {
+        CAPTURE(angle);
+        GeometrySettings geometry;
+        cli::setRotationAngle(geometry, angle);
+        REQUIRE(geometry.straighten >= minimumStraighten);
+        REQUIRE(geometry.straighten <= maximumStraighten);
+        const double resolved = static_cast<int>(geometry.rotation) * 90.0 + geometry.straighten;
+        REQUIRE(std::abs(std::remainder(resolved - std::fmod(angle, 360.0), 360.0)) < 1e-10);
+    }
+}
+
+TEST_CASE("Nonfinite rotation angles leave geometry untouched", "[cli]") {
+    GeometrySettings geometry;
+    cli::setRotationAngle(geometry, 100.0);
+    const auto original = geometry;
+    for (const double angle : {std::numeric_limits<double>::quiet_NaN(),
+                               std::numeric_limits<double>::infinity(),
+                               -std::numeric_limits<double>::infinity()}) {
+        REQUIRE_THROWS_AS(cli::setRotationAngle(geometry, angle), std::invalid_argument);
+        REQUIRE(geometry == original);
+    }
+}
+
+TEST_CASE("Malformed geometry is rejected before the rendering availability check", "[cli]") {
+    const test::TempDir directory;
+    const auto options = GENERATE(
+        std::vector<std::string>{"--rotate", "nan"},
+        std::vector<std::string>{"--rotate", "inf"},
+        std::vector<std::string>{"--rotate", "1e999"},
+        std::vector<std::string>{"--rotate", "clockwise"},
+        std::vector<std::string>{"--crop", "0,0,1"},
+        std::vector<std::string>{"--crop", "0,0,1,1,1"},
+        std::vector<std::string>{"--crop", "0,0,0,1"},
+        std::vector<std::string>{"--crop", "0,0.9,1,0.1"},
+        std::vector<std::string>{"--crop", "-0.1,0,1,1"},
+        std::vector<std::string>{"--crop", "0,0,1.1,1"},
+        std::vector<std::string>{"--crop", "0,,1,1"},
+        std::vector<std::string>{"--crop", "nan,0,1,1"},
+        std::vector<std::string>{"--crop-aspect", "3:0"},
+        std::vector<std::string>{"--crop-aspect", "-3:2"},
+        std::vector<std::string>{"--crop-aspect", "nan:2"},
+        std::vector<std::string>{"--crop-aspect", "3:inf"},
+        std::vector<std::string>{"--crop-aspect", "1e308:1e-308"},
+        std::vector<std::string>{"--crop-aspect", "1e-308:1e308"},
+        std::vector<std::string>{"--crop-aspect", "3:2:1"},
+        std::vector<std::string>{"--crop-aspect", "square"});
+    CAPTURE(options);
+    std::vector<std::string> arguments{"export", test::fixture(card).string(), "-o",
+                                        directory.path().string()};
+    arguments.insert(arguments.end(), options.begin(), options.end());
+    const auto result = invoke(arguments);
+    REQUIRE(result.code == cli::UsageError);
+    REQUIRE_THAT(result.err, ContainsSubstring(options.front()));
+    REQUIRE_THAT(result.err, !ContainsSubstring("not implemented yet"));
+    REQUIRE(std::filesystem::is_empty(directory.path()));
+}
+
+TEST_CASE("Explicit white-balance modes preserve the existing defaults", "[cli]") {
+    const test::TempDir directory;
+    const auto mode = GENERATE(std::string{"as-shot"}, std::string{"custom"});
+    const auto raw = test::fixture("linear-32x24-neutral.dng").string();
+    const auto output = directory.file("linear-32x24-neutral.png");
+    REQUIRE(invoke({"export", raw, "-o", directory.path().string(), "--format", "png"}).code ==
+            cli::Success);
+    const QImage baseline(QString::fromStdString(output.string()));
+    REQUIRE_FALSE(baseline.isNull());
+    REQUIRE(invoke({"export", raw, "-o", directory.path().string(), "--format", "png",
+                    "--white-balance", mode, "--overwrite"}).code == cli::Success);
+    const QImage explicitMode(QString::fromStdString(output.string()));
+    REQUIRE(explicitMode == baseline);
+}
+
+TEST_CASE("Conflicting or unknown white-balance modes are usage errors", "[cli]") {
+    const test::TempDir directory;
+    const auto options = GENERATE(
+        std::vector<std::string>{"--white-balance", "daylight"},
+        std::vector<std::string>{"--white-balance", "as-shot", "--temperature", "5500"},
+        std::vector<std::string>{"--tint", "10", "--white-balance", "as-shot"});
+    std::vector<std::string> arguments{"export", test::fixture(card).string(), "-o",
+                                        directory.path().string()};
+    arguments.insert(arguments.end(), options.begin(), options.end());
+    const auto result = invoke(arguments);
+    REQUIRE(result.code == cli::UsageError);
+    REQUIRE_THAT(result.err, ContainsSubstring("--white-balance"));
+    REQUIRE(std::filesystem::is_empty(directory.path()));
+}
+
+TEST_CASE("Nonfinite develop numbers are usage errors", "[cli]") {
+    const test::TempDir directory;
+    const auto* flag = GENERATE("--exposure", "--contrast", "--shadows", "--highlights", "--blacks",
+                                "--whites", "--temperature", "--tint", "--filmic-highlights");
+    const auto* value = GENERATE("nan", "inf", "-inf");
+    CAPTURE(flag, value);
+    const auto result = invoke({"export", test::fixture(card).string(), "-o",
+                                directory.path().string(), flag, value});
+    REQUIRE(result.code == cli::UsageError);
+    REQUIRE_THAT(result.err, ContainsSubstring(flag));
     REQUIRE(std::filesystem::is_empty(directory.path()));
 }
 

@@ -2,9 +2,17 @@
 
 #include <iosfwd>
 
+#include <GeometrySettings.h>
+
 #include <QtCore/qcontainerfwd.h>
 
 namespace arraw::cli {
+
+/// @brief Splits a clockwise angle into quarter-turn and straighten settings.
+/// @param geometry Settings whose rotation and straighten values are replaced.
+/// @param degrees Finite clockwise angle relative to camera orientation, before flips.
+/// @throws std::invalid_argument if the angle is not finite.
+void setRotationAngle(GeometrySettings& geometry, double degrees);
 
 /// @brief Renders images and writes them out.
 ///

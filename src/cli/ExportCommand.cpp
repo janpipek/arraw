@@ -18,6 +18,7 @@
 #include <QStringList>
 
 #include <exception>
+#include <cmath>
 #include <filesystem>
 #include <optional>
 #include <ostream>
@@ -27,6 +28,18 @@
 #include <vector>
 
 using namespace arraw;
+
+void cli::setRotationAngle(GeometrySettings& geometry, double degrees) {
+    if (!std::isfinite(degrees)) {
+        throw std::invalid_argument("A rotation angle must be finite");
+    }
+    const double wrapped = std::fmod(degrees, 360.0);
+    const int turns = static_cast<int>(std::round(wrapped / 90.0));
+    constexpr QuarterTurn rotations[]{QuarterTurn::None, QuarterTurn::Clockwise90,
+                                      QuarterTurn::Clockwise180, QuarterTurn::Clockwise270};
+    geometry.rotation = rotations[(turns % 4 + 4) % 4];
+    geometry.straighten = wrapped - static_cast<double>(turns) * 90.0;
+}
 
 namespace {
 
@@ -188,8 +201,8 @@ bool readSetting(const QCommandLineParser& parser, const char* name, float lowes
     }
     bool valid = false;
     const float parsed = parser.value(name).toFloat(&valid);
-    if (!valid) {
-        code = usageError(err, std::string("--") + name + " takes a number");
+    if (!valid || !std::isfinite(parsed)) {
+        code = usageError(err, std::string("--") + name + " takes a finite number");
         return false;
     }
     if (parsed < lowest || parsed > highest) {
@@ -199,6 +212,71 @@ bool readSetting(const QCommandLineParser& parser, const char* name, float lowes
         return false;
     }
     value = parsed;
+    return true;
+}
+
+/// @brief Reads geometry values without resolving or executing any transforms.
+bool readGeometry(const QCommandLineParser& parser, GeometrySettings& geometry,
+                  std::ostream& err, int& code) {
+    if (parser.isSet("rotate")) {
+        bool valid = false;
+        const double degrees = parser.value("rotate").toDouble(&valid);
+        if (!valid || !std::isfinite(degrees)) {
+            code = usageError(err, "--rotate takes a finite angle in clockwise degrees");
+            return false;
+        }
+        cli::setRotationAngle(geometry, degrees);
+    }
+    geometry.flipHorizontal = parser.isSet("flip-horizontal");
+    geometry.flipVertical = parser.isSet("flip-vertical");
+    if (parser.isSet("crop")) {
+        const auto value = parser.value("crop").trimmed().toLower();
+        if (value == "auto") {
+            geometry.crop.rectangle.reset();
+        } else {
+            const auto edges = value.split(',');
+            UprightCropRect rectangle;
+            double* destinations[]{&rectangle.left, &rectangle.top, &rectangle.right,
+                                   &rectangle.bottom};
+            bool valid = edges.size() == 4;
+            if (valid) {
+                for (int index = 0; index < 4; ++index) {
+                    bool parsed = false;
+                    const double edge = edges[index].toDouble(&parsed);
+                    valid = valid && parsed && std::isfinite(edge) && edge >= 0.0 && edge <= 1.0;
+                    *destinations[index] = edge;
+                }
+            }
+            if (!valid || rectangle.left >= rectangle.right || rectangle.top >= rectangle.bottom) {
+                code = usageError(err, "--crop takes auto or left,top,right,bottom with finite "
+                                       "edges from 0 to 1, left < right and top < bottom");
+                return false;
+            }
+            geometry.crop.rectangle = rectangle;
+        }
+    }
+    if (parser.isSet("crop-aspect")) {
+        const auto value = parser.value("crop-aspect").trimmed().toLower();
+        if (value == "free") {
+            geometry.crop.aspect = FreeCropAspect{};
+        } else if (value == "original") {
+            geometry.crop.aspect = OriginalCropAspect{};
+        } else {
+            const auto parts = value.split(':');
+            bool validWidth = false;
+            bool validHeight = false;
+            const double width = parts.size() == 2 ? parts[0].toDouble(&validWidth) : 0.0;
+            const double height = parts.size() == 2 ? parts[1].toDouble(&validHeight) : 0.0;
+            const double ratio = height > 0.0 ? width / height : 0.0;
+            if (!validWidth || !validHeight || !std::isfinite(width) || !std::isfinite(height) ||
+                width <= 0.0 || height <= 0.0 || !std::isfinite(ratio) || ratio <= 0.0) {
+                code = usageError(err, "--crop-aspect takes free, original, or positive finite "
+                                       "width:height, for example 3:2 or 2:3");
+                return false;
+            }
+            geometry.crop.aspect = CropRatio{ratio};
+        }
+    }
     return true;
 }
 
@@ -219,7 +297,8 @@ void configure(QCommandLineParser& parser) {
         "captured, save for a gentle roll-off that bends the brightest values toward\n"
         "white instead of clipping them flat; --filmic-highlights 0 turns it off.\n"
         "Exposure, the tone controls and white balance are implemented; the rest of the\n"
-        "develop controls are not yet.");
+        "develop controls are not yet. Explicit geometry options are validated but\n"
+        "abort export before writing any files until geometry rendering is implemented.");
     parser.addHelpOption();
     parser.addOption({{"o", "output"}, "Existing directory to write into.", "dir"});
     parser.addOption({"format", "png, jpeg, or tiff. Default: jpeg.", "name"});
@@ -234,7 +313,16 @@ void configure(QCommandLineParser& parser) {
     parser.addOption({"whites", "Move the white point, -100 to 100.", "amount"});
     parser.addOption({"temperature", "White balance in kelvin, 2000 to 12000. RAW only.", "k"});
     parser.addOption({"tint", "Green to magenta, -150 to 150. RAW only.", "amount"});
+    parser.addOption({"white-balance", "as-shot or custom. Temperature/tint imply custom.", "mode"});
     parser.addOption({"filmic-highlights", "Highlight roll-off, 0 to 100. Default: 25.", "amount"});
+    parser.addOption({"rotate", "Any finite clockwise angle, before flips. Not yet rendered.",
+                      "degrees"});
+    parser.addOption({"flip-horizontal", "Flip horizontally. Geometry rendering not yet implemented."});
+    parser.addOption({"flip-vertical", "Flip vertically. Geometry rendering not yet implemented."});
+    parser.addOption({"crop", "auto or normalised upright left,top,right,bottom. Not yet rendered.",
+                      "rectangle"});
+    parser.addOption({"crop-aspect", "free, original, or width:height (3:2, 2:3). Not yet rendered.",
+                      "aspect"});
     parser.addOption({"no-profile", "Convert colour but do not embed the output profile."});
     parser.addOption({"overwrite", "Replace outputs that already exist."});
     parser.addOption({{"q", "quiet"}, "Do not report each file as it is written."});
@@ -349,6 +437,35 @@ std::optional<ExportRequest> buildRequest(const QCommandLineParser& parser, std:
     // half left unnamed stays as the camera recorded it.
     if (request.settings.color.temperature.has_value() || request.settings.color.tint.has_value()) {
         request.settings.color.whiteBalance = WhiteBalanceMode::Custom;
+    }
+    if (parser.isSet("white-balance")) {
+        const auto mode = parser.value("white-balance").toLower();
+        if (mode == "as-shot") {
+            if (parser.isSet("temperature") || parser.isSet("tint")) {
+                code = usageError(err, "--white-balance as-shot cannot be combined with "
+                                       "--temperature or --tint");
+                return std::nullopt;
+            }
+            request.settings.color.whiteBalance = WhiteBalanceMode::AsShot;
+        } else if (mode == "custom") {
+            request.settings.color.whiteBalance = WhiteBalanceMode::Custom;
+        } else {
+            code = usageError(err, "--white-balance takes as-shot or custom");
+            return std::nullopt;
+        }
+    }
+    if (!readGeometry(parser, request.settings.geometry, err, code)) {
+        return std::nullopt;
+    }
+    // Until geometry is rendered, even explicitly neutral geometry options
+    // are refused: accepting them would imply that this interface is usable.
+    for (const auto* option : {"rotate", "flip-horizontal", "flip-vertical", "crop",
+                               "crop-aspect"}) {
+        if (parser.isSet(option)) {
+            code = usageError(err, std::string("--") + option +
+                                       ": geometry rendering is not implemented yet; no files written");
+            return std::nullopt;
+        }
     }
 
     if (parser.isSet("log-format")) {
