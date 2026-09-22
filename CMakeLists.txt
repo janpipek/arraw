@@ -34,6 +34,9 @@ add_library(arraw STATIC
         include/Diagnostics.h
         include/WhiteBalance.h
         include/DevelopSettings.h
+        include/GeometrySettings.h
+        include/ToneSettings.h
+        src/core/ToneSettings.cpp
         src/core/ColorSpaces.h
         src/core/Develop.cpp
         src/core/Diagnostics.cpp

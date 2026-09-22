@@ -51,7 +51,7 @@ TEST_CASE("Converting a RAW is all that happens below the knee", "[develop]") {
     /// highlight roll-off out of the way, since the conversion is what is
     /// under test and the roll-off has a test of its own.
     const auto image =
-        develop(loadImage(test::fixture(neutralFixture)), {.filmicHighlights = noFilmicHighlights});
+        develop(loadImage(test::fixture(neutralFixture)), {.tone = {.filmicHighlights = noFilmicHighlights}});
     const auto width = image.size().width;
 
     float worst = 0.0F;
@@ -72,10 +72,10 @@ TEST_CASE("Exposure is a doubling per stop", "[develop]") {
     /// a doubling back toward white, and here the doubling is the point.
     const auto source = test::rainbow({4, 2}, PixelFormat::RgbaU16, workingEncoding);
 
-    const auto flat = develop(source, {.filmicHighlights = noFilmicHighlights});
-    const auto lifted = develop(source, {.exposure = 1.0F, .filmicHighlights = noFilmicHighlights});
+    const auto flat = develop(source, {.tone = {.filmicHighlights = noFilmicHighlights}});
+    const auto lifted = develop(source, {.tone = {.exposure = 1.0F, .filmicHighlights = noFilmicHighlights}});
     const auto dropped =
-        develop(source, {.exposure = -1.0F, .filmicHighlights = noFilmicHighlights});
+        develop(source, {.tone = {.exposure = -1.0F, .filmicHighlights = noFilmicHighlights}});
 
     for (std::size_t index = 0; index < flat.samples<float>().size(); index += 4) {
         for (std::size_t channel = 0; channel < 3; ++channel) {
@@ -93,7 +93,7 @@ TEST_CASE("Highlights roll by default, and a whole photograph survives it", "[de
     /// arrives exactly as the conversion left it.
     const auto source = loadImage(test::fixture(neutralFixture));
     const auto rolled = develop(source, {});
-    const auto clipping = develop(source, {.filmicHighlights = noFilmicHighlights});
+    const auto clipping = develop(source, {.tone = {.filmicHighlights = noFilmicHighlights}});
 
     const auto width = rolled.size().width;
     bool anyRolled = false;
@@ -115,7 +115,7 @@ TEST_CASE("Exposure leaves alpha alone", "[develop]") {
     auto source = test::rainbow({2, 1}, PixelFormat::RgbaU16, workingEncoding);
     source.samples<std::uint16_t>()[3] = 32768;
 
-    const auto developed = develop(source, {.exposure = 2.0F});
+    const auto developed = develop(source, {.tone = {.exposure = 2.0F}});
 
     /// No develop setting produces transparency, and a source that carried
     /// some keeps exactly what it had: four stops must not make it opaque.

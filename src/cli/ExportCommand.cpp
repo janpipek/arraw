@@ -336,14 +336,14 @@ std::optional<ExportRequest> buildRequest(const QCommandLineParser& parser, std:
         !readSetting(parser, "tint", -tintLimit, tintLimit, request.settings.tint, err, code)) {
         return std::nullopt;
     }
-    request.settings.exposure = exposure.value_or(0.0F);
-    request.settings.contrast = contrast.value_or(0.0F);
-    request.settings.shadows = shadows.value_or(0.0F);
-    request.settings.highlights = highlights.value_or(0.0F);
-    request.settings.blacks = blacks.value_or(0.0F);
-    request.settings.whites = whites.value_or(0.0F);
-    request.settings.filmicHighlights =
-        filmicHighlights.value_or(request.settings.filmicHighlights);
+    request.settings.tone.exposure = exposure.value_or(0.0F);
+    request.settings.tone.contrast = contrast.value_or(0.0F);
+    request.settings.tone.shadows = shadows.value_or(0.0F);
+    request.settings.tone.highlights = highlights.value_or(0.0F);
+    request.settings.tone.blacks = blacks.value_or(0.0F);
+    request.settings.tone.whites = whites.value_or(0.0F);
+    request.settings.tone.filmicHighlights =
+        filmicHighlights.value_or(request.settings.tone.filmicHighlights);
     // Naming either half of a white balance is asking for a custom one; the
     // half left unnamed stays as the camera recorded it.
     if (request.settings.temperature.has_value() || request.settings.tint.has_value()) {

@@ -59,12 +59,12 @@ TEST_CASE("Developing a photograph differently makes another document", "[photo]
     /// all expressed: another snapshot of the same photograph, with the one
     /// that was read left alone.
     const Photo photo = openPhoto(test::fixture(neutralFixture));
-    const Photo lifted = photo.with({.exposure = 1.5F});
+    const Photo lifted = photo.with({.tone = {.exposure = 1.5F}});
 
     REQUIRE(lifted.path() == photo.path());
     REQUIRE(lifted.metadata() == photo.metadata());
-    REQUIRE(lifted.settings().exposure == 1.5F);
-    REQUIRE(photo.settings().exposure == 0.0F);
+    REQUIRE(lifted.settings().tone.exposure == 1.5F);
+    REQUIRE(photo.settings().tone.exposure == 0.0F);
     REQUIRE_FALSE(lifted == photo);
 }
 
@@ -90,7 +90,7 @@ TEST_CASE("A plan resolves from a photograph", "[photo]") {
     /// ADR 012: what a render is planned against is the document, not a
     /// buffer somebody else loaded and a settings struct that travelled
     /// separately.
-    const Photo photo = openPhoto(test::fixture(neutralFixture)).with({.exposure = -1.0F});
+    const Photo photo = openPhoto(test::fixture(neutralFixture)).with({.tone = {.exposure = -1.0F}});
     const ProcessingPlan plan = planFor(photo);
 
     REQUIRE(plan == planFor(photo.metadata().encoding, photo.settings()));

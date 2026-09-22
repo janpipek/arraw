@@ -82,6 +82,12 @@ struct ProcessingPlan {
     friend bool operator==(const ProcessingPlan&, const ProcessingPlan&) = default;
 };
 
+/// @brief Resolves tone settings into a plan with an identity colour transform.
+/// @param settings Tone adjustments to resolve.
+/// @return Exposure gain and tone coefficients for the pointwise chain.
+/// @throws std::invalid_argument if a tone setting is not finite.
+[[nodiscard]] ProcessingPlan tonePlanFor(const ToneSettings& settings);
+
 /// @brief Works out what a photograph's settings mean for its pixels.
 /// @param encoding Encoding the decoded pixels are in.
 /// @param settings Settings to resolve.

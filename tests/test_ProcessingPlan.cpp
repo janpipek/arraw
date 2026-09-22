@@ -31,7 +31,7 @@ TEST_CASE("The plan carries exposure as a gain, not as stops", "[plan]") {
     /// Settings are what a photographer sets; a plan is what the pixels need.
     /// Resolving 2^EV once per photograph keeps the per-pixel chain to a
     /// multiply, and is the shape the GPU's uniform block wants (ADR 011).
-    const auto plan = planFor(ColorEncoding{workingEncoding}, {.exposure = 2.0F});
+    const auto plan = planFor(ColorEncoding{workingEncoding}, {.tone = {.exposure = 2.0F}});
 
     REQUIRE(std::abs(plan.exposureGain - 4.0F) < 1e-6F);
     REQUIRE(plan.toWorking == Matrix3::identity());
@@ -70,7 +70,7 @@ TEST_CASE("Developing a buffer is the chain applied to each pixel", "[plan]") {
     /// has to be what developPixel says, pixel by pixel. That is what lets the
     /// order be tested without a buffer at all.
     const auto source = test::rainbow({4, 3}, PixelFormat::RgbaU16, workingEncoding);
-    const DevelopSettings settings{.exposure = -1.0F};
+    const DevelopSettings settings{.tone = {.exposure = -1.0F}};
 
     const auto developed = develop(source, settings);
     const auto plan = planFor(source.encoding(), settings);

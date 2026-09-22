@@ -24,7 +24,7 @@ float luminanceOf(const Colour& colour) {
 
 /// @brief Develops one neutral value through a plan's tone chain.
 float rolled(float value, float amount) {
-    const auto plan = planFor(ColorEncoding{workingEncoding}, {.filmicHighlights = amount});
+    const auto plan = planFor(ColorEncoding{workingEncoding}, {.tone = {.filmicHighlights = amount}});
     return developPixel(plan, {value, value, value})[1];
 }
 
@@ -40,7 +40,7 @@ bool unmoved(float value, float from) {
 
 /// @brief Develops one neutral value through settings of the caller's choosing.
 float toned(float value, DevelopSettings settings) {
-    settings.filmicHighlights = noFilmicHighlights;
+    settings.tone.filmicHighlights = noFilmicHighlights;
     const auto plan = planFor(ColorEncoding{workingEncoding}, settings);
     return developPixel(plan, {value, value, value})[1];
 }
@@ -48,7 +48,7 @@ float toned(float value, DevelopSettings settings) {
 /// @brief Shapes one neutral value, with the shoulder out of the way.
 float shaped(float value, float contrast) {
     const auto plan = planFor(ColorEncoding{workingEncoding},
-                              {.contrast = contrast, .filmicHighlights = noFilmicHighlights});
+                              {.tone = {.contrast = contrast, .filmicHighlights = noFilmicHighlights}});
     return developPixel(plan, {value, value, value})[1];
 }
 
@@ -57,43 +57,43 @@ float shaped(float value, float contrast) {
 TEST_CASE("Shadows lift the dark tones and leave the ends alone", "[tone]") {
     /// A region, not an end: black stays black -- that is what Blacks is for
     /// -- and white is untouched entirely (ADR 013).
-    REQUIRE(toned(0.0F, {.shadows = 100.0F}) == 0.0F);
-    REQUIRE(unmoved(toned(1.0F, {.shadows = 100.0F}), 1.0F));
+    REQUIRE(toned(0.0F, {.tone = {.shadows = 100.0F}}) == 0.0F);
+    REQUIRE(unmoved(toned(1.0F, {.tone = {.shadows = 100.0F}}), 1.0F));
 
-    REQUIRE(toned(0.01F, {.shadows = 100.0F}) > 0.01F);
-    REQUIRE(toned(0.01F, {.shadows = -100.0F}) < 0.01F);
+    REQUIRE(toned(0.01F, {.tone = {.shadows = 100.0F}}) > 0.01F);
+    REQUIRE(toned(0.01F, {.tone = {.shadows = -100.0F}}) < 0.01F);
 }
 
 TEST_CASE("Highlights recover the bright tones without reaching the shadows", "[tone]") {
-    REQUIRE(unmoved(toned(0.01F, {.highlights = -100.0F}), 0.01F));
+    REQUIRE(unmoved(toned(0.01F, {.tone = {.highlights = -100.0F}}), 0.01F));
 
-    REQUIRE(toned(0.8F, {.highlights = -100.0F}) < 0.8F);
-    REQUIRE(toned(0.8F, {.highlights = 100.0F}) > 0.8F);
+    REQUIRE(toned(0.8F, {.tone = {.highlights = -100.0F}}) < 0.8F);
+    REQUIRE(toned(0.8F, {.tone = {.highlights = 100.0F}}) > 0.8F);
 
     /// Reaching a little past white, so recovery has hold of the headroom the
     /// roll-off is about to compress.
-    REQUIRE(toned(1.5F, {.highlights = -100.0F}) < 1.5F);
+    REQUIRE(toned(1.5F, {.tone = {.highlights = -100.0F}}) < 1.5F);
 }
 
 TEST_CASE("Blacks move the black point", "[tone]") {
     /// A black pixel has no colour to scale, so it takes the lifted value
     /// neutrally rather than staying black while everything around it rises.
-    REQUIRE(toned(0.0F, {.blacks = 100.0F}) > 0.0F);
-    REQUIRE(toned(0.0F, {.blacks = -100.0F}) == 0.0F);
+    REQUIRE(toned(0.0F, {.tone = {.blacks = 100.0F}}) > 0.0F);
+    REQUIRE(toned(0.0F, {.tone = {.blacks = -100.0F}}) == 0.0F);
 
     /// And the midtones are none of its business.
-    REQUIRE(unmoved(toned(0.18F, {.blacks = 100.0F}), 0.18F));
+    REQUIRE(unmoved(toned(0.18F, {.tone = {.blacks = 100.0F}}), 0.18F));
 }
 
 TEST_CASE("Whites move the white point and carry the headroom with them", "[tone]") {
-    REQUIRE(toned(1.0F, {.whites = 100.0F}) > 1.0F);
-    REQUIRE(toned(1.0F, {.whites = -100.0F}) < 1.0F);
+    REQUIRE(toned(1.0F, {.tone = {.whites = 100.0F}}) > 1.0F);
+    REQUIRE(toned(1.0F, {.tone = {.whites = -100.0F}}) < 1.0F);
 
     /// Above white the weight stays full, so raising the white point lifts the
     /// headroom rather than crushing it into white (ADR 013).
-    REQUIRE(toned(3.0F, {.whites = 100.0F}) > 3.0F);
+    REQUIRE(toned(3.0F, {.tone = {.whites = 100.0F}}) > 3.0F);
 
-    REQUIRE(unmoved(toned(0.18F, {.whites = 100.0F}), 0.18F));
+    REQUIRE(unmoved(toned(0.18F, {.tone = {.whites = 100.0F}}), 0.18F));
 }
 
 TEST_CASE("No combination of the tone controls can invert the scale", "[tone]") {
@@ -109,11 +109,11 @@ TEST_CASE("No combination of the tone controls can invert the scale", "[tone]") 
                 for (const float blacks : corners) {
                     for (const float whites : corners) {
                         const auto plan =
-                            planFor(ColorEncoding{workingEncoding}, {.contrast = contrast,
+                            planFor(ColorEncoding{workingEncoding}, {.tone = {.contrast = contrast,
                                                                      .shadows = shadows,
                                                                      .highlights = highlights,
                                                                      .blacks = blacks,
-                                                                     .whites = whites});
+                                                                     .whites = whites}});
                         float previous = 0.0F;
                         for (int step = 0; step <= 400; ++step) {
                             const float input = static_cast<float>(step) / 100.0F;
@@ -153,7 +153,7 @@ TEST_CASE("Contrast pushes bright values past white, for the shoulder to catch",
     REQUIRE(shaped(0.9F, 100.0F) > 1.0F);
 
     /// And with the shoulder in the chain, it comes back below white.
-    const auto plan = planFor(ColorEncoding{workingEncoding}, {.contrast = 100.0F});
+    const auto plan = planFor(ColorEncoding{workingEncoding}, {.tone = {.contrast = 100.0F}});
     REQUIRE(developPixel(plan, {0.9F, 0.9F, 0.9F})[1] < 1.0F);
 }
 
@@ -174,7 +174,7 @@ TEST_CASE("Contrast leaves colour where it was", "[tone]") {
     /// Tone acts on luminance and the colour follows by ratio, so a contrast
     /// control cannot shift a hue (ADR 013).
     const auto plan = planFor(ColorEncoding{workingEncoding},
-                              {.contrast = 100.0F, .filmicHighlights = noFilmicHighlights});
+                              {.tone = {.contrast = 100.0F, .filmicHighlights = noFilmicHighlights}});
     constexpr Colour source{0.3F, 0.2F, 0.1F};
 
     const Colour developed = developPixel(plan, source);
@@ -185,7 +185,7 @@ TEST_CASE("Contrast leaves colour where it was", "[tone]") {
 }
 
 TEST_CASE("The plan carries contrast as a slope, not as a slider", "[tone][plan]") {
-    const auto plan = planFor(ColorEncoding{workingEncoding}, {.contrast = 200.0F});
+    const auto plan = planFor(ColorEncoding{workingEncoding}, {.tone = {.contrast = 200.0F}});
 
     /// Clamped rather than refused, like every other setting (ADR 008).
     REQUIRE(std::abs(plan.contrastSlope - std::sqrt(2.0F)) < 1e-5F);
@@ -246,7 +246,7 @@ TEST_CASE("A stronger amount starts the roll earlier", "[tone]") {
 TEST_CASE("No roll-off at all is allowed, and clips", "[tone]") {
     /// Zero is a true neutral rather than a floor: a photographer who wants a
     /// hard clip may have one, and the number means what it says (ADR 010).
-    const auto plan = planFor(ColorEncoding{workingEncoding}, {.filmicHighlights = 0.0F});
+    const auto plan = planFor(ColorEncoding{workingEncoding}, {.tone = {.filmicHighlights = 0.0F}});
 
     REQUIRE(std::isinf(plan.shoulderKnee));
     REQUIRE(rolled(4.0F, 0.0F) == 4.0F);
@@ -283,15 +283,15 @@ TEST_CASE("A neutral highlight stays neutral", "[tone]") {
 TEST_CASE("The plan carries the knee, not the amount", "[tone][plan]") {
     /// Settings are what a photographer sets; a plan is what the pixels need,
     /// and what the pixels need is where the bend starts (ADR 011).
-    REQUIRE(planFor(ColorEncoding{workingEncoding}, {.filmicHighlights = 100.0F}).shoulderKnee ==
+    REQUIRE(planFor(ColorEncoding{workingEncoding}, {.tone = {.filmicHighlights = 100.0F}}).shoulderKnee ==
             0.5F);
-    REQUIRE(planFor(ColorEncoding{workingEncoding}, {.filmicHighlights = 25.0F}).shoulderKnee ==
+    REQUIRE(planFor(ColorEncoding{workingEncoding}, {.tone = {.filmicHighlights = 25.0F}}).shoulderKnee ==
             0.875F);
 
     /// Out of range is clamped rather than refused, like every other setting:
     /// no pixel maths depends on a caller having checked first (ADR 008).
-    REQUIRE(planFor(ColorEncoding{workingEncoding}, {.filmicHighlights = 400.0F}).shoulderKnee ==
+    REQUIRE(planFor(ColorEncoding{workingEncoding}, {.tone = {.filmicHighlights = 400.0F}}).shoulderKnee ==
             0.5F);
     REQUIRE(std::isinf(
-        planFor(ColorEncoding{workingEncoding}, {.filmicHighlights = -10.0F}).shoulderKnee));
+        planFor(ColorEncoding{workingEncoding}, {.tone = {.filmicHighlights = -10.0F}}).shoulderKnee));
 }
