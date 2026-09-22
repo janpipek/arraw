@@ -68,7 +68,6 @@ struct CropSettings {
 
 /// @brief User geometry relative to the camera orientation, followed by cropping.
 ///
-/// Settings only: the current renderer does not consume these values yet.
 /// Camera orientation is always honoured and is metadata, not an override
 /// here. The order is camera orientation, straighten, user quarter-turn,
 /// horizontal flip, vertical flip, then crop (ADR 014).

@@ -1,11 +1,9 @@
 # Rotation and straighten preserve framing; crop remembers its constraint
 
-This decision defines public values. Geometry rendering, metadata
-orientation extraction, editing commands, geometry-aware validation, copying,
-serialization and GUI controls are not implemented here. CLI flags now parse
-these values and check numeric bounds, but reject export until geometry rendering
-exists; see the README for syntax. The current library renderer ignores
-`DevelopSettings::geometry`, including when it is non-default.
+This decision defines public values and their CPU rendering contract. Camera
+orientation extraction, geometry resolution and rendering are implemented, and
+CLI flags apply them; see the README for syntax. Interactive editing commands,
+copying between photographs, serialization and GUI controls remain future work.
 
 ## Decision
 
@@ -19,8 +17,13 @@ rendering functions or GUI state in these values.
 including mirrored orientations; missing orientation means identity. User
 rotation and flips are relative to this baseline, so resetting geometry restores
 the camera's intended orientation, not necessarily the decoded buffer's axes.
-The settings do not provide an ignore-orientation override. Reading and applying
-that metadata remain future work.
+The settings do not provide an ignore-orientation override. `ImageMetadata` and
+decoded `ImageBuffer` values carry an `ImageOrientation`, using EXIF's eight
+orientation values. Import leaves the raster unrotated, clones retain the tag,
+and development returns physically oriented pixels tagged Normal. Qt automatic
+orientation is explicitly disabled during decode. LibRaw's flip codes and
+[Qt's transformation flags](https://doc.qt.io/qt-6/qimageiohandler.html#Transformation-enum)
+are converted to this common representation at import.
 
 **The order is camera orientation, straighten, quarter-turn, horizontal flip,
 vertical flip, crop.** Future upstream lens correction keeps ADR 009's anchors.
@@ -53,7 +56,7 @@ geometry restores every field's default.
 **Crops always stay inside valid image content.** There is no allow-empty-corners
 switch or canvas background setting. A rotated image's bounding rectangle
 contains empty wedges; checking only normalised bounds is insufficient.
-The eventual geometry resolver must check the actual valid region.
+The geometry resolver checks the actual valid region.
 
 **The storage frame is the uncropped upright bounding rectangle.** After all
 orientation and straighten operations, translate the continuous bounding box
@@ -126,30 +129,69 @@ four stored edges is not enough. A portable preset containing an explicit crop
 must carry the source aspect and relative size as transfer data, not pretend
 that `DevelopSettings` alone supplies the missing dimensions.
 
-**Validation remains a contract, not an implementation in this slice.**
+**Validation happens before pixel processing.**
 Straighten and all coordinates must be finite; straighten is within its named
 limits, ratios are positive and finite, enum values are recognised, and edges
 satisfy `0 <= left < right <= 1` and `0 <= top < bottom <= 1`.
 Actual-content containment and aspect agreement require resolved geometry.
-Direct invalid input is rejected per ADR 008. A finite out-of-range straighten
+Nonfinite, unordered or out-of-range direct input is rejected per ADR 008.
+Explicit rectangles must agree with a locked aspect to a relative tolerance
+of 1e-6. A finite out-of-range straighten
 loaded from storage may be clamped with a warning. An unusable crop (nonfinite,
 empty or inverted) falls back to automatic framing with a warning; an invalid
 aspect falls back to free. A usable rectangle that falls outside valid content
-is fitted with a warning. CLI numeric validation exists; geometry-aware validation
-and storage-load recovery are not implemented yet.
+is fitted with a warning. Those storage-load recovery rules remain future work;
+the current resolver fits a structurally valid requested rectangle into valid
+content without mutating settings. No sidecar reader is implemented here.
+
+## CPU rendering contract
+
+`GeometryPlan` holds the source dimensions, an orthogonal source-to-upright
+matrix, continuous upright dimensions, fitted crop and output raster dimensions.
+It supplies distinct source/upright point types and forward/inverse mappings.
+Plans resolved from a buffer or `Photo` include geometry in value equality;
+the encoding-only planning overload still resolves just colour and tone.
+
+Camera orientation, quarter-turns and flips use exact integer coefficients.
+Straighten introduces sine and cosine once per plan. Every geometric operation
+is composed before sampling. Without lens correction the valid region is a
+rotated rectangle, so crop containment is equivalent to bounding its four
+corners in the source frame. Symmetry puts an automatic maximum-area crop at
+the image centre; its dimensions follow from the two source-axis constraints.
+An explicit crop retains its centre and physical aspect while shrinking. If
+the centre admits no positive-area crop, the largest retained size is chosen
+and its centre projected to the nearest feasible point in source axes.
+
+Colour and tone are evaluated over the decoded raster first. The geometry pass
+then maps output pixel centres back into this linear working-colour buffer.
+It uses bilinear interpolation with premultiplied alpha and converts back to
+straight alpha; transparent coloured neighbours therefore create no fringes.
+The half-pixel strips beyond the outermost source pixel centres use edge
+extension, within the already validated image boundary. Exact pixel centres
+copy all four channels, including RGB under zero alpha. Numerical noise within
+32 double-precision epsilons times the source-axis length snaps to an exact
+pixel centre. Identity geometry reuses the developed buffer without another
+allocation.
+
+Raster width and height are the floors of continuous crop extents, with a
+minimum of one pixel per axis. Extents within relative 1e-10 of an integer
+are rounded to that integer first. The continuous crop stays unchanged;
+rounding affects sampling density rather than selecting different content.
+Small aspect deviations in raster dimensions are unavoidable for odd dimensions
+and very small crops. Crop coordinates and aspect constraints remain continuous.
+There is no separate preview geometry path. Requested target-size resizing,
+including its antialiasing policy, remains outside this implementation.
 
 ## Consequences
 
-- Settings express the agreed editing behaviour without implementing pixels.
-  Rendering does not yet honour even the camera orientation promised here.
+- Settings resolve once into geometry shared by sampling and coordinate mapping.
 - The future geometry editor owns dependent crop/aspect updates. Plain field
-  assignment stores a new value; it does not secretly rotate or fit a crop.
-- Crop has no pixel-size minimum in storage. Raster rounding, interpolation and
-  sampling at valid edges belong to the future rendering contract and must be
-  specified before geometry execution ships.
-- Future tests must cover mirrored camera orientations, off-centre crops,
-  non-square and odd-sized images, locked ratios, automatic versus explicit
-  framing, preview/export agreement, and copying between unlike proportions.
+  assignment stores a new value; it does not remap an existing crop from an old
+  frame. The CLI describes one final geometry state, not a sequence of edits.
+- Tests cover mirrored camera orientations, off-centre crops, non-square and
+  odd-sized images, locked ratios, forward/inverse mapping, exact remapping,
+  fractional sampling and alpha. Preview sizing and copying between unlike
+  proportions need tests when those operations are implemented.
 - ADR 008's future descriptors will enumerate geometry leaves and their
   constraints. Geometry applies to RAW and non-RAW photographs alike; sidecar
   mapping and interoperability remain separate work.

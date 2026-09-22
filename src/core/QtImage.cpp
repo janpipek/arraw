@@ -67,7 +67,8 @@ QImage arraw::qtimage::toImage(const ImageBuffer& buffer) {
                   static_cast<qsizetype>(buffer.rowStride()), toImageFormat(buffer.format()));
 }
 
-arraw::ImageBuffer arraw::qtimage::toBuffer(const QImage& image, ColorEncoding encoding) {
+arraw::ImageBuffer arraw::qtimage::toBuffer(const QImage& image, ColorEncoding encoding,
+                                            ImageOrientation orientation) {
     if (image.isNull()) {
         throw std::invalid_argument("Cannot copy a null image into a buffer");
     }
@@ -79,7 +80,7 @@ arraw::ImageBuffer arraw::qtimage::toBuffer(const QImage& image, ColorEncoding e
 
     ImageBuffer buffer(
         {static_cast<std::uint32_t>(image.width()), static_cast<std::uint32_t>(image.height())},
-        *format, encoding);
+        *format, encoding, orientation);
 
     // QImage pads rows to a four-byte boundary and ImageBuffer does not, so the
     // strides differ and the copy has to go row by row.

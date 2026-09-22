@@ -58,7 +58,7 @@ ImageBuffer arraw::develop(const ImageBuffer& source, const DevelopSettings& set
         throw std::invalid_argument("Rendering to a requested size is not implemented yet");
     }
 
-    const ProcessingPlan plan = planFor(source.encoding(), settings);
+    const ProcessingPlan plan = planFor(source, settings);
 
     ImageBuffer result(source.size(), workingFormat, workingEncoding);
     switch (source.format()) {
@@ -75,5 +75,5 @@ ImageBuffer arraw::develop(const ImageBuffer& source, const DevelopSettings& set
         developSamples<float>(source, result, plan);
         break;
     }
-    return result;
+    return applyGeometry(std::move(result), *plan.geometry);
 }

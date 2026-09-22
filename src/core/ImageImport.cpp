@@ -6,6 +6,7 @@
 #include <QColorSpace>
 #include <QFile>
 #include <QImage>
+#include <QImageIOHandler>
 #include <QImageReader>
 
 #include <cstdint>
@@ -15,6 +16,28 @@ using namespace arraw;
 using namespace std;
 
 namespace {
+
+/// @brief Reads the orientation using Qt's mirror-before-rotation convention.
+ImageOrientation orientationOf(const QImageReader& reader) {
+    switch (reader.transformation()) {
+    case QImageIOHandler::TransformationMirror:
+        return ImageOrientation::MirrorHorizontal;
+    case QImageIOHandler::TransformationFlip:
+        return ImageOrientation::MirrorVertical;
+    case QImageIOHandler::TransformationRotate180:
+        return ImageOrientation::Rotate180;
+    case QImageIOHandler::TransformationRotate90:
+        return ImageOrientation::Rotate90;
+    case QImageIOHandler::TransformationMirrorAndRotate90:
+        return ImageOrientation::Transverse;
+    case QImageIOHandler::TransformationFlipAndRotate90:
+        return ImageOrientation::Transpose;
+    case QImageIOHandler::TransformationRotate270:
+        return ImageOrientation::Rotate270;
+    default:
+        return ImageOrientation::Normal;
+    }
+}
 
 /// @brief Chooses the buffer layout that preserves a decoded image's precision.
 ///
@@ -49,18 +72,20 @@ PixelFormat chooseLayout(const QImage& image) {
 /// installs a LibRaw-backed plugin into Qt's plugin directory, and it claims
 /// files by extension -- including RAW extensions arraw does not list, such as
 /// .mrw, .x3f and .crw. Left to it, those would be decoded with its processing
-/// choices rather than ours (it honours the camera's orientation, which arraw
-/// does not), with the metadata discarded, and only on machines where that
+/// choices rather than ours (it bakes in orientation, which arraw applies at
+/// development), with the metadata discarded, and only on machines where that
 /// package happens to be installed.
 ///
 /// ::arraw::loadImage now offers the file to LibRaw before reaching here, so
 /// the plugin no longer gets the chance; this stays as the second line of
 /// defence, for the day the plugin's LibRaw recognises a file ours does not.
-QImage decodeThroughQt(QFile& file, QString& error) {
+QImage decodeThroughQt(QFile& file, QString& error, ImageOrientation& orientation) {
     QImageReader reader(&file);
+    reader.setAutoTransform(false);
     if (reader.format() == "raw") {
         return {};
     }
+    orientation = orientationOf(reader);
     QImage decoded = reader.read();
     error = reader.errorString();
     return decoded;
@@ -112,7 +137,8 @@ ImageMetadata arraw::readImageMetadata(const std::filesystem::path& path, Diagno
     // the working encoding, so that is what a plan starts from.
     return {.size = {static_cast<std::uint32_t>(size.width()),
                      static_cast<std::uint32_t>(size.height())},
-            .encoding = workingEncoding};
+            .encoding = workingEncoding,
+            .orientation = orientationOf(reader)};
 }
 
 ImageBuffer arraw::loadImage(const std::filesystem::path& path, DiagnosticLog& log) {
@@ -127,7 +153,8 @@ ImageBuffer arraw::loadImage(const std::filesystem::path& path, DiagnosticLog& l
     }
 
     QString readerError;
-    QImage decoded = decodeThroughQt(sourceFile, readerError);
+    ImageOrientation orientation = ImageOrientation::Normal;
+    QImage decoded = decodeThroughQt(sourceFile, readerError, orientation);
     if (decoded.isNull()) {
         // Neither decoder recognised it. LibRaw has already declined above, so
         // there is nothing left to fall back to.
@@ -149,5 +176,5 @@ ImageBuffer arraw::loadImage(const std::filesystem::path& path, DiagnosticLog& l
                                  ": cannot convert to the working space");
     }
 
-    return qtimage::toBuffer(working, workingEncoding);
+    return qtimage::toBuffer(working, workingEncoding, orientation);
 }

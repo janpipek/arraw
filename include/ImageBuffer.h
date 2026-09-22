@@ -1,6 +1,7 @@
 #pragma once
 
 #include <ColorEncoding.h>
+#include <ImageOrientation.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -110,9 +111,11 @@ public:
     /// @param size Pixel dimensions; must be non-empty.
     /// @param format Sample layout to store.
     /// @param encoding Meaning of the RGB sample values.
+    /// @param orientation Source orientation still to be applied during development.
     /// @throws std::invalid_argument if @p size is empty.
     /// @throws std::length_error if the buffer size would overflow `size_t`.
-    ImageBuffer(ImageSize size, PixelFormat format, ColorEncoding encoding);
+    ImageBuffer(ImageSize size, PixelFormat format, ColorEncoding encoding,
+                ImageOrientation orientation = ImageOrientation::Normal);
 
     ImageBuffer(const ImageBuffer&) = delete;
     ImageBuffer& operator=(const ImageBuffer&) = delete;
@@ -133,6 +136,11 @@ public:
     /// @brief Meaning of the buffer's RGB sample values.
     [[nodiscard]] const ColorEncoding& encoding() const noexcept {
         return encoding_;
+    }
+
+    /// @brief Source orientation still to be applied to these pixels.
+    [[nodiscard]] ImageOrientation orientation() const noexcept {
+        return orientation_;
     }
 
     /// @brief Number of bytes between the start of consecutive rows.
@@ -197,6 +205,7 @@ private:
     ImageSize size_;
     PixelFormat format_;
     ColorEncoding encoding_;
+    ImageOrientation orientation_;
     std::size_t rowStride_;
     Storage storage_;
 };

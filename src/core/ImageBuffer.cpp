@@ -13,9 +13,10 @@ static constexpr std::size_t checkedSampleCount(ImageSize size, PixelFormat form
 
 static ImageBuffer::Storage allocateStorage(std::size_t sampleCount, PixelFormat format);
 
-ImageBuffer::ImageBuffer(ImageSize size, PixelFormat format, ColorEncoding encoding)
+ImageBuffer::ImageBuffer(ImageSize size, PixelFormat format, ColorEncoding encoding,
+                         ImageOrientation orientation)
     : size_(validateSize(size)), format_(format), encoding_(std::move(encoding)),
-      rowStride_(checkedMultiply(size_.width, bytesPerPixel(format_))),
+      orientation_(orientation), rowStride_(checkedMultiply(size_.width, bytesPerPixel(format_))),
       storage_(allocateStorage(checkedSampleCount(size_, format_), format_)) {}
 
 span<byte> ImageBuffer::bytes() noexcept {
@@ -38,7 +39,7 @@ size_t ImageBuffer::byteSize() const noexcept {
 }
 
 ImageBuffer ImageBuffer::clone() const {
-    ImageBuffer result(this->size(), this->format(), this->encoding());
+    ImageBuffer result(this->size(), this->format(), this->encoding(), this->orientation());
     result.storage_ = this->storage_;
     return result;
 }

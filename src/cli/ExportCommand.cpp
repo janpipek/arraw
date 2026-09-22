@@ -17,8 +17,8 @@
 #include <QString>
 #include <QStringList>
 
-#include <exception>
 #include <cmath>
+#include <exception>
 #include <filesystem>
 #include <optional>
 #include <ostream>
@@ -216,8 +216,8 @@ bool readSetting(const QCommandLineParser& parser, const char* name, float lowes
 }
 
 /// @brief Reads geometry values without resolving or executing any transforms.
-bool readGeometry(const QCommandLineParser& parser, GeometrySettings& geometry,
-                  std::ostream& err, int& code) {
+bool readGeometry(const QCommandLineParser& parser, GeometrySettings& geometry, std::ostream& err,
+                  int& code) {
     if (parser.isSet("rotate")) {
         bool valid = false;
         const double degrees = parser.value("rotate").toDouble(&valid);
@@ -296,9 +296,8 @@ void configure(QCommandLineParser& parser) {
         "With no develop settings an export is a faithful conversion of the image as\n"
         "captured, save for a gentle roll-off that bends the brightest values toward\n"
         "white instead of clipping them flat; --filmic-highlights 0 turns it off.\n"
-        "Exposure, the tone controls and white balance are implemented; the rest of the\n"
-        "develop controls are not yet. Explicit geometry options are validated but\n"
-        "abort export before writing any files until geometry rendering is implemented.");
+        "Camera orientation is honoured. Rotation, flips and cropping are applied\n"
+        "after colour and tone; crops always stay inside valid image content.");
     parser.addHelpOption();
     parser.addOption({{"o", "output"}, "Existing directory to write into.", "dir"});
     parser.addOption({"format", "png, jpeg, or tiff. Default: jpeg.", "name"});
@@ -313,16 +312,17 @@ void configure(QCommandLineParser& parser) {
     parser.addOption({"whites", "Move the white point, -100 to 100.", "amount"});
     parser.addOption({"temperature", "White balance in kelvin, 2000 to 12000. RAW only.", "k"});
     parser.addOption({"tint", "Green to magenta, -150 to 150. RAW only.", "amount"});
-    parser.addOption({"white-balance", "as-shot or custom. Temperature/tint imply custom.", "mode"});
+    parser.addOption(
+        {"white-balance", "as-shot or custom. Temperature/tint imply custom.", "mode"});
     parser.addOption({"filmic-highlights", "Highlight roll-off, 0 to 100. Default: 25.", "amount"});
-    parser.addOption({"rotate", "Any finite clockwise angle, before flips. Not yet rendered.",
-                      "degrees"});
-    parser.addOption({"flip-horizontal", "Flip horizontally. Geometry rendering not yet implemented."});
-    parser.addOption({"flip-vertical", "Flip vertically. Geometry rendering not yet implemented."});
-    parser.addOption({"crop", "auto or normalised upright left,top,right,bottom. Not yet rendered.",
-                      "rectangle"});
-    parser.addOption({"crop-aspect", "free, original, or width:height (3:2, 2:3). Not yet rendered.",
-                      "aspect"});
+    parser.addOption(
+        {"rotate", "Any finite clockwise angle, before flips. Default: 0.", "degrees"});
+    parser.addOption({"flip-horizontal", "Flip horizontally in the upright frame."});
+    parser.addOption({"flip-vertical", "Flip vertically in the upright frame."});
+    parser.addOption(
+        {"crop", "auto or normalised upright left,top,right,bottom. Default: auto.", "rectangle"});
+    parser.addOption(
+        {"crop-aspect", "free, original, or width:height (3:2, 2:3). Default: free.", "aspect"});
     parser.addOption({"no-profile", "Convert colour but do not embed the output profile."});
     parser.addOption({"overwrite", "Replace outputs that already exist."});
     parser.addOption({{"q", "quiet"}, "Do not report each file as it is written."});
@@ -456,16 +456,6 @@ std::optional<ExportRequest> buildRequest(const QCommandLineParser& parser, std:
     }
     if (!readGeometry(parser, request.settings.geometry, err, code)) {
         return std::nullopt;
-    }
-    // Until geometry is rendered, even explicitly neutral geometry options
-    // are refused: accepting them would imply that this interface is usable.
-    for (const auto* option : {"rotate", "flip-horizontal", "flip-vertical", "crop",
-                               "crop-aspect"}) {
-        if (parser.isSet(option)) {
-            code = usageError(err, std::string("--") + option +
-                                       ": geometry rendering is not implemented yet; no files written");
-            return std::nullopt;
-        }
     }
 
     if (parser.isSet("log-format")) {

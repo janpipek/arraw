@@ -8,8 +8,8 @@ with a Qt desktop application and a command line over it.
 > implemented here yet. Today the engine reads images (including RAW), develops
 > them from the camera's own colour into a linear Rec.2020 working space, and
 > writes them back out. Exposure, tone controls and white balance are implemented;
-> defaults include a gentle highlight roll-off. Geometry settings and CLI syntax
-> exist, but geometry rendering is not implemented yet.
+> defaults include a gentle highlight roll-off. Camera orientation, arbitrary
+> rotation, flips and cropping are applied during development.
 
 ## Building
 
@@ -32,6 +32,8 @@ arraw-cli --help                          # the commands that exist
 arraw-cli export *.arw -o out/            # render a shoot, JPEG by default
 arraw-cli export photo.dng -o out/ --format png --bit-depth 16
 arraw-cli export photo.arw -o out/ --exposure -0.5 --temperature 3200   # RAW only
+arraw-cli export photo.arw -o out/ --rotate 2.5 --crop-aspect 3:2
+arraw-cli export photo.arw -o out/ --rotate 90 --crop 0.1,0.2,0.8,0.9
 ```
 
 Inputs are files rather than directories; your shell expands the wildcards.
@@ -45,7 +47,7 @@ temperature or tint implies custom white balance; combining either with an
 explicit `as-shot` is an error. Custom with neither value retains the applied
 white balance for RAW images. Temperature and tint require RAW input.
 
-The geometry syntax is defined now for future rendering:
+Geometry flags:
 
 | Flag | Value |
 |---|---|
@@ -61,11 +63,17 @@ from zero: 45° gives 90° minus 45°, and -45° gives 270° plus 45°.
 
 Crop edges describe the final upright frame, regardless of argument order;
 they are not a sequence of crop and rotation commands. Aspect is a remembered
-constraint, not a substitute for crop edges. Checking that a crop fits valid
-image content and matches its aspect needs the future geometry resolver.
-For now, **any explicit geometry flag aborts export with exit code 2 before
-writing files**, after checking its syntax and numeric bounds. This includes
-neutral values such as `--rotate 0`; no geometry flag is silently ignored.
+constraint, not a substitute for crop edges. With an automatic crop, the renderer
+chooses the largest valid rectangle at the requested aspect. An explicit crop
+must already match a locked aspect; a mismatch fails that input. Crops that
+would include empty corners shrink around their centre, moving only when no
+positive-size rectangle fits there. Source pixels are never modified.
+
+Quarter-turns, flips and pixel-aligned crops preserve developed samples exactly.
+Fractional rotations and crops use bilinear interpolation in linear colour with
+premultiplied alpha. Continuous crop dimensions are floored to whole output
+pixels, with a minimum of one pixel per axis. Requested output resizing is
+still unimplemented.
 
 ## Layout
 

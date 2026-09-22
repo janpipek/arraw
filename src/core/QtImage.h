@@ -54,9 +54,11 @@ namespace arraw::qtimage {
 /// belongs to the caller, before this call.
 /// @param image Image to copy; must be in a layout arraw can hold.
 /// @param encoding Meaning to record for the sample values.
+/// @param orientation Source orientation still to be applied during development.
 /// @return A buffer holding a copy of the image's samples.
 /// @throws std::invalid_argument if the image is null or its layout has no
 /// buffer equivalent.
-[[nodiscard]] ImageBuffer toBuffer(const QImage& image, ColorEncoding encoding);
+[[nodiscard]] ImageBuffer toBuffer(const QImage& image, ColorEncoding encoding,
+                                   ImageOrientation orientation = ImageOrientation::Normal);
 
 } // namespace arraw::qtimage

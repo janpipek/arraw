@@ -42,13 +42,18 @@ struct RenderRequest {
 /// values above white and something has to bring them back (ADR 010). Below
 /// its knee nothing else happens.
 ///
+/// Camera orientation and user geometry are applied after colour and tone,
+/// with one bilinear resample in linear working colour and premultiplied alpha.
+/// Crops are constrained to valid image content. The output has no pending
+/// camera orientation. Exact quarter-turns and pixel-aligned crops copy samples.
+///
 /// @param source Decoded photograph, in the working or a camera encoding.
 /// @param settings Photographic settings to apply.
 /// @param request What to render; the default is the whole photograph at its
 /// own resolution.
 /// @return A new buffer in the working encoding.
 /// @throws std::invalid_argument if @p source is in an encoding development
-/// cannot start from, or if @p request asks for a size, which is not yet
+/// cannot start from, if geometry is invalid, or if @p request asks for a size, which is not yet
 /// implemented.
 [[nodiscard]] ImageBuffer develop(const ImageBuffer& source, const DevelopSettings& settings,
                                   const RenderRequest& request = {});

@@ -65,8 +65,8 @@ namespace arraw::rawimport {
 /// highlight handling are develop settings that this bakes in; see ADR 005 for
 /// why, and for what a later `RawLoadOptions` would reopen.
 ///
-/// Orientation is not applied, matching ::arraw::loadImage: rotation stays a
-/// develop setting rather than something baked into the buffer.
+/// Orientation is retained on the buffer without rearranging pixels, matching
+/// ::arraw::loadImage. Development applies it before the user's geometry.
 ///
 /// @param path File to decode.
 /// @param log Where to report a substituted white balance.

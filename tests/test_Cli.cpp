@@ -15,12 +15,12 @@
 #include <catch2/generators/catch_generators.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
-#include <filesystem>
 #include <cmath>
-#include <limits>
-#include <stdexcept>
+#include <filesystem>
 #include <fstream>
+#include <limits>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -353,20 +353,15 @@ TEST_CASE("A temperature on a photograph with no sensor fails that file", "[cli]
     REQUIRE(std::filesystem::is_empty(directory.path()));
 }
 
-TEST_CASE("Geometry options are documented but cannot silently export unchanged pixels", "[cli]") {
+TEST_CASE("Geometry options are documented and export successfully", "[cli]") {
     const test::TempDir directory;
     const auto options = GENERATE(
-        std::vector<std::string>{"--rotate", "90"},
-        std::vector<std::string>{"--rotate", "0"},
-        std::vector<std::string>{"--rotate", "180"},
-        std::vector<std::string>{"--rotate", "270"},
-        std::vector<std::string>{"--rotate", "45"},
-        std::vector<std::string>{"--rotate", "90.5"},
-        std::vector<std::string>{"--rotate", "-20"},
-        std::vector<std::string>{"--rotate", "730"},
+        std::vector<std::string>{"--rotate", "90"}, std::vector<std::string>{"--rotate", "0"},
+        std::vector<std::string>{"--rotate", "180"}, std::vector<std::string>{"--rotate", "270"},
+        std::vector<std::string>{"--rotate", "45"}, std::vector<std::string>{"--rotate", "90.5"},
+        std::vector<std::string>{"--rotate", "-20"}, std::vector<std::string>{"--rotate", "730"},
         std::vector<std::string>{"--rotate", "1e300"},
-        std::vector<std::string>{"--flip-horizontal"},
-        std::vector<std::string>{"--flip-vertical"},
+        std::vector<std::string>{"--flip-horizontal"}, std::vector<std::string>{"--flip-vertical"},
         std::vector<std::string>{"--rotate", "-45"},
         std::vector<std::string>{"--crop", "0.1,0.2,0.8,0.9"},
         std::vector<std::string>{"--crop", "auto"},
@@ -379,13 +374,13 @@ TEST_CASE("Geometry options are documented but cannot silently export unchanged 
     REQUIRE_THAT(help.out, ContainsSubstring(options.front()));
 
     std::vector<std::string> arguments{"export", test::fixture(card).string(), "-o",
-                                        directory.path().string()};
+                                       directory.path().string()};
     arguments.insert(arguments.end(), options.begin(), options.end());
     const auto result = invoke(arguments);
-    REQUIRE(result.code == cli::UsageError);
-    REQUIRE_THAT(result.err, ContainsSubstring("geometry rendering is not implemented yet"));
+    REQUIRE(result.code == cli::Success);
     REQUIRE(result.out.empty());
-    REQUIRE(std::filesystem::is_empty(directory.path()));
+    const QImage image(QString::fromStdString(directory.file("testcard-61x41-srgb8.jpg").string()));
+    REQUIRE_FALSE(image.isNull());
 }
 
 TEST_CASE("Rotation angles split into equivalent quarter-turns and bounded straighten", "[cli]") {
@@ -436,40 +431,39 @@ TEST_CASE("Nonfinite rotation angles leave geometry untouched", "[cli]") {
     GeometrySettings geometry;
     cli::setRotationAngle(geometry, 100.0);
     const auto original = geometry;
-    for (const double angle : {std::numeric_limits<double>::quiet_NaN(),
-                               std::numeric_limits<double>::infinity(),
-                               -std::numeric_limits<double>::infinity()}) {
+    for (const double angle :
+         {std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity(),
+          -std::numeric_limits<double>::infinity()}) {
         REQUIRE_THROWS_AS(cli::setRotationAngle(geometry, angle), std::invalid_argument);
         REQUIRE(geometry == original);
     }
 }
 
-TEST_CASE("Malformed geometry is rejected before the rendering availability check", "[cli]") {
+TEST_CASE("Malformed geometry is rejected before exporting any files", "[cli]") {
     const test::TempDir directory;
-    const auto options = GENERATE(
-        std::vector<std::string>{"--rotate", "nan"},
-        std::vector<std::string>{"--rotate", "inf"},
-        std::vector<std::string>{"--rotate", "1e999"},
-        std::vector<std::string>{"--rotate", "clockwise"},
-        std::vector<std::string>{"--crop", "0,0,1"},
-        std::vector<std::string>{"--crop", "0,0,1,1,1"},
-        std::vector<std::string>{"--crop", "0,0,0,1"},
-        std::vector<std::string>{"--crop", "0,0.9,1,0.1"},
-        std::vector<std::string>{"--crop", "-0.1,0,1,1"},
-        std::vector<std::string>{"--crop", "0,0,1.1,1"},
-        std::vector<std::string>{"--crop", "0,,1,1"},
-        std::vector<std::string>{"--crop", "nan,0,1,1"},
-        std::vector<std::string>{"--crop-aspect", "3:0"},
-        std::vector<std::string>{"--crop-aspect", "-3:2"},
-        std::vector<std::string>{"--crop-aspect", "nan:2"},
-        std::vector<std::string>{"--crop-aspect", "3:inf"},
-        std::vector<std::string>{"--crop-aspect", "1e308:1e-308"},
-        std::vector<std::string>{"--crop-aspect", "1e-308:1e308"},
-        std::vector<std::string>{"--crop-aspect", "3:2:1"},
-        std::vector<std::string>{"--crop-aspect", "square"});
+    const auto options = GENERATE(std::vector<std::string>{"--rotate", "nan"},
+                                  std::vector<std::string>{"--rotate", "inf"},
+                                  std::vector<std::string>{"--rotate", "1e999"},
+                                  std::vector<std::string>{"--rotate", "clockwise"},
+                                  std::vector<std::string>{"--crop", "0,0,1"},
+                                  std::vector<std::string>{"--crop", "0,0,1,1,1"},
+                                  std::vector<std::string>{"--crop", "0,0,0,1"},
+                                  std::vector<std::string>{"--crop", "0,0.9,1,0.1"},
+                                  std::vector<std::string>{"--crop", "-0.1,0,1,1"},
+                                  std::vector<std::string>{"--crop", "0,0,1.1,1"},
+                                  std::vector<std::string>{"--crop", "0,,1,1"},
+                                  std::vector<std::string>{"--crop", "nan,0,1,1"},
+                                  std::vector<std::string>{"--crop-aspect", "3:0"},
+                                  std::vector<std::string>{"--crop-aspect", "-3:2"},
+                                  std::vector<std::string>{"--crop-aspect", "nan:2"},
+                                  std::vector<std::string>{"--crop-aspect", "3:inf"},
+                                  std::vector<std::string>{"--crop-aspect", "1e308:1e-308"},
+                                  std::vector<std::string>{"--crop-aspect", "1e-308:1e308"},
+                                  std::vector<std::string>{"--crop-aspect", "3:2:1"},
+                                  std::vector<std::string>{"--crop-aspect", "square"});
     CAPTURE(options);
     std::vector<std::string> arguments{"export", test::fixture(card).string(), "-o",
-                                        directory.path().string()};
+                                       directory.path().string()};
     arguments.insert(arguments.end(), options.begin(), options.end());
     const auto result = invoke(arguments);
     REQUIRE(result.code == cli::UsageError);
@@ -488,19 +482,20 @@ TEST_CASE("Explicit white-balance modes preserve the existing defaults", "[cli]"
     const QImage baseline(QString::fromStdString(output.string()));
     REQUIRE_FALSE(baseline.isNull());
     REQUIRE(invoke({"export", raw, "-o", directory.path().string(), "--format", "png",
-                    "--white-balance", mode, "--overwrite"}).code == cli::Success);
+                    "--white-balance", mode, "--overwrite"})
+                .code == cli::Success);
     const QImage explicitMode(QString::fromStdString(output.string()));
     REQUIRE(explicitMode == baseline);
 }
 
 TEST_CASE("Conflicting or unknown white-balance modes are usage errors", "[cli]") {
     const test::TempDir directory;
-    const auto options = GENERATE(
-        std::vector<std::string>{"--white-balance", "daylight"},
-        std::vector<std::string>{"--white-balance", "as-shot", "--temperature", "5500"},
-        std::vector<std::string>{"--tint", "10", "--white-balance", "as-shot"});
+    const auto options =
+        GENERATE(std::vector<std::string>{"--white-balance", "daylight"},
+                 std::vector<std::string>{"--white-balance", "as-shot", "--temperature", "5500"},
+                 std::vector<std::string>{"--tint", "10", "--white-balance", "as-shot"});
     std::vector<std::string> arguments{"export", test::fixture(card).string(), "-o",
-                                        directory.path().string()};
+                                       directory.path().string()};
     arguments.insert(arguments.end(), options.begin(), options.end());
     const auto result = invoke(arguments);
     REQUIRE(result.code == cli::UsageError);
@@ -514,8 +509,8 @@ TEST_CASE("Nonfinite develop numbers are usage errors", "[cli]") {
                                 "--whites", "--temperature", "--tint", "--filmic-highlights");
     const auto* value = GENERATE("nan", "inf", "-inf");
     CAPTURE(flag, value);
-    const auto result = invoke({"export", test::fixture(card).string(), "-o",
-                                directory.path().string(), flag, value});
+    const auto result = invoke(
+        {"export", test::fixture(card).string(), "-o", directory.path().string(), flag, value});
     REQUIRE(result.code == cli::UsageError);
     REQUIRE_THAT(result.err, ContainsSubstring(flag));
     REQUIRE(std::filesystem::is_empty(directory.path()));

@@ -24,6 +24,9 @@ struct ImageMetadata {
     /// else, which ::arraw::loadImage converts to on the way in.
     ColorEncoding encoding;
 
+    /// @brief Camera orientation, retained without rearranging decoded pixels.
+    ImageOrientation orientation = ImageOrientation::Normal;
+
     friend bool operator==(const ImageMetadata&, const ImageMetadata&) = default;
 };
 
@@ -65,9 +68,9 @@ struct ImageMetadata {
 /// handling are develop settings that this bakes in; ADR 005 records why, and
 /// what a later `RawLoadOptions` would reopen.
 ///
-/// Orientation metadata is not applied, for RAW files as for any other: the
-/// pixels are returned as stored, and rotation remains a develop setting rather
-/// than something baked into the buffer.
+/// Orientation metadata is retained on the buffer without rearranging pixels,
+/// for RAW files as for any other. Development applies that camera orientation
+/// before the user's geometry settings.
 ///
 /// @param path File to decode.
 /// @param log Where to report what a photographer should know about the

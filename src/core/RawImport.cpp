@@ -184,7 +184,17 @@ CameraNative cameraColour(const LibRaw& raw) {
 /// @return What the file declares about itself.
 ImageMetadata metadataOf(const LibRaw& raw) {
     const auto& sizes = raw.imgdata.sizes;
-    return {.size = {sizes.width, sizes.height}, .encoding = cameraColour(raw)};
+    // LibRaw's flip bits are not EXIF orientation numbers.
+    constexpr ImageOrientation orientations[]{
+        ImageOrientation::Normal,         ImageOrientation::MirrorHorizontal,
+        ImageOrientation::MirrorVertical, ImageOrientation::Rotate180,
+        ImageOrientation::Transpose,      ImageOrientation::Rotate270,
+        ImageOrientation::Rotate90,       ImageOrientation::Transverse};
+    const auto orientation =
+        sizes.flip >= 0 && sizes.flip < 8 ? orientations[sizes.flip] : ImageOrientation::Normal;
+    return {.size = {sizes.width, sizes.height},
+            .encoding = cameraColour(raw),
+            .orientation = orientation};
 }
 
 /// @brief Reports a white balance the camera did not record.
@@ -204,7 +214,8 @@ void reportSubstitutedWhiteBalance(const LibRaw& raw, const std::filesystem::pat
     }
 }
 
-ImageBuffer toBuffer(const libraw_processed_image_t& image, ColorEncoding encoding) {
+ImageBuffer toBuffer(const libraw_processed_image_t& image, ColorEncoding encoding,
+                     ImageOrientation orientation) {
     if (image.type != LIBRAW_IMAGE_BITMAP) {
         throw std::runtime_error("LibRaw returned a thumbnail rather than an image");
     }
@@ -217,7 +228,8 @@ ImageBuffer toBuffer(const libraw_processed_image_t& image, ColorEncoding encodi
                                  " channels, expected 1 or 3");
     }
 
-    ImageBuffer buffer({image.width, image.height}, PixelFormat::RgbaU16, std::move(encoding));
+    ImageBuffer buffer({image.width, image.height}, PixelFormat::RgbaU16, std::move(encoding),
+                       orientation);
     const auto source =
         std::span(reinterpret_cast<const std::uint16_t*>(image.data),
                   static_cast<std::size_t>(image.data_size) / sizeof(std::uint16_t));
@@ -295,5 +307,5 @@ ImageBuffer arraw::rawimport::load(const std::filesystem::path& path, Diagnostic
     if (!image) {
         throw std::runtime_error(failureMessage(path, code));
     }
-    return toBuffer(*image, metadata.encoding);
+    return toBuffer(*image, metadata.encoding, metadata.orientation);
 }

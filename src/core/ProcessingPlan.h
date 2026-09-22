@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ColorSpaces.h"
+#include "GeometryPlan.h"
 
 #include <ColorEncoding.h>
 #include <DevelopSettings.h>
@@ -9,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <optional>
 
 namespace arraw {
 
@@ -79,6 +81,9 @@ struct ProcessingPlan {
     /// costs a comparison rather than a branch on a setting (ADR 011).
     float shoulderKnee = std::numeric_limits<float>::infinity();
 
+    /// @brief Resolved geometry when source dimensions and orientation are known.
+    std::optional<GeometryPlan> geometry = std::nullopt;
+
     friend bool operator==(const ProcessingPlan&, const ProcessingPlan&) = default;
 };
 
@@ -96,6 +101,8 @@ struct ProcessingPlan {
 [[nodiscard]] Matrix3 colorMatrixFor(const ColorEncoding& encoding, const ColorSettings& settings);
 
 /// @brief Works out what a photograph's settings mean for its pixels.
+///
+/// Resolves only colour and tone; buffer and Photo overloads also resolve geometry.
 /// @param encoding Encoding the decoded pixels are in.
 /// @param settings Settings to resolve.
 /// @return The plan both backends execute.
@@ -103,6 +110,9 @@ struct ProcessingPlan {
 /// or the settings cannot be resolved against it.
 [[nodiscard]] ProcessingPlan planFor(const ColorEncoding& encoding,
                                      const DevelopSettings& settings);
+
+/// @brief Resolves pointwise processing and geometry against decoded pixels.
+[[nodiscard]] ProcessingPlan planFor(const ImageBuffer& source, const DevelopSettings& settings);
 
 /// @brief Works out what a photograph's document means for its pixels.
 ///

@@ -37,6 +37,9 @@ add_library(arraw STATIC
         include/WhiteBalance.h
         include/DevelopSettings.h
         include/GeometrySettings.h
+        include/ImageOrientation.h
+        src/core/GeometryPlan.h
+        src/core/GeometryPlan.cpp
         include/ToneSettings.h
         src/core/ToneSettings.cpp
         src/core/ColorSpaces.h

@@ -14,7 +14,7 @@ struct DevelopSettings {
     /// @brief White-balance mode, temperature and tint.
     ColorSettings color{};
 
-    /// @brief Orientation, straightening and crop; not yet consumed by rendering.
+    /// @brief Orientation, straightening and crop.
     GeometrySettings geometry{};
 
     /// @brief Exposure, tonal shaping and highlight roll-off.
