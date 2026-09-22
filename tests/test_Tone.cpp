@@ -24,7 +24,8 @@ float luminanceOf(const Colour& colour) {
 
 /// @brief Develops one neutral value through a plan's tone chain.
 float rolled(float value, float amount) {
-    const auto plan = planFor(ColorEncoding{workingEncoding}, {.tone = {.filmicHighlights = amount}});
+    const auto plan =
+        planFor(ColorEncoding{workingEncoding}, {.tone = {.filmicHighlights = amount}});
     return developPixel(plan, {value, value, value})[1];
 }
 
@@ -47,8 +48,9 @@ float toned(float value, DevelopSettings settings) {
 
 /// @brief Shapes one neutral value, with the shoulder out of the way.
 float shaped(float value, float contrast) {
-    const auto plan = planFor(ColorEncoding{workingEncoding},
-                              {.tone = {.contrast = contrast, .filmicHighlights = noFilmicHighlights}});
+    const auto plan =
+        planFor(ColorEncoding{workingEncoding},
+                {.tone = {.contrast = contrast, .filmicHighlights = noFilmicHighlights}});
     return developPixel(plan, {value, value, value})[1];
 }
 
@@ -108,12 +110,12 @@ TEST_CASE("No combination of the tone controls can invert the scale", "[tone]") 
             for (const float highlights : corners) {
                 for (const float blacks : corners) {
                     for (const float whites : corners) {
-                        const auto plan =
-                            planFor(ColorEncoding{workingEncoding}, {.tone = {.contrast = contrast,
-                                                                     .shadows = shadows,
-                                                                     .highlights = highlights,
-                                                                     .blacks = blacks,
-                                                                     .whites = whites}});
+                        const auto plan = planFor(ColorEncoding{workingEncoding},
+                                                  {.tone = {.contrast = contrast,
+                                                            .shadows = shadows,
+                                                            .highlights = highlights,
+                                                            .blacks = blacks,
+                                                            .whites = whites}});
                         float previous = 0.0F;
                         for (int step = 0; step <= 400; ++step) {
                             const float input = static_cast<float>(step) / 100.0F;
@@ -173,8 +175,9 @@ TEST_CASE("Contrast never inverts the tone scale", "[tone]") {
 TEST_CASE("Contrast leaves colour where it was", "[tone]") {
     /// Tone acts on luminance and the colour follows by ratio, so a contrast
     /// control cannot shift a hue (ADR 013).
-    const auto plan = planFor(ColorEncoding{workingEncoding},
-                              {.tone = {.contrast = 100.0F, .filmicHighlights = noFilmicHighlights}});
+    const auto plan =
+        planFor(ColorEncoding{workingEncoding},
+                {.tone = {.contrast = 100.0F, .filmicHighlights = noFilmicHighlights}});
     constexpr Colour source{0.3F, 0.2F, 0.1F};
 
     const Colour developed = developPixel(plan, source);
@@ -283,15 +286,16 @@ TEST_CASE("A neutral highlight stays neutral", "[tone]") {
 TEST_CASE("The plan carries the knee, not the amount", "[tone][plan]") {
     /// Settings are what a photographer sets; a plan is what the pixels need,
     /// and what the pixels need is where the bend starts (ADR 011).
-    REQUIRE(planFor(ColorEncoding{workingEncoding}, {.tone = {.filmicHighlights = 100.0F}}).shoulderKnee ==
-            0.5F);
-    REQUIRE(planFor(ColorEncoding{workingEncoding}, {.tone = {.filmicHighlights = 25.0F}}).shoulderKnee ==
-            0.875F);
+    REQUIRE(planFor(ColorEncoding{workingEncoding}, {.tone = {.filmicHighlights = 100.0F}})
+                .shoulderKnee == 0.5F);
+    REQUIRE(planFor(ColorEncoding{workingEncoding}, {.tone = {.filmicHighlights = 25.0F}})
+                .shoulderKnee == 0.875F);
 
     /// Out of range is clamped rather than refused, like every other setting:
     /// no pixel maths depends on a caller having checked first (ADR 008).
-    REQUIRE(planFor(ColorEncoding{workingEncoding}, {.tone = {.filmicHighlights = 400.0F}}).shoulderKnee ==
-            0.5F);
-    REQUIRE(std::isinf(
-        planFor(ColorEncoding{workingEncoding}, {.tone = {.filmicHighlights = -10.0F}}).shoulderKnee));
+    REQUIRE(planFor(ColorEncoding{workingEncoding}, {.tone = {.filmicHighlights = 400.0F}})
+                .shoulderKnee == 0.5F);
+    REQUIRE(
+        std::isinf(planFor(ColorEncoding{workingEncoding}, {.tone = {.filmicHighlights = -10.0F}})
+                       .shoulderKnee));
 }

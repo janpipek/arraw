@@ -88,6 +88,13 @@ struct ProcessingPlan {
 /// @throws std::invalid_argument if a tone setting is not finite.
 [[nodiscard]] ProcessingPlan tonePlanFor(const ToneSettings& settings);
 
+/// @brief Resolves source primaries and colour settings into the working transform.
+/// @param encoding Encoding the decoded pixels are in.
+/// @param settings Colour adjustments to resolve.
+/// @return The source-to-working matrix including white balance.
+/// @throws std::invalid_argument if the encoding or colour settings cannot be resolved.
+[[nodiscard]] Matrix3 colorMatrixFor(const ColorEncoding& encoding, const ColorSettings& settings);
+
 /// @brief Works out what a photograph's settings mean for its pixels.
 /// @param encoding Encoding the decoded pixels are in.
 /// @param settings Settings to resolve.

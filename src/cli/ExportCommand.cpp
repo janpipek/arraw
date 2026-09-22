@@ -332,8 +332,9 @@ std::optional<ExportRequest> buildRequest(const QCommandLineParser& parser, std:
                      filmicHighlights, err, code) ||
         !readSetting(parser, "exposure", darkestExposure, brightestExposure, exposure, err, code) ||
         !readSetting(parser, "temperature", warmestKelvin, coolestKelvin,
-                     request.settings.temperature, err, code) ||
-        !readSetting(parser, "tint", -tintLimit, tintLimit, request.settings.tint, err, code)) {
+                     request.settings.color.temperature, err, code) ||
+        !readSetting(parser, "tint", -tintLimit, tintLimit, request.settings.color.tint, err,
+                     code)) {
         return std::nullopt;
     }
     request.settings.tone.exposure = exposure.value_or(0.0F);
@@ -346,8 +347,8 @@ std::optional<ExportRequest> buildRequest(const QCommandLineParser& parser, std:
         filmicHighlights.value_or(request.settings.tone.filmicHighlights);
     // Naming either half of a white balance is asking for a custom one; the
     // half left unnamed stays as the camera recorded it.
-    if (request.settings.temperature.has_value() || request.settings.tint.has_value()) {
-        request.settings.whiteBalance = WhiteBalanceMode::Custom;
+    if (request.settings.color.temperature.has_value() || request.settings.color.tint.has_value()) {
+        request.settings.color.whiteBalance = WhiteBalanceMode::Custom;
     }
 
     if (parser.isSet("log-format")) {

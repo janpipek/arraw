@@ -90,7 +90,8 @@ TEST_CASE("A plan resolves from a photograph", "[photo]") {
     /// ADR 012: what a render is planned against is the document, not a
     /// buffer somebody else loaded and a settings struct that travelled
     /// separately.
-    const Photo photo = openPhoto(test::fixture(neutralFixture)).with({.tone = {.exposure = -1.0F}});
+    const Photo photo =
+        openPhoto(test::fixture(neutralFixture)).with({.tone = {.exposure = -1.0F}});
     const ProcessingPlan plan = planFor(photo);
 
     REQUIRE(plan == planFor(photo.metadata().encoding, photo.settings()));

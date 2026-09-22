@@ -50,8 +50,8 @@ TEST_CASE("Converting a RAW is all that happens below the knee", "[develop]") {
     /// stored ramp must arrive as the same ramp in unit float -- with the
     /// highlight roll-off out of the way, since the conversion is what is
     /// under test and the roll-off has a test of its own.
-    const auto image =
-        develop(loadImage(test::fixture(neutralFixture)), {.tone = {.filmicHighlights = noFilmicHighlights}});
+    const auto image = develop(loadImage(test::fixture(neutralFixture)),
+                               {.tone = {.filmicHighlights = noFilmicHighlights}});
     const auto width = image.size().width;
 
     float worst = 0.0F;
@@ -73,7 +73,8 @@ TEST_CASE("Exposure is a doubling per stop", "[develop]") {
     const auto source = test::rainbow({4, 2}, PixelFormat::RgbaU16, workingEncoding);
 
     const auto flat = develop(source, {.tone = {.filmicHighlights = noFilmicHighlights}});
-    const auto lifted = develop(source, {.tone = {.exposure = 1.0F, .filmicHighlights = noFilmicHighlights}});
+    const auto lifted =
+        develop(source, {.tone = {.exposure = 1.0F, .filmicHighlights = noFilmicHighlights}});
     const auto dropped =
         develop(source, {.tone = {.exposure = -1.0F, .filmicHighlights = noFilmicHighlights}});
 
@@ -159,9 +160,9 @@ TEST_CASE("Asking for the light the camera saw changes nothing", "[develop]") {
     const auto asShot = asShotTemperature(*camera);
 
     const auto left = develop(source, {});
-    const auto right = develop(source, {.whiteBalance = WhiteBalanceMode::Custom,
-                                        .temperature = asShot.kelvin,
-                                        .tint = asShot.tint});
+    const auto right = develop(source, {.color = {.whiteBalance = WhiteBalanceMode::Custom,
+                                                  .temperature = asShot.kelvin,
+                                                  .tint = asShot.tint}});
 
     const auto before = left.samples<float>();
     const auto after = right.samples<float>();
@@ -173,10 +174,12 @@ TEST_CASE("Asking for the light the camera saw changes nothing", "[develop]") {
 TEST_CASE("A lower temperature cools the developed photograph", "[develop]") {
     const auto source = loadImage(test::fixture(skewedFixture));
 
-    const auto warm = develop(
-        source, {.whiteBalance = WhiteBalanceMode::Custom, .temperature = 3000.0F, .tint = 0.0F});
-    const auto cool = develop(
-        source, {.whiteBalance = WhiteBalanceMode::Custom, .temperature = 9000.0F, .tint = 0.0F});
+    const auto warm = develop(source, {.color = {.whiteBalance = WhiteBalanceMode::Custom,
+                                                 .temperature = 3000.0F,
+                                                 .tint = 0.0F}});
+    const auto cool = develop(source, {.color = {.whiteBalance = WhiteBalanceMode::Custom,
+                                                 .temperature = 9000.0F,
+                                                 .tint = 0.0F}});
 
     /// Naming a warm light tells arraw to take red back out of the picture.
     const auto warmPixel = pixelAt(warm, 20, 12);
@@ -188,10 +191,12 @@ TEST_CASE("A lower temperature cools the developed photograph", "[develop]") {
 TEST_CASE("Tint moves without disturbing the temperature", "[develop]") {
     const auto source = loadImage(test::fixture(skewedFixture));
 
-    const auto neutral = develop(
-        source, {.whiteBalance = WhiteBalanceMode::Custom, .temperature = 5500.0F, .tint = 0.0F});
-    const auto magenta = develop(
-        source, {.whiteBalance = WhiteBalanceMode::Custom, .temperature = 5500.0F, .tint = 40.0F});
+    const auto neutral = develop(source, {.color = {.whiteBalance = WhiteBalanceMode::Custom,
+                                                    .temperature = 5500.0F,
+                                                    .tint = 0.0F}});
+    const auto magenta = develop(source, {.color = {.whiteBalance = WhiteBalanceMode::Custom,
+                                                    .temperature = 5500.0F,
+                                                    .tint = 40.0F}});
 
     /// A magenta shift is red and blue rising against green. Green is pinned
     /// at 1 in the *sensor's* channels, but the working space's green is a
@@ -212,11 +217,11 @@ TEST_CASE("An unset temperature or tint keeps the camera's own", "[develop]") {
     REQUIRE(camera != nullptr);
     const auto asShot = asShotTemperature(*camera);
 
-    const auto partial =
-        develop(source, {.whiteBalance = WhiteBalanceMode::Custom, .temperature = 6000.0F});
-    const auto spelled = develop(
-        source,
-        {.whiteBalance = WhiteBalanceMode::Custom, .temperature = 6000.0F, .tint = asShot.tint});
+    const auto partial = develop(
+        source, {.color = {.whiteBalance = WhiteBalanceMode::Custom, .temperature = 6000.0F}});
+    const auto spelled = develop(source, {.color = {.whiteBalance = WhiteBalanceMode::Custom,
+                                                    .temperature = 6000.0F,
+                                                    .tint = asShot.tint}});
 
     const auto left = partial.samples<float>();
     const auto right = spelled.samples<float>();
@@ -230,9 +235,9 @@ TEST_CASE("A temperature is refused on a photograph with no sensor", "[develop]"
     /// gets the incremental setting instead, which is not implemented yet.
     const auto source = test::rainbow({2, 2}, PixelFormat::RgbaU16, workingEncoding);
 
-    REQUIRE_THROWS_AS(
-        develop(source, {.whiteBalance = WhiteBalanceMode::Custom, .temperature = 4000.0F}),
-        std::invalid_argument);
+    REQUIRE_THROWS_AS(develop(source, {.color = {.whiteBalance = WhiteBalanceMode::Custom,
+                                                 .temperature = 4000.0F}}),
+                      std::invalid_argument);
 }
 
 TEST_CASE("A file that recorded no white balance still develops from what it got", "[develop]") {
@@ -253,10 +258,11 @@ TEST_CASE("A file that recorded no white balance still develops from what it got
 
     /// Naming only the tint must leave the temperature alone: the result has to
     /// match spelling out the effective temperature by hand.
-    const auto partial = develop(source, {.whiteBalance = WhiteBalanceMode::Custom, .tint = 20.0F});
-    const auto spelled = develop(
-        source,
-        {.whiteBalance = WhiteBalanceMode::Custom, .temperature = effective.kelvin, .tint = 20.0F});
+    const auto partial =
+        develop(source, {.color = {.whiteBalance = WhiteBalanceMode::Custom, .tint = 20.0F}});
+    const auto spelled = develop(source, {.color = {.whiteBalance = WhiteBalanceMode::Custom,
+                                                    .temperature = effective.kelvin,
+                                                    .tint = 20.0F}});
 
     const auto left = partial.samples<float>();
     const auto right = spelled.samples<float>();
@@ -269,7 +275,7 @@ TEST_CASE("Custom with nothing named is the photograph it already was", "[develo
     const auto source = loadImage(test::fixture(skewedNoWbFixture));
 
     const auto asShot = develop(source, {});
-    const auto custom = develop(source, {.whiteBalance = WhiteBalanceMode::Custom});
+    const auto custom = develop(source, {.color = {.whiteBalance = WhiteBalanceMode::Custom}});
 
     const auto left = asShot.samples<float>();
     const auto right = custom.samples<float>();

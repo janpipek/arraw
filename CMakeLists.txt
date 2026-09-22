@@ -30,6 +30,8 @@ qt_standard_project_setup()
 # propagated to consumers through target_link_libraries.
 add_library(arraw STATIC
         include/ColorEncoding.h
+        include/ColorSettings.h
+        src/core/ColorSettings.cpp
         include/Develop.h
         include/Diagnostics.h
         include/WhiteBalance.h

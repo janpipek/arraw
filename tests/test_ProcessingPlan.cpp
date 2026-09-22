@@ -50,8 +50,9 @@ TEST_CASE("White balance is folded into the plan's one transform", "[plan]") {
 
     const auto asShot = planFor(source.encoding(), {});
     const auto custom =
-        planFor(source.encoding(),
-                {.whiteBalance = WhiteBalanceMode::Custom, .temperature = 4000.0F, .tint = 0.0F});
+        planFor(source.encoding(), {.color = {.whiteBalance = WhiteBalanceMode::Custom,
+                                              .temperature = 4000.0F,
+                                              .tint = 0.0F}});
 
     REQUIRE(asShot.toWorking == camera->toWorking);
     REQUIRE_FALSE(custom.toWorking == camera->toWorking);
@@ -60,9 +61,10 @@ TEST_CASE("White balance is folded into the plan's one transform", "[plan]") {
 
 TEST_CASE("A plan refuses what development cannot start from", "[plan]") {
     REQUIRE_THROWS_AS(planFor(ColorEncoding{NamedEncoding::Srgb}, {}), std::invalid_argument);
-    REQUIRE_THROWS_AS(planFor(ColorEncoding{workingEncoding},
-                              {.whiteBalance = WhiteBalanceMode::Custom, .temperature = 4000.0F}),
-                      std::invalid_argument);
+    REQUIRE_THROWS_AS(
+        planFor(ColorEncoding{workingEncoding},
+                {.color = {.whiteBalance = WhiteBalanceMode::Custom, .temperature = 4000.0F}}),
+        std::invalid_argument);
 }
 
 TEST_CASE("Developing a buffer is the chain applied to each pixel", "[plan]") {
