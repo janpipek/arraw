@@ -38,6 +38,13 @@ public:
 };
 ```
 
+> **Note (2026-09-22).** ADR 015 supersedes this interface. It is right for the
+> comparison milestone and wrong for everything after it: requiring CPU pixels
+> on every call means a slider change reads a full-resolution texture back and
+> uploads it again, and a viewport cannot present the result at all. A retained
+> GPU result is a `RenderCheckpoint` whose payload is a device image, and the
+> device that holds it travels with it. The rest of this document stands.
+
 The initial GPU implementation should use QRhi and Qt Shader Tools, as the
 project already targets Qt and the intended texture formats include RGBA16F.
 QRhi types belong in the GPU/application layer; the core library should see
@@ -98,6 +105,24 @@ formats at the upload boundary. The first implementation may accept only
 conversion is tested.
 
 ## Verification
+
+> **Note (2026-09-23).** `arraw-cli gpu-test` is the probe ADR 015 refers to.
+> It creates one backend's device with no fallback, refuses a software
+> rasteriser unless `--allow-software` is given, and checks that an RGBA32F
+> upload and readback is exact bit for bit. The suite cannot run it -- no runner
+> is assumed to have a GPU -- so it is run by hand on each platform we claim.
+> On Linux it needs no display session: unless `QT_QPA_PLATFORM` names another,
+> the CLI runs on its own Qt platform, `arraw-headless` (`src/platform/headless/`,
+> a static plugin whose one real job is a `QVulkanInstance` without surface
+> extensions), because Qt's offscreen platform cannot create Vulkan instances at
+> all. That platform has no OpenGL; `QT_QPA_PLATFORM=xcb` or `wayland` is how to
+> probe OpenGL. `ARRAW_DISABLE_GPU` (any value but empty or `0`) keeps the
+> CLI on a `QCoreApplication` and fails the probe. The separate
+> `arraw-headless-tests` suite runs a Vulkan round trip on that platform, and
+> skips it where the runner has no Vulkan driver.
+> ADR 015's "`struct Impl` defined in the translation unit" is now
+> `arraw::detail::DeviceImageState` in `src/gpu/DeviceImageState.h`, a Qt-free
+> base whose QRhi-texture subclass lives in `src/gpu/GpuContext.cpp`.
 
 The CPU renderer remains the reference implementation. Add small deterministic
 tests that render the same input and plan through both backends and compare

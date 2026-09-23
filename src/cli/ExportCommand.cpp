@@ -1,6 +1,7 @@
 #include "ExportCommand.h"
 
 #include "Cli.h"
+#include "Command.h"
 
 #include <Develop.h>
 #include <DevelopSettings.h>
@@ -170,8 +171,7 @@ private:
 
 /// @brief Reports a usage problem and the exit code that goes with it.
 int usageError(std::ostream& err, const std::string& message) {
-    err << "error: " << message << "\n\nTry 'arraw-cli export --help'.\n";
-    return cli::UsageError;
+    return cli::commandUsageError(err, "export", message);
 }
 
 /// @brief Reads a named option as an integer.

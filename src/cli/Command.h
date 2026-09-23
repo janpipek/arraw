@@ -39,4 +39,11 @@ struct Command {
 /// @return The command, or `nullptr` if no command is called that.
 [[nodiscard]] const Command* findCommand(std::string_view name);
 
+/// @brief Reports a usage problem with one command, pointing at its own help.
+/// @param err Stream the problem is written to.
+/// @param command Word that selects the command.
+/// @param message What was wrong.
+/// @return ::arraw::cli::UsageError.
+int commandUsageError(std::ostream& err, std::string_view command, std::string_view message);
+
 } // namespace arraw::cli

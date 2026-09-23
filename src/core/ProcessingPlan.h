@@ -6,11 +6,14 @@
 #include <ColorEncoding.h>
 #include <DevelopSettings.h>
 #include <Photo.h>
+#include <RenderCheckpoint.h>
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
 #include <optional>
+#include <tuple>
+#include <utility>
 
 namespace arraw {
 
@@ -87,6 +90,59 @@ struct ProcessingPlan {
     friend bool operator==(const ProcessingPlan&, const ProcessingPlan&) = default;
 };
 
+/// @brief Groups the plan's fields by the pass that consumes them.
+///
+/// ADR 011's partition, with the passes that exist today. The plan is still
+/// flat — decode, lens, spots and noise are not stages yet — so this groups
+/// fields rather than blocks, and becomes `std::tie(p.decode, ...)` as each of
+/// those arrives. The grouping is what the prefix comparison folds over, so
+/// there is no per-stage line to forget, only this list to keep honest.
+/// @param plan Plan to view by stage.
+/// @return One tuple element per ::arraw::Stage, in pipeline order.
+[[nodiscard]] inline auto stagesOf(const ProcessingPlan& plan) {
+    return std::make_tuple(std::tie(plan.toWorking, plan.exposureGain, plan.shapesTone,
+                                    plan.contrastSlope, plan.contrastScale, plan.shadowShift,
+                                    plan.highlightShift, plan.blackShift, plan.whiteShift,
+                                    plan.shoulderKnee),
+                           std::tie(plan.geometry));
+}
+
+static_assert(std::tuple_size_v<decltype(stagesOf(std::declval<const ProcessingPlan&>()))> ==
+                  stageCount,
+              "every Stage needs a group in stagesOf, and no group may lack a Stage");
+
+/// @brief Whether two plans agree on everything up to and including a boundary.
+///
+/// What decides that a ::arraw::RenderCheckpoint may still be resumed from, or
+/// its pixels reused. Comparing whole plans would defeat the purpose — nudging
+/// Exposure would discard a result that does not depend on it — so the fold
+/// stops at the checkpoint's boundary (ADR 011).
+///
+/// Exact float equality is sound here: these are values our own code derived
+/// deterministically from the same inputs, not measurements, and the failure
+/// direction is safe, since a NaN never compares equal and simply recomputes.
+///
+/// This only works while the plan genuinely holds everything the stages
+/// consume. That is ADR 009's discipline, and comparing plans is what makes a
+/// violation fail rather than merely be untidy.
+/// @param first One plan.
+/// @param second The other.
+/// @param upTo Last boundary to compare; later stages are not looked at.
+/// @return `true` if @p upTo is a known boundary and every stage up to it
+/// resolved identically.
+[[nodiscard]] inline bool prefixMatches(const ProcessingPlan& first, const ProcessingPlan& second,
+                                        Stage upTo) {
+    const auto left = stagesOf(first);
+    const auto right = stagesOf(second);
+    const auto last = static_cast<std::size_t>(upTo);
+    if (last >= stageCount) {
+        return false;
+    }
+    return [&]<std::size_t... I>(std::index_sequence<I...>) {
+        return ((I > last || std::get<I>(left) == std::get<I>(right)) && ...);
+    }(std::make_index_sequence<stageCount>{});
+}
+
 /// @brief Resolves tone settings into a plan with an identity colour transform.
 /// @param settings Tone adjustments to resolve.
 /// @return Exposure gain and tone coefficients for the pointwise chain.
@@ -103,6 +159,7 @@ struct ProcessingPlan {
 /// @brief Works out what a photograph's settings mean for its pixels.
 ///
 /// Resolves only colour and tone; buffer and Photo overloads also resolve geometry.
+/// This overload carries no source identity and must not be used as a cache key.
 /// @param encoding Encoding the decoded pixels are in.
 /// @param settings Settings to resolve.
 /// @return The plan both backends execute.

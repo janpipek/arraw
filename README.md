@@ -25,6 +25,9 @@ just format    # clang-format owns mechanical formatting
 just fixtures  # regenerate the committed test fixtures (needs uv)
 ```
 
+For containerized agent sessions, the [VibePod overlay](.vibepod/README.md)
+provides the Linux build dependencies and developer tools automatically.
+
 ## Using
 
 ```bash
@@ -34,7 +37,13 @@ arraw-cli export photo.dng -o out/ --format png --bit-depth 16
 arraw-cli export photo.arw -o out/ --exposure -0.5 --temperature 3200   # RAW only
 arraw-cli export photo.arw -o out/ --rotate 2.5 --crop-aspect 3:2
 arraw-cli export photo.arw -o out/ --rotate 90 --crop 0.1,0.2,0.8,0.9
+arraw-cli gpu-test                        # check the GPU backend works on this machine
 ```
+
+On Linux the command line needs no display: it runs on its own headless Qt
+platform, which reaches Vulkan through the driver alone but has no OpenGL (set
+`QT_QPA_PLATFORM=xcb` or `wayland` for that). `ARRAW_DISABLE_GPU=1` keeps it
+off the graphics stack entirely.
 
 Inputs are files rather than directories; your shell expands the wildcards.
 Every input is attempted, so one bad frame does not abandon an overnight batch.
@@ -81,6 +90,7 @@ still unimplemented.
 - `src/core/` — the engine
 - `src/app/` — the Qt application
 - `src/cli/` — the command line
+- `src/platform/headless/` — the command line's display-free Qt platform (Linux)
 - `docs/adr/` — why each hard-to-reverse choice was made
 - `docs/desired-features.md` — the feature brief, from a photographer's view
 

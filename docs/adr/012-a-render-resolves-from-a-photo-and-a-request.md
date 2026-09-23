@@ -67,7 +67,9 @@ input, never a cache entry.** Tests build buffers, and one day something will
 arrive from somewhere that is not a file. "Here are pixels, start after decode"
 is what `resumeFrom` means, so this needs no second door into the pipeline —
 but such a checkpoint has no provenance anyone can verify, so nothing may be
-cached from it or reused against it.
+cached from it or reused against it. ADR 015 adds one further condition for a
+checkpoint whose pixels live on a graphics device: it is an input only to a
+render on the device that holds them.
 
 ## Consequences
 
@@ -93,6 +95,14 @@ cached from it or reused against it.
   this ADR: a render request that reaches the plan's blocks, decoding as a
   stage rather than a call a caller makes first, and the processor that caches
   what those blocks describe.
+- **The decode block is what keeps a GPU cache from showing the wrong
+  photograph.** A review of the GPU plan observed that `planFor(encoding,
+  settings)` does not identify the source pixels, so two photographs with the
+  same metadata and settings resolve equal plans and a texture reused on plan
+  equality would display stale pixels. That is true of the narrow overload and
+  false of this decision: the file and its stamp are compared by value with
+  everything else. ADR 015 draws the practical line — no cache may be keyed on
+  a plan resolved from the narrow overload.
 - **A snapshot stays cheap only while develop state stays light.** When brush
   rasters and long spot lists live in it, a snapshot shares them rather than
   copying, and the plan compares them by revision, as ADR 011 already says for

@@ -2,8 +2,10 @@
 
 #include "Command.h"
 
+#include <QByteArray>
 #include <QString>
 #include <QStringList>
+#include <QtGlobal>
 
 #include <iomanip>
 #include <ostream>
@@ -40,7 +42,8 @@ void writeHelp(std::ostream& stream) {
               "\n";
     listCommands(stream);
     stream << "\n"
-              "Run 'arraw-cli <command> --help' for a command's own options.\n";
+              "Run 'arraw-cli <command> --help' for a command's own options.\n"
+              "Set ARRAW_DISABLE_GPU=1 to run without loading any graphics stack.\n";
 }
 
 /// @brief Reports a usage problem, listing what could have been typed instead.
@@ -114,4 +117,13 @@ int arraw::cli::run(const std::vector<std::string>& arguments, std::ostream& out
         forwarded << QString::fromStdString(argument);
     }
     return command->run(forwarded, out, err);
+}
+
+bool arraw::cli::disablesGpu(const char* value) noexcept {
+    return value != nullptr && *value != '\0' && std::string_view(value) != "0";
+}
+
+bool arraw::cli::gpuDisabled() {
+    // An unset variable reads as a null QByteArray, whose data is still "".
+    return disablesGpu(qgetenv(disableGpuVariable).constData());
 }

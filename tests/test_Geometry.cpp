@@ -13,8 +13,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <array>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <numbers>
@@ -55,9 +55,14 @@ void requireValidCrop(const GeometryPlan& plan) {
 } // namespace
 
 TEST_CASE("All eight camera orientations rearrange exact samples", "[geometry]") {
-    const std::array<std::array<int, 6>, 8> expected{{
-        {0, 1, 2, 3, 4, 5}, {2, 1, 0, 5, 4, 3}, {5, 4, 3, 2, 1, 0}, {3, 4, 5, 0, 1, 2},
-        {0, 3, 1, 4, 2, 5}, {3, 0, 4, 1, 5, 2}, {5, 2, 4, 1, 3, 0}, {2, 5, 1, 4, 0, 3}}};
+    const std::array<std::array<int, 6>, 8> expected{{{0, 1, 2, 3, 4, 5},
+                                                      {2, 1, 0, 5, 4, 3},
+                                                      {5, 4, 3, 2, 1, 0},
+                                                      {3, 4, 5, 0, 1, 2},
+                                                      {0, 3, 1, 4, 2, 5},
+                                                      {3, 0, 4, 1, 5, 2},
+                                                      {5, 2, 4, 1, 3, 0},
+                                                      {2, 5, 1, 4, 0, 3}}};
     for (int tag = 1; tag <= 8; ++tag) {
         CAPTURE(tag);
         const auto source = labelled({3, 2}, static_cast<ImageOrientation>(tag));
@@ -90,14 +95,16 @@ TEST_CASE("User rotation and flips follow camera orientation", "[geometry]") {
     const auto flipped = develop(source, settings);
     const int expected[]{0, 3, 1, 4, 2, 5};
     for (std::size_t index = 0; index < 6; ++index) {
-        REQUIRE(flipped.samples<float>()[index * 4] == source.samples<float>()[expected[index] * 4]);
+        REQUIRE(flipped.samples<float>()[index * 4] ==
+                source.samples<float>()[expected[index] * 4]);
     }
 
     settings.geometry.flipVertical = true;
     const auto both = develop(source, settings);
     const int bothExpected[]{2, 5, 1, 4, 0, 3};
     for (std::size_t index = 0; index < 6; ++index) {
-        REQUIRE(both.samples<float>()[index * 4] == source.samples<float>()[bothExpected[index] * 4]);
+        REQUIRE(both.samples<float>()[index * 4] ==
+                source.samples<float>()[bothExpected[index] * 4]);
     }
 }
 
@@ -178,11 +185,13 @@ TEST_CASE("Geometry mappings round trip and crops contain no empty wedges", "[ge
                 settings.rotation = QuarterTurn::Clockwise90;
                 settings.flipHorizontal = true;
                 settings.straighten = angle;
-                const auto plan = geometryPlanFor(size, static_cast<ImageOrientation>(orientation), settings);
+                const auto plan =
+                    geometryPlanFor(size, static_cast<ImageOrientation>(orientation), settings);
                 CAPTURE(orientation, angle, size.width, size.height);
                 requireValidCrop(plan);
-                for (const SourcePoint point : {SourcePoint{0, 0}, SourcePoint{0.5, 0.5},
-                                                SourcePoint{double(size.width), double(size.height)}}) {
+                for (const SourcePoint point :
+                     {SourcePoint{0, 0}, SourcePoint{0.5, 0.5},
+                      SourcePoint{double(size.width), double(size.height)}}) {
                     const auto restored = plan.toSource(plan.toUpright(point));
                     REQUIRE(std::abs(restored.x - point.x) < 1e-8);
                     REQUIRE(std::abs(restored.y - point.y) < 1e-8);
@@ -283,10 +292,14 @@ TEST_CASE("Qt orientation metadata survives decoding without rearranging pixels"
     QImage source(5, 3, QImage::Format_RGB32);
     source.fill(Qt::red);
     const QImageIOHandler::Transformation transforms[]{
-        QImageIOHandler::TransformationNone, QImageIOHandler::TransformationMirror,
-        QImageIOHandler::TransformationRotate180, QImageIOHandler::TransformationFlip,
-        QImageIOHandler::TransformationFlipAndRotate90, QImageIOHandler::TransformationRotate90,
-        QImageIOHandler::TransformationMirrorAndRotate90, QImageIOHandler::TransformationRotate270};
+        QImageIOHandler::TransformationNone,
+        QImageIOHandler::TransformationMirror,
+        QImageIOHandler::TransformationRotate180,
+        QImageIOHandler::TransformationFlip,
+        QImageIOHandler::TransformationFlipAndRotate90,
+        QImageIOHandler::TransformationRotate90,
+        QImageIOHandler::TransformationMirrorAndRotate90,
+        QImageIOHandler::TransformationRotate270};
     for (int index = 0; index < 8; ++index) {
         const auto path = directory.file("oriented.tif");
         QImageWriter writer(QString::fromStdString(path.string()), "tiff");

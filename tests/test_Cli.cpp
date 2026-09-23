@@ -10,6 +10,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QString>
+#include <QtGlobal>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
@@ -22,6 +23,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 using namespace arraw;
@@ -59,6 +61,46 @@ std::filesystem::path writeRubbish(const test::TempDir& directory, std::string_v
 
 constexpr std::string_view card = "testcard-61x41-srgb8.png";
 
+/// @brief One environment variable set or unset for a scope, and restored after.
+///
+/// The GPU switch is read from the environment, so the tests that pin it down
+/// set it themselves rather than inherit whatever the runner has.
+class ScopedEnvironment {
+public:
+    /// @brief Sets or unsets @p name until the scope ends.
+    /// @param name Variable to change.
+    /// @param value New value, or `nullptr` to unset it.
+    ScopedEnvironment(const char* name, const char* value)
+        : name_(name), wasSet_(qEnvironmentVariableIsSet(name)), previous_(qgetenv(name)) {
+        if (value == nullptr) {
+            qunsetenv(name_);
+        } else {
+            qputenv(name_, value);
+        }
+    }
+
+    ScopedEnvironment(const ScopedEnvironment&) = delete;
+    ScopedEnvironment& operator=(const ScopedEnvironment&) = delete;
+
+    ~ScopedEnvironment() {
+        if (wasSet_) {
+            qputenv(name_, previous_);
+        } else {
+            qunsetenv(name_);
+        }
+    }
+
+private:
+    /// @brief Variable changed.
+    const char* name_;
+
+    /// @brief Whether it was set before, if only to an empty value.
+    bool wasSet_;
+
+    /// @brief Value it had before.
+    QByteArray previous_;
+};
+
 } // namespace
 
 TEST_CASE("The top-level help lists every command, on stdout", "[cli]") {
@@ -94,6 +136,113 @@ TEST_CASE("A command's help carries its own options", "[cli]") {
     REQUIRE_THAT(result.out, ContainsSubstring("--overwrite"));
     REQUIRE_THAT(result.out, ContainsSubstring("export <input>..."));
     REQUIRE(result.err.empty());
+}
+
+TEST_CASE("The GPU probe is listed and carries its own help", "[cli][gpu]") {
+    REQUIRE_THAT(invoke({"--help"}).out, ContainsSubstring("gpu-test"));
+
+    const auto asked = GENERATE(std::vector<std::string>{"gpu-test", "--help"},
+                                std::vector<std::string>{"gpu-test", "--help-all"},
+                                std::vector<std::string>{"help", "gpu-test"});
+    CAPTURE(asked);
+    const auto result = invoke(asked);
+
+    /// Help is text: it is answered without making a device, so it works under
+    /// the suite's QCoreApplication as it does on a machine with no GPU.
+    REQUIRE(result.code == cli::Success);
+    REQUIRE_THAT(result.out, ContainsSubstring("--backend"));
+    REQUIRE_THAT(result.out, ContainsSubstring("--allow-software"));
+    REQUIRE_THAT(result.out, ContainsSubstring("--size"));
+    REQUIRE_THAT(result.out, ContainsSubstring("gpu-test"));
+    REQUIRE(result.err.empty());
+}
+
+TEST_CASE("A wrong GPU probe command line exits 2 before any device is made", "[cli][gpu]") {
+    const auto arguments = GENERATE(std::vector<std::string>{"gpu-test", "--backend", "nonsense"},
+                                    std::vector<std::string>{"gpu-test", "--backend", "null"},
+                                    std::vector<std::string>{"gpu-test", "--size", "0"},
+                                    std::vector<std::string>{"gpu-test", "--size", "-1"},
+                                    std::vector<std::string>{"gpu-test", "--size", "8193"},
+                                    std::vector<std::string>{"gpu-test", "--size", "1.5"},
+                                    std::vector<std::string>{"gpu-test", "--size", "huge"},
+                                    std::vector<std::string>{"gpu-test", "photo.arw"},
+                                    std::vector<std::string>{"gpu-test", "--nonsense"});
+    CAPTURE(arguments);
+    const auto result = invoke(arguments);
+
+    /// Checked before a device is created, so the suite's QCoreApplication --
+    /// which cannot make one -- would turn a missed check into exit 1, not 2.
+    REQUIRE(result.code == cli::UsageError);
+    REQUIRE_THAT(result.err, ContainsSubstring("gpu-test --help"));
+    REQUIRE(result.out.empty());
+    if (arguments[1] == "--size") {
+        REQUIRE_THAT(result.err, ContainsSubstring("--size"));
+    } else if (arguments[1] == "--backend") {
+        REQUIRE_THAT(result.err, ContainsSubstring("'" + arguments[2] + "'"));
+    }
+}
+
+TEST_CASE("An unknown backend is named and the real ones listed", "[cli][gpu]") {
+    const auto result = invoke({"gpu-test", "--backend", "nonsense"});
+
+    REQUIRE(result.code == cli::UsageError);
+    REQUIRE_THAT(result.err, ContainsSubstring("'nonsense'"));
+    REQUIRE_THAT(result.err, ContainsSubstring("vulkan"));
+    REQUIRE_THAT(result.err, ContainsSubstring("d3d11"));
+}
+
+TEST_CASE("Without a device the GPU probe fails rather than falls back", "[cli][gpu]") {
+    /// The suite runs under a QCoreApplication, which has no platform plugin to
+    /// make a device through: the honest answer is a failure that says why,
+    /// never a probe that quietly passes on the CPU (ADR 015). Unset, empty and
+    /// 0 all leave the GPU on, so each reaches the device and fails there.
+    for (const char* value : {static_cast<const char*>(nullptr), "", "0"}) {
+        CAPTURE(value == nullptr ? "(unset)" : value);
+        const ScopedEnvironment enabled(cli::disableGpuVariable, value);
+        const auto result = invoke({"gpu-test", "--size", "1"});
+
+        REQUIRE(result.code == cli::Failed);
+        REQUIRE_THAT(result.err, ContainsSubstring("error:"));
+        REQUIRE_THAT(result.err, ContainsSubstring("QGuiApplication"));
+        REQUIRE(result.out.empty());
+    }
+}
+
+TEST_CASE("A GPU turned off by ARRAW_DISABLE_GPU fails the probe and says so", "[cli][gpu]") {
+    const ScopedEnvironment disabled(cli::disableGpuVariable, "1");
+    const auto result = invoke({"gpu-test", "--size", "1"});
+
+    /// Refused before a device is attempted, so the error names the switch
+    /// rather than the missing QGuiApplication it implies.
+    REQUIRE(result.code == cli::Failed);
+    REQUIRE_THAT(result.err, ContainsSubstring("error:"));
+    REQUIRE_THAT(result.err, ContainsSubstring("ARRAW_DISABLE_GPU"));
+    REQUIRE_THAT(result.err, !ContainsSubstring("QGuiApplication"));
+    REQUIRE(result.out.empty());
+
+    /// The switch turns off the device, not the command line: help is still
+    /// text, and a wrong flag is still a usage error.
+    REQUIRE(invoke({"gpu-test", "--help"}).code == cli::Success);
+    REQUIRE(invoke({"gpu-test", "--size", "0"}).code == cli::UsageError);
+}
+
+TEST_CASE("Any value of ARRAW_DISABLE_GPU but empty or 0 turns the GPU off", "[cli][gpu]") {
+    REQUIRE(std::string_view(cli::disableGpuVariable) == "ARRAW_DISABLE_GPU");
+
+    REQUIRE_FALSE(cli::disablesGpu(nullptr));
+    REQUIRE_FALSE(cli::disablesGpu(""));
+    REQUIRE_FALSE(cli::disablesGpu("0"));
+
+    /// No guessing at what a word meant: "false" and "00" are values too.
+    for (const char* value : {"1", "yes", "true", "false", "off", "00", " 0", "0 "}) {
+        CAPTURE(value);
+        REQUIRE(cli::disablesGpu(value));
+    }
+}
+
+TEST_CASE("The top-level help mentions the GPU switch", "[cli][gpu]") {
+    REQUIRE_THAT(invoke({"--help"}).out, ContainsSubstring("ARRAW_DISABLE_GPU"));
+    REQUIRE_THAT(invoke({"gpu-test", "--help"}).out, ContainsSubstring("ARRAW_DISABLE_GPU"));
 }
 
 TEST_CASE("A reserved command says it is coming, not that it is unknown", "[cli]") {

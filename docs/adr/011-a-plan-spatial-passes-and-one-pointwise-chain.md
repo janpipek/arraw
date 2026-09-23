@@ -99,7 +99,9 @@ carrying a comment asking for somewhere to say so.
 **A render can resume, and what it resumes from carries its own provenance.**
 `stopAfter` produces a `RenderCheckpoint` — pixels, the boundary they were
 taken at, and the part of the plan that made them — and a request can
-`resumeFrom` one. Not a boundary number: handing over a bare buffer and a stage
+`resumeFrom` one. ADR 015 says where those pixels may live: on the host as an
+`ImageBuffer`, or on a graphics device, which is the same idea with the same
+validity rule. Not a boundary number: handing over a bare buffer and a stage
 is how a stale render happens, silently and in colour. Only pass boundaries are
 checkpoints, for the reason above. ADR 012 says what a plan is resolved from,
 and therefore what a checkpoint's provenance amounts to.
@@ -158,6 +160,17 @@ There is no per-stage line to forget, and the list itself is guarded twice: a
 does too. That is the arrangement ADR 008 already uses for the descriptor
 table.
 
+> **Note (2026-09-22).** ADR 015 builds this fold, and the shape above is ahead
+> of the code in two ways. The plan is still flat — none of `decode`, `lens`,
+> `spots` or `noise` is a block yet — so `stagesOf` groups *fields* by the pass
+> that consumes them and grows into the partition above as each block arrives.
+> And `Stage` names the boundaries that exist, which today are `Pointwise` and
+> `Geometry`. The fold, the tuple-size `static_assert` and the argument for
+> exact float comparison are all as written here. The `__cpp_reflection` guard
+> is not in place: no compiler we build with supports it, so a field added to
+> the plan and forgotten here still compiles, and a test asserting that a
+> full-depth `prefixMatches` agrees with `operator==` stands in for it.
+
 That partition also makes structural a property currently held by a comment:
 ADR 007 has the demosaic use the as-shot multipliers so that the temperature
 slider does not invalidate the most expensive cache in the program. With the
@@ -194,6 +207,9 @@ request" keeps its meaning.
 - **`resumeFrom`, `RenderCheckpoint` and the stage-partitioned plan are decided
   here and built with the processor that caches them** — ADR 007's promotion
   path, where callers stop resuming by hand and simply call `render` again.
+  ADR 015 brought part of that forward: `RenderCheckpoint` and the prefix fold
+  are built, because deciding where GPU pixels live needed them to be real,
+  while `stopAfter` and `resumeFrom` still wait for the processor.
 - **A stage's kind is part of its definition.** Anything pointwise that later
   needs a neighbour, such as clarity or a local contrast, becomes a spatial
   stage and a pass of its own rather than being smuggled into the chain.
