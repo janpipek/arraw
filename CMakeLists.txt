@@ -119,6 +119,7 @@ add_library(arraw STATIC
         src/core/WhiteBalance.cpp
         include/ImageBuffer.h
         include/ImageExport.h
+        include/EditSession.h
         include/Photo.h
         src/core/Photo.cpp
         src/core/ImageBuffer.cpp
@@ -220,6 +221,10 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 
 add_executable(arraw-ui src/app/main.cpp
+        src/app/DebugDiagnostics.cpp
+        src/app/DebugDiagnostics.h
+        src/app/DisplayImage.cpp
+        src/app/DisplayImage.h
         src/app/ui/MainWindow.cpp
         src/app/ui/MainWindow.h)
 arraw_enable_warnings(arraw-ui)
