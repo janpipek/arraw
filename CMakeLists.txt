@@ -78,7 +78,8 @@ target_include_directories(arraw PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 # The GPU module's own headers name no graphics type — the QRhi texture lives
 # behind DeviceImageState, whose device-side subclass is arraw-gpu's — so core
 # may hold a device image without Qt reaching either the engine's headers or the
-# public API. Only arraw-gpu links Qt6::GuiPrivate.
+# public API. Only arraw-gpu links Qt6::GuiPrivate, and the tests that drive its
+# QRhi device directly (tests/test_GpuDevice.cpp).
 target_include_directories(arraw PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/gpu)
 # Qt GUI holds QImage and the image codecs (QImageReader/QImageWriter); it needs
 # no display and no QGuiApplication, only a QCoreApplication for plugin paths.
@@ -96,7 +97,9 @@ set_target_properties(arraw PROPERTIES AUTOMOC OFF)
 # Qt type, so the dependency stays private.
 add_library(arraw-gpu STATIC
         src/gpu/GpuContext.h
-        src/gpu/GpuContext.cpp)
+        src/gpu/GpuContext.cpp
+        src/gpu/GpuDevice.h
+        src/gpu/GpuDevice.cpp)
 arraw_enable_warnings(arraw-gpu)
 target_include_directories(arraw-gpu PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/gpu)
 target_link_libraries(arraw-gpu PUBLIC arraw PRIVATE Qt6::Gui Qt6::GuiPrivate)

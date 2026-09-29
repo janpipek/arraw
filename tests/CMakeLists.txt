@@ -23,6 +23,7 @@ add_executable(arraw-tests
         test_Geometry.cpp
         test_Diagnostics.cpp
         test_GpuContext.cpp
+        test_GpuDevice.cpp
         test_ImageBuffer.cpp
         test_ImageExport.cpp
         test_Photo.cpp
@@ -47,7 +48,11 @@ target_include_directories(arraw-tests PRIVATE
 target_compile_definitions(arraw-tests
         PRIVATE ARRAW_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 # Catch2 (not Catch2WithMain): main.cpp runs the session inside a QCoreApplication.
-target_link_libraries(arraw-tests PRIVATE arraw arraw-gpu arraw-cli-core Catch2::Catch2 Qt6::Gui)
+# GuiPrivate for QRhi, which test_GpuDevice drives directly on its Null backend:
+# the one place outside arraw-gpu that names it, because the failures it covers
+# cannot be caused through GpuContext.
+target_link_libraries(arraw-tests
+        PRIVATE arraw arraw-gpu arraw-cli-core Catch2::Catch2 Qt6::Gui Qt6::GuiPrivate)
 set_target_properties(arraw-tests PROPERTIES AUTOMOC OFF)
 
 # Registers each TEST_CASE with CTest individually, so `ctest -R` can select one.
