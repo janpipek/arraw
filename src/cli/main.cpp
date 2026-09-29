@@ -5,7 +5,7 @@
 #include <QtGlobal>
 
 #if defined(ARRAW_HEADLESS_PLATFORM)
-#include <HeadlessPlatform.h>
+#include "HeadlessPlatform.h"
 
 #include <QtPlugin>
 #endif

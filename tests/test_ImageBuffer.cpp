@@ -1,4 +1,4 @@
-#include "ImageBuffer.h"
+#include <ImageBuffer.h>
 
 #include <catch2/catch_test_macros.hpp>
 

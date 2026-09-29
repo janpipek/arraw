@@ -1,10 +1,10 @@
-#include "Develop.h"
 #include "GeometryPlan.h"
-#include "ImageImport.h"
 #include "ProcessingPlan.h"
-
 #include "support/Fixtures.h"
 #include "support/TempDir.h"
+
+#include <Develop.h>
+#include <ImageImport.h>
 
 #include <QImage>
 #include <QImageIOHandler>

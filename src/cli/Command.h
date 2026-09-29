@@ -2,12 +2,12 @@
 
 #include "Cli.h"
 
+#include <QtCore/qcontainerfwd.h>
+
 #include <iosfwd>
 #include <span>
 #include <string>
 #include <string_view>
-
-#include <QtCore/qcontainerfwd.h>
 
 class QCommandLineParser;
 

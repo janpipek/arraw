@@ -1,4 +1,4 @@
-#include <HeadlessPlatform.h>
+#include "HeadlessPlatform.h"
 
 #include <QGuiApplication>
 #include <QtGlobal>

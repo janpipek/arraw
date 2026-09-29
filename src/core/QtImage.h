@@ -1,11 +1,11 @@
 #pragma once
 
+#include <ImageBuffer.h>
+
 #include <QColorSpace>
 #include <QImage>
 
 #include <optional>
-
-#include <ImageBuffer.h>
 
 /// @brief Conversions between arraw's image types and Qt's.
 ///

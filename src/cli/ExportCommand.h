@@ -2,11 +2,11 @@
 
 #include "Cli.h"
 
-#include <iosfwd>
-
 #include <GeometrySettings.h>
 
 #include <QtCore/qcontainerfwd.h>
+
+#include <iosfwd>
 
 namespace arraw::cli {
 

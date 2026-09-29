@@ -1,7 +1,7 @@
-#include "ImageExport.h"
-
 #include "support/TempDir.h"
 #include "support/TestImages.h"
+
+#include <ImageExport.h>
 
 #include <QColor>
 #include <QColorSpace>

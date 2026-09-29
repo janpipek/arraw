@@ -1,9 +1,9 @@
-#include "Develop.h"
-#include "ImageImport.h"
-#include "WhiteBalance.h"
-
 #include "support/Fixtures.h"
 #include "support/TestImages.h"
+
+#include <Develop.h>
+#include <ImageImport.h>
+#include <WhiteBalance.h>
 
 #include <catch2/catch_test_macros.hpp>
 

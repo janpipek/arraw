@@ -1,10 +1,10 @@
 #pragma once
 
-#include <filesystem>
-
 #include <Diagnostics.h>
 #include <ImageBuffer.h>
 #include <ImageImport.h>
+
+#include <filesystem>
 
 /// @brief RAW decoding, over LibRaw.
 ///

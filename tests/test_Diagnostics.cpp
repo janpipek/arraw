@@ -1,8 +1,7 @@
-#include "Diagnostics.h"
-
-#include "ImageImport.h"
-
 #include "support/Fixtures.h"
+
+#include <Diagnostics.h>
+#include <ImageImport.h>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>

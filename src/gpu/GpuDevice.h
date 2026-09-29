@@ -3,7 +3,6 @@
 #include "DeviceImage.h"
 
 #include <QOffscreenSurface>
-
 #include <rhi/qrhi.h>
 
 #include <functional>

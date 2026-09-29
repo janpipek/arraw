@@ -1,8 +1,8 @@
 #pragma once
 
+#include "DeviceImage.h"
 #include "ProcessingPlan.h"
 
-#include <DeviceImage.h>
 #include <ImageBuffer.h>
 #include <RenderCheckpoint.h>
 

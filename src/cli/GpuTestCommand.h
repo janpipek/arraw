@@ -2,9 +2,9 @@
 
 #include "Cli.h"
 
-#include <iosfwd>
-
 #include <QtCore/qcontainerfwd.h>
+
+#include <iosfwd>
 
 namespace arraw::cli {
 

@@ -1,11 +1,11 @@
 #pragma once
 
-#include <filesystem>
-#include <utility>
-
 #include <DevelopSettings.h>
 #include <Diagnostics.h>
 #include <ImageImport.h>
+
+#include <filesystem>
+#include <utility>
 
 namespace arraw {
 

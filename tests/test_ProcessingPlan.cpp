@@ -1,10 +1,9 @@
 #include "ProcessingPlan.h"
-
-#include "Develop.h"
-#include "ImageImport.h"
-
 #include "support/Fixtures.h"
 #include "support/TestImages.h"
+
+#include <Develop.h>
+#include <ImageImport.h>
 
 #include <catch2/catch_test_macros.hpp>
 

@@ -1,7 +1,6 @@
 #include "Cli.h"
 #include "Command.h"
 #include "ExportCommand.h"
-
 #include "support/Fixtures.h"
 #include "support/TempDir.h"
 

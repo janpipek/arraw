@@ -1,9 +1,9 @@
-#include "ImageExport.h"
-#include "ImageImport.h"
-
 #include "support/Fixtures.h"
 #include "support/ImageCompare.h"
 #include "support/TempDir.h"
+
+#include <ImageExport.h>
+#include <ImageImport.h>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>

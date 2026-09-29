@@ -11,7 +11,6 @@
 #include <QString>
 #include <QThread>
 #include <QVersionNumber>
-
 #include <rhi/qrhi.h>
 
 #include <atomic>

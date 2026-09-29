@@ -2,10 +2,10 @@
 
 #include "Cli.h"
 #include "Command.h"
+#include "GpuContext.h"
 #include "StreamDiagnostics.h"
 
 #include <Diagnostics.h>
-#include <GpuContext.h>
 #include <ImageBuffer.h>
 #include <ImageOrientation.h>
 

@@ -1,9 +1,9 @@
 #pragma once
 
-#include <optional>
-
 #include <DevelopSettings.h>
 #include <ImageBuffer.h>
+
+#include <optional>
 
 namespace arraw {
 

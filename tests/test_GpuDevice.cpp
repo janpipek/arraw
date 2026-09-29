@@ -1,4 +1,4 @@
-#include <GpuDevice.h>
+#include "GpuDevice.h"
 
 #include <rhi/qrhi.h>
 

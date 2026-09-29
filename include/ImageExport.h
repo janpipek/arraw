@@ -1,9 +1,9 @@
 #pragma once
 
+#include <ImageBuffer.h>
+
 #include <filesystem>
 #include <optional>
-
-#include <ImageBuffer.h>
 
 namespace arraw {
 /// @brief Supported image file formats.

@@ -1,5 +1,5 @@
-#include <GpuContext.h>
-#include <HeadlessPlatform.h>
+#include "GpuContext.h"
+#include "HeadlessPlatform.h"
 
 #include <ColorEncoding.h>
 #include <ImageBuffer.h>

@@ -46,6 +46,14 @@ Code style:
 - .h (public in include, otherwise in src), .cpp files semantically organised
 - `clang-format` owns mechanical C++ formatting. Run `just format` to avoid complex shell commands
   changed for the current task; use `just format-check` to verify formatting without changes.
+- Includes: spelling says where a header lives, groups say how far away it is.
+  - `"..."` for the file's own header and any header under `src/` or `tests/`
+    (including another component's private one, e.g. `"GpuContext.h"`, `"support/Fixtures.h"`).
+  - `<...>` for public arraw headers in `include/` (e.g. `<Photo.h>`), Qt, other libraries, std.
+  - Groups, separated by a blank line, in this order: own header; repo-private; public arraw;
+    Qt; other third-party (Catch2, LibRaw, ...); standard library.
+  - `.clang-format` enforces grouping and order via `just format`, but it can't tell a private
+    header from a public one by name, so choosing quotes vs angle brackets is up to you.
 - Comments in Doxygen style, /// rather than /*. All briefs are noun-forms for classes and fields,
   verb forms for methods and functions (exception: booleans)
 

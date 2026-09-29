@@ -12,6 +12,21 @@ AllowShortFunctionsOnASingleLine: Empty
 AllowShortIfStatementsOnASingleLine: Never
 AllowShortLoopsOnASingleLine: false
 SortIncludes: CaseSensitive
-IncludeBlocks: Preserve
+# Include order, one blank-line-separated group each (see AGENTS.md): the
+# file's own header; repo-private headers, quoted; public arraw headers from
+# include/; Qt; other third-party libraries; the standard library. Categories
+# match in the order listed, and Priority sets the output order.
+IncludeBlocks: Regroup
+IncludeCategories:
+  - Regex: '^"'
+    Priority: 1
+  - Regex: '^<[A-Z][A-Za-z0-9]*\.h>$'
+    Priority: 2
+  - Regex: '^<(Q[A-Za-z0-9]*|Qt[A-Za-z]*/.*|qpa/.*|rhi/.*)>$'
+    Priority: 3
+  - Regex: '^<[a-z_0-9]+>$'
+    Priority: 5
+  - Regex: '.*'
+    Priority: 4
 NamespaceIndentation: None
 AccessModifierOffset: -4

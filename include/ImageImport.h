@@ -1,9 +1,9 @@
 #pragma once
 
-#include <filesystem>
-
 #include <Diagnostics.h>
 #include <ImageBuffer.h>
+
+#include <filesystem>
 
 namespace arraw {
 

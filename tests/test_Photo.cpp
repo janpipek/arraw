@@ -1,9 +1,8 @@
-#include "Photo.h"
-
 #include "ProcessingPlan.h"
-
 #include "support/Fixtures.h"
 #include "support/TempDir.h"
+
+#include <Photo.h>
 
 #include <catch2/catch_test_macros.hpp>
 
