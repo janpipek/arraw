@@ -189,14 +189,14 @@ static_assert(std::tuple_size_v<decltype(stagesOf(std::declval<const ProcessingP
 /// acted there would put its whole range in the highlights (ADR 010).
 /// @param luminance Linear luminance, zero or above.
 /// @return The same brightness, perceptually spaced.
-[[nodiscard]] constexpr float toPerceptual(float luminance) {
+[[nodiscard]] inline float toPerceptual(float luminance) {
     return std::pow(luminance, 1.0F / 2.2F);
 }
 
 /// @brief Returns a perceptual value to scene-linear luminance.
 /// @param value Perceptually spaced brightness.
 /// @return The linear luminance it stands for.
-[[nodiscard]] constexpr float toLinear(float value) {
+[[nodiscard]] inline float toLinear(float value) {
     return std::pow(value, 2.2F);
 }
 
@@ -246,7 +246,7 @@ inline constexpr float greyPivot = 0.45865646F;
 /// @param plan Resolved settings.
 /// @param luminance Linear luminance to shape.
 /// @return The shaped linear luminance.
-[[nodiscard]] constexpr float shapeLuminance(const ProcessingPlan& plan, float luminance) {
+[[nodiscard]] inline float shapeLuminance(const ProcessingPlan& plan, float luminance) {
     float value = toPerceptual(luminance);
     value = plan.contrastScale * std::pow(value, plan.contrastSlope);
 
