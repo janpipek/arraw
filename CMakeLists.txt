@@ -25,8 +25,54 @@ find_package(Qt6 6.10 REQUIRED COMPONENTS Core CorePrivate Gui GuiPrivate Widget
 # decode the same file differently from one built with it, which is the failure
 # mode ADR 005 exists to prevent. Prefer the reentrant pkg-config module when
 # LibRaw ships it; some distributions expose only the generic libraw module.
-find_package(PkgConfig REQUIRED)
-pkg_search_module(LibRaw REQUIRED IMPORTED_TARGET libraw_r libraw)
+# Windows has no pkg-config, so find vcpkg's reentrant build directly (its
+# CMake package would drag in an OpenMP lookup that clang-cl-style setups fail).
+if(WIN32)
+    find_library(LIBRAW_LIB_RELEASE NAMES raw_r REQUIRED)
+    find_library(LIBRAW_LIB_DEBUG NAMES raw_rd REQUIRED)
+    find_path(LIBRAW_INCLUDE_DIR libraw/libraw.h REQUIRED)
+    add_library(arraw-libraw INTERFACE)
+    target_link_libraries(arraw-libraw INTERFACE
+            "$<IF:$<CONFIG:Debug>,${LIBRAW_LIB_DEBUG},${LIBRAW_LIB_RELEASE}>")
+    target_include_directories(arraw-libraw INTERFACE ${LIBRAW_INCLUDE_DIR})
+    set(ARRAW_LIBRAW arraw-libraw)
+else()
+    find_package(PkgConfig REQUIRED)
+    pkg_search_module(LibRaw REQUIRED IMPORTED_TARGET libraw_r libraw)
+    set(ARRAW_LIBRAW PkgConfig::LibRaw)
+endif()
+
+# On Windows vcpkg deploys the Qt DLLs next to each executable, but not the
+# plugins. Without a platform plugin a Q(Gui)Application aborts at startup;
+# without the JPEG plugin QImage silently cannot read or write JPEG. The JPEG
+# plugin's codec (jpeg62.dll) goes beside the executable, where Windows looks
+# for a plugin's imports.
+function(arraw_deploy_qt_plugins target)
+    if(NOT WIN32)
+        return()
+    endif()
+    set(plugins
+            Qt6::QWindowsIntegrationPlugin platforms
+            Qt6::QOffscreenIntegrationPlugin platforms
+            Qt6::QJpegPlugin imageformats)
+    while(plugins)
+        list(POP_FRONT plugins plugin subdir)
+        if(TARGET ${plugin})
+            add_custom_command(TARGET ${target} POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${target}>/${subdir}"
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                            "$<TARGET_FILE:${plugin}>" "$<TARGET_FILE_DIR:${target}>/${subdir}/"
+                    VERBATIM)
+        endif()
+    endwhile()
+    if(TARGET Qt6::QJpegPlugin)
+        set(vcpkg_bin "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}$<$<CONFIG:Debug>:/debug>/bin")
+        add_custom_command(TARGET ${target} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${vcpkg_bin}/jpeg62.dll" "$<TARGET_FILE_DIR:${target}>/"
+                VERBATIM)
+    endif()
+endfunction()
 
 qt_standard_project_setup()
 
@@ -85,7 +131,7 @@ target_include_directories(arraw PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/gpu)
 # no display and no QGuiApplication, only a QCoreApplication for plugin paths.
 # Private: nothing in include/ mentions Qt, and CMake still propagates the link
 # requirement to consumers of this static library.
-target_link_libraries(arraw PRIVATE Qt6::Gui PkgConfig::LibRaw)
+target_link_libraries(arraw PRIVATE Qt6::Gui ${ARRAW_LIBRAW})
 # qt_standard_project_setup() turns AUTOMOC on globally; the engine has no Qt
 # types, so opting out keeps that honest (and saves a moc pass).
 set_target_properties(arraw PROPERTIES AUTOMOC OFF)
@@ -167,6 +213,7 @@ add_executable(arraw-ui src/app/main.cpp
 arraw_enable_warnings(arraw-ui)
 target_include_directories(arraw-ui PRIVATE src/app)
 target_link_libraries(arraw-ui PRIVATE arraw Qt6::Widgets)
+arraw_deploy_qt_plugins(arraw-ui)
 
 # The command line's behaviour, split from its main() so the tests can drive it
 # in-process and assert on what reaches each stream. See ADR 006.
@@ -198,6 +245,7 @@ arraw_enable_warnings(arraw-cli)
 # platform plugin at all. On Linux that QGuiApplication runs on arraw-headless
 # unless QT_QPA_PLATFORM names another.
 target_link_libraries(arraw-cli PRIVATE arraw-cli-core Qt6::Core Qt6::Gui)
+arraw_deploy_qt_plugins(arraw-cli)
 if(TARGET arraw-headless-platform)
     target_link_libraries(arraw-cli PRIVATE arraw-headless-platform)
 endif()

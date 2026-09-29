@@ -21,7 +21,7 @@ enum class Stage {
 /// @brief Number of pass boundaries, for the prefix fold to iterate over.
 inline constexpr std::size_t stageCount = 2;
 
-class CheckpointState;
+struct CheckpointState;
 
 /// @brief Pixels from a pass boundary, with the plan prefix that made them.
 ///

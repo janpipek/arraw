@@ -54,6 +54,7 @@ target_compile_definitions(arraw-tests
 target_link_libraries(arraw-tests
         PRIVATE arraw arraw-gpu arraw-cli-core Catch2::Catch2 Qt6::Gui Qt6::GuiPrivate)
 set_target_properties(arraw-tests PROPERTIES AUTOMOC OFF)
+arraw_deploy_qt_plugins(arraw-tests)
 
 # Registers each TEST_CASE with CTest individually, so `ctest -R` can select one.
 catch_discover_tests(arraw-tests)
