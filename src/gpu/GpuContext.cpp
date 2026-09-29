@@ -26,6 +26,7 @@
 #include <string>
 #include <thread>
 #include <utility>
+#include <vector>
 
 // QRhi's own condition for declaring its Vulkan parameters: a Vulkan-enabled
 // Qt still hides QVulkanInstance from a build that cannot see vulkan.h.
@@ -52,6 +53,14 @@ struct GpuDevice {
     /// @brief Surface an OpenGL device makes its context current against, if OpenGL.
     std::unique_ptr<QOffscreenSurface> fallbackSurface;
 #endif
+    /// @brief Readback results a failed frame left registered with the device.
+    ///
+    /// QRhi keeps the address of a readback's result until the readback
+    /// completes, and a frame that failed after registering one ends before it
+    /// does. The result stays alive here until QRhi itself is gone, which is why
+    /// this is declared before it.
+    std::vector<std::unique_ptr<QRhiReadbackResult>> abandonedReadbacks;
+
     /// @brief The device itself.
     std::unique_ptr<QRhi> rhi;
 
@@ -61,16 +70,27 @@ struct GpuDevice {
     /// @brief Thread that created the device, and the only one that may use it.
     std::thread::id owner = std::this_thread::get_id();
 
-    /// @brief Refuses use from any thread but the owner.
+    /// @brief Whether a frame failed, after which the device is not used again.
+    ///
+    /// A failed submission may leave work pending that QRhi can neither finish
+    /// nor forget, so the device is not trusted with more.
+    bool lost = false;
+
+    /// @brief Refuses use from any thread but the owner, or of a lost device.
     ///
     /// Cheap enough to do on every transfer, and the difference between an
     /// exception and a device corrupted in a way nobody can reproduce.
     /// @param action What was attempted, completing "can only ... on".
     /// @throws std::logic_error if called from another thread.
-    void requireOwnerThread(const char* action) const {
+    /// @throws std::runtime_error if an earlier frame failed.
+    void requireUsable(const char* action) const {
         if (std::this_thread::get_id() != owner) {
             throw std::logic_error(std::string("A GPU device can only ") + action +
                                    " on the thread that created it");
+        }
+        if (lost) {
+            throw std::runtime_error(std::string("The GPU device cannot ") + action +
+                                     ": an earlier transfer failed and left it unusable");
         }
     }
 };
@@ -248,14 +268,15 @@ GpuDeviceKind kindOf(const QRhiDriverInfo& driver) {
 /// @brief Submits one batch of resource updates and waits for it to finish.
 ///
 /// An offscreen frame, because only that promises a readback is complete when
-/// it ends; the frame is always ended once begun, so a failure leaves the
-/// device usable.
-/// @param rhi Device to submit to.
+/// it ends. The frame is always ended once begun; if ending it fails, the
+/// device is marked lost, since work QRhi could not finish may still be pending.
+/// @param device Device to submit to.
 /// @param purpose What the batch is for, as an infinitive without "to".
 /// @param record Records the updates into the batch.
 /// @throws std::runtime_error if the frame cannot be begun or fails.
-void submitUpdates(QRhi& rhi, const std::string& purpose,
+void submitUpdates(detail::GpuDevice& device, const std::string& purpose,
                    const std::function<void(QRhiResourceUpdateBatch&)>& record) {
+    QRhi& rhi = *device.rhi;
     QRhiCommandBuffer* commands = nullptr;
     if (rhi.beginOffscreenFrame(&commands) != QRhi::FrameOpSuccess || commands == nullptr) {
         throw std::runtime_error("The GPU device could not begin a frame to " + purpose);
@@ -269,6 +290,7 @@ void submitUpdates(QRhi& rhi, const std::string& purpose,
     // Commits and releases the batch; no pass is needed for transfers alone.
     commands->resourceUpdate(batch);
     if (rhi.endOffscreenFrame() != QRhi::FrameOpSuccess) {
+        device.lost = true;
         throw std::runtime_error("The GPU device failed to " + purpose);
     }
 }
@@ -287,12 +309,20 @@ public:
           device_(std::move(owner)), texture_(std::move(pixels)) {}
 
     [[nodiscard]] ImageBuffer readBack() const override {
-        device_->requireOwnerThread("read back");
+        device_->requireUsable("read back");
 
-        QRhiReadbackResult result{};
-        submitUpdates(*device_->rhi, "read a texture back", [&](QRhiResourceUpdateBatch& batch) {
-            batch.readBackTexture(QRhiReadbackDescription(texture_.get()), &result);
-        });
+        // On the heap, because a failed frame leaves QRhi holding its address;
+        // the device then keeps it for as long as QRhi might write to it.
+        auto pending = std::make_unique<QRhiReadbackResult>();
+        try {
+            submitUpdates(*device_, "read a texture back", [&](QRhiResourceUpdateBatch& batch) {
+                batch.readBackTexture(QRhiReadbackDescription(texture_.get()), pending.get());
+            });
+        } catch (...) {
+            device_->abandonedReadbacks.push_back(std::move(pending));
+            throw;
+        }
+        const QRhiReadbackResult& result = *pending;
 
         ImageBuffer buffer(size, format, encoding, orientation);
         const std::span<std::byte> destination = buffer.bytes();
@@ -400,7 +430,7 @@ const GpuDeviceInfo& GpuContext::info() const noexcept {
 }
 
 DeviceImage GpuContext::upload(const ImageBuffer& image) {
-    device_->requireOwnerThread("upload");
+    device_->requireUsable("upload");
 
     if (image.format() != PixelFormat::RgbaF32) {
         // RGBA32F is the only texture format the device side stores, and QRhi
@@ -448,7 +478,7 @@ DeviceImage GpuContext::upload(const ImageBuffer& image) {
     subresource.setData(QByteArray::fromRawData(reinterpret_cast<const char*>(bytes.data()),
                                                 static_cast<qsizetype>(bytes.size())));
     const QRhiTextureUploadDescription description(QRhiTextureUploadEntry(0, 0, subresource));
-    submitUpdates(rhi, "upload a texture", [&](QRhiResourceUpdateBatch& batch) {
+    submitUpdates(*device_, "upload a texture", [&](QRhiResourceUpdateBatch& batch) {
         batch.uploadTexture(texture.get(), description);
     });
 

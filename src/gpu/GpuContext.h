@@ -112,6 +112,10 @@ struct GpuDeviceInfo {
 /// throws rather than corrupting the device. Needs a `QGuiApplication`, since
 /// Vulkan instances and OpenGL surfaces come from the platform plugin.
 ///
+/// A transfer whose frame fails leaves the device unusable: every later
+/// transfer, through the context or its images, throws. A new context is the
+/// way back.
+///
 /// Neither copyable nor movable. Images it mints share the device, so they may
 /// outlive the context; they still belong to its owner thread.
 class GpuContext {
@@ -142,7 +146,8 @@ public:
     /// than the device or a single QRhi transfer accepts.
     /// @throws std::logic_error if called from a thread other than the owner.
     /// @throws std::runtime_error if the device has no RGBA32F textures (see
-    /// GpuDeviceInfo::floatTextures), or cannot create or fill the texture.
+    /// GpuDeviceInfo::floatTextures), cannot create or fill the texture, or an
+    /// earlier transfer failed.
     [[nodiscard]] DeviceImage upload(const ImageBuffer& image);
 
 private:
