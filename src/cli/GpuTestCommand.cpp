@@ -2,7 +2,9 @@
 
 #include "Cli.h"
 #include "Command.h"
+#include "StreamDiagnostics.h"
 
+#include <Diagnostics.h>
 #include <GpuContext.h>
 #include <ImageBuffer.h>
 #include <ImageOrientation.h>
@@ -48,6 +50,7 @@ struct GpuTestRequest {
     GpuBackend backend = defaultGpuBackend();
     std::uint32_t edge = defaultEdge;
     bool allowSoftware = false;
+    cli::LogFormat logFormat = cli::LogFormat::Text;
 };
 
 /// @brief Reports a usage problem and the exit code that goes with it.
@@ -241,6 +244,7 @@ void configure(QCommandLineParser& parser) {
                           .arg(defaultEdge),
                       "pixels"});
     parser.addOption({"allow-software", "Accept a software rasteriser, such as llvmpipe or WARP."});
+    cli::addLogFormatOption(parser);
     // The syntax carries the command word, which Qt's usage line otherwise
     // omits: it knows only argv[0], and the command is a positional we consumed.
     parser.addPositionalArgument("gpu-test", "The command word; gpu-test takes no inputs.",
@@ -279,13 +283,18 @@ std::optional<GpuTestRequest> buildRequest(const QCommandLineParser& parser, std
         request.edge = static_cast<std::uint32_t>(edge);
     }
     request.allowSoftware = parser.isSet("allow-software");
+    const auto logFormat = cli::readLogFormat(parser, "gpu-test", err, code);
+    if (!logFormat) {
+        return std::nullopt;
+    }
+    request.logFormat = *logFormat;
     return request;
 }
 
 /// @brief Reports the device, refusing one that cannot stand in for a GPU.
 /// @return `true` if the round trip is worth attempting.
 bool reportDevice(const GpuDeviceInfo& info, bool allowSoftware, std::ostream& out,
-                  std::ostream& err) {
+                  DiagnosticLog& log) {
     field(out, "Backend", gpuBackendName(info.backend));
     field(out, "Device", info.deviceName.empty() ? "(unnamed)" : info.deviceName);
     field(out, "Kind", nameOf(info.kind));
@@ -299,26 +308,29 @@ bool reportDevice(const GpuDeviceInfo& info, bool allowSoftware, std::ostream& o
 
     if (info.kind == GpuDeviceKind::Software) {
         if (!allowSoftware) {
-            err << "error: '" << info.deviceName
-                << "' is a software rasteriser, not a GPU; pass --allow-software to accept it\n";
+            log.record({.notice = Notice::GpuSoftwareRefused,
+                        .severity = Severity::Error,
+                        .values = {info.deviceName}});
             return false;
         }
-        err << "warning: '" << info.deviceName
-            << "' is a software rasteriser, accepted because --allow-software was given\n";
+        log.record({.notice = Notice::GpuSoftwareAccepted,
+                    .severity = Severity::Warning,
+                    .values = {info.deviceName}});
     }
     if (!info.floatTextures) {
-        err << "error: the device does not support RGBA32F textures, which development needs\n";
+        log.record({.notice = Notice::GpuNoFloatTextures, .severity = Severity::Error});
         return false;
     }
     if (!info.anyFormatReadBack) {
-        err << "warning: the " << gpuBackendName(info.backend)
-            << " backend does not promise float readback; the round trip decides\n";
+        log.record({.notice = Notice::GpuReadBackNotPromised,
+                    .severity = Severity::Warning,
+                    .values = {std::string(gpuBackendName(info.backend))}});
     }
     return true;
 }
 
 /// @brief Uploads the test image, reads it back and judges the result.
-int roundTrip(GpuContext& context, std::uint32_t edge, std::ostream& out, std::ostream& err) {
+int roundTrip(GpuContext& context, std::uint32_t edge, std::ostream& out, DiagnosticLog& log) {
     using Clock = std::chrono::steady_clock;
     using Milliseconds = std::chrono::duration<double, std::milli>;
 
@@ -346,7 +358,7 @@ int roundTrip(GpuContext& context, std::uint32_t edge, std::ostream& out, std::o
     if (received.size() != sent.size() || received.format() != sent.format() ||
         !(received.encoding() == sent.encoding()) || received.orientation() != sent.orientation()) {
         field(out, "Round trip", "changed the image's description");
-        err << "error: the image read back is not described as the one uploaded\n";
+        log.record({.notice = Notice::GpuRoundTripRedescribed, .severity = Severity::Error});
         return cli::Failed;
     }
     const auto samples = sent.samples<float>();
@@ -361,31 +373,37 @@ int roundTrip(GpuContext& context, std::uint32_t edge, std::ostream& out, std::o
     field(out, "Round trip",
           std::to_string(comparison.mismatches) + " of " + std::to_string(samples.size()) +
               " samples changed");
-    err << "error: the round trip changed " << comparison.mismatches << " samples; the first, "
-        << "channel " << "RGBA"[comparison.first % channels] << " of pixel (" << pixel % edge
-        << ", " << pixel / edge << "), went in as " << describeSample(samples[comparison.first])
-        << " and came back as " << describeSample(received.samples<float>()[comparison.first])
-        << '\n';
+    log.record({.notice = Notice::GpuRoundTripChanged,
+                .severity = Severity::Error,
+                .values = {std::to_string(comparison.mismatches),
+                           std::string(1, "RGBA"[comparison.first % channels]),
+                           std::to_string(pixel % edge), std::to_string(pixel / edge),
+                           describeSample(samples[comparison.first]),
+                           describeSample(received.samples<float>()[comparison.first])}});
     return cli::Failed;
 }
 
 /// @brief Creates the device, reports it and runs the round trip.
-int probe(const GpuTestRequest& request, std::ostream& out, std::ostream& err) {
+int probe(const GpuTestRequest& request, std::ostream& out, DiagnosticLog& log) {
+    const auto failed = [&log](const std::exception& problem) {
+        log.record({.notice = Notice::GpuFailed,
+                    .severity = Severity::Error,
+                    .values = {std::string(problem.what())}});
+        return cli::Failed;
+    };
     std::unique_ptr<GpuContext> context;
     try {
         context = std::make_unique<GpuContext>(request.backend);
     } catch (const std::exception& problem) {
-        err << "error: " << problem.what() << '\n';
-        return cli::Failed;
+        return failed(problem);
     }
-    if (!reportDevice(context->info(), request.allowSoftware, out, err)) {
+    if (!reportDevice(context->info(), request.allowSoftware, out, log)) {
         return cli::Failed;
     }
     try {
-        return roundTrip(*context, request.edge, out, err);
+        return roundTrip(*context, request.edge, out, log);
     } catch (const std::exception& problem) {
-        err << "error: " << problem.what() << '\n';
-        return cli::Failed;
+        return failed(problem);
     }
 }
 
@@ -417,11 +435,13 @@ int cli::runGpuTestCommand(const QStringList& arguments, std::ostream& out, std:
     // After the arguments, so a mistyped flag is still a usage error, and before
     // any application: the honest report is that the GPU was turned off, and
     // turning it off means no platform plugin is loaded.
+    StreamDiagnostics log(err, request->logFormat);
     if (gpuDisabled()) {
-        err << "error: the GPU is disabled by " << disableGpuVariable
-            << "; unset it, or set it to 0, to probe the device\n";
+        log.record({.notice = Notice::GpuDisabled,
+                    .severity = Severity::Error,
+                    .values = {std::string(disableGpuVariable)}});
         return Failed;
     }
     start(ApplicationKind::Gui);
-    return probe(*request, out, err);
+    return probe(*request, out, log);
 }

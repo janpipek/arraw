@@ -8,14 +8,14 @@
 
 namespace arraw {
 
-/// @brief What a photographer should make of one diagnostic.
+/// @brief What whoever ran arraw should make of one diagnostic.
 enum class Severity {
     Info,    ///< What happened, when it went as asked.
-    Warning, ///< It worked, but not as the photograph deserved.
-    Error,   ///< This photograph did not come out.
+    Warning, ///< It worked, but not as well as it should have.
+    Error,   ///< What was asked did not happen: a photograph did not come out, or a check failed.
 };
 
-/// @brief Something worth telling a photographer about, by name.
+/// @brief Something worth telling whoever ran arraw about, by name.
 ///
 /// The name rather than a sentence, because the sentence is presentation:
 /// a log reader matches on this, a person reads what ::arraw::describe makes
@@ -32,6 +32,31 @@ enum class Notice {
 
     /// @brief A batch reached its end, with a count of what did not come out.
     BatchFinished,
+
+    /// @brief The GPU probe refused a software rasteriser, named, as not a GPU.
+    GpuSoftwareRefused,
+
+    /// @brief The GPU probe accepted a software rasteriser, named, because it was told to.
+    GpuSoftwareAccepted,
+
+    /// @brief The device has no RGBA32F textures, which development needs.
+    GpuNoFloatTextures,
+
+    /// @brief The named backend does not promise float readback, so the round trip decides.
+    GpuReadBackNotPromised,
+
+    /// @brief The device could not be created or used, with the reason.
+    GpuFailed,
+
+    /// @brief The image read back is not described as the one uploaded.
+    GpuRoundTripRedescribed,
+
+    /// @brief The round trip changed samples: how many, then the first one's
+    /// channel, column, row, and value sent and received.
+    GpuRoundTripChanged,
+
+    /// @brief The GPU was turned off, by the named environment variable.
+    GpuDisabled,
 };
 
 /// @brief One detail of a diagnostic, kept as a value rather than as prose.
@@ -47,7 +72,7 @@ struct Diagnostic {
     Severity severity = Severity::Info;
 
     /// @brief Photograph it concerns, absent when it concerns none, as a
-    /// batch's own summary does not.
+    /// batch's own summary and the GPU probe do not.
     std::optional<std::filesystem::path> subject = std::nullopt;
 
     /// @brief Details the notice needs to be specific.

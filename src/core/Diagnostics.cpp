@@ -43,6 +43,29 @@ std::string arraw::describe(const Diagnostic& diagnostic) {
         return valueAt(diagnostic, 0);
     case Notice::BatchFinished:
         return valueAt(diagnostic, 0) + " of " + valueAt(diagnostic, 1) + " failed";
+    case Notice::GpuSoftwareRefused:
+        return "'" + valueAt(diagnostic, 0) +
+               "' is a software rasteriser, not a GPU; pass --allow-software to accept it";
+    case Notice::GpuSoftwareAccepted:
+        return "'" + valueAt(diagnostic, 0) +
+               "' is a software rasteriser, accepted because --allow-software was given";
+    case Notice::GpuNoFloatTextures:
+        return "the device does not support RGBA32F textures, which development needs";
+    case Notice::GpuReadBackNotPromised:
+        return "the " + valueAt(diagnostic, 0) +
+               " backend does not promise float readback; the round trip decides";
+    case Notice::GpuFailed:
+        return valueAt(diagnostic, 0);
+    case Notice::GpuRoundTripRedescribed:
+        return "the image read back is not described as the one uploaded";
+    case Notice::GpuRoundTripChanged:
+        return "the round trip changed " + valueAt(diagnostic, 0) +
+               " samples; the first, channel " + valueAt(diagnostic, 1) + " of pixel (" +
+               valueAt(diagnostic, 2) + ", " + valueAt(diagnostic, 3) + "), went in as " +
+               valueAt(diagnostic, 4) + " and came back as " + valueAt(diagnostic, 5);
+    case Notice::GpuDisabled:
+        return "the GPU is disabled by " + valueAt(diagnostic, 0) +
+               "; unset it, or set it to 0, to probe the device";
     }
     return {};
 }

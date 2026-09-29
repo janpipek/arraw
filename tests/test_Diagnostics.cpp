@@ -71,3 +71,25 @@ TEST_CASE("A diagnostic's details are values, not prose", "[diagnostics]") {
 
     REQUIRE(describe(finished) == "3 of 40 failed");
 }
+
+TEST_CASE("The GPU probe's notices say what went wrong with the device", "[diagnostics][gpu]") {
+    const Diagnostic refused{.notice = Notice::GpuSoftwareRefused,
+                             .severity = Severity::Error,
+                             .values = {std::string("llvmpipe")}};
+    REQUIRE(describe(refused) ==
+            "'llvmpipe' is a software rasteriser, not a GPU; pass --allow-software to accept it");
+
+    const Diagnostic disabled{.notice = Notice::GpuDisabled,
+                              .severity = Severity::Error,
+                              .values = {std::string("ARRAW_DISABLE_GPU")}};
+    REQUIRE(describe(disabled) ==
+            "the GPU is disabled by ARRAW_DISABLE_GPU; unset it, or set it to 0, to probe the "
+            "device");
+
+    const Diagnostic changed{.notice = Notice::GpuRoundTripChanged,
+                             .severity = Severity::Error,
+                             .values = {std::string("3"), std::string("G"), std::string("5"),
+                                        std::string("7"), std::string("-0"), std::string("0")}};
+    REQUIRE(describe(changed) == "the round trip changed 3 samples; the first, channel G of pixel "
+                                 "(5, 7), went in as -0 and came back as 0");
+}

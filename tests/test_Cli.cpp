@@ -776,3 +776,43 @@ TEST_CASE("A command's help names the program as arraw-cli", "[cli]") {
     REQUIRE_THAT(invoke({command, "--help"}).out,
                  StartsWith("Usage: arraw-cli [options] " + command));
 }
+
+TEST_CASE("The GPU probe logs through the diagnostic log, as JSON when asked", "[cli][gpu]") {
+    /// One writer for everything a command says, so --log-format json covers
+    /// the probe's failures as it covers an export's (ADR 006). The device
+    /// report itself is what was asked for, and stays on stdout.
+    struct Case {
+        const char* disabled;
+        std::string notice;
+    };
+    const auto [disabled, notice] = GENERATE(Case{"1", "gpu_disabled"}, Case{"0", "gpu_failed"});
+    CAPTURE(notice);
+    const ScopedEnvironment environment(cli::disableGpuVariable, disabled);
+
+    const auto result = invoke({"gpu-test", "--size", "1", "--log-format", "json"});
+
+    REQUIRE(result.code == cli::Failed);
+    std::istringstream lines(result.err);
+    std::string line;
+    REQUIRE(std::getline(lines, line));
+    const auto parsed = QJsonDocument::fromJson(QByteArray::fromStdString(line));
+    REQUIRE(parsed.isObject());
+    REQUIRE(parsed.object()["notice"] == QString::fromStdString(notice));
+    REQUIRE(parsed.object()["severity"] == "error");
+    REQUIRE_FALSE(parsed.object().contains("file"));
+    REQUIRE_FALSE(std::getline(lines, line));
+}
+
+TEST_CASE("The GPU probe's text log reads as it always has", "[cli][gpu]") {
+    const ScopedEnvironment disabled(cli::disableGpuVariable, "1");
+    REQUIRE(invoke({"gpu-test", "--size", "1"}).err ==
+            "error: the GPU is disabled by ARRAW_DISABLE_GPU; unset it, or set it to 0, to probe "
+            "the device\n");
+}
+
+TEST_CASE("An unknown log format is a usage error for the GPU probe too", "[cli][gpu]") {
+    const auto result = invoke({"gpu-test", "--log-format", "yaml"});
+    REQUIRE(result.code == cli::UsageError);
+    REQUIRE_THAT(result.err, ContainsSubstring("'yaml'"));
+    REQUIRE(result.started.empty());
+}

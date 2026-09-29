@@ -178,7 +178,9 @@ add_library(arraw-cli-core STATIC
         src/cli/ExportCommand.cpp
         src/cli/ExportCommand.h
         src/cli/GpuTestCommand.cpp
-        src/cli/GpuTestCommand.h)
+        src/cli/GpuTestCommand.h
+        src/cli/StreamDiagnostics.cpp
+        src/cli/StreamDiagnostics.h)
 arraw_enable_warnings(arraw-cli-core)
 target_include_directories(arraw-cli-core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/cli)
 # Qt Core only: the command line needs QCommandLineParser and an application
