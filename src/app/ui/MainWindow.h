@@ -2,6 +2,8 @@
 
 #include <QMainWindow>
 
+#include <optional>
+
 namespace arraw::app {
 
 class MainWindow : public QMainWindow {
@@ -14,5 +16,8 @@ public:
 private:
     /// @brief Build the whole menu.
     void buildMenu();
+
+    /// @brief Let the user choose the file to open.
+    void openFileWithDialog();
 };
 } // namespace arraw::app
