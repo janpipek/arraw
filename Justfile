@@ -26,7 +26,7 @@ cli *args: configure
 
 # Build and run the test suite
 test *args: configure
-    cmake --build --preset debug --target arraw-tests
+    cmake --build --preset debug --target arraw-test-binaries
     ctest --preset debug {{args}}
 
 # Regenerate the committed test fixtures (see tests/fixtures/README.md)

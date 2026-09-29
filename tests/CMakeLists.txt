@@ -75,3 +75,12 @@ if(TARGET arraw-headless-platform)
     # itself; older ones, such as Ubuntu 24.04's 3.4, would report a failure.
     catch_discover_tests(arraw-headless-tests PROPERTIES SKIP_RETURN_CODE 4)
 endif()
+
+# Every test executable CTest runs, so that one build step brings them all up
+# to date: `just test` builds this, and a target CTest registers but nothing
+# builds would fail as "not built", or run stale.
+add_custom_target(arraw-test-binaries)
+add_dependencies(arraw-test-binaries arraw-tests)
+if(TARGET arraw-headless-tests)
+    add_dependencies(arraw-test-binaries arraw-headless-tests)
+endif()
