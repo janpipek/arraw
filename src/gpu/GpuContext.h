@@ -117,7 +117,15 @@ struct GpuDeviceInfo {
 /// way back.
 ///
 /// Neither copyable nor movable. Images it mints share the device, so they may
-/// outlive the context; they still belong to its owner thread.
+/// outlive the context; they still belong to its owner thread, and the context
+/// and every image's last copy must be destroyed there too, since that is where
+/// the texture, and perhaps the device itself, is released. Debug builds assert
+/// it. Handing an image to another thread and back is fine; dropping it there
+/// is not.
+///
+/// On Metal, an owner thread other than the main one must keep an autorelease
+/// pool around its use of the context and its images, as QRhi requires of a
+/// dedicated render thread; nothing here makes one.
 class GpuContext {
 public:
     /// @brief Creates an offscreen device through one backend.

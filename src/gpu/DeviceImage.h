@@ -35,7 +35,9 @@ enum class DeviceId : std::uint64_t {
 /// Default-constructs empty. A non-empty one comes from a device, which is why
 /// nothing here creates one.
 ///
-/// Immutable, and cheap to copy: copies share one texture.
+/// Immutable, and cheap to copy: copies share one texture. Belongs to the
+/// thread that owns its device: read it back there, and let its last copy go
+/// there, since that releases the texture (see ::arraw::GpuContext).
 class DeviceImage {
 public:
     /// @brief Constructs an empty image, bound to no device.

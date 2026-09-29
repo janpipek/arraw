@@ -64,6 +64,11 @@ struct GpuDevice {
     /// nor forget, so the device is not trusted with more.
     bool lost = false;
 
+    /// @brief Whether the calling thread is the owner.
+    [[nodiscard]] bool onOwnerThread() const noexcept {
+        return std::this_thread::get_id() == owner;
+    }
+
     /// @brief Refuses use from any thread but the owner, or of a lost device.
     ///
     /// Cheap enough to do on every transfer, and the difference between an
@@ -72,7 +77,7 @@ struct GpuDevice {
     /// @throws std::logic_error if called from another thread.
     /// @throws std::runtime_error if an earlier frame failed.
     void requireUsable(const char* action) const {
-        if (std::this_thread::get_id() != owner) {
+        if (!onOwnerThread()) {
             throw std::logic_error(std::string("A GPU device can only ") + action +
                                    " on the thread that created it");
         }

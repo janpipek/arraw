@@ -15,6 +15,7 @@
 #include <rhi/qrhi.h>
 
 #include <atomic>
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -210,6 +211,19 @@ public:
         : DeviceImageState(owner->id, dimensions, PixelFormat::RgbaF32, std::move(meaning), source),
           device_(std::move(owner)), texture_(std::move(pixels)) {}
 
+    RhiDeviceImage(const RhiDeviceImage&) = delete;
+    RhiDeviceImage& operator=(const RhiDeviceImage&) = delete;
+    RhiDeviceImage(RhiDeviceImage&&) = delete;
+    RhiDeviceImage& operator=(RhiDeviceImage&&) = delete;
+
+    /// Releases the texture, and the device with it if this held the last
+    /// share, which QRhi allows only on the owner thread. A destructor cannot
+    /// refuse, so a debug build stops here rather than corrupt the device.
+    ~RhiDeviceImage() override {
+        assert(device_->onOwnerThread() &&
+               "a device image's last copy must be released on its device's owner thread");
+    }
+
     [[nodiscard]] ImageBuffer readBack() const override {
         device_->requireUsable("read back");
 
@@ -321,7 +335,11 @@ GpuContext::GpuContext(GpuBackend backend) : device_(std::make_shared<detail::Gp
     device_->id = static_cast<DeviceId>(nextDeviceId.fetch_add(1, std::memory_order_relaxed));
 }
 
-GpuContext::~GpuContext() = default;
+GpuContext::~GpuContext() {
+    // As for an image: this may be the device's last share.
+    assert(device_->onOwnerThread() &&
+           "a GPU context must be destroyed on the thread that created it");
+}
 
 DeviceId GpuContext::id() const noexcept {
     return device_->id;

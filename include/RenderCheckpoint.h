@@ -38,7 +38,10 @@ class CheckpointState;
 /// validated by the engine comparing plans, never by a caller reading one out
 /// and deciding for itself; that is what keeps the rule in one place.
 ///
-/// Immutable, and cheap to copy: copies share one payload.
+/// Immutable, and cheap to copy: copies share one payload. A resident one
+/// belongs to the thread that owns its device: read it back there, and let its
+/// last copy go there, since that releases the device's texture. A host one
+/// may go anywhere.
 class RenderCheckpoint {
 public:
     /// @brief Wraps engine-side state that a caller cannot construct.
