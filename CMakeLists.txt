@@ -44,9 +44,11 @@ endif()
 
 # On Windows vcpkg deploys the Qt DLLs next to each executable, but not the
 # plugins. Without a platform plugin a Q(Gui)Application aborts at startup;
-# without the JPEG plugin QImage silently cannot read or write JPEG. The JPEG
-# plugin's codec (jpeg62.dll) goes beside the executable, where Windows looks
-# for a plugin's imports.
+# without the JPEG or TIFF plugin QImage silently cannot read or write that
+# format. An image plugin's codec DLLs go beside the executable, where Windows
+# looks for a plugin's imports. The TIFF plugin comes from vcpkg's
+# qtimageformats port ("qtimageformats[core,tiff]"); without it TIFF stays
+# unsupported rather than failing the build.
 function(arraw_deploy_qt_plugins target)
     if(NOT WIN32)
         return()
@@ -54,7 +56,8 @@ function(arraw_deploy_qt_plugins target)
     set(plugins
             Qt6::QWindowsIntegrationPlugin platforms
             Qt6::QOffscreenIntegrationPlugin platforms
-            Qt6::QJpegPlugin imageformats)
+            Qt6::QJpegPlugin imageformats
+            Qt6::QTiffPlugin imageformats)
     while(plugins)
         list(POP_FRONT plugins plugin subdir)
         if(TARGET ${plugin})
@@ -65,11 +68,20 @@ function(arraw_deploy_qt_plugins target)
                     VERBATIM)
         endif()
     endwhile()
+    set(codecs)
     if(TARGET Qt6::QJpegPlugin)
+        list(APPEND codecs jpeg62.dll)
+    endif()
+    if(TARGET Qt6::QTiffPlugin)
+        # libtiff links zlib too, which Qt Gui needs and vcpkg deploys anyway.
+        list(APPEND codecs "tiff$<$<CONFIG:Debug>:d>.dll" liblzma.dll jpeg62.dll)
+    endif()
+    if(codecs)
+        list(REMOVE_DUPLICATES codecs)
         set(vcpkg_bin "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}$<$<CONFIG:Debug>:/debug>/bin")
+        list(TRANSFORM codecs PREPEND "${vcpkg_bin}/")
         add_custom_command(TARGET ${target} POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                        "${vcpkg_bin}/jpeg62.dll" "$<TARGET_FILE_DIR:${target}>/"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different ${codecs} "$<TARGET_FILE_DIR:${target}>/"
                 VERBATIM)
     endif()
 endfunction()
