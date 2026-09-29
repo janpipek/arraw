@@ -391,7 +391,8 @@ int probe(const GpuTestRequest& request, std::ostream& out, std::ostream& err) {
 
 } // namespace
 
-int cli::runGpuTestCommand(const QStringList& arguments, std::ostream& out, std::ostream& err) {
+int cli::runGpuTestCommand(const QStringList& arguments, std::ostream& out, std::ostream& err,
+                           const StartApplication& start) {
     QCommandLineParser parser;
     configure(parser);
 
@@ -404,7 +405,7 @@ int cli::runGpuTestCommand(const QStringList& arguments, std::ostream& out, std:
     // here too rather than run the probe. Qt's generic options are not this
     // command's, so the text is one.
     if (parser.isSet("help") || parser.isSet("help-all")) {
-        out << parser.helpText().toStdString();
+        out << commandHelp(parser);
         return Success;
     }
 
@@ -414,12 +415,13 @@ int cli::runGpuTestCommand(const QStringList& arguments, std::ostream& out, std:
         return code;
     }
     // After the arguments, so a mistyped flag is still a usage error, and before
-    // any device: main() made no QGuiApplication, and the honest report is that
-    // the GPU was turned off rather than that it is missing.
+    // any application: the honest report is that the GPU was turned off, and
+    // turning it off means no platform plugin is loaded.
     if (gpuDisabled()) {
         err << "error: the GPU is disabled by " << disableGpuVariable
             << "; unset it, or set it to 0, to probe the device\n";
         return Failed;
     }
+    start(ApplicationKind::Gui);
     return probe(*request, out, err);
 }

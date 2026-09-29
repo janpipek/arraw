@@ -24,10 +24,12 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 using namespace arraw;
 using Catch::Matchers::ContainsSubstring;
+using Catch::Matchers::StartsWith;
 
 /// Tests for the command line's contract: what it writes to which stream, and
 /// what it returns. In-process rather than through the real binary, because
@@ -41,14 +43,19 @@ struct Invocation {
     int code = 0;
     std::string out;
     std::string err;
+    /// @brief Applications the command asked for, in order; the suite is
+    /// already inside one, so none is started.
+    std::vector<cli::ApplicationKind> started;
 };
 
 /// @brief Runs the command line with both streams captured.
 Invocation invoke(const std::vector<std::string>& arguments) {
     std::ostringstream out;
     std::ostringstream err;
-    const int code = cli::run(arguments, out, err);
-    return {code, out.str(), err.str()};
+    std::vector<cli::ApplicationKind> started;
+    const int code = cli::run(arguments, out, err,
+                              [&started](cli::ApplicationKind kind) { started.push_back(kind); });
+    return {code, out.str(), err.str(), std::move(started)};
 }
 
 /// @brief Writes a file that is not an image, to fail a decode on purpose.
@@ -725,4 +732,47 @@ TEST_CASE("An unknown log format is a usage error", "[cli]") {
                                 directory.path().string(), "--log-format", "yaml"});
 
     REQUIRE(result.code == cli::UsageError);
+}
+
+TEST_CASE("Help and usage errors start no Qt application", "[cli]") {
+    /// A platform plugin that cannot start aborts the process, so anything
+    /// that answers without doing work must not load one.
+    const auto arguments =
+        GENERATE(std::vector<std::string>{}, std::vector<std::string>{"--help"},
+                 std::vector<std::string>{"--version"}, std::vector<std::string>{"nonsense"},
+                 std::vector<std::string>{"info"}, std::vector<std::string>{"help", "gpu-test"},
+                 std::vector<std::string>{"export", "--help"}, std::vector<std::string>{"export"},
+                 std::vector<std::string>{"export", "--nonsense"},
+                 std::vector<std::string>{"gpu-test", "--help"},
+                 std::vector<std::string>{"gpu-test", "--size", "0"});
+    CAPTURE(arguments);
+    const auto result = invoke(arguments);
+    REQUIRE(result.code != cli::Failed);
+    REQUIRE(result.started.empty());
+}
+
+TEST_CASE("An export asks for a core application, once its arguments are good", "[cli]") {
+    const test::TempDir directory;
+    const auto input = writeRubbish(directory, "rubbish.png");
+    const auto result =
+        invoke({"export", input.string(), "-o", directory.path().string(), "--quiet"});
+    REQUIRE(result.code == cli::Failed);
+    REQUIRE(result.started == std::vector{cli::ApplicationKind::Core});
+}
+
+TEST_CASE("The GPU probe asks for a GUI application unless the GPU is off", "[cli][gpu]") {
+    {
+        const ScopedEnvironment enabled(cli::disableGpuVariable, "0");
+        REQUIRE(invoke({"gpu-test", "--size", "1"}).started ==
+                std::vector{cli::ApplicationKind::Gui});
+    }
+    const ScopedEnvironment disabled(cli::disableGpuVariable, "1");
+    REQUIRE(invoke({"gpu-test", "--size", "1"}).started.empty());
+}
+
+TEST_CASE("A command's help names the program as arraw-cli", "[cli]") {
+    const auto command = GENERATE(as<std::string>{}, "export", "gpu-test");
+    CAPTURE(command);
+    REQUIRE_THAT(invoke({command, "--help"}).out,
+                 StartsWith("Usage: arraw-cli [options] " + command));
 }

@@ -527,7 +527,8 @@ int exportAll(const ExportRequest& request, std::ostream& err) {
 
 } // namespace
 
-int cli::runExportCommand(const QStringList& arguments, std::ostream& out, std::ostream& err) {
+int cli::runExportCommand(const QStringList& arguments, std::ostream& out, std::ostream& err,
+                          const StartApplication& start) {
     QCommandLineParser parser;
     configure(parser);
 
@@ -538,7 +539,7 @@ int cli::runExportCommand(const QStringList& arguments, std::ostream& out, std::
         return usageError(err, parser.errorText().toStdString());
     }
     if (parser.isSet("help")) {
-        out << parser.helpText().toStdString();
+        out << commandHelp(parser);
         return Success;
     }
 
@@ -547,5 +548,8 @@ int cli::runExportCommand(const QStringList& arguments, std::ostream& out, std::
     if (!request) {
         return code;
     }
+    // Qt Core alone: the image codecs beyond PNG are plugins, found through an
+    // application, and an export touches no graphics device.
+    start(ApplicationKind::Core);
     return exportAll(*request, err);
 }

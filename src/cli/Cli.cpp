@@ -61,8 +61,8 @@ bool isHelpWord(const std::string& argument) {
 } // namespace
 } // namespace arraw::cli
 
-int arraw::cli::run(const std::vector<std::string>& arguments, std::ostream& out,
-                    std::ostream& err) {
+int arraw::cli::run(const std::vector<std::string>& arguments, std::ostream& out, std::ostream& err,
+                    const StartApplication& start) {
     if (arguments.empty()) {
         return usageError(err, "no command given");
     }
@@ -74,7 +74,7 @@ int arraw::cli::run(const std::vector<std::string>& arguments, std::ostream& out
         // --help`, so it is answered by the command rather than duplicated here.
         if (arguments.size() > 1) {
             if (const Command* command = findCommand(arguments[1]); command != nullptr) {
-                return run({arguments[1], "--help"}, out, err);
+                return run({arguments[1], "--help"}, out, err, start);
             }
             return usageError(err, "unknown command '" + arguments[1] + "'");
         }
@@ -116,7 +116,7 @@ int arraw::cli::run(const std::vector<std::string>& arguments, std::ostream& out
     for (const auto& argument : arguments) {
         forwarded << QString::fromStdString(argument);
     }
-    return command->run(forwarded, out, err);
+    return command->run(forwarded, out, err, start);
 }
 
 bool arraw::cli::disablesGpu(const char* value) noexcept {

@@ -191,9 +191,10 @@ set_target_properties(arraw-cli-core PROPERTIES AUTOMOC OFF)
 
 add_executable(arraw-cli src/cli/main.cpp)
 arraw_enable_warnings(arraw-cli)
-# Qt GUI as well: main() makes a QGuiApplication, unless ARRAW_DISABLE_GPU asks
-# for a QCoreApplication that loads no platform plugin at all. On Linux that
-# QGuiApplication runs on arraw-headless unless QT_QPA_PLATFORM names another.
+# Qt GUI as well: main() makes a QGuiApplication when a command asks for one,
+# as the GPU probe does, and a QCoreApplication otherwise, which loads no
+# platform plugin at all. On Linux that QGuiApplication runs on arraw-headless
+# unless QT_QPA_PLATFORM names another.
 target_link_libraries(arraw-cli PRIVATE arraw-cli-core Qt6::Core Qt6::Gui)
 if(TARGET arraw-headless-platform)
     target_link_libraries(arraw-cli PRIVATE arraw-headless-platform)

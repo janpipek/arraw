@@ -4,9 +4,14 @@
 #include "ExportCommand.h"
 #include "GpuTestCommand.h"
 
+#include <QCommandLineParser>
+#include <QString>
+
 #include <algorithm>
 #include <array>
 #include <ostream>
+#include <string>
+#include <string_view>
 
 namespace arraw::cli {
 namespace {
@@ -36,6 +41,19 @@ const Command* findCommand(std::string_view name) {
     const auto found = std::ranges::find_if(
         table, [name](const Command& command) { return command.name == name; });
     return found == table.end() ? nullptr : &*found;
+}
+
+std::string commandHelp(const QCommandLineParser& parser) {
+    std::string text = parser.helpText().toStdString();
+    // "Usage: <program> ...": whatever Qt put there, up to the next space.
+    constexpr std::string_view usage = "Usage: ";
+    if (text.starts_with(usage)) {
+        const auto end = text.find(' ', usage.size());
+        if (end != std::string::npos) {
+            text.replace(usage.size(), end - usage.size(), "arraw-cli");
+        }
+    }
+    return text;
 }
 
 int commandUsageError(std::ostream& err, std::string_view command, std::string_view message) {

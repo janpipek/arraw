@@ -10,6 +10,7 @@
 #include <QtPlugin>
 #endif
 
+#include <array>
 #include <cstddef>
 #include <iostream>
 #include <memory>
@@ -40,8 +41,8 @@ std::vector<std::string> argumentsOf(int argc, char* argv[]) {
 /// It needs no X or Wayland server, so the command line runs the same on a
 /// desktop, a build machine and over SSH, and it is the platform that can make
 /// a Vulkan instance without one, which Qt's offscreen platform cannot. It has
-/// no OpenGL. An explicit `QT_QPA_PLATFORM` (or `-platform`) always wins, which
-/// is how to reach OpenGL: `QT_QPA_PLATFORM=xcb` or `wayland`. Windows and macOS
+/// no OpenGL. An explicit `QT_QPA_PLATFORM` always wins, which is how to reach
+/// OpenGL: `QT_QPA_PLATFORM=xcb` or `wayland`. Windows and macOS
 /// need no display for a device, and keep Qt's own platform.
 ///
 /// On macOS, keeps the process a background one. Qt otherwise turns a plain
@@ -62,29 +63,42 @@ void prepareGraphicsPlatform() {
 
 } // namespace
 
-/// @brief Runs the command line inside a Qt application.
+/// @brief Runs the command line, inside the Qt application its command asks for.
 ///
-/// A QGuiApplication, because Vulkan instances and OpenGL surfaces come from
-/// the platform plugin only it loads, and every command gets the same one
-/// rather than guessing which will need a device. ARRAW_DISABLE_GPU is the way
-/// out: with it, a QCoreApplication, so that no platform plugin is loaded and
-/// no graphics driver touched; `gpu-test` then fails and says why. Either way
-/// there is an application instance, which Qt resolves image-codec plugin paths
-/// against: without one every format beyond PNG would fail to encode.
+/// None until then: a command asks once its arguments are good, so help and
+/// usage errors load no platform plugin, which would abort the process if it
+/// could not start. An export asks for a QCoreApplication, which Qt resolves
+/// image-codec plugin paths against; the GPU probe for a QGuiApplication,
+/// because Vulkan instances and OpenGL surfaces come from the platform plugin
+/// only it loads.
 ///
-/// Nothing but wiring lives here. ::arraw::cli::run takes its streams as
-/// arguments so that the tests can drive it directly; see ADR 006.
+/// Qt is shown the program name and nothing else. Given all of `argv` it would
+/// remove the options it takes for its own, `-reverse` or `-platform` among
+/// them, even after `--`, where they are input files; `QT_QPA_PLATFORM` is the
+/// way to choose a platform.
+///
+/// Nothing but wiring lives here. ::arraw::cli::run takes its streams and the
+/// application's construction as arguments so that the tests can drive it
+/// directly; see ADR 006.
 int main(int argc, char* argv[]) {
-    std::unique_ptr<QCoreApplication> app;
-    if (arraw::cli::gpuDisabled()) {
-        app = std::make_unique<QCoreApplication>(argc, argv);
-    } else {
-        prepareGraphicsPlatform();
-        app = std::make_unique<QGuiApplication>(argc, argv);
-    }
+    const std::vector<std::string> arguments = argumentsOf(argc, argv);
 
-    // Collected after the application: QGuiApplication consumes the options
-    // that are its own, such as -platform, and they are not the command line's
-    // to parse.
-    return arraw::cli::run(argumentsOf(argc, argv), std::cout, std::cerr);
+    // Both must outlive the application, which keeps references to them.
+    static char fallbackName[] = "arraw-cli";
+    int qtArgc = 1;
+    std::array<char*, 2> qtArgv{argc > 0 ? argv[0] : fallbackName, nullptr};
+
+    std::unique_ptr<QCoreApplication> app;
+    const auto start = [&](arraw::cli::ApplicationKind kind) {
+        if (app) {
+            return;
+        }
+        if (kind == arraw::cli::ApplicationKind::Gui) {
+            prepareGraphicsPlatform();
+            app = std::make_unique<QGuiApplication>(qtArgc, qtArgv.data());
+        } else {
+            app = std::make_unique<QCoreApplication>(qtArgc, qtArgv.data());
+        }
+    };
+    return arraw::cli::run(arguments, std::cout, std::cerr, start);
 }

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Cli.h"
+
 #include <iosfwd>
 
 #include <GeometrySettings.h>
@@ -24,9 +26,11 @@ void setRotationAngle(GeometrySettings& geometry, double degrees);
 /// @param arguments The command's own arguments, beginning with its name.
 /// @param out Help, when it was asked for; nothing else.
 /// @param err Progress, warnings, and errors.
+/// @param start Starts the Qt application, a `QCoreApplication`, once the
+/// arguments are good.
 /// @return ::arraw::cli::Success, ::arraw::cli::Failed if any input could not
 /// be exported, or ::arraw::cli::UsageError if the arguments were wrong.
 [[nodiscard]] int runExportCommand(const QStringList& arguments, std::ostream& out,
-                                   std::ostream& err);
+                                   std::ostream& err, const StartApplication& start);
 
 } // namespace arraw::cli

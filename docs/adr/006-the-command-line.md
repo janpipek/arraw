@@ -79,8 +79,14 @@ drift from the flags.
 
 **`cli::run(arguments, out, err)` lives in a static library** that both
 `arraw-cli` and `arraw-tests` link, alongside `Command.cpp` (the table) and one
-file per command. `main.cpp` is reduced to constructing `QCoreApplication`,
-collecting `argv`, and calling it. Adding a command is a row and a file.
+file per command. `main.cpp` is reduced to collecting `argv`, calling it, and
+constructing the Qt application a command asks for. A command asks once its
+arguments are good — export for a `QCoreApplication`, the GPU probe for a
+`QGuiApplication` — so help and usage errors never load a platform plugin, one
+that cannot start aborting the process. Qt is shown only `argv[0]`: given the
+rest it removes the options it takes for its own, even after `--`, so
+`QT_QPA_PLATFORM` rather than `-platform` chooses a platform. Adding a command
+is a row and a file.
 
 ## Consequences
 

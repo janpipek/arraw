@@ -76,11 +76,30 @@ if(TARGET arraw-headless-platform)
     catch_discover_tests(arraw-headless-tests PROPERTIES SKIP_RETURN_CODE 4)
 endif()
 
-# Every test executable CTest runs, so that one build step brings them all up
+# The real arraw-cli binary, for what only main() decides: which Qt application
+# is made, when, and from which arguments. A platform that does not exist makes
+# Qt abort the moment one is loaded, so a command that exits cleanly under it
+# never loaded one.
+set(arraw_expect_exit ${CMAKE_CURRENT_SOURCE_DIR}/cli/ExpectExit.cmake)
+set(arraw_no_platform "QT_QPA_PLATFORM=arraw-no-such-platform")
+add_test(NAME arraw-cli.help-loads-no-platform
+        COMMAND ${CMAKE_COMMAND} -DEXPECTED_EXIT=0 -P ${arraw_expect_exit}
+        -- $<TARGET_FILE:arraw-cli> --help)
+add_test(NAME arraw-cli.usage-error-loads-no-platform
+        COMMAND ${CMAKE_COMMAND} -DEXPECTED_EXIT=2 -DEXPECTED_ERR=--size -P ${arraw_expect_exit}
+        -- $<TARGET_FILE:arraw-cli> gpu-test --size 0)
+set_tests_properties(arraw-cli.help-loads-no-platform arraw-cli.usage-error-loads-no-platform
+        PROPERTIES ENVIRONMENT ${arraw_no_platform})
+# An operand after `--` is an input, even one Qt would take for its own option.
+add_test(NAME arraw-cli.escaped-operand-is-an-input
+        COMMAND ${CMAKE_COMMAND} -DEXPECTED_EXIT=1 -DEXPECTED_ERR=-reverse -P ${arraw_expect_exit}
+        -- $<TARGET_FILE:arraw-cli> export -o ${CMAKE_CURRENT_BINARY_DIR} -- -reverse)
+
+# Every executable CTest runs, so that one build step brings them all up
 # to date: `just test` builds this, and a target CTest registers but nothing
 # builds would fail as "not built", or run stale.
 add_custom_target(arraw-test-binaries)
-add_dependencies(arraw-test-binaries arraw-tests)
+add_dependencies(arraw-test-binaries arraw-tests arraw-cli)
 if(TARGET arraw-headless-tests)
     add_dependencies(arraw-test-binaries arraw-headless-tests)
 endif()

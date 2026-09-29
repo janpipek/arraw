@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Cli.h"
+
 #include <iosfwd>
 
 #include <QtCore/qcontainerfwd.h>
@@ -19,10 +21,12 @@ namespace arraw::cli {
 /// @param arguments The command's own arguments, beginning with its name.
 /// @param out The report, and help when it was asked for.
 /// @param err Warnings and errors.
+/// @param start Starts the Qt application, a `QGuiApplication`, once the
+/// arguments are good and the GPU is not turned off.
 /// @return ::arraw::cli::Success, ::arraw::cli::Failed if there is no usable
 /// device or the round trip changed a sample, or ::arraw::cli::UsageError if the
 /// arguments were wrong.
 [[nodiscard]] int runGpuTestCommand(const QStringList& arguments, std::ostream& out,
-                                    std::ostream& err);
+                                    std::ostream& err, const StartApplication& start);
 
 } // namespace arraw::cli
