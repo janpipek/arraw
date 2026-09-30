@@ -1,0 +1,5 @@
+# The sandbox image (tools/sandbox/Containerfile) builds with the repository
+# as its context, but needs only these; everything else, build trees and .git
+# included, stays out.
+*
+!tools/ci/install-deps.sh

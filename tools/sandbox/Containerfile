@@ -1,0 +1,68 @@
+# The arraw dev sandbox image (ADR 016): CI's toolchain plus the agents, for
+# running an agent unattended against one clone mounted at /workspace.
+# Built and started by tools/sandbox/sandbox.py, with the repository root as
+# the context (.containerignore admits only what is copied below).
+FROM docker.io/library/ubuntu:26.04
+
+# The build and test dependencies, shared with CI.
+COPY tools/ci/install-deps.sh /tmp/install-deps.sh
+RUN sh /tmp/install-deps.sh && rm /tmp/install-deps.sh
+
+# Working in the container: the Justfile's helpers, analysis, debugging, the
+# agents' search tools, and the Wayland platform and Mesa drivers used only
+# when the launcher is given --gui or --gpu.
+RUN apt-get install -y --no-install-recommends \
+        curl jq less vim-tiny just ccache gdb ripgrep fd-find \
+        clangd clang-tidy clazy \
+        qt6-wayland libgl1-mesa-dri fonts-dejavu-core \
+        nodejs npm \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -LsSf https://astral.sh/uv/install.sh \
+        | env UV_INSTALL_DIR=/usr/local/bin UV_NO_MODIFY_PATH=1 sh
+
+# Claude Code's native binary, fetched the way its installer does (checksum from
+# the release manifest), but into /usr/local/bin rather than a home directory.
+ARG CLAUDE_VERSION=latest
+RUN set -eu; base=https://downloads.claude.ai/claude-code-releases; \
+    version=$CLAUDE_VERSION; \
+    [ "$version" = latest ] && version=$(curl -fsSL "$base/latest"); \
+    sum=$(curl -fsSL "$base/$version/manifest.json" | jq -r '.platforms["linux-x64"].checksum'); \
+    curl -fsSL -o /usr/local/bin/claude "$base/$version/linux-x64/claude"; \
+    echo "$sum  /usr/local/bin/claude" | sha256sum -c -; \
+    chmod 755 /usr/local/bin/claude
+
+# Codex's release package, which carries the helpers (bwrap, rg) it expects
+# next to the binary.
+ARG CODEX_VERSION=latest
+RUN set -eu; \
+    if [ "$CODEX_VERSION" = latest ]; then url=https://github.com/openai/codex/releases/latest/download; \
+    else url=https://github.com/openai/codex/releases/download/rust-v$CODEX_VERSION; fi; \
+    mkdir -p /opt/codex; \
+    curl -fsSL "$url/codex-package-x86_64-unknown-linux-musl.tar.gz" | tar xz -C /opt/codex; \
+    ln -s /opt/codex/bin/codex /usr/local/bin/codex
+
+ARG OPENCODE_VERSION=latest
+RUN set -eu; \
+    if [ "$OPENCODE_VERSION" = latest ]; then url=https://github.com/anomalyco/opencode/releases/latest/download; \
+    else url=https://github.com/anomalyco/opencode/releases/download/v$OPENCODE_VERSION; fi; \
+    curl -fsSL "$url/opencode-linux-x64.tar.gz" | tar xz -C /usr/local/bin opencode
+
+ARG PI_VERSION=latest
+RUN npm install -g --no-fund --no-audit "@earendil-works/pi-coding-agent@$PI_VERSION" \
+    && rm -rf /root/.npm
+
+# The launcher runs as the host user's UID (--userns=keep-id), who owns no home
+# here. This one is writable whatever that UID is and is thrown away with the
+# container; only the store paths the launcher mounts into it persist.
+RUN install -d -m 0777 /home/dev /home/dev/.config /home/dev/.local /home/dev/.local/share
+ENV HOME=/home/dev \
+    XDG_CACHE_HOME=/home/dev/.cache \
+    npm_config_cache=/home/dev/.cache/npm \
+    CLAUDE_CONFIG_DIR=/home/dev/.claude \
+    DISABLE_AUTOUPDATER=1 \
+    CMAKE_CXX_COMPILER_LAUNCHER=ccache \
+    ARRAW_BUILD_PREFIX=container-
+
+WORKDIR /workspace
+CMD ["bash"]
