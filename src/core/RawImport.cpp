@@ -8,11 +8,13 @@
 #include <array>
 #include <cctype>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 
 using namespace arraw;
 
@@ -65,6 +67,24 @@ int openFile(LibRaw& raw, const std::filesystem::path& path) {
 /// @brief Builds the message for a failed LibRaw call.
 std::string failureMessage(const std::filesystem::path& path, int code) {
     return path.string() + ": " + LibRaw::strerror(code);
+}
+
+/// @brief Opens a file with LibRaw, or throws saying why it could not.
+///
+/// LibRaw describes a file that does not exist as a failure of its own, such
+/// as "Image too big for processing", so absence is checked first and worded
+/// the way the Qt path words it.
+/// @throws std::runtime_error naming the file and the reason.
+void openOrThrow(LibRaw& raw, const std::filesystem::path& path) {
+    std::error_code error;
+    if (!std::filesystem::exists(path, error)) {
+        const std::error_code reason =
+            error ? error : std::make_error_code(std::errc::no_such_file_or_directory);
+        throw std::runtime_error(path.string() + ": " + reason.message());
+    }
+    if (const int code = openFile(raw, path); code != LIBRAW_SUCCESS) {
+        throw std::runtime_error(failureMessage(path, code));
+    }
 }
 
 /// @brief Applies arraw's decode settings to an opened handle.
@@ -271,9 +291,7 @@ bool arraw::rawimport::holdsRawImage(const std::filesystem::path& path) {
 ImageMetadata arraw::rawimport::readMetadata(const std::filesystem::path& path,
                                              DiagnosticLog& log) {
     LibRaw raw;
-    if (const int code = openFile(raw, path); code != LIBRAW_SUCCESS) {
-        throw std::runtime_error(failureMessage(path, code));
-    }
+    openOrThrow(raw, path);
 
     // No unpack and no processing: the colour description comes out of the
     // headers, and asking for it must not cost a demosaic.
@@ -283,9 +301,7 @@ ImageMetadata arraw::rawimport::readMetadata(const std::filesystem::path& path,
 
 ImageBuffer arraw::rawimport::load(const std::filesystem::path& path, DiagnosticLog& log) {
     LibRaw raw;
-    if (const int code = openFile(raw, path); code != LIBRAW_SUCCESS) {
-        throw std::runtime_error(failureMessage(path, code));
-    }
+    openOrThrow(raw, path);
 
     applyDecodeSettings(raw);
 

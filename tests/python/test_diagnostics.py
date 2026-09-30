@@ -15,9 +15,17 @@ def test_missing_white_balance_logs_warning(nowb_dng, caplog):
     assert any("white balance" in r.getMessage().lower() for r in warnings)
 
 
-def test_warning_also_comes_from_open_or_load(nowb_dng, caplog):
+def test_opened_photo_reports_once(nowb_dng, caplog):
     with caplog.at_level(logging.INFO, logger="arraw"):
-        arraw.open(nowb_dng).load()
+        photo = arraw.open(nowb_dng)
+        photo.load()
+        arraw.develop(photo)
+    assert len([r for r in arraw_records(caplog) if r.levelno == logging.WARNING]) == 1
+
+
+def test_load_by_path_reports(nowb_dng, caplog):
+    with caplog.at_level(logging.INFO, logger="arraw"):
+        arraw.load(nowb_dng)
     assert any(r.levelno == logging.WARNING for r in arraw_records(caplog))
 
 

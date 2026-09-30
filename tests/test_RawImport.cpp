@@ -6,16 +6,20 @@
 #include <ImageImport.h>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <variant>
 
@@ -355,6 +359,17 @@ TEST_CASE("Describing a photograph does not read its pixels", "[integration][raw
     REQUIRE(metadata.size == ImageSize{32, 24});
 
     REQUIRE_THROWS_AS(loadImage(truncated), std::runtime_error);
+}
+
+TEST_CASE("A RAW that does not exist is reported as missing", "[integration][raw]") {
+    /// LibRaw words a missing file as one of its own failures; the message
+    /// should say what a photographer can act on.
+    const test::TempDir directory;
+    const auto missing = directory.file("gone.dng");
+    const std::string message = std::strerror(ENOENT);
+
+    REQUIRE_THROWS_WITH(readImageMetadata(missing), Catch::Matchers::EndsWith(message));
+    REQUIRE_THROWS_WITH(loadImage(missing), Catch::Matchers::EndsWith(message));
 }
 
 TEST_CASE("A substituted white balance is reported before any pixel is read",

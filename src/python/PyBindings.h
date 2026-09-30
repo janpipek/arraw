@@ -67,19 +67,35 @@ template <class Function> decltype(auto) withoutGil(Function&& function) {
 }
 
 /// @brief Casts a Python value to a C++ type, naming the setting on failure.
+///
+/// Stricter than nanobind's own casts, which read a bool as a number and an
+/// int as an enumeration member: `exposure=True` or `rotation=1` is more
+/// likely a mistake than a meaning, so both are refused.
 /// @tparam V Target type.
 /// @param value Python object.
 /// @param name Name of the setting or argument, for the message.
-/// @note nanobind converts implicitly: a bool reads as a float and an int as an enumeration
-/// member; only values with no conversion raise.
-/// @throws nb::type_error if the value does not convert.
+/// @throws nb::type_error if the value is of the wrong type.
 template <class V> V convertValue(nb::handle value, std::string_view name) {
+    const auto refuse = [&] {
+        return nb::type_error(("'" + std::string(name) + "': cannot use a value of type '" +
+                               std::string(nb::type_name(value.type()).c_str()) + "'")
+                                  .c_str());
+    };
+    constexpr bool numeric = std::is_floating_point_v<V> || std::is_same_v<V, std::optional<float>>;
+    if constexpr (numeric) {
+        if (nb::isinstance<nb::bool_>(value)) {
+            throw refuse();
+        }
+    }
+    if constexpr (std::is_enum_v<V>) {
+        if (!nb::isinstance<V>(value)) {
+            throw refuse();
+        }
+    }
     try {
         return nb::cast<V>(value);
     } catch (const nb::cast_error&) {
-        throw nb::type_error(("'" + std::string(name) + "': cannot use a value of type '" +
-                              std::string(nb::type_name(value.type()).c_str()) + "'")
-                                 .c_str());
+        throw refuse();
     }
 }
 

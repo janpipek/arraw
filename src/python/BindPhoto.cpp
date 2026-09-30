@@ -74,8 +74,9 @@ void bindPhoto(nb::module_& m) {
         .def(
             "load",
             [](const Photo& photo) {
-                PythonLog log;
-                return withoutGil([&] { return loadImage(photo.path(), log); });
+                // What the file declares was reported when the photograph was
+                // opened; decoding it again says nothing new (as the CLI does).
+                return withoutGil([&] { return loadImage(photo.path()); });
             },
             "Decode the photograph's file into a buffer.")
         .def(nb::self == nb::self)
@@ -102,9 +103,9 @@ void bindPhoto(nb::module_& m) {
     m.def(
         "develop",
         [](const Photo& photo, const std::optional<DevelopSettings>& settings) {
-            PythonLog log;
+            // Reported once, by open(), as in Photo.load.
             return withoutGil([&] {
-                const ImageBuffer source = loadImage(photo.path(), log);
+                const ImageBuffer source = loadImage(photo.path());
                 return develop(source, settings.value_or(photo.settings()));
             });
         },

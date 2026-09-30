@@ -82,9 +82,18 @@ def test_unknown_key_is_type_error(photo):
         photo.with_(filmicHighlights=10.0)  # keys are snake_case
 
 
-def test_wrong_value_type_is_type_error(photo):
-    with pytest.raises(TypeError, match="exposure"):
-        photo.with_(exposure="bright")
+@pytest.mark.parametrize(
+    "key, value",
+    [("exposure", "bright"), ("exposure", True), ("temperature", False), ("straighten", True),
+     ("rotation", 1), ("white_balance", 0), ("flip_horizontal", 1)],
+)
+def test_wrong_value_type_is_type_error(photo, key, value):
+    with pytest.raises(TypeError, match=key):
+        photo.with_(**{key: value})
+
+
+def test_int_is_accepted_for_a_number(photo):
+    assert photo.with_(exposure=1).settings.tone.exposure == 1.0
 
 
 @pytest.mark.parametrize(
