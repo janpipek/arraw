@@ -1,6 +1,7 @@
 set windows-powershell := true
 
-clang_format := env_var_or_default("CLANG_FORMAT", "clang-format")
+# The one clang-format everyone formats with: host, sandbox, CI and Windows
+clang_format := env_var_or_default("CLANG_FORMAT", "uvx clang-format@22.1.8")
 
 # List available tasks
 default:
