@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <stdexcept>
 
 namespace arraw {
 
@@ -35,7 +36,33 @@ GpuPointwiseBlock packPointwise(const ProcessingPlan& plan, PointwiseProbe probe
     return block;
 }
 
+namespace {
+
+/// @brief A step split into a part with few mantissa bits and the remainder.
+struct SplitStep {
+    float high;
+    float low;
+};
+
+/// @brief Rounds a value to 9 significant bits, and keeps what that dropped.
+SplitStep splitStep(double value) {
+    constexpr int bits = 9;
+    if (value == 0.0) {
+        return {0.0F, 0.0F};
+    }
+    int exponent = 0;
+    const double mantissa = std::frexp(value, &exponent); // [0.5, 1) in magnitude
+    const double high = std::ldexp(std::round(std::ldexp(mantissa, bits)), exponent - bits);
+    return {static_cast<float>(high), static_cast<float>(value - high)};
+}
+
+} // namespace
+
 GpuGeometryBlock packGeometry(const GeometryPlan& plan) {
+    if (plan.outputSize.width > maxGeometryOutputExtent ||
+        plan.outputSize.height > maxGeometryOutputExtent) {
+        throw std::invalid_argument("The geometry pass is exact only up to 16384 pixels per side");
+    }
     // Composed in double, as applyGeometry evaluates it: upright position
     // left + (x + 0.5) * width / outputWidth, and likewise down, taken back
     // through toSource, which is linear.
@@ -45,12 +72,30 @@ GpuGeometryBlock packGeometry(const GeometryPlan& plan) {
     const auto& m = plan.matrix;
 
     GpuGeometryBlock block;
-    block.origin = {static_cast<float>(origin.x), static_cast<float>(origin.y)};
+    const double originValues[2] = {origin.x, origin.y};
+    for (std::size_t axis = 0; axis < 2; ++axis) {
+        const double whole = std::floor(originValues[axis]);
+        auto fraction = static_cast<float>(originValues[axis] - whole);
+        auto wholeInt = static_cast<std::int32_t>(whole);
+        if (fraction >= 1.0F) { // Rounded up to one: carry it.
+            fraction = 0.0F;
+            ++wholeInt;
+        }
+        block.originWhole[axis] = wholeInt;
+        block.originFraction[axis] = fraction;
+    }
     // toSource applies the transpose, so a column of output moves the source
     // along the matrix's first row and a row of output along its second.
-    block.columnStep = {static_cast<float>(m[0] * columnScale),
-                        static_cast<float>(m[1] * columnScale)};
-    block.rowStep = {static_cast<float>(m[2] * rowScale), static_cast<float>(m[3] * rowScale)};
+    const double columnStep[2] = {m[0] * columnScale, m[1] * columnScale};
+    const double rowStep[2] = {m[2] * rowScale, m[3] * rowScale};
+    for (std::size_t axis = 0; axis < 2; ++axis) {
+        const SplitStep column = splitStep(columnStep[axis]);
+        const SplitStep row = splitStep(rowStep[axis]);
+        block.columnStepHigh[axis] = column.high;
+        block.columnStepLow[axis] = column.low;
+        block.rowStepHigh[axis] = row.high;
+        block.rowStepLow[axis] = row.low;
+    }
     block.sourceSize = {plan.sourceSize.width, plan.sourceSize.height};
     block.outputSize = {plan.outputSize.width, plan.outputSize.height};
     return block;

@@ -20,6 +20,10 @@
 // exponent), although nothing reaches that today, so that a future caller
 // cannot silently get an undefined value. NaN and +inf pass through pow as on
 // the CPU: a NaN fails every comparison below the way it does there.
+//
+// Parity with the CPU, including NaN and infinity, and the tolerances the
+// tests hold, are measured on Vulkan (lavapipe) only. HLSL and MSL compilers
+// may apply fast-math to comparisons and arithmetic; that is unverified.
 
 layout(location = 0) out vec4 fragColor;
 
@@ -53,6 +57,11 @@ const float greyPivot = 0.45865646;
 
 // colorspaces::workingLuminance, ColorSpaces.h.
 const vec3 workingLuminance = vec3(0.2627, 0.6780, 0.0593);
+
+// liftedBlackThreshold, ProcessingPlan.h: luminance at or below which a colour
+// is black for tone. Not zero, because GPUs flush denormals and the CPU does
+// not, so a denormal luminance would branch differently on the two.
+const float liftedBlackThreshold = 1.0e-20;
 
 // std::pow for the arguments the chain gives it; see the note at the top.
 float pow0(float x, float y) {
@@ -126,7 +135,7 @@ vec3 shapeTone(vec3 colour) {
     }
 
     const float luminance = luminanceOf(colour);
-    if (!(luminance > 0.0)) {
+    if (!(luminance > liftedBlackThreshold)) {
         const float lifted = shapeLuminance(0.0);
         return vec3(lifted, lifted, lifted);
     }

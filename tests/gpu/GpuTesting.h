@@ -56,6 +56,11 @@ struct FloatDifference {
                                            double absoluteFloor = 1e-6);
 
 // Tolerances against the CPU, measured on lavapipe by the steps that fixed them.
+//
+// Every number below, and the NaN and infinity parity the tests assert, was
+// measured on Vulkan (lavapipe, Mesa llvmpipe) only. HLSL and MSL back ends may
+// compile with fast-math, which changes comparisons against NaN and infinity
+// and how `pow` rounds; none of that is verified here.
 
 /// @brief Largest error the pointwise pass may have against the CPU chain, relative to the
 /// pixel's scale (see worstColourError).
@@ -80,15 +85,16 @@ inline constexpr double pointwiseAbsoluteFloor = 1e-5;
 /// Largest relative difference tolerated where the resample blends texels.
 ///
 /// Measured worst on small images (up to 31x20, all angles, crops and
-/// aspects): 1.4e-5, at an alpha near 0.06. The shader evaluates the source
-/// position and the blend weights in float where the CPU uses double, so a
-/// weight is off by a few float ulps of the source length; the sums are float.
+/// aspects): 1.6e-6, and 2.2e-6 on a 6000 pixel wide checker. Kept at 1e-4, a
+/// wide margin, so that end-to-end comparisons that add the pointwise error do
+/// not become fragile; the geometry tests assert tighter bounds of their own
+/// where they have measured them. The shader carries the source position as a
+/// whole and a fractional part and evaluates the blend weights from the latter,
+/// so the error is a few float ulps of the weight, whatever the source size.
 inline constexpr double resampleTolerance = 1.0e-4;
 
 /// Magnitude below which differences count against a floor, not the expected value.
 inline constexpr double geometryAbsoluteFloor = 1.0e-4;
-
-/// @brief Builds distinguishable pixels, with coloured transparent ones and fractional alpha.
 
 /// @brief Measures the worst colour error of an image, relative to each pixel's own scale.
 ///

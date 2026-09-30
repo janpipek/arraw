@@ -278,6 +278,16 @@ inline constexpr float greyPivot = 0.45865646F;
     return toLinear(std::max(value, 0.0F));
 }
 
+/// @brief Luminance at or below which tone treats a colour as black.
+///
+/// Below it a luminance cannot be told from black, and the ratio the tone
+/// controls scale the colour by could be denormal or overflow, which GPUs flush
+/// where CPUs do not. Both backends therefore take the lifted branch on the same
+/// side of this value, a normal float far under anything a photograph holds.
+/// NaN fails the comparison and lifts too. Mirrored by `liftedBlackThreshold` in
+/// `src/gpu/shaders/develop.frag`.
+inline constexpr float liftedBlackThreshold = 1.0e-20F;
+
 /// @brief Applies the tone controls to a colour, through its luminance.
 ///
 /// Tone shapes brightness and the colour follows by the ratio, so hue and
@@ -297,7 +307,7 @@ inline constexpr float greyPivot = 0.45865646F;
     const float luminance = colorspaces::workingLuminance[0] * colour[0] +
                             colorspaces::workingLuminance[1] * colour[1] +
                             colorspaces::workingLuminance[2] * colour[2];
-    if (!(luminance > 0.0F)) {
+    if (!(luminance > liftedBlackThreshold)) {
         const float lifted = shapeLuminance(plan, 0.0F);
         return {lifted, lifted, lifted};
     }
