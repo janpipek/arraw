@@ -616,20 +616,20 @@ std::optional<SidecarContents> arraw::readSidecar(const std::filesystem::path& p
     const std::vector<QDomElement> descriptions = descriptionsOf(document);
 
     SidecarContents contents;
-    readVersion(descriptions, log, path);
+    readVersion(descriptions, log, photo);
     for (const FieldDescriptor& descriptor : developSettingDescriptors) {
         const auto found = occurrencesOf(descriptions, arrawProperty(descriptor.key));
         if (found.empty()) {
             continue;
         }
         if (found.back().simple) {
-            applyText(descriptor, found.back().text, contents.settings, log, path);
+            applyText(descriptor, found.back().text, contents.settings, log, photo);
         } else {
-            reportMalformed(descriptor, log, path);
+            reportMalformed(descriptor, log, photo);
         }
     }
-    readUnknownKeys(descriptions, log, path);
-    contents.marks = marksIn(descriptions, log, path);
+    readUnknownKeys(descriptions, log, photo);
+    contents.marks = marksIn(descriptions, log, photo);
     return contents;
 }
 

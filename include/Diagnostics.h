@@ -91,6 +91,10 @@ enum class Notice {
     /// @brief A photograph's sidecar could not be read, so the photograph was
     /// opened without its settings and marks: the reason.
     SidecarUnreadable,
+
+    /// @brief An explicit crop was dropped for automatic framing, because an
+    /// edit changed the rotation or flips it was drawn in: what changed.
+    CropReset,
 };
 
 /// @brief One detail of a diagnostic, kept as a value rather than as prose.

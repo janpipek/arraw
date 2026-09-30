@@ -120,6 +120,10 @@ void writeSidecar(const Photo&);   // preserves everything it does not own
    flags (`ExportCommand.cpp`, `openPhoto(input, log).with(request.settings)`).
    `--no-sidecar` ignores sidecars. The CLI never writes a sidecar in this
    phase.
+
+   *Done.* The flags are a list of (descriptor, encoded value) applied with
+   `decode` over `openPhoto`'s settings; `--no-sidecar` opens with
+   `Photo(path, readImageMetadata(path, log))`, so no API changed. See ADR 006.
 4. **Python.** This step adds:
    - `DevelopSettings.to_json()` and `DevelopSettings.from_json(text, base=None)`;
    - `Photo.marks` and `with_(rating=…, label=…)`;

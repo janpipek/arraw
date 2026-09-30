@@ -247,7 +247,7 @@ TEST_CASE("A child-element key is read, then replaced by an attribute", "[sideca
     // The one key this arraw does not know is reported, naming the file.
     REQUIRE(log.entries().size() == 1);
     REQUIRE(log.entries().front().notice == Notice::SettingUnknown);
-    REQUIRE(log.entries().front().subject == sidecar);
+    REQUIRE(log.entries().front().subject == path);
 
     writeSidecar(photoOf(path, contents->settings, contents->marks));
     QDomDocument document = parsed(sidecar);
@@ -354,7 +354,7 @@ TEST_CASE("Opening a photograph picks up its sidecar", "[sidecar][photo]") {
     REQUIRE(photo.marks() == PhotoMarks{.rating = -1, .label = ColorLabel::Yellow});
     REQUIRE(log.entries().size() == 1);
     REQUIRE(log.entries().front().notice == Notice::SettingClamped);
-    REQUIRE(log.entries().front().subject == sidecar);
+    REQUIRE(log.entries().front().subject == path);
 }
 
 TEST_CASE("A photograph without a sidecar opens as before", "[sidecar][photo]") {
@@ -384,7 +384,7 @@ TEST_CASE("Values a sidecar gets wrong are reported and repaired", "[sidecar][di
         with(R"(xmp:Rating="9")");
         REQUIRE(readSidecar(path, log)->marks.rating == 5);
         REQUIRE(count(log, Notice::SettingClamped) == 1);
-        REQUIRE(log.entries().front().subject == sidecar);
+        REQUIRE(log.entries().front().subject == path);
         with(R"(xmp:Rating="-4")");
         REQUIRE(readSidecar(path, log)->marks.rating == -1);
     }
@@ -397,7 +397,7 @@ TEST_CASE("Values a sidecar gets wrong are reported and repaired", "[sidecar][di
         with(R"(xmp:Label="Mauve")");
         REQUIRE_FALSE(readSidecar(path, log)->marks.label);
         REQUIRE(count(log, Notice::SettingMalformed) == 1);
-        REQUIRE(log.entries().front().subject == sidecar);
+        REQUIRE(log.entries().front().subject == path);
     }
     SECTION("an empty label is no label") {
         with(R"(xmp:Label="")");
@@ -410,13 +410,13 @@ TEST_CASE("Values a sidecar gets wrong are reported and repaired", "[sidecar][di
         REQUIRE(contents->settings.tone.exposure == 0.0F);
         REQUIRE(contents->settings.tone.contrast == 0.25F);
         REQUIRE(count(log, Notice::SettingMalformed) == 2);
-        REQUIRE(log.entries().front().subject == sidecar);
+        REQUIRE(log.entries().front().subject == path);
     }
     SECTION("a newer version is read with a warning") {
         with(R"(arraw:version="2" arraw:exposure="0.5")");
         REQUIRE(readSidecar(path, log)->settings.tone.exposure == 0.5F);
         REQUIRE(count(log, Notice::NewerSettingsVersion) == 1);
-        REQUIRE(log.entries().front().subject == sidecar);
+        REQUIRE(log.entries().front().subject == path);
     }
 }
 

@@ -55,7 +55,7 @@ struct SidecarContents {
 /// ::arraw::PhotoMarks so that a write gives it back. `arraw:version` above
 /// ::arraw::sidecarVersion gives ::arraw::Notice::NewerSettingsVersion.
 /// `crs:` and anything else is not read.
-/// @param photo Path of the photograph.
+/// @param photo Path of the photograph, which is also the subject of every warning.
 /// @param log Where the warnings go.
 /// @return What the sidecar holds, or nothing when there is no sidecar.
 /// @throws std::runtime_error if the sidecar cannot be read or is not XML,

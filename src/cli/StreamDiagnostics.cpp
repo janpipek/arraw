@@ -62,6 +62,8 @@ std::string nameOf(Notice notice) {
         return "newer_settings_version";
     case Notice::SidecarUnreadable:
         return "sidecar_unreadable";
+    case Notice::CropReset:
+        return "crop_reset";
     }
     return "unknown";
 }

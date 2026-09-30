@@ -6,6 +6,7 @@
 #include "GpuContext.h"
 #include "GpuDevelop.h"
 #include "ProcessingPlan.h"
+#include "SettingCodec.h"
 #include "StreamDiagnostics.h"
 
 #include <Develop.h>
@@ -56,6 +57,10 @@ bool cli::isRangedFloatSetting(const FieldDescriptor& descriptor) {
 
 namespace {
 
+using cli::CropEdit;
+using cli::GeometryEdits;
+using cli::SettingEdit;
+
 /// @brief File extension a format is written with.
 std::string_view extensionFor(ImageFileFormat format) {
     switch (format) {
@@ -69,12 +74,91 @@ std::string_view extensionFor(ImageFileFormat format) {
     return ".bin";
 }
 
+/// @brief Finds the row of the settings table a key names.
+/// @throws std::logic_error if no row has the key, which is a misspelling in this file.
+const FieldDescriptor& descriptorFor(std::string_view key) {
+    const FieldDescriptor* descriptor = findDescriptor(key);
+    if (descriptor == nullptr) {
+        throw std::logic_error("no setting is keyed '" + std::string(key) + "'");
+    }
+    return *descriptor;
+}
+
+/// @brief Records the value a field of @p source now holds as an edit.
+/// @param edits List to append to.
+/// @param key Key of the field, which must name a row.
+/// @param source Settings holding the value the flags gave.
+void addEdit(std::vector<SettingEdit>& edits, std::string_view key, const DevelopSettings& source) {
+    const FieldDescriptor& descriptor = descriptorFor(key);
+    edits.push_back({&descriptor, encode(descriptor, source)});
+}
+
+/// @brief Puts the geometry flags on top of a photograph's own geometry.
+///
+/// The flags are values, not operations. ADR 014 has a rotation or flip carry
+/// an explicit crop with the content it selects, composed in displayed axes;
+/// that belongs to the geometry editor, not to the command line. So when the
+/// flags change the rotation, straighten or flips a sidecar's explicit crop
+/// was drawn in, the crop goes back to automatic framing, with a warning, and
+/// a quarter-turn that swaps the frame's sides reciprocates a custom ratio.
+/// `--crop` with a rectangle, without an aspect, leaves the aspect free, since
+/// a rectangle a photographer draws does not obey the sidecar's old
+/// constraint; `--crop-aspect` other than free, without a rectangle, makes the
+/// rectangle automatic when the aspect changes. Given together, the two are
+/// taken as they are, and the render rejects a pair that does not agree.
+GeometrySettings withGeometryEdits(GeometrySettings base, const GeometryEdits& edits,
+                                   DiagnosticLog& log, const std::filesystem::path& subject) {
+    const GeometrySettings before = base;
+    if (edits.rotate) {
+        cli::setRotationAngle(base, *edits.rotate);
+    }
+    if (edits.flipHorizontal) {
+        base.flipHorizontal = *edits.flipHorizontal;
+    }
+    if (edits.flipVertical) {
+        base.flipVertical = *edits.flipVertical;
+    }
+    const int turns = (static_cast<int>(base.rotation) - static_cast<int>(before.rotation) + 4) % 4;
+    if (turns % 2 == 1) {
+        if (auto* ratio = std::get_if<CropRatio>(&base.crop.aspect)) {
+            ratio->widthOverHeight = 1.0 / ratio->widthOverHeight;
+        }
+    }
+    const bool reframed =
+        base.rotation != before.rotation || base.straighten != before.straighten ||
+        base.flipHorizontal != before.flipHorizontal || base.flipVertical != before.flipVertical;
+    if (reframed && base.crop.rectangle && !edits.crop) {
+        base.crop.rectangle.reset();
+        log.record({.notice = Notice::CropReset,
+                    .severity = Severity::Warning,
+                    .subject = subject,
+                    .values = {std::string(edits.rotate ? "the rotation" : "the flips")}});
+    }
+    if (edits.crop) {
+        base.crop.rectangle = edits.crop->rectangle;
+        if (edits.crop->rectangle && !edits.aspect) {
+            base.crop.aspect = FreeCropAspect{};
+        }
+    }
+    if (edits.aspect) {
+        const bool freed = std::holds_alternative<FreeCropAspect>(*edits.aspect);
+        if (!edits.crop && !freed && *edits.aspect != base.crop.aspect) {
+            base.crop.rectangle.reset();
+        }
+        base.crop.aspect = *edits.aspect;
+    }
+    return base;
+}
+
 /// @brief Everything the command needs, once its arguments are understood.
 struct ExportRequest {
     std::vector<std::filesystem::path> inputs;
     std::filesystem::path outputDirectory;
     ImageFileFormat format = ImageFileFormat::Jpeg;
-    DevelopSettings settings;
+    /// @brief What the flags said, applied over each photograph's own settings.
+    cli::ExportEdits edits;
+    /// @brief Whether each photograph's sidecar is read; false is `--no-sidecar`.
+    bool useSidecars = true;
     ExportOptions options;
     cli::DeviceChoice device;
     GpuBackend backend = defaultGpuBackend();
@@ -158,15 +242,16 @@ std::string limit(double value) {
     return QString::number(value).toStdString();
 }
 
-/// @brief Reads every numeric setting option into the settings.
+/// @brief Reads every numeric setting option into edits.
 ///
 /// Names and limits come from ::arraw::developSettingDescriptors. Out of range
 /// is refused rather than clamped: a photographer is present to be told, and
 /// nothing invalid should enter a session (ADR 008). The renderer clamps as
 /// well, for values that arrive from a file instead.
 /// @return `true` if every option present was acceptable; `false` otherwise.
-bool readSettings(const QCommandLineParser& parser, DevelopSettings& settings, std::ostream& err,
-                  int& code) {
+bool readSettings(const QCommandLineParser& parser, std::vector<SettingEdit>& edits,
+                  std::ostream& err, int& code) {
+    DevelopSettings given;
     for (const FieldDescriptor& descriptor : developSettingDescriptors) {
         if (!isNumericOption(descriptor)) {
             continue;
@@ -186,19 +271,20 @@ bool readSettings(const QCommandLineParser& parser, DevelopSettings& settings, s
                                        " to " + limit(descriptor.range->maximum));
             return false;
         }
-        visitField(descriptor, settings, [&](auto& field) {
+        visitField(descriptor, given, [&](auto& field) {
             if constexpr (std::is_same_v<std::remove_cvref_t<decltype(field)>, float> ||
                           std::is_same_v<std::remove_cvref_t<decltype(field)>,
                                          std::optional<float>>) {
                 field = parsed;
             }
         });
+        addEdit(edits, descriptor.key, given);
     }
     return true;
 }
 
-/// @brief Reads geometry values without resolving or executing any transforms.
-bool readGeometry(const QCommandLineParser& parser, GeometrySettings& geometry, std::ostream& err,
+/// @brief Reads the geometry options into edits, without resolving or executing any transforms.
+bool readGeometry(const QCommandLineParser& parser, GeometryEdits& edits, std::ostream& err,
                   int& code) {
     if (parser.isSet("rotate")) {
         bool valid = false;
@@ -207,15 +293,26 @@ bool readGeometry(const QCommandLineParser& parser, GeometrySettings& geometry, 
             code = usageError(err, "--rotate takes a finite angle in clockwise degrees");
             return false;
         }
-        cli::setRotationAngle(geometry, degrees);
+        edits.rotate = degrees;
     }
-    geometry.flipHorizontal = parser.isSet("flip-horizontal");
-    geometry.flipVertical = parser.isSet("flip-vertical");
+    const auto readFlip = [&](const char* on, const char* off, std::optional<bool>& flip) {
+        if (parser.isSet(on) && parser.isSet(off)) {
+            code = usageError(err, std::string("--") + on + " and --" + off + " contradict");
+            return false;
+        }
+        if (parser.isSet(on) || parser.isSet(off)) {
+            flip = parser.isSet(on);
+        }
+        return true;
+    };
+    if (!readFlip("flip-horizontal", "no-flip-horizontal", edits.flipHorizontal) ||
+        !readFlip("flip-vertical", "no-flip-vertical", edits.flipVertical)) {
+        return false;
+    }
     if (parser.isSet("crop")) {
         const auto value = parser.value("crop").trimmed().toLower();
-        if (value == "auto") {
-            geometry.crop.rectangle.reset();
-        } else {
+        CropEdit crop;
+        if (value != "auto") {
             const auto edges = value.split(',');
             UprightCropRect rectangle;
             double* destinations[]{&rectangle.left, &rectangle.top, &rectangle.right,
@@ -234,15 +331,16 @@ bool readGeometry(const QCommandLineParser& parser, GeometrySettings& geometry, 
                                        "edges from 0 to 1, left < right and top < bottom");
                 return false;
             }
-            geometry.crop.rectangle = rectangle;
+            crop.rectangle = rectangle;
         }
+        edits.crop = crop;
     }
     if (parser.isSet("crop-aspect")) {
         const auto value = parser.value("crop-aspect").trimmed().toLower();
         if (value == "free") {
-            geometry.crop.aspect = FreeCropAspect{};
+            edits.aspect = FreeCropAspect{};
         } else if (value == "original") {
-            geometry.crop.aspect = OriginalCropAspect{};
+            edits.aspect = OriginalCropAspect{};
         } else {
             const auto parts = value.split(':');
             bool validWidth = false;
@@ -256,10 +354,47 @@ bool readGeometry(const QCommandLineParser& parser, GeometrySettings& geometry, 
                                        "width:height, for example 3:2 or 2:3");
                 return false;
             }
-            geometry.crop.aspect = CropRatio{ratio};
+            edits.aspect = CropRatio{ratio};
         }
     }
     return true;
+}
+
+/// @brief Reads every develop option, the white balance's included, into edits.
+bool readEdits(const QCommandLineParser& parser, cli::ExportEdits& edits, std::ostream& err,
+               int& code) {
+    if (!readSettings(parser, edits.settings, err, code)) {
+        return false;
+    }
+    DevelopSettings given;
+    // Naming either half of a white balance is asking for a custom one; the
+    // half left unnamed stays as the photograph has it, or as the camera
+    // recorded it.
+    if (parser.isSet("temperature") || parser.isSet("tint")) {
+        given.color.whiteBalance = WhiteBalanceMode::Custom;
+        addEdit(edits.settings, "whiteBalance", given);
+    }
+    if (parser.isSet("white-balance")) {
+        const auto mode = parser.value("white-balance").toLower();
+        if (mode == "as-shot") {
+            if (parser.isSet("temperature") || parser.isSet("tint")) {
+                code = usageError(err, "--white-balance as-shot cannot be combined with "
+                                       "--temperature or --tint");
+                return false;
+            }
+            // Clears both halves, so nothing a sidecar kept in them survives.
+            addEdit(edits.settings, "whiteBalance", given);
+            addEdit(edits.settings, "temperature", given);
+            addEdit(edits.settings, "tint", given);
+        } else if (mode == "custom") {
+            given.color.whiteBalance = WhiteBalanceMode::Custom;
+            addEdit(edits.settings, "whiteBalance", given);
+        } else {
+            code = usageError(err, "--white-balance takes as-shot or custom");
+            return false;
+        }
+    }
+    return readGeometry(parser, edits.geometry, err, code);
 }
 
 /// @brief Configures the command's own parser.
@@ -278,8 +413,21 @@ void configure(QCommandLineParser& parser) {
         "With no develop settings an export is a faithful conversion of the image as\n"
         "captured, save for a gentle roll-off that bends the brightest values toward\n"
         "white instead of clipping them flat; --filmic-highlights 0 turns it off.\n"
+        "Each file renders through its own .xmp sidecar, if it has one: the develop\n"
+        "settings given here are applied on top of the sidecar's and replace only what\n"
+        "they name. --no-sidecar ignores sidecars, so the flags alone develop the file.\n"
+        "Naming --temperature or --tint makes white balance custom; the other half\n"
+        "keeps the photograph's own value, or as shot. The command never writes a\n"
+        "sidecar.\n"
         "Camera orientation is honoured. Rotation, flips and cropping are applied\n"
         "after colour and tone; crops always stay inside valid image content.\n"
+        "Geometry flags are values: --rotate replaces the sidecar's rotation, and a\n"
+        "rotation, straighten or flip that changes drops its explicit crop for\n"
+        "automatic framing, with a warning. --crop with a rectangle leaves the aspect free unless "
+        "--crop-aspect\n"
+        "is given too; --crop-aspect alone makes the crop automatic when it changes\n"
+        "the aspect to something other than free. A sidecar that cannot be read fails\n"
+        "its file, unless --no-sidecar is given.\n"
         "\n"
         "Development runs on the GPU when there is one, unless --device cpu is given or\n"
         "ARRAW_DISABLE_GPU is set to a value other than 0. Without --device gpu, a GPU\n"
@@ -313,7 +461,9 @@ void configure(QCommandLineParser& parser) {
     parser.addOption(
         {"rotate", "Any finite clockwise angle, before flips. Default: 0.", "degrees"});
     parser.addOption({"flip-horizontal", "Flip horizontally in the upright frame."});
+    parser.addOption({"no-flip-horizontal", "Undo a sidecar's horizontal flip."});
     parser.addOption({"flip-vertical", "Flip vertically in the upright frame."});
+    parser.addOption({"no-flip-vertical", "Undo a sidecar's vertical flip."});
     parser.addOption(
         {"crop", "auto or normalised upright left,top,right,bottom. Default: auto.", "rectangle"});
     parser.addOption(
@@ -331,6 +481,10 @@ void configure(QCommandLineParser& parser) {
                           "(xcb or wayland); the others need no display.",
                       "name"});
     parser.addOption({"allow-software", "Accept a software rasteriser, such as llvmpipe or WARP."});
+    parser.addOption({"no-sidecar",
+                      "Ignore each photograph's .xmp sidecar: develop it from the defaults and "
+                      "the flags alone. Without it, the flags are applied on top of the sidecar's "
+                      "settings. The command never writes a sidecar."});
     parser.addOption({"no-profile", "Convert colour but do not embed the output profile."});
     parser.addOption({"overwrite", "Replace outputs that already exist."});
     parser.addOption({{"q", "quiet"}, "Do not report each file as it is written."});
@@ -408,31 +562,7 @@ std::optional<ExportRequest> buildRequest(const QCommandLineParser& parser, std:
         return std::nullopt;
     }
 
-    if (!readSettings(parser, request.settings, err, code)) {
-        return std::nullopt;
-    }
-    // Naming either half of a white balance is asking for a custom one; the
-    // half left unnamed stays as the camera recorded it.
-    if (request.settings.color.temperature.has_value() || request.settings.color.tint.has_value()) {
-        request.settings.color.whiteBalance = WhiteBalanceMode::Custom;
-    }
-    if (parser.isSet("white-balance")) {
-        const auto mode = parser.value("white-balance").toLower();
-        if (mode == "as-shot") {
-            if (parser.isSet("temperature") || parser.isSet("tint")) {
-                code = usageError(err, "--white-balance as-shot cannot be combined with "
-                                       "--temperature or --tint");
-                return std::nullopt;
-            }
-            request.settings.color.whiteBalance = WhiteBalanceMode::AsShot;
-        } else if (mode == "custom") {
-            request.settings.color.whiteBalance = WhiteBalanceMode::Custom;
-        } else {
-            code = usageError(err, "--white-balance takes as-shot or custom");
-            return std::nullopt;
-        }
-    }
-    if (!readGeometry(parser, request.settings.geometry, err, code)) {
+    if (!readEdits(parser, request.edits, err, code)) {
         return std::nullopt;
     }
 
@@ -482,6 +612,7 @@ std::optional<ExportRequest> buildRequest(const QCommandLineParser& parser, std:
     request.logFormat = *logFormat;
 
     request.options.embedProfile = !parser.isSet("no-profile");
+    request.useSidecars = !parser.isSet("no-sidecar");
     request.overwrite = parser.isSet("overwrite");
     request.quiet = parser.isSet("quiet");
     return request;
@@ -522,6 +653,23 @@ ImageBuffer developOnDevice(GpuContext& context, const ImageBuffer& source,
     const RenderCheckpoint checkpoint = developOnGpu(context, source, settings);
     return checkpoint.readBack();
 }
+
+/// @brief Log that passes everything on and notes whether a sidecar was unreadable.
+class SidecarWatch final : public DiagnosticLog {
+public:
+    explicit SidecarWatch(DiagnosticLog& next) : next_(next) {}
+
+    void record(const Diagnostic& diagnostic) override {
+        unreadable = unreadable || diagnostic.notice == Notice::SidecarUnreadable;
+        next_.record(diagnostic);
+    }
+
+    /// @brief Whether a sidecar was reported unreadable.
+    bool unreadable = false;
+
+private:
+    DiagnosticLog& next_;
+};
 
 /// @brief Exports every input, continuing past the ones that fail.
 int exportAll(const ExportRequest& request, std::ostream& err) {
@@ -580,10 +728,21 @@ int exportAll(const ExportRequest& request, std::ostream& err) {
             // rather than when its pixels arrive. The command line's settings
             // are another snapshot of it, and the file on disk is untouched
             // (ADR 012). The decode is then not asked to repeat the warning.
-            // Interim, until the sidecar plan's step 3: the sidecar is read,
-            // and its warnings reported, but the command line's settings
-            // replace the settings it held.
-            const Photo photo = openPhoto(input, log).with(request.settings);
+            // The settings are the photograph's own, its sidecar's, with only
+            // what the flags named applied on top; --no-sidecar opens it bare.
+            // A sidecar that cannot be read fails the file: opened bare, the
+            // photograph would export without the edits its photographer made
+            // and the exit status would say all was well. --no-sidecar opts out.
+            SidecarWatch watch(log);
+            const Photo opened = request.useSidecars ? openPhoto(input, watch)
+                                                     : Photo(input, readImageMetadata(input, log));
+            if (watch.unreadable) {
+                throw std::runtime_error("its sidecar could not be read, so its edits are not "
+                                         "applied; fix the sidecar, or pass --no-sidecar to "
+                                         "export without it");
+            }
+            const Photo photo =
+                opened.with(cli::applyEdits(opened.settings(), request.edits, log, input));
             // Decoded once, before the device is involved: a file that cannot be
             // read is the input's failure, whichever device would have developed it.
             const ImageBuffer source = loadImage(input);
@@ -646,6 +805,44 @@ int exportAll(const ExportRequest& request, std::ostream& err) {
 }
 
 } // namespace
+
+std::optional<cli::ExportEdits> cli::readExportEdits(const std::vector<std::string>& flags,
+                                                     std::ostream& err) {
+    QCommandLineParser parser;
+    configure(parser);
+    QStringList arguments{"export"};
+    for (const std::string& flag : flags) {
+        arguments.append(QString::fromStdString(flag));
+    }
+    if (!parser.parse(arguments)) {
+        (void)usageError(err, parser.errorText().toStdString());
+        return std::nullopt;
+    }
+    ExportEdits edits;
+    int code = Success;
+    if (!readEdits(parser, edits, err, code)) {
+        return std::nullopt;
+    }
+    return edits;
+}
+
+DevelopSettings cli::applyEdits(DevelopSettings base, const ExportEdits& edits, DiagnosticLog& log,
+                                const std::filesystem::path& subject) {
+    // A photograph that is not in Custom white balance has no temperature or
+    // tint of its own, so whatever a sidecar left in them is dropped first:
+    // naming one half then leaves the other as shot, as it always did, rather
+    // than adopting a value the photograph was not using. This happens with no
+    // flags too, which changes nothing a render reads.
+    if (base.color.whiteBalance != WhiteBalanceMode::Custom) {
+        base.color.temperature.reset();
+        base.color.tint.reset();
+    }
+    for (const SettingEdit& edit : edits.settings) {
+        decode(*edit.descriptor, edit.value, base, log, subject);
+    }
+    base.geometry = withGeometryEdits(base.geometry, edits.geometry, log, subject);
+    return base;
+}
 
 int cli::runExportCommand(const QStringList& arguments, std::ostream& out, std::ostream& err,
                           const StartApplication& start) {

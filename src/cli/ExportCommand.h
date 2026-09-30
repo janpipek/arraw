@@ -1,13 +1,20 @@
 #pragma once
 
 #include "Cli.h"
+#include "SettingCodec.h"
 
+#include <DevelopSettings.h>
+#include <Diagnostics.h>
 #include <GeometrySettings.h>
 #include <SettingDescriptors.h>
 
 #include <QtCore/qcontainerfwd.h>
 
+#include <filesystem>
 #include <iosfwd>
+#include <optional>
+#include <string>
+#include <vector>
 
 namespace arraw::cli {
 
@@ -22,6 +29,67 @@ void setRotationAngle(GeometrySettings& geometry, double degrees);
 /// Such a row needs help wording in the export command; a test holds the table to it.
 /// @param descriptor Row of ::arraw::developSettingDescriptors.
 [[nodiscard]] bool isRangedFloatSetting(const FieldDescriptor& descriptor);
+
+/// @brief One setting the flags named, as the codec understands it.
+struct SettingEdit {
+    /// @brief Row of ::arraw::developSettingDescriptors naming the field.
+    const FieldDescriptor* descriptor;
+
+    /// @brief Value to give it.
+    Encoded value;
+};
+
+/// @brief What `--crop` said: a rectangle, or automatic framing when empty.
+struct CropEdit {
+    /// @brief Rectangle asked for, or automatic framing when absent.
+    std::optional<UprightCropRect> rectangle;
+};
+
+/// @brief The geometry flags the command line was given.
+struct GeometryEdits {
+    /// @brief `--rotate`: clockwise degrees, replacing the quarter-turn and the straighten.
+    std::optional<double> rotate;
+
+    /// @brief `--flip-horizontal` (true) or `--no-flip-horizontal` (false).
+    std::optional<bool> flipHorizontal;
+
+    /// @brief `--flip-vertical` (true) or `--no-flip-vertical` (false).
+    std::optional<bool> flipVertical;
+
+    /// @brief `--crop`.
+    std::optional<CropEdit> crop;
+
+    /// @brief `--crop-aspect`.
+    std::optional<CropAspect> aspect;
+};
+
+/// @brief What the flags of an export say to change in each photograph's settings.
+///
+/// A partial edit rather than a settings value, so that whatever a flag does not
+/// name stays as the photograph's sidecar has it (ADR 006).
+struct ExportEdits {
+    /// @brief Ordered edits of the settings the table describes.
+    std::vector<SettingEdit> settings;
+
+    /// @brief Edits of the geometry, which may send an explicit crop back to automatic framing.
+    GeometryEdits geometry;
+};
+
+/// @brief Reads the develop flags of an export command line.
+/// @param flags The command's arguments after its name; only develop flags are used.
+/// @param err Where a usage problem is reported.
+/// @return The edits, or `std::nullopt` after reporting the problem.
+[[nodiscard]] std::optional<ExportEdits> readExportEdits(const std::vector<std::string>& flags,
+                                                         std::ostream& err);
+
+/// @brief Puts the flags' edits on top of a photograph's own settings.
+/// @param base Settings the photograph came with.
+/// @param edits What the flags said.
+/// @param log Where the codec's warnings go; a value the flags gave is already in range.
+/// @param subject Photograph the settings are for.
+/// @return @p base with the edits applied.
+[[nodiscard]] DevelopSettings applyEdits(DevelopSettings base, const ExportEdits& edits,
+                                         DiagnosticLog& log, const std::filesystem::path& subject);
 
 /// @brief Renders images and writes them out.
 ///

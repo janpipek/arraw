@@ -92,6 +92,37 @@ rest it removes the options it takes for its own, even after `--`, so
 `QT_QPA_PLATFORM` rather than `-platform` chooses a platform. Adding a command
 is a row and a file.
 
+*Added 2026-09-30, with sidecars:* each input renders through its own sidecar
+(see the sidecars plan, step 3). The flags are a partial edit, not a settings
+value: the request keeps an ordered list of (descriptor, encoded value) for just
+the flags given, and each input's settings are `openPhoto`'s, its sidecar's,
+with those edits decoded on top through the same codec the sidecar uses. A range
+is still refused as a usage error, never clamped. Cross-field rules are relative
+to that base: `--temperature` or `--tint` makes white balance Custom, and the
+half not named keeps the photograph's own value when its sidecar is Custom and is
+as shot otherwise (ADR 008: a partial edit leaves what it does not name
+untouched); `--white-balance as-shot` clears both. Whatever the flags leave
+out stays as the sidecar has it. The geometry flags are values, not the
+operations ADR 014 defines for an editor, which carry an explicit crop with
+the content in displayed axes; the command line does not reproduce that. So
+`--rotate` sets rotation and straighten, `--flip-horizontal` and
+`--flip-vertical` set a flip and `--no-flip-horizontal` and
+`--no-flip-vertical` clear it, and when any of them changes what the sidecar
+had, its explicit rectangle is dropped for automatic framing with a
+`CropReset` warning, and a change of an odd number of quarter-turns
+reciprocates a custom ratio; `--crop` with a rectangle leaves the
+aspect free unless `--crop-aspect` is given too, and `--crop auto` keeps it;
+`--crop-aspect` alone makes the rectangle automatic when the aspect changes to
+anything but free. Given together, `--crop` and `--crop-aspect` are taken as
+given, and a pair that disagrees fails the file at planning. `applyEdits` drops
+the temperature and tint of a sidecar that is not Custom even with no flags,
+which changes nothing a render reads. `--no-sidecar` ignores sidecars (defaults
+plus flags). An unreadable sidecar fails that input (exit 1, the rest of the
+batch still exports), because opening it bare would silently lose the
+photographer's edits; `--no-sidecar` exports it anyway. The command never writes
+a sidecar. Sidecar warnings and errors go through the same log, in text and
+JSON, with the photograph as their subject.
+
 ## Consequences
 
 - **The command line is tested in-process**, which departs from ADR 004's
