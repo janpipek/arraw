@@ -87,6 +87,10 @@ enum class Notice {
     /// @brief A settings document was written by a newer arraw, and was read
     /// anyway: its version, then the newest version this arraw knows.
     NewerSettingsVersion,
+
+    /// @brief A photograph's sidecar could not be read, so the photograph was
+    /// opened without its settings and marks: the reason.
+    SidecarUnreadable,
 };
 
 /// @brief One detail of a diagnostic, kept as a value rather than as prose.

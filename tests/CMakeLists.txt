@@ -35,6 +35,7 @@ add_executable(arraw-tests
         test_SettingCodec.cpp
         test_SettingDescriptors.cpp
         test_SettingsJson.cpp
+        test_Sidecar.cpp
         test_SampleConversion.cpp
         test_RoundTrip.cpp
         test_Tone.cpp
@@ -58,7 +59,7 @@ target_compile_definitions(arraw-tests
 # the one place outside arraw-gpu that names it, because the failures it covers
 # cannot be caused through GpuContext.
 target_link_libraries(arraw-tests
-        PRIVATE arraw arraw-gpu arraw-cli-core Catch2::Catch2 Qt6::Gui Qt6::GuiPrivate)
+        PRIVATE arraw arraw-gpu arraw-cli-core Catch2::Catch2 Qt6::Gui Qt6::GuiPrivate Qt6::Xml)
 set_target_properties(arraw-tests PROPERTIES AUTOMOC OFF)
 arraw_deploy_qt_plugins(arraw-tests)
 

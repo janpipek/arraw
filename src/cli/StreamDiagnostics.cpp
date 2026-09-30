@@ -60,6 +60,8 @@ std::string nameOf(Notice notice) {
         return "setting_malformed";
     case Notice::NewerSettingsVersion:
         return "newer_settings_version";
+    case Notice::SidecarUnreadable:
+        return "sidecar_unreadable";
     }
     return "unknown";
 }

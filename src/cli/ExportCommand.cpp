@@ -580,6 +580,9 @@ int exportAll(const ExportRequest& request, std::ostream& err) {
             // rather than when its pixels arrive. The command line's settings
             // are another snapshot of it, and the file on disk is untouched
             // (ADR 012). The decode is then not asked to repeat the warning.
+            // Interim, until the sidecar plan's step 3: the sidecar is read,
+            // and its warnings reported, but the command line's settings
+            // replace the settings it held.
             const Photo photo = openPhoto(input, log).with(request.settings);
             // Decoded once, before the device is involved: a file that cannot be
             // read is the input's failure, whichever device would have developed it.

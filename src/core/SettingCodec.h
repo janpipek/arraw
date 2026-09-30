@@ -36,6 +36,17 @@ using Encoded = std::variant<std::monostate, bool, double, std::string, Compound
 /// @return The field's value; never null except for an unset optional.
 [[nodiscard]] Encoded encode(const FieldDescriptor& descriptor, const DevelopSettings& settings);
 
+/// @brief Lists the compound values a row can encode to, by the names of their members.
+///
+/// For a format whose text does not say what shape a value has, and that has to
+/// build the compound a row would take: a crop rectangle gives
+/// left, top, right, bottom, a crop aspect gives ratio.
+/// @param descriptor Row naming the field.
+/// @return One list of member names, in ::arraw::encode's order, for each
+/// compound the row can encode to; none for a row that never encodes to one.
+[[nodiscard]] std::vector<std::vector<std::string>>
+compoundShapes(const FieldDescriptor& descriptor);
+
 /// @brief Describes what a row accepts, in words for a warning.
 /// @param descriptor Row naming the field.
 /// @return The expectation, for instance "a number, or unset".

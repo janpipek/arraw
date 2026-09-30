@@ -202,6 +202,32 @@ std::string arraw::expectation(const FieldDescriptor& descriptor) {
     });
 }
 
+std::vector<std::vector<std::string>> arraw::compoundShapes(const FieldDescriptor& descriptor) {
+    // Asked of encode itself, with a value of each compound type, so the names
+    // cannot drift from what it writes.
+    DevelopSettings sample;
+    std::vector<std::vector<std::string>> shapes;
+    visitField(descriptor, sample, [&](auto& field) {
+        using T = std::remove_cvref_t<decltype(field)>;
+        if constexpr (std::is_same_v<T, std::optional<UprightCropRect>>) {
+            field = UprightCropRect{};
+        } else if constexpr (std::is_same_v<T, CropAspect>) {
+            field = CropRatio{1.0};
+        } else {
+            return;
+        }
+        const Encoded encoded = encode(descriptor, sample);
+        if (const auto* compound = std::get_if<Compound>(&encoded)) {
+            std::vector<std::string> names;
+            for (const auto& [name, value] : *compound) {
+                names.push_back(name);
+            }
+            shapes.push_back(std::move(names));
+        }
+    });
+    return shapes;
+}
+
 void arraw::reportMalformed(const FieldDescriptor& descriptor, DiagnosticLog& log,
                             const std::optional<std::filesystem::path>& subject) {
     log.record({.notice = Notice::SettingMalformed,

@@ -135,6 +135,9 @@ add_library(arraw STATIC
         src/core/SettingCodec.cpp
         include/SettingsJson.h
         src/core/SettingsJson.cpp
+        include/PhotoMarks.h
+        include/Sidecar.h
+        src/core/Sidecar.cpp
         src/core/ImageBuffer.cpp
         src/core/ImageExport.cpp
         include/ImageImport.h
@@ -159,7 +162,7 @@ target_include_directories(arraw PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/gpu)
 # no display and no QGuiApplication, only a QCoreApplication for plugin paths.
 # Private: nothing in include/ mentions Qt, and CMake still propagates the link
 # requirement to consumers of this static library.
-target_link_libraries(arraw PRIVATE Qt6::Core Qt6::Gui ${ARRAW_LIBRAW})
+target_link_libraries(arraw PRIVATE Qt6::Core Qt6::Gui Qt6::Xml ${ARRAW_LIBRAW})
 # qt_standard_project_setup() turns AUTOMOC on globally; the engine has no Qt
 # types, so opting out keeps that honest (and saves a moc pass).
 set_target_properties(arraw PROPERTIES AUTOMOC OFF)

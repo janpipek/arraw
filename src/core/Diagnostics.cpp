@@ -87,6 +87,8 @@ std::string arraw::describe(const Diagnostic& diagnostic) {
         return "these settings are version " + valueAt(diagnostic, 0) +
                ", but this arraw knows up to version " + valueAt(diagnostic, 1) +
                "; reading what it can";
+    case Notice::SidecarUnreadable:
+        return valueAt(diagnostic, 0) + "; opened with default settings and no marks";
     }
     return {};
 }

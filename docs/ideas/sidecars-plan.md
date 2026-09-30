@@ -21,9 +21,10 @@ Not in scope:
 
 | Question | Answer |
 |---|---|
-| Namespace | `arraw:` (`http://ns.arraw.org/develop/1.0/`, final URI to confirm), with keys taken from the descriptor table. `crs:` becomes a second key column later |
+| Namespace | `arraw:` (`http://ns.arraw.org/develop/1.0/`, final URI still to confirm: it becomes permanent with the first sidecar written, and needs a domain the project controls), with keys taken from the descriptor table. `crs:` becomes a second key column later |
 | Standard XMP | `xmp:Rating` (-1 reject, 0–5) and `xmp:Label` read and written in their own namespaces from the start (ADR 008) |
-| Sidecar name | `IMG_1.xmp` (Lightroom). A non-RAW file whose stem matches a RAW beside it uses `IMG_1.JPG.xmp`, so a RAW+JPEG pair never share one sidecar |
+| Sidecar name | `IMG_1.xmp` (Lightroom) for a RAW that no other RAW shares a stem with, and for a file no other image shares a stem with. Anything else uses its whole name, `IMG_1.JPG.xmp`, so two files never share one sidecar |
+| Marks on write | A mark is written only when it differs from what reading the file gave, so a rating or label arraw cannot represent (a rating of `9`, a label `Rot`) stays as the other tool wrote it until someone changes it |
 | XML | Qt Xml (already found by CMake), DOM-based, so unknown elements, attributes and namespaces survive a write |
 | JSON | Qt's `QJsonDocument` (Qt Core), so no new dependency |
 | Reading | The sidecar is applied onto defaults. Out-of-range values are clamped with a warning, and unknown keys or wrong types are skipped with a warning (ADR 008) |
@@ -104,10 +105,15 @@ void writeSidecar(const Photo&);   // preserves everything it does not own
    cover:
    - a round trip for settings and marks;
    - preservation: a fixture sidecar with `crs:` settings, a foreign namespace
-     and an unknown `arraw:` attribute survives a write byte for byte, apart
-     from what we own;
+     and an unknown `arraw:` attribute survives a write in meaning, apart from
+     what we own. Not byte for byte: Qt re-sorts attributes, drops the
+     packet's padding and trailing newline, quotes the XML declaration with
+     single quotes and rewrites its encoding as UTF-8. ADR 019 states this;
    - the pair-naming rule;
-   - an atomic write;
+   - an atomic write: a failed write leaves the old file byte-identical;
+   - a foreign label or rating (localised, out of range, `3.0`) surviving a
+     write, a newer-version sidecar and a non-UTF-8 sidecar being handled
+     without damage;
    - clamping on read.
 3. **CLI.** `export` applies only the flags that were given, on top of each
    file's sidecar. Today it replaces the settings wholesale with defaults plus

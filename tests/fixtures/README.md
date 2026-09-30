@@ -164,3 +164,20 @@ eleven such extensions (`.mrw .srf .x3f .kdc .mos .raw .3fr .iiq .erf .nrw
 cannot tell the two decoders apart — which is what `preview-32x24.dng` is for:
 copied to those same names, it tells whether the content check ran *before* Qt
 or only after Qt failed. See ADR 005.
+
+## The sidecar fixture
+
+`sidecar-foreign.xmp` is written by hand, not generated. It is an XMP sidecar as
+another program might leave it, and `test_Sidecar.cpp` writes a sidecar over a
+copy of it to check that everything arraw does not own survives (ADR 008). It
+holds:
+
+- `xmp:Rating` and `xmp:Label`, which arraw owns;
+- `crs:` develop settings, which arraw neither reads nor writes yet;
+- `arraw:exposure` as an attribute, `arraw:contrast` as a child element (which a
+  write turns into an attribute), and `arraw:futureKnob`, an `arraw:` key that
+  this version does not know and must keep;
+- a foreign namespace with a nested `rdf:Bag` and nested elements;
+- a second `rdf:Description` holding `dc:creator`.
+
+The `xpacket` header carries a literal U+FEFF, as the XMP specification asks.
