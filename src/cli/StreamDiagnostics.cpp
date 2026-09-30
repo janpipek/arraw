@@ -44,6 +44,12 @@ std::string nameOf(Notice notice) {
         return "gpu_round_trip_changed";
     case Notice::GpuDisabled:
         return "gpu_disabled";
+    case Notice::GpuUsed:
+        return "gpu_used";
+    case Notice::CpuUsed:
+        return "cpu_used";
+    case Notice::GpuFallback:
+        return "gpu_fallback";
     }
     return "unknown";
 }

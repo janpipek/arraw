@@ -2,6 +2,8 @@
 
 #include "Cli.h"
 #include "Command.h"
+#include "GpuContext.h"
+#include "GpuDevelop.h"
 #include "StreamDiagnostics.h"
 
 #include <Develop.h>
@@ -19,6 +21,7 @@
 #include <cmath>
 #include <exception>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <ostream>
 #include <stdexcept>
@@ -55,6 +58,13 @@ std::string_view extensionFor(ImageFileFormat format) {
     return ".bin";
 }
 
+/// @brief Which device an export is asked to develop on.
+enum class DeviceMode {
+    Auto, ///< The GPU if it is usable, the CPU with a warning if it is not.
+    Gpu,  ///< The GPU, and a failure if it is not usable.
+    Cpu,  ///< The CPU, and no graphics stack.
+};
+
 /// @brief Everything the command needs, once its arguments are understood.
 struct ExportRequest {
     std::vector<std::filesystem::path> inputs;
@@ -62,6 +72,9 @@ struct ExportRequest {
     ImageFileFormat format = ImageFileFormat::Jpeg;
     DevelopSettings settings;
     ExportOptions options;
+    DeviceMode device = DeviceMode::Auto;
+    GpuBackend backend = defaultGpuBackend();
+    bool allowSoftware = false;
     bool overwrite = false;
     bool quiet = false;
     cli::LogFormat logFormat = cli::LogFormat::Text;
@@ -195,7 +208,13 @@ void configure(QCommandLineParser& parser) {
         "captured, save for a gentle roll-off that bends the brightest values toward\n"
         "white instead of clipping them flat; --filmic-highlights 0 turns it off.\n"
         "Camera orientation is honoured. Rotation, flips and cropping are applied\n"
-        "after colour and tone; crops always stay inside valid image content.");
+        "after colour and tone; crops always stay inside valid image content.\n"
+        "\n"
+        "Development runs on the GPU when there is one, unless --device cpu is given or\n"
+        "ARRAW_DISABLE_GPU is set to a value other than 0. Without --device gpu, a GPU\n"
+        "that cannot be used, or is only a software rasteriser, is reported once and the\n"
+        "batch runs on the CPU; a photograph the GPU fails on is retried there. With\n"
+        "--device gpu nothing falls back, and ARRAW_DISABLE_GPU is a usage error.");
     parser.addHelpOption();
     parser.addOption({{"o", "output"}, "Existing directory to write into.", "dir"});
     parser.addOption({"format", "png, jpeg, or tiff. Default: jpeg.", "name"});
@@ -221,6 +240,15 @@ void configure(QCommandLineParser& parser) {
         {"crop", "auto or normalised upright left,top,right,bottom. Default: auto.", "rectangle"});
     parser.addOption(
         {"crop-aspect", "free, original, or width:height (3:2, 2:3). Default: free.", "aspect"});
+    parser.addOption({"device",
+                      "auto, gpu, or cpu. Auto uses the GPU when it can and says so when it "
+                      "cannot; gpu never falls back. Default: auto.",
+                      "name"});
+    parser.addOption({"gpu-backend",
+                      "vulkan, opengl, d3d11, d3d12, or metal. Default: " +
+                          QString::fromUtf8(gpuBackendName(defaultGpuBackend()).data()) + ".",
+                      "name"});
+    parser.addOption({"allow-software", "Accept a software rasteriser, such as llvmpipe or WARP."});
     parser.addOption({"no-profile", "Convert colour but do not embed the output profile."});
     parser.addOption({"overwrite", "Replace outputs that already exist."});
     parser.addOption({{"q", "quiet"}, "Do not report each file as it is written."});
@@ -356,6 +384,38 @@ std::optional<ExportRequest> buildRequest(const QCommandLineParser& parser, std:
         return std::nullopt;
     }
 
+    if (parser.isSet("device")) {
+        const auto name = parser.value("device").toLower();
+        if (name == "auto") {
+            request.device = DeviceMode::Auto;
+        } else if (name == "gpu") {
+            request.device = DeviceMode::Gpu;
+        } else if (name == "cpu") {
+            request.device = DeviceMode::Cpu;
+        } else {
+            code = usageError(err, "unknown device '" + name.toStdString() +
+                                       "'; expected auto, gpu, or cpu");
+            return std::nullopt;
+        }
+    }
+    if (parser.isSet("gpu-backend")) {
+        const auto name = parser.value("gpu-backend").toLower().toStdString();
+        const auto backend = parseGpuBackend(name);
+        if (!backend) {
+            code = usageError(err, "unknown backend '" + name +
+                                       "'; expected vulkan, opengl, d3d11, d3d12, or metal");
+            return std::nullopt;
+        }
+        request.backend = *backend;
+    }
+    request.allowSoftware = parser.isSet("allow-software");
+    if (request.device == DeviceMode::Gpu && cli::gpuDisabled()) {
+        code = usageError(err, "--device gpu cannot be used while " +
+                                   std::string(cli::disableGpuVariable) +
+                                   " is set; unset it, or set it to 0");
+        return std::nullopt;
+    }
+
     const auto logFormat = cli::readLogFormat(parser, "export", err, code);
     if (!logFormat) {
         return std::nullopt;
@@ -368,10 +428,80 @@ std::optional<ExportRequest> buildRequest(const QCommandLineParser& parser, std:
     return request;
 }
 
+/// @brief Whether the request develops on the CPU without ever looking for a GPU.
+bool cpuOnly(const ExportRequest& request) {
+    return request.device == DeviceMode::Cpu ||
+           (request.device == DeviceMode::Auto && cli::gpuDisabled());
+}
+
+/// @brief Creates the batch's one GPU context, or says why there is none.
+/// @param request What was asked for.
+/// @param problem Receives the reason when the result is empty.
+/// @return The context, or an empty pointer.
+std::unique_ptr<GpuContext> createContext(const ExportRequest& request, std::string& problem) {
+    std::unique_ptr<GpuContext> context;
+    try {
+        context = std::make_unique<GpuContext>(request.backend);
+    } catch (const std::exception& failure) {
+        problem = failure.what();
+        return nullptr;
+    }
+    if (context->info().kind == GpuDeviceKind::Software && !request.allowSoftware) {
+        problem = describe(
+            {.notice = Notice::GpuSoftwareRefused, .values = {context->info().deviceName}});
+        return nullptr;
+    }
+    return context;
+}
+
+/// @brief Develops one photograph on the device and returns it on the host.
+///
+/// Every device image, the checkpoint included, is gone before this returns,
+/// so the context can be destroyed whenever its owner likes.
+ImageBuffer developOnDevice(GpuContext& context, const std::filesystem::path& input,
+                            const DevelopSettings& settings) {
+    const RenderCheckpoint checkpoint = developOnGpu(context, loadImage(input), settings);
+    return checkpoint.readBack();
+}
+
 /// @brief Exports every input, continuing past the ones that fail.
 int exportAll(const ExportRequest& request, std::ostream& err) {
     cli::StreamDiagnostics log(err, request.logFormat, request.quiet);
     std::size_t failures = 0;
+
+    // One device for the batch, created here on the main thread and destroyed
+    // on it after the last input: no device image outlives an iteration.
+    std::unique_ptr<GpuContext> context;
+    if (cpuOnly(request)) {
+        if (request.device == DeviceMode::Auto) {
+            log.record({.notice = Notice::GpuFallback,
+                        .severity = Severity::Warning,
+                        .values = {describe({.notice = Notice::GpuDisabled,
+                                             .values = {std::string(cli::disableGpuVariable)}})}});
+        }
+    } else {
+        std::string problem;
+        context = createContext(request, problem);
+        if (!context) {
+            if (request.device == DeviceMode::Gpu) {
+                log.record({.notice = Notice::GpuFailed,
+                            .severity = Severity::Error,
+                            .values = {problem}});
+                return cli::Failed;
+            }
+            log.record({.notice = Notice::GpuFallback,
+                        .severity = Severity::Warning,
+                        .values = {problem}});
+        }
+    }
+    if (context) {
+        log.record({.notice = Notice::GpuUsed,
+                    .severity = Severity::Info,
+                    .values = {std::string(gpuBackendName(context->info().backend)),
+                               context->info().deviceName}});
+    } else {
+        log.record({.notice = Notice::CpuUsed, .severity = Severity::Info});
+    }
 
     for (const auto& input : request.inputs) {
         const auto destination =
@@ -392,7 +522,33 @@ int exportAll(const ExportRequest& request, std::ostream& err) {
             // are another snapshot of it, and the file on disk is untouched
             // (ADR 012). The decode is then not asked to repeat the warning.
             const Photo photo = openPhoto(input, log).with(request.settings);
-            exportImage(develop(loadImage(input), photo.settings()), destination, request.options);
+            std::optional<ImageBuffer> developed;
+            if (context) {
+                try {
+                    developed = developOnDevice(*context, input, photo.settings());
+                } catch (const std::exception& failure) {
+                    if (request.device == DeviceMode::Gpu) {
+                        throw;
+                    }
+                    const bool lost = context->lost();
+                    std::string reason = failure.what();
+                    if (lost) {
+                        reason += " (the device is lost, so the rest of the batch is exported "
+                                  "on the CPU)";
+                    }
+                    log.record({.notice = Notice::GpuFallback,
+                                .severity = Severity::Warning,
+                                .subject = input,
+                                .values = {reason}});
+                    if (lost) {
+                        context.reset();
+                    }
+                }
+            }
+            if (!developed) {
+                developed = develop(loadImage(input), photo.settings());
+            }
+            exportImage(*developed, destination, request.options);
             log.record({.notice = Notice::Exported,
                         .severity = Severity::Info,
                         .subject = input,
@@ -441,8 +597,9 @@ int cli::runExportCommand(const QStringList& arguments, std::ostream& out, std::
     if (!request) {
         return code;
     }
-    // Qt Core alone: the image codecs beyond PNG are plugins, found through an
-    // application, and an export touches no graphics device.
-    start(ApplicationKind::Core);
+    // Qt Core alone when no GPU will be looked for: the image codecs beyond PNG
+    // are plugins, found through an application, and a CPU export touches no
+    // graphics device. Otherwise the GUI application a device is created through.
+    start(cpuOnly(*request) ? ApplicationKind::Core : ApplicationKind::Gui);
     return exportAll(*request, err);
 }
