@@ -20,7 +20,7 @@ build: configure
     cmake --build --preset debug
 
 # Build and run the GUI application
-run: configure
+gui: configure
     cmake --build --preset debug --target arraw-ui
     ./{{build_dir}}debug/arraw-ui
 
