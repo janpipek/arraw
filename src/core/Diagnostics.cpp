@@ -66,6 +66,13 @@ std::string arraw::describe(const Diagnostic& diagnostic) {
     case Notice::GpuDisabled:
         return "the GPU is disabled by " + valueAt(diagnostic, 0) +
                "; unset it, or set it to 0, to probe the device";
+    case Notice::GpuUsed:
+        return "exporting on the GPU: " + valueAt(diagnostic, 1) + " (" + valueAt(diagnostic, 0) +
+               ")";
+    case Notice::CpuUsed:
+        return "exporting on the CPU";
+    case Notice::GpuFallback:
+        return "not using the GPU, exporting on the CPU instead: " + valueAt(diagnostic, 0);
     }
     return {};
 }

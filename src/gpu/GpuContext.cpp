@@ -450,6 +450,10 @@ const GpuDeviceInfo& GpuContext::info() const noexcept {
     return info_;
 }
 
+bool GpuContext::lost() const noexcept {
+    return device_->lost;
+}
+
 DeviceImage GpuContext::upload(const ImageBuffer& image) {
     device_->requireUsable("upload");
 

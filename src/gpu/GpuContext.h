@@ -163,6 +163,9 @@ public:
     /// @brief Description of the device and what it supports.
     [[nodiscard]] const GpuDeviceInfo& info() const noexcept;
 
+    /// @brief Whether an earlier frame failed, after which every use throws.
+    [[nodiscard]] bool lost() const noexcept;
+
     /// @brief Copies a host buffer into a new RGBA32F texture.
     /// @param image Buffer to upload; must be ::arraw::PixelFormat::RgbaF32.
     /// @return A device image with the buffer's size, encoding and orientation.

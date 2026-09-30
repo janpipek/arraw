@@ -233,10 +233,11 @@ void configure(QCommandLineParser& parser) {
         "The exit status is 0 when all is well, 1 when it is not, 2 for a usage error.");
     parser.addHelpOption();
     parser.addOption(QCommandLineOption(
-        "backend",
+        "gpu-backend",
         QString::fromStdString(backendChoices() + ". Default: " +
                                std::string(gpuBackendName(defaultGpuBackend())) + "."),
         "name"));
+    parser.addOption(QCommandLineOption("backend", "Alias of --gpu-backend.", "name"));
     parser.addOption({"size",
                       QString("Edge of the square test image, %1-%2. Default: %3.")
                           .arg(smallestEdge)
@@ -262,8 +263,11 @@ std::optional<GpuTestRequest> buildRequest(const QCommandLineParser& parser, std
                                    parser.positionalArguments().front().toStdString() + "'");
         return std::nullopt;
     }
-    if (parser.isSet("backend")) {
-        const auto name = parser.value("backend").toLower().toStdString();
+    if (parser.isSet("gpu-backend") || parser.isSet("backend")) {
+        // --gpu-backend wins if both are given: it is the name that stays.
+        const auto name = parser.value(parser.isSet("gpu-backend") ? "gpu-backend" : "backend")
+                              .toLower()
+                              .toStdString();
         const auto backend = parseGpuBackend(name);
         if (!backend) {
             code = usageError(err, "unknown backend '" + name + "'; expected " + backendChoices());
