@@ -139,6 +139,22 @@ class MountBoundaryTests(unittest.TestCase):
         self.assertNotIn("-t", command)
         self.assertNotIn("-it", command)
 
+    def test_arguments_after_separator_go_to_the_named_agent(self):
+        def launched(*argv):
+            with patch.object(sandbox.sys, "argv", ["sandbox.py", *argv]), \
+                    patch.object(sandbox, "podman", return_value="podman"), \
+                    patch.object(sandbox, "ensure_image"), patch.object(sandbox, "git_identity", return_value=[]), \
+                    patch.object(sandbox, "memory_limit", return_value="1g"), \
+                    patch.object(sandbox.subprocess, "run", return_value=argparse.Namespace(returncode=0)) as run:
+                sandbox.main()
+            command = run.call_args.args[0]
+            return command[command.index(sandbox.IMAGE) + 1:]
+
+        self.assertEqual(launched("--safe", "claude", "--", "--resume"), ["claude", "--resume"])
+        self.assertEqual(launched("claude", "--", "--resume"),
+                         ["claude", "--dangerously-skip-permissions", "--resume"])
+        self.assertEqual(launched("--", "just", "test"), ["just", "test"])
+
     def test_image_build_logs_do_not_pollute_command_output(self):
         with patch.object(sandbox, "inputs_hash", return_value="hash"), \
                 patch.object(sandbox.subprocess, "run", return_value=argparse.Namespace(returncode=0)) as run:
