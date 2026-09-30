@@ -42,9 +42,10 @@ arraw-cli gpu-test                        # check the GPU backend works on this 
 ```
 
 On Linux the command line needs no display: it runs on its own headless Qt
-platform, which reaches Vulkan through the driver alone but has no OpenGL (set
-`QT_QPA_PLATFORM=xcb` or `wayland` for that). `ARRAW_DISABLE_GPU=1` keeps it
-off the graphics stack entirely.
+platform, which reaches Vulkan through the driver alone but has no OpenGL.
+`export` uses it whatever `QT_QPA_PLATFORM` says, unless `--gpu-backend opengl`
+is given, which honours `QT_QPA_PLATFORM=xcb` or `wayland`; `gpu-test` honours
+it always. `ARRAW_DISABLE_GPU=1` keeps it off the graphics stack entirely.
 
 `export` develops on the GPU when it can. `--device auto` (the default) creates
 one device for the whole batch; if there is none, or it is a software

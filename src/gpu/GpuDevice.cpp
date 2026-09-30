@@ -10,13 +10,19 @@ namespace {
 
 /// @brief An offscreen frame, ended on every way out of the scope that began it.
 ///
-/// Only the normal way out asks how ending went; an exception already says
-/// what went wrong, and ending the frame is only what keeps the device usable.
+/// Only the normal way out reports how ending went; an exception already says
+/// what went wrong. A frame that cannot be begun because the device is lost, or
+/// that fails to end while unwinding, still marks the device lost.
 class OffscreenFrame {
 public:
     /// @throws std::runtime_error if the frame cannot be begun.
-    OffscreenFrame(QRhi& rhi, const std::string& purpose) : rhi_(rhi) {
-        if (rhi_.beginOffscreenFrame(&commands_) != QRhi::FrameOpSuccess || commands_ == nullptr) {
+    OffscreenFrame(GpuDevice& device, const std::string& purpose)
+        : device_(device), rhi_(*device.rhi) {
+        const QRhi::FrameOpResult began = rhi_.beginOffscreenFrame(&commands_);
+        if (began != QRhi::FrameOpSuccess || commands_ == nullptr) {
+            if (began == QRhi::FrameOpDeviceLost) {
+                device_.lost = true;
+            }
             throw std::runtime_error("The GPU device could not begin a frame to " + purpose);
         }
     }
@@ -27,8 +33,8 @@ public:
     OffscreenFrame& operator=(OffscreenFrame&&) = delete;
 
     ~OffscreenFrame() {
-        if (open_) {
-            rhi_.endOffscreenFrame();
+        if (open_ && rhi_.endOffscreenFrame() != QRhi::FrameOpSuccess) {
+            device_.lost = true;
         }
     }
 
@@ -45,6 +51,7 @@ public:
     }
 
 private:
+    GpuDevice& device_;
     QRhi& rhi_;
     QRhiCommandBuffer* commands_ = nullptr;
     bool open_ = true;
@@ -62,7 +69,7 @@ struct BatchRelease {
 void submitUpdates(GpuDevice& device, const std::string& purpose,
                    const std::function<void(QRhiResourceUpdateBatch&)>& record) {
     QRhi& rhi = *device.rhi;
-    OffscreenFrame frame(rhi, purpose);
+    OffscreenFrame frame(device, purpose);
     // Declared after the frame, so a batch never submitted is released before
     // the frame ends.
     std::unique_ptr<QRhiResourceUpdateBatch, BatchRelease> batch(rhi.nextResourceUpdateBatch());
@@ -82,7 +89,7 @@ void submitPass(GpuDevice& device, const std::string& purpose, QRhiTextureRender
                 QRhiGraphicsPipeline& pipeline, QRhiShaderResourceBindings& bindings,
                 const std::function<void(QRhiResourceUpdateBatch&)>& record) {
     QRhi& rhi = *device.rhi;
-    OffscreenFrame frame(rhi, purpose);
+    OffscreenFrame frame(device, purpose);
     std::unique_ptr<QRhiResourceUpdateBatch, BatchRelease> batch(rhi.nextResourceUpdateBatch());
     if (!batch) {
         throw std::runtime_error("The GPU device had no resource update batch free to " + purpose);

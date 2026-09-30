@@ -771,18 +771,27 @@ TEST_CASE("An export's application follows its device mode", "[cli][gpu]") {
         const char* disabled;
         cli::ApplicationKind kind;
     };
-    const auto [device, disabled, kind] = GENERATE(Case{"cpu", nullptr, cli::ApplicationKind::Core},
-                                                   Case{"cpu", "1", cli::ApplicationKind::Core},
-                                                   Case{"auto", "1", cli::ApplicationKind::Core},
-                                                   Case{"auto", "0", cli::ApplicationKind::Gui},
-                                                   Case{"auto", nullptr, cli::ApplicationKind::Gui},
-                                                   Case{"gpu", nullptr, cli::ApplicationKind::Gui});
+    const auto [device, disabled, kind] = GENERATE(
+        Case{"cpu", nullptr, cli::ApplicationKind::Core},
+        Case{"cpu", "1", cli::ApplicationKind::Core}, Case{"auto", "1", cli::ApplicationKind::Core},
+        Case{"auto", "0", cli::ApplicationKind::OffscreenDevice},
+        Case{"auto", nullptr, cli::ApplicationKind::OffscreenDevice},
+        Case{"gpu", nullptr, cli::ApplicationKind::OffscreenDevice});
     CAPTURE(device, disabled);
     const ScopedEnvironment environment(cli::disableGpuVariable, disabled);
 
     const auto result =
         invoke({"export", input, "-o", output, "--device", device, "--overwrite", "--quiet"});
     REQUIRE(result.started == std::vector{kind});
+}
+
+TEST_CASE("Export asks for a display's platform only for OpenGL", "[cli][gpu]") {
+    const test::TempDir directory;
+    const ScopedEnvironment enabled(cli::disableGpuVariable, nullptr);
+    const auto opengl =
+        invoke({"export", test::fixture(card).string(), "-o", directory.path().string(),
+                "--gpu-backend", "opengl", "--overwrite", "--quiet"});
+    REQUIRE(opengl.started == std::vector{cli::ApplicationKind::Gui});
 }
 
 TEST_CASE("The device options are validated before anything starts", "[cli][gpu]") {
@@ -908,7 +917,7 @@ TEST_CASE("Export --device gpu without a usable device fails before any input", 
                 "gpu", "--log-format", "json"});
 
     REQUIRE(result.code == cli::Failed);
-    REQUIRE(result.started == std::vector{cli::ApplicationKind::Gui});
+    REQUIRE(result.started == std::vector{cli::ApplicationKind::OffscreenDevice});
     REQUIRE(std::filesystem::is_empty(directory.path()));
     REQUIRE_THAT(result.err, ContainsSubstring("\"notice\":\"gpu_failed\""));
     REQUIRE_THAT(result.err, !ContainsSubstring("\"notice\":\"exported\""));

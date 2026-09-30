@@ -25,8 +25,11 @@ enum ExitCode {
 
 /// @brief Kind of Qt application a command runs inside.
 enum class ApplicationKind {
-    Core, ///< Qt Core only: image codecs, and no platform plugin or graphics driver.
-    Gui,  ///< A platform plugin too, which graphics devices are created through.
+    Core,            ///< Qt Core only: image codecs, and no platform plugin or graphics driver.
+    Gui,             ///< A platform plugin too, which graphics devices are created through; the
+                     ///< one `QT_QPA_PLATFORM` names, if any.
+    OffscreenDevice, ///< As Gui, for a device that needs no display: on arraw's headless
+                     ///< platform where there is one, whatever `QT_QPA_PLATFORM` says.
 };
 
 /// @brief Starts the Qt application a command needs.

@@ -41,17 +41,22 @@ std::vector<std::string> argumentsOf(int argc, char* argv[]) {
 /// It needs no X or Wayland server, so the command line runs the same on a
 /// desktop, a build machine and over SSH, and it is the platform that can make
 /// a Vulkan instance without one, which Qt's offscreen platform cannot. It has
-/// no OpenGL. An explicit `QT_QPA_PLATFORM` always wins, which is how to reach
-/// OpenGL: `QT_QPA_PLATFORM=xcb` or `wayland`. Windows and macOS
+/// no OpenGL. An explicit `QT_QPA_PLATFORM` wins, which is how to reach
+/// OpenGL: `QT_QPA_PLATFORM=xcb` or `wayland`, except for a command that
+/// asks for no display (`forced`). Windows and macOS
 /// need no display for a device, and keep Qt's own platform.
 ///
 /// On macOS, keeps the process a background one. Qt otherwise turns a plain
 /// executable into a foreground application, with a Dock icon and a claim on
 /// focus for as long as the probe runs; a value already set is left alone.
-void prepareGraphicsPlatform() {
+///
+/// @param forced Whether to select the headless platform even over an explicit
+/// `QT_QPA_PLATFORM`: for a command that needs no display, which should not
+/// abort because the environment names a platform that cannot start.
+void prepareGraphicsPlatform(bool forced) {
 #if defined(ARRAW_HEADLESS_PLATFORM)
     // Empty counts as unset, as it does for Qt: it names no platform.
-    if (qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM")) {
+    if (forced || qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM")) {
         qputenv("QT_QPA_PLATFORM", arraw::headless::platformKey);
     }
 #elif defined(Q_OS_MACOS)
@@ -93,8 +98,8 @@ int main(int argc, char* argv[]) {
         if (app) {
             return;
         }
-        if (kind == arraw::cli::ApplicationKind::Gui) {
-            prepareGraphicsPlatform();
+        if (kind != arraw::cli::ApplicationKind::Core) {
+            prepareGraphicsPlatform(kind == arraw::cli::ApplicationKind::OffscreenDevice);
             app = std::make_unique<QGuiApplication>(qtArgc, qtArgv.data());
         } else {
             app = std::make_unique<QCoreApplication>(qtArgc, qtArgv.data());

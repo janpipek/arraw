@@ -90,6 +90,11 @@ struct GpuDevice {
     /// nor forget, so the device is not trusted with more.
     bool lost = false;
 
+    /// @brief Whether a frame failed or QRhi reports the device lost.
+    [[nodiscard]] bool isLost() const noexcept {
+        return lost || (rhi && rhi->isDeviceLost());
+    }
+
     /// @brief Whether the calling thread is the owner.
     [[nodiscard]] bool onOwnerThread() const noexcept {
         return std::this_thread::get_id() == owner;
@@ -107,7 +112,7 @@ struct GpuDevice {
             throw std::logic_error(std::string("A GPU device can only ") + action +
                                    " on the thread that created it");
         }
-        if (lost) {
+        if (isLost()) {
             throw std::runtime_error(std::string("The GPU device cannot ") + action +
                                      ": an earlier transfer failed and left it unusable");
         }

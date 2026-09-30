@@ -4,6 +4,7 @@
 #include "Command.h"
 #include "GpuContext.h"
 #include "GpuDevelop.h"
+#include "ProcessingPlan.h"
 #include "StreamDiagnostics.h"
 
 #include <Develop.h>
@@ -246,7 +247,9 @@ void configure(QCommandLineParser& parser) {
                       "name"});
     parser.addOption({"gpu-backend",
                       "vulkan, opengl, d3d11, d3d12, or metal. Default: " +
-                          QString::fromUtf8(gpuBackendName(defaultGpuBackend()).data()) + ".",
+                          QString::fromUtf8(gpuBackendName(defaultGpuBackend()).data()) +
+                          ". Only opengl, on Linux, uses the platform QT_QPA_PLATFORM names "
+                          "(xcb or wayland); the others need no display.",
                       "name"});
     parser.addOption({"allow-software", "Accept a software rasteriser, such as llvmpipe or WARP."});
     parser.addOption({"no-profile", "Convert colour but do not embed the output profile."});
@@ -454,13 +457,13 @@ std::unique_ptr<GpuContext> createContext(const ExportRequest& request, std::str
     return context;
 }
 
-/// @brief Develops one photograph on the device and returns it on the host.
+/// @brief Develops one decoded photograph on the device and returns it on the host.
 ///
 /// Every device image, the checkpoint included, is gone before this returns,
 /// so the context can be destroyed whenever its owner likes.
-ImageBuffer developOnDevice(GpuContext& context, const std::filesystem::path& input,
+ImageBuffer developOnDevice(GpuContext& context, const ImageBuffer& source,
                             const DevelopSettings& settings) {
-    const RenderCheckpoint checkpoint = developOnGpu(context, loadImage(input), settings);
+    const RenderCheckpoint checkpoint = developOnGpu(context, source, settings);
     return checkpoint.readBack();
 }
 
@@ -522,10 +525,19 @@ int exportAll(const ExportRequest& request, std::ostream& err) {
             // are another snapshot of it, and the file on disk is untouched
             // (ADR 012). The decode is then not asked to repeat the warning.
             const Photo photo = openPhoto(input, log).with(request.settings);
+            // Decoded once, before the device is involved: a file that cannot be
+            // read is the input's failure, whichever device would have developed it.
+            const ImageBuffer source = loadImage(input);
+            // Planned on the host for the same reason: settings the plan rejects
+            // (std::invalid_argument) fail the input on either device. What the
+            // device is then blamed for is developOnGpu and readBack alone, so
+            // any exception from them, an image larger than the device's
+            // textures included, means "the GPU could not".
+            (void)planFor(source, photo.settings());
             std::optional<ImageBuffer> developed;
             if (context) {
                 try {
-                    developed = developOnDevice(*context, input, photo.settings());
+                    developed = developOnDevice(*context, source, photo.settings());
                 } catch (const std::exception& failure) {
                     if (request.device == DeviceMode::Gpu) {
                         throw;
@@ -546,7 +558,7 @@ int exportAll(const ExportRequest& request, std::ostream& err) {
                 }
             }
             if (!developed) {
-                developed = develop(loadImage(input), photo.settings());
+                developed = develop(source, photo.settings());
             }
             exportImage(*developed, destination, request.options);
             log.record({.notice = Notice::Exported,
@@ -600,6 +612,13 @@ int cli::runExportCommand(const QStringList& arguments, std::ostream& out, std::
     // Qt Core alone when no GPU will be looked for: the image codecs beyond PNG
     // are plugins, found through an application, and a CPU export touches no
     // graphics device. Otherwise the GUI application a device is created through.
-    start(cpuOnly(*request) ? ApplicationKind::Core : ApplicationKind::Gui);
+    // Only OpenGL needs a display server's platform; every other backend is
+    // reached through the headless one, whatever QT_QPA_PLATFORM says.
+    if (cpuOnly(*request)) {
+        start(ApplicationKind::Core);
+    } else {
+        start(request->backend == GpuBackend::OpenGL ? ApplicationKind::Gui
+                                                     : ApplicationKind::OffscreenDevice);
+    }
     return exportAll(*request, err);
 }

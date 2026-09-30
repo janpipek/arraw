@@ -270,7 +270,8 @@ add_library(arraw-cli-core STATIC
         src/cli/StreamDiagnostics.cpp
         src/cli/StreamDiagnostics.h)
 arraw_enable_warnings(arraw-cli-core)
-target_include_directories(arraw-cli-core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/cli)
+target_include_directories(arraw-cli-core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/cli
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/core)
 # Qt Core only: the command line needs QCommandLineParser and an application
 # instance (QCoreApplication or QGuiApplication, see arraw-cli below) for codec
 # plugin paths. The GPU probe reaches a device
