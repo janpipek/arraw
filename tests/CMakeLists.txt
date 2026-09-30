@@ -32,6 +32,7 @@ add_executable(arraw-tests
         test_ProcessingPlan.cpp
         test_RenderCheckpoint.cpp
         test_RawImport.cpp
+        test_SettingDescriptors.cpp
         test_SampleConversion.cpp
         test_RoundTrip.cpp
         test_Tone.cpp

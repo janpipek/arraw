@@ -16,6 +16,20 @@ names that as a thing to separate: photographic values are the model, and
 slider ranges, display precision and localised text are presentation derived
 from it.
 
+> **Note (2026-09-30).** The table exists (`include/SettingDescriptors.h`), and
+> the shape above is ahead of it in two ways. `DevelopSettings` is nested
+> (`tone`, `color`, `geometry` with its `crop`), so a row cannot hold a
+> `float DevelopSettings::*`; it holds a `Member`, a variant of function
+> pointers `T& (*)(DevelopSettings&)` produced by captureless lambdas, one
+> alternative per leaf type. The table has one row per leaf, keyed by the
+> leaf's camelCase name; `range` is optional (absent for booleans,
+> enumerations and the crop rows, whose limits stay in `GeometryPlan`) and
+> `affects` is the checkpoint `Stage`. Reading through a const settings object
+> goes through one `visitField` overload, the only `const_cast`. `validate`
+> throws `std::invalid_argument` and `Photo`'s constructor calls it. No
+> compiler we build with has reflection, so the drift guard is a test that
+> counts each struct's fields and writes a sentinel through every row.
+
 ## Decision
 
 **Settings are plain values in an aggregate**, and a `constexpr` table beside

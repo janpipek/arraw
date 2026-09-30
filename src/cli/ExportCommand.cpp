@@ -14,6 +14,7 @@
 #include <ImageExport.h>
 #include <ImageImport.h>
 #include <Photo.h>
+#include <SettingDescriptors.h>
 #include <WhiteBalance.h>
 
 #include <QCommandLineParser>
@@ -29,6 +30,8 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
+#include <variant>
 #include <vector>
 
 using namespace arraw;
@@ -94,30 +97,99 @@ bool readInteger(const QCommandLineParser& parser, const char* name, int& value)
     return valid;
 }
 
-/// @brief Reads a named option as a number within its modelled range.
+/// @brief Help wording of one ranged setting; its name and limits come from the descriptor table.
+struct SettingHelp {
+    std::string_view key;
+    const char* valueName;
+    const char* description;
+    const char* note;
+};
+
+/// @brief Help wording for the ranged settings, keyed like ::arraw::developSettingDescriptors.
+constexpr SettingHelp settingHelp[]{
+    {"exposure", "stops", "Exposure adjustment in EV", ""},
+    {"contrast", "amount", "Contrast", ""},
+    {"shadows", "amount", "Lift or deepen the dark tones", ""},
+    {"highlights", "amount", "Recover or raise the bright tones", ""},
+    {"blacks", "amount", "Move the black point", ""},
+    {"whites", "amount", "Move the white point", ""},
+    {"temperature", "k", "White balance in kelvin", " RAW only."},
+    {"tint", "amount", "Green to magenta", " RAW only."},
+    {"filmicHighlights", "amount", "Highlight roll-off", " Default: 25."},
+};
+
+/// @brief Finds the help wording of a setting.
+const SettingHelp* helpFor(std::string_view key) {
+    for (const SettingHelp& help : settingHelp) {
+        if (help.key == key) {
+            return &help;
+        }
+    }
+    return nullptr;
+}
+
+/// @brief Spells a camelCase key as a command-line option name.
+std::string optionName(std::string_view key) {
+    std::string name;
+    for (const char c : key) {
+        if (c >= 'A' && c <= 'Z') {
+            name += '-';
+            name += static_cast<char>(c - 'A' + 'a');
+        } else {
+            name += c;
+        }
+    }
+    return name;
+}
+
+/// @brief Whether a row is a plain number setting that gets an option of its own.
+bool isNumericOption(const FieldDescriptor& descriptor) {
+    return descriptor.range && helpFor(descriptor.key) &&
+           (std::holds_alternative<float& (*)(DevelopSettings&)>(descriptor.member) ||
+            std::holds_alternative<std::optional<float>& (*)(DevelopSettings&)>(descriptor.member));
+}
+
+/// @brief Spells a limit the way the help and the errors show it.
+std::string limit(double value) {
+    return QString::number(value).toStdString();
+}
+
+/// @brief Reads every numeric setting option into the settings.
 ///
-/// Out of range is refused rather than clamped: a photographer is present to
-/// be told, and nothing invalid should enter a session (ADR 008). The renderer
-/// clamps as well, for values that arrive from a file instead.
-/// @return `true` if the option was absent or acceptable; `false` otherwise.
-bool readSetting(const QCommandLineParser& parser, const char* name, float lowest, float highest,
-                 std::optional<float>& value, std::ostream& err, int& code) {
-    if (!parser.isSet(name)) {
-        return true;
+/// Names and limits come from ::arraw::developSettingDescriptors. Out of range
+/// is refused rather than clamped: a photographer is present to be told, and
+/// nothing invalid should enter a session (ADR 008). The renderer clamps as
+/// well, for values that arrive from a file instead.
+/// @return `true` if every option present was acceptable; `false` otherwise.
+bool readSettings(const QCommandLineParser& parser, DevelopSettings& settings, std::ostream& err,
+                  int& code) {
+    for (const FieldDescriptor& descriptor : developSettingDescriptors) {
+        if (!isNumericOption(descriptor)) {
+            continue;
+        }
+        const std::string name = optionName(descriptor.key);
+        if (!parser.isSet(QString::fromStdString(name))) {
+            continue;
+        }
+        bool valid = false;
+        const float parsed = parser.value(QString::fromStdString(name)).toFloat(&valid);
+        if (!valid || !std::isfinite(parsed)) {
+            code = usageError(err, "--" + name + " takes a finite number");
+            return false;
+        }
+        if (parsed < descriptor.range->minimum || parsed > descriptor.range->maximum) {
+            code = usageError(err, "--" + name + " accepts " + limit(descriptor.range->minimum) +
+                                       " to " + limit(descriptor.range->maximum));
+            return false;
+        }
+        visitField(descriptor, settings, [&](auto& field) {
+            if constexpr (std::is_same_v<std::remove_cvref_t<decltype(field)>, float> ||
+                          std::is_same_v<std::remove_cvref_t<decltype(field)>,
+                                         std::optional<float>>) {
+                field = parsed;
+            }
+        });
     }
-    bool valid = false;
-    const float parsed = parser.value(name).toFloat(&valid);
-    if (!valid || !std::isfinite(parsed)) {
-        code = usageError(err, std::string("--") + name + " takes a finite number");
-        return false;
-    }
-    if (parsed < lowest || parsed > highest) {
-        code = usageError(err, std::string("--") + name + " accepts " +
-                                   QString::number(lowest).toStdString() + " to " +
-                                   QString::number(highest).toStdString());
-        return false;
-    }
-    value = parsed;
     return true;
 }
 
@@ -220,17 +292,20 @@ void configure(QCommandLineParser& parser) {
     parser.addOption({"quality", "JPEG quality, 0-100. Default: 90.", "value"});
     parser.addOption({"bit-depth", "8 or 16. Default: 8.", "value"});
     parser.addOption({"encoding", "srgb, display-p3, or adobe-rgb. Default: srgb.", "name"});
-    parser.addOption({"exposure", "Exposure adjustment in EV, -5 to 5.", "stops"});
-    parser.addOption({"contrast", "Contrast, -100 to 100.", "amount"});
-    parser.addOption({"shadows", "Lift or deepen the dark tones, -100 to 100.", "amount"});
-    parser.addOption({"highlights", "Recover or raise the bright tones, -100 to 100.", "amount"});
-    parser.addOption({"blacks", "Move the black point, -100 to 100.", "amount"});
-    parser.addOption({"whites", "Move the white point, -100 to 100.", "amount"});
-    parser.addOption({"temperature", "White balance in kelvin, 2000 to 12000. RAW only.", "k"});
-    parser.addOption({"tint", "Green to magenta, -150 to 150. RAW only.", "amount"});
+    for (const FieldDescriptor& descriptor : developSettingDescriptors) {
+        if (!isNumericOption(descriptor)) {
+            continue;
+        }
+        const SettingHelp& help = *helpFor(descriptor.key);
+        parser.addOption({QString::fromStdString(optionName(descriptor.key)),
+                          QString::fromUtf8(help.description) + ", " +
+                              QString::fromStdString(limit(descriptor.range->minimum) + " to " +
+                                                     limit(descriptor.range->maximum)) +
+                              "." + QString::fromUtf8(help.note),
+                          help.valueName});
+    }
     parser.addOption(
         {"white-balance", "as-shot or custom. Temperature/tint imply custom.", "mode"});
-    parser.addOption({"filmic-highlights", "Highlight roll-off, 0 to 100. Default: 25.", "amount"});
     parser.addOption(
         {"rotate", "Any finite clockwise angle, before flips. Default: 0.", "degrees"});
     parser.addOption({"flip-horizontal", "Flip horizontally in the upright frame."});
@@ -329,39 +404,9 @@ std::optional<ExportRequest> buildRequest(const QCommandLineParser& parser, std:
         return std::nullopt;
     }
 
-    std::optional<float> exposure;
-    std::optional<float> contrast;
-    std::optional<float> shadows;
-    std::optional<float> highlights;
-    std::optional<float> blacks;
-    std::optional<float> whites;
-    std::optional<float> filmicHighlights;
-    if (!readSetting(parser, "contrast", flattestContrast, steepestContrast, contrast, err, code) ||
-        !readSetting(parser, "shadows", weakestToneControl, strongestToneControl, shadows, err,
-                     code) ||
-        !readSetting(parser, "highlights", weakestToneControl, strongestToneControl, highlights,
-                     err, code) ||
-        !readSetting(parser, "blacks", weakestToneControl, strongestToneControl, blacks, err,
-                     code) ||
-        !readSetting(parser, "whites", weakestToneControl, strongestToneControl, whites, err,
-                     code) ||
-        !readSetting(parser, "filmic-highlights", noFilmicHighlights, fullFilmicHighlights,
-                     filmicHighlights, err, code) ||
-        !readSetting(parser, "exposure", darkestExposure, brightestExposure, exposure, err, code) ||
-        !readSetting(parser, "temperature", warmestKelvin, coolestKelvin,
-                     request.settings.color.temperature, err, code) ||
-        !readSetting(parser, "tint", -tintLimit, tintLimit, request.settings.color.tint, err,
-                     code)) {
+    if (!readSettings(parser, request.settings, err, code)) {
         return std::nullopt;
     }
-    request.settings.tone.exposure = exposure.value_or(0.0F);
-    request.settings.tone.contrast = contrast.value_or(0.0F);
-    request.settings.tone.shadows = shadows.value_or(0.0F);
-    request.settings.tone.highlights = highlights.value_or(0.0F);
-    request.settings.tone.blacks = blacks.value_or(0.0F);
-    request.settings.tone.whites = whites.value_or(0.0F);
-    request.settings.tone.filmicHighlights =
-        filmicHighlights.value_or(request.settings.tone.filmicHighlights);
     // Naming either half of a white balance is asking for a custom one; the
     // half left unnamed stays as the camera recorded it.
     if (request.settings.color.temperature.has_value() || request.settings.color.tint.has_value()) {

@@ -31,8 +31,9 @@ public:
     /// @param path File the photograph was read from.
     /// @param metadata What that file declares about itself.
     /// @param settings How it is developed.
-    Photo(std::filesystem::path path, ImageMetadata metadata, DevelopSettings settings = {})
-        : path_(std::move(path)), metadata_(std::move(metadata)), settings_(settings) {}
+    /// @throws std::invalid_argument if @p settings is not finite or is out of
+    /// range (see ::arraw::validate), so an invalid photograph cannot exist.
+    Photo(std::filesystem::path path, ImageMetadata metadata, DevelopSettings settings = {});
 
     /// @brief File the photograph was read from.
     [[nodiscard]] const std::filesystem::path& path() const noexcept {
@@ -52,6 +53,7 @@ public:
     /// @brief Makes the same photograph, developed differently.
     /// @param settings Settings the new document carries.
     /// @return A document over the same file, leaving this one alone.
+    /// @throws std::invalid_argument as the constructor does.
     [[nodiscard]] Photo with(DevelopSettings settings) const {
         return {path_, metadata_, settings};
     }

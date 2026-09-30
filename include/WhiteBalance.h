@@ -31,7 +31,8 @@ struct ColourTemperature {
 /// @brief Warmest light arraw models, in kelvin.
 ///
 /// The limits are named here rather than left to whatever a test happened to
-/// pass. They become a row in the descriptor table of ADR 008 when it exists.
+/// pass. The temperature and tint rows of the descriptor table
+/// (SettingDescriptors.h, ADR 008) refer to them.
 inline constexpr float warmestKelvin = 2000.0F;
 
 /// @brief Coolest light arraw models, in kelvin.
