@@ -160,6 +160,9 @@ std::uint32_t rasterExtent(double extent) {
 }
 
 /// @brief Interpolates in premultiplied alpha, returning straight RGBA.
+///
+/// The GPU's `src/gpu/shaders/geometry.frag` mirrors this function, snapping
+/// and weights included; change them together.
 std::array<float, 4> sample(const ImageBuffer& source, SourcePoint position) {
     const auto centreCoordinate = [](double edge, std::uint32_t length) {
         double value = std::clamp(edge - 0.5, 0.0, length - 1.0);
@@ -289,6 +292,9 @@ GeometryPlan arraw::geometryPlanFor(ImageSize size, ImageOrientation orientation
     return plan;
 }
 
+/// The GPU's `src/gpu/shaders/geometry.frag` mirrors this resample through
+/// `packGeometry` (GpuPlan.cpp), which composes the per-pixel position below into
+/// one affine map; a change to the mapping here changes both.
 ImageBuffer arraw::applyGeometry(ImageBuffer source, const GeometryPlan& plan) {
     if (source.size() != plan.sourceSize || source.format() != workingFormat) {
         throw std::invalid_argument("Geometry requires matching developed float pixels");
