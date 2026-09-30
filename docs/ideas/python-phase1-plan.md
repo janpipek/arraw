@@ -1,8 +1,9 @@
 # Python bindings, phase 1 — execution plan
 
 Status: implemented on branch `gpu-develop` (89f19e9, 6079101, 3cb47c6 and
-the follow-up commit after them). Where the result differs from the plan, see
-[Outcome](#outcome) at the end.
+aed395f). Where the result differs from the plan, see
+[Outcome](#outcome) at the end. The decisions that last are recorded in
+[ADR 018](../adr/018-python-binds-the-public-api-and-nothing-else.md).
 
 ## Goal
 

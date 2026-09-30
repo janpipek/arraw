@@ -89,7 +89,8 @@ rendering on machines without a GPU or display server.
 - Ordinary C++ value types and algorithms at the numerical core; Qt Core allowed
   in application infrastructure and persistence where useful.
 - QRhi and Qt Shader Tools retained as the first GPU implementation.
-- Pybind11 and scikit-build-core for a native Python package.
+- Pybind11 and scikit-build-core for a native Python package. (nanobind replaced
+  pybind11; see [ADR 018](../adr/018-python-binds-the-public-api-and-nothing-else.md).)
 - One processing contract, with a readable CPU reference and GPU implementations
   verified against it.
 
