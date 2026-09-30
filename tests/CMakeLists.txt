@@ -25,6 +25,7 @@ add_executable(arraw-tests
         test_Diagnostics.cpp
         test_GpuContext.cpp
         test_GpuDevice.cpp
+        test_GpuPlan.cpp
         test_ImageBuffer.cpp
         test_ImageExport.cpp
         test_Photo.cpp

@@ -221,6 +221,11 @@ SourcePoint GeometryPlan::toSource(UprightPoint point) const {
             matrix[1] * x + matrix[3] * y + sourceSize.height / 2.0};
 }
 
+bool GeometryPlan::isIdentity() const noexcept {
+    return matrix == Matrix{1, 0, 0, 1} && left == 0 && top == 0 && width == sourceSize.width &&
+           height == sourceSize.height;
+}
+
 GeometryPlan arraw::geometryPlanFor(ImageSize size, ImageOrientation orientation,
                                     const GeometrySettings& settings) {
     if (size.empty() || !std::isfinite(settings.straighten) ||
@@ -288,9 +293,7 @@ ImageBuffer arraw::applyGeometry(ImageBuffer source, const GeometryPlan& plan) {
     if (source.size() != plan.sourceSize || source.format() != workingFormat) {
         throw std::invalid_argument("Geometry requires matching developed float pixels");
     }
-    if (source.orientation() == ImageOrientation::Normal && plan.matrix == Matrix{1, 0, 0, 1} &&
-        plan.left == 0 && plan.top == 0 && plan.width == plan.sourceSize.width &&
-        plan.height == plan.sourceSize.height) {
+    if (source.orientation() == ImageOrientation::Normal && plan.isIdentity()) {
         return source;
     }
     ImageBuffer result(plan.outputSize, workingFormat, source.encoding());

@@ -158,9 +158,13 @@ add_library(arraw-gpu STATIC
         src/gpu/GpuContext.h
         src/gpu/GpuContext.cpp
         src/gpu/GpuDevice.h
-        src/gpu/GpuDevice.cpp)
+        src/gpu/GpuDevice.cpp
+        src/gpu/GpuPlan.h
+        src/gpu/GpuPlan.cpp)
 arraw_enable_warnings(arraw-gpu)
 target_include_directories(arraw-gpu PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/gpu)
+# The processing plan is engine-private, and the GPU packs its uniforms from it.
+target_include_directories(arraw-gpu PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/core)
 target_link_libraries(arraw-gpu PUBLIC arraw PRIVATE Qt6::Gui Qt6::GuiPrivate)
 set_target_properties(arraw-gpu PROPERTIES AUTOMOC OFF)
 # QRhi declares its Vulkan backend only where vulkan/vulkan.h is visible, so a
