@@ -1,4 +1,4 @@
-# A sandboxed dev container: CI's toolchain, one clone, agents unattended
+# A sandboxed dev container: CI's toolchain, current clone, agents unattended
 
 Coding agents (Claude Code, Codex, pi, opencode) do their best work when they
 can build, test and probe the GPU without asking before every command, and
@@ -53,20 +53,28 @@ and keeps the container confined as `container_t`. `main` used
 layer that would otherwise keep an escaped process out of `~/.ssh` and the
 rest of the home directory.
 
-**One clone at `/workspace`, and clones only.** A worktree's `.git` is a file
-naming the main clone's git directory, which the container does not see; the
-launcher refuses a worktree rather than mounting every branch of the main
-clone as well. The fixed path makes every clone look the same inside, so the
-shared ccache hits across clones.
+**The current clone at `/workspace`.** `just sandbox` uses the clone containing
+the launcher, with no separate checkout or import step. Worktrees are refused:
+their Git metadata lives outside the clone mount. The fixed container path
+makes the shared ccache useful across clones.
 
-**`.git/hooks` and `.git/config` are mounted read-only.** Both are executed by
-git on the host (hooks, and settings such as `core.fsmonitor`), so a writable
-one would let the container run code outside itself at the next host commit.
-The cost is that git operations that write config (adding remotes, setting
-upstreams) fail inside, which the container has no business doing anyway.
+**Writable checkout, explicit trust limit.** The container limits direct host
+access during execution, but source files, launch scripts and Git metadata in
+the clone remain writable. Protecting only `.git/hooks` and `.git/config` did
+not protect their replaceable parent or all of Git's configuration redirections;
+those partial mounts are removed. Changes to the launcher, Justfile, build
+scripts or Git metadata can execute on the host at the next host command.
+Review them before running host commands against the clone again. Git metadata
+requires separate inspection because a tracked-file diff does not cover it and
+Git itself can execute configured commands.
 
-**Git is local.** No SSH, no `gh`, no tokens: commits are made inside and
-pushed from the host. The host's `user.name` and `user.email` are passed in
+A separate trusted checkout or installed launcher with isolated Git metadata
+would provide a stronger boundary. We choose the simpler single-clone workflow
+and accept this delayed host-execution risk; this is not full isolation from a
+malicious agent.
+
+**Git is local.** No SSH, no `gh`, no tokens: commits are made inside and pushed
+from the host after review. The host's `user.name` and `user.email` are passed in
 as the `GIT_AUTHOR_*` and `GIT_COMMITTER_*` variables at every start.
 
 **One store for logins and caches**, `~/.local/share/arraw-sandbox/`, shared
@@ -78,13 +86,17 @@ interactively, inside the container. Anything an agent can use it can also
 read, whether a file in the store or a variable in its environment, so tokens
 from the host would be no safer and would add host secrets to manage.
 
-**Agents start unattended by default.** The container is the boundary, which
-is the point of having one; `--safe` starts them with their prompts.
+**Agents start unattended by default.** Container restrictions apply while the
+agent runs; the writable-checkout trust limit above still applies afterwards.
+`--safe` starts agents with their prompts.
 
 **The build tree is `build/container-<preset>`.** The image sets
 `ARRAW_BUILD_PREFIX`, which `CMakePresets.json` and the `Justfile` put in
 front of the preset name. The host and the container build against different
 Qt installs, so a shared tree would be broken by whichever configured last.
+`just clean` removes only the current prefix's Debug and Release trees;
+`just clean-all` explicitly removes all build trees. This separates ordinary
+build operations; host build trees remain accessible through the clone mount.
 
 **Vulkan always, the GPU and the display on request.** Mesa's lavapipe is in
 the image, so the headless Vulkan tests run everywhere, CI included.
@@ -101,6 +113,11 @@ every write lands in a layer of its own (Podman's `:O`): `DIR`, and its SELinux
 labels, never change. The layer is discarded on exit, or kept with
 `--keep-writes` to inspect what the app wrote. A read-only mount would forbid
 sidecars, and a writable one would let an unattended agent delete originals.
+Photo directories must not overlap the clone, the credential store, or
+overlay output; the launcher checks resolved paths before building an image or
+creating mount directories. Mount sources must not have host bind-mount aliases,
+and originals must not be hardlinked into writable mounts. Those filesystem
+aliases cannot be ruled out by directory containment checks alone.
 
 **Full network.** The agents need their APIs, and builds fetch from PyPI and
 GitHub. The repository and the store can therefore be sent anywhere; an
@@ -114,6 +131,7 @@ than 14 days old.
 ## Consequences
 
 - `docs/ideas/dev-container-plan.md` and `.vibepod/` are superseded and removed.
+- Launch and work in the same clone. Review agent changes before host execution.
 - Relabelling with `:z` is permanent on the host side: the clone and the store
   keep their container label afterwards (harmless to the user's own access).
 - `--gui` is unverified under SELinux: the Wayland socket belongs to the

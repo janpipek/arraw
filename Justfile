@@ -62,8 +62,12 @@ release:
     cmake --preset release
     cmake --build --preset release
 
-# Remove the build trees
+# Remove Debug and Release build trees for the current environment
 clean:
+    cmake -E rm -rf "{{build_dir}}debug" "{{build_dir}}release"
+
+# Remove every environment's build trees
+clean-all:
     cmake -E rm -rf build
 
 # Show which Vulkan devices this session has, and whether arraw can use one
@@ -77,7 +81,7 @@ gpu-info: configure
 test-lavapipe *args:
     VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json just test {{args}}
 
-# Open the dev sandbox: a shell, or an agent (see tools/sandbox/README.md)
+# Open the dev sandbox in this checkout: a shell, or an agent
 [unix]
 sandbox *args:
     uv run tools/sandbox/sandbox.py {{args}}
@@ -86,3 +90,8 @@ sandbox *args:
 [unix]
 sandbox-build *args:
     uv run tools/sandbox/sandbox.py build {{args}}
+
+# Check sandbox mount boundaries without starting a container
+[unix]
+sandbox-check:
+    uv run --script tools/sandbox/test_sandbox.py

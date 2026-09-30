@@ -4,18 +4,19 @@
 # ///
 """Build and run the arraw dev sandbox (ADR 016).
 
-One clone of this repository, mounted read-write at /workspace in a rootless
-Podman container, with CI's toolchain and the coding agents. The container is
-the boundary, so agents start with their permission prompts off unless --safe
-is given. Agent logins and caches persist in one store shared by every clone;
-everything else is thrown away when the container exits.
+The current checkout, mounted read-write at /workspace in a rootless Podman
+container, with CI's toolchain and the coding agents. Agents start with their
+permission prompts off unless --safe is given. Changes to scripts and Git
+metadata must be reviewed before running host commands against the checkout.
+Agent logins and caches persist in one store shared by every checkout;
+the rest of the container home is discarded on exit.
 
 Examples:
     tools/sandbox/sandbox.py                     # a shell
-    tools/sandbox/sandbox.py claude              # Claude, permissions skipped
-    tools/sandbox/sandbox.py codex --safe        # Codex with its approvals
-    tools/sandbox/sandbox.py --gpu -- just test  # one command, real GPU
-    tools/sandbox/sandbox.py --gui --photos ~/Pictures/raw --keep-writes ~/sandbox-writes
+    tools/sandbox/sandbox.py claude              # unattended
+    tools/sandbox/sandbox.py codex --safe
+    tools/sandbox/sandbox.py --gpu -- just test
+    tools/sandbox/sandbox.py --gui --photos ~/Pictures/raw
     tools/sandbox/sandbox.py build --refresh     # rebuild with the newest agents
 """
 
@@ -101,7 +102,8 @@ def build(cli: str, refresh: bool) -> None:
         cmd += ["--pull=always", "--no-cache"]
     cmd.append(str(REPO))
     print("+", " ".join(cmd), file=sys.stderr)
-    if subprocess.run(cmd).returncode != 0:
+    # Keep build logs separate from the command's redirected output.
+    if subprocess.run(cmd, stdout=sys.stderr).returncode != 0:
         fail("image build failed")
 
 
@@ -128,14 +130,64 @@ def store_root() -> Path:
     return data / "arraw-sandbox"
 
 
-def prepare_store() -> Path:
+def overlaps(first: Path, second: Path) -> bool:
+    """Check whether either resolved directory contains the other."""
+    return first.is_relative_to(second) or second.is_relative_to(first)
+
+
+def host_path(value: str | Path) -> Path:
+    """Resolve a host path and reject Podman's volume-option delimiters."""
+    path = Path(value).expanduser().resolve()
+    if any(character in str(path) for character in (":", ",", "\n", "\r")):
+        fail(f"unsupported character in mount path: {path}")
+    return path
+
+
+def validate_paths(photos_dir: str | None, keep_writes: str | None) -> tuple[Path, Path]:
+    """Validate the mount boundary before creating directories or invoking Podman."""
+    workspace = host_path(REPO)
+    git_dir = workspace / ".git"
+    if git_dir.is_symlink() or not git_dir.is_dir() or (git_dir / "commondir").exists():
+        fail(f"{workspace} is not a standalone clone; use a clone, not a worktree")
+    store = host_path(store_root())
+    if overlaps(store, workspace):
+        fail("the sandbox store must be outside the checkout")
+
+    # Resolve the actual bind sources too: an existing store entry could be a
+    # symlink even when the store root is outside the checkout.
+    writable = [workspace, store]
+    for name in STORE_MOUNTS:
+        source = host_path(store / name)
+        if not source.is_relative_to(store) or source == store:
+            fail(f"store entry escapes its store directory: {store / name}")
+
+    if keep_writes and not photos_dir:
+        fail("--keep-writes needs --photos")
+    if keep_writes:
+        keep = host_path(keep_writes)
+        if any(overlaps(keep, path) for path in writable):
+            fail("--keep-writes must be outside the checkout and store")
+        for name in ("changes", ".work"):
+            source = host_path(keep / name)
+            if source != keep / name:
+                fail(f"overlay directory must not be a symlink: {keep / name}")
+        writable.append(keep)
+
+    if photos_dir:
+        photos = host_path(photos_dir)
+        if not photos.is_dir():
+            fail(f"--photos: not a directory: {photos}")
+        if any(overlaps(photos, path) for path in writable):
+            fail("--photos must not overlap the checkout, store or --keep-writes directory")
+    return workspace, store
+
+
+def prepare_store(root: Path) -> None:
     """Create the store, readable by the host user alone."""
-    root = store_root()
     root.mkdir(parents=True, exist_ok=True)
     root.chmod(0o700)
     for name in STORE_MOUNTS:
         (root / name).mkdir(exist_ok=True)
-    return root
 
 
 def git_identity() -> list[str]:
@@ -207,14 +259,10 @@ def photos_args(photos_dir: str, keep_writes: str | None) -> list[str]:
     with keep_writes, kept in keep_writes/changes. Neither the folder nor its
     SELinux labels change.
     """
-    photos = Path(photos_dir).expanduser().resolve()
-    if not photos.is_dir():
-        fail(f"--photos: not a directory: {photos}")
+    photos = host_path(photos_dir)
     options = "O"
     if keep_writes:
-        keep = Path(keep_writes).expanduser().resolve()
-        if keep == photos or keep.is_relative_to(photos):
-            fail("--keep-writes must be outside the --photos folder")
+        keep = host_path(keep_writes)
         # The kernel wants the work directory beside the kept layer, on the same
         # filesystem; it ends up owned by a namespace UID (`podman unshare rm` it).
         (keep / "changes").mkdir(parents=True, exist_ok=True)
@@ -224,14 +272,10 @@ def photos_args(photos_dir: str, keep_writes: str | None) -> list[str]:
 
 
 def run(cli: str, args: argparse.Namespace) -> int:
-    git_dir = REPO / ".git"
-    if not git_dir.is_dir():
-        fail(f"{REPO} is not a clone (a worktree's .git points outside it, so git would not work "
-             "inside); use a separate clone")
+    workspace, store = validate_paths(args.photos, args.keep_writes)
     if not args.dry_run:
         ensure_image(cli)
-    store = prepare_store()
-    (git_dir / "hooks").mkdir(exist_ok=True)
+    prepare_store(store)
 
     cmd = [
         cli, "run", "--rm", "--init",
@@ -243,15 +287,15 @@ def run(cli: str, args: argparse.Namespace) -> int:
         f"--memory={memory_limit()}",
         f"--pids-limit={os.environ.get('ARRAW_SANDBOX_PIDS', '4096')}",
         # :z labels the mounts for containers but keeps SELinux confining this one.
-        "-v", f"{REPO}:{WORKSPACE}:z",
-        # Hooks and config run on the host at the next git command there; the
-        # container must not be able to plant them.
-        "-v", f"{git_dir / 'hooks'}:{WORKSPACE}/.git/hooks:ro,z",
-        "-v", f"{git_dir / 'config'}:{WORKSPACE}/.git/config:ro,z",
+        # Source, launch scripts and Git metadata are writable; review changes
+        # before running host commands against this checkout again.
+        "-v", f"{workspace}:{WORKSPACE}:z",
         "-w", WORKSPACE,
     ]
     if sys.stdin.isatty():
-        cmd.append("-it")
+        cmd.append("-i")
+        if sys.stdout.isatty():
+            cmd.append("-t")
     for name, target in STORE_MOUNTS.items():
         cmd += ["-v", f"{store / name}:{target}:z"]
     cmd += git_identity()
@@ -261,8 +305,6 @@ def run(cli: str, args: argparse.Namespace) -> int:
         cmd += gui_args()
     if args.photos:
         cmd += photos_args(args.photos, args.keep_writes)
-    elif args.keep_writes:
-        fail("--keep-writes needs --photos")
 
     cmd.append(IMAGE)
     if args.command:
