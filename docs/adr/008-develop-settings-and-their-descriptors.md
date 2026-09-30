@@ -19,7 +19,7 @@ from it.
 > **Note (2026-09-30).** The table exists (`include/SettingDescriptors.h`), and
 > the shape above is ahead of it in two ways. `DevelopSettings` is nested
 > (`tone`, `color`, `geometry` with its `crop`), so a row cannot hold a
-> `float DevelopSettings::*`; it holds a `Member`, a variant of function
+> `float DevelopSettings::*`; it holds a `SettingAccessor`, a variant of function
 > pointers `T& (*)(DevelopSettings&)` produced by captureless lambdas, one
 > alternative per leaf type. The table has one row per leaf, keyed by the
 > leaf's camelCase name; `range` is optional (absent for booleans,
@@ -46,8 +46,8 @@ struct DevelopSettings {
 
 struct FieldDescriptor {
     std::string_view key;
-    Member member;      ///< Variant over `float DevelopSettings::*` and friends.
-    Range range;
+    SettingAccessor member;  ///< Variant over `float DevelopSettings::*` and friends.
+    SettingRange range;
     Group group;
     Applicability applies;
     Stage affects;
@@ -65,7 +65,7 @@ stay ordinary floats — addressable, trivially copyable, and laid out the way a
 GPU uniform block will want them.
 
 **The alternatives, and why not.** Self-describing fields
-(`Setting<float, "Exposure2012", Range{-5, 5}>`, using C++20 class-type
+(`Setting<float, "Exposure2012", SettingRange{-5, 5}>`, using C++20 class-type
 template parameters) make drift impossible but stop `settings.exposure` being a
 float, and still need something to enumerate the members. Generating the struct
 and the table from one list removes the duplication entirely and is the likely

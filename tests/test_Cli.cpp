@@ -146,6 +146,29 @@ TEST_CASE("A command's help carries its own options", "[cli]") {
     REQUIRE(result.err.empty());
 }
 
+TEST_CASE("Every ranged float setting is an export option", "[cli]") {
+    const auto result = invoke({"export", "--help"});
+    REQUIRE(result.code == cli::Success);
+
+    for (const FieldDescriptor& descriptor : developSettingDescriptors) {
+        if (!cli::isRangedFloatSetting(descriptor)) {
+            continue;
+        }
+        std::string option = "--";
+        for (const char c : std::string_view(descriptor.key)) {
+            if (c >= 'A' && c <= 'Z') {
+                option += '-';
+                option += static_cast<char>(c - 'A' + 'a');
+            } else {
+                option += c;
+            }
+        }
+        CAPTURE(descriptor.key, option);
+        // A row without help wording in the export command gets no option.
+        REQUIRE_THAT(result.out, ContainsSubstring(option + " "));
+    }
+}
+
 TEST_CASE("The GPU probe is listed and carries its own help", "[cli][gpu]") {
     REQUIRE_THAT(invoke({"--help"}).out, ContainsSubstring("gpu-test"));
 

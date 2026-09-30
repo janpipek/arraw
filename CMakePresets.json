@@ -25,6 +25,17 @@
       }
     },
     {
+      "name": "py-debug",
+      "displayName": "Python extension (Ninja)",
+      "description": "Debug build of the _arraw module only; needs `uv sync` first (see `just py-test`).",
+      "inherits": "debug",
+      "cacheVariables": {
+        "ARRAW_BUILD_PYTHON": "ON",
+        "ARRAW_BUILD_APPS": "OFF",
+        "ARRAW_BUILD_TESTS": "OFF"
+      }
+    },
+    {
       "name": "release",
       "displayName": "Release (Ninja)",
       "description": "Optimised build, no debug info.",
@@ -39,6 +50,11 @@
       "name": "debug",
       "displayName": "Debug",
       "configurePreset": "debug"
+    },
+    {
+      "name": "py-debug",
+      "displayName": "Python extension",
+      "configurePreset": "py-debug"
     },
     {
       "name": "release",

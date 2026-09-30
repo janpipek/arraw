@@ -5,6 +5,13 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(ARRAW_BUILD_TESTS "Build the arraw test suite" ON)
+option(ARRAW_BUILD_APPS "Build the GUI, the command line and the GPU module" ON)
+option(ARRAW_BUILD_PYTHON "Build the Python extension module" OFF)
+
+if(ARRAW_BUILD_TESTS AND NOT ARRAW_BUILD_APPS)
+    message(FATAL_ERROR "ARRAW_BUILD_TESTS needs the applications (arraw-gpu, arraw-cli-core, "
+            "arraw-cli, arraw-headless-platform): set ARRAW_BUILD_APPS=ON or ARRAW_BUILD_TESTS=OFF.")
+endif()
 
 function(arraw_enable_warnings target)
     if(MSVC)
@@ -152,6 +159,15 @@ target_link_libraries(arraw PRIVATE Qt6::Gui ${ARRAW_LIBRAW})
 # qt_standard_project_setup() turns AUTOMOC on globally; the engine has no Qt
 # types, so opting out keeps that honest (and saves a moc pass).
 set_target_properties(arraw PROPERTIES AUTOMOC OFF)
+# A Python extension module is a shared object, and the static library goes into it.
+if(ARRAW_BUILD_PYTHON)
+    set_target_properties(arraw PROPERTIES POSITION_INDEPENDENT_CODE ON)
+endif()
+
+# Everything from here to the tests is an application or belongs to one; the
+# Python module needs only the engine above. (Not indented, to keep the diff
+# and the blame of these blocks readable.)
+if(ARRAW_BUILD_APPS)
 
 # The one graphics device the library owns: an offscreen QRhi, and the textures
 # it mints as DeviceImages (ADR 015). Separate from the engine so that the only
@@ -294,6 +310,12 @@ target_link_libraries(arraw-cli PRIVATE arraw-cli-core Qt6::Core Qt6::Gui)
 arraw_deploy_qt_plugins(arraw-cli)
 if(TARGET arraw-headless-platform)
     target_link_libraries(arraw-cli PRIVATE arraw-headless-platform)
+endif()
+
+endif() # ARRAW_BUILD_APPS
+
+if(ARRAW_BUILD_PYTHON)
+    add_subdirectory(src/python)
 endif()
 
 if(ARRAW_BUILD_TESTS)

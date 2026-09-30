@@ -10,7 +10,7 @@ using namespace arraw;
 namespace {
 
 void check(const FieldDescriptor& descriptor, double value) {
-    const Range range = *descriptor.range;
+    const SettingRange range = *descriptor.range;
     if (!std::isfinite(value) || value < range.minimum || value > range.maximum) {
         throw std::invalid_argument(std::format("{} is {}, outside its range {} to {}",
                                                 descriptor.key, value, range.minimum,

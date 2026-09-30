@@ -48,6 +48,12 @@ void cli::setRotationAngle(GeometrySettings& geometry, double degrees) {
     geometry.straighten = wrapped - static_cast<double>(turns) * 90.0;
 }
 
+bool cli::isRangedFloatSetting(const FieldDescriptor& descriptor) {
+    return descriptor.range &&
+           (std::holds_alternative<float& (*)(DevelopSettings&)>(descriptor.member) ||
+            std::holds_alternative<std::optional<float>& (*)(DevelopSettings&)>(descriptor.member));
+}
+
 namespace {
 
 /// @brief File extension a format is written with.
@@ -144,9 +150,7 @@ std::string optionName(std::string_view key) {
 
 /// @brief Whether a row is a plain number setting that gets an option of its own.
 bool isNumericOption(const FieldDescriptor& descriptor) {
-    return descriptor.range && helpFor(descriptor.key) &&
-           (std::holds_alternative<float& (*)(DevelopSettings&)>(descriptor.member) ||
-            std::holds_alternative<std::optional<float>& (*)(DevelopSettings&)>(descriptor.member));
+    return cli::isRangedFloatSetting(descriptor) && helpFor(descriptor.key);
 }
 
 /// @brief Spells a limit the way the help and the errors show it.

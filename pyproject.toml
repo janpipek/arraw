@@ -1,0 +1,39 @@
+[build-system]
+requires = ["scikit-build-core>=0.10", "nanobind>=2"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "arraw"
+description = "Python bindings for the arraw RAW processing engine"
+requires-python = ">=3.12"
+dependencies = ["numpy"]
+dynamic = ["version"]
+
+[dependency-groups]
+dev = ["pytest", "numpy", "nanobind", "scikit-build-core"]
+
+[tool.uv]
+# The system Python may lack development headers; a uv-managed one has them.
+python-preference = "only-managed"
+# Rebuild the editable install when the C++ changes, not only pyproject.toml.
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "CMakeLists.txt" },
+    { file = "src/**" },
+    { file = "include/**" },
+]
+
+[tool.scikit-build]
+minimum-version = "build-system.requires"
+build-dir = "build/py-{wheel_tag}"
+wheel.packages = ["src/python/arraw"]
+
+[tool.scikit-build.cmake.define]
+ARRAW_BUILD_PYTHON = "ON"
+ARRAW_BUILD_APPS = "OFF"
+ARRAW_BUILD_TESTS = "OFF"
+
+[tool.scikit-build.metadata.version]
+provider = "scikit_build_core.metadata.regex"
+input = "CMakeLists.txt"
+regex = 'project\(arraw VERSION (?P<value>\d+\.\d+\.\d+)'

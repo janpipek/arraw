@@ -37,19 +37,19 @@ turned into a function pointer instead:
 
 ```cpp
 // include/SettingDescriptors.h
-using Member = std::variant<
+using SettingAccessor = std::variant<
     float& (*)(DevelopSettings&), std::optional<float>& (*)(DevelopSettings&),
     double& (*)(DevelopSettings&), bool& (*)(DevelopSettings&),
     WhiteBalanceMode& (*)(DevelopSettings&), QuarterTurn& (*)(DevelopSettings&),
     std::optional<UprightCropRect>& (*)(DevelopSettings&), CropAspect& (*)(DevelopSettings&)>;
 
 struct FieldDescriptor {
-    std::string_view key;         ///< camelCase leaf name, unique: "exposure", "cropRectangle"
-    Member member;
-    std::optional<Range> range;   ///< absent for bool, enum and compound rows
-    SettingGroup group;           ///< Color, Tone, Geometry
-    Applicability applies;        ///< Always, or RawOnly (temperature, tint)
-    Stage affects;                ///< the existing RenderCheckpoint Stage: Pointwise or Geometry
+    std::string_view key;               ///< camelCase leaf name, unique: "exposure", "cropRectangle"
+    SettingAccessor member;
+    std::optional<SettingRange> range;  ///< absent for bool, enum and compound rows
+    SettingGroup group;                 ///< Color, Tone, Geometry
+    Applicability applies;              ///< Always, or RawOnly (temperature, tint)
+    Stage affects;                      ///< the existing RenderCheckpoint Stage: Pointwise or Geometry
 };
 inline constexpr std::array developSettingDescriptors{ /* one row per leaf */ };
 ```

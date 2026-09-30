@@ -34,6 +34,15 @@ test *args: configure
     cmake --build --preset debug --target arraw-test-binaries
     ctest --preset debug {{args}}
 
+# Build the Python extension in its own tree (build/[prefix]py-debug) and run pytest against it.
+# Needs the uv-managed .venv; `--no-install-project` uninstalls an editable arraw that a plain `uv sync` installed.
+[unix]
+py-test *args:
+    uv sync --no-install-project
+    cmake --preset py-debug -DPython_EXECUTABLE="$(pwd)/.venv/bin/python"
+    cmake --build --preset py-debug --target _arraw
+    PYTHONPATH="$(pwd)/{{build_dir}}py-debug/python" uv run --no-sync pytest tests/python {{args}}
+
 # Regenerate the committed test fixtures (see tests/fixtures/README.md)
 fixtures:
     uv run tests/fixtures/make_fixtures.py

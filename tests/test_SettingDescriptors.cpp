@@ -196,7 +196,7 @@ TEST_CASE("Validation refuses a value below, above or outside every range", "[se
             continue;
         }
         INFO(descriptor.key);
-        const Range range = *descriptor.range;
+        const SettingRange range = *descriptor.range;
         REQUIRE_THROWS_AS(validate(withValue(descriptor, range.minimum - 1.0)),
                           std::invalid_argument);
         REQUIRE_THROWS_AS(validate(withValue(descriptor, range.maximum + 1.0)),

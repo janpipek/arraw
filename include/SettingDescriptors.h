@@ -17,7 +17,7 @@ namespace arraw {
 /// lambda turned into a function pointer rather than a data-member pointer
 /// (ADR 008). Each alternative is the reference-returning accessor for one
 /// leaf type.
-using Member =
+using SettingAccessor =
     std::variant<float& (*)(DevelopSettings&), std::optional<float>& (*)(DevelopSettings&),
                  double& (*)(DevelopSettings&), bool& (*)(DevelopSettings&),
                  WhiteBalanceMode& (*)(DevelopSettings&), QuarterTurn& (*)(DevelopSettings&),
@@ -25,7 +25,7 @@ using Member =
                  CropAspect& (*)(DevelopSettings&)>;
 
 /// @brief Inclusive numeric limits of a setting, in its own units.
-struct Range {
+struct SettingRange {
     /// @brief Smallest accepted value.
     double minimum;
 
@@ -48,10 +48,10 @@ struct FieldDescriptor {
     std::string_view key;
 
     /// @brief Accessor to the leaf inside ::arraw::DevelopSettings.
-    Member member;
+    SettingAccessor member;
 
     /// @brief Accepted values, absent for booleans, enumerations and compound rows.
-    std::optional<Range> range;
+    std::optional<SettingRange> range;
 
     /// @brief Panel the setting is shown in.
     SettingGroup group;
@@ -66,7 +66,7 @@ struct FieldDescriptor {
 // Local to the table below: a captureless accessor to the leaf `path` of a
 // `DevelopSettings s`, undefined again right after it.
 #define ARRAW_ACCESSOR(Type, path)                                                                 \
-    Member {                                                                                       \
+    SettingAccessor {                                                                              \
         +[](DevelopSettings& s) -> Type& { return s.path; }                                        \
     }
 
@@ -76,34 +76,34 @@ struct FieldDescriptor {
 /// the fields of each struct and fails when the two disagree (ADR 008).
 inline constexpr std::array developSettingDescriptors{
     FieldDescriptor{"exposure", ARRAW_ACCESSOR(float, tone.exposure),
-                    Range{darkestExposure, brightestExposure}, SettingGroup::Tone,
+                    SettingRange{darkestExposure, brightestExposure}, SettingGroup::Tone,
                     Applicability::Always, Stage::Pointwise},
     FieldDescriptor{"contrast", ARRAW_ACCESSOR(float, tone.contrast),
-                    Range{flattestContrast, steepestContrast}, SettingGroup::Tone,
+                    SettingRange{flattestContrast, steepestContrast}, SettingGroup::Tone,
                     Applicability::Always, Stage::Pointwise},
     FieldDescriptor{"shadows", ARRAW_ACCESSOR(float, tone.shadows),
-                    Range{weakestToneControl, strongestToneControl}, SettingGroup::Tone,
+                    SettingRange{weakestToneControl, strongestToneControl}, SettingGroup::Tone,
                     Applicability::Always, Stage::Pointwise},
     FieldDescriptor{"highlights", ARRAW_ACCESSOR(float, tone.highlights),
-                    Range{weakestToneControl, strongestToneControl}, SettingGroup::Tone,
+                    SettingRange{weakestToneControl, strongestToneControl}, SettingGroup::Tone,
                     Applicability::Always, Stage::Pointwise},
     FieldDescriptor{"blacks", ARRAW_ACCESSOR(float, tone.blacks),
-                    Range{weakestToneControl, strongestToneControl}, SettingGroup::Tone,
+                    SettingRange{weakestToneControl, strongestToneControl}, SettingGroup::Tone,
                     Applicability::Always, Stage::Pointwise},
     FieldDescriptor{"whites", ARRAW_ACCESSOR(float, tone.whites),
-                    Range{weakestToneControl, strongestToneControl}, SettingGroup::Tone,
+                    SettingRange{weakestToneControl, strongestToneControl}, SettingGroup::Tone,
                     Applicability::Always, Stage::Pointwise},
     FieldDescriptor{"filmicHighlights", ARRAW_ACCESSOR(float, tone.filmicHighlights),
-                    Range{noFilmicHighlights, fullFilmicHighlights}, SettingGroup::Tone,
+                    SettingRange{noFilmicHighlights, fullFilmicHighlights}, SettingGroup::Tone,
                     Applicability::Always, Stage::Pointwise},
     FieldDescriptor{"whiteBalance", ARRAW_ACCESSOR(WhiteBalanceMode, color.whiteBalance),
                     std::nullopt, SettingGroup::Color, Applicability::Always, Stage::Pointwise},
     FieldDescriptor{"temperature", ARRAW_ACCESSOR(std::optional<float>, color.temperature),
-                    Range{warmestKelvin, coolestKelvin}, SettingGroup::Color,
+                    SettingRange{warmestKelvin, coolestKelvin}, SettingGroup::Color,
                     Applicability::RawOnly, Stage::Pointwise},
     FieldDescriptor{"tint", ARRAW_ACCESSOR(std::optional<float>, color.tint),
-                    Range{-tintLimit, tintLimit}, SettingGroup::Color, Applicability::RawOnly,
-                    Stage::Pointwise},
+                    SettingRange{-tintLimit, tintLimit}, SettingGroup::Color,
+                    Applicability::RawOnly, Stage::Pointwise},
     FieldDescriptor{"rotation", ARRAW_ACCESSOR(QuarterTurn, geometry.rotation), std::nullopt,
                     SettingGroup::Geometry, Applicability::Always, Stage::Geometry},
     FieldDescriptor{"flipHorizontal", ARRAW_ACCESSOR(bool, geometry.flipHorizontal), std::nullopt,
@@ -111,7 +111,7 @@ inline constexpr std::array developSettingDescriptors{
     FieldDescriptor{"flipVertical", ARRAW_ACCESSOR(bool, geometry.flipVertical), std::nullopt,
                     SettingGroup::Geometry, Applicability::Always, Stage::Geometry},
     FieldDescriptor{"straighten", ARRAW_ACCESSOR(double, geometry.straighten),
-                    Range{minimumStraighten, maximumStraighten}, SettingGroup::Geometry,
+                    SettingRange{minimumStraighten, maximumStraighten}, SettingGroup::Geometry,
                     Applicability::Always, Stage::Geometry},
     FieldDescriptor{"cropRectangle",
                     ARRAW_ACCESSOR(std::optional<UprightCropRect>, geometry.crop.rectangle),
@@ -137,7 +137,7 @@ inline constexpr std::array developSettingDescriptors{
 /// @brief Calls a visitor with a mutable reference to the field a row describes.
 /// @param descriptor Row naming the field.
 /// @param settings Settings holding the field.
-/// @param visitor Callable taking `T&` for every leaf type T in ::arraw::Member.
+/// @param visitor Callable taking `T&` for every leaf type T in ::arraw::SettingAccessor.
 /// @return Whatever the visitor returns.
 template <class Visitor>
 decltype(auto) visitField(const FieldDescriptor& descriptor, DevelopSettings& settings,
@@ -153,7 +153,7 @@ decltype(auto) visitField(const FieldDescriptor& descriptor, DevelopSettings& se
 /// which keeps `settings` unmodified.
 /// @param descriptor Row naming the field.
 /// @param settings Settings holding the field.
-/// @param visitor Callable taking `const T&` for every leaf type T in ::arraw::Member.
+/// @param visitor Callable taking `const T&` for every leaf type T in ::arraw::SettingAccessor.
 /// @return Whatever the visitor returns.
 template <class Visitor>
 decltype(auto) visitField(const FieldDescriptor& descriptor, const DevelopSettings& settings,
