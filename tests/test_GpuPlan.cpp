@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <stdexcept>
 
 using namespace arraw;
 
@@ -83,9 +84,12 @@ TEST_CASE("An identity geometry packs to an identity map", "[gpu][plan]") {
 
     const auto block = packGeometry(plan);
 
-    REQUIRE(block.origin == std::array{0.0F, 0.0F});
-    REQUIRE(block.columnStep == std::array{1.0F, 0.0F});
-    REQUIRE(block.rowStep == std::array{0.0F, 1.0F});
+    REQUIRE(block.originWhole == std::array<std::int32_t, 2>{0, 0});
+    REQUIRE(block.originFraction == std::array{0.0F, 0.0F});
+    REQUIRE(block.columnStepHigh == std::array{1.0F, 0.0F});
+    REQUIRE(block.rowStepHigh == std::array{0.0F, 1.0F});
+    REQUIRE(block.columnStepLow == std::array{0.0F, 0.0F});
+    REQUIRE(block.rowStepLow == std::array{0.0F, 0.0F});
     REQUIRE(block.sourceSize == std::array<std::uint32_t, 2>{6, 4});
     REQUIRE(block.outputSize == std::array<std::uint32_t, 2>{6, 4});
 }
@@ -98,11 +102,43 @@ TEST_CASE("A quarter-turn packs to integral steps from a pixel edge", "[gpu][pla
 
     const auto block = packGeometry(plan);
 
-    for (const float value : {block.origin[0], block.origin[1], block.columnStep[0],
-                              block.columnStep[1], block.rowStep[0], block.rowStep[1]}) {
+    for (const float value : {block.columnStepHigh[0], block.columnStepHigh[1],
+                              block.rowStepHigh[0], block.rowStepHigh[1]}) {
         REQUIRE(value == std::round(value));
     }
+    for (const float value : {block.columnStepLow[0], block.columnStepLow[1], block.rowStepLow[0],
+                              block.rowStepLow[1]}) {
+        REQUIRE(value == 0.0F);
+    }
+    for (const float value : block.originFraction) {
+        REQUIRE((value == 0.0F || value == 0.5F));
+    }
     REQUIRE(block.outputSize == std::array<std::uint32_t, 2>{4, 6});
+}
+
+TEST_CASE("Step highs carry nine significant bits, so their products are exact", "[gpu][plan]") {
+    const auto plan = geometryPlanFor({6000, 40}, ImageOrientation::Normal, {.straighten = 0.3});
+    const auto block = packGeometry(plan);
+
+    for (const float high : {block.columnStepHigh[0], block.columnStepHigh[1], block.rowStepHigh[0],
+                             block.rowStepHigh[1]}) {
+        int exponent = 0;
+        const double mantissa = std::frexp(high, &exponent);
+        // 9 bits: scaling the mantissa by 2^9 leaves an integer.
+        REQUIRE(std::ldexp(mantissa, 9) == std::round(std::ldexp(mantissa, 9)));
+    }
+    // The largest column the shader multiplies by, at the widest permitted output.
+    const float x = static_cast<float>(maxGeometryOutputExtent - 1) + 0.5F;
+    const float high = block.columnStepHigh[0];
+    REQUIRE(static_cast<double>(x * high) == static_cast<double>(x) * static_cast<double>(high));
+    REQUIRE(block.originFraction[0] >= 0.0F);
+    REQUIRE(block.originFraction[0] < 1.0F);
+}
+
+TEST_CASE("An output too wide for exact products is refused", "[gpu][plan]") {
+    const auto plan =
+        geometryPlanFor({maxGeometryOutputExtent + 1, 4}, ImageOrientation::Normal, {});
+    REQUIRE_THROWS_AS(packGeometry(plan), std::invalid_argument);
 }
 
 TEST_CASE("The packed map lands where the CPU samples", "[gpu][plan]") {
@@ -116,13 +152,17 @@ TEST_CASE("The packed map lands where the CPU samples", "[gpu][plan]") {
         const SourcePoint expected =
             plan.toSource({plan.left + (x + 0.5) * plan.width / plan.outputSize.width,
                            plan.top + (y + 0.5) * plan.height / plan.outputSize.height});
-        const float column = static_cast<float>(x) + 0.5F;
-        const float row = static_cast<float>(y) + 0.5F;
-        const float sourceX =
-            block.origin[0] + column * block.columnStep[0] + row * block.rowStep[0];
-        const float sourceY =
-            block.origin[1] + column * block.columnStep[1] + row * block.rowStep[1];
-        REQUIRE(std::abs(sourceX - expected.x) < 1e-3);
-        REQUIRE(std::abs(sourceY - expected.y) < 1e-3);
+        const double column = x + 0.5;
+        const double row = y + 0.5;
+        const auto position = [&](std::size_t axis) {
+            return static_cast<double>(block.originWhole[axis]) +
+                   static_cast<double>(block.originFraction[axis]) +
+                   column * (static_cast<double>(block.columnStepHigh[axis]) +
+                             static_cast<double>(block.columnStepLow[axis])) +
+                   row * (static_cast<double>(block.rowStepHigh[axis]) +
+                          static_cast<double>(block.rowStepLow[axis]));
+        };
+        REQUIRE(std::abs(position(0) - expected.x) < 1e-5);
+        REQUIRE(std::abs(position(1) - expected.y) < 1e-5);
     }
 }

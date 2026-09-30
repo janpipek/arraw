@@ -389,9 +389,14 @@ TEST_CASE("The pointwise pass matches the CPU chain for a camera matrix that mak
 TEST_CASE("The pointwise pass lifts black as the CPU chain does", "[gpu][pointwise]") {
     // Zero, near-zero and non-positive luminance: the branch that takes the
     // shaped value of nothing and makes it neutral.
-    constexpr std::array<std::array<float, 3>, 12> colours{{
+    constexpr std::array<std::array<float, 3>, 15> colours{{
         {0.0F, 0.0F, 0.0F},
         {-0.0F, -0.0F, -0.0F},
+        // Denormal luminances, which GPUs flush and CPUs do not: both must
+        // still lift, or scale by a ratio that is not a denormal quotient.
+        {1.0e-39F, 0.0F, 0.0F},
+        {2.0e-38F, 0.0F, 0.0F},
+        {4.0e-38F, 4.0e-38F, 4.0e-38F},
         {1.0e-30F, 0.0F, 0.0F},
         {1.0e-12F, 1.0e-12F, 1.0e-12F},
         {1.0e-6F, 1.0e-6F, 1.0e-6F},

@@ -87,6 +87,13 @@ static_assert(offsetof(GpuPointwiseBlock, rollsHighlights) == 84);
 static_assert(offsetof(GpuPointwiseBlock, probe) == 88);
 static_assert(sizeof(GpuPointwiseBlock) == 96);
 
+/// @brief Widest output, in pixels per side, that the geometry block can address exactly.
+///
+/// See ::arraw::GpuGeometryBlock: the shader's products are exact only while
+/// `2 * x + 1` fits in 15 bits. Also the largest texture Vulkan implementations
+/// commonly promise (lavapipe's `maxImageDimension2D`).
+inline constexpr std::uint32_t maxGeometryOutputExtent = 1U << 14;
+
 /// @brief The geometry pass's uniform block, byte for byte as std140 lays it out.
 ///
 /// The shader data contract of `src/gpu/shaders/geometry.frag`. Rather than
@@ -96,38 +103,65 @@ static_assert(sizeof(GpuPointwiseBlock) == 96);
 ///     origin + (x + 0.5) * columnStep + (y + 0.5) * rowStep
 ///
 /// in source edge units, which is what ::arraw::applyGeometry computes per
-/// pixel through GeometryPlan::toSource. Composing it on the CPU in double
-/// leaves the shader one float multiply-add per axis, so its error does not
-/// grow with every intermediate a float recomputation would round. Exact
-/// quarter-turns with pixel-aligned crops have integral steps and a
-/// half-integral origin, both of which a float holds exactly, so those copy
-/// samples bit for bit without a special case.
+/// pixel through GeometryPlan::toSource.
+///
+/// No absolute position is ever held in one float: at 6000 pixels a float
+/// position is quantised to 5e-4 pixel, which shows as tens of 16-bit codes at
+/// a sharp edge. Instead the map is composed on the CPU in double and split:
+///
+///  - each step is `high + low`, where `high` is the step rounded to 9
+///    significant bits. `(x + 0.5)` is `(2x + 1) / 2` with `2x + 1 < 2^15` for
+///    `x < 2^14` (::arraw::maxGeometryOutputExtent), so `(x + 0.5) * high` is an
+///    integer of at most 15 bits times a 9-bit mantissa: at most 24 significant
+///    bits, exactly representable in float. The shader then splits that exact
+///    product into its whole and fractional parts, which is exact too.
+///  - `low` is what rounding left, at most 2^-10 of the step, so its products
+///    are small (at most about 16 pixels at the widest output) and their float
+///    rounding costs about 1e-6 pixel.
+///  - the origin is a whole part (`int32`) and a fractional part in [0, 1).
+///
+/// The whole parts are summed as integers, the fractions and low products as
+/// floats, and the result renormalised, so the fractional position that sets the
+/// blend weights keeps float precision whatever the source size.
+///
+/// Exact quarter-turns with pixel-aligned crops have integral steps (`high`
+/// integral, `low` zero) and a half-integral origin, so the fraction is exactly
+/// one half and those copy samples bit for bit without a special case.
 struct GpuGeometryBlock {
-    /// @brief Source position of the output's top-left edge, `(0, 0)`.
-    std::array<float, 2> origin{};
+    /// @brief Whole part of the source position of the output's top-left edge.
+    std::array<std::int32_t, 2> originWhole{};
 
-    /// @brief Source displacement of one output column.
-    std::array<float, 2> columnStep{1.0F, 0.0F};
+    /// @brief Fractional part of that position, in [0, 1).
+    std::array<float, 2> originFraction{};
 
-    /// @brief Source displacement of one output row.
-    std::array<float, 2> rowStep{0.0F, 1.0F};
+    /// @brief Source displacement of one output column, rounded to 9 significant bits.
+    std::array<float, 2> columnStepHigh{1.0F, 0.0F};
+
+    /// @brief Source displacement of one output row, rounded to 9 significant bits.
+    std::array<float, 2> rowStepHigh{0.0F, 1.0F};
+
+    /// @brief What rounding left of the column step: the step is high plus low.
+    std::array<float, 2> columnStepLow{};
+
+    /// @brief What rounding left of the row step: the step is high plus low.
+    std::array<float, 2> rowStepLow{};
 
     /// @brief Developed image dimensions, for clamping to its edge.
     std::array<std::uint32_t, 2> sourceSize{};
 
     /// @brief Output dimensions, the size of the pass's render target.
     std::array<std::uint32_t, 2> outputSize{};
-
-    /// @brief Rounds the block up to a `vec4` boundary, as std140 does.
-    std::array<std::uint32_t, 2> padding{};
 };
 
-static_assert(offsetof(GpuGeometryBlock, origin) == 0);
-static_assert(offsetof(GpuGeometryBlock, columnStep) == 8);
-static_assert(offsetof(GpuGeometryBlock, rowStep) == 16);
-static_assert(offsetof(GpuGeometryBlock, sourceSize) == 24);
-static_assert(offsetof(GpuGeometryBlock, outputSize) == 32);
-static_assert(sizeof(GpuGeometryBlock) == 48);
+static_assert(offsetof(GpuGeometryBlock, originWhole) == 0);
+static_assert(offsetof(GpuGeometryBlock, originFraction) == 8);
+static_assert(offsetof(GpuGeometryBlock, columnStepHigh) == 16);
+static_assert(offsetof(GpuGeometryBlock, rowStepHigh) == 24);
+static_assert(offsetof(GpuGeometryBlock, columnStepLow) == 32);
+static_assert(offsetof(GpuGeometryBlock, rowStepLow) == 40);
+static_assert(offsetof(GpuGeometryBlock, sourceSize) == 48);
+static_assert(offsetof(GpuGeometryBlock, outputSize) == 56);
+static_assert(sizeof(GpuGeometryBlock) == 64);
 
 /// @brief Fills the pointwise block from a resolved plan.
 /// @param plan Plan to pack; only its pointwise fields are read.
@@ -139,6 +173,8 @@ static_assert(sizeof(GpuGeometryBlock) == 48);
 /// @brief Fills the geometry block from a resolved geometry.
 /// @param plan Geometry to pack.
 /// @return The block, ready to be copied into a uniform buffer.
+/// @throws std::invalid_argument if the output is wider or taller than
+/// ::arraw::maxGeometryOutputExtent, beyond which the shader is not exact.
 [[nodiscard]] GpuGeometryBlock packGeometry(const GeometryPlan& plan);
 
 } // namespace arraw

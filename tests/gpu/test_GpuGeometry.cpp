@@ -12,6 +12,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -19,6 +20,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <span>
+#include <utility>
 
 using namespace arraw;
 using namespace arraw::test;
@@ -27,25 +29,39 @@ namespace {
 
 /// Largest relative difference tolerated on a large, opaque, straightened image.
 ///
-/// Measured worst on 1000x700 at 0.3, 7.5 and -30 degrees: 1.4e-4 (absolute
-/// 4e-5). The float position error grows with the source length: a ramp image
-/// shows up to 2.4e-4 pixels at 1000 columns, four ulps of the coordinate.
-constexpr double largeImageTolerance = 3.0e-4;
+/// Measured worst on 1000x700 at 0.3, 7.5 and -30 degrees: 4.0e-7 (absolute
+/// 1.8e-7), about one float ulp of the value. The position is carried as a
+/// whole and a fractional part (see GpuGeometryBlock), so the error no longer
+/// grows with the source length; it was 1.4e-4 with a single float position.
+constexpr double largeImageTolerance = 5.0e-6;
 
 /// Magnitude below which the transparent-neighbourhood comparison counts against a floor.
 constexpr double transparentFloor = 5.0e-2;
 
 /// Largest relative difference tolerated on a large image with transparent pixels.
 ///
-/// Measured worst 5.0e-3 above ::transparentFloor. Where most neighbours are
-/// transparent the colour is a ratio of two small weighted sums, so the same
-/// float weight error is magnified by the inverse of the total alpha.
-constexpr double transparentTolerance = 1.0e-2;
+/// Measured worst 5.1e-6 above ::transparentFloor. Where most neighbours are
+/// transparent the colour is a ratio of two small weighted sums, so a float
+/// weight error is magnified by the inverse of the total alpha.
+constexpr double transparentTolerance = 5.0e-5;
 
 /// Largest absolute difference tolerated on a large image with transparent pixels.
 ///
-/// Measured worst 1.6e-3, in colour beside almost transparent neighbours.
-constexpr double transparentAbsoluteTolerance = 3.0e-3;
+/// Measured worst 1.5e-6, in colour beside almost transparent neighbours.
+constexpr double transparentAbsoluteTolerance = 1.0e-5;
+
+/// Largest relative difference tolerated on a 6000 pixel wide checker.
+///
+/// Measured worst on 6000x64 at 0.3, 1 and 7.5 degrees, against a 0.05/0.9
+/// checker: 2.2e-6 (absolute 3.6e-7). With the position held in one float the
+/// same images showed 6.6e-4 to 8.5e-4 absolute, tens of 16-bit codes.
+constexpr double photoWidthTolerance = 1.0e-5;
+
+/// Largest absolute alpha or blended colour difference tolerated beside transparent texels.
+///
+/// Measured worst 2.1e-7 in alpha and exactly 0 in colour on 4000x6 at 0.01 and
+/// 0.05 degrees.
+constexpr double stripeTolerance = 1.0e-4;
 
 ImageBuffer labelled(ImageSize size, bool opaque = false) {
     ImageBuffer image(size, workingFormat, workingEncoding);
@@ -73,23 +89,67 @@ template <typename Block> std::span<const std::byte> bytesOf(const Block& block)
     return std::as_bytes(std::span<const Block, 1>(&block, 1));
 }
 
-/// @brief Resamples on the device and on the host, and compares the two.
+/// @brief A resample done on the device and on the host.
+struct GeometryPair {
+    ImageBuffer expected; ///< The CPU's result.
+    ImageBuffer actual;   ///< The device's result, read back.
+};
+
+/// @brief Resamples on the device and on the host.
 ///
 /// The uploaded buffer stays Normal, as develop() leaves its pixels; the
 /// camera orientation reaches the plan alone.
-FloatDifference compareGeometry(const ImageBuffer& source, ImageOrientation orientation,
-                                const GeometrySettings& settings,
-                                double floor = geometryAbsoluteFloor) {
+GeometryPair resampleBoth(const ImageBuffer& source, ImageOrientation orientation,
+                          const GeometrySettings& settings) {
     GpuContext& context = gpuContext();
     const GeometryPlan plan = geometryPlanFor(source.size(), orientation, settings);
     const GpuGeometryBlock block = packGeometry(plan);
-    const ImageBuffer actual = context
-                                   .render(GpuPass::Geometry, bytesOf(block),
-                                           context.upload(source), plan.outputSize, workingEncoding)
-                                   .readBack();
-    const ImageBuffer expected = applyGeometry(source.clone(), plan);
+    ImageBuffer actual = context
+                             .render(GpuPass::Geometry, bytesOf(block), context.upload(source),
+                                     plan.outputSize, workingEncoding)
+                             .readBack();
+    ImageBuffer expected = applyGeometry(source.clone(), plan);
     REQUIRE(actual.size() == plan.outputSize);
-    return compareFloat(expected, actual, floor);
+    return {std::move(expected), std::move(actual)};
+}
+
+/// @brief Resamples on the device and on the host, and compares the two.
+FloatDifference compareGeometry(const ImageBuffer& source, ImageOrientation orientation,
+                                const GeometrySettings& settings,
+                                double floor = geometryAbsoluteFloor) {
+    const GeometryPair pair = resampleBoth(source, orientation, settings);
+    return compareFloat(pair.expected, pair.actual, floor);
+}
+
+/// @brief Builds an opaque, high-contrast checker of three-pixel squares.
+ImageBuffer checker(ImageSize size) {
+    ImageBuffer image(size, workingFormat, workingEncoding);
+    auto samples = image.samples<float>();
+    for (std::uint32_t y = 0; y < size.height; ++y) {
+        for (std::uint32_t x = 0; x < size.width; ++x) {
+            const float value = ((x / 3 + y / 3) % 2 == 0) ? 0.05F : 0.9F;
+            const std::size_t index = (static_cast<std::size_t>(y) * size.width + x) * 4;
+            samples[index] = value;
+            samples[index + 1] = value;
+            samples[index + 2] = value;
+            samples[index + 3] = 1.0F;
+        }
+    }
+    return image;
+}
+
+/// @brief Builds columns alternating a transparent red and an opaque blue.
+ImageBuffer transparentStripes(ImageSize size) {
+    ImageBuffer image(size, workingFormat, workingEncoding);
+    auto samples = image.samples<float>();
+    for (std::size_t index = 0; index < size.pixelCount(); ++index) {
+        const bool transparent = (index % size.width) % 2 == 0;
+        samples[index * 4] = transparent ? 1.0F : 0.0F;
+        samples[index * 4 + 1] = 0.0F;
+        samples[index * 4 + 2] = transparent ? 0.0F : 1.0F;
+        samples[index * 4 + 3] = transparent ? 0.0F : 1.0F;
+    }
+    return image;
 }
 
 /// @brief Reports a measured error when asked, for choosing the tolerances.
@@ -237,6 +297,56 @@ TEST_CASE("The geometry pass keeps the CPU's accuracy on a large straightened im
         measure("large transparent", transparent);
         CHECK(transparent.maxRelDiff <= transparentTolerance);
         CHECK(transparent.maxAbsDiff <= transparentAbsoluteTolerance);
+    }
+}
+
+TEST_CASE("The geometry pass keeps the CPU's accuracy at photo widths", "[gpu][geometry]") {
+    // 6000 pixels wide: a float holding the absolute source position is
+    // quantised to 5e-4 pixel here, which a sharp checker turns into an error of
+    // a percent. Height stays small to keep the software device quick.
+    const ImageBuffer source = checker({6000, 64});
+    for (const double angle : {0.3, 1.0, 7.5}) {
+        CAPTURE(angle);
+        const auto difference =
+            compareGeometry(source, ImageOrientation::Normal, {.straighten = angle});
+        measure("photo width checker", difference);
+        CHECK(difference.maxRelDiff <= photoWidthTolerance);
+    }
+}
+
+TEST_CASE("The geometry pass blends a transparent texel as the CPU does, never copies it",
+          "[gpu][geometry]") {
+    // Alternating (alpha 0, red) and (alpha 1, blue) texels. Straightened by a
+    // hair, most output pixels sit a tiny distance from a texel centre: the
+    // CPU blends there, so where anything is visible the colour is blue, and a
+    // shader that snapped to the centre would answer red.
+    const ImageBuffer source = transparentStripes({4000, 6});
+    const UprightCropRect full{.left = 0.0, .top = 0.0, .right = 1.0, .bottom = 1.0};
+    for (const double angle : {0.01, 0.05}) {
+        CAPTURE(angle);
+        const GeometryPair pair = resampleBoth(source, ImageOrientation::Normal,
+                                               {.straighten = angle, .crop = {.rectangle = full}});
+        const auto expected = pair.expected.samples<float>();
+        const auto actual = pair.actual.samples<float>();
+        double worstAlpha = 0.0;
+        double worstColour = 0.0;
+        for (std::size_t index = 0; index < expected.size(); index += 4) {
+            worstAlpha = std::max(
+                worstAlpha, static_cast<double>(std::abs(expected[index + 3] - actual[index + 3])));
+            if (expected[index + 3] > 0.0F) {
+                for (std::size_t channel = 0; channel < 3; ++channel) {
+                    worstColour = std::max(worstColour,
+                                           static_cast<double>(std::abs(expected[index + channel] -
+                                                                        actual[index + channel])));
+                }
+            }
+        }
+        if (std::getenv("ARRAW_PRINT_MEASURED") != nullptr) {
+            std::fprintf(stderr, "transparent stripes %g: alpha %.3g colour %.3g\n", angle,
+                         worstAlpha, worstColour);
+        }
+        CHECK(worstAlpha <= stripeTolerance);
+        CHECK(worstColour <= stripeTolerance);
     }
 }
 

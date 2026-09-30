@@ -4,9 +4,14 @@
 //
 // Mirrors them, and must change with them. The CPU composes crop, matrix and
 // centring in double per pixel; here the CPU has already composed them into
-// one affine map (GpuGeometryBlock in GpuPlan.h), so a pixel costs one
-// multiply-add per axis. Only texelFetch reads the source: filtering is done
-// by hand, in premultiplied alpha, exactly as sample() does it.
+// one affine map (GpuGeometryBlock in GpuPlan.h), split so that no absolute
+// source position is ever held in one float, which at photo sizes would cost
+// tens of 16-bit codes at a sharp edge. Only texelFetch reads the source:
+// filtering is done by hand, in premultiplied alpha, exactly as sample() does
+// it.
+//
+// Parity with the CPU, and the tolerances the tests hold, are measured on
+// Vulkan (lavapipe) only.
 
 layout(location = 0) out vec4 fragColor;
 
@@ -14,50 +19,66 @@ layout(binding = 0) uniform sampler2D source;
 
 // The contract with GpuGeometryBlock: keep the members in step with it.
 layout(std140, binding = 1) uniform Geometry {
-    vec2 origin;
-    vec2 columnStep;
-    vec2 rowStep;
+    ivec2 originWhole;
+    vec2 originFraction;
+    vec2 columnStepHigh;
+    vec2 rowStepHigh;
+    vec2 columnStepLow;
+    vec2 rowStepLow;
     uvec2 sourceSize;
     uvec2 outputSize;
 } plan;
 
-// Float epsilon: the spacing of floats above 1 is this, so the spacing near
-// a coordinate of magnitude len is about len * this.
-const float floatEpsilon = 1.1920929e-7;
-
-// Turns a source edge position along one axis into a texel-centre coordinate.
+// Turns a source edge position along one axis, given as whole + fraction with
+// fraction in [0, 1), into the texel below the centre coordinate and the
+// distance above it, clamped as sample() clamps: the centre coordinate
+// edge - 0.5 lies in [0, length - 1], and is exactly the last texel beyond it.
 //
-// The CPU snaps to the nearest integer when within 32 double epsilons of the
-// source length, to absorb the rounding of its own composition. Here the
-// composition is done in double before packing, so what is left is the
-// rounding of the float origin and steps and of one multiply-add: about an
-// ulp of the length. One float epsilon of the length is that tolerance. No
-// more is spent because every snapped distance is an error against the CPU
-// (4 epsilons measured a 4.9e-4 pixel worst on a 1000 pixel ramp against
-// 2.4e-4 with one). Exact copies need no snap: quarter-turns have integral
-// steps and half-integral origins, which a float holds exactly.
-float centreCoordinate(float edge, uint length) {
-    const float last = float(length) - 1.0;
-    float value = clamp(edge - 0.5, 0.0, last);
-    const float nearest = round(value);
-    if (abs(value - nearest) <= floatEpsilon * float(length)) {
-        value = nearest;
+// The CPU also snaps to the nearest integer within 32 double epsilons of a
+// texel centre. That is far below anything a float sees, and no snap is done
+// here: a snap would turn a blend with a transparent neighbour into a copy of
+// its colour. Exact copies need none, since quarter-turns land on a fraction
+// of exactly one half.
+void centreCoordinate(int whole, float fraction, uint length, out int below, out float above) {
+    const float shifted = fraction - 0.5;
+    const float shiftedFloor = floor(shifted);
+    below = whole + int(shiftedFloor);
+    above = shifted - shiftedFloor;
+    const int last = int(length) - 1;
+    if (below < 0) {
+        below = 0;
+        above = 0.0;
+    } else if (below >= last) {
+        below = last;
+        above = 0.0;
     }
-    return value;
 }
 
 void main() {
-    // gl_FragCoord is (x + 0.5, y + 0.5): the output pixel's centre.
-    const vec2 edge = plan.origin + gl_FragCoord.x * plan.columnStep +
-                      gl_FragCoord.y * plan.rowStep;
-    const float x = centreCoordinate(edge.x, plan.sourceSize.x);
-    const float y = centreCoordinate(edge.y, plan.sourceSize.y);
-    const int x0 = int(floor(x));
-    const int y0 = int(floor(y));
+    // gl_FragCoord is (x + 0.5, y + 0.5): the output pixel's centre. With the
+    // steps' high parts (9 significant bits) the products are exact in float,
+    // so they split into whole and fractional parts without error; see
+    // GpuGeometryBlock for the bound.
+    const vec2 columnHigh = gl_FragCoord.x * plan.columnStepHigh;
+    const vec2 rowHigh = gl_FragCoord.y * plan.rowStepHigh;
+    const vec2 columnWhole = floor(columnHigh);
+    const vec2 rowWhole = floor(rowHigh);
+    const ivec2 whole = plan.originWhole + ivec2(columnWhole) + ivec2(rowWhole);
+    // Everything left is small: fractions and the low parts' products.
+    vec2 fraction = plan.originFraction + (columnHigh - columnWhole) + (rowHigh - rowWhole) +
+                    (gl_FragCoord.x * plan.columnStepLow + gl_FragCoord.y * plan.rowStepLow);
+    const vec2 carry = floor(fraction);
+    fraction -= carry;
+    const ivec2 edgeWhole = whole + ivec2(carry);
+
+    int x0;
+    int y0;
+    float dx;
+    float dy;
+    centreCoordinate(edgeWhole.x, fraction.x, plan.sourceSize.x, x0, dx);
+    centreCoordinate(edgeWhole.y, fraction.y, plan.sourceSize.y, y0, dy);
     const int x1 = min(x0 + 1, int(plan.sourceSize.x) - 1);
     const int y1 = min(y0 + 1, int(plan.sourceSize.y) - 1);
-    const float dx = x - float(x0);
-    const float dy = y - float(y0);
 
     // On a texel centre the texel passes unchanged, colour of a transparent
     // pixel included, which the premultiplied blend below would zero.
