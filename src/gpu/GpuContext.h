@@ -4,9 +4,11 @@
 
 #include <ImageBuffer.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -97,6 +99,20 @@ struct GpuDeviceInfo {
     int maxTextureSize = 0;
 };
 
+/// @brief One fullscreen fragment pass a ::arraw::GpuContext can render.
+///
+/// Each reads one input image through `texelFetch` at binding 0 and, except
+/// ::Copy, one std140 uniform block at binding 1, and writes one RGBA32F
+/// render target. The shaders live in `src/gpu/shaders`, compiled at build time.
+enum class GpuPass {
+    Copy,      ///< Copies its input unchanged; no uniforms. The render round trip's proof.
+    Pointwise, ///< The pointwise chain; uniforms are a ::arraw::GpuPointwiseBlock.
+    Geometry,  ///< The geometry resample; uniforms are a ::arraw::GpuGeometryBlock.
+};
+
+/// @brief Number of ::arraw::GpuPass values, for tables indexed by one.
+inline constexpr std::size_t gpuPassCount = 3;
+
 /// @brief One graphics device, owned, offscreen, on the thread that made it.
 ///
 /// The adapter ADR 015 describes: pass-recording code will take a device it
@@ -157,6 +173,28 @@ public:
     /// GpuDeviceInfo::floatTextures), cannot create or fill the texture, or an
     /// earlier transfer failed.
     [[nodiscard]] DeviceImage upload(const ImageBuffer& image);
+
+    /// @brief Renders one pass from a device image into a new one.
+    ///
+    /// The one way a pass's output becomes a ::arraw::DeviceImage, which is
+    /// what keeps this class the only minter of them. Pipelines are built on a
+    /// pass's first use and kept for the device's lifetime. Waits for the
+    /// render to finish, as a transfer does.
+    /// @param pass Shader to run.
+    /// @param uniforms The pass's uniform block, byte for byte; empty for ::GpuPass::Copy.
+    /// @param input Image the pass reads; must belong to this context's device.
+    /// @param outputSize Dimensions of the result.
+    /// @param encoding Meaning of the result's RGB values, which the pass decides.
+    /// @return The result, with no pending orientation.
+    /// @throws std::invalid_argument if @p input is empty or belongs to another
+    /// device, @p uniforms is not the pass's block size, or @p outputSize is
+    /// empty or larger than the device accepts.
+    /// @throws std::logic_error if called from a thread other than the owner.
+    /// @throws std::runtime_error if the device has no RGBA32F textures, cannot
+    /// create the pass's resources, or the render fails.
+    [[nodiscard]] DeviceImage render(GpuPass pass, std::span<const std::byte> uniforms,
+                                     const DeviceImage& input, ImageSize outputSize,
+                                     const ColorEncoding& encoding);
 
 private:
     /// @brief Device shared with every image minted from it.

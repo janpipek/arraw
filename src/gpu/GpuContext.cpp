@@ -2,9 +2,11 @@
 
 #include "DeviceImageState.h"
 #include "GpuDevice.h"
+#include "GpuPlan.h"
 
 #include <QByteArray>
 #include <QCoreApplication>
+#include <QFile>
 #include <QGuiApplication>
 #include <QOffscreenSurface>
 #include <QSize>
@@ -12,6 +14,7 @@
 #include <QThread>
 #include <QVersionNumber>
 #include <rhi/qrhi.h>
+#include <rhi/qshader.h>
 
 #include <atomic>
 #include <cassert>
@@ -25,6 +28,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -223,6 +227,11 @@ public:
                "a device image's last copy must be released on its device's owner thread");
     }
 
+    /// @brief The pixels, for a pass on the same device to read.
+    [[nodiscard]] QRhiTexture& texture() const noexcept {
+        return *texture_;
+    }
+
     [[nodiscard]] ImageBuffer readBack() const override {
         device_->requireUsable("read back");
 
@@ -261,6 +270,99 @@ private:
     /// @brief The pixels.
     std::unique_ptr<QRhiTexture> texture_;
 };
+
+/// @brief Names a pass, for messages.
+std::string_view passName(GpuPass pass) {
+    switch (pass) {
+    case GpuPass::Copy:
+        return "copy";
+    case GpuPass::Pointwise:
+        return "pointwise";
+    case GpuPass::Geometry:
+        return "geometry";
+    }
+    return "unknown";
+}
+
+/// @brief Resource path of a pass's compiled fragment shader.
+QString fragmentShaderOf(GpuPass pass) {
+    return QStringLiteral(":/arraw/shaders/%1.qsb")
+        .arg(pass == GpuPass::Copy        ? QStringLiteral("copy.frag")
+             : pass == GpuPass::Pointwise ? QStringLiteral("develop.frag")
+                                          : QStringLiteral("geometry.frag"));
+}
+
+/// @brief Size of the uniform block a pass reads, in bytes; zero for none.
+std::size_t uniformSizeOf(GpuPass pass) {
+    switch (pass) {
+    case GpuPass::Copy:
+        return 0;
+    case GpuPass::Pointwise:
+        return sizeof(GpuPointwiseBlock);
+    case GpuPass::Geometry:
+        return sizeof(GpuGeometryBlock);
+    }
+    return 0;
+}
+
+/// @brief Loads a shader compiled into this build by qt_add_shaders.
+/// @throws std::runtime_error if it is missing or unreadable, which is a
+/// build fault rather than a device's.
+QShader loadShader(const QString& path) {
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        throw std::runtime_error("The GPU shader " + path.toStdString() +
+                                 " is missing from this build");
+    }
+    QShader shader = QShader::fromSerialized(file.readAll());
+    if (!shader.isValid()) {
+        throw std::runtime_error("The GPU shader " + path.toStdString() + " cannot be read");
+    }
+    return shader;
+}
+
+/// @brief Binds a pass's input at 0 and, if it has one, its uniform block at 1.
+///
+/// With null resources it describes only the layout, which is what a pipeline
+/// is created against; each render binds its own resources in the same layout.
+std::vector<QRhiShaderResourceBinding> bindingsFor(QRhiTexture* input, QRhiSampler* sampler,
+                                                   QRhiBuffer* uniforms, bool hasUniforms) {
+    std::vector<QRhiShaderResourceBinding> bindings{QRhiShaderResourceBinding::sampledTexture(
+        0, QRhiShaderResourceBinding::FragmentStage, input, sampler)};
+    if (hasUniforms) {
+        bindings.push_back(QRhiShaderResourceBinding::uniformBuffer(
+            1, QRhiShaderResourceBinding::FragmentStage, uniforms));
+    }
+    return bindings;
+}
+
+/// @brief Builds a pass's pipeline against the render pass its targets share.
+/// @throws std::runtime_error if a shader is missing or the pipeline cannot be created.
+void buildPipeline(QRhi& rhi, GpuPass pass, detail::PassPipeline& cached) {
+    const std::vector<QRhiShaderResourceBinding> layout =
+        bindingsFor(nullptr, nullptr, nullptr, uniformSizeOf(pass) > 0);
+    std::unique_ptr<QRhiShaderResourceBindings> bindings(rhi.newShaderResourceBindings());
+    bindings->setBindings(layout.begin(), layout.end());
+    if (!bindings->create()) {
+        throw std::runtime_error("The GPU device could not lay out the " +
+                                 std::string(passName(pass)) + " pass's resources");
+    }
+
+    std::unique_ptr<QRhiGraphicsPipeline> pipeline(rhi.newGraphicsPipeline());
+    pipeline->setShaderStages({{QRhiShaderStage::Vertex,
+                                loadShader(QStringLiteral(":/arraw/shaders/fullscreen.vert.qsb"))},
+                               {QRhiShaderStage::Fragment, loadShader(fragmentShaderOf(pass))}});
+    // The fullscreen triangle is made from the vertex index: no vertex input.
+    pipeline->setVertexInputLayout({});
+    pipeline->setShaderResourceBindings(bindings.get());
+    pipeline->setRenderPassDescriptor(cached.renderPass.get());
+    if (!pipeline->create()) {
+        throw std::runtime_error("The GPU device could not create the " +
+                                 std::string(passName(pass)) + " pass's pipeline");
+    }
+    cached.layout = std::move(bindings);
+    cached.pipeline = std::move(pipeline);
+}
 
 } // namespace
 
@@ -403,6 +505,115 @@ DeviceImage GpuContext::upload(const ImageBuffer& image) {
 
     return DeviceImage(std::make_shared<const RhiDeviceImage>(
         device_, std::move(texture), size, image.encoding(), image.orientation()));
+}
+
+DeviceImage GpuContext::render(GpuPass pass, std::span<const std::byte> uniforms,
+                               const DeviceImage& input, ImageSize outputSize,
+                               const ColorEncoding& encoding) {
+    device_->requireUsable("render");
+
+    const auto index = static_cast<std::size_t>(pass);
+    if (index >= gpuPassCount) {
+        throw std::invalid_argument("Unknown GPU pass");
+    }
+    const std::string name(passName(pass));
+    if (!input.valid()) {
+        throw std::invalid_argument("The " + name + " pass needs an input image");
+    }
+    if (input.device() != id()) {
+        // Textures are meaningless to any device but the one that made them
+        // (ADR 015), which is also what makes the cast below sound.
+        throw std::invalid_argument("The " + name +
+                                    " pass can only read an image from its own device");
+    }
+    if (uniforms.size() != uniformSizeOf(pass)) {
+        throw std::invalid_argument("The " + name + " pass takes " +
+                                    std::to_string(uniformSizeOf(pass)) +
+                                    " bytes of uniforms, not " + std::to_string(uniforms.size()));
+    }
+    const std::uint32_t edge =
+        info_.maxTextureSize > 0 ? static_cast<std::uint32_t>(info_.maxTextureSize) : 0U;
+    if (outputSize.empty() || outputSize.width > edge || outputSize.height > edge) {
+        throw std::invalid_argument("The " + name + " pass cannot render a " +
+                                    describe(outputSize) +
+                                    " image on a device whose largest "
+                                    "texture edge is " +
+                                    std::to_string(edge) + " pixels");
+    }
+    if (outputSize.pixelCount() * bytesPerPixel(PixelFormat::RgbaF32) > maxTransferBytes) {
+        // Refused before rendering rather than when the result is read back.
+        throw std::invalid_argument("A " + describe(outputSize) +
+                                    " result is larger than one GPU transfer can carry");
+    }
+    if (!info_.floatTextures) {
+        throw std::runtime_error("This GPU device has no RGBA32F textures, which a pass needs");
+    }
+
+    const auto& source = static_cast<const RhiDeviceImage&>(*input.state_);
+    QRhi& rhi = *device_->rhi;
+
+    std::unique_ptr<QRhiTexture> texture(rhi.newTexture(
+        QRhiTexture::RGBA32F,
+        QSize(static_cast<int>(outputSize.width), static_cast<int>(outputSize.height)), 1,
+        QRhiTexture::RenderTarget | QRhiTexture::UsedAsTransferSource));
+    if (!texture->create()) {
+        throw std::runtime_error("The GPU device could not create a " + describe(outputSize) +
+                                 " RGBA32F render target");
+    }
+    std::unique_ptr<QRhiTextureRenderTarget> target(
+        rhi.newTextureRenderTarget(QRhiTextureRenderTargetDescription(texture.get())));
+    detail::PassPipeline& cached = device_->passes.at(index);
+    if (!cached.renderPass) {
+        // Every target of a pass has one RGBA32F attachment, so the first
+        // one's render pass is compatible with all that follow.
+        cached.renderPass.reset(target->newCompatibleRenderPassDescriptor());
+    }
+    target->setRenderPassDescriptor(cached.renderPass.get());
+    if (!target->create()) {
+        throw std::runtime_error("The GPU device could not create a " + describe(outputSize) +
+                                 " render target");
+    }
+    if (!cached.pipeline) {
+        buildPipeline(rhi, pass, cached);
+    }
+
+    if (!device_->sampler) {
+        device_->sampler.reset(rhi.newSampler(QRhiSampler::Nearest, QRhiSampler::Nearest,
+                                              QRhiSampler::None, QRhiSampler::ClampToEdge,
+                                              QRhiSampler::ClampToEdge));
+        if (!device_->sampler->create()) {
+            device_->sampler.reset();
+            throw std::runtime_error("The GPU device could not create a sampler");
+        }
+    }
+    std::unique_ptr<QRhiBuffer> buffer;
+    if (!uniforms.empty()) {
+        buffer.reset(rhi.newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer,
+                                   static_cast<quint32>(uniforms.size())));
+        if (!buffer->create()) {
+            throw std::runtime_error("The GPU device could not create the " + name +
+                                     " pass's uniform buffer");
+        }
+    }
+    const std::vector<QRhiShaderResourceBinding> list =
+        bindingsFor(&source.texture(), device_->sampler.get(), buffer.get(), buffer != nullptr);
+    std::unique_ptr<QRhiShaderResourceBindings> bindings(rhi.newShaderResourceBindings());
+    bindings->setBindings(list.begin(), list.end());
+    if (!bindings->create()) {
+        throw std::runtime_error("The GPU device could not bind the " + name + " pass's resources");
+    }
+
+    detail::submitPass(*device_, "render the " + name + " pass", *target, *cached.pipeline,
+                       *bindings, [&](QRhiResourceUpdateBatch& batch) {
+                           if (buffer) {
+                               batch.updateDynamicBuffer(buffer.get(), 0,
+                                                         static_cast<quint32>(uniforms.size()),
+                                                         uniforms.data());
+                           }
+                       });
+
+    return DeviceImage(std::make_shared<const RhiDeviceImage>(
+        device_, std::move(texture), outputSize, encoding, ImageOrientation::Normal));
 }
 
 } // namespace arraw

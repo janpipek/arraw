@@ -130,6 +130,8 @@ add_library(arraw STATIC
         src/core/QtImage.h
         src/core/RawImport.cpp
         src/core/RawImport.h
+        src/core/SampleConversion.h
+        src/core/SampleConversion.cpp
 )
 add_library(arraw::arraw ALIAS arraw)
 arraw_enable_warnings(arraw)
@@ -159,12 +161,30 @@ add_library(arraw-gpu STATIC
         src/gpu/GpuContext.cpp
         src/gpu/GpuDevice.h
         src/gpu/GpuDevice.cpp
+        src/gpu/GpuDevelop.h
+        src/gpu/GpuDevelop.cpp
         src/gpu/GpuPlan.h
         src/gpu/GpuPlan.cpp)
 arraw_enable_warnings(arraw-gpu)
 target_include_directories(arraw-gpu PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/gpu)
-# The processing plan is engine-private, and the GPU packs its uniforms from it.
+# The processing plan and checkpoint state are engine-private; the GPU packs its
+# uniforms from the one and builds the other.
 target_include_directories(arraw-gpu PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/core)
+# The passes' shaders, compiled at build time into .qsb resources, so a shader
+# that does not compile fails the build rather than the first render. GLSL
+# 440 sources; qsb adds SPIR-V for Vulkan and translates for the rest. The GLSL
+# targets start at ES 3.0 and 3.30, the first with texelFetch and uint.
+qt_add_shaders(arraw-gpu "arraw-shaders"
+        PREFIX "/arraw/shaders"
+        BASE src/gpu/shaders
+        GLSL "300es,330"
+        HLSL 50
+        MSL 12
+        FILES
+        src/gpu/shaders/fullscreen.vert
+        src/gpu/shaders/copy.frag
+        src/gpu/shaders/develop.frag
+        src/gpu/shaders/geometry.frag)
 target_link_libraries(arraw-gpu PUBLIC arraw PRIVATE Qt6::Gui Qt6::GuiPrivate)
 set_target_properties(arraw-gpu PROPERTIES AUTOMOC OFF)
 # QRhi declares its Vulkan backend only where vulkan/vulkan.h is visible, so a

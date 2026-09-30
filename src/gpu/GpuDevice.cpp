@@ -78,4 +78,32 @@ void submitUpdates(GpuDevice& device, const std::string& purpose,
     }
 }
 
+void submitPass(GpuDevice& device, const std::string& purpose, QRhiTextureRenderTarget& target,
+                QRhiGraphicsPipeline& pipeline, QRhiShaderResourceBindings& bindings,
+                const std::function<void(QRhiResourceUpdateBatch&)>& record) {
+    QRhi& rhi = *device.rhi;
+    OffscreenFrame frame(rhi, purpose);
+    std::unique_ptr<QRhiResourceUpdateBatch, BatchRelease> batch(rhi.nextResourceUpdateBatch());
+    if (!batch) {
+        throw std::runtime_error("The GPU device had no resource update batch free to " + purpose);
+    }
+    record(*batch);
+
+    const QSize size = target.pixelSize();
+    QRhiCommandBuffer& commands = frame.commands();
+    // The pass commits the batch; every pixel is then written by the draw, so
+    // what the target is cleared to never survives.
+    commands.beginPass(&target, Qt::black, {1.0F, 0}, batch.release());
+    commands.setGraphicsPipeline(&pipeline);
+    commands.setViewport(
+        {0, 0, static_cast<float>(size.width()), static_cast<float>(size.height())});
+    commands.setShaderResources(&bindings);
+    commands.draw(3);
+    commands.endPass();
+    if (!frame.end()) {
+        device.lost = true;
+        throw std::runtime_error("The GPU device failed to " + purpose);
+    }
+}
+
 } // namespace arraw::detail

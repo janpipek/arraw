@@ -32,6 +32,7 @@ add_executable(arraw-tests
         test_ProcessingPlan.cpp
         test_RenderCheckpoint.cpp
         test_RawImport.cpp
+        test_SampleConversion.cpp
         test_RoundTrip.cpp
         test_Tone.cpp
         test_WhiteBalance.cpp)
@@ -79,6 +80,32 @@ if(TARGET arraw-headless-platform)
     catch_discover_tests(arraw-headless-tests PROPERTIES SKIP_RETURN_CODE 4)
 endif()
 
+# The passes on a real device, in their own executable for the same reason as
+# above: a QGuiApplication on the headless platform, which creates one shared
+# Vulkan context before the suite runs. Software rasterisers are accepted, since
+# the passes' correctness is under test, not the hardware; a machine with no
+# Vulkan device at all skips every case (exit 4).
+if(TARGET arraw-headless-platform)
+    add_executable(arraw-gpu-tests
+            gpu/main.cpp
+            gpu/GpuTesting.cpp
+            gpu/GpuTesting.h
+            gpu/test_GpuPasses.cpp
+            gpu/test_GpuPointwise.cpp
+            gpu/test_GpuGeometry.cpp)
+    arraw_enable_warnings(arraw-gpu-tests)
+    target_include_directories(arraw-gpu-tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/core
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/gpu)
+    # Later steps load tests/fixtures/*.dng, as arraw-tests does.
+    target_compile_definitions(arraw-gpu-tests
+            PRIVATE ARRAW_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+    target_link_libraries(arraw-gpu-tests
+            PRIVATE arraw arraw-gpu arraw-headless-platform Catch2::Catch2 Qt6::Gui)
+    set_target_properties(arraw-gpu-tests PROPERTIES AUTOMOC OFF)
+    catch_discover_tests(arraw-gpu-tests PROPERTIES SKIP_RETURN_CODE 4)
+endif()
+
 # The real arraw-cli binary, for what only main() decides: which Qt application
 # is made, when, and from which arguments. A platform that does not exist makes
 # Qt abort the moment one is loaded, so a command that exits cleanly under it
@@ -104,5 +131,5 @@ add_test(NAME arraw-cli.escaped-operand-is-an-input
 add_custom_target(arraw-test-binaries)
 add_dependencies(arraw-test-binaries arraw-tests arraw-cli)
 if(TARGET arraw-headless-tests)
-    add_dependencies(arraw-test-binaries arraw-headless-tests)
+    add_dependencies(arraw-test-binaries arraw-headless-tests arraw-gpu-tests)
 endif()

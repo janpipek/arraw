@@ -1,10 +1,12 @@
 #pragma once
 
 #include "DeviceImage.h"
+#include "GpuContext.h"
 
 #include <QOffscreenSurface>
 #include <rhi/qrhi.h>
 
+#include <array>
 #include <functional>
 #include <memory>
 #include <stdexcept>
@@ -21,6 +23,21 @@
 #endif
 
 namespace arraw::detail {
+
+/// @brief What one ::arraw::GpuPass needs on a device, built on its first use.
+///
+/// Member order is load-bearing: the pipeline goes before the layout and the
+/// render pass it was created against.
+struct PassPipeline {
+    /// @brief Render pass every render target of this pass is made compatible with.
+    std::unique_ptr<QRhiRenderPassDescriptor> renderPass;
+
+    /// @brief Binding layout the pipeline was created with; never bound itself.
+    std::unique_ptr<QRhiShaderResourceBindings> layout;
+
+    /// @brief The pipeline itself.
+    std::unique_ptr<QRhiGraphicsPipeline> pipeline;
+};
 
 /// @brief One QRhi device and everything it depends on, shared by its images.
 ///
@@ -50,6 +67,16 @@ struct GpuDevice {
 
     /// @brief The device itself.
     std::unique_ptr<QRhi> rhi;
+
+    /// @brief Sampler every pass binds its input with.
+    ///
+    /// Passes read texels with `texelFetch`, which ignores filtering and
+    /// addressing, but a combined image sampler still needs one. Declared
+    /// after the device, so it is released before it.
+    std::unique_ptr<QRhiSampler> sampler;
+
+    /// @brief Pipelines by ::arraw::GpuPass, each empty until first used.
+    std::array<PassPipeline, gpuPassCount> passes;
 
     /// @brief Identity carried by every image the device mints.
     DeviceId id = DeviceId::None;
@@ -99,5 +126,20 @@ struct GpuDevice {
 /// @throws std::runtime_error if the frame cannot be begun or fails.
 void submitUpdates(GpuDevice& device, const std::string& purpose,
                    const std::function<void(QRhiResourceUpdateBatch&)>& record);
+
+/// @brief Records one fullscreen pass into a render target and waits for it.
+///
+/// As ::arraw::detail::submitUpdates, in an offscreen frame that is always
+/// ended once begun; a failed frame marks the device lost.
+/// @param device Device to submit to.
+/// @param purpose What the pass is for, as an infinitive without "to".
+/// @param target Render target to draw into, created against @p pipeline's render pass.
+/// @param pipeline Pipeline to draw with.
+/// @param bindings Resources the pipeline reads.
+/// @param record Records any updates the pass depends on, such as its uniforms.
+/// @throws std::runtime_error if the frame cannot be begun or fails.
+void submitPass(GpuDevice& device, const std::string& purpose, QRhiTextureRenderTarget& target,
+                QRhiGraphicsPipeline& pipeline, QRhiShaderResourceBindings& bindings,
+                const std::function<void(QRhiResourceUpdateBatch&)>& record);
 
 } // namespace arraw::detail
