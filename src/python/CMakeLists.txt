@@ -15,7 +15,7 @@ endif()
 list(APPEND CMAKE_PREFIX_PATH "${ARRAW_NANOBIND_DIR}")
 find_package(nanobind CONFIG REQUIRED)
 
-nanobind_add_module(_arraw NB_STATIC Module.cpp)
+nanobind_add_module(_arraw NB_STATIC Module.cpp BindImage.cpp BindSettings.cpp BindPhoto.cpp)
 arraw_enable_warnings(_arraw)
 target_link_libraries(_arraw PRIVATE arraw)
 target_compile_definitions(_arraw PRIVATE ARRAW_VERSION="${PROJECT_VERSION}")
@@ -44,4 +44,15 @@ else()
     endforeach()
     add_custom_target(arraw-python-files ALL DEPENDS ${ARRAW_PYTHON_COPIES})
     add_dependencies(_arraw arraw-python-files)
+
+    # Not part of the default build: `cmake --build <tree> --target arraw-stubs`
+    # regenerates the committed type stubs (src/python/arraw/_arraw.pyi, which the
+    # wheel packages; the dev tree has no use for them) after the bindings change.
+    nanobind_add_stub(arraw-stubs
+            MODULE arraw._arraw
+            OUTPUT "${CMAKE_CURRENT_SOURCE_DIR}/arraw/_arraw.pyi"
+            PATTERN_FILE "${CMAKE_CURRENT_SOURCE_DIR}/arraw/stubs.pattern"
+            PYTHON_PATH "${CMAKE_BINARY_DIR}/python"
+            DEPENDS _arraw arraw-python-files
+            EXCLUDE_FROM_ALL)
 endif()
