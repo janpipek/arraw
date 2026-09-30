@@ -43,10 +43,12 @@ template <typename Block> std::span<const std::byte> bytesOf(const Block& block)
 }
 
 /// @brief Compares a GPU result to its CPU reference and records the error.
-void requireClose(const ImageBuffer& expected, const ImageBuffer& actual) {
+/// @param tolerance Largest relative error allowed; ill-conditioned input gets a looser one.
+void requireClose(const ImageBuffer& expected, const ImageBuffer& actual,
+                  double tolerance = pointwiseRelativeTolerance) {
     const double error = worstColourError(expected, actual);
-    CAPTURE(error, compareFloat(expected, actual, pointwiseAbsoluteFloor));
-    REQUIRE(error <= pointwiseRelativeTolerance);
+    CAPTURE(error, tolerance, compareFloat(expected, actual, pointwiseAbsoluteFloor));
+    REQUIRE(error <= tolerance);
 }
 
 /// @brief Requires two images' alpha channels to have the same bits.
@@ -95,7 +97,8 @@ ImageBuffer gpuPointwise(const ImageBuffer& source, const DevelopSettings& setti
 ///
 /// For a Normal-oriented source with default geometry `arraw::develop` is the
 /// pointwise result exactly, which also checks the reference itself.
-void requireMatchesCpu(const ImageBuffer& source, const DevelopSettings& settings) {
+void requireMatchesCpu(const ImageBuffer& source, const DevelopSettings& settings,
+                       double tolerance = pointwiseRelativeTolerance) {
     const ImageBuffer expected = cpuPointwise(source, settings);
     if (source.orientation() == ImageOrientation::Normal &&
         settings.geometry == GeometrySettings{}) {
@@ -106,7 +109,7 @@ void requireMatchesCpu(const ImageBuffer& source, const DevelopSettings& setting
     REQUIRE(actual.format() == PixelFormat::RgbaF32);
     REQUIRE(actual.size() == source.size());
     requireSameAlpha(expected, actual);
-    requireClose(expected, actual);
+    requireClose(expected, actual, tolerance);
 }
 
 /// @brief Draws a magnitude spread evenly across decades.
@@ -352,7 +355,7 @@ TEST_CASE("The pointwise pass matches the CPU chain for negative channels", "[gp
     const ImageBuffer source = sweep({64, 48}, true, workingEncoding, 33);
     for (const auto& [name, settings] : toneCases()) {
         DYNAMIC_SECTION(name) {
-            requireMatchesCpu(source, settings);
+            requireMatchesCpu(source, settings, illConditionedRelativeTolerance);
         }
     }
 }
@@ -368,21 +371,21 @@ TEST_CASE("The pointwise pass matches the CPU chain for a camera matrix that mak
                                      5, 0.5);
 
     SECTION("as shot, no tone") {
-        requireMatchesCpu(source, withTone(neutralTone()));
+        requireMatchesCpu(source, withTone(neutralTone()), illConditionedRelativeTolerance);
     }
     SECTION("as shot, default settings") {
-        requireMatchesCpu(source, DevelopSettings{});
+        requireMatchesCpu(source, DevelopSettings{}, illConditionedRelativeTolerance);
     }
     SECTION("as shot, every tone control") {
         for (const auto& [name, settings] : toneCases()) {
             CAPTURE(name);
-            requireMatchesCpu(source, settings);
+            requireMatchesCpu(source, settings, illConditionedRelativeTolerance);
         }
     }
     SECTION("custom white balance and tone") {
         DevelopSettings settings = withTone({0.3F, 20.0F, 30.0F, -20.0F, 10.0F, 10.0F, 40.0F});
         settings.color = {WhiteBalanceMode::Custom, 3200.0F, 12.0F};
-        requireMatchesCpu(source, settings);
+        requireMatchesCpu(source, settings, illConditionedRelativeTolerance);
     }
 }
 
@@ -427,7 +430,7 @@ TEST_CASE("The pointwise pass lifts black as the CPU chain does", "[gpu][pointwi
     SECTION("exposure and every control") {
         tone = {2.0F, 40.0F, 50.0F, 50.0F, 100.0F, 50.0F, 25.0F};
     }
-    requireMatchesCpu(source, withTone(tone));
+    requireMatchesCpu(source, withTone(tone), illConditionedRelativeTolerance);
 }
 
 TEST_CASE("The pointwise pass agrees with the CPU chain on NaN and infinity", "[gpu][pointwise]") {

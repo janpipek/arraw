@@ -141,6 +141,16 @@ backend. Every other backend goes through the headless platform and keeps
   with fast-math. `d3d11`, `d3d12` and `metal` are accepted by the option, not
   vouched for by the tests. The suite can run on them (next section), but the
   tolerances are still lavapipe's.
+
+> **Note (2026-09-30).** On a real GPU (Mesa ANV, Intel HD Graphics 630,
+> Vulkan) well-conditioned input still holds the pointwise tolerance, but
+> ill-conditioned input does not: negative channels, and a near-zero luminance
+> under large channels, reached 3.6e-4 relative against lavapipe's 3e-5,
+> because that driver's `pow` is less exact (within Vulkan's precision). The
+> tests that probe those branches now hold `illConditionedRelativeTolerance`
+> (5e-4), still well short of the 1e-2 a wrong branch gives. At 16 bits export
+> differed by up to 26 codes, so export parity is now one code value or that
+> relative bound, whichever is more (`tests/gpu/GpuTesting.h`).
 - **Wide-image tests write `--format png --overwrite`**, because the same
   `ok.png` appears twice in the batch.
 - **No `ARRAW_DEVICE` variable and no config file.** A persistent default is a

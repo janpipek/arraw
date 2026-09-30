@@ -90,6 +90,22 @@ struct FloatDifference {
 /// that reason; a wrong stage, matrix layout or order disagrees by 1e-3 or more.
 inline constexpr double pointwiseRelativeTolerance = 3e-5;
 
+/// @brief Largest error the pointwise pass may have against the CPU chain on ill-conditioned
+/// input, relative to the pixel's scale (see worstColourError).
+///
+/// Ill-conditioned: negative channels, or a luminance near zero under channels
+/// far from it (`{-1, 0, 4.43}` develops to -410 and 1840). There the chain's
+/// three powers and a subtraction of nearly equal perceptual values magnify
+/// `pow`'s rounding, and how much depends on the driver. Measured worst case:
+/// within pointwiseRelativeTolerance on lavapipe, 3.6e-4 on Mesa ANV (Intel HD
+/// Graphics 630), whose `pow` is within Vulkan's precision but less exact than
+/// lavapipe's. Well-conditioned input holds pointwiseRelativeTolerance on both.
+///
+/// The cases held to this bound check which branch the chain takes (lifted
+/// black, negatives through the tone curve), and a wrong branch disagrees by
+/// 1e-2 or more.
+inline constexpr double illConditionedRelativeTolerance = 5e-4;
+
 /// @brief Magnitude below which the pointwise comparison uses an absolute error instead.
 inline constexpr double pointwiseAbsoluteFloor = 1e-5;
 
