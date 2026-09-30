@@ -71,6 +71,22 @@ enum class Notice {
     /// @brief The GPU was not used where it might have been, with the reason;
     /// about one photograph if it has a subject, otherwise about the whole batch.
     GpuFallback,
+
+    /// @brief A setting read from a document lay outside its range and was
+    /// clamped into it: the key, the value read, then the limit used instead.
+    SettingClamped,
+
+    /// @brief A document named a setting that does not exist, and it was
+    /// ignored: the key.
+    SettingUnknown,
+
+    /// @brief A setting read from a document had the wrong shape, and it was
+    /// ignored: the key, then what was expected.
+    SettingMalformed,
+
+    /// @brief A settings document was written by a newer arraw, and was read
+    /// anyway: its version, then the newest version this arraw knows.
+    NewerSettingsVersion,
 };
 
 /// @brief One detail of a diagnostic, kept as a value rather than as prose.

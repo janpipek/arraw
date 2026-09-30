@@ -36,19 +36,15 @@ void arraw::validate(const DevelopSettings& settings) {
             }
         });
     }
-    // The crop rows have no range: GeometryPlan owns their geometry, but a
-    // non-finite value is refused here so no photograph holds one.
+    // The crop rows have no range. Whether a crop fits the image is the
+    // geometry plan's question, but a crop that could fit no image is refused
+    // here, so no photograph holds one.
     const CropSettings& crop = settings.geometry.crop;
-    if (crop.rectangle) {
-        for (const double edge : {crop.rectangle->left, crop.rectangle->top, crop.rectangle->right,
-                                  crop.rectangle->bottom}) {
-            if (!std::isfinite(edge)) {
-                throw std::invalid_argument("cropRectangle is not finite");
-            }
-        }
+    if (crop.rectangle && !isWellFormed(*crop.rectangle)) {
+        throw std::invalid_argument("cropRectangle needs finite edges within 0 to 1, left below "
+                                    "right and top above bottom");
     }
-    if (const auto* ratio = std::get_if<CropRatio>(&crop.aspect);
-        ratio && !std::isfinite(ratio->widthOverHeight)) {
-        throw std::invalid_argument("cropAspect is not finite");
+    if (const auto* ratio = std::get_if<CropRatio>(&crop.aspect); ratio && !isWellFormed(*ratio)) {
+        throw std::invalid_argument("cropAspect needs a positive finite ratio");
     }
 }

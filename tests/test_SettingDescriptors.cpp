@@ -229,3 +229,33 @@ TEST_CASE("A photograph cannot be built from out-of-range settings", "[settings]
     REQUIRE_THROWS_AS(photo.with({.geometry = {.straighten = 90.0}}), std::invalid_argument);
     REQUIRE(photo.settings() == DevelopSettings{});
 }
+
+TEST_CASE("Validation refuses a crop that could fit no image", "[settings]") {
+    /// Whether a crop fits a particular image is the geometry plan's question;
+    /// these fit none, so no photograph may hold them.
+    const auto withRectangle = [](UprightCropRect rectangle) {
+        return DevelopSettings{.geometry = {.crop = {.rectangle = rectangle}}};
+    };
+    const auto withRatio = [](double ratio) {
+        return DevelopSettings{.geometry = {.crop = {.aspect = CropRatio{ratio}}}};
+    };
+
+    REQUIRE_NOTHROW(
+        validate(withRectangle({.left = 0.0, .top = 0.0, .right = 1.0, .bottom = 1.0})));
+    REQUIRE_NOTHROW(validate(withRatio(0.5)));
+
+    REQUIRE_THROWS_AS(
+        validate(withRectangle({.left = 0.6, .top = 0.1, .right = 0.4, .bottom = 0.9})),
+        std::invalid_argument);
+    REQUIRE_THROWS_AS(
+        validate(withRectangle({.left = 0.1, .top = 0.5, .right = 0.9, .bottom = 0.5})),
+        std::invalid_argument);
+    REQUIRE_THROWS_AS(
+        validate(withRectangle({.left = -0.1, .top = 0.0, .right = 1.0, .bottom = 1.0})),
+        std::invalid_argument);
+    REQUIRE_THROWS_AS(
+        validate(withRectangle({.left = 0.0, .top = 0.0, .right = 1.0, .bottom = 1.1})),
+        std::invalid_argument);
+    REQUIRE_THROWS_AS(validate(withRatio(0.0)), std::invalid_argument);
+    REQUIRE_THROWS_AS(validate(withRatio(-1.5)), std::invalid_argument);
+}
