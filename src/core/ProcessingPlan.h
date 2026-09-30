@@ -189,6 +189,8 @@ static_assert(std::tuple_size_v<decltype(stagesOf(std::declval<const ProcessingP
 /// acted there would put its whole range in the highlights (ADR 010).
 /// @param luminance Linear luminance, zero or above.
 /// @return The same brightness, perceptually spaced.
+///
+/// Mirrored by `src/gpu/shaders/develop.frag`, which must change with it.
 [[nodiscard]] inline float toPerceptual(float luminance) {
     return std::pow(luminance, 1.0F / 2.2F);
 }
@@ -196,6 +198,8 @@ static_assert(std::tuple_size_v<decltype(stagesOf(std::declval<const ProcessingP
 /// @brief Returns a perceptual value to scene-linear luminance.
 /// @param value Perceptually spaced brightness.
 /// @return The linear luminance it stands for.
+///
+/// Mirrored by `src/gpu/shaders/develop.frag`, which must change with it.
 [[nodiscard]] inline float toLinear(float value) {
     return std::pow(value, 2.2F);
 }
@@ -205,6 +209,8 @@ static_assert(std::tuple_size_v<decltype(stagesOf(std::declval<const ProcessingP
 /// An eighteen percent grey card, encoded: `0.18^(1/2.2)`, to the nearest
 /// float, so that a contrast control leaves the value a photographer metered
 /// for exactly where it was.
+///
+/// Mirrored by `src/gpu/shaders/develop.frag`, which must change with it.
 inline constexpr float greyPivot = 0.45865646F;
 
 /// @brief Smooth rise from zero to one between two edges.
@@ -212,27 +218,37 @@ inline constexpr float greyPivot = 0.45865646F;
 /// @param last Edge above which it is one.
 /// @param value Where to evaluate it.
 /// @return The eased fraction, never outside zero to one.
+///
+/// Mirrored by `src/gpu/shaders/develop.frag`, which must change with it.
 [[nodiscard]] constexpr float smoothstep(float first, float last, float value) {
     const float t = std::clamp((value - first) / (last - first), 0.0F, 1.0F);
     return t * t * (3.0F - 2.0F * t);
 }
 
 /// @brief Weight of the Shadows region: zero at black, zero by the midtones.
+///
+/// Mirrored by `src/gpu/shaders/develop.frag`, which must change with it.
 [[nodiscard]] constexpr float shadowWeight(float value) {
     return smoothstep(0.0F, 0.3F, value) * (1.0F - smoothstep(0.3F, 0.6F, value));
 }
 
 /// @brief Weight of the Highlights region, reaching a little past white.
+///
+/// Mirrored by `src/gpu/shaders/develop.frag`, which must change with it.
 [[nodiscard]] constexpr float highlightWeight(float value) {
     return smoothstep(0.4F, 0.75F, value) * (1.0F - smoothstep(0.75F, 1.2F, value));
 }
 
 /// @brief Weight of the black end, full at black and gone by the shadows.
+///
+/// Mirrored by `src/gpu/shaders/develop.frag`, which must change with it.
 [[nodiscard]] constexpr float blackWeight(float value) {
     return 1.0F - smoothstep(0.0F, 0.35F, value);
 }
 
 /// @brief Weight of the white end, full at white and above.
+///
+/// Mirrored by `src/gpu/shaders/develop.frag`, which must change with it.
 [[nodiscard]] constexpr float whiteWeight(float value) {
     return smoothstep(0.6F, 1.0F, value);
 }
@@ -246,6 +262,8 @@ inline constexpr float greyPivot = 0.45865646F;
 /// @param plan Resolved settings.
 /// @param luminance Linear luminance to shape.
 /// @return The shaped linear luminance.
+///
+/// Mirrored by `src/gpu/shaders/develop.frag`, which must change with it.
 [[nodiscard]] inline float shapeLuminance(const ProcessingPlan& plan, float luminance) {
     float value = toPerceptual(luminance);
     value = plan.contrastScale * std::pow(value, plan.contrastSlope);
@@ -269,6 +287,8 @@ inline constexpr float greyPivot = 0.45865646F;
 /// @param plan Resolved settings.
 /// @param colour Colour in the working encoding.
 /// @return The colour with its tone shaped.
+///
+/// Mirrored by `src/gpu/shaders/develop.frag`, which must change with it.
 [[nodiscard]] constexpr Colour shapeTone(const ProcessingPlan& plan, Colour colour) {
     if (!plan.shapesTone) {
         return colour;
@@ -302,6 +322,8 @@ inline constexpr float greyPivot = 0.45865646F;
 /// @param plan Resolved settings.
 /// @param colour Colour in the working encoding, possibly above white.
 /// @return The colour with its highlights rolled.
+///
+/// Mirrored by `src/gpu/shaders/develop.frag`, which must change with it.
 [[nodiscard]] constexpr Colour rollHighlights(const ProcessingPlan& plan, Colour colour) {
     const float luminance = colorspaces::workingLuminance[0] * colour[0] +
                             colorspaces::workingLuminance[1] * colour[1] +
@@ -332,6 +354,8 @@ inline constexpr float greyPivot = 0.45865646F;
 /// @param plan Resolved settings.
 /// @param colour Source colour, in the encoding the plan was built for.
 /// @return The developed colour, in the working encoding.
+///
+/// Mirrored by `src/gpu/shaders/develop.frag`, which must change with it.
 [[nodiscard]] constexpr Colour developPixel(const ProcessingPlan& plan, Colour colour) {
     colour = plan.toWorking * colour;
     colour = {colour[0] * plan.exposureGain, colour[1] * plan.exposureGain,
