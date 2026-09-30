@@ -2,6 +2,7 @@
 
 #include <DevelopSettings.h>
 #include <SettingDescriptors.h>
+#include <SettingsJson.h>
 
 #include <cctype>
 #include <string>
@@ -153,7 +154,20 @@ void bindSettings(nb::module_& m) {
                 applyFlatSettings(copy, keywords);
                 return copy;
             },
-            "Return a copy with flat snake_case keywords applied, e.g. exposure=0.7.");
+            "Return a copy with flat snake_case keywords applied, e.g. exposure=0.7.")
+        .def(
+            "to_json", [](const DevelopSettings& self) { return settingsToJson(self); },
+            "Write the settings as a JSON document.")
+        .def_static(
+            "from_json",
+            [](const std::string& text, const std::optional<DevelopSettings>& base) {
+                PythonLog log;
+                return applySettingsJson(text, base.value_or(DevelopSettings{}), log);
+            },
+            "text"_a, "base"_a = nb::none(),
+            "Read a JSON document onto `base` (the defaults when None). Keys that are absent "
+            "keep the base's value; problems with single settings are logged as warnings on "
+            "the 'arraw' logger, and a document that cannot be read raises ValueError.");
 
     nb::class_<SettingDescriptor>(m, "SettingDescriptor", "One row of the develop settings table.")
         .def_ro("key", &SettingDescriptor::key)

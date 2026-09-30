@@ -171,7 +171,7 @@ class Stage(enum.Enum):
 class ToneSettings:
     """Photographic tone adjustments."""
 
-    def __init__(self, *, exposure: float = 0.0, contrast: float = 0.0, shadows: float = 0.0, highlights: float = 0.0, blacks: float = 0.0, whites: float = 0.0, filmic_highlights: float = 25.0) -> None: ...
+    def __init__(self, *, exposure: float | None = 0.0, contrast: float | None = 0.0, shadows: float | None = 0.0, highlights: float | None = 0.0, blacks: float | None = 0.0, whites: float | None = 0.0, filmic_highlights: float | None = 25.0) -> None: ...
 
     @property
     def exposure(self) -> float: ...
@@ -206,7 +206,7 @@ class ToneSettings:
 class ColorSettings:
     """Photographic colour adjustments."""
 
-    def __init__(self, *, white_balance: WhiteBalanceMode = WhiteBalanceMode.AS_SHOT, temperature: float | None = None, tint: float | None = None) -> None: ...
+    def __init__(self, *, white_balance: WhiteBalanceMode = WhiteBalanceMode.AS_SHOT, temperature: float | None | None = None, tint: float | None | None = None) -> None: ...
 
     @property
     def white_balance(self) -> WhiteBalanceMode: ...
@@ -257,7 +257,7 @@ class OriginalCropAspect:
 class CropRatio:
     """Fixed width-to-height crop ratio."""
 
-    def __init__(self, width_over_height: float = 1.0) -> None: ...
+    def __init__(self, width_over_height: float | None = 1.0) -> None: ...
 
     @property
     def width_over_height(self) -> float: ...
@@ -274,7 +274,7 @@ class CropRatio:
 class UprightCropRect:
     """Crop edges normalised to the uncropped upright rectangle."""
 
-    def __init__(self, left: float = 0.0, top: float = 0.0, right: float = 1.0, bottom: float = 1.0) -> None: ...
+    def __init__(self, left: float | None = 0.0, top: float | None = 0.0, right: float | None = 1.0, bottom: float | None = 1.0) -> None: ...
 
     @property
     def left(self) -> float: ...
@@ -320,7 +320,7 @@ class CropSettings:
 class GeometrySettings:
     """Orientation, straightening and crop."""
 
-    def __init__(self, *, rotation: QuarterTurn = QuarterTurn.NONE, flip_horizontal: bool = False, flip_vertical: bool = False, straighten: float = 0.0, crop: CropSettings | None = None) -> None: ...
+    def __init__(self, *, rotation: QuarterTurn = QuarterTurn.NONE, flip_horizontal: bool = False, flip_vertical: bool = False, straighten: float | None = 0.0, crop: CropSettings | None = None) -> None: ...
 
     @property
     def rotation(self) -> QuarterTurn: ...
@@ -368,6 +368,15 @@ class DevelopSettings:
 
     def replace(self, **kwargs) -> DevelopSettings:
         """Return a copy with the given attributes replaced."""
+
+    def to_json(self) -> str:
+        """Write the settings as a JSON document."""
+
+    @staticmethod
+    def from_json(text: str, base: DevelopSettings | None = None) -> DevelopSettings:
+        """
+        Read a JSON document onto `base` (the defaults when None). Keys that are absent keep the base's value; problems with single settings are logged as warnings on the 'arraw' logger, and a document that cannot be read raises ValueError.
+        """
 
     def with_(self, **kwargs: Any) -> DevelopSettings:
         """Return a copy with flat snake_case keywords applied, e.g. exposure=0.7."""
@@ -422,6 +431,59 @@ class ImageFileFormat(enum.Enum):
 
     TIFF = 2
 
+class ColorLabel(enum.Enum):
+    """Colour a photograph is labelled with while culling."""
+
+    RED = 0
+
+    YELLOW = 1
+
+    GREEN = 2
+
+    BLUE = 3
+
+    PURPLE = 4
+
+class PhotoMarks:
+    """Culling marks of a photograph: rating -1 (rejected) to 5, and a label."""
+
+    def __init__(self, *, rating: int | None = 0, label: ColorLabel | None = None) -> None: ...
+
+    @property
+    def rating(self) -> int: ...
+
+    @property
+    def label(self) -> ColorLabel | None: ...
+
+    def __eq__(self, arg: PhotoMarks, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> PhotoMarks:
+        """Return a copy with the given attributes replaced."""
+
+class SidecarContents:
+    """What an XMP sidecar holds."""
+
+    def __init__(self, *, settings: DevelopSettings | None = None, marks: PhotoMarks | None = None) -> None: ...
+
+    @property
+    def settings(self) -> DevelopSettings: ...
+
+    @property
+    def marks(self) -> PhotoMarks: ...
+
+    def __eq__(self, arg: SidecarContents, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> SidecarContents:
+        """Return a copy with the given attributes replaced."""
+
 class Photo:
     """One photograph as a document: a file and how it is developed."""
 
@@ -434,6 +496,9 @@ class Photo:
     @property
     def settings(self) -> DevelopSettings: ...
 
+    @property
+    def marks(self) -> PhotoMarks: ...
+
     def load(self) -> ImageBuffer:
         """Decode the photograph's file into a buffer."""
 
@@ -443,13 +508,34 @@ class Photo:
 
     __hash__: None = None
 
-    def with_(self, settings: DevelopSettings | None = None, **kwargs: Any) -> Photo:
+    def with_(
+        self,
+        settings: DevelopSettings | None = None,
+        *,
+        marks: PhotoMarks | None = None,
+        rating: int = ...,
+        label: ColorLabel | None = ...,
+        **kwargs: Any,
+    ) -> Photo:
         """
-        Return a photograph with `settings` replacing the current ones wholesale, then flat snake_case keywords applied, e.g. exposure=0.7.
+        Return a photograph with `settings` (and `marks`) replacing the current ones wholesale, then flat snake_case keywords applied, e.g. exposure=0.7. `rating` and `label` change the marks instead (label=None clears it).
         """
 
-def open(path: str | os.PathLike) -> Photo:
-    """Open a photograph; reads its metadata, not its pixels."""
+def open(path: str | os.PathLike, *, sidecar: bool = True) -> Photo:
+    """
+    Open a photograph; reads its metadata, not its pixels. Its XMP sidecar supplies the settings and marks unless sidecar=False. A sidecar that cannot be read is logged as an error on the 'arraw' logger, not raised, and the defaults are used.
+    """
+
+def sidecar_path(path: str | os.PathLike) -> pathlib.Path:
+    """Name the XMP sidecar of a photograph; nothing is created."""
+
+def read_sidecar(path: str | os.PathLike) -> SidecarContents | None:
+    """Read the sidecar of a photograph, or None when it has none."""
+
+def write_sidecar(photo: Photo) -> None:
+    """
+    Write a photograph's settings and marks into its sidecar, keeping the rest.
+    """
 
 @overload
 def develop(source: ImageBuffer, settings: DevelopSettings | None = None) -> ImageBuffer:

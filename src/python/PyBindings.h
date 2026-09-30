@@ -66,6 +66,10 @@ template <class Function> decltype(auto) withoutGil(Function&& function) {
     return function();
 }
 
+/// @brief Trait for an optional holding an enumeration.
+template <class V> struct IsOptionalEnum : std::false_type {};
+template <class V> struct IsOptionalEnum<std::optional<V>> : std::is_enum<V> {};
+
 /// @brief Casts a Python value to a C++ type, naming the setting on failure.
 ///
 /// Stricter than nanobind's own casts, which read a bool as a number and an
@@ -81,14 +85,26 @@ template <class V> V convertValue(nb::handle value, std::string_view name) {
                                std::string(nb::type_name(value.type()).c_str()) + "'")
                                   .c_str());
     };
-    constexpr bool numeric = std::is_floating_point_v<V> || std::is_same_v<V, std::optional<float>>;
-    if constexpr (numeric) {
+    constexpr bool numeric = std::is_floating_point_v<V> || std::is_integral_v<V> ||
+                             std::is_same_v<V, std::optional<float>>;
+    if constexpr (numeric && !std::is_same_v<V, bool>) {
         if (nb::isinstance<nb::bool_>(value)) {
+            throw refuse();
+        }
+    }
+    if constexpr (std::is_integral_v<V> && !std::is_same_v<V, bool>) {
+        // Anything usable as an index (NumPy integers included), but no bool (refused above).
+        if (!PyIndex_Check(value.ptr())) {
             throw refuse();
         }
     }
     if constexpr (std::is_enum_v<V>) {
         if (!nb::isinstance<V>(value)) {
+            throw refuse();
+        }
+    }
+    if constexpr (IsOptionalEnum<V>::value) {
+        if (!value.is_none() && !nb::isinstance<typename V::value_type>(value)) {
             throw refuse();
         }
     }
@@ -163,10 +179,56 @@ template <class M> nb::object constructorDefault(const M& value) {
     }
 }
 
+/// @brief Whether a field is a number, which nanobind would fill from a bool (or refuse a NumPy
+/// integer for).
+template <class M>
+inline constexpr bool isNumberField =
+    std::is_floating_point_v<M> || (std::is_integral_v<M> && !std::is_same_v<M, bool>) ||
+    std::is_same_v<M, std::optional<float>>;
+
+/// @brief Type a constructor takes for a field of type M, as a Python annotation and a C++ value.
+///
+/// A number field takes any object, so that convertValue can refuse a bool as replace() does,
+/// while nanobind's own cast would let it through. Every other field is cast by nanobind,
+/// with noconvert (see argument()) refusing what convertValue would.
+template <class M>
+using ConstructorArgument =
+    std::conditional_t<isNumberField<M>, nb::typed<nb::object, ConstructorParam<M>>,
+                       ConstructorParam<M>>;
+
+/// @brief Builds the keyword argument of a constructor parameter.
+///
+/// An enumeration refuses anything but its own kind (no int for an enumeration member), as
+/// convertValue does.
+template <class M> auto argument(const char* name, const nb::object& value) {
+    if constexpr (std::is_enum_v<M> || IsOptionalEnum<M>::value) {
+        return nb::arg(name).noconvert() = value;
+    } else if constexpr (isNumberField<M>) {
+        return nb::arg(name).none() = value; // an object argument takes None only when told to
+    } else {
+        return nb::arg(name) = value;
+    }
+}
+
+/// @brief Moves one constructor argument onto a field; None leaves a class at its default.
+template <class M, class Argument>
+void assignArgument(M& target, Argument& source, const char* name) {
+    if constexpr (isNumberField<M>) {
+        target = convertValue<M>(source, name);
+    } else if constexpr (std::is_same_v<Argument, std::optional<M>>) {
+        if (source) {
+            target = std::move(*source);
+        }
+    } else {
+        target = std::move(source);
+    }
+}
+
 /// @brief Binds a plain settings struct as a frozen Python value class.
 ///
 /// Gives it a keyword constructor with the C++ defaults, read-only attributes,
-/// `replace(**kw)`, `==`, a hash and a repr, all from the one field list.
+/// `replace(**kw)`, `==`, a hash and a repr, all from the one field list. Constructor and
+/// `replace` convert values by the one rule of convertValue.
 /// @param module Module to add the class to.
 /// @param name Python class name.
 /// @param doc Class docstring.
@@ -179,24 +241,14 @@ nb::class_<T> bindFrozen(nb::module_& module, const char* name, const char* doc,
                          Field<T, Ms>... fields) {
     nb::class_<T> cls(module, name, doc);
     [[maybe_unused]] const T defaults{};
-    const auto init = [=](T* self, ConstructorParam<Ms>... values) {
+    const auto init = [=](T* self, ConstructorArgument<Ms>... values) {
         T value;
-        [[maybe_unused]] const auto assign = [](auto& target, auto& source) {
-            if constexpr (IsOptional<std::remove_cvref_t<decltype(source)>>::value &&
-                          !IsOptional<std::remove_cvref_t<decltype(target)>>::value) {
-                if (source) {
-                    target = std::move(*source);
-                }
-            } else {
-                target = std::move(source);
-            }
-        };
-        (assign(value.*fields.member, values), ...);
+        (assignArgument(value.*fields.member, values, fields.name), ...);
         new (self) T(std::move(value));
     };
     const auto defineInit = [&](auto... leading) {
         cls.def("__init__", init, leading...,
-                (nb::arg(fields.name) = constructorDefault(defaults.*fields.member))...);
+                (argument<Ms>(fields.name, constructorDefault(defaults.*fields.member)))...);
     };
     if constexpr (KeywordOnly && sizeof...(Ms) > 0) {
         defineInit(nb::kw_only());

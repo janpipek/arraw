@@ -2,9 +2,17 @@
 # that end in a single underscore (with_) and the module's __version__.
 
 Photo\.__suffix__:
-    def with_(self, settings: DevelopSettings | None = None, **kwargs: Any) -> Photo:
+    def with_(
+        self,
+        settings: DevelopSettings | None = None,
+        *,
+        marks: PhotoMarks | None = None,
+        rating: int = ...,
+        label: ColorLabel | None = ...,
+        **kwargs: Any,
+    ) -> Photo:
         """
-        Return a photograph with `settings` replacing the current ones wholesale, then flat snake_case keywords applied, e.g. exposure=0.7.
+        Return a photograph with `settings` (and `marks`) replacing the current ones wholesale, then flat snake_case keywords applied, e.g. exposure=0.7. `rating` and `label` change the marks instead (label=None clears it).
         """
 
 DevelopSettings\.__suffix__:

@@ -27,6 +27,8 @@ struct SidecarContents {
 
     /// @brief Culling marks, none for whatever the sidecar does not say.
     PhotoMarks marks;
+
+    friend bool operator==(const SidecarContents&, const SidecarContents&) = default;
 };
 
 /// @brief Names the sidecar of a photograph.

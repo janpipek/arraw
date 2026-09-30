@@ -96,7 +96,8 @@ private:
 /// such as a white balance it did not record.
 /// @return The document.
 /// @throws std::runtime_error if the file cannot be opened or is not an image
-/// arraw recognises, or if its sidecar is not readable XML.
+/// arraw recognises. A sidecar that is not readable XML is not thrown: it is
+/// reported as ::arraw::Notice::SidecarUnreadable and the defaults are used.
 [[nodiscard]] Photo openPhoto(const std::filesystem::path& path,
                               DiagnosticLog& log = discardedDiagnostics());
 
