@@ -53,8 +53,9 @@ rasteriser (llvmpipe, lavapipe, WARP; accept one with `--allow-software`), or
 `ARRAW_DISABLE_GPU` is set, it warns once and exports the batch on the CPU. A
 photograph the GPU fails on is retried on the CPU with a warning. `--device gpu`
 never falls back: it fails instead, and combined with `ARRAW_DISABLE_GPU` it is
-a usage error. `--device cpu` loads no graphics stack. `--gpu-backend` picks the
-API (`vulkan`, `opengl`, `d3d11`, `d3d12`, `metal`), and one line per batch says
+a usage error. With `--gpu-backend opengl`, `auto` is `gpu`: OpenGL needs a
+display's platform, and a process cannot fall back from one that will not load.
+`--device cpu` loads no graphics stack. `--gpu-backend` picks the API (`vulkan`, `opengl`, `d3d11`, `d3d12`, `metal`), and one line per batch says
 which device was used (silenced by `--quiet`).
 
 Inputs are files rather than directories; your shell expands the wildcards.

@@ -94,7 +94,7 @@ TEST_CASE("Rendering refuses what it cannot render", "[gpu][passes]") {
     }
 
     SECTION("an image from another context") {
-        GpuContext other(GpuBackend::Vulkan);
+        GpuContext other(gpuTestBackend());
         const DeviceImage foreign = other.upload(image);
         REQUIRE_THROWS_AS(context.render(GpuPass::Copy, {}, foreign, {4, 4}, workingEncoding),
                           std::invalid_argument);

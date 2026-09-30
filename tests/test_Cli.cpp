@@ -796,6 +796,45 @@ TEST_CASE("Export asks for a display's platform only for OpenGL", "[cli][gpu]") 
     REQUIRE(opengl.started == std::vector{cli::ApplicationKind::Gui});
 }
 
+TEST_CASE("Export --gpu-backend opengl asks for the GPU whatever --device says", "[cli][gpu]") {
+    const test::TempDir directory;
+    const auto input = test::fixture(card).string();
+    const auto output = directory.path().string();
+
+    SECTION("Auto with the GPU disabled is a usage error that names opengl") {
+        const ScopedEnvironment disabled(cli::disableGpuVariable, "1");
+        const auto result = invoke({"export", input, "-o", output, "--gpu-backend", "opengl"});
+        REQUIRE(result.code == cli::UsageError);
+        REQUIRE_THAT(result.err, ContainsSubstring("--gpu-backend opengl"));
+        REQUIRE_THAT(result.err, ContainsSubstring("ARRAW_DISABLE_GPU"));
+        REQUIRE(result.started.empty());
+        REQUIRE(std::filesystem::is_empty(directory.path()));
+    }
+    SECTION("Auto with another backend still falls back") {
+        const ScopedEnvironment disabled(cli::disableGpuVariable, "1");
+        const auto result = invoke(
+            {"export", input, "-o", output, "--gpu-backend", "vulkan", "--overwrite", "--quiet"});
+        REQUIRE(result.code == cli::Success);
+        REQUIRE(result.started == std::vector{cli::ApplicationKind::Core});
+    }
+    SECTION("Cpu stays on the CPU, whatever the backend") {
+        const ScopedEnvironment disabled(cli::disableGpuVariable, "1");
+        const auto result = invoke({"export", input, "-o", output, "--device", "cpu",
+                                    "--gpu-backend", "opengl", "--overwrite", "--quiet"});
+        REQUIRE(result.code == cli::Success);
+        REQUIRE(result.started == std::vector{cli::ApplicationKind::Core});
+    }
+    SECTION("A GPU that cannot be made fails the export rather than falling back") {
+        // The suite's QCoreApplication has no platform plugin, so creation fails.
+        const ScopedEnvironment enabled(cli::disableGpuVariable, nullptr);
+        const auto result = invoke({"export", input, "-o", output, "--gpu-backend", "opengl",
+                                    "--overwrite", "--log-format", "json"});
+        REQUIRE(result.code == cli::Failed);
+        REQUIRE_THAT(result.err, ContainsSubstring("\"notice\":\"gpu_failed\""));
+        REQUIRE_THAT(result.err, !ContainsSubstring("gpu_fallback"));
+    }
+}
+
 TEST_CASE("The device options are validated before anything starts", "[cli][gpu]") {
     const test::TempDir directory;
     const auto input = test::fixture(card).string();

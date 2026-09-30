@@ -12,6 +12,16 @@
 
 namespace arraw::test {
 
+/// @brief Names the backend every GPU test runs on.
+///
+/// Read once from ARRAW_TEST_GPU_BACKEND (the names ::arraw::parseGpuBackend
+/// reads), defaulting to ::arraw::defaultGpuBackend(). Tests use this, never a
+/// literal backend, so that one suite covers Vulkan, OpenGL, Direct3D and Metal.
+/// @return The backend under test.
+/// @throws std::runtime_error if the variable names no backend; main() calls it
+/// before anything else, so a misspelt name fails the run rather than skipping it.
+[[nodiscard]] GpuBackend gpuTestBackend();
+
 /// @brief Creates the device every GPU test shares, or records why it cannot.
 ///
 /// Called once by main(), after the application exists; never throws.
@@ -26,7 +36,7 @@ void destroySharedGpuContext();
 /// @brief Hands out the shared device, or skips the calling test.
 ///
 /// Skips through Catch (`SKIP`, exit code 4 if nothing else ran) with the
-/// creation error when this machine has no Vulkan device.
+/// creation error, naming the backend, when this machine has no device for it.
 /// @return The shared context; valid until the process ends.
 [[nodiscard]] GpuContext& gpuContext();
 
@@ -58,9 +68,10 @@ struct FloatDifference {
 // Tolerances against the CPU, measured on lavapipe by the steps that fixed them.
 //
 // Every number below, and the NaN and infinity parity the tests assert, was
-// measured on Vulkan (lavapipe, Mesa llvmpipe) only. HLSL and MSL back ends may
-// compile with fast-math, which changes comparisons against NaN and infinity
-// and how `pow` rounds; none of that is verified here.
+// measured on Vulkan (lavapipe, Mesa llvmpipe) only, although the suite can now
+// run on any backend (see gpuTestBackend). GLSL for OpenGL, HLSL and MSL back
+// ends may compile with fast-math, which changes comparisons against NaN and
+// infinity and how `pow` rounds; none of that is verified here.
 
 /// @brief Largest error the pointwise pass may have against the CPU chain, relative to the
 /// pixel's scale (see worstColourError).

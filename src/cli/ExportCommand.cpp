@@ -210,6 +210,8 @@ void configure(QCommandLineParser& parser) {
         "that cannot be used, or is only a software rasteriser, is reported once and the\n"
         "batch runs on the CPU; a photograph the GPU fails on is retried there. With\n"
         "--device gpu nothing falls back, and ARRAW_DISABLE_GPU is a usage error.\n"
+        "--gpu-backend opengl with --device auto is --device gpu, since OpenGL needs a\n"
+        "display's platform and a process cannot fall back from one that will not load.\n"
         "--device gpuN is --device gpu on the N-th adapter the --gpu-backend lists,\n"
         "counting from 0; `arraw-cli gpu-test` shows the numbers.");
     parser.addHelpOption();
@@ -240,7 +242,8 @@ void configure(QCommandLineParser& parser) {
     parser.addOption({"device",
                       "auto, cpu, gpu, or gpuN. Auto uses the GPU when it can and says so when "
                       "it cannot; gpu never falls back; gpuN is gpu on the backend's N-th "
-                      "adapter, counting from 0. Default: auto.",
+                      "adapter, counting from 0. With --gpu-backend opengl, auto is gpu. "
+                      "Default: auto.",
                       "name"});
     parser.addOption({"gpu-backend",
                       "vulkan, opengl, d3d11, d3d12, or metal. Default: " +
@@ -404,9 +407,21 @@ std::optional<ExportRequest> buildRequest(const QCommandLineParser& parser, std:
         request.backend = *backend;
     }
     request.allowSoftware = parser.isSet("allow-software");
+    // OpenGL needs a display server's Qt platform, and Qt aborts the process
+    // when that cannot load, so auto's promise of a CPU fallback cannot be kept.
+    // Asking for OpenGL is taken as asking for the GPU: from here on the request
+    // is `gpu`, and every rule that follows is the one `gpu` already has.
+    const bool openGlImpliesGpu =
+        request.device.kind == cli::DeviceKind::Auto && request.backend == GpuBackend::OpenGL;
+    if (openGlImpliesGpu) {
+        request.device.kind = cli::DeviceKind::Gpu;
+    }
     if (request.device.kind == cli::DeviceKind::Gpu && cli::gpuDisabled()) {
-        code = usageError(err, "--device " + parser.value("device").toStdString() +
-                                   " cannot be used while " + std::string(cli::disableGpuVariable) +
+        const std::string asked = openGlImpliesGpu
+                                      ? "--gpu-backend opengl, which is --device gpu,"
+                                      : "--device " + parser.value("device").toStdString();
+        code = usageError(err, asked + " cannot be used while " +
+                                   std::string(cli::disableGpuVariable) +
                                    " is set; unset it, or set it to 0");
         return std::nullopt;
     }

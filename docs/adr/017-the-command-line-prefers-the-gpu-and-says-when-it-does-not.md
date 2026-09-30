@@ -58,8 +58,10 @@ platform whatever `QT_QPA_PLATFORM` says, so an `xcb` session with no `DISPLAY`,
 or a stale variable in a shell profile, cannot abort a batch for a reason that
 has nothing to do with the photographs. The exception is `--gpu-backend opengl`,
 which needs a platform with OpenGL and asks for `Gui`, so it honours
-`QT_QPA_PLATFORM`. `gpu-test` is a diagnostic and still honours the variable
-always, so someone can probe xcb Vulkan or OpenGL with it.
+`QT_QPA_PLATFORM`, and so cannot promise `auto`'s fallback: Qt aborts the process
+when that platform will not load (see "OpenGL asks for the GPU", below).
+`gpu-test` is a diagnostic and still honours the variable always, so someone can
+probe xcb Vulkan or OpenGL with it.
 
 **One notice per batch says which device was used**: backend and device name,
 silent under `--quiet` and structured under `--log-format json`. A user can tell
@@ -115,6 +117,18 @@ mode its presence says nothing about the others. The run exits 0 only if at
 least one adapter was tested and every one tested passed; if every adapter was
 skipped, nothing was tested and it fails, saying so.
 
+**OpenGL asks for the GPU.** `--gpu-backend opengl` with `--device auto` is
+`--device gpu`, the one place where the two questions are not kept apart. Its
+platform is a display server's, Qt aborts the process when it cannot load, and a
+fallback that is promised but cannot be kept is worse than none, so asking for
+OpenGL is taken as asking for the GPU. The request is resolved once, when the
+arguments are read, and every rule of `gpu` follows: nothing falls back at
+creation, an input the GPU fails on fails rather than moving to the CPU, and
+`ARRAW_DISABLE_GPU` is a usage error whose message names `--gpu-backend opengl`,
+since `--device` was `auto`, not `gpu`. `--device cpu` still wins and ignores the
+backend. Every other backend goes through the headless platform and keeps
+`auto`'s fallback.
+
 ## Consequences
 
 - **The one fallback branch that is untested is device loss mid-batch.**
@@ -125,7 +139,8 @@ skipped, nothing was tested and it fails, saying so.
 - **The GPU tests were measured on Vulkan (lavapipe) only.** Parity, including
   NaN and infinity, is unverified on HLSL and MSL back ends, which may compile
   with fast-math. `d3d11`, `d3d12` and `metal` are accepted by the option, not
-  vouched for by the tests.
+  vouched for by the tests. The suite can run on them (next section), but the
+  tolerances are still lavapipe's.
 - **Wide-image tests write `--format png --overwrite`**, because the same
   `ok.png` appears twice in the batch.
 - **No `ARRAW_DEVICE` variable and no config file.** A persistent default is a
@@ -133,6 +148,22 @@ skipped, nothing was tested and it fails, saying so.
 - **GPU development stays internal.** `include/` has no device choice, since it
   would put device lifetime and an owner thread into the public contract before
   the scripting work needs it.
+
+## Running the GPU suite on another backend
+
+`arraw-gpu-tests` is built on every platform. `ARRAW_TEST_GPU_BACKEND` picks the
+backend, with the names `--gpu-backend` takes, and defaults to the platform's
+own; an unknown name fails the run at startup. A backend with no device on the
+machine skips every case (exit 4), naming the backend. On Linux the suite uses
+arraw's headless platform for every backend except OpenGL, which honours
+`QT_QPA_PLATFORM`; Windows and macOS use Qt's native platform.
+
+```
+ARRAW_TEST_GPU_BACKEND=opengl QT_QPA_PLATFORM=xcb xvfb-run build/debug/tests/arraw-gpu-tests
+```
+
+Windows and macOS now build the suite but it has never been run there, so what
+it finds on Direct3D and Metal is unknown.
 
 ## What was rejected, and why
 

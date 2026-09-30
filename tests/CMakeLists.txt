@@ -81,34 +81,42 @@ if(TARGET arraw-headless-platform)
 endif()
 
 # The passes on a real device, in their own executable for the same reason as
-# above: a QGuiApplication on the headless platform, which creates one shared
-# Vulkan context before the suite runs. Software rasterisers are accepted, since
-# the passes' correctness is under test, not the hardware; a machine with no
-# Vulkan device at all skips every case (exit 4).
+# above: a QGuiApplication, which creates one shared device before the suite
+# runs. Built everywhere; ARRAW_TEST_GPU_BACKEND picks the backend (default: the
+# platform's own, as arraw-cli) and main.cpp the Qt platform. On Linux that is
+# arraw's headless platform, except for OpenGL, which honours QT_QPA_PLATFORM;
+# Windows and macOS use Qt's native one. Software rasterisers are accepted,
+# since the passes' correctness is under test, not the hardware; a machine with
+# no device for the backend skips every case (exit 4). Only Vulkan on lavapipe
+# has been run: see ADR 017.
+add_executable(arraw-gpu-tests
+        gpu/main.cpp
+        gpu/GpuTesting.cpp
+        gpu/GpuTesting.h
+        gpu/test_GpuAdapters.cpp
+        gpu/test_GpuDevelop.cpp
+        gpu/test_GpuExport.cpp
+        gpu/test_GpuPasses.cpp
+        gpu/test_GpuPointwise.cpp
+        gpu/test_GpuGeometry.cpp)
+arraw_enable_warnings(arraw-gpu-tests)
+target_include_directories(arraw-gpu-tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/core
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/gpu)
+# Later steps load tests/fixtures/*.dng, as arraw-tests does.
+target_compile_definitions(arraw-gpu-tests
+        PRIVATE ARRAW_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+target_link_libraries(arraw-gpu-tests
+        PRIVATE arraw arraw-gpu arraw-cli-core Catch2::Catch2 Qt6::Gui)
+# The headless platform exists on Linux only; its INTERFACE defines
+# ARRAW_HEADLESS_PLATFORM, which main.cpp tests.
 if(TARGET arraw-headless-platform)
-    add_executable(arraw-gpu-tests
-            gpu/main.cpp
-            gpu/GpuTesting.cpp
-            gpu/GpuTesting.h
-            gpu/test_GpuAdapters.cpp
-            gpu/test_GpuDevelop.cpp
-            gpu/test_GpuExport.cpp
-            gpu/test_GpuPasses.cpp
-            gpu/test_GpuPointwise.cpp
-            gpu/test_GpuGeometry.cpp)
-    arraw_enable_warnings(arraw-gpu-tests)
-    target_include_directories(arraw-gpu-tests PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}
-            ${CMAKE_CURRENT_SOURCE_DIR}/../src/core
-            ${CMAKE_CURRENT_SOURCE_DIR}/../src/gpu)
-    # Later steps load tests/fixtures/*.dng, as arraw-tests does.
-    target_compile_definitions(arraw-gpu-tests
-            PRIVATE ARRAW_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
-    target_link_libraries(arraw-gpu-tests
-            PRIVATE arraw arraw-gpu arraw-cli-core arraw-headless-platform Catch2::Catch2 Qt6::Gui)
-    set_target_properties(arraw-gpu-tests PROPERTIES AUTOMOC OFF)
-    catch_discover_tests(arraw-gpu-tests PROPERTIES SKIP_RETURN_CODE 4)
+    target_link_libraries(arraw-gpu-tests PRIVATE arraw-headless-platform)
 endif()
+set_target_properties(arraw-gpu-tests PROPERTIES AUTOMOC OFF)
+arraw_deploy_qt_plugins(arraw-gpu-tests)
+catch_discover_tests(arraw-gpu-tests PROPERTIES SKIP_RETURN_CODE 4)
 
 # The real arraw-cli binary, for what only main() decides: which Qt application
 # is made, when, and from which arguments. A platform that does not exist makes
@@ -147,6 +155,7 @@ endif()
 # builds would fail as "not built", or run stale.
 add_custom_target(arraw-test-binaries)
 add_dependencies(arraw-test-binaries arraw-tests arraw-cli)
+add_dependencies(arraw-test-binaries arraw-gpu-tests)
 if(TARGET arraw-headless-tests)
-    add_dependencies(arraw-test-binaries arraw-headless-tests arraw-gpu-tests)
+    add_dependencies(arraw-test-binaries arraw-headless-tests)
 endif()

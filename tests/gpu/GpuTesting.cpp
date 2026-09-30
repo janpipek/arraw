@@ -1,11 +1,14 @@
 #include "GpuTesting.h"
 
+#include <QString>
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <exception>
 #include <limits>
 #include <memory>
@@ -13,6 +16,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 namespace arraw::test {
 
@@ -41,9 +45,25 @@ double sampleDifference(float expected, float actual) {
 
 } // namespace
 
+GpuBackend gpuTestBackend() {
+    static const GpuBackend backend = [] {
+        const std::string name = qEnvironmentVariable("ARRAW_TEST_GPU_BACKEND").toStdString();
+        if (name.empty()) {
+            return defaultGpuBackend();
+        }
+        if (const auto parsed = parseGpuBackend(name)) {
+            return *parsed;
+        }
+        throw std::runtime_error("ARRAW_TEST_GPU_BACKEND is '" + name +
+                                 "', which is no backend; use vulkan, opengl, d3d11, d3d12 or "
+                                 "metal");
+    }();
+    return backend;
+}
+
 void createSharedGpuContext() {
     try {
-        shared = std::make_unique<GpuContext>(GpuBackend::Vulkan);
+        shared = std::make_unique<GpuContext>(gpuTestBackend());
         status = shared->info().deviceName;
     } catch (const std::exception& problem) {
         shared.reset();
@@ -61,7 +81,7 @@ const std::string& sharedGpuContextStatus() {
 
 GpuContext& gpuContext() {
     if (!shared) {
-        SKIP("No Vulkan device on this machine: " << status);
+        SKIP("No " << gpuBackendName(gpuTestBackend()) << " device on this machine: " << status);
     }
     return *shared;
 }

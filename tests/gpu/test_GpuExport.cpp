@@ -35,9 +35,9 @@ struct Exported {
 
 /// @brief Runs `arraw-cli export` in this process, on the GPU or the CPU, and reads the PNG back.
 ///
-/// The suite already runs inside a QGuiApplication on arraw's headless
-/// platform, which is what the binary makes for a GPU export, so the
-/// application factory has nothing to start.
+/// The suite already runs inside a QGuiApplication on the platform its
+/// backend needs (see main.cpp), so the application factory has nothing to
+/// start.
 Exported exportWith(const std::string& device, const std::string& input, int bitDepth,
                     const std::vector<std::string>& develop) {
     const test::TempDir directory;
@@ -51,6 +51,8 @@ Exported exportWith(const std::string& device, const std::string& input, int bit
                                        std::to_string(bitDepth),
                                        "--device",
                                        device,
+                                       "--gpu-backend",
+                                       std::string(gpuBackendName(test::gpuTestBackend())),
                                        "--allow-software"};
     arguments.insert(arguments.end(), develop.begin(), develop.end());
     std::ostringstream out;
@@ -92,9 +94,10 @@ Exported exportBatch(const std::string& device, const std::vector<std::filesyste
     for (const auto& input : inputs) {
         arguments.push_back(input.string());
     }
-    for (const std::string& argument :
-         std::vector<std::string>{"-o", directory.string(), "--device", device, "--allow-software",
-                                  "--log-format", "json", "--format", "png", "--overwrite"}) {
+    for (const std::string& argument : std::vector<std::string>{
+             "-o", directory.string(), "--device", device, "--gpu-backend",
+             std::string(gpuBackendName(test::gpuTestBackend())), "--allow-software",
+             "--log-format", "json", "--format", "png", "--overwrite"}) {
         arguments.push_back(argument);
     }
     std::ostringstream out;
@@ -169,6 +172,9 @@ TEST_CASE("A photograph too wide for the device falls back alone, in auto mode",
     std::filesystem::create_directory(out);
 
     SECTION("auto blames the GPU for that input only") {
+        if (test::gpuTestBackend() == GpuBackend::OpenGL) {
+            SKIP("--gpu-backend opengl makes auto gpu (ADR 017); the gpu section covers it");
+        }
         const Exported result = exportBatch("auto", {good, wide, good}, out);
         INFO(result.err);
         REQUIRE(result.code == cli::Success);
@@ -251,15 +257,19 @@ TEST_CASE("The GPU probe tests every adapter unless one is asked for", "[gpu][cl
     const auto probe = [](const std::vector<std::string>& arguments) {
         std::ostringstream out;
         std::ostringstream err;
-        std::vector<std::string> command{"gpu-test", "--size", "1"};
+        std::vector<std::string> command{"gpu-test", "--size", "1", "--gpu-backend",
+                                         std::string(gpuBackendName(test::gpuTestBackend()))};
         command.insert(command.end(), arguments.begin(), arguments.end());
         const int code = cli::run(command, out, err, [](cli::ApplicationKind) {});
         return std::tuple{code, out.str(), err.str()};
     };
 
-    const auto adapters = listGpuAdapters(defaultGpuBackend());
+    const auto adapters = listGpuAdapters(test::gpuTestBackend());
     const auto software = static_cast<std::size_t>(std::ranges::count_if(
         adapters, [](const GpuAdapterInfo& info) { return info.kind == GpuDeviceKind::Software; }));
+    // With no listed adapters the run probes the default device, which may be software too.
+    const bool defaultIsSoftware =
+        adapters.empty() && test::gpuContext().info().kind == GpuDeviceKind::Software;
     const std::string skipped = "Round trip:          skipped";
     const auto occurrences = [](const std::string& text, const std::string& needle) {
         std::size_t count = 0;
@@ -284,7 +294,7 @@ TEST_CASE("The GPU probe tests every adapter unless one is asked for", "[gpu][cl
         const auto [code, out, err] = probe({});
         INFO(err);
         REQUIRE(occurrences(out, skipped) == software);
-        if (!adapters.empty() && software == adapters.size()) {
+        if (defaultIsSoftware || (!adapters.empty() && software == adapters.size())) {
             REQUIRE(code == cli::Failed);
             REQUIRE_THAT(err, ContainsSubstring("nothing was tested"));
             REQUIRE_THAT(err, ContainsSubstring("--allow-software"));
