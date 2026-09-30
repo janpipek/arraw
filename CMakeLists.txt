@@ -263,6 +263,8 @@ add_library(arraw-cli-core STATIC
         src/cli/Cli.h
         src/cli/Command.cpp
         src/cli/Command.h
+        src/cli/DeviceChoice.cpp
+        src/cli/DeviceChoice.h
         src/cli/ExportCommand.cpp
         src/cli/ExportCommand.h
         src/cli/GpuTestCommand.cpp

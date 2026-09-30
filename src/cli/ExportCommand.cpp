@@ -2,6 +2,7 @@
 
 #include "Cli.h"
 #include "Command.h"
+#include "DeviceChoice.h"
 #include "GpuContext.h"
 #include "GpuDevelop.h"
 #include "ProcessingPlan.h"
@@ -59,13 +60,6 @@ std::string_view extensionFor(ImageFileFormat format) {
     return ".bin";
 }
 
-/// @brief Which device an export is asked to develop on.
-enum class DeviceMode {
-    Auto, ///< The GPU if it is usable, the CPU with a warning if it is not.
-    Gpu,  ///< The GPU, and a failure if it is not usable.
-    Cpu,  ///< The CPU, and no graphics stack.
-};
-
 /// @brief Everything the command needs, once its arguments are understood.
 struct ExportRequest {
     std::vector<std::filesystem::path> inputs;
@@ -73,7 +67,7 @@ struct ExportRequest {
     ImageFileFormat format = ImageFileFormat::Jpeg;
     DevelopSettings settings;
     ExportOptions options;
-    DeviceMode device = DeviceMode::Auto;
+    cli::DeviceChoice device;
     GpuBackend backend = defaultGpuBackend();
     bool allowSoftware = false;
     bool overwrite = false;
@@ -215,7 +209,9 @@ void configure(QCommandLineParser& parser) {
         "ARRAW_DISABLE_GPU is set to a value other than 0. Without --device gpu, a GPU\n"
         "that cannot be used, or is only a software rasteriser, is reported once and the\n"
         "batch runs on the CPU; a photograph the GPU fails on is retried there. With\n"
-        "--device gpu nothing falls back, and ARRAW_DISABLE_GPU is a usage error.");
+        "--device gpu nothing falls back, and ARRAW_DISABLE_GPU is a usage error.\n"
+        "--device gpuN is --device gpu on the N-th adapter the --gpu-backend lists,\n"
+        "counting from 0; `arraw-cli gpu-test` shows the numbers.");
     parser.addHelpOption();
     parser.addOption({{"o", "output"}, "Existing directory to write into.", "dir"});
     parser.addOption({"format", "png, jpeg, or tiff. Default: jpeg.", "name"});
@@ -242,8 +238,9 @@ void configure(QCommandLineParser& parser) {
     parser.addOption(
         {"crop-aspect", "free, original, or width:height (3:2, 2:3). Default: free.", "aspect"});
     parser.addOption({"device",
-                      "auto, gpu, or cpu. Auto uses the GPU when it can and says so when it "
-                      "cannot; gpu never falls back. Default: auto.",
+                      "auto, cpu, gpu, or gpuN. Auto uses the GPU when it can and says so when "
+                      "it cannot; gpu never falls back; gpuN is gpu on the backend's N-th "
+                      "adapter, counting from 0. Default: auto.",
                       "name"});
     parser.addOption({"gpu-backend",
                       "vulkan, opengl, d3d11, d3d12, or metal. Default: " +
@@ -388,18 +385,13 @@ std::optional<ExportRequest> buildRequest(const QCommandLineParser& parser, std:
     }
 
     if (parser.isSet("device")) {
-        const auto name = parser.value("device").toLower();
-        if (name == "auto") {
-            request.device = DeviceMode::Auto;
-        } else if (name == "gpu") {
-            request.device = DeviceMode::Gpu;
-        } else if (name == "cpu") {
-            request.device = DeviceMode::Cpu;
-        } else {
-            code = usageError(err, "unknown device '" + name.toStdString() +
-                                       "'; expected auto, gpu, or cpu");
+        const auto device = cli::parseDeviceChoice(parser.value("device").toStdString());
+        if (!device) {
+            code = usageError(err, "unknown device '" + parser.value("device").toStdString() +
+                                       "'; expected " + cli::deviceChoices());
             return std::nullopt;
         }
+        request.device = *device;
     }
     if (parser.isSet("gpu-backend")) {
         const auto name = parser.value("gpu-backend").toLower().toStdString();
@@ -412,9 +404,9 @@ std::optional<ExportRequest> buildRequest(const QCommandLineParser& parser, std:
         request.backend = *backend;
     }
     request.allowSoftware = parser.isSet("allow-software");
-    if (request.device == DeviceMode::Gpu && cli::gpuDisabled()) {
-        code = usageError(err, "--device gpu cannot be used while " +
-                                   std::string(cli::disableGpuVariable) +
+    if (request.device.kind == cli::DeviceKind::Gpu && cli::gpuDisabled()) {
+        code = usageError(err, "--device " + parser.value("device").toStdString() +
+                                   " cannot be used while " + std::string(cli::disableGpuVariable) +
                                    " is set; unset it, or set it to 0");
         return std::nullopt;
     }
@@ -433,8 +425,8 @@ std::optional<ExportRequest> buildRequest(const QCommandLineParser& parser, std:
 
 /// @brief Whether the request develops on the CPU without ever looking for a GPU.
 bool cpuOnly(const ExportRequest& request) {
-    return request.device == DeviceMode::Cpu ||
-           (request.device == DeviceMode::Auto && cli::gpuDisabled());
+    return request.device.kind == cli::DeviceKind::Cpu ||
+           (request.device.kind == cli::DeviceKind::Auto && cli::gpuDisabled());
 }
 
 /// @brief Creates the batch's one GPU context, or says why there is none.
@@ -444,7 +436,7 @@ bool cpuOnly(const ExportRequest& request) {
 std::unique_ptr<GpuContext> createContext(const ExportRequest& request, std::string& problem) {
     std::unique_ptr<GpuContext> context;
     try {
-        context = std::make_unique<GpuContext>(request.backend);
+        context = std::make_unique<GpuContext>(request.backend, request.device.adapter);
     } catch (const std::exception& failure) {
         problem = failure.what();
         return nullptr;
@@ -476,7 +468,7 @@ int exportAll(const ExportRequest& request, std::ostream& err) {
     // on it after the last input: no device image outlives an iteration.
     std::unique_ptr<GpuContext> context;
     if (cpuOnly(request)) {
-        if (request.device == DeviceMode::Auto) {
+        if (request.device.kind == cli::DeviceKind::Auto) {
             log.record({.notice = Notice::GpuFallback,
                         .severity = Severity::Warning,
                         .values = {describe({.notice = Notice::GpuDisabled,
@@ -486,7 +478,7 @@ int exportAll(const ExportRequest& request, std::ostream& err) {
         std::string problem;
         context = createContext(request, problem);
         if (!context) {
-            if (request.device == DeviceMode::Gpu) {
+            if (request.device.kind == cli::DeviceKind::Gpu) {
                 log.record({.notice = Notice::GpuFailed,
                             .severity = Severity::Error,
                             .values = {problem}});
@@ -539,7 +531,7 @@ int exportAll(const ExportRequest& request, std::ostream& err) {
                 try {
                     developed = developOnDevice(*context, source, photo.settings());
                 } catch (const std::exception& failure) {
-                    if (request.device == DeviceMode::Gpu) {
+                    if (request.device.kind == cli::DeviceKind::Gpu) {
                         throw;
                     }
                     const bool lost = context->lost();

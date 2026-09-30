@@ -90,6 +90,7 @@ if(TARGET arraw-headless-platform)
             gpu/main.cpp
             gpu/GpuTesting.cpp
             gpu/GpuTesting.h
+            gpu/test_GpuAdapters.cpp
             gpu/test_GpuDevelop.cpp
             gpu/test_GpuExport.cpp
             gpu/test_GpuPasses.cpp

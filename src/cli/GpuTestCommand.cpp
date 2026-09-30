@@ -2,6 +2,7 @@
 
 #include "Cli.h"
 #include "Command.h"
+#include "DeviceChoice.h"
 #include "GpuContext.h"
 #include "StreamDiagnostics.h"
 
@@ -25,8 +26,10 @@
 #include <optional>
 #include <ostream>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 using namespace arraw;
 
@@ -48,6 +51,7 @@ constexpr std::size_t valueColumn = 21;
 /// @brief Everything the command needs, once its arguments are understood.
 struct GpuTestRequest {
     GpuBackend backend = defaultGpuBackend();
+    cli::DeviceChoice device;
     std::uint32_t edge = defaultEdge;
     bool allowSoftware = false;
     cli::LogFormat logFormat = cli::LogFormat::Text;
@@ -222,10 +226,17 @@ void configure(QCommandLineParser& parser) {
         "Check that the GPU backend works on this machine.\n"
         "\n"
         "Creates an offscreen device through one backend, never falling back to\n"
-        "another, and reports what it is and what it supports. Then uploads an RGBA\n"
-        "float test image and reads it back; the round trip must be exact bit for bit,\n"
-        "values above white, negatives, subnormals and fractional alpha included. A\n"
-        "software rasteriser is not a GPU and fails unless --allow-software is given.\n"
+        "another, and reports what it is and what it supports. By default it does so for\n"
+        "every adapter the backend lists, each labelled gpu0, gpu1, and so on, and goes\n"
+        "on past one that fails; --device gpu tests the default device only, and\n"
+        "--device gpuN adapter N only, counting from 0 per backend. In the default\n"
+        "mode a software adapter is listed and skipped unless --allow-software is\n"
+        "given; the run fails if any tested adapter fails, or if none was tested.\n"
+        "Each test uploads an RGBA float test image and reads it back; the round trip\n"
+        "must be exact bit for bit, values above white, negatives, subnormals and\n"
+        "fractional alpha included.\n"
+        "With --device gpu or gpuN a software rasteriser is not a GPU and fails\n"
+        "unless --allow-software is given.\n"
         "With ARRAW_DISABLE_GPU set to a value other than 0, no device is attempted\n"
         "and the probe fails. On Linux, unless QT_QPA_PLATFORM names another, the\n"
         "probe runs on arraw's headless platform, which reaches Vulkan without a\n"
@@ -238,6 +249,11 @@ void configure(QCommandLineParser& parser) {
                                std::string(gpuBackendName(defaultGpuBackend())) + "."),
         "name"));
     parser.addOption(QCommandLineOption("backend", "Alias of --gpu-backend.", "name"));
+    parser.addOption({"device",
+                      "auto, gpu, or gpuN; cpu is not a device to probe. Auto tests every "
+                      "adapter the backend lists; gpu the default device; gpuN the N-th "
+                      "adapter, counting from 0. Default: auto.",
+                      "name"});
     parser.addOption({"size",
                       QString("Edge of the square test image, %1-%2. Default: %3.")
                           .arg(smallestEdge)
@@ -275,6 +291,19 @@ std::optional<GpuTestRequest> buildRequest(const QCommandLineParser& parser, std
         }
         request.backend = *backend;
     }
+    if (parser.isSet("device")) {
+        const auto text = parser.value("device").toStdString();
+        const auto device = cli::parseDeviceChoice(text);
+        if (!device) {
+            code = usageError(err, "unknown device '" + text + "'; expected auto, gpu, or gpuN");
+            return std::nullopt;
+        }
+        if (device->kind == cli::DeviceKind::Cpu) {
+            code = usageError(err, "--device cpu has no GPU to probe; expected auto, gpu, or gpuN");
+            return std::nullopt;
+        }
+        request.device = *device;
+    }
     if (parser.isSet("size")) {
         bool valid = false;
         const int edge = parser.value("size").toInt(&valid);
@@ -293,6 +322,11 @@ std::optional<GpuTestRequest> buildRequest(const QCommandLineParser& parser, std
     }
     request.logFormat = *logFormat;
     return request;
+}
+
+/// @brief Names an adapter by the number `--device` takes.
+std::string adapterLabel(std::size_t adapter) {
+    return "gpu" + std::to_string(adapter);
 }
 
 /// @brief Reports the device, refusing one that cannot stand in for a GPU.
@@ -387,19 +421,29 @@ int roundTrip(GpuContext& context, std::uint32_t edge, std::ostream& out, Diagno
     return cli::Failed;
 }
 
-/// @brief Creates the device, reports it and runs the round trip.
-int probe(const GpuTestRequest& request, std::ostream& out, DiagnosticLog& log) {
-    const auto failed = [&log](const std::exception& problem) {
-        log.record({.notice = Notice::GpuFailed,
-                    .severity = Severity::Error,
-                    .values = {std::string(problem.what())}});
-        return cli::Failed;
-    };
+/// @brief Reports a failure to create or use a device.
+/// @return ::arraw::cli::Failed.
+int failed(const std::exception& problem, DiagnosticLog& log) {
+    log.record({.notice = Notice::GpuFailed,
+                .severity = Severity::Error,
+                .values = {std::string(problem.what())}});
+    return cli::Failed;
+}
+
+/// @brief Creates one device, reports it and runs the round trip.
+/// @param adapter The adapter to test, or empty for the backend's default device.
+int probe(const GpuTestRequest& request, std::optional<std::size_t> adapter, std::ostream& out,
+          DiagnosticLog& log) {
+    // Before the device exists, so that an adapter that cannot be created is
+    // still named on stdout beside the error on stderr.
+    if (adapter) {
+        field(out, "Adapter", adapterLabel(*adapter));
+    }
     std::unique_ptr<GpuContext> context;
     try {
-        context = std::make_unique<GpuContext>(request.backend);
+        context = std::make_unique<GpuContext>(request.backend, adapter);
     } catch (const std::exception& problem) {
-        return failed(problem);
+        return failed(problem, log);
     }
     if (!reportDevice(context->info(), request.allowSoftware, out, log)) {
         return cli::Failed;
@@ -407,8 +451,73 @@ int probe(const GpuTestRequest& request, std::ostream& out, DiagnosticLog& log) 
     try {
         return roundTrip(*context, request.edge, out, log);
     } catch (const std::exception& problem) {
-        return failed(problem);
+        return failed(problem, log);
     }
+}
+
+/// @brief Reports an adapter that is not tested, and why.
+void reportSkipped(std::size_t adapter, const GpuAdapterInfo& info, const GpuTestRequest& request,
+                   std::ostream& out, DiagnosticLog& log) {
+    field(out, "Adapter", adapterLabel(adapter));
+    field(out, "Backend", gpuBackendName(request.backend));
+    field(out, "Device", info.name.empty() ? "(unnamed)" : info.name);
+    field(out, "Kind", nameOf(info.kind));
+    field(out, "Vendor id", hex(info.vendorId));
+    field(out, "Device id", hex(info.deviceId));
+    field(out, "Round trip", "skipped");
+    log.record({.notice = Notice::GpuAdapterSkipped,
+                .severity = Severity::Warning,
+                .values = {adapterLabel(adapter), info.name}});
+}
+
+/// @brief Tests every adapter the backend lists, one block each.
+///
+/// A software adapter is skipped unless accepting one was asked for, and a
+/// failure does not stop the ones after it: the point of testing them all is
+/// to learn which work.
+int probeAll(const GpuTestRequest& request, std::ostream& out, DiagnosticLog& log) {
+    std::vector<GpuAdapterInfo> adapters;
+    try {
+        adapters = listGpuAdapters(request.backend);
+    } catch (const std::exception& problem) {
+        return failed(problem, log);
+    }
+    if (adapters.empty()) {
+        // A backend that does not enumerate still has its one default device.
+        return probe(request, 0, out, log);
+    }
+
+    std::size_t tested = 0;
+    int result = cli::Success;
+    for (std::size_t adapter = 0; adapter < adapters.size(); ++adapter) {
+        if (adapter > 0) {
+            out << '\n';
+        }
+        if (adapters[adapter].kind == GpuDeviceKind::Software && !request.allowSoftware) {
+            reportSkipped(adapter, adapters[adapter], request, out, log);
+            continue;
+        }
+        ++tested;
+        if (probe(request, adapter, out, log) != cli::Success) {
+            result = cli::Failed;
+        }
+    }
+    if (tested == 0) {
+        log.record({.notice = Notice::GpuFailed,
+                    .severity = Severity::Error,
+                    .values = {"every adapter is a software rasteriser, so nothing was tested; "
+                               "pass --allow-software to test one"}});
+        return cli::Failed;
+    }
+    return result;
+}
+
+/// @brief Runs the probe the request asks for.
+int probeRequested(const GpuTestRequest& request, std::ostream& out, DiagnosticLog& log) {
+    if (request.device.kind == cli::DeviceKind::Auto) {
+        return probeAll(request, out, log);
+    }
+    return probe(request, request.device.adapter, out, log);
 }
 
 } // namespace
@@ -447,5 +556,5 @@ int cli::runGpuTestCommand(const QStringList& arguments, std::ostream& out, std:
         return Failed;
     }
     start(ApplicationKind::Gui);
-    return probe(*request, out, log);
+    return probeRequested(*request, out, log);
 }

@@ -49,6 +49,10 @@ std::string arraw::describe(const Diagnostic& diagnostic) {
     case Notice::GpuSoftwareAccepted:
         return "'" + valueAt(diagnostic, 0) +
                "' is a software rasteriser, accepted because --allow-software was given";
+    case Notice::GpuAdapterSkipped:
+        return valueAt(diagnostic, 0) + " ('" + valueAt(diagnostic, 1) +
+               "') is a software rasteriser, so it was not tested; pass --allow-software to "
+               "test it";
     case Notice::GpuNoFloatTextures:
         return "the device does not support RGBA32F textures, which development needs";
     case Notice::GpuReadBackNotPromised:

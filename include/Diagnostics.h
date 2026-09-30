@@ -39,6 +39,10 @@ enum class Notice {
     /// @brief The GPU probe accepted a software rasteriser, named, because it was told to.
     GpuSoftwareAccepted,
 
+    /// @brief The GPU probe left a software rasteriser untested, because it tests
+    /// every adapter and was not told to accept one: the adapter's label, then its name.
+    GpuAdapterSkipped,
+
     /// @brief The device has no RGBA32F textures, which development needs.
     GpuNoFloatTextures,
 

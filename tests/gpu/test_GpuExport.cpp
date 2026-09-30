@@ -1,4 +1,5 @@
 #include "Cli.h"
+#include "GpuContext.h"
 #include "GpuTesting.h"
 #include "support/Fixtures.h"
 #include "support/TempDir.h"
@@ -17,6 +18,7 @@
 #include <iterator>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <vector>
 
 using namespace arraw;
@@ -219,3 +221,97 @@ TEST_CASE("A photograph that cannot be decoded fails, and is not blamed on the G
 // `arraw-cli export` creates its own GpuContext inside cli::run, so a test could only reach
 // that device through a process-wide hook in production code, and QRhi offers no portable way
 // to lose a real one; the frame-failure paths that set the flag are one line each.
+
+TEST_CASE("Export on a numbered adapter is export on the GPU, with that adapter's device",
+          "[gpu][cli][export]") {
+    const auto& context = test::gpuContext(); // skips the case when there is no device at all
+    (void)context;
+    const std::string input = test::fixture("testcard-61x41-srgb8.png").string();
+
+    const Exported numbered = exportWith("gpu0", input, 8, {});
+    INFO(numbered.err);
+    REQUIRE(numbered.code == cli::Success);
+    REQUIRE_THAT(numbered.err, ContainsSubstring("exporting on the GPU"));
+    REQUIRE(!numbered.image.isNull());
+}
+
+TEST_CASE("Export on an adapter that does not exist fails, and does not fall back",
+          "[gpu][cli][export]") {
+    (void)test::gpuContext();
+    const Exported missing =
+        exportWith("gpu99", test::fixture("testcard-61x41-srgb8.png").string(), 8, {});
+
+    REQUIRE(missing.code == cli::Failed);
+    REQUIRE_THAT(missing.err, ContainsSubstring("no adapter 99"));
+    REQUIRE_THAT(missing.err, !ContainsSubstring("exporting on the CPU"));
+}
+
+TEST_CASE("The GPU probe tests every adapter unless one is asked for", "[gpu][cli]") {
+    (void)test::gpuContext();
+    const auto probe = [](const std::vector<std::string>& arguments) {
+        std::ostringstream out;
+        std::ostringstream err;
+        std::vector<std::string> command{"gpu-test", "--size", "1"};
+        command.insert(command.end(), arguments.begin(), arguments.end());
+        const int code = cli::run(command, out, err, [](cli::ApplicationKind) {});
+        return std::tuple{code, out.str(), err.str()};
+    };
+
+    const auto adapters = listGpuAdapters(defaultGpuBackend());
+    const auto software = static_cast<std::size_t>(std::ranges::count_if(
+        adapters, [](const GpuAdapterInfo& info) { return info.kind == GpuDeviceKind::Software; }));
+    const std::string skipped = "Round trip:          skipped";
+    const auto occurrences = [](const std::string& text, const std::string& needle) {
+        std::size_t count = 0;
+        for (auto at = text.find(needle); at != std::string::npos;
+             at = text.find(needle, at + needle.size())) {
+            ++count;
+        }
+        return count;
+    };
+
+    SECTION("every adapter, each labelled") {
+        const auto [code, out, err] = probe({"--allow-software"});
+        INFO(err);
+        REQUIRE(code == cli::Success);
+        REQUIRE_THAT(out, ContainsSubstring("exact"));
+        for (std::size_t index = 0; index < std::max<std::size_t>(adapters.size(), 1); ++index) {
+            REQUIRE_THAT(out,
+                         ContainsSubstring("Adapter:             gpu" + std::to_string(index)));
+        }
+    }
+    SECTION("a software adapter is skipped, and with nothing else the run fails") {
+        const auto [code, out, err] = probe({});
+        INFO(err);
+        REQUIRE(occurrences(out, skipped) == software);
+        if (!adapters.empty() && software == adapters.size()) {
+            REQUIRE(code == cli::Failed);
+            REQUIRE_THAT(err, ContainsSubstring("nothing was tested"));
+            REQUIRE_THAT(err, ContainsSubstring("--allow-software"));
+        } else {
+            REQUIRE(code == cli::Success);
+        }
+    }
+    SECTION("a skipped adapter is logged under a name a script can match") {
+        if (software == 0) {
+            SKIP("no software adapter to skip");
+        }
+        const auto [code, out, err] = probe({"--log-format", "json"});
+        REQUIRE_THAT(err, ContainsSubstring("\"notice\":\"gpu_adapter_skipped\""));
+    }
+    SECTION("one adapter, by number") {
+        const auto [code, out, err] = probe({"--device", "gpu0", "--allow-software"});
+        REQUIRE(code == cli::Success);
+        REQUIRE_THAT(out, ContainsSubstring("gpu0"));
+    }
+    SECTION("the default device carries no label") {
+        const auto [code, out, err] = probe({"--device", "gpu", "--allow-software"});
+        REQUIRE(code == cli::Success);
+        REQUIRE_THAT(out, !ContainsSubstring("Adapter:"));
+    }
+    SECTION("an adapter past the end is a failure that says how many there are") {
+        const auto [code, out, err] = probe({"--device", "gpu99", "--allow-software"});
+        REQUIRE(code == cli::Failed);
+        REQUIRE_THAT(err, ContainsSubstring("no adapter 99"));
+    }
+}

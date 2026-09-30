@@ -13,6 +13,7 @@
 #include <QString>
 #include <QThread>
 #include <QVersionNumber>
+#include <QtAlgorithms>
 #include <rhi/qrhi.h>
 #include <rhi/qshader.h>
 
@@ -25,6 +26,7 @@
 #include <initializer_list>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -85,16 +87,17 @@ std::string platformAdvice(GpuBackend backend) {
     return {};
 }
 
-/// @brief Creates the QRhi for one backend, storing what it depends on in @p device.
+/// @brief Prepares what one backend's QRhi is created from and calls @p use with it.
 ///
-/// Never passes QRhi::PreferSoftwareRenderer, and never tries a second backend
-/// when the first fails: either would let a missing GPU pass for a present one
-/// (ADR 015).
-/// @return The device, or null if QRhi could not create one.
+/// The one place a backend's init parameters are made, so that enumerating its
+/// adapters and creating a device from one see the same instance or surface.
+/// What the parameters depend on is stored in @p device, which must outlive
+/// anything @p use keeps.
+/// @param use Receives the QRhi implementation and its parameters.
 /// @throws std::runtime_error if the backend is not in this build or on this
 /// platform, or what it depends on cannot be created.
-std::unique_ptr<QRhi> createRhi(GpuBackend backend, [[maybe_unused]] detail::GpuDevice& device) {
-    [[maybe_unused]] const QRhi::Flags flags{};
+void withInitParams(GpuBackend backend, [[maybe_unused]] detail::GpuDevice& device,
+                    const std::function<void(QRhi::Implementation, QRhiInitParams*)>& use) {
     switch (backend) {
     case GpuBackend::Vulkan: {
 #if ARRAW_GPU_VULKAN
@@ -114,7 +117,8 @@ std::unique_ptr<QRhi> createRhi(GpuBackend backend, [[maybe_unused]] detail::Gpu
         QRhiVulkanInitParams params;
         params.inst = instance.get();
         device.vulkan = std::move(instance);
-        return std::unique_ptr<QRhi>(QRhi::create(QRhi::Vulkan, &params, flags));
+        use(QRhi::Vulkan, &params);
+        return;
 #else
         throw unavailable(backend,
                           "this Qt was built without Vulkan, or arraw without the Vulkan headers");
@@ -137,7 +141,8 @@ std::unique_ptr<QRhi> createRhi(GpuBackend backend, [[maybe_unused]] detail::Gpu
         device.fallbackSurface.reset(QRhiGles2InitParams::newFallbackSurface());
         QRhiGles2InitParams params;
         params.fallbackSurface = device.fallbackSurface.get();
-        return std::unique_ptr<QRhi>(QRhi::create(QRhi::OpenGLES2, &params, flags));
+        use(QRhi::OpenGLES2, &params);
+        return;
 #else
         throw unavailable(backend, "this Qt was built without OpenGL");
 #endif
@@ -145,7 +150,8 @@ std::unique_ptr<QRhi> createRhi(GpuBackend backend, [[maybe_unused]] detail::Gpu
     case GpuBackend::D3D11: {
 #if defined(Q_OS_WIN)
         QRhiD3D11InitParams params;
-        return std::unique_ptr<QRhi>(QRhi::create(QRhi::D3D11, &params, flags));
+        use(QRhi::D3D11, &params);
+        return;
 #else
         throw unavailable(backend, "Direct3D exists only on Windows");
 #endif
@@ -153,7 +159,8 @@ std::unique_ptr<QRhi> createRhi(GpuBackend backend, [[maybe_unused]] detail::Gpu
     case GpuBackend::D3D12: {
 #if defined(Q_OS_WIN)
         QRhiD3D12InitParams params;
-        return std::unique_ptr<QRhi>(QRhi::create(QRhi::D3D12, &params, flags));
+        use(QRhi::D3D12, &params);
+        return;
 #else
         throw unavailable(backend, "Direct3D exists only on Windows");
 #endif
@@ -161,7 +168,8 @@ std::unique_ptr<QRhi> createRhi(GpuBackend backend, [[maybe_unused]] detail::Gpu
     case GpuBackend::Metal: {
 #if QT_CONFIG(metal)
         QRhiMetalInitParams params;
-        return std::unique_ptr<QRhi>(QRhi::create(QRhi::Metal, &params, flags));
+        use(QRhi::Metal, &params);
+        return;
 #else
         throw unavailable(backend, "Metal exists only on Apple platforms, and needs a Qt built "
                                    "with it");
@@ -170,6 +178,18 @@ std::unique_ptr<QRhi> createRhi(GpuBackend backend, [[maybe_unused]] detail::Gpu
     }
     throw unavailable(backend, "it is not a backend arraw knows");
 }
+
+/// @brief Owns the adapters QRhi enumerated, and frees them.
+struct AdapterList {
+    QRhi::AdapterList adapters;
+
+    explicit AdapterList(QRhi::AdapterList enumerated) : adapters(std::move(enumerated)) {}
+    AdapterList(const AdapterList&) = delete;
+    AdapterList& operator=(const AdapterList&) = delete;
+    ~AdapterList() {
+        qDeleteAll(adapters);
+    }
+};
 
 /// @brief Classifies a device, by name where the backend does not say.
 ///
@@ -402,17 +422,74 @@ std::optional<GpuBackend> parseGpuBackend(std::string_view name) noexcept {
     return std::nullopt;
 }
 
-GpuContext::GpuContext(GpuBackend backend) : device_(std::make_shared<detail::GpuDevice>()) {
-    // Checked first, and for every backend alike: without it a Vulkan instance
-    // or an OpenGL surface fails deep inside Qt, and a QCoreApplication is what
-    // the main test suite runs under, and what arraw-cli runs under when
-    // ARRAW_DISABLE_GPU turns the GPU off.
+namespace {
+
+/// @brief Refuses a caller that has no platform plugin to make devices through.
+///
+/// Checked first, and for every backend alike: without it a Vulkan instance
+/// or an OpenGL surface fails deep inside Qt, and a QCoreApplication is what
+/// the main test suite runs under, and what arraw-cli runs under when
+/// ARRAW_DISABLE_GPU turns the GPU off.
+void requireGuiApplication() {
     if (qobject_cast<QGuiApplication*>(QCoreApplication::instance()) == nullptr) {
         throw std::runtime_error("A GPU device needs a QGuiApplication, which provides the "
                                  "platform plugin devices are created through");
     }
+}
 
-    device_->rhi = createRhi(backend, *device_);
+} // namespace
+
+std::vector<GpuAdapterInfo> listGpuAdapters(GpuBackend backend) {
+    requireGuiApplication();
+
+    // Scratch: keeps the instance or surface the enumeration needs alive, and
+    // is dropped with the list, since no device outlives this call.
+    detail::GpuDevice scratch;
+    std::vector<GpuAdapterInfo> result;
+    withInitParams(backend, scratch, [&](QRhi::Implementation impl, QRhiInitParams* params) {
+        const AdapterList list{QRhi::enumerateAdapters(impl, params)};
+        for (const QRhiAdapter* adapter : list.adapters) {
+            const QRhiDriverInfo driver = adapter->info();
+            result.push_back({driver.deviceName.toStdString(), kindOf(driver), driver.vendorId,
+                              driver.deviceId});
+        }
+    });
+    return result;
+}
+
+GpuContext::GpuContext(GpuBackend backend, std::optional<std::size_t> adapter)
+    : device_(std::make_shared<detail::GpuDevice>()) {
+    requireGuiApplication();
+
+    // Never QRhi::PreferSoftwareRenderer, and never a second backend when the
+    // first fails: either would let a missing GPU pass for a present one (ADR 015).
+    withInitParams(backend, *device_, [&](QRhi::Implementation impl, QRhiInitParams* params) {
+        const QRhi::Flags flags{};
+        if (!adapter) {
+            device_->rhi.reset(QRhi::create(impl, params, flags));
+            return;
+        }
+        // Enumerated with the parameters the device is created with, so the
+        // index means the same adapter in both.
+        const AdapterList list{QRhi::enumerateAdapters(impl, params)};
+        const auto count = static_cast<std::size_t>(list.adapters.size());
+        if (count == 0 && *adapter == 0) {
+            // A backend that does not enumerate has one device, the default.
+            device_->rhi.reset(QRhi::create(impl, params, flags));
+            return;
+        }
+        if (*adapter >= count) {
+            throw std::out_of_range(
+                "The " + std::string(gpuBackendName(backend)) + " backend has no adapter " +
+                std::to_string(*adapter) + "; " +
+                (count == 0 ? std::string("it does not list adapters, so only 0 (the default "
+                                          "device) is valid")
+                            : "it lists " + std::to_string(count) + ", numbered 0 to " +
+                                  std::to_string(count - 1)));
+        }
+        device_->rhi.reset(QRhi::create(impl, params, flags, nullptr,
+                                        list.adapters[static_cast<qsizetype>(*adapter)]));
+    });
     if (!device_->rhi) {
         throw unavailable(backend, "QRhi could not create a device on the '" + platformName() +
                                        "' platform; Qt's warnings above say why" +
@@ -422,6 +499,7 @@ GpuContext::GpuContext(GpuBackend backend) : device_(std::make_shared<detail::Gp
     const QRhi& rhi = *device_->rhi;
     const QRhiDriverInfo driver = rhi.driverInfo();
     info_.backend = backend;
+    info_.adapter = adapter;
     info_.deviceName = driver.deviceName.toStdString();
     info_.kind = kindOf(driver);
     info_.vendorId = driver.vendorId;

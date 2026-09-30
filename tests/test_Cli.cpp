@@ -1,5 +1,6 @@
 #include "Cli.h"
 #include "Command.h"
+#include "DeviceChoice.h"
 #include "ExportCommand.h"
 #include "support/Fixtures.h"
 #include "support/TempDir.h"
@@ -19,6 +20,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -993,4 +995,83 @@ TEST_CASE("An unknown log format is a usage error for the GPU probe too", "[cli]
     REQUIRE(result.code == cli::UsageError);
     REQUIRE_THAT(result.err, ContainsSubstring("'yaml'"));
     REQUIRE(result.started.empty());
+}
+
+TEST_CASE("A device choice is auto, cpu, gpu, or gpu and a number, in any case", "[cli][gpu]") {
+    using cli::DeviceKind;
+    using Choice = cli::DeviceChoice;
+
+    REQUIRE(cli::parseDeviceChoice("auto") == Choice{DeviceKind::Auto, std::nullopt});
+    REQUIRE(cli::parseDeviceChoice("CPU") == Choice{DeviceKind::Cpu, std::nullopt});
+    REQUIRE(cli::parseDeviceChoice("gpu") == Choice{DeviceKind::Gpu, std::nullopt});
+    REQUIRE(cli::parseDeviceChoice("GPU") == Choice{DeviceKind::Gpu, std::nullopt});
+    REQUIRE(cli::parseDeviceChoice("gpu0") == Choice{DeviceKind::Gpu, 0});
+    REQUIRE(cli::parseDeviceChoice("Gpu12") == Choice{DeviceKind::Gpu, 12});
+    REQUIRE(cli::parseDeviceChoice("gpu007") == Choice{DeviceKind::Gpu, 7});
+
+    for (const std::string_view bad :
+         {"", " ", "gpux", "gpu-1", "gpu+1", "gpu1.5", "gpu 1", "gpu1 ", "gpu1x", "cpu0", "auto1",
+          "cuda", "gpu99999999999999999999999"}) {
+        CAPTURE(bad);
+        REQUIRE_FALSE(cli::parseDeviceChoice(bad).has_value());
+    }
+}
+
+TEST_CASE("A wrong --device is a usage error for both commands, naming the value", "[cli][gpu]") {
+    const auto bad = GENERATE(std::string{"gpux"}, std::string{"gpu-1"}, std::string{"gpu1.5"},
+                              std::string{"gpu 1"}, std::string{"tpu"});
+    const std::string image = test::fixture(card).string();
+    const test::TempDir directory;
+    CAPTURE(bad);
+
+    const auto exported =
+        invoke({"export", image, "-o", directory.path().string(), "--device", bad});
+    REQUIRE(exported.code == cli::UsageError);
+    REQUIRE_THAT(exported.err, ContainsSubstring("'" + bad + "'"));
+    REQUIRE_THAT(exported.err, ContainsSubstring("gpuN"));
+    REQUIRE(exported.started.empty());
+
+    const auto probed = invoke({"gpu-test", "--device", bad});
+    REQUIRE(probed.code == cli::UsageError);
+    REQUIRE_THAT(probed.err, ContainsSubstring("'" + bad + "'"));
+    REQUIRE_THAT(probed.err, ContainsSubstring("gpuN"));
+    REQUIRE(probed.started.empty());
+}
+
+TEST_CASE("The GPU probe has no CPU to test", "[cli][gpu]") {
+    const auto result = invoke({"gpu-test", "--device", "cpu"});
+    REQUIRE(result.code == cli::UsageError);
+    REQUIRE_THAT(result.err, ContainsSubstring("--device cpu"));
+    REQUIRE(result.started.empty());
+}
+
+TEST_CASE("Both commands' help explains gpuN", "[cli][gpu]") {
+    for (const std::string command : {"export", "gpu-test"}) {
+        CAPTURE(command);
+        const auto result = invoke({command, "--help"});
+        REQUIRE(result.code == cli::Success);
+        REQUIRE_THAT(result.out, ContainsSubstring("gpuN"));
+    }
+    REQUIRE_THAT(invoke({"gpu-test", "--help"}).out, ContainsSubstring("every adapter"));
+}
+
+TEST_CASE("A numbered GPU cannot be used while ARRAW_DISABLE_GPU turns the GPU off", "[cli][gpu]") {
+    const ScopedEnvironment disabled(cli::disableGpuVariable, "1");
+    const test::TempDir directory;
+    const auto result = invoke({"export", test::fixture(card).string(), "-o",
+                                directory.path().string(), "--device", "gpu2"});
+
+    REQUIRE(result.code == cli::UsageError);
+    REQUIRE_THAT(result.err, ContainsSubstring("--device gpu2"));
+    REQUIRE_THAT(result.err, ContainsSubstring("ARRAW_DISABLE_GPU"));
+}
+
+TEST_CASE("The GPU probe fails on a disabled GPU whatever device was asked for", "[cli][gpu]") {
+    const ScopedEnvironment disabled(cli::disableGpuVariable, "1");
+    for (const std::string device : {"auto", "gpu", "gpu1"}) {
+        CAPTURE(device);
+        const auto result = invoke({"gpu-test", "--device", device});
+        REQUIRE(result.code == cli::Failed);
+        REQUIRE_THAT(result.err, ContainsSubstring("ARRAW_DISABLE_GPU"));
+    }
 }

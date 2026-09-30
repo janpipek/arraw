@@ -29,8 +29,8 @@ arraw-cli export <input>... -o <dir> [--format] [--quality] [--bit-depth]
                                      [--overwrite] [--quiet]
 ```
 
-*Added later:* `--device`, `--gpu-backend` and `--allow-software` choose where
-development runs; see
+*Added later:* `--device` (`auto`, `cpu`, `gpu`, or `gpuN` for the N-th adapter),
+`--gpu-backend` and `--allow-software` choose where development runs; see
 [ADR 017](017-the-command-line-prefers-the-gpu-and-says-when-it-does-not.md).
 
 - **Inputs are files, never directories.** The shell expands wildcards. A

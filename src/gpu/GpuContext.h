@@ -11,6 +11,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace arraw {
 
@@ -62,10 +63,46 @@ enum class GpuDeviceKind {
     Software, ///< A CPU rasteriser: WARP, llvmpipe, lavapipe, SwiftShader.
 };
 
+/// @brief What a backend says about one of its adapters, before a device is made from it.
+///
+/// Classified as ::arraw::GpuDeviceInfo is, so that a software rasteriser is
+/// recognised here too, and a caller can refuse it without creating a device.
+struct GpuAdapterInfo {
+    /// @brief Name the driver gives the adapter, UTF-8.
+    std::string name;
+
+    /// @brief Sort of hardware behind the adapter.
+    GpuDeviceKind kind = GpuDeviceKind::Unknown;
+
+    /// @brief PCI vendor id, or 0 where the backend does not report one.
+    std::uint64_t vendorId = 0;
+
+    /// @brief PCI device id, or 0 where the backend does not report one.
+    std::uint64_t deviceId = 0;
+};
+
+/// @brief Lists the adapters a backend enumerates, in the order its indices number them.
+///
+/// The position in the result is the index ::arraw::GpuContext takes. Empty
+/// where the backend does not enumerate (OpenGL; possibly Metal), which is not
+/// the same as having no device: index 0 still means the default one there.
+/// Creates and drops a Vulkan instance or an OpenGL surface, as a context would.
+/// @param backend Backend to ask; never substituted.
+/// @throws std::runtime_error if no `QGuiApplication` exists, or the backend is
+/// not available in this build or on this platform.
+[[nodiscard]] std::vector<GpuAdapterInfo> listGpuAdapters(GpuBackend backend);
+
 /// @brief Everything a caller may want to know about a device before using it.
 struct GpuDeviceInfo {
     /// @brief Backend the device was created through.
     GpuBackend backend = GpuBackend::Vulkan;
+
+    /// @brief Index of the adapter the device was made on, if one was asked for.
+    ///
+    /// The position in ::arraw::listGpuAdapters. Empty for the backend's
+    /// default device; also 0, not empty, when 0 was asked for of a backend
+    /// that lists nothing.
+    std::optional<std::size_t> adapter;
 
     /// @brief Name the driver gives the device, UTF-8.
     std::string deviceName;
@@ -119,9 +156,10 @@ inline constexpr std::size_t gpuPassCount = 3;
 /// does not own, and this is the thing that owns one for callers with no
 /// viewport — the command line, export, and the CPU/GPU comparison tests.
 ///
-/// Never falls back. A backend that is not in this Qt, not on this platform or
-/// will not start is an error, and so the caller learns that it has no GPU
-/// rather than comparing the CPU with itself.
+/// Never falls back: not to another backend, and, when an adapter was asked
+/// for, not to another adapter. A backend that is not in this Qt, not on this
+/// platform or will not start is an error, and so the caller learns that it has
+/// no GPU rather than comparing the CPU with itself.
 ///
 /// QRhi is used from one thread, so this is too: the thread that constructs a
 /// context is its owner, and uploading to or reading back from it anywhere else
@@ -146,10 +184,15 @@ class GpuContext {
 public:
     /// @brief Creates an offscreen device through one backend.
     /// @param backend Backend to create; never substituted.
+    /// @param adapter Index into ::arraw::listGpuAdapters of the adapter to use,
+    /// or `std::nullopt` for the default device QRhi picks. Index 0 is also
+    /// valid, and means the default device, on a backend that lists no adapters.
     /// @throws std::runtime_error if no `QGuiApplication` exists, the backend is
     /// not available in this build or on this platform, or the device cannot be
     /// created.
-    explicit GpuContext(GpuBackend backend);
+    /// @throws std::out_of_range if @p adapter is not below the number of
+    /// adapters the backend lists; the message gives that number.
+    explicit GpuContext(GpuBackend backend, std::optional<std::size_t> adapter = std::nullopt);
 
     GpuContext(const GpuContext&) = delete;
     GpuContext& operator=(const GpuContext&) = delete;

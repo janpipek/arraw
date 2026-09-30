@@ -82,6 +82,39 @@ flag is set or QRhi reports `isDeviceLost()`, and both `requireUsable` and
 so does one whose `endOffscreenFrame` fails while unwinding, so the loss is
 noticed by the frame that suffered it rather than by the next input.
 
+## Added later (2026-09-30): choosing an adapter
+
+**`--device gpuN` is `--device gpu` on adapter N.** A machine can have several
+Vulkan devices (an integrated and a discrete GPU, or a GPU and lavapipe), and
+`gpu` took whichever one Qt picked. `gpuN` takes the N-th adapter the chosen
+`--gpu-backend` lists, counting from 0, in the case-insensitive spelling the
+other values have: `gpu0`, `GPU12`. Nothing else about `gpu` changes: it never
+falls back, `ARRAW_DISABLE_GPU` is a usage error with it, and a software adapter
+still needs `--allow-software`, whichever way it was chosen.
+
+**Numbers are per backend.** Vulkan's `gpu1` and Direct3D 12's `gpu1` need not be
+the same device, and the numbering is whatever the backend enumerates, in its
+order. `gpu-test` is where a user learns the numbers: it labels each adapter
+`gpu0`, `gpu1` and so on. A backend that enumerates nothing (OpenGL, and
+possibly Metal) has one device, the default one, which is `gpu0`; any other
+number is out of range there.
+
+**An index past the end is a runtime failure, not a usage error.** Whether `gpu3`
+exists depends on the machine, so the same command line is well-formed
+everywhere and fails only where there is no such adapter, with exit 1 and a
+message giving how many adapters the backend lists.
+
+**`gpu-test` tests every adapter by default.** `--device auto` runs each
+adapter's report and round trip in its own labelled block and carries on past a
+failure, so one broken adapter does not hide the state of the others. `gpu` tests
+the default device only, as before, and `gpuN` adapter N alone; `cpu` is a usage
+error, since there is no GPU in it to probe. A software adapter that
+`--allow-software` did not accept is listed and skipped with a warning
+(`Notice::GpuAdapterSkipped`) rather than failed, because in the all-adapters
+mode its presence says nothing about the others. The run exits 0 only if at
+least one adapter was tested and every one tested passed; if every adapter was
+skipped, nothing was tested and it fails, saying so.
+
 ## Consequences
 
 - **The one fallback branch that is untested is device loss mid-batch.**
