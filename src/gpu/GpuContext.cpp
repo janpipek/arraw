@@ -451,7 +451,7 @@ const GpuDeviceInfo& GpuContext::info() const noexcept {
 }
 
 bool GpuContext::lost() const noexcept {
-    return device_->lost;
+    return device_->isLost();
 }
 
 DeviceImage GpuContext::upload(const ImageBuffer& image) {

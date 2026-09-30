@@ -128,6 +128,19 @@ add_test(NAME arraw-cli.escaped-operand-is-an-input
         COMMAND ${CMAKE_COMMAND} -DEXPECTED_EXIT=1 -DEXPECTED_ERR=-reverse -P ${arraw_expect_exit}
         -- $<TARGET_FILE:arraw-cli> export -o ${CMAKE_CURRENT_BINARY_DIR} -- -reverse)
 
+# An export never aborts for a platform it does not need: a platform Qt cannot
+# start (xcb without a display) is bypassed for arraw's headless one, so the
+# export runs on the GPU or falls back, and exits 0 either way.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_test(NAME arraw-cli.export-ignores-unstartable-platform
+            COMMAND ${CMAKE_COMMAND} -DEXPECTED_EXIT=0 -P ${arraw_expect_exit}
+            -- $<TARGET_FILE:arraw-cli> export
+            ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/testcard-61x41-srgb8.png
+            -o ${CMAKE_CURRENT_BINARY_DIR} --overwrite)
+    set_tests_properties(arraw-cli.export-ignores-unstartable-platform
+            PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=xcb;DISPLAY=;WAYLAND_DISPLAY=")
+endif()
+
 # Every executable CTest runs, so that one build step brings them all up
 # to date: `just test` builds this, and a target CTest registers but nothing
 # builds would fail as "not built", or run stale.
