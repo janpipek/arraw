@@ -25,14 +25,6 @@ using namespace arraw::test;
 
 namespace {
 
-/// Largest relative difference tolerated where the resample blends texels.
-///
-/// Measured worst on small images (up to 31x20, all angles, crops and
-/// aspects): 1.4e-5, at an alpha near 0.06. The shader evaluates the source
-/// position and the blend weights in float where the CPU uses double, so a
-/// weight is off by a few float ulps of the source length; the sums are float.
-constexpr double resampleTolerance = 1.0e-4;
-
 /// Largest relative difference tolerated on a large, opaque, straightened image.
 ///
 /// Measured worst on 1000x700 at 0.3, 7.5 and -30 degrees: 1.4e-4 (absolute
@@ -55,10 +47,6 @@ constexpr double transparentTolerance = 1.0e-2;
 /// Measured worst 1.6e-3, in colour beside almost transparent neighbours.
 constexpr double transparentAbsoluteTolerance = 3.0e-3;
 
-/// Magnitude below which differences count against a floor, not the expected value.
-constexpr double absoluteFloor = 1.0e-4;
-
-/// @brief Builds distinguishable pixels, with coloured transparent ones and fractional alpha.
 ImageBuffer labelled(ImageSize size, bool opaque = false) {
     ImageBuffer image(size, workingFormat, workingEncoding);
     auto samples = image.samples<float>();
@@ -90,7 +78,8 @@ template <typename Block> std::span<const std::byte> bytesOf(const Block& block)
 /// The uploaded buffer stays Normal, as develop() leaves its pixels; the
 /// camera orientation reaches the plan alone.
 FloatDifference compareGeometry(const ImageBuffer& source, ImageOrientation orientation,
-                                const GeometrySettings& settings, double floor = absoluteFloor) {
+                                const GeometrySettings& settings,
+                                double floor = geometryAbsoluteFloor) {
     GpuContext& context = gpuContext();
     const GeometryPlan plan = geometryPlanFor(source.size(), orientation, settings);
     const GpuGeometryBlock block = packGeometry(plan);

@@ -109,4 +109,44 @@ std::ostream& operator<<(std::ostream& stream, const FloatDifference& difference
                   << ", got " << difference.worstActual;
 }
 
+/// @brief Measures the worst colour error of an image, relative to each pixel's own scale.
+///
+/// A sample's error is divided by the larger of its own magnitude, the
+/// largest colour magnitude of its pixel, and the absolute floor. Judging a
+/// channel against itself alone would count a channel that the chain
+/// leaves near zero by cancellation (a small negative from the camera matrix,
+/// faded toward neutral by the shoulder) against a value it is a small
+/// difference of: the powers' relative error then shows up in it multiplied by
+/// the pixel's brightness over the channel's. Non-finite values must agree in
+/// kind: two NaNs, or the same infinity, are equal; anything else is infinitely far.
+/// Alpha is not part of this; it is compared bit for bit.
+double worstColourError(const ImageBuffer& expected, const ImageBuffer& actual) {
+    const std::span<const float> want = expected.samples<float>();
+    const std::span<const float> got = actual.samples<float>();
+    double worst = 0.0;
+    for (std::size_t pixel = 0; pixel < want.size() / 4; ++pixel) {
+        double scale = pointwiseAbsoluteFloor;
+        for (std::size_t channel = 0; channel < 3; ++channel) {
+            const float value = want[pixel * 4 + channel];
+            if (std::isfinite(value)) {
+                scale = std::max(scale, std::abs(static_cast<double>(value)));
+            }
+        }
+        for (std::size_t channel = 0; channel < 3; ++channel) {
+            const float e = want[pixel * 4 + channel];
+            const float a = got[pixel * 4 + channel];
+            double error = 0.0;
+            if (std::isnan(e) || std::isnan(a)) {
+                error = std::isnan(e) && std::isnan(a) ? 0.0 : INFINITY;
+            } else if (std::isinf(e) || std::isinf(a)) {
+                error = e == a ? 0.0 : INFINITY;
+            } else {
+                error = std::abs(static_cast<double>(e) - static_cast<double>(a)) / scale;
+            }
+            worst = std::max(worst, error);
+        }
+    }
+    return worst;
+}
+
 } // namespace arraw::test

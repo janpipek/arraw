@@ -90,18 +90,21 @@ if(TARGET arraw-headless-platform)
             gpu/main.cpp
             gpu/GpuTesting.cpp
             gpu/GpuTesting.h
+            gpu/test_GpuDevelop.cpp
+            gpu/test_GpuExport.cpp
             gpu/test_GpuPasses.cpp
             gpu/test_GpuPointwise.cpp
             gpu/test_GpuGeometry.cpp)
     arraw_enable_warnings(arraw-gpu-tests)
     target_include_directories(arraw-gpu-tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/core
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/gpu)
     # Later steps load tests/fixtures/*.dng, as arraw-tests does.
     target_compile_definitions(arraw-gpu-tests
             PRIVATE ARRAW_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
     target_link_libraries(arraw-gpu-tests
-            PRIVATE arraw arraw-gpu arraw-headless-platform Catch2::Catch2 Qt6::Gui)
+            PRIVATE arraw arraw-gpu arraw-cli-core arraw-headless-platform Catch2::Catch2 Qt6::Gui)
     set_target_properties(arraw-gpu-tests PROPERTIES AUTOMOC OFF)
     catch_discover_tests(arraw-gpu-tests PROPERTIES SKIP_RETURN_CODE 4)
 endif()

@@ -55,4 +55,47 @@ struct FloatDifference {
 [[nodiscard]] FloatDifference compareFloat(const ImageBuffer& expected, const ImageBuffer& actual,
                                            double absoluteFloor = 1e-6);
 
+// Tolerances against the CPU, measured on lavapipe by the steps that fixed them.
+
+/// @brief Largest error the pointwise pass may have against the CPU chain, relative to the
+/// pixel's scale (see worstColourError).
+///
+/// Measured worst case on lavapipe (Mesa llvmpipe), over every case below:
+/// 1.7e-5 with the floor below, 4.4e-5 with a floor of 1e-6. The chain raises
+/// to a power twice, and GLSL leaves `pow` precision to the implementation
+/// (Vulkan allows several ULP; lavapipe's is a polynomial exp2/log2), against
+/// the CPU's correctly rounded `std::pow`. The worst cases are the ones where
+/// the chain subtracts nearly equal perceptual values (Blacks at -100 pulls a
+/// dark value down to just above zero before it is raised back to 2.2), which
+/// turns a power's relative error into a larger one in the result. The rest is
+/// plain float arithmetic that a GPU may fuse into multiply-adds.
+///
+/// Looser than the plan's 1e-5 target, and the floor higher than its 1e-6, for
+/// that reason; a wrong stage, matrix layout or order disagrees by 1e-3 or more.
+inline constexpr double pointwiseRelativeTolerance = 3e-5;
+
+/// @brief Magnitude below which the pointwise comparison uses an absolute error instead.
+inline constexpr double pointwiseAbsoluteFloor = 1e-5;
+
+/// Largest relative difference tolerated where the resample blends texels.
+///
+/// Measured worst on small images (up to 31x20, all angles, crops and
+/// aspects): 1.4e-5, at an alpha near 0.06. The shader evaluates the source
+/// position and the blend weights in float where the CPU uses double, so a
+/// weight is off by a few float ulps of the source length; the sums are float.
+inline constexpr double resampleTolerance = 1.0e-4;
+
+/// Magnitude below which differences count against a floor, not the expected value.
+inline constexpr double geometryAbsoluteFloor = 1.0e-4;
+
+/// @brief Builds distinguishable pixels, with coloured transparent ones and fractional alpha.
+
+/// @brief Measures the worst colour error of an image, relative to each pixel's own scale.
+///
+/// See the implementation for the metric; alpha is not part of it.
+/// @param expected Reference image; RgbaF32.
+/// @param actual Image under test, the same size and format.
+/// @return The largest error, with non-finite disagreements counted as infinite.
+[[nodiscard]] double worstColourError(const ImageBuffer& expected, const ImageBuffer& actual);
+
 } // namespace arraw::test

@@ -37,69 +37,9 @@ using namespace arraw::test;
 
 namespace {
 
-/// @brief Largest error the pointwise pass may have against the CPU chain, relative to the
-/// pixel's scale (see worstColourError).
-///
-/// Measured worst case on lavapipe (Mesa llvmpipe), over every case below:
-/// 1.7e-5 with the floor below, 4.4e-5 with a floor of 1e-6. The chain raises
-/// to a power twice, and GLSL leaves `pow` precision to the implementation
-/// (Vulkan allows several ULP; lavapipe's is a polynomial exp2/log2), against
-/// the CPU's correctly rounded `std::pow`. The worst cases are the ones where
-/// the chain subtracts nearly equal perceptual values (Blacks at -100 pulls a
-/// dark value down to just above zero before it is raised back to 2.2), which
-/// turns a power's relative error into a larger one in the result. The rest is
-/// plain float arithmetic that a GPU may fuse into multiply-adds.
-///
-/// Looser than the plan's 1e-5 target, and the floor higher than its 1e-6, for
-/// that reason; a wrong stage, matrix layout or order disagrees by 1e-3 or more.
-constexpr double pointwiseRelativeTolerance = 3e-5;
-
-/// @brief Magnitude below which the pointwise comparison uses an absolute error instead.
-constexpr double pointwiseAbsoluteFloor = 1e-5;
-
 /// @brief Views a uniform block as the bytes a pass takes.
 template <typename Block> std::span<const std::byte> bytesOf(const Block& block) {
     return std::as_bytes(std::span(&block, 1));
-}
-
-/// @brief Measures the worst colour error of an image, relative to each pixel's own scale.
-///
-/// A sample's error is divided by the larger of its own magnitude, the
-/// largest colour magnitude of its pixel, and the absolute floor. Judging a
-/// channel against itself alone would count a channel that the chain
-/// leaves near zero by cancellation (a small negative from the camera matrix,
-/// faded toward neutral by the shoulder) against a value it is a small
-/// difference of: the powers' relative error then shows up in it multiplied by
-/// the pixel's brightness over the channel's. Non-finite values must agree in
-/// kind: two NaNs, or the same infinity, are equal; anything else is infinitely far.
-/// Alpha is not part of this; it is compared bit for bit.
-double worstColourError(const ImageBuffer& expected, const ImageBuffer& actual) {
-    const std::span<const float> want = expected.samples<float>();
-    const std::span<const float> got = actual.samples<float>();
-    double worst = 0.0;
-    for (std::size_t pixel = 0; pixel < want.size() / 4; ++pixel) {
-        double scale = pointwiseAbsoluteFloor;
-        for (std::size_t channel = 0; channel < 3; ++channel) {
-            const float value = want[pixel * 4 + channel];
-            if (std::isfinite(value)) {
-                scale = std::max(scale, std::abs(static_cast<double>(value)));
-            }
-        }
-        for (std::size_t channel = 0; channel < 3; ++channel) {
-            const float e = want[pixel * 4 + channel];
-            const float a = got[pixel * 4 + channel];
-            double error = 0.0;
-            if (std::isnan(e) || std::isnan(a)) {
-                error = std::isnan(e) && std::isnan(a) ? 0.0 : INFINITY;
-            } else if (std::isinf(e) || std::isinf(a)) {
-                error = e == a ? 0.0 : INFINITY;
-            } else {
-                error = std::abs(static_cast<double>(e) - static_cast<double>(a)) / scale;
-            }
-            worst = std::max(worst, error);
-        }
-    }
-    return worst;
 }
 
 /// @brief Compares a GPU result to its CPU reference and records the error.
