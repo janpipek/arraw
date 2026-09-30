@@ -20,7 +20,7 @@ build: configure
     cmake --build --preset debug
 
 # Build and run the GUI application
-run: configure
+gui: configure
     cmake --build --preset debug --target arraw-ui
     ./{{build_dir}}debug/arraw-ui
 
@@ -33,6 +33,28 @@ cli *args: configure
 test *args: configure
     cmake --build --preset debug --target arraw-test-binaries
     ctest --preset debug {{args}}
+
+# Needs the uv-managed .venv; `--no-install-project` uninstalls an editable arraw that a plain `uv sync` installed.
+# Build the Python extension in its own tree (build/[prefix]py-debug)
+[unix]
+py-build:
+    uv sync --no-install-project
+    cmake --preset py-debug -DPython_EXECUTABLE="$(pwd)/.venv/bin/python"
+    cmake --build --preset py-debug --target _arraw
+
+# Also builds arraw-cli in the debug tree, which the CLI parity tests compare against.
+# Build the Python extension and run pytest against it
+[unix]
+py-test *args: py-build
+    cmake --preset debug
+    cmake --build --preset debug --target arraw-cli
+    ARRAW_REQUIRE_CLI=1 PYTHONPATH="$(pwd)/{{build_dir}}py-debug/python" uv run --no-sync pytest tests/python {{args}}
+
+# IPython is added for this session only (`uv run --with`), not to the project's dependencies.
+# Build the Python extension and open IPython with arraw importable
+[unix]
+ipython *args: py-build
+    PYTHONPATH="$(pwd)/{{build_dir}}py-debug/python" uv run --no-sync --with ipython ipython {{args}}
 
 # Regenerate the committed test fixtures (see tests/fixtures/README.md)
 fixtures:

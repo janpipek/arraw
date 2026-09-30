@@ -5,6 +5,13 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(ARRAW_BUILD_TESTS "Build the arraw test suite" ON)
+option(ARRAW_BUILD_APPS "Build the GUI, the command line and the GPU module" ON)
+option(ARRAW_BUILD_PYTHON "Build the Python extension module" OFF)
+
+if(ARRAW_BUILD_TESTS AND NOT ARRAW_BUILD_APPS)
+    message(FATAL_ERROR "ARRAW_BUILD_TESTS needs the applications (arraw-gpu, arraw-cli-core, "
+            "arraw-cli, arraw-headless-platform): set ARRAW_BUILD_APPS=ON or ARRAW_BUILD_TESTS=OFF.")
+endif()
 
 function(arraw_enable_warnings target)
     if(MSVC)
@@ -122,6 +129,8 @@ add_library(arraw STATIC
         include/EditSession.h
         include/Photo.h
         src/core/Photo.cpp
+        include/SettingDescriptors.h
+        src/core/SettingDescriptors.cpp
         src/core/ImageBuffer.cpp
         src/core/ImageExport.cpp
         include/ImageImport.h
@@ -130,6 +139,8 @@ add_library(arraw STATIC
         src/core/QtImage.h
         src/core/RawImport.cpp
         src/core/RawImport.h
+        src/core/SampleConversion.h
+        src/core/SampleConversion.cpp
 )
 add_library(arraw::arraw ALIAS arraw)
 arraw_enable_warnings(arraw)
@@ -148,6 +159,15 @@ target_link_libraries(arraw PRIVATE Qt6::Gui ${ARRAW_LIBRAW})
 # qt_standard_project_setup() turns AUTOMOC on globally; the engine has no Qt
 # types, so opting out keeps that honest (and saves a moc pass).
 set_target_properties(arraw PROPERTIES AUTOMOC OFF)
+# A Python extension module is a shared object, and the static library goes into it.
+if(ARRAW_BUILD_PYTHON)
+    set_target_properties(arraw PROPERTIES POSITION_INDEPENDENT_CODE ON)
+endif()
+
+# Everything from here to the tests is an application or belongs to one; the
+# Python module needs only the engine above. (Not indented, to keep the diff
+# and the blame of these blocks readable.)
+if(ARRAW_BUILD_APPS)
 
 # The one graphics device the library owns: an offscreen QRhi, and the textures
 # it mints as DeviceImages (ADR 015). Separate from the engine so that the only
@@ -158,9 +178,31 @@ add_library(arraw-gpu STATIC
         src/gpu/GpuContext.h
         src/gpu/GpuContext.cpp
         src/gpu/GpuDevice.h
-        src/gpu/GpuDevice.cpp)
+        src/gpu/GpuDevice.cpp
+        src/gpu/GpuDevelop.h
+        src/gpu/GpuDevelop.cpp
+        src/gpu/GpuPlan.h
+        src/gpu/GpuPlan.cpp)
 arraw_enable_warnings(arraw-gpu)
 target_include_directories(arraw-gpu PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/gpu)
+# The processing plan and checkpoint state are engine-private; the GPU packs its
+# uniforms from the one and builds the other.
+target_include_directories(arraw-gpu PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/core)
+# The passes' shaders, compiled at build time into .qsb resources, so a shader
+# that does not compile fails the build rather than the first render. GLSL
+# 440 sources; qsb adds SPIR-V for Vulkan and translates for the rest. The GLSL
+# targets start at ES 3.0 and 3.30, the first with texelFetch and uint.
+qt_add_shaders(arraw-gpu "arraw-shaders"
+        PREFIX "/arraw/shaders"
+        BASE src/gpu/shaders
+        GLSL "300es,330"
+        HLSL 50
+        MSL 12
+        FILES
+        src/gpu/shaders/fullscreen.vert
+        src/gpu/shaders/copy.frag
+        src/gpu/shaders/develop.frag
+        src/gpu/shaders/geometry.frag)
 target_link_libraries(arraw-gpu PUBLIC arraw PRIVATE Qt6::Gui Qt6::GuiPrivate)
 set_target_properties(arraw-gpu PROPERTIES AUTOMOC OFF)
 # QRhi declares its Vulkan backend only where vulkan/vulkan.h is visible, so a
@@ -239,6 +281,8 @@ add_library(arraw-cli-core STATIC
         src/cli/Cli.h
         src/cli/Command.cpp
         src/cli/Command.h
+        src/cli/DeviceChoice.cpp
+        src/cli/DeviceChoice.h
         src/cli/ExportCommand.cpp
         src/cli/ExportCommand.h
         src/cli/GpuTestCommand.cpp
@@ -246,7 +290,8 @@ add_library(arraw-cli-core STATIC
         src/cli/StreamDiagnostics.cpp
         src/cli/StreamDiagnostics.h)
 arraw_enable_warnings(arraw-cli-core)
-target_include_directories(arraw-cli-core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/cli)
+target_include_directories(arraw-cli-core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/cli
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/core)
 # Qt Core only: the command line needs QCommandLineParser and an application
 # instance (QCoreApplication or QGuiApplication, see arraw-cli below) for codec
 # plugin paths. The GPU probe reaches a device
@@ -265,6 +310,12 @@ target_link_libraries(arraw-cli PRIVATE arraw-cli-core Qt6::Core Qt6::Gui)
 arraw_deploy_qt_plugins(arraw-cli)
 if(TARGET arraw-headless-platform)
     target_link_libraries(arraw-cli PRIVATE arraw-headless-platform)
+endif()
+
+endif() # ARRAW_BUILD_APPS
+
+if(ARRAW_BUILD_PYTHON)
+    add_subdirectory(src/python)
 endif()
 
 if(ARRAW_BUILD_TESTS)

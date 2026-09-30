@@ -2,6 +2,10 @@
 
 #include "Cli.h"
 #include "Command.h"
+#include "DeviceChoice.h"
+#include "GpuContext.h"
+#include "GpuDevelop.h"
+#include "ProcessingPlan.h"
 #include "StreamDiagnostics.h"
 
 #include <Develop.h>
@@ -10,6 +14,7 @@
 #include <ImageExport.h>
 #include <ImageImport.h>
 #include <Photo.h>
+#include <SettingDescriptors.h>
 #include <WhiteBalance.h>
 
 #include <QCommandLineParser>
@@ -19,11 +24,14 @@
 #include <cmath>
 #include <exception>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <ostream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
+#include <variant>
 #include <vector>
 
 using namespace arraw;
@@ -38,6 +46,12 @@ void cli::setRotationAngle(GeometrySettings& geometry, double degrees) {
                                       QuarterTurn::Clockwise180, QuarterTurn::Clockwise270};
     geometry.rotation = rotations[(turns % 4 + 4) % 4];
     geometry.straighten = wrapped - static_cast<double>(turns) * 90.0;
+}
+
+bool cli::isRangedFloatSetting(const FieldDescriptor& descriptor) {
+    return descriptor.range &&
+           (std::holds_alternative<float& (*)(DevelopSettings&)>(descriptor.member) ||
+            std::holds_alternative<std::optional<float>& (*)(DevelopSettings&)>(descriptor.member));
 }
 
 namespace {
@@ -62,6 +76,9 @@ struct ExportRequest {
     ImageFileFormat format = ImageFileFormat::Jpeg;
     DevelopSettings settings;
     ExportOptions options;
+    cli::DeviceChoice device;
+    GpuBackend backend = defaultGpuBackend();
+    bool allowSoftware = false;
     bool overwrite = false;
     bool quiet = false;
     cli::LogFormat logFormat = cli::LogFormat::Text;
@@ -86,30 +103,97 @@ bool readInteger(const QCommandLineParser& parser, const char* name, int& value)
     return valid;
 }
 
-/// @brief Reads a named option as a number within its modelled range.
+/// @brief Help wording of one ranged setting; its name and limits come from the descriptor table.
+struct SettingHelp {
+    std::string_view key;
+    const char* valueName;
+    const char* description;
+    const char* note;
+};
+
+/// @brief Help wording for the ranged settings, keyed like ::arraw::developSettingDescriptors.
+constexpr SettingHelp settingHelp[]{
+    {"exposure", "stops", "Exposure adjustment in EV", ""},
+    {"contrast", "amount", "Contrast", ""},
+    {"shadows", "amount", "Lift or deepen the dark tones", ""},
+    {"highlights", "amount", "Recover or raise the bright tones", ""},
+    {"blacks", "amount", "Move the black point", ""},
+    {"whites", "amount", "Move the white point", ""},
+    {"temperature", "k", "White balance in kelvin", " RAW only."},
+    {"tint", "amount", "Green to magenta", " RAW only."},
+    {"filmicHighlights", "amount", "Highlight roll-off", " Default: 25."},
+};
+
+/// @brief Finds the help wording of a setting.
+const SettingHelp* helpFor(std::string_view key) {
+    for (const SettingHelp& help : settingHelp) {
+        if (help.key == key) {
+            return &help;
+        }
+    }
+    return nullptr;
+}
+
+/// @brief Spells a camelCase key as a command-line option name.
+std::string optionName(std::string_view key) {
+    std::string name;
+    for (const char c : key) {
+        if (c >= 'A' && c <= 'Z') {
+            name += '-';
+            name += static_cast<char>(c - 'A' + 'a');
+        } else {
+            name += c;
+        }
+    }
+    return name;
+}
+
+/// @brief Whether a row is a plain number setting that gets an option of its own.
+bool isNumericOption(const FieldDescriptor& descriptor) {
+    return cli::isRangedFloatSetting(descriptor) && helpFor(descriptor.key);
+}
+
+/// @brief Spells a limit the way the help and the errors show it.
+std::string limit(double value) {
+    return QString::number(value).toStdString();
+}
+
+/// @brief Reads every numeric setting option into the settings.
 ///
-/// Out of range is refused rather than clamped: a photographer is present to
-/// be told, and nothing invalid should enter a session (ADR 008). The renderer
-/// clamps as well, for values that arrive from a file instead.
-/// @return `true` if the option was absent or acceptable; `false` otherwise.
-bool readSetting(const QCommandLineParser& parser, const char* name, float lowest, float highest,
-                 std::optional<float>& value, std::ostream& err, int& code) {
-    if (!parser.isSet(name)) {
-        return true;
+/// Names and limits come from ::arraw::developSettingDescriptors. Out of range
+/// is refused rather than clamped: a photographer is present to be told, and
+/// nothing invalid should enter a session (ADR 008). The renderer clamps as
+/// well, for values that arrive from a file instead.
+/// @return `true` if every option present was acceptable; `false` otherwise.
+bool readSettings(const QCommandLineParser& parser, DevelopSettings& settings, std::ostream& err,
+                  int& code) {
+    for (const FieldDescriptor& descriptor : developSettingDescriptors) {
+        if (!isNumericOption(descriptor)) {
+            continue;
+        }
+        const std::string name = optionName(descriptor.key);
+        if (!parser.isSet(QString::fromStdString(name))) {
+            continue;
+        }
+        bool valid = false;
+        const float parsed = parser.value(QString::fromStdString(name)).toFloat(&valid);
+        if (!valid || !std::isfinite(parsed)) {
+            code = usageError(err, "--" + name + " takes a finite number");
+            return false;
+        }
+        if (parsed < descriptor.range->minimum || parsed > descriptor.range->maximum) {
+            code = usageError(err, "--" + name + " accepts " + limit(descriptor.range->minimum) +
+                                       " to " + limit(descriptor.range->maximum));
+            return false;
+        }
+        visitField(descriptor, settings, [&](auto& field) {
+            if constexpr (std::is_same_v<std::remove_cvref_t<decltype(field)>, float> ||
+                          std::is_same_v<std::remove_cvref_t<decltype(field)>,
+                                         std::optional<float>>) {
+                field = parsed;
+            }
+        });
     }
-    bool valid = false;
-    const float parsed = parser.value(name).toFloat(&valid);
-    if (!valid || !std::isfinite(parsed)) {
-        code = usageError(err, std::string("--") + name + " takes a finite number");
-        return false;
-    }
-    if (parsed < lowest || parsed > highest) {
-        code = usageError(err, std::string("--") + name + " accepts " +
-                                   QString::number(lowest).toStdString() + " to " +
-                                   QString::number(highest).toStdString());
-        return false;
-    }
-    value = parsed;
     return true;
 }
 
@@ -195,24 +279,37 @@ void configure(QCommandLineParser& parser) {
         "captured, save for a gentle roll-off that bends the brightest values toward\n"
         "white instead of clipping them flat; --filmic-highlights 0 turns it off.\n"
         "Camera orientation is honoured. Rotation, flips and cropping are applied\n"
-        "after colour and tone; crops always stay inside valid image content.");
+        "after colour and tone; crops always stay inside valid image content.\n"
+        "\n"
+        "Development runs on the GPU when there is one, unless --device cpu is given or\n"
+        "ARRAW_DISABLE_GPU is set to a value other than 0. Without --device gpu, a GPU\n"
+        "that cannot be used, or is only a software rasteriser, is reported once and the\n"
+        "batch runs on the CPU; a photograph the GPU fails on is retried there. With\n"
+        "--device gpu nothing falls back, and ARRAW_DISABLE_GPU is a usage error.\n"
+        "--gpu-backend opengl with --device auto is --device gpu, since OpenGL needs a\n"
+        "display's platform and a process cannot fall back from one that will not load.\n"
+        "--device gpuN is --device gpu on the N-th adapter the --gpu-backend lists,\n"
+        "counting from 0; `arraw-cli gpu-test` shows the numbers.");
     parser.addHelpOption();
     parser.addOption({{"o", "output"}, "Existing directory to write into.", "dir"});
     parser.addOption({"format", "png, jpeg, or tiff. Default: jpeg.", "name"});
     parser.addOption({"quality", "JPEG quality, 0-100. Default: 90.", "value"});
     parser.addOption({"bit-depth", "8 or 16. Default: 8.", "value"});
     parser.addOption({"encoding", "srgb, display-p3, or adobe-rgb. Default: srgb.", "name"});
-    parser.addOption({"exposure", "Exposure adjustment in EV, -5 to 5.", "stops"});
-    parser.addOption({"contrast", "Contrast, -100 to 100.", "amount"});
-    parser.addOption({"shadows", "Lift or deepen the dark tones, -100 to 100.", "amount"});
-    parser.addOption({"highlights", "Recover or raise the bright tones, -100 to 100.", "amount"});
-    parser.addOption({"blacks", "Move the black point, -100 to 100.", "amount"});
-    parser.addOption({"whites", "Move the white point, -100 to 100.", "amount"});
-    parser.addOption({"temperature", "White balance in kelvin, 2000 to 12000. RAW only.", "k"});
-    parser.addOption({"tint", "Green to magenta, -150 to 150. RAW only.", "amount"});
+    for (const FieldDescriptor& descriptor : developSettingDescriptors) {
+        if (!isNumericOption(descriptor)) {
+            continue;
+        }
+        const SettingHelp& help = *helpFor(descriptor.key);
+        parser.addOption({QString::fromStdString(optionName(descriptor.key)),
+                          QString::fromUtf8(help.description) + ", " +
+                              QString::fromStdString(limit(descriptor.range->minimum) + " to " +
+                                                     limit(descriptor.range->maximum)) +
+                              "." + QString::fromUtf8(help.note),
+                          help.valueName});
+    }
     parser.addOption(
         {"white-balance", "as-shot or custom. Temperature/tint imply custom.", "mode"});
-    parser.addOption({"filmic-highlights", "Highlight roll-off, 0 to 100. Default: 25.", "amount"});
     parser.addOption(
         {"rotate", "Any finite clockwise angle, before flips. Default: 0.", "degrees"});
     parser.addOption({"flip-horizontal", "Flip horizontally in the upright frame."});
@@ -221,6 +318,19 @@ void configure(QCommandLineParser& parser) {
         {"crop", "auto or normalised upright left,top,right,bottom. Default: auto.", "rectangle"});
     parser.addOption(
         {"crop-aspect", "free, original, or width:height (3:2, 2:3). Default: free.", "aspect"});
+    parser.addOption({"device",
+                      "auto, cpu, gpu, or gpuN. Auto uses the GPU when it can and says so when "
+                      "it cannot; gpu never falls back; gpuN is gpu on the backend's N-th "
+                      "adapter, counting from 0. With --gpu-backend opengl, auto is gpu. "
+                      "Default: auto.",
+                      "name"});
+    parser.addOption({"gpu-backend",
+                      "vulkan, opengl, d3d11, d3d12, or metal. Default: " +
+                          QString::fromUtf8(gpuBackendName(defaultGpuBackend()).data()) +
+                          ". Only opengl, on Linux, uses the platform QT_QPA_PLATFORM names "
+                          "(xcb or wayland); the others need no display.",
+                      "name"});
+    parser.addOption({"allow-software", "Accept a software rasteriser, such as llvmpipe or WARP."});
     parser.addOption({"no-profile", "Convert colour but do not embed the output profile."});
     parser.addOption({"overwrite", "Replace outputs that already exist."});
     parser.addOption({{"q", "quiet"}, "Do not report each file as it is written."});
@@ -298,39 +408,9 @@ std::optional<ExportRequest> buildRequest(const QCommandLineParser& parser, std:
         return std::nullopt;
     }
 
-    std::optional<float> exposure;
-    std::optional<float> contrast;
-    std::optional<float> shadows;
-    std::optional<float> highlights;
-    std::optional<float> blacks;
-    std::optional<float> whites;
-    std::optional<float> filmicHighlights;
-    if (!readSetting(parser, "contrast", flattestContrast, steepestContrast, contrast, err, code) ||
-        !readSetting(parser, "shadows", weakestToneControl, strongestToneControl, shadows, err,
-                     code) ||
-        !readSetting(parser, "highlights", weakestToneControl, strongestToneControl, highlights,
-                     err, code) ||
-        !readSetting(parser, "blacks", weakestToneControl, strongestToneControl, blacks, err,
-                     code) ||
-        !readSetting(parser, "whites", weakestToneControl, strongestToneControl, whites, err,
-                     code) ||
-        !readSetting(parser, "filmic-highlights", noFilmicHighlights, fullFilmicHighlights,
-                     filmicHighlights, err, code) ||
-        !readSetting(parser, "exposure", darkestExposure, brightestExposure, exposure, err, code) ||
-        !readSetting(parser, "temperature", warmestKelvin, coolestKelvin,
-                     request.settings.color.temperature, err, code) ||
-        !readSetting(parser, "tint", -tintLimit, tintLimit, request.settings.color.tint, err,
-                     code)) {
+    if (!readSettings(parser, request.settings, err, code)) {
         return std::nullopt;
     }
-    request.settings.tone.exposure = exposure.value_or(0.0F);
-    request.settings.tone.contrast = contrast.value_or(0.0F);
-    request.settings.tone.shadows = shadows.value_or(0.0F);
-    request.settings.tone.highlights = highlights.value_or(0.0F);
-    request.settings.tone.blacks = blacks.value_or(0.0F);
-    request.settings.tone.whites = whites.value_or(0.0F);
-    request.settings.tone.filmicHighlights =
-        filmicHighlights.value_or(request.settings.tone.filmicHighlights);
     // Naming either half of a white balance is asking for a custom one; the
     // half left unnamed stays as the camera recorded it.
     if (request.settings.color.temperature.has_value() || request.settings.color.tint.has_value()) {
@@ -356,6 +436,45 @@ std::optional<ExportRequest> buildRequest(const QCommandLineParser& parser, std:
         return std::nullopt;
     }
 
+    if (parser.isSet("device")) {
+        const auto device = cli::parseDeviceChoice(parser.value("device").toStdString());
+        if (!device) {
+            code = usageError(err, "unknown device '" + parser.value("device").toStdString() +
+                                       "'; expected " + cli::deviceChoices());
+            return std::nullopt;
+        }
+        request.device = *device;
+    }
+    if (parser.isSet("gpu-backend")) {
+        const auto name = parser.value("gpu-backend").toLower().toStdString();
+        const auto backend = parseGpuBackend(name);
+        if (!backend) {
+            code = usageError(err, "unknown backend '" + name +
+                                       "'; expected vulkan, opengl, d3d11, d3d12, or metal");
+            return std::nullopt;
+        }
+        request.backend = *backend;
+    }
+    request.allowSoftware = parser.isSet("allow-software");
+    // OpenGL needs a display server's Qt platform, and Qt aborts the process
+    // when that cannot load, so auto's promise of a CPU fallback cannot be kept.
+    // Asking for OpenGL is taken as asking for the GPU: from here on the request
+    // is `gpu`, and every rule that follows is the one `gpu` already has.
+    const bool openGlImpliesGpu =
+        request.device.kind == cli::DeviceKind::Auto && request.backend == GpuBackend::OpenGL;
+    if (openGlImpliesGpu) {
+        request.device.kind = cli::DeviceKind::Gpu;
+    }
+    if (request.device.kind == cli::DeviceKind::Gpu && cli::gpuDisabled()) {
+        const std::string asked = openGlImpliesGpu
+                                      ? "--gpu-backend opengl, which is --device gpu,"
+                                      : "--device " + parser.value("device").toStdString();
+        code = usageError(err, asked + " cannot be used while " +
+                                   std::string(cli::disableGpuVariable) +
+                                   " is set; unset it, or set it to 0");
+        return std::nullopt;
+    }
+
     const auto logFormat = cli::readLogFormat(parser, "export", err, code);
     if (!logFormat) {
         return std::nullopt;
@@ -368,10 +487,80 @@ std::optional<ExportRequest> buildRequest(const QCommandLineParser& parser, std:
     return request;
 }
 
+/// @brief Whether the request develops on the CPU without ever looking for a GPU.
+bool cpuOnly(const ExportRequest& request) {
+    return request.device.kind == cli::DeviceKind::Cpu ||
+           (request.device.kind == cli::DeviceKind::Auto && cli::gpuDisabled());
+}
+
+/// @brief Creates the batch's one GPU context, or says why there is none.
+/// @param request What was asked for.
+/// @param problem Receives the reason when the result is empty.
+/// @return The context, or an empty pointer.
+std::unique_ptr<GpuContext> createContext(const ExportRequest& request, std::string& problem) {
+    std::unique_ptr<GpuContext> context;
+    try {
+        context = std::make_unique<GpuContext>(request.backend, request.device.adapter);
+    } catch (const std::exception& failure) {
+        problem = failure.what();
+        return nullptr;
+    }
+    if (context->info().kind == GpuDeviceKind::Software && !request.allowSoftware) {
+        problem = describe(
+            {.notice = Notice::GpuSoftwareRefused, .values = {context->info().deviceName}});
+        return nullptr;
+    }
+    return context;
+}
+
+/// @brief Develops one decoded photograph on the device and returns it on the host.
+///
+/// Every device image, the checkpoint included, is gone before this returns,
+/// so the context can be destroyed whenever its owner likes.
+ImageBuffer developOnDevice(GpuContext& context, const ImageBuffer& source,
+                            const DevelopSettings& settings) {
+    const RenderCheckpoint checkpoint = developOnGpu(context, source, settings);
+    return checkpoint.readBack();
+}
+
 /// @brief Exports every input, continuing past the ones that fail.
 int exportAll(const ExportRequest& request, std::ostream& err) {
     cli::StreamDiagnostics log(err, request.logFormat, request.quiet);
     std::size_t failures = 0;
+
+    // One device for the batch, created here on the main thread and destroyed
+    // on it after the last input: no device image outlives an iteration.
+    std::unique_ptr<GpuContext> context;
+    if (cpuOnly(request)) {
+        if (request.device.kind == cli::DeviceKind::Auto) {
+            log.record({.notice = Notice::GpuFallback,
+                        .severity = Severity::Warning,
+                        .values = {describe({.notice = Notice::GpuDisabled,
+                                             .values = {std::string(cli::disableGpuVariable)}})}});
+        }
+    } else {
+        std::string problem;
+        context = createContext(request, problem);
+        if (!context) {
+            if (request.device.kind == cli::DeviceKind::Gpu) {
+                log.record({.notice = Notice::GpuFailed,
+                            .severity = Severity::Error,
+                            .values = {problem}});
+                return cli::Failed;
+            }
+            log.record({.notice = Notice::GpuFallback,
+                        .severity = Severity::Warning,
+                        .values = {problem}});
+        }
+    }
+    if (context) {
+        log.record({.notice = Notice::GpuUsed,
+                    .severity = Severity::Info,
+                    .values = {std::string(gpuBackendName(context->info().backend)),
+                               context->info().deviceName}});
+    } else {
+        log.record({.notice = Notice::CpuUsed, .severity = Severity::Info});
+    }
 
     for (const auto& input : request.inputs) {
         const auto destination =
@@ -392,7 +581,42 @@ int exportAll(const ExportRequest& request, std::ostream& err) {
             // are another snapshot of it, and the file on disk is untouched
             // (ADR 012). The decode is then not asked to repeat the warning.
             const Photo photo = openPhoto(input, log).with(request.settings);
-            exportImage(develop(loadImage(input), photo.settings()), destination, request.options);
+            // Decoded once, before the device is involved: a file that cannot be
+            // read is the input's failure, whichever device would have developed it.
+            const ImageBuffer source = loadImage(input);
+            // Planned on the host for the same reason: settings the plan rejects
+            // (std::invalid_argument) fail the input on either device. What the
+            // device is then blamed for is developOnGpu and readBack alone, so
+            // any exception from them, an image larger than the device's
+            // textures included, means "the GPU could not".
+            (void)planFor(source, photo.settings());
+            std::optional<ImageBuffer> developed;
+            if (context) {
+                try {
+                    developed = developOnDevice(*context, source, photo.settings());
+                } catch (const std::exception& failure) {
+                    if (request.device.kind == cli::DeviceKind::Gpu) {
+                        throw;
+                    }
+                    const bool lost = context->lost();
+                    std::string reason = failure.what();
+                    if (lost) {
+                        reason += " (the device is lost, so the rest of the batch is exported "
+                                  "on the CPU)";
+                    }
+                    log.record({.notice = Notice::GpuFallback,
+                                .severity = Severity::Warning,
+                                .subject = input,
+                                .values = {reason}});
+                    if (lost) {
+                        context.reset();
+                    }
+                }
+            }
+            if (!developed) {
+                developed = develop(source, photo.settings());
+            }
+            exportImage(*developed, destination, request.options);
             log.record({.notice = Notice::Exported,
                         .severity = Severity::Info,
                         .subject = input,
@@ -441,8 +665,16 @@ int cli::runExportCommand(const QStringList& arguments, std::ostream& out, std::
     if (!request) {
         return code;
     }
-    // Qt Core alone: the image codecs beyond PNG are plugins, found through an
-    // application, and an export touches no graphics device.
-    start(ApplicationKind::Core);
+    // Qt Core alone when no GPU will be looked for: the image codecs beyond PNG
+    // are plugins, found through an application, and a CPU export touches no
+    // graphics device. Otherwise the GUI application a device is created through.
+    // Only OpenGL needs a display server's platform; every other backend is
+    // reached through the headless one, whatever QT_QPA_PLATFORM says.
+    if (cpuOnly(*request)) {
+        start(ApplicationKind::Core);
+    } else {
+        start(request->backend == GpuBackend::OpenGL ? ApplicationKind::Gui
+                                                     : ApplicationKind::OffscreenDevice);
+    }
     return exportAll(*request, err);
 }

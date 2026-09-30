@@ -32,6 +32,8 @@ std::string nameOf(Notice notice) {
         return "gpu_software_refused";
     case Notice::GpuSoftwareAccepted:
         return "gpu_software_accepted";
+    case Notice::GpuAdapterSkipped:
+        return "gpu_adapter_skipped";
     case Notice::GpuNoFloatTextures:
         return "gpu_no_float_textures";
     case Notice::GpuReadBackNotPromised:
@@ -44,6 +46,12 @@ std::string nameOf(Notice notice) {
         return "gpu_round_trip_changed";
     case Notice::GpuDisabled:
         return "gpu_disabled";
+    case Notice::GpuUsed:
+        return "gpu_used";
+    case Notice::CpuUsed:
+        return "cpu_used";
+    case Notice::GpuFallback:
+        return "gpu_fallback";
     }
     return "unknown";
 }

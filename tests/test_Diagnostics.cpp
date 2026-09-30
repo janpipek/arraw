@@ -78,6 +78,12 @@ TEST_CASE("The GPU probe's notices say what went wrong with the device", "[diagn
     REQUIRE(describe(refused) ==
             "'llvmpipe' is a software rasteriser, not a GPU; pass --allow-software to accept it");
 
+    const Diagnostic skipped{.notice = Notice::GpuAdapterSkipped,
+                             .severity = Severity::Warning,
+                             .values = {std::string("gpu1"), std::string("llvmpipe")}};
+    REQUIRE(describe(skipped) == "gpu1 ('llvmpipe') is a software rasteriser, so it was not "
+                                 "tested; pass --allow-software to test it");
+
     const Diagnostic disabled{.notice = Notice::GpuDisabled,
                               .severity = Severity::Error,
                               .values = {std::string("ARRAW_DISABLE_GPU")}};

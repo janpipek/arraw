@@ -1,29 +1,19 @@
 #include "Develop.h"
 
 #include "ProcessingPlan.h"
+#include "SampleConversion.h"
 
 #include <WhiteBalance.h>
 
 #include <array>
 #include <cmath>
 #include <cstdint>
-#include <limits>
 #include <stdexcept>
-#include <type_traits>
 #include <variant>
 
 using namespace arraw;
 
 namespace {
-
-/// @brief Converts one stored sample to the unit range development works in.
-template <typename Sample> constexpr float toUnit(Sample value) {
-    if constexpr (std::is_same_v<Sample, float>) {
-        return value;
-    } else {
-        return static_cast<float>(value) / static_cast<float>(std::numeric_limits<Sample>::max());
-    }
-}
 
 /// @brief Runs the pointwise chain over every pixel of one layout.
 ///

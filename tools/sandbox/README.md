@@ -57,6 +57,9 @@ sudo setsebool -P container_use_devices on
   `podman unshare rm -rf OUT/.work`.
 - `just test-lavapipe` pins the software Vulkan driver when a GPU is passed
   through.
+- The GPU suite runs on OpenGL (Mesa llvmpipe) under the image's virtual X
+  server, with no display or `--gpu` needed:
+  `ARRAW_TEST_GPU_BACKEND=opengl QT_QPA_PLATFORM=xcb xvfb-run build/container-debug/tests/arraw-gpu-tests`.
 
 ## Trust boundary
 

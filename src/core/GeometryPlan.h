@@ -41,6 +41,13 @@ struct GeometryPlan {
     /// @brief Maps an upright edge position back to decoded coordinates.
     [[nodiscard]] SourcePoint toSource(UprightPoint point) const;
 
+    /// @brief Whether this geometry leaves pixels exactly where they are.
+    ///
+    /// No rotation, flip or crop: the condition under which a backend skips
+    /// its resample, shared so that the CPU and the GPU cannot disagree about
+    /// when one happens.
+    [[nodiscard]] bool isIdentity() const noexcept;
+
     friend bool operator==(const GeometryPlan&, const GeometryPlan&) = default;
 };
 

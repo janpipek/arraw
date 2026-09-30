@@ -160,6 +160,9 @@ std::uint32_t rasterExtent(double extent) {
 }
 
 /// @brief Interpolates in premultiplied alpha, returning straight RGBA.
+///
+/// The GPU's `src/gpu/shaders/geometry.frag` mirrors this function, snapping
+/// and weights included; change them together.
 std::array<float, 4> sample(const ImageBuffer& source, SourcePoint position) {
     const auto centreCoordinate = [](double edge, std::uint32_t length) {
         double value = std::clamp(edge - 0.5, 0.0, length - 1.0);
@@ -219,6 +222,11 @@ SourcePoint GeometryPlan::toSource(UprightPoint point) const {
     // Orthogonal transforms invert by transposition, including reflections.
     return {matrix[0] * x + matrix[2] * y + sourceSize.width / 2.0,
             matrix[1] * x + matrix[3] * y + sourceSize.height / 2.0};
+}
+
+bool GeometryPlan::isIdentity() const noexcept {
+    return matrix == Matrix{1, 0, 0, 1} && left == 0 && top == 0 && width == sourceSize.width &&
+           height == sourceSize.height;
 }
 
 GeometryPlan arraw::geometryPlanFor(ImageSize size, ImageOrientation orientation,
@@ -284,13 +292,14 @@ GeometryPlan arraw::geometryPlanFor(ImageSize size, ImageOrientation orientation
     return plan;
 }
 
+/// The GPU's `src/gpu/shaders/geometry.frag` mirrors this resample through
+/// `packGeometry` (GpuPlan.cpp), which composes the per-pixel position below into
+/// one affine map; a change to the mapping here changes both.
 ImageBuffer arraw::applyGeometry(ImageBuffer source, const GeometryPlan& plan) {
     if (source.size() != plan.sourceSize || source.format() != workingFormat) {
         throw std::invalid_argument("Geometry requires matching developed float pixels");
     }
-    if (source.orientation() == ImageOrientation::Normal && plan.matrix == Matrix{1, 0, 0, 1} &&
-        plan.left == 0 && plan.top == 0 && plan.width == plan.sourceSize.width &&
-        plan.height == plan.sourceSize.height) {
+    if (source.orientation() == ImageOrientation::Normal && plan.isIdentity()) {
         return source;
     }
     ImageBuffer result(plan.outputSize, workingFormat, source.encoding());

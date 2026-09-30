@@ -16,6 +16,20 @@ names that as a thing to separate: photographic values are the model, and
 slider ranges, display precision and localised text are presentation derived
 from it.
 
+> **Note (2026-09-30).** The table exists (`include/SettingDescriptors.h`), and
+> the shape above is ahead of it in two ways. `DevelopSettings` is nested
+> (`tone`, `color`, `geometry` with its `crop`), so a row cannot hold a
+> `float DevelopSettings::*`; it holds a `SettingAccessor`, a variant of function
+> pointers `T& (*)(DevelopSettings&)` produced by captureless lambdas, one
+> alternative per leaf type. The table has one row per leaf, keyed by the
+> leaf's camelCase name; `range` is optional (absent for booleans,
+> enumerations and the crop rows, whose limits stay in `GeometryPlan`) and
+> `affects` is the checkpoint `Stage`. Reading through a const settings object
+> goes through one `visitField` overload, the only `const_cast`. `validate`
+> throws `std::invalid_argument` and `Photo`'s constructor calls it. No
+> compiler we build with has reflection, so the drift guard is a test that
+> counts each struct's fields and writes a sentinel through every row.
+
 ## Decision
 
 **Settings are plain values in an aggregate**, and a `constexpr` table beside
@@ -32,8 +46,8 @@ struct DevelopSettings {
 
 struct FieldDescriptor {
     std::string_view key;
-    Member member;      ///< Variant over `float DevelopSettings::*` and friends.
-    Range range;
+    SettingAccessor member;  ///< Variant over `float DevelopSettings::*` and friends.
+    SettingRange range;
     Group group;
     Applicability applies;
     Stage affects;
@@ -51,7 +65,7 @@ stay ordinary floats — addressable, trivially copyable, and laid out the way a
 GPU uniform block will want them.
 
 **The alternatives, and why not.** Self-describing fields
-(`Setting<float, "Exposure2012", Range{-5, 5}>`, using C++20 class-type
+(`Setting<float, "Exposure2012", SettingRange{-5, 5}>`, using C++20 class-type
 template parameters) make drift impossible but stop `settings.exposure` being a
 float, and still need something to enumerate the members. Generating the struct
 and the table from one list removes the duplication entirely and is the likely

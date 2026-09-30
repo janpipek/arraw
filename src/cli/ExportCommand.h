@@ -3,6 +3,7 @@
 #include "Cli.h"
 
 #include <GeometrySettings.h>
+#include <SettingDescriptors.h>
 
 #include <QtCore/qcontainerfwd.h>
 
@@ -15,6 +16,12 @@ namespace arraw::cli {
 /// @param degrees Finite clockwise angle relative to camera orientation, before flips.
 /// @throws std::invalid_argument if the angle is not finite.
 void setRotationAngle(GeometrySettings& geometry, double degrees);
+
+/// @brief Tell whether a row is a ranged float setting, which export offers as an option.
+///
+/// Such a row needs help wording in the export command; a test holds the table to it.
+/// @param descriptor Row of ::arraw::developSettingDescriptors.
+[[nodiscard]] bool isRangedFloatSetting(const FieldDescriptor& descriptor);
 
 /// @brief Renders images and writes them out.
 ///

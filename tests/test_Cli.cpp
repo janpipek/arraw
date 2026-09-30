@@ -1,5 +1,6 @@
 #include "Cli.h"
 #include "Command.h"
+#include "DeviceChoice.h"
 #include "ExportCommand.h"
 #include "support/Fixtures.h"
 #include "support/TempDir.h"
@@ -19,6 +20,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -142,6 +144,29 @@ TEST_CASE("A command's help carries its own options", "[cli]") {
     REQUIRE_THAT(result.out, ContainsSubstring("--overwrite"));
     REQUIRE_THAT(result.out, ContainsSubstring("export <input>..."));
     REQUIRE(result.err.empty());
+}
+
+TEST_CASE("Every ranged float setting is an export option", "[cli]") {
+    const auto result = invoke({"export", "--help"});
+    REQUIRE(result.code == cli::Success);
+
+    for (const FieldDescriptor& descriptor : developSettingDescriptors) {
+        if (!cli::isRangedFloatSetting(descriptor)) {
+            continue;
+        }
+        std::string option = "--";
+        for (const char c : std::string_view(descriptor.key)) {
+            if (c >= 'A' && c <= 'Z') {
+                option += '-';
+                option += static_cast<char>(c - 'A' + 'a');
+            } else {
+                option += c;
+            }
+        }
+        CAPTURE(descriptor.key, option);
+        // A row without help wording in the export command gets no option.
+        REQUIRE_THAT(result.out, ContainsSubstring(option + " "));
+    }
 }
 
 TEST_CASE("The GPU probe is listed and carries its own help", "[cli][gpu]") {
@@ -344,8 +369,8 @@ TEST_CASE("A RAW exports through the same command", "[cli]") {
 TEST_CASE("Quiet suppresses the per-file report but not errors", "[cli]") {
     const test::TempDir directory;
 
-    const auto quiet = invoke(
-        {"export", test::fixture(card).string(), "-o", directory.path().string(), "--quiet"});
+    const auto quiet = invoke({"export", test::fixture(card).string(), "-o",
+                               directory.path().string(), "--quiet", "--device", "cpu"});
     REQUIRE(quiet.code == cli::Success);
     REQUIRE(quiet.err.empty());
 
@@ -702,7 +727,7 @@ TEST_CASE("A JSON log is one object per line, and nothing else", "[cli]") {
     const auto result =
         invoke({"export", test::fixture("linear-32x24-nowb.dng").string(),
                 (directory.path() / "absent.dng").string(), "-o", directory.path().string(),
-                "--format", "png", "--log-format", "json"});
+                "--format", "png", "--log-format", "json", "--device", "cpu"});
 
     REQUIRE(result.code == cli::Failed);
     std::istringstream lines(result.err);
@@ -716,12 +741,14 @@ TEST_CASE("A JSON log is one object per line, and nothing else", "[cli]") {
         REQUIRE(parsed.isObject());
         const auto object = parsed.object();
         REQUIRE(object.contains("notice"));
-        // A diagnostic about no particular photograph names none: the summary
-        // has no file, every other line has one.
-        REQUIRE(object.contains("file") == (object["notice"] != "batch_finished"));
+        // A diagnostic about no particular photograph names none: the batch's
+        // own lines have no file, every other line has one.
+        REQUIRE(object.contains("file") ==
+                (object["notice"] != "batch_finished" && object["notice"] != "cpu_used"));
         ++objects;
     }
-    REQUIRE(objects == 4); // the warning, the export, the failure, the summary
+    // the device, the warning, the export, the failure, the summary
+    REQUIRE(objects == 5);
 }
 
 TEST_CASE("An unknown log format is a usage error", "[cli]") {
@@ -753,10 +780,226 @@ TEST_CASE("Help and usage errors start no Qt application", "[cli]") {
 TEST_CASE("An export asks for a core application, once its arguments are good", "[cli]") {
     const test::TempDir directory;
     const auto input = writeRubbish(directory, "rubbish.png");
-    const auto result =
-        invoke({"export", input.string(), "-o", directory.path().string(), "--quiet"});
+    const auto result = invoke(
+        {"export", input.string(), "-o", directory.path().string(), "--quiet", "--device", "cpu"});
     REQUIRE(result.code == cli::Failed);
     REQUIRE(result.started == std::vector{cli::ApplicationKind::Core});
+}
+
+TEST_CASE("An export's application follows its device mode", "[cli][gpu]") {
+    const test::TempDir directory;
+    const auto input = test::fixture(card).string();
+    const auto output = directory.path().string();
+
+    struct Case {
+        const char* device;
+        const char* disabled;
+        cli::ApplicationKind kind;
+    };
+    const auto [device, disabled, kind] = GENERATE(
+        Case{"cpu", nullptr, cli::ApplicationKind::Core},
+        Case{"cpu", "1", cli::ApplicationKind::Core}, Case{"auto", "1", cli::ApplicationKind::Core},
+        Case{"auto", "0", cli::ApplicationKind::OffscreenDevice},
+        Case{"auto", nullptr, cli::ApplicationKind::OffscreenDevice},
+        Case{"gpu", nullptr, cli::ApplicationKind::OffscreenDevice});
+    CAPTURE(device, disabled);
+    const ScopedEnvironment environment(cli::disableGpuVariable, disabled);
+
+    const auto result =
+        invoke({"export", input, "-o", output, "--device", device, "--overwrite", "--quiet"});
+    REQUIRE(result.started == std::vector{kind});
+}
+
+TEST_CASE("Export asks for a display's platform only for OpenGL", "[cli][gpu]") {
+    const test::TempDir directory;
+    const ScopedEnvironment enabled(cli::disableGpuVariable, nullptr);
+    const auto opengl =
+        invoke({"export", test::fixture(card).string(), "-o", directory.path().string(),
+                "--gpu-backend", "opengl", "--overwrite", "--quiet"});
+    REQUIRE(opengl.started == std::vector{cli::ApplicationKind::Gui});
+}
+
+TEST_CASE("Export --gpu-backend opengl asks for the GPU whatever --device says", "[cli][gpu]") {
+    const test::TempDir directory;
+    const auto input = test::fixture(card).string();
+    const auto output = directory.path().string();
+
+    SECTION("Auto with the GPU disabled is a usage error that names opengl") {
+        const ScopedEnvironment disabled(cli::disableGpuVariable, "1");
+        const auto result = invoke({"export", input, "-o", output, "--gpu-backend", "opengl"});
+        REQUIRE(result.code == cli::UsageError);
+        REQUIRE_THAT(result.err, ContainsSubstring("--gpu-backend opengl"));
+        REQUIRE_THAT(result.err, ContainsSubstring("ARRAW_DISABLE_GPU"));
+        REQUIRE(result.started.empty());
+        REQUIRE(std::filesystem::is_empty(directory.path()));
+    }
+    SECTION("Auto with another backend still falls back") {
+        const ScopedEnvironment disabled(cli::disableGpuVariable, "1");
+        const auto result = invoke(
+            {"export", input, "-o", output, "--gpu-backend", "vulkan", "--overwrite", "--quiet"});
+        REQUIRE(result.code == cli::Success);
+        REQUIRE(result.started == std::vector{cli::ApplicationKind::Core});
+    }
+    SECTION("Cpu stays on the CPU, whatever the backend") {
+        const ScopedEnvironment disabled(cli::disableGpuVariable, "1");
+        const auto result = invoke({"export", input, "-o", output, "--device", "cpu",
+                                    "--gpu-backend", "opengl", "--overwrite", "--quiet"});
+        REQUIRE(result.code == cli::Success);
+        REQUIRE(result.started == std::vector{cli::ApplicationKind::Core});
+    }
+    SECTION("A GPU that cannot be made fails the export rather than falling back") {
+        // The suite's QCoreApplication has no platform plugin, so creation fails.
+        const ScopedEnvironment enabled(cli::disableGpuVariable, nullptr);
+        const auto result = invoke({"export", input, "-o", output, "--gpu-backend", "opengl",
+                                    "--overwrite", "--log-format", "json"});
+        REQUIRE(result.code == cli::Failed);
+        REQUIRE_THAT(result.err, ContainsSubstring("\"notice\":\"gpu_failed\""));
+        REQUIRE_THAT(result.err, !ContainsSubstring("gpu_fallback"));
+    }
+}
+
+TEST_CASE("The device options are validated before anything starts", "[cli][gpu]") {
+    const test::TempDir directory;
+    const auto input = test::fixture(card).string();
+    const auto output = directory.path().string();
+    const ScopedEnvironment environment(cli::disableGpuVariable, nullptr);
+
+    SECTION("An unknown device is named") {
+        const auto result = invoke({"export", input, "-o", output, "--device", "tpu"});
+        REQUIRE(result.code == cli::UsageError);
+        REQUIRE_THAT(result.err, ContainsSubstring("unknown device 'tpu'"));
+        REQUIRE(result.started.empty());
+    }
+    SECTION("An unknown backend is named") {
+        const auto result = invoke({"export", input, "-o", output, "--gpu-backend", "null"});
+        REQUIRE(result.code == cli::UsageError);
+        REQUIRE_THAT(result.err, ContainsSubstring("unknown backend 'null'"));
+        REQUIRE(result.started.empty());
+    }
+    SECTION("The known values parse") {
+        for (const char* device : {"auto", "gpu", "cpu", "GPU"}) {
+            for (const char* backend : {"vulkan", "opengl", "d3d11", "d3d12", "metal"}) {
+                CAPTURE(device, backend);
+                const auto result =
+                    invoke({"export", input, "-o", output, "--device", device, "--gpu-backend",
+                            backend, "--allow-software", "--overwrite", "--quiet"});
+                REQUIRE(result.code != cli::UsageError);
+            }
+        }
+    }
+    SECTION("The help describes the options") {
+        const auto help = invoke({"export", "--help"}).out;
+        REQUIRE_THAT(help, ContainsSubstring("--device"));
+        REQUIRE_THAT(help, ContainsSubstring("--gpu-backend"));
+        REQUIRE_THAT(help, ContainsSubstring("--allow-software"));
+    }
+}
+
+TEST_CASE("Export --device gpu with the GPU disabled is a usage error", "[cli][gpu]") {
+    const test::TempDir directory;
+    const ScopedEnvironment disabled(cli::disableGpuVariable, "1");
+
+    const auto result = invoke({"export", test::fixture(card).string(), "-o",
+                                directory.path().string(), "--device", "gpu"});
+
+    REQUIRE(result.code == cli::UsageError);
+    REQUIRE_THAT(result.err, ContainsSubstring("ARRAW_DISABLE_GPU"));
+    REQUIRE(result.started.empty());
+    REQUIRE(std::filesystem::is_empty(directory.path()));
+}
+
+TEST_CASE("Export --device auto with the GPU disabled exports on the CPU and says so once",
+          "[cli][gpu]") {
+    const test::TempDir directory;
+    const ScopedEnvironment disabled(cli::disableGpuVariable, "1");
+
+    const auto result = invoke({"export", test::fixture(card).string(), "-o",
+                                directory.path().string(), "--log-format", "json"});
+
+    REQUIRE(result.code == cli::Success);
+    REQUIRE(std::filesystem::exists(directory.file("testcard-61x41-srgb8.jpg")));
+    REQUIRE(result.started == std::vector{cli::ApplicationKind::Core});
+    REQUIRE_THAT(result.err, ContainsSubstring("\"notice\":\"gpu_fallback\""));
+    REQUIRE_THAT(result.err, ContainsSubstring("\"severity\":\"warning\""));
+    REQUIRE_THAT(result.err, ContainsSubstring("ARRAW_DISABLE_GPU"));
+    REQUIRE_THAT(result.err, ContainsSubstring("\"notice\":\"cpu_used\""));
+    REQUIRE_THAT(result.err, !ContainsSubstring("gpu_used"));
+}
+
+TEST_CASE("Export --device auto falls back to the CPU when no device can be made", "[cli][gpu]") {
+    /// The suite's QCoreApplication has no platform plugin, so creation fails.
+    const test::TempDir directory;
+    const ScopedEnvironment enabled(cli::disableGpuVariable, nullptr);
+    const auto input = test::fixture(card).string();
+
+    SECTION("in text, one warning then the device line") {
+        const auto result = invoke({"export", input, "-o", directory.path().string()});
+        REQUIRE(result.code == cli::Success);
+        REQUIRE(std::filesystem::exists(directory.file("testcard-61x41-srgb8.jpg")));
+        REQUIRE_THAT(result.err, StartsWith("warning: "));
+        REQUIRE_THAT(result.err, ContainsSubstring("exporting on the CPU instead"));
+        REQUIRE_THAT(result.err, ContainsSubstring("exporting on the CPU\n"));
+    }
+    SECTION("under --quiet only the warning remains") {
+        const auto result = invoke({"export", input, "-o", directory.path().string(), "--quiet"});
+        REQUIRE(result.code == cli::Success);
+        REQUIRE_THAT(result.err, StartsWith("warning: "));
+        REQUIRE_THAT(result.err, !ContainsSubstring("exporting on the CPU\n"));
+        REQUIRE_THAT(result.err, !ContainsSubstring("written to"));
+    }
+    SECTION("in JSON, both notices are structured") {
+        const auto result =
+            invoke({"export", input, "-o", directory.path().string(), "--log-format", "json"});
+        REQUIRE(result.code == cli::Success);
+        std::istringstream lines(result.err);
+        std::string line;
+        std::vector<std::string> notices;
+        while (std::getline(lines, line)) {
+            const auto parsed = QJsonDocument::fromJson(QByteArray::fromStdString(line));
+            REQUIRE(parsed.isObject());
+            notices.push_back(parsed.object()["notice"].toString().toStdString());
+        }
+        REQUIRE(notices == std::vector<std::string>{"gpu_fallback", "cpu_used", "exported"});
+    }
+}
+
+TEST_CASE("Export --device cpu says which device it used and never warns", "[cli][gpu]") {
+    const test::TempDir directory;
+    const auto result = invoke({"export", test::fixture(card).string(), "-o",
+                                directory.path().string(), "--device", "cpu"});
+    REQUIRE(result.code == cli::Success);
+    REQUIRE_THAT(result.err, StartsWith("exporting on the CPU\n"));
+    REQUIRE_THAT(result.err, !ContainsSubstring("warning"));
+}
+
+TEST_CASE("Export --device gpu without a usable device fails before any input", "[cli][gpu]") {
+    const test::TempDir directory;
+    const ScopedEnvironment enabled(cli::disableGpuVariable, nullptr);
+
+    const auto result =
+        invoke({"export", test::fixture(card).string(), "-o", directory.path().string(), "--device",
+                "gpu", "--log-format", "json"});
+
+    REQUIRE(result.code == cli::Failed);
+    REQUIRE(result.started == std::vector{cli::ApplicationKind::OffscreenDevice});
+    REQUIRE(std::filesystem::is_empty(directory.path()));
+    REQUIRE_THAT(result.err, ContainsSubstring("\"notice\":\"gpu_failed\""));
+    REQUIRE_THAT(result.err, !ContainsSubstring("\"notice\":\"exported\""));
+    REQUIRE_THAT(result.err, !ContainsSubstring("fallback"));
+}
+
+TEST_CASE("gpu-test takes --gpu-backend, and --backend as its alias", "[cli][gpu]") {
+    const ScopedEnvironment disabled(cli::disableGpuVariable, "1");
+    for (const char* name : {"--gpu-backend", "--backend"}) {
+        CAPTURE(name);
+        REQUIRE(invoke({"gpu-test", name, "vulkan", "--size", "1"}).code == cli::Failed);
+        const auto bad = invoke({"gpu-test", name, "nonsense"});
+        REQUIRE(bad.code == cli::UsageError);
+        REQUIRE_THAT(bad.err, ContainsSubstring("unknown backend 'nonsense'"));
+    }
+    const auto help = invoke({"gpu-test", "--help"}).out;
+    REQUIRE_THAT(help, ContainsSubstring("--gpu-backend"));
+    REQUIRE_THAT(help, ContainsSubstring("Alias of --gpu-backend"));
 }
 
 TEST_CASE("The GPU probe asks for a GUI application unless the GPU is off", "[cli][gpu]") {
@@ -814,4 +1057,83 @@ TEST_CASE("An unknown log format is a usage error for the GPU probe too", "[cli]
     REQUIRE(result.code == cli::UsageError);
     REQUIRE_THAT(result.err, ContainsSubstring("'yaml'"));
     REQUIRE(result.started.empty());
+}
+
+TEST_CASE("A device choice is auto, cpu, gpu, or gpu and a number, in any case", "[cli][gpu]") {
+    using cli::DeviceKind;
+    using Choice = cli::DeviceChoice;
+
+    REQUIRE(cli::parseDeviceChoice("auto") == Choice{DeviceKind::Auto, std::nullopt});
+    REQUIRE(cli::parseDeviceChoice("CPU") == Choice{DeviceKind::Cpu, std::nullopt});
+    REQUIRE(cli::parseDeviceChoice("gpu") == Choice{DeviceKind::Gpu, std::nullopt});
+    REQUIRE(cli::parseDeviceChoice("GPU") == Choice{DeviceKind::Gpu, std::nullopt});
+    REQUIRE(cli::parseDeviceChoice("gpu0") == Choice{DeviceKind::Gpu, 0});
+    REQUIRE(cli::parseDeviceChoice("Gpu12") == Choice{DeviceKind::Gpu, 12});
+    REQUIRE(cli::parseDeviceChoice("gpu007") == Choice{DeviceKind::Gpu, 7});
+
+    for (const std::string_view bad :
+         {"", " ", "gpux", "gpu-1", "gpu+1", "gpu1.5", "gpu 1", "gpu1 ", "gpu1x", "cpu0", "auto1",
+          "cuda", "gpu99999999999999999999999"}) {
+        CAPTURE(bad);
+        REQUIRE_FALSE(cli::parseDeviceChoice(bad).has_value());
+    }
+}
+
+TEST_CASE("A wrong --device is a usage error for both commands, naming the value", "[cli][gpu]") {
+    const auto bad = GENERATE(std::string{"gpux"}, std::string{"gpu-1"}, std::string{"gpu1.5"},
+                              std::string{"gpu 1"}, std::string{"tpu"});
+    const std::string image = test::fixture(card).string();
+    const test::TempDir directory;
+    CAPTURE(bad);
+
+    const auto exported =
+        invoke({"export", image, "-o", directory.path().string(), "--device", bad});
+    REQUIRE(exported.code == cli::UsageError);
+    REQUIRE_THAT(exported.err, ContainsSubstring("'" + bad + "'"));
+    REQUIRE_THAT(exported.err, ContainsSubstring("gpuN"));
+    REQUIRE(exported.started.empty());
+
+    const auto probed = invoke({"gpu-test", "--device", bad});
+    REQUIRE(probed.code == cli::UsageError);
+    REQUIRE_THAT(probed.err, ContainsSubstring("'" + bad + "'"));
+    REQUIRE_THAT(probed.err, ContainsSubstring("gpuN"));
+    REQUIRE(probed.started.empty());
+}
+
+TEST_CASE("The GPU probe has no CPU to test", "[cli][gpu]") {
+    const auto result = invoke({"gpu-test", "--device", "cpu"});
+    REQUIRE(result.code == cli::UsageError);
+    REQUIRE_THAT(result.err, ContainsSubstring("--device cpu"));
+    REQUIRE(result.started.empty());
+}
+
+TEST_CASE("Both commands' help explains gpuN", "[cli][gpu]") {
+    for (const std::string command : {"export", "gpu-test"}) {
+        CAPTURE(command);
+        const auto result = invoke({command, "--help"});
+        REQUIRE(result.code == cli::Success);
+        REQUIRE_THAT(result.out, ContainsSubstring("gpuN"));
+    }
+    REQUIRE_THAT(invoke({"gpu-test", "--help"}).out, ContainsSubstring("every adapter"));
+}
+
+TEST_CASE("A numbered GPU cannot be used while ARRAW_DISABLE_GPU turns the GPU off", "[cli][gpu]") {
+    const ScopedEnvironment disabled(cli::disableGpuVariable, "1");
+    const test::TempDir directory;
+    const auto result = invoke({"export", test::fixture(card).string(), "-o",
+                                directory.path().string(), "--device", "gpu2"});
+
+    REQUIRE(result.code == cli::UsageError);
+    REQUIRE_THAT(result.err, ContainsSubstring("--device gpu2"));
+    REQUIRE_THAT(result.err, ContainsSubstring("ARRAW_DISABLE_GPU"));
+}
+
+TEST_CASE("The GPU probe fails on a disabled GPU whatever device was asked for", "[cli][gpu]") {
+    const ScopedEnvironment disabled(cli::disableGpuVariable, "1");
+    for (const std::string device : {"auto", "gpu", "gpu1"}) {
+        CAPTURE(device);
+        const auto result = invoke({"gpu-test", "--device", device});
+        REQUIRE(result.code == cli::Failed);
+        REQUIRE_THAT(result.err, ContainsSubstring("ARRAW_DISABLE_GPU"));
+    }
 }

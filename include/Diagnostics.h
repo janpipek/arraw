@@ -39,6 +39,10 @@ enum class Notice {
     /// @brief The GPU probe accepted a software rasteriser, named, because it was told to.
     GpuSoftwareAccepted,
 
+    /// @brief The GPU probe left a software rasteriser untested, because it tests
+    /// every adapter and was not told to accept one: the adapter's label, then its name.
+    GpuAdapterSkipped,
+
     /// @brief The device has no RGBA32F textures, which development needs.
     GpuNoFloatTextures,
 
@@ -57,6 +61,16 @@ enum class Notice {
 
     /// @brief The GPU was turned off, by the named environment variable.
     GpuDisabled,
+
+    /// @brief An export batch ran on the GPU: the backend, then the device's name.
+    GpuUsed,
+
+    /// @brief An export batch ran on the CPU, by choice or by fallback.
+    CpuUsed,
+
+    /// @brief The GPU was not used where it might have been, with the reason;
+    /// about one photograph if it has a subject, otherwise about the whole batch.
+    GpuFallback,
 };
 
 /// @brief One detail of a diagnostic, kept as a value rather than as prose.

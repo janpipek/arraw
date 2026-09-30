@@ -57,3 +57,14 @@ TEST_CASE("A device is refused without a GUI application, never faked", "[gpu]")
     /// that is secretly something else (ADR 015).
     REQUIRE_THROWS_AS(GpuContext{backend}, std::runtime_error);
 }
+
+TEST_CASE("Adapters are not listed without a GUI application either", "[gpu]") {
+    const auto backend = GENERATE(GpuBackend::Vulkan, GpuBackend::OpenGL, GpuBackend::D3D11,
+                                  GpuBackend::D3D12, GpuBackend::Metal);
+    CAPTURE(gpuBackendName(backend));
+
+    /// Listing makes a Vulkan instance or an OpenGL surface as a device does,
+    /// so it has the same precondition, and the same refusal.
+    REQUIRE_THROWS_AS(listGpuAdapters(backend), std::runtime_error);
+    REQUIRE_THROWS_AS((GpuContext{backend, 0}), std::runtime_error);
+}

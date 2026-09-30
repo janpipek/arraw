@@ -83,6 +83,13 @@ TEST_CASE("Blacks move the black point", "[tone]") {
     REQUIRE(toned(0.0F, {.tone = {.blacks = 100.0F}}) > 0.0F);
     REQUIRE(toned(0.0F, {.tone = {.blacks = -100.0F}}) == 0.0F);
 
+    /// A luminance too small to tell from black takes the lifted value too, so
+    /// that a denormal does not depend on whether the hardware flushes it.
+    REQUIRE(toned(1.0e-39F, {.tone = {.blacks = 100.0F}}) ==
+            toned(0.0F, {.tone = {.blacks = 100.0F}}));
+    REQUIRE(toned(2.0e-38F, {.tone = {.blacks = 100.0F}}) ==
+            toned(0.0F, {.tone = {.blacks = 100.0F}}));
+
     /// And the midtones are none of its business.
     REQUIRE(unmoved(toned(0.18F, {.tone = {.blacks = 100.0F}}), 0.18F));
 }

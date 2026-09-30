@@ -2,16 +2,20 @@
 
 #include "DeviceImageState.h"
 #include "GpuDevice.h"
+#include "GpuPlan.h"
 
 #include <QByteArray>
 #include <QCoreApplication>
+#include <QFile>
 #include <QGuiApplication>
 #include <QOffscreenSurface>
 #include <QSize>
 #include <QString>
 #include <QThread>
 #include <QVersionNumber>
+#include <QtAlgorithms>
 #include <rhi/qrhi.h>
+#include <rhi/qshader.h>
 
 #include <atomic>
 #include <cassert>
@@ -22,9 +26,11 @@
 #include <initializer_list>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -81,16 +87,17 @@ std::string platformAdvice(GpuBackend backend) {
     return {};
 }
 
-/// @brief Creates the QRhi for one backend, storing what it depends on in @p device.
+/// @brief Prepares what one backend's QRhi is created from and calls @p use with it.
 ///
-/// Never passes QRhi::PreferSoftwareRenderer, and never tries a second backend
-/// when the first fails: either would let a missing GPU pass for a present one
-/// (ADR 015).
-/// @return The device, or null if QRhi could not create one.
+/// The one place a backend's init parameters are made, so that enumerating its
+/// adapters and creating a device from one see the same instance or surface.
+/// What the parameters depend on is stored in @p device, which must outlive
+/// anything @p use keeps.
+/// @param use Receives the QRhi implementation and its parameters.
 /// @throws std::runtime_error if the backend is not in this build or on this
 /// platform, or what it depends on cannot be created.
-std::unique_ptr<QRhi> createRhi(GpuBackend backend, [[maybe_unused]] detail::GpuDevice& device) {
-    [[maybe_unused]] const QRhi::Flags flags{};
+void withInitParams(GpuBackend backend, [[maybe_unused]] detail::GpuDevice& device,
+                    const std::function<void(QRhi::Implementation, QRhiInitParams*)>& use) {
     switch (backend) {
     case GpuBackend::Vulkan: {
 #if ARRAW_GPU_VULKAN
@@ -110,7 +117,8 @@ std::unique_ptr<QRhi> createRhi(GpuBackend backend, [[maybe_unused]] detail::Gpu
         QRhiVulkanInitParams params;
         params.inst = instance.get();
         device.vulkan = std::move(instance);
-        return std::unique_ptr<QRhi>(QRhi::create(QRhi::Vulkan, &params, flags));
+        use(QRhi::Vulkan, &params);
+        return;
 #else
         throw unavailable(backend,
                           "this Qt was built without Vulkan, or arraw without the Vulkan headers");
@@ -133,7 +141,8 @@ std::unique_ptr<QRhi> createRhi(GpuBackend backend, [[maybe_unused]] detail::Gpu
         device.fallbackSurface.reset(QRhiGles2InitParams::newFallbackSurface());
         QRhiGles2InitParams params;
         params.fallbackSurface = device.fallbackSurface.get();
-        return std::unique_ptr<QRhi>(QRhi::create(QRhi::OpenGLES2, &params, flags));
+        use(QRhi::OpenGLES2, &params);
+        return;
 #else
         throw unavailable(backend, "this Qt was built without OpenGL");
 #endif
@@ -141,7 +150,8 @@ std::unique_ptr<QRhi> createRhi(GpuBackend backend, [[maybe_unused]] detail::Gpu
     case GpuBackend::D3D11: {
 #if defined(Q_OS_WIN)
         QRhiD3D11InitParams params;
-        return std::unique_ptr<QRhi>(QRhi::create(QRhi::D3D11, &params, flags));
+        use(QRhi::D3D11, &params);
+        return;
 #else
         throw unavailable(backend, "Direct3D exists only on Windows");
 #endif
@@ -149,7 +159,8 @@ std::unique_ptr<QRhi> createRhi(GpuBackend backend, [[maybe_unused]] detail::Gpu
     case GpuBackend::D3D12: {
 #if defined(Q_OS_WIN)
         QRhiD3D12InitParams params;
-        return std::unique_ptr<QRhi>(QRhi::create(QRhi::D3D12, &params, flags));
+        use(QRhi::D3D12, &params);
+        return;
 #else
         throw unavailable(backend, "Direct3D exists only on Windows");
 #endif
@@ -157,7 +168,8 @@ std::unique_ptr<QRhi> createRhi(GpuBackend backend, [[maybe_unused]] detail::Gpu
     case GpuBackend::Metal: {
 #if QT_CONFIG(metal)
         QRhiMetalInitParams params;
-        return std::unique_ptr<QRhi>(QRhi::create(QRhi::Metal, &params, flags));
+        use(QRhi::Metal, &params);
+        return;
 #else
         throw unavailable(backend, "Metal exists only on Apple platforms, and needs a Qt built "
                                    "with it");
@@ -166,6 +178,18 @@ std::unique_ptr<QRhi> createRhi(GpuBackend backend, [[maybe_unused]] detail::Gpu
     }
     throw unavailable(backend, "it is not a backend arraw knows");
 }
+
+/// @brief Owns the adapters QRhi enumerated, and frees them.
+struct AdapterList {
+    QRhi::AdapterList adapters;
+
+    explicit AdapterList(QRhi::AdapterList enumerated) : adapters(std::move(enumerated)) {}
+    AdapterList(const AdapterList&) = delete;
+    AdapterList& operator=(const AdapterList&) = delete;
+    ~AdapterList() {
+        qDeleteAll(adapters);
+    }
+};
 
 /// @brief Classifies a device, by name where the backend does not say.
 ///
@@ -223,6 +247,11 @@ public:
                "a device image's last copy must be released on its device's owner thread");
     }
 
+    /// @brief The pixels, for a pass on the same device to read.
+    [[nodiscard]] QRhiTexture& texture() const noexcept {
+        return *texture_;
+    }
+
     [[nodiscard]] ImageBuffer readBack() const override {
         device_->requireUsable("read back");
 
@@ -262,6 +291,99 @@ private:
     std::unique_ptr<QRhiTexture> texture_;
 };
 
+/// @brief Names a pass, for messages.
+std::string_view passName(GpuPass pass) {
+    switch (pass) {
+    case GpuPass::Copy:
+        return "copy";
+    case GpuPass::Pointwise:
+        return "pointwise";
+    case GpuPass::Geometry:
+        return "geometry";
+    }
+    return "unknown";
+}
+
+/// @brief Resource path of a pass's compiled fragment shader.
+QString fragmentShaderOf(GpuPass pass) {
+    return QStringLiteral(":/arraw/shaders/%1.qsb")
+        .arg(pass == GpuPass::Copy        ? QStringLiteral("copy.frag")
+             : pass == GpuPass::Pointwise ? QStringLiteral("develop.frag")
+                                          : QStringLiteral("geometry.frag"));
+}
+
+/// @brief Size of the uniform block a pass reads, in bytes; zero for none.
+std::size_t uniformSizeOf(GpuPass pass) {
+    switch (pass) {
+    case GpuPass::Copy:
+        return 0;
+    case GpuPass::Pointwise:
+        return sizeof(GpuPointwiseBlock);
+    case GpuPass::Geometry:
+        return sizeof(GpuGeometryBlock);
+    }
+    return 0;
+}
+
+/// @brief Loads a shader compiled into this build by qt_add_shaders.
+/// @throws std::runtime_error if it is missing or unreadable, which is a
+/// build fault rather than a device's.
+QShader loadShader(const QString& path) {
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        throw std::runtime_error("The GPU shader " + path.toStdString() +
+                                 " is missing from this build");
+    }
+    QShader shader = QShader::fromSerialized(file.readAll());
+    if (!shader.isValid()) {
+        throw std::runtime_error("The GPU shader " + path.toStdString() + " cannot be read");
+    }
+    return shader;
+}
+
+/// @brief Binds a pass's input at 0 and, if it has one, its uniform block at 1.
+///
+/// With null resources it describes only the layout, which is what a pipeline
+/// is created against; each render binds its own resources in the same layout.
+std::vector<QRhiShaderResourceBinding> bindingsFor(QRhiTexture* input, QRhiSampler* sampler,
+                                                   QRhiBuffer* uniforms, bool hasUniforms) {
+    std::vector<QRhiShaderResourceBinding> bindings{QRhiShaderResourceBinding::sampledTexture(
+        0, QRhiShaderResourceBinding::FragmentStage, input, sampler)};
+    if (hasUniforms) {
+        bindings.push_back(QRhiShaderResourceBinding::uniformBuffer(
+            1, QRhiShaderResourceBinding::FragmentStage, uniforms));
+    }
+    return bindings;
+}
+
+/// @brief Builds a pass's pipeline against the render pass its targets share.
+/// @throws std::runtime_error if a shader is missing or the pipeline cannot be created.
+void buildPipeline(QRhi& rhi, GpuPass pass, detail::PassPipeline& cached) {
+    const std::vector<QRhiShaderResourceBinding> layout =
+        bindingsFor(nullptr, nullptr, nullptr, uniformSizeOf(pass) > 0);
+    std::unique_ptr<QRhiShaderResourceBindings> bindings(rhi.newShaderResourceBindings());
+    bindings->setBindings(layout.begin(), layout.end());
+    if (!bindings->create()) {
+        throw std::runtime_error("The GPU device could not lay out the " +
+                                 std::string(passName(pass)) + " pass's resources");
+    }
+
+    std::unique_ptr<QRhiGraphicsPipeline> pipeline(rhi.newGraphicsPipeline());
+    pipeline->setShaderStages({{QRhiShaderStage::Vertex,
+                                loadShader(QStringLiteral(":/arraw/shaders/fullscreen.vert.qsb"))},
+                               {QRhiShaderStage::Fragment, loadShader(fragmentShaderOf(pass))}});
+    // The fullscreen triangle is made from the vertex index: no vertex input.
+    pipeline->setVertexInputLayout({});
+    pipeline->setShaderResourceBindings(bindings.get());
+    pipeline->setRenderPassDescriptor(cached.renderPass.get());
+    if (!pipeline->create()) {
+        throw std::runtime_error("The GPU device could not create the " +
+                                 std::string(passName(pass)) + " pass's pipeline");
+    }
+    cached.layout = std::move(bindings);
+    cached.pipeline = std::move(pipeline);
+}
+
 } // namespace
 
 GpuBackend defaultGpuBackend() noexcept {
@@ -300,17 +422,74 @@ std::optional<GpuBackend> parseGpuBackend(std::string_view name) noexcept {
     return std::nullopt;
 }
 
-GpuContext::GpuContext(GpuBackend backend) : device_(std::make_shared<detail::GpuDevice>()) {
-    // Checked first, and for every backend alike: without it a Vulkan instance
-    // or an OpenGL surface fails deep inside Qt, and a QCoreApplication is what
-    // the main test suite runs under, and what arraw-cli runs under when
-    // ARRAW_DISABLE_GPU turns the GPU off.
+namespace {
+
+/// @brief Refuses a caller that has no platform plugin to make devices through.
+///
+/// Checked first, and for every backend alike: without it a Vulkan instance
+/// or an OpenGL surface fails deep inside Qt, and a QCoreApplication is what
+/// the main test suite runs under, and what arraw-cli runs under when
+/// ARRAW_DISABLE_GPU turns the GPU off.
+void requireGuiApplication() {
     if (qobject_cast<QGuiApplication*>(QCoreApplication::instance()) == nullptr) {
         throw std::runtime_error("A GPU device needs a QGuiApplication, which provides the "
                                  "platform plugin devices are created through");
     }
+}
 
-    device_->rhi = createRhi(backend, *device_);
+} // namespace
+
+std::vector<GpuAdapterInfo> listGpuAdapters(GpuBackend backend) {
+    requireGuiApplication();
+
+    // Scratch: keeps the instance or surface the enumeration needs alive, and
+    // is dropped with the list, since no device outlives this call.
+    detail::GpuDevice scratch;
+    std::vector<GpuAdapterInfo> result;
+    withInitParams(backend, scratch, [&](QRhi::Implementation impl, QRhiInitParams* params) {
+        const AdapterList list{QRhi::enumerateAdapters(impl, params)};
+        for (const QRhiAdapter* adapter : list.adapters) {
+            const QRhiDriverInfo driver = adapter->info();
+            result.push_back({driver.deviceName.toStdString(), kindOf(driver), driver.vendorId,
+                              driver.deviceId});
+        }
+    });
+    return result;
+}
+
+GpuContext::GpuContext(GpuBackend backend, std::optional<std::size_t> adapter)
+    : device_(std::make_shared<detail::GpuDevice>()) {
+    requireGuiApplication();
+
+    // Never QRhi::PreferSoftwareRenderer, and never a second backend when the
+    // first fails: either would let a missing GPU pass for a present one (ADR 015).
+    withInitParams(backend, *device_, [&](QRhi::Implementation impl, QRhiInitParams* params) {
+        const QRhi::Flags flags{};
+        if (!adapter) {
+            device_->rhi.reset(QRhi::create(impl, params, flags));
+            return;
+        }
+        // Enumerated with the parameters the device is created with, so the
+        // index means the same adapter in both.
+        const AdapterList list{QRhi::enumerateAdapters(impl, params)};
+        const auto count = static_cast<std::size_t>(list.adapters.size());
+        if (count == 0 && *adapter == 0) {
+            // A backend that does not enumerate has one device, the default.
+            device_->rhi.reset(QRhi::create(impl, params, flags));
+            return;
+        }
+        if (*adapter >= count) {
+            throw std::out_of_range(
+                "The " + std::string(gpuBackendName(backend)) + " backend has no adapter " +
+                std::to_string(*adapter) + "; " +
+                (count == 0 ? std::string("it does not list adapters, so only 0 (the default "
+                                          "device) is valid")
+                            : "it lists " + std::to_string(count) + ", numbered 0 to " +
+                                  std::to_string(count - 1)));
+        }
+        device_->rhi.reset(QRhi::create(impl, params, flags, nullptr,
+                                        list.adapters[static_cast<qsizetype>(*adapter)]));
+    });
     if (!device_->rhi) {
         throw unavailable(backend, "QRhi could not create a device on the '" + platformName() +
                                        "' platform; Qt's warnings above say why" +
@@ -320,6 +499,7 @@ GpuContext::GpuContext(GpuBackend backend) : device_(std::make_shared<detail::Gp
     const QRhi& rhi = *device_->rhi;
     const QRhiDriverInfo driver = rhi.driverInfo();
     info_.backend = backend;
+    info_.adapter = adapter;
     info_.deviceName = driver.deviceName.toStdString();
     info_.kind = kindOf(driver);
     info_.vendorId = driver.vendorId;
@@ -346,6 +526,10 @@ DeviceId GpuContext::id() const noexcept {
 
 const GpuDeviceInfo& GpuContext::info() const noexcept {
     return info_;
+}
+
+bool GpuContext::lost() const noexcept {
+    return device_->isLost();
 }
 
 DeviceImage GpuContext::upload(const ImageBuffer& image) {
@@ -403,6 +587,115 @@ DeviceImage GpuContext::upload(const ImageBuffer& image) {
 
     return DeviceImage(std::make_shared<const RhiDeviceImage>(
         device_, std::move(texture), size, image.encoding(), image.orientation()));
+}
+
+DeviceImage GpuContext::render(GpuPass pass, std::span<const std::byte> uniforms,
+                               const DeviceImage& input, ImageSize outputSize,
+                               const ColorEncoding& encoding) {
+    device_->requireUsable("render");
+
+    const auto index = static_cast<std::size_t>(pass);
+    if (index >= gpuPassCount) {
+        throw std::invalid_argument("Unknown GPU pass");
+    }
+    const std::string name(passName(pass));
+    if (!input.valid()) {
+        throw std::invalid_argument("The " + name + " pass needs an input image");
+    }
+    if (input.device() != id()) {
+        // Textures are meaningless to any device but the one that made them
+        // (ADR 015), which is also what makes the cast below sound.
+        throw std::invalid_argument("The " + name +
+                                    " pass can only read an image from its own device");
+    }
+    if (uniforms.size() != uniformSizeOf(pass)) {
+        throw std::invalid_argument("The " + name + " pass takes " +
+                                    std::to_string(uniformSizeOf(pass)) +
+                                    " bytes of uniforms, not " + std::to_string(uniforms.size()));
+    }
+    const std::uint32_t edge =
+        info_.maxTextureSize > 0 ? static_cast<std::uint32_t>(info_.maxTextureSize) : 0U;
+    if (outputSize.empty() || outputSize.width > edge || outputSize.height > edge) {
+        throw std::invalid_argument("The " + name + " pass cannot render a " +
+                                    describe(outputSize) +
+                                    " image on a device whose largest "
+                                    "texture edge is " +
+                                    std::to_string(edge) + " pixels");
+    }
+    if (outputSize.pixelCount() * bytesPerPixel(PixelFormat::RgbaF32) > maxTransferBytes) {
+        // Refused before rendering rather than when the result is read back.
+        throw std::invalid_argument("A " + describe(outputSize) +
+                                    " result is larger than one GPU transfer can carry");
+    }
+    if (!info_.floatTextures) {
+        throw std::runtime_error("This GPU device has no RGBA32F textures, which a pass needs");
+    }
+
+    const auto& source = static_cast<const RhiDeviceImage&>(*input.state_);
+    QRhi& rhi = *device_->rhi;
+
+    std::unique_ptr<QRhiTexture> texture(rhi.newTexture(
+        QRhiTexture::RGBA32F,
+        QSize(static_cast<int>(outputSize.width), static_cast<int>(outputSize.height)), 1,
+        QRhiTexture::RenderTarget | QRhiTexture::UsedAsTransferSource));
+    if (!texture->create()) {
+        throw std::runtime_error("The GPU device could not create a " + describe(outputSize) +
+                                 " RGBA32F render target");
+    }
+    std::unique_ptr<QRhiTextureRenderTarget> target(
+        rhi.newTextureRenderTarget(QRhiTextureRenderTargetDescription(texture.get())));
+    detail::PassPipeline& cached = device_->passes.at(index);
+    if (!cached.renderPass) {
+        // Every target of a pass has one RGBA32F attachment, so the first
+        // one's render pass is compatible with all that follow.
+        cached.renderPass.reset(target->newCompatibleRenderPassDescriptor());
+    }
+    target->setRenderPassDescriptor(cached.renderPass.get());
+    if (!target->create()) {
+        throw std::runtime_error("The GPU device could not create a " + describe(outputSize) +
+                                 " render target");
+    }
+    if (!cached.pipeline) {
+        buildPipeline(rhi, pass, cached);
+    }
+
+    if (!device_->sampler) {
+        device_->sampler.reset(rhi.newSampler(QRhiSampler::Nearest, QRhiSampler::Nearest,
+                                              QRhiSampler::None, QRhiSampler::ClampToEdge,
+                                              QRhiSampler::ClampToEdge));
+        if (!device_->sampler->create()) {
+            device_->sampler.reset();
+            throw std::runtime_error("The GPU device could not create a sampler");
+        }
+    }
+    std::unique_ptr<QRhiBuffer> buffer;
+    if (!uniforms.empty()) {
+        buffer.reset(rhi.newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer,
+                                   static_cast<quint32>(uniforms.size())));
+        if (!buffer->create()) {
+            throw std::runtime_error("The GPU device could not create the " + name +
+                                     " pass's uniform buffer");
+        }
+    }
+    const std::vector<QRhiShaderResourceBinding> list =
+        bindingsFor(&source.texture(), device_->sampler.get(), buffer.get(), buffer != nullptr);
+    std::unique_ptr<QRhiShaderResourceBindings> bindings(rhi.newShaderResourceBindings());
+    bindings->setBindings(list.begin(), list.end());
+    if (!bindings->create()) {
+        throw std::runtime_error("The GPU device could not bind the " + name + " pass's resources");
+    }
+
+    detail::submitPass(*device_, "render the " + name + " pass", *target, *cached.pipeline,
+                       *bindings, [&](QRhiResourceUpdateBatch& batch) {
+                           if (buffer) {
+                               batch.updateDynamicBuffer(buffer.get(), 0,
+                                                         static_cast<quint32>(uniforms.size()),
+                                                         uniforms.data());
+                           }
+                       });
+
+    return DeviceImage(std::make_shared<const RhiDeviceImage>(
+        device_, std::move(texture), outputSize, encoding, ImageOrientation::Normal));
 }
 
 } // namespace arraw

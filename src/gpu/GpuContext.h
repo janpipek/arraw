@@ -4,11 +4,14 @@
 
 #include <ImageBuffer.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace arraw {
 
@@ -60,10 +63,46 @@ enum class GpuDeviceKind {
     Software, ///< A CPU rasteriser: WARP, llvmpipe, lavapipe, SwiftShader.
 };
 
+/// @brief What a backend says about one of its adapters, before a device is made from it.
+///
+/// Classified as ::arraw::GpuDeviceInfo is, so that a software rasteriser is
+/// recognised here too, and a caller can refuse it without creating a device.
+struct GpuAdapterInfo {
+    /// @brief Name the driver gives the adapter, UTF-8.
+    std::string name;
+
+    /// @brief Sort of hardware behind the adapter.
+    GpuDeviceKind kind = GpuDeviceKind::Unknown;
+
+    /// @brief PCI vendor id, or 0 where the backend does not report one.
+    std::uint64_t vendorId = 0;
+
+    /// @brief PCI device id, or 0 where the backend does not report one.
+    std::uint64_t deviceId = 0;
+};
+
+/// @brief Lists the adapters a backend enumerates, in the order its indices number them.
+///
+/// The position in the result is the index ::arraw::GpuContext takes. Empty
+/// where the backend does not enumerate (OpenGL; possibly Metal), which is not
+/// the same as having no device: index 0 still means the default one there.
+/// Creates and drops a Vulkan instance or an OpenGL surface, as a context would.
+/// @param backend Backend to ask; never substituted.
+/// @throws std::runtime_error if no `QGuiApplication` exists, or the backend is
+/// not available in this build or on this platform.
+[[nodiscard]] std::vector<GpuAdapterInfo> listGpuAdapters(GpuBackend backend);
+
 /// @brief Everything a caller may want to know about a device before using it.
 struct GpuDeviceInfo {
     /// @brief Backend the device was created through.
     GpuBackend backend = GpuBackend::Vulkan;
+
+    /// @brief Index of the adapter the device was made on, if one was asked for.
+    ///
+    /// The position in ::arraw::listGpuAdapters. Empty for the backend's
+    /// default device; also 0, not empty, when 0 was asked for of a backend
+    /// that lists nothing.
+    std::optional<std::size_t> adapter;
 
     /// @brief Name the driver gives the device, UTF-8.
     std::string deviceName;
@@ -97,15 +136,30 @@ struct GpuDeviceInfo {
     int maxTextureSize = 0;
 };
 
+/// @brief One fullscreen fragment pass a ::arraw::GpuContext can render.
+///
+/// Each reads one input image through `texelFetch` at binding 0 and, except
+/// ::Copy, one std140 uniform block at binding 1, and writes one RGBA32F
+/// render target. The shaders live in `src/gpu/shaders`, compiled at build time.
+enum class GpuPass {
+    Copy,      ///< Copies its input unchanged; no uniforms. The render round trip's proof.
+    Pointwise, ///< The pointwise chain; uniforms are a ::arraw::GpuPointwiseBlock.
+    Geometry,  ///< The geometry resample; uniforms are a ::arraw::GpuGeometryBlock.
+};
+
+/// @brief Number of ::arraw::GpuPass values, for tables indexed by one.
+inline constexpr std::size_t gpuPassCount = 3;
+
 /// @brief One graphics device, owned, offscreen, on the thread that made it.
 ///
 /// The adapter ADR 015 describes: pass-recording code will take a device it
 /// does not own, and this is the thing that owns one for callers with no
 /// viewport — the command line, export, and the CPU/GPU comparison tests.
 ///
-/// Never falls back. A backend that is not in this Qt, not on this platform or
-/// will not start is an error, and so the caller learns that it has no GPU
-/// rather than comparing the CPU with itself.
+/// Never falls back: not to another backend, and, when an adapter was asked
+/// for, not to another adapter. A backend that is not in this Qt, not on this
+/// platform or will not start is an error, and so the caller learns that it has
+/// no GPU rather than comparing the CPU with itself.
 ///
 /// QRhi is used from one thread, so this is too: the thread that constructs a
 /// context is its owner, and uploading to or reading back from it anywhere else
@@ -130,10 +184,15 @@ class GpuContext {
 public:
     /// @brief Creates an offscreen device through one backend.
     /// @param backend Backend to create; never substituted.
+    /// @param adapter Index into ::arraw::listGpuAdapters of the adapter to use,
+    /// or `std::nullopt` for the default device QRhi picks. Index 0 is also
+    /// valid, and means the default device, on a backend that lists no adapters.
     /// @throws std::runtime_error if no `QGuiApplication` exists, the backend is
     /// not available in this build or on this platform, or the device cannot be
     /// created.
-    explicit GpuContext(GpuBackend backend);
+    /// @throws std::out_of_range if @p adapter is not below the number of
+    /// adapters the backend lists; the message gives that number.
+    explicit GpuContext(GpuBackend backend, std::optional<std::size_t> adapter = std::nullopt);
 
     GpuContext(const GpuContext&) = delete;
     GpuContext& operator=(const GpuContext&) = delete;
@@ -147,6 +206,9 @@ public:
     /// @brief Description of the device and what it supports.
     [[nodiscard]] const GpuDeviceInfo& info() const noexcept;
 
+    /// @brief Whether an earlier frame failed, after which every use throws.
+    [[nodiscard]] bool lost() const noexcept;
+
     /// @brief Copies a host buffer into a new RGBA32F texture.
     /// @param image Buffer to upload; must be ::arraw::PixelFormat::RgbaF32.
     /// @return A device image with the buffer's size, encoding and orientation.
@@ -157,6 +219,28 @@ public:
     /// GpuDeviceInfo::floatTextures), cannot create or fill the texture, or an
     /// earlier transfer failed.
     [[nodiscard]] DeviceImage upload(const ImageBuffer& image);
+
+    /// @brief Renders one pass from a device image into a new one.
+    ///
+    /// The one way a pass's output becomes a ::arraw::DeviceImage, which is
+    /// what keeps this class the only minter of them. Pipelines are built on a
+    /// pass's first use and kept for the device's lifetime. Waits for the
+    /// render to finish, as a transfer does.
+    /// @param pass Shader to run.
+    /// @param uniforms The pass's uniform block, byte for byte; empty for ::GpuPass::Copy.
+    /// @param input Image the pass reads; must belong to this context's device.
+    /// @param outputSize Dimensions of the result.
+    /// @param encoding Meaning of the result's RGB values, which the pass decides.
+    /// @return The result, with no pending orientation.
+    /// @throws std::invalid_argument if @p input is empty or belongs to another
+    /// device, @p uniforms is not the pass's block size, or @p outputSize is
+    /// empty or larger than the device accepts.
+    /// @throws std::logic_error if called from a thread other than the owner.
+    /// @throws std::runtime_error if the device has no RGBA32F textures, cannot
+    /// create the pass's resources, or the render fails.
+    [[nodiscard]] DeviceImage render(GpuPass pass, std::span<const std::byte> uniforms,
+                                     const DeviceImage& input, ImageSize outputSize,
+                                     const ColorEncoding& encoding);
 
 private:
     /// @brief Device shared with every image minted from it.

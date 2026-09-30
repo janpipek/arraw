@@ -37,13 +37,26 @@ arraw-cli export photo.dng -o out/ --format png --bit-depth 16
 arraw-cli export photo.arw -o out/ --exposure -0.5 --temperature 3200   # RAW only
 arraw-cli export photo.arw -o out/ --rotate 2.5 --crop-aspect 3:2
 arraw-cli export photo.arw -o out/ --rotate 90 --crop 0.1,0.2,0.8,0.9
+arraw-cli export photo.arw -o out/ --device gpu --gpu-backend vulkan   # no CPU fallback
 arraw-cli gpu-test                        # check the GPU backend works on this machine
 ```
 
 On Linux the command line needs no display: it runs on its own headless Qt
-platform, which reaches Vulkan through the driver alone but has no OpenGL (set
-`QT_QPA_PLATFORM=xcb` or `wayland` for that). `ARRAW_DISABLE_GPU=1` keeps it
-off the graphics stack entirely.
+platform, which reaches Vulkan through the driver alone but has no OpenGL.
+`export` uses it whatever `QT_QPA_PLATFORM` says, unless `--gpu-backend opengl`
+is given, which honours `QT_QPA_PLATFORM=xcb` or `wayland`; `gpu-test` honours
+it always. `ARRAW_DISABLE_GPU=1` keeps it off the graphics stack entirely.
+
+`export` develops on the GPU when it can. `--device auto` (the default) creates
+one device for the whole batch; if there is none, or it is a software
+rasteriser (llvmpipe, lavapipe, WARP; accept one with `--allow-software`), or
+`ARRAW_DISABLE_GPU` is set, it warns once and exports the batch on the CPU. A
+photograph the GPU fails on is retried on the CPU with a warning. `--device gpu`
+never falls back: it fails instead, and combined with `ARRAW_DISABLE_GPU` it is
+a usage error. With `--gpu-backend opengl`, `auto` is `gpu`: OpenGL needs a
+display's platform, and a process cannot fall back from one that will not load.
+`--device cpu` loads no graphics stack. `--gpu-backend` picks the API (`vulkan`, `opengl`, `d3d11`, `d3d12`, `metal`), and one line per batch says
+which device was used (silenced by `--quiet`).
 
 Inputs are files rather than directories; your shell expands the wildcards.
 Every input is attempted, so one bad frame does not abandon an overnight batch.

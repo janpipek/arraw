@@ -8,8 +8,9 @@ namespace arraw {
 
 /// @brief Photographic settings applied to one photograph, in domain units.
 ///
-/// Plain values: presentation decides how to show them, and a descriptor table
-/// beside them carries ranges, defaults and applicability (ADR 008).
+/// Plain values: presentation decides how to show them, and the descriptor table
+/// beside them (SettingDescriptors.h) carries ranges, groups and applicability
+/// (ADR 008). A new leaf field needs a row there.
 struct DevelopSettings {
     /// @brief White-balance mode, temperature and tint.
     ColorSettings color{};
