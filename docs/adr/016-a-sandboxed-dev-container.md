@@ -79,7 +79,7 @@ as the `GIT_AUTHOR_*` and `GIT_COMMITTER_*` variables at every start.
 
 **One store for logins and caches**, `~/.local/share/arraw-sandbox/`, shared
 by every clone and readable only by the user. Only named paths persist: the
-agents' configuration directories and `~/.cache` (uv, ccache, npm). The rest of
+agents' configuration directories, `~/.agents` (installed skills) and `~/.cache` (uv, ccache, npm). The rest of
 the home directory is thrown away with the container, so nothing can leave a
 `.bashrc` behind for the next session. Each agent is logged into once,
 interactively, inside the container. Anything an agent can use it can also

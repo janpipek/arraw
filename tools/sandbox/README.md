@@ -29,6 +29,10 @@ once inside (`/login` in Claude, `codex login --device-auth`, and so on); the
 session is kept in `~/.local/share/arraw-sandbox/`, shared by every clone.
 Delete a subdirectory there to log out of that agent in the sandbox.
 
+Skills are the sandbox's own, not the host's. Install them inside with
+`npx skills add <repo> -g`; they land in `~/.agents/skills` (linked from
+`~/.claude/skills`) and persist in the same store.
+
 `--gpu` and `--gui` need SELinux to allow devices in containers, once:
 
 ```sh
