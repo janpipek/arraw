@@ -66,9 +66,28 @@ Exported exportWith(const std::string& device, const std::string& input, int bit
     return result;
 }
 
-/// @brief Finds the largest difference in any sample of two images of the same format.
-int worstCodeDifference(const QImage& a, const QImage& b) {
-    int worst = 0;
+/// @brief How far two exports of the same format are apart.
+struct CodeDifference {
+    /// @brief Largest difference in any sample, in code values.
+    int worstCodes = 0;
+    /// @brief Largest difference over what a sample is allowed; at most 1 passes.
+    double worstExcess = 0.0;
+};
+
+/// @brief Compares every sample of two images of the same format.
+///
+/// A sample may differ by one code value, or by @p relative of its value when
+/// that is more: at 16 bits the GPU's `pow` rounding shows up as tens of codes
+/// (see illConditionedRelativeTolerance), which one code value in 65535 cannot
+/// absorb.
+CodeDifference compareCodes(const QImage& a, const QImage& b, double relative) {
+    CodeDifference difference;
+    const auto sample = [&](int left, int right) {
+        const int codes = std::abs(left - right);
+        const double allowed = std::max(1.0, relative * std::max(left, right));
+        difference.worstCodes = std::max(difference.worstCodes, codes);
+        difference.worstExcess = std::max(difference.worstExcess, codes / allowed);
+    };
     for (int y = 0; y < a.height(); ++y) {
         const auto* left = a.constScanLine(y);
         const auto* right = b.constScanLine(y);
@@ -76,15 +95,15 @@ int worstCodeDifference(const QImage& a, const QImage& b) {
             const auto* l = reinterpret_cast<const quint16*>(left);
             const auto* r = reinterpret_cast<const quint16*>(right);
             for (int i = 0; i < a.width() * 4; ++i) {
-                worst = std::max(worst, std::abs(int(l[i]) - int(r[i])));
+                sample(l[i], r[i]);
             }
         } else {
             for (int i = 0; i < a.width() * 4; ++i) {
-                worst = std::max(worst, std::abs(int(left[i]) - int(right[i])));
+                sample(left[i], right[i]);
             }
         }
     }
-    return worst;
+    return difference;
 }
 
 /// @brief Runs `arraw-cli export` of several inputs as JSON, in this process.
@@ -117,7 +136,7 @@ int occurrences(const std::string& text, const std::string& what) {
 
 } // namespace
 
-TEST_CASE("Export on the GPU stays within one code value of the CPU", "[gpu][cli][export]") {
+TEST_CASE("Export on the GPU stays within rounding of the CPU", "[gpu][cli][export]") {
     (void)test::gpuContext(); // skips the case when there is no device at all
 
     struct Case {
@@ -147,10 +166,11 @@ TEST_CASE("Export on the GPU stays within one code value of the CPU", "[gpu][cli
                 REQUIRE(gpu.image.size() == cpu.image.size());
                 const QImage::Format format =
                     bitDepth == 16 ? QImage::Format_RGBA64 : QImage::Format_RGBA8888;
-                const int worst = worstCodeDifference(gpu.image.convertToFormat(format),
-                                                      cpu.image.convertToFormat(format));
-                CAPTURE(worst);
-                REQUIRE(worst <= 1);
+                const CodeDifference difference = compareCodes(
+                    gpu.image.convertToFormat(format), cpu.image.convertToFormat(format),
+                    test::illConditionedRelativeTolerance);
+                CAPTURE(difference.worstCodes, difference.worstExcess);
+                REQUIRE(difference.worstExcess <= 1.0);
             }
         }
     }
