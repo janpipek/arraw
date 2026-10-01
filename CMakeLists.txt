@@ -294,6 +294,8 @@ add_library(arraw-cli-core STATIC
         src/cli/ExportCommand.h
         src/cli/GpuTestCommand.cpp
         src/cli/GpuTestCommand.h
+        src/cli/InfoCommand.cpp
+        src/cli/InfoCommand.h
         src/cli/StreamDiagnostics.cpp
         src/cli/StreamDiagnostics.h)
 arraw_enable_warnings(arraw-cli-core)

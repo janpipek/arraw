@@ -11,6 +11,7 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/pair.h>
 #include <nanobind/stl/string.h>
+#include <nanobind/stl/string_view.h>
 #include <nanobind/stl/variant.h>
 #include <nanobind/stl/vector.h>
 // clang-format on
@@ -25,6 +26,7 @@
 #include <tuple>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 /// @brief Private helpers of the Python bindings.
 namespace arraw::python {
@@ -224,6 +226,20 @@ void assignArgument(M& target, Argument& source, const char* name) {
     }
 }
 
+/// @brief Tells whether a type is a std::vector.
+template <class M> struct IsVector : std::false_type {};
+template <class T, class A> struct IsVector<std::vector<T, A>> : std::true_type {};
+
+/// @brief Casts a field to a Python value that can be hashed: a vector becomes a tuple.
+template <class M> nb::object hashable(const M& value) {
+    nb::object cast = nb::cast(value);
+    if constexpr (IsVector<M>::value) {
+        return nb::steal(PySequence_Tuple(cast.ptr()));
+    } else {
+        return cast;
+    }
+}
+
 /// @brief Binds a plain settings struct as a frozen Python value class.
 ///
 /// Gives it a keyword constructor with the C++ defaults, read-only attributes,
@@ -258,7 +274,7 @@ nb::class_<T> bindFrozen(nb::module_& module, const char* name, const char* doc,
     (cls.def_ro(fields.name, fields.member), ...);
     cls.def(nb::self == nb::self);
     cls.def("__hash__", [=](const T& self) {
-        return nb::hash(nb::make_tuple(nb::cast(self.*fields.member)...));
+        return nb::hash(nb::make_tuple(hashable(self.*fields.member)...));
     });
     cls.def("__repr__", [=](const T& self) {
         std::string text = std::string(name) + "(";

@@ -8,6 +8,7 @@ from ._arraw import (
     CropRatio,
     CropSettings,
     DevelopSettings,
+    ForeignNamespace,
     FreeCropAspect,
     GeometrySettings,
     ImageBuffer,
@@ -39,6 +40,7 @@ from ._arraw import (
     setting_descriptors,
     sidecar_path,
     write_sidecar,
+    xmp_namespace_owner,
 )
 
 __all__ = [
@@ -49,6 +51,7 @@ __all__ = [
     "CropRatio",
     "CropSettings",
     "DevelopSettings",
+    "ForeignNamespace",
     "FreeCropAspect",
     "GeometrySettings",
     "ImageBuffer",
@@ -79,4 +82,5 @@ __all__ = [
     "setting_descriptors",
     "sidecar_path",
     "write_sidecar",
+    "xmp_namespace_owner",
 ]

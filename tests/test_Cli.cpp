@@ -12,8 +12,10 @@
 
 #include <QByteArray>
 #include <QImage>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonParseError>
 #include <QString>
 #include <QtGlobal>
 
@@ -22,6 +24,7 @@
 #include <catch2/generators/catch_generators.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -284,7 +287,7 @@ TEST_CASE("The top-level help mentions the GPU switch", "[cli][gpu]") {
 }
 
 TEST_CASE("A reserved command says it is coming, not that it is unknown", "[cli]") {
-    const auto reserved = GENERATE(std::string{"info"}, std::string{"preset"});
+    const auto reserved = GENERATE(std::string{"preset"});
     CAPTURE(reserved);
 
     const auto* command = cli::findCommand(reserved);
@@ -1731,4 +1734,415 @@ TEST_CASE("Stale temperature and tint of a non-Custom sidecar are dropped, flags
 
     REQUIRE_FALSE(result.color.temperature);
     REQUIRE_FALSE(result.color.tint);
+}
+
+namespace {
+
+/// @brief Sidecar settings and marks that differ from the defaults in a few keys.
+Photo editedPhoto(const std::filesystem::path& path) {
+    DevelopSettings settings;
+    settings.tone.exposure = 0.5F;
+    settings.geometry.crop.rectangle = UprightCropRect{0.1, 0.2, 0.9, 0.8};
+    return openPhoto(path).with(settings).with(PhotoMarks{.rating = 4, .label = ColorLabel::Green});
+}
+
+QJsonObject firstFile(const std::string& text) {
+    QJsonParseError parseError;
+    const auto document = QJsonDocument::fromJson(QByteArray::fromStdString(text), &parseError);
+    REQUIRE(parseError.error == QJsonParseError::NoError);
+    return document.object().value("files").toArray().at(0).toObject();
+}
+
+} // namespace
+
+TEST_CASE("Info shows a file without a sidecar as it opens", "[cli][info]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    const auto result = invoke({"info", raw.string()});
+
+    REQUIRE(result.code == cli::Success);
+    REQUIRE(result.err.empty());
+    REQUIRE(result.started == std::vector{cli::ApplicationKind::Core});
+    REQUIRE_THAT(result.out, StartsWith(raw.string() + "\n"));
+    REQUIRE_THAT(result.out, ContainsSubstring("size: 32 x 24"));
+    REQUIRE_THAT(result.out, ContainsSubstring("orientation: normal"));
+    REQUIRE_THAT(result.out, ContainsSubstring("encoding: camera"));
+    REQUIRE_THAT(result.out, ContainsSubstring("sidecar: none"));
+    REQUIRE_THAT(result.out, ContainsSubstring("develop settings: defaults"));
+    REQUIRE_THAT(result.out, !ContainsSubstring("rating"));
+    REQUIRE_THAT(result.out, !ContainsSubstring("label"));
+}
+
+TEST_CASE("Info gives no encoding for an ordinary image, whose own it cannot read", "[cli][info]") {
+    const auto result = invoke({"info", test::fixture(card).string()});
+    REQUIRE(result.code == cli::Success);
+    REQUIRE_THAT(result.out, ContainsSubstring("size: 61 x 41"));
+    REQUIRE_THAT(result.out, !ContainsSubstring("encoding"));
+
+    const auto json = invoke({"info", "--json", test::fixture(card).string()});
+    REQUIRE(firstFile(json.out).value("encoding").isNull());
+}
+
+TEST_CASE("Info leaves out settings a render would not read", "[cli][info]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    DevelopSettings settings;
+    settings.color.temperature = 4200.0F;
+    settings.color.tint = 10.0F;
+    writeSidecar(openPhoto(raw).with(settings));
+
+    SECTION("not in Custom white balance") {
+        const auto result = invoke({"info", raw.string()});
+        REQUIRE_THAT(result.out, ContainsSubstring("develop settings: defaults"));
+        REQUIRE_THAT(result.out, !ContainsSubstring("temperature"));
+    }
+    SECTION("in Custom white balance, a tint of zero is listed") {
+        settings.color.whiteBalance = WhiteBalanceMode::Custom;
+        settings.color.tint = 0.0F;
+        writeSidecar(openPhoto(raw).with(settings));
+        const auto result = invoke({"info", raw.string()});
+        REQUIRE_THAT(result.out, ContainsSubstring("    whiteBalance: "));
+        REQUIRE_THAT(result.out, ContainsSubstring("    temperature: 4200\n"));
+        REQUIRE_THAT(result.out, ContainsSubstring("    tint: 0\n"));
+    }
+    SECTION("on a non-RAW") {
+        const test::TempDir pngs;
+        const auto png = pngs.file("card.png");
+        std::filesystem::copy_file(test::fixture(card), png);
+        settings.color.whiteBalance = WhiteBalanceMode::Custom;
+        writeSidecar(openPhoto(png).with(settings));
+        const auto result = invoke({"info", png.string()});
+        REQUIRE_THAT(result.out, ContainsSubstring("whiteBalance"));
+        REQUIRE_THAT(result.out, !ContainsSubstring("temperature"));
+        REQUIRE_THAT(result.out, !ContainsSubstring("tint"));
+    }
+}
+
+TEST_CASE("Info lists a crop aspect in each of its forms", "[cli][info]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    DevelopSettings settings;
+
+    SECTION("a ratio") {
+        settings.geometry.crop.aspect = CropRatio{1.5};
+        writeSidecar(openPhoto(raw).with(settings));
+        REQUIRE_THAT(invoke({"info", raw.string()}).out,
+                     ContainsSubstring("    cropAspect: 1.5\n"));
+        const auto json = firstFile(invoke({"info", "--json", raw.string()}).out);
+        REQUIRE(json.value("settings")
+                    .toObject()
+                    .value("cropAspect")
+                    .toObject()
+                    .value("ratio")
+                    .toDouble() == 1.5);
+    }
+    SECTION("original") {
+        settings.geometry.crop.aspect = OriginalCropAspect{};
+        writeSidecar(openPhoto(raw).with(settings));
+        REQUIRE_THAT(invoke({"info", raw.string()}).out,
+                     ContainsSubstring("    cropAspect: original\n"));
+    }
+}
+
+#ifndef _WIN32
+TEST_CASE("Info escapes a path in JSON", "[cli][info]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "say \"hi\".dng");
+    const auto file = firstFile(invoke({"info", "--json", raw.string()}).out);
+    REQUIRE(file.value("path").toString().toStdString() == raw.string());
+}
+#endif
+
+TEST_CASE("Info lists only what the sidecar changes, and its marks", "[cli][info]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    writeSidecar(editedPhoto(raw));
+    const auto result = invoke({"info", raw.string()});
+
+    REQUIRE(result.code == cli::Success);
+    REQUIRE_THAT(result.out, ContainsSubstring("sidecar: " + directory.file("frame.xmp").string()));
+    REQUIRE_THAT(result.out, ContainsSubstring("rating: 4"));
+    REQUIRE_THAT(result.out, ContainsSubstring("label: Green"));
+    REQUIRE_THAT(result.out, ContainsSubstring("develop settings:\n"));
+    REQUIRE_THAT(result.out, ContainsSubstring("    exposure: 0.5\n"));
+    REQUIRE_THAT(result.out, ContainsSubstring("    cropRectangle: 0.1,0.2,0.9,0.8\n"));
+    REQUIRE_THAT(result.out, !ContainsSubstring("contrast"));
+    REQUIRE_THAT(result.out, !ContainsSubstring("defaults"));
+    REQUIRE(result.out.find("exposure") < result.out.find("cropRectangle"));
+}
+
+TEST_CASE("Info says rejected for a rating of -1", "[cli][info]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    writeSidecar(openPhoto(raw).with(PhotoMarks{.rating = rejectedRating}));
+    const auto result = invoke({"info", raw.string()});
+    REQUIRE_THAT(result.out, ContainsSubstring("rating: rejected"));
+}
+
+TEST_CASE("Info --all lists every setting", "[cli][info]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    const auto result = invoke({"info", "--all", raw.string()});
+
+    REQUIRE(result.code == cli::Success);
+    REQUIRE_THAT(result.out, !ContainsSubstring("defaults"));
+    std::size_t previous = 0;
+    for (const FieldDescriptor& descriptor : developSettingDescriptors) {
+        CAPTURE(descriptor.key);
+        const auto at = result.out.find("    " + std::string(descriptor.key) + ": ");
+        REQUIRE(at != std::string::npos);
+        REQUIRE(at >= previous);
+        previous = at;
+    }
+    REQUIRE(developSettingDescriptors.size() == 16);
+    REQUIRE_THAT(result.out, ContainsSubstring("temperature: unset"));
+}
+
+TEST_CASE("Info names the other tools that wrote in the sidecar", "[cli][info][sidecar]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    std::filesystem::copy_file(test::fixture("sidecar-foreign.xmp"), directory.file("frame.xmp"));
+
+    const auto text = invoke({"info", raw.string()});
+    REQUIRE(text.code == cli::Success);
+    REQUIRE_THAT(text.out, ContainsSubstring("  other tools:\n"
+                                             "    written by: Adobe Lightroom Classic 13.0 "
+                                             "(Macintosh)\n"
+                                             "    Adobe Camera Raw / Lightroom develop settings "
+                                             "(crs:, 4 properties)\n"
+                                             "    unknown (acme:, 2 properties)\n"
+                                             "    Dublin Core (dc:, 1 property)\n"));
+
+    const auto file = firstFile(invoke({"info", "--json", raw.string()}).out);
+    REQUIRE(file.value("creatorTool").toString() == "Adobe Lightroom Classic 13.0 (Macintosh)");
+    const auto others = file.value("others").toArray();
+    REQUIRE(others.size() == 3);
+    REQUIRE(others[0].toObject().value("prefix").toString() == "crs");
+    REQUIRE(others[0].toObject().value("uri").toString() ==
+            "http://ns.adobe.com/camera-raw-settings/1.0/");
+    REQUIRE(others[0].toObject().value("properties").toInt() == 4);
+    REQUIRE(others[0].toObject().value("owner").toString() ==
+            "Adobe Camera Raw / Lightroom develop settings");
+    REQUIRE(others[1].toObject().value("owner").isNull());
+
+    const auto bare = invoke({"info", "--no-sidecar", raw.string()});
+    REQUIRE_THAT(bare.out, !ContainsSubstring("other tools"));
+    const auto bareJson = firstFile(invoke({"info", "--json", "--no-sidecar", raw.string()}).out);
+    REQUIRE(bareJson.value("creatorTool").isNull());
+    REQUIRE(bareJson.value("others").toArray().isEmpty());
+}
+
+TEST_CASE("Info prints no other-tools block for a sidecar only arraw wrote",
+          "[cli][info][sidecar]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    writeSidecar(editedPhoto(raw));
+    const auto text = invoke({"info", raw.string()});
+    REQUIRE_THAT(text.out, !ContainsSubstring("other tools"));
+    REQUIRE_THAT(text.out, !ContainsSubstring("written by"));
+    const auto file = firstFile(invoke({"info", "--json", raw.string()}).out);
+    REQUIRE(file.value("creatorTool").isNull());
+    REQUIRE(file.value("others").toArray().isEmpty());
+}
+
+TEST_CASE("Info --json is one document with the settings in table order", "[cli][info]") {
+    const test::TempDir directory;
+    const auto plain = copyRaw(directory, "plain.dng");
+    const auto edited = copyRaw(directory, "edited.dng");
+    writeSidecar(editedPhoto(edited));
+
+    SECTION("a file without a sidecar") {
+        const auto result = invoke({"info", "--json", plain.string()});
+        REQUIRE(result.code == cli::Success);
+        const auto file = firstFile(result.out);
+        REQUIRE(file.value("path").toString().toStdString() == plain.string());
+        REQUIRE(file.value("size").toObject().value("width").toInt() == 32);
+        REQUIRE(file.value("size").toObject().value("height").toInt() == 24);
+        REQUIRE(file.value("orientation").toString() == "normal");
+        REQUIRE(file.value("encoding").toString() == "camera");
+        REQUIRE(file.value("sidecar").isNull());
+        REQUIRE(file.value("marks").toObject().value("rating").toInt() == 0);
+        REQUIRE(file.value("marks").toObject().value("label").isNull());
+        REQUIRE(file.value("settings").toObject().isEmpty());
+    }
+    SECTION("a file with one") {
+        const auto result = invoke({"info", "--json", edited.string()});
+        REQUIRE(result.code == cli::Success);
+        const auto file = firstFile(result.out);
+        REQUIRE(file.value("sidecar").toString().toStdString() ==
+                directory.file("edited.xmp").string());
+        REQUIRE(file.value("marks").toObject().value("rating").toInt() == 4);
+        REQUIRE(file.value("marks").toObject().value("label").toString() == "Green");
+        const auto settings = file.value("settings").toObject();
+        REQUIRE(settings.keys().size() == 2);
+        REQUIRE(settings.value("exposure").toDouble() == Catch::Approx(0.5));
+        REQUIRE(settings.value("cropRectangle").toObject().value("right").toDouble() ==
+                Catch::Approx(0.9));
+        REQUIRE(result.out.find("\"exposure\"") < result.out.find("\"cropRectangle\""));
+    }
+    SECTION("--all lists every key in table order") {
+        const auto result = invoke({"info", "--json", "--all", plain.string()});
+        REQUIRE(result.code == cli::Success);
+        REQUIRE(firstFile(result.out).value("settings").toObject().size() == 16);
+        std::size_t previous = 0;
+        for (const FieldDescriptor& descriptor : developSettingDescriptors) {
+            const auto at = result.out.find("\"" + std::string(descriptor.key) + "\":");
+            REQUIRE(at != std::string::npos);
+            REQUIRE(at >= previous);
+            previous = at;
+        }
+        REQUIRE_THAT(result.out, ContainsSubstring("\"temperature\": null"));
+    }
+}
+
+TEST_CASE("Info shows the rest when one file is broken, and exits 1", "[cli][info]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    const auto rubbish = writeRubbish(directory, "rubbish.dng");
+
+    SECTION("text") {
+        const auto result = invoke({"info", rubbish.string(), raw.string()});
+        REQUIRE(result.code == cli::Failed);
+        REQUIRE_THAT(result.out, StartsWith(raw.string() + "\n"));
+        REQUIRE_THAT(result.err, ContainsSubstring("error:"));
+        REQUIRE_THAT(result.err, ContainsSubstring("rubbish.dng"));
+        REQUIRE_THAT(result.err, ContainsSubstring("1 of 2 failed"));
+    }
+    SECTION("JSON") {
+        const auto result = invoke({"info", "--json", rubbish.string(), raw.string()});
+        REQUIRE(result.code == cli::Failed);
+        REQUIRE(firstFile(result.out).value("path").toString().toStdString() == raw.string());
+    }
+}
+
+TEST_CASE("Info --no-sidecar shows the file as it opens without one", "[cli][info]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    writeSidecar(editedPhoto(raw));
+    const auto result = invoke({"info", "--no-sidecar", raw.string()});
+
+    REQUIRE(result.code == cli::Success);
+    REQUIRE_THAT(result.out, ContainsSubstring("sidecar: " + directory.file("frame.xmp").string() +
+                                               " (ignored)"));
+    REQUIRE_THAT(result.out, ContainsSubstring("develop settings: defaults"));
+    REQUIRE_THAT(result.out, !ContainsSubstring("rating"));
+
+    const auto json = firstFile(invoke({"info", "--json", "--no-sidecar", raw.string()}).out);
+    REQUIRE(json.value("sidecarRead").toBool() == false);
+    REQUIRE(json.value("sidecar").toString().toStdString() == directory.file("frame.xmp").string());
+}
+
+TEST_CASE("Info fails a file whose sidecar is unreadable, unless --no-sidecar is given",
+          "[cli][info][sidecar]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    std::ofstream(directory.file("frame.xmp")) << "this is not xml <<<";
+
+    const auto failed = invoke({"info", raw.string()});
+    REQUIRE(failed.code == cli::Failed);
+    REQUIRE(failed.out.empty());
+    REQUIRE_THAT(failed.err, ContainsSubstring("error:"));
+    REQUIRE_THAT(failed.err, ContainsSubstring("frame.xmp"));
+    REQUIRE_THAT(failed.err, ContainsSubstring("--no-sidecar"));
+
+    const auto bare = invoke({"info", "--no-sidecar", raw.string()});
+    REQUIRE(bare.code == cli::Success);
+    REQUIRE(bare.err.empty());
+}
+
+TEST_CASE("Info reports sidecar warnings through the log, and --quiet keeps them",
+          "[cli][info][sidecar]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    writeSidecar(openPhoto(raw));
+    {
+        std::ifstream in(directory.file("frame.xmp"));
+        std::string xmp((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        const auto at = xmp.find("arraw:exposure=\"");
+        REQUIRE(at != std::string::npos);
+        const auto end = xmp.find('"', at + 16);
+        xmp.replace(at, end - at + 1, "arraw:exposure=\"99\"");
+        std::ofstream(directory.file("frame.xmp")) << xmp;
+    }
+    const auto text = invoke({"info", "--quiet", raw.string()});
+    REQUIRE(text.code == cli::Success);
+    REQUIRE_THAT(text.err, ContainsSubstring("exposure"));
+    REQUIRE_THAT(text.out, ContainsSubstring("exposure: 5"));
+
+    const auto json = invoke({"info", "--log-format", "json", raw.string()});
+    REQUIRE_THAT(json.err, ContainsSubstring("setting_clamped"));
+}
+
+TEST_CASE("Info has its own help, usage errors, and writes nothing", "[cli][info]") {
+    const auto help = invoke({"info", "--help"});
+    REQUIRE(help.code == cli::Success);
+    REQUIRE_THAT(help.out, ContainsSubstring("info <input>..."));
+    REQUIRE_THAT(help.out, ContainsSubstring("--all"));
+    REQUIRE_THAT(help.out, ContainsSubstring("--json"));
+    REQUIRE_THAT(help.out, ContainsSubstring("--no-sidecar"));
+    REQUIRE_THAT(help.out, !ContainsSubstring("--overwrite"));
+    REQUIRE(help.started.empty());
+
+    const auto top = invoke({"--help"});
+    REQUIRE_THAT(top.out, ContainsSubstring("info"));
+    REQUIRE(cli::findCommand("info")->run != nullptr);
+
+    for (const auto& arguments :
+         {std::vector<std::string>{"info"}, std::vector<std::string>{"info", "--nonsense", "x"},
+          std::vector<std::string>{"info", "--log-format", "xml", "x"}}) {
+        CAPTURE(arguments);
+        const auto result = invoke(arguments);
+        REQUIRE(result.code == cli::UsageError);
+        REQUIRE(result.started.empty());
+    }
+}
+
+namespace {
+
+/// @brief Reads a file's bytes.
+std::string bytesOf(const std::filesystem::path& path) {
+    std::ifstream in(path, std::ios::binary);
+    return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+}
+
+/// @brief Lists the names in a directory, sorted.
+std::vector<std::string> namesIn(const std::filesystem::path& directory) {
+    std::vector<std::string> names;
+    for (const auto& entry : std::filesystem::directory_iterator(directory)) {
+        names.push_back(entry.path().filename().string());
+    }
+    std::ranges::sort(names);
+    return names;
+}
+
+} // namespace
+
+TEST_CASE("Info never writes or changes a sidecar", "[cli][info][sidecar]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    const auto before = namesIn(directory.path());
+    REQUIRE(invoke({"info", raw.string()}).code == cli::Success);
+    REQUIRE(namesIn(directory.path()) == before);
+
+    writeSidecar(editedPhoto(raw));
+    const auto xmp = directory.file("frame.xmp");
+    const auto bytes = bytesOf(xmp);
+    const auto names = namesIn(directory.path());
+    for (const auto& flags :
+         {std::vector<std::string>{}, {"--all"}, {"--json"}, {"--no-sidecar"}}) {
+        auto arguments = std::vector<std::string>{"info"};
+        arguments.insert(arguments.end(), flags.begin(), flags.end());
+        arguments.push_back(raw.string());
+        CAPTURE(arguments);
+        REQUIRE(invoke(arguments).code == cli::Success);
+        REQUIRE(bytesOf(xmp) == bytes);
+        REQUIRE(namesIn(directory.path()) == names);
+    }
+
+    std::ofstream(xmp, std::ios::binary) << "this is not xml <<<";
+    const auto broken = bytesOf(xmp);
+    REQUIRE(invoke({"info", raw.string()}).code == cli::Failed);
+    REQUIRE(invoke({"info", "--json", raw.string()}).code == cli::Failed);
+    REQUIRE(bytesOf(xmp) == broken);
+    REQUIRE(namesIn(directory.path()) == names);
 }

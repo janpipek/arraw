@@ -150,6 +150,62 @@ std::vector<Resolved> propertiesOf(const QDomElement& description) {
     return properties;
 }
 
+/// @brief Namespaces that are the packet's own or arraw's, not another tool's.
+///
+/// An empty namespace, which is what an unbound prefix resolves to, counts as
+/// own and is dropped silently. The XML namespace entry is a safeguard only:
+/// `xml:` is implicitly bound and never reaches here as a declared prefix.
+bool isOwnNamespace(const QString& ns) {
+    static const std::array<QLatin1StringView, 6> own = {
+        rdfNamespace,
+        xmpNamespace,
+        QLatin1StringView("adobe:ns:meta/"),
+        QLatin1StringView("http://www.w3.org/2000/xmlns/"),
+        QLatin1StringView("http://www.w3.org/XML/1998/namespace"),
+        QLatin1StringView(sidecarNamespace.data(),
+                          static_cast<qsizetype>(sidecarNamespace.size()))};
+    return ns.isEmpty() || std::ranges::find(own, ns) != own.end();
+}
+
+/// @brief Lists the other tools' namespaces and how many properties each holds.
+///
+/// Attributes are taken by name and then the child elements in document order,
+/// for Qt keeps attributes unordered.
+std::vector<ForeignNamespace> foreignNamespacesIn(const std::vector<QDomElement>& descriptions) {
+    std::vector<ForeignNamespace> others;
+    const auto count = [&](const QString& ns, const QString& prefix) {
+        if (isOwnNamespace(ns)) {
+            return;
+        }
+        const std::string uri = ns.toStdString();
+        auto found = std::ranges::find(others, uri, &ForeignNamespace::uri);
+        if (found == others.end()) {
+            others.push_back({uri, prefix.toStdString(), 0});
+            found = others.end() - 1;
+        }
+        ++found->properties;
+    };
+    for (const QDomElement& description : descriptions) {
+        const QDomNamedNodeMap attributes = description.attributes();
+        QStringList names;
+        for (int i = 0; i < attributes.size(); ++i) {
+            names.push_back(attributes.item(i).nodeName());
+        }
+        names.sort();
+        for (const QString& name : names) {
+            const auto [prefix, local] = splitName(name);
+            if (!prefix.isEmpty() && prefix != "xmlns"_L1) {
+                count(namespaceOf(description, prefix), prefix);
+            }
+        }
+        for (QDomElement child = description.firstChildElement(); !child.isNull();
+             child = child.nextSiblingElement()) {
+            count(resolved(child).ns, splitName(child.tagName()).first);
+        }
+    }
+    return others;
+}
+
 /// @brief Whether an element sits in a namespace under a local name.
 bool isNamed(const QDomElement& element, QLatin1StringView ns, QLatin1StringView local) {
     const Resolved name = resolved(element);
@@ -435,6 +491,15 @@ QByteArray readBytes(const std::filesystem::path& path) {
     return file.readAll();
 }
 
+/// @brief Reads `xmp:CreatorTool`; nothing when it is absent, empty or not simple text.
+std::optional<std::string> creatorToolIn(const std::vector<QDomElement>& descriptions) {
+    const auto found = occurrencesOf(descriptions, xmpProperty("CreatorTool"_L1));
+    if (found.empty() || !found.back().simple || found.back().text.isEmpty()) {
+        return std::nullopt;
+    }
+    return found.back().text.toStdString();
+}
+
 /// @brief Reads the version a sidecar declares; nothing when it declares none or one that is
 /// unreadable.
 std::optional<int> versionIn(const std::vector<QDomElement>& descriptions) {
@@ -584,6 +649,14 @@ bool isAmong(const std::filesystem::path& photo, std::span<const std::string_vie
 
 } // namespace
 
+std::optional<std::string_view> arraw::xmpNamespaceOwner(std::string_view uri) {
+    const auto found = std::ranges::find(xmpNamespaceOwners, uri, &XmpNamespaceOwner::uri);
+    if (found == xmpNamespaceOwners.end()) {
+        return std::nullopt;
+    }
+    return found->name;
+}
+
 std::filesystem::path arraw::sidecarPath(const std::filesystem::path& photo) {
     // The RAW of a pair keeps the stem; anything else that shares a stem with
     // another image has to be told apart by its extension.
@@ -630,6 +703,8 @@ std::optional<SidecarContents> arraw::readSidecar(const std::filesystem::path& p
     }
     readUnknownKeys(descriptions, log, photo);
     contents.marks = marksIn(descriptions, log, photo);
+    contents.creatorTool = creatorToolIn(descriptions);
+    contents.others = foreignNamespacesIn(descriptions);
     return contents;
 }
 

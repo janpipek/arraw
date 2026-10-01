@@ -181,6 +181,51 @@ TEST_CASE("A new sidecar is an XMP packet holding the settings as attributes", "
     REQUIRE(text.find("arraw:tint") == std::string::npos);
 }
 
+TEST_CASE("Reading names the other tools that wrote in a sidecar", "[sidecar][others]") {
+    const test::TempDir directory;
+    const fs::path path = copyRaw(directory, "IMG_1.dng");
+    fs::copy_file(test::fixture("sidecar-foreign.xmp"), directory.file("IMG_1.xmp"));
+
+    const auto contents = readSidecar(path);
+    REQUIRE(contents);
+    REQUIRE(contents->creatorTool == "Adobe Lightroom Classic 13.0 (Macintosh)");
+    // crs: on attributes, acme: on elements, then dc: in the second description;
+    // arraw:, xmp:, rdf: and x: are not counted.
+    const std::vector<ForeignNamespace> expected = {
+        {"http://ns.adobe.com/camera-raw-settings/1.0/", "crs", 4},
+        {"http://ns.example.com/acme/1.0/", "acme", 2},
+        {"http://purl.org/dc/elements/1.1/", "dc", 1},
+    };
+    REQUIRE(contents->others == expected);
+    REQUIRE(xmpNamespaceOwner(expected[0].uri) == "Adobe Camera Raw / Lightroom develop settings");
+    REQUIRE(xmpNamespaceOwner(expected[2].uri) == "Dublin Core");
+    REQUIRE_FALSE(xmpNamespaceOwner(expected[1].uri));
+}
+
+TEST_CASE("The creator tool is read as an element too", "[sidecar][others]") {
+    const test::TempDir directory;
+    const fs::path path = copyRaw(directory, "IMG_1.dng");
+    spit(
+        directory.file("IMG_1.xmp"),
+        R"(<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+ <rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xml:lang="en"><xmp:CreatorTool>darktable 4.6</xmp:CreatorTool></rdf:Description>
+</rdf:RDF></x:xmpmeta>)");
+    const auto contents = readSidecar(path);
+    REQUIRE(contents);
+    REQUIRE(contents->creatorTool == "darktable 4.6");
+    REQUIRE(contents->others.empty());
+}
+
+TEST_CASE("A sidecar arraw wrote has no other tools in it", "[sidecar][others]") {
+    const test::TempDir directory;
+    const fs::path path = copyRaw(directory, "IMG_1.dng");
+    writeSidecar(photoOf(path, allNonDefault(), {.rating = 2, .label = ColorLabel::Red}));
+    const auto contents = readSidecar(path);
+    REQUIRE(contents);
+    REQUIRE_FALSE(contents->creatorTool);
+    REQUIRE(contents->others.empty());
+}
+
 TEST_CASE("Writing over a foreign sidecar keeps everything it does not own", "[sidecar]") {
     const test::TempDir directory;
     const fs::path path = copyRaw(directory, "IMG_1.dng");

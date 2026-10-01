@@ -96,9 +96,21 @@ void bindPhoto(nb::module_& m) {
         m, "PhotoMarks", "Culling marks of a photograph: rating -1 (rejected) to 5, and a label.",
         field("rating", &PhotoMarks::rating), field("label", &PhotoMarks::label));
 
-    bindFrozen<SidecarContents>(m, "SidecarContents", "What an XMP sidecar holds.",
-                                field("settings", &SidecarContents::settings),
-                                field("marks", &SidecarContents::marks));
+    bindFrozen<ForeignNamespace>(
+        m, "ForeignNamespace",
+        "A namespace other tools left properties in: its URI, the prefix as written, and how "
+        "many top-level properties it holds.",
+        field("uri", &ForeignNamespace::uri), field("prefix", &ForeignNamespace::prefix),
+        field("properties", &ForeignNamespace::properties));
+
+    bindFrozen<SidecarContents>(
+        m, "SidecarContents", "What an XMP sidecar holds, and which other tools wrote in it.",
+        field("settings", &SidecarContents::settings), field("marks", &SidecarContents::marks),
+        field("creator_tool", &SidecarContents::creatorTool),
+        field("others", &SidecarContents::others));
+
+    m.def("xmp_namespace_owner", &xmpNamespaceOwner, "uri"_a,
+          "Name the tool or standard behind an XMP namespace URI, or None when unknown.");
 
     nb::class_<Photo>(m, "Photo", "One photograph as a document: a file and how it is developed.")
         .def_prop_ro("path", &Photo::path)

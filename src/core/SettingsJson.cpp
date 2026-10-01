@@ -12,6 +12,8 @@
 #include <cmath>
 #include <stdexcept>
 #include <string>
+#include <string_view>
+#include <variant>
 
 using namespace arraw;
 
@@ -24,35 +26,38 @@ std::string number(double value) {
     return std::string(buffer, written.ptr);
 }
 
-/// @brief Spells an encoded value as JSON.
-///
-/// Keys and names come from the tables in this library, plain ASCII with
-/// nothing to escape.
-std::string spell(const Encoded& encoded) {
-    struct Speller {
-        std::string operator()(std::monostate) const {
-            return "null";
-        }
-        std::string operator()(bool flag) const {
-            return flag ? "true" : "false";
-        }
-        std::string operator()(double value) const {
-            return number(value);
-        }
-        std::string operator()(const std::string& text) const {
-            return '"' + text + '"';
-        }
-        std::string operator()(const Compound& compound) const {
-            // In the order the codec gives, which reads left to right.
-            std::string text = "{";
-            for (const auto& [key, value] : compound) {
-                text += text.size() > 1 ? ", " : "";
-                text += '"' + key + "\": " + number(value);
+/// @brief Quotes a string as JSON.
+std::string jsonString(std::string_view text) {
+    std::string result = "\"";
+    for (const char character : text) {
+        switch (character) {
+        case '"':
+            result += "\\\"";
+            break;
+        case '\\':
+            result += "\\\\";
+            break;
+        case '\n':
+            result += "\\n";
+            break;
+        case '\r':
+            result += "\\r";
+            break;
+        case '\t':
+            result += "\\t";
+            break;
+        default:
+            if (static_cast<unsigned char>(character) < 0x20) {
+                constexpr std::string_view digits = "0123456789abcdef";
+                result += "\\u00";
+                result += digits[static_cast<unsigned char>(character) >> 4];
+                result += digits[static_cast<unsigned char>(character) & 0xF];
+            } else {
+                result += character;
             }
-            return text + '}';
         }
-    };
-    return std::visit(Speller{}, encoded);
+    }
+    return result + '"';
 }
 
 /// @brief Reads a JSON value as an encoded one, or nothing when it has no such form.
@@ -87,13 +92,40 @@ std::optional<Encoded> unspell(const QJsonValue& value) {
 
 } // namespace
 
+std::string arraw::encodedToJson(const Encoded& encoded) {
+    struct Speller {
+        std::string operator()(std::monostate) const {
+            return "null";
+        }
+        std::string operator()(bool flag) const {
+            return flag ? "true" : "false";
+        }
+        std::string operator()(double value) const {
+            return number(value);
+        }
+        std::string operator()(const std::string& text) const {
+            return jsonString(text);
+        }
+        std::string operator()(const Compound& compound) const {
+            // In the order the codec gives, which reads left to right.
+            std::string text = "{";
+            for (const auto& [key, value] : compound) {
+                text += text.size() > 1 ? ", " : "";
+                text += jsonString(key) + ": " + number(value);
+            }
+            return text + '}';
+        }
+    };
+    return std::visit(Speller{}, encoded);
+}
+
 std::string arraw::settingsToJson(const DevelopSettings& settings) {
     validate(settings);
     std::string text =
         "{\n  \"arraw\": " + std::to_string(settingsJsonVersion) + ",\n  \"settings\": {\n";
     for (const FieldDescriptor& descriptor : developSettingDescriptors) {
-        text +=
-            "    \"" + std::string(descriptor.key) + "\": " + spell(encode(descriptor, settings));
+        text += "    \"" + std::string(descriptor.key) +
+                "\": " + encodedToJson(encode(descriptor, settings));
         text += &descriptor == &developSettingDescriptors.back() ? "\n" : ",\n";
     }
     return text + "  }\n}\n";

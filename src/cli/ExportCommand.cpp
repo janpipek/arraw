@@ -7,6 +7,7 @@
 #include "GpuDevelop.h"
 #include "ProcessingPlan.h"
 #include "SettingCodec.h"
+#include "SidecarWatch.h"
 #include "StreamDiagnostics.h"
 
 #include <Develop.h>
@@ -32,6 +33,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -654,23 +656,6 @@ ImageBuffer developOnDevice(GpuContext& context, const ImageBuffer& source,
     return checkpoint.readBack();
 }
 
-/// @brief Log that passes everything on and notes whether a sidecar was unreadable.
-class SidecarWatch final : public DiagnosticLog {
-public:
-    explicit SidecarWatch(DiagnosticLog& next) : next_(next) {}
-
-    void record(const Diagnostic& diagnostic) override {
-        unreadable = unreadable || diagnostic.notice == Notice::SidecarUnreadable;
-        next_.record(diagnostic);
-    }
-
-    /// @brief Whether a sidecar was reported unreadable.
-    bool unreadable = false;
-
-private:
-    DiagnosticLog& next_;
-};
-
 /// @brief Exports every input, continuing past the ones that fail.
 int exportAll(const ExportRequest& request, std::ostream& err) {
     cli::StreamDiagnostics log(err, request.logFormat, request.quiet);
@@ -733,7 +718,7 @@ int exportAll(const ExportRequest& request, std::ostream& err) {
             // A sidecar that cannot be read fails the file: opened bare, the
             // photograph would export without the edits its photographer made
             // and the exit status would say all was well. --no-sidecar opts out.
-            SidecarWatch watch(log);
+            cli::SidecarWatch watch(log);
             const Photo opened = request.useSidecars ? openPhoto(input, watch)
                                                      : Photo(input, readImageMetadata(input, log));
             if (watch.unreadable) {
@@ -741,8 +726,9 @@ int exportAll(const ExportRequest& request, std::ostream& err) {
                                          "applied; fix the sidecar, or pass --no-sidecar to "
                                          "export without it");
             }
-            const Photo photo =
-                opened.with(cli::applyEdits(opened.settings(), request.edits, log, input));
+            const Photo photo = opened.with(cli::applyEdits(
+                opened.settings(), request.edits, log, input,
+                !std::holds_alternative<NamedEncoding>(opened.metadata().encoding)));
             // Decoded once, before the device is involved: a file that cannot be
             // read is the input's failure, whichever device would have developed it.
             const ImageBuffer source = loadImage(input);
@@ -827,16 +813,12 @@ std::optional<cli::ExportEdits> cli::readExportEdits(const std::vector<std::stri
 }
 
 DevelopSettings cli::applyEdits(DevelopSettings base, const ExportEdits& edits, DiagnosticLog& log,
-                                const std::filesystem::path& subject) {
-    // A photograph that is not in Custom white balance has no temperature or
-    // tint of its own, so whatever a sidecar left in them is dropped first:
-    // naming one half then leaves the other as shot, as it always did, rather
-    // than adopting a value the photograph was not using. This happens with no
-    // flags too, which changes nothing a render reads.
-    if (base.color.whiteBalance != WhiteBalanceMode::Custom) {
-        base.color.temperature.reset();
-        base.color.tint.reset();
-    }
+                                const std::filesystem::path& subject, bool raw) {
+    // Whatever a sidecar left in the settings a render does not read is dropped
+    // first: naming one half of temperature and tint then leaves the other as
+    // shot, as it always did, rather than adopting a value the photograph was
+    // not using. This happens with no flags too, which changes nothing a render reads.
+    base = withoutUnusedSettings(std::move(base), raw);
     for (const SettingEdit& edit : edits.settings) {
         decode(*edit.descriptor, edit.value, base, log, subject);
     }

@@ -1,5 +1,6 @@
 """Python bindings for the arraw RAW processing engine."""
 
+from collections.abc import Sequence
 import enum
 import os
 import pathlib
@@ -464,16 +465,47 @@ class PhotoMarks:
     def replace(self, **kwargs) -> PhotoMarks:
         """Return a copy with the given attributes replaced."""
 
-class SidecarContents:
-    """What an XMP sidecar holds."""
+class ForeignNamespace:
+    """
+    A namespace other tools left properties in: its URI, the prefix as written, and how many top-level properties it holds.
+    """
 
-    def __init__(self, *, settings: DevelopSettings | None = None, marks: PhotoMarks | None = None) -> None: ...
+    def __init__(self, *, uri: str | None = None, prefix: str | None = None, properties: int | None = 0) -> None: ...
+
+    @property
+    def uri(self) -> str: ...
+
+    @property
+    def prefix(self) -> str: ...
+
+    @property
+    def properties(self) -> int: ...
+
+    def __eq__(self, arg: ForeignNamespace, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> ForeignNamespace:
+        """Return a copy with the given attributes replaced."""
+
+class SidecarContents:
+    """What an XMP sidecar holds, and which other tools wrote in it."""
+
+    def __init__(self, *, settings: DevelopSettings | None = None, marks: PhotoMarks | None = None, creator_tool: str | None = None, others: Sequence[ForeignNamespace] | None = None) -> None: ...
 
     @property
     def settings(self) -> DevelopSettings: ...
 
     @property
     def marks(self) -> PhotoMarks: ...
+
+    @property
+    def creator_tool(self) -> str | None: ...
+
+    @property
+    def others(self) -> list[ForeignNamespace]: ...
 
     def __eq__(self, arg: SidecarContents, /) -> bool: ...
 
@@ -483,6 +515,11 @@ class SidecarContents:
 
     def replace(self, **kwargs) -> SidecarContents:
         """Return a copy with the given attributes replaced."""
+
+def xmp_namespace_owner(uri: str) -> str | None:
+    """
+    Name the tool or standard behind an XMP namespace URI, or None when unknown.
+    """
 
 class Photo:
     """One photograph as a document: a file and how it is developed."""

@@ -63,7 +63,7 @@ are registered: `export`, and `info` and `preset` with a null `run`. A null
 `run` is what "reserved but not built" means — no stub function, no apology
 printed from a binary. The top-level help lists the commands *from that same
 table*, so it cannot advertise a command that does not dispatch, and a reserved
-one is marked. Typing `info` gets "not implemented yet"; typing `develop` gets
+one is marked. (When written, `info` was reserved; see the note at the end.) Typing `info` then got "not implemented yet"; typing `develop` gets
 "unknown command", because someone who typed what the documentation promised did
 not make the same mistake as someone who guessed.
 
@@ -143,13 +143,40 @@ JSON, with the photograph as their subject.
   and an overnight batch can be read by something other than a person. The
   summary line goes through it too, or a JSON reader would have one line to
   skip.
-- **`preset` and `info` are advertised but refuse to run**, exiting `2`. That is
-  a deliberate trade: `--help` names two commands that do nothing, which is the
+- **`preset` is advertised but refuses to run**, exiting `2`. That is
+  a deliberate trade: `--help` names a command that does nothing, which is the
   cost of telling a reader following `desired-features.md` that the feature is
-  coming rather than that they mistyped. It stops being a trade when they land.
+  coming rather than that they mistyped. It stops being a trade when it lands.
+  (`info` was the second such command until 2026-09-30; see the note below.)
 - **`QCommandLineParser`'s lack of subcommands costs nothing here**, because
   dispatch happens before any parser is built and each command constructs its
   own. What Qt cannot do is put the command word in its usage line — it knows
   only `argv[0]` — so each command passes the word through its positional
   `syntax` argument.
 - Qt claims `-v` for `--version`, so a future verbose flag needs another letter.
+
+## Note, 2026-09-30: `info` is implemented
+
+`arraw-cli info <file>... [--all] [--json] [--no-sidecar] [--quiet]
+[--log-format]` opens each file as a document (no pixels are read) and shows its
+path, pixel size, orientation, colour encoding (`camera` for a RAW, else the
+named encoding), its sidecar (the path, or `none`), its rating (`rejected` for
+-1) and colour label when set, and the develop settings that differ from the
+defaults, one `key: value` per line in table order, spelled by the same codec as
+the sidecar and the JSON settings document. `--all` lists every setting. `--json`
+prints one document, `{"files": [...]}`, with the settings as an object of the
+same values. The report goes to stdout, diagnostics to stderr through the log
+export uses. As in export, an unreadable input or sidecar fails that file
+(exit 1) while the rest are shown, and `--no-sidecar` opens the file bare.
+Nothing is ever written.
+
+The EXIF of the camera (make, model, lens, exposure, date) is not shown: it
+awaits the metadata reader deferred in ADR 005. Until then `info` reports only
+what opening a photograph already knows.
+
+`info` also says which other tools left information in the sidecar, from what
+reading it already finds (ADR 019): an `other tools:` block with
+`written by: <xmp:CreatorTool>` and one line per foreign namespace,
+`<owner or unknown> (<prefix>:, N properties)`. `--json` gives `creatorTool`
+(string or null) and `others` (`uri`, `prefix`, `properties`, `owner`) per file.
+Nothing is shown for a sidecar only arraw wrote, or with `--no-sidecar`.

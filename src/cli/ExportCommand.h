@@ -87,9 +87,11 @@ struct ExportEdits {
 /// @param edits What the flags said.
 /// @param log Where the codec's warnings go; a value the flags gave is already in range.
 /// @param subject Photograph the settings are for.
+/// @param raw Whether the photograph is a RAW, which decides the settings a render does not read.
 /// @return @p base with the edits applied.
 [[nodiscard]] DevelopSettings applyEdits(DevelopSettings base, const ExportEdits& edits,
-                                         DiagnosticLog& log, const std::filesystem::path& subject);
+                                         DiagnosticLog& log, const std::filesystem::path& subject,
+                                         bool raw = true);
 
 /// @brief Renders images and writes them out.
 ///

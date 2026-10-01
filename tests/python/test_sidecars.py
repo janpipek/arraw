@@ -227,6 +227,16 @@ def test_round_trip_through_write_and_read(work):
     assert hash(contents) == hash(arraw.read_sidecar(work))
 
 
+def test_read_sidecar_reports_other_tools(work):
+    shutil.copy(Path(__file__).parents[1] / "fixtures" / "sidecar-foreign.xmp", arraw.sidecar_path(work))
+    contents = arraw.read_sidecar(work)
+    assert contents.creator_tool == "Adobe Lightroom Classic 13.0 (Macintosh)"
+    assert [(o.prefix, o.properties) for o in contents.others] == [("crs", 4), ("acme", 2), ("dc", 1)]
+    assert arraw.xmp_namespace_owner(contents.others[0].uri) == "Adobe Camera Raw / Lightroom develop settings"
+    assert arraw.xmp_namespace_owner(contents.others[1].uri) is None
+    assert hash(contents) == hash(arraw.read_sidecar(work))
+
+
 def test_open_reads_the_sidecar(work):
     photo = arraw.open(work, sidecar=False).with_(
         exposure=-1.5, tint=20, rating=-1, label=arraw.ColorLabel.YELLOW

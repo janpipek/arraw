@@ -8,6 +8,7 @@
     xmlns:acme="http://ns.example.com/acme/1.0/"
     xmp:Rating="3"
     xmp:Label="Blue"
+    xmp:CreatorTool="Adobe Lightroom Classic 13.0 (Macintosh)"
     crs:Version="15.0"
     crs:Exposure2012="+0.50"
     crs:Contrast2012="+10"

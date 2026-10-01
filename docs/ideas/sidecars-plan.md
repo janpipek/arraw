@@ -1,6 +1,7 @@
 # Sidecars and settings as JSON — execution plan
 
-Status: proposed.
+Status: implemented on branch `sidecars`. The format and its guarantees are
+recorded in [ADR 019](../adr/019-develop-settings-live-in-an-xmp-sidecar-and-in-json.md).
 
 ## Goal
 

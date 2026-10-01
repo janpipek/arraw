@@ -77,4 +77,22 @@ void reportMalformed(const FieldDescriptor& descriptor, DiagnosticLog& log,
 void decode(const FieldDescriptor& descriptor, const Encoded& encoded, DevelopSettings& settings,
             DiagnosticLog& log, const std::optional<std::filesystem::path>& subject = std::nullopt);
 
+/// @brief Spells an encoded value as JSON, as the settings document does.
+///
+/// Null is `null`, a compound an object with its members in order, and strings
+/// are quoted and escaped. Numbers take the shortest text that reads back the same.
+/// @param encoded Value to spell.
+/// @return The JSON text of the value.
+[[nodiscard]] std::string encodedToJson(const Encoded& encoded);
+
+/// @brief Resets the settings a render would not read.
+///
+/// Temperature and tint belong to Custom white balance, so a photograph in any
+/// other mode has none of its own, and they need a sensor, so a photograph
+/// that is not a RAW has none either. Whatever a sidecar left in them is dropped.
+/// @param settings Settings to clean.
+/// @param raw Whether the photograph is a RAW.
+/// @return @p settings without the unused ones; what a render reads is unchanged.
+[[nodiscard]] DevelopSettings withoutUnusedSettings(DevelopSettings settings, bool raw);
+
 } // namespace arraw

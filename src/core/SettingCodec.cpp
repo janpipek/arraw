@@ -331,3 +331,11 @@ void arraw::decode(const FieldDescriptor& descriptor, const Encoded& encoded,
         }
     });
 }
+
+DevelopSettings arraw::withoutUnusedSettings(DevelopSettings settings, bool raw) {
+    if (!raw || settings.color.whiteBalance != WhiteBalanceMode::Custom) {
+        settings.color.temperature.reset();
+        settings.color.tint.reset();
+    }
+    return settings;
+}
