@@ -1,6 +1,6 @@
 #include "Diagnostics.h"
 
-#include <sstream>
+#include <format>
 #include <utility>
 
 using namespace arraw;
@@ -12,9 +12,7 @@ std::string text(const DiagnosticValue& value) {
     if (const auto* words = std::get_if<std::string>(&value)) {
         return *words;
     }
-    std::ostringstream stream;
-    stream << std::get<double>(value);
-    return stream.str();
+    return std::format("{}", std::get<double>(value));
 }
 
 /// @brief Reads one detail, or an empty one when it was not supplied.
@@ -77,6 +75,23 @@ std::string arraw::describe(const Diagnostic& diagnostic) {
         return "exporting on the CPU";
     case Notice::GpuFallback:
         return "not using the GPU, exporting on the CPU instead: " + valueAt(diagnostic, 0);
+    case Notice::SettingClamped:
+        return "'" + valueAt(diagnostic, 0) + "' is " + valueAt(diagnostic, 1) +
+               ", outside what it accepts, so " + valueAt(diagnostic, 2) + " was used";
+    case Notice::SettingUnknown:
+        return "'" + valueAt(diagnostic, 0) + "' is not a setting, so it was ignored";
+    case Notice::SettingMalformed:
+        return "'" + valueAt(diagnostic, 0) + "' cannot be read, so it was ignored; expected " +
+               valueAt(diagnostic, 1);
+    case Notice::NewerSettingsVersion:
+        return "these settings are version " + valueAt(diagnostic, 0) +
+               ", but this arraw knows up to version " + valueAt(diagnostic, 1) +
+               "; reading what it can";
+    case Notice::SidecarUnreadable:
+        return valueAt(diagnostic, 0) + "; opened with default settings and no marks";
+    case Notice::CropReset:
+        return "the crop was drawn before " + valueAt(diagnostic, 0) +
+               " changed, so automatic framing was used instead";
     }
     return {};
 }

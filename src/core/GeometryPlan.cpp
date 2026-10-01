@@ -260,16 +260,14 @@ GeometryPlan arraw::geometryPlanFor(ImageSize size, ImageOrientation orientation
     if (std::holds_alternative<OriginalCropAspect>(settings.crop.aspect)) {
         aspect = originalWidth / originalHeight;
     } else if (const auto* custom = std::get_if<CropRatio>(&settings.crop.aspect)) {
-        if (!std::isfinite(custom->widthOverHeight) || custom->widthOverHeight <= 0) {
+        if (!isWellFormed(*custom)) {
             throw std::invalid_argument("Crop aspect must be positive and finite");
         }
         aspect = custom->widthOverHeight;
     }
     if (settings.crop.rectangle) {
         const auto& crop = *settings.crop.rectangle;
-        if (!std::isfinite(crop.left) || !std::isfinite(crop.top) || !std::isfinite(crop.right) ||
-            !std::isfinite(crop.bottom) || crop.left < 0 || crop.top < 0 || crop.right > 1 ||
-            crop.bottom > 1 || crop.left >= crop.right || crop.top >= crop.bottom) {
+        if (!isWellFormed(crop)) {
             throw std::invalid_argument("Crop edges must be finite, ordered and within 0 to 1");
         }
         plan.left = crop.left * plan.uprightWidth;

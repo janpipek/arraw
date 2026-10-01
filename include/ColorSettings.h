@@ -1,6 +1,9 @@
 #pragma once
 
+#include <array>
 #include <optional>
+#include <string_view>
+#include <utility>
 
 namespace arraw {
 
@@ -15,6 +18,13 @@ enum class WhiteBalanceMode {
     /// @brief A light the photographer named instead.
     Custom,
 };
+
+/// @brief Stable names of the white balance modes, as documents and the command line spell them.
+inline constexpr std::array<std::pair<WhiteBalanceMode, std::string_view>, 2> whiteBalanceModeNames{
+    {
+        {WhiteBalanceMode::AsShot, "asShot"},
+        {WhiteBalanceMode::Custom, "custom"},
+    }};
 
 /// @brief Photographic colour adjustments in domain units.
 struct ColorSettings {

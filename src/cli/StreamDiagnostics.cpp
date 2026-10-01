@@ -52,6 +52,18 @@ std::string nameOf(Notice notice) {
         return "cpu_used";
     case Notice::GpuFallback:
         return "gpu_fallback";
+    case Notice::SettingClamped:
+        return "setting_clamped";
+    case Notice::SettingUnknown:
+        return "setting_unknown";
+    case Notice::SettingMalformed:
+        return "setting_malformed";
+    case Notice::NewerSettingsVersion:
+        return "newer_settings_version";
+    case Notice::SidecarUnreadable:
+        return "sidecar_unreadable";
+    case Notice::CropReset:
+        return "crop_reset";
     }
     return "unknown";
 }

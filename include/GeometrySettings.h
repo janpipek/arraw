@@ -1,12 +1,24 @@
 #pragma once
 
+#include <array>
+#include <cmath>
 #include <optional>
+#include <string_view>
+#include <utility>
 #include <variant>
 
 namespace arraw {
 
 /// @brief User rotation clockwise from the camera's declared orientation.
 enum class QuarterTurn { None, Clockwise90, Clockwise180, Clockwise270 };
+
+/// @brief Stable names of the quarter-turns, as documents and the command line spell them.
+inline constexpr std::array<std::pair<QuarterTurn, std::string_view>, 4> quarterTurnNames{{
+    {QuarterTurn::None, "none"},
+    {QuarterTurn::Clockwise90, "clockwise90"},
+    {QuarterTurn::Clockwise180, "clockwise180"},
+    {QuarterTurn::Clockwise270, "clockwise270"},
+}};
 
 /// @brief Counterclockwise and clockwise limits of straightening, in degrees.
 inline constexpr double minimumStraighten = -45.0;
@@ -32,6 +44,11 @@ struct CropRatio {
     friend bool operator==(const CropRatio&, const CropRatio&) = default;
 };
 
+/// @brief Whether a crop ratio is positive and finite.
+[[nodiscard]] inline bool isWellFormed(const CropRatio& ratio) noexcept {
+    return std::isfinite(ratio.widthOverHeight) && ratio.widthOverHeight > 0.0;
+}
+
 /// @brief Per-photograph aspect constraint, independent of the selected rectangle.
 using CropAspect = std::variant<FreeCropAspect, OriginalCropAspect, CropRatio>;
 
@@ -54,6 +71,17 @@ struct UprightCropRect {
 
     friend bool operator==(const UprightCropRect&, const UprightCropRect&) = default;
 };
+
+/// @brief Whether a crop rectangle's edges are finite, ordered and within 0 to 1.
+///
+/// Whether it also lies inside valid image content depends on the image, and
+/// is the geometry plan's to decide (ADR 014).
+[[nodiscard]] inline bool isWellFormed(const UprightCropRect& rectangle) noexcept {
+    const auto& [left, top, right, bottom] = rectangle;
+    return std::isfinite(left) && std::isfinite(top) && std::isfinite(right) &&
+           std::isfinite(bottom) && left >= 0.0 && top >= 0.0 && right <= 1.0 && bottom <= 1.0 &&
+           left < right && top < bottom;
+}
 
 /// @brief Automatic or explicit framing and its remembered aspect constraint.
 struct CropSettings {

@@ -5,20 +5,30 @@
 #include "support/Fixtures.h"
 #include "support/TempDir.h"
 
+#include <DevelopSettings.h>
+#include <Diagnostics.h>
+#include <Photo.h>
+#include <Sidecar.h>
+
 #include <QByteArray>
 #include <QImage>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonParseError>
 #include <QString>
 #include <QtGlobal>
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <limits>
 #include <optional>
 #include <sstream>
@@ -277,7 +287,7 @@ TEST_CASE("The top-level help mentions the GPU switch", "[cli][gpu]") {
 }
 
 TEST_CASE("A reserved command says it is coming, not that it is unknown", "[cli]") {
-    const auto reserved = GENERATE(std::string{"info"}, std::string{"preset"});
+    const auto reserved = GENERATE(std::string{"preset"});
     CAPTURE(reserved);
 
     const auto* command = cli::findCommand(reserved);
@@ -1136,4 +1146,1003 @@ TEST_CASE("The GPU probe fails on a disabled GPU whatever device was asked for",
         REQUIRE(result.code == cli::Failed);
         REQUIRE_THAT(result.err, ContainsSubstring("ARRAW_DISABLE_GPU"));
     }
+}
+
+namespace {
+
+constexpr std::string_view sidecarRaw = "linear-32x24-neutral.dng";
+
+/// @brief Copies the RAW fixture into a directory under a name, so a sidecar can sit beside it.
+std::filesystem::path copyRaw(const test::TempDir& directory, const std::string& name) {
+    const auto path = directory.file(name);
+    std::filesystem::copy_file(test::fixture(sidecarRaw), path);
+    return path;
+}
+
+/// @brief Writes a sidecar holding @p settings beside a photograph.
+void sidecarWith(const std::filesystem::path& photo, const DevelopSettings& settings) {
+    writeSidecar(openPhoto(photo).with(settings));
+}
+
+/// @brief Exports one file to PNG on the CPU with extra flags, and loads the result.
+/// @param code Receives the exit code when not null.
+QImage exportedPng(const std::filesystem::path& input, std::vector<std::string> flags,
+                   int* code = nullptr, std::string* err = nullptr) {
+    const test::TempDir output;
+    std::vector<std::string> arguments{
+        "export",   input.string(), "-o",       output.path().string(),
+        "--format", "png",          "--device", "cpu"};
+    arguments.insert(arguments.end(), flags.begin(), flags.end());
+    const auto result = invoke(arguments);
+    if (code != nullptr) {
+        *code = result.code;
+    }
+    if (err != nullptr) {
+        *err = result.err;
+    }
+    return QImage(QString::fromStdString((output.path() / input.stem()).string() + ".png"));
+}
+
+/// @brief Settings that change every part of the picture the flags below can name.
+DevelopSettings editedSettings() {
+    DevelopSettings settings;
+    settings.tone.exposure = 0.5F;
+    settings.tone.shadows = 30.0F;
+    settings.color.whiteBalance = WhiteBalanceMode::Custom;
+    settings.color.temperature = 4200.0F;
+    settings.color.tint = 10.0F;
+    settings.geometry.rotation = QuarterTurn::Clockwise90;
+    settings.geometry.flipHorizontal = true;
+    settings.geometry.crop.rectangle = UprightCropRect{0.1, 0.1, 0.9, 0.9};
+    return settings;
+}
+
+const std::vector<std::string> editedFlags{
+    "--exposure", "0.5", "--shadows",         "30",     "--temperature",  "4200", "--tint", "10",
+    "--rotate",   "90",  "--flip-horizontal", "--crop", "0.1,0.1,0.9,0.9"};
+
+std::vector<std::string> withNoSidecar(std::vector<std::string> flags) {
+    flags.emplace_back("--no-sidecar");
+    return flags;
+}
+
+} // namespace
+
+TEST_CASE("An export renders through the photograph's own sidecar", "[cli][sidecar]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    sidecarWith(raw, editedSettings());
+
+    const QImage fromSidecar = exportedPng(raw, {});
+    const QImage fromFlags = exportedPng(raw, withNoSidecar(editedFlags));
+
+    /// The sidecar and the flags say the same thing, so the pixels must be the same.
+    REQUIRE_FALSE(fromSidecar.isNull());
+    REQUIRE(fromSidecar == fromFlags);
+    REQUIRE(fromSidecar != exportedPng(raw, {"--no-sidecar"}));
+}
+
+TEST_CASE("The --no-sidecar flag ignores the sidecar and equals a file without one",
+          "[cli][sidecar]") {
+    const test::TempDir directory;
+    const auto edited = copyRaw(directory, "edited.dng");
+    sidecarWith(edited, editedSettings());
+    const auto bare = copyRaw(directory, "bare.dng");
+
+    const QImage ignored = exportedPng(edited, {"--no-sidecar", "--contrast", "20"});
+
+    REQUIRE(ignored == exportedPng(bare, {"--contrast", "20"}));
+}
+
+TEST_CASE("A flag overrides its own key and keeps the rest of the sidecar", "[cli][sidecar]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    DevelopSettings settings;
+    settings.tone.exposure = 1.0F;
+    settings.tone.contrast = 20.0F;
+    sidecarWith(raw, settings);
+
+    const QImage overridden = exportedPng(raw, {"--exposure", "0"});
+
+    REQUIRE(overridden == exportedPng(raw, {"--no-sidecar", "--contrast", "20"}));
+    REQUIRE(overridden != exportedPng(raw, {}));
+}
+
+TEST_CASE("Flips and geometry keys the flags do not name stay as the sidecar has them",
+          "[cli][sidecar]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    DevelopSettings settings;
+    settings.geometry.flipHorizontal = true;
+    settings.geometry.crop.rectangle = UprightCropRect{0.1, 0.1, 0.5, 0.9};
+    sidecarWith(raw, settings);
+
+    /// Naming the tone alone touches no geometry: the flip and the rectangle stay.
+    const QImage image = exportedPng(raw, {"--contrast", "20"});
+
+    REQUIRE(image == exportedPng(raw, {"--no-sidecar", "--flip-horizontal", "--crop",
+                                       "0.1,0.1,0.5,0.9", "--contrast", "20"}));
+    REQUIRE(image !=
+            exportedPng(raw, {"--no-sidecar", "--crop", "0.1,0.1,0.5,0.9", "--contrast", "20"}));
+}
+
+TEST_CASE("A --crop on a sidecar with an aspect leaves the aspect free", "[cli][sidecar]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    DevelopSettings settings;
+    settings.geometry.crop.aspect = CropRatio{1.0};
+    sidecarWith(raw, settings);
+
+    int code = 0;
+    std::string err;
+    const QImage image = exportedPng(raw, {"--crop", "0.1,0.1,0.9,0.9"}, &code, &err);
+
+    REQUIRE(code == cli::Success);
+    REQUIRE(image == exportedPng(raw, {"--no-sidecar", "--crop", "0.1,0.1,0.9,0.9"}));
+}
+
+TEST_CASE("The --crop and --crop-aspect flags together are taken as given", "[cli][sidecar]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    DevelopSettings settings;
+    settings.geometry.crop.aspect = CropRatio{1.0};
+    sidecarWith(raw, settings);
+
+    /// 0.6 x 0.8 of a 4:3 image is square, so the sidecar's aspect and this rectangle agree.
+    REQUIRE(
+        exportedPng(raw, {"--crop", "0.2,0.1,0.8,0.9", "--crop-aspect", "1:1"}) ==
+        exportedPng(raw, {"--no-sidecar", "--crop", "0.2,0.1,0.8,0.9", "--crop-aspect", "1:1"}));
+}
+
+TEST_CASE("A --crop-aspect on a sidecar with a rectangle makes the crop automatic",
+          "[cli][sidecar]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    DevelopSettings settings;
+    settings.geometry.crop.rectangle = UprightCropRect{0.2, 0.1, 0.8, 0.9};
+    settings.geometry.crop.aspect = CropRatio{1.0};
+    sidecarWith(raw, settings);
+
+    SECTION("a different ratio") {
+        int code = 0;
+        const QImage image = exportedPng(raw, {"--crop-aspect", "3:2"}, &code);
+        REQUIRE(code == cli::Success);
+        REQUIRE(image == exportedPng(raw, {"--no-sidecar", "--crop-aspect", "3:2"}));
+    }
+    SECTION("original") {
+        int code = 0;
+        const QImage image = exportedPng(raw, {"--crop-aspect", "original"}, &code);
+        REQUIRE(code == cli::Success);
+        REQUIRE(image == exportedPng(raw, {"--no-sidecar", "--crop-aspect", "original"}));
+    }
+    SECTION("the same ratio keeps the rectangle") {
+        REQUIRE(exportedPng(raw, {"--crop-aspect", "1:1"}) ==
+                exportedPng(raw,
+                            {"--no-sidecar", "--crop", "0.2,0.1,0.8,0.9", "--crop-aspect", "1:1"}));
+    }
+    SECTION("free keeps the rectangle") {
+        REQUIRE(exportedPng(raw, {"--crop-aspect", "free"}) ==
+                exportedPng(raw, {"--no-sidecar", "--crop", "0.2,0.1,0.8,0.9"}));
+    }
+}
+
+TEST_CASE("A --rotate that turns the frame reframes a sidecar's crop, and says so",
+          "[cli][sidecar]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    DevelopSettings settings;
+    /// Square on the 4:3 image; the ratio stays square once the image is a quarter-turn.
+    settings.geometry.crop.rectangle = UprightCropRect{0.2, 0.1, 0.8, 0.9};
+    settings.geometry.crop.aspect = CropRatio{1.0};
+    sidecarWith(raw, settings);
+
+    int code = 0;
+    std::string err;
+    const QImage image = exportedPng(raw, {"--rotate", "90"}, &code, &err);
+
+    REQUIRE(code == cli::Success);
+    REQUIRE_THAT(err, ContainsSubstring("automatic framing"));
+    REQUIRE(image == exportedPng(raw, {"--no-sidecar", "--rotate", "90", "--crop-aspect", "1:1"}));
+}
+
+TEST_CASE("A flip flag reframes a sidecar's crop, and --no-flip undoes a sidecar's flip",
+          "[cli][sidecar]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    DevelopSettings plain;
+    plain.geometry.crop.rectangle = UprightCropRect{0.0, 0.1, 0.5, 0.6};
+    DevelopSettings flipped = plain;
+    flipped.geometry.flipHorizontal = true;
+    flipped.geometry.crop.rectangle = UprightCropRect{0.5, 0.1, 1.0, 0.6};
+    const auto other = copyRaw(directory, "other.dng");
+    sidecarWith(raw, plain);
+    sidecarWith(other, flipped);
+
+    SECTION("adding a flip frames the picture anew") {
+        REQUIRE(exportedPng(raw, {"--flip-horizontal"}) ==
+                exportedPng(raw, {"--no-sidecar", "--flip-horizontal"}));
+    }
+    SECTION("removing a flip frames the picture anew") {
+        REQUIRE(exportedPng(other, {"--no-flip-horizontal"}) ==
+                exportedPng(other, {"--no-sidecar"}));
+    }
+    SECTION("a flip with a crop uses that crop") {
+        REQUIRE(exportedPng(raw, {"--flip-horizontal", "--crop", "0.5,0.1,1,0.6"}) ==
+                exportedPng(raw, {"--no-sidecar", "--flip-horizontal", "--crop", "0.5,0.1,1,0.6"}));
+    }
+    SECTION("asking for the flip a sidecar has changes nothing") {
+        REQUIRE(exportedPng(other, {"--flip-horizontal"}) == exportedPng(other, {}));
+    }
+    SECTION("a flip and its undoing contradict") {
+        int code = 0;
+        std::string err;
+        (void)exportedPng(raw, {"--flip-horizontal", "--no-flip-horizontal"}, &code, &err);
+        REQUIRE(code == cli::UsageError);
+        REQUIRE_THAT(err, ContainsSubstring("contradict"));
+    }
+}
+
+TEST_CASE("The --rotate flag replaces both the quarter-turn and the straighten of a sidecar",
+          "[cli][sidecar]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    DevelopSettings settings;
+    settings.geometry.rotation = QuarterTurn::Clockwise180;
+    settings.geometry.straighten = 3.0;
+    sidecarWith(raw, settings);
+
+    REQUIRE(exportedPng(raw, {"--rotate", "90"}) ==
+            exportedPng(raw, {"--no-sidecar", "--rotate", "90"}));
+}
+
+TEST_CASE("A --tint alone keeps the temperature of a Custom sidecar", "[cli][sidecar]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    DevelopSettings settings;
+    settings.color.whiteBalance = WhiteBalanceMode::Custom;
+    settings.color.temperature = 4200.0F;
+    sidecarWith(raw, settings);
+
+    const QImage image = exportedPng(raw, {"--tint", "10"});
+
+    REQUIRE(image == exportedPng(raw, {"--no-sidecar", "--temperature", "4200", "--tint", "10"}));
+    REQUIRE(image != exportedPng(raw, {"--no-sidecar", "--tint", "10"}));
+}
+
+TEST_CASE(
+    "Naming one half of white balance leaves the other as shot when the sidecar is not Custom",
+    "[cli][sidecar]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    DevelopSettings settings;
+    /// As shot, but with a temperature a Custom photograph would have used.
+    settings.color.temperature = 3000.0F;
+    sidecarWith(raw, settings);
+
+    REQUIRE(exportedPng(raw, {"--tint", "10"}) ==
+            exportedPng(raw, {"--no-sidecar", "--tint", "10"}));
+}
+
+TEST_CASE("The --white-balance as-shot flag overrides a Custom sidecar", "[cli][sidecar]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    DevelopSettings settings;
+    settings.color.whiteBalance = WhiteBalanceMode::Custom;
+    settings.color.temperature = 4200.0F;
+    settings.color.tint = 10.0F;
+    sidecarWith(raw, settings);
+
+    const QImage image = exportedPng(raw, {"--white-balance", "as-shot"});
+
+    REQUIRE(image == exportedPng(raw, {"--no-sidecar"}));
+    REQUIRE(image != exportedPng(raw, {}));
+}
+
+TEST_CASE("A temperature on a non-RAW still fails that file with a sidecar present",
+          "[cli][sidecar]") {
+    const test::TempDir directory;
+    const auto png = directory.file("card.png");
+    std::filesystem::copy_file(test::fixture(card), png);
+    sidecarWith(png, {});
+
+    int code = 0;
+    std::string err;
+    (void)exportedPng(png, {"--temperature", "5000"}, &code, &err);
+
+    REQUIRE(code == cli::Failed);
+    REQUIRE_THAT(err, ContainsSubstring("sensor"));
+}
+
+TEST_CASE("An unreadable sidecar fails its file unless --no-sidecar is given", "[cli][sidecar]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    std::ofstream(directory.file("frame.xmp")) << "this is not xml <<<";
+
+    int code = 0;
+    std::string err;
+    const test::TempDir output;
+    const auto result = invoke({"export", raw.string(), "-o", output.path().string(), "--format",
+                                "png", "--device", "cpu", "--exposure", "0.5"});
+
+    REQUIRE(result.code == cli::Failed);
+    REQUIRE_THAT(result.err, ContainsSubstring("error:"));
+    REQUIRE_THAT(result.err, ContainsSubstring("frame.xmp"));
+    REQUIRE_THAT(result.err, ContainsSubstring("--no-sidecar"));
+    REQUIRE_FALSE(std::filesystem::exists(output.path() / "frame.png"));
+
+    const QImage image = exportedPng(raw, {"--no-sidecar", "--exposure", "0.5"}, &code, &err);
+    REQUIRE(code == cli::Success);
+    REQUIRE_FALSE(image.isNull());
+}
+
+TEST_CASE("One file's unreadable sidecar leaves the rest of the batch exported", "[cli][sidecar]") {
+    const test::TempDir directory;
+    const auto broken = copyRaw(directory, "broken.dng");
+    const auto fine = copyRaw(directory, "fine.dng");
+    std::ofstream(directory.file("broken.xmp")) << "not xml";
+    const test::TempDir output;
+
+    const auto result =
+        invoke({"export", broken.string(), fine.string(), "-o", output.path().string(), "--format",
+                "png", "--device", "cpu", "--log-format", "json"});
+
+    REQUIRE(result.code == cli::Failed);
+    REQUIRE_FALSE(std::filesystem::exists(output.path() / "broken.png"));
+    REQUIRE(std::filesystem::exists(output.path() / "fine.png"));
+    REQUIRE_THAT(result.err, ContainsSubstring("\"notice\":\"batch_finished\""));
+}
+
+TEST_CASE("A sidecar value out of range is clamped and reported, in text and JSON",
+          "[cli][sidecar]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    std::ofstream(directory.file("frame.xmp"))
+        << "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">"
+           "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">"
+           "<rdf:Description rdf:about=\"\" xmlns:arraw=\"http://ns.arraw.org/develop/1.0/\" "
+           "arraw:exposure=\"99\" arraw:futureKnob=\"7\"/></rdf:RDF></x:xmpmeta>";
+
+    int code = 0;
+    std::string err;
+    (void)exportedPng(raw, {}, &code, &err);
+    REQUIRE(code == cli::Success);
+    REQUIRE_THAT(err, ContainsSubstring("warning:"));
+    REQUIRE_THAT(err, ContainsSubstring("'exposure' is 99"));
+    REQUIRE_THAT(err, ContainsSubstring("'futureKnob' is not a setting"));
+
+    (void)exportedPng(raw, {"--log-format", "json"}, &code, &err);
+    REQUIRE_THAT(err, ContainsSubstring("\"notice\":\"setting_clamped\""));
+    REQUIRE_THAT(err, ContainsSubstring("\"notice\":\"setting_unknown\""));
+    /// Every diagnostic is about the photograph, not its sidecar.
+    REQUIRE_THAT(err, ContainsSubstring("\"file\":\"" + raw.string() + "\""));
+    REQUIRE_THAT(err, !ContainsSubstring("frame.xmp\""));
+}
+
+TEST_CASE("An unreadable sidecar has a JSON notice of its own, about the photograph",
+          "[cli][sidecar]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    std::ofstream(directory.file("frame.xmp")) << "not xml";
+
+    std::string err;
+    (void)exportedPng(raw, {"--log-format", "json"}, nullptr, &err);
+
+    REQUIRE_THAT(err, ContainsSubstring("\"notice\":\"sidecar_unreadable\""));
+    REQUIRE_THAT(err, ContainsSubstring("\"severity\":\"error\""));
+    REQUIRE_THAT(err, ContainsSubstring("\"file\":\"" + raw.string() + "\""));
+}
+
+TEST_CASE("A batch renders each file through its own sidecar", "[cli][sidecar]") {
+    const test::TempDir directory;
+    const auto first = copyRaw(directory, "first.dng");
+    const auto second = copyRaw(directory, "second.dng");
+    DevelopSettings brighter;
+    brighter.tone.exposure = 1.0F;
+    DevelopSettings darker;
+    darker.tone.exposure = -1.0F;
+    sidecarWith(first, brighter);
+    sidecarWith(second, darker);
+    const test::TempDir output;
+
+    const auto result =
+        invoke({"export", first.string(), second.string(), "-o", output.path().string(), "--format",
+                "png", "--device", "cpu", "--contrast", "10"});
+
+    REQUIRE(result.code == cli::Success);
+    const auto load = [&](const char* name) {
+        return QImage(QString::fromStdString((output.path() / name).string()));
+    };
+    REQUIRE(load("first.png") ==
+            exportedPng(first, withNoSidecar({"--exposure", "1", "--contrast", "10"})));
+    REQUIRE(load("second.png") ==
+            exportedPng(second, withNoSidecar({"--exposure", "-1", "--contrast", "10"})));
+}
+
+TEST_CASE("The command line never writes or changes a sidecar", "[cli][sidecar]") {
+    const test::TempDir directory;
+    const auto edited = copyRaw(directory, "edited.dng");
+    sidecarWith(edited, editedSettings());
+    const auto bare = copyRaw(directory, "bare.dng");
+    const auto slurp = [](const std::filesystem::path& path) {
+        std::ifstream stream(path, std::ios::binary);
+        return std::string(std::istreambuf_iterator<char>(stream), {});
+    };
+    const std::string before = slurp(directory.file("edited.xmp"));
+
+    (void)exportedPng(edited, {"--exposure", "1"});
+    (void)exportedPng(bare, {"--exposure", "1"});
+
+    REQUIRE(slurp(directory.file("edited.xmp")) == before);
+    REQUIRE_FALSE(std::filesystem::exists(directory.file("bare.xmp")));
+}
+
+TEST_CASE("The export help documents --no-sidecar and the sidecar rule", "[cli][sidecar]") {
+    const auto result = invoke({"export", "--help"});
+
+    REQUIRE(result.code == cli::Success);
+    REQUIRE_THAT(result.out, ContainsSubstring("--no-sidecar"));
+    REQUIRE_THAT(result.out, ContainsSubstring("own .xmp sidecar"));
+}
+
+namespace {
+
+/// @brief Reads the edits of some flags, which must be well-formed.
+cli::ExportEdits editsOf(const std::vector<std::string>& flags) {
+    std::ostringstream err;
+    const auto edits = cli::readExportEdits(flags, err);
+    REQUIRE(edits.has_value());
+    return *edits;
+}
+
+/// @brief Applies flags to settings.
+DevelopSettings applied(const DevelopSettings& base, const std::vector<std::string>& flags) {
+    CollectedDiagnostics log;
+    return cli::applyEdits(base, editsOf(flags), log, "frame.dng");
+}
+
+/// @brief Whether a crop rectangle is, to rounding, the one expected.
+bool isNear(const std::optional<UprightCropRect>& actual, const UprightCropRect& expected) {
+    using Catch::Approx;
+    return actual && actual->left == Approx(expected.left) && actual->top == Approx(expected.top) &&
+           actual->right == Approx(expected.right) && actual->bottom == Approx(expected.bottom);
+}
+
+} // namespace
+
+TEST_CASE("Every numeric flag replaces its own setting and no other", "[cli][sidecar]") {
+    struct Row {
+        const char* flag;
+        std::optional<float> (*read)(const DevelopSettings&);
+        const char* value;
+        float replaced;
+    };
+    const Row rows[]{
+        {"--exposure", [](const DevelopSettings& s) { return std::optional(s.tone.exposure); }, "2",
+         2.0F},
+        {"--contrast", [](const DevelopSettings& s) { return std::optional(s.tone.contrast); },
+         "-40", -40.0F},
+        {"--shadows", [](const DevelopSettings& s) { return std::optional(s.tone.shadows); }, "40",
+         40.0F},
+        {"--highlights", [](const DevelopSettings& s) { return std::optional(s.tone.highlights); },
+         "-40", -40.0F},
+        {"--blacks", [](const DevelopSettings& s) { return std::optional(s.tone.blacks); }, "20",
+         20.0F},
+        {"--whites", [](const DevelopSettings& s) { return std::optional(s.tone.whites); }, "-20",
+         -20.0F},
+        {"--filmic-highlights",
+         [](const DevelopSettings& s) { return std::optional(s.tone.filmicHighlights); }, "0",
+         0.0F},
+        {"--temperature", [](const DevelopSettings& s) { return s.color.temperature; }, "6500",
+         6500.0F},
+        {"--tint", [](const DevelopSettings& s) { return s.color.tint; }, "-10", -10.0F},
+    };
+    DevelopSettings sidecar;
+    sidecar.tone = {.exposure = 1.0F,
+                    .contrast = 20.0F,
+                    .shadows = 30.0F,
+                    .highlights = -20.0F,
+                    .blacks = 10.0F,
+                    .whites = -10.0F,
+                    .filmicHighlights = 60.0F};
+    sidecar.color.whiteBalance = WhiteBalanceMode::Custom;
+    sidecar.color.temperature = 4200.0F;
+    sidecar.color.tint = 10.0F;
+
+    const DevelopSettings untouched = applied(sidecar, {});
+    REQUIRE(untouched == sidecar);
+    for (const Row& row : rows) {
+        DYNAMIC_SECTION(row.flag) {
+            const DevelopSettings result = applied(sidecar, {row.flag, row.value});
+            for (const Row& other : rows) {
+                if (&other == &row) {
+                    REQUIRE(other.read(result) == std::optional(row.replaced));
+                } else {
+                    REQUIRE(other.read(result) == other.read(sidecar));
+                }
+            }
+            REQUIRE(result.geometry == sidecar.geometry);
+        }
+    }
+}
+
+TEST_CASE("Geometry flags keep the sidecar's geometry they do not name", "[cli][sidecar]") {
+    DevelopSettings sidecar;
+    sidecar.geometry.rotation = QuarterTurn::Clockwise180;
+    sidecar.geometry.straighten = 3.0;
+    sidecar.geometry.flipHorizontal = true;
+    sidecar.geometry.flipVertical = true;
+    sidecar.geometry.crop.rectangle = UprightCropRect{0.1, 0.2, 0.6, 0.7};
+    sidecar.geometry.crop.aspect = CropRatio{2.0};
+
+    SECTION("nothing named") {
+        REQUIRE(applied(sidecar, {"--exposure", "1"}).geometry == sidecar.geometry);
+    }
+    SECTION("the vertical flip is undone, and the crop is framed anew") {
+        CollectedDiagnostics log;
+        const auto geometry =
+            cli::applyEdits(sidecar, editsOf({"--no-flip-vertical"}), log, "frame.dng").geometry;
+        REQUIRE_FALSE(geometry.flipVertical);
+        REQUIRE(geometry.flipHorizontal);
+        REQUIRE_FALSE(geometry.crop.rectangle);
+        REQUIRE(geometry.crop.aspect == CropAspect{CropRatio{2.0}});
+        REQUIRE(geometry.rotation == QuarterTurn::Clockwise180);
+        REQUIRE(log.entries().size() == 1);
+        REQUIRE(log.entries().front().notice == Notice::CropReset);
+        REQUIRE(log.entries().front().severity == Severity::Warning);
+    }
+    SECTION("a vertical flip already there changes nothing") {
+        REQUIRE(applied(sidecar, {"--flip-vertical"}).geometry == sidecar.geometry);
+    }
+    SECTION("a rotation that changes frames the crop anew and reciprocates the ratio") {
+        const auto geometry = applied(sidecar, {"--rotate", "270"}).geometry;
+        REQUIRE(geometry.rotation == QuarterTurn::Clockwise270);
+        REQUIRE(geometry.straighten == 0.0);
+        REQUIRE_FALSE(geometry.crop.rectangle);
+        REQUIRE(geometry.crop.aspect == CropAspect{CropRatio{0.5}});
+    }
+    SECTION("a half-turn keeps the ratio") {
+        const auto geometry = applied(sidecar, {"--rotate", "3"}).geometry;
+        REQUIRE(geometry.rotation == QuarterTurn::None);
+        REQUIRE_FALSE(geometry.crop.rectangle);
+        REQUIRE(geometry.crop.aspect == CropAspect{CropRatio{2.0}});
+    }
+    SECTION("a crop given with a flip is the crop used") {
+        const auto geometry =
+            applied(sidecar, {"--no-flip-vertical", "--crop", "0.2,0.2,0.4,0.3"}).geometry;
+        REQUIRE(isNear(geometry.crop.rectangle, {0.2, 0.2, 0.4, 0.3}));
+    }
+    SECTION("a rotation that only straightens leaves the crop") {
+        const auto geometry = applied(sidecar, {"--rotate", "183"}).geometry;
+        REQUIRE(geometry.rotation == QuarterTurn::Clockwise180);
+        REQUIRE(geometry.straighten == 3.0);
+        REQUIRE(geometry.crop == sidecar.geometry.crop);
+    }
+    SECTION("--crop auto keeps the aspect") {
+        const auto geometry = applied(sidecar, {"--crop", "auto"}).geometry;
+        REQUIRE_FALSE(geometry.crop.rectangle);
+        REQUIRE(geometry.crop.aspect == CropAspect{CropRatio{2.0}});
+    }
+}
+
+TEST_CASE("Stale temperature and tint of a non-Custom sidecar are dropped, flags or not",
+          "[cli][sidecar]") {
+    DevelopSettings sidecar;
+    sidecar.color.temperature = 3000.0F;
+    sidecar.color.tint = 5.0F;
+
+    const DevelopSettings result = applied(sidecar, {});
+
+    REQUIRE_FALSE(result.color.temperature);
+    REQUIRE_FALSE(result.color.tint);
+}
+
+namespace {
+
+/// @brief Sidecar settings and marks that differ from the defaults in a few keys.
+Photo editedPhoto(const std::filesystem::path& path) {
+    DevelopSettings settings;
+    settings.tone.exposure = 0.5F;
+    settings.geometry.crop.rectangle = UprightCropRect{0.1, 0.2, 0.9, 0.8};
+    return openPhoto(path).with(settings).with(PhotoMarks{.rating = 4, .label = ColorLabel::Green});
+}
+
+QJsonObject firstFile(const std::string& text) {
+    QJsonParseError parseError;
+    const auto document = QJsonDocument::fromJson(QByteArray::fromStdString(text), &parseError);
+    REQUIRE(parseError.error == QJsonParseError::NoError);
+    return document.object().value("files").toArray().at(0).toObject();
+}
+
+} // namespace
+
+TEST_CASE("Info shows a file without a sidecar as it opens", "[cli][info]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    const auto result = invoke({"info", raw.string()});
+
+    REQUIRE(result.code == cli::Success);
+    REQUIRE(result.err.empty());
+    REQUIRE(result.started == std::vector{cli::ApplicationKind::Core});
+    REQUIRE_THAT(result.out, StartsWith(raw.string() + "\n"));
+    REQUIRE_THAT(result.out, ContainsSubstring("size: 32 x 24"));
+    REQUIRE_THAT(result.out, ContainsSubstring("orientation: normal"));
+    REQUIRE_THAT(result.out, ContainsSubstring("encoding: camera"));
+    REQUIRE_THAT(result.out, ContainsSubstring("sidecar: none"));
+    REQUIRE_THAT(result.out, ContainsSubstring("develop settings: defaults"));
+    REQUIRE_THAT(result.out, !ContainsSubstring("rating"));
+    REQUIRE_THAT(result.out, !ContainsSubstring("label"));
+}
+
+TEST_CASE("Info gives no encoding for an ordinary image, whose own it cannot read", "[cli][info]") {
+    const auto result = invoke({"info", test::fixture(card).string()});
+    REQUIRE(result.code == cli::Success);
+    REQUIRE_THAT(result.out, ContainsSubstring("size: 61 x 41"));
+    REQUIRE_THAT(result.out, !ContainsSubstring("encoding"));
+
+    const auto json = invoke({"info", "--json", test::fixture(card).string()});
+    REQUIRE(firstFile(json.out).value("encoding").isNull());
+}
+
+TEST_CASE("Info leaves out settings a render would not read", "[cli][info]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    DevelopSettings settings;
+    settings.color.temperature = 4200.0F;
+    settings.color.tint = 10.0F;
+    writeSidecar(openPhoto(raw).with(settings));
+
+    SECTION("not in Custom white balance") {
+        const auto result = invoke({"info", raw.string()});
+        REQUIRE_THAT(result.out, ContainsSubstring("develop settings: defaults"));
+        REQUIRE_THAT(result.out, !ContainsSubstring("temperature"));
+    }
+    SECTION("in Custom white balance, a tint of zero is listed") {
+        settings.color.whiteBalance = WhiteBalanceMode::Custom;
+        settings.color.tint = 0.0F;
+        writeSidecar(openPhoto(raw).with(settings));
+        const auto result = invoke({"info", raw.string()});
+        REQUIRE_THAT(result.out, ContainsSubstring("    whiteBalance: "));
+        REQUIRE_THAT(result.out, ContainsSubstring("    temperature: 4200\n"));
+        REQUIRE_THAT(result.out, ContainsSubstring("    tint: 0\n"));
+    }
+    SECTION("on a non-RAW") {
+        const test::TempDir pngs;
+        const auto png = pngs.file("card.png");
+        std::filesystem::copy_file(test::fixture(card), png);
+        settings.color.whiteBalance = WhiteBalanceMode::Custom;
+        writeSidecar(openPhoto(png).with(settings));
+        const auto result = invoke({"info", png.string()});
+        REQUIRE_THAT(result.out, ContainsSubstring("whiteBalance"));
+        REQUIRE_THAT(result.out, !ContainsSubstring("temperature"));
+        REQUIRE_THAT(result.out, !ContainsSubstring("tint"));
+    }
+}
+
+TEST_CASE("Info lists a crop aspect in each of its forms", "[cli][info]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    DevelopSettings settings;
+
+    SECTION("a ratio") {
+        settings.geometry.crop.aspect = CropRatio{1.5};
+        writeSidecar(openPhoto(raw).with(settings));
+        REQUIRE_THAT(invoke({"info", raw.string()}).out,
+                     ContainsSubstring("    cropAspect: 1.5\n"));
+        const auto json = firstFile(invoke({"info", "--json", raw.string()}).out);
+        REQUIRE(json.value("settings")
+                    .toObject()
+                    .value("cropAspect")
+                    .toObject()
+                    .value("ratio")
+                    .toDouble() == 1.5);
+    }
+    SECTION("original") {
+        settings.geometry.crop.aspect = OriginalCropAspect{};
+        writeSidecar(openPhoto(raw).with(settings));
+        REQUIRE_THAT(invoke({"info", raw.string()}).out,
+                     ContainsSubstring("    cropAspect: original\n"));
+    }
+}
+
+#ifndef _WIN32
+TEST_CASE("Info escapes a path in JSON", "[cli][info]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "say \"hi\".dng");
+    const auto file = firstFile(invoke({"info", "--json", raw.string()}).out);
+    REQUIRE(file.value("path").toString().toStdString() == raw.string());
+}
+#endif
+
+TEST_CASE("Info lists only what the sidecar changes, and its marks", "[cli][info]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    writeSidecar(editedPhoto(raw));
+    const auto result = invoke({"info", raw.string()});
+
+    REQUIRE(result.code == cli::Success);
+    REQUIRE_THAT(result.out, ContainsSubstring("sidecar: " + directory.file("frame.xmp").string()));
+    REQUIRE_THAT(result.out, ContainsSubstring("rating: 4"));
+    REQUIRE_THAT(result.out, ContainsSubstring("label: Green"));
+    REQUIRE_THAT(result.out, ContainsSubstring("develop settings:\n"));
+    REQUIRE_THAT(result.out, ContainsSubstring("    exposure: 0.5\n"));
+    REQUIRE_THAT(result.out, ContainsSubstring("    cropRectangle: 0.1,0.2,0.9,0.8\n"));
+    REQUIRE_THAT(result.out, !ContainsSubstring("contrast"));
+    REQUIRE_THAT(result.out, !ContainsSubstring("defaults"));
+    REQUIRE(result.out.find("exposure") < result.out.find("cropRectangle"));
+}
+
+TEST_CASE("Info says rejected for a rating of -1", "[cli][info]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    writeSidecar(openPhoto(raw).with(PhotoMarks{.rating = rejectedRating}));
+    const auto result = invoke({"info", raw.string()});
+    REQUIRE_THAT(result.out, ContainsSubstring("rating: rejected"));
+}
+
+TEST_CASE("Info --all lists every setting", "[cli][info]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    const auto result = invoke({"info", "--all", raw.string()});
+
+    REQUIRE(result.code == cli::Success);
+    REQUIRE_THAT(result.out, !ContainsSubstring("defaults"));
+    std::size_t previous = 0;
+    for (const FieldDescriptor& descriptor : developSettingDescriptors) {
+        CAPTURE(descriptor.key);
+        const auto at = result.out.find("    " + std::string(descriptor.key) + ": ");
+        REQUIRE(at != std::string::npos);
+        REQUIRE(at >= previous);
+        previous = at;
+    }
+    REQUIRE(developSettingDescriptors.size() == 16);
+    REQUIRE_THAT(result.out, ContainsSubstring("temperature: unset"));
+}
+
+TEST_CASE("Info names the other tools that wrote in the sidecar", "[cli][info][sidecar]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    std::filesystem::copy_file(test::fixture("sidecar-foreign.xmp"), directory.file("frame.xmp"));
+
+    const auto text = invoke({"info", raw.string()});
+    REQUIRE(text.code == cli::Success);
+    REQUIRE_THAT(text.out, ContainsSubstring("  other tools:\n"
+                                             "    written by: Adobe Lightroom Classic 13.0 "
+                                             "(Macintosh)\n"
+                                             "    Adobe Camera Raw / Lightroom develop settings "
+                                             "(crs:, 4 properties)\n"
+                                             "    unknown (acme:, 2 properties)\n"
+                                             "    Dublin Core (dc:, 1 property)\n"));
+
+    const auto file = firstFile(invoke({"info", "--json", raw.string()}).out);
+    REQUIRE(file.value("creatorTool").toString() == "Adobe Lightroom Classic 13.0 (Macintosh)");
+    const auto others = file.value("others").toArray();
+    REQUIRE(others.size() == 3);
+    REQUIRE(others[0].toObject().value("prefix").toString() == "crs");
+    REQUIRE(others[0].toObject().value("uri").toString() ==
+            "http://ns.adobe.com/camera-raw-settings/1.0/");
+    REQUIRE(others[0].toObject().value("properties").toInt() == 4);
+    REQUIRE(others[0].toObject().value("owner").toString() ==
+            "Adobe Camera Raw / Lightroom develop settings");
+    REQUIRE(others[1].toObject().value("owner").isNull());
+
+    const auto bare = invoke({"info", "--no-sidecar", raw.string()});
+    REQUIRE_THAT(bare.out, !ContainsSubstring("other tools"));
+    const auto bareJson = firstFile(invoke({"info", "--json", "--no-sidecar", raw.string()}).out);
+    REQUIRE(bareJson.value("creatorTool").isNull());
+    REQUIRE(bareJson.value("others").toArray().isEmpty());
+}
+
+TEST_CASE("Info prints no other-tools block for a sidecar only arraw wrote",
+          "[cli][info][sidecar]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    writeSidecar(editedPhoto(raw));
+    const auto text = invoke({"info", raw.string()});
+    REQUIRE_THAT(text.out, !ContainsSubstring("other tools"));
+    REQUIRE_THAT(text.out, !ContainsSubstring("written by"));
+    const auto file = firstFile(invoke({"info", "--json", raw.string()}).out);
+    REQUIRE(file.value("creatorTool").isNull());
+    REQUIRE(file.value("others").toArray().isEmpty());
+}
+
+TEST_CASE("Info --json is one document with the settings in table order", "[cli][info]") {
+    const test::TempDir directory;
+    const auto plain = copyRaw(directory, "plain.dng");
+    const auto edited = copyRaw(directory, "edited.dng");
+    writeSidecar(editedPhoto(edited));
+
+    SECTION("a file without a sidecar") {
+        const auto result = invoke({"info", "--json", plain.string()});
+        REQUIRE(result.code == cli::Success);
+        const auto file = firstFile(result.out);
+        REQUIRE(file.value("path").toString().toStdString() == plain.string());
+        REQUIRE(file.value("size").toObject().value("width").toInt() == 32);
+        REQUIRE(file.value("size").toObject().value("height").toInt() == 24);
+        REQUIRE(file.value("orientation").toString() == "normal");
+        REQUIRE(file.value("encoding").toString() == "camera");
+        REQUIRE(file.value("sidecar").isNull());
+        REQUIRE(file.value("marks").toObject().value("rating").toInt() == 0);
+        REQUIRE(file.value("marks").toObject().value("label").isNull());
+        REQUIRE(file.value("settings").toObject().isEmpty());
+    }
+    SECTION("a file with one") {
+        const auto result = invoke({"info", "--json", edited.string()});
+        REQUIRE(result.code == cli::Success);
+        const auto file = firstFile(result.out);
+        REQUIRE(file.value("sidecar").toString().toStdString() ==
+                directory.file("edited.xmp").string());
+        REQUIRE(file.value("marks").toObject().value("rating").toInt() == 4);
+        REQUIRE(file.value("marks").toObject().value("label").toString() == "Green");
+        const auto settings = file.value("settings").toObject();
+        REQUIRE(settings.keys().size() == 2);
+        REQUIRE(settings.value("exposure").toDouble() == Catch::Approx(0.5));
+        REQUIRE(settings.value("cropRectangle").toObject().value("right").toDouble() ==
+                Catch::Approx(0.9));
+        REQUIRE(result.out.find("\"exposure\"") < result.out.find("\"cropRectangle\""));
+    }
+    SECTION("--all lists every key in table order") {
+        const auto result = invoke({"info", "--json", "--all", plain.string()});
+        REQUIRE(result.code == cli::Success);
+        REQUIRE(firstFile(result.out).value("settings").toObject().size() == 16);
+        std::size_t previous = 0;
+        for (const FieldDescriptor& descriptor : developSettingDescriptors) {
+            const auto at = result.out.find("\"" + std::string(descriptor.key) + "\":");
+            REQUIRE(at != std::string::npos);
+            REQUIRE(at >= previous);
+            previous = at;
+        }
+        REQUIRE_THAT(result.out, ContainsSubstring("\"temperature\": null"));
+    }
+}
+
+TEST_CASE("Info shows the rest when one file is broken, and exits 1", "[cli][info]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    const auto rubbish = writeRubbish(directory, "rubbish.dng");
+
+    SECTION("text") {
+        const auto result = invoke({"info", rubbish.string(), raw.string()});
+        REQUIRE(result.code == cli::Failed);
+        REQUIRE_THAT(result.out, StartsWith(raw.string() + "\n"));
+        REQUIRE_THAT(result.err, ContainsSubstring("error:"));
+        REQUIRE_THAT(result.err, ContainsSubstring("rubbish.dng"));
+        REQUIRE_THAT(result.err, ContainsSubstring("1 of 2 failed"));
+    }
+    SECTION("JSON") {
+        const auto result = invoke({"info", "--json", rubbish.string(), raw.string()});
+        REQUIRE(result.code == cli::Failed);
+        REQUIRE(firstFile(result.out).value("path").toString().toStdString() == raw.string());
+    }
+}
+
+TEST_CASE("Info --no-sidecar shows the file as it opens without one", "[cli][info]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    writeSidecar(editedPhoto(raw));
+    const auto result = invoke({"info", "--no-sidecar", raw.string()});
+
+    REQUIRE(result.code == cli::Success);
+    REQUIRE_THAT(result.out, ContainsSubstring("sidecar: " + directory.file("frame.xmp").string() +
+                                               " (ignored)"));
+    REQUIRE_THAT(result.out, ContainsSubstring("develop settings: defaults"));
+    REQUIRE_THAT(result.out, !ContainsSubstring("rating"));
+
+    const auto json = firstFile(invoke({"info", "--json", "--no-sidecar", raw.string()}).out);
+    REQUIRE(json.value("sidecarRead").toBool() == false);
+    REQUIRE(json.value("sidecar").toString().toStdString() == directory.file("frame.xmp").string());
+}
+
+TEST_CASE("Info fails a file whose sidecar is unreadable, unless --no-sidecar is given",
+          "[cli][info][sidecar]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    std::ofstream(directory.file("frame.xmp")) << "this is not xml <<<";
+
+    const auto failed = invoke({"info", raw.string()});
+    REQUIRE(failed.code == cli::Failed);
+    REQUIRE(failed.out.empty());
+    REQUIRE_THAT(failed.err, ContainsSubstring("error:"));
+    REQUIRE_THAT(failed.err, ContainsSubstring("frame.xmp"));
+    REQUIRE_THAT(failed.err, ContainsSubstring("--no-sidecar"));
+
+    const auto bare = invoke({"info", "--no-sidecar", raw.string()});
+    REQUIRE(bare.code == cli::Success);
+    REQUIRE(bare.err.empty());
+}
+
+TEST_CASE("Info reports sidecar warnings through the log, and --quiet keeps them",
+          "[cli][info][sidecar]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    writeSidecar(openPhoto(raw));
+    {
+        std::ifstream in(directory.file("frame.xmp"));
+        std::string xmp((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        const auto at = xmp.find("arraw:exposure=\"");
+        REQUIRE(at != std::string::npos);
+        const auto end = xmp.find('"', at + 16);
+        xmp.replace(at, end - at + 1, "arraw:exposure=\"99\"");
+        std::ofstream(directory.file("frame.xmp")) << xmp;
+    }
+    const auto text = invoke({"info", "--quiet", raw.string()});
+    REQUIRE(text.code == cli::Success);
+    REQUIRE_THAT(text.err, ContainsSubstring("exposure"));
+    REQUIRE_THAT(text.out, ContainsSubstring("exposure: 5"));
+
+    const auto json = invoke({"info", "--log-format", "json", raw.string()});
+    REQUIRE_THAT(json.err, ContainsSubstring("setting_clamped"));
+}
+
+TEST_CASE("Info has its own help, usage errors, and writes nothing", "[cli][info]") {
+    const auto help = invoke({"info", "--help"});
+    REQUIRE(help.code == cli::Success);
+    REQUIRE_THAT(help.out, ContainsSubstring("info <input>..."));
+    REQUIRE_THAT(help.out, ContainsSubstring("--all"));
+    REQUIRE_THAT(help.out, ContainsSubstring("--json"));
+    REQUIRE_THAT(help.out, ContainsSubstring("--no-sidecar"));
+    REQUIRE_THAT(help.out, !ContainsSubstring("--overwrite"));
+    REQUIRE(help.started.empty());
+
+    const auto top = invoke({"--help"});
+    REQUIRE_THAT(top.out, ContainsSubstring("info"));
+    REQUIRE(cli::findCommand("info")->run != nullptr);
+
+    for (const auto& arguments :
+         {std::vector<std::string>{"info"}, std::vector<std::string>{"info", "--nonsense", "x"},
+          std::vector<std::string>{"info", "--log-format", "xml", "x"}}) {
+        CAPTURE(arguments);
+        const auto result = invoke(arguments);
+        REQUIRE(result.code == cli::UsageError);
+        REQUIRE(result.started.empty());
+    }
+}
+
+namespace {
+
+/// @brief Reads a file's bytes.
+std::string bytesOf(const std::filesystem::path& path) {
+    std::ifstream in(path, std::ios::binary);
+    return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+}
+
+/// @brief Lists the names in a directory, sorted.
+std::vector<std::string> namesIn(const std::filesystem::path& directory) {
+    std::vector<std::string> names;
+    for (const auto& entry : std::filesystem::directory_iterator(directory)) {
+        names.push_back(entry.path().filename().string());
+    }
+    std::ranges::sort(names);
+    return names;
+}
+
+} // namespace
+
+TEST_CASE("Info never writes or changes a sidecar", "[cli][info][sidecar]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    const auto before = namesIn(directory.path());
+    REQUIRE(invoke({"info", raw.string()}).code == cli::Success);
+    REQUIRE(namesIn(directory.path()) == before);
+
+    writeSidecar(editedPhoto(raw));
+    const auto xmp = directory.file("frame.xmp");
+    const auto bytes = bytesOf(xmp);
+    const auto names = namesIn(directory.path());
+    for (const auto& flags :
+         {std::vector<std::string>{}, {"--all"}, {"--json"}, {"--no-sidecar"}}) {
+        auto arguments = std::vector<std::string>{"info"};
+        arguments.insert(arguments.end(), flags.begin(), flags.end());
+        arguments.push_back(raw.string());
+        CAPTURE(arguments);
+        REQUIRE(invoke(arguments).code == cli::Success);
+        REQUIRE(bytesOf(xmp) == bytes);
+        REQUIRE(namesIn(directory.path()) == names);
+    }
+
+    std::ofstream(xmp, std::ios::binary) << "this is not xml <<<";
+    const auto broken = bytesOf(xmp);
+    REQUIRE(invoke({"info", raw.string()}).code == cli::Failed);
+    REQUIRE(invoke({"info", "--json", raw.string()}).code == cli::Failed);
+    REQUIRE(bytesOf(xmp) == broken);
+    REQUIRE(namesIn(directory.path()) == names);
 }

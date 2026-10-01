@@ -3,6 +3,7 @@
 #include <DevelopSettings.h>
 #include <Diagnostics.h>
 #include <ImageImport.h>
+#include <PhotoMarks.h>
 
 #include <filesystem>
 #include <utility>
@@ -31,9 +32,12 @@ public:
     /// @param path File the photograph was read from.
     /// @param metadata What that file declares about itself.
     /// @param settings How it is developed.
+    /// @param marks How it is culled.
     /// @throws std::invalid_argument if @p settings is not finite or is out of
-    /// range (see ::arraw::validate), so an invalid photograph cannot exist.
-    Photo(std::filesystem::path path, ImageMetadata metadata, DevelopSettings settings = {});
+    /// range (see ::arraw::validate), or if the rating of @p marks is outside
+    /// -1 to 5, so an invalid photograph cannot exist.
+    Photo(std::filesystem::path path, ImageMetadata metadata, DevelopSettings settings = {},
+          PhotoMarks marks = {});
 
     /// @brief File the photograph was read from.
     [[nodiscard]] const std::filesystem::path& path() const noexcept {
@@ -50,12 +54,25 @@ public:
         return settings_;
     }
 
+    /// @brief How the photograph is culled.
+    [[nodiscard]] const PhotoMarks& marks() const noexcept {
+        return marks_;
+    }
+
     /// @brief Makes the same photograph, developed differently.
     /// @param settings Settings the new document carries.
-    /// @return A document over the same file, leaving this one alone.
+    /// @return A document over the same file with the same marks, leaving this one alone.
     /// @throws std::invalid_argument as the constructor does.
     [[nodiscard]] Photo with(DevelopSettings settings) const {
-        return {path_, metadata_, settings};
+        return {path_, metadata_, settings, marks_};
+    }
+
+    /// @brief Makes the same photograph, culled differently.
+    /// @param marks Marks the new document carries.
+    /// @return A document over the same file with the same settings, leaving this one alone.
+    /// @throws std::invalid_argument as the constructor does.
+    [[nodiscard]] Photo with(PhotoMarks marks) const {
+        return {path_, metadata_, settings_, marks};
     }
 
     friend bool operator==(const Photo&, const Photo&) = default;
@@ -64,12 +81,14 @@ private:
     std::filesystem::path path_;
     ImageMetadata metadata_;
     DevelopSettings settings_;
+    PhotoMarks marks_;
 };
 
 /// @brief Opens a photograph as a document, reading no pixels.
 ///
 /// Reads what the file declares — its dimensions and the encoding its pixels
-/// will arrive in — and pairs it with default develop settings. Decoding
+/// will arrive in — and pairs it with the settings and marks of its sidecar
+/// (see ::arraw::readSidecar), or with defaults when it has none. Decoding
 /// happens when something asks for pixels, which a document never does.
 ///
 /// @param path File to open.
@@ -77,7 +96,8 @@ private:
 /// such as a white balance it did not record.
 /// @return The document.
 /// @throws std::runtime_error if the file cannot be opened or is not an image
-/// arraw recognises.
+/// arraw recognises. A sidecar that is not readable XML is not thrown: it is
+/// reported as ::arraw::Notice::SidecarUnreadable and the defaults are used.
 [[nodiscard]] Photo openPhoto(const std::filesystem::path& path,
                               DiagnosticLog& log = discardedDiagnostics());
 

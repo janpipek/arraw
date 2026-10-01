@@ -49,6 +49,8 @@ STORE_MOUNTS = {
     "pi": f"{HOME}/.pi",
     "opencode-config": f"{HOME}/.config/opencode",
     "opencode-data": f"{HOME}/.local/share/opencode",
+    # Skills installed with `npx skills add -g`, which ~/.claude/skills links into.
+    "agents": f"{HOME}/.agents",
     "cache": f"{HOME}/.cache",
 }
 
