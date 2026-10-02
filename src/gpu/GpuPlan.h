@@ -191,15 +191,22 @@ struct GpuResizeBlock {
     /// one.
     std::uint32_t plane = 0;
 
-    /// @brief Length of the source along the resized axis, for clamping tap indices to it.
+    /// @brief Length of the region along the resized axis, for clamping tap indices to it.
     std::uint32_t inputLength = 0;
 
-    /// @brief Rounds the block up to a `vec4` boundary, as std140 does.
-    std::array<std::uint32_t, 2> padding{};
+    /// @brief Column and row of the source's first pixel that is resized, for the horizontal pass.
+    ///
+    /// The region a render cuts out (ADR 025): tap indices are clamped to the
+    /// region's own length and then moved by this, so an edge repeats the
+    /// region's edge pixel as it does on the CPU after cutting. The row is
+    /// where output row 0 reads. Zero for the whole image, and unused by the
+    /// vertical pass, which reads what the horizontal one wrote.
+    std::array<std::uint32_t, 2> offset{};
 };
 
 static_assert(offsetof(GpuResizeBlock, plane) == 0);
 static_assert(offsetof(GpuResizeBlock, inputLength) == 4);
+static_assert(offsetof(GpuResizeBlock, offset) == 8);
 static_assert(sizeof(GpuResizeBlock) == 16);
 
 /// @brief Fills the pointwise block from a resolved plan.

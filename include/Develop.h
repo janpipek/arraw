@@ -46,10 +46,35 @@ struct RenderRequest {
         double factor = 1.0; ///< Multiplier, finite and positive.
     };
 
-    /// @brief Size of the result relative to the cropped photograph.
+    /// @brief Rectangle of the developed frame to render, in fractions of its sides.
     ///
-    /// Empty keeps the photograph's own resolution. See ::arraw::resolvedSize.
+    /// Measured on the frame after geometry (orientation, rotation and crop),
+    /// from its top-left corner: `{0, 0, 1, 1}` is all of it.
+    struct Region {
+        double left = 0.0;   ///< Left edge, from 0 inclusive.
+        double top = 0.0;    ///< Top edge, from 0 inclusive.
+        double right = 1.0;  ///< Right edge, above @ref left and at most 1.
+        double bottom = 1.0; ///< Bottom edge, above @ref top and at most 1.
+    };
+
+    /// @brief Size of the result relative to the cropped photograph, or to the region.
+    ///
+    /// Empty keeps the photograph's own resolution (the region's, if there is
+    /// one). See ::arraw::resolvedSize.
     std::optional<std::variant<FitInside, Scale>> size = std::nullopt;
+
+    /// @brief Part of the developed frame to render, or empty for all of it.
+    ///
+    /// The region is cut from the frame after geometry, snapped outward to whole
+    /// pixels (at least one), and the @ref size then resolves against the
+    /// region's pixel size: the result is that part of the frame, at that
+    /// scale. A region covering the frame is the same render as none. It is
+    /// part of the resize stage (ADR 025), so a checkpoint taken after geometry
+    /// serves every region, and moving the region redoes only the last stage.
+    /// Each side must be finite, with `0 <= left < right <= 1` and
+    /// `0 <= top < bottom <= 1`; anything else is refused with
+    /// `std::invalid_argument` when the render is planned.
+    std::optional<Region> region = std::nullopt;
 
     /// @brief Whether a size larger than the photograph enlarges it.
     Upscale upscale = Upscale::Never;
@@ -61,7 +86,23 @@ struct RenderRequest {
     Quality quality = Quality::Export;
 };
 
-/// @brief Resolves a request's size against the photograph's size after its crop.
+/// @brief Gives the part of a frame a request's region actually renders.
+///
+/// A region is snapped outward to whole pixels of the frame it is cut from
+/// (ADR 025), so what is rendered can be a little larger than what was asked
+/// for, and differs between frames of different sizes, such as two pyramid
+/// levels. A caller placing the result on screen needs this, not the request.
+/// @param request Request whose region is resolved; all of the frame when it has none.
+/// @param frame Size of the developed, cropped frame the region is cut from.
+/// @return The rendered part, in normalised coordinates of @p frame.
+/// @throws std::invalid_argument if the region is invalid or @p frame is empty.
+[[nodiscard]] RenderRequest::Region renderedRegion(const RenderRequest& request, ImageSize frame);
+
+/// @brief Resolves a request's size against the size of what is resized.
+///
+/// That is the photograph's size after its crop, or the size of the request's
+/// ::arraw::RenderRequest::region in pixels when it has one; this function does
+/// not look at the region, so a caller passes the size it has cut.
 ///
 /// The scale is the factor in a ::arraw::RenderRequest::Scale, or for a
 /// ::arraw::RenderRequest::FitInside the
@@ -71,11 +112,24 @@ struct RenderRequest {
 /// This is the one place sizes are worked out, so that every backend and
 /// caller agrees.
 /// @param request What the caller wants rendered.
-/// @param cropped Size of the photograph after its crop.
+/// @param cropped Size of the frame (or region) the request is applied to.
 /// @return The size of the rendered result; @p cropped if the request has no size.
 /// @throws std::invalid_argument if @p cropped is empty, a box has a zero side,
 /// a factor is not finite and positive, or the result does not fit a 32-bit side.
 [[nodiscard]] ImageSize resolvedSize(const RenderRequest& request, ImageSize cropped);
+
+/// @brief Gives the size of the developed frame at the source's own resolution.
+///
+/// The size after orientation, rotation and crop: the frame a
+/// ::arraw::RenderRequest::region is a fraction of, and the one a size resolves
+/// against when the request has no region.
+/// @param sourceSize Size of the decoded photograph.
+/// @param orientation Camera orientation of the decoded photograph.
+/// @param state How the photograph is developed.
+/// @return The size of the frame; never empty for a non-empty source.
+/// @throws std::invalid_argument as ::arraw::develop does for its geometry.
+[[nodiscard]] ImageSize croppedSize(ImageSize sourceSize, ImageOrientation orientation,
+                                    const DevelopState& state);
 
 /// @brief Renders a decoded photograph through its develop state.
 ///
@@ -97,7 +151,8 @@ struct RenderRequest {
 /// camera orientation. Exact quarter-turns and pixel-aligned crops copy samples.
 /// A requested size is then resolved against the cropped size and applied as a
 /// separate resize with the request's filter; a size equal to the cropped one
-/// leaves the pixels untouched.
+/// leaves the pixels untouched. A request's region is cut from the cropped
+/// frame just before that resize, and the size resolves against the cut.
 ///
 /// @param source Decoded photograph, in the working or a camera encoding.
 /// @param state How the photograph is developed.

@@ -34,6 +34,7 @@ add_executable(arraw-tests
         test_Photo.cpp
         test_PreviewRenderer.cpp
         test_ProcessingPlan.cpp
+        test_Region.cpp
         test_RenderCheckpoint.cpp
         test_Resample.cpp
         test_RawImport.cpp

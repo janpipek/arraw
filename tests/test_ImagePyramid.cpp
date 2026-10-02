@@ -181,6 +181,24 @@ TEST_CASE("The pyramid level a render needs", "[pyramid]") {
         REQUIRE(level(plain, {.size = RenderRequest::FitInside{1500, 2250}}, source,
                       ImageOrientation::Rotate90) == 1);
     }
+    SECTION("a region needs the level that still covers the output over the region") {
+        // The whole frame at a 750 box is 750x500, level 3. Half of each side
+        // is 3000x2000 to fit the same box, so one level finer.
+        const RenderRequest::FitInside box{750, 750};
+        REQUIRE(level(plain, {.size = box}) == 3);
+        REQUIRE(level(plain, {.size = box, .region = RenderRequest::Region{0.0, 0.0, 0.5, 0.5}}) ==
+                2);
+        REQUIRE(level(plain, {.size = box, .region = RenderRequest::Region{0.5, 0.5, 1.0, 1.0}}) ==
+                2);
+        // A region covering the frame changes nothing, nor does one that is
+        // already smaller than the box.
+        REQUIRE(level(plain, {.size = box, .region = RenderRequest::Region{0.0, 0.0, 1.0, 1.0}}) ==
+                3);
+        REQUIRE(level(plain, {.size = box, .region = RenderRequest::Region{0.0, 0.0, 0.1, 0.1}}) ==
+                0);
+        REQUIRE_THROWS_AS(level(plain, {.region = RenderRequest::Region{0.5, 0.0, 0.5, 1.0}}),
+                          std::invalid_argument);
+    }
     SECTION("a tiny image never loops") {
         REQUIRE(level(plain, longEdge(1), {1, 1}) == 0);
         REQUIRE(level(plain, longEdge(1), {1, 64}) == 6);

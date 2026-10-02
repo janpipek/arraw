@@ -36,6 +36,10 @@ namespace arraw {
 /// A request that enlarges, that keeps the cropped size, or that is as large
 /// as it, needs level 0.
 ///
+/// With a ::arraw::RenderRequest::region the size compared is the region's
+/// pixel size at that level, since that is what is resized: a closer view
+/// needs a finer level for the same output.
+///
 /// The cropped size is the one at full resolution, from the same geometry
 /// plan a render makes, so orientation, rotation and crop are accounted for.
 /// The caller develops that level with the same request.

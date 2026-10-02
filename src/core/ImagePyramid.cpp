@@ -1,6 +1,7 @@
 #include "ImagePyramid.h"
 
 #include "GeometryPlan.h"
+#include "ProcessingPlan.h"
 #include "SampleConversion.h"
 
 #include <algorithm>
@@ -75,7 +76,8 @@ int pyramidLevelFor(ImageSize sourceSize, ImageOrientation orientation, const De
                     const RenderRequest& request) {
     const ImageSize cropped =
         geometryPlanFor(sourceSize, orientation, state.settings.geometry).outputSize;
-    const ImageSize wanted = resolvedSize(request, cropped);
+    // What is resized is the region, so what must be covered is its size.
+    const ImageSize wanted = resolvedSize(request, regionOf(request, cropped).size());
     if (request.upscale == Upscale::Allowed) {
         return 0;
     }
@@ -84,7 +86,11 @@ int pyramidLevelFor(ImageSize sourceSize, ImageOrientation orientation, const De
     while (true) {
         const ImageSize next = halfOf(size);
         // Stops at one pixel, where halving no longer shrinks.
-        if (next == size || next.width < wanted.width || next.height < wanted.height) {
+        if (next == size) {
+            return level;
+        }
+        const ImageSize region = regionOf(request, next).size();
+        if (region.width < wanted.width || region.height < wanted.height) {
             return level;
         }
         size = next;

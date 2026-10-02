@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
@@ -66,9 +67,27 @@ ImageBuffer developPointwise(const ImageBuffer& source, const ProcessingPlan& pl
     return result;
 }
 
-/// @brief Runs the resize that a plan resolved.
+/// @brief Copies a rectangle of working-format pixels out of a frame.
+ImageBuffer cutOut(const ImageBuffer& frame, const PixelRegion& region) {
+    ImageBuffer cut(region.size(), workingFormat, frame.encoding(), frame.orientation());
+    const auto in = frame.samples<float>();
+    const auto out = cut.samples<float>();
+    const std::size_t rowSamples = static_cast<std::size_t>(region.width) * 4;
+    for (std::uint32_t row = 0; row < region.height; ++row) {
+        const std::size_t start =
+            (static_cast<std::size_t>(region.y + row) * frame.size().width + region.x) * 4;
+        std::copy_n(in.begin() + static_cast<std::ptrdiff_t>(start), rowSamples,
+                    out.begin() + static_cast<std::ptrdiff_t>(row * rowSamples));
+    }
+    return cut;
+}
+
+/// @brief Runs the resize that a plan resolved: cut the region, then resample it.
 ImageBuffer resizeBy(ImageBuffer framed, const ProcessingPlan& plan) {
     const ResizePlan& resize = *plan.resize;
+    if (!resize.region.covers(framed.size())) {
+        framed = cutOut(framed, resize.region);
+    }
     return resample(std::move(framed), resize.outputSize, resize.filter, resize.opaque);
 }
 
@@ -133,6 +152,21 @@ RenderCheckpoint arraw::resumeFrom(const RenderCheckpoint& from, const ImageBuff
         return from;
     }
     return runStages(held.boundary, pixels->clone(), std::move(plan), stopAfter);
+}
+
+ImageSize arraw::croppedSize(ImageSize sourceSize, ImageOrientation orientation,
+                             const DevelopState& state) {
+    return geometryPlanFor(sourceSize, orientation, state.settings.geometry).outputSize;
+}
+
+RenderRequest::Region arraw::renderedRegion(const RenderRequest& request, ImageSize frame) {
+    const PixelRegion pixels = regionOf(request, frame);
+    const auto width = static_cast<double>(frame.width);
+    const auto height = static_cast<double>(frame.height);
+    return {.left = pixels.x / width,
+            .top = pixels.y / height,
+            .right = (pixels.x + pixels.width) / width,
+            .bottom = (pixels.y + pixels.height) / height};
 }
 
 ImageSize arraw::resolvedSize(const RenderRequest& request, ImageSize cropped) {

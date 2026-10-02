@@ -612,3 +612,65 @@ TEST_CASE("Resizing an opaque image on the GPU matches the CPU after rotation an
         }
     }
 }
+
+namespace {
+
+/// @brief A request for a part of the frame at a scale.
+RenderRequest regional(RenderRequest::Region region, double factor, ResizeFilter filter,
+                       Upscale upscale = Upscale::Never) {
+    RenderRequest request = scaled(factor, filter, upscale);
+    request.region = region;
+    return request;
+}
+
+} // namespace
+
+TEST_CASE("Rendering a region on the GPU matches the CPU", "[gpu][resize][region]") {
+    const ImageBuffer opaque = opaqueImage({400, 300});
+    const ImageBuffer translucent = translucentImage({400, 300});
+    const RenderRequest::Region regions[] = {
+        {0.25, 0.25, 0.75, 0.75}, {0.0, 0.0, 0.3, 0.4}, {0.61, 0.5, 1.0, 1.0}};
+    for (const ResizeFilter filter : {ResizeFilter::Lanczos3, ResizeFilter::Bilinear}) {
+        for (const RenderRequest::Region& region : regions) {
+            for (const double factor : {0.4, 1.0, 2.5}) {
+                DYNAMIC_SECTION(name(filter) << " region " << region.left << "," << region.top
+                                             << " at " << factor) {
+                    const Upscale upscale = factor > 1.0 ? Upscale::Allowed : Upscale::Never;
+                    const auto request = regional(region, factor, filter, upscale);
+                    requireClose(renderBoth(opaque, plainSettings(), request));
+                    const Pair pair = renderBoth(translucent, plainSettings(), request);
+                    const Errors errors = measure(pair, 0.01F);
+                    CHECK(errors.alpha <= resizeTolerance);
+                    CHECK(errors.colourAbsolute <= resizeTolerance);
+                }
+            }
+        }
+    }
+}
+
+TEST_CASE("Rendering a region on the GPU matches the CPU after a rotation",
+          "[gpu][resize][region]") {
+    const ImageBuffer source = opaqueImage({300, 200});
+    DevelopSettings settings = plainSettings();
+    settings.geometry = {.rotation = QuarterTurn::Clockwise90, .straighten = 7.0};
+    requireClose(
+        renderBoth(source, settings, regional({0.1, 0.2, 0.6, 0.9}, 0.5, ResizeFilter::Lanczos3)));
+}
+
+TEST_CASE("A geometry checkpoint on the GPU is resumed across regions", "[gpu][resize][region]") {
+    GpuContext& context = gpuContext();
+    const ImageBuffer source = opaqueImage({200, 150});
+    const DevelopState state{plainSettings()};
+    const RenderCheckpoint geometry = developOnGpu(context, source, state, Stage::Geometry);
+
+    for (const RenderRequest::Region region :
+         {RenderRequest::Region{0.0, 0.0, 0.5, 0.5}, {0.5, 0.5, 1.0, 1.0}, {0.2, 0.1, 0.9, 0.6}}) {
+        const RenderRequest request = regional(region, 0.5, ResizeFilter::Lanczos3);
+        const RenderCheckpoint resumed =
+            developOnGpu(context, geometry, source, state, Stage::Resize, request);
+        REQUIRE(resumed.isResident());
+        const ImageBuffer expected = develop(source, state, request);
+        REQUIRE(resumed.size() == expected.size());
+        requireClose({expected.clone(), resumed.readBack()});
+    }
+}

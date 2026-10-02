@@ -28,11 +28,13 @@ layout(location = 0) out vec4 fragColor;
 
 layout(binding = 0) uniform sampler2D source;
 
-// The contract with GpuResizeBlock: keep the members in step with it.
+// The contract with GpuResizeBlock: keep the members in step with it. inputLength
+// is the length of the cut region, and offset where it starts in the source
+// (ADR 025); tap indices are clamped to the region before the offset is added.
 layout(std140, binding = 1) uniform Resize {
     uint plane;
     uint inputLength;
-    uvec2 padding;
+    uvec2 offset;
 } plan;
 
 // The weights of the resized axis, as packResizeWeights lays them out: row i is
@@ -77,7 +79,7 @@ void main() {
         const float weight = tapWeight(pixel.x, k);
         // The image extends its edge pixel: clampIndex().
         const int index = clamp(first + k, 0, last);
-        const vec4 colour = texelFetch(source, ivec2(index, pixel.y), 0);
+        const vec4 colour = texelFetch(source, ivec2(index, pixel.y) + ivec2(plan.offset), 0);
         // The CPU's row[]: premultiplied, in float.
         const vec4 premultiplied = vec4(colour.rgb * colour.a, colour.a);
         sum += weight * premultiplied;

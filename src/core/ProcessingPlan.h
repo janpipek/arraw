@@ -13,12 +13,45 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <optional>
 #include <tuple>
 #include <utility>
 
 namespace arraw {
+
+/// @brief Rectangle of whole pixels in a frame.
+struct PixelRegion {
+    std::uint32_t x = 0;      ///< Column of the left edge.
+    std::uint32_t y = 0;      ///< Row of the top edge.
+    std::uint32_t width = 0;  ///< Width in pixels.
+    std::uint32_t height = 0; ///< Height in pixels.
+
+    /// @brief Gives the size of the rectangle.
+    [[nodiscard]] constexpr ImageSize size() const noexcept {
+        return {width, height};
+    }
+
+    /// @brief Checks whether the rectangle is all of a frame.
+    /// @param frame Size of the frame.
+    [[nodiscard]] constexpr bool covers(ImageSize frame) const noexcept {
+        return x == 0 && y == 0 && size() == frame;
+    }
+
+    friend bool operator==(const PixelRegion&, const PixelRegion&) = default;
+};
+
+/// @brief Resolves a request's region into whole pixels of a frame.
+///
+/// Each edge snaps outward: the left and top down, the right and bottom up,
+/// and a region thinner than a pixel grows to one. No region gives the frame.
+/// @param request What the caller wants rendered.
+/// @param frame Size of the frame after geometry.
+/// @return The pixels the region covers, inside @p frame, at least 1x1.
+/// @throws std::invalid_argument if @p frame is empty or the region is not
+/// finite, not within the unit square, or empty.
+[[nodiscard]] PixelRegion regionOf(const RenderRequest& request, ImageSize frame);
 
 /// @brief The resample block: the size a render ends at, and how it gets there.
 ///
@@ -27,12 +60,19 @@ namespace arraw {
 /// and filter are resolved here rather than read from the request by each
 /// backend. Both backends execute exactly this.
 struct ResizePlan {
-    /// @brief Size of the result, from ::arraw::resolvedSize against the cropped size.
+    /// @brief Part of the cropped frame that is resized, from ::arraw::regionOf.
+    ///
+    /// Always set by the planner, to the whole frame when no region was asked
+    /// for. It belongs here and not in the geometry block so that a checkpoint
+    /// after geometry is shared by every region (ADR 025).
+    PixelRegion region;
+
+    /// @brief Size of the result, from ::arraw::resolvedSize against the region's size.
     ImageSize outputSize;
 
     /// @brief Kernel the resize runs with.
     ///
-    /// ::arraw::ResizeFilter::Lanczos3 for an identity resize, whatever the
+    /// ::arraw::ResizeFilter::Lanczos3 for a resize that does not resample, whatever the
     /// request said, since no kernel runs and two renders with the same pixels
     /// should compare equal.
     ResizeFilter filter = ResizeFilter::Lanczos3;
@@ -62,12 +102,18 @@ struct ResizePlan {
     /// @brief Whether the resize leaves the pixels alone, which both backends skip.
     /// @param cropped Size of the photograph after its crop.
     [[nodiscard]] bool isIdentity(ImageSize cropped) const noexcept {
-        return outputSize == cropped;
+        return region.covers(cropped) && outputSize == cropped;
+    }
+
+    /// @brief Whether the kernel runs, as opposed to the region being cut and kept as it is.
+    [[nodiscard]] bool resamples() const noexcept {
+        return outputSize != region.size();
     }
 
     /// @brief Compares what the resize computes, ignoring the ::arraw::ResizePlan::opaque hint.
     friend bool operator==(const ResizePlan& first, const ResizePlan& second) noexcept {
-        return first.outputSize == second.outputSize && first.filter == second.filter;
+        return first.region == second.region && first.outputSize == second.outputSize &&
+               first.filter == second.filter;
     }
 };
 

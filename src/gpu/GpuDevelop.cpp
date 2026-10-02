@@ -27,9 +27,15 @@ template <typename Block> std::span<const std::byte> bytesOf(const Block& block)
 /// Four renders in general: the horizontal shader runs once per plane over the
 /// image, and the vertical one reads the three planes and writes the result.
 /// An opaque image needs no planes beyond the sums, so it takes two.
+///
+/// The plan's region is cut by the horizontal pass, which reads the image at an
+/// offset and clamps to the region's own edges, with weights made for the
+/// region's size: the same taps the host resamples a cut-out copy with, and no
+/// copy. A region that is only cut runs the same passes with identity weights.
 DeviceImage resizeOnGpu(GpuContext& context, const DeviceImage& image, const ResizePlan& resize) {
-    const ImageSize size = image.size();
+    const ImageSize size = resize.region.size();
     const ImageSize target = resize.outputSize;
+    const std::array<std::uint32_t, 2> offset{resize.region.x, resize.region.y};
     const DeviceImage acrossWeights =
         context.upload(packResizeWeights(size.width, target.width, resize.filter));
     const DeviceImage downWeights =
@@ -37,7 +43,7 @@ DeviceImage resizeOnGpu(GpuContext& context, const DeviceImage& image, const Res
 
     const ImageSize widened{target.width, size.height};
     if (resize.opaque) {
-        const GpuResizeBlock across{.plane = 0, .inputLength = size.width};
+        const GpuResizeBlock across{.plane = 0, .inputLength = size.width, .offset = offset};
         const GpuResizeBlock down{.plane = 0, .inputLength = size.height};
         const DeviceImage sums =
             context.render(GpuPass::ResizeAcrossOpaque, bytesOf(across),
@@ -49,7 +55,8 @@ DeviceImage resizeOnGpu(GpuContext& context, const DeviceImage& image, const Res
     std::array<DeviceImage, resizePlaneCount> planes;
     for (std::size_t plane = 0; plane < resizePlaneCount; ++plane) {
         const GpuResizeBlock block{.plane = static_cast<std::uint32_t>(plane),
-                                   .inputLength = size.width};
+                                   .inputLength = size.width,
+                                   .offset = offset};
         const std::array inputs{image, acrossWeights};
         planes[plane] =
             context.render(GpuPass::ResizeAcross, bytesOf(block), inputs, widened, workingEncoding);
