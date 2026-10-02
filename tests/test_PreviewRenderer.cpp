@@ -1,12 +1,15 @@
 #include "PreviewRenderer.h"
 #include "support/TestImages.h"
 
+#include <DevelopSettings.h>
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <chrono>
 #include <condition_variable>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <vector>
 
 using namespace arraw;
@@ -296,4 +299,87 @@ TEST_CASE("Destroying the renderer with work pending ends the worker for good", 
     REQUIRE(collector.lateCalls() == 0);
     REQUIRE(collector.results().size() == atDestruction);
     REQUIRE(std::chrono::steady_clock::now() - begin < timeout);
+}
+
+namespace {
+
+/// @brief Renders one request and returns its result, requiring it to succeed.
+app::PreviewResult renderOne(app::PreviewRenderer& renderer, Collector& collector,
+                             const DevelopState& state, QSize viewport) {
+    const std::uint64_t id = renderer.request(state, viewport, 1.0);
+    REQUIRE(collector.waitFor(id));
+    app::PreviewResult result = collector.results().back();
+    REQUIRE(result.request == id);
+    REQUIRE(result.error.empty());
+    REQUIRE(result.image.has_value());
+    return result;
+}
+
+/// @brief Renders a request on a renderer that has never seen another.
+QImage freshImage(const DevelopState& state, QSize viewport) {
+    Collector collector;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
+    renderer.setSource(makeSource());
+    return *renderOne(renderer, collector, state, viewport).image;
+}
+
+DevelopState stateWith(float exposure, double straighten) {
+    DevelopSettings settings;
+    settings.tone.exposure = exposure;
+    settings.geometry.straighten = straighten;
+    return DevelopState{settings};
+}
+
+} // namespace
+
+TEST_CASE("An edit resumes from the newest checkpoint it can still use", "[app][preview][resume]") {
+    Collector collector;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
+    renderer.setSource(makeSource());
+    const QSize wide{200, 200};
+    const QSize narrow{150, 150};
+
+    struct Step {
+        const char* label;
+        DevelopState state;
+        QSize viewport;
+        std::optional<Stage> resumed;
+    };
+    const std::vector<Step> steps{
+        {"the first render develops from the level", stateWith(0.0F, 0.0), wide, std::nullopt},
+        {"a tone change resumes from nothing", stateWith(0.5F, 0.0), wide, std::nullopt},
+        {"a viewport change resumes from the geometry", stateWith(0.5F, 0.0), narrow,
+         Stage::Geometry},
+        {"a straighten change resumes from the pointwise result", stateWith(0.5F, 5.0), narrow,
+         Stage::Pointwise},
+        {"the same request again resumes from the geometry", stateWith(0.5F, 5.0), narrow,
+         Stage::Geometry},
+        {"a tone change after that resumes from nothing", stateWith(-0.5F, 5.0), narrow,
+         std::nullopt},
+        {"a viewport change after that resumes from the geometry", stateWith(-0.5F, 5.0), wide,
+         Stage::Geometry},
+    };
+    for (const Step& step : steps) {
+        INFO(step.label);
+        const auto result = renderOne(renderer, collector, step.state, step.viewport);
+        REQUIRE(result.resumedFrom == step.resumed);
+        REQUIRE_FALSE(result.onGpu);
+        // Whatever it resumed from, the picture is what a renderer with no
+        // history makes of the same request, bit for bit.
+        REQUIRE(*result.image == freshImage(step.state, step.viewport));
+    }
+}
+
+TEST_CASE("A new source starts with no checkpoints", "[app][preview][resume]") {
+    Collector collector;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
+    renderer.setSource(makeSource());
+    const DevelopState state = stateWith(0.5F, 3.0);
+    REQUIRE_FALSE(renderOne(renderer, collector, state, {200, 200}).resumedFrom.has_value());
+
+    // Same size and settings, other pixels: only the renderer knows to start again.
+    ImageBuffer changed = test::rainbow({256, 128}, PixelFormat::RgbaF32, workingEncoding);
+    changed.samples<float>()[0] += 0.5F;
+    renderer.setSource(std::make_shared<const ImageBuffer>(std::move(changed)));
+    REQUIRE_FALSE(renderOne(renderer, collector, state, {200, 200}).resumedFrom.has_value());
 }

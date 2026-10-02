@@ -9,6 +9,7 @@
 #include <ImageBuffer.h>
 #include <ImageImport.h>
 #include <ImagePyramid.h>
+#include <RenderCheckpoint.h>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -231,4 +232,110 @@ TEST_CASE("Developing a halved source on the GPU matches the CPU", "[gpu][develo
     CAPTURE(colour, alpha, compareFloat(expected, actual, pointwiseAbsoluteFloor));
     REQUIRE(colour <= endToEndTolerance);
     REQUIRE(alpha <= endToEndAlphaTolerance);
+}
+
+namespace {
+
+/// @brief Requires a resumed render to equal a fresh one on the device, pass for pass.
+void requireResumeEqualsFresh(GpuContext& context, const RenderCheckpoint& checkpoint,
+                              const ImageBuffer& source, const DevelopState& state,
+                              const RenderRequest& request) {
+    const std::size_t before = context.renderCount();
+    const RenderCheckpoint resumed =
+        developOnGpu(context, checkpoint, source, state, Stage::Resize, request);
+    const std::size_t resumedPasses = context.renderCount() - before;
+    const RenderCheckpoint fresh = developOnGpu(context, source, state, Stage::Resize, request);
+    const std::size_t freshPasses = context.renderCount() - before - resumedPasses;
+
+    REQUIRE(resumed.isResident());
+    REQUIRE(resumed.boundary() == Stage::Resize);
+    REQUIRE(resumedPasses < freshPasses);
+    const ImageBuffer expected = fresh.readBack();
+    const ImageBuffer actual = resumed.readBack();
+    REQUIRE(actual.size() == expected.size());
+    REQUIRE(compareFloat(expected, actual, pointwiseAbsoluteFloor).bitExact);
+    REQUIRE(worstColourError(develop(source, state, request), actual) <= endToEndTolerance);
+}
+
+} // namespace
+
+TEST_CASE("Resuming on the GPU from a pointwise or a geometry checkpoint equals a fresh render",
+          "[gpu][develop][checkpoint]") {
+    GpuContext& context = gpuContext();
+    const ImageBuffer source = fixtureImage("testcard-61x41-alpha8.png");
+    const DevelopState state{combined(WhiteBalanceMode::AsShot, {.straighten = 7.5})};
+    const RenderRequest request{.size = RenderRequest::FitInside{20, 20}};
+
+    const RenderCheckpoint pointwise = developOnGpu(context, source, state, Stage::Pointwise);
+    const RenderCheckpoint geometry = developOnGpu(context, source, state, Stage::Geometry);
+
+    SECTION("a viewport change after a geometry checkpoint") {
+        requireResumeEqualsFresh(context, geometry, source, state,
+                                 RenderRequest{.size = RenderRequest::FitInside{33, 33}});
+    }
+    SECTION("a geometry change after a pointwise checkpoint") {
+        const DevelopState straighter{combined(WhiteBalanceMode::AsShot, {.straighten = -3.0})};
+        requireResumeEqualsFresh(context, pointwise, source, straighter, request);
+    }
+    SECTION("stopping at the geometry after a pointwise checkpoint") {
+        const RenderCheckpoint resumed =
+            developOnGpu(context, pointwise, source, state, Stage::Geometry);
+        REQUIRE(resumed.boundary() == Stage::Geometry);
+        REQUIRE(
+            compareFloat(geometry.readBack(), resumed.readBack(), pointwiseAbsoluteFloor).bitExact);
+    }
+    SECTION("the checkpoint's own boundary costs no pass") {
+        const std::size_t before = context.renderCount();
+        const RenderCheckpoint again =
+            developOnGpu(context, geometry, source, state, Stage::Geometry);
+        REQUIRE(context.renderCount() == before);
+        REQUIRE(again.boundary() == Stage::Geometry);
+    }
+}
+
+TEST_CASE("Resuming on the GPU refuses what the checkpoint cannot serve",
+          "[gpu][develop][checkpoint]") {
+    GpuContext& context = gpuContext();
+    const ImageBuffer source = fixtureImage("testcard-61x41-srgb8.png");
+    const DevelopState state{combined(WhiteBalanceMode::AsShot, {.straighten = 7.5})};
+    const RenderCheckpoint pointwise = developOnGpu(context, source, state, Stage::Pointwise);
+    const RenderCheckpoint geometry = developOnGpu(context, source, state, Stage::Geometry);
+
+    SECTION("a host checkpoint") {
+        const RenderCheckpoint host = developUntil(source, state, Stage::Pointwise);
+        REQUIRE_THROWS_AS(developOnGpu(context, host, source, state), std::invalid_argument);
+    }
+    SECTION("a checkpoint from another device") {
+        GpuContext other(gpuTestBackend());
+        const RenderCheckpoint foreign = developOnGpu(other, source, state, Stage::Pointwise);
+        REQUIRE_THROWS_AS(developOnGpu(context, foreign, source, state), std::invalid_argument);
+    }
+    SECTION("a changed tone setting") {
+        DevelopSettings brighter = combined(WhiteBalanceMode::AsShot, {.straighten = 7.5});
+        brighter.tone.exposure += 1.0F;
+        REQUIRE_THROWS_AS(developOnGpu(context, pointwise, source, DevelopState{brighter}),
+                          std::invalid_argument);
+    }
+    SECTION("a changed geometry after a geometry checkpoint") {
+        const DevelopState straighter{combined(WhiteBalanceMode::AsShot, {.straighten = 1.0})};
+        REQUIRE_THROWS_AS(developOnGpu(context, geometry, source, straighter),
+                          std::invalid_argument);
+    }
+    SECTION("another pyramid level") {
+        const ImageBuffer reduced = halved(source);
+        REQUIRE_THROWS_AS(developOnGpu(context, pointwise, reduced, state), std::invalid_argument);
+    }
+    SECTION("stopping before the checkpoint") {
+        REQUIRE_THROWS_AS(developOnGpu(context, geometry, source, state, Stage::Pointwise),
+                          std::invalid_argument);
+    }
+}
+
+TEST_CASE("The CPU refuses a checkpoint that lives on a device", "[gpu][develop][checkpoint]") {
+    GpuContext& context = gpuContext();
+    const ImageBuffer source = fixtureImage("testcard-61x41-srgb8.png");
+    const DevelopState state{};
+    const RenderCheckpoint resident = developOnGpu(context, source, state, Stage::Pointwise);
+    REQUIRE(resident.isResident());
+    REQUIRE_THROWS_AS(resumeFrom(resident, source, state, Stage::Resize), std::invalid_argument);
 }

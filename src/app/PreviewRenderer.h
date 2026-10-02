@@ -2,6 +2,7 @@
 
 #include <DevelopState.h>
 #include <ImageBuffer.h>
+#include <RenderCheckpoint.h>
 
 #include <QImage>
 #include <QSize>
@@ -35,6 +36,9 @@ struct PreviewResult {
     /// Pyramid level the image was developed from: 0 is the full-resolution
     /// photograph, and each level above halves both sides (ADR 020).
     int level = 0;
+    /// Boundary of the checkpoint the render resumed from, or empty when it
+    /// developed from the level itself. A diagnostic: nothing shows it.
+    std::optional<Stage> resumedFrom;
 };
 
 /// @brief Worker thread that renders previews off the thread that asks for them.
@@ -48,6 +52,13 @@ struct PreviewResult {
 /// smaller than it: a pyramid of 2x box reductions, built lazily on the worker
 /// from whatever setSource was given, and the smallest level that still covers
 /// the viewport is used (ADR 020). The result says which level it was.
+///
+/// Keeps the last pointwise and geometry results of the level it renders, as
+/// checkpoints (resident on the GPU path, in host memory on the CPU one), so
+/// that a geometry edit resumes after the pointwise pass and a viewport change
+/// after the geometry. The engine decides whether a checkpoint still applies
+/// (ADR 011); the renderer only drops them when the source, the level or the
+/// device changes, which the plan cannot tell it.
 ///
 /// Renders on the GPU when there is one: the first render creates the device,
 /// on the worker, and the decoded photograph is uploaded once per source rather

@@ -8,8 +8,10 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <stdexcept>
+#include <variant>
 
 namespace arraw {
 
@@ -78,6 +80,50 @@ RenderCheckpoint developOnGpu(GpuContext& context, const ImageBuffer& source,
     return developOnGpu(context, source, uploaded, state, stopAfter, request);
 }
 
+namespace {
+
+/// @brief Runs the passes after a boundary, up to another, on an image taken at the first.
+///
+/// The one path for every GPU development: a fresh one starts at the
+/// pointwise pass, a resumed one after the boundary it resumes from, and each
+/// pass is skipped under exactly the condition the CPU skips it.
+/// @param context Device the images live on.
+/// @param done Boundary @p image was taken at, or empty for the uploaded source.
+/// @param image Source pixels, or the pixels at @p done.
+/// @param plan The plan that makes the rest.
+/// @param stopAfter Last boundary to run.
+RenderCheckpoint runPasses(GpuContext& context, std::optional<Stage> done, DeviceImage image,
+                           ProcessingPlan plan, Stage stopAfter) {
+    if (!done) {
+        const GpuPointwiseBlock pointwise = packPointwise(plan);
+        image = context.render(GpuPass::Pointwise, bytesOf(pointwise), image, image.size(),
+                               workingEncoding);
+        done = Stage::Pointwise;
+    }
+    if (*done == Stage::Pointwise && stopAfter != Stage::Pointwise) {
+        // As applyGeometry: an identity geometry leaves the developed pixels as
+        // they are, rather than resampling them onto themselves.
+        const GeometryPlan& geometry = *plan.geometry;
+        if (!geometry.isIdentity()) {
+            const GpuGeometryBlock block = packGeometry(geometry);
+            image = context.render(GpuPass::Geometry, bytesOf(block), image, geometry.outputSize,
+                                   workingEncoding);
+        }
+        done = Stage::Geometry;
+    }
+    if (*done == Stage::Geometry && stopAfter == Stage::Resize) {
+        // As resample: a size equal to the cropped one is not resized, and the
+        // pixels are reused as they are.
+        if (!plan.resize->isIdentity(plan.geometry->outputSize)) {
+            image = resizeOnGpu(context, image, *plan.resize);
+        }
+        done = Stage::Resize;
+    }
+    return makeCheckpoint(*done, std::move(plan), std::move(image));
+}
+
+} // namespace
+
 RenderCheckpoint developOnGpu(GpuContext& context, const ImageBuffer& source,
                               const DeviceImage& uploaded, const DevelopState& state,
                               Stage stopAfter, const RenderRequest& request) {
@@ -94,34 +140,30 @@ RenderCheckpoint developOnGpu(GpuContext& context, const ImageBuffer& source,
     // the request, whatever it says, and has no use for the opacity scan.
     ProcessingPlan plan =
         planFor(source, state, stopAfter == Stage::Resize ? request : RenderRequest{});
+    return runPasses(context, std::nullopt, uploaded, std::move(plan), stopAfter);
+}
 
-    const GpuPointwiseBlock pointwise = packPointwise(plan);
-    DeviceImage developed = context.render(GpuPass::Pointwise, bytesOf(pointwise), uploaded,
-                                           source.size(), workingEncoding);
-    if (stopAfter == Stage::Pointwise) {
-        return makeCheckpoint(Stage::Pointwise, std::move(plan), std::move(developed));
+RenderCheckpoint developOnGpu(GpuContext& context, const RenderCheckpoint& from,
+                              const ImageBuffer& source, const DevelopState& state, Stage stopAfter,
+                              const RenderRequest& request) {
+    if (static_cast<std::size_t>(stopAfter) >= stageCount) {
+        throw std::invalid_argument("A GPU development needs a recognised pass boundary");
     }
-
-    // As applyGeometry: an identity geometry leaves the developed pixels as
-    // they are, rather than resampling them onto themselves.
-    const GeometryPlan& geometry = *plan.geometry;
-    DeviceImage framed = std::move(developed);
-    if (!geometry.isIdentity()) {
-        const GpuGeometryBlock block = packGeometry(geometry);
-        framed = context.render(GpuPass::Geometry, bytesOf(block), framed, geometry.outputSize,
-                                workingEncoding);
+    const CheckpointState& held = stateOf(from);
+    const auto* image = std::get_if<DeviceImage>(&held.pixels);
+    if (image == nullptr) {
+        throw std::invalid_argument("A checkpoint in host memory cannot be resumed on the GPU");
     }
-    if (stopAfter == Stage::Geometry) {
-        return makeCheckpoint(Stage::Geometry, std::move(plan), std::move(framed));
+    if (image->device() != context.id()) {
+        throw std::invalid_argument("The checkpoint belongs to another device");
     }
-
-    // As resample: a size equal to the cropped one is not resized, and the
-    // pixels are reused as they are.
-    if (plan.resize->isIdentity(geometry.outputSize)) {
-        return makeCheckpoint(Stage::Resize, std::move(plan), std::move(framed));
+    ProcessingPlan plan =
+        planFor(source, state, stopAfter == Stage::Resize ? request : RenderRequest{});
+    requireResumable(held, plan, source.size(), stopAfter);
+    if (stopAfter == held.boundary) {
+        return from;
     }
-    DeviceImage resized = resizeOnGpu(context, framed, *plan.resize);
-    return makeCheckpoint(Stage::Resize, std::move(plan), std::move(resized));
+    return runPasses(context, held.boundary, *image, std::move(plan), stopAfter);
 }
 
 } // namespace arraw

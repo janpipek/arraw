@@ -78,6 +78,10 @@ public:
     [[nodiscard]] ImageBuffer readBack() const;
 
 private:
+    /// Engine-side access to the state, for the backends that resume from a
+    /// checkpoint; not part of the public surface.
+    friend const CheckpointState& stateOf(const RenderCheckpoint& checkpoint) noexcept;
+
     std::shared_ptr<const CheckpointState> state_;
 };
 

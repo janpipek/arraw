@@ -83,4 +83,40 @@ RenderCheckpoint developOnGpu(GpuContext& context, const ImageBuffer& source,
                               const DeviceImage& uploaded, const DevelopState& state,
                               Stage stopAfter = Stage::Resize, const RenderRequest& request = {});
 
+/// @brief Carries a render on from a checkpoint that is on this device.
+///
+/// Runs only the passes after the checkpoint's boundary, from the same plan and
+/// through the same code as the overloads above, so a resumed render is the
+/// same as a fresh one, with fewer passes (see ::arraw::GpuContext::renderCount).
+/// Valid only under ADR 011's rule: the plan this render resolves must equal the
+/// checkpoint's up to its boundary, and the pixels must be of the size it would
+/// have made. Two sources of one size and encoding are not told apart (see
+/// ::arraw::resumeFrom), so a caller that changes the source drops its
+/// checkpoints.
+///
+/// A checkpoint in host memory is refused rather than uploaded: the transfer
+/// would be a full-size cost that this call's callers, who hold resident
+/// checkpoints to avoid exactly that, did not ask for. Resuming at the
+/// checkpoint's own boundary returns @p from itself.
+/// @param context Device to develop on; the one that holds @p from; used from
+/// its owner thread only.
+/// @param from Resident checkpoint made on @p context.
+/// @param source Decoded photograph the checkpoint was made from. Read for what
+/// planning needs: its encoding, size, orientation and, for a resize, whether it
+/// is opaque.
+/// @param state How the photograph is developed now.
+/// @param stopAfter Last boundary to run; not before the checkpoint's.
+/// @param request Size and filter to render at; read only when @p stopAfter is
+/// ::arraw::Stage::Resize.
+/// @return A resident checkpoint at @p stopAfter.
+/// @throws std::invalid_argument if @p from is in host memory, belongs to another
+/// device, or does not match this render (plan prefix or size), @p stopAfter is not
+/// a boundary or is before the checkpoint's, or as the overloads above.
+/// @throws std::logic_error if called from a thread other than the context's owner.
+/// @throws std::runtime_error if the device cannot do the work or fails.
+[[nodiscard]] RenderCheckpoint developOnGpu(GpuContext& context, const RenderCheckpoint& from,
+                                            const ImageBuffer& source, const DevelopState& state,
+                                            Stage stopAfter = Stage::Resize,
+                                            const RenderRequest& request = {});
+
 } // namespace arraw

@@ -1,5 +1,6 @@
 #include "Develop.h"
 
+#include "CheckpointState.h"
 #include "ProcessingPlan.h"
 #include "Resample.h"
 #include "SampleConversion.h"
@@ -45,12 +46,8 @@ void developSamples(const ImageBuffer& source, ImageBuffer& result, const Proces
     }
 }
 
-} // namespace
-
-ImageBuffer arraw::develop(const ImageBuffer& source, const DevelopState& state,
-                           const RenderRequest& request) {
-    const ProcessingPlan plan = planFor(source, state, request);
-
+/// @brief Runs the pointwise chain over a source, into the working format.
+ImageBuffer developPointwise(const ImageBuffer& source, const ProcessingPlan& plan) {
     ImageBuffer result(source.size(), workingFormat, workingEncoding);
     switch (source.format()) {
     case PixelFormat::RgbU8:
@@ -66,9 +63,76 @@ ImageBuffer arraw::develop(const ImageBuffer& source, const DevelopState& state,
         developSamples<float>(source, result, plan);
         break;
     }
+    return result;
+}
+
+/// @brief Runs the resize that a plan resolved.
+ImageBuffer resizeBy(ImageBuffer framed, const ProcessingPlan& plan) {
     const ResizePlan& resize = *plan.resize;
-    return resample(applyGeometry(std::move(result), *plan.geometry), resize.outputSize,
-                    resize.filter, resize.opaque);
+    return resample(std::move(framed), resize.outputSize, resize.filter, resize.opaque);
+}
+
+/// @brief Checks that a pass boundary is one that exists.
+void requireBoundary(Stage stopAfter) {
+    if (static_cast<std::size_t>(stopAfter) >= stageCount) {
+        throw std::invalid_argument("A render needs a recognised pass boundary to stop after");
+    }
+}
+
+/// @brief Runs the stages after a boundary, up to another, on pixels taken at the first.
+/// @param done Boundary @p pixels were taken at.
+/// @param pixels Developed pixels at @p done; consumed.
+/// @param plan The plan that made them and makes the rest.
+/// @param stopAfter Last boundary to run, not before @p done.
+RenderCheckpoint runStages(Stage done, ImageBuffer pixels, ProcessingPlan plan, Stage stopAfter) {
+    Stage at = done;
+    if (at == Stage::Pointwise && stopAfter != Stage::Pointwise) {
+        pixels = applyGeometry(std::move(pixels), *plan.geometry);
+        at = Stage::Geometry;
+    }
+    if (at == Stage::Geometry && stopAfter == Stage::Resize) {
+        pixels = resizeBy(std::move(pixels), plan);
+        at = Stage::Resize;
+    }
+    return makeCheckpoint(at, std::move(plan), std::move(pixels));
+}
+
+} // namespace
+
+ImageBuffer arraw::develop(const ImageBuffer& source, const DevelopState& state,
+                           const RenderRequest& request) {
+    // The direct path: no checkpoint, so nothing is shared and nothing copied.
+    const ProcessingPlan plan = planFor(source, state, request);
+    return resizeBy(applyGeometry(developPointwise(source, plan), *plan.geometry), plan);
+}
+
+RenderCheckpoint arraw::developUntil(const ImageBuffer& source, const DevelopState& state,
+                                     Stage stopAfter, const RenderRequest& request) {
+    requireBoundary(stopAfter);
+    // Only a render that reaches the resize plans one: stopping earlier ignores
+    // the request, and has no use for the opacity scan.
+    ProcessingPlan plan =
+        planFor(source, state, stopAfter == Stage::Resize ? request : RenderRequest{});
+    ImageBuffer developed = developPointwise(source, plan);
+    return runStages(Stage::Pointwise, std::move(developed), std::move(plan), stopAfter);
+}
+
+RenderCheckpoint arraw::resumeFrom(const RenderCheckpoint& from, const ImageBuffer& source,
+                                   const DevelopState& state, Stage stopAfter,
+                                   const RenderRequest& request) {
+    requireBoundary(stopAfter);
+    const CheckpointState& held = stateOf(from);
+    const auto* pixels = std::get_if<ImageBuffer>(&held.pixels);
+    if (pixels == nullptr) {
+        throw std::invalid_argument("A checkpoint on a device cannot be resumed on the CPU");
+    }
+    ProcessingPlan plan =
+        planFor(source, state, stopAfter == Stage::Resize ? request : RenderRequest{});
+    requireResumable(held, plan, source.size(), stopAfter);
+    if (stopAfter == held.boundary) {
+        return from;
+    }
+    return runStages(held.boundary, pixels->clone(), std::move(plan), stopAfter);
 }
 
 ImageSize arraw::resolvedSize(const RenderRequest& request, ImageSize cropped) {

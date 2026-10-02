@@ -2,6 +2,7 @@
 
 #include <DevelopState.h>
 #include <ImageBuffer.h>
+#include <RenderCheckpoint.h>
 
 #include <cstdint>
 #include <optional>
@@ -107,5 +108,58 @@ struct RenderRequest {
 /// cannot start from, if geometry is invalid, or if @p request is invalid.
 [[nodiscard]] ImageBuffer develop(const ImageBuffer& source, const DevelopState& state,
                                   const RenderRequest& request = {});
+
+/// @brief Develops a decoded photograph as far as a pass boundary and keeps what is there.
+///
+/// The CPU's `stopAfter` (ADR 011): the same stages as ::arraw::develop, in the
+/// same order and from the same plan, stopped after one. The result is a host
+/// checkpoint a later ::arraw::resumeFrom can carry on from, so that an edit
+/// that only touches later stages does not pay for the earlier ones.
+///
+/// The request is read only when @p stopAfter is ::arraw::Stage::Resize; earlier
+/// stops ignore it, whatever it says, as the GPU does.
+/// @param source Decoded photograph, in the working or a camera encoding.
+/// @param state How the photograph is developed.
+/// @param stopAfter Last boundary to run. ::arraw::Stage::Pointwise leaves a
+/// result of the source's size with no geometry applied, ::arraw::Stage::Geometry
+/// one with no resize.
+/// @param request What to render; see ::arraw::develop.
+/// @return A host checkpoint in the working encoding, with no pending orientation.
+/// @throws std::invalid_argument as ::arraw::develop, and if @p stopAfter is not
+/// a boundary.
+[[nodiscard]] RenderCheckpoint developUntil(const ImageBuffer& source, const DevelopState& state,
+                                            Stage stopAfter, const RenderRequest& request = {});
+
+/// @brief Carries a render on from a checkpoint, stopping after a boundary.
+///
+/// Valid only if the plan this render resolves equals the checkpoint's up to the
+/// checkpoint's own boundary (ADR 011), so a tone edit refuses a pointwise
+/// checkpoint, a viewport change reuses a geometry one, and a checkpoint of
+/// another size, such as one from another pyramid level, is refused. Nothing
+/// about the plan is exposed: the engine compares, the caller holds. What it
+/// cannot tell apart is two sources of one size and encoding, since the plan has
+/// no decode block yet (ADR 012); a caller that changes the pixels under it
+/// must drop its checkpoints.
+///
+/// Resuming costs a copy of the checkpoint's pixels, because the payload is
+/// shared and immutable and the stages take their input by value. It is a
+/// fraction of the passes it skips; ::arraw::develop itself pays none.
+///
+/// Resuming at the checkpoint's own boundary returns @p from itself, which is
+/// equivalent and shares its pixels.
+/// @param from Checkpoint to resume from; a host one.
+/// @param source Decoded photograph the checkpoint was made from. Still read,
+/// for what planning needs.
+/// @param state How the photograph is developed now.
+/// @param stopAfter Last boundary to run; not before the checkpoint's.
+/// @param request What to render; read only when @p stopAfter is ::arraw::Stage::Resize.
+/// @return A host checkpoint at @p stopAfter, equal to what ::arraw::developUntil
+/// of the same arguments gives, bit for bit.
+/// @throws std::invalid_argument if @p from is resident on a device, its plan
+/// prefix or pixels do not match this render, @p stopAfter is not a boundary or
+/// is before the checkpoint's, or as ::arraw::develop.
+[[nodiscard]] RenderCheckpoint resumeFrom(const RenderCheckpoint& from, const ImageBuffer& source,
+                                          const DevelopState& state, Stage stopAfter,
+                                          const RenderRequest& request = {});
 
 } // namespace arraw

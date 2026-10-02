@@ -4,12 +4,16 @@
 #include "GpuContext.h"
 #include "GpuDevelop.h"
 
+#include <Develop.h>
 #include <ImagePyramid.h>
+#include <RenderCheckpoint.h>
 
 #include <algorithm>
 #include <cstdint>
 #include <exception>
 #include <memory>
+#include <optional>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -17,6 +21,93 @@
 namespace arraw::app {
 
 namespace {
+
+/// @brief The last pointwise and geometry results of one level of one source.
+///
+/// Whether a checkpoint still applies to a request is the engine's to say; what
+/// the plan cannot tell is that the pixels underneath changed to others of the
+/// same size and encoding, so the cache is bound to the level's buffer and
+/// dropped when that is another one. Used on the worker only, which is also
+/// where resident checkpoints must be released.
+class CheckpointCache {
+public:
+    /// @brief Binds the cache to a level, dropping the checkpoints of any other.
+    /// @param level Buffer the next renders develop from; kept alive, so that its
+    /// address identifies it.
+    void bind(const std::shared_ptr<const ImageBuffer>& level) {
+        if (level != level_) {
+            clear();
+            level_ = level;
+        }
+    }
+
+    /// @brief Drops both checkpoints and the binding.
+    void clear() noexcept {
+        pointwise_.reset();
+        geometry_.reset();
+        level_.reset();
+    }
+
+    /// @brief Renders a request from the best checkpoint there is, refreshing the cache.
+    ///
+    /// Tries the geometry checkpoint, then the pointwise one, then the level
+    /// itself, and carries on to the resize through each boundary it passes so
+    /// the next request can reuse them. A checkpoint the engine refuses is
+    /// dropped: it is stale, and the render goes on from an earlier one. A
+    /// render that fails leaves only checkpoints that are whole.
+    /// @tparam Develop Callable `(Stage) -> RenderCheckpoint`, developing the level.
+    /// @tparam Resume Callable `(const RenderCheckpoint&, Stage) -> RenderCheckpoint`.
+    /// @param resumedFrom Set to the boundary resumed from, or reset.
+    /// @return The checkpoint at the resize.
+    template <typename Develop, typename Resume>
+    [[nodiscard]] RenderCheckpoint render(Develop&& develop, Resume&& resume,
+                                          std::optional<Stage>& resumedFrom) {
+        resumedFrom.reset();
+        if (geometry_) {
+            if (auto done = tryResume(resume, *geometry_, Stage::Resize)) {
+                resumedFrom = Stage::Geometry;
+                return std::move(*done);
+            }
+            geometry_.reset();
+        }
+        // The pointwise checkpoint is checked after the geometry one, which
+        // was made from it: one that does not match now is useless to keep.
+        if (pointwise_) {
+            if (auto done = tryResume(resume, *pointwise_, Stage::Geometry)) {
+                resumedFrom = Stage::Pointwise;
+                geometry_ = std::move(*done);
+                return resume(*geometry_, Stage::Resize);
+            }
+            pointwise_.reset();
+        }
+        pointwise_ = develop(Stage::Pointwise);
+        geometry_ = resume(*pointwise_, Stage::Geometry);
+        return resume(*geometry_, Stage::Resize);
+    }
+
+private:
+    /// @brief Resumes, or says the checkpoint does not apply.
+    ///
+    /// The engine refuses a stale checkpoint with an `std::invalid_argument`,
+    /// which is also what a bad request raises; the latter is raised again by
+    /// the render that follows, so nothing is hidden.
+    template <typename Resume>
+    static std::optional<RenderCheckpoint> tryResume(Resume& resume, const RenderCheckpoint& from,
+                                                     Stage stopAfter) {
+        try {
+            return resume(from, stopAfter);
+        } catch (const std::invalid_argument&) {
+            return std::nullopt;
+        }
+    }
+
+    /// Level the checkpoints were made from.
+    std::shared_ptr<const ImageBuffer> level_;
+    /// Result after the pointwise chain, at the level's size.
+    std::optional<RenderCheckpoint> pointwise_;
+    /// Result after the geometry, before any resize.
+    std::optional<RenderCheckpoint> geometry_;
+};
 
 /// @brief What the worker holds on the GPU: the device, and the pyramid levels on it.
 ///
@@ -32,6 +123,7 @@ public:
 
     /// @brief Releases the uploaded levels, then the device, in that order.
     ~GpuPreview() {
+        checkpoints_.clear();
         uploaded_.clear();
         context_.reset();
     }
@@ -53,6 +145,7 @@ public:
             return false;
         }
         if (source != source_) {
+            checkpoints_.clear();
             uploaded_.clear();
             source_ = source;
             sourceReason_.clear();
@@ -67,22 +160,32 @@ public:
     /// @pre prepare returned true.
     /// @param level Pyramid level of @p image.
     /// @param image The level to develop.
-    [[nodiscard]] ImageBuffer render(int level, const ImageBuffer& image, const DevelopState& state,
-                                     const RenderRequest& request) {
+    /// @param resumedFrom Set to the boundary resumed from, or reset.
+    [[nodiscard]] ImageBuffer render(int level, const std::shared_ptr<const ImageBuffer>& image,
+                                     const DevelopState& state, const RenderRequest& request,
+                                     std::optional<Stage>& resumedFrom) {
         const auto index = static_cast<std::size_t>(level);
         if (uploaded_.size() <= index) {
             uploaded_.resize(index + 1);
         }
         if (!uploaded_[index].valid()) {
-            uploaded_[index] = uploadSource(*context_, image);
+            uploaded_[index] = uploadSource(*context_, *image);
         }
-        const RenderCheckpoint checkpoint =
-            developOnGpu(*context_, image, uploaded_[index], state, Stage::Resize, request);
+        checkpoints_.bind(image);
+        const RenderCheckpoint checkpoint = checkpoints_.render(
+            [&](Stage stop) {
+                return developOnGpu(*context_, *image, uploaded_[index], state, stop, request);
+            },
+            [&](const RenderCheckpoint& from, Stage stop) {
+                return developOnGpu(*context_, from, *image, state, stop, request);
+            },
+            resumedFrom);
         return checkpoint.readBack();
     }
 
     /// @brief Releases the photograph from the device, as there is none to show.
     void forget() {
+        checkpoints_.clear();
         uploaded_.clear();
         source_.reset();
         sourceReason_.clear();
@@ -91,6 +194,7 @@ public:
     /// @brief Gives up the GPU for the photograph being shown, and says why.
     void fail(const std::string& reason) {
         sourceReason_ = reason;
+        checkpoints_.clear();
         uploaded_.clear();
         dropIfLost();
     }
@@ -127,6 +231,7 @@ private:
     void dropIfLost() {
         if (context_ && context_->lost()) {
             reason_ = "GPU device lost";
+            checkpoints_.clear();
             uploaded_.clear();
             source_.reset();
             context_.reset();
@@ -138,6 +243,8 @@ private:
     std::unique_ptr<GpuContext> context_;
     /// Pyramid levels on the device, by level; a level not yet needed is empty.
     std::vector<DeviceImage> uploaded_;
+    /// Last pointwise and geometry results of the level shown, resident here.
+    CheckpointCache checkpoints_;
     /// Photograph the levels belong to, or whose upload failed; kept alive so
     /// that its address identifies it.
     std::shared_ptr<const ImageBuffer> source_;
@@ -212,18 +319,20 @@ private:
 /// @brief Renders one request, turning a failure into a result.
 PreviewResult render(std::uint64_t id, const DevelopState& state, QSize viewport,
                      qreal devicePixelRatio, const std::shared_ptr<const ImageBuffer>& source,
-                     SourcePyramid& pyramid, GpuPreview* gpu) {
+                     SourcePyramid& pyramid, CheckpointCache& cpuCache, GpuPreview* gpu) {
     PreviewResult result{.request = id,
                          .image = std::nullopt,
                          .error = {},
                          .onGpu = false,
                          .deviceName = {},
                          .fallbackReason = {},
-                         .level = 0};
+                         .level = 0,
+                         .resumedFrom = std::nullopt};
     // Nothing may escape the thread, or the process terminates.
     try {
         pyramid.reset(source);
         if (!source) {
+            cpuCache.clear();
             result.error = "No photograph to render";
             if (gpu != nullptr) {
                 gpu->forget();
@@ -239,7 +348,8 @@ PreviewResult render(std::uint64_t id, const DevelopState& state, QSize viewport
         std::string gpuFailure;
         if (gpu != nullptr && gpu->prepare(source)) {
             try {
-                QImage image = toDisplayImage(gpu->render(level, *reduced, state, request));
+                QImage image =
+                    toDisplayImage(gpu->render(level, reduced, state, request, result.resumedFrom));
                 image.setDevicePixelRatio(devicePixelRatio);
                 result.image = std::move(image);
                 result.onGpu = true;
@@ -254,7 +364,14 @@ PreviewResult render(std::uint64_t id, const DevelopState& state, QSize viewport
         // The CPU renders: no GPU was wanted, or it could not. It runs before
         // the GPU is given up for this photograph, since if it fails too the
         // request was at fault and the GPU is not.
-        QImage image = toDisplayImage(develop(*reduced, state, request));
+        cpuCache.bind(reduced);
+        const RenderCheckpoint developed = cpuCache.render(
+            [&](Stage stop) { return developUntil(*reduced, state, stop, request); },
+            [&](const RenderCheckpoint& from, Stage stop) {
+                return resumeFrom(from, *reduced, state, stop, request);
+            },
+            result.resumedFrom);
+        QImage image = toDisplayImage(developed.readBack());
         image.setDevicePixelRatio(devicePixelRatio);
         result.image = std::move(image);
         if (gpu != nullptr) {
@@ -311,6 +428,8 @@ void PreviewRenderer::run(std::stop_token stop) {
     }
     // Host memory only: the GPU's copies of the levels are its own.
     SourcePyramid pyramid;
+    // Host checkpoints of the CPU path, for the level it last rendered.
+    CheckpointCache cpuCache;
     while (true) {
         std::optional<Pending> job;
         std::shared_ptr<const ImageBuffer> source;
@@ -327,7 +446,7 @@ void PreviewRenderer::run(std::stop_token stop) {
         // Without the lock: developing takes long, and the window must be able
         // to queue the next request meanwhile.
         PreviewResult result = render(job->id, job->state, job->viewport, job->devicePixelRatio,
-                                      source, pyramid, gpu ? &*gpu : nullptr);
+                                      source, pyramid, cpuCache, gpu ? &*gpu : nullptr);
         try {
             onResult_(std::move(result));
         } catch (...) {
