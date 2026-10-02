@@ -5,6 +5,7 @@
 #include <RenderCheckpoint.h>
 
 #include <QImage>
+#include <QRect>
 #include <QSize>
 
 #include <condition_variable>
@@ -17,6 +18,25 @@
 #include <thread>
 
 namespace arraw::app {
+
+/// @brief What a preview shows: a part of the developed frame, at a size.
+struct PreviewView {
+    /// Part of the developed frame to render, in whole pixels of the frame at
+    /// full resolution (what ::arraw::croppedSize gives), or empty for all of it.
+    std::optional<QRect> region;
+    /// Box to fit the region (or the frame) inside, in device pixels. The
+    /// photograph is never enlarged to it, so a result can be smaller.
+    QSize outputSize;
+    /// Device pixels per logical pixel of the screen; set on the image.
+    qreal devicePixelRatio = 1.0;
+
+    /// @brief Makes a view of the whole frame.
+    /// @param box Box to fit the frame inside, in device pixels.
+    /// @param ratio Device pixels per logical pixel.
+    [[nodiscard]] static PreviewView wholeFrame(QSize box, qreal ratio = 1.0) {
+        return {.region = std::nullopt, .outputSize = box, .devicePixelRatio = ratio};
+    }
+};
 
 /// @brief Outcome of one preview render.
 struct PreviewResult {
@@ -33,6 +53,13 @@ struct PreviewResult {
     /// Why the CPU rendered when the GPU was wanted, or empty when it was not
     /// (the GPU rendered, or the CPU was asked for).
     std::string fallbackReason;
+    /// Part of the frame the image shows, in normalised coordinates of the
+    /// frame: what was actually rendered, which the engine snaps outward to
+    /// whole pixels of the level it developed (see ::arraw::renderedRegion).
+    /// Empty if the render failed.
+    QRectF region;
+    /// Size of the full-resolution developed frame that @ref region is in.
+    QSize frame;
     /// Pyramid level the image was developed from: 0 is the full-resolution
     /// photograph, and each level above halves both sides (ADR 020).
     int level = 0;
@@ -48,10 +75,13 @@ struct PreviewResult {
 /// kept, so a burst of edits costs one render of the latest state, not one per
 /// edit. Uses no Qt signals, so it works without an event loop.
 ///
-/// Develops from a reduced copy of the photograph when the viewport is much
-/// smaller than it: a pyramid of 2x box reductions, built lazily on the worker
+/// Renders the part of the frame a request names (ADR 025), so that a zoomed
+/// view costs the size of the view, not of the photograph.
+///
+/// Develops from a reduced copy of the photograph when the output is much
+/// smaller than what it shows: a pyramid of 2x box reductions, built lazily on the worker
 /// from whatever setSource was given, and the smallest level that still covers
-/// the viewport is used (ADR 020). The result says which level it was.
+/// the output is used (ADR 020). The result says which level it was.
 ///
 /// Keeps the last pointwise and geometry results of the level it renders, as
 /// checkpoints (resident on the GPU path, in host memory on the CPU one), so
@@ -103,18 +133,16 @@ public:
     /// A request made while no source is set is not ignored: it yields a result
     /// with an error.
     /// @param state How to develop the photograph.
-    /// @param viewport Size to fit inside, in device pixels.
-    /// @param devicePixelRatio Device pixels per logical pixel of the screen.
+    /// @param view Part of the frame to show, and the size to show it at.
     /// @return Identifier of the request, increasing with each call.
-    std::uint64_t request(DevelopState state, QSize viewport, qreal devicePixelRatio);
+    std::uint64_t request(DevelopState state, PreviewView view);
 
 private:
     /// Request waiting for the worker.
     struct Pending {
         std::uint64_t id;
         DevelopState state;
-        QSize viewport;
-        qreal devicePixelRatio;
+        PreviewView view;
     };
 
     /// @brief Serves requests until asked to stop.

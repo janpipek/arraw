@@ -46,6 +46,7 @@ add_executable(arraw-tests
         test_SampleConversion.cpp
         test_RoundTrip.cpp
         test_Tone.cpp
+        test_ViewTransform.cpp
         test_WhiteBalance.cpp
         test_WhiteBalanceChoice.cpp)
 arraw_enable_warnings(arraw-tests)

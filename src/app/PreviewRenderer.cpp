@@ -317,15 +317,17 @@ private:
 };
 
 /// @brief Renders one request, turning a failure into a result.
-PreviewResult render(std::uint64_t id, const DevelopState& state, QSize viewport,
-                     qreal devicePixelRatio, const std::shared_ptr<const ImageBuffer>& source,
-                     SourcePyramid& pyramid, CheckpointCache& cpuCache, GpuPreview* gpu) {
+PreviewResult render(std::uint64_t id, const DevelopState& state, const PreviewView& view,
+                     const std::shared_ptr<const ImageBuffer>& source, SourcePyramid& pyramid,
+                     CheckpointCache& cpuCache, GpuPreview* gpu) {
     PreviewResult result{.request = id,
                          .image = std::nullopt,
                          .error = {},
                          .onGpu = false,
                          .deviceName = {},
                          .fallbackReason = {},
+                         .region = {},
+                         .frame = {},
                          .level = 0,
                          .resumedFrom = std::nullopt};
     // Nothing may escape the thread, or the process terminates.
@@ -339,18 +341,39 @@ PreviewResult render(std::uint64_t id, const DevelopState& state, QSize viewport
             }
             return result;
         }
-        const RenderRequest request = previewRequest(viewport);
+        RenderRequest request = previewRequest(view.outputSize);
+        const ImageSize cropped = croppedSize(source->size(), source->orientation(), state);
+        const QSize frame(static_cast<int>(cropped.width), static_cast<int>(cropped.height));
+        QRect shown(QPoint(0, 0), frame);
+        if (view.region) {
+            shown = *view.region;
+            if (shown.isEmpty() || !QRect(QPoint(0, 0), frame).contains(shown)) {
+                throw std::invalid_argument("The region is not inside the developed frame");
+            }
+            request.region = RenderRequest::Region{
+                .left = static_cast<double>(shown.left()) / frame.width(),
+                .top = static_cast<double>(shown.top()) / frame.height(),
+                .right = static_cast<double>(shown.right() + 1) / frame.width(),
+                .bottom = static_cast<double>(shown.bottom() + 1) / frame.height()};
+        }
+        result.frame = frame;
         const int level =
             std::min(pyramidLevelFor(source->size(), source->orientation(), state, request),
                      SourcePyramid::highestLevel(source->size()));
         const std::shared_ptr<const ImageBuffer>& reduced = pyramid.level(level);
         result.level = level;
+        // Snapped to the level's own pixels, which are coarser than the
+        // frame's: where the image goes on screen is what this says.
+        const RenderRequest::Region rendered =
+            renderedRegion(request, croppedSize(reduced->size(), reduced->orientation(), state));
+        result.region =
+            QRectF(QPointF(rendered.left, rendered.top), QPointF(rendered.right, rendered.bottom));
         std::string gpuFailure;
         if (gpu != nullptr && gpu->prepare(source)) {
             try {
                 QImage image =
                     toDisplayImage(gpu->render(level, reduced, state, request, result.resumedFrom));
-                image.setDevicePixelRatio(devicePixelRatio);
+                image.setDevicePixelRatio(view.devicePixelRatio);
                 result.image = std::move(image);
                 result.onGpu = true;
                 result.deviceName = gpu->deviceName();
@@ -372,7 +395,7 @@ PreviewResult render(std::uint64_t id, const DevelopState& state, QSize viewport
             },
             result.resumedFrom);
         QImage image = toDisplayImage(developed.readBack());
-        image.setDevicePixelRatio(devicePixelRatio);
+        image.setDevicePixelRatio(view.devicePixelRatio);
         result.image = std::move(image);
         if (gpu != nullptr) {
             if (!gpuFailure.empty()) {
@@ -407,12 +430,12 @@ void PreviewRenderer::setSource(std::shared_ptr<const ImageBuffer> decoded) {
     pending_.reset();
 }
 
-std::uint64_t PreviewRenderer::request(DevelopState state, QSize viewport, qreal devicePixelRatio) {
+std::uint64_t PreviewRenderer::request(DevelopState state, PreviewView view) {
     std::uint64_t id = 0;
     {
         const std::scoped_lock lock(mutex_);
         id = ++lastId_;
-        pending_.emplace(Pending{id, std::move(state), viewport, devicePixelRatio});
+        pending_.emplace(Pending{id, std::move(state), view});
     }
     wake_.notify_one();
     return id;
@@ -445,8 +468,8 @@ void PreviewRenderer::run(std::stop_token stop) {
         }
         // Without the lock: developing takes long, and the window must be able
         // to queue the next request meanwhile.
-        PreviewResult result = render(job->id, job->state, job->viewport, job->devicePixelRatio,
-                                      source, pyramid, cpuCache, gpu ? &*gpu : nullptr);
+        PreviewResult result = render(job->id, job->state, job->view, source, pyramid, cpuCache,
+                                      gpu ? &*gpu : nullptr);
         try {
             onResult_(std::move(result));
         } catch (...) {

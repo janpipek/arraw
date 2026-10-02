@@ -293,6 +293,8 @@ add_library(arraw-app-core STATIC
         src/app/PreviewRenderer.h
         src/app/SettingPresentation.cpp
         src/app/SettingPresentation.h
+        src/app/ViewTransform.cpp
+        src/app/ViewTransform.h
         src/app/WhiteBalanceChoice.cpp
         src/app/WhiteBalanceChoice.h)
 arraw_enable_warnings(arraw-app-core)
@@ -305,6 +307,8 @@ add_executable(arraw-ui src/app/main.cpp
         src/app/ui/DevelopPanel.h
         src/app/ui/MainWindow.cpp
         src/app/ui/MainWindow.h
+        src/app/ui/PhotoView.cpp
+        src/app/ui/PhotoView.h
         src/app/ui/SettingSlider.cpp
         src/app/ui/SettingSlider.h)
 arraw_enable_warnings(arraw-ui)

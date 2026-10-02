@@ -3,6 +3,7 @@
 
 #include <DevelopSettings.h>
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <chrono>
@@ -87,7 +88,7 @@ TEST_CASE("A large source in a small viewport is developed from a reduced level"
     app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
     renderer.setSource(makeLargeSource());
 
-    const std::uint64_t id = renderer.request({}, {512, 512}, 1.0);
+    const std::uint64_t id = renderer.request({}, app::PreviewView::wholeFrame({512, 512}));
 
     REQUIRE(collector.waitFor(id));
     const auto results = collector.results();
@@ -105,7 +106,7 @@ TEST_CASE("A viewport as large as the source is developed from the source itself
     app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
     renderer.setSource(makeLargeSource());
 
-    const std::uint64_t id = renderer.request({}, {2048, 1024}, 1.0);
+    const std::uint64_t id = renderer.request({}, app::PreviewView::wholeFrame({2048, 1024}));
 
     REQUIRE(collector.waitFor(id));
     const auto results = collector.results();
@@ -120,7 +121,7 @@ TEST_CASE("The pyramid stops before its levels become too small to be of use",
     app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
     renderer.setSource(makeLargeSource());
 
-    const std::uint64_t id = renderer.request({}, {16, 16}, 1.0);
+    const std::uint64_t id = renderer.request({}, app::PreviewView::wholeFrame({16, 16}));
 
     REQUIRE(collector.waitFor(id));
     const auto results = collector.results();
@@ -134,11 +135,11 @@ TEST_CASE("A new source starts a new pyramid", "[app][preview][pyramid]") {
     Collector collector;
     app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
     renderer.setSource(makeLargeSource());
-    const std::uint64_t first = renderer.request({}, {512, 512}, 1.0);
+    const std::uint64_t first = renderer.request({}, app::PreviewView::wholeFrame({512, 512}));
     REQUIRE(collector.waitFor(first));
 
     renderer.setSource(makeSource()); // 256x128: nothing to reduce.
-    const std::uint64_t second = renderer.request({}, {128, 128}, 1.0);
+    const std::uint64_t second = renderer.request({}, app::PreviewView::wholeFrame({128, 128}));
 
     REQUIRE(collector.waitFor(second));
     const auto results = collector.results();
@@ -153,7 +154,7 @@ TEST_CASE("A renderer told to use the CPU says so and needs no fallback reason",
     app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
     renderer.setSource(makeSource());
 
-    const std::uint64_t id = renderer.request({}, {100, 100}, 1.0);
+    const std::uint64_t id = renderer.request({}, app::PreviewView::wholeFrame({100, 100}));
 
     REQUIRE(collector.waitFor(id));
     const auto results = collector.results();
@@ -167,9 +168,9 @@ TEST_CASE("An automatic renderer without a usable GPU falls back and says why", 
     app::PreviewRenderer renderer(collector.callback());
     renderer.setSource(makeSource());
 
-    const std::uint64_t first = renderer.request({}, {100, 100}, 1.0);
+    const std::uint64_t first = renderer.request({}, app::PreviewView::wholeFrame({100, 100}));
     REQUIRE(collector.waitFor(first));
-    const std::uint64_t second = renderer.request({}, {64, 64}, 1.0);
+    const std::uint64_t second = renderer.request({}, app::PreviewView::wholeFrame({64, 64}));
     REQUIRE(collector.waitFor(second));
 
     const auto results = collector.results();
@@ -193,7 +194,7 @@ TEST_CASE("A request renders and is answered with its id", "[app][preview]") {
     app::PreviewRenderer renderer(collector.callback());
     renderer.setSource(makeSource());
 
-    const std::uint64_t id = renderer.request({}, {100, 100}, 1.0);
+    const std::uint64_t id = renderer.request({}, app::PreviewView::wholeFrame({100, 100}));
 
     REQUIRE(collector.waitFor(id));
     const auto results = collector.results();
@@ -214,7 +215,7 @@ TEST_CASE("The newest request wins, and results never arrive out of order", "[ap
     for (int i = 0; i < 50; ++i) {
         DevelopState state;
         state.settings.tone.exposure = static_cast<float>(i) * 0.02F;
-        last = renderer.request(state, {128, 64}, 1.0);
+        last = renderer.request(state, app::PreviewView::wholeFrame({128, 64}));
     }
 
     REQUIRE(collector.waitFor(last));
@@ -232,7 +233,7 @@ TEST_CASE("A failed render yields an error and the worker carries on", "[app][pr
     app::PreviewRenderer renderer(collector.callback());
     renderer.setSource(makeSource());
 
-    const std::uint64_t bad = renderer.request({}, {0, 0}, 1.0);
+    const std::uint64_t bad = renderer.request({}, app::PreviewView::wholeFrame({0, 0}));
     REQUIRE(collector.waitFor(bad));
     {
         const auto results = collector.results();
@@ -241,7 +242,7 @@ TEST_CASE("A failed render yields an error and the worker carries on", "[app][pr
         REQUIRE(!results.back().error.empty());
     }
 
-    const std::uint64_t good = renderer.request({}, {64, 64}, 1.0);
+    const std::uint64_t good = renderer.request({}, app::PreviewView::wholeFrame({64, 64}));
     REQUIRE(collector.waitFor(good));
     const auto results = collector.results();
     REQUIRE(results.back().request == good);
@@ -253,7 +254,7 @@ TEST_CASE("A request before any source yields an error result", "[app][preview]"
     Collector collector;
     app::PreviewRenderer renderer(collector.callback());
 
-    const std::uint64_t id = renderer.request({}, {64, 64}, 1.0);
+    const std::uint64_t id = renderer.request({}, app::PreviewView::wholeFrame({64, 64}));
 
     REQUIRE(collector.waitFor(id));
     const auto results = collector.results();
@@ -267,10 +268,10 @@ TEST_CASE("Replacing the source drops requests not yet started", "[app][preview]
     app::PreviewRenderer renderer(collector.callback());
     renderer.setSource(makeSource());
     // Occupy the worker, then queue a request and drop it with the source.
-    const std::uint64_t first = renderer.request({}, {128, 64}, 1.0);
-    const std::uint64_t dropped = renderer.request({}, {128, 64}, 1.0);
+    const std::uint64_t first = renderer.request({}, app::PreviewView::wholeFrame({128, 64}));
+    const std::uint64_t dropped = renderer.request({}, app::PreviewView::wholeFrame({128, 64}));
     renderer.setSource(makeSource());
-    const std::uint64_t kept = renderer.request({}, {128, 64}, 1.0);
+    const std::uint64_t kept = renderer.request({}, app::PreviewView::wholeFrame({128, 64}));
 
     REQUIRE(collector.waitFor(kept));
     for (const auto& result : collector.results()) {
@@ -287,7 +288,7 @@ TEST_CASE("Destroying the renderer with work pending ends the worker for good", 
         app::PreviewRenderer renderer(collector.callback());
         renderer.setSource(makeSource());
         for (int i = 0; i < 20; ++i) {
-            (void)renderer.request({}, {128, 64}, 1.0);
+            (void)renderer.request({}, app::PreviewView::wholeFrame({128, 64}));
         }
     }
     collector.close();
@@ -306,7 +307,7 @@ namespace {
 /// @brief Renders one request and returns its result, requiring it to succeed.
 app::PreviewResult renderOne(app::PreviewRenderer& renderer, Collector& collector,
                              const DevelopState& state, QSize viewport) {
-    const std::uint64_t id = renderer.request(state, viewport, 1.0);
+    const std::uint64_t id = renderer.request(state, app::PreviewView::wholeFrame(viewport));
     REQUIRE(collector.waitFor(id));
     app::PreviewResult result = collector.results().back();
     REQUIRE(result.request == id);
@@ -382,4 +383,96 @@ TEST_CASE("A new source starts with no checkpoints", "[app][preview][resume]") {
     changed.samples<float>()[0] += 0.5F;
     renderer.setSource(std::make_shared<const ImageBuffer>(std::move(changed)));
     REQUIRE_FALSE(renderOne(renderer, collector, state, {200, 200}).resumedFrom.has_value());
+}
+
+TEST_CASE("A region request renders that part of the frame at the size asked for",
+          "[app][preview][region]") {
+    Collector collector;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
+    renderer.setSource(makeLargeSource());
+
+    const QRect region(512, 256, 256, 128);
+    const std::uint64_t id =
+        renderer.request({}, {.region = region, .outputSize = {128, 64}, .devicePixelRatio = 2.0});
+
+    REQUIRE(collector.waitFor(id));
+    const auto result = collector.results().back();
+    REQUIRE(result.error.empty());
+    REQUIRE(result.image.has_value());
+    REQUIRE(result.image->size() == QSize(128, 64));
+    REQUIRE(result.image->devicePixelRatio() == 2.0);
+    // Level 1 halves the frame; the region falls on its pixel boundaries, so
+    // what was rendered is exactly what was asked for.
+    REQUIRE(result.region == QRectF(512.0 / 2048, 256.0 / 1024, 256.0 / 2048, 128.0 / 1024));
+    REQUIRE(result.frame == QSize(2048, 1024));
+    // The region is 256 pixels wide at level 0 and 128 at level 1, which still
+    // covers the 128 wanted; level 2 would not.
+    REQUIRE(result.level == 1);
+}
+
+TEST_CASE("A region off the level's pixels reports where it was actually rendered",
+          "[app][preview][region]") {
+    Collector collector;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
+    renderer.setSource(makeLargeSource());
+
+    // Odd edges at full resolution; level 1 has pixels twice as wide, so the
+    // engine snaps outward to even ones: 513 -> 512, 513 + 255 = 768 stays.
+    const std::uint64_t id = renderer.request(
+        {},
+        {.region = QRect(513, 257, 255, 127), .outputSize = {128, 64}, .devicePixelRatio = 1.0});
+
+    REQUIRE(collector.waitFor(id));
+    const auto result = collector.results().back();
+    REQUIRE(result.error.empty());
+    REQUIRE(result.level == 1);
+    REQUIRE(result.region.left() == Catch::Approx(512.0 / 2048));
+    REQUIRE(result.region.top() == Catch::Approx(256.0 / 1024));
+    REQUIRE(result.region.right() == Catch::Approx(768.0 / 2048));
+    REQUIRE(result.region.bottom() == Catch::Approx(384.0 / 1024));
+}
+
+TEST_CASE("A small region at one image pixel per output pixel is developed from level 0",
+          "[app][preview][region][pyramid]") {
+    Collector collector;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
+    renderer.setSource(makeLargeSource());
+
+    const std::uint64_t id = renderer.request(
+        {},
+        {.region = QRect(100, 100, 200, 100), .outputSize = {200, 100}, .devicePixelRatio = 1.0});
+
+    REQUIRE(collector.waitFor(id));
+    const auto result = collector.results().back();
+    REQUIRE(result.error.empty());
+    REQUIRE(result.level == 0);
+    REQUIRE(result.image->size() == QSize(200, 100));
+}
+
+TEST_CASE("A request without a region reports the whole frame", "[app][preview][region]") {
+    Collector collector;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
+    renderer.setSource(makeLargeSource());
+
+    const std::uint64_t id = renderer.request({}, app::PreviewView::wholeFrame({512, 512}));
+
+    REQUIRE(collector.waitFor(id));
+    const auto result = collector.results().back();
+    REQUIRE(result.region == QRectF(0.0, 0.0, 1.0, 1.0));
+    REQUIRE(result.frame == QSize(2048, 1024));
+}
+
+TEST_CASE("A region outside the frame is reported as a failure", "[app][preview][region]") {
+    Collector collector;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
+    renderer.setSource(makeLargeSource());
+
+    const std::uint64_t id = renderer.request(
+        {},
+        {.region = QRect(2000, 0, 100, 100), .outputSize = {100, 100}, .devicePixelRatio = 1.0});
+
+    REQUIRE(collector.waitFor(id));
+    const auto result = collector.results().back();
+    REQUIRE_FALSE(result.error.empty());
+    REQUIRE_FALSE(result.image.has_value());
 }

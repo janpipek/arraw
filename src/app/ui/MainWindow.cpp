@@ -3,14 +3,18 @@
 #include "DebugDiagnostics.h"
 #include "DevelopPanel.h"
 #include "DisplayImage.h"
+#include "PhotoView.h"
+#include "ViewTransform.h"
 
 #include <ColorEncoding.h>
+#include <Develop.h>
 #include <ImageBuffer.h>
 #include <ImageImport.h>
 #include <Photo.h>
 #include <WhiteBalance.h>
 
 #include <QAction>
+#include <QActionGroup>
 #include <QDockWidget>
 #include <QEvent>
 #include <QFileDialog>
@@ -21,15 +25,13 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QMetaObject>
-#include <QMouseEvent>
-#include <QPixmap>
 #include <QScreen>
 #include <QScrollArea>
 #include <QShortcut>
-#include <QSizePolicy>
 #include <QStandardPaths>
 #include <QStatusBar>
 #include <QString>
+#include <QToolButton>
 
 #include <cstdlib>
 #include <exception>
@@ -79,6 +81,9 @@ MainWindow::MainWindow(QWidget* parent)
     resizeTimer_.setSingleShot(true);
     resizeTimer_.setInterval(100);
     connect(&resizeTimer_, &QTimer::timeout, this, &MainWindow::requestRender);
+    interactionTimer_.setSingleShot(true);
+    interactionTimer_.setInterval(0);
+    connect(&interactionTimer_, &QTimer::timeout, this, &MainWindow::requestRender);
 
     // No size to restore yet: two thirds of the screen, so the first photograph
     // is fitted to something worth looking at.
@@ -88,14 +93,7 @@ MainWindow::MainWindow(QWidget* parent)
 }
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
-    if (watched == imageView_ && picking_ && event->type() == QEvent::MouseButtonPress) {
-        const auto* click = static_cast<QMouseEvent*>(event);
-        if (click->button() == Qt::LeftButton) {
-            pickNeutralAt(click->position());
-            return true;
-        }
-    }
-    if (watched == imageView_ && open_ &&
+    if (watched == photoView_ && open_ &&
         (event->type() == QEvent::Resize || event->type() == QEvent::DevicePixelRatioChange)) {
         resizeTimer_.start();
     }
@@ -134,6 +132,73 @@ void MainWindow::buildMenu() {
             refreshPanel();
         });
     });
+
+    buildZoomControls();
+}
+
+void MainWindow::buildZoomControls() {
+    QMenu* viewMenu = menuBar()->addMenu(tr("&View"));
+    QMenu* zoomMenu = viewMenu->addMenu(tr("&Zoom"));
+
+    zoomInAction_ = zoomMenu->addAction(tr("Zoom &In"));
+    zoomInAction_->setShortcut(QKeySequence::ZoomIn);
+    connect(zoomInAction_, &QAction::triggered, this, [this] { photoView_->zoomBy(2.0); });
+    zoomOutAction_ = zoomMenu->addAction(tr("Zoom &Out"));
+    zoomOutAction_->setShortcut(QKeySequence::ZoomOut);
+    connect(zoomOutAction_, &QAction::triggered, this, [this] { photoView_->zoomBy(0.5); });
+    zoomMenu->addSeparator();
+
+    // One list of actions, in the menu and in the button's dropdown alike.
+    zoomGroup_ = new QActionGroup(this);
+    zoomGroup_->setExclusive(true);
+    auto* fitAction = new QAction(tr("&Fit"), this);
+    fitAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_0));
+    connect(fitAction, &QAction::triggered, this, [this] { photoView_->zoomToFit(); });
+    zoomActions_.push_back(fitAction);
+    for (const double preset : zoomPresets) {
+        auto* action = new QAction(zoomPercentLabel(preset), this);
+        connect(action, &QAction::triggered, this, [this, preset] { photoView_->zoomTo(preset); });
+        zoomActions_.push_back(action);
+    }
+    auto* dropdown = new QMenu(this);
+    for (QAction* action : zoomActions_) {
+        action->setCheckable(true);
+        zoomGroup_->addAction(action);
+        zoomMenu->addAction(action);
+        dropdown->addAction(action);
+    }
+
+    zoomButton_ = new QToolButton(this);
+    zoomButton_->setPopupMode(QToolButton::InstantPopup);
+    zoomButton_->setAutoRaise(true);
+    zoomButton_->setMenu(dropdown);
+    zoomButton_->setToolTip(tr("Zoom"));
+}
+
+void MainWindow::updateZoomControls() {
+    const bool enabled = open_.has_value();
+    zoomButton_->setEnabled(enabled);
+    zoomInAction_->setEnabled(enabled);
+    zoomOutAction_->setEnabled(enabled);
+    for (QAction* action : zoomActions_) {
+        action->setEnabled(enabled);
+    }
+    const bool fit = photoView_->isFit();
+    const double zoom = photoView_->zoom();
+    zoomButton_->setText(enabled ? zoomLabel(zoom, fit) : tr("Fit"));
+    // The preset the zoom is, or none: a wheel zoom is between them.
+    const int preset = fit ? -1 : matchingZoomPreset(zoom);
+    for (std::size_t i = 0; i < zoomActions_.size(); ++i) {
+        zoomActions_[i]->setChecked(enabled && (i == 0 ? fit : static_cast<int>(i) - 1 == preset));
+    }
+    if (!enabled || (!fit && preset < 0)) {
+        // Exclusive groups keep one ticked; a zoom between presets ticks none.
+        zoomGroup_->setExclusive(false);
+        for (QAction* action : zoomActions_) {
+            action->setChecked(false);
+        }
+        zoomGroup_->setExclusive(true);
+    }
 }
 
 void MainWindow::buildDevelopDock() {
@@ -179,29 +244,12 @@ void MainWindow::setPicking(bool picking) {
     picking_ = picking && open_.has_value();
     developPanel_->setPicking(picking_);
     cancelPickShortcut_->setEnabled(picking_);
-    if (picking_) {
-        imageView_->setCursor(Qt::CrossCursor);
-    } else {
-        imageView_->unsetCursor();
-    }
+    photoView_->setPicking(picking_);
 }
 
-void MainWindow::pickNeutralAt(const QPointF& position) {
-    // The preview is centred in the view and may be smaller than it, and the
-    // click is only meaningful on the photograph itself.
-    const QPixmap pixmap = imageView_->pixmap();
-    if (pixmap.isNull()) {
-        return;
-    }
-    const QSizeF size = pixmap.deviceIndependentSize();
-    const QRectF contents = imageView_->contentsRect();
-    const QPointF origin(contents.x() + (contents.width() - size.width()) / 2.0,
-                         contents.y() + (contents.height() - size.height()) / 2.0);
-    const double x = (position.x() - origin.x()) / size.width();
-    const double y = (position.y() - origin.y()) / size.height();
-    if (x < 0.0 || x > 1.0 || y < 0.0 || y > 1.0) {
-        return;
-    }
+void MainWindow::pickNeutralAt(const QPointF& point) {
+    const double x = point.x();
+    const double y = point.y();
 
     setPicking(false);
     guarded([this, x, y] {
@@ -265,19 +313,24 @@ void MainWindow::refreshPanel() {
 }
 
 void MainWindow::buildImageView() {
-    imageView_ = new QLabel(this);
-    imageView_->setAlignment(Qt::AlignCenter);
-    // The view takes the room the window gives it; the pixmap must not decide
-    // the window's minimum size, or the photograph could never be fitted smaller.
-    imageView_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
-    imageView_->setMinimumSize(1, 1);
-    imageView_->installEventFilter(this);
-    setCentralWidget(imageView_);
+    photoView_ = new PhotoView(this);
+    photoView_->installEventFilter(this);
+    connect(photoView_, &PhotoView::picked, this, &MainWindow::pickNeutralAt);
+    connect(photoView_, &PhotoView::zoomChanged, this, &MainWindow::updateZoomControls);
+    // A drag or a wheel burst makes many events; they ask for one render per turn.
+    connect(photoView_, &PhotoView::viewChanged, this, [this] {
+        if (open_) {
+            interactionTimer_.start();
+        }
+    });
+    setCentralWidget(photoView_);
+    updateZoomControls();
 }
 
 void MainWindow::buildStatusBar() {
     deviceLabel_ = new QLabel(this);
     statusBar()->addPermanentWidget(deviceLabel_);
+    statusBar()->addPermanentWidget(zoomButton_);
 }
 
 void MainWindow::showDevice(const PreviewResult& result) {
@@ -321,18 +374,31 @@ void MainWindow::openFileWithDialog() {
     }
 }
 
-QSize MainWindow::viewportPixels() const {
-    return (imageView_->size() * imageView_->devicePixelRatioF()).expandedTo({1, 1});
-}
-
 void MainWindow::requestRender() {
     if (!open_) {
         return;
     }
-    // Any pending resize is covered by this request.
+    // Any pending resize or interaction is covered by this request.
     resizeTimer_.stop();
-    latestRequest_ = previewRenderer_.request(open_->session.photo().state(), viewportPixels(),
-                                              imageView_->devicePixelRatioF());
+    interactionTimer_.stop();
+    const DevelopState& state = open_->session.photo().state();
+    const qreal ratio = photoView_->devicePixelRatioF();
+    PreviewView view{.region = std::nullopt,
+                     .outputSize = photoView_->devicePixels(),
+                     .devicePixelRatio = ratio};
+    try {
+        // The crop may have changed the frame; the view keeps its zoom and centre.
+        const ImageSize cropped =
+            croppedSize(open_->decoded->size(), open_->decoded->orientation(), state);
+        photoView_->setFrameSize(
+            QSize(static_cast<int>(cropped.width), static_cast<int>(cropped.height)));
+        const ViewTransform transform = photoView_->transform();
+        view.region = transform.visiblePixels();
+        view.outputSize = transform.outputSize();
+    } catch (const std::exception&) {
+        // Left to the renderer, which reports what is wrong with the state.
+    }
+    latestRequest_ = previewRenderer_.request(state, std::move(view));
 }
 
 void MainWindow::showResult(const PreviewResult& result) {
@@ -341,7 +407,7 @@ void MainWindow::showResult(const PreviewResult& result) {
     }
     if (result.image) {
         latestShown_ = result.request;
-        imageView_->setPixmap(QPixmap::fromImage(*result.image));
+        photoView_->setImage(*result.image, result.region);
         showDevice(result);
         return;
     }
@@ -370,6 +436,8 @@ void MainWindow::showPhoto(Photo photo) {
     // Commit.
     setPicking(false);
     open_.emplace(OpenPhoto{EditSession(std::move(photo)), decoded});
+    photoView_->resetView();
+    updateZoomControls();
     previewRenderer_.setSource(std::move(decoded));
     // Results of the previous photograph are still on their way, or in progress.
     firstRequest_ = latestRequest_ + 1;

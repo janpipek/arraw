@@ -14,9 +14,12 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <vector>
 
 class QAction;
+class QActionGroup;
 class QLabel;
+class QToolButton;
 class QEvent;
 class QShortcut;
 class QObject;
@@ -24,6 +27,7 @@ class QObject;
 namespace arraw::app {
 
 class DevelopPanel;
+class PhotoView;
 
 /// @brief Top-level window of the desktop application.
 class MainWindow : public QMainWindow {
@@ -43,8 +47,18 @@ private:
     /// @brief Builds the menu bar and the actions it offers.
     void buildMenu();
 
-    /// @brief Builds the view that shows the photograph centred in the window.
+    /// @brief Builds the view that shows the photograph, zoomed and panned.
     void buildImageView();
+
+    /// @brief Builds the View menu and the status bar's zoom button, from one list of actions.
+    ///
+    /// The actions are shared: Fit and the presets of ::arraw::app::zoomPresets
+    /// are in the View > Zoom menu and in the button's dropdown alike (ADR 0056
+    /// of the earlier version).
+    void buildZoomControls();
+
+    /// @brief Shows the view's zoom on the button and ticks the matching preset.
+    void updateZoomControls();
 
     /// @brief Asks the user for a photograph and opens it.
     void openFileWithDialog();
@@ -67,16 +81,16 @@ private:
     void setPicking(bool picking);
 
     /// @brief Sets the white balance from the neutral under a click on the view.
-    /// @param position Click position in the view's coordinates.
-    void pickNeutralAt(const QPointF& position);
+    /// @param point Click position, in fractions of the developed frame.
+    void pickNeutralAt(const QPointF& point);
 
     /// @brief Shows the session's state in the panel and updates the actions.
     void refreshPanel();
 
     /// @brief Asks the renderer for the current photograph in its current state.
     ///
-    /// Fitted to the view as it is now. Returns at once; the picture arrives
-    /// through showResult, and a newer request replaces one not yet started.
+    /// The part of the frame in view, at the size the view shows it. Returns at once; the picture
+    /// arrives through showResult, and a newer request replaces one not yet started.
     void requestRender();
 
     /// @brief Shows a finished render, or reports why there is none.
@@ -95,9 +109,6 @@ private:
     /// The fallback reason, when there is one, is the label's tooltip.
     /// @param result Finished render, with its image.
     void showDevice(const PreviewResult& result);
-
-    /// @brief Gives the size of the view in device pixels.
-    [[nodiscard]] QSize viewportPixels() const;
 
     /// @brief Opens a photograph and makes it the one being edited.
     ///
@@ -119,7 +130,13 @@ private:
         std::shared_ptr<const ImageBuffer> decoded;
     };
 
-    QLabel* imageView_ = nullptr;
+    PhotoView* photoView_ = nullptr;
+    QToolButton* zoomButton_ = nullptr;
+    QActionGroup* zoomGroup_ = nullptr;
+    /// Fit, then one per preset, in the order of ::arraw::app::zoomPresets.
+    std::vector<QAction*> zoomActions_;
+    QAction* zoomInAction_ = nullptr;
+    QAction* zoomOutAction_ = nullptr;
     QLabel* deviceLabel_ = nullptr;
     DevelopPanel* developPanel_ = nullptr;
     QWidget* developDock_ = nullptr;
@@ -133,6 +150,10 @@ private:
     /// Single-shot timer that fires once the view has stopped changing, so that
     /// dragging an edge renders once rather than per pixel.
     QTimer resizeTimer_;
+
+    /// Single-shot timer of no delay, so that a drag or a wheel burst asks for
+    /// one render per turn of the event loop, however many events it has.
+    QTimer interactionTimer_;
 
     /// Whether a message about a failed render is on screen.
     bool reportingFailure_ = false;
