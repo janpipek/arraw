@@ -61,20 +61,40 @@ DeviceImage resizeOnGpu(GpuContext& context, const DeviceImage& image, const Res
 
 } // namespace
 
+DeviceImage uploadSource(GpuContext& context, const ImageBuffer& source) {
+    return source.format() == PixelFormat::RgbaF32 ? context.upload(source)
+                                                   : context.upload(toRgbaF32(source));
+}
+
 RenderCheckpoint developOnGpu(GpuContext& context, const ImageBuffer& source,
                               const DevelopState& state, Stage stopAfter,
                               const RenderRequest& request) {
+    // One path: the transfer this call pays for is the only difference.
+    // Validating first keeps a bad argument from costing an upload.
     if (static_cast<std::size_t>(stopAfter) >= stageCount) {
         throw std::invalid_argument("A GPU development needs a recognised pass boundary");
+    }
+    const DeviceImage uploaded = uploadSource(context, source);
+    return developOnGpu(context, source, uploaded, state, stopAfter, request);
+}
+
+RenderCheckpoint developOnGpu(GpuContext& context, const ImageBuffer& source,
+                              const DeviceImage& uploaded, const DevelopState& state,
+                              Stage stopAfter, const RenderRequest& request) {
+    if (static_cast<std::size_t>(stopAfter) >= stageCount) {
+        throw std::invalid_argument("A GPU development needs a recognised pass boundary");
+    }
+    if (!uploaded.valid() || uploaded.device() != context.id()) {
+        throw std::invalid_argument("The uploaded source does not belong to this device");
+    }
+    if (uploaded.size() != source.size()) {
+        throw std::invalid_argument("The uploaded source is not of the source's size");
     }
     // Only a render that reaches the resize plans one: stopping earlier ignores
     // the request, whatever it says, and has no use for the opacity scan.
     ProcessingPlan plan =
         planFor(source, state, stopAfter == Stage::Resize ? request : RenderRequest{});
 
-    const DeviceImage uploaded = source.format() == PixelFormat::RgbaF32
-                                     ? context.upload(source)
-                                     : context.upload(toRgbaF32(source));
     const GpuPointwiseBlock pointwise = packPointwise(plan);
     DeviceImage developed = context.render(GpuPass::Pointwise, bytesOf(pointwise), uploaded,
                                            source.size(), workingEncoding);

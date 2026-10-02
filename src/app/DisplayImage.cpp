@@ -35,16 +35,19 @@ QImage toDisplayImage(const ImageBuffer& developed) {
     return view.convertedToColorSpace(QColorSpace::SRgb, QImage::Format_RGBA8888);
 }
 
-QImage renderForViewport(const ImageBuffer& decoded, const DevelopState& state, QSize viewport,
-                         qreal devicePixelRatio) {
+RenderRequest previewRequest(QSize viewport) {
     if (viewport.isEmpty()) {
         throw std::invalid_argument("Cannot fit an image inside an empty viewport");
     }
-    const RenderRequest request{
+    return RenderRequest{
         .size = RenderRequest::FitInside{static_cast<std::uint32_t>(viewport.width()),
                                          static_cast<std::uint32_t>(viewport.height())},
         .upscale = Upscale::Never};
-    QImage image = toDisplayImage(develop(decoded, state, request));
+}
+
+QImage renderForViewport(const ImageBuffer& decoded, const DevelopState& state, QSize viewport,
+                         qreal devicePixelRatio) {
+    QImage image = toDisplayImage(develop(decoded, state, previewRequest(viewport)));
     image.setDevicePixelRatio(devicePixelRatio);
     return image;
 }

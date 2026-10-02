@@ -25,24 +25,44 @@
 #include <QScrollArea>
 #include <QSizePolicy>
 #include <QStandardPaths>
+#include <QStatusBar>
 #include <QString>
 
+#include <cstdlib>
 #include <exception>
 #include <filesystem>
+#include <string_view>
 #include <utility>
 #include <variant>
 
 namespace arraw::app {
 
+namespace {
+
+/// @brief Reads where previews may render from ARRAW_PREVIEW_DEVICE.
+///
+/// `cpu` forces the CPU; anything else, or nothing, means the GPU when there is one.
+PreviewRenderer::Device previewDeviceFromEnvironment() {
+    const char* value = std::getenv("ARRAW_PREVIEW_DEVICE");
+    return value != nullptr && std::string_view(value) == "cpu" ? PreviewRenderer::Device::Cpu
+                                                                : PreviewRenderer::Device::Auto;
+}
+
+} // namespace
+
 MainWindow::MainWindow(QWidget* parent)
-    : QMainWindow(parent), previewRenderer_([this](PreviewResult result) {
-          // On the worker thread. Dropped if the window is gone by the time the
-          // GUI thread would run it.
-          QMetaObject::invokeMethod(
-              this, [this, result = std::move(result)] { showResult(result); },
-              Qt::QueuedConnection);
-      }) {
+    : QMainWindow(parent),
+      previewRenderer_(
+          [this](PreviewResult result) {
+              // On the worker thread. Dropped if the window is gone by the time the
+              // GUI thread would run it.
+              QMetaObject::invokeMethod(
+                  this, [this, result = std::move(result)] { showResult(result); },
+                  Qt::QueuedConnection);
+          },
+          previewDeviceFromEnvironment()) {
     buildMenu();
+    buildStatusBar();
     buildImageView();
     buildDevelopDock();
 
@@ -181,6 +201,18 @@ void MainWindow::buildImageView() {
     setCentralWidget(imageView_);
 }
 
+void MainWindow::buildStatusBar() {
+    deviceLabel_ = new QLabel(this);
+    statusBar()->addPermanentWidget(deviceLabel_);
+}
+
+void MainWindow::showDevice(const PreviewResult& result) {
+    deviceLabel_->setText(
+        result.onGpu ? tr("Preview: GPU \u2014 %1").arg(QString::fromStdString(result.deviceName))
+                     : tr("Preview: CPU"));
+    deviceLabel_->setToolTip(QString::fromStdString(result.fallbackReason));
+}
+
 void MainWindow::openFileWithDialog() {
     const QString filesDir = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
     // TODO: derive the extensions from what loadImage can decode, rather than
@@ -231,6 +263,7 @@ void MainWindow::showResult(const PreviewResult& result) {
     if (result.image) {
         latestShown_ = result.request;
         imageView_->setPixmap(QPixmap::fromImage(*result.image));
+        showDevice(result);
         return;
     }
     // A newer request is on its way and may well succeed: say nothing yet.

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Develop.h>
 #include <DevelopState.h>
 #include <ImageBuffer.h>
 
@@ -18,6 +19,15 @@ namespace arraw::app {
 /// @throws std::invalid_argument if @p developed is not in the working encoding
 /// and format, or is too large for QImage.
 [[nodiscard]] QImage toDisplayImage(const ImageBuffer& developed);
+
+/// @brief Builds the request a preview develops with, fitted inside a viewport.
+///
+/// The one an export would make for the same size: fit inside, never enlarge,
+/// so a small photograph shows at its own size (ADR 007). Shared by the CPU and
+/// the GPU preview so that they cannot drift apart.
+/// @param viewport Size of the area to fit inside, in device pixels.
+/// @throws std::invalid_argument if the viewport is empty.
+[[nodiscard]] RenderRequest previewRequest(QSize viewport);
 
 /// @brief Renders a decoded photograph fitted inside a viewport, ready to show.
 ///

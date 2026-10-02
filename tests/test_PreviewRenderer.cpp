@@ -72,6 +72,46 @@ std::shared_ptr<const ImageBuffer> makeSource() {
 
 } // namespace
 
+TEST_CASE("A renderer told to use the CPU says so and needs no fallback reason", "[app][preview]") {
+    Collector collector;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
+    renderer.setSource(makeSource());
+
+    const std::uint64_t id = renderer.request({}, {100, 100}, 1.0);
+
+    REQUIRE(collector.waitFor(id));
+    const auto results = collector.results();
+    REQUIRE(results.back().image.has_value());
+    REQUIRE_FALSE(results.back().onGpu);
+    REQUIRE(results.back().fallbackReason.empty());
+}
+
+TEST_CASE("An automatic renderer without a usable GPU falls back and says why", "[app][preview]") {
+    Collector collector;
+    app::PreviewRenderer renderer(collector.callback());
+    renderer.setSource(makeSource());
+
+    const std::uint64_t first = renderer.request({}, {100, 100}, 1.0);
+    REQUIRE(collector.waitFor(first));
+    const std::uint64_t second = renderer.request({}, {64, 64}, 1.0);
+    REQUIRE(collector.waitFor(second));
+
+    const auto results = collector.results();
+    const app::PreviewResult& last = results.back();
+    REQUIRE(last.request == second);
+    REQUIRE(last.error.empty());
+    REQUIRE(last.image.has_value());
+    // This suite runs without a QGuiApplication, so there is never a device here;
+    // where there is one the preview is on it and nothing is to be explained.
+    if (last.onGpu) {
+        REQUIRE(!last.deviceName.empty());
+        REQUIRE(last.fallbackReason.empty());
+    } else {
+        REQUIRE(last.deviceName.empty());
+        REQUIRE(!last.fallbackReason.empty());
+    }
+}
+
 TEST_CASE("A request renders and is answered with its id", "[app][preview]") {
     Collector collector;
     app::PreviewRenderer renderer(collector.callback());

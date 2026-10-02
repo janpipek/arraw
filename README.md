@@ -58,6 +58,12 @@ display's platform, and a process cannot fall back from one that will not load.
 `--device cpu` loads no graphics stack. `--gpu-backend` picks the API (`vulkan`, `opengl`, `d3d11`, `d3d12`, `metal`), and one line per batch says
 which device was used (silenced by `--quiet`).
 
+The desktop app (`arraw-ui`) renders its preview on the GPU when it can, uploading
+the photograph once, and on the CPU otherwise; the status bar says which, and
+why not the GPU when it fell back (tooltip). `ARRAW_PREVIEW_DEVICE=cpu` forces
+the CPU, for comparison or a broken driver; anything else, or unset, means
+"GPU when available". Software rasterisers are not used for the preview.
+
 Inputs are files rather than directories; your shell expands the wildcards.
 Every input is attempted, so one bad frame does not abandon an overnight batch.
 See [ADR 006](docs/adr/006-the-command-line.md) for the full contract.

@@ -25,21 +25,41 @@ struct PreviewResult {
     std::optional<QImage> image;
     /// Description of the failure, set when the render failed.
     std::string error;
+    /// Whether the GPU rendered the image, rather than the CPU.
+    bool onGpu = false;
+    /// Name of the GPU that rendered the image; empty when the CPU did.
+    std::string deviceName;
+    /// Why the CPU rendered when the GPU was wanted, or empty when it was not
+    /// (the GPU rendered, or the CPU was asked for).
+    std::string fallbackReason;
 };
 
 /// @brief Worker thread that renders previews off the thread that asks for them.
 ///
 /// One long-lived thread, not a pool: a GPU context belongs to the thread that
-/// made it, and the GPU path will render here. Only the newest request is
+/// made it, and the GPU path renders here. Only the newest request is
 /// kept, so a burst of edits costs one render of the latest state, not one per
 /// edit. Uses no Qt signals, so it works without an event loop.
+///
+/// Renders on the GPU when there is one: the first render creates the device,
+/// on the worker, and the decoded photograph is uploaded once per source rather
+/// than once per render. Whatever the GPU cannot do, the CPU does, and the
+/// result says which it was (see PreviewResult::device).
 class PreviewRenderer {
 public:
+    /// @brief Where previews may be rendered.
+    enum class Device {
+        Auto, ///< On the GPU when one can be used, else on the CPU.
+        Cpu,  ///< Always on the CPU, without ever creating a GPU device.
+    };
+
     /// @brief Starts the worker thread.
     /// @param onResult Receives each finished render, called on the worker
     /// thread; the caller marshals it to wherever it is needed. Must not throw;
     /// what it throws is dropped.
-    explicit PreviewRenderer(std::function<void(PreviewResult)> onResult);
+    /// @param device Where previews may be rendered.
+    explicit PreviewRenderer(std::function<void(PreviewResult)> onResult,
+                             Device device = Device::Auto);
 
     PreviewRenderer(const PreviewRenderer&) = delete;
     PreviewRenderer& operator=(const PreviewRenderer&) = delete;
@@ -82,12 +102,11 @@ private:
     /// @param stop Raised by the destructor.
     void run(std::stop_token stop);
 
-    /// @brief Renders one request, turning a failure into a result.
-    [[nodiscard]] static PreviewResult render(const Pending& pending,
-                                              const std::shared_ptr<const ImageBuffer>& source);
-
     /// Receiver of each finished render, called on the worker thread.
     std::function<void(PreviewResult)> onResult_;
+
+    /// Where previews may be rendered; fixed before the worker starts.
+    Device device_;
 
     /// Guard of source_, pending_ and lastId_.
     std::mutex mutex_;

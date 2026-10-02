@@ -3,6 +3,7 @@
 
 #include <Develop.h>
 #include <DevelopSettings.h>
+#include <DevelopState.h>
 #include <GeometrySettings.h>
 #include <ImageBuffer.h>
 #include <ImageImport.h>
@@ -17,6 +18,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -141,5 +143,69 @@ TEST_CASE("Developing on the GPU with default settings matches the CPU", "[gpu][
         DYNAMIC_SECTION(name) {
             requireMatchesCpu(fixtureImage(name), DevelopSettings{});
         }
+    }
+}
+
+TEST_CASE("Developing from an uploaded source equals developing from the host", "[gpu][develop]") {
+    GpuContext& context = gpuContext();
+    for (const char* name : {"testcard-61x41-alpha8.png", "linear-32x24-rotated.dng"}) {
+        DYNAMIC_SECTION(name) {
+            const ImageBuffer source = fixtureImage(name);
+            const DeviceImage uploaded = uploadSource(context, source);
+            REQUIRE(uploaded.size() == source.size());
+            const DevelopState state{combined(WhiteBalanceMode::AsShot, {.straighten = 7.5})};
+            const RenderRequest request{.size = RenderRequest::FitInside{20, 20}};
+
+            const ImageBuffer direct =
+                developOnGpu(context, source, state, Stage::Resize, request).readBack();
+            const ImageBuffer viaUpload =
+                developOnGpu(context, source, uploaded, state, Stage::Resize, request).readBack();
+
+            REQUIRE(viaUpload.size() == direct.size());
+            // The same passes on the same texels: no tolerance is needed.
+            REQUIRE(compareFloat(direct, viaUpload, pointwiseAbsoluteFloor).bitExact);
+        }
+    }
+}
+
+TEST_CASE("One uploaded source serves renders of different states", "[gpu][develop]") {
+    GpuContext& context = gpuContext();
+    const ImageBuffer source = fixtureImage("testcard-61x41-srgb8.png");
+    const DeviceImage uploaded = uploadSource(context, source);
+
+    for (const float exposure : {-1.0F, 0.0F, 0.7F}) {
+        DYNAMIC_SECTION("exposure " << exposure) {
+            DevelopSettings settings;
+            settings.tone.exposure = exposure;
+            const DevelopState state{settings};
+            const ImageBuffer expected = develop(source, state);
+            const ImageBuffer actual = developOnGpu(context, source, uploaded, state).readBack();
+            REQUIRE(actual.size() == expected.size());
+            REQUIRE(worstColourError(expected, actual) <= endToEndTolerance);
+        }
+    }
+    // The upload is left as it was: it still reads back as the source.
+    REQUIRE(uploaded.size() == source.size());
+}
+
+TEST_CASE("An uploaded source of another device or another size is refused", "[gpu][develop]") {
+    GpuContext& context = gpuContext();
+    const ImageBuffer source = fixtureImage("testcard-61x41-srgb8.png");
+    const ImageBuffer smaller = fixtureImage("linear-32x24-rotated.dng");
+
+    SECTION("another device") {
+        GpuContext other(gpuTestBackend());
+        const DeviceImage foreign = uploadSource(other, source);
+        REQUIRE_THROWS_AS(developOnGpu(context, source, foreign, DevelopState{}),
+                          std::invalid_argument);
+    }
+    SECTION("another size") {
+        const DeviceImage wrongSize = uploadSource(context, smaller);
+        REQUIRE_THROWS_AS(developOnGpu(context, source, wrongSize, DevelopState{}),
+                          std::invalid_argument);
+    }
+    SECTION("an empty image") {
+        REQUIRE_THROWS_AS(developOnGpu(context, source, DeviceImage{}, DevelopState{}),
+                          std::invalid_argument);
     }
 }

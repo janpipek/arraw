@@ -74,6 +74,15 @@ private:
     /// @param result Outcome delivered by the renderer.
     void showResult(const PreviewResult& result);
 
+    /// @brief Creates the status bar with its permanent preview-device label.
+    void buildStatusBar();
+
+    /// @brief Shows which device rendered a preview, and why not the GPU if so.
+    ///
+    /// The fallback reason, when there is one, is the label's tooltip.
+    /// @param result Finished render, with its image.
+    void showDevice(const PreviewResult& result);
+
     /// @brief Gives the size of the view in device pixels.
     [[nodiscard]] QSize viewportPixels() const;
 
@@ -98,6 +107,7 @@ private:
     };
 
     QLabel* imageView_ = nullptr;
+    QLabel* deviceLabel_ = nullptr;
     DevelopPanel* developPanel_ = nullptr;
     QWidget* developDock_ = nullptr;
     QAction* undoAction_ = nullptr;
