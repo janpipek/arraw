@@ -7,13 +7,17 @@
 #include <QMainWindow>
 #include <QTimer>
 
+#include <functional>
 #include <optional>
 
+class QAction;
 class QLabel;
 class QEvent;
 class QObject;
 
 namespace arraw::app {
+
+class DevelopPanel;
 
 /// @brief Top-level window of the desktop application.
 class MainWindow : public QMainWindow {
@@ -38,6 +42,22 @@ private:
 
     /// @brief Asks the user for a photograph and opens it.
     void openFileWithDialog();
+
+    /// @brief Builds the dock holding the develop panel.
+    void buildDevelopDock();
+
+    /// @brief Runs a slot body that calls into the session, reporting what it throws.
+    ///
+    /// An exception must not leave a function Qt's event loop called. A failed
+    /// edit is cancelled, and the panel shows the state of the session again.
+    /// @param action Body to run.
+    void guarded(const std::function<void()>& action);
+
+    /// @brief Shows the session's state in the panel and updates the actions.
+    void refreshPanel();
+
+    /// @brief Reports a failed render, one message box at a time.
+    void renderNow();
 
     /// @brief Renders the current photograph again, fitted to the view as it is now.
     ///
@@ -65,6 +85,14 @@ private:
     };
 
     QLabel* imageView_ = nullptr;
+    DevelopPanel* developPanel_ = nullptr;
+    QWidget* developDock_ = nullptr;
+    QAction* undoAction_ = nullptr;
+    QAction* redoAction_ = nullptr;
+
+    /// Zero-interval single-shot timer that coalesces a burst of edits into one
+    /// render per event-loop turn, with the latest state.
+    QTimer renderTimer_;
 
     /// Single-shot timer that fires once the view has stopped changing, so that
     /// dragging an edge renders once rather than per pixel.

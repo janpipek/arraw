@@ -286,15 +286,21 @@ add_library(arraw-app-core STATIC
         src/app/DebugDiagnostics.cpp
         src/app/DebugDiagnostics.h
         src/app/DisplayImage.cpp
-        src/app/DisplayImage.h)
+        src/app/DisplayImage.h
+        src/app/SettingPresentation.cpp
+        src/app/SettingPresentation.h)
 arraw_enable_warnings(arraw-app-core)
 target_include_directories(arraw-app-core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/app)
 target_link_libraries(arraw-app-core PUBLIC arraw Qt6::Gui)
 set_target_properties(arraw-app-core PROPERTIES AUTOMOC OFF)
 
 add_executable(arraw-ui src/app/main.cpp
+        src/app/ui/DevelopPanel.cpp
+        src/app/ui/DevelopPanel.h
         src/app/ui/MainWindow.cpp
-        src/app/ui/MainWindow.h)
+        src/app/ui/MainWindow.h
+        src/app/ui/SettingSlider.cpp
+        src/app/ui/SettingSlider.h)
 arraw_enable_warnings(arraw-ui)
 target_include_directories(arraw-ui PRIVATE src/app)
 target_link_libraries(arraw-ui PRIVATE arraw-app-core Qt6::Widgets)

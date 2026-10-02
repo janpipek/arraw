@@ -37,6 +37,7 @@ add_executable(arraw-tests
         test_RawImport.cpp
         test_SettingCodec.cpp
         test_SettingDescriptors.cpp
+        test_SettingPresentation.cpp
         test_SettingsJson.cpp
         test_Sidecar.cpp
         test_SampleConversion.cpp

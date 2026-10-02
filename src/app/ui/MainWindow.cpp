@@ -1,13 +1,16 @@
 #include "MainWindow.h"
 
 #include "DebugDiagnostics.h"
+#include "DevelopPanel.h"
 #include "DisplayImage.h"
 
+#include <ColorEncoding.h>
 #include <ImageBuffer.h>
 #include <ImageImport.h>
 #include <Photo.h>
 
 #include <QAction>
+#include <QDockWidget>
 #include <QEvent>
 #include <QFileDialog>
 #include <QImage>
@@ -18,6 +21,7 @@
 #include <QMessageBox>
 #include <QPixmap>
 #include <QScreen>
+#include <QScrollArea>
 #include <QSizePolicy>
 #include <QStandardPaths>
 #include <QString>
@@ -25,32 +29,23 @@
 #include <exception>
 #include <filesystem>
 #include <utility>
+#include <variant>
 
 namespace arraw::app {
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     buildMenu();
     buildImageView();
+    buildDevelopDock();
+
+    renderTimer_.setSingleShot(true);
+    renderTimer_.setInterval(0);
+    connect(&renderTimer_, &QTimer::timeout, this, &MainWindow::renderNow);
 
     // Long enough to coalesce the events of a drag, short enough to feel prompt.
     resizeTimer_.setSingleShot(true);
     resizeTimer_.setInterval(100);
-    connect(&resizeTimer_, &QTimer::timeout, this, [this] {
-        // The message box runs a nested event loop, in which further resizes
-        // can fire the timer again: one box at a time.
-        if (reportingFailure_) {
-            return;
-        }
-        // An exception must not leave a function Qt's event loop called.
-        try {
-            rerender();
-        } catch (const std::exception& error) {
-            reportingFailure_ = true;
-            QMessageBox::warning(this, tr("Cannot Render Photograph"),
-                                 QString::fromUtf8(error.what()));
-            reportingFailure_ = false;
-        }
-    });
+    connect(&resizeTimer_, &QTimer::timeout, this, &MainWindow::renderNow);
 
     // No size to restore yet: two thirds of the screen, so the first photograph
     // is fitted to something worth looking at.
@@ -77,6 +72,114 @@ void MainWindow::buildMenu() {
     QAction* quitAction = fileMenu->addAction(tr("&Quit"));
     quitAction->setShortcut(QKeySequence::Quit);
     connect(quitAction, &QAction::triggered, this, [this] { close(); });
+
+    QMenu* editMenu = menuBar()->addMenu(tr("&Edit"));
+    undoAction_ = editMenu->addAction(tr("&Undo"));
+    undoAction_->setShortcut(QKeySequence::Undo);
+    undoAction_->setEnabled(false);
+    connect(undoAction_, &QAction::triggered, this, [this] {
+        guarded([this] {
+            developPanel_->finishPendingEdit();
+            open_->session.undo();
+            refreshPanel();
+        });
+    });
+    redoAction_ = editMenu->addAction(tr("&Redo"));
+    redoAction_->setShortcut(QKeySequence::Redo);
+    redoAction_->setEnabled(false);
+    connect(redoAction_, &QAction::triggered, this, [this] {
+        guarded([this] {
+            developPanel_->finishPendingEdit();
+            open_->session.redo();
+            refreshPanel();
+        });
+    });
+}
+
+void MainWindow::buildDevelopDock() {
+    developPanel_ = new DevelopPanel;
+    auto* scroll = new QScrollArea;
+    scroll->setWidget(developPanel_);
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+
+    auto* dock = new QDockWidget(tr("Develop"), this);
+    dock->setFeatures(QDockWidget::NoDockWidgetFeatures);
+    dock->setWidget(scroll);
+    dock->setEnabled(false);
+    addDockWidget(Qt::RightDockWidgetArea, dock);
+    developDock_ = dock;
+
+    connect(developPanel_, &DevelopPanel::editStarted, this,
+            [this] { guarded([this] { open_->session.begin(); }); });
+    connect(developPanel_, &DevelopPanel::stateEdited, this, [this](const DevelopState& state) {
+        guarded([this, &state] {
+            // No edit is open after a failure cancelled one: the rest of that
+            // drag is dropped, rather than failing again with every move.
+            if (!open_->session.editing()) {
+                return;
+            }
+            open_->session.update(state);
+            refreshPanel();
+        });
+    });
+    connect(developPanel_, &DevelopPanel::editFinished, this, [this] {
+        guarded([this] {
+            if (!open_->session.editing()) {
+                return;
+            }
+            open_->session.commit();
+            refreshPanel();
+        });
+    });
+}
+
+void MainWindow::guarded(const std::function<void()>& action) {
+    if (!open_) {
+        return;
+    }
+    try {
+        action();
+    } catch (const std::exception& error) {
+        const QString message = QString::fromUtf8(error.what());
+        try {
+            if (open_->session.editing()) {
+                open_->session.cancel();
+            }
+            refreshPanel();
+        } catch (const std::exception&) {
+            // Nothing more can be done; the message below still tells the user.
+        }
+        QMessageBox::warning(this, tr("Cannot Edit Photograph"), message);
+    }
+}
+
+void MainWindow::refreshPanel() {
+    if (!open_) {
+        return;
+    }
+    const Photo& photo = open_->session.photo();
+    const bool raw = !std::holds_alternative<NamedEncoding>(photo.metadata().encoding);
+    developPanel_->showState(photo.state(), raw);
+    undoAction_->setEnabled(open_->session.canUndo());
+    redoAction_->setEnabled(open_->session.canRedo());
+    renderTimer_.start();
+}
+
+void MainWindow::renderNow() {
+    // The message box runs a nested event loop, in which further resizes
+    // can fire the timer again: one box at a time.
+    if (reportingFailure_) {
+        return;
+    }
+    // An exception must not leave a function Qt's event loop called.
+    try {
+        rerender();
+    } catch (const std::exception& error) {
+        reportingFailure_ = true;
+        QMessageBox::warning(this, tr("Cannot Render Photograph"), QString::fromUtf8(error.what()));
+        reportingFailure_ = false;
+    }
 }
 
 void MainWindow::buildImageView() {
@@ -143,7 +246,11 @@ void MainWindow::showPhoto(Photo photo) {
     // Commit.
     open_.emplace(OpenPhoto{EditSession(std::move(photo)), std::move(decoded)});
     imageView_->setPixmap(QPixmap::fromImage(image));
-    resizeTimer_.stop(); // The pixels are already fitted to the current size.
+    developDock_->setEnabled(true);
+    refreshPanel();
+    // The pixels are already rendered, and fitted to the current size.
+    resizeTimer_.stop();
+    renderTimer_.stop();
 }
 
 } // namespace arraw::app
