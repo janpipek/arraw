@@ -20,6 +20,7 @@ add_executable(arraw-tests
         test_Cli.cpp
         test_ColorEncoding.cpp
         test_Develop.cpp
+        test_DisplayImage.cpp
         test_EditSession.cpp
         test_Geometry.cpp
         test_Diagnostics.cpp
@@ -31,6 +32,7 @@ add_executable(arraw-tests
         test_Photo.cpp
         test_ProcessingPlan.cpp
         test_RenderCheckpoint.cpp
+        test_Resample.cpp
         test_RawImport.cpp
         test_SettingCodec.cpp
         test_SettingDescriptors.cpp
@@ -59,7 +61,7 @@ target_compile_definitions(arraw-tests
 # the one place outside arraw-gpu that names it, because the failures it covers
 # cannot be caused through GpuContext.
 target_link_libraries(arraw-tests
-        PRIVATE arraw arraw-gpu arraw-cli-core Catch2::Catch2 Qt6::Gui Qt6::GuiPrivate Qt6::Xml)
+        PRIVATE arraw arraw-gpu arraw-app-core arraw-cli-core Catch2::Catch2 Qt6::Gui Qt6::GuiPrivate Qt6::Xml)
 set_target_properties(arraw-tests PROPERTIES AUTOMOC OFF)
 arraw_deploy_qt_plugins(arraw-tests)
 
@@ -102,7 +104,8 @@ add_executable(arraw-gpu-tests
         gpu/test_GpuExport.cpp
         gpu/test_GpuPasses.cpp
         gpu/test_GpuPointwise.cpp
-        gpu/test_GpuGeometry.cpp)
+        gpu/test_GpuGeometry.cpp
+        gpu/test_GpuResize.cpp)
 arraw_enable_warnings(arraw-gpu-tests)
 target_include_directories(arraw-gpu-tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}

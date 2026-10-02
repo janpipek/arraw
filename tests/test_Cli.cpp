@@ -5,6 +5,7 @@
 #include "support/Fixtures.h"
 #include "support/TempDir.h"
 
+#include <Develop.h>
 #include <DevelopSettings.h>
 #include <Diagnostics.h>
 #include <Photo.h>
@@ -26,6 +27,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -2145,4 +2147,147 @@ TEST_CASE("Info never writes or changes a sidecar", "[cli][info][sidecar]") {
     REQUIRE(invoke({"info", "--json", raw.string()}).code == cli::Failed);
     REQUIRE(bytesOf(xmp) == broken);
     REQUIRE(namesIn(directory.path()) == names);
+}
+
+namespace {
+
+/// @brief Exports the test card as a PNG with the given extra arguments, and reads it back.
+/// @return The image, or a null image if the export did not succeed.
+QImage exportCard(const std::vector<std::string>& extra, int* code = nullptr) {
+    const test::TempDir directory;
+    std::vector<std::string> arguments{"export",   test::fixture(card).string(),
+                                       "-o",       directory.path().string(),
+                                       "--format", "png",
+                                       "--device", "cpu"};
+    arguments.insert(arguments.end(), extra.begin(), extra.end());
+    const auto result = invoke(arguments);
+    if (code != nullptr) {
+        *code = result.code;
+    }
+    return QImage(QString::fromStdString(directory.file("testcard-61x41-srgb8.png").string()));
+}
+
+} // namespace
+
+TEST_CASE("Each form of --resize gives the output size ADR 007 describes", "[cli][resize]") {
+    const auto geometry =
+        GENERATE(std::vector<std::string>{}, std::vector<std::string>{"--rotate", "90"},
+                 std::vector<std::string>{"--crop", "0.1,0.2,0.8,0.9"},
+                 std::vector<std::string>{"--rotate", "90", "--crop", "0.1,0.2,0.8,0.9"});
+    const auto spec = GENERATE(as<std::string>{}, "30", "40x40", "100x20", "50%", "12.5%", "200%",
+                               "100", "500x500");
+    const bool upscale = GENERATE(false, true);
+    CAPTURE(geometry, spec, upscale);
+
+    const QImage whole = exportCard(geometry);
+    REQUIRE_FALSE(whole.isNull());
+    std::vector<std::string> extra = geometry;
+    extra.insert(extra.end(), {"--resize", spec});
+    if (upscale) {
+        extra.emplace_back("--allow-upscale");
+    }
+    const QImage resized = exportCard(extra);
+    REQUIRE_FALSE(resized.isNull());
+
+    RenderRequest request;
+    request.size = cli::parseResize(spec);
+    request.upscale = upscale ? Upscale::Allowed : Upscale::Never;
+    const ImageSize expected = resolvedSize(request, {static_cast<std::uint32_t>(whole.width()),
+                                                      static_cast<std::uint32_t>(whole.height())});
+    REQUIRE(resized.width() == static_cast<int>(expected.width));
+    REQUIRE(resized.height() == static_cast<int>(expected.height));
+}
+
+TEST_CASE("Resize options without a size say they do nothing", "[cli][resize]") {
+    const test::TempDir directory;
+    const auto result =
+        invoke({"export", test::fixture(card).string(), "-o", directory.path().string(), "--format",
+                "png", "--device", "cpu", "--allow-upscale", "--resize-filter", "bilinear"});
+
+    REQUIRE(result.code == cli::Success);
+    REQUIRE_THAT(result.err, ContainsSubstring("--allow-upscale does nothing without --resize"));
+    REQUIRE_THAT(result.err, ContainsSubstring("--resize-filter does nothing without --resize"));
+
+    const auto quiet =
+        invoke({"export", test::fixture(card).string(), "-o", directory.path().string(), "--format",
+                "png", "--device", "cpu", "--overwrite", "--resize", "20", "--allow-upscale"});
+    REQUIRE_THAT(quiet.err, !ContainsSubstring("does nothing"));
+}
+
+TEST_CASE("Resizing gives the sizes written out in ADR 007 for the test card", "[cli][resize]") {
+    const auto sized = [](const std::vector<std::string>& extra) {
+        const QImage image = exportCard(extra);
+        return std::pair{image.width(), image.height()};
+    };
+    using Size = std::pair<int, int>;
+    /// The card is 61x41, a landscape frame; rotated, a portrait one of 41x61.
+    REQUIRE(sized({"--resize", "30"}) == Size{30, 20});
+    REQUIRE(sized({"--rotate", "90", "--resize", "30"}) == Size{20, 30});
+    REQUIRE(sized({"--resize", "40x40"}) == Size{40, 27});
+    REQUIRE(sized({"--resize", "100x20"}) == Size{30, 20});
+    REQUIRE(sized({"--resize", "50%"}) == Size{31, 21});
+    REQUIRE(sized({"--resize", "50.5%"}) == Size{31, 21});
+    /// Shrink only: a size past the photograph's own is its own size.
+    REQUIRE(sized({"--resize", "500"}) == Size{61, 41});
+    REQUIRE(sized({"--resize", "200%"}) == Size{61, 41});
+    REQUIRE(sized({"--resize", "122", "--allow-upscale"}) == Size{122, 82});
+    REQUIRE(sized({"--resize", "200%", "--allow-upscale"}) == Size{122, 82});
+}
+
+TEST_CASE("The resize filter changes the pixels, lanczos by default", "[cli][resize]") {
+    const QImage byDefault = exportCard({"--resize", "20"});
+    const QImage lanczos = exportCard({"--resize", "20", "--resize-filter", "lanczos"});
+    const QImage bilinear = exportCard({"--resize", "20", "--resize-filter", "bilinear"});
+    REQUIRE_FALSE(byDefault.isNull());
+    REQUIRE(byDefault == lanczos);
+    REQUIRE(bilinear.size() == lanczos.size());
+    REQUIRE(bilinear != lanczos);
+}
+
+TEST_CASE("The resize flags are documented", "[cli][resize]") {
+    const auto help = invoke({"export", "--help"});
+    for (const char* name : {"--resize ", "--allow-upscale", "--resize-filter"}) {
+        REQUIRE_THAT(help.out, ContainsSubstring(name));
+    }
+}
+
+TEST_CASE("The forms of --resize are parsed by shape", "[cli][resize]") {
+    using Box = RenderRequest::FitInside;
+    using Scale = RenderRequest::Scale;
+    REQUIRE(std::get<Box>(cli::parseResize("2048")).width == 2048);
+    REQUIRE(std::get<Box>(cli::parseResize("2048")).height == 2048);
+    REQUIRE(std::get<Box>(cli::parseResize("2048x1365")).height == 1365);
+    REQUIRE(std::get<Box>(cli::parseResize("1X2")).width == 1);
+    REQUIRE(std::get<Scale>(cli::parseResize("50%")).factor == Catch::Approx(0.5));
+    REQUIRE(std::get<Scale>(cli::parseResize("12.5%")).factor == Catch::Approx(0.125));
+    REQUIRE(std::get<Scale>(cli::parseResize("150%")).factor == Catch::Approx(1.5));
+}
+
+TEST_CASE("A malformed --resize is a usage error before any file is touched", "[cli][resize]") {
+    const test::TempDir directory;
+    const auto spec =
+        GENERATE("0", "-5", "-5%", "0%", "0.0%", "%", "x", "100x", "x100", "0x100", "100x0",
+                 "100x-5", "1.5", "nan", "inf", "nan%", "inf%", "1e999%", "abc", "", "10%%",
+                 "5.5.5%", "99999999999", "10x20x30", "0x10%", " 100", "+100", "0x20");
+    CAPTURE(spec);
+    const auto result = invoke({"export", test::fixture(card).string(), "-o",
+                                directory.path().string(), "--resize", spec});
+    REQUIRE(result.code == cli::UsageError);
+    REQUIRE_THAT(result.err, ContainsSubstring("--resize"));
+    REQUIRE(std::filesystem::is_empty(directory.path()));
+}
+
+TEST_CASE("An unknown --resize-filter is a usage error", "[cli][resize]") {
+    const test::TempDir directory;
+    const auto result =
+        invoke({"export", test::fixture(card).string(), "-o", directory.path().string(), "--resize",
+                "20", "--resize-filter", "nearest"});
+    REQUIRE(result.code == cli::UsageError);
+    REQUIRE_THAT(result.err, ContainsSubstring("--resize-filter"));
+    REQUIRE(std::filesystem::is_empty(directory.path()));
+}
+
+TEST_CASE("Info is unaffected by resizing flags", "[cli][resize]") {
+    const auto result = invoke({"info", test::fixture(card).string()});
+    REQUIRE(result.code == cli::Success);
 }

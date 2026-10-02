@@ -95,6 +95,10 @@ enum class Notice {
     /// @brief An explicit crop was dropped for automatic framing, because an
     /// edit changed the rotation or flips it was drawn in: what changed.
     CropReset,
+
+    /// @brief An option was given that has no effect without another one: the
+    /// option, then the one it needs.
+    OptionIgnored,
 };
 
 /// @brief One detail of a diagnostic, kept as a value rather than as prose.

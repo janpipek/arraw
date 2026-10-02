@@ -110,6 +110,10 @@ add_library(arraw STATIC
         include/ImageOrientation.h
         src/core/GeometryPlan.h
         src/core/GeometryPlan.cpp
+        src/core/Resample.h
+        src/core/Resample.cpp
+        src/core/ResampleWeights.h
+        src/core/ResampleWeights.cpp
         include/ToneSettings.h
         src/core/ToneSettings.cpp
         src/core/ColorSpaces.h
@@ -209,7 +213,11 @@ qt_add_shaders(arraw-gpu "arraw-shaders"
         src/gpu/shaders/fullscreen.vert
         src/gpu/shaders/copy.frag
         src/gpu/shaders/develop.frag
-        src/gpu/shaders/geometry.frag)
+        src/gpu/shaders/geometry.frag
+        src/gpu/shaders/resize_across.frag
+        src/gpu/shaders/resize_across_opaque.frag
+        src/gpu/shaders/resize_down.frag
+        src/gpu/shaders/resize_down_opaque.frag)
 target_link_libraries(arraw-gpu PUBLIC arraw PRIVATE Qt6::Gui Qt6::GuiPrivate)
 set_target_properties(arraw-gpu PROPERTIES AUTOMOC OFF)
 # QRhi declares its Vulkan backend only where vulkan/vulkan.h is visible, so a
@@ -269,16 +277,24 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set_target_properties(arraw-headless-platform PROPERTIES AUTOMOC ON)
 endif()
 
-add_executable(arraw-ui src/app/main.cpp
+# What the application does that needs no widgets, split from its main() so the
+# tests can drive it, as arraw-cli-core does for the command line.
+add_library(arraw-app-core STATIC
         src/app/DebugDiagnostics.cpp
         src/app/DebugDiagnostics.h
         src/app/DisplayImage.cpp
-        src/app/DisplayImage.h
+        src/app/DisplayImage.h)
+arraw_enable_warnings(arraw-app-core)
+target_include_directories(arraw-app-core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/app)
+target_link_libraries(arraw-app-core PUBLIC arraw Qt6::Gui)
+set_target_properties(arraw-app-core PROPERTIES AUTOMOC OFF)
+
+add_executable(arraw-ui src/app/main.cpp
         src/app/ui/MainWindow.cpp
         src/app/ui/MainWindow.h)
 arraw_enable_warnings(arraw-ui)
 target_include_directories(arraw-ui PRIVATE src/app)
-target_link_libraries(arraw-ui PRIVATE arraw Qt6::Widgets)
+target_link_libraries(arraw-ui PRIVATE arraw-app-core Qt6::Widgets)
 arraw_deploy_qt_plugins(arraw-ui)
 
 # The command line's behaviour, split from its main() so the tests can drive it

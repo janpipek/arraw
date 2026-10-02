@@ -94,10 +94,20 @@ void main() {
                                       (1.0 - dx) * dy, dx * dy);
     vec3 colour = vec3(0.0);
     float alpha = 0.0;
+    bool opaque = true;
     for (int index = 0; index < 4; ++index) {
         const float weight = weights[index] * neighbours[index].a;
         alpha += weight;
         colour += weight * neighbours[index].rgb;
+        opaque = opaque && (weights[index] == 0.0 || neighbours[index].a == 1.0);
     }
-    fragColor = alpha <= 0.0 ? vec4(0.0) : vec4(colour / alpha, alpha);
+    // The CPU sums the weights in double, where those of four opaque texels
+    // come to exactly 1 once stored. In float they can come to 1 - 2^-24, and
+    // a pixel that is not exactly opaque is one the resize treats as translucent
+    // (Resample.cpp clamps such a window's colour to its visible range), which
+    // would clip the resize's ringing in an opaque photograph. So opaque
+    // neighbours give alpha exactly 1; the colour is still the quotient.
+    // ResizePlan::opaque, scanned from the source, relies on this: opaque
+    // pixels stay exactly opaque through here.
+    fragColor = alpha <= 0.0 ? vec4(0.0) : vec4(colour / alpha, opaque ? 1.0 : alpha);
 }

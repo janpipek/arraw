@@ -3,12 +3,12 @@
 #include "DebugDiagnostics.h"
 #include "DisplayImage.h"
 
-#include <Develop.h>
 #include <ImageBuffer.h>
 #include <ImageImport.h>
 #include <Photo.h>
 
 #include <QAction>
+#include <QEvent>
 #include <QFileDialog>
 #include <QImage>
 #include <QKeySequence>
@@ -17,7 +17,8 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPixmap>
-#include <QScrollArea>
+#include <QScreen>
+#include <QSizePolicy>
 #include <QStandardPaths>
 #include <QString>
 
@@ -30,6 +31,40 @@ namespace arraw::app {
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     buildMenu();
     buildImageView();
+
+    // Long enough to coalesce the events of a drag, short enough to feel prompt.
+    resizeTimer_.setSingleShot(true);
+    resizeTimer_.setInterval(100);
+    connect(&resizeTimer_, &QTimer::timeout, this, [this] {
+        // The message box runs a nested event loop, in which further resizes
+        // can fire the timer again: one box at a time.
+        if (reportingFailure_) {
+            return;
+        }
+        // An exception must not leave a function Qt's event loop called.
+        try {
+            rerender();
+        } catch (const std::exception& error) {
+            reportingFailure_ = true;
+            QMessageBox::warning(this, tr("Cannot Render Photograph"),
+                                 QString::fromUtf8(error.what()));
+            reportingFailure_ = false;
+        }
+    });
+
+    // No size to restore yet: two thirds of the screen, so the first photograph
+    // is fitted to something worth looking at.
+    if (const QScreen* screenOfWindow = screen()) {
+        resize(screenOfWindow->availableGeometry().size() * 2 / 3);
+    }
+}
+
+bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == imageView_ && open_ &&
+        (event->type() == QEvent::Resize || event->type() == QEvent::DevicePixelRatioChange)) {
+        resizeTimer_.start();
+    }
+    return QMainWindow::eventFilter(watched, event);
 }
 
 void MainWindow::buildMenu() {
@@ -46,9 +81,13 @@ void MainWindow::buildMenu() {
 
 void MainWindow::buildImageView() {
     imageView_ = new QLabel(this);
-    auto* scrollArea = new QScrollArea(this);
-    scrollArea->setWidget(imageView_);
-    setCentralWidget(scrollArea);
+    imageView_->setAlignment(Qt::AlignCenter);
+    // The view takes the room the window gives it; the pixmap must not decide
+    // the window's minimum size, or the photograph could never be fitted smaller.
+    imageView_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
+    imageView_->setMinimumSize(1, 1);
+    imageView_->installEventFilter(this);
+    setCentralWidget(imageView_);
 }
 
 void MainWindow::openFileWithDialog() {
@@ -80,20 +119,31 @@ void MainWindow::openFileWithDialog() {
     }
 }
 
+QSize MainWindow::viewportPixels() const {
+    return (imageView_->size() * imageView_->devicePixelRatioF()).expandedTo({1, 1});
+}
+
+void MainWindow::rerender() {
+    if (!open_) {
+        return;
+    }
+    const QImage image = renderForViewport(open_->decoded, open_->session.photo().settings(),
+                                           viewportPixels(), imageView_->devicePixelRatioF());
+    imageView_->setPixmap(QPixmap::fromImage(image));
+}
+
 void MainWindow::showPhoto(Photo photo) {
     DebugDiagnostics log;
 
     // Everything that can throw, before anything changes.
-    const ImageBuffer decoded = loadImage(photo.path(), log);
-    const ImageBuffer developed = develop(decoded, photo.settings());
-    const QImage image = toDisplayImage(developed);
+    ImageBuffer decoded = loadImage(photo.path(), log);
+    const QImage image = renderForViewport(decoded, photo.settings(), viewportPixels(),
+                                           imageView_->devicePixelRatioF());
 
     // Commit.
-    editSession_.emplace(std::move(photo));
+    open_.emplace(OpenPhoto{EditSession(std::move(photo)), std::move(decoded)});
     imageView_->setPixmap(QPixmap::fromImage(image));
-    // The scroll area keeps its widget at whatever size it has; the label
-    // does not grow to a new pixmap by itself.
-    imageView_->adjustSize();
+    resizeTimer_.stop(); // The pixels are already fitted to the current size.
 }
 
 } // namespace arraw::app

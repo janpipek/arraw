@@ -23,15 +23,20 @@
 #include <QString>
 #include <QStringList>
 
+#include <algorithm>
+#include <charconv>
 #include <cmath>
+#include <cstdint>
 #include <exception>
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <ostream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -152,6 +157,25 @@ GeometrySettings withGeometryEdits(GeometrySettings base, const GeometryEdits& e
     return base;
 }
 
+/// @brief Reads a side of a `--resize` box: digits only, at least 1, within 32 bits.
+/// @throws std::invalid_argument if @p text is not one.
+std::uint32_t parseSide(std::string_view text, std::string_view spec) {
+    const bool digits =
+        !text.empty() && std::ranges::all_of(text, [](char c) { return c >= '0' && c <= '9'; });
+    std::uint32_t value = 0;
+    if (!digits ||
+        std::from_chars(text.data(), text.data() + text.size(), value).ec != std::errc{}) {
+        throw std::invalid_argument("--resize: '" + std::string(spec) +
+                                    "' is not a long edge (2048), a box (2048x1365) or a "
+                                    "percentage (50%); sizes are whole numbers of pixels up to " +
+                                    std::to_string(std::numeric_limits<std::uint32_t>::max()));
+    }
+    if (value == 0) {
+        throw std::invalid_argument("--resize: '" + std::string(spec) + "' must be greater than 0");
+    }
+    return value;
+}
+
 /// @brief Everything the command needs, once its arguments are understood.
 struct ExportRequest {
     std::vector<std::filesystem::path> inputs;
@@ -162,13 +186,28 @@ struct ExportRequest {
     /// @brief Whether each photograph's sidecar is read; false is `--no-sidecar`.
     bool useSidecars = true;
     ExportOptions options;
+    /// @brief Size and filter of every render, built once for both devices.
+    RenderRequest render;
     cli::DeviceChoice device;
     GpuBackend backend = defaultGpuBackend();
     bool allowSoftware = false;
     bool overwrite = false;
     bool quiet = false;
     cli::LogFormat logFormat = cli::LogFormat::Text;
+    /// @brief Options given that do nothing without `--resize`, reported once the log exists.
+    std::vector<std::string> ignoredResizeOptions;
 };
+
+/// @brief Which filter `--resize-filter` names, if any.
+std::optional<ResizeFilter> parseResizeFilter(const std::string& name) {
+    if (name == "lanczos") {
+        return ResizeFilter::Lanczos3;
+    }
+    if (name == "bilinear") {
+        return ResizeFilter::Bilinear;
+    }
+    return std::nullopt;
+}
 
 /// @brief Reports a usage problem and the exit code that goes with it.
 int usageError(std::ostream& err, const std::string& message) {
@@ -470,6 +509,17 @@ void configure(QCommandLineParser& parser) {
         {"crop", "auto or normalised upright left,top,right,bottom. Default: auto.", "rectangle"});
     parser.addOption(
         {"crop-aspect", "free, original, or width:height (3:2, 2:3). Default: free.", "aspect"});
+    parser.addOption({"resize",
+                      "Shrink to a size, after the crop: N is the long edge, WxH fits inside "
+                      "a box, N% scales (12.5% is fine). A bare number is the long edge. "
+                      "Never enlarges unless --allow-upscale. Default: full size.",
+                      "size"});
+    parser.addOption({"allow-upscale", "Let --resize enlarge a photograph past its own size."});
+    parser.addOption({"resize-filter",
+                      "lanczos or bilinear: how --resize resamples. Lanczos is sharper, with a "
+                      "little ringing at hard edges; bilinear is softer and never rings. "
+                      "Default: lanczos.",
+                      "name"});
     parser.addOption({"device",
                       "auto, cpu, gpu, or gpuN. Auto uses the GPU when it can and says so when "
                       "it cannot; gpu never falls back; gpuN is gpu on the backend's N-th "
@@ -568,6 +618,34 @@ std::optional<ExportRequest> buildRequest(const QCommandLineParser& parser, std:
         return std::nullopt;
     }
 
+    if (parser.isSet("resize")) {
+        try {
+            request.render.size = cli::parseResize(parser.value("resize").toStdString());
+        } catch (const std::invalid_argument& problem) {
+            code = usageError(err, problem.what());
+            return std::nullopt;
+        }
+    }
+    request.render.upscale = parser.isSet("allow-upscale") ? Upscale::Allowed : Upscale::Never;
+    if (parser.isSet("resize-filter")) {
+        const auto filter =
+            parseResizeFilter(parser.value("resize-filter").toLower().toStdString());
+        if (!filter) {
+            code = usageError(err, "unknown --resize-filter '" +
+                                       parser.value("resize-filter").toStdString() +
+                                       "'; expected lanczos or bilinear");
+            return std::nullopt;
+        }
+        request.render.filter = *filter;
+    }
+    if (!parser.isSet("resize")) {
+        for (const char* option : {"allow-upscale", "resize-filter"}) {
+            if (parser.isSet(option)) {
+                request.ignoredResizeOptions.push_back(std::string("--") + option);
+            }
+        }
+    }
+
     if (parser.isSet("device")) {
         const auto device = cli::parseDeviceChoice(parser.value("device").toStdString());
         if (!device) {
@@ -651,8 +729,9 @@ std::unique_ptr<GpuContext> createContext(const ExportRequest& request, std::str
 /// Every device image, the checkpoint included, is gone before this returns,
 /// so the context can be destroyed whenever its owner likes.
 ImageBuffer developOnDevice(GpuContext& context, const ImageBuffer& source,
-                            const DevelopSettings& settings) {
-    const RenderCheckpoint checkpoint = developOnGpu(context, source, settings);
+                            const DevelopSettings& settings, const RenderRequest& render) {
+    const RenderCheckpoint checkpoint =
+        developOnGpu(context, source, settings, Stage::Resize, render);
     return checkpoint.readBack();
 }
 
@@ -660,6 +739,11 @@ ImageBuffer developOnDevice(GpuContext& context, const ImageBuffer& source,
 int exportAll(const ExportRequest& request, std::ostream& err) {
     cli::StreamDiagnostics log(err, request.logFormat, request.quiet);
     std::size_t failures = 0;
+    for (const std::string& option : request.ignoredResizeOptions) {
+        log.record({.notice = Notice::OptionIgnored,
+                    .severity = Severity::Warning,
+                    .values = {option, std::string("--resize")}});
+    }
 
     // One device for the batch, created here on the main thread and destroyed
     // on it after the last input: no device image outlives an iteration.
@@ -737,11 +821,11 @@ int exportAll(const ExportRequest& request, std::ostream& err) {
             // device is then blamed for is developOnGpu and readBack alone, so
             // any exception from them, an image larger than the device's
             // textures included, means "the GPU could not".
-            (void)planFor(source, photo.settings());
+            (void)planFor(source, photo.settings(), request.render);
             std::optional<ImageBuffer> developed;
             if (context) {
                 try {
-                    developed = developOnDevice(*context, source, photo.settings());
+                    developed = developOnDevice(*context, source, photo.settings(), request.render);
                 } catch (const std::exception& failure) {
                     if (request.device.kind == cli::DeviceKind::Gpu) {
                         throw;
@@ -762,7 +846,7 @@ int exportAll(const ExportRequest& request, std::ostream& err) {
                 }
             }
             if (!developed) {
-                developed = develop(source, photo.settings());
+                developed = develop(source, photo.settings(), request.render);
             }
             exportImage(*developed, destination, request.options);
             log.record({.notice = Notice::Exported,
@@ -810,6 +894,41 @@ std::optional<cli::ExportEdits> cli::readExportEdits(const std::vector<std::stri
         return std::nullopt;
     }
     return edits;
+}
+
+std::variant<RenderRequest::FitInside, RenderRequest::Scale>
+cli::parseResize(std::string_view spec) {
+    if (spec.ends_with('%')) {
+        const std::string_view number = spec.substr(0, spec.size() - 1);
+        const bool plain = !number.empty() && number != "." &&
+                           std::ranges::all_of(
+                               number, [](char c) { return (c >= '0' && c <= '9') || c == '.'; }) &&
+                           std::ranges::count(number, '.') <= 1;
+        double percent = 0.0;
+        if (plain) {
+            percent = std::strtod(std::string(number).c_str(), nullptr);
+        }
+        if (!plain || !std::isfinite(percent)) {
+            throw std::invalid_argument("--resize: '" + std::string(spec) +
+                                        "' is not a percentage such as 50% or 12.5%");
+        }
+        if (percent <= 0.0) {
+            throw std::invalid_argument("--resize: '" + std::string(spec) +
+                                        "' must be greater than 0%");
+        }
+        return RenderRequest::Scale{percent / 100.0};
+    }
+    if (const auto at = spec.find_first_of("xX"); at != std::string_view::npos) {
+        const std::string_view width = spec.substr(0, at);
+        const std::string_view height = spec.substr(at + 1);
+        if (width.empty() || height.empty()) {
+            throw std::invalid_argument("--resize: '" + std::string(spec) +
+                                        "' needs both sides, as in 2048x1365");
+        }
+        return RenderRequest::FitInside{parseSide(width, spec), parseSide(height, spec)};
+    }
+    const std::uint32_t edge = parseSide(spec, spec);
+    return RenderRequest::FitInside{edge, edge};
 }
 
 DevelopSettings cli::applyEdits(DevelopSettings base, const ExportEdits& edits, DiagnosticLog& log,

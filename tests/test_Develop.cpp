@@ -1,3 +1,4 @@
+#include "Resample.h"
 #include "support/Fixtures.h"
 #include "support/TestImages.h"
 
@@ -144,10 +145,56 @@ TEST_CASE("Development refuses an encoding it cannot start from", "[develop]") {
     REQUIRE_THROWS_AS(develop(source, {}), std::invalid_argument);
 }
 
-TEST_CASE("A requested size is refused while it is unimplemented", "[develop]") {
+TEST_CASE("A requested size resizes after geometry, exactly as a resample would",
+          "[develop][size]") {
+    const auto source = loadImage(test::fixture(testCard));
+    for (const auto filter : {ResizeFilter::Lanczos3, ResizeFilter::Bilinear}) {
+        DevelopSettings settings;
+        settings.geometry.rotation = QuarterTurn::Clockwise90;
+        const auto full = develop(source, settings);
+        const RenderRequest request{.size = RenderRequest::FitInside{20, 20}, .filter = filter};
+        const auto sized = develop(source, settings, request);
+
+        REQUIRE(sized.size() == resolvedSize(request, full.size()));
+        REQUIRE(sized.size() == ImageSize{13, 20});
+        const auto expected = resample(develop(source, settings), sized.size(), filter);
+        const auto a = sized.samples<float>();
+        const auto b = expected.samples<float>();
+        REQUIRE(std::equal(a.begin(), a.end(), b.begin(), b.end()));
+    }
+}
+
+TEST_CASE("A size that does not change the photograph leaves it alone", "[develop][size]") {
+    const auto source = loadImage(test::fixture(testCard));
+    const auto plain = develop(source, {});
+    const auto same = develop(source, {}, {.size = RenderRequest::FitInside{4000, 4000}});
+    const auto a = plain.samples<float>();
+    const auto b = same.samples<float>();
+    REQUIRE(same.size() == plain.size());
+    REQUIRE(std::equal(a.begin(), a.end(), b.begin(), b.end()));
+}
+
+TEST_CASE("A crop ratio and a requested size compose", "[develop][size]") {
+    const auto source = loadImage(test::fixture(testCard));
+    DevelopSettings settings;
+    settings.geometry.crop.aspect = CropRatio{1.0};
+
+    const auto cropped = develop(source, settings);
+    REQUIRE(cropped.size().width == cropped.size().height);
+
+    const auto sized = develop(source, settings, {.size = RenderRequest::FitInside{10, 10}});
+    REQUIRE(sized.size() == ImageSize{10, 10});
+    const auto scaled = develop(source, settings, {.size = RenderRequest::Scale{0.5}});
+    REQUIRE(scaled.size() == resolvedSize({.size = RenderRequest::Scale{0.5}}, cropped.size()));
+}
+
+TEST_CASE("An invalid request fails before any work", "[develop][size]") {
     const auto source = test::rainbow({4, 4}, PixelFormat::RgbaU16, workingEncoding);
 
-    REQUIRE_THROWS_AS(develop(source, {}, {.targetSize = ImageSize{2, 2}}), std::invalid_argument);
+    REQUIRE_THROWS_AS(develop(source, {}, {.size = RenderRequest::FitInside{0, 2}}),
+                      std::invalid_argument);
+    REQUIRE_THROWS_AS(develop(source, {}, {.size = RenderRequest::Scale{-1.0}}),
+                      std::invalid_argument);
 }
 
 TEST_CASE("Asking for the light the camera saw changes nothing", "[develop]") {

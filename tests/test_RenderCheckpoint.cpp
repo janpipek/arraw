@@ -1,4 +1,5 @@
 #include "CheckpointState.h"
+#include "ProcessingPlan.h"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -72,6 +73,8 @@ TEST_CASE("Plan prefixes ignore later geometry but include every pointwise input
     REQUIRE(prefixMatches(original, changed, Stage::Pointwise));
     REQUIRE_FALSE(prefixMatches(original, changed, Stage::Geometry));
     REQUIRE(prefixMatches(original, changed, Stage::Geometry) == (original == changed));
+    REQUIRE_FALSE(prefixMatches(original, changed, Stage::Resize));
+    REQUIRE(prefixMatches(original, original, Stage::Resize));
 
     /// Each field is varied independently: full-depth comparison must agree
     /// with the defaulted equality, including fields inactive in this plan.
@@ -79,6 +82,7 @@ TEST_CASE("Plan prefixes ignore later geometry but include every pointwise input
         REQUIRE_FALSE(original == other);
         REQUIRE_FALSE(prefixMatches(original, other, Stage::Pointwise));
         REQUIRE(prefixMatches(original, other, Stage::Geometry) == (original == other));
+        REQUIRE(prefixMatches(original, other, Stage::Resize) == (original == other));
     };
     changed = original;
     changed.toWorking = Matrix3{};
@@ -97,6 +101,48 @@ TEST_CASE("Plan prefixes ignore later geometry but include every pointwise input
     REQUIRE(prefixMatches(original, original, Stage::Geometry) == (original == original));
     REQUIRE_FALSE(prefixMatches(original, original, static_cast<Stage>(-1)));
     REQUIRE_FALSE(prefixMatches(original, original, static_cast<Stage>(stageCount)));
+}
+
+TEST_CASE("Plan prefixes tell requests apart at the resize and no earlier", "[plan][checkpoint]") {
+    ImageBuffer source({60, 40}, workingFormat, workingEncoding);
+    const DevelopSettings settings;
+    const auto planned = [&](const RenderRequest& request) {
+        return planFor(source, settings, request);
+    };
+    const auto request = [](RenderRequest::Scale scale, ResizeFilter filter) {
+        return RenderRequest{.size = scale, .filter = filter};
+    };
+    const auto half = planned(request({0.5}, ResizeFilter::Lanczos3));
+
+    // The same request is the same plan.
+    REQUIRE(half == planned(request({0.5}, ResizeFilter::Lanczos3)));
+    REQUIRE(prefixMatches(half, planned(request({0.5}, ResizeFilter::Lanczos3)), Stage::Resize));
+
+    // Another size or another filter changes what the resize computes, and
+    // nothing before it.
+    for (const auto& other :
+         {planned(request({0.25}, ResizeFilter::Lanczos3)),
+          planned(request({0.5}, ResizeFilter::Bilinear)),
+          planned(RenderRequest{.size = RenderRequest::FitInside{20, 20}}), planned({})}) {
+        REQUIRE(prefixMatches(half, other, Stage::Pointwise));
+        REQUIRE(prefixMatches(half, other, Stage::Geometry));
+        REQUIRE_FALSE(prefixMatches(half, other, Stage::Resize));
+    }
+
+    // Different requests that resolve to the same pixels are the same plan:
+    // a box and a factor reaching one size, and an identity whatever its filter.
+    REQUIRE(prefixMatches(half, planned(RenderRequest{.size = RenderRequest::FitInside{30, 30}}),
+                          Stage::Resize));
+    REQUIRE(
+        prefixMatches(planned({}), planned(request({3.0}, ResizeFilter::Bilinear)), Stage::Resize));
+    REQUIRE(planned({}).resize->isIdentity({60, 40}));
+    REQUIRE_FALSE(half.resize->isIdentity({60, 40}));
+
+    // The pointwise settings still decide first.
+    DevelopSettings brighter;
+    brighter.tone.exposure = 1.0F;
+    const auto other = planFor(source, brighter, request({0.5}, ResizeFilter::Lanczos3));
+    REQUIRE_FALSE(prefixMatches(half, other, Stage::Pointwise));
 }
 
 TEST_CASE("NaN plan inputs refuse reuse even against themselves", "[plan][checkpoint]") {

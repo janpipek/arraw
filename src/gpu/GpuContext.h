@@ -138,17 +138,45 @@ struct GpuDeviceInfo {
 
 /// @brief One fullscreen fragment pass a ::arraw::GpuContext can render.
 ///
-/// Each reads one input image through `texelFetch` at binding 0 and, except
-/// ::Copy, one std140 uniform block at binding 1, and writes one RGBA32F
-/// render target. The shaders live in `src/gpu/shaders`, compiled at build time.
+/// Each reads its input images through `texelFetch`, the first at binding 0 and
+/// any others from binding 2 on, and, except ::Copy, one std140 uniform block at
+/// binding 1, and writes one RGBA32F render target. The shaders live in
+/// `src/gpu/shaders`, compiled at build time.
 enum class GpuPass {
     Copy,      ///< Copies its input unchanged; no uniforms. The render round trip's proof.
     Pointwise, ///< The pointwise chain; uniforms are a ::arraw::GpuPointwiseBlock.
     Geometry,  ///< The geometry resample; uniforms are a ::arraw::GpuGeometryBlock.
+
+    /// @brief The horizontal half of a resize, one ::arraw::ResizePlane per render.
+    ///
+    /// Inputs are the image and the weights of ::arraw::packResizeWeights, as
+    /// uploaded; uniforms are a ::arraw::GpuResizeBlock.
+    ResizeAcross,
+
+    /// @brief The vertical half of a resize, which also produces the result.
+    ///
+    /// Inputs are the three planes ::GpuPass::ResizeAcross wrote, sums first,
+    /// with the weights of the vertical axis between the first two (so at bindings
+    /// 0, 2, 3 and 4: sums, weights, low, high); uniforms are a ::arraw::GpuResizeBlock.
+    ResizeDown,
+
+    /// @brief The horizontal half of a resize of an opaque image: one render, no planes.
+    ///
+    /// Inputs and uniforms as ::GpuPass::ResizeAcross, whose `plane` it ignores.
+    /// Writes only the premultiplied sums (which for alpha one are the filtered
+    /// colour) with alpha one.
+    ResizeAcrossOpaque,
+
+    /// @brief The vertical half of a resize of an opaque image, which also produces the result.
+    ///
+    /// Inputs are the one image ::GpuPass::ResizeAcrossOpaque wrote and the weights
+    /// of the vertical axis (bindings 0 and 2); uniforms are a ::arraw::GpuResizeBlock.
+    /// Writes the filtered colour with alpha exactly one.
+    ResizeDownOpaque,
 };
 
 /// @brief Number of ::arraw::GpuPass values, for tables indexed by one.
-inline constexpr std::size_t gpuPassCount = 3;
+inline constexpr std::size_t gpuPassCount = 7;
 
 /// @brief One graphics device, owned, offscreen, on the thread that made it.
 ///
@@ -209,6 +237,15 @@ public:
     /// @brief Whether an earlier frame failed, after which every use throws.
     [[nodiscard]] bool lost() const noexcept;
 
+    /// @brief Counts the passes rendered so far, each of which made one texture.
+    ///
+    /// Uploads are not counted. A diagnostic, there for tests to say how many
+    /// passes a render took (an opaque resize is two, not four) without a hook
+    /// inside the pipeline. Unlike the other members it is not checked against
+    /// the owner thread: a diagnostic read, only meaningful when nothing else
+    /// is rendering.
+    [[nodiscard]] std::size_t renderCount() const noexcept;
+
     /// @brief Copies a host buffer into a new RGBA32F texture.
     /// @param image Buffer to upload; must be ::arraw::PixelFormat::RgbaF32.
     /// @return A device image with the buffer's size, encoding and orientation.
@@ -240,6 +277,18 @@ public:
     /// create the pass's resources, or the render fails.
     [[nodiscard]] DeviceImage render(GpuPass pass, std::span<const std::byte> uniforms,
                                      const DeviceImage& input, ImageSize outputSize,
+                                     const ColorEncoding& encoding);
+
+    /// @brief Renders one pass that reads several device images into a new one.
+    ///
+    /// As the single-input overload, for the passes whose inputs are more than
+    /// one image. The first input is bound at 0 and the rest from binding 2 on,
+    /// in order, the uniform block holding binding 1.
+    /// @param inputs Images the pass reads, exactly as many as it takes.
+    /// @throws std::invalid_argument as the other overload, and if @p inputs is
+    /// not as long as the pass takes.
+    [[nodiscard]] DeviceImage render(GpuPass pass, std::span<const std::byte> uniforms,
+                                     std::span<const DeviceImage> inputs, ImageSize outputSize,
                                      const ColorEncoding& encoding);
 
 private:

@@ -78,6 +78,14 @@ Geometry flags:
 | `--crop` | `auto` or normalised upright `left,top,right,bottom`, e.g. `0.1,0.2,0.8,0.9` |
 | `--crop-aspect` | `free`, `original`, or `width:height`, e.g. `3:2` or `2:3` |
 
+Resize flags, applied after the crop:
+
+| Flag | Value |
+|---|---|
+| `--resize` | `N` is the long edge in pixels, `WxH` is a box to fit inside, `N%` is a scale factor (`12.5%` is fine). A bare number is the long edge. Default: full size |
+| `--allow-upscale` | Let `--resize` enlarge past the photograph's own size; by default it only shrinks |
+| `--resize-filter` | `lanczos` (default, sharper, with slight ringing at hard edges) or `bilinear` (softer, never rings) |
+
 Rotation is split into the nearest quarter-turn and a straighten remainder
 within ±45°: `--rotate 100` gives 90° plus 10°, and `--rotate -20` gives 0°
 plus -20°. Full turns wrap. At exact half-quarter-turns, the reduced angle rounds away
@@ -94,8 +102,8 @@ positive-size rectangle fits there. Source pixels are never modified.
 Quarter-turns, flips and pixel-aligned crops preserve developed samples exactly.
 Fractional rotations and crops use bilinear interpolation in linear colour with
 premultiplied alpha. Continuous crop dimensions are floored to whole output
-pixels, with a minimum of one pixel per axis. Requested output resizing is
-still unimplemented.
+pixels, with a minimum of one pixel per axis. Resizing is applied last,
+after the crop (see `--resize`).
 
 ## Layout
 

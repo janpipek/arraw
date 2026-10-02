@@ -3,7 +3,9 @@
 #include <DevelopSettings.h>
 #include <ImageBuffer.h>
 
+#include <cstdint>
 #include <optional>
+#include <variant>
 
 namespace arraw {
 
@@ -13,20 +15,66 @@ enum class Upscale {
     Allowed, ///< The photograph is interpolated up to the requested size.
 };
 
+/// @brief Resampling kernel for a render to a requested size.
+enum class ResizeFilter {
+    Lanczos3, ///< Windowed sinc of radius 3: sharp, with a little ringing at hard edges.
+    Bilinear, ///< Tent kernel: soft, never rings. Widened when shrinking, so it does not alias.
+};
+
+/// @brief Level of effort a render spends on being exact.
+enum class Quality {
+    Export, ///< Full resolution all the way, the result an export would write.
+};
+
 /// @brief What a caller wants rendered.
 ///
 /// Defaults to the whole photograph at its own resolution. Both a preview and
 /// an export at a chosen size are the same request, which is what keeps them
 /// from drifting apart (ADR 007).
 struct RenderRequest {
-    /// @brief Size to fit the result inside, after the crop.
+    /// @brief Box to fit the result inside, keeping the aspect ratio.
     ///
-    /// Not yet honoured; see ::arraw::develop.
-    std::optional<ImageSize> targetSize = std::nullopt;
+    /// A long edge of N is `FitInside{N, N}`.
+    struct FitInside {
+        std::uint32_t width = 0;  ///< Largest width of the result, in pixels.
+        std::uint32_t height = 0; ///< Largest height of the result, in pixels.
+    };
 
-    /// @brief Whether a target size larger than the photograph enlarges it.
+    /// @brief Factor to multiply both sides of the cropped photograph by.
+    struct Scale {
+        double factor = 1.0; ///< Multiplier, finite and positive.
+    };
+
+    /// @brief Size of the result relative to the cropped photograph.
+    ///
+    /// Empty keeps the photograph's own resolution. See ::arraw::resolvedSize.
+    std::optional<std::variant<FitInside, Scale>> size = std::nullopt;
+
+    /// @brief Whether a size larger than the photograph enlarges it.
     Upscale upscale = Upscale::Never;
+
+    /// @brief Kernel used when the size changes.
+    ResizeFilter filter = ResizeFilter::Lanczos3;
+
+    /// @brief Effort the render spends on exactness.
+    Quality quality = Quality::Export;
 };
+
+/// @brief Resolves a request's size against the photograph's size after its crop.
+///
+/// The scale is the factor in a ::arraw::RenderRequest::Scale, or for a
+/// ::arraw::RenderRequest::FitInside the
+/// smallest that fits both sides in the box. Unless the request allows
+/// upscaling the scale is capped at 1. Each side is the cropped side times the
+/// scale, rounded, and at least one pixel (and, for a box, at most the box).
+/// This is the one place sizes are worked out, so that every backend and
+/// caller agrees.
+/// @param request What the caller wants rendered.
+/// @param cropped Size of the photograph after its crop.
+/// @return The size of the rendered result; @p cropped if the request has no size.
+/// @throws std::invalid_argument if @p cropped is empty, a box has a zero side,
+/// a factor is not finite and positive, or the result does not fit a 32-bit side.
+[[nodiscard]] ImageSize resolvedSize(const RenderRequest& request, ImageSize cropped);
 
 /// @brief Renders a decoded photograph through its develop settings.
 ///
@@ -46,6 +94,9 @@ struct RenderRequest {
 /// with one bilinear resample in linear working colour and premultiplied alpha.
 /// Crops are constrained to valid image content. The output has no pending
 /// camera orientation. Exact quarter-turns and pixel-aligned crops copy samples.
+/// A requested size is then resolved against the cropped size and applied as a
+/// separate resize with the request's filter; a size equal to the cropped one
+/// leaves the pixels untouched.
 ///
 /// @param source Decoded photograph, in the working or a camera encoding.
 /// @param settings Photographic settings to apply.
@@ -53,8 +104,7 @@ struct RenderRequest {
 /// own resolution.
 /// @return A new buffer in the working encoding.
 /// @throws std::invalid_argument if @p source is in an encoding development
-/// cannot start from, if geometry is invalid, or if @p request asks for a size, which is not yet
-/// implemented.
+/// cannot start from, if geometry is invalid, or if @p request is invalid.
 [[nodiscard]] ImageBuffer develop(const ImageBuffer& source, const DevelopSettings& settings,
                                   const RenderRequest& request = {});
 

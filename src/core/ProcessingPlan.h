@@ -4,7 +4,9 @@
 #include "GeometryPlan.h"
 
 #include <ColorEncoding.h>
+#include <Develop.h>
 #include <DevelopSettings.h>
+#include <ImageBuffer.h>
 #include <Photo.h>
 #include <RenderCheckpoint.h>
 
@@ -16,6 +18,57 @@
 #include <utility>
 
 namespace arraw {
+
+/// @brief The resample block: the size a render ends at, and how it gets there.
+///
+/// ADR 011 puts a target size in the resample block and ADR 012 puts anything
+/// that changes what a stage computes in the plan, so a render's requested size
+/// and filter are resolved here rather than read from the request by each
+/// backend. Both backends execute exactly this.
+struct ResizePlan {
+    /// @brief Size of the result, from ::arraw::resolvedSize against the cropped size.
+    ImageSize outputSize;
+
+    /// @brief Kernel the resize runs with.
+    ///
+    /// ::arraw::ResizeFilter::Lanczos3 for an identity resize, whatever the
+    /// request said, since no kernel runs and two renders with the same pixels
+    /// should compare equal.
+    ResizeFilter filter = ResizeFilter::Lanczos3;
+
+    /// @brief Whether every alpha sample of the developed pixels is exactly one.
+    ///
+    /// An execution hint, not a plan input: it does not change the result, so
+    /// it is left out of ::arraw::ResizePlan's equality, and two plans that
+    /// differ only in it describe the same render (a plan from a
+    /// ::arraw::Photo, which has no pixels to scan, still matches one from
+    /// pixels). It is worked out from the source, which stands for the
+    /// developed pixels only by two invariants: the pointwise chain copies
+    /// alpha (see developSamples in `Develop.cpp`), and the geometry pass keeps
+    /// the pixels it interpolates between exactly opaque (see `geometry.frag`).
+    /// A setting that produced transparency would break both this hint and the
+    /// fast path it enables, and must clear it.
+    ///
+    /// Opaque pixels need no tracking of transparency: no window is
+    /// translucent, so no colour is clamped to a visible range and no quotient
+    /// by alpha is taken, and the result's alpha is one by construction. Both
+    /// backends then take a cheaper path with the same result (see
+    /// ::arraw::resample). Only worked out for a resize that runs; `false` for an
+    /// identity one, and `false` where the pixels were not at hand to be scanned
+    /// (see ::arraw::planFor for a ::arraw::Photo).
+    bool opaque = false;
+
+    /// @brief Whether the resize leaves the pixels alone, which both backends skip.
+    /// @param cropped Size of the photograph after its crop.
+    [[nodiscard]] bool isIdentity(ImageSize cropped) const noexcept {
+        return outputSize == cropped;
+    }
+
+    /// @brief Compares what the resize computes, ignoring the ::arraw::ResizePlan::opaque hint.
+    friend bool operator==(const ResizePlan& first, const ResizePlan& second) noexcept {
+        return first.outputSize == second.outputSize && first.filter == second.filter;
+    }
+};
 
 /// @brief Everything a photograph's settings imply, worked out once.
 ///
@@ -87,6 +140,9 @@ struct ProcessingPlan {
     /// @brief Resolved geometry when source dimensions and orientation are known.
     std::optional<GeometryPlan> geometry = std::nullopt;
 
+    /// @brief Resolved resize, when a geometry and so a cropped size is known.
+    std::optional<ResizePlan> resize = std::nullopt;
+
     friend bool operator==(const ProcessingPlan&, const ProcessingPlan&) = default;
 };
 
@@ -104,7 +160,7 @@ struct ProcessingPlan {
                                     plan.contrastSlope, plan.contrastScale, plan.shadowShift,
                                     plan.highlightShift, plan.blackShift, plan.whiteShift,
                                     plan.shoulderKnee),
-                           std::tie(plan.geometry));
+                           std::tie(plan.geometry), std::tie(plan.resize));
 }
 
 static_assert(std::tuple_size_v<decltype(stagesOf(std::declval<const ProcessingPlan&>()))> ==
@@ -168,19 +224,35 @@ static_assert(std::tuple_size_v<decltype(stagesOf(std::declval<const ProcessingP
 [[nodiscard]] ProcessingPlan planFor(const ColorEncoding& encoding,
                                      const DevelopSettings& settings);
 
-/// @brief Resolves pointwise processing and geometry against decoded pixels.
-[[nodiscard]] ProcessingPlan planFor(const ImageBuffer& source, const DevelopSettings& settings);
+/// @brief Resolves pointwise processing, geometry and the resize against decoded pixels.
+///
+/// The one overload that knows whether the pixels are opaque (see
+/// ::arraw::ResizePlan::opaque). A source with no alpha channel is opaque for
+/// free; one with alpha is scanned once, on the host, stopping at the first
+/// sample that is not exactly one: a read of the alpha samples, at worst the
+/// whole buffer, and only when the request actually resizes.
+/// @param source Decoded pixels the plan is for.
+/// @param settings Settings to resolve.
+/// @param request Size and filter to render at; the default is the cropped size.
+/// @throws std::invalid_argument as the other overloads, and if @p request
+/// cannot be resolved (see ::arraw::resolvedSize).
+[[nodiscard]] ProcessingPlan planFor(const ImageBuffer& source, const DevelopSettings& settings,
+                                     const RenderRequest& request = {});
 
 /// @brief Works out what a photograph's document means for its pixels.
 ///
 /// What a render is planned against (ADR 012): the encoding comes from what
 /// the file declared and the settings from the document that declared it, so
 /// the two cannot arrive from different photographs.
+///
+/// A photograph carries no pixels, so whether they are opaque is unknown here:
+/// the resize it plans is never marked ::arraw::ResizePlan::opaque.
 /// @param photo Document to resolve.
+/// @param request Size and filter to render at; the default is the cropped size.
 /// @return The plan both backends execute.
 /// @throws std::invalid_argument if the photograph's encoding or settings
-/// cannot be resolved.
-[[nodiscard]] ProcessingPlan planFor(const Photo& photo);
+/// cannot be resolved, or @p request cannot be resolved against its crop.
+[[nodiscard]] ProcessingPlan planFor(const Photo& photo, const RenderRequest& request = {});
 
 /// @brief Perceptual coordinate the tone controls act in.
 ///

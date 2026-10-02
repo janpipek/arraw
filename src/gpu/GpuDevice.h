@@ -84,6 +84,9 @@ struct GpuDevice {
     /// @brief Thread that created the device, and the only one that may use it.
     std::thread::id owner = std::this_thread::get_id();
 
+    /// @brief Number of passes rendered to completion, and so of textures they made.
+    std::size_t rendersDone = 0;
+
     /// @brief Whether a frame failed, after which the device is not used again.
     ///
     /// A failed submission may leave work pending that QRhi can neither finish

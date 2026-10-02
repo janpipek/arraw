@@ -110,7 +110,8 @@ void bindSettings(nb::module_& m) {
 
     nb::enum_<Stage>(m, "Stage", "Pass boundary of the render pipeline.")
         .value("POINTWISE", Stage::Pointwise)
-        .value("GEOMETRY", Stage::Geometry);
+        .value("GEOMETRY", Stage::Geometry)
+        .value("RESIZE", Stage::Resize);
 
     bindFrozen<ToneSettings>(
         m, "ToneSettings", "Photographic tone adjustments.",
