@@ -112,6 +112,8 @@ add_library(arraw STATIC
         src/core/GeometryPlan.cpp
         src/core/Resample.h
         src/core/Resample.cpp
+        src/core/ResampleWeights.h
+        src/core/ResampleWeights.cpp
         include/ToneSettings.h
         src/core/ToneSettings.cpp
         src/core/ColorSpaces.h
@@ -211,7 +213,11 @@ qt_add_shaders(arraw-gpu "arraw-shaders"
         src/gpu/shaders/fullscreen.vert
         src/gpu/shaders/copy.frag
         src/gpu/shaders/develop.frag
-        src/gpu/shaders/geometry.frag)
+        src/gpu/shaders/geometry.frag
+        src/gpu/shaders/resize_across.frag
+        src/gpu/shaders/resize_across_opaque.frag
+        src/gpu/shaders/resize_down.frag
+        src/gpu/shaders/resize_down_opaque.frag)
 target_link_libraries(arraw-gpu PUBLIC arraw PRIVATE Qt6::Gui Qt6::GuiPrivate)
 set_target_properties(arraw-gpu PROPERTIES AUTOMOC OFF)
 # QRhi declares its Vulkan backend only where vulkan/vulkan.h is visible, so a

@@ -1,3 +1,4 @@
+#include "ProcessingPlan.h"
 #include "Resample.h"
 
 #include <Develop.h>
@@ -340,4 +341,90 @@ TEST_CASE("Two colours beside a transparent area stay bounded and unfringed", "[
             REQUIRE(v <= (c == 3 ? 1.0F : ceiling));
         }
     }
+}
+
+namespace {
+
+/// @brief Whether two buffers hold the same bits, sample for sample.
+bool sameBits(const ImageBuffer& first, const ImageBuffer& second) {
+    return first.size() == second.size() && std::ranges::equal(first.bytes(), second.bytes());
+}
+
+} // namespace
+
+TEST_CASE("The opaque path is bit-identical to the general one on opaque pixels",
+          "[resample][opaque]") {
+    // Hard edges, noise, values above one and negative channels, so that the
+    // rule against ringing is exercised in both directions.
+    const auto wide = made({97, 61}, [](std::uint32_t x, std::uint32_t y) {
+        const float noise = static_cast<float>((x * 2654435761U + y * 40503U) % 1000) / 1000.0F;
+        const bool edge = (x / 5 + y / 7) % 3 == 0;
+        return std::array<float, 4>{edge ? 3.5F : noise, (x / 9 + y / 9) % 2 == 0 ? -0.4F : 0.6F,
+                                    0.2F + 0.1F * noise, 1.0F};
+    });
+    const auto plain = made({64, 48}, [](std::uint32_t x, std::uint32_t y) {
+        return std::array<float, 4>{(x % 8 < 4) ? 1.0F : 0.0F, static_cast<float>(y) / 48.0F, 0.25F,
+                                    1.0F};
+    });
+    for (const ImageBuffer* source : {&wide, &plain}) {
+        for (const ResizeFilter filter : filters) {
+            for (const ImageSize size : {ImageSize{13, 9}, ImageSize{50, 11}, ImageSize{7, 40},
+                                         ImageSize{1, 1}, ImageSize{200, 130}, ImageSize{97, 5}}) {
+                DYNAMIC_SECTION((filter == ResizeFilter::Lanczos3 ? "Lanczos3 " : "Bilinear ")
+                                << size.width << "x" << size.height) {
+                    const ImageBuffer general = resample(source->clone(), size, filter, false);
+                    const ImageBuffer opaque = resample(source->clone(), size, filter, true);
+                    REQUIRE(sameBits(general, opaque));
+                    for (std::size_t i = 3; i < opaque.samples<float>().size(); i += 4) {
+                        REQUIRE(opaque.samples<float>()[i] == 1.0F);
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEST_CASE("Developing an opaque photograph gives exactly opaque pixels, resized or not",
+          "[resample][opaque]") {
+    // Rotation and a crop blend neighbours, and the resize filters after them:
+    // alpha must stay exactly one through both, which is what the fast path
+    // and the JPEG export rely on.
+    const auto source = made({90, 70}, [](std::uint32_t x, std::uint32_t y) {
+        return std::array<float, 4>{static_cast<float>(x) / 90.0F, static_cast<float>(y) / 70.0F,
+                                    0.5F, 1.0F};
+    });
+    DevelopSettings settings;
+    settings.geometry.straighten = 11.0;
+    for (const RenderRequest request :
+         {RenderRequest{}, RenderRequest{.size = RenderRequest::Scale{0.37}},
+          RenderRequest{.size = RenderRequest::FitInside{40, 40}, .filter = ResizeFilter::Bilinear},
+          RenderRequest{.size = RenderRequest::Scale{2.0}, .upscale = Upscale::Allowed}}) {
+        const ImageBuffer result = develop(source, settings, request);
+        for (std::size_t i = 3; i < result.samples<float>().size(); i += 4) {
+            REQUIRE(result.samples<float>()[i] == 1.0F);
+        }
+    }
+    REQUIRE(planFor(source, settings, {.size = RenderRequest::Scale{0.37}}).resize->opaque);
+}
+
+TEST_CASE("Developing is the same through the opaque path as through the general one",
+          "[resample][opaque]") {
+    const auto source = made({70, 50}, [](std::uint32_t x, std::uint32_t y) {
+        return std::array<float, 4>{(x / 6 + y / 6) % 2 == 0 ? 0.9F : 0.05F,
+                                    static_cast<float>(x) / 70.0F, 0.3F, 1.0F};
+    });
+    DevelopSettings settings;
+    settings.geometry.straighten = -6.0;
+    const RenderRequest request{.size = RenderRequest::Scale{0.43}};
+    const ProcessingPlan plan = planFor(source, settings, request);
+    REQUIRE(plan.resize->opaque);
+
+    // Without a request develop() stops at the cropped pixels; resampling them
+    // by hand with no claim of opacity is the general path. This shows the two
+    // paths agree, not that develop() took the fast path: they are bit-identical,
+    // so nothing here could tell. The plan's opaque flag is checked above.
+    const ImageBuffer cropped = develop(source, settings);
+    REQUIRE(
+        sameBits(develop(source, settings, request),
+                 resample(cropped.clone(), plan.resize->outputSize, plan.resize->filter, false)));
 }

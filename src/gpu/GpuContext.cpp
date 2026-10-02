@@ -300,16 +300,37 @@ std::string_view passName(GpuPass pass) {
         return "pointwise";
     case GpuPass::Geometry:
         return "geometry";
+    case GpuPass::ResizeAcross:
+        return "resize-across";
+    case GpuPass::ResizeDown:
+        return "resize-down";
+    case GpuPass::ResizeAcrossOpaque:
+        return "resize-across-opaque";
+    case GpuPass::ResizeDownOpaque:
+        return "resize-down-opaque";
     }
     return "unknown";
 }
 
 /// @brief Resource path of a pass's compiled fragment shader.
 QString fragmentShaderOf(GpuPass pass) {
-    return QStringLiteral(":/arraw/shaders/%1.qsb")
-        .arg(pass == GpuPass::Copy        ? QStringLiteral("copy.frag")
-             : pass == GpuPass::Pointwise ? QStringLiteral("develop.frag")
-                                          : QStringLiteral("geometry.frag"));
+    switch (pass) {
+    case GpuPass::Copy:
+        return QStringLiteral(":/arraw/shaders/copy.frag.qsb");
+    case GpuPass::Pointwise:
+        return QStringLiteral(":/arraw/shaders/develop.frag.qsb");
+    case GpuPass::Geometry:
+        return QStringLiteral(":/arraw/shaders/geometry.frag.qsb");
+    case GpuPass::ResizeAcross:
+        return QStringLiteral(":/arraw/shaders/resize_across.frag.qsb");
+    case GpuPass::ResizeDown:
+        return QStringLiteral(":/arraw/shaders/resize_down.frag.qsb");
+    case GpuPass::ResizeAcrossOpaque:
+        return QStringLiteral(":/arraw/shaders/resize_across_opaque.frag.qsb");
+    case GpuPass::ResizeDownOpaque:
+        return QStringLiteral(":/arraw/shaders/resize_down_opaque.frag.qsb");
+    }
+    return {};
 }
 
 /// @brief Size of the uniform block a pass reads, in bytes; zero for none.
@@ -321,8 +342,30 @@ std::size_t uniformSizeOf(GpuPass pass) {
         return sizeof(GpuPointwiseBlock);
     case GpuPass::Geometry:
         return sizeof(GpuGeometryBlock);
+    case GpuPass::ResizeAcross:
+    case GpuPass::ResizeDown:
+    case GpuPass::ResizeAcrossOpaque:
+    case GpuPass::ResizeDownOpaque:
+        return sizeof(GpuResizeBlock);
     }
     return 0;
+}
+
+/// @brief Number of images a pass reads.
+std::size_t inputCountOf(GpuPass pass) {
+    switch (pass) {
+    case GpuPass::Copy:
+    case GpuPass::Pointwise:
+    case GpuPass::Geometry:
+        return 1;
+    case GpuPass::ResizeAcross:
+    case GpuPass::ResizeAcrossOpaque:
+    case GpuPass::ResizeDownOpaque:
+        return 2;
+    case GpuPass::ResizeDown:
+        return 4;
+    }
+    return 1;
 }
 
 /// @brief Loads a shader compiled into this build by qt_add_shaders.
@@ -341,17 +384,23 @@ QShader loadShader(const QString& path) {
     return shader;
 }
 
-/// @brief Binds a pass's input at 0 and, if it has one, its uniform block at 1.
+/// @brief Binds a pass's first input at 0, its uniform block at 1 if it has one, and the
+/// other inputs from 2 on.
 ///
 /// With null resources it describes only the layout, which is what a pipeline
 /// is created against; each render binds its own resources in the same layout.
-std::vector<QRhiShaderResourceBinding> bindingsFor(QRhiTexture* input, QRhiSampler* sampler,
-                                                   QRhiBuffer* uniforms, bool hasUniforms) {
-    std::vector<QRhiShaderResourceBinding> bindings{QRhiShaderResourceBinding::sampledTexture(
-        0, QRhiShaderResourceBinding::FragmentStage, input, sampler)};
+std::vector<QRhiShaderResourceBinding> bindingsFor(std::span<QRhiTexture* const> inputs,
+                                                   QRhiSampler* sampler, QRhiBuffer* uniforms,
+                                                   bool hasUniforms) {
+    constexpr auto stage = QRhiShaderResourceBinding::FragmentStage;
+    std::vector<QRhiShaderResourceBinding> bindings{
+        QRhiShaderResourceBinding::sampledTexture(0, stage, inputs.front(), sampler)};
     if (hasUniforms) {
-        bindings.push_back(QRhiShaderResourceBinding::uniformBuffer(
-            1, QRhiShaderResourceBinding::FragmentStage, uniforms));
+        bindings.push_back(QRhiShaderResourceBinding::uniformBuffer(1, stage, uniforms));
+    }
+    for (std::size_t index = 1; index < inputs.size(); ++index) {
+        bindings.push_back(QRhiShaderResourceBinding::sampledTexture(
+            static_cast<int>(index) + 1, stage, inputs[index], sampler));
     }
     return bindings;
 }
@@ -360,7 +409,8 @@ std::vector<QRhiShaderResourceBinding> bindingsFor(QRhiTexture* input, QRhiSampl
 /// @throws std::runtime_error if a shader is missing or the pipeline cannot be created.
 void buildPipeline(QRhi& rhi, GpuPass pass, detail::PassPipeline& cached) {
     const std::vector<QRhiShaderResourceBinding> layout =
-        bindingsFor(nullptr, nullptr, nullptr, uniformSizeOf(pass) > 0);
+        bindingsFor(std::vector<QRhiTexture*>(inputCountOf(pass), nullptr), nullptr, nullptr,
+                    uniformSizeOf(pass) > 0);
     std::unique_ptr<QRhiShaderResourceBindings> bindings(rhi.newShaderResourceBindings());
     bindings->setBindings(layout.begin(), layout.end());
     if (!bindings->create()) {
@@ -592,6 +642,12 @@ DeviceImage GpuContext::upload(const ImageBuffer& image) {
 DeviceImage GpuContext::render(GpuPass pass, std::span<const std::byte> uniforms,
                                const DeviceImage& input, ImageSize outputSize,
                                const ColorEncoding& encoding) {
+    return render(pass, uniforms, std::span(&input, 1), outputSize, encoding);
+}
+
+DeviceImage GpuContext::render(GpuPass pass, std::span<const std::byte> uniforms,
+                               std::span<const DeviceImage> inputs, ImageSize outputSize,
+                               const ColorEncoding& encoding) {
     device_->requireUsable("render");
 
     const auto index = static_cast<std::size_t>(pass);
@@ -599,14 +655,21 @@ DeviceImage GpuContext::render(GpuPass pass, std::span<const std::byte> uniforms
         throw std::invalid_argument("Unknown GPU pass");
     }
     const std::string name(passName(pass));
-    if (!input.valid()) {
-        throw std::invalid_argument("The " + name + " pass needs an input image");
+    if (inputs.size() != inputCountOf(pass)) {
+        throw std::invalid_argument("The " + name + " pass reads " +
+                                    std::to_string(inputCountOf(pass)) + " images, not " +
+                                    std::to_string(inputs.size()));
     }
-    if (input.device() != id()) {
-        // Textures are meaningless to any device but the one that made them
-        // (ADR 015), which is also what makes the cast below sound.
-        throw std::invalid_argument("The " + name +
-                                    " pass can only read an image from its own device");
+    for (const DeviceImage& input : inputs) {
+        if (!input.valid()) {
+            throw std::invalid_argument("The " + name + " pass needs an input image");
+        }
+        if (input.device() != id()) {
+            // Textures are meaningless to any device but the one that made them
+            // (ADR 015), which is also what makes the cast below sound.
+            throw std::invalid_argument("The " + name +
+                                        " pass can only read an image from its own device");
+        }
     }
     if (uniforms.size() != uniformSizeOf(pass)) {
         throw std::invalid_argument("The " + name + " pass takes " +
@@ -631,7 +694,10 @@ DeviceImage GpuContext::render(GpuPass pass, std::span<const std::byte> uniforms
         throw std::runtime_error("This GPU device has no RGBA32F textures, which a pass needs");
     }
 
-    const auto& source = static_cast<const RhiDeviceImage&>(*input.state_);
+    std::vector<QRhiTexture*> textures;
+    for (const DeviceImage& input : inputs) {
+        textures.push_back(&static_cast<const RhiDeviceImage&>(*input.state_).texture());
+    }
     QRhi& rhi = *device_->rhi;
 
     std::unique_ptr<QRhiTexture> texture(rhi.newTexture(
@@ -678,7 +744,7 @@ DeviceImage GpuContext::render(GpuPass pass, std::span<const std::byte> uniforms
         }
     }
     const std::vector<QRhiShaderResourceBinding> list =
-        bindingsFor(&source.texture(), device_->sampler.get(), buffer.get(), buffer != nullptr);
+        bindingsFor(textures, device_->sampler.get(), buffer.get(), buffer != nullptr);
     std::unique_ptr<QRhiShaderResourceBindings> bindings(rhi.newShaderResourceBindings());
     bindings->setBindings(list.begin(), list.end());
     if (!bindings->create()) {
@@ -694,8 +760,13 @@ DeviceImage GpuContext::render(GpuPass pass, std::span<const std::byte> uniforms
                            }
                        });
 
+    ++device_->rendersDone;
     return DeviceImage(std::make_shared<const RhiDeviceImage>(
         device_, std::move(texture), outputSize, encoding, ImageOrientation::Normal));
+}
+
+std::size_t GpuContext::renderCount() const noexcept {
+    return device_->rendersDone;
 }
 
 } // namespace arraw

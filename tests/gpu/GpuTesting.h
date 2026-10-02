@@ -123,6 +123,44 @@ inline constexpr double resampleTolerance = 1.0e-4;
 /// Magnitude below which differences count against a floor, not the expected value.
 inline constexpr double geometryAbsoluteFloor = 1.0e-4;
 
+/// @brief Largest absolute difference tolerated in a resize, in colour of well-conditioned
+/// windows and in alpha everywhere.
+///
+/// Measured worst on lavapipe over every case in test_GpuResize.cpp (Lanczos and
+/// bilinear; 8x, 13.7x and non-integer shrinks, boxes down to 1x1, enlargements
+/// to 2.5x, rotated and cropped geometry in front): 7.8e-7 in colour and 6.6e-7
+/// in alpha, a few float ulps of values up to 3.5. The weights are the CPU's,
+/// computed in double and uploaded, so the difference is the sum done in float
+/// (up to 83 taps at 13.7x) against the CPU's double, and a GPU's fused
+/// multiply-adds. A wrong tap, centre or edge rule disagrees by 1e-3 or more.
+/// The opaque passes (one plane, no tracking) agree bit for bit with the general
+/// ones on opaque images on lavapipe, and are held to the same tolerance.
+///
+/// Well-conditioned: opaque, or a window whose colour is a plain weighted mean.
+inline constexpr double resizeTolerance = 1.0e-5;
+
+/// @brief Largest absolute colour difference tolerated in a resize where the result is a
+/// quotient or a difference of nearly equal sums.
+///
+/// Ill-conditioned: pixels whose window holds transparency (the colour is
+/// premultiplied colour over alpha, so it divides the float sums' error by
+/// alpha, here taken at or above resizeVisibleAlpha), and images with negative
+/// channels, where Lanczos lobes of opposite sign cancel. Measured worst on
+/// lavapipe: 7.2e-7 beside transparency (opaque pixels after a rotation
+/// included, see geometry.frag on why those must come out exactly opaque) and
+/// 1.7e-6 with negative and above-one channels. The bound is looser than the
+/// measurement by the factor the pointwise bounds are, because how much a
+/// division or a cancellation costs depends on the driver's arithmetic, and
+/// only lavapipe was measured.
+inline constexpr double illConditionedResizeTolerance = 1.0e-4;
+
+/// @brief Output alpha below which a resize's colour is not compared.
+///
+/// Colour is a quotient by alpha, so close to transparent a float sum's
+/// rounding is magnified without bound (and it is clamped to the window's
+/// visible range there, which hides nothing); alpha itself is still compared.
+inline constexpr float resizeVisibleAlpha = 5.0e-2F;
+
 /// @brief Measures the worst colour error of an image, relative to each pixel's own scale.
 ///
 /// See the implementation for the metric; alpha is not part of it.

@@ -169,6 +169,8 @@ class Stage(enum.Enum):
 
     GEOMETRY = 1
 
+    RESIZE = 2
+
 class ToneSettings:
     """Photographic tone adjustments."""
 

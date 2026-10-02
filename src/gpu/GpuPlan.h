@@ -1,5 +1,8 @@
 #pragma once
 
+#include <Develop.h>
+#include <ImageBuffer.h>
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -163,6 +166,42 @@ static_assert(offsetof(GpuGeometryBlock, sourceSize) == 48);
 static_assert(offsetof(GpuGeometryBlock, outputSize) == 56);
 static_assert(sizeof(GpuGeometryBlock) == 64);
 
+/// @brief Which of the three intermediates a ::arraw::GpuPass::ResizeAcross render writes.
+///
+/// The vertical pass needs more from the horizontal one than its pixels: the
+/// range of visible colours in each window and whether it held a pixel that was
+/// not opaque (see `src/core/Resample.cpp`). A render has one output, so the
+/// horizontal shader is run once per plane.
+enum class ResizePlane : std::uint32_t {
+    Sums = 0, ///< Premultiplied RGBA after the rule against ringing below black.
+    Low = 1,  ///< Lowest visible colour per channel in rgb; in a, 1 if the window was translucent.
+    High = 2, ///< Highest visible colour per channel in rgb; a is unused.
+};
+
+/// @brief Number of ::arraw::ResizePlane values.
+inline constexpr std::size_t resizePlaneCount = 3;
+
+/// @brief The resize passes' uniform block, byte for byte as std140 lays it out.
+///
+/// The shader data contract of `src/gpu/shaders/resize_across.frag` and
+/// `resize_down.frag`, whose `Resize` blocks declare the same members in the
+/// same order.
+struct GpuResizeBlock {
+    /// @brief Plane the horizontal pass writes, as a ::arraw::ResizePlane; unused by the vertical
+    /// one.
+    std::uint32_t plane = 0;
+
+    /// @brief Length of the source along the resized axis, for clamping tap indices to it.
+    std::uint32_t inputLength = 0;
+
+    /// @brief Rounds the block up to a `vec4` boundary, as std140 does.
+    std::array<std::uint32_t, 2> padding{};
+};
+
+static_assert(offsetof(GpuResizeBlock, plane) == 0);
+static_assert(offsetof(GpuResizeBlock, inputLength) == 4);
+static_assert(sizeof(GpuResizeBlock) == 16);
+
 /// @brief Fills the pointwise block from a resolved plan.
 /// @param plan Plan to pack; only its pointwise fields are read.
 /// @param probe Intermediate the shader should write instead of its result.
@@ -176,5 +215,24 @@ static_assert(sizeof(GpuGeometryBlock) == 64);
 /// @throws std::invalid_argument if the output is wider or taller than
 /// ::arraw::maxGeometryOutputExtent, beyond which the shader is not exact.
 [[nodiscard]] GpuGeometryBlock packGeometry(const GeometryPlan& plan);
+
+/// @brief Packs the weights of one axis of a resize as an image the shader reads.
+///
+/// Row `i` describes output coordinate `i`, from ::arraw::axisWeights, the same
+/// weights the CPU resample uses. Texel 0 holds `(first, count, 0, 0)`, the
+/// index of the first source pixel (which may lie outside the image) and the
+/// number of taps, as floats, which are exact below 2^24. Texels 1 and on hold
+/// the weights four to a texel, in order, narrowed to float. The shader clamps
+/// tap indices to the image, as the CPU does, so the image is independent of
+/// the source's content.
+///
+/// The result is labelled RGBA float in the working encoding only so that it
+/// can be uploaded; it holds weights, not colour.
+/// @param in Source length along the axis, at least 1.
+/// @param out Result length along the axis, at least 1.
+/// @param filter Kernel to evaluate.
+/// @return An image `1 + ceil(maxTaps / 4)` pixels wide and @p out pixels tall.
+[[nodiscard]] ImageBuffer packResizeWeights(std::uint32_t in, std::uint32_t out,
+                                            ResizeFilter filter);
 
 } // namespace arraw

@@ -103,7 +103,8 @@ add_executable(arraw-gpu-tests
         gpu/test_GpuExport.cpp
         gpu/test_GpuPasses.cpp
         gpu/test_GpuPointwise.cpp
-        gpu/test_GpuGeometry.cpp)
+        gpu/test_GpuGeometry.cpp
+        gpu/test_GpuResize.cpp)
 arraw_enable_warnings(arraw-gpu-tests)
 target_include_directories(arraw-gpu-tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}

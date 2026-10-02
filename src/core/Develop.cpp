@@ -23,7 +23,9 @@ namespace {
 /// The order itself is in ::arraw::developPixel; this is only the traversal,
 /// deliberately small enough that nothing can hide in it. Alpha is copied
 /// rather than developed: no setting produces transparency, and a source that
-/// carried some keeps exactly what it had.
+/// carried some keeps exactly what it had. ::arraw::ResizePlan::opaque, scanned
+/// from the source, relies on this: were alpha ever changed here, it would no
+/// longer describe the developed pixels.
 template <typename Sample>
 void developSamples(const ImageBuffer& source, ImageBuffer& result, const ProcessingPlan& plan) {
     const auto input = source.samples<Sample>();
@@ -47,8 +49,7 @@ void developSamples(const ImageBuffer& source, ImageBuffer& result, const Proces
 
 ImageBuffer arraw::develop(const ImageBuffer& source, const DevelopSettings& settings,
                            const RenderRequest& request) {
-    const ProcessingPlan plan = planFor(source, settings);
-    const ImageSize target = resolvedSize(request, plan.geometry->outputSize);
+    const ProcessingPlan plan = planFor(source, settings, request);
 
     ImageBuffer result(source.size(), workingFormat, workingEncoding);
     switch (source.format()) {
@@ -65,7 +66,9 @@ ImageBuffer arraw::develop(const ImageBuffer& source, const DevelopSettings& set
         developSamples<float>(source, result, plan);
         break;
     }
-    return resample(applyGeometry(std::move(result), *plan.geometry), target, request.filter);
+    const ResizePlan& resize = *plan.resize;
+    return resample(applyGeometry(std::move(result), *plan.geometry), resize.outputSize,
+                    resize.filter, resize.opaque);
 }
 
 ImageSize arraw::resolvedSize(const RenderRequest& request, ImageSize cropped) {

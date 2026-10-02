@@ -28,10 +28,17 @@ namespace arraw {
 /// @param source Developed pixels in the working format.
 /// @param size Size of the result, at least one pixel per side.
 /// @param filter Kernel to resample with.
+/// @param opaque Whether every alpha sample of @p source is exactly one, as
+/// ::arraw::ResizePlan::opaque says. Then the result is the same, bit for bit,
+/// as without the claim, but the pass tracks no transparency and writes alpha
+/// one: no range of colours, no translucency flags, no final clamp. A caller
+/// that cannot say leaves it `false`, which is always correct; `true` for a
+/// source with transparency is not.
 /// @return @p source itself, untouched and not copied, if it already has @p size;
 /// otherwise a new buffer in the same encoding.
 /// @throws std::invalid_argument if @p source is not in the working format or
 /// @p size is empty.
-[[nodiscard]] ImageBuffer resample(ImageBuffer source, ImageSize size, ResizeFilter filter);
+[[nodiscard]] ImageBuffer resample(ImageBuffer source, ImageSize size, ResizeFilter filter,
+                                   bool opaque = false);
 
 } // namespace arraw

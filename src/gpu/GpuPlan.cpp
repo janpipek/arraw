@@ -2,7 +2,9 @@
 
 #include "GeometryPlan.h"
 #include "ProcessingPlan.h"
+#include "ResampleWeights.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -99,6 +101,27 @@ GpuGeometryBlock packGeometry(const GeometryPlan& plan) {
     block.sourceSize = {plan.sourceSize.width, plan.sourceSize.height};
     block.outputSize = {plan.outputSize.width, plan.outputSize.height};
     return block;
+}
+
+ImageBuffer packResizeWeights(std::uint32_t in, std::uint32_t out, ResizeFilter filter) {
+    const AxisWeights axis = axisWeights(in, out, filter);
+    std::size_t widest = 0;
+    for (const Taps& taps : axis.taps) {
+        widest = std::max(widest, taps.count);
+    }
+    const auto width = static_cast<std::uint32_t>(1 + (widest + 3) / 4);
+    ImageBuffer image({width, out}, workingFormat, workingEncoding);
+    const auto samples = image.samples<float>();
+    for (std::size_t row = 0; row < axis.taps.size(); ++row) {
+        const Taps& taps = axis.taps[row];
+        float* texels = &samples[row * width * 4];
+        texels[0] = static_cast<float>(taps.first);
+        texels[1] = static_cast<float>(taps.count);
+        for (std::size_t k = 0; k < taps.count; ++k) {
+            texels[4 + k] = static_cast<float>(axis.weights[taps.offset + k]);
+        }
+    }
+    return image;
 }
 
 } // namespace arraw
