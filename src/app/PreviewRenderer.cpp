@@ -4,16 +4,21 @@
 #include "GpuContext.h"
 #include "GpuDevelop.h"
 
+#include <ImagePyramid.h>
+
+#include <algorithm>
+#include <cstdint>
 #include <exception>
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace arraw::app {
 
 namespace {
 
-/// @brief What the worker holds on the GPU: the device, and the photograph on it.
+/// @brief What the worker holds on the GPU: the device, and the pyramid levels on it.
 ///
 /// Lives as a local of the worker's loop, so that everything holding the device
 /// is destroyed on the thread that owns it, before that thread ends.
@@ -25,18 +30,18 @@ public:
     GpuPreview(GpuPreview&&) = delete;
     GpuPreview& operator=(GpuPreview&&) = delete;
 
-    /// @brief Releases the uploaded photograph, then the device, in that order.
+    /// @brief Releases the uploaded levels, then the device, in that order.
     ~GpuPreview() {
-        uploaded_ = {};
+        uploaded_.clear();
         context_.reset();
     }
 
     /// @brief Makes the GPU ready to render a source, if it can be.
     ///
-    /// Creates the device on the first call, and uploads the source when it is
-    /// not the one already on the device, dropping the previous one first. A
-    /// failure is remembered: for the device it is final, for a source it lasts
-    /// until the source changes.
+    /// Creates the device on the first call, and drops the levels of the
+    /// previous source when the source changes. Nothing is uploaded here: a
+    /// level goes up when a render first needs it. A failure is remembered: for
+    /// the device it is final, for a source it lasts until the source changes.
     /// @param source Photograph about to be rendered.
     /// @return Whether the GPU can render @p source.
     [[nodiscard]] bool prepare(const std::shared_ptr<const ImageBuffer>& source) {
@@ -48,31 +53,37 @@ public:
             return false;
         }
         if (source != source_) {
-            uploaded_ = {};
+            uploaded_.clear();
             source_ = source;
             sourceReason_.clear();
-            try {
-                uploaded_ = uploadSource(*context_, *source);
-            } catch (const std::exception& error) {
-                sourceReason_ = error.what();
-                dropIfLost();
-            }
         }
-        return uploaded_.valid();
+        return sourceReason_.empty();
     }
 
     /// @brief Renders a request on the device and reads the viewport-sized result back.
-    /// @pre prepare returned true for @p source.
-    [[nodiscard]] ImageBuffer render(const ImageBuffer& source, const DevelopState& state,
+    ///
+    /// Uploads the level the first time it is rendered from, and keeps it for
+    /// the current source.
+    /// @pre prepare returned true.
+    /// @param level Pyramid level of @p image.
+    /// @param image The level to develop.
+    [[nodiscard]] ImageBuffer render(int level, const ImageBuffer& image, const DevelopState& state,
                                      const RenderRequest& request) {
+        const auto index = static_cast<std::size_t>(level);
+        if (uploaded_.size() <= index) {
+            uploaded_.resize(index + 1);
+        }
+        if (!uploaded_[index].valid()) {
+            uploaded_[index] = uploadSource(*context_, image);
+        }
         const RenderCheckpoint checkpoint =
-            developOnGpu(*context_, source, uploaded_, state, Stage::Resize, request);
+            developOnGpu(*context_, image, uploaded_[index], state, Stage::Resize, request);
         return checkpoint.readBack();
     }
 
     /// @brief Releases the photograph from the device, as there is none to show.
     void forget() {
-        uploaded_ = {};
+        uploaded_.clear();
         source_.reset();
         sourceReason_.clear();
     }
@@ -80,7 +91,7 @@ public:
     /// @brief Gives up the GPU for the photograph being shown, and says why.
     void fail(const std::string& reason) {
         sourceReason_ = reason;
-        uploaded_ = {};
+        uploaded_.clear();
         dropIfLost();
     }
 
@@ -116,7 +127,7 @@ private:
     void dropIfLost() {
         if (context_ && context_->lost()) {
             reason_ = "GPU device lost";
-            uploaded_ = {};
+            uploaded_.clear();
             source_.reset();
             context_.reset();
         }
@@ -125,9 +136,10 @@ private:
     // Declaration order is destruction order reversed: the device is made first
     // and goes last (the destructor says so too).
     std::unique_ptr<GpuContext> context_;
-    DeviceImage uploaded_;
-    /// Photograph on the device, or whose upload failed; kept alive so that its
-    /// address identifies it.
+    /// Pyramid levels on the device, by level; a level not yet needed is empty.
+    std::vector<DeviceImage> uploaded_;
+    /// Photograph the levels belong to, or whose upload failed; kept alive so
+    /// that its address identifies it.
     std::shared_ptr<const ImageBuffer> source_;
     /// Why the GPU does not serve source_.
     std::string sourceReason_;
@@ -137,18 +149,80 @@ private:
     bool tried_ = false;
 };
 
+/// @brief Shortest long edge a pyramid level may have, in pixels.
+///
+/// Below it a level is of no use to a preview, and the levels above would
+/// only cost memory.
+constexpr std::uint32_t smallestLevelEdge = 256;
+
+/// @brief Reductions of one source, each half the one before, built when asked for.
+///
+/// Level 0 is the source itself, whatever it is: the pyramid hangs off what
+/// the renderer was given, so that another kind of source (a provisional
+/// picture, say) is a different thing to reset to and nothing more. Used on the
+/// worker only.
+class SourcePyramid {
+public:
+    /// @brief Starts a pyramid on a source, dropping the levels of the previous one.
+    ///
+    /// Does nothing when @p source is the one already held.
+    void reset(const std::shared_ptr<const ImageBuffer>& source) {
+        if (source == source_) {
+            return;
+        }
+        source_ = source;
+        levels_.clear();
+        if (source_) {
+            levels_.push_back(source_);
+        }
+    }
+
+    /// @brief Gives the highest level that may exist for a source of a size.
+    ///
+    /// The last level whose long edge is still at least ::smallestLevelEdge,
+    /// and 0 for a source that is smaller already.
+    [[nodiscard]] static int highestLevel(ImageSize size) {
+        int level = 0;
+        while (true) {
+            const ImageSize next{(size.width + 1) / 2, (size.height + 1) / 2};
+            if (next == size || std::max(next.width, next.height) < smallestLevelEdge) {
+                return level;
+            }
+            size = next;
+            ++level;
+        }
+    }
+
+    /// @brief Gives a level, building it and those below it if need be.
+    /// @pre reset was given a source, and @p level is at most highestLevel of its size.
+    [[nodiscard]] const std::shared_ptr<const ImageBuffer>& level(int level) {
+        while (levels_.size() <= static_cast<std::size_t>(level)) {
+            levels_.push_back(std::make_shared<const ImageBuffer>(halved(*levels_.back())));
+        }
+        return levels_[static_cast<std::size_t>(level)];
+    }
+
+private:
+    /// Source the levels come from; keeps it alive and identifies it.
+    std::shared_ptr<const ImageBuffer> source_;
+    /// Levels built so far; the first is the source.
+    std::vector<std::shared_ptr<const ImageBuffer>> levels_;
+};
+
 /// @brief Renders one request, turning a failure into a result.
 PreviewResult render(std::uint64_t id, const DevelopState& state, QSize viewport,
                      qreal devicePixelRatio, const std::shared_ptr<const ImageBuffer>& source,
-                     GpuPreview* gpu) {
+                     SourcePyramid& pyramid, GpuPreview* gpu) {
     PreviewResult result{.request = id,
                          .image = std::nullopt,
                          .error = {},
                          .onGpu = false,
                          .deviceName = {},
-                         .fallbackReason = {}};
+                         .fallbackReason = {},
+                         .level = 0};
     // Nothing may escape the thread, or the process terminates.
     try {
+        pyramid.reset(source);
         if (!source) {
             result.error = "No photograph to render";
             if (gpu != nullptr) {
@@ -157,10 +231,15 @@ PreviewResult render(std::uint64_t id, const DevelopState& state, QSize viewport
             return result;
         }
         const RenderRequest request = previewRequest(viewport);
+        const int level =
+            std::min(pyramidLevelFor(source->size(), source->orientation(), state, request),
+                     SourcePyramid::highestLevel(source->size()));
+        const std::shared_ptr<const ImageBuffer>& reduced = pyramid.level(level);
+        result.level = level;
         std::string gpuFailure;
         if (gpu != nullptr && gpu->prepare(source)) {
             try {
-                QImage image = toDisplayImage(gpu->render(*source, state, request));
+                QImage image = toDisplayImage(gpu->render(level, *reduced, state, request));
                 image.setDevicePixelRatio(devicePixelRatio);
                 result.image = std::move(image);
                 result.onGpu = true;
@@ -175,7 +254,7 @@ PreviewResult render(std::uint64_t id, const DevelopState& state, QSize viewport
         // The CPU renders: no GPU was wanted, or it could not. It runs before
         // the GPU is given up for this photograph, since if it fails too the
         // request was at fault and the GPU is not.
-        QImage image = toDisplayImage(develop(*source, state, request));
+        QImage image = toDisplayImage(develop(*reduced, state, request));
         image.setDevicePixelRatio(devicePixelRatio);
         result.image = std::move(image);
         if (gpu != nullptr) {
@@ -230,6 +309,8 @@ void PreviewRenderer::run(std::stop_token stop) {
     if (device_ == Device::Auto) {
         gpu.emplace();
     }
+    // Host memory only: the GPU's copies of the levels are its own.
+    SourcePyramid pyramid;
     while (true) {
         std::optional<Pending> job;
         std::shared_ptr<const ImageBuffer> source;
@@ -246,7 +327,7 @@ void PreviewRenderer::run(std::stop_token stop) {
         // Without the lock: developing takes long, and the window must be able
         // to queue the next request meanwhile.
         PreviewResult result = render(job->id, job->state, job->viewport, job->devicePixelRatio,
-                                      source, gpu ? &*gpu : nullptr);
+                                      source, pyramid, gpu ? &*gpu : nullptr);
         try {
             onResult_(std::move(result));
         } catch (...) {

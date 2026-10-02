@@ -32,6 +32,9 @@ struct PreviewResult {
     /// Why the CPU rendered when the GPU was wanted, or empty when it was not
     /// (the GPU rendered, or the CPU was asked for).
     std::string fallbackReason;
+    /// Pyramid level the image was developed from: 0 is the full-resolution
+    /// photograph, and each level above halves both sides (ADR 020).
+    int level = 0;
 };
 
 /// @brief Worker thread that renders previews off the thread that asks for them.
@@ -40,6 +43,11 @@ struct PreviewResult {
 /// made it, and the GPU path renders here. Only the newest request is
 /// kept, so a burst of edits costs one render of the latest state, not one per
 /// edit. Uses no Qt signals, so it works without an event loop.
+///
+/// Develops from a reduced copy of the photograph when the viewport is much
+/// smaller than it: a pyramid of 2x box reductions, built lazily on the worker
+/// from whatever setSource was given, and the smallest level that still covers
+/// the viewport is used (ADR 020). The result says which level it was.
 ///
 /// Renders on the GPU when there is one: the first render creates the device,
 /// on the worker, and the decoded photograph is uploaded once per source rather

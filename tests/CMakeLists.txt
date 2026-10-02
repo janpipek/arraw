@@ -30,6 +30,7 @@ add_executable(arraw-tests
         test_GpuPlan.cpp
         test_ImageBuffer.cpp
         test_ImageExport.cpp
+        test_ImagePyramid.cpp
         test_Photo.cpp
         test_PreviewRenderer.cpp
         test_ProcessingPlan.cpp

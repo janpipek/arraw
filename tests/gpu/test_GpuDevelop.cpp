@@ -1,3 +1,4 @@
+#include "GpuContext.h"
 #include "GpuDevelop.h"
 #include "GpuTesting.h"
 
@@ -7,6 +8,7 @@
 #include <GeometrySettings.h>
 #include <ImageBuffer.h>
 #include <ImageImport.h>
+#include <ImagePyramid.h>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -208,4 +210,25 @@ TEST_CASE("An uploaded source of another device or another size is refused", "[g
         REQUIRE_THROWS_AS(developOnGpu(context, source, DeviceImage{}, DevelopState{}),
                           std::invalid_argument);
     }
+}
+
+TEST_CASE("Developing a halved source on the GPU matches the CPU", "[gpu][develop][pyramid]") {
+    // What the preview does with a pyramid level: the reduced copy is uploaded
+    // and developed like any source.
+    GpuContext& context = gpuContext();
+    const ImageBuffer reduced = halved(fixtureImage("testcard-61x41-srgb16.png"));
+    const DevelopState state{combined(WhiteBalanceMode::AsShot, {.straighten = 5.0})};
+    const RenderRequest request{.size = RenderRequest::FitInside{20, 20}};
+
+    const ImageBuffer expected = develop(reduced, state, request);
+    const DeviceImage uploaded = uploadSource(context, reduced);
+    const ImageBuffer actual =
+        developOnGpu(context, reduced, uploaded, state, Stage::Resize, request).readBack();
+
+    REQUIRE(actual.size() == expected.size());
+    const double colour = worstColourError(expected, actual);
+    const double alpha = worstAlphaError(expected, actual);
+    CAPTURE(colour, alpha, compareFloat(expected, actual, pointwiseAbsoluteFloor));
+    REQUIRE(colour <= endToEndTolerance);
+    REQUIRE(alpha <= endToEndAlphaTolerance);
 }

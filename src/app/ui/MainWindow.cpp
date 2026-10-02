@@ -207,9 +207,14 @@ void MainWindow::buildStatusBar() {
 }
 
 void MainWindow::showDevice(const PreviewResult& result) {
-    deviceLabel_->setText(
-        result.onGpu ? tr("Preview: GPU \u2014 %1").arg(QString::fromStdString(result.deviceName))
-                     : tr("Preview: CPU"));
+    QString text = result.onGpu
+                       ? tr("Preview: GPU \u2014 %1").arg(QString::fromStdString(result.deviceName))
+                       : tr("Preview: CPU");
+    if (result.level > 0) {
+        // A reduced copy of the photograph was developed: 1/2^level of its linear size.
+        text += tr(" \u00b7 1/%1").arg(1ULL << result.level);
+    }
+    deviceLabel_->setText(text);
     deviceLabel_->setToolTip(QString::fromStdString(result.fallbackReason));
 }
 

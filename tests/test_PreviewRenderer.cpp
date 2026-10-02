@@ -70,7 +70,80 @@ std::shared_ptr<const ImageBuffer> makeSource() {
         test::rainbow({256, 128}, PixelFormat::RgbaF32, workingEncoding));
 }
 
+/// A source far larger than a preview, as a photograph is.
+std::shared_ptr<const ImageBuffer> makeLargeSource() {
+    return std::make_shared<const ImageBuffer>(
+        test::rainbow({2048, 1024}, PixelFormat::RgbaF32, workingEncoding));
+}
+
 } // namespace
+
+TEST_CASE("A large source in a small viewport is developed from a reduced level",
+          "[app][preview][pyramid]") {
+    Collector collector;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
+    renderer.setSource(makeLargeSource());
+
+    const std::uint64_t id = renderer.request({}, {512, 512}, 1.0);
+
+    REQUIRE(collector.waitFor(id));
+    const auto results = collector.results();
+    REQUIRE(results.back().error.empty());
+    REQUIRE(results.back().image.has_value());
+    // 2048x1024 into 512x512 is 512x256, which level 2 is exactly.
+    REQUIRE(results.back().level == 2);
+    REQUIRE(results.back().image->width() <= 512);
+    REQUIRE(results.back().image->height() <= 512);
+}
+
+TEST_CASE("A viewport as large as the source is developed from the source itself",
+          "[app][preview][pyramid]") {
+    Collector collector;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
+    renderer.setSource(makeLargeSource());
+
+    const std::uint64_t id = renderer.request({}, {2048, 1024}, 1.0);
+
+    REQUIRE(collector.waitFor(id));
+    const auto results = collector.results();
+    REQUIRE(results.back().error.empty());
+    REQUIRE(results.back().level == 0);
+    REQUIRE(results.back().image->width() == 2048);
+}
+
+TEST_CASE("The pyramid stops before its levels become too small to be of use",
+          "[app][preview][pyramid]") {
+    Collector collector;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
+    renderer.setSource(makeLargeSource());
+
+    const std::uint64_t id = renderer.request({}, {16, 16}, 1.0);
+
+    REQUIRE(collector.waitFor(id));
+    const auto results = collector.results();
+    REQUIRE(results.back().error.empty());
+    // Level 3 is 256x128; the one below would have a long edge under 256.
+    REQUIRE(results.back().level == 3);
+    REQUIRE(results.back().image->width() <= 16);
+}
+
+TEST_CASE("A new source starts a new pyramid", "[app][preview][pyramid]") {
+    Collector collector;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
+    renderer.setSource(makeLargeSource());
+    const std::uint64_t first = renderer.request({}, {512, 512}, 1.0);
+    REQUIRE(collector.waitFor(first));
+
+    renderer.setSource(makeSource()); // 256x128: nothing to reduce.
+    const std::uint64_t second = renderer.request({}, {128, 128}, 1.0);
+
+    REQUIRE(collector.waitFor(second));
+    const auto results = collector.results();
+    REQUIRE(results.back().request == second);
+    REQUIRE(results.back().error.empty());
+    REQUIRE(results.back().level == 0);
+    REQUIRE(results.back().image->width() == 128);
+}
 
 TEST_CASE("A renderer told to use the CPU says so and needs no fallback reason", "[app][preview]") {
     Collector collector;

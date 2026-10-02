@@ -110,6 +110,8 @@ add_library(arraw STATIC
         src/core/DevelopState.cpp
         include/GeometrySettings.h
         include/ImageOrientation.h
+        include/ImagePyramid.h
+        src/core/ImagePyramid.cpp
         src/core/GeometryPlan.h
         src/core/GeometryPlan.cpp
         src/core/Resample.h
