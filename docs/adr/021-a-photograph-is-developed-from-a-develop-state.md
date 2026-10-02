@@ -41,8 +41,9 @@ use:**
 - `Photo` holds a `DevelopState`, reads it through `state()` and changes it
   with `with(DevelopState)`. There is no `settings()` shorthand, so there is
   one way to read it.
-- `EditSession::setState` replaces it. The coming edit protocol
-  (begin / update / commit) and its history store `DevelopState` values.
+- `EditSession::setState` replaces it. The edit protocol
+  (begin / update / commit) and its history store `DevelopState` values
+  ([ADR 022](022-an-edit-is-begun-updated-and-committed-as-one-step.md)).
 - `SidecarContents::state` is what a sidecar reads and writes, since a sidecar
   persists per-photograph edits too.
 - `develop`, `developOnDevice`, `developOnGpu` and `planFor` take a

@@ -134,6 +134,7 @@ add_library(arraw STATIC
         include/ImageExport.h
         include/EditSession.h
         include/Photo.h
+        src/core/EditSession.cpp
         src/core/Photo.cpp
         include/SettingDescriptors.h
         src/core/SettingDescriptors.cpp
