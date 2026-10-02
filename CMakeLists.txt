@@ -110,6 +110,8 @@ add_library(arraw STATIC
         include/ImageOrientation.h
         src/core/GeometryPlan.h
         src/core/GeometryPlan.cpp
+        src/core/Resample.h
+        src/core/Resample.cpp
         include/ToneSettings.h
         src/core/ToneSettings.cpp
         src/core/ColorSpaces.h
