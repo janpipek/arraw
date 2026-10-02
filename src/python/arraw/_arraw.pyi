@@ -425,6 +425,15 @@ class Severity(enum.Enum):
 
     ERROR = 2
 
+class ResizeFilter(enum.Enum):
+    """Resampling kernel for a develop to a size."""
+
+    LANCZOS3 = 0
+    """Windowed sinc of radius 3: sharp."""
+
+    BILINEAR = 1
+    """Tent kernel: soft, never rings."""
+
 class ImageFileFormat(enum.Enum):
     """File format an image can be saved as."""
 
@@ -577,15 +586,20 @@ def write_sidecar(photo: Photo) -> None:
     """
 
 @overload
-def develop(source: ImageBuffer, settings: DevelopSettings | None = None) -> ImageBuffer:
+def develop(source: ImageBuffer, settings: DevelopSettings | None = None, *, size: int | tuple[int, int] | float | None = None, filter: ResizeFilter = ResizeFilter.LANCZOS3, allow_upscale: bool = False) -> ImageBuffer:
     """
-    Develop a decoded buffer on the CPU; default settings leave the colour unchanged.
+    Develop a decoded buffer on the CPU; default settings leave the colour unchanged. `size` renders the cropped result smaller: an int is the long edge, a (width, height) tuple a box to fit inside, a float a scale factor. Sizes only shrink unless `allow_upscale`.
     """
 
 @overload
-def develop(source: Photo, settings: DevelopSettings | None = None) -> ImageBuffer:
+def develop(source: Photo, settings: DevelopSettings | None = None, *, size: int | tuple[int, int] | float | None = None, filter: ResizeFilter = ResizeFilter.LANCZOS3, allow_upscale: bool = False) -> ImageBuffer:
     """
-    Decode a photograph and develop it with its own settings unless `settings` is given.
+    Decode a photograph and develop it with its own settings unless `settings` is given; `size`, `filter` and `allow_upscale` are as for a decoded buffer.
+    """
+
+def resolved_size(size: int | tuple[int, int] | float, cropped: ImageSize, *, allow_upscale: bool = False) -> ImageSize:
+    """
+    Resolve a develop `size` against the size after the crop, as develop does.
     """
 
 def save(image: ImageBuffer, path: str | os.PathLike, *, format: ImageFileFormat | None = None, encoding: NamedEncoding = NamedEncoding.SRGB, bit_depth: int = 8, quality: int = 90, embed_profile: bool = True) -> None:

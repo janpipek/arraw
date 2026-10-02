@@ -89,6 +89,8 @@ std::string arraw::describe(const Diagnostic& diagnostic) {
                "; reading what it can";
     case Notice::SidecarUnreadable:
         return valueAt(diagnostic, 0) + "; opened with default settings and no marks";
+    case Notice::OptionIgnored:
+        return valueAt(diagnostic, 0) + " does nothing without " + valueAt(diagnostic, 1);
     case Notice::CropReset:
         return "the crop was drawn before " + valueAt(diagnostic, 0) +
                " changed, so automatic framing was used instead";

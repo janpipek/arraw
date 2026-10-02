@@ -16,3 +16,19 @@ def test_stub_declares_what_the_generator_skips():
     assert "with_" in members(tree, "DevelopSettings")
     names = {n.target.id for n in tree.body if isinstance(n, ast.AnnAssign)}
     assert "__version__" in names
+
+
+def test_stub_imports_only_real_modules():
+    # Stubgen reads a dotted default in a hand-written signature as a module
+    # path and emits a bogus `import ResizeFilter`.
+    tree = ast.parse(STUB.read_text())
+    imported = set()
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            imported.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module.split(".")[0])
+    classes = {n.name for n in tree.body if isinstance(n, ast.ClassDef)}
+    assert not imported & classes
+    allowed = {"collections", "enum", "os", "pathlib", "typing", "numpy", "types", "__future__"}
+    assert imported <= allowed, imported - allowed

@@ -3,6 +3,7 @@
 #include "Cli.h"
 #include "SettingCodec.h"
 
+#include <Develop.h>
 #include <DevelopSettings.h>
 #include <Diagnostics.h>
 #include <GeometrySettings.h>
@@ -14,6 +15,8 @@
 #include <iosfwd>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <variant>
 #include <vector>
 
 namespace arraw::cli {
@@ -23,6 +26,19 @@ namespace arraw::cli {
 /// @param degrees Finite clockwise angle relative to camera orientation, before flips.
 /// @throws std::invalid_argument if the angle is not finite.
 void setRotationAngle(GeometrySettings& geometry, double degrees);
+
+/// @brief Reads the value of `--resize`, whose three forms are told apart by shape (ADR 007).
+///
+/// `2048` is the long edge, `2048x1365` a box to fit inside, and `50%` a scale,
+/// which may be fractional (`12.5%`). A bare number is the long edge for good.
+/// Sides are whole numbers of at least 1 that fit 32 bits; a percentage is a
+/// plain decimal greater than 0.
+/// @param spec The text after `--resize`.
+/// @return A box (a long edge of N is N by N) or a scale factor (the percentage over 100).
+/// @throws std::invalid_argument with a message for the person at the keyboard if @p spec
+/// matches none of the forms.
+[[nodiscard]] std::variant<RenderRequest::FitInside, RenderRequest::Scale>
+parseResize(std::string_view spec);
 
 /// @brief Tell whether a row is a ranged float setting, which export offers as an option.
 ///

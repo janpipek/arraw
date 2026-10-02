@@ -8,7 +8,10 @@
 #include <PhotoMarks.h>
 #include <Sidecar.h>
 
+#include <cmath>
+#include <cstdint>
 #include <exception>
+#include <limits>
 #include <string>
 
 namespace arraw::python {
@@ -72,6 +75,72 @@ Photo photoWith(const Photo& photo, const std::optional<DevelopSettings>& settin
     return {photo.path(), photo.metadata(), result, marks};
 }
 
+/// @brief Reads one side of a requested size: a positive Python int that fits a 32-bit side.
+/// @throws nb::type_error if @p value is not an int, a bool included.
+/// @throws nb::value_error if it is not positive or is too large.
+std::uint32_t readSide(const nb::handle& value, const char* what) {
+    if (!PyLong_Check(value.ptr()) || PyBool_Check(value.ptr())) {
+        throw nb::type_error(what);
+    }
+    int overflow = 0;
+    const long long number = PyLong_AsLongLongAndOverflow(value.ptr(), &overflow);
+    if (overflow == 0 && number == -1 && PyErr_Occurred() != nullptr) {
+        throw nb::python_error();
+    }
+    if (overflow != 0 || number <= 0 ||
+        number > static_cast<long long>(std::numeric_limits<std::uint32_t>::max())) {
+        throw nb::value_error("size must be positive and fit in 32 bits");
+    }
+    return static_cast<std::uint32_t>(number);
+}
+
+/// @brief Builds a render request from the keywords of `develop`, strictly typed.
+///
+/// An int is the long edge, a pair of ints is a box to fit inside, and a float
+/// is a scale factor, the three forms of ADR 007's `--resize`. A bool is none of them.
+/// @param size The `size` keyword, or None for the photograph's own resolution.
+/// @param filter The `filter` keyword, which must be a ResizeFilter member.
+/// @param allowUpscale The `allow_upscale` keyword.
+/// @throws nb::type_error if @p size or @p filter has the wrong type.
+/// @throws nb::value_error if @p size is not positive, too large, or not finite.
+RenderRequest requestFrom(const nb::object& size, const nb::object& filter, bool allowUpscale) {
+    RenderRequest request;
+    // Not converted: an int is not a ResizeFilter (ADR 018).
+    ResizeFilter kernel{};
+    if (!nb::try_cast<ResizeFilter>(filter, kernel, false)) {
+        throw nb::type_error("filter must be an arraw.ResizeFilter");
+    }
+    request.filter = kernel;
+    request.upscale = allowUpscale ? Upscale::Allowed : Upscale::Never;
+    if (size.is_none()) {
+        return request;
+    }
+    PyObject* const object = size.ptr();
+    if (PyBool_Check(object)) {
+        throw nb::type_error("size must be an int, a (width, height) tuple or a float, not a bool");
+    }
+    if (PyLong_Check(object)) {
+        const std::uint32_t edge = readSide(size, "size must be an int");
+        request.size = RenderRequest::FitInside{edge, edge};
+    } else if (PyFloat_Check(object)) {
+        const double factor = PyFloat_AsDouble(object);
+        if (!std::isfinite(factor) || factor <= 0.0) {
+            throw nb::value_error("a size scale factor must be finite and greater than 0");
+        }
+        request.size = RenderRequest::Scale{factor};
+    } else if (PyTuple_Check(object) && PyTuple_GET_SIZE(object) == 2) {
+        const std::uint32_t width =
+            readSide(nb::handle(PyTuple_GET_ITEM(object, 0)), "size must be a pair of ints");
+        const std::uint32_t height =
+            readSide(nb::handle(PyTuple_GET_ITEM(object, 1)), "size must be a pair of ints");
+        request.size = RenderRequest::FitInside{width, height};
+    } else {
+        throw nb::type_error("size must be an int (long edge), a (width, height) tuple "
+                             "(fit inside) or a float (scale factor)");
+    }
+    return request;
+}
+
 } // namespace
 
 void bindPhoto(nb::module_& m) {
@@ -79,6 +148,10 @@ void bindPhoto(nb::module_& m) {
         .value("INFO", Severity::Info)
         .value("WARNING", Severity::Warning)
         .value("ERROR", Severity::Error);
+
+    nb::enum_<ResizeFilter>(m, "ResizeFilter", "Resampling kernel for a develop to a size.")
+        .value("LANCZOS3", ResizeFilter::Lanczos3, "Windowed sinc of radius 3: sharp.")
+        .value("BILINEAR", ResizeFilter::Bilinear, "Tent kernel: soft, never rings.");
 
     nb::enum_<ImageFileFormat>(m, "ImageFileFormat", "File format an image can be saved as.")
         .value("JPEG", ImageFileFormat::Jpeg)
@@ -169,26 +242,58 @@ void bindPhoto(nb::module_& m) {
         "write_sidecar", [](const Photo& photo) { withoutGil([&] { writeSidecar(photo); }); },
         "photo"_a, "Write a photograph's settings and marks into its sidecar, keeping the rest.");
 
+    const RenderRequest requestDefaults{};
     m.def(
         "develop",
-        [](const ImageBuffer& source, const std::optional<DevelopSettings>& settings) {
+        [](const ImageBuffer& source, const std::optional<DevelopSettings>& settings,
+           const nb::object& size, const nb::object& filter, bool allowUpscale) {
+            const RenderRequest request = requestFrom(size, filter, allowUpscale);
             return withoutGil(
-                [&] { return develop(source, settings.value_or(DevelopSettings{})); });
+                [&] { return develop(source, settings.value_or(DevelopSettings{}), request); });
         },
-        "source"_a, "settings"_a = nb::none(),
-        "Develop a decoded buffer on the CPU; default settings leave the colour unchanged.");
+        "source"_a, "settings"_a = nb::none(), nb::kw_only(), "size"_a = nb::none(),
+        "filter"_a = requestDefaults.filter,
+        "allow_upscale"_a = (requestDefaults.upscale == Upscale::Allowed),
+        nb::sig("def develop(source: ImageBuffer, settings: DevelopSettings | None = None, *, "
+                "size: int | tuple[int, int] | float | None = None, filter: ResizeFilter = "
+                "arraw._arraw.ResizeFilter.LANCZOS3, allow_upscale: bool = False) -> ImageBuffer"),
+        "Develop a decoded buffer on the CPU; default settings leave the colour unchanged. "
+        "`size` renders the cropped result smaller: an int is the long edge, a (width, height) "
+        "tuple a box to fit inside, a float a scale factor. Sizes only shrink unless "
+        "`allow_upscale`.");
 
     m.def(
         "develop",
-        [](const Photo& photo, const std::optional<DevelopSettings>& settings) {
+        [](const Photo& photo, const std::optional<DevelopSettings>& settings,
+           const nb::object& size, const nb::object& filter, bool allowUpscale) {
+            const RenderRequest request = requestFrom(size, filter, allowUpscale);
             // Reported once, by open(), as in Photo.load.
             return withoutGil([&] {
                 const ImageBuffer source = loadImage(photo.path());
-                return develop(source, settings.value_or(photo.settings()));
+                return develop(source, settings.value_or(photo.settings()), request);
             });
         },
-        "source"_a, "settings"_a = nb::none(),
-        "Decode a photograph and develop it with its own settings unless `settings` is given.");
+        "source"_a, "settings"_a = nb::none(), nb::kw_only(), "size"_a = nb::none(),
+        "filter"_a = requestDefaults.filter,
+        "allow_upscale"_a = (requestDefaults.upscale == Upscale::Allowed),
+        nb::sig("def develop(source: Photo, settings: DevelopSettings | None = None, *, size: int "
+                "| tuple[int, int] | float | None = None, filter: ResizeFilter = "
+                "arraw._arraw.ResizeFilter.LANCZOS3, allow_upscale: bool = False) -> ImageBuffer"),
+        "Decode a photograph and develop it with its own settings unless `settings` is given; "
+        "`size`, `filter` and `allow_upscale` are as for a decoded buffer.");
+
+    m.def(
+        "resolved_size",
+        [](const nb::object& size, const ImageSize& cropped, bool allowUpscale) {
+            const RenderRequest request =
+                requestFrom(size, nb::cast(ResizeFilter::Lanczos3), allowUpscale);
+            return resolvedSize(request, cropped);
+        },
+        "size"_a, "cropped"_a, nb::kw_only(),
+        "allow_upscale"_a = (requestDefaults.upscale == Upscale::Allowed),
+        nb::sig("def resolved_size(size: int | tuple[int, int] | float, cropped: ImageSize, *, "
+                "allow_upscale: bool = False) -> ImageSize"),
+        "Resolve a develop `size` against the size after the crop, as develop does.");
 
     const ExportOptions exportDefaults{};
     m.def(

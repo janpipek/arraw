@@ -6,6 +6,7 @@
 
 #include <QColor>
 #include <QImage>
+#include <QSize>
 #include <QString>
 
 #include <catch2/catch_test_macros.hpp>
@@ -108,7 +109,8 @@ CodeDifference compareCodes(const QImage& a, const QImage& b, double relative) {
 
 /// @brief Runs `arraw-cli export` of several inputs as JSON, in this process.
 Exported exportBatch(const std::string& device, const std::vector<std::filesystem::path>& inputs,
-                     const std::filesystem::path& directory) {
+                     const std::filesystem::path& directory,
+                     const std::vector<std::string>& extra = {}) {
     std::vector<std::string> arguments{"export"};
     for (const auto& input : inputs) {
         arguments.push_back(input.string());
@@ -119,6 +121,7 @@ Exported exportBatch(const std::string& device, const std::vector<std::filesyste
              "--log-format", "json", "--format", "png", "--overwrite"}) {
         arguments.push_back(argument);
     }
+    arguments.insert(arguments.end(), extra.begin(), extra.end());
     std::ostringstream out;
     std::ostringstream err;
     const int code = cli::run(arguments, out, err, [](cli::ApplicationKind) {});
@@ -149,12 +152,21 @@ TEST_CASE("Export on the GPU stays within rounding of the CPU", "[gpu][cli][expo
         {"linear-32x24-warmwb.dng", {"--rotate", "90", "--crop", "0.1,0.1,0.9,0.8"}},
         {"testcard-61x41-srgb8.png", {"--contrast", "20", "--rotate", "-7", "--flip-vertical"}},
         {"testcard-61x41-srgb8.png", {}},
+        {"testcard-61x41-srgb8.png", {"--resize", "30"}},
+        {"testcard-61x41-srgb8.png", {"--resize", "25%", "--resize-filter", "bilinear"}},
+        {"testcard-61x41-srgb8.png", {"--resize", "100x100", "--allow-upscale"}},
+        {"testcard-61x41-srgb8.png",
+         {"--rotate", "90", "--crop", "0.1,0.2,0.8,0.9", "--resize", "20x40"}},
+        {"linear-32x24-rotated.dng",
+         {"--exposure", "0.5", "--rotate", "9", "--crop", "0.1,0.1,0.9,0.8", "--resize", "17"}},
+        {"linear-32x24-warmwb.dng",
+         {"--resize", "70%", "--resize-filter", "bilinear", "--flip-horizontal"}},
     };
     for (const auto& [name, develop] : cases) {
         const std::string input = test::fixture(name).string();
         for (const int bitDepth : {8, 16}) {
             DYNAMIC_SECTION(name << " at " << bitDepth << " bits, " << develop.size() / 2
-                                 << " options") {
+                                 << " options, " << (develop.empty() ? "" : develop.back())) {
                 const Exported gpu = exportWith("gpu", input, bitDepth, develop);
                 const Exported cpu = exportWith("cpu", input, bitDepth, develop);
                 INFO(gpu.err);
@@ -208,6 +220,20 @@ TEST_CASE("A photograph too wide for the device falls back alone, in auto mode",
         const auto lineStart = result.err.rfind('\n', notice) + 1;
         REQUIRE_THAT(result.err.substr(lineStart, notice - lineStart),
                      ContainsSubstring("wide.png"));
+    }
+    SECTION("the input that falls back is resized on the CPU like the others") {
+        if (test::gpuTestBackend() == GpuBackend::OpenGL) {
+            SKIP("--gpu-backend opengl makes auto gpu (ADR 017); the gpu section covers it");
+        }
+        const Exported result = exportBatch("auto", {good, wide, good}, out, {"--resize", "30"});
+        INFO(result.err);
+        REQUIRE(result.code == cli::Success);
+        REQUIRE(occurrences(result.err, "\"notice\":\"gpu_fallback\"") == 1);
+        const QImage fallback(QString::fromStdString((out / "wide.png").string()));
+        REQUIRE(fallback.width() == 30);
+        REQUIRE(fallback.height() == 1);
+        const QImage onDevice(QString::fromStdString((out / "testcard-61x41-srgb8.png").string()));
+        REQUIRE(onDevice.size() == QSize(30, 20));
     }
     SECTION("gpu fails that input and exports the rest") {
         const Exported result = exportBatch("gpu", {good, wide, good}, out);
