@@ -1,5 +1,7 @@
 #pragma once
 
+#include "PreviewRenderer.h"
+
 #include <EditSession.h>
 #include <ImageBuffer.h>
 #include <Photo.h>
@@ -7,7 +9,9 @@
 #include <QMainWindow>
 #include <QTimer>
 
+#include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 
 class QAction;
@@ -56,32 +60,41 @@ private:
     /// @brief Shows the session's state in the panel and updates the actions.
     void refreshPanel();
 
-    /// @brief Reports a failed render, one message box at a time.
-    void renderNow();
-
-    /// @brief Renders the current photograph again, fitted to the view as it is now.
+    /// @brief Asks the renderer for the current photograph in its current state.
     ///
-    /// Keeps the picture it shows if rendering fails.
-    /// @throws std::exception if the photograph cannot be rendered.
-    void rerender();
+    /// Fitted to the view as it is now. Returns at once; the picture arrives
+    /// through showResult, and a newer request replaces one not yet started.
+    void requestRender();
+
+    /// @brief Shows a finished render, or reports why there is none.
+    ///
+    /// Ignores results of a previous photograph and ones older than what is
+    /// shown. Keeps the picture it shows if rendering failed, and reports a
+    /// failure only for the newest request, one message box at a time.
+    /// @param result Outcome delivered by the renderer.
+    void showResult(const PreviewResult& result);
 
     /// @brief Gives the size of the view in device pixels.
     [[nodiscard]] QSize viewportPixels() const;
 
-    /// @brief Renders a photograph and makes it the one being edited.
+    /// @brief Opens a photograph and makes it the one being edited.
     ///
-    /// Commits only once rendering has succeeded, so a failure leaves the
+    /// Decodes synchronously, before anything changes, so a failure leaves the
     /// window showing the previous photograph, session and pixels together.
+    /// Rendering is asynchronous: the previous picture stays until the first
+    /// render of this photograph arrives, and a failure of that render is
+    /// reported through showResult.
     /// @param photo Photograph to show.
-    /// @throws std::exception if the photograph cannot be decoded or rendered.
+    /// @throws std::exception if the photograph cannot be decoded.
     void showPhoto(Photo photo);
 
     /// @brief Photograph being edited, with its pixels.
     struct OpenPhoto {
         /// Edit session of the photograph.
         EditSession session;
-        /// Pixels, decoded once and developed again for each size.
-        ImageBuffer decoded;
+        /// Pixels, decoded once and developed again for each size; shared with
+        /// the renderer, which may still be using them after the window moved on.
+        std::shared_ptr<const ImageBuffer> decoded;
     };
 
     QLabel* imageView_ = nullptr;
@@ -89,10 +102,6 @@ private:
     QWidget* developDock_ = nullptr;
     QAction* undoAction_ = nullptr;
     QAction* redoAction_ = nullptr;
-
-    /// Zero-interval single-shot timer that coalesces a burst of edits into one
-    /// render per event-loop turn, with the latest state.
-    QTimer renderTimer_;
 
     /// Single-shot timer that fires once the view has stopped changing, so that
     /// dragging an edge renders once rather than per pixel.
@@ -103,6 +112,23 @@ private:
 
     /// Photograph being shown; empty until one is opened.
     std::optional<OpenPhoto> open_;
+
+    /// Identifier of the newest render requested.
+    std::uint64_t latestRequest_ = 0;
+
+    /// Identifier of the newest result shown or reported.
+    std::uint64_t latestShown_ = 0;
+
+    /// Identifier of the first request made for the photograph being edited;
+    /// results below it belong to a previous photograph.
+    std::uint64_t firstRequest_ = 0;
+
+    /// Worker that renders the preview.
+    ///
+    /// Declared last so that it is destroyed first: its destructor joins the
+    /// thread, after which no callback can run, so nothing it touches has
+    /// been destroyed yet.
+    PreviewRenderer previewRenderer_;
 };
 
 } // namespace arraw::app

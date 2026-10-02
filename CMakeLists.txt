@@ -287,6 +287,8 @@ add_library(arraw-app-core STATIC
         src/app/DebugDiagnostics.h
         src/app/DisplayImage.cpp
         src/app/DisplayImage.h
+        src/app/PreviewRenderer.cpp
+        src/app/PreviewRenderer.h
         src/app/SettingPresentation.cpp
         src/app/SettingPresentation.h)
 arraw_enable_warnings(arraw-app-core)

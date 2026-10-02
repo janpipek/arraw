@@ -19,6 +19,7 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QMetaObject>
 #include <QPixmap>
 #include <QScreen>
 #include <QScrollArea>
@@ -33,19 +34,22 @@
 
 namespace arraw::app {
 
-MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
+MainWindow::MainWindow(QWidget* parent)
+    : QMainWindow(parent), previewRenderer_([this](PreviewResult result) {
+          // On the worker thread. Dropped if the window is gone by the time the
+          // GUI thread would run it.
+          QMetaObject::invokeMethod(
+              this, [this, result = std::move(result)] { showResult(result); },
+              Qt::QueuedConnection);
+      }) {
     buildMenu();
     buildImageView();
     buildDevelopDock();
 
-    renderTimer_.setSingleShot(true);
-    renderTimer_.setInterval(0);
-    connect(&renderTimer_, &QTimer::timeout, this, &MainWindow::renderNow);
-
     // Long enough to coalesce the events of a drag, short enough to feel prompt.
     resizeTimer_.setSingleShot(true);
     resizeTimer_.setInterval(100);
-    connect(&resizeTimer_, &QTimer::timeout, this, &MainWindow::renderNow);
+    connect(&resizeTimer_, &QTimer::timeout, this, &MainWindow::requestRender);
 
     // No size to restore yet: two thirds of the screen, so the first photograph
     // is fitted to something worth looking at.
@@ -163,23 +167,7 @@ void MainWindow::refreshPanel() {
     developPanel_->showState(photo.state(), raw);
     undoAction_->setEnabled(open_->session.canUndo());
     redoAction_->setEnabled(open_->session.canRedo());
-    renderTimer_.start();
-}
-
-void MainWindow::renderNow() {
-    // The message box runs a nested event loop, in which further resizes
-    // can fire the timer again: one box at a time.
-    if (reportingFailure_) {
-        return;
-    }
-    // An exception must not leave a function Qt's event loop called.
-    try {
-        rerender();
-    } catch (const std::exception& error) {
-        reportingFailure_ = true;
-        QMessageBox::warning(this, tr("Cannot Render Photograph"), QString::fromUtf8(error.what()));
-        reportingFailure_ = false;
-    }
+    requestRender();
 }
 
 void MainWindow::buildImageView() {
@@ -226,31 +214,54 @@ QSize MainWindow::viewportPixels() const {
     return (imageView_->size() * imageView_->devicePixelRatioF()).expandedTo({1, 1});
 }
 
-void MainWindow::rerender() {
+void MainWindow::requestRender() {
     if (!open_) {
         return;
     }
-    const QImage image = renderForViewport(open_->decoded, open_->session.photo().state(),
-                                           viewportPixels(), imageView_->devicePixelRatioF());
-    imageView_->setPixmap(QPixmap::fromImage(image));
+    // Any pending resize is covered by this request.
+    resizeTimer_.stop();
+    latestRequest_ = previewRenderer_.request(open_->session.photo().state(), viewportPixels(),
+                                              imageView_->devicePixelRatioF());
+}
+
+void MainWindow::showResult(const PreviewResult& result) {
+    if (result.request < firstRequest_ || result.request <= latestShown_) {
+        return;
+    }
+    if (result.image) {
+        latestShown_ = result.request;
+        imageView_->setPixmap(QPixmap::fromImage(*result.image));
+        return;
+    }
+    // A newer request is on its way and may well succeed: say nothing yet.
+    if (result.request != latestRequest_) {
+        return;
+    }
+    latestShown_ = result.request;
+    // The message box runs a nested event loop, in which further results can
+    // arrive: one box at a time.
+    if (reportingFailure_) {
+        return;
+    }
+    reportingFailure_ = true;
+    QMessageBox::warning(this, tr("Cannot Render Photograph"),
+                         QString::fromStdString(result.error));
+    reportingFailure_ = false;
 }
 
 void MainWindow::showPhoto(Photo photo) {
     DebugDiagnostics log;
 
     // Everything that can throw, before anything changes.
-    ImageBuffer decoded = loadImage(photo.path(), log);
-    const QImage image = renderForViewport(decoded, photo.state(), viewportPixels(),
-                                           imageView_->devicePixelRatioF());
+    auto decoded = std::make_shared<const ImageBuffer>(loadImage(photo.path(), log));
 
     // Commit.
-    open_.emplace(OpenPhoto{EditSession(std::move(photo)), std::move(decoded)});
-    imageView_->setPixmap(QPixmap::fromImage(image));
+    open_.emplace(OpenPhoto{EditSession(std::move(photo)), decoded});
+    previewRenderer_.setSource(std::move(decoded));
+    // Results of the previous photograph are still on their way, or in progress.
+    firstRequest_ = latestRequest_ + 1;
     developDock_->setEnabled(true);
-    refreshPanel();
-    // The pixels are already rendered, and fitted to the current size.
-    resizeTimer_.stop();
-    renderTimer_.stop();
+    refreshPanel(); // Requests the first render.
 }
 
 } // namespace arraw::app

@@ -31,6 +31,7 @@ add_executable(arraw-tests
         test_ImageBuffer.cpp
         test_ImageExport.cpp
         test_Photo.cpp
+        test_PreviewRenderer.cpp
         test_ProcessingPlan.cpp
         test_RenderCheckpoint.cpp
         test_Resample.cpp
