@@ -182,6 +182,12 @@ and very small crops. Crop coordinates and aspect constraints remain continuous.
 There is no separate preview geometry path. Requested target-size resizing,
 including its antialiasing policy, remains outside this implementation.
 
+> **Note (2026-10-02).** Requested sizes are a separate separable pass after
+> this one, with its own antialiasing; see
+> [ADR 020](020-a-render-is-resized-after-geometry-in-one-separable-pass.md).
+> Geometry now also gives alpha exactly 1 where every contributing pixel is
+> opaque, on both backends.
+
 ## Consequences
 
 - Settings resolve once into geometry shared by sampling and coordinate mapping.

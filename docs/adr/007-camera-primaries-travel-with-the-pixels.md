@@ -180,6 +180,11 @@ already puts decoded and derived buffers in a processor's hands — and moves
 behind `Photo` and an editing session at the first sidecar. The signature is
 what a `render` member would have, so both promotions are mechanical.
 
+> **Note (2026-10-02).** `targetSize` became `RenderRequest::size`, a
+> `FitInside` box or a `Scale` factor, with a filter and a quality; `--resize`
+> is implemented as written here. See
+> [ADR 020](020-a-render-is-resized-after-geometry-in-one-separable-pass.md).
+
 **Development happens in `RgbaF32`, named by a constant.** Exposure pushes
 samples above 1, white-balance gains do the same, and the camera matrix
 produces genuine negatives for sensor colours outside Rec.2020 — none of which

@@ -1,6 +1,7 @@
 # Rendering to a requested size — execution plan
 
-Status: proposed.
+Status: implemented on branch `target-size`. The decisions that last are recorded in
+[ADR 020](../adr/020-a-render-is-resized-after-geometry-in-one-separable-pass.md).
 
 ## Goal
 
@@ -66,4 +67,3 @@ Not in scope:
 Execution follows the earlier plans: small workflows with Sonnet implementing
 and Opus reviewing, with a review between steps.
 
-For ADR 020 (step 4): opaque input must give exactly 1.0F alpha on every backend, since the CPU translucency key and the JPEG export's isOpaque both rely on it. The GPU geometry and resize passes therefore set alpha to 1 when every contributing pixel is opaque, rather than trusting float weight sums.
