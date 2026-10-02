@@ -62,7 +62,7 @@ DeviceImage resizeOnGpu(GpuContext& context, const DeviceImage& image, const Res
 } // namespace
 
 RenderCheckpoint developOnGpu(GpuContext& context, const ImageBuffer& source,
-                              const DevelopSettings& settings, Stage stopAfter,
+                              const DevelopState& state, Stage stopAfter,
                               const RenderRequest& request) {
     if (static_cast<std::size_t>(stopAfter) >= stageCount) {
         throw std::invalid_argument("A GPU development needs a recognised pass boundary");
@@ -70,7 +70,7 @@ RenderCheckpoint developOnGpu(GpuContext& context, const ImageBuffer& source,
     // Only a render that reaches the resize plans one: stopping earlier ignores
     // the request, whatever it says, and has no use for the opacity scan.
     ProcessingPlan plan =
-        planFor(source, settings, stopAfter == Stage::Resize ? request : RenderRequest{});
+        planFor(source, state, stopAfter == Stage::Resize ? request : RenderRequest{});
 
     const DeviceImage uploaded = source.format() == PixelFormat::RgbaF32
                                      ? context.upload(source)

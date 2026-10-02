@@ -16,6 +16,11 @@ names that as a thing to separate: photographic values are the model, and
 slider ranges, display precision and localised text are presentation derived
 from it.
 
+> **Note (2026-10-02).** `DevelopSettings` is now the global part of a
+> `DevelopState`, which is what a `Photo` holds and what renders take; per-photograph
+> lists such as masks and spots will sit beside it rather than in this table
+> ([ADR 021](021-a-photograph-is-developed-from-a-develop-state.md)).
+
 > **Note (2026-09-30).** The table exists (`include/SettingDescriptors.h`), and
 > the shape above is ahead of it in two ways. `DevelopSettings` is nested
 > (`tone`, `color`, `geometry` with its `crop`), so a row cannot hold a

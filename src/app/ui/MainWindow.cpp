@@ -127,7 +127,7 @@ void MainWindow::rerender() {
     if (!open_) {
         return;
     }
-    const QImage image = renderForViewport(open_->decoded, open_->session.photo().settings(),
+    const QImage image = renderForViewport(open_->decoded, open_->session.photo().state(),
                                            viewportPixels(), imageView_->devicePixelRatioF());
     imageView_->setPixmap(QPixmap::fromImage(image));
 }
@@ -137,7 +137,7 @@ void MainWindow::showPhoto(Photo photo) {
 
     // Everything that can throw, before anything changes.
     ImageBuffer decoded = loadImage(photo.path(), log);
-    const QImage image = renderForViewport(decoded, photo.settings(), viewportPixels(),
+    const QImage image = renderForViewport(decoded, photo.state(), viewportPixels(),
                                            imageView_->devicePixelRatioF());
 
     // Commit.

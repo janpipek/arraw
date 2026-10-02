@@ -23,16 +23,16 @@ TEST_CASE("A session starts from the photograph it is given", "[session]") {
     REQUIRE(session.photo() == photo);
 }
 
-TEST_CASE("Changing settings replaces them and keeps the photograph", "[session]") {
+TEST_CASE("Changing the state replaces it and keeps the photograph", "[session]") {
     const Photo original = testPhoto();
     EditSession session(original);
-    DevelopSettings brighter;
-    brighter.tone.exposure = 1.0F;
+    DevelopState brighter;
+    brighter.settings.tone.exposure = 1.0F;
 
-    session.setSettings(brighter);
+    session.setState(brighter);
 
-    REQUIRE(session.photo().settings() == brighter);
+    REQUIRE(session.photo().state() == brighter);
     REQUIRE(session.photo().path() == original.path());
     REQUIRE(session.photo().metadata() == original.metadata());
-    REQUIRE(original.settings() == DevelopSettings{});
+    REQUIRE(original.state() == DevelopState{});
 }

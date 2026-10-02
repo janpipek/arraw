@@ -1,6 +1,6 @@
 #pragma once
 
-#include <DevelopSettings.h>
+#include <DevelopState.h>
 #include <ImageBuffer.h>
 
 #include <cstdint>
@@ -76,7 +76,7 @@ struct RenderRequest {
 /// a factor is not finite and positive, or the result does not fit a 32-bit side.
 [[nodiscard]] ImageSize resolvedSize(const RenderRequest& request, ImageSize cropped);
 
-/// @brief Renders a decoded photograph through its develop settings.
+/// @brief Renders a decoded photograph through its develop state.
 ///
 /// The source may be in the working encoding, as anything Qt decoded is, or in
 /// a camera's own primaries, as a RAW is. Either way the result is in the
@@ -99,13 +99,13 @@ struct RenderRequest {
 /// leaves the pixels untouched.
 ///
 /// @param source Decoded photograph, in the working or a camera encoding.
-/// @param settings Photographic settings to apply.
+/// @param state How the photograph is developed.
 /// @param request What to render; the default is the whole photograph at its
 /// own resolution.
 /// @return A new buffer in the working encoding.
 /// @throws std::invalid_argument if @p source is in an encoding development
 /// cannot start from, if geometry is invalid, or if @p request is invalid.
-[[nodiscard]] ImageBuffer develop(const ImageBuffer& source, const DevelopSettings& settings,
+[[nodiscard]] ImageBuffer develop(const ImageBuffer& source, const DevelopState& state,
                                   const RenderRequest& request = {});
 
 } // namespace arraw

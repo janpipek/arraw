@@ -1163,7 +1163,7 @@ std::filesystem::path copyRaw(const test::TempDir& directory, const std::string&
 
 /// @brief Writes a sidecar holding @p settings beside a photograph.
 void sidecarWith(const std::filesystem::path& photo, const DevelopSettings& settings) {
-    writeSidecar(openPhoto(photo).with(settings));
+    writeSidecar(openPhoto(photo).with(DevelopState{settings}));
 }
 
 /// @brief Exports one file to PNG on the CPU with extra flags, and loads the result.
@@ -1745,7 +1745,9 @@ Photo editedPhoto(const std::filesystem::path& path) {
     DevelopSettings settings;
     settings.tone.exposure = 0.5F;
     settings.geometry.crop.rectangle = UprightCropRect{0.1, 0.2, 0.9, 0.8};
-    return openPhoto(path).with(settings).with(PhotoMarks{.rating = 4, .label = ColorLabel::Green});
+    return openPhoto(path)
+        .with(DevelopState{settings})
+        .with(PhotoMarks{.rating = 4, .label = ColorLabel::Green});
 }
 
 QJsonObject firstFile(const std::string& text) {
@@ -1791,7 +1793,7 @@ TEST_CASE("Info leaves out settings a render would not read", "[cli][info]") {
     DevelopSettings settings;
     settings.color.temperature = 4200.0F;
     settings.color.tint = 10.0F;
-    writeSidecar(openPhoto(raw).with(settings));
+    writeSidecar(openPhoto(raw).with(DevelopState{settings}));
 
     SECTION("not in Custom white balance") {
         const auto result = invoke({"info", raw.string()});
@@ -1801,7 +1803,7 @@ TEST_CASE("Info leaves out settings a render would not read", "[cli][info]") {
     SECTION("in Custom white balance, a tint of zero is listed") {
         settings.color.whiteBalance = WhiteBalanceMode::Custom;
         settings.color.tint = 0.0F;
-        writeSidecar(openPhoto(raw).with(settings));
+        writeSidecar(openPhoto(raw).with(DevelopState{settings}));
         const auto result = invoke({"info", raw.string()});
         REQUIRE_THAT(result.out, ContainsSubstring("    whiteBalance: "));
         REQUIRE_THAT(result.out, ContainsSubstring("    temperature: 4200\n"));
@@ -1812,7 +1814,7 @@ TEST_CASE("Info leaves out settings a render would not read", "[cli][info]") {
         const auto png = pngs.file("card.png");
         std::filesystem::copy_file(test::fixture(card), png);
         settings.color.whiteBalance = WhiteBalanceMode::Custom;
-        writeSidecar(openPhoto(png).with(settings));
+        writeSidecar(openPhoto(png).with(DevelopState{settings}));
         const auto result = invoke({"info", png.string()});
         REQUIRE_THAT(result.out, ContainsSubstring("whiteBalance"));
         REQUIRE_THAT(result.out, !ContainsSubstring("temperature"));
@@ -1827,7 +1829,7 @@ TEST_CASE("Info lists a crop aspect in each of its forms", "[cli][info]") {
 
     SECTION("a ratio") {
         settings.geometry.crop.aspect = CropRatio{1.5};
-        writeSidecar(openPhoto(raw).with(settings));
+        writeSidecar(openPhoto(raw).with(DevelopState{settings}));
         REQUIRE_THAT(invoke({"info", raw.string()}).out,
                      ContainsSubstring("    cropAspect: 1.5\n"));
         const auto json = firstFile(invoke({"info", "--json", raw.string()}).out);
@@ -1840,7 +1842,7 @@ TEST_CASE("Info lists a crop aspect in each of its forms", "[cli][info]") {
     }
     SECTION("original") {
         settings.geometry.crop.aspect = OriginalCropAspect{};
-        writeSidecar(openPhoto(raw).with(settings));
+        writeSidecar(openPhoto(raw).with(DevelopState{settings}));
         REQUIRE_THAT(invoke({"info", raw.string()}).out,
                      ContainsSubstring("    cropAspect: original\n"));
     }

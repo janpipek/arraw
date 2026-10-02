@@ -291,7 +291,7 @@ void writeText(std::ostream& out, const FileReport& report, bool all) {
         }
     }
     const auto listed =
-        listedSettings(withoutUnusedSettings(photo.settings(), isRaw(metadata)), all);
+        listedSettings(withoutUnusedSettings(photo.state().settings, isRaw(metadata)), all);
     if (listed.empty()) {
         out << "  develop settings: defaults\n";
         return;
@@ -330,7 +330,7 @@ std::string jsonOfReport(const FileReport& report, bool all) {
     text += "], \"settings\": {";
     bool first = true;
     for (const auto& [descriptor, value] :
-         listedSettings(withoutUnusedSettings(photo.settings(), isRaw(metadata)), all)) {
+         listedSettings(withoutUnusedSettings(photo.state().settings, isRaw(metadata)), all)) {
         text += first ? "" : ", ";
         text += jsonString(descriptor->key) + ": " + encodedToJson(value);
         first = false;
@@ -374,9 +374,8 @@ FileReport open(const InfoRequest& request, const std::filesystem::path& input,
         throw std::runtime_error("its sidecar could not be read; fix it, or pass --no-sidecar to "
                                  "show the file without it");
     }
-    FileReport report{contents
-                          ? Photo(input, std::move(metadata), contents->settings, contents->marks)
-                          : Photo(input, std::move(metadata)),
+    FileReport report{contents ? Photo(input, std::move(metadata), contents->state, contents->marks)
+                               : Photo(input, std::move(metadata)),
                       sidecar,
                       true,
                       std::nullopt,

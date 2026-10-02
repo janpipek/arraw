@@ -1,6 +1,6 @@
 #pragma once
 
-#include <DevelopSettings.h>
+#include <DevelopState.h>
 #include <ImageBuffer.h>
 
 #include <QImage>
@@ -25,14 +25,14 @@ namespace arraw::app {
 /// fitted inside the viewport and never enlarged, so a small one shows at its
 /// own size (ADR 007).
 /// @param decoded Decoded photograph, in the working or a camera encoding.
-/// @param settings Photographic settings to apply.
+/// @param state How the photograph is developed.
 /// @param viewport Size of the area to fit inside, in device pixels.
 /// @param devicePixelRatio Device pixels per logical pixel of the screen; set on
 /// the result so that it covers the viewport once drawn.
 /// @return An 8-bit sRGB image no larger than @p viewport, owning its pixels.
 /// @throws std::invalid_argument if the viewport is empty, or as ::arraw::develop
 /// and toDisplayImage do.
-[[nodiscard]] QImage renderForViewport(const ImageBuffer& decoded, const DevelopSettings& settings,
+[[nodiscard]] QImage renderForViewport(const ImageBuffer& decoded, const DevelopState& state,
                                        QSize viewport, qreal devicePixelRatio);
 
 } // namespace arraw::app

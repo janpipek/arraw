@@ -51,8 +51,9 @@ double worstAlphaError(const ImageBuffer& expected, const ImageBuffer& actual) {
 
 /// @brief Requires the device's development of a source to match the CPU's.
 void requireMatchesCpu(const ImageBuffer& source, const DevelopSettings& settings) {
-    const ImageBuffer expected = develop(source, settings);
-    const ImageBuffer actual = developOnGpu(gpuContext(), source, settings).readBack();
+    const ImageBuffer expected = develop(source, DevelopState{settings});
+    const ImageBuffer actual =
+        developOnGpu(gpuContext(), source, DevelopState{settings}).readBack();
     REQUIRE(actual.format() == PixelFormat::RgbaF32);
     REQUIRE(actual.size() == expected.size());
     const double colour = worstColourError(expected, actual);

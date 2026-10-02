@@ -4,7 +4,7 @@
 Photo\.__suffix__:
     def with_(
         self,
-        settings: DevelopSettings | None = None,
+        state: DevelopState | None = None,
         *,
         marks: PhotoMarks | None = None,
         rating: int = ...,
@@ -12,7 +12,7 @@ Photo\.__suffix__:
         **kwargs: Any,
     ) -> Photo:
         """
-        Return a photograph with `settings` (and `marks`) replacing the current ones wholesale, then flat snake_case keywords applied, e.g. exposure=0.7. `rating` and `label` change the marks instead (label=None clears it).
+        Return a photograph with `state` (and `marks`) replacing the current ones wholesale, then flat snake_case keywords applied, e.g. exposure=0.7, which edit the settings of the state. `rating` and `label` change the marks instead (label=None clears it).
         """
 
 DevelopSettings\.__suffix__:

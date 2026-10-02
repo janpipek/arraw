@@ -12,6 +12,7 @@
 
 #include <Develop.h>
 #include <DevelopSettings.h>
+#include <DevelopState.h>
 #include <Diagnostics.h>
 #include <ImageExport.h>
 #include <ImageImport.h>
@@ -729,9 +730,8 @@ std::unique_ptr<GpuContext> createContext(const ExportRequest& request, std::str
 /// Every device image, the checkpoint included, is gone before this returns,
 /// so the context can be destroyed whenever its owner likes.
 ImageBuffer developOnDevice(GpuContext& context, const ImageBuffer& source,
-                            const DevelopSettings& settings, const RenderRequest& render) {
-    const RenderCheckpoint checkpoint =
-        developOnGpu(context, source, settings, Stage::Resize, render);
+                            const DevelopState& state, const RenderRequest& render) {
+    const RenderCheckpoint checkpoint = developOnGpu(context, source, state, Stage::Resize, render);
     return checkpoint.readBack();
 }
 
@@ -810,9 +810,11 @@ int exportAll(const ExportRequest& request, std::ostream& err) {
                                          "applied; fix the sidecar, or pass --no-sidecar to "
                                          "export without it");
             }
-            const Photo photo = opened.with(cli::applyEdits(
-                opened.settings(), request.edits, log, input,
-                !std::holds_alternative<NamedEncoding>(opened.metadata().encoding)));
+            DevelopState edited = opened.state();
+            edited.settings =
+                cli::applyEdits(std::move(edited.settings), request.edits, log, input,
+                                !std::holds_alternative<NamedEncoding>(opened.metadata().encoding));
+            const Photo photo = opened.with(std::move(edited));
             // Decoded once, before the device is involved: a file that cannot be
             // read is the input's failure, whichever device would have developed it.
             const ImageBuffer source = loadImage(input);
@@ -821,11 +823,11 @@ int exportAll(const ExportRequest& request, std::ostream& err) {
             // device is then blamed for is developOnGpu and readBack alone, so
             // any exception from them, an image larger than the device's
             // textures included, means "the GPU could not".
-            (void)planFor(source, photo.settings(), request.render);
+            (void)planFor(source, photo.state(), request.render);
             std::optional<ImageBuffer> developed;
             if (context) {
                 try {
-                    developed = developOnDevice(*context, source, photo.settings(), request.render);
+                    developed = developOnDevice(*context, source, photo.state(), request.render);
                 } catch (const std::exception& failure) {
                     if (request.device.kind == cli::DeviceKind::Gpu) {
                         throw;
@@ -846,7 +848,7 @@ int exportAll(const ExportRequest& request, std::ostream& err) {
                 }
             }
             if (!developed) {
-                developed = develop(source, photo.settings(), request.render);
+                developed = develop(source, photo.state(), request.render);
             }
             exportImage(*developed, destination, request.options);
             log.record({.notice = Notice::Exported,

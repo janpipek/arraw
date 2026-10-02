@@ -501,13 +501,32 @@ class ForeignNamespace:
     def replace(self, **kwargs) -> ForeignNamespace:
         """Return a copy with the given attributes replaced."""
 
-class SidecarContents:
-    """What an XMP sidecar holds, and which other tools wrote in it."""
+class DevelopState:
+    """
+    Everything that says how one photograph is developed: its global settings now, per-image edits later.
+    """
 
-    def __init__(self, *, settings: DevelopSettings | None = None, marks: PhotoMarks | None = None, creator_tool: str | None = None, others: Sequence[ForeignNamespace] | None = None) -> None: ...
+    def __init__(self, *, settings: DevelopSettings | None = None) -> None: ...
 
     @property
     def settings(self) -> DevelopSettings: ...
+
+    def __eq__(self, arg: DevelopState, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> DevelopState:
+        """Return a copy with the given attributes replaced."""
+
+class SidecarContents:
+    """What an XMP sidecar holds, and which other tools wrote in it."""
+
+    def __init__(self, *, state: DevelopState | None = None, marks: PhotoMarks | None = None, creator_tool: str | None = None, others: Sequence[ForeignNamespace] | None = None) -> None: ...
+
+    @property
+    def state(self) -> DevelopState: ...
 
     @property
     def marks(self) -> PhotoMarks: ...
@@ -542,7 +561,7 @@ class Photo:
     def metadata(self) -> ImageMetadata: ...
 
     @property
-    def settings(self) -> DevelopSettings: ...
+    def state(self) -> DevelopState: ...
 
     @property
     def marks(self) -> PhotoMarks: ...
@@ -558,7 +577,7 @@ class Photo:
 
     def with_(
         self,
-        settings: DevelopSettings | None = None,
+        state: DevelopState | None = None,
         *,
         marks: PhotoMarks | None = None,
         rating: int = ...,
@@ -566,12 +585,12 @@ class Photo:
         **kwargs: Any,
     ) -> Photo:
         """
-        Return a photograph with `settings` (and `marks`) replacing the current ones wholesale, then flat snake_case keywords applied, e.g. exposure=0.7. `rating` and `label` change the marks instead (label=None clears it).
+        Return a photograph with `state` (and `marks`) replacing the current ones wholesale, then flat snake_case keywords applied, e.g. exposure=0.7, which edit the settings of the state. `rating` and `label` change the marks instead (label=None clears it).
         """
 
 def open(path: str | os.PathLike, *, sidecar: bool = True) -> Photo:
     """
-    Open a photograph; reads its metadata, not its pixels. Its XMP sidecar supplies the settings and marks unless sidecar=False. A sidecar that cannot be read is logged as an error on the 'arraw' logger, not raised, and the defaults are used.
+    Open a photograph; reads its metadata, not its pixels. Its XMP sidecar supplies the state and marks unless sidecar=False. A sidecar that cannot be read is logged as an error on the 'arraw' logger, not raised, and the defaults are used.
     """
 
 def sidecar_path(path: str | os.PathLike) -> pathlib.Path:
@@ -582,19 +601,19 @@ def read_sidecar(path: str | os.PathLike) -> SidecarContents | None:
 
 def write_sidecar(photo: Photo) -> None:
     """
-    Write a photograph's settings and marks into its sidecar, keeping the rest.
+    Write a photograph's state and marks into its sidecar, keeping the rest.
     """
 
 @overload
-def develop(source: ImageBuffer, settings: DevelopSettings | None = None, *, size: int | tuple[int, int] | float | None = None, filter: ResizeFilter = ResizeFilter.LANCZOS3, allow_upscale: bool = False) -> ImageBuffer:
+def develop(source: ImageBuffer, state: DevelopState | None = None, *, size: int | tuple[int, int] | float | None = None, filter: ResizeFilter = ResizeFilter.LANCZOS3, allow_upscale: bool = False) -> ImageBuffer:
     """
-    Develop a decoded buffer on the CPU; default settings leave the colour unchanged. `size` renders the cropped result smaller: an int is the long edge, a (width, height) tuple a box to fit inside, a float a scale factor. Sizes only shrink unless `allow_upscale`.
+    Develop a decoded buffer on the CPU; default state leaves the colour unchanged. `size` renders the cropped result smaller: an int is the long edge, a (width, height) tuple a box to fit inside, a float a scale factor. Sizes only shrink unless `allow_upscale`.
     """
 
 @overload
-def develop(source: Photo, settings: DevelopSettings | None = None, *, size: int | tuple[int, int] | float | None = None, filter: ResizeFilter = ResizeFilter.LANCZOS3, allow_upscale: bool = False) -> ImageBuffer:
+def develop(source: Photo, state: DevelopState | None = None, *, size: int | tuple[int, int] | float | None = None, filter: ResizeFilter = ResizeFilter.LANCZOS3, allow_upscale: bool = False) -> ImageBuffer:
     """
-    Decode a photograph and develop it with its own settings unless `settings` is given; `size`, `filter` and `allow_upscale` are as for a decoded buffer.
+    Decode a photograph and develop it with its own state unless `state` is given; `size`, `filter` and `allow_upscale` are as for a decoded buffer.
     """
 
 def resolved_size(size: int | tuple[int, int] | float, cropped: ImageSize, *, allow_upscale: bool = False) -> ImageSize:

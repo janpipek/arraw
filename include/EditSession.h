@@ -27,9 +27,9 @@ public:
     }
 
     /// @brief Replaces how the photograph is developed.
-    /// @param settings Settings the document carries from now on.
-    void setSettings(DevelopSettings settings) {
-        photo_ = photo_.with(settings);
+    /// @param state State the document carries from now on.
+    void setState(DevelopState state) {
+        photo_ = photo_.with(std::move(state));
     }
 
 private:

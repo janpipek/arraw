@@ -55,10 +55,10 @@ def photo(dng):
 
 @pytest.mark.parametrize("descriptor", arraw.setting_descriptors(), ids=lambda d: d.name)
 def test_every_descriptor_name_lands_in_its_field(photo, descriptor):
-    default = leaves(photo.settings)
+    default = leaves(photo.state.settings)
     value = sample(descriptor)
     changed = photo.with_(**{descriptor.name: value})
-    after = leaves(changed.settings)
+    after = leaves(changed.state.settings)
     assert same(after[descriptor.name], value)
     assert after[descriptor.name] != default[descriptor.name]
     for name in default:
@@ -68,7 +68,7 @@ def test_every_descriptor_name_lands_in_its_field(photo, descriptor):
 
 def test_all_descriptors_at_once(photo):
     kwargs = {d.name: sample(d) for d in arraw.setting_descriptors()}
-    after = leaves(photo.with_(**kwargs).settings)
+    after = leaves(photo.with_(**kwargs).state.settings)
     for name, value in kwargs.items():
         assert same(after[name], value), name
 
@@ -93,7 +93,7 @@ def test_wrong_value_type_is_type_error(photo, key, value):
 
 
 def test_int_is_accepted_for_a_number(photo):
-    assert photo.with_(exposure=1).settings.tone.exposure == 1.0
+    assert photo.with_(exposure=1).state.settings.tone.exposure == 1.0
 
 
 @pytest.mark.parametrize(
@@ -122,9 +122,9 @@ def test_range_edges_are_accepted(photo):
 
 
 def test_original_is_unchanged(photo):
-    before = photo.settings
+    before = photo.state.settings
     changed = photo.with_(exposure=1.0, crop_aspect=arraw.OriginalCropAspect())
-    assert photo.settings == before
+    assert photo.state.settings == before
     assert photo == arraw.open(photo.path)
     assert changed != photo
     assert changed.path == photo.path
@@ -138,15 +138,15 @@ def test_with_nothing_is_equal(photo):
 def test_none_clears_optional_values(photo):
     custom = photo.with_(white_balance=arraw.WhiteBalanceMode.CUSTOM, temperature=5200,
                          tint=10, crop_rectangle=arraw.UprightCropRect(0.1, 0.1, 0.9, 0.9))
-    assert custom.settings.color.temperature == pytest.approx(5200)
-    assert custom.settings.color.tint == pytest.approx(10)
-    assert custom.settings.geometry.crop.rectangle is not None
+    assert custom.state.settings.color.temperature == pytest.approx(5200)
+    assert custom.state.settings.color.tint == pytest.approx(10)
+    assert custom.state.settings.geometry.crop.rectangle is not None
     cleared = custom.with_(temperature=None, tint=None, crop_rectangle=None)
-    assert cleared.settings.color.temperature is None
-    assert cleared.settings.color.tint is None
-    assert cleared.settings.geometry.crop.rectangle is None
+    assert cleared.state.settings.color.temperature is None
+    assert cleared.state.settings.color.tint is None
+    assert cleared.state.settings.geometry.crop.rectangle is None
     # Only the cleared fields changed.
-    assert cleared.settings.color.white_balance == arraw.WhiteBalanceMode.CUSTOM
+    assert cleared.state.settings.color.white_balance == arraw.WhiteBalanceMode.CUSTOM
 
 
 def test_none_for_crop_aspect_is_rejected(photo):
@@ -154,26 +154,41 @@ def test_none_for_crop_aspect_is_rejected(photo):
         photo.with_(crop_aspect=None)
 
 
-def test_settings_then_flat_keys(photo):
-    base = arraw.DevelopSettings(tone=arraw.ToneSettings(exposure=1.0, contrast=20.0))
-    result = photo.with_(settings=base, exposure=2.0)
-    assert result.settings.tone.exposure == pytest.approx(2.0)
-    assert result.settings.tone.contrast == pytest.approx(20.0)
+def test_state_then_flat_keys(photo):
+    base = arraw.DevelopState(
+        settings=arraw.DevelopSettings(tone=arraw.ToneSettings(exposure=1.0, contrast=20.0)))
+    result = photo.with_(state=base, exposure=2.0)
+    assert result.state.settings.tone.exposure == pytest.approx(2.0)
+    assert result.state.settings.tone.contrast == pytest.approx(20.0)
 
 
-def test_settings_replacement_alone(photo):
-    base = arraw.DevelopSettings(tone=arraw.ToneSettings(shadows=30.0))
-    assert photo.with_(settings=base).settings == base
-    assert photo.with_(base).settings == base
+def test_state_replacement_alone(photo):
+    base = arraw.DevelopState(
+        settings=arraw.DevelopSettings(tone=arraw.ToneSettings(shadows=30.0)))
+    assert photo.with_(state=base).state == base
+    assert photo.with_(base).state == base
 
 
-def test_settings_replacement_is_validated(photo):
-    bad = arraw.DevelopSettings(tone=arraw.ToneSettings(exposure=99.0))
+def test_state_replacement_keeps_path_and_marks(photo):
+    marked = photo.with_(rating=3)
+    replaced = marked.with_(state=arraw.DevelopState(
+        settings=arraw.DevelopSettings(tone=arraw.ToneSettings(shadows=30.0))))
+    assert replaced.path == marked.path
+    assert replaced.marks == marked.marks
+
+
+def test_state_replacement_is_validated(photo):
+    bad = arraw.DevelopState(
+        settings=arraw.DevelopSettings(tone=arraw.ToneSettings(exposure=99.0)))
     with pytest.raises(ValueError):
-        photo.with_(settings=bad)
+        photo.with_(state=bad)
 
 
-def test_photo_equality_follows_settings(photo):
+def test_photo_has_no_settings_attribute(photo):
+    assert not hasattr(photo, "settings")
+
+
+def test_photo_equality_follows_state(photo):
     assert photo.with_(exposure=0.5) == photo.with_(exposure=0.5)
     assert photo.with_(exposure=0.5) != photo.with_(exposure=0.6)
 

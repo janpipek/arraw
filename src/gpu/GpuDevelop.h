@@ -3,7 +3,7 @@
 #include "GpuContext.h"
 
 #include <Develop.h>
-#include <DevelopSettings.h>
+#include <DevelopState.h>
 #include <ImageBuffer.h>
 #include <RenderCheckpoint.h>
 
@@ -24,7 +24,7 @@ namespace arraw {
 /// GPU (ADR 015).
 /// @param context Device to develop on; used from its owner thread only.
 /// @param source Decoded photograph, in the working or a camera encoding.
-/// @param settings Photographic settings to apply.
+/// @param state How the photograph is developed.
 /// @param stopAfter Last boundary to run: ::arraw::Stage::Pointwise leaves a
 /// result of the source's size with no geometry applied, and
 /// ::arraw::Stage::Geometry one with no resize, whatever @p request asks.
@@ -41,7 +41,7 @@ namespace arraw {
 /// @throws std::logic_error if called from a thread other than the context's owner.
 /// @throws std::runtime_error if the device cannot do the work or fails.
 [[nodiscard]] RenderCheckpoint developOnGpu(GpuContext& context, const ImageBuffer& source,
-                                            const DevelopSettings& settings,
+                                            const DevelopState& state,
                                             Stage stopAfter = Stage::Resize,
                                             const RenderRequest& request = {});
 

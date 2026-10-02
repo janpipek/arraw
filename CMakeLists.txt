@@ -106,6 +106,8 @@ add_library(arraw STATIC
         include/Diagnostics.h
         include/WhiteBalance.h
         include/DevelopSettings.h
+        include/DevelopState.h
+        src/core/DevelopState.cpp
         include/GeometrySettings.h
         include/ImageOrientation.h
         src/core/GeometryPlan.h

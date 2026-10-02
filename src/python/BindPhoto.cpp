@@ -1,6 +1,7 @@
 #include "PyBindings.h"
 
 #include <Develop.h>
+#include <DevelopState.h>
 #include <Diagnostics.h>
 #include <ImageExport.h>
 #include <ImageImport.h>
@@ -46,19 +47,19 @@ namespace {
 /// @brief Formats a photograph for repr.
 std::string photoRepr(const Photo& photo) {
     return "Photo(path=" + reprValue(photo.path()) + ", metadata=" + reprValue(photo.metadata()) +
-           ", settings=" + reprValue(photo.settings()) + ", marks=" + reprValue(photo.marks()) +
-           ")";
+           ", state=" + reprValue(photo.state()) + ", marks=" + reprValue(photo.marks()) + ")";
 }
 
-/// @brief Derives a photograph with new settings and marks, then applies flat keywords.
+/// @brief Derives a photograph with a new state and marks, then applies flat keywords.
 ///
+/// `state` replaces the develop state wholesale, and the flat keywords then edit its settings.
 /// `marks` replaces the marks wholesale. `rating` and `label` then change them,
 /// where `label=None` clears the label; every other keyword is a develop
 /// setting. Those two names are reserved: a develop setting must never be
 /// called `rating` or `label`, or it would be taken for a mark.
-Photo photoWith(const Photo& photo, const std::optional<DevelopSettings>& settings,
+Photo photoWith(const Photo& photo, const std::optional<DevelopState>& newState,
                 const std::optional<PhotoMarks>& newMarks, const nb::kwargs& keywords) {
-    DevelopSettings result = settings.value_or(photo.settings());
+    DevelopState result = newState.value_or(photo.state());
     PhotoMarks marks = newMarks.value_or(photo.marks());
     const nb::kwargs flat = nb::steal<nb::kwargs>(PyDict_New());
     for (auto [key, value] : keywords) {
@@ -71,7 +72,7 @@ Photo photoWith(const Photo& photo, const std::optional<DevelopSettings>& settin
             flat[key] = value;
         }
     }
-    applyFlatSettings(result, flat);
+    applyFlatSettings(result.settings, flat);
     return {photo.path(), photo.metadata(), result, marks};
 }
 
@@ -176,9 +177,15 @@ void bindPhoto(nb::module_& m) {
         field("uri", &ForeignNamespace::uri), field("prefix", &ForeignNamespace::prefix),
         field("properties", &ForeignNamespace::properties));
 
+    bindFrozen<DevelopState>(
+        m, "DevelopState",
+        "Everything that says how one photograph is developed: its global settings now, per-image "
+        "edits later.",
+        field("settings", &DevelopState::settings));
+
     bindFrozen<SidecarContents>(
         m, "SidecarContents", "What an XMP sidecar holds, and which other tools wrote in it.",
-        field("settings", &SidecarContents::settings), field("marks", &SidecarContents::marks),
+        field("state", &SidecarContents::state), field("marks", &SidecarContents::marks),
         field("creator_tool", &SidecarContents::creatorTool),
         field("others", &SidecarContents::others));
 
@@ -188,12 +195,13 @@ void bindPhoto(nb::module_& m) {
     nb::class_<Photo>(m, "Photo", "One photograph as a document: a file and how it is developed.")
         .def_prop_ro("path", &Photo::path)
         .def_prop_ro("metadata", &Photo::metadata)
-        .def_prop_ro("settings", &Photo::settings)
+        .def_prop_ro("state", &Photo::state)
         .def_prop_ro("marks", &Photo::marks)
-        .def("with_", &photoWith, "settings"_a = nb::none(), nb::kw_only(), "marks"_a = nb::none(),
+        .def("with_", &photoWith, "state"_a = nb::none(), nb::kw_only(), "marks"_a = nb::none(),
              "kwargs"_a,
-             "Return a photograph with `settings` (and `marks`) replacing the current ones "
-             "wholesale, then flat snake_case keywords applied, e.g. exposure=0.7. `rating` and "
+             "Return a photograph with `state` (and `marks`) replacing the current ones "
+             "wholesale, then flat snake_case keywords applied, e.g. exposure=0.7, which edit the "
+             "settings of the state. `rating` and "
              "`label` change the marks instead (label=None clears it).")
         .def(
             "load",
@@ -220,7 +228,7 @@ void bindPhoto(nb::module_& m) {
         },
         "path"_a, nb::kw_only(), "sidecar"_a = true,
         "Open a photograph; reads its metadata, not its pixels. Its XMP sidecar supplies the "
-        "settings and marks unless sidecar=False. A sidecar that cannot be read is logged as an "
+        "state and marks unless sidecar=False. A sidecar that cannot be read is logged as an "
         "error on the 'arraw' logger, not raised, and the defaults are used.");
 
     m.def(
@@ -240,46 +248,46 @@ void bindPhoto(nb::module_& m) {
 
     m.def(
         "write_sidecar", [](const Photo& photo) { withoutGil([&] { writeSidecar(photo); }); },
-        "photo"_a, "Write a photograph's settings and marks into its sidecar, keeping the rest.");
+        "photo"_a, "Write a photograph's state and marks into its sidecar, keeping the rest.");
 
     const RenderRequest requestDefaults{};
     m.def(
         "develop",
-        [](const ImageBuffer& source, const std::optional<DevelopSettings>& settings,
+        [](const ImageBuffer& source, const std::optional<DevelopState>& state,
            const nb::object& size, const nb::object& filter, bool allowUpscale) {
             const RenderRequest request = requestFrom(size, filter, allowUpscale);
             return withoutGil(
-                [&] { return develop(source, settings.value_or(DevelopSettings{}), request); });
+                [&] { return develop(source, state.value_or(DevelopState{}), request); });
         },
-        "source"_a, "settings"_a = nb::none(), nb::kw_only(), "size"_a = nb::none(),
+        "source"_a, "state"_a = nb::none(), nb::kw_only(), "size"_a = nb::none(),
         "filter"_a = requestDefaults.filter,
         "allow_upscale"_a = (requestDefaults.upscale == Upscale::Allowed),
-        nb::sig("def develop(source: ImageBuffer, settings: DevelopSettings | None = None, *, "
+        nb::sig("def develop(source: ImageBuffer, state: DevelopState | None = None, *, "
                 "size: int | tuple[int, int] | float | None = None, filter: ResizeFilter = "
                 "arraw._arraw.ResizeFilter.LANCZOS3, allow_upscale: bool = False) -> ImageBuffer"),
-        "Develop a decoded buffer on the CPU; default settings leave the colour unchanged. "
+        "Develop a decoded buffer on the CPU; default state leaves the colour unchanged. "
         "`size` renders the cropped result smaller: an int is the long edge, a (width, height) "
         "tuple a box to fit inside, a float a scale factor. Sizes only shrink unless "
         "`allow_upscale`.");
 
     m.def(
         "develop",
-        [](const Photo& photo, const std::optional<DevelopSettings>& settings,
-           const nb::object& size, const nb::object& filter, bool allowUpscale) {
+        [](const Photo& photo, const std::optional<DevelopState>& state, const nb::object& size,
+           const nb::object& filter, bool allowUpscale) {
             const RenderRequest request = requestFrom(size, filter, allowUpscale);
             // Reported once, by open(), as in Photo.load.
             return withoutGil([&] {
                 const ImageBuffer source = loadImage(photo.path());
-                return develop(source, settings.value_or(photo.settings()), request);
+                return develop(source, state.value_or(photo.state()), request);
             });
         },
-        "source"_a, "settings"_a = nb::none(), nb::kw_only(), "size"_a = nb::none(),
+        "source"_a, "state"_a = nb::none(), nb::kw_only(), "size"_a = nb::none(),
         "filter"_a = requestDefaults.filter,
         "allow_upscale"_a = (requestDefaults.upscale == Upscale::Allowed),
-        nb::sig("def develop(source: Photo, settings: DevelopSettings | None = None, *, size: int "
+        nb::sig("def develop(source: Photo, state: DevelopState | None = None, *, size: int "
                 "| tuple[int, int] | float | None = None, filter: ResizeFilter = "
                 "arraw._arraw.ResizeFilter.LANCZOS3, allow_upscale: bool = False) -> ImageBuffer"),
-        "Decode a photograph and develop it with its own settings unless `settings` is given; "
+        "Decode a photograph and develop it with its own state unless `state` is given; "
         "`size`, `filter` and `allow_upscale` are as for a decoded buffer.");
 
     m.def(

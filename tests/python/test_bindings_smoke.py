@@ -11,9 +11,9 @@ DNG = FIXTURES / "linear-32x24-neutral.dng"
 def test_flat_keys_and_errors():
     photo = arraw.open(DNG)
     brighter = photo.with_(exposure=0.5, crop_aspect=arraw.CropRatio(1.5))
-    assert brighter.settings.tone.exposure == pytest.approx(0.5)
-    assert brighter.settings.geometry.crop.aspect == arraw.CropRatio(1.5)
-    assert photo.settings.tone.exposure == 0.0
+    assert brighter.state.settings.tone.exposure == pytest.approx(0.5)
+    assert brighter.state.settings.geometry.crop.aspect == arraw.CropRatio(1.5)
+    assert photo.state.settings.tone.exposure == 0.0
     with pytest.raises(TypeError, match="bogus"):
         photo.with_(bogus=1)
     with pytest.raises(ValueError):

@@ -6,6 +6,7 @@
 #include <ColorEncoding.h>
 #include <Develop.h>
 #include <DevelopSettings.h>
+#include <DevelopState.h>
 #include <ImageBuffer.h>
 #include <Photo.h>
 #include <RenderCheckpoint.h>
@@ -217,12 +218,11 @@ static_assert(std::tuple_size_v<decltype(stagesOf(std::declval<const ProcessingP
 /// Resolves only colour and tone; buffer and Photo overloads also resolve geometry.
 /// This overload carries no source identity and must not be used as a cache key.
 /// @param encoding Encoding the decoded pixels are in.
-/// @param settings Settings to resolve.
+/// @param state State to resolve.
 /// @return The plan both backends execute.
 /// @throws std::invalid_argument if development cannot start from @p encoding,
 /// or the settings cannot be resolved against it.
-[[nodiscard]] ProcessingPlan planFor(const ColorEncoding& encoding,
-                                     const DevelopSettings& settings);
+[[nodiscard]] ProcessingPlan planFor(const ColorEncoding& encoding, const DevelopState& state);
 
 /// @brief Resolves pointwise processing, geometry and the resize against decoded pixels.
 ///
@@ -232,11 +232,11 @@ static_assert(std::tuple_size_v<decltype(stagesOf(std::declval<const ProcessingP
 /// sample that is not exactly one: a read of the alpha samples, at worst the
 /// whole buffer, and only when the request actually resizes.
 /// @param source Decoded pixels the plan is for.
-/// @param settings Settings to resolve.
+/// @param state State to resolve.
 /// @param request Size and filter to render at; the default is the cropped size.
 /// @throws std::invalid_argument as the other overloads, and if @p request
 /// cannot be resolved (see ::arraw::resolvedSize).
-[[nodiscard]] ProcessingPlan planFor(const ImageBuffer& source, const DevelopSettings& settings,
+[[nodiscard]] ProcessingPlan planFor(const ImageBuffer& source, const DevelopState& state,
                                      const RenderRequest& request = {});
 
 /// @brief Works out what a photograph's document means for its pixels.

@@ -47,9 +47,9 @@ void developSamples(const ImageBuffer& source, ImageBuffer& result, const Proces
 
 } // namespace
 
-ImageBuffer arraw::develop(const ImageBuffer& source, const DevelopSettings& settings,
+ImageBuffer arraw::develop(const ImageBuffer& source, const DevelopState& state,
                            const RenderRequest& request) {
-    const ProcessingPlan plan = planFor(source, settings, request);
+    const ProcessingPlan plan = planFor(source, state, request);
 
     ImageBuffer result(source.size(), workingFormat, workingEncoding);
     switch (source.format()) {

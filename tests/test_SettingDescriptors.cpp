@@ -219,15 +219,16 @@ TEST_CASE("A validation failure names the key, the value and the range", "[setti
 
 TEST_CASE("A photograph cannot be built from out-of-range settings", "[settings][photo]") {
     REQUIRE_NOTHROW(Photo("a.dng", someMetadata(), {}));
-    REQUIRE_THROWS_AS(Photo("a.dng", someMetadata(), {.tone = {.exposure = 6.0F}}),
+    REQUIRE_THROWS_AS(Photo("a.dng", someMetadata(), {.settings = {.tone = {.exposure = 6.0F}}}),
                       std::invalid_argument);
-    REQUIRE_THROWS_AS(
-        Photo("a.dng", someMetadata(), {.color = {.temperature = std::optional<float>{500.0F}}}),
-        std::invalid_argument);
+    REQUIRE_THROWS_AS(Photo("a.dng", someMetadata(),
+                            {.settings = {.color = {.temperature = std::optional<float>{500.0F}}}}),
+                      std::invalid_argument);
 
     const Photo photo("a.dng", someMetadata());
-    REQUIRE_THROWS_AS(photo.with({.geometry = {.straighten = 90.0}}), std::invalid_argument);
-    REQUIRE(photo.settings() == DevelopSettings{});
+    REQUIRE_THROWS_AS(photo.with({.settings = {.geometry = {.straighten = 90.0}}}),
+                      std::invalid_argument);
+    REQUIRE(photo.state() == DevelopState{});
 }
 
 TEST_CASE("Validation refuses a crop that could fit no image", "[settings]") {

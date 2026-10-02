@@ -58,24 +58,25 @@ ResizePlan resizePlanFor(const RenderRequest& request, ImageSize cropped,
 
 } // namespace
 
-ProcessingPlan arraw::planFor(const ColorEncoding& encoding, const DevelopSettings& settings) {
+ProcessingPlan arraw::planFor(const ColorEncoding& encoding, const DevelopState& state) {
+    const DevelopSettings& settings = state.settings;
     ProcessingPlan plan = tonePlanFor(settings.tone);
     plan.toWorking = colorMatrixFor(encoding, settings.color);
     return plan;
 }
 
 ProcessingPlan arraw::planFor(const Photo& photo, const RenderRequest& request) {
-    auto plan = planFor(photo.metadata().encoding, photo.settings());
+    auto plan = planFor(photo.metadata().encoding, photo.state());
     plan.geometry = geometryPlanFor(photo.metadata().size, photo.metadata().orientation,
-                                    photo.settings().geometry);
+                                    photo.state().settings.geometry);
     plan.resize = resizePlanFor(request, plan.geometry->outputSize, nullptr);
     return plan;
 }
 
-ProcessingPlan arraw::planFor(const ImageBuffer& source, const DevelopSettings& settings,
+ProcessingPlan arraw::planFor(const ImageBuffer& source, const DevelopState& state,
                               const RenderRequest& request) {
-    auto plan = planFor(source.encoding(), settings);
-    plan.geometry = geometryPlanFor(source.size(), source.orientation(), settings.geometry);
+    auto plan = planFor(source.encoding(), state);
+    plan.geometry = geometryPlanFor(source.size(), source.orientation(), state.settings.geometry);
     plan.resize = resizePlanFor(request, plan.geometry->outputSize, &source);
     return plan;
 }

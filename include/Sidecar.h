@@ -1,6 +1,6 @@
 #pragma once
 
-#include <DevelopSettings.h>
+#include <DevelopState.h>
 #include <Diagnostics.h>
 #include <Photo.h>
 #include <PhotoMarks.h>
@@ -40,8 +40,8 @@ struct ForeignNamespace {
 
 /// @brief What an XMP sidecar holds that arraw understands, and who else wrote in it.
 struct SidecarContents {
-    /// @brief Develop settings, defaults for whatever the sidecar does not say.
-    DevelopSettings settings;
+    /// @brief Develop state, defaults for whatever the sidecar does not say.
+    DevelopState state;
 
     /// @brief Culling marks, none for whatever the sidecar does not say.
     PhotoMarks marks;

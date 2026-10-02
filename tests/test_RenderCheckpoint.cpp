@@ -107,7 +107,7 @@ TEST_CASE("Plan prefixes tell requests apart at the resize and no earlier", "[pl
     ImageBuffer source({60, 40}, workingFormat, workingEncoding);
     const DevelopSettings settings;
     const auto planned = [&](const RenderRequest& request) {
-        return planFor(source, settings, request);
+        return planFor(source, DevelopState{settings}, request);
     };
     const auto request = [](RenderRequest::Scale scale, ResizeFilter filter) {
         return RenderRequest{.size = scale, .filter = filter};
@@ -141,7 +141,8 @@ TEST_CASE("Plan prefixes tell requests apart at the resize and no earlier", "[pl
     // The pointwise settings still decide first.
     DevelopSettings brighter;
     brighter.tone.exposure = 1.0F;
-    const auto other = planFor(source, brighter, request({0.5}, ResizeFilter::Lanczos3));
+    const auto other =
+        planFor(source, DevelopState{brighter}, request({0.5}, ResizeFilter::Lanczos3));
     REQUIRE_FALSE(prefixMatches(half, other, Stage::Pointwise));
 }
 

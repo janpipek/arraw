@@ -68,7 +68,7 @@ void requireSameAlpha(const ImageBuffer& expected, const ImageBuffer& actual) {
 /// What `arraw::develop` does before geometry: the source as RGBA float, each
 /// colour through ::arraw::developPixel, alpha as it came.
 ImageBuffer cpuPointwise(const ImageBuffer& source, const DevelopSettings& settings) {
-    const ProcessingPlan plan = planFor(source, settings);
+    const ProcessingPlan plan = planFor(source, DevelopState{settings});
     const ImageBuffer floats = toRgbaF32(source);
     ImageBuffer result(source.size(), PixelFormat::RgbaF32, workingEncoding);
     const std::span<const float> in = floats.samples<float>();
@@ -87,7 +87,7 @@ ImageBuffer cpuPointwise(const ImageBuffer& source, const DevelopSettings& setti
 /// @brief Develops on the device up to the pointwise boundary and reads it back.
 ImageBuffer gpuPointwise(const ImageBuffer& source, const DevelopSettings& settings) {
     const RenderCheckpoint checkpoint =
-        developOnGpu(gpuContext(), source, settings, Stage::Pointwise);
+        developOnGpu(gpuContext(), source, DevelopState{settings}, Stage::Pointwise);
     REQUIRE(checkpoint.isResident());
     REQUIRE(checkpoint.size() == source.size());
     return checkpoint.readBack();
@@ -102,7 +102,7 @@ void requireMatchesCpu(const ImageBuffer& source, const DevelopSettings& setting
     const ImageBuffer expected = cpuPointwise(source, settings);
     if (source.orientation() == ImageOrientation::Normal &&
         settings.geometry == GeometrySettings{}) {
-        const ImageBuffer developed = develop(source, settings);
+        const ImageBuffer developed = develop(source, DevelopState{settings});
         REQUIRE(compareFloat(developed, expected).bitExact);
     }
     const ImageBuffer actual = gpuPointwise(source, settings);
@@ -507,7 +507,7 @@ TEST_CASE("The pointwise pass writes the CPU's value after each stage", "[gpu][p
 
     DevelopSettings settings = withTone({1.2F, 25.0F, 30.0F, -25.0F, 20.0F, 15.0F, 80.0F});
     settings.color = {WhiteBalanceMode::Custom, 3600.0F, 6.0F};
-    const ProcessingPlan plan = planFor(source, settings);
+    const ProcessingPlan plan = planFor(source, DevelopState{settings});
     REQUIRE(plan.shapesTone);
 
     const DeviceImage input = context.upload(source);

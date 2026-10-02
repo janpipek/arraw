@@ -696,7 +696,7 @@ std::optional<SidecarContents> arraw::readSidecar(const std::filesystem::path& p
             continue;
         }
         if (found.back().simple) {
-            applyText(descriptor, found.back().text, contents.settings, log, photo);
+            applyText(descriptor, found.back().text, contents.state.settings, log, photo);
         } else {
             reportMalformed(descriptor, log, photo);
         }
@@ -750,7 +750,7 @@ void arraw::writeSidecar(const Photo& photo) {
     setProperty(descriptions, home, arrawProperty("version"), QString::number(sidecarVersion));
     for (const FieldDescriptor& descriptor : developSettingDescriptors) {
         setProperty(descriptions, home, arrawProperty(descriptor.key),
-                    spell(encode(descriptor, photo.settings())));
+                    spell(encode(descriptor, photo.state().settings)));
     }
     // Marks are standard XMP that other tools write too, and some of what they
     // write is no mark arraw has (a rating of 9, a label named "Rot"). So a mark

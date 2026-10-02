@@ -7,7 +7,7 @@ import arraw
 def test_develop_photo_equals_develop_loaded_buffer(dng):
     photo = arraw.open(dng).with_(exposure=0.4, contrast=15, shadows=10)
     direct = arraw.develop(photo)
-    stepwise = arraw.develop(photo.load(), photo.settings)
+    stepwise = arraw.develop(photo.load(), photo.state)
     assert direct.size == stepwise.size
     assert direct.format == stepwise.format
     assert np.array_equal(direct.pixels, stepwise.pixels)
@@ -16,26 +16,28 @@ def test_develop_photo_equals_develop_loaded_buffer(dng):
 def test_develop_photo_equals_buffer_for_bayer(bayer_dng):
     photo = arraw.open(bayer_dng).with_(exposure=-0.5)
     assert np.array_equal(arraw.develop(photo).pixels,
-                          arraw.develop(photo.load(), photo.settings).pixels)
+                          arraw.develop(photo.load(), photo.state).pixels)
 
 
-def test_develop_photo_with_explicit_settings_overrides_own(dng):
+def test_develop_photo_with_explicit_state_overrides_own(dng):
     photo = arraw.open(dng).with_(exposure=2.0)
-    other = arraw.DevelopSettings(tone=arraw.ToneSettings(exposure=-1.0))
+    other = arraw.DevelopState(
+        settings=arraw.DevelopSettings(tone=arraw.ToneSettings(exposure=-1.0)))
     assert np.array_equal(arraw.develop(photo, other).pixels,
                           arraw.develop(photo.load(), other).pixels)
 
 
-def test_develop_without_settings_uses_defaults(dng):
+def test_develop_without_state_uses_defaults(dng):
     buf = arraw.load(dng)
     assert np.array_equal(arraw.develop(buf).pixels,
-                          arraw.develop(buf, arraw.DevelopSettings()).pixels)
+                          arraw.develop(buf, arraw.DevelopState()).pixels)
 
 
 def test_develop_does_not_modify_source(dng):
     buf = arraw.load(dng)
     before = buf.pixels.copy()
-    arraw.develop(buf, arraw.DevelopSettings(tone=arraw.ToneSettings(exposure=2.0)))
+    arraw.develop(buf, arraw.DevelopState(settings=arraw.DevelopSettings(
+        tone=arraw.ToneSettings(exposure=2.0))))
     assert np.array_equal(buf.pixels, before)
 
 
@@ -99,8 +101,8 @@ def _dims(buffer):
 def test_size_int_is_the_long_edge(png):
     buf = arraw.load(png)  # 61x41
     assert _dims(arraw.develop(buf, size=30)) == (30, 20)
-    portrait = arraw.DevelopSettings(
-        geometry=arraw.GeometrySettings(rotation=arraw.QuarterTurn.CLOCKWISE_90))
+    portrait = arraw.DevelopState(settings=arraw.DevelopSettings(
+        geometry=arraw.GeometrySettings(rotation=arraw.QuarterTurn.CLOCKWISE_90)))
     assert _dims(arraw.develop(buf, portrait, size=30)) == (20, 30)
 
 
@@ -182,7 +184,7 @@ def test_size_keywords_are_keyword_only(png):
 def test_develop_photo_with_size_equals_develop_loaded_buffer(dng, size):
     photo = arraw.open(dng).with_(exposure=0.4, contrast=15)
     direct = arraw.develop(photo, size=size, filter=arraw.ResizeFilter.BILINEAR)
-    stepwise = arraw.develop(photo.load(), photo.settings, size=size,
+    stepwise = arraw.develop(photo.load(), photo.state, size=size,
                              filter=arraw.ResizeFilter.BILINEAR)
     assert _dims(direct) == _dims(stepwise)
     assert np.array_equal(direct.pixels, stepwise.pixels)
