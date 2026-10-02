@@ -1,5 +1,7 @@
 #include "DisplayImage.h"
 
+#include <Develop.h>
+
 #include <QColorSpace>
 
 #include <limits>
@@ -31,6 +33,20 @@ QImage toDisplayImage(const ImageBuffer& developed) {
     // Returns a new image with its own pixels, which is what lets it outlive
     // the view and the buffer.
     return view.convertedToColorSpace(QColorSpace::SRgb, QImage::Format_RGBA8888);
+}
+
+QImage renderForViewport(const ImageBuffer& decoded, const DevelopSettings& settings,
+                         QSize viewport, qreal devicePixelRatio) {
+    if (viewport.isEmpty()) {
+        throw std::invalid_argument("Cannot fit an image inside an empty viewport");
+    }
+    const RenderRequest request{
+        .size = RenderRequest::FitInside{static_cast<std::uint32_t>(viewport.width()),
+                                         static_cast<std::uint32_t>(viewport.height())},
+        .upscale = Upscale::Never};
+    QImage image = toDisplayImage(develop(decoded, settings, request));
+    image.setDevicePixelRatio(devicePixelRatio);
+    return image;
 }
 
 } // namespace arraw::app
