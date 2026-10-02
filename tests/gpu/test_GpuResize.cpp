@@ -413,11 +413,14 @@ TEST_CASE("Stopping after the geometry ignores the requested size", "[gpu][resiz
 }
 
 TEST_CASE("Resizing on the GPU refuses a request that cannot be resolved", "[gpu][resize]") {
+    // Outside the checks: without a device it skips, which a check would take
+    // for the wrong exception.
+    GpuContext& context = gpuContext();
     const ImageBuffer source = opaqueImage({16, 16});
-    CHECK_THROWS_AS(developOnGpu(gpuContext(), source, DevelopState{plainSettings()}, Stage::Resize,
+    CHECK_THROWS_AS(developOnGpu(context, source, DevelopState{plainSettings()}, Stage::Resize,
                                  scaled(0.0, ResizeFilter::Lanczos3)),
                     std::invalid_argument);
-    CHECK_THROWS_AS(developOnGpu(gpuContext(), source, DevelopState{plainSettings()}, Stage::Resize,
+    CHECK_THROWS_AS(developOnGpu(context, source, DevelopState{plainSettings()}, Stage::Resize,
                                  fitted(0, 10, ResizeFilter::Lanczos3)),
                     std::invalid_argument);
 }
