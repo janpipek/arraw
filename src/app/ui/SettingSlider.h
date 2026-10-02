@@ -1,5 +1,7 @@
 #pragma once
 
+#include "SettingPresentation.h"
+
 #include <SettingDescriptors.h>
 
 #include <QTimer>
@@ -21,12 +23,17 @@ namespace arraw::app {
 /// edit. Keyboard, wheel and spin-box changes that follow each other closely
 /// are one edit too, which ends once they pause, focus leaves the row, or
 /// finishPendingEdit() is called; a reset is an edit of its own.
+///
+/// A row for an optional setting (temperature, tint) has no default of its
+/// own: the panel shows a fallback with setValue() when the setting is absent,
+/// and a reset reports valueCleared() instead of a value, for the panel to
+/// apply as "absent again".
 class SettingSlider : public QWidget {
     Q_OBJECT
     Q_DISABLE_COPY_MOVE(SettingSlider)
 public:
     /// @brief Builds the row for a setting.
-    /// @param key Key of a ranged float or double setting in the descriptor table.
+    /// @param key Key of a ranged float, double or optional float setting in the descriptor table.
     /// @param parent Owning widget.
     /// @throws std::invalid_argument if @p key names no such setting.
     /// @throws std::out_of_range if no presentation exists for @p key.
@@ -54,6 +61,9 @@ signals:
     /// @param value Value in the setting's units.
     void valueEdited(double value);
 
+    /// @brief Announces that a reset cleared an optional setting; follows editStarted().
+    void valueCleared();
+
     /// @brief Announces that the edit is over.
     void editFinished();
 
@@ -75,8 +85,14 @@ private:
     /// Distance between two slider positions, in the setting's units.
     double step_;
 
-    /// Value that a reset restores.
+    /// How the slider spreads its positions.
+    SliderScale scale_;
+
+    /// Value that a reset restores; unused when the setting is optional.
     double default_;
+
+    /// Whether the setting is optional, so that a reset clears it.
+    bool optional_;
 
     /// Single-shot timer that ends a pending edit once its changes pause.
     QTimer pendingTimer_;

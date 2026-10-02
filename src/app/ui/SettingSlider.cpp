@@ -11,8 +11,10 @@
 #include <QSignalBlocker>
 #include <QSlider>
 
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 
 namespace arraw::app {
 
@@ -26,13 +28,23 @@ const FieldDescriptor& numericDescriptor(std::string_view key) {
     return *descriptor;
 }
 
+/// @brief Checks whether a setting's leaf is an optional number.
+bool isOptional(const FieldDescriptor& descriptor) {
+    return visitField(descriptor, DevelopSettings{}, [](const auto& field) {
+        return std::is_same_v<std::remove_cvref_t<decltype(field)>, std::optional<float>>;
+    });
+}
+
 } // namespace
 
 SettingSlider::SettingSlider(std::string_view key, QWidget* parent)
     : QWidget(parent), key_(numericDescriptor(key).key), range_(*numericDescriptor(key).range),
-      step_(1.0), default_(defaultValueOf(numericDescriptor(key))) {
+      step_(presentationOf(key).step), scale_(presentationOf(key).scale), default_(0.0),
+      optional_(isOptional(numericDescriptor(key))) {
     const SettingPresentation& presentation = presentationOf(key);
-    step_ = presentation.step;
+    // An optional setting has no default; the panel shows its fallback at once.
+    default_ = optional_ ? (range_.minimum + range_.maximum) / 2.0
+                         : defaultValueOf(numericDescriptor(key));
 
     label_ = new QLabel(presentation.label, this);
     label_->setToolTip(presentation.toolTip);
@@ -46,9 +58,9 @@ SettingSlider::SettingSlider(std::string_view key, QWidget* parent)
     connect(&pendingTimer_, &QTimer::timeout, this, &SettingSlider::finishPendingEdit);
 
     slider_ = new QSlider(Qt::Horizontal, this);
-    slider_->setRange(0, tickCount(range_, step_));
+    slider_->setRange(0, tickCount(range_, step_, scale_));
     slider_->setToolTip(presentation.toolTip);
-    slider_->setValue(tickOf(default_, range_, step_));
+    slider_->setValue(tickOf(default_, range_, step_, scale_));
 
     spinBox_ = new QDoubleSpinBox(this);
     spinBox_->setRange(range_.minimum, range_.maximum);
@@ -73,7 +85,7 @@ SettingSlider::SettingSlider(std::string_view key, QWidget* parent)
     });
     connect(slider_, &QSlider::sliderReleased, this, &SettingSlider::editFinished);
     connect(slider_, &QSlider::valueChanged, this, [this](int tick) {
-        const double value = valueOfTick(tick, range_, step_);
+        const double value = valueOfTick(tick, range_, step_, scale_);
         {
             const QSignalBlocker blocker(spinBox_);
             spinBox_->setValue(value);
@@ -87,7 +99,7 @@ SettingSlider::SettingSlider(std::string_view key, QWidget* parent)
     connect(spinBox_, &QDoubleSpinBox::valueChanged, this, [this](double value) {
         {
             const QSignalBlocker blocker(slider_);
-            slider_->setValue(tickOf(value, range_, step_));
+            slider_->setValue(tickOf(value, range_, step_, scale_));
         }
         nudge(value);
     });
@@ -96,16 +108,20 @@ SettingSlider::SettingSlider(std::string_view key, QWidget* parent)
 void SettingSlider::setValue(double value) {
     const QSignalBlocker sliderBlocker(slider_);
     const QSignalBlocker spinBlocker(spinBox_);
-    slider_->setValue(tickOf(value, range_, step_));
+    slider_->setValue(tickOf(value, range_, step_, scale_));
     spinBox_->setValue(value);
 }
 
 bool SettingSlider::eventFilter(QObject* watched, QEvent* event) {
     if (watched == label_ && event->type() == QEvent::MouseButtonDblClick) {
         finishPendingEdit();
-        setValue(default_);
         emit editStarted();
-        emit valueEdited(default_);
+        if (optional_) {
+            emit valueCleared();
+        } else {
+            setValue(default_);
+            emit valueEdited(default_);
+        }
         emit editFinished();
         return true;
     }

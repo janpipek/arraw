@@ -292,7 +292,9 @@ add_library(arraw-app-core STATIC
         src/app/PreviewRenderer.cpp
         src/app/PreviewRenderer.h
         src/app/SettingPresentation.cpp
-        src/app/SettingPresentation.h)
+        src/app/SettingPresentation.h
+        src/app/WhiteBalanceChoice.cpp
+        src/app/WhiteBalanceChoice.h)
 arraw_enable_warnings(arraw-app-core)
 target_include_directories(arraw-app-core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/app)
 target_link_libraries(arraw-app-core PUBLIC arraw Qt6::Gui PRIVATE arraw-gpu)

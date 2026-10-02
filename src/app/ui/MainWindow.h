@@ -7,6 +7,7 @@
 #include <Photo.h>
 
 #include <QMainWindow>
+#include <QPointF>
 #include <QTimer>
 
 #include <cstdint>
@@ -17,6 +18,7 @@
 class QAction;
 class QLabel;
 class QEvent;
+class QShortcut;
 class QObject;
 
 namespace arraw::app {
@@ -56,6 +58,17 @@ private:
     /// edit is cancelled, and the panel shows the state of the session again.
     /// @param action Body to run.
     void guarded(const std::function<void()>& action);
+
+    /// @brief Arms or disarms the white balance picker.
+    ///
+    /// Armed, the view shows a cross cursor and a click on the photograph reads
+    /// the light there; Esc disarms it.
+    /// @param picking Whether the picker is armed.
+    void setPicking(bool picking);
+
+    /// @brief Sets the white balance from the neutral under a click on the view.
+    /// @param position Click position in the view's coordinates.
+    void pickNeutralAt(const QPointF& position);
 
     /// @brief Shows the session's state in the panel and updates the actions.
     void refreshPanel();
@@ -112,6 +125,10 @@ private:
     QWidget* developDock_ = nullptr;
     QAction* undoAction_ = nullptr;
     QAction* redoAction_ = nullptr;
+    QShortcut* cancelPickShortcut_ = nullptr;
+
+    /// Whether the next click on the photograph picks a neutral.
+    bool picking_ = false;
 
     /// Single-shot timer that fires once the view has stopped changing, so that
     /// dragging an edge renders once rather than per pixel.

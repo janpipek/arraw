@@ -9,6 +9,22 @@
 
 namespace arraw::app {
 
+/// @brief How slider positions are spread across a setting's range.
+enum class SliderScale {
+    /// @brief Equal steps in the setting's own units.
+    Linear,
+
+    /// @brief Equal steps in the reciprocal of the value.
+    ///
+    /// For a colour temperature: equal steps in mired (a million over the
+    /// kelvin) look like equal steps of colour, where equal kelvin steps crowd
+    /// all the change into the warm end.
+    Reciprocal,
+};
+
+/// @brief Slider positions across a reciprocal range.
+inline constexpr int reciprocalTickCount = 1000;
+
 /// @brief Presentation of one setting, derived from the model (ADR 008).
 struct SettingPresentation {
     /// @brief Localised name shown beside the control.
@@ -20,15 +36,27 @@ struct SettingPresentation {
     /// @brief Digits shown after the decimal point.
     int decimals;
 
-    /// @brief Distance between two slider positions, in the setting's own units.
+    /// @brief Distance between two values, in the setting's own units.
+    ///
+    /// For a linear slider also the distance between two positions. A
+    /// reciprocal slider has its own positions, and values it yields are
+    /// rounded to this.
     double step;
 
     /// @brief Localised one-sentence explanation for a photographer.
     QString toolTip;
+
+    /// @brief How the slider spreads positions across the range.
+    SliderScale scale = SliderScale::Linear;
 };
 
 /// @brief Gives the keys of the Tone group in the order the panel shows them.
 [[nodiscard]] std::span<const std::string_view> toneKeys() noexcept;
+
+/// @brief Gives the keys of the White Balance rows, in the order the panel shows them.
+///
+/// The rows with a slider; the preset combo has no key.
+[[nodiscard]] std::span<const std::string_view> whiteBalanceKeys() noexcept;
 
 /// @brief Finds the presentation of a setting.
 /// @param key camelCase key of a setting the panel shows, such as one of ::arraw::app::toneKeys.
@@ -37,24 +65,33 @@ struct SettingPresentation {
 [[nodiscard]] const SettingPresentation& presentationOf(std::string_view key);
 
 /// @brief Counts the slider steps across a range.
-/// @param range Range of the setting.
+/// @param range Range of the setting; positive for a reciprocal scale.
 /// @param step Distance between two steps, in the setting's units; positive.
+/// @param scale How steps are spread; a reciprocal one has ::reciprocalTickCount of them.
 /// @return The number of steps from minimum to maximum.
-[[nodiscard]] int tickCount(const SettingRange& range, double step);
+[[nodiscard]] int tickCount(const SettingRange& range, double step,
+                            SliderScale scale = SliderScale::Linear);
 
 /// @brief Maps a value to the nearest slider step.
 /// @param value Value in the setting's units.
 /// @param range Range of the setting.
 /// @param step Distance between two steps, in the setting's units; positive.
+/// @param scale How steps are spread.
 /// @return The step, clamped to 0 through tickCount().
-[[nodiscard]] int tickOf(double value, const SettingRange& range, double step);
+[[nodiscard]] int tickOf(double value, const SettingRange& range, double step,
+                         SliderScale scale = SliderScale::Linear);
 
 /// @brief Maps a slider step to its value.
+///
+/// On a reciprocal scale the value is rounded to a multiple of @p step, so
+/// that dragging yields tidy numbers, then clamped to the range.
 /// @param tick Slider step; need not lie within the range.
 /// @param range Range of the setting.
 /// @param step Distance between two steps, in the setting's units; positive.
+/// @param scale How steps are spread.
 /// @return The value, clamped to the range.
-[[nodiscard]] double valueOfTick(int tick, const SettingRange& range, double step);
+[[nodiscard]] double valueOfTick(int tick, const SettingRange& range, double step,
+                                 SliderScale scale = SliderScale::Linear);
 
 /// @brief Reads the value a setting has in a default-constructed ::arraw::DevelopSettings.
 /// @param descriptor Row of a float or double setting.

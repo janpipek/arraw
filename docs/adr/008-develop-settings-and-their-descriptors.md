@@ -16,6 +16,16 @@ names that as a thing to separate: photographic values are the model, and
 slider ranges, display precision and localised text are presentation derived
 from it.
 
+> **Note (2026-10-02, white balance panel).** Where Temp or Tint is absent, the
+> panel shows the light the decode *applied*. That is also the value development
+> uses for whichever half is not named, so a row never jumps when the other one
+> moves. For a file that recorded a neutral, it is the camera's reading.
+> - **The Temp slider** is even in mireds; the spin box shows kelvin.
+> - **Presets** are named `Custom` values with Lightroom's numbers.
+> - **Pick** (`neutralTemperatureAt`) reads the temperature that, stored as
+>   `Custom`, makes the clicked spot neutral. It inverts the same relation to
+>   the applied gains that resolving a stored temperature uses.
+
 > **Note (2026-10-02).** `DevelopSettings` is now the global part of a
 > `DevelopState`, which is what a `Photo` holds and what renders take; per-photograph
 > lists such as masks and spots will sit beside it rather than in this table

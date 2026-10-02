@@ -45,7 +45,8 @@ add_executable(arraw-tests
         test_SampleConversion.cpp
         test_RoundTrip.cpp
         test_Tone.cpp
-        test_WhiteBalance.cpp)
+        test_WhiteBalance.cpp
+        test_WhiteBalanceChoice.cpp)
 arraw_enable_warnings(arraw-tests)
 
 # The processing plan is engine-private: the order of the pointwise stages is

@@ -1,14 +1,28 @@
 #pragma once
 
 #include <DevelopState.h>
+#include <WhiteBalance.h>
 
 #include <QWidget>
 
+#include <optional>
 #include <vector>
+
+class QComboBox;
+class QPushButton;
 
 namespace arraw::app {
 
 class SettingSlider;
+
+/// @brief What the panel needs to know about the photograph, besides its state.
+struct PanelContext {
+    /// @brief Whether the photograph is a RAW file, which white balance needs for now.
+    bool raw = true;
+
+    /// @brief The light the decode balanced for, shown where a setting is absent.
+    std::optional<ColourTemperature> asShot = std::nullopt;
+};
 
 /// @brief Panel of the develop controls, showing a state and reporting edits to it.
 ///
@@ -24,8 +38,12 @@ public:
 
     /// @brief Shows a state without emitting any signal.
     /// @param state State to show; also the base of the next edit.
-    /// @param raw Whether the photograph is a RAW file, which raw-only rows need.
-    void showState(const DevelopState& state, bool raw);
+    /// @param context What the photograph is, for the rows that depend on it.
+    void showState(const DevelopState& state, const PanelContext& context);
+
+    /// @brief Shows whether the white balance picker is armed, without emitting any signal.
+    /// @param picking Whether the Pick button is checked.
+    void setPicking(bool picking);
 
     /// @brief Ends any row's edit that is still waiting for its changes to pause.
     ///
@@ -44,14 +62,33 @@ signals:
     /// @brief Announces that the edit is over.
     void editFinished();
 
+    /// @brief Announces that the Pick button was checked or unchecked by the user.
+    /// @param picking Whether the picker is now armed.
+    void pickToggled(bool picking);
+
 private:
+    /// @brief Builds the White Balance group.
+    QWidget* buildWhiteBalanceGroup();
+
+    /// @brief Builds a row of a group and wires its edits.
+    SettingSlider* addRow(std::string_view key, QWidget* group);
+
     /// @brief Writes an edited value into the last shown state and reports it.
     void applyEdit(const SettingSlider& row, double value);
+
+    /// @brief Writes a cleared optional value into the last shown state and reports it.
+    void applyClear(const SettingSlider& row);
+
+    /// @brief Reports a combo entry the user chose, as one complete edit.
+    void applyChoice(int index);
 
     /// Last state shown, kept only to build the next one.
     DevelopState shown_;
 
     std::vector<SettingSlider*> rows_;
+
+    QComboBox* presetCombo_ = nullptr;
+    QPushButton* pickButton_ = nullptr;
 };
 
 } // namespace arraw::app

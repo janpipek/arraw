@@ -16,6 +16,8 @@ namespace {
 constexpr std::array<std::string_view, 7> toneKeyList{
     "exposure", "contrast", "highlights", "shadows", "whites", "blacks", "filmicHighlights"};
 
+constexpr std::array<std::string_view, 2> whiteBalanceKeyList{"temperature", "tint"};
+
 QString tr(const char* text) {
     return QCoreApplication::translate("SettingPresentation", text);
 }
@@ -25,9 +27,9 @@ struct Row {
     SettingPresentation presentation;
 };
 
-const std::array<Row, 7>& table() {
+const std::array<Row, 9>& table() {
     // Built on first use, so that translations see the installed translator.
-    static const std::array<Row, 7> rows{{
+    static const std::array<Row, 9> rows{{
         {"exposure",
          {tr("Exposure"), tr(" EV"), 2, 0.01,
           tr("Brightens or darkens the whole photograph, in stops.")}},
@@ -49,6 +51,18 @@ const std::array<Row, 7>& table() {
           1.0,
           tr("Rolls the brightest values smoothly toward white instead of "
              "clipping them.")}},
+        {"temperature",
+         {tr("Temp"), tr(" K"), 0, 50.0,
+          tr("The temperature of the light the photograph is balanced for. Lower is "
+             "bluer, higher is warmer. Double-click the label to follow the camera again."),
+          SliderScale::Reciprocal}},
+        {"tint",
+         {tr("Tint"),
+          {},
+          0,
+          1.0,
+          tr("How far toward green (negative) or magenta (positive) the light is. "
+             "Double-click the label to follow the camera again.")}},
     }};
     return rows;
 }
@@ -57,6 +71,10 @@ const std::array<Row, 7>& table() {
 
 std::span<const std::string_view> toneKeys() noexcept {
     return toneKeyList;
+}
+
+std::span<const std::string_view> whiteBalanceKeys() noexcept {
+    return whiteBalanceKeyList;
 }
 
 const SettingPresentation& presentationOf(std::string_view key) {
@@ -68,16 +86,44 @@ const SettingPresentation& presentationOf(std::string_view key) {
     throw std::out_of_range("no presentation for setting '" + std::string(key) + "'");
 }
 
-int tickCount(const SettingRange& range, double step) {
+namespace {
+
+/// Position of a value along a reciprocal range: 0 at the minimum, 1 at the maximum.
+double reciprocalFraction(double value, const SettingRange& range) {
+    const double low = 1.0 / range.minimum;
+    const double high = 1.0 / range.maximum;
+    return (low - 1.0 / value) / (low - high);
+}
+
+} // namespace
+
+int tickCount(const SettingRange& range, double step, SliderScale scale) {
+    if (scale == SliderScale::Reciprocal) {
+        return reciprocalTickCount;
+    }
     return static_cast<int>(std::lround((range.maximum - range.minimum) / step));
 }
 
-int tickOf(double value, const SettingRange& range, double step) {
+int tickOf(double value, const SettingRange& range, double step, SliderScale scale) {
+    const int count = tickCount(range, step, scale);
+    if (scale == SliderScale::Reciprocal) {
+        const double clamped = std::clamp(value, range.minimum, range.maximum);
+        return static_cast<int>(
+            std::clamp<long>(std::lround(reciprocalFraction(clamped, range) * count), 0, count));
+    }
     const long tick = std::lround((value - range.minimum) / step);
-    return static_cast<int>(std::clamp<long>(tick, 0, tickCount(range, step)));
+    return static_cast<int>(std::clamp<long>(tick, 0, count));
 }
 
-double valueOfTick(int tick, const SettingRange& range, double step) {
+double valueOfTick(int tick, const SettingRange& range, double step, SliderScale scale) {
+    if (scale == SliderScale::Reciprocal) {
+        const double fraction =
+            std::clamp(static_cast<double>(tick) / tickCount(range, step, scale), 0.0, 1.0);
+        const double low = 1.0 / range.minimum;
+        const double high = 1.0 / range.maximum;
+        const double value = 1.0 / (low - fraction * (low - high));
+        return std::clamp(std::round(value / step) * step, range.minimum, range.maximum);
+    }
     return std::clamp(range.minimum + tick * step, range.minimum, range.maximum);
 }
 

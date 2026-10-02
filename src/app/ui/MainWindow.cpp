@@ -8,6 +8,7 @@
 #include <ImageBuffer.h>
 #include <ImageImport.h>
 #include <Photo.h>
+#include <WhiteBalance.h>
 
 #include <QAction>
 #include <QDockWidget>
@@ -20,9 +21,11 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QMetaObject>
+#include <QMouseEvent>
 #include <QPixmap>
 #include <QScreen>
 #include <QScrollArea>
+#include <QShortcut>
 #include <QSizePolicy>
 #include <QStandardPaths>
 #include <QStatusBar>
@@ -31,6 +34,8 @@
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
+#include <optional>
+#include <stdexcept>
 #include <string_view>
 #include <utility>
 #include <variant>
@@ -66,6 +71,10 @@ MainWindow::MainWindow(QWidget* parent)
     buildImageView();
     buildDevelopDock();
 
+    cancelPickShortcut_ = new QShortcut(Qt::Key_Escape, this);
+    cancelPickShortcut_->setEnabled(false);
+    connect(cancelPickShortcut_, &QShortcut::activated, this, [this] { setPicking(false); });
+
     // Long enough to coalesce the events of a drag, short enough to feel prompt.
     resizeTimer_.setSingleShot(true);
     resizeTimer_.setInterval(100);
@@ -79,6 +88,13 @@ MainWindow::MainWindow(QWidget* parent)
 }
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == imageView_ && picking_ && event->type() == QEvent::MouseButtonPress) {
+        const auto* click = static_cast<QMouseEvent*>(event);
+        if (click->button() == Qt::LeftButton) {
+            pickNeutralAt(click->position());
+            return true;
+        }
+    }
     if (watched == imageView_ && open_ &&
         (event->type() == QEvent::Resize || event->type() == QEvent::DevicePixelRatioChange)) {
         resizeTimer_.start();
@@ -147,6 +163,7 @@ void MainWindow::buildDevelopDock() {
             refreshPanel();
         });
     });
+    connect(developPanel_, &DevelopPanel::pickToggled, this, &MainWindow::setPicking);
     connect(developPanel_, &DevelopPanel::editFinished, this, [this] {
         guarded([this] {
             if (!open_->session.editing()) {
@@ -155,6 +172,50 @@ void MainWindow::buildDevelopDock() {
             open_->session.commit();
             refreshPanel();
         });
+    });
+}
+
+void MainWindow::setPicking(bool picking) {
+    picking_ = picking && open_.has_value();
+    developPanel_->setPicking(picking_);
+    cancelPickShortcut_->setEnabled(picking_);
+    if (picking_) {
+        imageView_->setCursor(Qt::CrossCursor);
+    } else {
+        imageView_->unsetCursor();
+    }
+}
+
+void MainWindow::pickNeutralAt(const QPointF& position) {
+    // The preview is centred in the view and may be smaller than it, and the
+    // click is only meaningful on the photograph itself.
+    const QPixmap pixmap = imageView_->pixmap();
+    if (pixmap.isNull()) {
+        return;
+    }
+    const QSizeF size = pixmap.deviceIndependentSize();
+    const QRectF contents = imageView_->contentsRect();
+    const QPointF origin(contents.x() + (contents.width() - size.width()) / 2.0,
+                         contents.y() + (contents.height() - size.height()) / 2.0);
+    const double x = (position.x() - origin.x()) / size.width();
+    const double y = (position.y() - origin.y()) / size.height();
+    if (x < 0.0 || x > 1.0 || y < 0.0 || y > 1.0) {
+        return;
+    }
+
+    setPicking(false);
+    guarded([this, x, y] {
+        developPanel_->finishPendingEdit();
+        // The preview is of a reduced copy, but its frame is the developed
+        // frame, so normalised coordinates hold against the full source.
+        const DevelopState& current = open_->session.photo().state();
+        const ColourTemperature light = neutralTemperatureAt(*open_->decoded, current, x, y);
+        DevelopState next = current;
+        next.settings.color = {WhiteBalanceMode::Custom, light.kelvin, light.tint};
+        open_->session.begin();
+        open_->session.update(next);
+        open_->session.commit();
+        refreshPanel();
     });
 }
 
@@ -184,7 +245,20 @@ void MainWindow::refreshPanel() {
     }
     const Photo& photo = open_->session.photo();
     const bool raw = !std::holds_alternative<NamedEncoding>(photo.metadata().encoding);
-    developPanel_->showState(photo.state(), raw);
+    PanelContext context{raw, std::nullopt};
+    if (const auto* camera = std::get_if<CameraNative>(&photo.metadata().encoding)) {
+        try {
+            // The light the pixels went through, which is also what development
+            // keeps for whichever of Temp and Tint is not named. For a file that
+            // recorded its neutral this is the camera's reading; for one that
+            // did not, the decode's substitute (ADR 007), and showing that keeps
+            // a row from jumping when only the other one moves.
+            context.asShot = temperatureForGains(*camera, camera->appliedMultipliers);
+        } catch (const std::invalid_argument&) {
+            // A calibration that gives no reading: the rows fall back to a fixed one.
+        }
+    }
+    developPanel_->showState(photo.state(), context);
     undoAction_->setEnabled(open_->session.canUndo());
     redoAction_->setEnabled(open_->session.canRedo());
     requestRender();
@@ -294,6 +368,7 @@ void MainWindow::showPhoto(Photo photo) {
     auto decoded = std::make_shared<const ImageBuffer>(loadImage(photo.path(), log));
 
     // Commit.
+    setPicking(false);
     open_.emplace(OpenPhoto{EditSession(std::move(photo)), decoded});
     previewRenderer_.setSource(std::move(decoded));
     // Results of the previous photograph are still on their way, or in progress.
