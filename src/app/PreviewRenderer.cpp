@@ -110,6 +110,12 @@ private:
     std::optional<RenderCheckpoint> geometry_;
 };
 
+/// @brief Which of a request's renders is made; each keeps its own checkpoints.
+enum class Layer {
+    Shown,      ///< The view asked for.
+    Background, ///< The reduced whole frame beneath a region.
+};
+
 /// @brief What the worker holds on the GPU: the device, and the pyramid levels on it.
 ///
 /// Lives as a local of the worker's loop, so that everything holding the device
@@ -124,7 +130,7 @@ public:
 
     /// @brief Releases the uploaded levels, then the device, in that order.
     ~GpuPreview() {
-        checkpoints_.clear();
+        clearCheckpoints();
         uploaded_.clear();
         context_.reset();
     }
@@ -146,7 +152,7 @@ public:
             return false;
         }
         if (source != source_) {
-            checkpoints_.clear();
+            clearCheckpoints();
             uploaded_.clear();
             source_ = source;
             sourceReason_.clear();
@@ -159,10 +165,12 @@ public:
     /// Uploads the level the first time it is rendered from, and keeps it for
     /// the current source.
     /// @pre prepare returned true.
+    /// @param layer Render it is, which picks the checkpoints resumed from.
     /// @param level Pyramid level of @p image.
     /// @param image The level to develop.
     /// @param resumedFrom Set to the boundary resumed from, or reset.
-    [[nodiscard]] ImageBuffer render(int level, const std::shared_ptr<const ImageBuffer>& image,
+    [[nodiscard]] ImageBuffer render(Layer layer, int level,
+                                     const std::shared_ptr<const ImageBuffer>& image,
                                      const DevelopState& state, const RenderRequest& request,
                                      std::optional<Stage>& resumedFrom) {
         const auto index = static_cast<std::size_t>(level);
@@ -172,8 +180,10 @@ public:
         if (!uploaded_[index].valid()) {
             uploaded_[index] = uploadSource(*context_, *image);
         }
-        checkpoints_.bind(image);
-        const RenderCheckpoint checkpoint = checkpoints_.render(
+        CheckpointCache& checkpoints =
+            layer == Layer::Background ? backgroundCheckpoints_ : checkpoints_;
+        checkpoints.bind(image);
+        const RenderCheckpoint checkpoint = checkpoints.render(
             [&](Stage stop) {
                 return developOnGpu(*context_, *image, uploaded_[index], state, stop, request);
             },
@@ -186,7 +196,7 @@ public:
 
     /// @brief Releases the photograph from the device, as there is none to show.
     void forget() {
-        checkpoints_.clear();
+        clearCheckpoints();
         uploaded_.clear();
         source_.reset();
         sourceReason_.clear();
@@ -195,7 +205,7 @@ public:
     /// @brief Gives up the GPU for the photograph being shown, and says why.
     void fail(const std::string& reason) {
         sourceReason_ = reason;
-        checkpoints_.clear();
+        clearCheckpoints();
         uploaded_.clear();
         dropIfLost();
     }
@@ -217,11 +227,17 @@ private:
         context_ = createAppGpuContext(settings_, reason_);
     }
 
+    /// @brief Drops the checkpoints of both layers.
+    void clearCheckpoints() noexcept {
+        checkpoints_.clear();
+        backgroundCheckpoints_.clear();
+    }
+
     /// @brief Drops the device once it has failed for good; the CPU takes over.
     void dropIfLost() {
         if (context_ && context_->lost()) {
             reason_ = "GPU device lost";
-            checkpoints_.clear();
+            clearCheckpoints();
             uploaded_.clear();
             source_.reset();
             context_.reset();
@@ -237,6 +253,8 @@ private:
     std::vector<DeviceImage> uploaded_;
     /// Last pointwise and geometry results of the level shown, resident here.
     CheckpointCache checkpoints_;
+    /// The same for the background, whose coarser level would evict the shown one's.
+    CheckpointCache backgroundCheckpoints_;
     /// Photograph the levels belong to, or whose upload failed; kept alive so
     /// that its address identifies it.
     std::shared_ptr<const ImageBuffer> source_;
@@ -311,7 +329,7 @@ private:
 /// @brief Renders one request, turning a failure into a result.
 PreviewResult render(std::uint64_t id, const DevelopState& state, const PreviewView& view,
                      const std::shared_ptr<const ImageBuffer>& source, SourcePyramid& pyramid,
-                     CheckpointCache& cpuCache, GpuPreview* gpu) {
+                     CheckpointCache& cpuCache, GpuPreview* gpu, Layer layer) {
     const detail::TimingSpan timing("preview.render", id);
     PreviewResult result{.request = id,
                          .image = std::nullopt,
@@ -375,8 +393,8 @@ PreviewResult render(std::uint64_t id, const DevelopState& state, const PreviewV
         std::string gpuFailure;
         if (gpu != nullptr && gpu->prepare(source)) {
             try {
-                QImage image =
-                    toDisplayImage(gpu->render(level, reduced, state, request, result.resumedFrom));
+                QImage image = toDisplayImage(
+                    gpu->render(layer, level, reduced, state, request, result.resumedFrom));
                 image.setDevicePixelRatio(view.devicePixelRatio);
                 result.image = std::move(image);
                 result.onGpu = true;
@@ -461,7 +479,8 @@ void PreviewRenderer::run(std::stop_token stop) {
     // Host checkpoints of the CPU path, for the level it last rendered.
     CheckpointCache cpuCache;
     // Whole-frame fallback beneath region renders, with its own cache so it
-    // never evicts the detailed checkpoints; redone when the source or state changes.
+    // never evicts the detailed checkpoints (GpuPreview keeps a second one too);
+    // redone when the source or state changes.
     CheckpointCache backgroundCache;
     std::shared_ptr<const ImageBuffer> backgroundSource;
     std::optional<DevelopState> backgroundState;
@@ -491,11 +510,11 @@ void PreviewRenderer::run(std::stop_token stop) {
             const detail::TimingSpan backgroundTiming("preview.background");
             const PreviewResult reduced =
                 render(job->id, job->state, PreviewView::wholeFrame({1024, 1024}), source, pyramid,
-                       backgroundCache, nullptr);
+                       backgroundCache, gpu ? &*gpu : nullptr, Layer::Background);
             background = reduced.image;
         }
         PreviewResult result = render(job->id, job->state, job->view, source, pyramid, cpuCache,
-                                      gpu ? &*gpu : nullptr);
+                                      gpu ? &*gpu : nullptr, Layer::Shown);
         if (result.image) {
             result.background =
                 result.region == QRectF(0.0, 0.0, 1.0, 1.0) ? result.image : background;
