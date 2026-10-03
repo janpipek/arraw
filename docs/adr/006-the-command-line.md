@@ -218,3 +218,19 @@ error (2) before any file is touched. An empty folder reports `no photographs`
 input (1), and a sidecar that cannot be read fails its photograph under a
 filter, since its marks are unknown. The batch summary counts folders that could
 not be read among the failed inputs.
+
+## Note, 2026-10-03: exported metadata
+
+`export` takes `--metadata LIST` (ADR 032): `all`, `none`, or a comma list of
+`capture`, `location` and `descriptive`, in any case. The default is
+`capture,descriptive`; location (GPS) is carried only when named. The photograph's
+camera, lens, exposure and time, its rating and label (from the sidecar's marks)
+and its title, caption, keywords, creator and rights (from its own XMP and its
+sidecar, the sidecar winning) go into the JPEG, PNG or TIFF, and arraw's version
+into its `Software` tag. `--no-sidecar` also ignores the sidecar for this. An
+unknown name is a usage error (2). A photograph whose metadata exiv2 cannot read
+fails as an input (1) with a hint to pass `--metadata none`; nothing is written
+for it.
+```
+arraw-cli export <input>... -o <dir> [...] [--metadata LIST]
+```

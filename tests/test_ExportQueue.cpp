@@ -1,7 +1,9 @@
 #include "ExportQueue.h"
+#include "support/Fixtures.h"
 #include "support/TempDir.h"
 #include "support/TestImages.h"
 
+#include <ExifInfo.h>
 #include <ImageImport.h>
 
 #include <QImage>
@@ -103,6 +105,61 @@ TEST_CASE("Exports run in order and write files that load back", "[app][export][
     REQUIRE_FALSE(b.isNull());
     REQUIRE(b.width() == 32);
     REQUIRE(b.height() == 16);
+}
+
+TEST_CASE("An export job carries the chosen metadata", "[app][export][queue][metadata]") {
+    const test::TempDir dir;
+    Collector collector;
+    app::ExportQueue queue(collector.callback(), app::ExportQueue::Device::Cpu);
+
+    const auto carried = dir.file("carried.jpg");
+    const auto location = dir.file("location.jpg");
+    const auto none = dir.file("none.jpg");
+    const auto source = test::fixture("exif-32x24.dng");
+    app::ExportJob a = jobTo(carried, ImageFileFormat::Jpeg);
+    a.metadata = ExportMetadata{.source = source};
+    app::ExportJob b = jobTo(location, ImageFileFormat::Jpeg);
+    b.metadata = ExportMetadata{.source = source, .selection = {.location = true}};
+    app::ExportJob c = jobTo(none, ImageFileFormat::Jpeg);
+    c.metadata = ExportMetadata{
+        .source = source, .selection = {.capture = false, .location = false, .descriptive = false}};
+    queue.enqueue(std::move(a));
+    queue.enqueue(std::move(b));
+    queue.enqueue(std::move(c));
+
+    REQUIRE(collector.waitFor(3));
+    for (const auto& result : collector.results()) {
+        REQUIRE(result.error.empty());
+    }
+    const ExifInfo info = readExif(carried);
+    REQUIRE(info.model == "Fixture One");
+    REQUIRE_FALSE(info.gps);
+    REQUIRE(readExif(location).gps);
+    const ExifInfo empty = readExif(none);
+    REQUIRE_FALSE(empty.make);
+    REQUIRE_FALSE(empty.model);
+    REQUIRE_FALSE(empty.gps);
+}
+
+TEST_CASE("An export whose metadata cannot be read succeeds and carries the warning",
+          "[app][export][queue][metadata]") {
+    const test::TempDir dir;
+    Collector collector;
+    app::ExportQueue queue(collector.callback(), app::ExportQueue::Device::Cpu);
+    const auto path = dir.file("out.jpg");
+    app::ExportJob job = jobTo(path, ImageFileFormat::Jpeg);
+    job.metadata = ExportMetadata{.source = dir.file("absent.dng")};
+    queue.enqueue(std::move(job));
+    app::ExportJob fine = jobTo(dir.file("fine.jpg"), ImageFileFormat::Jpeg);
+    queue.enqueue(std::move(fine));
+
+    REQUIRE(collector.waitFor(2));
+    const auto results = collector.results();
+    REQUIRE(results[0].error.empty());
+    REQUIRE(std::filesystem::exists(path));
+    REQUIRE(results[0].warnings.size() == 1);
+    REQUIRE(results[0].warnings.front().find("without some metadata") != std::string::npos);
+    REQUIRE(results[1].warnings.empty());
 }
 
 TEST_CASE("A failing export reports, and the next one still runs", "[app][export][queue]") {

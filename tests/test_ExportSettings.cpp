@@ -145,6 +145,34 @@ TEST_CASE("Settings are remembered, except the size", "[app][export][settings]")
     REQUIRE(restored.height == 0);
 }
 
+TEST_CASE("Metadata choices default, map to a selection, and are remembered",
+          "[app][export][settings][metadata]") {
+    const ExportSettings defaults;
+    REQUIRE(app::selectionOf(defaults) == MetadataSelection{});
+    REQUIRE(defaults.captureInfo);
+    REQUIRE_FALSE(defaults.location);
+    REQUIRE(defaults.descriptive);
+
+    ExportSettings settings;
+    settings.captureInfo = false;
+    settings.location = true;
+    settings.descriptive = false;
+    REQUIRE(app::selectionOf(settings) ==
+            MetadataSelection{.capture = false, .location = true, .descriptive = false});
+
+    const test::TempDir dir;
+    const QString file = QString::fromStdU16String(dir.file("settings.ini").u16string());
+    {
+        QSettings store(file, QSettings::IniFormat);
+        app::saveSettings(settings, store);
+    }
+    QSettings store(file, QSettings::IniFormat);
+    const ExportSettings restored = app::restoreSettings(store);
+    REQUIRE_FALSE(restored.captureInfo);
+    REQUIRE(restored.location);
+    REQUIRE_FALSE(restored.descriptive);
+}
+
 TEST_CASE("Nothing stored, or nonsense, gives the defaults", "[app][export][settings]") {
     const test::TempDir dir;
     const QString file = QString::fromStdU16String(dir.file("settings.ini").u16string());

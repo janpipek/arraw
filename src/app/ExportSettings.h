@@ -24,6 +24,9 @@ struct ExportSettings {
     bool allowEnlarging = false;                    ///< Whether the size may exceed the frame's.
     int quality = 90;                               ///< JPEG quality, 0-100.
     int sharpening = 0;                             ///< Output sharpening amount, 0-100.
+    bool captureInfo = true;                        ///< Whether to carry camera and capture info.
+    bool location = false;                          ///< Whether to carry the GPS location.
+    bool descriptive = true; ///< Whether to carry rating, label, title, rights.
 };
 
 /// @brief Makes the render request for settings.
@@ -36,6 +39,10 @@ struct ExportSettings {
 /// 16 bits per channel is ignored for JPEG, which has only 8.
 /// @param settings What the user chose.
 [[nodiscard]] ExportOptions optionsOf(const ExportSettings& settings);
+
+/// @brief Maps the metadata choices of settings to the groups an export carries.
+/// @param settings What the user chose.
+[[nodiscard]] MetadataSelection selectionOf(const ExportSettings& settings);
 
 /// @brief Gives the extension a format is written with, without the dot.
 /// @param format File format.

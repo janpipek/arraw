@@ -25,6 +25,7 @@ add_executable(arraw-tests
         test_EditSession.cpp
         test_EmbeddedPreview.cpp
         test_ExifInfo.cpp
+        test_ExportMetadata.cpp
         test_ExportQueue.cpp
         test_ExportSettings.cpp
         test_FilmStripRules.cpp

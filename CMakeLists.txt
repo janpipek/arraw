@@ -173,6 +173,8 @@ add_library(arraw STATIC
         src/core/ExifInfo.cpp
         src/core/Exiv2Support.h
         src/core/Exiv2Support.cpp
+        src/core/MetadataEmbedding.h
+        src/core/MetadataEmbedding.cpp
         src/core/EmbeddedPreview.cpp
         include/ImageImport.h
         src/core/ImageImport.cpp
@@ -201,6 +203,8 @@ target_include_directories(arraw PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/gpu)
 # Private: nothing in include/ mentions Qt, and CMake still propagates the link
 # requirement to consumers of this static library.
 target_link_libraries(arraw PRIVATE Qt6::Core Qt6::Gui Qt6::Xml ${ARRAW_LIBRAW} ${ARRAW_EXIV2})
+# Stamped into exported files as their Software tag (ADR 032).
+target_compile_definitions(arraw PRIVATE ARRAW_VERSION="${PROJECT_VERSION}")
 # qt_standard_project_setup() turns AUTOMOC on globally; the engine has no Qt
 # types, so opting out keeps that honest (and saves a moc pass).
 set_target_properties(arraw PROPERTIES AUTOMOC OFF)

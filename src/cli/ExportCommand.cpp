@@ -27,6 +27,7 @@
 #include <QStringList>
 
 #include <algorithm>
+#include <cctype>
 #include <charconv>
 #include <cmath>
 #include <cstdint>
@@ -191,6 +192,8 @@ struct ExportRequest {
     /// @brief Whether each photograph's sidecar is read; false is `--no-sidecar`.
     bool useSidecars = true;
     ExportOptions options;
+    /// @brief Metadata groups each export carries from its photograph (ADR 032).
+    MetadataSelection metadata;
     /// @brief Size and filter of every render, built once for both devices.
     RenderRequest render;
     cli::DeviceChoice device;
@@ -202,6 +205,39 @@ struct ExportRequest {
     /// @brief Options given that do nothing without `--resize`, reported once the log exists.
     std::vector<std::string> ignoredResizeOptions;
 };
+
+/// @brief Reads the list `--metadata` takes.
+/// @return The groups it names, or nothing for an unknown name or an empty list.
+std::optional<MetadataSelection> parseMetadataSelection(const std::string& list) {
+    MetadataSelection selection{false, false, false};
+    std::string text = list;
+    std::ranges::transform(text, text.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (text == "all") {
+        return MetadataSelection{true, true, true};
+    }
+    if (text == "none") {
+        return selection;
+    }
+    std::size_t start = 0;
+    while (true) {
+        const auto comma = text.find(',', start);
+        const auto name = text.substr(start, comma == std::string::npos ? comma : comma - start);
+        if (name == "capture") {
+            selection.capture = true;
+        } else if (name == "location") {
+            selection.location = true;
+        } else if (name == "descriptive") {
+            selection.descriptive = true;
+        } else {
+            return std::nullopt;
+        }
+        if (comma == std::string::npos) {
+            return selection;
+        }
+        start = comma + 1;
+    }
+}
 
 /// @brief Which filter `--resize-filter` names, if any.
 std::optional<ResizeFilter> parseResizeFilter(const std::string& name) {
@@ -599,6 +635,12 @@ void configure(QCommandLineParser& parser) {
                       "the flags alone. Without it, the flags are applied on top of the sidecar's "
                       "settings. The command never writes a sidecar."});
     parser.addOption({"no-profile", "Convert colour but do not embed the output profile."});
+    parser.addOption({"metadata",
+                      "Metadata to carry from the photograph: all, none, or a comma-separated "
+                      "list of capture (camera, lens, exposure, time), location (GPS) and "
+                      "descriptive (rating, label, title, caption, keywords, creator, "
+                      "rights). Default: capture,descriptive.",
+                      "list"});
     cli::addMarksFilterOptions(parser);
     parser.addOption({"overwrite", "Replace outputs that already exist."});
     parser.addOption({{"q", "quiet"}, "Do not report each file as it is written."});
@@ -760,6 +802,15 @@ std::optional<ExportRequest> buildRequest(const QCommandLineParser& parser, std:
     request.logFormat = *logFormat;
 
     request.options.embedProfile = !parser.isSet("no-profile");
+    if (parser.isSet("metadata")) {
+        const auto selection = parseMetadataSelection(parser.value("metadata").toStdString());
+        if (!selection) {
+            code = usageError(err, "--metadata takes all, none, or a comma-separated list of "
+                                   "capture, location and descriptive");
+            return std::nullopt;
+        }
+        request.metadata = *selection;
+    }
     request.useSidecars = !parser.isSet("no-sidecar");
     const auto filter = cli::readMarksFilter(parser, "export", err, code);
     if (!filter) {
@@ -929,7 +980,18 @@ int exportAll(const ExportRequest& request, std::ostream& err) {
             if (!developed) {
                 developed = develop(source, photo.state(), request.render);
             }
-            exportImage(*developed, destination, request.options);
+            const ExportMetadata carried{input, photo.marks(), request.metadata,
+                                         request.useSidecars};
+            try {
+                exportImage(*developed, destination, request.options, carried, log);
+            } catch (const std::runtime_error& problem) {
+                if (std::string_view(problem.what()).find("Cannot write the metadata") ==
+                    std::string_view::npos) {
+                    throw;
+                }
+                throw std::runtime_error(std::string(problem.what()) +
+                                         "; pass --metadata none to export without it");
+            }
             log.record({.notice = Notice::Exported,
                         .severity = Severity::Info,
                         .subject = input,

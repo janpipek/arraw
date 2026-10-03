@@ -66,6 +66,8 @@ std::string nameOf(Notice notice) {
         return "exif_unreadable";
     case Notice::PreviewUnreadable:
         return "preview_unreadable";
+    case Notice::MetadataNotCarried:
+        return "metadata_not_carried";
     case Notice::NoPhotographs:
         return "no_photographs";
     case Notice::FilteredOut:

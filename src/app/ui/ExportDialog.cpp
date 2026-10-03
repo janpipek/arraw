@@ -110,6 +110,23 @@ ExportDialog::ExportDialog(const ExportSettings& initial, ImageSize frame, QWidg
     sharpenGroup->setLayout(linkedRow(sharpenSlider_, sharpenSpin_, 0, 100, initial.sharpening));
     root->addWidget(sharpenGroup);
 
+    auto* metadataGroup = new QGroupBox(tr("Metadata"));
+    auto* metadataLayout = new QVBoxLayout(metadataGroup);
+    captureCheck_ = new QCheckBox(tr("Camera && capture info"));
+    captureCheck_->setChecked(initial.captureInfo);
+    captureCheck_->setToolTip(tr("Camera, lens, exposure and capture time. Never serial numbers."));
+    locationCheck_ = new QCheckBox(tr("Location"));
+    locationCheck_->setChecked(initial.location);
+    locationCheck_->setToolTip(tr("Where the photograph was taken (GPS). It can reveal a home."));
+    descriptiveCheck_ = new QCheckBox(tr("Descriptive metadata"));
+    descriptiveCheck_->setChecked(initial.descriptive);
+    descriptiveCheck_->setToolTip(
+        tr("Rating, label, title, caption, keywords, creator and rights."));
+    metadataLayout->addWidget(captureCheck_);
+    metadataLayout->addWidget(locationCheck_);
+    metadataLayout->addWidget(descriptiveCheck_);
+    root->addWidget(metadataGroup);
+
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
     root->addWidget(buttons);
     connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
@@ -144,7 +161,10 @@ ExportSettings ExportDialog::settings() const {
             .height = static_cast<std::uint32_t>(heightSpin_->value()),
             .allowEnlarging = enlargeCheck_->isChecked(),
             .quality = qualitySpin_->value(),
-            .sharpening = sharpenSpin_->value()};
+            .sharpening = sharpenSpin_->value(),
+            .captureInfo = captureCheck_->isChecked(),
+            .location = locationCheck_->isChecked(),
+            .descriptive = descriptiveCheck_->isChecked()};
 }
 
 } // namespace arraw::app

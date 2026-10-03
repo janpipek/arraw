@@ -48,6 +48,9 @@ private:
     QSpinBox* qualitySpin_ = nullptr;
     QSlider* sharpenSlider_ = nullptr;
     QSpinBox* sharpenSpin_ = nullptr;
+    QCheckBox* captureCheck_ = nullptr;
+    QCheckBox* locationCheck_ = nullptr;
+    QCheckBox* descriptiveCheck_ = nullptr;
 };
 
 } // namespace arraw::app

@@ -93,6 +93,8 @@ std::string arraw::describe(const Diagnostic& diagnostic) {
         return valueAt(diagnostic, 0) + "; no capture information is shown";
     case Notice::PreviewUnreadable:
         return valueAt(diagnostic, 0) + "; no embedded preview is shown";
+    case Notice::MetadataNotCarried:
+        return "exported without some metadata: " + valueAt(diagnostic, 0);
     case Notice::NoPhotographs:
         return "no photographs";
     case Notice::FilteredOut:

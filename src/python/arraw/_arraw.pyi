@@ -890,9 +890,34 @@ def resolved_size(size: int | tuple[int, int] | float, cropped: ImageSize, *, al
     Resolve a develop `size` against the size after the crop, as develop does.
     """
 
-def save(image: ImageBuffer, path: str | os.PathLike, *, format: ImageFileFormat | None = None, encoding: NamedEncoding = NamedEncoding.SRGB, bit_depth: int = 8, quality: int = 90, embed_profile: bool = True, sharpening: int = 0) -> None:
+class MetadataSelection:
     """
-    Write an image as JPEG, PNG or TIFF; the format comes from the extension unless given. `sharpening` (0-100, default 0 = off) applies an unsharp mask to the final pixels.
+    Groups of metadata an export carries from its source photograph: capture (camera, lens, exposure, time), location (GPS) and descriptive (rating, label, title, caption, keywords, creator, rights).
+    """
+
+    def __init__(self, *, capture: bool = True, location: bool = False, descriptive: bool = True) -> None: ...
+
+    @property
+    def capture(self) -> bool: ...
+
+    @property
+    def location(self) -> bool: ...
+
+    @property
+    def descriptive(self) -> bool: ...
+
+    def __eq__(self, arg: MetadataSelection, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> MetadataSelection:
+        """Return a copy with the given attributes replaced."""
+
+def save(image: ImageBuffer, path: str | os.PathLike, *, format: ImageFileFormat | None = None, encoding: NamedEncoding = NamedEncoding.SRGB, bit_depth: int = 8, quality: int = 90, embed_profile: bool = True, sharpening: int = 0, metadata_from: Photo | None = None, metadata: MetadataSelection = ...) -> None:
+    """
+    Write an image as JPEG, PNG or TIFF; the format comes from the extension unless given. `sharpening` (0-100, default 0 = off) applies an unsharp mask to the final pixels. With `metadata_from` (the photograph the pixels came from) the groups of `metadata` are copied from its file and sidecar, and its marks written as rating and label; without it nothing is written. A source or sidecar that cannot be read is logged as a warning on the 'arraw' logger and its metadata left out; the file is still written.
     """
 
 class Shot:

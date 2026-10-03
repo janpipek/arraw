@@ -51,6 +51,12 @@ ExportOptions optionsOf(const ExportSettings& settings) {
     return options;
 }
 
+MetadataSelection selectionOf(const ExportSettings& settings) {
+    return {.capture = settings.captureInfo,
+            .location = settings.location,
+            .descriptive = settings.descriptive};
+}
+
 std::string_view suffixOf(ImageFileFormat format) {
     switch (format) {
     case ImageFileFormat::Jpeg:
@@ -108,6 +114,9 @@ void saveSettings(const ExportSettings& settings, QSettings& store) {
     store.setValue(group + "allowEnlarging", settings.allowEnlarging);
     store.setValue(group + "quality", settings.quality);
     store.setValue(group + "sharpening", settings.sharpening);
+    store.setValue(group + "captureInfo", settings.captureInfo);
+    store.setValue(group + "location", settings.location);
+    store.setValue(group + "descriptive", settings.descriptive);
 }
 
 ExportSettings restoreSettings(QSettings& store) {
@@ -132,6 +141,9 @@ ExportSettings restoreSettings(QSettings& store) {
         store.value(group + "allowEnlarging", settings.allowEnlarging).toBool();
     settings.quality = storedInt(store, "quality", settings.quality, 0, 100);
     settings.sharpening = storedInt(store, "sharpening", settings.sharpening, 0, 100);
+    settings.captureInfo = store.value(group + "captureInfo", settings.captureInfo).toBool();
+    settings.location = store.value(group + "location", settings.location).toBool();
+    settings.descriptive = store.value(group + "descriptive", settings.descriptive).toBool();
     return settings;
 }
 

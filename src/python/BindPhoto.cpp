@@ -312,22 +312,42 @@ void bindPhoto(nb::module_& m) {
                 "allow_upscale: bool = False) -> ImageSize"),
         "Resolve a develop `size` against the size after the crop, as develop does.");
 
+    bindFrozen<MetadataSelection>(
+        m, "MetadataSelection",
+        "Groups of metadata an export carries from its source photograph: capture (camera, lens, "
+        "exposure, time), location (GPS) and descriptive (rating, label, title, caption, "
+        "keywords, creator, rights).",
+        field("capture", &MetadataSelection::capture),
+        field("location", &MetadataSelection::location),
+        field("descriptive", &MetadataSelection::descriptive));
+
     const ExportOptions exportDefaults{};
     m.def(
         "save",
         [](const ImageBuffer& image, const std::filesystem::path& path,
            std::optional<ImageFileFormat> format, NamedEncoding encoding, int bitDepth, int quality,
-           bool embedProfile, int sharpening) {
+           bool embedProfile, int sharpening, const std::optional<Photo>& metadataFrom,
+           const MetadataSelection& metadata) {
             const ExportOptions options{format,  encoding,     bitDepth,
                                         quality, embedProfile, sharpening};
-            withoutGil([&] { exportImage(image, path, options); });
+            std::optional<ExportMetadata> carried;
+            if (metadataFrom) {
+                carried = ExportMetadata{metadataFrom->path(), metadataFrom->marks(), metadata};
+            }
+            PythonLog log;
+            withoutGil([&] { exportImage(image, path, options, carried, log); });
         },
         "image"_a, "path"_a, nb::kw_only(), "format"_a = exportDefaults.format,
         "encoding"_a = exportDefaults.encoding, "bit_depth"_a = exportDefaults.bitDepth,
         "quality"_a = exportDefaults.quality, "embed_profile"_a = exportDefaults.embedProfile,
-        "sharpening"_a = exportDefaults.sharpening,
+        "sharpening"_a = exportDefaults.sharpening, "metadata_from"_a = std::optional<Photo>{},
+        "metadata"_a = MetadataSelection{},
         "Write an image as JPEG, PNG or TIFF; the format comes from the extension unless given. "
-        "`sharpening` (0-100, default 0 = off) applies an unsharp mask to the final pixels.");
+        "`sharpening` (0-100, default 0 = off) applies an unsharp mask to the final pixels. "
+        "With `metadata_from` (the photograph the pixels came from) the groups of `metadata` "
+        "are copied from its file and sidecar, and its marks written as rating and label; "
+        "without it nothing is written. A source or sidecar that cannot be read is logged as a "
+        "warning on the 'arraw' logger and its metadata left out; the file is still written.");
 }
 
 } // namespace arraw::python

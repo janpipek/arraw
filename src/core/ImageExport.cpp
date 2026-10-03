@@ -1,7 +1,10 @@
 #include "ImageExport.h"
 
+#include "MetadataEmbedding.h"
 #include "QtImage.h"
 
+#include <QBuffer>
+#include <QByteArray>
 #include <QColorSpace>
 #include <QFile>
 #include <QImage>
@@ -13,6 +16,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -273,12 +277,24 @@ QImage prepareExportImage(const ImageBuffer& image, ImageFileFormat format,
     return prepared;
 }
 
+/// @brief Encodes a prepared image to a device.
+void encode(QIODevice& device, const QImage& image, ImageFileFormat format,
+            const ExportOptions& options) {
+    QImageWriter writer(&device, fileFormatToString(format));
+    if (format == ImageFileFormat::Jpeg) {
+        writer.setQuality(options.quality);
+    }
+    if (!writer.write(image)) {
+        throw std::runtime_error("Cannot encode image: " + writer.errorString().toStdString());
+    }
+}
+
 } // namespace
 
 void arraw::exportImage(const ImageBuffer& image, const std::filesystem::path& path,
-                        const ExportOptions& options) {
+                        const ExportOptions& options, const std::optional<ExportMetadata>& metadata,
+                        DiagnosticLog& log) {
     const auto format = extractImageFileFormat(path, options);
-    const auto fileFormat = fileFormatToString(format);
     validateExportOptions(format, options);
     const QImage qImage = prepareExportImage(image, format, options);
 
@@ -291,15 +307,23 @@ void arraw::exportImage(const ImageBuffer& image, const std::filesystem::path& p
                                  output.errorString().toStdString());
     }
 
-    {
-        QImageWriter writer(&output, fileFormat);
-        if (format == ImageFileFormat::Jpeg) {
-            writer.setQuality(options.quality);
+    if (metadata && carriesAnything(metadata->selection)) {
+        // Encoded in memory and given its metadata there, so that a failure of
+        // either leaves the destination as it was, and the file is committed once.
+        QByteArray encoded;
+        QBuffer buffer(&encoded);
+        buffer.open(QIODevice::WriteOnly);
+        encode(buffer, qImage, format, options);
+        buffer.close();
+        const QByteArray embedded = embedMetadata(
+            encoded, *metadata,
+            {qImage.width(), qImage.height(), options.encoding == NamedEncoding::Srgb}, log);
+        const QByteArray& bytes = embedded.isNull() ? encoded : embedded;
+        if (output.write(bytes) != bytes.size()) {
+            throw std::runtime_error("Cannot write export: " + output.errorString().toStdString());
         }
-
-        if (!writer.write(qImage)) {
-            throw std::runtime_error("Cannot encode image: " + writer.errorString().toStdString());
-        }
+    } else {
+        encode(output, qImage, format, options);
     }
 
     if (!output.commit()) {

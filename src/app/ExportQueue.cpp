@@ -3,6 +3,7 @@
 #include "GpuContext.h"
 #include "GpuDevelop.h"
 
+#include <Diagnostics.h>
 #include <RenderCheckpoint.h>
 
 #include <exception>
@@ -91,7 +92,11 @@ ExportResult execute(std::uint64_t id, const ExportJob& job, GpuExport* gpu) {
         if (!developed) {
             developed = develop(*job.source, job.state, job.request);
         }
-        exportImage(*developed, job.path, job.options);
+        CollectedDiagnostics log;
+        exportImage(*developed, job.path, job.options, job.metadata, log);
+        for (const auto& entry : log.entries()) {
+            result.warnings.push_back(describe(entry));
+        }
     } catch (const std::exception& error) {
         result.error = error.what();
     } catch (...) {

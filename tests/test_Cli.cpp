@@ -8,6 +8,7 @@
 #include <Develop.h>
 #include <DevelopSettings.h>
 #include <Diagnostics.h>
+#include <ExifInfo.h>
 #include <Photo.h>
 #include <Sidecar.h>
 
@@ -456,6 +457,47 @@ TEST_CASE("The sharpen flag is documented and sharpens the export", "[cli]") {
     REQUIRE_FALSE(plain.isNull());
     REQUIRE(crisp.size() == plain.size());
     REQUIRE(crisp != plain);
+}
+
+TEST_CASE("The metadata flag chooses what an export carries from its photograph", "[cli]") {
+    REQUIRE_THAT(invoke({"export", "--help"}).out, ContainsSubstring("--metadata"));
+    const test::TempDir directory;
+    const auto raw = test::fixture("exif-32x24.dng").string();
+    const auto out = directory.file("exif-32x24.jpg");
+    const auto run = [&](const std::string& list) {
+        std::vector<std::string> command{"export", raw, "-o", directory.path().string(),
+                                         "--overwrite"};
+        if (!list.empty()) {
+            command.insert(command.end(), {"--metadata", list});
+        }
+        return invoke(command);
+    };
+
+    REQUIRE(run("").code == cli::Success);
+    REQUIRE(readExif(out).make == "Arraw");
+    REQUIRE_FALSE(readExif(out).gps);
+
+    REQUIRE(run("capture,location").code == cli::Success);
+    REQUIRE(readExif(out).gps);
+    REQUIRE(readExif(out).make == "Arraw");
+
+    REQUIRE(run("ALL").code == cli::Success);
+    REQUIRE(readExif(out).gps);
+
+    REQUIRE(run("descriptive").code == cli::Success);
+    REQUIRE_FALSE(readExif(out).make);
+    REQUIRE(readExif(out).artist == "Ada Lovelace");
+
+    REQUIRE(run("none").code == cli::Success);
+    REQUIRE(readExif(out) == ExifInfo{});
+
+    for (const char* bad : {"everything", "capture,", "capture,gps", ""}) {
+        const auto result =
+            invoke({"export", raw, "-o", directory.path().string(), "--metadata", bad});
+        CAPTURE(bad);
+        REQUIRE(result.code == cli::UsageError);
+        REQUIRE_THAT(result.err, ContainsSubstring("--metadata"));
+    }
 }
 
 TEST_CASE("Exposure reaches the exported pixels", "[cli]") {

@@ -670,7 +670,10 @@ void MainWindow::exportWithDialog() {
                               .source = open_->decoded,
                               .request = requestOf(settings),
                               .options = optionsOf(settings),
-                              .path = path});
+                              .path = path,
+                              .metadata = ExportMetadata{.source = photo.path(),
+                                                         .marks = photo.marks(),
+                                                         .selection = selectionOf(settings)}});
         exportNames_.push_back(toQString(path.filename()));
         showExportProgress();
     } catch (const std::exception& error) {
@@ -690,12 +693,22 @@ void MainWindow::showExportProgress() {
 }
 
 void MainWindow::showExportResult(const ExportResult& result) {
+    statusBar()->setToolTip({});
     // Every result belongs to the oldest name: jobs run in order.
     if (!exportNames_.empty()) {
         const QString name = exportNames_.front();
         exportNames_.pop_front();
         if (result.error.empty()) {
-            statusBar()->showMessage(tr("Exported %1").arg(name), 5000);
+            if (result.warnings.empty()) {
+                statusBar()->showMessage(tr("Exported %1").arg(name), 5000);
+            } else {
+                QStringList details;
+                for (const auto& warning : result.warnings) {
+                    details << QString::fromStdString(warning);
+                }
+                statusBar()->setToolTip(details.join(QLatin1Char('\n')));
+                statusBar()->showMessage(tr("Exported %1 without some metadata").arg(name), 8000);
+            }
         } else {
             statusBar()->clearMessage();
         }

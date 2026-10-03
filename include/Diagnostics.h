@@ -113,6 +113,10 @@ enum class Notice {
     /// @brief A photograph's embedded preview could not be looked for, so none
     /// is shown: the reason.
     PreviewUnreadable,
+
+    /// @brief An export left out metadata it could not read or copy from its
+    /// source, but was written: what was left out and why.
+    MetadataNotCarried,
 };
 
 /// @brief One detail of a diagnostic, kept as a value rather than as prose.

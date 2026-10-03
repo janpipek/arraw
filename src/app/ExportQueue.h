@@ -13,8 +13,10 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace arraw::app {
 
@@ -33,6 +35,8 @@ struct ExportJob {
     ExportOptions options;
     /// File to create or replace.
     std::filesystem::path path;
+    /// Metadata to carry into the file; none when nothing is to be carried.
+    std::optional<ExportMetadata> metadata;
 };
 
 /// @brief Outcome of one export.
@@ -43,6 +47,9 @@ struct ExportResult {
     std::filesystem::path path;
     /// Description of the failure; empty when the file was written.
     std::string error;
+    /// Sentences about what the file was written without, as metadata that could not be
+    /// carried; empty when nothing was left out. Meaningful only when error is empty.
+    std::vector<std::string> warnings;
     /// Whether the GPU developed the photograph, rather than the CPU.
     bool onGpu = false;
     /// Why the CPU developed when the GPU was wanted, or empty when it was not.
