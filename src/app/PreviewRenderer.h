@@ -41,12 +41,16 @@ struct PreviewView {
 };
 
 /// @brief Outcome of one preview render.
+///
+/// A result with only @ref background set is a refreshed fallback, rendered
+/// for its request's state after the render of that request was delivered.
 struct PreviewResult {
     /// Identifier PreviewRenderer::request returned for the render.
     std::uint64_t request = 0;
     /// Rendered image, set when the render succeeded.
     std::optional<QImage> image;
-    /// Reduced whole-frame image beneath the detailed region.
+    /// Reduced whole-frame image beneath the detailed region; possibly of an
+    /// earlier state with the same geometry, until a refreshed one follows.
     std::optional<QImage> background;
     /// Description of the failure, set when the render failed.
     std::string error;
@@ -80,7 +84,9 @@ struct PreviewResult {
 /// edit. Uses no Qt signals, so it works without an event loop.
 ///
 /// Renders the part of the frame a request names (ADR 025), so that a zoomed
-/// view costs the size of the view, not of the photograph.
+/// view costs the size of the view, not of the photograph. Beneath such a
+/// region it keeps a reduced whole frame, to fill what a pan uncovers: the
+/// last whole-frame render, refreshed once requests pause after an edit.
 ///
 /// Develops from a reduced copy of the photograph when the output is much
 /// smaller than what it shows: a pyramid of 2x box reductions, built lazily on the worker

@@ -60,6 +60,10 @@ public:
     /// @param background Reduced whole-frame image to fill newly exposed areas.
     void setImage(const QImage& image, const QRectF& region, const QImage& background);
 
+    /// @brief Replaces the whole-frame image beneath the render.
+    /// @param background Reduced whole-frame image, refreshed after the render.
+    void setBackground(const QImage& background);
+
     /// @brief Fits the whole frame and keeps it fitted; for a newly opened photograph.
     ///
     /// Does not emit viewChanged: the caller renders.

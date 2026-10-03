@@ -472,6 +472,22 @@ void MainWindow::openFileWithDialog() {
     openFile(std::filesystem::path(fileName.toStdU16String()));
 }
 
+void MainWindow::openInitialPath(const std::optional<std::filesystem::path>& path) {
+    QSettings store;
+    const auto selected = path ? path : restoreOpenPath(store);
+    if (!selected) {
+        return;
+    }
+    const std::filesystem::path absolute(
+        QFileInfo(toQString(*selected)).absoluteFilePath().toStdU16String());
+    std::error_code error;
+    if (std::filesystem::is_directory(absolute, error)) {
+        openFolder(absolute);
+    } else {
+        openFile(absolute);
+    }
+}
+
 void MainWindow::openFile(const std::filesystem::path& path) {
     // The one place that can tell the user: an exception must not leave a
     // function Qt's event loop called, which ends in std::terminate.
@@ -531,6 +547,7 @@ void MainWindow::openFolder(const std::filesystem::path& folder) {
         return;
     }
     rememberFolder(folder);
+    QSettings().remove("lastFile");
     if (const auto first = filmStrip_->firstVisible()) {
         activateShot(toQString(*first));
     }
@@ -559,7 +576,7 @@ QString MainWindow::dialogFolder() const {
 }
 
 void MainWindow::rememberFolder(const std::filesystem::path& folder) {
-    QSettings().setValue("lastFolder", toQString(folder));
+    QSettings().setValue("lastFolder", QFileInfo(toQString(folder)).absoluteFilePath());
 }
 
 void MainWindow::buildFilmStripDock() {
@@ -884,7 +901,16 @@ void MainWindow::requestRender() {
 }
 
 void MainWindow::showResult(const PreviewResult& result) {
-    if (result.request < firstRequest_ || result.request <= latestShown_) {
+    if (result.request < firstRequest_) {
+        return;
+    }
+    // A refreshed fallback follows the render it belongs to, so it is never
+    // older than what is shown.
+    if (!result.image && result.background) {
+        photoView_->setBackground(*result.background);
+        return;
+    }
+    if (result.request <= latestShown_) {
         return;
     }
     if (result.image) {
@@ -957,6 +983,9 @@ void MainWindow::showPhoto(Photo photo) {
     developDock_->setEnabled(true);
     exportAction_->setEnabled(true);
     refreshPanel(); // Requests the first render.
+    const auto& path = open_->session.photo().path();
+    rememberFolder(path.parent_path());
+    QSettings().setValue("lastFile", QFileInfo(toQString(path)).absoluteFilePath());
 }
 
 } // namespace arraw::app

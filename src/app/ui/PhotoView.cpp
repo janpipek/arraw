@@ -81,6 +81,11 @@ void PhotoView::setImage(const QImage& image, const QRectF& region, const QImage
     update();
 }
 
+void PhotoView::setBackground(const QImage& background) {
+    background_ = background;
+    update();
+}
+
 void PhotoView::resetView() {
     image_ = {};
     background_ = {};

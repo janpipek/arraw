@@ -32,7 +32,11 @@ public:
                 if (closed_) {
                     ++lateCalls_;
                 }
-                results_.push_back(std::move(result));
+                if (!result.image && result.background) {
+                    backgrounds_.push_back(std::move(result));
+                } else {
+                    results_.push_back(std::move(result));
+                }
             }
             changed_.notify_all();
         };
@@ -43,6 +47,14 @@ public:
         std::unique_lock lock(mutex_);
         return changed_.wait_for(
             lock, timeout, [&] { return !results_.empty() && results_.back().request >= id; });
+    }
+
+    /// Waits until a refreshed fallback for @p id, or a later one, has arrived.
+    [[nodiscard]] bool waitForBackground(std::uint64_t id) {
+        std::unique_lock lock(mutex_);
+        return changed_.wait_for(lock, timeout, [&] {
+            return !backgrounds_.empty() && backgrounds_.back().request >= id;
+        });
     }
 
     /// Makes any later callback count as late.
@@ -56,6 +68,12 @@ public:
         return results_;
     }
 
+    /// Refreshed fallbacks, apart from the renders.
+    [[nodiscard]] std::vector<app::PreviewResult> backgrounds() {
+        const std::scoped_lock lock(mutex_);
+        return backgrounds_;
+    }
+
     [[nodiscard]] int lateCalls() {
         const std::scoped_lock lock(mutex_);
         return lateCalls_;
@@ -65,6 +83,7 @@ private:
     std::mutex mutex_;
     std::condition_variable changed_;
     std::vector<app::PreviewResult> results_;
+    std::vector<app::PreviewResult> backgrounds_;
     bool closed_ = false;
     int lateCalls_ = 0;
 };
@@ -477,39 +496,67 @@ TEST_CASE("A region outside the frame is reported as a failure", "[app][preview]
     REQUIRE_FALSE(result.image.has_value());
 }
 
-TEST_CASE("Panning reuses a whole-frame fallback and edits refresh it", "[app][preview][region]") {
+TEST_CASE("A region carries the last whole frame beneath it", "[app][preview][region]") {
     Collector collector;
     app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
     renderer.setSource(makeLargeSource());
-    app::PreviewView view{.region = QRect(100, 100, 200, 100), .outputSize = {200, 100}};
-    auto id = renderer.request({}, view);
+    auto id = renderer.request({}, app::PreviewView::wholeFrame({1024, 1024}));
     REQUIRE(collector.waitFor(id));
-    const auto first = collector.results().back();
-    REQUIRE(first.background.has_value());
-    REQUIRE(first.background->size() == QSize(1024, 512));
+    const QImage whole = *collector.results().back().image;
+
+    app::PreviewView view{.region = QRect(100, 100, 200, 100), .outputSize = {200, 100}};
+    id = renderer.request({}, view);
+    REQUIRE(collector.waitFor(id));
+    const auto zoomed = collector.results().back();
+    REQUIRE(zoomed.background.has_value());
+    REQUIRE(zoomed.background->cacheKey() == whole.cacheKey());
 
     view.region = QRect(200, 100, 200, 100);
     id = renderer.request({}, view);
     REQUIRE(collector.waitFor(id));
     const auto panned = collector.results().back();
-    REQUIRE(panned.background.has_value());
-    REQUIRE(panned.background->cacheKey() == first.background->cacheKey());
+    REQUIRE(panned.background->cacheKey() == whole.cacheKey());
     REQUIRE(panned.resumedFrom == Stage::Geometry);
+    // Nothing was out of date, so nothing followed.
+    REQUIRE(collector.backgrounds().empty());
+}
+
+TEST_CASE("An edit shows the earlier fallback until a refreshed one follows",
+          "[app][preview][region]") {
+    Collector collector;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
+    renderer.setSource(makeLargeSource());
+    const app::PreviewView view{.region = QRect(100, 100, 200, 100), .outputSize = {200, 100}};
+    auto id = renderer.request({}, view);
+    REQUIRE(collector.waitFor(id));
+    // Nothing was rendered of the whole frame yet.
+    REQUIRE_FALSE(collector.results().back().background.has_value());
+    REQUIRE(collector.waitForBackground(id));
+    const QImage first = *collector.backgrounds().back().background;
+    REQUIRE(first.size() == QSize(1024, 512));
 
     DevelopState edited;
     edited.settings.tone.exposure = 1.0F;
     id = renderer.request(edited, view);
     REQUIRE(collector.waitFor(id));
-    const auto changed = collector.results().back();
-    REQUIRE(changed.background.has_value());
-    REQUIRE(*changed.background != *first.background);
+    REQUIRE(collector.results().back().background->cacheKey() == first.cacheKey());
+    REQUIRE(collector.waitForBackground(id));
+    REQUIRE(*collector.backgrounds().back().background != first);
+
+    // A geometry edit moves the frame under the fallback, which is dropped.
+    edited.settings.geometry.straighten = 5.0;
+    id = renderer.request(edited, view);
+    REQUIRE(collector.waitFor(id));
+    REQUIRE_FALSE(collector.results().back().background.has_value());
+    REQUIRE(collector.waitForBackground(id));
 
     renderer.setSource(makeSource());
-    view.region = QRect(0, 0, 100, 100);
-    id = renderer.request({}, view);
+    id = renderer.request(
+        {}, app::PreviewView{.region = QRect(0, 0, 100, 100), .outputSize = {100, 100}});
     REQUIRE(collector.waitFor(id));
-    REQUIRE(collector.results().back().background.has_value());
-    REQUIRE(collector.results().back().background->size() == QSize(256, 128));
+    REQUIRE_FALSE(collector.results().back().background.has_value());
+    REQUIRE(collector.waitForBackground(id));
+    REQUIRE(collector.backgrounds().back().background->size() == QSize(256, 128));
 }
 
 TEST_CASE("Desktop CPU preference overrides automatic preview rendering",

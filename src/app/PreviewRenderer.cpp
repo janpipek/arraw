@@ -10,6 +10,7 @@
 #include <RenderCheckpoint.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <exception>
 #include <memory>
@@ -109,6 +110,15 @@ private:
     /// Result after the geometry, before any resize.
     std::optional<RenderCheckpoint> geometry_;
 };
+
+/// @brief Idle time after a region render before the fallback beneath it is refreshed.
+///
+/// Long enough that the gaps of a slider drag do not start one, which would
+/// hold up the next edit; short enough to follow soon after the edit stops.
+constexpr std::chrono::milliseconds backgroundDelay{150};
+
+/// @brief Size the whole-frame fallback is rendered within.
+constexpr QSize backgroundSize{1024, 1024};
 
 /// @brief Which of a request's renders is made; each keeps its own checkpoints.
 enum class Layer {
@@ -478,13 +488,21 @@ void PreviewRenderer::run(std::stop_token stop) {
     SourcePyramid pyramid;
     // Host checkpoints of the CPU path, for the level it last rendered.
     CheckpointCache cpuCache;
-    // Whole-frame fallback beneath region renders, with its own cache so it
-    // never evicts the detailed checkpoints (GpuPreview keeps a second one too);
-    // redone when the source or state changes.
+    // Whole-frame fallback beneath region renders, with its own CPU cache so it
+    // never evicts the detailed checkpoints (GpuPreview keeps a second one too).
+    // Kept across edits that leave the geometry alone, as it still lines up;
+    // backgroundState is what it was rendered for.
     CheckpointCache backgroundCache;
     std::shared_ptr<const ImageBuffer> backgroundSource;
     std::optional<DevelopState> backgroundState;
     std::optional<QImage> background;
+    const auto deliver = [this](PreviewResult result) {
+        try {
+            onResult_(std::move(result));
+        } catch (...) {
+            // The callback's failure is not ours to handle, and must not end the thread.
+        }
+    };
     while (true) {
         std::optional<Pending> job;
         std::shared_ptr<const ImageBuffer> source;
@@ -498,31 +516,57 @@ void PreviewRenderer::run(std::stop_token stop) {
             pending_.reset();
             source = source_;
         }
-        const detail::TimingSpan timing("preview", job->id);
-        // Without the lock: developing takes long, and the window must be able
-        // to queue the next request meanwhile.
-        if (source != backgroundSource || backgroundState != job->state) {
+        if (source != backgroundSource || (backgroundState && backgroundState->settings.geometry !=
+                                                                  job->state.settings.geometry)) {
             background.reset();
+            backgroundState.reset();
             backgroundSource = source;
-            backgroundState = job->state;
         }
-        if (source && job->view.region && !background) {
-            const detail::TimingSpan backgroundTiming("preview.background");
-            const PreviewResult reduced =
-                render(job->id, job->state, PreviewView::wholeFrame({1024, 1024}), source, pyramid,
-                       backgroundCache, gpu ? &*gpu : nullptr, Layer::Background);
-            background = reduced.image;
+        bool shown = false;
+        {
+            const detail::TimingSpan timing("preview", job->id);
+            // Without the lock: developing takes long, and the window must be
+            // able to queue the next request meanwhile.
+            PreviewResult result = render(job->id, job->state, job->view, source, pyramid, cpuCache,
+                                          gpu ? &*gpu : nullptr, Layer::Shown);
+            if (result.image && result.region == QRectF(0.0, 0.0, 1.0, 1.0)) {
+                background = result.image;
+                backgroundState = job->state;
+            }
+            if (result.image) {
+                shown = true;
+                result.background = background;
+            }
+            deliver(std::move(result));
         }
-        PreviewResult result = render(job->id, job->state, job->view, source, pyramid, cpuCache,
-                                      gpu ? &*gpu : nullptr, Layer::Shown);
-        if (result.image) {
-            result.background =
-                result.region == QRectF(0.0, 0.0, 1.0, 1.0) ? result.image : background;
+        // The fallback is refreshed only once the requests pause, after the
+        // render that was asked for, so that it never delays one.
+        if (!shown || !job->view.region || backgroundState == job->state) {
+            continue;
         }
-        try {
-            onResult_(std::move(result));
-        } catch (...) {
-            // The callback's failure is not ours to handle, and must not end the thread.
+        {
+            std::unique_lock lock(mutex_);
+            if (wake_.wait_for(lock, stop, backgroundDelay,
+                               [this] { return pending_.has_value(); }) ||
+                source_ != source) {
+                continue;
+            }
+            if (stop.stop_requested()) {
+                return;
+            }
+        }
+        const detail::TimingSpan timing("preview.background", job->id);
+        PreviewResult reduced =
+            render(job->id, job->state, PreviewView::wholeFrame(backgroundSize), source, pyramid,
+                   backgroundCache, gpu ? &*gpu : nullptr, Layer::Background);
+        // A failure is not retried for the same state; the region render reports it.
+        backgroundState = job->state;
+        background = std::move(reduced.image);
+        if (background) {
+            PreviewResult update;
+            update.request = job->id;
+            update.background = background;
+            deliver(std::move(update));
         }
     }
 }
