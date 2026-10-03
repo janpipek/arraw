@@ -20,13 +20,18 @@ namespace arraw {
 /// that edits produce. An edit is opened with begin(), changed any number of
 /// times with update() and closed with commit() or cancel(), so that a slider
 /// drag or a brush stroke is one history step rather than a hundred (ADR 022).
-/// History holds develop states only: marks are not undone. Unsaved-change
-/// tracking will live here too.
+/// History holds develop states only: marks are not undone.
+///
+/// The session also holds the photograph as its sidecar holds it, saved(), so
+/// that "unsaved changes" is a comparison and not a flag (ADR 030). Develop
+/// edits reach the sidecar through save(); marks reach it at once, through
+/// setMarks().
 class EditSession {
 public:
     /// @brief Starts editing a photograph, with no history.
-    /// @param photo Document to edit, usually from ::arraw::openPhoto.
-    explicit EditSession(Photo photo) : photo_(std::move(photo)) {}
+    /// @param photo Document to edit, usually from ::arraw::openPhoto, which is
+    /// taken to be what its sidecar holds (or defaults, when there is none).
+    explicit EditSession(Photo photo) : photo_(photo), saved_(std::move(photo)) {}
 
     /// @brief Current state of the document, including an edit in progress.
     ///
@@ -89,8 +94,43 @@ public:
     /// @throws std::logic_error if there is nothing to redo.
     void redo();
 
+    /// @brief Photograph as its sidecar holds it: the baseline of unsaved changes.
+    [[nodiscard]] const Photo& saved() const noexcept {
+        return saved_;
+    }
+
+    /// @brief Whether the develop state, an open edit included, differs from the saved one.
+    ///
+    /// Marks never count: they are written as they change (see setMarks()).
+    [[nodiscard]] bool hasUnsavedChanges() const {
+        return photo_.state() != saved_.state();
+    }
+
+    /// @brief Writes the photograph to its sidecar and makes that the saved state.
+    ///
+    /// An open edit is committed first. History is kept: saving is not an edit.
+    /// @throws std::runtime_error as ::arraw::writeSidecar does; nothing changes.
+    void save();
+
+    /// @brief Sets the marks, writing them to the sidecar at once.
+    ///
+    /// Writes the saved photograph with the new marks, so develop edits not yet
+    /// saved stay out of the file, then updates saved() and photo(). This is
+    /// not an undo step (ADR 021, 022).
+    /// @param marks Marks the photograph carries from now on.
+    /// @throws std::invalid_argument if @p marks are not valid.
+    /// @throws std::runtime_error as ::arraw::writeSidecar does.
+    /// Either way nothing changes.
+    void setMarks(PhotoMarks marks);
+
+    /// @brief Returns the develop state to the saved one, dropping history and any open edit.
+    void discardChanges();
+
 private:
     Photo photo_;
+
+    /// Photograph as the sidecar holds it.
+    Photo saved_;
 
     /// State the open edit started from; empty when no edit is open.
     std::optional<DevelopState> baseline_;

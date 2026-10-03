@@ -1,7 +1,13 @@
+#include "support/Fixtures.h"
+#include "support/TempDir.h"
+
 #include <EditSession.h>
+#include <Sidecar.h>
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <filesystem>
+#include <fstream>
 #include <stdexcept>
 
 using namespace arraw;
@@ -206,4 +212,174 @@ TEST_CASE("Redo is still offered while an open edit has changed nothing", "[sess
 
     session.redo();
     REQUIRE(session.photo().state() == exposed(1.0F));
+}
+
+namespace {
+
+/// @brief Copies a RAW fixture into a directory, so that a sidecar can sit beside it.
+std::filesystem::path rawIn(const test::TempDir& directory) {
+    const std::filesystem::path path = directory.file("IMG_1.dng");
+    std::filesystem::copy_file(test::fixture("linear-32x24-neutral.dng"), path);
+    return path;
+}
+
+} // namespace
+
+TEST_CASE("A fresh session has no unsaved changes", "[session][save]") {
+    const test::TempDir directory;
+    const EditSession session(openPhoto(rawIn(directory)));
+
+    REQUIRE_FALSE(session.hasUnsavedChanges());
+    REQUIRE(session.saved() == session.photo());
+}
+
+TEST_CASE("An edit makes a session dirty and undoing it makes it clean", "[session][save]") {
+    const test::TempDir directory;
+    EditSession session(openPhoto(rawIn(directory)));
+
+    session.setState(exposed(1.0F));
+    REQUIRE(session.hasUnsavedChanges());
+    session.undo();
+    REQUIRE_FALSE(session.hasUnsavedChanges());
+}
+
+TEST_CASE("An open edit with a changed state counts as unsaved", "[session][save]") {
+    const test::TempDir directory;
+    EditSession session(openPhoto(rawIn(directory)));
+
+    session.begin();
+    REQUIRE_FALSE(session.hasUnsavedChanges());
+    session.update(exposed(0.5F));
+    REQUIRE(session.hasUnsavedChanges());
+    session.update(DevelopState{});
+    REQUIRE_FALSE(session.hasUnsavedChanges());
+}
+
+TEST_CASE("Saving writes the sidecar, cleans the session and keeps history", "[session][save]") {
+    const test::TempDir directory;
+    const std::filesystem::path path = rawIn(directory);
+    EditSession session(openPhoto(path));
+    session.begin();
+    session.update(exposed(0.75F));
+
+    session.save();
+
+    REQUIRE_FALSE(session.editing());
+    REQUIRE_FALSE(session.hasUnsavedChanges());
+    REQUIRE(session.saved() == session.photo());
+    REQUIRE(openPhoto(path) == session.photo());
+    REQUIRE(session.canUndo());
+    session.undo();
+    REQUIRE(session.hasUnsavedChanges());
+}
+
+TEST_CASE("Marks are written at once and unsaved edits stay out of the file", "[session][save]") {
+    const test::TempDir directory;
+    const std::filesystem::path path = rawIn(directory);
+    EditSession session(openPhoto(path));
+    session.setState(exposed(1.0F));
+    const PhotoMarks marks{.rating = 4, .label = ColorLabel::Blue};
+
+    session.setMarks(marks);
+
+    REQUIRE(session.photo().marks() == marks);
+    REQUIRE(session.saved().marks() == marks);
+    REQUIRE(session.photo().state() == exposed(1.0F));
+    REQUIRE(session.saved().state() == DevelopState{});
+    REQUIRE(session.hasUnsavedChanges());
+    const auto contents = readSidecar(path);
+    REQUIRE(contents);
+    REQUIRE(contents->marks == marks);
+    REQUIRE(contents->state == DevelopState{});
+    // Not an undo step: undoing takes back the exposure and keeps the marks.
+    session.undo();
+    REQUIRE(session.photo().marks() == marks);
+    REQUIRE_FALSE(session.canUndo());
+}
+
+TEST_CASE("Saving after setting marks keeps the marks", "[session][save]") {
+    const test::TempDir directory;
+    const std::filesystem::path path = rawIn(directory);
+    EditSession session(openPhoto(path));
+    const PhotoMarks marks{.rating = 2};
+    session.setMarks(marks);
+    session.setState(exposed(0.5F));
+
+    session.save();
+
+    const auto contents = readSidecar(path);
+    REQUIRE(contents);
+    REQUIRE(contents->marks == marks);
+    REQUIRE(contents->state == exposed(0.5F));
+}
+
+TEST_CASE("Invalid marks change nothing", "[session][save]") {
+    const test::TempDir directory;
+    EditSession session(openPhoto(rawIn(directory)));
+
+    REQUIRE_THROWS_AS(session.setMarks({.rating = 9}), std::invalid_argument);
+    REQUIRE(session.photo().marks() == PhotoMarks{});
+    REQUIRE(session.saved().marks() == PhotoMarks{});
+}
+
+TEST_CASE("Discarding returns to the saved state and clears history", "[session][save]") {
+    const test::TempDir directory;
+    EditSession session(openPhoto(rawIn(directory)));
+    session.setState(exposed(1.0F));
+    session.save();
+    session.setState(exposed(2.0F));
+    session.undo();
+    session.begin();
+    session.update(exposed(3.0F));
+
+    session.discardChanges();
+
+    REQUIRE(session.photo() == session.saved());
+    REQUIRE(session.photo().state() == exposed(1.0F));
+    REQUIRE_FALSE(session.hasUnsavedChanges());
+    REQUIRE_FALSE(session.editing());
+    REQUIRE_FALSE(session.canUndo());
+    REQUIRE_FALSE(session.canRedo());
+}
+
+TEST_CASE("A save that fails throws and leaves the session as it was", "[session][save]") {
+    const test::TempDir directory;
+    const std::filesystem::path path = rawIn(directory);
+    EditSession session(openPhoto(path));
+    session.begin();
+    session.update(exposed(1.0F));
+    // Not XML: writing refuses to replace it (ADR 019).
+    std::ofstream(sidecarPath(path), std::ios::binary) << "not xml at all";
+
+    REQUIRE_THROWS_AS(session.save(), std::runtime_error);
+    REQUIRE_THROWS_AS(session.setMarks({.rating = 3}), std::runtime_error);
+
+    REQUIRE(session.editing());
+    REQUIRE(session.photo().state() == exposed(1.0F));
+    REQUIRE(session.photo().marks() == PhotoMarks{});
+    REQUIRE(session.saved().state() == DevelopState{});
+    REQUIRE(session.saved().marks() == PhotoMarks{});
+    REQUIRE(session.hasUnsavedChanges());
+}
+
+TEST_CASE("A save into a read-only directory throws and changes nothing", "[session][save]") {
+    namespace fs = std::filesystem;
+    const test::TempDir directory;
+    const fs::path path = rawIn(directory);
+    EditSession session(openPhoto(path));
+    session.setState(exposed(1.0F));
+    fs::permissions(directory.path(), fs::perms::owner_write, fs::perm_options::remove);
+    const bool enforced = [&] {
+        std::ofstream probe(directory.file("probe"));
+        return !probe.is_open();
+    }();
+    if (enforced) {
+        REQUIRE_THROWS_AS(session.save(), std::runtime_error);
+        REQUIRE(session.hasUnsavedChanges());
+        REQUIRE(session.saved().state() == DevelopState{});
+    }
+    fs::permissions(directory.path(), fs::perms::owner_write, fs::perm_options::add);
+    if (!enforced) {
+        SKIP("permissions are not enforced here (running as root?)");
+    }
 }

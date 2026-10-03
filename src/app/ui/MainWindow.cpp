@@ -21,6 +21,7 @@
 #include <QDockWidget>
 #include <QEvent>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QImage>
 #include <QKeySequence>
 #include <QLabel>
@@ -127,6 +128,11 @@ void MainWindow::buildMenu() {
     QAction* openAction = fileMenu->addAction(tr("&Open…"));
     openAction->setShortcut(QKeySequence::Open);
     connect(openAction, &QAction::triggered, this, &MainWindow::openFileWithDialog);
+
+    saveAction_ = fileMenu->addAction(tr("&Save Adjustments"));
+    saveAction_->setShortcut(QKeySequence::Save);
+    saveAction_->setEnabled(false);
+    connect(saveAction_, &QAction::triggered, this, [this] { saveAdjustments(); });
 
     exportAction_ = fileMenu->addAction(tr("&Export…"));
     exportAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_E));
@@ -336,7 +342,19 @@ void MainWindow::refreshPanel() {
     developPanel_->showState(photo.state(), context);
     undoAction_->setEnabled(open_->session.canUndo());
     redoAction_->setEnabled(open_->session.canRedo());
+    saveAction_->setEnabled(open_->session.hasUnsavedChanges());
+    updateTitle();
     requestRender();
+}
+
+void MainWindow::updateTitle() {
+    if (!open_) {
+        setWindowTitle(tr("arraw"));
+        return;
+    }
+    setWindowTitle(
+        tr("%1[*] \u2014 arraw").arg(toQString(open_->session.photo().path().filename())));
+    setWindowModified(open_->session.hasUnsavedChanges());
 }
 
 void MainWindow::buildImageView() {
@@ -415,7 +433,13 @@ void MainWindow::openFileWithDialog() {
     // function Qt's event loop called, which ends in std::terminate.
     try {
         DebugDiagnostics log;
-        showPhoto(openPhoto(path, log));
+        Photo photo = openPhoto(path, log);
+        // Asked once the file is known to open, so that cancelling the dialog
+        // or choosing a bad file leaves the current photograph and its edits.
+        if (!confirmLeavingPhoto()) {
+            return;
+        }
+        showPhoto(std::move(photo));
     } catch (const std::exception& error) {
         QMessageBox::warning(this, tr("Cannot Open Photograph"),
                              tr("%1\n\n%2").arg(fileName, QString::fromUtf8(error.what())));
@@ -526,8 +550,77 @@ void MainWindow::showExportResult(const ExportResult& result) {
     }
 }
 
+bool MainWindow::saveAdjustments() {
+    if (!open_) {
+        return true;
+    }
+    try {
+        developPanel_->finishPendingEdit();
+        open_->session.save();
+        refreshPanel();
+        return true;
+    } catch (const std::exception& error) {
+        // Nothing changed: the edits are still there, unsaved.
+        QMessageBox::warning(
+            this, tr("Cannot Save Adjustments"),
+            tr("%1\n\n%2")
+                .arg(toQString(open_->session.photo().path()), QString::fromUtf8(error.what())));
+        return false;
+    }
+}
+
+bool MainWindow::confirmLeavingPhoto() {
+    if (!open_) {
+        return true;
+    }
+    try {
+        developPanel_->finishPendingEdit();
+    } catch (const std::exception&) {
+        // The edit stays open, and counts as unsaved below.
+    }
+    if (!open_->session.hasUnsavedChanges()) {
+        return true;
+    }
+    QMessageBox box(
+        QMessageBox::Question, tr("Unsaved Changes"),
+        tr("Save changes to %1?").arg(toQString(open_->session.photo().path().filename())),
+        QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel, this);
+    box.setInformativeText(tr("Your adjustments will be lost if you do not save them."));
+    box.setDefaultButton(QMessageBox::Save);
+    box.setEscapeButton(QMessageBox::Cancel);
+    switch (box.exec()) {
+    case QMessageBox::Save:
+        return saveAdjustments();
+    case QMessageBox::Discard:
+        open_->session.discardChanges();
+        // The window may stay open (a cancelled close), and then shows the saved state.
+        refreshPanel();
+        return true;
+    default:
+        return false;
+    }
+}
+
+void MainWindow::setMarksForCurrent(PhotoMarks marks) {
+    if (!open_) {
+        return;
+    }
+    try {
+        open_->session.setMarks(marks);
+        refreshPanel();
+    } catch (const std::exception& error) {
+        QMessageBox::warning(this, tr("Cannot Set Marks"), QString::fromUtf8(error.what()));
+    }
+}
+
 void MainWindow::closeEvent(QCloseEvent* event) {
     closeWhenIdle_ = false;
+    // Unsaved changes first: they are the user's work, whereas running exports
+    // are asked about only once the window is certain to go.
+    if (!confirmLeavingPhoto()) {
+        event->ignore();
+        return;
+    }
     if (exportNames_.empty()) {
         QMainWindow::closeEvent(event);
         return;

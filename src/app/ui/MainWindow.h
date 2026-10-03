@@ -6,6 +6,7 @@
 #include <EditSession.h>
 #include <ImageBuffer.h>
 #include <Photo.h>
+#include <PhotoMarks.h>
 
 #include <QMainWindow>
 #include <QPointF>
@@ -89,6 +90,28 @@ private:
     /// @brief Asks the user for a photograph and opens it.
     void openFileWithDialog();
 
+    /// @brief Writes the develop state of the open photograph to its sidecar.
+    /// @return Whether it is saved, or there was nothing to save; a failure is shown to the user.
+    bool saveAdjustments();
+
+    /// @brief Settles unsaved changes before the open photograph is left.
+    ///
+    /// Asks "Save changes to <name>?" when the develop state differs from the
+    /// sidecar's. Save writes it, and a failure is shown and stays; Discard
+    /// returns the session to the saved state. Everything that replaces or
+    /// closes the photograph asks this first.
+    /// @return Whether to go on: false on Cancel or a failed save, so nothing is left.
+    bool confirmLeavingPhoto();
+
+    /// @brief Sets the marks of the open photograph through its session, which writes them at once.
+    ///
+    /// A failure is shown to the user and changes nothing.
+    /// @param marks Marks the photograph carries from now on.
+    void setMarksForCurrent(PhotoMarks marks);
+
+    /// @brief Shows the file name and whether it has unsaved changes in the title.
+    void updateTitle();
+
     /// @brief Builds the dock holding the develop panel.
     void buildDevelopDock();
 
@@ -166,6 +189,7 @@ private:
     QLabel* deviceLabel_ = nullptr;
     DevelopPanel* developPanel_ = nullptr;
     QWidget* developDock_ = nullptr;
+    QAction* saveAction_ = nullptr;
     QAction* undoAction_ = nullptr;
     QAction* redoAction_ = nullptr;
     QAction* exportAction_ = nullptr;

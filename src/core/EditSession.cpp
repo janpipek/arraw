@@ -1,5 +1,7 @@
 #include "EditSession.h"
 
+#include <Sidecar.h>
+
 #include <stdexcept>
 #include <utility>
 
@@ -81,4 +83,29 @@ void EditSession::redo() {
     undo_.push_back(photo_.state());
     redo_.pop_back();
     photo_ = std::move(next);
+}
+
+void EditSession::save() {
+    // Written first, so a failure leaves even an open edit open.
+    writeSidecar(photo_);
+    saved_ = photo_;
+    if (editing()) {
+        commit();
+    }
+}
+
+void EditSession::setMarks(PhotoMarks marks) {
+    // Both are checked and written before anything changes.
+    Photo saved = saved_.with(marks);
+    Photo current = photo_.with(marks);
+    writeSidecar(saved);
+    saved_ = std::move(saved);
+    photo_ = std::move(current);
+}
+
+void EditSession::discardChanges() {
+    photo_ = saved_;
+    baseline_.reset();
+    undo_.clear();
+    redo_.clear();
 }
