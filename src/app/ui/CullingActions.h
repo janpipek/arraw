@@ -4,6 +4,7 @@
 
 #include <QObject>
 
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -48,8 +49,8 @@ private:
     FilmStrip& strip_;
     /// Rating actions with the rating each sets.
     std::vector<std::pair<QAction*, int>> ratingActions_;
-    /// Label actions with the label each toggles.
-    std::vector<std::pair<QAction*, ColorLabel>> labelActions_;
+    /// Label menu items with the label each sets, none for the last.
+    std::vector<std::pair<QAction*, std::optional<ColorLabel>>> labelActions_;
     std::vector<QAction*> otherActions_;
 };
 

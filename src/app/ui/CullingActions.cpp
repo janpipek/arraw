@@ -4,6 +4,7 @@
 #include "FilmStripRules.h"
 
 #include <QAction>
+#include <QActionGroup>
 #include <QApplication>
 #include <QKeyEvent>
 #include <QKeySequence>
@@ -39,20 +40,34 @@ CullingActions::CullingActions(QMainWindow& window, FilmStrip& strip)
     addRating(tr("&Unrated"), 0, Qt::Key_0);
     addRating(tr("Re&ject"), rejectedRating, Qt::Key_X);
 
+    // The menu is a radio group whose items set a label, or none. The keys
+    // toggle instead (main's behaviour: R on a red shot clears it), so they are
+    // separate window actions; the menu only shows them, after a tab.
     QMenu* labelMenu = menu->addMenu(tr("&Label"));
+    auto* labelGroup = new QActionGroup(labelMenu);
+    labelGroup->setExclusive(true);
+    const auto addLabel = [&](const QString& text, std::optional<ColorLabel> label) {
+        QAction* action = labelMenu->addAction(text);
+        action->setCheckable(true);
+        action->setActionGroup(labelGroup);
+        connect(action, &QAction::triggered, this, [this, label] { strip_.setLabel(label); });
+        labelActions_.emplace_back(action, label);
+    };
     std::size_t key = 0;
     for (const auto& [label, name] : colorLabelNames) {
-        QAction* action = labelMenu->addAction(tr(labelName(label)));
-        action->setShortcut(QKeySequence(labelKeys[key++]));
-        action->setCheckable(true);
-        connect(action, &QAction::triggered, this,
+        const QKeySequence shortcut(labelKeys[key++]);
+        addLabel(tr(labelName(label)) + QLatin1Char('\t') +
+                     shortcut.toString(QKeySequence::NativeText),
+                 label);
+        auto* toggle = new QAction(this);
+        toggle->setShortcut(shortcut);
+        connect(toggle, &QAction::triggered, this,
                 [this, label = label] { strip_.toggleLabel(label); });
-        labelActions_.emplace_back(action, label);
+        window.addAction(toggle);
+        otherActions_.push_back(toggle);
     }
     labelMenu->addSeparator();
-    QAction* none = labelMenu->addAction(tr("&None"));
-    connect(none, &QAction::triggered, this, [this] { strip_.clearLabel(); });
-    otherActions_.push_back(none);
+    addLabel(tr("&None"), std::nullopt);
 
     menu->addSeparator();
     QAction* previous = menu->addAction(tr("&Previous Photo"));
@@ -86,6 +101,9 @@ void CullingActions::reflectActiveShot() {
     }
     for (const auto& [action, label] : labelActions_) {
         action->setEnabled(any);
+        // An exclusive group cannot be unchecked item by item; with no active
+        // shot nothing is checked, so the group lets go first.
+        action->actionGroup()->setExclusive(any);
         action->setChecked(any && marks.label == label);
     }
     for (QAction* action : otherActions_) {

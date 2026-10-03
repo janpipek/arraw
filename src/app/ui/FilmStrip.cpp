@@ -4,6 +4,7 @@
 
 #include <QAbstractItemView>
 #include <QAction>
+#include <QActionGroup>
 #include <QComboBox>
 #include <QContextMenuEvent>
 #include <QDesktopServices>
@@ -604,8 +605,8 @@ void FilmStrip::toggleLabel(ColorLabel label) {
     toggleLabelOn(targets(), label);
 }
 
-void FilmStrip::clearLabel() {
-    setLabelOn(targets(), std::nullopt);
+void FilmStrip::setLabel(std::optional<ColorLabel> label) {
+    setLabelOn(targets(), label);
 }
 
 void FilmStrip::navigate(int delta) {
@@ -709,18 +710,25 @@ void FilmStrip::showContextMenu(const QPoint& position) {
     connect(rate->addAction(tr("Reject")), &QAction::triggered, this,
             [this, shots] { rateShots(shots, rejectedRating); });
 
+    // One label or none, as radio items that set it; the one checked is the
+    // label every target shares, and none is checked when they differ.
     QMenu* label = menu.addMenu(tr("Label"));
-    for (const auto& [value, name] : colorLabelNames) {
-        QAction* action = label->addAction(tr(labelName(value)));
+    auto* labels = new QActionGroup(label);
+    labels->setExclusive(true);
+    const auto addLabel = [&](const QString& text, std::optional<ColorLabel> value) {
+        QAction* action = label->addAction(text);
         action->setCheckable(true);
+        action->setActionGroup(labels);
         action->setChecked(std::ranges::all_of(
-            marks, [value = value](const PhotoMarks& each) { return each.label == value; }));
+            marks, [value](const PhotoMarks& each) { return each.label == value; }));
         connect(action, &QAction::triggered, this,
-                [this, shots, value = value] { toggleLabelOn(shots, value); });
+                [this, shots, value] { setLabelOn(shots, value); });
+    };
+    for (const auto& [value, name] : colorLabelNames) {
+        addLabel(tr(labelName(value)), value);
     }
     label->addSeparator();
-    connect(label->addAction(tr("None")), &QAction::triggered, this,
-            [this, shots] { setLabelOn(shots, std::nullopt); });
+    addLabel(tr("None"), std::nullopt);
 
     menu.addSeparator();
     // Opens the folder; selecting the file in it is not portable (Linux has no standard way).

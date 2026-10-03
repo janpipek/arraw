@@ -128,8 +128,9 @@ public:
     /// @param label Label of the key.
     void toggleLabel(ColorLabel label);
 
-    /// @brief Removes the colour label of the target shots.
-    void clearLabel();
+    /// @brief Gives the target shots one colour label, or none.
+    /// @param label Label to set; empty removes it.
+    void setLabel(std::optional<ColorLabel> label);
 
     /// @brief Asks for the shot a step from the active one among the shots shown.
     ///
