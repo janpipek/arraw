@@ -2,28 +2,50 @@
 
 #include "Cli.h"
 #include "Command.h"
+#include "DeviceChoice.h"
+#include "GpuContext.h"
+#include "GpuDevelop.h"
+#include "ProcessingPlan.h"
+#include "SettingCodec.h"
+#include "ShotInputs.h"
+#include "SidecarWatch.h"
 #include "StreamDiagnostics.h"
+#include "TerminalStyle.h"
+#include "TimingTrace.h"
 
 #include <Develop.h>
 #include <DevelopSettings.h>
+#include <DevelopState.h>
 #include <Diagnostics.h>
 #include <ImageExport.h>
 #include <ImageImport.h>
+#include <MarksFilter.h>
 #include <Photo.h>
+#include <SettingDescriptors.h>
 #include <WhiteBalance.h>
 
 #include <QCommandLineParser>
 #include <QString>
 #include <QStringList>
 
+#include <algorithm>
+#include <cctype>
+#include <charconv>
 #include <cmath>
+#include <cstdint>
 #include <exception>
 #include <filesystem>
+#include <limits>
+#include <memory>
 #include <optional>
 #include <ostream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
+#include <type_traits>
+#include <utility>
+#include <variant>
 #include <vector>
 
 using namespace arraw;
@@ -40,7 +62,17 @@ void cli::setRotationAngle(GeometrySettings& geometry, double degrees) {
     geometry.straighten = wrapped - static_cast<double>(turns) * 90.0;
 }
 
+bool cli::isRangedFloatSetting(const FieldDescriptor& descriptor) {
+    return descriptor.range &&
+           (std::holds_alternative<float& (*)(DevelopSettings&)>(descriptor.member) ||
+            std::holds_alternative<std::optional<float>& (*)(DevelopSettings&)>(descriptor.member));
+}
+
 namespace {
+
+using cli::CropEdit;
+using cli::GeometryEdits;
+using cli::SettingEdit;
 
 /// @brief File extension a format is written with.
 std::string_view extensionFor(ImageFileFormat format) {
@@ -55,17 +87,170 @@ std::string_view extensionFor(ImageFileFormat format) {
     return ".bin";
 }
 
+/// @brief Finds the row of the settings table a key names.
+/// @throws std::logic_error if no row has the key, which is a misspelling in this file.
+const FieldDescriptor& descriptorFor(std::string_view key) {
+    const FieldDescriptor* descriptor = findDescriptor(key);
+    if (descriptor == nullptr) {
+        throw std::logic_error("no setting is keyed '" + std::string(key) + "'");
+    }
+    return *descriptor;
+}
+
+/// @brief Records the value a field of @p source now holds as an edit.
+/// @param edits List to append to.
+/// @param key Key of the field, which must name a row.
+/// @param source Settings holding the value the flags gave.
+void addEdit(std::vector<SettingEdit>& edits, std::string_view key, const DevelopSettings& source) {
+    const FieldDescriptor& descriptor = descriptorFor(key);
+    edits.push_back({&descriptor, encode(descriptor, source)});
+}
+
+/// @brief Puts the geometry flags on top of a photograph's own geometry.
+///
+/// The flags are values, not operations. ADR 014 has a rotation or flip carry
+/// an explicit crop with the content it selects, composed in displayed axes;
+/// that belongs to the geometry editor, not to the command line. So when the
+/// flags change the rotation, straighten or flips a sidecar's explicit crop
+/// was drawn in, the crop goes back to automatic framing, with a warning, and
+/// a quarter-turn that swaps the frame's sides reciprocates a custom ratio.
+/// `--crop` with a rectangle, without an aspect, leaves the aspect free, since
+/// a rectangle a photographer draws does not obey the sidecar's old
+/// constraint; `--crop-aspect` other than free, without a rectangle, makes the
+/// rectangle automatic when the aspect changes. Given together, the two are
+/// taken as they are, and the render rejects a pair that does not agree.
+GeometrySettings withGeometryEdits(GeometrySettings base, const GeometryEdits& edits,
+                                   DiagnosticLog& log, const std::filesystem::path& subject) {
+    const GeometrySettings before = base;
+    if (edits.rotate) {
+        cli::setRotationAngle(base, *edits.rotate);
+    }
+    if (edits.flipHorizontal) {
+        base.flipHorizontal = *edits.flipHorizontal;
+    }
+    if (edits.flipVertical) {
+        base.flipVertical = *edits.flipVertical;
+    }
+    const int turns = (static_cast<int>(base.rotation) - static_cast<int>(before.rotation) + 4) % 4;
+    if (turns % 2 == 1) {
+        if (auto* ratio = std::get_if<CropRatio>(&base.crop.aspect)) {
+            ratio->widthOverHeight = 1.0 / ratio->widthOverHeight;
+        }
+    }
+    const bool reframed =
+        base.rotation != before.rotation || base.straighten != before.straighten ||
+        base.flipHorizontal != before.flipHorizontal || base.flipVertical != before.flipVertical;
+    if (reframed && base.crop.rectangle && !edits.crop) {
+        base.crop.rectangle.reset();
+        log.record({.notice = Notice::CropReset,
+                    .severity = Severity::Warning,
+                    .subject = subject,
+                    .values = {std::string(edits.rotate ? "the rotation" : "the flips")}});
+    }
+    if (edits.crop) {
+        base.crop.rectangle = edits.crop->rectangle;
+        if (edits.crop->rectangle && !edits.aspect) {
+            base.crop.aspect = FreeCropAspect{};
+        }
+    }
+    if (edits.aspect) {
+        const bool freed = std::holds_alternative<FreeCropAspect>(*edits.aspect);
+        if (!edits.crop && !freed && *edits.aspect != base.crop.aspect) {
+            base.crop.rectangle.reset();
+        }
+        base.crop.aspect = *edits.aspect;
+    }
+    return base;
+}
+
+/// @brief Reads a side of a `--resize` box: digits only, at least 1, within 32 bits.
+/// @throws std::invalid_argument if @p text is not one.
+std::uint32_t parseSide(std::string_view text, std::string_view spec) {
+    const bool digits =
+        !text.empty() && std::ranges::all_of(text, [](char c) { return c >= '0' && c <= '9'; });
+    std::uint32_t value = 0;
+    if (!digits ||
+        std::from_chars(text.data(), text.data() + text.size(), value).ec != std::errc{}) {
+        throw std::invalid_argument("--resize: '" + std::string(spec) +
+                                    "' is not a long edge (2048), a box (2048x1365) or a "
+                                    "percentage (50%); sizes are whole numbers of pixels up to " +
+                                    std::to_string(std::numeric_limits<std::uint32_t>::max()));
+    }
+    if (value == 0) {
+        throw std::invalid_argument("--resize: '" + std::string(spec) + "' must be greater than 0");
+    }
+    return value;
+}
+
 /// @brief Everything the command needs, once its arguments are understood.
 struct ExportRequest {
     std::vector<std::filesystem::path> inputs;
+    /// @brief Which photographs are wanted by their marks; inactive wants all.
+    MarksFilter filter;
     std::filesystem::path outputDirectory;
     ImageFileFormat format = ImageFileFormat::Jpeg;
-    DevelopSettings settings;
+    /// @brief What the flags said, applied over each photograph's own settings.
+    cli::ExportEdits edits;
+    /// @brief Whether each photograph's sidecar is read; false is `--no-sidecar`.
+    bool useSidecars = true;
     ExportOptions options;
+    /// @brief Metadata groups each export carries from its photograph (ADR 032).
+    MetadataSelection metadata;
+    /// @brief Size and filter of every render, built once for both devices.
+    RenderRequest render;
+    cli::DeviceChoice device;
+    GpuBackend backend = defaultGpuBackend();
+    bool allowSoftware = false;
     bool overwrite = false;
     bool quiet = false;
     cli::LogFormat logFormat = cli::LogFormat::Text;
+    /// @brief Options given that do nothing without `--resize`, reported once the log exists.
+    std::vector<std::string> ignoredResizeOptions;
 };
+
+/// @brief Reads the list `--metadata` takes.
+/// @return The groups it names, or nothing for an unknown name or an empty list.
+std::optional<MetadataSelection> parseMetadataSelection(const std::string& list) {
+    MetadataSelection selection{false, false, false};
+    std::string text = list;
+    std::ranges::transform(text, text.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (text == "all") {
+        return MetadataSelection{true, true, true};
+    }
+    if (text == "none") {
+        return selection;
+    }
+    std::size_t start = 0;
+    while (true) {
+        const auto comma = text.find(',', start);
+        const auto name = text.substr(start, comma == std::string::npos ? comma : comma - start);
+        if (name == "capture") {
+            selection.capture = true;
+        } else if (name == "location") {
+            selection.location = true;
+        } else if (name == "descriptive") {
+            selection.descriptive = true;
+        } else {
+            return std::nullopt;
+        }
+        if (comma == std::string::npos) {
+            return selection;
+        }
+        start = comma + 1;
+    }
+}
+
+/// @brief Which filter `--resize-filter` names, if any.
+std::optional<ResizeFilter> parseResizeFilter(const std::string& name) {
+    if (name == "lanczos") {
+        return ResizeFilter::Lanczos3;
+    }
+    if (name == "bilinear") {
+        return ResizeFilter::Bilinear;
+    }
+    return std::nullopt;
+}
 
 /// @brief Reports a usage problem and the exit code that goes with it.
 int usageError(std::ostream& err, const std::string& message) {
@@ -86,35 +271,138 @@ bool readInteger(const QCommandLineParser& parser, const char* name, int& value)
     return valid;
 }
 
-/// @brief Reads a named option as a number within its modelled range.
+/// @brief Help wording of one ranged setting; its name and limits come from the descriptor table.
+struct SettingHelp {
+    std::string_view key;
+    const char* valueName;
+    const char* description;
+    const char* note;
+};
+
+/// @brief Help wording for the ranged settings, keyed like ::arraw::developSettingDescriptors.
+constexpr SettingHelp settingHelp[]{
+    {"exposure", "stops", "Exposure adjustment in EV", ""},
+    {"contrast", "amount", "Contrast", ""},
+    {"shadows", "amount", "Lift or deepen the dark tones", ""},
+    {"highlights", "amount", "Recover or raise the bright tones", ""},
+    {"blacks", "amount", "Move the black point", ""},
+    {"whites", "amount", "Move the white point", ""},
+    {"temperature", "k", "White balance in kelvin", " RAW only."},
+    {"tint", "amount", "Green to magenta", " RAW only."},
+    {"filmicHighlights", "amount", "Highlight roll-off", " Default: 25."},
+    {"saturation", "amount", "Colourfulness of every colour", ""},
+    {"vibrance", "amount", "Colourfulness of the muted colours, sparing the vivid", ""},
+    {"hueRed", "amount", "Shift the hue of reds", ""},
+    {"saturationRed", "amount", "Colourfulness of reds", ""},
+    {"luminanceRed", "amount", "Lightness of reds", ""},
+    {"hueOrange", "amount", "Shift the hue of oranges", ""},
+    {"saturationOrange", "amount", "Colourfulness of oranges", ""},
+    {"luminanceOrange", "amount", "Lightness of oranges", ""},
+    {"hueYellow", "amount", "Shift the hue of yellows", ""},
+    {"saturationYellow", "amount", "Colourfulness of yellows", ""},
+    {"luminanceYellow", "amount", "Lightness of yellows", ""},
+    {"hueGreen", "amount", "Shift the hue of greens", ""},
+    {"saturationGreen", "amount", "Colourfulness of greens", ""},
+    {"luminanceGreen", "amount", "Lightness of greens", ""},
+    {"hueAqua", "amount", "Shift the hue of aquas", ""},
+    {"saturationAqua", "amount", "Colourfulness of aquas", ""},
+    {"luminanceAqua", "amount", "Lightness of aquas", ""},
+    {"hueBlue", "amount", "Shift the hue of blues", ""},
+    {"saturationBlue", "amount", "Colourfulness of blues", ""},
+    {"luminanceBlue", "amount", "Lightness of blues", ""},
+    {"huePurple", "amount", "Shift the hue of purples", ""},
+    {"saturationPurple", "amount", "Colourfulness of purples", ""},
+    {"luminancePurple", "amount", "Lightness of purples", ""},
+    {"hueMagenta", "amount", "Shift the hue of magentas", ""},
+    {"saturationMagenta", "amount", "Colourfulness of magentas", ""},
+    {"luminanceMagenta", "amount", "Lightness of magentas", ""},
+    {"grayRed", "amount", "Lightness of reds in black and white", ""},
+    {"grayOrange", "amount", "Lightness of oranges in black and white", ""},
+    {"grayYellow", "amount", "Lightness of yellows in black and white", ""},
+    {"grayGreen", "amount", "Lightness of greens in black and white", ""},
+    {"grayAqua", "amount", "Lightness of aquas in black and white", ""},
+    {"grayBlue", "amount", "Lightness of blues in black and white", ""},
+    {"grayPurple", "amount", "Lightness of purples in black and white", ""},
+    {"grayMagenta", "amount", "Lightness of magentas in black and white", ""},
+};
+
+/// @brief Finds the help wording of a setting.
+const SettingHelp* helpFor(std::string_view key) {
+    for (const SettingHelp& help : settingHelp) {
+        if (help.key == key) {
+            return &help;
+        }
+    }
+    return nullptr;
+}
+
+/// @brief Spells a camelCase key as a command-line option name.
+std::string optionName(std::string_view key) {
+    std::string name;
+    for (const char c : key) {
+        if (c >= 'A' && c <= 'Z') {
+            name += '-';
+            name += static_cast<char>(c - 'A' + 'a');
+        } else {
+            name += c;
+        }
+    }
+    return name;
+}
+
+/// @brief Whether a row is a plain number setting that gets an option of its own.
+bool isNumericOption(const FieldDescriptor& descriptor) {
+    return cli::isRangedFloatSetting(descriptor) && helpFor(descriptor.key);
+}
+
+/// @brief Spells a limit the way the help and the errors show it.
+std::string limit(double value) {
+    return QString::number(value).toStdString();
+}
+
+/// @brief Reads every numeric setting option into edits.
 ///
-/// Out of range is refused rather than clamped: a photographer is present to
-/// be told, and nothing invalid should enter a session (ADR 008). The renderer
-/// clamps as well, for values that arrive from a file instead.
-/// @return `true` if the option was absent or acceptable; `false` otherwise.
-bool readSetting(const QCommandLineParser& parser, const char* name, float lowest, float highest,
-                 std::optional<float>& value, std::ostream& err, int& code) {
-    if (!parser.isSet(name)) {
-        return true;
+/// Names and limits come from ::arraw::developSettingDescriptors. Out of range
+/// is refused rather than clamped: a photographer is present to be told, and
+/// nothing invalid should enter a session (ADR 008). The renderer clamps as
+/// well, for values that arrive from a file instead.
+/// @return `true` if every option present was acceptable; `false` otherwise.
+bool readSettings(const QCommandLineParser& parser, std::vector<SettingEdit>& edits,
+                  std::ostream& err, int& code) {
+    DevelopSettings given;
+    for (const FieldDescriptor& descriptor : developSettingDescriptors) {
+        if (!isNumericOption(descriptor)) {
+            continue;
+        }
+        const std::string name = optionName(descriptor.key);
+        if (!parser.isSet(QString::fromStdString(name))) {
+            continue;
+        }
+        bool valid = false;
+        const float parsed = parser.value(QString::fromStdString(name)).toFloat(&valid);
+        if (!valid || !std::isfinite(parsed)) {
+            code = usageError(err, "--" + name + " takes a finite number");
+            return false;
+        }
+        if (parsed < descriptor.range->minimum || parsed > descriptor.range->maximum) {
+            code = usageError(err, "--" + name + " accepts " + limit(descriptor.range->minimum) +
+                                       " to " + limit(descriptor.range->maximum));
+            return false;
+        }
+        visitField(descriptor, given, [&](auto& field) {
+            if constexpr (std::is_same_v<std::remove_cvref_t<decltype(field)>, float> ||
+                          std::is_same_v<std::remove_cvref_t<decltype(field)>,
+                                         std::optional<float>>) {
+                field = parsed;
+            }
+        });
+        addEdit(edits, descriptor.key, given);
     }
-    bool valid = false;
-    const float parsed = parser.value(name).toFloat(&valid);
-    if (!valid || !std::isfinite(parsed)) {
-        code = usageError(err, std::string("--") + name + " takes a finite number");
-        return false;
-    }
-    if (parsed < lowest || parsed > highest) {
-        code = usageError(err, std::string("--") + name + " accepts " +
-                                   QString::number(lowest).toStdString() + " to " +
-                                   QString::number(highest).toStdString());
-        return false;
-    }
-    value = parsed;
     return true;
 }
 
-/// @brief Reads geometry values without resolving or executing any transforms.
-bool readGeometry(const QCommandLineParser& parser, GeometrySettings& geometry, std::ostream& err,
+/// @brief Reads the geometry options into edits, without resolving or executing any transforms.
+bool readGeometry(const QCommandLineParser& parser, GeometryEdits& edits, std::ostream& err,
                   int& code) {
     if (parser.isSet("rotate")) {
         bool valid = false;
@@ -123,15 +411,26 @@ bool readGeometry(const QCommandLineParser& parser, GeometrySettings& geometry, 
             code = usageError(err, "--rotate takes a finite angle in clockwise degrees");
             return false;
         }
-        cli::setRotationAngle(geometry, degrees);
+        edits.rotate = degrees;
     }
-    geometry.flipHorizontal = parser.isSet("flip-horizontal");
-    geometry.flipVertical = parser.isSet("flip-vertical");
+    const auto readFlip = [&](const char* on, const char* off, std::optional<bool>& flip) {
+        if (parser.isSet(on) && parser.isSet(off)) {
+            code = usageError(err, std::string("--") + on + " and --" + off + " contradict");
+            return false;
+        }
+        if (parser.isSet(on) || parser.isSet(off)) {
+            flip = parser.isSet(on);
+        }
+        return true;
+    };
+    if (!readFlip("flip-horizontal", "no-flip-horizontal", edits.flipHorizontal) ||
+        !readFlip("flip-vertical", "no-flip-vertical", edits.flipVertical)) {
+        return false;
+    }
     if (parser.isSet("crop")) {
         const auto value = parser.value("crop").trimmed().toLower();
-        if (value == "auto") {
-            geometry.crop.rectangle.reset();
-        } else {
+        CropEdit crop;
+        if (value != "auto") {
             const auto edges = value.split(',');
             UprightCropRect rectangle;
             double* destinations[]{&rectangle.left, &rectangle.top, &rectangle.right,
@@ -150,15 +449,16 @@ bool readGeometry(const QCommandLineParser& parser, GeometrySettings& geometry, 
                                        "edges from 0 to 1, left < right and top < bottom");
                 return false;
             }
-            geometry.crop.rectangle = rectangle;
+            crop.rectangle = rectangle;
         }
+        edits.crop = crop;
     }
     if (parser.isSet("crop-aspect")) {
         const auto value = parser.value("crop-aspect").trimmed().toLower();
         if (value == "free") {
-            geometry.crop.aspect = FreeCropAspect{};
+            edits.aspect = FreeCropAspect{};
         } else if (value == "original") {
-            geometry.crop.aspect = OriginalCropAspect{};
+            edits.aspect = OriginalCropAspect{};
         } else {
             const auto parts = value.split(':');
             bool validWidth = false;
@@ -172,10 +472,55 @@ bool readGeometry(const QCommandLineParser& parser, GeometrySettings& geometry, 
                                        "width:height, for example 3:2 or 2:3");
                 return false;
             }
-            geometry.crop.aspect = CropRatio{ratio};
+            edits.aspect = CropRatio{ratio};
         }
     }
     return true;
+}
+
+/// @brief Reads every develop option, the white balance's included, into edits.
+bool readEdits(const QCommandLineParser& parser, cli::ExportEdits& edits, std::ostream& err,
+               int& code) {
+    if (!readSettings(parser, edits.settings, err, code)) {
+        return false;
+    }
+    DevelopSettings given;
+    // Naming either half of a white balance is asking for a custom one; the
+    // half left unnamed stays as the photograph has it, or as the camera
+    // recorded it.
+    if (parser.isSet("temperature") || parser.isSet("tint")) {
+        given.color.whiteBalance = WhiteBalanceMode::Custom;
+        addEdit(edits.settings, "whiteBalance", given);
+    }
+    if (parser.isSet("white-balance")) {
+        const auto mode = parser.value("white-balance").toLower();
+        if (mode == "as-shot") {
+            if (parser.isSet("temperature") || parser.isSet("tint")) {
+                code = usageError(err, "--white-balance as-shot cannot be combined with "
+                                       "--temperature or --tint");
+                return false;
+            }
+            // Clears both halves, so nothing a sidecar kept in them survives.
+            addEdit(edits.settings, "whiteBalance", given);
+            addEdit(edits.settings, "temperature", given);
+            addEdit(edits.settings, "tint", given);
+        } else if (mode == "custom") {
+            given.color.whiteBalance = WhiteBalanceMode::Custom;
+            addEdit(edits.settings, "whiteBalance", given);
+        } else {
+            code = usageError(err, "--white-balance takes as-shot or custom");
+            return false;
+        }
+    }
+    if (parser.isSet("convert-to-grayscale") && parser.isSet("no-convert-to-grayscale")) {
+        code = usageError(err, "--convert-to-grayscale and --no-convert-to-grayscale contradict");
+        return false;
+    }
+    if (parser.isSet("convert-to-grayscale") || parser.isSet("no-convert-to-grayscale")) {
+        given.blackAndWhite.convertToGrayscale = parser.isSet("convert-to-grayscale");
+        addEdit(edits.settings, "convertToGrayscale", given);
+    }
+    return readGeometry(parser, edits.geometry, err, code);
 }
 
 /// @brief Configures the command's own parser.
@@ -187,47 +532,125 @@ void configure(QCommandLineParser& parser) {
     parser.setApplicationDescription(
         "Render images and write them out.\n"
         "\n"
-        "Inputs are files, not directories; your shell expands the wildcards. Every\n"
+        "Inputs are files, which your shell can expand from wildcards, or folders. A\n"
+        "folder stands for the shots in it, not recursively: a RAW and a JPEG of the\n"
+        "same name are one shot, and only the RAW is exported. Files given directly are\n"
+        "all exported. --min-rating, --rejected and --label export only the photographs\n"
+        "whose sidecar marks match (no sidecar, or --no-sidecar, means no rating and no\n"
+        "label); the others are counted, not reported as failures. Every\n"
         "input is attempted, so one bad frame does not abandon an overnight batch. The\n"
         "exit status is 0 when all succeeded, 1 when any failed, 2 for a usage error.\n"
         "\n"
         "With no develop settings an export is a faithful conversion of the image as\n"
         "captured, save for a gentle roll-off that bends the brightest values toward\n"
         "white instead of clipping them flat; --filmic-highlights 0 turns it off.\n"
+        "Each file renders through its own .xmp sidecar, if it has one: the develop\n"
+        "settings given here are applied on top of the sidecar's and replace only what\n"
+        "they name. --no-sidecar ignores sidecars, so the flags alone develop the file.\n"
+        "Colour controls come in three families: --saturation and --vibrance, the HSL\n"
+        "bands --hue-, --saturation- and --luminance- followed by red, orange, yellow,\n"
+        "green, aqua, blue, purple or magenta, and black and white, which\n"
+        "--convert-to-grayscale turns on and --gray- plus a band mixes.\n"
+        "Naming --temperature or --tint makes white balance custom; the other half\n"
+        "keeps the photograph's own value, or as shot. The command never writes a\n"
+        "sidecar.\n"
         "Camera orientation is honoured. Rotation, flips and cropping are applied\n"
-        "after colour and tone; crops always stay inside valid image content.");
+        "after colour and tone; crops always stay inside valid image content.\n"
+        "Geometry flags are values: --rotate replaces the sidecar's rotation, and a\n"
+        "rotation, straighten or flip that changes drops its explicit crop for\n"
+        "automatic framing, with a warning. --crop with a rectangle leaves the aspect free unless "
+        "--crop-aspect\n"
+        "is given too; --crop-aspect alone makes the crop automatic when it changes\n"
+        "the aspect to something other than free. A sidecar that cannot be read fails\n"
+        "its file, unless --no-sidecar is given.\n"
+        "\n"
+        "Development runs on the GPU when there is one, unless --device cpu is given or\n"
+        "ARRAW_DISABLE_GPU is set to a value other than 0. Without --device gpu, a GPU\n"
+        "that cannot be used, or is only a software rasteriser, is reported once and the\n"
+        "batch runs on the CPU; a photograph the GPU fails on is retried there. With\n"
+        "--device gpu nothing falls back, and ARRAW_DISABLE_GPU is a usage error.\n"
+        "--gpu-backend opengl with --device auto is --device gpu, since OpenGL needs a\n"
+        "display's platform and a process cannot fall back from one that will not load.\n"
+        "--device gpuN is --device gpu on the N-th adapter the --gpu-backend lists,\n"
+        "counting from 0; `arraw-cli gpu-test` shows the numbers.");
     parser.addHelpOption();
     parser.addOption({{"o", "output"}, "Existing directory to write into.", "dir"});
     parser.addOption({"format", "png, jpeg, or tiff. Default: jpeg.", "name"});
     parser.addOption({"quality", "JPEG quality, 0-100. Default: 90.", "value"});
+    parser.addOption({"sharpen", "Output sharpening, 0-100. Default: 0 (off).", "amount"});
     parser.addOption({"bit-depth", "8 or 16. Default: 8.", "value"});
     parser.addOption({"encoding", "srgb, display-p3, or adobe-rgb. Default: srgb.", "name"});
-    parser.addOption({"exposure", "Exposure adjustment in EV, -5 to 5.", "stops"});
-    parser.addOption({"contrast", "Contrast, -100 to 100.", "amount"});
-    parser.addOption({"shadows", "Lift or deepen the dark tones, -100 to 100.", "amount"});
-    parser.addOption({"highlights", "Recover or raise the bright tones, -100 to 100.", "amount"});
-    parser.addOption({"blacks", "Move the black point, -100 to 100.", "amount"});
-    parser.addOption({"whites", "Move the white point, -100 to 100.", "amount"});
-    parser.addOption({"temperature", "White balance in kelvin, 2000 to 12000. RAW only.", "k"});
-    parser.addOption({"tint", "Green to magenta, -150 to 150. RAW only.", "amount"});
+    for (const FieldDescriptor& descriptor : developSettingDescriptors) {
+        if (!isNumericOption(descriptor)) {
+            continue;
+        }
+        const SettingHelp& help = *helpFor(descriptor.key);
+        parser.addOption({QString::fromStdString(optionName(descriptor.key)),
+                          QString::fromUtf8(help.description) + ", " +
+                              QString::fromStdString(limit(descriptor.range->minimum) + " to " +
+                                                     limit(descriptor.range->maximum)) +
+                              "." + QString::fromUtf8(help.note),
+                          help.valueName});
+    }
     parser.addOption(
         {"white-balance", "as-shot or custom. Temperature/tint imply custom.", "mode"});
-    parser.addOption({"filmic-highlights", "Highlight roll-off, 0 to 100. Default: 25.", "amount"});
+    parser.addOption({"convert-to-grayscale",
+                      "Make the photograph black and white; the --gray-* weights mix the hues, and "
+                      "saturation, vibrance and the HSL bands then have nothing to act on."});
+    parser.addOption({"no-convert-to-grayscale", "Undo a sidecar's black and white conversion."});
     parser.addOption(
         {"rotate", "Any finite clockwise angle, before flips. Default: 0.", "degrees"});
     parser.addOption({"flip-horizontal", "Flip horizontally in the upright frame."});
+    parser.addOption({"no-flip-horizontal", "Undo a sidecar's horizontal flip."});
     parser.addOption({"flip-vertical", "Flip vertically in the upright frame."});
+    parser.addOption({"no-flip-vertical", "Undo a sidecar's vertical flip."});
     parser.addOption(
         {"crop", "auto or normalised upright left,top,right,bottom. Default: auto.", "rectangle"});
     parser.addOption(
         {"crop-aspect", "free, original, or width:height (3:2, 2:3). Default: free.", "aspect"});
+    parser.addOption({"resize",
+                      "Shrink to a size, after the crop: N is the long edge, WxH fits inside "
+                      "a box, N% scales (12.5% is fine). A bare number is the long edge. "
+                      "Never enlarges unless --allow-upscale. Default: full size.",
+                      "size"});
+    parser.addOption({"allow-upscale", "Let --resize enlarge a photograph past its own size."});
+    parser.addOption({"resize-filter",
+                      "lanczos or bilinear: how --resize resamples. Lanczos is sharper, with a "
+                      "little ringing at hard edges; bilinear is softer and never rings. "
+                      "Default: lanczos.",
+                      "name"});
+    parser.addOption({"device",
+                      "auto, cpu, gpu, or gpuN. Auto uses the GPU when it can and says so when "
+                      "it cannot; gpu never falls back; gpuN is gpu on the backend's N-th "
+                      "adapter, counting from 0. With --gpu-backend opengl, auto is gpu. "
+                      "Default: auto.",
+                      "name"});
+    parser.addOption({"gpu-backend",
+                      "vulkan, opengl, d3d11, d3d12, or metal. Default: " +
+                          QString::fromUtf8(gpuBackendName(defaultGpuBackend()).data()) +
+                          ". Only opengl, on Linux, uses the platform QT_QPA_PLATFORM names "
+                          "(xcb or wayland); the others need no display.",
+                      "name"});
+    parser.addOption({"allow-software", "Accept a software rasteriser, such as llvmpipe or WARP."});
+    parser.addOption({"no-sidecar",
+                      "Ignore each photograph's .xmp sidecar: develop it from the defaults and "
+                      "the flags alone. Without it, the flags are applied on top of the sidecar's "
+                      "settings. The command never writes a sidecar."});
     parser.addOption({"no-profile", "Convert colour but do not embed the output profile."});
+    parser.addOption({"metadata",
+                      "Metadata to carry from the photograph: all, none, or a comma-separated "
+                      "list of capture (camera, lens, exposure, time), location (GPS) and "
+                      "descriptive (rating, label, title, caption, keywords, creator, "
+                      "rights). Default: capture,descriptive.",
+                      "list"});
+    cli::addMarksFilterOptions(parser);
     parser.addOption({"overwrite", "Replace outputs that already exist."});
     parser.addOption({{"q", "quiet"}, "Do not report each file as it is written."});
     cli::addLogFormatOption(parser);
     // The syntax carries the command word, which Qt's usage line otherwise
     // omits: it knows only argv[0], and the command is a positional we consumed.
-    parser.addPositionalArgument("input", "Files to export.", "export <input>...");
+    parser.addPositionalArgument("input", "Files, or folders of shots, to export.",
+                                 "export <input>...");
 }
 
 /// @brief Turns the parsed arguments into an ::ExportRequest.
@@ -293,66 +716,84 @@ std::optional<ExportRequest> buildRequest(const QCommandLineParser& parser, std:
     }
 
     if (!readInteger(parser, "quality", request.options.quality) ||
-        !readInteger(parser, "bit-depth", request.options.bitDepth)) {
-        code = usageError(err, "--quality and --bit-depth take whole numbers");
+        !readInteger(parser, "bit-depth", request.options.bitDepth) ||
+        !readInteger(parser, "sharpen", request.options.sharpening)) {
+        code = usageError(err, "--quality, --bit-depth and --sharpen take whole numbers");
+        return std::nullopt;
+    }
+    if (request.options.sharpening < 0 || request.options.sharpening > 100) {
+        code = usageError(err, "--sharpen must be between 0 and 100");
         return std::nullopt;
     }
 
-    std::optional<float> exposure;
-    std::optional<float> contrast;
-    std::optional<float> shadows;
-    std::optional<float> highlights;
-    std::optional<float> blacks;
-    std::optional<float> whites;
-    std::optional<float> filmicHighlights;
-    if (!readSetting(parser, "contrast", flattestContrast, steepestContrast, contrast, err, code) ||
-        !readSetting(parser, "shadows", weakestToneControl, strongestToneControl, shadows, err,
-                     code) ||
-        !readSetting(parser, "highlights", weakestToneControl, strongestToneControl, highlights,
-                     err, code) ||
-        !readSetting(parser, "blacks", weakestToneControl, strongestToneControl, blacks, err,
-                     code) ||
-        !readSetting(parser, "whites", weakestToneControl, strongestToneControl, whites, err,
-                     code) ||
-        !readSetting(parser, "filmic-highlights", noFilmicHighlights, fullFilmicHighlights,
-                     filmicHighlights, err, code) ||
-        !readSetting(parser, "exposure", darkestExposure, brightestExposure, exposure, err, code) ||
-        !readSetting(parser, "temperature", warmestKelvin, coolestKelvin,
-                     request.settings.color.temperature, err, code) ||
-        !readSetting(parser, "tint", -tintLimit, tintLimit, request.settings.color.tint, err,
-                     code)) {
+    if (!readEdits(parser, request.edits, err, code)) {
         return std::nullopt;
     }
-    request.settings.tone.exposure = exposure.value_or(0.0F);
-    request.settings.tone.contrast = contrast.value_or(0.0F);
-    request.settings.tone.shadows = shadows.value_or(0.0F);
-    request.settings.tone.highlights = highlights.value_or(0.0F);
-    request.settings.tone.blacks = blacks.value_or(0.0F);
-    request.settings.tone.whites = whites.value_or(0.0F);
-    request.settings.tone.filmicHighlights =
-        filmicHighlights.value_or(request.settings.tone.filmicHighlights);
-    // Naming either half of a white balance is asking for a custom one; the
-    // half left unnamed stays as the camera recorded it.
-    if (request.settings.color.temperature.has_value() || request.settings.color.tint.has_value()) {
-        request.settings.color.whiteBalance = WhiteBalanceMode::Custom;
-    }
-    if (parser.isSet("white-balance")) {
-        const auto mode = parser.value("white-balance").toLower();
-        if (mode == "as-shot") {
-            if (parser.isSet("temperature") || parser.isSet("tint")) {
-                code = usageError(err, "--white-balance as-shot cannot be combined with "
-                                       "--temperature or --tint");
-                return std::nullopt;
-            }
-            request.settings.color.whiteBalance = WhiteBalanceMode::AsShot;
-        } else if (mode == "custom") {
-            request.settings.color.whiteBalance = WhiteBalanceMode::Custom;
-        } else {
-            code = usageError(err, "--white-balance takes as-shot or custom");
+
+    if (parser.isSet("resize")) {
+        try {
+            request.render.size = cli::parseResize(parser.value("resize").toStdString());
+        } catch (const std::invalid_argument& problem) {
+            code = usageError(err, problem.what());
             return std::nullopt;
         }
     }
-    if (!readGeometry(parser, request.settings.geometry, err, code)) {
+    request.render.upscale = parser.isSet("allow-upscale") ? Upscale::Allowed : Upscale::Never;
+    if (parser.isSet("resize-filter")) {
+        const auto filter =
+            parseResizeFilter(parser.value("resize-filter").toLower().toStdString());
+        if (!filter) {
+            code = usageError(err, "unknown --resize-filter '" +
+                                       parser.value("resize-filter").toStdString() +
+                                       "'; expected lanczos or bilinear");
+            return std::nullopt;
+        }
+        request.render.filter = *filter;
+    }
+    if (!parser.isSet("resize")) {
+        for (const char* option : {"allow-upscale", "resize-filter"}) {
+            if (parser.isSet(option)) {
+                request.ignoredResizeOptions.push_back(std::string("--") + option);
+            }
+        }
+    }
+
+    if (parser.isSet("device")) {
+        const auto device = cli::parseDeviceChoice(parser.value("device").toStdString());
+        if (!device) {
+            code = usageError(err, "unknown device '" + parser.value("device").toStdString() +
+                                       "'; expected " + cli::deviceChoices());
+            return std::nullopt;
+        }
+        request.device = *device;
+    }
+    if (parser.isSet("gpu-backend")) {
+        const auto name = parser.value("gpu-backend").toLower().toStdString();
+        const auto backend = parseGpuBackend(name);
+        if (!backend) {
+            code = usageError(err, "unknown backend '" + name +
+                                       "'; expected vulkan, opengl, d3d11, d3d12, or metal");
+            return std::nullopt;
+        }
+        request.backend = *backend;
+    }
+    request.allowSoftware = parser.isSet("allow-software");
+    // OpenGL needs a display server's Qt platform, and Qt aborts the process
+    // when that cannot load, so auto's promise of a CPU fallback cannot be kept.
+    // Asking for OpenGL is taken as asking for the GPU: from here on the request
+    // is `gpu`, and every rule that follows is the one `gpu` already has.
+    const bool openGlImpliesGpu =
+        request.device.kind == cli::DeviceKind::Auto && request.backend == GpuBackend::OpenGL;
+    if (openGlImpliesGpu) {
+        request.device.kind = cli::DeviceKind::Gpu;
+    }
+    if (request.device.kind == cli::DeviceKind::Gpu && cli::gpuDisabled()) {
+        const std::string asked = openGlImpliesGpu
+                                      ? "--gpu-backend opengl, which is --device gpu,"
+                                      : "--device " + parser.value("device").toStdString();
+        code = usageError(err, asked + " cannot be used while " +
+                                   std::string(cli::disableGpuVariable) +
+                                   " is set; unset it, or set it to 0");
         return std::nullopt;
     }
 
@@ -363,22 +804,121 @@ std::optional<ExportRequest> buildRequest(const QCommandLineParser& parser, std:
     request.logFormat = *logFormat;
 
     request.options.embedProfile = !parser.isSet("no-profile");
+    if (parser.isSet("metadata")) {
+        const auto selection = parseMetadataSelection(parser.value("metadata").toStdString());
+        if (!selection) {
+            code = usageError(err, "--metadata takes all, none, or a comma-separated list of "
+                                   "capture, location and descriptive");
+            return std::nullopt;
+        }
+        request.metadata = *selection;
+    }
+    request.useSidecars = !parser.isSet("no-sidecar");
+    const auto filter = cli::readMarksFilter(parser, "export", err, code);
+    if (!filter) {
+        return std::nullopt;
+    }
+    request.filter = *filter;
     request.overwrite = parser.isSet("overwrite");
     request.quiet = parser.isSet("quiet");
     return request;
+}
+
+/// @brief Whether the request develops on the CPU without ever looking for a GPU.
+bool cpuOnly(const ExportRequest& request) {
+    return request.device.kind == cli::DeviceKind::Cpu ||
+           (request.device.kind == cli::DeviceKind::Auto && cli::gpuDisabled());
+}
+
+/// @brief Creates the batch's one GPU context, or says why there is none.
+/// @param request What was asked for.
+/// @param problem Receives the reason when the result is empty.
+/// @return The context, or an empty pointer.
+std::unique_ptr<GpuContext> createContext(const ExportRequest& request, std::string& problem) {
+    std::unique_ptr<GpuContext> context;
+    try {
+        context = std::make_unique<GpuContext>(request.backend, request.device.adapter);
+    } catch (const std::exception& failure) {
+        problem = failure.what();
+        return nullptr;
+    }
+    if (context->info().kind == GpuDeviceKind::Software && !request.allowSoftware) {
+        problem = describe(
+            {.notice = Notice::GpuSoftwareRefused, .values = {context->info().deviceName}});
+        return nullptr;
+    }
+    return context;
+}
+
+/// @brief Develops one decoded photograph on the device and returns it on the host.
+///
+/// Every device image, the checkpoint included, is gone before this returns,
+/// so the context can be destroyed whenever its owner likes.
+ImageBuffer developOnDevice(GpuContext& context, const ImageBuffer& source,
+                            const DevelopState& state, const RenderRequest& render) {
+    const RenderCheckpoint checkpoint = developOnGpu(context, source, state, Stage::Resize, render);
+    return checkpoint.readBack();
 }
 
 /// @brief Exports every input, continuing past the ones that fail.
 int exportAll(const ExportRequest& request, std::ostream& err) {
     cli::StreamDiagnostics log(err, request.logFormat, request.quiet);
     std::size_t failures = 0;
+    for (const std::string& option : request.ignoredResizeOptions) {
+        log.record({.notice = Notice::OptionIgnored,
+                    .severity = Severity::Warning,
+                    .values = {option, std::string("--resize")}});
+    }
 
-    for (const auto& input : request.inputs) {
+    // One device for the batch, created here on the main thread and destroyed
+    // on it after the last input: no device image outlives an iteration.
+    std::unique_ptr<GpuContext> context;
+    if (cpuOnly(request)) {
+        if (request.device.kind == cli::DeviceKind::Auto) {
+            log.record({.notice = Notice::GpuFallback,
+                        .severity = Severity::Warning,
+                        .values = {describe({.notice = Notice::GpuDisabled,
+                                             .values = {std::string(cli::disableGpuVariable)}})}});
+        }
+    } else {
+        std::string problem;
+        context = createContext(request, problem);
+        if (!context) {
+            if (request.device.kind == cli::DeviceKind::Gpu) {
+                log.record({.notice = Notice::GpuFailed,
+                            .severity = Severity::Error,
+                            .values = {problem}});
+                return cli::Failed;
+            }
+            log.record({.notice = Notice::GpuFallback,
+                        .severity = Severity::Warning,
+                        .values = {problem}});
+        }
+    }
+    if (context) {
+        log.record({.notice = Notice::GpuUsed,
+                    .severity = Severity::Info,
+                    .values = {std::string(gpuBackendName(context->info().backend)),
+                               context->info().deviceName}});
+    } else {
+        log.record({.notice = Notice::CpuUsed, .severity = Severity::Info});
+    }
+
+    const cli::ExpandedInputs expanded = cli::expandInputs(request.inputs, log);
+    failures += expanded.unreadableFolders;
+    std::size_t filteredOut = 0;
+    std::uint64_t timingRequest = 0;
+    for (const auto& [input, shot] : expanded.photographs) {
+        const detail::TimingSpan timing("cli.export", ++timingRequest);
         const auto destination =
             request.outputDirectory /
             (input.stem().string() + std::string(extensionFor(request.format)));
 
         try {
+            if (!cli::passesFilter(request.filter, input, request.useSidecars)) {
+                ++filteredOut;
+                continue;
+            }
             if (!request.overwrite && std::filesystem::exists(destination)) {
                 // Refused rather than replaced: the destination is usually a
                 // directory of someone's photographs, and exportImage would
@@ -391,8 +931,71 @@ int exportAll(const ExportRequest& request, std::ostream& err) {
             // rather than when its pixels arrive. The command line's settings
             // are another snapshot of it, and the file on disk is untouched
             // (ADR 012). The decode is then not asked to repeat the warning.
-            const Photo photo = openPhoto(input, log).with(request.settings);
-            exportImage(develop(loadImage(input), photo.settings()), destination, request.options);
+            // The settings are the photograph's own, its sidecar's, with only
+            // what the flags named applied on top; --no-sidecar opens it bare.
+            // A sidecar that cannot be read fails the file: opened bare, the
+            // photograph would export without the edits its photographer made
+            // and the exit status would say all was well. --no-sidecar opts out.
+            cli::SidecarWatch watch(log);
+            const Photo opened = request.useSidecars ? openPhoto(input, watch)
+                                                     : Photo(input, readImageMetadata(input, log));
+            if (watch.unreadable) {
+                throw std::runtime_error("its sidecar could not be read, so its edits are not "
+                                         "applied; fix the sidecar, or pass --no-sidecar to "
+                                         "export without it");
+            }
+            DevelopState edited = opened.state();
+            edited.settings =
+                cli::applyEdits(std::move(edited.settings), request.edits, log, input,
+                                !std::holds_alternative<NamedEncoding>(opened.metadata().encoding));
+            const Photo photo = opened.with(std::move(edited));
+            // Decoded once, before the device is involved: a file that cannot be
+            // read is the input's failure, whichever device would have developed it.
+            const ImageBuffer source = loadImage(input);
+            // Planned on the host for the same reason: settings the plan rejects
+            // (std::invalid_argument) fail the input on either device. What the
+            // device is then blamed for is developOnGpu and readBack alone, so
+            // any exception from them, an image larger than the device's
+            // textures included, means "the GPU could not".
+            (void)planFor(source, photo.state(), request.render);
+            std::optional<ImageBuffer> developed;
+            if (context) {
+                try {
+                    developed = developOnDevice(*context, source, photo.state(), request.render);
+                } catch (const std::exception& failure) {
+                    if (request.device.kind == cli::DeviceKind::Gpu) {
+                        throw;
+                    }
+                    const bool lost = context->lost();
+                    std::string reason = failure.what();
+                    if (lost) {
+                        reason += " (the device is lost, so the rest of the batch is exported "
+                                  "on the CPU)";
+                    }
+                    log.record({.notice = Notice::GpuFallback,
+                                .severity = Severity::Warning,
+                                .subject = input,
+                                .values = {reason}});
+                    if (lost) {
+                        context.reset();
+                    }
+                }
+            }
+            if (!developed) {
+                developed = develop(source, photo.state(), request.render);
+            }
+            const ExportMetadata carried{input, photo.marks(), request.metadata,
+                                         request.useSidecars};
+            try {
+                exportImage(*developed, destination, request.options, carried, log);
+            } catch (const std::runtime_error& problem) {
+                if (std::string_view(problem.what()).find("Cannot write the metadata") ==
+                    std::string_view::npos) {
+                    throw;
+                }
+                throw std::runtime_error(std::string(problem.what()) +
+                                         "; pass --metadata none to export without it");
+            }
             log.record({.notice = Notice::Exported,
                         .severity = Severity::Info,
                         .subject = input,
@@ -406,19 +1009,92 @@ int exportAll(const ExportRequest& request, std::ostream& err) {
         }
     }
 
+    if (filteredOut > 0) {
+        log.record({.notice = Notice::FilteredOut, .values = {static_cast<double>(filteredOut)}});
+    }
     if (failures > 0) {
         // Through the log like everything else, so that --log-format json emits
         // nothing a JSON reader has to skip.
         log.record({.notice = Notice::BatchFinished,
                     .severity = Severity::Error,
                     .values = {static_cast<double>(failures),
-                               static_cast<double>(request.inputs.size())}});
+                               static_cast<double>(expanded.photographs.size() +
+                                                   expanded.unreadableFolders)}});
         return cli::Failed;
     }
     return cli::Success;
 }
 
 } // namespace
+
+std::optional<cli::ExportEdits> cli::readExportEdits(const std::vector<std::string>& flags,
+                                                     std::ostream& err) {
+    QCommandLineParser parser;
+    configure(parser);
+    QStringList arguments{"export"};
+    for (const std::string& flag : flags) {
+        arguments.append(QString::fromStdString(flag));
+    }
+    if (!parser.parse(arguments)) {
+        (void)usageError(err, parser.errorText().toStdString());
+        return std::nullopt;
+    }
+    ExportEdits edits;
+    int code = Success;
+    if (!readEdits(parser, edits, err, code)) {
+        return std::nullopt;
+    }
+    return edits;
+}
+
+std::variant<RenderRequest::FitInside, RenderRequest::Scale>
+cli::parseResize(std::string_view spec) {
+    if (spec.ends_with('%')) {
+        const std::string_view number = spec.substr(0, spec.size() - 1);
+        const bool plain = !number.empty() && number != "." &&
+                           std::ranges::all_of(
+                               number, [](char c) { return (c >= '0' && c <= '9') || c == '.'; }) &&
+                           std::ranges::count(number, '.') <= 1;
+        double percent = 0.0;
+        if (plain) {
+            percent = std::strtod(std::string(number).c_str(), nullptr);
+        }
+        if (!plain || !std::isfinite(percent)) {
+            throw std::invalid_argument("--resize: '" + std::string(spec) +
+                                        "' is not a percentage such as 50% or 12.5%");
+        }
+        if (percent <= 0.0) {
+            throw std::invalid_argument("--resize: '" + std::string(spec) +
+                                        "' must be greater than 0%");
+        }
+        return RenderRequest::Scale{percent / 100.0};
+    }
+    if (const auto at = spec.find_first_of("xX"); at != std::string_view::npos) {
+        const std::string_view width = spec.substr(0, at);
+        const std::string_view height = spec.substr(at + 1);
+        if (width.empty() || height.empty()) {
+            throw std::invalid_argument("--resize: '" + std::string(spec) +
+                                        "' needs both sides, as in 2048x1365");
+        }
+        return RenderRequest::FitInside{parseSide(width, spec), parseSide(height, spec)};
+    }
+    const std::uint32_t edge = parseSide(spec, spec);
+    return RenderRequest::FitInside{edge, edge};
+}
+
+DevelopSettings cli::applyEdits(DevelopSettings base, const ExportEdits& edits, DiagnosticLog& log,
+                                const std::filesystem::path& subject, bool raw) {
+    // Whatever a sidecar left in the settings a render does not read is dropped
+    // first: naming one half of temperature and tint then leaves the other as
+    // shot, as it always did, rather than adopting a value the photograph was
+    // not using. This happens with no flags too, which changes nothing a render reads.
+    base = withoutUnusedSettings(std::move(base), raw);
+    for (const SettingEdit& edit : edits.settings) {
+        decode(*edit.descriptor, edit.value, base, log, subject);
+    }
+    base.geometry = withGeometryEdits(base.geometry, edits.geometry, log, subject);
+    return base;
+}
 
 int cli::runExportCommand(const QStringList& arguments, std::ostream& out, std::ostream& err,
                           const StartApplication& start) {
@@ -432,7 +1108,7 @@ int cli::runExportCommand(const QStringList& arguments, std::ostream& out, std::
         return usageError(err, parser.errorText().toStdString());
     }
     if (parser.isSet("help")) {
-        out << commandHelp(parser);
+        writeStyledHelp(out, commandHelp(parser));
         return Success;
     }
 
@@ -441,8 +1117,16 @@ int cli::runExportCommand(const QStringList& arguments, std::ostream& out, std::
     if (!request) {
         return code;
     }
-    // Qt Core alone: the image codecs beyond PNG are plugins, found through an
-    // application, and an export touches no graphics device.
-    start(ApplicationKind::Core);
+    // Qt Core alone when no GPU will be looked for: the image codecs beyond PNG
+    // are plugins, found through an application, and a CPU export touches no
+    // graphics device. Otherwise the GUI application a device is created through.
+    // Only OpenGL needs a display server's platform; every other backend is
+    // reached through the headless one, whatever QT_QPA_PLATFORM says.
+    if (cpuOnly(*request)) {
+        start(ApplicationKind::Core);
+    } else {
+        start(request->backend == GpuBackend::OpenGL ? ApplicationKind::Gui
+                                                     : ApplicationKind::OffscreenDevice);
+    }
     return exportAll(*request, err);
 }

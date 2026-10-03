@@ -1,5 +1,7 @@
 #include "GeometryPlan.h"
 
+#include "TimingTrace.h"
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -160,6 +162,9 @@ std::uint32_t rasterExtent(double extent) {
 }
 
 /// @brief Interpolates in premultiplied alpha, returning straight RGBA.
+///
+/// The GPU's `src/gpu/shaders/geometry.frag` mirrors this function, snapping
+/// and weights included; change them together.
 std::array<float, 4> sample(const ImageBuffer& source, SourcePoint position) {
     const auto centreCoordinate = [](double edge, std::uint32_t length) {
         double value = std::clamp(edge - 0.5, 0.0, length - 1.0);
@@ -221,6 +226,11 @@ SourcePoint GeometryPlan::toSource(UprightPoint point) const {
             matrix[1] * x + matrix[3] * y + sourceSize.height / 2.0};
 }
 
+bool GeometryPlan::isIdentity() const noexcept {
+    return matrix == Matrix{1, 0, 0, 1} && left == 0 && top == 0 && width == sourceSize.width &&
+           height == sourceSize.height;
+}
+
 GeometryPlan arraw::geometryPlanFor(ImageSize size, ImageOrientation orientation,
                                     const GeometrySettings& settings) {
     if (size.empty() || !std::isfinite(settings.straighten) ||
@@ -252,16 +262,14 @@ GeometryPlan arraw::geometryPlanFor(ImageSize size, ImageOrientation orientation
     if (std::holds_alternative<OriginalCropAspect>(settings.crop.aspect)) {
         aspect = originalWidth / originalHeight;
     } else if (const auto* custom = std::get_if<CropRatio>(&settings.crop.aspect)) {
-        if (!std::isfinite(custom->widthOverHeight) || custom->widthOverHeight <= 0) {
+        if (!isWellFormed(*custom)) {
             throw std::invalid_argument("Crop aspect must be positive and finite");
         }
         aspect = custom->widthOverHeight;
     }
     if (settings.crop.rectangle) {
         const auto& crop = *settings.crop.rectangle;
-        if (!std::isfinite(crop.left) || !std::isfinite(crop.top) || !std::isfinite(crop.right) ||
-            !std::isfinite(crop.bottom) || crop.left < 0 || crop.top < 0 || crop.right > 1 ||
-            crop.bottom > 1 || crop.left >= crop.right || crop.top >= crop.bottom) {
+        if (!isWellFormed(crop)) {
             throw std::invalid_argument("Crop edges must be finite, ordered and within 0 to 1");
         }
         plan.left = crop.left * plan.uprightWidth;
@@ -284,13 +292,15 @@ GeometryPlan arraw::geometryPlanFor(ImageSize size, ImageOrientation orientation
     return plan;
 }
 
+/// The GPU's `src/gpu/shaders/geometry.frag` mirrors this resample through
+/// `packGeometry` (GpuPlan.cpp), which composes the per-pixel position below into
+/// one affine map; a change to the mapping here changes both.
 ImageBuffer arraw::applyGeometry(ImageBuffer source, const GeometryPlan& plan) {
+    const detail::TimingSpan timing("cpu.geometry");
     if (source.size() != plan.sourceSize || source.format() != workingFormat) {
         throw std::invalid_argument("Geometry requires matching developed float pixels");
     }
-    if (source.orientation() == ImageOrientation::Normal && plan.matrix == Matrix{1, 0, 0, 1} &&
-        plan.left == 0 && plan.top == 0 && plan.width == plan.sourceSize.width &&
-        plan.height == plan.sourceSize.height) {
+    if (source.orientation() == ImageOrientation::Normal && plan.isIdentity()) {
         return source;
     }
     ImageBuffer result(plan.outputSize, workingFormat, source.encoding());

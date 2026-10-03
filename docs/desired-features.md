@@ -7,9 +7,11 @@
 > subscription.
 
 Your edits are never baked into the file. They live in an `.xmp` sidecar next to the RAW,
-written in the same `crs:` dialect Lightroom uses — so ratings, colour labels and most
-develop settings survive a round-trip to and from Lightroom. Delete the sidecar and you
-have your untouched negative back.
+named as Lightroom names it. Ratings and colour labels are the standard `xmp:` ones, so
+they travel to and from Lightroom today; develop settings are in arraw's own namespace for
+now, and will be mapped to Lightroom's `crs:` dialect so that most of them survive the
+round-trip too. Whatever else the sidecar holds, arraw leaves alone. Delete the sidecar and
+you have your untouched negative back.
 
 ---
 
@@ -94,7 +96,7 @@ Arraw is also a command, running the identical pipeline headless:
 ```bash
 arraw-cli export *.arw -o out/   # render every file through its own sidecar
 arraw-cli preset list            # list, show, or apply saved presets
-arraw-cli info photo.arw         # EXIF and edit state, read-only
+arraw-cli info photo.arw         # size, encoding, EXIF, sidecar marks and edits, read-only
 ```
 
 Useful for overnight batches, or for re-exporting a shoot in a different size or profile

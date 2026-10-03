@@ -1,0 +1,23 @@
+# Additions for the generated _arraw.pyi. nanobind's stub generator skips names
+# that end in a single underscore (with_) and the module's __version__.
+
+Photo\.__suffix__:
+    def with_(
+        self,
+        state: DevelopState | None = None,
+        *,
+        marks: PhotoMarks | None = None,
+        rating: int = ...,
+        label: ColorLabel | None = ...,
+        **kwargs: Any,
+    ) -> Photo:
+        """
+        Return a photograph with `state` (and `marks`) replacing the current ones wholesale, then flat snake_case keywords applied, e.g. exposure=0.7, which edit the settings of the state. `rating` and `label` change the marks instead (label=None clears it).
+        """
+
+DevelopSettings\.__suffix__:
+    def with_(self, **kwargs: Any) -> DevelopSettings:
+        """Return a copy with flat snake_case keywords applied, e.g. exposure=0.7."""
+
+_arraw\.__suffix__:
+    __version__: str

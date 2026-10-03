@@ -46,6 +46,8 @@ QString noticeName(Notice notice) {
         return QStringLiteral("GpuSoftwareRefused");
     case Notice::GpuSoftwareAccepted:
         return QStringLiteral("GpuSoftwareAccepted");
+    case Notice::GpuAdapterSkipped:
+        return QStringLiteral("GpuAdapterSkipped");
     case Notice::GpuNoFloatTextures:
         return QStringLiteral("GpuNoFloatTextures");
     case Notice::GpuReadBackNotPromised:
@@ -58,6 +60,36 @@ QString noticeName(Notice notice) {
         return QStringLiteral("GpuRoundTripChanged");
     case Notice::GpuDisabled:
         return QStringLiteral("GpuDisabled");
+    case Notice::GpuUsed:
+        return QStringLiteral("GpuUsed");
+    case Notice::CpuUsed:
+        return QStringLiteral("CpuUsed");
+    case Notice::GpuFallback:
+        return QStringLiteral("GpuFallback");
+    case Notice::SettingClamped:
+        return QStringLiteral("SettingClamped");
+    case Notice::SettingUnknown:
+        return QStringLiteral("SettingUnknown");
+    case Notice::SettingMalformed:
+        return QStringLiteral("SettingMalformed");
+    case Notice::NewerSettingsVersion:
+        return QStringLiteral("NewerSettingsVersion");
+    case Notice::SidecarUnreadable:
+        return QStringLiteral("SidecarUnreadable");
+    case Notice::CropReset:
+        return QStringLiteral("CropReset");
+    case Notice::ExifUnreadable:
+        return QStringLiteral("ExifUnreadable");
+    case Notice::NoPhotographs:
+        return QStringLiteral("NoPhotographs");
+    case Notice::FilteredOut:
+        return QStringLiteral("FilteredOut");
+    case Notice::OptionIgnored:
+        return QStringLiteral("OptionIgnored");
+    case Notice::PreviewUnreadable:
+        return QStringLiteral("PreviewUnreadable");
+    case Notice::MetadataNotCarried:
+        return QStringLiteral("MetadataNotCarried");
     }
     return {};
 }

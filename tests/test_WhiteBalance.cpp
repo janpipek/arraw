@@ -1,3 +1,6 @@
+#include "ProcessingPlan.h"
+
+#include <GeometrySettings.h>
 #include <WhiteBalance.h>
 
 #include <catch2/catch_test_macros.hpp>
@@ -6,8 +9,11 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
+#include <functional>
 #include <limits>
 #include <stdexcept>
+#include <utility>
 
 using namespace arraw;
 
@@ -179,4 +185,180 @@ TEST_CASE("A light a narrow sensor cannot see is held to a floor", "[whitebalanc
     const auto widest = std::max({gains[0], gains[1], gains[2]});
     const auto narrowest = std::min({gains[0], gains[1], gains[2]});
     REQUIRE(widest / narrowest <= 1000.0F);
+}
+
+namespace {
+
+/// @brief What the decode hands over for a grey card lit by a given light.
+///
+/// The card reflects the light, so the sensor records the reciprocal of the
+/// gains that would neutralise it; the decode then multiplies by the gains it
+/// applied. Built from whiteBalanceGains, so the test and the engine agree on
+/// what a temperature means without sharing the code that reads one back.
+std::array<float, 3> cardUnder(const CameraNative& camera, ColourTemperature light) {
+    const Gains gains = whiteBalanceGains(camera, light);
+    const Gains applied = withGreenAtOne(camera.appliedMultipliers);
+    return {applied[0] / gains[0], applied[1] / gains[1], applied[2] / gains[2]};
+}
+
+/// @brief Builds a photograph whose pixels are chosen by a function of position.
+ImageBuffer
+photographWith(const CameraNative& camera, ImageSize size,
+               const std::function<std::array<float, 3>(std::uint32_t, std::uint32_t)>& pixelAt) {
+    ImageBuffer buffer(size, PixelFormat::RgbaF32, camera);
+    auto samples = buffer.samples<float>();
+    for (std::uint32_t y = 0; y < size.height; ++y) {
+        for (std::uint32_t x = 0; x < size.width; ++x) {
+            const auto pixel = pixelAt(x, y);
+            const std::size_t at = (static_cast<std::size_t>(y) * size.width + x) * 4;
+            samples[at] = pixel[0];
+            samples[at + 1] = pixel[1];
+            samples[at + 2] = pixel[2];
+            samples[at + 3] = 1.0F;
+        }
+    }
+    return buffer;
+}
+
+/// A camera whose decode applied gains unlike its recorded ones, so that a
+/// pick which compared against the wrong set would be off by a lot.
+CameraNative camera() {
+    CameraNative camera = cameraSeeing(0.31272F, 0.32903F);
+    camera.appliedMultipliers = {2.1F, 1.0F, 1.4F};
+    return camera;
+}
+
+} // namespace
+
+TEST_CASE("Picking a grey card recovers the light it was lit by", "[whitebalance][pick]") {
+    const CameraNative cam = camera();
+    const ColourTemperature light =
+        GENERATE(ColourTemperature{3200.0F, 0.0F}, ColourTemperature{5500.0F, 12.0F},
+                 ColourTemperature{7500.0F, -20.0F});
+    const auto card = cardUnder(cam, light);
+    const ImageBuffer photo = photographWith(cam, {16, 12}, [&](auto, auto) { return card; });
+
+    const auto picked = neutralTemperatureAt(photo, DevelopState{}, 0.5, 0.5);
+
+    CAPTURE(light.kelvin, light.tint, picked.kelvin, picked.tint);
+    CHECK(std::abs(picked.kelvin - light.kelvin) < 0.01F * light.kelvin);
+    CHECK(std::abs(picked.tint - light.tint) < 1.0F);
+}
+
+TEST_CASE("A pick averages a window and clamps at the edges", "[whitebalance][pick]") {
+    const CameraNative cam = camera();
+    const auto card = cardUnder(cam, {4500.0F, 5.0F});
+    const ImageBuffer photo = photographWith(cam, {10, 10}, [&](auto, auto) { return card; });
+
+    for (const auto [x, y] : {std::pair{0.0, 0.0}, std::pair{1.0, 1.0}, std::pair{1.0, 0.0}}) {
+        const auto picked = neutralTemperatureAt(photo, DevelopState{}, x, y, 8);
+        CHECK(std::abs(picked.kelvin - 4500.0F) < 50.0F);
+    }
+}
+
+TEST_CASE("A pick reads the half of the picture the point is on", "[whitebalance][pick]") {
+    const CameraNative cam = camera();
+    const ColourTemperature warm{3200.0F, 0.0F};
+    const ColourTemperature cool{8000.0F, 0.0F};
+    const auto warmCard = cardUnder(cam, warm);
+    const auto coolCard = cardUnder(cam, cool);
+
+    SECTION("with no geometry, left and right of the source") {
+        const ImageBuffer photo = photographWith(
+            cam, {40, 20}, [&](auto x, auto) { return x < 20 ? warmCard : coolCard; });
+        CHECK(std::abs(neutralTemperatureAt(photo, {}, 0.1, 0.5, 1).kelvin - 3200.0F) < 40.0F);
+        CHECK(std::abs(neutralTemperatureAt(photo, {}, 0.9, 0.5, 1).kelvin - 8000.0F) < 100.0F);
+    }
+
+    SECTION("through a crop, the point is in the cropped frame") {
+        const ImageBuffer photo = photographWith(
+            cam, {40, 20}, [&](auto x, auto) { return x < 20 ? warmCard : coolCard; });
+        DevelopState state;
+        // The right 60 percent: its left edge, normalised 0, is source column 16,
+        // which is warm; 0.5 is column 28, which is cool.
+        state.settings.geometry.crop.rectangle = UprightCropRect{0.4, 0.0, 1.0, 1.0};
+        CHECK(std::abs(neutralTemperatureAt(photo, state, 0.02, 0.5, 0).kelvin - 3200.0F) < 40.0F);
+        CHECK(std::abs(neutralTemperatureAt(photo, state, 0.5, 0.5, 0).kelvin - 8000.0F) < 100.0F);
+    }
+
+    SECTION("through a quarter-turn, the top of the source is on the right") {
+        // Warm on top, cool below; turned clockwise, the top is the right edge.
+        const ImageBuffer photo = photographWith(
+            cam, {20, 40}, [&](auto, auto y) { return y < 20 ? warmCard : coolCard; });
+        DevelopState state;
+        state.settings.geometry.rotation = QuarterTurn::Clockwise90;
+        CHECK(std::abs(neutralTemperatureAt(photo, state, 0.9, 0.5, 1).kelvin - 3200.0F) < 40.0F);
+        CHECK(std::abs(neutralTemperatureAt(photo, state, 0.1, 0.5, 1).kelvin - 8000.0F) < 100.0F);
+    }
+
+    SECTION("through a flip, the halves swap") {
+        const ImageBuffer photo = photographWith(
+            cam, {40, 20}, [&](auto x, auto) { return x < 20 ? warmCard : coolCard; });
+        DevelopState state;
+        state.settings.geometry.flipHorizontal = true;
+        CHECK(std::abs(neutralTemperatureAt(photo, state, 0.1, 0.5, 1).kelvin - 8000.0F) < 100.0F);
+    }
+
+    SECTION("through the camera's own orientation") {
+        ImageBuffer photo(ImageSize{40, 20}, PixelFormat::RgbaF32, cam, ImageOrientation::Rotate90);
+        auto samples = photo.samples<float>();
+        for (std::uint32_t y = 0; y < 20; ++y) {
+            for (std::uint32_t x = 0; x < 40; ++x) {
+                const auto& card = x < 20 ? warmCard : coolCard;
+                const std::size_t at = (static_cast<std::size_t>(y) * 40 + x) * 4;
+                samples[at] = card[0];
+                samples[at + 1] = card[1];
+                samples[at + 2] = card[2];
+                samples[at + 3] = 1.0F;
+            }
+        }
+        // Rotate90 turns the source clockwise, so its left is the top of the picture.
+        CHECK(std::abs(neutralTemperatureAt(photo, {}, 0.5, 0.1, 1).kelvin - 3200.0F) < 40.0F);
+        CHECK(std::abs(neutralTemperatureAt(photo, {}, 0.5, 0.9, 1).kelvin - 8000.0F) < 100.0F);
+    }
+}
+
+TEST_CASE("A pick is refused where it cannot mean anything", "[whitebalance][pick]") {
+    const CameraNative cam = camera();
+    const auto card = cardUnder(cam, {5000.0F, 0.0F});
+    const ImageBuffer photo = photographWith(cam, {8, 8}, [&](auto, auto) { return card; });
+
+    SECTION("a photograph without a sensor") {
+        ImageBuffer plain(ImageSize{8, 8}, PixelFormat::RgbaF32, workingEncoding);
+        CHECK_THROWS_AS(neutralTemperatureAt(plain, {}, 0.5, 0.5), std::invalid_argument);
+    }
+    SECTION("a point outside the frame") {
+        CHECK_THROWS_AS(neutralTemperatureAt(photo, {}, -0.01, 0.5), std::invalid_argument);
+        CHECK_THROWS_AS(neutralTemperatureAt(photo, {}, 0.5, 1.01), std::invalid_argument);
+        CHECK_THROWS_AS(
+            neutralTemperatureAt(photo, {}, std::numeric_limits<double>::quiet_NaN(), 0.5),
+            std::invalid_argument);
+    }
+    SECTION("a negative radius") {
+        CHECK_THROWS_AS(neutralTemperatureAt(photo, {}, 0.5, 0.5, -1), std::invalid_argument);
+    }
+    SECTION("black, and a channel with nothing in it") {
+        const ImageBuffer black =
+            photographWith(cam, {8, 8}, [](auto, auto) { return std::array{0.0F, 0.0F, 0.0F}; });
+        CHECK_THROWS_AS(neutralTemperatureAt(black, {}, 0.5, 0.5), std::invalid_argument);
+        const ImageBuffer noBlue =
+            photographWith(cam, {8, 8}, [](auto, auto) { return std::array{0.5F, 0.5F, 0.0F}; });
+        CHECK_THROWS_AS(neutralTemperatureAt(noBlue, {}, 0.5, 0.5), std::invalid_argument);
+    }
+}
+
+TEST_CASE("A picked light leaves the picked spot neutral when developed", "[whitebalance][pick]") {
+    /// The end-to-end meaning (the test camera has an identity matrix): store the pick as Custom
+    /// and the colour matrix the render resolves makes the card grey in the working space.
+    const CameraNative cam = camera();
+    const auto card = cardUnder(cam, {4200.0F, 8.0F});
+    const ImageBuffer photo = photographWith(cam, {8, 8}, [&](auto, auto) { return card; });
+
+    const auto picked = neutralTemperatureAt(photo, {}, 0.5, 0.5);
+    DevelopState state;
+    state.settings.color = {WhiteBalanceMode::Custom, picked.kelvin, picked.tint};
+    const auto grey = colorMatrixFor(photo.encoding(), state.settings.color) * card;
+
+    CHECK(std::abs(grey[0] - grey[1]) < 0.02F * grey[1]);
+    CHECK(std::abs(grey[2] - grey[1]) < 0.02F * grey[1]);
 }

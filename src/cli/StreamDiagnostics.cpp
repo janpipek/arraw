@@ -1,6 +1,7 @@
 #include "StreamDiagnostics.h"
 
 #include "Command.h"
+#include "TerminalStyle.h"
 
 #include <QCommandLineParser>
 #include <QJsonDocument>
@@ -32,6 +33,8 @@ std::string nameOf(Notice notice) {
         return "gpu_software_refused";
     case Notice::GpuSoftwareAccepted:
         return "gpu_software_accepted";
+    case Notice::GpuAdapterSkipped:
+        return "gpu_adapter_skipped";
     case Notice::GpuNoFloatTextures:
         return "gpu_no_float_textures";
     case Notice::GpuReadBackNotPromised:
@@ -44,6 +47,36 @@ std::string nameOf(Notice notice) {
         return "gpu_round_trip_changed";
     case Notice::GpuDisabled:
         return "gpu_disabled";
+    case Notice::GpuUsed:
+        return "gpu_used";
+    case Notice::CpuUsed:
+        return "cpu_used";
+    case Notice::GpuFallback:
+        return "gpu_fallback";
+    case Notice::SettingClamped:
+        return "setting_clamped";
+    case Notice::SettingUnknown:
+        return "setting_unknown";
+    case Notice::SettingMalformed:
+        return "setting_malformed";
+    case Notice::NewerSettingsVersion:
+        return "newer_settings_version";
+    case Notice::SidecarUnreadable:
+        return "sidecar_unreadable";
+    case Notice::ExifUnreadable:
+        return "exif_unreadable";
+    case Notice::PreviewUnreadable:
+        return "preview_unreadable";
+    case Notice::MetadataNotCarried:
+        return "metadata_not_carried";
+    case Notice::NoPhotographs:
+        return "no_photographs";
+    case Notice::FilteredOut:
+        return "filtered_out";
+    case Notice::OptionIgnored:
+        return "option_ignored";
+    case Notice::CropReset:
+        return "crop_reset";
     }
     return "unknown";
 }
@@ -99,15 +132,36 @@ void StreamDiagnostics::record(const Diagnostic& diagnostic) {
         stream_ << QJsonDocument(object).toJson(QJsonDocument::Compact).toStdString() << '\n';
         return;
     }
+    if (terminalStyle(stream_)) {
+        const bool failed = diagnostic.severity == Severity::Error;
+        const bool warning = diagnostic.severity == Severity::Warning;
+        const bool completed =
+            diagnostic.notice == Notice::Exported || diagnostic.notice == Notice::BatchFinished;
+        const auto accent = failed      ? Accent::Error
+                            : warning   ? Accent::Warning
+                            : completed ? Accent::Success
+                                        : Accent::Heading;
+        const std::string label = failed      ? "Error"
+                                  : warning   ? "Warning"
+                                  : completed ? "Finished"
+                                              : "Info";
+        stream_ << accented(stream_, std::string(10 - label.size(), ' ') + label, accent) << "  ";
+        if (diagnostic.subject) {
+            stream_ << accented(stream_, diagnostic.subject->string(), Accent::Heading) << ": ";
+        }
+        stream_ << terminalText(withoutSubject(diagnostic)) << '\n';
+        return;
+    }
     // A diagnostic about no particular photograph, such as a batch's own
     // summary, has no file to name.
     const std::string about =
-        diagnostic.subject ? diagnostic.subject->string() + ": " : std::string{};
+        diagnostic.subject ? terminalText(diagnostic.subject->string()) + ": " : std::string{};
     if (diagnostic.severity == Severity::Info) {
-        stream_ << about << withoutSubject(diagnostic) << '\n';
+        stream_ << about << terminalText(withoutSubject(diagnostic)) << '\n';
         return;
     }
-    stream_ << nameOf(diagnostic.severity) << ": " << about << withoutSubject(diagnostic) << '\n';
+    stream_ << nameOf(diagnostic.severity) << ": " << about
+            << terminalText(withoutSubject(diagnostic)) << '\n';
 }
 
 void addLogFormatOption(QCommandLineParser& parser) {

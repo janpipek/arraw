@@ -3,6 +3,8 @@
 #include "Cli.h"
 #include "ExportCommand.h"
 #include "GpuTestCommand.h"
+#include "InfoCommand.h"
+#include "TerminalStyle.h"
 
 #include <QCommandLineParser>
 #include <QString>
@@ -18,7 +20,7 @@ namespace {
 
 /// @brief Every command, implemented or merely reserved.
 ///
-/// `info` and `preset` are named by docs/desired-features.md and carry no
+/// `preset` is named by docs/desired-features.md and carries no
 /// implementation yet; a null `run` is what says so, rather than a stub that
 /// prints an apology. Listing them means someone who types what the
 /// documentation promised is told the feature is coming, not that they
@@ -27,7 +29,7 @@ constexpr std::array<Command, 4> table = {{
     {"export", "Render images through their develop settings and write them out.",
      &runExportCommand},
     {"gpu-test", "Check that the GPU backend works on this machine.", &runGpuTestCommand},
-    {"info", "Show camera metadata and edit state, read-only.", nullptr},
+    {"info", "Show camera metadata and edit state, read-only.", &runInfoCommand},
     {"preset", "List, show, and apply saved presets.", nullptr},
 }};
 
@@ -57,7 +59,8 @@ std::string commandHelp(const QCommandLineParser& parser) {
 }
 
 int commandUsageError(std::ostream& err, std::string_view command, std::string_view message) {
-    err << "error: " << message << "\n\nTry 'arraw-cli " << command << " --help'.\n";
+    err << accented(err, "error:", Accent::Error) << " " << terminalText(message)
+        << "\n\nTry 'arraw-cli " << command << " --help'.\n";
     return UsageError;
 }
 

@@ -5,6 +5,13 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(ARRAW_BUILD_TESTS "Build the arraw test suite" ON)
+option(ARRAW_BUILD_APPS "Build the GUI, the command line and the GPU module" ON)
+option(ARRAW_BUILD_PYTHON "Build the Python extension module" OFF)
+
+if(ARRAW_BUILD_TESTS AND NOT ARRAW_BUILD_APPS)
+    message(FATAL_ERROR "ARRAW_BUILD_TESTS needs the applications (arraw-gpu, arraw-cli-core, "
+            "arraw-cli, arraw-headless-platform): set ARRAW_BUILD_APPS=ON or ARRAW_BUILD_TESTS=OFF.")
+endif()
 
 function(arraw_enable_warnings target)
     if(MSVC)
@@ -40,6 +47,22 @@ else()
     find_package(PkgConfig REQUIRED)
     pkg_search_module(LibRaw REQUIRED IMPORTED_TARGET libraw_r libraw)
     set(ARRAW_LIBRAW PkgConfig::LibRaw)
+endif()
+
+# EXIF reading, required for the same reason as LibRaw: capture information that
+# is there on one build and missing on another would be a bug nobody could
+# reproduce (ADR 028). exiv2 0.28 ships both a pkg-config file and a CMake
+# package; pkg-config is what Linux and macOS (Homebrew) package managers
+# provide, vcpkg provides the CMake package (exiv2::exiv2lib, with
+# exiv2-xmp as its own target), so each platform uses what it has. Linked
+# PRIVATE: no exiv2 type appears in include/. BMFF (CR3, HEIF) is on by
+# default in 0.28.
+if(WIN32)
+    find_package(exiv2 0.28 CONFIG REQUIRED)
+    set(ARRAW_EXIV2 Exiv2::exiv2lib)
+else()
+    pkg_check_modules(EXIV2 REQUIRED IMPORTED_TARGET exiv2>=0.28)
+    set(ARRAW_EXIV2 PkgConfig::EXIV2)
 endif()
 
 # On Windows vcpkg deploys the Qt DLLs next to each executable, but not the
@@ -93,19 +116,33 @@ qt_standard_project_setup()
 # propagated to consumers through target_link_libraries.
 add_library(arraw STATIC
         include/ColorEncoding.h
+        include/BlackAndWhiteSettings.h
         include/ColorSettings.h
+        include/HslSettings.h
+        src/core/ColorAdjustments.h
+        src/core/ColorAdjustments.cpp
         src/core/ColorSettings.cpp
         include/Develop.h
         include/Diagnostics.h
         include/WhiteBalance.h
         include/DevelopSettings.h
+        include/DevelopState.h
+        src/core/DevelopState.cpp
         include/GeometrySettings.h
         include/ImageOrientation.h
+        include/ImagePyramid.h
+        src/core/ImagePyramid.cpp
         src/core/GeometryPlan.h
         src/core/GeometryPlan.cpp
+        src/core/Resample.h
+        src/core/Resample.cpp
+        src/core/ResampleWeights.h
+        src/core/ResampleWeights.cpp
         include/ToneSettings.h
         src/core/ToneSettings.cpp
         src/core/ColorSpaces.h
+        src/core/TimingTrace.cpp
+        src/core/TimingTrace.h
         src/core/Develop.cpp
         src/core/Diagnostics.cpp
         src/core/ProcessingPlan.cpp
@@ -121,15 +158,38 @@ add_library(arraw STATIC
         include/ImageExport.h
         include/EditSession.h
         include/Photo.h
+        src/core/EditSession.cpp
         src/core/Photo.cpp
+        include/SettingDescriptors.h
+        src/core/SettingDescriptors.cpp
+        src/core/SettingCodec.h
+        src/core/SettingCodec.cpp
+        include/SettingsJson.h
+        src/core/SettingsJson.cpp
+        include/PhotoMarks.h
+        include/Sidecar.h
+        src/core/Sidecar.cpp
         src/core/ImageBuffer.cpp
         src/core/ImageExport.cpp
+        include/ExifInfo.h
+        src/core/ExifInfo.cpp
+        src/core/Exiv2Support.h
+        src/core/Exiv2Support.cpp
+        src/core/MetadataEmbedding.h
+        src/core/MetadataEmbedding.cpp
+        src/core/EmbeddedPreview.cpp
         include/ImageImport.h
         src/core/ImageImport.cpp
+        include/MarksFilter.h
+        src/core/MarksFilter.cpp
+        include/Shot.h
+        src/core/Shot.cpp
         src/core/QtImage.cpp
         src/core/QtImage.h
         src/core/RawImport.cpp
         src/core/RawImport.h
+        src/core/SampleConversion.h
+        src/core/SampleConversion.cpp
 )
 add_library(arraw::arraw ALIAS arraw)
 arraw_enable_warnings(arraw)
@@ -144,10 +204,21 @@ target_include_directories(arraw PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/gpu)
 # no display and no QGuiApplication, only a QCoreApplication for plugin paths.
 # Private: nothing in include/ mentions Qt, and CMake still propagates the link
 # requirement to consumers of this static library.
-target_link_libraries(arraw PRIVATE Qt6::Gui ${ARRAW_LIBRAW})
+target_link_libraries(arraw PRIVATE Qt6::Core Qt6::Gui Qt6::Xml ${ARRAW_LIBRAW} ${ARRAW_EXIV2})
+# Stamped into exported files as their Software tag (ADR 032).
+target_compile_definitions(arraw PRIVATE ARRAW_VERSION="${PROJECT_VERSION}")
 # qt_standard_project_setup() turns AUTOMOC on globally; the engine has no Qt
 # types, so opting out keeps that honest (and saves a moc pass).
 set_target_properties(arraw PROPERTIES AUTOMOC OFF)
+# A Python extension module is a shared object, and the static library goes into it.
+if(ARRAW_BUILD_PYTHON)
+    set_target_properties(arraw PROPERTIES POSITION_INDEPENDENT_CODE ON)
+endif()
+
+# Everything from here to the tests is an application or belongs to one; the
+# Python module needs only the engine above. (Not indented, to keep the diff
+# and the blame of these blocks readable.)
+if(ARRAW_BUILD_APPS)
 
 # The one graphics device the library owns: an offscreen QRhi, and the textures
 # it mints as DeviceImages (ADR 015). Separate from the engine so that the only
@@ -158,9 +229,35 @@ add_library(arraw-gpu STATIC
         src/gpu/GpuContext.h
         src/gpu/GpuContext.cpp
         src/gpu/GpuDevice.h
-        src/gpu/GpuDevice.cpp)
+        src/gpu/GpuDevice.cpp
+        src/gpu/GpuDevelop.h
+        src/gpu/GpuDevelop.cpp
+        src/gpu/GpuPlan.h
+        src/gpu/GpuPlan.cpp)
 arraw_enable_warnings(arraw-gpu)
 target_include_directories(arraw-gpu PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/gpu)
+# The processing plan and checkpoint state are engine-private; the GPU packs its
+# uniforms from the one and builds the other.
+target_include_directories(arraw-gpu PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/core)
+# The passes' shaders, compiled at build time into .qsb resources, so a shader
+# that does not compile fails the build rather than the first render. GLSL
+# 440 sources; qsb adds SPIR-V for Vulkan and translates for the rest. The GLSL
+# targets start at ES 3.0 and 3.30, the first with texelFetch and uint.
+qt_add_shaders(arraw-gpu "arraw-shaders"
+        PREFIX "/arraw/shaders"
+        BASE src/gpu/shaders
+        GLSL "300es,330"
+        HLSL 50
+        MSL 12
+        FILES
+        src/gpu/shaders/fullscreen.vert
+        src/gpu/shaders/copy.frag
+        src/gpu/shaders/develop.frag
+        src/gpu/shaders/geometry.frag
+        src/gpu/shaders/resize_across.frag
+        src/gpu/shaders/resize_across_opaque.frag
+        src/gpu/shaders/resize_down.frag
+        src/gpu/shaders/resize_down_opaque.frag)
 target_link_libraries(arraw-gpu PUBLIC arraw PRIVATE Qt6::Gui Qt6::GuiPrivate)
 set_target_properties(arraw-gpu PROPERTIES AUTOMOC OFF)
 # QRhi declares its Vulkan backend only where vulkan/vulkan.h is visible, so a
@@ -220,26 +317,76 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set_target_properties(arraw-headless-platform PROPERTIES AUTOMOC ON)
 endif()
 
-add_executable(arraw-ui src/app/main.cpp
+# What the application does that needs no widgets, split from its main() so the
+# tests can drive it, as arraw-cli-core does for the command line.
+add_library(arraw-app-core STATIC
+        src/app/AppSettings.cpp
+        src/app/AppSettings.h
         src/app/DebugDiagnostics.cpp
         src/app/DebugDiagnostics.h
         src/app/DebugLog.cpp
         src/app/DebugLog.h
         src/app/DisplayImage.cpp
         src/app/DisplayImage.h
+        src/app/ExportQueue.cpp
+        src/app/ExportQueue.h
+        src/app/ExportSettings.cpp
+        src/app/ExportSettings.h
+        src/app/PreviewRenderer.cpp
+        src/app/PreviewRenderer.h
         src/app/QtMessageCapture.cpp
         src/app/QtMessageCapture.h
+        src/app/FilmStripRules.cpp
+        src/app/FilmStripRules.h
+        src/app/FolderWatcher.cpp
+        src/app/FolderWatcher.h
+        src/app/ShotFilterModel.cpp
+        src/app/ShotFilterModel.h
+        src/app/ShotModel.cpp
+        src/app/ShotModel.h
+        src/app/SettingPresentation.cpp
+        src/app/SettingPresentation.h
+        src/app/ThumbnailCache.cpp
+        src/app/ThumbnailCache.h
+        src/app/ThumbnailWorker.cpp
+        src/app/ThumbnailWorker.h
+        src/app/ViewTransform.cpp
+        src/app/ViewTransform.h
+        src/app/WhiteBalanceChoice.cpp
+        src/app/WhiteBalanceChoice.h)
+arraw_enable_warnings(arraw-app-core)
+target_include_directories(arraw-app-core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/app
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/core)
+target_link_libraries(arraw-app-core PUBLIC arraw arraw-gpu Qt6::Core Qt6::Gui)
+# The shot model, its filter and the folder watcher are QObjects with signals.
+set_target_properties(arraw-app-core PROPERTIES AUTOMOC ON)
+
+add_executable(arraw-ui src/app/main.cpp
+        src/app/ui/CullingActions.cpp
+        src/app/ui/CullingActions.h
         src/app/ui/DebugWindow.cpp
         src/app/ui/DebugWindow.h
+        src/app/ui/DevelopPanel.cpp
+        src/app/ui/DevelopPanel.h
+        src/app/ui/ExportDialog.cpp
+        src/app/ui/FilmStrip.cpp
+        src/app/ui/FilmStrip.h
+        src/app/ui/ExportDialog.h
         src/app/ui/MainWindow.cpp
         src/app/ui/MainWindow.h
+        src/app/ui/PhotoView.cpp
+        src/app/ui/PhotoView.h
+        src/app/ui/SettingsDialog.cpp
+        src/app/ui/SettingsDialog.h
+        src/app/ui/SettingSlider.cpp
+        src/app/ui/SettingSlider.h
         src/app/ui/Theme.cpp
         src/app/ui/Theme.h
         src/app/ui/ThemeColors.h
         resources/icon.qrc)
 arraw_enable_warnings(arraw-ui)
 target_include_directories(arraw-ui PRIVATE src/app)
-target_link_libraries(arraw-ui PRIVATE arraw Qt6::Widgets)
+target_link_libraries(arraw-ui PRIVATE arraw-app-core Qt6::Widgets)
 target_compile_definitions(arraw-ui PRIVATE ARRAW_VERSION="${PROJECT_VERSION}")
 # qt_standard_project_setup() turns on AUTOMOC only; the window icon comes
 # in through resources/icon.qrc.
@@ -253,14 +400,24 @@ add_library(arraw-cli-core STATIC
         src/cli/Cli.h
         src/cli/Command.cpp
         src/cli/Command.h
+        src/cli/DeviceChoice.cpp
+        src/cli/DeviceChoice.h
         src/cli/ExportCommand.cpp
         src/cli/ExportCommand.h
         src/cli/GpuTestCommand.cpp
         src/cli/GpuTestCommand.h
+        src/cli/InfoCommand.cpp
+        src/cli/InfoCommand.h
+        src/cli/ShotInputs.cpp
+        src/cli/ShotInputs.h
         src/cli/StreamDiagnostics.cpp
-        src/cli/StreamDiagnostics.h)
+        src/cli/StreamDiagnostics.h
+        src/cli/TerminalStyle.h
+        src/cli/TerminalText.h
+        src/cli/TerminalText.cpp)
 arraw_enable_warnings(arraw-cli-core)
-target_include_directories(arraw-cli-core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/cli)
+target_include_directories(arraw-cli-core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/cli
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/core)
 # Qt Core only: the command line needs QCommandLineParser and an application
 # instance (QCoreApplication or QGuiApplication, see arraw-cli below) for codec
 # plugin paths. The GPU probe reaches a device
@@ -279,6 +436,12 @@ target_link_libraries(arraw-cli PRIVATE arraw-cli-core Qt6::Core Qt6::Gui)
 arraw_deploy_qt_plugins(arraw-cli)
 if(TARGET arraw-headless-platform)
     target_link_libraries(arraw-cli PRIVATE arraw-headless-platform)
+endif()
+
+endif() # ARRAW_BUILD_APPS
+
+if(ARRAW_BUILD_PYTHON)
+    add_subdirectory(src/python)
 endif()
 
 if(ARRAW_BUILD_TESTS)

@@ -3,11 +3,14 @@
 #include "ui/MainWindow.h"
 #include "ui/Theme.h"
 
-#include <QAction>
 #include <QApplication>
+#include <QCommandLineParser>
 #include <QIcon>
 #include <QString>
 #include <QTimer>
+
+#include <filesystem>
+#include <optional>
 
 namespace {
 
@@ -49,22 +52,24 @@ int main(int argc, char* argv[]) {
     arraw::app::theme::apply(app);
     QApplication::setWindowIcon(applicationIcon());
 
+    QCommandLineParser parser;
+    parser.setApplicationDescription("Open and develop photographs.");
+    parser.addHelpOption();
+    parser.addPositionalArgument(
+        "path", "Photograph or folder to open; otherwise restore the last session.");
+    parser.process(app);
+    const auto arguments = parser.positionalArguments();
+    if (arguments.size() > 1) {
+        parser.showHelp(2);
+    }
+    std::optional<std::filesystem::path> path;
+    if (!arguments.isEmpty()) {
+        path = std::filesystem::path(arguments.front().toStdU16String());
+    }
+
     arraw::app::MainWindow window(debugLog);
     window.show();
-    // SMOKE-TEST-ONLY
-    QTimer::singleShot(500, [&window] {
-        for (QAction* a : window.findChildren<QAction*>())
-            if (a->text() == "&Debug Log")
-                a->trigger();
-    });
-    QTimer::singleShot(1500, [&window] {
-        auto* w = window.findChild<QWidget*>(QString(), Qt::FindDirectChildrenOnly);
-        for (QWidget* top : QApplication::topLevelWidgets())
-            if (top->windowTitle() == "Debug Log")
-                top->grab().save(qEnvironmentVariable("SHOT"));
-        (void)w;
-        QApplication::quit();
-    });
+    QTimer::singleShot(0, &window, [&window, path] { window.openInitialPath(path); });
 
     return QApplication::exec();
 }

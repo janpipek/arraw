@@ -1,6 +1,8 @@
 # Developing on the GPU — execution plan
 
-Status: proposed, for review before any code is written. This is the concrete
+Status: implemented on branch `gpu-develop`; the outcome is recorded in
+[ADR 017](../adr/017-the-command-line-prefers-the-gpu-and-says-when-it-does-not.md)
+and, where the plan changed, in the notes below. This is the concrete
 follow-up to [gpu-implementation-plan.md](gpu-implementation-plan.md), within
 the boundary [ADR 015](../adr/015-a-checkpoints-pixels-may-live-on-a-device.md)
 decided.
@@ -36,7 +38,7 @@ step 6.
 A session that can build and run Vulkan: a compiler, CMake, Qt 6.10 with
 ShaderTools, LibRaw, Catch2, the Vulkan loader and headers, and lavapipe at
 least. The current agent container has none of these (see
-[dev-container-plan.md](dev-container-plan.md)). Nothing below should be
+[ADR 016](../adr/016-a-sandboxed-dev-container.md)). Nothing below should be
 attempted without it, because every step ends in "build and compare".
 
 ## Design decisions
@@ -111,11 +113,31 @@ Geometry block (std140)
   explicit `rollsHighlights` flag. The packing function derives it as
   `std::isfinite(knee)`, and the shader's comparison matches the CPU's
   `!(luminance > knee)`, so NaN input behaves the same way.
-- Geometry is `double` on the CPU and `float` in the shader. At 8000 px, float
-  coordinates are good to about 1e-3 px. That is a documented tolerance, not a
-  bug. The two exact paths are special-cased so they stay bit-exact: the
-  identity skip, and exact quarter-turns with pixel-aligned crops, where
-  `sample` snaps to pixel centres and copies.
+- Geometry is `double` on the CPU and `float` in the shader. As first written
+  here, at 8000 px float coordinates are good to about 1e-3 px, which was to be
+  a documented tolerance. **It was not acceptable, and the block changed.** At
+  photo widths a float position is quantised to about 5e-4 px, which shows as
+  tens of 16-bit codes at a sharp edge (the reviewer measured 6.6e-4 to 8.5e-4
+  absolute on the first version), and the GPU-only texel snap that kept
+  quarter-turns exact was itself a divergence from the CPU. The geometry block
+  is now an exact-split affine map: the CPU composes the map in double and
+  splits it, with the origin as an integer part plus a fraction in [0, 1) and
+  each step as a `high` rounded to 9 significant bits plus a `low` remainder.
+  With `x < 2^14` (`maxGeometryOutputExtent`; `packGeometry` throws
+  `std::invalid_argument` beyond it) the product `(x + 0.5) * high` is at most
+  24 significant bits, so it is exact in float; the shader sums whole parts as
+  integers and only the fraction, which sets the blend weights, is a float. No
+  absolute position lives in one float, so the error no longer grows with the
+  source size. Exact quarter-turns fall out (integral steps, zero `low`,
+  half-integral origin) without a special case, so the snap is gone. The block
+  is 64 bytes: `originWhole`, `originFraction`, `columnStepHigh`, `rowStepHigh`,
+  `columnStepLow`, `rowStepLow`, `sourceSize`, `outputSize`.
+- The lifted-black threshold changed on both backends. The CPU tested
+  `!(luminance > 0)`; a GPU flushes denormals, so a denormal luminance took the
+  other branch. Both now test `!(luminance > liftedBlackThreshold)` with
+  `liftedBlackThreshold = 1e-20` (`ProcessingPlan.h`, mirrored in
+  `develop.frag`); NaN still lifts. Denormal rows (1e-39, 2e-38 red, 4e-38 grey)
+  are in the GPU lifted-black test and in `tests/test_Tone.cpp`.
 - Bilinear sampling is done by hand with `texelFetch`: clamp-to-edge,
   premultiplied weights, division by summed alpha, zero when alpha is zero.
   Hardware filtering is not used, because it would not match CPU clamping or
@@ -253,8 +275,8 @@ disagrees.
 
 ### Tolerances
 
-These are to be measured, then fixed in `tests/support/ImageCompare.h` with a
-comment giving the reason:
+These were the targets. The constants live in `tests/gpu/GpuTesting.h`, each
+with the reason for its value; what was measured follows the list.
 
 - Pointwise: max relative error of about 1e-5, absolute 1e-6 near zero. GLSL
   `pow` is only loosely specified (Vulkan allows several ULP), and the chain
@@ -263,6 +285,34 @@ comment giving the reason:
   double.
 - Exact paths (identity, quarter-turn copy, alpha): bit-exact.
 - Exported 8-bit and 16-bit files, CPU vs GPU: at most one code value apart.
+
+Measured, on Vulkan through lavapipe (Mesa llvmpipe) **only**:
+
+- **Pointwise**: worst 1.7e-5 relative with the 1e-5 floor, 4.4e-5 with a 1e-6
+  floor, on the cases whose Blacks at -100 subtract nearly equal perceptual
+  values. `pointwiseRelativeTolerance` is 3e-5 and `pointwiseAbsoluteFloor` 1e-5:
+  looser than the 1e-5 target above, which answers Q5. A wrong stage, matrix
+  layout or order disagrees by 1e-3 or more.
+- **Geometry, photo width**: a 6000x64 checker, opaque 0.05/0.9, auto crop,
+  straighten 0.3/1/7.5: max relative 2.2e-6 / 9.7e-7 / 2.0e-6, absolute 3.6e-7
+  at worst. (The old code was measured by the reviewer at 6.6e-4 to 8.5e-4
+  absolute; the old code was not rerun to confirm.)
+- 1000x700 opaque at 0.3/7.5/-30: max relative 4.0e-7, absolute 1.8e-7. The
+  transparent version: 5.1e-6 relative above the 5e-2 floor, absolute 1.5e-6.
+  Small images (up to 31x20): worst about 1.6e-6.
+- Transparent stripes, 4000x6, straighten 0.01 and 0.05, explicit full crop:
+  alpha 2.1e-7 at worst, colour exactly 0 where the CPU alpha is above zero.
+  That test was not run against the old snap to see it fail.
+- Constants: `largeImageTolerance` 3e-4 -> 5e-6; `transparentTolerance` 1e-2 ->
+  5e-5; `transparentAbsoluteTolerance` 3e-3 -> 1e-5; new `photoWidthTolerance`
+  1e-5 and `stripeTolerance` 1e-4. `resampleTolerance` stays 1e-4 as a
+  deliberate margin, because the end-to-end tests add it to the pointwise error.
+
+**Caveat.** Every number above, and the NaN and infinity parity the tests
+assert, is verified on Vulkan (lavapipe) only. HLSL and MSL compilers may apply
+fast-math to comparisons and arithmetic, which changes NaN and infinity
+handling and how `pow` rounds; none of that is verified. Performance is not
+claimed from lavapipe either.
 
 ### CLI tests
 
@@ -299,8 +349,8 @@ Each step ends with `just build`, `just test` and `just format-check` passing.
    and comparison tests 5–6.
 5. **CLI.** Add `--device`, `--gpu-backend` and `--allow-software`, the batch
    context, the fallback policy, the new notices and the CLI tests.
-6. **Docs.** Write ADR 016 ("the command line prefers the GPU and says when it
-   does not") covering D7 and the fallback policy. Update ADR 006 (command
+6. **Docs.** Write ADR 017 ("the command line prefers the GPU and says when it
+   does not"; 016 was taken by the sandboxed dev container) covering D7 and the fallback policy. Update ADR 006 (command
    line), the README usage, `export --help`, and the implementation plan's
    notes. Add `mesa-vulkan-drivers` and the GPU test executable to CI.
 7. **Review.** Write a review to `docs/reviews/`, focusing on shader and C++
@@ -332,18 +382,26 @@ that the work fans out:
 
 ## Open questions
 
+All six were answered by accepting the recommendation.
+
 - **Q1.** Should GPU development become public API now (a device choice on
   `develop`, for the future Python/Lua bindings), or stay internal until the
   scripting work needs it?
+  *Answer:* Stayed internal. GPU development is not public API until the scripting work needs it.
 - **Q2.** Should there be an `ARRAW_DEVICE` environment variable (or a config
   file) as a persistent default, beside `--device`?
+  *Answer:* No `ARRAW_DEVICE` for now; `--device` and `ARRAW_DISABLE_GPU` are enough.
 - **Q3.** Should `gpu-test --backend` be renamed to `--gpu-backend` for
   consistency, keeping the old name as an alias?
+  *Answer:* Yes. Implemented as `--gpu-backend` on `gpu-test`, with `--backend` kept as an alias.
 - **Q4.** In `auto`, should a software rasteriser mean falling back to the CPU
   (recommended: it is usually slower than the CPU path), or using it?
+  *Answer:* A software rasteriser is refused in `auto` and falls back to the CPU, unless `--allow-software` is given.
 - **Q5.** Is the pointwise tolerance in Tolerances acceptable, or must CPU and
   GPU agree more tightly? That would rule out native `pow`, and the shader
   would have to reproduce the C library's `powf`.
+  *Answer:* The tolerance stands, measured looser than 1e-5 (see Tolerances); native `pow` stays.
 - **Q6.** Should geometry keep one bilinear resample, as today, or is this the
   moment to decide on a better downsampling filter for large straightens?
   (Recommended: keep it, and change both backends together later.)
+  *Answer:* One bilinear resample stays, on both backends.

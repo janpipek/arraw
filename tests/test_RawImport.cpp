@@ -1,21 +1,28 @@
 #include "support/Fixtures.h"
 #include "support/TempDir.h"
 
+#include <Develop.h>
+#include <DevelopState.h>
 #include <Diagnostics.h>
 #include <ImageExport.h>
 #include <ImageImport.h>
+#include <ImagePyramid.h>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <variant>
 
@@ -357,6 +364,17 @@ TEST_CASE("Describing a photograph does not read its pixels", "[integration][raw
     REQUIRE_THROWS_AS(loadImage(truncated), std::runtime_error);
 }
 
+TEST_CASE("A RAW that does not exist is reported as missing", "[integration][raw]") {
+    /// LibRaw words a missing file as one of its own failures; the message
+    /// should say what a photographer can act on.
+    const test::TempDir directory;
+    const auto missing = directory.file("gone.dng");
+    const std::string message = std::strerror(ENOENT);
+
+    REQUIRE_THROWS_WITH(readImageMetadata(missing), Catch::Matchers::EndsWith(message));
+    REQUIRE_THROWS_WITH(loadImage(missing), Catch::Matchers::EndsWith(message));
+}
+
 TEST_CASE("A substituted white balance is reported before any pixel is read",
           "[integration][raw][diagnostics]") {
     /// The substitution is a fact about the file, not about the decode, so a
@@ -496,4 +514,55 @@ TEST_CASE("An exported TIFF is read as an image, not as sensor data", "[integrat
     /// the wrong path.
     REQUIRE(reloaded.size() == original.size());
     REQUIRE(reloaded.format() == original.format());
+}
+
+TEST_CASE("A half-size decode is the same photograph at half the width and height",
+          "[integration][raw]") {
+    for (const auto fixture : {neutralFixture, warmFixture, rotatedFixture, bayerFixture}) {
+        CAPTURE(fixture);
+        const auto full = loadImage(test::fixture(fixture));
+        const auto half =
+            loadImage(test::fixture(fixture), discardedDiagnostics(), {.halfSize = true});
+
+        /// Halved the way LibRaw halves: the integer quotient, not rounded up.
+        REQUIRE(half.size() == ImageSize{full.size().width / 2, full.size().height / 2});
+        REQUIRE(half.format() == full.format());
+        REQUIRE(half.orientation() == full.orientation());
+        REQUIRE(half.encoding() == full.encoding());
+    }
+}
+
+TEST_CASE("A half-size decode develops to what a full one does, reduced", "[integration][raw]") {
+    for (const auto fixture : {neutralFixture, warmFixture, bayerFixture}) {
+        CAPTURE(fixture);
+        const auto full = loadImage(test::fixture(fixture));
+        const auto half =
+            loadImage(test::fixture(fixture), discardedDiagnostics(), {.halfSize = true});
+
+        const DevelopState state;
+        const auto expected = halved(develop(full, state));
+        const auto actual = develop(half, state);
+        REQUIRE(actual.size() == expected.size());
+
+        float worst = 0.0F;
+        const auto a = actual.samples<float>();
+        const auto e = expected.samples<float>();
+        for (std::size_t index = 0; index < a.size(); ++index) {
+            worst = std::max(worst, std::abs(a[index] - e[index]));
+        }
+        /// Measured: 0 on the flat Bayer fixture, 8.4e-4 on the linear ramps. The
+        /// difference is the tone chain, which is not linear: the full decode is
+        /// developed and then averaged, the half one averaged and then developed,
+        /// and a mean of curved values is not the curve of a mean. 0.005 is six
+        /// times what a ramp shows, still under half a percent of full scale.
+        REQUIRE(worst < 0.005F);
+    }
+}
+
+TEST_CASE("Half size is ignored for a file that is not a RAW", "[integration][raw]") {
+    const auto full = loadImage(test::fixture(testCard));
+    const auto half =
+        loadImage(test::fixture(testCard), discardedDiagnostics(), {.halfSize = true});
+    REQUIRE(half.size() == full.size());
+    REQUIRE(maxDifference(full, half) == 0);
 }

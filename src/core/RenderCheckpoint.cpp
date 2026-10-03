@@ -42,6 +42,32 @@ ImageBuffer CheckpointState::readBack() const {
     return std::get<DeviceImage>(pixels).readBack();
 }
 
+const CheckpointState& stateOf(const RenderCheckpoint& checkpoint) noexcept {
+    return *checkpoint.state_;
+}
+
+void requireResumable(const CheckpointState& from, const ProcessingPlan& plan, ImageSize sourceSize,
+                      Stage stopAfter) {
+    if (static_cast<std::size_t>(stopAfter) >= stageCount) {
+        throw std::invalid_argument("A render needs a recognised pass boundary to stop after");
+    }
+    if (stopAfter < from.boundary) {
+        throw std::invalid_argument("A render cannot stop before the checkpoint it resumes from");
+    }
+    if (!prefixMatches(from.plan, plan, from.boundary)) {
+        throw std::invalid_argument("The checkpoint was not made by this render's plan");
+    }
+    ImageSize expected = sourceSize;
+    if (from.boundary == Stage::Geometry) {
+        expected = plan.geometry->outputSize;
+    } else if (from.boundary == Stage::Resize) {
+        expected = plan.resize->outputSize;
+    }
+    if (from.size() != expected) {
+        throw std::invalid_argument("The checkpoint is not of the size this render would make");
+    }
+}
+
 RenderCheckpoint makeCheckpoint(Stage boundary, ProcessingPlan plan, CheckpointPixels pixels) {
     return RenderCheckpoint{std::make_shared<const CheckpointState>(
         CheckpointState{boundary, std::move(plan), std::move(pixels)})};

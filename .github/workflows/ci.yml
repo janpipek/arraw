@@ -28,5 +28,8 @@ jobs:
       - name: Build
         run: cmake --build --preset debug
 
+      # arraw-gpu-tests is part of the build and registered with ctest; it picks
+      # its own headless platform, so no QT_QPA_PLATFORM is needed here, and
+      # lavapipe stands in for a GPU (the device tests skip without Vulkan).
       - name: Test
         run: ctest --preset debug

@@ -1,21 +1,122 @@
 #pragma once
 
+#include "ColorAdjustments.h"
 #include "ColorSpaces.h"
 #include "GeometryPlan.h"
 
 #include <ColorEncoding.h>
+#include <Develop.h>
 #include <DevelopSettings.h>
+#include <DevelopState.h>
+#include <ImageBuffer.h>
 #include <Photo.h>
 #include <RenderCheckpoint.h>
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <optional>
 #include <tuple>
 #include <utility>
 
 namespace arraw {
+
+/// @brief Rectangle of whole pixels in a frame.
+struct PixelRegion {
+    std::uint32_t x = 0;      ///< Column of the left edge.
+    std::uint32_t y = 0;      ///< Row of the top edge.
+    std::uint32_t width = 0;  ///< Width in pixels.
+    std::uint32_t height = 0; ///< Height in pixels.
+
+    /// @brief Gives the size of the rectangle.
+    [[nodiscard]] constexpr ImageSize size() const noexcept {
+        return {width, height};
+    }
+
+    /// @brief Checks whether the rectangle is all of a frame.
+    /// @param frame Size of the frame.
+    [[nodiscard]] constexpr bool covers(ImageSize frame) const noexcept {
+        return x == 0 && y == 0 && size() == frame;
+    }
+
+    friend bool operator==(const PixelRegion&, const PixelRegion&) = default;
+};
+
+/// @brief Resolves a request's region into whole pixels of a frame.
+///
+/// Each edge snaps outward: the left and top down, the right and bottom up,
+/// and a region thinner than a pixel grows to one. No region gives the frame.
+/// @param request What the caller wants rendered.
+/// @param frame Size of the frame after geometry.
+/// @return The pixels the region covers, inside @p frame, at least 1x1.
+/// @throws std::invalid_argument if @p frame is empty or the region is not
+/// finite, not within the unit square, or empty.
+[[nodiscard]] PixelRegion regionOf(const RenderRequest& request, ImageSize frame);
+
+/// @brief The resample block: the size a render ends at, and how it gets there.
+///
+/// ADR 011 puts a target size in the resample block and ADR 012 puts anything
+/// that changes what a stage computes in the plan, so a render's requested size
+/// and filter are resolved here rather than read from the request by each
+/// backend. Both backends execute exactly this.
+struct ResizePlan {
+    /// @brief Part of the cropped frame that is resized, from ::arraw::regionOf.
+    ///
+    /// Always set by the planner, to the whole frame when no region was asked
+    /// for. It belongs here and not in the geometry block so that a checkpoint
+    /// after geometry is shared by every region (ADR 025).
+    PixelRegion region;
+
+    /// @brief Size of the result, from ::arraw::resolvedSize against the region's size.
+    ImageSize outputSize;
+
+    /// @brief Kernel the resize runs with.
+    ///
+    /// ::arraw::ResizeFilter::Lanczos3 for a resize that does not resample, whatever the
+    /// request said, since no kernel runs and two renders with the same pixels
+    /// should compare equal.
+    ResizeFilter filter = ResizeFilter::Lanczos3;
+
+    /// @brief Whether every alpha sample of the developed pixels is exactly one.
+    ///
+    /// An execution hint, not a plan input: it does not change the result, so
+    /// it is left out of ::arraw::ResizePlan's equality, and two plans that
+    /// differ only in it describe the same render (a plan from a
+    /// ::arraw::Photo, which has no pixels to scan, still matches one from
+    /// pixels). It is worked out from the source, which stands for the
+    /// developed pixels only by two invariants: the pointwise chain copies
+    /// alpha (see developSamples in `Develop.cpp`), and the geometry pass keeps
+    /// the pixels it interpolates between exactly opaque (see `geometry.frag`).
+    /// A setting that produced transparency would break both this hint and the
+    /// fast path it enables, and must clear it.
+    ///
+    /// Opaque pixels need no tracking of transparency: no window is
+    /// translucent, so no colour is clamped to a visible range and no quotient
+    /// by alpha is taken, and the result's alpha is one by construction. Both
+    /// backends then take a cheaper path with the same result (see
+    /// ::arraw::resample). Only worked out for a resize that runs; `false` for an
+    /// identity one, and `false` where the pixels were not at hand to be scanned
+    /// (see ::arraw::planFor for a ::arraw::Photo).
+    bool opaque = false;
+
+    /// @brief Whether the resize leaves the pixels alone, which both backends skip.
+    /// @param cropped Size of the photograph after its crop.
+    [[nodiscard]] bool isIdentity(ImageSize cropped) const noexcept {
+        return region.covers(cropped) && outputSize == cropped;
+    }
+
+    /// @brief Whether the kernel runs, as opposed to the region being cut and kept as it is.
+    [[nodiscard]] bool resamples() const noexcept {
+        return outputSize != region.size();
+    }
+
+    /// @brief Compares what the resize computes, ignoring the ::arraw::ResizePlan::opaque hint.
+    friend bool operator==(const ResizePlan& first, const ResizePlan& second) noexcept {
+        return first.region == second.region && first.outputSize == second.outputSize &&
+               first.filter == second.filter;
+    }
+};
 
 /// @brief Everything a photograph's settings imply, worked out once.
 ///
@@ -84,8 +185,18 @@ struct ProcessingPlan {
     /// costs a comparison rather than a branch on a setting (ADR 011).
     float shoulderKnee = std::numeric_limits<float>::infinity();
 
+    /// @brief Saturation, vibrance, HSL and Black & White, resolved.
+    ///
+    /// The last of the pointwise stages: it follows the shoulder, as the
+    /// colour controls did on main, and every control left at zero is a flag
+    /// that is off (ADR 027).
+    ColorAdjustmentPlan colorAdjustments{};
+
     /// @brief Resolved geometry when source dimensions and orientation are known.
     std::optional<GeometryPlan> geometry = std::nullopt;
+
+    /// @brief Resolved resize, when a geometry and so a cropped size is known.
+    std::optional<ResizePlan> resize = std::nullopt;
 
     friend bool operator==(const ProcessingPlan&, const ProcessingPlan&) = default;
 };
@@ -103,8 +214,8 @@ struct ProcessingPlan {
     return std::make_tuple(std::tie(plan.toWorking, plan.exposureGain, plan.shapesTone,
                                     plan.contrastSlope, plan.contrastScale, plan.shadowShift,
                                     plan.highlightShift, plan.blackShift, plan.whiteShift,
-                                    plan.shoulderKnee),
-                           std::tie(plan.geometry));
+                                    plan.shoulderKnee, plan.colorAdjustments),
+                           std::tie(plan.geometry), std::tie(plan.resize));
 }
 
 static_assert(std::tuple_size_v<decltype(stagesOf(std::declval<const ProcessingPlan&>()))> ==
@@ -143,7 +254,8 @@ static_assert(std::tuple_size_v<decltype(stagesOf(std::declval<const ProcessingP
     }(std::make_index_sequence<stageCount>{});
 }
 
-/// @brief Resolves tone settings into a plan with an identity colour transform.
+/// @brief Resolves tone settings into a plan with an identity colour transform and no colour
+/// adjustments.
 /// @param settings Tone adjustments to resolve.
 /// @return Exposure gain and tone coefficients for the pointwise chain.
 /// @throws std::invalid_argument if a tone setting is not finite.
@@ -161,26 +273,41 @@ static_assert(std::tuple_size_v<decltype(stagesOf(std::declval<const ProcessingP
 /// Resolves only colour and tone; buffer and Photo overloads also resolve geometry.
 /// This overload carries no source identity and must not be used as a cache key.
 /// @param encoding Encoding the decoded pixels are in.
-/// @param settings Settings to resolve.
+/// @param state State to resolve.
 /// @return The plan both backends execute.
 /// @throws std::invalid_argument if development cannot start from @p encoding,
 /// or the settings cannot be resolved against it.
-[[nodiscard]] ProcessingPlan planFor(const ColorEncoding& encoding,
-                                     const DevelopSettings& settings);
+[[nodiscard]] ProcessingPlan planFor(const ColorEncoding& encoding, const DevelopState& state);
 
-/// @brief Resolves pointwise processing and geometry against decoded pixels.
-[[nodiscard]] ProcessingPlan planFor(const ImageBuffer& source, const DevelopSettings& settings);
+/// @brief Resolves pointwise processing, geometry and the resize against decoded pixels.
+///
+/// The one overload that knows whether the pixels are opaque (see
+/// ::arraw::ResizePlan::opaque). A source with no alpha channel is opaque for
+/// free; one with alpha is scanned once, on the host, stopping at the first
+/// sample that is not exactly one: a read of the alpha samples, at worst the
+/// whole buffer, and only when the request actually resizes.
+/// @param source Decoded pixels the plan is for.
+/// @param state State to resolve.
+/// @param request Size and filter to render at; the default is the cropped size.
+/// @throws std::invalid_argument as the other overloads, and if @p request
+/// cannot be resolved (see ::arraw::resolvedSize).
+[[nodiscard]] ProcessingPlan planFor(const ImageBuffer& source, const DevelopState& state,
+                                     const RenderRequest& request = {});
 
 /// @brief Works out what a photograph's document means for its pixels.
 ///
 /// What a render is planned against (ADR 012): the encoding comes from what
 /// the file declared and the settings from the document that declared it, so
 /// the two cannot arrive from different photographs.
+///
+/// A photograph carries no pixels, so whether they are opaque is unknown here:
+/// the resize it plans is never marked ::arraw::ResizePlan::opaque.
 /// @param photo Document to resolve.
+/// @param request Size and filter to render at; the default is the cropped size.
 /// @return The plan both backends execute.
 /// @throws std::invalid_argument if the photograph's encoding or settings
-/// cannot be resolved.
-[[nodiscard]] ProcessingPlan planFor(const Photo& photo);
+/// cannot be resolved, or @p request cannot be resolved against its crop.
+[[nodiscard]] ProcessingPlan planFor(const Photo& photo, const RenderRequest& request = {});
 
 /// @brief Perceptual coordinate the tone controls act in.
 ///
@@ -189,6 +316,8 @@ static_assert(std::tuple_size_v<decltype(stagesOf(std::declval<const ProcessingP
 /// acted there would put its whole range in the highlights (ADR 010).
 /// @param luminance Linear luminance, zero or above.
 /// @return The same brightness, perceptually spaced.
+///
+/// Mirrored by `src/gpu/shaders/develop.frag`, which must change with it.
 [[nodiscard]] inline float toPerceptual(float luminance) {
     return std::pow(luminance, 1.0F / 2.2F);
 }
@@ -196,6 +325,8 @@ static_assert(std::tuple_size_v<decltype(stagesOf(std::declval<const ProcessingP
 /// @brief Returns a perceptual value to scene-linear luminance.
 /// @param value Perceptually spaced brightness.
 /// @return The linear luminance it stands for.
+///
+/// Mirrored by `src/gpu/shaders/develop.frag`, which must change with it.
 [[nodiscard]] inline float toLinear(float value) {
     return std::pow(value, 2.2F);
 }
@@ -205,6 +336,8 @@ static_assert(std::tuple_size_v<decltype(stagesOf(std::declval<const ProcessingP
 /// An eighteen percent grey card, encoded: `0.18^(1/2.2)`, to the nearest
 /// float, so that a contrast control leaves the value a photographer metered
 /// for exactly where it was.
+///
+/// Mirrored by `src/gpu/shaders/develop.frag`, which must change with it.
 inline constexpr float greyPivot = 0.45865646F;
 
 /// @brief Smooth rise from zero to one between two edges.
@@ -212,27 +345,37 @@ inline constexpr float greyPivot = 0.45865646F;
 /// @param last Edge above which it is one.
 /// @param value Where to evaluate it.
 /// @return The eased fraction, never outside zero to one.
+///
+/// Mirrored by `src/gpu/shaders/develop.frag`, which must change with it.
 [[nodiscard]] constexpr float smoothstep(float first, float last, float value) {
     const float t = std::clamp((value - first) / (last - first), 0.0F, 1.0F);
     return t * t * (3.0F - 2.0F * t);
 }
 
 /// @brief Weight of the Shadows region: zero at black, zero by the midtones.
+///
+/// Mirrored by `src/gpu/shaders/develop.frag`, which must change with it.
 [[nodiscard]] constexpr float shadowWeight(float value) {
     return smoothstep(0.0F, 0.3F, value) * (1.0F - smoothstep(0.3F, 0.6F, value));
 }
 
 /// @brief Weight of the Highlights region, reaching a little past white.
+///
+/// Mirrored by `src/gpu/shaders/develop.frag`, which must change with it.
 [[nodiscard]] constexpr float highlightWeight(float value) {
     return smoothstep(0.4F, 0.75F, value) * (1.0F - smoothstep(0.75F, 1.2F, value));
 }
 
 /// @brief Weight of the black end, full at black and gone by the shadows.
+///
+/// Mirrored by `src/gpu/shaders/develop.frag`, which must change with it.
 [[nodiscard]] constexpr float blackWeight(float value) {
     return 1.0F - smoothstep(0.0F, 0.35F, value);
 }
 
 /// @brief Weight of the white end, full at white and above.
+///
+/// Mirrored by `src/gpu/shaders/develop.frag`, which must change with it.
 [[nodiscard]] constexpr float whiteWeight(float value) {
     return smoothstep(0.6F, 1.0F, value);
 }
@@ -246,6 +389,8 @@ inline constexpr float greyPivot = 0.45865646F;
 /// @param plan Resolved settings.
 /// @param luminance Linear luminance to shape.
 /// @return The shaped linear luminance.
+///
+/// Mirrored by `src/gpu/shaders/develop.frag`, which must change with it.
 [[nodiscard]] inline float shapeLuminance(const ProcessingPlan& plan, float luminance) {
     float value = toPerceptual(luminance);
     value = plan.contrastScale * std::pow(value, plan.contrastSlope);
@@ -260,6 +405,16 @@ inline constexpr float greyPivot = 0.45865646F;
     return toLinear(std::max(value, 0.0F));
 }
 
+/// @brief Luminance at or below which tone treats a colour as black.
+///
+/// Below it a luminance cannot be told from black, and the ratio the tone
+/// controls scale the colour by could be denormal or overflow, which GPUs flush
+/// where CPUs do not. Both backends therefore take the lifted branch on the same
+/// side of this value, a normal float far under anything a photograph holds.
+/// NaN fails the comparison and lifts too. Mirrored by `liftedBlackThreshold` in
+/// `src/gpu/shaders/develop.frag`.
+inline constexpr float liftedBlackThreshold = 1.0e-20F;
+
 /// @brief Applies the tone controls to a colour, through its luminance.
 ///
 /// Tone shapes brightness and the colour follows by the ratio, so hue and
@@ -269,6 +424,8 @@ inline constexpr float greyPivot = 0.45865646F;
 /// @param plan Resolved settings.
 /// @param colour Colour in the working encoding.
 /// @return The colour with its tone shaped.
+///
+/// Mirrored by `src/gpu/shaders/develop.frag`, which must change with it.
 [[nodiscard]] constexpr Colour shapeTone(const ProcessingPlan& plan, Colour colour) {
     if (!plan.shapesTone) {
         return colour;
@@ -277,7 +434,7 @@ inline constexpr float greyPivot = 0.45865646F;
     const float luminance = colorspaces::workingLuminance[0] * colour[0] +
                             colorspaces::workingLuminance[1] * colour[1] +
                             colorspaces::workingLuminance[2] * colour[2];
-    if (!(luminance > 0.0F)) {
+    if (!(luminance > liftedBlackThreshold)) {
         const float lifted = shapeLuminance(plan, 0.0F);
         return {lifted, lifted, lifted};
     }
@@ -302,6 +459,8 @@ inline constexpr float greyPivot = 0.45865646F;
 /// @param plan Resolved settings.
 /// @param colour Colour in the working encoding, possibly above white.
 /// @return The colour with its highlights rolled.
+///
+/// Mirrored by `src/gpu/shaders/develop.frag`, which must change with it.
 [[nodiscard]] constexpr Colour rollHighlights(const ProcessingPlan& plan, Colour colour) {
     const float luminance = colorspaces::workingLuminance[0] * colour[0] +
                             colorspaces::workingLuminance[1] * colour[1] +
@@ -332,12 +491,18 @@ inline constexpr float greyPivot = 0.45865646F;
 /// @param plan Resolved settings.
 /// @param colour Source colour, in the encoding the plan was built for.
 /// @return The developed colour, in the working encoding.
-[[nodiscard]] constexpr Colour developPixel(const ProcessingPlan& plan, Colour colour) {
+///
+/// Not `constexpr`: the colour block's Oklab maths takes cube roots, which
+/// the standard does not allow in a constant expression.
+///
+/// Mirrored by `src/gpu/shaders/develop.frag`, which must change with it.
+[[nodiscard]] inline Colour developPixel(const ProcessingPlan& plan, Colour colour) {
     colour = plan.toWorking * colour;
     colour = {colour[0] * plan.exposureGain, colour[1] * plan.exposureGain,
               colour[2] * plan.exposureGain};
     colour = shapeTone(plan, colour);
-    return rollHighlights(plan, colour);
+    colour = rollHighlights(plan, colour);
+    return adjustColor(plan.colorAdjustments, colour);
 }
 
 } // namespace arraw

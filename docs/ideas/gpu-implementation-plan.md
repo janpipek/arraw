@@ -2,6 +2,12 @@
 
 Status: proposed implementation sequence for the first GPU backend.
 
+*Outcome:* the first backend was built as [gpu-develop-plan.md](gpu-develop-plan.md)
+describes, within [ADR 015](../adr/015-a-checkpoints-pixels-may-live-on-a-device.md),
+and the command line's device policy is
+[ADR 017](../adr/017-the-command-line-prefers-the-gpu-and-says-when-it-does-not.md).
+Measured tolerances against the CPU are recorded in the develop plan.
+
 The current code already provides the correct division between preparation and
 execution. `ProcessingPlan` resolves settings into concrete values, and
 `developPixel()` is the readable CPU implementation of the pointwise chain. The

@@ -13,10 +13,13 @@ with a Qt desktop application and a command line over it.
 
 ## Building
 
-Requires CMake 3.21+, a C++20 compiler, **Qt 6.10**, and **LibRaw** (`libraw-dev`
-on Ubuntu, `libraw-devel` on Fedora). LibRaw is required rather than optional, so
+Requires CMake 3.21+, a C++20 compiler, **Qt 6.10**, **LibRaw** (`libraw-dev`
+on Ubuntu, `libraw-devel` on Fedora) and **exiv2** 0.28 or newer (`libexiv2-dev`
+on Ubuntu, `exiv2-devel` on Fedora). LibRaw is required rather than optional, so
 that every build decodes a RAW identically — see
-[ADR 005](docs/adr/005-raw-import-through-libraw.md).
+[ADR 005](docs/adr/005-raw-import-through-libraw.md); exiv2 is, so that every
+build reads the same capture information — see
+[ADR 028](docs/adr/028-exif-is-read-through-exiv2-into-a-typed-struct.md).
 
 ```bash
 just build     # configure and build (Debug)
@@ -37,13 +40,39 @@ arraw-cli export photo.dng -o out/ --format png --bit-depth 16
 arraw-cli export photo.arw -o out/ --exposure -0.5 --temperature 3200   # RAW only
 arraw-cli export photo.arw -o out/ --rotate 2.5 --crop-aspect 3:2
 arraw-cli export photo.arw -o out/ --rotate 90 --crop 0.1,0.2,0.8,0.9
+arraw-cli export photo.arw -o out/ --device gpu --gpu-backend vulkan   # no CPU fallback
 arraw-cli gpu-test                        # check the GPU backend works on this machine
 ```
 
+Interactive CLI output uses restrained color, aligned status labels, and a camera accent in the main help. Redirected output and JSON remain plain. Set `NO_COLOR` (or `TERM=dumb`) to disable terminal decoration. On Windows, color requires a console with virtual terminal processing enabled.
+
 On Linux the command line needs no display: it runs on its own headless Qt
-platform, which reaches Vulkan through the driver alone but has no OpenGL (set
-`QT_QPA_PLATFORM=xcb` or `wayland` for that). `ARRAW_DISABLE_GPU=1` keeps it
-off the graphics stack entirely.
+platform, which reaches Vulkan through the driver alone but has no OpenGL.
+`export` uses it whatever `QT_QPA_PLATFORM` says, unless `--gpu-backend opengl`
+is given, which honours `QT_QPA_PLATFORM=xcb` or `wayland`; `gpu-test` honours
+it always. `ARRAW_DISABLE_GPU=1` keeps it off the graphics stack entirely.
+
+`export` develops on the GPU when it can. `--device auto` (the default) creates
+one device for the whole batch; if there is none, or it is a software
+rasteriser (llvmpipe, lavapipe, WARP; accept one with `--allow-software`), or
+`ARRAW_DISABLE_GPU` is set, it warns once and exports the batch on the CPU. A
+photograph the GPU fails on is retried on the CPU with a warning. `--device gpu`
+never falls back: it fails instead, and combined with `ARRAW_DISABLE_GPU` it is
+a usage error. With `--gpu-backend opengl`, `auto` is `gpu`: OpenGL needs a
+display's platform, and a process cannot fall back from one that will not load.
+`--device cpu` loads no graphics stack. `--gpu-backend` picks the API (`vulkan`, `opengl`, `d3d11`, `d3d12`, `metal`), and one line per batch says
+which device was used (silenced by `--quiet`).
+
+The desktop app (`arraw-ui`) renders its preview on the GPU when it can, uploading
+the photograph once, and on the CPU otherwise; the status bar says which, and
+why not the GPU when it fell back (tooltip). `ARRAW_PREVIEW_DEVICE=cpu` forces
+the CPU, for comparison or a broken driver; anything else, or unset, means
+"GPU when available". Software rasterisers are not used for the preview.
+
+`arraw-ui [path]` opens a photograph or folder. Without a path, it reopens the
+last photograph and its folder. If that file is gone, it opens the remembered
+folder; if neither exists, it starts empty. Opening a folder without photographs
+remembers that folder without retaining a file from the previous one.
 
 Inputs are files rather than directories; your shell expands the wildcards.
 Every input is attempted, so one bad frame does not abandon an overnight batch.
@@ -65,6 +94,14 @@ Geometry flags:
 | `--crop` | `auto` or normalised upright `left,top,right,bottom`, e.g. `0.1,0.2,0.8,0.9` |
 | `--crop-aspect` | `free`, `original`, or `width:height`, e.g. `3:2` or `2:3` |
 
+Resize flags, applied after the crop:
+
+| Flag | Value |
+|---|---|
+| `--resize` | `N` is the long edge in pixels, `WxH` is a box to fit inside, `N%` is a scale factor (`12.5%` is fine). A bare number is the long edge. Default: full size |
+| `--allow-upscale` | Let `--resize` enlarge past the photograph's own size; by default it only shrinks |
+| `--resize-filter` | `lanczos` (default, sharper, with slight ringing at hard edges) or `bilinear` (softer, never rings) |
+
 Rotation is split into the nearest quarter-turn and a straighten remainder
 within ±45°: `--rotate 100` gives 90° plus 10°, and `--rotate -20` gives 0°
 plus -20°. Full turns wrap. At exact half-quarter-turns, the reduced angle rounds away
@@ -81,8 +118,32 @@ positive-size rectangle fits there. Source pixels are never modified.
 Quarter-turns, flips and pixel-aligned crops preserve developed samples exactly.
 Fractional rotations and crops use bilinear interpolation in linear colour with
 premultiplied alpha. Continuous crop dimensions are floored to whole output
-pixels, with a minimum of one pixel per axis. Requested output resizing is
-still unimplemented.
+pixels, with a minimum of one pixel per axis. Resizing is applied last,
+after the crop (see `--resize`).
+
+The desktop app offers **Edit → Settings…** (the application Settings menu on macOS).
+The Processing tab selects Automatic, CPU only, or a detected hardware GPU for previews
+and exports. Preferences use Qt's native `QSettings` storage and take effect after restart.
+A selected GPU that is unavailable falls back to CPU; the preview device label explains why.
+`ARRAW_PREVIEW_DEVICE=cpu` continues to override the saved preference for that session.
+
+To trace development performance, enable the `arraw.timing` Qt logging category:
+
+```sh
+QT_LOGGING_RULES="arraw.timing.debug=true" just gui 2>timing.log
+# The same category works in the CLI:
+QT_LOGGING_RULES="arraw.timing.debug=true" just cli export photo.dng -o out/
+```
+
+Traces show monotonic milliseconds since startup, begin/end events, elapsed milliseconds,
+unique span IDs, parent IDs, and preview/export request IDs. They cover processing plans,
+CPU stages, GPU context creation, uploads, individual GPU passes and submission waits,
+readback, preview pyramids, display conversion, and export writing.
+Nested durations include their children; do not add them together. Cached stages may be
+absent. These are host elapsed times, not GPU hardware timestamps; tracing itself adds
+logging overhead. Output goes to Qt's diagnostic stream (normally stderr), is disabled by
+default, and does not change CLI stdout or its JSON documents. Explicitly enabling timing
+alongside `--log-format json` mixes debug traces with diagnostic JSON on stderr.
 
 ## Layout
 
@@ -116,6 +177,7 @@ arraw links libraries under their own terms, all compatible with GPL-3.0-or-late
 |---|---|---|
 | [Qt 6](https://www.qt.io/) | LGPL-3.0-or-later | Application framework, image codecs |
 | [LibRaw](https://www.libraw.org/) | LGPL-2.1 / CDDL-1.0 | RAW decoding |
+| [exiv2](https://exiv2.org/) | GPL-2.0-or-later | EXIF reading (later also metadata writing) |
 | [Catch2](https://github.com/catchorg/Catch2) | BSL-1.0 | Test framework (not distributed) |
 
 A distributed binary must carry these licence texts alongside arraw's own.

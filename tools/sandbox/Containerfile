@@ -9,12 +9,15 @@ COPY tools/ci/install-deps.sh /tmp/install-deps.sh
 RUN sh /tmp/install-deps.sh && rm /tmp/install-deps.sh
 
 # Working in the container: the Justfile's helpers, analysis, debugging, the
-# agents' search tools, and the Wayland platform and Mesa drivers used only
-# when the launcher is given --gui or --gpu.
+# agents' search tools, the Wayland platform and Mesa drivers used only when
+# the launcher is given --gui or --gpu, and a virtual X server (with the
+# xcb-cursor library Qt's xcb platform needs) for running the GPU suite on
+# OpenGL with no display (ADR 017).
 RUN apt-get install -y --no-install-recommends \
         curl jq less vim-tiny just ccache gdb ripgrep fd-find \
         clangd clang-tidy clazy \
         qt6-wayland libgl1-mesa-dri fonts-dejavu-core \
+        xvfb xauth libxcb-cursor0 \
         nodejs npm \
     && rm -rf /var/lib/apt/lists/*
 

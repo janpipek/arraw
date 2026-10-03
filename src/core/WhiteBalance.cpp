@@ -1,12 +1,15 @@
 #include "WhiteBalance.h"
 
 #include "ColorSpaces.h"
+#include "GeometryPlan.h"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <stdexcept>
+#include <variant>
 
 using namespace arraw;
 
@@ -295,4 +298,88 @@ ColourTemperature arraw::temperatureForGains(const CameraNative& camera, Gains g
 
 ColourTemperature arraw::asShotTemperature(const CameraNative& camera) {
     return temperatureForGains(camera, camera.asShotMultipliers);
+}
+
+namespace {
+
+/// @brief Reads one sample as a fraction of full scale.
+/// @param source Buffer holding the sample.
+/// @param index Position in the buffer's sample storage.
+float sampleAsFloat(const ImageBuffer& source, std::size_t index) {
+    switch (source.format()) {
+    case PixelFormat::RgbU8:
+    case PixelFormat::RgbaU8:
+        return static_cast<float>(source.samples<std::uint8_t>()[index]) / 255.0F;
+    case PixelFormat::RgbU16:
+    case PixelFormat::RgbaU16:
+        return static_cast<float>(source.samples<std::uint16_t>()[index]) / 65535.0F;
+    case PixelFormat::RgbF32:
+    case PixelFormat::RgbaF32:
+        return source.samples<float>()[index];
+    }
+    throw std::invalid_argument("unknown pixel format");
+}
+
+} // namespace
+
+ColourTemperature arraw::neutralTemperatureAt(const ImageBuffer& source, const DevelopState& state,
+                                              double x, double y, int radius) {
+    const auto* camera = std::get_if<CameraNative>(&source.encoding());
+    if (camera == nullptr) {
+        throw std::invalid_argument("A neutral can only be picked in a photograph with a sensor");
+    }
+    if (!std::isfinite(x) || !std::isfinite(y) || x < 0.0 || x > 1.0 || y < 0.0 || y > 1.0) {
+        throw std::invalid_argument("The point to pick must lie inside the photograph");
+    }
+    if (radius < 0) {
+        throw std::invalid_argument("The window to average cannot have a negative radius");
+    }
+
+    // Developed frame -> upright frame -> source edge units, as a render does.
+    const GeometryPlan plan =
+        geometryPlanFor(source.size(), source.orientation(), state.settings.geometry);
+    const SourcePoint at = plan.toSource({plan.left + x * plan.width, plan.top + y * plan.height});
+
+    const auto clampedPixel = [](double edge, std::uint32_t length) {
+        return static_cast<std::int64_t>(
+            std::clamp(std::floor(edge), 0.0, static_cast<double>(length - 1)));
+    };
+    const std::int64_t centreX = clampedPixel(at.x, source.size().width);
+    const std::int64_t centreY = clampedPixel(at.y, source.size().height);
+    const std::int64_t left = std::max<std::int64_t>(centreX - radius, 0);
+    const std::int64_t right = std::min<std::int64_t>(
+        centreX + radius, static_cast<std::int64_t>(source.size().width) - 1);
+    const std::int64_t top = std::max<std::int64_t>(centreY - radius, 0);
+    const std::int64_t bottom = std::min<std::int64_t>(
+        centreY + radius, static_cast<std::int64_t>(source.size().height) - 1);
+
+    const std::size_t channels = channelCount(source.format());
+    std::array<double, 3> sum{};
+    for (std::int64_t row = top; row <= bottom; ++row) {
+        for (std::int64_t column = left; column <= right; ++column) {
+            const auto base = (static_cast<std::size_t>(row) * source.size().width +
+                               static_cast<std::size_t>(column)) *
+                              channels;
+            for (std::size_t channel = 0; channel < 3; ++channel) {
+                sum[channel] += sampleAsFloat(source, base + channel);
+            }
+        }
+    }
+    // Only the ratios between channels matter, so the count need not divide out.
+    for (const double channel : sum) {
+        if (!(channel > 0.0)) {
+            throw std::invalid_argument("There is no light to read at that point");
+        }
+    }
+
+    // The pixels have been through the applied gains already. What turns them
+    // neutral is a change `delta` on top: green over each channel. Full gains
+    // are that change times the applied ones -- the relation whiteBalanceDelta
+    // resolves a stored temperature with, read backwards.
+    const Gains applied = withGreenAtOne(camera->appliedMultipliers);
+    const Gains wanted{static_cast<float>(sum[1] / sum[0]) * applied[0], 1.0F,
+                       static_cast<float>(sum[1] / sum[2]) * applied[2]};
+    const ColourTemperature light = temperatureForGains(*camera, wanted);
+    return {std::clamp(light.kelvin, warmestKelvin, coolestKelvin),
+            std::clamp(light.tint, -tintLimit, tintLimit)};
 }

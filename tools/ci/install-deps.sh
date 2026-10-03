@@ -10,6 +10,6 @@ apt-get update
 apt-get install -y --no-install-recommends \
     ca-certificates git g++ cmake ninja-build pkg-config \
     qt6-base-dev qt6-base-private-dev qt6-shadertools-dev qt6-image-formats-plugins \
-    libraw-dev libtiff6 catch2 \
+    libraw-dev libexiv2-dev libtiff6 catch2 \
     libgl-dev libxkbcommon-dev \
     libvulkan-dev mesa-vulkan-drivers vulkan-tools

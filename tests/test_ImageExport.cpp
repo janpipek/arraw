@@ -347,3 +347,122 @@ TEST_CASE("JPEG embeds the requested profile only when enabled", "[ImageExport]"
         REQUIRE(decoded.colorSpace() == QColorSpace(QColorSpace::DisplayP3));
     }
 }
+
+namespace {
+
+/// @brief Builds an sRGB RgbaU8 image whose left half is dark and right half light.
+/// @param alpha Alpha of every pixel.
+ImageBuffer stepEdge(std::uint8_t alpha = 255, ImageSize size = {24, 8}) {
+    ImageBuffer image(size, PixelFormat::RgbaU8, NamedEncoding::Srgb);
+    auto samples = image.samples<std::uint8_t>();
+    for (int y = 0; y < size.height; ++y) {
+        for (int x = 0; x < size.width; ++x) {
+            const std::size_t index = (static_cast<std::size_t>(y) * size.width + x) * 4;
+            const std::uint8_t level = x < size.width / 2 ? 80 : 170;
+            samples[index] = samples[index + 1] = samples[index + 2] = level;
+            samples[index + 3] = alpha;
+        }
+    }
+    return image;
+}
+
+/// @brief Exports a buffer as a PNG with sharpening and decodes the result.
+QImage sharpened(const ImageBuffer& image, const std::filesystem::path& destination, int amount) {
+    exportImage(image, destination, {.sharpening = amount});
+    QImage decoded(QFile(destination).fileName());
+    REQUIRE_FALSE(decoded.isNull());
+    return decoded.convertedTo(QImage::Format_RGBA8888);
+}
+
+} // namespace
+
+TEST_CASE("Sharpening of zero leaves the export bit-identical", "[ImageExport][sharpen]") {
+    const test::TempDir directory;
+    const auto plain = directory.file("plain.png");
+    const auto zero = directory.file("zero.png");
+    exportImage(test::rainbow(), plain, {});
+    exportImage(test::rainbow(), zero, {.sharpening = 0});
+
+    const auto size = std::filesystem::file_size(plain);
+    REQUIRE(std::filesystem::file_size(zero) == size);
+    REQUIRE(head(zero, size) == head(plain, size));
+}
+
+TEST_CASE("Sharpening leaves a flat image unchanged", "[ImageExport][sharpen]") {
+    const test::TempDir directory;
+    ImageBuffer flat({10, 6}, PixelFormat::RgbaU8, NamedEncoding::Srgb);
+    std::ranges::fill(flat.samples<std::uint8_t>(), std::uint8_t{120});
+    const auto amount = GENERATE(1, 50, 100);
+
+    const QImage result = sharpened(flat, directory.file("flat.png"), amount);
+
+    for (int y = 0; y < result.height(); ++y) {
+        for (int x = 0; x < result.width(); ++x) {
+            REQUIRE(result.pixelColor(x, y).red() == 120);
+        }
+    }
+}
+
+TEST_CASE("Sharpening overshoots both sides of an edge, more with more amount",
+          "[ImageExport][sharpen]") {
+    const test::TempDir directory;
+    const auto image = stepEdge();
+    const int dark = 80;
+    const int light = 170;
+
+    int previousDark = dark;
+    int previousLight = light;
+    for (const int amount : {25, 50, 100}) {
+        CAPTURE(amount);
+        const QImage result = sharpened(image, directory.file("edge.png"), amount);
+        const int y = 4;
+        const int darkSide = result.pixelColor(11, y).red();
+        const int lightSide = result.pixelColor(12, y).red();
+        REQUIRE(darkSide < previousDark);
+        REQUIRE(lightSide > previousLight);
+        previousDark = darkSide;
+        previousLight = lightSide;
+        // Far from the edge the plateau is untouched.
+        REQUIRE(result.pixelColor(1, y).red() == dark);
+        REQUIRE(result.pixelColor(22, y).red() == light);
+    }
+}
+
+TEST_CASE("Sharpening does not change alpha", "[ImageExport][sharpen]") {
+    const test::TempDir directory;
+    const QImage result = sharpened(stepEdge(128), directory.file("alpha.png"), 100);
+
+    for (int x = 0; x < result.width(); ++x) {
+        REQUIRE(result.pixelColor(x, 3).alpha() == 128);
+    }
+    // Premultiplied sharpening still overshoots at the edge.
+    REQUIRE(result.pixelColor(11, 3).red() < result.pixelColor(1, 3).red());
+}
+
+TEST_CASE("Fully transparent pixels keep colour zero when sharpened", "[ImageExport][sharpen]") {
+    const test::TempDir directory;
+    ImageBuffer image({8, 4}, PixelFormat::RgbaU8, NamedEncoding::Srgb);
+    auto samples = image.samples<std::uint8_t>();
+    for (std::size_t index = 0; index < samples.size(); index += 4) {
+        const bool opaque = (index / 4) % 8 >= 4;
+        samples[index] = samples[index + 1] = samples[index + 2] = opaque ? 200 : 0;
+        samples[index + 3] = opaque ? 255 : 0;
+    }
+    const QImage result = sharpened(image, directory.file("clear.png"), 100);
+
+    for (int x = 0; x < 4; ++x) {
+        REQUIRE(result.pixelColor(x, 2).alpha() == 0);
+        REQUIRE(result.pixelColor(x, 2).red() == 0);
+    }
+}
+
+TEST_CASE("Sharpening outside 0 to 100 is refused", "[ImageExport][sharpen]") {
+    const test::TempDir directory;
+    const auto image = test::rainbow();
+    const auto amount = GENERATE(-1, 101);
+    const auto destination = directory.file("bad.png");
+
+    REQUIRE_THROWS_AS(exportImage(image, destination, {.sharpening = amount}),
+                      std::invalid_argument);
+    REQUIRE_FALSE(std::filesystem::exists(destination));
+}

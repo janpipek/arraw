@@ -39,6 +39,10 @@ enum class Notice {
     /// @brief The GPU probe accepted a software rasteriser, named, because it was told to.
     GpuSoftwareAccepted,
 
+    /// @brief The GPU probe left a software rasteriser untested, because it tests
+    /// every adapter and was not told to accept one: the adapter's label, then its name.
+    GpuAdapterSkipped,
+
     /// @brief The device has no RGBA32F textures, which development needs.
     GpuNoFloatTextures,
 
@@ -57,6 +61,62 @@ enum class Notice {
 
     /// @brief The GPU was turned off, by the named environment variable.
     GpuDisabled,
+
+    /// @brief An export batch ran on the GPU: the backend, then the device's name.
+    GpuUsed,
+
+    /// @brief An export batch ran on the CPU, by choice or by fallback.
+    CpuUsed,
+
+    /// @brief The GPU was not used where it might have been, with the reason;
+    /// about one photograph if it has a subject, otherwise about the whole batch.
+    GpuFallback,
+
+    /// @brief A setting read from a document lay outside its range and was
+    /// clamped into it: the key, the value read, then the limit used instead.
+    SettingClamped,
+
+    /// @brief A document named a setting that does not exist, and it was
+    /// ignored: the key.
+    SettingUnknown,
+
+    /// @brief A setting read from a document had the wrong shape, and it was
+    /// ignored: the key, then what was expected.
+    SettingMalformed,
+
+    /// @brief A settings document was written by a newer arraw, and was read
+    /// anyway: its version, then the newest version this arraw knows.
+    NewerSettingsVersion,
+
+    /// @brief A photograph's sidecar could not be read, so the photograph was
+    /// opened without its settings and marks: the reason.
+    SidecarUnreadable,
+
+    /// @brief An explicit crop was dropped for automatic framing, because an
+    /// edit changed the rotation or flips it was drawn in: what changed.
+    CropReset,
+
+    /// @brief A photograph's EXIF could not be read, or it records none, so
+    /// no capture information is shown: the reason.
+    ExifUnreadable,
+
+    /// @brief A folder among the inputs holds no photographs.
+    NoPhotographs,
+
+    /// @brief A batch left out the photographs its marks filter did not want: how many.
+    FilteredOut,
+
+    /// @brief An option was given that has no effect without another one: the
+    /// option, then the one it needs.
+    OptionIgnored,
+
+    /// @brief A photograph's embedded preview could not be looked for, so none
+    /// is shown: the reason.
+    PreviewUnreadable,
+
+    /// @brief An export left out metadata it could not read or copy from its
+    /// source, but was written: what was left out and why.
+    MetadataNotCarried,
 };
 
 /// @brief One detail of a diagnostic, kept as a value rather than as prose.

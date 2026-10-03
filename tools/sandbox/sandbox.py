@@ -15,6 +15,7 @@ Examples:
     tools/sandbox/sandbox.py                     # a shell
     tools/sandbox/sandbox.py claude              # unattended
     tools/sandbox/sandbox.py codex --safe
+    tools/sandbox/sandbox.py --safe claude -- --resume   # arguments for the agent
     tools/sandbox/sandbox.py --gpu -- just test
     tools/sandbox/sandbox.py --gui --photos ~/Pictures/raw
     tools/sandbox/sandbox.py build --refresh     # rebuild with the newest agents
@@ -48,6 +49,8 @@ STORE_MOUNTS = {
     "pi": f"{HOME}/.pi",
     "opencode-config": f"{HOME}/.config/opencode",
     "opencode-data": f"{HOME}/.local/share/opencode",
+    # Skills installed with `npx skills add -g`, which ~/.claude/skills links into.
+    "agents": f"{HOME}/.agents",
     "cache": f"{HOME}/.cache",
 }
 
@@ -307,11 +310,11 @@ def run(cli: str, args: argparse.Namespace) -> int:
         cmd += photos_args(args.photos, args.keep_writes)
 
     cmd.append(IMAGE)
-    if args.command:
-        cmd += args.command
-    elif args.agent:
+    if args.agent:
         unattended, safe = AGENTS[args.agent]
-        cmd += safe if args.safe else unattended
+        cmd += (safe if args.safe else unattended) + args.command
+    elif args.command:
+        cmd += args.command
     else:
         cmd.append("bash")
 
@@ -345,9 +348,8 @@ def main() -> int:
                         help="keep what was written to /photos in DIR/changes instead of discarding it")
     parser.add_argument("--dry-run", action="store_true", help="print the podman command, run nothing")
     args = parser.parse_args(argv)
+    # After --: the agent's arguments, or without an agent, the command to run.
     args.command = command
-    if args.command and args.agent:
-        parser.error("give an agent or a command after --, not both")
     return run(podman(), args)
 
 
