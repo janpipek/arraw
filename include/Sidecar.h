@@ -153,4 +153,18 @@ readSidecar(const std::filesystem::path& photo, DiagnosticLog& log = discardedDi
 /// or if the file cannot be written.
 void writeSidecar(const Photo& photo);
 
+/// @brief Writes only the marks of a photograph into its sidecar.
+///
+/// As ::arraw::writeSidecar does for the marks, and leaves the develop settings,
+/// `arraw:version` and everything foreign as the file has them. Without a
+/// sidecar a new one is created, with default develop settings. This is how a
+/// session writes a rating without saving the edits it has not saved (ADR 030).
+/// @param photo Path of the photograph.
+/// @param marks Marks to write.
+/// @throws std::invalid_argument if the rating of @p marks is outside -1 to 5.
+/// @throws std::runtime_error as ::arraw::writeSidecar does: for an existing
+/// sidecar that is not XMP or is of a newer version, which is left alone, or
+/// that cannot be read, and for a file that cannot be written.
+void writeSidecarMarks(const std::filesystem::path& photo, const PhotoMarks& marks);
+
 } // namespace arraw

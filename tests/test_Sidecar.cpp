@@ -735,3 +735,51 @@ TEST_CASE("A row that encodes to a compound is read through the shapes the codec
         }
     }
 }
+
+TEST_CASE("Writing only the marks keeps the settings and what is foreign", "[sidecar][marks]") {
+    const test::TempDir directory;
+    const fs::path path = copyRaw(directory, "IMG_1.dng");
+    DevelopSettings settings;
+    settings.tone.exposure = 0.5F;
+    const fs::path sidecar = directory.file("IMG_1.xmp");
+    fs::copy_file(test::fixture("sidecar-foreign.xmp"), sidecar);
+    writeSidecar(photoOf(path, settings));
+    const auto before = meaning(sidecar);
+
+    writeSidecarMarks(path, {.rating = 4, .label = ColorLabel::Blue});
+
+    const auto contents = readSidecar(path);
+    REQUIRE(contents);
+    REQUIRE(contents->marks == PhotoMarks{.rating = 4, .label = ColorLabel::Blue});
+    REQUIRE(contents->state.settings == settings);
+    const auto after = meaning(sidecar);
+    for (const auto& [key, value] : before) {
+        if (key.find("}Rating") != std::string::npos || key.find("}Label") != std::string::npos) {
+            continue;
+        }
+        INFO(key);
+        REQUIRE(after.contains(key));
+        REQUIRE(after.at(key) == value);
+    }
+}
+
+TEST_CASE("Writing only the marks creates a sidecar with default settings", "[sidecar][marks]") {
+    const test::TempDir directory;
+    const fs::path path = copyRaw(directory, "IMG_1.dng");
+    REQUIRE_FALSE(fs::exists(directory.file("IMG_1.xmp")));
+    writeSidecarMarks(path, {.rating = -1});
+    const auto contents = readSidecar(path);
+    REQUIRE(contents);
+    REQUIRE(contents->marks == PhotoMarks{.rating = -1});
+    REQUIRE(contents->state.settings == DevelopSettings{});
+}
+
+TEST_CASE("Writing only the marks refuses what writeSidecar refuses", "[sidecar][marks]") {
+    const test::TempDir directory;
+    const fs::path path = copyRaw(directory, "IMG_1.dng");
+    spit(directory.file("IMG_1.xmp"), "this is not XML");
+    REQUIRE_THROWS_AS(writeSidecarMarks(path, {.rating = 3}), std::runtime_error);
+    REQUIRE(slurp(directory.file("IMG_1.xmp")) == "this is not XML");
+    REQUIRE_THROWS_AS(writeSidecarMarks(path, {.rating = 6}), std::invalid_argument);
+    REQUIRE_THROWS_AS(writeSidecarMarks(path, {.rating = -2}), std::invalid_argument);
+}

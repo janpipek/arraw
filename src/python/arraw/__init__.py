@@ -57,6 +57,7 @@ from ._arraw import (
     setting_descriptors,
     sidecar_path,
     write_sidecar,
+    write_sidecar_marks,
     xmp_namespace_owner,
 )
 
@@ -116,5 +117,6 @@ __all__ = [
     "setting_descriptors",
     "sidecar_path",
     "write_sidecar",
+    "write_sidecar_marks",
     "xmp_namespace_owner",
 ]

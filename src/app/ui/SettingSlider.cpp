@@ -7,7 +7,9 @@
 #include <QDoubleSpinBox>
 #include <QEvent>
 #include <QHBoxLayout>
+#include <QKeyEvent>
 #include <QLabel>
+#include <QLineEdit>
 #include <QSignalBlocker>
 #include <QSlider>
 
@@ -60,6 +62,9 @@ SettingSlider::SettingSlider(std::string_view key, QWidget* parent)
     slider_ = new QSlider(Qt::Horizontal, this);
     slider_->setRange(0, tickCount(range_, step_, scale_));
     slider_->setToolTip(presentation.toolTip);
+    // Arrow keys step between photographs, so a slider never takes them; the spin box is the
+    // keyboard way to a value.
+    slider_->setFocusPolicy(Qt::NoFocus);
     slider_->setValue(tickOf(default_, range_, step_, scale_));
 
     spinBox_ = new QDoubleSpinBox(this);
@@ -127,6 +132,23 @@ bool SettingSlider::eventFilter(QObject* watched, QEvent* event) {
     }
     if ((watched == slider_ || watched == spinBox_) && event->type() == QEvent::FocusOut) {
         finishPendingEdit();
+    }
+    if (watched == spinBox_ && event->type() == QEvent::KeyPress) {
+        const int key = static_cast<QKeyEvent*>(event)->key();
+        if (key == Qt::Key_Return || key == Qt::Key_Enter) {
+            // Commits the typed text (the spin box does not track the keyboard), then lets go.
+            spinBox_->interpretText();
+            emit focusReleased();
+            return true;
+        }
+        if (key == Qt::Key_Escape) {
+            // Drops what was typed: the text goes back to the value.
+            if (auto* edit = spinBox_->findChild<QLineEdit*>()) {
+                edit->setText(spinBox_->textFromValue(spinBox_->value()) + spinBox_->suffix());
+            }
+            emit focusReleased();
+            return true;
+        }
     }
     return QWidget::eventFilter(watched, event);
 }

@@ -15,6 +15,7 @@
 
 #include <cstdint>
 #include <deque>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -23,6 +24,8 @@
 class QAction;
 class QActionGroup;
 class QCloseEvent;
+class QDockWidget;
+class QMenu;
 class QLabel;
 class QToolButton;
 class QEvent;
@@ -31,7 +34,9 @@ class QObject;
 
 namespace arraw::app {
 
+class CullingActions;
 class DevelopPanel;
+class FilmStrip;
 class PhotoView;
 
 /// @brief Top-level window of the desktop application.
@@ -90,6 +95,54 @@ private:
     /// @brief Asks the user for a photograph and opens it.
     void openFileWithDialog();
 
+    /// @brief Opens a photograph the user chose, and shows its folder in the film strip.
+    ///
+    /// The file itself is developed, even when it is a companion of a shot (a JPEG beside a
+    /// RAW); the strip selects the shot that holds it. Nothing changes if the file does not
+    /// open or the user cancels leaving the open photograph.
+    /// @param path File to open.
+    void openFile(const std::filesystem::path& path);
+
+    /// @brief Asks the user for a folder and opens it.
+    void openFolderWithDialog();
+
+    /// @brief Fills the film strip with a folder and develops its first shot.
+    ///
+    /// Asks about unsaved changes first. The first shot is the first the strip's filter shows.
+    /// @param folder Folder to open.
+    void openFolder(const std::filesystem::path& folder);
+
+    /// @brief Develops a shot of the strip, when the user lets go of the open photograph.
+    ///
+    /// The photograph is read before anything is asked, so one that does not open leaves
+    /// the window as it is; cancelling leaves the strip's active shot and selection as they were.
+    /// @param primary Primary file of the shot, as the strip names it.
+    void activateShot(const QString& primary);
+
+    /// @brief Handles another program changing a shot's sidecar.
+    ///
+    /// For the open photograph with nothing unsaved the photograph is read again from the
+    /// sidecar, the view kept; with unsaved edits the user is told and the edits stay.
+    /// @param primary Primary file of the shot whose sidecar changed.
+    void sidecarChangedOnDisk(const QString& primary);
+
+    /// @brief Writes the marks of a shot's sidecar, through the session if its photograph is open.
+    /// @param primary Primary file of the shot.
+    /// @param marks Marks to write.
+    /// @throws std::exception if they cannot be written.
+    void writeMarks(const std::filesystem::path& primary, const PhotoMarks& marks);
+
+    /// @brief Builds the dock holding the film strip.
+    void buildFilmStripDock();
+
+    /// @brief Names the folder the file dialogs start in.
+    /// @return The last folder opened, else the pictures folder.
+    [[nodiscard]] QString dialogFolder() const;
+
+    /// @brief Remembers a folder for the file dialogs.
+    /// @param folder Folder just opened.
+    void rememberFolder(const std::filesystem::path& folder);
+
     /// @brief Writes the develop state of the open photograph to its sidecar.
     /// @return Whether it is saved, or there was nothing to save; a failure is shown to the user.
     bool saveAdjustments();
@@ -105,8 +158,9 @@ private:
 
     /// @brief Sets the marks of the open photograph through its session, which writes them at once.
     ///
-    /// A failure is shown to the user and changes nothing.
+    /// Marks are not develop edits, so nothing in the panel or the title changes.
     /// @param marks Marks the photograph carries from now on.
+    /// @throws std::exception if they cannot be written; nothing changes.
     void setMarksForCurrent(PhotoMarks marks);
 
     /// @brief Shows the file name and whether it has unsaved changes in the title.
@@ -180,6 +234,10 @@ private:
     };
 
     PhotoView* photoView_ = nullptr;
+    FilmStrip* filmStrip_ = nullptr;
+    QDockWidget* stripDock_ = nullptr;
+    QMenu* viewMenu_ = nullptr;
+    CullingActions* culling_ = nullptr;
     QToolButton* zoomButton_ = nullptr;
     QActionGroup* zoomGroup_ = nullptr;
     /// Fit, then one per preset, in the order of ::arraw::app::zoomPresets.

@@ -861,6 +861,11 @@ def write_sidecar(photo: Photo) -> None:
     Write a photograph's state and marks into its sidecar, keeping the rest.
     """
 
+def write_sidecar_marks(path: str | os.PathLike, marks: PhotoMarks) -> None:
+    """
+    Write only the marks of a photograph into its sidecar, keeping its settings and the rest; a sidecar is created when there is none.
+    """
+
 @overload
 def develop(source: ImageBuffer, state: DevelopState | None = None, *, size: int | tuple[int, int] | float | None = None, filter: ResizeFilter = ResizeFilter.LANCZOS3, allow_upscale: bool = False) -> ImageBuffer:
     """

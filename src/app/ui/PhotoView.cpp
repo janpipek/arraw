@@ -26,6 +26,9 @@ PhotoView::PhotoView(QWidget* parent) : QWidget(parent) {
     // the window's minimum size, or the photograph could never be fitted smaller.
     setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
     setMinimumSize(1, 1);
+    // Takes the focus when the panel gives it back, and no key of its own: the arrow keys
+    // reach the window's actions, which step between photographs.
+    setFocusPolicy(Qt::ClickFocus);
     setAutoFillBackground(false);
     updateCursor();
 }

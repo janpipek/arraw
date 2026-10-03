@@ -67,8 +67,17 @@ signals:
     /// @brief Announces that the edit is over.
     void editFinished();
 
+    /// @brief Asks for the keyboard focus to go back to the photograph.
+    ///
+    /// Sent when Enter, Return or Esc ends the typing in the spin box, so that the
+    /// arrow keys step between photographs again.
+    void focusReleased();
+
 protected:
     /// @brief Resets on a double-click of the label; ends a pending edit when focus leaves.
+    ///
+    /// Also hands the focus back on Enter, Return and Esc in the spin box: Enter keeps
+    /// what was typed, Esc drops it.
     bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:

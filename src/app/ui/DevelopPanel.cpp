@@ -42,6 +42,7 @@ SettingSlider* DevelopPanel::addRow(std::string_view key, QWidget* group) {
         emit editStarted();
     });
     connect(row, &SettingSlider::editFinished, this, &DevelopPanel::editFinished);
+    connect(row, &SettingSlider::focusReleased, this, &DevelopPanel::focusReleased);
     connect(row, &SettingSlider::valueEdited, this,
             [this, row](double value) { applyEdit(*row, value); });
     connect(row, &SettingSlider::valueCleared, this, [this, row] { applyClear(*row); });

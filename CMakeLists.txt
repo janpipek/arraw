@@ -321,6 +321,14 @@ add_library(arraw-app-core STATIC
         src/app/ExportSettings.h
         src/app/PreviewRenderer.cpp
         src/app/PreviewRenderer.h
+        src/app/FilmStripRules.cpp
+        src/app/FilmStripRules.h
+        src/app/FolderWatcher.cpp
+        src/app/FolderWatcher.h
+        src/app/ShotFilterModel.cpp
+        src/app/ShotFilterModel.h
+        src/app/ShotModel.cpp
+        src/app/ShotModel.h
         src/app/SettingPresentation.cpp
         src/app/SettingPresentation.h
         src/app/ViewTransform.cpp
@@ -329,13 +337,18 @@ add_library(arraw-app-core STATIC
         src/app/WhiteBalanceChoice.h)
 arraw_enable_warnings(arraw-app-core)
 target_include_directories(arraw-app-core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/app)
-target_link_libraries(arraw-app-core PUBLIC arraw Qt6::Gui PRIVATE arraw-gpu)
-set_target_properties(arraw-app-core PROPERTIES AUTOMOC OFF)
+target_link_libraries(arraw-app-core PUBLIC arraw Qt6::Core Qt6::Gui PRIVATE arraw-gpu)
+# The shot model, its filter and the folder watcher are QObjects with signals.
+set_target_properties(arraw-app-core PROPERTIES AUTOMOC ON)
 
 add_executable(arraw-ui src/app/main.cpp
+        src/app/ui/CullingActions.cpp
+        src/app/ui/CullingActions.h
         src/app/ui/DevelopPanel.cpp
         src/app/ui/DevelopPanel.h
         src/app/ui/ExportDialog.cpp
+        src/app/ui/FilmStrip.cpp
+        src/app/ui/FilmStrip.h
         src/app/ui/ExportDialog.h
         src/app/ui/MainWindow.cpp
         src/app/ui/MainWindow.h

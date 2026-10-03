@@ -695,8 +695,16 @@ std::optional<SidecarContents> arraw::readSidecar(const std::filesystem::path& p
     return contents;
 }
 
-void arraw::writeSidecar(const Photo& photo) {
-    const std::filesystem::path path = sidecarPath(photo.path());
+namespace {
+
+/// @brief Edits or creates the sidecar of a photograph.
+/// @param photo Path of the photograph.
+/// @param state Develop state to write; null to leave the settings of an
+/// existing sidecar alone (a new one gets the defaults).
+/// @param marks Marks to write.
+void writeSidecarFor(const std::filesystem::path& photo, const DevelopState* state,
+                     const PhotoMarks& marks) {
+    const std::filesystem::path path = sidecarPath(photo);
     std::error_code error;
     const bool exists = std::filesystem::is_regular_file(path, error);
     QDomDocument document =
@@ -734,16 +742,18 @@ void arraw::writeSidecar(const Photo& photo) {
     });
     const QDomElement home = holder != descriptions.end() ? *holder : descriptions.front();
 
-    setProperty(descriptions, home, arrawProperty("version"), QString::number(sidecarVersion));
-    for (const FieldDescriptor& descriptor : developSettingDescriptors) {
-        setProperty(descriptions, home, arrawProperty(descriptor.key),
-                    spell(encode(descriptor, photo.state().settings)));
+    if (state != nullptr || !exists) {
+        const DevelopState written = state != nullptr ? *state : DevelopState{};
+        setProperty(descriptions, home, arrawProperty("version"), QString::number(sidecarVersion));
+        for (const FieldDescriptor& descriptor : developSettingDescriptors) {
+            setProperty(descriptions, home, arrawProperty(descriptor.key),
+                        spell(encode(descriptor, written.settings)));
+        }
     }
     // Marks are standard XMP that other tools write too, and some of what they
     // write is no mark arraw has (a rating of 9, a label named "Rot"). So a mark
     // is written only when it differs from what reading the file gave: an
     // unchanged mark leaves the file's own text alone, whatever it says.
-    const PhotoMarks& marks = photo.marks();
     const PhotoMarks onFile = marksIn(descriptions, discardedDiagnostics(), path);
     if (marks.rating != onFile.rating) {
         setProperty(descriptions, home, xmpProperty("Rating"_L1), QString::number(marks.rating));
@@ -771,4 +781,18 @@ void arraw::writeSidecar(const Photo& photo) {
         throw std::runtime_error("cannot write sidecar " + path.string() + ": " +
                                  file.errorString().toStdString());
     }
+}
+
+} // namespace
+
+void arraw::writeSidecar(const Photo& photo) {
+    const DevelopState state = photo.state();
+    writeSidecarFor(photo.path(), &state, photo.marks());
+}
+
+void arraw::writeSidecarMarks(const std::filesystem::path& photo, const PhotoMarks& marks) {
+    if (marks.rating < rejectedRating || marks.rating > highestRating) {
+        throw std::invalid_argument("rating must be from -1 to 5");
+    }
+    writeSidecarFor(photo, nullptr, marks);
 }

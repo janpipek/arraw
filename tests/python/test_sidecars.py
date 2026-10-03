@@ -353,3 +353,16 @@ def test_sidecar_clamping_on_read_logs_warning(work, caplog):
         photo = arraw.open(work)
     assert photo.state.settings.tone.exposure == pytest.approx(5.0)
     assert arraw_records(caplog)
+
+
+def test_write_sidecar_marks_keeps_settings(work):
+    arraw.write_sidecar(arraw.open(work, sidecar=False).with_(exposure=0.5))
+    arraw.write_sidecar_marks(work, arraw.PhotoMarks(rating=3, label=arraw.ColorLabel.RED))
+    contents = arraw.read_sidecar(work)
+    assert contents.marks == arraw.PhotoMarks(rating=3, label=arraw.ColorLabel.RED)
+    assert contents.state.settings.tone.exposure == pytest.approx(0.5)
+
+
+def test_write_sidecar_marks_creates_a_sidecar(work):
+    arraw.write_sidecar_marks(work, arraw.PhotoMarks(rating=-1))
+    assert arraw.read_sidecar(work).marks == arraw.PhotoMarks(rating=-1)

@@ -68,6 +68,9 @@ signals:
     /// @param picking Whether the picker is now armed.
     void pickToggled(bool picking);
 
+    /// @brief Asks for the keyboard focus to go back to the photograph.
+    void focusReleased();
+
 private:
     /// @brief Builds the Treatment row, Colour and B&W.
     QWidget* buildTreatmentRow();

@@ -1,10 +1,12 @@
 #include "MainWindow.h"
 
+#include "CullingActions.h"
 #include "DebugDiagnostics.h"
 #include "DevelopPanel.h"
 #include "DisplayImage.h"
 #include "ExportDialog.h"
 #include "ExportSettings.h"
+#include "FilmStrip.h"
 #include "PhotoView.h"
 #include "ViewTransform.h"
 
@@ -13,6 +15,7 @@
 #include <ImageBuffer.h>
 #include <ImageImport.h>
 #include <Photo.h>
+#include <Sidecar.h>
 #include <WhiteBalance.h>
 
 #include <QAction>
@@ -90,10 +93,12 @@ MainWindow::MainWindow(QWidget* parent)
                   Qt::QueuedConnection);
           },
           cpuForcedByEnvironment() ? ExportQueue::Device::Cpu : ExportQueue::Device::Auto) {
+    filmStrip_ = new FilmStrip(this);
     buildMenu();
     buildStatusBar();
     buildImageView();
     buildDevelopDock();
+    buildFilmStripDock();
 
     cancelPickShortcut_ = new QShortcut(Qt::Key_Escape, this);
     cancelPickShortcut_->setEnabled(false);
@@ -128,6 +133,10 @@ void MainWindow::buildMenu() {
     QAction* openAction = fileMenu->addAction(tr("&Open…"));
     openAction->setShortcut(QKeySequence::Open);
     connect(openAction, &QAction::triggered, this, &MainWindow::openFileWithDialog);
+
+    QAction* openFolderAction = fileMenu->addAction(tr("Open &Folder…"));
+    openFolderAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_O));
+    connect(openFolderAction, &QAction::triggered, this, &MainWindow::openFolderWithDialog);
 
     saveAction_ = fileMenu->addAction(tr("&Save Adjustments"));
     saveAction_->setShortcut(QKeySequence::Save);
@@ -166,12 +175,13 @@ void MainWindow::buildMenu() {
         });
     });
 
+    culling_ = new CullingActions(*this, *filmStrip_);
     buildZoomControls();
 }
 
 void MainWindow::buildZoomControls() {
-    QMenu* viewMenu = menuBar()->addMenu(tr("&View"));
-    QMenu* zoomMenu = viewMenu->addMenu(tr("&Zoom"));
+    viewMenu_ = menuBar()->addMenu(tr("&View"));
+    QMenu* zoomMenu = viewMenu_->addMenu(tr("&Zoom"));
 
     zoomInAction_ = zoomMenu->addAction(tr("Zoom &In"));
     zoomInAction_->setShortcut(QKeySequence::ZoomIn);
@@ -262,6 +272,9 @@ void MainWindow::buildDevelopDock() {
         });
     });
     connect(developPanel_, &DevelopPanel::pickToggled, this, &MainWindow::setPicking);
+    // Enter or Esc in a spin box ends the typing: the arrow keys are the window's again.
+    connect(developPanel_, &DevelopPanel::focusReleased, photoView_,
+            qOverload<>(&QWidget::setFocus));
     connect(developPanel_, &DevelopPanel::editFinished, this, [this] {
         guarded([this] {
             if (!open_->session.editing()) {
@@ -418,17 +431,18 @@ QString openFileFilter() {
 } // namespace
 
 void MainWindow::openFileWithDialog() {
-    const QString filesDir = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
     const QString filter = openFileFilter();
     const QString fileName =
-        QFileDialog::getOpenFileName(this, tr("Open Photograph"), filesDir, filter);
+        QFileDialog::getOpenFileName(this, tr("Open Photograph"), dialogFolder(), filter);
     if (fileName.isEmpty()) {
         return; // Cancelled.
     }
     // Through UTF-16, not toStdString(): on Windows a path built from a narrow
     // string is read in the ANSI code page, which mangles non-ASCII names.
-    const std::filesystem::path path(fileName.toStdU16String());
+    openFile(std::filesystem::path(fileName.toStdU16String()));
+}
 
+void MainWindow::openFile(const std::filesystem::path& path) {
     // The one place that can tell the user: an exception must not leave a
     // function Qt's event loop called, which ends in std::terminate.
     try {
@@ -439,10 +453,156 @@ void MainWindow::openFileWithDialog() {
         if (!confirmLeavingPhoto()) {
             return;
         }
+        const std::filesystem::path folder = path.parent_path();
+        if (filmStrip_->folder().lexically_normal() != folder.lexically_normal()) {
+            try {
+                filmStrip_->setFolder(folder);
+            } catch (const std::exception& error) {
+                // The photograph itself opened; only the strip cannot show its folder.
+                statusBar()->showMessage(
+                    tr("Cannot list %1: %2")
+                        .arg(toQString(folder), QString::fromUtf8(error.what())),
+                    8000);
+            }
+        }
         showPhoto(std::move(photo));
+        rememberFolder(folder);
+        // The shot that holds the file, as its primary or as a companion; the file the user
+        // chose stays the one developed.
+        if (const auto shot = filmStrip_->shotContaining(path)) {
+            filmStrip_->setActive(*shot);
+        } else {
+            filmStrip_->clearActive();
+        }
     } catch (const std::exception& error) {
         QMessageBox::warning(this, tr("Cannot Open Photograph"),
-                             tr("%1\n\n%2").arg(fileName, QString::fromUtf8(error.what())));
+                             tr("%1\n\n%2").arg(toQString(path), QString::fromUtf8(error.what())));
+    }
+}
+
+void MainWindow::openFolderWithDialog() {
+    const QString folder = QFileDialog::getExistingDirectory(
+        this, tr("Open Folder"), dialogFolder(), QFileDialog::ShowDirsOnly);
+    if (!folder.isEmpty()) {
+        openFolder(std::filesystem::path(folder.toStdU16String()));
+    }
+}
+
+void MainWindow::openFolder(const std::filesystem::path& folder) {
+    if (!confirmLeavingPhoto()) {
+        return;
+    }
+    try {
+        filmStrip_->setFolder(folder);
+    } catch (const std::exception& error) {
+        QMessageBox::warning(
+            this, tr("Cannot Open Folder"),
+            tr("%1\n\n%2").arg(toQString(folder), QString::fromUtf8(error.what())));
+        return;
+    }
+    rememberFolder(folder);
+    if (const auto first = filmStrip_->firstVisible()) {
+        activateShot(toQString(*first));
+    }
+}
+
+void MainWindow::activateShot(const QString& primary) {
+    const std::filesystem::path path(primary.toStdU16String());
+    try {
+        DebugDiagnostics log;
+        Photo photo = openPhoto(path, log);
+        if (!confirmLeavingPhoto()) {
+            return; // The strip keeps its active shot and selection.
+        }
+        showPhoto(std::move(photo));
+        filmStrip_->setActive(path);
+    } catch (const std::exception& error) {
+        QMessageBox::warning(this, tr("Cannot Open Photograph"),
+                             tr("%1\n\n%2").arg(toQString(path), QString::fromUtf8(error.what())));
+    }
+}
+
+QString MainWindow::dialogFolder() const {
+    const QString remembered = QSettings().value("lastFolder").toString();
+    return remembered.isEmpty() ? QStandardPaths::writableLocation(QStandardPaths::PicturesLocation)
+                                : remembered;
+}
+
+void MainWindow::rememberFolder(const std::filesystem::path& folder) {
+    QSettings().setValue("lastFolder", toQString(folder));
+}
+
+void MainWindow::buildFilmStripDock() {
+    stripDock_ = new QDockWidget(tr("Film Strip"), this);
+    stripDock_->setObjectName("FilmStripDock");
+    stripDock_->setAllowedAreas(Qt::TopDockWidgetArea | Qt::BottomDockWidgetArea);
+    // Closable for the View menu's toggle; the strip's own title bar has no close button.
+    stripDock_->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable |
+                            QDockWidget::DockWidgetClosable);
+    filmStrip_->setMinimumHeight(80);
+    stripDock_->setWidget(filmStrip_);
+    stripDock_->setTitleBarWidget(filmStrip_->titleBar());
+    addDockWidget(Qt::BottomDockWidgetArea, stripDock_);
+    resizeDocks({stripDock_}, {132}, Qt::Vertical);
+
+    QAction* toggle = stripDock_->toggleViewAction();
+    toggle->setText(tr("&Film Strip"));
+    toggle->setShortcut(Qt::Key_F9);
+    viewMenu_->addAction(toggle);
+
+    filmStrip_->setMarksWriter([this](const std::filesystem::path& primary,
+                                      const PhotoMarks& marks) { writeMarks(primary, marks); });
+    connect(filmStrip_, &FilmStrip::activationRequested, this, &MainWindow::activateShot);
+    connect(filmStrip_, &FilmStrip::folderRequested, this, &MainWindow::openFolderWithDialog);
+    connect(filmStrip_, &FilmStrip::exportRequested, this, &MainWindow::exportWithDialog);
+    connect(filmStrip_, &FilmStrip::sidecarChangedExternally, this,
+            &MainWindow::sidecarChangedOnDisk);
+}
+
+void MainWindow::writeMarks(const std::filesystem::path& primary, const PhotoMarks& marks) {
+    // The marks of a shot live in its primary's sidecar. The session writes them for the
+    // photograph it holds; a companion open in the develop view has a sidecar of its own, and
+    // the shot's marks are not in it.
+    if (open_ && open_->session.photo().path() == primary) {
+        setMarksForCurrent(marks);
+    } else {
+        writeSidecarMarks(primary, marks);
+    }
+}
+
+void MainWindow::sidecarChangedOnDisk(const QString& primary) {
+    const std::filesystem::path path(primary.toStdU16String());
+    if (!open_ || open_->session.photo().path() != path) {
+        return; // The strip has refreshed the marks; nothing else is open on it.
+    }
+    const QString name = toQString(path.filename());
+    try {
+        developPanel_->finishPendingEdit();
+    } catch (const std::exception&) {
+        // The edit stays open, and counts as unsaved below.
+    }
+    if (open_->session.hasUnsavedChanges()) {
+        statusBar()->showMessage(
+            tr("The sidecar of %1 changed on disk; your unsaved edits are kept.").arg(name), 10000);
+        return;
+    }
+    try {
+        DebugDiagnostics log;
+        Photo photo = openPhoto(path, log);
+        const Photo& saved = open_->session.saved();
+        if (photo.state() == saved.state() && photo.marks() == saved.marks()) {
+            return; // Touched, not changed: keep the history.
+        }
+        // The pixels are the same file's; only the settings and marks are read again, and the
+        // view stays where it is.
+        auto decoded = open_->decoded;
+        open_.emplace(OpenPhoto{EditSession(std::move(photo)), std::move(decoded)});
+        refreshPanel();
+        statusBar()->showMessage(tr("Reloaded %1: its sidecar changed on disk.").arg(name), 5000);
+    } catch (const std::exception& error) {
+        statusBar()->showMessage(
+            tr("Cannot reload the sidecar of %1: %2").arg(name, QString::fromUtf8(error.what())),
+            10000);
     }
 }
 
@@ -557,6 +717,7 @@ bool MainWindow::saveAdjustments() {
     try {
         developPanel_->finishPendingEdit();
         open_->session.save();
+        filmStrip_->noteOwnWrite(open_->session.photo().path());
         refreshPanel();
         return true;
     } catch (const std::exception& error) {
@@ -605,12 +766,8 @@ void MainWindow::setMarksForCurrent(PhotoMarks marks) {
     if (!open_) {
         return;
     }
-    try {
-        open_->session.setMarks(marks);
-        refreshPanel();
-    } catch (const std::exception& error) {
-        QMessageBox::warning(this, tr("Cannot Set Marks"), QString::fromUtf8(error.what()));
-    }
+    // Marks are no develop edit and not part of what the panel shows, so no refresh.
+    open_->session.setMarks(marks);
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {

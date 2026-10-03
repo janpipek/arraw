@@ -250,6 +250,15 @@ void bindPhoto(nb::module_& m) {
         "write_sidecar", [](const Photo& photo) { withoutGil([&] { writeSidecar(photo); }); },
         "photo"_a, "Write a photograph's state and marks into its sidecar, keeping the rest.");
 
+    m.def(
+        "write_sidecar_marks",
+        [](const std::filesystem::path& path, const PhotoMarks& marks) {
+            withoutGil([&] { writeSidecarMarks(path, marks); });
+        },
+        "path"_a, "marks"_a,
+        "Write only the marks of a photograph into its sidecar, keeping its settings and the "
+        "rest; a sidecar is created when there is none.");
+
     const RenderRequest requestDefaults{};
     m.def(
         "develop",
