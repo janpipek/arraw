@@ -226,10 +226,18 @@ add_executable(arraw-ui src/app/main.cpp
         src/app/DisplayImage.cpp
         src/app/DisplayImage.h
         src/app/ui/MainWindow.cpp
-        src/app/ui/MainWindow.h)
+        src/app/ui/MainWindow.h
+        src/app/ui/Theme.cpp
+        src/app/ui/Theme.h
+        src/app/ui/ThemeColors.h
+        resources/icon.qrc)
 arraw_enable_warnings(arraw-ui)
 target_include_directories(arraw-ui PRIVATE src/app)
 target_link_libraries(arraw-ui PRIVATE arraw Qt6::Widgets)
+target_compile_definitions(arraw-ui PRIVATE ARRAW_VERSION="${PROJECT_VERSION}")
+# qt_standard_project_setup() turns on AUTOMOC only; the window icon comes
+# in through resources/icon.qrc.
+set_target_properties(arraw-ui PROPERTIES AUTORCC ON)
 arraw_deploy_qt_plugins(arraw-ui)
 
 # The command line's behaviour, split from its main() so the tests can drive it
