@@ -84,3 +84,18 @@ def test_save_to_missing_directory_raises(developed, tmp_path):
 def test_unknown_extension_raises(developed, tmp_path):
     with pytest.raises(ValueError):
         arraw.save(developed, tmp_path / "x.xyz")
+
+
+def test_sharpening_round_trip(developed, tmp_path):
+    arraw.save(developed, tmp_path / "off.png")
+    arraw.save(developed, tmp_path / "zero.png", sharpening=0)
+    arraw.save(developed, tmp_path / "sharp.png", sharpening=100)
+    assert (tmp_path / "off.png").read_bytes() == (tmp_path / "zero.png").read_bytes()
+    assert (tmp_path / "sharp.png").read_bytes() != (tmp_path / "off.png").read_bytes()
+
+
+@pytest.mark.parametrize("amount", [-1, 101])
+def test_sharpening_out_of_range_is_value_error(developed, tmp_path, amount):
+    with pytest.raises(ValueError):
+        arraw.save(developed, tmp_path / "bad.png", sharpening=amount)
+    assert not (tmp_path / "bad.png").exists()

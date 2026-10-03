@@ -308,14 +308,17 @@ void bindPhoto(nb::module_& m) {
         "save",
         [](const ImageBuffer& image, const std::filesystem::path& path,
            std::optional<ImageFileFormat> format, NamedEncoding encoding, int bitDepth, int quality,
-           bool embedProfile) {
-            const ExportOptions options{format, encoding, bitDepth, quality, embedProfile};
+           bool embedProfile, int sharpening) {
+            const ExportOptions options{format,  encoding,     bitDepth,
+                                        quality, embedProfile, sharpening};
             withoutGil([&] { exportImage(image, path, options); });
         },
         "image"_a, "path"_a, nb::kw_only(), "format"_a = exportDefaults.format,
         "encoding"_a = exportDefaults.encoding, "bit_depth"_a = exportDefaults.bitDepth,
         "quality"_a = exportDefaults.quality, "embed_profile"_a = exportDefaults.embedProfile,
-        "Write an image as JPEG, PNG or TIFF; the format comes from the extension unless given.");
+        "sharpening"_a = exportDefaults.sharpening,
+        "Write an image as JPEG, PNG or TIFF; the format comes from the extension unless given. "
+        "`sharpening` (0-100, default 0 = off) applies an unsharp mask to the final pixels.");
 }
 
 } // namespace arraw::python

@@ -342,6 +342,9 @@ TEST_CASE("A command line that is wrong exits 2 and says so on stderr", "[cli]")
         std::vector<std::string>{"export", image, "-o", output, "--format", "gif"},
         std::vector<std::string>{"export", image, "-o", output, "--encoding", "rec2020"},
         std::vector<std::string>{"export", image, "-o", output, "--quality", "high"},
+        std::vector<std::string>{"export", image, "-o", output, "--sharpen", "strong"},
+        std::vector<std::string>{"export", image, "-o", output, "--sharpen", "101"},
+        std::vector<std::string>{"export", image, "-o", output, "--sharpen", "-1"},
         std::vector<std::string>{"export", image, "-o", output, "--nonsense"});
     CAPTURE(arguments);
 
@@ -432,6 +435,27 @@ TEST_CASE("An existing output is refused unless overwriting is asked for", "[cli
     const auto replaced = invoke(overwriting);
     REQUIRE(replaced.code == cli::Success);
     REQUIRE(std::filesystem::file_size(destination) != original);
+}
+
+TEST_CASE("The sharpen flag is documented and sharpens the export", "[cli]") {
+    REQUIRE_THAT(invoke({"export", "--help"}).out, ContainsSubstring("--sharpen"));
+
+    const test::TempDir directory;
+    const auto image = test::fixture(card).string();
+    const auto destination = directory.file("testcard-61x41-srgb8.png");
+    const auto base = std::vector<std::string>{
+        "export", image, "-o", directory.path().string(), "--format", "png", "--overwrite"};
+    REQUIRE(invoke(base).code == cli::Success);
+    const QImage plain(QString::fromStdString(destination.string()));
+
+    auto sharp = base;
+    sharp.insert(sharp.end(), {"--sharpen", "100"});
+    REQUIRE(invoke(sharp).code == cli::Success);
+    const QImage crisp(QString::fromStdString(destination.string()));
+
+    REQUIRE_FALSE(plain.isNull());
+    REQUIRE(crisp.size() == plain.size());
+    REQUIRE(crisp != plain);
 }
 
 TEST_CASE("Exposure reaches the exported pixels", "[cli]") {

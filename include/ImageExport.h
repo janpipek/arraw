@@ -17,13 +17,15 @@ struct ExportOptions {
     int bitDepth = 8;                             ///< Bits per channel: 8 or 16; JPEG requires 8.
     int quality = 90;                             ///< JPEG quality, 0–100; ignored for PNG/TIFF.
     bool embedProfile = true; ///< Embedded output ICC profile; conversion always applies.
+    int sharpening = 0;       ///< Output sharpening amount, 0–100; 0 is off (ADR 026).
 };
 
 /// @brief Converts and atomically writes an image to the destination.
 /// @param image Source in RgbU8, RgbaU8, RgbaU16, or RgbaF32 layout, encoded
 /// as sRGB, Display P3, or Adobe RGB. JPEG requires fully opaque pixels.
 /// @param path Destination to create or replace after successful encoding.
-/// @param options Output settings; the working encoding is not a valid output.
+/// @param options Output settings; the working encoding is not a valid output, and
+/// sharpening must be between 0 and 100.
 /// @throws std::invalid_argument if the input, format, or options are unsupported.
 /// @throws std::runtime_error if image preparation, encoding, or file writing fails.
 void exportImage(const ImageBuffer& image, const std::filesystem::path& path,

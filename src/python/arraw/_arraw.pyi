@@ -621,9 +621,9 @@ def resolved_size(size: int | tuple[int, int] | float, cropped: ImageSize, *, al
     Resolve a develop `size` against the size after the crop, as develop does.
     """
 
-def save(image: ImageBuffer, path: str | os.PathLike, *, format: ImageFileFormat | None = None, encoding: NamedEncoding = NamedEncoding.SRGB, bit_depth: int = 8, quality: int = 90, embed_profile: bool = True) -> None:
+def save(image: ImageBuffer, path: str | os.PathLike, *, format: ImageFileFormat | None = None, encoding: NamedEncoding = NamedEncoding.SRGB, bit_depth: int = 8, quality: int = 90, embed_profile: bool = True, sharpening: int = 0) -> None:
     """
-    Write an image as JPEG, PNG or TIFF; the format comes from the extension unless given.
+    Write an image as JPEG, PNG or TIFF; the format comes from the extension unless given. `sharpening` (0-100, default 0 = off) applies an unsharp mask to the final pixels.
     """
 
 __version__: str

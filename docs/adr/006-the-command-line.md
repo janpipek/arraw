@@ -25,7 +25,7 @@ would be the expensive mistake.
 
 ```
 arraw-cli export <input>... -o <dir> [--format] [--quality] [--bit-depth]
-                                     [--encoding] [--no-profile]
+                                     [--sharpen] [--encoding] [--no-profile]
                                      [--overwrite] [--quiet]
 ```
 

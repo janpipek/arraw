@@ -484,6 +484,7 @@ void configure(QCommandLineParser& parser) {
     parser.addOption({{"o", "output"}, "Existing directory to write into.", "dir"});
     parser.addOption({"format", "png, jpeg, or tiff. Default: jpeg.", "name"});
     parser.addOption({"quality", "JPEG quality, 0-100. Default: 90.", "value"});
+    parser.addOption({"sharpen", "Output sharpening, 0-100. Default: 0 (off).", "amount"});
     parser.addOption({"bit-depth", "8 or 16. Default: 8.", "value"});
     parser.addOption({"encoding", "srgb, display-p3, or adobe-rgb. Default: srgb.", "name"});
     for (const FieldDescriptor& descriptor : developSettingDescriptors) {
@@ -610,8 +611,13 @@ std::optional<ExportRequest> buildRequest(const QCommandLineParser& parser, std:
     }
 
     if (!readInteger(parser, "quality", request.options.quality) ||
-        !readInteger(parser, "bit-depth", request.options.bitDepth)) {
-        code = usageError(err, "--quality and --bit-depth take whole numbers");
+        !readInteger(parser, "bit-depth", request.options.bitDepth) ||
+        !readInteger(parser, "sharpen", request.options.sharpening)) {
+        code = usageError(err, "--quality, --bit-depth and --sharpen take whole numbers");
+        return std::nullopt;
+    }
+    if (request.options.sharpening < 0 || request.options.sharpening > 100) {
+        code = usageError(err, "--sharpen must be between 0 and 100");
         return std::nullopt;
     }
 
