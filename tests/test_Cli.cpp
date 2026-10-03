@@ -1856,6 +1856,67 @@ TEST_CASE("Info gives no encoding for an ordinary image, whose own it cannot rea
     REQUIRE(firstFile(json.out).value("encoding").isNull());
 }
 
+TEST_CASE("Info shows what the file records about its capture", "[cli][info][exif]") {
+    const auto result = invoke({"info", test::fixture("exif-32x24.dng").string()});
+
+    REQUIRE(result.code == cli::Success);
+    REQUIRE(result.err.empty());
+    REQUIRE_THAT(result.out, ContainsSubstring("  camera: Arraw Fixture One\n"));
+    REQUIRE_THAT(result.out, ContainsSubstring("  lens: Fixture 35mm F2.8\n"));
+    REQUIRE_THAT(
+        result.out,
+        ContainsSubstring("  exposure: 1/250 s  f/2.8  ISO 400  35 mm (52 mm equivalent)\n"));
+    REQUIRE_THAT(result.out, ContainsSubstring("  exposure bias: -0.33 EV\n"));
+    REQUIRE_THAT(result.out, ContainsSubstring("  flash: did not fire\n"));
+    REQUIRE_THAT(result.out, ContainsSubstring("  taken: 2024:05:01 10:00:00 +02:00\n"));
+    REQUIRE_THAT(result.out, ContainsSubstring("  GPS: 50.0877, 14.4217, 235.5 m\n"));
+    REQUIRE_THAT(result.out, ContainsSubstring("  artist: Ada Lovelace\n"));
+    REQUIRE_THAT(result.out, ContainsSubstring("  copyright: (c) 2024 Ada Lovelace\n"));
+}
+
+TEST_CASE("Info says nothing about capture information a file does not record",
+          "[cli][info][exif]") {
+    const auto result = invoke({"info", test::fixture(card).string()});
+
+    REQUIRE(result.code == cli::Success);
+    // No notice either: the absence is what the report shows.
+    REQUIRE(result.err.empty());
+    REQUIRE_THAT(result.out, !ContainsSubstring("camera:"));
+    REQUIRE_THAT(result.out, !ContainsSubstring("exposure:"));
+    REQUIRE_THAT(result.out, !ContainsSubstring("GPS:"));
+
+    const auto json = invoke({"info", "--json", test::fixture(card).string()});
+    REQUIRE(firstFile(json.out).value("exif").toObject().isEmpty());
+}
+
+TEST_CASE("Info --json gives the capture information with the EXIF names", "[cli][info][exif]") {
+    const auto result = invoke({"info", "--json", test::fixture("exif-32x24.dng").string()});
+    REQUIRE(result.code == cli::Success);
+    const auto exif = firstFile(result.out).value("exif").toObject();
+
+    REQUIRE(exif.value("make").toString() == "Arraw");
+    REQUIRE(exif.value("model").toString() == "Fixture One");
+    REQUIRE(exif.value("lensModel").toString() == "Fixture 35mm F2.8");
+    REQUIRE(exif.value("dateTimeOriginal").toString() == "2024:05:01 10:00:00");
+    REQUIRE(exif.value("offsetTimeOriginal").toString() == "+02:00");
+    REQUIRE(exif.value("exposureTime").toObject().value("numerator").toInt() == 1);
+    REQUIRE(exif.value("exposureTime").toObject().value("denominator").toInt() == 250);
+    REQUIRE(exif.value("fNumber").toObject().value("numerator").toInt() == 28);
+    REQUIRE(exif.value("fNumber").toObject().value("denominator").toInt() == 10);
+    REQUIRE(exif.value("photographicSensitivity").toInt() == 400);
+    REQUIRE(exif.value("focalLength").toObject().value("numerator").toInt() == 35);
+    REQUIRE(exif.value("focalLengthIn35mmFilm").toInt() == 52);
+    REQUIRE(exif.value("exposureBiasValue").toObject().value("numerator").toInt() == -1);
+    REQUIRE(exif.value("exposureBiasValue").toObject().value("denominator").toInt() == 3);
+    REQUIRE(exif.value("flash").toInt() == 16);
+    REQUIRE(exif.value("gps").toObject().value("latitude").toDouble() == Catch::Approx(50.0877083));
+    REQUIRE(exif.value("gps").toObject().value("longitude").toDouble() ==
+            Catch::Approx(14.4216667));
+    REQUIRE(exif.value("gps").toObject().value("altitude").toDouble() == Catch::Approx(235.5));
+    REQUIRE(exif.value("artist").toString() == "Ada Lovelace");
+    REQUIRE(exif.value("copyright").toString() == "(c) 2024 Ada Lovelace");
+}
+
 TEST_CASE("Info leaves out settings a render would not read", "[cli][info]") {
     const test::TempDir directory;
     const auto raw = copyRaw(directory, "frame.dng");

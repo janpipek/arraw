@@ -128,6 +128,145 @@ def read_metadata(path: str | os.PathLike) -> ImageMetadata:
 def load(path: str | os.PathLike) -> ImageBuffer:
     """Decode an image file into a buffer."""
 
+class URational:
+    """
+    An unsigned fraction, as EXIF stores an exposure time or an f-number: a numerator and a denominator.
+    """
+
+    def __init__(self, numerator: int | None = 0, denominator: int | None = 1) -> None: ...
+
+    @property
+    def numerator(self) -> int: ...
+
+    @property
+    def denominator(self) -> int: ...
+
+    def __eq__(self, arg: URational, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> URational:
+        """Return a copy with the given attributes replaced."""
+
+    def value(self) -> float:
+        """The quotient as a float, or NaN when the denominator is zero."""
+
+class SRational:
+    """A signed fraction, as EXIF stores an exposure bias."""
+
+    def __init__(self, numerator: int | None = 0, denominator: int | None = 1) -> None: ...
+
+    @property
+    def numerator(self) -> int: ...
+
+    @property
+    def denominator(self) -> int: ...
+
+    def __eq__(self, arg: SRational, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> SRational:
+        """Return a copy with the given attributes replaced."""
+
+    def value(self) -> float:
+        """The quotient as a float, or NaN when the denominator is zero."""
+
+class GpsPosition:
+    """
+    Where a photograph was taken: signed decimal degrees (negative south and west) and metres above sea level.
+    """
+
+    def __init__(self, *, latitude: float | None = 0.0, longitude: float | None = 0.0, altitude: float | None = None) -> None: ...
+
+    @property
+    def latitude(self) -> float: ...
+
+    @property
+    def longitude(self) -> float: ...
+
+    @property
+    def altitude(self) -> float | None: ...
+
+    def __eq__(self, arg: GpsPosition, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> GpsPosition:
+        """Return a copy with the given attributes replaced."""
+
+class ExifInfo:
+    """
+    What a photograph's EXIF records about its capture; every field is None when absent.
+    """
+
+    def __init__(self, *, make: str | None = None, model: str | None = None, lens_model: str | None = None, date_time_original: str | None = None, offset_time_original: str | None = None, exposure_time: URational | None = None, f_number: URational | None = None, photographic_sensitivity: int | None = None, focal_length: URational | None = None, focal_length_in_35mm_film: int | None = None, exposure_bias_value: SRational | None = None, flash: int | None = None, gps: GpsPosition | None = None, artist: str | None = None, copyright: str | None = None) -> None: ...
+
+    @property
+    def make(self) -> str | None: ...
+
+    @property
+    def model(self) -> str | None: ...
+
+    @property
+    def lens_model(self) -> str | None: ...
+
+    @property
+    def date_time_original(self) -> str | None: ...
+
+    @property
+    def offset_time_original(self) -> str | None: ...
+
+    @property
+    def exposure_time(self) -> URational | None: ...
+
+    @property
+    def f_number(self) -> URational | None: ...
+
+    @property
+    def photographic_sensitivity(self) -> int | None: ...
+
+    @property
+    def focal_length(self) -> URational | None: ...
+
+    @property
+    def focal_length_in_35mm_film(self) -> int | None: ...
+
+    @property
+    def exposure_bias_value(self) -> SRational | None: ...
+
+    @property
+    def flash(self) -> int | None: ...
+
+    @property
+    def gps(self) -> GpsPosition | None: ...
+
+    @property
+    def artist(self) -> str | None: ...
+
+    @property
+    def copyright(self) -> str | None: ...
+
+    def __eq__(self, arg: ExifInfo, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> ExifInfo:
+        """Return a copy with the given attributes replaced."""
+
+def read_exif(path: str | os.PathLike) -> ExifInfo:
+    """
+    Read what a file records about its capture (EXIF). A file with no readable EXIF gives an ExifInfo with every field None, and a message on the 'arraw' logger; a file that does not exist raises.
+    """
+
 class WhiteBalanceMode(enum.Enum):
     """Where a photograph's white balance comes from."""
 

@@ -49,6 +49,22 @@ else()
     set(ARRAW_LIBRAW PkgConfig::LibRaw)
 endif()
 
+# EXIF reading, required for the same reason as LibRaw: capture information that
+# is there on one build and missing on another would be a bug nobody could
+# reproduce (ADR 028). exiv2 0.28 ships both a pkg-config file and a CMake
+# package; pkg-config is what Linux and macOS (Homebrew) package managers
+# provide, vcpkg provides the CMake package (exiv2::exiv2lib, with
+# exiv2-xmp as its own target), so each platform uses what it has. Linked
+# PRIVATE: no exiv2 type appears in include/. BMFF (CR3, HEIF) is on by
+# default in 0.28.
+if(WIN32)
+    find_package(exiv2 0.28 CONFIG REQUIRED)
+    set(ARRAW_EXIV2 Exiv2::exiv2lib)
+else()
+    pkg_check_modules(EXIV2 REQUIRED IMPORTED_TARGET exiv2>=0.28)
+    set(ARRAW_EXIV2 PkgConfig::EXIV2)
+endif()
+
 # On Windows vcpkg deploys the Qt DLLs next to each executable, but not the
 # plugins. Without a platform plugin a Q(Gui)Application aborts at startup;
 # without the JPEG or TIFF plugin QImage silently cannot read or write that
@@ -153,6 +169,8 @@ add_library(arraw STATIC
         src/core/Sidecar.cpp
         src/core/ImageBuffer.cpp
         src/core/ImageExport.cpp
+        include/ExifInfo.h
+        src/core/ExifInfo.cpp
         include/ImageImport.h
         src/core/ImageImport.cpp
         src/core/QtImage.cpp
@@ -175,7 +193,7 @@ target_include_directories(arraw PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/gpu)
 # no display and no QGuiApplication, only a QCoreApplication for plugin paths.
 # Private: nothing in include/ mentions Qt, and CMake still propagates the link
 # requirement to consumers of this static library.
-target_link_libraries(arraw PRIVATE Qt6::Core Qt6::Gui Qt6::Xml ${ARRAW_LIBRAW})
+target_link_libraries(arraw PRIVATE Qt6::Core Qt6::Gui Qt6::Xml ${ARRAW_LIBRAW} ${ARRAW_EXIV2})
 # qt_standard_project_setup() turns AUTOMOC on globally; the engine has no Qt
 # types, so opting out keeps that honest (and saves a moc pass).
 set_target_properties(arraw PROPERTIES AUTOMOC OFF)

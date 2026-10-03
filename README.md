@@ -13,10 +13,13 @@ with a Qt desktop application and a command line over it.
 
 ## Building
 
-Requires CMake 3.21+, a C++20 compiler, **Qt 6.10**, and **LibRaw** (`libraw-dev`
-on Ubuntu, `libraw-devel` on Fedora). LibRaw is required rather than optional, so
+Requires CMake 3.21+, a C++20 compiler, **Qt 6.10**, **LibRaw** (`libraw-dev`
+on Ubuntu, `libraw-devel` on Fedora) and **exiv2** 0.28 or newer (`libexiv2-dev`
+on Ubuntu, `exiv2-devel` on Fedora). LibRaw is required rather than optional, so
 that every build decodes a RAW identically — see
-[ADR 005](docs/adr/005-raw-import-through-libraw.md).
+[ADR 005](docs/adr/005-raw-import-through-libraw.md); exiv2 is, so that every
+build reads the same capture information — see
+[ADR 028](docs/adr/028-exif-is-read-through-exiv2-into-a-typed-struct.md).
 
 ```bash
 just build     # configure and build (Debug)
@@ -143,6 +146,7 @@ arraw links libraries under their own terms, all compatible with GPL-3.0-or-late
 |---|---|---|
 | [Qt 6](https://www.qt.io/) | LGPL-3.0-or-later | Application framework, image codecs |
 | [LibRaw](https://www.libraw.org/) | LGPL-2.1 / CDDL-1.0 | RAW decoding |
+| [exiv2](https://exiv2.org/) | GPL-2.0-or-later | EXIF reading (later also metadata writing) |
 | [Catch2](https://github.com/catchorg/Catch2) | BSL-1.0 | Test framework (not distributed) |
 
 A distributed binary must carry these licence texts alongside arraw's own.

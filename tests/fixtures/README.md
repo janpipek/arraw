@@ -7,7 +7,7 @@ Two generators, one per input kind:
 | Script | Produces | Read by |
 |---|---|---|
 | `make_fixtures.py` | `*.png` — a 61×41 test card | `test_RoundTrip.cpp` |
-| `make_raw_fixtures.py` | `*.dng` — synthetic 32×24 RAWs | `test_RawImport.cpp` |
+| `make_raw_fixtures.py` | `*.dng` — synthetic 32×24 RAWs | `test_RawImport.cpp`, `test_ExifInfo.cpp` |
 
 The **generated files are committed and are what the tests read**. The scripts
 are committed so that a reader can see what is in them and why, and so that new
@@ -108,6 +108,7 @@ first of these.
 | `linear-32x24-skewed.dng` | LinearRaw, 3 spp | (0.5, 1.0, 0.8) | none | the camera matrix and its daylight calibration |
 | `linear-32x24-skewed-nowb.dng` | LinearRaw, 3 spp | **absent** | none | recorded gains against the gains actually applied |
 | `preview-32x24.dng` | RGB preview + LinearRaw sub-IFD | unity | none | *which image* was decoded |
+| `exif-32x24.dng` | LinearRaw, 3 spp, EXIF and GPS IFDs | unity | none | `readExif`: every field of `ExifInfo` (ADR 028) |
 
 `linear-32x24-skewed.dng` is the only one whose camera is not sRGB. Its
 `ColorMatrix1` has scaled rows — red doubled, blue at four fifths — which LibRaw

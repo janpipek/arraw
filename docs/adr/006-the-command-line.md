@@ -170,9 +170,16 @@ export uses. As in export, an unreadable input or sidecar fails that file
 (exit 1) while the rest are shown, and `--no-sidecar` opens the file bare.
 Nothing is ever written.
 
-The EXIF of the camera (make, model, lens, exposure, date) is not shown: it
-awaits the metadata reader deferred in ADR 005. Until then `info` reports only
-what opening a photograph already knows.
+The EXIF of the camera is shown from 2026-10-03 (ADR 028): after the
+encoding line, one `label: text` line for each of `camera`, `lens`, `exposure`
+(`1/250 s  f/2.8  ISO 400  35 mm (52 mm equivalent)`), `exposure bias`, `flash`,
+`taken` (with the UTC offset), `GPS` (latitude, longitude and altitude, signed)
+`artist` and `copyright` that the file records; a file that records none shows
+none of them and prints no notice. `--json` gives an `exif` object per file with
+the fields present, named as in `ExifInfo` (`make`, `lensModel`, `exposureTime`,
+...), rationals as `{"numerator": n, "denominator": d}` and `gps` as
+`{"latitude", "longitude", "altitude"}`. A file whose EXIF exiv2 failed to read
+is still shown, with a `exif_unreadable` warning.
 
 `info` also says which other tools left information in the sidecar, from what
 reading it already finds (ADR 019): an `other tools:` block with

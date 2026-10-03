@@ -23,6 +23,7 @@ add_executable(arraw-tests
         test_DevelopState.cpp
         test_DisplayImage.cpp
         test_EditSession.cpp
+        test_ExifInfo.cpp
         test_ExportQueue.cpp
         test_ExportSettings.cpp
         test_Geometry.cpp
@@ -71,7 +72,9 @@ target_compile_definitions(arraw-tests
 # the one place outside arraw-gpu that names it, because the failures it covers
 # cannot be caused through GpuContext.
 target_link_libraries(arraw-tests
-        PRIVATE arraw arraw-gpu arraw-app-core arraw-cli-core Catch2::Catch2 Qt6::Gui Qt6::GuiPrivate Qt6::Xml)
+        PRIVATE arraw arraw-gpu arraw-app-core arraw-cli-core Catch2::Catch2 Qt6::Gui Qt6::GuiPrivate Qt6::Xml
+        # exiv2 itself, to write the EXIF tags test_ExifInfo.cpp reads back.
+        ${ARRAW_EXIV2})
 set_target_properties(arraw-tests PROPERTIES AUTOMOC OFF)
 arraw_deploy_qt_plugins(arraw-tests)
 

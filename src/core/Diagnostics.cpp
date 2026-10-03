@@ -89,6 +89,8 @@ std::string arraw::describe(const Diagnostic& diagnostic) {
                "; reading what it can";
     case Notice::SidecarUnreadable:
         return valueAt(diagnostic, 0) + "; opened with default settings and no marks";
+    case Notice::ExifUnreadable:
+        return valueAt(diagnostic, 0) + "; no capture information is shown";
     case Notice::OptionIgnored:
         return valueAt(diagnostic, 0) + " does nothing without " + valueAt(diagnostic, 1);
     case Notice::CropReset:

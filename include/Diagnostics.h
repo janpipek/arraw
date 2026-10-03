@@ -96,6 +96,10 @@ enum class Notice {
     /// edit changed the rotation or flips it was drawn in: what changed.
     CropReset,
 
+    /// @brief A photograph's EXIF could not be read, or it records none, so
+    /// no capture information is shown: the reason.
+    ExifUnreadable,
+
     /// @brief An option was given that has no effect without another one: the
     /// option, then the one it needs.
     OptionIgnored,

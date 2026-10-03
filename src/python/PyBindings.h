@@ -37,6 +37,9 @@ using namespace nb::literals;
 /// @brief Binds images, pixel formats, colour encodings and metadata.
 void bindImage(nb::module_& module);
 
+/// @brief Binds the EXIF value classes and `read_exif`.
+void bindExif(nb::module_& module);
+
 /// @brief Binds the settings classes, their enumerations and the descriptor table.
 void bindSettings(nb::module_& module);
 

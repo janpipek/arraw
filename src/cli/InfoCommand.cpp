@@ -9,6 +9,7 @@
 #include <ColorEncoding.h>
 #include <DevelopSettings.h>
 #include <Diagnostics.h>
+#include <ExifInfo.h>
 #include <ImageImport.h>
 #include <ImageOrientation.h>
 #include <Photo.h>
@@ -20,6 +21,7 @@
 #include <QStringList>
 
 #include <charconv>
+#include <cmath>
 #include <cstddef>
 #include <exception>
 #include <filesystem>
@@ -57,6 +59,9 @@ struct FileReport {
     /// @brief Whether the sidecar was read; false when it was ignored.
     bool sidecarRead = true;
 
+    /// @brief What the file records about its capture; empty when it records none.
+    ExifInfo exif;
+
     /// @brief Program named in the sidecar, when it was read and says.
     std::optional<std::string> creatorTool;
 
@@ -81,7 +86,9 @@ void configure(QCommandLineParser& parser) {
         "Defaults, a rating of 0 and no label are not listed; --all lists every setting.\n"
         "A RAW also shows its camera colour encoding. Settings a render would not\n"
         "read (a temperature without Custom white balance, any on a non-RAW) are\n"
-        "not listed. Camera metadata beyond that is not read yet. Marks and\n"
+        "not listed. The camera, lens, exposure, time and place of the capture are\n"
+        "shown when the file records them (EXIF; --json gives an \"exif\" object).\n"
+        "Marks and\n"
         "settings arraw cannot store are not shown, nor is other tools' XMP beyond\n"
         "which tools wrote in the sidecar (the program that wrote it, and each\n"
         "other namespace with its prefix and number of properties).\n"
@@ -236,6 +243,160 @@ std::string jsonString(std::string_view text) {
     return result + '"';
 }
 
+/// @brief Rounds to a number of decimals and spells the result as a number.
+std::string rounded(double value, int decimals) {
+    const double scale = std::pow(10.0, decimals);
+    return number(std::round(value * scale) / scale);
+}
+
+/// @brief Spells a shutter time: "1/250 s" for a fraction of a second, else "1.3 s".
+std::string exposureText(const URational& time) {
+    const double seconds = time.value();
+    if (!(seconds > 0.0)) {
+        return std::to_string(time.numerator) + "/" + std::to_string(time.denominator) + " s";
+    }
+    if (seconds >= 1.0) {
+        return rounded(seconds, 1) + " s";
+    }
+    return "1/" + rounded(1.0 / seconds, 0) + " s";
+}
+
+/// @brief Lists the capture information in the order of the report, as "label: text" lines.
+std::vector<std::pair<std::string, std::string>> exifLines(const ExifInfo& exif) {
+    std::vector<std::pair<std::string, std::string>> lines;
+    if (exif.make || exif.model) {
+        // Cameras often repeat the maker in the model ("Canon Canon EOS R5").
+        std::string camera = exif.make.value_or("");
+        const std::string model = exif.model.value_or("");
+        if (!model.empty() && !camera.empty() && model.starts_with(camera)) {
+            camera.clear();
+        }
+        camera += camera.empty() || model.empty() ? "" : " ";
+        lines.emplace_back("camera", camera + model);
+    }
+    if (exif.lensModel) {
+        lines.emplace_back("lens", *exif.lensModel);
+    }
+    std::string exposure;
+    const auto add = [&exposure](const std::string& part) {
+        exposure += exposure.empty() ? "" : "  ";
+        exposure += part;
+    };
+    if (exif.exposureTime) {
+        add(exposureText(*exif.exposureTime));
+    }
+    if (exif.fNumber) {
+        add("f/" + rounded(exif.fNumber->value(), 1));
+    }
+    if (exif.photographicSensitivity) {
+        add("ISO " + std::to_string(*exif.photographicSensitivity));
+    }
+    if (exif.focalLength) {
+        std::string focal = rounded(exif.focalLength->value(), 1) + " mm";
+        if (exif.focalLengthIn35mmFilm) {
+            focal += " (" + std::to_string(*exif.focalLengthIn35mmFilm) + " mm equivalent)";
+        }
+        add(focal);
+    }
+    if (!exposure.empty()) {
+        lines.emplace_back("exposure", exposure);
+    }
+    if (exif.exposureBiasValue) {
+        lines.emplace_back("exposure bias", rounded(exif.exposureBiasValue->value(), 2) + " EV");
+    }
+    if (exif.flash) {
+        lines.emplace_back("flash", (*exif.flash & 1U) != 0 ? "fired" : "did not fire");
+    }
+    if (exif.dateTimeOriginal) {
+        lines.emplace_back("taken",
+                           *exif.dateTimeOriginal +
+                               (exif.offsetTimeOriginal ? " " + *exif.offsetTimeOriginal : ""));
+    }
+    if (exif.gps) {
+        std::string place = rounded(exif.gps->latitude, 4) + ", " + rounded(exif.gps->longitude, 4);
+        if (exif.gps->altitude) {
+            place += ", " + rounded(*exif.gps->altitude, 1) + " m";
+        }
+        lines.emplace_back("GPS", place);
+    }
+    if (exif.artist) {
+        lines.emplace_back("artist", *exif.artist);
+    }
+    if (exif.copyright) {
+        lines.emplace_back("copyright", *exif.copyright);
+    }
+    return lines;
+}
+
+/// @brief Spells an optional fraction as a JSON object, or null.
+template <class Rational> std::string jsonRational(const std::optional<Rational>& rational) {
+    return rational ? "{\"numerator\": " + std::to_string(rational->numerator) +
+                          ", \"denominator\": " + std::to_string(rational->denominator) + "}"
+                    : "null";
+}
+
+/// @brief Spells the capture information as a JSON object of the fields present.
+std::string jsonOfExif(const ExifInfo& exif) {
+    std::string text = "{";
+    const auto add = [&text](std::string_view key, const std::string& value) {
+        text += (text.size() > 1 ? ", " : "") + jsonString(key) + ": " + value;
+    };
+    const auto addText = [&add](std::string_view key, const std::optional<std::string>& value) {
+        if (value) {
+            add(key, jsonString(*value));
+        }
+    };
+    const auto addNumber = [&add](std::string_view key, const auto& value) {
+        if (value) {
+            add(key, std::to_string(*value));
+        }
+    };
+    const auto addRational = [&add](std::string_view key, const auto& value) {
+        if (value) {
+            add(key, jsonRational(value));
+        }
+    };
+    addText("make", exif.make);
+    addText("model", exif.model);
+    addText("lensModel", exif.lensModel);
+    addText("dateTimeOriginal", exif.dateTimeOriginal);
+    addText("offsetTimeOriginal", exif.offsetTimeOriginal);
+    addRational("exposureTime", exif.exposureTime);
+    addRational("fNumber", exif.fNumber);
+    addNumber("photographicSensitivity", exif.photographicSensitivity);
+    addRational("focalLength", exif.focalLength);
+    addNumber("focalLengthIn35mmFilm", exif.focalLengthIn35mmFilm);
+    addRational("exposureBiasValue", exif.exposureBiasValue);
+    addNumber("flash", exif.flash);
+    if (exif.gps) {
+        add("gps", "{\"latitude\": " + number(exif.gps->latitude) +
+                       ", \"longitude\": " + number(exif.gps->longitude) + ", \"altitude\": " +
+                       (exif.gps->altitude ? number(*exif.gps->altitude) : "null") + "}");
+    }
+    addText("artist", exif.artist);
+    addText("copyright", exif.copyright);
+    return text + "}";
+}
+
+/// @brief A log that passes on what went wrong and drops what is merely so.
+///
+/// A file with no EXIF is not a problem `info` should print a line about: the
+/// report shows no capture lines, and that says it. A file whose EXIF could
+/// not be read is another matter.
+class WarningsOnly final : public DiagnosticLog {
+public:
+    explicit WarningsOnly(DiagnosticLog& target) : target_(target) {}
+
+    void record(const Diagnostic& diagnostic) override {
+        if (diagnostic.severity != Severity::Info) {
+            target_.record(diagnostic);
+        }
+    }
+
+private:
+    DiagnosticLog& target_;
+};
+
 /// @brief One setting of a photograph that is listed: its row and value.
 struct ListedSetting {
     const FieldDescriptor* descriptor;
@@ -264,6 +425,9 @@ void writeText(std::ostream& out, const FileReport& report, bool all) {
         << "  orientation: " << orientationName(metadata.orientation) << '\n';
     if (isRaw(metadata)) {
         out << "  encoding: camera\n";
+    }
+    for (const auto& [label, line] : exifLines(report.exif)) {
+        out << "  " << label << ": " << line << '\n';
     }
     out << "  sidecar: " << (report.sidecar ? pathText(*report.sidecar) : "none")
         << (report.sidecar && !report.sidecarRead ? " (ignored)" : "") << '\n';
@@ -313,6 +477,7 @@ std::string jsonOfReport(const FileReport& report, bool all) {
         ", \"height\": " + std::to_string(metadata.size.height) +
         "}, \"orientation\": " + jsonString(orientationName(metadata.orientation)) +
         ", \"encoding\": " + (isRaw(metadata) ? "\"camera\"" : "null") +
+        ", \"exif\": " + jsonOfExif(report.exif) +
         ", \"sidecar\": " + (report.sidecar ? jsonString(pathText(*report.sidecar)) : "null") +
         ", \"sidecarRead\": " + (report.sidecarRead ? "true" : "false") +
         ", \"marks\": {\"rating\": " + std::to_string(marks.rating) +
@@ -349,12 +514,11 @@ std::optional<std::filesystem::path> findSidecar(const std::filesystem::path& in
 /// @brief Opens one photograph the way the request asks, failing on an unreadable sidecar.
 FileReport open(const InfoRequest& request, const std::filesystem::path& input,
                 DiagnosticLog& log) {
+    WarningsOnly exifLog(log);
     if (!request.useSidecars) {
-        return {Photo(input, readImageMetadata(input, log)),
-                findSidecar(input),
-                false,
-                std::nullopt,
-                {}};
+        Photo photo(input, readImageMetadata(input, log));
+        return {std::move(photo),         findSidecar(input), false,
+                readExif(input, exifLog), std::nullopt,       {}};
     }
     cli::SidecarWatch watch(log);
     ImageMetadata metadata = readImageMetadata(input, watch);
@@ -378,6 +542,7 @@ FileReport open(const InfoRequest& request, const std::filesystem::path& input,
                                : Photo(input, std::move(metadata)),
                       sidecar,
                       true,
+                      readExif(input, exifLog),
                       std::nullopt,
                       {}};
     if (contents) {
