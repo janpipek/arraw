@@ -114,11 +114,9 @@ QWidget* DevelopPanel::buildHslGroup() {
 
 QWidget* DevelopPanel::buildBlackAndWhiteGroup() {
     auto* group = new QGroupBox(tr("Black && White"), this);
+    // On the group, so it shows over the title; the rows keep their own tips.
+    group->setToolTip(tr("How each colour becomes grey: drag a band darker or lighter."));
     auto* groupLayout = new QVBoxLayout(group);
-    auto* hint =
-        new QLabel(tr("How each colour becomes grey: drag a band darker or lighter."), group);
-    hint->setWordWrap(true);
-    groupLayout->addWidget(hint);
     for (const std::string_view key : blackAndWhiteKeys()) {
         addRow(key, group);
     }
