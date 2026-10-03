@@ -11,12 +11,19 @@ class QLabel;
 
 namespace arraw::app {
 
+struct DebugLog;
+class DebugWindow;
+
 /// @brief Top-level window of the desktop application.
 class MainWindow : public QMainWindow {
     Q_OBJECT
     Q_DISABLE_COPY_MOVE(MainWindow)
 public:
-    explicit MainWindow(QWidget* parent = nullptr);
+    /// @brief Makes the window.
+    /// @param debugLog Log the window's diagnostics go to, and the debug
+    /// window shows; must outlive the window.
+    /// @param parent Parent widget, usually none.
+    explicit MainWindow(DebugLog& debugLog, QWidget* parent = nullptr);
 
 private:
     /// @brief Builds the menu bar and the actions it offers.
@@ -24,6 +31,9 @@ private:
 
     /// @brief Builds the scrollable area the photograph is shown in.
     void buildImageView();
+
+    /// @brief Shows the debug window, making it on first use.
+    void showDebugWindow();
 
     /// @brief Asks the user for a photograph and opens it.
     void openFileWithDialog();
@@ -36,6 +46,8 @@ private:
     /// @throws std::exception if the photograph cannot be decoded or rendered.
     void showPhoto(Photo photo);
 
+    DebugLog& debugLog_;
+    DebugWindow* debugWindow_ = nullptr;
     QLabel* imageView_ = nullptr;
 
     std::optional<EditSession> editSession_;

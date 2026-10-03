@@ -1,11 +1,22 @@
 #include "DebugDiagnostics.h"
 
+#include "DebugLog.h"
+
 #include <QDebug>
+#include <QLoggingCategory>
 #include <QString>
 
 namespace arraw::app {
 
+namespace {
+
+Q_LOGGING_CATEGORY(diagnosticsLog, diagnosticsCategory)
+
+} // namespace
+
 void DebugDiagnostics::record(const Diagnostic& diagnostic) {
+    model_.append(diagnostic);
+
     // Through UTF-16, as everywhere a path meets a QString: the narrow
     // string() is in the ANSI code page on Windows.
     const QString about = diagnostic.subject
@@ -15,13 +26,13 @@ void DebugDiagnostics::record(const Diagnostic& diagnostic) {
 
     switch (diagnostic.severity) {
     case Severity::Info:
-        qInfo().noquote() << message;
+        qCInfo(diagnosticsLog).noquote() << message;
         return;
     case Severity::Warning:
-        qWarning().noquote() << message;
+        qCWarning(diagnosticsLog).noquote() << message;
         return;
     case Severity::Error:
-        qCritical().noquote() << message;
+        qCCritical(diagnosticsLog).noquote() << message;
         return;
     }
 }

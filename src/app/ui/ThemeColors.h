@@ -45,6 +45,10 @@ inline const QColor brightText{0xff, 0xff, 0xff};
 inline const QColor disabledText{0x6a, 0x6a, 0x6a};
 /// Placeholder text in empty entry fields.
 inline const QColor placeholderText{0x80, 0x80, 0x80};
+/// Text of warnings, such as a log's warning rows; muted, like the accent.
+inline const QColor warningText{0xd6, 0xa6, 0x4a};
+/// Text of errors, such as a log's error rows; muted, like the accent.
+inline const QColor errorText{0xe0, 0x6c, 0x64};
 
 /// Toolbar separators: a dim divider only a touch off the window grey.
 inline const QColor separator{0x3a, 0x3a, 0x3a};

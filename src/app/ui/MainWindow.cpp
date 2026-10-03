@@ -1,6 +1,8 @@
 #include "MainWindow.h"
 
 #include "DebugDiagnostics.h"
+#include "DebugLog.h"
+#include "DebugWindow.h"
 #include "DisplayImage.h"
 
 #include <Develop.h>
@@ -27,7 +29,8 @@
 
 namespace arraw::app {
 
-MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
+MainWindow::MainWindow(DebugLog& debugLog, QWidget* parent)
+    : QMainWindow(parent), debugLog_(debugLog) {
     buildMenu();
     buildImageView();
 }
@@ -42,6 +45,22 @@ void MainWindow::buildMenu() {
     QAction* quitAction = fileMenu->addAction(tr("&Quit"));
     quitAction->setShortcut(QKeySequence::Quit);
     connect(quitAction, &QAction::triggered, this, [this] { close(); });
+
+    QMenu* viewMenu = menuBar()->addMenu(tr("&View"));
+    QAction* debugAction = viewMenu->addAction(tr("&Debug Log"));
+    debugAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_D));
+    connect(debugAction, &QAction::triggered, this, &MainWindow::showDebugWindow);
+    // Also on the window, so the shortcut outlives a hidden menu bar.
+    addAction(debugAction);
+}
+
+void MainWindow::showDebugWindow() {
+    if (!debugWindow_) {
+        debugWindow_ = new DebugWindow(debugLog_, this);
+    }
+    debugWindow_->show();
+    debugWindow_->raise();
+    debugWindow_->activateWindow();
 }
 
 void MainWindow::buildImageView() {
@@ -72,7 +91,7 @@ void MainWindow::openFileWithDialog() {
     // The one place that can tell the user: an exception must not leave a
     // function Qt's event loop called, which ends in std::terminate.
     try {
-        DebugDiagnostics log;
+        DebugDiagnostics log(debugLog_.diagnostics);
         showPhoto(openPhoto(path, log));
     } catch (const std::exception& error) {
         QMessageBox::warning(this, tr("Cannot Open Photograph"),
@@ -81,7 +100,7 @@ void MainWindow::openFileWithDialog() {
 }
 
 void MainWindow::showPhoto(Photo photo) {
-    DebugDiagnostics log;
+    DebugDiagnostics log(debugLog_.diagnostics);
 
     // Everything that can throw, before anything changes.
     const ImageBuffer decoded = loadImage(photo.path(), log);

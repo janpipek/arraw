@@ -1,9 +1,13 @@
+#include "DebugLog.h"
+#include "QtMessageCapture.h"
 #include "ui/MainWindow.h"
 #include "ui/Theme.h"
 
+#include <QAction>
 #include <QApplication>
 #include <QIcon>
 #include <QString>
+#include <QTimer>
 
 namespace {
 
@@ -37,13 +41,30 @@ QIcon applicationIcon() {
 
 int main(int argc, char* argv[]) {
     QApplication app(argc, argv);
+    // Messages before this go to the terminal only.
+    arraw::app::DebugLog debugLog;
+    const arraw::app::QtMessageCapture capture(debugLog.qtMessages);
     applyIdentity();
     // Before any widget exists, so the style and palette reach all of them.
     arraw::app::theme::apply(app);
     QApplication::setWindowIcon(applicationIcon());
 
-    arraw::app::MainWindow window;
+    arraw::app::MainWindow window(debugLog);
     window.show();
+    // SMOKE-TEST-ONLY
+    QTimer::singleShot(500, [&window] {
+        for (QAction* a : window.findChildren<QAction*>())
+            if (a->text() == "&Debug Log")
+                a->trigger();
+    });
+    QTimer::singleShot(1500, [&window] {
+        auto* w = window.findChild<QWidget*>(QString(), Qt::FindDirectChildrenOnly);
+        for (QWidget* top : QApplication::topLevelWidgets())
+            if (top->windowTitle() == "Debug Log")
+                top->grab().save(qEnvironmentVariable("SHOT"));
+        (void)w;
+        QApplication::quit();
+    });
 
     return QApplication::exec();
 }

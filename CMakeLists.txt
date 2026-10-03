@@ -223,8 +223,14 @@ endif()
 add_executable(arraw-ui src/app/main.cpp
         src/app/DebugDiagnostics.cpp
         src/app/DebugDiagnostics.h
+        src/app/DebugLog.cpp
+        src/app/DebugLog.h
         src/app/DisplayImage.cpp
         src/app/DisplayImage.h
+        src/app/QtMessageCapture.cpp
+        src/app/QtMessageCapture.h
+        src/app/ui/DebugWindow.cpp
+        src/app/ui/DebugWindow.h
         src/app/ui/MainWindow.cpp
         src/app/ui/MainWindow.h
         src/app/ui/Theme.cpp
