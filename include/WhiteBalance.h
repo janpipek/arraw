@@ -1,6 +1,8 @@
 #pragma once
 
 #include <ColorEncoding.h>
+#include <DevelopState.h>
+#include <ImageBuffer.h>
 
 namespace arraw {
 
@@ -85,5 +87,37 @@ inline constexpr float tintLimit = 150.0F;
 /// @param camera Sensor and the gains its file recorded.
 /// @return The light those gains neutralise.
 [[nodiscard]] ColourTemperature asShotTemperature(const CameraNative& camera);
+
+/// @brief Default half-width of the window a pick averages, in source pixels.
+inline constexpr int defaultPickRadius = 3;
+
+/// @brief Reads which light makes the source neutral around a point of the developed picture.
+///
+/// The eyedropper of a white balance panel. The point is given where the
+/// photographer sees it, in the developed and cropped frame, and is carried
+/// back to the decoded pixels through the same geometry a render resolves
+/// (orientation, rotation, straighten, flips, crop; ADR 009). The pixels in a
+/// window around it are averaged in the camera's own channels, and the answer
+/// is the light whose gains turn that average neutral.
+///
+/// The answer means what a stored temperature means. The decode has already
+/// multiplied the channels by @ref CameraNative::appliedMultipliers, so the
+/// gains that make the average neutral are a *change* from those; the light
+/// returned is the one whose full gains are that change times the applied
+/// ones, which is precisely the relation develop resolves a Custom temperature
+/// with (ADR 007). Storing the result as Custom therefore turns the picked
+/// spot neutral, whatever the settings the photograph is shown with now.
+/// @param source Decoded photograph, in a camera's own encoding.
+/// @param state Develop state whose geometry frames the point.
+/// @param x Horizontal position in the developed frame, 0 at the left edge to 1 at the right.
+/// @param y Vertical position in the developed frame, 0 at the top edge to 1 at the bottom.
+/// @param radius Half-width of the averaged window in source pixels, clamped at the edges.
+/// @return The light, with kelvin and tint held inside the modelled range.
+/// @throws std::invalid_argument if @p source is not camera-native, the point lies outside
+/// the frame or is not finite, @p radius is negative, or the window has no
+/// positive signal in some channel.
+[[nodiscard]] ColourTemperature neutralTemperatureAt(const ImageBuffer& source,
+                                                     const DevelopState& state, double x, double y,
+                                                     int radius = defaultPickRadius);
 
 } // namespace arraw

@@ -135,3 +135,32 @@ def test_developed_view_survives_deletion(dng):
     del out
     gc.collect()
     assert np.array_equal(view, expected)
+
+
+def test_half_size_load_halves_a_raw(bayer_dng, dng):
+    for path in (bayer_dng, dng):
+        full = arraw.load(path)
+        half = arraw.load(path, half_size=True)
+        assert (half.size.width, half.size.height) == (full.size.width // 2, full.size.height // 2)
+        assert half.format == full.format
+        assert half.orientation == full.orientation
+        assert half.encoding == full.encoding
+
+
+def test_half_size_is_ignored_for_other_files(png):
+    assert arraw.load(png, half_size=True).size == arraw.load(png).size
+
+
+def test_embedded_preview_of_a_raw(fixtures):
+    preview = arraw.read_embedded_preview(fixtures / "preview-32x24.dng", 4)
+    assert preview is not None
+    assert preview.size == arraw.ImageSize(4, 3)
+    assert preview.format == arraw.PixelFormat.RGBA_U8
+    assert preview.encoding == arraw.NamedEncoding.SRGB
+    assert preview.orientation == arraw.ImageOrientation.NORMAL
+    assert preview.pixels.shape == (3, 4, 4)
+
+
+def test_no_embedded_preview_is_none(png, tmp_path):
+    assert arraw.read_embedded_preview(png, 256) is None
+    assert arraw.read_embedded_preview(tmp_path / "absent.jpg", 256) is None

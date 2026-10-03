@@ -1,5 +1,7 @@
 #include "GeometryPlan.h"
 
+#include "TimingTrace.h"
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -294,6 +296,7 @@ GeometryPlan arraw::geometryPlanFor(ImageSize size, ImageOrientation orientation
 /// `packGeometry` (GpuPlan.cpp), which composes the per-pixel position below into
 /// one affine map; a change to the mapping here changes both.
 ImageBuffer arraw::applyGeometry(ImageBuffer source, const GeometryPlan& plan) {
+    const detail::TimingSpan timing("cpu.geometry");
     if (source.size() != plan.sourceSize || source.format() != workingFormat) {
         throw std::invalid_argument("Geometry requires matching developed float pixels");
     }

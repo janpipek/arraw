@@ -1,6 +1,6 @@
 """Python bindings for the arraw RAW processing engine."""
 
-from collections.abc import Sequence
+from collections.abc import Sequence, Set
 import enum
 import os
 import pathlib
@@ -125,8 +125,154 @@ class ImageBuffer:
 def read_metadata(path: str | os.PathLike) -> ImageMetadata:
     """Read what a file declares about itself, without decoding its pixels."""
 
-def load(path: str | os.PathLike) -> ImageBuffer:
-    """Decode an image file into a buffer."""
+def load(path: str | os.PathLike, half_size: bool = False) -> ImageBuffer:
+    """
+    Decode an image file into a buffer. With half_size a RAW is decoded at half its width and height, without demosaicing, and the buffer is that much smaller than read_metadata says; other files ignore it.
+    """
+
+def read_embedded_preview(path: str | os.PathLike, max_edge: int) -> ImageBuffer | None:
+    """
+    Read the preview a file embeds, upright, in sRGB and no longer than max_edge on its longer edge (0 keeps the largest at its own size). None if the file has no preview, or cannot be read, which is also a message on the 'arraw' logger.
+    """
+
+class URational:
+    """
+    An unsigned fraction, as EXIF stores an exposure time or an f-number: a numerator and a denominator.
+    """
+
+    def __init__(self, numerator: int | None = 0, denominator: int | None = 1) -> None: ...
+
+    @property
+    def numerator(self) -> int: ...
+
+    @property
+    def denominator(self) -> int: ...
+
+    def __eq__(self, arg: URational, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> URational:
+        """Return a copy with the given attributes replaced."""
+
+    def value(self) -> float:
+        """The quotient as a float, or NaN when the denominator is zero."""
+
+class SRational:
+    """A signed fraction, as EXIF stores an exposure bias."""
+
+    def __init__(self, numerator: int | None = 0, denominator: int | None = 1) -> None: ...
+
+    @property
+    def numerator(self) -> int: ...
+
+    @property
+    def denominator(self) -> int: ...
+
+    def __eq__(self, arg: SRational, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> SRational:
+        """Return a copy with the given attributes replaced."""
+
+    def value(self) -> float:
+        """The quotient as a float, or NaN when the denominator is zero."""
+
+class GpsPosition:
+    """
+    Where a photograph was taken: signed decimal degrees (negative south and west) and metres above sea level.
+    """
+
+    def __init__(self, *, latitude: float | None = 0.0, longitude: float | None = 0.0, altitude: float | None = None) -> None: ...
+
+    @property
+    def latitude(self) -> float: ...
+
+    @property
+    def longitude(self) -> float: ...
+
+    @property
+    def altitude(self) -> float | None: ...
+
+    def __eq__(self, arg: GpsPosition, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> GpsPosition:
+        """Return a copy with the given attributes replaced."""
+
+class ExifInfo:
+    """
+    What a photograph's EXIF records about its capture; every field is None when absent.
+    """
+
+    def __init__(self, *, make: str | None = None, model: str | None = None, lens_model: str | None = None, date_time_original: str | None = None, offset_time_original: str | None = None, exposure_time: URational | None = None, f_number: URational | None = None, photographic_sensitivity: int | None = None, focal_length: URational | None = None, focal_length_in_35mm_film: int | None = None, exposure_bias_value: SRational | None = None, flash: int | None = None, gps: GpsPosition | None = None, artist: str | None = None, copyright: str | None = None) -> None: ...
+
+    @property
+    def make(self) -> str | None: ...
+
+    @property
+    def model(self) -> str | None: ...
+
+    @property
+    def lens_model(self) -> str | None: ...
+
+    @property
+    def date_time_original(self) -> str | None: ...
+
+    @property
+    def offset_time_original(self) -> str | None: ...
+
+    @property
+    def exposure_time(self) -> URational | None: ...
+
+    @property
+    def f_number(self) -> URational | None: ...
+
+    @property
+    def photographic_sensitivity(self) -> int | None: ...
+
+    @property
+    def focal_length(self) -> URational | None: ...
+
+    @property
+    def focal_length_in_35mm_film(self) -> int | None: ...
+
+    @property
+    def exposure_bias_value(self) -> SRational | None: ...
+
+    @property
+    def flash(self) -> int | None: ...
+
+    @property
+    def gps(self) -> GpsPosition | None: ...
+
+    @property
+    def artist(self) -> str | None: ...
+
+    @property
+    def copyright(self) -> str | None: ...
+
+    def __eq__(self, arg: ExifInfo, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> ExifInfo:
+        """Return a copy with the given attributes replaced."""
+
+def read_exif(path: str | os.PathLike) -> ExifInfo:
+    """
+    Read what a file records about its capture (EXIF). A file with no readable EXIF gives an ExifInfo with every field None, and a message on the 'arraw' logger; a file that does not exist raises.
+    """
 
 class WhiteBalanceMode(enum.Enum):
     """Where a photograph's white balance comes from."""
@@ -154,6 +300,10 @@ class SettingGroup(enum.Enum):
     TONE = 1
 
     GEOMETRY = 2
+
+    HSL = 3
+
+    BLACK_AND_WHITE = 4
 
 class Applicability(enum.Enum):
     """Whether a setting means anything for every photograph."""
@@ -209,7 +359,7 @@ class ToneSettings:
 class ColorSettings:
     """Photographic colour adjustments."""
 
-    def __init__(self, *, white_balance: WhiteBalanceMode = WhiteBalanceMode.AS_SHOT, temperature: float | None | None = None, tint: float | None | None = None) -> None: ...
+    def __init__(self, *, white_balance: WhiteBalanceMode = WhiteBalanceMode.AS_SHOT, temperature: float | None | None = None, tint: float | None | None = None, saturation: float | None = 0.0, vibrance: float | None = 0.0) -> None: ...
 
     @property
     def white_balance(self) -> WhiteBalanceMode: ...
@@ -220,6 +370,12 @@ class ColorSettings:
     @property
     def tint(self) -> float | None: ...
 
+    @property
+    def saturation(self) -> float: ...
+
+    @property
+    def vibrance(self) -> float: ...
+
     def __eq__(self, arg: ColorSettings, /) -> bool: ...
 
     def __hash__(self) -> int: ...
@@ -227,6 +383,108 @@ class ColorSettings:
     def __repr__(self) -> str: ...
 
     def replace(self, **kwargs) -> ColorSettings:
+        """Return a copy with the given attributes replaced."""
+
+class HueBand:
+    """Hue, saturation and luminance shifts of one band of hues."""
+
+    def __init__(self, *, hue: float | None = 0.0, saturation: float | None = 0.0, luminance: float | None = 0.0) -> None: ...
+
+    @property
+    def hue(self) -> float: ...
+
+    @property
+    def saturation(self) -> float: ...
+
+    @property
+    def luminance(self) -> float: ...
+
+    def __eq__(self, arg: HueBand, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> HueBand:
+        """Return a copy with the given attributes replaced."""
+
+class HslSettings:
+    """Per-hue colour adjustments over eight bands."""
+
+    def __init__(self, *, red: HueBand | None = None, orange: HueBand | None = None, yellow: HueBand | None = None, green: HueBand | None = None, aqua: HueBand | None = None, blue: HueBand | None = None, purple: HueBand | None = None, magenta: HueBand | None = None) -> None: ...
+
+    @property
+    def red(self) -> HueBand: ...
+
+    @property
+    def orange(self) -> HueBand: ...
+
+    @property
+    def yellow(self) -> HueBand: ...
+
+    @property
+    def green(self) -> HueBand: ...
+
+    @property
+    def aqua(self) -> HueBand: ...
+
+    @property
+    def blue(self) -> HueBand: ...
+
+    @property
+    def purple(self) -> HueBand: ...
+
+    @property
+    def magenta(self) -> HueBand: ...
+
+    def __eq__(self, arg: HslSettings, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> HslSettings:
+        """Return a copy with the given attributes replaced."""
+
+class BlackAndWhiteSettings:
+    """Conversion to grey and the mix of hues it is made from."""
+
+    def __init__(self, *, convert_to_grayscale: bool = False, red: float | None = 0.0, orange: float | None = 0.0, yellow: float | None = 0.0, green: float | None = 0.0, aqua: float | None = 0.0, blue: float | None = 0.0, purple: float | None = 0.0, magenta: float | None = 0.0) -> None: ...
+
+    @property
+    def convert_to_grayscale(self) -> bool: ...
+
+    @property
+    def red(self) -> float: ...
+
+    @property
+    def orange(self) -> float: ...
+
+    @property
+    def yellow(self) -> float: ...
+
+    @property
+    def green(self) -> float: ...
+
+    @property
+    def aqua(self) -> float: ...
+
+    @property
+    def blue(self) -> float: ...
+
+    @property
+    def purple(self) -> float: ...
+
+    @property
+    def magenta(self) -> float: ...
+
+    def __eq__(self, arg: BlackAndWhiteSettings, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> BlackAndWhiteSettings:
         """Return a copy with the given attributes replaced."""
 
 class FreeCropAspect:
@@ -352,7 +610,7 @@ class GeometrySettings:
 class DevelopSettings:
     """Photographic settings of one photograph."""
 
-    def __init__(self, *, color: ColorSettings | None = None, geometry: GeometrySettings | None = None, tone: ToneSettings | None = None) -> None: ...
+    def __init__(self, *, color: ColorSettings | None = None, geometry: GeometrySettings | None = None, tone: ToneSettings | None = None, hsl: HslSettings | None = None, black_and_white: BlackAndWhiteSettings | None = None) -> None: ...
 
     @property
     def color(self) -> ColorSettings: ...
@@ -362,6 +620,12 @@ class DevelopSettings:
 
     @property
     def tone(self) -> ToneSettings: ...
+
+    @property
+    def hsl(self) -> HslSettings: ...
+
+    @property
+    def black_and_white(self) -> BlackAndWhiteSettings: ...
 
     def __eq__(self, arg: DevelopSettings, /) -> bool: ...
 
@@ -501,13 +765,32 @@ class ForeignNamespace:
     def replace(self, **kwargs) -> ForeignNamespace:
         """Return a copy with the given attributes replaced."""
 
-class SidecarContents:
-    """What an XMP sidecar holds, and which other tools wrote in it."""
+class DevelopState:
+    """
+    Everything that says how one photograph is developed: its global settings now, per-image edits later.
+    """
 
-    def __init__(self, *, settings: DevelopSettings | None = None, marks: PhotoMarks | None = None, creator_tool: str | None = None, others: Sequence[ForeignNamespace] | None = None) -> None: ...
+    def __init__(self, *, settings: DevelopSettings | None = None) -> None: ...
 
     @property
     def settings(self) -> DevelopSettings: ...
+
+    def __eq__(self, arg: DevelopState, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> DevelopState:
+        """Return a copy with the given attributes replaced."""
+
+class SidecarContents:
+    """What an XMP sidecar holds, and which other tools wrote in it."""
+
+    def __init__(self, *, state: DevelopState | None = None, marks: PhotoMarks | None = None, creator_tool: str | None = None, others: Sequence[ForeignNamespace] | None = None) -> None: ...
+
+    @property
+    def state(self) -> DevelopState: ...
 
     @property
     def marks(self) -> PhotoMarks: ...
@@ -542,7 +825,7 @@ class Photo:
     def metadata(self) -> ImageMetadata: ...
 
     @property
-    def settings(self) -> DevelopSettings: ...
+    def state(self) -> DevelopState: ...
 
     @property
     def marks(self) -> PhotoMarks: ...
@@ -558,7 +841,7 @@ class Photo:
 
     def with_(
         self,
-        settings: DevelopSettings | None = None,
+        state: DevelopState | None = None,
         *,
         marks: PhotoMarks | None = None,
         rating: int = ...,
@@ -566,12 +849,12 @@ class Photo:
         **kwargs: Any,
     ) -> Photo:
         """
-        Return a photograph with `settings` (and `marks`) replacing the current ones wholesale, then flat snake_case keywords applied, e.g. exposure=0.7. `rating` and `label` change the marks instead (label=None clears it).
+        Return a photograph with `state` (and `marks`) replacing the current ones wholesale, then flat snake_case keywords applied, e.g. exposure=0.7, which edit the settings of the state. `rating` and `label` change the marks instead (label=None clears it).
         """
 
 def open(path: str | os.PathLike, *, sidecar: bool = True) -> Photo:
     """
-    Open a photograph; reads its metadata, not its pixels. Its XMP sidecar supplies the settings and marks unless sidecar=False. A sidecar that cannot be read is logged as an error on the 'arraw' logger, not raised, and the defaults are used.
+    Open a photograph; reads its metadata, not its pixels. Its XMP sidecar supplies the state and marks unless sidecar=False. A sidecar that cannot be read is logged as an error on the 'arraw' logger, not raised, and the defaults are used.
     """
 
 def sidecar_path(path: str | os.PathLike) -> pathlib.Path:
@@ -582,19 +865,24 @@ def read_sidecar(path: str | os.PathLike) -> SidecarContents | None:
 
 def write_sidecar(photo: Photo) -> None:
     """
-    Write a photograph's settings and marks into its sidecar, keeping the rest.
+    Write a photograph's state and marks into its sidecar, keeping the rest.
+    """
+
+def write_sidecar_marks(path: str | os.PathLike, marks: PhotoMarks) -> None:
+    """
+    Write only the marks of a photograph into its sidecar, keeping its settings and the rest; a sidecar is created when there is none.
     """
 
 @overload
-def develop(source: ImageBuffer, settings: DevelopSettings | None = None, *, size: int | tuple[int, int] | float | None = None, filter: ResizeFilter = ResizeFilter.LANCZOS3, allow_upscale: bool = False) -> ImageBuffer:
+def develop(source: ImageBuffer, state: DevelopState | None = None, *, size: int | tuple[int, int] | float | None = None, filter: ResizeFilter = ResizeFilter.LANCZOS3, allow_upscale: bool = False) -> ImageBuffer:
     """
-    Develop a decoded buffer on the CPU; default settings leave the colour unchanged. `size` renders the cropped result smaller: an int is the long edge, a (width, height) tuple a box to fit inside, a float a scale factor. Sizes only shrink unless `allow_upscale`.
+    Develop a decoded buffer on the CPU; default state leaves the colour unchanged. `size` renders the cropped result smaller: an int is the long edge, a (width, height) tuple a box to fit inside, a float a scale factor. Sizes only shrink unless `allow_upscale`.
     """
 
 @overload
-def develop(source: Photo, settings: DevelopSettings | None = None, *, size: int | tuple[int, int] | float | None = None, filter: ResizeFilter = ResizeFilter.LANCZOS3, allow_upscale: bool = False) -> ImageBuffer:
+def develop(source: Photo, state: DevelopState | None = None, *, size: int | tuple[int, int] | float | None = None, filter: ResizeFilter = ResizeFilter.LANCZOS3, allow_upscale: bool = False) -> ImageBuffer:
     """
-    Decode a photograph and develop it with its own settings unless `settings` is given; `size`, `filter` and `allow_upscale` are as for a decoded buffer.
+    Decode a photograph and develop it with its own state unless `state` is given; `size`, `filter` and `allow_upscale` are as for a decoded buffer.
     """
 
 def resolved_size(size: int | tuple[int, int] | float, cropped: ImageSize, *, allow_upscale: bool = False) -> ImageSize:
@@ -602,9 +890,111 @@ def resolved_size(size: int | tuple[int, int] | float, cropped: ImageSize, *, al
     Resolve a develop `size` against the size after the crop, as develop does.
     """
 
-def save(image: ImageBuffer, path: str | os.PathLike, *, format: ImageFileFormat | None = None, encoding: NamedEncoding = NamedEncoding.SRGB, bit_depth: int = 8, quality: int = 90, embed_profile: bool = True) -> None:
+class MetadataSelection:
     """
-    Write an image as JPEG, PNG or TIFF; the format comes from the extension unless given.
+    Groups of metadata an export carries from its source photograph: capture (camera, lens, exposure, time), location (GPS) and descriptive (rating, label, title, caption, keywords, creator, rights).
     """
+
+    def __init__(self, *, capture: bool = True, location: bool = False, descriptive: bool = True) -> None: ...
+
+    @property
+    def capture(self) -> bool: ...
+
+    @property
+    def location(self) -> bool: ...
+
+    @property
+    def descriptive(self) -> bool: ...
+
+    def __eq__(self, arg: MetadataSelection, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> MetadataSelection:
+        """Return a copy with the given attributes replaced."""
+
+def save(image: ImageBuffer, path: str | os.PathLike, *, format: ImageFileFormat | None = None, encoding: NamedEncoding = NamedEncoding.SRGB, bit_depth: int = 8, quality: int = 90, embed_profile: bool = True, sharpening: int = 0, metadata_from: Photo | None = None, metadata: MetadataSelection = ...) -> None:
+    """
+    Write an image as JPEG, PNG or TIFF; the format comes from the extension unless given. `sharpening` (0-100, default 0 = off) applies an unsharp mask to the final pixels. With `metadata_from` (the photograph the pixels came from) the groups of `metadata` are copied from its file and sidecar, and its marks written as rating and label; without it nothing is written. A source or sidecar that cannot be read is logged as a warning on the 'arraw' logger and its metadata left out; the file is still written.
+    """
+
+class Shot:
+    """
+    One capture: the file that is developed (the RAW when there is one) and the standard images of the same capture, which a RAW+JPEG camera writes beside it.
+    """
+
+    def __init__(self, *, primary: str | os.PathLike | None = None, companions: Sequence[str | os.PathLike] | None = None) -> None: ...
+
+    @property
+    def primary(self) -> pathlib.Path: ...
+
+    @property
+    def companions(self) -> list[pathlib.Path]: ...
+
+    def __eq__(self, arg: Shot, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> Shot:
+        """Return a copy with the given attributes replaced."""
+
+    @property
+    def format_label(self) -> str:
+        """
+        The formats of the shot, each once, joined by '+': 'ARW', 'JPEG', 'ARW+JPEG'.
+        """
+
+class MarksFilter:
+    """
+    Which culling marks a photograph must have: at least min_rating stars (which excludes rejects and unrated ones), or rejects_only (not both), and any one of labels (empty for any). The two dimensions combine by AND.
+    """
+
+    def __init__(self, *, min_rating: int | None = 0, rejects_only: bool = False, labels: Set[ColorLabel] | None = None) -> None: ...
+
+    @property
+    def min_rating(self) -> int: ...
+
+    @property
+    def rejects_only(self) -> bool: ...
+
+    @property
+    def labels(self) -> set[ColorLabel]: ...
+
+    def __eq__(self, arg: MarksFilter, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> MarksFilter:
+        """Return a copy with the given attributes replaced."""
+
+    @property
+    def is_active(self) -> bool:
+        """Whether the filter narrows anything."""
+
+    def matches(self, marks: PhotoMarks) -> bool:
+        """
+        Whether a photograph's marks pass the filter. Raises ValueError for a filter that wants rejects_only and a min_rating, or a min_rating outside 0 to 5.
+        """
+
+def group_shots(paths: Sequence[str | os.PathLike]) -> list[Shot]:
+    """
+    Group files into shots, without touching the filesystem: same folder and same stem (case-insensitive), the RAW as primary and the JPEG, PNG and TIFF files as its companions. Files without a RAW partner, and every file of a stem two RAWs share, stand alone; unsupported files and sidecars are dropped. In natural order of the primary's name (IMG_2 before IMG_10).
+    """
+
+def list_shots(folder: str | os.PathLike) -> list[Shot]:
+    """
+    List the shots of a folder (not its subfolders, not hidden files), in natural order. Raises if the folder cannot be read.
+    """
+
+def is_supported_image(path: str | os.PathLike) -> bool:
+    """Whether a path names a photograph arraw opens, by its extension alone."""
+
+SUPPORTED_EXTENSIONS: tuple = ...
 
 __version__: str

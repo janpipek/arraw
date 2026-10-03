@@ -22,6 +22,7 @@ enum class PointwiseProbe : std::uint32_t {
     AfterMatrix = 1,   ///< After the source-to-working transform.
     AfterExposure = 2, ///< After the exposure gain.
     AfterTone = 3,     ///< After the tone controls, before the shoulder.
+    AfterShoulder = 4, ///< After the shoulder, before the colour controls.
 };
 
 /// @brief The pointwise chain's uniform block, byte for byte as std140 lays it out.
@@ -32,9 +33,11 @@ enum class PointwiseProbe : std::uint32_t {
 /// plan holds `bool`, `std::optional` and padding, none of which has a portable
 /// shader layout (GPU implementation plan, "Shader data contract").
 ///
-/// Every member is four bytes and the matrix rows are `vec4`s, so std140 adds
-/// no padding the declaration order does not already show; the assertions
-/// below the struct hold the offsets to that.
+/// Every scalar member is four bytes and the matrix rows and the band sets are
+/// `vec4`s, so std140 adds no padding the declaration order does not already
+/// show; the assertions below the struct hold the offsets to that. A band set
+/// is eight floats, which std140 holds as an array of two `vec4`s: the same
+/// bytes as the plan's `std::array<float, 8>`.
 struct GpuPointwiseBlock {
     /// @brief Rows of the source-to-working matrix, each padded to a `vec4`.
     std::array<float, 12> toWorking{};
@@ -72,8 +75,38 @@ struct GpuPointwiseBlock {
     /// @brief Intermediate to write instead of the result; see ::arraw::PointwiseProbe.
     std::uint32_t probe = static_cast<std::uint32_t>(PointwiseProbe::Developed);
 
-    /// @brief Rounds the block up to a `vec4` boundary, as std140 does.
-    std::uint32_t padding = 0;
+    /// @brief Whether the photograph is made grey, replacing the colour controls: 0 or 1.
+    std::uint32_t convertsToGrayscale = 0;
+
+    /// @brief Saturation on the scale of its maths: minus one is grey, plus one doubles chroma.
+    float saturation = 0.0F;
+
+    /// @brief Vibrance on the same scale.
+    float vibrance = 0.0F;
+
+    /// @brief Whether Saturation changes anything: 0 or 1.
+    std::uint32_t adjustsSaturation = 0;
+
+    /// @brief Whether Vibrance changes anything: 0 or 1.
+    std::uint32_t adjustsVibrance = 0;
+
+    /// @brief Whether any HSL band changes anything: 0 or 1.
+    std::uint32_t adjustsHsl = 0;
+
+    /// @brief Rounds the scalars up to the `vec4` boundary the band sets start on.
+    std::array<std::uint32_t, 3> padding{};
+
+    /// @brief Hue shift of each band, as two `vec4`s.
+    std::array<float, 8> hueShift{};
+
+    /// @brief Saturation shift of each band, as two `vec4`s.
+    std::array<float, 8> bandSaturation{};
+
+    /// @brief Luminance shift of each band, as two `vec4`s.
+    std::array<float, 8> bandLuminance{};
+
+    /// @brief Weight of each band in the grey, as two `vec4`s.
+    std::array<float, 8> grayMix{};
 };
 
 static_assert(offsetof(GpuPointwiseBlock, toWorking) == 0);
@@ -88,7 +121,18 @@ static_assert(offsetof(GpuPointwiseBlock, shoulderKnee) == 76);
 static_assert(offsetof(GpuPointwiseBlock, shapesTone) == 80);
 static_assert(offsetof(GpuPointwiseBlock, rollsHighlights) == 84);
 static_assert(offsetof(GpuPointwiseBlock, probe) == 88);
-static_assert(sizeof(GpuPointwiseBlock) == 96);
+static_assert(offsetof(GpuPointwiseBlock, convertsToGrayscale) == 92);
+static_assert(offsetof(GpuPointwiseBlock, saturation) == 96);
+static_assert(offsetof(GpuPointwiseBlock, vibrance) == 100);
+static_assert(offsetof(GpuPointwiseBlock, adjustsSaturation) == 104);
+static_assert(offsetof(GpuPointwiseBlock, adjustsVibrance) == 108);
+static_assert(offsetof(GpuPointwiseBlock, adjustsHsl) == 112);
+static_assert(offsetof(GpuPointwiseBlock, padding) == 116);
+static_assert(offsetof(GpuPointwiseBlock, hueShift) == 128);
+static_assert(offsetof(GpuPointwiseBlock, bandSaturation) == 160);
+static_assert(offsetof(GpuPointwiseBlock, bandLuminance) == 192);
+static_assert(offsetof(GpuPointwiseBlock, grayMix) == 224);
+static_assert(sizeof(GpuPointwiseBlock) == 256);
 
 /// @brief Widest output, in pixels per side, that the geometry block can address exactly.
 ///
@@ -191,15 +235,22 @@ struct GpuResizeBlock {
     /// one.
     std::uint32_t plane = 0;
 
-    /// @brief Length of the source along the resized axis, for clamping tap indices to it.
+    /// @brief Length of the region along the resized axis, for clamping tap indices to it.
     std::uint32_t inputLength = 0;
 
-    /// @brief Rounds the block up to a `vec4` boundary, as std140 does.
-    std::array<std::uint32_t, 2> padding{};
+    /// @brief Column and row of the source's first pixel that is resized, for the horizontal pass.
+    ///
+    /// The region a render cuts out (ADR 025): tap indices are clamped to the
+    /// region's own length and then moved by this, so an edge repeats the
+    /// region's edge pixel as it does on the CPU after cutting. The row is
+    /// where output row 0 reads. Zero for the whole image, and unused by the
+    /// vertical pass, which reads what the horizontal one wrote.
+    std::array<std::uint32_t, 2> offset{};
 };
 
 static_assert(offsetof(GpuResizeBlock, plane) == 0);
 static_assert(offsetof(GpuResizeBlock, inputLength) == 4);
+static_assert(offsetof(GpuResizeBlock, offset) == 8);
 static_assert(sizeof(GpuResizeBlock) == 16);
 
 /// @brief Fills the pointwise block from a resolved plan.

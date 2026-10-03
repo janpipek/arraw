@@ -1,11 +1,15 @@
+#include "GpuContext.h"
 #include "GpuDevelop.h"
 #include "GpuTesting.h"
 
 #include <Develop.h>
 #include <DevelopSettings.h>
+#include <DevelopState.h>
 #include <GeometrySettings.h>
 #include <ImageBuffer.h>
 #include <ImageImport.h>
+#include <ImagePyramid.h>
+#include <RenderCheckpoint.h>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -17,6 +21,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -51,8 +56,9 @@ double worstAlphaError(const ImageBuffer& expected, const ImageBuffer& actual) {
 
 /// @brief Requires the device's development of a source to match the CPU's.
 void requireMatchesCpu(const ImageBuffer& source, const DevelopSettings& settings) {
-    const ImageBuffer expected = develop(source, settings);
-    const ImageBuffer actual = developOnGpu(gpuContext(), source, settings).readBack();
+    const ImageBuffer expected = develop(source, DevelopState{settings});
+    const ImageBuffer actual =
+        developOnGpu(gpuContext(), source, DevelopState{settings}).readBack();
     REQUIRE(actual.format() == PixelFormat::RgbaF32);
     REQUIRE(actual.size() == expected.size());
     const double colour = worstColourError(expected, actual);
@@ -141,4 +147,195 @@ TEST_CASE("Developing on the GPU with default settings matches the CPU", "[gpu][
             requireMatchesCpu(fixtureImage(name), DevelopSettings{});
         }
     }
+}
+
+TEST_CASE("Developing from an uploaded source equals developing from the host", "[gpu][develop]") {
+    GpuContext& context = gpuContext();
+    for (const char* name : {"testcard-61x41-alpha8.png", "linear-32x24-rotated.dng"}) {
+        DYNAMIC_SECTION(name) {
+            const ImageBuffer source = fixtureImage(name);
+            const DeviceImage uploaded = uploadSource(context, source);
+            REQUIRE(uploaded.size() == source.size());
+            const DevelopState state{combined(WhiteBalanceMode::AsShot, {.straighten = 7.5})};
+            const RenderRequest request{.size = RenderRequest::FitInside{20, 20}};
+
+            const ImageBuffer direct =
+                developOnGpu(context, source, state, Stage::Resize, request).readBack();
+            const ImageBuffer viaUpload =
+                developOnGpu(context, source, uploaded, state, Stage::Resize, request).readBack();
+
+            REQUIRE(viaUpload.size() == direct.size());
+            // The same passes on the same texels: no tolerance is needed.
+            REQUIRE(compareFloat(direct, viaUpload, pointwiseAbsoluteFloor).bitExact);
+        }
+    }
+}
+
+TEST_CASE("One uploaded source serves renders of different states", "[gpu][develop]") {
+    GpuContext& context = gpuContext();
+    const ImageBuffer source = fixtureImage("testcard-61x41-srgb8.png");
+    const DeviceImage uploaded = uploadSource(context, source);
+
+    for (const float exposure : {-1.0F, 0.0F, 0.7F}) {
+        DYNAMIC_SECTION("exposure " << exposure) {
+            DevelopSettings settings;
+            settings.tone.exposure = exposure;
+            const DevelopState state{settings};
+            const ImageBuffer expected = develop(source, state);
+            const ImageBuffer actual = developOnGpu(context, source, uploaded, state).readBack();
+            REQUIRE(actual.size() == expected.size());
+            REQUIRE(worstColourError(expected, actual) <= endToEndTolerance);
+        }
+    }
+    // The upload is left as it was: it still reads back as the source.
+    REQUIRE(uploaded.size() == source.size());
+}
+
+TEST_CASE("An uploaded source of another device or another size is refused", "[gpu][develop]") {
+    GpuContext& context = gpuContext();
+    const ImageBuffer source = fixtureImage("testcard-61x41-srgb8.png");
+    const ImageBuffer smaller = fixtureImage("linear-32x24-rotated.dng");
+
+    SECTION("another device") {
+        GpuContext other(gpuTestBackend());
+        const DeviceImage foreign = uploadSource(other, source);
+        REQUIRE_THROWS_AS(developOnGpu(context, source, foreign, DevelopState{}),
+                          std::invalid_argument);
+    }
+    SECTION("another size") {
+        const DeviceImage wrongSize = uploadSource(context, smaller);
+        REQUIRE_THROWS_AS(developOnGpu(context, source, wrongSize, DevelopState{}),
+                          std::invalid_argument);
+    }
+    SECTION("an empty image") {
+        REQUIRE_THROWS_AS(developOnGpu(context, source, DeviceImage{}, DevelopState{}),
+                          std::invalid_argument);
+    }
+}
+
+TEST_CASE("Developing a halved source on the GPU matches the CPU", "[gpu][develop][pyramid]") {
+    // What the preview does with a pyramid level: the reduced copy is uploaded
+    // and developed like any source.
+    GpuContext& context = gpuContext();
+    const ImageBuffer reduced = halved(fixtureImage("testcard-61x41-srgb16.png"));
+    const DevelopState state{combined(WhiteBalanceMode::AsShot, {.straighten = 5.0})};
+    const RenderRequest request{.size = RenderRequest::FitInside{20, 20}};
+
+    const ImageBuffer expected = develop(reduced, state, request);
+    const DeviceImage uploaded = uploadSource(context, reduced);
+    const ImageBuffer actual =
+        developOnGpu(context, reduced, uploaded, state, Stage::Resize, request).readBack();
+
+    REQUIRE(actual.size() == expected.size());
+    const double colour = worstColourError(expected, actual);
+    const double alpha = worstAlphaError(expected, actual);
+    CAPTURE(colour, alpha, compareFloat(expected, actual, pointwiseAbsoluteFloor));
+    REQUIRE(colour <= endToEndTolerance);
+    REQUIRE(alpha <= endToEndAlphaTolerance);
+}
+
+namespace {
+
+/// @brief Requires a resumed render to equal a fresh one on the device, pass for pass.
+void requireResumeEqualsFresh(GpuContext& context, const RenderCheckpoint& checkpoint,
+                              const ImageBuffer& source, const DevelopState& state,
+                              const RenderRequest& request) {
+    const std::size_t before = context.renderCount();
+    const RenderCheckpoint resumed =
+        developOnGpu(context, checkpoint, source, state, Stage::Resize, request);
+    const std::size_t resumedPasses = context.renderCount() - before;
+    const RenderCheckpoint fresh = developOnGpu(context, source, state, Stage::Resize, request);
+    const std::size_t freshPasses = context.renderCount() - before - resumedPasses;
+
+    REQUIRE(resumed.isResident());
+    REQUIRE(resumed.boundary() == Stage::Resize);
+    REQUIRE(resumedPasses < freshPasses);
+    const ImageBuffer expected = fresh.readBack();
+    const ImageBuffer actual = resumed.readBack();
+    REQUIRE(actual.size() == expected.size());
+    REQUIRE(compareFloat(expected, actual, pointwiseAbsoluteFloor).bitExact);
+    REQUIRE(worstColourError(develop(source, state, request), actual) <= endToEndTolerance);
+}
+
+} // namespace
+
+TEST_CASE("Resuming on the GPU from a pointwise or a geometry checkpoint equals a fresh render",
+          "[gpu][develop][checkpoint]") {
+    GpuContext& context = gpuContext();
+    const ImageBuffer source = fixtureImage("testcard-61x41-alpha8.png");
+    const DevelopState state{combined(WhiteBalanceMode::AsShot, {.straighten = 7.5})};
+    const RenderRequest request{.size = RenderRequest::FitInside{20, 20}};
+
+    const RenderCheckpoint pointwise = developOnGpu(context, source, state, Stage::Pointwise);
+    const RenderCheckpoint geometry = developOnGpu(context, source, state, Stage::Geometry);
+
+    SECTION("a viewport change after a geometry checkpoint") {
+        requireResumeEqualsFresh(context, geometry, source, state,
+                                 RenderRequest{.size = RenderRequest::FitInside{33, 33}});
+    }
+    SECTION("a geometry change after a pointwise checkpoint") {
+        const DevelopState straighter{combined(WhiteBalanceMode::AsShot, {.straighten = -3.0})};
+        requireResumeEqualsFresh(context, pointwise, source, straighter, request);
+    }
+    SECTION("stopping at the geometry after a pointwise checkpoint") {
+        const RenderCheckpoint resumed =
+            developOnGpu(context, pointwise, source, state, Stage::Geometry);
+        REQUIRE(resumed.boundary() == Stage::Geometry);
+        REQUIRE(
+            compareFloat(geometry.readBack(), resumed.readBack(), pointwiseAbsoluteFloor).bitExact);
+    }
+    SECTION("the checkpoint's own boundary costs no pass") {
+        const std::size_t before = context.renderCount();
+        const RenderCheckpoint again =
+            developOnGpu(context, geometry, source, state, Stage::Geometry);
+        REQUIRE(context.renderCount() == before);
+        REQUIRE(again.boundary() == Stage::Geometry);
+    }
+}
+
+TEST_CASE("Resuming on the GPU refuses what the checkpoint cannot serve",
+          "[gpu][develop][checkpoint]") {
+    GpuContext& context = gpuContext();
+    const ImageBuffer source = fixtureImage("testcard-61x41-srgb8.png");
+    const DevelopState state{combined(WhiteBalanceMode::AsShot, {.straighten = 7.5})};
+    const RenderCheckpoint pointwise = developOnGpu(context, source, state, Stage::Pointwise);
+    const RenderCheckpoint geometry = developOnGpu(context, source, state, Stage::Geometry);
+
+    SECTION("a host checkpoint") {
+        const RenderCheckpoint host = developUntil(source, state, Stage::Pointwise);
+        REQUIRE_THROWS_AS(developOnGpu(context, host, source, state), std::invalid_argument);
+    }
+    SECTION("a checkpoint from another device") {
+        GpuContext other(gpuTestBackend());
+        const RenderCheckpoint foreign = developOnGpu(other, source, state, Stage::Pointwise);
+        REQUIRE_THROWS_AS(developOnGpu(context, foreign, source, state), std::invalid_argument);
+    }
+    SECTION("a changed tone setting") {
+        DevelopSettings brighter = combined(WhiteBalanceMode::AsShot, {.straighten = 7.5});
+        brighter.tone.exposure += 1.0F;
+        REQUIRE_THROWS_AS(developOnGpu(context, pointwise, source, DevelopState{brighter}),
+                          std::invalid_argument);
+    }
+    SECTION("a changed geometry after a geometry checkpoint") {
+        const DevelopState straighter{combined(WhiteBalanceMode::AsShot, {.straighten = 1.0})};
+        REQUIRE_THROWS_AS(developOnGpu(context, geometry, source, straighter),
+                          std::invalid_argument);
+    }
+    SECTION("another pyramid level") {
+        const ImageBuffer reduced = halved(source);
+        REQUIRE_THROWS_AS(developOnGpu(context, pointwise, reduced, state), std::invalid_argument);
+    }
+    SECTION("stopping before the checkpoint") {
+        REQUIRE_THROWS_AS(developOnGpu(context, geometry, source, state, Stage::Pointwise),
+                          std::invalid_argument);
+    }
+}
+
+TEST_CASE("The CPU refuses a checkpoint that lives on a device", "[gpu][develop][checkpoint]") {
+    GpuContext& context = gpuContext();
+    const ImageBuffer source = fixtureImage("testcard-61x41-srgb8.png");
+    const DevelopState state{};
+    const RenderCheckpoint resident = developOnGpu(context, source, state, Stage::Pointwise);
+    REQUIRE(resident.isResident());
+    REQUIRE_THROWS_AS(resumeFrom(resident, source, state, Stage::Resize), std::invalid_argument);
 }

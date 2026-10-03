@@ -3,16 +3,21 @@
 #include "Cli.h"
 #include "Command.h"
 #include "SettingCodec.h"
+#include "ShotInputs.h"
 #include "SidecarWatch.h"
 #include "StreamDiagnostics.h"
+#include "TerminalStyle.h"
 
 #include <ColorEncoding.h>
 #include <DevelopSettings.h>
 #include <Diagnostics.h>
+#include <ExifInfo.h>
 #include <ImageImport.h>
 #include <ImageOrientation.h>
+#include <MarksFilter.h>
 #include <Photo.h>
 #include <SettingDescriptors.h>
+#include <Shot.h>
 #include <Sidecar.h>
 
 #include <QCommandLineParser>
@@ -20,6 +25,7 @@
 #include <QStringList>
 
 #include <charconv>
+#include <cmath>
 #include <cstddef>
 #include <exception>
 #include <filesystem>
@@ -40,6 +46,8 @@ namespace {
 /// @brief What `info` was asked for.
 struct InfoRequest {
     std::vector<std::filesystem::path> inputs;
+    /// @brief Which photographs are wanted by their marks; inactive wants all.
+    MarksFilter filter;
     bool all = false;
     bool json = false;
     bool useSidecars = true;
@@ -51,11 +59,17 @@ struct InfoRequest {
 struct FileReport {
     Photo photo;
 
+    /// @brief The shot the photograph is the primary of, when it came out of a folder.
+    std::optional<Shot> shot;
+
     /// @brief Sidecar beside the photograph, absent when it has none.
     std::optional<std::filesystem::path> sidecar;
 
     /// @brief Whether the sidecar was read; false when it was ignored.
     bool sidecarRead = true;
+
+    /// @brief What the file records about its capture; empty when it records none.
+    ExifInfo exif;
 
     /// @brief Program named in the sidecar, when it was read and says.
     std::optional<std::string> creatorTool;
@@ -74,6 +88,11 @@ void configure(QCommandLineParser& parser) {
     parser.setApplicationDescription(
         "Show what is known about photographs, read-only.\n"
         "\n"
+        "Inputs are files or folders. A folder stands for the shots in it, not\n"
+        "recursively, and each shot is shown once, as its primary file (the RAW of a\n"
+        "RAW+JPEG pair), with its format label and its companions. --min-rating,\n"
+        "--rejected and --label list only the photographs whose sidecar marks match.\n"
+        "\n"
         "For each file: its size, orientation, its sidecar, its\n"
         "rating and colour label, and the develop settings that differ from the\n"
         "defaults, one per line as key: value, in the order of the settings table,\n"
@@ -81,7 +100,9 @@ void configure(QCommandLineParser& parser) {
         "Defaults, a rating of 0 and no label are not listed; --all lists every setting.\n"
         "A RAW also shows its camera colour encoding. Settings a render would not\n"
         "read (a temperature without Custom white balance, any on a non-RAW) are\n"
-        "not listed. Camera metadata beyond that is not read yet. Marks and\n"
+        "not listed. The camera, lens, exposure, time and place of the capture are\n"
+        "shown when the file records them (EXIF; --json gives an \"exif\" object).\n"
+        "Marks and\n"
         "settings arraw cannot store are not shown, nor is other tools' XMP beyond\n"
         "which tools wrote in the sidecar (the program that wrote it, and each\n"
         "other namespace with its prefix and number of properties).\n"
@@ -98,8 +119,10 @@ void configure(QCommandLineParser& parser) {
                       "failed is left out of it."});
     parser.addOption({"no-sidecar", "Show each photograph as it opens without its .xmp sidecar."});
     parser.addOption({{"q", "quiet"}, "Drop informational diagnostics, keeping what went wrong."});
+    cli::addMarksFilterOptions(parser);
     cli::addLogFormatOption(parser);
-    parser.addPositionalArgument("input", "Files to describe.", "info <input>...");
+    parser.addPositionalArgument("input", "Files, or folders of shots, to describe.",
+                                 "info <input>...");
 }
 
 /// @brief Reads the request from the parsed command line, or reports why it cannot.
@@ -121,6 +144,11 @@ std::optional<InfoRequest> buildRequest(const QCommandLineParser& parser, std::o
     request.all = parser.isSet("all");
     request.json = parser.isSet("json");
     request.useSidecars = !parser.isSet("no-sidecar");
+    const auto filter = cli::readMarksFilter(parser, "info", err, code);
+    if (!filter) {
+        return std::nullopt;
+    }
+    request.filter = *filter;
     request.quiet = parser.isSet("quiet");
     return request;
 }
@@ -236,6 +264,160 @@ std::string jsonString(std::string_view text) {
     return result + '"';
 }
 
+/// @brief Rounds to a number of decimals and spells the result as a number.
+std::string rounded(double value, int decimals) {
+    const double scale = std::pow(10.0, decimals);
+    return number(std::round(value * scale) / scale);
+}
+
+/// @brief Spells a shutter time: "1/250 s" for a fraction of a second, else "1.3 s".
+std::string exposureText(const URational& time) {
+    const double seconds = time.value();
+    if (!(seconds > 0.0)) {
+        return std::to_string(time.numerator) + "/" + std::to_string(time.denominator) + " s";
+    }
+    if (seconds >= 1.0) {
+        return rounded(seconds, 1) + " s";
+    }
+    return "1/" + rounded(1.0 / seconds, 0) + " s";
+}
+
+/// @brief Lists the capture information in the order of the report, as "label: text" lines.
+std::vector<std::pair<std::string, std::string>> exifLines(const ExifInfo& exif) {
+    std::vector<std::pair<std::string, std::string>> lines;
+    if (exif.make || exif.model) {
+        // Cameras often repeat the maker in the model ("Canon Canon EOS R5").
+        std::string camera = exif.make.value_or("");
+        const std::string model = exif.model.value_or("");
+        if (!model.empty() && !camera.empty() && model.starts_with(camera)) {
+            camera.clear();
+        }
+        camera += camera.empty() || model.empty() ? "" : " ";
+        lines.emplace_back("camera", camera + model);
+    }
+    if (exif.lensModel) {
+        lines.emplace_back("lens", *exif.lensModel);
+    }
+    std::string exposure;
+    const auto add = [&exposure](const std::string& part) {
+        exposure += exposure.empty() ? "" : "  ";
+        exposure += part;
+    };
+    if (exif.exposureTime) {
+        add(exposureText(*exif.exposureTime));
+    }
+    if (exif.fNumber) {
+        add("f/" + rounded(exif.fNumber->value(), 1));
+    }
+    if (exif.photographicSensitivity) {
+        add("ISO " + std::to_string(*exif.photographicSensitivity));
+    }
+    if (exif.focalLength) {
+        std::string focal = rounded(exif.focalLength->value(), 1) + " mm";
+        if (exif.focalLengthIn35mmFilm) {
+            focal += " (" + std::to_string(*exif.focalLengthIn35mmFilm) + " mm equivalent)";
+        }
+        add(focal);
+    }
+    if (!exposure.empty()) {
+        lines.emplace_back("exposure", exposure);
+    }
+    if (exif.exposureBiasValue) {
+        lines.emplace_back("exposure bias", rounded(exif.exposureBiasValue->value(), 2) + " EV");
+    }
+    if (exif.flash) {
+        lines.emplace_back("flash", (*exif.flash & 1U) != 0 ? "fired" : "did not fire");
+    }
+    if (exif.dateTimeOriginal) {
+        lines.emplace_back("taken",
+                           *exif.dateTimeOriginal +
+                               (exif.offsetTimeOriginal ? " " + *exif.offsetTimeOriginal : ""));
+    }
+    if (exif.gps) {
+        std::string place = rounded(exif.gps->latitude, 4) + ", " + rounded(exif.gps->longitude, 4);
+        if (exif.gps->altitude) {
+            place += ", " + rounded(*exif.gps->altitude, 1) + " m";
+        }
+        lines.emplace_back("GPS", place);
+    }
+    if (exif.artist) {
+        lines.emplace_back("artist", *exif.artist);
+    }
+    if (exif.copyright) {
+        lines.emplace_back("copyright", *exif.copyright);
+    }
+    return lines;
+}
+
+/// @brief Spells an optional fraction as a JSON object, or null.
+template <class Rational> std::string jsonRational(const std::optional<Rational>& rational) {
+    return rational ? "{\"numerator\": " + std::to_string(rational->numerator) +
+                          ", \"denominator\": " + std::to_string(rational->denominator) + "}"
+                    : "null";
+}
+
+/// @brief Spells the capture information as a JSON object of the fields present.
+std::string jsonOfExif(const ExifInfo& exif) {
+    std::string text = "{";
+    const auto add = [&text](std::string_view key, const std::string& value) {
+        text += (text.size() > 1 ? ", " : "") + jsonString(key) + ": " + value;
+    };
+    const auto addText = [&add](std::string_view key, const std::optional<std::string>& value) {
+        if (value) {
+            add(key, jsonString(*value));
+        }
+    };
+    const auto addNumber = [&add](std::string_view key, const auto& value) {
+        if (value) {
+            add(key, std::to_string(*value));
+        }
+    };
+    const auto addRational = [&add](std::string_view key, const auto& value) {
+        if (value) {
+            add(key, jsonRational(value));
+        }
+    };
+    addText("make", exif.make);
+    addText("model", exif.model);
+    addText("lensModel", exif.lensModel);
+    addText("dateTimeOriginal", exif.dateTimeOriginal);
+    addText("offsetTimeOriginal", exif.offsetTimeOriginal);
+    addRational("exposureTime", exif.exposureTime);
+    addRational("fNumber", exif.fNumber);
+    addNumber("photographicSensitivity", exif.photographicSensitivity);
+    addRational("focalLength", exif.focalLength);
+    addNumber("focalLengthIn35mmFilm", exif.focalLengthIn35mmFilm);
+    addRational("exposureBiasValue", exif.exposureBiasValue);
+    addNumber("flash", exif.flash);
+    if (exif.gps) {
+        add("gps", "{\"latitude\": " + number(exif.gps->latitude) +
+                       ", \"longitude\": " + number(exif.gps->longitude) + ", \"altitude\": " +
+                       (exif.gps->altitude ? number(*exif.gps->altitude) : "null") + "}");
+    }
+    addText("artist", exif.artist);
+    addText("copyright", exif.copyright);
+    return text + "}";
+}
+
+/// @brief A log that passes on what went wrong and drops what is merely so.
+///
+/// A file with no EXIF is not a problem `info` should print a line about: the
+/// report shows no capture lines, and that says it. A file whose EXIF could
+/// not be read is another matter.
+class WarningsOnly final : public DiagnosticLog {
+public:
+    explicit WarningsOnly(DiagnosticLog& target) : target_(target) {}
+
+    void record(const Diagnostic& diagnostic) override {
+        if (diagnostic.severity != Severity::Info) {
+            target_.record(diagnostic);
+        }
+    }
+
+private:
+    DiagnosticLog& target_;
+};
+
 /// @brief One setting of a photograph that is listed: its row and value.
 struct ListedSetting {
     const FieldDescriptor* descriptor;
@@ -259,13 +441,26 @@ std::vector<ListedSetting> listedSettings(const DevelopSettings& settings, bool 
 void writeText(std::ostream& out, const FileReport& report, bool all) {
     const Photo& photo = report.photo;
     const ImageMetadata& metadata = photo.metadata();
-    out << pathText(photo.path()) << '\n'
-        << "  size: " << metadata.size.width << " x " << metadata.size.height << '\n'
+    out << cli::accented(out, pathText(photo.path()), cli::Accent::Heading) << '\n';
+    if (report.shot) {
+        out << "  format: " << formatLabel(*report.shot) << '\n';
+        if (!report.shot->companions.empty()) {
+            out << "  companions:";
+            for (const auto& companion : report.shot->companions) {
+                out << ' ' << cli::terminalText(pathText(companion.filename()));
+            }
+            out << '\n';
+        }
+    }
+    out << "  size: " << metadata.size.width << " x " << metadata.size.height << '\n'
         << "  orientation: " << orientationName(metadata.orientation) << '\n';
     if (isRaw(metadata)) {
         out << "  encoding: camera\n";
     }
-    out << "  sidecar: " << (report.sidecar ? pathText(*report.sidecar) : "none")
+    for (const auto& [label, line] : exifLines(report.exif)) {
+        out << "  " << label << ": " << cli::terminalText(line) << '\n';
+    }
+    out << "  sidecar: " << (report.sidecar ? cli::terminalText(pathText(*report.sidecar)) : "none")
         << (report.sidecar && !report.sidecarRead ? " (ignored)" : "") << '\n';
     const PhotoMarks& marks = photo.marks();
     if (marks.rating != 0) {
@@ -282,23 +477,24 @@ void writeText(std::ostream& out, const FileReport& report, bool all) {
     if (report.creatorTool || !report.others.empty()) {
         out << "  other tools:\n";
         if (report.creatorTool) {
-            out << "    written by: " << *report.creatorTool << '\n';
+            out << "    written by: " << cli::terminalText(*report.creatorTool) << '\n';
         }
         for (const ForeignNamespace& other : report.others) {
             out << "    " << xmpNamespaceOwner(other.uri).value_or("unknown") << " ("
-                << (other.prefix.empty() ? "no prefix" : other.prefix + ":") << ", "
-                << other.properties << (other.properties == 1 ? " property)\n" : " properties)\n");
+                << (other.prefix.empty() ? "no prefix" : cli::terminalText(other.prefix) + ":")
+                << ", " << other.properties
+                << (other.properties == 1 ? " property)\n" : " properties)\n");
         }
     }
     const auto listed =
-        listedSettings(withoutUnusedSettings(photo.settings(), isRaw(metadata)), all);
+        listedSettings(withoutUnusedSettings(photo.state().settings, isRaw(metadata)), all);
     if (listed.empty()) {
         out << "  develop settings: defaults\n";
         return;
     }
     out << "  develop settings:\n";
     for (const auto& [descriptor, value] : listed) {
-        out << "    " << descriptor->key << ": " << textOf(value) << '\n';
+        out << "    " << descriptor->key << ": " << cli::terminalText(textOf(value)) << '\n';
     }
 }
 
@@ -307,12 +503,19 @@ std::string jsonOfReport(const FileReport& report, bool all) {
     const Photo& photo = report.photo;
     const ImageMetadata& metadata = photo.metadata();
     const PhotoMarks& marks = photo.marks();
+    const Shot shot = report.shot.value_or(Shot{photo.path(), {}});
+    std::string companions;
+    for (const auto& companion : shot.companions) {
+        companions += (companions.empty() ? "" : ", ") + jsonString(pathText(companion));
+    }
     std::string text =
         "{\"path\": " + jsonString(pathText(photo.path())) +
-        ", \"size\": {\"width\": " + std::to_string(metadata.size.width) +
+        ", \"format\": " + jsonString(formatLabel(shot)) + ", \"companions\": [" + companions +
+        "], \"size\": {\"width\": " + std::to_string(metadata.size.width) +
         ", \"height\": " + std::to_string(metadata.size.height) +
         "}, \"orientation\": " + jsonString(orientationName(metadata.orientation)) +
         ", \"encoding\": " + (isRaw(metadata) ? "\"camera\"" : "null") +
+        ", \"exif\": " + jsonOfExif(report.exif) +
         ", \"sidecar\": " + (report.sidecar ? jsonString(pathText(*report.sidecar)) : "null") +
         ", \"sidecarRead\": " + (report.sidecarRead ? "true" : "false") +
         ", \"marks\": {\"rating\": " + std::to_string(marks.rating) +
@@ -330,7 +533,7 @@ std::string jsonOfReport(const FileReport& report, bool all) {
     text += "], \"settings\": {";
     bool first = true;
     for (const auto& [descriptor, value] :
-         listedSettings(withoutUnusedSettings(photo.settings(), isRaw(metadata)), all)) {
+         listedSettings(withoutUnusedSettings(photo.state().settings, isRaw(metadata)), all)) {
         text += first ? "" : ", ";
         text += jsonString(descriptor->key) + ": " + encodedToJson(value);
         first = false;
@@ -349,10 +552,14 @@ std::optional<std::filesystem::path> findSidecar(const std::filesystem::path& in
 /// @brief Opens one photograph the way the request asks, failing on an unreadable sidecar.
 FileReport open(const InfoRequest& request, const std::filesystem::path& input,
                 DiagnosticLog& log) {
+    WarningsOnly exifLog(log);
     if (!request.useSidecars) {
-        return {Photo(input, readImageMetadata(input, log)),
+        Photo photo(input, readImageMetadata(input, log));
+        return {std::move(photo),
+                std::nullopt,
                 findSidecar(input),
                 false,
+                readExif(input, exifLog),
                 std::nullopt,
                 {}};
     }
@@ -374,11 +581,12 @@ FileReport open(const InfoRequest& request, const std::filesystem::path& input,
         throw std::runtime_error("its sidecar could not be read; fix it, or pass --no-sidecar to "
                                  "show the file without it");
     }
-    FileReport report{contents
-                          ? Photo(input, std::move(metadata), contents->settings, contents->marks)
-                          : Photo(input, std::move(metadata)),
+    FileReport report{contents ? Photo(input, std::move(metadata), contents->state, contents->marks)
+                               : Photo(input, std::move(metadata)),
+                      std::nullopt,
                       sidecar,
                       true,
+                      readExif(input, exifLog),
                       std::nullopt,
                       {}};
     if (contents) {
@@ -391,14 +599,21 @@ FileReport open(const InfoRequest& request, const std::filesystem::path& input,
 /// @brief Describes every input, continuing past the ones that fail.
 int infoAll(const InfoRequest& request, std::ostream& out, std::ostream& err) {
     cli::StreamDiagnostics log(err, request.logFormat, request.quiet);
-    std::size_t failures = 0;
+    const cli::ExpandedInputs expanded = cli::expandInputs(request.inputs, log);
+    std::size_t failures = expanded.unreadableFolders;
     std::size_t shown = 0;
+    std::size_t filteredOut = 0;
     if (request.json) {
         out << "{\"files\": [";
     }
-    for (const auto& input : request.inputs) {
+    for (const auto& [input, shot] : expanded.photographs) {
         try {
-            const FileReport report = open(request, input, log);
+            if (!cli::passesFilter(request.filter, input, request.useSidecars)) {
+                ++filteredOut;
+                continue;
+            }
+            FileReport report = open(request, input, log);
+            report.shot = shot;
             if (request.json) {
                 out << (shown > 0 ? ", " : "") << jsonOfReport(report, request.all);
             } else {
@@ -417,11 +632,15 @@ int infoAll(const InfoRequest& request, std::ostream& out, std::ostream& err) {
     if (request.json) {
         out << "]}\n";
     }
+    if (filteredOut > 0) {
+        log.record({.notice = Notice::FilteredOut, .values = {static_cast<double>(filteredOut)}});
+    }
     if (failures > 0) {
         log.record({.notice = Notice::BatchFinished,
                     .severity = Severity::Error,
                     .values = {static_cast<double>(failures),
-                               static_cast<double>(request.inputs.size())}});
+                               static_cast<double>(expanded.photographs.size() +
+                                                   expanded.unreadableFolders)}});
         return cli::Failed;
     }
     return cli::Success;
@@ -437,7 +656,7 @@ int cli::runInfoCommand(const QStringList& arguments, std::ostream& out, std::os
         return usageError(err, parser.errorText().toStdString());
     }
     if (parser.isSet("help")) {
-        out << commandHelp(parser);
+        writeStyledHelp(out, commandHelp(parser));
         return Success;
     }
     int code = Success;

@@ -116,9 +116,9 @@ struct Pair {
 /// @brief Renders a source with a request on both backends.
 Pair renderBoth(const ImageBuffer& source, const DevelopSettings& settings,
                 const RenderRequest& request) {
-    ImageBuffer expected = develop(source, settings, request);
+    ImageBuffer expected = develop(source, DevelopState{settings}, request);
     const RenderCheckpoint checkpoint =
-        developOnGpu(gpuContext(), source, settings, Stage::Resize, request);
+        developOnGpu(gpuContext(), source, DevelopState{settings}, Stage::Resize, request);
     REQUIRE(checkpoint.boundary() == Stage::Resize);
     REQUIRE(checkpoint.isResident());
     ImageBuffer actual = checkpoint.readBack();
@@ -375,7 +375,8 @@ TEST_CASE("An identity request leaves the geometry checkpoint unchanged", "[gpu]
     DevelopSettings settings = plainSettings();
     settings.geometry = {.straighten = 10.0};
 
-    const RenderCheckpoint geometry = developOnGpu(context, source, settings, Stage::Geometry);
+    const RenderCheckpoint geometry =
+        developOnGpu(context, source, DevelopState{settings}, Stage::Geometry);
     const ImageBuffer framed = geometry.readBack();
     const ImageSize cropped = geometry.size();
 
@@ -388,7 +389,7 @@ TEST_CASE("An identity request leaves the geometry checkpoint unchanged", "[gpu]
     };
     for (const RenderRequest& request : identities) {
         const RenderCheckpoint resized =
-            developOnGpu(context, source, settings, Stage::Resize, request);
+            developOnGpu(context, source, DevelopState{settings}, Stage::Resize, request);
         CHECK(resized.boundary() == Stage::Resize);
         CHECK(resized.size() == cropped);
         CHECK(resized.isResident());
@@ -399,23 +400,27 @@ TEST_CASE("An identity request leaves the geometry checkpoint unchanged", "[gpu]
 TEST_CASE("Stopping after the geometry ignores the requested size", "[gpu][resize]") {
     const ImageBuffer source = opaqueImage({64, 48});
     const RenderCheckpoint checkpoint =
-        developOnGpu(gpuContext(), source, plainSettings(), Stage::Geometry,
+        developOnGpu(gpuContext(), source, DevelopState{plainSettings()}, Stage::Geometry,
                      scaled(0.5, ResizeFilter::Lanczos3));
     CHECK(checkpoint.boundary() == Stage::Geometry);
     CHECK(checkpoint.size() == source.size());
 
-    const RenderCheckpoint resized = developOnGpu(
-        gpuContext(), source, plainSettings(), Stage::Resize, scaled(0.5, ResizeFilter::Lanczos3));
+    const RenderCheckpoint resized =
+        developOnGpu(gpuContext(), source, DevelopState{plainSettings()}, Stage::Resize,
+                     scaled(0.5, ResizeFilter::Lanczos3));
     CHECK(resized.boundary() == Stage::Resize);
     CHECK(resized.size() == ImageSize{32, 24});
 }
 
 TEST_CASE("Resizing on the GPU refuses a request that cannot be resolved", "[gpu][resize]") {
+    // Outside the checks: without a device it skips, which a check would take
+    // for the wrong exception.
+    GpuContext& context = gpuContext();
     const ImageBuffer source = opaqueImage({16, 16});
-    CHECK_THROWS_AS(developOnGpu(gpuContext(), source, plainSettings(), Stage::Resize,
+    CHECK_THROWS_AS(developOnGpu(context, source, DevelopState{plainSettings()}, Stage::Resize,
                                  scaled(0.0, ResizeFilter::Lanczos3)),
                     std::invalid_argument);
-    CHECK_THROWS_AS(developOnGpu(gpuContext(), source, plainSettings(), Stage::Resize,
+    CHECK_THROWS_AS(developOnGpu(context, source, DevelopState{plainSettings()}, Stage::Resize,
                                  fitted(0, 10, ResizeFilter::Lanczos3)),
                     std::invalid_argument);
 }
@@ -486,19 +491,19 @@ TEST_CASE("Resizing an opaque image on the GPU takes two renders, not four",
     const RenderRequest request = scaled(0.4, ResizeFilter::Lanczos3);
     const auto rendersFor = [&](const ImageBuffer& source, const RenderRequest& asked) {
         const std::size_t before = context.renderCount();
-        (void)developOnGpu(context, source, plainSettings(), Stage::Resize, asked);
+        (void)developOnGpu(context, source, DevelopState{plainSettings()}, Stage::Resize, asked);
         return context.renderCount() - before;
     };
 
     // The pointwise pass, then the resize: one row pass, one column pass.
     const ImageBuffer opaque = opaqueImage({300, 200});
-    CHECK(planFor(opaque, plainSettings(), request).resize->opaque);
+    CHECK(planFor(opaque, DevelopState{plainSettings()}, request).resize->opaque);
     CHECK(rendersFor(opaque, request) == 1 + 2);
 
     // The general path: three planes, then the column pass.
     ImageBuffer nearlyOpaque = opaqueImage({300, 200});
     nearlyOpaque.samples<float>()[3] = std::nextafter(1.0F, 0.0F);
-    CHECK_FALSE(planFor(nearlyOpaque, plainSettings(), request).resize->opaque);
+    CHECK_FALSE(planFor(nearlyOpaque, DevelopState{plainSettings()}, request).resize->opaque);
     CHECK(rendersFor(nearlyOpaque, request) == 1 + 4);
     CHECK(rendersFor(translucentImage({300, 200}), request) == 1 + 4);
 
@@ -510,7 +515,7 @@ TEST_CASE("Resizing an opaque image on the GPU takes two renders, not four",
     DevelopSettings rotated = plainSettings();
     rotated.geometry.straighten = 5.0;
     const std::size_t before = context.renderCount();
-    (void)developOnGpu(context, opaque, rotated, Stage::Resize, request);
+    (void)developOnGpu(context, opaque, DevelopState{rotated}, Stage::Resize, request);
     CHECK(context.renderCount() - before == 1 + 1 + 2);
 }
 
@@ -596,7 +601,8 @@ TEST_CASE("Resizing an opaque image on the GPU matches the CPU after rotation an
                 DevelopSettings settings = plainSettings();
                 settings.geometry = geometry;
                 const Pair pair = renderBoth(source, settings, scaled(0.37, filter));
-                REQUIRE(planFor(source, settings, scaled(0.37, filter)).resize->opaque);
+                REQUIRE(
+                    planFor(source, DevelopState{settings}, scaled(0.37, filter)).resize->opaque);
                 requireClose(pair);
                 for (std::size_t i = 3; i < pair.actual.samples<float>().size(); i += 4) {
                     REQUIRE(pair.actual.samples<float>()[i] == 1.0F);
@@ -604,5 +610,67 @@ TEST_CASE("Resizing an opaque image on the GPU matches the CPU after rotation an
                 }
             }
         }
+    }
+}
+
+namespace {
+
+/// @brief A request for a part of the frame at a scale.
+RenderRequest regional(RenderRequest::Region region, double factor, ResizeFilter filter,
+                       Upscale upscale = Upscale::Never) {
+    RenderRequest request = scaled(factor, filter, upscale);
+    request.region = region;
+    return request;
+}
+
+} // namespace
+
+TEST_CASE("Rendering a region on the GPU matches the CPU", "[gpu][resize][region]") {
+    const ImageBuffer opaque = opaqueImage({400, 300});
+    const ImageBuffer translucent = translucentImage({400, 300});
+    const RenderRequest::Region regions[] = {
+        {0.25, 0.25, 0.75, 0.75}, {0.0, 0.0, 0.3, 0.4}, {0.61, 0.5, 1.0, 1.0}};
+    for (const ResizeFilter filter : {ResizeFilter::Lanczos3, ResizeFilter::Bilinear}) {
+        for (const RenderRequest::Region& region : regions) {
+            for (const double factor : {0.4, 1.0, 2.5}) {
+                DYNAMIC_SECTION(name(filter) << " region " << region.left << "," << region.top
+                                             << " at " << factor) {
+                    const Upscale upscale = factor > 1.0 ? Upscale::Allowed : Upscale::Never;
+                    const auto request = regional(region, factor, filter, upscale);
+                    requireClose(renderBoth(opaque, plainSettings(), request));
+                    const Pair pair = renderBoth(translucent, plainSettings(), request);
+                    const Errors errors = measure(pair, 0.01F);
+                    CHECK(errors.alpha <= resizeTolerance);
+                    CHECK(errors.colourAbsolute <= resizeTolerance);
+                }
+            }
+        }
+    }
+}
+
+TEST_CASE("Rendering a region on the GPU matches the CPU after a rotation",
+          "[gpu][resize][region]") {
+    const ImageBuffer source = opaqueImage({300, 200});
+    DevelopSettings settings = plainSettings();
+    settings.geometry = {.rotation = QuarterTurn::Clockwise90, .straighten = 7.0};
+    requireClose(
+        renderBoth(source, settings, regional({0.1, 0.2, 0.6, 0.9}, 0.5, ResizeFilter::Lanczos3)));
+}
+
+TEST_CASE("A geometry checkpoint on the GPU is resumed across regions", "[gpu][resize][region]") {
+    GpuContext& context = gpuContext();
+    const ImageBuffer source = opaqueImage({200, 150});
+    const DevelopState state{plainSettings()};
+    const RenderCheckpoint geometry = developOnGpu(context, source, state, Stage::Geometry);
+
+    for (const RenderRequest::Region region :
+         {RenderRequest::Region{0.0, 0.0, 0.5, 0.5}, {0.5, 0.5, 1.0, 1.0}, {0.2, 0.1, 0.9, 0.6}}) {
+        const RenderRequest request = regional(region, 0.5, ResizeFilter::Lanczos3);
+        const RenderCheckpoint resumed =
+            developOnGpu(context, geometry, source, state, Stage::Resize, request);
+        REQUIRE(resumed.isResident());
+        const ImageBuffer expected = develop(source, state, request);
+        REQUIRE(resumed.size() == expected.size());
+        requireClose({expected.clone(), resumed.readBack()});
     }
 }

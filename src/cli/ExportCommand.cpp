@@ -7,14 +7,19 @@
 #include "GpuDevelop.h"
 #include "ProcessingPlan.h"
 #include "SettingCodec.h"
+#include "ShotInputs.h"
 #include "SidecarWatch.h"
 #include "StreamDiagnostics.h"
+#include "TerminalStyle.h"
+#include "TimingTrace.h"
 
 #include <Develop.h>
 #include <DevelopSettings.h>
+#include <DevelopState.h>
 #include <Diagnostics.h>
 #include <ImageExport.h>
 #include <ImageImport.h>
+#include <MarksFilter.h>
 #include <Photo.h>
 #include <SettingDescriptors.h>
 #include <WhiteBalance.h>
@@ -24,6 +29,7 @@
 #include <QStringList>
 
 #include <algorithm>
+#include <cctype>
 #include <charconv>
 #include <cmath>
 #include <cstdint>
@@ -179,6 +185,8 @@ std::uint32_t parseSide(std::string_view text, std::string_view spec) {
 /// @brief Everything the command needs, once its arguments are understood.
 struct ExportRequest {
     std::vector<std::filesystem::path> inputs;
+    /// @brief Which photographs are wanted by their marks; inactive wants all.
+    MarksFilter filter;
     std::filesystem::path outputDirectory;
     ImageFileFormat format = ImageFileFormat::Jpeg;
     /// @brief What the flags said, applied over each photograph's own settings.
@@ -186,6 +194,8 @@ struct ExportRequest {
     /// @brief Whether each photograph's sidecar is read; false is `--no-sidecar`.
     bool useSidecars = true;
     ExportOptions options;
+    /// @brief Metadata groups each export carries from its photograph (ADR 032).
+    MetadataSelection metadata;
     /// @brief Size and filter of every render, built once for both devices.
     RenderRequest render;
     cli::DeviceChoice device;
@@ -197,6 +207,39 @@ struct ExportRequest {
     /// @brief Options given that do nothing without `--resize`, reported once the log exists.
     std::vector<std::string> ignoredResizeOptions;
 };
+
+/// @brief Reads the list `--metadata` takes.
+/// @return The groups it names, or nothing for an unknown name or an empty list.
+std::optional<MetadataSelection> parseMetadataSelection(const std::string& list) {
+    MetadataSelection selection{false, false, false};
+    std::string text = list;
+    std::ranges::transform(text, text.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (text == "all") {
+        return MetadataSelection{true, true, true};
+    }
+    if (text == "none") {
+        return selection;
+    }
+    std::size_t start = 0;
+    while (true) {
+        const auto comma = text.find(',', start);
+        const auto name = text.substr(start, comma == std::string::npos ? comma : comma - start);
+        if (name == "capture") {
+            selection.capture = true;
+        } else if (name == "location") {
+            selection.location = true;
+        } else if (name == "descriptive") {
+            selection.descriptive = true;
+        } else {
+            return std::nullopt;
+        }
+        if (comma == std::string::npos) {
+            return selection;
+        }
+        start = comma + 1;
+    }
+}
 
 /// @brief Which filter `--resize-filter` names, if any.
 std::optional<ResizeFilter> parseResizeFilter(const std::string& name) {
@@ -247,6 +290,40 @@ constexpr SettingHelp settingHelp[]{
     {"temperature", "k", "White balance in kelvin", " RAW only."},
     {"tint", "amount", "Green to magenta", " RAW only."},
     {"filmicHighlights", "amount", "Highlight roll-off", " Default: 25."},
+    {"saturation", "amount", "Colourfulness of every colour", ""},
+    {"vibrance", "amount", "Colourfulness of the muted colours, sparing the vivid", ""},
+    {"hueRed", "amount", "Shift the hue of reds", ""},
+    {"saturationRed", "amount", "Colourfulness of reds", ""},
+    {"luminanceRed", "amount", "Lightness of reds", ""},
+    {"hueOrange", "amount", "Shift the hue of oranges", ""},
+    {"saturationOrange", "amount", "Colourfulness of oranges", ""},
+    {"luminanceOrange", "amount", "Lightness of oranges", ""},
+    {"hueYellow", "amount", "Shift the hue of yellows", ""},
+    {"saturationYellow", "amount", "Colourfulness of yellows", ""},
+    {"luminanceYellow", "amount", "Lightness of yellows", ""},
+    {"hueGreen", "amount", "Shift the hue of greens", ""},
+    {"saturationGreen", "amount", "Colourfulness of greens", ""},
+    {"luminanceGreen", "amount", "Lightness of greens", ""},
+    {"hueAqua", "amount", "Shift the hue of aquas", ""},
+    {"saturationAqua", "amount", "Colourfulness of aquas", ""},
+    {"luminanceAqua", "amount", "Lightness of aquas", ""},
+    {"hueBlue", "amount", "Shift the hue of blues", ""},
+    {"saturationBlue", "amount", "Colourfulness of blues", ""},
+    {"luminanceBlue", "amount", "Lightness of blues", ""},
+    {"huePurple", "amount", "Shift the hue of purples", ""},
+    {"saturationPurple", "amount", "Colourfulness of purples", ""},
+    {"luminancePurple", "amount", "Lightness of purples", ""},
+    {"hueMagenta", "amount", "Shift the hue of magentas", ""},
+    {"saturationMagenta", "amount", "Colourfulness of magentas", ""},
+    {"luminanceMagenta", "amount", "Lightness of magentas", ""},
+    {"grayRed", "amount", "Lightness of reds in black and white", ""},
+    {"grayOrange", "amount", "Lightness of oranges in black and white", ""},
+    {"grayYellow", "amount", "Lightness of yellows in black and white", ""},
+    {"grayGreen", "amount", "Lightness of greens in black and white", ""},
+    {"grayAqua", "amount", "Lightness of aquas in black and white", ""},
+    {"grayBlue", "amount", "Lightness of blues in black and white", ""},
+    {"grayPurple", "amount", "Lightness of purples in black and white", ""},
+    {"grayMagenta", "amount", "Lightness of magentas in black and white", ""},
 };
 
 /// @brief Finds the help wording of a setting.
@@ -435,6 +512,14 @@ bool readEdits(const QCommandLineParser& parser, cli::ExportEdits& edits, std::o
             return false;
         }
     }
+    if (parser.isSet("convert-to-grayscale") && parser.isSet("no-convert-to-grayscale")) {
+        code = usageError(err, "--convert-to-grayscale and --no-convert-to-grayscale contradict");
+        return false;
+    }
+    if (parser.isSet("convert-to-grayscale") || parser.isSet("no-convert-to-grayscale")) {
+        given.blackAndWhite.convertToGrayscale = parser.isSet("convert-to-grayscale");
+        addEdit(edits.settings, "convertToGrayscale", given);
+    }
     return readGeometry(parser, edits.geometry, err, code);
 }
 
@@ -447,7 +532,12 @@ void configure(QCommandLineParser& parser) {
     parser.setApplicationDescription(
         "Render images and write them out.\n"
         "\n"
-        "Inputs are files, not directories; your shell expands the wildcards. Every\n"
+        "Inputs are files, which your shell can expand from wildcards, or folders. A\n"
+        "folder stands for the shots in it, not recursively: a RAW and a JPEG of the\n"
+        "same name are one shot, and only the RAW is exported. Files given directly are\n"
+        "all exported. --min-rating, --rejected and --label export only the photographs\n"
+        "whose sidecar marks match (no sidecar, or --no-sidecar, means no rating and no\n"
+        "label); the others are counted, not reported as failures. Every\n"
         "input is attempted, so one bad frame does not abandon an overnight batch. The\n"
         "exit status is 0 when all succeeded, 1 when any failed, 2 for a usage error.\n"
         "\n"
@@ -457,6 +547,10 @@ void configure(QCommandLineParser& parser) {
         "Each file renders through its own .xmp sidecar, if it has one: the develop\n"
         "settings given here are applied on top of the sidecar's and replace only what\n"
         "they name. --no-sidecar ignores sidecars, so the flags alone develop the file.\n"
+        "Colour controls come in three families: --saturation and --vibrance, the HSL\n"
+        "bands --hue-, --saturation- and --luminance- followed by red, orange, yellow,\n"
+        "green, aqua, blue, purple or magenta, and black and white, which\n"
+        "--convert-to-grayscale turns on and --gray- plus a band mixes.\n"
         "Naming --temperature or --tint makes white balance custom; the other half\n"
         "keeps the photograph's own value, or as shot. The command never writes a\n"
         "sidecar.\n"
@@ -483,6 +577,7 @@ void configure(QCommandLineParser& parser) {
     parser.addOption({{"o", "output"}, "Existing directory to write into.", "dir"});
     parser.addOption({"format", "png, jpeg, or tiff. Default: jpeg.", "name"});
     parser.addOption({"quality", "JPEG quality, 0-100. Default: 90.", "value"});
+    parser.addOption({"sharpen", "Output sharpening, 0-100. Default: 0 (off).", "amount"});
     parser.addOption({"bit-depth", "8 or 16. Default: 8.", "value"});
     parser.addOption({"encoding", "srgb, display-p3, or adobe-rgb. Default: srgb.", "name"});
     for (const FieldDescriptor& descriptor : developSettingDescriptors) {
@@ -499,6 +594,10 @@ void configure(QCommandLineParser& parser) {
     }
     parser.addOption(
         {"white-balance", "as-shot or custom. Temperature/tint imply custom.", "mode"});
+    parser.addOption({"convert-to-grayscale",
+                      "Make the photograph black and white; the --gray-* weights mix the hues, and "
+                      "saturation, vibrance and the HSL bands then have nothing to act on."});
+    parser.addOption({"no-convert-to-grayscale", "Undo a sidecar's black and white conversion."});
     parser.addOption(
         {"rotate", "Any finite clockwise angle, before flips. Default: 0.", "degrees"});
     parser.addOption({"flip-horizontal", "Flip horizontally in the upright frame."});
@@ -538,12 +637,20 @@ void configure(QCommandLineParser& parser) {
                       "the flags alone. Without it, the flags are applied on top of the sidecar's "
                       "settings. The command never writes a sidecar."});
     parser.addOption({"no-profile", "Convert colour but do not embed the output profile."});
+    parser.addOption({"metadata",
+                      "Metadata to carry from the photograph: all, none, or a comma-separated "
+                      "list of capture (camera, lens, exposure, time), location (GPS) and "
+                      "descriptive (rating, label, title, caption, keywords, creator, "
+                      "rights). Default: capture,descriptive.",
+                      "list"});
+    cli::addMarksFilterOptions(parser);
     parser.addOption({"overwrite", "Replace outputs that already exist."});
     parser.addOption({{"q", "quiet"}, "Do not report each file as it is written."});
     cli::addLogFormatOption(parser);
     // The syntax carries the command word, which Qt's usage line otherwise
     // omits: it knows only argv[0], and the command is a positional we consumed.
-    parser.addPositionalArgument("input", "Files to export.", "export <input>...");
+    parser.addPositionalArgument("input", "Files, or folders of shots, to export.",
+                                 "export <input>...");
 }
 
 /// @brief Turns the parsed arguments into an ::ExportRequest.
@@ -609,8 +716,13 @@ std::optional<ExportRequest> buildRequest(const QCommandLineParser& parser, std:
     }
 
     if (!readInteger(parser, "quality", request.options.quality) ||
-        !readInteger(parser, "bit-depth", request.options.bitDepth)) {
-        code = usageError(err, "--quality and --bit-depth take whole numbers");
+        !readInteger(parser, "bit-depth", request.options.bitDepth) ||
+        !readInteger(parser, "sharpen", request.options.sharpening)) {
+        code = usageError(err, "--quality, --bit-depth and --sharpen take whole numbers");
+        return std::nullopt;
+    }
+    if (request.options.sharpening < 0 || request.options.sharpening > 100) {
+        code = usageError(err, "--sharpen must be between 0 and 100");
         return std::nullopt;
     }
 
@@ -692,7 +804,21 @@ std::optional<ExportRequest> buildRequest(const QCommandLineParser& parser, std:
     request.logFormat = *logFormat;
 
     request.options.embedProfile = !parser.isSet("no-profile");
+    if (parser.isSet("metadata")) {
+        const auto selection = parseMetadataSelection(parser.value("metadata").toStdString());
+        if (!selection) {
+            code = usageError(err, "--metadata takes all, none, or a comma-separated list of "
+                                   "capture, location and descriptive");
+            return std::nullopt;
+        }
+        request.metadata = *selection;
+    }
     request.useSidecars = !parser.isSet("no-sidecar");
+    const auto filter = cli::readMarksFilter(parser, "export", err, code);
+    if (!filter) {
+        return std::nullopt;
+    }
+    request.filter = *filter;
     request.overwrite = parser.isSet("overwrite");
     request.quiet = parser.isSet("quiet");
     return request;
@@ -729,9 +855,8 @@ std::unique_ptr<GpuContext> createContext(const ExportRequest& request, std::str
 /// Every device image, the checkpoint included, is gone before this returns,
 /// so the context can be destroyed whenever its owner likes.
 ImageBuffer developOnDevice(GpuContext& context, const ImageBuffer& source,
-                            const DevelopSettings& settings, const RenderRequest& render) {
-    const RenderCheckpoint checkpoint =
-        developOnGpu(context, source, settings, Stage::Resize, render);
+                            const DevelopState& state, const RenderRequest& render) {
+    const RenderCheckpoint checkpoint = developOnGpu(context, source, state, Stage::Resize, render);
     return checkpoint.readBack();
 }
 
@@ -779,12 +904,21 @@ int exportAll(const ExportRequest& request, std::ostream& err) {
         log.record({.notice = Notice::CpuUsed, .severity = Severity::Info});
     }
 
-    for (const auto& input : request.inputs) {
+    const cli::ExpandedInputs expanded = cli::expandInputs(request.inputs, log);
+    failures += expanded.unreadableFolders;
+    std::size_t filteredOut = 0;
+    std::uint64_t timingRequest = 0;
+    for (const auto& [input, shot] : expanded.photographs) {
+        const detail::TimingSpan timing("cli.export", ++timingRequest);
         const auto destination =
             request.outputDirectory /
             (input.stem().string() + std::string(extensionFor(request.format)));
 
         try {
+            if (!cli::passesFilter(request.filter, input, request.useSidecars)) {
+                ++filteredOut;
+                continue;
+            }
             if (!request.overwrite && std::filesystem::exists(destination)) {
                 // Refused rather than replaced: the destination is usually a
                 // directory of someone's photographs, and exportImage would
@@ -810,9 +944,11 @@ int exportAll(const ExportRequest& request, std::ostream& err) {
                                          "applied; fix the sidecar, or pass --no-sidecar to "
                                          "export without it");
             }
-            const Photo photo = opened.with(cli::applyEdits(
-                opened.settings(), request.edits, log, input,
-                !std::holds_alternative<NamedEncoding>(opened.metadata().encoding)));
+            DevelopState edited = opened.state();
+            edited.settings =
+                cli::applyEdits(std::move(edited.settings), request.edits, log, input,
+                                !std::holds_alternative<NamedEncoding>(opened.metadata().encoding));
+            const Photo photo = opened.with(std::move(edited));
             // Decoded once, before the device is involved: a file that cannot be
             // read is the input's failure, whichever device would have developed it.
             const ImageBuffer source = loadImage(input);
@@ -821,11 +957,11 @@ int exportAll(const ExportRequest& request, std::ostream& err) {
             // device is then blamed for is developOnGpu and readBack alone, so
             // any exception from them, an image larger than the device's
             // textures included, means "the GPU could not".
-            (void)planFor(source, photo.settings(), request.render);
+            (void)planFor(source, photo.state(), request.render);
             std::optional<ImageBuffer> developed;
             if (context) {
                 try {
-                    developed = developOnDevice(*context, source, photo.settings(), request.render);
+                    developed = developOnDevice(*context, source, photo.state(), request.render);
                 } catch (const std::exception& failure) {
                     if (request.device.kind == cli::DeviceKind::Gpu) {
                         throw;
@@ -846,9 +982,20 @@ int exportAll(const ExportRequest& request, std::ostream& err) {
                 }
             }
             if (!developed) {
-                developed = develop(source, photo.settings(), request.render);
+                developed = develop(source, photo.state(), request.render);
             }
-            exportImage(*developed, destination, request.options);
+            const ExportMetadata carried{input, photo.marks(), request.metadata,
+                                         request.useSidecars};
+            try {
+                exportImage(*developed, destination, request.options, carried, log);
+            } catch (const std::runtime_error& problem) {
+                if (std::string_view(problem.what()).find("Cannot write the metadata") ==
+                    std::string_view::npos) {
+                    throw;
+                }
+                throw std::runtime_error(std::string(problem.what()) +
+                                         "; pass --metadata none to export without it");
+            }
             log.record({.notice = Notice::Exported,
                         .severity = Severity::Info,
                         .subject = input,
@@ -862,13 +1009,17 @@ int exportAll(const ExportRequest& request, std::ostream& err) {
         }
     }
 
+    if (filteredOut > 0) {
+        log.record({.notice = Notice::FilteredOut, .values = {static_cast<double>(filteredOut)}});
+    }
     if (failures > 0) {
         // Through the log like everything else, so that --log-format json emits
         // nothing a JSON reader has to skip.
         log.record({.notice = Notice::BatchFinished,
                     .severity = Severity::Error,
                     .values = {static_cast<double>(failures),
-                               static_cast<double>(request.inputs.size())}});
+                               static_cast<double>(expanded.photographs.size() +
+                                                   expanded.unreadableFolders)}});
         return cli::Failed;
     }
     return cli::Success;
@@ -957,7 +1108,7 @@ int cli::runExportCommand(const QStringList& arguments, std::ostream& out, std::
         return usageError(err, parser.errorText().toStdString());
     }
     if (parser.isSet("help")) {
-        out << commandHelp(parser);
+        writeStyledHelp(out, commandHelp(parser));
         return Success;
     }
 

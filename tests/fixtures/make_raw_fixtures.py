@@ -61,6 +61,13 @@ STRIP = ["STRIP"]  # placeholder patched with the strip's real offset
 SUBIFDS = ["SUBIFDS"]  # placeholder patched with the sub-IFD offsets
 
 
+class IfdPointer:
+    """A LONG value that is the offset of another IFD of the file (EXIF, GPS)."""
+
+    def __init__(self, index: int) -> None:
+        self.index = index
+
+
 def pack_values(vtype, values):
     if vtype == TYPE_ASCII:
         return values  # already bytes, NUL-terminated
@@ -76,6 +83,8 @@ def value_count(values, subifd_count: int) -> int:
         return 1
     if values == SUBIFDS:
         return subifd_count
+    if isinstance(values, IfdPointer):
+        return 1
     return len(values)
 
 
@@ -84,7 +93,9 @@ def write_tiff(path: pathlib.Path, ifds: list) -> None:
 
     ``ifds`` is a list of ``(entries, pixels)`` pairs. The first is IFD0; any
     others are written as its sub-IFDs, and IFD0 must then carry a ``SubIFDs``
-    entry whose values are the ``SUBIFDS`` placeholder. Each IFD's ``entries``
+    entry whose values are the ``SUBIFDS`` placeholder. An IFD that holds no
+    pixels (``b""``) and no ``StripOffsets``, such as the EXIF and GPS ones, is
+    instead pointed to by an ``IfdPointer`` value in the entry that names it. Each IFD's ``entries``
     is a list of ``(tag, type, values)`` sorted by tag, which the TIFF
     specification requires and some readers rely on, and its ``StripOffsets``
     entry uses the ``STRIP`` placeholder.
@@ -130,6 +141,8 @@ def write_tiff(path: pathlib.Path, ifds: list) -> None:
                 values = [strip_offsets[index]]
             elif values == SUBIFDS:
                 values = ifd_offsets[1:]
+            elif isinstance(values, IfdPointer):
+                values = [ifd_offsets[values.index]]
             packed = pack_values(vtype, values)
             if len(packed) <= 4:
                 value_field = packed.ljust(4, b"\0")
@@ -407,6 +420,46 @@ def main() -> None:
     write_tiff(here / "preview-32x24.dng",
                [(sorted(preview_ifd, key=lambda e: e[0]), preview),
                 (sorted(raw_ifd, key=lambda e: e[0]), linear)])
+
+    # What a camera records about the capture: Make and Model in IFD0, an EXIF
+    # IFD and a GPS IFD behind it. Every value is a distinct, readable number, so
+    # a reader that swapped two tags or mangled a rational shows. The position
+    # is in the north and the east; the southern and western signs are
+    # tested on a JPEG the test writes itself.
+    ifd0 = base_entries(pixel_bytes=len(linear), samples_per_pixel=3,
+                        photometric=PHOTOMETRIC_LINEAR_RAW,
+                        as_shot_neutral=(1.0, 1.0, 1.0), orientation=None)
+    ifd0 += [
+        (271, TYPE_ASCII, b"Arraw\0"),                      # Make
+        (272, TYPE_ASCII, b"Fixture One\0"),                # Model
+        (315, TYPE_ASCII, b"Ada Lovelace\0"),               # Artist
+        (33432, TYPE_ASCII, b"(c) 2024 Ada Lovelace\0"),    # Copyright
+        (34665, TYPE_LONG, IfdPointer(1)),                  # ExifIFD
+        (34853, TYPE_LONG, IfdPointer(2)),                  # GPSInfo
+    ]
+    exif_ifd = [
+        (33434, TYPE_RATIONAL, [(1, 250)]),                 # ExposureTime: 1/250 s
+        (33437, TYPE_RATIONAL, [(28, 10)]),                 # FNumber: f/2.8
+        (34855, TYPE_SHORT, [400]),                         # ISOSpeedRatings
+        (36867, TYPE_ASCII, b"2024:05:01 10:00:00\0"),      # DateTimeOriginal
+        (36881, TYPE_ASCII, b"+02:00\0"),                   # OffsetTimeOriginal
+        (37380, TYPE_SRATIONAL, [(-1, 3)]),                 # ExposureBiasValue: -1/3 EV
+        (37385, TYPE_SHORT, [16]),                          # Flash: did not fire, compulsory
+        (37386, TYPE_RATIONAL, [(35, 1)]),                  # FocalLength: 35 mm
+        (41989, TYPE_SHORT, [52]),                          # FocalLengthIn35mmFilm
+        (42036, TYPE_ASCII, b"Fixture 35mm F2.8\0"),        # LensModel
+    ]
+    gps_ifd = [
+        (1, TYPE_ASCII, b"N\0"),                            # GPSLatitudeRef
+        (2, TYPE_RATIONAL, [(50, 1), (5, 1), (1575, 100)]),  # GPSLatitude: 50 5' 15.75"
+        (3, TYPE_ASCII, b"E\0"),                            # GPSLongitudeRef
+        (4, TYPE_RATIONAL, [(14, 1), (25, 1), (1800, 100)]),  # GPSLongitude: 14 25' 18"
+        (5, TYPE_BYTE, [0]),                                # GPSAltitudeRef: above sea level
+        (6, TYPE_RATIONAL, [(2355, 10)]),                   # GPSAltitude: 235.5 m
+    ]
+    write_tiff(here / "exif-32x24.dng",
+               [(sorted(ifd0, key=lambda e: e[0]), linear),
+                (exif_ifd, b""), (gps_ifd, b"")])
 
     for path in sorted(here.glob("*.dng")):
         print(f"{path.name}: {path.stat().st_size} bytes")

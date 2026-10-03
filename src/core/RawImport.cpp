@@ -20,17 +20,6 @@ using namespace arraw;
 
 namespace {
 
-/// @brief Extensions ::arraw::loadImage routes to LibRaw by name.
-///
-/// The set published in docs/desired-features.md, no wider -- and it does not
-/// need to be. ::holdsRawImage asks LibRaw about everything else before Qt is
-/// offered anything, so a .3fr, a .mrw or a renamed .dng reaches the same
-/// decoder one file open later. Widening the list would only move where the
-/// error for a non-RAW file comes from, and for an extension as generic as
-/// .raw it would report a RAW failure for a file Qt can read.
-constexpr std::array<std::string_view, 10> rawExtensions = {".cr2", ".cr3", ".nef", ".arw", ".dng",
-                                                            ".raf", ".orf", ".rw2", ".pef", ".srw"};
-
 /// @brief LibRaw's `output_color` value for "leave it in the camera's space".
 ///
 /// LibRaw inherits dcraw's bare integers here and validates nothing — an
@@ -108,8 +97,12 @@ Gains normalised(const float* gains) {
     return {gains[0] / green, gains[1] / green, gains[2] / green};
 }
 
-void applyDecodeSettings(LibRaw& raw) {
+void applyDecodeSettings(LibRaw& raw, DecodeOptions options) {
     auto& params = raw.imgdata.params;
+
+    // Each 2x2 sensor block becomes a pixel, so nothing is demosaiced; the
+    // colour and white balance are those of a full decode (ADR 031).
+    params.half_size = options.halfSize ? 1 : 0;
 
     // A content-dependent brightness stretch would make one develop setting
     // render differently from frame to frame, which a non-destructive editor
@@ -273,14 +266,68 @@ ImageBuffer toBuffer(const libraw_processed_image_t& image, ColorEncoding encodi
     return buffer;
 }
 
+/// @brief Halves a decoded sixteen-bit buffer by averaging 2x2 blocks.
+///
+/// What LibRaw's half-size mode does not do for a file that is already
+/// demosaiced (a linear DNG): it halves only what it would have demosaiced, so
+/// the buffer comes back whole. Halving it here keeps the promise of
+/// ::arraw::DecodeOptions::halfSize whatever the file holds, at the cost of
+/// the speed-up, which there was none to be had from. The size is the integer
+/// quotient, as LibRaw's is; the colour is a plain mean, as the samples are
+/// linear and opaque.
+/// @param image Buffer in RgbaU16, at least 2x2.
+ImageBuffer halvedRgbaU16(const ImageBuffer& image) {
+    const ImageSize in = image.size();
+    ImageBuffer result({in.width / 2, in.height / 2}, image.format(), image.encoding(),
+                       image.orientation());
+    const auto input = image.samples<std::uint16_t>();
+    auto output = result.samples<std::uint16_t>();
+    const auto out = result.size();
+    for (std::uint32_t y = 0; y < out.height; ++y) {
+        for (std::uint32_t x = 0; x < out.width; ++x) {
+            for (std::size_t channel = 0; channel < 4; ++channel) {
+                unsigned sum = 0;
+                for (std::uint32_t dy = 0; dy < 2; ++dy) {
+                    for (std::uint32_t dx = 0; dx < 2; ++dx) {
+                        sum +=
+                            input[((2 * y + dy) * static_cast<std::size_t>(in.width) + 2 * x + dx) *
+                                      4 +
+                                  channel];
+                    }
+                }
+                output[(y * static_cast<std::size_t>(out.width) + x) * 4 + channel] =
+                    static_cast<std::uint16_t>((sum + 2) / 4);
+            }
+        }
+    }
+    return result;
+}
+
 } // namespace
 
-bool arraw::rawimport::namesRawFormat(const std::filesystem::path& path) {
+namespace {
+
+/// @brief Gives a path's extension, lower-case and without the dot.
+std::string lowerExtension(const std::filesystem::path& path) {
     std::string extension = path.extension().string();
+    if (!extension.empty()) {
+        extension.erase(0, 1);
+    }
     std::ranges::transform(extension, extension.begin(), [](unsigned char character) {
         return static_cast<char>(std::tolower(character));
     });
-    return std::ranges::find(rawExtensions, extension) != rawExtensions.end();
+    return extension;
+}
+
+} // namespace
+
+bool arraw::rawimport::namesRawFormat(const std::filesystem::path& path) {
+    return std::ranges::find(rawExtensions, lowerExtension(path)) != rawExtensions.end();
+}
+
+bool arraw::rawimport::hasRawExtension(const std::filesystem::path& path) {
+    return std::ranges::find(openedRawExtensions, lowerExtension(path)) !=
+           openedRawExtensions.end();
 }
 
 bool arraw::rawimport::holdsRawImage(const std::filesystem::path& path) {
@@ -299,11 +346,12 @@ ImageMetadata arraw::rawimport::readMetadata(const std::filesystem::path& path,
     return metadataOf(raw);
 }
 
-ImageBuffer arraw::rawimport::load(const std::filesystem::path& path, DiagnosticLog& log) {
+ImageBuffer arraw::rawimport::load(const std::filesystem::path& path, DiagnosticLog& log,
+                                   DecodeOptions options) {
     LibRaw raw;
     openOrThrow(raw, path);
 
-    applyDecodeSettings(raw);
+    applyDecodeSettings(raw, options);
 
     if (const int code = raw.unpack(); code != LIBRAW_SUCCESS) {
         throw std::runtime_error(failureMessage(path, code));
@@ -323,5 +371,10 @@ ImageBuffer arraw::rawimport::load(const std::filesystem::path& path, Diagnostic
     if (!image) {
         throw std::runtime_error(failureMessage(path, code));
     }
-    return toBuffer(*image, metadata.encoding, metadata.orientation);
+    ImageBuffer decoded = toBuffer(*image, metadata.encoding, metadata.orientation);
+    if (options.halfSize && decoded.size() == metadata.size && decoded.size().width >= 2 &&
+        decoded.size().height >= 2) {
+        return halvedRgbaU16(decoded);
+    }
+    return decoded;
 }

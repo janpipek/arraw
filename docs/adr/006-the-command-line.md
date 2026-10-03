@@ -25,7 +25,7 @@ would be the expensive mistake.
 
 ```
 arraw-cli export <input>... -o <dir> [--format] [--quality] [--bit-depth]
-                                     [--encoding] [--no-profile]
+                                     [--sharpen] [--encoding] [--no-profile]
                                      [--overwrite] [--quiet]
 ```
 
@@ -36,7 +36,8 @@ arraw-cli export <input>... -o <dir> [--format] [--quality] [--bit-depth]
 - **Inputs are files, never directories.** The shell expands wildcards. A
   directory input would need a "which files count" policy involving RAW+JPEG
   pairing that the engine cannot answer yet, and approximating it would be worse
-  than refusing it.
+  than refusing it. *(Superseded 2026-10-03: see the note at the end and
+  [ADR 029](029-a-folder-is-a-list-of-shots.md).)*
 - **`-o` names a directory, always**, which must already exist. The tempting
   alternative — a single input plus an image-shaped `-o` means "write exactly
   this file" — makes the meaning of `-o` depend on how many inputs were passed.
@@ -170,9 +171,16 @@ export uses. As in export, an unreadable input or sidecar fails that file
 (exit 1) while the rest are shown, and `--no-sidecar` opens the file bare.
 Nothing is ever written.
 
-The EXIF of the camera (make, model, lens, exposure, date) is not shown: it
-awaits the metadata reader deferred in ADR 005. Until then `info` reports only
-what opening a photograph already knows.
+The EXIF of the camera is shown from 2026-10-03 (ADR 028): after the
+encoding line, one `label: text` line for each of `camera`, `lens`, `exposure`
+(`1/250 s  f/2.8  ISO 400  35 mm (52 mm equivalent)`), `exposure bias`, `flash`,
+`taken` (with the UTC offset), `GPS` (latitude, longitude and altitude, signed)
+`artist` and `copyright` that the file records; a file that records none shows
+none of them and prints no notice. `--json` gives an `exif` object per file with
+the fields present, named as in `ExifInfo` (`make`, `lensModel`, `exposureTime`,
+...), rationals as `{"numerator": n, "denominator": d}` and `gps` as
+`{"latitude", "longitude", "altitude"}`. A file whose EXIF exiv2 failed to read
+is still shown, with a `exif_unreadable` warning.
 
 `info` also says which other tools left information in the sidecar, from what
 reading it already finds (ADR 019): an `other tools:` block with
@@ -180,3 +188,76 @@ reading it already finds (ADR 019): an `other tools:` block with
 `<owner or unknown> (<prefix>:, N properties)`. `--json` gives `creatorTool`
 (string or null) and `others` (`uri`, `prefix`, `properties`, `owner`) per file.
 Nothing is shown for a sidecar only arraw wrote, or with `--no-sidecar`.
+
+## Note, 2026-10-03: folders and the marks filter
+
+Inputs of `export` and `info` may be folders (ADR 029). A folder expands to the
+primary files of its shots, in natural order, not recursively; a RAW+JPEG pair is
+one shot, and only the RAW is exported or listed as a file of its own. Files
+given directly behave as before, and so does everything else in this record.
+`info` shows, for a shot found in a folder, a `format:` line (`ARW+JPEG`) and a
+`companions:` line with the names; `--json` gives every file `format` and
+`companions` (an array of paths, empty for a file given directly).
+
+```
+arraw-cli export <input>... -o <dir> [...] [--min-rating N] [--rejected] [--label NAME]...
+arraw-cli info   <input>... [...]          [--min-rating N] [--rejected] [--label NAME]...
+```
+
+`--min-rating N` (1 to 5) wants at least N stars; `--rejected` wants rejects
+only and is a usage error with `--min-rating`; `--label` takes red, yellow,
+green, blue or purple in any case, and several labels mean any of them. The
+dimensions combine by AND. A photograph is tested by the marks in its sidecar,
+the default marks (none) when it has none or under `--no-sidecar`, whether it
+was given as a file or found in a folder. A photograph left out is not a
+failure: one summary line, `N left out, as their marks do not match the filter`
+(notice `filtered_out`, informational, so `--quiet` drops it), and the exit
+status is unchanged. A bad rating, an unknown label or the conflict is a usage
+error (2) before any file is touched. An empty folder reports `no photographs`
+(notice `no_photographs`) and is not an error; an unreadable folder fails as an
+input (1), and a sidecar that cannot be read fails its photograph under a
+filter, since its marks are unknown. The batch summary counts folders that could
+not be read among the failed inputs.
+
+## Note, 2026-10-03: exported metadata
+
+`export` takes `--metadata LIST` (ADR 032): `all`, `none`, or a comma list of
+`capture`, `location` and `descriptive`, in any case. The default is
+`capture,descriptive`; location (GPS) is carried only when named. The photograph's
+camera, lens, exposure and time, its rating and label (from the sidecar's marks)
+and its title, caption, keywords, creator and rights (from its own XMP and its
+sidecar, the sidecar winning) go into the JPEG, PNG or TIFF, and arraw's version
+into its `Software` tag. `--no-sidecar` also ignores the sidecar for this. An
+unknown name is a usage error (2). A photograph whose metadata exiv2 cannot read
+fails as an input (1) with a hint to pass `--metadata none`; nothing is written
+for it.
+```
+arraw-cli export <input>... -o <dir> [...] [--metadata LIST]
+```
+
+## Note, 2026-10-03: terminal styling and untrusted text
+
+Human-readable output strips terminal control sequences from filenames,
+metadata, diagnostic messages, arguments reported in usage errors, and GPU
+report values. These fields can come from outside arraw: a filename or camera
+tag must not clear the screen, change the clipboard, or inject report lines.
+
+`cli::terminalText` in `src/cli/TerminalText.cpp` removes ANSI sequences,
+including CSI and OSC sequences and control-string payloads, plus C0/C1
+controls and DEL. It strips the sequences entirely rather than displaying
+escape notation. An unterminated control string consumes the remainder of
+that field. Ordinary Unicode text is preserved; embedded line breaks and tabs
+are removed, while the report writer owns indentation and line breaks.
+
+`cli::accented` cleans its text before adding arraw's own ANSI styling. Other
+text fields use the same helper directly. This keeps the existing colours and
+layout while preventing supplied text from contributing terminal controls,
+whether colour is enabled or output is redirected. The earlier removal of ANSI
+colour described above is superseded by this shared styling helper; help still
+comes from the parser.
+
+JSON reports and diagnostics keep the original field values through their JSON
+serialization; terminal cleaning belongs to human-readable output, not the
+engine's metadata or paths. CLI regression tests cover injected sequences in
+filenames, sidecar metadata, diagnostics and usage errors, Unicode preservation,
+and cleaning before trusted styling is added.

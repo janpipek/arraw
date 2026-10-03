@@ -399,12 +399,13 @@ TEST_CASE("Developing an opaque photograph gives exactly opaque pixels, resized 
          {RenderRequest{}, RenderRequest{.size = RenderRequest::Scale{0.37}},
           RenderRequest{.size = RenderRequest::FitInside{40, 40}, .filter = ResizeFilter::Bilinear},
           RenderRequest{.size = RenderRequest::Scale{2.0}, .upscale = Upscale::Allowed}}) {
-        const ImageBuffer result = develop(source, settings, request);
+        const ImageBuffer result = develop(source, DevelopState{settings}, request);
         for (std::size_t i = 3; i < result.samples<float>().size(); i += 4) {
             REQUIRE(result.samples<float>()[i] == 1.0F);
         }
     }
-    REQUIRE(planFor(source, settings, {.size = RenderRequest::Scale{0.37}}).resize->opaque);
+    REQUIRE(planFor(source, DevelopState{settings}, {.size = RenderRequest::Scale{0.37}})
+                .resize->opaque);
 }
 
 TEST_CASE("Developing is the same through the opaque path as through the general one",
@@ -416,15 +417,15 @@ TEST_CASE("Developing is the same through the opaque path as through the general
     DevelopSettings settings;
     settings.geometry.straighten = -6.0;
     const RenderRequest request{.size = RenderRequest::Scale{0.43}};
-    const ProcessingPlan plan = planFor(source, settings, request);
+    const ProcessingPlan plan = planFor(source, DevelopState{settings}, request);
     REQUIRE(plan.resize->opaque);
 
     // Without a request develop() stops at the cropped pixels; resampling them
     // by hand with no claim of opacity is the general path. This shows the two
     // paths agree, not that develop() took the fast path: they are bit-identical,
     // so nothing here could tell. The plan's opaque flag is checked above.
-    const ImageBuffer cropped = develop(source, settings);
+    const ImageBuffer cropped = develop(source, DevelopState{settings});
     REQUIRE(
-        sameBits(develop(source, settings, request),
+        sameBits(develop(source, DevelopState{settings}, request),
                  resample(cropped.clone(), plan.resize->outputSize, plan.resize->filter, false)));
 }

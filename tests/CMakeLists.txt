@@ -17,31 +17,51 @@ add_executable(arraw-tests
         main.cpp
         support/ImageCompare.cpp
         support/TestImages.cpp
+        test_AppSettings.cpp
         test_Cli.cpp
         test_ColorEncoding.cpp
         test_Develop.cpp
+        test_DevelopState.cpp
         test_DisplayImage.cpp
         test_EditSession.cpp
+        test_EmbeddedPreview.cpp
+        test_ExifInfo.cpp
+        test_ExportMetadata.cpp
+        test_ExportQueue.cpp
+        test_ExportSettings.cpp
+        test_FilmStripRules.cpp
         test_Geometry.cpp
         test_Diagnostics.cpp
+        test_ColorAdjustments.cpp
         test_GpuContext.cpp
         test_GpuDevice.cpp
         test_GpuPlan.cpp
         test_ImageBuffer.cpp
         test_ImageExport.cpp
+        test_ImagePyramid.cpp
         test_Photo.cpp
+        test_PreviewRenderer.cpp
         test_ProcessingPlan.cpp
+        test_Region.cpp
         test_RenderCheckpoint.cpp
         test_Resample.cpp
         test_RawImport.cpp
         test_SettingCodec.cpp
         test_SettingDescriptors.cpp
+        test_SettingPresentation.cpp
         test_SettingsJson.cpp
+        test_Shot.cpp
+        test_ShotModel.cpp
         test_Sidecar.cpp
         test_SampleConversion.cpp
         test_RoundTrip.cpp
+        test_ThumbnailCache.cpp
+        test_ThumbnailWorker.cpp
+        test_TimingTrace.cpp
         test_Tone.cpp
-        test_WhiteBalance.cpp)
+        test_ViewTransform.cpp
+        test_WhiteBalance.cpp
+        test_WhiteBalanceChoice.cpp)
 arraw_enable_warnings(arraw-tests)
 
 # The processing plan is engine-private: the order of the pointwise stages is
@@ -61,9 +81,22 @@ target_compile_definitions(arraw-tests
 # the one place outside arraw-gpu that names it, because the failures it covers
 # cannot be caused through GpuContext.
 target_link_libraries(arraw-tests
-        PRIVATE arraw arraw-gpu arraw-app-core arraw-cli-core Catch2::Catch2 Qt6::Gui Qt6::GuiPrivate Qt6::Xml)
+        PRIVATE arraw arraw-gpu arraw-app-core arraw-cli-core Catch2::Catch2 Qt6::Gui Qt6::GuiPrivate Qt6::Xml
+        # exiv2 itself, to write the EXIF tags test_ExifInfo.cpp reads back.
+        ${ARRAW_EXIV2})
 set_target_properties(arraw-tests PROPERTIES AUTOMOC OFF)
 arraw_deploy_qt_plugins(arraw-tests)
+
+# Widget behavior runs separately because the core suite owns a QCoreApplication.
+add_executable(arraw-widget-tests
+        test_SettingsDialog.cpp
+        ../src/app/ui/SettingsDialog.cpp
+        ../src/app/ui/SettingsDialog.h)
+arraw_enable_warnings(arraw-widget-tests)
+target_link_libraries(arraw-widget-tests PRIVATE arraw-app-core Qt6::Widgets Catch2::Catch2)
+set_target_properties(arraw-widget-tests PROPERTIES AUTOMOC ON)
+arraw_deploy_qt_plugins(arraw-widget-tests)
+catch_discover_tests(arraw-widget-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # Registers each TEST_CASE with CTest individually, so `ctest -R` can select one.
 catch_discover_tests(arraw-tests)
@@ -161,6 +194,7 @@ endif()
 # to date: `just test` builds this, and a target CTest registers but nothing
 # builds would fail as "not built", or run stale.
 add_custom_target(arraw-test-binaries)
+add_dependencies(arraw-test-binaries arraw-widget-tests)
 add_dependencies(arraw-test-binaries arraw-tests arraw-cli)
 add_dependencies(arraw-test-binaries arraw-gpu-tests)
 if(TARGET arraw-headless-tests)

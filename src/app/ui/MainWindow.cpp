@@ -1,56 +1,123 @@
 #include "MainWindow.h"
 
+#include "CullingActions.h"
 #include "DebugDiagnostics.h"
+#include "DevelopPanel.h"
 #include "DisplayImage.h"
+#include "ExportDialog.h"
+#include "ExportSettings.h"
+#include "FilmStrip.h"
+#include "PhotoView.h"
+#include "SettingsDialog.h"
+#include "ThumbnailCache.h"
+#include "ViewTransform.h"
 
+#include <ColorEncoding.h>
+#include <Develop.h>
 #include <ImageBuffer.h>
 #include <ImageImport.h>
 #include <Photo.h>
+#include <Sidecar.h>
+#include <WhiteBalance.h>
 
 #include <QAction>
+#include <QActionGroup>
+#include <QCloseEvent>
+#include <QDockWidget>
 #include <QEvent>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QImage>
 #include <QKeySequence>
 #include <QLabel>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
-#include <QPixmap>
+#include <QMetaObject>
+#include <QPushButton>
 #include <QScreen>
-#include <QSizePolicy>
+#include <QScrollArea>
+#include <QSettings>
+#include <QShortcut>
 #include <QStandardPaths>
+#include <QStatusBar>
 #include <QString>
+#include <QStringList>
+#include <QToolButton>
 
+#include <algorithm>
+#include <cstdlib>
 #include <exception>
 #include <filesystem>
+#include <optional>
+#include <stdexcept>
+#include <string_view>
+#include <system_error>
 #include <utility>
+#include <variant>
 
 namespace arraw::app {
 
-MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
+namespace {
+
+/// @brief Reads whether ARRAW_PREVIEW_DEVICE forces the CPU.
+///
+/// `cpu` forces it, for previews and exports alike; anything else, or nothing,
+/// leaves the saved processing preference in effect.
+bool cpuForcedByEnvironment() {
+    const char* value = std::getenv("ARRAW_PREVIEW_DEVICE");
+    return value != nullptr && std::string_view(value) == "cpu";
+}
+
+/// @brief Converts a filesystem path to a Qt string, through UTF-16.
+QString toQString(const std::filesystem::path& path) {
+    return QString::fromStdU16String(path.u16string());
+}
+
+} // namespace
+
+MainWindow::MainWindow(QWidget* parent)
+    : QMainWindow(parent), runningSettings_([] {
+          QSettings store;
+          return restoreAppSettings(store);
+      }()),
+      previewRenderer_(
+          [this](PreviewResult result) {
+              // On the worker thread. Dropped if the window is gone by the time the
+              // GUI thread would run it.
+              QMetaObject::invokeMethod(
+                  this, [this, result = std::move(result)] { showResult(result); },
+                  Qt::QueuedConnection);
+          },
+          cpuForcedByEnvironment() ? PreviewRenderer::Device::Cpu : PreviewRenderer::Device::Auto,
+          runningSettings_),
+      exportQueue_(
+          [this](ExportResult result) {
+              // On the worker thread, as the preview's.
+              QMetaObject::invokeMethod(
+                  this, [this, result = std::move(result)] { showExportResult(result); },
+                  Qt::QueuedConnection);
+          },
+          cpuForcedByEnvironment() ? ExportQueue::Device::Cpu : ExportQueue::Device::Auto,
+          runningSettings_) {
+    filmStrip_ = new FilmStrip(this);
     buildMenu();
+    buildStatusBar();
     buildImageView();
+    buildDevelopDock();
+    buildFilmStripDock();
+
+    cancelPickShortcut_ = new QShortcut(Qt::Key_Escape, this);
+    cancelPickShortcut_->setEnabled(false);
+    connect(cancelPickShortcut_, &QShortcut::activated, this, [this] { setPicking(false); });
 
     // Long enough to coalesce the events of a drag, short enough to feel prompt.
     resizeTimer_.setSingleShot(true);
     resizeTimer_.setInterval(100);
-    connect(&resizeTimer_, &QTimer::timeout, this, [this] {
-        // The message box runs a nested event loop, in which further resizes
-        // can fire the timer again: one box at a time.
-        if (reportingFailure_) {
-            return;
-        }
-        // An exception must not leave a function Qt's event loop called.
-        try {
-            rerender();
-        } catch (const std::exception& error) {
-            reportingFailure_ = true;
-            QMessageBox::warning(this, tr("Cannot Render Photograph"),
-                                 QString::fromUtf8(error.what()));
-            reportingFailure_ = false;
-        }
-    });
+    connect(&resizeTimer_, &QTimer::timeout, this, &MainWindow::requestRender);
+    interactionTimer_.setSingleShot(true);
+    interactionTimer_.setInterval(0);
+    connect(&interactionTimer_, &QTimer::timeout, this, &MainWindow::requestRender);
 
     // No size to restore yet: two thirds of the screen, so the first photograph
     // is fitted to something worth looking at.
@@ -60,7 +127,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 }
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
-    if (watched == imageView_ && open_ &&
+    if (watched == photoView_ && open_ &&
         (event->type() == QEvent::Resize || event->type() == QEvent::DevicePixelRatioChange)) {
         resizeTimer_.start();
     }
@@ -74,76 +141,851 @@ void MainWindow::buildMenu() {
     openAction->setShortcut(QKeySequence::Open);
     connect(openAction, &QAction::triggered, this, &MainWindow::openFileWithDialog);
 
+    QAction* openFolderAction = fileMenu->addAction(tr("Open &Folder…"));
+    openFolderAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_O));
+    connect(openFolderAction, &QAction::triggered, this, &MainWindow::openFolderWithDialog);
+
+    saveAction_ = fileMenu->addAction(tr("&Save Adjustments"));
+    saveAction_->setShortcut(QKeySequence::Save);
+    saveAction_->setEnabled(false);
+    connect(saveAction_, &QAction::triggered, this, [this] { saveAdjustments(); });
+
+    exportAction_ = fileMenu->addAction(tr("&Export…"));
+    exportAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_E));
+    exportAction_->setEnabled(false);
+    connect(exportAction_, &QAction::triggered, this, &MainWindow::exportWithDialog);
+
+    fileMenu->addSeparator();
     QAction* quitAction = fileMenu->addAction(tr("&Quit"));
     quitAction->setShortcut(QKeySequence::Quit);
     connect(quitAction, &QAction::triggered, this, [this] { close(); });
+
+    QMenu* editMenu = menuBar()->addMenu(tr("&Edit"));
+    undoAction_ = editMenu->addAction(tr("&Undo"));
+    undoAction_->setShortcut(QKeySequence::Undo);
+    undoAction_->setEnabled(false);
+    connect(undoAction_, &QAction::triggered, this, [this] {
+        guarded([this] {
+            developPanel_->finishPendingEdit();
+            open_->session.undo();
+            refreshPanel();
+        });
+    });
+    redoAction_ = editMenu->addAction(tr("&Redo"));
+    redoAction_->setShortcut(QKeySequence::Redo);
+    redoAction_->setEnabled(false);
+    connect(redoAction_, &QAction::triggered, this, [this] {
+        guarded([this] {
+            developPanel_->finishPendingEdit();
+            open_->session.redo();
+            refreshPanel();
+        });
+    });
+
+    editMenu->addSeparator();
+    QAction* settingsAction = editMenu->addAction(tr("&Settings…"));
+    settingsAction->setMenuRole(QAction::PreferencesRole);
+    settingsAction->setShortcut(QKeySequence::Preferences);
+    connect(settingsAction, &QAction::triggered, this, &MainWindow::showSettings);
+
+    culling_ = new CullingActions(*this, *filmStrip_);
+    buildZoomControls();
+}
+
+void MainWindow::showSettings() {
+    QSettings saved;
+    SettingsDialog dialog(restoreAppSettings(saved), this);
+    while (dialog.exec() == QDialog::Accepted) {
+        QSettings store;
+        saveAppSettings(dialog.settings(), store);
+        store.sync();
+        if (store.status() == QSettings::NoError) {
+            statusBar()->showMessage(
+                tr("Settings saved. Restart Arraw to apply processing changes."), 6000);
+            return;
+        }
+        QMessageBox::warning(this, tr("Could not save settings"),
+                             tr("Check that the application settings location is writable."));
+    }
+}
+
+void MainWindow::buildZoomControls() {
+    viewMenu_ = menuBar()->addMenu(tr("&View"));
+    QMenu* zoomMenu = viewMenu_->addMenu(tr("&Zoom"));
+
+    zoomInAction_ = zoomMenu->addAction(tr("Zoom &In"));
+    zoomInAction_->setShortcut(QKeySequence::ZoomIn);
+    connect(zoomInAction_, &QAction::triggered, this, [this] { photoView_->zoomBy(2.0); });
+    zoomOutAction_ = zoomMenu->addAction(tr("Zoom &Out"));
+    zoomOutAction_->setShortcut(QKeySequence::ZoomOut);
+    connect(zoomOutAction_, &QAction::triggered, this, [this] { photoView_->zoomBy(0.5); });
+    zoomMenu->addSeparator();
+
+    // One list of actions, in the menu and in the button's dropdown alike.
+    zoomGroup_ = new QActionGroup(this);
+    zoomGroup_->setExclusive(true);
+    auto* fitAction = new QAction(tr("&Fit"), this);
+    fitAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_0));
+    connect(fitAction, &QAction::triggered, this, [this] { photoView_->zoomToFit(); });
+    zoomActions_.push_back(fitAction);
+    for (const double preset : zoomPresets) {
+        auto* action = new QAction(zoomPercentLabel(preset), this);
+        connect(action, &QAction::triggered, this, [this, preset] { photoView_->zoomTo(preset); });
+        zoomActions_.push_back(action);
+    }
+    auto* dropdown = new QMenu(this);
+    for (QAction* action : zoomActions_) {
+        action->setCheckable(true);
+        zoomGroup_->addAction(action);
+        zoomMenu->addAction(action);
+        dropdown->addAction(action);
+    }
+
+    zoomButton_ = new QToolButton(this);
+    zoomButton_->setPopupMode(QToolButton::InstantPopup);
+    zoomButton_->setAutoRaise(true);
+    zoomButton_->setMenu(dropdown);
+    zoomButton_->setToolTip(tr("Zoom"));
+}
+
+void MainWindow::updateZoomControls() {
+    const bool enabled = open_.has_value();
+    zoomButton_->setEnabled(enabled);
+    zoomInAction_->setEnabled(enabled);
+    zoomOutAction_->setEnabled(enabled);
+    for (QAction* action : zoomActions_) {
+        action->setEnabled(enabled);
+    }
+    const bool fit = photoView_->isFit();
+    const double zoom = photoView_->zoom();
+    zoomButton_->setText(enabled ? zoomLabel(zoom, fit) : tr("Fit"));
+    // The preset the zoom is, or none: a wheel zoom is between them.
+    const int preset = fit ? -1 : matchingZoomPreset(zoom);
+    for (std::size_t i = 0; i < zoomActions_.size(); ++i) {
+        zoomActions_[i]->setChecked(enabled && (i == 0 ? fit : static_cast<int>(i) - 1 == preset));
+    }
+    if (!enabled || (!fit && preset < 0)) {
+        // Exclusive groups keep one ticked; a zoom between presets ticks none.
+        zoomGroup_->setExclusive(false);
+        for (QAction* action : zoomActions_) {
+            action->setChecked(false);
+        }
+        zoomGroup_->setExclusive(true);
+    }
+}
+
+void MainWindow::buildDevelopDock() {
+    developPanel_ = new DevelopPanel;
+    auto* scroll = new QScrollArea;
+    scroll->setWidget(developPanel_);
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+
+    auto* dock = new QDockWidget(tr("Develop"), this);
+    dock->setFeatures(QDockWidget::NoDockWidgetFeatures);
+    dock->setWidget(scroll);
+    dock->setEnabled(false);
+    addDockWidget(Qt::RightDockWidgetArea, dock);
+    developDock_ = dock;
+
+    connect(developPanel_, &DevelopPanel::editStarted, this,
+            [this] { guarded([this] { open_->session.begin(); }); });
+    connect(developPanel_, &DevelopPanel::stateEdited, this, [this](const DevelopState& state) {
+        guarded([this, &state] {
+            // No edit is open after a failure cancelled one: the rest of that
+            // drag is dropped, rather than failing again with every move.
+            if (!open_->session.editing()) {
+                return;
+            }
+            open_->session.update(state);
+            refreshPanel();
+        });
+    });
+    connect(developPanel_, &DevelopPanel::pickToggled, this, &MainWindow::setPicking);
+    // Enter or Esc in a spin box ends the typing: the arrow keys are the window's again.
+    connect(developPanel_, &DevelopPanel::focusReleased, photoView_,
+            qOverload<>(&QWidget::setFocus));
+    connect(developPanel_, &DevelopPanel::editFinished, this, [this] {
+        guarded([this] {
+            if (!open_->session.editing()) {
+                return;
+            }
+            open_->session.commit();
+            refreshPanel();
+        });
+    });
+}
+
+void MainWindow::setPicking(bool picking) {
+    picking_ = picking && open_.has_value();
+    developPanel_->setPicking(picking_);
+    cancelPickShortcut_->setEnabled(picking_);
+    photoView_->setPicking(picking_);
+}
+
+void MainWindow::pickNeutralAt(const QPointF& point) {
+    const double x = point.x();
+    const double y = point.y();
+
+    setPicking(false);
+    guarded([this, x, y] {
+        developPanel_->finishPendingEdit();
+        // The preview is of a reduced copy, but its frame is the developed
+        // frame, so normalised coordinates hold against the full source.
+        const DevelopState& current = open_->session.photo().state();
+        const ColourTemperature light = neutralTemperatureAt(*open_->decoded, current, x, y);
+        DevelopState next = current;
+        next.settings.color = {WhiteBalanceMode::Custom, light.kelvin, light.tint};
+        open_->session.begin();
+        open_->session.update(next);
+        open_->session.commit();
+        refreshPanel();
+    });
+}
+
+void MainWindow::guarded(const std::function<void()>& action) {
+    if (!open_) {
+        return;
+    }
+    try {
+        action();
+    } catch (const std::exception& error) {
+        const QString message = QString::fromUtf8(error.what());
+        try {
+            if (open_->session.editing()) {
+                open_->session.cancel();
+            }
+            refreshPanel();
+        } catch (const std::exception&) {
+            // Nothing more can be done; the message below still tells the user.
+        }
+        QMessageBox::warning(this, tr("Cannot Edit Photograph"), message);
+    }
+}
+
+void MainWindow::refreshPanel() {
+    if (!open_) {
+        return;
+    }
+    const Photo& photo = open_->session.photo();
+    const bool raw = !std::holds_alternative<NamedEncoding>(photo.metadata().encoding);
+    PanelContext context{raw, std::nullopt};
+    if (const auto* camera = std::get_if<CameraNative>(&photo.metadata().encoding)) {
+        try {
+            // The light the pixels went through, which is also what development
+            // keeps for whichever of Temp and Tint is not named. For a file that
+            // recorded its neutral this is the camera's reading; for one that
+            // did not, the decode's substitute (ADR 007), and showing that keeps
+            // a row from jumping when only the other one moves.
+            context.asShot = temperatureForGains(*camera, camera->appliedMultipliers);
+        } catch (const std::invalid_argument&) {
+            // A calibration that gives no reading: the rows fall back to a fixed one.
+        }
+    }
+    developPanel_->showState(photo.state(), context);
+    undoAction_->setEnabled(open_->session.canUndo());
+    redoAction_->setEnabled(open_->session.canRedo());
+    saveAction_->setEnabled(open_->session.hasUnsavedChanges());
+    updateTitle();
+    requestRender();
+}
+
+void MainWindow::updateTitle() {
+    if (!open_) {
+        setWindowTitle(tr("arraw"));
+        return;
+    }
+    setWindowTitle(
+        tr("%1[*] \u2014 arraw").arg(toQString(open_->session.photo().path().filename())));
+    setWindowModified(open_->session.hasUnsavedChanges());
 }
 
 void MainWindow::buildImageView() {
-    imageView_ = new QLabel(this);
-    imageView_->setAlignment(Qt::AlignCenter);
-    // The view takes the room the window gives it; the pixmap must not decide
-    // the window's minimum size, or the photograph could never be fitted smaller.
-    imageView_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
-    imageView_->setMinimumSize(1, 1);
-    imageView_->installEventFilter(this);
-    setCentralWidget(imageView_);
+    photoView_ = new PhotoView(this);
+    photoView_->installEventFilter(this);
+    connect(photoView_, &PhotoView::picked, this, &MainWindow::pickNeutralAt);
+    connect(photoView_, &PhotoView::zoomChanged, this, &MainWindow::updateZoomControls);
+    // A drag or a wheel burst makes many events; they ask for one render per turn.
+    connect(photoView_, &PhotoView::viewChanged, this, [this] {
+        if (open_) {
+            interactionTimer_.start();
+        }
+    });
+    setCentralWidget(photoView_);
+    updateZoomControls();
 }
 
+void MainWindow::buildStatusBar() {
+    deviceLabel_ = new QLabel(this);
+    statusBar()->addPermanentWidget(deviceLabel_);
+    statusBar()->addPermanentWidget(zoomButton_);
+}
+
+void MainWindow::showDevice(const PreviewResult& result) {
+    QString text = result.onGpu
+                       ? tr("Preview: GPU \u2014 %1").arg(QString::fromStdString(result.deviceName))
+                       : tr("Preview: CPU");
+    if (result.level > 0) {
+        // A reduced copy of the photograph was developed: 1/2^level of its linear size.
+        text += tr(" \u00b7 1/%1").arg(1ULL << result.level);
+    }
+    deviceLabel_->setText(text);
+    deviceLabel_->setToolTip(QString::fromStdString(result.fallbackReason));
+}
+
+namespace {
+
+/// @brief Builds the open dialog's name filters from the extensions arraw opens.
+///
+/// All images first, then one group each for RAW, JPEG, PNG and TIFF, so the
+/// dialog cannot offer what ::arraw::loadImage would not decode, nor leave out
+/// what it would.
+QString openFileFilter() {
+    QStringList all;
+    QStringList raw;
+    for (const std::string_view extension : supportedImageExtensions()) {
+        const QString pattern =
+            QStringLiteral("*.") +
+            QString::fromUtf8(extension.data(), static_cast<qsizetype>(extension.size()));
+        all << pattern;
+        if (extension != "jpg" && extension != "jpeg" && extension != "png" && extension != "tif" &&
+            extension != "tiff") {
+            raw << pattern;
+        }
+    }
+    return MainWindow::tr("All Images (%1);;RAW Images (%2);;JPEG Images (*.jpg *.jpeg);;"
+                          "PNG Images (*.png);;TIFF Images (*.tif *.tiff);;All Files (*)")
+        .arg(all.join(' '), raw.join(' '));
+}
+
+} // namespace
+
 void MainWindow::openFileWithDialog() {
-    const QString filesDir = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
-    // TODO: derive the extensions from what loadImage can decode, rather than
-    // keeping a second list here.
-    const QString filter = tr("All Images (*.cr2 *.arw *.dng *.jpg *.jpeg *.png);;"
-                              "RAW Images (*.cr2 *.arw *.dng);;"
-                              "JPEG Images (*.jpg *.jpeg);;"
-                              "PNG Images (*.png);;"
-                              "All Files (*)");
+    const QString filter = openFileFilter();
     const QString fileName =
-        QFileDialog::getOpenFileName(this, tr("Open Photograph"), filesDir, filter);
+        QFileDialog::getOpenFileName(this, tr("Open Photograph"), dialogFolder(), filter);
     if (fileName.isEmpty()) {
         return; // Cancelled.
     }
     // Through UTF-16, not toStdString(): on Windows a path built from a narrow
     // string is read in the ANSI code page, which mangles non-ASCII names.
-    const std::filesystem::path path(fileName.toStdU16String());
+    openFile(std::filesystem::path(fileName.toStdU16String()));
+}
 
+void MainWindow::openInitialPath(const std::optional<std::filesystem::path>& path) {
+    QSettings store;
+    const auto selected = path ? path : restoreOpenPath(store);
+    if (!selected) {
+        return;
+    }
+    const std::filesystem::path absolute(
+        QFileInfo(toQString(*selected)).absoluteFilePath().toStdU16String());
+    std::error_code error;
+    if (std::filesystem::is_directory(absolute, error)) {
+        openFolder(absolute);
+    } else {
+        openFile(absolute);
+    }
+}
+
+void MainWindow::openFile(const std::filesystem::path& path) {
     // The one place that can tell the user: an exception must not leave a
     // function Qt's event loop called, which ends in std::terminate.
     try {
         DebugDiagnostics log;
-        showPhoto(openPhoto(path, log));
+        Photo photo = openPhoto(path, log);
+        // Asked once the file is known to open, so that cancelling the dialog
+        // or choosing a bad file leaves the current photograph and its edits.
+        if (!confirmLeavingPhoto()) {
+            return;
+        }
+        const std::filesystem::path folder = path.parent_path();
+        if (filmStrip_->folder().lexically_normal() != folder.lexically_normal()) {
+            try {
+                filmStrip_->setFolder(folder);
+            } catch (const std::exception& error) {
+                // The photograph itself opened; only the strip cannot show its folder.
+                statusBar()->showMessage(
+                    tr("Cannot list %1: %2")
+                        .arg(toQString(folder), QString::fromUtf8(error.what())),
+                    8000);
+            }
+        }
+        showPhoto(std::move(photo));
+        rememberFolder(folder);
+        // The shot that holds the file, as its primary or as a companion; the file the user
+        // chose stays the one developed.
+        if (const auto shot = filmStrip_->shotContaining(path)) {
+            filmStrip_->setActive(*shot);
+        } else {
+            filmStrip_->clearActive();
+        }
     } catch (const std::exception& error) {
         QMessageBox::warning(this, tr("Cannot Open Photograph"),
-                             tr("%1\n\n%2").arg(fileName, QString::fromUtf8(error.what())));
+                             tr("%1\n\n%2").arg(toQString(path), QString::fromUtf8(error.what())));
     }
 }
 
-QSize MainWindow::viewportPixels() const {
-    return (imageView_->size() * imageView_->devicePixelRatioF()).expandedTo({1, 1});
+void MainWindow::openFolderWithDialog() {
+    const QString folder = QFileDialog::getExistingDirectory(
+        this, tr("Open Folder"), dialogFolder(), QFileDialog::ShowDirsOnly);
+    if (!folder.isEmpty()) {
+        openFolder(std::filesystem::path(folder.toStdU16String()));
+    }
 }
 
-void MainWindow::rerender() {
+void MainWindow::openFolder(const std::filesystem::path& folder) {
+    if (!confirmLeavingPhoto()) {
+        return;
+    }
+    try {
+        filmStrip_->setFolder(folder);
+    } catch (const std::exception& error) {
+        QMessageBox::warning(
+            this, tr("Cannot Open Folder"),
+            tr("%1\n\n%2").arg(toQString(folder), QString::fromUtf8(error.what())));
+        return;
+    }
+    rememberFolder(folder);
+    QSettings().remove("lastFile");
+    if (const auto first = filmStrip_->firstVisible()) {
+        activateShot(toQString(*first));
+    }
+}
+
+void MainWindow::activateShot(const QString& primary) {
+    const std::filesystem::path path(primary.toStdU16String());
+    try {
+        DebugDiagnostics log;
+        Photo photo = openPhoto(path, log);
+        if (!confirmLeavingPhoto()) {
+            return; // The strip keeps its active shot and selection.
+        }
+        showPhoto(std::move(photo));
+        filmStrip_->setActive(path);
+    } catch (const std::exception& error) {
+        QMessageBox::warning(this, tr("Cannot Open Photograph"),
+                             tr("%1\n\n%2").arg(toQString(path), QString::fromUtf8(error.what())));
+    }
+}
+
+QString MainWindow::dialogFolder() const {
+    const QString remembered = QSettings().value("lastFolder").toString();
+    return remembered.isEmpty() ? QStandardPaths::writableLocation(QStandardPaths::PicturesLocation)
+                                : remembered;
+}
+
+void MainWindow::rememberFolder(const std::filesystem::path& folder) {
+    QSettings().setValue("lastFolder", QFileInfo(toQString(folder)).absoluteFilePath());
+}
+
+void MainWindow::buildFilmStripDock() {
+    stripDock_ = new QDockWidget(tr("Film Strip"), this);
+    stripDock_->setObjectName("FilmStripDock");
+    stripDock_->setAllowedAreas(Qt::TopDockWidgetArea | Qt::BottomDockWidgetArea);
+    // Closable for the View menu's toggle; the strip's own title bar has no close button.
+    stripDock_->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable |
+                            QDockWidget::DockWidgetClosable);
+    filmStrip_->setMinimumHeight(80);
+    stripDock_->setWidget(filmStrip_);
+    stripDock_->setTitleBarWidget(filmStrip_->titleBar());
+    addDockWidget(Qt::BottomDockWidgetArea, stripDock_);
+    resizeDocks({stripDock_}, {132}, Qt::Vertical);
+
+    QAction* toggle = stripDock_->toggleViewAction();
+    toggle->setText(tr("&Film Strip"));
+    toggle->setShortcut(Qt::Key_F9);
+    viewMenu_->addAction(toggle);
+
+    filmStrip_->setMarksWriter([this](const std::filesystem::path& primary,
+                                      const PhotoMarks& marks) { writeMarks(primary, marks); });
+    connect(filmStrip_, &FilmStrip::activationRequested, this, &MainWindow::activateShot);
+    connect(filmStrip_, &FilmStrip::folderRequested, this, &MainWindow::openFolderWithDialog);
+    connect(filmStrip_, &FilmStrip::exportRequested, this, &MainWindow::exportWithDialog);
+    connect(filmStrip_, &FilmStrip::sidecarChangedExternally, this,
+            &MainWindow::sidecarChangedOnDisk);
+}
+
+void MainWindow::writeMarks(const std::filesystem::path& primary, const PhotoMarks& marks) {
+    // The marks of a shot live in its primary's sidecar. The session writes them for the
+    // photograph it holds; a companion open in the develop view has a sidecar of its own, and
+    // the shot's marks are not in it.
+    if (open_ && open_->session.photo().path() == primary) {
+        setMarksForCurrent(marks);
+    } else {
+        writeSidecarMarks(primary, marks);
+    }
+}
+
+void MainWindow::sidecarChangedOnDisk(const QString& primary) {
+    const std::filesystem::path path(primary.toStdU16String());
+    if (!open_ || open_->session.photo().path() != path) {
+        return; // The strip has refreshed the marks; nothing else is open on it.
+    }
+    const QString name = toQString(path.filename());
+    try {
+        developPanel_->finishPendingEdit();
+    } catch (const std::exception&) {
+        // The edit stays open, and counts as unsaved below.
+    }
+    if (open_->session.hasUnsavedChanges()) {
+        statusBar()->showMessage(
+            tr("The sidecar of %1 changed on disk; your unsaved edits are kept.").arg(name), 10000);
+        return;
+    }
+    try {
+        DebugDiagnostics log;
+        Photo photo = openPhoto(path, log);
+        const Photo& saved = open_->session.saved();
+        if (photo.state() == saved.state() && photo.marks() == saved.marks()) {
+            return; // Touched, not changed: keep the history.
+        }
+        // The pixels are the same file's; only the settings and marks are read again, and the
+        // view stays where it is.
+        auto decoded = open_->decoded;
+        open_.emplace(OpenPhoto{EditSession(std::move(photo)), std::move(decoded)});
+        refreshPanel();
+        statusBar()->showMessage(tr("Reloaded %1: its sidecar changed on disk.").arg(name), 5000);
+    } catch (const std::exception& error) {
+        statusBar()->showMessage(
+            tr("Cannot reload the sidecar of %1: %2").arg(name, QString::fromUtf8(error.what())),
+            10000);
+    }
+}
+
+namespace {
+
+/// @brief Describes a format for the save dialog's filter.
+QString nameFilterFor(ImageFileFormat format) {
+    switch (format) {
+    case ImageFileFormat::Jpeg:
+        return QObject::tr("JPEG Images (*.jpg *.jpeg)");
+    case ImageFileFormat::Png:
+        return QObject::tr("PNG Images (*.png)");
+    case ImageFileFormat::Tiff:
+        return QObject::tr("TIFF Images (*.tif *.tiff)");
+    }
+    return {};
+}
+
+} // namespace
+
+void MainWindow::exportWithDialog() {
     if (!open_) {
         return;
     }
-    const QImage image = renderForViewport(open_->decoded, open_->session.photo().settings(),
-                                           viewportPixels(), imageView_->devicePixelRatioF());
-    imageView_->setPixmap(QPixmap::fromImage(image));
+    // The end of a pending edit may change what is exported.
+    developPanel_->finishPendingEdit();
+    try {
+        const Photo& photo = open_->session.photo();
+        const ImageSize frame =
+            croppedSize(open_->decoded->size(), open_->decoded->orientation(), photo.state());
+
+        QSettings store;
+        ExportDialog dialog(restoreSettings(store), frame, this);
+        if (dialog.exec() != QDialog::Accepted) {
+            return;
+        }
+        const ExportSettings settings = dialog.settings();
+        saveSettings(settings, store);
+
+        const std::filesystem::path suggested = suggestedPath(photo.path(), settings.format);
+        const QString chosen = QFileDialog::getSaveFileName(
+            this, tr("Export Image"), toQString(suggested), nameFilterFor(settings.format));
+        if (chosen.isEmpty()) {
+            return; // Cancelled.
+        }
+        const std::filesystem::path typed(chosen.toStdU16String());
+        const std::filesystem::path path = withSuffix(typed, settings.format);
+        if (isSameFile(path, photo.path())) {
+            QMessageBox::warning(this, tr("Cannot Export Photograph"),
+                                 tr("%1\n\nThis is the photograph itself; the export would "
+                                    "overwrite it. Choose another name.")
+                                     .arg(toQString(path)));
+            return;
+        }
+        std::error_code ignored;
+        if (path != typed && std::filesystem::exists(path, ignored) &&
+            QMessageBox::question(this, tr("Export Image"),
+                                  tr("%1 already exists. Replace it?").arg(toQString(path))) !=
+                QMessageBox::Yes) {
+            return; // The file dialog only asked about the name as typed.
+        }
+
+        exportQueue_.enqueue({.state = photo.state(),
+                              .source = open_->decoded,
+                              .request = requestOf(settings),
+                              .options = optionsOf(settings),
+                              .path = path,
+                              .metadata = ExportMetadata{.source = photo.path(),
+                                                         .marks = photo.marks(),
+                                                         .selection = selectionOf(settings)}});
+        exportNames_.push_back(toQString(path.filename()));
+        showExportProgress();
+    } catch (const std::exception& error) {
+        QMessageBox::warning(this, tr("Cannot Export Photograph"), QString::fromUtf8(error.what()));
+    }
+}
+
+void MainWindow::showExportProgress() {
+    if (exportNames_.empty()) {
+        return;
+    }
+    QString text = tr("Exporting %1…").arg(exportNames_.front());
+    if (exportNames_.size() > 1) {
+        text += tr(" (%1 more)").arg(exportNames_.size() - 1);
+    }
+    statusBar()->showMessage(text);
+}
+
+void MainWindow::showExportResult(const ExportResult& result) {
+    statusBar()->setToolTip({});
+    // Every result belongs to the oldest name: jobs run in order.
+    if (!exportNames_.empty()) {
+        const QString name = exportNames_.front();
+        exportNames_.pop_front();
+        if (result.error.empty()) {
+            if (result.warnings.empty()) {
+                statusBar()->showMessage(tr("Exported %1").arg(name), 5000);
+            } else {
+                QStringList details;
+                for (const auto& warning : result.warnings) {
+                    details << QString::fromStdString(warning);
+                }
+                statusBar()->setToolTip(details.join(QLatin1Char('\n')));
+                statusBar()->showMessage(tr("Exported %1 without some metadata").arg(name), 8000);
+            }
+        } else {
+            statusBar()->clearMessage();
+        }
+    }
+    if (!result.error.empty()) {
+        QMessageBox::warning(
+            this, tr("Cannot Export Photograph"),
+            tr("%1\n\n%2").arg(toQString(result.path), QString::fromStdString(result.error)));
+    }
+    showExportProgress();
+    if (exportNames_.empty() && closeWhenIdle_) {
+        close();
+    }
+}
+
+bool MainWindow::saveAdjustments() {
+    if (!open_) {
+        return true;
+    }
+    try {
+        developPanel_->finishPendingEdit();
+        open_->session.save();
+        filmStrip_->noteOwnWrite(open_->session.photo().path());
+        // The cache gets the thumbnail of what was saved, rendered by the strip's worker: the
+        // preview may show a zoomed part of the frame, or a size the cache does not want.
+        filmStrip_->noteSettingsSaved(open_->session.photo().path());
+        refreshPanel();
+        return true;
+    } catch (const std::exception& error) {
+        // Nothing changed: the edits are still there, unsaved.
+        QMessageBox::warning(
+            this, tr("Cannot Save Adjustments"),
+            tr("%1\n\n%2")
+                .arg(toQString(open_->session.photo().path()), QString::fromUtf8(error.what())));
+        return false;
+    }
+}
+
+bool MainWindow::confirmLeavingPhoto() {
+    if (!open_) {
+        return true;
+    }
+    try {
+        developPanel_->finishPendingEdit();
+    } catch (const std::exception&) {
+        // The edit stays open, and counts as unsaved below.
+    }
+    if (!open_->session.hasUnsavedChanges()) {
+        return true;
+    }
+    QMessageBox box(
+        QMessageBox::Question, tr("Unsaved Changes"),
+        tr("Save changes to %1?").arg(toQString(open_->session.photo().path().filename())),
+        QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel, this);
+    box.setInformativeText(tr("Your adjustments will be lost if you do not save them."));
+    box.setDefaultButton(QMessageBox::Save);
+    box.setEscapeButton(QMessageBox::Cancel);
+    switch (box.exec()) {
+    case QMessageBox::Save:
+        return saveAdjustments();
+    case QMessageBox::Discard:
+        open_->session.discardChanges();
+        // The window may stay open (a cancelled close), and then shows the saved state.
+        refreshPanel();
+        return true;
+    default:
+        return false;
+    }
+}
+
+void MainWindow::setMarksForCurrent(PhotoMarks marks) {
+    if (!open_) {
+        return;
+    }
+    // Marks are no develop edit and not part of what the panel shows, so no refresh.
+    open_->session.setMarks(marks);
+}
+
+void MainWindow::closeEvent(QCloseEvent* event) {
+    closeWhenIdle_ = false;
+    // Unsaved changes first: they are the user's work, whereas running exports
+    // are asked about only once the window is certain to go.
+    if (!confirmLeavingPhoto()) {
+        event->ignore();
+        return;
+    }
+    if (exportNames_.empty()) {
+        QMainWindow::closeEvent(event);
+        return;
+    }
+    QMessageBox box(QMessageBox::Question, tr("Exports Running"), tr("Exports are still running."),
+                    QMessageBox::NoButton, this);
+    box.setInformativeText(tr("Wait for them to finish, or cancel the ones that have not started? "
+                              "The one in progress finishes either way."));
+    QPushButton* wait = box.addButton(tr("Wait"), QMessageBox::AcceptRole);
+    QPushButton* cancel = box.addButton(tr("Cancel Exports"), QMessageBox::DestructiveRole);
+    box.setDefaultButton(wait);
+    box.setEscapeButton(wait);
+    box.exec();
+    if (box.clickedButton() == cancel) {
+        // The queue's oldest job is the one in progress, or about to start;
+        // the others are dropped and will not report.
+        const std::size_t dropped = exportQueue_.cancelQueued();
+        exportNames_.resize(exportNames_.size() - std::min(dropped, exportNames_.size()));
+        QMainWindow::closeEvent(event);
+        return;
+    }
+    closeWhenIdle_ = true;
+    event->ignore();
+}
+
+void MainWindow::requestRender() {
+    if (!open_) {
+        return;
+    }
+    // Any pending resize or interaction is covered by this request.
+    resizeTimer_.stop();
+    interactionTimer_.stop();
+    const DevelopState& state = open_->session.photo().state();
+    const qreal ratio = photoView_->devicePixelRatioF();
+    PreviewView view{.region = std::nullopt,
+                     .outputSize = photoView_->devicePixels(),
+                     .devicePixelRatio = ratio};
+    try {
+        // The crop may have changed the frame; the view keeps its zoom and centre.
+        const ImageSize cropped =
+            croppedSize(open_->decoded->size(), open_->decoded->orientation(), state);
+        photoView_->setFrameSize(
+            QSize(static_cast<int>(cropped.width), static_cast<int>(cropped.height)));
+        const ViewTransform transform = photoView_->transform();
+        const QRect visible = transform.visiblePixels();
+        // A quarter-view margin on each side covers short pans immediately.
+        const int marginX = (visible.width() + 3) / 4;
+        const int marginY = (visible.height() + 3) / 4;
+        const QRect region = visible.adjusted(-marginX, -marginY, marginX, marginY)
+                                 .intersected(QRect(QPoint(0, 0), transform.frame().toSize()));
+        view.region = region;
+        view.outputSize =
+            (QSizeF(region.size()) * std::min(transform.zoom(), 1.0)).toSize().expandedTo({1, 1});
+    } catch (const std::exception&) {
+        // Left to the renderer, which reports what is wrong with the state.
+    }
+    latestRequest_ = previewRenderer_.request(state, std::move(view));
+}
+
+void MainWindow::showResult(const PreviewResult& result) {
+    if (result.request < firstRequest_) {
+        return;
+    }
+    // A refreshed fallback follows the render it belongs to, so it is never
+    // older than what is shown.
+    if (!result.image && result.background) {
+        photoView_->setBackground(*result.background);
+        return;
+    }
+    if (result.request <= latestShown_) {
+        return;
+    }
+    if (result.image) {
+        latestShown_ = result.request;
+        photoView_->setImage(*result.image, result.region, result.background.value_or(QImage{}));
+        showDevice(result);
+        followWithThumbnail(result);
+        return;
+    }
+    // A newer request is on its way and may well succeed: say nothing yet.
+    if (result.request != latestRequest_) {
+        return;
+    }
+    latestShown_ = result.request;
+    // The message box runs a nested event loop, in which further results can
+    // arrive: one box at a time.
+    if (reportingFailure_) {
+        return;
+    }
+    reportingFailure_ = true;
+    QMessageBox::warning(this, tr("Cannot Render Photograph"),
+                         QString::fromStdString(result.error));
+    reportingFailure_ = false;
+}
+
+void MainWindow::followWithThumbnail(const PreviewResult& result) {
+    if (!open_) {
+        return;
+    }
+    // A zoomed view shows a part of the frame, which is no thumbnail of the photograph.
+    constexpr double tolerance = 1e-3;
+    const QRectF& region = result.region;
+    if (region.left() > tolerance || region.top() > tolerance || region.right() < 1.0 - tolerance ||
+        region.bottom() < 1.0 - tolerance) {
+        return;
+    }
+    // The strip's cell is the photograph's primary; a companion has a sidecar, and a thumbnail,
+    // of its own that the strip does not show.
+    const std::filesystem::path path = open_->session.photo().path();
+    if (filmStrip_->shotContaining(path) != path) {
+        return;
+    }
+    QImage thumbnail = *result.image;
+    if (thumbnail.width() > ThumbnailCache::maxEdge ||
+        thumbnail.height() > ThumbnailCache::maxEdge) {
+        thumbnail = thumbnail.scaled(ThumbnailCache::maxEdge, ThumbnailCache::maxEdge,
+                                     Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    }
+    // The preview's pixel ratio is for the photograph view, not for a cell.
+    thumbnail.setDevicePixelRatio(1.0);
+    filmStrip_->setLiveThumbnail(path, std::move(thumbnail));
 }
 
 void MainWindow::showPhoto(Photo photo) {
     DebugDiagnostics log;
 
     // Everything that can throw, before anything changes.
-    ImageBuffer decoded = loadImage(photo.path(), log);
-    const QImage image = renderForViewport(decoded, photo.settings(), viewportPixels(),
-                                           imageView_->devicePixelRatioF());
+    auto decoded = std::make_shared<const ImageBuffer>(loadImage(photo.path(), log));
 
     // Commit.
-    open_.emplace(OpenPhoto{EditSession(std::move(photo)), std::move(decoded)});
-    imageView_->setPixmap(QPixmap::fromImage(image));
-    resizeTimer_.stop(); // The pixels are already fitted to the current size.
+    setPicking(false);
+    // The shot just left shows its saved settings again, not the edits that were abandoned.
+    filmStrip_->releaseLiveThumbnail();
+    open_.emplace(OpenPhoto{EditSession(std::move(photo)), decoded});
+    photoView_->resetView();
+    updateZoomControls();
+    previewRenderer_.setSource(std::move(decoded));
+    // Results of the previous photograph are still on their way, or in progress.
+    firstRequest_ = latestRequest_ + 1;
+    developDock_->setEnabled(true);
+    exportAction_->setEnabled(true);
+    refreshPanel(); // Requests the first render.
+    const auto& path = open_->session.photo().path();
+    rememberFolder(path.parent_path());
+    QSettings().setValue("lastFile", QFileInfo(toQString(path)).absoluteFilePath());
 }
 
 } // namespace arraw::app

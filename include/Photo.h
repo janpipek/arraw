@@ -1,6 +1,6 @@
 #pragma once
 
-#include <DevelopSettings.h>
+#include <DevelopState.h>
 #include <Diagnostics.h>
 #include <ImageImport.h>
 #include <PhotoMarks.h>
@@ -17,7 +17,7 @@ namespace arraw {
 /// leave it describing one file while pointing at another. Its pixels are not
 /// part of it — decoding is the renderer's business (ADR 001) — and what a
 /// render is planned against is this, not a buffer somebody else loaded and a
-/// settings struct that travelled separately (ADR 012).
+/// state that travelled separately (ADR 012).
 ///
 /// It is a value. Developing a photograph differently makes another document
 /// rather than changing this one, which is how a preset, a before-and-after,
@@ -31,12 +31,12 @@ public:
     /// already read the file, such as one restoring a document it stored.
     /// @param path File the photograph was read from.
     /// @param metadata What that file declares about itself.
-    /// @param settings How it is developed.
+    /// @param state How it is developed.
     /// @param marks How it is culled.
-    /// @throws std::invalid_argument if @p settings is not finite or is out of
-    /// range (see ::arraw::validate), or if the rating of @p marks is outside
-    /// -1 to 5, so an invalid photograph cannot exist.
-    Photo(std::filesystem::path path, ImageMetadata metadata, DevelopSettings settings = {},
+    /// @throws std::invalid_argument if @p state is not valid (see ::arraw::validate),
+    /// or if the rating of @p marks is outside -1 to 5, so an invalid
+    /// photograph cannot exist.
+    Photo(std::filesystem::path path, ImageMetadata metadata, DevelopState state = {},
           PhotoMarks marks = {});
 
     /// @brief File the photograph was read from.
@@ -50,8 +50,8 @@ public:
     }
 
     /// @brief How the photograph is developed.
-    [[nodiscard]] const DevelopSettings& settings() const noexcept {
-        return settings_;
+    [[nodiscard]] const DevelopState& state() const noexcept {
+        return state_;
     }
 
     /// @brief How the photograph is culled.
@@ -60,19 +60,19 @@ public:
     }
 
     /// @brief Makes the same photograph, developed differently.
-    /// @param settings Settings the new document carries.
+    /// @param state State the new document carries.
     /// @return A document over the same file with the same marks, leaving this one alone.
     /// @throws std::invalid_argument as the constructor does.
-    [[nodiscard]] Photo with(DevelopSettings settings) const {
-        return {path_, metadata_, settings, marks_};
+    [[nodiscard]] Photo with(DevelopState state) const {
+        return {path_, metadata_, std::move(state), marks_};
     }
 
     /// @brief Makes the same photograph, culled differently.
     /// @param marks Marks the new document carries.
-    /// @return A document over the same file with the same settings, leaving this one alone.
+    /// @return A document over the same file with the same state, leaving this one alone.
     /// @throws std::invalid_argument as the constructor does.
     [[nodiscard]] Photo with(PhotoMarks marks) const {
-        return {path_, metadata_, settings_, marks};
+        return {path_, metadata_, state_, marks};
     }
 
     friend bool operator==(const Photo&, const Photo&) = default;
@@ -80,14 +80,14 @@ public:
 private:
     std::filesystem::path path_;
     ImageMetadata metadata_;
-    DevelopSettings settings_;
+    DevelopState state_;
     PhotoMarks marks_;
 };
 
 /// @brief Opens a photograph as a document, reading no pixels.
 ///
 /// Reads what the file declares — its dimensions and the encoding its pixels
-/// will arrive in — and pairs it with the settings and marks of its sidecar
+/// will arrive in — and pairs it with the state and marks of its sidecar
 /// (see ::arraw::readSidecar), or with defaults when it has none. Decoding
 /// happens when something asks for pixels, which a document never does.
 ///

@@ -81,7 +81,7 @@ def test_with_rating_and_label(dng):
     photo = arraw.open(dng, sidecar=False)
     marked = photo.with_(rating=4, label=arraw.ColorLabel.GREEN)
     assert marked.marks == arraw.PhotoMarks(rating=4, label=arraw.ColorLabel.GREEN)
-    assert marked.settings == photo.settings
+    assert marked.state == photo.state
     assert photo.marks == arraw.PhotoMarks()
 
 
@@ -97,13 +97,13 @@ def test_with_label_none_clears(dng):
 
 def test_with_marks_and_settings_together(dng):
     photo = arraw.open(dng, sidecar=False).with_(exposure=0.5, rating=1)
-    assert photo.settings.tone.exposure == pytest.approx(0.5)
+    assert photo.state.settings.tone.exposure == pytest.approx(0.5)
     assert photo.marks.rating == 1
 
 
-def test_with_settings_keeps_marks(dng):
+def test_with_state_keeps_marks(dng):
     photo = arraw.open(dng, sidecar=False).with_(rating=3)
-    assert photo.with_(arraw.DevelopSettings()).marks.rating == 3
+    assert photo.with_(arraw.DevelopState()).marks.rating == 3
     assert photo.with_(exposure=1.0).marks.rating == 3
 
 
@@ -220,7 +220,7 @@ def test_round_trip_through_write_and_read(work):
     contents = arraw.read_sidecar(work)
     assert isinstance(contents, arraw.SidecarContents)
     assert contents.marks == photo.marks
-    assert contents.settings == photo.settings
+    assert contents.state == photo.state
     with pytest.raises(AttributeError):
         contents.marks = arraw.PhotoMarks()
     assert contents == arraw.read_sidecar(work)
@@ -245,13 +245,13 @@ def test_open_reads_the_sidecar(work):
     opened = arraw.open(work)
     assert opened == photo
     assert opened.marks == arraw.PhotoMarks(rating=-1, label=arraw.ColorLabel.YELLOW)
-    assert opened.settings.tone.exposure == pytest.approx(-1.5)
+    assert opened.state.settings.tone.exposure == pytest.approx(-1.5)
 
 
 def test_open_without_sidecar_ignores_it(work):
     arraw.write_sidecar(arraw.open(work).with_(exposure=1.0, rating=5))
     bare = arraw.open(work, sidecar=False)
-    assert bare.settings == arraw.DevelopSettings()
+    assert bare.state == arraw.DevelopState()
     assert bare.marks == arraw.PhotoMarks()
     assert bare.metadata == arraw.open(work).metadata
     assert arraw.open(work).marks.rating == 5
@@ -266,7 +266,7 @@ def test_open_without_sidecar_does_not_read_a_broken_one(work, caplog):
     arraw.sidecar_path(work).write_text("<<< not xml")
     with caplog.at_level(logging.INFO, logger="arraw"):
         photo = arraw.open(work, sidecar=False)
-    assert photo.settings == arraw.DevelopSettings()
+    assert photo.state == arraw.DevelopState()
     assert not arraw_records(caplog, logging.ERROR)
 
 
@@ -283,7 +283,7 @@ def test_write_preserves_foreign_attributes(work, fixtures):
     shutil.copy(fixtures / "sidecar-foreign.xmp", sidecar)
     photo = arraw.open(work)
     assert photo.marks == arraw.PhotoMarks(rating=3, label=arraw.ColorLabel.BLUE)
-    assert photo.settings.tone.exposure == pytest.approx(1.25)
+    assert photo.state.settings.tone.exposure == pytest.approx(1.25)
     arraw.write_sidecar(photo.with_(exposure=2.0, rating=1))
 
     root = ET.parse(sidecar).getroot()
@@ -306,8 +306,8 @@ def test_write_preserves_foreign_attributes(work, fixtures):
     again = arraw.open(work)
     assert again.marks.rating == 1
     assert again.marks.label == arraw.ColorLabel.BLUE
-    assert again.settings.tone.exposure == pytest.approx(2.0)
-    assert again.settings.tone.contrast == pytest.approx(0.5)
+    assert again.state.settings.tone.exposure == pytest.approx(2.0)
+    assert again.state.settings.tone.contrast == pytest.approx(0.5)
 
 
 def test_write_to_an_unwritable_place_is_runtime_error(work):
@@ -336,7 +336,7 @@ def test_open_logs_error_for_an_unreadable_sidecar_and_returns_defaults(work, ca
     arraw.sidecar_path(work).write_text("<<< not xml")
     with caplog.at_level(logging.INFO, logger="arraw"):
         photo = arraw.open(work)
-    assert photo.settings == arraw.DevelopSettings()
+    assert photo.state == arraw.DevelopState()
     assert photo.marks == arraw.PhotoMarks()
     errors = arraw_records(caplog, logging.ERROR)
     assert errors and all(r.levelno == logging.ERROR for r in errors)
@@ -351,5 +351,18 @@ def test_sidecar_clamping_on_read_logs_warning(work, caplog):
     sidecar.write_text(text.replace('arraw:exposure="0"', 'arraw:exposure="99"'), encoding="utf-8")
     with caplog.at_level(logging.INFO, logger="arraw"):
         photo = arraw.open(work)
-    assert photo.settings.tone.exposure == pytest.approx(5.0)
+    assert photo.state.settings.tone.exposure == pytest.approx(5.0)
     assert arraw_records(caplog)
+
+
+def test_write_sidecar_marks_keeps_settings(work):
+    arraw.write_sidecar(arraw.open(work, sidecar=False).with_(exposure=0.5))
+    arraw.write_sidecar_marks(work, arraw.PhotoMarks(rating=3, label=arraw.ColorLabel.RED))
+    contents = arraw.read_sidecar(work)
+    assert contents.marks == arraw.PhotoMarks(rating=3, label=arraw.ColorLabel.RED)
+    assert contents.state.settings.tone.exposure == pytest.approx(0.5)
+
+
+def test_write_sidecar_marks_creates_a_sidecar(work):
+    arraw.write_sidecar_marks(work, arraw.PhotoMarks(rating=-1))
+    assert arraw.read_sidecar(work).marks == arraw.PhotoMarks(rating=-1)

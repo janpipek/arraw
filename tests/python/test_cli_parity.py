@@ -8,6 +8,7 @@ import arraw
 CASES = {
     "exposure": {"exposure": 0.5},
     "contrast": {"contrast": 20},
+    "colour": {"saturation": 30, "vibrance": 20, "hue_red": 40, "luminance_green": -20},
     "combined": {"exposure": 0.5, "contrast": 20, "shadows": 15, "filmic_highlights": 0},
 }
 

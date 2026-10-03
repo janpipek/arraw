@@ -67,3 +67,11 @@ roll, so an export clips only when asked to.
   frame in ADR 009.
 - **Values above 1 stay live** until the output transform, which is the only
   place clipping is allowed to happen.
+
+## Note, 2026-10-03
+
+"One shoulder ends the chain" is true of the tone chain, not of the pointwise
+chain: the colour block of ADR 027 (saturation, vibrance, HSL, Black & White)
+runs after the shoulder, as it did on `main`. The shoulder still ends the tone
+stages, and it still comes before the output transform, which stays the only
+place values are clipped.

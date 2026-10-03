@@ -80,16 +80,45 @@ ImageMetadata someMetadata() {
 TEST_CASE("The descriptor table has a row per leaf, matching the structs", "[settings]") {
     // A new field needs a descriptor row AND an updated count here.
     STATIC_REQUIRE(test::fieldCount<ToneSettings> == 7);
-    STATIC_REQUIRE(test::fieldCount<ColorSettings> == 3);
+    STATIC_REQUIRE(test::fieldCount<ColorSettings> == 5);
     STATIC_REQUIRE(test::fieldCount<GeometrySettings> == 5);
     STATIC_REQUIRE(test::fieldCount<CropSettings> == 2);
-    STATIC_REQUIRE(test::fieldCount<DevelopSettings> == 3);
+    STATIC_REQUIRE(test::fieldCount<HueBand> == 3);
+    STATIC_REQUIRE(test::fieldCount<HslSettings> == 8);
+    STATIC_REQUIRE(test::fieldCount<BlackAndWhiteSettings> == 9);
+    STATIC_REQUIRE(test::fieldCount<DevelopSettings> == 5);
 
-    // Leaves: tone + color + geometry (crop is a group of two leaves).
+    // Leaves: tone + color + geometry (crop is a group of two leaves) + hsl
+    // (eight bands of three leaves) + black and white.
     STATIC_REQUIRE(developSettingDescriptors.size() ==
                    test::fieldCount<ToneSettings> + test::fieldCount<ColorSettings> +
-                       test::fieldCount<GeometrySettings> - 1 + test::fieldCount<CropSettings>);
-    STATIC_REQUIRE(developSettingDescriptors.size() == 16);
+                       test::fieldCount<GeometrySettings> - 1 + test::fieldCount<CropSettings> +
+                       test::fieldCount<HslSettings> * test::fieldCount<HueBand> +
+                       test::fieldCount<BlackAndWhiteSettings>);
+    STATIC_REQUIRE(developSettingDescriptors.size() == 51);
+}
+
+TEST_CASE("The colour rows are pointwise, always apply and share their groups", "[settings]") {
+    int hsl = 0;
+    int blackAndWhite = 0;
+    for (const FieldDescriptor& descriptor : developSettingDescriptors) {
+        INFO(descriptor.key);
+        hsl += descriptor.group == SettingGroup::Hsl ? 1 : 0;
+        blackAndWhite += descriptor.group == SettingGroup::BlackAndWhite ? 1 : 0;
+        if (descriptor.group == SettingGroup::Hsl ||
+            descriptor.group == SettingGroup::BlackAndWhite) {
+            REQUIRE(descriptor.affects == Stage::Pointwise);
+            REQUIRE(descriptor.applies == Applicability::Always);
+        }
+    }
+    REQUIRE(hsl == 24);
+    REQUIRE(blackAndWhite == 9);
+    REQUIRE(findDescriptor("saturation")->group == SettingGroup::Color);
+    REQUIRE(findDescriptor("vibrance")->group == SettingGroup::Color);
+    REQUIRE(findDescriptor("hueRed")->range->minimum == -100.0);
+    REQUIRE(findDescriptor("luminanceMagenta")->range->maximum == 100.0);
+    REQUIRE_FALSE(findDescriptor("convertToGrayscale")->range.has_value());
+    REQUIRE(findDescriptor("grayBlue") != nullptr);
 }
 
 TEST_CASE("Keys are unique camelCase names that can be looked up", "[settings]") {
@@ -219,15 +248,16 @@ TEST_CASE("A validation failure names the key, the value and the range", "[setti
 
 TEST_CASE("A photograph cannot be built from out-of-range settings", "[settings][photo]") {
     REQUIRE_NOTHROW(Photo("a.dng", someMetadata(), {}));
-    REQUIRE_THROWS_AS(Photo("a.dng", someMetadata(), {.tone = {.exposure = 6.0F}}),
+    REQUIRE_THROWS_AS(Photo("a.dng", someMetadata(), {.settings = {.tone = {.exposure = 6.0F}}}),
                       std::invalid_argument);
-    REQUIRE_THROWS_AS(
-        Photo("a.dng", someMetadata(), {.color = {.temperature = std::optional<float>{500.0F}}}),
-        std::invalid_argument);
+    REQUIRE_THROWS_AS(Photo("a.dng", someMetadata(),
+                            {.settings = {.color = {.temperature = std::optional<float>{500.0F}}}}),
+                      std::invalid_argument);
 
     const Photo photo("a.dng", someMetadata());
-    REQUIRE_THROWS_AS(photo.with({.geometry = {.straighten = 90.0}}), std::invalid_argument);
-    REQUIRE(photo.settings() == DevelopSettings{});
+    REQUIRE_THROWS_AS(photo.with({.settings = {.geometry = {.straighten = 90.0}}}),
+                      std::invalid_argument);
+    REQUIRE(photo.state() == DevelopState{});
 }
 
 TEST_CASE("Validation refuses a crop that could fit no image", "[settings]") {

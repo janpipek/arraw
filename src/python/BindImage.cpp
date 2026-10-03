@@ -10,6 +10,7 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <variant>
 
@@ -137,11 +138,25 @@ void bindImage(nb::module_& m) {
 
     m.def(
         "load",
-        [](const std::filesystem::path& path) {
+        [](const std::filesystem::path& path, bool halfSize) {
             PythonLog log;
-            return withoutGil([&] { return loadImage(path, log); });
+            return withoutGil([&] { return loadImage(path, log, {.halfSize = halfSize}); });
         },
-        "path"_a, "Decode an image file into a buffer.");
+        "path"_a, "half_size"_a = false,
+        "Decode an image file into a buffer. With half_size a RAW is decoded at half its width "
+        "and height, without demosaicing, and the buffer is that much smaller than "
+        "read_metadata says; other files ignore it.");
+
+    m.def(
+        "read_embedded_preview",
+        [](const std::filesystem::path& path, std::uint32_t maxEdge) -> std::optional<ImageBuffer> {
+            PythonLog log;
+            return withoutGil([&] { return readEmbeddedPreview(path, maxEdge, log); });
+        },
+        "path"_a, "max_edge"_a,
+        "Read the preview a file embeds, upright, in sRGB and no longer than max_edge on its "
+        "longer edge (0 keeps the largest at its own size). None if the file has no preview, "
+        "or cannot be read, which is also a message on the 'arraw' logger.");
 }
 
 } // namespace arraw::python

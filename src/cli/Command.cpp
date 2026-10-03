@@ -4,6 +4,7 @@
 #include "ExportCommand.h"
 #include "GpuTestCommand.h"
 #include "InfoCommand.h"
+#include "TerminalStyle.h"
 
 #include <QCommandLineParser>
 #include <QString>
@@ -58,7 +59,8 @@ std::string commandHelp(const QCommandLineParser& parser) {
 }
 
 int commandUsageError(std::ostream& err, std::string_view command, std::string_view message) {
-    err << "error: " << message << "\n\nTry 'arraw-cli " << command << " --help'.\n";
+    err << accented(err, "error:", Accent::Error) << " " << terminalText(message)
+        << "\n\nTry 'arraw-cli " << command << " --help'.\n";
     return UsageError;
 }
 

@@ -15,7 +15,7 @@ endif()
 list(APPEND CMAKE_PREFIX_PATH "${ARRAW_NANOBIND_DIR}")
 find_package(nanobind CONFIG REQUIRED)
 
-nanobind_add_module(_arraw NB_STATIC Module.cpp BindImage.cpp BindSettings.cpp BindPhoto.cpp)
+nanobind_add_module(_arraw NB_STATIC Module.cpp BindImage.cpp BindExif.cpp BindSettings.cpp BindPhoto.cpp BindShots.cpp)
 arraw_enable_warnings(_arraw)
 target_link_libraries(_arraw PRIVATE arraw)
 target_compile_definitions(_arraw PRIVATE ARRAW_VERSION="${PROJECT_VERSION}")

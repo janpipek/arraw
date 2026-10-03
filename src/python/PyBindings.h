@@ -10,6 +10,7 @@
 #include <nanobind/stl/filesystem.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/pair.h>
+#include <nanobind/stl/set.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/string_view.h>
 #include <nanobind/stl/variant.h>
@@ -21,6 +22,7 @@
 
 #include <charconv>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -37,8 +39,14 @@ using namespace nb::literals;
 /// @brief Binds images, pixel formats, colour encodings and metadata.
 void bindImage(nb::module_& module);
 
+/// @brief Binds the EXIF value classes and `read_exif`.
+void bindExif(nb::module_& module);
+
 /// @brief Binds the settings classes, their enumerations and the descriptor table.
 void bindSettings(nb::module_& module);
+
+/// @brief Binds shots, the marks filter and the supported extensions.
+void bindShots(nb::module_& module);
 
 /// @brief Binds photographs, diagnostics and the develop and save functions.
 void bindPhoto(nb::module_& module);
@@ -230,11 +238,18 @@ void assignArgument(M& target, Argument& source, const char* name) {
 template <class M> struct IsVector : std::false_type {};
 template <class T, class A> struct IsVector<std::vector<T, A>> : std::true_type {};
 
-/// @brief Casts a field to a Python value that can be hashed: a vector becomes a tuple.
+/// @brief Tells whether a type is a std::set.
+template <class M> struct IsSet : std::false_type {};
+template <class T, class C, class A> struct IsSet<std::set<T, C, A>> : std::true_type {};
+
+/// @brief Casts a field to a Python value that can be hashed: a vector becomes a tuple, a set a
+/// frozenset.
 template <class M> nb::object hashable(const M& value) {
     nb::object cast = nb::cast(value);
     if constexpr (IsVector<M>::value) {
         return nb::steal(PySequence_Tuple(cast.ptr()));
+    } else if constexpr (IsSet<M>::value) {
+        return nb::steal(PyFrozenSet_New(cast.ptr()));
     } else {
         return cast;
     }

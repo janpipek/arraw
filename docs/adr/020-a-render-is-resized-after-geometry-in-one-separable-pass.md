@@ -114,6 +114,11 @@ The general path runs the row stage once per intermediate (sums, low, high),
 because one render writes one output. Multiple render targets would cut that
 to one render.
 
+> **Note (2026-10-02).** The preview arrived differently:
+> [ADR 023](023-a-preview-develops-a-reduced-copy-of-the-source.md) reduces the
+> source before development, the GUI chooses the level, and no `Preview`
+> quality was added to the request.
+
 **Quality is in the request, and only Export exists.** `RenderRequest::quality`
 has one value, `Quality::Export`: full resolution all the way. A `Preview`
 quality will come with the GUI's editing loop: a pyramid of 2× box reductions

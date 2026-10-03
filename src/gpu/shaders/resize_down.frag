@@ -27,7 +27,7 @@ layout(binding = 4) uniform sampler2D highs;
 layout(std140, binding = 1) uniform Resize {
     uint plane;
     uint inputLength;
-    uvec2 padding;
+    uvec2 offset;
 } plan;
 
 // The weights of the vertical axis, as packResizeWeights lays them out.

@@ -50,6 +50,33 @@ struct CheckpointState {
     [[nodiscard]] ImageBuffer readBack() const;
 };
 
+/// @brief Gives the engine-side state of a checkpoint.
+///
+/// For the backends that resume from one. The plan prefix stays out of a
+/// caller's reach by this being an `src/` header, not by anything stronger.
+/// @param checkpoint Checkpoint to look into; the result lives as long as it does.
+[[nodiscard]] const CheckpointState& stateOf(const RenderCheckpoint& checkpoint) noexcept;
+
+/// @brief Refuses a resume that a checkpoint cannot serve.
+///
+/// The one place the validity rule is applied, for both backends (ADR 011): the
+/// checkpoint's plan must equal the new one up to its own boundary, and the run
+/// must not stop before it. The plan carries the source's size and orientation
+/// (in the geometry group) and its encoding (in the pointwise one), but not yet
+/// a file or a stamp (ADR 012's decode block), so for a pointwise checkpoint,
+/// whose boundary precedes the geometry, the pixels' size is also checked
+/// against the source's. Two sources of one size and encoding are not told
+/// apart here; a caller that swaps one for the other must drop its checkpoints.
+/// @param from Checkpoint to resume from.
+/// @param plan Plan of the render being resumed, resolved for @p stopAfter.
+/// @param sourceSize Size of the source the render develops.
+/// @param stopAfter Last boundary the render runs.
+/// @throws std::invalid_argument if @p stopAfter is not a boundary or is before
+/// the checkpoint's, the plan prefixes differ, or the pixels are not what the
+/// plan would have made at that boundary.
+void requireResumable(const CheckpointState& from, const ProcessingPlan& plan, ImageSize sourceSize,
+                      Stage stopAfter);
+
 /// @brief Builds a checkpoint, refusing states that could not have been rendered.
 /// @param boundary Pass boundary the pixels were taken at.
 /// @param plan Plan that made them.

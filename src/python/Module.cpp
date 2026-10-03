@@ -13,6 +13,8 @@ NB_MODULE(_arraw, m) {
 
     // Order matters: later classes name earlier ones in their signatures.
     arraw::python::bindImage(m);
+    arraw::python::bindExif(m);
     arraw::python::bindSettings(m);
     arraw::python::bindPhoto(m);
+    arraw::python::bindShots(m);
 }

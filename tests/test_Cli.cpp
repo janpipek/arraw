@@ -2,12 +2,15 @@
 #include "Command.h"
 #include "DeviceChoice.h"
 #include "ExportCommand.h"
+#include "StreamDiagnostics.h"
+#include "TerminalStyle.h"
 #include "support/Fixtures.h"
 #include "support/TempDir.h"
 
 #include <Develop.h>
 #include <DevelopSettings.h>
 #include <Diagnostics.h>
+#include <ExifInfo.h>
 #include <Photo.h>
 #include <Sidecar.h>
 
@@ -342,6 +345,9 @@ TEST_CASE("A command line that is wrong exits 2 and says so on stderr", "[cli]")
         std::vector<std::string>{"export", image, "-o", output, "--format", "gif"},
         std::vector<std::string>{"export", image, "-o", output, "--encoding", "rec2020"},
         std::vector<std::string>{"export", image, "-o", output, "--quality", "high"},
+        std::vector<std::string>{"export", image, "-o", output, "--sharpen", "strong"},
+        std::vector<std::string>{"export", image, "-o", output, "--sharpen", "101"},
+        std::vector<std::string>{"export", image, "-o", output, "--sharpen", "-1"},
         std::vector<std::string>{"export", image, "-o", output, "--nonsense"});
     CAPTURE(arguments);
 
@@ -432,6 +438,68 @@ TEST_CASE("An existing output is refused unless overwriting is asked for", "[cli
     const auto replaced = invoke(overwriting);
     REQUIRE(replaced.code == cli::Success);
     REQUIRE(std::filesystem::file_size(destination) != original);
+}
+
+TEST_CASE("The sharpen flag is documented and sharpens the export", "[cli]") {
+    REQUIRE_THAT(invoke({"export", "--help"}).out, ContainsSubstring("--sharpen"));
+
+    const test::TempDir directory;
+    const auto image = test::fixture(card).string();
+    const auto destination = directory.file("testcard-61x41-srgb8.png");
+    const auto base = std::vector<std::string>{
+        "export", image, "-o", directory.path().string(), "--format", "png", "--overwrite"};
+    REQUIRE(invoke(base).code == cli::Success);
+    const QImage plain(QString::fromStdString(destination.string()));
+
+    auto sharp = base;
+    sharp.insert(sharp.end(), {"--sharpen", "100"});
+    REQUIRE(invoke(sharp).code == cli::Success);
+    const QImage crisp(QString::fromStdString(destination.string()));
+
+    REQUIRE_FALSE(plain.isNull());
+    REQUIRE(crisp.size() == plain.size());
+    REQUIRE(crisp != plain);
+}
+
+TEST_CASE("The metadata flag chooses what an export carries from its photograph", "[cli]") {
+    REQUIRE_THAT(invoke({"export", "--help"}).out, ContainsSubstring("--metadata"));
+    const test::TempDir directory;
+    const auto raw = test::fixture("exif-32x24.dng").string();
+    const auto out = directory.file("exif-32x24.jpg");
+    const auto run = [&](const std::string& list) {
+        std::vector<std::string> command{"export", raw, "-o", directory.path().string(),
+                                         "--overwrite"};
+        if (!list.empty()) {
+            command.insert(command.end(), {"--metadata", list});
+        }
+        return invoke(command);
+    };
+
+    REQUIRE(run("").code == cli::Success);
+    REQUIRE(readExif(out).make == "Arraw");
+    REQUIRE_FALSE(readExif(out).gps);
+
+    REQUIRE(run("capture,location").code == cli::Success);
+    REQUIRE(readExif(out).gps);
+    REQUIRE(readExif(out).make == "Arraw");
+
+    REQUIRE(run("ALL").code == cli::Success);
+    REQUIRE(readExif(out).gps);
+
+    REQUIRE(run("descriptive").code == cli::Success);
+    REQUIRE_FALSE(readExif(out).make);
+    REQUIRE(readExif(out).artist == "Ada Lovelace");
+
+    REQUIRE(run("none").code == cli::Success);
+    REQUIRE(readExif(out) == ExifInfo{});
+
+    for (const char* bad : {"everything", "capture,", "capture,gps", ""}) {
+        const auto result =
+            invoke({"export", raw, "-o", directory.path().string(), "--metadata", bad});
+        CAPTURE(bad);
+        REQUIRE(result.code == cli::UsageError);
+        REQUIRE_THAT(result.err, ContainsSubstring("--metadata"));
+    }
 }
 
 TEST_CASE("Exposure reaches the exported pixels", "[cli]") {
@@ -1163,7 +1231,7 @@ std::filesystem::path copyRaw(const test::TempDir& directory, const std::string&
 
 /// @brief Writes a sidecar holding @p settings beside a photograph.
 void sidecarWith(const std::filesystem::path& photo, const DevelopSettings& settings) {
-    writeSidecar(openPhoto(photo).with(settings));
+    writeSidecar(openPhoto(photo).with(DevelopState{settings}));
 }
 
 /// @brief Exports one file to PNG on the CPU with extra flags, and loads the result.
@@ -1667,6 +1735,51 @@ TEST_CASE("Every numeric flag replaces its own setting and no other", "[cli][sid
     }
 }
 
+TEST_CASE("The colour flags replace their own setting and keep the sidecar's others",
+          "[cli][sidecar][colour]") {
+    DevelopSettings sidecar;
+    sidecar.color.saturation = 10.0F;
+    sidecar.hsl.green.luminance = -20.0F;
+    sidecar.blackAndWhite.blue = 30.0F;
+
+    SECTION("saturation and vibrance") {
+        const DevelopSettings result =
+            applied(sidecar, {"--saturation", "-60", "--vibrance", "25"});
+        REQUIRE(result.color.saturation == -60.0F);
+        REQUIRE(result.color.vibrance == 25.0F);
+        REQUIRE(result.hsl == sidecar.hsl);
+        REQUIRE(result.blackAndWhite == sidecar.blackAndWhite);
+    }
+    SECTION("an HSL band") {
+        const DevelopSettings result =
+            applied(sidecar, {"--hue-red", "40", "--luminance-magenta", "-5"});
+        REQUIRE(result.hsl.red.hue == 40.0F);
+        REQUIRE(result.hsl.magenta.luminance == -5.0F);
+        REQUIRE(result.hsl.green.luminance == -20.0F);
+        REQUIRE(result.color == sidecar.color);
+    }
+    SECTION("the black and white mix and switch") {
+        const DevelopSettings result =
+            applied(sidecar, {"--convert-to-grayscale", "--gray-red", "55"});
+        REQUIRE(result.blackAndWhite.convertToGrayscale);
+        REQUIRE(result.blackAndWhite.red == 55.0F);
+        REQUIRE(result.blackAndWhite.blue == 30.0F);
+
+        sidecar.blackAndWhite.convertToGrayscale = true;
+        REQUIRE_FALSE(
+            applied(sidecar, {"--no-convert-to-grayscale"}).blackAndWhite.convertToGrayscale);
+        REQUIRE(applied(sidecar, {}).blackAndWhite.convertToGrayscale);
+    }
+    SECTION("the switch cannot contradict itself, and a weight is range checked") {
+        std::ostringstream err;
+        REQUIRE_FALSE(
+            cli::readExportEdits({"--convert-to-grayscale", "--no-convert-to-grayscale"}, err));
+        std::ostringstream rangeErr;
+        REQUIRE_FALSE(cli::readExportEdits({"--gray-aqua", "101"}, rangeErr));
+        REQUIRE_THAT(rangeErr.str(), ContainsSubstring("--gray-aqua accepts -100 to 100"));
+    }
+}
+
 TEST_CASE("Geometry flags keep the sidecar's geometry they do not name", "[cli][sidecar]") {
     DevelopSettings sidecar;
     sidecar.geometry.rotation = QuarterTurn::Clockwise180;
@@ -1745,7 +1858,9 @@ Photo editedPhoto(const std::filesystem::path& path) {
     DevelopSettings settings;
     settings.tone.exposure = 0.5F;
     settings.geometry.crop.rectangle = UprightCropRect{0.1, 0.2, 0.9, 0.8};
-    return openPhoto(path).with(settings).with(PhotoMarks{.rating = 4, .label = ColorLabel::Green});
+    return openPhoto(path)
+        .with(DevelopState{settings})
+        .with(PhotoMarks{.rating = 4, .label = ColorLabel::Green});
 }
 
 QJsonObject firstFile(const std::string& text) {
@@ -1785,13 +1900,74 @@ TEST_CASE("Info gives no encoding for an ordinary image, whose own it cannot rea
     REQUIRE(firstFile(json.out).value("encoding").isNull());
 }
 
+TEST_CASE("Info shows what the file records about its capture", "[cli][info][exif]") {
+    const auto result = invoke({"info", test::fixture("exif-32x24.dng").string()});
+
+    REQUIRE(result.code == cli::Success);
+    REQUIRE(result.err.empty());
+    REQUIRE_THAT(result.out, ContainsSubstring("  camera: Arraw Fixture One\n"));
+    REQUIRE_THAT(result.out, ContainsSubstring("  lens: Fixture 35mm F2.8\n"));
+    REQUIRE_THAT(
+        result.out,
+        ContainsSubstring("  exposure: 1/250 s  f/2.8  ISO 400  35 mm (52 mm equivalent)\n"));
+    REQUIRE_THAT(result.out, ContainsSubstring("  exposure bias: -0.33 EV\n"));
+    REQUIRE_THAT(result.out, ContainsSubstring("  flash: did not fire\n"));
+    REQUIRE_THAT(result.out, ContainsSubstring("  taken: 2024:05:01 10:00:00 +02:00\n"));
+    REQUIRE_THAT(result.out, ContainsSubstring("  GPS: 50.0877, 14.4217, 235.5 m\n"));
+    REQUIRE_THAT(result.out, ContainsSubstring("  artist: Ada Lovelace\n"));
+    REQUIRE_THAT(result.out, ContainsSubstring("  copyright: (c) 2024 Ada Lovelace\n"));
+}
+
+TEST_CASE("Info says nothing about capture information a file does not record",
+          "[cli][info][exif]") {
+    const auto result = invoke({"info", test::fixture(card).string()});
+
+    REQUIRE(result.code == cli::Success);
+    // No notice either: the absence is what the report shows.
+    REQUIRE(result.err.empty());
+    REQUIRE_THAT(result.out, !ContainsSubstring("camera:"));
+    REQUIRE_THAT(result.out, !ContainsSubstring("exposure:"));
+    REQUIRE_THAT(result.out, !ContainsSubstring("GPS:"));
+
+    const auto json = invoke({"info", "--json", test::fixture(card).string()});
+    REQUIRE(firstFile(json.out).value("exif").toObject().isEmpty());
+}
+
+TEST_CASE("Info --json gives the capture information with the EXIF names", "[cli][info][exif]") {
+    const auto result = invoke({"info", "--json", test::fixture("exif-32x24.dng").string()});
+    REQUIRE(result.code == cli::Success);
+    const auto exif = firstFile(result.out).value("exif").toObject();
+
+    REQUIRE(exif.value("make").toString() == "Arraw");
+    REQUIRE(exif.value("model").toString() == "Fixture One");
+    REQUIRE(exif.value("lensModel").toString() == "Fixture 35mm F2.8");
+    REQUIRE(exif.value("dateTimeOriginal").toString() == "2024:05:01 10:00:00");
+    REQUIRE(exif.value("offsetTimeOriginal").toString() == "+02:00");
+    REQUIRE(exif.value("exposureTime").toObject().value("numerator").toInt() == 1);
+    REQUIRE(exif.value("exposureTime").toObject().value("denominator").toInt() == 250);
+    REQUIRE(exif.value("fNumber").toObject().value("numerator").toInt() == 28);
+    REQUIRE(exif.value("fNumber").toObject().value("denominator").toInt() == 10);
+    REQUIRE(exif.value("photographicSensitivity").toInt() == 400);
+    REQUIRE(exif.value("focalLength").toObject().value("numerator").toInt() == 35);
+    REQUIRE(exif.value("focalLengthIn35mmFilm").toInt() == 52);
+    REQUIRE(exif.value("exposureBiasValue").toObject().value("numerator").toInt() == -1);
+    REQUIRE(exif.value("exposureBiasValue").toObject().value("denominator").toInt() == 3);
+    REQUIRE(exif.value("flash").toInt() == 16);
+    REQUIRE(exif.value("gps").toObject().value("latitude").toDouble() == Catch::Approx(50.0877083));
+    REQUIRE(exif.value("gps").toObject().value("longitude").toDouble() ==
+            Catch::Approx(14.4216667));
+    REQUIRE(exif.value("gps").toObject().value("altitude").toDouble() == Catch::Approx(235.5));
+    REQUIRE(exif.value("artist").toString() == "Ada Lovelace");
+    REQUIRE(exif.value("copyright").toString() == "(c) 2024 Ada Lovelace");
+}
+
 TEST_CASE("Info leaves out settings a render would not read", "[cli][info]") {
     const test::TempDir directory;
     const auto raw = copyRaw(directory, "frame.dng");
     DevelopSettings settings;
     settings.color.temperature = 4200.0F;
     settings.color.tint = 10.0F;
-    writeSidecar(openPhoto(raw).with(settings));
+    writeSidecar(openPhoto(raw).with(DevelopState{settings}));
 
     SECTION("not in Custom white balance") {
         const auto result = invoke({"info", raw.string()});
@@ -1801,7 +1977,7 @@ TEST_CASE("Info leaves out settings a render would not read", "[cli][info]") {
     SECTION("in Custom white balance, a tint of zero is listed") {
         settings.color.whiteBalance = WhiteBalanceMode::Custom;
         settings.color.tint = 0.0F;
-        writeSidecar(openPhoto(raw).with(settings));
+        writeSidecar(openPhoto(raw).with(DevelopState{settings}));
         const auto result = invoke({"info", raw.string()});
         REQUIRE_THAT(result.out, ContainsSubstring("    whiteBalance: "));
         REQUIRE_THAT(result.out, ContainsSubstring("    temperature: 4200\n"));
@@ -1812,7 +1988,7 @@ TEST_CASE("Info leaves out settings a render would not read", "[cli][info]") {
         const auto png = pngs.file("card.png");
         std::filesystem::copy_file(test::fixture(card), png);
         settings.color.whiteBalance = WhiteBalanceMode::Custom;
-        writeSidecar(openPhoto(png).with(settings));
+        writeSidecar(openPhoto(png).with(DevelopState{settings}));
         const auto result = invoke({"info", png.string()});
         REQUIRE_THAT(result.out, ContainsSubstring("whiteBalance"));
         REQUIRE_THAT(result.out, !ContainsSubstring("temperature"));
@@ -1827,7 +2003,7 @@ TEST_CASE("Info lists a crop aspect in each of its forms", "[cli][info]") {
 
     SECTION("a ratio") {
         settings.geometry.crop.aspect = CropRatio{1.5};
-        writeSidecar(openPhoto(raw).with(settings));
+        writeSidecar(openPhoto(raw).with(DevelopState{settings}));
         REQUIRE_THAT(invoke({"info", raw.string()}).out,
                      ContainsSubstring("    cropAspect: 1.5\n"));
         const auto json = firstFile(invoke({"info", "--json", raw.string()}).out);
@@ -1840,7 +2016,7 @@ TEST_CASE("Info lists a crop aspect in each of its forms", "[cli][info]") {
     }
     SECTION("original") {
         settings.geometry.crop.aspect = OriginalCropAspect{};
-        writeSidecar(openPhoto(raw).with(settings));
+        writeSidecar(openPhoto(raw).with(DevelopState{settings}));
         REQUIRE_THAT(invoke({"info", raw.string()}).out,
                      ContainsSubstring("    cropAspect: original\n"));
     }
@@ -1896,7 +2072,7 @@ TEST_CASE("Info --all lists every setting", "[cli][info]") {
         REQUIRE(at >= previous);
         previous = at;
     }
-    REQUIRE(developSettingDescriptors.size() == 16);
+    REQUIRE(developSettingDescriptors.size() == 51);
     REQUIRE_THAT(result.out, ContainsSubstring("temperature: unset"));
 }
 
@@ -1985,7 +2161,7 @@ TEST_CASE("Info --json is one document with the settings in table order", "[cli]
     SECTION("--all lists every key in table order") {
         const auto result = invoke({"info", "--json", "--all", plain.string()});
         REQUIRE(result.code == cli::Success);
-        REQUIRE(firstFile(result.out).value("settings").toObject().size() == 16);
+        REQUIRE(firstFile(result.out).value("settings").toObject().size() == 51);
         std::size_t previous = 0;
         for (const FieldDescriptor& descriptor : developSettingDescriptors) {
             const auto at = result.out.find("\"" + std::string(descriptor.key) + "\":");
@@ -2291,3 +2467,332 @@ TEST_CASE("Info is unaffected by resizing flags", "[cli][resize]") {
     const auto result = invoke({"info", test::fixture(card).string()});
     REQUIRE(result.code == cli::Success);
 }
+
+namespace {
+
+/// @brief Makes a shoot: `a` rated 4 and green with a JPEG companion, `b` rejected, `c` unrated.
+///
+/// Also a sidecar and a note that are no photographs, and a subfolder that is not looked into.
+test::TempDir makeShoot() {
+    test::TempDir directory;
+    const auto a = copyRaw(directory, "a.dng");
+    const auto b = copyRaw(directory, "b.dng");
+    copyRaw(directory, "c.dng");
+    std::ofstream(directory.file("a.jpg")) << "companion";
+    std::ofstream(directory.file("notes.txt")) << "not a photograph";
+    std::filesystem::create_directory(directory.file("sub"));
+    writeSidecar(openPhoto(a).with(PhotoMarks{.rating = 4, .label = ColorLabel::Green}));
+    writeSidecar(openPhoto(b).with(PhotoMarks{.rating = rejectedRating, .label = ColorLabel::Red}));
+    return directory;
+}
+
+/// @brief Exports a folder to PNG on the CPU; the output goes to a fresh directory.
+Invocation exportFolder(const std::filesystem::path& input, const test::TempDir& output,
+                        std::vector<std::string> flags = {}) {
+    std::vector<std::string> arguments{
+        "export",   input.string(), "-o",       output.path().string(),
+        "--format", "png",          "--device", "cpu"};
+    arguments.insert(arguments.end(), flags.begin(), flags.end());
+    return invoke(arguments);
+}
+
+QJsonArray filesOf(const std::string& text) {
+    QJsonParseError parseError;
+    const auto document = QJsonDocument::fromJson(QByteArray::fromStdString(text), &parseError);
+    REQUIRE(parseError.error == QJsonParseError::NoError);
+    return document.object().value("files").toArray();
+}
+
+} // namespace
+
+TEST_CASE("Info on a folder shows each shot once, as its primary, with format and companions",
+          "[cli][info][shots]") {
+    const auto shoot = makeShoot();
+    const auto result = invoke({"info", shoot.path().string()});
+
+    REQUIRE(result.code == cli::Success);
+    REQUIRE_THAT(result.out, ContainsSubstring(shoot.file("a.dng").string() + "\n"));
+    REQUIRE_THAT(result.out, ContainsSubstring("format: DNG+JPEG"));
+    REQUIRE_THAT(result.out, ContainsSubstring("companions: a.jpg"));
+    REQUIRE_THAT(result.out, ContainsSubstring("format: DNG\n"));
+    REQUIRE_THAT(result.out, ContainsSubstring("label: Green"));
+    REQUIRE_THAT(result.out, !ContainsSubstring("notes.txt"));
+    REQUIRE_THAT(result.out, !ContainsSubstring(shoot.file("a.jpg").string() + "\n"));
+    REQUIRE(result.out.find("a.dng") < result.out.find("b.dng"));
+    REQUIRE(result.out.find("b.dng") < result.out.find("c.dng"));
+}
+
+TEST_CASE("Info --json gives each file a format and its companions", "[cli][info][shots]") {
+    const auto shoot = makeShoot();
+    const auto files = filesOf(invoke({"info", "--json", shoot.path().string()}).out);
+
+    REQUIRE(files.size() == 3);
+    REQUIRE(files[0].toObject().value("format") == "DNG+JPEG");
+    REQUIRE(files[0].toObject().value("companions").toArray().size() == 1);
+    REQUIRE(files[1].toObject().value("format") == "DNG");
+    REQUIRE(files[1].toObject().value("companions").toArray().isEmpty());
+
+    // A file given directly is its own shot, and says nothing more than before in text.
+    const auto direct = invoke({"info", shoot.file("a.dng").string()});
+    REQUIRE_THAT(direct.out, !ContainsSubstring("format:"));
+    REQUIRE_THAT(direct.out, !ContainsSubstring("companions"));
+}
+
+TEST_CASE("Info lists only the shots whose marks match, and counts the others",
+          "[cli][info][shots][filter]") {
+    const auto shoot = makeShoot();
+    const auto folder = shoot.path().string();
+
+    const auto rated = invoke({"info", folder, "--min-rating", "3"});
+    REQUIRE(rated.code == cli::Success);
+    REQUIRE_THAT(rated.out, ContainsSubstring("a.dng"));
+    REQUIRE_THAT(rated.out, !ContainsSubstring("b.dng"));
+    REQUIRE_THAT(rated.out, !ContainsSubstring("c.dng"));
+    REQUIRE_THAT(rated.err, ContainsSubstring("2 left out"));
+
+    const auto rejected = invoke({"info", folder, "--rejected"});
+    REQUIRE_THAT(rejected.out, ContainsSubstring("b.dng"));
+    REQUIRE_THAT(rejected.out, !ContainsSubstring("a.dng"));
+
+    const auto labelled = invoke({"info", "--json", folder, "--label", "GREEN", "--label", "red"});
+    REQUIRE(filesOf(labelled.out).size() == 2);
+
+    // Without sidecars every shot has default marks, so a threshold leaves none.
+    const auto bare = invoke({"info", "--json", folder, "--min-rating", "1", "--no-sidecar"});
+    REQUIRE(bare.code == cli::Success);
+    REQUIRE(filesOf(bare.out).isEmpty());
+}
+
+TEST_CASE("An empty folder is no error and says there are no photographs", "[cli][shots]") {
+    const test::TempDir empty;
+    const test::TempDir output;
+    const auto info = invoke({"info", empty.path().string()});
+    REQUIRE(info.code == cli::Success);
+    REQUIRE(info.out.empty());
+    REQUIRE_THAT(info.err, ContainsSubstring("no photographs"));
+
+    const auto exported = exportFolder(empty.path(), output);
+    REQUIRE(exported.code == cli::Success);
+    REQUIRE_THAT(exported.err, ContainsSubstring("no photographs"));
+    REQUIRE(namesIn(output.path()).empty());
+}
+
+TEST_CASE("A folder that cannot be read fails like an input that cannot be read", "[cli][shots]") {
+    const test::TempDir directory;
+    const auto result = invoke({"info", directory.file("missing").string(), card.data()});
+    // A name that is no directory is a file, which fails as it always did.
+    REQUIRE(result.code == cli::Failed);
+}
+
+TEST_CASE("Export of a folder writes the primary of each shot and no companion",
+          "[cli][export][shots]") {
+    const auto shoot = makeShoot();
+    const test::TempDir output;
+    const auto result = exportFolder(shoot.path(), output);
+
+    REQUIRE(result.code == cli::Success);
+    REQUIRE(namesIn(output.path()) == std::vector<std::string>{"a.png", "b.png", "c.png"});
+}
+
+TEST_CASE("Export filters by rating, rejects and label", "[cli][export][shots][filter]") {
+    const auto shoot = makeShoot();
+    {
+        const test::TempDir output;
+        const auto result = exportFolder(shoot.path(), output, {"--min-rating", "4"});
+        REQUIRE(result.code == cli::Success);
+        REQUIRE(namesIn(output.path()) == std::vector<std::string>{"a.png"});
+        REQUIRE_THAT(result.err, ContainsSubstring("2 left out"));
+    }
+    {
+        const test::TempDir output;
+        const auto result = exportFolder(shoot.path(), output, {"--rejected"});
+        REQUIRE(result.code == cli::Success);
+        REQUIRE(namesIn(output.path()) == std::vector<std::string>{"b.png"});
+    }
+    {
+        const test::TempDir output;
+        const auto result =
+            exportFolder(shoot.path(), output, {"--label", "red", "--label", "Green"});
+        REQUIRE(namesIn(output.path()) == std::vector<std::string>{"a.png", "b.png"});
+    }
+    {
+        const test::TempDir output;
+        const auto result =
+            exportFolder(shoot.path(), output, {"--label", "green", "--min-rating", "5"});
+        REQUIRE(result.code == cli::Success);
+        REQUIRE(namesIn(output.path()).empty());
+        REQUIRE_THAT(result.err, ContainsSubstring("3 left out"));
+    }
+    {
+        // Files given directly are filtered too, and --no-sidecar gives default marks.
+        const test::TempDir output;
+        const auto result =
+            invoke({"export", shoot.file("a.dng").string(), "-o", output.path().string(),
+                    "--device", "cpu", "--no-sidecar", "--min-rating", "1"});
+        REQUIRE(result.code == cli::Success);
+        REQUIRE(namesIn(output.path()).empty());
+    }
+}
+
+TEST_CASE("A filtered-out photograph is not an error even when its output exists",
+          "[cli][export][shots][filter]") {
+    const auto shoot = makeShoot();
+    const test::TempDir output;
+    std::ofstream(output.file("c.png")) << "already";
+    const auto result = exportFolder(shoot.path(), output, {"--min-rating", "1"});
+    REQUIRE(result.code == cli::Success);
+    REQUIRE(namesIn(output.path()) == std::vector<std::string>{"a.png", "c.png"});
+}
+
+TEST_CASE("The filter flags are checked before any file is touched", "[cli][shots][filter]") {
+    const auto shoot = makeShoot();
+    const test::TempDir output;
+    const auto command = GENERATE(std::string{"info"}, std::string{"export"});
+    CAPTURE(command);
+    const auto run = [&](std::vector<std::string> flags) {
+        std::vector<std::string> arguments{command, shoot.path().string()};
+        if (command == "export") {
+            arguments.insert(arguments.end(), {"-o", output.path().string()});
+        }
+        arguments.insert(arguments.end(), flags.begin(), flags.end());
+        return invoke(arguments);
+    };
+
+    for (const auto& flags : {std::vector<std::string>{"--rejected", "--min-rating", "2"},
+                              {"--min-rating", "0"},
+                              {"--min-rating", "6"},
+                              {"--min-rating", "many"},
+                              {"--label", "mauve"},
+                              {"--label", "red", "--label", ""}}) {
+        const auto result = run(flags);
+        CAPTURE(flags);
+        REQUIRE(result.code == cli::UsageError);
+        REQUIRE(result.out.empty());
+        REQUIRE_THAT(result.err, ContainsSubstring("error:"));
+    }
+    REQUIRE(namesIn(output.path()).empty());
+}
+
+TEST_CASE("A sidecar that cannot be read fails its file when a filter needs its marks",
+          "[cli][export][shots][filter]") {
+    test::TempDir directory;
+    const auto raw = copyRaw(directory, "a.dng");
+    copyRaw(directory, "b.dng");
+    std::ofstream(directory.file("a.xmp")) << "this is not XML";
+    const test::TempDir output;
+    const auto result = exportFolder(directory.path(), output, {"--min-rating", "1"});
+    REQUIRE(result.code == cli::Failed);
+    REQUIRE_THAT(result.err, ContainsSubstring("--no-sidecar"));
+    REQUIRE_THAT(result.err, ContainsSubstring("1 of 2 failed"));
+    REQUIRE(namesIn(output.path()).empty());
+}
+
+TEST_CASE("The export help describes folders and the filter", "[cli][export][shots]") {
+    const auto result = invoke({"export", "--help"});
+    REQUIRE_THAT(result.out, ContainsSubstring("--min-rating"));
+    REQUIRE_THAT(result.out, ContainsSubstring("--rejected"));
+    REQUIRE_THAT(result.out, ContainsSubstring("--label"));
+    REQUIRE_THAT(result.out, !ContainsSubstring("not directories"));
+}
+
+TEST_CASE("Terminal decoration leaves captured output and JSON clean", "[cli][style]") {
+    std::ostringstream out;
+    REQUIRE_FALSE(cli::terminalStyle(out));
+    REQUIRE(cli::accented("hello", cli::Accent::Heading, false) == "hello");
+    REQUIRE(cli::accented("hello", cli::Accent::Heading, true) == "\033[1;36mhello\033[0m");
+    const auto help = invoke({"--help"});
+    REQUIRE_THAT(help.out, !ContainsSubstring("\033["));
+    const std::string text = "Usage: arraw-cli info\nOptions:\n  --json  JSON output\n";
+    cli::writeStyledHelp(out, text);
+    REQUIRE(out.str() == text);
+    const auto json = invoke({"info", "--json", test::fixture(card).string()});
+    REQUIRE(json.code == cli::Success);
+    REQUIRE_THAT(json.out, !ContainsSubstring("\033["));
+}
+
+TEST_CASE("Terminal text removes injected controls while preserving Unicode", "[cli][style]") {
+    const std::string attack = GENERATE(
+        std::string("\033[2J\033[Hhello\033[31m world\033[0m"),
+        std::string("\033]52;c;clipboard\ahello world"),
+        std::string("hello\033]0;title\033\\ world"), std::string("hello\033Ppayload\033\\ world"),
+        std::string("hello\033Xpayload\033\\ world"), std::string("hello\033^payload\033\\ world"),
+        std::string("hello\033_payload\033\\ world"), std::string("\033(Bhello\0337 world\0338"),
+        std::string("\u009b31mhello\u009b0m world"),
+        std::string("\u009d52;c;clipboard\u009chello world"),
+        std::string("hello\r\n\t\b\a world\177"));
+    REQUIRE(cli::terminalText(attack) == "hello world");
+    REQUIRE(cli::accented(attack, cli::Accent::Heading, false) == "hello world");
+    REQUIRE(cli::accented(attack, cli::Accent::Heading, true) == "\033[1;36mhello world\033[0m");
+    REQUIRE(cli::terminalText("📷 café 日本語") == "📷 café 日本語");
+    REQUIRE(cli::terminalText(std::string("a\0b", 3)) == "ab");
+    REQUIRE(cli::terminalText("hello\033]unterminated") == "hello");
+    REQUIRE(cli::terminalText("hello\033[31") == "hello");
+    REQUIRE(cli::terminalText("hello\033") == "hello");
+}
+
+TEST_CASE("Text diagnostics remove injected controls and JSON retains the data", "[cli][style]") {
+    const Diagnostic diagnostic{.notice = Notice::InputFailed,
+                                .severity = Severity::Error,
+                                .subject = std::filesystem::path("photo.png"),
+                                .values = {std::string("bad\033[2J\r\nmessage")}};
+    std::ostringstream text;
+    cli::StreamDiagnostics(text, cli::LogFormat::Text).record(diagnostic);
+    REQUIRE_THAT(text.str(), ContainsSubstring("badmessage"));
+    REQUIRE_THAT(text.str(), !ContainsSubstring("\033"));
+    REQUIRE(std::ranges::count(text.str(), '\n') == 1);
+
+    std::ostringstream json;
+    cli::StreamDiagnostics(json, cli::LogFormat::Json).record(diagnostic);
+    const auto object = QJsonDocument::fromJson(QByteArray::fromStdString(json.str())).object();
+    REQUIRE(object["message"].toString().contains("bad\033[2J\r\nmessage"));
+    REQUIRE_THAT(json.str(), !ContainsSubstring("\033"));
+}
+
+TEST_CASE("Info strips terminal sequences from sidecar metadata", "[cli][info][style]") {
+    const test::TempDir directory;
+    const auto image = directory.file("photo.png");
+    std::filesystem::copy_file(test::fixture(card), image);
+    std::ofstream(sidecarPath(image))
+        << "<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>"
+           "<rdf:Description xmlns:xmp='http://ns.adobe.com/xap/1.0/'>"
+           "<xmp:CreatorTool>&#155;31mCamera&#155;0m&#10;Maker</xmp:CreatorTool>"
+           "</rdf:Description></rdf:RDF>";
+    const auto text = invoke({"info", image.string()});
+    REQUIRE(text.code == cli::Success);
+    REQUIRE_THAT(text.out, ContainsSubstring("written by: CameraMaker\n"));
+    REQUIRE_THAT(text.out, !ContainsSubstring("\u009b"));
+
+    const auto json = invoke({"info", "--json", image.string()});
+    REQUIRE(json.code == cli::Success);
+    const auto file = QJsonDocument::fromJson(QByteArray::fromStdString(json.out))
+                          .object()["files"]
+                          .toArray()[0]
+                          .toObject();
+    REQUIRE(file["creatorTool"].toString() == QString::fromUtf8("\u009b31mCamera\u009b0m\nMaker"));
+}
+
+TEST_CASE("Usage errors remove terminal controls from arguments", "[cli][style]") {
+    const auto result = invoke({"unknown\033[2J\ncommand"});
+    REQUIRE(result.code == cli::UsageError);
+    REQUIRE_THAT(result.err, ContainsSubstring("unknowncommand"));
+    REQUIRE_THAT(result.err, !ContainsSubstring("\033"));
+}
+
+#ifndef _WIN32
+TEST_CASE("Info and diagnostics strip terminal sequences from filenames", "[cli][info][style]") {
+    const test::TempDir directory;
+    const auto image = directory.file("evil\033[2J\033[H.png");
+    std::filesystem::copy_file(test::fixture(card), image);
+    const auto info = invoke({"info", image.string()});
+    REQUIRE(info.code == cli::Success);
+    REQUIRE_THAT(info.out, ContainsSubstring("evil.png\n"));
+    REQUIRE_THAT(info.out, !ContainsSubstring("\033"));
+
+    const auto missing = directory.file("missing\033]52;c;clipboard\a.png");
+    const auto failed = invoke({"info", missing.string()});
+    REQUIRE(failed.code == cli::Failed);
+    REQUIRE_THAT(failed.err, ContainsSubstring("missing.png"));
+    REQUIRE_THAT(failed.err, !ContainsSubstring("clipboard"));
+    REQUIRE_THAT(failed.err, !ContainsSubstring("\033"));
+}
+#endif

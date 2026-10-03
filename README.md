@@ -13,10 +13,13 @@ with a Qt desktop application and a command line over it.
 
 ## Building
 
-Requires CMake 3.21+, a C++20 compiler, **Qt 6.10**, and **LibRaw** (`libraw-dev`
-on Ubuntu, `libraw-devel` on Fedora). LibRaw is required rather than optional, so
+Requires CMake 3.21+, a C++20 compiler, **Qt 6.10**, **LibRaw** (`libraw-dev`
+on Ubuntu, `libraw-devel` on Fedora) and **exiv2** 0.28 or newer (`libexiv2-dev`
+on Ubuntu, `exiv2-devel` on Fedora). LibRaw is required rather than optional, so
 that every build decodes a RAW identically — see
-[ADR 005](docs/adr/005-raw-import-through-libraw.md).
+[ADR 005](docs/adr/005-raw-import-through-libraw.md); exiv2 is, so that every
+build reads the same capture information — see
+[ADR 028](docs/adr/028-exif-is-read-through-exiv2-into-a-typed-struct.md).
 
 ```bash
 just build     # configure and build (Debug)
@@ -41,6 +44,8 @@ arraw-cli export photo.arw -o out/ --device gpu --gpu-backend vulkan   # no CPU 
 arraw-cli gpu-test                        # check the GPU backend works on this machine
 ```
 
+Interactive CLI output uses restrained color, aligned status labels, and a camera accent in the main help. Redirected output and JSON remain plain. Set `NO_COLOR` (or `TERM=dumb`) to disable terminal decoration. On Windows, color requires a console with virtual terminal processing enabled.
+
 On Linux the command line needs no display: it runs on its own headless Qt
 platform, which reaches Vulkan through the driver alone but has no OpenGL.
 `export` uses it whatever `QT_QPA_PLATFORM` says, unless `--gpu-backend opengl`
@@ -57,6 +62,12 @@ a usage error. With `--gpu-backend opengl`, `auto` is `gpu`: OpenGL needs a
 display's platform, and a process cannot fall back from one that will not load.
 `--device cpu` loads no graphics stack. `--gpu-backend` picks the API (`vulkan`, `opengl`, `d3d11`, `d3d12`, `metal`), and one line per batch says
 which device was used (silenced by `--quiet`).
+
+The desktop app (`arraw-ui`) renders its preview on the GPU when it can, uploading
+the photograph once, and on the CPU otherwise; the status bar says which, and
+why not the GPU when it fell back (tooltip). `ARRAW_PREVIEW_DEVICE=cpu` forces
+the CPU, for comparison or a broken driver; anything else, or unset, means
+"GPU when available". Software rasterisers are not used for the preview.
 
 Inputs are files rather than directories; your shell expands the wildcards.
 Every input is attempted, so one bad frame does not abandon an overnight batch.
@@ -105,6 +116,30 @@ premultiplied alpha. Continuous crop dimensions are floored to whole output
 pixels, with a minimum of one pixel per axis. Resizing is applied last,
 after the crop (see `--resize`).
 
+The desktop app offers **Edit → Settings…** (the application Settings menu on macOS).
+The Processing tab selects Automatic, CPU only, or a detected hardware GPU for previews
+and exports. Preferences use Qt's native `QSettings` storage and take effect after restart.
+A selected GPU that is unavailable falls back to CPU; the preview device label explains why.
+`ARRAW_PREVIEW_DEVICE=cpu` continues to override the saved preference for that session.
+
+To trace development performance, enable the `arraw.timing` Qt logging category:
+
+```sh
+QT_LOGGING_RULES="arraw.timing.debug=true" just gui 2>timing.log
+# The same category works in the CLI:
+QT_LOGGING_RULES="arraw.timing.debug=true" just cli export photo.dng -o out/
+```
+
+Traces show monotonic milliseconds since startup, begin/end events, elapsed milliseconds,
+unique span IDs, parent IDs, and preview/export request IDs. They cover processing plans,
+CPU stages, GPU context creation, uploads, individual GPU passes and submission waits,
+readback, preview pyramids, display conversion, and export writing.
+Nested durations include their children; do not add them together. Cached stages may be
+absent. These are host elapsed times, not GPU hardware timestamps; tracing itself adds
+logging overhead. Output goes to Qt's diagnostic stream (normally stderr), is disabled by
+default, and does not change CLI stdout or its JSON documents. Explicitly enabling timing
+alongside `--log-format json` mixes debug traces with diagnostic JSON on stderr.
+
 ## Layout
 
 - `include/` — the public API
@@ -137,6 +172,7 @@ arraw links libraries under their own terms, all compatible with GPL-3.0-or-late
 |---|---|---|
 | [Qt 6](https://www.qt.io/) | LGPL-3.0-or-later | Application framework, image codecs |
 | [LibRaw](https://www.libraw.org/) | LGPL-2.1 / CDDL-1.0 | RAW decoding |
+| [exiv2](https://exiv2.org/) | GPL-2.0-or-later | EXIF reading (later also metadata writing) |
 | [Catch2](https://github.com/catchorg/Catch2) | BSL-1.0 | Test framework (not distributed) |
 
 A distributed binary must carry these licence texts alongside arraw's own.

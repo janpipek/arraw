@@ -151,7 +151,7 @@ TEST_CASE("Developing on the GPU leaves a resident checkpoint", "[gpu][passes]")
 
     SECTION("stopping after the pointwise pass keeps the source size") {
         const RenderCheckpoint checkpoint =
-            developOnGpu(context, awkwardImage({7, 5}), settings, Stage::Pointwise);
+            developOnGpu(context, awkwardImage({7, 5}), DevelopState{settings}, Stage::Pointwise);
         REQUIRE(checkpoint.isResident());
         REQUIRE(checkpoint.boundary() == Stage::Pointwise);
         REQUIRE(checkpoint.size() == ImageSize{7, 5});
@@ -159,15 +159,16 @@ TEST_CASE("Developing on the GPU leaves a resident checkpoint", "[gpu][passes]")
 
     SECTION("an upright source through geometry keeps its size") {
         const RenderCheckpoint checkpoint =
-            developOnGpu(context, awkwardImage({7, 5}), settings, Stage::Geometry);
+            developOnGpu(context, awkwardImage({7, 5}), DevelopState{settings}, Stage::Geometry);
         REQUIRE(checkpoint.isResident());
         REQUIRE(checkpoint.boundary() == Stage::Geometry);
         REQUIRE(checkpoint.size() == ImageSize{7, 5});
     }
 
     SECTION("a quarter-turned source comes out transposed") {
-        const RenderCheckpoint checkpoint = developOnGpu(
-            context, awkwardImage({7, 5}, ImageOrientation::Rotate90), settings, Stage::Geometry);
+        const RenderCheckpoint checkpoint =
+            developOnGpu(context, awkwardImage({7, 5}, ImageOrientation::Rotate90),
+                         DevelopState{settings}, Stage::Geometry);
         REQUIRE(checkpoint.isResident());
         REQUIRE(checkpoint.boundary() == Stage::Geometry);
         REQUIRE(checkpoint.size() == ImageSize{5, 7});
@@ -179,7 +180,7 @@ TEST_CASE("Developing on the GPU leaves a resident checkpoint", "[gpu][passes]")
             CAPTURE(static_cast<int>(format));
             const ImageBuffer source({4, 3}, format, workingEncoding);
             const RenderCheckpoint checkpoint =
-                developOnGpu(context, source, settings, Stage::Pointwise);
+                developOnGpu(context, source, DevelopState{settings}, Stage::Pointwise);
             REQUIRE(checkpoint.isResident());
             REQUIRE(checkpoint.size() == ImageSize{4, 3});
         }

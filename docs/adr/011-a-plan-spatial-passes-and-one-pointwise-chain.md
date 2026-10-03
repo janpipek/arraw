@@ -210,6 +210,9 @@ request" keeps its meaning.
   ADR 015 brought part of that forward: `RenderCheckpoint` and the prefix fold
   are built, because deciding where GPU pixels live needed them to be real,
   while `stopAfter` and `resumeFrom` still wait for the processor.
+  ([ADR 024](024-renders-stop-and-resume-at-pass-boundaries.md) builds them:
+  `developUntil` and `resumeFrom` on the CPU, a resuming `developOnGpu`, and
+  the GUI preview as their first caller.)
 - **A stage's kind is part of its definition.** Anything pointwise that later
   needs a neighbour, such as clarity or a local contrast, becomes a spatial
   stage and a pass of its own rather than being smuggled into the chain.

@@ -1,6 +1,6 @@
 #pragma once
 
-#include <DevelopSettings.h>
+#include <DevelopState.h>
 #include <Diagnostics.h>
 #include <Photo.h>
 #include <PhotoMarks.h>
@@ -40,8 +40,8 @@ struct ForeignNamespace {
 
 /// @brief What an XMP sidecar holds that arraw understands, and who else wrote in it.
 struct SidecarContents {
-    /// @brief Develop settings, defaults for whatever the sidecar does not say.
-    DevelopSettings settings;
+    /// @brief Develop state, defaults for whatever the sidecar does not say.
+    DevelopState state;
 
     /// @brief Culling marks, none for whatever the sidecar does not say.
     PhotoMarks marks;
@@ -152,5 +152,19 @@ readSidecar(const std::filesystem::path& photo, DiagnosticLog& log = discardedDi
 /// newer ::arraw::sidecarVersion, naming it, in which case it is left alone,
 /// or if the file cannot be written.
 void writeSidecar(const Photo& photo);
+
+/// @brief Writes only the marks of a photograph into its sidecar.
+///
+/// As ::arraw::writeSidecar does for the marks, and leaves the develop settings,
+/// `arraw:version` and everything foreign as the file has them. Without a
+/// sidecar a new one is created, with default develop settings. This is how a
+/// session writes a rating without saving the edits it has not saved (ADR 030).
+/// @param photo Path of the photograph.
+/// @param marks Marks to write.
+/// @throws std::invalid_argument if the rating of @p marks is outside -1 to 5.
+/// @throws std::runtime_error as ::arraw::writeSidecar does: for an existing
+/// sidecar that is not XMP or is of a newer version, which is left alone, or
+/// that cannot be read, and for a file that cannot be written.
+void writeSidecarMarks(const std::filesystem::path& photo, const PhotoMarks& marks);
 
 } // namespace arraw

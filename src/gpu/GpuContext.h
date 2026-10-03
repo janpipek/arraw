@@ -299,4 +299,14 @@ private:
     GpuDeviceInfo info_;
 };
 
+/// @brief Creates a context on the default backend, unless it would be a software rasteriser.
+///
+/// For callers that fall back to the CPU: a rasteriser on the CPU is no faster
+/// than the CPU path, and is slower to start, so it is refused as the command
+/// line's auto mode refuses it. Never throws; the reason comes back instead.
+/// @param problem Receives why there is no context: the failure, or
+/// "Software rasteriser refused: <device>". Left untouched on success.
+/// @return The context, which belongs to the calling thread, or an empty pointer.
+[[nodiscard]] std::unique_ptr<GpuContext> createHardwareContext(std::string& problem);
+
 } // namespace arraw

@@ -1,5 +1,6 @@
 #include "Sidecar.h"
 
+#include "RawImport.h"
 #include "SettingCodec.h"
 
 #include <QByteArray>
@@ -72,14 +73,6 @@ QString qtPath(const std::filesystem::path& path) {
 std::string_view withoutPlus(std::string_view text) {
     return text.starts_with('+') ? text.substr(1) : text;
 }
-
-/// @brief Extensions of the RAW formats LibRaw opens, which name a sidecar by their stem.
-///
-/// More than the decoder claims by name (see rawimport::namesRawFormat): naming
-/// has to recognise every RAW, or a RAW and its JPEG would share a sidecar.
-constexpr std::array<std::string_view, 21> rawExtensions = {
-    ".cr2", ".cr3", ".nef", ".arw", ".dng", ".raf", ".orf", ".rw2", ".pef", ".srw", ".nrw",
-    ".crw", ".mrw", ".srf", ".x3f", ".kdc", ".mos", ".raw", ".3fr", ".iiq", ".erf"};
 
 /// @brief Extensions of the other image formats that can share a stem with a photograph.
 constexpr std::array<std::string_view, 12> otherExtensions = {".jpg",  ".jpeg", ".png",  ".tif",
@@ -638,15 +631,6 @@ bool hasSibling(const std::filesystem::path& photo, std::span<const std::string_
     return false;
 }
 
-/// @brief Whether an extension, in either case, is one of a list.
-bool isAmong(const std::filesystem::path& photo, std::span<const std::string_view> extensions) {
-    std::string extension = photo.extension().string();
-    std::ranges::transform(extension, extension.begin(), [](unsigned char character) {
-        return static_cast<char>(std::tolower(character));
-    });
-    return std::ranges::find(extensions, extension) != extensions.end();
-}
-
 } // namespace
 
 std::optional<std::string_view> arraw::xmpNamespaceOwner(std::string_view uri) {
@@ -660,9 +644,12 @@ std::optional<std::string_view> arraw::xmpNamespaceOwner(std::string_view uri) {
 std::filesystem::path arraw::sidecarPath(const std::filesystem::path& photo) {
     // The RAW of a pair keeps the stem; anything else that shares a stem with
     // another image has to be told apart by its extension.
-    const bool sharesStem = isAmong(photo, rawExtensions) ? hasSibling(photo, rawExtensions)
-                                                          : hasSibling(photo, rawExtensions) ||
-                                                                hasSibling(photo, otherExtensions);
+    // Every RAW LibRaw opens counts (rawimport::openedRawExtensions), or a RAW
+    // and its JPEG would share a sidecar; replace_extension adds the dot.
+    const auto& raws = rawimport::openedRawExtensions;
+    const bool sharesStem = rawimport::hasRawExtension(photo)
+                                ? hasSibling(photo, raws)
+                                : hasSibling(photo, raws) || hasSibling(photo, otherExtensions);
     std::filesystem::path name = sharesStem ? photo.filename() : photo.stem();
     const std::filesystem::path directory = photo.parent_path();
     std::filesystem::path exact = directory / name;
@@ -696,7 +683,7 @@ std::optional<SidecarContents> arraw::readSidecar(const std::filesystem::path& p
             continue;
         }
         if (found.back().simple) {
-            applyText(descriptor, found.back().text, contents.settings, log, photo);
+            applyText(descriptor, found.back().text, contents.state.settings, log, photo);
         } else {
             reportMalformed(descriptor, log, photo);
         }
@@ -708,8 +695,16 @@ std::optional<SidecarContents> arraw::readSidecar(const std::filesystem::path& p
     return contents;
 }
 
-void arraw::writeSidecar(const Photo& photo) {
-    const std::filesystem::path path = sidecarPath(photo.path());
+namespace {
+
+/// @brief Edits or creates the sidecar of a photograph.
+/// @param photo Path of the photograph.
+/// @param state Develop state to write; null to leave the settings of an
+/// existing sidecar alone (a new one gets the defaults).
+/// @param marks Marks to write.
+void writeSidecarFor(const std::filesystem::path& photo, const DevelopState* state,
+                     const PhotoMarks& marks) {
+    const std::filesystem::path path = sidecarPath(photo);
     std::error_code error;
     const bool exists = std::filesystem::is_regular_file(path, error);
     QDomDocument document =
@@ -747,16 +742,18 @@ void arraw::writeSidecar(const Photo& photo) {
     });
     const QDomElement home = holder != descriptions.end() ? *holder : descriptions.front();
 
-    setProperty(descriptions, home, arrawProperty("version"), QString::number(sidecarVersion));
-    for (const FieldDescriptor& descriptor : developSettingDescriptors) {
-        setProperty(descriptions, home, arrawProperty(descriptor.key),
-                    spell(encode(descriptor, photo.settings())));
+    if (state != nullptr || !exists) {
+        const DevelopState written = state != nullptr ? *state : DevelopState{};
+        setProperty(descriptions, home, arrawProperty("version"), QString::number(sidecarVersion));
+        for (const FieldDescriptor& descriptor : developSettingDescriptors) {
+            setProperty(descriptions, home, arrawProperty(descriptor.key),
+                        spell(encode(descriptor, written.settings)));
+        }
     }
     // Marks are standard XMP that other tools write too, and some of what they
     // write is no mark arraw has (a rating of 9, a label named "Rot"). So a mark
     // is written only when it differs from what reading the file gave: an
     // unchanged mark leaves the file's own text alone, whatever it says.
-    const PhotoMarks& marks = photo.marks();
     const PhotoMarks onFile = marksIn(descriptions, discardedDiagnostics(), path);
     if (marks.rating != onFile.rating) {
         setProperty(descriptions, home, xmpProperty("Rating"_L1), QString::number(marks.rating));
@@ -784,4 +781,18 @@ void arraw::writeSidecar(const Photo& photo) {
         throw std::runtime_error("cannot write sidecar " + path.string() + ": " +
                                  file.errorString().toStdString());
     }
+}
+
+} // namespace
+
+void arraw::writeSidecar(const Photo& photo) {
+    const DevelopState state = photo.state();
+    writeSidecarFor(photo.path(), &state, photo.marks());
+}
+
+void arraw::writeSidecarMarks(const std::filesystem::path& photo, const PhotoMarks& marks) {
+    if (marks.rating < rejectedRating || marks.rating > highestRating) {
+        throw std::invalid_argument("rating must be from -1 to 5");
+    }
+    writeSidecarFor(photo, nullptr, marks);
 }

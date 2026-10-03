@@ -26,6 +26,15 @@ inline constexpr std::array<std::pair<WhiteBalanceMode, std::string_view>, 2> wh
         {WhiteBalanceMode::Custom, "custom"},
     }};
 
+/// @brief Weakest and strongest Saturation and Vibrance arraw models.
+///
+/// Both run from fully desaturated through unchanged to double the colourfulness,
+/// as Lightroom's sliders do (ADR 027).
+inline constexpr float weakestSaturation = -100.0F;
+
+/// @copydoc weakestSaturation
+inline constexpr float strongestSaturation = 100.0F;
+
 /// @brief Photographic colour adjustments in domain units.
 struct ColorSettings {
     /// @brief Which light the photograph is balanced for.
@@ -40,6 +49,19 @@ struct ColorSettings {
 
     /// @brief How far off the line of glowing-object colours that light sits.
     std::optional<float> tint = std::nullopt;
+
+    /// @brief How much the colourfulness of every colour is raised or lowered.
+    ///
+    /// Scales Oklab chroma uniformly, holding lightness and hue: minus a
+    /// hundred is grey, plus a hundred doubles the chroma (ADR 027). Zero
+    /// leaves the photograph alone.
+    float saturation = 0.0F;
+
+    /// @brief How much the colourfulness of the muted colours is raised or lowered.
+    ///
+    /// Like Saturation, but weighted so that colours that are already vivid
+    /// move less than muted ones.
+    float vibrance = 0.0F;
 
     friend bool operator==(const ColorSettings&, const ColorSettings&) = default;
 };

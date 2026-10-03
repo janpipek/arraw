@@ -34,7 +34,7 @@ struct SettingRange {
 };
 
 /// @brief Panel a setting belongs to.
-enum class SettingGroup { Color, Tone, Geometry };
+enum class SettingGroup { Color, Tone, Geometry, Hsl, BlackAndWhite };
 
 /// @brief Whether a setting means anything for every photograph.
 enum class Applicability {
@@ -68,6 +68,33 @@ struct FieldDescriptor {
 #define ARRAW_ACCESSOR(Type, path)                                                                 \
     SettingAccessor {                                                                              \
         +[](DevelopSettings& s) -> Type& { return s.path; }                                        \
+    }
+
+// The three rows of one HSL band, and the row of one band's grey weight (ADR 027).
+#define ARRAW_HSL_BAND(Name, member)                                                               \
+    FieldDescriptor{"hue" #Name,                                                                   \
+                    ARRAW_ACCESSOR(float, hsl.member.hue),                                         \
+                    SettingRange{weakestHslControl, strongestHslControl},                          \
+                    SettingGroup::Hsl,                                                             \
+                    Applicability::Always,                                                         \
+                    Stage::Pointwise},                                                             \
+        FieldDescriptor{"saturation" #Name,                                                        \
+                        ARRAW_ACCESSOR(float, hsl.member.saturation),                              \
+                        SettingRange{weakestHslControl, strongestHslControl},                      \
+                        SettingGroup::Hsl,                                                         \
+                        Applicability::Always,                                                     \
+                        Stage::Pointwise},                                                         \
+        FieldDescriptor {                                                                          \
+        "luminance" #Name, ARRAW_ACCESSOR(float, hsl.member.luminance),                            \
+            SettingRange{weakestHslControl, strongestHslControl}, SettingGroup::Hsl,               \
+            Applicability::Always, Stage::Pointwise                                                \
+    }
+
+#define ARRAW_GRAY_BAND(Name, member)                                                              \
+    FieldDescriptor {                                                                              \
+        "gray" #Name, ARRAW_ACCESSOR(float, blackAndWhite.member),                                 \
+            SettingRange{darkestGrayMix, lightestGrayMix}, SettingGroup::BlackAndWhite,            \
+            Applicability::Always, Stage::Pointwise                                                \
     }
 
 /// @brief One descriptor per leaf of ::arraw::DevelopSettings.
@@ -104,6 +131,31 @@ inline constexpr std::array developSettingDescriptors{
     FieldDescriptor{"tint", ARRAW_ACCESSOR(std::optional<float>, color.tint),
                     SettingRange{-tintLimit, tintLimit}, SettingGroup::Color,
                     Applicability::RawOnly, Stage::Pointwise},
+    FieldDescriptor{"saturation", ARRAW_ACCESSOR(float, color.saturation),
+                    SettingRange{weakestSaturation, strongestSaturation}, SettingGroup::Color,
+                    Applicability::Always, Stage::Pointwise},
+    FieldDescriptor{"vibrance", ARRAW_ACCESSOR(float, color.vibrance),
+                    SettingRange{weakestSaturation, strongestSaturation}, SettingGroup::Color,
+                    Applicability::Always, Stage::Pointwise},
+    ARRAW_HSL_BAND(Red, red),
+    ARRAW_HSL_BAND(Orange, orange),
+    ARRAW_HSL_BAND(Yellow, yellow),
+    ARRAW_HSL_BAND(Green, green),
+    ARRAW_HSL_BAND(Aqua, aqua),
+    ARRAW_HSL_BAND(Blue, blue),
+    ARRAW_HSL_BAND(Purple, purple),
+    ARRAW_HSL_BAND(Magenta, magenta),
+    FieldDescriptor{"convertToGrayscale", ARRAW_ACCESSOR(bool, blackAndWhite.convertToGrayscale),
+                    std::nullopt, SettingGroup::BlackAndWhite, Applicability::Always,
+                    Stage::Pointwise},
+    ARRAW_GRAY_BAND(Red, red),
+    ARRAW_GRAY_BAND(Orange, orange),
+    ARRAW_GRAY_BAND(Yellow, yellow),
+    ARRAW_GRAY_BAND(Green, green),
+    ARRAW_GRAY_BAND(Aqua, aqua),
+    ARRAW_GRAY_BAND(Blue, blue),
+    ARRAW_GRAY_BAND(Purple, purple),
+    ARRAW_GRAY_BAND(Magenta, magenta),
     FieldDescriptor{"rotation", ARRAW_ACCESSOR(QuarterTurn, geometry.rotation), std::nullopt,
                     SettingGroup::Geometry, Applicability::Always, Stage::Geometry},
     FieldDescriptor{"flipHorizontal", ARRAW_ACCESSOR(bool, geometry.flipHorizontal), std::nullopt,
@@ -120,6 +172,8 @@ inline constexpr std::array developSettingDescriptors{
                     SettingGroup::Geometry, Applicability::Always, Stage::Geometry},
 };
 
+#undef ARRAW_GRAY_BAND
+#undef ARRAW_HSL_BAND
 #undef ARRAW_ACCESSOR
 
 /// @brief Finds the descriptor with a given key.

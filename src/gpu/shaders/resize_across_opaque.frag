@@ -19,7 +19,7 @@ layout(binding = 0) uniform sampler2D source;
 layout(std140, binding = 1) uniform Resize {
     uint plane;
     uint inputLength;
-    uvec2 padding;
+    uvec2 offset;
 } plan;
 
 // The weights of the resized axis, as packResizeWeights lays them out.
@@ -46,7 +46,7 @@ void main() {
     for (int k = 0; k < count; ++k) {
         const float weight = tapWeight(pixel.x, k);
         const int index = clamp(first + k, 0, last);
-        const vec3 colour = texelFetch(source, ivec2(index, pixel.y), 0).rgb;
+        const vec3 colour = texelFetch(source, ivec2(index, pixel.y) + ivec2(plan.offset), 0).rgb;
         sum += weight * colour;
         negative = max(negative, vec3(lessThan(colour, vec3(0.0))));
     }

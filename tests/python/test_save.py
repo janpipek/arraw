@@ -1,3 +1,5 @@
+import shutil
+
 import pytest
 
 import arraw
@@ -84,3 +86,66 @@ def test_save_to_missing_directory_raises(developed, tmp_path):
 def test_unknown_extension_raises(developed, tmp_path):
     with pytest.raises(ValueError):
         arraw.save(developed, tmp_path / "x.xyz")
+
+
+def test_sharpening_round_trip(developed, tmp_path):
+    arraw.save(developed, tmp_path / "off.png")
+    arraw.save(developed, tmp_path / "zero.png", sharpening=0)
+    arraw.save(developed, tmp_path / "sharp.png", sharpening=100)
+    assert (tmp_path / "off.png").read_bytes() == (tmp_path / "zero.png").read_bytes()
+    assert (tmp_path / "sharp.png").read_bytes() != (tmp_path / "off.png").read_bytes()
+
+
+@pytest.mark.parametrize("amount", [-1, 101])
+def test_sharpening_out_of_range_is_value_error(developed, tmp_path, amount):
+    with pytest.raises(ValueError):
+        arraw.save(developed, tmp_path / "bad.png", sharpening=amount)
+    assert not (tmp_path / "bad.png").exists()
+
+
+@pytest.fixture(scope="module")
+def exif_photo(fixtures):
+    return arraw.open(fixtures / "exif-32x24.dng")
+
+
+def test_save_without_metadata_from_writes_no_metadata(exif_photo, tmp_path):
+    arraw.save(arraw.develop(exif_photo), tmp_path / "plain.jpg")
+    assert arraw.read_exif(tmp_path / "plain.jpg") == arraw.ExifInfo()
+
+
+def test_save_carries_capture_but_not_location_by_default(exif_photo, tmp_path):
+    arraw.save(arraw.develop(exif_photo), tmp_path / "a.jpg", metadata_from=exif_photo)
+    info = arraw.read_exif(tmp_path / "a.jpg")
+    assert info.make == "Arraw"
+    assert info.f_number == arraw.URational(28, 10)
+    assert info.gps is None
+
+
+def test_save_metadata_selection(exif_photo, tmp_path):
+    selection = arraw.MetadataSelection(capture=False, location=True, descriptive=False)
+    arraw.save(arraw.develop(exif_photo), tmp_path / "b.png", metadata_from=exif_photo,
+               metadata=selection)
+    info = arraw.read_exif(tmp_path / "b.png")
+    assert info.gps is not None
+    assert info.make is None
+
+
+def test_metadata_selection_defaults_and_value_semantics():
+    default = arraw.MetadataSelection()
+    assert (default.capture, default.location, default.descriptive) == (True, False, True)
+    assert default.replace(location=True).location is True
+    assert default == arraw.MetadataSelection()
+
+
+def test_save_metadata_from_missing_source_still_saves_and_warns(
+    exif_photo, fixtures, tmp_path, caplog
+):
+    copy = tmp_path / "gone.dng"
+    shutil.copy(fixtures / "exif-32x24.dng", copy)
+    ghost = arraw.open(copy)
+    copy.unlink()
+    with caplog.at_level("WARNING", logger="arraw"):
+        arraw.save(arraw.develop(exif_photo), tmp_path / "c.jpg", metadata_from=ghost)
+    assert (tmp_path / "c.jpg").exists()
+    assert arraw.read_exif(tmp_path / "c.jpg") == arraw.ExifInfo()
+    assert any("without some metadata" in r.getMessage() for r in caplog.records)

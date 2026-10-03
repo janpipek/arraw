@@ -1,23 +1,58 @@
 #pragma once
 
+#include "ColorAdjustments.h"
 #include "ColorSpaces.h"
 #include "GeometryPlan.h"
 
 #include <ColorEncoding.h>
 #include <Develop.h>
 #include <DevelopSettings.h>
+#include <DevelopState.h>
 #include <ImageBuffer.h>
 #include <Photo.h>
 #include <RenderCheckpoint.h>
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <optional>
 #include <tuple>
 #include <utility>
 
 namespace arraw {
+
+/// @brief Rectangle of whole pixels in a frame.
+struct PixelRegion {
+    std::uint32_t x = 0;      ///< Column of the left edge.
+    std::uint32_t y = 0;      ///< Row of the top edge.
+    std::uint32_t width = 0;  ///< Width in pixels.
+    std::uint32_t height = 0; ///< Height in pixels.
+
+    /// @brief Gives the size of the rectangle.
+    [[nodiscard]] constexpr ImageSize size() const noexcept {
+        return {width, height};
+    }
+
+    /// @brief Checks whether the rectangle is all of a frame.
+    /// @param frame Size of the frame.
+    [[nodiscard]] constexpr bool covers(ImageSize frame) const noexcept {
+        return x == 0 && y == 0 && size() == frame;
+    }
+
+    friend bool operator==(const PixelRegion&, const PixelRegion&) = default;
+};
+
+/// @brief Resolves a request's region into whole pixels of a frame.
+///
+/// Each edge snaps outward: the left and top down, the right and bottom up,
+/// and a region thinner than a pixel grows to one. No region gives the frame.
+/// @param request What the caller wants rendered.
+/// @param frame Size of the frame after geometry.
+/// @return The pixels the region covers, inside @p frame, at least 1x1.
+/// @throws std::invalid_argument if @p frame is empty or the region is not
+/// finite, not within the unit square, or empty.
+[[nodiscard]] PixelRegion regionOf(const RenderRequest& request, ImageSize frame);
 
 /// @brief The resample block: the size a render ends at, and how it gets there.
 ///
@@ -26,12 +61,19 @@ namespace arraw {
 /// and filter are resolved here rather than read from the request by each
 /// backend. Both backends execute exactly this.
 struct ResizePlan {
-    /// @brief Size of the result, from ::arraw::resolvedSize against the cropped size.
+    /// @brief Part of the cropped frame that is resized, from ::arraw::regionOf.
+    ///
+    /// Always set by the planner, to the whole frame when no region was asked
+    /// for. It belongs here and not in the geometry block so that a checkpoint
+    /// after geometry is shared by every region (ADR 025).
+    PixelRegion region;
+
+    /// @brief Size of the result, from ::arraw::resolvedSize against the region's size.
     ImageSize outputSize;
 
     /// @brief Kernel the resize runs with.
     ///
-    /// ::arraw::ResizeFilter::Lanczos3 for an identity resize, whatever the
+    /// ::arraw::ResizeFilter::Lanczos3 for a resize that does not resample, whatever the
     /// request said, since no kernel runs and two renders with the same pixels
     /// should compare equal.
     ResizeFilter filter = ResizeFilter::Lanczos3;
@@ -61,12 +103,18 @@ struct ResizePlan {
     /// @brief Whether the resize leaves the pixels alone, which both backends skip.
     /// @param cropped Size of the photograph after its crop.
     [[nodiscard]] bool isIdentity(ImageSize cropped) const noexcept {
-        return outputSize == cropped;
+        return region.covers(cropped) && outputSize == cropped;
+    }
+
+    /// @brief Whether the kernel runs, as opposed to the region being cut and kept as it is.
+    [[nodiscard]] bool resamples() const noexcept {
+        return outputSize != region.size();
     }
 
     /// @brief Compares what the resize computes, ignoring the ::arraw::ResizePlan::opaque hint.
     friend bool operator==(const ResizePlan& first, const ResizePlan& second) noexcept {
-        return first.outputSize == second.outputSize && first.filter == second.filter;
+        return first.region == second.region && first.outputSize == second.outputSize &&
+               first.filter == second.filter;
     }
 };
 
@@ -137,6 +185,13 @@ struct ProcessingPlan {
     /// costs a comparison rather than a branch on a setting (ADR 011).
     float shoulderKnee = std::numeric_limits<float>::infinity();
 
+    /// @brief Saturation, vibrance, HSL and Black & White, resolved.
+    ///
+    /// The last of the pointwise stages: it follows the shoulder, as the
+    /// colour controls did on main, and every control left at zero is a flag
+    /// that is off (ADR 027).
+    ColorAdjustmentPlan colorAdjustments{};
+
     /// @brief Resolved geometry when source dimensions and orientation are known.
     std::optional<GeometryPlan> geometry = std::nullopt;
 
@@ -159,7 +214,7 @@ struct ProcessingPlan {
     return std::make_tuple(std::tie(plan.toWorking, plan.exposureGain, plan.shapesTone,
                                     plan.contrastSlope, plan.contrastScale, plan.shadowShift,
                                     plan.highlightShift, plan.blackShift, plan.whiteShift,
-                                    plan.shoulderKnee),
+                                    plan.shoulderKnee, plan.colorAdjustments),
                            std::tie(plan.geometry), std::tie(plan.resize));
 }
 
@@ -199,7 +254,8 @@ static_assert(std::tuple_size_v<decltype(stagesOf(std::declval<const ProcessingP
     }(std::make_index_sequence<stageCount>{});
 }
 
-/// @brief Resolves tone settings into a plan with an identity colour transform.
+/// @brief Resolves tone settings into a plan with an identity colour transform and no colour
+/// adjustments.
 /// @param settings Tone adjustments to resolve.
 /// @return Exposure gain and tone coefficients for the pointwise chain.
 /// @throws std::invalid_argument if a tone setting is not finite.
@@ -217,12 +273,11 @@ static_assert(std::tuple_size_v<decltype(stagesOf(std::declval<const ProcessingP
 /// Resolves only colour and tone; buffer and Photo overloads also resolve geometry.
 /// This overload carries no source identity and must not be used as a cache key.
 /// @param encoding Encoding the decoded pixels are in.
-/// @param settings Settings to resolve.
+/// @param state State to resolve.
 /// @return The plan both backends execute.
 /// @throws std::invalid_argument if development cannot start from @p encoding,
 /// or the settings cannot be resolved against it.
-[[nodiscard]] ProcessingPlan planFor(const ColorEncoding& encoding,
-                                     const DevelopSettings& settings);
+[[nodiscard]] ProcessingPlan planFor(const ColorEncoding& encoding, const DevelopState& state);
 
 /// @brief Resolves pointwise processing, geometry and the resize against decoded pixels.
 ///
@@ -232,11 +287,11 @@ static_assert(std::tuple_size_v<decltype(stagesOf(std::declval<const ProcessingP
 /// sample that is not exactly one: a read of the alpha samples, at worst the
 /// whole buffer, and only when the request actually resizes.
 /// @param source Decoded pixels the plan is for.
-/// @param settings Settings to resolve.
+/// @param state State to resolve.
 /// @param request Size and filter to render at; the default is the cropped size.
 /// @throws std::invalid_argument as the other overloads, and if @p request
 /// cannot be resolved (see ::arraw::resolvedSize).
-[[nodiscard]] ProcessingPlan planFor(const ImageBuffer& source, const DevelopSettings& settings,
+[[nodiscard]] ProcessingPlan planFor(const ImageBuffer& source, const DevelopState& state,
                                      const RenderRequest& request = {});
 
 /// @brief Works out what a photograph's document means for its pixels.
@@ -437,13 +492,17 @@ inline constexpr float liftedBlackThreshold = 1.0e-20F;
 /// @param colour Source colour, in the encoding the plan was built for.
 /// @return The developed colour, in the working encoding.
 ///
+/// Not `constexpr`: the colour block's Oklab maths takes cube roots, which
+/// the standard does not allow in a constant expression.
+///
 /// Mirrored by `src/gpu/shaders/develop.frag`, which must change with it.
-[[nodiscard]] constexpr Colour developPixel(const ProcessingPlan& plan, Colour colour) {
+[[nodiscard]] inline Colour developPixel(const ProcessingPlan& plan, Colour colour) {
     colour = plan.toWorking * colour;
     colour = {colour[0] * plan.exposureGain, colour[1] * plan.exposureGain,
               colour[2] * plan.exposureGain};
     colour = shapeTone(plan, colour);
-    return rollHighlights(plan, colour);
+    colour = rollHighlights(plan, colour);
+    return adjustColor(plan.colorAdjustments, colour);
 }
 
 } // namespace arraw

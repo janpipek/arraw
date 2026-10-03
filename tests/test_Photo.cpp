@@ -31,7 +31,7 @@ TEST_CASE("A photograph opens as a coherent document", "[photo]") {
 
     REQUIRE(photo.path() == path);
     REQUIRE(photo.metadata() == readImageMetadata(path));
-    REQUIRE(photo.settings() == DevelopSettings{});
+    REQUIRE(photo.state() == DevelopState{});
 }
 
 TEST_CASE("A photograph that is not a RAW is a document too", "[photo]") {
@@ -58,12 +58,12 @@ TEST_CASE("Developing a photograph differently makes another document", "[photo]
     /// all expressed: another snapshot of the same photograph, with the one
     /// that was read left alone.
     const Photo photo = openPhoto(test::fixture(neutralFixture));
-    const Photo lifted = photo.with({.tone = {.exposure = 1.5F}});
+    const Photo lifted = photo.with({.settings = {.tone = {.exposure = 1.5F}}});
 
     REQUIRE(lifted.path() == photo.path());
     REQUIRE(lifted.metadata() == photo.metadata());
-    REQUIRE(lifted.settings().tone.exposure == 1.5F);
-    REQUIRE(photo.settings().tone.exposure == 0.0F);
+    REQUIRE(lifted.state().settings.tone.exposure == 1.5F);
+    REQUIRE(photo.state().settings.tone.exposure == 0.0F);
     REQUIRE_FALSE(lifted == photo);
 }
 
@@ -90,10 +90,10 @@ TEST_CASE("A plan resolves from a photograph", "[photo]") {
     /// buffer somebody else loaded and a settings struct that travelled
     /// separately.
     const Photo photo =
-        openPhoto(test::fixture(neutralFixture)).with({.tone = {.exposure = -1.0F}});
+        openPhoto(test::fixture(neutralFixture)).with({.settings = {.tone = {.exposure = -1.0F}}});
     const ProcessingPlan plan = planFor(photo);
 
-    REQUIRE(plan == planFor(loadImage(photo.path()), photo.settings()));
+    REQUIRE(plan == planFor(loadImage(photo.path()), photo.state()));
     REQUIRE(plan.exposureGain == 0.5F);
     REQUIRE_FALSE(plan == planFor(openPhoto(test::fixture(neutralFixture))));
 }

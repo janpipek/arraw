@@ -101,7 +101,8 @@ gpu-info: configure
 # Run the test suite on lavapipe alone, independent of the host's GPU
 [unix]
 test-lavapipe *args:
-    VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json just test {{args}}
+    # Debian/Ubuntu name the ICD per architecture or not, depending on the release.
+    VK_DRIVER_FILES="$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -n 1)" just test {{args}}
 
 # Open the dev sandbox in this checkout: a shell, or an agent
 [unix]

@@ -96,7 +96,7 @@ Arraw is also a command, running the identical pipeline headless:
 ```bash
 arraw-cli export *.arw -o out/   # render every file through its own sidecar
 arraw-cli preset list            # list, show, or apply saved presets
-arraw-cli info photo.arw         # size, encoding, sidecar marks and edits (EXIF to follow), read-only
+arraw-cli info photo.arw         # size, encoding, EXIF, sidecar marks and edits, read-only
 ```
 
 Useful for overnight batches, or for re-exporting a shoot in a different size or profile

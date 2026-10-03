@@ -5,6 +5,7 @@
 #include "DeviceChoice.h"
 #include "GpuContext.h"
 #include "StreamDiagnostics.h"
+#include "TerminalStyle.h"
 
 #include <Diagnostics.h>
 #include <ImageBuffer.h>
@@ -88,13 +89,13 @@ std::string_view nameOf(GpuDeviceKind kind) {
 
 /// @brief Writes one line of the report, its value aligned with the others.
 void field(std::ostream& out, std::string_view label, std::string_view value) {
-    out << label << ':';
+    out << cli::accented(out, label, cli::Accent::Heading) << ':';
     if (label.size() + 1 < valueColumn) {
         out << std::string(valueColumn - label.size() - 1, ' ');
     } else {
         out << ' ';
     }
-    out << value << '\n';
+    out << cli::terminalText(value) << '\n';
 }
 
 /// @brief Says yes or no.
@@ -536,7 +537,7 @@ int cli::runGpuTestCommand(const QStringList& arguments, std::ostream& out, std:
     // here too rather than run the probe. Qt's generic options are not this
     // command's, so the text is one.
     if (parser.isSet("help") || parser.isSet("help-all")) {
-        out << commandHelp(parser);
+        writeStyledHelp(out, commandHelp(parser));
         return Success;
     }
 

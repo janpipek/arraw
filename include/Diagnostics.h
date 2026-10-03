@@ -96,9 +96,27 @@ enum class Notice {
     /// edit changed the rotation or flips it was drawn in: what changed.
     CropReset,
 
+    /// @brief A photograph's EXIF could not be read, or it records none, so
+    /// no capture information is shown: the reason.
+    ExifUnreadable,
+
+    /// @brief A folder among the inputs holds no photographs.
+    NoPhotographs,
+
+    /// @brief A batch left out the photographs its marks filter did not want: how many.
+    FilteredOut,
+
     /// @brief An option was given that has no effect without another one: the
     /// option, then the one it needs.
     OptionIgnored,
+
+    /// @brief A photograph's embedded preview could not be looked for, so none
+    /// is shown: the reason.
+    PreviewUnreadable,
+
+    /// @brief An export left out metadata it could not read or copy from its
+    /// source, but was written: what was left out and why.
+    MetadataNotCarried,
 };
 
 /// @brief One detail of a diagnostic, kept as a value rather than as prose.

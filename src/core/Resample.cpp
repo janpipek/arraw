@@ -1,6 +1,7 @@
 #include "Resample.h"
 
 #include "ResampleWeights.h"
+#include "TimingTrace.h"
 
 #include <algorithm>
 #include <array>
@@ -195,6 +196,7 @@ void verticalPass(const Pass& input, std::uint32_t width, std::uint32_t inHeight
 } // namespace
 
 ImageBuffer arraw::resample(ImageBuffer source, ImageSize size, ResizeFilter filter, bool opaque) {
+    const detail::TimingSpan timing("cpu.resize");
     if (source.format() != workingFormat) {
         throw std::invalid_argument("Resampling requires developed float pixels");
     }

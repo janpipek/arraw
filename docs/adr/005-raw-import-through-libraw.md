@@ -140,7 +140,8 @@ will want.
   reads headers without decoding pixels. Deliberately deferred: the film strip
   and `arraw-cli info` need metadata *without* pixels, so metadata-by-path has
   to exist regardless, and it should be designed against two callers rather than
-  guessed at from one.
+  guessed at from one. (Capture EXIF arrived as ADR 028's `readExif`, with a
+  different reader and API; the lens-correction caller can use it.)
 - **Licensing is not a constraint here.** `main` is GPL-3; LibRaw (LGPL-2.1/
   CDDL) and lensfun (LGPL-3) are compatible, and LGPL's relinking obligation is
   already satisfied by a GPL-3 work shipping complete source. This branch has no

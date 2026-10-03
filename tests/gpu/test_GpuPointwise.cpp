@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <limits>
+#include <optional>
 #include <random>
 #include <span>
 #include <string>
@@ -68,7 +69,7 @@ void requireSameAlpha(const ImageBuffer& expected, const ImageBuffer& actual) {
 /// What `arraw::develop` does before geometry: the source as RGBA float, each
 /// colour through ::arraw::developPixel, alpha as it came.
 ImageBuffer cpuPointwise(const ImageBuffer& source, const DevelopSettings& settings) {
-    const ProcessingPlan plan = planFor(source, settings);
+    const ProcessingPlan plan = planFor(source, DevelopState{settings});
     const ImageBuffer floats = toRgbaF32(source);
     ImageBuffer result(source.size(), PixelFormat::RgbaF32, workingEncoding);
     const std::span<const float> in = floats.samples<float>();
@@ -87,7 +88,7 @@ ImageBuffer cpuPointwise(const ImageBuffer& source, const DevelopSettings& setti
 /// @brief Develops on the device up to the pointwise boundary and reads it back.
 ImageBuffer gpuPointwise(const ImageBuffer& source, const DevelopSettings& settings) {
     const RenderCheckpoint checkpoint =
-        developOnGpu(gpuContext(), source, settings, Stage::Pointwise);
+        developOnGpu(gpuContext(), source, DevelopState{settings}, Stage::Pointwise);
     REQUIRE(checkpoint.isResident());
     REQUIRE(checkpoint.size() == source.size());
     return checkpoint.readBack();
@@ -102,7 +103,7 @@ void requireMatchesCpu(const ImageBuffer& source, const DevelopSettings& setting
     const ImageBuffer expected = cpuPointwise(source, settings);
     if (source.orientation() == ImageOrientation::Normal &&
         settings.geometry == GeometrySettings{}) {
-        const ImageBuffer developed = develop(source, settings);
+        const ImageBuffer developed = develop(source, DevelopState{settings});
         REQUIRE(compareFloat(developed, expected).bitExact);
     }
     const ImageBuffer actual = gpuPointwise(source, settings);
@@ -238,6 +239,67 @@ std::vector<std::pair<std::string, DevelopSettings>> toneCases() {
     return cases;
 }
 
+/// @brief Names every colour-block setting combination the comparisons run over.
+///
+/// The shoulder stays at its default, so that the colour block is also checked
+/// downstream of it, where it runs.
+std::vector<std::pair<std::string, DevelopSettings>> colorCases() {
+    std::vector<std::pair<std::string, DevelopSettings>> cases;
+    const auto add = [&](std::string name, auto change) {
+        DevelopSettings settings;
+        change(settings);
+        cases.emplace_back(std::move(name), settings);
+    };
+    add("saturation -100", [](DevelopSettings& s) { s.color.saturation = weakestSaturation; });
+    add("saturation +100", [](DevelopSettings& s) { s.color.saturation = strongestSaturation; });
+    add("saturation +35", [](DevelopSettings& s) { s.color.saturation = 35.0F; });
+    add("vibrance -100", [](DevelopSettings& s) { s.color.vibrance = weakestSaturation; });
+    add("vibrance +100", [](DevelopSettings& s) { s.color.vibrance = strongestSaturation; });
+    add("vibrance -40", [](DevelopSettings& s) { s.color.vibrance = -40.0F; });
+    add("saturation and vibrance", [](DevelopSettings& s) {
+        s.color.saturation = -25.0F;
+        s.color.vibrance = 60.0F;
+    });
+    add("hue red +100", [](DevelopSettings& s) { s.hsl.red.hue = strongestHslControl; });
+    add("hue green -100", [](DevelopSettings& s) { s.hsl.green.hue = weakestHslControl; });
+    add("saturation blue +100",
+        [](DevelopSettings& s) { s.hsl.blue.saturation = strongestHslControl; });
+    add("saturation orange -100",
+        [](DevelopSettings& s) { s.hsl.orange.saturation = weakestHslControl; });
+    add("luminance yellow +100",
+        [](DevelopSettings& s) { s.hsl.yellow.luminance = strongestHslControl; });
+    add("luminance magenta -100",
+        [](DevelopSettings& s) { s.hsl.magenta.luminance = weakestHslControl; });
+    add("every band", [](DevelopSettings& s) {
+        s.hsl = {{20.0F, -30.0F, 10.0F},  {-40.0F, 25.0F, -15.0F}, {60.0F, 10.0F, 20.0F},
+                 {-10.0F, -50.0F, 30.0F}, {35.0F, 45.0F, -25.0F},  {-70.0F, 15.0F, 5.0F},
+                 {55.0F, -20.0F, -35.0F}, {-25.0F, 40.0F, 45.0F}};
+    });
+    add("hsl with saturation and vibrance", [](DevelopSettings& s) {
+        s.hsl.red = {50.0F, 20.0F, -10.0F};
+        s.hsl.aqua = {-50.0F, -20.0F, 10.0F};
+        s.color.saturation = 20.0F;
+        s.color.vibrance = -30.0F;
+    });
+    add("grayscale, flat mix",
+        [](DevelopSettings& s) { s.blackAndWhite.convertToGrayscale = true; });
+    add("grayscale, mixed", [](DevelopSettings& s) {
+        s.blackAndWhite = {true, 60.0F, -40.0F, 80.0F, -20.0F, 30.0F, -90.0F, 50.0F, -10.0F};
+    });
+    add("grayscale, extremes", [](DevelopSettings& s) {
+        s.blackAndWhite = {
+            true,           darkestGrayMix,  lightestGrayMix, darkestGrayMix, lightestGrayMix,
+            darkestGrayMix, lightestGrayMix, darkestGrayMix,  lightestGrayMix};
+    });
+    add("grayscale replaces the colour controls", [](DevelopSettings& s) {
+        s.blackAndWhite = {true, 30.0F, 0.0F, 0.0F, -30.0F, 0.0F, 0.0F, 0.0F, 0.0F};
+        s.color.saturation = 100.0F;
+        s.hsl.red.hue = 100.0F;
+    });
+    add("a mix without the switch", [](DevelopSettings& s) { s.blackAndWhite.red = 80.0F; });
+    return cases;
+}
+
 /// @brief Reads a fixture RAW with its own encoding and orientation.
 ImageBuffer fixtureImage(const char* name) {
     return loadImage(std::filesystem::path(ARRAW_TEST_DATA_DIR) / name);
@@ -311,6 +373,46 @@ TEST_CASE("The pointwise pass matches the CPU chain for every tone control", "[g
         DYNAMIC_SECTION(name) {
             requireMatchesCpu(source, settings);
         }
+    }
+}
+
+TEST_CASE("The pointwise pass matches the CPU chain for every colour control", "[gpu][pointwise]") {
+    const ImageBuffer source = sweep({64, 48}, false, workingEncoding, 41, 2.0);
+    for (const auto& [name, settings] : colorCases()) {
+        DYNAMIC_SECTION(name) {
+            requireMatchesCpu(source, settings);
+        }
+    }
+}
+
+TEST_CASE("The pointwise pass matches the CPU chain for colour controls on negative channels",
+          "[gpu][pointwise]") {
+    const ImageBuffer source = sweep({64, 48}, true, workingEncoding, 43, 2.0);
+    for (const auto& [name, settings] : colorCases()) {
+        DYNAMIC_SECTION(name) {
+            requireMatchesCpu(source, settings, illConditionedRelativeTolerance);
+        }
+    }
+}
+
+TEST_CASE("The pointwise pass matches the CPU chain for colour controls on integer sources",
+          "[gpu][pointwise]") {
+    DevelopSettings settings;
+    settings.color = {.saturation = 30.0F, .vibrance = 20.0F};
+    settings.hsl.green = {25.0F, -30.0F, 15.0F};
+    settings.hsl.red = {-35.0F, 40.0F, -10.0F};
+    SECTION("RGB u8") {
+        requireMatchesCpu(codes<std::uint8_t>({31, 29}, PixelFormat::RgbU8), settings);
+    }
+    SECTION("RGBA u16") {
+        requireMatchesCpu(codes<std::uint16_t>({31, 29}, PixelFormat::RgbaU16), settings);
+    }
+    settings.blackAndWhite = {true, 40.0F, -20.0F, 10.0F, 30.0F, -30.0F, 20.0F, -10.0F, 0.0F};
+    SECTION("grayscale, RGB u8") {
+        requireMatchesCpu(codes<std::uint8_t>({31, 29}, PixelFormat::RgbU8), settings);
+    }
+    SECTION("grayscale, RGBA u16") {
+        requireMatchesCpu(codes<std::uint16_t>({31, 29}, PixelFormat::RgbaU16), settings);
     }
 }
 
@@ -477,13 +579,22 @@ TEST_CASE("The pointwise pass matches the CPU chain on RAW fixtures", "[gpu][poi
     DevelopSettings toned = withTone({0.4F, 30.0F, 30.0F, -30.0F, 10.0F, 20.0F, 70.0F});
     toned.color = {WhiteBalanceMode::Custom, 4200.0F, 8.0F};
 
+    DevelopSettings coloured = withTone({0.2F, 10.0F, 10.0F, 0.0F, 0.0F, 0.0F, 40.0F});
+    coloured.color = {WhiteBalanceMode::AsShot, std::nullopt, std::nullopt, 25.0F, 35.0F};
+    coloured.hsl.orange = {30.0F, -20.0F, 10.0F};
+    coloured.hsl.blue = {-45.0F, 30.0F, -10.0F};
+    DevelopSettings grey = coloured;
+    grey.blackAndWhite = {true, 20.0F, 10.0F, 0.0F, -10.0F, 0.0F, -30.0F, 0.0F, 0.0F};
+
     // As shot with the default shoulder, then a custom balance alone, tinted,
-    // and under strong tone.
-    const std::array<std::pair<const char*, DevelopSettings>, 4> settingsCases{{
+    // under strong tone, and with the colour block.
+    const std::array<std::pair<const char*, DevelopSettings>, 6> settingsCases{{
         {"as shot", DevelopSettings{}},
         {"custom warm", warm},
         {"custom cool with tint", coolTinted},
         {"custom with tone", toned},
+        {"colour block", coloured},
+        {"grayscale", grey},
     }};
     for (const char* name : fixtures) {
         const ImageBuffer source = fixtureImage(name);
@@ -506,9 +617,12 @@ TEST_CASE("The pointwise pass writes the CPU's value after each stage", "[gpu][p
                                      9, 1.5);
 
     DevelopSettings settings = withTone({1.2F, 25.0F, 30.0F, -25.0F, 20.0F, 15.0F, 80.0F});
-    settings.color = {WhiteBalanceMode::Custom, 3600.0F, 6.0F};
-    const ProcessingPlan plan = planFor(source, settings);
+    settings.color = {WhiteBalanceMode::Custom, 3600.0F, 6.0F, 30.0F, -20.0F};
+    settings.hsl.red = {40.0F, 20.0F, -10.0F};
+    settings.hsl.green = {-30.0F, -25.0F, 20.0F};
+    const ProcessingPlan plan = planFor(source, DevelopState{settings});
     REQUIRE(plan.shapesTone);
+    REQUIRE(plan.colorAdjustments.adjustsHsl);
 
     const DeviceImage input = context.upload(source);
     const std::span<const float> in = source.samples<float>();
@@ -518,7 +632,7 @@ TEST_CASE("The pointwise pass writes the CPU's value after each stage", "[gpu][p
         PointwiseProbe probe;
         Colour (*stage)(const ProcessingPlan&, Colour);
     };
-    const std::array<Probe, 4> probes{{
+    const std::array<Probe, 5> probes{{
         {"after the matrix", PointwiseProbe::AfterMatrix,
          [](const ProcessingPlan& p, Colour c) { return p.toWorking * c; }},
         {"after exposure", PointwiseProbe::AfterExposure,
@@ -531,6 +645,12 @@ TEST_CASE("The pointwise pass writes the CPU's value after each stage", "[gpu][p
              c = p.toWorking * c;
              c = {c[0] * p.exposureGain, c[1] * p.exposureGain, c[2] * p.exposureGain};
              return shapeTone(p, c);
+         }},
+        {"after the shoulder", PointwiseProbe::AfterShoulder,
+         [](const ProcessingPlan& p, Colour c) {
+             c = p.toWorking * c;
+             c = {c[0] * p.exposureGain, c[1] * p.exposureGain, c[2] * p.exposureGain};
+             return rollHighlights(p, shapeTone(p, c));
          }},
         {"developed", PointwiseProbe::Developed,
          [](const ProcessingPlan& p, Colour c) { return developPixel(p, c); }},
