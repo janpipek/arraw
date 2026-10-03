@@ -2423,3 +2423,230 @@ TEST_CASE("Info is unaffected by resizing flags", "[cli][resize]") {
     const auto result = invoke({"info", test::fixture(card).string()});
     REQUIRE(result.code == cli::Success);
 }
+
+namespace {
+
+/// @brief Makes a shoot: `a` rated 4 and green with a JPEG companion, `b` rejected, `c` unrated.
+///
+/// Also a sidecar and a note that are no photographs, and a subfolder that is not looked into.
+test::TempDir makeShoot() {
+    test::TempDir directory;
+    const auto a = copyRaw(directory, "a.dng");
+    const auto b = copyRaw(directory, "b.dng");
+    copyRaw(directory, "c.dng");
+    std::ofstream(directory.file("a.jpg")) << "companion";
+    std::ofstream(directory.file("notes.txt")) << "not a photograph";
+    std::filesystem::create_directory(directory.file("sub"));
+    writeSidecar(openPhoto(a).with(PhotoMarks{.rating = 4, .label = ColorLabel::Green}));
+    writeSidecar(openPhoto(b).with(PhotoMarks{.rating = rejectedRating, .label = ColorLabel::Red}));
+    return directory;
+}
+
+/// @brief Exports a folder to PNG on the CPU; the output goes to a fresh directory.
+Invocation exportFolder(const std::filesystem::path& input, const test::TempDir& output,
+                        std::vector<std::string> flags = {}) {
+    std::vector<std::string> arguments{
+        "export",   input.string(), "-o",       output.path().string(),
+        "--format", "png",          "--device", "cpu"};
+    arguments.insert(arguments.end(), flags.begin(), flags.end());
+    return invoke(arguments);
+}
+
+QJsonArray filesOf(const std::string& text) {
+    QJsonParseError parseError;
+    const auto document = QJsonDocument::fromJson(QByteArray::fromStdString(text), &parseError);
+    REQUIRE(parseError.error == QJsonParseError::NoError);
+    return document.object().value("files").toArray();
+}
+
+} // namespace
+
+TEST_CASE("Info on a folder shows each shot once, as its primary, with format and companions",
+          "[cli][info][shots]") {
+    const auto shoot = makeShoot();
+    const auto result = invoke({"info", shoot.path().string()});
+
+    REQUIRE(result.code == cli::Success);
+    REQUIRE_THAT(result.out, ContainsSubstring(shoot.file("a.dng").string() + "\n"));
+    REQUIRE_THAT(result.out, ContainsSubstring("format: DNG+JPEG"));
+    REQUIRE_THAT(result.out, ContainsSubstring("companions: a.jpg"));
+    REQUIRE_THAT(result.out, ContainsSubstring("format: DNG\n"));
+    REQUIRE_THAT(result.out, ContainsSubstring("label: Green"));
+    REQUIRE_THAT(result.out, !ContainsSubstring("notes.txt"));
+    REQUIRE_THAT(result.out, !ContainsSubstring(shoot.file("a.jpg").string() + "\n"));
+    REQUIRE(result.out.find("a.dng") < result.out.find("b.dng"));
+    REQUIRE(result.out.find("b.dng") < result.out.find("c.dng"));
+}
+
+TEST_CASE("Info --json gives each file a format and its companions", "[cli][info][shots]") {
+    const auto shoot = makeShoot();
+    const auto files = filesOf(invoke({"info", "--json", shoot.path().string()}).out);
+
+    REQUIRE(files.size() == 3);
+    REQUIRE(files[0].toObject().value("format") == "DNG+JPEG");
+    REQUIRE(files[0].toObject().value("companions").toArray().size() == 1);
+    REQUIRE(files[1].toObject().value("format") == "DNG");
+    REQUIRE(files[1].toObject().value("companions").toArray().isEmpty());
+
+    // A file given directly is its own shot, and says nothing more than before in text.
+    const auto direct = invoke({"info", shoot.file("a.dng").string()});
+    REQUIRE_THAT(direct.out, !ContainsSubstring("format:"));
+    REQUIRE_THAT(direct.out, !ContainsSubstring("companions"));
+}
+
+TEST_CASE("Info lists only the shots whose marks match, and counts the others",
+          "[cli][info][shots][filter]") {
+    const auto shoot = makeShoot();
+    const auto folder = shoot.path().string();
+
+    const auto rated = invoke({"info", folder, "--min-rating", "3"});
+    REQUIRE(rated.code == cli::Success);
+    REQUIRE_THAT(rated.out, ContainsSubstring("a.dng"));
+    REQUIRE_THAT(rated.out, !ContainsSubstring("b.dng"));
+    REQUIRE_THAT(rated.out, !ContainsSubstring("c.dng"));
+    REQUIRE_THAT(rated.err, ContainsSubstring("2 left out"));
+
+    const auto rejected = invoke({"info", folder, "--rejected"});
+    REQUIRE_THAT(rejected.out, ContainsSubstring("b.dng"));
+    REQUIRE_THAT(rejected.out, !ContainsSubstring("a.dng"));
+
+    const auto labelled = invoke({"info", "--json", folder, "--label", "GREEN", "--label", "red"});
+    REQUIRE(filesOf(labelled.out).size() == 2);
+
+    // Without sidecars every shot has default marks, so a threshold leaves none.
+    const auto bare = invoke({"info", "--json", folder, "--min-rating", "1", "--no-sidecar"});
+    REQUIRE(bare.code == cli::Success);
+    REQUIRE(filesOf(bare.out).isEmpty());
+}
+
+TEST_CASE("An empty folder is no error and says there are no photographs", "[cli][shots]") {
+    const test::TempDir empty;
+    const test::TempDir output;
+    const auto info = invoke({"info", empty.path().string()});
+    REQUIRE(info.code == cli::Success);
+    REQUIRE(info.out.empty());
+    REQUIRE_THAT(info.err, ContainsSubstring("no photographs"));
+
+    const auto exported = exportFolder(empty.path(), output);
+    REQUIRE(exported.code == cli::Success);
+    REQUIRE_THAT(exported.err, ContainsSubstring("no photographs"));
+    REQUIRE(namesIn(output.path()).empty());
+}
+
+TEST_CASE("A folder that cannot be read fails like an input that cannot be read", "[cli][shots]") {
+    const test::TempDir directory;
+    const auto result = invoke({"info", directory.file("missing").string(), card.data()});
+    // A name that is no directory is a file, which fails as it always did.
+    REQUIRE(result.code == cli::Failed);
+}
+
+TEST_CASE("Export of a folder writes the primary of each shot and no companion",
+          "[cli][export][shots]") {
+    const auto shoot = makeShoot();
+    const test::TempDir output;
+    const auto result = exportFolder(shoot.path(), output);
+
+    REQUIRE(result.code == cli::Success);
+    REQUIRE(namesIn(output.path()) == std::vector<std::string>{"a.png", "b.png", "c.png"});
+}
+
+TEST_CASE("Export filters by rating, rejects and label", "[cli][export][shots][filter]") {
+    const auto shoot = makeShoot();
+    {
+        const test::TempDir output;
+        const auto result = exportFolder(shoot.path(), output, {"--min-rating", "4"});
+        REQUIRE(result.code == cli::Success);
+        REQUIRE(namesIn(output.path()) == std::vector<std::string>{"a.png"});
+        REQUIRE_THAT(result.err, ContainsSubstring("2 left out"));
+    }
+    {
+        const test::TempDir output;
+        const auto result = exportFolder(shoot.path(), output, {"--rejected"});
+        REQUIRE(result.code == cli::Success);
+        REQUIRE(namesIn(output.path()) == std::vector<std::string>{"b.png"});
+    }
+    {
+        const test::TempDir output;
+        const auto result =
+            exportFolder(shoot.path(), output, {"--label", "red", "--label", "Green"});
+        REQUIRE(namesIn(output.path()) == std::vector<std::string>{"a.png", "b.png"});
+    }
+    {
+        const test::TempDir output;
+        const auto result =
+            exportFolder(shoot.path(), output, {"--label", "green", "--min-rating", "5"});
+        REQUIRE(result.code == cli::Success);
+        REQUIRE(namesIn(output.path()).empty());
+        REQUIRE_THAT(result.err, ContainsSubstring("3 left out"));
+    }
+    {
+        // Files given directly are filtered too, and --no-sidecar gives default marks.
+        const test::TempDir output;
+        const auto result =
+            invoke({"export", shoot.file("a.dng").string(), "-o", output.path().string(),
+                    "--device", "cpu", "--no-sidecar", "--min-rating", "1"});
+        REQUIRE(result.code == cli::Success);
+        REQUIRE(namesIn(output.path()).empty());
+    }
+}
+
+TEST_CASE("A filtered-out photograph is not an error even when its output exists",
+          "[cli][export][shots][filter]") {
+    const auto shoot = makeShoot();
+    const test::TempDir output;
+    std::ofstream(output.file("c.png")) << "already";
+    const auto result = exportFolder(shoot.path(), output, {"--min-rating", "1"});
+    REQUIRE(result.code == cli::Success);
+    REQUIRE(namesIn(output.path()) == std::vector<std::string>{"a.png", "c.png"});
+}
+
+TEST_CASE("The filter flags are checked before any file is touched", "[cli][shots][filter]") {
+    const auto shoot = makeShoot();
+    const test::TempDir output;
+    const auto command = GENERATE(std::string{"info"}, std::string{"export"});
+    CAPTURE(command);
+    const auto run = [&](std::vector<std::string> flags) {
+        std::vector<std::string> arguments{command, shoot.path().string()};
+        if (command == "export") {
+            arguments.insert(arguments.end(), {"-o", output.path().string()});
+        }
+        arguments.insert(arguments.end(), flags.begin(), flags.end());
+        return invoke(arguments);
+    };
+
+    for (const auto& flags : {std::vector<std::string>{"--rejected", "--min-rating", "2"},
+                              {"--min-rating", "0"},
+                              {"--min-rating", "6"},
+                              {"--min-rating", "many"},
+                              {"--label", "mauve"},
+                              {"--label", "red", "--label", ""}}) {
+        const auto result = run(flags);
+        CAPTURE(flags);
+        REQUIRE(result.code == cli::UsageError);
+        REQUIRE(result.out.empty());
+        REQUIRE_THAT(result.err, ContainsSubstring("error:"));
+    }
+    REQUIRE(namesIn(output.path()).empty());
+}
+
+TEST_CASE("A sidecar that cannot be read fails its file when a filter needs its marks",
+          "[cli][export][shots][filter]") {
+    test::TempDir directory;
+    const auto raw = copyRaw(directory, "a.dng");
+    copyRaw(directory, "b.dng");
+    std::ofstream(directory.file("a.xmp")) << "this is not XML";
+    const test::TempDir output;
+    const auto result = exportFolder(directory.path(), output, {"--min-rating", "1"});
+    REQUIRE(result.code == cli::Failed);
+    REQUIRE_THAT(result.err, ContainsSubstring("--no-sidecar"));
+    REQUIRE_THAT(result.err, ContainsSubstring("1 of 2 failed"));
+    REQUIRE(namesIn(output.path()).empty());
+}
+
+TEST_CASE("The export help describes folders and the filter", "[cli][export][shots]") {
+    const auto result = invoke({"export", "--help"});
+    REQUIRE_THAT(result.out, ContainsSubstring("--min-rating"));
+    REQUIRE_THAT(result.out, ContainsSubstring("--rejected"));
+    REQUIRE_THAT(result.out, ContainsSubstring("--label"));
+    REQUIRE_THAT(result.out, !ContainsSubstring("not directories"));
+}

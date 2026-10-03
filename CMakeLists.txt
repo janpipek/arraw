@@ -173,6 +173,10 @@ add_library(arraw STATIC
         src/core/ExifInfo.cpp
         include/ImageImport.h
         src/core/ImageImport.cpp
+        include/MarksFilter.h
+        src/core/MarksFilter.cpp
+        include/Shot.h
+        src/core/Shot.cpp
         src/core/QtImage.cpp
         src/core/QtImage.h
         src/core/RawImport.cpp
@@ -359,6 +363,8 @@ add_library(arraw-cli-core STATIC
         src/cli/GpuTestCommand.h
         src/cli/InfoCommand.cpp
         src/cli/InfoCommand.h
+        src/cli/ShotInputs.cpp
+        src/cli/ShotInputs.h
         src/cli/StreamDiagnostics.cpp
         src/cli/StreamDiagnostics.h)
 arraw_enable_warnings(arraw-cli-core)

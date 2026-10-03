@@ -36,6 +36,7 @@
 #include <QStandardPaths>
 #include <QStatusBar>
 #include <QString>
+#include <QStringList>
 #include <QToolButton>
 
 #include <algorithm>
@@ -371,15 +372,36 @@ void MainWindow::showDevice(const PreviewResult& result) {
     deviceLabel_->setToolTip(QString::fromStdString(result.fallbackReason));
 }
 
+namespace {
+
+/// @brief Builds the open dialog's name filters from the extensions arraw opens.
+///
+/// All images first, then one group each for RAW, JPEG, PNG and TIFF, so the
+/// dialog cannot offer what ::arraw::loadImage would not decode, nor leave out
+/// what it would.
+QString openFileFilter() {
+    QStringList all;
+    QStringList raw;
+    for (const std::string_view extension : supportedImageExtensions()) {
+        const QString pattern =
+            QStringLiteral("*.") +
+            QString::fromUtf8(extension.data(), static_cast<qsizetype>(extension.size()));
+        all << pattern;
+        if (extension != "jpg" && extension != "jpeg" && extension != "png" && extension != "tif" &&
+            extension != "tiff") {
+            raw << pattern;
+        }
+    }
+    return MainWindow::tr("All Images (%1);;RAW Images (%2);;JPEG Images (*.jpg *.jpeg);;"
+                          "PNG Images (*.png);;TIFF Images (*.tif *.tiff);;All Files (*)")
+        .arg(all.join(' '), raw.join(' '));
+}
+
+} // namespace
+
 void MainWindow::openFileWithDialog() {
     const QString filesDir = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
-    // TODO: derive the extensions from what loadImage can decode, rather than
-    // keeping a second list here.
-    const QString filter = tr("All Images (*.cr2 *.arw *.dng *.jpg *.jpeg *.png);;"
-                              "RAW Images (*.cr2 *.arw *.dng);;"
-                              "JPEG Images (*.jpg *.jpeg);;"
-                              "PNG Images (*.png);;"
-                              "All Files (*)");
+    const QString filter = openFileFilter();
     const QString fileName =
         QFileDialog::getOpenFileName(this, tr("Open Photograph"), filesDir, filter);
     if (fileName.isEmpty()) {

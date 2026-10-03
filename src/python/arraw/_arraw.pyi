@@ -1,6 +1,6 @@
 """Python bindings for the arraw RAW processing engine."""
 
-from collections.abc import Sequence
+from collections.abc import Sequence, Set
 import enum
 import os
 import pathlib
@@ -882,5 +882,82 @@ def save(image: ImageBuffer, path: str | os.PathLike, *, format: ImageFileFormat
     """
     Write an image as JPEG, PNG or TIFF; the format comes from the extension unless given. `sharpening` (0-100, default 0 = off) applies an unsharp mask to the final pixels.
     """
+
+class Shot:
+    """
+    One capture: the file that is developed (the RAW when there is one) and the standard images of the same capture, which a RAW+JPEG camera writes beside it.
+    """
+
+    def __init__(self, *, primary: str | os.PathLike | None = None, companions: Sequence[str | os.PathLike] | None = None) -> None: ...
+
+    @property
+    def primary(self) -> pathlib.Path: ...
+
+    @property
+    def companions(self) -> list[pathlib.Path]: ...
+
+    def __eq__(self, arg: Shot, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> Shot:
+        """Return a copy with the given attributes replaced."""
+
+    @property
+    def format_label(self) -> str:
+        """
+        The formats of the shot, each once, joined by '+': 'ARW', 'JPEG', 'ARW+JPEG'.
+        """
+
+class MarksFilter:
+    """
+    Which culling marks a photograph must have: at least min_rating stars (which excludes rejects and unrated ones), or rejects_only (not both), and any one of labels (empty for any). The two dimensions combine by AND.
+    """
+
+    def __init__(self, *, min_rating: int | None = 0, rejects_only: bool = False, labels: Set[ColorLabel] | None = None) -> None: ...
+
+    @property
+    def min_rating(self) -> int: ...
+
+    @property
+    def rejects_only(self) -> bool: ...
+
+    @property
+    def labels(self) -> set[ColorLabel]: ...
+
+    def __eq__(self, arg: MarksFilter, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> MarksFilter:
+        """Return a copy with the given attributes replaced."""
+
+    @property
+    def is_active(self) -> bool:
+        """Whether the filter narrows anything."""
+
+    def matches(self, marks: PhotoMarks) -> bool:
+        """
+        Whether a photograph's marks pass the filter. Raises ValueError for a filter that wants rejects_only and a min_rating, or a min_rating outside 0 to 5.
+        """
+
+def group_shots(paths: Sequence[str | os.PathLike]) -> list[Shot]:
+    """
+    Group files into shots, without touching the filesystem: same folder and same stem (case-insensitive), the RAW as primary and the JPEG, PNG and TIFF files as its companions. Files without a RAW partner, and every file of a stem two RAWs share, stand alone; unsupported files and sidecars are dropped. In natural order of the primary's name (IMG_2 before IMG_10).
+    """
+
+def list_shots(folder: str | os.PathLike) -> list[Shot]:
+    """
+    List the shots of a folder (not its subfolders, not hidden files), in natural order. Raises if the folder cannot be read.
+    """
+
+def is_supported_image(path: str | os.PathLike) -> bool:
+    """Whether a path names a photograph arraw opens, by its extension alone."""
+
+SUPPORTED_EXTENSIONS: tuple = ...
 
 __version__: str

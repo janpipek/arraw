@@ -20,17 +20,6 @@ using namespace arraw;
 
 namespace {
 
-/// @brief Extensions ::arraw::loadImage routes to LibRaw by name.
-///
-/// The set published in docs/desired-features.md, no wider -- and it does not
-/// need to be. ::holdsRawImage asks LibRaw about everything else before Qt is
-/// offered anything, so a .3fr, a .mrw or a renamed .dng reaches the same
-/// decoder one file open later. Widening the list would only move where the
-/// error for a non-RAW file comes from, and for an extension as generic as
-/// .raw it would report a RAW failure for a file Qt can read.
-constexpr std::array<std::string_view, 10> rawExtensions = {".cr2", ".cr3", ".nef", ".arw", ".dng",
-                                                            ".raf", ".orf", ".rw2", ".pef", ".srw"};
-
 /// @brief LibRaw's `output_color` value for "leave it in the camera's space".
 ///
 /// LibRaw inherits dcraw's bare integers here and validates nothing — an
@@ -275,12 +264,29 @@ ImageBuffer toBuffer(const libraw_processed_image_t& image, ColorEncoding encodi
 
 } // namespace
 
-bool arraw::rawimport::namesRawFormat(const std::filesystem::path& path) {
+namespace {
+
+/// @brief Gives a path's extension, lower-case and without the dot.
+std::string lowerExtension(const std::filesystem::path& path) {
     std::string extension = path.extension().string();
+    if (!extension.empty()) {
+        extension.erase(0, 1);
+    }
     std::ranges::transform(extension, extension.begin(), [](unsigned char character) {
         return static_cast<char>(std::tolower(character));
     });
-    return std::ranges::find(rawExtensions, extension) != rawExtensions.end();
+    return extension;
+}
+
+} // namespace
+
+bool arraw::rawimport::namesRawFormat(const std::filesystem::path& path) {
+    return std::ranges::find(rawExtensions, lowerExtension(path)) != rawExtensions.end();
+}
+
+bool arraw::rawimport::hasRawExtension(const std::filesystem::path& path) {
+    return std::ranges::find(openedRawExtensions, lowerExtension(path)) !=
+           openedRawExtensions.end();
 }
 
 bool arraw::rawimport::holdsRawImage(const std::filesystem::path& path) {

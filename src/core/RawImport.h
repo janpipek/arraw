@@ -4,7 +4,9 @@
 #include <ImageBuffer.h>
 #include <ImageImport.h>
 
+#include <array>
 #include <filesystem>
+#include <string_view>
 
 /// @brief RAW decoding, over LibRaw.
 ///
@@ -12,6 +14,33 @@
 /// lives here, so ::arraw::loadImage need only decide which decoder a file
 /// belongs to. Replacing LibRaw one day means replacing this file.
 namespace arraw::rawimport {
+
+/// @brief Extensions ::arraw::loadImage routes to LibRaw by name, lower-case and without the dot.
+///
+/// The set published in docs/desired-features.md, no wider -- and it does not
+/// need to be. ::holdsRawImage asks LibRaw about everything else before Qt is
+/// offered anything, so a .3fr, a .mrw or a renamed .dng reaches the same
+/// decoder one file open later. Widening the list would only move where the
+/// error for a non-RAW file comes from, and for an extension as generic as
+/// .raw it would report a RAW failure for a file Qt can read. What counts as a
+/// RAW by name elsewhere is ::openedRawExtensions.
+inline constexpr std::array<std::string_view, 10> rawExtensions = {
+    "cr2", "cr3", "nef", "arw", "dng", "raf", "orf", "rw2", "pef", "srw"};
+
+/// @brief Extensions of every RAW format LibRaw opens, lower-case and without the dot.
+///
+/// Wider than ::rawExtensions, which only decides where decoding starts. This
+/// one decides what *is* a RAW for everything that goes by name: which files
+/// a folder lists, which file of a shot is its primary, and when a RAW and a
+/// JPEG must not share a sidecar. Leaving a format out would hide a
+/// photograph that opens, or pair it wrongly.
+inline constexpr std::array<std::string_view, 21> openedRawExtensions = {
+    "cr2", "cr3", "nef", "arw", "dng", "raf", "orf", "rw2", "pef", "srw", "nrw",
+    "crw", "mrw", "srf", "x3f", "kdc", "mos", "raw", "3fr", "iiq", "erf"};
+
+/// @brief Checks whether a path's extension is among ::openedRawExtensions.
+/// @param path Path to inspect; its extension is compared case-insensitively.
+[[nodiscard]] bool hasRawExtension(const std::filesystem::path& path);
 
 /// @brief Checks whether a path's extension names a RAW format arraw decodes.
 ///

@@ -4,6 +4,8 @@
 #include <ImageBuffer.h>
 
 #include <filesystem>
+#include <span>
+#include <string_view>
 
 namespace arraw {
 
@@ -29,6 +31,23 @@ struct ImageMetadata {
 
     friend bool operator==(const ImageMetadata&, const ImageMetadata&) = default;
 };
+
+/// @brief Lists the file extensions of the photographs arraw opens, by name.
+///
+/// The RAW extensions the RAW decoder claims by name, then the standard formats
+/// Qt decodes here (`jpg`, `jpeg`, `png`, `tif`, `tiff`), lower-case and without
+/// the dot. The one list ::arraw::isSupportedImage and everything that lists a
+/// folder go by. A file named otherwise may still decode, since content has a
+/// say in ::arraw::loadImage, but it is not offered to a photographer.
+/// @return The extensions, valid for the life of the program.
+[[nodiscard]] std::span<const std::string_view> supportedImageExtensions();
+
+/// @brief Checks whether a path names a photograph arraw opens.
+///
+/// By the extension alone, compared case-insensitively; the file is not looked at.
+/// @param path Path to inspect.
+/// @return `true` if its extension is one of ::arraw::supportedImageExtensions.
+[[nodiscard]] bool isSupportedImage(const std::filesystem::path& path);
 
 /// @brief Reads what a file declares about itself, without decoding its pixels.
 ///

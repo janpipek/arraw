@@ -3,6 +3,7 @@
 #include "Cli.h"
 #include "Command.h"
 #include "SettingCodec.h"
+#include "ShotInputs.h"
 #include "SidecarWatch.h"
 #include "StreamDiagnostics.h"
 
@@ -12,8 +13,10 @@
 #include <ExifInfo.h>
 #include <ImageImport.h>
 #include <ImageOrientation.h>
+#include <MarksFilter.h>
 #include <Photo.h>
 #include <SettingDescriptors.h>
+#include <Shot.h>
 #include <Sidecar.h>
 
 #include <QCommandLineParser>
@@ -42,6 +45,8 @@ namespace {
 /// @brief What `info` was asked for.
 struct InfoRequest {
     std::vector<std::filesystem::path> inputs;
+    /// @brief Which photographs are wanted by their marks; inactive wants all.
+    MarksFilter filter;
     bool all = false;
     bool json = false;
     bool useSidecars = true;
@@ -52,6 +57,9 @@ struct InfoRequest {
 /// @brief One photograph as `info` reports it.
 struct FileReport {
     Photo photo;
+
+    /// @brief The shot the photograph is the primary of, when it came out of a folder.
+    std::optional<Shot> shot;
 
     /// @brief Sidecar beside the photograph, absent when it has none.
     std::optional<std::filesystem::path> sidecar;
@@ -79,6 +87,11 @@ void configure(QCommandLineParser& parser) {
     parser.setApplicationDescription(
         "Show what is known about photographs, read-only.\n"
         "\n"
+        "Inputs are files or folders. A folder stands for the shots in it, not\n"
+        "recursively, and each shot is shown once, as its primary file (the RAW of a\n"
+        "RAW+JPEG pair), with its format label and its companions. --min-rating,\n"
+        "--rejected and --label list only the photographs whose sidecar marks match.\n"
+        "\n"
         "For each file: its size, orientation, its sidecar, its\n"
         "rating and colour label, and the develop settings that differ from the\n"
         "defaults, one per line as key: value, in the order of the settings table,\n"
@@ -105,8 +118,10 @@ void configure(QCommandLineParser& parser) {
                       "failed is left out of it."});
     parser.addOption({"no-sidecar", "Show each photograph as it opens without its .xmp sidecar."});
     parser.addOption({{"q", "quiet"}, "Drop informational diagnostics, keeping what went wrong."});
+    cli::addMarksFilterOptions(parser);
     cli::addLogFormatOption(parser);
-    parser.addPositionalArgument("input", "Files to describe.", "info <input>...");
+    parser.addPositionalArgument("input", "Files, or folders of shots, to describe.",
+                                 "info <input>...");
 }
 
 /// @brief Reads the request from the parsed command line, or reports why it cannot.
@@ -128,6 +143,11 @@ std::optional<InfoRequest> buildRequest(const QCommandLineParser& parser, std::o
     request.all = parser.isSet("all");
     request.json = parser.isSet("json");
     request.useSidecars = !parser.isSet("no-sidecar");
+    const auto filter = cli::readMarksFilter(parser, "info", err, code);
+    if (!filter) {
+        return std::nullopt;
+    }
+    request.filter = *filter;
     request.quiet = parser.isSet("quiet");
     return request;
 }
@@ -420,8 +440,18 @@ std::vector<ListedSetting> listedSettings(const DevelopSettings& settings, bool 
 void writeText(std::ostream& out, const FileReport& report, bool all) {
     const Photo& photo = report.photo;
     const ImageMetadata& metadata = photo.metadata();
-    out << pathText(photo.path()) << '\n'
-        << "  size: " << metadata.size.width << " x " << metadata.size.height << '\n'
+    out << pathText(photo.path()) << '\n';
+    if (report.shot) {
+        out << "  format: " << formatLabel(*report.shot) << '\n';
+        if (!report.shot->companions.empty()) {
+            out << "  companions:";
+            for (const auto& companion : report.shot->companions) {
+                out << ' ' << pathText(companion.filename());
+            }
+            out << '\n';
+        }
+    }
+    out << "  size: " << metadata.size.width << " x " << metadata.size.height << '\n'
         << "  orientation: " << orientationName(metadata.orientation) << '\n';
     if (isRaw(metadata)) {
         out << "  encoding: camera\n";
@@ -471,9 +501,15 @@ std::string jsonOfReport(const FileReport& report, bool all) {
     const Photo& photo = report.photo;
     const ImageMetadata& metadata = photo.metadata();
     const PhotoMarks& marks = photo.marks();
+    const Shot shot = report.shot.value_or(Shot{photo.path(), {}});
+    std::string companions;
+    for (const auto& companion : shot.companions) {
+        companions += (companions.empty() ? "" : ", ") + jsonString(pathText(companion));
+    }
     std::string text =
         "{\"path\": " + jsonString(pathText(photo.path())) +
-        ", \"size\": {\"width\": " + std::to_string(metadata.size.width) +
+        ", \"format\": " + jsonString(formatLabel(shot)) + ", \"companions\": [" + companions +
+        "], \"size\": {\"width\": " + std::to_string(metadata.size.width) +
         ", \"height\": " + std::to_string(metadata.size.height) +
         "}, \"orientation\": " + jsonString(orientationName(metadata.orientation)) +
         ", \"encoding\": " + (isRaw(metadata) ? "\"camera\"" : "null") +
@@ -517,8 +553,13 @@ FileReport open(const InfoRequest& request, const std::filesystem::path& input,
     WarningsOnly exifLog(log);
     if (!request.useSidecars) {
         Photo photo(input, readImageMetadata(input, log));
-        return {std::move(photo),         findSidecar(input), false,
-                readExif(input, exifLog), std::nullopt,       {}};
+        return {std::move(photo),
+                std::nullopt,
+                findSidecar(input),
+                false,
+                readExif(input, exifLog),
+                std::nullopt,
+                {}};
     }
     cli::SidecarWatch watch(log);
     ImageMetadata metadata = readImageMetadata(input, watch);
@@ -540,6 +581,7 @@ FileReport open(const InfoRequest& request, const std::filesystem::path& input,
     }
     FileReport report{contents ? Photo(input, std::move(metadata), contents->state, contents->marks)
                                : Photo(input, std::move(metadata)),
+                      std::nullopt,
                       sidecar,
                       true,
                       readExif(input, exifLog),
@@ -555,14 +597,21 @@ FileReport open(const InfoRequest& request, const std::filesystem::path& input,
 /// @brief Describes every input, continuing past the ones that fail.
 int infoAll(const InfoRequest& request, std::ostream& out, std::ostream& err) {
     cli::StreamDiagnostics log(err, request.logFormat, request.quiet);
-    std::size_t failures = 0;
+    const cli::ExpandedInputs expanded = cli::expandInputs(request.inputs, log);
+    std::size_t failures = expanded.unreadableFolders;
     std::size_t shown = 0;
+    std::size_t filteredOut = 0;
     if (request.json) {
         out << "{\"files\": [";
     }
-    for (const auto& input : request.inputs) {
+    for (const auto& [input, shot] : expanded.photographs) {
         try {
-            const FileReport report = open(request, input, log);
+            if (!cli::passesFilter(request.filter, input, request.useSidecars)) {
+                ++filteredOut;
+                continue;
+            }
+            FileReport report = open(request, input, log);
+            report.shot = shot;
             if (request.json) {
                 out << (shown > 0 ? ", " : "") << jsonOfReport(report, request.all);
             } else {
@@ -581,11 +630,15 @@ int infoAll(const InfoRequest& request, std::ostream& out, std::ostream& err) {
     if (request.json) {
         out << "]}\n";
     }
+    if (filteredOut > 0) {
+        log.record({.notice = Notice::FilteredOut, .values = {static_cast<double>(filteredOut)}});
+    }
     if (failures > 0) {
         log.record({.notice = Notice::BatchFinished,
                     .severity = Severity::Error,
                     .values = {static_cast<double>(failures),
-                               static_cast<double>(request.inputs.size())}});
+                               static_cast<double>(expanded.photographs.size() +
+                                                   expanded.unreadableFolders)}});
         return cli::Failed;
     }
     return cli::Success;

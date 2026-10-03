@@ -1,5 +1,6 @@
 #include "Sidecar.h"
 
+#include "RawImport.h"
 #include "SettingCodec.h"
 
 #include <QByteArray>
@@ -72,14 +73,6 @@ QString qtPath(const std::filesystem::path& path) {
 std::string_view withoutPlus(std::string_view text) {
     return text.starts_with('+') ? text.substr(1) : text;
 }
-
-/// @brief Extensions of the RAW formats LibRaw opens, which name a sidecar by their stem.
-///
-/// More than the decoder claims by name (see rawimport::namesRawFormat): naming
-/// has to recognise every RAW, or a RAW and its JPEG would share a sidecar.
-constexpr std::array<std::string_view, 21> rawExtensions = {
-    ".cr2", ".cr3", ".nef", ".arw", ".dng", ".raf", ".orf", ".rw2", ".pef", ".srw", ".nrw",
-    ".crw", ".mrw", ".srf", ".x3f", ".kdc", ".mos", ".raw", ".3fr", ".iiq", ".erf"};
 
 /// @brief Extensions of the other image formats that can share a stem with a photograph.
 constexpr std::array<std::string_view, 12> otherExtensions = {".jpg",  ".jpeg", ".png",  ".tif",
@@ -638,15 +631,6 @@ bool hasSibling(const std::filesystem::path& photo, std::span<const std::string_
     return false;
 }
 
-/// @brief Whether an extension, in either case, is one of a list.
-bool isAmong(const std::filesystem::path& photo, std::span<const std::string_view> extensions) {
-    std::string extension = photo.extension().string();
-    std::ranges::transform(extension, extension.begin(), [](unsigned char character) {
-        return static_cast<char>(std::tolower(character));
-    });
-    return std::ranges::find(extensions, extension) != extensions.end();
-}
-
 } // namespace
 
 std::optional<std::string_view> arraw::xmpNamespaceOwner(std::string_view uri) {
@@ -660,9 +644,12 @@ std::optional<std::string_view> arraw::xmpNamespaceOwner(std::string_view uri) {
 std::filesystem::path arraw::sidecarPath(const std::filesystem::path& photo) {
     // The RAW of a pair keeps the stem; anything else that shares a stem with
     // another image has to be told apart by its extension.
-    const bool sharesStem = isAmong(photo, rawExtensions) ? hasSibling(photo, rawExtensions)
-                                                          : hasSibling(photo, rawExtensions) ||
-                                                                hasSibling(photo, otherExtensions);
+    // Every RAW LibRaw opens counts (rawimport::openedRawExtensions), or a RAW
+    // and its JPEG would share a sidecar; replace_extension adds the dot.
+    const auto& raws = rawimport::openedRawExtensions;
+    const bool sharesStem = rawimport::hasRawExtension(photo)
+                                ? hasSibling(photo, raws)
+                                : hasSibling(photo, raws) || hasSibling(photo, otherExtensions);
     std::filesystem::path name = sharesStem ? photo.filename() : photo.stem();
     const std::filesystem::path directory = photo.parent_path();
     std::filesystem::path exact = directory / name;

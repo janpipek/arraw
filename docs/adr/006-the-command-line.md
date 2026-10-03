@@ -36,7 +36,8 @@ arraw-cli export <input>... -o <dir> [--format] [--quality] [--bit-depth]
 - **Inputs are files, never directories.** The shell expands wildcards. A
   directory input would need a "which files count" policy involving RAW+JPEG
   pairing that the engine cannot answer yet, and approximating it would be worse
-  than refusing it.
+  than refusing it. *(Superseded 2026-10-03: see the note at the end and
+  [ADR 029](029-a-folder-is-a-list-of-shots.md).)*
 - **`-o` names a directory, always**, which must already exist. The tempting
   alternative — a single input plus an image-shaped `-o` means "write exactly
   this file" — makes the meaning of `-o` depend on how many inputs were passed.
@@ -187,3 +188,33 @@ reading it already finds (ADR 019): an `other tools:` block with
 `<owner or unknown> (<prefix>:, N properties)`. `--json` gives `creatorTool`
 (string or null) and `others` (`uri`, `prefix`, `properties`, `owner`) per file.
 Nothing is shown for a sidecar only arraw wrote, or with `--no-sidecar`.
+
+## Note, 2026-10-03: folders and the marks filter
+
+Inputs of `export` and `info` may be folders (ADR 029). A folder expands to the
+primary files of its shots, in natural order, not recursively; a RAW+JPEG pair is
+one shot, and only the RAW is exported or listed as a file of its own. Files
+given directly behave as before, and so does everything else in this record.
+`info` shows, for a shot found in a folder, a `format:` line (`ARW+JPEG`) and a
+`companions:` line with the names; `--json` gives every file `format` and
+`companions` (an array of paths, empty for a file given directly).
+
+```
+arraw-cli export <input>... -o <dir> [...] [--min-rating N] [--rejected] [--label NAME]...
+arraw-cli info   <input>... [...]          [--min-rating N] [--rejected] [--label NAME]...
+```
+
+`--min-rating N` (1 to 5) wants at least N stars; `--rejected` wants rejects
+only and is a usage error with `--min-rating`; `--label` takes red, yellow,
+green, blue or purple in any case, and several labels mean any of them. The
+dimensions combine by AND. A photograph is tested by the marks in its sidecar,
+the default marks (none) when it has none or under `--no-sidecar`, whether it
+was given as a file or found in a folder. A photograph left out is not a
+failure: one summary line, `N left out, as their marks do not match the filter`
+(notice `filtered_out`, informational, so `--quiet` drops it), and the exit
+status is unchanged. A bad rating, an unknown label or the conflict is a usage
+error (2) before any file is touched. An empty folder reports `no photographs`
+(notice `no_photographs`) and is not an error; an unreadable folder fails as an
+input (1), and a sidecar that cannot be read fails its photograph under a
+filter, since its marks are unknown. The batch summary counts folders that could
+not be read among the failed inputs.

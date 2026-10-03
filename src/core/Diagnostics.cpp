@@ -91,6 +91,10 @@ std::string arraw::describe(const Diagnostic& diagnostic) {
         return valueAt(diagnostic, 0) + "; opened with default settings and no marks";
     case Notice::ExifUnreadable:
         return valueAt(diagnostic, 0) + "; no capture information is shown";
+    case Notice::NoPhotographs:
+        return "no photographs";
+    case Notice::FilteredOut:
+        return valueAt(diagnostic, 0) + " left out, as their marks do not match the filter";
     case Notice::OptionIgnored:
         return valueAt(diagnostic, 0) + " does nothing without " + valueAt(diagnostic, 1);
     case Notice::CropReset:

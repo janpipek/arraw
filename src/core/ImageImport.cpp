@@ -9,8 +9,12 @@
 #include <QImageIOHandler>
 #include <QImageReader>
 
+#include <algorithm>
+#include <array>
+#include <cctype>
 #include <cstdint>
 #include <stdexcept>
+#include <string>
 
 using namespace arraw;
 using namespace std;
@@ -112,7 +116,36 @@ bool decodedAsRaw(const std::filesystem::path& path) {
     return rawimport::namesRawFormat(path) || rawimport::holdsRawImage(path);
 }
 
+/// @brief Standard formats Qt decodes here, lower-case and without the dot.
+constexpr std::array<std::string_view, 5> standardExtensions = {"jpg", "jpeg", "png", "tif",
+                                                                "tiff"};
+
+/// @brief Every extension offered to a photographer: the RAW ones, then the standard ones.
+constexpr auto allExtensions = [] {
+    std::array<std::string_view, rawimport::openedRawExtensions.size() + standardExtensions.size()>
+        all;
+    std::ranges::copy(rawimport::openedRawExtensions, all.begin());
+    std::ranges::copy(standardExtensions, all.begin() + rawimport::openedRawExtensions.size());
+    return all;
+}();
+
 } // namespace
+
+std::span<const std::string_view> arraw::supportedImageExtensions() {
+    return allExtensions;
+}
+
+bool arraw::isSupportedImage(const std::filesystem::path& path) {
+    std::string extension = path.extension().string();
+    if (extension.empty()) {
+        return false;
+    }
+    extension.erase(0, 1);
+    std::ranges::transform(extension, extension.begin(), [](unsigned char character) {
+        return static_cast<char>(std::tolower(character));
+    });
+    return std::ranges::find(allExtensions, extension) != allExtensions.end();
+}
 
 ImageMetadata arraw::readImageMetadata(const std::filesystem::path& path, DiagnosticLog& log) {
     if (decodedAsRaw(path)) {

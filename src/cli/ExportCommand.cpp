@@ -7,6 +7,7 @@
 #include "GpuDevelop.h"
 #include "ProcessingPlan.h"
 #include "SettingCodec.h"
+#include "ShotInputs.h"
 #include "SidecarWatch.h"
 #include "StreamDiagnostics.h"
 
@@ -16,6 +17,7 @@
 #include <Diagnostics.h>
 #include <ImageExport.h>
 #include <ImageImport.h>
+#include <MarksFilter.h>
 #include <Photo.h>
 #include <SettingDescriptors.h>
 #include <WhiteBalance.h>
@@ -180,6 +182,8 @@ std::uint32_t parseSide(std::string_view text, std::string_view spec) {
 /// @brief Everything the command needs, once its arguments are understood.
 struct ExportRequest {
     std::vector<std::filesystem::path> inputs;
+    /// @brief Which photographs are wanted by their marks; inactive wants all.
+    MarksFilter filter;
     std::filesystem::path outputDirectory;
     ImageFileFormat format = ImageFileFormat::Jpeg;
     /// @brief What the flags said, applied over each photograph's own settings.
@@ -490,7 +494,12 @@ void configure(QCommandLineParser& parser) {
     parser.setApplicationDescription(
         "Render images and write them out.\n"
         "\n"
-        "Inputs are files, not directories; your shell expands the wildcards. Every\n"
+        "Inputs are files, which your shell can expand from wildcards, or folders. A\n"
+        "folder stands for the shots in it, not recursively: a RAW and a JPEG of the\n"
+        "same name are one shot, and only the RAW is exported. Files given directly are\n"
+        "all exported. --min-rating, --rejected and --label export only the photographs\n"
+        "whose sidecar marks match (no sidecar, or --no-sidecar, means no rating and no\n"
+        "label); the others are counted, not reported as failures. Every\n"
         "input is attempted, so one bad frame does not abandon an overnight batch. The\n"
         "exit status is 0 when all succeeded, 1 when any failed, 2 for a usage error.\n"
         "\n"
@@ -590,12 +599,14 @@ void configure(QCommandLineParser& parser) {
                       "the flags alone. Without it, the flags are applied on top of the sidecar's "
                       "settings. The command never writes a sidecar."});
     parser.addOption({"no-profile", "Convert colour but do not embed the output profile."});
+    cli::addMarksFilterOptions(parser);
     parser.addOption({"overwrite", "Replace outputs that already exist."});
     parser.addOption({{"q", "quiet"}, "Do not report each file as it is written."});
     cli::addLogFormatOption(parser);
     // The syntax carries the command word, which Qt's usage line otherwise
     // omits: it knows only argv[0], and the command is a positional we consumed.
-    parser.addPositionalArgument("input", "Files to export.", "export <input>...");
+    parser.addPositionalArgument("input", "Files, or folders of shots, to export.",
+                                 "export <input>...");
 }
 
 /// @brief Turns the parsed arguments into an ::ExportRequest.
@@ -750,6 +761,11 @@ std::optional<ExportRequest> buildRequest(const QCommandLineParser& parser, std:
 
     request.options.embedProfile = !parser.isSet("no-profile");
     request.useSidecars = !parser.isSet("no-sidecar");
+    const auto filter = cli::readMarksFilter(parser, "export", err, code);
+    if (!filter) {
+        return std::nullopt;
+    }
+    request.filter = *filter;
     request.overwrite = parser.isSet("overwrite");
     request.quiet = parser.isSet("quiet");
     return request;
@@ -835,12 +851,19 @@ int exportAll(const ExportRequest& request, std::ostream& err) {
         log.record({.notice = Notice::CpuUsed, .severity = Severity::Info});
     }
 
-    for (const auto& input : request.inputs) {
+    const cli::ExpandedInputs expanded = cli::expandInputs(request.inputs, log);
+    failures += expanded.unreadableFolders;
+    std::size_t filteredOut = 0;
+    for (const auto& [input, shot] : expanded.photographs) {
         const auto destination =
             request.outputDirectory /
             (input.stem().string() + std::string(extensionFor(request.format)));
 
         try {
+            if (!cli::passesFilter(request.filter, input, request.useSidecars)) {
+                ++filteredOut;
+                continue;
+            }
             if (!request.overwrite && std::filesystem::exists(destination)) {
                 // Refused rather than replaced: the destination is usually a
                 // directory of someone's photographs, and exportImage would
@@ -920,13 +943,17 @@ int exportAll(const ExportRequest& request, std::ostream& err) {
         }
     }
 
+    if (filteredOut > 0) {
+        log.record({.notice = Notice::FilteredOut, .values = {static_cast<double>(filteredOut)}});
+    }
     if (failures > 0) {
         // Through the log like everything else, so that --log-format json emits
         // nothing a JSON reader has to skip.
         log.record({.notice = Notice::BatchFinished,
                     .severity = Severity::Error,
                     .values = {static_cast<double>(failures),
-                               static_cast<double>(request.inputs.size())}});
+                               static_cast<double>(expanded.photographs.size() +
+                                                   expanded.unreadableFolders)}});
         return cli::Failed;
     }
     return cli::Success;

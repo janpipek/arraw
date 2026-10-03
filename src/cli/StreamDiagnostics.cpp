@@ -64,6 +64,10 @@ std::string nameOf(Notice notice) {
         return "sidecar_unreadable";
     case Notice::ExifUnreadable:
         return "exif_unreadable";
+    case Notice::NoPhotographs:
+        return "no_photographs";
+    case Notice::FilteredOut:
+        return "filtered_out";
     case Notice::OptionIgnored:
         return "option_ignored";
     case Notice::CropReset:

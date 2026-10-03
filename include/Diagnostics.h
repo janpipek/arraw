@@ -100,6 +100,12 @@ enum class Notice {
     /// no capture information is shown: the reason.
     ExifUnreadable,
 
+    /// @brief A folder among the inputs holds no photographs.
+    NoPhotographs,
+
+    /// @brief A batch left out the photographs its marks filter did not want: how many.
+    FilteredOut,
+
     /// @brief An option was given that has no effect without another one: the
     /// option, then the one it needs.
     OptionIgnored,
