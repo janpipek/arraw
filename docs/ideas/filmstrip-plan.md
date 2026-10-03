@@ -1,10 +1,9 @@
 # Film strip, shots, culling and EXIF: execution plan
 
-Status: decided on 2026-10-03, not started. It waits for the dev sandbox to be
-rebuilt with exiv2: `tools/ci/install-deps.sh` now installs `libexiv2-dev`, and
-the image rebuilds when that file changes (`just sandbox-build` forces it).
-Before writing code, check that `pkg-config --modversion exiv2` works in the
-sandbox.
+Status: implemented on branch `develop-state`, 2026-10-03, in five commits:
+EXIF (ADR 028), shots (ADR 029), saving (ADR 030), the strip, and thumbnails
+(ADR 031). The lasting decisions are in those ADRs; this plan records the
+questions and answers behind them.
 
 ## Goal
 

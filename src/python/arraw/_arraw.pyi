@@ -125,8 +125,15 @@ class ImageBuffer:
 def read_metadata(path: str | os.PathLike) -> ImageMetadata:
     """Read what a file declares about itself, without decoding its pixels."""
 
-def load(path: str | os.PathLike) -> ImageBuffer:
-    """Decode an image file into a buffer."""
+def load(path: str | os.PathLike, half_size: bool = False) -> ImageBuffer:
+    """
+    Decode an image file into a buffer. With half_size a RAW is decoded at half its width and height, without demosaicing, and the buffer is that much smaller than read_metadata says; other files ignore it.
+    """
+
+def read_embedded_preview(path: str | os.PathLike, max_edge: int) -> ImageBuffer | None:
+    """
+    Read the preview a file embeds, upright, in sRGB and no longer than max_edge on its longer edge (0 keeps the largest at its own size). None if the file has no preview, or cannot be read, which is also a message on the 'arraw' logger.
+    """
 
 class URational:
     """

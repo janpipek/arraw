@@ -204,6 +204,13 @@ private:
     /// @param result Outcome delivered by the renderer.
     void showResult(const PreviewResult& result);
 
+    /// @brief Makes the open photograph's thumbnail in the strip follow a preview.
+    ///
+    /// Only for a preview of the whole frame of the shot's primary file; the thumbnail is the
+    /// preview reduced to the cache's size, and is not cached, as it may show unsaved edits.
+    /// @param result A preview that rendered, and is being shown.
+    void followWithThumbnail(const PreviewResult& result);
+
     /// @brief Creates the status bar with its permanent preview-device label.
     void buildStatusBar();
 

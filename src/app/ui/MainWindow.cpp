@@ -8,6 +8,7 @@
 #include "ExportSettings.h"
 #include "FilmStrip.h"
 #include "PhotoView.h"
+#include "ThumbnailCache.h"
 #include "ViewTransform.h"
 
 #include <ColorEncoding.h>
@@ -718,6 +719,9 @@ bool MainWindow::saveAdjustments() {
         developPanel_->finishPendingEdit();
         open_->session.save();
         filmStrip_->noteOwnWrite(open_->session.photo().path());
+        // The cache gets the thumbnail of what was saved, rendered by the strip's worker: the
+        // preview may show a zoomed part of the frame, or a size the cache does not want.
+        filmStrip_->noteSettingsSaved(open_->session.photo().path());
         refreshPanel();
         return true;
     } catch (const std::exception& error) {
@@ -838,6 +842,7 @@ void MainWindow::showResult(const PreviewResult& result) {
         latestShown_ = result.request;
         photoView_->setImage(*result.image, result.region);
         showDevice(result);
+        followWithThumbnail(result);
         return;
     }
     // A newer request is on its way and may well succeed: say nothing yet.
@@ -856,6 +861,34 @@ void MainWindow::showResult(const PreviewResult& result) {
     reportingFailure_ = false;
 }
 
+void MainWindow::followWithThumbnail(const PreviewResult& result) {
+    if (!open_) {
+        return;
+    }
+    // A zoomed view shows a part of the frame, which is no thumbnail of the photograph.
+    constexpr double tolerance = 1e-3;
+    const QRectF& region = result.region;
+    if (region.left() > tolerance || region.top() > tolerance || region.right() < 1.0 - tolerance ||
+        region.bottom() < 1.0 - tolerance) {
+        return;
+    }
+    // The strip's cell is the photograph's primary; a companion has a sidecar, and a thumbnail,
+    // of its own that the strip does not show.
+    const std::filesystem::path path = open_->session.photo().path();
+    if (filmStrip_->shotContaining(path) != path) {
+        return;
+    }
+    QImage thumbnail = *result.image;
+    if (thumbnail.width() > ThumbnailCache::maxEdge ||
+        thumbnail.height() > ThumbnailCache::maxEdge) {
+        thumbnail = thumbnail.scaled(ThumbnailCache::maxEdge, ThumbnailCache::maxEdge,
+                                     Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    }
+    // The preview's pixel ratio is for the photograph view, not for a cell.
+    thumbnail.setDevicePixelRatio(1.0);
+    filmStrip_->setLiveThumbnail(path, std::move(thumbnail));
+}
+
 void MainWindow::showPhoto(Photo photo) {
     DebugDiagnostics log;
 
@@ -864,6 +897,8 @@ void MainWindow::showPhoto(Photo photo) {
 
     // Commit.
     setPicking(false);
+    // The shot just left shows its saved settings again, not the edits that were abandoned.
+    filmStrip_->releaseLiveThumbnail();
     open_.emplace(OpenPhoto{EditSession(std::move(photo)), decoded});
     photoView_->resetView();
     updateZoomControls();

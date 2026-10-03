@@ -171,6 +171,9 @@ add_library(arraw STATIC
         src/core/ImageExport.cpp
         include/ExifInfo.h
         src/core/ExifInfo.cpp
+        src/core/Exiv2Support.h
+        src/core/Exiv2Support.cpp
+        src/core/EmbeddedPreview.cpp
         include/ImageImport.h
         src/core/ImageImport.cpp
         include/MarksFilter.h
@@ -331,6 +334,10 @@ add_library(arraw-app-core STATIC
         src/app/ShotModel.h
         src/app/SettingPresentation.cpp
         src/app/SettingPresentation.h
+        src/app/ThumbnailCache.cpp
+        src/app/ThumbnailCache.h
+        src/app/ThumbnailWorker.cpp
+        src/app/ThumbnailWorker.h
         src/app/ViewTransform.cpp
         src/app/ViewTransform.h
         src/app/WhiteBalanceChoice.cpp

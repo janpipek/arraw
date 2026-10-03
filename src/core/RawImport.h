@@ -99,10 +99,12 @@ inline constexpr std::array<std::string_view, 21> openedRawExtensions = {
 ///
 /// @param path File to decode.
 /// @param log Where to report a substituted white balance.
+/// @param options Whether to decode at half size; see ::arraw::DecodeOptions.
 /// @return A buffer holding the decoded pixels, RGBA at sixteen bits per
 /// channel, opaque.
 /// @throws std::runtime_error if the file cannot be opened, decoded, or
 /// converted.
-[[nodiscard]] ImageBuffer load(const std::filesystem::path& path, DiagnosticLog& log);
+[[nodiscard]] ImageBuffer load(const std::filesystem::path& path, DiagnosticLog& log,
+                               DecodeOptions options = {});
 
 } // namespace arraw::rawimport

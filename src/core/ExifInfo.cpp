@@ -1,5 +1,7 @@
 #include "ExifInfo.h"
 
+#include "Exiv2Support.h"
+
 #include <exiv2/exiv2.hpp>
 
 #include <cctype>
@@ -7,7 +9,6 @@
 #include <cstdint>
 #include <filesystem>
 #include <limits>
-#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -18,49 +19,6 @@
 using namespace arraw;
 
 namespace {
-
-/// @brief Serialises exiv2's registration of XMP namespaces between threads.
-std::mutex xmpMutex;
-
-/// @brief Locks or unlocks ::xmpMutex for the XMP toolkit.
-void lockXmp(void*, bool lock) {
-    if (lock) {
-        xmpMutex.lock();
-    } else {
-        xmpMutex.unlock();
-    }
-}
-
-/// @brief Prepares exiv2 for use from any thread, once.
-///
-/// exiv2's XMP toolkit registers namespaces lazily and is not thread-safe
-/// unless it is given a lock before its first use, which `initialize` is
-/// documented to need being called thread-safely: a function-local static
-/// does that. Its log is muted, because exiv2 writes warnings to stderr by
-/// default, which a library must not do (a fixture-free file with a slightly
-/// malformed maker note would otherwise print on every thumbnail).
-void prepareExiv2() {
-    static const bool prepared = [] {
-        Exiv2::LogMsg::setLevel(Exiv2::LogMsg::mute);
-        Exiv2::XmpParser::initialize(lockXmp, nullptr);
-        return true;
-    }();
-    (void)prepared;
-}
-
-/// @brief Spells a path the way exiv2 0.28 opens it.
-///
-/// It takes a narrow string. On Windows that is UTF-8, which it widens itself,
-/// so a path outside the active code page survives; elsewhere it is the
-/// path's own bytes, whatever their encoding.
-std::string exivPath(const std::filesystem::path& path) {
-#ifdef _WIN32
-    const auto utf8 = path.u8string();
-    return std::string(utf8.begin(), utf8.end());
-#else
-    return path.string();
-#endif
-}
 
 /// @brief Finds a tag, by its exiv2 key.
 /// @return The datum, or null when the tag is absent or holds no value.
@@ -272,9 +230,9 @@ ExifInfo arraw::readExif(const std::filesystem::path& path, DiagnosticLog& log) 
             error ? error : std::make_error_code(std::errc::no_such_file_or_directory);
         throw std::runtime_error(path.string() + ": " + reason.message());
     }
-    prepareExiv2();
+    exiv2support::prepare();
     try {
-        const auto image = Exiv2::ImageFactory::open(exivPath(path), false);
+        const auto image = Exiv2::ImageFactory::open(exiv2support::path(path), false);
         image->readMetadata();
         const ExifInfo info = collect(image->exifData());
         if (info == ExifInfo{}) {

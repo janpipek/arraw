@@ -4,6 +4,8 @@
 #include "FolderWatcher.h"
 #include "ShotFilterModel.h"
 #include "ShotModel.h"
+#include "ThumbnailCache.h"
+#include "ThumbnailWorker.h"
 
 #include <PhotoMarks.h>
 
@@ -48,9 +50,11 @@ public:
     /// @brief Writes the marks of one shot, and throws what it cannot write.
     using MarksWriter = std::function<void(const std::filesystem::path&, const PhotoMarks&)>;
 
-    /// @brief Builds an empty strip with its title bar.
+    /// @brief Builds an empty strip with its title bar, and starts its thumbnail worker.
     /// @param parent Owning widget.
-    explicit FilmStrip(QWidget* parent = nullptr);
+    /// @param cache Where thumbnails are kept; the application's cache directory by default.
+    explicit FilmStrip(QWidget* parent = nullptr,
+                       ThumbnailCache cache = ThumbnailCache(ThumbnailCache::defaultRoot()));
 
     /// @brief Stops watching the folder.
     ~FilmStrip() override;
@@ -133,10 +137,24 @@ public:
     /// @param delta Steps, -1 for the previous shot and 1 for the next.
     void navigate(int delta);
 
-    /// @brief Sets the thumbnail of a shot; the seam for the thumbnail worker (plan, step 5).
+    /// @brief Shows a thumbnail that follows the edits of the open photograph.
+    ///
+    /// Not cached: it may show what is not saved. While a shot has a live thumbnail the worker's
+    /// results for it are dropped, so they cannot undo the edits it shows. It lasts until
+    /// ::arraw::app::FilmStrip::releaseLiveThumbnail or a new folder.
+    /// @param primary Primary file of the shot; an unknown one is ignored.
+    /// @param thumbnail Image to show, at most ::arraw::app::ThumbnailCache::maxEdge on a side.
+    void setLiveThumbnail(const std::filesystem::path& primary, QImage thumbnail);
+
+    /// @brief Ends the live thumbnail, and brings back the one of the saved settings.
+    ///
+    /// Asks the worker for the shot's developed thumbnail again, which the cache usually has.
+    void releaseLiveThumbnail();
+
+    /// @brief Tells the strip that a shot's settings were saved, so that its cached thumbnail is
+    /// made afresh.
     /// @param primary Primary file of the shot.
-    /// @param thumbnail Image to show, or a null one for the placeholder.
-    void setThumbnail(const std::filesystem::path& primary, QImage thumbnail);
+    void noteSettingsSaved(const std::filesystem::path& primary);
 
     /// @brief Gives the filter that is applied.
     /// @return The filter; one that is not active shows everything.
@@ -176,6 +194,12 @@ protected:
 private:
     /// @brief Builds the title bar.
     void buildTitleBar();
+
+    /// @brief Takes a thumbnail from the worker.
+    void receiveThumbnail(const ThumbnailResult& result);
+
+    /// @brief Tells the worker which shots are on screen.
+    void reportVisible();
 
     /// @brief Builds the filter's controls into the title bar.
     /// @param into The title bar.
@@ -256,6 +280,12 @@ private:
     bool updatingCells_ = false;
     /// Whether the left button went down on a cell, so that its release is ours too.
     bool pressHandled_ = false;
+    /// Shot whose thumbnail follows the edits, empty for none.
+    std::filesystem::path live_;
+    /// Waits for scrolling to pause before the worker is told what is on screen.
+    QTimer visibleTimer_;
+    /// Declared last, so that the thread stops before what it hands results to is gone.
+    ThumbnailWorker thumbnails_;
 };
 
 } // namespace arraw::app

@@ -3,7 +3,9 @@
 #include <Diagnostics.h>
 #include <ImageBuffer.h>
 
+#include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <span>
 #include <string_view>
 
@@ -65,6 +67,26 @@ struct ImageMetadata {
 [[nodiscard]] ImageMetadata readImageMetadata(const std::filesystem::path& path,
                                               DiagnosticLog& log = discardedDiagnostics());
 
+/// @brief How a decode trades completeness for speed.
+struct DecodeOptions {
+    /// @brief Whether to decode a RAW at half its width and height.
+    ///
+    /// The RAW decoder then combines each 2x2 block of the sensor into one
+    /// pixel instead of demosaicing, which costs a fraction of a full decode
+    /// and suits a render that is small anyway (ADR 031). The result is an
+    /// ordinary decoded buffer: same encoding, orientation and applied white
+    /// balance, with each side `size / 2` (rounded down, as the decoder does),
+    /// whatever the file holds (one already demosaiced, a linear DNG, is
+    /// halved afterwards, without the speed-up), so ::arraw::develop takes it unchanged. Its size
+    /// is then not the one
+    /// ::arraw::readImageMetadata declares, so plan against the buffer
+    /// (`planFor(buffer, ...)`), not the metadata. Ignored for anything that is
+    /// not a RAW: those decode in full, and ::arraw::halved is there to reduce them.
+    bool halfSize = false;
+
+    friend bool operator==(const DecodeOptions&, const DecodeOptions&) = default;
+};
+
 /// @brief Decodes an image file into a buffer in the working encoding.
 ///
 /// A RAW extension chooses the RAW decoder, and so does a file whose *content*
@@ -94,11 +116,40 @@ struct ImageMetadata {
 /// @param path File to decode.
 /// @param log Where to report what a photographer should know about the
 /// decode, such as a white balance the file did not record.
+/// @param options How complete the decode must be; see ::arraw::DecodeOptions.
 /// @return A buffer holding the decoded pixels.
 /// @throws std::runtime_error if the file cannot be opened, decoded, or
 /// converted. Very large images are refused by the decoder's own allocation
 /// limit rather than being decoded.
 [[nodiscard]] ImageBuffer loadImage(const std::filesystem::path& path,
-                                    DiagnosticLog& log = discardedDiagnostics());
+                                    DiagnosticLog& log = discardedDiagnostics(),
+                                    DecodeOptions options = {});
+
+/// @brief Reads the preview image a file carries, without decoding the photograph.
+///
+/// Cameras embed JPEG previews in their RAW files, and JPEG and TIFF files may
+/// carry an EXIF thumbnail; reading one costs a fraction of a decode, which is
+/// what a thumbnail wants first (ADR 031). Of the previews the file holds, the
+/// smallest whose longer edge is at least @p maxEdge is used, else the largest.
+/// It is returned as the file's own camera-processed picture and not as arraw
+/// would develop it: converted to sRGB, rotated upright by the orientation the
+/// file records (a preview that records its own is trusted instead), and
+/// reduced, with smooth filtering, to fit @p maxEdge on its longer edge. A
+/// preview is never enlarged.
+///
+/// A file with no preview, such as a PNG, gives no result and no notice. A
+/// file that cannot be read at all gives no result and a
+/// ::arraw::Notice::PreviewUnreadable warning. May be called from several
+/// threads at once.
+///
+/// @param path File to read.
+/// @param maxEdge Longer edge, in pixels, the result must fit and the preview
+/// should reach; zero keeps the largest preview at its own size.
+/// @param log Where to report a file that could not be read.
+/// @return An upright ::arraw::PixelFormat::RgbaU8 buffer in
+/// ::arraw::NamedEncoding::Srgb with no pending orientation, or `std::nullopt`.
+[[nodiscard]] std::optional<ImageBuffer>
+readEmbeddedPreview(const std::filesystem::path& path, std::uint32_t maxEdge,
+                    DiagnosticLog& log = discardedDiagnostics());
 
 } // namespace arraw

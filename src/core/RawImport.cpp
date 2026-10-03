@@ -97,8 +97,12 @@ Gains normalised(const float* gains) {
     return {gains[0] / green, gains[1] / green, gains[2] / green};
 }
 
-void applyDecodeSettings(LibRaw& raw) {
+void applyDecodeSettings(LibRaw& raw, DecodeOptions options) {
     auto& params = raw.imgdata.params;
+
+    // Each 2x2 sensor block becomes a pixel, so nothing is demosaiced; the
+    // colour and white balance are those of a full decode (ADR 031).
+    params.half_size = options.halfSize ? 1 : 0;
 
     // A content-dependent brightness stretch would make one develop setting
     // render differently from frame to frame, which a non-destructive editor
@@ -262,6 +266,43 @@ ImageBuffer toBuffer(const libraw_processed_image_t& image, ColorEncoding encodi
     return buffer;
 }
 
+/// @brief Halves a decoded sixteen-bit buffer by averaging 2x2 blocks.
+///
+/// What LibRaw's half-size mode does not do for a file that is already
+/// demosaiced (a linear DNG): it halves only what it would have demosaiced, so
+/// the buffer comes back whole. Halving it here keeps the promise of
+/// ::arraw::DecodeOptions::halfSize whatever the file holds, at the cost of
+/// the speed-up, which there was none to be had from. The size is the integer
+/// quotient, as LibRaw's is; the colour is a plain mean, as the samples are
+/// linear and opaque.
+/// @param image Buffer in RgbaU16, at least 2x2.
+ImageBuffer halvedRgbaU16(const ImageBuffer& image) {
+    const ImageSize in = image.size();
+    ImageBuffer result({in.width / 2, in.height / 2}, image.format(), image.encoding(),
+                       image.orientation());
+    const auto input = image.samples<std::uint16_t>();
+    auto output = result.samples<std::uint16_t>();
+    const auto out = result.size();
+    for (std::uint32_t y = 0; y < out.height; ++y) {
+        for (std::uint32_t x = 0; x < out.width; ++x) {
+            for (std::size_t channel = 0; channel < 4; ++channel) {
+                unsigned sum = 0;
+                for (std::uint32_t dy = 0; dy < 2; ++dy) {
+                    for (std::uint32_t dx = 0; dx < 2; ++dx) {
+                        sum +=
+                            input[((2 * y + dy) * static_cast<std::size_t>(in.width) + 2 * x + dx) *
+                                      4 +
+                                  channel];
+                    }
+                }
+                output[(y * static_cast<std::size_t>(out.width) + x) * 4 + channel] =
+                    static_cast<std::uint16_t>((sum + 2) / 4);
+            }
+        }
+    }
+    return result;
+}
+
 } // namespace
 
 namespace {
@@ -305,11 +346,12 @@ ImageMetadata arraw::rawimport::readMetadata(const std::filesystem::path& path,
     return metadataOf(raw);
 }
 
-ImageBuffer arraw::rawimport::load(const std::filesystem::path& path, DiagnosticLog& log) {
+ImageBuffer arraw::rawimport::load(const std::filesystem::path& path, DiagnosticLog& log,
+                                   DecodeOptions options) {
     LibRaw raw;
     openOrThrow(raw, path);
 
-    applyDecodeSettings(raw);
+    applyDecodeSettings(raw, options);
 
     if (const int code = raw.unpack(); code != LIBRAW_SUCCESS) {
         throw std::runtime_error(failureMessage(path, code));
@@ -329,5 +371,10 @@ ImageBuffer arraw::rawimport::load(const std::filesystem::path& path, Diagnostic
     if (!image) {
         throw std::runtime_error(failureMessage(path, code));
     }
-    return toBuffer(*image, metadata.encoding, metadata.orientation);
+    ImageBuffer decoded = toBuffer(*image, metadata.encoding, metadata.orientation);
+    if (options.halfSize && decoded.size() == metadata.size && decoded.size().width >= 2 &&
+        decoded.size().height >= 2) {
+        return halvedRgbaU16(decoded);
+    }
+    return decoded;
 }

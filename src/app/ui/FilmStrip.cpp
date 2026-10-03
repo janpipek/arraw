@@ -14,6 +14,7 @@
 #include <QListView>
 #include <QMenu>
 #include <QMessageBox>
+#include <QMetaObject>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPen>
@@ -135,7 +136,7 @@ public:
 
         const auto thumbnail = index.data(ShotModel::ThumbnailRole).value<QImage>();
         if (thumbnail.isNull()) {
-            // Until the thumbnail worker (step 5) hands one over: a dark tile naming the format.
+            // Until the thumbnail worker hands one over: a dark tile naming the format.
             painter->fillRect(inner, QColor(0x2B, 0x2B, 0x2B));
             QFont font = painter->font();
             font.setPixelSize(std::max(10, inner.height() / 7));
@@ -149,6 +150,8 @@ public:
                                  Qt::KeepAspectRatio, Qt::SmoothTransformation);
             QRect target(QPoint(), scaled.size() / painter->device()->devicePixelRatioF());
             target.moveCenter(inner.center());
+            // Letterboxed: the cell's tile shows around a photograph of another shape.
+            painter->fillRect(inner, QColor(0x2B, 0x2B, 0x2B));
             painter->drawImage(target, scaled);
             if (inner.height() >= marksMinHeight) {
                 paintFormatChip(painter, inner, format);
@@ -177,7 +180,15 @@ private:
     QString active_;
 };
 
-FilmStrip::FilmStrip(QWidget* parent) : QWidget(parent), watcher_(model_) {
+FilmStrip::FilmStrip(QWidget* parent, ThumbnailCache cache)
+    : QWidget(parent), watcher_(model_),
+      thumbnails_(std::move(cache), [this](ThumbnailResult result) {
+          // On the worker thread. Dropped if the strip is gone by the time the GUI thread
+          // would run it.
+          QMetaObject::invokeMethod(
+              this, [this, result = std::move(result)] { receiveThumbnail(result); },
+              Qt::QueuedConnection);
+      }) {
     proxy_.setSourceModel(&model_);
 
     auto* layout = new QHBoxLayout(this);
@@ -228,7 +239,31 @@ FilmStrip::FilmStrip(QWidget* parent) : QWidget(parent), watcher_(model_) {
         scheduleActiveCheck();
     });
     connect(&watcher_, &FolderWatcher::sidecarChangedExternally, this,
-            &FilmStrip::sidecarChangedExternally);
+            [this](const QString& primary) {
+                thumbnails_.invalidate(toPath(primary));
+                emit sidecarChangedExternally(primary);
+            });
+
+    // Shots appear by refresh (the watcher); a new folder is handled in setFolder.
+    connect(&model_, &QAbstractItemModel::rowsInserted, this,
+            [this](const QModelIndex&, int first, int last) {
+                std::vector<fs::path> added;
+                for (int row = first; row <= last; ++row) {
+                    added.push_back(model_.shot(row).primary);
+                }
+                thumbnails_.addShots(added);
+            });
+    // What is on screen changes with scrolling, size, filter and the shots themselves; one report
+    // after the burst.
+    visibleTimer_.setSingleShot(true);
+    visibleTimer_.setInterval(40);
+    connect(&visibleTimer_, &QTimer::timeout, this, &FilmStrip::reportVisible);
+    const auto scheduleVisible = [this] { visibleTimer_.start(); };
+    connect(list_->horizontalScrollBar(), &QScrollBar::valueChanged, this, scheduleVisible);
+    connect(&proxy_, &QAbstractItemModel::rowsInserted, this, scheduleVisible);
+    connect(&proxy_, &QAbstractItemModel::rowsRemoved, this, scheduleVisible);
+    connect(&proxy_, &QAbstractItemModel::modelReset, this, scheduleVisible);
+    connect(&proxy_, &QAbstractItemModel::layoutChanged, this, scheduleVisible);
 }
 
 FilmStrip::~FilmStrip() = default;
@@ -330,6 +365,16 @@ void FilmStrip::clearFilter() {
 
 void FilmStrip::setFolder(const fs::path& folder) {
     model_.setFolder(folder);
+    live_.clear();
+    {
+        std::vector<fs::path> shots;
+        shots.reserve(static_cast<std::size_t>(model_.rowCount()));
+        for (int row = 0; row < model_.rowCount(); ++row) {
+            shots.push_back(model_.shot(row).primary);
+        }
+        thumbnails_.setShots(std::move(shots));
+    }
+    visibleTimer_.start();
     active_.clear();
     delegate_->setActive({});
     folderLabel_->setText(toQString(folder.lexically_normal()));
@@ -440,8 +485,50 @@ void FilmStrip::noteOwnWrite(const fs::path& photo) {
     }
 }
 
-void FilmStrip::setThumbnail(const fs::path& primary, QImage thumbnail) {
+void FilmStrip::setLiveThumbnail(const fs::path& primary, QImage thumbnail) {
+    if (model_.rowOf(primary) < 0) {
+        return;
+    }
+    live_ = primary;
     model_.setThumbnail(primary, std::move(thumbnail));
+}
+
+void FilmStrip::releaseLiveThumbnail() {
+    if (live_.empty()) {
+        return;
+    }
+    const fs::path primary = std::move(live_);
+    live_.clear();
+    thumbnails_.invalidate(primary);
+}
+
+void FilmStrip::noteSettingsSaved(const fs::path& primary) {
+    thumbnails_.invalidate(primary);
+}
+
+void FilmStrip::receiveThumbnail(const ThumbnailResult& result) {
+    if (result.generation != thumbnails_.generation() || result.primary == live_) {
+        return;
+    }
+    model_.setThumbnail(result.primary, result.image);
+}
+
+void FilmStrip::reportVisible() {
+    const int rows = proxy_.rowCount();
+    std::vector<fs::path> shown;
+    if (rows > 0) {
+        const QRect view = list_->viewport()->rect();
+        const int y = view.height() / 2;
+        const QModelIndex left = list_->indexAt(QPoint(0, y));
+        const QModelIndex right = list_->indexAt(QPoint(view.right(), y));
+        // One cell either side, so that a small scroll does not show placeholders.
+        const int first = std::max(0, (left.isValid() ? left.row() : 0) - 1);
+        const int last = std::min(rows - 1, (right.isValid() ? right.row() : rows - 1) + 1);
+        for (int row = first; row <= last; ++row) {
+            shown.push_back(primaryAt(proxy_.index(row, 0)));
+        }
+    }
+    thumbnails_.setVisible(std::move(shown));
 }
 
 std::vector<PhotoMarks> FilmStrip::currentMarks(const std::vector<fs::path>& shots) const {
@@ -651,6 +738,7 @@ void FilmStrip::showContextMenu(const QPoint& position) {
 bool FilmStrip::eventFilter(QObject* watched, QEvent* event) {
     if (watched == list_ && event->type() == QEvent::Resize) {
         updateCellSide();
+        visibleTimer_.start();
         if (emptyHint_->isVisible()) {
             emptyHint_->setGeometry(list_->viewport()->rect());
         }

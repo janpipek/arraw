@@ -174,9 +174,10 @@ ImageMetadata arraw::readImageMetadata(const std::filesystem::path& path, Diagno
             .orientation = orientationOf(reader)};
 }
 
-ImageBuffer arraw::loadImage(const std::filesystem::path& path, DiagnosticLog& log) {
+ImageBuffer arraw::loadImage(const std::filesystem::path& path, DiagnosticLog& log,
+                             DecodeOptions options) {
     if (decodedAsRaw(path)) {
-        return rawimport::load(path, log);
+        return rawimport::load(path, log, options);
     }
 
     QFile sourceFile(path);

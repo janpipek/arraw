@@ -23,6 +23,7 @@ add_executable(arraw-tests
         test_DevelopState.cpp
         test_DisplayImage.cpp
         test_EditSession.cpp
+        test_EmbeddedPreview.cpp
         test_ExifInfo.cpp
         test_ExportQueue.cpp
         test_ExportSettings.cpp
@@ -52,6 +53,8 @@ add_executable(arraw-tests
         test_Sidecar.cpp
         test_SampleConversion.cpp
         test_RoundTrip.cpp
+        test_ThumbnailCache.cpp
+        test_ThumbnailWorker.cpp
         test_Tone.cpp
         test_ViewTransform.cpp
         test_WhiteBalance.cpp

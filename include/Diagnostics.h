@@ -109,6 +109,10 @@ enum class Notice {
     /// @brief An option was given that has no effect without another one: the
     /// option, then the one it needs.
     OptionIgnored,
+
+    /// @brief A photograph's embedded preview could not be looked for, so none
+    /// is shown: the reason.
+    PreviewUnreadable,
 };
 
 /// @brief One detail of a diagnostic, kept as a value rather than as prose.
