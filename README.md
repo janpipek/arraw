@@ -69,6 +69,11 @@ why not the GPU when it fell back (tooltip). `ARRAW_PREVIEW_DEVICE=cpu` forces
 the CPU, for comparison or a broken driver; anything else, or unset, means
 "GPU when available". Software rasterisers are not used for the preview.
 
+`arraw-ui [path]` opens a photograph or folder. Without a path, it reopens the
+last photograph and its folder. If that file is gone, it opens the remembered
+folder; if neither exists, it starts empty. Opening a folder without photographs
+remembers that folder without retaining a file from the previous one.
+
 Inputs are files rather than directories; your shell expands the wildcards.
 Every input is attempted, so one bad frame does not abandon an overnight batch.
 See [ADR 006](docs/adr/006-the-command-line.md) for the full contract.

@@ -9,10 +9,47 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <fstream>
 #include <limits>
 #include <string>
 
 using namespace arraw;
+
+TEST_CASE("GUI startup restores the file and falls back to the remembered folder",
+          "[app][settings]") {
+    const test::TempDir directory;
+    QSettings store(QString::fromStdU16String(directory.file("settings.ini").u16string()),
+                    QSettings::IniFormat);
+    REQUIRE_FALSE(app::restoreOpenPath(store));
+    const auto folder = directory.path() / "photos";
+    std::filesystem::create_directory(folder);
+    const auto file = folder / std::filesystem::path(std::u16string(u"caf\u00e9.png"));
+    std::ofstream(file) << "fixture";
+    store.setValue("lastFolder", QString::fromStdU16String(folder.u16string()));
+    store.setValue("lastFile", QString::fromStdU16String(file.u16string()));
+    store.sync();
+    QSettings restored(store.fileName(), QSettings::IniFormat);
+    REQUIRE(app::restoreOpenPath(restored) == file);
+
+    std::filesystem::remove(file);
+    REQUIRE(app::restoreOpenPath(restored) == folder);
+    std::filesystem::remove(folder);
+    REQUIRE_FALSE(app::restoreOpenPath(restored));
+}
+
+TEST_CASE("GUI startup does not reopen a file from a previously visited folder",
+          "[app][settings]") {
+    const test::TempDir directory;
+    QSettings store(QString::fromStdU16String(directory.file("settings.ini").u16string()),
+                    QSettings::IniFormat);
+    const auto file = directory.file("old.png");
+    std::ofstream(file) << "fixture";
+    const auto folder = directory.path() / "new";
+    std::filesystem::create_directory(folder);
+    store.setValue("lastFile", QString::fromStdU16String(file.u16string()));
+    store.setValue("lastFolder", QString::fromStdU16String(folder.u16string()));
+    REQUIRE(app::restoreOpenPath(store) == folder);
+}
 
 namespace {
 

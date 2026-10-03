@@ -5,6 +5,7 @@
 #include <QSettings>
 
 #include <cstddef>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <span>
@@ -28,6 +29,10 @@ struct AppSettings {
 
 /// @brief Stores desktop preferences without touching other settings groups.
 void saveAppSettings(const AppSettings& settings, QSettings& store);
+
+/// @brief Restores the last photograph, falling back to its folder when the file is gone.
+/// @return An existing file or folder, or nothing when neither is available.
+[[nodiscard]] std::optional<std::filesystem::path> restoreOpenPath(QSettings& store);
 
 /// @brief Finds a stored hardware identity in the currently enumerated adapters.
 [[nodiscard]] std::optional<std::size_t> findPreferredGpu(const GpuAdapterInfo& preferred,
