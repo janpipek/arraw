@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ExportQueue.h"
 #include "PreviewRenderer.h"
 
 #include <EditSession.h>
@@ -8,9 +9,11 @@
 
 #include <QMainWindow>
 #include <QPointF>
+#include <QString>
 #include <QTimer>
 
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -18,6 +21,7 @@
 
 class QAction;
 class QActionGroup;
+class QCloseEvent;
 class QLabel;
 class QToolButton;
 class QEvent;
@@ -43,6 +47,15 @@ protected:
     /// room it has, and a move to a screen of another pixel ratio.
     bool eventFilter(QObject* watched, QEvent* event) override;
 
+    /// @brief Lets the window close, or asks what to do with exports still running.
+    ///
+    /// "Wait" keeps the window until the queue is empty and then closes it;
+    /// "Cancel Exports" drops the queued exports and closes at once. The export
+    /// in progress is never cut off: its file is written atomically, and
+    /// destroying the window waits for it to finish.
+    /// @param event Close request.
+    void closeEvent(QCloseEvent* event) override;
+
 private:
     /// @brief Builds the menu bar and the actions it offers.
     void buildMenu();
@@ -59,6 +72,19 @@ private:
 
     /// @brief Shows the view's zoom on the button and ticks the matching preset.
     void updateZoomControls();
+
+    /// @brief Asks how to export the photograph and where to, then queues the export.
+    ///
+    /// Snapshots the photograph's develop state at this moment; editing
+    /// carries on while the export runs.
+    void exportWithDialog();
+
+    /// @brief Reports a finished export, and closes the window if it was waiting for them.
+    /// @param result Outcome delivered by the export queue.
+    void showExportResult(const ExportResult& result);
+
+    /// @brief Shows what the queue is working on in the status bar.
+    void showExportProgress();
 
     /// @brief Asks the user for a photograph and opens it.
     void openFileWithDialog();
@@ -142,6 +168,7 @@ private:
     QWidget* developDock_ = nullptr;
     QAction* undoAction_ = nullptr;
     QAction* redoAction_ = nullptr;
+    QAction* exportAction_ = nullptr;
     QShortcut* cancelPickShortcut_ = nullptr;
 
     /// Whether the next click on the photograph picks a neutral.
@@ -171,12 +198,24 @@ private:
     /// results below it belong to a previous photograph.
     std::uint64_t firstRequest_ = 0;
 
+    /// File names of the exports that have not reported yet, oldest first.
+    std::deque<QString> exportNames_;
+
+    /// Whether the user chose to wait for the exports before closing.
+    bool closeWhenIdle_ = false;
+
     /// Worker that renders the preview.
     ///
     /// Declared last so that it is destroyed first: its destructor joins the
     /// thread, after which no callback can run, so nothing it touches has
     /// been destroyed yet.
     PreviewRenderer previewRenderer_;
+
+    /// Worker that develops and writes exports.
+    ///
+    /// Declared after everything it reports to, so that it is destroyed
+    /// before any of it, and no callback reaches a destroyed window.
+    ExportQueue exportQueue_;
 };
 
 } // namespace arraw::app

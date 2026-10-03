@@ -289,6 +289,10 @@ add_library(arraw-app-core STATIC
         src/app/DebugDiagnostics.h
         src/app/DisplayImage.cpp
         src/app/DisplayImage.h
+        src/app/ExportQueue.cpp
+        src/app/ExportQueue.h
+        src/app/ExportSettings.cpp
+        src/app/ExportSettings.h
         src/app/PreviewRenderer.cpp
         src/app/PreviewRenderer.h
         src/app/SettingPresentation.cpp
@@ -305,6 +309,8 @@ set_target_properties(arraw-app-core PROPERTIES AUTOMOC OFF)
 add_executable(arraw-ui src/app/main.cpp
         src/app/ui/DevelopPanel.cpp
         src/app/ui/DevelopPanel.h
+        src/app/ui/ExportDialog.cpp
+        src/app/ui/ExportDialog.h
         src/app/ui/MainWindow.cpp
         src/app/ui/MainWindow.h
         src/app/ui/PhotoView.cpp

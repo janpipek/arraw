@@ -23,6 +23,8 @@ add_executable(arraw-tests
         test_DevelopState.cpp
         test_DisplayImage.cpp
         test_EditSession.cpp
+        test_ExportQueue.cpp
+        test_ExportSettings.cpp
         test_Geometry.cpp
         test_Diagnostics.cpp
         test_GpuContext.cpp

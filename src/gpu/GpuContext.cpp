@@ -22,6 +22,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <exception>
 #include <functional>
 #include <initializer_list>
 #include <limits>
@@ -767,6 +768,22 @@ DeviceImage GpuContext::render(GpuPass pass, std::span<const std::byte> uniforms
 
 std::size_t GpuContext::renderCount() const noexcept {
     return device_->rendersDone;
+}
+
+std::unique_ptr<GpuContext> createHardwareContext(std::string& problem) {
+    try {
+        auto context = std::make_unique<GpuContext>(defaultGpuBackend());
+        if (context->info().kind == GpuDeviceKind::Software) {
+            problem = "Software rasteriser refused: " + context->info().deviceName;
+            return nullptr;
+        }
+        return context;
+    } catch (const std::exception& error) {
+        problem = error.what();
+    } catch (...) {
+        problem = "Unknown error while creating the GPU device";
+    }
+    return nullptr;
 }
 
 } // namespace arraw

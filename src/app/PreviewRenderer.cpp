@@ -213,18 +213,7 @@ public:
 private:
     /// @brief Creates the device, or records why not.
     void create() {
-        try {
-            auto context = std::make_unique<GpuContext>(defaultGpuBackend());
-            if (context->info().kind == GpuDeviceKind::Software) {
-                // As the command line's auto mode: a rasteriser on the CPU is
-                // no faster than the CPU path, and is slower to start.
-                reason_ = "Software rasteriser refused: " + context->info().deviceName;
-                return;
-            }
-            context_ = std::move(context);
-        } catch (const std::exception& error) {
-            reason_ = error.what();
-        }
+        context_ = createHardwareContext(reason_);
     }
 
     /// @brief Drops the device once it has failed for good; the CPU takes over.

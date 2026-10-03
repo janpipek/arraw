@@ -3,6 +3,8 @@
 #include "DebugDiagnostics.h"
 #include "DevelopPanel.h"
 #include "DisplayImage.h"
+#include "ExportDialog.h"
+#include "ExportSettings.h"
 #include "PhotoView.h"
 #include "ViewTransform.h"
 
@@ -15,6 +17,7 @@
 
 #include <QAction>
 #include <QActionGroup>
+#include <QCloseEvent>
 #include <QDockWidget>
 #include <QEvent>
 #include <QFileDialog>
@@ -25,20 +28,24 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QMetaObject>
+#include <QPushButton>
 #include <QScreen>
 #include <QScrollArea>
+#include <QSettings>
 #include <QShortcut>
 #include <QStandardPaths>
 #include <QStatusBar>
 #include <QString>
 #include <QToolButton>
 
+#include <algorithm>
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
 #include <optional>
 #include <stdexcept>
 #include <string_view>
+#include <system_error>
 #include <utility>
 #include <variant>
 
@@ -46,13 +53,18 @@ namespace arraw::app {
 
 namespace {
 
-/// @brief Reads where previews may render from ARRAW_PREVIEW_DEVICE.
+/// @brief Reads whether ARRAW_PREVIEW_DEVICE forces the CPU.
 ///
-/// `cpu` forces the CPU; anything else, or nothing, means the GPU when there is one.
-PreviewRenderer::Device previewDeviceFromEnvironment() {
+/// `cpu` forces it, for previews and exports alike; anything else, or nothing,
+/// means the GPU when there is one.
+bool cpuForcedByEnvironment() {
     const char* value = std::getenv("ARRAW_PREVIEW_DEVICE");
-    return value != nullptr && std::string_view(value) == "cpu" ? PreviewRenderer::Device::Cpu
-                                                                : PreviewRenderer::Device::Auto;
+    return value != nullptr && std::string_view(value) == "cpu";
+}
+
+/// @brief Converts a filesystem path to a Qt string, through UTF-16.
+QString toQString(const std::filesystem::path& path) {
+    return QString::fromStdU16String(path.u16string());
 }
 
 } // namespace
@@ -67,7 +79,15 @@ MainWindow::MainWindow(QWidget* parent)
                   this, [this, result = std::move(result)] { showResult(result); },
                   Qt::QueuedConnection);
           },
-          previewDeviceFromEnvironment()) {
+          cpuForcedByEnvironment() ? PreviewRenderer::Device::Cpu : PreviewRenderer::Device::Auto),
+      exportQueue_(
+          [this](ExportResult result) {
+              // On the worker thread, as the preview's.
+              QMetaObject::invokeMethod(
+                  this, [this, result = std::move(result)] { showExportResult(result); },
+                  Qt::QueuedConnection);
+          },
+          cpuForcedByEnvironment() ? ExportQueue::Device::Cpu : ExportQueue::Device::Auto) {
     buildMenu();
     buildStatusBar();
     buildImageView();
@@ -107,6 +127,12 @@ void MainWindow::buildMenu() {
     openAction->setShortcut(QKeySequence::Open);
     connect(openAction, &QAction::triggered, this, &MainWindow::openFileWithDialog);
 
+    exportAction_ = fileMenu->addAction(tr("&Export…"));
+    exportAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_E));
+    exportAction_->setEnabled(false);
+    connect(exportAction_, &QAction::triggered, this, &MainWindow::exportWithDialog);
+
+    fileMenu->addSeparator();
     QAction* quitAction = fileMenu->addAction(tr("&Quit"));
     quitAction->setShortcut(QKeySequence::Quit);
     connect(quitAction, &QAction::triggered, this, [this] { close(); });
@@ -374,6 +400,137 @@ void MainWindow::openFileWithDialog() {
     }
 }
 
+namespace {
+
+/// @brief Describes a format for the save dialog's filter.
+QString nameFilterFor(ImageFileFormat format) {
+    switch (format) {
+    case ImageFileFormat::Jpeg:
+        return QObject::tr("JPEG Images (*.jpg *.jpeg)");
+    case ImageFileFormat::Png:
+        return QObject::tr("PNG Images (*.png)");
+    case ImageFileFormat::Tiff:
+        return QObject::tr("TIFF Images (*.tif *.tiff)");
+    }
+    return {};
+}
+
+} // namespace
+
+void MainWindow::exportWithDialog() {
+    if (!open_) {
+        return;
+    }
+    // The end of a pending edit may change what is exported.
+    developPanel_->finishPendingEdit();
+    try {
+        const Photo& photo = open_->session.photo();
+        const ImageSize frame =
+            croppedSize(open_->decoded->size(), open_->decoded->orientation(), photo.state());
+
+        QSettings store;
+        ExportDialog dialog(restoreSettings(store), frame, this);
+        if (dialog.exec() != QDialog::Accepted) {
+            return;
+        }
+        const ExportSettings settings = dialog.settings();
+        saveSettings(settings, store);
+
+        const std::filesystem::path suggested = suggestedPath(photo.path(), settings.format);
+        const QString chosen = QFileDialog::getSaveFileName(
+            this, tr("Export Image"), toQString(suggested), nameFilterFor(settings.format));
+        if (chosen.isEmpty()) {
+            return; // Cancelled.
+        }
+        const std::filesystem::path typed(chosen.toStdU16String());
+        const std::filesystem::path path = withSuffix(typed, settings.format);
+        if (isSameFile(path, photo.path())) {
+            QMessageBox::warning(this, tr("Cannot Export Photograph"),
+                                 tr("%1\n\nThis is the photograph itself; the export would "
+                                    "overwrite it. Choose another name.")
+                                     .arg(toQString(path)));
+            return;
+        }
+        std::error_code ignored;
+        if (path != typed && std::filesystem::exists(path, ignored) &&
+            QMessageBox::question(this, tr("Export Image"),
+                                  tr("%1 already exists. Replace it?").arg(toQString(path))) !=
+                QMessageBox::Yes) {
+            return; // The file dialog only asked about the name as typed.
+        }
+
+        exportQueue_.enqueue({.state = photo.state(),
+                              .source = open_->decoded,
+                              .request = requestOf(settings),
+                              .options = optionsOf(settings),
+                              .path = path});
+        exportNames_.push_back(toQString(path.filename()));
+        showExportProgress();
+    } catch (const std::exception& error) {
+        QMessageBox::warning(this, tr("Cannot Export Photograph"), QString::fromUtf8(error.what()));
+    }
+}
+
+void MainWindow::showExportProgress() {
+    if (exportNames_.empty()) {
+        return;
+    }
+    QString text = tr("Exporting %1…").arg(exportNames_.front());
+    if (exportNames_.size() > 1) {
+        text += tr(" (%1 more)").arg(exportNames_.size() - 1);
+    }
+    statusBar()->showMessage(text);
+}
+
+void MainWindow::showExportResult(const ExportResult& result) {
+    // Every result belongs to the oldest name: jobs run in order.
+    if (!exportNames_.empty()) {
+        const QString name = exportNames_.front();
+        exportNames_.pop_front();
+        if (result.error.empty()) {
+            statusBar()->showMessage(tr("Exported %1").arg(name), 5000);
+        } else {
+            statusBar()->clearMessage();
+        }
+    }
+    if (!result.error.empty()) {
+        QMessageBox::warning(
+            this, tr("Cannot Export Photograph"),
+            tr("%1\n\n%2").arg(toQString(result.path), QString::fromStdString(result.error)));
+    }
+    showExportProgress();
+    if (exportNames_.empty() && closeWhenIdle_) {
+        close();
+    }
+}
+
+void MainWindow::closeEvent(QCloseEvent* event) {
+    closeWhenIdle_ = false;
+    if (exportNames_.empty()) {
+        QMainWindow::closeEvent(event);
+        return;
+    }
+    QMessageBox box(QMessageBox::Question, tr("Exports Running"), tr("Exports are still running."),
+                    QMessageBox::NoButton, this);
+    box.setInformativeText(tr("Wait for them to finish, or cancel the ones that have not started? "
+                              "The one in progress finishes either way."));
+    QPushButton* wait = box.addButton(tr("Wait"), QMessageBox::AcceptRole);
+    QPushButton* cancel = box.addButton(tr("Cancel Exports"), QMessageBox::DestructiveRole);
+    box.setDefaultButton(wait);
+    box.setEscapeButton(wait);
+    box.exec();
+    if (box.clickedButton() == cancel) {
+        // The queue's oldest job is the one in progress, or about to start;
+        // the others are dropped and will not report.
+        const std::size_t dropped = exportQueue_.cancelQueued();
+        exportNames_.resize(exportNames_.size() - std::min(dropped, exportNames_.size()));
+        QMainWindow::closeEvent(event);
+        return;
+    }
+    closeWhenIdle_ = true;
+    event->ignore();
+}
+
 void MainWindow::requestRender() {
     if (!open_) {
         return;
@@ -442,6 +599,7 @@ void MainWindow::showPhoto(Photo photo) {
     // Results of the previous photograph are still on their way, or in progress.
     firstRequest_ = latestRequest_ + 1;
     developDock_->setEnabled(true);
+    exportAction_->setEnabled(true);
     refreshPanel(); // Requests the first render.
 }
 
