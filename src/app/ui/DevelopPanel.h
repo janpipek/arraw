@@ -8,8 +8,10 @@
 #include <optional>
 #include <vector>
 
+class QButtonGroup;
 class QComboBox;
 class QPushButton;
+class QStackedWidget;
 
 namespace arraw::app {
 
@@ -67,8 +69,23 @@ signals:
     void pickToggled(bool picking);
 
 private:
+    /// @brief Builds the Treatment row, Colour and B&W.
+    QWidget* buildTreatmentRow();
+
     /// @brief Builds the White Balance group.
     QWidget* buildWhiteBalanceGroup();
+
+    /// @brief Builds the Color group, Saturation and Vibrance.
+    QWidget* buildColorGroup();
+
+    /// @brief Builds the HSL box, a page of band rows for each of Hue, Saturation and Luminance.
+    QWidget* buildHslGroup();
+
+    /// @brief Builds the Black & White mix box.
+    QWidget* buildBlackAndWhiteGroup();
+
+    /// @brief Reports a Treatment button the user chose, as one complete edit.
+    void applyTreatment(bool grayscale);
 
     /// @brief Builds a row of a group and wires its edits.
     SettingSlider* addRow(std::string_view key, QWidget* group);
@@ -89,6 +106,11 @@ private:
 
     QComboBox* presetCombo_ = nullptr;
     QPushButton* pickButton_ = nullptr;
+
+    QButtonGroup* treatment_ = nullptr;
+    QWidget* colorGroup_ = nullptr;
+    QWidget* hslGroup_ = nullptr;
+    QWidget* blackAndWhiteGroup_ = nullptr;
 };
 
 } // namespace arraw::app

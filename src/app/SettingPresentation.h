@@ -58,6 +58,41 @@ struct SettingPresentation {
 /// The rows with a slider; the preset combo has no key.
 [[nodiscard]] std::span<const std::string_view> whiteBalanceKeys() noexcept;
 
+/// @brief Gives the keys of the Color group's rows (Saturation, Vibrance), in panel order.
+[[nodiscard]] std::span<const std::string_view> colorKeys() noexcept;
+
+/// @brief Tells how many pages the HSL box has: Hue, Saturation and Luminance.
+inline constexpr int hslPageCount = 3;
+
+/// @brief Gives the keys of one page of the HSL box, one per band, in panel order.
+/// @param page 0 for Hue, 1 for Saturation, 2 for Luminance.
+/// @throws std::out_of_range if @p page is not within 0 to ::arraw::app::hslPageCount - 1.
+[[nodiscard]] std::span<const std::string_view> hslKeys(int page);
+
+/// @brief Gives the keys of the Black & White mix, one per band, in panel order.
+[[nodiscard]] std::span<const std::string_view> blackAndWhiteKeys() noexcept;
+
+/// @brief Which of the groups that depend on the treatment the panel shows.
+struct TreatmentVisibility {
+    /// @brief Whether the Color group (Saturation, Vibrance) is shown.
+    bool color;
+
+    /// @brief Whether the HSL box is shown.
+    bool hsl;
+
+    /// @brief Whether the Black & White mix is shown.
+    bool blackAndWhiteMix;
+};
+
+/// @brief Decides which groups are shown for a treatment.
+///
+/// Black & White replaces Color and HSL with its own mix (ADR 027); White Balance
+/// and Tone are always shown and so are not part of the answer.
+/// @param grayscale Whether the photograph is converted to grayscale.
+[[nodiscard]] constexpr TreatmentVisibility visibleGroups(bool grayscale) noexcept {
+    return {!grayscale, !grayscale, grayscale};
+}
+
 /// @brief Finds the presentation of a setting.
 /// @param key camelCase key of a setting the panel shows, such as one of ::arraw::app::toneKeys.
 /// @return The presentation, valid for the life of the program.

@@ -155,6 +155,10 @@ class SettingGroup(enum.Enum):
 
     GEOMETRY = 2
 
+    HSL = 3
+
+    BLACK_AND_WHITE = 4
+
 class Applicability(enum.Enum):
     """Whether a setting means anything for every photograph."""
 
@@ -209,7 +213,7 @@ class ToneSettings:
 class ColorSettings:
     """Photographic colour adjustments."""
 
-    def __init__(self, *, white_balance: WhiteBalanceMode = WhiteBalanceMode.AS_SHOT, temperature: float | None | None = None, tint: float | None | None = None) -> None: ...
+    def __init__(self, *, white_balance: WhiteBalanceMode = WhiteBalanceMode.AS_SHOT, temperature: float | None | None = None, tint: float | None | None = None, saturation: float | None = 0.0, vibrance: float | None = 0.0) -> None: ...
 
     @property
     def white_balance(self) -> WhiteBalanceMode: ...
@@ -220,6 +224,12 @@ class ColorSettings:
     @property
     def tint(self) -> float | None: ...
 
+    @property
+    def saturation(self) -> float: ...
+
+    @property
+    def vibrance(self) -> float: ...
+
     def __eq__(self, arg: ColorSettings, /) -> bool: ...
 
     def __hash__(self) -> int: ...
@@ -227,6 +237,108 @@ class ColorSettings:
     def __repr__(self) -> str: ...
 
     def replace(self, **kwargs) -> ColorSettings:
+        """Return a copy with the given attributes replaced."""
+
+class HueBand:
+    """Hue, saturation and luminance shifts of one band of hues."""
+
+    def __init__(self, *, hue: float | None = 0.0, saturation: float | None = 0.0, luminance: float | None = 0.0) -> None: ...
+
+    @property
+    def hue(self) -> float: ...
+
+    @property
+    def saturation(self) -> float: ...
+
+    @property
+    def luminance(self) -> float: ...
+
+    def __eq__(self, arg: HueBand, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> HueBand:
+        """Return a copy with the given attributes replaced."""
+
+class HslSettings:
+    """Per-hue colour adjustments over eight bands."""
+
+    def __init__(self, *, red: HueBand | None = None, orange: HueBand | None = None, yellow: HueBand | None = None, green: HueBand | None = None, aqua: HueBand | None = None, blue: HueBand | None = None, purple: HueBand | None = None, magenta: HueBand | None = None) -> None: ...
+
+    @property
+    def red(self) -> HueBand: ...
+
+    @property
+    def orange(self) -> HueBand: ...
+
+    @property
+    def yellow(self) -> HueBand: ...
+
+    @property
+    def green(self) -> HueBand: ...
+
+    @property
+    def aqua(self) -> HueBand: ...
+
+    @property
+    def blue(self) -> HueBand: ...
+
+    @property
+    def purple(self) -> HueBand: ...
+
+    @property
+    def magenta(self) -> HueBand: ...
+
+    def __eq__(self, arg: HslSettings, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> HslSettings:
+        """Return a copy with the given attributes replaced."""
+
+class BlackAndWhiteSettings:
+    """Conversion to grey and the mix of hues it is made from."""
+
+    def __init__(self, *, convert_to_grayscale: bool = False, red: float | None = 0.0, orange: float | None = 0.0, yellow: float | None = 0.0, green: float | None = 0.0, aqua: float | None = 0.0, blue: float | None = 0.0, purple: float | None = 0.0, magenta: float | None = 0.0) -> None: ...
+
+    @property
+    def convert_to_grayscale(self) -> bool: ...
+
+    @property
+    def red(self) -> float: ...
+
+    @property
+    def orange(self) -> float: ...
+
+    @property
+    def yellow(self) -> float: ...
+
+    @property
+    def green(self) -> float: ...
+
+    @property
+    def aqua(self) -> float: ...
+
+    @property
+    def blue(self) -> float: ...
+
+    @property
+    def purple(self) -> float: ...
+
+    @property
+    def magenta(self) -> float: ...
+
+    def __eq__(self, arg: BlackAndWhiteSettings, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> BlackAndWhiteSettings:
         """Return a copy with the given attributes replaced."""
 
 class FreeCropAspect:
@@ -352,7 +464,7 @@ class GeometrySettings:
 class DevelopSettings:
     """Photographic settings of one photograph."""
 
-    def __init__(self, *, color: ColorSettings | None = None, geometry: GeometrySettings | None = None, tone: ToneSettings | None = None) -> None: ...
+    def __init__(self, *, color: ColorSettings | None = None, geometry: GeometrySettings | None = None, tone: ToneSettings | None = None, hsl: HslSettings | None = None, black_and_white: BlackAndWhiteSettings | None = None) -> None: ...
 
     @property
     def color(self) -> ColorSettings: ...
@@ -362,6 +474,12 @@ class DevelopSettings:
 
     @property
     def tone(self) -> ToneSettings: ...
+
+    @property
+    def hsl(self) -> HslSettings: ...
+
+    @property
+    def black_and_white(self) -> BlackAndWhiteSettings: ...
 
     def __eq__(self, arg: DevelopSettings, /) -> bool: ...
 

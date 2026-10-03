@@ -248,6 +248,40 @@ constexpr SettingHelp settingHelp[]{
     {"temperature", "k", "White balance in kelvin", " RAW only."},
     {"tint", "amount", "Green to magenta", " RAW only."},
     {"filmicHighlights", "amount", "Highlight roll-off", " Default: 25."},
+    {"saturation", "amount", "Colourfulness of every colour", ""},
+    {"vibrance", "amount", "Colourfulness of the muted colours, sparing the vivid", ""},
+    {"hueRed", "amount", "Shift the hue of reds", ""},
+    {"saturationRed", "amount", "Colourfulness of reds", ""},
+    {"luminanceRed", "amount", "Lightness of reds", ""},
+    {"hueOrange", "amount", "Shift the hue of oranges", ""},
+    {"saturationOrange", "amount", "Colourfulness of oranges", ""},
+    {"luminanceOrange", "amount", "Lightness of oranges", ""},
+    {"hueYellow", "amount", "Shift the hue of yellows", ""},
+    {"saturationYellow", "amount", "Colourfulness of yellows", ""},
+    {"luminanceYellow", "amount", "Lightness of yellows", ""},
+    {"hueGreen", "amount", "Shift the hue of greens", ""},
+    {"saturationGreen", "amount", "Colourfulness of greens", ""},
+    {"luminanceGreen", "amount", "Lightness of greens", ""},
+    {"hueAqua", "amount", "Shift the hue of aquas", ""},
+    {"saturationAqua", "amount", "Colourfulness of aquas", ""},
+    {"luminanceAqua", "amount", "Lightness of aquas", ""},
+    {"hueBlue", "amount", "Shift the hue of blues", ""},
+    {"saturationBlue", "amount", "Colourfulness of blues", ""},
+    {"luminanceBlue", "amount", "Lightness of blues", ""},
+    {"huePurple", "amount", "Shift the hue of purples", ""},
+    {"saturationPurple", "amount", "Colourfulness of purples", ""},
+    {"luminancePurple", "amount", "Lightness of purples", ""},
+    {"hueMagenta", "amount", "Shift the hue of magentas", ""},
+    {"saturationMagenta", "amount", "Colourfulness of magentas", ""},
+    {"luminanceMagenta", "amount", "Lightness of magentas", ""},
+    {"grayRed", "amount", "Lightness of reds in black and white", ""},
+    {"grayOrange", "amount", "Lightness of oranges in black and white", ""},
+    {"grayYellow", "amount", "Lightness of yellows in black and white", ""},
+    {"grayGreen", "amount", "Lightness of greens in black and white", ""},
+    {"grayAqua", "amount", "Lightness of aquas in black and white", ""},
+    {"grayBlue", "amount", "Lightness of blues in black and white", ""},
+    {"grayPurple", "amount", "Lightness of purples in black and white", ""},
+    {"grayMagenta", "amount", "Lightness of magentas in black and white", ""},
 };
 
 /// @brief Finds the help wording of a setting.
@@ -436,6 +470,14 @@ bool readEdits(const QCommandLineParser& parser, cli::ExportEdits& edits, std::o
             return false;
         }
     }
+    if (parser.isSet("convert-to-grayscale") && parser.isSet("no-convert-to-grayscale")) {
+        code = usageError(err, "--convert-to-grayscale and --no-convert-to-grayscale contradict");
+        return false;
+    }
+    if (parser.isSet("convert-to-grayscale") || parser.isSet("no-convert-to-grayscale")) {
+        given.blackAndWhite.convertToGrayscale = parser.isSet("convert-to-grayscale");
+        addEdit(edits.settings, "convertToGrayscale", given);
+    }
     return readGeometry(parser, edits.geometry, err, code);
 }
 
@@ -458,6 +500,10 @@ void configure(QCommandLineParser& parser) {
         "Each file renders through its own .xmp sidecar, if it has one: the develop\n"
         "settings given here are applied on top of the sidecar's and replace only what\n"
         "they name. --no-sidecar ignores sidecars, so the flags alone develop the file.\n"
+        "Colour controls come in three families: --saturation and --vibrance, the HSL\n"
+        "bands --hue-, --saturation- and --luminance- followed by red, orange, yellow,\n"
+        "green, aqua, blue, purple or magenta, and black and white, which\n"
+        "--convert-to-grayscale turns on and --gray- plus a band mixes.\n"
         "Naming --temperature or --tint makes white balance custom; the other half\n"
         "keeps the photograph's own value, or as shot. The command never writes a\n"
         "sidecar.\n"
@@ -501,6 +547,10 @@ void configure(QCommandLineParser& parser) {
     }
     parser.addOption(
         {"white-balance", "as-shot or custom. Temperature/tint imply custom.", "mode"});
+    parser.addOption({"convert-to-grayscale",
+                      "Make the photograph black and white; the --gray-* weights mix the hues, and "
+                      "saturation, vibrance and the HSL bands then have nothing to act on."});
+    parser.addOption({"no-convert-to-grayscale", "Undo a sidecar's black and white conversion."});
     parser.addOption(
         {"rotate", "Any finite clockwise angle, before flips. Default: 0.", "degrees"});
     parser.addOption({"flip-horizontal", "Flip horizontally in the upright frame."});

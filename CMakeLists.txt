@@ -100,7 +100,11 @@ qt_standard_project_setup()
 # propagated to consumers through target_link_libraries.
 add_library(arraw STATIC
         include/ColorEncoding.h
+        include/BlackAndWhiteSettings.h
         include/ColorSettings.h
+        include/HslSettings.h
+        src/core/ColorAdjustments.h
+        src/core/ColorAdjustments.cpp
         src/core/ColorSettings.cpp
         include/Develop.h
         include/Diagnostics.h

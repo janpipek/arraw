@@ -17,10 +17,16 @@ RANGES = {
     "filmic_highlights": (0.0, 100.0),
     "temperature": (2000.0, 12000.0),
     "tint": (-150.0, 150.0),
+    "saturation": (-100.0, 100.0),
+    "vibrance": (-100.0, 100.0),
     "straighten": (-45.0, 45.0),
 }
+BANDS = ("red", "orange", "yellow", "green", "aqua", "blue", "purple", "magenta")
+HSL = {f"{kind}_{band}" for kind in ("hue", "saturation", "luminance") for band in BANDS}
+GRAY = {f"gray_{band}" for band in BANDS}
+RANGES.update({name: (-100.0, 100.0) for name in HSL | GRAY})
 UNRANGED = {"white_balance", "rotation", "flip_horizontal", "flip_vertical",
-            "crop_rectangle", "crop_aspect"}
+            "crop_rectangle", "crop_aspect", "convert_to_grayscale"}
 
 
 def snake(key: str) -> str:
@@ -33,8 +39,8 @@ def descriptors():
 
 
 def test_one_row_per_leaf(descriptors):
-    assert len(descriptors) == 16
-    assert len({d.name for d in descriptors}) == 16
+    assert len(descriptors) == 51
+    assert len({d.name for d in descriptors}) == 51
     assert {d.name for d in descriptors} == set(RANGES) | UNRANGED
 
 
@@ -70,6 +76,19 @@ def test_groups_and_stages(descriptors):
                  "flip_horizontal", "flip_vertical"):
         assert by_name[name].group == arraw.SettingGroup.GEOMETRY
         assert by_name[name].affects == arraw.Stage.GEOMETRY
+
+
+def test_colour_groups(descriptors):
+    by_name = {d.name: d for d in descriptors}
+    for name in ("saturation", "vibrance"):
+        assert by_name[name].group == arraw.SettingGroup.COLOR
+        assert by_name[name].affects == arraw.Stage.POINTWISE
+    for name in HSL:
+        assert by_name[name].group == arraw.SettingGroup.HSL
+        assert by_name[name].affects == arraw.Stage.POINTWISE
+    for name in GRAY | {"convert_to_grayscale"}:
+        assert by_name[name].group == arraw.SettingGroup.BLACK_AND_WHITE
+        assert by_name[name].affects == arraw.Stage.POINTWISE
 
 
 def test_descriptors_are_unhashable_but_comparable(descriptors):

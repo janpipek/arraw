@@ -26,6 +26,21 @@ namespace {
 constexpr std::array<std::string_view, 6> notShownYet{
     "rotation", "flipHorizontal", "flipVertical", "straighten", "cropRectangle", "cropAspect"};
 
+/// Settings the Treatment buttons edit; they have no slider row.
+constexpr std::array<std::string_view, 1> shownByTreatment{"convertToGrayscale"};
+
+/// Every key that has a slider row, across all groups of the panel.
+std::vector<std::string_view> slidingKeys() {
+    std::vector<std::string_view> keys(toneKeys().begin(), toneKeys().end());
+    keys.insert(keys.end(), whiteBalanceKeys().begin(), whiteBalanceKeys().end());
+    keys.insert(keys.end(), colorKeys().begin(), colorKeys().end());
+    for (int page = 0; page < hslPageCount; ++page) {
+        keys.insert(keys.end(), hslKeys(page).begin(), hslKeys(page).end());
+    }
+    keys.insert(keys.end(), blackAndWhiteKeys().begin(), blackAndWhiteKeys().end());
+    return keys;
+}
+
 /// Settings the combo box of the White Balance group edits; they have no row of their own.
 constexpr std::array<std::string_view, 1> shownByCombo{"whiteBalance"};
 
@@ -43,9 +58,7 @@ bool isNumber(const FieldDescriptor& descriptor) {
 
 TEST_CASE("Every shown key has a descriptor, a range, a numeric leaf and a presentation",
           "[SettingPresentation]") {
-    std::vector<std::string_view> keys(toneKeys().begin(), toneKeys().end());
-    keys.insert(keys.end(), whiteBalanceKeys().begin(), whiteBalanceKeys().end());
-    for (const std::string_view key : keys) {
+    for (const std::string_view key : slidingKeys()) {
         CAPTURE(key);
         const FieldDescriptor* descriptor = findDescriptor(key);
         REQUIRE(descriptor != nullptr);
@@ -62,10 +75,11 @@ TEST_CASE("Every shown key has a descriptor, a range, a numeric leaf and a prese
 TEST_CASE("Every setting is either shown or listed as not shown yet", "[SettingPresentation]") {
     for (const FieldDescriptor& descriptor : developSettingDescriptors) {
         CAPTURE(descriptor.key);
+        const std::vector<std::string_view> sliding = slidingKeys();
         const bool shown =
-            std::ranges::find(toneKeys(), descriptor.key) != toneKeys().end() ||
-            std::ranges::find(whiteBalanceKeys(), descriptor.key) != whiteBalanceKeys().end() ||
-            std::ranges::find(shownByCombo, descriptor.key) != shownByCombo.end();
+            std::ranges::find(sliding, descriptor.key) != sliding.end() ||
+            std::ranges::find(shownByCombo, descriptor.key) != shownByCombo.end() ||
+            std::ranges::find(shownByTreatment, descriptor.key) != shownByTreatment.end();
         const bool listed = std::ranges::find(notShownYet, descriptor.key) != notShownYet.end();
         CHECK(shown != listed);
     }
@@ -181,4 +195,47 @@ TEST_CASE("Tint is a plain linear row", "[SettingPresentation]") {
     const SettingRange range = *findDescriptor("tint")->range;
     CHECK(tickCount(range, presentation.step) == 300);
     CHECK(tickOf(0.0, range, presentation.step) == 150);
+}
+
+TEST_CASE("The band pages list eight distinct keys each", "[SettingPresentation]") {
+    std::vector<std::string_view> all;
+    for (int page = 0; page < hslPageCount; ++page) {
+        CHECK(hslKeys(page).size() == 8);
+        all.insert(all.end(), hslKeys(page).begin(), hslKeys(page).end());
+    }
+    CHECK(blackAndWhiteKeys().size() == 8);
+    all.insert(all.end(), blackAndWhiteKeys().begin(), blackAndWhiteKeys().end());
+    std::ranges::sort(all);
+    CHECK(std::ranges::adjacent_find(all) == all.end());
+    CHECK_THROWS_AS(hslKeys(hslPageCount), std::out_of_range);
+    CHECK_THROWS_AS(hslKeys(-1), std::out_of_range);
+}
+
+TEST_CASE("Band rows are named for their band and move in whole units", "[SettingPresentation]") {
+    for (int page = 0; page < hslPageCount; ++page) {
+        CHECK(presentationOf(hslKeys(page).front()).label == QString("Reds"));
+        CHECK(presentationOf(hslKeys(page).back()).label == QString("Magentas"));
+    }
+    CHECK(presentationOf("grayAqua").label == QString("Aquas"));
+    CHECK(presentationOf("saturation").label == QString("Saturation"));
+    CHECK(presentationOf("vibrance").label == QString("Vibrance"));
+    for (const std::string_view key : slidingKeys()) {
+        if (key != "exposure" && key != "temperature") {
+            CAPTURE(key);
+            CHECK(presentationOf(key).step == 1.0);
+            CHECK(presentationOf(key).decimals == 0);
+        }
+    }
+}
+
+TEST_CASE("Black and white swaps the Color and HSL groups for the mix", "[SettingPresentation]") {
+    const TreatmentVisibility colour = visibleGroups(false);
+    CHECK(colour.color);
+    CHECK(colour.hsl);
+    CHECK_FALSE(colour.blackAndWhiteMix);
+
+    const TreatmentVisibility grey = visibleGroups(true);
+    CHECK_FALSE(grey.color);
+    CHECK_FALSE(grey.hsl);
+    CHECK(grey.blackAndWhiteMix);
 }

@@ -19,12 +19,52 @@ def test_defaults_match_cpp_defaults():
     assert g.crop.aspect == arraw.FreeCropAspect()
 
 
+def test_colour_defaults():
+    s = arraw.DevelopSettings()
+    assert (s.color.saturation, s.color.vibrance) == (0.0, 0.0)
+    for band in ("red", "orange", "yellow", "green", "aqua", "blue", "purple", "magenta"):
+        assert getattr(s.hsl, band) == arraw.HueBand()
+        assert getattr(s.black_and_white, band) == 0.0
+    assert (s.hsl.red.hue, s.hsl.red.saturation, s.hsl.red.luminance) == (0.0, 0.0, 0.0)
+    assert s.black_and_white.convert_to_grayscale is False
+
+
 def test_nested_defaults_equal_default_settings():
     assert arraw.DevelopSettings() == arraw.DevelopSettings(
         color=arraw.ColorSettings(),
         geometry=arraw.GeometrySettings(),
         tone=arraw.ToneSettings(),
+        hsl=arraw.HslSettings(),
+        black_and_white=arraw.BlackAndWhiteSettings(),
     )
+
+
+def test_colour_settings_construct_and_round_trip_json():
+    settings = arraw.DevelopSettings(
+        color=arraw.ColorSettings(saturation=-20.0, vibrance=35.5),
+        hsl=arraw.HslSettings(
+            red=arraw.HueBand(hue=10.0, saturation=-5.0, luminance=2.5),
+            magenta=arraw.HueBand(luminance=-40.0),
+        ),
+        black_and_white=arraw.BlackAndWhiteSettings(convert_to_grayscale=True, red=60.0, blue=-30.0),
+    )
+    assert settings.color.vibrance == 35.5
+    assert settings.hsl.red.hue == 10.0
+    assert settings.hsl.magenta.luminance == -40.0
+    assert settings.black_and_white.convert_to_grayscale
+    assert arraw.DevelopSettings.from_json(settings.to_json()) == settings
+    assert arraw.DevelopSettings() != settings
+
+
+def test_flat_keywords_reach_the_colour_leaves():
+    settings = arraw.DevelopSettings().with_(
+        saturation=15.0, hue_red=20.0, luminance_aqua=-30.0, convert_to_grayscale=True, gray_blue=45.0
+    )
+    assert settings.color.saturation == 15.0
+    assert settings.hsl.red.hue == 20.0
+    assert settings.hsl.aqua.luminance == -30.0
+    assert settings.black_and_white.convert_to_grayscale
+    assert settings.black_and_white.blue == 45.0
 
 
 @pytest.mark.parametrize(

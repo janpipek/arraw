@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ColorAdjustments.h"
 #include "ColorSpaces.h"
 #include "GeometryPlan.h"
 
@@ -184,6 +185,13 @@ struct ProcessingPlan {
     /// costs a comparison rather than a branch on a setting (ADR 011).
     float shoulderKnee = std::numeric_limits<float>::infinity();
 
+    /// @brief Saturation, vibrance, HSL and Black & White, resolved.
+    ///
+    /// The last of the pointwise stages: it follows the shoulder, as the
+    /// colour controls did on main, and every control left at zero is a flag
+    /// that is off (ADR 027).
+    ColorAdjustmentPlan colorAdjustments{};
+
     /// @brief Resolved geometry when source dimensions and orientation are known.
     std::optional<GeometryPlan> geometry = std::nullopt;
 
@@ -206,7 +214,7 @@ struct ProcessingPlan {
     return std::make_tuple(std::tie(plan.toWorking, plan.exposureGain, plan.shapesTone,
                                     plan.contrastSlope, plan.contrastScale, plan.shadowShift,
                                     plan.highlightShift, plan.blackShift, plan.whiteShift,
-                                    plan.shoulderKnee),
+                                    plan.shoulderKnee, plan.colorAdjustments),
                            std::tie(plan.geometry), std::tie(plan.resize));
 }
 
@@ -246,7 +254,8 @@ static_assert(std::tuple_size_v<decltype(stagesOf(std::declval<const ProcessingP
     }(std::make_index_sequence<stageCount>{});
 }
 
-/// @brief Resolves tone settings into a plan with an identity colour transform.
+/// @brief Resolves tone settings into a plan with an identity colour transform and no colour
+/// adjustments.
 /// @param settings Tone adjustments to resolve.
 /// @return Exposure gain and tone coefficients for the pointwise chain.
 /// @throws std::invalid_argument if a tone setting is not finite.
@@ -483,13 +492,17 @@ inline constexpr float liftedBlackThreshold = 1.0e-20F;
 /// @param colour Source colour, in the encoding the plan was built for.
 /// @return The developed colour, in the working encoding.
 ///
+/// Not `constexpr`: the colour block's Oklab maths takes cube roots, which
+/// the standard does not allow in a constant expression.
+///
 /// Mirrored by `src/gpu/shaders/develop.frag`, which must change with it.
-[[nodiscard]] constexpr Colour developPixel(const ProcessingPlan& plan, Colour colour) {
+[[nodiscard]] inline Colour developPixel(const ProcessingPlan& plan, Colour colour) {
     colour = plan.toWorking * colour;
     colour = {colour[0] * plan.exposureGain, colour[1] * plan.exposureGain,
               colour[2] * plan.exposureGain};
     colour = shapeTone(plan, colour);
-    return rollHighlights(plan, colour);
+    colour = rollHighlights(plan, colour);
+    return adjustColor(plan.colorAdjustments, colour);
 }
 
 } // namespace arraw

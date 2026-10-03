@@ -3,6 +3,7 @@
 #include "ProcessingPlan.h"
 
 #include <ColorEncoding.h>
+#include <DevelopState.h>
 #include <GeometrySettings.h>
 #include <ImageBuffer.h>
 #include <ImageOrientation.h>
@@ -57,6 +58,45 @@ TEST_CASE("The pointwise block carries the tone chain's values unchanged", "[gpu
     REQUIRE(block.probe == static_cast<std::uint32_t>(PointwiseProbe::Developed));
 
     REQUIRE(packPointwise(ProcessingPlan{}).shapesTone == 0U);
+}
+
+TEST_CASE("The pointwise block carries the colour block unchanged", "[gpu][plan]") {
+    DevelopSettings settings;
+    settings.color = {.saturation = 40.0F, .vibrance = -25.0F};
+    settings.hsl.red = {10.0F, 20.0F, 30.0F};
+    settings.hsl.magenta = {-40.0F, -50.0F, -60.0F};
+    settings.blackAndWhite = {true, 1.0F, 2.0F, 3.0F, 4.0F, 5.0F, 6.0F, 7.0F, 8.0F};
+    const ProcessingPlan plan = planFor(ColorEncoding{workingEncoding}, DevelopState{settings});
+
+    const auto block = packPointwise(plan);
+
+    REQUIRE(block.saturation == plan.colorAdjustments.saturation);
+    REQUIRE(block.vibrance == plan.colorAdjustments.vibrance);
+    REQUIRE(block.adjustsSaturation == 1U);
+    REQUIRE(block.adjustsVibrance == 1U);
+    REQUIRE(block.adjustsHsl == 1U);
+    REQUIRE(block.convertsToGrayscale == 1U);
+    REQUIRE(block.hueShift == plan.colorAdjustments.hueShift);
+    REQUIRE(block.bandSaturation == plan.colorAdjustments.bandSaturation);
+    REQUIRE(block.bandLuminance == plan.colorAdjustments.bandLuminance);
+    REQUIRE(block.grayMix == plan.colorAdjustments.grayMix);
+    REQUIRE(block.hueShift[7] == -0.4F);
+    REQUIRE(block.grayMix[7] == 8.0F);
+
+    /// Everything off, as an unset plan is.
+    const auto idle = packPointwise(ProcessingPlan{});
+    REQUIRE(idle.adjustsSaturation == 0U);
+    REQUIRE(idle.adjustsVibrance == 0U);
+    REQUIRE(idle.adjustsHsl == 0U);
+    REQUIRE(idle.convertsToGrayscale == 0U);
+}
+
+TEST_CASE("The pointwise block lays its band sets out as std140 arrays of vec4", "[gpu][plan]") {
+    /// Two vec4 per set: the plan's eight contiguous floats are the same bytes.
+    REQUIRE(sizeof(GpuPointwiseBlock::hueShift) == 2 * 4 * sizeof(float));
+    REQUIRE(offsetof(GpuPointwiseBlock, hueShift) % 16 == 0);
+    REQUIRE(offsetof(GpuPointwiseBlock, grayMix) % 16 == 0);
+    REQUIRE(sizeof(GpuPointwiseBlock) % 16 == 0);
 }
 
 TEST_CASE("No shoulder reaches the shader as a flag, never as an infinity", "[gpu][plan]") {

@@ -11,7 +11,10 @@ CENTER = {
     "flip_vertical": True,
     "crop_rectangle": arraw.UprightCropRect(0.1, 0.1, 0.9, 0.9),
     "crop_aspect": arraw.CropRatio(1.5),
+    "convert_to_grayscale": True,
 }
+
+BANDS = ("red", "orange", "yellow", "green", "aqua", "blue", "purple", "magenta")
 
 
 def sample(descriptor):
@@ -31,7 +34,13 @@ def leaves(settings):
 
 
 def find(settings, name):
-    for group in (settings.color, settings.tone, settings.geometry):
+    for kind in ("hue", "saturation", "luminance"):
+        for band in BANDS:
+            if name == f"{kind}_{band}":
+                return getattr(getattr(settings.hsl, band), kind)
+    if name.startswith("gray_"):
+        return getattr(settings.black_and_white, name.removeprefix("gray_"))
+    for group in (settings.color, settings.tone, settings.geometry, settings.black_and_white):
         if hasattr(group, name):
             return getattr(group, name)
         if name.startswith("crop_") and hasattr(group, "crop"):

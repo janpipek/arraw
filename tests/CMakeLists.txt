@@ -27,6 +27,7 @@ add_executable(arraw-tests
         test_ExportSettings.cpp
         test_Geometry.cpp
         test_Diagnostics.cpp
+        test_ColorAdjustments.cpp
         test_GpuContext.cpp
         test_GpuDevice.cpp
         test_GpuPlan.cpp

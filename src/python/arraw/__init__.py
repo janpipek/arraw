@@ -2,6 +2,7 @@
 
 from ._arraw import (
     Applicability,
+    BlackAndWhiteSettings,
     CameraNative,
     ColorLabel,
     ColorSettings,
@@ -12,6 +13,8 @@ from ._arraw import (
     ForeignNamespace,
     FreeCropAspect,
     GeometrySettings,
+    HslSettings,
+    HueBand,
     ImageBuffer,
     ImageFileFormat,
     ImageMetadata,
@@ -48,6 +51,7 @@ from ._arraw import (
 
 __all__ = [
     "Applicability",
+    "BlackAndWhiteSettings",
     "CameraNative",
     "ColorLabel",
     "ColorSettings",
@@ -58,6 +62,8 @@ __all__ = [
     "ForeignNamespace",
     "FreeCropAspect",
     "GeometrySettings",
+    "HslSettings",
+    "HueBand",
     "ImageBuffer",
     "ImageFileFormat",
     "ImageMetadata",

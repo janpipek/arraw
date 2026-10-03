@@ -42,6 +42,18 @@ layout(std140, binding = 1) uniform Pointwise {
     uint shapesTone;
     uint rollsHighlights;
     uint probe;
+    uint convertsToGrayscale;
+    float saturation;
+    float vibrance;
+    uint adjustsSaturation;
+    uint adjustsVibrance;
+    uint adjustsHsl;
+    // Three words of padding, which std140 does not need declared: the band
+    // sets below start on the next vec4 boundary by themselves.
+    vec4 hueShift[2];
+    vec4 bandSaturation[2];
+    vec4 bandLuminance[2];
+    vec4 grayMix[2];
 } plan;
 
 // 1 / 2.2f and 2.2f as C++ rounds them to float, spelled out so that no
@@ -167,10 +179,200 @@ vec3 rollHighlights(vec3 colour) {
                 rolled + chroma * (colour.z * ratio - rolled));
 }
 
+// ColorAdjustments.h and ColorAdjustments.cpp, stage for stage. The colour
+// block follows the shoulder (ADR 027).
+
+// std::max and std::min, which the built-ins are not: they return their first
+// argument when the comparison fails, as the built-ins leave undefined.
+float maxExact(float a, float b) {
+    return a < b ? b : a;
+}
+
+float minExact(float a, float b) {
+    return b < a ? b : a;
+}
+
+// std::cbrt, for the arguments Oklab gives it: negative channels keep their sign.
+float cbrtExact(float x) {
+    const float third = 0.333333343;
+    return x < 0.0 ? -pow0(-x, third) : pow0(x, third);
+}
+
+// hslCenters, ColorAdjustments.cpp.
+const float hslCenters[8] = float[8](0.0, 0.083, 0.167, 0.333, 0.5, 0.611, 0.778, 0.889);
+
+// vibranceHalf and negligibleWeight, ColorAdjustments.cpp.
+const float vibranceHalf = 0.2;
+const float negligibleWeight = 0.001;
+
+// toHsv: (hue, saturation, value).
+vec3 toHsv(vec3 c) {
+    const float maxC = maxExact(c.x, maxExact(c.y, c.z));
+    const float minC = minExact(c.x, minExact(c.y, c.z));
+    const float delta = maxC - minC;
+    float h = 0.0;
+    if (delta > 1e-5) {
+        if (maxC == c.x) {
+            h = (c.y - c.z) / delta + (c.y < c.z ? 6.0 : 0.0);
+        } else if (maxC == c.y) {
+            h = (c.z - c.x) / delta + 2.0;
+        } else {
+            h = (c.x - c.y) / delta + 4.0;
+        }
+        h /= 6.0;
+    }
+    const float s = (maxC > 1e-5) ? delta / maxC : 0.0;
+    return vec3(h, s, maxC);
+}
+
+vec3 fromHsv(vec3 hsv) {
+    const float h = hsv.x * 6.0;
+    const float s = hsv.y;
+    const float v = hsv.z;
+    const float whole = floor(h);
+    const int i = (whole >= 0.0 && whole < 6.0) ? int(whole) : 5;
+    const float f = h - float(i);
+    const float p = v * (1.0 - s);
+    const float q = v * (1.0 - s * f);
+    const float t = v * (1.0 - s * (1.0 - f));
+    if (i == 0) return vec3(v, t, p);
+    if (i == 1) return vec3(q, v, p);
+    if (i == 2) return vec3(p, v, t);
+    if (i == 3) return vec3(p, q, v);
+    if (i == 4) return vec3(t, p, v);
+    return vec3(v, p, q);
+}
+
+float bandWeight(float hue, int band) {
+    float d = abs(hue - hslCenters[band]);
+    if (d > 0.5) {
+        d = 1.0 - d;
+    }
+    const float w = maxExact(0.0, 1.0 - d * 6.0);
+    return w * w * (3.0 - 2.0 * w);
+}
+
+// toOklab, as (lightness, a, b).
+vec3 toOklab(vec3 rgb) {
+    const float r = 1.660491 * rgb.x - 0.587641 * rgb.y - 0.072850 * rgb.z;
+    const float g = -0.124550 * rgb.x + 1.132900 * rgb.y - 0.008349 * rgb.z;
+    const float bl = -0.018151 * rgb.x - 0.100579 * rgb.y + 1.118730 * rgb.z;
+    const float l = 0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * bl;
+    const float m = 0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * bl;
+    const float s = 0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * bl;
+    const float l_ = cbrtExact(l);
+    const float m_ = cbrtExact(m);
+    const float s_ = cbrtExact(s);
+    return vec3(0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_,
+                1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_,
+                0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_);
+}
+
+vec3 fromOklab(vec3 lab) {
+    const float l_ = lab.x + 0.3963377774 * lab.y + 0.2158037573 * lab.z;
+    const float m_ = lab.x - 0.1055613458 * lab.y - 0.0638541728 * lab.z;
+    const float s_ = lab.x - 0.0894841775 * lab.y - 1.2914855480 * lab.z;
+    const float l = l_ * l_ * l_;
+    const float m = m_ * m_ * m_;
+    const float s = s_ * s_ * s_;
+    const float r = 4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s;
+    const float g = -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s;
+    const float b = -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s;
+    return vec3(0.627404 * r + 0.329283 * g + 0.043313 * b,
+                0.069097 * r + 0.919541 * g + 0.011362 * b,
+                0.016391 * r + 0.088013 * g + 0.895595 * b);
+}
+
+vec3 applySaturation(vec3 colour, float amount) {
+    vec3 lab = toOklab(colour);
+    const float scale = 1.0 + amount;
+    lab.y *= scale;
+    lab.z *= scale;
+    return fromOklab(lab);
+}
+
+vec3 applyVibrance(vec3 colour, float amount) {
+    vec3 lab = toOklab(colour);
+    const float chroma = sqrt(lab.y * lab.y + lab.z * lab.z);
+    const float weight = vibranceHalf / (vibranceHalf + chroma);
+    const float scale = 1.0 + amount * weight;
+    lab.y *= scale;
+    lab.z *= scale;
+    return fromOklab(lab);
+}
+
+vec3 applyHsl(vec3 colour) {
+    vec3 hsv = toHsv(colour);
+
+    float totalHue = 0.0;
+    float totalSat = 0.0;
+    float totalLum = 0.0;
+    float totalW = 0.0;
+    for (int i = 0; i < 8; ++i) {
+        const float w = bandWeight(hsv.x, i);
+        if (w > negligibleWeight) {
+            totalHue += plan.hueShift[i >> 2][i & 3] * w;
+            totalSat += plan.bandSaturation[i >> 2][i & 3] * w;
+            totalLum += plan.bandLuminance[i >> 2][i & 3] * w;
+            totalW += w;
+        }
+    }
+    if (totalW < negligibleWeight) {
+        return colour;
+    }
+
+    const float wInv = 1.0 / totalW;
+    const float turned = hsv.x + totalHue * wInv / 12.0;
+    hsv.x = turned - floor(turned);
+    hsv.y = clampExact(hsv.y * (1.0 + totalSat * wInv * 0.5), 0.0, 1.0);
+    hsv.z = maxExact(hsv.z + totalLum * wInv * 0.5, 0.0);
+    return fromHsv(hsv);
+}
+
+vec3 applyBlackAndWhite(vec3 colour) {
+    const float base = luminanceOf(colour);
+    const vec3 hsv = toHsv(colour);
+
+    float weighted = 0.0;
+    float totalW = 0.0;
+    for (int i = 0; i < 8; ++i) {
+        const float w = bandWeight(hsv.x, i);
+        if (w > negligibleWeight) {
+            weighted += plan.grayMix[i >> 2][i & 3] * w;
+            totalW += w;
+        }
+    }
+
+    float gain = 1.0;
+    if (totalW > negligibleWeight) {
+        const float blended = weighted / totalW;
+        gain = 1.0 + (blended / 100.0) * hsv.y;
+    }
+    const float grey = maxExact(base * gain, 0.0);
+    return vec3(grey, grey, grey);
+}
+
+vec3 adjustColor(vec3 colour) {
+    if (plan.convertsToGrayscale != 0u) {
+        return applyBlackAndWhite(colour);
+    }
+    if (plan.adjustsHsl != 0u) {
+        colour = applyHsl(colour);
+    }
+    if (plan.adjustsSaturation != 0u) {
+        colour = applySaturation(colour, plan.saturation);
+    }
+    if (plan.adjustsVibrance != 0u) {
+        colour = applyVibrance(colour, plan.vibrance);
+    }
+    return colour;
+}
+
 // PointwiseProbe values, GpuPlan.h.
 const uint probeAfterMatrix = 1u;
 const uint probeAfterExposure = 2u;
 const uint probeAfterTone = 3u;
+const uint probeAfterShoulder = 4u;
 
 void main() {
     const vec4 texel = texelFetch(source, ivec2(gl_FragCoord.xy), 0);
@@ -202,5 +404,11 @@ void main() {
         return;
     }
 
-    fragColor = vec4(rollHighlights(colour), texel.a);
+    colour = rollHighlights(colour);
+    if (plan.probe == probeAfterShoulder) {
+        fragColor = vec4(colour, texel.a);
+        return;
+    }
+
+    fragColor = vec4(adjustColor(colour), texel.a);
 }

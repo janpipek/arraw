@@ -34,6 +34,17 @@ GpuPointwiseBlock packPointwise(const ProcessingPlan& plan, PointwiseProbe probe
     const bool rolls = std::isfinite(plan.shoulderKnee);
     block.rollsHighlights = rolls ? 1U : 0U;
     block.shoulderKnee = rolls ? plan.shoulderKnee : 0.0F;
+    const ColorAdjustmentPlan& colour = plan.colorAdjustments;
+    block.convertsToGrayscale = colour.convertsToGrayscale ? 1U : 0U;
+    block.saturation = colour.saturation;
+    block.vibrance = colour.vibrance;
+    block.adjustsSaturation = colour.adjustsSaturation ? 1U : 0U;
+    block.adjustsVibrance = colour.adjustsVibrance ? 1U : 0U;
+    block.adjustsHsl = colour.adjustsHsl ? 1U : 0U;
+    block.hueShift = colour.hueShift;
+    block.bandSaturation = colour.bandSaturation;
+    block.bandLuminance = colour.bandLuminance;
+    block.grayMix = colour.grayMix;
     block.probe = static_cast<std::uint32_t>(probe);
     return block;
 }

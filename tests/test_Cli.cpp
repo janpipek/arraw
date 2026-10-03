@@ -1691,6 +1691,51 @@ TEST_CASE("Every numeric flag replaces its own setting and no other", "[cli][sid
     }
 }
 
+TEST_CASE("The colour flags replace their own setting and keep the sidecar's others",
+          "[cli][sidecar][colour]") {
+    DevelopSettings sidecar;
+    sidecar.color.saturation = 10.0F;
+    sidecar.hsl.green.luminance = -20.0F;
+    sidecar.blackAndWhite.blue = 30.0F;
+
+    SECTION("saturation and vibrance") {
+        const DevelopSettings result =
+            applied(sidecar, {"--saturation", "-60", "--vibrance", "25"});
+        REQUIRE(result.color.saturation == -60.0F);
+        REQUIRE(result.color.vibrance == 25.0F);
+        REQUIRE(result.hsl == sidecar.hsl);
+        REQUIRE(result.blackAndWhite == sidecar.blackAndWhite);
+    }
+    SECTION("an HSL band") {
+        const DevelopSettings result =
+            applied(sidecar, {"--hue-red", "40", "--luminance-magenta", "-5"});
+        REQUIRE(result.hsl.red.hue == 40.0F);
+        REQUIRE(result.hsl.magenta.luminance == -5.0F);
+        REQUIRE(result.hsl.green.luminance == -20.0F);
+        REQUIRE(result.color == sidecar.color);
+    }
+    SECTION("the black and white mix and switch") {
+        const DevelopSettings result =
+            applied(sidecar, {"--convert-to-grayscale", "--gray-red", "55"});
+        REQUIRE(result.blackAndWhite.convertToGrayscale);
+        REQUIRE(result.blackAndWhite.red == 55.0F);
+        REQUIRE(result.blackAndWhite.blue == 30.0F);
+
+        sidecar.blackAndWhite.convertToGrayscale = true;
+        REQUIRE_FALSE(
+            applied(sidecar, {"--no-convert-to-grayscale"}).blackAndWhite.convertToGrayscale);
+        REQUIRE(applied(sidecar, {}).blackAndWhite.convertToGrayscale);
+    }
+    SECTION("the switch cannot contradict itself, and a weight is range checked") {
+        std::ostringstream err;
+        REQUIRE_FALSE(
+            cli::readExportEdits({"--convert-to-grayscale", "--no-convert-to-grayscale"}, err));
+        std::ostringstream rangeErr;
+        REQUIRE_FALSE(cli::readExportEdits({"--gray-aqua", "101"}, rangeErr));
+        REQUIRE_THAT(rangeErr.str(), ContainsSubstring("--gray-aqua accepts -100 to 100"));
+    }
+}
+
 TEST_CASE("Geometry flags keep the sidecar's geometry they do not name", "[cli][sidecar]") {
     DevelopSettings sidecar;
     sidecar.geometry.rotation = QuarterTurn::Clockwise180;
@@ -1922,7 +1967,7 @@ TEST_CASE("Info --all lists every setting", "[cli][info]") {
         REQUIRE(at >= previous);
         previous = at;
     }
-    REQUIRE(developSettingDescriptors.size() == 16);
+    REQUIRE(developSettingDescriptors.size() == 51);
     REQUIRE_THAT(result.out, ContainsSubstring("temperature: unset"));
 }
 
@@ -2011,7 +2056,7 @@ TEST_CASE("Info --json is one document with the settings in table order", "[cli]
     SECTION("--all lists every key in table order") {
         const auto result = invoke({"info", "--json", "--all", plain.string()});
         REQUIRE(result.code == cli::Success);
-        REQUIRE(firstFile(result.out).value("settings").toObject().size() == 16);
+        REQUIRE(firstFile(result.out).value("settings").toObject().size() == 51);
         std::size_t previous = 0;
         for (const FieldDescriptor& descriptor : developSettingDescriptors) {
             const auto at = result.out.find("\"" + std::string(descriptor.key) + "\":");

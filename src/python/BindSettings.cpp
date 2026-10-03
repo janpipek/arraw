@@ -101,7 +101,9 @@ void bindSettings(nb::module_& m) {
     nb::enum_<SettingGroup>(m, "SettingGroup", "Panel a setting belongs to.")
         .value("COLOR", SettingGroup::Color)
         .value("TONE", SettingGroup::Tone)
-        .value("GEOMETRY", SettingGroup::Geometry);
+        .value("GEOMETRY", SettingGroup::Geometry)
+        .value("HSL", SettingGroup::Hsl)
+        .value("BLACK_AND_WHITE", SettingGroup::BlackAndWhite);
 
     nb::enum_<Applicability>(m, "Applicability",
                              "Whether a setting means anything for every photograph.")
@@ -123,7 +125,28 @@ void bindSettings(nb::module_& m) {
     bindFrozen<ColorSettings>(m, "ColorSettings", "Photographic colour adjustments.",
                               field("white_balance", &ColorSettings::whiteBalance),
                               field("temperature", &ColorSettings::temperature),
-                              field("tint", &ColorSettings::tint));
+                              field("tint", &ColorSettings::tint),
+                              field("saturation", &ColorSettings::saturation),
+                              field("vibrance", &ColorSettings::vibrance));
+
+    bindFrozen<HueBand>(m, "HueBand", "Hue, saturation and luminance shifts of one band of hues.",
+                        field("hue", &HueBand::hue), field("saturation", &HueBand::saturation),
+                        field("luminance", &HueBand::luminance));
+    bindFrozen<HslSettings>(
+        m, "HslSettings", "Per-hue colour adjustments over eight bands.",
+        field("red", &HslSettings::red), field("orange", &HslSettings::orange),
+        field("yellow", &HslSettings::yellow), field("green", &HslSettings::green),
+        field("aqua", &HslSettings::aqua), field("blue", &HslSettings::blue),
+        field("purple", &HslSettings::purple), field("magenta", &HslSettings::magenta));
+    bindFrozen<BlackAndWhiteSettings>(
+        m, "BlackAndWhiteSettings", "Conversion to grey and the mix of hues it is made from.",
+        field("convert_to_grayscale", &BlackAndWhiteSettings::convertToGrayscale),
+        field("red", &BlackAndWhiteSettings::red), field("orange", &BlackAndWhiteSettings::orange),
+        field("yellow", &BlackAndWhiteSettings::yellow),
+        field("green", &BlackAndWhiteSettings::green), field("aqua", &BlackAndWhiteSettings::aqua),
+        field("blue", &BlackAndWhiteSettings::blue),
+        field("purple", &BlackAndWhiteSettings::purple),
+        field("magenta", &BlackAndWhiteSettings::magenta));
 
     bindFrozen<FreeCropAspect>(m, "FreeCropAspect", "Unconstrained crop aspect.");
     bindFrozen<OriginalCropAspect>(m, "OriginalCropAspect",
@@ -144,10 +167,11 @@ void bindSettings(nb::module_& m) {
                                  field("straighten", &GeometrySettings::straighten),
                                  field("crop", &GeometrySettings::crop));
 
-    bindFrozen<DevelopSettings>(m, "DevelopSettings", "Photographic settings of one photograph.",
-                                field("color", &DevelopSettings::color),
-                                field("geometry", &DevelopSettings::geometry),
-                                field("tone", &DevelopSettings::tone))
+    bindFrozen<DevelopSettings>(
+        m, "DevelopSettings", "Photographic settings of one photograph.",
+        field("color", &DevelopSettings::color), field("geometry", &DevelopSettings::geometry),
+        field("tone", &DevelopSettings::tone), field("hsl", &DevelopSettings::hsl),
+        field("black_and_white", &DevelopSettings::blackAndWhite))
         .def(
             "with_",
             [](const DevelopSettings& self, const nb::kwargs& keywords) {

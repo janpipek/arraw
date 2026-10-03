@@ -6,13 +6,17 @@
 
 #include <SettingDescriptors.h>
 
+#include <QButtonGroup>
 #include <QComboBox>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QLabel>
 #include <QPushButton>
 #include <QSignalBlocker>
+#include <QStackedWidget>
 #include <QVBoxLayout>
 
+#include <array>
 #include <type_traits>
 
 namespace arraw::app {
@@ -42,6 +46,82 @@ SettingSlider* DevelopPanel::addRow(std::string_view key, QWidget* group) {
             [this, row](double value) { applyEdit(*row, value); });
     connect(row, &SettingSlider::valueCleared, this, [this, row] { applyClear(*row); });
     return row;
+}
+
+QWidget* DevelopPanel::buildTreatmentRow() {
+    auto* row = new QWidget(this);
+    auto* rowLayout = new QHBoxLayout(row);
+    rowLayout->setContentsMargins(0, 0, 0, 0);
+    rowLayout->setSpacing(2);
+    rowLayout->addWidget(new QLabel(tr("Treatment"), row));
+
+    treatment_ = new QButtonGroup(this);
+    const auto addButton = [&](const QString& text, int id, const char* name) {
+        auto* button = new QPushButton(text, row);
+        button->setObjectName(name);
+        button->setCheckable(true);
+        treatment_->addButton(button, id);
+        rowLayout->addWidget(button, 1);
+    };
+    addButton(tr("Colour"), 0, "treatmentColour");
+    addButton(tr("B&&W"), 1, "treatmentBw");
+    treatment_->button(0)->setChecked(true);
+    connect(treatment_, &QButtonGroup::idClicked, this,
+            [this](int id) { applyTreatment(id == 1); });
+    return row;
+}
+
+QWidget* DevelopPanel::buildColorGroup() {
+    auto* group = new QGroupBox(tr("Color"), this);
+    new QVBoxLayout(group);
+    for (const std::string_view key : colorKeys()) {
+        addRow(key, group);
+    }
+    return group;
+}
+
+QWidget* DevelopPanel::buildHslGroup() {
+    auto* group = new QGroupBox(tr("HSL / Color Mix"), this);
+    auto* groupLayout = new QVBoxLayout(group);
+
+    auto* tabRow = new QHBoxLayout;
+    tabRow->setSpacing(2);
+    auto* tabs = new QButtonGroup(group);
+    auto* stack = new QStackedWidget(group);
+    const std::array<QString, hslPageCount> titles{tr("Hue"), tr("Saturation"), tr("Luminance")};
+    for (int page = 0; page < hslPageCount; ++page) {
+        auto* pageWidget = new QWidget(stack);
+        auto* pageLayout = new QVBoxLayout(pageWidget);
+        pageLayout->setContentsMargins(0, 0, 0, 0);
+        for (const std::string_view key : hslKeys(page)) {
+            addRow(key, pageWidget);
+        }
+        stack->addWidget(pageWidget);
+
+        auto* button = new QPushButton(titles[static_cast<std::size_t>(page)], group);
+        button->setCheckable(true);
+        button->setChecked(page == 0);
+        tabs->addButton(button, page);
+        tabRow->addWidget(button);
+    }
+    // The page is view state: choosing one is not an edit.
+    connect(tabs, &QButtonGroup::idClicked, stack, &QStackedWidget::setCurrentIndex);
+    groupLayout->addLayout(tabRow);
+    groupLayout->addWidget(stack);
+    return group;
+}
+
+QWidget* DevelopPanel::buildBlackAndWhiteGroup() {
+    auto* group = new QGroupBox(tr("Black && White"), this);
+    auto* groupLayout = new QVBoxLayout(group);
+    auto* hint =
+        new QLabel(tr("How each colour becomes grey: drag a band darker or lighter."), group);
+    hint->setWordWrap(true);
+    groupLayout->addWidget(hint);
+    for (const std::string_view key : blackAndWhiteKeys()) {
+        addRow(key, group);
+    }
+    return group;
 }
 
 QWidget* DevelopPanel::buildWhiteBalanceGroup() {
@@ -74,6 +154,7 @@ QWidget* DevelopPanel::buildWhiteBalanceGroup() {
 DevelopPanel::DevelopPanel(QWidget* parent) : QWidget(parent) {
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
+    layout->addWidget(buildTreatmentRow());
     layout->addWidget(buildWhiteBalanceGroup());
 
     auto* tone = new QGroupBox(tr("Tone"), this);
@@ -82,6 +163,13 @@ DevelopPanel::DevelopPanel(QWidget* parent) : QWidget(parent) {
         addRow(key, tone);
     }
     layout->addWidget(tone);
+
+    colorGroup_ = buildColorGroup();
+    hslGroup_ = buildHslGroup();
+    blackAndWhiteGroup_ = buildBlackAndWhiteGroup();
+    layout->addWidget(colorGroup_);
+    layout->addWidget(hslGroup_);
+    layout->addWidget(blackAndWhiteGroup_);
     layout->addStretch(1);
     showState(shown_, PanelContext{});
 }
@@ -101,6 +189,16 @@ void DevelopPanel::showState(const DevelopState& state, const PanelContext& cont
     pickButton_->setToolTip(context.raw ? tr("Pick a neutral grey or white area in the image to "
                                              "set white balance")
                                         : needsRaw);
+
+    const bool grayscale = shown_.settings.blackAndWhite.convertToGrayscale;
+    {
+        const QSignalBlocker blocker(treatment_);
+        treatment_->button(grayscale ? 1 : 0)->setChecked(true);
+    }
+    const TreatmentVisibility visible = visibleGroups(grayscale);
+    colorGroup_->setVisible(visible.color);
+    hslGroup_->setVisible(visible.hsl);
+    blackAndWhiteGroup_->setVisible(visible.blackAndWhiteMix);
 
     const ColourTemperature light = shownLight(color, context.asShot.value_or(fallbackLight));
     for (SettingSlider* row : rows_) {
@@ -158,6 +256,18 @@ void DevelopPanel::applyClear(const SettingSlider& row) {
         next.settings.color = withTint(next.settings.color, std::nullopt);
     }
     emit stateEdited(next);
+}
+
+void DevelopPanel::applyTreatment(bool grayscale) {
+    if (grayscale == shown_.settings.blackAndWhite.convertToGrayscale) {
+        return;
+    }
+    DevelopState next = shown_;
+    next.settings.blackAndWhite.convertToGrayscale = grayscale;
+    finishPendingEdit();
+    emit editStarted();
+    emit stateEdited(next);
+    emit editFinished();
 }
 
 void DevelopPanel::applyChoice(int index) {
