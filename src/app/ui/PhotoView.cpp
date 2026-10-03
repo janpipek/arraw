@@ -73,7 +73,8 @@ void PhotoView::setFrameSize(QSize frame) {
     updateCursor();
 }
 
-void PhotoView::setImage(const QImage& image, const QRectF& region) {
+void PhotoView::setImage(const QImage& image, const QRectF& region, const QImage& background) {
+    background_ = background;
     image_ = image;
     imageRegion_ = region;
     updateCursor();
@@ -81,6 +82,9 @@ void PhotoView::setImage(const QImage& image, const QRectF& region) {
 }
 
 void PhotoView::resetView() {
+    image_ = {};
+    background_ = {};
+    update();
     adopt(ViewTransform::fitted(QSizeF(frame_), QSizeF(devicePixels())), true, false);
 }
 
@@ -121,6 +125,13 @@ void PhotoView::paintEvent(QPaintEvent* /*event*/) {
         QPointF(std::round(bottomRight.x()) / ratio, std::round(bottomRight.y()) / ratio));
     // Past 1:1 the pixels of the photograph are shown as they are.
     painter.setRenderHint(QPainter::SmoothPixmapTransform, t.zoom() <= 1.0);
+    if (!background_.isNull()) {
+        painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+        painter.drawImage(
+            QRectF(t.viewFromFrame({0.0, 0.0}) / ratio, t.viewFromFrame({1.0, 1.0}) / ratio),
+            background_);
+        painter.setRenderHint(QPainter::SmoothPixmapTransform, t.zoom() <= 1.0);
+    }
     painter.drawImage(target, image_);
 }
 

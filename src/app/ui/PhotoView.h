@@ -21,7 +21,8 @@ namespace arraw::app {
 /// and the newest render, and paints that render where the current view puts
 /// it. Zooming and panning therefore show at once, stretched or shifted, until
 /// the window has a render of the new view; the owner asks for it on
-/// viewChanged. It renders nothing itself.
+/// viewChanged. A reduced whole-frame image fills areas outside that render.
+/// It renders nothing itself.
 ///
 /// The wheel zooms about the cursor. A left drag pans, unless picking, when a
 /// left click picks; a middle drag and Alt with a left drag pan either way.
@@ -56,7 +57,8 @@ public:
     /// @brief Shows a render in place of the one before.
     /// @param image The render.
     /// @param region Part of the frame it shows, in normalised coordinates.
-    void setImage(const QImage& image, const QRectF& region);
+    /// @param background Reduced whole-frame image to fill newly exposed areas.
+    void setImage(const QImage& image, const QRectF& region, const QImage& background);
 
     /// @brief Fits the whole frame and keeps it fitted; for a newly opened photograph.
     ///
@@ -117,6 +119,8 @@ private:
 
     /// The newest render.
     QImage image_;
+    /// Reduced whole-frame fallback.
+    QImage background_;
     /// Part of the frame it shows, in fractions of the frame it was rendered for.
     QRectF imageRegion_;
 };

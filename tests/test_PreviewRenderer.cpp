@@ -477,6 +477,41 @@ TEST_CASE("A region outside the frame is reported as a failure", "[app][preview]
     REQUIRE_FALSE(result.image.has_value());
 }
 
+TEST_CASE("Panning reuses a whole-frame fallback and edits refresh it", "[app][preview][region]") {
+    Collector collector;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
+    renderer.setSource(makeLargeSource());
+    app::PreviewView view{.region = QRect(100, 100, 200, 100), .outputSize = {200, 100}};
+    auto id = renderer.request({}, view);
+    REQUIRE(collector.waitFor(id));
+    const auto first = collector.results().back();
+    REQUIRE(first.background.has_value());
+    REQUIRE(first.background->size() == QSize(1024, 512));
+
+    view.region = QRect(200, 100, 200, 100);
+    id = renderer.request({}, view);
+    REQUIRE(collector.waitFor(id));
+    const auto panned = collector.results().back();
+    REQUIRE(panned.background.has_value());
+    REQUIRE(panned.background->cacheKey() == first.background->cacheKey());
+    REQUIRE(panned.resumedFrom == Stage::Geometry);
+
+    DevelopState edited;
+    edited.settings.tone.exposure = 1.0F;
+    id = renderer.request(edited, view);
+    REQUIRE(collector.waitFor(id));
+    const auto changed = collector.results().back();
+    REQUIRE(changed.background.has_value());
+    REQUIRE(*changed.background != *first.background);
+
+    renderer.setSource(makeSource());
+    view.region = QRect(0, 0, 100, 100);
+    id = renderer.request({}, view);
+    REQUIRE(collector.waitFor(id));
+    REQUIRE(collector.results().back().background.has_value());
+    REQUIRE(collector.results().back().background->size() == QSize(256, 128));
+}
+
 TEST_CASE("Desktop CPU preference overrides automatic preview rendering",
           "[app][preview][settings]") {
     Collector collector;

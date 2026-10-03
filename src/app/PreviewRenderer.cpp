@@ -315,6 +315,7 @@ PreviewResult render(std::uint64_t id, const DevelopState& state, const PreviewV
     const detail::TimingSpan timing("preview.render", id);
     PreviewResult result{.request = id,
                          .image = std::nullopt,
+                         .background = std::nullopt,
                          .error = {},
                          .onGpu = false,
                          .deviceName = {},
@@ -459,6 +460,12 @@ void PreviewRenderer::run(std::stop_token stop) {
     SourcePyramid pyramid;
     // Host checkpoints of the CPU path, for the level it last rendered.
     CheckpointCache cpuCache;
+    // Whole-frame fallback beneath region renders, with its own cache so it
+    // never evicts the detailed checkpoints; redone when the source or state changes.
+    CheckpointCache backgroundCache;
+    std::shared_ptr<const ImageBuffer> backgroundSource;
+    std::optional<DevelopState> backgroundState;
+    std::optional<QImage> background;
     while (true) {
         std::optional<Pending> job;
         std::shared_ptr<const ImageBuffer> source;
@@ -475,8 +482,24 @@ void PreviewRenderer::run(std::stop_token stop) {
         const detail::TimingSpan timing("preview", job->id);
         // Without the lock: developing takes long, and the window must be able
         // to queue the next request meanwhile.
+        if (source != backgroundSource || backgroundState != job->state) {
+            background.reset();
+            backgroundSource = source;
+            backgroundState = job->state;
+        }
+        if (source && job->view.region && !background) {
+            const detail::TimingSpan backgroundTiming("preview.background");
+            const PreviewResult reduced =
+                render(job->id, job->state, PreviewView::wholeFrame({1024, 1024}), source, pyramid,
+                       backgroundCache, nullptr);
+            background = reduced.image;
+        }
         PreviewResult result = render(job->id, job->state, job->view, source, pyramid, cpuCache,
                                       gpu ? &*gpu : nullptr);
+        if (result.image) {
+            result.background =
+                result.region == QRectF(0.0, 0.0, 1.0, 1.0) ? result.image : background;
+        }
         try {
             onResult_(std::move(result));
         } catch (...) {

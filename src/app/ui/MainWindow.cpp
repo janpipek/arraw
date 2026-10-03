@@ -868,8 +868,15 @@ void MainWindow::requestRender() {
         photoView_->setFrameSize(
             QSize(static_cast<int>(cropped.width), static_cast<int>(cropped.height)));
         const ViewTransform transform = photoView_->transform();
-        view.region = transform.visiblePixels();
-        view.outputSize = transform.outputSize();
+        const QRect visible = transform.visiblePixels();
+        // A quarter-view margin on each side covers short pans immediately.
+        const int marginX = (visible.width() + 3) / 4;
+        const int marginY = (visible.height() + 3) / 4;
+        const QRect region = visible.adjusted(-marginX, -marginY, marginX, marginY)
+                                 .intersected(QRect(QPoint(0, 0), transform.frame().toSize()));
+        view.region = region;
+        view.outputSize =
+            (QSizeF(region.size()) * std::min(transform.zoom(), 1.0)).toSize().expandedTo({1, 1});
     } catch (const std::exception&) {
         // Left to the renderer, which reports what is wrong with the state.
     }
@@ -882,7 +889,7 @@ void MainWindow::showResult(const PreviewResult& result) {
     }
     if (result.image) {
         latestShown_ = result.request;
-        photoView_->setImage(*result.image, result.region);
+        photoView_->setImage(*result.image, result.region, result.background.value_or(QImage{}));
         showDevice(result);
         followWithThumbnail(result);
         return;

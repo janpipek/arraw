@@ -46,6 +46,8 @@ struct PreviewResult {
     std::uint64_t request = 0;
     /// Rendered image, set when the render succeeded.
     std::optional<QImage> image;
+    /// Reduced whole-frame image beneath the detailed region.
+    std::optional<QImage> background;
     /// Description of the failure, set when the render failed.
     std::string error;
     /// Whether the GPU rendered the image, rather than the CPU.
