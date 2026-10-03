@@ -1,6 +1,7 @@
 #include "StreamDiagnostics.h"
 
 #include "Command.h"
+#include "TerminalStyle.h"
 
 #include <QCommandLineParser>
 #include <QJsonDocument>
@@ -129,6 +130,26 @@ void StreamDiagnostics::record(const Diagnostic& diagnostic) {
         }
         object["message"] = QString::fromStdString(withoutSubject(diagnostic));
         stream_ << QJsonDocument(object).toJson(QJsonDocument::Compact).toStdString() << '\n';
+        return;
+    }
+    if (terminalStyle(stream_)) {
+        const bool failed = diagnostic.severity == Severity::Error;
+        const bool warning = diagnostic.severity == Severity::Warning;
+        const bool completed =
+            diagnostic.notice == Notice::Exported || diagnostic.notice == Notice::BatchFinished;
+        const auto accent = failed      ? Accent::Error
+                            : warning   ? Accent::Warning
+                            : completed ? Accent::Success
+                                        : Accent::Heading;
+        const std::string label = failed      ? "Error"
+                                  : warning   ? "Warning"
+                                  : completed ? "Finished"
+                                              : "Info";
+        stream_ << accented(stream_, std::string(10 - label.size(), ' ') + label, accent) << "  ";
+        if (diagnostic.subject) {
+            stream_ << accented(stream_, diagnostic.subject->string(), Accent::Heading) << ": ";
+        }
+        stream_ << withoutSubject(diagnostic) << '\n';
         return;
     }
     // A diagnostic about no particular photograph, such as a batch's own

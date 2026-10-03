@@ -10,6 +10,7 @@
 #include "ShotInputs.h"
 #include "SidecarWatch.h"
 #include "StreamDiagnostics.h"
+#include "TerminalStyle.h"
 
 #include <Develop.h>
 #include <DevelopSettings.h>
@@ -1104,7 +1105,7 @@ int cli::runExportCommand(const QStringList& arguments, std::ostream& out, std::
         return usageError(err, parser.errorText().toStdString());
     }
     if (parser.isSet("help")) {
-        out << commandHelp(parser);
+        writeStyledHelp(out, commandHelp(parser));
         return Success;
     }
 

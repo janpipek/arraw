@@ -44,6 +44,8 @@ arraw-cli export photo.arw -o out/ --device gpu --gpu-backend vulkan   # no CPU 
 arraw-cli gpu-test                        # check the GPU backend works on this machine
 ```
 
+Interactive CLI output uses restrained color, aligned status labels, and a camera accent in the main help. Redirected output and JSON remain plain. Set `NO_COLOR` (or `TERM=dumb`) to disable terminal decoration. On Windows, color requires a console with virtual terminal processing enabled.
+
 On Linux the command line needs no display: it runs on its own headless Qt
 platform, which reaches Vulkan through the driver alone but has no OpenGL.
 `export` uses it whatever `QT_QPA_PLATFORM` says, unless `--gpu-backend opengl`

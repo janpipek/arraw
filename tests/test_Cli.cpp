@@ -2,6 +2,7 @@
 #include "Command.h"
 #include "DeviceChoice.h"
 #include "ExportCommand.h"
+#include "TerminalStyle.h"
 #include "support/Fixtures.h"
 #include "support/TempDir.h"
 
@@ -2691,4 +2692,19 @@ TEST_CASE("The export help describes folders and the filter", "[cli][export][sho
     REQUIRE_THAT(result.out, ContainsSubstring("--rejected"));
     REQUIRE_THAT(result.out, ContainsSubstring("--label"));
     REQUIRE_THAT(result.out, !ContainsSubstring("not directories"));
+}
+
+TEST_CASE("Terminal decoration leaves captured output and JSON clean", "[cli][style]") {
+    std::ostringstream out;
+    REQUIRE_FALSE(cli::terminalStyle(out));
+    REQUIRE(cli::accented("hello", cli::Accent::Heading, false) == "hello");
+    REQUIRE(cli::accented("hello", cli::Accent::Heading, true) == "\033[1;36mhello\033[0m");
+    const auto help = invoke({"--help"});
+    REQUIRE_THAT(help.out, !ContainsSubstring("\033["));
+    const std::string text = "Usage: arraw-cli info\nOptions:\n  --json  JSON output\n";
+    cli::writeStyledHelp(out, text);
+    REQUIRE(out.str() == text);
+    const auto json = invoke({"info", "--json", test::fixture(card).string()});
+    REQUIRE(json.code == cli::Success);
+    REQUIRE_THAT(json.out, !ContainsSubstring("\033["));
 }

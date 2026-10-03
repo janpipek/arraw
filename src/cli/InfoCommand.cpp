@@ -6,6 +6,7 @@
 #include "ShotInputs.h"
 #include "SidecarWatch.h"
 #include "StreamDiagnostics.h"
+#include "TerminalStyle.h"
 
 #include <ColorEncoding.h>
 #include <DevelopSettings.h>
@@ -440,7 +441,7 @@ std::vector<ListedSetting> listedSettings(const DevelopSettings& settings, bool 
 void writeText(std::ostream& out, const FileReport& report, bool all) {
     const Photo& photo = report.photo;
     const ImageMetadata& metadata = photo.metadata();
-    out << pathText(photo.path()) << '\n';
+    out << cli::accented(out, pathText(photo.path()), cli::Accent::Heading) << '\n';
     if (report.shot) {
         out << "  format: " << formatLabel(*report.shot) << '\n';
         if (!report.shot->companions.empty()) {
@@ -654,7 +655,7 @@ int cli::runInfoCommand(const QStringList& arguments, std::ostream& out, std::os
         return usageError(err, parser.errorText().toStdString());
     }
     if (parser.isSet("help")) {
-        out << commandHelp(parser);
+        writeStyledHelp(out, commandHelp(parser));
         return Success;
     }
     int code = Success;

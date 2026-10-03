@@ -1,13 +1,13 @@
 #include "Cli.h"
 
 #include "Command.h"
+#include "TerminalStyle.h"
 
 #include <QByteArray>
 #include <QString>
 #include <QStringList>
 #include <QtGlobal>
 
-#include <iomanip>
 #include <ostream>
 #include <string_view>
 
@@ -19,9 +19,11 @@ constexpr int summaryColumn = 12;
 
 /// @brief Writes the command table.
 void listCommands(std::ostream& stream) {
-    stream << "Commands:\n";
+    stream << accented(stream, "Commands:", Accent::Heading) << '\n';
     for (const Command& command : commands()) {
-        stream << "  " << std::left << std::setw(summaryColumn) << command.name << command.summary;
+        stream << "  "
+               << accented(stream, command.name, command.run ? Accent::Success : Accent::Muted)
+               << std::string(summaryColumn - command.name.size(), ' ') << command.summary;
         if (command.run == nullptr) {
             stream << " (not implemented yet)";
         }
@@ -36,9 +38,13 @@ void listCommands(std::ostream& stream) {
 /// A command's own options belong to its own parser, reached through
 /// `arraw-cli <command> --help`.
 void writeHelp(std::ostream& stream) {
+    if (terminalStyle(stream)) {
+        stream << accented(stream, "📷 arraw", Accent::Heading) << "  ·  RAW development\n\n";
+    }
     stream << "Develop and export photographs without opening the window.\n"
               "\n"
-              "Usage: arraw-cli <command> [options]\n"
+           << accented(stream, "Usage: arraw-cli <command> [options]", Accent::Heading)
+           << "\n"
               "\n";
     listCommands(stream);
     stream << "\n"
@@ -48,7 +54,7 @@ void writeHelp(std::ostream& stream) {
 
 /// @brief Reports a usage problem, listing what could have been typed instead.
 int usageError(std::ostream& err, const std::string& message) {
-    err << "error: " << message << "\n\n";
+    err << accented(err, "error:", Accent::Error) << " " << message << "\n\n";
     listCommands(err);
     err << "\nTry 'arraw-cli --help'.\n";
     return UsageError;
