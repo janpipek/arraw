@@ -4,6 +4,7 @@
 #include "ProcessingPlan.h"
 #include "Resample.h"
 #include "SampleConversion.h"
+#include "TimingTrace.h"
 
 #include <WhiteBalance.h>
 
@@ -49,6 +50,7 @@ void developSamples(const ImageBuffer& source, ImageBuffer& result, const Proces
 
 /// @brief Runs the pointwise chain over a source, into the working format.
 ImageBuffer developPointwise(const ImageBuffer& source, const ProcessingPlan& plan) {
+    const detail::TimingSpan timing("cpu.pointwise");
     ImageBuffer result(source.size(), workingFormat, workingEncoding);
     switch (source.format()) {
     case PixelFormat::RgbU8:
@@ -120,6 +122,7 @@ RenderCheckpoint runStages(Stage done, ImageBuffer pixels, ProcessingPlan plan, 
 
 ImageBuffer arraw::develop(const ImageBuffer& source, const DevelopState& state,
                            const RenderRequest& request) {
+    const detail::TimingSpan timing("cpu.develop");
     // The direct path: no checkpoint, so nothing is shared and nothing copied.
     const ProcessingPlan plan = planFor(source, state, request);
     return resizeBy(applyGeometry(developPointwise(source, plan), *plan.geometry), plan);

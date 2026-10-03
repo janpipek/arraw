@@ -1,5 +1,7 @@
 #include "DisplayImage.h"
 
+#include "TimingTrace.h"
+
 #include <Develop.h>
 
 #include <QColorSpace>
@@ -10,6 +12,7 @@
 namespace arraw::app {
 
 QImage toDisplayImage(const ImageBuffer& developed) {
+    const detail::TimingSpan timing("display.convert");
     if (!isWorkingEncoding(developed.encoding()) || developed.format() != workingFormat) {
         throw std::invalid_argument("Only a developed image in the working encoding can be shown");
     }

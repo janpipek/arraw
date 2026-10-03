@@ -3,6 +3,7 @@
 #include "DeviceImageState.h"
 #include "GpuDevice.h"
 #include "GpuPlan.h"
+#include "TimingTrace.h"
 
 #include <QByteArray>
 #include <QCoreApplication>
@@ -254,6 +255,7 @@ public:
     }
 
     [[nodiscard]] ImageBuffer readBack() const override {
+        const detail::TimingSpan timing("gpu.readback");
         device_->requireUsable("read back");
 
         // On the heap, because a failed frame leaves QRhi holding its address;
@@ -510,6 +512,7 @@ std::vector<GpuAdapterInfo> listGpuAdapters(GpuBackend backend) {
 
 GpuContext::GpuContext(GpuBackend backend, std::optional<std::size_t> adapter)
     : device_(std::make_shared<detail::GpuDevice>()) {
+    const detail::TimingSpan timing("gpu.create-context", 0, gpuBackendName(backend));
     requireGuiApplication();
 
     // Never QRhi::PreferSoftwareRenderer, and never a second backend when the
@@ -584,6 +587,7 @@ bool GpuContext::lost() const noexcept {
 }
 
 DeviceImage GpuContext::upload(const ImageBuffer& image) {
+    const detail::TimingSpan timing("gpu.upload");
     device_->requireUsable("upload");
 
     if (image.format() != PixelFormat::RgbaF32) {
@@ -656,6 +660,7 @@ DeviceImage GpuContext::render(GpuPass pass, std::span<const std::byte> uniforms
         throw std::invalid_argument("Unknown GPU pass");
     }
     const std::string name(passName(pass));
+    const detail::TimingSpan timing("gpu.pass", 0, name);
     if (inputs.size() != inputCountOf(pass)) {
         throw std::invalid_argument("The " + name + " pass reads " +
                                     std::to_string(inputCountOf(pass)) + " images, not " +

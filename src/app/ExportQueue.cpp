@@ -2,6 +2,7 @@
 
 #include "GpuContext.h"
 #include "GpuDevelop.h"
+#include "TimingTrace.h"
 
 #include <Diagnostics.h>
 #include <RenderCheckpoint.h>
@@ -23,7 +24,7 @@ namespace {
 /// thread that owns it. Holds no device image between jobs.
 class GpuExport {
 public:
-    GpuExport() = default;
+    explicit GpuExport(AppSettings settings) : settings_(std::move(settings)) {}
     GpuExport(const GpuExport&) = delete;
     GpuExport& operator=(const GpuExport&) = delete;
     GpuExport(GpuExport&&) = delete;
@@ -40,7 +41,7 @@ public:
     [[nodiscard]] std::optional<ImageBuffer> develop(const ExportJob& job, std::string& failure) {
         if (!tried_) {
             tried_ = true;
-            context_ = createHardwareContext(reason_);
+            context_ = createAppGpuContext(settings_, reason_);
         }
         if (!context_) {
             failure = reason_;
@@ -65,6 +66,8 @@ public:
     }
 
 private:
+    /// Desktop GPU preference.
+    AppSettings settings_;
     /// Device of this thread; empty before the first job, and after a loss.
     std::unique_ptr<GpuContext> context_;
     /// Why there is no device; empty while there is one.
@@ -75,6 +78,7 @@ private:
 
 /// @brief Runs one job, turning a failure into a result.
 ExportResult execute(std::uint64_t id, const ExportJob& job, GpuExport* gpu) {
+    const detail::TimingSpan timing("export", id);
     ExportResult result{.id = id, .path = job.path};
     // Nothing may escape the thread, or the process terminates.
     try {
@@ -107,9 +111,10 @@ ExportResult execute(std::uint64_t id, const ExportJob& job, GpuExport* gpu) {
 
 } // namespace
 
-ExportQueue::ExportQueue(std::function<void(ExportResult)> onResult, Device device)
-    : onResult_(std::move(onResult)), device_(device),
-      worker_([this](const std::stop_token& stop) { run(stop); }) {}
+ExportQueue::ExportQueue(std::function<void(ExportResult)> onResult, Device device,
+                         AppSettings settings)
+    : onResult_(std::move(onResult)), device_(settings.cpuOnly ? Device::Cpu : device),
+      settings_(std::move(settings)), worker_([this](const std::stop_token& stop) { run(stop); }) {}
 
 ExportQueue::~ExportQueue() {
     worker_.request_stop();
@@ -139,7 +144,7 @@ void ExportQueue::run(std::stop_token stop) {
     // when this function returns, before the thread ends.
     std::optional<GpuExport> gpu;
     if (device_ == Device::Auto) {
-        gpu.emplace();
+        gpu.emplace(settings_);
     }
     while (true) {
         std::optional<Pending> next;

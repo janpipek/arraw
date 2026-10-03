@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AppSettings.h"
+
 #include <Develop.h>
 #include <DevelopState.h>
 #include <ImageBuffer.h>
@@ -78,7 +80,9 @@ public:
     /// the worker thread; the caller marshals it where it is needed. Must not
     /// throw; what it throws is dropped.
     /// @param device Where exports may be developed.
-    explicit ExportQueue(std::function<void(ExportResult)> onResult, Device device = Device::Auto);
+    /// @param settings Desktop GPU preference, captured for the lifetime of the worker.
+    explicit ExportQueue(std::function<void(ExportResult)> onResult, Device device = Device::Auto,
+                         AppSettings settings = {});
 
     ExportQueue(const ExportQueue&) = delete;
     ExportQueue& operator=(const ExportQueue&) = delete;
@@ -117,6 +121,9 @@ private:
 
     /// Where exports may be developed; fixed before the worker starts.
     Device device_;
+
+    /// Desktop preferences captured before the worker starts.
+    AppSettings settings_;
 
     /// Guard of queue_ and lastId_.
     std::mutex mutex_;

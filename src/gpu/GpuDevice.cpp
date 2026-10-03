@@ -1,5 +1,7 @@
 #include "GpuDevice.h"
 
+#include "TimingTrace.h"
+
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -46,6 +48,7 @@ public:
     /// @brief Ends the frame and waits for its work.
     /// @return Whether the frame succeeded.
     [[nodiscard]] bool end() {
+        const TimingSpan timing("gpu.submit-and-wait");
         open_ = false;
         return rhi_.endOffscreenFrame() == QRhi::FrameOpSuccess;
     }

@@ -11,6 +11,7 @@
 #include "SidecarWatch.h"
 #include "StreamDiagnostics.h"
 #include "TerminalStyle.h"
+#include "TimingTrace.h"
 
 #include <Develop.h>
 #include <DevelopSettings.h>
@@ -906,7 +907,9 @@ int exportAll(const ExportRequest& request, std::ostream& err) {
     const cli::ExpandedInputs expanded = cli::expandInputs(request.inputs, log);
     failures += expanded.unreadableFolders;
     std::size_t filteredOut = 0;
+    std::uint64_t timingRequest = 0;
     for (const auto& [input, shot] : expanded.photographs) {
+        const detail::TimingSpan timing("cli.export", ++timingRequest);
         const auto destination =
             request.outputDirectory /
             (input.stem().string() + std::string(extensionFor(request.format)));

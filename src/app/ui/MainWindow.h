@@ -66,6 +66,9 @@ private:
     /// @brief Builds the menu bar and the actions it offers.
     void buildMenu();
 
+    /// @brief Shows and saves desktop preferences for the next application session.
+    void showSettings();
+
     /// @brief Builds the view that shows the photograph, zoomed and panned.
     void buildImageView();
 
@@ -292,6 +295,9 @@ private:
 
     /// Whether the user chose to wait for the exports before closing.
     bool closeWhenIdle_ = false;
+
+    /// Desktop preferences used by this application session.
+    AppSettings runningSettings_;
 
     /// Worker that renders the preview.
     ///

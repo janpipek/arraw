@@ -8,6 +8,7 @@
 #include "ExportSettings.h"
 #include "FilmStrip.h"
 #include "PhotoView.h"
+#include "SettingsDialog.h"
 #include "ThumbnailCache.h"
 #include "ViewTransform.h"
 
@@ -62,7 +63,7 @@ namespace {
 /// @brief Reads whether ARRAW_PREVIEW_DEVICE forces the CPU.
 ///
 /// `cpu` forces it, for previews and exports alike; anything else, or nothing,
-/// means the GPU when there is one.
+/// leaves the saved processing preference in effect.
 bool cpuForcedByEnvironment() {
     const char* value = std::getenv("ARRAW_PREVIEW_DEVICE");
     return value != nullptr && std::string_view(value) == "cpu";
@@ -76,7 +77,10 @@ QString toQString(const std::filesystem::path& path) {
 } // namespace
 
 MainWindow::MainWindow(QWidget* parent)
-    : QMainWindow(parent),
+    : QMainWindow(parent), runningSettings_([] {
+          QSettings store;
+          return restoreAppSettings(store);
+      }()),
       previewRenderer_(
           [this](PreviewResult result) {
               // On the worker thread. Dropped if the window is gone by the time the
@@ -85,7 +89,8 @@ MainWindow::MainWindow(QWidget* parent)
                   this, [this, result = std::move(result)] { showResult(result); },
                   Qt::QueuedConnection);
           },
-          cpuForcedByEnvironment() ? PreviewRenderer::Device::Cpu : PreviewRenderer::Device::Auto),
+          cpuForcedByEnvironment() ? PreviewRenderer::Device::Cpu : PreviewRenderer::Device::Auto,
+          runningSettings_),
       exportQueue_(
           [this](ExportResult result) {
               // On the worker thread, as the preview's.
@@ -93,7 +98,8 @@ MainWindow::MainWindow(QWidget* parent)
                   this, [this, result = std::move(result)] { showExportResult(result); },
                   Qt::QueuedConnection);
           },
-          cpuForcedByEnvironment() ? ExportQueue::Device::Cpu : ExportQueue::Device::Auto) {
+          cpuForcedByEnvironment() ? ExportQueue::Device::Cpu : ExportQueue::Device::Auto,
+          runningSettings_) {
     filmStrip_ = new FilmStrip(this);
     buildMenu();
     buildStatusBar();
@@ -176,8 +182,31 @@ void MainWindow::buildMenu() {
         });
     });
 
+    editMenu->addSeparator();
+    QAction* settingsAction = editMenu->addAction(tr("&Settings…"));
+    settingsAction->setMenuRole(QAction::PreferencesRole);
+    settingsAction->setShortcut(QKeySequence::Preferences);
+    connect(settingsAction, &QAction::triggered, this, &MainWindow::showSettings);
+
     culling_ = new CullingActions(*this, *filmStrip_);
     buildZoomControls();
+}
+
+void MainWindow::showSettings() {
+    QSettings saved;
+    SettingsDialog dialog(restoreAppSettings(saved), this);
+    while (dialog.exec() == QDialog::Accepted) {
+        QSettings store;
+        saveAppSettings(dialog.settings(), store);
+        store.sync();
+        if (store.status() == QSettings::NoError) {
+            statusBar()->showMessage(
+                tr("Settings saved. Restart Arraw to apply processing changes."), 6000);
+            return;
+        }
+        QMessageBox::warning(this, tr("Could not save settings"),
+                             tr("Check that the application settings location is writable."));
+    }
 }
 
 void MainWindow::buildZoomControls() {

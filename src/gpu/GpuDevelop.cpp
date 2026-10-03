@@ -4,6 +4,7 @@
 #include "GpuPlan.h"
 #include "ProcessingPlan.h"
 #include "SampleConversion.h"
+#include "TimingTrace.h"
 
 #include <array>
 #include <cstddef>
@@ -71,6 +72,7 @@ DeviceImage resizeOnGpu(GpuContext& context, const DeviceImage& image, const Res
 } // namespace
 
 DeviceImage uploadSource(GpuContext& context, const ImageBuffer& source) {
+    const detail::TimingSpan timing("gpu.prepare-source");
     return source.format() == PixelFormat::RgbaF32 ? context.upload(source)
                                                    : context.upload(toRgbaF32(source));
 }
@@ -101,6 +103,7 @@ namespace {
 /// @param stopAfter Last boundary to run.
 RenderCheckpoint runPasses(GpuContext& context, std::optional<Stage> done, DeviceImage image,
                            ProcessingPlan plan, Stage stopAfter) {
+    const detail::TimingSpan timing("gpu.develop");
     if (!done) {
         const GpuPointwiseBlock pointwise = packPointwise(plan);
         image = context.render(GpuPass::Pointwise, bytesOf(pointwise), image, image.size(),

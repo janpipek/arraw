@@ -2,6 +2,7 @@
 
 #include "MetadataEmbedding.h"
 #include "QtImage.h"
+#include "TimingTrace.h"
 
 #include <QBuffer>
 #include <QByteArray>
@@ -294,6 +295,7 @@ void encode(QIODevice& device, const QImage& image, ImageFileFormat format,
 void arraw::exportImage(const ImageBuffer& image, const std::filesystem::path& path,
                         const ExportOptions& options, const std::optional<ExportMetadata>& metadata,
                         DiagnosticLog& log) {
+    const detail::TimingSpan timing("export.write");
     const auto format = extractImageFileFormat(path, options);
     validateExportOptions(format, options);
     const QImage qImage = prepareExportImage(image, format, options);

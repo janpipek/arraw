@@ -1,6 +1,7 @@
 #include "ProcessingPlan.h"
 
 #include "SampleConversion.h"
+#include "TimingTrace.h"
 
 #include <algorithm>
 #include <cmath>
@@ -120,6 +121,7 @@ ProcessingPlan arraw::planFor(const Photo& photo, const RenderRequest& request) 
 
 ProcessingPlan arraw::planFor(const ImageBuffer& source, const DevelopState& state,
                               const RenderRequest& request) {
+    const detail::TimingSpan timing("develop.plan");
     auto plan = planFor(source.encoding(), state);
     plan.geometry = geometryPlanFor(source.size(), source.orientation(), state.settings.geometry);
     plan.resize = resizePlanFor(request, plan.geometry->outputSize, &source);

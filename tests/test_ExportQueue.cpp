@@ -230,3 +230,19 @@ TEST_CASE("Destroying a queue with jobs pending returns and leaves no partial fi
     REQUIRE(files == reported);
     REQUIRE(reported < 20);
 }
+
+TEST_CASE("Desktop CPU preference overrides automatic export rendering",
+          "[app][export][queue][settings]") {
+    const test::TempDir directory;
+    Collector collector;
+    app::ExportQueue queue(collector.callback(), app::ExportQueue::Device::Auto,
+                           {.cpuOnly = true, .gpu = std::nullopt});
+    const auto path = directory.file("cpu.png");
+    queue.enqueue(jobTo(path, ImageFileFormat::Png));
+    REQUIRE(collector.waitFor(1));
+    const auto result = collector.results().front();
+    REQUIRE(result.error.empty());
+    REQUIRE_FALSE(result.onGpu);
+    REQUIRE(result.fallbackReason.empty());
+    REQUIRE_FALSE(load(path).isNull());
+}

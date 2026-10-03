@@ -17,6 +17,7 @@ add_executable(arraw-tests
         main.cpp
         support/ImageCompare.cpp
         support/TestImages.cpp
+        test_AppSettings.cpp
         test_Cli.cpp
         test_ColorEncoding.cpp
         test_Develop.cpp
@@ -56,6 +57,7 @@ add_executable(arraw-tests
         test_RoundTrip.cpp
         test_ThumbnailCache.cpp
         test_ThumbnailWorker.cpp
+        test_TimingTrace.cpp
         test_Tone.cpp
         test_ViewTransform.cpp
         test_WhiteBalance.cpp
@@ -84,6 +86,17 @@ target_link_libraries(arraw-tests
         ${ARRAW_EXIV2})
 set_target_properties(arraw-tests PROPERTIES AUTOMOC OFF)
 arraw_deploy_qt_plugins(arraw-tests)
+
+# Widget behavior runs separately because the core suite owns a QCoreApplication.
+add_executable(arraw-widget-tests
+        test_SettingsDialog.cpp
+        ../src/app/ui/SettingsDialog.cpp
+        ../src/app/ui/SettingsDialog.h)
+arraw_enable_warnings(arraw-widget-tests)
+target_link_libraries(arraw-widget-tests PRIVATE arraw-app-core Qt6::Widgets Catch2::Catch2)
+set_target_properties(arraw-widget-tests PROPERTIES AUTOMOC ON)
+arraw_deploy_qt_plugins(arraw-widget-tests)
+catch_discover_tests(arraw-widget-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # Registers each TEST_CASE with CTest individually, so `ctest -R` can select one.
 catch_discover_tests(arraw-tests)
@@ -181,6 +194,7 @@ endif()
 # to date: `just test` builds this, and a target CTest registers but nothing
 # builds would fail as "not built", or run stale.
 add_custom_target(arraw-test-binaries)
+add_dependencies(arraw-test-binaries arraw-widget-tests)
 add_dependencies(arraw-test-binaries arraw-tests arraw-cli)
 add_dependencies(arraw-test-binaries arraw-gpu-tests)
 if(TARGET arraw-headless-tests)

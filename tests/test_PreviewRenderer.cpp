@@ -476,3 +476,18 @@ TEST_CASE("A region outside the frame is reported as a failure", "[app][preview]
     REQUIRE_FALSE(result.error.empty());
     REQUIRE_FALSE(result.image.has_value());
 }
+
+TEST_CASE("Desktop CPU preference overrides automatic preview rendering",
+          "[app][preview][settings]") {
+    Collector collector;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Auto,
+                                  {.cpuOnly = true, .gpu = std::nullopt});
+    renderer.setSource(makeSource());
+    const auto id = renderer.request({}, app::PreviewView::wholeFrame({128, 64}));
+    REQUIRE(collector.waitFor(id));
+    const auto result = collector.results().back();
+    REQUIRE(result.image);
+    REQUIRE(result.error.empty());
+    REQUIRE_FALSE(result.onGpu);
+    REQUIRE(result.fallbackReason.empty());
+}

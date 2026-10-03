@@ -141,6 +141,8 @@ add_library(arraw STATIC
         include/ToneSettings.h
         src/core/ToneSettings.cpp
         src/core/ColorSpaces.h
+        src/core/TimingTrace.cpp
+        src/core/TimingTrace.h
         src/core/Develop.cpp
         src/core/Diagnostics.cpp
         src/core/ProcessingPlan.cpp
@@ -318,6 +320,8 @@ endif()
 # What the application does that needs no widgets, split from its main() so the
 # tests can drive it, as arraw-cli-core does for the command line.
 add_library(arraw-app-core STATIC
+        src/app/AppSettings.cpp
+        src/app/AppSettings.h
         src/app/DebugDiagnostics.cpp
         src/app/DebugDiagnostics.h
         src/app/DisplayImage.cpp
@@ -347,8 +351,9 @@ add_library(arraw-app-core STATIC
         src/app/WhiteBalanceChoice.cpp
         src/app/WhiteBalanceChoice.h)
 arraw_enable_warnings(arraw-app-core)
-target_include_directories(arraw-app-core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/app)
-target_link_libraries(arraw-app-core PUBLIC arraw Qt6::Core Qt6::Gui PRIVATE arraw-gpu)
+target_include_directories(arraw-app-core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/app
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/core)
+target_link_libraries(arraw-app-core PUBLIC arraw arraw-gpu Qt6::Core Qt6::Gui)
 # The shot model, its filter and the folder watcher are QObjects with signals.
 set_target_properties(arraw-app-core PROPERTIES AUTOMOC ON)
 
@@ -365,6 +370,8 @@ add_executable(arraw-ui src/app/main.cpp
         src/app/ui/MainWindow.h
         src/app/ui/PhotoView.cpp
         src/app/ui/PhotoView.h
+        src/app/ui/SettingsDialog.cpp
+        src/app/ui/SettingsDialog.h
         src/app/ui/SettingSlider.cpp
         src/app/ui/SettingSlider.h)
 arraw_enable_warnings(arraw-ui)

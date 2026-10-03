@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AppSettings.h"
+
 #include <DevelopState.h>
 #include <ImageBuffer.h>
 #include <RenderCheckpoint.h>
@@ -107,8 +109,9 @@ public:
     /// thread; the caller marshals it to wherever it is needed. Must not throw;
     /// what it throws is dropped.
     /// @param device Where previews may be rendered.
+    /// @param settings Desktop GPU preference, captured for the lifetime of the worker.
     explicit PreviewRenderer(std::function<void(PreviewResult)> onResult,
-                             Device device = Device::Auto);
+                             Device device = Device::Auto, AppSettings settings = {});
 
     PreviewRenderer(const PreviewRenderer&) = delete;
     PreviewRenderer& operator=(const PreviewRenderer&) = delete;
@@ -154,6 +157,9 @@ private:
 
     /// Where previews may be rendered; fixed before the worker starts.
     Device device_;
+
+    /// Desktop preferences captured before the worker starts.
+    AppSettings settings_;
 
     /// Guard of source_, pending_ and lastId_.
     std::mutex mutex_;

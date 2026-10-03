@@ -116,6 +116,30 @@ premultiplied alpha. Continuous crop dimensions are floored to whole output
 pixels, with a minimum of one pixel per axis. Resizing is applied last,
 after the crop (see `--resize`).
 
+The desktop app offers **Edit → Settings…** (the application Settings menu on macOS).
+The Processing tab selects Automatic, CPU only, or a detected hardware GPU for previews
+and exports. Preferences use Qt's native `QSettings` storage and take effect after restart.
+A selected GPU that is unavailable falls back to CPU; the preview device label explains why.
+`ARRAW_PREVIEW_DEVICE=cpu` continues to override the saved preference for that session.
+
+To trace development performance, enable the `arraw.timing` Qt logging category:
+
+```sh
+QT_LOGGING_RULES="arraw.timing.debug=true" just gui 2>timing.log
+# The same category works in the CLI:
+QT_LOGGING_RULES="arraw.timing.debug=true" just cli export photo.dng -o out/
+```
+
+Traces show monotonic milliseconds since startup, begin/end events, elapsed milliseconds,
+unique span IDs, parent IDs, and preview/export request IDs. They cover processing plans,
+CPU stages, GPU context creation, uploads, individual GPU passes and submission waits,
+readback, preview pyramids, display conversion, and export writing.
+Nested durations include their children; do not add them together. Cached stages may be
+absent. These are host elapsed times, not GPU hardware timestamps; tracing itself adds
+logging overhead. Output goes to Qt's diagnostic stream (normally stderr), is disabled by
+default, and does not change CLI stdout or its JSON documents. Explicitly enabling timing
+alongside `--log-format json` mixes debug traces with diagnostic JSON on stderr.
+
 ## Layout
 
 - `include/` — the public API

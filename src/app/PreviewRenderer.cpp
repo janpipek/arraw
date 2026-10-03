@@ -3,6 +3,7 @@
 #include "DisplayImage.h"
 #include "GpuContext.h"
 #include "GpuDevelop.h"
+#include "TimingTrace.h"
 
 #include <Develop.h>
 #include <ImagePyramid.h>
@@ -115,7 +116,7 @@ private:
 /// is destroyed on the thread that owns it, before that thread ends.
 class GpuPreview {
 public:
-    GpuPreview() = default;
+    explicit GpuPreview(AppSettings settings) : settings_(std::move(settings)) {}
     GpuPreview(const GpuPreview&) = delete;
     GpuPreview& operator=(const GpuPreview&) = delete;
     GpuPreview(GpuPreview&&) = delete;
@@ -213,7 +214,7 @@ public:
 private:
     /// @brief Creates the device, or records why not.
     void create() {
-        context_ = createHardwareContext(reason_);
+        context_ = createAppGpuContext(settings_, reason_);
     }
 
     /// @brief Drops the device once it has failed for good; the CPU takes over.
@@ -229,6 +230,8 @@ private:
 
     // Declaration order is destruction order reversed: the device is made first
     // and goes last (the destructor says so too).
+    /// Desktop GPU preference.
+    AppSettings settings_;
     std::unique_ptr<GpuContext> context_;
     /// Pyramid levels on the device, by level; a level not yet needed is empty.
     std::vector<DeviceImage> uploaded_;
@@ -309,6 +312,7 @@ private:
 PreviewResult render(std::uint64_t id, const DevelopState& state, const PreviewView& view,
                      const std::shared_ptr<const ImageBuffer>& source, SourcePyramid& pyramid,
                      CheckpointCache& cpuCache, GpuPreview* gpu) {
+    const detail::TimingSpan timing("preview.render", id);
     PreviewResult result{.request = id,
                          .image = std::nullopt,
                          .error = {},
@@ -349,8 +353,18 @@ PreviewResult render(std::uint64_t id, const DevelopState& state, const PreviewV
         const int level =
             std::min(pyramidLevelFor(source->size(), source->orientation(), state, request),
                      SourcePyramid::highestLevel(source->size()));
-        const std::shared_ptr<const ImageBuffer>& reduced = pyramid.level(level);
+        const std::shared_ptr<const ImageBuffer> reduced = [&] {
+            const detail::TimingSpan pyramidTiming("preview.pyramid");
+            return pyramid.level(level);
+        }();
         result.level = level;
+        if (detail::timingLog().isDebugEnabled()) {
+            timing.note("level=" + std::to_string(level) +
+                        " source=" + std::to_string(reduced->size().width) + "x" +
+                        std::to_string(reduced->size().height) +
+                        " viewport=" + std::to_string(view.outputSize.width()) + "x" +
+                        std::to_string(view.outputSize.height()));
+        }
         // Snapped to the level's own pixels, which are coarser than the
         // frame's: where the image goes on screen is what this says.
         const RenderRequest::Region rendered =
@@ -366,6 +380,7 @@ PreviewResult render(std::uint64_t id, const DevelopState& state, const PreviewV
                 result.image = std::move(image);
                 result.onGpu = true;
                 result.deviceName = gpu->deviceName();
+                timing.note(result.deviceName);
                 return result;
             } catch (const std::exception& error) {
                 gpuFailure = error.what();
@@ -386,6 +401,7 @@ PreviewResult render(std::uint64_t id, const DevelopState& state, const PreviewV
         QImage image = toDisplayImage(developed.readBack());
         image.setDevicePixelRatio(view.devicePixelRatio);
         result.image = std::move(image);
+        timing.note("CPU");
         if (gpu != nullptr) {
             if (!gpuFailure.empty()) {
                 gpu->fail(gpuFailure);
@@ -402,9 +418,10 @@ PreviewResult render(std::uint64_t id, const DevelopState& state, const PreviewV
 
 } // namespace
 
-PreviewRenderer::PreviewRenderer(std::function<void(PreviewResult)> onResult, Device device)
-    : onResult_(std::move(onResult)), device_(device),
-      worker_([this](const std::stop_token& stop) { run(stop); }) {}
+PreviewRenderer::PreviewRenderer(std::function<void(PreviewResult)> onResult, Device device,
+                                 AppSettings settings)
+    : onResult_(std::move(onResult)), device_(settings.cpuOnly ? Device::Cpu : device),
+      settings_(std::move(settings)), worker_([this](const std::stop_token& stop) { run(stop); }) {}
 
 PreviewRenderer::~PreviewRenderer() {
     // Explicit rather than left to ~jthread, so the order is visible: stop,
@@ -436,7 +453,7 @@ void PreviewRenderer::run(std::stop_token stop) {
     // thread ends. Only built when the GPU is allowed at all.
     std::optional<GpuPreview> gpu;
     if (device_ == Device::Auto) {
-        gpu.emplace();
+        gpu.emplace(settings_);
     }
     // Host memory only: the GPU's copies of the levels are its own.
     SourcePyramid pyramid;
@@ -455,6 +472,7 @@ void PreviewRenderer::run(std::stop_token stop) {
             pending_.reset();
             source = source_;
         }
+        const detail::TimingSpan timing("preview", job->id);
         // Without the lock: developing takes long, and the window must be able
         // to queue the next request meanwhile.
         PreviewResult result = render(job->id, job->state, job->view, source, pyramid, cpuCache,
