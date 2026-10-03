@@ -1,14 +1,15 @@
 #include "SettingsJson.h"
 
 #include "SettingCodec.h"
+#include "ShortestDecimal.h"
 
 #include <QByteArray>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonParseError>
 #include <QJsonValue>
 
-#include <charconv>
 #include <cmath>
 #include <stdexcept>
 #include <string>
@@ -21,9 +22,7 @@ namespace {
 
 /// @brief Spells a finite number as JSON, in the shortest text that reads back the same.
 std::string number(double value) {
-    char buffer[64];
-    const auto written = std::to_chars(buffer, buffer + sizeof buffer, value);
-    return std::string(buffer, written.ptr);
+    return shortestText(value);
 }
 
 /// @brief Quotes a string as JSON.
@@ -83,7 +82,18 @@ std::optional<Encoded> unspell(const QJsonValue& value) {
         }
         return Encoded{std::move(compound)};
     }
-    case QJsonValue::Array:
+    case QJsonValue::Array: {
+        PointList points;
+        for (const QJsonValue& entry : value.toArray()) {
+            const QJsonArray pair = entry.toArray();
+            if (!entry.isArray() || pair.size() != 2 || !pair[0].isDouble() ||
+                !pair[1].isDouble()) {
+                return std::nullopt;
+            }
+            points.emplace_back(pair[0].toDouble(), pair[1].toDouble());
+        }
+        return Encoded{std::move(points)};
+    }
     case QJsonValue::Undefined:
         break;
     }
@@ -114,6 +124,14 @@ std::string arraw::encodedToJson(const Encoded& encoded) {
                 text += jsonString(key) + ": " + number(value);
             }
             return text + '}';
+        }
+        std::string operator()(const PointList& points) const {
+            std::string text = "[";
+            for (const auto& [x, y] : points) {
+                text += text.size() > 1 ? ", " : "";
+                text += "[" + number(x) + ", " + number(y) + "]";
+            }
+            return text + ']';
         }
     };
     return std::visit(Speller{}, encoded);

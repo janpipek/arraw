@@ -1,19 +1,23 @@
 #include "GeometryPlan.h"
 #include "GpuPlan.h"
 #include "ProcessingPlan.h"
+#include "ToneCurve.h"
 
 #include <ColorEncoding.h>
+#include <DevelopSettings.h>
 #include <DevelopState.h>
 #include <GeometrySettings.h>
 #include <ImageBuffer.h>
 #include <ImageOrientation.h>
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <span>
 #include <stdexcept>
 
 using namespace arraw;
@@ -204,5 +208,54 @@ TEST_CASE("The packed map lands where the CPU samples", "[gpu][plan]") {
         };
         REQUIRE(std::abs(position(0) - expected.x) < 1e-5);
         REQUIRE(std::abs(position(1) - expected.y) < 1e-5);
+    }
+}
+
+TEST_CASE("The pointwise block flags and carries the active tone curves", "[gpu][plan][curve]") {
+    ProcessingPlan idle;
+    const auto off = packPointwise(idle);
+    REQUIRE(off.curvesLuma == 0U);
+    REQUIRE(off.curvesRed == 0U);
+    REQUIRE(off.curvesGreen == 0U);
+    REQUIRE(off.curvesBlue == 0U);
+
+    DevelopSettings settings;
+    settings.toneCurve.luma.points = {{0.0F, 0.0F}, {0.5F, 0.7F}, {1.0F, 1.0F}};
+    settings.toneCurve.blue.points = {{0.0F, 0.1F}, {1.0F, 0.8F}};
+    const ProcessingPlan plan = planFor(workingEncoding, DevelopState{settings});
+
+    const auto block = packPointwise(plan);
+    REQUIRE(block.curvesLuma == 1U);
+    REQUIRE(block.curvesRed == 0U);
+    REQUIRE(block.curvesGreen == 0U);
+    REQUIRE(block.curvesBlue == 1U);
+}
+
+TEST_CASE("The tone curves pack as one row, a curve to a channel", "[gpu][plan][curve]") {
+    DevelopSettings settings;
+    settings.toneCurve.luma.points = {{0.0F, 0.0F}, {0.5F, 0.7F}, {1.0F, 1.0F}};
+    settings.toneCurve.green.points = {{0.0F, 0.1F}, {1.0F, 0.8F}};
+    const ProcessingPlan plan = planFor(workingEncoding, DevelopState{settings});
+
+    const ImageBuffer packed = packToneCurves(plan.toneCurves);
+    REQUIRE(packed.size() == ImageSize{static_cast<std::uint32_t>(toneCurveSamples), 1});
+    REQUIRE(packed.format() == PixelFormat::RgbaF32);
+
+    const std::span<const float> texels = packed.samples<float>();
+    for (std::size_t index = 0; index < toneCurveSamples; ++index) {
+        REQUIRE(texels[index * 4] == plan.toneCurves.luma.table[index]);
+        REQUIRE(texels[index * 4 + 1] == 0.0F); // red: identity, so off and zero
+        REQUIRE(texels[index * 4 + 2] == plan.toneCurves.green.table[index]);
+        REQUIRE(texels[index * 4 + 3] == 0.0F);
+    }
+    // The ends are the curve's own, which the shader's extension starts from.
+    REQUIRE(texels[2] == Catch::Approx(0.1F));
+    REQUIRE(texels[(toneCurveSamples - 1) * 4 + 2] == Catch::Approx(0.8F));
+
+    // Default settings pack to an all-zero texture of the same size.
+    const ImageBuffer idle = packToneCurves(ToneCurvePlan{});
+    REQUIRE(idle.size() == packed.size());
+    for (const float value : idle.samples<float>()) {
+        REQUIRE(value == 0.0F);
     }
 }

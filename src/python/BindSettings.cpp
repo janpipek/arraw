@@ -3,6 +3,7 @@
 #include <DevelopSettings.h>
 #include <SettingDescriptors.h>
 #include <SettingsJson.h>
+#include <ToneCurveSettings.h>
 
 #include <cctype>
 #include <string>
@@ -81,7 +82,16 @@ void applyFlatSettings(DevelopSettings& settings, const nb::kwargs& keywords) {
             throw nb::type_error(("unknown develop setting '" + name + "'").c_str());
         }
         visitField(*match, settings, [&](auto& leaf) {
-            leaf = convertValue<std::remove_cvref_t<decltype(leaf)>>(value, name);
+            using Leaf = std::remove_cvref_t<decltype(leaf)>;
+            if constexpr (std::is_same_v<Leaf, ToneCurve>) {
+                // A curve may be given as a ToneCurve or as its list of (x, y) points.
+                if (!nb::isinstance<ToneCurve>(value)) {
+                    leaf = ToneCurve{convertValue<std::vector<CurvePoint>>(value, name)};
+                    normaliseCurvePoints(leaf.points);
+                    return;
+                }
+            }
+            leaf = convertValue<Leaf>(value, name);
         });
     }
 }
@@ -103,7 +113,8 @@ void bindSettings(nb::module_& m) {
         .value("TONE", SettingGroup::Tone)
         .value("GEOMETRY", SettingGroup::Geometry)
         .value("HSL", SettingGroup::Hsl)
-        .value("BLACK_AND_WHITE", SettingGroup::BlackAndWhite);
+        .value("BLACK_AND_WHITE", SettingGroup::BlackAndWhite)
+        .value("TONE_CURVE", SettingGroup::ToneCurve);
 
     nb::enum_<Applicability>(m, "Applicability",
                              "Whether a setting means anything for every photograph.")
@@ -167,11 +178,24 @@ void bindSettings(nb::module_& m) {
                                  field("straighten", &GeometrySettings::straighten),
                                  field("crop", &GeometrySettings::crop));
 
+    bindFrozen<ToneCurve, false>(
+        m, "ToneCurve",
+        "A tone curve as 2 to 16 (x, y) control points from x = 0 to x = 1, x at least 0.01 "
+        "apart, given in any order and sorted by x; the default is the identity.",
+        field("points", &ToneCurve::points))
+        .def_prop_ro("is_identity", &ToneCurve::isIdentity,
+                     "Whether the curve is exactly the line from (0, 0) to (1, 1).");
+    bindFrozen<ToneCurveSettings>(
+        m, "ToneCurveSettings", "Tone curves on luminance and on the red, green and blue channels.",
+        field("luma", &ToneCurveSettings::luma), field("red", &ToneCurveSettings::red),
+        field("green", &ToneCurveSettings::green), field("blue", &ToneCurveSettings::blue));
+
     bindFrozen<DevelopSettings>(
         m, "DevelopSettings", "Photographic settings of one photograph.",
         field("color", &DevelopSettings::color), field("geometry", &DevelopSettings::geometry),
         field("tone", &DevelopSettings::tone), field("hsl", &DevelopSettings::hsl),
-        field("black_and_white", &DevelopSettings::blackAndWhite))
+        field("black_and_white", &DevelopSettings::blackAndWhite),
+        field("tone_curve", &DevelopSettings::toneCurve))
         .def(
             "with_",
             [](const DevelopSettings& self, const nb::kwargs& keywords) {

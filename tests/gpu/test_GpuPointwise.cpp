@@ -3,6 +3,7 @@
 #include "GpuTesting.h"
 #include "ProcessingPlan.h"
 #include "SampleConversion.h"
+#include "ToneCurve.h"
 
 #include <Develop.h>
 #include <DevelopSettings.h>
@@ -300,6 +301,74 @@ std::vector<std::pair<std::string, DevelopSettings>> colorCases() {
     return cases;
 }
 
+/// @brief Builds a tone curve from control points.
+ToneCurve curveOf(std::vector<CurvePoint> points) {
+    return ToneCurve{std::move(points)};
+}
+
+/// @brief Names every tone curve combination the comparisons run over.
+///
+/// The shoulder and the rest stay at their defaults, so that the curves are
+/// also checked upstream of the shoulder, where they run.
+std::vector<std::pair<std::string, DevelopSettings>> curveCases() {
+    const ToneCurve sCurve = curveOf({{0.0F, 0.0F}, {0.25F, 0.15F}, {0.75F, 0.85F}, {1.0F, 1.0F}});
+    const ToneCurve lifted = curveOf({{0.0F, 0.2F}, {0.5F, 0.6F}, {1.0F, 1.0F}});
+    const ToneCurve steepEnd = curveOf({{0.0F, 0.0F}, {0.6F, 0.3F}, {1.0F, 1.0F}});
+    const ToneCurve inverting = curveOf({{0.0F, 1.0F}, {1.0F, 0.0F}});
+    const ToneCurve wiggly = curveOf({{0.0F, 0.0F},
+                                      {0.1F, 0.25F},
+                                      {0.3F, 0.3F},
+                                      {0.45F, 0.7F},
+                                      {0.7F, 0.72F},
+                                      {0.9F, 0.95F},
+                                      {1.0F, 1.0F}});
+    const ToneCurve flatEnd = curveOf({{0.0F, 0.0F}, {0.5F, 0.8F}, {1.0F, 0.8F}});
+    ToneCurve sixteen;
+    sixteen.points.clear();
+    for (int i = 0; i < 16; ++i) {
+        const float x = static_cast<float>(i) / 15.0F;
+        sixteen.points.push_back({x, x + (i % 2 == 0 ? 0.0F : 0.03F) * (1.0F - x)});
+    }
+
+    std::vector<std::pair<std::string, DevelopSettings>> cases;
+    const auto add = [&](std::string name, auto change) {
+        DevelopSettings settings;
+        change(settings.toneCurve);
+        cases.emplace_back(std::move(name), settings);
+    };
+    add("luma s-curve", [&](ToneCurveSettings& c) { c.luma = sCurve; });
+    add("luma lifted black", [&](ToneCurveSettings& c) { c.luma = lifted; });
+    add("luma steep end", [&](ToneCurveSettings& c) { c.luma = steepEnd; });
+    add("luma inverting", [&](ToneCurveSettings& c) { c.luma = inverting; });
+    add("luma seven-point", [&](ToneCurveSettings& c) { c.luma = wiggly; });
+    add("luma sixteen-point", [&](ToneCurveSettings& c) { c.luma = sixteen; });
+    add("luma flat end", [&](ToneCurveSettings& c) { c.luma = flatEnd; });
+    add("red only", [&](ToneCurveSettings& c) { c.red = sCurve; });
+    add("green only", [&](ToneCurveSettings& c) { c.green = lifted; });
+    add("blue only", [&](ToneCurveSettings& c) { c.blue = steepEnd; });
+    add("rgb", [&](ToneCurveSettings& c) {
+        c.red = sCurve;
+        c.green = lifted;
+        c.blue = steepEnd;
+    });
+    add("rgb lifted and flat end", [&](ToneCurveSettings& c) {
+        c.red = lifted;
+        c.green = flatEnd;
+        c.blue = sixteen;
+    });
+    add("rgb inverting", [&](ToneCurveSettings& c) {
+        c.red = inverting;
+        c.blue = wiggly;
+    });
+    add("luma and rgb", [&](ToneCurveSettings& c) {
+        c.luma = sCurve;
+        c.red = lifted;
+        c.green = wiggly;
+        c.blue = steepEnd;
+    });
+    return cases;
+}
+
 /// @brief Reads a fixture RAW with its own encoding and orientation.
 ImageBuffer fixtureImage(const char* name) {
     return loadImage(std::filesystem::path(ARRAW_TEST_DATA_DIR) / name);
@@ -393,6 +462,91 @@ TEST_CASE("The pointwise pass matches the CPU chain for colour controls on negat
             requireMatchesCpu(source, settings, illConditionedRelativeTolerance);
         }
     }
+}
+
+TEST_CASE("The pointwise pass matches the CPU chain for every tone curve",
+          "[gpu][pointwise][curve]") {
+    // Up to a hundred times white, so that the extension above one is read.
+    const ImageBuffer source = sweep({64, 48}, false, workingEncoding, 47, 2.0);
+    for (const auto& [name, settings] : curveCases()) {
+        DYNAMIC_SECTION(name) {
+            // An inverting curve sends bright inputs to near black, where the
+            // power back to linear amplifies the float rounding of the table
+            // blend (a relative 1e-4 at an output of 1e-3): ill-conditioned
+            // output, as a lifted black is, not a different formula.
+            const bool inverts = name.find("inverting") != std::string::npos;
+            requireMatchesCpu(source, settings,
+                              inverts ? illConditionedRelativeTolerance
+                                      : pointwiseRelativeTolerance);
+        }
+    }
+}
+
+TEST_CASE("The pointwise pass matches the CPU chain for tone curves on negative channels",
+          "[gpu][pointwise][curve]") {
+    const ImageBuffer source = sweep({64, 48}, true, workingEncoding, 53, 2.0);
+    for (const auto& [name, settings] : curveCases()) {
+        DYNAMIC_SECTION(name) {
+            requireMatchesCpu(source, settings, illConditionedRelativeTolerance);
+        }
+    }
+}
+
+TEST_CASE("The pointwise pass matches the CPU chain for tone curves under the tone controls",
+          "[gpu][pointwise][curve]") {
+    const ImageBuffer source = sweep({64, 48}, false, workingEncoding, 59, 1.0);
+    DevelopSettings settings = withTone({0.5F, 30.0F, 20.0F, -20.0F, 10.0F, -10.0F, 60.0F});
+    settings.toneCurve.luma = curveOf({{0.0F, 0.0F}, {0.25F, 0.15F}, {0.75F, 0.85F}, {1.0F, 1.0F}});
+    settings.toneCurve.green = curveOf({{0.0F, 0.1F}, {0.5F, 0.45F}, {1.0F, 1.0F}});
+    settings.color.saturation = 20.0F;
+    requireMatchesCpu(source, settings);
+}
+
+TEST_CASE("Default tone curves leave the GPU's result bit for bit as without them",
+          "[gpu][pointwise][curve]") {
+    // The curves bind a texture even when off; it must change nothing. The
+    // chain here is the exact one of the test above, and the settings spell
+    // the identity curves out rather than leaving them defaulted.
+    const ImageBuffer source = sweep({40, 30}, true);
+    const DevelopSettings plain = withTone(neutralTone());
+    DevelopSettings spelledOut = plain;
+    spelledOut.toneCurve.luma = curveOf({{0.0F, 0.0F}, {1.0F, 1.0F}});
+    spelledOut.toneCurve.red = curveOf({{0.0F, 0.0F}, {1.0F, 1.0F}});
+    REQUIRE(planFor(source, DevelopState{spelledOut}).toneCurves == ToneCurvePlan{});
+
+    const ImageBuffer without = gpuPointwise(source, plain);
+    const ImageBuffer with = gpuPointwise(source, spelledOut);
+    REQUIRE(compareFloat(without, with).bitExact);
+    REQUIRE(compareFloat(cpuPointwise(source, plain), with).bitExact);
+
+    // And with the default settings as a whole, against the same settings run
+    // twice: no stray state in the curve texture reaches the pixels.
+    const ImageBuffer first = gpuPointwise(source, DevelopSettings{});
+    const ImageBuffer second = gpuPointwise(source, DevelopSettings{});
+    REQUIRE(compareFloat(first, second).bitExact);
+}
+
+TEST_CASE("A tone curve resumes from a checkpoint like any other pointwise setting",
+          "[gpu][pointwise][curve]") {
+    const ImageBuffer source = sweep({32, 24}, false, workingEncoding, 61, 1.0);
+    DevelopSettings curved;
+    curved.toneCurve.luma = curveOf({{0.0F, 0.0F}, {0.25F, 0.15F}, {0.75F, 0.85F}, {1.0F, 1.0F}});
+
+    // A checkpoint taken at the pointwise boundary resumes into geometry
+    // without running the pass, so the curves are not uploaded again and the
+    // pixels are those of the first development.
+    const RenderCheckpoint first =
+        developOnGpu(gpuContext(), source, DevelopState{curved}, Stage::Pointwise);
+    const RenderCheckpoint resumed =
+        developOnGpu(gpuContext(), first, source, DevelopState{curved}, Stage::Geometry);
+    REQUIRE(compareFloat(first.readBack(), resumed.readBack()).bitExact);
+
+    // Changing the curve is a change at the pointwise stage: a fresh render.
+    DevelopSettings other = curved;
+    other.toneCurve.red = curveOf({{0.0F, 0.1F}, {1.0F, 1.0F}});
+    const RenderCheckpoint changed =
+        developOnGpu(gpuContext(), source, DevelopState{other}, Stage::Pointwise);
+    requireClose(cpuPointwise(source, other), changed.readBack());
 }
 
 TEST_CASE("The pointwise pass matches the CPU chain for colour controls on integer sources",
@@ -516,8 +670,20 @@ TEST_CASE("The pointwise pass lifts black as the CPU chain does", "[gpu][pointwi
     const ImageBuffer source = row(colours, 0.25F);
 
     ToneSettings tone = neutralTone();
+    ToneCurveSettings curves;
     SECTION("blacks up") {
         tone.blacks = strongestToneControl;
+    }
+    SECTION("luma curve lifting black") {
+        curves.luma = curveOf({{0.0F, 0.2F}, {0.5F, 0.6F}, {1.0F, 1.0F}});
+    }
+    SECTION("luma curve keeping black") {
+        curves.luma = curveOf({{0.0F, 0.0F}, {0.25F, 0.15F}, {0.75F, 0.85F}, {1.0F, 1.0F}});
+    }
+    SECTION("channel curves lifting black, on negative channels") {
+        curves.red = curveOf({{0.0F, 0.2F}, {1.0F, 1.0F}});
+        curves.green = curveOf({{0.0F, 0.0F}, {0.9F, 0.91F}, {1.0F, 1.0F}});
+        curves.blue = curveOf({{0.0F, 0.1F}, {0.5F, 0.6F}, {1.0F, 0.9F}});
     }
     SECTION("blacks down") {
         tone.blacks = weakestToneControl;
@@ -532,7 +698,48 @@ TEST_CASE("The pointwise pass lifts black as the CPU chain does", "[gpu][pointwi
     SECTION("exposure and every control") {
         tone = {2.0F, 40.0F, 50.0F, 50.0F, 100.0F, 50.0F, 25.0F};
     }
-    requireMatchesCpu(source, withTone(tone), illConditionedRelativeTolerance);
+    DevelopSettings settings = withTone(tone);
+    settings.toneCurve = curves;
+    requireMatchesCpu(source, settings, illConditionedRelativeTolerance);
+}
+
+TEST_CASE("The pointwise pass matches the CPU chain for curves near zero luminance and below zero",
+          "[gpu][pointwise][curve]") {
+    // Out of gamut with next to no luminance, either side of zero and of the
+    // ratio floor, and negative channels through channel curves.
+    constexpr std::array<std::array<float, 3>, 12> colours{{
+        {1.0F, -0.38732F, 0.0F},
+        {1.0F, -0.38745F, 0.0F},
+        {1.0F, -0.38748F, 0.0F},
+        {1.0F, -0.38760F, 0.0F},
+        {6.1e-5F, 6.1e-5F, 6.1e-5F},
+        {6.2e-5F, 6.2e-5F, 6.2e-5F},
+        {1.0e-6F, 1.0e-6F, 1.0e-6F},
+        {-0.1F, 0.5F, 0.5F},
+        {-0.3F, -0.3F, -0.3F},
+        {0.5F, -0.05F, 0.2F},
+        {0.0F, 0.0F, 0.0F},
+        {0.2F, 0.4F, 0.6F},
+    }};
+    const ImageBuffer source = row(colours, 0.5F);
+    DevelopSettings settings;
+    SECTION("luma lifting black") {
+        settings.toneCurve.luma = curveOf({{0.0F, 0.2F}, {1.0F, 1.0F}});
+    }
+    SECTION("luma keeping black") {
+        settings.toneCurve.luma = curveOf({{0.0F, 0.0F}, {0.5F, 0.5F}, {1.0F, 0.8F}});
+    }
+    SECTION("channel curves") {
+        settings.toneCurve.red = curveOf({{0.0F, 0.0F}, {0.9F, 0.91F}, {1.0F, 1.0F}});
+        settings.toneCurve.green = curveOf({{0.0F, 0.2F}, {1.0F, 1.0F}});
+        settings.toneCurve.blue = curveOf({{0.0F, 0.1F}, {0.5F, 0.3F}, {1.0F, 0.9F}});
+    }
+    SECTION("all four") {
+        settings.toneCurve.luma = curveOf({{0.0F, 0.15F}, {0.5F, 0.55F}, {1.0F, 1.0F}});
+        settings.toneCurve.red = curveOf({{0.0F, 0.0F}, {0.9F, 0.91F}, {1.0F, 1.0F}});
+        settings.toneCurve.green = curveOf({{0.0F, 0.2F}, {1.0F, 1.0F}});
+    }
+    requireMatchesCpu(source, settings, illConditionedRelativeTolerance);
 }
 
 TEST_CASE("The pointwise pass agrees with the CPU chain on NaN and infinity", "[gpu][pointwise]") {
@@ -553,7 +760,19 @@ TEST_CASE("The pointwise pass agrees with the CPU chain on NaN and infinity", "[
     const ImageBuffer source = row(colours, 0.75F);
 
     ToneSettings tone = neutralTone();
+    ToneCurveSettings curves;
     SECTION("no tone, no shoulder") {}
+    SECTION("curves with a flat end") {
+        // A flat end once made 0 * inf: infinity must stay infinity.
+        curves.luma = curveOf({{0.0F, 0.0F}, {0.5F, 0.8F}, {1.0F, 0.8F}});
+        curves.red = curves.luma;
+        curves.blue = curveOf({{0.0F, 0.2F}, {1.0F, 1.0F}});
+    }
+    SECTION("channel curves alone") {
+        curves.red = curveOf({{0.0F, 0.0F}, {0.5F, 0.8F}, {1.0F, 0.8F}});
+        curves.green = curveOf({{0.0F, 0.2F}, {1.0F, 1.0F}});
+        curves.blue = curveOf({{0.0F, 0.0F}, {0.9F, 0.5F}, {1.0F, 1.0F}});
+    }
     SECTION("shoulder") {
         tone.filmicHighlights = fullFilmicHighlights;
     }
@@ -564,7 +783,9 @@ TEST_CASE("The pointwise pass agrees with the CPU chain on NaN and infinity", "[
     SECTION("tone and shoulder") {
         tone = {1.0F, 30.0F, 20.0F, 20.0F, 20.0F, 20.0F, 60.0F};
     }
-    requireMatchesCpu(source, withTone(tone));
+    DevelopSettings settings = withTone(tone);
+    settings.toneCurve = curves;
+    requireMatchesCpu(source, settings);
 }
 
 TEST_CASE("The pointwise pass matches the CPU chain on RAW fixtures", "[gpu][pointwise]") {
@@ -620,11 +841,16 @@ TEST_CASE("The pointwise pass writes the CPU's value after each stage", "[gpu][p
     settings.color = {WhiteBalanceMode::Custom, 3600.0F, 6.0F, 30.0F, -20.0F};
     settings.hsl.red = {40.0F, 20.0F, -10.0F};
     settings.hsl.green = {-30.0F, -25.0F, 20.0F};
+    settings.toneCurve.luma = curveOf({{0.0F, 0.0F}, {0.25F, 0.15F}, {0.75F, 0.85F}, {1.0F, 1.0F}});
+    settings.toneCurve.blue = curveOf({{0.0F, 0.05F}, {0.5F, 0.45F}, {1.0F, 1.0F}});
     const ProcessingPlan plan = planFor(source, DevelopState{settings});
     REQUIRE(plan.shapesTone);
+    REQUIRE(plan.toneCurves.luma.active);
+    REQUIRE(plan.toneCurves.blue.active);
     REQUIRE(plan.colorAdjustments.adjustsHsl);
 
     const DeviceImage input = context.upload(source);
+    const DeviceImage curves = context.upload(packToneCurves(plan.toneCurves));
     const std::span<const float> in = source.samples<float>();
 
     struct Probe {
@@ -632,7 +858,7 @@ TEST_CASE("The pointwise pass writes the CPU's value after each stage", "[gpu][p
         PointwiseProbe probe;
         Colour (*stage)(const ProcessingPlan&, Colour);
     };
-    const std::array<Probe, 5> probes{{
+    const std::array<Probe, 6> probes{{
         {"after the matrix", PointwiseProbe::AfterMatrix,
          [](const ProcessingPlan& p, Colour c) { return p.toWorking * c; }},
         {"after exposure", PointwiseProbe::AfterExposure,
@@ -646,11 +872,17 @@ TEST_CASE("The pointwise pass writes the CPU's value after each stage", "[gpu][p
              c = {c[0] * p.exposureGain, c[1] * p.exposureGain, c[2] * p.exposureGain};
              return shapeTone(p, c);
          }},
+        {"after the curves", PointwiseProbe::AfterCurves,
+         [](const ProcessingPlan& p, Colour c) {
+             c = p.toWorking * c;
+             c = {c[0] * p.exposureGain, c[1] * p.exposureGain, c[2] * p.exposureGain};
+             return applyToneCurves(p, shapeTone(p, c));
+         }},
         {"after the shoulder", PointwiseProbe::AfterShoulder,
          [](const ProcessingPlan& p, Colour c) {
              c = p.toWorking * c;
              c = {c[0] * p.exposureGain, c[1] * p.exposureGain, c[2] * p.exposureGain};
-             return rollHighlights(p, shapeTone(p, c));
+             return rollHighlights(p, applyToneCurves(p, shapeTone(p, c)));
          }},
         {"developed", PointwiseProbe::Developed,
          [](const ProcessingPlan& p, Colour c) { return developPixel(p, c); }},
@@ -670,12 +902,17 @@ TEST_CASE("The pointwise pass writes the CPU's value after each stage", "[gpu][p
             }
 
             const GpuPointwiseBlock block = packPointwise(plan, probe.probe);
+            const std::array inputs{input, curves};
             const ImageBuffer actual = context
-                                           .render(GpuPass::Pointwise, bytesOf(block), input,
+                                           .render(GpuPass::Pointwise, bytesOf(block), inputs,
                                                    source.size(), workingEncoding)
                                            .readBack();
             requireSameAlpha(expected, actual);
-            requireClose(expected, actual);
+            // The colour controls amplify rounding on the very dark pixels the
+            // sweep's negative channels produce, as in the negative-channel tests.
+            requireClose(expected, actual,
+                         probe.probe == PointwiseProbe::Developed ? illConditionedRelativeTolerance
+                                                                  : pointwiseRelativeTolerance);
         }
     }
 }

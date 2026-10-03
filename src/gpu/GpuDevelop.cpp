@@ -106,7 +106,16 @@ RenderCheckpoint runPasses(GpuContext& context, std::optional<Stage> done, Devic
     const detail::TimingSpan timing("gpu.develop");
     if (!done) {
         const GpuPointwiseBlock pointwise = packPointwise(plan);
-        image = context.render(GpuPass::Pointwise, bytesOf(pointwise), image, image.size(),
+        // The curves' tables are uploaded here, once per development that runs
+        // this pass: a resumed one starts after it and pays nothing. With no
+        // active curve the shader never reads the second input, so the source
+        // stands in for it and nothing is uploaded.
+        const ToneCurvePlan& tones = plan.toneCurves;
+        const bool anyCurve =
+            tones.luma.active || tones.red.active || tones.green.active || tones.blue.active;
+        const DeviceImage curves = anyCurve ? context.upload(packToneCurves(tones)) : image;
+        const std::array inputs{image, curves};
+        image = context.render(GpuPass::Pointwise, bytesOf(pointwise), inputs, image.size(),
                                workingEncoding);
         done = Stage::Pointwise;
     }

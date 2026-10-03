@@ -4,6 +4,7 @@
 #include <ColorSettings.h>
 #include <GeometrySettings.h>
 #include <HslSettings.h>
+#include <ToneCurveSettings.h>
 #include <ToneSettings.h>
 
 namespace arraw {
@@ -22,6 +23,9 @@ struct DevelopSettings {
 
     /// @brief Exposure, tonal shaping and highlight roll-off.
     ToneSettings tone{};
+
+    /// @brief Luma, red, green and blue curves over the tone.
+    ToneCurveSettings toneCurve{};
 
     /// @brief Hue, saturation and luminance of eight bands of hues.
     HslSettings hsl{};

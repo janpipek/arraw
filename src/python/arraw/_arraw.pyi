@@ -305,6 +305,8 @@ class SettingGroup(enum.Enum):
 
     BLACK_AND_WHITE = 4
 
+    TONE_CURVE = 5
+
 class Applicability(enum.Enum):
     """Whether a setting means anything for every photograph."""
 
@@ -607,10 +609,59 @@ class GeometrySettings:
     def replace(self, **kwargs) -> GeometrySettings:
         """Return a copy with the given attributes replaced."""
 
+class ToneCurve:
+    """
+    A tone curve as 2 to 16 (x, y) control points from x = 0 to x = 1, x at least 0.01 apart, given in any order and sorted by x; the default is the identity.
+    """
+
+    def __init__(self, points: Sequence[tuple[float, float]] | None = None) -> None: ...
+
+    @property
+    def points(self) -> list[tuple[float, float]]: ...
+
+    def __eq__(self, arg: ToneCurve, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> ToneCurve:
+        """Return a copy with the given attributes replaced."""
+
+    @property
+    def is_identity(self) -> bool:
+        """Whether the curve is exactly the line from (0, 0) to (1, 1)."""
+
+class ToneCurveSettings:
+    """Tone curves on luminance and on the red, green and blue channels."""
+
+    def __init__(self, *, luma: ToneCurve | None = None, red: ToneCurve | None = None, green: ToneCurve | None = None, blue: ToneCurve | None = None) -> None: ...
+
+    @property
+    def luma(self) -> ToneCurve: ...
+
+    @property
+    def red(self) -> ToneCurve: ...
+
+    @property
+    def green(self) -> ToneCurve: ...
+
+    @property
+    def blue(self) -> ToneCurve: ...
+
+    def __eq__(self, arg: ToneCurveSettings, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> ToneCurveSettings:
+        """Return a copy with the given attributes replaced."""
+
 class DevelopSettings:
     """Photographic settings of one photograph."""
 
-    def __init__(self, *, color: ColorSettings | None = None, geometry: GeometrySettings | None = None, tone: ToneSettings | None = None, hsl: HslSettings | None = None, black_and_white: BlackAndWhiteSettings | None = None) -> None: ...
+    def __init__(self, *, color: ColorSettings | None = None, geometry: GeometrySettings | None = None, tone: ToneSettings | None = None, hsl: HslSettings | None = None, black_and_white: BlackAndWhiteSettings | None = None, tone_curve: ToneCurveSettings | None = None) -> None: ...
 
     @property
     def color(self) -> ColorSettings: ...
@@ -626,6 +677,9 @@ class DevelopSettings:
 
     @property
     def black_and_white(self) -> BlackAndWhiteSettings: ...
+
+    @property
+    def tone_curve(self) -> ToneCurveSettings: ...
 
     def __eq__(self, arg: DevelopSettings, /) -> bool: ...
 

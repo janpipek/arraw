@@ -3,6 +3,7 @@
 #include "ColorAdjustments.h"
 #include "ColorSpaces.h"
 #include "GeometryPlan.h"
+#include "ToneCurve.h"
 
 #include <ColorEncoding.h>
 #include <Develop.h>
@@ -185,6 +186,13 @@ struct ProcessingPlan {
     /// costs a comparison rather than a branch on a setting (ADR 011).
     float shoulderKnee = std::numeric_limits<float>::infinity();
 
+    /// @brief Luma, red, green and blue tone curves, resolved.
+    ///
+    /// They follow Basic Tone and precede the shoulder, so the shoulder still
+    /// catches whatever a curve lifts past white; a curve that is the
+    /// identity is a flag that is off (ADR 011).
+    ToneCurvePlan toneCurves{};
+
     /// @brief Saturation, vibrance, HSL and Black & White, resolved.
     ///
     /// The last of the pointwise stages: it follows the shoulder, as the
@@ -214,7 +222,7 @@ struct ProcessingPlan {
     return std::make_tuple(std::tie(plan.toWorking, plan.exposureGain, plan.shapesTone,
                                     plan.contrastSlope, plan.contrastScale, plan.shadowShift,
                                     plan.highlightShift, plan.blackShift, plan.whiteShift,
-                                    plan.shoulderKnee, plan.colorAdjustments),
+                                    plan.shoulderKnee, plan.toneCurves, plan.colorAdjustments),
                            std::tie(plan.geometry), std::tie(plan.resize));
 }
 
@@ -443,6 +451,78 @@ inline constexpr float liftedBlackThreshold = 1.0e-20F;
     return {colour[0] * ratio, colour[1] * ratio, colour[2] * ratio};
 }
 
+/// @brief Luminance below which the luma curve stops dividing by it.
+///
+/// A curve that lifts black climbs out of zero infinitely steeply in linear
+/// light, because the lift is made in the perceptual coordinate. Divided by
+/// the luminance, the part of such a curve above its lift grows without bound
+/// as the luminance falls, and a colour outside the working gamut with almost
+/// no luminance but large channels would be scaled by thousands. Below this
+/// luminance the ratio is therefore held at its value here, and the curve
+/// continues as the straight line, in linear light, from its lift to its value
+/// here, on through zero into negative luminance. It is 2^-14, fourteen stops
+/// under white and the floor of a 14-bit raw file; on a curve lifting black to
+/// 0.2 the line and the curve differ there by under 3% of the value. Mirrored
+/// by `curveRatioFloor` in `src/gpu/shaders/develop.frag`.
+inline constexpr float curveRatioFloor = 0x1p-14F;
+
+/// @brief Applies the tone curves to a colour: luminance first, then each channel.
+///
+/// The luma curve acts as the tone controls do: on the luminance in the
+/// perceptual coordinate, with the colour following by the ratio, so hue and
+/// saturation come through. A curve that lifts black is split in two: its
+/// value at black, the lift, is added to every channel as a neutral, and only
+/// the rest, `toLinear(curve(x)) - lift`, scales the colour by the ratio. A grey
+/// therefore lands exactly on the curve, while a colour near black keeps its
+/// hue and the ratio stays bounded, with ::arraw::curveRatioFloor holding it
+/// for the darkest and for negative luminances, continuously across zero.
+/// A NaN luminance has no ratio at all, and takes the lift as a neutral.
+///
+/// The red, green and blue curves then act on their channels alone, each in
+/// the perceptual coordinate, and may shift hue: that is their purpose. A
+/// negative channel, which only a colour outside the working gamut has, cannot
+/// enter the perceptual coordinate; it is moved by the curve's lift instead,
+/// `value + toLinear(curve(0))`, which meets the curve continuously at zero and
+/// keeps the colour as far outside the gamut as it was. A NaN channel takes
+/// the curve's value at black, as zero does. A channel whose curve is inactive
+/// is returned untouched.
+/// @param plan Resolved settings.
+/// @param colour Colour in the working encoding.
+/// @return The colour with every active curve applied; the colour itself when none is.
+///
+/// Mirrored by `src/gpu/shaders/develop.frag`, which must change with it.
+[[nodiscard]] inline Colour applyToneCurves(const ProcessingPlan& plan, Colour colour) {
+    const ToneCurvePlan& curves = plan.toneCurves;
+    if (curves.luma.active) {
+        const float lift = toLinear(std::max(evaluateCurve(curves.luma, 0.0F), 0.0F));
+        const float luminance = colorspaces::workingLuminance[0] * colour[0] +
+                                colorspaces::workingLuminance[1] * colour[1] +
+                                colorspaces::workingLuminance[2] * colour[2];
+        // A NaN fails both comparisons.
+        if (!(luminance > curveRatioFloor) && !(luminance <= curveRatioFloor)) {
+            colour = {lift, lift, lift};
+        } else {
+            const float anchor = luminance > curveRatioFloor ? luminance : curveRatioFloor;
+            const float shaped =
+                toLinear(std::max(evaluateCurve(curves.luma, toPerceptual(anchor)), 0.0F));
+            const float ratio = (shaped - lift) / anchor;
+            colour = {colour[0] * ratio + lift, colour[1] * ratio + lift, colour[2] * ratio + lift};
+        }
+    }
+    const auto channel = [](const CurvePlan& curve, float value) {
+        if (!curve.active) {
+            return value;
+        }
+        if (value > 0.0F) {
+            return toLinear(std::max(evaluateCurve(curve, toPerceptual(value)), 0.0F));
+        }
+        const float lift = toLinear(std::max(evaluateCurve(curve, 0.0F), 0.0F));
+        return value < 0.0F ? value + lift : lift;
+    };
+    return {channel(curves.red, colour[0]), channel(curves.green, colour[1]),
+            channel(curves.blue, colour[2])};
+}
+
 /// @brief Rolls a colour's brightest values toward white rather than clipping.
 ///
 /// The shoulder that ends the chain (ADR 010), as a bend in luminance: below
@@ -501,6 +581,7 @@ inline constexpr float liftedBlackThreshold = 1.0e-20F;
     colour = {colour[0] * plan.exposureGain, colour[1] * plan.exposureGain,
               colour[2] * plan.exposureGain};
     colour = shapeTone(plan, colour);
+    colour = applyToneCurves(plan, colour);
     colour = rollHighlights(plan, colour);
     return adjustColor(plan.colorAdjustments, colour);
 }

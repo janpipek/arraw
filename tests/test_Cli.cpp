@@ -161,6 +161,19 @@ TEST_CASE("A command's help carries its own options", "[cli]") {
     REQUIRE(result.err.empty());
 }
 
+TEST_CASE("Every tone curve is an export option that states its constraints", "[cli]") {
+    const auto result = invoke({"export", "--help"});
+    REQUIRE(result.code == cli::Success);
+    for (const char* option : {"--tone-curve-luma <points>", "--tone-curve-red <points>",
+                               "--tone-curve-green <points>", "--tone-curve-blue <points>"}) {
+        INFO(option);
+        REQUIRE_THAT(result.out, ContainsSubstring(option));
+    }
+    REQUIRE_THAT(result.out, ContainsSubstring("Tone curve of the red channel"));
+    REQUIRE_THAT(result.out, ContainsSubstring("2 to 16 points"));
+    REQUIRE_THAT(result.out, ContainsSubstring("0.01 apart"));
+}
+
 TEST_CASE("Every ranged float setting is an export option", "[cli]") {
     const auto result = invoke({"export", "--help"});
     REQUIRE(result.code == cli::Success);
@@ -1780,6 +1793,71 @@ TEST_CASE("The colour flags replace their own setting and keep the sidecar's oth
     }
 }
 
+TEST_CASE("The tone curve flags replace their own curve and keep the others",
+          "[cli][sidecar][curve]") {
+    DevelopSettings sidecar;
+    sidecar.toneCurve.green.points = {{0.0F, 0.1F}, {1.0F, 1.0F}};
+
+    SECTION("each flag names its own curve") {
+        const DevelopSettings result = applied(
+            sidecar, {"--tone-curve-luma", "0,0;0.5,0.7;1,1", "--tone-curve-red", "0,0;1,0.5"});
+        REQUIRE(result.toneCurve.luma.points ==
+                std::vector<CurvePoint>{{0.0F, 0.0F}, {0.5F, 0.7F}, {1.0F, 1.0F}});
+        REQUIRE(result.toneCurve.red.points == std::vector<CurvePoint>{{0.0F, 0.0F}, {1.0F, 0.5F}});
+        REQUIRE(result.toneCurve.green == sidecar.toneCurve.green);
+        REQUIRE(result.toneCurve.blue.isIdentity());
+    }
+    SECTION("the identity curve undoes a sidecar's") {
+        REQUIRE(applied(sidecar, {"--tone-curve-green", "0,0;1,1"}).toneCurve.green.isIdentity());
+    }
+    SECTION("points may come in any order, with spaces") {
+        const DevelopSettings result = applied(sidecar, {"--tone-curve-blue", "1,1; 0.5,0.4 ;0,0"});
+        REQUIRE(result.toneCurve.blue.points[1] == CurvePoint{0.5F, 0.4F});
+    }
+    SECTION("a malformed curve is a usage error") {
+        for (const char* bad :
+             {"", "0,0", "0,0;1", "0,0;1,1,1", "a,b;1,1", "0,0;0.5,2;1,1",
+              "0,0;0.5,0.5;0.5,0.6;1,1", "0.1,0;1,1", "0,0;0.9,1", "0,0;nan,0.5;1,1",
+              "0,0;0.5,0.5;1,1;", "0,0;0.005,0.5;1,1", "-0.01,0;1,1", "0,0;1.001,1"}) {
+            std::ostringstream err;
+            INFO(bad);
+            REQUIRE_FALSE(cli::readExportEdits({"--tone-curve-luma", bad}, err));
+            REQUIRE_THAT(err.str(), ContainsSubstring("--tone-curve-luma takes 2 to 16 points"));
+        }
+        std::ostringstream err;
+        REQUIRE_FALSE(cli::readExportEdits({"--tone-curve-blue", "0,0;1"}, err));
+        REQUIRE_THAT(err.str(), ContainsSubstring("--tone-curve-blue takes"));
+    }
+    SECTION("sixteen points are the most") {
+        std::string spelled = "0,0";
+        for (int i = 1; i <= 14; ++i) {
+            spelled += ";" + std::to_string(i / 16.0);
+            spelled += "," + std::to_string(i / 16.0);
+        }
+        std::ostringstream err;
+        REQUIRE(cli::readExportEdits({"--tone-curve-luma", spelled + ";1,1"}, err));
+        REQUIRE_FALSE(cli::readExportEdits({"--tone-curve-luma", spelled + ";0.99,0.99;1,1"}, err));
+    }
+}
+
+TEST_CASE("Info shows a tone curve as its points", "[cli][info][curve]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    DevelopSettings settings;
+    settings.toneCurve.luma.points = {{0.0F, 0.0F}, {0.25F, 0.2F}, {1.0F, 1.0F}};
+    writeSidecar(openPhoto(raw).with(DevelopState{settings}));
+
+    const auto text = invoke({"info", raw.string()});
+    REQUIRE(text.code == cli::Success);
+    REQUIRE_THAT(text.out, ContainsSubstring("toneCurveLuma: 0,0;0.25,0.2;1,1"));
+    REQUIRE_THAT(text.out, !ContainsSubstring("toneCurveRed"));
+
+    const auto json = invoke({"info", "--json", raw.string()});
+    const auto document = QJsonDocument::fromJson(QByteArray::fromStdString(json.out));
+    REQUIRE(document.isObject());
+    REQUIRE_THAT(json.out, ContainsSubstring("0.25"));
+}
+
 TEST_CASE("Geometry flags keep the sidecar's geometry they do not name", "[cli][sidecar]") {
     DevelopSettings sidecar;
     sidecar.geometry.rotation = QuarterTurn::Clockwise180;
@@ -2072,7 +2150,7 @@ TEST_CASE("Info --all lists every setting", "[cli][info]") {
         REQUIRE(at >= previous);
         previous = at;
     }
-    REQUIRE(developSettingDescriptors.size() == 51);
+    REQUIRE(developSettingDescriptors.size() == 55);
     REQUIRE_THAT(result.out, ContainsSubstring("temperature: unset"));
 }
 
@@ -2161,7 +2239,7 @@ TEST_CASE("Info --json is one document with the settings in table order", "[cli]
     SECTION("--all lists every key in table order") {
         const auto result = invoke({"info", "--json", "--all", plain.string()});
         REQUIRE(result.code == cli::Success);
-        REQUIRE(firstFile(result.out).value("settings").toObject().size() == 51);
+        REQUIRE(firstFile(result.out).value("settings").toObject().size() == 55);
         std::size_t previous = 0;
         for (const FieldDescriptor& descriptor : developSettingDescriptors) {
             const auto at = result.out.find("\"" + std::string(descriptor.key) + "\":");

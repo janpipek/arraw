@@ -27,6 +27,8 @@ inline void setNonDefault(const FieldDescriptor& descriptor, DevelopSettings& se
             field = QuarterTurn::Clockwise270;
         } else if constexpr (std::is_same_v<T, std::optional<UprightCropRect>>) {
             field = UprightCropRect{.left = 0.125, .top = 0.1, .right = 0.9, .bottom = 0.85};
+        } else if constexpr (std::is_same_v<T, ToneCurve>) {
+            field.points = {{0.0F, 0.0625F}, {0.3F, 0.4F}, {0.7F, 0.55F}, {1.0F, 0.96F}};
         } else {
             static_assert(std::is_same_v<T, CropAspect>);
             field = CropRatio{1.5};

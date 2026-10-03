@@ -12,6 +12,7 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <vector>
 
 using namespace arraw;
 
@@ -36,6 +37,8 @@ void writeSentinel(const FieldDescriptor& descriptor, DevelopSettings& settings)
             field = QuarterTurn::Clockwise90;
         } else if constexpr (std::is_same_v<T, std::optional<UprightCropRect>>) {
             field = UprightCropRect{.left = 0.1, .top = 0.1, .right = 0.9, .bottom = 0.9};
+        } else if constexpr (std::is_same_v<T, ToneCurve>) {
+            field.points = {{0.0F, 0.0F}, {0.5F, 0.75F}, {1.0F, 1.0F}};
         } else {
             static_assert(std::is_same_v<T, CropAspect>);
             field = CropRatio{2.0};
@@ -86,16 +89,18 @@ TEST_CASE("The descriptor table has a row per leaf, matching the structs", "[set
     STATIC_REQUIRE(test::fieldCount<HueBand> == 3);
     STATIC_REQUIRE(test::fieldCount<HslSettings> == 8);
     STATIC_REQUIRE(test::fieldCount<BlackAndWhiteSettings> == 9);
-    STATIC_REQUIRE(test::fieldCount<DevelopSettings> == 5);
+    STATIC_REQUIRE(test::fieldCount<ToneCurveSettings> == 4);
+    STATIC_REQUIRE(test::fieldCount<DevelopSettings> == 6);
 
     // Leaves: tone + color + geometry (crop is a group of two leaves) + hsl
-    // (eight bands of three leaves) + black and white.
+    // (eight bands of three leaves) + black and white + the four tone curves.
     STATIC_REQUIRE(developSettingDescriptors.size() ==
                    test::fieldCount<ToneSettings> + test::fieldCount<ColorSettings> +
                        test::fieldCount<GeometrySettings> - 1 + test::fieldCount<CropSettings> +
                        test::fieldCount<HslSettings> * test::fieldCount<HueBand> +
-                       test::fieldCount<BlackAndWhiteSettings>);
-    STATIC_REQUIRE(developSettingDescriptors.size() == 51);
+                       test::fieldCount<BlackAndWhiteSettings> +
+                       test::fieldCount<ToneCurveSettings>);
+    STATIC_REQUIRE(developSettingDescriptors.size() == 55);
 }
 
 TEST_CASE("The colour rows are pointwise, always apply and share their groups", "[settings]") {
@@ -119,6 +124,54 @@ TEST_CASE("The colour rows are pointwise, always apply and share their groups", 
     REQUIRE(findDescriptor("luminanceMagenta")->range->maximum == 100.0);
     REQUIRE_FALSE(findDescriptor("convertToGrayscale")->range.has_value());
     REQUIRE(findDescriptor("grayBlue") != nullptr);
+}
+
+TEST_CASE("The tone curve rows are pointwise, always apply and have no range", "[settings]") {
+    int curves = 0;
+    for (const FieldDescriptor& descriptor : developSettingDescriptors) {
+        INFO(descriptor.key);
+        if (descriptor.group != SettingGroup::ToneCurve) {
+            continue;
+        }
+        ++curves;
+        REQUIRE(descriptor.affects == Stage::Pointwise);
+        REQUIRE(descriptor.applies == Applicability::Always);
+        REQUIRE_FALSE(descriptor.range.has_value());
+    }
+    REQUIRE(curves == 4);
+    for (const char* key : {"toneCurveLuma", "toneCurveRed", "toneCurveGreen", "toneCurveBlue"}) {
+        REQUIRE(findDescriptor(key)->group == SettingGroup::ToneCurve);
+    }
+}
+
+TEST_CASE("Validation refuses a curve that breaks its invariants", "[settings]") {
+    const std::vector<std::vector<CurvePoint>> bad{
+        {{0.0F, 0.0F}},
+        {{0.0F, 0.0F}, {0.5F, 0.5F}, {0.5F, 0.6F}, {1.0F, 1.0F}},
+        {{0.0F, 0.0F}, {0.7F, 0.5F}, {0.3F, 0.6F}, {1.0F, 1.0F}},
+        {{0.1F, 0.0F}, {1.0F, 1.0F}},
+        {{0.0F, 0.0F}, {0.9F, 1.0F}},
+        {{0.0F, 0.0F}, {1.0F, 1.5F}},
+        {{0.0F, 0.0F}, {1.0F, std::numeric_limits<float>::quiet_NaN()}},
+    };
+    for (const auto& points : bad) {
+        DevelopSettings settings;
+        settings.toneCurve.green.points = points;
+        REQUIRE_THROWS_AS(validate(settings), std::invalid_argument);
+    }
+    DevelopSettings tooMany;
+    for (std::size_t i = 0; i <= maximumCurvePoints; ++i) {
+        tooMany.toneCurve.red.points.push_back(
+            {static_cast<float>(i) / static_cast<float>(maximumCurvePoints), 0.5F});
+    }
+    REQUIRE_THROWS_AS(validate(tooMany), std::invalid_argument);
+    DevelopSettings sixteen;
+    sixteen.toneCurve.red.points.clear();
+    for (std::size_t i = 0; i < maximumCurvePoints; ++i) {
+        sixteen.toneCurve.red.points.push_back(
+            {static_cast<float>(i) / static_cast<float>(maximumCurvePoints - 1), 0.5F});
+    }
+    REQUIRE_NOTHROW(validate(sixteen));
 }
 
 TEST_CASE("Keys are unique camelCase names that can be looked up", "[settings]") {

@@ -25,8 +25,9 @@ BANDS = ("red", "orange", "yellow", "green", "aqua", "blue", "purple", "magenta"
 HSL = {f"{kind}_{band}" for kind in ("hue", "saturation", "luminance") for band in BANDS}
 GRAY = {f"gray_{band}" for band in BANDS}
 RANGES.update({name: (-100.0, 100.0) for name in HSL | GRAY})
+CURVES = {"tone_curve_luma", "tone_curve_red", "tone_curve_green", "tone_curve_blue"}
 UNRANGED = {"white_balance", "rotation", "flip_horizontal", "flip_vertical",
-            "crop_rectangle", "crop_aspect", "convert_to_grayscale"}
+            "crop_rectangle", "crop_aspect", "convert_to_grayscale"} | CURVES
 
 
 def snake(key: str) -> str:
@@ -39,8 +40,8 @@ def descriptors():
 
 
 def test_one_row_per_leaf(descriptors):
-    assert len(descriptors) == 51
-    assert len({d.name for d in descriptors}) == 51
+    assert len(descriptors) == len(RANGES) + len(UNRANGED) == 55
+    assert len({d.name for d in descriptors}) == len(RANGES) + len(UNRANGED) == 55
     assert {d.name for d in descriptors} == set(RANGES) | UNRANGED
 
 
@@ -89,6 +90,15 @@ def test_colour_groups(descriptors):
     for name in GRAY | {"convert_to_grayscale"}:
         assert by_name[name].group == arraw.SettingGroup.BLACK_AND_WHITE
         assert by_name[name].affects == arraw.Stage.POINTWISE
+
+
+def test_curve_descriptors(descriptors):
+    by_name = {d.name: d for d in descriptors}
+    for name in CURVES:
+        assert by_name[name].range is None
+        assert by_name[name].group == arraw.SettingGroup.TONE_CURVE
+        assert by_name[name].affects == arraw.Stage.POINTWISE
+        assert by_name[name].applies == arraw.Applicability.ALWAYS
 
 
 def test_descriptors_are_unhashable_but_comparable(descriptors):

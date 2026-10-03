@@ -22,7 +22,7 @@ using SettingAccessor =
                  double& (*)(DevelopSettings&), bool& (*)(DevelopSettings&),
                  WhiteBalanceMode& (*)(DevelopSettings&), QuarterTurn& (*)(DevelopSettings&),
                  std::optional<UprightCropRect>& (*)(DevelopSettings&),
-                 CropAspect& (*)(DevelopSettings&)>;
+                 CropAspect& (*)(DevelopSettings&), ToneCurve& (*)(DevelopSettings&)>;
 
 /// @brief Inclusive numeric limits of a setting, in its own units.
 struct SettingRange {
@@ -34,7 +34,7 @@ struct SettingRange {
 };
 
 /// @brief Panel a setting belongs to.
-enum class SettingGroup { Color, Tone, Geometry, Hsl, BlackAndWhite };
+enum class SettingGroup { Color, Tone, Geometry, Hsl, BlackAndWhite, ToneCurve };
 
 /// @brief Whether a setting means anything for every photograph.
 enum class Applicability {
@@ -123,6 +123,14 @@ inline constexpr std::array developSettingDescriptors{
     FieldDescriptor{"filmicHighlights", ARRAW_ACCESSOR(float, tone.filmicHighlights),
                     SettingRange{noFilmicHighlights, fullFilmicHighlights}, SettingGroup::Tone,
                     Applicability::Always, Stage::Pointwise},
+    FieldDescriptor{"toneCurveLuma", ARRAW_ACCESSOR(ToneCurve, toneCurve.luma), std::nullopt,
+                    SettingGroup::ToneCurve, Applicability::Always, Stage::Pointwise},
+    FieldDescriptor{"toneCurveRed", ARRAW_ACCESSOR(ToneCurve, toneCurve.red), std::nullopt,
+                    SettingGroup::ToneCurve, Applicability::Always, Stage::Pointwise},
+    FieldDescriptor{"toneCurveGreen", ARRAW_ACCESSOR(ToneCurve, toneCurve.green), std::nullopt,
+                    SettingGroup::ToneCurve, Applicability::Always, Stage::Pointwise},
+    FieldDescriptor{"toneCurveBlue", ARRAW_ACCESSOR(ToneCurve, toneCurve.blue), std::nullopt,
+                    SettingGroup::ToneCurve, Applicability::Always, Stage::Pointwise},
     FieldDescriptor{"whiteBalance", ARRAW_ACCESSOR(WhiteBalanceMode, color.whiteBalance),
                     std::nullopt, SettingGroup::Color, Applicability::Always, Stage::Pointwise},
     FieldDescriptor{"temperature", ARRAW_ACCESSOR(std::optional<float>, color.temperature),

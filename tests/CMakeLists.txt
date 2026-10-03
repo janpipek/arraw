@@ -21,6 +21,7 @@ add_executable(arraw-tests
         test_Cli.cpp
         test_ColorEncoding.cpp
         test_Develop.cpp
+        test_ToneCurve.cpp
         test_DevelopState.cpp
         test_DisplayImage.cpp
         test_EditSession.cpp

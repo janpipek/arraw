@@ -29,6 +29,12 @@ layout(location = 0) out vec4 fragColor;
 
 layout(binding = 0) uniform sampler2D source;
 
+// The tone curves' tables, ::arraw::packToneCurves: texel i holds entry i of
+// the luma (r), red (g), green (b) and blue (a) curves. Read with texelFetch
+// and blended by hand, never through the sampler's filtering, so that the
+// arithmetic is the CPU's. Bound even when no curve is active; not read then.
+layout(binding = 2) uniform sampler2D curves;
+
 layout(std140, binding = 1) uniform Pointwise {
     vec4 toWorking[3];
     float exposureGain;
@@ -48,6 +54,10 @@ layout(std140, binding = 1) uniform Pointwise {
     uint adjustsSaturation;
     uint adjustsVibrance;
     uint adjustsHsl;
+    uint curvesLuma;
+    uint curvesRed;
+    uint curvesGreen;
+    uint curvesBlue;
     // Three words of padding, which std140 does not need declared: the band
     // sets below start on the next vec4 boundary by themselves.
     vec4 hueShift[2];
@@ -154,6 +164,79 @@ vec3 shapeTone(vec3 colour) {
 
     const float ratio = shapeLuminance(luminance) / luminance;
     return vec3(colour.x * ratio, colour.y * ratio, colour.z * ratio);
+}
+
+// toneCurveSamples, ToneCurve.h.
+const int toneCurveSamples = 1024;
+
+// One entry of one curve's table: channel 0 is luma, 1 red, 2 green, 3 blue.
+float curveEntry(int index, int channel) {
+    const vec4 texel = texelFetch(curves, ivec2(index, 0), 0);
+    return channel == 0 ? texel.x : (channel == 1 ? texel.y : (channel == 2 ? texel.z : texel.w));
+}
+
+// evaluateCurve, ToneCurve.h: the same index and weight, the same extension
+// at slope one above one, and the value at zero for anything not above it.
+float evaluateCurve(int channel, float x) {
+    const int last = toneCurveSamples - 1;
+    if (!(x > 0.0)) {
+        return curveEntry(0, channel);
+    }
+    if (x >= 1.0) {
+        return curveEntry(last, channel) + (x - 1.0);
+    }
+    const float position = x * float(last);
+    const int index = min(int(position), last - 1);
+    const float fraction = position - float(index);
+    const float low = curveEntry(index, channel);
+    const float high = curveEntry(index + 1, channel);
+    return low + fraction * (high - low);
+}
+
+// curveRatioFloor, ProcessingPlan.h: luminance below which the luma curve's
+// ratio is held, 2^-14.
+const float curveRatioFloor = 6.103515625e-05;
+
+// applyToneCurves' channel curve, ProcessingPlan.h: a negative channel moves
+// by the lift, a NaN or zero one takes it.
+float curveChannel(int channel, float value) {
+    if (value > 0.0) {
+        const float shaped = evaluateCurve(channel, toPerceptual(value));
+        return toLinear(shaped < 0.0 ? 0.0 : shaped);
+    }
+    const float black = evaluateCurve(channel, 0.0);
+    const float lift = toLinear(black < 0.0 ? 0.0 : black);
+    return value < 0.0 ? value + lift : lift;
+}
+
+// applyToneCurves, ProcessingPlan.h: luminance first, then each channel.
+vec3 applyToneCurves(vec3 colour) {
+    if (plan.curvesLuma != 0u) {
+        const float black = evaluateCurve(0, 0.0);
+        const float lift = toLinear(black < 0.0 ? 0.0 : black);
+        const float luminance = luminanceOf(colour);
+        // A NaN fails both comparisons.
+        if (!(luminance > curveRatioFloor) && !(luminance <= curveRatioFloor)) {
+            colour = vec3(lift, lift, lift);
+        } else {
+            const float anchor = luminance > curveRatioFloor ? luminance : curveRatioFloor;
+            const float value = evaluateCurve(0, toPerceptual(anchor));
+            const float shaped = toLinear(value < 0.0 ? 0.0 : value);
+            const float ratio = (shaped - lift) / anchor;
+            colour = vec3(colour.x * ratio + lift, colour.y * ratio + lift,
+                          colour.z * ratio + lift);
+        }
+    }
+    if (plan.curvesRed != 0u) {
+        colour.x = curveChannel(1, colour.x);
+    }
+    if (plan.curvesGreen != 0u) {
+        colour.y = curveChannel(2, colour.y);
+    }
+    if (plan.curvesBlue != 0u) {
+        colour.z = curveChannel(3, colour.z);
+    }
+    return colour;
 }
 
 vec3 rollHighlights(vec3 colour) {
@@ -373,6 +456,7 @@ const uint probeAfterMatrix = 1u;
 const uint probeAfterExposure = 2u;
 const uint probeAfterTone = 3u;
 const uint probeAfterShoulder = 4u;
+const uint probeAfterCurves = 5u;
 
 void main() {
     const vec4 texel = texelFetch(source, ivec2(gl_FragCoord.xy), 0);
@@ -400,6 +484,12 @@ void main() {
 
     colour = shapeTone(colour);
     if (plan.probe == probeAfterTone) {
+        fragColor = vec4(colour, texel.a);
+        return;
+    }
+
+    colour = applyToneCurves(colour);
+    if (plan.probe == probeAfterCurves) {
         fragColor = vec4(colour, texel.a);
         return;
     }

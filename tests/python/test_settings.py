@@ -67,6 +67,64 @@ def test_flat_keywords_reach_the_colour_leaves():
     assert settings.black_and_white.blue == 45.0
 
 
+def test_curve_defaults_are_identities():
+    curves = arraw.DevelopSettings().tone_curve
+    assert curves == arraw.ToneCurveSettings()
+    for curve in (curves.luma, curves.red, curves.green, curves.blue):
+        assert curve == arraw.ToneCurve()
+        assert curve.points == [(0.0, 0.0), (1.0, 1.0)]
+        assert curve.is_identity
+
+
+def test_curve_points_are_tuples_that_keep_their_spelling():
+    curve = arraw.ToneCurve([[0, 0], (0.3, 0.7), (1.0, 1)])
+    assert curve.points == [(0.0, 0.0), (0.3, 0.7), (1.0, 1.0)]
+    assert not curve.is_identity
+    assert arraw.ToneCurve([(0, 0), (1, 1)]).is_identity
+    assert hash(curve) == hash(arraw.ToneCurve([(0, 0), (0.3, 0.7), (1, 1)]))
+    assert curve.replace(points=[(0, 0), (1, 1)]).is_identity
+    with pytest.raises(TypeError):
+        arraw.ToneCurve([(0, 0), (1,)])
+    with pytest.raises(TypeError):
+        arraw.ToneCurve([(0, True), (1, 1)])
+
+
+def test_curve_points_may_be_given_in_any_order_and_are_sorted():
+    expected = [(0.0, 0.0), (0.3, 0.7), (1.0, 1.0)]
+    assert arraw.ToneCurve([(1, 1), (0.3, 0.7), (0, 0)]).points == expected
+    assert arraw.ToneCurve().replace(points=[(1, 1), (0.3, 0.7), (0, 0)]).points == expected
+    flat = arraw.DevelopSettings().with_(tone_curve_green=[(1, 1), (0.3, 0.7), (0, 0)])
+    assert flat.tone_curve.green.points == expected
+    # An end a rounding error off its x is snapped, as in the sidecar and on the command line.
+    assert arraw.ToneCurve([(0, 0), (0.5, 0.5), (1.0000004, 1)]).points[-1] == (1.0, 1.0)
+
+
+@pytest.mark.parametrize("point", [b"\x00\x00", bytearray(b"\x00\x01"), "01"])
+def test_a_curve_point_is_not_bytes_or_text(point):
+    with pytest.raises(TypeError):
+        arraw.ToneCurve([point, (1, 1)])
+
+
+def test_curves_construct_flat_set_and_round_trip_json():
+    settings = arraw.DevelopSettings(
+        tone_curve=arraw.ToneCurveSettings(
+            luma=arraw.ToneCurve([(0, 0), (0.25, 0.2), (1, 1)]),
+            blue=arraw.ToneCurve([(0, 0.1), (1, 1)]),
+        )
+    )
+    assert settings.tone_curve.luma.points[1] == (0.25, 0.2)
+    assert settings.tone_curve.red.is_identity
+    flat = arraw.DevelopSettings().with_(
+        tone_curve_luma=[(0, 0), (0.25, 0.2), (1, 1)],
+        tone_curve_blue=arraw.ToneCurve([(0, 0.1), (1, 1)]),
+    )
+    assert flat == settings
+    assert arraw.DevelopSettings.from_json(settings.to_json()) == settings
+    assert arraw.DevelopSettings() != settings
+    with pytest.raises(TypeError):
+        arraw.DevelopSettings().with_(tone_curve=0.5)
+
+
 @pytest.mark.parametrize(
     "obj, attr, value",
     [

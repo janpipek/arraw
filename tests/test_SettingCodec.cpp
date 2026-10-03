@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <limits>
 #include <string>
+#include <vector>
 
 using namespace arraw;
 
@@ -299,4 +300,113 @@ TEST_CASE("A clamp reports its numbers in full", "[settings][codec][diagnostics]
                       .severity = Severity::Warning,
                       .values = {std::string("exposure"), 1234567.0, 5.0}}) ==
             "'exposure' is 1234567, outside what it accepts, so 5 was used");
+}
+
+TEST_CASE("A tone curve encodes to its points and decodes them back exactly", "[settings][codec]") {
+    DevelopSettings settings;
+    settings.toneCurve.red.points = {{0.0F, 0.1F}, {0.3F, 0.35F}, {1.0F, 0.9F}};
+    const Encoded encoded = encode(row("toneCurveRed"), settings);
+    // Floats spell as short as they can, like every other float.
+    REQUIRE(std::get<PointList>(encoded) == PointList{{0.0, 0.1}, {0.3, 0.35}, {1.0, 0.9}});
+    REQUIRE(std::get<PointList>(encode(row("toneCurveLuma"), settings)) ==
+            PointList{{0.0, 0.0}, {1.0, 1.0}});
+    REQUIRE(takesPoints(row("toneCurveBlue")));
+    REQUIRE_FALSE(takesPoints(row("exposure")));
+    REQUIRE_FALSE(takesPoints(row("cropRectangle")));
+    REQUIRE(compoundShapes(row("toneCurveLuma")).empty());
+
+    CollectedDiagnostics log;
+    REQUIRE(decoded("toneCurveRed", encoded, log) == settings);
+    REQUIRE(log.entries().empty());
+}
+
+TEST_CASE("A point list is read from x,y pairs joined by semicolons", "[settings][codec]") {
+    REQUIRE(parsePointList("0,0;0.25,0.2;1,1") == PointList{{0.0, 0.0}, {0.25, 0.2}, {1.0, 1.0}});
+    // Blanks are ignored, a leading plus is taken, and the order is kept.
+    REQUIRE(parsePointList(" 1 , +1 ;\t0,0 ") == PointList{{1.0, 1.0}, {0.0, 0.0}});
+    // Values are not judged here: that is each caller's policy.
+    REQUIRE(parsePointList("-5,7") == PointList{{-5.0, 7.0}});
+    for (const char* bad : {"", ";", "0,0;", ";0,0", "0", "0,0,0", "0;1", "a,b", "0,0;1,", "0 0",
+                            "0,0;;1,1", "++1,1", "1,1x"}) {
+        INFO(bad);
+        REQUIRE_FALSE(parsePointList(bad));
+    }
+}
+
+TEST_CASE("A tone curve's points may come in any order", "[settings][codec]") {
+    CollectedDiagnostics log;
+    const DevelopSettings result =
+        decoded("toneCurveLuma", PointList{{1.0, 1.0}, {0.5, 0.25}, {0.0, 0.0}}, log);
+    const std::vector<CurvePoint> expected{{0.0F, 0.0F}, {0.5F, 0.25F}, {1.0F, 1.0F}};
+    REQUIRE(result.toneCurve.luma.points == expected);
+    REQUIRE(log.entries().empty());
+}
+
+TEST_CASE("A tone curve's end x within rounding of 0 or 1 is taken as exactly there",
+          "[settings][codec]") {
+    CollectedDiagnostics log;
+    const DevelopSettings result =
+        decoded("toneCurveLuma", PointList{{1.0000004, 1.0}, {0.99, 0.5}, {-3.0e-7, 0.0}}, log);
+    const std::vector<CurvePoint> expected{{0.0F, 0.0F}, {0.99F, 0.5F}, {1.0F, 1.0F}};
+    REQUIRE(result.toneCurve.luma.points == expected);
+    REQUIRE(log.entries().empty());
+}
+
+TEST_CASE("A tone curve's y out of range is clamped with a warning", "[settings][codec]") {
+    CollectedDiagnostics log;
+    const DevelopSettings result =
+        decoded("toneCurveGreen", PointList{{0.0, -0.5}, {0.5, 0.5}, {1.0, 1.5}}, log);
+    const std::vector<CurvePoint> expected{{0.0F, 0.0F}, {0.5F, 0.5F}, {1.0F, 1.0F}};
+    REQUIRE(result.toneCurve.green.points == expected);
+    REQUIRE(log.entries().size() == 2);
+    const Diagnostic& first = log.entries().front();
+    REQUIRE(first.notice == Notice::SettingClamped);
+    REQUIRE(std::get<std::string>(first.values[0]) == "toneCurveGreen");
+    REQUIRE(std::get<double>(first.values[1]) == -0.5);
+    REQUIRE(std::get<double>(first.values[2]) == 0.0);
+}
+
+TEST_CASE("A tone curve that cannot be one is skipped with a warning", "[settings][codec]") {
+    PointList seventeen;
+    for (int i = 0; i < 17; ++i) {
+        seventeen.emplace_back(i / 16.0, 0.5);
+    }
+    const struct {
+        const char* what;
+        Encoded value;
+    } cases[] = {
+        {"a number", 1.0},
+        {"a string", std::string("0,0;1,1")},
+        {"a compound", Compound{{"x", 1.0}}},
+        {"null", Encoded{}},
+        {"no points", PointList{}},
+        {"one point", PointList{{0.0, 0.0}}},
+        {"too many points", seventeen},
+        {"a repeated x", PointList{{0.0, 0.0}, {0.5, 0.2}, {0.5, 0.3}, {1.0, 1.0}}},
+        {"a start after zero", PointList{{0.25, 0.0}, {1.0, 1.0}}},
+        {"an end before one", PointList{{0.0, 0.0}, {0.75, 1.0}}},
+        {"a coordinate not a number", PointList{{0.0, 0.0}, {0.5, notANumber}, {1.0, 1.0}}},
+        {"a coordinate not finite", PointList{{0.0, 0.0}, {unbounded, 0.5}, {1.0, 1.0}}},
+        // An x is never clamped: moving a point along x makes it another curve.
+        {"a first x just below zero", PointList{{-0.01, 0.0}, {0.5, 0.5}, {1.0, 1.0}}},
+        {"a last x just above one", PointList{{0.0, 0.0}, {0.5, 0.5}, {1.001, 1.0}}},
+        {"an x far out", PointList{{0.0, 0.0}, {1.0, 0.5}, {2.0, 1.0}}},
+        {"an x too far out for a float", PointList{{0.0, 0.0}, {1.0, 0.5}, {1.0e300, 1.0}}},
+        {"points closer than a hundredth",
+         PointList{{0.0, 0.0}, {0.5, 0.2}, {0.505, 0.3}, {1.0, 1.0}}},
+    };
+    for (const auto& [what, value] : cases) {
+        INFO(what);
+        CollectedDiagnostics log;
+        REQUIRE(decoded("toneCurveBlue", value, log) == DevelopSettings{});
+        REQUIRE(log.entries().size() == 1);
+        REQUIRE(log.entries().front().notice == Notice::SettingMalformed);
+    }
+    // A skipped curve keeps what the field held.
+    DevelopSettings settings;
+    settings.toneCurve.red.points = {{0.0F, 0.2F}, {1.0F, 1.0F}};
+    const DevelopSettings before = settings;
+    CollectedDiagnostics log;
+    decode(row("toneCurveRed"), PointList{{0.0, 0.0}}, settings, log);
+    REQUIRE(settings == before);
 }

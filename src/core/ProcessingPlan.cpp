@@ -106,6 +106,7 @@ ProcessingPlan arraw::planFor(const ColorEncoding& encoding, const DevelopState&
     const DevelopSettings& settings = state.settings;
     ProcessingPlan plan = tonePlanFor(settings.tone);
     plan.toWorking = colorMatrixFor(encoding, settings.color);
+    plan.toneCurves = toneCurvePlanFor(settings.toneCurve);
     plan.colorAdjustments =
         colorAdjustmentPlanFor(settings.color, settings.hsl, settings.blackAndWhite);
     return plan;

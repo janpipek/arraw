@@ -9,6 +9,11 @@ CASES = {
     "exposure": {"exposure": 0.5},
     "contrast": {"contrast": 20},
     "colour": {"saturation": 30, "vibrance": 20, "hue_red": 40, "luminance_green": -20},
+    "curves": {
+        "tone_curve_luma": [(0.0, 0.0), (0.25, 0.2), (0.75, 0.82), (1.0, 1.0)],
+        "tone_curve_red": [(0.0, 0.0), (0.5, 0.6), (1.0, 1.0)],
+        "tone_curve_blue": [(0.0, 0.05), (1.0, 0.9)],
+    },
     "combined": {"exposure": 0.5, "contrast": 20, "shadows": 15, "filmic_highlights": 0},
 }
 
@@ -16,6 +21,8 @@ CASES = {
 def cli_args(settings):
     args = []
     for key, value in settings.items():
+        if isinstance(value, list):
+            value = ";".join(f"{x},{y}" for x, y in value)
         args += ["--" + key.replace("_", "-"), str(value)]
     return args
 

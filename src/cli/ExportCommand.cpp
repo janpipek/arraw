@@ -7,6 +7,7 @@
 #include "GpuDevelop.h"
 #include "ProcessingPlan.h"
 #include "SettingCodec.h"
+#include "ShortestDecimal.h"
 #include "ShotInputs.h"
 #include "SidecarWatch.h"
 #include "StreamDiagnostics.h"
@@ -22,6 +23,7 @@
 #include <MarksFilter.h>
 #include <Photo.h>
 #include <SettingDescriptors.h>
+#include <ToneCurveSettings.h>
 #include <WhiteBalance.h>
 
 #include <QCommandLineParser>
@@ -290,6 +292,10 @@ constexpr SettingHelp settingHelp[]{
     {"temperature", "k", "White balance in kelvin", " RAW only."},
     {"tint", "amount", "Green to magenta", " RAW only."},
     {"filmicHighlights", "amount", "Highlight roll-off", " Default: 25."},
+    {"toneCurveLuma", "points", "Tone curve of the luminance", ""},
+    {"toneCurveRed", "points", "Tone curve of the red channel", ""},
+    {"toneCurveGreen", "points", "Tone curve of the green channel", ""},
+    {"toneCurveBlue", "points", "Tone curve of the blue channel", ""},
     {"saturation", "amount", "Colourfulness of every colour", ""},
     {"vibrance", "amount", "Colourfulness of the muted colours, sparing the vivid", ""},
     {"hueRed", "amount", "Shift the hue of reds", ""},
@@ -401,6 +407,56 @@ bool readSettings(const QCommandLineParser& parser, std::vector<SettingEdit>& ed
     return true;
 }
 
+/// @brief Reads the tone curve options into edits.
+///
+/// A curve is "x,y;x,y;..." as in a sidecar: two to sixteen points with
+/// coordinates from 0 to 1, x at least ::arraw::minimumCurvePointSpacing apart,
+/// the first at x = 0 and the last at x = 1, in any order (sorted, and ends
+/// snapped, by ::arraw::curveFromPoints). Anything else is refused rather than
+/// repaired, as out-of-range numbers are.
+/// @return `true` if every curve option present was acceptable; `false` otherwise.
+bool readCurves(const QCommandLineParser& parser, std::vector<SettingEdit>& edits,
+                std::ostream& err, int& code) {
+    DevelopSettings given;
+    for (const FieldDescriptor& descriptor : developSettingDescriptors) {
+        if (!takesPoints(descriptor)) {
+            continue;
+        }
+        const std::string name = optionName(descriptor.key);
+        if (!parser.isSet(QString::fromStdString(name))) {
+            continue;
+        }
+        const std::string wording = "--" + name + " takes " + toneCurveRequirements +
+                                    ", as x,y joined by semicolons, for example 0,0;0.5,0.6;1,1";
+        std::vector<CurvePoint> points;
+        bool valid = false;
+        if (const auto parsed =
+                parsePointList(parser.value(QString::fromStdString(name)).toStdString())) {
+            valid = std::ranges::all_of(*parsed, [](const auto& point) {
+                return std::isfinite(point.first) && std::isfinite(point.second) &&
+                       point.first >= 0.0 && point.first <= 1.0 && point.second >= 0.0 &&
+                       point.second <= 1.0;
+            });
+            for (const auto& [x, y] : *parsed) {
+                points.push_back({shortestFloat(x), shortestFloat(y)});
+            }
+        }
+        const std::optional<ToneCurve> curve =
+            valid ? curveFromPoints(std::move(points)) : std::nullopt;
+        if (!curve) {
+            code = usageError(err, wording);
+            return false;
+        }
+        visitField(descriptor, given, [&](auto& field) {
+            if constexpr (std::is_same_v<std::remove_cvref_t<decltype(field)>, ToneCurve>) {
+                field = *curve;
+            }
+        });
+        addEdit(edits, descriptor.key, given);
+    }
+    return true;
+}
+
 /// @brief Reads the geometry options into edits, without resolving or executing any transforms.
 bool readGeometry(const QCommandLineParser& parser, GeometryEdits& edits, std::ostream& err,
                   int& code) {
@@ -481,7 +537,8 @@ bool readGeometry(const QCommandLineParser& parser, GeometryEdits& edits, std::o
 /// @brief Reads every develop option, the white balance's included, into edits.
 bool readEdits(const QCommandLineParser& parser, cli::ExportEdits& edits, std::ostream& err,
                int& code) {
-    if (!readSettings(parser, edits.settings, err, code)) {
+    if (!readSettings(parser, edits.settings, err, code) ||
+        !readCurves(parser, edits.settings, err, code)) {
         return false;
     }
     DevelopSettings given;
@@ -551,6 +608,9 @@ void configure(QCommandLineParser& parser) {
         "bands --hue-, --saturation- and --luminance- followed by red, orange, yellow,\n"
         "green, aqua, blue, purple or magenta, and black and white, which\n"
         "--convert-to-grayscale turns on and --gray- plus a band mixes.\n"
+        "Tone curves are --tone-curve-luma for luminance and --tone-curve-red, -green and\n"
+        "-blue for the channels, each as x,y points joined by semicolons, as in a\n"
+        "sidecar: --tone-curve-luma '0,0;0.25,0.2;0.75,0.82;1,1'.\n"
         "Naming --temperature or --tint makes white balance custom; the other half\n"
         "keeps the photograph's own value, or as shot. The command never writes a\n"
         "sidecar.\n"
@@ -591,6 +651,17 @@ void configure(QCommandLineParser& parser) {
                                                      limit(descriptor.range->maximum)) +
                               "." + QString::fromUtf8(help.note),
                           help.valueName});
+    }
+    for (const FieldDescriptor& descriptor : developSettingDescriptors) {
+        if (takesPoints(descriptor)) {
+            const SettingHelp& help = *helpFor(descriptor.key);
+            parser.addOption({QString::fromStdString(optionName(descriptor.key)),
+                              QString::fromUtf8(help.description) +
+                                  ", as x,y points joined by semicolons: 2 to 16 points, x and y "
+                                  "from 0 to 1, the ends at x = 0 and x = 1, x at least 0.01 "
+                                  "apart, in any order.",
+                              help.valueName});
+        }
     }
     parser.addOption(
         {"white-balance", "as-shot or custom. Temperature/tint imply custom.", "mode"});

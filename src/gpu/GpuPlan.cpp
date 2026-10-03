@@ -3,6 +3,7 @@
 #include "GeometryPlan.h"
 #include "ProcessingPlan.h"
 #include "ResampleWeights.h"
+#include "ToneCurve.h"
 
 #include <algorithm>
 #include <cmath>
@@ -45,6 +46,11 @@ GpuPointwiseBlock packPointwise(const ProcessingPlan& plan, PointwiseProbe probe
     block.bandSaturation = colour.bandSaturation;
     block.bandLuminance = colour.bandLuminance;
     block.grayMix = colour.grayMix;
+    const ToneCurvePlan& curves = plan.toneCurves;
+    block.curvesLuma = curves.luma.active ? 1U : 0U;
+    block.curvesRed = curves.red.active ? 1U : 0U;
+    block.curvesGreen = curves.green.active ? 1U : 0U;
+    block.curvesBlue = curves.blue.active ? 1U : 0U;
     block.probe = static_cast<std::uint32_t>(probe);
     return block;
 }
@@ -112,6 +118,19 @@ GpuGeometryBlock packGeometry(const GeometryPlan& plan) {
     block.sourceSize = {plan.sourceSize.width, plan.sourceSize.height};
     block.outputSize = {plan.outputSize.width, plan.outputSize.height};
     return block;
+}
+
+ImageBuffer packToneCurves(const ToneCurvePlan& curves) {
+    ImageBuffer image({static_cast<std::uint32_t>(toneCurveSamples), 1}, workingFormat,
+                      workingEncoding);
+    const auto samples = image.samples<float>();
+    for (std::size_t index = 0; index < toneCurveSamples; ++index) {
+        samples[index * 4] = curves.luma.table[index];
+        samples[index * 4 + 1] = curves.red.table[index];
+        samples[index * 4 + 2] = curves.green.table[index];
+        samples[index * 4 + 3] = curves.blue.table[index];
+    }
+    return image;
 }
 
 ImageBuffer packResizeWeights(std::uint32_t in, std::uint32_t out, ResizeFilter filter) {

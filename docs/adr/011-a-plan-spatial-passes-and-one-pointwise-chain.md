@@ -216,3 +216,12 @@ request" keeps its meaning.
 - **A stage's kind is part of its definition.** Anything pointwise that later
   needs a neighbour, such as clarity or a local contrast, becomes a spatial
   stage and a pass of its own rather than being smuggled into the chain.
+
+## Note, 2026-10-03
+
+The tone curve ([ADR 033](033-the-tone-curve-is-four-monotone-curves-in-the-perceptual-coordinate.md))
+is built and sits between `shapeTone` and `rollHighlights`, so the curve input
+tap is that position: after Basic Tone, immediately before the curves. The tap
+definition above holds as written. The curves are part of the plan's pointwise
+group and of the Pointwise pass's inputs (a second texture on the GPU), so
+nothing about checkpoints changes. The tap itself is still unbuilt.

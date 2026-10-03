@@ -144,7 +144,8 @@ struct GpuDeviceInfo {
 /// `src/gpu/shaders`, compiled at build time.
 enum class GpuPass {
     Copy,      ///< Copies its input unchanged; no uniforms. The render round trip's proof.
-    Pointwise, ///< The pointwise chain; uniforms are a ::arraw::GpuPointwiseBlock.
+    Pointwise, ///< The pointwise chain; uniforms are a ::arraw::GpuPointwiseBlock, inputs the image
+               ///< and the curves.
     Geometry,  ///< The geometry resample; uniforms are a ::arraw::GpuGeometryBlock.
 
     /// @brief The horizontal half of a resize, one ::arraw::ResizePlane per render.

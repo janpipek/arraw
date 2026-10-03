@@ -11,18 +11,22 @@ namespace arraw {
 
 struct GeometryPlan;
 struct ProcessingPlan;
+struct ToneCurvePlan;
 
 /// @brief Intermediate value the pointwise shader writes instead of its result.
 ///
 /// ADR 011's "branch on a uniform": when a GPU and a CPU development disagree,
 /// comparing each stage says which of the matrix, the gain or the tone chain
-/// is responsible. Development itself always asks for ::Developed.
+/// is responsible. Development itself always asks for ::Developed. The values
+/// are stable identifiers shared with the shader, not the order of the
+/// pipeline: the tone curves (5) run before the shoulder (4).
 enum class PointwiseProbe : std::uint32_t {
     Developed = 0,     ///< The whole chain: what development writes.
     AfterMatrix = 1,   ///< After the source-to-working transform.
     AfterExposure = 2, ///< After the exposure gain.
-    AfterTone = 3,     ///< After the tone controls, before the shoulder.
+    AfterTone = 3,     ///< After the tone controls, before the tone curves.
     AfterShoulder = 4, ///< After the shoulder, before the colour controls.
+    AfterCurves = 5,   ///< After the tone curves, before the shoulder.
 };
 
 /// @brief The pointwise chain's uniform block, byte for byte as std140 lays it out.
@@ -93,6 +97,21 @@ struct GpuPointwiseBlock {
     /// @brief Whether any HSL band changes anything: 0 or 1.
     std::uint32_t adjustsHsl = 0;
 
+    /// @brief Whether the luma curve changes anything: 0 or 1.
+    ///
+    /// The four curves' tables travel in a texture (::arraw::packToneCurves);
+    /// a flag that is 0 keeps the shader from reading it.
+    std::uint32_t curvesLuma = 0;
+
+    /// @brief Whether the red curve changes anything: 0 or 1.
+    std::uint32_t curvesRed = 0;
+
+    /// @brief Whether the green curve changes anything: 0 or 1.
+    std::uint32_t curvesGreen = 0;
+
+    /// @brief Whether the blue curve changes anything: 0 or 1.
+    std::uint32_t curvesBlue = 0;
+
     /// @brief Rounds the scalars up to the `vec4` boundary the band sets start on.
     std::array<std::uint32_t, 3> padding{};
 
@@ -127,12 +146,16 @@ static_assert(offsetof(GpuPointwiseBlock, vibrance) == 100);
 static_assert(offsetof(GpuPointwiseBlock, adjustsSaturation) == 104);
 static_assert(offsetof(GpuPointwiseBlock, adjustsVibrance) == 108);
 static_assert(offsetof(GpuPointwiseBlock, adjustsHsl) == 112);
-static_assert(offsetof(GpuPointwiseBlock, padding) == 116);
-static_assert(offsetof(GpuPointwiseBlock, hueShift) == 128);
-static_assert(offsetof(GpuPointwiseBlock, bandSaturation) == 160);
-static_assert(offsetof(GpuPointwiseBlock, bandLuminance) == 192);
-static_assert(offsetof(GpuPointwiseBlock, grayMix) == 224);
-static_assert(sizeof(GpuPointwiseBlock) == 256);
+static_assert(offsetof(GpuPointwiseBlock, curvesLuma) == 116);
+static_assert(offsetof(GpuPointwiseBlock, curvesRed) == 120);
+static_assert(offsetof(GpuPointwiseBlock, curvesGreen) == 124);
+static_assert(offsetof(GpuPointwiseBlock, curvesBlue) == 128);
+static_assert(offsetof(GpuPointwiseBlock, padding) == 132);
+static_assert(offsetof(GpuPointwiseBlock, hueShift) == 144);
+static_assert(offsetof(GpuPointwiseBlock, bandSaturation) == 176);
+static_assert(offsetof(GpuPointwiseBlock, bandLuminance) == 208);
+static_assert(offsetof(GpuPointwiseBlock, grayMix) == 240);
+static_assert(sizeof(GpuPointwiseBlock) == 272);
 
 /// @brief Widest output, in pixels per side, that the geometry block can address exactly.
 ///
@@ -259,6 +282,17 @@ static_assert(sizeof(GpuResizeBlock) == 16);
 /// @return The block, ready to be copied into a uniform buffer.
 [[nodiscard]] GpuPointwiseBlock packPointwise(const ProcessingPlan& plan,
                                               PointwiseProbe probe = PointwiseProbe::Developed);
+
+/// @brief Packs the four tone curves of a plan as an image the pointwise shader reads.
+///
+/// Texel `i` holds entry `i` of each table: red the luma curve, green the red
+/// curve, blue the green curve and alpha the blue curve. Inactive curves are
+/// zeros, which the shader never reads. The result is labelled RGBA float in
+/// the working encoding only so that it can be uploaded; it holds curve
+/// values, not colour.
+/// @param curves Resolved curves to pack.
+/// @return An image ::arraw::toneCurveSamples pixels wide and one tall.
+[[nodiscard]] ImageBuffer packToneCurves(const ToneCurvePlan& curves);
 
 /// @brief Fills the geometry block from a resolved geometry.
 /// @param plan Geometry to pack.

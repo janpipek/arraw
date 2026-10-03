@@ -226,6 +226,14 @@ std::string textOf(const Encoded& encoded) {
             }
             return text;
         }
+        std::string operator()(const PointList& points) const {
+            std::string text;
+            for (const auto& [x, y] : points) {
+                text += text.empty() ? "" : ";";
+                text += number(x) + "," + number(y);
+            }
+            return text;
+        }
     };
     return std::visit(Speller{}, encoded);
 }

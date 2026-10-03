@@ -12,6 +12,10 @@ CENTER = {
     "crop_rectangle": arraw.UprightCropRect(0.1, 0.1, 0.9, 0.9),
     "crop_aspect": arraw.CropRatio(1.5),
     "convert_to_grayscale": True,
+    "tone_curve_luma": arraw.ToneCurve([(0.0, 0.0), (0.25, 0.4), (1.0, 1.0)]),
+    "tone_curve_red": arraw.ToneCurve([(0.0, 0.1), (1.0, 1.0)]),
+    "tone_curve_green": arraw.ToneCurve([(0.0, 0.0), (0.5, 0.3), (1.0, 0.9)]),
+    "tone_curve_blue": arraw.ToneCurve([(0.0, 0.0), (0.2, 0.1), (0.8, 0.9), (1.0, 1.0)]),
 }
 
 BANDS = ("red", "orange", "yellow", "green", "aqua", "blue", "purple", "magenta")
@@ -38,6 +42,8 @@ def find(settings, name):
         for band in BANDS:
             if name == f"{kind}_{band}":
                 return getattr(getattr(settings.hsl, band), kind)
+    if name.startswith("tone_curve"):
+        return getattr(settings.tone_curve, name.removeprefix("tone_curve").lstrip("_") or "luma")
     if name.startswith("gray_"):
         return getattr(settings.black_and_white, name.removeprefix("gray_"))
     for group in (settings.color, settings.tone, settings.geometry, settings.black_and_white):
@@ -213,3 +219,9 @@ def test_open_missing_file_raises(tmp_path):
 
 def test_open_accepts_str_and_path(dng):
     assert arraw.open(str(dng)) == arraw.open(dng)
+
+
+@pytest.mark.parametrize("points", [[(0.1, 0.0), (1.0, 1.0)], [(0.0, 0.0), (0.5, 2.0), (1.0, 1.0)]])
+def test_a_malformed_curve_is_refused_when_set_on_a_photo(photo, points):
+    with pytest.raises(ValueError, match="tone curve"):
+        photo.with_(tone_curve_luma=points)

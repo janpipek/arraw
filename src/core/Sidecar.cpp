@@ -357,6 +357,14 @@ std::optional<QString> spell(const Encoded& encoded) {
             }
             return parts.join(',');
         }
+        std::optional<QString> operator()(const PointList& points) const {
+            // "x,y;x,y;...", in the curve's order.
+            QStringList parts;
+            for (const auto& [x, y] : points) {
+                parts.push_back(number(x) + ',' + number(y));
+            }
+            return parts.join(';');
+        }
         static QString number(double value) {
             char buffer[64];
             const auto written = std::to_chars(buffer, buffer + sizeof buffer, value);
@@ -408,6 +416,11 @@ std::vector<Encoded> readingsOf(const FieldDescriptor& descriptor, const QString
         }
         if (compound.size() == names.size()) {
             readings.emplace_back(std::move(compound));
+        }
+    }
+    if (takesPoints(descriptor)) {
+        if (auto points = parsePointList(text.toStdString())) {
+            readings.emplace_back(std::move(*points));
         }
     }
     readings.emplace_back(text.toStdString());

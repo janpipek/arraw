@@ -358,9 +358,9 @@ std::size_t uniformSizeOf(GpuPass pass) {
 std::size_t inputCountOf(GpuPass pass) {
     switch (pass) {
     case GpuPass::Copy:
-    case GpuPass::Pointwise:
     case GpuPass::Geometry:
         return 1;
+    case GpuPass::Pointwise:
     case GpuPass::ResizeAcross:
     case GpuPass::ResizeAcrossOpaque:
     case GpuPass::ResizeDownOpaque:

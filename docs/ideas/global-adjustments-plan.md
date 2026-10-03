@@ -259,8 +259,8 @@ committed on its own. Each ends with an ADR and green
 `just test`, including the GPU suite where a device exists.
 
 1. **Tone Curve, engine.** Curve leaf type in the codec, `ToneCurveSettings`,
-   monotone-cubic LUT, chain placement, GPU texture, CLI `--tone-curve`,
-   `--tone-curve-red|green|blue` (`"x,y;x,y"`), Python.
+   monotone-cubic LUT, chain placement, GPU texture, CLI
+   `--tone-curve-luma|red|green|blue` (`"x,y;x,y"`), Python.
 2. **Colour Grading, engine.** Settings, maths, GPU, CLI, Python.
 3. **Curve-input tap and histogram.** `sample(Tap::CurveInput)` on both
    backends (ADR 011: the GPU branches on a uniform and writes the tap instead

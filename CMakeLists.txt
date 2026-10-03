@@ -138,6 +138,10 @@ add_library(arraw STATIC
         src/core/Resample.cpp
         src/core/ResampleWeights.h
         src/core/ResampleWeights.cpp
+        include/ToneCurveSettings.h
+        src/core/ToneCurveSettings.cpp
+        src/core/ToneCurve.h
+        src/core/ToneCurve.cpp
         include/ToneSettings.h
         src/core/ToneSettings.cpp
         src/core/ColorSpaces.h
@@ -163,6 +167,7 @@ add_library(arraw STATIC
         include/SettingDescriptors.h
         src/core/SettingDescriptors.cpp
         src/core/SettingCodec.h
+        src/core/ShortestDecimal.h
         src/core/SettingCodec.cpp
         include/SettingsJson.h
         src/core/SettingsJson.cpp

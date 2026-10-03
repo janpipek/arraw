@@ -457,6 +457,23 @@ TEST_CASE("Values a sidecar gets wrong are reported and repaired", "[sidecar][di
         REQUIRE(count(log, Notice::SettingMalformed) == 2);
         REQUIRE(log.entries().front().subject == path);
     }
+    SECTION("a curve is read from its points, sorted, with a clamp reported") {
+        with(R"(arraw:toneCurveRed="1,1;0.5,0.25;0,0" arraw:toneCurveBlue="0,-1;1,1")");
+        const auto contents = readSidecar(path, log);
+        const std::vector<CurvePoint> red{{0.0F, 0.0F}, {0.5F, 0.25F}, {1.0F, 1.0F}};
+        const std::vector<CurvePoint> blue{{0.0F, 0.0F}, {1.0F, 1.0F}};
+        REQUIRE(contents->state.settings.toneCurve.red.points == red);
+        REQUIRE(contents->state.settings.toneCurve.blue.points == blue);
+        REQUIRE(count(log, Notice::SettingClamped) == 1);
+        REQUIRE(count(log, Notice::SettingMalformed) == 0);
+    }
+    SECTION("a malformed curve is skipped") {
+        with(R"(arraw:toneCurveLuma="0,0" arraw:toneCurveRed="0,0;0.5,0.5;0.5,0.7;1,1")"
+             R"( arraw:toneCurveGreen="0,0;one,1" arraw:toneCurveBlue="0.5,0.5;1,1")");
+        const auto contents = readSidecar(path, log);
+        REQUIRE(contents->state.settings.toneCurve == ToneCurveSettings{});
+        REQUIRE(count(log, Notice::SettingMalformed) == 4);
+    }
     SECTION("a newer version is read with a warning") {
         with(R"(arraw:version="2" arraw:exposure="0.5")");
         REQUIRE(readSidecar(path, log)->state.settings.tone.exposure == 0.5F);
@@ -734,6 +751,18 @@ TEST_CASE("A row that encodes to a compound is read through the shapes the codec
             REQUIRE(compoundShapes(descriptor).empty());
         }
     }
+}
+
+TEST_CASE("A tone curve is written as an attribute of semicolon-separated points", "[sidecar]") {
+    const test::TempDir directory;
+    const fs::path path = copyRaw(directory, "IMG_1.dng");
+    DevelopSettings settings;
+    settings.toneCurve.green.points = {{0.0F, 0.0F}, {0.25F, 0.125F}, {1.0F, 0.9F}};
+    writeSidecar(photoOf(path, settings));
+    const std::string text = slurp(directory.file("IMG_1.xmp"));
+    REQUIRE(text.find("toneCurveGreen=\"0,0;0.25,0.125;1,0.9\"") != std::string::npos);
+    REQUIRE(text.find("toneCurveLuma=\"0,0;1,1\"") != std::string::npos);
+    REQUIRE(readSidecar(path)->state.settings == settings);
 }
 
 TEST_CASE("Writing only the marks keeps the settings and what is foreign", "[sidecar][marks]") {

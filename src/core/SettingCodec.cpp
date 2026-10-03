@@ -1,40 +1,38 @@
 #include "SettingCodec.h"
 
+#include "ShortestDecimal.h"
+
+#include <algorithm>
 #include <array>
 #include <charconv>
 #include <cmath>
+#include <optional>
 #include <string_view>
+#include <system_error>
 #include <type_traits>
+#include <utility>
 
 using namespace arraw;
 
 namespace {
 
-/// @brief Spells a double as its shortest text that reads back the same.
-std::string shortestText(double value) {
-    char buffer[64];
-    const auto written = std::to_chars(buffer, buffer + sizeof buffer, value);
-    return std::string(buffer, written.ptr);
-}
-
-/// @brief Reads a float as the double that spells it the shortest.
-double shortestDouble(float value) {
-    char buffer[64];
-    const auto written = std::to_chars(buffer, buffer + sizeof buffer, value);
-    double result = value;
-    std::from_chars(buffer, written.ptr, result);
-    return result;
-}
-
-/// @brief Reads a double as the float with the same shortest text, the inverse of shortestDouble.
-///
-/// Converting the double directly would round a second time and could land a
-/// unit in the last place away from the float that was encoded.
-float shortestFloat(double value) {
-    const std::string text = shortestText(value);
-    auto result = static_cast<float>(value);
-    std::from_chars(text.data(), text.data() + text.size(), result);
-    return result;
+/// @brief Reads a whole text as a number, ignoring blanks around it and one leading `+`.
+std::optional<double> wholeNumber(std::string_view text) {
+    constexpr std::string_view blanks = " \t\r\n";
+    const std::size_t first = text.find_first_not_of(blanks);
+    if (first == std::string_view::npos) {
+        return std::nullopt;
+    }
+    text = text.substr(first, text.find_last_not_of(blanks) - first + 1);
+    if (text.starts_with('+')) {
+        text.remove_prefix(1);
+    }
+    double value = 0.0;
+    const auto result = std::from_chars(text.data(), text.data() + text.size(), value);
+    if (text.empty() || result.ec != std::errc{} || result.ptr != text.data() + text.size()) {
+        return std::nullopt;
+    }
+    return value;
 }
 
 /// @brief Where a decode reports to, and about what.
@@ -176,7 +174,71 @@ std::optional<CropAspect> cropAspect(const Encoded& encoded) {
     return std::nullopt;
 }
 
+/// @brief Reads a curve from its points, or nothing if malformed.
+///
+/// The points may come in any order and are sorted, and an end x within
+/// rounding of 0 or 1 is snapped onto it (::arraw::curveFromPoints); an x
+/// further out is malformed rather than clamped, since moving a point along x
+/// changes which curve it is. A y outside 0 to 1 is clamped, as every number
+/// is, and the warnings about it are reported only for a curve that is taken.
+std::optional<ToneCurve> curveFrom(const Encoded& encoded, const Reporter& report) {
+    const auto* list = std::get_if<PointList>(&encoded);
+    if (list == nullptr || list->size() < minimumCurvePoints || list->size() > maximumCurvePoints) {
+        return std::nullopt;
+    }
+    std::vector<double> clamps;
+    std::vector<CurvePoint> points;
+    for (const auto& [x, y] : *list) {
+        // An x this far out is malformed anyway, and is refused before it
+        // could overflow a float.
+        if (!std::isfinite(x) || !std::isfinite(y) || x < -1.0 || x > 2.0) {
+            return std::nullopt;
+        }
+        if (y < 0.0 || y > 1.0) {
+            clamps.push_back(y);
+        }
+        points.push_back({shortestFloat(x), shortestFloat(std::clamp(y, 0.0, 1.0))});
+    }
+    std::optional<ToneCurve> curve = curveFromPoints(std::move(points));
+    if (!curve) {
+        return std::nullopt;
+    }
+    for (const double value : clamps) {
+        report.reportClamped(value, value < 0.0 ? 0.0 : 1.0);
+    }
+    return curve;
+}
+
 } // namespace
+
+std::optional<PointList> arraw::parsePointList(std::string_view text) {
+    PointList points;
+    while (true) {
+        const std::size_t end = text.find(';');
+        const std::string_view pair = text.substr(0, end);
+        const std::size_t comma = pair.find(',');
+        if (comma == std::string_view::npos) {
+            return std::nullopt;
+        }
+        const std::optional<double> x = wholeNumber(pair.substr(0, comma));
+        const std::optional<double> y = wholeNumber(pair.substr(comma + 1));
+        if (!x || !y) {
+            return std::nullopt;
+        }
+        points.emplace_back(*x, *y);
+        if (end == std::string_view::npos) {
+            return points;
+        }
+        text.remove_prefix(end + 1);
+    }
+}
+
+bool arraw::takesPoints(const FieldDescriptor& descriptor) {
+    static const DevelopSettings blank;
+    return visitField(descriptor, blank, [](const auto& field) {
+        return std::is_same_v<std::remove_cvref_t<decltype(field)>, ToneCurve>;
+    });
+}
 
 std::string arraw::expectation(const FieldDescriptor& descriptor) {
     static const DevelopSettings blank;
@@ -195,6 +257,8 @@ std::string arraw::expectation(const FieldDescriptor& descriptor) {
         } else if constexpr (std::is_same_v<T, std::optional<UprightCropRect>>) {
             return "left, top, right and bottom numbers from 0 to 1, left below right and top "
                    "below bottom, or unset";
+        } else if constexpr (std::is_same_v<T, ToneCurve>) {
+            return toneCurveRequirements;
         } else {
             static_assert(std::is_same_v<T, CropAspect>);
             return "free, original, or a positive finite ratio";
@@ -257,6 +321,12 @@ Encoded arraw::encode(const FieldDescriptor& descriptor, const DevelopSettings& 
                             {"top", field->top},
                             {"right", field->right},
                             {"bottom", field->bottom}};
+        } else if constexpr (std::is_same_v<T, ToneCurve>) {
+            PointList list;
+            for (const CurvePoint& point : field.points) {
+                list.emplace_back(shortestDouble(point.x), shortestDouble(point.y));
+            }
+            return list;
         } else {
             static_assert(std::is_same_v<T, CropAspect>);
             if (std::holds_alternative<FreeCropAspect>(field)) {
@@ -318,6 +388,12 @@ void arraw::decode(const FieldDescriptor& descriptor, const Encoded& encoded,
             const auto* compound = std::get_if<Compound>(&encoded);
             if (const auto rectangle = compound ? cropRectangle(*compound) : std::nullopt) {
                 field = *rectangle;
+            } else {
+                report.reportMalformed();
+            }
+        } else if constexpr (std::is_same_v<T, ToneCurve>) {
+            if (auto curve = curveFrom(encoded, report)) {
+                field = std::move(*curve);
             } else {
                 report.reportMalformed();
             }

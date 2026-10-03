@@ -3,6 +3,7 @@
 #include <cmath>
 #include <format>
 #include <stdexcept>
+#include <string>
 #include <type_traits>
 
 using namespace arraw;
@@ -35,6 +36,14 @@ void arraw::validate(const DevelopSettings& settings) {
                 }
             }
         });
+    }
+    // The curves have no range either: each coordinate lies from 0 to 1, and a
+    // curve that breaks its invariants could resolve into no plan.
+    for (const ToneCurve* curve : {&settings.toneCurve.luma, &settings.toneCurve.red,
+                                   &settings.toneCurve.green, &settings.toneCurve.blue}) {
+        if (!isWellFormed(*curve)) {
+            throw std::invalid_argument(std::string("a tone curve needs ") + toneCurveRequirements);
+        }
     }
     // The crop rows have no range. Whether a crop fits the image is the
     // geometry plan's question, but a crop that could fit no image is refused

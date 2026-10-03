@@ -17,10 +17,12 @@
 #include <nanobind/stl/vector.h>
 // clang-format on
 
+#include "ShortestDecimal.h"
+
 #include <DevelopSettings.h>
 #include <Diagnostics.h>
+#include <ToneCurveSettings.h>
 
-#include <charconv>
 #include <optional>
 #include <set>
 #include <string>
@@ -29,6 +31,49 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
+
+/// @brief Caster of a curve point to and from a Python `(x, y)` tuple.
+///
+/// A float goes out as the double of its shortest decimal spelling, so that a
+/// point read as 0.3 shows as 0.3 and not as 0.30000001192092896. Reading
+/// takes any two-item sequence of numbers except text and bytes, and goes
+/// through the shortest spelling too, so that the two directions are inverse.
+template <> struct nanobind::detail::type_caster<arraw::CurvePoint> {
+    NB_TYPE_CASTER(arraw::CurvePoint, const_name("tuple[float, float]"))
+
+    /// @brief Reads a two-item sequence of numbers.
+    bool from_python(nanobind::handle source, uint8_t, cleanup_list*) noexcept {
+        PyObject* object = source.ptr();
+        if (PyUnicode_Check(object) || PyBytes_Check(object) || PyByteArray_Check(object) ||
+            PySequence_Check(object) == 0 || PySequence_Size(object) != 2) {
+            PyErr_Clear();
+            return false;
+        }
+        double coordinates[2]{};
+        for (Py_ssize_t index = 0; index < 2; ++index) {
+            PyObject* item = PySequence_GetItem(object, index);
+            const bool number = item != nullptr && PyBool_Check(item) == 0;
+            coordinates[index] = number ? PyFloat_AsDouble(item) : 0.0;
+            const bool failed = !number || PyErr_Occurred() != nullptr;
+            Py_XDECREF(item);
+            if (failed) {
+                PyErr_Clear();
+                return false;
+            }
+        }
+        value = arraw::CurvePoint{arraw::shortestFloat(coordinates[0]),
+                                  arraw::shortestFloat(coordinates[1])};
+        return true;
+    }
+
+    /// @brief Makes an `(x, y)` tuple.
+    static handle from_cpp(const arraw::CurvePoint& point, rv_policy, cleanup_list*) noexcept {
+        PyObject* tuple = PyTuple_New(2);
+        PyTuple_SET_ITEM(tuple, 0, PyFloat_FromDouble(arraw::shortestDouble(point.x)));
+        PyTuple_SET_ITEM(tuple, 1, PyFloat_FromDouble(arraw::shortestDouble(point.y)));
+        return tuple;
+    }
+};
 
 /// @brief Private helpers of the Python bindings.
 namespace arraw::python {
@@ -255,6 +300,15 @@ template <class M> nb::object hashable(const M& value) {
     }
 }
 
+/// @brief Puts a freshly built value in its canonical form; most values have one already.
+template <class T> void canonicalise(T&) {}
+
+/// @brief Sorts a curve's points by x and snaps its ends, so that Python takes them in any
+/// order as every other frontend does (ADR 033).
+inline void canonicalise(arraw::ToneCurve& curve) {
+    arraw::normaliseCurvePoints(curve.points);
+}
+
 /// @brief Binds a plain settings struct as a frozen Python value class.
 ///
 /// Gives it a keyword constructor with the C++ defaults, read-only attributes,
@@ -275,6 +329,7 @@ nb::class_<T> bindFrozen(nb::module_& module, const char* name, const char* doc,
     const auto init = [=](T* self, ConstructorArgument<Ms>... values) {
         T value;
         (assignArgument(value.*fields.member, values, fields.name), ...);
+        canonicalise(value);
         new (self) T(std::move(value));
     };
     const auto defineInit = [&](auto... leading) {
@@ -317,6 +372,7 @@ nb::class_<T> bindFrozen(nb::module_& module, const char* name, const char* doc,
                         ("replace() got an unexpected keyword argument '" + keyName + "'").c_str());
                 }
             }
+            canonicalise(copy);
             return copy;
         },
         "Return a copy with the given attributes replaced.");

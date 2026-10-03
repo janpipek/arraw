@@ -23,8 +23,9 @@ using Catch::Approx;
 namespace {
 
 /// Settings that no panel shows yet; deciding where a new one goes is deliberate.
-constexpr std::array<std::string_view, 6> notShownYet{
-    "rotation", "flipHorizontal", "flipVertical", "straighten", "cropRectangle", "cropAspect"};
+constexpr std::array<std::string_view, 10> notShownYet{
+    "rotation",   "flipHorizontal", "flipVertical", "straighten",     "cropRectangle",
+    "cropAspect", "toneCurveLuma",  "toneCurveRed", "toneCurveGreen", "toneCurveBlue"};
 
 /// Settings the Treatment buttons edit; they have no slider row.
 constexpr std::array<std::string_view, 1> shownByTreatment{"convertToGrayscale"};
