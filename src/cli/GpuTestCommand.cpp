@@ -95,7 +95,7 @@ void field(std::ostream& out, std::string_view label, std::string_view value) {
     } else {
         out << ' ';
     }
-    out << value << '\n';
+    out << cli::terminalText(value) << '\n';
 }
 
 /// @brief Says yes or no.

@@ -398,7 +398,9 @@ add_library(arraw-cli-core STATIC
         src/cli/ShotInputs.h
         src/cli/StreamDiagnostics.cpp
         src/cli/StreamDiagnostics.h
-        src/cli/TerminalStyle.h)
+        src/cli/TerminalStyle.h
+        src/cli/TerminalText.h
+        src/cli/TerminalText.cpp)
 arraw_enable_warnings(arraw-cli-core)
 target_include_directories(arraw-cli-core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/cli
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/core)

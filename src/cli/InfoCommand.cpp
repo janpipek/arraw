@@ -447,7 +447,7 @@ void writeText(std::ostream& out, const FileReport& report, bool all) {
         if (!report.shot->companions.empty()) {
             out << "  companions:";
             for (const auto& companion : report.shot->companions) {
-                out << ' ' << pathText(companion.filename());
+                out << ' ' << cli::terminalText(pathText(companion.filename()));
             }
             out << '\n';
         }
@@ -458,9 +458,9 @@ void writeText(std::ostream& out, const FileReport& report, bool all) {
         out << "  encoding: camera\n";
     }
     for (const auto& [label, line] : exifLines(report.exif)) {
-        out << "  " << label << ": " << line << '\n';
+        out << "  " << label << ": " << cli::terminalText(line) << '\n';
     }
-    out << "  sidecar: " << (report.sidecar ? pathText(*report.sidecar) : "none")
+    out << "  sidecar: " << (report.sidecar ? cli::terminalText(pathText(*report.sidecar)) : "none")
         << (report.sidecar && !report.sidecarRead ? " (ignored)" : "") << '\n';
     const PhotoMarks& marks = photo.marks();
     if (marks.rating != 0) {
@@ -477,12 +477,13 @@ void writeText(std::ostream& out, const FileReport& report, bool all) {
     if (report.creatorTool || !report.others.empty()) {
         out << "  other tools:\n";
         if (report.creatorTool) {
-            out << "    written by: " << *report.creatorTool << '\n';
+            out << "    written by: " << cli::terminalText(*report.creatorTool) << '\n';
         }
         for (const ForeignNamespace& other : report.others) {
             out << "    " << xmpNamespaceOwner(other.uri).value_or("unknown") << " ("
-                << (other.prefix.empty() ? "no prefix" : other.prefix + ":") << ", "
-                << other.properties << (other.properties == 1 ? " property)\n" : " properties)\n");
+                << (other.prefix.empty() ? "no prefix" : cli::terminalText(other.prefix) + ":")
+                << ", " << other.properties
+                << (other.properties == 1 ? " property)\n" : " properties)\n");
         }
     }
     const auto listed =
@@ -493,7 +494,7 @@ void writeText(std::ostream& out, const FileReport& report, bool all) {
     }
     out << "  develop settings:\n";
     for (const auto& [descriptor, value] : listed) {
-        out << "    " << descriptor->key << ": " << textOf(value) << '\n';
+        out << "    " << descriptor->key << ": " << cli::terminalText(textOf(value)) << '\n';
     }
 }
 

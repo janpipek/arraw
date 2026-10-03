@@ -149,18 +149,19 @@ void StreamDiagnostics::record(const Diagnostic& diagnostic) {
         if (diagnostic.subject) {
             stream_ << accented(stream_, diagnostic.subject->string(), Accent::Heading) << ": ";
         }
-        stream_ << withoutSubject(diagnostic) << '\n';
+        stream_ << terminalText(withoutSubject(diagnostic)) << '\n';
         return;
     }
     // A diagnostic about no particular photograph, such as a batch's own
     // summary, has no file to name.
     const std::string about =
-        diagnostic.subject ? diagnostic.subject->string() + ": " : std::string{};
+        diagnostic.subject ? terminalText(diagnostic.subject->string()) + ": " : std::string{};
     if (diagnostic.severity == Severity::Info) {
-        stream_ << about << withoutSubject(diagnostic) << '\n';
+        stream_ << about << terminalText(withoutSubject(diagnostic)) << '\n';
         return;
     }
-    stream_ << nameOf(diagnostic.severity) << ": " << about << withoutSubject(diagnostic) << '\n';
+    stream_ << nameOf(diagnostic.severity) << ": " << about
+            << terminalText(withoutSubject(diagnostic)) << '\n';
 }
 
 void addLogFormatOption(QCommandLineParser& parser) {

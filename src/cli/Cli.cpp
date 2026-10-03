@@ -54,7 +54,7 @@ void writeHelp(std::ostream& stream) {
 
 /// @brief Reports a usage problem, listing what could have been typed instead.
 int usageError(std::ostream& err, const std::string& message) {
-    err << accented(err, "error:", Accent::Error) << " " << message << "\n\n";
+    err << accented(err, "error:", Accent::Error) << " " << terminalText(message) << "\n\n";
     listCommands(err);
     err << "\nTry 'arraw-cli --help'.\n";
     return UsageError;

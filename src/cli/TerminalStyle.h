@@ -1,5 +1,7 @@
 #pragma once
 
+#include "TerminalText.h"
+
 #include <cstdlib>
 #include <iostream>
 #include <ostream>
@@ -41,10 +43,11 @@ inline bool terminalStyle(const std::ostream& stream) {
 #endif
 }
 
-/// @brief Wraps text in an ANSI accent when enabled.
+/// @brief Removes injected controls and wraps text in an ANSI accent when enabled.
 inline std::string accented(std::string_view text, Accent accent, bool enabled) {
+    const std::string clean = terminalText(text);
     if (!enabled) {
-        return std::string(text);
+        return clean;
     }
     std::string_view code;
     switch (accent) {
@@ -64,7 +67,7 @@ inline std::string accented(std::string_view text, Accent accent, bool enabled) 
         code = "\033[2m";
         break;
     }
-    return std::string(code) + std::string(text) + "\033[0m";
+    return std::string(code) + clean + "\033[0m";
 }
 
 /// @brief Accents text for the destination stream.

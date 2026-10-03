@@ -234,3 +234,30 @@ for it.
 ```
 arraw-cli export <input>... -o <dir> [...] [--metadata LIST]
 ```
+
+## Note, 2026-10-03: terminal styling and untrusted text
+
+Human-readable output strips terminal control sequences from filenames,
+metadata, diagnostic messages, arguments reported in usage errors, and GPU
+report values. These fields can come from outside arraw: a filename or camera
+tag must not clear the screen, change the clipboard, or inject report lines.
+
+`cli::terminalText` in `src/cli/TerminalText.cpp` removes ANSI sequences,
+including CSI and OSC sequences and control-string payloads, plus C0/C1
+controls and DEL. It strips the sequences entirely rather than displaying
+escape notation. An unterminated control string consumes the remainder of
+that field. Ordinary Unicode text is preserved; embedded line breaks and tabs
+are removed, while the report writer owns indentation and line breaks.
+
+`cli::accented` cleans its text before adding arraw's own ANSI styling. Other
+text fields use the same helper directly. This keeps the existing colours and
+layout while preventing supplied text from contributing terminal controls,
+whether colour is enabled or output is redirected. The earlier removal of ANSI
+colour described above is superseded by this shared styling helper; help still
+comes from the parser.
+
+JSON reports and diagnostics keep the original field values through their JSON
+serialization; terminal cleaning belongs to human-readable output, not the
+engine's metadata or paths. CLI regression tests cover injected sequences in
+filenames, sidecar metadata, diagnostics and usage errors, Unicode preservation,
+and cleaning before trusted styling is added.

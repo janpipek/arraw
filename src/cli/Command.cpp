@@ -59,8 +59,8 @@ std::string commandHelp(const QCommandLineParser& parser) {
 }
 
 int commandUsageError(std::ostream& err, std::string_view command, std::string_view message) {
-    err << accented(err, "error:", Accent::Error) << " " << message << "\n\nTry 'arraw-cli "
-        << command << " --help'.\n";
+    err << accented(err, "error:", Accent::Error) << " " << terminalText(message)
+        << "\n\nTry 'arraw-cli " << command << " --help'.\n";
     return UsageError;
 }
 

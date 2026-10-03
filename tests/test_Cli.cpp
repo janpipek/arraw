@@ -2,6 +2,7 @@
 #include "Command.h"
 #include "DeviceChoice.h"
 #include "ExportCommand.h"
+#include "StreamDiagnostics.h"
 #include "TerminalStyle.h"
 #include "support/Fixtures.h"
 #include "support/TempDir.h"
@@ -2708,3 +2709,90 @@ TEST_CASE("Terminal decoration leaves captured output and JSON clean", "[cli][st
     REQUIRE(json.code == cli::Success);
     REQUIRE_THAT(json.out, !ContainsSubstring("\033["));
 }
+
+TEST_CASE("Terminal text removes injected controls while preserving Unicode", "[cli][style]") {
+    const std::string attack = GENERATE(
+        std::string("\033[2J\033[Hhello\033[31m world\033[0m"),
+        std::string("\033]52;c;clipboard\ahello world"),
+        std::string("hello\033]0;title\033\\ world"), std::string("hello\033Ppayload\033\\ world"),
+        std::string("hello\033Xpayload\033\\ world"), std::string("hello\033^payload\033\\ world"),
+        std::string("hello\033_payload\033\\ world"), std::string("\033(Bhello\0337 world\0338"),
+        std::string("\u009b31mhello\u009b0m world"),
+        std::string("\u009d52;c;clipboard\u009chello world"),
+        std::string("hello\r\n\t\b\a world\177"));
+    REQUIRE(cli::terminalText(attack) == "hello world");
+    REQUIRE(cli::accented(attack, cli::Accent::Heading, false) == "hello world");
+    REQUIRE(cli::accented(attack, cli::Accent::Heading, true) == "\033[1;36mhello world\033[0m");
+    REQUIRE(cli::terminalText("📷 café 日本語") == "📷 café 日本語");
+    REQUIRE(cli::terminalText(std::string("a\0b", 3)) == "ab");
+    REQUIRE(cli::terminalText("hello\033]unterminated") == "hello");
+    REQUIRE(cli::terminalText("hello\033[31") == "hello");
+    REQUIRE(cli::terminalText("hello\033") == "hello");
+}
+
+TEST_CASE("Text diagnostics remove injected controls and JSON retains the data", "[cli][style]") {
+    const Diagnostic diagnostic{.notice = Notice::InputFailed,
+                                .severity = Severity::Error,
+                                .subject = std::filesystem::path("photo.png"),
+                                .values = {std::string("bad\033[2J\r\nmessage")}};
+    std::ostringstream text;
+    cli::StreamDiagnostics(text, cli::LogFormat::Text).record(diagnostic);
+    REQUIRE_THAT(text.str(), ContainsSubstring("badmessage"));
+    REQUIRE_THAT(text.str(), !ContainsSubstring("\033"));
+    REQUIRE(std::ranges::count(text.str(), '\n') == 1);
+
+    std::ostringstream json;
+    cli::StreamDiagnostics(json, cli::LogFormat::Json).record(diagnostic);
+    const auto object = QJsonDocument::fromJson(QByteArray::fromStdString(json.str())).object();
+    REQUIRE(object["message"].toString().contains("bad\033[2J\r\nmessage"));
+    REQUIRE_THAT(json.str(), !ContainsSubstring("\033"));
+}
+
+TEST_CASE("Info strips terminal sequences from sidecar metadata", "[cli][info][style]") {
+    const test::TempDir directory;
+    const auto image = directory.file("photo.png");
+    std::filesystem::copy_file(test::fixture(card), image);
+    std::ofstream(sidecarPath(image))
+        << "<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>"
+           "<rdf:Description xmlns:xmp='http://ns.adobe.com/xap/1.0/'>"
+           "<xmp:CreatorTool>&#155;31mCamera&#155;0m&#10;Maker</xmp:CreatorTool>"
+           "</rdf:Description></rdf:RDF>";
+    const auto text = invoke({"info", image.string()});
+    REQUIRE(text.code == cli::Success);
+    REQUIRE_THAT(text.out, ContainsSubstring("written by: CameraMaker\n"));
+    REQUIRE_THAT(text.out, !ContainsSubstring("\u009b"));
+
+    const auto json = invoke({"info", "--json", image.string()});
+    REQUIRE(json.code == cli::Success);
+    const auto file = QJsonDocument::fromJson(QByteArray::fromStdString(json.out))
+                          .object()["files"]
+                          .toArray()[0]
+                          .toObject();
+    REQUIRE(file["creatorTool"].toString() == QString::fromUtf8("\u009b31mCamera\u009b0m\nMaker"));
+}
+
+TEST_CASE("Usage errors remove terminal controls from arguments", "[cli][style]") {
+    const auto result = invoke({"unknown\033[2J\ncommand"});
+    REQUIRE(result.code == cli::UsageError);
+    REQUIRE_THAT(result.err, ContainsSubstring("unknowncommand"));
+    REQUIRE_THAT(result.err, !ContainsSubstring("\033"));
+}
+
+#ifndef _WIN32
+TEST_CASE("Info and diagnostics strip terminal sequences from filenames", "[cli][info][style]") {
+    const test::TempDir directory;
+    const auto image = directory.file("evil\033[2J\033[H.png");
+    std::filesystem::copy_file(test::fixture(card), image);
+    const auto info = invoke({"info", image.string()});
+    REQUIRE(info.code == cli::Success);
+    REQUIRE_THAT(info.out, ContainsSubstring("evil.png\n"));
+    REQUIRE_THAT(info.out, !ContainsSubstring("\033"));
+
+    const auto missing = directory.file("missing\033]52;c;clipboard\a.png");
+    const auto failed = invoke({"info", missing.string()});
+    REQUIRE(failed.code == cli::Failed);
+    REQUIRE_THAT(failed.err, ContainsSubstring("missing.png"));
+    REQUIRE_THAT(failed.err, !ContainsSubstring("clipboard"));
+    REQUIRE_THAT(failed.err, !ContainsSubstring("\033"));
+}
+#endif
