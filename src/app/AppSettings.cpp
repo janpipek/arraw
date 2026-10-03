@@ -6,8 +6,23 @@
 #include <QVariant>
 
 #include <exception>
+#include <system_error>
 
 namespace arraw::app {
+
+std::optional<std::filesystem::path> restoreOpenPath(QSettings& store) {
+    const std::filesystem::path file(store.value("lastFile").toString().toStdU16String());
+    const std::filesystem::path folder(store.value("lastFolder").toString().toStdU16String());
+    std::error_code error;
+    if (!file.empty() && std::filesystem::is_regular_file(file, error) &&
+        (folder.empty() || file.parent_path().lexically_normal() == folder.lexically_normal())) {
+        return file;
+    }
+    if (!folder.empty() && std::filesystem::is_directory(folder, error)) {
+        return folder;
+    }
+    return std::nullopt;
+}
 
 AppSettings restoreAppSettings(QSettings& store) {
     AppSettings settings;

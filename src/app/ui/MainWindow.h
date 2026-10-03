@@ -46,6 +46,9 @@ class MainWindow : public QMainWindow {
 public:
     explicit MainWindow(QWidget* parent = nullptr);
 
+    /// @brief Opens a startup file or folder, restoring the last one when none is supplied.
+    void openInitialPath(const std::optional<std::filesystem::path>& path = std::nullopt);
+
 protected:
     /// @brief Schedules a new render when the view changes size or pixel ratio.
     ///
