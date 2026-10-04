@@ -4,8 +4,9 @@ from collections.abc import Sequence, Set
 import enum
 import os
 import pathlib
-from typing import overload
+from typing import Annotated, overload
 
+import numpy
 from numpy.typing import NDArray
 
 
@@ -70,6 +71,11 @@ class NamedEncoding(enum.Enum):
     DISPLAY_P3 = 2
 
     ADOBE_RGB = 3
+
+    REC2020_GAMMA22 = 4
+    """
+    Rec.2020 primaries, each channel sign(v) * |v|^(1/2.2): the curve input that sample() hands back; not an output encoding.
+    """
 
 class CameraNative:
     """A camera's native colour encoding; opaque in this version."""
@@ -995,6 +1001,79 @@ def develop(source: ImageBuffer, state: DevelopState | None = None, *, size: int
 def develop(source: Photo, state: DevelopState | None = None, *, size: int | tuple[int, int] | float | None = None, filter: ResizeFilter = ResizeFilter.LANCZOS3, allow_upscale: bool = False) -> ImageBuffer:
     """
     Decode a photograph and develop it with its own state unless `state` is given; `size`, `filter` and `allow_upscale` are as for a decoded buffer.
+    """
+
+class Tap(enum.Enum):
+    """Named position inside the pointwise chain that sample() stops at."""
+
+    CURVE_INPUT = 0
+    """
+    What the tone curves take in: after white balance, exposure and Basic Tone; handed back in NamedEncoding.REC2020_GAMMA22.
+    """
+
+@overload
+def sample(source: ImageBuffer, tap: Tap, state: DevelopState | None = None, *, size: int | tuple[int, int] | float | None = None, filter: ResizeFilter = ResizeFilter.LANCZOS3, allow_upscale: bool = False) -> ImageBuffer:
+    """
+    Develop a decoded buffer on the CPU with the chain stopped at `tap`, to measure it: the same frame and size as develop() with the same arguments, in the tap's encoding.
+    """
+
+@overload
+def sample(source: Photo, tap: Tap, state: DevelopState | None = None, *, size: int | tuple[int, int] | float | None = None, filter: ResizeFilter = ResizeFilter.LANCZOS3, allow_upscale: bool = False) -> ImageBuffer:
+    """
+    Decode a photograph and sample it at `tap` with its own state unless `state` is given.
+    """
+
+CURVE_HISTOGRAM_BINS: int = 256
+
+class CurveHistogram:
+    """
+    Pixel counts of the curve input over the perceptual coordinate, CURVE_HISTOGRAM_BINS bins from 0 to 1 per channel; not constructible from Python.
+    """
+
+    @property
+    def luma(self) -> Annotated[NDArray[numpy.uint64], dict(shape=(256), writable=False)]:
+        """
+        Read-only uint64 array of the luminance counts, as the luma curve reads it.
+        """
+
+    @property
+    def red(self) -> Annotated[NDArray[numpy.uint64], dict(shape=(256), writable=False)]:
+        """Read-only uint64 array of the red counts."""
+
+    @property
+    def green(self) -> Annotated[NDArray[numpy.uint64], dict(shape=(256), writable=False)]:
+        """Read-only uint64 array of the green counts."""
+
+    @property
+    def blue(self) -> Annotated[NDArray[numpy.uint64], dict(shape=(256), writable=False)]:
+        """Read-only uint64 array of the blue counts."""
+
+    @property
+    def pixels(self) -> int:
+        """Number of pixels counted; fully transparent ones are not."""
+
+    def __eq__(self, arg: CurveHistogram, /) -> bool: ...
+
+    def __repr__(self) -> str: ...
+
+    __hash__: None = None
+
+@overload
+def curve_histogram(image: ImageBuffer) -> CurveHistogram:
+    """
+    Count a sample taken at Tap.CURVE_INPUT (NamedEncoding.REC2020_GAMMA22) into a CurveHistogram.
+    """
+
+@overload
+def curve_histogram(source: ImageBuffer, state: DevelopState, *, size: int | tuple[int, int] | float | None = 1024, allow_upscale: bool = False) -> CurveHistogram:
+    """
+    Sample a decoded buffer at Tap.CURVE_INPUT and count it. `size` is as for develop() and defaults to a 1024-pixel long edge; None counts the full cropped resolution. The resize is always bilinear, so no ringing reaches the end bins.
+    """
+
+@overload
+def curve_histogram(source: Photo, state: DevelopState | None = None, *, size: int | tuple[int, int] | float | None = 1024, allow_upscale: bool = False) -> CurveHistogram:
+    """
+    Decode a photograph, sample it at Tap.CURVE_INPUT with its own state unless `state` is given, and count it; `size` and the resize as for a decoded buffer.
     """
 
 def resolved_size(size: int | tuple[int, int] | float, cropped: ImageSize, *, allow_upscale: bool = False) -> ImageSize:

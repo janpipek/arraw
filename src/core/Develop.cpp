@@ -4,6 +4,7 @@
 #include "ProcessingPlan.h"
 #include "Resample.h"
 #include "SampleConversion.h"
+#include "Taps.h"
 #include "TimingTrace.h"
 
 #include <WhiteBalance.h>
@@ -23,14 +24,15 @@ namespace {
 
 /// @brief Runs the pointwise chain over every pixel of one layout.
 ///
-/// The order itself is in ::arraw::developPixel; this is only the traversal,
-/// deliberately small enough that nothing can hide in it. Alpha is copied
-/// rather than developed: no setting produces transparency, and a source that
-/// carried some keeps exactly what it had. ::arraw::ResizePlan::opaque, scanned
-/// from the source, relies on this: were alpha ever changed here, it would no
-/// longer describe the developed pixels.
-template <typename Sample>
-void developSamples(const ImageBuffer& source, ImageBuffer& result, const ProcessingPlan& plan) {
+/// The order itself is in ::arraw::developPixel (or a tap's prefix of it);
+/// this is only the traversal, deliberately small enough that nothing can hide
+/// in it. Alpha is copied rather than developed: no setting produces
+/// transparency, and a source that carried some keeps exactly what it had.
+/// ::arraw::ResizePlan::opaque, scanned from the source, relies on this: were
+/// alpha ever changed here, it would no longer describe the developed pixels.
+/// @param chain What one colour goes through: developPixel, or a tap's prefix.
+template <typename Sample, typename Chain>
+void developSamples(const ImageBuffer& source, ImageBuffer& result, const Chain& chain) {
     const auto input = source.samples<Sample>();
     const auto output = result.samples<float>();
     const std::size_t channels = channelCount(source.format());
@@ -40,7 +42,7 @@ void developSamples(const ImageBuffer& source, ImageBuffer& result, const Proces
         const auto* in = &input[pixel * channels];
         auto* out = &output[pixel * 4];
 
-        const Colour developed = developPixel(plan, {toUnit(in[0]), toUnit(in[1]), toUnit(in[2])});
+        const Colour developed = chain({toUnit(in[0]), toUnit(in[1]), toUnit(in[2])});
         out[0] = developed[0];
         out[1] = developed[1];
         out[2] = developed[2];
@@ -48,25 +50,31 @@ void developSamples(const ImageBuffer& source, ImageBuffer& result, const Proces
     }
 }
 
-/// @brief Runs the pointwise chain over a source, into the working format.
-ImageBuffer developPointwise(const ImageBuffer& source, const ProcessingPlan& plan) {
-    const detail::TimingSpan timing("cpu.pointwise");
+/// @brief Runs the pointwise chain, or a tap's prefix of it, over a source into the working
+/// format.
+template <typename Chain> ImageBuffer runPointwise(const ImageBuffer& source, const Chain& chain) {
     ImageBuffer result(source.size(), workingFormat, workingEncoding);
     switch (source.format()) {
     case PixelFormat::RgbU8:
     case PixelFormat::RgbaU8:
-        developSamples<std::uint8_t>(source, result, plan);
+        developSamples<std::uint8_t>(source, result, chain);
         break;
     case PixelFormat::RgbU16:
     case PixelFormat::RgbaU16:
-        developSamples<std::uint16_t>(source, result, plan);
+        developSamples<std::uint16_t>(source, result, chain);
         break;
     case PixelFormat::RgbF32:
     case PixelFormat::RgbaF32:
-        developSamples<float>(source, result, plan);
+        developSamples<float>(source, result, chain);
         break;
     }
     return result;
+}
+
+/// @brief Runs the pointwise chain over a source, into the working format.
+ImageBuffer developPointwise(const ImageBuffer& source, const ProcessingPlan& plan) {
+    const detail::TimingSpan timing("cpu.pointwise");
+    return runPointwise(source, [&plan](Colour colour) { return developPixel(plan, colour); });
 }
 
 /// @brief Copies a rectangle of working-format pixels out of a frame.
@@ -155,6 +163,20 @@ RenderCheckpoint arraw::resumeFrom(const RenderCheckpoint& from, const ImageBuff
         return from;
     }
     return runStages(held.boundary, pixels->clone(), std::move(plan), stopAfter);
+}
+
+ImageBuffer arraw::sample(const ImageBuffer& source, const DevelopState& state, Tap tap,
+                          const RenderRequest& request) {
+    // Validated first, so a bad tap costs nothing.
+    static_cast<void>(tapEncoding(tap));
+    const detail::TimingSpan timing("cpu.sample");
+    const ProcessingPlan plan = planFor(source, state, request);
+    ImageBuffer tapped = runPointwise(
+        source, [&plan, tap](Colour colour) { return developToTap(plan, colour, tap); });
+    // The same geometry and resize as a render, in linear light (ADR 020), so
+    // the sample covers the frame the render shows; then the tap's encoding.
+    const ImageBuffer framed = resizeBy(applyGeometry(std::move(tapped), *plan.geometry), plan);
+    return encodeTap(framed, tap);
 }
 
 ImageSize arraw::croppedSize(ImageSize sourceSize, ImageOrientation orientation,

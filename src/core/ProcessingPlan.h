@@ -563,6 +563,27 @@ inline constexpr float curveRatioFloor = 0x1p-14F;
             rolled + chroma * (colour[2] * ratio - rolled)};
 }
 
+/// @brief Applies the pointwise stages up to the curve input tap, in their fixed order.
+///
+/// The first half of ::arraw::developPixel, which calls this rather than
+/// repeating it, so that ::arraw::Tap::CurveInput and its position in the
+/// chain cannot drift apart (ADR 011): white balance and the matrix, exposure,
+/// then Basic Tone. What comes out is what the tone curves take in.
+/// @param plan Resolved settings.
+/// @param colour Source colour, in the encoding the plan was built for.
+/// @return The colour at the curve input, in the working encoding; a sample
+/// encodes it into ::arraw::perceptualEncoding afterwards (see
+/// ::arraw::toPerceptualSigned).
+///
+/// Mirrored by `src/gpu/shaders/develop.frag` up to its `probeAfterTone`
+/// stop, which ::arraw::probeFor names for this tap.
+[[nodiscard]] inline Colour developToCurveInput(const ProcessingPlan& plan, Colour colour) {
+    colour = plan.toWorking * colour;
+    colour = {colour[0] * plan.exposureGain, colour[1] * plan.exposureGain,
+              colour[2] * plan.exposureGain};
+    return shapeTone(plan, colour);
+}
+
 /// @brief Applies the pointwise stages to one colour, in their fixed order.
 ///
 /// The order lives here and nowhere else, so that it can be read in one place
@@ -577,13 +598,84 @@ inline constexpr float curveRatioFloor = 0x1p-14F;
 ///
 /// Mirrored by `src/gpu/shaders/develop.frag`, which must change with it.
 [[nodiscard]] inline Colour developPixel(const ProcessingPlan& plan, Colour colour) {
-    colour = plan.toWorking * colour;
-    colour = {colour[0] * plan.exposureGain, colour[1] * plan.exposureGain,
-              colour[2] * plan.exposureGain};
-    colour = shapeTone(plan, colour);
+    colour = developToCurveInput(plan, colour);
     colour = applyToneCurves(plan, colour);
     colour = rollHighlights(plan, colour);
     return adjustColor(plan.colorAdjustments, colour);
+}
+
+/// @brief Applies the pointwise stages up to a tap, in their fixed order.
+///
+/// Taps are named positions inside the chain (ADR 011), and each is a prefix
+/// of ::arraw::developPixel that it shares rather than repeats.
+/// @param plan Resolved settings.
+/// @param colour Source colour, in the encoding the plan was built for.
+/// @param tap Where to stop.
+/// @return The colour at @p tap, still in the working encoding.
+[[nodiscard]] inline Colour developToTap(const ProcessingPlan& plan, Colour colour, Tap tap) {
+    switch (tap) {
+    case Tap::CurveInput:
+        return developToCurveInput(plan, colour);
+    }
+    // Unreachable for a valid tap: sample() validates it before any pixel runs.
+    // The identity is what an unrecognised tap would sample; ::arraw::tapEncoding
+    // and the GPU's probeFor throw for it.
+    return colour;
+}
+
+/// @brief Groups the plan's fields that ::arraw::developToCurveInput reads.
+///
+/// Kept beside the prefix it describes, and changed with it: a field the
+/// prefix starts reading must join this list, or ::arraw::sameAtTap would call
+/// a stale sample current.
+/// @param plan Plan to view.
+/// @return References to white balance and the matrix, exposure and Basic Tone.
+[[nodiscard]] inline auto curveInputFieldsOf(const ProcessingPlan& plan) {
+    return std::tie(plan.toWorking, plan.exposureGain, plan.shapesTone, plan.contrastSlope,
+                    plan.contrastScale, plan.shadowShift, plan.highlightShift, plan.blackShift,
+                    plan.whiteShift);
+}
+
+/// @brief Whether two plans give the same sample at a tap.
+///
+/// What tells a caller that a sample, or a histogram of one, is still current
+/// after an edit: dragging a curve changes the plan but not the curve input,
+/// so a curve widget need not sample again (ADR 035). Compares the fields the
+/// chain reads up to @p tap, then geometry and the resize, which a sample runs
+/// through as a render does. Exact float equality, for the reasons
+/// ::arraw::prefixMatches gives. The source is not part of a plan, so the
+/// caller must also know that both are for the same pixels.
+/// @param first One plan.
+/// @param second The other.
+/// @param tap Tap the sample was taken at.
+/// @return `true` if @p tap is a tap and both plans resolve identically up to
+/// it, and in geometry and the resize.
+[[nodiscard]] inline bool sameAtTap(const ProcessingPlan& first, const ProcessingPlan& second,
+                                    Tap tap) {
+    const bool sameFrame = first.geometry == second.geometry && first.resize == second.resize;
+    switch (tap) {
+    case Tap::CurveInput:
+        return sameFrame && curveInputFieldsOf(first) == curveInputFieldsOf(second);
+    }
+    return false;
+}
+
+/// @brief Encodes one linear value into ::arraw::perceptualEncoding.
+///
+/// ::arraw::toPerceptual made odd: `sign(v) * |v|^(1/2.2)`, so that a negative
+/// channel, which only a colour outside the working gamut has, keeps its
+/// magnitude rather than collapsing onto black. NaN stays NaN.
+/// @param value Linear channel value.
+/// @return The value in the perceptual coordinate.
+[[nodiscard]] inline float toPerceptualSigned(float value) {
+    return value < 0.0F ? -toPerceptual(-value) : toPerceptual(value);
+}
+
+/// @brief Decodes one value from ::arraw::perceptualEncoding back to linear.
+/// @param value Channel value in the perceptual coordinate.
+/// @return The linear value: `sign(v) * |v|^2.2`.
+[[nodiscard]] inline float fromPerceptualSigned(float value) {
+    return value < 0.0F ? -toLinear(-value) : toLinear(value);
 }
 
 } // namespace arraw

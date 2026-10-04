@@ -24,10 +24,29 @@ enum class PointwiseProbe : std::uint32_t {
     Developed = 0,     ///< The whole chain: what development writes.
     AfterMatrix = 1,   ///< After the source-to-working transform.
     AfterExposure = 2, ///< After the exposure gain.
-    AfterTone = 3,     ///< After the tone controls, before the tone curves.
+    AfterTone = 3,     ///< After the tone controls, before the tone curves: the curve input tap.
     AfterShoulder = 4, ///< After the shoulder, before the colour controls.
     AfterCurves = 5,   ///< After the tone curves, before the shoulder.
 };
+
+/// @brief Gives the probe that makes the pointwise shader write a tap.
+///
+/// ADR 011's taps on the GPU are probes: the shader branches on the uniform
+/// and writes the colour at that position instead of the developed one, in
+/// linear light, exactly as ::arraw::developToTap does on the CPU.
+/// @param tap Tap to write.
+/// @return ::arraw::PointwiseProbe::AfterTone for ::arraw::Tap::CurveInput: the
+/// stop after Basic Tone and before the curves.
+/// @throws std::invalid_argument if @p tap is not a tap.
+[[nodiscard]] PointwiseProbe probeFor(Tap tap);
+
+/// @brief Tells whether a probe's result depends on the tone curves.
+///
+/// The shader order lives here, beside the enum: a probe that stops before the
+/// curves never reads their table, so the table need not be uploaded for it.
+/// @param probe Probe to ask about.
+/// @return `true` for every probe at or after the tone curves; `false` for those before.
+[[nodiscard]] bool probeReadsCurves(PointwiseProbe probe);
 
 /// @brief The pointwise chain's uniform block, byte for byte as std140 lays it out.
 ///

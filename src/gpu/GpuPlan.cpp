@@ -13,6 +13,29 @@
 
 namespace arraw {
 
+PointwiseProbe probeFor(Tap tap) {
+    switch (tap) {
+    case Tap::CurveInput:
+        return PointwiseProbe::AfterTone;
+    }
+    throw std::invalid_argument("A sample needs a recognised tap");
+}
+
+bool probeReadsCurves(PointwiseProbe probe) {
+    switch (probe) {
+    case PointwiseProbe::AfterMatrix:
+    case PointwiseProbe::AfterExposure:
+    case PointwiseProbe::AfterTone:
+        return false;
+    case PointwiseProbe::Developed:
+    case PointwiseProbe::AfterShoulder:
+    case PointwiseProbe::AfterCurves:
+        return true;
+    }
+    // An unknown probe is assumed to read them: the table costs an upload, never a wrong result.
+    return true;
+}
+
 GpuPointwiseBlock packPointwise(const ProcessingPlan& plan, PointwiseProbe probe) {
     GpuPointwiseBlock block;
     for (std::size_t row = 0; row < 3; ++row) {

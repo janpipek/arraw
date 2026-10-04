@@ -76,8 +76,9 @@ QByteArray fileFormatToString(ImageFileFormat format) {
 
 /// @brief Validates the options applicable to the destination format.
 void validateExportOptions(ImageFileFormat format, const ExportOptions& options) {
-    if (options.encoding == workingEncoding) {
-        throw std::invalid_argument("The working encoding is internal, not an output one");
+    if (options.encoding == workingEncoding || options.encoding == perceptualEncoding) {
+        throw std::invalid_argument("The working and perceptual encodings are internal, not "
+                                    "output ones");
     }
     if (options.bitDepth != 8 && options.bitDepth != 16) {
         throw std::invalid_argument("Export bit depth must be 8 or 16");

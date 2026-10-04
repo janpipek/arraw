@@ -119,4 +119,44 @@ RenderCheckpoint developOnGpu(GpuContext& context, const ImageBuffer& source,
                                             Stage stopAfter = Stage::Resize,
                                             const RenderRequest& request = {});
 
+/// @brief Samples a photograph already on the device at a tap, and reads the result back.
+///
+/// The GPU's ::arraw::sample: the pointwise pass writes the tap's colour
+/// through its probe (::arraw::probeFor) instead of the developed one, the
+/// geometry and resize passes run on it as for a render to @p request, and the
+/// result is read back and encoded on the host by the same function the CPU
+/// uses. No checkpoint is made: a tap is inside a pass (ADR 011, ADR 035).
+/// @param context Device to sample on; used from its owner thread only.
+/// @param source Decoded photograph, the one @p uploaded was made from; read
+/// for what planning needs.
+/// @param uploaded Result of ::arraw::uploadSource of @p source on @p context.
+/// @param state How the photograph is developed.
+/// @param tap Where in the chain to stop.
+/// @param request What to render; see ::arraw::develop. A sample meant for
+/// ::arraw::curveHistogram passes ::arraw::curveHistogramRequest: the request is
+/// honoured as given, and the default is a full-resolution Lanczos sample.
+/// @return A host buffer, as ::arraw::sample of the same arguments gives within the
+/// parity tolerance of the passes it ran.
+/// @throws std::invalid_argument if @p tap is not a tap, @p uploaded does not
+/// belong to @p context or is not of @p source's size, or as ::arraw::developOnGpu.
+/// @throws std::logic_error if called from a thread other than the context's owner.
+/// @throws std::runtime_error if the device cannot do the work or fails.
+[[nodiscard]] ImageBuffer sampleOnGpu(GpuContext& context, const ImageBuffer& source,
+                                      const DeviceImage& uploaded, const DevelopState& state,
+                                      Tap tap, const RenderRequest& request = {});
+
+/// @brief Uploads a decoded photograph, samples it at a tap, and reads the result back.
+///
+/// As the overload above, after ::arraw::uploadSource.
+/// @param context Device to sample on; used from its owner thread only.
+/// @param source Decoded photograph, in the working or a camera encoding.
+/// @param state How the photograph is developed.
+/// @param tap Where in the chain to stop.
+/// @param request What to render; see ::arraw::develop.
+/// @return A host buffer in the tap's encoding.
+/// @throws As the overload above.
+[[nodiscard]] ImageBuffer sampleOnGpu(GpuContext& context, const ImageBuffer& source,
+                                      const DevelopState& state, Tap tap,
+                                      const RenderRequest& request = {});
+
 } // namespace arraw

@@ -27,6 +27,21 @@ enum class Quality {
     Export, ///< Full resolution all the way, the result an export would write.
 };
 
+/// @brief Named position inside the pointwise chain whose values a render can hand back.
+///
+/// A tap is not a pass boundary: inside the fused pointwise chain a colour is
+/// in registers, so there is no buffer to keep (ADR 011). ::arraw::sample asks
+/// for one by running the render with the chain stopped there. Each tap names
+/// the encoding its samples come back in. The position of each lives in
+/// `src/core/ProcessingPlan.h`, beside the chain itself.
+enum class Tap {
+    /// What the tone curves take in: after white balance, the matrix, exposure
+    /// and Basic Tone, before the curves, the shoulder and the colour controls.
+    /// Handed back in ::arraw::perceptualEncoding, the coordinate the curves
+    /// act in, which is the x-axis of a curve widget (ADR 010, ADR 035).
+    CurveInput,
+};
+
 /// @brief What a caller wants rendered.
 ///
 /// Defaults to the whole photograph at its own resolution. Both a preview and
@@ -216,5 +231,29 @@ struct RenderRequest {
 [[nodiscard]] RenderCheckpoint resumeFrom(const RenderCheckpoint& from, const ImageBuffer& source,
                                           const DevelopState& state, Stage stopAfter,
                                           const RenderRequest& request = {});
+
+/// @brief Renders a photograph with the pointwise chain stopped at a tap, to measure it.
+///
+/// ADR 011's `sample(tap)`, the looking verb beside ::arraw::developUntil's
+/// continuing one: it hands back pixels and no checkpoint, because a tap is
+/// inside a pass. The chain writes the colour at @p tap instead of the
+/// developed one; geometry, the region and the resize then run as for
+/// ::arraw::develop, in linear light, so the result covers the same frame at the
+/// same size as a render of the same request would. Last, the colour is
+/// encoded into the tap's encoding. A preview's reduced source therefore gives
+/// preview-resolution samples, and the crop decides which pixels are measured.
+///
+/// Alpha passes through as it does in a render. Nothing earlier can be reused:
+/// the only boundary before a tap is the source itself (ADR 035).
+/// @param source Decoded photograph, in the working or a camera encoding.
+/// @param state How the photograph is developed.
+/// @param tap Where in the chain to stop.
+/// @param request What to render; see ::arraw::develop.
+/// @return A new ::arraw::workingFormat buffer in the encoding @p tap names
+/// (::arraw::perceptualEncoding for ::arraw::Tap::CurveInput), with no pending
+/// orientation.
+/// @throws std::invalid_argument as ::arraw::develop, and if @p tap is not a tap.
+[[nodiscard]] ImageBuffer sample(const ImageBuffer& source, const DevelopState& state, Tap tap,
+                                 const RenderRequest& request = {});
 
 } // namespace arraw

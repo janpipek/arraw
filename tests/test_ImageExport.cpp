@@ -189,7 +189,8 @@ TEST_CASE("Invalid export options preserve an existing destination", "[ImageExpo
                                   ExportOptions{.format = ImageFileFormat::Jpeg, .bitDepth = 16},
                                   ExportOptions{.format = ImageFileFormat::Jpeg, .quality = -1},
                                   ExportOptions{.format = ImageFileFormat::Jpeg, .quality = 101},
-                                  ExportOptions{.encoding = workingEncoding});
+                                  ExportOptions{.encoding = workingEncoding},
+                                  ExportOptions{.encoding = perceptualEncoding});
     const test::TempDir directory;
     const auto destination = directory.file("existing.png");
     const auto image = test::rainbow();
@@ -221,6 +222,18 @@ TEST_CASE("The working encoding is refused as an output encoding", "[ImageExport
 
     REQUIRE_THROWS_AS(exportImage(image, destination, options), std::invalid_argument);
     REQUIRE_FALSE(std::filesystem::exists(destination));
+}
+
+TEST_CASE("A curve-input sample can be saved, to look at", "[ImageExport]") {
+    // The perceptual encoding is internal as an output, but a sample in it can
+    // still be converted to a viewer's encoding, for diagnostics.
+    const test::TempDir directory;
+    const auto destination = directory.file("tap.png");
+    const auto image = test::rainbow({3, 2}, PixelFormat::RgbaF32, perceptualEncoding);
+
+    exportImage(image, destination, {});
+
+    REQUIRE(startsWith(destination, pngSignature));
 }
 
 TEST_CASE("A camera-native buffer is refused before the encoder", "[ImageExport]") {

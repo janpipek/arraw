@@ -56,6 +56,7 @@ add_executable(arraw-tests
         test_ShotModel.cpp
         test_Sidecar.cpp
         test_SampleConversion.cpp
+        test_Sample.cpp
         test_RoundTrip.cpp
         test_ThumbnailCache.cpp
         test_ThumbnailWorker.cpp
@@ -140,7 +141,8 @@ add_executable(arraw-gpu-tests
         gpu/test_GpuPasses.cpp
         gpu/test_GpuPointwise.cpp
         gpu/test_GpuGeometry.cpp
-        gpu/test_GpuResize.cpp)
+        gpu/test_GpuResize.cpp
+        gpu/test_GpuSample.cpp)
 arraw_enable_warnings(arraw-gpu-tests)
 target_include_directories(arraw-gpu-tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}

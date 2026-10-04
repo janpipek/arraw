@@ -225,3 +225,16 @@ tap is that position: after Basic Tone, immediately before the curves. The tap
 definition above holds as written. The curves are part of the plan's pointwise
 group and of the Pointwise pass's inputs (a second texture on the GPU), so
 nothing about checkpoints changes. The tap itself is still unbuilt.
+
+## Note, 2026-10-04
+
+The curve input tap is built
+([ADR 035](035-the-curve-input-is-sampled-through-the-render-and-binned-on-the-host.md)).
+`Tap::CurveInput` and `sample(source, state, tap, request)` are public and sit
+beside `develop` and `developUntil`; `sample` returns pixels and never a
+checkpoint, as decided above. The position is `developToCurveInput` in
+`ProcessingPlan.h`, the prefix `developPixel` itself calls. On the GPU the tap
+is the existing `AfterTone` probe. The tapped colours go through geometry and
+the resize in linear light, as a render does, and are then encoded into the
+named `NamedEncoding::Rec2020Gamma22`. So the Consequence about a sampled
+buffer declaring its own encoding is met.

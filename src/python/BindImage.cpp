@@ -91,7 +91,10 @@ void bindImage(nb::module_& m) {
         .value("LINEAR_REC2020", NamedEncoding::LinearRec2020)
         .value("SRGB", NamedEncoding::Srgb)
         .value("DISPLAY_P3", NamedEncoding::DisplayP3)
-        .value("ADOBE_RGB", NamedEncoding::AdobeRgb);
+        .value("ADOBE_RGB", NamedEncoding::AdobeRgb)
+        .value("REC2020_GAMMA22", NamedEncoding::Rec2020Gamma22,
+               "Rec.2020 primaries, each channel sign(v) * |v|^(1/2.2): the curve input that "
+               "sample() hands back; not an output encoding.");
 
     nb::class_<CameraNative>(m, "CameraNative",
                              "A camera's native colour encoding; opaque in this version.")

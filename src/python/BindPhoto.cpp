@@ -1,5 +1,6 @@
 #include "PyBindings.h"
 
+#include <CurveHistogram.h>
 #include <Develop.h>
 #include <DevelopState.h>
 #include <Diagnostics.h>
@@ -9,7 +10,10 @@
 #include <PhotoMarks.h>
 #include <Sidecar.h>
 
+#include <nanobind/ndarray.h>
+
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <limits>
@@ -298,6 +302,121 @@ void bindPhoto(nb::module_& m) {
                 "arraw._arraw.ResizeFilter.LANCZOS3, allow_upscale: bool = False) -> ImageBuffer"),
         "Decode a photograph and develop it with its own state unless `state` is given; "
         "`size`, `filter` and `allow_upscale` are as for a decoded buffer.");
+
+    nb::enum_<Tap>(m, "Tap", "Named position inside the pointwise chain that sample() stops at.")
+        .value("CURVE_INPUT", Tap::CurveInput,
+               "What the tone curves take in: after white balance, exposure and Basic Tone; "
+               "handed back in NamedEncoding.REC2020_GAMMA22.");
+
+    m.def(
+        "sample",
+        [](const ImageBuffer& source, Tap tap, const std::optional<DevelopState>& state,
+           const nb::object& size, const nb::object& filter, bool allowUpscale) {
+            const RenderRequest request = requestFrom(size, filter, allowUpscale);
+            return withoutGil(
+                [&] { return sample(source, state.value_or(DevelopState{}), tap, request); });
+        },
+        "source"_a, "tap"_a, "state"_a = nb::none(), nb::kw_only(), "size"_a = nb::none(),
+        "filter"_a = requestDefaults.filter,
+        "allow_upscale"_a = (requestDefaults.upscale == Upscale::Allowed),
+        nb::sig("def sample(source: ImageBuffer, tap: Tap, state: DevelopState | None = None, *, "
+                "size: int | tuple[int, int] | float | None = None, filter: ResizeFilter = "
+                "arraw._arraw.ResizeFilter.LANCZOS3, allow_upscale: bool = False) -> ImageBuffer"),
+        "Develop a decoded buffer on the CPU with the chain stopped at `tap`, to measure it: the "
+        "same frame and size as develop() with the same arguments, in the tap's encoding.");
+
+    m.def(
+        "sample",
+        [](const Photo& photo, Tap tap, const std::optional<DevelopState>& state,
+           const nb::object& size, const nb::object& filter, bool allowUpscale) {
+            const RenderRequest request = requestFrom(size, filter, allowUpscale);
+            return withoutGil([&] {
+                const ImageBuffer source = loadImage(photo.path());
+                return sample(source, state.value_or(photo.state()), tap, request);
+            });
+        },
+        "source"_a, "tap"_a, "state"_a = nb::none(), nb::kw_only(), "size"_a = nb::none(),
+        "filter"_a = requestDefaults.filter,
+        "allow_upscale"_a = (requestDefaults.upscale == Upscale::Allowed),
+        nb::sig("def sample(source: Photo, tap: Tap, state: DevelopState | None = None, *, "
+                "size: int | tuple[int, int] | float | None = None, filter: ResizeFilter = "
+                "arraw._arraw.ResizeFilter.LANCZOS3, allow_upscale: bool = False) -> ImageBuffer"),
+        "Decode a photograph and sample it at `tap` with its own state unless `state` is given.");
+
+    m.attr("CURVE_HISTOGRAM_BINS") = curveHistogramBins;
+    // The curve_histogram signatures and docstrings below spell the default out.
+    static_assert(curveHistogramLongEdge == 1024);
+
+    // A read-only view of the bins, not a copy; it keeps the histogram alive.
+    const auto binsOf = [](CurveHistogram::Bins CurveHistogram::* channel) {
+        return [channel](nb::handle self) {
+            const auto& bins = nb::cast<const CurveHistogram&>(self).*channel;
+            return nb::ndarray<nb::numpy, const std::uint64_t, nb::shape<curveHistogramBins>>(
+                bins.data(), {curveHistogramBins}, self);
+        };
+    };
+    nb::class_<CurveHistogram>(
+        m, "CurveHistogram",
+        "Pixel counts of the curve input over the perceptual coordinate, CURVE_HISTOGRAM_BINS "
+        "bins from 0 to 1 per channel; not constructible from Python.")
+        .def_prop_ro("luma", binsOf(&CurveHistogram::luma),
+                     "Read-only uint64 array of the luminance counts, as the luma curve reads it.")
+        .def_prop_ro("red", binsOf(&CurveHistogram::red),
+                     "Read-only uint64 array of the red counts.")
+        .def_prop_ro("green", binsOf(&CurveHistogram::green),
+                     "Read-only uint64 array of the green counts.")
+        .def_prop_ro("blue", binsOf(&CurveHistogram::blue),
+                     "Read-only uint64 array of the blue counts.")
+        .def_ro("pixels", &CurveHistogram::pixels,
+                "Number of pixels counted; fully transparent ones are not.")
+        .def(nb::self == nb::self)
+        .def("__repr__", [](const CurveHistogram& histogram) {
+            return "CurveHistogram(pixels=" + std::to_string(histogram.pixels) + ")";
+        });
+    m.attr("CurveHistogram").attr("__hash__") = nb::none();
+
+    m.def(
+        "curve_histogram",
+        [](const ImageBuffer& image) { return withoutGil([&] { return curveHistogram(image); }); },
+        "image"_a,
+        "Count a sample taken at Tap.CURVE_INPUT (NamedEncoding.REC2020_GAMMA22) into a "
+        "CurveHistogram.");
+
+    m.def(
+        "curve_histogram",
+        [](const ImageBuffer& source, const DevelopState& state, const nb::object& size,
+           bool allowUpscale) {
+            const RenderRequest request =
+                requestFrom(size, nb::cast(curveHistogramRequest.filter), allowUpscale);
+            return withoutGil([&] { return curveHistogram(source, state, request); });
+        },
+        "source"_a, "state"_a, nb::kw_only(), "size"_a.none() = curveHistogramLongEdge,
+        "allow_upscale"_a = (curveHistogramRequest.upscale == Upscale::Allowed),
+        nb::sig("def curve_histogram(source: ImageBuffer, state: DevelopState, *, size: int | "
+                "tuple[int, int] | float | None = 1024, allow_upscale: bool = False) -> "
+                "CurveHistogram"),
+        "Sample a decoded buffer at Tap.CURVE_INPUT and count it. `size` is as for develop() "
+        "and defaults to a 1024-pixel long edge; None counts the full cropped resolution. The "
+        "resize is always bilinear, so no ringing reaches the end bins.");
+
+    m.def(
+        "curve_histogram",
+        [](const Photo& photo, const std::optional<DevelopState>& state, const nb::object& size,
+           bool allowUpscale) {
+            const RenderRequest request =
+                requestFrom(size, nb::cast(curveHistogramRequest.filter), allowUpscale);
+            return withoutGil([&] {
+                const ImageBuffer source = loadImage(photo.path());
+                return curveHistogram(source, state.value_or(photo.state()), request);
+            });
+        },
+        "source"_a, "state"_a = nb::none(), nb::kw_only(), "size"_a.none() = curveHistogramLongEdge,
+        "allow_upscale"_a = (curveHistogramRequest.upscale == Upscale::Allowed),
+        nb::sig("def curve_histogram(source: Photo, state: DevelopState | None = None, *, size: "
+                "int | tuple[int, int] | float | None = 1024, allow_upscale: bool = False) -> "
+                "CurveHistogram"),
+        "Decode a photograph, sample it at Tap.CURVE_INPUT with its own state unless `state` is "
+        "given, and count it; `size` and the resize as for a decoded buffer.");
 
     m.def(
         "resolved_size",

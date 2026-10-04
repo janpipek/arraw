@@ -151,6 +151,10 @@ add_library(arraw STATIC
         src/core/TimingTrace.cpp
         src/core/TimingTrace.h
         src/core/Develop.cpp
+        include/CurveHistogram.h
+        src/core/CurveHistogram.cpp
+        src/core/Taps.h
+        src/core/Taps.cpp
         src/core/Diagnostics.cpp
         src/core/ProcessingPlan.cpp
         src/core/ProcessingPlan.h

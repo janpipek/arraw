@@ -89,6 +89,16 @@ enum class NamedEncoding {
     Srgb,
     DisplayP3,
     AdobeRgb,
+    /// Rec.2020 primaries, each channel `v` stored as `sign(v) * |v|^(1/2.2)`.
+    ///
+    /// Named for its maths, as the other values are, rather than for its role,
+    /// which ::arraw::perceptualEncoding names. It is the perceptual
+    /// coordinate the tone controls and the tone curves act in (ADR 010),
+    /// carried over to the whole colour so that a sample taken inside
+    /// development says what its numbers mean (ADR 011). Odd below zero,
+    /// so a colour outside the gamut survives the round trip. Internal: what
+    /// ::arraw::sample hands back, never an export's output encoding.
+    Rec2020Gamma22,
 };
 
 /// @brief Per-channel multipliers, in camera channel order.
@@ -138,6 +148,9 @@ using ColorEncoding = std::variant<NamedEncoding, CameraNative>;
 
 /// @brief Encoding that development happens in; see ADR 003.
 inline constexpr NamedEncoding workingEncoding = NamedEncoding::LinearRec2020;
+
+/// @brief Encoding of the curve input, the coordinate tone is shaped in; see ADR 010 and ADR 035.
+inline constexpr NamedEncoding perceptualEncoding = NamedEncoding::Rec2020Gamma22;
 
 /// @brief Checks whether an encoding is the one development happens in.
 /// @param encoding Encoding to test.
