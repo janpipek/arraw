@@ -1,5 +1,6 @@
 #include "PyBindings.h"
 
+#include <ColorGradingSettings.h>
 #include <DevelopSettings.h>
 #include <SettingDescriptors.h>
 #include <SettingsJson.h>
@@ -114,7 +115,8 @@ void bindSettings(nb::module_& m) {
         .value("GEOMETRY", SettingGroup::Geometry)
         .value("HSL", SettingGroup::Hsl)
         .value("BLACK_AND_WHITE", SettingGroup::BlackAndWhite)
-        .value("TONE_CURVE", SettingGroup::ToneCurve);
+        .value("TONE_CURVE", SettingGroup::ToneCurve)
+        .value("COLOR_GRADING", SettingGroup::ColorGrading);
 
     nb::enum_<Applicability>(m, "Applicability",
                              "Whether a setting means anything for every photograph.")
@@ -190,12 +192,27 @@ void bindSettings(nb::module_& m) {
         field("luma", &ToneCurveSettings::luma), field("red", &ToneCurveSettings::red),
         field("green", &ToneCurveSettings::green), field("blue", &ToneCurveSettings::blue));
 
+    bindFrozen<GradeZone>(
+        m, "GradeZone",
+        "Tint of one tonal zone: a hue and how much of it.\n\n"
+        "The hue is an Oklab hue angle in degrees, not Lightroom's: roughly 30 is "
+        "red, 110 yellow, 140 green and 260 blue.",
+        field("hue", &GradeZone::hue), field("saturation", &GradeZone::saturation));
+    bindFrozen<ColorGradingSettings>(m, "ColorGradingSettings",
+                                     "Three-zone toning of the shadows, midtones and highlights.",
+                                     field("shadows", &ColorGradingSettings::shadows),
+                                     field("midtones", &ColorGradingSettings::midtones),
+                                     field("highlights", &ColorGradingSettings::highlights),
+                                     field("balance", &ColorGradingSettings::balance),
+                                     field("blending", &ColorGradingSettings::blending));
+
     bindFrozen<DevelopSettings>(
         m, "DevelopSettings", "Photographic settings of one photograph.",
         field("color", &DevelopSettings::color), field("geometry", &DevelopSettings::geometry),
         field("tone", &DevelopSettings::tone), field("hsl", &DevelopSettings::hsl),
         field("black_and_white", &DevelopSettings::blackAndWhite),
-        field("tone_curve", &DevelopSettings::toneCurve))
+        field("tone_curve", &DevelopSettings::toneCurve),
+        field("color_grading", &DevelopSettings::colorGrading))
         .def(
             "with_",
             [](const DevelopSettings& self, const nb::kwargs& keywords) {

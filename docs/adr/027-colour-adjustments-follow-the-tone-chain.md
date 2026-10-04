@@ -79,3 +79,9 @@ failures can be placed before or after the colour block.
   reachable through the CLI, sidecars, JSON and Python.
 - Colour Grading and a tone curve, which `main` ran in this part of the chain,
   are not here, and will follow the same pattern.
+
+> **Note (2026-10-04).** Colour Grading
+> ([ADR 034](034-colour-grading-tints-three-tonal-zones-in-oklab.md)) now runs
+> at the end of `adjustColor`, after Saturation, Vibrance and HSL or after the
+> Black & White mix, so `adjustColor` no longer returns early for Black &
+> White. The tone curve landed earlier (ADR 033).

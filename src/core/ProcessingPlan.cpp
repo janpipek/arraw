@@ -107,8 +107,8 @@ ProcessingPlan arraw::planFor(const ColorEncoding& encoding, const DevelopState&
     ProcessingPlan plan = tonePlanFor(settings.tone);
     plan.toWorking = colorMatrixFor(encoding, settings.color);
     plan.toneCurves = toneCurvePlanFor(settings.toneCurve);
-    plan.colorAdjustments =
-        colorAdjustmentPlanFor(settings.color, settings.hsl, settings.blackAndWhite);
+    plan.colorAdjustments = colorAdjustmentPlanFor(settings.color, settings.hsl,
+                                                   settings.blackAndWhite, settings.colorGrading);
     return plan;
 }
 

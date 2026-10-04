@@ -90,17 +90,21 @@ TEST_CASE("The descriptor table has a row per leaf, matching the structs", "[set
     STATIC_REQUIRE(test::fieldCount<HslSettings> == 8);
     STATIC_REQUIRE(test::fieldCount<BlackAndWhiteSettings> == 9);
     STATIC_REQUIRE(test::fieldCount<ToneCurveSettings> == 4);
-    STATIC_REQUIRE(test::fieldCount<DevelopSettings> == 6);
+    STATIC_REQUIRE(test::fieldCount<GradeZone> == 2);
+    STATIC_REQUIRE(test::fieldCount<ColorGradingSettings> == 5);
+    STATIC_REQUIRE(test::fieldCount<DevelopSettings> == 7);
 
     // Leaves: tone + color + geometry (crop is a group of two leaves) + hsl
-    // (eight bands of three leaves) + black and white + the four tone curves.
+    // (eight bands of three leaves) + black and white + the four tone curves +
+    // colour grading (three zones of two leaves, balance and blending).
     STATIC_REQUIRE(developSettingDescriptors.size() ==
                    test::fieldCount<ToneSettings> + test::fieldCount<ColorSettings> +
                        test::fieldCount<GeometrySettings> - 1 + test::fieldCount<CropSettings> +
                        test::fieldCount<HslSettings> * test::fieldCount<HueBand> +
                        test::fieldCount<BlackAndWhiteSettings> +
-                       test::fieldCount<ToneCurveSettings>);
-    STATIC_REQUIRE(developSettingDescriptors.size() == 55);
+                       test::fieldCount<ToneCurveSettings> + 3 * test::fieldCount<GradeZone> +
+                       test::fieldCount<ColorGradingSettings> - 3);
+    STATIC_REQUIRE(developSettingDescriptors.size() == 63);
 }
 
 TEST_CASE("The colour rows are pointwise, always apply and share their groups", "[settings]") {

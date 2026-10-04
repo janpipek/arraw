@@ -105,6 +105,38 @@ def test_a_curve_point_is_not_bytes_or_text(point):
         arraw.ToneCurve([point, (1, 1)])
 
 
+def test_colour_grading_defaults():
+    grading = arraw.DevelopSettings().color_grading
+    assert grading == arraw.ColorGradingSettings()
+    assert grading.shadows == arraw.GradeZone(hue=0.0, saturation=0.0)
+    assert grading.midtones == grading.highlights == arraw.GradeZone()
+    assert grading.balance == 0.0
+    assert grading.blending == 50.0
+
+
+def test_colour_grading_constructs_flat_sets_and_round_trips_json():
+    settings = arraw.DevelopSettings(
+        color_grading=arraw.ColorGradingSettings(
+            shadows=arraw.GradeZone(hue=250.0, saturation=40.0),
+            highlights=arraw.GradeZone(hue=70.0, saturation=25.0),
+            balance=-20.0,
+            blending=80.0,
+        )
+    )
+    assert settings.color_grading.shadows.hue == 250.0
+    assert settings.color_grading.midtones == arraw.GradeZone()
+    flat = arraw.DevelopSettings().with_(
+        grade_shadow_hue=250, grade_shadow_saturation=40,
+        grade_highlight_hue=70, grade_highlight_saturation=25,
+        grade_balance=-20, grade_blending=80,
+    )
+    assert flat == settings
+    assert arraw.DevelopSettings.from_json(settings.to_json()) == settings
+    assert settings.color_grading.shadows.replace(saturation=0.0) != settings.color_grading.shadows
+    with pytest.raises(TypeError):
+        arraw.DevelopSettings().with_(grade_shadow=0.5)
+
+
 def test_curves_construct_flat_set_and_round_trip_json():
     settings = arraw.DevelopSettings(
         tone_curve=arraw.ToneCurveSettings(

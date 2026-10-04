@@ -330,6 +330,16 @@ constexpr SettingHelp settingHelp[]{
     {"grayBlue", "amount", "Lightness of blues in black and white", ""},
     {"grayPurple", "amount", "Lightness of purples in black and white", ""},
     {"grayMagenta", "amount", "Lightness of magentas in black and white", ""},
+    {"gradeShadowHue", "degrees", "Hue the shadows are tinted toward", ""},
+    {"gradeShadowSaturation", "amount", "Strength of the shadows' tint", ""},
+    {"gradeMidtoneHue", "degrees", "Hue the midtones are tinted toward", ""},
+    {"gradeMidtoneSaturation", "amount", "Strength of the midtones' tint", ""},
+    {"gradeHighlightHue", "degrees", "Hue the highlights are tinted toward", ""},
+    {"gradeHighlightSaturation", "amount", "Strength of the highlights' tint", ""},
+    {"gradeBalance", "amount", "Give the tint's range to the shadows (-) or the highlights (+)",
+     ""},
+    {"gradeBlending", "amount", "Softness of the transitions between the tinted zones",
+     " Default: 50."},
 };
 
 /// @brief Finds the help wording of a setting.
@@ -611,6 +621,12 @@ void configure(QCommandLineParser& parser) {
         "Tone curves are --tone-curve-luma for luminance and --tone-curve-red, -green and\n"
         "-blue for the channels, each as x,y points joined by semicolons, as in a\n"
         "sidecar: --tone-curve-luma '0,0;0.25,0.2;0.75,0.82;1,1'.\n"
+        "Colour grading tints three tonal zones: --grade-shadow-, --grade-midtone- and\n"
+        "--grade-highlight- followed by hue (degrees) or saturation (0 to 100, which\n"
+        "leaves the zone untouched at 0), with --grade-balance and --grade-blending\n"
+        "setting how the zones share the tonal range. It works on black and white too.\n"
+        "Hues are Oklab hue angles, not Lightroom's: roughly 30 is red, 110 yellow,\n"
+        "140 green and 260 blue. The tint fades out toward white.\n"
         "Naming --temperature or --tint makes white balance custom; the other half\n"
         "keeps the photograph's own value, or as shot. The command never writes a\n"
         "sidecar.\n"

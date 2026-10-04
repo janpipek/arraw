@@ -193,11 +193,11 @@ struct ProcessingPlan {
     /// identity is a flag that is off (ADR 011).
     ToneCurvePlan toneCurves{};
 
-    /// @brief Saturation, vibrance, HSL and Black & White, resolved.
+    /// @brief Saturation, vibrance, HSL, Black & White and Colour Grading, resolved.
     ///
     /// The last of the pointwise stages: it follows the shoulder, as the
     /// colour controls did on main, and every control left at zero is a flag
-    /// that is off (ADR 027).
+    /// that is off (ADR 027). Colour Grading ends it (ADR 034).
     ColorAdjustmentPlan colorAdjustments{};
 
     /// @brief Resolved geometry when source dimensions and orientation are known.

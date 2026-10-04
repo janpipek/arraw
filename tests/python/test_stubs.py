@@ -45,5 +45,5 @@ def test_stub_declares_every_exported_name_of_the_extension():
         for name in arraw.__all__
         if getattr(getattr(arraw, name), "__module__", None) == "arraw._arraw"
     }
-    assert {"ToneCurve", "ToneCurveSettings"} <= native
+    assert {"ToneCurve", "ToneCurveSettings", "GradeZone", "ColorGradingSettings"} <= native
     assert native <= declared, native - declared

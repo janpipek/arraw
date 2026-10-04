@@ -307,6 +307,8 @@ class SettingGroup(enum.Enum):
 
     TONE_CURVE = 5
 
+    COLOR_GRADING = 6
+
 class Applicability(enum.Enum):
     """Whether a setting means anything for every photograph."""
 
@@ -658,10 +660,63 @@ class ToneCurveSettings:
     def replace(self, **kwargs) -> ToneCurveSettings:
         """Return a copy with the given attributes replaced."""
 
+class GradeZone:
+    """
+    Tint of one tonal zone: a hue and how much of it.
+
+    The hue is an Oklab hue angle in degrees, not Lightroom's: roughly 30 is red, 110 yellow, 140 green and 260 blue.
+    """
+
+    def __init__(self, *, hue: float | None = 0.0, saturation: float | None = 0.0) -> None: ...
+
+    @property
+    def hue(self) -> float: ...
+
+    @property
+    def saturation(self) -> float: ...
+
+    def __eq__(self, arg: GradeZone, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> GradeZone:
+        """Return a copy with the given attributes replaced."""
+
+class ColorGradingSettings:
+    """Three-zone toning of the shadows, midtones and highlights."""
+
+    def __init__(self, *, shadows: GradeZone | None = None, midtones: GradeZone | None = None, highlights: GradeZone | None = None, balance: float | None = 0.0, blending: float | None = 50.0) -> None: ...
+
+    @property
+    def shadows(self) -> GradeZone: ...
+
+    @property
+    def midtones(self) -> GradeZone: ...
+
+    @property
+    def highlights(self) -> GradeZone: ...
+
+    @property
+    def balance(self) -> float: ...
+
+    @property
+    def blending(self) -> float: ...
+
+    def __eq__(self, arg: ColorGradingSettings, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> ColorGradingSettings:
+        """Return a copy with the given attributes replaced."""
+
 class DevelopSettings:
     """Photographic settings of one photograph."""
 
-    def __init__(self, *, color: ColorSettings | None = None, geometry: GeometrySettings | None = None, tone: ToneSettings | None = None, hsl: HslSettings | None = None, black_and_white: BlackAndWhiteSettings | None = None, tone_curve: ToneCurveSettings | None = None) -> None: ...
+    def __init__(self, *, color: ColorSettings | None = None, geometry: GeometrySettings | None = None, tone: ToneSettings | None = None, hsl: HslSettings | None = None, black_and_white: BlackAndWhiteSettings | None = None, tone_curve: ToneCurveSettings | None = None, color_grading: ColorGradingSettings | None = None) -> None: ...
 
     @property
     def color(self) -> ColorSettings: ...
@@ -680,6 +735,9 @@ class DevelopSettings:
 
     @property
     def tone_curve(self) -> ToneCurveSettings: ...
+
+    @property
+    def color_grading(self) -> ColorGradingSettings: ...
 
     def __eq__(self, arg: DevelopSettings, /) -> bool: ...
 

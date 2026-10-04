@@ -1,7 +1,10 @@
 #pragma once
 
+#include "ColorGrading.h"
+
 #include <BlackAndWhiteSettings.h>
 #include <ColorEncoding.h>
+#include <ColorGradingSettings.h>
 #include <ColorSettings.h>
 #include <HslSettings.h>
 
@@ -10,6 +13,15 @@
 
 namespace arraw {
 
+/// @brief Check a setting is finite and clamp it into its range.
+/// @param value Setting to read.
+/// @param least Lower limit.
+/// @param most Upper limit.
+/// @param name Setting's name, for the error: "A <name> adjustment must be finite".
+/// @return The value within the limits.
+/// @throws std::invalid_argument When the value is not finite.
+[[nodiscard]] float clampedSetting(float value, float least, float most, const char* name);
+
 /// @brief Number of bands the HSL and Black & White controls divide the hues into.
 inline constexpr std::size_t hueBandCount = 8;
 
@@ -17,7 +29,8 @@ inline constexpr std::size_t hueBandCount = 8;
 /// magenta.
 using BandValues = std::array<float, hueBandCount>;
 
-/// @brief The colour block of a plan: saturation, vibrance, HSL and Black & White, resolved.
+/// @brief The colour block of a plan: saturation, vibrance, HSL, Black & White and Colour
+/// Grading, resolved.
 ///
 /// Part of the pointwise group (ADR 011, ADR 027). Each control that is left
 /// at zero resolves to a flag that is off, so that the chain skips it outright
@@ -57,6 +70,9 @@ struct ColorAdjustmentPlan {
     /// maths divides by a hundred.
     BandValues grayMix{};
 
+    /// @brief Three-zone tint, which follows the colour controls or the grey (ADR 034).
+    ColorGradingPlan grading{};
+
     friend bool operator==(const ColorAdjustmentPlan&, const ColorAdjustmentPlan&) = default;
 };
 
@@ -67,11 +83,13 @@ struct ColorAdjustmentPlan {
 /// @param color Saturation and Vibrance.
 /// @param hsl Per-band hue, saturation and luminance.
 /// @param blackAndWhite Conversion to grey and its mix.
+/// @param colorGrading Zone tints, Balance and Blending.
 /// @return The block, with every control that is zero switched off.
 /// @throws std::invalid_argument if a value is not finite.
-[[nodiscard]] ColorAdjustmentPlan
-colorAdjustmentPlanFor(const ColorSettings& color, const HslSettings& hsl,
-                       const BlackAndWhiteSettings& blackAndWhite);
+[[nodiscard]] ColorAdjustmentPlan colorAdjustmentPlanFor(const ColorSettings& color,
+                                                         const HslSettings& hsl,
+                                                         const BlackAndWhiteSettings& blackAndWhite,
+                                                         const ColorGradingSettings& colorGrading);
 
 /// @brief A colour in Oklab: lightness and the two opponent axes.
 struct Oklab {
@@ -136,10 +154,13 @@ struct Oklab {
 /// Mirrored by `src/gpu/shaders/develop.frag`, which must change with it.
 [[nodiscard]] Colour applyBlackAndWhite(const BandValues& mix, Colour colour);
 
-/// @brief Applies the colour block to one colour: grey, or HSL then saturation then vibrance.
+/// @brief Applies the colour block to one colour: grey, or HSL then saturation then vibrance;
+/// then the grade.
 ///
 /// Black & White replaces the colour controls, which have nothing to act on
-/// in a grey photograph (ADR 027).
+/// in a grey photograph (ADR 027). Colour Grading follows wherever the two
+/// branches meet, so it tints a grey photograph as well as a colour one: that
+/// is what it is for (ADR 034).
 /// @param plan Colour block.
 /// @param colour Colour in the working encoding, after tone and the shoulder.
 /// @return The adjusted colour; exactly @p colour when the block is all off.
@@ -147,18 +168,19 @@ struct Oklab {
 /// Mirrored by `src/gpu/shaders/develop.frag`, which must change with it.
 [[nodiscard]] inline Colour adjustColor(const ColorAdjustmentPlan& plan, Colour colour) {
     if (plan.convertsToGrayscale) {
-        return applyBlackAndWhite(plan.grayMix, colour);
+        colour = applyBlackAndWhite(plan.grayMix, colour);
+    } else {
+        if (plan.adjustsHsl) {
+            colour = applyHsl(plan, colour);
+        }
+        if (plan.adjustsSaturation) {
+            colour = applySaturation(colour, plan.saturation);
+        }
+        if (plan.adjustsVibrance) {
+            colour = applyVibrance(colour, plan.vibrance);
+        }
     }
-    if (plan.adjustsHsl) {
-        colour = applyHsl(plan, colour);
-    }
-    if (plan.adjustsSaturation) {
-        colour = applySaturation(colour, plan.saturation);
-    }
-    if (plan.adjustsVibrance) {
-        colour = applyVibrance(colour, plan.vibrance);
-    }
-    return colour;
+    return applyColorGrading(plan.grading, colour);
 }
 
 } // namespace arraw

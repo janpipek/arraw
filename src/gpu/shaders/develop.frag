@@ -3,15 +3,18 @@
 // The pointwise chain: ProcessingPlan.h's developPixel, stage for stage.
 //
 // Every function below mirrors the C++ of the same name in
-// src/core/ProcessingPlan.h, in the same order and with the same arithmetic,
+// src/core/ProcessingPlan.h (and, for the colour grade, src/core/ColorGrading.h
+// and ColorGrading.cpp), in the same order and with the same arithmetic,
 // and must change with it. The Pointwise block is the contract with
 // GpuPointwiseBlock in GpuPlan.h: same members, same order.
 //
 // Powers. C++ std::pow and GLSL pow differ where GLSL leaves the result
 // undefined: for x < 0, and for x == 0 with y <= 0. Where the CPU chain can
 // reach them:
-//   - toPerceptual is only called with luminance > 0, or with exactly 0 by the
-//     lifted black; the contrast power takes its result, so x >= 0.
+//   - toPerceptual is called with luminance > 0, with exactly 0 (the lifted
+//     black), with a tone curve anchor, or with the grade's clamp(Y, 0, 1),
+//     which can be 0 or NaN; the argument is never below 0, and the contrast
+//     power takes its result, so x >= 0.
 //   - toLinear takes max(value, 0), so x >= 0.
 //   - The exponents are 1/2.2, 2.2 and contrastSlope = exp2(c / 200) > 0.
 // So the only case that needs care is x == 0, where std::pow gives 0 and a
@@ -64,6 +67,14 @@ layout(std140, binding = 1) uniform Pointwise {
     vec4 bandSaturation[2];
     vec4 bandLuminance[2];
     vec4 grayMix[2];
+    uint grades;
+    float gradeBalanceShift;
+    float gradeZoneWidth;
+    // One word of padding, declared so that the vec4s below are plainly
+    // where GpuPointwiseBlock puts them.
+    uint gradePadding;
+    vec4 gradeShadowMidtoneTint;
+    vec4 gradeHighlightTint;
 } plan;
 
 // 1 / 2.2f and 2.2f as C++ rounds them to float, spelled out so that no
@@ -435,20 +446,66 @@ vec3 applyBlackAndWhite(vec3 colour) {
     return vec3(grey, grey, grey);
 }
 
+// ColorGrading.h and ColorGrading.cpp. The zone tints arrive resolved, so no
+// sine or cosine is taken here.
+
+// midtoneCentre, tintFadeStart and tintFadeEnd, ColorGrading.cpp.
+const float midtoneCentre = 0.5;
+const float tintFadeStart = 0.85;
+const float tintFadeEnd = 1.0;
+
+float bell(float position, float centre, float width) {
+    const float t = (position - centre) / width;
+    return exp(-t * t);
+}
+
+// gradeZoneWeights: (shadows, midtones, highlights), summing to one.
+vec3 gradeZoneWeights(float luminance) {
+    const float held = clampExact(luminance, 0.0, 1.0);
+    const float position = clampExact(toPerceptual(held) + plan.gradeBalanceShift, 0.0, 1.0);
+    const float shadows = bell(position, 0.0, plan.gradeZoneWidth);
+    const float midtones = bell(position, midtoneCentre, plan.gradeZoneWidth);
+    const float highlights = bell(position, 1.0, plan.gradeZoneWidth);
+    const float total = shadows + midtones + highlights;
+    return vec3(shadows / total, midtones / total, highlights / total);
+}
+
+float gradeTintFade(float lightness) {
+    return 1.0 - smoothStep(tintFadeStart, tintFadeEnd, lightness);
+}
+
+vec3 applyColorGrading(vec3 colour) {
+    if (plan.grades == 0u) {
+        return colour;
+    }
+    const vec3 weights = gradeZoneWeights(luminanceOf(colour));
+    const vec4 lower = plan.gradeShadowMidtoneTint;
+    const vec2 upper = plan.gradeHighlightTint.xy;
+    vec3 lab = toOklab(colour);
+    const float fade = gradeTintFade(lab.x);
+    if (fade == 0.0) {
+        return colour;
+    }
+    lab.y += fade * (weights.x * lower.x + weights.y * lower.z + weights.z * upper.x);
+    lab.z += fade * (weights.x * lower.y + weights.y * lower.w + weights.z * upper.y);
+    return fromOklab(lab);
+}
+
 vec3 adjustColor(vec3 colour) {
     if (plan.convertsToGrayscale != 0u) {
-        return applyBlackAndWhite(colour);
+        colour = applyBlackAndWhite(colour);
+    } else {
+        if (plan.adjustsHsl != 0u) {
+            colour = applyHsl(colour);
+        }
+        if (plan.adjustsSaturation != 0u) {
+            colour = applySaturation(colour, plan.saturation);
+        }
+        if (plan.adjustsVibrance != 0u) {
+            colour = applyVibrance(colour, plan.vibrance);
+        }
     }
-    if (plan.adjustsHsl != 0u) {
-        colour = applyHsl(colour);
-    }
-    if (plan.adjustsSaturation != 0u) {
-        colour = applySaturation(colour, plan.saturation);
-    }
-    if (plan.adjustsVibrance != 0u) {
-        colour = applyVibrance(colour, plan.vibrance);
-    }
-    return colour;
+    return applyColorGrading(colour);
 }
 
 // PointwiseProbe values, GpuPlan.h.

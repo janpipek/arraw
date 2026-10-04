@@ -40,6 +40,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -169,9 +170,17 @@ TEST_CASE("Every tone curve is an export option that states its constraints", "[
         INFO(option);
         REQUIRE_THAT(result.out, ContainsSubstring(option));
     }
-    REQUIRE_THAT(result.out, ContainsSubstring("Tone curve of the red channel"));
-    REQUIRE_THAT(result.out, ContainsSubstring("2 to 16 points"));
-    REQUIRE_THAT(result.out, ContainsSubstring("0.01 apart"));
+    // The help wraps to the widest option, so words are compared across line breaks.
+    std::string words;
+    for (const char c : result.out) {
+        const bool space = c == ' ' || c == '\n';
+        if (!space || (!words.empty() && words.back() != ' ')) {
+            words += space ? ' ' : c;
+        }
+    }
+    REQUIRE_THAT(words, ContainsSubstring("Tone curve of the red channel"));
+    REQUIRE_THAT(words, ContainsSubstring("2 to 16 points"));
+    REQUIRE_THAT(words, ContainsSubstring("0.01 apart"));
 }
 
 TEST_CASE("Every ranged float setting is an export option", "[cli]") {
@@ -1840,6 +1849,71 @@ TEST_CASE("The tone curve flags replace their own curve and keep the others",
     }
 }
 
+TEST_CASE("The colour grading flags replace what they name and keep the rest",
+          "[cli][sidecar][grading]") {
+    DevelopSettings sidecar;
+    sidecar.colorGrading.shadows = {220.0F, 30.0F};
+    sidecar.colorGrading.blending = 20.0F;
+
+    SECTION("each flag names its own field") {
+        const DevelopSettings result =
+            applied(sidecar, {"--grade-highlight-hue", "70", "--grade-highlight-saturation", "45",
+                              "--grade-midtone-hue", "30", "--grade-midtone-saturation", "10",
+                              "--grade-balance", "-30"});
+        REQUIRE(result.colorGrading.highlights == GradeZone{70.0F, 45.0F});
+        REQUIRE(result.colorGrading.midtones == GradeZone{30.0F, 10.0F});
+        REQUIRE(result.colorGrading.balance == -30.0F);
+        REQUIRE(result.colorGrading.shadows == sidecar.colorGrading.shadows);
+        REQUIRE(result.colorGrading.blending == 20.0F);
+    }
+    SECTION("a zone's hue and saturation are separate") {
+        const DevelopSettings result = applied(sidecar, {"--grade-shadow-saturation", "0"});
+        REQUIRE(result.colorGrading.shadows == GradeZone{220.0F, 0.0F});
+    }
+    SECTION("values outside their ranges are usage errors") {
+        for (const auto& [flag, value, wording] :
+             {std::tuple{"--grade-shadow-hue", "361", "accepts 0 to 360"},
+              std::tuple{"--grade-midtone-saturation", "101", "accepts 0 to 100"},
+              std::tuple{"--grade-balance", "-101", "accepts -100 to 100"},
+              std::tuple{"--grade-blending", "-1", "accepts 0 to 100"}}) {
+            std::ostringstream err;
+            INFO(flag);
+            REQUIRE_FALSE(cli::readExportEdits({flag, value}, err));
+            REQUIRE_THAT(err.str(), ContainsSubstring(std::string(flag) + " " + wording));
+        }
+    }
+}
+
+TEST_CASE("The export help describes colour grading", "[cli][grading]") {
+    const auto result = invoke({"export", "--help"});
+    REQUIRE(result.code == cli::Success);
+    for (const char* option :
+         {"--grade-shadow-hue <degrees>", "--grade-shadow-saturation <amount>",
+          "--grade-midtone-hue <degrees>", "--grade-midtone-saturation <amount>",
+          "--grade-highlight-hue <degrees>", "--grade-highlight-saturation <amount>",
+          "--grade-balance <amount>", "--grade-blending <amount>", "Colour grading tints"}) {
+        INFO(option);
+        REQUIRE_THAT(result.out, ContainsSubstring(option));
+    }
+}
+
+TEST_CASE("Info shows a grading that differs from the default", "[cli][info][grading]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    DevelopSettings settings;
+    settings.colorGrading.highlights = {70.0F, 45.0F};
+    settings.colorGrading.balance = -30.0F;
+    writeSidecar(openPhoto(raw).with(DevelopState{settings}));
+
+    const auto text = invoke({"info", raw.string()});
+    REQUIRE(text.code == cli::Success);
+    REQUIRE_THAT(text.out, ContainsSubstring("gradeHighlightHue: 70"));
+    REQUIRE_THAT(text.out, ContainsSubstring("gradeHighlightSaturation: 45"));
+    REQUIRE_THAT(text.out, ContainsSubstring("gradeBalance: -30"));
+    REQUIRE_THAT(text.out, !ContainsSubstring("gradeShadow"));
+    REQUIRE_THAT(text.out, !ContainsSubstring("gradeBlending"));
+}
+
 TEST_CASE("Info shows a tone curve as its points", "[cli][info][curve]") {
     const test::TempDir directory;
     const auto raw = copyRaw(directory, "frame.dng");
@@ -2150,7 +2224,7 @@ TEST_CASE("Info --all lists every setting", "[cli][info]") {
         REQUIRE(at >= previous);
         previous = at;
     }
-    REQUIRE(developSettingDescriptors.size() == 55);
+    REQUIRE(developSettingDescriptors.size() == 63);
     REQUIRE_THAT(result.out, ContainsSubstring("temperature: unset"));
 }
 
@@ -2239,7 +2313,7 @@ TEST_CASE("Info --json is one document with the settings in table order", "[cli]
     SECTION("--all lists every key in table order") {
         const auto result = invoke({"info", "--json", "--all", plain.string()});
         REQUIRE(result.code == cli::Success);
-        REQUIRE(firstFile(result.out).value("settings").toObject().size() == 55);
+        REQUIRE(firstFile(result.out).value("settings").toObject().size() == 63);
         std::size_t previous = 0;
         for (const FieldDescriptor& descriptor : developSettingDescriptors) {
             const auto at = result.out.find("\"" + std::string(descriptor.key) + "\":");

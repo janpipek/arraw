@@ -1,3 +1,4 @@
+#include "ColorAdjustments.h"
 #include "GpuDevelop.h"
 #include "GpuPlan.h"
 #include "GpuTesting.h"
@@ -298,6 +299,50 @@ std::vector<std::pair<std::string, DevelopSettings>> colorCases() {
         s.hsl.red.hue = 100.0F;
     });
     add("a mix without the switch", [](DevelopSettings& s) { s.blackAndWhite.red = 80.0F; });
+    add("grade shadows only", [](DevelopSettings& s) {
+        s.colorGrading.shadows = {.hue = 230.0F, .saturation = strongestGrade};
+    });
+    add("grade every zone", [](DevelopSettings& s) {
+        s.colorGrading = {.shadows = {.hue = 200.0F, .saturation = 60.0F},
+                          .midtones = {.hue = 320.0F, .saturation = 25.0F},
+                          .highlights = {.hue = 50.0F, .saturation = 80.0F},
+                          .balance = 15.0F,
+                          .blending = 35.0F};
+    });
+    add("grade sharp, toward the shadows", [](DevelopSettings& s) {
+        s.colorGrading = {.shadows = {.hue = 0.0F, .saturation = 70.0F},
+                          .highlights = {.hue = 180.0F, .saturation = 70.0F},
+                          .balance = -gradeBalanceLimit,
+                          .blending = sharpestGradeBlending};
+    });
+    add("grade soft, toward the highlights", [](DevelopSettings& s) {
+        s.colorGrading = {.shadows = {.hue = maximumGradeHue, .saturation = 40.0F},
+                          .midtones = {.hue = 140.0F, .saturation = 90.0F},
+                          .balance = gradeBalanceLimit,
+                          .blending = softestGradeBlending};
+    });
+    add("grade over grayscale", [](DevelopSettings& s) {
+        s.blackAndWhite = {true, 40.0F, -20.0F, 10.0F, 30.0F, -30.0F, 20.0F, -10.0F, 0.0F};
+        s.colorGrading = {.shadows = {.hue = 250.0F, .saturation = 50.0F},
+                          .highlights = {.hue = 70.0F, .saturation = 60.0F},
+                          .balance = -20.0F};
+    });
+    add("grade after the colour controls", [](DevelopSettings& s) {
+        s.color.saturation = 30.0F;
+        s.hsl.blue = {-40.0F, 20.0F, 10.0F};
+        s.colorGrading.midtones = {.hue = 30.0F, .saturation = 45.0F};
+    });
+    add("grade highlights toward white", [](DevelopSettings& s) {
+        s.colorGrading = {.midtones = {.hue = 90.0F, .saturation = 60.0F},
+                          .highlights = {.hue = 260.0F, .saturation = strongestGrade}};
+    });
+    add("grade hues without saturation", [](DevelopSettings& s) {
+        s.colorGrading = {.shadows = {.hue = 120.0F},
+                          .midtones = {.hue = 240.0F},
+                          .highlights = {.hue = 300.0F},
+                          .balance = 60.0F,
+                          .blending = 10.0F};
+    });
     return cases;
 }
 
@@ -788,6 +833,64 @@ TEST_CASE("The pointwise pass agrees with the CPU chain on NaN and infinity", "[
     requireMatchesCpu(source, settings);
 }
 
+TEST_CASE("A highlight tint near white stays in range on the GPU as on the CPU",
+          "[gpu][pointwise][grading]") {
+    // Greys from below the fade to above white, a light colour and white
+    // itself; the shoulder is off so that the grade sees them as they are.
+    std::vector<std::array<float, 3>> colours;
+    for (int step = 0; step <= 60; ++step) {
+        const float lightness = 0.8F + 0.25F * static_cast<float>(step) / 60;
+        const Colour g = fromOklab({lightness, 0.0F, 0.0F});
+        colours.push_back({g[0], g[1], g[2]});
+    }
+    colours.push_back({0.9F, 0.9F, 0.9F});
+    colours.push_back({1.0F, 1.0F, 1.0F});
+    colours.push_back({1.0F, 0.95F, 0.9F});
+    colours.push_back({4.0F, 4.0F, 4.0F});
+    const ImageBuffer source = row(colours, 1.0F);
+
+    for (const float hue : {30.0F, 90.0F, 260.0F}) {
+        DYNAMIC_SECTION("hue " << hue) {
+            DevelopSettings settings;
+            settings.tone.filmicHighlights = noFilmicHighlights;
+            settings.colorGrading.highlights = {.hue = hue, .saturation = strongestGrade};
+            requireMatchesCpu(source, settings);
+
+            // The review's cases: greys at L 0.95 and 1 and a linear grey of
+            // 0.9, which the whole tint pushed to 1.2 to 1.7.
+            const ImageBuffer actual = gpuPointwise(source, settings);
+            const std::span<const float> out = actual.samples<float>();
+            for (std::size_t pixel = 0; pixel < colours.size(); ++pixel) {
+                const float lightness =
+                    toOklab(Colour{colours[pixel][0], colours[pixel][1], colours[pixel][2]})
+                        .lightness;
+                const bool reviewed = std::abs(lightness - 0.95F) < 0.003F || lightness >= 0.999F ||
+                                      colours[pixel][0] == 0.9F;
+                if (!reviewed) {
+                    continue;
+                }
+                const float ceiling =
+                    std::max({1.0F, colours[pixel][0], colours[pixel][1], colours[pixel][2]});
+                // Within the parity tolerance of the CPU's range.
+                const float slack = ceiling * 1.0e-4F;
+                for (std::size_t channel = 0; channel < 3; ++channel) {
+                    CAPTURE(pixel, lightness, channel, out[pixel * 4 + channel]);
+                    REQUIRE(out[pixel * 4 + channel] >= -slack);
+                    REQUIRE(out[pixel * 4 + channel] <= ceiling + slack);
+                }
+                // Clearly above white: no tint at all, as on the CPU. A grey
+                // whose L sits at 1 is left out, since the GPU's own cube root
+                // may put it one ulp below the fade's end.
+                if (lightness >= 1.0F + 1.0e-5F) {
+                    for (std::size_t channel = 0; channel < 3; ++channel) {
+                        REQUIRE(out[pixel * 4 + channel] == colours[pixel][channel]);
+                    }
+                }
+            }
+        }
+    }
+}
+
 TEST_CASE("The pointwise pass matches the CPU chain on RAW fixtures", "[gpu][pointwise]") {
     const std::array fixtures{"linear-32x24-neutral.dng", "linear-32x24-warmwb.dng",
                               "linear-32x24-nowb.dng",    "linear-32x24-nowb-dark.dng",
@@ -797,8 +900,8 @@ TEST_CASE("The pointwise pass matches the CPU chain on RAW fixtures", "[gpu][poi
     warm.color = {WhiteBalanceMode::Custom, 3000.0F, 0.0F};
     DevelopSettings coolTinted;
     coolTinted.color = {WhiteBalanceMode::Custom, 8500.0F, -25.0F};
-    DevelopSettings toned = withTone({0.4F, 30.0F, 30.0F, -30.0F, 10.0F, 20.0F, 70.0F});
-    toned.color = {WhiteBalanceMode::Custom, 4200.0F, 8.0F};
+    DevelopSettings strong = withTone({0.4F, 30.0F, 30.0F, -30.0F, 10.0F, 20.0F, 70.0F});
+    strong.color = {WhiteBalanceMode::Custom, 4200.0F, 8.0F};
 
     DevelopSettings coloured = withTone({0.2F, 10.0F, 10.0F, 0.0F, 0.0F, 0.0F, 40.0F});
     coloured.color = {WhiteBalanceMode::AsShot, std::nullopt, std::nullopt, 25.0F, 35.0F};
@@ -806,16 +909,21 @@ TEST_CASE("The pointwise pass matches the CPU chain on RAW fixtures", "[gpu][poi
     coloured.hsl.blue = {-45.0F, 30.0F, -10.0F};
     DevelopSettings grey = coloured;
     grey.blackAndWhite = {true, 20.0F, 10.0F, 0.0F, -10.0F, 0.0F, -30.0F, 0.0F, 0.0F};
+    DevelopSettings toned = grey;
+    toned.colorGrading = {.shadows = {.hue = 240.0F, .saturation = 45.0F},
+                          .highlights = {.hue = 60.0F, .saturation = 55.0F},
+                          .balance = -10.0F};
 
     // As shot with the default shoulder, then a custom balance alone, tinted,
     // under strong tone, and with the colour block.
-    const std::array<std::pair<const char*, DevelopSettings>, 6> settingsCases{{
+    const std::array<std::pair<const char*, DevelopSettings>, 7> settingsCases{{
         {"as shot", DevelopSettings{}},
         {"custom warm", warm},
         {"custom cool with tint", coolTinted},
-        {"custom with tone", toned},
+        {"custom with tone", strong},
         {"colour block", coloured},
         {"grayscale", grey},
+        {"split-toned grayscale", toned},
     }};
     for (const char* name : fixtures) {
         const ImageBuffer source = fixtureImage(name);
@@ -843,8 +951,11 @@ TEST_CASE("The pointwise pass writes the CPU's value after each stage", "[gpu][p
     settings.hsl.green = {-30.0F, -25.0F, 20.0F};
     settings.toneCurve.luma = curveOf({{0.0F, 0.0F}, {0.25F, 0.15F}, {0.75F, 0.85F}, {1.0F, 1.0F}});
     settings.toneCurve.blue = curveOf({{0.0F, 0.05F}, {0.5F, 0.45F}, {1.0F, 1.0F}});
+    settings.colorGrading = {.shadows = {.hue = 210.0F, .saturation = 35.0F},
+                             .highlights = {.hue = 40.0F, .saturation = 50.0F}};
     const ProcessingPlan plan = planFor(source, DevelopState{settings});
     REQUIRE(plan.shapesTone);
+    REQUIRE(plan.colorAdjustments.grading.active);
     REQUIRE(plan.toneCurves.luma.active);
     REQUIRE(plan.toneCurves.blue.active);
     REQUIRE(plan.colorAdjustments.adjustsHsl);

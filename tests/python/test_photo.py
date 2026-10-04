@@ -42,6 +42,12 @@ def find(settings, name):
         for band in BANDS:
             if name == f"{kind}_{band}":
                 return getattr(getattr(settings.hsl, band), kind)
+    if name.startswith("grade_"):
+        rest = name.removeprefix("grade_")
+        if rest in ("balance", "blending"):
+            return getattr(settings.color_grading, rest)
+        zone, kind = rest.split("_")
+        return getattr(getattr(settings.color_grading, zone + "s"), kind)
     if name.startswith("tone_curve"):
         return getattr(settings.tone_curve, name.removeprefix("tone_curve").lstrip("_") or "luma")
     if name.startswith("gray_"):
@@ -114,7 +120,9 @@ def test_int_is_accepted_for_a_number(photo):
 @pytest.mark.parametrize(
     "key, value",
     [("exposure", 5.5), ("exposure", -5.5), ("contrast", 101), ("filmic_highlights", -1),
-     ("temperature", 1500), ("temperature", 13000), ("tint", 200), ("straighten", 46)],
+     ("temperature", 1500), ("temperature", 13000), ("tint", 200), ("straighten", 46),
+     ("grade_shadow_hue", 361), ("grade_shadow_hue", -1), ("grade_highlight_saturation", 101),
+     ("grade_balance", -101), ("grade_blending", 101)],
 )
 def test_out_of_range_is_value_error(photo, key, value):
     with pytest.raises(ValueError):

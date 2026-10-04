@@ -1,6 +1,7 @@
 #pragma once
 
 #include <BlackAndWhiteSettings.h>
+#include <ColorGradingSettings.h>
 #include <ColorSettings.h>
 #include <GeometrySettings.h>
 #include <HslSettings.h>
@@ -32,6 +33,9 @@ struct DevelopSettings {
 
     /// @brief Conversion to grey and the mix of hues it is made from.
     BlackAndWhiteSettings blackAndWhite{};
+
+    /// @brief Hue and saturation of the tint in the shadows, midtones and highlights.
+    ColorGradingSettings colorGrading{};
 
     friend bool operator==(const DevelopSettings&, const DevelopSettings&) = default;
 };

@@ -126,6 +126,24 @@ struct GpuPointwiseBlock {
 
     /// @brief Weight of each band in the grey, as two `vec4`s.
     std::array<float, 8> grayMix{};
+
+    /// @brief Whether Colour Grading tints anything: 0 or 1.
+    std::uint32_t grades = 0;
+
+    /// @brief How far Balance moves the tonal position, in the perceptual coordinate.
+    float gradeBalanceShift = 0.0F;
+
+    /// @brief Width of each zone's bell over the tonal position.
+    float gradeZoneWidth = 1.0F;
+
+    /// @brief Rounds the grade's scalars up to the `vec4` boundary.
+    std::uint32_t gradePadding = 0;
+
+    /// @brief Oklab offsets of the Shadows and Midtones zones: `(a, b, a, b)`, one `vec4`.
+    std::array<float, 4> gradeShadowMidtoneTint{};
+
+    /// @brief Oklab offset of the Highlights zone in `xy`; `zw` unused.
+    std::array<float, 4> gradeHighlightTint{};
 };
 
 static_assert(offsetof(GpuPointwiseBlock, toWorking) == 0);
@@ -155,7 +173,13 @@ static_assert(offsetof(GpuPointwiseBlock, hueShift) == 144);
 static_assert(offsetof(GpuPointwiseBlock, bandSaturation) == 176);
 static_assert(offsetof(GpuPointwiseBlock, bandLuminance) == 208);
 static_assert(offsetof(GpuPointwiseBlock, grayMix) == 240);
-static_assert(sizeof(GpuPointwiseBlock) == 272);
+static_assert(offsetof(GpuPointwiseBlock, grades) == 272);
+static_assert(offsetof(GpuPointwiseBlock, gradeBalanceShift) == 276);
+static_assert(offsetof(GpuPointwiseBlock, gradeZoneWidth) == 280);
+static_assert(offsetof(GpuPointwiseBlock, gradePadding) == 284);
+static_assert(offsetof(GpuPointwiseBlock, gradeShadowMidtoneTint) == 288);
+static_assert(offsetof(GpuPointwiseBlock, gradeHighlightTint) == 304);
+static_assert(sizeof(GpuPointwiseBlock) == 320);
 
 /// @brief Widest output, in pixels per side, that the geometry block can address exactly.
 ///

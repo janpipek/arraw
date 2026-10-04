@@ -117,10 +117,13 @@ qt_standard_project_setup()
 add_library(arraw STATIC
         include/ColorEncoding.h
         include/BlackAndWhiteSettings.h
+        include/ColorGradingSettings.h
         include/ColorSettings.h
         include/HslSettings.h
         src/core/ColorAdjustments.h
         src/core/ColorAdjustments.cpp
+        src/core/ColorGrading.h
+        src/core/ColorGrading.cpp
         src/core/ColorSettings.cpp
         include/Develop.h
         include/Diagnostics.h

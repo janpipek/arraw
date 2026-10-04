@@ -13,6 +13,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -93,6 +94,53 @@ TEST_CASE("The pointwise block carries the colour block unchanged", "[gpu][plan]
     REQUIRE(idle.adjustsVibrance == 0U);
     REQUIRE(idle.adjustsHsl == 0U);
     REQUIRE(idle.convertsToGrayscale == 0U);
+}
+
+TEST_CASE("The pointwise block carries the colour grade unchanged", "[gpu][plan][grading]") {
+    DevelopSettings settings;
+    settings.colorGrading = {.shadows = {.hue = 220.0F, .saturation = 40.0F},
+                             .midtones = {.hue = 90.0F, .saturation = 10.0F},
+                             .highlights = {.hue = 45.0F, .saturation = 70.0F},
+                             .balance = -30.0F,
+                             .blending = 80.0F};
+    const ProcessingPlan plan = planFor(ColorEncoding{workingEncoding}, DevelopState{settings});
+    const ColorGradingPlan& grading = plan.colorAdjustments.grading;
+    REQUIRE(grading.active);
+
+    const auto block = packPointwise(plan);
+
+    REQUIRE(block.grades == 1U);
+    REQUIRE(block.gradeBalanceShift == grading.balanceShift);
+    REQUIRE(block.gradeZoneWidth == grading.zoneWidth);
+    REQUIRE(block.gradeShadowMidtoneTint == std::array{grading.shadowTint.a, grading.shadowTint.b,
+                                                       grading.midtoneTint.a,
+                                                       grading.midtoneTint.b});
+    REQUIRE(block.gradeHighlightTint ==
+            std::array{grading.highlightTint.a, grading.highlightTint.b, 0.0F, 0.0F});
+
+    /// Off, as an unset plan is.
+    const auto idle = packPointwise(ProcessingPlan{});
+    REQUIRE(idle.grades == 0U);
+    REQUIRE(idle.gradeShadowMidtoneTint == std::array{0.0F, 0.0F, 0.0F, 0.0F});
+
+    /// Hues, Balance and Blending with no saturation upload the very bytes
+    /// the defaults do.
+    DevelopSettings hueOnly;
+    hueOnly.colorGrading = {.shadows = {.hue = 100.0F},
+                            .midtones = {.hue = 200.0F},
+                            .highlights = {.hue = 300.0F},
+                            .balance = 40.0F,
+                            .blending = 5.0F};
+    const auto plain =
+        packPointwise(planFor(ColorEncoding{workingEncoding}, DevelopState{DevelopSettings{}}));
+    const auto hues = packPointwise(planFor(ColorEncoding{workingEncoding}, DevelopState{hueOnly}));
+    REQUIRE(std::memcmp(&plain, &hues, sizeof(GpuPointwiseBlock)) == 0);
+}
+
+TEST_CASE("The pointwise block starts the grade's tints on vec4 boundaries", "[gpu][plan]") {
+    REQUIRE(offsetof(GpuPointwiseBlock, grades) % 16 == 0);
+    REQUIRE(offsetof(GpuPointwiseBlock, gradeShadowMidtoneTint) % 16 == 0);
+    REQUIRE(offsetof(GpuPointwiseBlock, gradeHighlightTint) % 16 == 0);
 }
 
 TEST_CASE("The pointwise block lays its band sets out as std140 arrays of vec4", "[gpu][plan]") {

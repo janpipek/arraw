@@ -34,7 +34,7 @@ struct SettingRange {
 };
 
 /// @brief Panel a setting belongs to.
-enum class SettingGroup { Color, Tone, Geometry, Hsl, BlackAndWhite, ToneCurve };
+enum class SettingGroup { Color, Tone, Geometry, Hsl, BlackAndWhite, ToneCurve, ColorGrading };
 
 /// @brief Whether a setting means anything for every photograph.
 enum class Applicability {
@@ -94,6 +94,20 @@ struct FieldDescriptor {
     FieldDescriptor {                                                                              \
         "gray" #Name, ARRAW_ACCESSOR(float, blackAndWhite.member),                                 \
             SettingRange{darkestGrayMix, lightestGrayMix}, SettingGroup::BlackAndWhite,            \
+            Applicability::Always, Stage::Pointwise                                                \
+    }
+
+// The two rows of one Colour Grading zone.
+#define ARRAW_GRADE_ZONE(Name, member)                                                             \
+    FieldDescriptor{"grade" #Name "Hue",                                                           \
+                    ARRAW_ACCESSOR(float, colorGrading.member.hue),                                \
+                    SettingRange{minimumGradeHue, maximumGradeHue},                                \
+                    SettingGroup::ColorGrading,                                                    \
+                    Applicability::Always,                                                         \
+                    Stage::Pointwise},                                                             \
+        FieldDescriptor {                                                                          \
+        "grade" #Name "Saturation", ARRAW_ACCESSOR(float, colorGrading.member.saturation),         \
+            SettingRange{weakestGrade, strongestGrade}, SettingGroup::ColorGrading,                \
             Applicability::Always, Stage::Pointwise                                                \
     }
 
@@ -164,6 +178,15 @@ inline constexpr std::array developSettingDescriptors{
     ARRAW_GRAY_BAND(Blue, blue),
     ARRAW_GRAY_BAND(Purple, purple),
     ARRAW_GRAY_BAND(Magenta, magenta),
+    ARRAW_GRADE_ZONE(Shadow, shadows),
+    ARRAW_GRADE_ZONE(Midtone, midtones),
+    ARRAW_GRADE_ZONE(Highlight, highlights),
+    FieldDescriptor{"gradeBalance", ARRAW_ACCESSOR(float, colorGrading.balance),
+                    SettingRange{-gradeBalanceLimit, gradeBalanceLimit}, SettingGroup::ColorGrading,
+                    Applicability::Always, Stage::Pointwise},
+    FieldDescriptor{"gradeBlending", ARRAW_ACCESSOR(float, colorGrading.blending),
+                    SettingRange{sharpestGradeBlending, softestGradeBlending},
+                    SettingGroup::ColorGrading, Applicability::Always, Stage::Pointwise},
     FieldDescriptor{"rotation", ARRAW_ACCESSOR(QuarterTurn, geometry.rotation), std::nullopt,
                     SettingGroup::Geometry, Applicability::Always, Stage::Geometry},
     FieldDescriptor{"flipHorizontal", ARRAW_ACCESSOR(bool, geometry.flipHorizontal), std::nullopt,
@@ -180,6 +203,7 @@ inline constexpr std::array developSettingDescriptors{
                     SettingGroup::Geometry, Applicability::Always, Stage::Geometry},
 };
 
+#undef ARRAW_GRADE_ZONE
 #undef ARRAW_GRAY_BAND
 #undef ARRAW_HSL_BAND
 #undef ARRAW_ACCESSOR

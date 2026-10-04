@@ -46,6 +46,13 @@ GpuPointwiseBlock packPointwise(const ProcessingPlan& plan, PointwiseProbe probe
     block.bandSaturation = colour.bandSaturation;
     block.bandLuminance = colour.bandLuminance;
     block.grayMix = colour.grayMix;
+    const ColorGradingPlan& grading = colour.grading;
+    block.grades = grading.active ? 1U : 0U;
+    block.gradeBalanceShift = grading.balanceShift;
+    block.gradeZoneWidth = grading.zoneWidth;
+    block.gradeShadowMidtoneTint = {grading.shadowTint.a, grading.shadowTint.b,
+                                    grading.midtoneTint.a, grading.midtoneTint.b};
+    block.gradeHighlightTint = {grading.highlightTint.a, grading.highlightTint.b, 0.0F, 0.0F};
     const ToneCurvePlan& curves = plan.toneCurves;
     block.curvesLuma = curves.luma.active ? 1U : 0U;
     block.curvesRed = curves.red.active ? 1U : 0U;

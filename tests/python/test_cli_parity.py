@@ -14,6 +14,13 @@ CASES = {
         "tone_curve_red": [(0.0, 0.0), (0.5, 0.6), (1.0, 1.0)],
         "tone_curve_blue": [(0.0, 0.05), (1.0, 0.9)],
     },
+    "grading": {"grade_shadow_hue": 250, "grade_shadow_saturation": 40,
+                "grade_midtone_hue": 30, "grade_midtone_saturation": 15,
+                "grade_highlight_hue": 70, "grade_highlight_saturation": 50,
+                "grade_balance": -30, "grade_blending": 70},
+    "grading_black_and_white": {"convert_to_grayscale": True, "grade_shadow_hue": 230,
+                                "grade_shadow_saturation": 60, "grade_highlight_hue": 60,
+                                "grade_highlight_saturation": 40},
     "combined": {"exposure": 0.5, "contrast": 20, "shadows": 15, "filmic_highlights": 0},
 }
 
@@ -21,6 +28,9 @@ CASES = {
 def cli_args(settings):
     args = []
     for key, value in settings.items():
+        if value is True:
+            args.append("--" + key.replace("_", "-"))
+            continue
         if isinstance(value, list):
             value = ";".join(f"{x},{y}" for x, y in value)
         args += ["--" + key.replace("_", "-"), str(value)]
