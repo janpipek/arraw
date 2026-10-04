@@ -1,10 +1,12 @@
 #include "PreviewRenderer.h"
 
+#include "CurveHistogramRefresh.h"
 #include "DisplayImage.h"
 #include "GpuContext.h"
 #include "GpuDevelop.h"
 #include "TimingTrace.h"
 
+#include <CurveHistogram.h>
 #include <Develop.h>
 #include <ImagePyramid.h>
 #include <RenderCheckpoint.h>
@@ -183,25 +185,34 @@ public:
                                      const std::shared_ptr<const ImageBuffer>& image,
                                      const DevelopState& state, const RenderRequest& request,
                                      std::optional<Stage>& resumedFrom) {
-        const auto index = static_cast<std::size_t>(level);
-        if (uploaded_.size() <= index) {
-            uploaded_.resize(index + 1);
-        }
-        if (!uploaded_[index].valid()) {
-            uploaded_[index] = uploadSource(*context_, *image);
-        }
+        const DeviceImage& uploaded = uploadedLevel(level, *image);
         CheckpointCache& checkpoints =
             layer == Layer::Background ? backgroundCheckpoints_ : checkpoints_;
         checkpoints.bind(image);
         const RenderCheckpoint checkpoint = checkpoints.render(
             [&](Stage stop) {
-                return developOnGpu(*context_, *image, uploaded_[index], state, stop, request);
+                return developOnGpu(*context_, *image, uploaded, state, stop, request);
             },
             [&](const RenderCheckpoint& from, Stage stop) {
                 return developOnGpu(*context_, from, *image, state, stop, request);
             },
             resumedFrom);
         return checkpoint.readBack();
+    }
+
+    /// @brief Counts the curve histogram of a level on the device.
+    ///
+    /// Samples the curve input at ::arraw::curveHistogramRequest, which is bounded
+    /// and Bilinear (ADR 035), reads it back and counts it on the host. Uploads
+    /// the level if no render has yet.
+    /// @pre prepare returned true.
+    /// @param level Pyramid level of @p image.
+    /// @param image The level to sample.
+    [[nodiscard]] CurveHistogram curveHistogramOf(int level,
+                                                  const std::shared_ptr<const ImageBuffer>& image,
+                                                  const DevelopState& state) {
+        return curveHistogram(sampleOnGpu(*context_, *image, uploadedLevel(level, *image), state,
+                                          Tap::CurveInput, curveHistogramRequest));
     }
 
     /// @brief Releases the photograph from the device, as there is none to show.
@@ -232,6 +243,18 @@ public:
     }
 
 private:
+    /// @brief Gives a level on the device, uploading it the first time it is asked for.
+    const DeviceImage& uploadedLevel(int level, const ImageBuffer& image) {
+        const auto index = static_cast<std::size_t>(level);
+        if (uploaded_.size() <= index) {
+            uploaded_.resize(index + 1);
+        }
+        if (!uploaded_[index].valid()) {
+            uploaded_[index] = uploadSource(*context_, image);
+        }
+        return uploaded_[index];
+    }
+
     /// @brief Creates the device, or records why not.
     void create() {
         context_ = createAppGpuContext(settings_, reason_);
@@ -351,7 +374,8 @@ PreviewResult render(std::uint64_t id, const DevelopState& state, const PreviewV
                          .region = {},
                          .frame = {},
                          .level = 0,
-                         .resumedFrom = std::nullopt};
+                         .resumedFrom = std::nullopt,
+                         .curveHistogram = std::nullopt};
     // Nothing may escape the thread, or the process terminates.
     try {
         pyramid.reset(source);
@@ -445,6 +469,58 @@ PreviewResult render(std::uint64_t id, const DevelopState& state, const PreviewV
     return result;
 }
 
+/// @brief Counts the curve histogram of a state, unless the last one counted is still current.
+///
+/// Samples the pyramid level that covers the histogram's own request, not the
+/// level of the view, so that zooming neither changes nor recounts it. On the
+/// GPU when it renders this source, with ::arraw::curveHistogramRequest; on the
+/// CPU when it does not or fails, with the smaller ::cpuCurveHistogramRequest.
+/// @return The histogram, or nothing when the last one is current or it failed;
+/// a failure is not retried before the next render.
+std::optional<CurveHistogram> countCurveHistogram(const DevelopState& state,
+                                                  const std::shared_ptr<const ImageBuffer>& source,
+                                                  SourcePyramid& pyramid, GpuPreview* gpu,
+                                                  CurveHistogramRefresh& refresh) {
+    const detail::TimingSpan timing("preview.curveHistogram");
+    const auto levelFor = [&](const RenderRequest& request) {
+        return std::min(pyramidLevelFor(source->size(), source->orientation(), state, request),
+                        SourcePyramid::highestLevel(source->size()));
+    };
+    try {
+        const bool onGpu = gpu != nullptr && gpu->prepare(source);
+        const RenderRequest& request = onGpu ? curveHistogramRequest : cpuCurveHistogramRequest;
+        int level = levelFor(request);
+        std::shared_ptr<const ImageBuffer> reduced = pyramid.level(level);
+        ProcessingPlan plan = planFor(*reduced, state, request);
+        if (refresh.isCurrent(reduced, plan)) {
+            timing.note("current");
+            return std::nullopt;
+        }
+        std::optional<CurveHistogram> counted;
+        if (onGpu) {
+            try {
+                counted = gpu->curveHistogramOf(level, reduced, state);
+                timing.note(gpu->deviceName());
+            } catch (const std::exception&) {
+                // The CPU counts instead, from its own level; the next render
+                // reports a GPU that is gone.
+                level = levelFor(cpuCurveHistogramRequest);
+                reduced = pyramid.level(level);
+                plan = planFor(*reduced, state, cpuCurveHistogramRequest);
+            }
+        }
+        if (!counted) {
+            counted = curveHistogram(*reduced, state, cpuCurveHistogramRequest);
+            timing.note("CPU");
+        }
+        refresh.record(reduced, std::move(plan));
+        return counted;
+    } catch (const std::exception&) {
+        // The render of the same state reports what is wrong with it.
+        return std::nullopt;
+    }
+}
+
 } // namespace
 
 PreviewRenderer::PreviewRenderer(std::function<void(PreviewResult)> onResult, Device device,
@@ -463,6 +539,19 @@ void PreviewRenderer::setSource(std::shared_ptr<const ImageBuffer> decoded) {
     const std::scoped_lock lock(mutex_);
     source_ = std::move(decoded);
     pending_.reset();
+}
+
+void PreviewRenderer::setCurveHistogramWanted(bool wanted) {
+    bool wake = false;
+    {
+        const std::scoped_lock lock(mutex_);
+        wake = wanted && !curveHistogramWanted_;
+        curveHistogramWanted_ = wanted;
+        recountHistogram_ = recountHistogram_ || wake;
+    }
+    if (wake) {
+        wake_.notify_one();
+    }
 }
 
 std::uint64_t PreviewRenderer::request(DevelopState state, PreviewView view) {
@@ -496,6 +585,8 @@ void PreviewRenderer::run(std::stop_token stop) {
     std::shared_ptr<const ImageBuffer> backgroundSource;
     std::optional<DevelopState> backgroundState;
     std::optional<QImage> background;
+    // What the last curve histogram was counted from.
+    CurveHistogramRefresh histogramRefresh;
     const auto deliver = [this](PreviewResult result) {
         try {
             onResult_(std::move(result));
@@ -503,69 +594,119 @@ void PreviewRenderer::run(std::stop_token stop) {
             // The callback's failure is not ours to handle, and must not end the thread.
         }
     };
+    // The last request rendered and its source, which a recount without a
+    // new request is counted for.
+    std::optional<Pending> lastShown;
+    std::shared_ptr<const ImageBuffer> lastShownSource;
     while (true) {
         std::optional<Pending> job;
         std::shared_ptr<const ImageBuffer> source;
+        bool recountOnly = false;
         {
             std::unique_lock lock(mutex_);
-            wake_.wait(lock, stop, [this] { return pending_.has_value(); });
+            wake_.wait(lock, stop, [this] { return pending_.has_value() || recountHistogram_; });
             if (stop.stop_requested()) {
                 return; // Pending requests are dropped.
             }
-            job = std::move(pending_);
-            pending_.reset();
             source = source_;
-        }
-        if (source != backgroundSource || (backgroundState && backgroundState->settings.geometry !=
-                                                                  job->state.settings.geometry)) {
-            background.reset();
-            backgroundState.reset();
-            backgroundSource = source;
-        }
-        bool shown = false;
-        {
-            const detail::TimingSpan timing("preview", job->id);
-            // Without the lock: developing takes long, and the window must be
-            // able to queue the next request meanwhile.
-            PreviewResult result = render(job->id, job->state, job->view, source, pyramid, cpuCache,
-                                          gpu ? &*gpu : nullptr, Layer::Shown);
-            if (result.image && result.region == QRectF(0.0, 0.0, 1.0, 1.0)) {
-                background = result.image;
-                backgroundState = job->state;
+            if (pending_) {
+                job = std::move(pending_);
+                pending_.reset();
+            } else {
+                // Only a recount: of the state last rendered, if it was of this source.
+                recountHistogram_ = false;
+                if (!lastShown || lastShownSource != source) {
+                    continue;
+                }
+                job = lastShown;
+                recountOnly = true;
             }
-            if (result.image) {
-                shown = true;
-                result.background = background;
+        }
+        if (!recountOnly) {
+            if (source != backgroundSource ||
+                (backgroundState &&
+                 backgroundState->settings.geometry != job->state.settings.geometry)) {
+                background.reset();
+                backgroundState.reset();
+                if (source != backgroundSource) {
+                    // Also lets go of the previous source's level.
+                    histogramRefresh.clear();
+                }
+                backgroundSource = source;
             }
-            deliver(std::move(result));
-        }
-        // The fallback is refreshed only once the requests pause, after the
-        // render that was asked for, so that it never delays one.
-        if (!shown || !job->view.region || backgroundState == job->state) {
-            continue;
-        }
-        {
-            std::unique_lock lock(mutex_);
-            if (wake_.wait_for(lock, stop, backgroundDelay,
-                               [this] { return pending_.has_value(); }) ||
-                source_ != source) {
+            bool shown = false;
+            {
+                const detail::TimingSpan timing("preview", job->id);
+                // Without the lock: developing takes long, and the window must be
+                // able to queue the next request meanwhile.
+                PreviewResult result = render(job->id, job->state, job->view, source, pyramid,
+                                              cpuCache, gpu ? &*gpu : nullptr, Layer::Shown);
+                if (result.image && result.region == QRectF(0.0, 0.0, 1.0, 1.0)) {
+                    background = result.image;
+                    backgroundState = job->state;
+                }
+                if (result.image) {
+                    shown = true;
+                    result.background = background;
+                }
+                deliver(std::move(result));
+            }
+            // The fallback and the curve histogram are refreshed only once the
+            // requests pause, after the render that was asked for, so that they
+            // never delay one.
+            if (!shown) {
                 continue;
             }
+            lastShown = job;
+            lastShownSource = source;
+        }
+        const auto paused = [&] {
+            std::unique_lock lock(mutex_);
+            return !wake_.wait_for(lock, stop, backgroundDelay,
+                                   [this] { return pending_.has_value(); }) &&
+                   source_ == source && !stop.stop_requested();
+        };
+        if (!paused()) {
             if (stop.stop_requested()) {
                 return;
             }
+            continue;
         }
-        const detail::TimingSpan timing("preview.background", job->id);
-        PreviewResult reduced =
-            render(job->id, job->state, PreviewView::wholeFrame(backgroundSize), source, pyramid,
-                   backgroundCache, gpu ? &*gpu : nullptr, Layer::Background);
-        // A failure is not retried for the same state; the region render reports it.
-        backgroundState = job->state;
-        background = std::move(reduced.image);
-        if (background) {
+        if (job->view.region && backgroundState != job->state) {
+            const detail::TimingSpan timing("preview.background", job->id);
+            PreviewResult reduced =
+                render(job->id, job->state, PreviewView::wholeFrame(backgroundSize), source,
+                       pyramid, backgroundCache, gpu ? &*gpu : nullptr, Layer::Background);
+            // A failure is not retried for the same state; the region render reports it.
+            backgroundState = job->state;
+            background = std::move(reduced.image);
+            if (background) {
+                PreviewResult update;
+                update.request = job->id;
+                update.background = background;
+                deliver(std::move(update));
+            }
+        }
+        {
+            const std::scoped_lock lock(mutex_);
+            // Closing must not wait for a count as well as for the render.
+            if (stop.stop_requested() || pending_ || source_ != source) {
+                if (stop.stop_requested()) {
+                    return;
+                }
+                continue;
+            }
+            // Counted now, or not wanted: either way no recount is owed.
+            recountHistogram_ = false;
+            if (!curveHistogramWanted_) {
+                continue;
+            }
+        }
+        if (auto histogram = countCurveHistogram(job->state, source, pyramid, gpu ? &*gpu : nullptr,
+                                                 histogramRefresh)) {
             PreviewResult update;
             update.request = job->id;
-            update.background = background;
+            update.curveHistogram = std::move(histogram);
             deliver(std::move(update));
         }
     }

@@ -22,6 +22,18 @@ enum class SliderScale {
     Reciprocal,
 };
 
+/// @brief What a slider's groove shows behind the handle.
+enum class SliderTrack {
+    /// @brief The style's own groove.
+    Plain,
+
+    /// @brief The hues of the Oklab wheel, as ::arraw::app::oklabHueColour paints them.
+    ///
+    /// For a setting that is a hue angle in degrees, so that the colour under
+    /// the handle is the one the setting means.
+    OklabHue,
+};
+
 /// @brief Slider positions across a reciprocal range.
 inline constexpr int reciprocalTickCount = 1000;
 
@@ -48,6 +60,9 @@ struct SettingPresentation {
 
     /// @brief How the slider spreads positions across the range.
     SliderScale scale = SliderScale::Linear;
+
+    /// @brief What the slider's groove shows.
+    SliderTrack track = SliderTrack::Plain;
 };
 
 /// @brief Gives the keys of the Tone group in the order the panel shows them.
@@ -71,6 +86,18 @@ inline constexpr int hslPageCount = 3;
 
 /// @brief Gives the keys of the Black & White mix, one per band, in panel order.
 [[nodiscard]] std::span<const std::string_view> blackAndWhiteKeys() noexcept;
+
+/// @brief Gives the keys of the Colour Grading group's rows, in panel order.
+///
+/// Shadows, Midtones and Highlights each as hue then saturation, then Balance and Blending.
+[[nodiscard]] std::span<const std::string_view> colorGradingKeys() noexcept;
+
+/// @brief Gives the keys of the settings the curve editor shows: the four tone curves.
+///
+/// Edited by the curve editor rather than a slider row, so they have no
+/// presentation. Listed so that the test of what the panel shows can count
+/// them; the editor itself writes curves through ::arraw::app::curveOf.
+[[nodiscard]] std::span<const std::string_view> toneCurveKeys() noexcept;
 
 /// @brief Which of the groups that depend on the treatment the panel shows.
 struct TreatmentVisibility {

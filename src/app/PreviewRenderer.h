@@ -2,6 +2,7 @@
 
 #include "AppSettings.h"
 
+#include <CurveHistogram.h>
 #include <DevelopState.h>
 #include <ImageBuffer.h>
 #include <RenderCheckpoint.h>
@@ -20,6 +21,18 @@
 #include <thread>
 
 namespace arraw::app {
+
+/// @brief Render the CPU counts a curve histogram from: the frame fitted inside 512 pixels.
+///
+/// A quarter of the pixels of ::arraw::curveHistogramRequest, which the GPU
+/// keeps: 256 bins need far fewer than a million pixels, and the host sample
+/// costs about 150-200 ns a source pixel (ADR 035), so the larger request would
+/// hold up the next render by up to half a second (ADR 036). Bilinear, as
+/// ::arraw::curveHistogram uses whatever the request says.
+inline constexpr RenderRequest cpuCurveHistogramRequest{
+    .size = RenderRequest::FitInside{512, 512},
+    .filter = ResizeFilter::Bilinear,
+};
 
 /// @brief What a preview shows: a part of the developed frame, at a size.
 struct PreviewView {
@@ -43,7 +56,9 @@ struct PreviewView {
 /// @brief Outcome of one preview render.
 ///
 /// A result with only @ref background set is a refreshed fallback, rendered
-/// for its request's state after the render of that request was delivered.
+/// for its request's state after the render of that request was delivered. A
+/// result with only @ref curveHistogram set is a recounted curve histogram,
+/// likewise.
 struct PreviewResult {
     /// Identifier PreviewRenderer::request returned for the render.
     std::uint64_t request = 0;
@@ -74,6 +89,9 @@ struct PreviewResult {
     /// Boundary of the checkpoint the render resumed from, or empty when it
     /// developed from the level itself. A diagnostic: nothing shows it.
     std::optional<Stage> resumedFrom;
+    /// Histogram of the curve input for the request's state (ADR 035), set only
+    /// on a result of its own, once requests paused and the curve input changed.
+    std::optional<CurveHistogram> curveHistogram;
 };
 
 /// @brief Worker thread that renders previews off the thread that asks for them.
@@ -99,6 +117,11 @@ struct PreviewResult {
 /// after the geometry. The engine decides whether a checkpoint still applies
 /// (ADR 011); the renderer only drops them when the source, the level or the
 /// device changes, which the plan cannot tell it.
+///
+/// Once requests pause, also counts the histogram of the curve input that the
+/// curve editor draws behind its curves, on the GPU when it renders, and only
+/// while someone shows it (setCurveHistogramWanted()) and the curve input may
+/// have changed since the last count (ADR 036): a curve drag never costs one.
 ///
 /// Renders on the GPU when there is one: the first render creates the device,
 /// on the worker, and the decoded photograph is uploaded once per source rather
@@ -148,6 +171,14 @@ public:
     /// @return Identifier of the request, increasing with each call.
     std::uint64_t request(DevelopState state, PreviewView view);
 
+    /// @brief Says whether the curve histogram is shown, so whether it is worth counting.
+    ///
+    /// Nothing is counted while it is not wanted; none is wanted until this
+    /// says so. Becoming wanted counts once, at the next pause, for the state
+    /// last rendered, if the last histogram counted is not current for it.
+    /// @param wanted Whether the curve editor is on screen.
+    void setCurveHistogramWanted(bool wanted);
+
 private:
     /// Request waiting for the worker.
     struct Pending {
@@ -169,10 +200,10 @@ private:
     /// Desktop preferences captured before the worker starts.
     AppSettings settings_;
 
-    /// Guard of source_, pending_ and lastId_.
+    /// Guard of source_, pending_, lastId_, curveHistogramWanted_ and recountHistogram_.
     std::mutex mutex_;
 
-    /// Signal that a request is pending or the worker should stop.
+    /// Signal that a request or a recount is pending, or the worker should stop.
     std::condition_variable_any wake_;
 
     /// Photograph to render; null until one is set.
@@ -183,6 +214,13 @@ private:
 
     /// Identifier of the newest request.
     std::uint64_t lastId_ = 0;
+
+    /// Whether the curve histogram is shown, so counted.
+    bool curveHistogramWanted_ = false;
+
+    /// Whether the histogram became wanted since the worker last looked, so
+    /// that it counts for the state last rendered without a new request.
+    bool recountHistogram_ = false;
 
     /// Declared last so that every member above exists before it starts.
     std::jthread worker_;

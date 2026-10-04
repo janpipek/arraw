@@ -334,6 +334,10 @@ endif()
 add_library(arraw-app-core STATIC
         src/app/AppSettings.cpp
         src/app/AppSettings.h
+        src/app/CurveEditing.cpp
+        src/app/CurveEditing.h
+        src/app/CurveHistogramRefresh.cpp
+        src/app/CurveHistogramRefresh.h
         src/app/DebugDiagnostics.cpp
         src/app/DebugDiagnostics.h
         src/app/DisplayImage.cpp
@@ -348,6 +352,8 @@ add_library(arraw-app-core STATIC
         src/app/FilmStripRules.h
         src/app/FolderWatcher.cpp
         src/app/FolderWatcher.h
+        src/app/OklabHue.cpp
+        src/app/OklabHue.h
         src/app/ShotFilterModel.cpp
         src/app/ShotFilterModel.h
         src/app/ShotModel.cpp
@@ -372,6 +378,8 @@ set_target_properties(arraw-app-core PROPERTIES AUTOMOC ON)
 add_executable(arraw-ui src/app/main.cpp
         src/app/ui/CullingActions.cpp
         src/app/ui/CullingActions.h
+        src/app/ui/CurveEditor.cpp
+        src/app/ui/CurveEditor.h
         src/app/ui/DevelopPanel.cpp
         src/app/ui/DevelopPanel.h
         src/app/ui/ExportDialog.cpp

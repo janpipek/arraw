@@ -1,5 +1,6 @@
 #include "DevelopPanel.h"
 
+#include "CurveEditor.h"
 #include "SettingPresentation.h"
 #include "SettingSlider.h"
 #include "WhiteBalanceChoice.h"
@@ -8,6 +9,7 @@
 
 #include <QButtonGroup>
 #include <QComboBox>
+#include <QEvent>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -16,6 +18,7 @@
 #include <QStackedWidget>
 #include <QVBoxLayout>
 
+#include <algorithm>
 #include <array>
 #include <type_traits>
 
@@ -34,11 +37,7 @@ SettingSlider* DevelopPanel::addRow(std::string_view key, QWidget* group) {
     rows_.push_back(row);
     connect(row, &SettingSlider::editStarted, this, [this, row] {
         // One edit at a time: another row's pending edit ends before this one begins.
-        for (SettingSlider* other : rows_) {
-            if (other != row) {
-                other->finishPendingEdit();
-            }
-        }
+        finishOtherEdits(row);
         emit editStarted();
     });
     connect(row, &SettingSlider::editFinished, this, &DevelopPanel::editFinished);
@@ -72,8 +71,70 @@ QWidget* DevelopPanel::buildTreatmentRow() {
     return row;
 }
 
+void DevelopPanel::finishOtherEdits(const QObject* keep) {
+    for (SettingSlider* other : rows_) {
+        if (other != keep) {
+            other->finishPendingEdit();
+        }
+    }
+    if (curveEditor_ != nullptr && curveEditor_ != keep) {
+        curveEditor_->finishPendingEdit();
+    }
+}
+
+QWidget* DevelopPanel::buildToneCurveGroup() {
+    auto* group = new QGroupBox(tr("Tone Curve"), this);
+    auto* groupLayout = new QVBoxLayout(group);
+
+    curveEditor_ = new CurveEditor(group);
+    curveEditor_->setObjectName("curveEditor");
+
+    auto* channelRow = new QHBoxLayout;
+    channelRow->setSpacing(2);
+    auto* channels = new QButtonGroup(group);
+    const std::array<QString, curveChannelCount> titles{tr("Luma"), tr("Red"), tr("Green"),
+                                                        tr("Blue")};
+    for (std::size_t index = 0; index < curveChannelCount; ++index) {
+        auto* button = new QPushButton(titles[index], group);
+        button->setCheckable(true);
+        button->setChecked(index == 0);
+        channels->addButton(button, static_cast<int>(index));
+        channelRow->addWidget(button, 1);
+    }
+    auto* reset = new QPushButton(tr("Reset"), group);
+    reset->setObjectName("curveReset");
+    reset->setToolTip(tr("Straightens the curve of the channel shown."));
+    channelRow->addWidget(reset);
+    groupLayout->addLayout(channelRow);
+    groupLayout->addWidget(curveEditor_);
+
+    auto* readout = new QLabel(group);
+    readout->setObjectName("curveReadout");
+    readout->setAlignment(Qt::AlignCenter);
+    // Room for a line whether or not a point is selected, so the panel does not jump.
+    readout->setMinimumHeight(readout->fontMetrics().height());
+    groupLayout->addWidget(readout);
+    connect(curveEditor_, &CurveEditor::readoutChanged, readout, &QLabel::setText);
+    // Whether the histogram is worth counting follows whether the editor is on screen.
+    curveEditor_->installEventFilter(this);
+
+    // The channel is view state: choosing one is not an edit.
+    connect(channels, &QButtonGroup::idClicked, curveEditor_, [this](int id) {
+        curveEditor_->setChannel(curveChannels[static_cast<std::size_t>(id)]);
+    });
+    connect(reset, &QPushButton::clicked, curveEditor_, &CurveEditor::resetChannel);
+    connect(curveEditor_, &CurveEditor::editStarted, this, [this] {
+        finishOtherEdits(curveEditor_);
+        emit editStarted();
+    });
+    connect(curveEditor_, &CurveEditor::curveEdited, this, &DevelopPanel::applyCurveEdit);
+    connect(curveEditor_, &CurveEditor::editFinished, this, &DevelopPanel::editFinished);
+    connect(curveEditor_, &CurveEditor::focusReleased, this, &DevelopPanel::focusReleased);
+    return group;
+}
+
 QWidget* DevelopPanel::buildColorGroup() {
-    auto* group = new QGroupBox(tr("Color"), this);
+    auto* group = new QGroupBox(tr("Colour"), this);
     new QVBoxLayout(group);
     for (const std::string_view key : colorKeys()) {
         addRow(key, group);
@@ -81,8 +142,17 @@ QWidget* DevelopPanel::buildColorGroup() {
     return group;
 }
 
+QWidget* DevelopPanel::buildColorGradingGroup() {
+    auto* group = new QGroupBox(tr("Colour Grading"), this);
+    new QVBoxLayout(group);
+    for (const std::string_view key : colorGradingKeys()) {
+        addRow(key, group);
+    }
+    return group;
+}
+
 QWidget* DevelopPanel::buildHslGroup() {
-    auto* group = new QGroupBox(tr("HSL / Color Mix"), this);
+    auto* group = new QGroupBox(tr("HSL / Colour Mix"), this);
     auto* groupLayout = new QVBoxLayout(group);
 
     auto* tabRow = new QHBoxLayout;
@@ -116,7 +186,7 @@ QWidget* DevelopPanel::buildBlackAndWhiteGroup() {
     auto* group = new QGroupBox(tr("Black && White"), this);
     // On the group, so it shows over the title; the rows keep their own tips.
     group->setToolTip(tr("How each colour becomes grey: drag a band darker or lighter."));
-    auto* groupLayout = new QVBoxLayout(group);
+    new QVBoxLayout(group);
     for (const std::string_view key : blackAndWhiteKeys()) {
         addRow(key, group);
     }
@@ -162,6 +232,7 @@ DevelopPanel::DevelopPanel(QWidget* parent) : QWidget(parent) {
         addRow(key, tone);
     }
     layout->addWidget(tone);
+    layout->addWidget(buildToneCurveGroup());
 
     colorGroup_ = buildColorGroup();
     hslGroup_ = buildHslGroup();
@@ -169,8 +240,18 @@ DevelopPanel::DevelopPanel(QWidget* parent) : QWidget(parent) {
     layout->addWidget(colorGroup_);
     layout->addWidget(hslGroup_);
     layout->addWidget(blackAndWhiteGroup_);
+    layout->addWidget(buildColorGradingGroup());
     layout->addStretch(1);
+    // One label column for every row, so that the grooves line up across groups.
+    int labelWidth = 0;
+    for (const SettingSlider* row : rows_) {
+        labelWidth = std::max(labelWidth, row->labelWidthHint());
+    }
+    for (SettingSlider* row : rows_) {
+        row->setLabelWidth(labelWidth);
+    }
     showState(shown_, PanelContext{});
+    watchViewport();
 }
 
 void DevelopPanel::showState(const DevelopState& state, const PanelContext& context) {
@@ -199,6 +280,8 @@ void DevelopPanel::showState(const DevelopState& state, const PanelContext& cont
     hslGroup_->setVisible(visible.hsl);
     blackAndWhiteGroup_->setVisible(visible.blackAndWhiteMix);
 
+    curveEditor_->setCurves(shown_.settings.toneCurve);
+
     const ColourTemperature light = shownLight(color, context.asShot.value_or(fallbackLight));
     for (SettingSlider* row : rows_) {
         const FieldDescriptor& descriptor = *findDescriptor(row->key());
@@ -225,9 +308,77 @@ void DevelopPanel::setPicking(bool picking) {
 }
 
 void DevelopPanel::finishPendingEdit() {
-    for (SettingSlider* row : rows_) {
-        row->finishPendingEdit();
+    finishOtherEdits(nullptr);
+}
+
+void DevelopPanel::showCurveHistogram(const CurveHistogram& histogram) {
+    curveEditor_->setHistogram(histogram);
+}
+
+void DevelopPanel::clearCurveHistogram() {
+    curveEditor_->setHistogram(std::nullopt);
+}
+
+void DevelopPanel::applyCurveEdit(CurveChannel channel, const ToneCurve& curve) {
+    DevelopState next = shown_;
+    curveOf(next.settings.toneCurve, channel) = curve;
+    emit stateEdited(next);
+}
+
+bool DevelopPanel::curveHistogramWanted() const {
+    return curveHistogramWanted_;
+}
+
+void DevelopPanel::updateCurveHistogramWanted() {
+    if (curveEditor_ == nullptr) {
+        return; // Still being built.
     }
+    // Hidden with the dock or a hidden ancestor, or scrolled out of the
+    // scroll area: either way no part of it is on screen.
+    const bool wanted = curveEditor_->isVisible() && !curveEditor_->visibleRegion().isEmpty();
+    if (wanted != curveHistogramWanted_) {
+        curveHistogramWanted_ = wanted;
+        emit curveHistogramWantedChanged(wanted);
+    }
+}
+
+bool DevelopPanel::event(QEvent* event) {
+    switch (event->type()) {
+    case QEvent::Move:   // Scrolling moves the panel inside the scroll area's viewport.
+    case QEvent::Resize: // So does a resize, and it changes what fits.
+    case QEvent::Show:
+    case QEvent::Hide:
+        updateCurveHistogramWanted();
+        break;
+    case QEvent::ParentChange:
+        watchViewport();
+        break;
+    default:
+        break;
+    }
+    return QWidget::event(event);
+}
+
+bool DevelopPanel::eventFilter(QObject* watched, QEvent* event) {
+    const QEvent::Type type = event->type();
+    if ((watched == curveEditor_ &&
+         (type == QEvent::Show || type == QEvent::Hide || type == QEvent::Paint)) ||
+        (watched == viewport_ && type == QEvent::Resize)) {
+        // A paint is how an editor scrolled back into view first shows it.
+        updateCurveHistogramWanted();
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
+void DevelopPanel::watchViewport() {
+    if (viewport_ != nullptr) {
+        viewport_->removeEventFilter(this);
+    }
+    viewport_ = parentWidget();
+    if (viewport_ != nullptr) {
+        viewport_->installEventFilter(this);
+    }
+    updateCurveHistogramWanted();
 }
 
 void DevelopPanel::applyEdit(const SettingSlider& row, double value) {

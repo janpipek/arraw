@@ -28,6 +28,10 @@ namespace arraw::app {
 /// own: the panel shows a fallback with setValue() when the setting is absent,
 /// and a reset reports valueCleared() instead of a value, for the panel to
 /// apply as "absent again".
+///
+/// A setting whose presentation asks for a painted track (SliderTrack) gets
+/// a groove showing what its values mean, such as the hues of a hue angle,
+/// with the style's handle drawn over it.
 class SettingSlider : public QWidget {
     Q_OBJECT
     Q_DISABLE_COPY_MOVE(SettingSlider)
@@ -43,6 +47,14 @@ public:
     [[nodiscard]] std::string_view key() const noexcept {
         return key_;
     }
+
+    /// @brief Gives the width the label needs for its text.
+    [[nodiscard]] int labelWidthHint() const;
+
+    /// @brief Sets the width of the label column, so that the rows of a panel line up.
+    /// @param width Width in pixels; at least ::arraw::app::SettingSlider::labelWidthHint
+    /// for the text to fit.
+    void setLabelWidth(int width);
 
     /// @brief Shows a value without emitting any signal.
     /// @param value Value in the setting's units.

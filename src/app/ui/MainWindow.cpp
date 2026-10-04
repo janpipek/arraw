@@ -302,6 +302,10 @@ void MainWindow::buildDevelopDock() {
         });
     });
     connect(developPanel_, &DevelopPanel::pickToggled, this, &MainWindow::setPicking);
+    // The curve histogram costs a render (ADR 035): counted only while the editor shows.
+    connect(developPanel_, &DevelopPanel::curveHistogramWantedChanged, this,
+            [this](bool wanted) { previewRenderer_.setCurveHistogramWanted(wanted); });
+    previewRenderer_.setCurveHistogramWanted(developPanel_->curveHistogramWanted());
     // Enter or Esc in a spin box ends the typing: the arrow keys are the window's again.
     connect(developPanel_, &DevelopPanel::focusReleased, photoView_,
             qOverload<>(&QWidget::setFocus));
@@ -904,6 +908,12 @@ void MainWindow::showResult(const PreviewResult& result) {
     if (result.request < firstRequest_) {
         return;
     }
+    // A recounted curve histogram comes once requests pause, for the newest
+    // state rendered, and on a result of its own.
+    if (result.curveHistogram) {
+        developPanel_->showCurveHistogram(*result.curveHistogram);
+        return;
+    }
     // A refreshed fallback follows the render it belongs to, so it is never
     // older than what is shown.
     if (!result.image && result.background) {
@@ -978,6 +988,8 @@ void MainWindow::showPhoto(Photo photo) {
     photoView_->resetView();
     updateZoomControls();
     previewRenderer_.setSource(std::move(decoded));
+    // The previous photograph's histogram is no histogram of this one.
+    developPanel_->clearCurveHistogram();
     // Results of the previous photograph are still on their way, or in progress.
     firstRequest_ = latestRequest_ + 1;
     developDock_->setEnabled(true);

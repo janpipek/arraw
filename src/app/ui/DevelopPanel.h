@@ -1,5 +1,8 @@
 #pragma once
 
+#include "CurveEditing.h"
+
+#include <CurveHistogram.h>
 #include <DevelopState.h>
 #include <WhiteBalance.h>
 
@@ -15,6 +18,7 @@ class QStackedWidget;
 
 namespace arraw::app {
 
+class CurveEditor;
 class SettingSlider;
 
 /// @brief What the panel needs to know about the photograph, besides its state.
@@ -53,6 +57,19 @@ public:
     /// that edit committed rather than open.
     void finishPendingEdit();
 
+    /// @brief Shows the curve-input histogram behind the tone curves.
+    /// @param histogram Counts for the state being edited (ADR 035).
+    void showCurveHistogram(const CurveHistogram& histogram);
+
+    /// @brief Clears the histogram behind the tone curves, as for another photograph.
+    void clearCurveHistogram();
+
+    /// @brief Tells whether the curve editor is on screen, so its histogram worth counting.
+    ///
+    /// False while the panel or the Tone Curve group is hidden, and while the
+    /// editor is scrolled wholly out of the scroll area the panel sits in.
+    [[nodiscard]] bool curveHistogramWanted() const;
+
 signals:
     /// @brief Announces that an edit begins.
     void editStarted();
@@ -71,6 +88,17 @@ signals:
     /// @brief Asks for the keyboard focus to go back to the photograph.
     void focusReleased();
 
+    /// @brief Announces that curveHistogramWanted() changed.
+    /// @param wanted Whether the curve editor is now on screen.
+    void curveHistogramWantedChanged(bool wanted);
+
+protected:
+    /// @brief Follows moves, resizes, showing and hiding, which change what of the editor shows.
+    bool event(QEvent* event) override;
+
+    /// @brief Follows the editor's showing, hiding and painting, and the viewport's resizes.
+    bool eventFilter(QObject* watched, QEvent* event) override;
+
 private:
     /// @brief Builds the Treatment row, Colour and B&W.
     QWidget* buildTreatmentRow();
@@ -78,8 +106,15 @@ private:
     /// @brief Builds the White Balance group.
     QWidget* buildWhiteBalanceGroup();
 
+    /// @brief Builds the Tone Curve group: the channel switch, a reset and the curve editor.
+    QWidget* buildToneCurveGroup();
+
     /// @brief Builds the Color group, Saturation and Vibrance.
     QWidget* buildColorGroup();
+
+    /// @brief Builds the Colour Grading group: a hue and saturation per tonal zone, Balance,
+    /// Blending.
+    QWidget* buildColorGradingGroup();
 
     /// @brief Builds the HSL box, a page of band rows for each of Hue, Saturation and Luminance.
     QWidget* buildHslGroup();
@@ -99,8 +134,21 @@ private:
     /// @brief Writes a cleared optional value into the last shown state and reports it.
     void applyClear(const SettingSlider& row);
 
+    /// @brief Writes an edited curve into the last shown state and reports it.
+    void applyCurveEdit(CurveChannel channel, const ToneCurve& curve);
+
+    /// @brief Ends every pending edit but the one of a row or the curve editor.
+    /// @param keep Row or editor whose edit begins; nullptr ends them all.
+    void finishOtherEdits(const QObject* keep);
+
     /// @brief Reports a combo entry the user chose, as one complete edit.
     void applyChoice(int index);
+
+    /// @brief Works out curveHistogramWanted() again, announcing a change.
+    void updateCurveHistogramWanted();
+
+    /// @brief Watches the parent's resizes: the viewport, when the panel is in a scroll area.
+    void watchViewport();
 
     /// Last state shown, kept only to build the next one.
     DevelopState shown_;
@@ -111,9 +159,16 @@ private:
     QPushButton* pickButton_ = nullptr;
 
     QButtonGroup* treatment_ = nullptr;
+    CurveEditor* curveEditor_ = nullptr;
     QWidget* colorGroup_ = nullptr;
     QWidget* hslGroup_ = nullptr;
     QWidget* blackAndWhiteGroup_ = nullptr;
+
+    /// Parent watched for resizes, which change how much of the panel shows.
+    QWidget* viewport_ = nullptr;
+
+    /// Whether the curve editor was on screen when last worked out.
+    bool curveHistogramWanted_ = false;
 };
 
 } // namespace arraw::app

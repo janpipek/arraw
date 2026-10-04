@@ -1,7 +1,9 @@
 #include "PreviewRenderer.h"
 #include "support/TestImages.h"
 
+#include <CurveHistogram.h>
 #include <DevelopSettings.h>
+#include <ImagePyramid.h>
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -11,6 +13,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <thread>
 #include <vector>
 
 using namespace arraw;
@@ -32,7 +35,9 @@ public:
                 if (closed_) {
                     ++lateCalls_;
                 }
-                if (!result.image && result.background) {
+                if (result.curveHistogram) {
+                    histograms_.push_back(std::move(result));
+                } else if (!result.image && result.background) {
                     backgrounds_.push_back(std::move(result));
                 } else {
                     results_.push_back(std::move(result));
@@ -57,6 +62,14 @@ public:
         });
     }
 
+    /// Waits until a recounted curve histogram for @p id, or a later one, has arrived.
+    [[nodiscard]] bool waitForHistogram(std::uint64_t id) {
+        std::unique_lock lock(mutex_);
+        return changed_.wait_for(lock, timeout, [&] {
+            return !histograms_.empty() && histograms_.back().request >= id;
+        });
+    }
+
     /// Makes any later callback count as late.
     void close() {
         const std::scoped_lock lock(mutex_);
@@ -74,6 +87,12 @@ public:
         return backgrounds_;
     }
 
+    /// Recounted curve histograms, apart from the renders.
+    [[nodiscard]] std::vector<app::PreviewResult> histograms() {
+        const std::scoped_lock lock(mutex_);
+        return histograms_;
+    }
+
     [[nodiscard]] int lateCalls() {
         const std::scoped_lock lock(mutex_);
         return lateCalls_;
@@ -84,6 +103,7 @@ private:
     std::condition_variable changed_;
     std::vector<app::PreviewResult> results_;
     std::vector<app::PreviewResult> backgrounds_;
+    std::vector<app::PreviewResult> histograms_;
     bool closed_ = false;
     int lateCalls_ = 0;
 };
@@ -572,4 +592,140 @@ TEST_CASE("Desktop CPU preference overrides automatic preview rendering",
     REQUIRE(result.error.empty());
     REQUIRE_FALSE(result.onGpu);
     REQUIRE(result.fallbackReason.empty());
+}
+
+TEST_CASE("The curve histogram is counted once requests pause", "[app][preview][histogram]") {
+    Collector collector;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
+    renderer.setCurveHistogramWanted(true);
+    const auto source = makeLargeSource();
+    renderer.setSource(source);
+    DevelopState state;
+    state.settings.tone.exposure = 0.4F;
+    const auto id = renderer.request(state, app::PreviewView::wholeFrame({300, 300}));
+    REQUIRE(collector.waitForHistogram(id));
+
+    const auto histograms = collector.histograms();
+    REQUIRE(histograms.size() == 1);
+    const app::PreviewResult& delivered = histograms.back();
+    REQUIRE(delivered.request == id);
+    REQUIRE_FALSE(delivered.image.has_value());
+    REQUIRE_FALSE(delivered.background.has_value());
+    // The level that covers the CPU's own histogram request, whatever the
+    // view's: 2048x1024 fits 512 at level 2, not at level 1 as the GPU's 1024 would.
+    const ImageBuffer level2 = halved(halved(*source));
+    REQUIRE(*delivered.curveHistogram ==
+            curveHistogram(level2, state, app::cpuCurveHistogramRequest));
+    REQUIRE(*delivered.curveHistogram != curveHistogram(halved(*source), state));
+}
+
+TEST_CASE("A curve edit keeps the histogram, an exposure edit recounts it",
+          "[app][preview][histogram]") {
+    Collector collector;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
+    renderer.setCurveHistogramWanted(true);
+    renderer.setSource(makeSource());
+    const app::PreviewView view = app::PreviewView::wholeFrame({200, 200});
+    DevelopState state;
+    auto id = renderer.request(state, view);
+    REQUIRE(collector.waitForHistogram(id));
+    const CurveHistogram first = *collector.histograms().back().curveHistogram;
+
+    // A curve drag: several renders, each followed by a pause.
+    for (const float y : {0.55F, 0.6F, 0.7F}) {
+        state.settings.toneCurve.luma.points = {{0.0F, 0.0F}, {0.5F, y}, {1.0F, 1.0F}};
+        id = renderer.request(state, view);
+        REQUIRE(collector.waitFor(id));
+        // Well past the pause: a recount, had one been started, would come
+        // before the next request is served.
+        std::this_thread::sleep_for(400ms);
+    }
+    // A zoom changes the view, not the histogram.
+    id = renderer.request(
+        state, app::PreviewView{.region = QRect(10, 10, 100, 60), .outputSize = {100, 60}});
+    REQUIRE(collector.waitFor(id));
+    std::this_thread::sleep_for(400ms);
+
+    state.settings.tone.exposure = 1.0F;
+    id = renderer.request(state, view);
+    REQUIRE(collector.waitForHistogram(id));
+    const auto histograms = collector.histograms();
+    REQUIRE(histograms.size() == 2);
+    REQUIRE(histograms.back().request == id);
+    REQUIRE(*histograms.back().curveHistogram != first);
+}
+
+TEST_CASE("A new source recounts the histogram", "[app][preview][histogram]") {
+    Collector collector;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
+    renderer.setCurveHistogramWanted(true);
+    renderer.setSource(makeSource());
+    auto id = renderer.request({}, app::PreviewView::wholeFrame({200, 200}));
+    REQUIRE(collector.waitForHistogram(id));
+
+    renderer.setSource(makeSource());
+    id = renderer.request({}, app::PreviewView::wholeFrame({200, 200}));
+    REQUIRE(collector.waitForHistogram(id));
+    REQUIRE(collector.histograms().size() == 2);
+}
+
+TEST_CASE("No histogram is counted while none is wanted", "[app][preview][histogram]") {
+    Collector collector;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
+    renderer.setSource(makeSource());
+    const app::PreviewView view = app::PreviewView::wholeFrame({200, 200});
+    auto id = renderer.request({}, view);
+    REQUIRE(collector.waitFor(id));
+    std::this_thread::sleep_for(400ms);
+    REQUIRE(collector.histograms().empty());
+
+    // Wanted, then not wanted again before an exposure edit: still nothing.
+    renderer.setCurveHistogramWanted(true);
+    REQUIRE(collector.waitForHistogram(id));
+    renderer.setCurveHistogramWanted(false);
+    DevelopState state;
+    state.settings.tone.exposure = 1.0F;
+    id = renderer.request(state, view);
+    REQUIRE(collector.waitFor(id));
+    std::this_thread::sleep_for(400ms);
+    REQUIRE(collector.histograms().size() == 1);
+}
+
+TEST_CASE("Becoming wanted counts once for the state last rendered", "[app][preview][histogram]") {
+    Collector collector;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
+    const auto source = makeSource();
+    renderer.setSource(source);
+    DevelopState state;
+    state.settings.tone.exposure = 0.7F;
+    const auto id = renderer.request(state, app::PreviewView::wholeFrame({200, 200}));
+    REQUIRE(collector.waitFor(id));
+    std::this_thread::sleep_for(400ms);
+    REQUIRE(collector.histograms().empty());
+
+    // No new request: the worker counts for the last one at the next pause.
+    renderer.setCurveHistogramWanted(true);
+    REQUIRE(collector.waitForHistogram(id));
+    const auto histograms = collector.histograms();
+    REQUIRE(histograms.size() == 1);
+    REQUIRE(histograms.back().request == id);
+    REQUIRE(*histograms.back().curveHistogram ==
+            curveHistogram(*source, state, app::cpuCurveHistogramRequest));
+
+    // Hidden and shown again with nothing changed: the histogram is still current.
+    renderer.setCurveHistogramWanted(false);
+    renderer.setCurveHistogramWanted(true);
+    std::this_thread::sleep_for(400ms);
+    REQUIRE(collector.histograms().size() == 1);
+    REQUIRE(collector.results().size() == 1);
+}
+
+TEST_CASE("Becoming wanted with no render yet counts nothing", "[app][preview][histogram]") {
+    Collector collector;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
+    renderer.setSource(makeSource());
+    renderer.setCurveHistogramWanted(true);
+    std::this_thread::sleep_for(300ms);
+    REQUIRE(collector.histograms().empty());
+    REQUIRE(collector.results().empty());
 }

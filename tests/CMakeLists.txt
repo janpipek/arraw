@@ -20,6 +20,8 @@ add_executable(arraw-tests
         test_AppSettings.cpp
         test_Cli.cpp
         test_ColorEncoding.cpp
+        test_CurveEditing.cpp
+        test_CurveHistogramRefresh.cpp
         test_Develop.cpp
         test_ToneCurve.cpp
         test_DevelopState.cpp
@@ -50,6 +52,7 @@ add_executable(arraw-tests
         test_RawImport.cpp
         test_SettingCodec.cpp
         test_SettingDescriptors.cpp
+        test_OklabHue.cpp
         test_SettingPresentation.cpp
         test_SettingsJson.cpp
         test_Shot.cpp
@@ -93,6 +96,15 @@ arraw_deploy_qt_plugins(arraw-tests)
 # Widget behavior runs separately because the core suite owns a QCoreApplication.
 add_executable(arraw-widget-tests
         test_SettingsDialog.cpp
+        test_CurveEditor.cpp
+        test_DevelopPanel.cpp
+        test_SettingSlider.cpp
+        ../src/app/ui/CurveEditor.cpp
+        ../src/app/ui/CurveEditor.h
+        ../src/app/ui/DevelopPanel.cpp
+        ../src/app/ui/DevelopPanel.h
+        ../src/app/ui/SettingSlider.cpp
+        ../src/app/ui/SettingSlider.h
         ../src/app/ui/SettingsDialog.cpp
         ../src/app/ui/SettingsDialog.h)
 arraw_enable_warnings(arraw-widget-tests)

@@ -1,3 +1,4 @@
+#include "CurveEditing.h"
 #include "SettingPresentation.h"
 
 #include <SettingDescriptors.h>
@@ -23,16 +24,8 @@ using Catch::Approx;
 namespace {
 
 /// Settings that no panel shows yet; deciding where a new one goes is deliberate.
-constexpr std::array<std::string_view, 18> notShownYet{
-    "rotation",          "flipHorizontal",
-    "flipVertical",      "straighten",
-    "cropRectangle",     "cropAspect",
-    "toneCurveLuma",     "toneCurveRed",
-    "toneCurveGreen",    "toneCurveBlue",
-    "gradeShadowHue",    "gradeShadowSaturation",
-    "gradeMidtoneHue",   "gradeMidtoneSaturation",
-    "gradeHighlightHue", "gradeHighlightSaturation",
-    "gradeBalance",      "gradeBlending"};
+constexpr std::array<std::string_view, 6> notShownYet{
+    "rotation", "flipHorizontal", "flipVertical", "straighten", "cropRectangle", "cropAspect"};
 
 /// Settings the Treatment buttons edit; they have no slider row.
 constexpr std::array<std::string_view, 1> shownByTreatment{"convertToGrayscale"};
@@ -42,6 +35,7 @@ std::vector<std::string_view> slidingKeys() {
     std::vector<std::string_view> keys(toneKeys().begin(), toneKeys().end());
     keys.insert(keys.end(), whiteBalanceKeys().begin(), whiteBalanceKeys().end());
     keys.insert(keys.end(), colorKeys().begin(), colorKeys().end());
+    keys.insert(keys.end(), colorGradingKeys().begin(), colorGradingKeys().end());
     for (int page = 0; page < hslPageCount; ++page) {
         keys.insert(keys.end(), hslKeys(page).begin(), hslKeys(page).end());
     }
@@ -86,6 +80,7 @@ TEST_CASE("Every setting is either shown or listed as not shown yet", "[SettingP
         const std::vector<std::string_view> sliding = slidingKeys();
         const bool shown =
             std::ranges::find(sliding, descriptor.key) != sliding.end() ||
+            std::ranges::find(toneCurveKeys(), descriptor.key) != toneCurveKeys().end() ||
             std::ranges::find(shownByCombo, descriptor.key) != shownByCombo.end() ||
             std::ranges::find(shownByTreatment, descriptor.key) != shownByTreatment.end();
         const bool listed = std::ranges::find(notShownYet, descriptor.key) != notShownYet.end();
@@ -236,7 +231,7 @@ TEST_CASE("Band rows are named for their band and move in whole units", "[Settin
     }
 }
 
-TEST_CASE("Black and white swaps the Color and HSL groups for the mix", "[SettingPresentation]") {
+TEST_CASE("Black and white swaps the Colour and HSL groups for the mix", "[SettingPresentation]") {
     const TreatmentVisibility colour = visibleGroups(false);
     CHECK(colour.color);
     CHECK(colour.hsl);
@@ -246,4 +241,24 @@ TEST_CASE("Black and white swaps the Color and HSL groups for the mix", "[Settin
     CHECK_FALSE(grey.color);
     CHECK_FALSE(grey.hsl);
     CHECK(grey.blackAndWhiteMix);
+}
+
+TEST_CASE("The curve editor's keys are curves with no slider row", "[SettingPresentation]") {
+    REQUIRE(toneCurveKeys().size() == curveChannelCount);
+    for (const std::string_view key : toneCurveKeys()) {
+        CAPTURE(key);
+        const FieldDescriptor* descriptor = findDescriptor(key);
+        REQUIRE(descriptor != nullptr);
+        CHECK_FALSE(descriptor->range.has_value());
+        CHECK_THROWS_AS(presentationOf(key), std::out_of_range);
+    }
+}
+
+TEST_CASE("Only the grading hues paint a hue track", "[SettingPresentation]") {
+    for (const std::string_view key : slidingKeys()) {
+        CAPTURE(key);
+        const bool gradeHue =
+            key == "gradeShadowHue" || key == "gradeMidtoneHue" || key == "gradeHighlightHue";
+        CHECK((presentationOf(key).track == SliderTrack::OklabHue) == gradeHue);
+    }
 }

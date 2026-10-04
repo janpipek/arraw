@@ -268,7 +268,7 @@ committed on its own. Each ends with an ADR and green
    perceptual coordinate, computed on the host from the tap at preview
    resolution. Exposed through the public API and Python; the CLI may print it
    later.
-4. **GUI for 1–3.** Curve editor widget (painted, Qt Widgets; add, drag and
+4. **GUI for 1–3.** Done (ADR 036). Curve editor widget (painted, Qt Widgets; add, drag and
    remove points, channel switch, histogram behind it, refreshed when the
    preview pauses), Colour Grading group.
 5. **Effects.** `Stage::Effects`, vignette, the grain seam with the

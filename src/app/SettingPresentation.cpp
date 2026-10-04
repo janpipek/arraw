@@ -34,6 +34,13 @@ constexpr std::array<std::string_view, 8> blackAndWhiteKeyList{
     "grayRed",  "grayOrange", "grayYellow", "grayGreen",
     "grayAqua", "grayBlue",   "grayPurple", "grayMagenta"};
 
+constexpr std::array<std::string_view, 8> colorGradingKeyList{
+    "gradeShadowHue",    "gradeShadowSaturation",    "gradeMidtoneHue", "gradeMidtoneSaturation",
+    "gradeHighlightHue", "gradeHighlightSaturation", "gradeBalance",    "gradeBlending"};
+
+constexpr std::array<std::string_view, 4> toneCurveKeyList{"toneCurveLuma", "toneCurveRed",
+                                                           "toneCurveGreen", "toneCurveBlue"};
+
 QString tr(const char* text) {
     return QCoreApplication::translate("SettingPresentation", text);
 }
@@ -130,6 +137,47 @@ const std::vector<Row>& table() {
             add("gray", band.name, band.label,
                 "How light these colours come out in black and white.");
         }
+        struct Zone {
+            const char* key;
+            const char* hueName;
+            const char* saturationName;
+        };
+        const std::array<Zone, 3> zones{
+            {{"Shadow", QT_TR_NOOP("Shadows hue"), QT_TR_NOOP("Shadows saturation")},
+             {"Midtone", QT_TR_NOOP("Midtones hue"), QT_TR_NOOP("Midtones saturation")},
+             {"Highlight", QT_TR_NOOP("Highlights hue"), QT_TR_NOOP("Highlights saturation")}}};
+        for (const Zone& zone : zones) {
+            const FieldDescriptor* hue = findDescriptor(std::string("grade") + zone.key + "Hue");
+            const FieldDescriptor* saturation =
+                findDescriptor(std::string("grade") + zone.key + "Saturation");
+            built.push_back({hue->key,
+                             {tr(zone.hueName), tr("\u00B0"), 0, 1.0,
+                              tr("The hue this tonal zone is tinted with, as an angle around the "
+                                 "colour wheel."),
+                              SliderScale::Linear, SliderTrack::OklabHue}});
+            built.push_back({saturation->key,
+                             {tr(zone.saturationName),
+                              {},
+                              0,
+                              1.0,
+                              tr("How strongly this tonal zone is tinted; zero leaves it "
+                                 "untinted.")}});
+        }
+        built.push_back(
+            {"gradeBalance",
+             {tr("Balance"),
+              {},
+              0,
+              1.0,
+              tr("Gives more of the tonal range to the Shadows tint (negative) or to the "
+                 "Highlights tint (positive).")}});
+        built.push_back({"gradeBlending",
+                         {tr("Blending"),
+                          {},
+                          0,
+                          1.0,
+                          tr("How softly the three tints melt into each other; lower is "
+                             "sharper.")}});
         return built;
     }();
     return rows;
@@ -158,6 +206,14 @@ std::span<const std::string_view> hslKeys(int page) {
 
 std::span<const std::string_view> blackAndWhiteKeys() noexcept {
     return blackAndWhiteKeyList;
+}
+
+std::span<const std::string_view> colorGradingKeys() noexcept {
+    return colorGradingKeyList;
+}
+
+std::span<const std::string_view> toneCurveKeys() noexcept {
+    return toneCurveKeyList;
 }
 
 const SettingPresentation& presentationOf(std::string_view key) {
