@@ -4,7 +4,7 @@ import logging
 import pytest
 
 import arraw
-from test_photo import find, same, sample
+from test_photo import SOLE_VALUE, find, same, sample
 
 
 def arraw_records(caplog, level=logging.WARNING):
@@ -29,8 +29,9 @@ def test_default_document_shape():
 @pytest.mark.parametrize("descriptor", arraw.setting_descriptors(), ids=lambda d: d.name)
 def test_round_trip_of_every_descriptor(descriptor):
     settings = build(**{descriptor.name: sample(descriptor)})
-    # The one grain model there is is the default, so it has nothing else to round-trip.
-    assert settings != arraw.DevelopSettings() or descriptor.name == "grain_model"
+    # The one grain model and luminance filter there are are the defaults, so they have
+    # nothing else to round-trip.
+    assert settings != arraw.DevelopSettings() or descriptor.name in SOLE_VALUE
     back = arraw.DevelopSettings.from_json(settings.to_json())
     for d in arraw.setting_descriptors():
         assert same(find(back, d.name), find(settings, d.name)), d.name

@@ -18,6 +18,18 @@ CENTER = {
     "tone_curve_blue": arraw.ToneCurve([(0.0, 0.0), (0.2, 0.1), (0.8, 0.9), (1.0, 1.0)]),
     # The one model there is, so the default: nothing else is valid yet.
     "grain_model": arraw.GrainModel.VALUE_NOISE,
+    # Likewise the one luminance noise filter.
+    "luminance_noise_filter": arraw.LuminanceNoiseFilter.BILATERAL,
+}
+# The only rows whose one valid value is their default.
+SOLE_VALUE = {"grain_model", "luminance_noise_filter"}
+# Flat keyword to field of DevelopSettings.noise_reduction.
+NOISE_REDUCTION = {
+    "luminance_noise_reduction": "luminance",
+    "luminance_noise_detail": "luminance_detail",
+    "luminance_noise_filter": "luminance_filter",
+    "color_noise_reduction": "color",
+    "color_noise_smoothness": "color_smoothness",
 }
 # Above 2**31, so that a signed 32-bit integer somewhere would show.
 WHOLE = {"grain_seed": 3000000000}
@@ -44,6 +56,8 @@ def leaves(settings):
 
 
 def find(settings, name):
+    if name in NOISE_REDUCTION:
+        return getattr(settings.noise_reduction, NOISE_REDUCTION[name])
     for kind in ("hue", "saturation", "luminance"):
         for band in BANDS:
             if name == f"{kind}_{band}":
@@ -91,7 +105,7 @@ def test_every_descriptor_name_lands_in_its_field(photo, descriptor):
     changed = photo.with_(**{descriptor.name: value})
     after = leaves(changed.state.settings)
     assert same(after[descriptor.name], value)
-    if descriptor.name != "grain_model":
+    if descriptor.name not in SOLE_VALUE:
         assert after[descriptor.name] != default[descriptor.name]
     for name in default:
         if name != descriptor.name:

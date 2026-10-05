@@ -158,9 +158,10 @@ TEST_CASE("The colour settings belong to the pointwise group of the plan", "[col
     };
     for (const ProcessingPlan& plan : changed) {
         REQUIRE(plan != base);
-        REQUIRE(std::get<0>(stagesOf(plan)) != std::get<0>(stagesOf(base)));
-        REQUIRE(std::get<1>(stagesOf(plan)) == std::get<1>(stagesOf(base)));
+        REQUIRE(std::get<0>(stagesOf(plan)) == std::get<0>(stagesOf(base)));
+        REQUIRE(std::get<1>(stagesOf(plan)) != std::get<1>(stagesOf(base)));
         REQUIRE(std::get<2>(stagesOf(plan)) == std::get<2>(stagesOf(base)));
+        REQUIRE(std::get<3>(stagesOf(plan)) == std::get<3>(stagesOf(base)));
         REQUIRE_FALSE(prefixMatches(plan, base, Stage::Pointwise));
         REQUIRE_FALSE(prefixMatches(plan, base, Stage::Resize));
     }

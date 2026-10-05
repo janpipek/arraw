@@ -1,5 +1,8 @@
+#include "ProcessingPlan.h"
 #include "support/FieldCount.h"
+#include "support/Fixtures.h"
 
+#include <ImageImport.h>
 #include <Photo.h>
 #include <SettingDescriptors.h>
 
@@ -7,6 +10,7 @@
 
 #include <cctype>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <set>
@@ -44,6 +48,9 @@ void writeSentinel(const FieldDescriptor& descriptor, DevelopSettings& settings)
         } else if constexpr (std::is_same_v<T, GrainModel>) {
             // One model so far: an out-of-table value stands for "another one".
             field = static_cast<GrainModel>(1);
+        } else if constexpr (std::is_same_v<T, LuminanceNoiseFilter>) {
+            // One filter so far, as for the grain model.
+            field = static_cast<LuminanceNoiseFilter>(1);
         } else if constexpr (std::is_same_v<T, std::uint32_t>) {
             field += 7U;
         } else {
@@ -109,12 +116,14 @@ TEST_CASE("The descriptor table has a row per leaf, matching the structs", "[set
     STATIC_REQUIRE(test::fieldCount<VignetteSettings> == 3);
     STATIC_REQUIRE(test::fieldCount<GrainSettings> == 5);
     STATIC_REQUIRE(test::fieldCount<EffectsSettings> == 2);
-    STATIC_REQUIRE(test::fieldCount<DevelopSettings> == 8);
+    STATIC_REQUIRE(test::fieldCount<NoiseReductionSettings> == 5);
+    STATIC_REQUIRE(test::fieldCount<DevelopSettings> == 9);
 
     // Leaves: tone + color + geometry (crop is a group of two leaves) + hsl
     // (eight bands of three leaves) + black and white + the four tone curves +
     // colour grading (three zones of two leaves, balance and blending) +
-    // effects (the vignette's three leaves and the grain's five).
+    // effects (the vignette's three leaves and the grain's five) + noise
+    // reduction.
     STATIC_REQUIRE(developSettingDescriptors.size() ==
                    test::fieldCount<ToneSettings> + test::fieldCount<ColorSettings> +
                        test::fieldCount<GeometrySettings> - 1 + test::fieldCount<CropSettings> +
@@ -122,8 +131,9 @@ TEST_CASE("The descriptor table has a row per leaf, matching the structs", "[set
                        test::fieldCount<BlackAndWhiteSettings> +
                        test::fieldCount<ToneCurveSettings> + 3 * test::fieldCount<GradeZone> +
                        test::fieldCount<ColorGradingSettings> - 3 +
-                       test::fieldCount<VignetteSettings> + test::fieldCount<GrainSettings>);
-    STATIC_REQUIRE(developSettingDescriptors.size() == 71);
+                       test::fieldCount<VignetteSettings> + test::fieldCount<GrainSettings> +
+                       test::fieldCount<NoiseReductionSettings>);
+    STATIC_REQUIRE(developSettingDescriptors.size() == 76);
 }
 
 TEST_CASE("The vignette and grain rows run in the Effects pass and always apply", "[settings]") {
@@ -407,4 +417,51 @@ TEST_CASE("Validation refuses a crop that could fit no image", "[settings]") {
         std::invalid_argument);
     REQUIRE_THROWS_AS(validate(withRatio(0.0)), std::invalid_argument);
     REQUIRE_THROWS_AS(validate(withRatio(-1.5)), std::invalid_argument);
+}
+
+TEST_CASE("A row's stage is the first boundary its value changes in the plan", "[settings][plan]") {
+    // A camera-native source, so that the RAW-only rows reach the plan.
+    const ImageBuffer source = loadImage(test::fixture("linear-32x24-skewed.dng"));
+    DevelopSettings base;
+    // The shaping rows only count once what they shape is on.
+    base.noiseReduction.luminance = 40.0F;
+    base.noiseReduction.color = 40.0F;
+    base.effects.vignette.amount = -30.0F;
+    base.effects.grain.amount = 30.0F;
+    base.colorGrading.shadows.saturation = 30.0F;
+    base.colorGrading.midtones.saturation = 30.0F;
+    base.colorGrading.highlights.saturation = 30.0F;
+    base.color.temperature = 5000.0F;
+    base.color.tint = 10.0F;
+
+    for (const FieldDescriptor& descriptor : developSettingDescriptors) {
+        // Enumerations with one entry have no other value to change to.
+        if (descriptor.key == "grainModel" || descriptor.key == "luminanceNoiseFilter") {
+            continue;
+        }
+        DYNAMIC_SECTION(descriptor.key) {
+            DevelopSettings from = base;
+            DevelopSettings to = base;
+            if (descriptor.key == "temperature" || descriptor.key == "tint") {
+                // Only a custom white balance reads them.
+                from.color.whiteBalance = WhiteBalanceMode::Custom;
+                to.color.whiteBalance = WhiteBalanceMode::Custom;
+                if (descriptor.key == "temperature") {
+                    to.color.temperature = 4000.0F;
+                } else {
+                    to.color.tint = 20.0F;
+                }
+            } else {
+                writeSentinel(descriptor, to);
+            }
+            const ProcessingPlan before = planFor(source, DevelopState{from});
+            const ProcessingPlan after = planFor(source, DevelopState{to});
+            const auto first = static_cast<std::size_t>(descriptor.affects);
+            // Untouched before the boundary, different at it.
+            if (first > 0) {
+                REQUIRE(prefixMatches(after, before, static_cast<Stage>(first - 1)));
+            }
+            REQUIRE_FALSE(prefixMatches(after, before, descriptor.affects));
+        }
+    }
 }

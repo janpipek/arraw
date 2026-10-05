@@ -3,6 +3,8 @@
 #include "support/Fixtures.h"
 #include "support/TempDir.h"
 
+#include <DevelopState.h>
+#include <ImageImport.h>
 #include <Photo.h>
 #include <Sidecar.h>
 
@@ -162,7 +164,7 @@ TEST_CASE("The second run is served from the cache", "[thumbnailworker]") {
     const ThumbnailCache cache(cacheRoot.path());
     REQUIRE(cache.sizeBytes() > 0);
     REQUIRE_FALSE(cache.load(*ThumbnailCache::embeddedKey(shot)).isNull());
-    const auto state = readSidecar(shot)->state;
+    const DevelopState state = *readSidecar(shot)->state;
     REQUIRE_FALSE(cache.load(*ThumbnailCache::developedKey(shot, state)).isNull());
 
     // Same file, same state: both come from the cache entries made above.
@@ -170,6 +172,25 @@ TEST_CASE("The second run is served from the cache", "[thumbnailworker]") {
     ThumbnailWorker worker(cache, second.callback());
     worker.setShots({shot});
     REQUIRE(waitUntil([&] { return second.count() == 2 && worker.pendingJobs() == 0; }));
+}
+
+TEST_CASE("A RAW with no sidecar develops with its kind's defaults", "[thumbnailworker]") {
+    const test::TempDir folder;
+    const test::TempDir cacheRoot;
+    const fs::path shot = addShot(folder, "IMG_1.dng");
+    {
+        Collector collector;
+        ThumbnailWorker worker(ThumbnailCache(cacheRoot.path()), collector.callback());
+        worker.setShots({shot});
+        REQUIRE(waitUntil([&] { return collector.count() == 2 && worker.pendingJobs() == 0; }));
+    }
+    // Cached under the state opening the photograph gives: colour noise reduction on.
+    const DevelopState defaults = defaultStateFor(readImageMetadata(shot).encoding);
+    REQUIRE(defaults.settings.noiseReduction.color == rawDefaultColorNoiseReduction);
+    REQUIRE(defaults == openPhoto(shot).state());
+    const ThumbnailCache cache(cacheRoot.path());
+    REQUIRE_FALSE(cache.load(*ThumbnailCache::developedKey(shot, defaults)).isNull());
+    REQUIRE(cache.load(*ThumbnailCache::developedKey(shot, DevelopState{})).isNull());
 }
 
 TEST_CASE("Visible shots are served first", "[thumbnailworker]") {

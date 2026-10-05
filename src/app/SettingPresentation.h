@@ -92,6 +92,12 @@ inline constexpr int hslPageCount = 3;
 /// Shadows, Midtones and Highlights each as hue then saturation, then Balance and Blending.
 [[nodiscard]] std::span<const std::string_view> colorGradingKeys() noexcept;
 
+/// @brief Gives the keys of the Noise Reduction group's rows, in panel order.
+///
+/// Luminance and its Detail, then Colour and its Smoothness. The luminance filter has one value
+/// so far: a choice of one is no row.
+[[nodiscard]] std::span<const std::string_view> noiseReductionKeys() noexcept;
+
 /// @brief Gives the keys of the Effects group's rows, in panel order.
 ///
 /// The post-crop vignette's amount, midpoint and feather, then the grain's amount, size and
@@ -162,10 +168,13 @@ struct TreatmentVisibility {
 [[nodiscard]] double valueOfTick(int tick, const SettingRange& range, double step,
                                  SliderScale scale = SliderScale::Linear);
 
-/// @brief Reads the value a setting has in a default-constructed ::arraw::DevelopSettings.
+/// @brief Reads the value a setting has in a set of defaults.
 /// @param descriptor Row of a float or double setting.
+/// @param defaults Settings to read it from: a photograph's (::arraw::defaultStateFor), or
+/// the neutral ones of a default-constructed ::arraw::DevelopSettings.
 /// @return The default value.
 /// @throws std::invalid_argument if the setting is neither float nor double.
-[[nodiscard]] double defaultValueOf(const FieldDescriptor& descriptor);
+[[nodiscard]] double defaultValueOf(const FieldDescriptor& descriptor,
+                                    const DevelopSettings& defaults = DevelopSettings{});
 
 } // namespace arraw::app

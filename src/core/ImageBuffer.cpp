@@ -1,5 +1,7 @@
 #include "ImageBuffer.h"
 
+#include <cmath>
+
 using namespace std;
 using namespace arraw;
 
@@ -38,8 +40,16 @@ size_t ImageBuffer::byteSize() const noexcept {
         storage_);
 }
 
+void ImageBuffer::setPixelScale(double scale) {
+    if (!std::isfinite(scale) || !(scale > 0.0)) {
+        throw std::invalid_argument("a pixel scale must be finite and above zero");
+    }
+    pixelScale_ = scale;
+}
+
 ImageBuffer ImageBuffer::clone() const {
     ImageBuffer result(this->size(), this->format(), this->encoding(), this->orientation());
+    result.pixelScale_ = this->pixelScale_;
     result.storage_ = this->storage_;
     return result;
 }

@@ -24,7 +24,8 @@ using SettingAccessor =
                  WhiteBalanceMode& (*)(DevelopSettings&), QuarterTurn& (*)(DevelopSettings&),
                  std::optional<UprightCropRect>& (*)(DevelopSettings&),
                  CropAspect& (*)(DevelopSettings&), ToneCurve& (*)(DevelopSettings&),
-                 GrainModel& (*)(DevelopSettings&), std::uint32_t& (*)(DevelopSettings&)>;
+                 GrainModel& (*)(DevelopSettings&), std::uint32_t& (*)(DevelopSettings&),
+                 LuminanceNoiseFilter& (*)(DevelopSettings&)>;
 
 /// @brief Inclusive numeric limits of a setting, in its own units.
 struct SettingRange {
@@ -48,6 +49,7 @@ enum class SettingGroup {
     ToneCurve,
     ColorGrading,
     Effects,
+    Detail,
 };
 
 /// @brief Whether a setting means anything for every photograph.
@@ -238,6 +240,21 @@ inline constexpr std::array developSettingDescriptors{
     FieldDescriptor{"grainSeed", ARRAW_ACCESSOR(std::uint32_t, effects.grain.seed),
                     SettingRange{0.0, maximumGrainSeed}, SettingGroup::Effects,
                     Applicability::Always, Stage::Effects, SettingScope::Photo},
+    FieldDescriptor{"luminanceNoiseReduction", ARRAW_ACCESSOR(float, noiseReduction.luminance),
+                    SettingRange{minimumNoiseReduction, maximumNoiseReduction},
+                    SettingGroup::Detail, Applicability::Always, Stage::Denoise},
+    FieldDescriptor{"luminanceNoiseDetail", ARRAW_ACCESSOR(float, noiseReduction.luminanceDetail),
+                    SettingRange{minimumNoiseReduction, maximumNoiseReduction},
+                    SettingGroup::Detail, Applicability::Always, Stage::Denoise},
+    FieldDescriptor{"luminanceNoiseFilter",
+                    ARRAW_ACCESSOR(LuminanceNoiseFilter, noiseReduction.luminanceFilter),
+                    std::nullopt, SettingGroup::Detail, Applicability::Always, Stage::Denoise},
+    FieldDescriptor{"colorNoiseReduction", ARRAW_ACCESSOR(float, noiseReduction.color),
+                    SettingRange{minimumNoiseReduction, maximumNoiseReduction},
+                    SettingGroup::Detail, Applicability::Always, Stage::Denoise},
+    FieldDescriptor{"colorNoiseSmoothness", ARRAW_ACCESSOR(float, noiseReduction.colorSmoothness),
+                    SettingRange{minimumNoiseReduction, maximumNoiseReduction},
+                    SettingGroup::Detail, Applicability::Always, Stage::Denoise},
     FieldDescriptor{"rotation", ARRAW_ACCESSOR(QuarterTurn, geometry.rotation), std::nullopt,
                     SettingGroup::Geometry, Applicability::Always, Stage::Geometry},
     FieldDescriptor{"flipHorizontal", ARRAW_ACCESSOR(bool, geometry.flipHorizontal), std::nullopt,

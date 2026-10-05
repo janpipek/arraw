@@ -3,6 +3,7 @@
 #include "CheckpointState.h"
 #include "GpuPlan.h"
 #include "ProcessingPlan.h"
+#include "Resample.h"
 #include "SampleConversion.h"
 #include "Taps.h"
 #include "TimingTrace.h"
@@ -44,6 +45,9 @@ DeviceImage resizeOnGpu(GpuContext& context, const DeviceImage& image, const Res
         context.upload(packResizeWeights(size.height, target.height, resize.filter));
 
     const ImageSize widened{target.width, size.height};
+    // The result spans more sensor pixels per pixel, by the reduction, as on the host.
+    const GpuTarget result{.pixelScale =
+                               resampledPixelScale(image.pixelScale(), size.width, target.width)};
     if (resize.opaque) {
         const GpuResizeBlock across{.plane = 0, .inputLength = size.width, .offset = offset};
         const GpuResizeBlock down{.plane = 0, .inputLength = size.height};
@@ -51,7 +55,7 @@ DeviceImage resizeOnGpu(GpuContext& context, const DeviceImage& image, const Res
             context.render(GpuPass::ResizeAcrossOpaque, bytesOf(across),
                            std::array{image, acrossWeights}, widened, workingEncoding);
         return context.render(GpuPass::ResizeDownOpaque, bytesOf(down),
-                              std::array{sums, downWeights}, target, workingEncoding);
+                              std::array{sums, downWeights}, target, workingEncoding, result);
     }
 
     std::array<DeviceImage, resizePlaneCount> planes;
@@ -67,7 +71,55 @@ DeviceImage resizeOnGpu(GpuContext& context, const DeviceImage& image, const Res
     const std::array inputs{planes[static_cast<std::size_t>(ResizePlane::Sums)], downWeights,
                             planes[static_cast<std::size_t>(ResizePlane::Low)],
                             planes[static_cast<std::size_t>(ResizePlane::High)]};
-    return context.render(GpuPass::ResizeDown, bytesOf(block), inputs, target, workingEncoding);
+    return context.render(GpuPass::ResizeDown, bytesOf(block), inputs, target, workingEncoding,
+                          result);
+}
+
+/// @brief Runs the Denoise pass on a device image, as ::arraw::applyDenoise does on the host.
+///
+/// Up to six renders: the colour half reduces the source to its grid and blurs
+/// it across and down, the luminance half runs its filter (the bilateral's two
+/// steps), and one render puts the pixel back together. A half that is off
+/// renders nothing, and the source stands in for its input to the last render.
+///
+/// Each intermediate is dropped as soon as the next step has read it, and the
+/// filtered luminance is a one-channel target, so the pass holds at most the
+/// source, one RGBA intermediate of its size and that luminance besides its
+/// result (ADR 039).
+DeviceImage denoiseOnGpu(GpuContext& context, const DeviceImage& source, const DenoisePlan& plan) {
+    const ImageSize size = source.size();
+    const ColorEncoding& encoding = source.encoding();
+    const auto step = [&](DenoiseStep which, const DeviceImage& input, ImageSize output,
+                          GpuTargetFormat format = GpuTargetFormat::Rgba32F) {
+        const GpuDenoiseBlock block = packDenoise(plan, size, which);
+        return context.render(GpuPass::DenoiseFilter, bytesOf(block), input, output, encoding,
+                              {.format = format});
+    };
+    DeviceImage ratios = source;
+    if (plan.color) {
+        const ImageSize grid = denoiseGridSize(plan, size);
+        ratios = step(DenoiseStep::Reduce, source, grid);
+        ratios = step(DenoiseStep::BlurAcross, ratios, grid);
+        ratios = step(DenoiseStep::BlurDown, ratios, grid);
+    }
+    DeviceImage luma = source;
+    if (plan.luminance) {
+        // The luminance filter seam: every filter is steps from the source to
+        // a luminance in r, which the combination reads.
+        switch (plan.filter) {
+        case LuminanceNoiseFilter::Bilateral:
+            // Across writes (luminance, perceptual) so that down reads both
+            // rather than evaluating pow per tap, as the CPU's planes do.
+            // QRhi has no two-channel float target, so it is RGBA32F; down's
+            // scalar result replaces it at once.
+            luma = step(DenoiseStep::BilateralAcross, source, size);
+            luma = step(DenoiseStep::BilateralDown, luma, size, GpuTargetFormat::R32F);
+            break;
+        }
+    }
+    const GpuDenoiseBlock block = packDenoise(plan, size, DenoiseStep::Combine);
+    const std::array inputs{source, ratios, luma};
+    return context.render(GpuPass::DenoiseCombine, bytesOf(block), inputs, size, encoding);
 }
 
 } // namespace
@@ -113,7 +165,7 @@ void requireUploaded(const GpuContext& context, const ImageBuffer& source,
 /// @brief Runs the passes after a boundary, up to another, on an image taken at the first.
 ///
 /// The one path for every GPU development and sample: a fresh one starts at
-/// the pointwise pass, a resumed one after the boundary it resumes from, and
+/// the Denoise pass, a resumed one after the boundary it resumes from, and
 /// each pass is skipped under exactly the condition the CPU skips it.
 /// @param context Device the images live on.
 /// @param done Boundary @p image was taken at, or empty for the uploaded source.
@@ -125,6 +177,14 @@ PassResult runPasses(GpuContext& context, std::optional<Stage> done, DeviceImage
                      const ProcessingPlan& plan, Stage stopAfter,
                      PointwiseProbe probe = PointwiseProbe::Developed) {
     if (!done) {
+        // As denoisedCopy and pointwiseFromSource: with noise reduction off the
+        // boundary collapses onto the source, which is shared, not copied.
+        if (plan.denoise.active()) {
+            image = denoiseOnGpu(context, image, plan.denoise);
+        }
+        done = Stage::Denoise;
+    }
+    if (*done == Stage::Denoise && stopAfter != Stage::Denoise) {
         const GpuPointwiseBlock pointwise = packPointwise(plan, probe);
         // The curves' tables are uploaded here, once per development that runs
         // this pass: a resumed one starts after it and pays nothing. With no
@@ -192,8 +252,7 @@ RenderCheckpoint developOnGpu(GpuContext& context, const ImageBuffer& source,
     requireUploaded(context, source, uploaded);
     // Only a render that reaches the resize plans one: stopping earlier ignores
     // the request, whatever it says, and has no use for the opacity scan.
-    ProcessingPlan plan =
-        planFor(source, state, stopAfter >= Stage::Resize ? request : RenderRequest{});
+    ProcessingPlan plan = planFor(source, state, plannedRequest(request, stopAfter));
     return developPasses(context, std::nullopt, uploaded, std::move(plan), stopAfter);
 }
 
@@ -211,8 +270,7 @@ RenderCheckpoint developOnGpu(GpuContext& context, const RenderCheckpoint& from,
     if (image->device() != context.id()) {
         throw std::invalid_argument("The checkpoint belongs to another device");
     }
-    ProcessingPlan plan =
-        planFor(source, state, stopAfter >= Stage::Resize ? request : RenderRequest{});
+    ProcessingPlan plan = planFor(source, state, plannedRequest(request, stopAfter));
     requireResumable(held, plan, source.size(), stopAfter);
     if (stopAfter == held.boundary) {
         return from;

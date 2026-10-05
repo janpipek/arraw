@@ -92,3 +92,11 @@ as a different kind of source without reshaping the levels.
 - When spatial stages arrive (lens correction, spots, noise reduction), each
   works on the chosen level. Any radius in pixels must scale with the level,
   which ADR 020 already anticipates for scale-aware stages.
+
+## Note, 2026-10-05
+
+The level is now known from the pixels: `halved` doubles
+`ImageBuffer::pixelScale`, and noise reduction divides its radii by the
+source's scale ([ADR 039](039-noise-reduction-is-the-first-pass-and-reads-the-as-shot-luminance.md)). The preview, the curve histogram and the thumbnail no
+longer tell the render which level they develop, and a half-size decode counts
+as a reduction of 2.

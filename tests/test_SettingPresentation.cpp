@@ -25,10 +25,10 @@ namespace {
 
 /// Settings that no panel shows yet; deciding where a new one goes is deliberate.
 ///
-/// The grain model has one value so far: a choice of one is no row.
-constexpr std::array<std::string_view, 7> notShownYet{
+/// The grain model and the luminance noise filter have one value so far: a choice of one is no row.
+constexpr std::array<std::string_view, 8> notShownYet{
     "rotation",      "flipHorizontal", "flipVertical", "straighten",
-    "cropRectangle", "cropAspect",     "grainModel"};
+    "cropRectangle", "cropAspect",     "grainModel",   "luminanceNoiseFilter"};
 
 /// Settings the Treatment buttons edit; they have no slider row.
 constexpr std::array<std::string_view, 1> shownByTreatment{"convertToGrayscale"};
@@ -39,6 +39,7 @@ std::vector<std::string_view> slidingKeys() {
     keys.insert(keys.end(), whiteBalanceKeys().begin(), whiteBalanceKeys().end());
     keys.insert(keys.end(), colorKeys().begin(), colorKeys().end());
     keys.insert(keys.end(), colorGradingKeys().begin(), colorGradingKeys().end());
+    keys.insert(keys.end(), noiseReductionKeys().begin(), noiseReductionKeys().end());
     keys.insert(keys.end(), effectsKeys().begin(), effectsKeys().end());
     for (int page = 0; page < hslPageCount; ++page) {
         keys.insert(keys.end(), hslKeys(page).begin(), hslKeys(page).end());

@@ -304,6 +304,8 @@ ImageBuffer arraw::applyGeometry(ImageBuffer source, const GeometryPlan& plan) {
         return source;
     }
     ImageBuffer result(plan.outputSize, workingFormat, source.encoding());
+    // A crop, a turn or a straighten keeps the density of the pixels.
+    result.setPixelScale(source.pixelScale());
     auto output = result.samples<float>();
     for (std::uint32_t y = 0; y < plan.outputSize.height; ++y) {
         for (std::uint32_t x = 0; x < plan.outputSize.width; ++x) {

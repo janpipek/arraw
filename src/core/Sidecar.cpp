@@ -690,16 +690,24 @@ std::optional<SidecarContents> arraw::readSidecar(const std::filesystem::path& p
 
     SidecarContents contents;
     readVersion(descriptions, log, photo);
+    // Settings are applied onto the neutral defaults, never a kind's: a key
+    // the file leaves out means what it meant when the file was written.
+    DevelopState state;
+    bool recorded = !occurrencesOf(descriptions, arrawProperty("version")).empty();
     for (const FieldDescriptor& descriptor : developSettingDescriptors) {
         const auto found = occurrencesOf(descriptions, arrawProperty(descriptor.key));
         if (found.empty()) {
             continue;
         }
+        recorded = true;
         if (found.back().simple) {
-            applyText(descriptor, found.back().text, contents.state.settings, log, photo);
+            applyText(descriptor, found.back().text, state.settings, log, photo);
         } else {
             reportMalformed(descriptor, log, photo);
         }
+    }
+    if (recorded) {
+        contents.state = std::move(state);
     }
     readUnknownKeys(descriptions, log, photo);
     contents.marks = marksIn(descriptions, log, photo);
@@ -713,7 +721,7 @@ namespace {
 /// @brief Edits or creates the sidecar of a photograph.
 /// @param photo Path of the photograph.
 /// @param state Develop state to write; null to leave the settings of an
-/// existing sidecar alone (a new one gets the defaults).
+/// existing sidecar alone (a new one then records none).
 /// @param marks Marks to write.
 void writeSidecarFor(const std::filesystem::path& photo, const DevelopState* state,
                      const PhotoMarks& marks) {
@@ -755,12 +763,11 @@ void writeSidecarFor(const std::filesystem::path& photo, const DevelopState* sta
     });
     const QDomElement home = holder != descriptions.end() ? *holder : descriptions.front();
 
-    if (state != nullptr || !exists) {
-        const DevelopState written = state != nullptr ? *state : DevelopState{};
+    if (state != nullptr) {
         setProperty(descriptions, home, arrawProperty("version"), QString::number(sidecarVersion));
         for (const FieldDescriptor& descriptor : developSettingDescriptors) {
             setProperty(descriptions, home, arrawProperty(descriptor.key),
-                        spell(encode(descriptor, written.settings)));
+                        spell(encode(descriptor, state->settings)));
         }
     }
     // Marks are standard XMP that other tools write too, and some of what they

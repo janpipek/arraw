@@ -159,3 +159,13 @@ Conditions that require revisiting this decision:
 - **A GUI that saves.** It decides when `writeSidecar` runs (on every edit,
   debounced, on leaving a photograph), and how a sidecar changed on disk by
   another tool meanwhile is noticed.
+
+## Note, 2026-10-05
+
+A sidecar either records a develop state or does not
+(`SidecarContents::state` is optional; [ADR 039](039-noise-reduction-is-the-first-pass-and-reads-the-as-shot-luminance.md)). It records one when it holds an
+`arraw:version` or any settings key, and each key it omits keeps the neutral
+default, so sidecars written before a setting existed render as they did. A
+sidecar of marks alone, or one only another tool wrote in, records none, and
+the photograph starts from `defaultStateFor` its kind, as with no sidecar.
+`writeSidecarMarks` without an existing sidecar writes the marks alone.

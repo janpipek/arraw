@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Denoise.h"
 #include "GrainModels.h"
 
 #include <Develop.h>
@@ -8,6 +9,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <tuple>
 
 namespace arraw {
 
@@ -406,6 +408,98 @@ static_assert(offsetof(GpuEffectsBlock, grains) == 40);
 static_assert(offsetof(GpuEffectsBlock, grainModel) == 44);
 static_assert(offsetof(GpuEffectsBlock, grainLayers) == 48);
 static_assert(sizeof(GpuEffectsBlock) == 176);
+
+/// @brief Which part of the Denoise pass a ::arraw::GpuPass::DenoiseFilter render does.
+///
+/// The CPU's steps in `src/core/Denoise.cpp`, one render each; the values are
+/// shared with `src/gpu/shaders/denoise_filter.frag`.
+enum class DenoiseStep : std::uint32_t {
+    Reduce = 0,          ///< Source to grid: each cell's mean colour, as a unit-luma ratio.
+    BlurAcross = 1,      ///< The colour blur along rows of the grid.
+    BlurDown = 2,        ///< The colour blur along columns of the grid.
+    BilateralAcross = 3, ///< The bilateral along rows, from the source's colours; luminance in r.
+    BilateralDown = 4,   ///< The bilateral along columns, from the across result's r.
+    Combine = 5,         ///< The recombination, which ::arraw::GpuPass::DenoiseCombine does.
+};
+
+/// @brief The Denoise passes' uniform block, byte for byte as std140 lays it out.
+///
+/// The shader data contract of `src/gpu/shaders/denoise_filter.frag` and
+/// `denoise_combine.frag`, whose `Denoise` blocks declare the same members in
+/// the same order. One block for every step: each reads what it needs. The
+/// spatial weights are worked out on the host by ::arraw::denoiseWeights, the
+/// same numbers the CPU uses, so that neither backend's `exp` decides them;
+/// std140 holds them as `vec4`s, four to an element.
+struct GpuDenoiseBlock {
+    /// @brief Step this render does, as a ::arraw::DenoiseStep.
+    std::uint32_t step = 0;
+
+    /// @brief Tap radius of the step's filter; zero for the steps that filter nothing.
+    std::uint32_t radius = 0;
+
+    /// @brief Source pixels per side of a grid cell.
+    std::uint32_t gridReduction = 1;
+
+    /// @brief Whether the combination smooths luminance: 0 or 1.
+    std::uint32_t luminance = 0;
+
+    /// @brief Whether the combination smooths colour: 0 or 1.
+    std::uint32_t color = 0;
+
+    /// @brief Factor of the edge-stop's exponent, ::arraw::rangeFactorOf.
+    float rangeFactor = 0.0F;
+
+    /// @brief How much of the filtered luminance replaces the original.
+    float luminanceMix = 0.0F;
+
+    /// @brief How much of the blurred ratio replaces the original.
+    float colorMix = 0.0F;
+
+    /// @brief Source channels to luminance, padded to a `vec4`.
+    std::array<float, 4> lumaRow{};
+
+    /// @brief The unit-luma neutral in the source's channels, padded to a `vec4`.
+    std::array<float, 4> neutral{};
+
+    /// @brief Width and height of the source.
+    std::array<std::uint32_t, 2> sourceSize{};
+
+    /// @brief Width and height of the grid the colour is blurred on.
+    std::array<std::uint32_t, 2> gridSize{};
+
+    /// @brief The step's spatial weights, ::arraw::DenoiseWeights, as 17 `vec4`s.
+    std::array<float, 68> weights{};
+};
+
+static_assert(offsetof(GpuDenoiseBlock, step) == 0);
+static_assert(offsetof(GpuDenoiseBlock, radius) == 4);
+static_assert(offsetof(GpuDenoiseBlock, gridReduction) == 8);
+static_assert(offsetof(GpuDenoiseBlock, luminance) == 12);
+static_assert(offsetof(GpuDenoiseBlock, color) == 16);
+static_assert(offsetof(GpuDenoiseBlock, rangeFactor) == 20);
+static_assert(offsetof(GpuDenoiseBlock, luminanceMix) == 24);
+static_assert(offsetof(GpuDenoiseBlock, colorMix) == 28);
+static_assert(offsetof(GpuDenoiseBlock, lumaRow) == 32);
+static_assert(offsetof(GpuDenoiseBlock, neutral) == 48);
+static_assert(offsetof(GpuDenoiseBlock, sourceSize) == 64);
+static_assert(offsetof(GpuDenoiseBlock, gridSize) == 72);
+static_assert(offsetof(GpuDenoiseBlock, weights) == 80);
+static_assert(sizeof(GpuDenoiseBlock) == 352);
+static_assert(std::tuple_size_v<DenoiseWeights> <= 68,
+              "the block holds the weights of every radius the shaders allow");
+
+/// @brief Gives the size of the grid a Denoise plan blurs colour on, for a source.
+/// @param plan Plan whose colour half is on.
+/// @param source Size of the source.
+[[nodiscard]] ImageSize denoiseGridSize(const DenoisePlan& plan, ImageSize source);
+
+/// @brief Fills the Denoise block for one step.
+/// @param plan Active plan to pack.
+/// @param source Size of the source being denoised.
+/// @param step Step the render does.
+/// @return The block, ready to be copied into a uniform buffer.
+[[nodiscard]] GpuDenoiseBlock packDenoise(const DenoisePlan& plan, ImageSize source,
+                                          DenoiseStep step);
 
 /// @brief Fills the pointwise block from a resolved plan.
 /// @param plan Plan to pack; only its pointwise fields are read.

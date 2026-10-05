@@ -22,6 +22,7 @@ ImageBuffer arraw::encodeTap(const ImageBuffer& linear, Tap tap) {
                                     "encoding");
     }
     ImageBuffer encoded(linear.size(), workingFormat, encoding, linear.orientation());
+    encoded.setPixelScale(linear.pixelScale());
     const auto in = linear.samples<float>();
     const auto out = encoded.samples<float>();
     for (std::size_t index = 0; index < in.size(); index += 4) {

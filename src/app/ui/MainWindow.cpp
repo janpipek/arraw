@@ -8,6 +8,7 @@
 #include "ExportSettings.h"
 #include "FilmStrip.h"
 #include "PhotoView.h"
+#include "RenderDelay.h"
 #include "SettingsDialog.h"
 #include "ThumbnailCache.h"
 #include "ViewTransform.h"
@@ -118,6 +119,10 @@ MainWindow::MainWindow(QWidget* parent)
     interactionTimer_.setSingleShot(true);
     interactionTimer_.setInterval(0);
     connect(&interactionTimer_, &QTimer::timeout, this, &MainWindow::requestRender);
+    // A noise reduction drag waits for the hand to rest (ADR 039); the edit itself is not held.
+    noiseReductionTimer_.setSingleShot(true);
+    noiseReductionTimer_.setInterval(app::noiseReductionRenderDelay);
+    connect(&noiseReductionTimer_, &QTimer::timeout, this, &MainWindow::requestRender);
 
     // No size to restore yet: two thirds of the screen, so the first photograph
     // is fitted to something worth looking at.
@@ -297,8 +302,9 @@ void MainWindow::buildDevelopDock() {
             if (!open_->session.editing()) {
                 return;
             }
+            const DevelopState before = open_->session.photo().state();
             open_->session.update(state);
-            refreshPanel();
+            refreshPanel(renderDelayFor(before, open_->session.photo().state()));
         });
     });
     connect(developPanel_, &DevelopPanel::pickToggled, this, &MainWindow::setPicking);
@@ -367,13 +373,13 @@ void MainWindow::guarded(const std::function<void()>& action) {
     }
 }
 
-void MainWindow::refreshPanel() {
+void MainWindow::refreshPanel(std::chrono::milliseconds renderDelay) {
     if (!open_) {
         return;
     }
     const Photo& photo = open_->session.photo();
     const bool raw = !std::holds_alternative<NamedEncoding>(photo.metadata().encoding);
-    PanelContext context{raw, std::nullopt};
+    PanelContext context{raw, std::nullopt, defaultStateFor(photo.metadata().encoding).settings};
     if (const auto* camera = std::get_if<CameraNative>(&photo.metadata().encoding)) {
         try {
             // The light the pixels went through, which is also what development
@@ -391,7 +397,11 @@ void MainWindow::refreshPanel() {
     redoAction_->setEnabled(open_->session.canRedo());
     saveAction_->setEnabled(open_->session.hasUnsavedChanges());
     updateTitle();
-    requestRender();
+    if (renderDelay.count() > 0) {
+        noiseReductionTimer_.start(renderDelay);
+    } else {
+        requestRender();
+    }
 }
 
 void MainWindow::updateTitle() {
@@ -877,6 +887,7 @@ void MainWindow::requestRender() {
     // Any pending resize or interaction is covered by this request.
     resizeTimer_.stop();
     interactionTimer_.stop();
+    noiseReductionTimer_.stop();
     const DevelopState& state = open_->session.photo().state();
     const qreal ratio = photoView_->devicePixelRatioF();
     PreviewView view{.region = std::nullopt,

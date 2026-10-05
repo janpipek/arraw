@@ -37,6 +37,7 @@ add_executable(arraw-tests
         test_Diagnostics.cpp
         test_ColorAdjustments.cpp
         test_ColorGrading.cpp
+        test_Denoise.cpp
         test_Effects.cpp
         test_Grain.cpp
         test_GpuContext.cpp
@@ -47,6 +48,7 @@ add_executable(arraw-tests
         test_ImagePyramid.cpp
         test_Photo.cpp
         test_PreviewRenderer.cpp
+        test_RenderDelay.cpp
         test_ProcessingPlan.cpp
         test_Region.cpp
         test_RenderCheckpoint.cpp
@@ -151,6 +153,7 @@ add_executable(arraw-gpu-tests
         gpu/GpuTesting.cpp
         gpu/GpuTesting.h
         gpu/test_GpuAdapters.cpp
+        gpu/test_GpuDenoise.cpp
         gpu/test_GpuDevelop.cpp
         gpu/test_GpuEffects.cpp
         gpu/test_GpuExport.cpp

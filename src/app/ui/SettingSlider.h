@@ -60,6 +60,18 @@ public:
     /// @param value Value in the setting's units.
     void setValue(double value);
 
+    /// @brief Sets the value a reset (a double-click of the label) restores.
+    ///
+    /// The photograph's own default, which can depend on its kind (see
+    /// ::arraw::defaultStateFor). Ignored for an optional setting, which a reset clears.
+    /// @param value Value in the setting's units.
+    void setDefaultValue(double value);
+
+    /// @brief Gives the value a reset restores.
+    [[nodiscard]] double defaultValue() const noexcept {
+        return default_;
+    }
+
     /// @brief Ends an edit of keyboard, wheel or spin-box changes that is still waiting to end.
     ///
     /// Emits editFinished() when such an edit is open; does nothing otherwise.

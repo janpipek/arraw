@@ -26,6 +26,8 @@ CASES = {
     # A seed given, as the command line would otherwise choose its own.
     "grain": {"grain_amount": 60, "grain_size": 100, "grain_roughness": 70,
               "grain_seed": 31337, "vignette_amount": -30},
+    "noise_reduction": {"luminance_noise_reduction": 60, "luminance_noise_detail": 30,
+                        "color_noise_reduction": 70, "color_noise_smoothness": 40},
     "combined": {"exposure": 0.5, "contrast": 20, "shadows": 15, "filmic_highlights": 0},
 }
 

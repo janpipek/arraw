@@ -143,6 +143,24 @@ public:
         return orientation_;
     }
 
+    /// @brief Sensor pixels one pixel of this buffer spans along each side.
+    ///
+    /// 1 for a full decode. A spatial stage whose reach is measured in sensor
+    /// pixels, such as noise reduction, divides it by this, so that a reduced
+    /// copy develops as an approximation of the full photograph (ADR 039).
+    /// ::arraw::halved doubles it, a half-size RAW decode gives 2, a resize
+    /// multiplies it by the reduction, and copies, conversions, crops and
+    /// development before the resize keep it. It is a fact about the pixels, so
+    /// it travels with them rather than with a request.
+    [[nodiscard]] double pixelScale() const noexcept {
+        return pixelScale_;
+    }
+
+    /// @brief Says how many sensor pixels one pixel of this buffer spans along each side.
+    /// @param scale The span; finite and above zero.
+    /// @throws std::invalid_argument if @p scale is not finite or not above zero.
+    void setPixelScale(double scale);
+
     /// @brief Number of bytes between the start of consecutive rows.
     [[nodiscard]] std::size_t rowStride() const noexcept {
         return rowStride_;
@@ -183,7 +201,7 @@ public:
         return {values.data(), values.size()};
     }
 
-    /// @brief Create an independent copy of the buffer.
+    /// @brief Create an independent copy of the buffer, its pixel scale included.
     [[nodiscard]] ImageBuffer clone() const;
 
     /// @brief Holds real, correctly-aligned `std::vector<T>` objects rather
@@ -206,6 +224,7 @@ private:
     PixelFormat format_;
     ColorEncoding encoding_;
     ImageOrientation orientation_;
+    double pixelScale_ = 1.0;
     std::size_t rowStride_;
     Storage storage_;
 };

@@ -121,11 +121,14 @@ add_library(arraw STATIC
         include/ColorSettings.h
         include/EffectsSettings.h
         include/HslSettings.h
+        include/NoiseReductionSettings.h
         src/core/ColorAdjustments.h
         src/core/ColorAdjustments.cpp
         src/core/ColorGrading.h
         src/core/ColorGrading.cpp
         src/core/ColorSettings.cpp
+        src/core/Denoise.h
+        src/core/Denoise.cpp
         src/core/Effects.h
         src/core/Effects.cpp
         src/core/GrainModels.h
@@ -144,6 +147,7 @@ add_library(arraw STATIC
         src/core/GeometryPlan.h
         src/core/GeometryPlan.cpp
         src/core/Resample.h
+        src/core/RowBands.h
         src/core/Resample.cpp
         src/core/ResampleWeights.h
         src/core/ResampleWeights.cpp
@@ -281,7 +285,9 @@ qt_add_shaders(arraw-gpu "arraw-shaders"
         src/gpu/shaders/resize_across_opaque.frag
         src/gpu/shaders/resize_down.frag
         src/gpu/shaders/resize_down_opaque.frag
-        src/gpu/shaders/effects.frag)
+        src/gpu/shaders/effects.frag
+        src/gpu/shaders/denoise_filter.frag
+        src/gpu/shaders/denoise_combine.frag)
 target_link_libraries(arraw-gpu PUBLIC arraw PRIVATE Qt6::Gui Qt6::GuiPrivate)
 set_target_properties(arraw-gpu PROPERTIES AUTOMOC OFF)
 # QRhi declares its Vulkan backend only where vulkan/vulkan.h is visible, so a
@@ -360,6 +366,8 @@ add_library(arraw-app-core STATIC
         src/app/ExportSettings.h
         src/app/PreviewRenderer.cpp
         src/app/PreviewRenderer.h
+        src/app/RenderDelay.cpp
+        src/app/RenderDelay.h
         src/app/FilmStripRules.cpp
         src/app/FilmStripRules.h
         src/app/FolderWatcher.cpp

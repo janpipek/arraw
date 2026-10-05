@@ -35,9 +35,13 @@ EFFECTS = {"vignette_amount": (-100.0, 100.0), "vignette_midpoint": (0.0, 100.0)
            "grain_size": (0.0, 100.0), "grain_roughness": (0.0, 100.0),
            "grain_seed": (0.0, 4294967295.0)}
 RANGES.update(EFFECTS)
+DETAIL = {"luminance_noise_reduction": (0.0, 100.0), "luminance_noise_detail": (0.0, 100.0),
+          "color_noise_reduction": (0.0, 100.0), "color_noise_smoothness": (0.0, 100.0)}
+RANGES.update(DETAIL)
 CURVES = {"tone_curve_luma", "tone_curve_red", "tone_curve_green", "tone_curve_blue"}
 UNRANGED = {"white_balance", "rotation", "flip_horizontal", "flip_vertical",
-            "crop_rectangle", "crop_aspect", "convert_to_grayscale", "grain_model"} | CURVES
+            "crop_rectangle", "crop_aspect", "convert_to_grayscale", "grain_model",
+            "luminance_noise_filter"} | CURVES
 
 
 def snake(key: str) -> str:
@@ -50,8 +54,8 @@ def descriptors():
 
 
 def test_one_row_per_leaf(descriptors):
-    assert len(descriptors) == len(RANGES) + len(UNRANGED) == 71
-    assert len({d.name for d in descriptors}) == len(RANGES) + len(UNRANGED) == 71
+    assert len(descriptors) == len(RANGES) + len(UNRANGED) == 76
+    assert len({d.name for d in descriptors}) == len(RANGES) + len(UNRANGED) == 76
     assert {d.name for d in descriptors} == set(RANGES) | UNRANGED
 
 
@@ -137,3 +141,11 @@ def test_descriptors_are_unhashable_but_comparable(descriptors):
     assert descriptors == arraw.setting_descriptors()
     with pytest.raises(TypeError):
         hash(descriptors[0])
+
+
+def test_noise_reduction_descriptors(descriptors):
+    by_name = {d.name: d for d in descriptors}
+    for name in set(DETAIL) | {"luminance_noise_filter"}:
+        assert by_name[name].group == arraw.SettingGroup.DETAIL
+        assert by_name[name].affects == arraw.Stage.DENOISE
+        assert by_name[name].applies == arraw.Applicability.ALWAYS

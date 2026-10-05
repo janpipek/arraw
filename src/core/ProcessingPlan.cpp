@@ -115,10 +115,12 @@ FrameMapping arraw::frameMappingOf(const ProcessingPlan& plan) {
     return mapping;
 }
 
-ProcessingPlan arraw::planFor(const ColorEncoding& encoding, const DevelopState& state) {
+ProcessingPlan arraw::planFor(const ColorEncoding& encoding, const DevelopState& state,
+                              double pixelScale) {
     const DevelopSettings& settings = state.settings;
     ProcessingPlan plan = tonePlanFor(settings.tone);
     plan.toWorking = colorMatrixFor(encoding, settings.color);
+    plan.denoise = denoisePlanFor(settings.noiseReduction, encoding, pixelScale);
     plan.toneCurves = toneCurvePlanFor(settings.toneCurve);
     plan.colorAdjustments = colorAdjustmentPlanFor(settings.color, settings.hsl,
                                                    settings.blackAndWhite, settings.colorGrading);
@@ -127,6 +129,7 @@ ProcessingPlan arraw::planFor(const ColorEncoding& encoding, const DevelopState&
 }
 
 ProcessingPlan arraw::planFor(const Photo& photo, const RenderRequest& request) {
+    // What the file declares is its full resolution: one sensor pixel a pixel.
     auto plan = planFor(photo.metadata().encoding, photo.state());
     plan.geometry = geometryPlanFor(photo.metadata().size, photo.metadata().orientation,
                                     photo.state().settings.geometry);
@@ -137,7 +140,7 @@ ProcessingPlan arraw::planFor(const Photo& photo, const RenderRequest& request) 
 ProcessingPlan arraw::planFor(const ImageBuffer& source, const DevelopState& state,
                               const RenderRequest& request) {
     const detail::TimingSpan timing("develop.plan");
-    auto plan = planFor(source.encoding(), state);
+    auto plan = planFor(source.encoding(), state, source.pixelScale());
     plan.geometry = geometryPlanFor(source.size(), source.orientation(), state.settings.geometry);
     plan.resize = resizePlanFor(request, plan.geometry->outputSize, &source);
     return plan;

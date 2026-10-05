@@ -262,6 +262,8 @@ std::string arraw::expectation(const FieldDescriptor& descriptor) {
             return toneCurveRequirements;
         } else if constexpr (std::is_same_v<T, GrainModel>) {
             return listOf(grainModelNames);
+        } else if constexpr (std::is_same_v<T, LuminanceNoiseFilter>) {
+            return listOf(luminanceNoiseFilterNames);
         } else if constexpr (std::is_same_v<T, std::uint32_t>) {
             const double most = descriptor.range ? descriptor.range->maximum : maximumGrainSeed;
             return "a whole number from 0 to " + std::to_string(static_cast<std::uint64_t>(most));
@@ -317,6 +319,8 @@ Encoded arraw::encode(const FieldDescriptor& descriptor, const DevelopSettings& 
             return static_cast<double>(field);
         } else if constexpr (std::is_same_v<T, GrainModel>) {
             return std::string(nameOf(grainModelNames, field));
+        } else if constexpr (std::is_same_v<T, LuminanceNoiseFilter>) {
+            return std::string(nameOf(luminanceNoiseFilterNames, field));
         } else if constexpr (std::is_same_v<T, std::optional<float>>) {
             return field ? Encoded{shortestDouble(*field)} : Encoded{};
         } else if constexpr (std::is_same_v<T, WhiteBalanceMode>) {
@@ -393,6 +397,12 @@ void arraw::decode(const FieldDescriptor& descriptor, const Encoded& encoded,
         } else if constexpr (std::is_same_v<T, GrainModel>) {
             if (const auto model = valueNamed(grainModelNames, encoded)) {
                 field = *model;
+            } else {
+                report.reportMalformed();
+            }
+        } else if constexpr (std::is_same_v<T, LuminanceNoiseFilter>) {
+            if (const auto filter = valueNamed(luminanceNoiseFilterNames, encoded)) {
+                field = *filter;
             } else {
                 report.reportMalformed();
             }

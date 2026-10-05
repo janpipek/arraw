@@ -123,6 +123,10 @@ void bindImage(nb::module_& m) {
         .def_prop_ro("encoding",
                      [](const ImageBuffer& buffer) { return encodingToPython(buffer.encoding()); })
         .def_prop_ro("orientation", &ImageBuffer::orientation)
+        .def_prop_rw("pixel_scale", &ImageBuffer::pixelScale, &ImageBuffer::setPixelScale,
+                     "Sensor pixels one pixel spans along each side: 1 for a full decode, 2 for "
+                     "a half-size one, doubled by each halving. Noise reduction divides its "
+                     "reach by it. Finite and above zero.")
         .def_prop_ro("pixels", &pixelsOf,
                      "Writable NumPy view of shape (height, width, channels), without a copy; "
                      "it keeps the buffer alive.")
@@ -147,7 +151,8 @@ void bindImage(nb::module_& m) {
         },
         "path"_a, "half_size"_a = false,
         "Decode an image file into a buffer. With half_size a RAW is decoded at half its width "
-        "and height, without demosaicing, and the buffer is that much smaller than "
+        "and height, without demosaicing, its pixel_scale is 2, and the buffer is that much "
+        "smaller than "
         "read_metadata says; other files ignore it.");
 
     m.def(

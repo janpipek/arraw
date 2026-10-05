@@ -198,6 +198,12 @@ void SettingSlider::setValue(double value) {
     spinBox_->setValue(value);
 }
 
+void SettingSlider::setDefaultValue(double value) {
+    if (!optional_) {
+        default_ = value;
+    }
+}
+
 bool SettingSlider::eventFilter(QObject* watched, QEvent* event) {
     if (watched == label_ && event->type() == QEvent::MouseButtonDblClick) {
         finishPendingEdit();

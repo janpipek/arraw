@@ -3,7 +3,19 @@
 #include <Develop.h>
 #include <ImageBuffer.h>
 
+#include <cstdint>
+
 namespace arraw {
+
+/// @brief Gives the pixel scale of an image resized along one side.
+///
+/// One rule for both backends: the scale grows by the reduction of the width,
+/// which for a resize that keeps the aspect is that of the height too.
+/// @param scale Pixel scale of the image before (::arraw::ImageBuffer::pixelScale).
+/// @param from Width before, in pixels; above zero.
+/// @param to Width after, in pixels; above zero.
+/// @return `scale * from / to`.
+[[nodiscard]] double resampledPixelScale(double scale, std::uint32_t from, std::uint32_t to);
 
 /// @brief Resizes developed float pixels to a size, with a separable kernel.
 ///
@@ -35,7 +47,8 @@ namespace arraw {
 /// that cannot say leaves it `false`, which is always correct; `true` for a
 /// source with transparency is not.
 /// @return @p source itself, untouched and not copied, if it already has @p size;
-/// otherwise a new buffer in the same encoding.
+/// otherwise a new buffer in the same encoding, its pixel scale multiplied by
+/// the reduction (::arraw::resampledPixelScale).
 /// @throws std::invalid_argument if @p source is not in the working format or
 /// @p size is empty.
 [[nodiscard]] ImageBuffer resample(ImageBuffer source, ImageSize size, ResizeFilter filter,

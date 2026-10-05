@@ -170,6 +170,19 @@ def test_grain_defaults_construct_flat_and_round_trip_json():
         arraw.GrainSettings(model=0)
 
 
+def test_noise_reduction_defaults_construct_flat_and_round_trip_json():
+    noise = arraw.DevelopSettings().noise_reduction
+    assert noise == arraw.NoiseReductionSettings(
+        luminance=0.0, luminance_detail=50.0, color=0.0, color_smoothness=50.0,
+        luminance_filter=arraw.LuminanceNoiseFilter.BILATERAL)
+    flat = arraw.DevelopSettings().with_(luminance_noise_reduction=40, color_noise_reduction=25,
+                                         color_noise_smoothness=80)
+    assert flat.noise_reduction.luminance == 40.0
+    assert flat.noise_reduction.color_smoothness == 80.0
+    back = arraw.DevelopSettings.from_json(flat.to_json())
+    assert back == flat
+
+
 def test_choose_grain_seed_is_the_one_policy():
     off = arraw.GrainSettings()
     on = arraw.GrainSettings(amount=30.0)

@@ -69,3 +69,12 @@ Effects run after the region is cut and resized
 Each output pixel's place in the cropped frame is worked out from `ResizePlan`
 and the geometry's output size, so a region shows the falloff the whole frame
 has at the same place.
+
+## Note, 2026-10-05
+
+Noise reduction runs on the whole source before geometry
+([ADR 039](039-noise-reduction-is-the-first-pass-and-reads-the-as-shot-luminance.md)),
+so a region is still the crop of the whole render, bit for bit, and needs no
+margin. When the earlier stages are restricted to a region's footprint,
+`denoiseReach(plan.denoise)` gives the margin in source pixels the Denoise
+pass needs around it.

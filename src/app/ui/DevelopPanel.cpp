@@ -152,6 +152,15 @@ QWidget* DevelopPanel::buildColorGradingGroup() {
     return group;
 }
 
+QWidget* DevelopPanel::buildNoiseReductionGroup() {
+    auto* group = new QGroupBox(tr("Noise Reduction"), this);
+    new QVBoxLayout(group);
+    for (const std::string_view key : noiseReductionKeys()) {
+        addRow(key, group);
+    }
+    return group;
+}
+
 QWidget* DevelopPanel::buildEffectsGroup() {
     auto* group = new QGroupBox(tr("Effects"), this);
     new QVBoxLayout(group);
@@ -251,6 +260,7 @@ DevelopPanel::DevelopPanel(QWidget* parent) : QWidget(parent) {
     layout->addWidget(hslGroup_);
     layout->addWidget(blackAndWhiteGroup_);
     layout->addWidget(buildColorGradingGroup());
+    layout->addWidget(buildNoiseReductionGroup());
     layout->addWidget(buildEffectsGroup());
     layout->addStretch(1);
     // One label column for every row, so that the grooves line up across groups.
@@ -297,6 +307,15 @@ void DevelopPanel::showState(const DevelopState& state, const PanelContext& cont
     for (SettingSlider* row : rows_) {
         const FieldDescriptor& descriptor = *findDescriptor(row->key());
         row->setVisible(context.raw || descriptor.applies != Applicability::RawOnly);
+        // What a reset restores is the photograph's default, which can depend
+        // on its kind; an optional setting is cleared instead.
+        row->setDefaultValue(visitField(descriptor, context.defaults, [](const auto& field) {
+            if constexpr (std::is_arithmetic_v<std::remove_cvref_t<decltype(field)>>) {
+                return static_cast<double>(field);
+            } else {
+                return 0.0;
+            }
+        }));
         if (row->key() == "temperature") {
             row->setValue(light.kelvin);
         } else if (row->key() == "tint") {

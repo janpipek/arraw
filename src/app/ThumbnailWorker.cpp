@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <exception>
+#include <optional>
 #include <utility>
 
 #if defined(_WIN32)
@@ -61,8 +62,12 @@ QImage toQImage(const ImageBuffer& preview) {
     return view.copy();
 }
 
-/// @brief Reads the saved develop state of a photograph; defaults when there is no sidecar.
-DevelopState savedState(const fs::path& primary) {
+/// @brief Reads the develop state a photograph's sidecar records, if it records one.
+///
+/// Nothing when there is no sidecar, when it records no settings, or when it
+/// cannot be read: the photograph then develops from what its kind starts
+/// from, as opening it would say.
+std::optional<DevelopState> savedState(const fs::path& primary) {
     try {
         if (const auto contents = readSidecar(primary)) {
             return contents->state;
@@ -70,7 +75,18 @@ DevelopState savedState(const fs::path& primary) {
     } catch (const std::exception&) {
         // An unreadable sidecar develops as defaults, as opening the photograph would say.
     }
-    return {};
+    return std::nullopt;
+}
+
+/// @brief Gives the state a photograph's thumbnail develops with.
+///
+/// What its sidecar records, or else what its kind starts from, which takes a
+/// look at the file's header (no decode) to tell a RAW from anything else.
+DevelopState thumbnailState(const fs::path& primary) {
+    if (auto saved = savedState(primary)) {
+        return std::move(*saved);
+    }
+    return defaultStateFor(readImageMetadata(primary).encoding);
 }
 
 /// @brief Develops the thumbnail of a photograph: half-size decode, pyramid, develop.
@@ -83,6 +99,8 @@ QImage developThumbnail(const fs::path& primary, const DevelopState& state) {
     for (int i = 0; i < level; ++i) {
         source = halved(source);
     }
+    // Radii in sensor pixels shrink with the reduction: the half-size decode
+    // and every halving say so on the pixels (ADR 039).
     return toDisplayImage(develop(source, state, request));
 }
 
@@ -228,7 +246,7 @@ void ThumbnailWorker::execute(const Job& job, std::uint64_t generation) {
                 cache_.store(*key, image);
             }
         } else {
-            const DevelopState state = savedState(job.primary);
+            const DevelopState state = thumbnailState(job.primary);
             const auto key = ThumbnailCache::developedKey(job.primary, state);
             if (!key) {
                 return;

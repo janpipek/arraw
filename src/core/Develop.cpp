@@ -1,6 +1,7 @@
 #include "Develop.h"
 
 #include "CheckpointState.h"
+#include "Denoise.h"
 #include "Effects.h"
 #include "ProcessingPlan.h"
 #include "Resample.h"
@@ -55,6 +56,7 @@ void developSamples(const ImageBuffer& source, ImageBuffer& result, const Chain&
 /// format.
 template <typename Chain> ImageBuffer runPointwise(const ImageBuffer& source, const Chain& chain) {
     ImageBuffer result(source.size(), workingFormat, workingEncoding);
+    result.setPixelScale(source.pixelScale());
     switch (source.format()) {
     case PixelFormat::RgbU8:
     case PixelFormat::RgbaU8:
@@ -78,9 +80,44 @@ ImageBuffer developPointwise(const ImageBuffer& source, const ProcessingPlan& pl
     return runPointwise(source, [&plan](Colour colour) { return developPixel(plan, colour); });
 }
 
+/// @brief Runs the Denoise pass that a plan resolved, or copies the source as it stands.
+///
+/// What a checkpoint at ::arraw::Stage::Denoise holds. With noise reduction off
+/// the boundary collapses onto the source (ADR 039), and only a render that
+/// stops there pays for the copy: it must own its pixels.
+ImageBuffer denoisedCopy(const ImageBuffer& source, const ProcessingPlan& plan) {
+    if (plan.denoise.active()) {
+        return applyDenoise(source, plan.denoise);
+    }
+    return source.format() == PixelFormat::RgbaF32 ? source.clone() : toRgbaF32(source);
+}
+
+/// @brief Runs the stages from the source to the pointwise boundary: denoise, if on, then the
+/// chain.
+///
+/// With noise reduction off the chain reads the source itself, so the pixels,
+/// and the cost, are those of before the Denoise stage existed.
+/// @param chain What one colour goes through: developPixel, or a tap's prefix.
+template <typename Chain>
+ImageBuffer pointwiseFromSource(const ImageBuffer& source, const ProcessingPlan& plan,
+                                const Chain& chain) {
+    if (!plan.denoise.active()) {
+        return runPointwise(source, chain);
+    }
+    return runPointwise(applyDenoise(source, plan.denoise), chain);
+}
+
+/// @brief Runs noise reduction and the pointwise chain over a source, into the working format.
+ImageBuffer developFromSource(const ImageBuffer& source, const ProcessingPlan& plan) {
+    const detail::TimingSpan timing("cpu.pointwise");
+    return pointwiseFromSource(source, plan,
+                               [&plan](Colour colour) { return developPixel(plan, colour); });
+}
+
 /// @brief Copies a rectangle of working-format pixels out of a frame.
 ImageBuffer cutOut(const ImageBuffer& frame, const PixelRegion& region) {
     ImageBuffer cut(region.size(), workingFormat, frame.encoding(), frame.orientation());
+    cut.setPixelScale(frame.pixelScale());
     const auto in = frame.samples<float>();
     const auto out = cut.samples<float>();
     const std::size_t rowSamples = static_cast<std::size_t>(region.width) * 4;
@@ -113,11 +150,6 @@ ImageBuffer effectsBy(ImageBuffer resized, const ProcessingPlan& plan) {
     return applyEffects(std::move(resized), plan.effects, frameMappingOf(plan));
 }
 
-/// @brief Whether a render stopping after a boundary reaches the resize, and so reads the request.
-bool readsRequest(Stage stopAfter) {
-    return stopAfter >= Stage::Resize;
-}
-
 /// @brief Checks that a pass boundary is one that exists.
 void requireBoundary(Stage stopAfter) {
     if (static_cast<std::size_t>(stopAfter) >= stageCount) {
@@ -132,6 +164,10 @@ void requireBoundary(Stage stopAfter) {
 /// @param stopAfter Last boundary to run, not before @p done.
 RenderCheckpoint runStages(Stage done, ImageBuffer pixels, ProcessingPlan plan, Stage stopAfter) {
     Stage at = done;
+    if (at == Stage::Denoise && stopAfter != Stage::Denoise) {
+        pixels = developPointwise(pixels, plan);
+        at = Stage::Pointwise;
+    }
     if (at == Stage::Pointwise && stopAfter != Stage::Pointwise) {
         pixels = applyGeometry(std::move(pixels), *plan.geometry);
         at = Stage::Geometry;
@@ -154,7 +190,7 @@ ImageBuffer arraw::develop(const ImageBuffer& source, const DevelopState& state,
     const detail::TimingSpan timing("cpu.develop");
     // The direct path: no checkpoint, so nothing is shared and nothing copied.
     const ProcessingPlan plan = planFor(source, state, request);
-    return effectsBy(resizeBy(applyGeometry(developPointwise(source, plan), *plan.geometry), plan),
+    return effectsBy(resizeBy(applyGeometry(developFromSource(source, plan), *plan.geometry), plan),
                      plan);
 }
 
@@ -163,9 +199,12 @@ RenderCheckpoint arraw::developUntil(const ImageBuffer& source, const DevelopSta
     requireBoundary(stopAfter);
     // Only a render that reaches the resize plans one: stopping earlier ignores
     // the request, and has no use for the opacity scan.
-    ProcessingPlan plan =
-        planFor(source, state, readsRequest(stopAfter) ? request : RenderRequest{});
-    ImageBuffer developed = developPointwise(source, plan);
+    ProcessingPlan plan = planFor(source, state, plannedRequest(request, stopAfter));
+    if (stopAfter == Stage::Denoise) {
+        ImageBuffer denoised = denoisedCopy(source, plan);
+        return makeCheckpoint(Stage::Denoise, std::move(plan), std::move(denoised));
+    }
+    ImageBuffer developed = developFromSource(source, plan);
     return runStages(Stage::Pointwise, std::move(developed), std::move(plan), stopAfter);
 }
 
@@ -178,11 +217,16 @@ RenderCheckpoint arraw::resumeFrom(const RenderCheckpoint& from, const ImageBuff
     if (pixels == nullptr) {
         throw std::invalid_argument("A checkpoint on a device cannot be resumed on the CPU");
     }
-    ProcessingPlan plan =
-        planFor(source, state, readsRequest(stopAfter) ? request : RenderRequest{});
+    ProcessingPlan plan = planFor(source, state, plannedRequest(request, stopAfter));
     requireResumable(held, plan, source.size(), stopAfter);
     if (stopAfter == held.boundary) {
         return from;
+    }
+    if (held.boundary == Stage::Denoise) {
+        // The chain reads its input without consuming it, so the shared pixels
+        // need no copy: a tone edit resumes for the price of the chain alone.
+        ImageBuffer developed = developPointwise(*pixels, plan);
+        return runStages(Stage::Pointwise, std::move(developed), std::move(plan), stopAfter);
     }
     return runStages(held.boundary, pixels->clone(), std::move(plan), stopAfter);
 }
@@ -193,8 +237,8 @@ ImageBuffer arraw::sample(const ImageBuffer& source, const DevelopState& state, 
     static_cast<void>(tapEncoding(tap));
     const detail::TimingSpan timing("cpu.sample");
     const ProcessingPlan plan = planFor(source, state, request);
-    ImageBuffer tapped = runPointwise(
-        source, [&plan, tap](Colour colour) { return developToTap(plan, colour, tap); });
+    ImageBuffer tapped = pointwiseFromSource(
+        source, plan, [&plan, tap](Colour colour) { return developToTap(plan, colour, tap); });
     // The same geometry and resize as a render, in linear light (ADR 020), so
     // the sample covers the frame the render shows; then the tap's encoding.
     const ImageBuffer framed = resizeBy(applyGeometry(std::move(tapped), *plan.geometry), plan);

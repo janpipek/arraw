@@ -28,6 +28,9 @@ struct PanelContext {
 
     /// @brief The light the decode balanced for, shown where a setting is absent.
     std::optional<ColourTemperature> asShot = std::nullopt;
+
+    /// @brief What a reset restores: the photograph's defaults (::arraw::defaultStateFor).
+    DevelopSettings defaults{};
 };
 
 /// @brief Panel of the develop controls, showing a state and reporting edits to it.
@@ -115,6 +118,9 @@ private:
     /// @brief Builds the Colour Grading group: a hue and saturation per tonal zone, Balance,
     /// Blending.
     QWidget* buildColorGradingGroup();
+
+    /// @brief Builds the Noise Reduction group: luminance and colour, each with its refinement.
+    QWidget* buildNoiseReductionGroup();
 
     /// @brief Builds the Effects group: the post-crop vignette's rows and the grain's.
     QWidget* buildEffectsGroup();

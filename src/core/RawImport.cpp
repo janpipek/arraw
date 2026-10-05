@@ -374,7 +374,12 @@ ImageBuffer arraw::rawimport::load(const std::filesystem::path& path, Diagnostic
     ImageBuffer decoded = toBuffer(*image, metadata.encoding, metadata.orientation);
     if (options.halfSize && decoded.size() == metadata.size && decoded.size().width >= 2 &&
         decoded.size().height >= 2) {
-        return halvedRgbaU16(decoded);
+        decoded = halvedRgbaU16(decoded);
+    }
+    if (options.halfSize && decoded.size() != metadata.size) {
+        // Each pixel is a 2x2 block of the sensor, whoever combined it; a
+        // stage measured in sensor pixels reads this (ADR 039).
+        decoded.setPixelScale(2.0);
     }
     return decoded;
 }

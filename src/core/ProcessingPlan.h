@@ -2,6 +2,7 @@
 
 #include "ColorAdjustments.h"
 #include "ColorSpaces.h"
+#include "Denoise.h"
 #include "Effects.h"
 #include "GeometryPlan.h"
 #include "ToneCurve.h"
@@ -131,6 +132,14 @@ struct ResizePlan {
 /// Settings that are switched off should resolve to a value that costs
 /// nothing here rather than to a test inside the per-pixel loop.
 struct ProcessingPlan {
+    /// @brief Luminance and colour noise reduction, run on the source before anything else.
+    ///
+    /// Its own pass and the first group of `stagesOf` (ADR 039). It reads the
+    /// source's as-shot luminance row, never @ref toWorking, so that white
+    /// balance and exposure cannot reach it. With both halves off it is the
+    /// default, and the pass does not run.
+    DenoisePlan denoise{};
+
     /// @brief Source primaries into the working space, white balance included.
     ///
     /// White balance, the camera matrix, and any change of primaries are all
@@ -221,14 +230,15 @@ struct ProcessingPlan {
 /// @brief Groups the plan's fields by the pass that consumes them.
 ///
 /// ADR 011's partition, with the passes that exist today. The plan is still
-/// flat — decode, lens, spots and noise are not stages yet — so this groups
-/// fields rather than blocks, and becomes `std::tie(p.decode, ...)` as each of
-/// those arrives. The grouping is what the prefix comparison folds over, so
-/// there is no per-stage line to forget, only this list to keep honest.
+/// partly flat — decode, lens and spots are not stages yet, and the pointwise
+/// fields are not one block — so this groups fields rather than blocks, and
+/// becomes `std::tie(p.decode, ...)` as each of those arrives. The grouping is what the prefix
+/// comparison folds over, so there is no per-stage line to forget, only this list to keep honest.
 /// @param plan Plan to view by stage.
 /// @return One tuple element per ::arraw::Stage, in pipeline order.
 [[nodiscard]] inline auto stagesOf(const ProcessingPlan& plan) {
-    return std::make_tuple(std::tie(plan.toWorking, plan.exposureGain, plan.shapesTone,
+    return std::make_tuple(std::tie(plan.denoise),
+                           std::tie(plan.toWorking, plan.exposureGain, plan.shapesTone,
                                     plan.contrastSlope, plan.contrastScale, plan.shadowShift,
                                     plan.highlightShift, plan.blackShift, plan.whiteShift,
                                     plan.shoulderKnee, plan.toneCurves, plan.colorAdjustments),
@@ -283,6 +293,22 @@ static_assert(std::tuple_size_v<decltype(stagesOf(std::declval<const ProcessingP
     }(std::make_index_sequence<stageCount>{});
 }
 
+/// @brief Gives the part of a request a render stopping after a boundary reads.
+///
+/// A render that stops before the resize ignores the request's size, region
+/// and filter, whatever they say, and so has no use for the opacity scan
+/// either. What the source's pixels are, such as their pixel scale, is read
+/// from the source, not from the request (ADR 039).
+/// @param request What the caller asked for.
+/// @param stopAfter Last boundary the render runs.
+/// @return @p request itself, or a default one.
+[[nodiscard]] inline RenderRequest plannedRequest(const RenderRequest& request, Stage stopAfter) {
+    if (stopAfter >= Stage::Resize) {
+        return request;
+    }
+    return {};
+}
+
 /// @brief Resolves tone settings into a plan with an identity colour transform and no colour
 /// adjustments.
 /// @param settings Tone adjustments to resolve.
@@ -299,14 +325,17 @@ static_assert(std::tuple_size_v<decltype(stagesOf(std::declval<const ProcessingP
 
 /// @brief Works out what a photograph's settings mean for its pixels.
 ///
-/// Resolves only colour and tone; buffer and Photo overloads also resolve geometry.
-/// This overload carries no source identity and must not be used as a cache key.
+/// Resolves only noise reduction, colour and tone; buffer and Photo overloads
+/// also resolve geometry. This overload carries no source identity and must
+/// not be used as a cache key.
 /// @param encoding Encoding the decoded pixels are in.
 /// @param state State to resolve.
+/// @param pixelScale Sensor pixels per pixel of the source (::arraw::ImageBuffer::pixelScale).
 /// @return The plan both backends execute.
 /// @throws std::invalid_argument if development cannot start from @p encoding,
 /// or the settings cannot be resolved against it.
-[[nodiscard]] ProcessingPlan planFor(const ColorEncoding& encoding, const DevelopState& state);
+[[nodiscard]] ProcessingPlan planFor(const ColorEncoding& encoding, const DevelopState& state,
+                                     double pixelScale = 1.0);
 
 /// @brief Resolves pointwise processing, geometry and the resize against decoded pixels.
 ///
@@ -661,9 +690,10 @@ inline constexpr float curveRatioFloor = 0x1p-14F;
 ///
 /// What tells a caller that a sample, or a histogram of one, is still current
 /// after an edit: dragging a curve changes the plan but not the curve input,
-/// so a curve widget need not sample again (ADR 035). Compares the fields the
-/// chain reads up to @p tap, then geometry and the resize, which a sample runs
-/// through as a render does. Exact float equality, for the reasons
+/// so a curve widget need not sample again (ADR 035). Compares the denoise
+/// block, which runs before the chain, the fields the chain reads up to
+/// @p tap, then geometry and the resize, which a sample runs through as a
+/// render does. Exact float equality, for the reasons
 /// ::arraw::prefixMatches gives. The source is not part of a plan, so the
 /// caller must also know that both are for the same pixels.
 /// @param first One plan.
@@ -673,7 +703,8 @@ inline constexpr float curveRatioFloor = 0x1p-14F;
 /// it, and in geometry and the resize.
 [[nodiscard]] inline bool sameAtTap(const ProcessingPlan& first, const ProcessingPlan& second,
                                     Tap tap) {
-    const bool sameFrame = first.geometry == second.geometry && first.resize == second.resize;
+    const bool sameFrame = first.denoise == second.denoise && first.geometry == second.geometry &&
+                           first.resize == second.resize;
     switch (tap) {
     case Tap::CurveInput:
         return sameFrame && curveInputFieldsOf(first) == curveInputFieldsOf(second);

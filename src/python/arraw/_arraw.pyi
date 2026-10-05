@@ -121,6 +121,15 @@ class ImageBuffer:
     def orientation(self) -> ImageOrientation: ...
 
     @property
+    def pixel_scale(self) -> float:
+        """
+        Sensor pixels one pixel spans along each side: 1 for a full decode, 2 for a half-size one, doubled by each halving. Noise reduction divides its reach by it. Finite and above zero.
+        """
+
+    @pixel_scale.setter
+    def pixel_scale(self, arg: float, /) -> None: ...
+
+    @property
     def pixels(self) -> NDArray:
         """
         Writable NumPy view of shape (height, width, channels), without a copy; it keeps the buffer alive.
@@ -133,7 +142,7 @@ def read_metadata(path: str | os.PathLike) -> ImageMetadata:
 
 def load(path: str | os.PathLike, half_size: bool = False) -> ImageBuffer:
     """
-    Decode an image file into a buffer. With half_size a RAW is decoded at half its width and height, without demosaicing, and the buffer is that much smaller than read_metadata says; other files ignore it.
+    Decode an image file into a buffer. With half_size a RAW is decoded at half its width and height, without demosaicing, its pixel_scale is 2, and the buffer is that much smaller than read_metadata says; other files ignore it.
     """
 
 def read_embedded_preview(path: str | os.PathLike, max_edge: int) -> ImageBuffer | None:
@@ -317,6 +326,8 @@ class SettingGroup(enum.Enum):
 
     EFFECTS = 7
 
+    DETAIL = 8
+
 class Applicability(enum.Enum):
     """Whether a setting means anything for every photograph."""
 
@@ -336,16 +347,23 @@ class GrainModel(enum.Enum):
 
     VALUE_NOISE = 0
 
+class LuminanceNoiseFilter(enum.Enum):
+    """Filter that smooths luminance noise."""
+
+    BILATERAL = 0
+
 class Stage(enum.Enum):
     """Pass boundary of the render pipeline."""
 
-    POINTWISE = 0
+    DENOISE = 0
 
-    GEOMETRY = 1
+    POINTWISE = 1
 
-    RESIZE = 2
+    GEOMETRY = 2
 
-    EFFECTS = 3
+    RESIZE = 3
+
+    EFFECTS = 4
 
 class ToneSettings:
     """Photographic tone adjustments."""
@@ -815,6 +833,39 @@ class EffectsSettings:
     def replace(self, **kwargs) -> EffectsSettings:
         """Return a copy with the given attributes replaced."""
 
+class NoiseReductionSettings:
+    """
+    Luminance and colour noise reduction, run on the decoded photograph first.
+
+    Radii are in sensor pixels; with both amounts at 0 nothing happens.
+    """
+
+    def __init__(self, *, luminance: float | None = 0.0, luminance_detail: float | None = 50.0, luminance_filter: LuminanceNoiseFilter = LuminanceNoiseFilter.BILATERAL, color: float | None = 0.0, color_smoothness: float | None = 50.0) -> None: ...
+
+    @property
+    def luminance(self) -> float: ...
+
+    @property
+    def luminance_detail(self) -> float: ...
+
+    @property
+    def luminance_filter(self) -> LuminanceNoiseFilter: ...
+
+    @property
+    def color(self) -> float: ...
+
+    @property
+    def color_smoothness(self) -> float: ...
+
+    def __eq__(self, arg: NoiseReductionSettings, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> NoiseReductionSettings:
+        """Return a copy with the given attributes replaced."""
+
 def choose_grain_seed(previous: GrainSettings, next: GrainSettings, entropy: Callable[[], int] | None = None) -> int:
     """
     Return the seed grain should carry after an edit from `previous` to `next`: a new one, never 0, when the edit turns grain on (amount from 0 to above 0) and `next` has none, else `next`'s seed, 0 included. `entropy` returns 32 random bits per call; None uses the operating system's. Store the result as the photograph's grain seed.
@@ -823,7 +874,7 @@ def choose_grain_seed(previous: GrainSettings, next: GrainSettings, entropy: Cal
 class DevelopSettings:
     """Photographic settings of one photograph."""
 
-    def __init__(self, *, color: ColorSettings | None = None, geometry: GeometrySettings | None = None, tone: ToneSettings | None = None, hsl: HslSettings | None = None, black_and_white: BlackAndWhiteSettings | None = None, tone_curve: ToneCurveSettings | None = None, color_grading: ColorGradingSettings | None = None, effects: EffectsSettings | None = None) -> None: ...
+    def __init__(self, *, color: ColorSettings | None = None, geometry: GeometrySettings | None = None, tone: ToneSettings | None = None, hsl: HslSettings | None = None, black_and_white: BlackAndWhiteSettings | None = None, tone_curve: ToneCurveSettings | None = None, color_grading: ColorGradingSettings | None = None, effects: EffectsSettings | None = None, noise_reduction: NoiseReductionSettings | None = None) -> None: ...
 
     @property
     def color(self) -> ColorSettings: ...
@@ -848,6 +899,9 @@ class DevelopSettings:
 
     @property
     def effects(self) -> EffectsSettings: ...
+
+    @property
+    def noise_reduction(self) -> NoiseReductionSettings: ...
 
     def __eq__(self, arg: DevelopSettings, /) -> bool: ...
 
@@ -1010,12 +1064,14 @@ class DevelopState:
         """Return a copy with the given attributes replaced."""
 
 class SidecarContents:
-    """What an XMP sidecar holds, and which other tools wrote in it."""
+    """
+    What an XMP sidecar holds, and which other tools wrote in it. `state` is None when the sidecar records no develop settings (marks only, or another tool's).
+    """
 
     def __init__(self, *, state: DevelopState | None = None, marks: PhotoMarks | None = None, creator_tool: str | None = None, others: Sequence[ForeignNamespace] | None = None) -> None: ...
 
     @property
-    def state(self) -> DevelopState: ...
+    def state(self) -> DevelopState | None: ...
 
     @property
     def marks(self) -> PhotoMarks: ...
@@ -1034,6 +1090,16 @@ class SidecarContents:
 
     def replace(self, **kwargs) -> SidecarContents:
         """Return a copy with the given attributes replaced."""
+
+@overload
+def default_state(metadata: ImageMetadata) -> DevelopState:
+    """
+    The state a photograph of this kind starts from: colour noise reduction 25 for a RAW, the neutral DevelopState() for anything else. What open() gives a photograph with no sidecar.
+    """
+
+@overload
+def default_state(buffer: ImageBuffer) -> DevelopState:
+    """The state a decoded buffer's kind starts from, as for its metadata."""
 
 def xmp_namespace_owner(uri: str) -> str | None:
     """
@@ -1079,7 +1145,7 @@ class Photo:
 
 def open(path: str | os.PathLike, *, sidecar: bool = True) -> Photo:
     """
-    Open a photograph; reads its metadata, not its pixels. Its XMP sidecar supplies the state and marks unless sidecar=False. A sidecar that cannot be read is logged as an error on the 'arraw' logger, not raised, and the defaults are used.
+    Open a photograph; reads its metadata, not its pixels. Its XMP sidecar supplies the state and marks unless sidecar=False. Without one, or with one that records no settings, the state is default_state(metadata). A sidecar that cannot be read is logged as an error on the 'arraw' logger, not raised, and the defaults are used.
     """
 
 def sidecar_path(path: str | os.PathLike) -> pathlib.Path:
@@ -1101,7 +1167,7 @@ def write_sidecar_marks(path: str | os.PathLike, marks: PhotoMarks) -> None:
 @overload
 def develop(source: ImageBuffer, state: DevelopState | None = None, *, size: int | tuple[int, int] | float | None = None, filter: ResizeFilter = ResizeFilter.LANCZOS3, allow_upscale: bool = False) -> ImageBuffer:
     """
-    Develop a decoded buffer on the CPU; default state leaves the colour unchanged. `size` renders the cropped result smaller: an int is the long edge, a (width, height) tuple a box to fit inside, a float a scale factor. Sizes only shrink unless `allow_upscale`.
+    Develop a decoded buffer on the CPU; with no state, the defaults of its kind (default_state: colour noise reduction for a RAW, nothing for anything else). `size` renders the cropped result smaller: an int is the long edge, a (width, height) tuple a box to fit inside, a float a scale factor. Sizes only shrink unless `allow_upscale`.
     """
 
 @overload

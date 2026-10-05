@@ -188,10 +188,24 @@ void bindPhoto(nb::module_& m) {
         field("settings", &DevelopState::settings));
 
     bindFrozen<SidecarContents>(
-        m, "SidecarContents", "What an XMP sidecar holds, and which other tools wrote in it.",
+        m, "SidecarContents",
+        "What an XMP sidecar holds, and which other tools wrote in it. `state` is None when the "
+        "sidecar records no develop settings (marks only, or another tool's).",
         field("state", &SidecarContents::state), field("marks", &SidecarContents::marks),
         field("creator_tool", &SidecarContents::creatorTool),
         field("others", &SidecarContents::others));
+
+    m.def(
+        "default_state",
+        [](const ImageMetadata& metadata) { return defaultStateFor(metadata.encoding); },
+        "metadata"_a,
+        "The state a photograph of this kind starts from: colour noise reduction 25 for a RAW, "
+        "the neutral DevelopState() for anything else. What open() gives a photograph with no "
+        "sidecar.");
+    m.def(
+        "default_state",
+        [](const ImageBuffer& buffer) { return defaultStateFor(buffer.encoding()); }, "buffer"_a,
+        "The state a decoded buffer's kind starts from, as for its metadata.");
 
     m.def("xmp_namespace_owner", &xmpNamespaceOwner, "uri"_a,
           "Name the tool or standard behind an XMP namespace URI, or None when unknown.");
@@ -232,8 +246,9 @@ void bindPhoto(nb::module_& m) {
         },
         "path"_a, nb::kw_only(), "sidecar"_a = true,
         "Open a photograph; reads its metadata, not its pixels. Its XMP sidecar supplies the "
-        "state and marks unless sidecar=False. A sidecar that cannot be read is logged as an "
-        "error on the 'arraw' logger, not raised, and the defaults are used.");
+        "state and marks unless sidecar=False. Without one, or with one that records no "
+        "settings, the state is default_state(metadata). A sidecar that cannot be read is "
+        "logged as an error on the 'arraw' logger, not raised, and the defaults are used.");
 
     m.def(
         "sidecar_path",
@@ -269,8 +284,9 @@ void bindPhoto(nb::module_& m) {
         [](const ImageBuffer& source, const std::optional<DevelopState>& state,
            const nb::object& size, const nb::object& filter, bool allowUpscale) {
             const RenderRequest request = requestFrom(size, filter, allowUpscale);
-            return withoutGil(
-                [&] { return develop(source, state.value_or(DevelopState{}), request); });
+            return withoutGil([&] {
+                return develop(source, state.value_or(defaultStateFor(source.encoding())), request);
+            });
         },
         "source"_a, "state"_a = nb::none(), nb::kw_only(), "size"_a = nb::none(),
         "filter"_a = requestDefaults.filter,
@@ -278,7 +294,8 @@ void bindPhoto(nb::module_& m) {
         nb::sig("def develop(source: ImageBuffer, state: DevelopState | None = None, *, "
                 "size: int | tuple[int, int] | float | None = None, filter: ResizeFilter = "
                 "arraw._arraw.ResizeFilter.LANCZOS3, allow_upscale: bool = False) -> ImageBuffer"),
-        "Develop a decoded buffer on the CPU; default state leaves the colour unchanged. "
+        "Develop a decoded buffer on the CPU; with no state, the defaults of its kind "
+        "(default_state: colour noise reduction for a RAW, nothing for anything else). "
         "`size` renders the cropped result smaller: an int is the long edge, a (width, height) "
         "tuple a box to fit inside, a float a scale factor. Sizes only shrink unless "
         "`allow_upscale`.");
@@ -313,8 +330,10 @@ void bindPhoto(nb::module_& m) {
         [](const ImageBuffer& source, Tap tap, const std::optional<DevelopState>& state,
            const nb::object& size, const nb::object& filter, bool allowUpscale) {
             const RenderRequest request = requestFrom(size, filter, allowUpscale);
-            return withoutGil(
-                [&] { return sample(source, state.value_or(DevelopState{}), tap, request); });
+            return withoutGil([&] {
+                return sample(source, state.value_or(defaultStateFor(source.encoding())), tap,
+                              request);
+            });
         },
         "source"_a, "tap"_a, "state"_a = nb::none(), nb::kw_only(), "size"_a = nb::none(),
         "filter"_a = requestDefaults.filter,

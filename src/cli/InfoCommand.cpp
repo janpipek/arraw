@@ -589,14 +589,17 @@ FileReport open(const InfoRequest& request, const std::filesystem::path& input,
         throw std::runtime_error("its sidecar could not be read; fix it, or pass --no-sidecar to "
                                  "show the file without it");
     }
-    FileReport report{contents ? Photo(input, std::move(metadata), contents->state, contents->marks)
-                               : Photo(input, std::move(metadata)),
-                      std::nullopt,
-                      sidecar,
-                      true,
-                      readExif(input, exifLog),
-                      std::nullopt,
-                      {}};
+    // As openPhoto: a sidecar that records no settings leaves the kind's defaults.
+    const auto photoOf = [&](ImageMetadata described) {
+        if (!contents) {
+            return Photo(input, std::move(described));
+        }
+        DevelopState state =
+            contents->state ? *contents->state : defaultStateFor(described.encoding);
+        return Photo(input, std::move(described), std::move(state), contents->marks);
+    };
+    FileReport report{photoOf(std::move(metadata)), std::nullopt, sidecar, true,
+                      readExif(input, exifLog),     std::nullopt, {}};
     if (contents) {
         report.creatorTool = contents->creatorTool;
         report.others = contents->others;

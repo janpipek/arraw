@@ -31,6 +31,7 @@ ImageBuffer toRgbaF32(const ImageBuffer& source) {
     }
     ImageBuffer result(source.size(), PixelFormat::RgbaF32, source.encoding(),
                        source.orientation());
+    result.setPixelScale(source.pixelScale());
     switch (source.format()) {
     case PixelFormat::RgbU8:
     case PixelFormat::RgbaU8:

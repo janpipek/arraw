@@ -13,6 +13,7 @@
 #include <Diagnostics.h>
 #include <EffectsSettings.h>
 #include <ExifInfo.h>
+#include <NoiseReductionSettings.h>
 #include <Photo.h>
 #include <Sidecar.h>
 
@@ -584,6 +585,29 @@ TEST_CASE("The highlight roll-off reaches the exported pixels", "[cli]") {
     const auto rolledRight = rolled.pixelColor(31, 12);
     REQUIRE(rolledLeft.greenF() < 1.0F);
     REQUIRE(rolledLeft.greenF() < rolledRight.greenF());
+}
+
+TEST_CASE("A RAW without a sidecar exports with its kind's colour noise reduction",
+          "[cli][noise]") {
+    // ADR 039: the CLI opens a RAW as the app does, with Lightroom's 25, with
+    // or without --no-sidecar, unless a flag names another value.
+    const test::TempDir directory;
+    const auto raw = test::fixture("linear-32x24-skewed.dng").string();
+    const auto exported =
+        QString::fromStdString(directory.file("linear-32x24-skewed.png").string());
+    const auto exportWith = [&](std::vector<std::string> flags) {
+        std::vector<std::string> arguments{
+            "export",      raw,  "-o",         directory.path().string(), "--format", "png",
+            "--bit-depth", "16", "--overwrite"};
+        arguments.insert(arguments.end(), flags.begin(), flags.end());
+        REQUIRE(invoke(arguments).code == cli::Success);
+        return QImage(exported);
+    };
+    const QImage plain = exportWith({});
+    REQUIRE_FALSE(plain.isNull());
+    REQUIRE(exportWith({"--no-sidecar"}) == plain);
+    REQUIRE(exportWith({"--color-noise-reduction", "25"}) == plain);
+    REQUIRE(exportWith({"--color-noise-reduction", "0"}) != plain);
 }
 
 TEST_CASE("White balance reaches the exported pixels", "[cli]") {
@@ -1832,6 +1856,32 @@ TEST_CASE("The grain flags set the photograph's seed and model, exactly", "[cli]
     }
 }
 
+TEST_CASE("The noise reduction flags set their fields, and the filter is a name",
+          "[cli][sidecar][noise]") {
+    DevelopSettings sidecar;
+    sidecar.noiseReduction.color = 30.0F;
+
+    SECTION("the flags replace their own fields only") {
+        const DevelopSettings result =
+            applied(sidecar, {"--luminance-noise-reduction", "60", "--luminance-noise-detail", "20",
+                              "--color-noise-smoothness", "75"});
+        REQUIRE(result.noiseReduction.luminance == 60.0F);
+        REQUIRE(result.noiseReduction.luminanceDetail == 20.0F);
+        REQUIRE(result.noiseReduction.color == 30.0F);
+        REQUIRE(result.noiseReduction.colorSmoothness == 75.0F);
+        REQUIRE(applied(sidecar, {"--luminance-noise-filter", "bilateral"})
+                    .noiseReduction.luminanceFilter == LuminanceNoiseFilter::Bilateral);
+    }
+    SECTION("an unknown filter and an out-of-range amount are usage errors") {
+        std::ostringstream err;
+        REQUIRE_FALSE(cli::readExportEdits({"--luminance-noise-filter", "guided"}, err));
+        REQUIRE_THAT(err.str(), ContainsSubstring("--luminance-noise-filter takes bilateral"));
+        std::ostringstream rangeErr;
+        REQUIRE_FALSE(cli::readExportEdits({"--color-noise-reduction", "101"}, rangeErr));
+        REQUIRE_THAT(rangeErr.str(), ContainsSubstring("--color-noise-reduction accepts 0 to 100"));
+    }
+}
+
 TEST_CASE("Grain the photograph has keeps its pattern, and only the flags turning it on reseed",
           "[cli][sidecar][grain]") {
     // Enlarged and coarse, so the grain shows in an 8-bit PNG.
@@ -2113,7 +2163,8 @@ TEST_CASE("Info shows a file without a sidecar as it opens", "[cli][info]") {
     REQUIRE_THAT(result.out, ContainsSubstring("orientation: normal"));
     REQUIRE_THAT(result.out, ContainsSubstring("encoding: camera"));
     REQUIRE_THAT(result.out, ContainsSubstring("sidecar: none"));
-    REQUIRE_THAT(result.out, ContainsSubstring("develop settings: defaults"));
+    // A RAW starts with colour noise reduction, listed as it differs from neutral (ADR 039).
+    REQUIRE_THAT(result.out, ContainsSubstring("develop settings:\n    colorNoiseReduction: 25\n"));
     REQUIRE_THAT(result.out, !ContainsSubstring("rating"));
     REQUIRE_THAT(result.out, !ContainsSubstring("label"));
 }
@@ -2300,7 +2351,7 @@ TEST_CASE("Info --all lists every setting", "[cli][info]") {
         REQUIRE(at >= previous);
         previous = at;
     }
-    REQUIRE(developSettingDescriptors.size() == 71);
+    REQUIRE(developSettingDescriptors.size() == 76);
     REQUIRE_THAT(result.out, ContainsSubstring("temperature: unset"));
 }
 
@@ -2369,7 +2420,10 @@ TEST_CASE("Info --json is one document with the settings in table order", "[cli]
         REQUIRE(file.value("sidecar").isNull());
         REQUIRE(file.value("marks").toObject().value("rating").toInt() == 0);
         REQUIRE(file.value("marks").toObject().value("label").isNull());
-        REQUIRE(file.value("settings").toObject().isEmpty());
+        // What a RAW starts from, against the neutral settings the document assumes.
+        const QJsonObject settings = file.value("settings").toObject();
+        REQUIRE(settings.size() == 1);
+        REQUIRE(settings.value("colorNoiseReduction").toDouble() == 25.0);
     }
     SECTION("a file with one") {
         const auto result = invoke({"info", "--json", edited.string()});
@@ -2389,7 +2443,7 @@ TEST_CASE("Info --json is one document with the settings in table order", "[cli]
     SECTION("--all lists every key in table order") {
         const auto result = invoke({"info", "--json", "--all", plain.string()});
         REQUIRE(result.code == cli::Success);
-        REQUIRE(firstFile(result.out).value("settings").toObject().size() == 71);
+        REQUIRE(firstFile(result.out).value("settings").toObject().size() == 76);
         std::size_t previous = 0;
         for (const FieldDescriptor& descriptor : developSettingDescriptors) {
             const auto at = result.out.find("\"" + std::string(descriptor.key) + "\":");
@@ -2430,7 +2484,7 @@ TEST_CASE("Info --no-sidecar shows the file as it opens without one", "[cli][inf
     REQUIRE(result.code == cli::Success);
     REQUIRE_THAT(result.out, ContainsSubstring("sidecar: " + directory.file("frame.xmp").string() +
                                                " (ignored)"));
-    REQUIRE_THAT(result.out, ContainsSubstring("develop settings: defaults"));
+    REQUIRE_THAT(result.out, ContainsSubstring("develop settings:\n    colorNoiseReduction: 25\n"));
     REQUIRE_THAT(result.out, !ContainsSubstring("rating"));
 
     const auto json = firstFile(invoke({"info", "--json", "--no-sidecar", raw.string()}).out);

@@ -212,9 +212,10 @@ TEST_CASE("The grade belongs to the pointwise group of the plan", "[grading][pla
     const ProcessingPlan base = planOf({});
     const ProcessingPlan plan = planOf(graded({.highlights = {.hue = 50.0F, .saturation = 10.0F}}));
     REQUIRE(plan != base);
-    REQUIRE(std::get<0>(stagesOf(plan)) != std::get<0>(stagesOf(base)));
-    REQUIRE(std::get<1>(stagesOf(plan)) == std::get<1>(stagesOf(base)));
+    REQUIRE(std::get<0>(stagesOf(plan)) == std::get<0>(stagesOf(base)));
+    REQUIRE(std::get<1>(stagesOf(plan)) != std::get<1>(stagesOf(base)));
     REQUIRE(std::get<2>(stagesOf(plan)) == std::get<2>(stagesOf(base)));
+    REQUIRE(std::get<3>(stagesOf(plan)) == std::get<3>(stagesOf(base)));
     REQUIRE_FALSE(prefixMatches(plan, base, Stage::Pointwise));
 }
 

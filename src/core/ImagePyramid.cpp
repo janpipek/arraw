@@ -35,6 +35,7 @@ ImageBuffer halved(const ImageBuffer& image) {
 
     const ImageSize out = halfOf(in);
     ImageBuffer result(out, PixelFormat::RgbaF32, image.encoding(), image.orientation());
+    result.setPixelScale(2.0 * image.pixelScale());
     const auto input = source.samples<float>();
     auto output = result.samples<float>();
     for (std::uint32_t y = 0; y < out.height; ++y) {

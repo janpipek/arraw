@@ -18,6 +18,14 @@ PixelFormat DeviceImage::format() const noexcept {
     return state_ ? state_->format : workingFormat;
 }
 
+double DeviceImage::pixelScale() const noexcept {
+    return state_ ? state_->pixelScale : 1.0;
+}
+
+std::size_t DeviceImage::channelCount() const noexcept {
+    return state_ ? state_->channels : 4;
+}
+
 const ColorEncoding& DeviceImage::encoding() const {
     if (!state_) {
         throw std::logic_error("An empty device image has no encoding");

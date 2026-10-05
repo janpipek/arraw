@@ -195,6 +195,10 @@ void verticalPass(const Pass& input, std::uint32_t width, std::uint32_t inHeight
 
 } // namespace
 
+double arraw::resampledPixelScale(double scale, std::uint32_t from, std::uint32_t to) {
+    return scale * static_cast<double>(from) / static_cast<double>(to);
+}
+
 ImageBuffer arraw::resample(ImageBuffer source, ImageSize size, ResizeFilter filter, bool opaque) {
     const detail::TimingSpan timing("cpu.resize");
     if (source.format() != workingFormat) {
@@ -208,6 +212,7 @@ ImageBuffer arraw::resample(ImageBuffer source, ImageSize size, ResizeFilter fil
     }
 
     ImageBuffer result(size, workingFormat, source.encoding(), source.orientation());
+    result.setPixelScale(resampledPixelScale(source.pixelScale(), source.size().width, size.width));
     const auto out = result.samples<float>();
     if (opaque) {
         const Pass across = horizontalPass<true>(source, size.width, filter);

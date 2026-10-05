@@ -1,12 +1,16 @@
+#include "SampleConversion.h"
+
 #include <ImageBuffer.h>
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <limits>
 #include <span>
+#include <stdexcept>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -158,4 +162,19 @@ TEST_CASE("Buffers move rather than copy", "[ImageBuffer]") {
     REQUIRE(moved.size() == ImageSize{2, 2});
     REQUIRE(moved.samples<float>().data() == storage);
     REQUIRE(moved.samples<float>()[3] == 2.5F);
+}
+
+TEST_CASE("A buffer carries its pixel scale through copies", "[ImageBuffer]") {
+    ImageBuffer buffer({4, 2}, PixelFormat::RgbaU16, workingEncoding);
+    REQUIRE(buffer.pixelScale() == 1.0);
+    buffer.setPixelScale(2.0);
+    REQUIRE(buffer.clone().pixelScale() == 2.0);
+    REQUIRE(toRgbaF32(buffer).pixelScale() == 2.0);
+    const ImageBuffer moved = std::move(buffer);
+    REQUIRE(moved.pixelScale() == 2.0);
+    ImageBuffer other({1, 1}, PixelFormat::RgbaF32, workingEncoding);
+    for (const double bad : {0.0, -2.0, std::numeric_limits<double>::infinity(), std::nan("")}) {
+        REQUIRE_THROWS_AS(other.setPixelScale(bad), std::invalid_argument);
+    }
+    REQUIRE(other.pixelScale() == 1.0);
 }

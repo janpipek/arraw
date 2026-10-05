@@ -275,7 +275,7 @@ committed on its own. Each ends with an ADR and green
    as a replaceable model (value noise first, band-limited by pixel
    footprint), the hidden seed behind `arraw::chooseGrainSeed`, both
    backends, CLI/Python, panel rows; callers moved to the new boundary.
-6. **Denoise.** `Stage::Denoise`, the luma filter seam with the separable
+6. **Denoise.** Done (ADR 039). `Stage::Denoise`, the luma filter seam with the separable
    bilateral, the chroma blur, Luminance and Colour NR, preview debounce,
    panel rows.
 7. **Texture, Clarity, Dehaze.** Context side-product, chain stage, panel rows.

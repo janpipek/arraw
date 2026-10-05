@@ -149,3 +149,13 @@ a handle that grows a boundary and a plan prefix, at which point it is a
 checkpoint with a different name — and because these ADRs have repeatedly
 refused to multiply mechanisms: two verbs deliberately in ADR 011, no callback
 interface there, no generation counter in ADR 012.
+
+## Note, 2026-10-05
+
+A device image now also carries the pixel scale of the buffer it came from
+(`DeviceImage::pixelScale`, see [ADR 039](039-noise-reduction-is-the-first-pass-and-reads-the-as-shot-luminance.md)): an upload copies it, a pass keeps its
+first input's unless it gives one (a resize does), and a readback restores it.
+A pass may render into a one-channel R32F target (`GpuTargetFormat::R32F`)
+for a scalar intermediate, falling back to RGBA32F on a device without R32F.
+Such an image reports `channelCount() == 1` and reads back as `(r, 0, 0, 1)`.
+Every image a caller develops is still RGBA32F.

@@ -3,11 +3,14 @@
 #include "ui/DevelopPanel.h"
 #include "ui/SettingSlider.h"
 
+#include <ColorEncoding.h>
 #include <DevelopState.h>
+#include <NoiseReductionSettings.h>
 
 #include <QCoreApplication>
 #include <QKeyEvent>
 #include <QLabel>
+#include <QMouseEvent>
 #include <QScrollArea>
 #include <QScrollBar>
 
@@ -178,4 +181,34 @@ TEST_CASE("The readout under the plot follows the selected point", "[app][panel]
     QCoreApplication::sendEvent(editor, &pageDown);
     CHECK(readout->text() == editor->readout());
     CHECK_FALSE(readout->text().isEmpty());
+}
+
+TEST_CASE("A reset restores the photograph's own default", "[app][panel][noise]") {
+    // A RAW starts with colour noise reduction (ADR 039), and a double-click
+    // on the row's label goes back there, not to the neutral zero.
+    const auto resetValue = [](const PanelContext& context) {
+        DevelopState state;
+        state.settings.noiseReduction.color = 60.0F;
+        DevelopPanel panel;
+        panel.showState(state, context);
+        std::optional<DevelopState> edited;
+        QObject::connect(&panel, &DevelopPanel::stateEdited,
+                         [&](const DevelopState& next) { edited = next; });
+        SettingSlider* row = rowOf(panel, "colorNoiseReduction");
+        REQUIRE(row != nullptr);
+        auto* label = row->findChild<QLabel*>();
+        REQUIRE(label != nullptr);
+        QMouseEvent click(QEvent::MouseButtonDblClick, QPointF(1, 1),
+                          label->mapToGlobal(QPointF(1, 1)), Qt::LeftButton, Qt::LeftButton,
+                          Qt::NoModifier);
+        QCoreApplication::sendEvent(label, &click);
+        REQUIRE(edited);
+        return edited->settings.noiseReduction.color;
+    };
+    PanelContext raw;
+    raw.defaults = defaultStateFor(CameraNative{}).settings;
+    CHECK(resetValue(raw) == rawDefaultColorNoiseReduction);
+    PanelContext rendered{.raw = false};
+    rendered.defaults = defaultStateFor(workingEncoding).settings;
+    CHECK(resetValue(rendered) == 0.0F);
 }

@@ -22,6 +22,7 @@
 #include <ImageExport.h>
 #include <ImageImport.h>
 #include <MarksFilter.h>
+#include <NoiseReductionSettings.h>
 #include <Photo.h>
 #include <SettingDescriptors.h>
 #include <ToneCurveSettings.h>
@@ -358,6 +359,11 @@ constexpr SettingHelp settingHelp[]{
     {"grainSize", "amount", "Size of the grain, relative to the cropped frame's long edge",
      " Default: 50."},
     {"grainRoughness", "amount", "How clumped the grain is, 0 for even", " Default: 50."},
+    {"luminanceNoiseReduction", "amount", "Strength of the luminance noise smoothing", ""},
+    {"luminanceNoiseDetail", "amount",
+     "How much edge the luminance smoothing keeps, 0 smooths across most", " Default: 50."},
+    {"colorNoiseReduction", "amount", "Strength of the colour noise smoothing", ""},
+    {"colorNoiseSmoothness", "amount", "Size of the colour blotches smoothed", " Default: 50."},
 };
 
 /// @brief Finds the help wording of a setting.
@@ -624,6 +630,21 @@ bool readEdits(const QCommandLineParser& parser, cli::ExportEdits& edits, std::o
         given.effects.grain.model = entry->first;
         addEdit(edits.settings, "grainModel", given);
     }
+    if (parser.isSet("luminance-noise-filter")) {
+        const std::string name = parser.value("luminance-noise-filter").trimmed().toStdString();
+        const auto entry = std::ranges::find(luminanceNoiseFilterNames, name,
+                                             [](const auto& known) { return known.second; });
+        if (entry == luminanceNoiseFilterNames.end()) {
+            std::string names;
+            for (const auto& known : luminanceNoiseFilterNames) {
+                names += (names.empty() ? "" : ", ") + std::string(known.second);
+            }
+            code = usageError(err, "--luminance-noise-filter takes " + names);
+            return false;
+        }
+        given.noiseReduction.luminanceFilter = entry->first;
+        addEdit(edits.settings, "luminanceNoiseFilter", given);
+    }
     if (parser.isSet("convert-to-grayscale") && parser.isSet("no-convert-to-grayscale")) {
         code = usageError(err, "--convert-to-grayscale and --no-convert-to-grayscale contradict");
         return false;
@@ -680,6 +701,11 @@ void configure(QCommandLineParser& parser) {
         "Grain the flags turn on, where the sidecar has none, gets a random pattern per\n"
         "photograph and export, since the command never writes its seed back; grain the\n"
         "sidecar has keeps its pattern, and --grain-seed names one, so that exports repeat.\n"
+        "Noise reduction runs first, on the photograph as decoded, so every other control\n"
+        "leaves it alone: --luminance-noise-reduction smooths brightness noise, keeping\n"
+        "edges according to --luminance-noise-detail and --luminance-noise-filter, and\n"
+        "--color-noise-reduction smooths colour blotches of the size --color-noise-smoothness\n"
+        "sets, keeping brightness exactly. Both are 0 by default, which skips the pass.\n"
         "Naming --temperature or --tint makes white balance custom; the other half\n"
         "keeps the photograph's own value, or as shot. The command never writes a\n"
         "sidecar.\n"
@@ -740,6 +766,8 @@ void configure(QCommandLineParser& parser) {
                       "number"});
     parser.addOption(
         {"grain-model", "How grain is drawn: valueNoise. Default: valueNoise.", "name"});
+    parser.addOption({"luminance-noise-filter",
+                      "How luminance noise is smoothed: bilateral. Default: bilateral.", "name"});
     parser.addOption({"convert-to-grayscale",
                       "Make the photograph black and white; the --gray-* weights mix the hues, and "
                       "saturation, vibrance and the HSL bands then have nothing to act on."});

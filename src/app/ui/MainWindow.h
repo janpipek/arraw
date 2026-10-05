@@ -13,6 +13,7 @@
 #include <QString>
 #include <QTimer>
 
+#include <chrono>
 #include <cstdint>
 #include <deque>
 #include <filesystem>
@@ -193,8 +194,10 @@ private:
     /// @param point Click position, in fractions of the developed frame.
     void pickNeutralAt(const QPointF& point);
 
-    /// @brief Shows the session's state in the panel and updates the actions.
-    void refreshPanel();
+    /// @brief Shows the session's state in the panel and updates the actions, then asks for a
+    /// render.
+    /// @param renderDelay Time to hold the render back; a newer request or edit replaces it.
+    void refreshPanel(std::chrono::milliseconds renderDelay = std::chrono::milliseconds{0});
 
     /// @brief Asks the renderer for the current photograph in its current state.
     ///
@@ -276,6 +279,9 @@ private:
     /// Single-shot timer of no delay, so that a drag or a wheel burst asks for
     /// one render per turn of the event loop, however many events it has.
     QTimer interactionTimer_;
+
+    /// Single-shot timer that holds a render back while a noise reduction row is dragged.
+    QTimer noiseReductionTimer_;
 
     /// Whether a message about a failed render is on screen.
     bool reportingFailure_ = false;

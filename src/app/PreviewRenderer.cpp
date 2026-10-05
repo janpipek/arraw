@@ -9,6 +9,7 @@
 #include <CurveHistogram.h>
 #include <Develop.h>
 #include <ImagePyramid.h>
+#include <NoiseReductionSettings.h>
 #include <RenderCheckpoint.h>
 
 #include <algorithm>
@@ -26,7 +27,7 @@ namespace arraw::app {
 
 namespace {
 
-/// @brief The last pointwise, geometry and resize results of one level of one source.
+/// @brief The last denoise, pointwise, geometry and resize results of one level of one source.
 ///
 /// Whether a checkpoint still applies to a request is the engine's to say; what
 /// the plan cannot tell is that the pixels underneath changed to others of the
@@ -47,6 +48,7 @@ public:
 
     /// @brief Drops every checkpoint and the binding.
     void clear() noexcept {
+        denoised_.reset();
         pointwise_.reset();
         geometry_.reset();
         resized_.reset();
@@ -56,21 +58,29 @@ public:
     /// @brief Renders a request from the best checkpoint there is, refreshing the cache.
     ///
     /// Tries the resize checkpoint, then the geometry one, then the pointwise
-    /// one, then the level itself, and carries on to the effects through each
-    /// boundary it passes so the next request can reuse them. A checkpoint the
-    /// engine refuses is dropped: it is stale, and the render goes on from an
-    /// earlier one. A render that fails leaves only checkpoints that are whole.
-    /// With every effect off the effects boundary is the resize's pixels, so
-    /// keeping the resize checkpoint costs nothing on the GPU and one
-    /// viewport-sized buffer on the CPU.
+    /// one, then the denoise one, then the level itself, and carries on to the
+    /// effects through each boundary it passes so the next request can reuse
+    /// them. A checkpoint the engine refuses is dropped: it is stale, and the
+    /// render goes on from an earlier one. A render that fails leaves only
+    /// checkpoints that are whole. With every effect off the effects boundary
+    /// is the resize's pixels, so keeping the resize checkpoint costs nothing
+    /// on the GPU and one viewport-sized buffer on the CPU. With noise
+    /// reduction off the denoise boundary is the level itself, which a
+    /// checkpoint would only copy (a level-sized float buffer on the CPU), so
+    /// none is kept and the level is developed from as before the stage
+    /// existed (ADR 039).
     /// @tparam Develop Callable `(Stage) -> RenderCheckpoint`, developing the level.
     /// @tparam Resume Callable `(const RenderCheckpoint&, Stage) -> RenderCheckpoint`.
+    /// @param denoising Whether the state reduces noise (::arraw::reducesNoise).
     /// @param resumedFrom Set to the boundary resumed from, or reset.
     /// @return The checkpoint at the effects.
     template <typename Develop, typename Resume>
-    [[nodiscard]] RenderCheckpoint render(Develop&& develop, Resume&& resume,
+    [[nodiscard]] RenderCheckpoint render(Develop&& develop, Resume&& resume, bool denoising,
                                           std::optional<Stage>& resumedFrom) {
         resumedFrom.reset();
+        if (!denoising) {
+            denoised_.reset();
+        }
         // Each checkpoint is checked after the later one made from it: one
         // that does not match now is useless to keep.
         if (resized_) {
@@ -97,7 +107,22 @@ public:
             }
             pointwise_.reset();
         }
-        pointwise_ = develop(Stage::Pointwise);
+        if (denoised_) {
+            if (auto done = tryResume(resume, *denoised_, Stage::Pointwise)) {
+                resumedFrom = Stage::Denoise;
+                pointwise_ = std::move(*done);
+                geometry_ = resume(*pointwise_, Stage::Geometry);
+                resized_ = resume(*geometry_, Stage::Resize);
+                return resume(*resized_, Stage::Effects);
+            }
+            denoised_.reset();
+        }
+        if (denoising) {
+            denoised_ = develop(Stage::Denoise);
+            pointwise_ = resume(*denoised_, Stage::Pointwise);
+        } else {
+            pointwise_ = develop(Stage::Pointwise);
+        }
         geometry_ = resume(*pointwise_, Stage::Geometry);
         resized_ = resume(*geometry_, Stage::Resize);
         return resume(*resized_, Stage::Effects);
@@ -121,6 +146,8 @@ private:
 
     /// Level the checkpoints were made from.
     std::shared_ptr<const ImageBuffer> level_;
+    /// Result after noise reduction, at the level's size and in its encoding.
+    std::optional<RenderCheckpoint> denoised_;
     /// Result after the pointwise chain, at the level's size.
     std::optional<RenderCheckpoint> pointwise_;
     /// Result after the geometry, before any resize.
@@ -212,7 +239,7 @@ public:
             [&](const RenderCheckpoint& from, Stage stop) {
                 return developOnGpu(*context_, from, *image, state, stop, request);
             },
-            resumedFrom);
+            reducesNoise(state.settings.noiseReduction), resumedFrom);
         return checkpoint.readBack();
     }
 
@@ -300,7 +327,7 @@ private:
     std::unique_ptr<GpuContext> context_;
     /// Pyramid levels on the device, by level; a level not yet needed is empty.
     std::vector<DeviceImage> uploaded_;
-    /// Last pointwise, geometry and resize results of the level shown, resident here.
+    /// Last denoise, pointwise, geometry and resize results of the level shown, resident here.
     CheckpointCache checkpoints_;
     /// The same for the background, whose coarser level would evict the shown one's.
     CheckpointCache backgroundCheckpoints_;
@@ -466,7 +493,7 @@ PreviewResult render(std::uint64_t id, const DevelopState& state, const PreviewV
             [&](const RenderCheckpoint& from, Stage stop) {
                 return resumeFrom(from, *reduced, state, stop, request);
             },
-            result.resumedFrom);
+            reducesNoise(state.settings.noiseReduction), result.resumedFrom);
         QImage image = toDisplayImage(developed.readBack());
         image.setDevicePixelRatio(view.devicePixelRatio);
         result.image = std::move(image);

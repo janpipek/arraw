@@ -82,3 +82,12 @@ half_size=False)`.
   accepted in the plan.
 - There is no fixture with several previews, so the choice among them is
   specified here but not pinned by a test; fixtures carry at most one.
+
+## Note, 2026-10-05
+
+A half-size decode has a pixel scale of 2 (`ImageBuffer::pixelScale`), and its
+halvings 4, 8 and so on, so noise reduction on a thumbnail shrinks its reach to
+match ([ADR 039](039-noise-reduction-is-the-first-pass-and-reads-the-as-shot-luminance.md)). A photograph with no recorded develop state is developed, and
+its thumbnail cached, with `defaultStateFor` its kind. The worker reads the
+file's header to tell a RAW, which costs a header parse but no decode, also on
+a cache hit.

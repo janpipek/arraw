@@ -11,7 +11,8 @@ namespace arraw {
 ///
 /// The result is ::arraw::PixelFormat::RgbaF32 (an image in another format is
 /// converted first, as development does), with the input's encoding and pending
-/// orientation, and `ceil(w / 2)` by `ceil(h / 2)` pixels. An odd last row or
+/// orientation, twice its pixel scale (::arraw::ImageBuffer::pixelScale), and
+/// `ceil(w / 2)` by `ceil(h / 2)` pixels. An odd last row or
 /// column averages the samples it has: nothing is padded or wrapped.
 ///
 /// Colour is averaged premultiplied by alpha and divided by the mean alpha

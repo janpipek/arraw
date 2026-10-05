@@ -42,15 +42,17 @@ namespace arraw {
 /// @param context Device to develop on; used from its owner thread only.
 /// @param source Decoded photograph, in the working or a camera encoding.
 /// @param state How the photograph is developed.
-/// @param stopAfter Last boundary to run: ::arraw::Stage::Pointwise leaves a
-/// result of the source's size with no geometry applied, and
+/// @param stopAfter Last boundary to run: ::arraw::Stage::Denoise leaves the
+/// source after noise reduction, in its own encoding and pending orientation
+/// (the upload itself, shared, when noise reduction is off);
+/// ::arraw::Stage::Pointwise a result of the source's size with no geometry applied, and
 /// ::arraw::Stage::Geometry one with no resize, whatever @p request asks, and
 /// ::arraw::Stage::Resize one with no effects.
 /// @param request Size and filter to render at; the default is the cropped size
 /// of the photograph, which costs no pass. Only its size, upscale and filter
 /// are read.
-/// @return A resident checkpoint in the working encoding, with no pending
-/// orientation.
+/// @return A resident checkpoint; in the working encoding, with no pending
+/// orientation, at every boundary after ::arraw::Stage::Denoise.
 /// @throws std::invalid_argument if development cannot start from @p source,
 /// the settings cannot be resolved, @p stopAfter is not a boundary, @p request
 /// cannot be resolved (see ::arraw::resolvedSize; checked only when
@@ -75,8 +77,8 @@ namespace arraw {
 /// @param state How the photograph is developed.
 /// @param stopAfter Last boundary to run; see the overload above.
 /// @param request Size and filter to render at; see the overload above.
-/// @return A resident checkpoint in the working encoding, with no pending
-/// orientation.
+/// @return A resident checkpoint; in the working encoding, with no pending
+/// orientation, at every boundary after ::arraw::Stage::Denoise.
 /// @throws std::invalid_argument as the overload above, and if @p uploaded is
 /// empty, belongs to another device than @p context, or is not of @p source's size.
 /// @throws std::logic_error if called from a thread other than the context's owner.

@@ -1,7 +1,9 @@
+#include "DisplayImage.h"
 #include "PreviewRenderer.h"
 #include "support/TestImages.h"
 
 #include <CurveHistogram.h>
+#include <Develop.h>
 #include <DevelopSettings.h>
 #include <ImagePyramid.h>
 
@@ -137,6 +139,35 @@ TEST_CASE("A large source in a small viewport is developed from a reduced level"
     REQUIRE(results.back().level == 2);
     REQUIRE(results.back().image->width() <= 512);
     REQUIRE(results.back().image->height() <= 512);
+}
+
+TEST_CASE("A reduced level is denoised with radii divided by its scale",
+          "[app][preview][pyramid][denoise]") {
+    Collector collector;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
+    const auto source = makeLargeSource();
+    renderer.setSource(source);
+    DevelopState state;
+    state.settings.noiseReduction.luminance = 80.0F;
+    state.settings.noiseReduction.color = 60.0F;
+
+    const std::uint64_t id = renderer.request(state, app::PreviewView::wholeFrame({512, 512}));
+    REQUIRE(collector.waitFor(id));
+    const app::PreviewResult result = collector.results().back();
+    REQUIRE(result.error.empty());
+    REQUIRE(result.level == 2);
+
+    // The same level developed by hand, whose pixels know their scale, and a
+    // copy that claims to be full resolution.
+    const ImageBuffer level2 = halved(halved(*source));
+    REQUIRE(level2.pixelScale() == 4.0 * source->pixelScale());
+    const RenderRequest request = app::previewRequest({512, 512});
+    const QImage expected = app::toDisplayImage(develop(level2, state, request));
+    ImageBuffer claimsFull = level2.clone();
+    claimsFull.setPixelScale(1.0);
+    const QImage unscaled = app::toDisplayImage(develop(claimsFull, state, request));
+    REQUIRE(*result.image == expected);
+    REQUIRE(*result.image != unscaled);
 }
 
 TEST_CASE("A viewport as large as the source is developed from the source itself",
@@ -363,11 +394,13 @@ QImage freshImage(const DevelopState& state, QSize viewport) {
     return *renderOne(renderer, collector, state, viewport).image;
 }
 
-DevelopState stateWith(float exposure, double straighten, float vignette = 0.0F) {
+DevelopState stateWith(float exposure, double straighten, float vignette = 0.0F,
+                       float colorNoise = 0.0F) {
     DevelopSettings settings;
     settings.tone.exposure = exposure;
     settings.geometry.straighten = straighten;
     settings.effects.vignette.amount = vignette;
+    settings.noiseReduction.color = colorNoise;
     return DevelopState{settings};
 }
 
@@ -405,6 +438,16 @@ TEST_CASE("An edit resumes from the newest checkpoint it can still use", "[app][
          stateWith(-0.5F, 5.0, -40.0F), narrow, Stage::Geometry},
         {"a vignette turned off resumes from the resize", stateWith(-0.5F, 5.0), narrow,
          Stage::Resize},
+        {"noise reduction turned on develops from the level", stateWith(-0.5F, 5.0, 0.0F, 40.0F),
+         narrow, std::nullopt},
+        {"a tone change with noise reduction resumes from the denoise result",
+         stateWith(0.25F, 5.0, 0.0F, 40.0F), narrow, Stage::Denoise},
+        {"a stronger noise reduction develops from the level again",
+         stateWith(0.25F, 5.0, 0.0F, 70.0F), narrow, std::nullopt},
+        {"noise reduction turned off develops from the level, keeping no denoise result",
+         stateWith(0.25F, 5.0), narrow, std::nullopt},
+        {"a tone change then resumes from nothing again", stateWith(0.5F, 5.0), narrow,
+         std::nullopt},
     };
     for (const Step& step : steps) {
         INFO(step.label);

@@ -36,6 +36,47 @@ bool probeReadsCurves(PointwiseProbe probe) {
     return true;
 }
 
+ImageSize denoiseGridSize(const DenoisePlan& plan, ImageSize source) {
+    const std::uint32_t reduction = std::max<std::uint32_t>(plan.gridReduction, 1U);
+    return {(source.width + reduction - 1) / reduction,
+            (source.height + reduction - 1) / reduction};
+}
+
+GpuDenoiseBlock packDenoise(const DenoisePlan& plan, ImageSize source, DenoiseStep step) {
+    GpuDenoiseBlock block;
+    block.step = static_cast<std::uint32_t>(step);
+    block.gridReduction = std::max<std::uint32_t>(plan.gridReduction, 1U);
+    block.luminance = plan.luminance ? 1U : 0U;
+    block.color = plan.color ? 1U : 0U;
+    block.rangeFactor = plan.luminance ? rangeFactorOf(plan) : 0.0F;
+    block.luminanceMix = plan.luminanceMix;
+    block.colorMix = plan.colorMix;
+    block.lumaRow = {plan.lumaRow[0], plan.lumaRow[1], plan.lumaRow[2], 0.0F};
+    block.neutral = {plan.neutral[0], plan.neutral[1], plan.neutral[2], 0.0F};
+    block.sourceSize = {source.width, source.height};
+    const ImageSize grid = denoiseGridSize(plan, source);
+    block.gridSize = {grid.width, grid.height};
+    const auto fill = [&block](float sigma, std::uint32_t radius) {
+        block.radius = radius;
+        const DenoiseWeights weights = denoiseWeights(sigma, radius);
+        std::copy(weights.begin(), weights.end(), block.weights.begin());
+    };
+    switch (step) {
+    case DenoiseStep::BlurAcross:
+    case DenoiseStep::BlurDown:
+        fill(plan.colorSigma, plan.colorRadius);
+        break;
+    case DenoiseStep::BilateralAcross:
+    case DenoiseStep::BilateralDown:
+        fill(plan.spatialSigma, plan.spatialRadius);
+        break;
+    case DenoiseStep::Reduce:
+    case DenoiseStep::Combine:
+        break;
+    }
+    return block;
+}
+
 GpuEffectsBlock packEffects(const ProcessingPlan& plan) {
     const FrameMapping mapping = frameMappingOf(plan);
     const VignettePlan& vignette = plan.effects.vignette;

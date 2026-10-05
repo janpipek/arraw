@@ -3,6 +3,9 @@
 #include "support/Sentinels.h"
 #include "support/TempDir.h"
 
+#include <DevelopState.h>
+#include <ImageImport.h>
+#include <NoiseReductionSettings.h>
 #include <Photo.h>
 #include <SettingDescriptors.h>
 #include <Sidecar.h>
@@ -127,15 +130,15 @@ TEST_CASE("Every settings row survives a write and a read", "[sidecar]") {
         CollectedDiagnostics log;
         const auto contents = readSidecar(path, log);
         REQUIRE(contents);
-        REQUIRE(contents->state.settings == settings);
+        REQUIRE(contents->state->settings == settings);
         REQUIRE(log.entries().empty());
     }
     const DevelopSettings everything = allNonDefault();
     writeSidecar(photoOf(path, everything));
-    REQUIRE(readSidecar(path)->state.settings == everything);
+    REQUIRE(readSidecar(path)->state->settings == everything);
     // Back to defaults: the unset optionals leave no attribute, and read back as unset.
     writeSidecar(photoOf(path));
-    REQUIRE(readSidecar(path)->state.settings == DevelopSettings{});
+    REQUIRE(readSidecar(path)->state->settings == DevelopSettings{});
 }
 
 TEST_CASE("Marks survive a write and a read", "[sidecar][marks]") {
@@ -272,7 +275,7 @@ TEST_CASE("Writing over a foreign sidecar keeps everything it does not own", "[s
 
     // What it owns has moved to the new values.
     const auto contents = readSidecar(path);
-    REQUIRE(contents->state.settings == settings);
+    REQUIRE(contents->state->settings == settings);
     REQUIRE(contents->marks == PhotoMarks{.rating = 5, .label = ColorLabel::Purple});
     // The packet wrapper is still there.
     REQUIRE(slurp(sidecar).find("<?xpacket end=") != std::string::npos);
@@ -286,15 +289,15 @@ TEST_CASE("A child-element key is read, then replaced by an attribute", "[sideca
 
     CollectedDiagnostics log;
     const auto contents = readSidecar(path, log);
-    REQUIRE(contents->state.settings.tone.exposure == 1.25F);
-    REQUIRE(contents->state.settings.tone.contrast == 0.5F);
+    REQUIRE(contents->state->settings.tone.exposure == 1.25F);
+    REQUIRE(contents->state->settings.tone.contrast == 0.5F);
     REQUIRE(contents->marks == PhotoMarks{.rating = 3, .label = ColorLabel::Blue});
     // The one key this arraw does not know is reported, naming the file.
     REQUIRE(log.entries().size() == 1);
     REQUIRE(log.entries().front().notice == Notice::SettingUnknown);
     REQUIRE(log.entries().front().subject == path);
 
-    writeSidecar(photoOf(path, contents->state.settings, contents->marks));
+    writeSidecar(photoOf(path, contents->state->settings, contents->marks));
     QDomDocument document = parsed(sidecar);
     REQUIRE(document.elementsByTagNameNS(QString::fromUtf8(arrawNs), "contrast").isEmpty());
     const auto after = meaning(sidecar);
@@ -305,7 +308,7 @@ TEST_CASE("A child-element key is read, then replaced by an attribute", "[sideca
             (key.ends_with("@{http://ns.arraw.org/develop/1.0/}contrast") && value == "0.5");
     }
     REQUIRE(asAttribute);
-    REQUIRE(readSidecar(path)->state.settings == contents->state.settings);
+    REQUIRE(readSidecar(path)->state->settings == contents->state->settings);
 }
 
 TEST_CASE("A sidecar is named by the photograph's stem, unless a RAW shares it", "[sidecar]") {
@@ -367,8 +370,8 @@ TEST_CASE("A pair with the same stem keeps two sidecars", "[sidecar]") {
     writeSidecar(photoOf(jpeg, {.tone = {.exposure = -1.0F}}));
     REQUIRE(fs::exists(directory.file("IMG_1.xmp")));
     REQUIRE(fs::exists(directory.file("IMG_1.png.xmp")));
-    REQUIRE(readSidecar(raw)->state.settings.tone.exposure == 1.0F);
-    REQUIRE(readSidecar(jpeg)->state.settings.tone.exposure == -1.0F);
+    REQUIRE(readSidecar(raw)->state->settings.tone.exposure == 1.0F);
+    REQUIRE(readSidecar(jpeg)->state->settings.tone.exposure == -1.0F);
 }
 
 TEST_CASE("Writing edits a sidecar whose name differs only in case", "[sidecar]") {
@@ -402,14 +405,76 @@ TEST_CASE("Opening a photograph picks up its sidecar", "[sidecar][photo]") {
     REQUIRE(log.entries().front().subject == path);
 }
 
-TEST_CASE("A photograph without a sidecar opens as before", "[sidecar][photo]") {
+TEST_CASE("A photograph without a sidecar opens with what its kind starts from",
+          "[sidecar][photo]") {
     const test::TempDir directory;
     const fs::path path = copyRaw(directory, "IMG_1.dng");
     REQUIRE_FALSE(readSidecar(path));
     const Photo photo = openPhoto(path);
-    REQUIRE(photo.state() == DevelopState{});
+    // A RAW: colour noise reduction at Lightroom's 25, everything else neutral.
+    DevelopState expected;
+    expected.settings.noiseReduction.color = rawDefaultColorNoiseReduction;
+    REQUIRE(photo.state() == expected);
+    REQUIRE(photo.state() == defaultStateFor(photo.metadata().encoding));
+    REQUIRE(photo.state() == Photo(path, readImageMetadata(path)).state());
     REQUIRE(photo.marks() == PhotoMarks{});
     REQUIRE_FALSE(fs::exists(directory.file("IMG_1.xmp")));
+
+    // Saving it writes the 25, so the sidecar says what the photograph looked like.
+    writeSidecar(photo);
+    REQUIRE(readSidecar(path)->state == expected);
+    REQUIRE(openPhoto(path).state() == expected);
+}
+
+TEST_CASE("A sidecar written before a setting existed keeps the neutral default",
+          "[sidecar][photo]") {
+    // As arraw wrote them before noise reduction: a version and the keys of the
+    // time, none for noise reduction. The photograph renders as it did.
+    const test::TempDir directory;
+    const fs::path path = copyRaw(directory, "IMG_1.dng");
+    spit(directory.file("IMG_1.xmp"), R"(<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about="" xmlns:arraw="http://ns.arraw.org/develop/1.0/"
+    arraw:version="1" arraw:exposure="0.5" arraw:contrast="0"/>
+ </rdf:RDF>
+</x:xmpmeta>)");
+    const auto contents = readSidecar(path);
+    REQUIRE(contents->state);
+    REQUIRE(contents->state->settings.noiseReduction.color == 0.0F);
+    const Photo photo = openPhoto(path);
+    REQUIRE(photo.state().settings.tone.exposure == 0.5F);
+    REQUIRE(photo.state().settings.noiseReduction == NoiseReductionSettings{});
+
+    SECTION("a version alone records the neutral state too") {
+        spit(directory.file("IMG_1.xmp"), R"(<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about="" xmlns:arraw="http://ns.arraw.org/develop/1.0/" arraw:version="1"/>
+ </rdf:RDF>
+</x:xmpmeta>)");
+        REQUIRE(readSidecar(path)->state == DevelopState{});
+        REQUIRE(openPhoto(path).state() == DevelopState{});
+    }
+}
+
+TEST_CASE("A sidecar only another tool wrote in records no state", "[sidecar][photo]") {
+    const test::TempDir directory;
+    const fs::path path = copyRaw(directory, "IMG_1.dng");
+    spit(directory.file("IMG_1.xmp"), R"(<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+    xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+    xmp:Rating="2" crs:Exposure2012="+0.50"/>
+ </rdf:RDF>
+</x:xmpmeta>)");
+    const auto contents = readSidecar(path);
+    REQUIRE(contents);
+    REQUIRE_FALSE(contents->state);
+    REQUIRE(contents->marks.rating == 2);
+    // So the photograph opens as with no sidecar, and keeps the marks.
+    const Photo photo = openPhoto(path);
+    REQUIRE(photo.state() == defaultStateFor(photo.metadata().encoding));
+    REQUIRE(photo.state().settings.noiseReduction.color == rawDefaultColorNoiseReduction);
+    REQUIRE(photo.marks().rating == 2);
 }
 
 TEST_CASE("Values a sidecar gets wrong are reported and repaired", "[sidecar][diagnostics]") {
@@ -452,8 +517,8 @@ TEST_CASE("Values a sidecar gets wrong are reported and repaired", "[sidecar][di
     SECTION("a malformed setting is skipped") {
         with(R"(arraw:exposure="bright" arraw:cropRectangle="1,2,3" arraw:contrast="0.25")");
         const auto contents = readSidecar(path, log);
-        REQUIRE(contents->state.settings.tone.exposure == 0.0F);
-        REQUIRE(contents->state.settings.tone.contrast == 0.25F);
+        REQUIRE(contents->state->settings.tone.exposure == 0.0F);
+        REQUIRE(contents->state->settings.tone.contrast == 0.25F);
         REQUIRE(count(log, Notice::SettingMalformed) == 2);
         REQUIRE(log.entries().front().subject == path);
     }
@@ -462,8 +527,8 @@ TEST_CASE("Values a sidecar gets wrong are reported and repaired", "[sidecar][di
         const auto contents = readSidecar(path, log);
         const std::vector<CurvePoint> red{{0.0F, 0.0F}, {0.5F, 0.25F}, {1.0F, 1.0F}};
         const std::vector<CurvePoint> blue{{0.0F, 0.0F}, {1.0F, 1.0F}};
-        REQUIRE(contents->state.settings.toneCurve.red.points == red);
-        REQUIRE(contents->state.settings.toneCurve.blue.points == blue);
+        REQUIRE(contents->state->settings.toneCurve.red.points == red);
+        REQUIRE(contents->state->settings.toneCurve.blue.points == blue);
         REQUIRE(count(log, Notice::SettingClamped) == 1);
         REQUIRE(count(log, Notice::SettingMalformed) == 0);
     }
@@ -471,12 +536,12 @@ TEST_CASE("Values a sidecar gets wrong are reported and repaired", "[sidecar][di
         with(R"(arraw:toneCurveLuma="0,0" arraw:toneCurveRed="0,0;0.5,0.5;0.5,0.7;1,1")"
              R"( arraw:toneCurveGreen="0,0;one,1" arraw:toneCurveBlue="0.5,0.5;1,1")");
         const auto contents = readSidecar(path, log);
-        REQUIRE(contents->state.settings.toneCurve == ToneCurveSettings{});
+        REQUIRE(contents->state->settings.toneCurve == ToneCurveSettings{});
         REQUIRE(count(log, Notice::SettingMalformed) == 4);
     }
     SECTION("a newer version is read with a warning") {
         with(R"(arraw:version="2" arraw:exposure="0.5")");
-        REQUIRE(readSidecar(path, log)->state.settings.tone.exposure == 0.5F);
+        REQUIRE(readSidecar(path, log)->state->settings.tone.exposure == 0.5F);
         REQUIRE(count(log, Notice::NewerSettingsVersion) == 1);
         REQUIRE(log.entries().front().subject == path);
     }
@@ -501,7 +566,7 @@ TEST_CASE("A sidecar that is XML but not XMP is left alone", "[sidecar]") {
     const std::string other = "<notes>keep me</notes>";
     spit(sidecar, other);
 
-    REQUIRE(readSidecar(path)->state.settings == DevelopSettings{});
+    REQUIRE_FALSE(readSidecar(path)->state);
     REQUIRE_THROWS_AS(writeSidecar(Photo(path, readImageMetadata(path))), std::runtime_error);
     REQUIRE(slurp(sidecar) == other);
 }
@@ -598,7 +663,7 @@ TEST_CASE("A signed number is read", "[sidecar]") {
     const fs::path path = copyRaw(directory, "IMG_1.dng");
     spit(directory.file("IMG_1.xmp"), sidecarWith(R"(arraw:exposure="+0.5")"));
     CollectedDiagnostics log;
-    REQUIRE(readSidecar(path, log)->state.settings.tone.exposure == 0.5F);
+    REQUIRE(readSidecar(path, log)->state->settings.tone.exposure == 0.5F);
     REQUIRE(log.entries().empty());
 }
 
@@ -654,7 +719,7 @@ TEST_CASE("A sidecar in another encoding is written back as UTF-8, declared", "[
     REQUIRE(text.find("ISO-8859-1") == std::string::npos);
     REQUIRE(text.find("UTF-16") == std::string::npos);
     REQUIRE(text.find("UTF-8") != std::string::npos);
-    REQUIRE(readSidecar(path)->state.settings.tone.exposure == 1.0F);
+    REQUIRE(readSidecar(path)->state->settings.tone.exposure == 1.0F);
 }
 
 TEST_CASE("A sidecar that cannot be parsed does not stop a photograph opening",
@@ -667,7 +732,7 @@ TEST_CASE("A sidecar that cannot be parsed does not stop a photograph opening",
 
     CollectedDiagnostics log;
     const Photo photo = openPhoto(path, log);
-    REQUIRE(photo.state() == DevelopState{});
+    REQUIRE(photo.state() == defaultStateFor(photo.metadata().encoding));
     REQUIRE(photo.marks() == PhotoMarks{});
     REQUIRE(log.entries().size() == 1);
     REQUIRE(log.entries().front().notice == Notice::SidecarUnreadable);
@@ -719,7 +784,7 @@ TEST_CASE("A prefix already bound to the namespace is reused", "[sidecar]") {
     const std::string text = slurp(sidecar);
     REQUIRE(text.find("xmlns:arraw") == std::string::npos);
     REQUIRE(text.find("a:exposure=") != std::string::npos);
-    REQUIRE(readSidecar(path)->state.settings.tone.exposure == 1.0F);
+    REQUIRE(readSidecar(path)->state->settings.tone.exposure == 1.0F);
 }
 
 TEST_CASE("A row that encodes to a compound is read through the shapes the codec names",
@@ -762,7 +827,7 @@ TEST_CASE("A tone curve is written as an attribute of semicolon-separated points
     const std::string text = slurp(directory.file("IMG_1.xmp"));
     REQUIRE(text.find("toneCurveGreen=\"0,0;0.25,0.125;1,0.9\"") != std::string::npos);
     REQUIRE(text.find("toneCurveLuma=\"0,0;1,1\"") != std::string::npos);
-    REQUIRE(readSidecar(path)->state.settings == settings);
+    REQUIRE(readSidecar(path)->state->settings == settings);
 }
 
 TEST_CASE("Writing only the marks keeps the settings and what is foreign", "[sidecar][marks]") {
@@ -780,7 +845,7 @@ TEST_CASE("Writing only the marks keeps the settings and what is foreign", "[sid
     const auto contents = readSidecar(path);
     REQUIRE(contents);
     REQUIRE(contents->marks == PhotoMarks{.rating = 4, .label = ColorLabel::Blue});
-    REQUIRE(contents->state.settings == settings);
+    REQUIRE(contents->state->settings == settings);
     const auto after = meaning(sidecar);
     for (const auto& [key, value] : before) {
         if (key.find("}Rating") != std::string::npos || key.find("}Label") != std::string::npos) {
@@ -792,7 +857,7 @@ TEST_CASE("Writing only the marks keeps the settings and what is foreign", "[sid
     }
 }
 
-TEST_CASE("Writing only the marks creates a sidecar with default settings", "[sidecar][marks]") {
+TEST_CASE("Writing only the marks creates a sidecar that records no settings", "[sidecar][marks]") {
     const test::TempDir directory;
     const fs::path path = copyRaw(directory, "IMG_1.dng");
     REQUIRE_FALSE(fs::exists(directory.file("IMG_1.xmp")));
@@ -800,7 +865,12 @@ TEST_CASE("Writing only the marks creates a sidecar with default settings", "[si
     const auto contents = readSidecar(path);
     REQUIRE(contents);
     REQUIRE(contents->marks == PhotoMarks{.rating = -1});
-    REQUIRE(contents->state.settings == DevelopSettings{});
+    REQUIRE_FALSE(contents->state);
+    // So the RAW still opens with what its kind starts from, and the marks.
+    const Photo photo = openPhoto(path);
+    REQUIRE(photo.marks() == PhotoMarks{.rating = -1});
+    REQUIRE(photo.state() == defaultStateFor(photo.metadata().encoding));
+    REQUIRE(photo.state().settings.noiseReduction.color == rawDefaultColorNoiseReduction);
 }
 
 TEST_CASE("Writing only the marks refuses what writeSidecar refuses", "[sidecar][marks]") {

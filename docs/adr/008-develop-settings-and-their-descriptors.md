@@ -197,3 +197,10 @@ when it arrives:
   processing-compatibility policy the reimplementation plan lists as open, and
   clamp-with-a-warning is a defensible default for it rather than an answer.
 
+
+## Note, 2026-10-05
+
+A descriptor's default stays the one of a default-constructed
+`DevelopSettings`, the neutral value every document assumes. What a
+photograph *starts from* can differ by its kind: `defaultStateFor(encoding)`
+gives a RAW colour noise reduction 25 ([ADR 039](039-noise-reduction-is-the-first-pass-and-reads-the-as-shot-luminance.md)). The table is not changed for it.

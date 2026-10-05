@@ -42,6 +42,10 @@ constexpr std::array<std::string_view, 6> effectsKeyList{"vignetteAmount",  "vig
                                                          "vignetteFeather", "grainAmount",
                                                          "grainSize",       "grainRoughness"};
 
+constexpr std::array<std::string_view, 4> noiseReductionKeyList{
+    "luminanceNoiseReduction", "luminanceNoiseDetail", "colorNoiseReduction",
+    "colorNoiseSmoothness"};
+
 constexpr std::array<std::string_view, 4> toneCurveKeyList{"toneCurveLuma", "toneCurveRed",
                                                            "toneCurveGreen", "toneCurveBlue"};
 
@@ -222,6 +226,34 @@ const std::vector<Row>& table() {
                           1.0,
                           tr("How clumped the grain is: zero is even, higher mixes in coarser "
                              "clusters.")}});
+        built.push_back({"luminanceNoiseReduction",
+                         {tr("Luminance"),
+                          {},
+                          0,
+                          1.0,
+                          tr("Smooths the grain of brightness noise, in the photograph as the "
+                             "camera saw it. Higher is smoother and softer.")}});
+        built.push_back({"luminanceNoiseDetail",
+                         {tr("Detail"),
+                          {},
+                          0,
+                          1.0,
+                          tr("How much edge the luminance smoothing keeps: higher keeps more "
+                             "detail and more noise.")}});
+        built.push_back({"colorNoiseReduction",
+                         {tr("Colour"),
+                          {},
+                          0,
+                          1.0,
+                          tr("Smooths blotches of false colour, keeping the brightness exactly "
+                             "as it is.")}});
+        built.push_back({"colorNoiseSmoothness",
+                         {tr("Smoothness"),
+                          {},
+                          0,
+                          1.0,
+                          tr("Size of the colour blotches smoothed: higher evens out larger "
+                             "ones, and can wash colour out of fine detail.")}});
         return built;
     }();
     return rows;
@@ -254,6 +286,10 @@ std::span<const std::string_view> blackAndWhiteKeys() noexcept {
 
 std::span<const std::string_view> colorGradingKeys() noexcept {
     return colorGradingKeyList;
+}
+
+std::span<const std::string_view> noiseReductionKeys() noexcept {
+    return noiseReductionKeyList;
 }
 
 std::span<const std::string_view> effectsKeys() noexcept {
@@ -314,8 +350,7 @@ double valueOfTick(int tick, const SettingRange& range, double step, SliderScale
     return std::clamp(range.minimum + tick * step, range.minimum, range.maximum);
 }
 
-double defaultValueOf(const FieldDescriptor& descriptor) {
-    const DevelopSettings defaults{};
+double defaultValueOf(const FieldDescriptor& descriptor, const DevelopSettings& defaults) {
     return visitField(descriptor, defaults, [&](const auto& field) -> double {
         using Field = std::remove_cvref_t<decltype(field)>;
         if constexpr (std::is_same_v<Field, float> || std::is_same_v<Field, double>) {

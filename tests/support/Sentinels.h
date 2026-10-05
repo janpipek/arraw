@@ -33,6 +33,9 @@ inline void setNonDefault(const FieldDescriptor& descriptor, DevelopSettings& se
         } else if constexpr (std::is_same_v<T, GrainModel>) {
             // The one model there is, so the default: nothing else is valid yet.
             field = GrainModel::ValueNoise;
+        } else if constexpr (std::is_same_v<T, LuminanceNoiseFilter>) {
+            // The one filter there is, so the default: nothing else is valid yet.
+            field = LuminanceNoiseFilter::Bilateral;
         } else if constexpr (std::is_same_v<T, std::uint32_t>) {
             // Above 2^31, and spelled by the shortest decimal as 3e+09.
             field = 3000000000U;

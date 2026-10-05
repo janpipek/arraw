@@ -251,7 +251,7 @@ TEST_CASE("An open edit with a changed state counts as unsaved", "[session][save
     REQUIRE_FALSE(session.hasUnsavedChanges());
     session.update(exposed(0.5F));
     REQUIRE(session.hasUnsavedChanges());
-    session.update(DevelopState{});
+    session.update(session.saved().state());
     REQUIRE_FALSE(session.hasUnsavedChanges());
 }
 
@@ -285,12 +285,13 @@ TEST_CASE("Marks are written at once and unsaved edits stay out of the file", "[
     REQUIRE(session.photo().marks() == marks);
     REQUIRE(session.saved().marks() == marks);
     REQUIRE(session.photo().state() == exposed(1.0F));
-    REQUIRE(session.saved().state() == DevelopState{});
+    REQUIRE(session.saved().state() == defaultStateFor(session.saved().metadata().encoding));
     REQUIRE(session.hasUnsavedChanges());
     const auto contents = readSidecar(path);
     REQUIRE(contents);
     REQUIRE(contents->marks == marks);
-    REQUIRE(contents->state == DevelopState{});
+    // The saved document is written with the marks: its state, not the unsaved one.
+    REQUIRE(contents->state == session.saved().state());
     // Not an undo step: undoing takes back the exposure and keeps the marks.
     session.undo();
     REQUIRE(session.photo().marks() == marks);
@@ -357,7 +358,7 @@ TEST_CASE("A save that fails throws and leaves the session as it was", "[session
     REQUIRE(session.editing());
     REQUIRE(session.photo().state() == exposed(1.0F));
     REQUIRE(session.photo().marks() == PhotoMarks{});
-    REQUIRE(session.saved().state() == DevelopState{});
+    REQUIRE(session.saved().state() == defaultStateFor(session.saved().metadata().encoding));
     REQUIRE(session.saved().marks() == PhotoMarks{});
     REQUIRE(session.hasUnsavedChanges());
 }
@@ -376,7 +377,7 @@ TEST_CASE("A save into a read-only directory throws and changes nothing", "[sess
     if (enforced) {
         REQUIRE_THROWS_AS(session.save(), std::runtime_error);
         REQUIRE(session.hasUnsavedChanges());
-        REQUIRE(session.saved().state() == DevelopState{});
+        REQUIRE(session.saved().state() == defaultStateFor(session.saved().metadata().encoding));
     }
     fs::permissions(directory.path(), fs::perms::owner_write, fs::perm_options::add);
     if (!enforced) {

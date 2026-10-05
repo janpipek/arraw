@@ -2,6 +2,7 @@
 
 #include <ImageBuffer.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <utility>
@@ -66,8 +67,20 @@ public:
     /// @throws std::logic_error if the image is empty.
     [[nodiscard]] const ColorEncoding& encoding() const;
 
+    /// @brief Sensor pixels per pixel, as ::arraw::ImageBuffer::pixelScale; 1 if empty.
+    [[nodiscard]] double pixelScale() const noexcept;
+
+    /// @brief Channels the texture stores: 4, or 1 for a scalar intermediate; 4 if empty.
+    ///
+    /// Every image a caller develops has four. A scalar one is an intermediate
+    /// of a pass, which a test may still read back.
+    [[nodiscard]] std::size_t channelCount() const noexcept;
+
     /// @brief Copies the texture into host memory.
-    /// @return A new buffer holding the texture's pixels.
+    ///
+    /// A scalar texture comes back as RGBA, `(r, 0, 0, 1)`, as a pass reads it.
+    /// @return A new buffer holding the texture's pixels, with its encoding,
+    /// orientation and pixel scale.
     /// @throws std::logic_error if the image is empty.
     /// @throws std::runtime_error if the device cannot read the texture back.
     [[nodiscard]] ImageBuffer readBack() const;

@@ -6,6 +6,7 @@
 #include <EffectsSettings.h>
 #include <GeometrySettings.h>
 #include <HslSettings.h>
+#include <NoiseReductionSettings.h>
 #include <ToneCurveSettings.h>
 #include <ToneSettings.h>
 
@@ -40,6 +41,9 @@ struct DevelopSettings {
 
     /// @brief Vignette and grain, applied to the cropped frame after the resize.
     EffectsSettings effects{};
+
+    /// @brief Luminance and colour noise reduction, applied to the decoded photograph first.
+    NoiseReductionSettings noiseReduction{};
 
     friend bool operator==(const DevelopSettings&, const DevelopSettings&) = default;
 };

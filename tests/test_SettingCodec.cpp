@@ -44,7 +44,8 @@ TEST_CASE("Every row decodes what it encoded", "[settings][codec]") {
         DevelopSettings original;
         test::setNonDefault(descriptor, original);
         // The one grain model there is is the default, so it has nothing else to round-trip.
-        REQUIRE((original != DevelopSettings{} || descriptor.key == "grainModel"));
+        REQUIRE((original != DevelopSettings{} || descriptor.key == "grainModel" ||
+                 descriptor.key == "luminanceNoiseFilter"));
 
         CollectedDiagnostics log;
         DevelopSettings restored;

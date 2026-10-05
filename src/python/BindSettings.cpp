@@ -3,6 +3,7 @@
 #include <ColorGradingSettings.h>
 #include <DevelopSettings.h>
 #include <EffectsSettings.h>
+#include <NoiseReductionSettings.h>
 #include <SettingDescriptors.h>
 #include <SettingsJson.h>
 #include <ToneCurveSettings.h>
@@ -123,7 +124,8 @@ void bindSettings(nb::module_& m) {
         .value("BLACK_AND_WHITE", SettingGroup::BlackAndWhite)
         .value("TONE_CURVE", SettingGroup::ToneCurve)
         .value("COLOR_GRADING", SettingGroup::ColorGrading)
-        .value("EFFECTS", SettingGroup::Effects);
+        .value("EFFECTS", SettingGroup::Effects)
+        .value("DETAIL", SettingGroup::Detail);
 
     nb::enum_<Applicability>(m, "Applicability",
                              "Whether a setting means anything for every photograph.")
@@ -138,7 +140,12 @@ void bindSettings(nb::module_& m) {
     nb::enum_<GrainModel>(m, "GrainModel", "Algorithm that draws the grain.")
         .value("VALUE_NOISE", GrainModel::ValueNoise);
 
+    nb::enum_<LuminanceNoiseFilter>(m, "LuminanceNoiseFilter",
+                                    "Filter that smooths luminance noise.")
+        .value("BILATERAL", LuminanceNoiseFilter::Bilateral);
+
     nb::enum_<Stage>(m, "Stage", "Pass boundary of the render pipeline.")
+        .value("DENOISE", Stage::Denoise)
         .value("POINTWISE", Stage::Pointwise)
         .value("GEOMETRY", Stage::Geometry)
         .value("RESIZE", Stage::Resize)
@@ -240,6 +247,15 @@ void bindSettings(nb::module_& m) {
     bindFrozen<EffectsSettings>(
         m, "EffectsSettings", "Effects applied to the cropped frame after the resize.",
         field("vignette", &EffectsSettings::vignette), field("grain", &EffectsSettings::grain));
+    bindFrozen<NoiseReductionSettings>(
+        m, "NoiseReductionSettings",
+        "Luminance and colour noise reduction, run on the decoded photograph first.\n\n"
+        "Radii are in sensor pixels; with both amounts at 0 nothing happens.",
+        field("luminance", &NoiseReductionSettings::luminance),
+        field("luminance_detail", &NoiseReductionSettings::luminanceDetail),
+        field("luminance_filter", &NoiseReductionSettings::luminanceFilter),
+        field("color", &NoiseReductionSettings::color),
+        field("color_smoothness", &NoiseReductionSettings::colorSmoothness));
 
     m.def(
         "choose_grain_seed",
@@ -268,7 +284,8 @@ void bindSettings(nb::module_& m) {
         field("black_and_white", &DevelopSettings::blackAndWhite),
         field("tone_curve", &DevelopSettings::toneCurve),
         field("color_grading", &DevelopSettings::colorGrading),
-        field("effects", &DevelopSettings::effects))
+        field("effects", &DevelopSettings::effects),
+        field("noise_reduction", &DevelopSettings::noiseReduction))
         .def(
             "with_",
             [](const DevelopSettings& self, const nb::kwargs& keywords) {
