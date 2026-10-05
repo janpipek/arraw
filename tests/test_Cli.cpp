@@ -2,6 +2,7 @@
 #include "Command.h"
 #include "DeviceChoice.h"
 #include "ExportCommand.h"
+#include "GrainModels.h"
 #include "StreamDiagnostics.h"
 #include "TerminalStyle.h"
 #include "support/Fixtures.h"
@@ -10,6 +11,7 @@
 #include <Develop.h>
 #include <DevelopSettings.h>
 #include <Diagnostics.h>
+#include <EffectsSettings.h>
 #include <ExifInfo.h>
 #include <Photo.h>
 #include <Sidecar.h>
@@ -1802,6 +1804,80 @@ TEST_CASE("The colour flags replace their own setting and keep the sidecar's oth
     }
 }
 
+TEST_CASE("The grain flags set the photograph's seed and model, exactly", "[cli][sidecar][grain]") {
+    DevelopSettings sidecar;
+    sidecar.effects.grain = {.amount = 20.0F, .seed = 77U};
+
+    SECTION("the amount keeps the sidecar's seed, and a seed replaces it") {
+        const DevelopSettings kept =
+            applied(sidecar, {"--grain-amount", "60", "--grain-size", "10"});
+        REQUIRE(kept.effects.grain.amount == 60.0F);
+        REQUIRE(kept.effects.grain.size == 10.0F);
+        REQUIRE(kept.effects.grain.seed == 77U);
+        REQUIRE(applied(sidecar, {"--grain-seed", "4294967295"}).effects.grain.seed == 4294967295U);
+        REQUIRE(applied(sidecar, {"--grain-seed", "0"}).effects.grain.seed == 0U);
+        REQUIRE(applied(sidecar, {"--grain-model", "valueNoise"}).effects.grain.model ==
+                GrainModel::ValueNoise);
+    }
+    SECTION("a seed that is not a whole 32-bit number, or an unknown model, is a usage error") {
+        for (const char* bad : {"-1", "4294967296", "1.5", "seven", ""}) {
+            INFO(bad);
+            std::ostringstream err;
+            REQUIRE_FALSE(cli::readExportEdits({"--grain-seed", bad}, err));
+            REQUIRE_THAT(err.str(), ContainsSubstring("--grain-seed takes a whole number"));
+        }
+        std::ostringstream err;
+        REQUIRE_FALSE(cli::readExportEdits({"--grain-model", "perlin"}, err));
+        REQUIRE_THAT(err.str(), ContainsSubstring("--grain-model takes valueNoise"));
+    }
+}
+
+TEST_CASE("Grain the photograph has keeps its pattern, and only the flags turning it on reseed",
+          "[cli][sidecar][grain]") {
+    // Enlarged and coarse, so the grain shows in an 8-bit PNG.
+    const std::vector<std::string> large{"--resize", "256", "--allow-upscale", "--grain-size",
+                                         "100"};
+    const auto with = [&large](std::vector<std::string> flags) {
+        flags.insert(flags.end(), large.begin(), large.end());
+        return flags;
+    };
+    const std::string unseeded = std::to_string(unseededGrainSeed);
+    const test::TempDir directory;
+    const auto bare = copyRaw(directory, "bare.dng");
+    const QImage fixed =
+        exportedPng(bare, with({"--grain-amount", "80", "--grain-seed", unseeded}));
+    REQUIRE_FALSE(fixed.isNull());
+    REQUIRE(fixed != exportedPng(bare, with({})));
+
+    SECTION("an explicit --grain-seed 0 is the fixed pattern, every time") {
+        const QImage first = exportedPng(bare, with({"--grain-amount", "80", "--grain-seed", "0"}));
+        REQUIRE(first == fixed);
+        REQUIRE(exportedPng(bare, with({"--grain-amount", "80", "--grain-seed", "0"})) == fixed);
+    }
+    SECTION("a sidecar with grain and seed 0 is the fixed pattern, every time") {
+        const auto grainy = copyRaw(directory, "grainy.dng");
+        DevelopSettings settings;
+        settings.effects.grain = {.amount = 80.0F};
+        sidecarWith(grainy, settings);
+        REQUIRE(exportedPng(grainy, with({})) == fixed);
+        REQUIRE(exportedPng(grainy, with({})) == fixed);
+        // Changing its amount does not turn it on, so it keeps the pattern.
+        REQUIRE(exportedPng(grainy, with({"--grain-amount", "40"})) ==
+                exportedPng(bare, with({"--grain-amount", "40", "--grain-seed", "0"})));
+    }
+    SECTION("grain the flags turn on gets a random pattern per export") {
+        const QImage first = exportedPng(bare, with({"--grain-amount", "80"}));
+        const QImage second = exportedPng(bare, with({"--grain-amount", "80"}));
+        REQUIRE(first != fixed);
+        REQUIRE(first != second);
+        // Even when the sidecar's grain is off with seed 0, and it is named explicitly then.
+        const auto off = copyRaw(directory, "off.dng");
+        sidecarWith(off, DevelopSettings{});
+        REQUIRE(exportedPng(off, with({"--grain-amount", "80"})) != fixed);
+        REQUIRE(exportedPng(off, with({"--grain-amount", "80", "--grain-seed", "0"})) == fixed);
+    }
+}
+
 TEST_CASE("The tone curve flags replace their own curve and keep the others",
           "[cli][sidecar][curve]") {
     DevelopSettings sidecar;
@@ -2224,7 +2300,7 @@ TEST_CASE("Info --all lists every setting", "[cli][info]") {
         REQUIRE(at >= previous);
         previous = at;
     }
-    REQUIRE(developSettingDescriptors.size() == 63);
+    REQUIRE(developSettingDescriptors.size() == 71);
     REQUIRE_THAT(result.out, ContainsSubstring("temperature: unset"));
 }
 
@@ -2313,7 +2389,7 @@ TEST_CASE("Info --json is one document with the settings in table order", "[cli]
     SECTION("--all lists every key in table order") {
         const auto result = invoke({"info", "--json", "--all", plain.string()});
         REQUIRE(result.code == cli::Success);
-        REQUIRE(firstFile(result.out).value("settings").toObject().size() == 63);
+        REQUIRE(firstFile(result.out).value("settings").toObject().size() == 71);
         std::size_t previous = 0;
         for (const FieldDescriptor& descriptor : developSettingDescriptors) {
             const auto at = result.out.find("\"" + std::string(descriptor.key) + "\":");

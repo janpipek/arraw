@@ -61,3 +61,11 @@ resize does anything, a cut included.
 - A region at the edge snaps outward, so the result can be up to a pixel
   larger than the fraction asked for, and a pan by less than a pixel does not
   move it.
+
+## Note, 2026-10-04
+
+Effects run after the region is cut and resized
+([ADR 037](037-effects-run-after-the-resize-and-the-vignette-follows-the-crop.md)).
+Each output pixel's place in the cropped frame is worked out from `ResizePlan`
+and the geometry's output size, so a region shows the falloff the whole frame
+has at the same place.

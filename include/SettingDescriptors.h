@@ -5,6 +5,7 @@
 #include <WhiteBalance.h>
 
 #include <array>
+#include <cstdint>
 #include <optional>
 #include <string_view>
 #include <variant>
@@ -22,7 +23,8 @@ using SettingAccessor =
                  double& (*)(DevelopSettings&), bool& (*)(DevelopSettings&),
                  WhiteBalanceMode& (*)(DevelopSettings&), QuarterTurn& (*)(DevelopSettings&),
                  std::optional<UprightCropRect>& (*)(DevelopSettings&),
-                 CropAspect& (*)(DevelopSettings&), ToneCurve& (*)(DevelopSettings&)>;
+                 CropAspect& (*)(DevelopSettings&), ToneCurve& (*)(DevelopSettings&),
+                 GrainModel& (*)(DevelopSettings&), std::uint32_t& (*)(DevelopSettings&)>;
 
 /// @brief Inclusive numeric limits of a setting, in its own units.
 struct SettingRange {
@@ -33,13 +35,35 @@ struct SettingRange {
     double maximum;
 };
 
+/// @brief Largest grain seed, the range of a 32-bit seed.
+inline constexpr double maximumGrainSeed = 4294967295.0;
+
 /// @brief Panel a setting belongs to.
-enum class SettingGroup { Color, Tone, Geometry, Hsl, BlackAndWhite, ToneCurve, ColorGrading };
+enum class SettingGroup {
+    Color,
+    Tone,
+    Geometry,
+    Hsl,
+    BlackAndWhite,
+    ToneCurve,
+    ColorGrading,
+    Effects,
+};
 
 /// @brief Whether a setting means anything for every photograph.
 enum class Applicability {
     Always,  ///< Applies to any image.
     RawOnly, ///< Needs a sensor to measure against (ADR 008).
+};
+
+/// @brief Whether a setting is part of a look, or belongs to one photograph.
+enum class SettingScope {
+    /// @brief Part of the look: presets and copied settings carry it.
+    Look,
+
+    /// @brief The photograph's own, such as its grain seed: presets and copied settings leave
+    /// it on the photograph they are applied to, and no panel shows it.
+    Photo,
 };
 
 /// @brief Description of one leaf setting: where it lives, and what it may hold.
@@ -61,6 +85,10 @@ struct FieldDescriptor {
 
     /// @brief Earliest pass boundary the setting changes.
     Stage affects;
+
+    /// @brief Whether the setting travels with a look; the rows of the many that do leave it
+    /// out.
+    SettingScope scope = SettingScope::Look;
 };
 
 // Local to the table below: a captureless accessor to the leaf `path` of a
@@ -187,6 +215,29 @@ inline constexpr std::array developSettingDescriptors{
     FieldDescriptor{"gradeBlending", ARRAW_ACCESSOR(float, colorGrading.blending),
                     SettingRange{sharpestGradeBlending, softestGradeBlending},
                     SettingGroup::ColorGrading, Applicability::Always, Stage::Pointwise},
+    FieldDescriptor{"vignetteAmount", ARRAW_ACCESSOR(float, effects.vignette.amount),
+                    SettingRange{darkestVignette, lightestVignette}, SettingGroup::Effects,
+                    Applicability::Always, Stage::Effects},
+    FieldDescriptor{"vignetteMidpoint", ARRAW_ACCESSOR(float, effects.vignette.midpoint),
+                    SettingRange{minimumVignetteShape, maximumVignetteShape}, SettingGroup::Effects,
+                    Applicability::Always, Stage::Effects},
+    FieldDescriptor{"vignetteFeather", ARRAW_ACCESSOR(float, effects.vignette.feather),
+                    SettingRange{minimumVignetteShape, maximumVignetteShape}, SettingGroup::Effects,
+                    Applicability::Always, Stage::Effects},
+    FieldDescriptor{"grainAmount", ARRAW_ACCESSOR(float, effects.grain.amount),
+                    SettingRange{minimumGrainControl, maximumGrainControl}, SettingGroup::Effects,
+                    Applicability::Always, Stage::Effects},
+    FieldDescriptor{"grainSize", ARRAW_ACCESSOR(float, effects.grain.size),
+                    SettingRange{minimumGrainControl, maximumGrainControl}, SettingGroup::Effects,
+                    Applicability::Always, Stage::Effects},
+    FieldDescriptor{"grainRoughness", ARRAW_ACCESSOR(float, effects.grain.roughness),
+                    SettingRange{minimumGrainControl, maximumGrainControl}, SettingGroup::Effects,
+                    Applicability::Always, Stage::Effects},
+    FieldDescriptor{"grainModel", ARRAW_ACCESSOR(GrainModel, effects.grain.model), std::nullopt,
+                    SettingGroup::Effects, Applicability::Always, Stage::Effects},
+    FieldDescriptor{"grainSeed", ARRAW_ACCESSOR(std::uint32_t, effects.grain.seed),
+                    SettingRange{0.0, maximumGrainSeed}, SettingGroup::Effects,
+                    Applicability::Always, Stage::Effects, SettingScope::Photo},
     FieldDescriptor{"rotation", ARRAW_ACCESSOR(QuarterTurn, geometry.rotation), std::nullopt,
                     SettingGroup::Geometry, Applicability::Always, Stage::Geometry},
     FieldDescriptor{"flipHorizontal", ARRAW_ACCESSOR(bool, geometry.flipHorizontal), std::nullopt,

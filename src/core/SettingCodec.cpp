@@ -6,6 +6,7 @@
 #include <array>
 #include <charconv>
 #include <cmath>
+#include <cstdint>
 #include <optional>
 #include <string_view>
 #include <system_error>
@@ -242,7 +243,7 @@ bool arraw::takesPoints(const FieldDescriptor& descriptor) {
 
 std::string arraw::expectation(const FieldDescriptor& descriptor) {
     static const DevelopSettings blank;
-    return visitField(descriptor, blank, [](const auto& field) -> std::string {
+    return visitField(descriptor, blank, [&descriptor](const auto& field) -> std::string {
         using T = std::remove_cvref_t<decltype(field)>;
         if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
             return "a number";
@@ -259,6 +260,11 @@ std::string arraw::expectation(const FieldDescriptor& descriptor) {
                    "below bottom, or unset";
         } else if constexpr (std::is_same_v<T, ToneCurve>) {
             return toneCurveRequirements;
+        } else if constexpr (std::is_same_v<T, GrainModel>) {
+            return listOf(grainModelNames);
+        } else if constexpr (std::is_same_v<T, std::uint32_t>) {
+            const double most = descriptor.range ? descriptor.range->maximum : maximumGrainSeed;
+            return "a whole number from 0 to " + std::to_string(static_cast<std::uint64_t>(most));
         } else {
             static_assert(std::is_same_v<T, CropAspect>);
             return "free, original, or a positive finite ratio";
@@ -307,6 +313,10 @@ Encoded arraw::encode(const FieldDescriptor& descriptor, const DevelopSettings& 
             return shortestDouble(field);
         } else if constexpr (std::is_same_v<T, double> || std::is_same_v<T, bool>) {
             return field;
+        } else if constexpr (std::is_same_v<T, std::uint32_t>) {
+            return static_cast<double>(field);
+        } else if constexpr (std::is_same_v<T, GrainModel>) {
+            return std::string(nameOf(grainModelNames, field));
         } else if constexpr (std::is_same_v<T, std::optional<float>>) {
             return field ? Encoded{shortestDouble(*field)} : Encoded{};
         } else if constexpr (std::is_same_v<T, WhiteBalanceMode>) {
@@ -377,6 +387,22 @@ void arraw::decode(const FieldDescriptor& descriptor, const Encoded& encoded,
         } else if constexpr (std::is_same_v<T, QuarterTurn>) {
             if (const auto turn = valueNamed(quarterTurnNames, encoded)) {
                 field = *turn;
+            } else {
+                report.reportMalformed();
+            }
+        } else if constexpr (std::is_same_v<T, GrainModel>) {
+            if (const auto model = valueNamed(grainModelNames, encoded)) {
+                field = *model;
+            } else {
+                report.reportMalformed();
+            }
+        } else if constexpr (std::is_same_v<T, std::uint32_t>) {
+            // An identity such as a seed, not a quantity: brought into range or
+            // rounded it would name something else, so only an exact one is taken.
+            const std::optional<double> number = finiteNumber(encoded);
+            const double most = descriptor.range ? descriptor.range->maximum : maximumGrainSeed;
+            if (number && *number >= 0.0 && *number <= most && std::floor(*number) == *number) {
+                field = static_cast<std::uint32_t>(*number);
             } else {
                 report.reportMalformed();
             }

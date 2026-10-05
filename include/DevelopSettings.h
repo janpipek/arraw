@@ -3,6 +3,7 @@
 #include <BlackAndWhiteSettings.h>
 #include <ColorGradingSettings.h>
 #include <ColorSettings.h>
+#include <EffectsSettings.h>
 #include <GeometrySettings.h>
 #include <HslSettings.h>
 #include <ToneCurveSettings.h>
@@ -36,6 +37,9 @@ struct DevelopSettings {
 
     /// @brief Hue and saturation of the tint in the shadows, midtones and highlights.
     ColorGradingSettings colorGrading{};
+
+    /// @brief Vignette and grain, applied to the cropped frame after the resize.
+    EffectsSettings effects{};
 
     friend bool operator==(const DevelopSettings&, const DevelopSettings&) = default;
 };

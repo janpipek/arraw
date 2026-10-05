@@ -395,7 +395,7 @@ TEST_CASE("Developing an opaque photograph gives exactly opaque pixels, resized 
     });
     DevelopSettings settings;
     settings.geometry.straighten = 11.0;
-    for (const RenderRequest request :
+    for (const RenderRequest& request :
          {RenderRequest{}, RenderRequest{.size = RenderRequest::Scale{0.37}},
           RenderRequest{.size = RenderRequest::FitInside{40, 40}, .filter = ResizeFilter::Bilinear},
           RenderRequest{.size = RenderRequest::Scale{2.0}, .upscale = Upscale::Allowed}}) {

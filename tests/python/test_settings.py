@@ -137,6 +137,57 @@ def test_colour_grading_constructs_flat_sets_and_round_trips_json():
         arraw.DevelopSettings().with_(grade_shadow=0.5)
 
 
+def test_vignette_defaults_construct_flat_and_round_trip_json():
+    vignette = arraw.DevelopSettings().effects.vignette
+    assert arraw.DevelopSettings().effects == arraw.EffectsSettings()
+    assert vignette == arraw.VignetteSettings(amount=0.0, midpoint=50.0, feather=50.0)
+    settings = arraw.DevelopSettings(
+        effects=arraw.EffectsSettings(
+            vignette=arraw.VignetteSettings(amount=-40.0, midpoint=30.0, feather=0.0)))
+    flat = arraw.DevelopSettings().with_(vignette_amount=-40, vignette_midpoint=30,
+                                         vignette_feather=0)
+    assert flat == settings
+    assert arraw.DevelopSettings.from_json(settings.to_json()) == settings
+
+
+def test_grain_defaults_construct_flat_and_round_trip_json():
+    grain = arraw.DevelopSettings().effects.grain
+    assert grain == arraw.GrainSettings(amount=0.0, size=50.0, roughness=50.0,
+                                        model=arraw.GrainModel.VALUE_NOISE, seed=0)
+    settings = arraw.DevelopSettings(
+        effects=arraw.EffectsSettings(
+            grain=arraw.GrainSettings(amount=35.0, size=20.0, roughness=80.0, seed=4294967295)))
+    flat = arraw.DevelopSettings().with_(grain_amount=35, grain_size=20, grain_roughness=80,
+                                         grain_seed=4294967295)
+    assert flat == settings
+    assert arraw.DevelopSettings.from_json(settings.to_json()) == settings
+    assert '"grainModel": "valueNoise"' in settings.to_json()
+    # A seed is a whole 32-bit number: nothing else, and no bool, is taken.
+    for bad in (-1, 2**32, 1.5, True):
+        with pytest.raises(TypeError):
+            arraw.GrainSettings(seed=bad)
+    with pytest.raises(TypeError):
+        arraw.GrainSettings(model=0)
+
+
+def test_choose_grain_seed_is_the_one_policy():
+    off = arraw.GrainSettings()
+    on = arraw.GrainSettings(amount=30.0)
+    # Left off, or turned off: kept.
+    assert arraw.choose_grain_seed(off, off, lambda: 9) == 0
+    assert arraw.choose_grain_seed(on, off, lambda: 9) == 0
+    # Already on: kept, the fixed pattern of seed 0 included.
+    assert arraw.choose_grain_seed(on, on.replace(amount=60.0), lambda: 9) == 0
+    # Turned on with a seed: kept.
+    assert arraw.choose_grain_seed(off, on.replace(seed=5), lambda: 9) == 5
+    # Turned on without one: drawn from the entropy given, never 0, else the system's.
+    assert arraw.choose_grain_seed(off, on, lambda: 0xDEADBEEF) == 0xDEADBEEF
+    assert arraw.choose_grain_seed(off, on, lambda: 0) != 0
+    assert arraw.choose_grain_seed(off, on) != 0
+    with pytest.raises(TypeError):
+        arraw.choose_grain_seed(off, on, lambda: -1)
+
+
 def test_curves_construct_flat_set_and_round_trip_json():
     settings = arraw.DevelopSettings(
         tone_curve=arraw.ToneCurveSettings(

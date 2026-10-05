@@ -307,3 +307,29 @@ TEST_CASE("The tone curves pack as one row, a curve to a channel", "[gpu][plan][
         REQUIRE(value == 0.0F);
     }
 }
+
+TEST_CASE("The effects block carries the vignette and the crop frame mapping", "[gpu][plan]") {
+    const ImageBuffer source({40, 30}, workingFormat, workingEncoding);
+    DevelopSettings settings;
+    settings.effects.vignette = {60.0F, 40.0F, 0.0F};
+    const ProcessingPlan plan = planFor(source, DevelopState{settings},
+                                        {.size = RenderRequest::Scale{2.0},
+                                         .region = RenderRequest::Region{0.25, 0.5, 0.75, 1.0},
+                                         .upscale = Upscale::Allowed});
+
+    const GpuEffectsBlock block = packEffects(plan);
+    REQUIRE(block.origin == std::array{0.25F, 0.5F});
+    REQUIRE(block.step ==
+            std::array{static_cast<float>(1.0 / 80.0), static_cast<float>(1.0 / 60.0)});
+    const VignettePlan& vignette = plan.effects.vignette;
+    REQUIRE(block.vignettes == 1U);
+    REQUIRE(block.vignetteLightens == 1U);
+    REQUIRE(block.vignetteHardEdge == 1U);
+    REQUIRE(block.vignetteStops == vignette.stops);
+    REQUIRE(block.vignetteInner == vignette.inner);
+    REQUIRE(block.vignetteOuter == vignette.outer);
+
+    // Off, the block says so, whatever the shape asked for.
+    settings.effects.vignette.amount = 0.0F;
+    REQUIRE(packEffects(planFor(source, DevelopState{settings})).vignettes == 0U);
+}

@@ -2,6 +2,7 @@
 
 #include "ColorAdjustments.h"
 #include "ColorSpaces.h"
+#include "Effects.h"
 #include "GeometryPlan.h"
 #include "ToneCurve.h"
 
@@ -206,6 +207,14 @@ struct ProcessingPlan {
     /// @brief Resolved resize, when a geometry and so a cropped size is known.
     std::optional<ResizePlan> resize = std::nullopt;
 
+    /// @brief Vignette and grain, applied to the cropped frame after the resize.
+    ///
+    /// Its own pass, after the resize, because it reads the crop frame (ADR 037, ADR 038).
+    /// Where a pixel lies in that frame comes from the geometry and the resize
+    /// (::arraw::frameMappingOf), which the prefix before this group already
+    /// compares. With every effect off it is the default, and the pass does not run.
+    EffectsPlan effects{};
+
     friend bool operator==(const ProcessingPlan&, const ProcessingPlan&) = default;
 };
 
@@ -223,12 +232,24 @@ struct ProcessingPlan {
                                     plan.contrastSlope, plan.contrastScale, plan.shadowShift,
                                     plan.highlightShift, plan.blackShift, plan.whiteShift,
                                     plan.shoulderKnee, plan.toneCurves, plan.colorAdjustments),
-                           std::tie(plan.geometry), std::tie(plan.resize));
+                           std::tie(plan.geometry), std::tie(plan.resize), std::tie(plan.effects));
 }
 
 static_assert(std::tuple_size_v<decltype(stagesOf(std::declval<const ProcessingPlan&>()))> ==
                   stageCount,
               "every Stage needs a group in stagesOf, and no group may lack a Stage");
+
+/// @brief Gives where a render's output pixels lie in the crop frame.
+///
+/// `(region origin + (pixel + 0.5) * region / outputSize) / croppedSize` per
+/// axis, from the resize block and the geometry's output size (ADR 037): the
+/// same point of the frame maps to the same position whatever region, size or
+/// pyramid level is rendered.
+/// @param plan Plan with a geometry and a resize.
+/// @return The mapping the Effects pass reads.
+/// @pre @p plan has a geometry and a resize, as every plan from pixels or a
+/// ::arraw::Photo does.
+[[nodiscard]] FrameMapping frameMappingOf(const ProcessingPlan& plan);
 
 /// @brief Whether two plans agree on everything up to and including a boundary.
 ///

@@ -102,6 +102,19 @@ PixelRegion arraw::regionOf(const RenderRequest& request, ImageSize frame) {
     return {x0, y0, x1 - x0, y1 - y0};
 }
 
+FrameMapping arraw::frameMappingOf(const ProcessingPlan& plan) {
+    const ImageSize cropped = plan.geometry->outputSize;
+    const ResizePlan& resize = *plan.resize;
+    const auto width = static_cast<double>(cropped.width);
+    const auto height = static_cast<double>(cropped.height);
+    FrameMapping mapping;
+    mapping.origin = {resize.region.x / width, resize.region.y / height};
+    mapping.step = {static_cast<double>(resize.region.width) / resize.outputSize.width / width,
+                    static_cast<double>(resize.region.height) / resize.outputSize.height / height};
+    mapping.aspect = width / height;
+    return mapping;
+}
+
 ProcessingPlan arraw::planFor(const ColorEncoding& encoding, const DevelopState& state) {
     const DevelopSettings& settings = state.settings;
     ProcessingPlan plan = tonePlanFor(settings.tone);
@@ -109,6 +122,7 @@ ProcessingPlan arraw::planFor(const ColorEncoding& encoding, const DevelopState&
     plan.toneCurves = toneCurvePlanFor(settings.toneCurve);
     plan.colorAdjustments = colorAdjustmentPlanFor(settings.color, settings.hsl,
                                                    settings.blackAndWhite, settings.colorGrading);
+    plan.effects = effectsPlanFor(settings.effects);
     return plan;
 }
 

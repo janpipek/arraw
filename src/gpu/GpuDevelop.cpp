@@ -152,13 +152,23 @@ PassResult runPasses(GpuContext& context, std::optional<Stage> done, DeviceImage
         }
         done = Stage::Geometry;
     }
-    if (*done == Stage::Geometry && stopAfter == Stage::Resize) {
+    if (*done == Stage::Geometry && stopAfter >= Stage::Resize) {
         // As resample: a size equal to the cropped one is not resized, and the
         // pixels are reused as they are.
         if (!plan.resize->isIdentity(plan.geometry->outputSize)) {
             image = resizeOnGpu(context, image, *plan.resize);
         }
         done = Stage::Resize;
+    }
+    if (*done == Stage::Resize && stopAfter == Stage::Effects) {
+        // As effectsBy: with every effect off the boundary collapses onto the
+        // resize, and the image is shared rather than rendered again.
+        if (plan.effects.active()) {
+            const GpuEffectsBlock block = packEffects(plan);
+            image = context.render(GpuPass::Effects, bytesOf(block), image, image.size(),
+                                   workingEncoding);
+        }
+        done = Stage::Effects;
     }
     return {std::move(image), *done};
 }
@@ -183,7 +193,7 @@ RenderCheckpoint developOnGpu(GpuContext& context, const ImageBuffer& source,
     // Only a render that reaches the resize plans one: stopping earlier ignores
     // the request, whatever it says, and has no use for the opacity scan.
     ProcessingPlan plan =
-        planFor(source, state, stopAfter == Stage::Resize ? request : RenderRequest{});
+        planFor(source, state, stopAfter >= Stage::Resize ? request : RenderRequest{});
     return developPasses(context, std::nullopt, uploaded, std::move(plan), stopAfter);
 }
 
@@ -202,7 +212,7 @@ RenderCheckpoint developOnGpu(GpuContext& context, const RenderCheckpoint& from,
         throw std::invalid_argument("The checkpoint belongs to another device");
     }
     ProcessingPlan plan =
-        planFor(source, state, stopAfter == Stage::Resize ? request : RenderRequest{});
+        planFor(source, state, stopAfter >= Stage::Resize ? request : RenderRequest{});
     requireResumable(held, plan, source.size(), stopAfter);
     if (stopAfter == held.boundary) {
         return from;

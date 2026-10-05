@@ -21,6 +21,11 @@ CASES = {
     "grading_black_and_white": {"convert_to_grayscale": True, "grade_shadow_hue": 230,
                                 "grade_shadow_saturation": 60, "grade_highlight_hue": 60,
                                 "grade_highlight_saturation": 40},
+    "vignette": {"vignette_amount": -60, "vignette_midpoint": 30, "vignette_feather": 70},
+    "vignette_lighten": {"vignette_amount": 45, "vignette_feather": 0},
+    # A seed given, as the command line would otherwise choose its own.
+    "grain": {"grain_amount": 60, "grain_size": 100, "grain_roughness": 70,
+              "grain_seed": 31337, "vignette_amount": -30},
     "combined": {"exposure": 0.5, "contrast": 20, "shadows": 15, "filmic_highlights": 0},
 }
 

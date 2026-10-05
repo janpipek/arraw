@@ -38,6 +38,10 @@ constexpr std::array<std::string_view, 8> colorGradingKeyList{
     "gradeShadowHue",    "gradeShadowSaturation",    "gradeMidtoneHue", "gradeMidtoneSaturation",
     "gradeHighlightHue", "gradeHighlightSaturation", "gradeBalance",    "gradeBlending"};
 
+constexpr std::array<std::string_view, 6> effectsKeyList{"vignetteAmount",  "vignetteMidpoint",
+                                                         "vignetteFeather", "grainAmount",
+                                                         "grainSize",       "grainRoughness"};
+
 constexpr std::array<std::string_view, 4> toneCurveKeyList{"toneCurveLuma", "toneCurveRed",
                                                            "toneCurveGreen", "toneCurveBlue"};
 
@@ -178,6 +182,46 @@ const std::vector<Row>& table() {
                           1.0,
                           tr("How softly the three tints melt into each other; lower is "
                              "sharper.")}});
+        built.push_back({"vignetteAmount",
+                         {tr("Vignette"),
+                          {},
+                          0,
+                          1.0,
+                          tr("Darkens (negative) or lightens (positive) the edges of the cropped "
+                             "frame. It follows the crop.")}});
+        built.push_back({"vignetteMidpoint",
+                         {tr("Midpoint"),
+                          {},
+                          0,
+                          1.0,
+                          tr("Where the vignette begins: lower reaches further toward the "
+                             "centre.")}});
+        built.push_back({"vignetteFeather",
+                         {tr("Feather"),
+                          {},
+                          0,
+                          1.0,
+                          tr("How softly the vignette fades in; zero is a hard edge.")}});
+        built.push_back({"grainAmount",
+                         {tr("Grain"),
+                          {},
+                          0,
+                          1.0,
+                          tr("Strength of a film-like grain over the cropped frame. It stays put "
+                             "as you pan and zoom; a small preview shows it softer.")}});
+        built.push_back({"grainSize",
+                         {tr("Size"),
+                          {},
+                          0,
+                          1.0,
+                          tr("Size of the grain, relative to the cropped frame's long edge.")}});
+        built.push_back({"grainRoughness",
+                         {tr("Roughness"),
+                          {},
+                          0,
+                          1.0,
+                          tr("How clumped the grain is: zero is even, higher mixes in coarser "
+                             "clusters.")}});
         return built;
     }();
     return rows;
@@ -210,6 +254,10 @@ std::span<const std::string_view> blackAndWhiteKeys() noexcept {
 
 std::span<const std::string_view> colorGradingKeys() noexcept {
     return colorGradingKeyList;
+}
+
+std::span<const std::string_view> effectsKeys() noexcept {
+    return effectsKeyList;
 }
 
 std::span<const std::string_view> toneCurveKeys() noexcept {

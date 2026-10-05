@@ -1,6 +1,7 @@
 #include "Develop.h"
 
 #include "CheckpointState.h"
+#include "Effects.h"
 #include "ProcessingPlan.h"
 #include "Resample.h"
 #include "SampleConversion.h"
@@ -101,6 +102,22 @@ ImageBuffer resizeBy(ImageBuffer framed, const ProcessingPlan& plan) {
     return resample(std::move(framed), resize.outputSize, resize.filter, resize.opaque);
 }
 
+/// @brief Runs the Effects pass that a plan resolved, or leaves the pixels as they are.
+///
+/// With every effect off the boundary collapses onto the resize (ADR 011): no
+/// pass, and the buffer is handed on untouched.
+ImageBuffer effectsBy(ImageBuffer resized, const ProcessingPlan& plan) {
+    if (!plan.effects.active()) {
+        return resized;
+    }
+    return applyEffects(std::move(resized), plan.effects, frameMappingOf(plan));
+}
+
+/// @brief Whether a render stopping after a boundary reaches the resize, and so reads the request.
+bool readsRequest(Stage stopAfter) {
+    return stopAfter >= Stage::Resize;
+}
+
 /// @brief Checks that a pass boundary is one that exists.
 void requireBoundary(Stage stopAfter) {
     if (static_cast<std::size_t>(stopAfter) >= stageCount) {
@@ -119,9 +136,13 @@ RenderCheckpoint runStages(Stage done, ImageBuffer pixels, ProcessingPlan plan, 
         pixels = applyGeometry(std::move(pixels), *plan.geometry);
         at = Stage::Geometry;
     }
-    if (at == Stage::Geometry && stopAfter == Stage::Resize) {
+    if (at == Stage::Geometry && stopAfter >= Stage::Resize) {
         pixels = resizeBy(std::move(pixels), plan);
         at = Stage::Resize;
+    }
+    if (at == Stage::Resize && stopAfter == Stage::Effects) {
+        pixels = effectsBy(std::move(pixels), plan);
+        at = Stage::Effects;
     }
     return makeCheckpoint(at, std::move(plan), std::move(pixels));
 }
@@ -133,7 +154,8 @@ ImageBuffer arraw::develop(const ImageBuffer& source, const DevelopState& state,
     const detail::TimingSpan timing("cpu.develop");
     // The direct path: no checkpoint, so nothing is shared and nothing copied.
     const ProcessingPlan plan = planFor(source, state, request);
-    return resizeBy(applyGeometry(developPointwise(source, plan), *plan.geometry), plan);
+    return effectsBy(resizeBy(applyGeometry(developPointwise(source, plan), *plan.geometry), plan),
+                     plan);
 }
 
 RenderCheckpoint arraw::developUntil(const ImageBuffer& source, const DevelopState& state,
@@ -142,7 +164,7 @@ RenderCheckpoint arraw::developUntil(const ImageBuffer& source, const DevelopSta
     // Only a render that reaches the resize plans one: stopping earlier ignores
     // the request, and has no use for the opacity scan.
     ProcessingPlan plan =
-        planFor(source, state, stopAfter == Stage::Resize ? request : RenderRequest{});
+        planFor(source, state, readsRequest(stopAfter) ? request : RenderRequest{});
     ImageBuffer developed = developPointwise(source, plan);
     return runStages(Stage::Pointwise, std::move(developed), std::move(plan), stopAfter);
 }
@@ -157,7 +179,7 @@ RenderCheckpoint arraw::resumeFrom(const RenderCheckpoint& from, const ImageBuff
         throw std::invalid_argument("A checkpoint on a device cannot be resumed on the CPU");
     }
     ProcessingPlan plan =
-        planFor(source, state, stopAfter == Stage::Resize ? request : RenderRequest{});
+        planFor(source, state, readsRequest(stopAfter) ? request : RenderRequest{});
     requireResumable(held, plan, source.size(), stopAfter);
     if (stopAfter == held.boundary) {
         return from;

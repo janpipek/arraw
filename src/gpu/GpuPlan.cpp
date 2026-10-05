@@ -36,6 +36,35 @@ bool probeReadsCurves(PointwiseProbe probe) {
     return true;
 }
 
+GpuEffectsBlock packEffects(const ProcessingPlan& plan) {
+    const FrameMapping mapping = frameMappingOf(plan);
+    const VignettePlan& vignette = plan.effects.vignette;
+    GpuEffectsBlock block;
+    block.origin = {static_cast<float>(mapping.origin[0]), static_cast<float>(mapping.origin[1])};
+    block.step = {static_cast<float>(mapping.step[0]), static_cast<float>(mapping.step[1])};
+    block.vignettes = vignette.active ? 1U : 0U;
+    block.vignetteLightens = vignette.lightens ? 1U : 0U;
+    block.vignetteHardEdge = vignette.hardEdge ? 1U : 0U;
+    block.vignetteStops = vignette.stops;
+    block.vignetteInner = vignette.inner;
+    block.vignetteOuter = vignette.outer;
+    const GrainPlan& grain = plan.effects.grain;
+    if (grain.active) {
+        const GrainPlacement placement = grainPlacementOf(grain, mapping);
+        block.grains = 1U;
+        block.grainModel = static_cast<std::uint32_t>(grain.model);
+        for (std::size_t index = 0; index < grainLayerCount; ++index) {
+            const GrainLayer& layer = placement.layers[index];
+            block.grainLayers[index] = {.cell = layer.cell,
+                                        .fraction = layer.fraction,
+                                        .delta = layer.delta,
+                                        .weight = layer.weight,
+                                        .seed = layer.seed};
+        }
+    }
+    return block;
+}
+
 GpuPointwiseBlock packPointwise(const ProcessingPlan& plan, PointwiseProbe probe) {
     GpuPointwiseBlock block;
     for (std::size_t row = 0; row < 3; ++row) {

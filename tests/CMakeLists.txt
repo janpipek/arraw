@@ -37,6 +37,8 @@ add_executable(arraw-tests
         test_Diagnostics.cpp
         test_ColorAdjustments.cpp
         test_ColorGrading.cpp
+        test_Effects.cpp
+        test_Grain.cpp
         test_GpuContext.cpp
         test_GpuDevice.cpp
         test_GpuPlan.cpp
@@ -144,11 +146,13 @@ endif()
 # no device for the backend skips every case (exit 4). Only Vulkan on lavapipe
 # has been run: see ADR 017.
 add_executable(arraw-gpu-tests
+        support/TestImages.cpp
         gpu/main.cpp
         gpu/GpuTesting.cpp
         gpu/GpuTesting.h
         gpu/test_GpuAdapters.cpp
         gpu/test_GpuDevelop.cpp
+        gpu/test_GpuEffects.cpp
         gpu/test_GpuExport.cpp
         gpu/test_GpuPasses.cpp
         gpu/test_GpuPointwise.cpp

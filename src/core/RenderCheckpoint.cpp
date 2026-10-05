@@ -60,7 +60,7 @@ void requireResumable(const CheckpointState& from, const ProcessingPlan& plan, I
     ImageSize expected = sourceSize;
     if (from.boundary == Stage::Geometry) {
         expected = plan.geometry->outputSize;
-    } else if (from.boundary == Stage::Resize) {
+    } else if (from.boundary == Stage::Resize || from.boundary == Stage::Effects) {
         expected = plan.resize->outputSize;
     }
     if (from.size() != expected) {

@@ -7,11 +7,13 @@
 
 #include <cctype>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <set>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <variant>
 #include <vector>
 
 using namespace arraw;
@@ -39,6 +41,11 @@ void writeSentinel(const FieldDescriptor& descriptor, DevelopSettings& settings)
             field = UprightCropRect{.left = 0.1, .top = 0.1, .right = 0.9, .bottom = 0.9};
         } else if constexpr (std::is_same_v<T, ToneCurve>) {
             field.points = {{0.0F, 0.0F}, {0.5F, 0.75F}, {1.0F, 1.0F}};
+        } else if constexpr (std::is_same_v<T, GrainModel>) {
+            // One model so far: an out-of-table value stands for "another one".
+            field = static_cast<GrainModel>(1);
+        } else if constexpr (std::is_same_v<T, std::uint32_t>) {
+            field += 7U;
         } else {
             static_assert(std::is_same_v<T, CropAspect>);
             field = CropRatio{2.0};
@@ -69,9 +76,16 @@ DevelopSettings withValue(const FieldDescriptor& descriptor, double value) {
             field = value;
         } else if constexpr (std::is_same_v<T, float> || std::is_same_v<T, std::optional<float>>) {
             field = static_cast<float>(value);
+        } else if constexpr (std::is_same_v<T, std::uint32_t>) {
+            field = static_cast<std::uint32_t>(value);
         }
     });
     return settings;
+}
+
+/// Whether a row's leaf is a whole number, whose type cannot hold a value outside its range.
+bool isWholeNumber(const FieldDescriptor& descriptor) {
+    return std::holds_alternative<std::uint32_t& (*)(DevelopSettings&)>(descriptor.member);
 }
 
 ImageMetadata someMetadata() {
@@ -92,19 +106,66 @@ TEST_CASE("The descriptor table has a row per leaf, matching the structs", "[set
     STATIC_REQUIRE(test::fieldCount<ToneCurveSettings> == 4);
     STATIC_REQUIRE(test::fieldCount<GradeZone> == 2);
     STATIC_REQUIRE(test::fieldCount<ColorGradingSettings> == 5);
-    STATIC_REQUIRE(test::fieldCount<DevelopSettings> == 7);
+    STATIC_REQUIRE(test::fieldCount<VignetteSettings> == 3);
+    STATIC_REQUIRE(test::fieldCount<GrainSettings> == 5);
+    STATIC_REQUIRE(test::fieldCount<EffectsSettings> == 2);
+    STATIC_REQUIRE(test::fieldCount<DevelopSettings> == 8);
 
     // Leaves: tone + color + geometry (crop is a group of two leaves) + hsl
     // (eight bands of three leaves) + black and white + the four tone curves +
-    // colour grading (three zones of two leaves, balance and blending).
+    // colour grading (three zones of two leaves, balance and blending) +
+    // effects (the vignette's three leaves and the grain's five).
     STATIC_REQUIRE(developSettingDescriptors.size() ==
                    test::fieldCount<ToneSettings> + test::fieldCount<ColorSettings> +
                        test::fieldCount<GeometrySettings> - 1 + test::fieldCount<CropSettings> +
                        test::fieldCount<HslSettings> * test::fieldCount<HueBand> +
                        test::fieldCount<BlackAndWhiteSettings> +
                        test::fieldCount<ToneCurveSettings> + 3 * test::fieldCount<GradeZone> +
-                       test::fieldCount<ColorGradingSettings> - 3);
-    STATIC_REQUIRE(developSettingDescriptors.size() == 63);
+                       test::fieldCount<ColorGradingSettings> - 3 +
+                       test::fieldCount<VignetteSettings> + test::fieldCount<GrainSettings>);
+    STATIC_REQUIRE(developSettingDescriptors.size() == 71);
+}
+
+TEST_CASE("The vignette and grain rows run in the Effects pass and always apply", "[settings]") {
+    int effects = 0;
+    for (const FieldDescriptor& descriptor : developSettingDescriptors) {
+        INFO(descriptor.key);
+        if (descriptor.group != SettingGroup::Effects) {
+            continue;
+        }
+        ++effects;
+        REQUIRE(descriptor.affects == Stage::Effects);
+        REQUIRE(descriptor.applies == Applicability::Always);
+    }
+    REQUIRE(effects == 8);
+    REQUIRE(findDescriptor("vignetteAmount")->range->minimum == -100.0);
+    REQUIRE(findDescriptor("vignetteAmount")->range->maximum == 100.0);
+    REQUIRE(findDescriptor("vignetteMidpoint")->range->minimum == 0.0);
+    REQUIRE(findDescriptor("vignetteFeather")->range->maximum == 100.0);
+    const VignetteSettings defaults{};
+    REQUIRE(defaults.amount == 0.0F);
+    REQUIRE(defaults.midpoint == 50.0F);
+    REQUIRE(defaults.feather == 50.0F);
+    for (const char* key : {"grainAmount", "grainSize", "grainRoughness"}) {
+        INFO(key);
+        REQUIRE(findDescriptor(key)->range->minimum == 0.0);
+        REQUIRE(findDescriptor(key)->range->maximum == 100.0);
+    }
+    REQUIRE_FALSE(findDescriptor("grainModel")->range.has_value());
+    REQUIRE(findDescriptor("grainSeed")->range->maximum == 4294967295.0);
+    const GrainSettings grain{};
+    REQUIRE(grain.amount == 0.0F);
+    REQUIRE(grain.size == 50.0F);
+    REQUIRE(grain.roughness == 50.0F);
+    REQUIRE(grain.model == GrainModel::ValueNoise);
+    REQUIRE(grain.seed == 0U);
+}
+
+TEST_CASE("Only the grain seed belongs to the photograph rather than the look", "[settings]") {
+    for (const FieldDescriptor& descriptor : developSettingDescriptors) {
+        INFO(descriptor.key);
+        REQUIRE((descriptor.scope == SettingScope::Photo) == (descriptor.key == "grainSeed"));
+    }
 }
 
 TEST_CASE("The colour rows are pointwise, always apply and share their groups", "[settings]") {
@@ -278,7 +339,8 @@ TEST_CASE("Validation accepts the defaults and both ends of every range", "[sett
 
 TEST_CASE("Validation refuses a value below, above or outside every range", "[settings]") {
     for (const FieldDescriptor& descriptor : developSettingDescriptors) {
-        if (!descriptor.range) {
+        // A seed's range is its type's: nothing outside it can be stored to refuse.
+        if (!descriptor.range || isWholeNumber(descriptor)) {
             continue;
         }
         INFO(descriptor.key);

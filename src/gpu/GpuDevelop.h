@@ -31,7 +31,8 @@ namespace arraw {
 /// chain in one pass, then the geometry resample in another, skipped under
 /// exactly the condition the CPU skips it, then the resize to the requested
 /// size (horizontal, then vertical; see `Resample.cpp`; two renders for an opaque
-/// source, four otherwise), skipped when the size is the cropped one. The source is converted to
+/// source, four otherwise), skipped when the size is the cropped one, then the
+/// effects in one pass, skipped when every effect is off. The source is converted to
 /// RGBA float on the host first, by the conversion development itself uses, and uploaded; the
 /// result stays on the device until someone reads it back.
 ///
@@ -43,7 +44,8 @@ namespace arraw {
 /// @param state How the photograph is developed.
 /// @param stopAfter Last boundary to run: ::arraw::Stage::Pointwise leaves a
 /// result of the source's size with no geometry applied, and
-/// ::arraw::Stage::Geometry one with no resize, whatever @p request asks.
+/// ::arraw::Stage::Geometry one with no resize, whatever @p request asks, and
+/// ::arraw::Stage::Resize one with no effects.
 /// @param request Size and filter to render at; the default is the cropped size
 /// of the photograph, which costs no pass. Only its size, upscale and filter
 /// are read.
@@ -52,13 +54,13 @@ namespace arraw {
 /// @throws std::invalid_argument if development cannot start from @p source,
 /// the settings cannot be resolved, @p stopAfter is not a boundary, @p request
 /// cannot be resolved (see ::arraw::resolvedSize; checked only when
-/// @p stopAfter is ::arraw::Stage::Resize, as earlier stops ignore it), or an
+/// @p stopAfter is ::arraw::Stage::Resize or later, as earlier stops ignore it), or an
 /// image is larger than the device accepts.
 /// @throws std::logic_error if called from a thread other than the context's owner.
 /// @throws std::runtime_error if the device cannot do the work or fails.
 [[nodiscard]] RenderCheckpoint developOnGpu(GpuContext& context, const ImageBuffer& source,
                                             const DevelopState& state,
-                                            Stage stopAfter = Stage::Resize,
+                                            Stage stopAfter = Stage::Effects,
                                             const RenderRequest& request = {});
 
 /// @brief Develops a photograph already on the device, stopping after one boundary.
@@ -81,7 +83,7 @@ namespace arraw {
 /// @throws std::runtime_error if the device cannot do the work or fails.
 RenderCheckpoint developOnGpu(GpuContext& context, const ImageBuffer& source,
                               const DeviceImage& uploaded, const DevelopState& state,
-                              Stage stopAfter = Stage::Resize, const RenderRequest& request = {});
+                              Stage stopAfter = Stage::Effects, const RenderRequest& request = {});
 
 /// @brief Carries a render on from a checkpoint that is on this device.
 ///
@@ -107,7 +109,7 @@ RenderCheckpoint developOnGpu(GpuContext& context, const ImageBuffer& source,
 /// @param state How the photograph is developed now.
 /// @param stopAfter Last boundary to run; not before the checkpoint's.
 /// @param request Size and filter to render at; read only when @p stopAfter is
-/// ::arraw::Stage::Resize.
+/// ::arraw::Stage::Resize or later.
 /// @return A resident checkpoint at @p stopAfter.
 /// @throws std::invalid_argument if @p from is in host memory, belongs to another
 /// device, or does not match this render (plan prefix or size), @p stopAfter is not
@@ -116,7 +118,7 @@ RenderCheckpoint developOnGpu(GpuContext& context, const ImageBuffer& source,
 /// @throws std::runtime_error if the device cannot do the work or fails.
 [[nodiscard]] RenderCheckpoint developOnGpu(GpuContext& context, const RenderCheckpoint& from,
                                             const ImageBuffer& source, const DevelopState& state,
-                                            Stage stopAfter = Stage::Resize,
+                                            Stage stopAfter = Stage::Effects,
                                             const RenderRequest& request = {});
 
 /// @brief Samples a photograph already on the device at a tap, and reads the result back.

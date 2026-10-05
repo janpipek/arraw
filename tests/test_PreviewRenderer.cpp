@@ -363,10 +363,11 @@ QImage freshImage(const DevelopState& state, QSize viewport) {
     return *renderOne(renderer, collector, state, viewport).image;
 }
 
-DevelopState stateWith(float exposure, double straighten) {
+DevelopState stateWith(float exposure, double straighten, float vignette = 0.0F) {
     DevelopSettings settings;
     settings.tone.exposure = exposure;
     settings.geometry.straighten = straighten;
+    settings.effects.vignette.amount = vignette;
     return DevelopState{settings};
 }
 
@@ -392,12 +393,18 @@ TEST_CASE("An edit resumes from the newest checkpoint it can still use", "[app][
          Stage::Geometry},
         {"a straighten change resumes from the pointwise result", stateWith(0.5F, 5.0), narrow,
          Stage::Pointwise},
-        {"the same request again resumes from the geometry", stateWith(0.5F, 5.0), narrow,
-         Stage::Geometry},
+        {"the same request again resumes from the resize", stateWith(0.5F, 5.0), narrow,
+         Stage::Resize},
         {"a tone change after that resumes from nothing", stateWith(-0.5F, 5.0), narrow,
          std::nullopt},
         {"a viewport change after that resumes from the geometry", stateWith(-0.5F, 5.0), wide,
          Stage::Geometry},
+        {"a vignette change resumes from the resize", stateWith(-0.5F, 5.0, -40.0F), wide,
+         Stage::Resize},
+        {"a viewport change with a vignette resumes from the geometry",
+         stateWith(-0.5F, 5.0, -40.0F), narrow, Stage::Geometry},
+        {"a vignette turned off resumes from the resize", stateWith(-0.5F, 5.0), narrow,
+         Stage::Resize},
     };
     for (const Step& step : steps) {
         INFO(step.label);

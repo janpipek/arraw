@@ -75,3 +75,11 @@ Checkpoints are released on the preview thread, as the device requires.
   them, as main's cached derivative buffers did.
 - **A decode block in the plan** will move source identity into the engine. The
   preview's per-buffer binding can then go.
+
+## Note, 2026-10-04
+
+A fourth boundary, `Stage::Effects`, follows the resize
+([ADR 037](037-effects-run-after-the-resize-and-the-vignette-follows-the-crop.md)).
+Renders end there, and the preview keeps a resize checkpoint beside the
+pointwise and geometry ones, so a vignette edit resumes after the resize. With
+every effect off the boundary collapses onto the resize.

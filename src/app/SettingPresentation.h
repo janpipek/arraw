@@ -92,6 +92,13 @@ inline constexpr int hslPageCount = 3;
 /// Shadows, Midtones and Highlights each as hue then saturation, then Balance and Blending.
 [[nodiscard]] std::span<const std::string_view> colorGradingKeys() noexcept;
 
+/// @brief Gives the keys of the Effects group's rows, in panel order.
+///
+/// The post-crop vignette's amount, midpoint and feather, then the grain's amount, size and
+/// roughness. The grain's model has one value so far and its seed is the photograph's own
+/// (::arraw::SettingScope::Photo), so neither has a row.
+[[nodiscard]] std::span<const std::string_view> effectsKeys() noexcept;
+
 /// @brief Gives the keys of the settings the curve editor shows: the four tone curves.
 ///
 /// Edited by the curve editor rather than a slider row, so they have no

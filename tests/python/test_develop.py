@@ -205,3 +205,15 @@ def test_resolved_size_matches_develop(png):
     assert (got.width, got.height) == (122, 82)
     with pytest.raises(TypeError):
         arraw.resolved_size(True, buf.size)
+
+
+def test_vignette_darkens_corners_and_leaves_the_centre(dng):
+    photo = arraw.open(dng).with_(filmic_highlights=0)
+    base = arraw.develop(photo).pixels[..., :3]
+    dark = arraw.develop(photo.with_(vignette_amount=-100)).pixels[..., :3]
+    h, w = base.shape[:2]
+    # A corner pixel loses close to the full two stops; the centre keeps most.
+    corner = dark[0, 0] / np.maximum(base[0, 0], 1e-6)
+    centre = dark[h // 2, w // 2] / np.maximum(base[h // 2, w // 2], 1e-6)
+    assert np.all(corner < 0.4)
+    assert np.all(centre > 0.9)

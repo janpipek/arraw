@@ -16,13 +16,19 @@ CENTER = {
     "tone_curve_red": arraw.ToneCurve([(0.0, 0.1), (1.0, 1.0)]),
     "tone_curve_green": arraw.ToneCurve([(0.0, 0.0), (0.5, 0.3), (1.0, 0.9)]),
     "tone_curve_blue": arraw.ToneCurve([(0.0, 0.0), (0.2, 0.1), (0.8, 0.9), (1.0, 1.0)]),
+    # The one model there is, so the default: nothing else is valid yet.
+    "grain_model": arraw.GrainModel.VALUE_NOISE,
 }
+# Above 2**31, so that a signed 32-bit integer somewhere would show.
+WHOLE = {"grain_seed": 3000000000}
 
 BANDS = ("red", "orange", "yellow", "green", "aqua", "blue", "purple", "magenta")
 
 
 def sample(descriptor):
     """Pick a non-default value for a setting from its descriptor."""
+    if descriptor.name in WHOLE:
+        return WHOLE[descriptor.name]
     if descriptor.range is not None:
         low, high = descriptor.range
         return low + 0.3 * (high - low)
@@ -48,6 +54,10 @@ def find(settings, name):
             return getattr(settings.color_grading, rest)
         zone, kind = rest.split("_")
         return getattr(getattr(settings.color_grading, zone + "s"), kind)
+    if name.startswith("vignette_"):
+        return getattr(settings.effects.vignette, name.removeprefix("vignette_"))
+    if name.startswith("grain_"):
+        return getattr(settings.effects.grain, name.removeprefix("grain_"))
     if name.startswith("tone_curve"):
         return getattr(settings.tone_curve, name.removeprefix("tone_curve").lstrip("_") or "luma")
     if name.startswith("gray_"):
@@ -81,7 +91,8 @@ def test_every_descriptor_name_lands_in_its_field(photo, descriptor):
     changed = photo.with_(**{descriptor.name: value})
     after = leaves(changed.state.settings)
     assert same(after[descriptor.name], value)
-    assert after[descriptor.name] != default[descriptor.name]
+    if descriptor.name != "grain_model":
+        assert after[descriptor.name] != default[descriptor.name]
     for name in default:
         if name != descriptor.name:
             assert same(after[name], default[name]), f"{name} moved when setting {descriptor.name}"
@@ -140,6 +151,8 @@ def test_range_edges_are_accepted(photo):
     for d in arraw.setting_descriptors():
         if d.range is not None:
             low, high = d.range
+            if d.name in WHOLE:
+                low, high = int(low), int(high)
             photo.with_(**{d.name: low})
             photo.with_(**{d.name: high})
 

@@ -17,10 +17,11 @@ enum class Stage {
     Pointwise, ///< After the fused pointwise chain, before any geometry.
     Geometry,  ///< After the resample into the upright, cropped frame.
     Resize,    ///< After the resize to a requested size; equals Geometry's pixels when none.
+    Effects,   ///< After the effects on the crop frame; equals Resize's pixels when none is on.
 };
 
 /// @brief Number of pass boundaries, for the prefix fold to iterate over.
-inline constexpr std::size_t stageCount = 3;
+inline constexpr std::size_t stageCount = 4;
 
 struct CheckpointState;
 

@@ -311,6 +311,8 @@ std::string_view passName(GpuPass pass) {
         return "resize-across-opaque";
     case GpuPass::ResizeDownOpaque:
         return "resize-down-opaque";
+    case GpuPass::Effects:
+        return "effects";
     }
     return "unknown";
 }
@@ -332,6 +334,8 @@ QString fragmentShaderOf(GpuPass pass) {
         return QStringLiteral(":/arraw/shaders/resize_across_opaque.frag.qsb");
     case GpuPass::ResizeDownOpaque:
         return QStringLiteral(":/arraw/shaders/resize_down_opaque.frag.qsb");
+    case GpuPass::Effects:
+        return QStringLiteral(":/arraw/shaders/effects.frag.qsb");
     }
     return {};
 }
@@ -350,6 +354,8 @@ std::size_t uniformSizeOf(GpuPass pass) {
     case GpuPass::ResizeAcrossOpaque:
     case GpuPass::ResizeDownOpaque:
         return sizeof(GpuResizeBlock);
+    case GpuPass::Effects:
+        return sizeof(GpuEffectsBlock);
     }
     return 0;
 }
@@ -359,6 +365,7 @@ std::size_t inputCountOf(GpuPass pass) {
     switch (pass) {
     case GpuPass::Copy:
     case GpuPass::Geometry:
+    case GpuPass::Effects:
         return 1;
     case GpuPass::Pointwise:
     case GpuPass::ResizeAcross:

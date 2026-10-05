@@ -119,12 +119,18 @@ add_library(arraw STATIC
         include/BlackAndWhiteSettings.h
         include/ColorGradingSettings.h
         include/ColorSettings.h
+        include/EffectsSettings.h
         include/HslSettings.h
         src/core/ColorAdjustments.h
         src/core/ColorAdjustments.cpp
         src/core/ColorGrading.h
         src/core/ColorGrading.cpp
         src/core/ColorSettings.cpp
+        src/core/Effects.h
+        src/core/Effects.cpp
+        src/core/GrainModels.h
+        src/core/GrainModels.cpp
+        src/core/GrainSeed.cpp
         include/Develop.h
         include/Diagnostics.h
         include/WhiteBalance.h
@@ -205,6 +211,11 @@ add_library(arraw STATIC
 )
 add_library(arraw::arraw ALIAS arraw)
 arraw_enable_warnings(arraw)
+# The grain's lattice positions must round as the shader's do, one operation at
+# a time (ADR 038); a fused multiply-add would find other cells near their edges.
+# MSVC does not contract under its default /fp:precise.
+set_source_files_properties(src/core/GrainModels.cpp PROPERTIES
+        COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-ffp-contract=off>")
 target_include_directories(arraw PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 # The GPU module's own headers name no graphics type — the QRhi texture lives
 # behind DeviceImageState, whose device-side subclass is arraw-gpu's — so core
@@ -269,7 +280,8 @@ qt_add_shaders(arraw-gpu "arraw-shaders"
         src/gpu/shaders/resize_across.frag
         src/gpu/shaders/resize_across_opaque.frag
         src/gpu/shaders/resize_down.frag
-        src/gpu/shaders/resize_down_opaque.frag)
+        src/gpu/shaders/resize_down_opaque.frag
+        src/gpu/shaders/effects.frag)
 target_link_libraries(arraw-gpu PUBLIC arraw PRIVATE Qt6::Gui Qt6::GuiPrivate)
 set_target_properties(arraw-gpu PROPERTIES AUTOMOC OFF)
 # QRhi declares its Vulkan backend only where vulkan/vulkan.h is visible, so a

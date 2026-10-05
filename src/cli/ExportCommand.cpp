@@ -18,6 +18,7 @@
 #include <DevelopSettings.h>
 #include <DevelopState.h>
 #include <Diagnostics.h>
+#include <EffectsSettings.h>
 #include <ImageExport.h>
 #include <ImageImport.h>
 #include <MarksFilter.h>
@@ -106,6 +107,14 @@ const FieldDescriptor& descriptorFor(std::string_view key) {
 void addEdit(std::vector<SettingEdit>& edits, std::string_view key, const DevelopSettings& source) {
     const FieldDescriptor& descriptor = descriptorFor(key);
     edits.push_back({&descriptor, encode(descriptor, source)});
+}
+
+/// @brief Tells whether the flags gave a setting a value.
+/// @param edits What the flags said.
+/// @param key Key of the setting.
+bool namesSetting(const cli::ExportEdits& edits, std::string_view key) {
+    return std::ranges::any_of(
+        edits.settings, [key](const SettingEdit& edit) { return edit.descriptor->key == key; });
 }
 
 /// @brief Puts the geometry flags on top of a photograph's own geometry.
@@ -340,6 +349,15 @@ constexpr SettingHelp settingHelp[]{
      ""},
     {"gradeBlending", "amount", "Softness of the transitions between the tinted zones",
      " Default: 50."},
+    {"vignetteAmount", "amount", "Darken (-) or lighten (+) the edges of the cropped frame", ""},
+    {"vignetteMidpoint", "amount", "Where the vignette's falloff begins, from the centre outward",
+     " Default: 50."},
+    {"vignetteFeather", "amount", "Softness of the vignette's falloff, 0 for a hard edge",
+     " Default: 50."},
+    {"grainAmount", "amount", "Strength of the film grain", ""},
+    {"grainSize", "amount", "Size of the grain, relative to the cropped frame's long edge",
+     " Default: 50."},
+    {"grainRoughness", "amount", "How clumped the grain is, 0 for even", " Default: 50."},
 };
 
 /// @brief Finds the help wording of a setting.
@@ -579,6 +597,33 @@ bool readEdits(const QCommandLineParser& parser, cli::ExportEdits& edits, std::o
             return false;
         }
     }
+    if (parser.isSet("grain-seed")) {
+        // A seed names a pattern, so only an exact whole number is taken.
+        bool valid = false;
+        const qulonglong seed = parser.value("grain-seed").trimmed().toULongLong(&valid);
+        if (!valid || seed > std::numeric_limits<std::uint32_t>::max()) {
+            code = usageError(err, "--grain-seed takes a whole number from 0 to " +
+                                       std::to_string(std::numeric_limits<std::uint32_t>::max()));
+            return false;
+        }
+        given.effects.grain.seed = static_cast<std::uint32_t>(seed);
+        addEdit(edits.settings, "grainSeed", given);
+    }
+    if (parser.isSet("grain-model")) {
+        const std::string name = parser.value("grain-model").trimmed().toStdString();
+        const auto entry = std::ranges::find(grainModelNames, name,
+                                             [](const auto& known) { return known.second; });
+        if (entry == grainModelNames.end()) {
+            std::string names;
+            for (const auto& known : grainModelNames) {
+                names += (names.empty() ? "" : ", ") + std::string(known.second);
+            }
+            code = usageError(err, "--grain-model takes " + names);
+            return false;
+        }
+        given.effects.grain.model = entry->first;
+        addEdit(edits.settings, "grainModel", given);
+    }
     if (parser.isSet("convert-to-grayscale") && parser.isSet("no-convert-to-grayscale")) {
         code = usageError(err, "--convert-to-grayscale and --no-convert-to-grayscale contradict");
         return false;
@@ -627,6 +672,14 @@ void configure(QCommandLineParser& parser) {
         "setting how the zones share the tonal range. It works on black and white too.\n"
         "Hues are Oklab hue angles, not Lightroom's: roughly 30 is red, 110 yellow,\n"
         "140 green and 260 blue. The tint fades out toward white.\n"
+        "The post-crop vignette follows the crop: --vignette-amount darkens the edges as\n"
+        "an exposure change (-100 is two stops in the corners) or lightens them toward\n"
+        "white without clipping, shaped by --vignette-midpoint and --vignette-feather.\n"
+        "Film grain is --grain-amount, with --grain-size and --grain-roughness; it is\n"
+        "anchored to the cropped frame, so a smaller export shows it softer, never moved.\n"
+        "Grain the flags turn on, where the sidecar has none, gets a random pattern per\n"
+        "photograph and export, since the command never writes its seed back; grain the\n"
+        "sidecar has keeps its pattern, and --grain-seed names one, so that exports repeat.\n"
         "Naming --temperature or --tint makes white balance custom; the other half\n"
         "keeps the photograph's own value, or as shot. The command never writes a\n"
         "sidecar.\n"
@@ -681,6 +734,12 @@ void configure(QCommandLineParser& parser) {
     }
     parser.addOption(
         {"white-balance", "as-shot or custom. Temperature/tint imply custom.", "mode"});
+    parser.addOption({"grain-seed",
+                      "Which grain pattern, a whole number; 0 is one fixed pattern. Default: "
+                      "the sidecar's, or a random one when the flags turn grain on.",
+                      "number"});
+    parser.addOption(
+        {"grain-model", "How grain is drawn: valueNoise. Default: valueNoise.", "name"});
     parser.addOption({"convert-to-grayscale",
                       "Make the photograph black and white; the --gray-* weights mix the hues, and "
                       "saturation, vibrance and the HSL bands then have nothing to act on."});
@@ -943,7 +1002,8 @@ std::unique_ptr<GpuContext> createContext(const ExportRequest& request, std::str
 /// so the context can be destroyed whenever its owner likes.
 ImageBuffer developOnDevice(GpuContext& context, const ImageBuffer& source,
                             const DevelopState& state, const RenderRequest& render) {
-    const RenderCheckpoint checkpoint = developOnGpu(context, source, state, Stage::Resize, render);
+    const RenderCheckpoint checkpoint =
+        developOnGpu(context, source, state, Stage::Effects, render);
     return checkpoint.readBack();
 }
 
@@ -1035,6 +1095,13 @@ int exportAll(const ExportRequest& request, std::ostream& err) {
             edited.settings =
                 cli::applyEdits(std::move(edited.settings), request.edits, log, input,
                                 !std::holds_alternative<NamedEncoding>(opened.metadata().encoding));
+            // Grain the flags turn on gets a seed of its own, unless they name
+            // one; grain the photograph already has keeps its seed, zero
+            // included, so its exports repeat (ADR 038).
+            if (!namesSetting(request.edits, "grainSeed")) {
+                edited.settings.effects.grain.seed = chooseGrainSeed(
+                    opened.state().settings.effects.grain, edited.settings.effects.grain);
+            }
             const Photo photo = opened.with(std::move(edited));
             // Decoded once, before the device is involved: a file that cannot be
             // read is the input's failure, whichever device would have developed it.

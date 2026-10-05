@@ -34,7 +34,8 @@ struct DevelopState {
 ```
 
 Masks, spots and the grain seed become members next to `settings` when they
-arrive.
+arrive. (The grain seed did not: it is one number with a row of its own,
+kept with its photograph by its `SettingScope`; see ADR 038.)
 
 **The develop state is the unit the document, the session and the renderer
 use:**

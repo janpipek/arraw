@@ -26,7 +26,7 @@ namespace arraw::app {
 
 namespace {
 
-/// @brief The last pointwise and geometry results of one level of one source.
+/// @brief The last pointwise, geometry and resize results of one level of one source.
 ///
 /// Whether a checkpoint still applies to a request is the engine's to say; what
 /// the plan cannot tell is that the pixels underneath changed to others of the
@@ -45,48 +45,62 @@ public:
         }
     }
 
-    /// @brief Drops both checkpoints and the binding.
+    /// @brief Drops every checkpoint and the binding.
     void clear() noexcept {
         pointwise_.reset();
         geometry_.reset();
+        resized_.reset();
         level_.reset();
     }
 
     /// @brief Renders a request from the best checkpoint there is, refreshing the cache.
     ///
-    /// Tries the geometry checkpoint, then the pointwise one, then the level
-    /// itself, and carries on to the resize through each boundary it passes so
-    /// the next request can reuse them. A checkpoint the engine refuses is
-    /// dropped: it is stale, and the render goes on from an earlier one. A
-    /// render that fails leaves only checkpoints that are whole.
+    /// Tries the resize checkpoint, then the geometry one, then the pointwise
+    /// one, then the level itself, and carries on to the effects through each
+    /// boundary it passes so the next request can reuse them. A checkpoint the
+    /// engine refuses is dropped: it is stale, and the render goes on from an
+    /// earlier one. A render that fails leaves only checkpoints that are whole.
+    /// With every effect off the effects boundary is the resize's pixels, so
+    /// keeping the resize checkpoint costs nothing on the GPU and one
+    /// viewport-sized buffer on the CPU.
     /// @tparam Develop Callable `(Stage) -> RenderCheckpoint`, developing the level.
     /// @tparam Resume Callable `(const RenderCheckpoint&, Stage) -> RenderCheckpoint`.
     /// @param resumedFrom Set to the boundary resumed from, or reset.
-    /// @return The checkpoint at the resize.
+    /// @return The checkpoint at the effects.
     template <typename Develop, typename Resume>
     [[nodiscard]] RenderCheckpoint render(Develop&& develop, Resume&& resume,
                                           std::optional<Stage>& resumedFrom) {
         resumedFrom.reset();
+        // Each checkpoint is checked after the later one made from it: one
+        // that does not match now is useless to keep.
+        if (resized_) {
+            if (auto done = tryResume(resume, *resized_, Stage::Effects)) {
+                resumedFrom = Stage::Resize;
+                return std::move(*done);
+            }
+            resized_.reset();
+        }
         if (geometry_) {
             if (auto done = tryResume(resume, *geometry_, Stage::Resize)) {
                 resumedFrom = Stage::Geometry;
-                return std::move(*done);
+                resized_ = std::move(*done);
+                return resume(*resized_, Stage::Effects);
             }
             geometry_.reset();
         }
-        // The pointwise checkpoint is checked after the geometry one, which
-        // was made from it: one that does not match now is useless to keep.
         if (pointwise_) {
             if (auto done = tryResume(resume, *pointwise_, Stage::Geometry)) {
                 resumedFrom = Stage::Pointwise;
                 geometry_ = std::move(*done);
-                return resume(*geometry_, Stage::Resize);
+                resized_ = resume(*geometry_, Stage::Resize);
+                return resume(*resized_, Stage::Effects);
             }
             pointwise_.reset();
         }
         pointwise_ = develop(Stage::Pointwise);
         geometry_ = resume(*pointwise_, Stage::Geometry);
-        return resume(*geometry_, Stage::Resize);
+        resized_ = resume(*geometry_, Stage::Resize);
+        return resume(*resized_, Stage::Effects);
     }
 
 private:
@@ -111,6 +125,8 @@ private:
     std::optional<RenderCheckpoint> pointwise_;
     /// Result after the geometry, before any resize.
     std::optional<RenderCheckpoint> geometry_;
+    /// Result after the resize, before the effects.
+    std::optional<RenderCheckpoint> resized_;
 };
 
 /// @brief Idle time after a region render before the fallback beneath it is refreshed.
@@ -284,7 +300,7 @@ private:
     std::unique_ptr<GpuContext> context_;
     /// Pyramid levels on the device, by level; a level not yet needed is empty.
     std::vector<DeviceImage> uploaded_;
-    /// Last pointwise and geometry results of the level shown, resident here.
+    /// Last pointwise, geometry and resize results of the level shown, resident here.
     CheckpointCache checkpoints_;
     /// The same for the background, whose coarser level would evict the shown one's.
     CheckpointCache backgroundCheckpoints_;

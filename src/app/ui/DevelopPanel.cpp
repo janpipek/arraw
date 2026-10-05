@@ -5,6 +5,7 @@
 #include "SettingSlider.h"
 #include "WhiteBalanceChoice.h"
 
+#include <EffectsSettings.h>
 #include <SettingDescriptors.h>
 
 #include <QButtonGroup>
@@ -151,6 +152,15 @@ QWidget* DevelopPanel::buildColorGradingGroup() {
     return group;
 }
 
+QWidget* DevelopPanel::buildEffectsGroup() {
+    auto* group = new QGroupBox(tr("Effects"), this);
+    new QVBoxLayout(group);
+    for (const std::string_view key : effectsKeys()) {
+        addRow(key, group);
+    }
+    return group;
+}
+
 QWidget* DevelopPanel::buildHslGroup() {
     auto* group = new QGroupBox(tr("HSL / Colour Mix"), this);
     auto* groupLayout = new QVBoxLayout(group);
@@ -241,6 +251,7 @@ DevelopPanel::DevelopPanel(QWidget* parent) : QWidget(parent) {
     layout->addWidget(hslGroup_);
     layout->addWidget(blackAndWhiteGroup_);
     layout->addWidget(buildColorGradingGroup());
+    layout->addWidget(buildEffectsGroup());
     layout->addStretch(1);
     // One label column for every row, so that the grooves line up across groups.
     int labelWidth = 0;
@@ -395,6 +406,10 @@ void DevelopPanel::applyEdit(const SettingSlider& row, double value) {
             }
         });
     }
+    // Grain this edit turns on gets its photograph's own seed (ADR 038); every
+    // other edit, and turning it off, keeps the one it has, zero included.
+    next.settings.effects.grain.seed =
+        chooseGrainSeed(shown_.settings.effects.grain, next.settings.effects.grain);
     emit stateEdited(next);
 }
 

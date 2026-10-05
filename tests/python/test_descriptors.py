@@ -30,9 +30,14 @@ GRADE = {f"grade_{zone}_{kind}": (0.0, 360.0 if kind == "hue" else 100.0)
          for zone in ZONES for kind in ("hue", "saturation")}
 GRADE.update({"grade_balance": (-100.0, 100.0), "grade_blending": (0.0, 100.0)})
 RANGES.update(GRADE)
+EFFECTS = {"vignette_amount": (-100.0, 100.0), "vignette_midpoint": (0.0, 100.0),
+           "vignette_feather": (0.0, 100.0), "grain_amount": (0.0, 100.0),
+           "grain_size": (0.0, 100.0), "grain_roughness": (0.0, 100.0),
+           "grain_seed": (0.0, 4294967295.0)}
+RANGES.update(EFFECTS)
 CURVES = {"tone_curve_luma", "tone_curve_red", "tone_curve_green", "tone_curve_blue"}
 UNRANGED = {"white_balance", "rotation", "flip_horizontal", "flip_vertical",
-            "crop_rectangle", "crop_aspect", "convert_to_grayscale"} | CURVES
+            "crop_rectangle", "crop_aspect", "convert_to_grayscale", "grain_model"} | CURVES
 
 
 def snake(key: str) -> str:
@@ -45,8 +50,8 @@ def descriptors():
 
 
 def test_one_row_per_leaf(descriptors):
-    assert len(descriptors) == len(RANGES) + len(UNRANGED) == 63
-    assert len({d.name for d in descriptors}) == len(RANGES) + len(UNRANGED) == 63
+    assert len(descriptors) == len(RANGES) + len(UNRANGED) == 71
+    assert len({d.name for d in descriptors}) == len(RANGES) + len(UNRANGED) == 71
     assert {d.name for d in descriptors} == set(RANGES) | UNRANGED
 
 
@@ -103,6 +108,20 @@ def test_colour_grading_descriptors(descriptors):
         assert by_name[name].group == arraw.SettingGroup.COLOR_GRADING
         assert by_name[name].affects == arraw.Stage.POINTWISE
         assert by_name[name].applies == arraw.Applicability.ALWAYS
+
+
+def test_effects_descriptors(descriptors):
+    by_name = {d.name: d for d in descriptors}
+    for name in set(EFFECTS) | {"grain_model"}:
+        assert by_name[name].group == arraw.SettingGroup.EFFECTS
+        assert by_name[name].affects == arraw.Stage.EFFECTS
+        assert by_name[name].applies == arraw.Applicability.ALWAYS
+
+
+def test_only_the_grain_seed_is_the_photographs_own(descriptors):
+    own = {d.name for d in descriptors if d.scope == arraw.SettingScope.PHOTO}
+    assert own == {"grain_seed"}
+    assert all(d.scope == arraw.SettingScope.LOOK for d in descriptors if d.name not in own)
 
 
 def test_curve_descriptors(descriptors):

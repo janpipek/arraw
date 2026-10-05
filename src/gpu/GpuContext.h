@@ -174,10 +174,14 @@ enum class GpuPass {
     /// of the vertical axis (bindings 0 and 2); uniforms are a ::arraw::GpuResizeBlock.
     /// Writes the filtered colour with alpha exactly one.
     ResizeDownOpaque,
+
+    /// @brief The effects on the crop frame, after the resize; uniforms are a
+    /// ::arraw::GpuEffectsBlock, the one input the resized image.
+    Effects,
 };
 
 /// @brief Number of ::arraw::GpuPass values, for tables indexed by one.
-inline constexpr std::size_t gpuPassCount = 7;
+inline constexpr std::size_t gpuPassCount = 8;
 
 /// @brief One graphics device, owned, offscreen, on the thread that made it.
 ///

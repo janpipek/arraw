@@ -1,6 +1,7 @@
 #include "CurveEditing.h"
 #include "ui/CurveEditor.h"
 #include "ui/DevelopPanel.h"
+#include "ui/SettingSlider.h"
 
 #include <DevelopState.h>
 
@@ -12,13 +13,95 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cstdint>
 #include <optional>
+#include <string_view>
 #include <vector>
 
 using namespace arraw;
 using namespace arraw::app;
 
-/// The develop panel's wiring of the curve editor (ADR 036).
+/// The develop panel's wiring of the curve editor (ADR 036) and of the grain seed (ADR 038).
+
+namespace {
+
+/// Finds the slider row of a setting.
+SettingSlider* rowOf(const DevelopPanel& panel, std::string_view key) {
+    for (auto* row : panel.findChildren<SettingSlider*>()) {
+        if (row->key() == key) {
+            return row;
+        }
+    }
+    return nullptr;
+}
+
+} // namespace
+
+TEST_CASE("Turning grain on gives the photograph a seed, which later edits keep",
+          "[app][panel][grain]") {
+    DevelopPanel panel;
+    panel.showState(DevelopState{}, PanelContext{});
+    std::optional<DevelopState> edited;
+    QObject::connect(&panel, &DevelopPanel::stateEdited,
+                     [&](const DevelopState& next) { edited = next; });
+    SettingSlider* amount = rowOf(panel, "grainAmount");
+    SettingSlider* size = rowOf(panel, "grainSize");
+    REQUIRE(amount != nullptr);
+    REQUIRE(size != nullptr);
+    // The seed has no row of its own.
+    REQUIRE(rowOf(panel, "grainSeed") == nullptr);
+
+    // Another setting leaves the seed unchosen.
+    emit size->valueEdited(30.0);
+    REQUIRE(edited);
+    CHECK(edited->settings.effects.grain.seed == 0U);
+
+    emit amount->valueEdited(40.0);
+    REQUIRE(edited);
+    const std::uint32_t seed = edited->settings.effects.grain.seed;
+    CHECK(seed != 0U);
+    CHECK(edited->settings.effects.grain.amount == 40.0F);
+
+    // Shown back, as the window does, then edited again: the seed stays.
+    panel.showState(*edited, PanelContext{});
+    emit amount->valueEdited(0.0);
+    CHECK(edited->settings.effects.grain.seed == seed);
+    panel.showState(*edited, PanelContext{});
+    emit amount->valueEdited(70.0);
+    CHECK(edited->settings.effects.grain.seed == seed);
+}
+
+TEST_CASE("Grain a photograph already has keeps seed zero through other edits",
+          "[app][panel][grain]") {
+    // A sidecar written by hand or by the command line: grain on, no seed. It
+    // renders the fixed pattern, and an unrelated edit must not re-roll it.
+    DevelopState state;
+    state.settings.effects.grain = {.amount = 50.0F};
+    DevelopPanel panel;
+    panel.showState(state, PanelContext{});
+    std::optional<DevelopState> edited;
+    QObject::connect(&panel, &DevelopPanel::stateEdited,
+                     [&](const DevelopState& next) { edited = next; });
+    SettingSlider* exposure = rowOf(panel, "exposure");
+    SettingSlider* amount = rowOf(panel, "grainAmount");
+    REQUIRE(exposure != nullptr);
+    REQUIRE(amount != nullptr);
+
+    emit exposure->valueEdited(0.5);
+    REQUIRE(edited);
+    CHECK(edited->settings.effects.grain.seed == 0U);
+    panel.showState(*edited, PanelContext{});
+    emit amount->valueEdited(80.0);
+    CHECK(edited->settings.effects.grain.seed == 0U);
+
+    // Turned off and on again, it is grain turned on: it gets a seed then.
+    panel.showState(*edited, PanelContext{});
+    emit amount->valueEdited(0.0);
+    CHECK(edited->settings.effects.grain.seed == 0U);
+    panel.showState(*edited, PanelContext{});
+    emit amount->valueEdited(30.0);
+    CHECK(edited->settings.effects.grain.seed != 0U);
+}
 
 TEST_CASE("The curve histogram is wanted only while the editor is on screen",
           "[app][panel][histogram]") {

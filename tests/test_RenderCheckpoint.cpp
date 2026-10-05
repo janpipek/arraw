@@ -88,6 +88,7 @@ TEST_CASE("Plan prefixes ignore later geometry but include every pointwise input
         REQUIRE_FALSE(prefixMatches(original, other, Stage::Pointwise));
         REQUIRE(prefixMatches(original, other, Stage::Geometry) == (original == other));
         REQUIRE(prefixMatches(original, other, Stage::Resize) == (original == other));
+        REQUIRE(prefixMatches(original, other, Stage::Effects) == (original == other));
     };
     changed = original;
     changed.toWorking = Matrix3{};
@@ -104,6 +105,14 @@ TEST_CASE("Plan prefixes ignore later geometry but include every pointwise input
         check(changed);
     }
     REQUIRE(prefixMatches(original, original, Stage::Geometry) == (original == original));
+
+    // The effects are the last group: everything before them still matches.
+    changed = original;
+    changed.effects.vignette.active = true;
+    REQUIRE(prefixMatches(original, changed, Stage::Resize));
+    REQUIRE_FALSE(prefixMatches(original, changed, Stage::Effects));
+    REQUIRE(prefixMatches(original, changed, Stage::Effects) == (original == changed));
+
     REQUIRE_FALSE(prefixMatches(original, original, static_cast<Stage>(-1)));
     REQUIRE_FALSE(prefixMatches(original, original, static_cast<Stage>(stageCount)));
 }
@@ -206,6 +215,10 @@ TEST_CASE("Developing until each boundary gives host checkpoints that read back 
     REQUIRE(resized.boundary() == Stage::Resize);
     REQUIRE(resized.size().width <= 20);
     requireIdentical(develop(source, state, request), resized.readBack());
+
+    const auto effects = developUntil(source, state, Stage::Effects, request);
+    REQUIRE(effects.boundary() == Stage::Effects);
+    requireIdentical(develop(source, state, request), effects.readBack());
 
     REQUIRE_THROWS_AS(developUntil(source, state, static_cast<Stage>(stageCount)),
                       std::invalid_argument);

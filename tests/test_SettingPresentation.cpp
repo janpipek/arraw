@@ -24,8 +24,11 @@ using Catch::Approx;
 namespace {
 
 /// Settings that no panel shows yet; deciding where a new one goes is deliberate.
-constexpr std::array<std::string_view, 6> notShownYet{
-    "rotation", "flipHorizontal", "flipVertical", "straighten", "cropRectangle", "cropAspect"};
+///
+/// The grain model has one value so far: a choice of one is no row.
+constexpr std::array<std::string_view, 7> notShownYet{
+    "rotation",      "flipHorizontal", "flipVertical", "straighten",
+    "cropRectangle", "cropAspect",     "grainModel"};
 
 /// Settings the Treatment buttons edit; they have no slider row.
 constexpr std::array<std::string_view, 1> shownByTreatment{"convertToGrayscale"};
@@ -36,6 +39,7 @@ std::vector<std::string_view> slidingKeys() {
     keys.insert(keys.end(), whiteBalanceKeys().begin(), whiteBalanceKeys().end());
     keys.insert(keys.end(), colorKeys().begin(), colorKeys().end());
     keys.insert(keys.end(), colorGradingKeys().begin(), colorGradingKeys().end());
+    keys.insert(keys.end(), effectsKeys().begin(), effectsKeys().end());
     for (int page = 0; page < hslPageCount; ++page) {
         keys.insert(keys.end(), hslKeys(page).begin(), hslKeys(page).end());
     }
@@ -74,9 +78,12 @@ TEST_CASE("Every shown key has a descriptor, a range, a numeric leaf and a prese
     }
 }
 
-TEST_CASE("Every setting is either shown or listed as not shown yet", "[SettingPresentation]") {
+TEST_CASE("Every setting is either shown, listed as not shown yet, or the photograph's own",
+          "[SettingPresentation]") {
     for (const FieldDescriptor& descriptor : developSettingDescriptors) {
         CAPTURE(descriptor.key);
+        // A photograph's own setting, such as its grain seed, is never shown.
+        const bool own = descriptor.scope == SettingScope::Photo;
         const std::vector<std::string_view> sliding = slidingKeys();
         const bool shown =
             std::ranges::find(sliding, descriptor.key) != sliding.end() ||
@@ -84,7 +91,7 @@ TEST_CASE("Every setting is either shown or listed as not shown yet", "[SettingP
             std::ranges::find(shownByCombo, descriptor.key) != shownByCombo.end() ||
             std::ranges::find(shownByTreatment, descriptor.key) != shownByTreatment.end();
         const bool listed = std::ranges::find(notShownYet, descriptor.key) != notShownYet.end();
-        CHECK(shown != listed);
+        CHECK(int{shown} + int{listed} + int{own} == 1);
     }
     for (const std::string_view key : notShownYet) {
         CAPTURE(key);

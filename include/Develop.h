@@ -168,6 +168,9 @@ struct RenderRequest {
 /// separate resize with the request's filter; a size equal to the cropped one
 /// leaves the pixels untouched. A request's region is cut from the cropped
 /// frame just before that resize, and the size resolves against the cut.
+/// The effects (the post-crop vignette) run last, on the resized pixels, at
+/// each pixel's place in the crop frame, so a region or a size shows the same
+/// falloff as the whole frame (ADR 037); with every effect off they cost nothing.
 ///
 /// @param source Decoded photograph, in the working or a camera encoding.
 /// @param state How the photograph is developed.
@@ -186,13 +189,14 @@ struct RenderRequest {
 /// checkpoint a later ::arraw::resumeFrom can carry on from, so that an edit
 /// that only touches later stages does not pay for the earlier ones.
 ///
-/// The request is read only when @p stopAfter is ::arraw::Stage::Resize; earlier
-/// stops ignore it, whatever it says, as the GPU does.
+/// The request is read only when @p stopAfter is ::arraw::Stage::Resize or
+/// later; earlier stops ignore it, whatever it says, as the GPU does.
 /// @param source Decoded photograph, in the working or a camera encoding.
 /// @param state How the photograph is developed.
 /// @param stopAfter Last boundary to run. ::arraw::Stage::Pointwise leaves a
 /// result of the source's size with no geometry applied, ::arraw::Stage::Geometry
-/// one with no resize.
+/// one with no resize, ::arraw::Stage::Resize one with no effects, and
+/// ::arraw::Stage::Effects what ::arraw::develop gives.
 /// @param request What to render; see ::arraw::develop.
 /// @return A host checkpoint in the working encoding, with no pending orientation.
 /// @throws std::invalid_argument as ::arraw::develop, and if @p stopAfter is not
@@ -222,7 +226,7 @@ struct RenderRequest {
 /// for what planning needs.
 /// @param state How the photograph is developed now.
 /// @param stopAfter Last boundary to run; not before the checkpoint's.
-/// @param request What to render; read only when @p stopAfter is ::arraw::Stage::Resize.
+/// @param request What to render; read only when @p stopAfter is ::arraw::Stage::Resize or later.
 /// @return A host checkpoint at @p stopAfter, equal to what ::arraw::developUntil
 /// of the same arguments gives, bit for bit.
 /// @throws std::invalid_argument if @p from is resident on a device, its plan

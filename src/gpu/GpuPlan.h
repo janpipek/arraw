@@ -1,5 +1,7 @@
 #pragma once
 
+#include "GrainModels.h"
+
 #include <Develop.h>
 #include <ImageBuffer.h>
 
@@ -319,12 +321,104 @@ static_assert(offsetof(GpuResizeBlock, inputLength) == 4);
 static_assert(offsetof(GpuResizeBlock, offset) == 8);
 static_assert(sizeof(GpuResizeBlock) == 16);
 
+/// @brief One grain lattice in the Effects pass's uniform block, as std140 lays out a struct.
+///
+/// ::arraw::GrainLayer, member for member; the shader's `GrainLayer` struct
+/// declares the same members in the same order.
+struct GpuGrainLayer {
+    /// @brief Lattice cell holding output pixel (0, 0)'s centre.
+    std::array<std::int32_t, 2> cell{};
+
+    /// @brief Where in that cell the centre lies.
+    std::array<float, 2> fraction{};
+
+    /// @brief Lattice cells one output pixel spans along each axis.
+    std::array<float, 2> delta{};
+
+    /// @brief Multiplier of the layer's noise; zero leaves it out.
+    float weight = 0.0F;
+
+    /// @brief Seed of its lattice values.
+    std::uint32_t seed = 0;
+};
+
+static_assert(offsetof(GpuGrainLayer, cell) == 0);
+static_assert(offsetof(GpuGrainLayer, fraction) == 8);
+static_assert(offsetof(GpuGrainLayer, delta) == 16);
+static_assert(offsetof(GpuGrainLayer, weight) == 24);
+static_assert(offsetof(GpuGrainLayer, seed) == 28);
+static_assert(sizeof(GpuGrainLayer) == 32);
+
+/// @brief The Effects pass's uniform block, byte for byte as std140 lays it out.
+///
+/// The shader data contract of `src/gpu/shaders/effects.frag`, whose `Effects`
+/// block declares the same members in the same order. Output pixel `(x, y)`,
+/// at its centre, lies at `origin + (x + 0.5, y + 0.5) * step` in fractions of
+/// the crop frame (::arraw::FrameMapping, worked out in double on the host and
+/// narrowed here). Float is ample for the vignette: a position is good to
+/// about 1e-7 of the frame. Grain does not use it: its lattices are placed on
+/// the output pixels on the host (::arraw::GrainPlacement), so that the shader
+/// only works with small numbers at any zoom.
+struct GpuEffectsBlock {
+    /// @brief Crop-frame position of output pixel (0, 0)'s top-left corner.
+    std::array<float, 2> origin{};
+
+    /// @brief Crop-frame fraction one output pixel covers along each axis.
+    std::array<float, 2> step{1.0F, 1.0F};
+
+    /// @brief Whether the vignette changes anything: 0 or 1.
+    std::uint32_t vignettes = 0;
+
+    /// @brief Whether it lightens the edges rather than darkening them: 0 or 1.
+    std::uint32_t vignetteLightens = 0;
+
+    /// @brief Whether its falloff is a hard edge: 0 or 1.
+    std::uint32_t vignetteHardEdge = 0;
+
+    /// @brief Exposure change at the full falloff, in stops; see ::arraw::VignettePlan.
+    float vignetteStops = 0.0F;
+
+    /// @brief Radius at which the falloff begins, in corner radii.
+    float vignetteInner = 0.0F;
+
+    /// @brief Radius at which it is complete.
+    float vignetteOuter = 1.0F;
+
+    /// @brief Whether grain is drawn: 0 or 1.
+    std::uint32_t grains = 0;
+
+    /// @brief Which model draws it: the ::arraw::GrainModel value.
+    std::uint32_t grainModel = 0;
+
+    /// @brief The model's lattices on this render.
+    std::array<GpuGrainLayer, grainLayerCount> grainLayers{};
+};
+
+static_assert(offsetof(GpuEffectsBlock, origin) == 0);
+static_assert(offsetof(GpuEffectsBlock, step) == 8);
+static_assert(offsetof(GpuEffectsBlock, vignettes) == 16);
+static_assert(offsetof(GpuEffectsBlock, vignetteLightens) == 20);
+static_assert(offsetof(GpuEffectsBlock, vignetteHardEdge) == 24);
+static_assert(offsetof(GpuEffectsBlock, vignetteStops) == 28);
+static_assert(offsetof(GpuEffectsBlock, vignetteInner) == 32);
+static_assert(offsetof(GpuEffectsBlock, vignetteOuter) == 36);
+static_assert(offsetof(GpuEffectsBlock, grains) == 40);
+static_assert(offsetof(GpuEffectsBlock, grainModel) == 44);
+static_assert(offsetof(GpuEffectsBlock, grainLayers) == 48);
+static_assert(sizeof(GpuEffectsBlock) == 176);
+
 /// @brief Fills the pointwise block from a resolved plan.
 /// @param plan Plan to pack; only its pointwise fields are read.
 /// @param probe Intermediate the shader should write instead of its result.
 /// @return The block, ready to be copied into a uniform buffer.
 [[nodiscard]] GpuPointwiseBlock packPointwise(const ProcessingPlan& plan,
                                               PointwiseProbe probe = PointwiseProbe::Developed);
+
+/// @brief Fills the effects block from a resolved plan.
+/// @param plan Plan to pack; its effects, geometry and resize are read.
+/// @return The block, ready to be copied into a uniform buffer.
+/// @pre @p plan has a geometry and a resize (see ::arraw::frameMappingOf).
+[[nodiscard]] GpuEffectsBlock packEffects(const ProcessingPlan& plan);
 
 /// @brief Packs the four tone curves of a plan as an image the pointwise shader reads.
 ///

@@ -1,6 +1,6 @@
 """Python bindings for the arraw RAW processing engine."""
 
-from collections.abc import Sequence, Set
+from collections.abc import Callable, Sequence, Set
 import enum
 import os
 import pathlib
@@ -315,12 +315,26 @@ class SettingGroup(enum.Enum):
 
     COLOR_GRADING = 6
 
+    EFFECTS = 7
+
 class Applicability(enum.Enum):
     """Whether a setting means anything for every photograph."""
 
     ALWAYS = 0
 
     RAW_ONLY = 1
+
+class SettingScope(enum.Enum):
+    """Whether a setting is part of a look, or belongs to one photograph."""
+
+    LOOK = 0
+
+    PHOTO = 1
+
+class GrainModel(enum.Enum):
+    """Algorithm that draws the grain."""
+
+    VALUE_NOISE = 0
 
 class Stage(enum.Enum):
     """Pass boundary of the render pipeline."""
@@ -330,6 +344,8 @@ class Stage(enum.Enum):
     GEOMETRY = 1
 
     RESIZE = 2
+
+    EFFECTS = 3
 
 class ToneSettings:
     """Photographic tone adjustments."""
@@ -719,10 +735,95 @@ class ColorGradingSettings:
     def replace(self, **kwargs) -> ColorGradingSettings:
         """Return a copy with the given attributes replaced."""
 
+class VignetteSettings:
+    """
+    Post-crop vignette: an elliptical falloff fitted to the cropped frame.
+
+    Negative amounts darken the edges as an exposure change, positive ones lighten them toward white without passing it.
+    """
+
+    def __init__(self, *, amount: float | None = 0.0, midpoint: float | None = 50.0, feather: float | None = 50.0) -> None: ...
+
+    @property
+    def amount(self) -> float: ...
+
+    @property
+    def midpoint(self) -> float: ...
+
+    @property
+    def feather(self) -> float: ...
+
+    def __eq__(self, arg: VignetteSettings, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> VignetteSettings:
+        """Return a copy with the given attributes replaced."""
+
+class GrainSettings:
+    """
+    Film-like grain anchored to the cropped frame and to a seed.
+
+    The seed is the photograph's own, not part of a look: 0 renders one fixed pattern, and choose_grain_seed gives grain an edit turns on a seed of its own.
+    """
+
+    def __init__(self, *, amount: float | None = 0.0, size: float | None = 50.0, roughness: float | None = 50.0, model: GrainModel = GrainModel.VALUE_NOISE, seed: int | None = 0) -> None: ...
+
+    @property
+    def amount(self) -> float: ...
+
+    @property
+    def size(self) -> float: ...
+
+    @property
+    def roughness(self) -> float: ...
+
+    @property
+    def model(self) -> GrainModel: ...
+
+    @property
+    def seed(self) -> int: ...
+
+    def __eq__(self, arg: GrainSettings, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> GrainSettings:
+        """Return a copy with the given attributes replaced."""
+
+class EffectsSettings:
+    """Effects applied to the cropped frame after the resize."""
+
+    def __init__(self, *, vignette: VignetteSettings | None = None, grain: GrainSettings | None = None) -> None: ...
+
+    @property
+    def vignette(self) -> VignetteSettings: ...
+
+    @property
+    def grain(self) -> GrainSettings: ...
+
+    def __eq__(self, arg: EffectsSettings, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> EffectsSettings:
+        """Return a copy with the given attributes replaced."""
+
+def choose_grain_seed(previous: GrainSettings, next: GrainSettings, entropy: Callable[[], int] | None = None) -> int:
+    """
+    Return the seed grain should carry after an edit from `previous` to `next`: a new one, never 0, when the edit turns grain on (amount from 0 to above 0) and `next` has none, else `next`'s seed, 0 included. `entropy` returns 32 random bits per call; None uses the operating system's. Store the result as the photograph's grain seed.
+    """
+
 class DevelopSettings:
     """Photographic settings of one photograph."""
 
-    def __init__(self, *, color: ColorSettings | None = None, geometry: GeometrySettings | None = None, tone: ToneSettings | None = None, hsl: HslSettings | None = None, black_and_white: BlackAndWhiteSettings | None = None, tone_curve: ToneCurveSettings | None = None, color_grading: ColorGradingSettings | None = None) -> None: ...
+    def __init__(self, *, color: ColorSettings | None = None, geometry: GeometrySettings | None = None, tone: ToneSettings | None = None, hsl: HslSettings | None = None, black_and_white: BlackAndWhiteSettings | None = None, tone_curve: ToneCurveSettings | None = None, color_grading: ColorGradingSettings | None = None, effects: EffectsSettings | None = None) -> None: ...
 
     @property
     def color(self) -> ColorSettings: ...
@@ -744,6 +845,9 @@ class DevelopSettings:
 
     @property
     def color_grading(self) -> ColorGradingSettings: ...
+
+    @property
+    def effects(self) -> EffectsSettings: ...
 
     def __eq__(self, arg: DevelopSettings, /) -> bool: ...
 
@@ -787,6 +891,9 @@ class SettingDescriptor:
     @property
     def affects(self) -> Stage: ...
 
+    @property
+    def scope(self) -> SettingScope: ...
+
     def __eq__(self, arg: SettingDescriptor, /) -> bool: ...
 
     def __repr__(self) -> str: ...
@@ -795,7 +902,7 @@ class SettingDescriptor:
 
 def setting_descriptors() -> list[SettingDescriptor]:
     """
-    List the develop settings: key, snake_case name, range, group, applicability, stage.
+    List the develop settings: key, snake_case name, range, group, applicability, stage, scope.
     """
 
 class Severity(enum.Enum):

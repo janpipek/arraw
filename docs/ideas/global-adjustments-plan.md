@@ -271,9 +271,10 @@ committed on its own. Each ends with an ADR and green
 4. **GUI for 1–3.** Done (ADR 036). Curve editor widget (painted, Qt Widgets; add, drag and
    remove points, channel switch, histogram behind it, refreshed when the
    preview pauses), Colour Grading group.
-5. **Effects.** `Stage::Effects`, vignette, the grain seam with the
-   value-noise model, seed policy, both backends, CLI/Python, panel group;
-   callers moved to the new boundary.
+5. **Effects.** Done (ADR 037, ADR 038). `Stage::Effects`, the vignette, grain
+   as a replaceable model (value noise first, band-limited by pixel
+   footprint), the hidden seed behind `arraw::chooseGrainSeed`, both
+   backends, CLI/Python, panel rows; callers moved to the new boundary.
 6. **Denoise.** `Stage::Denoise`, the luma filter seam with the separable
    bilateral, the chroma blur, Luminance and Colour NR, preview debounce,
    panel rows.

@@ -116,6 +116,9 @@ private:
     /// Blending.
     QWidget* buildColorGradingGroup();
 
+    /// @brief Builds the Effects group: the post-crop vignette's rows and the grain's.
+    QWidget* buildEffectsGroup();
+
     /// @brief Builds the HSL box, a page of band rows for each of Hue, Saturation and Luminance.
     QWidget* buildHslGroup();
 

@@ -29,7 +29,8 @@ def test_default_document_shape():
 @pytest.mark.parametrize("descriptor", arraw.setting_descriptors(), ids=lambda d: d.name)
 def test_round_trip_of_every_descriptor(descriptor):
     settings = build(**{descriptor.name: sample(descriptor)})
-    assert settings != arraw.DevelopSettings()
+    # The one grain model there is is the default, so it has nothing else to round-trip.
+    assert settings != arraw.DevelopSettings() or descriptor.name == "grain_model"
     back = arraw.DevelopSettings.from_json(settings.to_json())
     for d in arraw.setting_descriptors():
         assert same(find(back, d.name), find(settings, d.name)), d.name
