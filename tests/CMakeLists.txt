@@ -50,8 +50,10 @@ add_executable(arraw-tests
         test_ImagePyramid.cpp
         test_Photo.cpp
         test_PreviewRenderer.cpp
+        test_RenderActivity.cpp
         test_RenderDelay.cpp
         test_ProcessingPlan.cpp
+        test_Progress.cpp
         test_Region.cpp
         test_RenderCheckpoint.cpp
         test_Resample.cpp
@@ -106,6 +108,7 @@ add_executable(arraw-widget-tests
         test_CurveEditor.cpp
         test_DevelopPanel.cpp
         test_MainWindowCrop.cpp
+        test_RenderProgressBar.cpp
         test_SettingSlider.cpp)
 arraw_enable_warnings(arraw-widget-tests)
 # Qt Test for key clicks that go through the window's shortcuts, as a user's do.
@@ -155,6 +158,7 @@ add_executable(arraw-gpu-tests
         gpu/test_GpuAdapters.cpp
         gpu/test_GpuDenoise.cpp
         gpu/test_GpuPresence.cpp
+        gpu/test_GpuProgress.cpp
         gpu/test_GpuDevelop.cpp
         gpu/test_GpuEffects.cpp
         gpu/test_GpuExport.cpp

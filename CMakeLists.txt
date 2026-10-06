@@ -170,6 +170,11 @@ add_library(arraw STATIC
         src/core/Taps.h
         src/core/Taps.cpp
         src/core/Diagnostics.cpp
+        include/Progress.h
+        src/core/ProgressScope.h
+        src/core/ProgressScope.cpp
+        src/core/RenderProgress.h
+        src/core/RenderProgress.cpp
         src/core/ProcessingPlan.cpp
         src/core/ProcessingPlan.h
         include/RenderCheckpoint.h
@@ -373,8 +378,12 @@ add_library(arraw-app-core STATIC
         src/app/ExportSettings.h
         src/app/PreviewRenderer.cpp
         src/app/PreviewRenderer.h
+        src/app/RenderActivity.cpp
+        src/app/RenderActivity.h
         src/app/RenderDelay.cpp
         src/app/RenderDelay.h
+        src/app/RenderIndicator.cpp
+        src/app/RenderIndicator.h
         src/app/FilmStripRules.cpp
         src/app/FilmStripRules.h
         src/app/FolderWatcher.cpp
@@ -420,6 +429,8 @@ add_library(arraw-app-ui STATIC
         src/app/ui/MainWindow.h
         src/app/ui/PhotoView.cpp
         src/app/ui/PhotoView.h
+        src/app/ui/RenderProgressBar.cpp
+        src/app/ui/RenderProgressBar.h
         src/app/ui/SettingsDialog.cpp
         src/app/ui/SettingsDialog.h
         src/app/ui/SettingSlider.cpp

@@ -5,12 +5,14 @@
 #include <CurveHistogram.h>
 #include <DevelopState.h>
 #include <ImageBuffer.h>
+#include <Progress.h>
 #include <RenderCheckpoint.h>
 
 #include <QImage>
 #include <QRect>
 #include <QSize>
 
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
@@ -52,6 +54,11 @@ struct PreviewView {
         return {.region = std::nullopt, .outputSize = box, .devicePixelRatio = ratio};
     }
 };
+
+/// @brief Least time between two progress reports of one preview render, unless its step changes.
+///
+/// About thirty a second: as often as a bar can be seen to move.
+inline constexpr std::chrono::milliseconds previewProgressInterval{33};
 
 /// @brief Outcome of one preview render.
 ///
@@ -118,6 +125,18 @@ struct PreviewResult {
 /// (ADR 011); the renderer only drops them when the source, the level or the
 /// device changes, which the plan cannot tell it.
 ///
+/// A newer request cancels the render in flight (ADR 042): on the CPU it stops
+/// within a few milliseconds, on the GPU after the render pass it is in. A
+/// cancelled render delivers nothing, neither an image nor an error, and keeps
+/// the checkpoints of the passes it finished, so the newer request resumes
+/// from them. The newest request is never cancelled by another, so it always
+/// ends with a result. The refreshed fallback and the histogram recount below
+/// are cancelled the same way, so neither holds up the next request.
+///
+/// Reports the progress of the render of each request, at most about
+/// ::arraw::app::previewProgressInterval apart and whenever the step changes,
+/// so that whoever shows it is not flooded.
+///
 /// Once requests pause, also counts the histogram of the curve input that the
 /// curve editor draws behind its curves, on the GPU when it renders, and only
 /// while someone shows it (setCurveHistogramWanted()) and the curve input may
@@ -135,14 +154,25 @@ public:
         Cpu,  ///< Always on the CPU, without ever creating a GPU device.
     };
 
+    /// @brief Receiver of the progress of the render of a request.
+    ///
+    /// Called on the worker thread with the identifier PreviewRenderer::request
+    /// returned and the render's progress; the caller marshals it to wherever it
+    /// is needed. Must not throw; what it throws stops the render, as a failure.
+    using ProgressCallback = std::function<void(std::uint64_t request, const Progress& progress)>;
+
     /// @brief Starts the worker thread.
     /// @param onResult Receives each finished render, called on the worker
     /// thread; the caller marshals it to wherever it is needed. Must not throw;
     /// what it throws is dropped.
     /// @param device Where previews may be rendered.
     /// @param settings Desktop GPU preference, captured for the lifetime of the worker.
+    /// @param onProgress Receives the progress of the render of each request,
+    /// thinned (see ::arraw::app::previewProgressInterval); may be empty.
+    /// Neither the fallback's nor the histogram's renders report.
     explicit PreviewRenderer(std::function<void(PreviewResult)> onResult,
-                             Device device = Device::Auto, AppSettings settings = {});
+                             Device device = Device::Auto, AppSettings settings = {},
+                             ProgressCallback onProgress = {});
 
     PreviewRenderer(const PreviewRenderer&) = delete;
     PreviewRenderer& operator=(const PreviewRenderer&) = delete;
@@ -151,8 +181,8 @@ public:
 
     /// @brief Stops the worker and waits for it.
     ///
-    /// Waits for a render in progress, as developing cannot be interrupted, and
-    /// drops pending requests. The callback is not called once this returns.
+    /// Cancels a render in progress and waits for it to stop, and drops pending
+    /// requests. The callbacks are not called once this returns.
     ~PreviewRenderer();
 
     /// @brief Replaces the photograph to render, dropping requests not yet started.
@@ -162,7 +192,8 @@ public:
     /// @param decoded Decoded photograph; may be empty to clear the source.
     void setSource(std::shared_ptr<const ImageBuffer> decoded);
 
-    /// @brief Queues a render, replacing any request not yet started.
+    /// @brief Queues a render, replacing any request not yet started and cancelling the one in
+    /// flight.
     ///
     /// A request made while no source is set is not ignored: it yields a result
     /// with an error.
@@ -191,8 +222,21 @@ private:
     /// @param stop Raised by the destructor.
     void run(std::stop_token stop);
 
+    /// @brief Makes the channel of the work about to start, which a newer request cancels.
+    ///
+    /// Already cancelled when a request arrived since the work was taken.
+    /// @param onProgress Receiver of the work's progress; may be empty.
+    [[nodiscard]] std::shared_ptr<ProgressChannel>
+    startChannel(ProgressChannel::Callback onProgress);
+
+    /// @brief Forgets the channel of the work that ended.
+    void endChannel();
+
     /// Receiver of each finished render, called on the worker thread.
     std::function<void(PreviewResult)> onResult_;
+
+    /// Receiver of the progress of each request's render, called on the worker thread.
+    ProgressCallback onProgress_;
 
     /// Where previews may be rendered; fixed before the worker starts.
     Device device_;
@@ -200,7 +244,8 @@ private:
     /// Desktop preferences captured before the worker starts.
     AppSettings settings_;
 
-    /// Guard of source_, pending_, lastId_, curveHistogramWanted_ and recountHistogram_.
+    /// Guard of source_, pending_, lastId_, curveHistogramWanted_, recountHistogram_ and
+    /// inFlight_.
     std::mutex mutex_;
 
     /// Signal that a request or a recount is pending, or the worker should stop.
@@ -211,6 +256,9 @@ private:
 
     /// Newest request not yet started.
     std::optional<Pending> pending_;
+
+    /// Channel of the work the worker is doing, which a newer request cancels; null when idle.
+    std::shared_ptr<ProgressChannel> inFlight_;
 
     /// Identifier of the newest request.
     std::uint64_t lastId_ = 0;

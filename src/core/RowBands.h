@@ -1,5 +1,9 @@
 #pragma once
 
+#include "ProgressScope.h"
+
+#include <Progress.h>
+
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
@@ -36,38 +40,37 @@ inline std::atomic<std::uint32_t> rowBandLimit{0};
         std::clamp<std::uint64_t>(pixels / minimumPixelsPerBand, std::uint64_t{1}, threads));
 }
 
-/// @brief Runs a function over bands of rows, one thread per band.
+/// @brief Gives how many rows of some width a band runs between looks at its progress.
 ///
-/// Splits the rows `[0, rows)` into contiguous bands of nearly equal height
-/// (see ::arraw::detail::rowBandCount) and calls `body(first, last)` for each,
-/// the calling thread taking the first band. Every row is in exactly one band,
-/// so a body that writes only its own rows and reads only what no band writes
-/// gives the same bits however the rows are split: the single-threaded result,
-/// which is what keeps the CPU a reference (ADR 039).
+/// About ::arraw::detail::minimumPixelsPerBand of work: a millisecond or a few
+/// of the costliest loops, so a cancellation is noticed that soon, and few
+/// enough looks that they cost nothing measurable.
+[[nodiscard]] inline std::uint32_t rowsPerProgressChunk(std::uint32_t width) noexcept {
+    return static_cast<std::uint32_t>(
+        std::max<std::uint64_t>(1, minimumPixelsPerBand / std::max<std::uint32_t>(width, 1)));
+}
+
+/// @brief Splits rows into bands and runs each on a thread of its own.
 ///
-/// The first exception a body throws is rethrown here once every band has
-/// finished.
-/// @param rows Rows to cover.
-/// @param width Pixels per row, which with @p rows decides how many bands are worth it.
-/// @param body Callable `(std::uint32_t first, std::uint32_t last)`, `last` exclusive.
-template <typename Body> void forEachRowBand(std::uint32_t rows, std::uint32_t width, Body&& body) {
-    if (rows == 0) {
-        return;
-    }
+/// The machinery under ::arraw::detail::forEachRowBand: calls
+/// `band(first, last, onCaller)` for each band, the calling thread taking the
+/// first (`onCaller` true), and rethrows the first exception once every band
+/// has finished.
+template <typename Band> void splitRowBands(std::uint32_t rows, std::uint32_t width, Band&& band) {
     const std::uint32_t bands =
         std::min(rowBandCount(static_cast<std::uint64_t>(rows) * width), rows);
     if (bands == 1) {
-        body(std::uint32_t{0}, rows);
+        band(std::uint32_t{0}, rows, true);
         return;
     }
-    const auto edge = [rows, bands](std::uint32_t band) {
-        return static_cast<std::uint32_t>(static_cast<std::uint64_t>(rows) * band / bands);
+    const auto edge = [rows, bands](std::uint32_t index) {
+        return static_cast<std::uint32_t>(static_cast<std::uint64_t>(rows) * index / bands);
     };
     std::exception_ptr failure;
     std::mutex failureMutex;
-    const auto run = [&](std::uint32_t band) noexcept {
+    const auto run = [&](std::uint32_t index) noexcept {
         try {
-            body(edge(band), edge(band + 1));
+            band(edge(index), edge(index + 1), index == 0);
         } catch (...) {
             const std::scoped_lock lock(failureMutex);
             if (!failure) {
@@ -78,14 +81,125 @@ template <typename Body> void forEachRowBand(std::uint32_t rows, std::uint32_t w
     {
         std::vector<std::jthread> workers;
         workers.reserve(bands - 1);
-        for (std::uint32_t band = 1; band < bands; ++band) {
-            workers.emplace_back(run, band);
+        for (std::uint32_t index = 1; index < bands; ++index) {
+            workers.emplace_back(run, index);
         }
         run(0);
     }
     if (failure) {
         std::rethrow_exception(failure);
     }
+}
+
+/// @brief Runs one band's rows in chunks, counting them and looking for a cancellation between.
+///
+/// What an observed loop does in each band (ADR 042): the body sees the same
+/// rows, only in more calls, which by the contract of
+/// ::arraw::detail::forEachRowBand gives the same bits. Only the calling thread
+/// reports; every band counts.
+/// @param stop Raised when another band failed, so this one stops too.
+template <typename Body>
+void runObservedBand(ProgressSpan& observed, const ProgressSlot& slot, std::uint32_t rows,
+                     std::uint32_t chunk, std::atomic<std::uint64_t>& done, std::atomic<bool>& stop,
+                     std::uint32_t first, std::uint32_t last, bool onCaller, Body& body) {
+    try {
+        std::uint32_t row = first;
+        while (row < last) {
+            if (stop.load(std::memory_order_relaxed)) {
+                return;
+            }
+            if (observed.cancelled()) {
+                throw Cancelled();
+            }
+            const std::uint32_t next = last - row > chunk ? row + chunk : last;
+            {
+                // Unobserved inside, on this thread as on the workers.
+                const HiddenProgress hidden;
+                body(row, next);
+            }
+            const std::uint64_t total =
+                done.fetch_add(next - row, std::memory_order_relaxed) + (next - row);
+            if (onCaller) {
+                observed.report(slot, static_cast<double>(total) / rows);
+            }
+            row = next;
+        }
+    } catch (...) {
+        stop.store(true, std::memory_order_relaxed);
+        throw;
+    }
+}
+
+/// @brief Runs a function over bands of rows, one thread per band.
+///
+/// Splits the rows `[0, rows)` into contiguous bands of nearly equal height
+/// (see ::arraw::detail::rowBandCount) and calls `body(first, last)` for each,
+/// the calling thread taking the first band. Every row is in exactly one band,
+/// so a body that writes only its own rows and reads only what no band writes
+/// gives the same bits however the rows are split: the single-threaded result,
+/// which is what keeps the CPU a reference (ADR 039).
+///
+/// When the operation is observed (ADR 042) the loop is one unit of the
+/// current ::arraw::detail::ProgressSpan: each band runs its rows in chunks of
+/// about ::arraw::detail::minimumPixelsPerBand pixels, between which it counts
+/// them, the calling thread reports, and every band looks for a cancellation.
+/// Unobserved, it is exactly the loop it was.
+///
+/// The first exception a body throws is rethrown here once every band has
+/// finished; observed, the other bands stop at their next chunk.
+/// @param rows Rows to cover.
+/// @param width Pixels per row, which with @p rows decides how many bands are worth it.
+/// @param body Callable `(std::uint32_t first, std::uint32_t last)`, `last` exclusive.
+/// @throws ::arraw::Cancelled if the observed operation is cancelled.
+template <typename Body> void forEachRowBand(std::uint32_t rows, std::uint32_t width, Body&& body) {
+    if (rows == 0) {
+        return;
+    }
+    ProgressSpan* observed = currentProgress();
+    if (observed == nullptr) {
+        splitRowBands(rows, width,
+                      [&body](std::uint32_t first, std::uint32_t last, bool /*onCaller*/) {
+                          body(first, last);
+                      });
+        return;
+    }
+    const ProgressSlot slot = observed->beginUnit();
+    const std::uint32_t chunk = rowsPerProgressChunk(width);
+    std::atomic<std::uint64_t> done{0};
+    std::atomic<bool> stop{false};
+    splitRowBands(rows, width, [&](std::uint32_t first, std::uint32_t last, bool onCaller) {
+        runObservedBand(*observed, slot, rows, chunk, done, stop, first, last, onCaller, body);
+    });
+    observed->endUnit();
+}
+
+/// @brief Runs a function over the rows of an image on the calling thread.
+///
+/// For the loops that are not banded across threads: unobserved it is one call
+/// of `body(0, rows)`; observed it is one unit of the current
+/// ::arraw::detail::ProgressSpan, run in chunks as a band of
+/// ::arraw::detail::forEachRowBand is. The body must give the same bits
+/// however its rows are split, as there.
+/// @param rows Rows to cover.
+/// @param width Pixels of work per row, which sizes the chunks.
+/// @param body Callable `(std::uint32_t first, std::uint32_t last)`, `last` exclusive.
+/// @throws ::arraw::Cancelled if the observed operation is cancelled.
+template <typename Body>
+void forEachRowInTurn(std::uint32_t rows, std::uint32_t width, Body&& body) {
+    if (rows == 0) {
+        return;
+    }
+    ProgressSpan* observed = currentProgress();
+    if (observed == nullptr) {
+        body(std::uint32_t{0}, rows);
+        return;
+    }
+    const ProgressSlot slot = observed->beginUnit();
+    std::atomic<std::uint64_t> done{0};
+    std::atomic<bool> stop{false};
+    runObservedBand(*observed, slot, rows, rowsPerProgressChunk(width), done, stop, 0, rows, true,
+                    body);
+    observed->endUnit();
 }
 
 } // namespace arraw::detail

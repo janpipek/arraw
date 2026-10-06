@@ -1,6 +1,10 @@
 #include "GeometryPlan.h"
 
+#include "ProgressScope.h"
+#include "RowBands.h"
 #include "TimingTrace.h"
+
+#include <Progress.h>
 
 #include <algorithm>
 #include <cmath>
@@ -347,14 +351,21 @@ ImageBuffer arraw::applyGeometry(ImageBuffer source, const GeometryPlan& plan) {
     // A crop, a turn or a straighten keeps the density of the pixels.
     result.setPixelScale(source.pixelScale());
     auto output = result.samples<float>();
-    for (std::uint32_t y = 0; y < plan.outputSize.height; ++y) {
-        for (std::uint32_t x = 0; x < plan.outputSize.width; ++x) {
-            const UprightPoint upright{plan.left + (x + 0.5) * plan.width / plan.outputSize.width,
-                                       plan.top + (y + 0.5) * plan.height / plan.outputSize.height};
-            const auto pixel = sample(source, plan.toSource(upright));
-            const auto index = (static_cast<std::size_t>(y) * plan.outputSize.width + x) * 4;
-            std::copy(pixel.begin(), pixel.end(), output.begin() + index);
-        }
-    }
+    const detail::ProgressSpan progress(ProgressStep::Geometry);
+    detail::forEachRowInTurn(
+        plan.outputSize.height, plan.outputSize.width,
+        [&](std::uint32_t first, std::uint32_t last) {
+            for (std::uint32_t y = first; y < last; ++y) {
+                for (std::uint32_t x = 0; x < plan.outputSize.width; ++x) {
+                    const UprightPoint upright{
+                        plan.left + (x + 0.5) * plan.width / plan.outputSize.width,
+                        plan.top + (y + 0.5) * plan.height / plan.outputSize.height};
+                    const auto pixel = sample(source, plan.toSource(upright));
+                    const auto index =
+                        (static_cast<std::size_t>(y) * plan.outputSize.width + x) * 4;
+                    std::copy(pixel.begin(), pixel.end(), output.begin() + index);
+                }
+            }
+        });
     return result;
 }

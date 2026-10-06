@@ -88,9 +88,12 @@ inline constexpr RenderRequest curveHistogramRequest{
 /// @param state How the photograph is developed.
 /// @param request What to render, see ::arraw::develop; its filter is ignored.
 /// The default fits the frame inside ::arraw::curveHistogramLongEdge.
+/// @param progress Channel for progress and cancellation, or null; see ::arraw::sample.
 /// @return The counts over the rendered frame.
 /// @throws std::invalid_argument as ::arraw::sample.
+/// @throws ::arraw::Cancelled if @p progress was cancelled before the sample finished.
 [[nodiscard]] CurveHistogram curveHistogram(const ImageBuffer& source, const DevelopState& state,
-                                            const RenderRequest& request = curveHistogramRequest);
+                                            const RenderRequest& request = curveHistogramRequest,
+                                            ProgressChannel* progress = nullptr);
 
 } // namespace arraw

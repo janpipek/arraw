@@ -87,8 +87,8 @@ CurveHistogram arraw::curveHistogram(const ImageBuffer& curveInput) {
 }
 
 CurveHistogram arraw::curveHistogram(const ImageBuffer& source, const DevelopState& state,
-                                     const RenderRequest& request) {
+                                     const RenderRequest& request, ProgressChannel* progress) {
     RenderRequest bilinear = request;
     bilinear.filter = ResizeFilter::Bilinear;
-    return curveHistogram(sample(source, state, Tap::CurveInput, bilinear));
+    return curveHistogram(sample(source, state, Tap::CurveInput, bilinear, progress));
 }

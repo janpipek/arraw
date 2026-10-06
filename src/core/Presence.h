@@ -340,6 +340,15 @@ struct PixelContext {
 /// @param plan Active plan.
 [[nodiscard]] PresenceContext presenceContextOf(const ImageBuffer& input, const PresencePlan& plan);
 
+/// @brief Gives the relative cost of each loop ::arraw::presenceContextOf runs, in the order it
+/// runs them.
+///
+/// Measured wall time on a release build, in nanoseconds, so that the sum is
+/// also the context's share of a render (ADR 042). Empty when Presence is off.
+/// @param plan Plan the context is computed for.
+/// @param size Size of the input.
+[[nodiscard]] std::vector<double> presenceLoopWeights(const PresencePlan& plan, ImageSize size);
+
 /// @brief Reads a context at the pixels of the image it was made from, row by row.
 ///
 /// The bilinear read at `u = (x + 0.5) / reduction - 0.5`, clamped to the grid

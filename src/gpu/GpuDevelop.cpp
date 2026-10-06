@@ -3,6 +3,8 @@
 #include "CheckpointState.h"
 #include "GpuPlan.h"
 #include "ProcessingPlan.h"
+#include "ProgressScope.h"
+#include "RenderProgress.h"
 #include "Resample.h"
 #include "SampleConversion.h"
 #include "Taps.h"
@@ -96,6 +98,9 @@ DeviceImage denoiseOnGpu(GpuContext& context, const DeviceImage& source, const D
         return context.render(GpuPass::DenoiseFilter, bytesOf(block), input, output, encoding,
                               {.format = format});
     };
+    // One unit a render: up to three for the colour, two for the luminance, one to combine.
+    const detail::ProgressSpan progress(ProgressStep::Denoise,
+                                        (plan.color ? 3U : 0U) + (plan.luminance ? 2U : 0U) + 1U);
     DeviceImage ratios = source;
     if (plan.color) {
         const ImageSize grid = denoiseGridSize(plan, size);
@@ -194,6 +199,19 @@ DevicePresence presenceOnGpu(GpuContext& context, const DeviceImage& input,
                              const PresencePlan& plan) {
     const ImageSize size = input.size();
     DevicePresence result{input, input, input, input};
+    // One unit a render: a reduction for each cell, and each base's steps.
+    const auto baseRenders = [](const PresenceBase& base) {
+        return base.window == 0 ? 2U : 8U + base.reconstruction + 2U;
+    };
+    std::uint32_t renders = 0;
+    if (plan.fine.active()) {
+        renders += 1 + baseRenders(plan.fine);
+    }
+    if (plan.coarse.active() || plan.haze.active()) {
+        renders += 1 + (plan.coarse.active() ? baseRenders(plan.coarse) : 0U) +
+                   (plan.haze.active() ? baseRenders(plan.haze) : 0U);
+    }
+    const detail::ProgressSpan progress(ProgressStep::Context, renders);
     if (plan.fine.active()) {
         const DeviceImage cells =
             presenceStepOnGpu(context, plan, plan.fine, size, PresenceStep::Reduce, input);
@@ -226,14 +244,14 @@ DeviceImage uploadSource(GpuContext& context, const ImageBuffer& source) {
 
 RenderCheckpoint developOnGpu(GpuContext& context, const ImageBuffer& source,
                               const DevelopState& state, Stage stopAfter,
-                              const RenderRequest& request) {
+                              const RenderRequest& request, ProgressChannel* progress) {
     // One path: the transfer this call pays for is the only difference.
     // Validating first keeps a bad argument from costing an upload.
     if (static_cast<std::size_t>(stopAfter) >= stageCount) {
         throw std::invalid_argument("A GPU development needs a recognised pass boundary");
     }
     const DeviceImage uploaded = uploadSource(context, source);
-    return developOnGpu(context, source, uploaded, state, stopAfter, request);
+    return developOnGpu(context, source, uploaded, state, stopAfter, request, progress);
 }
 
 namespace {
@@ -300,6 +318,7 @@ PassResult runPasses(GpuContext& context, std::optional<Stage> done, DeviceImage
         const DevicePresence around = presenceOnGpu(context, image, plan.presence);
         const std::array inputs{image,      curves, around.fine, around.coarse, around.coarseCells,
                                 around.haze};
+        const detail::ProgressSpan progress(ProgressStep::Pointwise, 1);
         image = context.render(GpuPass::Pointwise, bytesOf(pointwise), inputs, image.size(),
                                workingEncoding);
         done = Stage::Pointwise;
@@ -310,6 +329,7 @@ PassResult runPasses(GpuContext& context, std::optional<Stage> done, DeviceImage
         const GeometryPlan& geometry = *plan.geometry;
         if (!geometry.isIdentity()) {
             const GpuGeometryBlock block = packGeometry(geometry);
+            const detail::ProgressSpan progress(ProgressStep::Geometry, 1);
             image = context.render(GpuPass::Geometry, bytesOf(block), image, geometry.outputSize,
                                    workingEncoding);
         }
@@ -319,6 +339,8 @@ PassResult runPasses(GpuContext& context, std::optional<Stage> done, DeviceImage
         // As resample: a size equal to the cropped one is not resized, and the
         // pixels are reused as they are.
         if (!plan.resize->isIdentity(plan.geometry->outputSize)) {
+            const detail::ProgressSpan progress(ProgressStep::Resize,
+                                                plan.resize->opaque ? 2U : resizePlaneCount + 1);
             image = resizeOnGpu(context, image, *plan.resize);
         }
         done = Stage::Resize;
@@ -328,6 +350,7 @@ PassResult runPasses(GpuContext& context, std::optional<Stage> done, DeviceImage
         // resize, and the image is shared rather than rendered again.
         if (plan.effects.active()) {
             const GpuEffectsBlock block = packEffects(plan);
+            const detail::ProgressSpan progress(ProgressStep::Effects, 1);
             image = context.render(GpuPass::Effects, bytesOf(block), image, image.size(),
                                    workingEncoding);
         }
@@ -337,10 +360,20 @@ PassResult runPasses(GpuContext& context, std::optional<Stage> done, DeviceImage
 }
 
 /// @brief Runs the passes and keeps the result as a checkpoint.
+///
+/// Observed as ::arraw::developUntil and ::arraw::resumeFrom are, against the
+/// whole render @p request asks for; nothing is made into a checkpoint until
+/// the last pass returned, so a cancelled render keeps none.
+/// @param request What the whole render is asked for, which sizes the shares.
+/// @param progress The caller's channel, or null.
 RenderCheckpoint developPasses(GpuContext& context, std::optional<Stage> done, DeviceImage image,
-                               ProcessingPlan plan, Stage stopAfter) {
+                               ProcessingPlan plan, Stage stopAfter, const RenderRequest& request,
+                               ProgressChannel* progress) {
     const detail::TimingSpan timing("gpu.develop");
+    detail::ProgressRoot root(progress, detail::observedStepWeights(progress, plan, request),
+                              done ? detail::stepAfter(*done) : ProgressStep::Denoise);
     PassResult result = runPasses(context, done, std::move(image), plan, stopAfter);
+    root.finish(detail::stepThrough(result.done));
     return makeCheckpoint(result.done, std::move(plan), std::move(result.image));
 }
 
@@ -348,7 +381,8 @@ RenderCheckpoint developPasses(GpuContext& context, std::optional<Stage> done, D
 
 RenderCheckpoint developOnGpu(GpuContext& context, const ImageBuffer& source,
                               const DeviceImage& uploaded, const DevelopState& state,
-                              Stage stopAfter, const RenderRequest& request) {
+                              Stage stopAfter, const RenderRequest& request,
+                              ProgressChannel* progress) {
     if (static_cast<std::size_t>(stopAfter) >= stageCount) {
         throw std::invalid_argument("A GPU development needs a recognised pass boundary");
     }
@@ -356,12 +390,13 @@ RenderCheckpoint developOnGpu(GpuContext& context, const ImageBuffer& source,
     // Only a render that reaches the resize plans one: stopping earlier ignores
     // the request, whatever it says, and has no use for the opacity scan.
     ProcessingPlan plan = planFor(source, state, plannedRequest(request, stopAfter));
-    return developPasses(context, std::nullopt, uploaded, std::move(plan), stopAfter);
+    return developPasses(context, std::nullopt, uploaded, std::move(plan), stopAfter, request,
+                         progress);
 }
 
 RenderCheckpoint developOnGpu(GpuContext& context, const RenderCheckpoint& from,
                               const ImageBuffer& source, const DevelopState& state, Stage stopAfter,
-                              const RenderRequest& request) {
+                              const RenderRequest& request, ProgressChannel* progress) {
     if (static_cast<std::size_t>(stopAfter) >= stageCount) {
         throw std::invalid_argument("A GPU development needs a recognised pass boundary");
     }
@@ -376,28 +411,40 @@ RenderCheckpoint developOnGpu(GpuContext& context, const RenderCheckpoint& from,
     ProcessingPlan plan = planFor(source, state, plannedRequest(request, stopAfter));
     requireResumable(held, plan, source.size(), stopAfter);
     if (stopAfter == held.boundary) {
+        // Nothing to run, but a cancelled channel still says so, as on the CPU.
+        detail::ProgressRoot root(progress, detail::observedStepWeights(progress, plan, request),
+                                  detail::stepAfter(held.boundary));
+        root.finish(detail::stepThrough(stopAfter));
         return from;
     }
-    return developPasses(context, held.boundary, *image, std::move(plan), stopAfter);
+    return developPasses(context, held.boundary, *image, std::move(plan), stopAfter, request,
+                         progress);
 }
 
 ImageBuffer sampleOnGpu(GpuContext& context, const ImageBuffer& source, const DeviceImage& uploaded,
-                        const DevelopState& state, Tap tap, const RenderRequest& request) {
+                        const DevelopState& state, Tap tap, const RenderRequest& request,
+                        ProgressChannel* progress) {
     const PointwiseProbe probe = probeFor(tap);
     requireUploaded(context, source, uploaded);
     const detail::TimingSpan timing("gpu.sample");
     const ProcessingPlan plan = planFor(source, state, request);
+    // As ::arraw::sample: no effects, so they take no share.
+    detail::StepWeights weights = detail::observedStepWeights(progress, plan, request);
+    weights[static_cast<std::size_t>(ProgressStep::Effects)] = 0.0;
+    detail::ProgressRoot root(progress, weights, ProgressStep::Denoise);
     const PassResult result =
         runPasses(context, std::nullopt, uploaded, plan, Stage::Resize, probe);
-    return encodeTap(result.image.readBack(), tap);
+    ImageBuffer encoded = encodeTap(result.image.readBack(), tap);
+    root.finish(ProgressStep::Resize);
+    return encoded;
 }
 
 ImageBuffer sampleOnGpu(GpuContext& context, const ImageBuffer& source, const DevelopState& state,
-                        Tap tap, const RenderRequest& request) {
+                        Tap tap, const RenderRequest& request, ProgressChannel* progress) {
     // Validating first keeps a bad tap from costing an upload.
     static_cast<void>(probeFor(tap));
     const DeviceImage uploaded = uploadSource(context, source);
-    return sampleOnGpu(context, source, uploaded, state, tap, request);
+    return sampleOnGpu(context, source, uploaded, state, tap, request, progress);
 }
 
 } // namespace arraw

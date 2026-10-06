@@ -6,6 +6,7 @@
 
 #include <array>
 #include <cstdint>
+#include <vector>
 
 namespace arraw {
 
@@ -173,5 +174,14 @@ struct LumaRatio {
 /// @return A new ::arraw::PixelFormat::RgbaF32 buffer with @p source's size,
 /// encoding and pending orientation; alpha is copied.
 [[nodiscard]] ImageBuffer applyDenoise(const ImageBuffer& source, const DenoisePlan& plan);
+
+/// @brief Gives the relative cost of each loop ::arraw::applyDenoise runs, in the order it runs
+/// them.
+///
+/// Measured wall time on a release build, in nanoseconds, so that the sum is
+/// also the pass's share of a render (ADR 042). Empty when the plan is off.
+/// @param plan Plan the pass runs.
+/// @param size Size of the source.
+[[nodiscard]] std::vector<double> denoiseLoopWeights(const DenoisePlan& plan, ImageSize size);
 
 } // namespace arraw

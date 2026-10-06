@@ -16,6 +16,7 @@ class QWheelEvent;
 namespace arraw::app {
 
 class CropOverlay;
+class RenderProgressBar;
 
 /// @brief Widget that shows a part of the developed photograph, zoomed and panned.
 ///
@@ -92,6 +93,13 @@ public:
     /// @brief Tells whether the crop overlay is shown.
     [[nodiscard]] bool isCropMode() const;
 
+    /// @brief Gives the progress bar, a thin child along the view's top edge.
+    ///
+    /// Shown over the crop overlay too: the render beneath it is the same work.
+    [[nodiscard]] RenderProgressBar& progressBar() const noexcept {
+        return *progress_;
+    }
+
     /// @brief Gives the crop overlay, a child that covers the view.
     [[nodiscard]] CropOverlay& cropOverlay() const noexcept {
         return *crop_;
@@ -137,6 +145,8 @@ private:
 
     /// Crop mode's overlay; hidden outside the mode.
     CropOverlay* crop_ = nullptr;
+    /// Bar along the top edge that shows a render is in progress; above the overlay.
+    RenderProgressBar* progress_ = nullptr;
     /// Full-resolution frame size; empty without a photograph.
     QSize frame_;
     /// Device pixels per photograph pixel.

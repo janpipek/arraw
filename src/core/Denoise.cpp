@@ -2,6 +2,7 @@
 
 #include "ColorAdjustments.h"
 #include "ColorSpaces.h"
+#include "ProgressScope.h"
 #include "ReducedGrid.h"
 #include "RowBands.h"
 #include "SampleConversion.h"
@@ -444,11 +445,50 @@ std::uint32_t arraw::denoiseReach(const DenoisePlan& plan) {
     return reach;
 }
 
+std::vector<double> arraw::denoiseLoopWeights(const DenoisePlan& plan, ImageSize size) {
+    if (!plan.active()) {
+        return {};
+    }
+    // Nanoseconds of wall time per pixel, or per cell and tap, on eight threads
+    // of a release build at 24 MP, allocation included (ADR 042); a tap of the
+    // bilateral is an exp.
+    constexpr double convertCost = 4.0;
+    constexpr double lumaCost = 3.0;
+    constexpr double perceptualCost = 4.2;
+    constexpr double bilateralTapCost = 1.5;
+    constexpr double reduceCost = 1.5;
+    constexpr double blurTapCost = 0.3;
+    constexpr double combineCost = 9.0;
+    constexpr double upsampleCost = 2.3;
+    const auto pixels = static_cast<double>(size.pixelCount());
+    // The conversion of a source that is not RGBA float first; one that is
+    // passes its unit at once.
+    std::vector<double> weights{convertCost * pixels, lumaCost * pixels};
+    if (plan.luminance) {
+        const double bilateral = bilateralTapCost * (2.0 * plan.spatialRadius + 1.0) * pixels;
+        weights.insert(weights.end(),
+                       {perceptualCost * pixels, bilateral, perceptualCost * pixels, bilateral});
+    }
+    if (plan.color) {
+        const double cells = static_cast<double>(gridCells(size.width, plan.gridReduction)) *
+                             gridCells(size.height, plan.gridReduction);
+        const double blur = blurTapCost * (2.0 * plan.colorRadius + 1.0) * cells;
+        weights.insert(weights.end(), {reduceCost * pixels, blur, blur});
+    }
+    weights.push_back((combineCost + (plan.color ? upsampleCost : 0.0)) * pixels);
+    return weights;
+}
+
 ImageBuffer arraw::applyDenoise(const ImageBuffer& source, const DenoisePlan& plan) {
     const detail::TimingSpan timing("cpu.denoise");
+    // One unit a loop, in the order below.
+    const std::vector<double> loops = denoiseLoopWeights(plan, source.size());
+    const detail::ProgressSpan progress(ProgressStep::Denoise, loops);
     std::optional<ImageBuffer> converted;
     if (source.format() != PixelFormat::RgbaF32) {
         converted = toRgbaF32(source);
+    } else {
+        detail::completeUnit();
     }
     const ImageBuffer& input = converted ? *converted : source;
     const ImageSize size = input.size();

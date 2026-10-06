@@ -254,3 +254,13 @@ log2 = 0, so a two-argument overload serves callers without Presence and
 asserts that the plan has it off. The curve input tap is after
 Presence, which Lightroom counts as Basic, so "after Basic Tone, immediately
 before the curves" still holds.
+
+## Note, 2026-10-06 (progress)
+
+Progress and cancellation are built
+([ADR 042](042-a-decode-or-a-render-reports-progress-and-stops-on-request.md)).
+They are not part of the diagnostics sink: they travel on a second
+caller-supplied type, `ProgressChannel`, passed as a nullable pointer beside
+`DiagnosticLog&`. The "channel" above is therefore two types. They differ in
+direction, in their thread rules and in their lifetime, and ADR 042 sets out
+why they are kept apart rather than merged.

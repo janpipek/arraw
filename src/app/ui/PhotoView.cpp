@@ -1,6 +1,7 @@
 #include "PhotoView.h"
 
 #include "CropOverlay.h"
+#include "RenderProgressBar.h"
 
 #include <QMouseEvent>
 #include <QPaintEvent>
@@ -34,6 +35,8 @@ PhotoView::PhotoView(QWidget* parent) : QWidget(parent) {
     setAutoFillBackground(false);
     crop_ = new CropOverlay(this);
     crop_->hide();
+    progress_ = new RenderProgressBar(this);
+    progress_->setGeometry(0, 0, width(), RenderProgressBar::thickness);
     updateCursor();
 }
 
@@ -45,6 +48,7 @@ void PhotoView::setCropMode(bool cropping) {
     if (cropping) {
         crop_->show();
         crop_->raise();
+        progress_->raise();
         // Whatever gives the view the focus back, such as Enter in a spin box, gives it to
         // the overlay, which claims the mode's keys (ADR 040).
         setFocusProxy(crop_);
@@ -184,6 +188,7 @@ void PhotoView::paintEvent(QPaintEvent* /*event*/) {
 void PhotoView::resizeEvent(QResizeEvent* event) {
     QWidget::resizeEvent(event);
     crop_->setGeometry(rect());
+    progress_->setGeometry(0, 0, width(), RenderProgressBar::thickness);
     // Fitting follows the size; a zoom is kept, with the centre clamped anew.
     adopt(transform(), fit_, false);
 }

@@ -3,6 +3,7 @@
 #include "DeviceImageState.h"
 #include "GpuDevice.h"
 #include "GpuPlan.h"
+#include "ProgressScope.h"
 #include "TimingTrace.h"
 
 #include <QByteArray>
@@ -699,6 +700,8 @@ DeviceImage GpuContext::render(GpuPass pass, std::span<const std::byte> uniforms
 DeviceImage GpuContext::render(GpuPass pass, std::span<const std::byte> uniforms,
                                std::span<const DeviceImage> inputs, ImageSize outputSize,
                                const ColorEncoding& encoding, const GpuTarget& target) {
+    // Between renders is where a GPU development notices a cancellation (ADR 042).
+    detail::throwIfCancelled();
     device_->requireUsable("render");
 
     const auto index = static_cast<std::size_t>(pass);
@@ -825,8 +828,11 @@ DeviceImage GpuContext::render(GpuPass pass, std::span<const std::byte> uniforms
                        });
 
     ++device_->rendersDone;
-    return DeviceImage(std::make_shared<const RhiDeviceImage>(
+    DeviceImage result(std::make_shared<const RhiDeviceImage>(
         device_, std::move(texture), outputSize, encoding, ImageOrientation::Normal, pixelScale));
+    // Each render is a unit of the observed step it is part of.
+    detail::completeUnit();
+    return result;
 }
 
 std::size_t GpuContext::renderCount() const noexcept {

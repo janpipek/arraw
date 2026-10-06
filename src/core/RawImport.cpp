@@ -1,6 +1,9 @@
 #include "RawImport.h"
 
 #include "ColorSpaces.h"
+#include "ProgressScope.h"
+
+#include <Progress.h>
 
 #include <libraw/libraw.h>
 
@@ -8,6 +11,7 @@
 #include <array>
 #include <cctype>
 #include <cstdint>
+#include <exception>
 #include <filesystem>
 #include <memory>
 #include <span>
@@ -348,14 +352,33 @@ ImageMetadata arraw::rawimport::readMetadata(const std::filesystem::path& path,
 
 ImageBuffer arraw::rawimport::load(const std::filesystem::path& path, DiagnosticLog& log,
                                    DecodeOptions options) {
+    // Three units: the unpack, the processing (the demosaic) and the copy out.
+    // LibRaw reports its own stages without a measure of how far each has
+    // got, so only the units report; its callback is where it looks for a
+    // cancellation, which it may do from its own threads (ADR 042).
+    detail::ProgressSpan progress(ProgressStep::Decode, 3);
+    const auto failed = [&path](int code) -> std::exception_ptr {
+        if (code == LIBRAW_CANCELLED_BY_CALLBACK) {
+            return std::make_exception_ptr(Cancelled());
+        }
+        return std::make_exception_ptr(std::runtime_error(failureMessage(path, code)));
+    };
     LibRaw raw;
     openOrThrow(raw, path);
+    if (progress.active()) {
+        raw.set_progress_handler(
+            [](void* span, LibRaw_progress /*stage*/, int /*iteration*/, int /*expected*/) {
+                return static_cast<const detail::ProgressSpan*>(span)->cancelled() ? 1 : 0;
+            },
+            &progress);
+    }
 
     applyDecodeSettings(raw, options);
 
     if (const int code = raw.unpack(); code != LIBRAW_SUCCESS) {
-        throw std::runtime_error(failureMessage(path, code));
+        std::rethrow_exception(failed(code));
     }
+    detail::completeUnit();
 
     // The same description a caller can ask for on its own, read here before
     // processing, which rewrites part of what it reads.
@@ -363,8 +386,9 @@ ImageBuffer arraw::rawimport::load(const std::filesystem::path& path, Diagnostic
     reportSubstitutedWhiteBalance(raw, path, log);
 
     if (const int code = raw.dcraw_process(); code != LIBRAW_SUCCESS) {
-        throw std::runtime_error(failureMessage(path, code));
+        std::rethrow_exception(failed(code));
     }
+    detail::completeUnit();
 
     int code = LIBRAW_SUCCESS;
     const ProcessedImage image(raw.dcraw_make_mem_image(&code));
@@ -381,5 +405,6 @@ ImageBuffer arraw::rawimport::load(const std::filesystem::path& path, Diagnostic
         // stage measured in sensor pixels reads this (ADR 039).
         decoded.setPixelScale(2.0);
     }
+    detail::completeUnit();
     return decoded;
 }

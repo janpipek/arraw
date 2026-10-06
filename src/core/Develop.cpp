@@ -5,12 +5,15 @@
 #include "Effects.h"
 #include "Presence.h"
 #include "ProcessingPlan.h"
+#include "ProgressScope.h"
+#include "RenderProgress.h"
 #include "Resample.h"
 #include "RowBands.h"
 #include "SampleConversion.h"
 #include "Taps.h"
 #include "TimingTrace.h"
 
+#include <Progress.h>
 #include <WhiteBalance.h>
 
 #include <algorithm>
@@ -84,13 +87,16 @@ void developSamples(const ImageBuffer& source, ImageBuffer& result, const Chain&
 template <typename Chain>
 ImageBuffer runPointwise(const ImageBuffer& source, const ProcessingPlan& plan,
                          const Chain& chain) {
-    ImageBuffer result(source.size(), workingFormat, workingEncoding);
-    result.setPixelScale(source.pixelScale());
     std::optional<PresenceContext> context;
     if (plan.presence.active()) {
         context = presenceContextOf(source, plan.presence);
     }
     const PresenceContext* around = context ? &*context : nullptr;
+    // Opened before the result is made, whose zeroing at 24 MP takes as long
+    // as a cheap chain does, so that the step named is the one being paid for.
+    const detail::ProgressSpan progress(ProgressStep::Pointwise);
+    ImageBuffer result(source.size(), workingFormat, workingEncoding);
+    result.setPixelScale(source.pixelScale());
     switch (source.format()) {
     case PixelFormat::RgbU8:
     case PixelFormat::RgbaU8:
@@ -226,31 +232,44 @@ RenderCheckpoint runStages(Stage done, ImageBuffer pixels, ProcessingPlan plan, 
 } // namespace
 
 ImageBuffer arraw::develop(const ImageBuffer& source, const DevelopState& state,
-                           const RenderRequest& request) {
+                           const RenderRequest& request, ProgressChannel* progress) {
     const detail::TimingSpan timing("cpu.develop");
     // The direct path: no checkpoint, so nothing is shared and nothing copied.
     const ProcessingPlan plan = planFor(source, state, request);
-    return effectsBy(resizeBy(applyGeometry(developFromSource(source, plan), *plan.geometry), plan),
-                     plan);
+    detail::ProgressRoot root(progress, detail::observedStepWeights(progress, plan, request),
+                              ProgressStep::Denoise);
+    ImageBuffer developed = effectsBy(
+        resizeBy(applyGeometry(developFromSource(source, plan), *plan.geometry), plan), plan);
+    root.finish(ProgressStep::Effects);
+    return developed;
 }
 
 RenderCheckpoint arraw::developUntil(const ImageBuffer& source, const DevelopState& state,
-                                     Stage stopAfter, const RenderRequest& request) {
+                                     Stage stopAfter, const RenderRequest& request,
+                                     ProgressChannel* progress) {
     requireBoundary(stopAfter);
     // Only a render that reaches the resize plans one: stopping earlier ignores
     // the request, and has no use for the opacity scan.
     ProcessingPlan plan = planFor(source, state, plannedRequest(request, stopAfter));
+    // Measured against the whole render the request asks for, so that the
+    // resumes after this one carry on from where it stops.
+    detail::ProgressRoot root(progress, detail::observedStepWeights(progress, plan, request),
+                              ProgressStep::Denoise);
     if (stopAfter == Stage::Denoise) {
         ImageBuffer denoised = denoisedCopy(source, plan);
+        root.finish(ProgressStep::Denoise);
         return makeCheckpoint(Stage::Denoise, std::move(plan), std::move(denoised));
     }
     ImageBuffer developed = developFromSource(source, plan);
-    return runStages(Stage::Pointwise, std::move(developed), std::move(plan), stopAfter);
+    RenderCheckpoint done =
+        runStages(Stage::Pointwise, std::move(developed), std::move(plan), stopAfter);
+    root.finish(detail::stepThrough(stopAfter));
+    return done;
 }
 
 RenderCheckpoint arraw::resumeFrom(const RenderCheckpoint& from, const ImageBuffer& source,
                                    const DevelopState& state, Stage stopAfter,
-                                   const RenderRequest& request) {
+                                   const RenderRequest& request, ProgressChannel* progress) {
     requireBoundary(stopAfter);
     const CheckpointState& held = stateOf(from);
     const auto* pixels = std::get_if<ImageBuffer>(&held.pixels);
@@ -259,24 +278,35 @@ RenderCheckpoint arraw::resumeFrom(const RenderCheckpoint& from, const ImageBuff
     }
     ProcessingPlan plan = planFor(source, state, plannedRequest(request, stopAfter));
     requireResumable(held, plan, source.size(), stopAfter);
+    // From the checkpoint's share of the whole render, which a refused one never reports.
+    detail::ProgressRoot root(progress, detail::observedStepWeights(progress, plan, request),
+                              detail::stepAfter(held.boundary));
+    const ProgressStep last = detail::stepThrough(stopAfter);
     if (stopAfter == held.boundary) {
+        root.finish(last);
         return from;
     }
-    if (held.boundary == Stage::Denoise) {
-        // The chain reads its input without consuming it, so the shared pixels
-        // need no copy: a tone edit resumes for the price of the chain alone.
-        ImageBuffer developed = developPointwise(*pixels, plan);
-        return runStages(Stage::Pointwise, std::move(developed), std::move(plan), stopAfter);
-    }
-    return runStages(held.boundary, pixels->clone(), std::move(plan), stopAfter);
+    RenderCheckpoint done =
+        held.boundary == Stage::Denoise
+            // The chain reads its input without consuming it, so the shared pixels
+            // need no copy: a tone edit resumes for the price of the chain alone.
+            ? runStages(Stage::Pointwise, developPointwise(*pixels, plan), std::move(plan),
+                        stopAfter)
+            : runStages(held.boundary, pixels->clone(), std::move(plan), stopAfter);
+    root.finish(last);
+    return done;
 }
 
 ImageBuffer arraw::sample(const ImageBuffer& source, const DevelopState& state, Tap tap,
-                          const RenderRequest& request) {
+                          const RenderRequest& request, ProgressChannel* progress) {
     // Validated first, so a bad tap costs nothing.
     static_cast<void>(tapEncoding(tap));
     const detail::TimingSpan timing("cpu.sample");
     const ProcessingPlan plan = planFor(source, state, request);
+    // A sample stops before the effects, which therefore take no share.
+    detail::StepWeights weights = detail::observedStepWeights(progress, plan, request);
+    weights[static_cast<std::size_t>(ProgressStep::Effects)] = 0.0;
+    detail::ProgressRoot root(progress, weights, ProgressStep::Denoise);
     ImageBuffer tapped =
         pointwiseFromSource(source, plan, [&plan, tap](Colour colour, const PixelContext& context) {
             return developToTap(plan, colour, tap, context);
@@ -284,7 +314,9 @@ ImageBuffer arraw::sample(const ImageBuffer& source, const DevelopState& state, 
     // The same geometry and resize as a render, in linear light (ADR 020), so
     // the sample covers the frame the render shows; then the tap's encoding.
     const ImageBuffer framed = resizeBy(applyGeometry(std::move(tapped), *plan.geometry), plan);
-    return encodeTap(framed, tap);
+    ImageBuffer encoded = encodeTap(framed, tap);
+    root.finish(ProgressStep::Resize);
+    return encoded;
 }
 
 ImageSize arraw::croppedSize(ImageSize sourceSize, ImageOrientation orientation,

@@ -1,5 +1,6 @@
 #include "ImageImport.h"
 
+#include "ProgressScope.h"
 #include "QtImage.h"
 #include "RawImport.h"
 
@@ -174,8 +175,11 @@ ImageMetadata arraw::readImageMetadata(const std::filesystem::path& path, Diagno
             .orientation = orientationOf(reader)};
 }
 
-ImageBuffer arraw::loadImage(const std::filesystem::path& path, DiagnosticLog& log,
-                             DecodeOptions options) {
+namespace {
+
+/// @brief Decodes a file by whichever decoder it is for; ::arraw::loadImage without the
+/// observation.
+ImageBuffer decode(const std::filesystem::path& path, DiagnosticLog& log, DecodeOptions options) {
     if (decodedAsRaw(path)) {
         return rawimport::load(path, log, options);
     }
@@ -211,4 +215,16 @@ ImageBuffer arraw::loadImage(const std::filesystem::path& path, DiagnosticLog& l
     }
 
     return qtimage::toBuffer(working, workingEncoding, orientation);
+}
+
+} // namespace
+
+ImageBuffer arraw::loadImage(const std::filesystem::path& path, DiagnosticLog& log,
+                             DecodeOptions options, ProgressChannel* progress) {
+    detail::StepWeights weights{};
+    weights[static_cast<std::size_t>(ProgressStep::Decode)] = 1.0;
+    detail::ProgressRoot root(progress, weights, ProgressStep::Decode);
+    ImageBuffer decoded = decode(path, log, options);
+    root.finish(ProgressStep::Decode);
+    return decoded;
 }

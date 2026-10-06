@@ -3,11 +3,13 @@
 #include "CropEditing.h"
 #include "ExportQueue.h"
 #include "PreviewRenderer.h"
+#include "RenderIndicator.h"
 
 #include <EditSession.h>
 #include <ImageBuffer.h>
 #include <Photo.h>
 #include <PhotoMarks.h>
+#include <Progress.h>
 
 #include <QImage>
 #include <QMainWindow>
@@ -56,6 +58,21 @@ public:
 
     /// @brief Opens a startup file or folder, restoring the last one when none is supplied.
     void openInitialPath(const std::optional<std::filesystem::path>& path = std::nullopt);
+
+    /// @brief Shows how far the render of a request has got.
+    ///
+    /// On the GUI thread, which the renderer's progress is handed over to. Drawn
+    /// only when the render outlasts ::arraw::app::renderActivityDelay; a report
+    /// of a request that is no longer the newest is ignored.
+    /// @param request Identifier PreviewRenderer::request returned.
+    /// @param fraction Fraction of the render done, from 0 to 1.
+    /// @param step Step being worked on.
+    void showRenderProgress(std::uint64_t request, double fraction, ProgressStep step);
+
+    /// @brief Gives the indicator that decides when a render in progress shows.
+    [[nodiscard]] RenderIndicator& renderIndicator() const noexcept {
+        return *renderIndicator_;
+    }
 
 protected:
     /// @brief Schedules a new render when the view changes size or pixel ratio.
@@ -318,6 +335,10 @@ private:
     QAction* zoomInAction_ = nullptr;
     QAction* zoomOutAction_ = nullptr;
     QLabel* deviceLabel_ = nullptr;
+    /// Names the step of a render in progress in the status bar; hidden with the progress bar.
+    QLabel* renderStepLabel_ = nullptr;
+    /// Decides when a render in progress shows, and what of it.
+    RenderIndicator* renderIndicator_ = nullptr;
     DevelopPanel* developPanel_ = nullptr;
     QWidget* developDock_ = nullptr;
     QAction* saveAction_ = nullptr;

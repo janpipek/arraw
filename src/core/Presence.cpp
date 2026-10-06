@@ -3,6 +3,7 @@
 #include "ColorAdjustments.h"
 #include "Denoise.h"
 #include "ProcessingPlan.h"
+#include "ProgressScope.h"
 #include "RowBands.h"
 #include "SampleConversion.h"
 #include "TimingTrace.h"
@@ -14,6 +15,7 @@
 #include <cstddef>
 #include <span>
 #include <stdexcept>
+#include <vector>
 
 using namespace arraw;
 
@@ -347,8 +349,59 @@ ImageSize arraw::presenceGridSize(const PresenceBase& base, ImageSize source) {
     return {gridCells(source.width, reduction), gridCells(source.height, reduction)};
 }
 
+namespace {
+
+/// @brief Appends the cost of each loop ::baseOf runs for a base of a source's size, in order.
+void appendBaseLoops(std::vector<double>& weights, const PresenceBase& base, ImageSize size) {
+    // Nanoseconds of wall time per cell and tap, as in presenceLoopWeights.
+    constexpr double tapCost = 0.4;
+    const ImageSize grid = presenceGridSize(base, size);
+    const double cells = static_cast<double>(grid.width) * grid.height;
+    if (base.window != 0) {
+        const OctagonWindow octagon = octagonOf(base.window);
+        for (int extremum = 0; extremum < 2; ++extremum) {
+            for (std::size_t index = 0; index < octagonAxes.size(); ++index) {
+                const std::uint32_t radius = index < 2 ? octagon.across : octagon.diagonal;
+                weights.push_back(tapCost * (2.0 * radius + 1.0) * cells);
+            }
+        }
+        for (std::uint32_t step = 0; step < base.reconstruction; ++step) {
+            weights.push_back(tapCost * 9.0 * cells);
+        }
+    }
+    const double blur = tapCost * (2.0 * base.radius + 1.0) * cells;
+    weights.insert(weights.end(), {blur, blur});
+}
+
+} // namespace
+
+std::vector<double> arraw::presenceLoopWeights(const PresencePlan& plan, ImageSize size) {
+    // Nanoseconds of wall time per input pixel of a reduction to cells, on
+    // eight threads of a release build at 24 MP (ADR 042).
+    constexpr double reduceCost = 1.1;
+    const double reduce = reduceCost * static_cast<double>(size.pixelCount());
+    std::vector<double> weights;
+    if (plan.fine.active()) {
+        weights.push_back(reduce);
+        appendBaseLoops(weights, plan.fine, size);
+    }
+    if (plan.coarse.active() || plan.haze.active()) {
+        weights.push_back(reduce);
+        if (plan.haze.active()) {
+            appendBaseLoops(weights, plan.haze, size);
+        }
+        if (plan.coarse.active()) {
+            appendBaseLoops(weights, plan.coarse, size);
+        }
+    }
+    return weights;
+}
+
 PresenceContext arraw::presenceContextOf(const ImageBuffer& input, const PresencePlan& plan) {
     const detail::TimingSpan timing("cpu.presence-context");
+    // One unit a loop, in the order below and in baseOf.
+    const std::vector<double> loops = presenceLoopWeights(plan, input.size());
+    const detail::ProgressSpan progress(ProgressStep::Context, loops);
     PresenceContext context;
     if (plan.fine.active()) {
         context.fine = baseOf(cellsOf(input, plan.lumaRow, plan.fine.reduction), plan.fine);

@@ -323,6 +323,10 @@ public:
     /// what keeps this class the only minter of them. Pipelines are built on a
     /// pass's first use and kept for the device's lifetime. Waits for the
     /// render to finish, as a transfer does.
+    ///
+    /// When an operation is observed on this thread (ADR 042), looks for its
+    /// cancellation before rendering and counts the render as a unit of its
+    /// current span once done: the GPU's progress is a render at a time.
     /// @param pass Shader to run.
     /// @param uniforms The pass's uniform block, byte for byte; empty for ::GpuPass::Copy.
     /// @param input Image the pass reads; must belong to this context's device.
@@ -336,6 +340,7 @@ public:
     /// @throws std::logic_error if called from a thread other than the owner.
     /// @throws std::runtime_error if the device has no RGBA32F textures, cannot
     /// create the pass's resources, or the render fails.
+    /// @throws ::arraw::Cancelled if the operation observed on this thread is cancelled.
     [[nodiscard]] DeviceImage render(GpuPass pass, std::span<const std::byte> uniforms,
                                      const DeviceImage& input, ImageSize outputSize,
                                      const ColorEncoding& encoding, const GpuTarget& target = {});

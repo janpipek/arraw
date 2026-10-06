@@ -6,16 +6,19 @@
 #include <Develop.h>
 #include <DevelopSettings.h>
 #include <ImagePyramid.h>
+#include <Progress.h>
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <thread>
+#include <utility>
 #include <vector>
 
 using namespace arraw;
@@ -778,4 +781,156 @@ TEST_CASE("Becoming wanted with no render yet counts nothing", "[app][preview][h
     std::this_thread::sleep_for(300ms);
     REQUIRE(collector.histograms().empty());
     REQUIRE(collector.results().empty());
+}
+
+namespace {
+
+/// Progress reports delivered by a renderer, collected for the test thread.
+class ProgressCollector {
+public:
+    /// Callback to give the renderer.
+    [[nodiscard]] app::PreviewRenderer::ProgressCallback callback() {
+        return [this](std::uint64_t request, const Progress& progress) {
+            {
+                const std::scoped_lock lock(mutex_);
+                reports_.emplace_back(request, progress);
+            }
+            changed_.notify_all();
+        };
+    }
+
+    /// Waits until the render of @p id has reported at least once.
+    [[nodiscard]] bool waitForReport(std::uint64_t id) {
+        std::unique_lock lock(mutex_);
+        return changed_.wait_for(lock, timeout, [&] {
+            return std::ranges::any_of(reports_,
+                                       [id](const auto& report) { return report.first == id; });
+        });
+    }
+
+    /// Reports of one request's render, in order.
+    [[nodiscard]] std::vector<Progress> of(std::uint64_t id) {
+        const std::scoped_lock lock(mutex_);
+        std::vector<Progress> found;
+        for (const auto& [request, progress] : reports_) {
+            if (request == id) {
+                found.push_back(progress);
+            }
+        }
+        return found;
+    }
+
+private:
+    std::mutex mutex_;
+    std::condition_variable changed_;
+    std::vector<std::pair<std::uint64_t, Progress>> reports_;
+};
+
+/// @brief A state whose render at level 0 of the large source takes many seconds.
+DevelopState slowState() {
+    DevelopState state;
+    state.settings.noiseReduction.luminance = 100.0F;
+    state.settings.noiseReduction.color = 100.0F;
+    state.settings.presence.dehaze = 50.0F;
+    state.settings.presence.clarity = 50.0F;
+    return state;
+}
+
+} // namespace
+
+TEST_CASE("A newer request cancels the render in flight, and only the newest is shown",
+          "[app][preview][cancel]") {
+    Collector collector;
+    ProgressCollector progress;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu,
+                                  app::AppSettings{}, progress.callback());
+    renderer.setSource(makeLargeSource());
+
+    // At level 0 with everything slow on: far longer than the test waits for it.
+    const std::uint64_t slow =
+        renderer.request(slowState(), app::PreviewView::wholeFrame({2048, 1024}));
+    REQUIRE(progress.waitForReport(slow));
+    const auto superseded = std::chrono::steady_clock::now();
+    const std::uint64_t fast = renderer.request({}, app::PreviewView::wholeFrame({256, 128}));
+    REQUIRE(collector.waitFor(fast));
+    const auto shown = std::chrono::steady_clock::now();
+
+    // One render completed: the newest. The slow one delivered neither an image nor an error.
+    const auto results = collector.results();
+    REQUIRE(results.size() == 1);
+    REQUIRE(results[0].request == fast);
+    REQUIRE(results[0].image.has_value());
+    REQUIRE(results[0].error.empty());
+    REQUIRE(progress.of(slow).back().fraction < 1.0);
+    // Well within the time the slow render would have taken to finish.
+    REQUIRE(shown - superseded < 5s);
+}
+
+TEST_CASE("A burst of slow requests ends with the newest shown", "[app][preview][cancel]") {
+    Collector collector;
+    ProgressCollector progress;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu,
+                                  app::AppSettings{}, progress.callback());
+    renderer.setSource(makeLargeSource());
+
+    std::uint64_t last = 0;
+    for (int i = 0; i < 6; ++i) {
+        DevelopState state = slowState();
+        state.settings.tone.exposure = static_cast<float>(i) * 0.1F;
+        last = renderer.request(state, app::PreviewView::wholeFrame({512, 256}));
+        std::this_thread::sleep_for(20ms);
+    }
+    REQUIRE(collector.waitFor(last));
+    const auto results = collector.results();
+    // Superseded renders were cancelled: none came out as a failure, and fewer than all completed.
+    REQUIRE(results.size() < 6);
+    for (const auto& result : results) {
+        REQUIRE(result.error.empty());
+        REQUIRE(result.image.has_value());
+    }
+    REQUIRE(results.back().request == last);
+
+    // The newest render's progress rose to its end, thinned.
+    const std::vector<Progress> reports = progress.of(last);
+    REQUIRE_FALSE(reports.empty());
+    for (std::size_t index = 1; index < reports.size(); ++index) {
+        REQUIRE(reports[index].fraction >= reports[index - 1].fraction);
+    }
+    REQUIRE(reports.back().fraction == 1.0);
+}
+
+TEST_CASE("Progress is handed on at about thirty reports a second", "[app][preview][progress]") {
+    Collector collector;
+    ProgressCollector progress;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu,
+                                  app::AppSettings{}, progress.callback());
+    renderer.setSource(makeLargeSource());
+    const auto begin = std::chrono::steady_clock::now();
+    const std::uint64_t id =
+        renderer.request(slowState(), app::PreviewView::wholeFrame({1024, 512}));
+    REQUIRE(collector.waitFor(id));
+    const auto took = std::chrono::steady_clock::now() - begin;
+    const std::vector<Progress> reports = progress.of(id);
+    REQUIRE_FALSE(reports.empty());
+    // One per interval, one per step change and per call of the resume chain, and the end.
+    const auto intervals = static_cast<std::size_t>(took / app::previewProgressInterval);
+    REQUIRE(reports.size() <= intervals + 5 * progressStepCount + 2);
+    REQUIRE(reports.back().fraction == 1.0);
+}
+
+TEST_CASE("Destroying the renderer cancels the render in flight", "[app][preview][cancel]") {
+    Collector collector;
+    ProgressCollector progress;
+    std::optional<app::PreviewRenderer> renderer;
+    renderer.emplace(collector.callback(), app::PreviewRenderer::Device::Cpu, app::AppSettings{},
+                     progress.callback());
+    renderer->setSource(makeLargeSource());
+    const std::uint64_t slow =
+        renderer->request(slowState(), app::PreviewView::wholeFrame({2048, 1024}));
+    REQUIRE(progress.waitForReport(slow));
+    const auto begin = std::chrono::steady_clock::now();
+    renderer.reset();
+    const auto stopping = std::chrono::steady_clock::now() - begin;
+    REQUIRE(collector.results().empty());
+    REQUIRE(stopping < 5s);
 }

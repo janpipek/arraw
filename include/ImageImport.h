@@ -2,6 +2,7 @@
 
 #include <Diagnostics.h>
 #include <ImageBuffer.h>
+#include <Progress.h>
 
 #include <cstdint>
 #include <filesystem>
@@ -118,13 +119,19 @@ struct DecodeOptions {
 /// @param log Where to report what a photographer should know about the
 /// decode, such as a white balance the file did not record.
 /// @param options How complete the decode must be; see ::arraw::DecodeOptions.
+/// @param progress Channel for progress and cancellation (ADR 042), or null for
+/// none. A RAW decode reports its start, its unpack, its demosaic and its end,
+/// and LibRaw looks for a cancellation as it goes; any other file reports its
+/// start and its end only.
 /// @return A buffer holding the decoded pixels.
 /// @throws std::runtime_error if the file cannot be opened, decoded, or
 /// converted. Very large images are refused by the decoder's own allocation
 /// limit rather than being decoded.
+/// @throws ::arraw::Cancelled if @p progress was cancelled before the decode finished.
 [[nodiscard]] ImageBuffer loadImage(const std::filesystem::path& path,
                                     DiagnosticLog& log = discardedDiagnostics(),
-                                    DecodeOptions options = {});
+                                    DecodeOptions options = {},
+                                    ProgressChannel* progress = nullptr);
 
 /// @brief Reads the preview image a file carries, without decoding the photograph.
 ///

@@ -2,7 +2,11 @@
 
 #include "ColorAdjustments.h"
 #include "ProcessingPlan.h"
+#include "ProgressScope.h"
+#include "RowBands.h"
 #include "TimingTrace.h"
+
+#include <Progress.h>
 
 #include <algorithm>
 #include <cmath>
@@ -121,15 +125,18 @@ ImageBuffer arraw::applyEffects(ImageBuffer pixels, const EffectsPlan& plan,
     const ImageSize size = pixels.size();
     const EffectsPlacement placement = effectsPlacementOf(plan, mapping);
     const auto samples = pixels.samples<float>();
-    for (std::uint32_t row = 0; row < size.height; ++row) {
-        for (std::uint32_t column = 0; column < size.width; ++column) {
-            float* pixel = &samples[(static_cast<std::size_t>(row) * size.width + column) * 4];
-            const Colour result =
-                effectsPixel(plan, placement, column, row, {pixel[0], pixel[1], pixel[2]});
-            pixel[0] = result[0];
-            pixel[1] = result[1];
-            pixel[2] = result[2];
+    const detail::ProgressSpan progress(ProgressStep::Effects);
+    detail::forEachRowInTurn(size.height, size.width, [&](std::uint32_t first, std::uint32_t last) {
+        for (std::uint32_t row = first; row < last; ++row) {
+            for (std::uint32_t column = 0; column < size.width; ++column) {
+                float* pixel = &samples[(static_cast<std::size_t>(row) * size.width + column) * 4];
+                const Colour result =
+                    effectsPixel(plan, placement, column, row, {pixel[0], pixel[1], pixel[2]});
+                pixel[0] = result[0];
+                pixel[1] = result[1];
+                pixel[2] = result[2];
+            }
         }
-    }
+    });
     return pixels;
 }

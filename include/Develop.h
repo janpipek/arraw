@@ -2,6 +2,7 @@
 
 #include <DevelopState.h>
 #include <ImageBuffer.h>
+#include <Progress.h>
 #include <RenderCheckpoint.h>
 
 #include <cstdint>
@@ -181,11 +182,15 @@ struct RenderRequest {
 /// @param state How the photograph is developed.
 /// @param request What to render; the default is the whole photograph at its
 /// own resolution.
+/// @param progress Channel for progress and cancellation (ADR 042), or null
+/// for none, which costs nothing and changes no bit of the result.
 /// @return A new buffer in the working encoding.
 /// @throws std::invalid_argument if @p source is in an encoding development
 /// cannot start from, if geometry is invalid, or if @p request is invalid.
+/// @throws ::arraw::Cancelled if @p progress was cancelled before the render finished.
 [[nodiscard]] ImageBuffer develop(const ImageBuffer& source, const DevelopState& state,
-                                  const RenderRequest& request = {});
+                                  const RenderRequest& request = {},
+                                  ProgressChannel* progress = nullptr);
 
 /// @brief Develops a decoded photograph as far as a pass boundary and keeps what is there.
 ///
@@ -205,12 +210,16 @@ struct RenderRequest {
 /// applied, ::arraw::Stage::Geometry one with no resize, ::arraw::Stage::Resize
 /// one with no effects, and ::arraw::Stage::Effects what ::arraw::develop gives.
 /// @param request What to render; see ::arraw::develop.
+/// @param progress Channel for progress and cancellation, or null; progress is
+/// measured against the whole render, so it ends at @p stopAfter's share.
 /// @return A host checkpoint; in the working encoding, with no pending
 /// orientation, at every boundary after ::arraw::Stage::Denoise.
 /// @throws std::invalid_argument as ::arraw::develop, and if @p stopAfter is not
 /// a boundary.
+/// @throws ::arraw::Cancelled if @p progress was cancelled before the render finished.
 [[nodiscard]] RenderCheckpoint developUntil(const ImageBuffer& source, const DevelopState& state,
-                                            Stage stopAfter, const RenderRequest& request = {});
+                                            Stage stopAfter, const RenderRequest& request = {},
+                                            ProgressChannel* progress = nullptr);
 
 /// @brief Carries a render on from a checkpoint, stopping after a boundary.
 ///
@@ -236,14 +245,18 @@ struct RenderRequest {
 /// @param state How the photograph is developed now.
 /// @param stopAfter Last boundary to run; not before the checkpoint's.
 /// @param request What to render; read only when @p stopAfter is ::arraw::Stage::Resize or later.
+/// @param progress Channel for progress and cancellation, or null; progress
+/// starts at the checkpoint's share of the whole render.
 /// @return A host checkpoint at @p stopAfter, equal to what ::arraw::developUntil
 /// of the same arguments gives, bit for bit.
 /// @throws std::invalid_argument if @p from is resident on a device, its plan
 /// prefix or pixels do not match this render, @p stopAfter is not a boundary or
 /// is before the checkpoint's, or as ::arraw::develop.
+/// @throws ::arraw::Cancelled if @p progress was cancelled before the render finished.
 [[nodiscard]] RenderCheckpoint resumeFrom(const RenderCheckpoint& from, const ImageBuffer& source,
                                           const DevelopState& state, Stage stopAfter,
-                                          const RenderRequest& request = {});
+                                          const RenderRequest& request = {},
+                                          ProgressChannel* progress = nullptr);
 
 /// @brief Renders a photograph with the pointwise chain stopped at a tap, to measure it.
 ///
@@ -262,11 +275,14 @@ struct RenderRequest {
 /// @param state How the photograph is developed.
 /// @param tap Where in the chain to stop.
 /// @param request What to render; see ::arraw::develop.
+/// @param progress Channel for progress and cancellation, or null.
 /// @return A new ::arraw::workingFormat buffer in the encoding @p tap names
 /// (::arraw::perceptualEncoding for ::arraw::Tap::CurveInput), with no pending
 /// orientation.
 /// @throws std::invalid_argument as ::arraw::develop, and if @p tap is not a tap.
+/// @throws ::arraw::Cancelled if @p progress was cancelled before the render finished.
 [[nodiscard]] ImageBuffer sample(const ImageBuffer& source, const DevelopState& state, Tap tap,
-                                 const RenderRequest& request = {});
+                                 const RenderRequest& request = {},
+                                 ProgressChannel* progress = nullptr);
 
 } // namespace arraw

@@ -5,6 +5,7 @@
 #include <Develop.h>
 #include <DevelopState.h>
 #include <ImageBuffer.h>
+#include <Progress.h>
 #include <RenderCheckpoint.h>
 
 namespace arraw {
@@ -51,6 +52,8 @@ namespace arraw {
 /// @param request Size and filter to render at; the default is the cropped size
 /// of the photograph, which costs no pass. Only its size, upscale and filter
 /// are read.
+/// @param progress Channel for progress and cancellation (ADR 042), or null: a
+/// render at a time, the cancellation noticed between renders, never inside one.
 /// @return A resident checkpoint; in the working encoding, with no pending
 /// orientation, at every boundary after ::arraw::Stage::Denoise.
 /// @throws std::invalid_argument if development cannot start from @p source,
@@ -60,10 +63,13 @@ namespace arraw {
 /// image is larger than the device accepts.
 /// @throws std::logic_error if called from a thread other than the context's owner.
 /// @throws std::runtime_error if the device cannot do the work or fails.
+/// @throws ::arraw::Cancelled if @p progress was cancelled before the work finished;
+/// nothing it made is kept.
 [[nodiscard]] RenderCheckpoint developOnGpu(GpuContext& context, const ImageBuffer& source,
                                             const DevelopState& state,
                                             Stage stopAfter = Stage::Effects,
-                                            const RenderRequest& request = {});
+                                            const RenderRequest& request = {},
+                                            ProgressChannel* progress = nullptr);
 
 /// @brief Develops a photograph already on the device, stopping after one boundary.
 ///
@@ -77,15 +83,20 @@ namespace arraw {
 /// @param state How the photograph is developed.
 /// @param stopAfter Last boundary to run; see the overload above.
 /// @param request Size and filter to render at; see the overload above.
+/// @param progress Channel for progress and cancellation (ADR 042), or null: a
+/// render at a time, the cancellation noticed between renders, never inside one.
 /// @return A resident checkpoint; in the working encoding, with no pending
 /// orientation, at every boundary after ::arraw::Stage::Denoise.
 /// @throws std::invalid_argument as the overload above, and if @p uploaded is
 /// empty, belongs to another device than @p context, or is not of @p source's size.
 /// @throws std::logic_error if called from a thread other than the context's owner.
 /// @throws std::runtime_error if the device cannot do the work or fails.
+/// @throws ::arraw::Cancelled if @p progress was cancelled before the work finished;
+/// nothing it made is kept.
 RenderCheckpoint developOnGpu(GpuContext& context, const ImageBuffer& source,
                               const DeviceImage& uploaded, const DevelopState& state,
-                              Stage stopAfter = Stage::Effects, const RenderRequest& request = {});
+                              Stage stopAfter = Stage::Effects, const RenderRequest& request = {},
+                              ProgressChannel* progress = nullptr);
 
 /// @brief Carries a render on from a checkpoint that is on this device.
 ///
@@ -112,16 +123,21 @@ RenderCheckpoint developOnGpu(GpuContext& context, const ImageBuffer& source,
 /// @param stopAfter Last boundary to run; not before the checkpoint's.
 /// @param request Size and filter to render at; read only when @p stopAfter is
 /// ::arraw::Stage::Resize or later.
+/// @param progress Channel for progress and cancellation (ADR 042), or null: a
+/// render at a time, the cancellation noticed between renders, never inside one.
 /// @return A resident checkpoint at @p stopAfter.
 /// @throws std::invalid_argument if @p from is in host memory, belongs to another
 /// device, or does not match this render (plan prefix or size), @p stopAfter is not
 /// a boundary or is before the checkpoint's, or as the overloads above.
 /// @throws std::logic_error if called from a thread other than the context's owner.
 /// @throws std::runtime_error if the device cannot do the work or fails.
+/// @throws ::arraw::Cancelled if @p progress was cancelled before the work finished;
+/// nothing it made is kept.
 [[nodiscard]] RenderCheckpoint developOnGpu(GpuContext& context, const RenderCheckpoint& from,
                                             const ImageBuffer& source, const DevelopState& state,
                                             Stage stopAfter = Stage::Effects,
-                                            const RenderRequest& request = {});
+                                            const RenderRequest& request = {},
+                                            ProgressChannel* progress = nullptr);
 
 /// @brief Samples a photograph already on the device at a tap, and reads the result back.
 ///
@@ -139,15 +155,20 @@ RenderCheckpoint developOnGpu(GpuContext& context, const ImageBuffer& source,
 /// @param request What to render; see ::arraw::develop. A sample meant for
 /// ::arraw::curveHistogram passes ::arraw::curveHistogramRequest: the request is
 /// honoured as given, and the default is a full-resolution Lanczos sample.
+/// @param progress Channel for progress and cancellation (ADR 042), or null: a
+/// render at a time, the cancellation noticed between renders, never inside one.
 /// @return A host buffer, as ::arraw::sample of the same arguments gives within the
 /// parity tolerance of the passes it ran.
 /// @throws std::invalid_argument if @p tap is not a tap, @p uploaded does not
 /// belong to @p context or is not of @p source's size, or as ::arraw::developOnGpu.
 /// @throws std::logic_error if called from a thread other than the context's owner.
 /// @throws std::runtime_error if the device cannot do the work or fails.
+/// @throws ::arraw::Cancelled if @p progress was cancelled before the work finished;
+/// nothing it made is kept.
 [[nodiscard]] ImageBuffer sampleOnGpu(GpuContext& context, const ImageBuffer& source,
                                       const DeviceImage& uploaded, const DevelopState& state,
-                                      Tap tap, const RenderRequest& request = {});
+                                      Tap tap, const RenderRequest& request = {},
+                                      ProgressChannel* progress = nullptr);
 
 /// @brief Uploads a decoded photograph, samples it at a tap, and reads the result back.
 ///
@@ -157,10 +178,13 @@ RenderCheckpoint developOnGpu(GpuContext& context, const ImageBuffer& source,
 /// @param state How the photograph is developed.
 /// @param tap Where in the chain to stop.
 /// @param request What to render; see ::arraw::develop.
+/// @param progress Channel for progress and cancellation (ADR 042), or null: a
+/// render at a time, the cancellation noticed between renders, never inside one.
 /// @return A host buffer in the tap's encoding.
 /// @throws As the overload above.
 [[nodiscard]] ImageBuffer sampleOnGpu(GpuContext& context, const ImageBuffer& source,
                                       const DevelopState& state, Tap tap,
-                                      const RenderRequest& request = {});
+                                      const RenderRequest& request = {},
+                                      ProgressChannel* progress = nullptr);
 
 } // namespace arraw

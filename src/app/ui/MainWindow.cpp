@@ -10,6 +10,7 @@
 #include "FilmStrip.h"
 #include "PhotoView.h"
 #include "RenderDelay.h"
+#include "RenderProgressBar.h"
 #include "SettingsDialog.h"
 #include "ThumbnailCache.h"
 #include "ThumbnailWorker.h"
@@ -95,7 +96,16 @@ MainWindow::MainWindow(QWidget* parent)
                   Qt::QueuedConnection);
           },
           cpuForcedByEnvironment() ? PreviewRenderer::Device::Cpu : PreviewRenderer::Device::Auto,
-          runningSettings_),
+          runningSettings_,
+          [this](std::uint64_t request, const Progress& progress) {
+              // On the worker thread, already thinned to about thirty a second.
+              QMetaObject::invokeMethod(
+                  this,
+                  [this, request, progress] {
+                      showRenderProgress(request, progress.fraction, progress.step);
+                  },
+                  Qt::QueuedConnection);
+          }),
       exportQueue_(
           [this](ExportResult result) {
               // On the worker thread, as the preview's.
@@ -741,10 +751,31 @@ void MainWindow::buildImageView() {
         }
     });
     setCentralWidget(photoView_);
+    // The bar lies over the view in the crop mode too: the render beneath is the same work.
+    renderIndicator_ = new RenderIndicator(this);
+    connect(renderIndicator_, &RenderIndicator::changed, this,
+            [this](const RenderActivity::Display& display) {
+                photoView_->progressBar().setDisplay(display);
+                renderStepLabel_->setVisible(display.visible);
+                if (display.visible) {
+                    renderStepLabel_->setText(renderStepText(display.step));
+                }
+            });
     updateZoomControls();
 }
 
+void MainWindow::showRenderProgress(std::uint64_t request, double fraction, ProgressStep step) {
+    if (request == latestRequest_ && request >= firstRequest_) {
+        renderIndicator_->report(fraction, step);
+    }
+}
+
 void MainWindow::buildStatusBar() {
+    // Permanent, so that a message such as the export's neither hides it nor is hidden by it.
+    renderStepLabel_ = new QLabel(this);
+    renderStepLabel_->setObjectName("renderStepLabel");
+    renderStepLabel_->hide();
+    statusBar()->addPermanentWidget(renderStepLabel_);
     deviceLabel_ = new QLabel(this);
     statusBar()->addPermanentWidget(deviceLabel_);
     statusBar()->addPermanentWidget(zoomButton_);
@@ -1227,6 +1258,7 @@ void MainWindow::requestRender() {
             return;
         }
         lastCropRender_.emplace(uncropped, size);
+        renderIndicator_->begin();
         latestRequest_ = previewRenderer_.request(uncropped, PreviewView::wholeFrame(size, ratio));
         cropRequests_.emplace_back(latestRequest_, std::move(uncropped));
         return;
@@ -1253,10 +1285,18 @@ void MainWindow::requestRender() {
     } catch (const std::exception&) {
         // Left to the renderer, which reports what is wrong with the state.
     }
+    renderIndicator_->begin();
     latestRequest_ = previewRenderer_.request(state, std::move(view));
 }
 
 void MainWindow::showResult(const PreviewResult& result) {
+    // The newest request's render, delivered or failed, ends the busy period; a recount of
+    // the histogram or a refreshed fallback follows a render, and is not one. Before the
+    // filter below, so that a render no longer wanted (a photograph was opened, the crop
+    // mode left) still ends it when no request follows.
+    if (result.request >= latestRequest_ && (result.image || !result.error.empty())) {
+        renderIndicator_->finish(result.image.has_value() && result.request >= firstRequest_);
+    }
     if (result.request < firstRequest_) {
         return;
     }
