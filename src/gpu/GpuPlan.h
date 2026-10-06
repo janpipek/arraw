@@ -2,6 +2,7 @@
 
 #include "Denoise.h"
 #include "GrainModels.h"
+#include "Presence.h"
 
 #include <Develop.h>
 #include <ImageBuffer.h>
@@ -167,6 +168,40 @@ struct GpuPointwiseBlock {
 
     /// @brief Oklab offset of the Highlights zone in `xy`; `zw` unused.
     std::array<float, 4> gradeHighlightTint{};
+
+    /// @brief Source channels to luminance as shot, for Presence, padded to a `vec4`.
+    std::array<float, 4> presenceLumaRow{};
+
+    /// @brief Whether Texture, Clarity or Dehaze does anything: 0 or 1.
+    ///
+    /// The grids travel in four more inputs (bindings 3 to 6); a flag that is 0
+    /// keeps the shader from reading them.
+    std::uint32_t presence = 0;
+
+    /// @brief Texture, minus one to one; not `texture`, which GLSL's built-in would clash with.
+    float textureAmount = 0.0F;
+
+    /// @brief Clarity, minus one to one.
+    float clarityAmount = 0.0F;
+
+    /// @brief Dehaze, minus one to one.
+    float dehazeAmount = 0.0F;
+
+    /// @brief Source pixels per cell of Texture's base; zero when it is off.
+    std::uint32_t fineReduction = 0;
+
+    /// @brief Source pixels per cell of the coarse grids Clarity and Dehaze share; zero when
+    /// both are off. Which of them the shader reads, the amounts say.
+    std::uint32_t coarseReduction = 0;
+
+    /// @brief Width and height of Texture's base.
+    std::array<std::uint32_t, 2> fineGridSize{};
+
+    /// @brief Width and height of the coarse grids.
+    std::array<std::uint32_t, 2> coarseGridSize{};
+
+    /// @brief Rounds the block up to a whole `vec4`.
+    std::array<std::uint32_t, 2> presencePadding{};
 };
 
 static_assert(offsetof(GpuPointwiseBlock, toWorking) == 0);
@@ -202,7 +237,16 @@ static_assert(offsetof(GpuPointwiseBlock, gradeZoneWidth) == 280);
 static_assert(offsetof(GpuPointwiseBlock, gradePadding) == 284);
 static_assert(offsetof(GpuPointwiseBlock, gradeShadowMidtoneTint) == 288);
 static_assert(offsetof(GpuPointwiseBlock, gradeHighlightTint) == 304);
-static_assert(sizeof(GpuPointwiseBlock) == 320);
+static_assert(offsetof(GpuPointwiseBlock, presenceLumaRow) == 320);
+static_assert(offsetof(GpuPointwiseBlock, presence) == 336);
+static_assert(offsetof(GpuPointwiseBlock, textureAmount) == 340);
+static_assert(offsetof(GpuPointwiseBlock, clarityAmount) == 344);
+static_assert(offsetof(GpuPointwiseBlock, dehazeAmount) == 348);
+static_assert(offsetof(GpuPointwiseBlock, fineReduction) == 352);
+static_assert(offsetof(GpuPointwiseBlock, coarseReduction) == 356);
+static_assert(offsetof(GpuPointwiseBlock, fineGridSize) == 360);
+static_assert(offsetof(GpuPointwiseBlock, coarseGridSize) == 368);
+static_assert(sizeof(GpuPointwiseBlock) == 384);
 
 /// @brief Widest output, in pixels per side, that the geometry block can address exactly.
 ///
@@ -488,6 +532,76 @@ static_assert(sizeof(GpuDenoiseBlock) == 352);
 static_assert(std::tuple_size_v<DenoiseWeights> <= 68,
               "the block holds the weights of every radius the shaders allow");
 
+/// @brief Which part of the Presence context a ::arraw::GpuPass::PresenceFilter render does.
+///
+/// The CPU's steps in `src/core/Presence.cpp`, one render each, for one base;
+/// the values are shared with `src/gpu/shaders/presence_filter.frag`.
+enum class PresenceStep : std::uint32_t {
+    Reduce = 0,        ///< Source to grid: each cell's log2 mean luminance.
+    BlurAcross = 1,    ///< The Gaussian along rows of the grid.
+    BlurDown = 2,      ///< The Gaussian along columns of the grid.
+    MinimumAcross = 3, ///< The window's minimum along rows of the grid.
+    MinimumDown = 4,   ///< The window's minimum along columns of the grid.
+    MaximumAcross = 5, ///< The window's maximum along rows of the grid.
+    MaximumDown = 6,   ///< The window's maximum along columns of the grid.
+    /// The Gaussian along columns of the grid, never below the opened grid: a floor's last step.
+    BlurDownAboveOpening = 7,
+    /// One step of the opening's reconstruction: the 3x3 maximum, never above the cells.
+    Reconstruct = 8,
+};
+
+/// @brief The Presence context passes' uniform block, byte for byte as std140 lays it out.
+///
+/// The shader data contract of `src/gpu/shaders/presence_filter.frag`. As for
+/// the Denoise pass, the spatial weights are the host's
+/// (::arraw::denoiseWeights), four to a `vec4`.
+struct GpuPresenceBlock {
+    /// @brief Step this render does, as a ::arraw::PresenceStep.
+    std::uint32_t step = 0;
+
+    /// @brief Tap radius of the blur; zero for the other steps.
+    std::uint32_t radius = 0;
+
+    /// @brief Source pixels per side of a cell of the base.
+    std::uint32_t reduction = 1;
+
+    /// @brief Radius of the opening's window, in cells; zero for the other steps.
+    std::uint32_t window = 0;
+
+    /// @brief Source channels to luminance as shot, padded to a `vec4`.
+    std::array<float, 4> lumaRow{};
+
+    /// @brief Width and height of the source.
+    std::array<std::uint32_t, 2> sourceSize{};
+
+    /// @brief Width and height of the base's grid.
+    std::array<std::uint32_t, 2> gridSize{};
+
+    /// @brief The blur's weights, ::arraw::DenoiseWeights, as 17 `vec4`s.
+    std::array<float, 68> weights{};
+};
+
+static_assert(offsetof(GpuPresenceBlock, step) == 0);
+static_assert(offsetof(GpuPresenceBlock, radius) == 4);
+static_assert(offsetof(GpuPresenceBlock, reduction) == 8);
+static_assert(offsetof(GpuPresenceBlock, window) == 12);
+static_assert(offsetof(GpuPresenceBlock, lumaRow) == 16);
+static_assert(offsetof(GpuPresenceBlock, sourceSize) == 32);
+static_assert(offsetof(GpuPresenceBlock, gridSize) == 40);
+static_assert(offsetof(GpuPresenceBlock, weights) == 48);
+static_assert(sizeof(GpuPresenceBlock) == 320);
+static_assert(maximumPresenceRadius <= maximumDenoiseRadius,
+              "the block holds the weights of every radius the shader allows");
+
+/// @brief Fills the Presence block for one step of one base.
+/// @param plan Active plan to pack.
+/// @param base The base the render computes: the plan's fine, coarse or haze one.
+/// @param source Size of the pointwise pass's input.
+/// @param step Step the render does.
+/// @return The block, ready to be copied into a uniform buffer.
+[[nodiscard]] GpuPresenceBlock packPresence(const PresencePlan& plan, const PresenceBase& base,
+                                            ImageSize source, PresenceStep step);
+
 /// @brief Gives the size of the grid a Denoise plan blurs colour on, for a source.
 /// @param plan Plan whose colour half is on.
 /// @param source Size of the source.
@@ -502,7 +616,8 @@ static_assert(std::tuple_size_v<DenoiseWeights> <= 68,
                                           DenoiseStep step);
 
 /// @brief Fills the pointwise block from a resolved plan.
-/// @param plan Plan to pack; only its pointwise fields are read.
+/// @param plan Plan to pack; only its pointwise fields are read, with the
+/// geometry's source size for the Presence grids when Presence is on.
 /// @param probe Intermediate the shader should write instead of its result.
 /// @return The block, ready to be copied into a uniform buffer.
 [[nodiscard]] GpuPointwiseBlock packPointwise(const ProcessingPlan& plan,

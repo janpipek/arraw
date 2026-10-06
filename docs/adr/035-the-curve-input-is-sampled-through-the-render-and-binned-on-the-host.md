@@ -201,3 +201,13 @@ The command line does not print a histogram yet.
 - A second tap is one more enumerator, one more prefix function in
   `ProcessingPlan.h` that `developPixel` calls, one more case in `probeFor`
   (and a probe value if none exists), and its encoding in `tapEncoding`.
+
+## Note, 2026-10-06
+
+Texture, Clarity and Dehaze run between Basic Tone and the curves
+([ADR 041](041-texture-clarity-and-dehaze-read-a-context-of-log-luminance.md)), so the curve input includes them: `developToCurveInput` ends
+with `applyPresence`, the GPU's `AfterTone` probe stops after it, and
+`curveInputFieldsOf` includes the Presence block, so a Presence edit makes
+`sameAtTap` false and the histogram is sampled again. The test that the CPU
+tap equals matrix, exposure and `shapeTone` spelled out by hand holds with
+Presence at zero.

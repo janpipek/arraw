@@ -2,6 +2,7 @@
 
 #include "ColorAdjustments.h"
 #include "ColorSpaces.h"
+#include "ReducedGrid.h"
 #include "RowBands.h"
 #include "SampleConversion.h"
 #include "TimingTrace.h"
@@ -26,11 +27,9 @@ std::uint32_t radiusFor(float sigma) {
         std::clamp(taps, 1.0F, static_cast<float>(maximumDenoiseRadius)));
 }
 
-/// @brief Gives the source's channels to working luminance, as shot.
-///
-/// The camera's own matrix, never the plan's `toWorking`, which carries the
-/// white balance the photographer chose (ADR 007, ADR 039).
-Colour lumaRowOf(const ColorEncoding& encoding) {
+} // namespace
+
+Colour arraw::asShotLuminanceRow(const ColorEncoding& encoding) {
     if (const auto* camera = std::get_if<CameraNative>(&encoding)) {
         Colour row{};
         for (std::size_t column = 0; column < 3; ++column) {
@@ -44,8 +43,10 @@ Colour lumaRowOf(const ColorEncoding& encoding) {
         return colorspaces::workingLuminance;
     }
     throw std::invalid_argument(
-        "Noise reduction starts from the working encoding or a camera's own primaries");
+        "Luminance as shot is measured in the working encoding or a camera's own primaries");
 }
+
+namespace {
 
 /// @brief Luminance of a colour through a row, in a fixed order the shaders repeat.
 float lumaOf(const Colour& row, float red, float green, float blue) {
@@ -270,8 +271,8 @@ RatioGrid blurredRatios(std::span<const float> rgba, std::uint32_t width, std::u
                         const DenoisePlan& plan) {
     const std::uint32_t reduction = plan.gridReduction;
     RatioGrid grid;
-    grid.width = (width + reduction - 1) / reduction;
-    grid.height = (height + reduction - 1) / reduction;
+    grid.width = gridCells(width, reduction);
+    grid.height = gridCells(height, reduction);
     grid.cells.resize(static_cast<std::size_t>(grid.width) * grid.height);
     // Banded by grid rows; the work is that of the source pixels they cover.
     detail::forEachRowBand(
@@ -311,29 +312,6 @@ RatioGrid blurredRatios(std::span<const float> rgba, std::uint32_t width, std::u
     grid.cells =
         blurPass(grid.cells, grid.width, grid.height, weights, plan.colorRadius, /*across=*/false);
     return grid;
-}
-
-/// @brief Where a source pixel's centre falls on the grid along one axis, for bilinear reading.
-struct GridTap {
-    std::uint32_t first = 0;  ///< Cell at or before the position.
-    std::uint32_t second = 0; ///< The next cell, or the same one at the edge.
-    float fraction = 0.0F;    ///< Weight of the second cell.
-};
-
-/// @brief Places a source coordinate on the grid: `u = (x + 0.5) / reduction - 0.5`, clamped.
-///
-/// Mirrors `gridTap` in `denoise_combine.frag`. Exact in float: the reduction
-/// is a power of two.
-GridTap gridTap(std::uint32_t coordinate, std::uint32_t reduction, std::uint32_t cells) {
-    const float position =
-        (static_cast<float>(coordinate) + 0.5F) / static_cast<float>(reduction) - 0.5F;
-    const float clamped = std::clamp(position, 0.0F, static_cast<float>(cells - 1));
-    const float below = std::floor(clamped);
-    GridTap tap;
-    tap.first = static_cast<std::uint32_t>(below);
-    tap.second = std::min(tap.first + 1, cells - 1);
-    tap.fraction = clamped - below;
-    return tap;
 }
 
 /// @brief Reads the grid bilinearly at a source pixel.
@@ -381,7 +359,7 @@ DenoisePlan arraw::denoisePlanFor(const NoiseReductionSettings& settings,
     if (!plan.active()) {
         return plan;
     }
-    plan.lumaRow = lumaRowOf(encoding);
+    plan.lumaRow = asShotLuminanceRow(encoding);
     const float rowSum = plan.lumaRow[0] + plan.lumaRow[1] + plan.lumaRow[2];
     if (!(rowSum > 0.0F) || !std::isfinite(rowSum)) {
         throw std::invalid_argument("The source's luminance row has no positive neutral");

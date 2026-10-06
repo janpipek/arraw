@@ -238,3 +238,19 @@ is the existing `AfterTone` probe. The tapped colours go through geometry and
 the resize in linear light, as a render does, and are then encoded into the
 named `NamedEncoding::Rec2020Gamma22`. So the Consequence about a sampled
 buffer declaring its own encoding is met.
+
+## Note, 2026-10-06
+
+Texture, Clarity and Dehaze ([ADR 041](041-texture-clarity-and-dehaze-read-a-context-of-log-luminance.md)) need neighbours but act on tone
+inside the chain. The Consequence above, that such a stage "becomes a spatial
+stage and a pass of its own", is amended for them: the neighbourhood is a
+*context*, a reduced-resolution side image of the pointwise pass's input made
+by its own spatial steps (a few GPU renders a base), and the chain reads it at
+the pixel's coordinate. It is not a pass boundary and has no checkpoint; it is
+recomputed whenever the pointwise pass runs. `developPixel(plan, colour,
+context)` gains the context this ADR promised, as a `PixelContext` after the
+colour. It has no default: a zero context is not "none" but every base at
+log2 = 0, so a two-argument overload serves callers without Presence and
+asserts that the plan has it off. The curve input tap is after
+Presence, which Lightroom counts as Basic, so "after Basic Tone, immediately
+before the curves" still holds.

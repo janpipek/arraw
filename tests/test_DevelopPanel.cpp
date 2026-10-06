@@ -85,6 +85,33 @@ TEST_CASE("Turning grain on gives the photograph a seed, which later edits keep"
     CHECK(edited->settings.effects.grain.seed == seed);
 }
 
+TEST_CASE("The Presence group edits Texture, Clarity and Dehaze in both treatments",
+          "[app][panel][presence]") {
+    DevelopPanel panel;
+    for (const bool grayscale : {false, true}) {
+        INFO("grayscale " << grayscale);
+        DevelopState state;
+        state.settings.blackAndWhite.convertToGrayscale = grayscale;
+        panel.showState(state, PanelContext{});
+        std::optional<DevelopState> edited;
+        const auto connection = QObject::connect(&panel, &DevelopPanel::stateEdited,
+                                                 [&](const DevelopState& next) { edited = next; });
+        for (const std::string_view key : {"texture", "clarity", "dehaze"}) {
+            SettingSlider* row = rowOf(panel, key);
+            REQUIRE(row != nullptr);
+            auto* group = qobject_cast<QGroupBox*>(row->parentWidget());
+            REQUIRE(group != nullptr);
+            CHECK(group->title() == QStringLiteral("Presence"));
+            CHECK(group->isVisibleTo(&panel));
+        }
+        emit rowOf(panel, "clarity")->valueEdited(35.0);
+        REQUIRE(edited);
+        CHECK(edited->settings.presence.clarity == 35.0F);
+        CHECK(edited->settings.presence.texture == 0.0F);
+        QObject::disconnect(connection);
+    }
+}
+
 TEST_CASE("Grain a photograph already has keeps seed zero through other edits",
           "[app][panel][grain]") {
     // A sidecar written by hand or by the command line: grain on, no seed. It
@@ -119,12 +146,13 @@ TEST_CASE("Grain a photograph already has keeps seed zero through other edits",
 
 TEST_CASE("The curve histogram is wanted only while the editor is on screen",
           "[app][panel][histogram]") {
+    // Declared first: destroying the scroll area hides the panel, which still announces.
+    std::vector<bool> announced;
     QScrollArea scroll;
     auto* panel = new DevelopPanel;
     scroll.setWidget(panel);
     scroll.setWidgetResizable(true);
     scroll.resize(320, 160);
-    std::vector<bool> announced;
     QObject::connect(panel, &DevelopPanel::curveHistogramWantedChanged,
                      [&](bool wanted) { announced.push_back(wanted); });
     auto* editor = panel->findChild<CurveEditor*>("curveEditor");

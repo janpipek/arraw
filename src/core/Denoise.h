@@ -105,6 +105,16 @@ struct DenoisePlan {
     friend bool operator==(const DenoisePlan&, const DenoisePlan&) = default;
 };
 
+/// @brief Gives a source's channels to working luminance, as shot.
+///
+/// The camera's own matrix for a camera-native source, Rec.2020's luminance for
+/// a working-space one; never a plan's `toWorking`, which carries the white
+/// balance the photographer chose (ADR 007, ADR 039). The row the Denoise pass
+/// splits luminance with, and the one the Presence context measures it with
+/// (ADR 041), so that neither white balance nor exposure reaches them.
+/// @throws std::invalid_argument if @p encoding is neither the working one nor a camera's.
+[[nodiscard]] Colour asShotLuminanceRow(const ColorEncoding& encoding);
+
 /// @brief Resolves the noise reduction settings for one source.
 /// @param settings What the photographer set.
 /// @param encoding Encoding of the source's pixels, which gives the luminance row.

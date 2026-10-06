@@ -278,7 +278,9 @@ committed on its own. Each ends with an ADR and green
 6. **Denoise.** Done (ADR 039). `Stage::Denoise`, the luma filter seam with the separable
    bilateral, the chroma blur, Luminance and Colour NR, preview debounce,
    panel rows.
-7. **Texture, Clarity, Dehaze.** Context side-product, chain stage, panel rows.
+7. **Texture, Clarity, Dehaze.** Done (ADR 041). Context side-product, chain stage, panel rows.
+   After review: Clarity reads a band (coarse cells against their blur) and
+   Dehaze subtracts a floor from an opening of the coarse cells, not `main`'s veil.
 
 1–4 are independent of 5–7; 7 depends on 6.
 

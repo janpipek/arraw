@@ -304,3 +304,12 @@ Python has `NoiseReductionSettings`, `LuminanceNoiseFilter` and the flat keys.
 - **A missing sidecar key meaning the kind's default.** It is simpler to
   state, but every sidecar written before noise reduction existed would gain
   colour NR on a RAW and change how an edited photograph looks.
+
+## Note, 2026-10-06
+
+The as-shot luminance row is public to the engine as `asShotLuminanceRow`,
+and the bilinear grid read as `gridTap` (`src/core/ReducedGrid.h`): the
+Presence context ([ADR 041](041-texture-clarity-and-dehaze-read-a-context-of-log-luminance.md)) measures luminance with the same row and
+reads its grids the same way. The context is computed from the pixels at the
+Denoise boundary every time the pointwise pass runs, and is not carried by the
+checkpoint, so a Presence edit resumes from it like a tone edit.

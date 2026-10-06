@@ -4,6 +4,7 @@
 #include <DevelopSettings.h>
 #include <EffectsSettings.h>
 #include <NoiseReductionSettings.h>
+#include <PresenceSettings.h>
 #include <SettingDescriptors.h>
 #include <SettingsJson.h>
 #include <ToneCurveSettings.h>
@@ -125,7 +126,8 @@ void bindSettings(nb::module_& m) {
         .value("TONE_CURVE", SettingGroup::ToneCurve)
         .value("COLOR_GRADING", SettingGroup::ColorGrading)
         .value("EFFECTS", SettingGroup::Effects)
-        .value("DETAIL", SettingGroup::Detail);
+        .value("DETAIL", SettingGroup::Detail)
+        .value("PRESENCE", SettingGroup::Presence);
 
     nb::enum_<Applicability>(m, "Applicability",
                              "Whether a setting means anything for every photograph.")
@@ -247,6 +249,14 @@ void bindSettings(nb::module_& m) {
     bindFrozen<EffectsSettings>(
         m, "EffectsSettings", "Effects applied to the cropped frame after the resize.",
         field("vignette", &EffectsSettings::vignette), field("grain", &EffectsSettings::grain));
+    bindFrozen<PresenceSettings>(
+        m, "PresenceSettings",
+        "Texture, Clarity and Dehaze: local contrast after the tone controls, each -100 to 100.\n\n"
+        "Texture acts on detail a few sensor pixels across, Clarity on the midtones' contrast "
+        "at a hundredth of the long edge, Dehaze removes (or adds) a veil with some contrast "
+        "and colour.",
+        field("texture", &PresenceSettings::texture), field("clarity", &PresenceSettings::clarity),
+        field("dehaze", &PresenceSettings::dehaze));
     bindFrozen<NoiseReductionSettings>(
         m, "NoiseReductionSettings",
         "Luminance and colour noise reduction, run on the decoded photograph first.\n\n"
@@ -280,7 +290,8 @@ void bindSettings(nb::module_& m) {
     bindFrozen<DevelopSettings>(
         m, "DevelopSettings", "Photographic settings of one photograph.",
         field("color", &DevelopSettings::color), field("geometry", &DevelopSettings::geometry),
-        field("tone", &DevelopSettings::tone), field("hsl", &DevelopSettings::hsl),
+        field("tone", &DevelopSettings::tone), field("presence", &DevelopSettings::presence),
+        field("hsl", &DevelopSettings::hsl),
         field("black_and_white", &DevelopSettings::blackAndWhite),
         field("tone_curve", &DevelopSettings::toneCurve),
         field("color_grading", &DevelopSettings::colorGrading),

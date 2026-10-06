@@ -4,6 +4,7 @@
 #include "ProcessingPlan.h"
 #include "RowBands.h"
 #include "support/Fixtures.h"
+#include "support/RowBandLimit.h"
 #include "support/TestImages.h"
 
 #include <Develop.h>
@@ -560,14 +561,17 @@ TEST_CASE("The threaded CPU pass gives the single-threaded bits", "[denoise][thr
     const ImageBuffer source = chromaNoise({517, 509}, 0.5F);
     const DenoisePlan plan = planFor(source, DevelopState{noiseSettings(60.0F, 70.0F)}).denoise;
     // Set, so that the test splits even on a machine of one thread.
-    detail::rowBandLimit = 4;
-    REQUIRE(detail::rowBandCount(source.size().pixelCount()) == 4);
-    const ImageBuffer threaded = applyDenoise(source, plan);
-    detail::rowBandLimit = 1;
-    const ImageBuffer single = applyDenoise(source, plan);
-    detail::rowBandLimit = 3;
-    const ImageBuffer three = applyDenoise(source, plan);
-    detail::rowBandLimit = 0;
+    const auto denoisedWith = [&](std::uint32_t limit) {
+        const test::ScopedRowBandLimit scoped(limit);
+        return applyDenoise(source, plan);
+    };
+    {
+        const test::ScopedRowBandLimit four(4);
+        REQUIRE(detail::rowBandCount(source.size().pixelCount()) == 4);
+    }
+    const ImageBuffer threaded = denoisedWith(4);
+    const ImageBuffer single = denoisedWith(1);
+    const ImageBuffer three = denoisedWith(3);
     REQUIRE(sameBytes(threaded, single));
     REQUIRE(sameBytes(three, single));
 }

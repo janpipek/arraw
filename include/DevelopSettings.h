@@ -7,6 +7,7 @@
 #include <GeometrySettings.h>
 #include <HslSettings.h>
 #include <NoiseReductionSettings.h>
+#include <PresenceSettings.h>
 #include <ToneCurveSettings.h>
 #include <ToneSettings.h>
 
@@ -26,6 +27,9 @@ struct DevelopSettings {
 
     /// @brief Exposure, tonal shaping and highlight roll-off.
     ToneSettings tone{};
+
+    /// @brief Texture, Clarity and Dehaze: local contrast after the tone controls.
+    PresenceSettings presence{};
 
     /// @brief Luma, red, green and blue curves over the tone.
     ToneCurveSettings toneCurve{};

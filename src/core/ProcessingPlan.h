@@ -5,6 +5,7 @@
 #include "Denoise.h"
 #include "Effects.h"
 #include "GeometryPlan.h"
+#include "Presence.h"
 #include "ToneCurve.h"
 
 #include <ColorEncoding.h>
@@ -16,6 +17,7 @@
 #include <RenderCheckpoint.h>
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -196,6 +198,16 @@ struct ProcessingPlan {
     /// costs a comparison rather than a branch on a setting (ADR 011).
     float shoulderKnee = std::numeric_limits<float>::infinity();
 
+    /// @brief Texture, Clarity and Dehaze, resolved, and the context they read.
+    ///
+    /// After Basic Tone and before the curves, as Lightroom's Presence sits in
+    /// its Basic panel (ADR 041). The context they read is worked out from the
+    /// pointwise pass's input and from fields of this block alone, so white
+    /// balance and exposure never recompute it. Resolved only by the overloads
+    /// of ::arraw::planFor that know the source's size; every control at zero
+    /// is the default, and the chain reads no context.
+    PresencePlan presence{};
+
     /// @brief Luma, red, green and blue tone curves, resolved.
     ///
     /// They follow Basic Tone and precede the shoulder, so the shoulder still
@@ -241,7 +253,8 @@ struct ProcessingPlan {
                            std::tie(plan.toWorking, plan.exposureGain, plan.shapesTone,
                                     plan.contrastSlope, plan.contrastScale, plan.shadowShift,
                                     plan.highlightShift, plan.blackShift, plan.whiteShift,
-                                    plan.shoulderKnee, plan.toneCurves, plan.colorAdjustments),
+                                    plan.shoulderKnee, plan.presence, plan.toneCurves,
+                                    plan.colorAdjustments),
                            std::tie(plan.geometry), std::tie(plan.resize), std::tie(plan.effects));
 }
 
@@ -326,8 +339,9 @@ static_assert(std::tuple_size_v<decltype(stagesOf(std::declval<const ProcessingP
 /// @brief Works out what a photograph's settings mean for its pixels.
 ///
 /// Resolves only noise reduction, colour and tone; buffer and Photo overloads
-/// also resolve geometry. This overload carries no source identity and must
-/// not be used as a cache key.
+/// also resolve geometry, and Texture, Clarity and Dehaze, whose radius needs
+/// the source's size: here they stay off. This overload carries no source
+/// identity and must not be used as a cache key.
 /// @param encoding Encoding the decoded pixels are in.
 /// @param state State to resolve.
 /// @param pixelScale Sensor pixels per pixel of the source (::arraw::ImageBuffer::pixelScale).
@@ -618,20 +632,28 @@ inline constexpr float curveRatioFloor = 0x1p-14F;
 /// The first half of ::arraw::developPixel, which calls this rather than
 /// repeating it, so that ::arraw::Tap::CurveInput and its position in the
 /// chain cannot drift apart (ADR 011): white balance and the matrix, exposure,
-/// then Basic Tone. What comes out is what the tone curves take in.
+/// Basic Tone, then Texture, Clarity and Dehaze, which Lightroom counts as
+/// Basic too (ADR 041). What comes out is what the tone curves take in.
 /// @param plan Resolved settings.
 /// @param colour Source colour, in the encoding the plan was built for.
+/// @param context The Presence context at the pixel; not read when Presence is off.
 /// @return The colour at the curve input, in the working encoding; a sample
 /// encodes it into ::arraw::perceptualEncoding afterwards (see
 /// ::arraw::toPerceptualSigned).
 ///
 /// Mirrored by `src/gpu/shaders/develop.frag` up to its `probeAfterTone`
 /// stop, which ::arraw::probeFor names for this tap.
-[[nodiscard]] inline Colour developToCurveInput(const ProcessingPlan& plan, Colour colour) {
+[[nodiscard]] inline Colour developToCurveInput(const ProcessingPlan& plan, Colour colour,
+                                                const PixelContext& context) {
+    // Measured on the source colour, before white balance and exposure, which
+    // therefore cannot change the detail the Presence controls see.
+    const float logLuminance =
+        plan.presence.active() ? presenceLogLuminance(plan.presence, colour) : 0.0F;
     colour = plan.toWorking * colour;
     colour = {colour[0] * plan.exposureGain, colour[1] * plan.exposureGain,
               colour[2] * plan.exposureGain};
-    return shapeTone(plan, colour);
+    colour = shapeTone(plan, colour);
+    return applyPresence(plan.presence, colour, logLuminance, context);
 }
 
 /// @brief Applies the pointwise stages to one colour, in their fixed order.
@@ -641,17 +663,34 @@ inline constexpr float curveRatioFloor = 0x1p-14F;
 /// sequence by hand, and per-stage comparisons hold the two together (ADR 011).
 /// @param plan Resolved settings.
 /// @param colour Source colour, in the encoding the plan was built for.
+/// @param context What the chain knows of the pixel's surroundings: the
+/// Presence context at it (ADR 011, ADR 041); not read when Presence is off.
 /// @return The developed colour, in the working encoding.
 ///
 /// Not `constexpr`: the colour block's Oklab maths takes cube roots, which
 /// the standard does not allow in a constant expression.
 ///
 /// Mirrored by `src/gpu/shaders/develop.frag`, which must change with it.
-[[nodiscard]] inline Colour developPixel(const ProcessingPlan& plan, Colour colour) {
-    colour = developToCurveInput(plan, colour);
+[[nodiscard]] inline Colour developPixel(const ProcessingPlan& plan, Colour colour,
+                                         const PixelContext& context) {
+    colour = developToCurveInput(plan, colour, context);
     colour = applyToneCurves(plan, colour);
     colour = rollHighlights(plan, colour);
     return adjustColor(plan.colorAdjustments, colour);
+}
+
+/// @brief Applies the pointwise stages to one colour of a plan with Presence off.
+///
+/// For callers that have no context, which a plan with Texture, Clarity or
+/// Dehaze on needs: there is no neutral context to stand in for one (a zero
+/// base would read as every pixel standing far above its surroundings), so
+/// asking this of such a plan is a precondition violation, asserted.
+/// @param plan Resolved settings, with Presence off.
+/// @param colour Source colour, in the encoding the plan was built for.
+/// @return The developed colour, in the working encoding.
+[[nodiscard]] inline Colour developPixel(const ProcessingPlan& plan, Colour colour) {
+    assert(!plan.presence.active() && "a plan with Presence on needs the pixel's context");
+    return developPixel(plan, colour, PixelContext{});
 }
 
 /// @brief Applies the pointwise stages up to a tap, in their fixed order.
@@ -661,11 +700,13 @@ inline constexpr float curveRatioFloor = 0x1p-14F;
 /// @param plan Resolved settings.
 /// @param colour Source colour, in the encoding the plan was built for.
 /// @param tap Where to stop.
+/// @param context The Presence context at the pixel, as for ::arraw::developPixel.
 /// @return The colour at @p tap, still in the working encoding.
-[[nodiscard]] inline Colour developToTap(const ProcessingPlan& plan, Colour colour, Tap tap) {
+[[nodiscard]] inline Colour developToTap(const ProcessingPlan& plan, Colour colour, Tap tap,
+                                         const PixelContext& context) {
     switch (tap) {
     case Tap::CurveInput:
-        return developToCurveInput(plan, colour);
+        return developToCurveInput(plan, colour, context);
     }
     // Unreachable for a valid tap: sample() validates it before any pixel runs.
     // The identity is what an unrecognised tap would sample; ::arraw::tapEncoding
@@ -679,11 +720,11 @@ inline constexpr float curveRatioFloor = 0x1p-14F;
 /// prefix starts reading must join this list, or ::arraw::sameAtTap would call
 /// a stale sample current.
 /// @param plan Plan to view.
-/// @return References to white balance and the matrix, exposure and Basic Tone.
+/// @return References to white balance and the matrix, exposure, Basic Tone and Presence.
 [[nodiscard]] inline auto curveInputFieldsOf(const ProcessingPlan& plan) {
     return std::tie(plan.toWorking, plan.exposureGain, plan.shapesTone, plan.contrastSlope,
                     plan.contrastScale, plan.shadowShift, plan.highlightShift, plan.blackShift,
-                    plan.whiteShift);
+                    plan.whiteShift, plan.presence);
 }
 
 /// @brief Whether two plans give the same sample at a tap.

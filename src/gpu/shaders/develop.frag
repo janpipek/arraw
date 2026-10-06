@@ -38,6 +38,17 @@ layout(binding = 0) uniform sampler2D source;
 // arithmetic is the CPU's. Bound even when no curve is active; not read then.
 layout(binding = 2) uniform sampler2D curves;
 
+// The Presence context's grids, ::arraw::PresenceContext: log2 luminance in r
+// on a box-reduced grid, Texture's base (fine), Clarity's base, the coarse
+// cells unblurred (which Clarity and a positive Dehaze read), and Dehaze's
+// base on the same cells. Read with texelFetch and blended by hand, as the
+// CPU's PresenceSampler does. Bound even when Presence is off (the source
+// stands in); not read then.
+layout(binding = 3) uniform sampler2D fineBase;
+layout(binding = 4) uniform sampler2D coarseBase;
+layout(binding = 5) uniform sampler2D coarseCells;
+layout(binding = 6) uniform sampler2D hazeBase;
+
 layout(std140, binding = 1) uniform Pointwise {
     vec4 toWorking[3];
     float exposureGain;
@@ -75,6 +86,16 @@ layout(std140, binding = 1) uniform Pointwise {
     uint gradePadding;
     vec4 gradeShadowMidtoneTint;
     vec4 gradeHighlightTint;
+    vec4 presenceLumaRow;
+    uint presence;
+    float textureAmount;
+    float clarityAmount;
+    float dehazeAmount;
+    uint fineReduction;
+    uint coarseReduction;
+    uvec2 fineGridSize;
+    uvec2 coarseGridSize;
+    uvec2 presencePadding;
 } plan;
 
 // 1 / 2.2f and 2.2f as C++ rounds them to float, spelled out so that no
@@ -385,6 +406,150 @@ vec3 applySaturation(vec3 colour, float amount) {
     return fromOklab(lab);
 }
 
+// Presence.h and Presence.cpp: Texture, Clarity and Dehaze (ADR 041).
+
+// presenceLuminanceFloor, presenceLuminanceCeiling, textureLimitStops,
+// clarityLimitStops, dehazeStrength, dehazeVeil, dehazeChroma and
+// dehazeMeanLimitStops, Presence.h.
+const float presenceLuminanceFloor = 6.103515625e-05;
+const float presenceLuminanceCeiling = 65536.0;
+const float textureLimitStops = 0.5;
+const float clarityLimitStops = 1.0;
+const float dehazeStrength = 0.6;
+const float dehazeVeil = 0.4;
+const float dehazeChroma = 0.16;
+const float dehazeMeanLimitStops = 6.0;
+
+float boundedLuminance(float luminance) {
+    if (!(luminance > presenceLuminanceFloor)) {
+        return presenceLuminanceFloor;
+    }
+    return luminance < presenceLuminanceCeiling ? luminance : presenceLuminanceCeiling;
+}
+
+float presenceLogLuminance(vec3 colour) {
+    const float luminance = plan.presenceLumaRow.x * colour.x + plan.presenceLumaRow.y * colour.y +
+                            plan.presenceLumaRow.z * colour.z;
+    return log2(boundedLuminance(luminance));
+}
+
+float softLimit(float detail, float limit) {
+    return detail / (1.0 + abs(detail) / limit);
+}
+
+float midtoneWeight(float value) {
+    return smoothStep(0.0, 0.8, 1.0 - abs(2.0 * value - 1.0));
+}
+
+// gridTap, ReducedGrid.h: u = (x + 0.5) / reduction - 0.5, clamped; exact in
+// float, the reduction being a power of two.
+void gridTap(int coordinate, uint reduction, uint cells, out int first, out int second,
+             out float fraction) {
+    const float position = (float(coordinate) + 0.5) / float(reduction) - 0.5;
+    const float clamped = clampExact(position, 0.0, float(cells - 1u));
+    const float below = floor(clamped);
+    first = int(below);
+    second = min(first + 1, int(cells) - 1);
+    fraction = clamped - below;
+}
+
+// upsampled, Presence.cpp: the grid read bilinearly, rows first.
+float upsampledFine(ivec2 at) {
+    int x0;
+    int x1;
+    float tx;
+    int y0;
+    int y1;
+    float ty;
+    gridTap(at.x, plan.fineReduction, plan.fineGridSize.x, x0, x1, tx);
+    gridTap(at.y, plan.fineReduction, plan.fineGridSize.y, y0, y1, ty);
+    const float topLeft = texelFetch(fineBase, ivec2(x0, y0), 0).r;
+    const float topRight = texelFetch(fineBase, ivec2(x1, y0), 0).r;
+    const float bottomLeft = texelFetch(fineBase, ivec2(x0, y1), 0).r;
+    const float bottomRight = texelFetch(fineBase, ivec2(x1, y1), 0).r;
+    const float top = topLeft + tx * (topRight - topLeft);
+    const float bottom = bottomLeft + tx * (bottomRight - bottomLeft);
+    return top + ty * (bottom - top);
+}
+
+// The coarse grids share one geometry; GLSL takes no sampler parameter here
+// portably, so the three reads are spelled out by which.
+const int coarseOfBase = 0;
+const int coarseOfCells = 1;
+const int coarseOfHaze = 2;
+
+float coarseAt(int which, ivec2 at) {
+    if (which == coarseOfBase) {
+        return texelFetch(coarseBase, at, 0).r;
+    }
+    if (which == coarseOfCells) {
+        return texelFetch(coarseCells, at, 0).r;
+    }
+    return texelFetch(hazeBase, at, 0).r;
+}
+
+float upsampledCoarse(int which, ivec2 at) {
+    int x0;
+    int x1;
+    float tx;
+    int y0;
+    int y1;
+    float ty;
+    gridTap(at.x, plan.coarseReduction, plan.coarseGridSize.x, x0, x1, tx);
+    gridTap(at.y, plan.coarseReduction, plan.coarseGridSize.y, y0, y1, ty);
+    const float topLeft = coarseAt(which, ivec2(x0, y0));
+    const float topRight = coarseAt(which, ivec2(x1, y0));
+    const float bottomLeft = coarseAt(which, ivec2(x0, y1));
+    const float bottomRight = coarseAt(which, ivec2(x1, y1));
+    const float top = topLeft + tx * (topRight - topLeft);
+    const float bottom = bottomLeft + tx * (bottomRight - bottomLeft);
+    return top + ty * (bottom - top);
+}
+
+vec3 applyPresence(vec3 colour, float logLuminance, ivec2 at) {
+    if (plan.presence == 0u) {
+        return colour;
+    }
+    const float luminance = luminanceOf(colour);
+    if (!(luminance > liftedBlackThreshold)) {
+        return colour;
+    }
+
+    float stops = 0.0;
+    if (plan.fineReduction != 0u) {
+        stops += plan.textureAmount * softLimit(logLuminance - upsampledFine(at), textureLimitStops);
+    }
+    if (plan.clarityAmount != 0.0) {
+        const float limited =
+            softLimit(upsampledCoarse(coarseOfCells, at) - upsampledCoarse(coarseOfBase, at),
+                      clarityLimitStops);
+        const float perceptual = toPerceptual(clampExact(luminance, 0.0, 1.0));
+        stops += plan.clarityAmount * midtoneWeight(perceptual) * limited;
+    }
+    const float gain = exp2(stops);
+    colour = vec3(colour.x * gain, colour.y * gain, colour.z * gain);
+    if (plan.dehazeAmount == 0.0) {
+        return colour;
+    }
+
+    const float toned = luminance * gain;
+    const float open = 1.0 - smoothStep(0.75, 1.25, toned);
+    const float haze = upsampledCoarse(coarseOfHaze, at);
+    float hazy = 0.0;
+    if (plan.dehazeAmount > 0.0) {
+        hazy = exp2(min(haze - upsampledCoarse(coarseOfCells, at), 0.0)) * open;
+        const float keep = 1.0 - plan.dehazeAmount * dehazeStrength * hazy;
+        colour = vec3(colour.x * keep, colour.y * keep, colour.z * keep);
+    } else {
+        const float mean = toned * exp2(min(haze - logLuminance, dehazeMeanLimitStops));
+        const float veil = open > 0.0 ? -plan.dehazeAmount * dehazeVeil * open * mean : 0.0;
+        hazy = veil > 0.0 ? veil / (toned + veil) : 0.0;
+        colour = vec3(colour.x + veil, colour.y + veil, colour.z + veil);
+    }
+    const float chroma = plan.dehazeAmount * dehazeChroma * hazy;
+    return chroma == 0.0 ? colour : applySaturation(colour, chroma);
+}
+
 vec3 applyVibrance(vec3 colour, float amount) {
     vec3 lab = toOklab(colour);
     const float chroma = sqrt(lab.y * lab.y + lab.z * lab.z);
@@ -516,11 +681,14 @@ const uint probeAfterShoulder = 4u;
 const uint probeAfterCurves = 5u;
 
 void main() {
-    const vec4 texel = texelFetch(source, ivec2(gl_FragCoord.xy), 0);
+    const ivec2 at = ivec2(gl_FragCoord.xy);
+    const vec4 texel = texelFetch(source, at, 0);
 
     // developPixel, with a stop after the stage a probe names. Alpha is not
-    // developed; it goes through as it came.
+    // developed; it goes through as it came. Presence measures the source
+    // colour, before white balance and exposure.
     vec3 colour = texel.rgb;
+    const float logLuminance = plan.presence != 0u ? presenceLogLuminance(colour) : 0.0;
     colour = vec3(plan.toWorking[0].x * colour.x + plan.toWorking[0].y * colour.y +
                       plan.toWorking[0].z * colour.z,
                   plan.toWorking[1].x * colour.x + plan.toWorking[1].y * colour.y +
@@ -540,6 +708,7 @@ void main() {
     }
 
     colour = shapeTone(colour);
+    colour = applyPresence(colour, logLuminance, at);
     if (plan.probe == probeAfterTone) {
         fragColor = vec4(colour, texel.a);
         return;

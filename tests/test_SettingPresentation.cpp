@@ -36,6 +36,7 @@ std::vector<std::string_view> slidingKeys() {
     std::vector<std::string_view> keys(toneKeys().begin(), toneKeys().end());
     keys.insert(keys.end(), whiteBalanceKeys().begin(), whiteBalanceKeys().end());
     keys.insert(keys.end(), colorKeys().begin(), colorKeys().end());
+    keys.insert(keys.end(), presenceKeys().begin(), presenceKeys().end());
     keys.insert(keys.end(), colorGradingKeys().begin(), colorGradingKeys().end());
     keys.insert(keys.end(), noiseReductionKeys().begin(), noiseReductionKeys().end());
     keys.insert(keys.end(), effectsKeys().begin(), effectsKeys().end());

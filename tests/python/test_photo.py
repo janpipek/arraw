@@ -76,7 +76,8 @@ def find(settings, name):
         return getattr(settings.tone_curve, name.removeprefix("tone_curve").lstrip("_") or "luma")
     if name.startswith("gray_"):
         return getattr(settings.black_and_white, name.removeprefix("gray_"))
-    for group in (settings.color, settings.tone, settings.geometry, settings.black_and_white):
+    for group in (settings.color, settings.tone, settings.presence, settings.geometry,
+                  settings.black_and_white):
         if hasattr(group, name):
             return getattr(group, name)
         if name.startswith("crop_") and hasattr(group, "crop"):

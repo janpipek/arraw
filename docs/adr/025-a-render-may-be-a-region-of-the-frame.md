@@ -78,3 +78,10 @@ so a region is still the crop of the whole render, bit for bit, and needs no
 margin. When the earlier stages are restricted to a region's footprint,
 `denoiseReach(plan.denoise)` gives the margin in source pixels the Denoise
 pass needs around it.
+
+## Note, 2026-10-06
+
+The Presence context is made from the whole source ([ADR 041](041-texture-clarity-and-dehaze-read-a-context-of-log-luminance.md)), so a
+region with Texture, Clarity or Dehaze is still the crop of the whole render,
+bit for bit. `presenceReach(plan)` is the margin a footprint-restricted render
+would need for it.

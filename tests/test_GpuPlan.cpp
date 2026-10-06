@@ -333,3 +333,65 @@ TEST_CASE("The effects block carries the vignette and the crop frame mapping", "
     settings.effects.vignette.amount = 0.0F;
     REQUIRE(packEffects(planFor(source, DevelopState{settings})).vignettes == 0U);
 }
+
+TEST_CASE("The pointwise block carries Presence and its grids", "[gpu][plan][presence]") {
+    const ImageBuffer source({203, 77}, workingFormat, workingEncoding);
+    DevelopSettings settings;
+    settings.presence = {.texture = 40.0F, .clarity = -20.0F, .dehaze = 0.0F};
+    const ProcessingPlan plan = planFor(source, DevelopState{settings});
+    const GpuPointwiseBlock block = packPointwise(plan);
+    REQUIRE(block.presence == 1U);
+    REQUIRE(block.textureAmount == 0.4F);
+    REQUIRE(block.clarityAmount == -0.2F);
+    REQUIRE(block.dehazeAmount == 0.0F);
+    REQUIRE(block.fineReduction == plan.presence.fine.reduction);
+    REQUIRE(block.coarseReduction == plan.presence.coarse.reduction);
+    REQUIRE(block.fineGridSize == std::array<std::uint32_t, 2>{102, 39});
+    REQUIRE(block.coarseGridSize == std::array<std::uint32_t, 2>{203, 77});
+    REQUIRE(block.presenceLumaRow[3] == 0.0F);
+
+    const GpuPresenceBlock reduce =
+        packPresence(plan.presence, plan.presence.fine, source.size(), PresenceStep::Reduce);
+    REQUIRE(reduce.radius == 0U);
+    REQUIRE(reduce.gridSize == std::array<std::uint32_t, 2>{102, 39});
+    const GpuPresenceBlock blur =
+        packPresence(plan.presence, plan.presence.fine, source.size(), PresenceStep::BlurDown);
+    REQUIRE(blur.radius == plan.presence.fine.radius);
+    REQUIRE(blur.weights[0] == 1.0F);
+    REQUIRE(blur.weights[1] ==
+            denoiseWeights(plan.presence.fine.sigma, plan.presence.fine.radius)[1]);
+    REQUIRE(blur.window == 0U);
+
+    // Dehaze alone: the coarse grids are its, and its minimum carries the window.
+    settings.presence = {.texture = 0.0F, .clarity = 0.0F, .dehaze = 30.0F};
+    const ProcessingPlan hazy = planFor(source, DevelopState{settings});
+    const GpuPointwiseBlock hazyBlock = packPointwise(hazy);
+    REQUIRE(hazyBlock.coarseReduction == hazy.presence.haze.reduction);
+    REQUIRE(hazyBlock.coarseGridSize == std::array<std::uint32_t, 2>{203, 77});
+    const GpuPresenceBlock minimum =
+        packPresence(hazy.presence, hazy.presence.haze, source.size(), PresenceStep::MinimumAcross);
+    REQUIRE(minimum.window == hazy.presence.haze.window);
+    REQUIRE(minimum.window > 0U);
+    REQUIRE(minimum.radius == 0U);
+    // The floor's last blur, kept above the opening, carries the blur's taps.
+    const GpuPresenceBlock last = packPresence(hazy.presence, hazy.presence.haze, source.size(),
+                                               PresenceStep::BlurDownAboveOpening);
+    REQUIRE(last.step == 7U);
+    REQUIRE(last.radius == hazy.presence.haze.radius);
+    REQUIRE(last.weights[1] ==
+            denoiseWeights(hazy.presence.haze.sigma, hazy.presence.haze.radius)[1]);
+
+    // A step of the opening's reconstruction carries neither the window nor the blur.
+    const GpuPresenceBlock reconstruct =
+        packPresence(hazy.presence, hazy.presence.haze, source.size(), PresenceStep::Reconstruct);
+    REQUIRE(reconstruct.step == 8U);
+    REQUIRE(reconstruct.window == 0U);
+    REQUIRE(reconstruct.radius == 0U);
+    REQUIRE(reconstruct.gridSize == std::array<std::uint32_t, 2>{203, 77});
+
+    // Off, the block says so and carries nothing else.
+    const GpuPointwiseBlock off = packPointwise(planFor(source, DevelopState{}));
+    REQUIRE(off.presence == 0U);
+    REQUIRE(off.fineReduction == 0U);
+    REQUIRE(off.coarseReduction == 0U);
+}

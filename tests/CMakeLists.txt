@@ -39,6 +39,7 @@ add_executable(arraw-tests
         test_ColorAdjustments.cpp
         test_ColorGrading.cpp
         test_Denoise.cpp
+        test_Presence.cpp
         test_Effects.cpp
         test_Grain.cpp
         test_GpuContext.cpp
@@ -153,6 +154,7 @@ add_executable(arraw-gpu-tests
         gpu/GpuTesting.h
         gpu/test_GpuAdapters.cpp
         gpu/test_GpuDenoise.cpp
+        gpu/test_GpuPresence.cpp
         gpu/test_GpuDevelop.cpp
         gpu/test_GpuEffects.cpp
         gpu/test_GpuExport.cpp

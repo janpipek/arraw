@@ -9,6 +9,7 @@
 #include "TimingTrace.h"
 
 #include <array>
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -122,6 +123,91 @@ DeviceImage denoiseOnGpu(GpuContext& context, const DeviceImage& source, const D
     return context.render(GpuPass::DenoiseCombine, bytesOf(block), inputs, size, encoding);
 }
 
+/// @brief Runs one step of the Presence context on a device, into a one-channel target.
+/// @param limit The grid the step bounds its result by: the opened grid
+/// ::arraw::PresenceStep::BlurDownAboveOpening keeps above, the cells
+/// ::arraw::PresenceStep::Reconstruct keeps below; null for every other step,
+/// where @p from stands in.
+DeviceImage presenceStepOnGpu(GpuContext& context, const PresencePlan& plan,
+                              const PresenceBase& base, ImageSize source, PresenceStep step,
+                              const DeviceImage& from, const DeviceImage* limit = nullptr) {
+    const GpuPresenceBlock block = packPresence(plan, base, source, step);
+    const std::array inputs{from, limit != nullptr ? *limit : from};
+    return context.render(GpuPass::PresenceFilter, bytesOf(block), inputs,
+                          presenceGridSize(base, source), workingEncoding,
+                          {.format = GpuTargetFormat::R32F});
+}
+
+/// @brief Computes one base of the Presence context from its cells on a device, as
+/// ::arraw::presenceContextOf does on the host.
+///
+/// The opening by the window when the base has one, the minimum across and
+/// down then the maximum across and down and the steps of its reconstruction,
+/// then the blur across and down, a render each, the last kept above the
+/// opening when there is one (ADR 041).
+DeviceImage presenceBaseOnGpu(GpuContext& context, const DeviceImage& cells,
+                              const PresencePlan& plan, const PresenceBase& base,
+                              ImageSize source) {
+    if (base.window == 0) {
+        const DeviceImage across =
+            presenceStepOnGpu(context, plan, base, source, PresenceStep::BlurAcross, cells);
+        return presenceStepOnGpu(context, plan, base, source, PresenceStep::BlurDown, across);
+    }
+    DeviceImage opened = cells;
+    opened = presenceStepOnGpu(context, plan, base, source, PresenceStep::MinimumAcross, opened);
+    opened = presenceStepOnGpu(context, plan, base, source, PresenceStep::MinimumDown, opened);
+    opened = presenceStepOnGpu(context, plan, base, source, PresenceStep::MaximumAcross, opened);
+    opened = presenceStepOnGpu(context, plan, base, source, PresenceStep::MaximumDown, opened);
+    for (std::uint32_t index = 0; index < base.reconstruction; ++index) {
+        opened = presenceStepOnGpu(context, plan, base, source, PresenceStep::Reconstruct, opened,
+                                   &cells);
+    }
+    const DeviceImage across =
+        presenceStepOnGpu(context, plan, base, source, PresenceStep::BlurAcross, opened);
+    return presenceStepOnGpu(context, plan, base, source, PresenceStep::BlurDownAboveOpening,
+                             across, &opened);
+}
+
+/// @brief The Presence context on a device: one image a grid, the pass's input for one that is
+/// off.
+struct DevicePresence {
+    DeviceImage fine;
+    DeviceImage coarse;
+    DeviceImage coarseCells;
+    DeviceImage haze;
+};
+
+/// @brief Computes the Presence context of the pointwise pass's input on a device.
+///
+/// Texture's base from its own cells; Clarity's base and Dehaze's from one
+/// reduction to the coarse cells, which Clarity and a positive Dehaze also read
+/// unblurred.
+DevicePresence presenceOnGpu(GpuContext& context, const DeviceImage& input,
+                             const PresencePlan& plan) {
+    const ImageSize size = input.size();
+    DevicePresence result{input, input, input, input};
+    if (plan.fine.active()) {
+        const DeviceImage cells =
+            presenceStepOnGpu(context, plan, plan.fine, size, PresenceStep::Reduce, input);
+        result.fine = presenceBaseOnGpu(context, cells, plan, plan.fine, size);
+    }
+    if (plan.coarse.active() || plan.haze.active()) {
+        const PresenceBase& shared = plan.coarse.active() ? plan.coarse : plan.haze;
+        const DeviceImage cells =
+            presenceStepOnGpu(context, plan, shared, size, PresenceStep::Reduce, input);
+        if (plan.coarse.active()) {
+            result.coarse = presenceBaseOnGpu(context, cells, plan, plan.coarse, size);
+        }
+        if (plan.coarse.active() || plan.haze.window != 0) {
+            result.coarseCells = cells;
+        }
+        if (plan.haze.active()) {
+            result.haze = presenceBaseOnGpu(context, cells, plan, plan.haze, size);
+        }
+    }
+    return result;
+}
+
 } // namespace
 
 DeviceImage uploadSource(GpuContext& context, const ImageBuffer& source) {
@@ -185,6 +271,10 @@ PassResult runPasses(GpuContext& context, std::optional<Stage> done, DeviceImage
         done = Stage::Denoise;
     }
     if (*done == Stage::Denoise && stopAfter != Stage::Denoise) {
+        // The block's grid sizes come from the plan's geometry and the bases are rendered
+        // from the image: they must be of one size, or Presence would misread its grids.
+        assert(!plan.presence.active() ||
+               (plan.geometry && plan.geometry->sourceSize == image.size()));
         const GpuPointwiseBlock pointwise = packPointwise(plan, probe);
         // The curves' tables are uploaded here, once per development that runs
         // this pass: a resumed one starts after it and pays nothing. With no
@@ -196,7 +286,12 @@ PassResult runPasses(GpuContext& context, std::optional<Stage> done, DeviceImage
             tones.luma.active || tones.red.active || tones.green.active || tones.blue.active;
         const DeviceImage curves =
             anyCurve && probeReadsCurves(probe) ? context.upload(packToneCurves(tones)) : image;
-        const std::array inputs{image, curves};
+        // The Presence context is worked out from this pass's input every time
+        // the pass runs, rather than kept with a checkpoint (ADR 041); with
+        // Presence off nothing is rendered and the image stands in for every grid.
+        const DevicePresence around = presenceOnGpu(context, image, plan.presence);
+        const std::array inputs{image,      curves, around.fine, around.coarse, around.coarseCells,
+                                around.haze};
         image = context.render(GpuPass::Pointwise, bytesOf(pointwise), inputs, image.size(),
                                workingEncoding);
         done = Stage::Pointwise;

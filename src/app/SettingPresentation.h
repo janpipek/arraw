@@ -76,6 +76,12 @@ struct SettingPresentation {
 /// @brief Gives the keys of the Color group's rows (Saturation, Vibrance), in panel order.
 [[nodiscard]] std::span<const std::string_view> colorKeys() noexcept;
 
+/// @brief Gives the keys of the Presence group's rows (Texture, Clarity, Dehaze), in panel order.
+///
+/// Lightroom's Basic panel shows them under Presence beside Vibrance and Saturation; here those
+/// two stay in the Colour group, which the Black & White treatment hides.
+[[nodiscard]] std::span<const std::string_view> presenceKeys() noexcept;
+
 /// @brief Tells how many pages the HSL box has: Hue, Saturation and Luminance.
 inline constexpr int hslPageCount = 3;
 

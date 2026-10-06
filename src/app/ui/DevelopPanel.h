@@ -178,6 +178,9 @@ private:
     /// @brief Builds the Color group, Saturation and Vibrance.
     QWidget* buildColorGroup();
 
+    /// @brief Builds the Presence group: Texture, Clarity and Dehaze.
+    QWidget* buildPresenceGroup();
+
     /// @brief Builds the Colour Grading group: a hue and saturation per tonal zone, Balance,
     /// Blending.
     QWidget* buildColorGradingGroup();

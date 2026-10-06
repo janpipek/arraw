@@ -183,6 +183,15 @@ def test_noise_reduction_defaults_construct_flat_and_round_trip_json():
     assert back == flat
 
 
+def test_presence_defaults_construct_flat_and_round_trip_json():
+    assert arraw.DevelopSettings().presence == arraw.PresenceSettings(
+        texture=0.0, clarity=0.0, dehaze=0.0)
+    flat = arraw.DevelopSettings().with_(texture=20, clarity=-35, dehaze=60)
+    assert flat.presence == arraw.PresenceSettings(texture=20.0, clarity=-35.0, dehaze=60.0)
+    assert arraw.DevelopSettings.from_json(flat.to_json()) == flat
+    assert '"clarity": -35' in flat.to_json()
+
+
 def test_choose_grain_seed_is_the_one_policy():
     off = arraw.GrainSettings()
     on = arraw.GrainSettings(amount=30.0)

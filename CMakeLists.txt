@@ -122,6 +122,7 @@ add_library(arraw STATIC
         include/EffectsSettings.h
         include/HslSettings.h
         include/NoiseReductionSettings.h
+        include/PresenceSettings.h
         src/core/ColorAdjustments.h
         src/core/ColorAdjustments.cpp
         src/core/ColorGrading.h
@@ -129,6 +130,9 @@ add_library(arraw STATIC
         src/core/ColorSettings.cpp
         src/core/Denoise.h
         src/core/Denoise.cpp
+        src/core/Presence.h
+        src/core/Presence.cpp
+        src/core/ReducedGrid.h
         src/core/Effects.h
         src/core/Effects.cpp
         src/core/GrainModels.h
@@ -287,7 +291,8 @@ qt_add_shaders(arraw-gpu "arraw-shaders"
         src/gpu/shaders/resize_down_opaque.frag
         src/gpu/shaders/effects.frag
         src/gpu/shaders/denoise_filter.frag
-        src/gpu/shaders/denoise_combine.frag)
+        src/gpu/shaders/denoise_combine.frag
+        src/gpu/shaders/presence_filter.frag)
 target_link_libraries(arraw-gpu PUBLIC arraw PRIVATE Qt6::Gui Qt6::GuiPrivate)
 set_target_properties(arraw-gpu PROPERTIES AUTOMOC OFF)
 # QRhi declares its Vulkan backend only where vulkan/vulkan.h is visible, so a

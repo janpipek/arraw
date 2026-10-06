@@ -10,7 +10,6 @@
 #include <QKeySequence>
 #include <QMainWindow>
 #include <QMenu>
-#include <QMenuBar>
 
 namespace arraw::app {
 
@@ -25,11 +24,9 @@ const QKeyCombination labelKeys[] = {Qt::SHIFT | Qt::Key_R, Qt::SHIFT | Qt::Key_
 
 } // namespace
 
-CullingActions::CullingActions(QMainWindow& window, FilmStrip& strip)
+CullingActions::CullingActions(QMainWindow& window, FilmStrip& strip, QMenu& menu)
     : QObject(&window), window_(window), strip_(strip) {
-    QMenu* menu = window.menuBar()->addMenu(tr("&Image"));
-
-    QMenu* rateMenu = menu->addMenu(tr("&Rating"));
+    QMenu* rateMenu = menu.addMenu(tr("&Rating"));
     const auto addRating = [&](const QString& text, int rating, Qt::Key key) {
         QAction* action = rateMenu->addAction(text);
         action->setShortcut(QKeySequence(key));
@@ -48,7 +45,7 @@ CullingActions::CullingActions(QMainWindow& window, FilmStrip& strip)
     // The menu is a radio group whose items set a label, or none. The keys
     // toggle instead (main's behaviour: the red key on a red shot clears it), so they are
     // separate window actions; the menu only shows them, after a tab.
-    QMenu* labelMenu = menu->addMenu(tr("&Label"));
+    QMenu* labelMenu = menu.addMenu(tr("&Label"));
     auto* labelGroup = new QActionGroup(labelMenu);
     labelGroup->setExclusive(true);
     const auto addLabel = [&](const QString& text, std::optional<ColorLabel> label) {
@@ -74,17 +71,17 @@ CullingActions::CullingActions(QMainWindow& window, FilmStrip& strip)
     labelMenu->addSeparator();
     addLabel(tr("&None"), std::nullopt);
 
-    menu->addSeparator();
-    QAction* previous = menu->addAction(tr("&Previous Photo"));
+    menu.addSeparator();
+    QAction* previous = menu.addAction(tr("&Previous Photo"));
     previous->setShortcuts({QKeySequence(Qt::Key_Left), QKeySequence(Qt::CTRL | Qt::Key_Left)});
     connect(previous, &QAction::triggered, this, [this] { strip_.navigate(-1); });
-    QAction* next = menu->addAction(tr("&Next Photo"));
+    QAction* next = menu.addAction(tr("&Next Photo"));
     next->setShortcuts({QKeySequence(Qt::Key_Right), QKeySequence(Qt::CTRL | Qt::Key_Right)});
     connect(next, &QAction::triggered, this, [this] { strip_.navigate(1); });
     // Stepping needs shots shown, not an active one: from no shot it goes to the first or last.
     // The strip refuses at the ends, so these stay enabled.
 
-    connect(menu, &QMenu::aboutToShow, this, &CullingActions::reflectActiveShot);
+    connect(&menu, &QMenu::aboutToShow, this, &CullingActions::reflectActiveShot);
     connect(&strip, &FilmStrip::activeChanged, this, &CullingActions::reflectActiveShot);
     reflectActiveShot();
 

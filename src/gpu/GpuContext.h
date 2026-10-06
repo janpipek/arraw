@@ -150,10 +150,14 @@ struct GpuDeviceInfo {
 /// another ::arraw::GpuTargetFormat. The shaders live in
 /// `src/gpu/shaders`, compiled at build time.
 enum class GpuPass {
-    Copy,      ///< Copies its input unchanged; no uniforms. The render round trip's proof.
-    Pointwise, ///< The pointwise chain; uniforms are a ::arraw::GpuPointwiseBlock, inputs the image
-               ///< and the curves.
-    Geometry,  ///< The geometry resample; uniforms are a ::arraw::GpuGeometryBlock.
+    Copy, ///< Copies its input unchanged; no uniforms. The render round trip's proof.
+    /// @brief The pointwise chain; uniforms are a ::arraw::GpuPointwiseBlock.
+    ///
+    /// Inputs are the image, the curves, and the Presence context's fine base,
+    /// coarse base, coarse cells and haze base (bindings 0 and 2 to 6); the
+    /// image stands in for any the block says are not read.
+    Pointwise,
+    Geometry, ///< The geometry resample; uniforms are a ::arraw::GpuGeometryBlock.
 
     /// @brief The horizontal half of a resize, one ::arraw::ResizePlane per render.
     ///
@@ -194,10 +198,16 @@ enum class GpuPass {
     /// ::arraw::GpuDenoiseBlock, inputs the source, the blurred ratio grid and the
     /// filtered luminance (bindings 0, 2 and 3), the source standing in for a half that is off.
     DenoiseCombine,
+
+    /// @brief One step of one base of the Presence context, the ::arraw::PresenceStep its
+    /// ::arraw::GpuPresenceBlock names; inputs the source or the step before's result, and the
+    /// opened grid a floor's last blur keeps above (bindings 0 and 2), the first input standing
+    /// in for the second in every other step.
+    PresenceFilter,
 };
 
 /// @brief Number of ::arraw::GpuPass values, for tables indexed by one.
-inline constexpr std::size_t gpuPassCount = 10;
+inline constexpr std::size_t gpuPassCount = 11;
 
 /// @brief Channels a pass's render target stores, each a 32-bit float.
 ///

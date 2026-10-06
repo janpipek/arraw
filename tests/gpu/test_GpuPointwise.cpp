@@ -1013,7 +1013,8 @@ TEST_CASE("The pointwise pass writes the CPU's value after each stage", "[gpu][p
             }
 
             const GpuPointwiseBlock block = packPointwise(plan, probe.probe);
-            const std::array inputs{input, curves};
+            // No Presence: its four grids are not read, and the image stands in.
+            const std::array inputs{input, curves, input, input, input, input};
             const ImageBuffer actual = context
                                            .render(GpuPass::Pointwise, bytesOf(block), inputs,
                                                    source.size(), workingEncoding)

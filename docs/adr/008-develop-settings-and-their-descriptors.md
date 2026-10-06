@@ -204,3 +204,8 @@ A descriptor's default stays the one of a default-constructed
 `DevelopSettings`, the neutral value every document assumes. What a
 photograph *starts from* can differ by its kind: `defaultStateFor(encoding)`
 gives a RAW colour noise reduction 25 ([ADR 039](039-noise-reduction-is-the-first-pass-and-reads-the-as-shot-luminance.md)). The table is not changed for it.
+
+## Note, 2026-10-06
+
+`SettingGroup::Presence` holds Texture, Clarity and Dehaze
+([ADR 041](041-texture-clarity-and-dehaze-read-a-context-of-log-luminance.md)), appended to the enumeration so that no value moves.

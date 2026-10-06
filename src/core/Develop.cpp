@@ -3,8 +3,10 @@
 #include "CheckpointState.h"
 #include "Denoise.h"
 #include "Effects.h"
+#include "Presence.h"
 #include "ProcessingPlan.h"
 #include "Resample.h"
+#include "RowBands.h"
 #include "SampleConversion.h"
 #include "Taps.h"
 #include "TimingTrace.h"
@@ -17,6 +19,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <variant>
 
@@ -32,52 +35,90 @@ namespace {
 /// transparency, and a source that carried some keeps exactly what it had.
 /// ::arraw::ResizePlan::opaque, scanned from the source, relies on this: were
 /// alpha ever changed here, it would no longer describe the developed pixels.
-/// @param chain What one colour goes through: developPixel, or a tap's prefix.
+/// @param chain What one colour goes through: developPixel, or a tap's prefix,
+/// called with the colour and the pixel's ::arraw::PixelContext.
+/// @param context The Presence context of @p source, or null when Presence is off.
 template <typename Sample, typename Chain>
-void developSamples(const ImageBuffer& source, ImageBuffer& result, const Chain& chain) {
+void developSamples(const ImageBuffer& source, ImageBuffer& result, const Chain& chain,
+                    const PresenceContext* context) {
     const auto input = source.samples<Sample>();
     const auto output = result.samples<float>();
     const std::size_t channels = channelCount(source.format());
-    const auto pixels = static_cast<std::size_t>(source.size().pixelCount());
+    const ImageSize size = source.size();
 
-    for (std::size_t pixel = 0; pixel < pixels; ++pixel) {
-        const auto* in = &input[pixel * channels];
-        auto* out = &output[pixel * 4];
+    // Every pixel depends on its own colour and the context alone, so bands of
+    // rows on threads give the single-threaded bits (ADR 041).
+    detail::forEachRowBand(size.height, size.width, [&](std::uint32_t first, std::uint32_t last) {
+        std::optional<PresenceSampler> sampler;
+        if (context != nullptr) {
+            sampler.emplace(*context, size);
+        }
+        for (std::uint32_t y = first; y < last; ++y) {
+            if (sampler) {
+                sampler->setRow(y);
+            }
+            for (std::uint32_t x = 0; x < size.width; ++x) {
+                const std::size_t pixel = static_cast<std::size_t>(y) * size.width + x;
+                const auto* in = &input[pixel * channels];
+                auto* out = &output[pixel * 4];
 
-        const Colour developed = chain({toUnit(in[0]), toUnit(in[1]), toUnit(in[2])});
-        out[0] = developed[0];
-        out[1] = developed[1];
-        out[2] = developed[2];
-        out[3] = channels == 4 ? toUnit(in[3]) : 1.0F;
-    }
+                const PixelContext around = sampler ? sampler->at(x) : PixelContext{};
+                const Colour developed =
+                    chain({toUnit(in[0]), toUnit(in[1]), toUnit(in[2])}, around);
+                out[0] = developed[0];
+                out[1] = developed[1];
+                out[2] = developed[2];
+                out[3] = channels == 4 ? toUnit(in[3]) : 1.0F;
+            }
+        }
+    });
 }
 
 /// @brief Runs the pointwise chain, or a tap's prefix of it, over a source into the working
 /// format.
-template <typename Chain> ImageBuffer runPointwise(const ImageBuffer& source, const Chain& chain) {
+///
+/// The pass's input is also what the Presence context is computed from, here,
+/// when the plan has Presence on: from the source after noise reduction, so
+/// the context is recomputed with the chain rather than carried by a
+/// checkpoint (ADR 041).
+template <typename Chain>
+ImageBuffer runPointwise(const ImageBuffer& source, const ProcessingPlan& plan,
+                         const Chain& chain) {
     ImageBuffer result(source.size(), workingFormat, workingEncoding);
     result.setPixelScale(source.pixelScale());
+    std::optional<PresenceContext> context;
+    if (plan.presence.active()) {
+        context = presenceContextOf(source, plan.presence);
+    }
+    const PresenceContext* around = context ? &*context : nullptr;
     switch (source.format()) {
     case PixelFormat::RgbU8:
     case PixelFormat::RgbaU8:
-        developSamples<std::uint8_t>(source, result, chain);
+        developSamples<std::uint8_t>(source, result, chain, around);
         break;
     case PixelFormat::RgbU16:
     case PixelFormat::RgbaU16:
-        developSamples<std::uint16_t>(source, result, chain);
+        developSamples<std::uint16_t>(source, result, chain, around);
         break;
     case PixelFormat::RgbF32:
     case PixelFormat::RgbaF32:
-        developSamples<float>(source, result, chain);
+        developSamples<float>(source, result, chain, around);
         break;
     }
     return result;
 }
 
+/// @brief The whole chain, as the traversal calls it.
+auto developChain(const ProcessingPlan& plan) {
+    return [&plan](Colour colour, const PixelContext& context) {
+        return developPixel(plan, colour, context);
+    };
+}
+
 /// @brief Runs the pointwise chain over a source, into the working format.
 ImageBuffer developPointwise(const ImageBuffer& source, const ProcessingPlan& plan) {
     const detail::TimingSpan timing("cpu.pointwise");
-    return runPointwise(source, [&plan](Colour colour) { return developPixel(plan, colour); });
+    return runPointwise(source, plan, developChain(plan));
 }
 
 /// @brief Runs the Denoise pass that a plan resolved, or copies the source as it stands.
@@ -102,16 +143,15 @@ template <typename Chain>
 ImageBuffer pointwiseFromSource(const ImageBuffer& source, const ProcessingPlan& plan,
                                 const Chain& chain) {
     if (!plan.denoise.active()) {
-        return runPointwise(source, chain);
+        return runPointwise(source, plan, chain);
     }
-    return runPointwise(applyDenoise(source, plan.denoise), chain);
+    return runPointwise(applyDenoise(source, plan.denoise), plan, chain);
 }
 
 /// @brief Runs noise reduction and the pointwise chain over a source, into the working format.
 ImageBuffer developFromSource(const ImageBuffer& source, const ProcessingPlan& plan) {
     const detail::TimingSpan timing("cpu.pointwise");
-    return pointwiseFromSource(source, plan,
-                               [&plan](Colour colour) { return developPixel(plan, colour); });
+    return pointwiseFromSource(source, plan, developChain(plan));
 }
 
 /// @brief Copies a rectangle of working-format pixels out of a frame.
@@ -237,8 +277,10 @@ ImageBuffer arraw::sample(const ImageBuffer& source, const DevelopState& state, 
     static_cast<void>(tapEncoding(tap));
     const detail::TimingSpan timing("cpu.sample");
     const ProcessingPlan plan = planFor(source, state, request);
-    ImageBuffer tapped = pointwiseFromSource(
-        source, plan, [&plan, tap](Colour colour) { return developToTap(plan, colour, tap); });
+    ImageBuffer tapped =
+        pointwiseFromSource(source, plan, [&plan, tap](Colour colour, const PixelContext& context) {
+            return developToTap(plan, colour, tap, context);
+        });
     // The same geometry and resize as a render, in linear light (ADR 020), so
     // the sample covers the frame the render shows; then the tap's encoding.
     const ImageBuffer framed = resizeBy(applyGeometry(std::move(tapped), *plan.geometry), plan);

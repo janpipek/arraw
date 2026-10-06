@@ -11,12 +11,13 @@
 class QAction;
 class QEvent;
 class QMainWindow;
+class QMenu;
 
 namespace arraw::app {
 
 class FilmStrip;
 
-/// @brief The Image menu: rating, colour labels and stepping between shots.
+/// @brief The Photo menu's items for rating, colour labels and stepping between shots.
 ///
 /// Builds the actions with the keys of main's film strip for ratings (0 to 5, X), Shift with
 /// R Y G B P for the colour labels (R alone is the crop mode, ADR 040), and the arrow keys,
@@ -30,10 +31,11 @@ class CullingActions : public QObject {
     Q_OBJECT
     Q_DISABLE_COPY_MOVE(CullingActions)
 public:
-    /// @brief Adds the Image menu to a window's menu bar.
-    /// @param window Window whose menu bar gets the menu, and whose shortcuts these are.
+    /// @brief Appends the items to a menu of a window.
+    /// @param window Window whose shortcuts these are.
     /// @param strip Strip the actions act on.
-    CullingActions(QMainWindow& window, FilmStrip& strip);
+    /// @param menu Menu that gets the items, the Photo menu.
+    CullingActions(QMainWindow& window, FilmStrip& strip, QMenu& menu);
 
     /// @brief Stops filtering the application's events.
     ~CullingActions() override;

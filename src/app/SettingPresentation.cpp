@@ -21,6 +21,8 @@ constexpr std::array<std::string_view, 2> whiteBalanceKeyList{"temperature", "ti
 
 constexpr std::array<std::string_view, 2> colorKeyList{"saturation", "vibrance"};
 
+constexpr std::array<std::string_view, 3> presenceKeyList{"texture", "clarity", "dehaze"};
+
 constexpr std::array<std::array<std::string_view, 8>, hslPageCount> hslKeyLists{{
     {"hueRed", "hueOrange", "hueYellow", "hueGreen", "hueAqua", "hueBlue", "huePurple",
      "hueMagenta"},
@@ -116,6 +118,30 @@ const std::vector<Row>& table() {
                            1.0,
                            tr("Makes the muted colours more or less intense, leaving the vivid "
                               "ones alone.")}},
+                     });
+        built.insert(built.end(),
+                     {
+                         {"texture",
+                          {tr("Texture"),
+                           {},
+                           0,
+                           1.0,
+                           tr("Brings out (positive) or smooths (negative) fine detail such as "
+                              "skin, foliage and fabric. A small preview shows it coarser.")}},
+                         {"clarity",
+                          {tr("Clarity"),
+                           {},
+                           0,
+                           1.0,
+                           tr("Adds (positive) or takes away (negative) local contrast in the "
+                              "midtones, at the scale of shapes rather than fine detail.")}},
+                         {"dehaze",
+                          {tr("Dehaze"),
+                           {},
+                           0,
+                           1.0,
+                           tr("Removes (positive) or adds (negative) atmospheric haze: the veil "
+                              "over distant parts of a scene, with some contrast and colour.")}},
                      });
         struct Band {
             std::string_view name;
@@ -281,6 +307,10 @@ std::span<const std::string_view> whiteBalanceKeys() noexcept {
 
 std::span<const std::string_view> colorKeys() noexcept {
     return colorKeyList;
+}
+
+std::span<const std::string_view> presenceKeys() noexcept {
+    return presenceKeyList;
 }
 
 std::span<const std::string_view> hslKeys(int page) {

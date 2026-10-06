@@ -328,6 +328,8 @@ class SettingGroup(enum.Enum):
 
     DETAIL = 8
 
+    PRESENCE = 9
+
 class Applicability(enum.Enum):
     """Whether a setting means anything for every photograph."""
 
@@ -833,6 +835,33 @@ class EffectsSettings:
     def replace(self, **kwargs) -> EffectsSettings:
         """Return a copy with the given attributes replaced."""
 
+class PresenceSettings:
+    """
+    Texture, Clarity and Dehaze: local contrast after the tone controls, each -100 to 100.
+
+    Texture acts on detail a few sensor pixels across, Clarity on the midtones' contrast at a hundredth of the long edge, Dehaze removes (or adds) a veil with some contrast and colour.
+    """
+
+    def __init__(self, *, texture: float | None = 0.0, clarity: float | None = 0.0, dehaze: float | None = 0.0) -> None: ...
+
+    @property
+    def texture(self) -> float: ...
+
+    @property
+    def clarity(self) -> float: ...
+
+    @property
+    def dehaze(self) -> float: ...
+
+    def __eq__(self, arg: PresenceSettings, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> PresenceSettings:
+        """Return a copy with the given attributes replaced."""
+
 class NoiseReductionSettings:
     """
     Luminance and colour noise reduction, run on the decoded photograph first.
@@ -874,7 +903,7 @@ def choose_grain_seed(previous: GrainSettings, next: GrainSettings, entropy: Cal
 class DevelopSettings:
     """Photographic settings of one photograph."""
 
-    def __init__(self, *, color: ColorSettings | None = None, geometry: GeometrySettings | None = None, tone: ToneSettings | None = None, hsl: HslSettings | None = None, black_and_white: BlackAndWhiteSettings | None = None, tone_curve: ToneCurveSettings | None = None, color_grading: ColorGradingSettings | None = None, effects: EffectsSettings | None = None, noise_reduction: NoiseReductionSettings | None = None) -> None: ...
+    def __init__(self, *, color: ColorSettings | None = None, geometry: GeometrySettings | None = None, tone: ToneSettings | None = None, presence: PresenceSettings | None = None, hsl: HslSettings | None = None, black_and_white: BlackAndWhiteSettings | None = None, tone_curve: ToneCurveSettings | None = None, color_grading: ColorGradingSettings | None = None, effects: EffectsSettings | None = None, noise_reduction: NoiseReductionSettings | None = None) -> None: ...
 
     @property
     def color(self) -> ColorSettings: ...
@@ -884,6 +913,9 @@ class DevelopSettings:
 
     @property
     def tone(self) -> ToneSettings: ...
+
+    @property
+    def presence(self) -> PresenceSettings: ...
 
     @property
     def hsl(self) -> HslSettings: ...

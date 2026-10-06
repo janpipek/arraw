@@ -332,6 +332,8 @@ std::string_view passName(GpuPass pass) {
         return "denoise-filter";
     case GpuPass::DenoiseCombine:
         return "denoise-combine";
+    case GpuPass::PresenceFilter:
+        return "presence-filter";
     }
     return "unknown";
 }
@@ -359,6 +361,8 @@ QString fragmentShaderOf(GpuPass pass) {
         return QStringLiteral(":/arraw/shaders/denoise_filter.frag.qsb");
     case GpuPass::DenoiseCombine:
         return QStringLiteral(":/arraw/shaders/denoise_combine.frag.qsb");
+    case GpuPass::PresenceFilter:
+        return QStringLiteral(":/arraw/shaders/presence_filter.frag.qsb");
     }
     return {};
 }
@@ -382,6 +386,8 @@ std::size_t uniformSizeOf(GpuPass pass) {
     case GpuPass::DenoiseFilter:
     case GpuPass::DenoiseCombine:
         return sizeof(GpuDenoiseBlock);
+    case GpuPass::PresenceFilter:
+        return sizeof(GpuPresenceBlock);
     }
     return 0;
 }
@@ -397,9 +403,11 @@ std::size_t inputCountOf(GpuPass pass) {
     case GpuPass::DenoiseCombine:
         return 3;
     case GpuPass::Pointwise:
+        return 6;
     case GpuPass::ResizeAcross:
     case GpuPass::ResizeAcrossOpaque:
     case GpuPass::ResizeDownOpaque:
+    case GpuPass::PresenceFilter:
         return 2;
     case GpuPass::ResizeDown:
         return 4;

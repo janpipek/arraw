@@ -77,6 +77,26 @@ GpuDenoiseBlock packDenoise(const DenoisePlan& plan, ImageSize source, DenoiseSt
     return block;
 }
 
+GpuPresenceBlock packPresence(const PresencePlan& plan, const PresenceBase& base, ImageSize source,
+                              PresenceStep step) {
+    GpuPresenceBlock block;
+    block.step = static_cast<std::uint32_t>(step);
+    block.reduction = std::max<std::uint32_t>(base.reduction, 1U);
+    block.lumaRow = {plan.lumaRow[0], plan.lumaRow[1], plan.lumaRow[2], 0.0F};
+    block.sourceSize = {source.width, source.height};
+    const ImageSize grid = presenceGridSize(base, source);
+    block.gridSize = {grid.width, grid.height};
+    if (step == PresenceStep::BlurAcross || step == PresenceStep::BlurDown ||
+        step == PresenceStep::BlurDownAboveOpening) {
+        block.radius = base.radius;
+        const DenoiseWeights weights = denoiseWeights(base.sigma, base.radius);
+        std::copy(weights.begin(), weights.end(), block.weights.begin());
+    } else if (step != PresenceStep::Reduce && step != PresenceStep::Reconstruct) {
+        block.window = base.window;
+    }
+    return block;
+}
+
 GpuEffectsBlock packEffects(const ProcessingPlan& plan) {
     const FrameMapping mapping = frameMappingOf(plan);
     const VignettePlan& vignette = plan.effects.vignette;
@@ -151,6 +171,25 @@ GpuPointwiseBlock packPointwise(const ProcessingPlan& plan, PointwiseProbe probe
     block.curvesRed = curves.red.active ? 1U : 0U;
     block.curvesGreen = curves.green.active ? 1U : 0U;
     block.curvesBlue = curves.blue.active ? 1U : 0U;
+    const PresencePlan& presence = plan.presence;
+    if (presence.active()) {
+        block.presence = 1U;
+        block.presenceLumaRow = {presence.lumaRow[0], presence.lumaRow[1], presence.lumaRow[2],
+                                 0.0F};
+        block.textureAmount = presence.texture;
+        block.clarityAmount = presence.clarity;
+        block.dehazeAmount = presence.dehaze;
+        block.fineReduction = presence.fine.reduction;
+        block.coarseReduction = presence.coarseReduction();
+        // The grids are over the pass's input, the source, whose size the
+        // geometry block records.
+        const ImageSize source = plan.geometry ? plan.geometry->sourceSize : ImageSize{};
+        const ImageSize fine = presenceGridSize(presence.fine, source);
+        const ImageSize coarse =
+            presenceGridSize(PresenceBase{.reduction = presence.coarseReduction()}, source);
+        block.fineGridSize = {fine.width, fine.height};
+        block.coarseGridSize = {coarse.width, coarse.height};
+    }
     block.probe = static_cast<std::uint32_t>(probe);
     return block;
 }

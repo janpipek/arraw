@@ -117,23 +117,24 @@ TEST_CASE("The descriptor table has a row per leaf, matching the structs", "[set
     STATIC_REQUIRE(test::fieldCount<GrainSettings> == 5);
     STATIC_REQUIRE(test::fieldCount<EffectsSettings> == 2);
     STATIC_REQUIRE(test::fieldCount<NoiseReductionSettings> == 5);
-    STATIC_REQUIRE(test::fieldCount<DevelopSettings> == 9);
+    STATIC_REQUIRE(test::fieldCount<PresenceSettings> == 3);
+    STATIC_REQUIRE(test::fieldCount<DevelopSettings> == 10);
 
     // Leaves: tone + color + geometry (crop is a group of two leaves) + hsl
     // (eight bands of three leaves) + black and white + the four tone curves +
     // colour grading (three zones of two leaves, balance and blending) +
     // effects (the vignette's three leaves and the grain's five) + noise
-    // reduction.
-    STATIC_REQUIRE(developSettingDescriptors.size() ==
-                   test::fieldCount<ToneSettings> + test::fieldCount<ColorSettings> +
-                       test::fieldCount<GeometrySettings> - 1 + test::fieldCount<CropSettings> +
-                       test::fieldCount<HslSettings> * test::fieldCount<HueBand> +
-                       test::fieldCount<BlackAndWhiteSettings> +
-                       test::fieldCount<ToneCurveSettings> + 3 * test::fieldCount<GradeZone> +
-                       test::fieldCount<ColorGradingSettings> - 3 +
-                       test::fieldCount<VignetteSettings> + test::fieldCount<GrainSettings> +
-                       test::fieldCount<NoiseReductionSettings>);
-    STATIC_REQUIRE(developSettingDescriptors.size() == 76);
+    // reduction + presence.
+    STATIC_REQUIRE(
+        developSettingDescriptors.size() ==
+        test::fieldCount<ToneSettings> + test::fieldCount<ColorSettings> +
+            test::fieldCount<GeometrySettings> - 1 + test::fieldCount<CropSettings> +
+            test::fieldCount<HslSettings> * test::fieldCount<HueBand> +
+            test::fieldCount<BlackAndWhiteSettings> + test::fieldCount<ToneCurveSettings> +
+            3 * test::fieldCount<GradeZone> + test::fieldCount<ColorGradingSettings> - 3 +
+            test::fieldCount<VignetteSettings> + test::fieldCount<GrainSettings> +
+            test::fieldCount<NoiseReductionSettings> + test::fieldCount<PresenceSettings>);
+    STATIC_REQUIRE(developSettingDescriptors.size() == 79);
 }
 
 TEST_CASE("The vignette and grain rows run in the Effects pass and always apply", "[settings]") {

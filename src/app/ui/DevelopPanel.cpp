@@ -215,6 +215,15 @@ QWidget* DevelopPanel::buildColorGroup() {
     return group;
 }
 
+QWidget* DevelopPanel::buildPresenceGroup() {
+    auto* group = new QGroupBox(tr("Presence"), this);
+    new QVBoxLayout(group);
+    for (const std::string_view key : presenceKeys()) {
+        addRow(key, group);
+    }
+    return group;
+}
+
 QWidget* DevelopPanel::buildColorGradingGroup() {
     auto* group = new QGroupBox(tr("Colour Grading"), this);
     new QVBoxLayout(group);
@@ -534,6 +543,8 @@ DevelopPanel::DevelopPanel(QWidget* parent) : QWidget(parent) {
         addRow(key, tone);
     }
     addGroup(tone);
+    // Below Tone, as Lightroom's Basic panel has it, and shown in both treatments.
+    addGroup(buildPresenceGroup());
     addGroup(buildToneCurveGroup());
 
     colorGroup_ = buildColorGroup();

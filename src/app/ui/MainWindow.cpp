@@ -225,8 +225,6 @@ void MainWindow::buildMenu() {
     settingsAction->setShortcut(QKeySequence::Preferences);
     connect(settingsAction, &QAction::triggered, this, &MainWindow::showSettings);
 
-    culling_ = new CullingActions(*this, *filmStrip_);
-
     photoMenu_ = menuBar()->addMenu(tr("&Photo"));
     cropAction_ = photoMenu_->addAction(tr("&Crop && Straighten"));
     cropAction_->setShortcut(QKeySequence(Qt::Key_R));
@@ -252,7 +250,19 @@ void MainWindow::buildMenu() {
     addGeometryAction(tr("Flip &Horizontal"), {}, [](CropEditing& editing) { editing.flip(true); });
     addGeometryAction(tr("Flip &Vertical"), {}, [](CropEditing& editing) { editing.flip(false); });
 
+    // Rating, colour labels and stepping follow the geometry in the same menu, as in Lightroom.
+    photoMenu_->addSeparator();
+    culling_ = new CullingActions(*this, *filmStrip_, *photoMenu_);
+
     buildZoomControls();
+}
+
+MainWindow::~MainWindow() {
+    // The panel is deleted by ~QWidget, after the members are gone, and hiding it emits
+    // curveHistogramWantedChanged into a lambda that uses previewRenderer_.
+    if (developPanel_ != nullptr) {
+        developPanel_->disconnect(this);
+    }
 }
 
 void MainWindow::showSettings() {

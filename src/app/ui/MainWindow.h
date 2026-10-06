@@ -51,6 +51,9 @@ class MainWindow : public QMainWindow {
 public:
     explicit MainWindow(QWidget* parent = nullptr);
 
+    /// @brief Cuts the panel's signals off before the members they use are gone.
+    ~MainWindow() override;
+
     /// @brief Opens a startup file or folder, restoring the last one when none is supplied.
     void openInitialPath(const std::optional<std::filesystem::path>& path = std::nullopt);
 

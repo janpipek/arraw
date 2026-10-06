@@ -50,6 +50,7 @@ enum class SettingGroup {
     ColorGrading,
     Effects,
     Detail,
+    Presence, ///< Texture, Clarity and Dehaze, which Lightroom shows in its Basic panel.
 };
 
 /// @brief Whether a setting means anything for every photograph.
@@ -166,6 +167,15 @@ inline constexpr std::array developSettingDescriptors{
                     Applicability::Always, Stage::Pointwise},
     FieldDescriptor{"filmicHighlights", ARRAW_ACCESSOR(float, tone.filmicHighlights),
                     SettingRange{noFilmicHighlights, fullFilmicHighlights}, SettingGroup::Tone,
+                    Applicability::Always, Stage::Pointwise},
+    FieldDescriptor{"texture", ARRAW_ACCESSOR(float, presence.texture),
+                    SettingRange{weakestPresence, strongestPresence}, SettingGroup::Presence,
+                    Applicability::Always, Stage::Pointwise},
+    FieldDescriptor{"clarity", ARRAW_ACCESSOR(float, presence.clarity),
+                    SettingRange{weakestPresence, strongestPresence}, SettingGroup::Presence,
+                    Applicability::Always, Stage::Pointwise},
+    FieldDescriptor{"dehaze", ARRAW_ACCESSOR(float, presence.dehaze),
+                    SettingRange{weakestPresence, strongestPresence}, SettingGroup::Presence,
                     Applicability::Always, Stage::Pointwise},
     FieldDescriptor{"toneCurveLuma", ARRAW_ACCESSOR(ToneCurve, toneCurve.luma), std::nullopt,
                     SettingGroup::ToneCurve, Applicability::Always, Stage::Pointwise},

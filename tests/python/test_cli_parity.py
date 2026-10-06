@@ -28,6 +28,7 @@ CASES = {
               "grain_seed": 31337, "vignette_amount": -30},
     "noise_reduction": {"luminance_noise_reduction": 60, "luminance_noise_detail": 30,
                         "color_noise_reduction": 70, "color_noise_smoothness": 40},
+    "presence": {"texture": 40, "clarity": 60, "dehaze": -30},
     "combined": {"exposure": 0.5, "contrast": 20, "shadows": 15, "filmic_highlights": 0},
 }
 
