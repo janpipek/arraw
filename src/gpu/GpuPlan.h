@@ -540,14 +540,22 @@ enum class PresenceStep : std::uint32_t {
     Reduce = 0,        ///< Source to grid: each cell's log2 mean luminance.
     BlurAcross = 1,    ///< The Gaussian along rows of the grid.
     BlurDown = 2,      ///< The Gaussian along columns of the grid.
-    MinimumAcross = 3, ///< The window's minimum along rows of the grid.
-    MinimumDown = 4,   ///< The window's minimum along columns of the grid.
-    MaximumAcross = 5, ///< The window's maximum along rows of the grid.
-    MaximumDown = 6,   ///< The window's maximum along columns of the grid.
+    MinimumAcross = 3, ///< The octagon's minimum along rows of the grid.
+    MinimumDown = 4,   ///< The octagon's minimum along columns of the grid.
+    MaximumAcross = 5, ///< The octagon's maximum along rows of the grid.
+    MaximumDown = 6,   ///< The octagon's maximum along columns of the grid.
     /// The Gaussian along columns of the grid, never below the opened grid: a floor's last step.
     BlurDownAboveOpening = 7,
     /// One step of the opening's reconstruction: the 3x3 maximum, never above the cells.
     Reconstruct = 8,
+    /// The octagon's minimum along the diagonal, a cell across and one down a step.
+    MinimumDiagonal = 9,
+    /// The octagon's minimum along the antidiagonal, a cell across and one up a step.
+    MinimumAntidiagonal = 10,
+    /// The octagon's maximum along the diagonal.
+    MaximumDiagonal = 11,
+    /// The octagon's maximum along the antidiagonal.
+    MaximumAntidiagonal = 12,
 };
 
 /// @brief The Presence context passes' uniform block, byte for byte as std140 lays it out.
@@ -565,7 +573,8 @@ struct GpuPresenceBlock {
     /// @brief Source pixels per side of a cell of the base.
     std::uint32_t reduction = 1;
 
-    /// @brief Radius of the opening's window, in cells; zero for the other steps.
+    /// @brief Half-width of this pass of the opening's octagon, in steps along it
+    /// (::arraw::OctagonWindow); zero for the other steps.
     std::uint32_t window = 0;
 
     /// @brief Source channels to luminance as shot, padded to a `vec4`.

@@ -28,6 +28,7 @@
 #include <limits>
 #include <numbers>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 using namespace arraw;
@@ -207,14 +208,18 @@ TEST_CASE("Presence resolves its radii from the sensor and the long edge", "[pre
     REQUIRE(plan.haze.window == 23);
     REQUIRE(plan.haze.sigma == 1.875F);
     REQUIRE(plan.haze.radius == 6);
-    // The opening reconstructed by as many steps as the window's radius.
-    REQUIRE(plan.haze.reconstruction == 23);
+    // An octagon of inradius 23: 9 cells across and down, 7 steps along each
+    // diagonal, so 9 + 2 * 7 = 23 along the axes and sqrt(2) * 16 = 22.6 along
+    // the diagonals; then two steps of reconstruction.
+    REQUIRE(octagonOf(plan.haze.window) == OctagonWindow{.across = 9, .diagonal = 7});
+    REQUIRE(plan.haze.reconstruction == hazeReconstructionSteps);
+    REQUIRE(plan.haze.reconstruction == 2);
     REQUIRE(plan.coarse.reconstruction == 0);
     REQUIRE(plan.lumaRow == colorspaces::workingLuminance);
-    // The margin a region's footprint would need: Dehaze's opening (a window
-    // for its minimum and one for its maximum), its reconstruction and its
-    // blur, in source pixels.
-    REQUIRE(presenceReach(plan) == (2 * 23 + 23 + 6 + 2) * 8);
+    // The margin a region's footprint would need: Dehaze's opening (the
+    // octagon's axis inradius for its minimum and again for its maximum), its
+    // reconstruction and its blur, in source pixels.
+    REQUIRE(presenceReach(plan) == (2 * 23 + 2 + 6 + 2) * 8);
     REQUIRE(presenceReach(PresencePlan{}) == 0);
 
     SECTION("a pyramid level covers the same sensor pixels per cell") {
@@ -583,11 +588,13 @@ TEST_CASE("Dehaze takes as much off a bright area at its edge as inside it", "[p
 }
 
 TEST_CASE("Dehaze takes as much off a round bright area at its edge as inside it", "[presence]") {
-    // Disks of 150, 300 and 600 pixels, 0.3 on 0.03 under a uniform veil, in a
-    // frame of 2400: cells of 4 and a window of 18 cells (72 pixels). The square
-    // window does not reach the edge of a disk on its axis-facing sides; the
-    // opening's reconstruction brings the floor back up to it, so Dehaze 100
-    // takes as much off there as at the centre, and as on the diagonals.
+    // Disks of 90, 150, 300 and 600 pixels, 0.3 on 0.03 under a uniform veil,
+    // in a frame of 2400: cells of 4 and an octagon of inradius 18 cells (72
+    // pixels), whose corners reach 78. Every disk holds the octagon; the
+    // octagon alone falls short of a disk's edge by up to about 0.08 of its
+    // inradius between its corners, and the opening's two reconstruction steps
+    // bring the floor back up to it, so Dehaze 100 takes as much off there as
+    // at the centre, on the axis-facing sides and the diagonals alike.
     const ImageSize size{2400, 1400};
     struct Disk {
         double x;
@@ -595,7 +602,7 @@ TEST_CASE("Dehaze takes as much off a round bright area at its edge as inside it
         double radius;
     };
     const std::array disks{Disk{650.3, 700.7, 600.0}, Disk{1700.3, 400.7, 300.0},
-                           Disk{1700.3, 1100.7, 150.0}};
+                           Disk{1700.3, 1100.7, 150.0}, Disk{2200.3, 1200.7, 90.0}};
     const ImageBuffer scene = greyOf(size, [&](auto x, auto y) {
         const bool inside = std::ranges::any_of(disks, [&](const Disk& disk) {
             return std::hypot(x - disk.x, y - disk.y) < disk.radius;
@@ -645,6 +652,343 @@ TEST_CASE("Dehaze takes as much off a round bright area at its edge as inside it
     }
 }
 
+TEST_CASE("Dehaze leaves less off only the tip of a bright area's right-angled corner",
+          "[presence]") {
+    // A known limit, held: a square of 800 pixels, 0.3 on 0.03 under a veil,
+    // in a frame of 2400 (cells of 4, an octagon of inradius 18, 5 cells a
+    // diagonal). The octagon's cut corner does not reach into a right-angled
+    // corner of a bright area: a triangle with legs of 2 * 5 cells, which each
+    // reconstruction step shortens by two, so two steps leave legs of about 6
+    // cells (24 pixels) whose floor is the dark surroundings'. Everywhere else
+    // the square is uniform.
+    const ImageSize size{2400, 1600};
+    const double left = 800.3;
+    const double top = 400.7;
+    const double side = 800.0;
+    const ImageBuffer scene = greyOf(size, [&](auto x, auto y) {
+        const bool inside = x >= left && x < left + side && y >= top && y < top + side;
+        return 0.6F * (inside ? 0.3F : 0.03F) + 0.2F;
+    });
+    const PresencePlan plan = planFor(scene, DevelopState{presence(0.0F, 0.0F, 100.0F)}).presence;
+    REQUIRE(plan.haze.reduction == 4);
+    REQUIRE(octagonOf(plan.haze.window) == OctagonWindow{.across = 8, .diagonal = 5});
+    const ImageBuffer plain = develop(scene, DevelopState{presence(0.0F, 0.0F, 0.0F)});
+    const ImageBuffer clear = develop(scene, DevelopState{presence(0.0F, 0.0F, 100.0F)});
+    const auto stopsAt = [&](std::uint32_t x, std::uint32_t y) {
+        return std::log2(luminanceAt(clear, x, y) / luminanceAt(plain, x, y));
+    };
+    const float centre = stopsAt(1200, 800);
+    float worstTip = 0.0F;
+    float worstElsewhere = 0.0F;
+    double deepest = 0.0;
+    // Every pixel at least 3 from the edge, by its distance along the
+    // diagonal from the nearest corner (the sum of its distances to the two
+    // nearest sides).
+    for (auto y = static_cast<std::uint32_t>(top) + 4; y + 3 < top + side; ++y) {
+        for (auto x = static_cast<std::uint32_t>(left) + 4; x + 3 < left + side; ++x) {
+            const double fromCorner =
+                std::min(x - left, left + side - x) + std::min(y - top, top + side - y);
+            const float off = std::abs(stopsAt(x, y) - centre);
+            if (fromCorner < 48.0) {
+                worstTip = std::max(worstTip, off);
+            } else {
+                worstElsewhere = std::max(worstElsewhere, off);
+            }
+            if (off > 0.05F) {
+                deepest = std::max(deepest, fromCorner);
+            }
+        }
+    }
+    CAPTURE(centre, worstTip, worstElsewhere, deepest);
+    if (std::getenv("ARRAW_PRINT_MEASURED") != nullptr) {
+        std::fprintf(stderr,
+                     "dehaze corner: centre %.3f stops, worst %.3f off it at the tip (deepest "
+                     "%.0f px along the diagonal), %.4f elsewhere\n",
+                     centre, worstTip, deepest, worstElsewhere);
+    }
+    REQUIRE(centre < -1.0F);
+    REQUIRE(worstElsewhere < 0.02F);
+    REQUIRE(deepest < 48.0);
+}
+
+TEST_CASE("Dehaze leaves less off only the ends of an elongated bright area", "[presence]") {
+    // A known limit, held, wider than a right-angled corner: a convex tip whose
+    // curvature radius is below about the window keeps less, here the ends of
+    // an ellipse with semi-axes 600 and 200 pixels (tip radius 67), upright and
+    // turned by 30 degrees, in a frame of 3600 (cells of 8, a window of about
+    // 13 cells). One with semi-axes 600 and 300 (tip radius 150) holds the
+    // octagon to its ends and is uniform.
+    const ImageSize size{3600, 2400};
+    const double centreX = 1800.3;
+    const double centreY = 1200.7;
+    struct Ellipse {
+        double major;
+        double minor;
+        double degrees;
+    };
+    const auto measure = [&](const Ellipse& ellipse) {
+        const double angle = ellipse.degrees * std::numbers::pi / 180.0;
+        const auto along = [&](double x, double y) {
+            return (x - centreX) * std::cos(angle) + (y - centreY) * std::sin(angle);
+        };
+        const auto across = [&](double x, double y) {
+            return -(x - centreX) * std::sin(angle) + (y - centreY) * std::cos(angle);
+        };
+        const auto inside = [&](double x, double y) {
+            return std::pow(along(x, y) / ellipse.major, 2) +
+                       std::pow(across(x, y) / ellipse.minor, 2) <
+                   1.0;
+        };
+        const ImageBuffer scene = greyOf(
+            size, [&](auto x, auto y) { return 0.6F * (inside(x, y) ? 0.3F : 0.03F) + 0.2F; });
+        const ImageBuffer plain = develop(scene, DevelopState{presence(0.0F, 0.0F, 0.0F)});
+        const ImageBuffer clear = develop(scene, DevelopState{presence(0.0F, 0.0F, 100.0F)});
+        const auto stopsAt = [&](std::uint32_t x, std::uint32_t y) {
+            return std::log2(luminanceAt(clear, x, y) / luminanceAt(plain, x, y));
+        };
+        const float centre =
+            stopsAt(static_cast<std::uint32_t>(centreX), static_cast<std::uint32_t>(centreY));
+        struct Result {
+            float centre;
+            float worst;
+            double reach;
+        } result{centre, 0.0F, 0.0};
+        // Every pixel at least 3 inside the edge: how far it deviates from the
+        // centre, and how far in from the tip along the long axis the
+        // deviations above 0.05 stop reach.
+        for (std::uint32_t y = 0; y < size.height; ++y) {
+            for (std::uint32_t x = 0; x < size.width; ++x) {
+                if (!inside(x, y) || !inside(x + 3.0, y) || !inside(x - 3.0, y) ||
+                    !inside(x, y + 3.0) || !inside(x, y - 3.0)) {
+                    continue;
+                }
+                const float off = std::abs(stopsAt(x, y) - centre);
+                result.worst = std::max(result.worst, off);
+                if (off > 0.05F) {
+                    result.reach = std::max(result.reach, ellipse.major - std::abs(along(x, y)));
+                }
+            }
+        }
+        return result;
+    };
+    const auto upright = measure({600.0, 200.0, 0.0});
+    const auto turned = measure({600.0, 200.0, 30.0});
+    const auto round = measure({600.0, 300.0, 0.0});
+    CAPTURE(upright.worst, upright.reach, turned.worst, turned.reach, round.worst);
+    if (std::getenv("ARRAW_PRINT_MEASURED") != nullptr) {
+        std::fprintf(stderr,
+                     "dehaze ellipse tips: 600x200 centre %.3f, worst %.3f over %.0f px; at 30 "
+                     "degrees %.3f over %.0f px; 600x300 worst %.4f\n",
+                     upright.centre, upright.worst, upright.reach, turned.worst, turned.reach,
+                     round.worst);
+    }
+    REQUIRE(upright.centre < -1.0F);
+    REQUIRE(round.centre < -1.0F);
+    REQUIRE(round.worst < 0.02F);
+    // Measured 0.71 stop over 40 px upright and 0.57 over 51 px turned (the
+    // review's 0.64 and 0.52 stopped at the edge's 3 pixels further in).
+    REQUIRE(upright.worst > 0.3F);
+    REQUIRE(upright.worst < 0.8F);
+    REQUIRE(upright.reach < 60.0);
+    REQUIRE(turned.worst > 0.3F);
+    REQUIRE(turned.worst < 0.8F);
+    REQUIRE(turned.reach < 70.0);
+}
+
+TEST_CASE("Dehaze's octagon is regular and its passes mix both parities", "[presence]") {
+    // A pass along a diagonal steps by one cell across and one down, so on its
+    // own it reaches only the cells of its own parity, x + y even or odd about
+    // the centre; the passes across and down, at least one cell wide, mix them.
+    for (std::uint32_t inradius = 1; inradius <= maximumPresenceRadius; ++inradius) {
+        const OctagonWindow octagon = octagonOf(inradius);
+        CAPTURE(inradius, octagon.across, octagon.diagonal);
+        REQUIRE(octagon.across >= 1);
+        REQUIRE(octagon.across + 2 * octagon.diagonal == inradius);
+        const double diagonalInradius =
+            std::numbers::sqrt2 * static_cast<double>(octagon.across + octagon.diagonal);
+        REQUIRE(std::abs(diagonalInradius - inradius) <= 1.0);
+    }
+    REQUIRE(octagonOf(0) == OctagonWindow{});
+    REQUIRE(octagonOf(2) == OctagonWindow{.across = 2, .diagonal = 0});
+    REQUIRE(octagonOf(18) == OctagonWindow{.across = 8, .diagonal = 5});
+
+    // A checkerboard of single cells, 0.02 and 0.3: the cells of one parity
+    // are all dark and the others all light. Every octagon holds both, so the
+    // floor is the dark cells' everywhere; a window of diagonal passes alone
+    // would find each light cell its own floor.
+    const ImageBuffer board =
+        greyOf({96, 80}, [](auto x, auto y) { return (x + y) % 2 == 0 ? 0.02F : 0.3F; });
+    for (const std::uint32_t window : {1U, 2U, 3U, 4U, 7U, 18U, 23U, 64U}) {
+        CAPTURE(window);
+        PresencePlan plan;
+        plan.dehaze = 1.0F;
+        plan.lumaRow = colorspaces::workingLuminance;
+        plan.haze = {.reduction = 1,
+                     .sigma = 1.0F,
+                     .radius = 3,
+                     .window = window,
+                     .reconstruction = hazeReconstructionSteps};
+        const PresenceContext context = presenceContextOf(board, plan);
+        const float dark = std::ranges::min(context.coarseCells.cells);
+        REQUIRE(dark < std::ranges::max(context.coarseCells.cells) - 3.0F);
+        for (const float floor : context.haze.cells) {
+            REQUIRE(std::abs(floor - dark) <= 1e-5F);
+        }
+    }
+}
+
+namespace {
+
+/// @brief A blotchy texture at about a cell and a half of 8 pixels: value noise on a lattice of
+/// 12 pixels, smoothly interpolated, from a fixed hash; zero mean, about plus or minus one.
+float blotchAt(std::uint32_t x, std::uint32_t y) {
+    constexpr double lattice = 12.0;
+    const auto valueAt = [](std::uint32_t column, std::uint32_t row) {
+        std::uint32_t h = column * 73856093U ^ row * 19349663U ^ 0x9e3779b9U;
+        h ^= h >> 13;
+        h *= 0x5bd1e995U;
+        h ^= h >> 15;
+        return static_cast<double>(h & 0xffffU) / 32767.5 - 1.0;
+    };
+    const double u = x / lattice;
+    const double v = y / lattice;
+    const auto column = static_cast<std::uint32_t>(u);
+    const auto row = static_cast<std::uint32_t>(v);
+    const auto smooth = [](double t) { return t * t * (3.0 - 2.0 * t); };
+    const double s = smooth(u - column);
+    const double t = smooth(v - row);
+    const double top = valueAt(column, row) + s * (valueAt(column + 1, row) - valueAt(column, row));
+    const double bottom =
+        valueAt(column, row + 1) + s * (valueAt(column + 1, row + 1) - valueAt(column, row + 1));
+    return static_cast<float>(top + t * (bottom - top));
+}
+
+} // namespace
+
+TEST_CASE("Dehaze leaves a texture beside a bright area as it leaves it elsewhere", "[presence]") {
+    // At an export's cells: 3400 pixels, cells of 8, an octagon of inradius 13
+    // cells (104 pixels). A dark blotchy texture, about a stop from end to end
+    // at a scale of a cell and a half, with a bright rectangle on its right
+    // and a soft bright blob (a Gaussian of 120 pixels) on its left, all under
+    // a uniform veil. Dehaze 100 should take as much off the texture beside
+    // them as far from them: a reconstruction that climbs into the texture
+    // through its brighter cells raises the floor there and leaves a darker,
+    // flatter band (a window wide with 13 steps of 3x3, square-cornered around
+    // the blob); the octagon and two steps keep it to about the floor's blur.
+    const ImageSize size{3400, 1200};
+    const std::uint32_t edge = 2201;
+    const double blobX = 700.3;
+    const double blobY = 600.7;
+    const double blobSigma = 120.0;
+    const ImageBuffer scene = greyOf(size, [&](auto x, auto y) {
+        const bool bright = x >= edge && y >= 300 && y < 900;
+        const double distance = std::hypot(x - blobX, y - blobY);
+        const double blob = std::exp(-distance * distance / (2.0 * blobSigma * blobSigma));
+        const double texture = 0.06 * std::exp2(blotchAt(x, y)) + 0.16 * blob;
+        return static_cast<float>(0.6 * (bright ? 0.3 : texture) + 0.06);
+    });
+    const PresencePlan plan = planFor(scene, DevelopState{presence(0.0F, 0.0F, 100.0F)}).presence;
+    REQUIRE(plan.haze.reduction == 8);
+    REQUIRE(plan.haze.window == 13);
+    const ImageBuffer plain = develop(scene, DevelopState{presence(0.0F, 0.0F, 0.0F)});
+    const ImageBuffer clear = develop(scene, DevelopState{presence(0.0F, 0.0F, 100.0F)});
+    // Mean stops taken off the pixels a predicate picks.
+    const auto removed = [&](const std::function<bool(std::uint32_t, std::uint32_t)>& where) {
+        double sum = 0.0;
+        std::size_t count = 0;
+        for (std::uint32_t y = 0; y < size.height; ++y) {
+            for (std::uint32_t x = 0; x < size.width; ++x) {
+                if (where(x, y)) {
+                    sum += std::log2(luminanceAt(clear, x, y) / luminanceAt(plain, x, y));
+                    ++count;
+                }
+            }
+        }
+        REQUIRE(count > 0);
+        return sum / static_cast<double>(count);
+    };
+    // Far from both: at least 300 pixels from the rectangle, five sigmas from the blob.
+    const double far =
+        removed([](auto x, auto y) { return x >= 1300 && x < 1900 && y >= 150 && y < 1050; });
+
+    // Beside the rectangle's left edge, in strips of a cell, along its middle
+    // rows; and their mean from 3 to 15 cells out (24 to 120 pixels), the
+    // band a reconstruction by a window's radius darkens.
+    double nearest = 0.0;
+    double worstBand = 0.0;
+    std::uint32_t worstAt = 0;
+    double bandSum = 0.0;
+    std::size_t bandCount = 0;
+    std::string band;
+    for (std::uint32_t distance = 0; distance < 240; distance += 8) {
+        const double strip =
+            removed([&](auto x, auto y) {
+                return x + distance + 8 >= edge && x + distance < edge && y >= 350 && y < 850;
+            }) -
+            far;
+        band += std::to_string(distance) + ":" + std::to_string(strip).substr(0, 6) + " ";
+        if (distance == 0) {
+            nearest = strip;
+        } else if (distance >= 24 && std::abs(strip) > std::abs(worstBand)) {
+            worstBand = strip;
+            worstAt = distance;
+        }
+        if (distance >= 24 && distance < 120) {
+            bandSum += strip;
+            ++bandCount;
+        }
+    }
+    const double bandMean = bandSum / static_cast<double>(bandCount);
+
+    // Around the blob, beyond its bright part (2.5 to 5 sigmas), on the axes
+    // and on the diagonals, in rings of 30 pixels.
+    double worstRing = 0.0;
+    double worstCorner = 0.0;
+    std::string rings;
+    for (double inner = 2.5 * blobSigma; inner < 5.0 * blobSigma; inner += 30.0) {
+        const auto ring = [&](bool diagonal) {
+            return removed([&](auto x, auto y) {
+                       const double dx = x - blobX;
+                       const double dy = y - blobY;
+                       const double distance = std::hypot(dx, dy);
+                       if (distance < inner || distance >= inner + 30.0) {
+                           return false;
+                       }
+                       const double angle = std::atan2(std::abs(dy), std::abs(dx));
+                       const bool onDiagonal = std::abs(angle - std::numbers::pi / 4) < 0.18;
+                       const bool onAxis = angle < 0.18 || angle > std::numbers::pi / 2 - 0.18;
+                       return diagonal ? onDiagonal : onAxis;
+                   }) -
+                   far;
+        };
+        const double axis = ring(false);
+        const double diagonal = ring(true);
+        rings += std::to_string(static_cast<int>(inner)) + ":" + std::to_string(axis).substr(0, 6) +
+                 "/" + std::to_string(diagonal).substr(0, 6) + " ";
+        worstRing = std::max({worstRing, std::abs(axis), std::abs(diagonal)});
+        worstCorner = std::max(worstCorner, std::abs(diagonal - axis));
+    }
+    CAPTURE(far, nearest, bandMean, worstBand, worstAt, worstRing, worstCorner, band, rings);
+    if (std::getenv("ARRAW_PRINT_MEASURED") != nullptr) {
+        std::fprintf(stderr,
+                     "dehaze band: far %.3f stops; beside the edge (px: stops more) %s\n"
+                     "  mean 24-120 px %.3f, worst from 24 px %.3f at %u px; ring around the blob "
+                     "(px: axis/diagonal) %s\n  worst ring %.3f, corner %.3f\n",
+                     far, band.c_str(), bandMean, worstBand, worstAt, rings.c_str(), worstRing,
+                     worstCorner);
+    }
+    REQUIRE(far < -0.5);
+    // Measured with the octagon and two steps: a mean of -0.03 stop and at
+    // worst -0.12 (at 24 pixels), against -0.24 and -0.28 with the square and
+    // 13 steps; strips of a cell vary by about 0.03 stop on their own.
+    REQUIRE(std::abs(bandMean) <= 0.06);
+    REQUIRE(std::abs(worstBand) <= 0.15);
+    // Around the blob: 0.11 at worst, the corners within 0.03 of the axes,
+    // against 0.26 and 0.12.
+    REQUIRE(worstRing <= 0.15);
+    REQUIRE(worstCorner <= 0.06);
+}
+
 TEST_CASE("Dehaze raises fine detail and noise in a flat area no more than Texture", "[presence]") {
     // Mid grey, 3400 pixels (cells of 8): a quarter of a stop of modulation at
     // a period of 5 pixels, finer than a cell, and of noise. Dehaze measures
@@ -688,7 +1032,7 @@ TEST_CASE("Dehaze raises fine detail and noise in a flat area no more than Textu
     }
     REQUIRE(dehazeFine <= textureFine);
     REQUIRE(dehazeNoise <= textureNoise);
-    // And barely at all: measured x1.006 and x1.022, where a share against the
+    // And barely at all: measured x1.006 and x1.023, where a share against the
     // pixel gave about x1.5.
     REQUIRE(dehazeFine <= 1.2);
     REQUIRE(dehazeNoise <= 1.2);

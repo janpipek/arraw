@@ -58,11 +58,12 @@ separable Gaussian (across, then down, edges clamped):
   them;
 - the *haze* base, for Dehaze, when Dehaze is not zero, on the same coarse
   cells: for a positive Dehaze their *floor*, the opening of the cells by a
-  window (the minimum over it across and down, then the maximum of that across
-  and down), reconstructed towards the cells (`reconstruction` steps, each the
-  maximum over a cell's 3x3 neighbourhood, then the minimum of that and the
-  cell), under a light blur that never lowers a cell below the opening
-  (`floor = max(opened, blurred)`), read against the coarse cells unblurred;
+  regular octagon (the minimum over it, across, down and along both
+  diagonals, then the maximum of that along the same four), reconstructed
+  towards the cells by two steps (each the maximum over a cell's 3x3
+  neighbourhood, then the minimum of that and the cell), under a light blur
+  that never lowers a cell below the opening (`floor = max(opened,
+  blurred)`), read against the coarse cells unblurred;
   for a negative one their *mean*, a broad blur and no window.
 
 Clarity and Dehaze share one reduction to the coarse cells. A cell is the log2
@@ -148,37 +149,103 @@ dark-channel assumption: a window of 3% of the long edge almost always holds
 something dark, so the darkest cell found there is the veil over it. Opening
 rather than the plain minimum keeps a region wider than the window on its own
 floor up to its edges, so a broad flat area (a sky, a wall) is not left with a
-bright rim of less Dehaze inside its border. The opening's square window
-reaches the edge only where it fits flush, so on its own it left a curved edge
-(a disk, a rounded cloud, the tip of an oblique corner) with bright crescents
-of less Dehaze on its axis-facing sides, about `w^2 / 2R` wide (22 pixels and
-up to 1.2 stops on a disk of 150 pixels at 2400): a square imprint. So the
-opening is then **reconstructed**: each step takes the maximum over a cell's
-3x3 neighbourhood and the minimum of that and the cell unopened, which brings
-an opened bright area back by one cell towards its own outline and never above
-the cells. The count is fixed, the window's radius in cells (23 at 24 MP, 18
-at 2400 pixels), so the device renders as many steps every time; iterating
-until stable, measured at the production cells, a disk needs 7, 4 and 2 steps
-at radii of 375, 750 and 1500 pixels at 6000 (2400: 5, 3 and 2 at 150, 300 and
-600), and the smallest disk that holds the window, `R = w * sqrt(2)`, needs 10,
-about `0.42 w`: the count covers every disk with room to spare, and the
-narrow ends of other shapes up to a window's radius deep. Min and max are
-exact, so both backends agree bit for bit on it. The light blur (a quarter of a
-percent of the long edge, about two cells) hides the cells' steps, and is
-never allowed to lower a cell below its opening, so it cannot carry a dark
-neighbour's floor across an edge either. On a step from 0.03 to 0.3, both
-sides wider than the window (1200 pixels, the edge off the cells' grid),
-Dehaze 100 takes -1.322 stops off every pixel of the bright side up to the
-edge, and off the dark side: no rim (tested to 0.01 stop; measured 0.000).
-With the floor's blur free to lower it, and `s` measured against the pixel,
-the bright side kept 0.91 stop more at the edge, over a 7-pixel rim at 1200
-pixels (the review measured 1.0 stop over 35 pixels at 6000). On disks of
-150, 300 and 600 pixels (0.3 on 0.03 under a uniform veil, 2400 pixels), Dehaze
-100 takes the centre's -1.322 stops off every pixel up to the edge, on the
-axis-facing sides and on the diagonals alike (tested to 0.02 stop; measured
-0.0000), where the opening alone kept up to 0.44 stop more at the edge of the
-600-pixel disk and 0.64 at that of the 150-pixel one; the light ring just
+bright rim of less Dehaze inside its border.
+
+**The window is a regular octagon, and the opening is reconstructed by two
+steps.** A square window reaches a curved edge only where it fits flush, so
+on its own it left a curved edge (a disk, a rounded cloud, the tip of an
+oblique corner) with bright crescents of less Dehaze on its axis-facing
+sides, about `w^2 / 2R` wide (22 pixels and up to 1.2 stops on a disk of 150
+pixels at 2400): a square imprint. Reconstructing that opening by as many 3x3
+steps as the window's radius removed the imprint but climbed, through the
+brighter cells of any texture beside a bright area, up to a window's radius
+deep into it: a darker, flatter band beside every bright edge, square-cornered
+around a soft highlight (below). The octagon is a rounder window made of 1-D
+passes, each exact: the minimum across and down over a half-width `a`, then
+along the diagonal and the antidiagonal over `n` steps (a step is one cell
+across and one down), then the maximum along the same four, in the same
+order. A square of half-width `a` widened by two diagonal segments of `n`
+reaches `a + 2n` along the axes and `sqrt(2) (a + n)` along the diagonals; it
+is regular when `a = sqrt(2) n`. For a window of inradius `w`,
+`n = round(w (1 - 1/sqrt(2)))` (about 0.29 w) and `a = w - 2n` (about
+0.41 w): the axis inradius is exactly `w`, as the square's was, and the
+diagonal one within a cell of it (`octagonOf`; 23 gives `a = 9, n = 7` and a
+diagonal inradius of 22.6, 18 gives 8, 5 and 18.4). A diagonal pass reads
+only the cells of its own parity (`x + y` even or odd about the centre), so
+`n` is held to at most `(w - 1) / 2`, keeping `a` at least one: the passes
+across and down mix the parities, and a window of one or two cells is a
+square. Tested on a checkerboard of single cells, whose floor is the dark
+cells' everywhere for windows of 1 to 64 (diagonal passes alone would find
+each light cell its own floor), and on the device. The octagon's corners
+reach `w / cos(22.5°)`, 1.08 w, so it misses a curved edge by at most about
+0.08 w between them (1.9 cells at 24 MP); **two reconstruction steps** close
+that. On the cells, every disk that holds the octagon, from the smallest to
+four windows in radius at three sub-cell offsets, is reconstructed exactly
+for every window from 3 to 23 cells (one step leaves up to 3 stops on the
+smallest disks from 16 cells up; at 24 cells, two steps leave at most 0.04
+stop of one cell on a few disks of 28 to 30 cells; at 30, three would be
+needed). The window is at most 24 cells at full resolution and on
+power-of-two levels: the cell is the largest power of two below a quarter of
+a percent of the long edge, so the 3% window is 12 to 24 cells. The steps are
+a fixed count, so the device renders as many every time; min and max are
+exact, so both backends agree bit for bit on the opened grid.
+
+The light blur (a quarter of a percent of the long edge, about two cells)
+hides the cells' steps, and is never allowed to lower a cell below its
+opening, so it cannot carry a dark neighbour's floor across an edge either. On
+a step from 0.03 to 0.3, both sides wider than the window (1200 pixels, the
+edge off the cells' grid), Dehaze 100 takes -1.322 stops off every pixel of
+the bright side up to the edge, and off the dark side: no rim (tested to 0.01
+stop; measured 0.000). With the floor's blur free to lower it, and `s`
+measured against the pixel, the bright side kept 0.91 stop more at the edge,
+over a 7-pixel rim at 1200 pixels (the review measured 1.0 stop over 35 pixels
+at 6000). On disks of 90, 150, 300 and 600 pixels (0.3 on 0.03 under a uniform
+veil, 2400 pixels, window 72 pixels), Dehaze 100 takes the centre's -1.322
+stops off every pixel up to the edge, on the axis-facing sides and on the
+diagonals alike (tested to 0.02 stop; measured 0.0000), where the square
+opening alone kept up to 0.44 stop more at the edge of the 600-pixel disk and
+0.64 at that of the 150-pixel one, and the octagon alone 0.21 at that of the
+600-pixel one; with one step the 90-pixel disk kept 0.33. The light ring just
 outside the edge is gone too.
+
+**Beside a bright area, a texture keeps its own floor** (the review's R4,
+measured end to end, Dehaze 100, CPU). On the test scene (3400 x 1200, cells
+of 8, window 13 cells: a dark blotchy texture about a stop from end to end at
+a scale of a cell and a half, a bright rectangle on its right and a Gaussian
+blob of 120 pixels on its left, under a uniform veil), the extra removal
+beside the rectangle's edge, against the texture far from both, at 0, 8, 16,
+24, 32, 40 and 48 pixels from it:
+
+| floor | 0 | 8 | 16 | 24 | 32 | 40 | 48 | mean 24-120 | ring around the blob | its corners |
+|---|---|---|---|---|---|---|---|---|---|---|
+| square + 13 steps (before) | -0.31 | -0.30 | -0.29 | -0.28 | -0.28 | -0.28 | -0.24 | -0.24 | 0.26 | 0.12 |
+| octagon, no steps | | | | | | | | -0.01 | 0.07 | 0.03 |
+| octagon + 1 step | | | | | | | | -0.02 | 0.09 | 0.03 |
+| **octagon + 2 steps** | -0.31 | -0.28 | -0.18 | -0.12 | -0.11 | -0.06 | 0.00 | **-0.03** | **0.11** | **0.03** |
+| octagon + 3 steps | | | | | | | | -0.05 | 0.13 | 0.03 |
+| octagon + 4 steps | | | | | | | | -0.07 | 0.14 | 0.04 |
+| octagon + 7 steps | | | | | | | | -0.14 | 0.20 | 0.07 |
+
+(stops; the ring is the worst mean over rings of 30 pixels from 2.5 to 5
+sigmas of the blob, on the axes or the diagonals, against the far texture;
+its corners are the worst diagonal against axis, which a square-cornered ring
+shows; a strip of a cell varies by about 0.03 on its own; tested to a mean of
+0.06, a worst strip from 24 pixels of 0.15, a ring of 0.15 and corners of
+0.06). The first cell or two are the floor's blur and the opening itself:
+near a bright area a window holds less of the texture, so its minimum is a
+little higher, with or without steps. The review's scene (3600 x 2400, a
+0.5-stop texture beside a bright rectangle, window 14 cells), extra removal
+at 24 / 48 / 96 / 160 pixels: blotchy at 3 pixels, -0.33 / -0.29 / -0.27 /
+-0.04 before and -0.11 / +0.01 / -0.01 / -0.02 after; blotchy at 8 pixels,
+-0.32 / -0.28 / -0.29 / -0.06 and -0.17 / -0.07 / -0.07 / 0.00; pixel noise,
+-0.09 / -0.08 / -0.08 / -0.01 and -0.04 / -0.01 / -0.01 / 0.00. The texture's
+log spread under Dehaze, beside the edge against far from it, went from 0.86
+to 1.06 times (blotchy at 3). On the phase-7 review image (1200 x 800), the
+noisy half's mean removal is -1.00 stop (-1.16 before), -1.02 in the strip
+beside the bright rectangle (-1.28 before) and -1.00 further out, and the
+textured lower half -1.12 (-1.18), -1.09 under the rectangle (-1.28): back to
+about what the opening alone gave. The soft blob's removal is round, not
+square-cornered.
 
 Known behaviour, as Lightroom's: a broad *flat* area at any tone is all
 floor (`s = 1`), so Dehaze 100 darkens it by up to 1.3 stops (a pure
@@ -210,10 +277,10 @@ before, unless stated):
 - Dehaze 100 and -100 take a fine veiled pattern to 1.96 and 0.71. On a
   broad veil (40-pixel blocks, 0.02 and 0.3, under a uniform 0.3 veil over the
   lower half of 1200 x 800), the contrast between light and dark blocks under
-  the veil goes from 1.54 to 2.33 at 100 (2.34 before the reconstruction) and
-  1.37 at -100, the clear half against the veiled one from 0.63 to 0.98, and
+  the veil goes from 1.54 to 2.34 at 100 (the same with the square window,
+  with or without its reconstruction) and 1.37 at -100, the clear half against the veiled one from 0.63 to 0.98, and
   nothing crosses zero. On flat mid grey at 3400 pixels, Dehaze 100 takes a
-  quarter-stop 128-pixel modulation (16 cells) to 2.03, noise to 1.022 and a
+  quarter-stop 128-pixel modulation (16 cells) to 2.03, noise to 1.023 and a
   5-pixel one to 1.006 (tested to at most 1.2).
 
 **Radii.**
@@ -228,9 +295,9 @@ before, unless stated):
   long edge: Clarity's sigma is 1% of the long edge in sensor pixels (60 on a
   6000-pixel frame); the sensor cell, shared with Dehaze, is the largest power
   of two leaving four cells a sigma (8 on 6000 pixels: sigma 7.5 cells, radius
-  23). Dehaze's floor is opened by a window of radius 3% (23 cells),
-  reconstructed by 23 steps and blurred by a sigma of 0.25% (1.875 cells,
-  radius 6); its mean, for a
+  23). Dehaze's floor is opened by an octagon of inradius 3% (23 cells: 9
+  across and down, 7 a diagonal), reconstructed by two steps and blurred by a
+  sigma of 0.25% (1.875 cells, radius 6); its mean, for a
   negative Dehaze, by a sigma of 2% (15 cells, radius 45). On a reduced source
   the cell is `bit_floor(clamp(floor(cellSensor / scale), 1, cellSensor))`, so
   a pyramid level covers the same sensor pixels per cell as the source while
@@ -262,9 +329,10 @@ colour and the context, so the result is the single-threaded one bit for bit
 
 **The GPU computes each grid in a few renders and binds them to the pointwise
 pass.** `GpuPass::PresenceFilter` (`presence_filter.frag`, one std140
-`GpuPresenceBlock` of 320 bytes with the opening's `window`, `PresenceStep`
+`GpuPresenceBlock` of 320 bytes with the pass's half-width `window`, `PresenceStep`
 Reduce, BlurAcross, BlurDown, MinimumAcross, MinimumDown, MaximumAcross,
-MaximumDown, BlurDownAboveOpening, Reconstruct) writes one-channel R32F targets where the device has them (ADR
+MaximumDown, BlurDownAboveOpening, Reconstruct, MinimumDiagonal,
+MinimumAntidiagonal, MaximumDiagonal, MaximumAntidiagonal) writes one-channel R32F targets where the device has them (ADR
 039's fallback otherwise). The weights are the host's `denoiseWeights`,
 uploaded; a minimum and a maximum are exact on both. `GpuPass::Pointwise` now
 takes six inputs, the image, the curves, and the fine base, coarse base,
@@ -275,14 +343,16 @@ grid that is off, as for the curves. `GpuPointwiseBlock` grows to 384 bytes:
 coarse grids' reductions and sizes (the three coarse grids share theirs).
 `develop.frag`'s `applyPresence` mirrors the C++ line for line. Texture adds
 three renders (reduce, blur across and down); Clarity three; negative Dehaze
-three and positive Dehaze seven plus its `reconstruction` steps (the four
-of the opening, then one render a reconstruction step, which also reads the
-cells at binding 2 and keeps below them; the last blur down reads the opened
-grid there and keeps above it, so `presence_filter.frag` takes two inputs,
-the first standing in for the second in every other step): 30 renders at 24
-MP, 25 at 2400 pixels. One fewer each when they share the reduction with
-Clarity: all three positive add twelve plus the steps, and every control at
-zero none.
+three and positive Dehaze thirteen (the reduction; the eight passes of the
+opening, `packPresence` giving the passes across and down the octagon's `a`
+and the diagonal ones its `n`, all eight rendered even when `n` is zero; the
+two reconstruction steps, each of which also reads the cells at binding 2 and
+keeps below them; the blur across; and the last blur down, which reads the
+opened grid there and keeps above it, so `presence_filter.frag` takes two
+inputs, the first standing in for the second in every other step), whatever
+the size: 13 renders at 24 MP where the square and its 23 steps took 30. One
+fewer each when they share the reduction with Clarity: all three positive
+add eighteen, and every control at zero none.
 
 **Checkpoints: recompute, do not cache.** Release build, 6000 x 4000
 RgbaF32, best of three, 8 threads (the measurement machine has 8):
@@ -314,6 +384,15 @@ of a 750 x 500 one-channel grid, nine taps each; only lavapipe was at hand,
 where the whole develop went from 0.83-0.86 s to 0.95 s, about 4 ms a
 render on a software rasteriser. Not measured on a hardware GPU.
 
+After the octagon (the same machine and method, 6000 x 4000 RgbU8 PNG, CPU,
+release, best of five, two rounds alternating with the square and its 23
+steps in one binary): Dehaze 50, context 122 / 85 ms with the square, 89 / 60
+ms with the octagon, about 25 to 30 ms less; the pointwise boundary 1.28 /
+0.98 s and 1.18 / 0.92 s, within the noise (no Presence 0.49 / 0.33 s; all
+three 0.25 / 0.24 s context and 1.44 / 1.40 s boundary with the square, 0.21 /
+0.22 s and 1.35 / 1.39 s with the octagon). On the device it is 17 fewer
+renders of the 750 x 500 grid; not timed (only lavapipe is at hand).
+
 The context is at most a sixth of the pass it feeds, and less than the
 Denoise colour half every RAW runs (0.40 s, ADR 039). Caching it as an
 auxiliary image on the `Denoise` checkpoint would save that share on a tone
@@ -328,15 +407,19 @@ bit for bit (tested, with noise reduction on). When the earlier stages are
 restricted to a region's footprint, `presenceReach(plan)` is the margin in
 source pixels each base needs: `(2 * window + reconstruction + radius + 2) *
 reduction`, the larger of the two (the opening's minimum and maximum reach a
-window each, and each reconstruction step a cell; before the reconstruction
-the formula counted the window once, which undercounted the opening).
+window each, `a + 2n = w` cells along a row or a column, the octagon's
+farthest, and each reconstruction step a cell; before the reconstruction the
+formula counted the window once, which undercounted the opening): `(46 + 2 +
+6 + 2) * 8` = 448 pixels at 24 MP.
 
 **Tolerance.** The GPU's pointwise boundary with Presence agrees with the CPU
-to 3.9e-6 relative on lavapipe (each control alone and together, both signs,
+to 3.9e-6 relative on lavapipe (3.7e-6 with the octagon) (each control alone and together, both signs,
 pixel scales 1 to 8, odd sizes with partial cells, a wide source with 1-pixel
 and multi-pixel cells, an export-sized long edge of 3203 with 8-pixel cells
-and a 23-cell opening, a bright disk whose opening the 18 reconstruction
-steps bring back to its outline, a source with an infinite and a NaN pixel, the camera
+and a 23-cell opening, a bright disk whose octagonal opening the two
+reconstruction steps bring back to its outline, a checkerboard of single
+cells whose diagonal passes each read one parity, a source with an infinite
+and a NaN pixel, the camera
 fixture's as-shot row). It is held to the
 pointwise tolerance, 3e-5: what is the device's own is `log2` and `exp2` of
 values a few stops in size and float sums; a wrong cell, tap or bilinear
@@ -359,31 +442,48 @@ resample tolerances. Only lavapipe was measured.
 - Halos at strong Clarity are bounded but visible on hard edges (about half a
   stop beside a two-stop step at 100); the edge-aware base is the way to lower
   them, behind the same plan block. Dehaze's floor would gain from the same
-  edge-aware filter. At a straight step it leaves no rim, and after the
-  reconstruction no curved edge or corner of a bright area that holds the
-  window does either (measured above). What the reconstruction cannot fix is
-  a bright area that holds no window-sized square anywhere (narrower than
-  the window's side, `2w + 1` = 47 cells or 376 pixels at 24 MP, about 6% of
-  the long edge, in its widest part): it has nothing to grow back from,
-  so its floor is its darker surroundings', and it gets less Dehaze than a
-  broad area of its tone, as before. A part of a large area more than 23
-  cells (a window's radius) from where the window fits, the far end of a
-  long narrow tongue, is likewise only brought back that far.
-- The reconstruction's own price: it follows every 8-connected path of cells
-  at or above a level, so it also climbs from a bright area into a noisy or
-  finely textured neighbour, through the brighter cells of the texture, up to
-  23 cells (a window's radius) deep. There the floor rises towards the
-  texture's own cells, so Dehaze treats more of it as floor: a darker band of
-  more removal, about a window's radius wide (36 pixels at 1200), beside a
-  bright area's edge on the textured side, square-cornered around a soft
-  bright blob (the 3x3 step spreads as a square), and a little more removal
-  over noisy areas generally. On the phase-7 review scene (1200 x 800,
-  Dehaze 100) the noisy half's mean removal went from about -1.0 to -1.2
-  stops, -1.3 in the band beside the bright rectangle (-1.1 further out), and
-  the textured lower half from -1.08 to -1.17, -1.3 in a band under the
-  rectangle; the texture's log spread rose a little (0.232 to 0.263), noise
-  not (0.542 to 0.551). The flat-noise test (a 16-pixel strip) does not see
-  it.
+  edge-aware filter. At a straight step it leaves no rim, and no curved edge
+  of a bright area that holds the octagon does either (measured above).
+- What the octagon and its two steps leave, the known limits:
+  - *A convex tip whose curvature radius is below about the window:
+    right-angled and acute corners and the ends of elongated bright shapes
+    (lit windows, cloud streaks, reflections).* The octagon fits no tip that
+    sharp, and its two steps give back only two cells, so the tip keeps the
+    dark surroundings' floor: up to about 0.65 stop less Dehaze, over a
+    triangle or crescent reaching in from the tip. Measured at 3600 pixels
+    (cells of 8, window about 13 cells), pixels more than 0.05 stop off the
+    centre reach, from the tip: 38-40 pixels for an axis-aligned rectangle,
+    70-80 pixels rotated by 15 or 30 degrees (48-52 at 45), 146-163 pixels for
+    a 60 degree triangle, and 40-51 pixels for the ends of an ellipse with
+    semi-axes 600 and 200 (tip radius 67 pixels, 0.64 stop upright, 0.52
+    turned by 30 degrees); an ellipse with a tip radius of about 125 pixels
+    or more keeps none. These replace the lower figures of an earlier
+    measurement (24 and 41 pixels at 2400), which summed the distances to the
+    two nearest sides along the image axes and so understated rotated and
+    acute tips. The square window with its 23 steps left almost none of them. More steps close the axis-aligned corner but not the rotated one,
+    and bring the band back (the table above). It shows in the phase-7 image
+    as a small light triangle at the rectangle's lower left corner. The
+    planned edge-aware floor is the fix: it removes both the band and these
+    tips.
+  - *A bright area that holds no octagon of the window anywhere* (narrower
+    than `2w + 1` = 47 cells, 376 pixels at 24 MP, about 6% of the long edge,
+    in its widest part): its floor is its darker surroundings', and it gets
+    less Dehaze than a broad area of its tone, as before. Round areas fare
+    better than with the square: a disk holds the octagon from a radius of
+    1.08 w rather than 1.41 w (on the review's 3600-pixel frame a 150-pixel
+    disk now does, -1.322 stops to its edge, where it kept 0.13 stop more).
+  - *A narrow part of a large bright area* (a tongue narrower than the
+    window): brought back only two cells from where the octagon fits, where
+    the square's 23 steps brought it back 23. Its floor is its surroundings'.
+  - *A window of 24 cells* (long edges of 6267 to 6399 sensor pixels, and the
+    like at each power of two): two steps leave at most 0.04 stop of one cell
+    on a few disks just larger than the octagon.
+  - *The band's remainder.* The first two or three cells beside a bright
+    area take up to 0.3 stop more off a texture (the opening and the blur
+    themselves, as without the steps), and a soft highlight on a texture is
+    ringed by up to 0.1 stop more removal over about a window, round now
+    rather than square-cornered. The far field of a texture is unchanged by
+    the steps (within 0.01 stop).
 - Dehaze 100 darkens broad flat areas, skies above all, by up to 1.3 stops,
   as Lightroom's does. It removes the veil only above a cell's scale (8
   sensor pixels at 24 MP); finer detail and noise keep their contrast.
@@ -401,8 +501,15 @@ resample tolerances. Only lavapipe was measured.
   1.54 to more than 1.4 times that, the veiled half darkening more than the
   clear) with every channel above zero; Dehaze 100 takes the same off a bright
   area up to its edge as inside it, within 0.01 stop, and the dark side too,
-  and off disks of 150, 300 and 600 pixels under a veil up to their edges on
+  and off disks of 90, 150, 300 and 600 pixels under a veil up to their edges on
   the axis-facing sides and the diagonals, within 0.02 stop of the centre;
+  a blotchy texture beside a bright rectangle and around a soft blob, at
+  8-pixel cells, loses about as much as far from them (the bounds above); a
+  bright square's right-angled corners keep less only within 48 pixels of
+  their tips, and an ellipse's ends keep less only within 60 (upright) or 70
+  pixels, a rounder one's none; the octagon is regular within a cell, its passes across at least
+  one cell wide, and a checkerboard of cells has the dark cells' floor for
+  windows of 1 to 64; the plan's two steps and the region reach;
   on flat mid grey it raises noise and a 5-pixel pattern no more than
   Texture 100, and no more than 1.2 times; an infinite pixel under negative Dehaze is not NaN; Dehaze at both signs is the same at
   every exposure; a non-finite pixel leaves its neighbours finite and the far
@@ -412,8 +519,10 @@ resample tolerances. Only lavapipe was measured.
   and a Presence edit is refused at Pointwise; the curve input includes
   Presence and a curve edit still leaves it alone; the threaded context and
   chain equal one thread; non-finite values are refused; GPU parity, pass
-  counts, a resume from the GPU's Denoise checkpoint bit for bit and the GPU
-  tap, at production cell sizes and with non-finite pixels; the panel's
+  counts (13 for a positive Dehaze, at 60 pixels and at 3203), the pass
+  half-widths in the packed block, a resume from the GPU's Denoise checkpoint
+  bit for bit and the GPU tap, at production cell sizes, on a checkerboard
+  and with non-finite pixels; the panel's
   Presence group in both treatments; CLI and Python parity.
 
 ## What was rejected, and why
@@ -456,12 +565,28 @@ resample tolerances. Only lavapipe was measured.
   the darker floor of its surroundings a window plus the blur into it: a
   bright rim of less Dehaze inside its edge, 60 pixels on the review image.
   The opening keeps the area's own floor up to its edge.
-- **The opening alone, with its square window** (before the
-  reconstruction). It left the square imprint inside round bright areas
-  described above. A rounder window (the minimum and maximum along the
-  diagonals too, an octagon) would shrink the crescents to about a fifth for
-  four more renders but not remove them; an edge-aware refinement of the
-  floor is future work.
+- **The opening alone, with its square window** (the first opening). It left
+  the square imprint inside round bright areas described above.
+- **The octagon alone.** It shrinks the crescents to at most about 0.08 of
+  the window (two cells) but does not remove them: 0.21 stop at the edge of a
+  600-pixel disk at 2400. Two steps of reconstruction do, which is the
+  decision.
+- **The square window reconstructed by as many steps as its radius** (the
+  version before this one, 23 steps at 24 MP, 30 renders). It removed the
+  imprint and closed right-angled corners, but its geodesic steps follow every
+  8-connected path of cells at or above a level, so from a bright area they
+  climbed through the brighter cells of a neighbouring texture up to a window's
+  radius deep: a darker, flatter band beside every bright edge (about 0.3 stop
+  over a window's width, the texture's spread down by about an eighth), a
+  square-cornered ring around a soft highlight (the 3x3 step spreads as a
+  square), and every textured floor lifted a little. A tolerance on the
+  climb, fewer steps (11) or steps under a 3x3 erosion narrowed or shallowed
+  the band without removing it (the review's grid model).
+- **More steps after the octagon, to close right-angled corners.** Five at
+  2400 pixels close an axis-aligned corner but not one rotated by 30°, and
+  each step widens the band again (four double its mean, seven bring it to
+  half the square's). An edge-aware refinement of the floor is the way to
+  both; future work.
 - **The floor's blur free to lower it.** It carried a dark area's floor about
   three sigmas into a bright neighbour: up to 1 stop less Dehaze at the edge,
   fading over 0.6% of the long edge. Keeping the blur above the opening is one

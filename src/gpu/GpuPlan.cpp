@@ -91,8 +91,12 @@ GpuPresenceBlock packPresence(const PresencePlan& plan, const PresenceBase& base
         block.radius = base.radius;
         const DenoiseWeights weights = denoiseWeights(base.sigma, base.radius);
         std::copy(weights.begin(), weights.end(), block.weights.begin());
-    } else if (step != PresenceStep::Reduce && step != PresenceStep::Reconstruct) {
-        block.window = base.window;
+    } else if (step == PresenceStep::MinimumAcross || step == PresenceStep::MinimumDown ||
+               step == PresenceStep::MaximumAcross || step == PresenceStep::MaximumDown) {
+        block.window = octagonOf(base.window).across;
+    } else if (step == PresenceStep::MinimumDiagonal || step == PresenceStep::MinimumAntidiagonal ||
+               step == PresenceStep::MaximumDiagonal || step == PresenceStep::MaximumAntidiagonal) {
+        block.window = octagonOf(base.window).diagonal;
     }
     return block;
 }

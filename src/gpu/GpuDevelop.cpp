@@ -141,10 +141,10 @@ DeviceImage presenceStepOnGpu(GpuContext& context, const PresencePlan& plan,
 /// @brief Computes one base of the Presence context from its cells on a device, as
 /// ::arraw::presenceContextOf does on the host.
 ///
-/// The opening by the window when the base has one, the minimum across and
-/// down then the maximum across and down and the steps of its reconstruction,
-/// then the blur across and down, a render each, the last kept above the
-/// opening when there is one (ADR 041).
+/// The opening by the octagon when the base has one, the minimum across, down
+/// and along both diagonals, then the maximum along the same four, and the
+/// steps of its reconstruction, then the blur across and down, a render each,
+/// the last kept above the opening when there is one (ADR 041).
 DeviceImage presenceBaseOnGpu(GpuContext& context, const DeviceImage& cells,
                               const PresencePlan& plan, const PresenceBase& base,
                               ImageSize source) {
@@ -153,11 +153,19 @@ DeviceImage presenceBaseOnGpu(GpuContext& context, const DeviceImage& cells,
             presenceStepOnGpu(context, plan, base, source, PresenceStep::BlurAcross, cells);
         return presenceStepOnGpu(context, plan, base, source, PresenceStep::BlurDown, across);
     }
+    // As baseOf(): the same four directions in the same order, for the minimum
+    // then the maximum. Every pass renders even when the octagon's diagonal is
+    // zero (a window of one or two cells), so the count is fixed.
+    constexpr std::array opening{
+        PresenceStep::MinimumAcross,   PresenceStep::MinimumDown,
+        PresenceStep::MinimumDiagonal, PresenceStep::MinimumAntidiagonal,
+        PresenceStep::MaximumAcross,   PresenceStep::MaximumDown,
+        PresenceStep::MaximumDiagonal, PresenceStep::MaximumAntidiagonal,
+    };
     DeviceImage opened = cells;
-    opened = presenceStepOnGpu(context, plan, base, source, PresenceStep::MinimumAcross, opened);
-    opened = presenceStepOnGpu(context, plan, base, source, PresenceStep::MinimumDown, opened);
-    opened = presenceStepOnGpu(context, plan, base, source, PresenceStep::MaximumAcross, opened);
-    opened = presenceStepOnGpu(context, plan, base, source, PresenceStep::MaximumDown, opened);
+    for (const PresenceStep step : opening) {
+        opened = presenceStepOnGpu(context, plan, base, source, step, opened);
+    }
     for (std::uint32_t index = 0; index < base.reconstruction; ++index) {
         opened = presenceStepOnGpu(context, plan, base, source, PresenceStep::Reconstruct, opened,
                                    &cells);

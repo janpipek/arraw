@@ -141,8 +141,9 @@ TEST_CASE("Presence on the device matches the CPU", "[gpu][presence]") {
     }
 
     SECTION("a bright disk, whose opening the reconstruction brings back to its outline") {
-        // 600 pixels: cells of one, a window of 18; a disk of 60 pixels under a
-        // veil, which holds the window only by its middle.
+        // 600 pixels: cells of one, an octagon of inradius 18 (8 across, 5 a
+        // diagonal); a disk of 60 pixels under a veil, which holds the octagon
+        // only by its middle.
         ImageBuffer disk(ImageSize{600, 400}, workingFormat, workingEncoding);
         const auto samples = disk.samples<float>();
         for (std::uint32_t y = 0; y < 400; ++y) {
@@ -158,9 +159,32 @@ TEST_CASE("Presence on the device matches the CPU", "[gpu][presence]") {
         }
         const PresencePlan plan =
             planFor(disk, DevelopState{presence(0.0F, 0.0F, 100.0F)}).presence;
-        REQUIRE(plan.haze.reconstruction == 18);
+        REQUIRE(plan.haze.window == 18);
+        REQUIRE(plan.haze.reconstruction == hazeReconstructionSteps);
         worst = std::max(worst,
                          requirePointwiseMatches(disk.clone(), presence(0.0F, 0.0F, 100.0F), 1.0));
+    }
+
+    SECTION("a checkerboard of cells, which the octagon's diagonal passes split by parity") {
+        // 203 pixels: cells of one, an octagon of inradius 6, 2 across and 2 a
+        // diagonal. Each diagonal pass reads the cells of one parity only.
+        ImageBuffer board(ImageSize{203, 77}, workingFormat, workingEncoding);
+        const auto samples = board.samples<float>();
+        for (std::uint32_t y = 0; y < 77; ++y) {
+            for (std::uint32_t x = 0; x < 203; ++x) {
+                const float value = (x + y) % 2 == 0 ? 0.02F : 0.3F;
+                float* pixel = &samples[(static_cast<std::size_t>(y) * 203 + x) * 4];
+                pixel[0] = value;
+                pixel[1] = value;
+                pixel[2] = value;
+                pixel[3] = 1.0F;
+            }
+        }
+        const PresencePlan plan =
+            planFor(board, DevelopState{presence(0.0F, 0.0F, 100.0F)}).presence;
+        REQUIRE(octagonOf(plan.haze.window) == OctagonWindow{.across = 2, .diagonal = 2});
+        worst = std::max(worst,
+                         requirePointwiseMatches(board.clone(), presence(0.0F, 0.0F, 100.0F), 1.0));
     }
 
     SECTION("a non-finite pixel, bounded the same way") {
@@ -207,19 +231,31 @@ TEST_CASE("The Presence passes run only for the bases the controls read", "[gpu]
     REQUIRE(plain == 1);
     REQUIRE(passesFor(presence(0.0F, 0.0F, 0.0F)) == plain);
     // Texture and Clarity: reduce, blur across, blur down. Dehaze shares
-    // Clarity's reduction and adds its blur, and a positive one the opening
-    // (minimum and maximum, across and down) and its reconstruction, a render
-    // a step, before it: a fixed count, the window's radius, here two cells.
-    const std::size_t steps =
-        planFor(source, DevelopState{presence(0.0F, 0.0F, 50.0F)}).presence.haze.reconstruction;
-    REQUIRE(steps == 2);
+    // Clarity's reduction and adds its blur, and a positive one the octagon's
+    // opening (the minimum and the maximum, each across, down and along both
+    // diagonals, even where the diagonal is zero, as here with a window of
+    // two cells) and its reconstruction, a render a step, before it: a fixed
+    // count of two.
+    const PresencePlan clearer =
+        planFor(source, DevelopState{presence(0.0F, 0.0F, 50.0F)}).presence;
+    REQUIRE(octagonOf(clearer.haze.window).diagonal == 0);
+    const std::size_t steps = clearer.haze.reconstruction;
+    REQUIRE(steps == hazeReconstructionSteps);
     REQUIRE(passesFor(presence(50.0F, 0.0F, 0.0F)) == plain + 3);
     REQUIRE(passesFor(presence(0.0F, 50.0F, 0.0F)) == plain + 3);
     REQUIRE(passesFor(presence(0.0F, 0.0F, -50.0F)) == plain + 3);
-    REQUIRE(passesFor(presence(0.0F, 0.0F, 50.0F)) == plain + 7 + steps);
+    REQUIRE(passesFor(presence(0.0F, 0.0F, 50.0F)) == plain + 11 + steps);
     REQUIRE(passesFor(presence(0.0F, 50.0F, -50.0F)) == plain + 5);
-    REQUIRE(passesFor(presence(0.0F, 50.0F, 50.0F)) == plain + 9 + steps);
-    REQUIRE(passesFor(presence(50.0F, 50.0F, 50.0F)) == plain + 12 + steps);
+    REQUIRE(passesFor(presence(0.0F, 50.0F, 50.0F)) == plain + 13 + steps);
+    REQUIRE(passesFor(presence(50.0F, 50.0F, 50.0F)) == plain + 16 + steps);
+
+    // At an export's size the count is the same: 13 renders for a positive
+    // Dehaze, whatever the window.
+    const ImageBuffer wide = sceneOf({3203, 24});
+    const std::size_t before = context.renderCount();
+    static_cast<void>(
+        developOnGpu(context, wide, DevelopState{presence(0.0F, 0.0F, 50.0F)}, Stage::Pointwise));
+    REQUIRE(context.renderCount() - before == plain + 13);
 
     // Off, the pixels are those of a render without the controls, bit for bit.
     REQUIRE(compareFloat(

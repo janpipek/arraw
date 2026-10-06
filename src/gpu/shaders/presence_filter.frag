@@ -1,7 +1,7 @@
 #version 440
 
 // One step of one base of the Presence context: Presence.cpp's reduction to
-// the grid of log2 mean luminance, its opening by a window and the opening's
+// the grid of log2 mean luminance, its opening by an octagon and the opening's
 // reconstruction, and its Gaussian blur, kept above the opening, one step per
 // render.
 //
@@ -45,6 +45,10 @@ const uint stepMaximumAcross = 5u;
 const uint stepMaximumDown = 6u;
 const uint stepBlurDownAboveOpening = 7u;
 const uint stepReconstruct = 8u;
+const uint stepMinimumDiagonal = 9u;
+const uint stepMinimumAntidiagonal = 10u;
+const uint stepMaximumDiagonal = 11u;
+const uint stepMaximumAntidiagonal = 12u;
 
 // presenceLuminanceFloor and presenceLuminanceCeiling in Presence.h: 2^-14 and 2^16.
 const float luminanceFloor = 6.103515625e-05;
@@ -111,7 +115,8 @@ float blur(ivec2 at, ivec2 axis) {
     return sum / total;
 }
 
-// extremumPass(): the window's minimum, or maximum, along one axis, edges clamped.
+// extremumPass(): the window's minimum, or maximum, along one direction, each
+// coordinate clamped to the grid; plan.window is this pass's half-width.
 float extremum(ivec2 at, ivec2 axis, bool maximum) {
     float extreme = clampedAt(at);
     for (uint tap = 1u; tap <= plan.window; ++tap) {
@@ -153,6 +158,14 @@ void main() {
         value = extremum(at, ivec2(1, 0), true);
     } else if (plan.step == stepMaximumDown) {
         value = extremum(at, ivec2(0, 1), true);
+    } else if (plan.step == stepMinimumDiagonal) {
+        value = extremum(at, ivec2(1, 1), false);
+    } else if (plan.step == stepMinimumAntidiagonal) {
+        value = extremum(at, ivec2(1, -1), false);
+    } else if (plan.step == stepMaximumDiagonal) {
+        value = extremum(at, ivec2(1, 1), true);
+    } else if (plan.step == stepMaximumAntidiagonal) {
+        value = extremum(at, ivec2(1, -1), true);
     } else if (plan.step == stepReconstruct) {
         value = reconstruct(at);
     } else {

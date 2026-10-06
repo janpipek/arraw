@@ -370,9 +370,26 @@ TEST_CASE("The pointwise block carries Presence and its grids", "[gpu][plan][pre
     REQUIRE(hazyBlock.coarseGridSize == std::array<std::uint32_t, 2>{203, 77});
     const GpuPresenceBlock minimum =
         packPresence(hazy.presence, hazy.presence.haze, source.size(), PresenceStep::MinimumAcross);
-    REQUIRE(minimum.window == hazy.presence.haze.window);
-    REQUIRE(minimum.window > 0U);
+    // The octagon's passes across and down carry its half-width across, the
+    // diagonal ones its half-length along a diagonal.
+    const OctagonWindow octagon = octagonOf(hazy.presence.haze.window);
+    REQUIRE(octagon.diagonal > 0U);
+    REQUIRE(minimum.window == octagon.across);
     REQUIRE(minimum.radius == 0U);
+    REQUIRE(
+        packPresence(hazy.presence, hazy.presence.haze, source.size(), PresenceStep::MaximumDown)
+            .window == octagon.across);
+    for (const PresenceStep step :
+         {PresenceStep::MinimumDiagonal, PresenceStep::MinimumAntidiagonal,
+          PresenceStep::MaximumDiagonal, PresenceStep::MaximumAntidiagonal}) {
+        const GpuPresenceBlock diagonal =
+            packPresence(hazy.presence, hazy.presence.haze, source.size(), step);
+        REQUIRE(diagonal.step == static_cast<std::uint32_t>(step));
+        REQUIRE(diagonal.window == octagon.diagonal);
+        REQUIRE(diagonal.radius == 0U);
+    }
+    REQUIRE(static_cast<std::uint32_t>(PresenceStep::MinimumDiagonal) == 9U);
+    REQUIRE(static_cast<std::uint32_t>(PresenceStep::MaximumAntidiagonal) == 12U);
     // The floor's last blur, kept above the opening, carries the blur's taps.
     const GpuPresenceBlock last = packPresence(hazy.presence, hazy.presence.haze, source.size(),
                                                PresenceStep::BlurDownAboveOpening);

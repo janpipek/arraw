@@ -8,6 +8,7 @@
 #include "TimingTrace.h"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
 #include <cstddef>
@@ -138,10 +139,22 @@ std::vector<float> blurPass(const PresenceGrid& grid, const DenoiseWeights& weig
     return result;
 }
 
-/// @brief One pass of a window's minimum, or maximum, along one axis, edges clamped.
+/// @brief A direction a pass of the opening steps along, in cells.
+struct GridAxis {
+    std::int64_t x = 0; ///< Cells across a step.
+    std::int64_t y = 0; ///< Cells down a step.
+};
+
+/// @brief The four directions of the octagon's passes, in their order: across, down, and the
+/// diagonal and the antidiagonal.
+constexpr std::array<GridAxis, 4> octagonAxes{GridAxis{1, 0}, GridAxis{0, 1}, GridAxis{1, 1},
+                                              GridAxis{1, -1}};
+
+/// @brief One pass of a window's minimum, or maximum, along one direction, each coordinate
+/// clamped to the grid.
 ///
 /// Mirrors `extremum` in `presence_filter.frag`; exact on both, as a minimum is.
-std::vector<float> extremumPass(const PresenceGrid& grid, std::uint32_t window, bool across,
+std::vector<float> extremumPass(const PresenceGrid& grid, std::uint32_t window, GridAxis axis,
                                 bool maximum) {
     std::vector<float> result(grid.cells.size());
     const std::span<const float> in(grid.cells);
@@ -155,10 +168,10 @@ std::vector<float> extremumPass(const PresenceGrid& grid, std::uint32_t window, 
                     float extreme = in[static_cast<std::size_t>(y) * grid.width + x];
                     for (std::uint32_t tap = 1; tap <= window; ++tap) {
                         const std::int64_t step = tap;
-                        const float after = across ? in[clampedCell(grid, x + step, y)]
-                                                   : in[clampedCell(grid, x, y + step)];
-                        const float before = across ? in[clampedCell(grid, x - step, y)]
-                                                    : in[clampedCell(grid, x, y - step)];
+                        const float after =
+                            in[clampedCell(grid, x + step * axis.x, y + step * axis.y)];
+                        const float before =
+                            in[clampedCell(grid, x - step * axis.x, y - step * axis.y)];
                         extreme = pick(extreme, pick(after, before));
                     }
                     result[static_cast<std::size_t>(y) * grid.width + x] = extreme;
@@ -212,19 +225,23 @@ PresenceGrid cellsOf(const ImageBuffer& input, const Colour& row, std::uint32_t 
 
 /// @brief Computes one base from its cells: the opening by the window, if any, then the blur.
 ///
-/// The opening is reconstructed by the base's steps, so that a bright area
-/// holding the window keeps its own floor up to its edges whatever their
-/// shape, and with a window the blur never lowers a cell below the opening, so
-/// that a dark neighbour's floor does not spread across an edge into a bright
-/// area (ADR 041).
+/// The opening is by a regular octagon (::arraw::octagonOf), the minimum along
+/// its four directions and then the maximum, and is reconstructed by the
+/// base's few steps, so that a bright area holding the window keeps its own
+/// floor up to its edges whatever their shape; with a window the blur never
+/// lowers a cell below the opening, so that a dark neighbour's floor does not
+/// spread across an edge into a bright area (ADR 041).
 PresenceGrid baseOf(PresenceGrid grid, const PresenceBase& base) {
     std::vector<float> opened;
     if (base.window != 0) {
         const std::vector<float> cells = grid.cells;
-        grid.cells = extremumPass(grid, base.window, /*across=*/true, /*maximum=*/false);
-        grid.cells = extremumPass(grid, base.window, /*across=*/false, /*maximum=*/false);
-        grid.cells = extremumPass(grid, base.window, /*across=*/true, /*maximum=*/true);
-        grid.cells = extremumPass(grid, base.window, /*across=*/false, /*maximum=*/true);
+        const OctagonWindow octagon = octagonOf(base.window);
+        for (const bool maximum : {false, true}) {
+            for (std::size_t index = 0; index < octagonAxes.size(); ++index) {
+                const std::uint32_t radius = index < 2 ? octagon.across : octagon.diagonal;
+                grid.cells = extremumPass(grid, radius, octagonAxes[index], maximum);
+            }
+        }
         for (std::uint32_t step = 0; step < base.reconstruction; ++step) {
             grid.cells = reconstructionPass(grid, cells);
         }
@@ -304,7 +321,7 @@ PresencePlan arraw::presencePlanFor(const PresenceSettings& settings, const Colo
             if (plan.dehaze > 0.0F) {
                 plan.haze.window = windowFor(static_cast<float>(hazeWindowFraction * longEdge),
                                              pixelScale, plan.haze.reduction);
-                plan.haze.reconstruction = plan.haze.window;
+                plan.haze.reconstruction = hazeReconstructionSteps;
             }
         }
     }
@@ -315,7 +332,9 @@ std::uint32_t arraw::presenceReach(const PresencePlan& plan) {
     std::uint32_t reach = 0;
     for (const PresenceBase* base : {&plan.fine, &plan.coarse, &plan.haze}) {
         if (base->active()) {
-            // The opening's minimum and maximum, a window each, then its reconstruction.
+            // The opening's minimum and maximum, a window each (the octagon's
+            // axis inradius, its widest reach along a row or a column), then
+            // its reconstruction, a cell a step.
             reach = std::max(reach, (2 * base->window + base->reconstruction + base->radius + 2) *
                                         base->reduction);
         }

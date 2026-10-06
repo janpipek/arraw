@@ -7,6 +7,7 @@
 #include <ImageBuffer.h>
 #include <PresenceSettings.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <tuple>
@@ -84,14 +85,59 @@ inline constexpr float clarityLimitStops = 1.0F;
 
 /// @brief Radius of the window of Dehaze's floor, as a fraction of the long edge.
 ///
-/// 3%, 180 sensor pixels on a 6000-pixel frame. The floor is the opening of
-/// the coarse cells by this window, their minimum over it and then the maximum
-/// of that, reconstructed towards the cells: wide enough that a window almost
+/// 3%, 180 sensor pixels on a 6000-pixel frame: the inradius of the regular
+/// octagon the floor is opened by. The floor is the opening of the coarse
+/// cells by this window, their minimum over it and then the maximum of that,
+/// shortly reconstructed towards the cells: wide enough that a window almost
 /// always holds something dark, the dark-channel assumption, so what it finds
 /// is the veil over it; and a region that holds the window keeps its own floor
 /// up to its edges, whatever their shape, so a broad flat area such as a sky is
 /// not left with a rim (ADR 041).
 inline constexpr float hazeWindowFraction = 0.03F;
+
+/// @brief Steps of the reconstruction of Dehaze's opened floor.
+///
+/// The octagon reaches a curved edge to within about 0.08 of its inradius
+/// (1.9 cells at 24 MP); two 3x3 steps close that for every disk that holds
+/// the octagon, measured on the cells for windows of 3 to 23 cells (the window
+/// is at most 24 at full resolution and on power-of-two pyramid levels), and
+/// climb hardly further into a textured neighbour of a bright area. They do
+/// not close the tip of a right-angled corner, which the octagon cuts by a
+/// triangle with legs of twice its diagonal (ADR 041).
+inline constexpr std::uint32_t hazeReconstructionSteps = 2;
+
+/// @brief The two half-widths of a regular octagon made of four 1-D passes.
+///
+/// A square of half-width @ref across (a pass across, a pass down) widened by
+/// the two diagonal segments of @ref diagonal cells each: `across + 2 *
+/// diagonal` cells out along the axes, `sqrt(2) * (across + diagonal)` along
+/// the diagonals.
+struct OctagonWindow {
+    std::uint32_t across = 0;   ///< Half-width of the passes across and down, in cells.
+    std::uint32_t diagonal = 0; ///< Half-length of the diagonal passes, in diagonal steps.
+
+    friend bool operator==(const OctagonWindow&, const OctagonWindow&) = default;
+};
+
+/// @brief Splits an octagon's inradius into its passes' half-widths.
+///
+/// A regular octagon needs `across = sqrt(2) * diagonal`, so `diagonal =
+/// round(r * (1 - 1 / sqrt(2)))`, about 0.29 r, and `across = r - 2 *
+/// diagonal`, about 0.41 r: the axis inradius is exactly @p inradius and the
+/// diagonal one within a cell of it (22.6 for 23, 18.4 for 18). A diagonal
+/// pass reaches only the cells of one parity, `x + y` even or odd about the
+/// centre; @ref OctagonWindow::across is kept at least one, so the passes
+/// across and down mix both (tested) and a radius of one or two is a square.
+[[nodiscard]] constexpr OctagonWindow octagonOf(std::uint32_t inradius) noexcept {
+    if (inradius == 0) {
+        return {};
+    }
+    // 1 - 1/sqrt(2), rounded half up in integers.
+    constexpr double share = 0.29289321881345248;
+    const auto rounded = static_cast<std::uint32_t>(inradius * share + 0.5);
+    const std::uint32_t diagonal = std::min(rounded, (inradius - 1) / 2);
+    return {.across = inradius - 2 * diagonal, .diagonal = diagonal};
+}
 
 /// @brief Sigma of the blur that smooths Dehaze's floor, as a fraction of the long edge.
 ///
@@ -127,9 +173,9 @@ inline constexpr float dehazeMeanLimitStops = 6.0F;
 
 /// @brief One blurred base of the Presence context: a box-reduced grid of log luminance.
 ///
-/// The grid, then optionally its opening by a window (the minimum over it,
-/// then the maximum of that, then its reconstruction), then a Gaussian blur,
-/// which with a window never lowers a cell below its opening.
+/// The grid, then optionally its opening by an octagonal window (the minimum
+/// over it, then the maximum of that, then a short reconstruction), then a
+/// Gaussian blur, which with a window never lowers a cell below its opening.
 struct PresenceBase {
     /// @brief Source pixels per side of a cell; a power of two, or zero when the base is not used.
     std::uint32_t reduction = 0;
@@ -140,17 +186,17 @@ struct PresenceBase {
     /// @brief Tap radius of the blur, in cells.
     std::uint32_t radius = 0;
 
-    /// @brief Radius in cells of the square window the grid is opened by before the blur; zero for
-    /// none.
+    /// @brief Inradius in cells of the regular octagon the grid is opened by before the blur
+    /// (::arraw::octagonOf); zero for none.
     std::uint32_t window = 0;
 
     /// @brief Steps of the opening's reconstruction, each a 3x3 maximum bounded by the cells; zero
     /// for none.
     ///
     /// Each step brings an opened bright area back by one cell towards its own
-    /// outline, where the square window does not reach, such as along a curved
-    /// edge. As many as the window's radius: a disk needs at most about 0.42 of
-    /// it (ADR 041). A fixed count, so the device renders as many steps every time.
+    /// outline, where the octagon does not reach, such as along a curved edge
+    /// (::arraw::hazeReconstructionSteps). A fixed count, so the device renders
+    /// as many steps every time.
     std::uint32_t reconstruction = 0;
 
     /// @brief Whether the base is computed and read.
@@ -282,14 +328,14 @@ struct PixelContext {
 /// For each active base: each cell is the log2 of the mean luminance of the
 /// `reduction x reduction` block of pixels it covers (the last row and column
 /// average what they have), each luminance through the plan's as-shot row and
-/// ::arraw::boundedLuminance; Dehaze's floor then opens the grid by a window,
-/// the minimum across then down and the maximum across then down, and
-/// reconstructs the opening by its steps, each the maximum over a cell's 3x3
-/// neighbourhood bounded by the cell unopened; the grid is
-/// then blurred by a normalised Gaussian across, then down, edges clamped, and
-/// a floor kept at least at its opening. Clarity and Dehaze share the coarse
-/// cells, which are kept unblurred too for Clarity and a positive Dehaze.
-/// Mirrors `presence_filter.frag`.
+/// ::arraw::boundedLuminance; Dehaze's floor then opens the grid by an octagon,
+/// the minimum across, down and along both diagonals, then the maximum along
+/// the same four (::arraw::octagonOf), and reconstructs the opening by its
+/// steps, each the maximum over a cell's 3x3 neighbourhood bounded by the cell
+/// unopened; the grid is then blurred by a normalised Gaussian across, then
+/// down, edges clamped, and a floor kept at least at its opening. Clarity and
+/// Dehaze share the coarse cells, which are kept unblurred too for Clarity and
+/// a positive Dehaze. Mirrors `presence_filter.frag`.
 /// @param input The source after noise reduction, in any layout; read only.
 /// @param plan Active plan.
 [[nodiscard]] PresenceContext presenceContextOf(const ImageBuffer& input, const PresencePlan& plan);
