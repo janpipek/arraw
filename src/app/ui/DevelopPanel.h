@@ -59,11 +59,18 @@ public:
     /// @param cropping Whether the Crop button is checked.
     void setCropMode(bool cropping);
 
+    /// @brief Gives the narrowest the develop dock can be, in logical pixels.
+    ///
+    /// Derived from the content: the panel's minimum width (label column, value
+    /// field and a slider of at least ::arraw::app::SettingSlider::minimumSliderLength,
+    /// plus margins) and a vertical scroll bar, so that nothing scrolls sideways.
+    /// The dock's frame, if any, comes on top.
+    [[nodiscard]] int minimumDockWidth() const;
+
     /// @brief Gives the width the develop dock opens at, in logical pixels.
     ///
-    /// A fixed number of lines of the panel's font, which the panel's
-    /// narrowest layout and a vertical scroll bar fit inside, so that the dock
-    /// opens with no horizontal scroll bar.
+    /// The minimum dock width and a few lines of the panel's font of room for the
+    /// sliders to stretch into.
     [[nodiscard]] int defaultDockWidth() const;
 
     /// @brief Shows whether the straighten tool is armed, without emitting any signal.

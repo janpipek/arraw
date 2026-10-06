@@ -152,6 +152,12 @@ public:
     /// Asks the worker for the shot's developed thumbnail again, which the cache usually has.
     void releaseLiveThumbnail();
 
+    /// @brief Gives the thumbnail a shot's cell shows: the camera's preview, the developed one or
+    /// a live one.
+    /// @param primary Primary file of the shot.
+    /// @return The thumbnail, or a null image for an unknown shot or one without a thumbnail yet.
+    [[nodiscard]] QImage thumbnail(const std::filesystem::path& primary) const;
+
     /// @brief Tells the strip that a shot's settings were saved, so that its cached thumbnail is
     /// made afresh.
     /// @param primary Primary file of the shot.

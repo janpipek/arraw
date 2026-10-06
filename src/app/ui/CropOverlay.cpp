@@ -222,6 +222,16 @@ void CropOverlay::setPlaceholder(const QImage& uncropped, const QImage& framed) 
     update();
 }
 
+void CropOverlay::fillPlaceholder(const QImage& uncropped) {
+    if (!editing_ || rendered_ || uncropped.isNull()) {
+        return;
+    }
+    image_ = uncropped;
+    pixmap_ = {};
+    imageGeometry_ = editing_->geometry();
+    update();
+}
+
 QSize CropOverlay::renderSize() const {
     if (!editing_) {
         return {};

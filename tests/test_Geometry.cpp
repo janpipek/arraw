@@ -1,6 +1,7 @@
 #include "GeometryPlan.h"
 #include "ProcessingPlan.h"
 #include "support/Fixtures.h"
+#include "support/RowBandLimit.h"
 #include "support/TempDir.h"
 
 #include <Develop.h>
@@ -17,6 +18,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <limits>
 #include <numbers>
 #include <stdexcept>
@@ -385,4 +387,34 @@ TEST_CASE("Content helpers agree with the resolver's fitting", "[geometry][conte
         CHECK(resolved.crop() == fittedToContent(plan, requested));
         CHECK(isInsideContent(plan, resolved.crop(), 1e-7));
     }
+}
+
+TEST_CASE("Straightening is bit-identical on any number of threads", "[geometry][threads]") {
+    // Enough pixels for several bands, with a transparent area to interpolate across.
+    constexpr ImageSize size{640, 480};
+    ImageBuffer source(size, workingFormat, workingEncoding);
+    auto pixels = source.samples<float>();
+    for (std::size_t index = 0; index < size.pixelCount(); ++index) {
+        const auto x = static_cast<float>(index % size.width);
+        const auto y = static_cast<float>(index / size.width);
+        pixels[index * 4] = std::sin(x * 0.07F) * 0.5F + 0.5F;
+        pixels[index * 4 + 1] = std::cos(y * 0.05F) * 0.5F + 0.5F;
+        pixels[index * 4 + 2] = std::fmod(x * y, 17.0F) / 17.0F;
+        pixels[index * 4 + 3] = (index / 7) % 11 == 0 ? 0.25F : 1.0F;
+    }
+    GeometrySettings geometry;
+    geometry.straighten = 7.5;
+    geometry.rotation = QuarterTurn::Clockwise90;
+    const auto plan = geometryPlanFor(size, ImageOrientation::Normal, geometry);
+
+    ImageBuffer single({1, 1}, workingFormat, workingEncoding);
+    {
+        const test::ScopedRowBandLimit one(1);
+        single = applyGeometry(source.clone(), plan);
+    }
+    const ImageBuffer banded = applyGeometry(source.clone(), plan);
+
+    REQUIRE(banded.size() == plan.outputSize);
+    REQUIRE(banded.byteSize() == single.byteSize());
+    REQUIRE(std::memcmp(banded.bytes().data(), single.bytes().data(), single.byteSize()) == 0);
 }

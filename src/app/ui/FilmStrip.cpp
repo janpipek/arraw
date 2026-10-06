@@ -503,6 +503,14 @@ void FilmStrip::releaseLiveThumbnail() {
     thumbnails_.invalidate(primary);
 }
 
+QImage FilmStrip::thumbnail(const fs::path& primary) const {
+    const int row = model_.rowOf(primary);
+    if (row < 0) {
+        return {};
+    }
+    return model_.data(model_.index(row, 0), ShotModel::ThumbnailRole).value<QImage>();
+}
+
 void FilmStrip::noteSettingsSaved(const fs::path& primary) {
     thumbnails_.invalidate(primary);
 }

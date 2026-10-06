@@ -109,9 +109,21 @@ public:
     /// straightened, cropped frame); may be null. Dropped at the first change of geometry.
     void setPlaceholder(const QImage& uncropped, const QImage& framed);
 
+    /// @brief Gives the placeholder the whole photograph once it has been read (ADR 043).
+    ///
+    /// Keeps what the frame holds. Ignored once a render is shown, or for a null image.
+    /// @param uncropped The whole photograph in the session's geometry as it is now.
+    void fillPlaceholder(const QImage& uncropped);
+
     /// @brief Gives the image shown beneath the frame: a render, a placeholder or none.
     [[nodiscard]] const QImage& image() const noexcept {
         return image_;
+    }
+
+    /// @brief Tells whether anything of the photograph is shown: a render, or a placeholder of
+    /// the whole photograph or of what the frame holds.
+    [[nodiscard]] bool showsPhotograph() const noexcept {
+        return !image_.isNull() || !framed_.isNull();
     }
 
     /// @brief Tells whether a render, rather than a placeholder, is shown.

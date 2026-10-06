@@ -49,6 +49,7 @@ add_executable(arraw-tests
         test_ImageExport.cpp
         test_ImagePyramid.cpp
         test_Photo.cpp
+        test_PhotoLoader.cpp
         test_PreviewRenderer.cpp
         test_RenderActivity.cpp
         test_RenderDelay.cpp
@@ -108,12 +109,14 @@ add_executable(arraw-widget-tests
         test_CurveEditor.cpp
         test_DevelopPanel.cpp
         test_MainWindowCrop.cpp
+        test_MainWindowOpening.cpp
         test_RenderProgressBar.cpp
         test_SettingSlider.cpp)
 arraw_enable_warnings(arraw-widget-tests)
 # Qt Test for key clicks that go through the window's shortcuts, as a user's do.
 find_package(Qt6 REQUIRED COMPONENTS Test)
 target_link_libraries(arraw-widget-tests PRIVATE arraw-app-ui Qt6::Test Catch2::Catch2)
+target_include_directories(arraw-widget-tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src/core)
 target_compile_definitions(arraw-widget-tests
         PRIVATE ARRAW_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 set_target_properties(arraw-widget-tests PROPERTIES AUTOMOC ON)

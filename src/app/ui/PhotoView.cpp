@@ -118,7 +118,13 @@ void PhotoView::setFrameSize(QSize frame) {
     updateCursor();
 }
 
+void PhotoView::setStandIn(const QImage& standIn) {
+    standIn_ = standIn;
+    update();
+}
+
 void PhotoView::setImage(const QImage& image, const QRectF& region, const QImage& background) {
+    standIn_ = {};
     background_ = background;
     image_ = image;
     imageRegion_ = region;
@@ -134,6 +140,7 @@ void PhotoView::setBackground(const QImage& background) {
 void PhotoView::resetView() {
     image_ = {};
     background_ = {};
+    standIn_ = {};
     update();
     adopt(ViewTransform::fitted(QSizeF(frame_), QSizeF(devicePixels())), true, false);
 }
@@ -161,15 +168,28 @@ void PhotoView::zoomBy(double factor) {
 void PhotoView::paintEvent(QPaintEvent* /*event*/) {
     QPainter painter(this);
     painter.fillRect(rect(), palette().color(QPalette::Window));
-    if (image_.isNull() || imageRegion_.isEmpty() || frame_.isEmpty()) {
+    if (frame_.isEmpty()) {
         return;
     }
     const ViewTransform t = transform();
+    const double ratio = devicePixelRatioF();
+    if (image_.isNull() || imageRegion_.isEmpty()) {
+        if (!standIn_.isNull()) {
+            // Fitted inside the frame with its own shape, which the caller keeps close to it.
+            const QRectF frame(t.viewFromFrame({0.0, 0.0}) / ratio,
+                               t.viewFromFrame({1.0, 1.0}) / ratio);
+            QSizeF fitted = QSizeF(standIn_.size()).scaled(frame.size(), Qt::KeepAspectRatio);
+            QRectF target(QPointF(), fitted);
+            target.moveCenter(frame.center());
+            painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+            painter.drawImage(target, standIn_);
+        }
+        return;
+    }
     const QPointF topLeft = t.viewFromFrame(imageRegion_.topLeft());
     const QPointF bottomRight = t.viewFromFrame(imageRegion_.bottomRight());
     // Whole device pixels at the edges: at 1:1 the render then lands on the
     // screen's pixels, and is not resampled by a fraction of one.
-    const double ratio = devicePixelRatioF();
     const QRectF target(
         QPointF(std::round(topLeft.x()) / ratio, std::round(topLeft.y()) / ratio),
         QPointF(std::round(bottomRight.x()) / ratio, std::round(bottomRight.y()) / ratio));

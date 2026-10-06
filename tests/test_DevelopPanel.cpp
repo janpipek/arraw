@@ -21,6 +21,8 @@
 #include <QPushButton>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QSlider>
+#include <QStackedWidget>
 #include <QStyle>
 #include <QTimer>
 
@@ -527,4 +529,44 @@ TEST_CASE("The panel fits the develop dock's default width", "[app][panel]") {
     QCoreApplication::processEvents();
     CHECK(scroll.verticalScrollBar()->isVisible());
     CHECK(scroll.horizontalScrollBar()->maximum() == 0);
+}
+
+TEST_CASE("Every slider keeps its minimum track at the dock's minimum and default width",
+          "[app][panel]") {
+    for (const bool atMinimum : {true, false}) {
+        QScrollArea scroll;
+        auto* panel = new DevelopPanel;
+        scroll.setWidget(panel);
+        scroll.setWidgetResizable(true);
+        scroll.setFrameShape(QFrame::NoFrame);
+        panel->showState(DevelopState{}, PanelContext{});
+        const int width = atMinimum ? panel->minimumDockWidth() : panel->defaultDockWidth();
+        INFO((atMinimum ? "minimum " : "default ") << width);
+        scroll.resize(width, 400);
+        scroll.show();
+        QCoreApplication::processEvents();
+        CHECK(scroll.verticalScrollBar()->isVisible());
+        CHECK(scroll.horizontalScrollBar()->maximum() == 0);
+        // A hidden slider is not laid out, and would pass by keeping its minimum: each page of
+        // a stack (the HSL group's) is shown in turn, and only the visible sliders are checked.
+        const auto stacks = panel->findChildren<QStackedWidget*>();
+        CHECK_FALSE(stacks.isEmpty());
+        for (QStackedWidget* stack : stacks) {
+            for (int page = 0; page < stack->count(); ++page) {
+                stack->setCurrentIndex(page);
+                QCoreApplication::processEvents();
+                CHECK(scroll.horizontalScrollBar()->maximum() == 0);
+                int checked = 0;
+                for (const QSlider* slider : panel->findChildren<QSlider*>()) {
+                    if (slider->objectName() != "slider" || !slider->isVisibleTo(panel)) {
+                        continue;
+                    }
+                    ++checked;
+                    INFO("page " << page << ", slider width " << slider->width());
+                    CHECK(slider->width() >= SettingSlider::minimumSliderLength);
+                }
+                CHECK(checked > 0);
+            }
+        }
+    }
 }

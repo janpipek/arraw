@@ -14,6 +14,7 @@
 #include "SettingsDialog.h"
 #include "ThumbnailCache.h"
 #include "ThumbnailWorker.h"
+#include "TimingTrace.h"
 #include "ViewTransform.h"
 
 #include <ColorEncoding.h>
@@ -52,6 +53,7 @@
 #include <QToolButton>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
@@ -114,7 +116,31 @@ MainWindow::MainWindow(QWidget* parent)
                   Qt::QueuedConnection);
           },
           cpuForcedByEnvironment() ? ExportQueue::Device::Cpu : ExportQueue::Device::Auto,
-          runningSettings_) {
+          runningSettings_),
+      photoLoader_(
+          ThumbnailCache(ThumbnailCache::defaultRoot()),
+          [this](DecodedPhoto result) {
+              // On the decode thread, as the preview's.
+              QMetaObject::invokeMethod(
+                  this, [this, result = std::move(result)] { decodeLanded(result); },
+                  Qt::QueuedConnection);
+          },
+          [this](CameraPreview preview) {
+              QMetaObject::invokeMethod(
+                  this, [this, preview = std::move(preview)] { cameraPreviewLanded(preview); },
+                  Qt::QueuedConnection);
+          },
+          [this](std::uint64_t request, const Progress& progress) {
+              // A decode reports a handful of times: no thinning needed.
+              QMetaObject::invokeMethod(
+                  this,
+                  [this, request, progress] {
+                      if (request == decodeRequest_) {
+                          renderIndicator_->report(progress.fraction, progress.step);
+                      }
+                  },
+                  Qt::QueuedConnection);
+          }) {
     filmStrip_ = new FilmStrip(this);
     buildMenu();
     buildStatusBar();
@@ -333,7 +359,7 @@ void MainWindow::buildZoomControls() {
 
 void MainWindow::updateZoomControls() {
     // The crop mode always fits the whole photograph.
-    const bool enabled = open_.has_value() && !photoView_->isCropMode();
+    const bool enabled = editable() && !photoView_->isCropMode();
     zoomButton_->setEnabled(enabled);
     zoomInAction_->setEnabled(enabled);
     zoomOutAction_->setEnabled(enabled);
@@ -371,10 +397,7 @@ void MainWindow::buildDevelopDock() {
 
     // Never narrower than the panel and a vertical scroll bar, so the panel never scrolls
     // sideways; it opens a little wider (DevelopPanel::defaultDockWidth()).
-    scroll->setMinimumWidth(developPanel_->minimumSizeHint().width() +
-                            scroll->style()->pixelMetric(QStyle::PM_ScrollBarExtent, nullptr,
-                                                         scroll->verticalScrollBar()) +
-                            2 * scroll->frameWidth());
+    scroll->setMinimumWidth(developPanel_->minimumDockWidth() + 2 * scroll->frameWidth());
 
     auto* dock = new QDockWidget(tr("Develop"), this);
     dock->setFeatures(QDockWidget::NoDockWidgetFeatures);
@@ -474,7 +497,7 @@ void MainWindow::buildDevelopDock() {
 }
 
 void MainWindow::setPicking(bool picking) {
-    picking_ = picking && open_.has_value() && !photoView_->isCropMode();
+    picking_ = picking && editable() && !photoView_->isCropMode();
     developPanel_->setPicking(picking_);
     cancelPickShortcut_->setEnabled(picking_);
     photoView_->setPicking(picking_);
@@ -485,7 +508,7 @@ void MainWindow::setCropMode(bool cropping) {
         leaveCropMode(true);
         return;
     }
-    if (!open_ || photoView_->isCropMode()) {
+    if (!editable() || photoView_->isCropMode()) {
         cropAction_->setChecked(photoView_->isCropMode());
         return;
     }
@@ -526,16 +549,33 @@ void MainWindow::seedCropOverlay() {
         return;
     }
     if (!open_->cameraPreview) {
-        try {
-            open_->cameraPreview = embeddedPreviewImage(
-                ThumbnailCache(ThumbnailCache::defaultRoot()), open_->session.photo().path());
-        } catch (const std::exception&) {
-            open_->cameraPreview = QImage();
+        // Read off the GUI thread: a full-size JPEG preview takes about half a second
+        // (ADR 043). The developed frame stands in alone until it lands.
+        crop.setPlaceholder(QImage(), photoView_->wholeFrameImage());
+        if (cameraPreviewRequest_ == 0) {
+            cameraPreviewRequest_ = photoLoader_.readCameraPreview(open_->session.photo().path());
         }
+        return;
     }
     // The camera's preview is upright, with none of the user's turns or flips.
     crop.setPlaceholder(reorientedImage(*open_->cameraPreview, GeometrySettings{}, geometry),
                         photoView_->wholeFrameImage());
+}
+
+void MainWindow::cameraPreviewLanded(const CameraPreview& preview) {
+    if (preview.request != cameraPreviewRequest_) {
+        return;
+    }
+    cameraPreviewRequest_ = 0;
+    if (!open_ || open_->session.photo().path() != preview.path) {
+        return;
+    }
+    open_->cameraPreview = preview.image;
+    if (photoView_->isCropMode()) {
+        CropOverlay& crop = photoView_->cropOverlay();
+        crop.fillPlaceholder(
+            reorientedImage(preview.image, GeometrySettings{}, crop.editing().geometry()));
+    }
 }
 
 void MainWindow::updateHistoryActions() {
@@ -587,7 +627,7 @@ void MainWindow::leaveCropMode(bool accept) {
 }
 
 void MainWindow::editGeometry(const std::function<void(CropEditing&)>& command) {
-    if (!open_) {
+    if (!editable()) {
         return;
     }
     if (photoView_->isCropMode()) {
@@ -617,7 +657,7 @@ void MainWindow::setStraightening(bool straightening) {
 
 GeometrySettings MainWindow::reconciledGeometry(const GeometrySettings& geometry) {
     const GeometrySettings& current = open_->session.photo().state().settings.geometry;
-    if (geometry == current) {
+    if (geometry == current || !open_->decoded) {
         return geometry;
     }
     if (photoView_->isCropMode()) {
@@ -632,6 +672,9 @@ GeometrySettings MainWindow::reconciledGeometry(const GeometrySettings& geometry
 }
 
 void MainWindow::pickNeutralAt(const QPointF& point) {
+    if (!editable()) {
+        return;
+    }
     const double x = point.x();
     const double y = point.y();
 
@@ -681,6 +724,7 @@ void MainWindow::refreshPanel(std::chrono::milliseconds renderDelay) {
     if (!open_) {
         return;
     }
+    const detail::TimingSpan timing("window.panel");
     const Photo& photo = open_->session.photo();
     const bool raw = !std::holds_alternative<NamedEncoding>(photo.metadata().encoding);
     PanelContext context{raw, std::nullopt, defaultStateFor(photo.metadata().encoding).settings};
@@ -850,10 +894,16 @@ void MainWindow::openInitialPath(const std::optional<std::filesystem::path>& pat
 
 void MainWindow::openFile(const std::filesystem::path& path) {
     // The one place that can tell the user: an exception must not leave a
-    // function Qt's event loop called, which ends in std::terminate.
+    // function Qt's event loop called, which ends in std::terminate. The pixels are
+    // decoded afterwards, on the loader's thread, and a failure there is reported
+    // by decodeLanded.
+    const detail::TimingSpan timing("window.openFile");
     try {
         DebugDiagnostics log;
-        Photo photo = openPhoto(path, log);
+        Photo photo = [&] {
+            const detail::TimingSpan metadataTiming("window.open.metadata");
+            return openPhoto(path, log);
+        }();
         // Asked once the file is known to open, so that cancelling the dialog
         // or choosing a bad file leaves the current photograph and its edits.
         if (!confirmLeavingPhoto()) {
@@ -862,6 +912,7 @@ void MainWindow::openFile(const std::filesystem::path& path) {
         const std::filesystem::path folder = path.parent_path();
         if (filmStrip_->folder().lexically_normal() != folder.lexically_normal()) {
             try {
+                const detail::TimingSpan folderTiming("window.folder.scan");
                 filmStrip_->setFolder(folder);
             } catch (const std::exception& error) {
                 // The photograph itself opened; only the strip cannot show its folder.
@@ -899,6 +950,7 @@ void MainWindow::openFolder(const std::filesystem::path& folder) {
         return;
     }
     try {
+        const detail::TimingSpan folderTiming("window.folder.scan");
         filmStrip_->setFolder(folder);
     } catch (const std::exception& error) {
         QMessageBox::warning(
@@ -915,9 +967,13 @@ void MainWindow::openFolder(const std::filesystem::path& folder) {
 
 void MainWindow::activateShot(const QString& primary) {
     const std::filesystem::path path(primary.toStdU16String());
+    const detail::TimingSpan timing("window.activateShot");
     try {
         DebugDiagnostics log;
-        Photo photo = openPhoto(path, log);
+        Photo photo = [&] {
+            const detail::TimingSpan metadataTiming("window.open.metadata");
+            return openPhoto(path, log);
+        }();
         if (!confirmLeavingPhoto()) {
             return; // The strip keeps its active shot and selection.
         }
@@ -1038,6 +1094,12 @@ void MainWindow::exportWithDialog() {
     if (!open_) {
         return;
     }
+    if (!open_->decoded) {
+        statusBar()->showMessage(tr("%1 is still being decoded.")
+                                     .arg(toQString(open_->session.photo().path().filename())),
+                                 5000);
+        return;
+    }
     // The end of a pending edit may change what is exported.
     developPanel_->finishPendingEdit();
     try {
@@ -1138,6 +1200,7 @@ bool MainWindow::saveAdjustments() {
     if (!open_) {
         return true;
     }
+    const detail::TimingSpan timing("window.save");
     try {
         leaveCropMode(true);
         developPanel_->finishPendingEdit();
@@ -1233,7 +1296,8 @@ void MainWindow::closeEvent(QCloseEvent* event) {
 }
 
 void MainWindow::requestRender() {
-    if (!open_) {
+    // Nothing to render until the pixels land; decodeLanded asks then.
+    if (!editable()) {
         return;
     }
     // Any pending resize or interaction is covered by this request.
@@ -1265,7 +1329,8 @@ void MainWindow::requestRender() {
     }
     PreviewView view{.region = std::nullopt,
                      .outputSize = photoView_->devicePixels(),
-                     .devicePixelRatio = ratio};
+                     .devicePixelRatio = ratio,
+                     .thumbnailEdge = ThumbnailCache::maxEdge};
     try {
         // The crop may have changed the frame; the view keeps its zoom and centre.
         const ImageSize cropped =
@@ -1290,11 +1355,14 @@ void MainWindow::requestRender() {
 }
 
 void MainWindow::showResult(const PreviewResult& result) {
+    const detail::TimingSpan timing("window.result", result.request);
     // The newest request's render, delivered or failed, ends the busy period; a recount of
     // the histogram or a refreshed fallback follows a render, and is not one. Before the
     // filter below, so that a render no longer wanted (a photograph was opened, the crop
     // mode left) still ends it when no request follows.
-    if (result.request >= latestRequest_ && (result.image || !result.error.empty())) {
+    // While a decode is awaited the busy period is the decode's.
+    if (decodeRequest_ == 0 && result.request >= latestRequest_ &&
+        (result.image || !result.error.empty())) {
         renderIndicator_->finish(result.image.has_value() && result.request >= firstRequest_);
     }
     if (result.request < firstRequest_) {
@@ -1363,11 +1431,9 @@ void MainWindow::followWithThumbnail(const PreviewResult& result) {
     if (!open_) {
         return;
     }
-    // A zoomed view shows a part of the frame, which is no thumbnail of the photograph.
-    constexpr double tolerance = 1e-3;
-    const QRectF& region = result.region;
-    if (region.left() > tolerance || region.top() > tolerance || region.right() < 1.0 - tolerance ||
-        region.bottom() < 1.0 - tolerance) {
+    // Reduced on the worker (ADR 043), and only for a render of the whole frame: a zoomed
+    // view shows a part of it, which is no thumbnail of the photograph.
+    if (!result.thumbnail) {
         return;
     }
     // The strip's cell is the photograph's primary; a companion has a sidecar, and a thumbnail,
@@ -1376,24 +1442,11 @@ void MainWindow::followWithThumbnail(const PreviewResult& result) {
     if (filmStrip_->shotContaining(path) != path) {
         return;
     }
-    QImage thumbnail = *result.image;
-    if (thumbnail.width() > ThumbnailCache::maxEdge ||
-        thumbnail.height() > ThumbnailCache::maxEdge) {
-        thumbnail = thumbnail.scaled(ThumbnailCache::maxEdge, ThumbnailCache::maxEdge,
-                                     Qt::KeepAspectRatio, Qt::SmoothTransformation);
-    }
-    // The preview's pixel ratio is for the photograph view, not for a cell.
-    thumbnail.setDevicePixelRatio(1.0);
-    filmStrip_->setLiveThumbnail(path, std::move(thumbnail));
+    filmStrip_->setLiveThumbnail(path, *result.thumbnail);
 }
 
 void MainWindow::showPhoto(Photo photo) {
-    DebugDiagnostics log;
-
-    // Everything that can throw, before anything changes.
-    auto decoded = std::make_shared<const ImageBuffer>(loadImage(photo.path(), log));
-
-    // Commit.
+    const detail::TimingSpan timing("window.showPhoto");
     if (photoView_->isCropMode()) {
         // Only when nothing asked first; the edit belongs to the session being replaced.
         closeCropOverlay();
@@ -1402,24 +1455,113 @@ void MainWindow::showPhoto(Photo photo) {
     setPicking(false);
     // The shot just left shows its saved settings again, not the edits that were abandoned.
     filmStrip_->releaseLiveThumbnail();
-    open_.emplace(OpenPhoto{EditSession(std::move(photo)), decoded, std::nullopt, std::nullopt});
-    photoView_->resetView();
-    updateZoomControls();
-    previewRenderer_.setSource(std::move(decoded));
-    // The previous photograph's histogram is no histogram of this one.
-    developPanel_->clearCurveHistogram();
+    const std::filesystem::path path = photo.path();
+    open_.emplace(OpenPhoto{EditSession(std::move(photo)), nullptr, std::nullopt, std::nullopt});
+    // The previous photograph's pixels go, and with them whatever the renderer was doing.
+    previewRenderer_.setSource(nullptr);
     // Results of the previous photograph are still on their way, or in progress.
     firstRequest_ = latestRequest_ + 1;
-    developDock_->setEnabled(true);
-    exportAction_->setEnabled(true);
-    cropAction_->setEnabled(true);
-    for (QAction* action : geometryActions_) {
-        action->setEnabled(true);
-    }
-    refreshPanel(); // Requests the first render.
-    const auto& path = open_->session.photo().path();
+    // The previous photograph's histogram is no histogram of this one.
+    developPanel_->clearCurveHistogram();
+    cameraPreviewRequest_ = 0;
+    showStandIn();
+    // Cancels the decode of a photograph opened before this one (ADR 042).
+    decodeRequest_ = photoLoader_.decode(path);
+    renderIndicator_->begin();
+    // A render of the previous photograph may still hold the bar: its step is not this one's.
+    renderIndicator_->report(0.0, ProgressStep::Decode);
+    updateEditingActions();
+    refreshPanel(); // The sidecar's state at once; the render waits for the pixels.
     rememberFolder(path.parent_path());
     QSettings().setValue("lastFile", QFileInfo(toQString(path)).absoluteFilePath());
+}
+
+void MainWindow::showStandIn() {
+    const Photo& photo = open_->session.photo();
+    QSize frame;
+    try {
+        const ImageSize cropped =
+            croppedSize(photo.metadata().size, photo.metadata().orientation, photo.state());
+        frame = QSize(static_cast<int>(cropped.width), static_cast<int>(cropped.height));
+    } catch (const std::exception&) {
+        // A state the renderer will report on; no frame to fit until then.
+    }
+    QImage standIn;
+    if (filmStrip_->shotContaining(photo.path()) == photo.path()) {
+        standIn = filmStrip_->thumbnail(photo.path());
+    }
+    // A thumbnail of another shape is of another frame: a camera preview of a turned or
+    // cropped photograph. Within the rounding of a small thumbnail it is this frame.
+    constexpr double tolerance = 0.03;
+    if (!standIn.isNull() && !frame.isEmpty()) {
+        const double frameAspect = static_cast<double>(frame.width()) / frame.height();
+        const double standInAspect = static_cast<double>(standIn.width()) / standIn.height();
+        if (std::abs(standInAspect / frameAspect - 1.0) > tolerance) {
+            standIn = {};
+        }
+    }
+    photoView_->setFrameSize(frame);
+    photoView_->resetView();
+    photoView_->setStandIn(standIn);
+}
+
+void MainWindow::decodeLanded(const DecodedPhoto& result) {
+    if (result.request != decodeRequest_) {
+        return; // Of a photograph left since.
+    }
+    decodeRequest_ = 0;
+    if (!open_) {
+        return;
+    }
+    if (!result.decoded) {
+        renderIndicator_->finish(false);
+        const std::filesystem::path path = open_->session.photo().path();
+        closePhoto();
+        QMessageBox::warning(
+            this, tr("Cannot Open Photograph"),
+            tr("%1\n\n%2").arg(toQString(path), QString::fromStdString(result.error)));
+        return;
+    }
+    const detail::TimingSpan timing("window.decodeLanded");
+    open_->decoded = result.decoded;
+    previewRenderer_.setSource(result.decoded);
+    updateEditingActions();
+    refreshPanel(); // Requests the first render.
+}
+
+void MainWindow::closePhoto() {
+    if (photoView_->isCropMode()) {
+        closeCropOverlay();
+    }
+    geometryEdit_.reset();
+    setPicking(false);
+    filmStrip_->releaseLiveThumbnail();
+    filmStrip_->clearActive();
+    open_.reset();
+    photoLoader_.cancelDecode();
+    decodeRequest_ = 0;
+    cameraPreviewRequest_ = 0;
+    previewRenderer_.setSource(nullptr);
+    firstRequest_ = latestRequest_ + 1;
+    developPanel_->clearCurveHistogram();
+    photoView_->setFrameSize({});
+    photoView_->resetView();
+    updateEditingActions();
+    updateHistoryActions();
+    saveAction_->setEnabled(false);
+    updateTitle();
+    QSettings().remove("lastFile");
+}
+
+void MainWindow::updateEditingActions() {
+    const bool ready = editable();
+    developDock_->setEnabled(ready);
+    exportAction_->setEnabled(ready);
+    cropAction_->setEnabled(ready);
+    for (QAction* action : geometryActions_) {
+        action->setEnabled(ready);
+    }
+    updateZoomControls();
 }
 
 } // namespace arraw::app

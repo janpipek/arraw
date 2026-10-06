@@ -2,6 +2,7 @@
 
 #include "CropEditing.h"
 #include "ExportQueue.h"
+#include "PhotoLoader.h"
 #include "PreviewRenderer.h"
 #include "RenderIndicator.h"
 
@@ -129,8 +130,9 @@ private:
     /// @brief Opens a photograph the user chose, and shows its folder in the film strip.
     ///
     /// The file itself is developed, even when it is a companion of a shot (a JPEG beside a
-    /// RAW); the strip selects the shot that holds it. Nothing changes if the file does not
-    /// open or the user cancels leaving the open photograph.
+    /// RAW); the strip selects the shot that holds it. Nothing changes if the file's
+    /// description cannot be read or the user cancels leaving the open photograph; its pixels
+    /// are decoded afterwards, off the GUI thread (showPhoto()).
     /// @param path File to open.
     void openFile(const std::filesystem::path& path);
 
@@ -145,8 +147,9 @@ private:
 
     /// @brief Develops a shot of the strip, when the user lets go of the open photograph.
     ///
-    /// The photograph is read before anything is asked, so one that does not open leaves
-    /// the window as it is; cancelling leaves the strip's active shot and selection as they were.
+    /// The photograph's description and sidecar are read before anything is asked, so one
+    /// that does not open leaves the window as it is; cancelling leaves the strip's active
+    /// shot and selection as they were. The pixels follow asynchronously (showPhoto()).
     /// @param primary Primary file of the shot, as the strip names it.
     void activateShot(const QString& primary);
 
@@ -297,16 +300,47 @@ private:
     /// @param result Finished render, with its image.
     void showDevice(const PreviewResult& result);
 
-    /// @brief Opens a photograph and makes it the one being edited.
+    /// @brief Opens a photograph and makes it the one being edited, decoding it on a worker.
     ///
-    /// Decodes synchronously, before anything changes, so a failure leaves the
-    /// window showing the previous photograph, session and pixels together.
-    /// Rendering is asynchronous: the previous picture stays until the first
-    /// render of this photograph arrives, and a failure of that render is
-    /// reported through showResult.
-    /// @param photo Photograph to show.
-    /// @throws std::exception if the photograph cannot be decoded.
+    /// Returns at once (ADR 043). The session and the panel show the photograph's
+    /// state from its sidecar immediately, and the view its thumbnail from the strip
+    /// as a stand-in, or nothing; the bar shows the decode's progress. Until the
+    /// pixels land (decodeLanded()) nothing that needs them is enabled: the panel,
+    /// the crop mode, the geometry commands, the zoom, the picker and the export.
+    /// Marks can be set throughout. Opening another photograph meanwhile cancels the
+    /// decode, and the window never shows a result of one photograph for another.
+    /// @param photo Photograph to show, already read with its sidecar.
     void showPhoto(Photo photo);
+
+    /// @brief Takes the pixels of the photograph being opened, or reports why there are none.
+    ///
+    /// Ignores a decode the window no longer waits for. On success enables editing and asks
+    /// for the first render; on failure closes the photograph, as there is nothing to edit.
+    /// @param result Outcome delivered by the loader.
+    void decodeLanded(const DecodedPhoto& result);
+
+    /// @brief Keeps a camera preview read for the crop mode, and shows it if the mode still
+    /// waits for its first render.
+    /// @param preview Outcome delivered by the loader.
+    void cameraPreviewLanded(const CameraPreview& preview);
+
+    /// @brief Shows the strip's thumbnail of the photograph being opened, fitted to its frame.
+    ///
+    /// The frame comes from what the file declares, so the stand-in sits where the render
+    /// will. A thumbnail whose shape is not the frame's (a camera preview of a cropped or
+    /// turned photograph) is not shown.
+    void showStandIn();
+
+    /// @brief Closes the open photograph, leaving the window empty.
+    void closePhoto();
+
+    /// @brief Tells whether a photograph is open with its pixels, so whether it can be edited.
+    [[nodiscard]] bool editable() const noexcept {
+        return open_ && open_->decoded;
+    }
+
+    /// @brief Enables what needs the pixels of the open photograph, as editable() says.
+    void updateEditingActions();
 
     /// @brief Photograph being edited, with its pixels.
     struct OpenPhoto {
@@ -314,9 +348,10 @@ private:
         EditSession session;
         /// Pixels, decoded once and developed again for each size; shared with
         /// the renderer, which may still be using them after the window moved on.
+        /// Null while the loader decodes them.
         std::shared_ptr<const ImageBuffer> decoded;
-        /// Camera's embedded preview, upright; read on first entering the crop mode, and
-        /// null if the file has none.
+        /// Camera's embedded preview, upright; read off the GUI thread on first entering the
+        /// crop mode, and null if the file has none.
         std::optional<QImage> cameraPreview;
         /// Last render of the crop mode, and the uncropped state it shows, to show at once
         /// on entering the mode again.
@@ -384,6 +419,12 @@ private:
     /// results below it belong to a previous photograph.
     std::uint64_t firstRequest_ = 0;
 
+    /// Identifier of the decode the window waits for; 0 when none.
+    std::uint64_t decodeRequest_ = 0;
+
+    /// Identifier of the camera preview read the crop mode waits for; 0 when none.
+    std::uint64_t cameraPreviewRequest_ = 0;
+
     /// Identifier of the first render requested in the crop mode; later results are the overlay's.
     std::uint64_t cropFirstRequest_ = 0;
 
@@ -417,6 +458,12 @@ private:
     /// Declared after everything it reports to, so that it is destroyed
     /// before any of it, and no callback reaches a destroyed window.
     ExportQueue exportQueue_;
+
+    /// Workers that decode photographs and read camera previews (ADR 043).
+    ///
+    /// Declared last, as the workers above: destroying it cancels the decode in
+    /// progress and waits for its threads, after which no callback can run.
+    PhotoLoader photoLoader_;
 };
 
 } // namespace arraw::app

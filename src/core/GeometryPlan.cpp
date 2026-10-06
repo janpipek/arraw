@@ -352,7 +352,7 @@ ImageBuffer arraw::applyGeometry(ImageBuffer source, const GeometryPlan& plan) {
     result.setPixelScale(source.pixelScale());
     auto output = result.samples<float>();
     const detail::ProgressSpan progress(ProgressStep::Geometry);
-    detail::forEachRowInTurn(
+    detail::forEachRowBand(
         plan.outputSize.height, plan.outputSize.width,
         [&](std::uint32_t first, std::uint32_t last) {
             for (std::uint32_t y = first; y < last; ++y) {

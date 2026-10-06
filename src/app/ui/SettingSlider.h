@@ -36,6 +36,12 @@ class SettingSlider : public QWidget {
     Q_OBJECT
     Q_DISABLE_COPY_MOVE(SettingSlider)
 public:
+    /// Shortest slider track a row keeps, in logical pixels: enough to place a value by eye.
+    ///
+    /// It is the slider's minimum width, so the minimum size of a panel of rows (and with it
+    /// the develop dock's minimum width) grows with the label column and the value field.
+    static constexpr int minimumSliderLength = 120;
+
     /// @brief Builds the row for a setting.
     /// @param key Key of a ranged float, double or optional float setting in the descriptor table.
     /// @param parent Owning widget.

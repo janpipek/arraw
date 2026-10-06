@@ -46,12 +46,18 @@ struct PreviewView {
     QSize outputSize;
     /// Device pixels per logical pixel of the screen; set on the image.
     qreal devicePixelRatio = 1.0;
+    /// Long edge of a reduced copy to deliver beside an image of the whole frame, for a
+    /// thumbnail; 0 for none. Reduced on the worker, so the receiver does not (ADR 043).
+    int thumbnailEdge = 0;
 
     /// @brief Makes a view of the whole frame.
     /// @param box Box to fit the frame inside, in device pixels.
     /// @param ratio Device pixels per logical pixel.
     [[nodiscard]] static PreviewView wholeFrame(QSize box, qreal ratio = 1.0) {
-        return {.region = std::nullopt, .outputSize = box, .devicePixelRatio = ratio};
+        return {.region = std::nullopt,
+                .outputSize = box,
+                .devicePixelRatio = ratio,
+                .thumbnailEdge = 0};
     }
 };
 
@@ -99,6 +105,9 @@ struct PreviewResult {
     /// Histogram of the curve input for the request's state (ADR 035), set only
     /// on a result of its own, once requests paused and the curve input changed.
     std::optional<CurveHistogram> curveHistogram;
+    /// The image reduced to PreviewView::thumbnailEdge, at a pixel ratio of 1; set only
+    /// when the request asked for one and the image shows the whole frame.
+    std::optional<QImage> thumbnail;
 };
 
 /// @brief Worker thread that renders previews off the thread that asks for them.
@@ -187,8 +196,10 @@ public:
 
     /// @brief Replaces the photograph to render, dropping requests not yet started.
     ///
-    /// A render in progress finishes with the previous source, which the worker
-    /// keeps alive, and its result is still delivered.
+    /// Cancels the work in progress (ADR 042, ADR 043), which then delivers
+    /// nothing; a render past its last check finishes with the previous source,
+    /// which the worker keeps alive, and its result is still delivered.
+    /// The worker then drops the levels and checkpoints it kept of the previous source.
     /// @param decoded Decoded photograph; may be empty to clear the source.
     void setSource(std::shared_ptr<const ImageBuffer> decoded);
 
@@ -224,10 +235,12 @@ private:
 
     /// @brief Makes the channel of the work about to start, which a newer request cancels.
     ///
-    /// Already cancelled when a request arrived since the work was taken.
+    /// Already cancelled when a request or another source arrived since the work was taken.
     /// @param onProgress Receiver of the work's progress; may be empty.
+    /// @param source Source the work was taken with.
     [[nodiscard]] std::shared_ptr<ProgressChannel>
-    startChannel(ProgressChannel::Callback onProgress);
+    startChannel(ProgressChannel::Callback onProgress,
+                 const std::shared_ptr<const ImageBuffer>& source);
 
     /// @brief Forgets the channel of the work that ended.
     void endChannel();
@@ -244,8 +257,8 @@ private:
     /// Desktop preferences captured before the worker starts.
     AppSettings settings_;
 
-    /// Guard of source_, pending_, lastId_, curveHistogramWanted_, recountHistogram_ and
-    /// inFlight_.
+    /// Guard of source_, pending_, sourceChanged_, lastId_, curveHistogramWanted_,
+    /// recountHistogram_ and inFlight_.
     std::mutex mutex_;
 
     /// Signal that a request or a recount is pending, or the worker should stop.
@@ -256,6 +269,10 @@ private:
 
     /// Newest request not yet started.
     std::optional<Pending> pending_;
+
+    /// Whether source_ changed since the worker last looked, so that it drops what it keeps
+    /// of the previous one.
+    bool sourceChanged_ = false;
 
     /// Channel of the work the worker is doing, which a newer request cancels; null when idle.
     std::shared_ptr<ProgressChannel> inFlight_;

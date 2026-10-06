@@ -215,6 +215,14 @@ public:
         return sourceReason_.empty();
     }
 
+    /// @brief Drops the levels and checkpoints of the source, keeping the device.
+    void forgetSource() noexcept {
+        clearCheckpoints();
+        uploaded_.clear();
+        source_.reset();
+        sourceReason_.clear();
+    }
+
     /// @brief Renders a request on the device and reads the viewport-sized result back.
     ///
     /// Uploads the level the first time it is rendered from, and keeps it for
@@ -431,7 +439,8 @@ std::optional<PreviewResult> render(std::uint64_t id, const DevelopState& state,
                          .frame = {},
                          .level = 0,
                          .resumedFrom = std::nullopt,
-                         .curveHistogram = std::nullopt};
+                         .curveHistogram = std::nullopt,
+                         .thumbnail = std::nullopt};
     // Nothing may escape the thread, or the process terminates.
     try {
         pyramid.reset(source);
@@ -617,6 +626,28 @@ ProgressChannel::Callback thinned(const PreviewRenderer::ProgressCallback& onPro
     };
 }
 
+/// @brief Reduces a render of the whole frame for a thumbnail.
+/// @param result A render that delivered an image.
+/// @param edge Long edge of the thumbnail; 0 for none.
+/// @return The reduced image at a pixel ratio of 1, or nothing when none was asked for or the
+/// image shows a part of the frame.
+std::optional<QImage> reducedForThumbnail(const PreviewResult& result, int edge) {
+    constexpr double tolerance = 1e-3;
+    const QRectF& region = result.region;
+    if (edge <= 0 || !result.image || region.left() > tolerance || region.top() > tolerance ||
+        region.right() < 1.0 - tolerance || region.bottom() < 1.0 - tolerance) {
+        return std::nullopt;
+    }
+    const detail::TimingSpan timing("preview.thumbnail", result.request);
+    QImage thumbnail = *result.image;
+    if (thumbnail.width() > edge || thumbnail.height() > edge) {
+        thumbnail = thumbnail.scaled(edge, edge, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    }
+    // The preview's pixel ratio is for the photograph view, not for a cell.
+    thumbnail.setDevicePixelRatio(1.0);
+    return thumbnail;
+}
+
 } // namespace
 
 PreviewRenderer::PreviewRenderer(std::function<void(PreviewResult)> onResult, Device device,
@@ -639,13 +670,15 @@ PreviewRenderer::~PreviewRenderer() {
 }
 
 std::shared_ptr<ProgressChannel>
-PreviewRenderer::startChannel(ProgressChannel::Callback onProgress) {
+PreviewRenderer::startChannel(ProgressChannel::Callback onProgress,
+                              const std::shared_ptr<const ImageBuffer>& source) {
     auto channel = std::make_shared<ProgressChannel>(std::move(onProgress));
     const std::scoped_lock lock(mutex_);
-    // A request that came while the work was being taken has superseded it
-    // already. A stop requested before this lock found nothing in flight to
-    // cancel, so the new work stops here instead of holding up the destructor.
-    if (pending_ || worker_.get_stop_token().stop_requested()) {
+    // A request or a new source that came while the work was being taken has
+    // superseded it already. A stop requested before this lock found nothing in
+    // flight to cancel, so the new work stops here instead of holding up the
+    // destructor.
+    if (pending_ || source_ != source || worker_.get_stop_token().stop_requested()) {
         channel->cancel();
     }
     inFlight_ = channel;
@@ -658,9 +691,19 @@ void PreviewRenderer::endChannel() {
 }
 
 void PreviewRenderer::setSource(std::shared_ptr<const ImageBuffer> decoded) {
-    const std::scoped_lock lock(mutex_);
-    source_ = std::move(decoded);
-    pending_.reset();
+    {
+        const std::scoped_lock lock(mutex_);
+        sourceChanged_ = sourceChanged_ || decoded != source_;
+        source_ = std::move(decoded);
+        pending_.reset();
+        // Whatever the worker does is for the previous photograph.
+        if (inFlight_) {
+            inFlight_->cancel();
+        }
+    }
+    // The worker lets go of the previous photograph's levels and checkpoints now, not at
+    // the next render, which waits for the next decode (ADR 043).
+    wake_.notify_one();
 }
 
 void PreviewRenderer::setCurveHistogramWanted(bool wanted) {
@@ -728,25 +771,47 @@ void PreviewRenderer::run(std::stop_token stop) {
         std::optional<Pending> job;
         std::shared_ptr<const ImageBuffer> source;
         bool recountOnly = false;
+        bool forget = false;
         {
             std::unique_lock lock(mutex_);
-            wake_.wait(lock, stop, [this] { return pending_.has_value() || recountHistogram_; });
+            wake_.wait(lock, stop, [this] {
+                return pending_.has_value() || recountHistogram_ || sourceChanged_;
+            });
             if (stop.stop_requested()) {
                 return; // Pending requests are dropped.
             }
             source = source_;
+            forget = std::exchange(sourceChanged_, false);
             if (pending_) {
                 job = std::move(pending_);
                 pending_.reset();
-            } else {
+            } else if (recountHistogram_) {
                 // Only a recount: of the state last rendered, if it was of this source.
                 recountHistogram_ = false;
-                if (!lastShown || lastShownSource != source) {
-                    continue;
+                if (!forget && lastShown && lastShownSource == source) {
+                    job = lastShown;
+                    recountOnly = true;
                 }
-                job = lastShown;
-                recountOnly = true;
             }
+        }
+        if (forget) {
+            // Everything kept for the previous source goes, so that its memory is free
+            // while the next photograph decodes.
+            pyramid.reset(nullptr);
+            cpuCache.clear();
+            backgroundCache.clear();
+            backgroundSource.reset();
+            backgroundState.reset();
+            background.reset();
+            histogramRefresh.clear();
+            lastShown.reset();
+            lastShownSource.reset();
+            if (gpu) {
+                gpu->forgetSource();
+            }
+        }
+        if (!job) {
+            continue;
         }
         if (!recountOnly) {
             if (source != backgroundSource ||
@@ -766,7 +831,7 @@ void PreviewRenderer::run(std::stop_token stop) {
                 // Without the lock: developing takes long, and the window must be
                 // able to queue the next request meanwhile.
                 const std::shared_ptr<ProgressChannel> channel =
-                    startChannel(thinned(onProgress_, job->id));
+                    startChannel(thinned(onProgress_, job->id), source);
                 std::optional<PreviewResult> rendered =
                     render(job->id, job->state, job->view, source, pyramid, cpuCache,
                            gpu ? &*gpu : nullptr, Layer::Shown, channel.get());
@@ -783,6 +848,7 @@ void PreviewRenderer::run(std::stop_token stop) {
                 if (result.image) {
                     shown = true;
                     result.background = background;
+                    result.thumbnail = reducedForThumbnail(result, job->view.thumbnailEdge);
                 }
                 deliver(std::move(result));
             }
@@ -809,7 +875,7 @@ void PreviewRenderer::run(std::stop_token stop) {
         }
         if (job->view.region && backgroundState != job->state) {
             const detail::TimingSpan timing("preview.background", job->id);
-            const std::shared_ptr<ProgressChannel> channel = startChannel({});
+            const std::shared_ptr<ProgressChannel> channel = startChannel({}, source);
             std::optional<PreviewResult> reduced = render(
                 job->id, job->state, PreviewView::wholeFrame(backgroundSize), source, pyramid,
                 backgroundCache, gpu ? &*gpu : nullptr, Layer::Background, channel.get());
@@ -843,7 +909,7 @@ void PreviewRenderer::run(std::stop_token stop) {
                 continue;
             }
         }
-        const std::shared_ptr<ProgressChannel> channel = startChannel({});
+        const std::shared_ptr<ProgressChannel> channel = startChannel({}, source);
         std::optional<CurveHistogram> histogram = countCurveHistogram(
             job->state, source, pyramid, gpu ? &*gpu : nullptr, histogramRefresh, channel.get());
         endChannel();

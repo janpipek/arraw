@@ -84,7 +84,9 @@ shows a placeholder, chosen in this order:
 - Otherwise two layers. Beneath, the camera's embedded preview (from the
   thumbnail cache, else read from the file, once per photograph), turned and
   flipped to the geometry: uncropped and immediate, but the camera's look and
-  soft. Inside the crop frame, the view's whole-frame image
+  soft. Since [ADR 043](043-the-gui-thread-never-decodes.md) it is read on
+  the loader's preview thread; until it lands the inner layer shows alone.
+  Inside the crop frame, the view's whole-frame image
   (`PhotoView::wholeFrameImage`), which is the developed, straightened,
   cropped frame: exactly what the frame holds, upright on screen as the
   frame is. The outside is dimmed, so the camera look shows little there.
@@ -238,14 +240,17 @@ wherever the focus is in the window:
 - Left and Right keep stepping between photographs: the crop is committed,
   as in Lightroom, and the next photograph opens outside the mode.
 
-**The develop dock fits its panel.** The dock opens 21 lines of the panel's
-font wide (`DevelopPanel::defaultDockWidth`, about 360 px at a 17 px line),
-and never narrows below the panel's minimum and a vertical scroll bar, so the
-panel never scrolls sideways. Rows of several buttons (the Crop group's
-tools, aspect lock and swap, the tone curve's channels) are tool buttons, as
-wide as their text, rather than push buttons, whose style minimum of about
-80 px made those rows the panel's widest. A test checks that the panel's
-minimum and a scroll bar fit the default width.
+**The develop dock fits its panel.** Every slider keeps a track of at
+least 120 px (`SettingSlider::minimumSliderLength`, its minimum width), so the
+panel's minimum width is the label column, the value field and that track.
+The dock never narrows below it and a vertical scroll bar
+(`DevelopPanel::minimumDockWidth`), so the panel never scrolls sideways, and
+opens four lines of the panel's font wider (`defaultDockWidth`). Rows of
+several buttons (the Crop group's tools, aspect lock and swap, the tone
+curve's channels) are tool buttons, as wide as their text, rather than push
+buttons, whose style minimum of about 80 px made those rows the panel's widest. A test checks that no scroll bar
+runs sideways and every slider keeps its minimum track at the minimum and the
+default width.
 - (a) **Compact button rows (chosen).** The label column stays one width,
   so the grooves line up, and nothing is elided.
 - (b) Cap the label column and elide long labels with a tooltip. Not needed

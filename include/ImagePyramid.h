@@ -21,7 +21,8 @@ namespace arraw {
 /// the plain mean of the colours, and alpha stays exactly 1.
 ///
 /// Repeated, it makes the pyramid of reductions a preview develops from
-/// (ADR 020): each level halves the one before.
+/// (ADR 020): each level halves the one before. Banded across threads, with the
+/// same bits on any number of them (ADR 039, ADR 043).
 /// @param image Image to halve.
 /// @return A new image of half the size.
 /// @throws std::invalid_argument if @p image is 1x1, as there is nothing to

@@ -193,8 +193,10 @@ TEST_CASE("The crop mode opens on the photograph, not an empty frame", "[app][wi
     Window w;
     w.press(Qt::Key_R);
     REQUIRE(w.view().isCropMode());
-    // Before any render of the mode could arrive: no event has been processed since.
-    CHECK_FALSE(w.overlay().image().isNull());
+    // Before any render of the mode could arrive: no event has been processed since. The
+    // developed frame stands in at once; the camera's preview is read off the GUI thread
+    // (ADR 043) and fills the rest until the render.
+    CHECK(w.overlay().showsPhotograph());
 
     // Left and entered again with nothing changed, it shows its own last render at once.
     REQUIRE(QTest::qWaitFor([&] { return w.overlay().hasRender(); }, 20000));

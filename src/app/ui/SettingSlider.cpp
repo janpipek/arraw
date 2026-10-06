@@ -133,6 +133,7 @@ SettingSlider::SettingSlider(std::string_view key, QWidget* parent)
 
     slider_ = sliderFor(presentation, range_, this);
     slider_->setObjectName("slider");
+    slider_->setMinimumWidth(minimumSliderLength);
     slider_->setRange(0, tickCount(range_, step_, scale_));
     slider_->setToolTip(presentation.toolTip);
     // Arrow keys step between photographs, so a slider never takes them; the spin box is the

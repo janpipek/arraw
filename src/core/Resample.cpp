@@ -6,6 +6,7 @@
 #include "RowBands.h"
 #include "TimingTrace.h"
 
+#include <ImageBuffer.h>
 #include <Progress.h>
 
 #include <algorithm>
@@ -29,10 +30,15 @@ constexpr std::size_t channels = 4;
 /// For an opaque source only `pixels` is filled, with alpha one throughout; the
 /// rest is what an opaque source never needs.
 struct Pass {
-    std::vector<float> pixels; ///< Premultiplied RGBA.
-    std::vector<float> low;    ///< Lowest unpremultiplied RGB of the contributing visible pixels.
-    std::vector<float> high;   ///< Highest unpremultiplied RGB of the contributing visible pixels.
-    std::vector<char> translucent; ///< Per pixel: whether any contributing pixel was not opaque.
+    // Sized without being filled: each band of rows fills its own (ADR 043).
+    /// Premultiplied RGBA.
+    detail::SampleVector<float> pixels;
+    /// Lowest unpremultiplied RGB of the contributing visible pixels.
+    detail::SampleVector<float> low;
+    /// Highest unpremultiplied RGB of the contributing visible pixels.
+    detail::SampleVector<float> high;
+    /// Per pixel: whether any contributing pixel was not opaque.
+    detail::SampleVector<char> translucent;
 };
 
 /// @brief Clamps a source index into the image, which extends its edge pixels.
@@ -59,13 +65,13 @@ Pass horizontalPass(const ImageBuffer& source, std::uint32_t outWidth, ResizeFil
     Pass output;
     output.pixels.resize(outSamples);
     if constexpr (!Opaque) {
-        output.low.assign(outSamples, inf);
-        output.high.assign(outSamples, -inf);
-        output.translucent.assign(static_cast<std::size_t>(outWidth) * size.height, 0);
+        output.low.resize(outSamples);
+        output.high.resize(outSamples);
+        output.translucent.resize(static_cast<std::size_t>(outWidth) * size.height);
     }
-    std::vector<float> row(static_cast<std::size_t>(size.width) * channels);
 
-    detail::forEachRowInTurn(size.height, size.width, [&](std::uint32_t first, std::uint32_t last) {
+    detail::forEachRowBand(size.height, size.width, [&](std::uint32_t first, std::uint32_t last) {
+        std::vector<float> row(static_cast<std::size_t>(size.width) * channels);
         for (std::uint32_t y = first; y < last; ++y) {
             const auto* in = &input[static_cast<std::size_t>(y) * size.width * channels];
             for (std::uint32_t x = 0; x < size.width; ++x) {
@@ -77,6 +83,16 @@ Pass horizontalPass(const ImageBuffer& source, std::uint32_t outWidth, ResizeFil
                 row[x * channels + 3] = alpha;
             }
             const std::size_t rowStart = static_cast<std::size_t>(y) * outWidth * channels;
+            if constexpr (!Opaque) {
+                const auto rowSamples = static_cast<std::ptrdiff_t>(outWidth * channels);
+                std::fill_n(output.low.begin() + static_cast<std::ptrdiff_t>(rowStart), rowSamples,
+                            inf);
+                std::fill_n(output.high.begin() + static_cast<std::ptrdiff_t>(rowStart), rowSamples,
+                            -inf);
+                std::fill_n(output.translucent.begin() +
+                                static_cast<std::ptrdiff_t>(rowStart / channels),
+                            static_cast<std::ptrdiff_t>(outWidth), char{0});
+            }
             for (std::uint32_t x = 0; x < outWidth; ++x) {
                 const Taps& taps = axis.taps[x];
                 std::array<double, channels> sum{};
@@ -136,13 +152,13 @@ void verticalPass(const Pass& input, std::uint32_t width, std::uint32_t inHeight
     constexpr float inf = std::numeric_limits<float>::infinity();
     const AxisWeights axis = axisWeights(inHeight, outHeight, filter);
     const std::size_t rowSamples = static_cast<std::size_t>(width) * channels;
-    std::vector<double> sum(rowSamples);
-    std::vector<char> negative(rowSamples);
-    std::vector<float> low(Opaque ? 0 : rowSamples);
-    std::vector<float> high(Opaque ? 0 : rowSamples);
-    std::vector<char> translucent(Opaque ? 0 : width);
 
-    detail::forEachRowInTurn(outHeight, width, [&](std::uint32_t first, std::uint32_t last) {
+    detail::forEachRowBand(outHeight, width, [&](std::uint32_t first, std::uint32_t last) {
+        std::vector<double> sum(rowSamples);
+        std::vector<char> negative(rowSamples);
+        std::vector<float> low(Opaque ? 0 : rowSamples);
+        std::vector<float> high(Opaque ? 0 : rowSamples);
+        std::vector<char> translucent(Opaque ? 0 : width);
         for (std::uint32_t y = first; y < last; ++y) {
             const Taps& taps = axis.taps[y];
             std::fill(sum.begin(), sum.end(), 0.0);

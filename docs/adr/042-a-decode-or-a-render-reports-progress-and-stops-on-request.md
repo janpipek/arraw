@@ -263,10 +263,13 @@ named.
 - **Allocation is the uncancellable part.** At 24 MP each new float buffer is
   about 190 ms of zeroing and about 24 ms of freeing. Not zeroing buffers that
   are about to be overwritten would shorten both renders and cancel latency.
-  That changes `ImageBuffer`'s "starts zeroed" contract and is left for its
-  own decision.
+  That would change `ImageBuffer`'s "starts zeroed" contract and was left for
+  its own decision; [ADR 043](043-the-gui-thread-never-decodes.md) kept the
+  contract and made the zeroing about three times faster by doing it on every
+  thread.
 - **Decode reports, but the GUI does not show it yet.** `MainWindow::showPhoto`
   decodes on the GUI thread, so "Decoding…" needs the threaded decode first.
+  [ADR 043](043-the-gui-thread-never-decodes.md) threads it and shows it.
   Thumbnails and exports keep their own progress (out of scope by the plan).
 - **The GPU's progress moves a render at a time**, and a GPU render is only
   ever stopped between renders. A single long render, such as a large

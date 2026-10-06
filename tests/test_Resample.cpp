@@ -1,5 +1,6 @@
 #include "ProcessingPlan.h"
 #include "Resample.h"
+#include "support/RowBandLimit.h"
 
 #include <Develop.h>
 
@@ -11,9 +12,11 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <numbers>
 #include <stdexcept>
+#include <utility>
 
 using namespace arraw;
 
@@ -428,4 +431,41 @@ TEST_CASE("Developing is the same through the opaque path as through the general
     REQUIRE(
         sameBits(develop(source, DevelopState{settings}, request),
                  resample(cropped.clone(), plan.resize->outputSize, plan.resize->filter, false)));
+}
+
+namespace {
+
+/// @brief Builds a busy picture, opaque or with transparent and half-clear areas.
+ImageBuffer busyPicture(ImageSize size, bool opaque) {
+    return made(size, [opaque](std::uint32_t x, std::uint32_t y) {
+        const std::uint32_t hash = (x * 2654435761U) ^ (y * 40503U) ^ (x * y);
+        const float alpha = opaque              ? 1.0F
+                            : (x / 16) % 5 == 0 ? 0.0F
+                            : (y / 16) % 3 == 0 ? 0.5F
+                                                : 1.0F;
+        return std::array<float, 4>{static_cast<float>(hash & 255U) / 200.0F - 0.1F,
+                                    static_cast<float>((hash >> 8) & 255U) / 255.0F,
+                                    static_cast<float>(x % 64) / 63.0F, alpha};
+    });
+}
+
+} // namespace
+
+TEST_CASE("A resize is bit-identical on any number of threads", "[resample][threads]") {
+    const bool opaque = GENERATE(true, false);
+    // Both passes have more than 2^17 pixels of work, so each splits into bands.
+    const auto [from, to] = GENERATE(std::pair{ImageSize{512, 400}, ImageSize{800, 600}},
+                                     std::pair{ImageSize{1200, 800}, ImageSize{800, 500}});
+    const ResizeFilter filter = GENERATE(ResizeFilter::Lanczos3, ResizeFilter::Bilinear);
+
+    ImageBuffer single(from, workingFormat, workingEncoding);
+    {
+        const test::ScopedRowBandLimit one(1);
+        single = resample(busyPicture(from, opaque), to, filter, opaque);
+    }
+    const ImageBuffer banded = resample(busyPicture(from, opaque), to, filter, opaque);
+
+    REQUIRE(single.size() == to);
+    REQUIRE(banded.byteSize() == single.byteSize());
+    REQUIRE(std::memcmp(banded.bytes().data(), single.bytes().data(), single.byteSize()) == 0);
 }

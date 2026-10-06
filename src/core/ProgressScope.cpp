@@ -146,7 +146,13 @@ ProgressSlot ProgressSpan::beginUnit() {
         before = std::accumulate(weights_.begin(), weights_.begin() + done_, 0.0);
         weight = weights_[done_];
     }
-    return {slot_.start + slot_.width * before / totalWeight_, slot_.width * weight / totalWeight_};
+    const double start = slot_.start + slot_.width * before / totalWeight_;
+    if (done_ + 1 == units_) {
+        // The last unit ends exactly where the span does, so that what follows (the next
+        // step, or a render resumed from here) starts where it ended, not an ulp away.
+        return {start, slot_.end() - start};
+    }
+    return {start, slot_.width * weight / totalWeight_};
 }
 
 void ProgressSpan::endUnit() {

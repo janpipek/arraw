@@ -70,6 +70,13 @@ public:
     /// @param background Reduced whole-frame image, refreshed after the render.
     void setBackground(const QImage& background);
 
+    /// @brief Shows a stand-in for the photograph until its first render (ADR 043).
+    ///
+    /// Painted over the whole frame, shape kept, only while there is no render; the next
+    /// setImage() or resetView() drops it. Never what wholeFrameImage() gives.
+    /// @param standIn Rough image of the whole frame, such as a thumbnail; null for none.
+    void setStandIn(const QImage& standIn);
+
     /// @brief Gives the best image of the whole developed frame there is: the render if it
     /// shows all of it, else the reduced one beneath; null before the first render.
     [[nodiscard]] QImage wholeFrameImage() const;
@@ -164,6 +171,8 @@ private:
     QImage background_;
     /// Part of the frame it shows, in fractions of the frame it was rendered for.
     QRectF imageRegion_;
+    /// Rough image of the whole frame, shown until the first render; null when none.
+    QImage standIn_;
 };
 
 } // namespace arraw::app

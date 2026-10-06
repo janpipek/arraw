@@ -376,6 +376,8 @@ add_library(arraw-app-core STATIC
         src/app/ExportQueue.h
         src/app/ExportSettings.cpp
         src/app/ExportSettings.h
+        src/app/PhotoLoader.cpp
+        src/app/PhotoLoader.h
         src/app/PreviewRenderer.cpp
         src/app/PreviewRenderer.h
         src/app/RenderActivity.cpp
@@ -436,7 +438,8 @@ add_library(arraw-app-ui STATIC
         src/app/ui/SettingSlider.cpp
         src/app/ui/SettingSlider.h)
 arraw_enable_warnings(arraw-app-ui)
-target_include_directories(arraw-app-ui PUBLIC src/app)
+target_include_directories(arraw-app-ui PUBLIC src/app
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/core)
 target_link_libraries(arraw-app-ui PUBLIC arraw-app-core Qt6::Widgets)
 set_target_properties(arraw-app-ui PROPERTIES AUTOMOC ON)
 

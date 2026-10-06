@@ -3,6 +3,7 @@
 #include <ImageBuffer.h>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -177,4 +178,26 @@ TEST_CASE("A buffer carries its pixel scale through copies", "[ImageBuffer]") {
         REQUIRE_THROWS_AS(other.setPixelScale(bad), std::invalid_argument);
     }
     REQUIRE(other.pixelScale() == 1.0);
+}
+
+TEST_CASE("A large buffer of every format starts all zero", "[ImageBuffer][threads]") {
+    const PixelFormat format =
+        GENERATE(PixelFormat::RgbU8, PixelFormat::RgbaU8, PixelFormat::RgbU16, PixelFormat::RgbaU16,
+                 PixelFormat::RgbF32, PixelFormat::RgbaF32);
+    // Enough pixels for several bands, and an odd height so the bands are uneven.
+    constexpr ImageSize size{1021, 513};
+    {
+        // Memory freed dirty, which the allocator may hand out again: a fresh mapping
+        // would be zero from the kernel, and the test could not fail. Freeing a large
+        // block raises glibc's mmap threshold, so the next one comes from the heap.
+        ImageBuffer dirty(size, format, NamedEncoding::Srgb);
+        std::ranges::fill(dirty.bytes(), std::byte{0xFF});
+        ImageBuffer again(size, format, NamedEncoding::Srgb);
+        std::ranges::fill(again.bytes(), std::byte{0xFF});
+    }
+    const ImageBuffer buffer(size, format, NamedEncoding::Srgb);
+
+    REQUIRE(buffer.byteSize() == std::size_t{size.width} * size.height * bytesPerPixel(format));
+    REQUIRE(
+        std::ranges::all_of(buffer.bytes(), [](std::byte value) { return value == std::byte{0}; }));
 }

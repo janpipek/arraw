@@ -22,6 +22,7 @@
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QStackedWidget>
+#include <QStyle>
 #include <QToolButton>
 #include <QVBoxLayout>
 
@@ -68,8 +69,8 @@ constexpr std::array<PresetRatio, 5> presetRatios{{
 /// How close two ratios must be to be the same preset.
 constexpr double ratioTolerance = 1e-3;
 
-/// Width the develop dock opens at, in lines of the panel's font.
-constexpr double dockWidthInLines = 21.0;
+/// Room the develop dock opens with beyond its minimum width, in lines of the panel's font.
+constexpr double dockSlackInLines = 4.0;
 
 /// @brief Makes a compact button for a row of several: as wide as its text, sharing the row.
 ///
@@ -488,8 +489,14 @@ void DevelopPanel::setCropMode(bool cropping) {
     }
 }
 
+int DevelopPanel::minimumDockWidth() const {
+    return minimumSizeHint().width() +
+           style()->pixelMetric(QStyle::PM_ScrollBarExtent, nullptr, this);
+}
+
 int DevelopPanel::defaultDockWidth() const {
-    return static_cast<int>(std::lround(dockWidthInLines * fontMetrics().height()));
+    return minimumDockWidth() +
+           static_cast<int>(std::lround(dockSlackInLines * fontMetrics().height()));
 }
 
 void DevelopPanel::setStraightening(bool straightening) {

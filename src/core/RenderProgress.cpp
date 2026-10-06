@@ -13,22 +13,25 @@ namespace {
 
 // Nanoseconds of wall time per pixel on a release build at 24 MP, the banded
 // loops on eight threads and the others on one (ADR 042). Remeasure when a pass
-// gets much faster or slower; only the ratios matter.
+// gets much faster or slower; only the ratios matter. The pointwise chain, the
+// geometry and the resize were remeasured once their zeroing and their loops
+// were banded (ADR 043): a 6000x4000 source turned by 3 degrees and resized to
+// 1500 pixels, the resize's share split between its passes as before.
 
 /// @brief Cost of the pointwise chain per pixel of the source, the zeroing of its result included.
-constexpr double pointwiseCost = 15.0;
+constexpr double pointwiseCost = 7.0;
 
 /// @brief What reading the Presence context adds to the chain per pixel.
 constexpr double presenceSampleCost = 30.0;
 
 /// @brief Cost of the geometry resample per pixel of its result.
-constexpr double geometryCost = 52.0;
+constexpr double geometryCost = 12.0;
 
 /// @brief Cost of the horizontal resize per pixel it reads or writes, whichever are more.
-constexpr double resizeAcrossCost = 34.0;
+constexpr double resizeAcrossCost = 10.0;
 
 /// @brief Cost of the vertical resize per pixel of the result's width and the larger height.
-constexpr double resizeDownCost = 10.0;
+constexpr double resizeDownCost = 3.0;
 
 /// @brief Cost of the vignette per pixel of the result.
 constexpr double vignetteCost = 25.0;

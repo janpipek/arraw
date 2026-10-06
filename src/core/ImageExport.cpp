@@ -2,6 +2,7 @@
 
 #include "MetadataEmbedding.h"
 #include "QtImage.h"
+#include "RowBands.h"
 #include "TimingTrace.h"
 
 #include <QBuffer>
@@ -161,6 +162,20 @@ std::vector<float> sharpenKernel() {
     return kernel;
 }
 
+/// @brief Runs a function over bands of rows on every thread, without counting them as progress.
+///
+/// Each output row of the sharpening depends on inputs alone, so any split of the
+/// rows gives the bits of the single-threaded loop (ADR 039, ADR 043).
+/// @param rows Rows to cover.
+/// @param width Pixels per row.
+/// @param body Callable `(int first, int last)`, `last` exclusive.
+template <typename Body> void forEachBand(int rows, int width, Body&& body) {
+    detail::splitRowBands(static_cast<std::uint32_t>(rows), static_cast<std::uint32_t>(width),
+                          [&body](std::uint32_t first, std::uint32_t last, bool /*onCaller*/) {
+                              body(static_cast<int>(first), static_cast<int>(last));
+                          });
+}
+
 /// @brief Blurs the colour channels of a premultiplied RGBA float image along one axis.
 /// @param source Premultiplied samples, four floats per pixel, row-major.
 /// @param width Pixels per row.
@@ -173,26 +188,28 @@ std::vector<float> blurAxis(const std::vector<float>& source, int width, int hei
     std::vector<float> result(source);
     const int radius = static_cast<int>(kernel.size() / 2);
     const int length = horizontal ? width : height;
-    for (int y = 0; y < height; ++y) {
-        for (int x = 0; x < width; ++x) {
-            const int along = horizontal ? x : y;
-            std::array<float, 3> sum{};
-            for (int tap = -radius; tap <= radius; ++tap) {
-                const int at = std::clamp(along + tap, 0, length - 1);
-                const std::size_t index =
-                    4 * (horizontal ? static_cast<std::size_t>(y) * width + at
-                                    : static_cast<std::size_t>(at) * width + x);
-                const float weight = kernel[static_cast<std::size_t>(tap + radius)];
+    forEachBand(height, width, [&](int first, int last) {
+        for (int y = first; y < last; ++y) {
+            for (int x = 0; x < width; ++x) {
+                const int along = horizontal ? x : y;
+                std::array<float, 3> sum{};
+                for (int tap = -radius; tap <= radius; ++tap) {
+                    const int at = std::clamp(along + tap, 0, length - 1);
+                    const std::size_t index =
+                        4 * (horizontal ? static_cast<std::size_t>(y) * width + at
+                                        : static_cast<std::size_t>(at) * width + x);
+                    const float weight = kernel[static_cast<std::size_t>(tap + radius)];
+                    for (std::size_t channel = 0; channel < 3; ++channel) {
+                        sum[channel] += weight * source[index + channel];
+                    }
+                }
+                const std::size_t out = 4 * (static_cast<std::size_t>(y) * width + x);
                 for (std::size_t channel = 0; channel < 3; ++channel) {
-                    sum[channel] += weight * source[index + channel];
+                    result[out + channel] = sum[channel];
                 }
             }
-            const std::size_t out = 4 * (static_cast<std::size_t>(y) * width + x);
-            for (std::size_t channel = 0; channel < 3; ++channel) {
-                result[out + channel] = sum[channel];
-            }
         }
-    }
+    });
     return result;
 }
 
@@ -204,35 +221,42 @@ void sharpenInPlace(QImage& image, int amount) {
     const int height = image.height();
     const std::size_t pixels = static_cast<std::size_t>(width) * height;
     std::vector<float> original(pixels * 4);
-    for (int y = 0; y < height; ++y) {
-        const auto* line = reinterpret_cast<const float*>(image.constScanLine(y));
-        float* row = original.data() + static_cast<std::size_t>(y) * width * 4;
-        for (int x = 0; x < width; ++x) {
-            const float alpha = std::clamp(line[4 * x + 3], 0.0F, 1.0F);
-            for (int channel = 0; channel < 3; ++channel) {
-                row[4 * x + channel] = line[4 * x + channel] * alpha;
+    forEachBand(height, width, [&](int first, int last) {
+        for (int y = first; y < last; ++y) {
+            const auto* line = reinterpret_cast<const float*>(image.constScanLine(y));
+            float* row = original.data() + static_cast<std::size_t>(y) * width * 4;
+            for (int x = 0; x < width; ++x) {
+                const float alpha = std::clamp(line[4 * x + 3], 0.0F, 1.0F);
+                for (int channel = 0; channel < 3; ++channel) {
+                    row[4 * x + channel] = line[4 * x + channel] * alpha;
+                }
+                row[4 * x + 3] = alpha;
             }
-            row[4 * x + 3] = alpha;
         }
-    }
+    });
 
     const auto kernel = sharpenKernel();
     const auto blurred =
         blurAxis(blurAxis(original, width, height, true, kernel), width, height, false, kernel);
     const float strength = static_cast<float>(amount) / 100.0F * maxSharpenStrength;
-    for (int y = 0; y < height; ++y) {
-        auto* line = reinterpret_cast<float*>(image.scanLine(y));
-        for (int x = 0; x < width; ++x) {
-            const std::size_t index = (static_cast<std::size_t>(y) * width + x) * 4;
-            const float alpha = original[index + 3];
-            for (std::size_t channel = 0; channel < 3; ++channel) {
-                const float value = original[index + channel];
-                const float sharpened = value + strength * (value - blurred[index + channel]);
-                const float clamped = std::clamp(sharpened, 0.0F, alpha);
-                line[4 * x + channel] = alpha > 0.0F ? clamped / alpha : 0.0F;
+    // Taken once, here: a scanLine call from a band would detach the image there.
+    uchar* const bits = image.bits();
+    const auto stride = static_cast<std::size_t>(image.bytesPerLine());
+    forEachBand(height, width, [&](int first, int last) {
+        for (int y = first; y < last; ++y) {
+            auto* line = reinterpret_cast<float*>(bits + static_cast<std::size_t>(y) * stride);
+            for (int x = 0; x < width; ++x) {
+                const std::size_t index = (static_cast<std::size_t>(y) * width + x) * 4;
+                const float alpha = original[index + 3];
+                for (std::size_t channel = 0; channel < 3; ++channel) {
+                    const float value = original[index + channel];
+                    const float sharpened = value + strength * (value - blurred[index + channel]);
+                    const float clamped = std::clamp(sharpened, 0.0F, alpha);
+                    line[4 * x + channel] = alpha > 0.0F ? clamped / alpha : 0.0F;
+                }
             }
         }
-    }
+    });
 }
 
 /// @brief Converts colour and sample depth, and selects profile metadata for export.
