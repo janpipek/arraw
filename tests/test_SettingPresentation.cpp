@@ -26,9 +26,7 @@ namespace {
 /// Settings that no panel shows yet; deciding where a new one goes is deliberate.
 ///
 /// The grain model and the luminance noise filter have one value so far: a choice of one is no row.
-constexpr std::array<std::string_view, 8> notShownYet{
-    "rotation",      "flipHorizontal", "flipVertical", "straighten",
-    "cropRectangle", "cropAspect",     "grainModel",   "luminanceNoiseFilter"};
+constexpr std::array<std::string_view, 2> notShownYet{"grainModel", "luminanceNoiseFilter"};
 
 /// Settings the Treatment buttons edit; they have no slider row.
 constexpr std::array<std::string_view, 1> shownByTreatment{"convertToGrayscale"};
@@ -41,6 +39,7 @@ std::vector<std::string_view> slidingKeys() {
     keys.insert(keys.end(), colorGradingKeys().begin(), colorGradingKeys().end());
     keys.insert(keys.end(), noiseReductionKeys().begin(), noiseReductionKeys().end());
     keys.insert(keys.end(), effectsKeys().begin(), effectsKeys().end());
+    keys.insert(keys.end(), geometryKeys().begin(), geometryKeys().end());
     for (int page = 0; page < hslPageCount; ++page) {
         keys.insert(keys.end(), hslKeys(page).begin(), hslKeys(page).end());
     }
@@ -90,6 +89,7 @@ TEST_CASE("Every setting is either shown, listed as not shown yet, or the photog
             std::ranges::find(sliding, descriptor.key) != sliding.end() ||
             std::ranges::find(toneCurveKeys(), descriptor.key) != toneCurveKeys().end() ||
             std::ranges::find(shownByCombo, descriptor.key) != shownByCombo.end() ||
+            std::ranges::find(geometryButtonKeys(), descriptor.key) != geometryButtonKeys().end() ||
             std::ranges::find(shownByTreatment, descriptor.key) != shownByTreatment.end();
         const bool listed = std::ranges::find(notShownYet, descriptor.key) != notShownYet.end();
         CHECK(int{shown} + int{listed} + int{own} == 1);
@@ -231,7 +231,7 @@ TEST_CASE("Band rows are named for their band and move in whole units", "[Settin
     CHECK(presentationOf("saturation").label == QString("Saturation"));
     CHECK(presentationOf("vibrance").label == QString("Vibrance"));
     for (const std::string_view key : slidingKeys()) {
-        if (key != "exposure" && key != "temperature") {
+        if (key != "exposure" && key != "temperature" && key != "straighten") {
             CAPTURE(key);
             CHECK(presentationOf(key).step == 1.0);
             CHECK(presentationOf(key).decimals == 0);
@@ -269,4 +269,11 @@ TEST_CASE("Only the grading hues paint a hue track", "[SettingPresentation]") {
             key == "gradeShadowHue" || key == "gradeMidtoneHue" || key == "gradeHighlightHue";
         CHECK((presentationOf(key).track == SliderTrack::OklabHue) == gradeHue);
     }
+}
+
+TEST_CASE("The Angle row moves in tenths of a degree", "[SettingPresentation]") {
+    const SettingPresentation& angle = presentationOf("straighten");
+    CHECK(angle.step == Approx(0.1));
+    CHECK(angle.decimals == 1);
+    CHECK(angle.label == QString("Angle"));
 }

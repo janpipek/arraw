@@ -11,6 +11,7 @@
 #include <QImageWriter>
 #include <QString>
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
@@ -321,4 +322,67 @@ TEST_CASE("Resolved plans distinguish orientation and crop changes", "[geometry]
     DevelopSettings settings;
     settings.geometry.crop.aspect = CropRatio{1};
     REQUIRE_FALSE(plan == planFor(normal, DevelopState{settings}));
+}
+
+TEST_CASE("Content helpers agree with the resolver's fitting", "[geometry][content]") {
+    const ImageSize size{300, 200};
+    GeometrySettings settings;
+    settings.straighten = 12.0;
+    const GeometryPlan plan = geometryPlanFor(size, ImageOrientation::Normal, settings);
+
+    SECTION("the content's corners are the source's, rotated") {
+        const auto corners = contentCorners(plan);
+        for (const auto& corner : corners) {
+            const auto source = plan.toSource(corner);
+            CHECK(std::abs(std::min(source.x, size.width - source.x)) < 1e-9);
+            CHECK(std::abs(std::min(source.y, size.height - source.y)) < 1e-9);
+        }
+        // Consecutive corners share an edge: they are a source side apart.
+        CHECK(std::hypot(corners[1].x - corners[0].x, corners[1].y - corners[0].y) ==
+              Catch::Approx(300.0));
+        CHECK(std::hypot(corners[2].x - corners[1].x, corners[2].y - corners[1].y) ==
+              Catch::Approx(200.0));
+    }
+
+    SECTION("the automatic crop is inside, and the whole upright frame is not") {
+        CHECK(isInsideContent(plan, automaticCrop(plan, std::nullopt)));
+        CHECK(isInsideContent(plan, automaticCrop(plan, 1.0)));
+        CHECK(plan.crop() == automaticCrop(plan, std::nullopt));
+        CHECK_FALSE(isInsideContent(plan, {0, 0, plan.uprightWidth, plan.uprightHeight}));
+        const auto square = automaticCrop(plan, 1.0);
+        CHECK(square.width == Catch::Approx(square.height));
+    }
+
+    SECTION("fitting keeps an inside box and shrinks an outside one about its centre") {
+        const UprightBox inside = automaticCrop(plan, 1.5);
+        CHECK(fittedToContent(plan, inside) == inside);
+        const UprightBox outside{10, 10, 200, 100};
+        const UprightBox fitted = fittedToContent(plan, outside);
+        CHECK(isInsideContent(plan, fitted));
+        CHECK(fitted.width / fitted.height == Catch::Approx(2.0));
+        CHECK(fitted.left + fitted.width / 2 == Catch::Approx(110.0));
+        CHECK(fitted.top + fitted.height / 2 == Catch::Approx(60.0));
+    }
+
+    SECTION("shifting keeps a box's size and moves it the least distance") {
+        const UprightBox small{-50, plan.uprightHeight / 2 - 10, 20, 20};
+        const UprightBox shifted = shiftedIntoContent(plan, small);
+        CHECK(isInsideContent(plan, shifted, 1e-7));
+        CHECK(shifted.width == Catch::Approx(20.0));
+        CHECK(shifted.height == Catch::Approx(20.0));
+        // Too big to fit anywhere: the largest of its aspect, wherever that fits.
+        const UprightBox huge{0, 0, 1000, 500};
+        const UprightBox shrunk = shiftedIntoContent(plan, huge);
+        CHECK(isInsideContent(plan, shrunk, 1e-7));
+        CHECK(shrunk.width / shrunk.height == Catch::Approx(2.0));
+    }
+
+    SECTION("an explicit crop resolves through the same fit") {
+        GeometrySettings explicitCrop = settings;
+        explicitCrop.crop.rectangle = UprightCropRect{0.0, 0.0, 0.5, 0.5};
+        const GeometryPlan resolved = geometryPlanFor(size, ImageOrientation::Normal, explicitCrop);
+        const UprightBox requested{0, 0, plan.uprightWidth / 2, plan.uprightHeight / 2};
+        CHECK(resolved.crop() == fittedToContent(plan, requested));
+        CHECK(isInsideContent(plan, resolved.crop(), 1e-7));
+    }
 }

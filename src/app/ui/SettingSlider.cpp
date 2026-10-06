@@ -156,6 +156,10 @@ SettingSlider::SettingSlider(std::string_view key, QWidget* parent)
 
     slider_->installEventFilter(this);
     spinBox_->installEventFilter(this);
+    // The line edit has the focus while typing; its shortcut overrides are watched too.
+    if (auto* edit = spinBox_->findChild<QLineEdit*>()) {
+        edit->installEventFilter(this);
+    }
 
     connect(slider_, &QSlider::sliderPressed, this, [this] {
         finishPendingEdit();
@@ -216,6 +220,19 @@ bool SettingSlider::eventFilter(QObject* watched, QEvent* event) {
         }
         emit editFinished();
         return true;
+    }
+    if (event->type() == QEvent::ShortcutOverride &&
+        (watched == spinBox_ || watched == spinBox_->findChild<QLineEdit*>())) {
+        // Enter and Esc end the typing here, before any window shortcut can take them
+        // (the crop mode's accept and cancel, the picker's cancel).
+        auto* key = static_cast<QKeyEvent*>(event);
+        const auto modifiers = key->modifiers() & ~Qt::KeypadModifier;
+        if (modifiers == Qt::NoModifier &&
+            (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter ||
+             key->key() == Qt::Key_Escape)) {
+            event->accept();
+            return true;
+        }
     }
     if ((watched == slider_ || watched == spinBox_) && event->type() == QEvent::FocusOut) {
         finishPendingEdit();

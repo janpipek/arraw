@@ -1,5 +1,6 @@
 #pragma once
 
+#include "CropEditing.h"
 #include "ExportQueue.h"
 #include "PreviewRenderer.h"
 
@@ -8,8 +9,10 @@
 #include <Photo.h>
 #include <PhotoMarks.h>
 
+#include <QImage>
 #include <QMainWindow>
 #include <QPointF>
+#include <QSize>
 #include <QString>
 #include <QTimer>
 
@@ -20,6 +23,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
 class QAction;
@@ -194,6 +198,50 @@ private:
     /// @param point Click position, in fractions of the developed frame.
     void pickNeutralAt(const QPointF& point);
 
+    /// @brief Enters or leaves the crop mode; leaving this way keeps the crop (R, the Crop button).
+    ///
+    /// Entering finishes a pending panel edit, disarms the picker and opens the
+    /// one edit the whole session is (ADR 022, ADR 040). Only with a photograph open.
+    void setCropMode(bool cropping);
+
+    /// @brief Leaves the crop mode, committing or cancelling its edit.
+    /// @param accept Whether the crop is kept; otherwise the state before the mode returns.
+    void leaveCropMode(bool accept);
+
+    /// @brief Hides the crop overlay and puts the window's controls back as outside the mode.
+    ///
+    /// Leaves the session's edit alone: that is the caller's.
+    void closeCropOverlay();
+
+    /// @brief Gives the overlay something to show at once on entering the mode (ADR 040).
+    ///
+    /// The last render of the mode for this photograph if nothing it shows has
+    /// changed since; else the camera's embedded preview, turned and flipped to
+    /// the geometry, under the developed frame as the view showed it, in the frame.
+    void seedCropOverlay();
+
+    /// @brief Enables Undo and Redo: through the crop session's gestures in the mode, else
+    /// through the photograph's history.
+    void updateHistoryActions();
+
+    /// @brief Applies a geometry command: a quarter-turn, a flip, an aspect, a reset.
+    ///
+    /// In the crop mode it joins the session's edit; otherwise it is one
+    /// history step of its own. The rules are CropEditing's either way, so the
+    /// crop is carried and kept inside the photograph.
+    /// @param command Change to make to the geometry.
+    void editGeometry(const std::function<void(CropEditing&)>& command);
+
+    /// @brief Arms or disarms the straighten tool, entering the crop mode to arm it.
+    void setStraightening(bool straightening);
+
+    /// @brief Gives the geometry a panel edit asks for, through the crop rules.
+    ///
+    /// A straighten from a slider shrinks the crop as a rotation in the crop
+    /// mode does, from where the edit began rather than step by step.
+    /// @param geometry Geometry the panel's edited state carries.
+    [[nodiscard]] GeometrySettings reconciledGeometry(const GeometrySettings& geometry);
+
     /// @brief Shows the session's state in the panel and updates the actions, then asks for a
     /// render.
     /// @param renderDelay Time to hold the render back; a newer request or edit replaces it.
@@ -247,6 +295,12 @@ private:
         /// Pixels, decoded once and developed again for each size; shared with
         /// the renderer, which may still be using them after the window moved on.
         std::shared_ptr<const ImageBuffer> decoded;
+        /// Camera's embedded preview, upright; read on first entering the crop mode, and
+        /// null if the file has none.
+        std::optional<QImage> cameraPreview;
+        /// Last render of the crop mode, and the uncropped state it shows, to show at once
+        /// on entering the mode again.
+        std::optional<std::pair<DevelopState, QImage>> lastCropImage;
     };
 
     PhotoView* photoView_ = nullptr;
@@ -268,6 +322,13 @@ private:
     QAction* redoAction_ = nullptr;
     QAction* exportAction_ = nullptr;
     QShortcut* cancelPickShortcut_ = nullptr;
+    /// Enter, Esc, X and O of the crop mode wherever the focus is; enabled only in the mode.
+    std::vector<QShortcut*> cropShortcuts_;
+    QMenu* photoMenu_ = nullptr;
+    QAction* cropAction_ = nullptr;
+
+    /// Photo menu's rotations and flips, enabled with a photograph open.
+    std::vector<QAction*> geometryActions_;
 
     /// Whether the next click on the photograph picks a neutral.
     bool picking_ = false;
@@ -298,6 +359,18 @@ private:
     /// Identifier of the first request made for the photograph being edited;
     /// results below it belong to a previous photograph.
     std::uint64_t firstRequest_ = 0;
+
+    /// Identifier of the first render requested in the crop mode; later results are the overlay's.
+    std::uint64_t cropFirstRequest_ = 0;
+
+    /// What the crop mode last asked to render, so that a crop edit asks for nothing new.
+    std::optional<std::pair<DevelopState, QSize>> lastCropRender_;
+
+    /// Renders of the crop mode on their way, with the state each shows, oldest first.
+    std::deque<std::pair<std::uint64_t, DevelopState>> cropRequests_;
+
+    /// Crop rules for a panel edit of the geometry outside the crop mode, from its start.
+    std::optional<CropEditing> geometryEdit_;
 
     /// File names of the exports that have not reported yet, oldest first.
     std::deque<QString> exportNames_;

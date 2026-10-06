@@ -352,6 +352,8 @@ endif()
 add_library(arraw-app-core STATIC
         src/app/AppSettings.cpp
         src/app/AppSettings.h
+        src/app/CropEditing.cpp
+        src/app/CropEditing.h
         src/app/CurveEditing.cpp
         src/app/CurveEditing.h
         src/app/CurveHistogramRefresh.cpp
@@ -395,7 +397,10 @@ target_link_libraries(arraw-app-core PUBLIC arraw arraw-gpu Qt6::Core Qt6::Gui)
 # The shot model, its filter and the folder watcher are QObjects with signals.
 set_target_properties(arraw-app-core PROPERTIES AUTOMOC ON)
 
-add_executable(arraw-ui src/app/main.cpp
+# The widgets, apart from main(), so the widget tests can drive the whole window.
+add_library(arraw-app-ui STATIC
+        src/app/ui/CropOverlay.cpp
+        src/app/ui/CropOverlay.h
         src/app/ui/CullingActions.cpp
         src/app/ui/CullingActions.h
         src/app/ui/CurveEditor.cpp
@@ -403,9 +408,9 @@ add_executable(arraw-ui src/app/main.cpp
         src/app/ui/DevelopPanel.cpp
         src/app/ui/DevelopPanel.h
         src/app/ui/ExportDialog.cpp
+        src/app/ui/ExportDialog.h
         src/app/ui/FilmStrip.cpp
         src/app/ui/FilmStrip.h
-        src/app/ui/ExportDialog.h
         src/app/ui/MainWindow.cpp
         src/app/ui/MainWindow.h
         src/app/ui/PhotoView.cpp
@@ -414,9 +419,14 @@ add_executable(arraw-ui src/app/main.cpp
         src/app/ui/SettingsDialog.h
         src/app/ui/SettingSlider.cpp
         src/app/ui/SettingSlider.h)
+arraw_enable_warnings(arraw-app-ui)
+target_include_directories(arraw-app-ui PUBLIC src/app)
+target_link_libraries(arraw-app-ui PUBLIC arraw-app-core Qt6::Widgets)
+set_target_properties(arraw-app-ui PROPERTIES AUTOMOC ON)
+
+add_executable(arraw-ui src/app/main.cpp)
 arraw_enable_warnings(arraw-ui)
-target_include_directories(arraw-ui PRIVATE src/app)
-target_link_libraries(arraw-ui PRIVATE arraw-app-core Qt6::Widgets)
+target_link_libraries(arraw-ui PRIVATE arraw-app-ui)
 arraw_deploy_qt_plugins(arraw-ui)
 
 # The command line's behaviour, split from its main() so the tests can drive it

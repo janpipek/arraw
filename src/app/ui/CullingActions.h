@@ -18,8 +18,9 @@ class FilmStrip;
 
 /// @brief The Image menu: rating, colour labels and stepping between shots.
 ///
-/// Builds the actions with the keys of main's film strip (0 to 5, X, R Y G B P) and the
-/// arrow keys, and routes them to a ::arraw::app::FilmStrip. The actions belong to the
+/// Builds the actions with the keys of main's film strip for ratings (0 to 5, X), Shift with
+/// R Y G B P for the colour labels (R alone is the crop mode, ADR 040), and the arrow keys,
+/// and routes them to a ::arraw::app::FilmStrip. The actions belong to the
 /// window, so the keys work whichever widget has the focus, except while a text field
 /// takes them for typing: the shortcut machinery asks the focused widget first, and a
 /// spin box's line edit keeps plain digits and arrows. Ctrl+Left and Ctrl+Right are the
@@ -37,6 +38,10 @@ public:
     /// @brief Stops filtering the application's events.
     ~CullingActions() override;
 
+    /// @brief Disables Reject while the crop mode is on, so that X swaps the crop's orientation.
+    /// @param cropping Whether the crop mode is on.
+    void setCropMode(bool cropping);
+
 protected:
     /// @brief Lets Ctrl+Left and Ctrl+Right through to their actions while text is edited.
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -52,6 +57,10 @@ private:
     /// Label menu items with the label each sets, none for the last.
     std::vector<std::pair<QAction*, std::optional<ColorLabel>>> labelActions_;
     std::vector<QAction*> otherActions_;
+    /// The Reject item, whose X the crop mode takes.
+    QAction* rejectAction_ = nullptr;
+    /// Whether the crop mode is on.
+    bool cropping_ = false;
 };
 
 } // namespace arraw::app

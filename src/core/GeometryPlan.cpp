@@ -119,34 +119,6 @@ Extent largestFree(const GeometryPlan& plan) {
     return best;
 }
 
-/// @brief Fits an explicit rectangle while retaining its centre whenever possible.
-void fitExplicit(GeometryPlan& plan) {
-    auto centre = plan.toSource({plan.left + plan.width / 2, plan.top + plan.height / 2});
-    const auto extent = sourceExtent(plan, {plan.width, plan.height});
-    const double roomX = std::min(centre.x, plan.sourceSize.width - centre.x);
-    const double roomY = std::min(centre.y, plan.sourceSize.height - centre.y);
-    double scale = std::min({1.0, 2 * roomX / extent.width, 2 * roomY / extent.height});
-    if (scale == 1.0) {
-        return;
-    }
-    if (scale <= 0) {
-        // No positive rectangle fits at this centre. Choose the largest
-        // retained size, then the nearest feasible centre. The feasible
-        // centres form a rectangle in source axes, so projection is a clamp.
-        scale = std::min(
-            {1.0, plan.sourceSize.width / extent.width, plan.sourceSize.height / extent.height});
-        const double marginX = std::min(plan.sourceSize.width / 2.0, extent.width * scale / 2);
-        const double marginY = std::min(plan.sourceSize.height / 2.0, extent.height * scale / 2);
-        centre.x = std::clamp(centre.x, marginX, plan.sourceSize.width - marginX);
-        centre.y = std::clamp(centre.y, marginY, plan.sourceSize.height - marginY);
-    }
-    plan.width *= scale;
-    plan.height *= scale;
-    const auto upright = plan.toUpright(centre);
-    plan.left = upright.x - plan.width / 2;
-    plan.top = upright.y - plan.height / 2;
-}
-
 /// @brief Converts a continuous extent to a non-empty raster dimension.
 std::uint32_t rasterExtent(double extent) {
     if (!std::isfinite(extent) || extent <= 0 ||
@@ -226,6 +198,70 @@ SourcePoint GeometryPlan::toSource(UprightPoint point) const {
             matrix[1] * x + matrix[3] * y + sourceSize.height / 2.0};
 }
 
+std::array<UprightPoint, 4> arraw::contentCorners(const GeometryPlan& plan) {
+    const double width = plan.sourceSize.width;
+    const double height = plan.sourceSize.height;
+    return {plan.toUpright({0, 0}), plan.toUpright({width, 0}), plan.toUpright({width, height}),
+            plan.toUpright({0, height})};
+}
+
+bool arraw::isInsideContent(const GeometryPlan& plan, const UprightBox& box, double slack) {
+    // The box, mapped into the source, is a rectangle whose source-axis extent
+    // is what has to fit: the source raster is axis-aligned there.
+    const auto centre = plan.toSource({box.left + box.width / 2, box.top + box.height / 2});
+    const auto extent = sourceExtent(plan, {box.width, box.height});
+    return box.width > 0 && box.height > 0 && centre.x - extent.width / 2 >= -slack &&
+           centre.y - extent.height / 2 >= -slack &&
+           centre.x + extent.width / 2 <= plan.sourceSize.width + slack &&
+           centre.y + extent.height / 2 <= plan.sourceSize.height + slack;
+}
+
+UprightBox arraw::shiftedIntoContent(const GeometryPlan& plan, UprightBox box) {
+    auto centre = plan.toSource({box.left + box.width / 2, box.top + box.height / 2});
+    const auto extent = sourceExtent(plan, {box.width, box.height});
+    const double scale = std::min(
+        {1.0, plan.sourceSize.width / extent.width, plan.sourceSize.height / extent.height});
+    // The feasible centres form a rectangle in source axes, so the nearest is a clamp.
+    const double marginX = std::min(plan.sourceSize.width / 2.0, extent.width * scale / 2);
+    const double marginY = std::min(plan.sourceSize.height / 2.0, extent.height * scale / 2);
+    centre.x = std::clamp(centre.x, marginX, plan.sourceSize.width - marginX);
+    centre.y = std::clamp(centre.y, marginY, plan.sourceSize.height - marginY);
+    box.width *= scale;
+    box.height *= scale;
+    const auto upright = plan.toUpright(centre);
+    box.left = upright.x - box.width / 2;
+    box.top = upright.y - box.height / 2;
+    return box;
+}
+
+UprightBox arraw::fittedToContent(const GeometryPlan& plan, UprightBox box) {
+    const auto centre = plan.toSource({box.left + box.width / 2, box.top + box.height / 2});
+    const auto extent = sourceExtent(plan, {box.width, box.height});
+    const double roomX = std::min(centre.x, plan.sourceSize.width - centre.x);
+    const double roomY = std::min(centre.y, plan.sourceSize.height - centre.y);
+    const double scale = std::min({1.0, 2 * roomX / extent.width, 2 * roomY / extent.height});
+    if (scale == 1.0) {
+        return box;
+    }
+    if (scale <= 0) {
+        // No positive rectangle fits at this centre: the largest retained size,
+        // then the nearest feasible centre.
+        return shiftedIntoContent(plan, box);
+    }
+    const auto upright = plan.toUpright(centre);
+    box.width *= scale;
+    box.height *= scale;
+    box.left = upright.x - box.width / 2;
+    box.top = upright.y - box.height / 2;
+    return box;
+}
+
+UprightBox arraw::automaticCrop(const GeometryPlan& plan, std::optional<double> ratio) {
+    const auto extent = ratio ? atAspect(plan, *ratio) : largestFree(plan);
+    return {(plan.uprightWidth - extent.width) / 2, (plan.uprightHeight - extent.height) / 2,
+            extent.width, extent.height};
+}
+
 bool GeometryPlan::isIdentity() const noexcept {
     return matrix == Matrix{1, 0, 0, 1} && left == 0 && top == 0 && width == sourceSize.width &&
            height == sourceSize.height;
@@ -280,13 +316,17 @@ GeometryPlan arraw::geometryPlanFor(ImageSize size, ImageOrientation orientation
         if (aspect && std::abs(ratio / *aspect - 1.0) > 1e-6) {
             throw std::invalid_argument("Explicit crop does not match its aspect constraint");
         }
-        fitExplicit(plan);
+        const UprightBox fitted = fittedToContent(plan, plan.crop());
+        plan.left = fitted.left;
+        plan.top = fitted.top;
+        plan.width = fitted.width;
+        plan.height = fitted.height;
     } else {
-        const auto extent = aspect ? atAspect(plan, *aspect) : largestFree(plan);
-        plan.width = extent.width;
-        plan.height = extent.height;
-        plan.left = (plan.uprightWidth - plan.width) / 2;
-        plan.top = (plan.uprightHeight - plan.height) / 2;
+        const UprightBox automatic = automaticCrop(plan, aspect);
+        plan.left = automatic.left;
+        plan.top = automatic.top;
+        plan.width = automatic.width;
+        plan.height = automatic.height;
     }
     plan.outputSize = {rasterExtent(plan.width), rasterExtent(plan.height)};
     return plan;

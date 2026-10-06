@@ -105,6 +105,15 @@ inline constexpr int hslPageCount = 3;
 /// (::arraw::SettingScope::Photo), so neither has a row.
 [[nodiscard]] std::span<const std::string_view> effectsKeys() noexcept;
 
+/// @brief Gives the keys of the Crop group's slider rows, in panel order: the Angle.
+[[nodiscard]] std::span<const std::string_view> geometryKeys() noexcept;
+
+/// @brief Gives the keys of the settings the Crop group's buttons and menu edit.
+///
+/// Quarter-turns, flips, the crop rectangle and its aspect: edited through the crop rules
+/// (::arraw::app::CropEditing) rather than a slider row, so they have no presentation.
+[[nodiscard]] std::span<const std::string_view> geometryButtonKeys() noexcept;
+
 /// @brief Gives the keys of the settings the curve editor shows: the four tone curves.
 ///
 /// Edited by the curve editor rather than a slider row, so they have no

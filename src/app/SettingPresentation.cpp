@@ -46,6 +46,11 @@ constexpr std::array<std::string_view, 4> noiseReductionKeyList{
     "luminanceNoiseReduction", "luminanceNoiseDetail", "colorNoiseReduction",
     "colorNoiseSmoothness"};
 
+constexpr std::array<std::string_view, 1> geometryKeyList{"straighten"};
+
+constexpr std::array<std::string_view, 5> geometryButtonKeyList{
+    "rotation", "flipHorizontal", "flipVertical", "cropRectangle", "cropAspect"};
+
 constexpr std::array<std::string_view, 4> toneCurveKeyList{"toneCurveLuma", "toneCurveRed",
                                                            "toneCurveGreen", "toneCurveBlue"};
 
@@ -186,6 +191,11 @@ const std::vector<Row>& table() {
                           1.0,
                           tr("How softly the three tints melt into each other; lower is "
                              "sharper.")}});
+        built.push_back({"straighten",
+                         {tr("Angle"), tr("\u00B0"), 1, 0.1,
+                          tr("Turns the photograph a little to level a horizon or a vertical. "
+                             "Positive turns it clockwise. The crop shrinks to keep empty "
+                             "corners out.")}});
         built.push_back({"vignetteAmount",
                          {tr("Vignette"),
                           {},
@@ -294,6 +304,14 @@ std::span<const std::string_view> noiseReductionKeys() noexcept {
 
 std::span<const std::string_view> effectsKeys() noexcept {
     return effectsKeyList;
+}
+
+std::span<const std::string_view> geometryKeys() noexcept {
+    return geometryKeyList;
+}
+
+std::span<const std::string_view> geometryButtonKeys() noexcept {
+    return geometryButtonKeyList;
 }
 
 std::span<const std::string_view> toneCurveKeys() noexcept {

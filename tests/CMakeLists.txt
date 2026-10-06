@@ -20,6 +20,7 @@ add_executable(arraw-tests
         test_AppSettings.cpp
         test_Cli.cpp
         test_ColorEncoding.cpp
+        test_CropEditing.cpp
         test_CurveEditing.cpp
         test_CurveHistogramRefresh.cpp
         test_Develop.cpp
@@ -100,19 +101,17 @@ arraw_deploy_qt_plugins(arraw-tests)
 # Widget behavior runs separately because the core suite owns a QCoreApplication.
 add_executable(arraw-widget-tests
         test_SettingsDialog.cpp
+        test_CropOverlay.cpp
         test_CurveEditor.cpp
         test_DevelopPanel.cpp
-        test_SettingSlider.cpp
-        ../src/app/ui/CurveEditor.cpp
-        ../src/app/ui/CurveEditor.h
-        ../src/app/ui/DevelopPanel.cpp
-        ../src/app/ui/DevelopPanel.h
-        ../src/app/ui/SettingSlider.cpp
-        ../src/app/ui/SettingSlider.h
-        ../src/app/ui/SettingsDialog.cpp
-        ../src/app/ui/SettingsDialog.h)
+        test_MainWindowCrop.cpp
+        test_SettingSlider.cpp)
 arraw_enable_warnings(arraw-widget-tests)
-target_link_libraries(arraw-widget-tests PRIVATE arraw-app-core Qt6::Widgets Catch2::Catch2)
+# Qt Test for key clicks that go through the window's shortcuts, as a user's do.
+find_package(Qt6 REQUIRED COMPONENTS Test)
+target_link_libraries(arraw-widget-tests PRIVATE arraw-app-ui Qt6::Test Catch2::Catch2)
+target_compile_definitions(arraw-widget-tests
+        PRIVATE ARRAW_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 set_target_properties(arraw-widget-tests PROPERTIES AUTOMOC ON)
 arraw_deploy_qt_plugins(arraw-widget-tests)
 catch_discover_tests(arraw-widget-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

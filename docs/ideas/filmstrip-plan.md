@@ -32,7 +32,7 @@ through the library.
 | Opening | File > Open Folder…, or the strip's folder button. File > Open… of one photo also fills the strip with its folder and selects that photo. |
 | Leaving a changed photo | **As main.** Ctrl+S is "Save Adjustments". Moving to another photo, opening another folder or closing the window asks Save / Discard / Cancel. "Changed" means the develop state differs from what the sidecar holds, and Discard reverts to the sidecar. Undo history belongs to one visit and is dropped on leaving. |
 | Marks | Ratings and labels are written to the sidecar at once, against their own baseline (ADR 021: marks are not in develop history). Keys apply to **all selected** shots. |
-| Keys | **Main's keys:** 0–5 for stars (0 clears), X to reject, R/Y/G/B/P to toggle a colour label. |
+| Keys | **Main's keys:** 0–5 for stars (0 clears), X to reject, R/Y/G/B/P to toggle a colour label (since ADR 040 with Shift: R alone is the crop mode). |
 | Arrow keys | **←/→ always move between photos.** Sliders never take keyboard focus. Spin boxes take it only while typing, and Enter or Esc hands it back. Ctrl+←/→ also moves between photos while typing. |
 | Selection | Ctrl/Shift multi-select. The develop view always shows the active shot, which is the last one clicked. Batch export and paste will use the same selection later. |
 | Filter | **As main:** at least N stars, or rejects only; and any of the chosen colours. Colours combine with OR, and the two dimensions with AND. It lasts for the session and is not saved. If the active shot stops matching, the view jumps to the nearest shot that does. |

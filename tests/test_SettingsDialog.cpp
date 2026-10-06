@@ -4,6 +4,7 @@
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QPushButton>
+#include <QStandardPaths>
 
 #include <catch2/catch_session.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -14,7 +15,13 @@ int main(int argc, char* argv[]) {
     if (qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM")) {
         qputenv("QT_QPA_PLATFORM", "offscreen");
     }
+    // The window tests open photographs: settings and the thumbnail cache go to Qt's test
+    // locations, not the user's, and previews render on the CPU, the same on every machine.
+    QStandardPaths::setTestModeEnabled(true);
+    qputenv("ARRAW_PREVIEW_DEVICE", "cpu");
     const QApplication application(argc, argv);
+    QCoreApplication::setOrganizationName("arraw-tests");
+    QCoreApplication::setApplicationName("arraw-widget-tests");
     return Catch::Session().run(argc, argv);
 }
 

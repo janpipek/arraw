@@ -4,6 +4,7 @@
 
 #include <CurveHistogram.h>
 #include <DevelopState.h>
+#include <GeometrySettings.h>
 #include <WhiteBalance.h>
 
 #include <QWidget>
@@ -11,6 +12,7 @@
 #include <optional>
 #include <vector>
 
+class QAbstractButton;
 class QButtonGroup;
 class QComboBox;
 class QPushButton;
@@ -50,6 +52,24 @@ public:
     /// @param context What the photograph is, for the rows that depend on it.
     void showState(const DevelopState& state, const PanelContext& context);
 
+    /// @brief Shows whether the crop mode is on, without emitting any signal.
+    ///
+    /// In the mode every group but Crop is disabled: the mode is one edit of
+    /// the geometry, which Esc throws away whole (ADR 040).
+    /// @param cropping Whether the Crop button is checked.
+    void setCropMode(bool cropping);
+
+    /// @brief Gives the width the develop dock opens at, in logical pixels.
+    ///
+    /// A fixed number of lines of the panel's font, which the panel's
+    /// narrowest layout and a vertical scroll bar fit inside, so that the dock
+    /// opens with no horizontal scroll bar.
+    [[nodiscard]] int defaultDockWidth() const;
+
+    /// @brief Shows whether the straighten tool is armed, without emitting any signal.
+    /// @param straightening Whether the Level button is checked.
+    void setStraightening(bool straightening);
+
     /// @brief Shows whether the white balance picker is armed, without emitting any signal.
     /// @param picking Whether the Pick button is checked.
     void setPicking(bool picking);
@@ -88,6 +108,35 @@ signals:
     /// @param picking Whether the picker is now armed.
     void pickToggled(bool picking);
 
+    /// @brief Announces that the Crop button was checked or unchecked by the user.
+    /// @param cropping Whether the crop mode is asked for.
+    void cropModeToggled(bool cropping);
+
+    /// @brief Announces that the Level button was checked or unchecked by the user.
+    /// @param straightening Whether the straighten tool is asked for.
+    void straighteningToggled(bool straightening);
+
+    /// @brief Announces an aspect the user chose from the menu.
+    /// @param aspect Constraint chosen.
+    /// @param matchOrientation Whether a ratio is the menu's landscape one, to be turned to
+    /// suit the crop's orientation; false for a ratio taken as typed.
+    void aspectChosen(const arraw::CropAspect& aspect, bool matchOrientation);
+
+    /// @brief Announces that the lock button was checked or unchecked by the user.
+    /// @param locked Whether the aspect is to be held at the crop's present ratio.
+    void lockToggled(bool locked);
+
+    /// @brief Announces that the Swap button was pressed.
+    void orientationSwapped();
+
+    /// @brief Announces a quarter-turn button.
+    /// @param clockwise Whether the turn is clockwise.
+    void turned(bool clockwise);
+
+    /// @brief Announces a flip button.
+    /// @param horizontal Whether left and right swap, rather than top and bottom.
+    void flipped(bool horizontal);
+
     /// @brief Asks for the keyboard focus to go back to the photograph.
     void focusReleased();
 
@@ -105,6 +154,20 @@ protected:
 private:
     /// @brief Builds the Treatment row, Colour and B&W.
     QWidget* buildTreatmentRow();
+
+    /// @brief Builds the Crop group: the mode, aspect, angle, turns, flips and Reset.
+    QWidget* buildCropGroup();
+
+    /// @brief Shows the geometry in the Crop group's controls, without emitting any signal.
+    void showGeometry(const GeometrySettings& geometry);
+
+    /// @brief Asks for the ratio of the Custom entry, then announces the choice.
+    ///
+    /// Cancelling leaves the settings as they were.
+    void chooseCustomAspect();
+
+    /// @brief Reports the geometry's return to its defaults, as one complete edit.
+    void applyGeometryReset();
 
     /// @brief Builds the White Balance group.
     QWidget* buildWhiteBalanceGroup();
@@ -166,6 +229,14 @@ private:
 
     QComboBox* presetCombo_ = nullptr;
     QPushButton* pickButton_ = nullptr;
+
+    QPushButton* cropButton_ = nullptr;
+    QPushButton* levelButton_ = nullptr;
+    QAbstractButton* lockButton_ = nullptr;
+    QAbstractButton* cropResetButton_ = nullptr;
+    QComboBox* aspectCombo_ = nullptr;
+    /// Treatment row and every group but Crop, disabled in the crop mode.
+    std::vector<QWidget*> nonGeometryGroups_;
 
     QButtonGroup* treatment_ = nullptr;
     CurveEditor* curveEditor_ = nullptr;

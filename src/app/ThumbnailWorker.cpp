@@ -227,23 +227,31 @@ void ThumbnailWorker::run(const std::stop_token& stop) {
     }
 }
 
+QImage embeddedPreviewImage(const ThumbnailCache& cache, const std::filesystem::path& file) {
+    const auto key = ThumbnailCache::embeddedKey(file);
+    if (!key) {
+        return {};
+    }
+    QImage image = cache.load(*key);
+    if (image.isNull()) {
+        const auto preview = readEmbeddedPreview(file, ThumbnailCache::maxEdge);
+        if (!preview) {
+            return {};
+        }
+        image = toQImage(*preview);
+        cache.store(*key, image);
+    }
+    return image;
+}
+
 void ThumbnailWorker::execute(const Job& job, std::uint64_t generation) {
     // Nothing may escape the thread, or the process terminates.
     try {
         QImage image;
         if (job.kind == ThumbnailKind::Embedded) {
-            const auto key = ThumbnailCache::embeddedKey(job.primary);
-            if (!key) {
-                return;
-            }
-            image = cache_.load(*key);
+            image = embeddedPreviewImage(cache_, job.primary);
             if (image.isNull()) {
-                const auto preview = readEmbeddedPreview(job.primary, ThumbnailCache::maxEdge);
-                if (!preview) {
-                    return; // The shot has none; the placeholder stays until the developed one.
-                }
-                image = toQImage(*preview);
-                cache_.store(*key, image);
+                return; // The shot has none; the placeholder stays until the developed one.
             }
         } else {
             const DevelopState state = thumbnailState(job.primary);

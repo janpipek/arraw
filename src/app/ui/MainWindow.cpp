@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 
+#include "CropOverlay.h"
 #include "CullingActions.h"
 #include "DebugDiagnostics.h"
 #include "DevelopPanel.h"
@@ -11,6 +12,7 @@
 #include "RenderDelay.h"
 #include "SettingsDialog.h"
 #include "ThumbnailCache.h"
+#include "ThumbnailWorker.h"
 #include "ViewTransform.h"
 
 #include <ColorEncoding.h>
@@ -38,12 +40,14 @@
 #include <QPushButton>
 #include <QScreen>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QSettings>
 #include <QShortcut>
 #include <QStandardPaths>
 #include <QStatusBar>
 #include <QString>
 #include <QStringList>
+#include <QStyle>
 #include <QToolButton>
 
 #include <algorithm>
@@ -112,6 +116,24 @@ MainWindow::MainWindow(QWidget* parent)
     cancelPickShortcut_->setEnabled(false);
     connect(cancelPickShortcut_, &QShortcut::activated, this, [this] { setPicking(false); });
 
+    // The crop mode's keys wherever the focus is, such as on a button the mouse just used;
+    // the overlay claims them itself when it has the focus (ADR 040). Reject gives X up
+    // while the mode is on, and the picker Esc, so no two shortcuts share a key.
+    CropOverlay* crop = &photoView_->cropOverlay();
+    const auto addCropShortcut = [this](QKeyCombination key, const std::function<void()>& act) {
+        auto* shortcut = new QShortcut(QKeySequence(key), this);
+        shortcut->setEnabled(false);
+        connect(shortcut, &QShortcut::activated, this, act);
+        cropShortcuts_.push_back(shortcut);
+    };
+    addCropShortcut(QKeyCombination(Qt::Key_Return), [crop] { crop->accept(); });
+    addCropShortcut(QKeyCombination(Qt::KeypadModifier, Qt::Key_Enter), [crop] { crop->accept(); });
+    addCropShortcut(QKeyCombination(Qt::Key_Escape), [crop] { crop->dismiss(); });
+    addCropShortcut(QKeyCombination(Qt::Key_O), [crop] { crop->cycleGuide(); });
+    addCropShortcut(QKeyCombination(Qt::Key_X), [crop] {
+        crop->edit([](CropEditing& editing) { editing.swapOrientation(); });
+    });
+
     // Long enough to coalesce the events of a drag, short enough to feel prompt.
     resizeTimer_.setSingleShot(true);
     resizeTimer_.setInterval(100);
@@ -167,21 +189,31 @@ void MainWindow::buildMenu() {
 
     QMenu* editMenu = menuBar()->addMenu(tr("&Edit"));
     undoAction_ = editMenu->addAction(tr("&Undo"));
-    undoAction_->setShortcut(QKeySequence::Undo);
+    undoAction_->setShortcuts(QKeySequence::Undo);
     undoAction_->setEnabled(false);
     connect(undoAction_, &QAction::triggered, this, [this] {
         guarded([this] {
             developPanel_->finishPendingEdit();
+            if (photoView_->isCropMode()) {
+                // Back through the session's gestures, never past its start (ADR 040).
+                photoView_->cropOverlay().undo();
+                return;
+            }
             open_->session.undo();
             refreshPanel();
         });
     });
     redoAction_ = editMenu->addAction(tr("&Redo"));
-    redoAction_->setShortcut(QKeySequence::Redo);
+    // Every binding the platform has: Ctrl+Shift+Z as well as Ctrl+Y where both are usual.
+    redoAction_->setShortcuts(QKeySequence::Redo);
     redoAction_->setEnabled(false);
     connect(redoAction_, &QAction::triggered, this, [this] {
         guarded([this] {
             developPanel_->finishPendingEdit();
+            if (photoView_->isCropMode()) {
+                photoView_->cropOverlay().redo();
+                return;
+            }
             open_->session.redo();
             refreshPanel();
         });
@@ -194,6 +226,32 @@ void MainWindow::buildMenu() {
     connect(settingsAction, &QAction::triggered, this, &MainWindow::showSettings);
 
     culling_ = new CullingActions(*this, *filmStrip_);
+
+    photoMenu_ = menuBar()->addMenu(tr("&Photo"));
+    cropAction_ = photoMenu_->addAction(tr("&Crop && Straighten"));
+    cropAction_->setShortcut(QKeySequence(Qt::Key_R));
+    cropAction_->setCheckable(true);
+    cropAction_->setEnabled(false);
+    connect(cropAction_, &QAction::triggered, this, &MainWindow::setCropMode);
+    photoMenu_->addSeparator();
+    const auto addGeometryAction = [this](const QString& text, const QKeySequence& shortcut,
+                                          std::function<void(CropEditing&)> command) {
+        QAction* action = photoMenu_->addAction(text);
+        if (!shortcut.isEmpty()) {
+            action->setShortcut(shortcut);
+        }
+        action->setEnabled(false);
+        connect(action, &QAction::triggered, this,
+                [this, command = std::move(command)] { editGeometry(command); });
+        geometryActions_.push_back(action);
+    };
+    addGeometryAction(tr("Rotate &Left"), QKeySequence(Qt::CTRL | Qt::Key_BracketLeft),
+                      [](CropEditing& editing) { editing.turn(false); });
+    addGeometryAction(tr("Rotate &Right"), QKeySequence(Qt::CTRL | Qt::Key_BracketRight),
+                      [](CropEditing& editing) { editing.turn(true); });
+    addGeometryAction(tr("Flip &Horizontal"), {}, [](CropEditing& editing) { editing.flip(true); });
+    addGeometryAction(tr("Flip &Vertical"), {}, [](CropEditing& editing) { editing.flip(false); });
+
     buildZoomControls();
 }
 
@@ -254,7 +312,8 @@ void MainWindow::buildZoomControls() {
 }
 
 void MainWindow::updateZoomControls() {
-    const bool enabled = open_.has_value();
+    // The crop mode always fits the whole photograph.
+    const bool enabled = open_.has_value() && !photoView_->isCropMode();
     zoomButton_->setEnabled(enabled);
     zoomInAction_->setEnabled(enabled);
     zoomOutAction_->setEnabled(enabled);
@@ -285,16 +344,39 @@ void MainWindow::buildDevelopDock() {
     scroll->setWidget(developPanel_);
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
+    // A click on a button that takes no focus would otherwise give it to the scroll area,
+    // the nearest ancestor that takes it, and the photo view, or the crop mode, would lose
+    // its keys (ADR 040). The panel scrolls with the wheel and its scroll bar.
+    scroll->setFocusPolicy(Qt::NoFocus);
+
+    // Never narrower than the panel and a vertical scroll bar, so the panel never scrolls
+    // sideways; it opens a little wider (DevelopPanel::defaultDockWidth()).
+    scroll->setMinimumWidth(developPanel_->minimumSizeHint().width() +
+                            scroll->style()->pixelMetric(QStyle::PM_ScrollBarExtent, nullptr,
+                                                         scroll->verticalScrollBar()) +
+                            2 * scroll->frameWidth());
 
     auto* dock = new QDockWidget(tr("Develop"), this);
     dock->setFeatures(QDockWidget::NoDockWidgetFeatures);
     dock->setWidget(scroll);
     dock->setEnabled(false);
     addDockWidget(Qt::RightDockWidgetArea, dock);
+    resizeDocks({dock}, {developPanel_->defaultDockWidth()}, Qt::Horizontal);
     developDock_ = dock;
 
-    connect(developPanel_, &DevelopPanel::editStarted, this,
-            [this] { guarded([this] { open_->session.begin(); }); });
+    // In the crop mode the whole session is one edit (ADR 040): a panel edit
+    // joins it rather than opening and closing one of its own.
+    connect(developPanel_, &DevelopPanel::editStarted, this, [this] {
+        guarded([this] {
+            geometryEdit_.reset();
+            if (photoView_->isCropMode()) {
+                // One step of the crop session's history, however many changes it makes.
+                photoView_->cropOverlay().beginStep();
+            } else {
+                open_->session.begin();
+            }
+        });
+    });
     connect(developPanel_, &DevelopPanel::stateEdited, this, [this](const DevelopState& state) {
         guarded([this, &state] {
             // No edit is open after a failure cancelled one: the rest of that
@@ -303,11 +385,51 @@ void MainWindow::buildDevelopDock() {
                 return;
             }
             const DevelopState before = open_->session.photo().state();
-            open_->session.update(state);
+            DevelopState next = state;
+            next.settings.geometry = reconciledGeometry(state.settings.geometry);
+            open_->session.update(next);
             refreshPanel(renderDelayFor(before, open_->session.photo().state()));
         });
     });
     connect(developPanel_, &DevelopPanel::pickToggled, this, &MainWindow::setPicking);
+
+    // The Crop group asks for what the menu and keys ask for; its button and the
+    // action stay in step whoever flipped them.
+    connect(developPanel_, &DevelopPanel::cropModeToggled, this, [this](bool cropping) {
+        setCropMode(cropping);
+        developPanel_->setCropMode(photoView_->isCropMode());
+    });
+    connect(cropAction_, &QAction::toggled, developPanel_, &DevelopPanel::setCropMode);
+    connect(developPanel_, &DevelopPanel::straighteningToggled, this, [this](bool straightening) {
+        setStraightening(straightening);
+        developPanel_->setStraightening(photoView_->cropOverlay().isStraightening());
+    });
+    connect(&photoView_->cropOverlay(), &CropOverlay::straighteningChanged, developPanel_,
+            &DevelopPanel::setStraightening);
+    connect(developPanel_, &DevelopPanel::turned, this, [this](bool clockwise) {
+        editGeometry([clockwise](CropEditing& editing) { editing.turn(clockwise); });
+    });
+    connect(developPanel_, &DevelopPanel::flipped, this, [this](bool horizontal) {
+        editGeometry([horizontal](CropEditing& editing) { editing.flip(horizontal); });
+    });
+    connect(developPanel_, &DevelopPanel::orientationSwapped, this,
+            [this] { editGeometry([](CropEditing& editing) { editing.swapOrientation(); }); });
+    connect(developPanel_, &DevelopPanel::lockToggled, this, [this](bool locked) {
+        editGeometry([locked](CropEditing& editing) { editing.setLocked(locked); });
+    });
+    connect(developPanel_, &DevelopPanel::aspectChosen, this,
+            [this](const CropAspect& aspect, bool matchOrientation) {
+                editGeometry([aspect, matchOrientation](CropEditing& editing) {
+                    CropAspect chosen = aspect;
+                    // The menu's ratios are landscape; a portrait crop keeps its orientation.
+                    if (const auto* ratio = std::get_if<CropRatio>(&aspect);
+                        ratio != nullptr && matchOrientation &&
+                        editing.crop().height > editing.crop().width) {
+                        chosen = CropRatio{1.0 / ratio->widthOverHeight};
+                    }
+                    editing.setAspect(chosen);
+                });
+            });
     // The curve histogram costs a render (ADR 035): counted only while the editor shows.
     connect(developPanel_, &DevelopPanel::curveHistogramWantedChanged, this,
             [this](bool wanted) { previewRenderer_.setCurveHistogramWanted(wanted); });
@@ -317,6 +439,11 @@ void MainWindow::buildDevelopDock() {
             qOverload<>(&QWidget::setFocus));
     connect(developPanel_, &DevelopPanel::editFinished, this, [this] {
         guarded([this] {
+            geometryEdit_.reset();
+            if (photoView_->isCropMode()) {
+                photoView_->cropOverlay().endStep();
+                return;
+            }
             if (!open_->session.editing()) {
                 return;
             }
@@ -327,10 +454,161 @@ void MainWindow::buildDevelopDock() {
 }
 
 void MainWindow::setPicking(bool picking) {
-    picking_ = picking && open_.has_value();
+    picking_ = picking && open_.has_value() && !photoView_->isCropMode();
     developPanel_->setPicking(picking_);
     cancelPickShortcut_->setEnabled(picking_);
     photoView_->setPicking(picking_);
+}
+
+void MainWindow::setCropMode(bool cropping) {
+    if (!cropping) {
+        leaveCropMode(true);
+        return;
+    }
+    if (!open_ || photoView_->isCropMode()) {
+        cropAction_->setChecked(photoView_->isCropMode());
+        return;
+    }
+    guarded([this] {
+        developPanel_->finishPendingEdit();
+        setPicking(false);
+        CropEditing editing(open_->decoded->size(), open_->decoded->orientation(),
+                            open_->session.photo().state().settings.geometry);
+        open_->session.begin();
+        photoView_->cropOverlay().start(std::move(editing));
+        seedCropOverlay();
+        photoView_->setCropMode(true);
+        cropFirstRequest_ = latestRequest_ + 1;
+        lastCropRender_.reset();
+        cropRequests_.clear();
+        cropAction_->setChecked(true);
+        culling_->setCropMode(true);
+        developPanel_->setCropMode(true);
+        for (QShortcut* shortcut : cropShortcuts_) {
+            shortcut->setEnabled(true);
+        }
+        updateZoomControls();
+        refreshPanel();
+    });
+    cropAction_->setChecked(photoView_->isCropMode());
+}
+
+void MainWindow::seedCropOverlay() {
+    CropOverlay& crop = photoView_->cropOverlay();
+    const GeometrySettings& geometry = crop.editing().geometry();
+    DevelopState uncropped = open_->session.photo().state();
+    uncropped.settings.geometry.straighten = 0.0;
+    uncropped.settings.geometry.crop = {};
+    uncropped.settings.effects = {};
+    if (open_->lastCropImage && open_->lastCropImage->first == uncropped) {
+        // Nothing the mode shows changed since it was last left: its render is exact.
+        crop.setImage(open_->lastCropImage->second);
+        return;
+    }
+    if (!open_->cameraPreview) {
+        try {
+            open_->cameraPreview = embeddedPreviewImage(
+                ThumbnailCache(ThumbnailCache::defaultRoot()), open_->session.photo().path());
+        } catch (const std::exception&) {
+            open_->cameraPreview = QImage();
+        }
+    }
+    // The camera's preview is upright, with none of the user's turns or flips.
+    crop.setPlaceholder(reorientedImage(*open_->cameraPreview, GeometrySettings{}, geometry),
+                        photoView_->wholeFrameImage());
+}
+
+void MainWindow::updateHistoryActions() {
+    if (!open_) {
+        undoAction_->setEnabled(false);
+        redoAction_->setEnabled(false);
+        return;
+    }
+    if (photoView_->isCropMode()) {
+        undoAction_->setEnabled(photoView_->cropOverlay().canUndo());
+        redoAction_->setEnabled(photoView_->cropOverlay().canRedo());
+        return;
+    }
+    undoAction_->setEnabled(open_->session.canUndo());
+    redoAction_->setEnabled(open_->session.canRedo());
+}
+
+void MainWindow::closeCropOverlay() {
+    photoView_->cropOverlay().stop();
+    photoView_->setCropMode(false);
+    cropAction_->setChecked(false);
+    culling_->setCropMode(false);
+    developPanel_->setCropMode(false);
+    for (QShortcut* shortcut : cropShortcuts_) {
+        shortcut->setEnabled(false);
+    }
+    lastCropRender_.reset();
+    cropRequests_.clear();
+}
+
+void MainWindow::leaveCropMode(bool accept) {
+    if (!photoView_->isCropMode()) {
+        return;
+    }
+    closeCropOverlay();
+    // Renders of the crop mode still on their way are not of the cropped frame.
+    firstRequest_ = latestRequest_ + 1;
+    updateZoomControls();
+    guarded([this, accept] {
+        if (open_->session.editing()) {
+            if (accept) {
+                open_->session.commit();
+            } else {
+                open_->session.cancel();
+            }
+        }
+        refreshPanel();
+    });
+}
+
+void MainWindow::editGeometry(const std::function<void(CropEditing&)>& command) {
+    if (!open_) {
+        return;
+    }
+    if (photoView_->isCropMode()) {
+        photoView_->cropOverlay().edit(command);
+        return;
+    }
+    guarded([this, &command] {
+        developPanel_->finishPendingEdit();
+        DevelopState next = open_->session.photo().state();
+        CropEditing editing(open_->decoded->size(), open_->decoded->orientation(),
+                            next.settings.geometry);
+        command(editing);
+        next.settings.geometry = editing.geometry();
+        open_->session.setState(next);
+        refreshPanel();
+    });
+}
+
+void MainWindow::setStraightening(bool straightening) {
+    if (straightening && !photoView_->isCropMode()) {
+        setCropMode(true);
+    }
+    if (photoView_->isCropMode()) {
+        photoView_->cropOverlay().setStraightening(straightening);
+    }
+}
+
+GeometrySettings MainWindow::reconciledGeometry(const GeometrySettings& geometry) {
+    const GeometrySettings& current = open_->session.photo().state().settings.geometry;
+    if (geometry == current) {
+        return geometry;
+    }
+    if (photoView_->isCropMode()) {
+        photoView_->cropOverlay().adopt(geometry);
+        return photoView_->cropOverlay().editing().geometry();
+    }
+    if (!geometryEdit_) {
+        geometryEdit_.emplace(open_->decoded->size(), open_->decoded->orientation(), current);
+    }
+    geometryEdit_->adopt(geometry);
+    return geometryEdit_->geometry();
 }
 
 void MainWindow::pickNeutralAt(const QPointF& point) {
@@ -361,6 +639,12 @@ void MainWindow::guarded(const std::function<void()>& action) {
         action();
     } catch (const std::exception& error) {
         const QString message = QString::fromUtf8(error.what());
+        if (photoView_->isCropMode()) {
+            // The crop on screen can no longer be kept in step with the session.
+            closeCropOverlay();
+            firstRequest_ = latestRequest_ + 1;
+            updateZoomControls();
+        }
         try {
             if (open_->session.editing()) {
                 open_->session.cancel();
@@ -393,8 +677,7 @@ void MainWindow::refreshPanel(std::chrono::milliseconds renderDelay) {
         }
     }
     developPanel_->showState(photo.state(), context);
-    undoAction_->setEnabled(open_->session.canUndo());
-    redoAction_->setEnabled(open_->session.canRedo());
+    updateHistoryActions();
     saveAction_->setEnabled(open_->session.hasUnsavedChanges());
     updateTitle();
     if (renderDelay.count() > 0) {
@@ -421,6 +704,28 @@ void MainWindow::buildImageView() {
     connect(photoView_, &PhotoView::zoomChanged, this, &MainWindow::updateZoomControls);
     // A drag or a wheel burst makes many events; they ask for one render per turn.
     connect(photoView_, &PhotoView::viewChanged, this, [this] {
+        if (open_) {
+            interactionTimer_.start();
+        }
+    });
+    CropOverlay& crop = photoView_->cropOverlay();
+    connect(&crop, &CropOverlay::geometryEdited, this, [this](const GeometrySettings& geometry) {
+        guarded([this, &geometry] {
+            if (!open_->session.editing()) {
+                return;
+            }
+            DevelopState next = open_->session.photo().state();
+            next.settings.geometry = geometry;
+            open_->session.update(next);
+            refreshPanel();
+        });
+    });
+    connect(&crop, &CropOverlay::finished, this, [this](bool accepted) {
+        // The overlay has stopped itself and is still shown; the window leaves the mode.
+        leaveCropMode(accepted);
+    });
+    connect(&crop, &CropOverlay::historyChanged, this, &MainWindow::updateHistoryActions);
+    connect(&crop, &CropOverlay::renderWanted, this, [this] {
         if (open_) {
             interactionTimer_.start();
         }
@@ -637,6 +942,7 @@ void MainWindow::sidecarChangedOnDisk(const QString& primary) {
         return; // The strip has refreshed the marks; nothing else is open on it.
     }
     const QString name = toQString(path.filename());
+    leaveCropMode(true);
     try {
         developPanel_->finishPendingEdit();
     } catch (const std::exception&) {
@@ -657,7 +963,10 @@ void MainWindow::sidecarChangedOnDisk(const QString& primary) {
         // The pixels are the same file's; only the settings and marks are read again, and the
         // view stays where it is.
         auto decoded = open_->decoded;
-        open_.emplace(OpenPhoto{EditSession(std::move(photo)), std::move(decoded)});
+        auto cameraPreview = std::move(open_->cameraPreview);
+        auto lastCropImage = std::move(open_->lastCropImage);
+        open_.emplace(OpenPhoto{EditSession(std::move(photo)), std::move(decoded),
+                                std::move(cameraPreview), std::move(lastCropImage)});
         refreshPanel();
         statusBar()->showMessage(tr("Reloaded %1: its sidecar changed on disk.").arg(name), 5000);
     } catch (const std::exception& error) {
@@ -789,6 +1098,7 @@ bool MainWindow::saveAdjustments() {
         return true;
     }
     try {
+        leaveCropMode(true);
         developPanel_->finishPendingEdit();
         open_->session.save();
         filmStrip_->noteOwnWrite(open_->session.photo().path());
@@ -811,6 +1121,7 @@ bool MainWindow::confirmLeavingPhoto() {
     if (!open_) {
         return true;
     }
+    leaveCropMode(true);
     try {
         developPanel_->finishPendingEdit();
     } catch (const std::exception&) {
@@ -890,6 +1201,26 @@ void MainWindow::requestRender() {
     noiseReductionTimer_.stop();
     const DevelopState& state = open_->session.photo().state();
     const qreal ratio = photoView_->devicePixelRatioF();
+    if (photoView_->isCropMode()) {
+        // The photograph turned and flipped, neither straightened nor cropped:
+        // the overlay straightens it on screen (ADR 040). The effects follow the
+        // crop (ADR 037), so they wait for it. One geometry for the whole
+        // session, so the renderer's checkpoints serve every crop edit, and an
+        // edit that changes nothing here asks for nothing.
+        DevelopState uncropped = state;
+        uncropped.settings.geometry.straighten = 0.0;
+        uncropped.settings.geometry.crop = {};
+        uncropped.settings.effects = {};
+        const QSize size = photoView_->cropOverlay().renderSize().expandedTo({1, 1});
+        if (lastCropRender_ && lastCropRender_->first == uncropped &&
+            lastCropRender_->second == size) {
+            return;
+        }
+        lastCropRender_.emplace(uncropped, size);
+        latestRequest_ = previewRenderer_.request(uncropped, PreviewView::wholeFrame(size, ratio));
+        cropRequests_.emplace_back(latestRequest_, std::move(uncropped));
+        return;
+    }
     PreviewView view{.region = std::nullopt,
                      .outputSize = photoView_->devicePixels(),
                      .devicePixelRatio = ratio};
@@ -918,6 +1249,27 @@ void MainWindow::requestRender() {
 void MainWindow::showResult(const PreviewResult& result) {
     if (result.request < firstRequest_) {
         return;
+    }
+    if (photoView_->isCropMode() && result.request >= cropFirstRequest_) {
+        // The state the render shows, and the requests older than it, which will not be shown.
+        std::optional<DevelopState> renderedFor;
+        while (!cropRequests_.empty() && cropRequests_.front().first <= result.request) {
+            if (cropRequests_.front().first == result.request) {
+                renderedFor = cropRequests_.front().second;
+            }
+            cropRequests_.pop_front();
+        }
+        if (result.image && result.request > latestShown_ && renderedFor) {
+            latestShown_ = result.request;
+            // Turned and flipped to the geometry now, should a turn have happened since.
+            photoView_->cropOverlay().setImage(*result.image, renderedFor->settings.geometry);
+            open_->lastCropImage.emplace(*renderedFor, *result.image);
+            showDevice(result);
+            return;
+        }
+        if (result.image || result.background || result.curveHistogram) {
+            return; // Of the uncropped frame: no thumbnail, background or histogram of the photo.
+        }
     }
     // A recounted curve histogram comes once requests pause, for the newest
     // state rendered, and on a result of its own.
@@ -992,10 +1344,15 @@ void MainWindow::showPhoto(Photo photo) {
     auto decoded = std::make_shared<const ImageBuffer>(loadImage(photo.path(), log));
 
     // Commit.
+    if (photoView_->isCropMode()) {
+        // Only when nothing asked first; the edit belongs to the session being replaced.
+        closeCropOverlay();
+    }
+    geometryEdit_.reset();
     setPicking(false);
     // The shot just left shows its saved settings again, not the edits that were abandoned.
     filmStrip_->releaseLiveThumbnail();
-    open_.emplace(OpenPhoto{EditSession(std::move(photo)), decoded});
+    open_.emplace(OpenPhoto{EditSession(std::move(photo)), decoded, std::nullopt, std::nullopt});
     photoView_->resetView();
     updateZoomControls();
     previewRenderer_.setSource(std::move(decoded));
@@ -1005,6 +1362,10 @@ void MainWindow::showPhoto(Photo photo) {
     firstRequest_ = latestRequest_ + 1;
     developDock_->setEnabled(true);
     exportAction_->setEnabled(true);
+    cropAction_->setEnabled(true);
+    for (QAction* action : geometryActions_) {
+        action->setEnabled(true);
+    }
     refreshPanel(); // Requests the first render.
     const auto& path = open_->session.photo().path();
     rememberFolder(path.parent_path());

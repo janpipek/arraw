@@ -1,5 +1,7 @@
 #include "PhotoView.h"
 
+#include "CropOverlay.h"
+
 #include <QMouseEvent>
 #include <QPaintEvent>
 #include <QPainter>
@@ -30,7 +32,46 @@ PhotoView::PhotoView(QWidget* parent) : QWidget(parent) {
     // reach the window's actions, which step between photographs.
     setFocusPolicy(Qt::ClickFocus);
     setAutoFillBackground(false);
+    crop_ = new CropOverlay(this);
+    crop_->hide();
     updateCursor();
+}
+
+void PhotoView::setCropMode(bool cropping) {
+    if (cropping == isCropMode()) {
+        return;
+    }
+    crop_->setGeometry(rect());
+    if (cropping) {
+        crop_->show();
+        crop_->raise();
+        // Whatever gives the view the focus back, such as Enter in a spin box, gives it to
+        // the overlay, which claims the mode's keys (ADR 040).
+        setFocusProxy(crop_);
+        crop_->setFocus();
+        return;
+    }
+    // The view takes the focus before the overlay hides: hiding the focused widget would pass
+    // the focus on to the next one in the chain, such as a spin box of the panel, which would
+    // then take the keys meant for the window (R, Ctrl+Z).
+    const bool focused = crop_->hasFocus();
+    setFocusProxy(nullptr);
+    if (focused) {
+        setFocus();
+    }
+    crop_->hide();
+}
+
+QImage PhotoView::wholeFrameImage() const {
+    constexpr double tolerance = 1e-3;
+    const bool whole = !image_.isNull() && imageRegion_.left() <= tolerance &&
+                       imageRegion_.top() <= tolerance && imageRegion_.right() >= 1.0 - tolerance &&
+                       imageRegion_.bottom() >= 1.0 - tolerance;
+    return whole ? image_ : background_;
+}
+
+bool PhotoView::isCropMode() const {
+    return !crop_->isHidden();
 }
 
 QSize PhotoView::devicePixels() const {
@@ -142,6 +183,7 @@ void PhotoView::paintEvent(QPaintEvent* /*event*/) {
 
 void PhotoView::resizeEvent(QResizeEvent* event) {
     QWidget::resizeEvent(event);
+    crop_->setGeometry(rect());
     // Fitting follows the size; a zoom is kept, with the centre clamped anew.
     adopt(transform(), fit_, false);
 }

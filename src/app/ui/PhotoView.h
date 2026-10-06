@@ -15,6 +15,8 @@ class QWheelEvent;
 
 namespace arraw::app {
 
+class CropOverlay;
+
 /// @brief Widget that shows a part of the developed photograph, zoomed and panned.
 ///
 /// Holds the view (a zoom and the frame point at its middle, see ViewTransform)
@@ -26,6 +28,9 @@ namespace arraw::app {
 ///
 /// The wheel zooms about the cursor. A left drag pans, unless picking, when a
 /// left click picks; a middle drag and Alt with a left drag pan either way.
+///
+/// In the crop mode a CropOverlay covers it and takes the mouse, the wheel and
+/// the keys (ADR 040); the view beneath keeps its zoom for when the mode ends.
 class PhotoView : public QWidget {
     Q_OBJECT
     Q_DISABLE_COPY_MOVE(PhotoView)
@@ -64,6 +69,10 @@ public:
     /// @param background Reduced whole-frame image, refreshed after the render.
     void setBackground(const QImage& background);
 
+    /// @brief Gives the best image of the whole developed frame there is: the render if it
+    /// shows all of it, else the reduced one beneath; null before the first render.
+    [[nodiscard]] QImage wholeFrameImage() const;
+
     /// @brief Fits the whole frame and keeps it fitted; for a newly opened photograph.
     ///
     /// Does not emit viewChanged: the caller renders.
@@ -71,6 +80,22 @@ public:
 
     /// @brief Arms or disarms picking: a left click emits picked instead of panning.
     void setPicking(bool picking);
+
+    /// @brief Shows or hides the crop overlay over the view, giving it the focus when shown.
+    ///
+    /// While shown the overlay is the view's focus proxy, so focus given to the
+    /// view goes to it.
+    ///
+    /// Starting and stopping its session is the caller's, through cropOverlay().
+    void setCropMode(bool cropping);
+
+    /// @brief Tells whether the crop overlay is shown.
+    [[nodiscard]] bool isCropMode() const;
+
+    /// @brief Gives the crop overlay, a child that covers the view.
+    [[nodiscard]] CropOverlay& cropOverlay() const noexcept {
+        return *crop_;
+    }
 
 public slots:
     /// @brief Fits the whole frame, and keeps it fitted on resizing.
@@ -110,6 +135,8 @@ private:
     /// @brief Makes the cursor suit the mode and the drag.
     void updateCursor();
 
+    /// Crop mode's overlay; hidden outside the mode.
+    CropOverlay* crop_ = nullptr;
     /// Full-resolution frame size; empty without a photograph.
     QSize frame_;
     /// Device pixels per photograph pixel.

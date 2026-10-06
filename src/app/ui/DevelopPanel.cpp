@@ -1,5 +1,6 @@
 #include "DevelopPanel.h"
 
+#include "CropEditing.h"
 #include "CurveEditor.h"
 #include "SettingPresentation.h"
 #include "SettingSlider.h"
@@ -10,18 +11,25 @@
 
 #include <QButtonGroup>
 #include <QComboBox>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QDoubleSpinBox>
 #include <QEvent>
+#include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QStackedWidget>
+#include <QToolButton>
 #include <QVBoxLayout>
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <type_traits>
+#include <variant>
 
 namespace arraw::app {
 
@@ -29,6 +37,69 @@ namespace {
 
 /// What the White Balance rows show when the camera's reading is not known.
 constexpr ColourTemperature fallbackLight{5500.0F, 0.0F};
+
+/// What an entry of the aspect menu stands for.
+enum class AspectEntry {
+    Original,
+    Square,
+    FourByFive,
+    FiveBySeven,
+    TwoByThree,
+    SixteenByNine,
+    Custom,
+    Free
+};
+
+/// A menu entry that is a fixed ratio: its label and its landscape width over height.
+struct PresetRatio {
+    AspectEntry entry;
+    const char* label;
+    double widthOverHeight;
+};
+
+constexpr std::array<PresetRatio, 5> presetRatios{{
+    {AspectEntry::Square, "1:1", 1.0},
+    {AspectEntry::FourByFive, "4:5", 5.0 / 4.0},
+    {AspectEntry::FiveBySeven, "5:7", 7.0 / 5.0},
+    {AspectEntry::TwoByThree, "2:3", 3.0 / 2.0},
+    {AspectEntry::SixteenByNine, "16:9", 16.0 / 9.0},
+}};
+
+/// How close two ratios must be to be the same preset.
+constexpr double ratioTolerance = 1e-3;
+
+/// Width the develop dock opens at, in lines of the panel's font.
+constexpr double dockWidthInLines = 21.0;
+
+/// @brief Makes a compact button for a row of several: as wide as its text, sharing the row.
+///
+/// A QToolButton rather than a QPushButton, whose style minimum (about 80
+/// pixels) made rows of four or five buttons wider than the dock.
+QToolButton* compactButton(const QString& text, QWidget* parent) {
+    auto* button = new QToolButton(parent);
+    button->setText(text);
+    button->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    return button;
+}
+
+/// Gives the menu's entry for an aspect, and for a ratio of its own the text to show.
+AspectEntry entryFor(const CropAspect& aspect) {
+    if (std::holds_alternative<FreeCropAspect>(aspect)) {
+        return AspectEntry::Free;
+    }
+    if (std::holds_alternative<OriginalCropAspect>(aspect)) {
+        return AspectEntry::Original;
+    }
+    const double ratio = std::get<CropRatio>(aspect).widthOverHeight;
+    const double landscape = std::max(ratio, 1.0 / ratio);
+    for (const PresetRatio& preset : presetRatios) {
+        if (std::abs(landscape - preset.widthOverHeight) < ratioTolerance) {
+            return preset.entry;
+        }
+    }
+    return AspectEntry::Custom;
+}
 
 } // namespace
 
@@ -96,13 +167,14 @@ QWidget* DevelopPanel::buildToneCurveGroup() {
     const std::array<QString, curveChannelCount> titles{tr("Luma"), tr("Red"), tr("Green"),
                                                         tr("Blue")};
     for (std::size_t index = 0; index < curveChannelCount; ++index) {
-        auto* button = new QPushButton(titles[index], group);
+        QToolButton* button = compactButton(titles[index], group);
         button->setCheckable(true);
         button->setChecked(index == 0);
         channels->addButton(button, static_cast<int>(index));
         channelRow->addWidget(button, 1);
     }
-    auto* reset = new QPushButton(tr("Reset"), group);
+    QToolButton* reset = compactButton(tr("Reset"), group);
+    reset->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     reset->setObjectName("curveReset");
     reset->setToolTip(tr("Straightens the curve of the channel shown."));
     channelRow->addWidget(reset);
@@ -123,7 +195,7 @@ QWidget* DevelopPanel::buildToneCurveGroup() {
     connect(channels, &QButtonGroup::idClicked, curveEditor_, [this](int id) {
         curveEditor_->setChannel(curveChannels[static_cast<std::size_t>(id)]);
     });
-    connect(reset, &QPushButton::clicked, curveEditor_, &CurveEditor::resetChannel);
+    connect(reset, &QToolButton::clicked, curveEditor_, &CurveEditor::resetChannel);
     connect(curveEditor_, &CurveEditor::editStarted, this, [this] {
         finishOtherEdits(curveEditor_);
         emit editStarted();
@@ -212,6 +284,210 @@ QWidget* DevelopPanel::buildBlackAndWhiteGroup() {
     return group;
 }
 
+QWidget* DevelopPanel::buildCropGroup() {
+    auto* group = new QGroupBox(tr("Crop"), this);
+    auto* groupLayout = new QVBoxLayout(group);
+
+    // None of these takes the focus: in the crop mode it stays on the overlay, which claims
+    // Enter, Esc, O and X there (ADR 040). Only the Angle row's spin box takes it, to type.
+    cropButton_ = new QPushButton(tr("Crop"), group);
+    cropButton_->setObjectName("cropMode");
+    cropButton_->setCheckable(true);
+    cropButton_->setFocusPolicy(Qt::NoFocus);
+    cropButton_->setToolTip(tr("Frame the photograph on screen: drag the handles to crop, drag "
+                               "inside to move the photograph, outside to turn it (R)."));
+    levelButton_ = new QPushButton(tr("Level"), group);
+    levelButton_->setObjectName("cropLevel");
+    levelButton_->setCheckable(true);
+    levelButton_->setFocusPolicy(Qt::NoFocus);
+    levelButton_->setToolTip(
+        tr("Draw a line along a horizon or an upright, and the photograph is turned to make it "
+           "level. Ctrl-drag does the same."));
+    auto* modeRow = new QHBoxLayout;
+    modeRow->setSpacing(2);
+    modeRow->addWidget(cropButton_, 1);
+    modeRow->addWidget(levelButton_, 1);
+    groupLayout->addLayout(modeRow);
+
+    aspectCombo_ = new QComboBox(group);
+    aspectCombo_->setObjectName("cropAspect");
+    aspectCombo_->setFocusPolicy(Qt::NoFocus);
+    aspectCombo_->setToolTip(tr("The shape of the crop."));
+    // Sized to the entries, not to "Custom (1.78:1)", which may replace one of them.
+    aspectCombo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    aspectCombo_->setMinimumContentsLength(8);
+    aspectCombo_->addItem(tr("Original"), static_cast<int>(AspectEntry::Original));
+    for (const PresetRatio& preset : presetRatios) {
+        aspectCombo_->addItem(QString::fromLatin1(preset.label), static_cast<int>(preset.entry));
+    }
+    aspectCombo_->addItem(tr("Custom\u2026"), static_cast<int>(AspectEntry::Custom));
+    aspectCombo_->addItem(tr("Free"), static_cast<int>(AspectEntry::Free));
+    QToolButton* lock = compactButton(tr("Lock"), group);
+    lock->setObjectName("cropLock");
+    lock->setCheckable(true);
+    lock->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+    lock->setToolTip(tr("Keeps the crop's shape while it is resized."));
+    lockButton_ = lock;
+    QToolButton* swapButton = compactButton(tr("Swap"), group);
+    swapButton->setObjectName("cropSwap");
+    swapButton->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+    swapButton->setToolTip(tr("Swaps portrait and landscape (X in the crop mode)."));
+    auto* aspectRow = new QHBoxLayout;
+    aspectRow->setSpacing(2);
+    aspectRow->addWidget(aspectCombo_, 1);
+    aspectRow->addWidget(lock);
+    aspectRow->addWidget(swapButton);
+    groupLayout->addLayout(aspectRow);
+
+    for (const std::string_view key : geometryKeys()) {
+        addRow(key, group);
+    }
+
+    const auto addTool = [&](const QString& text, const QString& tip, const char* name) {
+        QToolButton* button = compactButton(text, group);
+        button->setObjectName(name);
+        button->setToolTip(tip);
+        return button;
+    };
+    QToolButton* turnLeft =
+        addTool(QString::fromUtf8("\u21B6"), tr("Rotates a quarter-turn anticlockwise (Ctrl+[)."),
+                "cropTurnLeft");
+    QToolButton* turnRight =
+        addTool(QString::fromUtf8("\u21B7"), tr("Rotates a quarter-turn clockwise (Ctrl+])."),
+                "cropTurnRight");
+    QToolButton* flipHorizontal =
+        addTool(QString::fromUtf8("\u2194"), tr("Flips left and right."), "cropFlipHorizontal");
+    QToolButton* flipVertical =
+        addTool(QString::fromUtf8("\u2195"), tr("Flips top and bottom."), "cropFlipVertical");
+    QToolButton* reset = addTool(tr("Reset"),
+                                 tr("Puts the turns, flips, angle and crop back as the photograph "
+                                    "came."),
+                                 "cropReset");
+    reset->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+    cropResetButton_ = reset;
+    auto* toolRow = new QHBoxLayout;
+    toolRow->setSpacing(2);
+    for (QToolButton* button : {turnLeft, turnRight, flipHorizontal, flipVertical}) {
+        toolRow->addWidget(button);
+    }
+    toolRow->addSpacing(8);
+    toolRow->addWidget(reset);
+    groupLayout->addLayout(toolRow);
+
+    for (QToolButton* button :
+         {lock, swapButton, turnLeft, turnRight, flipHorizontal, flipVertical, reset}) {
+        button->setFocusPolicy(Qt::NoFocus);
+    }
+
+    // Each click is one complete change, made by whoever owns the photograph.
+    connect(cropButton_, &QPushButton::clicked, this, &DevelopPanel::cropModeToggled);
+    connect(levelButton_, &QPushButton::clicked, this, &DevelopPanel::straighteningToggled);
+    connect(aspectCombo_, &QComboBox::activated, this, [this](int index) {
+        const auto entry = static_cast<AspectEntry>(aspectCombo_->itemData(index).toInt());
+        switch (entry) {
+        case AspectEntry::Original:
+            emit aspectChosen(OriginalCropAspect{}, false);
+            return;
+        case AspectEntry::Free:
+            emit aspectChosen(FreeCropAspect{}, false);
+            return;
+        case AspectEntry::Custom:
+            chooseCustomAspect();
+            return;
+        default:
+            break;
+        }
+        for (const PresetRatio& preset : presetRatios) {
+            if (preset.entry == entry) {
+                emit aspectChosen(CropRatio{preset.widthOverHeight}, true);
+            }
+        }
+    });
+    connect(lock, &QToolButton::clicked, this, &DevelopPanel::lockToggled);
+    connect(swapButton, &QToolButton::clicked, this, &DevelopPanel::orientationSwapped);
+    connect(turnLeft, &QToolButton::clicked, this, [this] { emit turned(false); });
+    connect(turnRight, &QToolButton::clicked, this, [this] { emit turned(true); });
+    connect(flipHorizontal, &QToolButton::clicked, this, [this] { emit flipped(true); });
+    connect(flipVertical, &QToolButton::clicked, this, [this] { emit flipped(false); });
+    connect(reset, &QToolButton::clicked, this, &DevelopPanel::applyGeometryReset);
+    return group;
+}
+
+void DevelopPanel::chooseCustomAspect() {
+    QDialog dialog(this);
+    dialog.setObjectName("customAspectDialog");
+    dialog.setWindowTitle(tr("Custom Aspect"));
+    auto* form = new QFormLayout(&dialog);
+    const auto addSpin = [&](const QString& label, const char* name) {
+        auto* spin = new QDoubleSpinBox(&dialog);
+        spin->setObjectName(name);
+        spin->setRange(0.1, 1000.0);
+        spin->setDecimals(2);
+        spin->setValue(3.0);
+        form->addRow(label, spin);
+        return spin;
+    };
+    auto* width = addSpin(tr("Width"), "customAspectWidth");
+    auto* height = addSpin(tr("Height"), "customAspectHeight");
+    height->setValue(2.0);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    form->addRow(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    if (dialog.exec() == QDialog::Accepted) {
+        emit aspectChosen(CropRatio{width->value() / height->value()}, false);
+    } else {
+        // The menu goes back to describing the settings.
+        showGeometry(shown_.settings.geometry);
+    }
+}
+
+void DevelopPanel::applyGeometryReset() {
+    DevelopState next = shown_;
+    next.settings.geometry = GeometrySettings{};
+    if (next.settings.geometry == shown_.settings.geometry) {
+        return;
+    }
+    finishPendingEdit();
+    emit editStarted();
+    emit stateEdited(next);
+    emit editFinished();
+}
+
+void DevelopPanel::showGeometry(const GeometrySettings& geometry) {
+    const AspectEntry entry = entryFor(geometry.crop.aspect);
+    const QSignalBlocker blocker(aspectCombo_);
+    const int custom = aspectCombo_->findData(static_cast<int>(AspectEntry::Custom));
+    // A ratio of the user's own is named in the menu's Custom entry.
+    QString customText = tr("Custom\u2026");
+    if (entry == AspectEntry::Custom) {
+        const double ratio = std::get<CropRatio>(geometry.crop.aspect).widthOverHeight;
+        const double landscape = std::max(ratio, 1.0 / ratio);
+        customText = tr("Custom (%1:1)").arg(landscape, 0, 'g', 3);
+    }
+    aspectCombo_->setItemText(custom, customText);
+    aspectCombo_->setCurrentIndex(aspectCombo_->findData(static_cast<int>(entry)));
+    lockButton_->setChecked(entry != AspectEntry::Free);
+    cropResetButton_->setEnabled(geometry != GeometrySettings{});
+}
+
+void DevelopPanel::setCropMode(bool cropping) {
+    const QSignalBlocker blocker(cropButton_);
+    cropButton_->setChecked(cropping);
+    for (QWidget* group : nonGeometryGroups_) {
+        group->setEnabled(!cropping);
+    }
+}
+
+int DevelopPanel::defaultDockWidth() const {
+    return static_cast<int>(std::lround(dockWidthInLines * fontMetrics().height()));
+}
+
+void DevelopPanel::setStraightening(bool straightening) {
+    const QSignalBlocker blocker(levelButton_);
+    levelButton_->setChecked(straightening);
+}
+
 QWidget* DevelopPanel::buildWhiteBalanceGroup() {
     auto* group = new QGroupBox(tr("White Balance"), this);
     auto* groupLayout = new QVBoxLayout(group);
@@ -242,26 +518,33 @@ QWidget* DevelopPanel::buildWhiteBalanceGroup() {
 DevelopPanel::DevelopPanel(QWidget* parent) : QWidget(parent) {
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
-    layout->addWidget(buildTreatmentRow());
-    layout->addWidget(buildWhiteBalanceGroup());
+    const auto addGroup = [&](QWidget* group) {
+        layout->addWidget(group);
+        nonGeometryGroups_.push_back(group);
+    };
+    addGroup(buildTreatmentRow());
+    // Geometry is the first thing a photograph is given, as in Lightroom, below
+    // the Treatment row, which describes the whole photograph rather than a step.
+    layout->addWidget(buildCropGroup());
+    addGroup(buildWhiteBalanceGroup());
 
     auto* tone = new QGroupBox(tr("Tone"), this);
     new QVBoxLayout(tone);
     for (const std::string_view key : toneKeys()) {
         addRow(key, tone);
     }
-    layout->addWidget(tone);
-    layout->addWidget(buildToneCurveGroup());
+    addGroup(tone);
+    addGroup(buildToneCurveGroup());
 
     colorGroup_ = buildColorGroup();
     hslGroup_ = buildHslGroup();
     blackAndWhiteGroup_ = buildBlackAndWhiteGroup();
-    layout->addWidget(colorGroup_);
-    layout->addWidget(hslGroup_);
-    layout->addWidget(blackAndWhiteGroup_);
-    layout->addWidget(buildColorGradingGroup());
-    layout->addWidget(buildNoiseReductionGroup());
-    layout->addWidget(buildEffectsGroup());
+    addGroup(colorGroup_);
+    addGroup(hslGroup_);
+    addGroup(blackAndWhiteGroup_);
+    addGroup(buildColorGradingGroup());
+    addGroup(buildNoiseReductionGroup());
+    addGroup(buildEffectsGroup());
     layout->addStretch(1);
     // One label column for every row, so that the grooves line up across groups.
     int labelWidth = 0;
@@ -302,6 +585,7 @@ void DevelopPanel::showState(const DevelopState& state, const PanelContext& cont
     blackAndWhiteGroup_->setVisible(visible.blackAndWhiteMix);
 
     curveEditor_->setCurves(shown_.settings.toneCurve);
+    showGeometry(shown_.settings.geometry);
 
     const ColourTemperature light = shownLight(color, context.asShot.value_or(fallbackLight));
     for (SettingSlider* row : rows_) {
@@ -316,7 +600,10 @@ void DevelopPanel::showState(const DevelopState& state, const PanelContext& cont
                 return 0.0;
             }
         }));
-        if (row->key() == "temperature") {
+        if (row->key() == "straighten") {
+            // Shown as it appears on screen: one flip reverses the stored angle.
+            row->setValue(displayedStraighten(shown_.settings.geometry));
+        } else if (row->key() == "temperature") {
             row->setValue(light.kelvin);
         } else if (row->key() == "tint") {
             row->setValue(light.tint);
@@ -417,6 +704,11 @@ void DevelopPanel::applyEdit(const SettingSlider& row, double value) {
         next.settings.color = withTemperature(next.settings.color, static_cast<float>(value));
     } else if (row.key() == "tint") {
         next.settings.color = withTint(next.settings.color, static_cast<float>(value));
+    } else if (row.key() == "straighten") {
+        // The row shows the angle as on screen; the setting is stored before the flips.
+        const bool mirrored =
+            next.settings.geometry.flipHorizontal != next.settings.geometry.flipVertical;
+        next.settings.geometry.straighten = mirrored ? -value : value;
     } else {
         visitField(*findDescriptor(row.key()), next.settings, [value](auto& field) {
             using Field = std::remove_cvref_t<decltype(field)>;

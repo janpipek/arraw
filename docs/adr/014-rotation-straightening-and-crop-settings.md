@@ -188,6 +188,12 @@ including its antialiasing policy, remains outside this implementation.
 > Geometry now also gives alpha exactly 1 where every contributing pixel is
 > opaque, on both backends.
 
+> **Note (2026-10-05).** The crop mode rotates an explicit crop about its own
+> centre (the content under it stays there) rather than carrying its offset
+> from the image centre, then fits as above; the explicit-crop fit and the
+> content test are shared helpers in `GeometryPlan.h`. See
+> [ADR 040](040-the-crop-mode-straightens-on-screen-over-an-uncropped-render.md).
+
 ## Consequences
 
 - Settings resolve once into geometry shared by sampling and coordinate mapping.
