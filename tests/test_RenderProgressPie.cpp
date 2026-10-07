@@ -4,6 +4,7 @@
 #include "ui/MainWindow.h"
 #include "ui/PhotoView.h"
 #include "ui/RenderProgressPie.h"
+#include "ui/ThemeColors.h"
 
 #include <QStatusBar>
 #include <QTest>
@@ -86,6 +87,7 @@ TEST_CASE("With no photograph open the pie is an empty grey ring", "[app][progre
     RenderProgressPie widget;
     widget.setPhotoOpen(false);
     CHECK_FALSE(widget.photoOpen());
+    CHECK(widget.stateColour() == theme::progressIdle);
     CHECK_FALSE(widget.rendering());
     CHECK(widget.filled() == 0.0);
     CHECK(widget.toolTip() == "No photograph open");
@@ -119,12 +121,16 @@ TEST_CASE("An opening photograph is never up to date", "[app][progress][pie]") {
     widget.setPhotoOpen(true);
     widget.setOpening("a.dng");
     CHECK(widget.opening());
-    // Within the show delay: an empty ring, not green.
+    // Within the show delay: an empty dim green ring, neither full green nor grey.
     CHECK_FALSE(widget.rendering());
+    CHECK(widget.stateColour() == theme::progressOpening);
+    CHECK(widget.stateColour() != theme::progressDone);
+    CHECK(widget.stateColour() != theme::progressIdle);
     CHECK(widget.filled() == 0.0);
     CHECK(widget.toolTip() == QString::fromUtf8("Opening a.dng\u2026"));
 
     widget.setDisplay(displayOf({}));
+    CHECK(widget.stateColour() == theme::progressBusy);
     CHECK(widget.filled() == 0.0);
     CHECK(widget.toolTip() == QString::fromUtf8("Opening a.dng\u2026"));
     widget.setDisplay(displayOf(0.4));
@@ -150,6 +156,7 @@ TEST_CASE("An opening photograph is never up to date", "[app][progress][pie]") {
     widget.setPhotoOpen(false);
     CHECK_FALSE(widget.opening());
     CHECK(widget.toolTip() == "No photograph open");
+    CHECK(widget.stateColour() == theme::progressIdle);
 }
 
 TEST_CASE("The window's pie is not up to date until the first render is shown",

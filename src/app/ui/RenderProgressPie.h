@@ -2,6 +2,7 @@
 
 #include "RenderActivity.h"
 
+#include <QColor>
 #include <QWidget>
 
 #include <optional>
@@ -12,7 +13,8 @@ namespace arraw::app {
 ///
 /// Always visible. A full green pie means up to date; while the indicator says a render is
 /// to be shown, a red pie filled with the fraction done, or an empty red one without a
-/// fraction yet; with no photograph open, an empty grey ring. The tooltip names the step
+/// fraction yet; with no photograph open, an empty grey ring; while a photograph is opening and
+/// no render is to be shown yet, an empty dim green ring. The tooltip names the step
 /// (ADR 042). A failed render is an empty red ring, tooltip "Render failed: <error>", until
 /// a render is shown (setOpened()), a render goes visibly or the photograph changes. A cancelled
 /// render delivers nothing, so the pie goes back to "up to date" for it; the window also reports a
@@ -45,10 +47,10 @@ public:
 
     /// @brief Starts showing that a photograph is being opened.
     ///
-    /// Until setOpened(), the pie is never "up to date": an empty grey ring before a render is
-    /// to be shown, then the red pie of the progress, both with the tooltip "Opening <name>…".
-    /// A failure shows its error meanwhile but does not end it, as nothing has been rendered yet;
-    /// setPhotoOpen(false) does.
+    /// Until setOpened(), the pie is never "up to date": an empty dim green ring before a render is
+    /// to be shown (so a quick switch does not blink green, grey, green), then the red pie of the
+    /// progress, both with the tooltip "Opening <name>…". A failure shows its error meanwhile but
+    /// does not end it, as nothing has been rendered yet; setPhotoOpen(false) does.
     /// @param name Name of the photograph, for the tooltip.
     void setOpening(const QString& name);
 
@@ -77,6 +79,9 @@ public:
     [[nodiscard]] bool rendering() const noexcept {
         return display_.visible;
     }
+
+    /// @brief Gives the colour of the outline and the fill as it is drawn now.
+    [[nodiscard]] QColor stateColour() const noexcept;
 
     [[nodiscard]] QSize sizeHint() const override;
     [[nodiscard]] QSize minimumSizeHint() const override;
@@ -109,6 +114,8 @@ private:
     bool shownFailed_ = false;
     /// Whether the pie is drawn as up to date when idle.
     bool shownUpToDate_ = true;
+    /// Whether the pie is drawn as opening when idle.
+    bool shownOpening_ = false;
 };
 
 } // namespace arraw::app

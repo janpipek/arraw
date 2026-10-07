@@ -57,6 +57,11 @@ inline const QColor progressDone{0x5a, 0xa8, 0x6a};
 /// ::arraw::app::theme::errorText, so that a render does not read as an error, about 3.8:1
 /// against the window grey.
 inline const QColor progressBusy{0xf0, 0x44, 0x3c};
+/// Outline of the render pie while a photograph is opening and no render is to be shown yet;
+/// the done green dimmed, so a quick switch between photographs keeps the pie greenish rather
+/// than blinking through grey, and it still reads as not yet done; about 2.3:1 against the window
+/// grey.
+inline const QColor progressOpening{0x3c, 0x6e, 0x47};
 /// Outline of the render pie with no photograph open; neutral grey, about 3.5:1 against the
 /// window grey.
 inline const QColor progressIdle{0x80, 0x80, 0x80};

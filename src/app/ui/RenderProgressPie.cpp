@@ -70,6 +70,16 @@ QString RenderProgressPie::describe() const {
     return text;
 }
 
+QColor RenderProgressPie::stateColour() const noexcept {
+    if (shownRendering_ || shownFailed_) {
+        return theme::progressBusy;
+    }
+    if (shownUpToDate_) {
+        return theme::progressDone;
+    }
+    return shownOpening_ ? theme::progressOpening : theme::progressIdle;
+}
+
 QSize RenderProgressPie::sizeHint() const {
     // The height of a line of the status bar's text; the pie takes the bar's height from its
     // layout, and a margin of a pixel around it, so it scales with the font and the display.
@@ -124,11 +134,13 @@ void RenderProgressPie::refresh() {
     const bool shownFailed = failed_.has_value();
     // Repaint only when the shown state changes.
     if (steps != shownSteps_ || display_.visible != shownRendering_ ||
-        upToDate() != shownUpToDate_ || shownFailed != shownFailed_) {
+        upToDate() != shownUpToDate_ || opening_.has_value() != shownOpening_ ||
+        shownFailed != shownFailed_) {
         shownFailed_ = shownFailed;
         shownSteps_ = steps;
         shownRendering_ = display_.visible;
         shownUpToDate_ = upToDate();
+        shownOpening_ = opening_.has_value();
         update();
     }
 }
@@ -143,9 +155,7 @@ void RenderProgressPie::paintEvent(QPaintEvent* /*event*/) {
     // Whole pixels (integer division), so the half-pen inset lands the stroke on pixel centres.
     const QRectF rect(QPointF((width() - side) / 2, (height() - side) / 2), QSizeF(side, side));
     const QRectF outline = rect.adjusted(inset, inset, -inset, -inset);
-    const QColor colour = (shownRendering_ || shownFailed_) ? theme::progressBusy
-                          : shownUpToDate_                  ? theme::progressDone
-                                                            : theme::progressIdle;
+    const QColor colour = stateColour();
 
     // The fill first, so that the outline of the whole pie, in the state colour, is on top: an
     // empty pie is an outline alone, and a partly filled one is not half one colour.

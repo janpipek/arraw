@@ -233,9 +233,10 @@ moment it starts opening (`showPhoto`) until its first render is on screen the p
 the decode's progress, which the window already receives and feeds to the same indicator
 (ADR 043), shows as the red fill with the tooltip "Opening <file name>… NN%", or an empty
 red ring with "Opening <file name>…" while there is no fraction. The indicator's show delay
-applies as for any render: before it has passed the pie is an empty grey ring with the
-tooltip "Opening <file name>…", so an open that is over in a moment flashes no red, and is
-never green either. The first render shown ends the opening and the normal states follow. A
+applies as for any render: before it has passed the pie is an empty dim green ring (`progressOpening`) with the
+tooltip "Opening <file name>…", so an open that is over in a moment flashes no red, is
+never full green, and a quick switch in the film strip does not blink green, grey, green. Grey is
+kept for no photograph open. The first render shown ends the opening and the normal states follow. A
 decode that fails closes the photograph, so the pie goes to "No photograph open".
 
 **Python gets no progress callable yet.** The bindings
