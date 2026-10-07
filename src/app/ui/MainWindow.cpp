@@ -667,16 +667,16 @@ void MainWindow::copySettings() {
     guarded([this] {
         // A drag still on the slider counts.
         developPanel_->finishPendingEdit();
+        const Photo& photo = open_->session.photo();
+        const Look look = lookOf(photo.metadata(), photo.state().settings);
         QSettings saved;
-        CopySettingsDialog dialog(restoreCopySections(saved), this);
+        CopySettingsDialog dialog(restoreCopySections(saved), look.fromRaw, this);
         if (dialog.exec() != QDialog::Accepted) {
             return;
         }
-        const std::vector<CopySection> sections = dialog.sections();
         QSettings store;
-        saveCopySections(sections, store);
-        const Photo& photo = open_->session.photo();
-        clipboard_ = SettingsClipboard{lookOf(photo.metadata(), photo.state().settings), sections};
+        saveCopySections(dialog.remembered(), store);
+        clipboard_ = SettingsClipboard{look, dialog.sections()};
         updatePasteAction();
     });
 }

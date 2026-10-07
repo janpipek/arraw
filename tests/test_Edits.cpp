@@ -680,3 +680,12 @@ TEST_CASE("A look refuses the geometry sections and invalid values", "[Edits][Lo
         CHECK_THROWS_AS(withLook(photo, state, look, sections), std::invalid_argument);
     }
 }
+
+TEST_CASE("Only White Balance has nothing to carry from a photograph that is not a RAW",
+          "[Edits][Look]") {
+    for (const CopySection section : copyableSections) {
+        CAPTURE(copySectionNames[static_cast<std::size_t>(section)]);
+        CHECK(sectionApplies(section, true));
+        CHECK(sectionApplies(section, false) == (section != CopySection::WhiteBalance));
+    }
+}

@@ -11,7 +11,8 @@
 
 namespace arraw::app {
 
-CopySettingsDialog::CopySettingsDialog(std::span<const CopySection> checked, QWidget* parent)
+CopySettingsDialog::CopySettingsDialog(std::span<const CopySection> checked, bool fromRaw,
+                                       QWidget* parent)
     : QDialog(parent) {
     setWindowTitle(tr("Copy Settings"));
 
@@ -23,7 +24,14 @@ CopySettingsDialog::CopySettingsDialog(std::span<const CopySection> checked, QWi
         auto* box = new QCheckBox(label, this);
         box->setObjectName(
             QString::fromUtf8(copySectionNames[static_cast<std::size_t>(section)].data()));
-        box->setChecked(std::ranges::find(checked, section) != checked.end());
+        const bool given = std::ranges::find(checked, section) != checked.end();
+        if (sectionApplies(section, fromRaw)) {
+            box->setChecked(given);
+        } else {
+            box->setEnabled(false);
+            box->setToolTip(tr("Only a RAW has a white balance to copy."));
+        }
+        given_.push_back(given);
         connect(box, &QCheckBox::toggled, this, &CopySettingsDialog::updateAccept);
         layout->addWidget(box);
         boxes_.push_back(box);
@@ -45,7 +53,17 @@ CopySettingsDialog::CopySettingsDialog(std::span<const CopySection> checked, QWi
 std::vector<CopySection> CopySettingsDialog::sections() const {
     std::vector<CopySection> chosen;
     for (std::size_t i = 0; i < boxes_.size(); ++i) {
-        if (boxes_[i]->isChecked()) {
+        if (boxes_[i]->isEnabled() && boxes_[i]->isChecked()) {
+            chosen.push_back(copyableSections[i]);
+        }
+    }
+    return chosen;
+}
+
+std::vector<CopySection> CopySettingsDialog::remembered() const {
+    std::vector<CopySection> chosen;
+    for (std::size_t i = 0; i < boxes_.size(); ++i) {
+        if (boxes_[i]->isEnabled() ? boxes_[i]->isChecked() : given_[i]) {
             chosen.push_back(copyableSections[i]);
         }
     }
@@ -53,13 +71,16 @@ std::vector<CopySection> CopySettingsDialog::sections() const {
 }
 
 void CopySettingsDialog::updateAccept() {
-    const bool any = std::ranges::any_of(boxes_, &QCheckBox::isChecked);
+    const bool any = std::ranges::any_of(
+        boxes_, [](const QCheckBox* box) { return box->isEnabled() && box->isChecked(); });
     buttons_->button(QDialogButtonBox::Ok)->setEnabled(any);
 }
 
 void CopySettingsDialog::setAll(bool checked) {
     for (QCheckBox* box : boxes_) {
-        box->setChecked(checked);
+        if (box->isEnabled()) {
+            box->setChecked(checked);
+        }
     }
 }
 

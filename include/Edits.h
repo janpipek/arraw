@@ -314,6 +314,14 @@ struct Look {
 /// @return The settings, with whether @p photo is a RAW.
 [[nodiscard]] Look lookOf(const ImageMetadata& photo, const DevelopSettings& settings);
 
+/// @brief Tells whether a section can be taken from, or given to, a photograph of a kind.
+///
+/// A section with a setting that needs a RAW (ADR 008) cannot cross a photograph that is not
+/// one; today that is White Balance, whose Kelvin and tint mean nothing without a sensor.
+/// @param section Section to ask about.
+/// @param raw Whether the photograph is a RAW.
+[[nodiscard]] bool sectionApplies(CopySection section, bool raw) noexcept;
+
 /// @brief Outcome of carrying a look onto a photograph: the new state, and what was left out.
 struct AppliedLook {
     /// @brief State with the look's sections carried onto it.

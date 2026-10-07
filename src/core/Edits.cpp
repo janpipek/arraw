@@ -161,6 +161,13 @@ Look lookOf(const ImageMetadata& photo, const DevelopSettings& settings) {
     return Look{settings, !std::holds_alternative<NamedEncoding>(photo.encoding)};
 }
 
+bool sectionApplies(CopySection section, bool raw) noexcept {
+    return raw || std::ranges::none_of(developSettingDescriptors, [&](const FieldDescriptor& d) {
+               return d.scope == SettingScope::Look && d.section == section &&
+                      d.applies == Applicability::RawOnly;
+           });
+}
+
 AppliedLook withLook(const ImageMetadata& photo, DevelopState state, const Look& look,
                      std::span<const CopySection> sections, const GrainEntropy& entropy) {
     constexpr std::size_t sectionCount = copySectionNames.size();

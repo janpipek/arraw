@@ -14,6 +14,7 @@
 #include <QDialog>
 #include <QDoubleSpinBox>
 #include <QSettings>
+#include <QStatusBar>
 #include <QTest>
 #include <QTimer>
 
@@ -136,4 +137,24 @@ TEST_CASE("Paste is off in the crop mode", "[app][window][copy][crop]") {
     CHECK_FALSE(w.action("pasteSettingsAction").isEnabled());
     w.action("cropAction").trigger();
     CHECK(w.action("pasteSettingsAction").isEnabled());
+}
+
+TEST_CASE("Copying from a photograph that is not a RAW leaves White Balance out",
+          "[app][window][copy]") {
+    Window w;
+    const std::filesystem::path fixtures(ARRAW_TEST_DATA_DIR);
+    std::filesystem::copy_file(fixtures / "testcard-61x41-srgb8.png", w.folder.file("c.png"));
+    w.window.openInitialPath(w.folder.file("c.png"));
+    REQUIRE(QTest::qWaitFor([&w] { return w.window.windowTitle().startsWith("c.png"); }, 20000));
+    REQUIRE(w.waitForRender());
+
+    w.copy();
+    CHECK(QSettings().value("copySettings/sections").toStringList().contains("whiteBalance"));
+
+    w.open("b.dng");
+    REQUIRE(w.panelExposure() == 1.0);
+    w.window.statusBar()->clearMessage();
+    w.action("pasteSettingsAction").trigger();
+    CHECK(w.panelExposure() == 0.0);
+    CHECK(w.window.statusBar()->currentMessage().isEmpty());
 }
