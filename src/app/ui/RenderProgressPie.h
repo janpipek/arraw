@@ -14,8 +14,9 @@ namespace arraw::app {
 /// to be shown, a red pie filled with the fraction done, or an empty red one without a
 /// fraction yet; with no photograph open, an empty grey ring. The tooltip names the step
 /// (ADR 042). A failed render is an empty red ring, tooltip "Render failed: <error>", until
-/// a render is shown or the photograph changes. A cancelled render delivers nothing, so the
-/// pie goes back to "up to date" for it; the window also reports a failure in a message box.
+/// a render is shown (setOpened()), a render goes visibly or the photograph changes. A cancelled
+/// render delivers nothing, so the pie goes back to "up to date" for it; the window also reports a
+/// failure in a message box.
 class RenderProgressPie : public QWidget {
     Q_OBJECT
     Q_DISABLE_COPY_MOVE(RenderProgressPie)
@@ -51,7 +52,7 @@ public:
     /// @param name Name of the photograph, for the tooltip.
     void setOpening(const QString& name);
 
-    /// @brief Ends the opening: the photograph's first render is on screen.
+    /// @brief Tells that a render is on screen: ends the opening and clears a failure.
     void setOpened();
 
     /// @brief Tells whether a photograph is being opened.

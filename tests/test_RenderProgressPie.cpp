@@ -102,6 +102,18 @@ TEST_CASE("With no photograph open the pie is an empty grey ring", "[app][progre
     CHECK(widget.toolTip() == "Up to date");
 }
 
+TEST_CASE("A render shown clears a failure even if it never became visible",
+          "[app][progress][pie]") {
+    RenderProgressPie widget;
+    widget.setFailed("bad");
+    widget.setDisplay({});
+    CHECK(widget.failed());
+    widget.setOpened();
+    CHECK_FALSE(widget.failed());
+    CHECK(widget.filled() == 1.0);
+    CHECK(widget.toolTip() == "Up to date");
+}
+
 TEST_CASE("An opening photograph is never up to date", "[app][progress][pie]") {
     RenderProgressPie widget;
     widget.setPhotoOpen(true);

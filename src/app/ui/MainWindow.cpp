@@ -1499,7 +1499,7 @@ void MainWindow::showResult(const PreviewResult& result) {
             // Turned and flipped to the geometry now, should a turn have happened since.
             photoView_->cropOverlay().setImage(*result.image, renderedFor->settings.geometry);
             open_->lastCropImage.emplace(*renderedFor, *result.image);
-            renderProgress_->setOpened(); // A render shown in the crop mode ends the opening too.
+            renderProgress_->setOpened(); // A render shown in the crop mode counts too.
             showDevice(result);
             return;
         }
@@ -1524,7 +1524,7 @@ void MainWindow::showResult(const PreviewResult& result) {
     }
     if (result.image) {
         latestShown_ = result.request;
-        renderProgress_->setOpened(); // The first render of a photograph ends its opening.
+        renderProgress_->setOpened(); // Ends the opening and any failure.
         photoView_->setImage(*result.image, result.region, result.background.value_or(QImage{}));
         showDevice(result);
         followWithThumbnail(result);

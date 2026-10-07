@@ -223,7 +223,7 @@ With no photograph open the pie is an empty grey ring, tooltip "No photograph op
 render that was cancelled delivers nothing, so the pie goes back to "up to date" for it. The
 newest render that failed (the window already isolates it and shows a message box) also
 turns the pie into an empty red ring with the tooltip "Render failed: <error>", until a
-render is shown or the photograph changes.
+render is shown (even one that never became visible) or the photograph changes.
 
 The red is its own, more saturated than the error text, so a render does not read as an
 error.

@@ -103,6 +103,7 @@ void RenderProgressPie::setOpening(const QString& name) {
 
 void RenderProgressPie::setOpened() {
     opening_.reset();
+    failed_.reset();
     refresh();
 }
 
