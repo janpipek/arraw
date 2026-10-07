@@ -2,6 +2,9 @@
 #include "support/Fixtures.h"
 #include "support/TempDir.h"
 
+#include <DevelopState.h>
+#include <ImageImport.h>
+#include <NoiseReductionSettings.h>
 #include <Photo.h>
 
 #include <catch2/catch_test_macros.hpp>
@@ -31,7 +34,26 @@ TEST_CASE("A photograph opens as a coherent document", "[photo]") {
 
     REQUIRE(photo.path() == path);
     REQUIRE(photo.metadata() == readImageMetadata(path));
-    REQUIRE(photo.state() == DevelopState{});
+    // A RAW with no sidecar starts with its kind's defaults (ADR 039).
+    REQUIRE(photo.state() == defaultStateFor(photo.metadata().encoding));
+    REQUIRE(photo.state().settings.noiseReduction.color == rawDefaultColorNoiseReduction);
+}
+
+TEST_CASE("A photograph's defaults depend on its kind", "[photo]") {
+    const ImageMetadata raw = readImageMetadata(test::fixture(neutralFixture));
+    const ImageMetadata card = readImageMetadata(test::fixture(testCard));
+    // A RAW starts with colour noise reduction, as Lightroom; everything else is neutral.
+    DevelopState rawDefaults;
+    rawDefaults.settings.noiseReduction.color = rawDefaultColorNoiseReduction;
+    REQUIRE(defaultStateFor(raw.encoding) == rawDefaults);
+    REQUIRE(defaultStateFor(card.encoding) == DevelopState{});
+    // The descriptor table's default stays neutral.
+    REQUIRE(DevelopSettings{}.noiseReduction.color == 0.0F);
+    // A document made without a state starts there; one given a state keeps it.
+    REQUIRE(Photo(test::fixture(neutralFixture), raw).state() == rawDefaults);
+    REQUIRE(Photo(test::fixture(testCard), card).state() == DevelopState{});
+    REQUIRE(Photo(test::fixture(neutralFixture), raw, DevelopState{}).state() == DevelopState{});
+    REQUIRE(openPhoto(test::fixture(testCard)).state() == DevelopState{});
 }
 
 TEST_CASE("A photograph that is not a RAW is a document too", "[photo]") {

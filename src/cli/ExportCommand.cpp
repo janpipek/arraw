@@ -17,11 +17,15 @@
 #include <DevelopSettings.h>
 #include <DevelopState.h>
 #include <Diagnostics.h>
+#include <EffectsSettings.h>
 #include <ImageExport.h>
 #include <ImageImport.h>
 #include <MarksFilter.h>
+#include <NoiseReductionSettings.h>
 #include <Photo.h>
 #include <SettingDescriptors.h>
+#include <ShortestDecimal.h>
+#include <ToneCurveSettings.h>
 #include <WhiteBalance.h>
 
 #include <QCommandLineParser>
@@ -36,9 +40,11 @@
 #include <exception>
 #include <filesystem>
 #include <limits>
+#include <map>
 #include <memory>
 #include <optional>
 #include <ostream>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -69,6 +75,39 @@ bool cli::isRangedFloatSetting(const FieldDescriptor& descriptor) {
 }
 
 namespace {
+
+/// @brief Gives the key a path is compared by: canonical where it can be, else lexically normal.
+std::filesystem::path pathKey(const std::filesystem::path& path) {
+    std::error_code error;
+    std::filesystem::path key = std::filesystem::weakly_canonical(path, error);
+    return error ? path.lexically_normal() : key;
+}
+
+/// @brief Finds the file among some that a path names.
+///
+/// By key first; then, when the path exists, by asking the file system, which
+/// also sees a name that differs only in case on a case-insensitive one, or a
+/// hard link. A batch is small, so the second pass's cost does not matter.
+/// @param path Path to look for.
+/// @param files The files, by ::pathKey, each with the path to report.
+/// @return The reported path of the file @p path names, or nothing.
+std::optional<std::filesystem::path>
+sameFileIn(const std::filesystem::path& path,
+           const std::map<std::filesystem::path, std::filesystem::path>& files) {
+    if (const auto found = files.find(pathKey(path)); found != files.end()) {
+        return found->second;
+    }
+    std::error_code error;
+    if (!std::filesystem::exists(path, error)) {
+        return std::nullopt;
+    }
+    for (const auto& [key, reported] : files) {
+        if (isSameFile(path, key)) {
+            return reported;
+        }
+    }
+    return std::nullopt;
+}
 
 using cli::CropEdit;
 using cli::GeometryEdits;
@@ -104,6 +143,14 @@ const FieldDescriptor& descriptorFor(std::string_view key) {
 void addEdit(std::vector<SettingEdit>& edits, std::string_view key, const DevelopSettings& source) {
     const FieldDescriptor& descriptor = descriptorFor(key);
     edits.push_back({&descriptor, encode(descriptor, source)});
+}
+
+/// @brief Tells whether the flags gave a setting a value.
+/// @param edits What the flags said.
+/// @param key Key of the setting.
+bool namesSetting(const cli::ExportEdits& edits, std::string_view key) {
+    return std::ranges::any_of(
+        edits.settings, [key](const SettingEdit& edit) { return edit.descriptor->key == key; });
 }
 
 /// @brief Puts the geometry flags on top of a photograph's own geometry.
@@ -290,6 +337,13 @@ constexpr SettingHelp settingHelp[]{
     {"temperature", "k", "White balance in kelvin", " RAW only."},
     {"tint", "amount", "Green to magenta", " RAW only."},
     {"filmicHighlights", "amount", "Highlight roll-off", " Default: 25."},
+    {"texture", "amount", "Emphasise (+) or smooth (-) fine detail", ""},
+    {"clarity", "amount", "Add (+) or take away (-) mid-scale local contrast", ""},
+    {"dehaze", "amount", "Remove (+) or add (-) atmospheric haze", ""},
+    {"toneCurveLuma", "points", "Tone curve of the luminance", ""},
+    {"toneCurveRed", "points", "Tone curve of the red channel", ""},
+    {"toneCurveGreen", "points", "Tone curve of the green channel", ""},
+    {"toneCurveBlue", "points", "Tone curve of the blue channel", ""},
     {"saturation", "amount", "Colourfulness of every colour", ""},
     {"vibrance", "amount", "Colourfulness of the muted colours, sparing the vivid", ""},
     {"hueRed", "amount", "Shift the hue of reds", ""},
@@ -324,6 +378,30 @@ constexpr SettingHelp settingHelp[]{
     {"grayBlue", "amount", "Lightness of blues in black and white", ""},
     {"grayPurple", "amount", "Lightness of purples in black and white", ""},
     {"grayMagenta", "amount", "Lightness of magentas in black and white", ""},
+    {"gradeShadowHue", "degrees", "Hue the shadows are tinted toward", ""},
+    {"gradeShadowSaturation", "amount", "Strength of the shadows' tint", ""},
+    {"gradeMidtoneHue", "degrees", "Hue the midtones are tinted toward", ""},
+    {"gradeMidtoneSaturation", "amount", "Strength of the midtones' tint", ""},
+    {"gradeHighlightHue", "degrees", "Hue the highlights are tinted toward", ""},
+    {"gradeHighlightSaturation", "amount", "Strength of the highlights' tint", ""},
+    {"gradeBalance", "amount", "Give the tint's range to the shadows (-) or the highlights (+)",
+     ""},
+    {"gradeBlending", "amount", "Softness of the transitions between the tinted zones",
+     " Default: 50."},
+    {"vignetteAmount", "amount", "Darken (-) or lighten (+) the edges of the cropped frame", ""},
+    {"vignetteMidpoint", "amount", "Where the vignette's falloff begins, from the centre outward",
+     " Default: 50."},
+    {"vignetteFeather", "amount", "Softness of the vignette's falloff, 0 for a hard edge",
+     " Default: 50."},
+    {"grainAmount", "amount", "Strength of the film grain", ""},
+    {"grainSize", "amount", "Size of the grain, relative to the cropped frame's long edge",
+     " Default: 50."},
+    {"grainRoughness", "amount", "How clumped the grain is, 0 for even", " Default: 50."},
+    {"luminanceNoiseReduction", "amount", "Strength of the luminance noise smoothing", ""},
+    {"luminanceNoiseDetail", "amount",
+     "How much edge the luminance smoothing keeps, 0 smooths across most", " Default: 50."},
+    {"colorNoiseReduction", "amount", "Strength of the colour noise smoothing", ""},
+    {"colorNoiseSmoothness", "amount", "Size of the colour blotches smoothed", " Default: 50."},
 };
 
 /// @brief Finds the help wording of a setting.
@@ -394,6 +472,56 @@ bool readSettings(const QCommandLineParser& parser, std::vector<SettingEdit>& ed
                           std::is_same_v<std::remove_cvref_t<decltype(field)>,
                                          std::optional<float>>) {
                 field = parsed;
+            }
+        });
+        addEdit(edits, descriptor.key, given);
+    }
+    return true;
+}
+
+/// @brief Reads the tone curve options into edits.
+///
+/// A curve is "x,y;x,y;..." as in a sidecar: two to sixteen points with
+/// coordinates from 0 to 1, x at least ::arraw::minimumCurvePointSpacing apart,
+/// the first at x = 0 and the last at x = 1, in any order (sorted, and ends
+/// snapped, by ::arraw::curveFromPoints). Anything else is refused rather than
+/// repaired, as out-of-range numbers are.
+/// @return `true` if every curve option present was acceptable; `false` otherwise.
+bool readCurves(const QCommandLineParser& parser, std::vector<SettingEdit>& edits,
+                std::ostream& err, int& code) {
+    DevelopSettings given;
+    for (const FieldDescriptor& descriptor : developSettingDescriptors) {
+        if (!takesPoints(descriptor)) {
+            continue;
+        }
+        const std::string name = optionName(descriptor.key);
+        if (!parser.isSet(QString::fromStdString(name))) {
+            continue;
+        }
+        const std::string wording = "--" + name + " takes " + toneCurveRequirements +
+                                    ", as x,y joined by semicolons, for example 0,0;0.5,0.6;1,1";
+        std::vector<CurvePoint> points;
+        bool valid = false;
+        if (const auto parsed =
+                parsePointList(parser.value(QString::fromStdString(name)).toStdString())) {
+            valid = std::ranges::all_of(*parsed, [](const auto& point) {
+                return std::isfinite(point.first) && std::isfinite(point.second) &&
+                       point.first >= 0.0 && point.first <= 1.0 && point.second >= 0.0 &&
+                       point.second <= 1.0;
+            });
+            for (const auto& [x, y] : *parsed) {
+                points.push_back({shortestFloat(x), shortestFloat(y)});
+            }
+        }
+        const std::optional<ToneCurve> curve =
+            valid ? curveFromPoints(std::move(points)) : std::nullopt;
+        if (!curve) {
+            code = usageError(err, wording);
+            return false;
+        }
+        visitField(descriptor, given, [&](auto& field) {
+            if constexpr (std::is_same_v<std::remove_cvref_t<decltype(field)>, ToneCurve>) {
+                field = *curve;
             }
         });
         addEdit(edits, descriptor.key, given);
@@ -481,7 +609,8 @@ bool readGeometry(const QCommandLineParser& parser, GeometryEdits& edits, std::o
 /// @brief Reads every develop option, the white balance's included, into edits.
 bool readEdits(const QCommandLineParser& parser, cli::ExportEdits& edits, std::ostream& err,
                int& code) {
-    if (!readSettings(parser, edits.settings, err, code)) {
+    if (!readSettings(parser, edits.settings, err, code) ||
+        !readCurves(parser, edits.settings, err, code)) {
         return false;
     }
     DevelopSettings given;
@@ -511,6 +640,48 @@ bool readEdits(const QCommandLineParser& parser, cli::ExportEdits& edits, std::o
             code = usageError(err, "--white-balance takes as-shot or custom");
             return false;
         }
+    }
+    if (parser.isSet("grain-seed")) {
+        // A seed names a pattern, so only an exact whole number is taken.
+        bool valid = false;
+        const qulonglong seed = parser.value("grain-seed").trimmed().toULongLong(&valid);
+        if (!valid || seed > std::numeric_limits<std::uint32_t>::max()) {
+            code = usageError(err, "--grain-seed takes a whole number from 0 to " +
+                                       std::to_string(std::numeric_limits<std::uint32_t>::max()));
+            return false;
+        }
+        given.effects.grain.seed = static_cast<std::uint32_t>(seed);
+        addEdit(edits.settings, "grainSeed", given);
+    }
+    if (parser.isSet("grain-model")) {
+        const std::string name = parser.value("grain-model").trimmed().toStdString();
+        const auto entry = std::ranges::find(grainModelNames, name,
+                                             [](const auto& known) { return known.second; });
+        if (entry == grainModelNames.end()) {
+            std::string names;
+            for (const auto& known : grainModelNames) {
+                names += (names.empty() ? "" : ", ") + std::string(known.second);
+            }
+            code = usageError(err, "--grain-model takes " + names);
+            return false;
+        }
+        given.effects.grain.model = entry->first;
+        addEdit(edits.settings, "grainModel", given);
+    }
+    if (parser.isSet("luminance-noise-filter")) {
+        const std::string name = parser.value("luminance-noise-filter").trimmed().toStdString();
+        const auto entry = std::ranges::find(luminanceNoiseFilterNames, name,
+                                             [](const auto& known) { return known.second; });
+        if (entry == luminanceNoiseFilterNames.end()) {
+            std::string names;
+            for (const auto& known : luminanceNoiseFilterNames) {
+                names += (names.empty() ? "" : ", ") + std::string(known.second);
+            }
+            code = usageError(err, "--luminance-noise-filter takes " + names);
+            return false;
+        }
+        given.noiseReduction.luminanceFilter = entry->first;
+        addEdit(edits.settings, "luminanceNoiseFilter", given);
     }
     if (parser.isSet("convert-to-grayscale") && parser.isSet("no-convert-to-grayscale")) {
         code = usageError(err, "--convert-to-grayscale and --no-convert-to-grayscale contradict");
@@ -551,6 +722,28 @@ void configure(QCommandLineParser& parser) {
         "bands --hue-, --saturation- and --luminance- followed by red, orange, yellow,\n"
         "green, aqua, blue, purple or magenta, and black and white, which\n"
         "--convert-to-grayscale turns on and --gray- plus a band mixes.\n"
+        "Tone curves are --tone-curve-luma for luminance and --tone-curve-red, -green and\n"
+        "-blue for the channels, each as x,y points joined by semicolons, as in a\n"
+        "sidecar: --tone-curve-luma '0,0;0.25,0.2;0.75,0.82;1,1'.\n"
+        "Colour grading tints three tonal zones: --grade-shadow-, --grade-midtone- and\n"
+        "--grade-highlight- followed by hue (degrees) or saturation (0 to 100, which\n"
+        "leaves the zone untouched at 0), with --grade-balance and --grade-blending\n"
+        "setting how the zones share the tonal range. It works on black and white too.\n"
+        "Hues are Oklab hue angles, not Lightroom's: roughly 30 is red, 110 yellow,\n"
+        "140 green and 260 blue. The tint fades out toward white.\n"
+        "The post-crop vignette follows the crop: --vignette-amount darkens the edges as\n"
+        "an exposure change (-100 is two stops in the corners) or lightens them toward\n"
+        "white without clipping, shaped by --vignette-midpoint and --vignette-feather.\n"
+        "Film grain is --grain-amount, with --grain-size and --grain-roughness; it is\n"
+        "anchored to the cropped frame, so a smaller export shows it softer, never moved.\n"
+        "Grain the flags turn on, where the sidecar has none, gets a random pattern per\n"
+        "photograph and export, since the command never writes its seed back; grain the\n"
+        "sidecar has keeps its pattern, and --grain-seed names one, so that exports repeat.\n"
+        "Noise reduction runs first, on the photograph as decoded, so every other control\n"
+        "leaves it alone: --luminance-noise-reduction smooths brightness noise, keeping\n"
+        "edges according to --luminance-noise-detail and --luminance-noise-filter, and\n"
+        "--color-noise-reduction smooths colour blotches of the size --color-noise-smoothness\n"
+        "sets, keeping brightness exactly. Both are 0 by default, which skips the pass.\n"
         "Naming --temperature or --tint makes white balance custom; the other half\n"
         "keeps the photograph's own value, or as shot. The command never writes a\n"
         "sidecar.\n"
@@ -592,8 +785,27 @@ void configure(QCommandLineParser& parser) {
                               "." + QString::fromUtf8(help.note),
                           help.valueName});
     }
+    for (const FieldDescriptor& descriptor : developSettingDescriptors) {
+        if (takesPoints(descriptor)) {
+            const SettingHelp& help = *helpFor(descriptor.key);
+            parser.addOption({QString::fromStdString(optionName(descriptor.key)),
+                              QString::fromUtf8(help.description) +
+                                  ", as x,y points joined by semicolons: 2 to 16 points, x and y "
+                                  "from 0 to 1, the ends at x = 0 and x = 1, x at least 0.01 "
+                                  "apart, in any order.",
+                              help.valueName});
+        }
+    }
     parser.addOption(
         {"white-balance", "as-shot or custom. Temperature/tint imply custom.", "mode"});
+    parser.addOption({"grain-seed",
+                      "Which grain pattern, a whole number; 0 is one fixed pattern. Default: "
+                      "the sidecar's, or a random one when the flags turn grain on.",
+                      "number"});
+    parser.addOption(
+        {"grain-model", "How grain is drawn: valueNoise. Default: valueNoise.", "name"});
+    parser.addOption({"luminance-noise-filter",
+                      "How luminance noise is smoothed: bilateral. Default: bilateral.", "name"});
     parser.addOption({"convert-to-grayscale",
                       "Make the photograph black and white; the --gray-* weights mix the hues, and "
                       "saturation, vibrance and the HSL bands then have nothing to act on."});
@@ -622,8 +834,9 @@ void configure(QCommandLineParser& parser) {
     parser.addOption({"device",
                       "auto, cpu, gpu, or gpuN. Auto uses the GPU when it can and says so when "
                       "it cannot; gpu never falls back; gpuN is gpu on the backend's N-th "
-                      "adapter, counting from 0. With --gpu-backend opengl, auto is gpu. "
-                      "Default: auto.",
+                      "adapter, counting from 0. With --gpu-backend opengl, auto is gpu. On "
+                      "Windows auto is the CPU for now, until Direct3D has been validated; "
+                      "pass gpu to use it. Default: auto.",
                       "name"});
     parser.addOption({"gpu-backend",
                       "vulkan, opengl, d3d11, d3d12, or metal. Default: " +
@@ -644,7 +857,10 @@ void configure(QCommandLineParser& parser) {
                       "rights). Default: capture,descriptive.",
                       "list"});
     cli::addMarksFilterOptions(parser);
-    parser.addOption({"overwrite", "Replace outputs that already exist."});
+    parser.addOption(
+        {"overwrite",
+         "Replace outputs that already exist, but never a file this run reads (a shot's "
+         "companions included) or has written."});
     parser.addOption({{"q", "quiet"}, "Do not report each file as it is written."});
     cli::addLogFormatOption(parser);
     // The syntax carries the command word, which Qt's usage line otherwise
@@ -827,7 +1043,8 @@ std::optional<ExportRequest> buildRequest(const QCommandLineParser& parser, std:
 /// @brief Whether the request develops on the CPU without ever looking for a GPU.
 bool cpuOnly(const ExportRequest& request) {
     return request.device.kind == cli::DeviceKind::Cpu ||
-           (request.device.kind == cli::DeviceKind::Auto && cli::gpuDisabled());
+           (request.device.kind == cli::DeviceKind::Auto &&
+            (cli::gpuDisabled() || !gpuUsedByDefault()));
 }
 
 /// @brief Creates the batch's one GPU context, or says why there is none.
@@ -856,7 +1073,8 @@ std::unique_ptr<GpuContext> createContext(const ExportRequest& request, std::str
 /// so the context can be destroyed whenever its owner likes.
 ImageBuffer developOnDevice(GpuContext& context, const ImageBuffer& source,
                             const DevelopState& state, const RenderRequest& render) {
-    const RenderCheckpoint checkpoint = developOnGpu(context, source, state, Stage::Resize, render);
+    const RenderCheckpoint checkpoint =
+        developOnGpu(context, source, state, Stage::Effects, render);
     return checkpoint.readBack();
 }
 
@@ -904,20 +1122,61 @@ int exportAll(const ExportRequest& request, std::ostream& err) {
         log.record({.notice = Notice::CpuUsed, .severity = Severity::Info});
     }
 
-    const cli::ExpandedInputs expanded = cli::expandInputs(request.inputs, log);
+    cli::ExpandedInputs expanded = cli::expandInputs(request.inputs, log);
     failures += expanded.unreadableFolders;
+    // A file named twice (repeated, overlapping globs, or a folder and a file in
+    // it) is exported once: the second would only replace the first's export.
+    {
+        std::set<std::filesystem::path> seen;
+        std::erase_if(expanded.photographs, [&seen](const cli::ShotInput& photograph) {
+            return !seen.insert(pathKey(photograph.path)).second;
+        });
+    }
+    // Every file the batch reads, a shot's companions included: none may become
+    // a destination, --overwrite or not, or a photograph is lost to an export.
+    std::map<std::filesystem::path, std::filesystem::path> batchFiles;
+    for (const auto& [input, shot] : expanded.photographs) {
+        batchFiles.emplace(pathKey(input), input);
+        if (shot) {
+            for (const auto& companion : shot->companions) {
+                batchFiles.emplace(pathKey(companion), companion);
+            }
+        }
+    }
     std::size_t filteredOut = 0;
     std::uint64_t timingRequest = 0;
+    // What this batch has written, by destination, and from which input.
+    std::map<std::filesystem::path, std::filesystem::path> written;
     for (const auto& [input, shot] : expanded.photographs) {
         const detail::TimingSpan timing("cli.export", ++timingRequest);
-        const auto destination =
-            request.outputDirectory /
-            (input.stem().string() + std::string(extensionFor(request.format)));
+        // Built from path parts, not by joining strings: a name that is not
+        // ASCII must not pass through the narrow code page on Windows.
+        std::filesystem::path name = input.stem();
+        name += extensionFor(request.format);
+        const auto destination = request.outputDirectory / name;
 
         try {
             if (!cli::passesFilter(request.filter, input, request.useSidecars)) {
                 ++filteredOut;
                 continue;
+            }
+            if (const auto file = sameFileIn(destination, batchFiles)) {
+                if (isSameFile(*file, input)) {
+                    throw std::runtime_error(destination.string() +
+                                             " is the input itself; the export would replace "
+                                             "it, so choose another --output folder");
+                }
+                throw std::runtime_error(destination.string() + " is " + file->string() +
+                                         ", which this export reads; choose another "
+                                         "--output folder");
+            }
+            // Nor a file this batch already wrote: inputs of one stem from
+            // different folders map to one name, and the later would silently
+            // replace the earlier one's export.
+            if (const auto earlier = sameFileIn(destination, written)) {
+                throw std::runtime_error(destination.string() + " would overwrite the export of " +
+                                         earlier->string() +
+                                         "; export them separately or to different folders");
             }
             if (!request.overwrite && std::filesystem::exists(destination)) {
                 // Refused rather than replaced: the destination is usually a
@@ -948,6 +1207,13 @@ int exportAll(const ExportRequest& request, std::ostream& err) {
             edited.settings =
                 cli::applyEdits(std::move(edited.settings), request.edits, log, input,
                                 !std::holds_alternative<NamedEncoding>(opened.metadata().encoding));
+            // Grain the flags turn on gets a seed of its own, unless they name
+            // one; grain the photograph already has keeps its seed, zero
+            // included, so its exports repeat (ADR 038).
+            if (!namesSetting(request.edits, "grainSeed")) {
+                edited.settings.effects.grain.seed = chooseGrainSeed(
+                    opened.state().settings.effects.grain, edited.settings.effects.grain);
+            }
             const Photo photo = opened.with(std::move(edited));
             // Decoded once, before the device is involved: a file that cannot be
             // read is the input's failure, whichever device would have developed it.
@@ -996,6 +1262,7 @@ int exportAll(const ExportRequest& request, std::ostream& err) {
                 throw std::runtime_error(std::string(problem.what()) +
                                          "; pass --metadata none to export without it");
             }
+            written.emplace(pathKey(destination), input);
             log.record({.notice = Notice::Exported,
                         .severity = Severity::Info,
                         .subject = input,

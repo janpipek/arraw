@@ -106,11 +106,11 @@ TEST_CASE("The source is recognised however its path is spelled", "[app][export]
     const auto file = dir.file("a.jpg");
     std::ofstream(file).put('x');
 
-    REQUIRE(app::isSameFile(file, dir.path() / "." / "a.jpg"));
-    REQUIRE(app::isSameFile(file, dir.path() / "sub" / ".." / "a.jpg"));
-    REQUIRE_FALSE(app::isSameFile(file, dir.file("b.jpg")));
+    REQUIRE(isSameFile(file, dir.path() / "." / "a.jpg"));
+    REQUIRE(isSameFile(file, dir.path() / "sub" / ".." / "a.jpg"));
+    REQUIRE_FALSE(isSameFile(file, dir.file("b.jpg")));
     // Not yet existing paths are compared as spelled, normalised.
-    REQUIRE(app::isSameFile(dir.file("new.png"), dir.path() / "x" / ".." / "new.png"));
+    REQUIRE(isSameFile(dir.file("new.png"), dir.path() / "x" / ".." / "new.png"));
 }
 
 TEST_CASE("Settings are remembered, except the size", "[app][export][settings]") {

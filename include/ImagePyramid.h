@@ -11,7 +11,8 @@ namespace arraw {
 ///
 /// The result is ::arraw::PixelFormat::RgbaF32 (an image in another format is
 /// converted first, as development does), with the input's encoding and pending
-/// orientation, and `ceil(w / 2)` by `ceil(h / 2)` pixels. An odd last row or
+/// orientation, twice its pixel scale (::arraw::ImageBuffer::pixelScale), and
+/// `ceil(w / 2)` by `ceil(h / 2)` pixels. An odd last row or
 /// column averages the samples it has: nothing is padded or wrapped.
 ///
 /// Colour is averaged premultiplied by alpha and divided by the mean alpha
@@ -20,7 +21,8 @@ namespace arraw {
 /// the plain mean of the colours, and alpha stays exactly 1.
 ///
 /// Repeated, it makes the pyramid of reductions a preview develops from
-/// (ADR 020): each level halves the one before.
+/// (ADR 020): each level halves the one before. Banded across threads, with the
+/// same bits on any number of them (ADR 039, ADR 043).
 /// @param image Image to halve.
 /// @return A new image of half the size.
 /// @throws std::invalid_argument if @p image is 1x1, as there is nothing to

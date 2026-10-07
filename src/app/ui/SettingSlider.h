@@ -28,10 +28,20 @@ namespace arraw::app {
 /// own: the panel shows a fallback with setValue() when the setting is absent,
 /// and a reset reports valueCleared() instead of a value, for the panel to
 /// apply as "absent again".
+///
+/// A setting whose presentation asks for a painted track (SliderTrack) gets
+/// a groove showing what its values mean, such as the hues of a hue angle,
+/// with the style's handle drawn over it.
 class SettingSlider : public QWidget {
     Q_OBJECT
     Q_DISABLE_COPY_MOVE(SettingSlider)
 public:
+    /// Shortest slider track a row keeps, in logical pixels: enough to place a value by eye.
+    ///
+    /// It is the slider's minimum width, so the minimum size of a panel of rows (and with it
+    /// the develop dock's minimum width) grows with the label column and the value field.
+    static constexpr int minimumSliderLength = 120;
+
     /// @brief Builds the row for a setting.
     /// @param key Key of a ranged float, double or optional float setting in the descriptor table.
     /// @param parent Owning widget.
@@ -44,9 +54,29 @@ public:
         return key_;
     }
 
+    /// @brief Gives the width the label needs for its text.
+    [[nodiscard]] int labelWidthHint() const;
+
+    /// @brief Sets the width of the label column, so that the rows of a panel line up.
+    /// @param width Width in pixels; at least ::arraw::app::SettingSlider::labelWidthHint
+    /// for the text to fit.
+    void setLabelWidth(int width);
+
     /// @brief Shows a value without emitting any signal.
     /// @param value Value in the setting's units.
     void setValue(double value);
+
+    /// @brief Sets the value a reset (a double-click of the label) restores.
+    ///
+    /// The photograph's own default, which can depend on its kind (see
+    /// ::arraw::defaultStateFor). Ignored for an optional setting, which a reset clears.
+    /// @param value Value in the setting's units.
+    void setDefaultValue(double value);
+
+    /// @brief Gives the value a reset restores.
+    [[nodiscard]] double defaultValue() const noexcept {
+        return default_;
+    }
 
     /// @brief Ends an edit of keyboard, wheel or spin-box changes that is still waiting to end.
     ///

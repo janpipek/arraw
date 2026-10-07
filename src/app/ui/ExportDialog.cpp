@@ -71,7 +71,7 @@ ExportDialog::ExportDialog(const ExportSettings& initial, ImageSize frame, QWidg
     profileBox_ = new QComboBox;
     profileBox_->addItems({tr("sRGB"), tr("Display P3"), tr("Adobe RGB")});
     profileBox_->setCurrentIndex(indexOf(encodings, initial.encoding));
-    form->addRow(tr("Color profile:"), profileBox_);
+    form->addRow(tr("Colour profile:"), profileBox_);
 
     sixteenBitCheck_ = new QCheckBox(tr("16-bit per channel"));
     sixteenBitCheck_->setChecked(initial.sixteenBit);

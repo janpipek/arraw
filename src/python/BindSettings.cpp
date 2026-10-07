@@ -1,10 +1,17 @@
 #include "PyBindings.h"
 
+#include <ColorGradingSettings.h>
 #include <DevelopSettings.h>
+#include <EffectsSettings.h>
+#include <NoiseReductionSettings.h>
+#include <PresenceSettings.h>
 #include <SettingDescriptors.h>
 #include <SettingsJson.h>
+#include <ToneCurveSettings.h>
 
 #include <cctype>
+#include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -31,6 +38,9 @@ struct SettingDescriptor {
 
     /// @brief Earliest pass boundary the setting changes.
     Stage affects;
+
+    /// @brief Whether the setting is part of a look or the photograph's own.
+    SettingScope scope;
 
     friend bool operator==(const SettingDescriptor&, const SettingDescriptor&) = default;
 };
@@ -59,8 +69,8 @@ std::vector<SettingDescriptor> listDescriptors() {
         if (row.range) {
             range = std::pair{row.range->minimum, row.range->maximum};
         }
-        result.push_back(
-            {std::string(row.key), snakeCase(row.key), range, row.group, row.applies, row.affects});
+        result.push_back({std::string(row.key), snakeCase(row.key), range, row.group, row.applies,
+                          row.affects, row.scope});
     }
     return result;
 }
@@ -81,7 +91,16 @@ void applyFlatSettings(DevelopSettings& settings, const nb::kwargs& keywords) {
             throw nb::type_error(("unknown develop setting '" + name + "'").c_str());
         }
         visitField(*match, settings, [&](auto& leaf) {
-            leaf = convertValue<std::remove_cvref_t<decltype(leaf)>>(value, name);
+            using Leaf = std::remove_cvref_t<decltype(leaf)>;
+            if constexpr (std::is_same_v<Leaf, ToneCurve>) {
+                // A curve may be given as a ToneCurve or as its list of (x, y) points.
+                if (!nb::isinstance<ToneCurve>(value)) {
+                    leaf = ToneCurve{convertValue<std::vector<CurvePoint>>(value, name)};
+                    normaliseCurvePoints(leaf.points);
+                    return;
+                }
+            }
+            leaf = convertValue<Leaf>(value, name);
         });
     }
 }
@@ -103,17 +122,36 @@ void bindSettings(nb::module_& m) {
         .value("TONE", SettingGroup::Tone)
         .value("GEOMETRY", SettingGroup::Geometry)
         .value("HSL", SettingGroup::Hsl)
-        .value("BLACK_AND_WHITE", SettingGroup::BlackAndWhite);
+        .value("BLACK_AND_WHITE", SettingGroup::BlackAndWhite)
+        .value("TONE_CURVE", SettingGroup::ToneCurve)
+        .value("COLOR_GRADING", SettingGroup::ColorGrading)
+        .value("EFFECTS", SettingGroup::Effects)
+        .value("DETAIL", SettingGroup::Detail)
+        .value("PRESENCE", SettingGroup::Presence);
 
     nb::enum_<Applicability>(m, "Applicability",
                              "Whether a setting means anything for every photograph.")
         .value("ALWAYS", Applicability::Always)
         .value("RAW_ONLY", Applicability::RawOnly);
 
+    nb::enum_<SettingScope>(m, "SettingScope",
+                            "Whether a setting is part of a look, or belongs to one photograph.")
+        .value("LOOK", SettingScope::Look)
+        .value("PHOTO", SettingScope::Photo);
+
+    nb::enum_<GrainModel>(m, "GrainModel", "Algorithm that draws the grain.")
+        .value("VALUE_NOISE", GrainModel::ValueNoise);
+
+    nb::enum_<LuminanceNoiseFilter>(m, "LuminanceNoiseFilter",
+                                    "Filter that smooths luminance noise.")
+        .value("BILATERAL", LuminanceNoiseFilter::Bilateral);
+
     nb::enum_<Stage>(m, "Stage", "Pass boundary of the render pipeline.")
+        .value("DENOISE", Stage::Denoise)
         .value("POINTWISE", Stage::Pointwise)
         .value("GEOMETRY", Stage::Geometry)
-        .value("RESIZE", Stage::Resize);
+        .value("RESIZE", Stage::Resize)
+        .value("EFFECTS", Stage::Effects);
 
     bindFrozen<ToneSettings>(
         m, "ToneSettings", "Photographic tone adjustments.",
@@ -167,11 +205,98 @@ void bindSettings(nb::module_& m) {
                                  field("straighten", &GeometrySettings::straighten),
                                  field("crop", &GeometrySettings::crop));
 
+    bindFrozen<ToneCurve, false>(
+        m, "ToneCurve",
+        "A tone curve as 2 to 16 (x, y) control points from x = 0 to x = 1, x at least 0.01 "
+        "apart, given in any order and sorted by x; the default is the identity.",
+        field("points", &ToneCurve::points))
+        .def_prop_ro("is_identity", &ToneCurve::isIdentity,
+                     "Whether the curve is exactly the line from (0, 0) to (1, 1).");
+    bindFrozen<ToneCurveSettings>(
+        m, "ToneCurveSettings", "Tone curves on luminance and on the red, green and blue channels.",
+        field("luma", &ToneCurveSettings::luma), field("red", &ToneCurveSettings::red),
+        field("green", &ToneCurveSettings::green), field("blue", &ToneCurveSettings::blue));
+
+    bindFrozen<GradeZone>(
+        m, "GradeZone",
+        "Tint of one tonal zone: a hue and how much of it.\n\n"
+        "The hue is an Oklab hue angle in degrees, not Lightroom's: roughly 30 is "
+        "red, 110 yellow, 140 green and 260 blue.",
+        field("hue", &GradeZone::hue), field("saturation", &GradeZone::saturation));
+    bindFrozen<ColorGradingSettings>(m, "ColorGradingSettings",
+                                     "Three-zone toning of the shadows, midtones and highlights.",
+                                     field("shadows", &ColorGradingSettings::shadows),
+                                     field("midtones", &ColorGradingSettings::midtones),
+                                     field("highlights", &ColorGradingSettings::highlights),
+                                     field("balance", &ColorGradingSettings::balance),
+                                     field("blending", &ColorGradingSettings::blending));
+
+    bindFrozen<VignetteSettings>(
+        m, "VignetteSettings",
+        "Post-crop vignette: an elliptical falloff fitted to the cropped frame.\n\n"
+        "Negative amounts darken the edges as an exposure change, positive ones lighten "
+        "them toward white without passing it.",
+        field("amount", &VignetteSettings::amount), field("midpoint", &VignetteSettings::midpoint),
+        field("feather", &VignetteSettings::feather));
+    bindFrozen<GrainSettings>(
+        m, "GrainSettings",
+        "Film-like grain anchored to the cropped frame and to a seed.\n\n"
+        "The seed is the photograph's own, not part of a look: 0 renders one fixed "
+        "pattern, and choose_grain_seed gives grain an edit turns on a seed of its own.",
+        field("amount", &GrainSettings::amount), field("size", &GrainSettings::size),
+        field("roughness", &GrainSettings::roughness), field("model", &GrainSettings::model),
+        field("seed", &GrainSettings::seed));
+    bindFrozen<EffectsSettings>(
+        m, "EffectsSettings", "Effects applied to the cropped frame after the resize.",
+        field("vignette", &EffectsSettings::vignette), field("grain", &EffectsSettings::grain));
+    bindFrozen<PresenceSettings>(
+        m, "PresenceSettings",
+        "Texture, Clarity and Dehaze: local contrast after the tone controls, each -100 to 100.\n\n"
+        "Texture acts on detail a few sensor pixels across, Clarity on the midtones' contrast "
+        "at a hundredth of the long edge, Dehaze removes (or adds) a veil with some contrast "
+        "and colour.",
+        field("texture", &PresenceSettings::texture), field("clarity", &PresenceSettings::clarity),
+        field("dehaze", &PresenceSettings::dehaze));
+    bindFrozen<NoiseReductionSettings>(
+        m, "NoiseReductionSettings",
+        "Luminance and colour noise reduction, run on the decoded photograph first.\n\n"
+        "Radii are in sensor pixels; with both amounts at 0 nothing happens.",
+        field("luminance", &NoiseReductionSettings::luminance),
+        field("luminance_detail", &NoiseReductionSettings::luminanceDetail),
+        field("luminance_filter", &NoiseReductionSettings::luminanceFilter),
+        field("color", &NoiseReductionSettings::color),
+        field("color_smoothness", &NoiseReductionSettings::colorSmoothness));
+
+    m.def(
+        "choose_grain_seed",
+        [](const GrainSettings& previous, const GrainSettings& next,
+           const std::optional<nb::callable>& entropy) {
+            if (!entropy) {
+                return chooseGrainSeed(previous, next);
+            }
+            return chooseGrainSeed(previous, next, [&entropy] {
+                return convertValue<std::uint32_t>((*entropy)(), "entropy()");
+            });
+        },
+        "previous"_a, "next"_a, "entropy"_a = nb::none(),
+        nb::sig("def choose_grain_seed(previous: GrainSettings, next: GrainSettings, entropy: "
+                "collections.abc.Callable[[], int] | None = None) -> int"),
+        "Return the seed grain should carry after an edit from `previous` to `next`: a new "
+        "one, never 0, when the edit turns grain on (amount from 0 to above 0) and `next` "
+        "has none, else `next`'s seed, 0 included. `entropy` returns 32 random bits per "
+        "call; None uses the operating system's. Store the result as the photograph's "
+        "grain seed.");
+
     bindFrozen<DevelopSettings>(
         m, "DevelopSettings", "Photographic settings of one photograph.",
         field("color", &DevelopSettings::color), field("geometry", &DevelopSettings::geometry),
-        field("tone", &DevelopSettings::tone), field("hsl", &DevelopSettings::hsl),
-        field("black_and_white", &DevelopSettings::blackAndWhite))
+        field("tone", &DevelopSettings::tone), field("presence", &DevelopSettings::presence),
+        field("hsl", &DevelopSettings::hsl),
+        field("black_and_white", &DevelopSettings::blackAndWhite),
+        field("tone_curve", &DevelopSettings::toneCurve),
+        field("color_grading", &DevelopSettings::colorGrading),
+        field("effects", &DevelopSettings::effects),
+        field("noise_reduction", &DevelopSettings::noiseReduction))
         .def(
             "with_",
             [](const DevelopSettings& self, const nb::kwargs& keywords) {
@@ -201,6 +326,7 @@ void bindSettings(nb::module_& m) {
         .def_ro("group", &SettingDescriptor::group)
         .def_ro("applies", &SettingDescriptor::applies)
         .def_ro("affects", &SettingDescriptor::affects)
+        .def_ro("scope", &SettingDescriptor::scope)
         .def(nb::self == nb::self)
         .def("__repr__", [](const SettingDescriptor& d) {
             return "SettingDescriptor(name='" + d.name + "', key='" + d.key + "')";
@@ -208,7 +334,8 @@ void bindSettings(nb::module_& m) {
     nb::cast<nb::object>(m.attr("SettingDescriptor")).attr("__hash__") = nb::none();
 
     m.def("setting_descriptors", &listDescriptors,
-          "List the develop settings: key, snake_case name, range, group, applicability, stage.");
+          "List the develop settings: key, snake_case name, range, group, applicability, stage, "
+          "scope.");
 }
 
 } // namespace arraw::python

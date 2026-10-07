@@ -37,6 +37,18 @@ struct ThumbnailResult {
     std::uint64_t generation = 0;
 };
 
+/// @brief Gives a file's embedded camera preview, upright, at most
+/// ::arraw::app::ThumbnailCache::maxEdge on a side.
+///
+/// From the cache when it holds it, else read from the file and kept there.
+/// Safe from any thread, as the cache is.
+/// @param cache Where embedded previews are kept.
+/// @param file Photograph.
+/// @return The preview, or a null image when the file has none or cannot be read.
+/// @throws std::exception if reading the file fails in a way readEmbeddedPreview does not catch.
+[[nodiscard]] QImage embeddedPreviewImage(const ThumbnailCache& cache,
+                                          const std::filesystem::path& file);
+
 /// @brief Background thread that makes the film strip's thumbnails.
 ///
 /// One thread, at a lower priority than the rest of the application, that uses the CPU only and

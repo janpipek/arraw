@@ -2,6 +2,7 @@
 
 #include <DevelopState.h>
 #include <ImageBuffer.h>
+#include <Progress.h>
 #include <RenderCheckpoint.h>
 
 #include <cstdint>
@@ -25,6 +26,21 @@ enum class ResizeFilter {
 /// @brief Level of effort a render spends on being exact.
 enum class Quality {
     Export, ///< Full resolution all the way, the result an export would write.
+};
+
+/// @brief Named position inside the pointwise chain whose values a render can hand back.
+///
+/// A tap is not a pass boundary: inside the fused pointwise chain a colour is
+/// in registers, so there is no buffer to keep (ADR 011). ::arraw::sample asks
+/// for one by running the render with the chain stopped there. Each tap names
+/// the encoding its samples come back in. The position of each lives in
+/// `src/core/ProcessingPlan.h`, beside the chain itself.
+enum class Tap {
+    /// What the tone curves take in: after white balance, the matrix, exposure
+    /// and Basic Tone, before the curves, the shoulder and the colour controls.
+    /// Handed back in ::arraw::perceptualEncoding, the coordinate the curves
+    /// act in, which is the x-axis of a curve widget (ADR 010, ADR 035).
+    CurveInput,
 };
 
 /// @brief What a caller wants rendered.
@@ -153,16 +169,28 @@ struct RenderRequest {
 /// separate resize with the request's filter; a size equal to the cropped one
 /// leaves the pixels untouched. A request's region is cut from the cropped
 /// frame just before that resize, and the size resolves against the cut.
+/// The effects (the post-crop vignette) run last, on the resized pixels, at
+/// each pixel's place in the crop frame, so a region or a size shows the same
+/// falloff as the whole frame (ADR 037); with every effect off they cost nothing.
+///
+/// Noise reduction runs first and measures its reach in sensor pixels, divided
+/// by the source's ::arraw::ImageBuffer::pixelScale, so a reduced copy develops
+/// as an approximation of the full photograph (ADR 039). The result carries the
+/// source's pixel scale, multiplied by the resize's reduction.
 ///
 /// @param source Decoded photograph, in the working or a camera encoding.
 /// @param state How the photograph is developed.
 /// @param request What to render; the default is the whole photograph at its
 /// own resolution.
+/// @param progress Channel for progress and cancellation (ADR 042), or null
+/// for none, which costs nothing and changes no bit of the result.
 /// @return A new buffer in the working encoding.
 /// @throws std::invalid_argument if @p source is in an encoding development
 /// cannot start from, if geometry is invalid, or if @p request is invalid.
+/// @throws ::arraw::Cancelled if @p progress was cancelled before the render finished.
 [[nodiscard]] ImageBuffer develop(const ImageBuffer& source, const DevelopState& state,
-                                  const RenderRequest& request = {});
+                                  const RenderRequest& request = {},
+                                  ProgressChannel* progress = nullptr);
 
 /// @brief Develops a decoded photograph as far as a pass boundary and keeps what is there.
 ///
@@ -171,19 +199,27 @@ struct RenderRequest {
 /// checkpoint a later ::arraw::resumeFrom can carry on from, so that an edit
 /// that only touches later stages does not pay for the earlier ones.
 ///
-/// The request is read only when @p stopAfter is ::arraw::Stage::Resize; earlier
-/// stops ignore it, whatever it says, as the GPU does.
+/// The request is read only when @p stopAfter is ::arraw::Stage::Resize or
+/// later; earlier stops ignore it, whatever it says, as the GPU does.
 /// @param source Decoded photograph, in the working or a camera encoding.
 /// @param state How the photograph is developed.
-/// @param stopAfter Last boundary to run. ::arraw::Stage::Pointwise leaves a
-/// result of the source's size with no geometry applied, ::arraw::Stage::Geometry
-/// one with no resize.
+/// @param stopAfter Last boundary to run. ::arraw::Stage::Denoise leaves the
+/// source after noise reduction, as RGBA float in the source's own encoding and
+/// pending orientation (the source as it stands when noise reduction is off);
+/// ::arraw::Stage::Pointwise a result of the source's size with no geometry
+/// applied, ::arraw::Stage::Geometry one with no resize, ::arraw::Stage::Resize
+/// one with no effects, and ::arraw::Stage::Effects what ::arraw::develop gives.
 /// @param request What to render; see ::arraw::develop.
-/// @return A host checkpoint in the working encoding, with no pending orientation.
+/// @param progress Channel for progress and cancellation, or null; progress is
+/// measured against the whole render, so it ends at @p stopAfter's share.
+/// @return A host checkpoint; in the working encoding, with no pending
+/// orientation, at every boundary after ::arraw::Stage::Denoise.
 /// @throws std::invalid_argument as ::arraw::develop, and if @p stopAfter is not
 /// a boundary.
+/// @throws ::arraw::Cancelled if @p progress was cancelled before the render finished.
 [[nodiscard]] RenderCheckpoint developUntil(const ImageBuffer& source, const DevelopState& state,
-                                            Stage stopAfter, const RenderRequest& request = {});
+                                            Stage stopAfter, const RenderRequest& request = {},
+                                            ProgressChannel* progress = nullptr);
 
 /// @brief Carries a render on from a checkpoint, stopping after a boundary.
 ///
@@ -198,7 +234,8 @@ struct RenderRequest {
 ///
 /// Resuming costs a copy of the checkpoint's pixels, because the payload is
 /// shared and immutable and the stages take their input by value. It is a
-/// fraction of the passes it skips; ::arraw::develop itself pays none.
+/// fraction of the passes it skips; ::arraw::develop itself pays none. From
+/// ::arraw::Stage::Denoise there is no copy: the pointwise chain only reads.
 ///
 /// Resuming at the checkpoint's own boundary returns @p from itself, which is
 /// equivalent and shares its pixels.
@@ -207,14 +244,72 @@ struct RenderRequest {
 /// for what planning needs.
 /// @param state How the photograph is developed now.
 /// @param stopAfter Last boundary to run; not before the checkpoint's.
-/// @param request What to render; read only when @p stopAfter is ::arraw::Stage::Resize.
+/// @param request What to render; read only when @p stopAfter is ::arraw::Stage::Resize or later.
+/// @param progress Channel for progress and cancellation, or null; progress
+/// starts at the checkpoint's share of the whole render.
 /// @return A host checkpoint at @p stopAfter, equal to what ::arraw::developUntil
 /// of the same arguments gives, bit for bit.
 /// @throws std::invalid_argument if @p from is resident on a device, its plan
 /// prefix or pixels do not match this render, @p stopAfter is not a boundary or
 /// is before the checkpoint's, or as ::arraw::develop.
+/// @throws ::arraw::Cancelled if @p progress was cancelled before the render finished.
 [[nodiscard]] RenderCheckpoint resumeFrom(const RenderCheckpoint& from, const ImageBuffer& source,
                                           const DevelopState& state, Stage stopAfter,
-                                          const RenderRequest& request = {});
+                                          const RenderRequest& request = {},
+                                          ProgressChannel* progress = nullptr);
+
+/// @brief Says whether a checkpoint can still serve a render, without rendering.
+///
+/// The question ::arraw::resumeFrom answers by refusing, asked without the
+/// exception: true exactly when the plan this render resolves equals the
+/// checkpoint's up to its boundary and the pixels are of the size it would
+/// have made (ADR 011), by the same code that rule is applied by. A caller
+/// keeping checkpoints asks this to choose which one to resume from, and so
+/// tells a stale checkpoint, which is expected, from a bad request, which is
+/// not and still throws.
+///
+/// Where the pixels live is not part of the answer: a resume on the other
+/// backend's kind of checkpoint, or on another device's, is refused by the
+/// resume itself. The plan is resolved here as the resume would resolve it,
+/// so asking first costs one more planning of the render (and, for a resize
+/// with alpha, one more opacity scan; see ::arraw::develop).
+/// @param from Checkpoint to resume from, on the host or on a device.
+/// @param source Decoded photograph the checkpoint was made from.
+/// @param state How the photograph is developed now.
+/// @param stopAfter Last boundary the render would run; not before the checkpoint's.
+/// @param request What to render; read only when @p stopAfter is ::arraw::Stage::Resize or later.
+/// @return Whether resuming from @p from would be valid.
+/// @throws std::invalid_argument if @p stopAfter is not a boundary or is before
+/// the checkpoint's, or as ::arraw::develop for @p state and @p request.
+[[nodiscard]] bool canResumeFrom(const RenderCheckpoint& from, const ImageBuffer& source,
+                                 const DevelopState& state, Stage stopAfter,
+                                 const RenderRequest& request = {});
+
+/// @brief Renders a photograph with the pointwise chain stopped at a tap, to measure it.
+///
+/// ADR 011's `sample(tap)`, the looking verb beside ::arraw::developUntil's
+/// continuing one: it hands back pixels and no checkpoint, because a tap is
+/// inside a pass. The chain writes the colour at @p tap instead of the
+/// developed one; geometry, the region and the resize then run as for
+/// ::arraw::develop, in linear light, so the result covers the same frame at the
+/// same size as a render of the same request would. Last, the colour is
+/// encoded into the tap's encoding. A preview's reduced source therefore gives
+/// preview-resolution samples, and the crop decides which pixels are measured.
+///
+/// Alpha passes through as it does in a render. Nothing earlier can be reused:
+/// the only boundary before a tap is the source itself (ADR 035).
+/// @param source Decoded photograph, in the working or a camera encoding.
+/// @param state How the photograph is developed.
+/// @param tap Where in the chain to stop.
+/// @param request What to render; see ::arraw::develop.
+/// @param progress Channel for progress and cancellation, or null.
+/// @return A new ::arraw::workingFormat buffer in the encoding @p tap names
+/// (::arraw::perceptualEncoding for ::arraw::Tap::CurveInput), with no pending
+/// orientation.
+/// @throws std::invalid_argument as ::arraw::develop, and if @p tap is not a tap.
+/// @throws ::arraw::Cancelled if @p progress was cancelled before the render finished.
+[[nodiscard]] ImageBuffer sample(const ImageBuffer& source, const DevelopState& state, Tap tap,
+                                 const RenderRequest& request = {},
+                                 ProgressChannel* progress = nullptr);
 
 } // namespace arraw

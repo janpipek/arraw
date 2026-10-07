@@ -6,6 +6,7 @@
 #include <ImageBuffer.h>
 #include <ImageOrientation.h>
 
+#include <cstddef>
 #include <utility>
 
 namespace arraw::detail {
@@ -27,10 +28,13 @@ struct DeviceImageState {
     /// @param layout Host sample layout the texture corresponds to.
     /// @param meaning Meaning of the texture's RGB sample values.
     /// @param source Source orientation the host buffer carried.
+    /// @param scale Sensor pixels per pixel, as the host buffer carried it.
+    /// @param stored Channels the texture stores: 4, or 1 for a scalar target.
     DeviceImageState(DeviceId holder, ImageSize dimensions, PixelFormat layout,
-                     ColorEncoding meaning, ImageOrientation source)
+                     ColorEncoding meaning, ImageOrientation source, double scale,
+                     std::size_t stored)
         : device(holder), size(dimensions), format(layout), encoding(std::move(meaning)),
-          orientation(source) {}
+          orientation(source), pixelScale(scale), channels(stored) {}
 
     DeviceImageState(const DeviceImageState&) = delete;
     DeviceImageState& operator=(const DeviceImageState&) = delete;
@@ -55,6 +59,13 @@ struct DeviceImageState {
     /// @brief Source orientation still to be applied, carried so that a read
     /// back buffer is the one that was uploaded rather than a near relative.
     ImageOrientation orientation;
+
+    /// @brief Sensor pixels per pixel (::arraw::ImageBuffer::pixelScale), carried for the same
+    /// reason.
+    double pixelScale;
+
+    /// @brief Channels the texture stores: 4, or 1 for a scalar intermediate.
+    std::size_t channels;
 };
 
 } // namespace arraw::detail

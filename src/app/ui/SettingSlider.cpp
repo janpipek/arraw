@@ -1,5 +1,6 @@
 #include "SettingSlider.h"
 
+#include "OklabHue.h"
 #include "SettingPresentation.h"
 
 #include <SettingDescriptors.h>
@@ -10,13 +11,19 @@
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QLinearGradient>
+#include <QPainter>
+#include <QPainterPath>
 #include <QSignalBlocker>
 #include <QSlider>
+#include <QStyle>
+#include <QStyleOptionSlider>
 
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <utility>
 
 namespace arraw::app {
 
@@ -35,6 +42,71 @@ bool isOptional(const FieldDescriptor& descriptor) {
     return visitField(descriptor, DevelopSettings{}, [](const auto& field) {
         return std::is_same_v<std::remove_cvref_t<decltype(field)>, std::optional<float>>;
     });
+}
+
+/// @brief Height of a painted track, in pixels.
+constexpr qreal paintedTrackHeight = 6.0;
+
+/// @brief Horizontal slider whose groove is a painted gradient, with the style's handle on top.
+///
+/// The gradient runs from the handle's centre at the minimum to its centre at
+/// the maximum, so the colour under the handle is the colour of its value.
+class GradientSlider : public QSlider {
+public:
+    /// @brief Builds the slider painting a gradient.
+    /// @param stops Colours from the minimum (0) to the maximum (1).
+    /// @param parent Owning widget.
+    GradientSlider(QGradientStops stops, QWidget* parent)
+        : QSlider(Qt::Horizontal, parent), stops_(std::move(stops)) {}
+
+protected:
+    void paintEvent(QPaintEvent* /*event*/) override {
+        QPainter painter(this);
+        QStyleOptionSlider option;
+        initStyleOption(&option);
+        const QRect groove =
+            style()->subControlRect(QStyle::CC_Slider, &option, QStyle::SC_SliderGroove, this);
+        const QRect handle =
+            style()->subControlRect(QStyle::CC_Slider, &option, QStyle::SC_SliderHandle, this);
+        const qreal start = groove.left() + handle.width() / 2.0;
+        const qreal end = groove.right() + 1 - handle.width() / 2.0;
+        QLinearGradient gradient(start, 0.0, end, 0.0);
+        QGradientStops stops = stops_;
+        if (!isEnabled()) {
+            // Faded like the other rows' grooves while the panel is off.
+            for (QGradientStop& stop : stops) {
+                stop.second.setAlphaF(0.3F);
+            }
+        }
+        gradient.setStops(stops);
+        const QRectF track(groove.left(), groove.center().y() + 0.5 - paintedTrackHeight / 2.0,
+                           groove.width(), paintedTrackHeight);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(QPen(
+            palette().color(isEnabled() ? QPalette::Active : QPalette::Disabled, QPalette::Mid),
+            1.0));
+        painter.setBrush(gradient);
+        painter.drawRoundedRect(track.adjusted(0.5, 0.5, -0.5, -0.5), paintedTrackHeight / 2.0,
+                                paintedTrackHeight / 2.0);
+        // The handle only, so that it sits whole and opaque over the colours.
+        option.subControls = QStyle::SC_SliderHandle;
+        style()->drawComplexControl(QStyle::CC_Slider, &option, &painter, this);
+    }
+
+private:
+    QGradientStops stops_;
+};
+
+/// @brief Makes the slider of a row, painting its track when the presentation asks.
+QSlider* sliderFor(const SettingPresentation& presentation, const SettingRange& range,
+                   QWidget* parent) {
+    switch (presentation.track) {
+    case SliderTrack::Plain:
+        break;
+    case SliderTrack::OklabHue:
+        return new GradientSlider(oklabHueStops(range.minimum, range.maximum), parent);
+    }
+    return new QSlider(Qt::Horizontal, parent);
 }
 
 } // namespace
@@ -59,7 +131,9 @@ SettingSlider::SettingSlider(std::string_view key, QWidget* parent)
     pendingTimer_.setInterval(500);
     connect(&pendingTimer_, &QTimer::timeout, this, &SettingSlider::finishPendingEdit);
 
-    slider_ = new QSlider(Qt::Horizontal, this);
+    slider_ = sliderFor(presentation, range_, this);
+    slider_->setObjectName("slider");
+    slider_->setMinimumWidth(minimumSliderLength);
     slider_->setRange(0, tickCount(range_, step_, scale_));
     slider_->setToolTip(presentation.toolTip);
     // Arrow keys step between photographs, so a slider never takes them; the spin box is the
@@ -83,6 +157,10 @@ SettingSlider::SettingSlider(std::string_view key, QWidget* parent)
 
     slider_->installEventFilter(this);
     spinBox_->installEventFilter(this);
+    // The line edit has the focus while typing; its shortcut overrides are watched too.
+    if (auto* edit = spinBox_->findChild<QLineEdit*>()) {
+        edit->installEventFilter(this);
+    }
 
     connect(slider_, &QSlider::sliderPressed, this, [this] {
         finishPendingEdit();
@@ -110,11 +188,25 @@ SettingSlider::SettingSlider(std::string_view key, QWidget* parent)
     });
 }
 
+int SettingSlider::labelWidthHint() const {
+    return label_->sizeHint().width();
+}
+
+void SettingSlider::setLabelWidth(int width) {
+    label_->setMinimumWidth(width);
+}
+
 void SettingSlider::setValue(double value) {
     const QSignalBlocker sliderBlocker(slider_);
     const QSignalBlocker spinBlocker(spinBox_);
     slider_->setValue(tickOf(value, range_, step_, scale_));
     spinBox_->setValue(value);
+}
+
+void SettingSlider::setDefaultValue(double value) {
+    if (!optional_) {
+        default_ = value;
+    }
 }
 
 bool SettingSlider::eventFilter(QObject* watched, QEvent* event) {
@@ -129,6 +221,19 @@ bool SettingSlider::eventFilter(QObject* watched, QEvent* event) {
         }
         emit editFinished();
         return true;
+    }
+    if (event->type() == QEvent::ShortcutOverride &&
+        (watched == spinBox_ || watched == spinBox_->findChild<QLineEdit*>())) {
+        // Enter and Esc end the typing here, before any window shortcut can take them
+        // (the crop mode's accept and cancel, the picker's cancel).
+        auto* key = static_cast<QKeyEvent*>(event);
+        const auto modifiers = key->modifiers() & ~Qt::KeypadModifier;
+        if (modifiers == Qt::NoModifier &&
+            (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter ||
+             key->key() == Qt::Key_Escape)) {
+            event->accept();
+            return true;
+        }
     }
     if ((watched == slider_ || watched == spinBox_) && event->type() == QEvent::FocusOut) {
         finishPendingEdit();

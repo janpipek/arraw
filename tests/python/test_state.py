@@ -42,5 +42,5 @@ def test_state_is_read_only():
 
 def test_photo_state_follows_flat_keys(dng):
     photo = arraw.open(dng)
-    assert photo.state == arraw.DevelopState()
+    assert photo.state == arraw.default_state(photo.metadata)
     assert photo.with_(exposure=0.5).state.settings.tone.exposure == pytest.approx(0.5)

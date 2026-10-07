@@ -1,5 +1,8 @@
+#include "ProcessingPlan.h"
 #include "support/FieldCount.h"
+#include "support/Fixtures.h"
 
+#include <ImageImport.h>
 #include <Photo.h>
 #include <SettingDescriptors.h>
 
@@ -7,11 +10,15 @@
 
 #include <cctype>
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <set>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <variant>
+#include <vector>
 
 using namespace arraw;
 
@@ -36,6 +43,16 @@ void writeSentinel(const FieldDescriptor& descriptor, DevelopSettings& settings)
             field = QuarterTurn::Clockwise90;
         } else if constexpr (std::is_same_v<T, std::optional<UprightCropRect>>) {
             field = UprightCropRect{.left = 0.1, .top = 0.1, .right = 0.9, .bottom = 0.9};
+        } else if constexpr (std::is_same_v<T, ToneCurve>) {
+            field.points = {{0.0F, 0.0F}, {0.5F, 0.75F}, {1.0F, 1.0F}};
+        } else if constexpr (std::is_same_v<T, GrainModel>) {
+            // One model so far: an out-of-table value stands for "another one".
+            field = static_cast<GrainModel>(1);
+        } else if constexpr (std::is_same_v<T, LuminanceNoiseFilter>) {
+            // One filter so far, as for the grain model.
+            field = static_cast<LuminanceNoiseFilter>(1);
+        } else if constexpr (std::is_same_v<T, std::uint32_t>) {
+            field += 7U;
         } else {
             static_assert(std::is_same_v<T, CropAspect>);
             field = CropRatio{2.0};
@@ -66,9 +83,16 @@ DevelopSettings withValue(const FieldDescriptor& descriptor, double value) {
             field = value;
         } else if constexpr (std::is_same_v<T, float> || std::is_same_v<T, std::optional<float>>) {
             field = static_cast<float>(value);
+        } else if constexpr (std::is_same_v<T, std::uint32_t>) {
+            field = static_cast<std::uint32_t>(value);
         }
     });
     return settings;
+}
+
+/// Whether a row's leaf is a whole number, whose type cannot hold a value outside its range.
+bool isWholeNumber(const FieldDescriptor& descriptor) {
+    return std::holds_alternative<std::uint32_t& (*)(DevelopSettings&)>(descriptor.member);
 }
 
 ImageMetadata someMetadata() {
@@ -86,16 +110,73 @@ TEST_CASE("The descriptor table has a row per leaf, matching the structs", "[set
     STATIC_REQUIRE(test::fieldCount<HueBand> == 3);
     STATIC_REQUIRE(test::fieldCount<HslSettings> == 8);
     STATIC_REQUIRE(test::fieldCount<BlackAndWhiteSettings> == 9);
-    STATIC_REQUIRE(test::fieldCount<DevelopSettings> == 5);
+    STATIC_REQUIRE(test::fieldCount<ToneCurveSettings> == 4);
+    STATIC_REQUIRE(test::fieldCount<GradeZone> == 2);
+    STATIC_REQUIRE(test::fieldCount<ColorGradingSettings> == 5);
+    STATIC_REQUIRE(test::fieldCount<VignetteSettings> == 3);
+    STATIC_REQUIRE(test::fieldCount<GrainSettings> == 5);
+    STATIC_REQUIRE(test::fieldCount<EffectsSettings> == 2);
+    STATIC_REQUIRE(test::fieldCount<NoiseReductionSettings> == 5);
+    STATIC_REQUIRE(test::fieldCount<PresenceSettings> == 3);
+    STATIC_REQUIRE(test::fieldCount<DevelopSettings> == 10);
 
     // Leaves: tone + color + geometry (crop is a group of two leaves) + hsl
-    // (eight bands of three leaves) + black and white.
-    STATIC_REQUIRE(developSettingDescriptors.size() ==
-                   test::fieldCount<ToneSettings> + test::fieldCount<ColorSettings> +
-                       test::fieldCount<GeometrySettings> - 1 + test::fieldCount<CropSettings> +
-                       test::fieldCount<HslSettings> * test::fieldCount<HueBand> +
-                       test::fieldCount<BlackAndWhiteSettings>);
-    STATIC_REQUIRE(developSettingDescriptors.size() == 51);
+    // (eight bands of three leaves) + black and white + the four tone curves +
+    // colour grading (three zones of two leaves, balance and blending) +
+    // effects (the vignette's three leaves and the grain's five) + noise
+    // reduction + presence.
+    STATIC_REQUIRE(
+        developSettingDescriptors.size() ==
+        test::fieldCount<ToneSettings> + test::fieldCount<ColorSettings> +
+            test::fieldCount<GeometrySettings> - 1 + test::fieldCount<CropSettings> +
+            test::fieldCount<HslSettings> * test::fieldCount<HueBand> +
+            test::fieldCount<BlackAndWhiteSettings> + test::fieldCount<ToneCurveSettings> +
+            3 * test::fieldCount<GradeZone> + test::fieldCount<ColorGradingSettings> - 3 +
+            test::fieldCount<VignetteSettings> + test::fieldCount<GrainSettings> +
+            test::fieldCount<NoiseReductionSettings> + test::fieldCount<PresenceSettings>);
+    STATIC_REQUIRE(developSettingDescriptors.size() == 79);
+}
+
+TEST_CASE("The vignette and grain rows run in the Effects pass and always apply", "[settings]") {
+    int effects = 0;
+    for (const FieldDescriptor& descriptor : developSettingDescriptors) {
+        INFO(descriptor.key);
+        if (descriptor.group != SettingGroup::Effects) {
+            continue;
+        }
+        ++effects;
+        REQUIRE(descriptor.affects == Stage::Effects);
+        REQUIRE(descriptor.applies == Applicability::Always);
+    }
+    REQUIRE(effects == 8);
+    REQUIRE(findDescriptor("vignetteAmount")->range->minimum == -100.0);
+    REQUIRE(findDescriptor("vignetteAmount")->range->maximum == 100.0);
+    REQUIRE(findDescriptor("vignetteMidpoint")->range->minimum == 0.0);
+    REQUIRE(findDescriptor("vignetteFeather")->range->maximum == 100.0);
+    const VignetteSettings defaults{};
+    REQUIRE(defaults.amount == 0.0F);
+    REQUIRE(defaults.midpoint == 50.0F);
+    REQUIRE(defaults.feather == 50.0F);
+    for (const char* key : {"grainAmount", "grainSize", "grainRoughness"}) {
+        INFO(key);
+        REQUIRE(findDescriptor(key)->range->minimum == 0.0);
+        REQUIRE(findDescriptor(key)->range->maximum == 100.0);
+    }
+    REQUIRE_FALSE(findDescriptor("grainModel")->range.has_value());
+    REQUIRE(findDescriptor("grainSeed")->range->maximum == 4294967295.0);
+    const GrainSettings grain{};
+    REQUIRE(grain.amount == 0.0F);
+    REQUIRE(grain.size == 50.0F);
+    REQUIRE(grain.roughness == 50.0F);
+    REQUIRE(grain.model == GrainModel::ValueNoise);
+    REQUIRE(grain.seed == 0U);
+}
+
+TEST_CASE("Only the grain seed belongs to the photograph rather than the look", "[settings]") {
+    for (const FieldDescriptor& descriptor : developSettingDescriptors) {
+        INFO(descriptor.key);
+        REQUIRE((descriptor.scope == SettingScope::Photo) == (descriptor.key == "grainSeed"));
+    }
 }
 
 TEST_CASE("The colour rows are pointwise, always apply and share their groups", "[settings]") {
@@ -119,6 +200,54 @@ TEST_CASE("The colour rows are pointwise, always apply and share their groups", 
     REQUIRE(findDescriptor("luminanceMagenta")->range->maximum == 100.0);
     REQUIRE_FALSE(findDescriptor("convertToGrayscale")->range.has_value());
     REQUIRE(findDescriptor("grayBlue") != nullptr);
+}
+
+TEST_CASE("The tone curve rows are pointwise, always apply and have no range", "[settings]") {
+    int curves = 0;
+    for (const FieldDescriptor& descriptor : developSettingDescriptors) {
+        INFO(descriptor.key);
+        if (descriptor.group != SettingGroup::ToneCurve) {
+            continue;
+        }
+        ++curves;
+        REQUIRE(descriptor.affects == Stage::Pointwise);
+        REQUIRE(descriptor.applies == Applicability::Always);
+        REQUIRE_FALSE(descriptor.range.has_value());
+    }
+    REQUIRE(curves == 4);
+    for (const char* key : {"toneCurveLuma", "toneCurveRed", "toneCurveGreen", "toneCurveBlue"}) {
+        REQUIRE(findDescriptor(key)->group == SettingGroup::ToneCurve);
+    }
+}
+
+TEST_CASE("Validation refuses a curve that breaks its invariants", "[settings]") {
+    const std::vector<std::vector<CurvePoint>> bad{
+        {{0.0F, 0.0F}},
+        {{0.0F, 0.0F}, {0.5F, 0.5F}, {0.5F, 0.6F}, {1.0F, 1.0F}},
+        {{0.0F, 0.0F}, {0.7F, 0.5F}, {0.3F, 0.6F}, {1.0F, 1.0F}},
+        {{0.1F, 0.0F}, {1.0F, 1.0F}},
+        {{0.0F, 0.0F}, {0.9F, 1.0F}},
+        {{0.0F, 0.0F}, {1.0F, 1.5F}},
+        {{0.0F, 0.0F}, {1.0F, std::numeric_limits<float>::quiet_NaN()}},
+    };
+    for (const auto& points : bad) {
+        DevelopSettings settings;
+        settings.toneCurve.green.points = points;
+        REQUIRE_THROWS_AS(validate(settings), std::invalid_argument);
+    }
+    DevelopSettings tooMany;
+    for (std::size_t i = 0; i <= maximumCurvePoints; ++i) {
+        tooMany.toneCurve.red.points.push_back(
+            {static_cast<float>(i) / static_cast<float>(maximumCurvePoints), 0.5F});
+    }
+    REQUIRE_THROWS_AS(validate(tooMany), std::invalid_argument);
+    DevelopSettings sixteen;
+    sixteen.toneCurve.red.points.clear();
+    for (std::size_t i = 0; i < maximumCurvePoints; ++i) {
+        sixteen.toneCurve.red.points.push_back(
+            {static_cast<float>(i) / static_cast<float>(maximumCurvePoints - 1), 0.5F});
+    }
+    REQUIRE_NOTHROW(validate(sixteen));
 }
 
 TEST_CASE("Keys are unique camelCase names that can be looked up", "[settings]") {
@@ -221,7 +350,8 @@ TEST_CASE("Validation accepts the defaults and both ends of every range", "[sett
 
 TEST_CASE("Validation refuses a value below, above or outside every range", "[settings]") {
     for (const FieldDescriptor& descriptor : developSettingDescriptors) {
-        if (!descriptor.range) {
+        // A seed's range is its type's: nothing outside it can be stored to refuse.
+        if (!descriptor.range || isWholeNumber(descriptor)) {
             continue;
         }
         INFO(descriptor.key);
@@ -288,4 +418,51 @@ TEST_CASE("Validation refuses a crop that could fit no image", "[settings]") {
         std::invalid_argument);
     REQUIRE_THROWS_AS(validate(withRatio(0.0)), std::invalid_argument);
     REQUIRE_THROWS_AS(validate(withRatio(-1.5)), std::invalid_argument);
+}
+
+TEST_CASE("A row's stage is the first boundary its value changes in the plan", "[settings][plan]") {
+    // A camera-native source, so that the RAW-only rows reach the plan.
+    const ImageBuffer source = loadImage(test::fixture("linear-32x24-skewed.dng"));
+    DevelopSettings base;
+    // The shaping rows only count once what they shape is on.
+    base.noiseReduction.luminance = 40.0F;
+    base.noiseReduction.color = 40.0F;
+    base.effects.vignette.amount = -30.0F;
+    base.effects.grain.amount = 30.0F;
+    base.colorGrading.shadows.saturation = 30.0F;
+    base.colorGrading.midtones.saturation = 30.0F;
+    base.colorGrading.highlights.saturation = 30.0F;
+    base.color.temperature = 5000.0F;
+    base.color.tint = 10.0F;
+
+    for (const FieldDescriptor& descriptor : developSettingDescriptors) {
+        // Enumerations with one entry have no other value to change to.
+        if (descriptor.key == "grainModel" || descriptor.key == "luminanceNoiseFilter") {
+            continue;
+        }
+        DYNAMIC_SECTION(descriptor.key) {
+            DevelopSettings from = base;
+            DevelopSettings to = base;
+            if (descriptor.key == "temperature" || descriptor.key == "tint") {
+                // Only a custom white balance reads them.
+                from.color.whiteBalance = WhiteBalanceMode::Custom;
+                to.color.whiteBalance = WhiteBalanceMode::Custom;
+                if (descriptor.key == "temperature") {
+                    to.color.temperature = 4000.0F;
+                } else {
+                    to.color.tint = 20.0F;
+                }
+            } else {
+                writeSentinel(descriptor, to);
+            }
+            const ProcessingPlan before = planFor(source, DevelopState{from});
+            const ProcessingPlan after = planFor(source, DevelopState{to});
+            const auto first = static_cast<std::size_t>(descriptor.affects);
+            // Untouched before the boundary, different at it.
+            if (first > 0) {
+                REQUIRE(prefixMatches(after, before, static_cast<Stage>(first - 1)));
+            }
+            REQUIRE_FALSE(prefixMatches(after, before, descriptor.affects));
+        }
+    }
 }

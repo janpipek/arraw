@@ -2,7 +2,11 @@
 
 #include "ColorAdjustments.h"
 #include "ColorSpaces.h"
+#include "Denoise.h"
+#include "Effects.h"
 #include "GeometryPlan.h"
+#include "Presence.h"
+#include "ToneCurve.h"
 
 #include <ColorEncoding.h>
 #include <Develop.h>
@@ -13,6 +17,7 @@
 #include <RenderCheckpoint.h>
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -129,6 +134,14 @@ struct ResizePlan {
 /// Settings that are switched off should resolve to a value that costs
 /// nothing here rather than to a test inside the per-pixel loop.
 struct ProcessingPlan {
+    /// @brief Luminance and colour noise reduction, run on the source before anything else.
+    ///
+    /// Its own pass and the first group of `stagesOf` (ADR 039). It reads the
+    /// source's as-shot luminance row, never @ref toWorking, so that white
+    /// balance and exposure cannot reach it. With both halves off it is the
+    /// default, and the pass does not run.
+    DenoisePlan denoise{};
+
     /// @brief Source primaries into the working space, white balance included.
     ///
     /// White balance, the camera matrix, and any change of primaries are all
@@ -185,11 +198,28 @@ struct ProcessingPlan {
     /// costs a comparison rather than a branch on a setting (ADR 011).
     float shoulderKnee = std::numeric_limits<float>::infinity();
 
-    /// @brief Saturation, vibrance, HSL and Black & White, resolved.
+    /// @brief Texture, Clarity and Dehaze, resolved, and the context they read.
+    ///
+    /// After Basic Tone and before the curves, as Lightroom's Presence sits in
+    /// its Basic panel (ADR 041). The context they read is worked out from the
+    /// pointwise pass's input and from fields of this block alone, so white
+    /// balance and exposure never recompute it. Resolved only by the overloads
+    /// of ::arraw::planFor that know the source's size; every control at zero
+    /// is the default, and the chain reads no context.
+    PresencePlan presence{};
+
+    /// @brief Luma, red, green and blue tone curves, resolved.
+    ///
+    /// They follow Basic Tone and precede the shoulder, so the shoulder still
+    /// catches whatever a curve lifts past white; a curve that is the
+    /// identity is a flag that is off (ADR 011).
+    ToneCurvePlan toneCurves{};
+
+    /// @brief Saturation, vibrance, HSL, Black & White and Colour Grading, resolved.
     ///
     /// The last of the pointwise stages: it follows the shoulder, as the
     /// colour controls did on main, and every control left at zero is a flag
-    /// that is off (ADR 027).
+    /// that is off (ADR 027). Colour Grading ends it (ADR 034).
     ColorAdjustmentPlan colorAdjustments{};
 
     /// @brief Resolved geometry when source dimensions and orientation are known.
@@ -198,29 +228,51 @@ struct ProcessingPlan {
     /// @brief Resolved resize, when a geometry and so a cropped size is known.
     std::optional<ResizePlan> resize = std::nullopt;
 
+    /// @brief Vignette and grain, applied to the cropped frame after the resize.
+    ///
+    /// Its own pass, after the resize, because it reads the crop frame (ADR 037, ADR 038).
+    /// Where a pixel lies in that frame comes from the geometry and the resize
+    /// (::arraw::frameMappingOf), which the prefix before this group already
+    /// compares. With every effect off it is the default, and the pass does not run.
+    EffectsPlan effects{};
+
     friend bool operator==(const ProcessingPlan&, const ProcessingPlan&) = default;
 };
 
 /// @brief Groups the plan's fields by the pass that consumes them.
 ///
 /// ADR 011's partition, with the passes that exist today. The plan is still
-/// flat — decode, lens, spots and noise are not stages yet — so this groups
-/// fields rather than blocks, and becomes `std::tie(p.decode, ...)` as each of
-/// those arrives. The grouping is what the prefix comparison folds over, so
-/// there is no per-stage line to forget, only this list to keep honest.
+/// partly flat — decode, lens and spots are not stages yet, and the pointwise
+/// fields are not one block — so this groups fields rather than blocks, and
+/// becomes `std::tie(p.decode, ...)` as each of those arrives. The grouping is what the prefix
+/// comparison folds over, so there is no per-stage line to forget, only this list to keep honest.
 /// @param plan Plan to view by stage.
 /// @return One tuple element per ::arraw::Stage, in pipeline order.
 [[nodiscard]] inline auto stagesOf(const ProcessingPlan& plan) {
-    return std::make_tuple(std::tie(plan.toWorking, plan.exposureGain, plan.shapesTone,
+    return std::make_tuple(std::tie(plan.denoise),
+                           std::tie(plan.toWorking, plan.exposureGain, plan.shapesTone,
                                     plan.contrastSlope, plan.contrastScale, plan.shadowShift,
                                     plan.highlightShift, plan.blackShift, plan.whiteShift,
-                                    plan.shoulderKnee, plan.colorAdjustments),
-                           std::tie(plan.geometry), std::tie(plan.resize));
+                                    plan.shoulderKnee, plan.presence, plan.toneCurves,
+                                    plan.colorAdjustments),
+                           std::tie(plan.geometry), std::tie(plan.resize), std::tie(plan.effects));
 }
 
 static_assert(std::tuple_size_v<decltype(stagesOf(std::declval<const ProcessingPlan&>()))> ==
                   stageCount,
               "every Stage needs a group in stagesOf, and no group may lack a Stage");
+
+/// @brief Gives where a render's output pixels lie in the crop frame.
+///
+/// `(region origin + (pixel + 0.5) * region / outputSize) / croppedSize` per
+/// axis, from the resize block and the geometry's output size (ADR 037): the
+/// same point of the frame maps to the same position whatever region, size or
+/// pyramid level is rendered.
+/// @param plan Plan with a geometry and a resize.
+/// @return The mapping the Effects pass reads.
+/// @pre @p plan has a geometry and a resize, as every plan from pixels or a
+/// ::arraw::Photo does.
+[[nodiscard]] FrameMapping frameMappingOf(const ProcessingPlan& plan);
 
 /// @brief Whether two plans agree on everything up to and including a boundary.
 ///
@@ -254,6 +306,22 @@ static_assert(std::tuple_size_v<decltype(stagesOf(std::declval<const ProcessingP
     }(std::make_index_sequence<stageCount>{});
 }
 
+/// @brief Gives the part of a request a render stopping after a boundary reads.
+///
+/// A render that stops before the resize ignores the request's size, region
+/// and filter, whatever they say, and so has no use for the opacity scan
+/// either. What the source's pixels are, such as their pixel scale, is read
+/// from the source, not from the request (ADR 039).
+/// @param request What the caller asked for.
+/// @param stopAfter Last boundary the render runs.
+/// @return @p request itself, or a default one.
+[[nodiscard]] inline RenderRequest plannedRequest(const RenderRequest& request, Stage stopAfter) {
+    if (stopAfter >= Stage::Resize) {
+        return request;
+    }
+    return {};
+}
+
 /// @brief Resolves tone settings into a plan with an identity colour transform and no colour
 /// adjustments.
 /// @param settings Tone adjustments to resolve.
@@ -270,14 +338,18 @@ static_assert(std::tuple_size_v<decltype(stagesOf(std::declval<const ProcessingP
 
 /// @brief Works out what a photograph's settings mean for its pixels.
 ///
-/// Resolves only colour and tone; buffer and Photo overloads also resolve geometry.
-/// This overload carries no source identity and must not be used as a cache key.
+/// Resolves only noise reduction, colour and tone; buffer and Photo overloads
+/// also resolve geometry, and Texture, Clarity and Dehaze, whose radius needs
+/// the source's size: here they stay off. This overload carries no source
+/// identity and must not be used as a cache key.
 /// @param encoding Encoding the decoded pixels are in.
 /// @param state State to resolve.
+/// @param pixelScale Sensor pixels per pixel of the source (::arraw::ImageBuffer::pixelScale).
 /// @return The plan both backends execute.
 /// @throws std::invalid_argument if development cannot start from @p encoding,
 /// or the settings cannot be resolved against it.
-[[nodiscard]] ProcessingPlan planFor(const ColorEncoding& encoding, const DevelopState& state);
+[[nodiscard]] ProcessingPlan planFor(const ColorEncoding& encoding, const DevelopState& state,
+                                     double pixelScale = 1.0);
 
 /// @brief Resolves pointwise processing, geometry and the resize against decoded pixels.
 ///
@@ -443,6 +515,78 @@ inline constexpr float liftedBlackThreshold = 1.0e-20F;
     return {colour[0] * ratio, colour[1] * ratio, colour[2] * ratio};
 }
 
+/// @brief Luminance below which the luma curve stops dividing by it.
+///
+/// A curve that lifts black climbs out of zero infinitely steeply in linear
+/// light, because the lift is made in the perceptual coordinate. Divided by
+/// the luminance, the part of such a curve above its lift grows without bound
+/// as the luminance falls, and a colour outside the working gamut with almost
+/// no luminance but large channels would be scaled by thousands. Below this
+/// luminance the ratio is therefore held at its value here, and the curve
+/// continues as the straight line, in linear light, from its lift to its value
+/// here, on through zero into negative luminance. It is 2^-14, fourteen stops
+/// under white and the floor of a 14-bit raw file; on a curve lifting black to
+/// 0.2 the line and the curve differ there by under 3% of the value. Mirrored
+/// by `curveRatioFloor` in `src/gpu/shaders/develop.frag`.
+inline constexpr float curveRatioFloor = 0x1p-14F;
+
+/// @brief Applies the tone curves to a colour: luminance first, then each channel.
+///
+/// The luma curve acts as the tone controls do: on the luminance in the
+/// perceptual coordinate, with the colour following by the ratio, so hue and
+/// saturation come through. A curve that lifts black is split in two: its
+/// value at black, the lift, is added to every channel as a neutral, and only
+/// the rest, `toLinear(curve(x)) - lift`, scales the colour by the ratio. A grey
+/// therefore lands exactly on the curve, while a colour near black keeps its
+/// hue and the ratio stays bounded, with ::arraw::curveRatioFloor holding it
+/// for the darkest and for negative luminances, continuously across zero.
+/// A NaN luminance has no ratio at all, and takes the lift as a neutral.
+///
+/// The red, green and blue curves then act on their channels alone, each in
+/// the perceptual coordinate, and may shift hue: that is their purpose. A
+/// negative channel, which only a colour outside the working gamut has, cannot
+/// enter the perceptual coordinate; it is moved by the curve's lift instead,
+/// `value + toLinear(curve(0))`, which meets the curve continuously at zero and
+/// keeps the colour as far outside the gamut as it was. A NaN channel takes
+/// the curve's value at black, as zero does. A channel whose curve is inactive
+/// is returned untouched.
+/// @param plan Resolved settings.
+/// @param colour Colour in the working encoding.
+/// @return The colour with every active curve applied; the colour itself when none is.
+///
+/// Mirrored by `src/gpu/shaders/develop.frag`, which must change with it.
+[[nodiscard]] inline Colour applyToneCurves(const ProcessingPlan& plan, Colour colour) {
+    const ToneCurvePlan& curves = plan.toneCurves;
+    if (curves.luma.active) {
+        const float lift = toLinear(std::max(evaluateCurve(curves.luma, 0.0F), 0.0F));
+        const float luminance = colorspaces::workingLuminance[0] * colour[0] +
+                                colorspaces::workingLuminance[1] * colour[1] +
+                                colorspaces::workingLuminance[2] * colour[2];
+        // A NaN fails both comparisons.
+        if (!(luminance > curveRatioFloor) && !(luminance <= curveRatioFloor)) {
+            colour = {lift, lift, lift};
+        } else {
+            const float anchor = luminance > curveRatioFloor ? luminance : curveRatioFloor;
+            const float shaped =
+                toLinear(std::max(evaluateCurve(curves.luma, toPerceptual(anchor)), 0.0F));
+            const float ratio = (shaped - lift) / anchor;
+            colour = {colour[0] * ratio + lift, colour[1] * ratio + lift, colour[2] * ratio + lift};
+        }
+    }
+    const auto channel = [](const CurvePlan& curve, float value) {
+        if (!curve.active) {
+            return value;
+        }
+        if (value > 0.0F) {
+            return toLinear(std::max(evaluateCurve(curve, toPerceptual(value)), 0.0F));
+        }
+        const float lift = toLinear(std::max(evaluateCurve(curve, 0.0F), 0.0F));
+        return value < 0.0F ? value + lift : lift;
+    };
+    return {channel(curves.red, colour[0]), channel(curves.green, colour[1]),
+            channel(curves.blue, colour[2])};
+}
+
 /// @brief Rolls a colour's brightest values toward white rather than clipping.
 ///
 /// The shoulder that ends the chain (ADR 010), as a bend in luminance: below
@@ -483,6 +627,35 @@ inline constexpr float liftedBlackThreshold = 1.0e-20F;
             rolled + chroma * (colour[2] * ratio - rolled)};
 }
 
+/// @brief Applies the pointwise stages up to the curve input tap, in their fixed order.
+///
+/// The first half of ::arraw::developPixel, which calls this rather than
+/// repeating it, so that ::arraw::Tap::CurveInput and its position in the
+/// chain cannot drift apart (ADR 011): white balance and the matrix, exposure,
+/// Basic Tone, then Texture, Clarity and Dehaze, which Lightroom counts as
+/// Basic too (ADR 041). What comes out is what the tone curves take in.
+/// @param plan Resolved settings.
+/// @param colour Source colour, in the encoding the plan was built for.
+/// @param context The Presence context at the pixel; not read when Presence is off.
+/// @return The colour at the curve input, in the working encoding; a sample
+/// encodes it into ::arraw::perceptualEncoding afterwards (see
+/// ::arraw::toPerceptualSigned).
+///
+/// Mirrored by `src/gpu/shaders/develop.frag` up to its `probeAfterTone`
+/// stop, which ::arraw::probeFor names for this tap.
+[[nodiscard]] inline Colour developToCurveInput(const ProcessingPlan& plan, Colour colour,
+                                                const PixelContext& context) {
+    // Measured on the source colour, before white balance and exposure, which
+    // therefore cannot change the detail the Presence controls see.
+    const float logLuminance =
+        plan.presence.active() ? presenceLogLuminance(plan.presence, colour) : 0.0F;
+    colour = plan.toWorking * colour;
+    colour = {colour[0] * plan.exposureGain, colour[1] * plan.exposureGain,
+              colour[2] * plan.exposureGain};
+    colour = shapeTone(plan, colour);
+    return applyPresence(plan.presence, colour, logLuminance, context);
+}
+
 /// @brief Applies the pointwise stages to one colour, in their fixed order.
 ///
 /// The order lives here and nowhere else, so that it can be read in one place
@@ -490,19 +663,112 @@ inline constexpr float liftedBlackThreshold = 1.0e-20F;
 /// sequence by hand, and per-stage comparisons hold the two together (ADR 011).
 /// @param plan Resolved settings.
 /// @param colour Source colour, in the encoding the plan was built for.
+/// @param context What the chain knows of the pixel's surroundings: the
+/// Presence context at it (ADR 011, ADR 041); not read when Presence is off.
 /// @return The developed colour, in the working encoding.
 ///
 /// Not `constexpr`: the colour block's Oklab maths takes cube roots, which
 /// the standard does not allow in a constant expression.
 ///
 /// Mirrored by `src/gpu/shaders/develop.frag`, which must change with it.
-[[nodiscard]] inline Colour developPixel(const ProcessingPlan& plan, Colour colour) {
-    colour = plan.toWorking * colour;
-    colour = {colour[0] * plan.exposureGain, colour[1] * plan.exposureGain,
-              colour[2] * plan.exposureGain};
-    colour = shapeTone(plan, colour);
+[[nodiscard]] inline Colour developPixel(const ProcessingPlan& plan, Colour colour,
+                                         const PixelContext& context) {
+    colour = developToCurveInput(plan, colour, context);
+    colour = applyToneCurves(plan, colour);
     colour = rollHighlights(plan, colour);
     return adjustColor(plan.colorAdjustments, colour);
+}
+
+/// @brief Applies the pointwise stages to one colour of a plan with Presence off.
+///
+/// For callers that have no context, which a plan with Texture, Clarity or
+/// Dehaze on needs: there is no neutral context to stand in for one (a zero
+/// base would read as every pixel standing far above its surroundings), so
+/// asking this of such a plan is a precondition violation, asserted.
+/// @param plan Resolved settings, with Presence off.
+/// @param colour Source colour, in the encoding the plan was built for.
+/// @return The developed colour, in the working encoding.
+[[nodiscard]] inline Colour developPixel(const ProcessingPlan& plan, Colour colour) {
+    assert(!plan.presence.active() && "a plan with Presence on needs the pixel's context");
+    return developPixel(plan, colour, PixelContext{});
+}
+
+/// @brief Applies the pointwise stages up to a tap, in their fixed order.
+///
+/// Taps are named positions inside the chain (ADR 011), and each is a prefix
+/// of ::arraw::developPixel that it shares rather than repeats.
+/// @param plan Resolved settings.
+/// @param colour Source colour, in the encoding the plan was built for.
+/// @param tap Where to stop.
+/// @param context The Presence context at the pixel, as for ::arraw::developPixel.
+/// @return The colour at @p tap, still in the working encoding.
+[[nodiscard]] inline Colour developToTap(const ProcessingPlan& plan, Colour colour, Tap tap,
+                                         const PixelContext& context) {
+    switch (tap) {
+    case Tap::CurveInput:
+        return developToCurveInput(plan, colour, context);
+    }
+    // Unreachable for a valid tap: sample() validates it before any pixel runs.
+    // The identity is what an unrecognised tap would sample; ::arraw::tapEncoding
+    // and the GPU's probeFor throw for it.
+    return colour;
+}
+
+/// @brief Groups the plan's fields that ::arraw::developToCurveInput reads.
+///
+/// Kept beside the prefix it describes, and changed with it: a field the
+/// prefix starts reading must join this list, or ::arraw::sameAtTap would call
+/// a stale sample current.
+/// @param plan Plan to view.
+/// @return References to white balance and the matrix, exposure, Basic Tone and Presence.
+[[nodiscard]] inline auto curveInputFieldsOf(const ProcessingPlan& plan) {
+    return std::tie(plan.toWorking, plan.exposureGain, plan.shapesTone, plan.contrastSlope,
+                    plan.contrastScale, plan.shadowShift, plan.highlightShift, plan.blackShift,
+                    plan.whiteShift, plan.presence);
+}
+
+/// @brief Whether two plans give the same sample at a tap.
+///
+/// What tells a caller that a sample, or a histogram of one, is still current
+/// after an edit: dragging a curve changes the plan but not the curve input,
+/// so a curve widget need not sample again (ADR 035). Compares the denoise
+/// block, which runs before the chain, the fields the chain reads up to
+/// @p tap, then geometry and the resize, which a sample runs through as a
+/// render does. Exact float equality, for the reasons
+/// ::arraw::prefixMatches gives. The source is not part of a plan, so the
+/// caller must also know that both are for the same pixels.
+/// @param first One plan.
+/// @param second The other.
+/// @param tap Tap the sample was taken at.
+/// @return `true` if @p tap is a tap and both plans resolve identically up to
+/// it, and in geometry and the resize.
+[[nodiscard]] inline bool sameAtTap(const ProcessingPlan& first, const ProcessingPlan& second,
+                                    Tap tap) {
+    const bool sameFrame = first.denoise == second.denoise && first.geometry == second.geometry &&
+                           first.resize == second.resize;
+    switch (tap) {
+    case Tap::CurveInput:
+        return sameFrame && curveInputFieldsOf(first) == curveInputFieldsOf(second);
+    }
+    return false;
+}
+
+/// @brief Encodes one linear value into ::arraw::perceptualEncoding.
+///
+/// ::arraw::toPerceptual made odd: `sign(v) * |v|^(1/2.2)`, so that a negative
+/// channel, which only a colour outside the working gamut has, keeps its
+/// magnitude rather than collapsing onto black. NaN stays NaN.
+/// @param value Linear channel value.
+/// @return The value in the perceptual coordinate.
+[[nodiscard]] inline float toPerceptualSigned(float value) {
+    return value < 0.0F ? -toPerceptual(-value) : toPerceptual(value);
+}
+
+/// @brief Decodes one value from ::arraw::perceptualEncoding back to linear.
+/// @param value Channel value in the perceptual coordinate.
+/// @return The linear value: `sign(v) * |v|^2.2`.
+[[nodiscard]] inline float fromPerceptualSigned(float value) {
+    return value < 0.0F ? -toLinear(-value) : toLinear(value);
 }
 
 } // namespace arraw

@@ -127,7 +127,7 @@ conversion is tested.
 > `arraw-headless-tests` suite runs a Vulkan round trip on that platform, and
 > skips it where the runner has no Vulkan driver.
 > ADR 015's "`struct Impl` defined in the translation unit" is now
-> `arraw::detail::DeviceImageState` in `src/gpu/DeviceImageState.h`, a Qt-free
+> `arraw::detail::DeviceImageState` in `src/core/device/DeviceImageState.h`, a Qt-free
 > base whose QRhi-texture subclass lives in `src/gpu/GpuContext.cpp`.
 
 The CPU renderer remains the reference implementation. Add small deterministic

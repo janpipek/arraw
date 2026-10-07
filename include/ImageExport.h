@@ -77,4 +77,13 @@ void exportImage(const ImageBuffer& image, const std::filesystem::path& path,
                  const ExportOptions& options,
                  const std::optional<ExportMetadata>& metadata = std::nullopt,
                  DiagnosticLog& log = discardedDiagnostics());
+
+/// @brief Checks whether two paths name the same file, which may be one that does not exist yet.
+///
+/// Follows links when both exist; otherwise compares the paths made absolute
+/// and normalised. Used to keep an export from replacing its own input.
+/// @param a First path.
+/// @param b Second path.
+/// @return True if both name one file.
+[[nodiscard]] bool isSameFile(const std::filesystem::path& a, const std::filesystem::path& b);
 } // namespace arraw

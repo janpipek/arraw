@@ -3,6 +3,7 @@
 #include "GeometryPlan.h"
 #include "ProcessingPlan.h"
 #include "ResampleWeights.h"
+#include "ToneCurve.h"
 
 #include <algorithm>
 #include <cmath>
@@ -11,6 +12,123 @@
 #include <stdexcept>
 
 namespace arraw {
+
+PointwiseProbe probeFor(Tap tap) {
+    switch (tap) {
+    case Tap::CurveInput:
+        return PointwiseProbe::AfterTone;
+    }
+    throw std::invalid_argument("A sample needs a recognised tap");
+}
+
+bool probeReadsCurves(PointwiseProbe probe) {
+    switch (probe) {
+    case PointwiseProbe::AfterMatrix:
+    case PointwiseProbe::AfterExposure:
+    case PointwiseProbe::AfterTone:
+        return false;
+    case PointwiseProbe::Developed:
+    case PointwiseProbe::AfterShoulder:
+    case PointwiseProbe::AfterCurves:
+        return true;
+    }
+    // An unknown probe is assumed to read them: the table costs an upload, never a wrong result.
+    return true;
+}
+
+ImageSize denoiseGridSize(const DenoisePlan& plan, ImageSize source) {
+    const std::uint32_t reduction = std::max<std::uint32_t>(plan.gridReduction, 1U);
+    return {(source.width + reduction - 1) / reduction,
+            (source.height + reduction - 1) / reduction};
+}
+
+GpuDenoiseBlock packDenoise(const DenoisePlan& plan, ImageSize source, DenoiseStep step) {
+    GpuDenoiseBlock block;
+    block.step = static_cast<std::uint32_t>(step);
+    block.gridReduction = std::max<std::uint32_t>(plan.gridReduction, 1U);
+    block.luminance = plan.luminance ? 1U : 0U;
+    block.color = plan.color ? 1U : 0U;
+    block.rangeFactor = plan.luminance ? rangeFactorOf(plan) : 0.0F;
+    block.luminanceMix = plan.luminanceMix;
+    block.colorMix = plan.colorMix;
+    block.lumaRow = {plan.lumaRow[0], plan.lumaRow[1], plan.lumaRow[2], 0.0F};
+    block.neutral = {plan.neutral[0], plan.neutral[1], plan.neutral[2], 0.0F};
+    block.sourceSize = {source.width, source.height};
+    const ImageSize grid = denoiseGridSize(plan, source);
+    block.gridSize = {grid.width, grid.height};
+    const auto fill = [&block](float sigma, std::uint32_t radius) {
+        block.radius = radius;
+        const DenoiseWeights weights = denoiseWeights(sigma, radius);
+        std::copy(weights.begin(), weights.end(), block.weights.begin());
+    };
+    switch (step) {
+    case DenoiseStep::BlurAcross:
+    case DenoiseStep::BlurDown:
+        fill(plan.colorSigma, plan.colorRadius);
+        break;
+    case DenoiseStep::BilateralAcross:
+    case DenoiseStep::BilateralDown:
+        fill(plan.spatialSigma, plan.spatialRadius);
+        break;
+    case DenoiseStep::Reduce:
+    case DenoiseStep::Combine:
+        break;
+    }
+    return block;
+}
+
+GpuPresenceBlock packPresence(const PresencePlan& plan, const PresenceBase& base, ImageSize source,
+                              PresenceStep step) {
+    GpuPresenceBlock block;
+    block.step = static_cast<std::uint32_t>(step);
+    block.reduction = std::max<std::uint32_t>(base.reduction, 1U);
+    block.lumaRow = {plan.lumaRow[0], plan.lumaRow[1], plan.lumaRow[2], 0.0F};
+    block.sourceSize = {source.width, source.height};
+    const ImageSize grid = presenceGridSize(base, source);
+    block.gridSize = {grid.width, grid.height};
+    if (step == PresenceStep::BlurAcross || step == PresenceStep::BlurDown ||
+        step == PresenceStep::BlurDownAboveOpening) {
+        block.radius = base.radius;
+        const DenoiseWeights weights = denoiseWeights(base.sigma, base.radius);
+        std::copy(weights.begin(), weights.end(), block.weights.begin());
+    } else if (step == PresenceStep::MinimumAcross || step == PresenceStep::MinimumDown ||
+               step == PresenceStep::MaximumAcross || step == PresenceStep::MaximumDown) {
+        block.window = octagonOf(base.window).across;
+    } else if (step == PresenceStep::MinimumDiagonal || step == PresenceStep::MinimumAntidiagonal ||
+               step == PresenceStep::MaximumDiagonal || step == PresenceStep::MaximumAntidiagonal) {
+        block.window = octagonOf(base.window).diagonal;
+    }
+    return block;
+}
+
+GpuEffectsBlock packEffects(const ProcessingPlan& plan) {
+    const FrameMapping mapping = frameMappingOf(plan);
+    const VignettePlan& vignette = plan.effects.vignette;
+    GpuEffectsBlock block;
+    block.origin = {static_cast<float>(mapping.origin[0]), static_cast<float>(mapping.origin[1])};
+    block.step = {static_cast<float>(mapping.step[0]), static_cast<float>(mapping.step[1])};
+    block.vignettes = vignette.active ? 1U : 0U;
+    block.vignetteLightens = vignette.lightens ? 1U : 0U;
+    block.vignetteHardEdge = vignette.hardEdge ? 1U : 0U;
+    block.vignetteStops = vignette.stops;
+    block.vignetteInner = vignette.inner;
+    block.vignetteOuter = vignette.outer;
+    const GrainPlan& grain = plan.effects.grain;
+    if (grain.active) {
+        const GrainPlacement placement = grainPlacementOf(grain, mapping);
+        block.grains = 1U;
+        block.grainModel = static_cast<std::uint32_t>(grain.model);
+        for (std::size_t index = 0; index < grainLayerCount; ++index) {
+            const GrainLayer& layer = placement.layers[index];
+            block.grainLayers[index] = {.cell = layer.cell,
+                                        .fraction = layer.fraction,
+                                        .delta = layer.delta,
+                                        .weight = layer.weight,
+                                        .seed = layer.seed};
+        }
+    }
+    return block;
+}
 
 GpuPointwiseBlock packPointwise(const ProcessingPlan& plan, PointwiseProbe probe) {
     GpuPointwiseBlock block;
@@ -45,6 +163,37 @@ GpuPointwiseBlock packPointwise(const ProcessingPlan& plan, PointwiseProbe probe
     block.bandSaturation = colour.bandSaturation;
     block.bandLuminance = colour.bandLuminance;
     block.grayMix = colour.grayMix;
+    const ColorGradingPlan& grading = colour.grading;
+    block.grades = grading.active ? 1U : 0U;
+    block.gradeBalanceShift = grading.balanceShift;
+    block.gradeZoneWidth = grading.zoneWidth;
+    block.gradeShadowMidtoneTint = {grading.shadowTint.a, grading.shadowTint.b,
+                                    grading.midtoneTint.a, grading.midtoneTint.b};
+    block.gradeHighlightTint = {grading.highlightTint.a, grading.highlightTint.b, 0.0F, 0.0F};
+    const ToneCurvePlan& curves = plan.toneCurves;
+    block.curvesLuma = curves.luma.active ? 1U : 0U;
+    block.curvesRed = curves.red.active ? 1U : 0U;
+    block.curvesGreen = curves.green.active ? 1U : 0U;
+    block.curvesBlue = curves.blue.active ? 1U : 0U;
+    const PresencePlan& presence = plan.presence;
+    if (presence.active()) {
+        block.presence = 1U;
+        block.presenceLumaRow = {presence.lumaRow[0], presence.lumaRow[1], presence.lumaRow[2],
+                                 0.0F};
+        block.textureAmount = presence.texture;
+        block.clarityAmount = presence.clarity;
+        block.dehazeAmount = presence.dehaze;
+        block.fineReduction = presence.fine.reduction;
+        block.coarseReduction = presence.coarseReduction();
+        // The grids are over the pass's input, the source, whose size the
+        // geometry block records.
+        const ImageSize source = plan.geometry ? plan.geometry->sourceSize : ImageSize{};
+        const ImageSize fine = presenceGridSize(presence.fine, source);
+        const ImageSize coarse =
+            presenceGridSize(PresenceBase{.reduction = presence.coarseReduction()}, source);
+        block.fineGridSize = {fine.width, fine.height};
+        block.coarseGridSize = {coarse.width, coarse.height};
+    }
     block.probe = static_cast<std::uint32_t>(probe);
     return block;
 }
@@ -112,6 +261,19 @@ GpuGeometryBlock packGeometry(const GeometryPlan& plan) {
     block.sourceSize = {plan.sourceSize.width, plan.sourceSize.height};
     block.outputSize = {plan.outputSize.width, plan.outputSize.height};
     return block;
+}
+
+ImageBuffer packToneCurves(const ToneCurvePlan& curves) {
+    ImageBuffer image({static_cast<std::uint32_t>(toneCurveSamples), 1}, workingFormat,
+                      workingEncoding);
+    const auto samples = image.samples<float>();
+    for (std::size_t index = 0; index < toneCurveSamples; ++index) {
+        samples[index * 4] = curves.luma.table[index];
+        samples[index * 4 + 1] = curves.red.table[index];
+        samples[index * 4 + 2] = curves.green.table[index];
+        samples[index * 4 + 3] = curves.blue.table[index];
+    }
+    return image;
 }
 
 ImageBuffer packResizeWeights(std::uint32_t in, std::uint32_t out, ResizeFilter filter) {

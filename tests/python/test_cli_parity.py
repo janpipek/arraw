@@ -9,6 +9,26 @@ CASES = {
     "exposure": {"exposure": 0.5},
     "contrast": {"contrast": 20},
     "colour": {"saturation": 30, "vibrance": 20, "hue_red": 40, "luminance_green": -20},
+    "curves": {
+        "tone_curve_luma": [(0.0, 0.0), (0.25, 0.2), (0.75, 0.82), (1.0, 1.0)],
+        "tone_curve_red": [(0.0, 0.0), (0.5, 0.6), (1.0, 1.0)],
+        "tone_curve_blue": [(0.0, 0.05), (1.0, 0.9)],
+    },
+    "grading": {"grade_shadow_hue": 250, "grade_shadow_saturation": 40,
+                "grade_midtone_hue": 30, "grade_midtone_saturation": 15,
+                "grade_highlight_hue": 70, "grade_highlight_saturation": 50,
+                "grade_balance": -30, "grade_blending": 70},
+    "grading_black_and_white": {"convert_to_grayscale": True, "grade_shadow_hue": 230,
+                                "grade_shadow_saturation": 60, "grade_highlight_hue": 60,
+                                "grade_highlight_saturation": 40},
+    "vignette": {"vignette_amount": -60, "vignette_midpoint": 30, "vignette_feather": 70},
+    "vignette_lighten": {"vignette_amount": 45, "vignette_feather": 0},
+    # A seed given, as the command line would otherwise choose its own.
+    "grain": {"grain_amount": 60, "grain_size": 100, "grain_roughness": 70,
+              "grain_seed": 31337, "vignette_amount": -30},
+    "noise_reduction": {"luminance_noise_reduction": 60, "luminance_noise_detail": 30,
+                        "color_noise_reduction": 70, "color_noise_smoothness": 40},
+    "presence": {"texture": 40, "clarity": 60, "dehaze": -30},
     "combined": {"exposure": 0.5, "contrast": 20, "shadows": 15, "filmic_highlights": 0},
 }
 
@@ -16,6 +36,11 @@ CASES = {
 def cli_args(settings):
     args = []
     for key, value in settings.items():
+        if value is True:
+            args.append("--" + key.replace("_", "-"))
+            continue
+        if isinstance(value, list):
+            value = ";".join(f"{x},{y}" for x, y in value)
         args += ["--" + key.replace("_", "-"), str(value)]
     return args
 

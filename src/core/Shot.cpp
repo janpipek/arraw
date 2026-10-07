@@ -26,6 +26,12 @@ std::string lowered(std::string text) {
     return text;
 }
 
+/// @brief The UTF-8 bytes of a path component, whatever the platform's narrow code page.
+std::string utf8(const std::filesystem::path& path) {
+    const auto text = path.u8string();
+    return {reinterpret_cast<const char*>(text.data()), text.size()};
+}
+
 bool isDigit(char character) {
     return std::isdigit(static_cast<unsigned char>(character)) != 0;
 }
@@ -77,8 +83,8 @@ int compareNatural(std::string_view left, std::string_view right) {
 
 /// @brief Orders paths by natural order of the file name, then by folder, then by the exact name.
 bool precedes(const std::filesystem::path& left, const std::filesystem::path& right) {
-    const std::string nameLeft = left.filename().string();
-    const std::string nameRight = right.filename().string();
+    const std::string nameLeft = utf8(left.filename());
+    const std::string nameRight = utf8(right.filename());
     if (const int order = compareNatural(nameLeft, nameRight); order != 0) {
         return order < 0;
     }
@@ -94,7 +100,7 @@ struct Bucket {
 
 /// @brief Canonical name of a file's format: JPEG and TIFF spelled one way, else upper-cased.
 std::string formatName(const std::filesystem::path& path) {
-    std::string extension = lowered(path.extension().string());
+    std::string extension = lowered(utf8(path.extension()));
     if (!extension.empty()) {
         extension.erase(0, 1);
     }
@@ -119,7 +125,7 @@ std::vector<Shot> arraw::groupShots(std::vector<std::filesystem::path> paths) {
         if (!isSupportedImage(path)) {
             continue;
         }
-        Bucket& bucket = buckets[{path.parent_path(), lowered(path.stem().string())}];
+        Bucket& bucket = buckets[{path.parent_path(), lowered(utf8(path.stem()))}];
         (rawimport::hasRawExtension(path) ? bucket.raws : bucket.standards)
             .push_back(std::move(path));
     }

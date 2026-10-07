@@ -28,9 +28,42 @@ def test_develop_photo_with_explicit_state_overrides_own(dng):
 
 
 def test_develop_without_state_uses_defaults(dng):
+    # The defaults of the buffer's kind: a RAW starts with colour noise reduction.
     buf = arraw.load(dng)
-    assert np.array_equal(arraw.develop(buf).pixels,
-                          arraw.develop(buf, arraw.DevelopState()).pixels)
+    defaults = arraw.default_state(buf)
+    assert defaults.settings.noise_reduction.color == pytest.approx(25.0)
+    assert defaults == arraw.default_state(arraw.read_metadata(dng))
+    assert np.array_equal(arraw.develop(buf).pixels, arraw.develop(buf, defaults).pixels)
+    assert np.array_equal(arraw.sample(buf, arraw.Tap.CURVE_INPUT).pixels,
+                          arraw.sample(buf, arraw.Tap.CURVE_INPUT, defaults).pixels)
+
+
+def test_default_state_depends_on_the_kind(dng, fixtures):
+    card = fixtures / "testcard-61x41-srgb8.png"
+    assert arraw.default_state(arraw.read_metadata(card)) == arraw.DevelopState()
+    assert arraw.default_state(arraw.load(card)) == arraw.DevelopState()
+    raw = arraw.default_state(arraw.read_metadata(dng))
+    assert raw.settings == arraw.DevelopSettings().with_(color_noise_reduction=25.0)
+    # The descriptor default stays neutral.
+    assert arraw.DevelopSettings().noise_reduction.color == 0.0
+    # What open() gives, with or without reading a sidecar, when there is none.
+    assert arraw.open(dng).state == raw
+    assert arraw.open(dng, sidecar=False).state == raw
+    assert arraw.open(card).state == arraw.DevelopState()
+
+
+def test_a_half_size_decode_says_its_pixel_scale(dng):
+    assert arraw.load(dng).pixel_scale == 1.0
+    half = arraw.load(dng, half_size=True)
+    assert half.pixel_scale == 2.0
+    # Settable, for a buffer reduced by hand; refused when meaningless.
+    half.pixel_scale = 4.0
+    assert half.pixel_scale == 4.0
+    with pytest.raises(ValueError):
+        half.pixel_scale = 0.0
+    # Developing keeps it up to a resize, which multiplies it by the reduction.
+    assert arraw.develop(half).pixel_scale == 4.0
+    assert arraw.develop(half, size=0.5).pixel_scale == 8.0
 
 
 def test_develop_does_not_modify_source(dng):
@@ -205,3 +238,15 @@ def test_resolved_size_matches_develop(png):
     assert (got.width, got.height) == (122, 82)
     with pytest.raises(TypeError):
         arraw.resolved_size(True, buf.size)
+
+
+def test_vignette_darkens_corners_and_leaves_the_centre(dng):
+    photo = arraw.open(dng).with_(filmic_highlights=0)
+    base = arraw.develop(photo).pixels[..., :3]
+    dark = arraw.develop(photo.with_(vignette_amount=-100)).pixels[..., :3]
+    h, w = base.shape[:2]
+    # A corner pixel loses close to the full two stops; the centre keeps most.
+    corner = dark[0, 0] / np.maximum(base[0, 0], 1e-6)
+    centre = dark[h // 2, w // 2] / np.maximum(base[h // 2, w // 2], 1e-6)
+    assert np.all(corner < 0.4)
+    assert np.all(centre > 0.9)

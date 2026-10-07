@@ -39,6 +39,14 @@ enum class GpuBackend {
 /// Direct3D 12 remains selectable), Metal on macOS.
 [[nodiscard]] GpuBackend defaultGpuBackend() noexcept;
 
+/// @brief Tells whether an automatic choice of device takes the GPU on this platform.
+///
+/// False on Windows for now: Direct3D 11, its default backend, has not run the
+/// CPU parity suite, so `auto` develops on the CPU there until it has (ADR 017).
+/// An explicit choice of the GPU (`--device gpu`, or an adapter named in the
+/// app's settings) still takes it.
+[[nodiscard]] bool gpuUsedByDefault() noexcept;
+
 /// @brief Names a backend as the command line spells it.
 /// @return `vulkan`, `opengl`, `d3d11`, `d3d12` or `metal`.
 [[nodiscard]] std::string_view gpuBackendName(GpuBackend backend) noexcept;
@@ -123,6 +131,12 @@ struct GpuDeviceInfo {
     /// ADR 015 leaves open.
     bool halfFloatTextures = false;
 
+    /// @brief Whether R32F textures are supported, which scalar render targets use.
+    ///
+    /// Without them a ::arraw::GpuTargetFormat::R32F target is made RGBA32F,
+    /// which holds the same value in its first channel at four times the memory.
+    bool scalarFloatTextures = false;
+
     /// @brief Whether compute shaders are supported.
     bool compute = false;
 
@@ -140,12 +154,18 @@ struct GpuDeviceInfo {
 ///
 /// Each reads its input images through `texelFetch`, the first at binding 0 and
 /// any others from binding 2 on, and, except ::Copy, one std140 uniform block at
-/// binding 1, and writes one RGBA32F render target. The shaders live in
+/// binding 1, and writes one render target, RGBA32F unless the render asks for
+/// another ::arraw::GpuTargetFormat. The shaders live in
 /// `src/gpu/shaders`, compiled at build time.
 enum class GpuPass {
-    Copy,      ///< Copies its input unchanged; no uniforms. The render round trip's proof.
-    Pointwise, ///< The pointwise chain; uniforms are a ::arraw::GpuPointwiseBlock.
-    Geometry,  ///< The geometry resample; uniforms are a ::arraw::GpuGeometryBlock.
+    Copy, ///< Copies its input unchanged; no uniforms. The render round trip's proof.
+    /// @brief The pointwise chain; uniforms are a ::arraw::GpuPointwiseBlock.
+    ///
+    /// Inputs are the image, the curves, and the Presence context's fine base,
+    /// coarse base, coarse cells and haze base (bindings 0 and 2 to 6); the
+    /// image stands in for any the block says are not read.
+    Pointwise,
+    Geometry, ///< The geometry resample; uniforms are a ::arraw::GpuGeometryBlock.
 
     /// @brief The horizontal half of a resize, one ::arraw::ResizePlane per render.
     ///
@@ -173,10 +193,58 @@ enum class GpuPass {
     /// of the vertical axis (bindings 0 and 2); uniforms are a ::arraw::GpuResizeBlock.
     /// Writes the filtered colour with alpha exactly one.
     ResizeDownOpaque,
+
+    /// @brief The effects on the crop frame, after the resize; uniforms are a
+    /// ::arraw::GpuEffectsBlock, the one input the resized image.
+    Effects,
+
+    /// @brief One filtering step of noise reduction, the ::arraw::DenoiseStep its
+    /// ::arraw::GpuDenoiseBlock names; the one input the source or the step before's result.
+    DenoiseFilter,
+
+    /// @brief The recombination that ends noise reduction; uniforms are a
+    /// ::arraw::GpuDenoiseBlock, inputs the source, the blurred ratio grid and the
+    /// filtered luminance (bindings 0, 2 and 3), the source standing in for a half that is off.
+    DenoiseCombine,
+
+    /// @brief One step of one base of the Presence context, the ::arraw::PresenceStep its
+    /// ::arraw::GpuPresenceBlock names; inputs the source or the step before's result, and the
+    /// opened grid a floor's last blur keeps above (bindings 0 and 2), the first input standing
+    /// in for the second in every other step.
+    PresenceFilter,
 };
 
 /// @brief Number of ::arraw::GpuPass values, for tables indexed by one.
-inline constexpr std::size_t gpuPassCount = 7;
+inline constexpr std::size_t gpuPassCount = 11;
+
+/// @brief Channels a pass's render target stores, each a 32-bit float.
+///
+/// A shader writes a `vec4` either way; a target with fewer channels keeps the
+/// first and drops the rest, so the same shader serves both.
+enum class GpuTargetFormat {
+    Rgba32F, ///< A colour and its alpha: what every image a caller sees is.
+    /// @brief One channel, for a scalar intermediate such as a filtered luminance.
+    ///
+    /// A pass reads it as `(r, 0, 0, 1)`, and so does ::arraw::DeviceImage::readBack.
+    /// On a device without R32F textures (GpuDeviceInfo::scalarFloatTextures)
+    /// the target is RGBA32F instead, which reads the same in its first channel.
+    R32F,
+};
+
+/// @brief Number of ::arraw::GpuTargetFormat values, for tables indexed by one.
+inline constexpr std::size_t gpuTargetFormatCount = 2;
+
+/// @brief What a pass renders into, besides its size and encoding.
+struct GpuTarget {
+    /// @brief Channels the target stores.
+    GpuTargetFormat format = GpuTargetFormat::Rgba32F;
+
+    /// @brief Sensor pixels per pixel of the result (::arraw::ImageBuffer::pixelScale).
+    ///
+    /// Empty keeps the first input's, which is right for every pass that keeps
+    /// the density of the pixels; a resize gives its own.
+    std::optional<double> pixelScale = std::nullopt;
+};
 
 /// @brief One graphics device, owned, offscreen, on the thread that made it.
 ///
@@ -248,7 +316,7 @@ public:
 
     /// @brief Copies a host buffer into a new RGBA32F texture.
     /// @param image Buffer to upload; must be ::arraw::PixelFormat::RgbaF32.
-    /// @return A device image with the buffer's size, encoding and orientation.
+    /// @return A device image with the buffer's size, encoding, orientation and pixel scale.
     /// @throws std::invalid_argument if @p image is not RGBA float, or is larger
     /// than the device or a single QRhi transfer accepts.
     /// @throws std::logic_error if called from a thread other than the owner.
@@ -263,11 +331,16 @@ public:
     /// what keeps this class the only minter of them. Pipelines are built on a
     /// pass's first use and kept for the device's lifetime. Waits for the
     /// render to finish, as a transfer does.
+    ///
+    /// When an operation is observed on this thread (ADR 042), looks for its
+    /// cancellation before rendering and counts the render as a unit of its
+    /// current span once done: the GPU's progress is a render at a time.
     /// @param pass Shader to run.
     /// @param uniforms The pass's uniform block, byte for byte; empty for ::GpuPass::Copy.
     /// @param input Image the pass reads; must belong to this context's device.
     /// @param outputSize Dimensions of the result.
     /// @param encoding Meaning of the result's RGB values, which the pass decides.
+    /// @param target Channels of the result, and its pixel scale.
     /// @return The result, with no pending orientation.
     /// @throws std::invalid_argument if @p input is empty or belongs to another
     /// device, @p uniforms is not the pass's block size, or @p outputSize is
@@ -275,9 +348,10 @@ public:
     /// @throws std::logic_error if called from a thread other than the owner.
     /// @throws std::runtime_error if the device has no RGBA32F textures, cannot
     /// create the pass's resources, or the render fails.
+    /// @throws ::arraw::Cancelled if the operation observed on this thread is cancelled.
     [[nodiscard]] DeviceImage render(GpuPass pass, std::span<const std::byte> uniforms,
                                      const DeviceImage& input, ImageSize outputSize,
-                                     const ColorEncoding& encoding);
+                                     const ColorEncoding& encoding, const GpuTarget& target = {});
 
     /// @brief Renders one pass that reads several device images into a new one.
     ///
@@ -289,7 +363,7 @@ public:
     /// not as long as the pass takes.
     [[nodiscard]] DeviceImage render(GpuPass pass, std::span<const std::byte> uniforms,
                                      std::span<const DeviceImage> inputs, ImageSize outputSize,
-                                     const ColorEncoding& encoding);
+                                     const ColorEncoding& encoding, const GpuTarget& target = {});
 
 private:
     /// @brief Device shared with every image minted from it.

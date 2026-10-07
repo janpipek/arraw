@@ -216,3 +216,51 @@ request" keeps its meaning.
 - **A stage's kind is part of its definition.** Anything pointwise that later
   needs a neighbour, such as clarity or a local contrast, becomes a spatial
   stage and a pass of its own rather than being smuggled into the chain.
+
+## Note, 2026-10-03
+
+The tone curve ([ADR 033](033-the-tone-curve-is-four-monotone-curves-in-the-perceptual-coordinate.md))
+is built and sits between `shapeTone` and `rollHighlights`, so the curve input
+tap is that position: after Basic Tone, immediately before the curves. The tap
+definition above holds as written. The curves are part of the plan's pointwise
+group and of the Pointwise pass's inputs (a second texture on the GPU), so
+nothing about checkpoints changes. The tap itself is still unbuilt.
+
+## Note, 2026-10-04
+
+The curve input tap is built
+([ADR 035](035-the-curve-input-is-sampled-through-the-render-and-binned-on-the-host.md)).
+`Tap::CurveInput` and `sample(source, state, tap, request)` are public and sit
+beside `develop` and `developUntil`; `sample` returns pixels and never a
+checkpoint, as decided above. The position is `developToCurveInput` in
+`ProcessingPlan.h`, the prefix `developPixel` itself calls. On the GPU the tap
+is the existing `AfterTone` probe. The tapped colours go through geometry and
+the resize in linear light, as a render does, and are then encoded into the
+named `NamedEncoding::Rec2020Gamma22`. So the Consequence about a sampled
+buffer declaring its own encoding is met.
+
+## Note, 2026-10-06
+
+Texture, Clarity and Dehaze ([ADR 041](041-texture-clarity-and-dehaze-read-a-context-of-log-luminance.md)) need neighbours but act on tone
+inside the chain. The Consequence above, that such a stage "becomes a spatial
+stage and a pass of its own", is amended for them: the neighbourhood is a
+*context*, a reduced-resolution side image of the pointwise pass's input made
+by its own spatial steps (a few GPU renders a base), and the chain reads it at
+the pixel's coordinate. It is not a pass boundary and has no checkpoint; it is
+recomputed whenever the pointwise pass runs. `developPixel(plan, colour,
+context)` gains the context this ADR promised, as a `PixelContext` after the
+colour. It has no default: a zero context is not "none" but every base at
+log2 = 0, so a two-argument overload serves callers without Presence and
+asserts that the plan has it off. The curve input tap is after
+Presence, which Lightroom counts as Basic, so "after Basic Tone, immediately
+before the curves" still holds.
+
+## Note, 2026-10-06 (progress)
+
+Progress and cancellation are built
+([ADR 042](042-a-decode-or-a-render-reports-progress-and-stops-on-request.md)).
+They are not part of the diagnostics sink: they travel on a second
+caller-supplied type, `ProgressChannel`, passed as a nullable pointer beside
+`DiagnosticLog&`. The "channel" above is therefore two types. They differ in
+direction, in their thread rules and in their lifetime, and ADR 042 sets out
+why they are kept apart rather than merged.

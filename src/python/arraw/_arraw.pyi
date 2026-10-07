@@ -1,11 +1,12 @@
 """Python bindings for the arraw RAW processing engine."""
 
-from collections.abc import Sequence, Set
+from collections.abc import Callable, Sequence, Set
 import enum
 import os
 import pathlib
-from typing import overload
+from typing import Annotated, overload
 
+import numpy
 from numpy.typing import NDArray
 
 
@@ -71,6 +72,11 @@ class NamedEncoding(enum.Enum):
 
     ADOBE_RGB = 3
 
+    REC2020_GAMMA22 = 4
+    """
+    Rec.2020 primaries, each channel sign(v) * |v|^(1/2.2): the curve input that sample() hands back; not an output encoding.
+    """
+
 class CameraNative:
     """A camera's native colour encoding; opaque in this version."""
 
@@ -115,6 +121,15 @@ class ImageBuffer:
     def orientation(self) -> ImageOrientation: ...
 
     @property
+    def pixel_scale(self) -> float:
+        """
+        Sensor pixels one pixel spans along each side: 1 for a full decode, 2 for a half-size one, doubled by each halving. Noise reduction divides its reach by it. Finite and above zero.
+        """
+
+    @pixel_scale.setter
+    def pixel_scale(self, arg: float, /) -> None: ...
+
+    @property
     def pixels(self) -> NDArray:
         """
         Writable NumPy view of shape (height, width, channels), without a copy; it keeps the buffer alive.
@@ -127,7 +142,7 @@ def read_metadata(path: str | os.PathLike) -> ImageMetadata:
 
 def load(path: str | os.PathLike, half_size: bool = False) -> ImageBuffer:
     """
-    Decode an image file into a buffer. With half_size a RAW is decoded at half its width and height, without demosaicing, and the buffer is that much smaller than read_metadata says; other files ignore it.
+    Decode an image file into a buffer. With half_size a RAW is decoded at half its width and height, without demosaicing, its pixel_scale is 2, and the buffer is that much smaller than read_metadata says; other files ignore it.
     """
 
 def read_embedded_preview(path: str | os.PathLike, max_edge: int) -> ImageBuffer | None:
@@ -305,6 +320,16 @@ class SettingGroup(enum.Enum):
 
     BLACK_AND_WHITE = 4
 
+    TONE_CURVE = 5
+
+    COLOR_GRADING = 6
+
+    EFFECTS = 7
+
+    DETAIL = 8
+
+    PRESENCE = 9
+
 class Applicability(enum.Enum):
     """Whether a setting means anything for every photograph."""
 
@@ -312,14 +337,35 @@ class Applicability(enum.Enum):
 
     RAW_ONLY = 1
 
+class SettingScope(enum.Enum):
+    """Whether a setting is part of a look, or belongs to one photograph."""
+
+    LOOK = 0
+
+    PHOTO = 1
+
+class GrainModel(enum.Enum):
+    """Algorithm that draws the grain."""
+
+    VALUE_NOISE = 0
+
+class LuminanceNoiseFilter(enum.Enum):
+    """Filter that smooths luminance noise."""
+
+    BILATERAL = 0
+
 class Stage(enum.Enum):
     """Pass boundary of the render pipeline."""
 
-    POINTWISE = 0
+    DENOISE = 0
 
-    GEOMETRY = 1
+    POINTWISE = 1
 
-    RESIZE = 2
+    GEOMETRY = 2
+
+    RESIZE = 3
+
+    EFFECTS = 4
 
 class ToneSettings:
     """Photographic tone adjustments."""
@@ -607,10 +653,257 @@ class GeometrySettings:
     def replace(self, **kwargs) -> GeometrySettings:
         """Return a copy with the given attributes replaced."""
 
+class ToneCurve:
+    """
+    A tone curve as 2 to 16 (x, y) control points from x = 0 to x = 1, x at least 0.01 apart, given in any order and sorted by x; the default is the identity.
+    """
+
+    def __init__(self, points: Sequence[tuple[float, float]] | None = None) -> None: ...
+
+    @property
+    def points(self) -> list[tuple[float, float]]: ...
+
+    def __eq__(self, arg: ToneCurve, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> ToneCurve:
+        """Return a copy with the given attributes replaced."""
+
+    @property
+    def is_identity(self) -> bool:
+        """Whether the curve is exactly the line from (0, 0) to (1, 1)."""
+
+class ToneCurveSettings:
+    """Tone curves on luminance and on the red, green and blue channels."""
+
+    def __init__(self, *, luma: ToneCurve | None = None, red: ToneCurve | None = None, green: ToneCurve | None = None, blue: ToneCurve | None = None) -> None: ...
+
+    @property
+    def luma(self) -> ToneCurve: ...
+
+    @property
+    def red(self) -> ToneCurve: ...
+
+    @property
+    def green(self) -> ToneCurve: ...
+
+    @property
+    def blue(self) -> ToneCurve: ...
+
+    def __eq__(self, arg: ToneCurveSettings, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> ToneCurveSettings:
+        """Return a copy with the given attributes replaced."""
+
+class GradeZone:
+    """
+    Tint of one tonal zone: a hue and how much of it.
+
+    The hue is an Oklab hue angle in degrees, not Lightroom's: roughly 30 is red, 110 yellow, 140 green and 260 blue.
+    """
+
+    def __init__(self, *, hue: float | None = 0.0, saturation: float | None = 0.0) -> None: ...
+
+    @property
+    def hue(self) -> float: ...
+
+    @property
+    def saturation(self) -> float: ...
+
+    def __eq__(self, arg: GradeZone, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> GradeZone:
+        """Return a copy with the given attributes replaced."""
+
+class ColorGradingSettings:
+    """Three-zone toning of the shadows, midtones and highlights."""
+
+    def __init__(self, *, shadows: GradeZone | None = None, midtones: GradeZone | None = None, highlights: GradeZone | None = None, balance: float | None = 0.0, blending: float | None = 50.0) -> None: ...
+
+    @property
+    def shadows(self) -> GradeZone: ...
+
+    @property
+    def midtones(self) -> GradeZone: ...
+
+    @property
+    def highlights(self) -> GradeZone: ...
+
+    @property
+    def balance(self) -> float: ...
+
+    @property
+    def blending(self) -> float: ...
+
+    def __eq__(self, arg: ColorGradingSettings, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> ColorGradingSettings:
+        """Return a copy with the given attributes replaced."""
+
+class VignetteSettings:
+    """
+    Post-crop vignette: an elliptical falloff fitted to the cropped frame.
+
+    Negative amounts darken the edges as an exposure change, positive ones lighten them toward white without passing it.
+    """
+
+    def __init__(self, *, amount: float | None = 0.0, midpoint: float | None = 50.0, feather: float | None = 50.0) -> None: ...
+
+    @property
+    def amount(self) -> float: ...
+
+    @property
+    def midpoint(self) -> float: ...
+
+    @property
+    def feather(self) -> float: ...
+
+    def __eq__(self, arg: VignetteSettings, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> VignetteSettings:
+        """Return a copy with the given attributes replaced."""
+
+class GrainSettings:
+    """
+    Film-like grain anchored to the cropped frame and to a seed.
+
+    The seed is the photograph's own, not part of a look: 0 renders one fixed pattern, and choose_grain_seed gives grain an edit turns on a seed of its own.
+    """
+
+    def __init__(self, *, amount: float | None = 0.0, size: float | None = 50.0, roughness: float | None = 50.0, model: GrainModel = GrainModel.VALUE_NOISE, seed: int | None = 0) -> None: ...
+
+    @property
+    def amount(self) -> float: ...
+
+    @property
+    def size(self) -> float: ...
+
+    @property
+    def roughness(self) -> float: ...
+
+    @property
+    def model(self) -> GrainModel: ...
+
+    @property
+    def seed(self) -> int: ...
+
+    def __eq__(self, arg: GrainSettings, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> GrainSettings:
+        """Return a copy with the given attributes replaced."""
+
+class EffectsSettings:
+    """Effects applied to the cropped frame after the resize."""
+
+    def __init__(self, *, vignette: VignetteSettings | None = None, grain: GrainSettings | None = None) -> None: ...
+
+    @property
+    def vignette(self) -> VignetteSettings: ...
+
+    @property
+    def grain(self) -> GrainSettings: ...
+
+    def __eq__(self, arg: EffectsSettings, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> EffectsSettings:
+        """Return a copy with the given attributes replaced."""
+
+class PresenceSettings:
+    """
+    Texture, Clarity and Dehaze: local contrast after the tone controls, each -100 to 100.
+
+    Texture acts on detail a few sensor pixels across, Clarity on the midtones' contrast at a hundredth of the long edge, Dehaze removes (or adds) a veil with some contrast and colour.
+    """
+
+    def __init__(self, *, texture: float | None = 0.0, clarity: float | None = 0.0, dehaze: float | None = 0.0) -> None: ...
+
+    @property
+    def texture(self) -> float: ...
+
+    @property
+    def clarity(self) -> float: ...
+
+    @property
+    def dehaze(self) -> float: ...
+
+    def __eq__(self, arg: PresenceSettings, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> PresenceSettings:
+        """Return a copy with the given attributes replaced."""
+
+class NoiseReductionSettings:
+    """
+    Luminance and colour noise reduction, run on the decoded photograph first.
+
+    Radii are in sensor pixels; with both amounts at 0 nothing happens.
+    """
+
+    def __init__(self, *, luminance: float | None = 0.0, luminance_detail: float | None = 50.0, luminance_filter: LuminanceNoiseFilter = LuminanceNoiseFilter.BILATERAL, color: float | None = 0.0, color_smoothness: float | None = 50.0) -> None: ...
+
+    @property
+    def luminance(self) -> float: ...
+
+    @property
+    def luminance_detail(self) -> float: ...
+
+    @property
+    def luminance_filter(self) -> LuminanceNoiseFilter: ...
+
+    @property
+    def color(self) -> float: ...
+
+    @property
+    def color_smoothness(self) -> float: ...
+
+    def __eq__(self, arg: NoiseReductionSettings, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> NoiseReductionSettings:
+        """Return a copy with the given attributes replaced."""
+
+def choose_grain_seed(previous: GrainSettings, next: GrainSettings, entropy: Callable[[], int] | None = None) -> int:
+    """
+    Return the seed grain should carry after an edit from `previous` to `next`: a new one, never 0, when the edit turns grain on (amount from 0 to above 0) and `next` has none, else `next`'s seed, 0 included. `entropy` returns 32 random bits per call; None uses the operating system's. Store the result as the photograph's grain seed.
+    """
+
 class DevelopSettings:
     """Photographic settings of one photograph."""
 
-    def __init__(self, *, color: ColorSettings | None = None, geometry: GeometrySettings | None = None, tone: ToneSettings | None = None, hsl: HslSettings | None = None, black_and_white: BlackAndWhiteSettings | None = None) -> None: ...
+    def __init__(self, *, color: ColorSettings | None = None, geometry: GeometrySettings | None = None, tone: ToneSettings | None = None, presence: PresenceSettings | None = None, hsl: HslSettings | None = None, black_and_white: BlackAndWhiteSettings | None = None, tone_curve: ToneCurveSettings | None = None, color_grading: ColorGradingSettings | None = None, effects: EffectsSettings | None = None, noise_reduction: NoiseReductionSettings | None = None) -> None: ...
 
     @property
     def color(self) -> ColorSettings: ...
@@ -622,10 +915,25 @@ class DevelopSettings:
     def tone(self) -> ToneSettings: ...
 
     @property
+    def presence(self) -> PresenceSettings: ...
+
+    @property
     def hsl(self) -> HslSettings: ...
 
     @property
     def black_and_white(self) -> BlackAndWhiteSettings: ...
+
+    @property
+    def tone_curve(self) -> ToneCurveSettings: ...
+
+    @property
+    def color_grading(self) -> ColorGradingSettings: ...
+
+    @property
+    def effects(self) -> EffectsSettings: ...
+
+    @property
+    def noise_reduction(self) -> NoiseReductionSettings: ...
 
     def __eq__(self, arg: DevelopSettings, /) -> bool: ...
 
@@ -669,6 +977,9 @@ class SettingDescriptor:
     @property
     def affects(self) -> Stage: ...
 
+    @property
+    def scope(self) -> SettingScope: ...
+
     def __eq__(self, arg: SettingDescriptor, /) -> bool: ...
 
     def __repr__(self) -> str: ...
@@ -677,7 +988,7 @@ class SettingDescriptor:
 
 def setting_descriptors() -> list[SettingDescriptor]:
     """
-    List the develop settings: key, snake_case name, range, group, applicability, stage.
+    List the develop settings: key, snake_case name, range, group, applicability, stage, scope.
     """
 
 class Severity(enum.Enum):
@@ -785,12 +1096,14 @@ class DevelopState:
         """Return a copy with the given attributes replaced."""
 
 class SidecarContents:
-    """What an XMP sidecar holds, and which other tools wrote in it."""
+    """
+    What an XMP sidecar holds, and which other tools wrote in it. `state` is None when the sidecar records no develop settings (marks only, or another tool's).
+    """
 
     def __init__(self, *, state: DevelopState | None = None, marks: PhotoMarks | None = None, creator_tool: str | None = None, others: Sequence[ForeignNamespace] | None = None) -> None: ...
 
     @property
-    def state(self) -> DevelopState: ...
+    def state(self) -> DevelopState | None: ...
 
     @property
     def marks(self) -> PhotoMarks: ...
@@ -809,6 +1122,16 @@ class SidecarContents:
 
     def replace(self, **kwargs) -> SidecarContents:
         """Return a copy with the given attributes replaced."""
+
+@overload
+def default_state(metadata: ImageMetadata) -> DevelopState:
+    """
+    The state a photograph of this kind starts from: colour noise reduction 25 for a RAW, the neutral DevelopState() for anything else. What open() gives a photograph with no sidecar.
+    """
+
+@overload
+def default_state(buffer: ImageBuffer) -> DevelopState:
+    """The state a decoded buffer's kind starts from, as for its metadata."""
 
 def xmp_namespace_owner(uri: str) -> str | None:
     """
@@ -854,7 +1177,7 @@ class Photo:
 
 def open(path: str | os.PathLike, *, sidecar: bool = True) -> Photo:
     """
-    Open a photograph; reads its metadata, not its pixels. Its XMP sidecar supplies the state and marks unless sidecar=False. A sidecar that cannot be read is logged as an error on the 'arraw' logger, not raised, and the defaults are used.
+    Open a photograph; reads its metadata, not its pixels. Its XMP sidecar supplies the state and marks unless sidecar=False. Without one, or with one that records no settings, the state is default_state(metadata). A sidecar that cannot be read is logged as an error on the 'arraw' logger, not raised, and the defaults are used.
     """
 
 def sidecar_path(path: str | os.PathLike) -> pathlib.Path:
@@ -876,13 +1199,86 @@ def write_sidecar_marks(path: str | os.PathLike, marks: PhotoMarks) -> None:
 @overload
 def develop(source: ImageBuffer, state: DevelopState | None = None, *, size: int | tuple[int, int] | float | None = None, filter: ResizeFilter = ResizeFilter.LANCZOS3, allow_upscale: bool = False) -> ImageBuffer:
     """
-    Develop a decoded buffer on the CPU; default state leaves the colour unchanged. `size` renders the cropped result smaller: an int is the long edge, a (width, height) tuple a box to fit inside, a float a scale factor. Sizes only shrink unless `allow_upscale`.
+    Develop a decoded buffer on the CPU; with no state, the defaults of its kind (default_state: colour noise reduction for a RAW, nothing for anything else). `size` renders the cropped result smaller: an int is the long edge, a (width, height) tuple a box to fit inside, a float a scale factor. Sizes only shrink unless `allow_upscale`.
     """
 
 @overload
 def develop(source: Photo, state: DevelopState | None = None, *, size: int | tuple[int, int] | float | None = None, filter: ResizeFilter = ResizeFilter.LANCZOS3, allow_upscale: bool = False) -> ImageBuffer:
     """
     Decode a photograph and develop it with its own state unless `state` is given; `size`, `filter` and `allow_upscale` are as for a decoded buffer.
+    """
+
+class Tap(enum.Enum):
+    """Named position inside the pointwise chain that sample() stops at."""
+
+    CURVE_INPUT = 0
+    """
+    What the tone curves take in: after white balance, exposure and Basic Tone; handed back in NamedEncoding.REC2020_GAMMA22.
+    """
+
+@overload
+def sample(source: ImageBuffer, tap: Tap, state: DevelopState | None = None, *, size: int | tuple[int, int] | float | None = None, filter: ResizeFilter = ResizeFilter.LANCZOS3, allow_upscale: bool = False) -> ImageBuffer:
+    """
+    Develop a decoded buffer on the CPU with the chain stopped at `tap`, to measure it: the same frame and size as develop() with the same arguments, in the tap's encoding.
+    """
+
+@overload
+def sample(source: Photo, tap: Tap, state: DevelopState | None = None, *, size: int | tuple[int, int] | float | None = None, filter: ResizeFilter = ResizeFilter.LANCZOS3, allow_upscale: bool = False) -> ImageBuffer:
+    """
+    Decode a photograph and sample it at `tap` with its own state unless `state` is given.
+    """
+
+CURVE_HISTOGRAM_BINS: int = 256
+
+class CurveHistogram:
+    """
+    Pixel counts of the curve input over the perceptual coordinate, CURVE_HISTOGRAM_BINS bins from 0 to 1 per channel; not constructible from Python.
+    """
+
+    @property
+    def luma(self) -> Annotated[NDArray[numpy.uint64], dict(shape=(256), writable=False)]:
+        """
+        Read-only uint64 array of the luminance counts, as the luma curve reads it.
+        """
+
+    @property
+    def red(self) -> Annotated[NDArray[numpy.uint64], dict(shape=(256), writable=False)]:
+        """Read-only uint64 array of the red counts."""
+
+    @property
+    def green(self) -> Annotated[NDArray[numpy.uint64], dict(shape=(256), writable=False)]:
+        """Read-only uint64 array of the green counts."""
+
+    @property
+    def blue(self) -> Annotated[NDArray[numpy.uint64], dict(shape=(256), writable=False)]:
+        """Read-only uint64 array of the blue counts."""
+
+    @property
+    def pixels(self) -> int:
+        """Number of pixels counted; fully transparent ones are not."""
+
+    def __eq__(self, arg: CurveHistogram, /) -> bool: ...
+
+    def __repr__(self) -> str: ...
+
+    __hash__: None = None
+
+@overload
+def curve_histogram(image: ImageBuffer) -> CurveHistogram:
+    """
+    Count a sample taken at Tap.CURVE_INPUT (NamedEncoding.REC2020_GAMMA22) into a CurveHistogram.
+    """
+
+@overload
+def curve_histogram(source: ImageBuffer, state: DevelopState, *, size: int | tuple[int, int] | float | None = 1024, allow_upscale: bool = False) -> CurveHistogram:
+    """
+    Sample a decoded buffer at Tap.CURVE_INPUT and count it. `size` is as for develop() and defaults to a 1024-pixel long edge; None counts the full cropped resolution. The resize is always bilinear, so no ringing reaches the end bins.
+    """
+
+@overload
+def curve_histogram(source: Photo, state: DevelopState | None = None, *, size: int | tuple[int, int] | float | None = 1024, allow_upscale: bool = False) -> CurveHistogram:
+    """
+    Decode a photograph, sample it at Tap.CURVE_INPUT with its own state unless `state` is given, and count it; `size` and the resize as for a decoded buffer.
     """
 
 def resolved_size(size: int | tuple[int, int] | float, cropped: ImageSize, *, allow_upscale: bool = False) -> ImageSize:

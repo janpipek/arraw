@@ -2,6 +2,7 @@
 #include "Command.h"
 #include "DeviceChoice.h"
 #include "ExportCommand.h"
+#include "GrainModels.h"
 #include "StreamDiagnostics.h"
 #include "TerminalStyle.h"
 #include "support/Fixtures.h"
@@ -10,7 +11,9 @@
 #include <Develop.h>
 #include <DevelopSettings.h>
 #include <Diagnostics.h>
+#include <EffectsSettings.h>
 #include <ExifInfo.h>
+#include <NoiseReductionSettings.h>
 #include <Photo.h>
 #include <Sidecar.h>
 
@@ -40,6 +43,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -159,6 +163,27 @@ TEST_CASE("A command's help carries its own options", "[cli]") {
     REQUIRE_THAT(result.out, ContainsSubstring("--overwrite"));
     REQUIRE_THAT(result.out, ContainsSubstring("export <input>..."));
     REQUIRE(result.err.empty());
+}
+
+TEST_CASE("Every tone curve is an export option that states its constraints", "[cli]") {
+    const auto result = invoke({"export", "--help"});
+    REQUIRE(result.code == cli::Success);
+    for (const char* option : {"--tone-curve-luma <points>", "--tone-curve-red <points>",
+                               "--tone-curve-green <points>", "--tone-curve-blue <points>"}) {
+        INFO(option);
+        REQUIRE_THAT(result.out, ContainsSubstring(option));
+    }
+    // The help wraps to the widest option, so words are compared across line breaks.
+    std::string words;
+    for (const char c : result.out) {
+        const bool space = c == ' ' || c == '\n';
+        if (!space || (!words.empty() && words.back() != ' ')) {
+            words += space ? ' ' : c;
+        }
+    }
+    REQUIRE_THAT(words, ContainsSubstring("Tone curve of the red channel"));
+    REQUIRE_THAT(words, ContainsSubstring("2 to 16 points"));
+    REQUIRE_THAT(words, ContainsSubstring("0.01 apart"));
 }
 
 TEST_CASE("Every ranged float setting is an export option", "[cli]") {
@@ -440,6 +465,122 @@ TEST_CASE("An existing output is refused unless overwriting is asked for", "[cli
     REQUIRE(std::filesystem::file_size(destination) != original);
 }
 
+TEST_CASE("An export never replaces its own input, even when overwriting", "[cli]") {
+    const test::TempDir directory;
+    const auto input = directory.file("testcard-61x41-srgb8.jpg");
+    std::filesystem::copy_file(test::fixture(card), input);
+    const auto bytes = [&] {
+        std::ifstream stream(input, std::ios::binary);
+        return std::string(std::istreambuf_iterator<char>(stream), {});
+    };
+    const std::string before = bytes();
+
+    const auto result = invoke({"export", input.string(), "-o", directory.path().string(),
+                                "--overwrite", "--exposure", "1"});
+    REQUIRE(result.code == cli::Failed);
+    REQUIRE_THAT(result.err, ContainsSubstring("is the input itself"));
+    REQUIRE(bytes() == before);
+}
+
+namespace {
+
+/// @brief Reads a file's bytes, to tell that it was not touched.
+std::string bytesOf(const std::filesystem::path& path) {
+    std::ifstream stream(path, std::ios::binary);
+    return std::string(std::istreambuf_iterator<char>(stream), {});
+}
+
+} // namespace
+
+TEST_CASE("Two inputs of one name do not overwrite each other's export", "[cli]") {
+    const test::TempDir directory;
+    const test::TempDir output;
+    // Different pictures under one name, so an overwrite would change the bytes.
+    const auto first = directory.path() / "a" / "card.png";
+    const auto second = directory.path() / "b" / "card.png";
+    std::filesystem::create_directories(first.parent_path());
+    std::filesystem::create_directories(second.parent_path());
+    std::filesystem::copy_file(test::fixture("testcard-61x41-srgb8.png"), first);
+    std::filesystem::copy_file(test::fixture("testcard-61x41-grey8.png"), second);
+    const auto exported = output.file("card.png");
+
+    for (const bool overwrite : {false, true}) {
+        std::filesystem::remove(exported);
+        std::vector<std::string> command{"export",   first.string(), "-o", output.path().string(),
+                                         "--format", "png"};
+        if (overwrite) {
+            command.emplace_back("--overwrite");
+        }
+        REQUIRE(invoke(command).code == cli::Success);
+        const std::string alone = bytesOf(exported);
+        std::filesystem::remove(exported);
+
+        command.insert(command.begin() + 2, second.string());
+        const auto result = invoke(command);
+        REQUIRE(result.code == cli::Failed);
+        REQUIRE_THAT(result.err, ContainsSubstring("would overwrite the export of"));
+        REQUIRE_THAT(result.err, ContainsSubstring(first.string()));
+        // The first input's export, untouched by the second.
+        REQUIRE(bytesOf(exported) == alone);
+    }
+}
+
+TEST_CASE("An export never replaces another file the batch reads", "[cli]") {
+    SECTION("a RAW's camera JPEG, its companion") {
+        const test::TempDir shoot;
+        std::filesystem::copy_file(test::fixture("preview-32x24.dng"), shoot.file("shot.dng"));
+        std::filesystem::copy_file(test::fixture(card), shoot.file("shot.jpg"));
+        const std::string before = bytesOf(shoot.file("shot.jpg"));
+
+        const auto result = invoke({"export", shoot.path().string(), "-o", shoot.path().string(),
+                                    "--format", "jpeg", "--overwrite"});
+        REQUIRE(result.code == cli::Failed);
+        REQUIRE_THAT(result.err, ContainsSubstring("which this export reads"));
+        REQUIRE(bytesOf(shoot.file("shot.jpg")) == before);
+    }
+    SECTION("another input of the folder, in another format") {
+        const test::TempDir folder;
+        std::filesystem::copy_file(test::fixture(card), folder.file("card.jpg"));
+        std::filesystem::copy_file(test::fixture("testcard-61x41-srgb8.png"),
+                                   folder.file("card.png"));
+        const std::string before = bytesOf(folder.file("card.jpg"));
+
+        const auto result = invoke({"export", folder.path().string(), "-o", folder.path().string(),
+                                    "--format", "jpeg", "--overwrite"});
+        REQUIRE(result.code == cli::Failed);
+        REQUIRE(bytesOf(folder.file("card.jpg")) == before);
+    }
+    SECTION("an input given later on the command line") {
+        const test::TempDir x;
+        const test::TempDir y;
+        std::filesystem::copy_file(test::fixture("testcard-61x41-srgb8.png"), x.file("card.png"));
+        std::filesystem::copy_file(test::fixture("testcard-61x41-grey8.png"), y.file("card.png"));
+        const std::string before = bytesOf(y.file("card.png"));
+
+        const auto result =
+            invoke({"export", x.file("card.png").string(), y.file("card.png").string(), "-o",
+                    y.path().string(), "--format", "png", "--overwrite"});
+        REQUIRE(result.code == cli::Failed);
+        REQUIRE(bytesOf(y.file("card.png")) == before);
+    }
+}
+
+TEST_CASE("A file named twice is exported once", "[cli]") {
+    const test::TempDir directory;
+    const test::TempDir output;
+    const auto input = directory.file("card.png");
+    std::filesystem::copy_file(test::fixture("testcard-61x41-srgb8.png"), input);
+
+    const auto result = invoke({"export", input.string(), input.string(), directory.path().string(),
+                                "-o", output.path().string()});
+    INFO(result.err);
+    REQUIRE(result.code == cli::Success);
+    const auto entries = std::distance(std::filesystem::directory_iterator(output.path()),
+                                       std::filesystem::directory_iterator());
+    REQUIRE(entries == 1);
+    REQUIRE(std::filesystem::exists(output.file("card.jpg")));
+}
+
 TEST_CASE("The sharpen flag is documented and sharpens the export", "[cli]") {
     REQUIRE_THAT(invoke({"export", "--help"}).out, ContainsSubstring("--sharpen"));
 
@@ -560,6 +701,29 @@ TEST_CASE("The highlight roll-off reaches the exported pixels", "[cli]") {
     const auto rolledRight = rolled.pixelColor(31, 12);
     REQUIRE(rolledLeft.greenF() < 1.0F);
     REQUIRE(rolledLeft.greenF() < rolledRight.greenF());
+}
+
+TEST_CASE("A RAW without a sidecar exports with its kind's colour noise reduction",
+          "[cli][noise]") {
+    // ADR 039: the CLI opens a RAW as the app does, with Lightroom's 25, with
+    // or without --no-sidecar, unless a flag names another value.
+    const test::TempDir directory;
+    const auto raw = test::fixture("linear-32x24-skewed.dng").string();
+    const auto exported =
+        QString::fromStdString(directory.file("linear-32x24-skewed.png").string());
+    const auto exportWith = [&](std::vector<std::string> flags) {
+        std::vector<std::string> arguments{
+            "export",      raw,  "-o",         directory.path().string(), "--format", "png",
+            "--bit-depth", "16", "--overwrite"};
+        arguments.insert(arguments.end(), flags.begin(), flags.end());
+        REQUIRE(invoke(arguments).code == cli::Success);
+        return QImage(exported);
+    };
+    const QImage plain = exportWith({});
+    REQUIRE_FALSE(plain.isNull());
+    REQUIRE(exportWith({"--no-sidecar"}) == plain);
+    REQUIRE(exportWith({"--color-noise-reduction", "25"}) == plain);
+    REQUIRE(exportWith({"--color-noise-reduction", "0"}) != plain);
 }
 
 TEST_CASE("White balance reaches the exported pixels", "[cli]") {
@@ -1780,6 +1944,236 @@ TEST_CASE("The colour flags replace their own setting and keep the sidecar's oth
     }
 }
 
+TEST_CASE("The grain flags set the photograph's seed and model, exactly", "[cli][sidecar][grain]") {
+    DevelopSettings sidecar;
+    sidecar.effects.grain = {.amount = 20.0F, .seed = 77U};
+
+    SECTION("the amount keeps the sidecar's seed, and a seed replaces it") {
+        const DevelopSettings kept =
+            applied(sidecar, {"--grain-amount", "60", "--grain-size", "10"});
+        REQUIRE(kept.effects.grain.amount == 60.0F);
+        REQUIRE(kept.effects.grain.size == 10.0F);
+        REQUIRE(kept.effects.grain.seed == 77U);
+        REQUIRE(applied(sidecar, {"--grain-seed", "4294967295"}).effects.grain.seed == 4294967295U);
+        REQUIRE(applied(sidecar, {"--grain-seed", "0"}).effects.grain.seed == 0U);
+        REQUIRE(applied(sidecar, {"--grain-model", "valueNoise"}).effects.grain.model ==
+                GrainModel::ValueNoise);
+    }
+    SECTION("a seed that is not a whole 32-bit number, or an unknown model, is a usage error") {
+        for (const char* bad : {"-1", "4294967296", "1.5", "seven", ""}) {
+            INFO(bad);
+            std::ostringstream err;
+            REQUIRE_FALSE(cli::readExportEdits({"--grain-seed", bad}, err));
+            REQUIRE_THAT(err.str(), ContainsSubstring("--grain-seed takes a whole number"));
+        }
+        std::ostringstream err;
+        REQUIRE_FALSE(cli::readExportEdits({"--grain-model", "perlin"}, err));
+        REQUIRE_THAT(err.str(), ContainsSubstring("--grain-model takes valueNoise"));
+    }
+}
+
+TEST_CASE("The noise reduction flags set their fields, and the filter is a name",
+          "[cli][sidecar][noise]") {
+    DevelopSettings sidecar;
+    sidecar.noiseReduction.color = 30.0F;
+
+    SECTION("the flags replace their own fields only") {
+        const DevelopSettings result =
+            applied(sidecar, {"--luminance-noise-reduction", "60", "--luminance-noise-detail", "20",
+                              "--color-noise-smoothness", "75"});
+        REQUIRE(result.noiseReduction.luminance == 60.0F);
+        REQUIRE(result.noiseReduction.luminanceDetail == 20.0F);
+        REQUIRE(result.noiseReduction.color == 30.0F);
+        REQUIRE(result.noiseReduction.colorSmoothness == 75.0F);
+        REQUIRE(applied(sidecar, {"--luminance-noise-filter", "bilateral"})
+                    .noiseReduction.luminanceFilter == LuminanceNoiseFilter::Bilateral);
+    }
+    SECTION("an unknown filter and an out-of-range amount are usage errors") {
+        std::ostringstream err;
+        REQUIRE_FALSE(cli::readExportEdits({"--luminance-noise-filter", "guided"}, err));
+        REQUIRE_THAT(err.str(), ContainsSubstring("--luminance-noise-filter takes bilateral"));
+        std::ostringstream rangeErr;
+        REQUIRE_FALSE(cli::readExportEdits({"--color-noise-reduction", "101"}, rangeErr));
+        REQUIRE_THAT(rangeErr.str(), ContainsSubstring("--color-noise-reduction accepts 0 to 100"));
+    }
+}
+
+TEST_CASE("Grain the photograph has keeps its pattern, and only the flags turning it on reseed",
+          "[cli][sidecar][grain]") {
+    // Enlarged and coarse, so the grain shows in an 8-bit PNG.
+    const std::vector<std::string> large{"--resize", "256", "--allow-upscale", "--grain-size",
+                                         "100"};
+    const auto with = [&large](std::vector<std::string> flags) {
+        flags.insert(flags.end(), large.begin(), large.end());
+        return flags;
+    };
+    const std::string unseeded = std::to_string(unseededGrainSeed);
+    const test::TempDir directory;
+    const auto bare = copyRaw(directory, "bare.dng");
+    const QImage fixed =
+        exportedPng(bare, with({"--grain-amount", "80", "--grain-seed", unseeded}));
+    REQUIRE_FALSE(fixed.isNull());
+    REQUIRE(fixed != exportedPng(bare, with({})));
+
+    SECTION("an explicit --grain-seed 0 is the fixed pattern, every time") {
+        const QImage first = exportedPng(bare, with({"--grain-amount", "80", "--grain-seed", "0"}));
+        REQUIRE(first == fixed);
+        REQUIRE(exportedPng(bare, with({"--grain-amount", "80", "--grain-seed", "0"})) == fixed);
+    }
+    SECTION("a sidecar with grain and seed 0 is the fixed pattern, every time") {
+        const auto grainy = copyRaw(directory, "grainy.dng");
+        DevelopSettings settings;
+        settings.effects.grain = {.amount = 80.0F};
+        sidecarWith(grainy, settings);
+        REQUIRE(exportedPng(grainy, with({})) == fixed);
+        REQUIRE(exportedPng(grainy, with({})) == fixed);
+        // Changing its amount does not turn it on, so it keeps the pattern.
+        REQUIRE(exportedPng(grainy, with({"--grain-amount", "40"})) ==
+                exportedPng(bare, with({"--grain-amount", "40", "--grain-seed", "0"})));
+    }
+    SECTION("grain the flags turn on gets a random pattern per export") {
+        const QImage first = exportedPng(bare, with({"--grain-amount", "80"}));
+        const QImage second = exportedPng(bare, with({"--grain-amount", "80"}));
+        REQUIRE(first != fixed);
+        REQUIRE(first != second);
+        // Even when the sidecar's grain is off with seed 0, and it is named explicitly then.
+        const auto off = copyRaw(directory, "off.dng");
+        sidecarWith(off, DevelopSettings{});
+        REQUIRE(exportedPng(off, with({"--grain-amount", "80"})) != fixed);
+        REQUIRE(exportedPng(off, with({"--grain-amount", "80", "--grain-seed", "0"})) == fixed);
+    }
+}
+
+TEST_CASE("The tone curve flags replace their own curve and keep the others",
+          "[cli][sidecar][curve]") {
+    DevelopSettings sidecar;
+    sidecar.toneCurve.green.points = {{0.0F, 0.1F}, {1.0F, 1.0F}};
+
+    SECTION("each flag names its own curve") {
+        const DevelopSettings result = applied(
+            sidecar, {"--tone-curve-luma", "0,0;0.5,0.7;1,1", "--tone-curve-red", "0,0;1,0.5"});
+        REQUIRE(result.toneCurve.luma.points ==
+                std::vector<CurvePoint>{{0.0F, 0.0F}, {0.5F, 0.7F}, {1.0F, 1.0F}});
+        REQUIRE(result.toneCurve.red.points == std::vector<CurvePoint>{{0.0F, 0.0F}, {1.0F, 0.5F}});
+        REQUIRE(result.toneCurve.green == sidecar.toneCurve.green);
+        REQUIRE(result.toneCurve.blue.isIdentity());
+    }
+    SECTION("the identity curve undoes a sidecar's") {
+        REQUIRE(applied(sidecar, {"--tone-curve-green", "0,0;1,1"}).toneCurve.green.isIdentity());
+    }
+    SECTION("points may come in any order, with spaces") {
+        const DevelopSettings result = applied(sidecar, {"--tone-curve-blue", "1,1; 0.5,0.4 ;0,0"});
+        REQUIRE(result.toneCurve.blue.points[1] == CurvePoint{0.5F, 0.4F});
+    }
+    SECTION("a malformed curve is a usage error") {
+        for (const char* bad :
+             {"", "0,0", "0,0;1", "0,0;1,1,1", "a,b;1,1", "0,0;0.5,2;1,1",
+              "0,0;0.5,0.5;0.5,0.6;1,1", "0.1,0;1,1", "0,0;0.9,1", "0,0;nan,0.5;1,1",
+              "0,0;0.5,0.5;1,1;", "0,0;0.005,0.5;1,1", "-0.01,0;1,1", "0,0;1.001,1"}) {
+            std::ostringstream err;
+            INFO(bad);
+            REQUIRE_FALSE(cli::readExportEdits({"--tone-curve-luma", bad}, err));
+            REQUIRE_THAT(err.str(), ContainsSubstring("--tone-curve-luma takes 2 to 16 points"));
+        }
+        std::ostringstream err;
+        REQUIRE_FALSE(cli::readExportEdits({"--tone-curve-blue", "0,0;1"}, err));
+        REQUIRE_THAT(err.str(), ContainsSubstring("--tone-curve-blue takes"));
+    }
+    SECTION("sixteen points are the most") {
+        std::string spelled = "0,0";
+        for (int i = 1; i <= 14; ++i) {
+            spelled += ";" + std::to_string(i / 16.0);
+            spelled += "," + std::to_string(i / 16.0);
+        }
+        std::ostringstream err;
+        REQUIRE(cli::readExportEdits({"--tone-curve-luma", spelled + ";1,1"}, err));
+        REQUIRE_FALSE(cli::readExportEdits({"--tone-curve-luma", spelled + ";0.99,0.99;1,1"}, err));
+    }
+}
+
+TEST_CASE("The colour grading flags replace what they name and keep the rest",
+          "[cli][sidecar][grading]") {
+    DevelopSettings sidecar;
+    sidecar.colorGrading.shadows = {220.0F, 30.0F};
+    sidecar.colorGrading.blending = 20.0F;
+
+    SECTION("each flag names its own field") {
+        const DevelopSettings result =
+            applied(sidecar, {"--grade-highlight-hue", "70", "--grade-highlight-saturation", "45",
+                              "--grade-midtone-hue", "30", "--grade-midtone-saturation", "10",
+                              "--grade-balance", "-30"});
+        REQUIRE(result.colorGrading.highlights == GradeZone{70.0F, 45.0F});
+        REQUIRE(result.colorGrading.midtones == GradeZone{30.0F, 10.0F});
+        REQUIRE(result.colorGrading.balance == -30.0F);
+        REQUIRE(result.colorGrading.shadows == sidecar.colorGrading.shadows);
+        REQUIRE(result.colorGrading.blending == 20.0F);
+    }
+    SECTION("a zone's hue and saturation are separate") {
+        const DevelopSettings result = applied(sidecar, {"--grade-shadow-saturation", "0"});
+        REQUIRE(result.colorGrading.shadows == GradeZone{220.0F, 0.0F});
+    }
+    SECTION("values outside their ranges are usage errors") {
+        for (const auto& [flag, value, wording] :
+             {std::tuple{"--grade-shadow-hue", "361", "accepts 0 to 360"},
+              std::tuple{"--grade-midtone-saturation", "101", "accepts 0 to 100"},
+              std::tuple{"--grade-balance", "-101", "accepts -100 to 100"},
+              std::tuple{"--grade-blending", "-1", "accepts 0 to 100"}}) {
+            std::ostringstream err;
+            INFO(flag);
+            REQUIRE_FALSE(cli::readExportEdits({flag, value}, err));
+            REQUIRE_THAT(err.str(), ContainsSubstring(std::string(flag) + " " + wording));
+        }
+    }
+}
+
+TEST_CASE("The export help describes colour grading", "[cli][grading]") {
+    const auto result = invoke({"export", "--help"});
+    REQUIRE(result.code == cli::Success);
+    for (const char* option :
+         {"--grade-shadow-hue <degrees>", "--grade-shadow-saturation <amount>",
+          "--grade-midtone-hue <degrees>", "--grade-midtone-saturation <amount>",
+          "--grade-highlight-hue <degrees>", "--grade-highlight-saturation <amount>",
+          "--grade-balance <amount>", "--grade-blending <amount>", "Colour grading tints"}) {
+        INFO(option);
+        REQUIRE_THAT(result.out, ContainsSubstring(option));
+    }
+}
+
+TEST_CASE("Info shows a grading that differs from the default", "[cli][info][grading]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    DevelopSettings settings;
+    settings.colorGrading.highlights = {70.0F, 45.0F};
+    settings.colorGrading.balance = -30.0F;
+    writeSidecar(openPhoto(raw).with(DevelopState{settings}));
+
+    const auto text = invoke({"info", raw.string()});
+    REQUIRE(text.code == cli::Success);
+    REQUIRE_THAT(text.out, ContainsSubstring("gradeHighlightHue: 70"));
+    REQUIRE_THAT(text.out, ContainsSubstring("gradeHighlightSaturation: 45"));
+    REQUIRE_THAT(text.out, ContainsSubstring("gradeBalance: -30"));
+    REQUIRE_THAT(text.out, !ContainsSubstring("gradeShadow"));
+    REQUIRE_THAT(text.out, !ContainsSubstring("gradeBlending"));
+}
+
+TEST_CASE("Info shows a tone curve as its points", "[cli][info][curve]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    DevelopSettings settings;
+    settings.toneCurve.luma.points = {{0.0F, 0.0F}, {0.25F, 0.2F}, {1.0F, 1.0F}};
+    writeSidecar(openPhoto(raw).with(DevelopState{settings}));
+
+    const auto text = invoke({"info", raw.string()});
+    REQUIRE(text.code == cli::Success);
+    REQUIRE_THAT(text.out, ContainsSubstring("toneCurveLuma: 0,0;0.25,0.2;1,1"));
+    REQUIRE_THAT(text.out, !ContainsSubstring("toneCurveRed"));
+
+    const auto json = invoke({"info", "--json", raw.string()});
+    const auto document = QJsonDocument::fromJson(QByteArray::fromStdString(json.out));
+    REQUIRE(document.isObject());
+    REQUIRE_THAT(json.out, ContainsSubstring("0.25"));
+}
+
 TEST_CASE("Geometry flags keep the sidecar's geometry they do not name", "[cli][sidecar]") {
     DevelopSettings sidecar;
     sidecar.geometry.rotation = QuarterTurn::Clockwise180;
@@ -1885,7 +2279,8 @@ TEST_CASE("Info shows a file without a sidecar as it opens", "[cli][info]") {
     REQUIRE_THAT(result.out, ContainsSubstring("orientation: normal"));
     REQUIRE_THAT(result.out, ContainsSubstring("encoding: camera"));
     REQUIRE_THAT(result.out, ContainsSubstring("sidecar: none"));
-    REQUIRE_THAT(result.out, ContainsSubstring("develop settings: defaults"));
+    // A RAW starts with colour noise reduction, listed as it differs from neutral (ADR 039).
+    REQUIRE_THAT(result.out, ContainsSubstring("develop settings:\n    colorNoiseReduction: 25\n"));
     REQUIRE_THAT(result.out, !ContainsSubstring("rating"));
     REQUIRE_THAT(result.out, !ContainsSubstring("label"));
 }
@@ -2072,7 +2467,7 @@ TEST_CASE("Info --all lists every setting", "[cli][info]") {
         REQUIRE(at >= previous);
         previous = at;
     }
-    REQUIRE(developSettingDescriptors.size() == 51);
+    REQUIRE(developSettingDescriptors.size() == 79);
     REQUIRE_THAT(result.out, ContainsSubstring("temperature: unset"));
 }
 
@@ -2141,7 +2536,10 @@ TEST_CASE("Info --json is one document with the settings in table order", "[cli]
         REQUIRE(file.value("sidecar").isNull());
         REQUIRE(file.value("marks").toObject().value("rating").toInt() == 0);
         REQUIRE(file.value("marks").toObject().value("label").isNull());
-        REQUIRE(file.value("settings").toObject().isEmpty());
+        // What a RAW starts from, against the neutral settings the document assumes.
+        const QJsonObject settings = file.value("settings").toObject();
+        REQUIRE(settings.size() == 1);
+        REQUIRE(settings.value("colorNoiseReduction").toDouble() == 25.0);
     }
     SECTION("a file with one") {
         const auto result = invoke({"info", "--json", edited.string()});
@@ -2161,7 +2559,7 @@ TEST_CASE("Info --json is one document with the settings in table order", "[cli]
     SECTION("--all lists every key in table order") {
         const auto result = invoke({"info", "--json", "--all", plain.string()});
         REQUIRE(result.code == cli::Success);
-        REQUIRE(firstFile(result.out).value("settings").toObject().size() == 51);
+        REQUIRE(firstFile(result.out).value("settings").toObject().size() == 79);
         std::size_t previous = 0;
         for (const FieldDescriptor& descriptor : developSettingDescriptors) {
             const auto at = result.out.find("\"" + std::string(descriptor.key) + "\":");
@@ -2202,7 +2600,7 @@ TEST_CASE("Info --no-sidecar shows the file as it opens without one", "[cli][inf
     REQUIRE(result.code == cli::Success);
     REQUIRE_THAT(result.out, ContainsSubstring("sidecar: " + directory.file("frame.xmp").string() +
                                                " (ignored)"));
-    REQUIRE_THAT(result.out, ContainsSubstring("develop settings: defaults"));
+    REQUIRE_THAT(result.out, ContainsSubstring("develop settings:\n    colorNoiseReduction: 25\n"));
     REQUIRE_THAT(result.out, !ContainsSubstring("rating"));
 
     const auto json = firstFile(invoke({"info", "--json", "--no-sidecar", raw.string()}).out);
@@ -2276,12 +2674,6 @@ TEST_CASE("Info has its own help, usage errors, and writes nothing", "[cli][info
 }
 
 namespace {
-
-/// @brief Reads a file's bytes.
-std::string bytesOf(const std::filesystem::path& path) {
-    std::ifstream in(path, std::ios::binary);
-    return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
-}
 
 /// @brief Lists the names in a directory, sorted.
 std::vector<std::string> namesIn(const std::filesystem::path& directory) {

@@ -75,3 +75,27 @@ Checkpoints are released on the preview thread, as the device requires.
   them, as main's cached derivative buffers did.
 - **A decode block in the plan** will move source identity into the engine. The
   preview's per-buffer binding can then go.
+
+## Note, 2026-10-04
+
+A fourth boundary, `Stage::Effects`, follows the resize
+([ADR 037](037-effects-run-after-the-resize-and-the-vignette-follows-the-crop.md)).
+Renders end there, and the preview keeps a resize checkpoint beside the
+pointwise and geometry ones, so a vignette edit resumes after the resize. With
+every effect off the boundary collapses onto the resize.
+
+## Note, 2026-10-05
+
+A first boundary, `Stage::Denoise`, comes before the pointwise pass
+([ADR 039](039-noise-reduction-is-the-first-pass-and-reads-the-as-shot-luminance.md)):
+a tone or white balance edit with noise reduction on resumes after it, and
+pays only the chain (the chain reads the checkpoint without copying it). With
+noise reduction off the boundary collapses onto the source and the preview
+keeps no checkpoint there.
+
+## Note, 2026-10-06
+
+The CPU pointwise pass now runs over bands of rows on threads, with the
+single-threaded bits ([ADR 041](041-texture-clarity-and-dehaze-read-a-context-of-log-luminance.md)): 0.71 s to 0.31 s for the chain at 24 MP.
+Texture, Clarity and Dehaze resume from the Denoise checkpoint; their context
+is recomputed with the chain.

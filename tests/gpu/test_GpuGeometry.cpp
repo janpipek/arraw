@@ -284,7 +284,7 @@ TEST_CASE("The geometry pass handles one-pixel-wide and one-pixel-tall images", 
 }
 
 TEST_CASE("The geometry pass keeps the CPU's accuracy on a large straightened image",
-          "[gpu][geometry]") {
+          "[gpu][geometry][slow]") {
     for (const double angle : {0.3, 7.5, -30.0}) {
         CAPTURE(angle);
         const auto opaque = compareGeometry(labelled({1000, 700}, true), ImageOrientation::Normal,

@@ -92,3 +92,19 @@ as a different kind of source without reshaping the levels.
 - When spatial stages arrive (lens correction, spots, noise reduction), each
   works on the chosen level. Any radius in pixels must scale with the level,
   which ADR 020 already anticipates for scale-aware stages.
+
+## Note, 2026-10-05
+
+The level is now known from the pixels: `halved` doubles
+`ImageBuffer::pixelScale`, and noise reduction divides its radii by the
+source's scale ([ADR 039](039-noise-reduction-is-the-first-pass-and-reads-the-as-shot-luminance.md)). The preview, the curve histogram and the thumbnail no
+longer tell the render which level they develop, and a half-size decode counts
+as a reduction of 2.
+
+## Note, 2026-10-06
+
+Clarity and Dehaze are relative to the long edge and their grid keeps its
+sensor-pixel cell on a pyramid level, so a level-2 preview shows within 0.2%
+of the effect the full render does. Texture is in sensor pixels and held at
+one pixel of the level, so a preview shows it coarser than 1:1
+([ADR 041](041-texture-clarity-and-dehaze-read-a-context-of-log-luminance.md)).

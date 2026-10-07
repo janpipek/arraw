@@ -88,6 +88,7 @@ TEST_CASE("Plan prefixes ignore later geometry but include every pointwise input
         REQUIRE_FALSE(prefixMatches(original, other, Stage::Pointwise));
         REQUIRE(prefixMatches(original, other, Stage::Geometry) == (original == other));
         REQUIRE(prefixMatches(original, other, Stage::Resize) == (original == other));
+        REQUIRE(prefixMatches(original, other, Stage::Effects) == (original == other));
     };
     changed = original;
     changed.toWorking = Matrix3{};
@@ -104,6 +105,14 @@ TEST_CASE("Plan prefixes ignore later geometry but include every pointwise input
         check(changed);
     }
     REQUIRE(prefixMatches(original, original, Stage::Geometry) == (original == original));
+
+    // The effects are the last group: everything before them still matches.
+    changed = original;
+    changed.effects.vignette.active = true;
+    REQUIRE(prefixMatches(original, changed, Stage::Resize));
+    REQUIRE_FALSE(prefixMatches(original, changed, Stage::Effects));
+    REQUIRE(prefixMatches(original, changed, Stage::Effects) == (original == changed));
+
     REQUIRE_FALSE(prefixMatches(original, original, static_cast<Stage>(-1)));
     REQUIRE_FALSE(prefixMatches(original, original, static_cast<Stage>(stageCount)));
 }
@@ -207,6 +216,10 @@ TEST_CASE("Developing until each boundary gives host checkpoints that read back 
     REQUIRE(resized.size().width <= 20);
     requireIdentical(develop(source, state, request), resized.readBack());
 
+    const auto effects = developUntil(source, state, Stage::Effects, request);
+    REQUIRE(effects.boundary() == Stage::Effects);
+    requireIdentical(develop(source, state, request), effects.readBack());
+
     REQUIRE_THROWS_AS(developUntil(source, state, static_cast<Stage>(stageCount)),
                       std::invalid_argument);
 }
@@ -299,5 +312,76 @@ TEST_CASE("A render cannot stop before its checkpoint", "[checkpoint][develop]")
     const auto geometry = developUntil(source, state, Stage::Geometry);
     REQUIRE_THROWS_AS(resumeFrom(geometry, source, state, Stage::Pointwise), std::invalid_argument);
     REQUIRE_THROWS_AS(resumeFrom(geometry, source, state, static_cast<Stage>(stageCount)),
+                      std::invalid_argument);
+}
+
+TEST_CASE("Asking whether a checkpoint can be resumed gives the answer the resume would",
+          "[checkpoint][develop]") {
+    const ImageBuffer source = resumeSource();
+    const ImageBuffer reduced = halved(source);
+    const DevelopState state = resumeState();
+    const DevelopState brighter = resumeState(1.5F);
+    const DevelopState straighter = resumeState(0.5F, 8.0);
+    const auto pointwise = developUntil(source, state, Stage::Pointwise);
+    const auto geometry = developUntil(source, state, Stage::Geometry);
+    const auto resized = developUntil(source, state, Stage::Resize, requestOf(20));
+
+    struct Case {
+        const RenderCheckpoint* from;
+        const ImageBuffer* source;
+        const DevelopState* state;
+        RenderRequest request;
+        bool valid;
+    };
+    const std::array cases{
+        Case{&pointwise, &source, &state, {}, true},
+        Case{&pointwise, &source, &straighter, requestOf(17), true},
+        Case{&pointwise, &source, &brighter, {}, false},
+        Case{&pointwise, &reduced, &state, {}, false},
+        Case{&geometry, &source, &state, requestOf(9), true},
+        Case{&geometry, &source, &straighter, {}, false},
+        Case{&geometry, &source, &brighter, {}, false},
+        Case{&geometry, &reduced, &state, {}, false},
+        Case{&resized, &source, &state, requestOf(20), true},
+        Case{&resized, &source, &state, requestOf(21), false},
+    };
+    for (const Case& item : cases) {
+        CAPTURE(item.from->boundary(), item.valid);
+        REQUIRE(canResumeFrom(*item.from, *item.source, *item.state, Stage::Resize, item.request) ==
+                item.valid);
+        if (item.valid) {
+            REQUIRE_NOTHROW(
+                resumeFrom(*item.from, *item.source, *item.state, Stage::Resize, item.request));
+        } else {
+            REQUIRE_THROWS_AS(
+                resumeFrom(*item.from, *item.source, *item.state, Stage::Resize, item.request),
+                std::invalid_argument);
+        }
+    }
+}
+
+TEST_CASE("Asking whether a checkpoint can be resumed still refuses a bad request",
+          "[checkpoint][develop]") {
+    const ImageBuffer source = resumeSource();
+    const DevelopState state = resumeState();
+    const auto geometry = developUntil(source, state, Stage::Geometry);
+
+    // A bad request is the caller's mistake, not a stale checkpoint.
+    const RenderRequest backwards{.region = RenderRequest::Region{.left = 0.6, .right = 0.2}};
+    REQUIRE_THROWS_AS(canResumeFrom(geometry, source, state, Stage::Resize, backwards),
+                      std::invalid_argument);
+    // As for the resume, a stop before the resize does not read the request.
+    REQUIRE(canResumeFrom(geometry, source, state, Stage::Geometry, backwards));
+
+    // So is a stop that is no boundary, or comes before the checkpoint's.
+    REQUIRE_THROWS_AS(canResumeFrom(geometry, source, state, Stage::Pointwise),
+                      std::invalid_argument);
+    REQUIRE_THROWS_AS(canResumeFrom(geometry, source, state, static_cast<Stage>(stageCount)),
+                      std::invalid_argument);
+
+    // And a state that cannot be developed.
+    DevelopState broken = state;
+    broken.settings.tone.exposure = std::numeric_limits<float>::quiet_NaN();
+    REQUIRE_THROWS_AS(canResumeFrom(geometry, source, broken, Stage::Resize),
                       std::invalid_argument);
 }

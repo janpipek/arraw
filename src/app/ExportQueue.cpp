@@ -49,7 +49,7 @@ public:
         }
         try {
             const RenderCheckpoint checkpoint =
-                developOnGpu(*context_, *job.source, job.state, Stage::Resize, job.request);
+                developOnGpu(*context_, *job.source, job.state, Stage::Effects, job.request);
             return checkpoint.readBack();
         } catch (const std::exception& error) {
             failure = error.what();

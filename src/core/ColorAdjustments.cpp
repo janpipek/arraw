@@ -87,14 +87,6 @@ float bandWeight(float hue, std::size_t band) {
     return w * w * (3.0F - 2.0F * w);
 }
 
-/// @brief Checks a setting is finite and clamps it into its range.
-float clampedSetting(float value, float least, float most, const char* name) {
-    if (!std::isfinite(value)) {
-        throw std::invalid_argument(std::string("A ") + name + " adjustment must be finite");
-    }
-    return std::clamp(value, least, most);
-}
-
 /// @brief Values of one HSL control, from the bands in order.
 template <float HueBand::* Member> BandValues hslValues(const HslSettings& hsl, const char* name) {
     const HueBand* bands[hueBandCount]{&hsl.red,  &hsl.orange, &hsl.yellow, &hsl.green,
@@ -110,9 +102,17 @@ template <float HueBand::* Member> BandValues hslValues(const HslSettings& hsl, 
 
 } // namespace
 
+float arraw::clampedSetting(float value, float least, float most, const char* name) {
+    if (!std::isfinite(value)) {
+        throw std::invalid_argument(std::string("A ") + name + " adjustment must be finite");
+    }
+    return std::clamp(value, least, most);
+}
+
 ColorAdjustmentPlan arraw::colorAdjustmentPlanFor(const ColorSettings& color,
                                                   const HslSettings& hsl,
-                                                  const BlackAndWhiteSettings& blackAndWhite) {
+                                                  const BlackAndWhiteSettings& blackAndWhite,
+                                                  const ColorGradingSettings& colorGrading) {
     ColorAdjustmentPlan plan;
     const float saturation =
         clampedSetting(color.saturation, weakestSaturation, strongestSaturation, "saturation");
@@ -138,6 +138,7 @@ ColorAdjustmentPlan arraw::colorAdjustmentPlanFor(const ColorSettings& color,
     for (std::size_t i = 0; i < hueBandCount; ++i) {
         plan.grayMix[i] = clampedSetting(mix[i], darkestGrayMix, lightestGrayMix, "gray mix");
     }
+    plan.grading = colorGradingPlanFor(colorGrading);
     return plan;
 }
 

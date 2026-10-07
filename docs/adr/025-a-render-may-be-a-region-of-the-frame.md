@@ -61,3 +61,27 @@ resize does anything, a cut included.
 - A region at the edge snaps outward, so the result can be up to a pixel
   larger than the fraction asked for, and a pan by less than a pixel does not
   move it.
+
+## Note, 2026-10-04
+
+Effects run after the region is cut and resized
+([ADR 037](037-effects-run-after-the-resize-and-the-vignette-follows-the-crop.md)).
+Each output pixel's place in the cropped frame is worked out from `ResizePlan`
+and the geometry's output size, so a region shows the falloff the whole frame
+has at the same place.
+
+## Note, 2026-10-05
+
+Noise reduction runs on the whole source before geometry
+([ADR 039](039-noise-reduction-is-the-first-pass-and-reads-the-as-shot-luminance.md)),
+so a region is still the crop of the whole render, bit for bit, and needs no
+margin. When the earlier stages are restricted to a region's footprint,
+`denoiseReach(plan.denoise)` gives the margin in source pixels the Denoise
+pass needs around it.
+
+## Note, 2026-10-06
+
+The Presence context is made from the whole source ([ADR 041](041-texture-clarity-and-dehaze-read-a-context-of-log-luminance.md)), so a
+region with Texture, Clarity or Dehaze is still the crop of the whole render,
+bit for bit. `presenceReach(plan)` is the margin a footprint-restricted render
+would need for it.

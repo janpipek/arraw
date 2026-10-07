@@ -56,7 +56,10 @@ half_size=False)`.
 **The strip's thumbnails are built on these two** (`src/app/ThumbnailWorker`,
 `ThumbnailCache`):
 - **One worker thread, at low OS priority and CPU only.** The preview owns the
-  GPU, and a thumbnail must never slow a slider.
+  GPU, and a thumbnail must never slow a slider. The threads its banded loops
+  start take that priority on (`detail::adoptThreadPriority`): Linux passes a
+  nice value on to a new thread by itself, Windows starts every thread at
+  normal priority, and macOS is not relied on to pass its class on.
 - **Order:** for each shot, the embedded preview first, then arraw's rendering of
   the *saved* state (half-size decode, pyramid, `FitInside{512, 512}`). The
   visible shots go first, all embedded previews come before any developed
@@ -82,3 +85,12 @@ half_size=False)`.
   accepted in the plan.
 - There is no fixture with several previews, so the choice among them is
   specified here but not pinned by a test; fixtures carry at most one.
+
+## Note, 2026-10-05
+
+A half-size decode has a pixel scale of 2 (`ImageBuffer::pixelScale`), and its
+halvings 4, 8 and so on, so noise reduction on a thumbnail shrinks its reach to
+match ([ADR 039](039-noise-reduction-is-the-first-pass-and-reads-the-as-shot-luminance.md)). A photograph with no recorded develop state is developed, and
+its thumbnail cached, with `defaultStateFor` its kind. The worker reads the
+file's header to tell a RAW, which costs a header parse but no decode, also on
+a cache hit.

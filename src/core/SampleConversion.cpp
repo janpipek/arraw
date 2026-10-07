@@ -1,5 +1,7 @@
 #include "SampleConversion.h"
 
+#include "RowBands.h"
+
 #include <cstddef>
 #include <cstdint>
 
@@ -8,19 +10,26 @@ namespace arraw {
 namespace {
 
 /// @brief Converts every pixel of one sample type.
+///
+/// In bands of rows (::arraw::detail::forEachRowBand), each pixel on its own,
+/// so the bits are the single-threaded ones; one unit of an observed span.
 template <typename Sample> void convert(const ImageBuffer& source, ImageBuffer& result) {
     const auto input = source.samples<Sample>();
     const auto output = result.samples<float>();
     const std::size_t channels = channelCount(source.format());
-    const auto pixels = static_cast<std::size_t>(source.size().pixelCount());
-    for (std::size_t pixel = 0; pixel < pixels; ++pixel) {
-        const auto* in = &input[pixel * channels];
-        auto* out = &output[pixel * 4];
-        out[0] = toUnit(in[0]);
-        out[1] = toUnit(in[1]);
-        out[2] = toUnit(in[2]);
-        out[3] = channels == 4 ? toUnit(in[3]) : 1.0F;
-    }
+    const ImageSize size = source.size();
+    detail::forEachRowBand(size.height, size.width, [&](std::uint32_t first, std::uint32_t last) {
+        const std::size_t end = static_cast<std::size_t>(last) * size.width;
+        for (std::size_t pixel = static_cast<std::size_t>(first) * size.width; pixel < end;
+             ++pixel) {
+            const auto* in = &input[pixel * channels];
+            auto* out = &output[pixel * 4];
+            out[0] = toUnit(in[0]);
+            out[1] = toUnit(in[1]);
+            out[2] = toUnit(in[2]);
+            out[3] = channels == 4 ? toUnit(in[3]) : 1.0F;
+        }
+    });
 }
 
 } // namespace
@@ -31,6 +40,7 @@ ImageBuffer toRgbaF32(const ImageBuffer& source) {
     }
     ImageBuffer result(source.size(), PixelFormat::RgbaF32, source.encoding(),
                        source.orientation());
+    result.setPixelScale(source.pixelScale());
     switch (source.format()) {
     case PixelFormat::RgbU8:
     case PixelFormat::RgbaU8:

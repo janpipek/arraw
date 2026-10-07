@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <span>
 #include <stdexcept>
 #include <type_traits>
@@ -14,6 +15,57 @@
 #include <vector>
 
 namespace arraw {
+
+namespace detail {
+
+/// @brief Allocator whose vectors leave their elements uninitialised unless given a value.
+///
+/// Sizing a `std::vector` with it allocates without writing the memory, which
+/// ::arraw::ImageBuffer then zeroes on every thread rather than one. An
+/// implementation detail of the buffer's storage.
+/// @tparam T Element type, a trivially constructible sample.
+template <typename T> struct DefaultInitAllocator {
+    using value_type = T;
+    using is_always_equal = std::true_type;
+
+    DefaultInitAllocator() = default;
+
+    template <typename U> constexpr DefaultInitAllocator(const DefaultInitAllocator<U>&) noexcept {}
+
+    /// @brief Allocates storage for some elements.
+    /// @param count Elements to make room for.
+    /// @return The first element's address.
+    [[nodiscard]] T* allocate(std::size_t count) {
+        return std::allocator<T>().allocate(count);
+    }
+
+    /// @brief Releases storage obtained from ::arraw::detail::DefaultInitAllocator::allocate.
+    void deallocate(T* pointer, std::size_t count) noexcept {
+        std::allocator<T>().deallocate(pointer, count);
+    }
+
+    /// @brief Default-initialises an element, which for a sample writes nothing.
+    template <typename U>
+    void construct(U* where) noexcept(std::is_nothrow_default_constructible_v<U>) {
+        ::new (static_cast<void*>(where)) U;
+    }
+
+    /// @brief Constructs an element from arguments, as `std::allocator` does.
+    template <typename U, typename... Args> void construct(U* where, Args&&... args) {
+        ::new (static_cast<void*>(where)) U(std::forward<Args>(args)...);
+    }
+
+    template <typename U>
+    friend constexpr bool operator==(const DefaultInitAllocator&,
+                                     const DefaultInitAllocator<U>&) noexcept {
+        return true;
+    }
+};
+
+/// @brief Vector of samples that is sized without being filled.
+template <typename T> using SampleVector = std::vector<T, DefaultInitAllocator<T>>;
+
+} // namespace detail
 
 /// @brief Pixel dimensions of an image, in pixels.
 struct ImageSize {
@@ -108,6 +160,10 @@ inline constexpr PixelFormat workingFormat = PixelFormat::RgbaF32;
 class ImageBuffer {
 public:
     /// @brief Allocates a zero-initialised buffer.
+    ///
+    /// The samples are zeroed across threads, in bands of rows, without
+    /// counting as a unit of progress. A large buffer made inside a banded loop
+    /// would start threads of its own on every band: make it before the loop.
     /// @param size Pixel dimensions; must be non-empty.
     /// @param format Sample layout to store.
     /// @param encoding Meaning of the RGB sample values.
@@ -117,7 +173,6 @@ public:
     ImageBuffer(ImageSize size, PixelFormat format, ColorEncoding encoding,
                 ImageOrientation orientation = ImageOrientation::Normal);
 
-    ImageBuffer(const ImageBuffer&) = delete;
     ImageBuffer& operator=(const ImageBuffer&) = delete;
     ImageBuffer(ImageBuffer&&) noexcept = default;
     ImageBuffer& operator=(ImageBuffer&&) noexcept = default;
@@ -142,6 +197,24 @@ public:
     [[nodiscard]] ImageOrientation orientation() const noexcept {
         return orientation_;
     }
+
+    /// @brief Sensor pixels one pixel of this buffer spans along each side.
+    ///
+    /// 1 for a full decode. A spatial stage whose reach is measured in sensor
+    /// pixels, such as noise reduction, divides it by this, so that a reduced
+    /// copy develops as an approximation of the full photograph (ADR 039).
+    /// ::arraw::halved doubles it, a half-size RAW decode gives 2, a resize
+    /// multiplies it by the reduction, and copies, conversions, crops and
+    /// development before the resize keep it. It is a fact about the pixels, so
+    /// it travels with them rather than with a request.
+    [[nodiscard]] double pixelScale() const noexcept {
+        return pixelScale_;
+    }
+
+    /// @brief Says how many sensor pixels one pixel of this buffer spans along each side.
+    /// @param scale The span; finite and above zero.
+    /// @throws std::invalid_argument if @p scale is not finite or not above zero.
+    void setPixelScale(double scale);
 
     /// @brief Number of bytes between the start of consecutive rows.
     [[nodiscard]] std::size_t rowStride() const noexcept {
@@ -172,31 +245,39 @@ public:
     /// @throws std::bad_variant_access if @p T does not match @ref format().
     template <typename T> [[nodiscard]] std::span<const T> samples() const {
         static_assert(isSupportedSample<T>);
-        const auto& values = std::get<std::vector<T>>(storage_);
+        const auto& values = std::get<detail::SampleVector<T>>(storage_);
         return {values.data(), values.size()};
     }
 
     /// @copydoc samples() const
     template <typename T> [[nodiscard]] std::span<T> samples() {
         static_assert(isSupportedSample<T>);
-        auto& values = std::get<std::vector<T>>(storage_);
+        auto& values = std::get<detail::SampleVector<T>>(storage_);
         return {values.data(), values.size()};
     }
 
-    /// @brief Create an independent copy of the buffer.
+    /// @brief Create an independent copy of the buffer, its pixel scale included.
     [[nodiscard]] ImageBuffer clone() const;
 
-    /// @brief Holds real, correctly-aligned `std::vector<T>` objects rather
+    /// @brief Holds real, correctly-aligned vector objects rather
     /// than a `std::vector<std::byte>` blob.
     ///
     /// That's what lets samples<T>() and bytes() both be legal, UB-free
     /// views over the same memory: reading any object's representation as
     /// bytes is always allowed, but reinterpreting a raw byte buffer back as
     /// float (say) is not, without extra ceremony.
-    using Storage =
-        std::variant<std::vector<std::uint8_t>, std::vector<std::uint16_t>, std::vector<float>>;
+    ///
+    /// The vectors do not fill themselves when sized (see
+    /// ::arraw::detail::DefaultInitAllocator): the constructor zeroes them on
+    /// every thread, which a vector's own fill, on one, takes ~190 ms for a
+    /// 24 MP RGBA float buffer to do (ADR 043).
+    using Storage = std::variant<detail::SampleVector<std::uint8_t>,
+                                 detail::SampleVector<std::uint16_t>, detail::SampleVector<float>>;
 
 private:
+    /// @brief Copies the samples as they are, without zeroing first; only clone() copies.
+    ImageBuffer(const ImageBuffer&) = default;
+
     template <typename T>
     static constexpr bool isSupportedSample =
         std::is_same_v<T, std::uint8_t> || std::is_same_v<T, std::uint16_t> ||
@@ -206,6 +287,7 @@ private:
     PixelFormat format_;
     ColorEncoding encoding_;
     ImageOrientation orientation_;
+    double pixelScale_ = 1.0;
     std::size_t rowStride_;
     Storage storage_;
 };

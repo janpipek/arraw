@@ -1,5 +1,7 @@
 #include "PhotoView.h"
 
+#include "CropOverlay.h"
+
 #include <QMouseEvent>
 #include <QPaintEvent>
 #include <QPainter>
@@ -30,7 +32,46 @@ PhotoView::PhotoView(QWidget* parent) : QWidget(parent) {
     // reach the window's actions, which step between photographs.
     setFocusPolicy(Qt::ClickFocus);
     setAutoFillBackground(false);
+    crop_ = new CropOverlay(this);
+    crop_->hide();
     updateCursor();
+}
+
+void PhotoView::setCropMode(bool cropping) {
+    if (cropping == isCropMode()) {
+        return;
+    }
+    crop_->setGeometry(rect());
+    if (cropping) {
+        crop_->show();
+        crop_->raise();
+        // Whatever gives the view the focus back, such as Enter in a spin box, gives it to
+        // the overlay, which claims the mode's keys (ADR 040).
+        setFocusProxy(crop_);
+        crop_->setFocus();
+        return;
+    }
+    // The view takes the focus before the overlay hides: hiding the focused widget would pass
+    // the focus on to the next one in the chain, such as a spin box of the panel, which would
+    // then take the keys meant for the window (R, Ctrl+Z).
+    const bool focused = crop_->hasFocus();
+    setFocusProxy(nullptr);
+    if (focused) {
+        setFocus();
+    }
+    crop_->hide();
+}
+
+QImage PhotoView::wholeFrameImage() const {
+    constexpr double tolerance = 1e-3;
+    const bool whole = !image_.isNull() && imageRegion_.left() <= tolerance &&
+                       imageRegion_.top() <= tolerance && imageRegion_.right() >= 1.0 - tolerance &&
+                       imageRegion_.bottom() >= 1.0 - tolerance;
+    return whole ? image_ : background_;
+}
+
+bool PhotoView::isCropMode() const {
+    return !crop_->isHidden();
 }
 
 QSize PhotoView::devicePixels() const {
@@ -73,7 +114,13 @@ void PhotoView::setFrameSize(QSize frame) {
     updateCursor();
 }
 
+void PhotoView::setStandIn(const QImage& standIn) {
+    standIn_ = standIn;
+    update();
+}
+
 void PhotoView::setImage(const QImage& image, const QRectF& region, const QImage& background) {
+    standIn_ = {};
     background_ = background;
     image_ = image;
     imageRegion_ = region;
@@ -89,6 +136,7 @@ void PhotoView::setBackground(const QImage& background) {
 void PhotoView::resetView() {
     image_ = {};
     background_ = {};
+    standIn_ = {};
     update();
     adopt(ViewTransform::fitted(QSizeF(frame_), QSizeF(devicePixels())), true, false);
 }
@@ -116,15 +164,28 @@ void PhotoView::zoomBy(double factor) {
 void PhotoView::paintEvent(QPaintEvent* /*event*/) {
     QPainter painter(this);
     painter.fillRect(rect(), palette().color(QPalette::Window));
-    if (image_.isNull() || imageRegion_.isEmpty() || frame_.isEmpty()) {
+    if (frame_.isEmpty()) {
         return;
     }
     const ViewTransform t = transform();
+    const double ratio = devicePixelRatioF();
+    if (image_.isNull() || imageRegion_.isEmpty()) {
+        if (!standIn_.isNull()) {
+            // Fitted inside the frame with its own shape, which the caller keeps close to it.
+            const QRectF frame(t.viewFromFrame({0.0, 0.0}) / ratio,
+                               t.viewFromFrame({1.0, 1.0}) / ratio);
+            QSizeF fitted = QSizeF(standIn_.size()).scaled(frame.size(), Qt::KeepAspectRatio);
+            QRectF target(QPointF(), fitted);
+            target.moveCenter(frame.center());
+            painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+            painter.drawImage(target, standIn_);
+        }
+        return;
+    }
     const QPointF topLeft = t.viewFromFrame(imageRegion_.topLeft());
     const QPointF bottomRight = t.viewFromFrame(imageRegion_.bottomRight());
     // Whole device pixels at the edges: at 1:1 the render then lands on the
     // screen's pixels, and is not resampled by a fraction of one.
-    const double ratio = devicePixelRatioF();
     const QRectF target(
         QPointF(std::round(topLeft.x()) / ratio, std::round(topLeft.y()) / ratio),
         QPointF(std::round(bottomRight.x()) / ratio, std::round(bottomRight.y()) / ratio));
@@ -142,6 +203,7 @@ void PhotoView::paintEvent(QPaintEvent* /*event*/) {
 
 void PhotoView::resizeEvent(QResizeEvent* event) {
     QWidget::resizeEvent(event);
+    crop_->setGeometry(rect());
     // Fitting follows the size; a zoom is kept, with the centre clamped anew.
     adopt(transform(), fit_, false);
 }

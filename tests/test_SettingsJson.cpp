@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 using namespace arraw;
 
@@ -228,4 +229,47 @@ TEST_CASE("Settings that are not valid are not written", "[settings][json]") {
     DevelopSettings settings;
     settings.tone.exposure = 1000.0F;
     REQUIRE_THROWS_AS(settingsToJson(settings), std::invalid_argument);
+}
+
+TEST_CASE("A tone curve is written as a list of points", "[settings][json]") {
+    DevelopSettings settings;
+    settings.toneCurve.red.points = {{0.0F, 0.1F}, {0.25F, 0.5F}, {1.0F, 1.0F}};
+    const std::string text = settingsToJson(settings);
+    REQUIRE(text.find("\"toneCurveLuma\": [[0, 0], [1, 1]],") != std::string::npos);
+    REQUIRE(text.find("\"toneCurveRed\": [[0, 0.1], [0.25, 0.5], [1, 1]],") != std::string::npos);
+
+    CollectedDiagnostics log;
+    REQUIRE(applySettingsJson(text, {}, log) == settings);
+    REQUIRE(log.entries().empty());
+}
+
+TEST_CASE("A tone curve is read from a list of pairs", "[settings][json]") {
+    CollectedDiagnostics log;
+    const DevelopSettings result = applySettingsJson(
+        document(
+            R"("toneCurveGreen": [[1, 1], [0.5, 0.4], [0, 0]], "toneCurveBlue": [[0, 0.5], [1, 3]])"),
+        {}, log);
+    const std::vector<CurvePoint> green{{0.0F, 0.0F}, {0.5F, 0.4F}, {1.0F, 1.0F}};
+    const std::vector<CurvePoint> blue{{0.0F, 0.5F}, {1.0F, 1.0F}};
+    REQUIRE(result.toneCurve.green.points == green);
+    REQUIRE(result.toneCurve.blue.points == blue);
+    REQUIRE(log.entries().size() == 1);
+    REQUIRE(log.entries().front().notice == Notice::SettingClamped);
+}
+
+TEST_CASE("A tone curve that is not a list of valid pairs is reported and skipped",
+          "[settings][json]") {
+    for (const char* entry :
+         {R"("toneCurveLuma": 1)", R"("toneCurveLuma": [])", R"("toneCurveLuma": [[0, 0]])",
+          R"("toneCurveLuma": [[0, 0, 0], [1, 1]])", R"("toneCurveLuma": [[0, "a"], [1, 1]])",
+          R"("toneCurveLuma": [0, 1])",
+          R"("toneCurveLuma": [[0, 0], [0.5, 0.5], [0.5, 0.6], [1, 1]])",
+          R"("toneCurveLuma": {"x": 1})", R"("toneCurveLuma": null)"}) {
+        INFO(entry);
+        CollectedDiagnostics log;
+        const DevelopSettings result = applySettingsJson(document(entry), {}, log);
+        REQUIRE(result == DevelopSettings{});
+        REQUIRE(log.entries().size() == 1);
+        REQUIRE(log.entries().front().notice == Notice::SettingMalformed);
+    }
 }

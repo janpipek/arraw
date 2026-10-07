@@ -59,3 +59,11 @@ The title shows the file name with Qt's `[*]` modified marker.
   only when there are no unsaved changes.
 - Discarding after a failed `openPhoto`-then-`loadImage` is possible: Open…
   reads the sidecar before asking, but decodes after.
+
+## Note, 2026-10-05
+
+Rating a photograph that has no sidecar creates one that holds the marks alone,
+with no `arraw:version` and no settings. It records no develop state, so the
+photograph still opens with what its kind starts from (a RAW's colour noise
+reduction, [ADR 039](039-noise-reduction-is-the-first-pass-and-reads-the-as-shot-luminance.md)). A session's own mark writes go through `writeSidecar` of
+the saved document, so they write its state too, as before.

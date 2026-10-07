@@ -3,6 +3,7 @@
 #include "DeviceImageState.h"
 #include "GpuDevice.h"
 #include "GpuPlan.h"
+#include "ProgressScope.h"
 #include "TimingTrace.h"
 
 #include <QByteArray>
@@ -20,6 +21,7 @@
 
 #include <atomic>
 #include <cassert>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -232,8 +234,10 @@ std::string describe(ImageSize size) {
 class RhiDeviceImage final : public detail::DeviceImageState {
 public:
     RhiDeviceImage(std::shared_ptr<detail::GpuDevice> owner, std::unique_ptr<QRhiTexture> pixels,
-                   ImageSize dimensions, ColorEncoding meaning, ImageOrientation source)
-        : DeviceImageState(owner->id, dimensions, PixelFormat::RgbaF32, std::move(meaning), source),
+                   ImageSize dimensions, ColorEncoding meaning, ImageOrientation source,
+                   double scale)
+        : DeviceImageState(owner->id, dimensions, PixelFormat::RgbaF32, std::move(meaning), source,
+                           scale, pixels->format() == QRhiTexture::R32F ? 1 : 4),
           device_(std::move(owner)), texture_(std::move(pixels)) {}
 
     RhiDeviceImage(const RhiDeviceImage&) = delete;
@@ -272,17 +276,29 @@ public:
         const QRhiReadbackResult& result = *pending;
 
         ImageBuffer buffer(size, format, encoding, orientation);
+        buffer.setPixelScale(pixelScale);
         const std::span<std::byte> destination = buffer.bytes();
         // Every backend returns rows tightly packed, which is also the
         // buffer's own layout, so one exact size check covers the stride too.
+        const std::size_t expectedBytes = destination.size() / 4 * channels;
         const QSize expected(static_cast<int>(size.width), static_cast<int>(size.height));
         if (result.pixelSize != expected ||
-            static_cast<std::size_t>(result.data.size()) != destination.size()) {
+            static_cast<std::size_t>(result.data.size()) != expectedBytes) {
             throw std::runtime_error(
                 "The GPU device read back " + std::to_string(result.data.size()) + " bytes of a " +
-                describe(size) + " texture; expected " + std::to_string(destination.size()));
+                describe(size) + " texture; expected " + std::to_string(expectedBytes));
         }
-        std::memcpy(destination.data(), result.data.constData(), destination.size());
+        if (channels == 4) {
+            std::memcpy(destination.data(), result.data.constData(), destination.size());
+            return buffer;
+        }
+        // A scalar texture reads as a pass samples it: (r, 0, 0, 1).
+        const auto samples = buffer.samples<float>();
+        for (std::size_t pixel = 0; pixel < samples.size() / 4; ++pixel) {
+            std::memcpy(&samples[pixel * 4], result.data.constData() + pixel * sizeof(float),
+                        sizeof(float));
+            samples[pixel * 4 + 3] = 1.0F;
+        }
         return buffer;
     }
 
@@ -311,6 +327,14 @@ std::string_view passName(GpuPass pass) {
         return "resize-across-opaque";
     case GpuPass::ResizeDownOpaque:
         return "resize-down-opaque";
+    case GpuPass::Effects:
+        return "effects";
+    case GpuPass::DenoiseFilter:
+        return "denoise-filter";
+    case GpuPass::DenoiseCombine:
+        return "denoise-combine";
+    case GpuPass::PresenceFilter:
+        return "presence-filter";
     }
     return "unknown";
 }
@@ -332,6 +356,14 @@ QString fragmentShaderOf(GpuPass pass) {
         return QStringLiteral(":/arraw/shaders/resize_across_opaque.frag.qsb");
     case GpuPass::ResizeDownOpaque:
         return QStringLiteral(":/arraw/shaders/resize_down_opaque.frag.qsb");
+    case GpuPass::Effects:
+        return QStringLiteral(":/arraw/shaders/effects.frag.qsb");
+    case GpuPass::DenoiseFilter:
+        return QStringLiteral(":/arraw/shaders/denoise_filter.frag.qsb");
+    case GpuPass::DenoiseCombine:
+        return QStringLiteral(":/arraw/shaders/denoise_combine.frag.qsb");
+    case GpuPass::PresenceFilter:
+        return QStringLiteral(":/arraw/shaders/presence_filter.frag.qsb");
     }
     return {};
 }
@@ -350,6 +382,13 @@ std::size_t uniformSizeOf(GpuPass pass) {
     case GpuPass::ResizeAcrossOpaque:
     case GpuPass::ResizeDownOpaque:
         return sizeof(GpuResizeBlock);
+    case GpuPass::Effects:
+        return sizeof(GpuEffectsBlock);
+    case GpuPass::DenoiseFilter:
+    case GpuPass::DenoiseCombine:
+        return sizeof(GpuDenoiseBlock);
+    case GpuPass::PresenceFilter:
+        return sizeof(GpuPresenceBlock);
     }
     return 0;
 }
@@ -358,12 +397,18 @@ std::size_t uniformSizeOf(GpuPass pass) {
 std::size_t inputCountOf(GpuPass pass) {
     switch (pass) {
     case GpuPass::Copy:
-    case GpuPass::Pointwise:
     case GpuPass::Geometry:
+    case GpuPass::Effects:
+    case GpuPass::DenoiseFilter:
         return 1;
+    case GpuPass::DenoiseCombine:
+        return 3;
+    case GpuPass::Pointwise:
+        return 6;
     case GpuPass::ResizeAcross:
     case GpuPass::ResizeAcrossOpaque:
     case GpuPass::ResizeDownOpaque:
+    case GpuPass::PresenceFilter:
         return 2;
     case GpuPass::ResizeDown:
         return 4;
@@ -446,6 +491,14 @@ GpuBackend defaultGpuBackend() noexcept {
     return GpuBackend::Metal;
 #else
     return GpuBackend::Vulkan;
+#endif
+}
+
+bool gpuUsedByDefault() noexcept {
+#if defined(_WIN32)
+    return false;
+#else
+    return true;
 #endif
 }
 
@@ -560,6 +613,7 @@ GpuContext::GpuContext(GpuBackend backend, std::optional<std::size_t> adapter)
     info_.deviceId = driver.deviceId;
     info_.floatTextures = rhi.isTextureFormatSupported(QRhiTexture::RGBA32F);
     info_.halfFloatTextures = rhi.isTextureFormatSupported(QRhiTexture::RGBA16F);
+    info_.scalarFloatTextures = rhi.isTextureFormatSupported(QRhiTexture::R32F);
     info_.compute = rhi.isFeatureSupported(QRhi::Compute);
     info_.anyFormatReadBack = rhi.isFeatureSupported(QRhi::ReadBackAnyTextureFormat);
     info_.maxTextureSize = rhi.resourceLimit(QRhi::TextureSizeMax);
@@ -640,19 +694,22 @@ DeviceImage GpuContext::upload(const ImageBuffer& image) {
         batch.uploadTexture(texture.get(), description);
     });
 
-    return DeviceImage(std::make_shared<const RhiDeviceImage>(
-        device_, std::move(texture), size, image.encoding(), image.orientation()));
+    return DeviceImage(std::make_shared<const RhiDeviceImage>(device_, std::move(texture), size,
+                                                              image.encoding(), image.orientation(),
+                                                              image.pixelScale()));
 }
 
 DeviceImage GpuContext::render(GpuPass pass, std::span<const std::byte> uniforms,
                                const DeviceImage& input, ImageSize outputSize,
-                               const ColorEncoding& encoding) {
-    return render(pass, uniforms, std::span(&input, 1), outputSize, encoding);
+                               const ColorEncoding& encoding, const GpuTarget& target) {
+    return render(pass, uniforms, std::span(&input, 1), outputSize, encoding, target);
 }
 
 DeviceImage GpuContext::render(GpuPass pass, std::span<const std::byte> uniforms,
                                std::span<const DeviceImage> inputs, ImageSize outputSize,
-                               const ColorEncoding& encoding) {
+                               const ColorEncoding& encoding, const GpuTarget& target) {
+    // Between renders is where a GPU development notices a cancellation (ADR 042).
+    detail::throwIfCancelled();
     device_->requireUsable("render");
 
     const auto index = static_cast<std::size_t>(pass);
@@ -691,6 +748,16 @@ DeviceImage GpuContext::render(GpuPass pass, std::span<const std::byte> uniforms
                                     "texture edge is " +
                                     std::to_string(edge) + " pixels");
     }
+    const double pixelScale = target.pixelScale.value_or(inputs.front().pixelScale());
+    if (!std::isfinite(pixelScale) || !(pixelScale > 0.0)) {
+        throw std::invalid_argument("The " + name +
+                                    " pass's result needs a finite pixel scale above zero");
+    }
+    // A scalar target the device cannot store falls back to RGBA32F, which a
+    // pass reads the same in its first channel.
+    const bool scalar = target.format == GpuTargetFormat::R32F && info_.scalarFloatTextures;
+    const QRhiTexture::Format format = scalar ? QRhiTexture::R32F : QRhiTexture::RGBA32F;
+    const char* formatName = scalar ? " R32F" : " RGBA32F";
     if (outputSize.pixelCount() * bytesPerPixel(PixelFormat::RgbaF32) > maxTransferBytes) {
         // Refused before rendering rather than when the result is read back.
         throw std::invalid_argument("A " + describe(outputSize) +
@@ -707,23 +774,25 @@ DeviceImage GpuContext::render(GpuPass pass, std::span<const std::byte> uniforms
     QRhi& rhi = *device_->rhi;
 
     std::unique_ptr<QRhiTexture> texture(rhi.newTexture(
-        QRhiTexture::RGBA32F,
-        QSize(static_cast<int>(outputSize.width), static_cast<int>(outputSize.height)), 1,
+        format, QSize(static_cast<int>(outputSize.width), static_cast<int>(outputSize.height)), 1,
         QRhiTexture::RenderTarget | QRhiTexture::UsedAsTransferSource));
     if (!texture->create()) {
         throw std::runtime_error("The GPU device could not create a " + describe(outputSize) +
-                                 " RGBA32F render target");
+                                 formatName + " render target");
     }
-    std::unique_ptr<QRhiTextureRenderTarget> target(
+    std::unique_ptr<QRhiTextureRenderTarget> renderTarget(
         rhi.newTextureRenderTarget(QRhiTextureRenderTargetDescription(texture.get())));
-    detail::PassPipeline& cached = device_->passes.at(index);
+    // One pipeline per pass and attachment format: a render pass is only
+    // compatible with targets of its own format.
+    detail::PassPipeline& cached =
+        device_->passes.at(index * gpuTargetFormatCount + (scalar ? 1 : 0));
     if (!cached.renderPass) {
-        // Every target of a pass has one RGBA32F attachment, so the first
-        // one's render pass is compatible with all that follow.
-        cached.renderPass.reset(target->newCompatibleRenderPassDescriptor());
+        // Every target of this pass and format has the same one attachment,
+        // so the first one's render pass is compatible with all that follow.
+        cached.renderPass.reset(renderTarget->newCompatibleRenderPassDescriptor());
     }
-    target->setRenderPassDescriptor(cached.renderPass.get());
-    if (!target->create()) {
+    renderTarget->setRenderPassDescriptor(cached.renderPass.get());
+    if (!renderTarget->create()) {
         throw std::runtime_error("The GPU device could not create a " + describe(outputSize) +
                                  " render target");
     }
@@ -757,7 +826,7 @@ DeviceImage GpuContext::render(GpuPass pass, std::span<const std::byte> uniforms
         throw std::runtime_error("The GPU device could not bind the " + name + " pass's resources");
     }
 
-    detail::submitPass(*device_, "render the " + name + " pass", *target, *cached.pipeline,
+    detail::submitPass(*device_, "render the " + name + " pass", *renderTarget, *cached.pipeline,
                        *bindings, [&](QRhiResourceUpdateBatch& batch) {
                            if (buffer) {
                                batch.updateDynamicBuffer(buffer.get(), 0,
@@ -767,8 +836,11 @@ DeviceImage GpuContext::render(GpuPass pass, std::span<const std::byte> uniforms
                        });
 
     ++device_->rendersDone;
-    return DeviceImage(std::make_shared<const RhiDeviceImage>(
-        device_, std::move(texture), outputSize, encoding, ImageOrientation::Normal));
+    DeviceImage result(std::make_shared<const RhiDeviceImage>(
+        device_, std::move(texture), outputSize, encoding, ImageOrientation::Normal, pixelScale));
+    // Each render is a unit of the observed step it is part of.
+    detail::completeUnit();
+    return result;
 }
 
 std::size_t GpuContext::renderCount() const noexcept {

@@ -2,14 +2,17 @@
 
 #include "AppSettings.h"
 
+#include <CurveHistogram.h>
 #include <DevelopState.h>
 #include <ImageBuffer.h>
+#include <Progress.h>
 #include <RenderCheckpoint.h>
 
 #include <QImage>
 #include <QRect>
 #include <QSize>
 
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
@@ -21,6 +24,18 @@
 
 namespace arraw::app {
 
+/// @brief Render the CPU counts a curve histogram from: the frame fitted inside 512 pixels.
+///
+/// A quarter of the pixels of ::arraw::curveHistogramRequest, which the GPU
+/// keeps: 256 bins need far fewer than a million pixels, and the host sample
+/// costs about 150-200 ns a source pixel (ADR 035), so the larger request would
+/// hold up the next render by up to half a second (ADR 036). Bilinear, as
+/// ::arraw::curveHistogram uses whatever the request says.
+inline constexpr RenderRequest cpuCurveHistogramRequest{
+    .size = RenderRequest::FitInside{512, 512},
+    .filter = ResizeFilter::Bilinear,
+};
+
 /// @brief What a preview shows: a part of the developed frame, at a size.
 struct PreviewView {
     /// Part of the developed frame to render, in whole pixels of the frame at
@@ -31,19 +46,32 @@ struct PreviewView {
     QSize outputSize;
     /// Device pixels per logical pixel of the screen; set on the image.
     qreal devicePixelRatio = 1.0;
+    /// Long edge of a reduced copy to deliver beside an image of the whole frame, for a
+    /// thumbnail; 0 for none. Reduced on the worker, so the receiver does not (ADR 043).
+    int thumbnailEdge = 0;
 
     /// @brief Makes a view of the whole frame.
     /// @param box Box to fit the frame inside, in device pixels.
     /// @param ratio Device pixels per logical pixel.
     [[nodiscard]] static PreviewView wholeFrame(QSize box, qreal ratio = 1.0) {
-        return {.region = std::nullopt, .outputSize = box, .devicePixelRatio = ratio};
+        return {.region = std::nullopt,
+                .outputSize = box,
+                .devicePixelRatio = ratio,
+                .thumbnailEdge = 0};
     }
 };
+
+/// @brief Least time between two progress reports of one preview render, unless its step changes.
+///
+/// About thirty a second: as often as a bar can be seen to move.
+inline constexpr std::chrono::milliseconds previewProgressInterval{33};
 
 /// @brief Outcome of one preview render.
 ///
 /// A result with only @ref background set is a refreshed fallback, rendered
-/// for its request's state after the render of that request was delivered.
+/// for its request's state after the render of that request was delivered. A
+/// result with only @ref curveHistogram set is a recounted curve histogram,
+/// likewise.
 struct PreviewResult {
     /// Identifier PreviewRenderer::request returned for the render.
     std::uint64_t request = 0;
@@ -74,6 +102,12 @@ struct PreviewResult {
     /// Boundary of the checkpoint the render resumed from, or empty when it
     /// developed from the level itself. A diagnostic: nothing shows it.
     std::optional<Stage> resumedFrom;
+    /// Histogram of the curve input for the request's state (ADR 035), set only
+    /// on a result of its own, once requests paused and the curve input changed.
+    std::optional<CurveHistogram> curveHistogram;
+    /// The image reduced to PreviewView::thumbnailEdge, at a pixel ratio of 1; set only
+    /// when the request asked for one and the image shows the whole frame.
+    std::optional<QImage> thumbnail;
 };
 
 /// @brief Worker thread that renders previews off the thread that asks for them.
@@ -100,6 +134,23 @@ struct PreviewResult {
 /// (ADR 011); the renderer only drops them when the source, the level or the
 /// device changes, which the plan cannot tell it.
 ///
+/// A newer request cancels the render in flight (ADR 042): on the CPU it stops
+/// within a few milliseconds, on the GPU after the render pass it is in. A
+/// cancelled render delivers nothing, neither an image nor an error, and keeps
+/// the checkpoints of the passes it finished, so the newer request resumes
+/// from them. The newest request is never cancelled by another, so it always
+/// ends with a result. The refreshed fallback and the histogram recount below
+/// are cancelled the same way, so neither holds up the next request.
+///
+/// Reports the progress of the render of each request, at most about
+/// ::arraw::app::previewProgressInterval apart and whenever the step changes,
+/// so that whoever shows it is not flooded.
+///
+/// Once requests pause, also counts the histogram of the curve input that the
+/// curve editor draws behind its curves, on the GPU when it renders, and only
+/// while someone shows it (setCurveHistogramWanted()) and the curve input may
+/// have changed since the last count (ADR 036): a curve drag never costs one.
+///
 /// Renders on the GPU when there is one: the first render creates the device,
 /// on the worker, and the decoded photograph is uploaded once per source rather
 /// than once per render. Whatever the GPU cannot do, the CPU does, and the
@@ -112,14 +163,25 @@ public:
         Cpu,  ///< Always on the CPU, without ever creating a GPU device.
     };
 
+    /// @brief Receiver of the progress of the render of a request.
+    ///
+    /// Called on the worker thread with the identifier PreviewRenderer::request
+    /// returned and the render's progress; the caller marshals it to wherever it
+    /// is needed. Must not throw; what it throws stops the render, as a failure.
+    using ProgressCallback = std::function<void(std::uint64_t request, const Progress& progress)>;
+
     /// @brief Starts the worker thread.
     /// @param onResult Receives each finished render, called on the worker
     /// thread; the caller marshals it to wherever it is needed. Must not throw;
     /// what it throws is dropped.
     /// @param device Where previews may be rendered.
     /// @param settings Desktop GPU preference, captured for the lifetime of the worker.
+    /// @param onProgress Receives the progress of the render of each request,
+    /// thinned (see ::arraw::app::previewProgressInterval); may be empty.
+    /// Neither the fallback's nor the histogram's renders report.
     explicit PreviewRenderer(std::function<void(PreviewResult)> onResult,
-                             Device device = Device::Auto, AppSettings settings = {});
+                             Device device = Device::Auto, AppSettings settings = {},
+                             ProgressCallback onProgress = {});
 
     PreviewRenderer(const PreviewRenderer&) = delete;
     PreviewRenderer& operator=(const PreviewRenderer&) = delete;
@@ -128,18 +190,21 @@ public:
 
     /// @brief Stops the worker and waits for it.
     ///
-    /// Waits for a render in progress, as developing cannot be interrupted, and
-    /// drops pending requests. The callback is not called once this returns.
+    /// Cancels a render in progress and waits for it to stop, and drops pending
+    /// requests. The callbacks are not called once this returns.
     ~PreviewRenderer();
 
     /// @brief Replaces the photograph to render, dropping requests not yet started.
     ///
-    /// A render in progress finishes with the previous source, which the worker
-    /// keeps alive, and its result is still delivered.
+    /// Cancels the work in progress (ADR 042, ADR 043), which then delivers
+    /// nothing; a render past its last check finishes with the previous source,
+    /// which the worker keeps alive, and its result is still delivered.
+    /// The worker then drops the levels and checkpoints it kept of the previous source.
     /// @param decoded Decoded photograph; may be empty to clear the source.
     void setSource(std::shared_ptr<const ImageBuffer> decoded);
 
-    /// @brief Queues a render, replacing any request not yet started.
+    /// @brief Queues a render, replacing any request not yet started and cancelling the one in
+    /// flight.
     ///
     /// A request made while no source is set is not ignored: it yields a result
     /// with an error.
@@ -147,6 +212,14 @@ public:
     /// @param view Part of the frame to show, and the size to show it at.
     /// @return Identifier of the request, increasing with each call.
     std::uint64_t request(DevelopState state, PreviewView view);
+
+    /// @brief Says whether the curve histogram is shown, so whether it is worth counting.
+    ///
+    /// Nothing is counted while it is not wanted; none is wanted until this
+    /// says so. Becoming wanted counts once, at the next pause, for the state
+    /// last rendered, if the last histogram counted is not current for it.
+    /// @param wanted Whether the curve editor is on screen.
+    void setCurveHistogramWanted(bool wanted);
 
 private:
     /// Request waiting for the worker.
@@ -160,8 +233,23 @@ private:
     /// @param stop Raised by the destructor.
     void run(std::stop_token stop);
 
+    /// @brief Makes the channel of the work about to start, which a newer request cancels.
+    ///
+    /// Already cancelled when a request or another source arrived since the work was taken.
+    /// @param onProgress Receiver of the work's progress; may be empty.
+    /// @param source Source the work was taken with.
+    [[nodiscard]] std::shared_ptr<ProgressChannel>
+    startChannel(ProgressChannel::Callback onProgress,
+                 const std::shared_ptr<const ImageBuffer>& source);
+
+    /// @brief Forgets the channel of the work that ended.
+    void endChannel();
+
     /// Receiver of each finished render, called on the worker thread.
     std::function<void(PreviewResult)> onResult_;
+
+    /// Receiver of the progress of each request's render, called on the worker thread.
+    ProgressCallback onProgress_;
 
     /// Where previews may be rendered; fixed before the worker starts.
     Device device_;
@@ -169,10 +257,11 @@ private:
     /// Desktop preferences captured before the worker starts.
     AppSettings settings_;
 
-    /// Guard of source_, pending_ and lastId_.
+    /// Guard of source_, pending_, sourceChanged_, lastId_, curveHistogramWanted_,
+    /// recountHistogram_ and inFlight_.
     std::mutex mutex_;
 
-    /// Signal that a request is pending or the worker should stop.
+    /// Signal that a request or a recount is pending, or the worker should stop.
     std::condition_variable_any wake_;
 
     /// Photograph to render; null until one is set.
@@ -181,8 +270,22 @@ private:
     /// Newest request not yet started.
     std::optional<Pending> pending_;
 
+    /// Whether source_ changed since the worker last looked, so that it drops what it keeps
+    /// of the previous one.
+    bool sourceChanged_ = false;
+
+    /// Channel of the work the worker is doing, which a newer request cancels; null when idle.
+    std::shared_ptr<ProgressChannel> inFlight_;
+
     /// Identifier of the newest request.
     std::uint64_t lastId_ = 0;
+
+    /// Whether the curve histogram is shown, so counted.
+    bool curveHistogramWanted_ = false;
+
+    /// Whether the histogram became wanted since the worker last looked, so
+    /// that it counts for the state last rendered without a new request.
+    bool recountHistogram_ = false;
 
     /// Declared last so that every member above exists before it starts.
     std::jthread worker_;

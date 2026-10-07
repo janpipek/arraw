@@ -1,25 +1,27 @@
 #version 440
+#extension GL_GOOGLE_include_directive : require
 
 // The pointwise chain: ProcessingPlan.h's developPixel, stage for stage.
 //
 // Every function below mirrors the C++ of the same name in
-// src/core/ProcessingPlan.h, in the same order and with the same arithmetic,
+// src/core/ProcessingPlan.h (and, for the colour grade, src/core/ColorGrading.h
+// and ColorGrading.cpp), in the same order and with the same arithmetic,
 // and must change with it. The Pointwise block is the contract with
 // GpuPointwiseBlock in GpuPlan.h: same members, same order.
 //
 // Powers. C++ std::pow and GLSL pow differ where GLSL leaves the result
 // undefined: for x < 0, and for x == 0 with y <= 0. Where the CPU chain can
 // reach them:
-//   - toPerceptual is only called with luminance > 0, or with exactly 0 by the
-//     lifted black; the contrast power takes its result, so x >= 0.
+//   - toPerceptual is called with luminance > 0, with exactly 0 (the lifted
+//     black), with a tone curve anchor, or with the grade's clamp(Y, 0, 1),
+//     which can be 0 or NaN; the argument is never below 0, and the contrast
+//     power takes its result, so x >= 0.
 //   - toLinear takes max(value, 0), so x >= 0.
 //   - The exponents are 1/2.2, 2.2 and contrastSlope = exp2(c / 200) > 0.
 // So the only case that needs care is x == 0, where std::pow gives 0 and a
-// driver's exp2(y * log2(x)) gives it only by way of infinities. pow0 spells
-// it out. It also returns NaN for x < 0 (as std::pow does for a non-integer
-// exponent), although nothing reaches that today, so that a future caller
-// cannot silently get an undefined value. NaN and +inf pass through pow as on
-// the CPU: a NaN fails every comparison below the way it does there.
+// driver's exp2(y * log2(x)) gives it only by way of infinities. pow0
+// (common/exact.glsl) spells it out. NaN and +inf pass through pow as on the
+// CPU: a NaN fails every comparison below the way it does there.
 //
 // Parity with the CPU, including NaN and infinity, and the tolerances the
 // tests hold, are measured on Vulkan (lavapipe) only. HLSL and MSL compilers
@@ -28,6 +30,23 @@
 layout(location = 0) out vec4 fragColor;
 
 layout(binding = 0) uniform sampler2D source;
+
+// The tone curves' tables, ::arraw::packToneCurves: texel i holds entry i of
+// the luma (r), red (g), green (b) and blue (a) curves. Read with texelFetch
+// and blended by hand, never through the sampler's filtering, so that the
+// arithmetic is the CPU's. Bound even when no curve is active; not read then.
+layout(binding = 2) uniform sampler2D curves;
+
+// The Presence context's grids, ::arraw::PresenceContext: log2 luminance in r
+// on a box-reduced grid, Texture's base (fine), Clarity's base, the coarse
+// cells unblurred (which Clarity and a positive Dehaze read), and Dehaze's
+// base on the same cells. Read with texelFetch and blended by hand, as the
+// CPU's PresenceSampler does. Bound even when Presence is off (the source
+// stands in); not read then.
+layout(binding = 3) uniform sampler2D fineBase;
+layout(binding = 4) uniform sampler2D coarseBase;
+layout(binding = 5) uniform sampler2D coarseCells;
+layout(binding = 6) uniform sampler2D hazeBase;
 
 layout(std140, binding = 1) uniform Pointwise {
     vec4 toWorking[3];
@@ -48,18 +67,37 @@ layout(std140, binding = 1) uniform Pointwise {
     uint adjustsSaturation;
     uint adjustsVibrance;
     uint adjustsHsl;
+    uint curvesLuma;
+    uint curvesRed;
+    uint curvesGreen;
+    uint curvesBlue;
     // Three words of padding, which std140 does not need declared: the band
     // sets below start on the next vec4 boundary by themselves.
     vec4 hueShift[2];
     vec4 bandSaturation[2];
     vec4 bandLuminance[2];
     vec4 grayMix[2];
+    uint grades;
+    float gradeBalanceShift;
+    float gradeZoneWidth;
+    // One word of padding, declared so that the vec4s below are plainly
+    // where GpuPointwiseBlock puts them.
+    uint gradePadding;
+    vec4 gradeShadowMidtoneTint;
+    vec4 gradeHighlightTint;
+    vec4 presenceLumaRow;
+    uint presence;
+    float textureAmount;
+    float clarityAmount;
+    float dehazeAmount;
+    uint fineReduction;
+    uint coarseReduction;
+    uvec2 fineGridSize;
+    uvec2 coarseGridSize;
+    uvec2 presencePadding;
 } plan;
 
-// 1 / 2.2f and 2.2f as C++ rounds them to float, spelled out so that no
-// compiler folds the division at another precision.
-const float perceptualExponent = 0.454545438;
-const float linearExponent = 2.20000005;
+#include "common/perceptual.glsl"
 
 
 // greyPivot, ProcessingPlan.h. The shader does not use it: the plan carries
@@ -75,30 +113,8 @@ const vec3 workingLuminance = vec3(0.2627, 0.6780, 0.0593);
 // not, so a denormal luminance would branch differently on the two.
 const float liftedBlackThreshold = 1.0e-20;
 
-// std::pow for the arguments the chain gives it; see the note at the top.
-float pow0(float x, float y) {
-    if (x > 0.0) {
-        return pow(x, y);
-    }
-    if (x == 0.0) {
-        return 0.0;
-    }
-    // Negative, or NaN: NaN, as std::pow with a non-integer exponent.
-    return uintBitsToFloat(0x7fc00000u);
-}
-
-// std::clamp(value, low, high), which the built-in clamp is not: it leaves a
-// NaN alone where the built-in is undefined.
-float clampExact(float value, float low, float high) {
-    return value < low ? low : (high < value ? high : value);
-}
-
-// smoothstep, ProcessingPlan.h. Not the built-in, which is undefined for
-// first >= last and leaves the clamping to the driver.
-float smoothStep(float first, float last, float value) {
-    const float t = clampExact((value - first) / (last - first), 0.0, 1.0);
-    return t * t * (3.0 - 2.0 * t);
-}
+// pow0, clampExact and smoothStep; see the note at the top.
+#include "common/exact.glsl"
 
 float toPerceptual(float luminance) {
     return pow0(luminance, perceptualExponent);
@@ -154,6 +170,79 @@ vec3 shapeTone(vec3 colour) {
 
     const float ratio = shapeLuminance(luminance) / luminance;
     return vec3(colour.x * ratio, colour.y * ratio, colour.z * ratio);
+}
+
+// toneCurveSamples, ToneCurve.h.
+const int toneCurveSamples = 1024;
+
+// One entry of one curve's table: channel 0 is luma, 1 red, 2 green, 3 blue.
+float curveEntry(int index, int channel) {
+    const vec4 texel = texelFetch(curves, ivec2(index, 0), 0);
+    return channel == 0 ? texel.x : (channel == 1 ? texel.y : (channel == 2 ? texel.z : texel.w));
+}
+
+// evaluateCurve, ToneCurve.h: the same index and weight, the same extension
+// at slope one above one, and the value at zero for anything not above it.
+float evaluateCurve(int channel, float x) {
+    const int last = toneCurveSamples - 1;
+    if (!(x > 0.0)) {
+        return curveEntry(0, channel);
+    }
+    if (x >= 1.0) {
+        return curveEntry(last, channel) + (x - 1.0);
+    }
+    const float position = x * float(last);
+    const int index = min(int(position), last - 1);
+    const float fraction = position - float(index);
+    const float low = curveEntry(index, channel);
+    const float high = curveEntry(index + 1, channel);
+    return low + fraction * (high - low);
+}
+
+// curveRatioFloor, ProcessingPlan.h: luminance below which the luma curve's
+// ratio is held, 2^-14.
+const float curveRatioFloor = 6.103515625e-05;
+
+// applyToneCurves' channel curve, ProcessingPlan.h: a negative channel moves
+// by the lift, a NaN or zero one takes it.
+float curveChannel(int channel, float value) {
+    if (value > 0.0) {
+        const float shaped = evaluateCurve(channel, toPerceptual(value));
+        return toLinear(shaped < 0.0 ? 0.0 : shaped);
+    }
+    const float black = evaluateCurve(channel, 0.0);
+    const float lift = toLinear(black < 0.0 ? 0.0 : black);
+    return value < 0.0 ? value + lift : lift;
+}
+
+// applyToneCurves, ProcessingPlan.h: luminance first, then each channel.
+vec3 applyToneCurves(vec3 colour) {
+    if (plan.curvesLuma != 0u) {
+        const float black = evaluateCurve(0, 0.0);
+        const float lift = toLinear(black < 0.0 ? 0.0 : black);
+        const float luminance = luminanceOf(colour);
+        // A NaN fails both comparisons.
+        if (!(luminance > curveRatioFloor) && !(luminance <= curveRatioFloor)) {
+            colour = vec3(lift, lift, lift);
+        } else {
+            const float anchor = luminance > curveRatioFloor ? luminance : curveRatioFloor;
+            const float value = evaluateCurve(0, toPerceptual(anchor));
+            const float shaped = toLinear(value < 0.0 ? 0.0 : value);
+            const float ratio = (shaped - lift) / anchor;
+            colour = vec3(colour.x * ratio + lift, colour.y * ratio + lift,
+                          colour.z * ratio + lift);
+        }
+    }
+    if (plan.curvesRed != 0u) {
+        colour.x = curveChannel(1, colour.x);
+    }
+    if (plan.curvesGreen != 0u) {
+        colour.y = curveChannel(2, colour.y);
+    }
+    if (plan.curvesBlue != 0u) {
+        colour.z = curveChannel(3, colour.z);
+    }
+    return colour;
 }
 
 vec3 rollHighlights(vec3 colour) {
@@ -291,6 +380,143 @@ vec3 applySaturation(vec3 colour, float amount) {
     return fromOklab(lab);
 }
 
+// Presence.h and Presence.cpp: Texture, Clarity and Dehaze (ADR 041).
+
+// presenceLuminanceFloor, presenceLuminanceCeiling and boundedLuminance.
+#include "common/presence_bounds.glsl"
+
+// textureLimitStops, clarityLimitStops, dehazeStrength, dehazeVeil,
+// dehazeChroma and dehazeMeanLimitStops, Presence.h.
+const float textureLimitStops = 0.5;
+const float clarityLimitStops = 1.0;
+const float dehazeStrength = 0.6;
+const float dehazeVeil = 0.4;
+const float dehazeChroma = 0.16;
+const float dehazeMeanLimitStops = 6.0;
+
+float presenceLogLuminance(vec3 colour) {
+    const float luminance = plan.presenceLumaRow.x * colour.x + plan.presenceLumaRow.y * colour.y +
+                            plan.presenceLumaRow.z * colour.z;
+    return log2(boundedLuminance(luminance));
+}
+
+float softLimit(float detail, float limit) {
+    return detail / (1.0 + abs(detail) / limit);
+}
+
+float midtoneWeight(float value) {
+    return smoothStep(0.0, 0.8, 1.0 - abs(2.0 * value - 1.0));
+}
+
+// gridTap, ReducedGrid.h: u = (x + 0.5) / reduction - 0.5, clamped; exact in
+// float, the reduction being a power of two.
+void gridTap(int coordinate, uint reduction, uint cells, out int first, out int second,
+             out float fraction) {
+    const float position = (float(coordinate) + 0.5) / float(reduction) - 0.5;
+    const float clamped = clampExact(position, 0.0, float(cells - 1u));
+    const float below = floor(clamped);
+    first = int(below);
+    second = min(first + 1, int(cells) - 1);
+    fraction = clamped - below;
+}
+
+// upsampled, Presence.cpp: the grid read bilinearly, rows first.
+float upsampledFine(ivec2 at) {
+    int x0;
+    int x1;
+    float tx;
+    int y0;
+    int y1;
+    float ty;
+    gridTap(at.x, plan.fineReduction, plan.fineGridSize.x, x0, x1, tx);
+    gridTap(at.y, plan.fineReduction, plan.fineGridSize.y, y0, y1, ty);
+    const float topLeft = texelFetch(fineBase, ivec2(x0, y0), 0).r;
+    const float topRight = texelFetch(fineBase, ivec2(x1, y0), 0).r;
+    const float bottomLeft = texelFetch(fineBase, ivec2(x0, y1), 0).r;
+    const float bottomRight = texelFetch(fineBase, ivec2(x1, y1), 0).r;
+    const float top = topLeft + tx * (topRight - topLeft);
+    const float bottom = bottomLeft + tx * (bottomRight - bottomLeft);
+    return top + ty * (bottom - top);
+}
+
+// The coarse grids share one geometry; GLSL takes no sampler parameter here
+// portably, so the three reads are spelled out by which.
+const int coarseOfBase = 0;
+const int coarseOfCells = 1;
+const int coarseOfHaze = 2;
+
+float coarseAt(int which, ivec2 at) {
+    if (which == coarseOfBase) {
+        return texelFetch(coarseBase, at, 0).r;
+    }
+    if (which == coarseOfCells) {
+        return texelFetch(coarseCells, at, 0).r;
+    }
+    return texelFetch(hazeBase, at, 0).r;
+}
+
+float upsampledCoarse(int which, ivec2 at) {
+    int x0;
+    int x1;
+    float tx;
+    int y0;
+    int y1;
+    float ty;
+    gridTap(at.x, plan.coarseReduction, plan.coarseGridSize.x, x0, x1, tx);
+    gridTap(at.y, plan.coarseReduction, plan.coarseGridSize.y, y0, y1, ty);
+    const float topLeft = coarseAt(which, ivec2(x0, y0));
+    const float topRight = coarseAt(which, ivec2(x1, y0));
+    const float bottomLeft = coarseAt(which, ivec2(x0, y1));
+    const float bottomRight = coarseAt(which, ivec2(x1, y1));
+    const float top = topLeft + tx * (topRight - topLeft);
+    const float bottom = bottomLeft + tx * (bottomRight - bottomLeft);
+    return top + ty * (bottom - top);
+}
+
+vec3 applyPresence(vec3 colour, float logLuminance, ivec2 at) {
+    if (plan.presence == 0u) {
+        return colour;
+    }
+    const float luminance = luminanceOf(colour);
+    if (!(luminance > liftedBlackThreshold)) {
+        return colour;
+    }
+
+    float stops = 0.0;
+    if (plan.fineReduction != 0u) {
+        stops += plan.textureAmount * softLimit(logLuminance - upsampledFine(at), textureLimitStops);
+    }
+    if (plan.clarityAmount != 0.0) {
+        const float limited =
+            softLimit(upsampledCoarse(coarseOfCells, at) - upsampledCoarse(coarseOfBase, at),
+                      clarityLimitStops);
+        const float perceptual = toPerceptual(clampExact(luminance, 0.0, 1.0));
+        stops += plan.clarityAmount * midtoneWeight(perceptual) * limited;
+    }
+    const float gain = exp2(stops);
+    colour = vec3(colour.x * gain, colour.y * gain, colour.z * gain);
+    if (plan.dehazeAmount == 0.0) {
+        return colour;
+    }
+
+    const float toned = luminance * gain;
+    const float open = 1.0 - smoothStep(0.75, 1.25, toned);
+    const float haze = upsampledCoarse(coarseOfHaze, at);
+    float hazy = 0.0;
+    if (plan.dehazeAmount > 0.0) {
+        hazy = exp2(min(haze - upsampledCoarse(coarseOfCells, at), 0.0)) * open;
+        const float keep = 1.0 - plan.dehazeAmount * dehazeStrength * hazy;
+        colour = vec3(colour.x * keep, colour.y * keep, colour.z * keep);
+    } else {
+        const float mean = toned * exp2(min(haze - logLuminance, dehazeMeanLimitStops));
+        const float veil = open > 0.0 ? -plan.dehazeAmount * dehazeVeil * open * mean : 0.0;
+        hazy = veil > 0.0 ? veil / (toned + veil) : 0.0;
+        colour = vec3(colour.x + veil, colour.y + veil, colour.z + veil);
+    }
+    const float chroma = plan.dehazeAmount * dehazeChroma * hazy;
+    return chroma == 0.0 ? colour : applySaturation(colour, chroma);
+}
+
 vec3 applyVibrance(vec3 colour, float amount) {
     vec3 lab = toOklab(colour);
     const float chroma = sqrt(lab.y * lab.y + lab.z * lab.z);
@@ -352,20 +578,66 @@ vec3 applyBlackAndWhite(vec3 colour) {
     return vec3(grey, grey, grey);
 }
 
+// ColorGrading.h and ColorGrading.cpp. The zone tints arrive resolved, so no
+// sine or cosine is taken here.
+
+// midtoneCentre, tintFadeStart and tintFadeEnd, ColorGrading.cpp.
+const float midtoneCentre = 0.5;
+const float tintFadeStart = 0.85;
+const float tintFadeEnd = 1.0;
+
+float bell(float position, float centre, float width) {
+    const float t = (position - centre) / width;
+    return exp(-t * t);
+}
+
+// gradeZoneWeights: (shadows, midtones, highlights), summing to one.
+vec3 gradeZoneWeights(float luminance) {
+    const float held = clampExact(luminance, 0.0, 1.0);
+    const float position = clampExact(toPerceptual(held) + plan.gradeBalanceShift, 0.0, 1.0);
+    const float shadows = bell(position, 0.0, plan.gradeZoneWidth);
+    const float midtones = bell(position, midtoneCentre, plan.gradeZoneWidth);
+    const float highlights = bell(position, 1.0, plan.gradeZoneWidth);
+    const float total = shadows + midtones + highlights;
+    return vec3(shadows / total, midtones / total, highlights / total);
+}
+
+float gradeTintFade(float lightness) {
+    return 1.0 - smoothStep(tintFadeStart, tintFadeEnd, lightness);
+}
+
+vec3 applyColorGrading(vec3 colour) {
+    if (plan.grades == 0u) {
+        return colour;
+    }
+    const vec3 weights = gradeZoneWeights(luminanceOf(colour));
+    const vec4 lower = plan.gradeShadowMidtoneTint;
+    const vec2 upper = plan.gradeHighlightTint.xy;
+    vec3 lab = toOklab(colour);
+    const float fade = gradeTintFade(lab.x);
+    if (fade == 0.0) {
+        return colour;
+    }
+    lab.y += fade * (weights.x * lower.x + weights.y * lower.z + weights.z * upper.x);
+    lab.z += fade * (weights.x * lower.y + weights.y * lower.w + weights.z * upper.y);
+    return fromOklab(lab);
+}
+
 vec3 adjustColor(vec3 colour) {
     if (plan.convertsToGrayscale != 0u) {
-        return applyBlackAndWhite(colour);
+        colour = applyBlackAndWhite(colour);
+    } else {
+        if (plan.adjustsHsl != 0u) {
+            colour = applyHsl(colour);
+        }
+        if (plan.adjustsSaturation != 0u) {
+            colour = applySaturation(colour, plan.saturation);
+        }
+        if (plan.adjustsVibrance != 0u) {
+            colour = applyVibrance(colour, plan.vibrance);
+        }
     }
-    if (plan.adjustsHsl != 0u) {
-        colour = applyHsl(colour);
-    }
-    if (plan.adjustsSaturation != 0u) {
-        colour = applySaturation(colour, plan.saturation);
-    }
-    if (plan.adjustsVibrance != 0u) {
-        colour = applyVibrance(colour, plan.vibrance);
-    }
-    return colour;
+    return applyColorGrading(colour);
 }
 
 // PointwiseProbe values, GpuPlan.h.
@@ -373,13 +645,17 @@ const uint probeAfterMatrix = 1u;
 const uint probeAfterExposure = 2u;
 const uint probeAfterTone = 3u;
 const uint probeAfterShoulder = 4u;
+const uint probeAfterCurves = 5u;
 
 void main() {
-    const vec4 texel = texelFetch(source, ivec2(gl_FragCoord.xy), 0);
+    const ivec2 at = ivec2(gl_FragCoord.xy);
+    const vec4 texel = texelFetch(source, at, 0);
 
     // developPixel, with a stop after the stage a probe names. Alpha is not
-    // developed; it goes through as it came.
+    // developed; it goes through as it came. Presence measures the source
+    // colour, before white balance and exposure.
     vec3 colour = texel.rgb;
+    const float logLuminance = plan.presence != 0u ? presenceLogLuminance(colour) : 0.0;
     colour = vec3(plan.toWorking[0].x * colour.x + plan.toWorking[0].y * colour.y +
                       plan.toWorking[0].z * colour.z,
                   plan.toWorking[1].x * colour.x + plan.toWorking[1].y * colour.y +
@@ -399,7 +675,14 @@ void main() {
     }
 
     colour = shapeTone(colour);
+    colour = applyPresence(colour, logLuminance, at);
     if (plan.probe == probeAfterTone) {
+        fragColor = vec4(colour, texel.a);
+        return;
+    }
+
+    colour = applyToneCurves(colour);
+    if (plan.probe == probeAfterCurves) {
         fragColor = vec4(colour, texel.a);
         return;
     }

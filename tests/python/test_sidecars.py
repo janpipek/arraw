@@ -251,7 +251,7 @@ def test_open_reads_the_sidecar(work):
 def test_open_without_sidecar_ignores_it(work):
     arraw.write_sidecar(arraw.open(work).with_(exposure=1.0, rating=5))
     bare = arraw.open(work, sidecar=False)
-    assert bare.state == arraw.DevelopState()
+    assert bare.state == arraw.default_state(bare.metadata)
     assert bare.marks == arraw.PhotoMarks()
     assert bare.metadata == arraw.open(work).metadata
     assert arraw.open(work).marks.rating == 5
@@ -266,7 +266,7 @@ def test_open_without_sidecar_does_not_read_a_broken_one(work, caplog):
     arraw.sidecar_path(work).write_text("<<< not xml")
     with caplog.at_level(logging.INFO, logger="arraw"):
         photo = arraw.open(work, sidecar=False)
-    assert photo.state == arraw.DevelopState()
+    assert photo.state == arraw.default_state(photo.metadata)
     assert not arraw_records(caplog, logging.ERROR)
 
 
@@ -336,7 +336,7 @@ def test_open_logs_error_for_an_unreadable_sidecar_and_returns_defaults(work, ca
     arraw.sidecar_path(work).write_text("<<< not xml")
     with caplog.at_level(logging.INFO, logger="arraw"):
         photo = arraw.open(work)
-    assert photo.state == arraw.DevelopState()
+    assert photo.state == arraw.default_state(photo.metadata)
     assert photo.marks == arraw.PhotoMarks()
     errors = arraw_records(caplog, logging.ERROR)
     assert errors and all(r.levelno == logging.ERROR for r in errors)
@@ -366,3 +366,14 @@ def test_write_sidecar_marks_keeps_settings(work):
 def test_write_sidecar_marks_creates_a_sidecar(work):
     arraw.write_sidecar_marks(work, arraw.PhotoMarks(rating=-1))
     assert arraw.read_sidecar(work).marks == arraw.PhotoMarks(rating=-1)
+
+
+def test_a_sidecar_of_marks_alone_records_no_state(work):
+    arraw.write_sidecar_marks(work, arraw.PhotoMarks(rating=3))
+    contents = arraw.read_sidecar(work)
+    assert contents.state is None
+    assert contents.marks.rating == 3
+    # So the photograph opens with its kind's defaults, and the marks.
+    photo = arraw.open(work)
+    assert photo.state == arraw.default_state(photo.metadata)
+    assert photo.marks.rating == 3

@@ -40,8 +40,15 @@ struct ForeignNamespace {
 
 /// @brief What an XMP sidecar holds that arraw understands, and who else wrote in it.
 struct SidecarContents {
-    /// @brief Develop state, defaults for whatever the sidecar does not say.
-    DevelopState state;
+    /// @brief Develop state the sidecar records, or nothing when it records none.
+    ///
+    /// A sidecar records a state when it has arraw's develop settings: an
+    /// `arraw:version` or any settings key. Each key it leaves out keeps the
+    /// neutral default of a default-constructed state, so a sidecar written
+    /// before a setting existed renders as it did. A sidecar of marks alone, or
+    /// one only another tool wrote in, records none, and the photograph starts
+    /// from what its kind does (::arraw::defaultStateFor), as with no sidecar.
+    std::optional<DevelopState> state;
 
     /// @brief Culling marks, none for whatever the sidecar does not say.
     PhotoMarks marks;
@@ -119,7 +126,8 @@ inline constexpr auto xmpNamespaceOwners = std::to_array<XmpNamespaceOwner>({
 /// skipped, each with a warning that names the sidecar. So are `xmp:Rating`
 /// (a whole number, `3.0` included, clamped to -1 to 5) and `xmp:Label`. A
 /// rating or label that does not fit is reported and read as no mark; the file
-/// keeps it (see ::arraw::writeSidecar). `arraw:version` above
+/// keeps it (see ::arraw::writeSidecar). Whether the file records develop
+/// settings at all is ::arraw::SidecarContents::state. `arraw:version` above
 /// ::arraw::sidecarVersion gives ::arraw::Notice::NewerSettingsVersion.
 /// `crs:` and anything else is not read, but it is reported: `xmp:CreatorTool`
 /// and the other namespaces that hold properties (see ::arraw::SidecarContents).
@@ -157,8 +165,10 @@ void writeSidecar(const Photo& photo);
 ///
 /// As ::arraw::writeSidecar does for the marks, and leaves the develop settings,
 /// `arraw:version` and everything foreign as the file has them. Without a
-/// sidecar a new one is created, with default develop settings. This is how a
-/// session writes a rating without saving the edits it has not saved (ADR 030).
+/// sidecar a new one is created that holds the marks alone, so it records no
+/// develop state and the photograph still starts from what its kind does
+/// (::arraw::defaultStateFor). This is how a session writes a rating without
+/// saving the edits it has not saved (ADR 030).
 /// @param photo Path of the photograph.
 /// @param marks Marks to write.
 /// @throws std::invalid_argument if the rating of @p marks is outside -1 to 5.

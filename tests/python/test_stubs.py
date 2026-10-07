@@ -32,3 +32,19 @@ def test_stub_imports_only_real_modules():
     assert not imported & classes
     allowed = {"collections", "enum", "os", "pathlib", "typing", "numpy", "types", "__future__"}
     assert imported <= allowed, imported - allowed
+
+
+def test_stub_declares_every_exported_name_of_the_extension():
+    import arraw
+
+    tree = ast.parse(STUB.read_text())
+    declared = {n.name for n in tree.body if isinstance(n, (ast.ClassDef, ast.FunctionDef))}
+    declared |= {n.target.id for n in tree.body if isinstance(n, ast.AnnAssign)}
+    native = {
+        name
+        for name in arraw.__all__
+        if getattr(getattr(arraw, name), "__module__", None) == "arraw._arraw"
+    }
+    assert {"ToneCurve", "ToneCurveSettings", "GradeZone", "ColorGradingSettings",
+            "VignetteSettings", "EffectsSettings"} <= native
+    assert native <= declared, native - declared

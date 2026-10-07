@@ -66,12 +66,6 @@ struct ExportSettings {
 [[nodiscard]] std::filesystem::path suggestedPath(const std::filesystem::path& source,
                                                   ImageFileFormat format);
 
-/// @brief Checks whether two paths name the same file, which may be one that does not exist yet.
-///
-/// Follows links when both exist; otherwise compares the paths made absolute
-/// and normalised.
-[[nodiscard]] bool isSameFile(const std::filesystem::path& a, const std::filesystem::path& b);
-
 /// @brief Stores settings for the next time, except the size.
 ///
 /// The size is not stored: it defaults to the photograph's own each time.

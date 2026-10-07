@@ -75,8 +75,9 @@ struct GpuDevice {
     /// after the device, so it is released before it.
     std::unique_ptr<QRhiSampler> sampler;
 
-    /// @brief Pipelines by ::arraw::GpuPass, each empty until first used.
-    std::array<PassPipeline, gpuPassCount> passes;
+    /// @brief Pipelines by ::arraw::GpuPass and then ::arraw::GpuTargetFormat, each empty until
+    /// first used.
+    std::array<PassPipeline, gpuPassCount * gpuTargetFormatCount> passes;
 
     /// @brief Identity carried by every image the device mints.
     DeviceId id = DeviceId::None;

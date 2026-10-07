@@ -17,6 +17,16 @@
 #include <string>
 #include <vector>
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
+
 #if defined(ARRAW_HEADLESS_PLATFORM)
 // arraw's own platform, linked in statically; see src/platform/headless. At
 // global scope, where the plugin's entry point is declared.
@@ -86,6 +96,11 @@ void prepareGraphicsPlatform(bool forced) {
 /// application's construction as arguments so that the tests can drive it
 /// directly; see ADR 006.
 int main(int argc, char* argv[]) {
+#if defined(_WIN32)
+    // The manifest makes the arguments UTF-8 (src/platform/arraw.manifest); the
+    // console must read what is printed the same way, or names print garbled.
+    SetConsoleOutputCP(CP_UTF8);
+#endif
     const std::vector<std::string> arguments = argumentsOf(argc, argv);
 
     // Both must outlive the application, which keeps references to them.

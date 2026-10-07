@@ -12,13 +12,35 @@ CENTER = {
     "crop_rectangle": arraw.UprightCropRect(0.1, 0.1, 0.9, 0.9),
     "crop_aspect": arraw.CropRatio(1.5),
     "convert_to_grayscale": True,
+    "tone_curve_luma": arraw.ToneCurve([(0.0, 0.0), (0.25, 0.4), (1.0, 1.0)]),
+    "tone_curve_red": arraw.ToneCurve([(0.0, 0.1), (1.0, 1.0)]),
+    "tone_curve_green": arraw.ToneCurve([(0.0, 0.0), (0.5, 0.3), (1.0, 0.9)]),
+    "tone_curve_blue": arraw.ToneCurve([(0.0, 0.0), (0.2, 0.1), (0.8, 0.9), (1.0, 1.0)]),
+    # The one model there is, so the default: nothing else is valid yet.
+    "grain_model": arraw.GrainModel.VALUE_NOISE,
+    # Likewise the one luminance noise filter.
+    "luminance_noise_filter": arraw.LuminanceNoiseFilter.BILATERAL,
 }
+# The only rows whose one valid value is their default.
+SOLE_VALUE = {"grain_model", "luminance_noise_filter"}
+# Flat keyword to field of DevelopSettings.noise_reduction.
+NOISE_REDUCTION = {
+    "luminance_noise_reduction": "luminance",
+    "luminance_noise_detail": "luminance_detail",
+    "luminance_noise_filter": "luminance_filter",
+    "color_noise_reduction": "color",
+    "color_noise_smoothness": "color_smoothness",
+}
+# Above 2**31, so that a signed 32-bit integer somewhere would show.
+WHOLE = {"grain_seed": 3000000000}
 
 BANDS = ("red", "orange", "yellow", "green", "aqua", "blue", "purple", "magenta")
 
 
 def sample(descriptor):
     """Pick a non-default value for a setting from its descriptor."""
+    if descriptor.name in WHOLE:
+        return WHOLE[descriptor.name]
     if descriptor.range is not None:
         low, high = descriptor.range
         return low + 0.3 * (high - low)
@@ -34,13 +56,28 @@ def leaves(settings):
 
 
 def find(settings, name):
+    if name in NOISE_REDUCTION:
+        return getattr(settings.noise_reduction, NOISE_REDUCTION[name])
     for kind in ("hue", "saturation", "luminance"):
         for band in BANDS:
             if name == f"{kind}_{band}":
                 return getattr(getattr(settings.hsl, band), kind)
+    if name.startswith("grade_"):
+        rest = name.removeprefix("grade_")
+        if rest in ("balance", "blending"):
+            return getattr(settings.color_grading, rest)
+        zone, kind = rest.split("_")
+        return getattr(getattr(settings.color_grading, zone + "s"), kind)
+    if name.startswith("vignette_"):
+        return getattr(settings.effects.vignette, name.removeprefix("vignette_"))
+    if name.startswith("grain_"):
+        return getattr(settings.effects.grain, name.removeprefix("grain_"))
+    if name.startswith("tone_curve"):
+        return getattr(settings.tone_curve, name.removeprefix("tone_curve").lstrip("_") or "luma")
     if name.startswith("gray_"):
         return getattr(settings.black_and_white, name.removeprefix("gray_"))
-    for group in (settings.color, settings.tone, settings.geometry, settings.black_and_white):
+    for group in (settings.color, settings.tone, settings.presence, settings.geometry,
+                  settings.black_and_white):
         if hasattr(group, name):
             return getattr(group, name)
         if name.startswith("crop_") and hasattr(group, "crop"):
@@ -69,7 +106,8 @@ def test_every_descriptor_name_lands_in_its_field(photo, descriptor):
     changed = photo.with_(**{descriptor.name: value})
     after = leaves(changed.state.settings)
     assert same(after[descriptor.name], value)
-    assert after[descriptor.name] != default[descriptor.name]
+    if descriptor.name not in SOLE_VALUE:
+        assert after[descriptor.name] != default[descriptor.name]
     for name in default:
         if name != descriptor.name:
             assert same(after[name], default[name]), f"{name} moved when setting {descriptor.name}"
@@ -108,7 +146,9 @@ def test_int_is_accepted_for_a_number(photo):
 @pytest.mark.parametrize(
     "key, value",
     [("exposure", 5.5), ("exposure", -5.5), ("contrast", 101), ("filmic_highlights", -1),
-     ("temperature", 1500), ("temperature", 13000), ("tint", 200), ("straighten", 46)],
+     ("temperature", 1500), ("temperature", 13000), ("tint", 200), ("straighten", 46),
+     ("grade_shadow_hue", 361), ("grade_shadow_hue", -1), ("grade_highlight_saturation", 101),
+     ("grade_balance", -101), ("grade_blending", 101)],
 )
 def test_out_of_range_is_value_error(photo, key, value):
     with pytest.raises(ValueError):
@@ -126,6 +166,8 @@ def test_range_edges_are_accepted(photo):
     for d in arraw.setting_descriptors():
         if d.range is not None:
             low, high = d.range
+            if d.name in WHOLE:
+                low, high = int(low), int(high)
             photo.with_(**{d.name: low})
             photo.with_(**{d.name: high})
 
@@ -213,3 +255,9 @@ def test_open_missing_file_raises(tmp_path):
 
 def test_open_accepts_str_and_path(dng):
     assert arraw.open(str(dng)) == arraw.open(dng)
+
+
+@pytest.mark.parametrize("points", [[(0.1, 0.0), (1.0, 1.0)], [(0.0, 0.0), (0.5, 2.0), (1.0, 1.0)]])
+def test_a_malformed_curve_is_refused_when_set_on_a_photo(photo, points):
+    with pytest.raises(ValueError, match="tone curve"):
+        photo.with_(tone_curve_luma=points)

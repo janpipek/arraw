@@ -91,7 +91,10 @@ void bindImage(nb::module_& m) {
         .value("LINEAR_REC2020", NamedEncoding::LinearRec2020)
         .value("SRGB", NamedEncoding::Srgb)
         .value("DISPLAY_P3", NamedEncoding::DisplayP3)
-        .value("ADOBE_RGB", NamedEncoding::AdobeRgb);
+        .value("ADOBE_RGB", NamedEncoding::AdobeRgb)
+        .value("REC2020_GAMMA22", NamedEncoding::Rec2020Gamma22,
+               "Rec.2020 primaries, each channel sign(v) * |v|^(1/2.2): the curve input that "
+               "sample() hands back; not an output encoding.");
 
     nb::class_<CameraNative>(m, "CameraNative",
                              "A camera's native colour encoding; opaque in this version.")
@@ -120,6 +123,10 @@ void bindImage(nb::module_& m) {
         .def_prop_ro("encoding",
                      [](const ImageBuffer& buffer) { return encodingToPython(buffer.encoding()); })
         .def_prop_ro("orientation", &ImageBuffer::orientation)
+        .def_prop_rw("pixel_scale", &ImageBuffer::pixelScale, &ImageBuffer::setPixelScale,
+                     "Sensor pixels one pixel spans along each side: 1 for a full decode, 2 for "
+                     "a half-size one, doubled by each halving. Noise reduction divides its "
+                     "reach by it. Finite and above zero.")
         .def_prop_ro("pixels", &pixelsOf,
                      "Writable NumPy view of shape (height, width, channels), without a copy; "
                      "it keeps the buffer alive.")
@@ -144,7 +151,8 @@ void bindImage(nb::module_& m) {
         },
         "path"_a, "half_size"_a = false,
         "Decode an image file into a buffer. With half_size a RAW is decoded at half its width "
-        "and height, without demosaicing, and the buffer is that much smaller than "
+        "and height, without demosaicing, its pixel_scale is 2, and the buffer is that much "
+        "smaller than "
         "read_metadata says; other files ignore it.");
 
     m.def(

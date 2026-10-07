@@ -1,19 +1,24 @@
 #include "GeometryPlan.h"
 #include "GpuPlan.h"
 #include "ProcessingPlan.h"
+#include "ToneCurve.h"
 
 #include <ColorEncoding.h>
+#include <DevelopSettings.h>
 #include <DevelopState.h>
 #include <GeometrySettings.h>
 #include <ImageBuffer.h>
 #include <ImageOrientation.h>
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <span>
 #include <stdexcept>
 
 using namespace arraw;
@@ -89,6 +94,53 @@ TEST_CASE("The pointwise block carries the colour block unchanged", "[gpu][plan]
     REQUIRE(idle.adjustsVibrance == 0U);
     REQUIRE(idle.adjustsHsl == 0U);
     REQUIRE(idle.convertsToGrayscale == 0U);
+}
+
+TEST_CASE("The pointwise block carries the colour grade unchanged", "[gpu][plan][grading]") {
+    DevelopSettings settings;
+    settings.colorGrading = {.shadows = {.hue = 220.0F, .saturation = 40.0F},
+                             .midtones = {.hue = 90.0F, .saturation = 10.0F},
+                             .highlights = {.hue = 45.0F, .saturation = 70.0F},
+                             .balance = -30.0F,
+                             .blending = 80.0F};
+    const ProcessingPlan plan = planFor(ColorEncoding{workingEncoding}, DevelopState{settings});
+    const ColorGradingPlan& grading = plan.colorAdjustments.grading;
+    REQUIRE(grading.active);
+
+    const auto block = packPointwise(plan);
+
+    REQUIRE(block.grades == 1U);
+    REQUIRE(block.gradeBalanceShift == grading.balanceShift);
+    REQUIRE(block.gradeZoneWidth == grading.zoneWidth);
+    REQUIRE(block.gradeShadowMidtoneTint == std::array{grading.shadowTint.a, grading.shadowTint.b,
+                                                       grading.midtoneTint.a,
+                                                       grading.midtoneTint.b});
+    REQUIRE(block.gradeHighlightTint ==
+            std::array{grading.highlightTint.a, grading.highlightTint.b, 0.0F, 0.0F});
+
+    /// Off, as an unset plan is.
+    const auto idle = packPointwise(ProcessingPlan{});
+    REQUIRE(idle.grades == 0U);
+    REQUIRE(idle.gradeShadowMidtoneTint == std::array{0.0F, 0.0F, 0.0F, 0.0F});
+
+    /// Hues, Balance and Blending with no saturation upload the very bytes
+    /// the defaults do.
+    DevelopSettings hueOnly;
+    hueOnly.colorGrading = {.shadows = {.hue = 100.0F},
+                            .midtones = {.hue = 200.0F},
+                            .highlights = {.hue = 300.0F},
+                            .balance = 40.0F,
+                            .blending = 5.0F};
+    const auto plain =
+        packPointwise(planFor(ColorEncoding{workingEncoding}, DevelopState{DevelopSettings{}}));
+    const auto hues = packPointwise(planFor(ColorEncoding{workingEncoding}, DevelopState{hueOnly}));
+    REQUIRE(std::memcmp(&plain, &hues, sizeof(GpuPointwiseBlock)) == 0);
+}
+
+TEST_CASE("The pointwise block starts the grade's tints on vec4 boundaries", "[gpu][plan]") {
+    REQUIRE(offsetof(GpuPointwiseBlock, grades) % 16 == 0);
+    REQUIRE(offsetof(GpuPointwiseBlock, gradeShadowMidtoneTint) % 16 == 0);
+    REQUIRE(offsetof(GpuPointwiseBlock, gradeHighlightTint) % 16 == 0);
 }
 
 TEST_CASE("The pointwise block lays its band sets out as std140 arrays of vec4", "[gpu][plan]") {
@@ -205,4 +257,158 @@ TEST_CASE("The packed map lands where the CPU samples", "[gpu][plan]") {
         REQUIRE(std::abs(position(0) - expected.x) < 1e-5);
         REQUIRE(std::abs(position(1) - expected.y) < 1e-5);
     }
+}
+
+TEST_CASE("The pointwise block flags and carries the active tone curves", "[gpu][plan][curve]") {
+    ProcessingPlan idle;
+    const auto off = packPointwise(idle);
+    REQUIRE(off.curvesLuma == 0U);
+    REQUIRE(off.curvesRed == 0U);
+    REQUIRE(off.curvesGreen == 0U);
+    REQUIRE(off.curvesBlue == 0U);
+
+    DevelopSettings settings;
+    settings.toneCurve.luma.points = {{0.0F, 0.0F}, {0.5F, 0.7F}, {1.0F, 1.0F}};
+    settings.toneCurve.blue.points = {{0.0F, 0.1F}, {1.0F, 0.8F}};
+    const ProcessingPlan plan = planFor(workingEncoding, DevelopState{settings});
+
+    const auto block = packPointwise(plan);
+    REQUIRE(block.curvesLuma == 1U);
+    REQUIRE(block.curvesRed == 0U);
+    REQUIRE(block.curvesGreen == 0U);
+    REQUIRE(block.curvesBlue == 1U);
+}
+
+TEST_CASE("The tone curves pack as one row, a curve to a channel", "[gpu][plan][curve]") {
+    DevelopSettings settings;
+    settings.toneCurve.luma.points = {{0.0F, 0.0F}, {0.5F, 0.7F}, {1.0F, 1.0F}};
+    settings.toneCurve.green.points = {{0.0F, 0.1F}, {1.0F, 0.8F}};
+    const ProcessingPlan plan = planFor(workingEncoding, DevelopState{settings});
+
+    const ImageBuffer packed = packToneCurves(plan.toneCurves);
+    REQUIRE(packed.size() == ImageSize{static_cast<std::uint32_t>(toneCurveSamples), 1});
+    REQUIRE(packed.format() == PixelFormat::RgbaF32);
+
+    const std::span<const float> texels = packed.samples<float>();
+    for (std::size_t index = 0; index < toneCurveSamples; ++index) {
+        REQUIRE(texels[index * 4] == plan.toneCurves.luma.table[index]);
+        REQUIRE(texels[index * 4 + 1] == 0.0F); // red: identity, so off and zero
+        REQUIRE(texels[index * 4 + 2] == plan.toneCurves.green.table[index]);
+        REQUIRE(texels[index * 4 + 3] == 0.0F);
+    }
+    // The ends are the curve's own, which the shader's extension starts from.
+    REQUIRE(texels[2] == Catch::Approx(0.1F));
+    REQUIRE(texels[(toneCurveSamples - 1) * 4 + 2] == Catch::Approx(0.8F));
+
+    // Default settings pack to an all-zero texture of the same size.
+    const ImageBuffer idle = packToneCurves(ToneCurvePlan{});
+    REQUIRE(idle.size() == packed.size());
+    for (const float value : idle.samples<float>()) {
+        REQUIRE(value == 0.0F);
+    }
+}
+
+TEST_CASE("The effects block carries the vignette and the crop frame mapping", "[gpu][plan]") {
+    const ImageBuffer source({40, 30}, workingFormat, workingEncoding);
+    DevelopSettings settings;
+    settings.effects.vignette = {60.0F, 40.0F, 0.0F};
+    const ProcessingPlan plan = planFor(source, DevelopState{settings},
+                                        {.size = RenderRequest::Scale{2.0},
+                                         .region = RenderRequest::Region{0.25, 0.5, 0.75, 1.0},
+                                         .upscale = Upscale::Allowed});
+
+    const GpuEffectsBlock block = packEffects(plan);
+    REQUIRE(block.origin == std::array{0.25F, 0.5F});
+    REQUIRE(block.step ==
+            std::array{static_cast<float>(1.0 / 80.0), static_cast<float>(1.0 / 60.0)});
+    const VignettePlan& vignette = plan.effects.vignette;
+    REQUIRE(block.vignettes == 1U);
+    REQUIRE(block.vignetteLightens == 1U);
+    REQUIRE(block.vignetteHardEdge == 1U);
+    REQUIRE(block.vignetteStops == vignette.stops);
+    REQUIRE(block.vignetteInner == vignette.inner);
+    REQUIRE(block.vignetteOuter == vignette.outer);
+
+    // Off, the block says so, whatever the shape asked for.
+    settings.effects.vignette.amount = 0.0F;
+    REQUIRE(packEffects(planFor(source, DevelopState{settings})).vignettes == 0U);
+}
+
+TEST_CASE("The pointwise block carries Presence and its grids", "[gpu][plan][presence]") {
+    const ImageBuffer source({203, 77}, workingFormat, workingEncoding);
+    DevelopSettings settings;
+    settings.presence = {.texture = 40.0F, .clarity = -20.0F, .dehaze = 0.0F};
+    const ProcessingPlan plan = planFor(source, DevelopState{settings});
+    const GpuPointwiseBlock block = packPointwise(plan);
+    REQUIRE(block.presence == 1U);
+    REQUIRE(block.textureAmount == 0.4F);
+    REQUIRE(block.clarityAmount == -0.2F);
+    REQUIRE(block.dehazeAmount == 0.0F);
+    REQUIRE(block.fineReduction == plan.presence.fine.reduction);
+    REQUIRE(block.coarseReduction == plan.presence.coarse.reduction);
+    REQUIRE(block.fineGridSize == std::array<std::uint32_t, 2>{102, 39});
+    REQUIRE(block.coarseGridSize == std::array<std::uint32_t, 2>{203, 77});
+    REQUIRE(block.presenceLumaRow[3] == 0.0F);
+
+    const GpuPresenceBlock reduce =
+        packPresence(plan.presence, plan.presence.fine, source.size(), PresenceStep::Reduce);
+    REQUIRE(reduce.radius == 0U);
+    REQUIRE(reduce.gridSize == std::array<std::uint32_t, 2>{102, 39});
+    const GpuPresenceBlock blur =
+        packPresence(plan.presence, plan.presence.fine, source.size(), PresenceStep::BlurDown);
+    REQUIRE(blur.radius == plan.presence.fine.radius);
+    REQUIRE(blur.weights[0] == 1.0F);
+    REQUIRE(blur.weights[1] ==
+            denoiseWeights(plan.presence.fine.sigma, plan.presence.fine.radius)[1]);
+    REQUIRE(blur.window == 0U);
+
+    // Dehaze alone: the coarse grids are its, and its minimum carries the window.
+    settings.presence = {.texture = 0.0F, .clarity = 0.0F, .dehaze = 30.0F};
+    const ProcessingPlan hazy = planFor(source, DevelopState{settings});
+    const GpuPointwiseBlock hazyBlock = packPointwise(hazy);
+    REQUIRE(hazyBlock.coarseReduction == hazy.presence.haze.reduction);
+    REQUIRE(hazyBlock.coarseGridSize == std::array<std::uint32_t, 2>{203, 77});
+    const GpuPresenceBlock minimum =
+        packPresence(hazy.presence, hazy.presence.haze, source.size(), PresenceStep::MinimumAcross);
+    // The octagon's passes across and down carry its half-width across, the
+    // diagonal ones its half-length along a diagonal.
+    const OctagonWindow octagon = octagonOf(hazy.presence.haze.window);
+    REQUIRE(octagon.diagonal > 0U);
+    REQUIRE(minimum.window == octagon.across);
+    REQUIRE(minimum.radius == 0U);
+    REQUIRE(
+        packPresence(hazy.presence, hazy.presence.haze, source.size(), PresenceStep::MaximumDown)
+            .window == octagon.across);
+    for (const PresenceStep step :
+         {PresenceStep::MinimumDiagonal, PresenceStep::MinimumAntidiagonal,
+          PresenceStep::MaximumDiagonal, PresenceStep::MaximumAntidiagonal}) {
+        const GpuPresenceBlock diagonal =
+            packPresence(hazy.presence, hazy.presence.haze, source.size(), step);
+        REQUIRE(diagonal.step == static_cast<std::uint32_t>(step));
+        REQUIRE(diagonal.window == octagon.diagonal);
+        REQUIRE(diagonal.radius == 0U);
+    }
+    REQUIRE(static_cast<std::uint32_t>(PresenceStep::MinimumDiagonal) == 9U);
+    REQUIRE(static_cast<std::uint32_t>(PresenceStep::MaximumAntidiagonal) == 12U);
+    // The floor's last blur, kept above the opening, carries the blur's taps.
+    const GpuPresenceBlock last = packPresence(hazy.presence, hazy.presence.haze, source.size(),
+                                               PresenceStep::BlurDownAboveOpening);
+    REQUIRE(last.step == 7U);
+    REQUIRE(last.radius == hazy.presence.haze.radius);
+    REQUIRE(last.weights[1] ==
+            denoiseWeights(hazy.presence.haze.sigma, hazy.presence.haze.radius)[1]);
+
+    // A step of the opening's reconstruction carries neither the window nor the blur.
+    const GpuPresenceBlock reconstruct =
+        packPresence(hazy.presence, hazy.presence.haze, source.size(), PresenceStep::Reconstruct);
+    REQUIRE(reconstruct.step == 8U);
+    REQUIRE(reconstruct.window == 0U);
+    REQUIRE(reconstruct.radius == 0U);
+    REQUIRE(reconstruct.gridSize == std::array<std::uint32_t, 2>{203, 77});
+
+    // Off, the block says so and carries nothing else.
+    const GpuPointwiseBlock off = packPointwise(planFor(source, DevelopState{}));
+    REQUIRE(off.presence == 0U);
+    REQUIRE(off.fineReduction == 0U);
+    REQUIRE(off.coarseReduction == 0U);
 }

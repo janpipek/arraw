@@ -102,17 +102,37 @@ PixelRegion arraw::regionOf(const RenderRequest& request, ImageSize frame) {
     return {x0, y0, x1 - x0, y1 - y0};
 }
 
-ProcessingPlan arraw::planFor(const ColorEncoding& encoding, const DevelopState& state) {
+FrameMapping arraw::frameMappingOf(const ProcessingPlan& plan) {
+    const ImageSize cropped = plan.geometry->outputSize;
+    const ResizePlan& resize = *plan.resize;
+    const auto width = static_cast<double>(cropped.width);
+    const auto height = static_cast<double>(cropped.height);
+    FrameMapping mapping;
+    mapping.origin = {resize.region.x / width, resize.region.y / height};
+    mapping.step = {static_cast<double>(resize.region.width) / resize.outputSize.width / width,
+                    static_cast<double>(resize.region.height) / resize.outputSize.height / height};
+    mapping.aspect = width / height;
+    return mapping;
+}
+
+ProcessingPlan arraw::planFor(const ColorEncoding& encoding, const DevelopState& state,
+                              double pixelScale) {
     const DevelopSettings& settings = state.settings;
     ProcessingPlan plan = tonePlanFor(settings.tone);
     plan.toWorking = colorMatrixFor(encoding, settings.color);
-    plan.colorAdjustments =
-        colorAdjustmentPlanFor(settings.color, settings.hsl, settings.blackAndWhite);
+    plan.denoise = denoisePlanFor(settings.noiseReduction, encoding, pixelScale);
+    plan.toneCurves = toneCurvePlanFor(settings.toneCurve);
+    plan.colorAdjustments = colorAdjustmentPlanFor(settings.color, settings.hsl,
+                                                   settings.blackAndWhite, settings.colorGrading);
+    plan.effects = effectsPlanFor(settings.effects);
     return plan;
 }
 
 ProcessingPlan arraw::planFor(const Photo& photo, const RenderRequest& request) {
+    // What the file declares is its full resolution: one sensor pixel a pixel.
     auto plan = planFor(photo.metadata().encoding, photo.state());
+    plan.presence = presencePlanFor(photo.state().settings.presence, photo.metadata().encoding, 1.0,
+                                    photo.metadata().size);
     plan.geometry = geometryPlanFor(photo.metadata().size, photo.metadata().orientation,
                                     photo.state().settings.geometry);
     plan.resize = resizePlanFor(request, plan.geometry->outputSize, nullptr);
@@ -122,7 +142,9 @@ ProcessingPlan arraw::planFor(const Photo& photo, const RenderRequest& request) 
 ProcessingPlan arraw::planFor(const ImageBuffer& source, const DevelopState& state,
                               const RenderRequest& request) {
     const detail::TimingSpan timing("develop.plan");
-    auto plan = planFor(source.encoding(), state);
+    auto plan = planFor(source.encoding(), state, source.pixelScale());
+    plan.presence = presencePlanFor(state.settings.presence, source.encoding(), source.pixelScale(),
+                                    source.size());
     plan.geometry = geometryPlanFor(source.size(), source.orientation(), state.settings.geometry);
     plan.resize = resizePlanFor(request, plan.geometry->outputSize, &source);
     return plan;

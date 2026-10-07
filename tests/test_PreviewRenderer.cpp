@@ -1,16 +1,24 @@
+#include "DisplayImage.h"
 #include "PreviewRenderer.h"
 #include "support/TestImages.h"
 
+#include <CurveHistogram.h>
+#include <Develop.h>
 #include <DevelopSettings.h>
+#include <ImagePyramid.h>
+#include <Progress.h>
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <thread>
+#include <utility>
 #include <vector>
 
 using namespace arraw;
@@ -32,7 +40,9 @@ public:
                 if (closed_) {
                     ++lateCalls_;
                 }
-                if (!result.image && result.background) {
+                if (result.curveHistogram) {
+                    histograms_.push_back(std::move(result));
+                } else if (!result.image && result.background) {
                     backgrounds_.push_back(std::move(result));
                 } else {
                     results_.push_back(std::move(result));
@@ -57,6 +67,14 @@ public:
         });
     }
 
+    /// Waits until a recounted curve histogram for @p id, or a later one, has arrived.
+    [[nodiscard]] bool waitForHistogram(std::uint64_t id) {
+        std::unique_lock lock(mutex_);
+        return changed_.wait_for(lock, timeout, [&] {
+            return !histograms_.empty() && histograms_.back().request >= id;
+        });
+    }
+
     /// Makes any later callback count as late.
     void close() {
         const std::scoped_lock lock(mutex_);
@@ -74,6 +92,12 @@ public:
         return backgrounds_;
     }
 
+    /// Recounted curve histograms, apart from the renders.
+    [[nodiscard]] std::vector<app::PreviewResult> histograms() {
+        const std::scoped_lock lock(mutex_);
+        return histograms_;
+    }
+
     [[nodiscard]] int lateCalls() {
         const std::scoped_lock lock(mutex_);
         return lateCalls_;
@@ -84,6 +108,7 @@ private:
     std::condition_variable changed_;
     std::vector<app::PreviewResult> results_;
     std::vector<app::PreviewResult> backgrounds_;
+    std::vector<app::PreviewResult> histograms_;
     bool closed_ = false;
     int lateCalls_ = 0;
 };
@@ -119,8 +144,37 @@ TEST_CASE("A large source in a small viewport is developed from a reduced level"
     REQUIRE(results.back().image->height() <= 512);
 }
 
+TEST_CASE("A reduced level is denoised with radii divided by its scale",
+          "[app][preview][pyramid][denoise]") {
+    Collector collector;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
+    const auto source = makeLargeSource();
+    renderer.setSource(source);
+    DevelopState state;
+    state.settings.noiseReduction.luminance = 80.0F;
+    state.settings.noiseReduction.color = 60.0F;
+
+    const std::uint64_t id = renderer.request(state, app::PreviewView::wholeFrame({512, 512}));
+    REQUIRE(collector.waitFor(id));
+    const app::PreviewResult result = collector.results().back();
+    REQUIRE(result.error.empty());
+    REQUIRE(result.level == 2);
+
+    // The same level developed by hand, whose pixels know their scale, and a
+    // copy that claims to be full resolution.
+    const ImageBuffer level2 = halved(halved(*source));
+    REQUIRE(level2.pixelScale() == 4.0 * source->pixelScale());
+    const RenderRequest request = app::previewRequest({512, 512});
+    const QImage expected = app::toDisplayImage(develop(level2, state, request));
+    ImageBuffer claimsFull = level2.clone();
+    claimsFull.setPixelScale(1.0);
+    const QImage unscaled = app::toDisplayImage(develop(claimsFull, state, request));
+    REQUIRE(*result.image == expected);
+    REQUIRE(*result.image != unscaled);
+}
+
 TEST_CASE("A viewport as large as the source is developed from the source itself",
-          "[app][preview][pyramid]") {
+          "[app][preview][pyramid][slow]") {
     Collector collector;
     app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
     renderer.setSource(makeLargeSource());
@@ -343,16 +397,20 @@ QImage freshImage(const DevelopState& state, QSize viewport) {
     return *renderOne(renderer, collector, state, viewport).image;
 }
 
-DevelopState stateWith(float exposure, double straighten) {
+DevelopState stateWith(float exposure, double straighten, float vignette = 0.0F,
+                       float colorNoise = 0.0F) {
     DevelopSettings settings;
     settings.tone.exposure = exposure;
     settings.geometry.straighten = straighten;
+    settings.effects.vignette.amount = vignette;
+    settings.noiseReduction.color = colorNoise;
     return DevelopState{settings};
 }
 
 } // namespace
 
-TEST_CASE("An edit resumes from the newest checkpoint it can still use", "[app][preview][resume]") {
+TEST_CASE("An edit resumes from the newest checkpoint it can still use",
+          "[app][preview][resume][slow]") {
     Collector collector;
     app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
     renderer.setSource(makeSource());
@@ -372,12 +430,28 @@ TEST_CASE("An edit resumes from the newest checkpoint it can still use", "[app][
          Stage::Geometry},
         {"a straighten change resumes from the pointwise result", stateWith(0.5F, 5.0), narrow,
          Stage::Pointwise},
-        {"the same request again resumes from the geometry", stateWith(0.5F, 5.0), narrow,
-         Stage::Geometry},
+        {"the same request again resumes from the resize", stateWith(0.5F, 5.0), narrow,
+         Stage::Resize},
         {"a tone change after that resumes from nothing", stateWith(-0.5F, 5.0), narrow,
          std::nullopt},
         {"a viewport change after that resumes from the geometry", stateWith(-0.5F, 5.0), wide,
          Stage::Geometry},
+        {"a vignette change resumes from the resize", stateWith(-0.5F, 5.0, -40.0F), wide,
+         Stage::Resize},
+        {"a viewport change with a vignette resumes from the geometry",
+         stateWith(-0.5F, 5.0, -40.0F), narrow, Stage::Geometry},
+        {"a vignette turned off resumes from the resize", stateWith(-0.5F, 5.0), narrow,
+         Stage::Resize},
+        {"noise reduction turned on develops from the level", stateWith(-0.5F, 5.0, 0.0F, 40.0F),
+         narrow, std::nullopt},
+        {"a tone change with noise reduction resumes from the denoise result",
+         stateWith(0.25F, 5.0, 0.0F, 40.0F), narrow, Stage::Denoise},
+        {"a stronger noise reduction develops from the level again",
+         stateWith(0.25F, 5.0, 0.0F, 70.0F), narrow, std::nullopt},
+        {"noise reduction turned off develops from the level, keeping no denoise result",
+         stateWith(0.25F, 5.0), narrow, std::nullopt},
+        {"a tone change then resumes from nothing again", stateWith(0.5F, 5.0), narrow,
+         std::nullopt},
     };
     for (const Step& step : steps) {
         INFO(step.label);
@@ -496,7 +570,7 @@ TEST_CASE("A region outside the frame is reported as a failure", "[app][preview]
     REQUIRE_FALSE(result.image.has_value());
 }
 
-TEST_CASE("A region carries the last whole frame beneath it", "[app][preview][region]") {
+TEST_CASE("A region carries the last whole frame beneath it", "[app][preview][region][slow]") {
     Collector collector;
     app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
     renderer.setSource(makeLargeSource());
@@ -522,7 +596,7 @@ TEST_CASE("A region carries the last whole frame beneath it", "[app][preview][re
 }
 
 TEST_CASE("An edit shows the earlier fallback until a refreshed one follows",
-          "[app][preview][region]") {
+          "[app][preview][region][slow]") {
     Collector collector;
     app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
     renderer.setSource(makeLargeSource());
@@ -572,4 +646,293 @@ TEST_CASE("Desktop CPU preference overrides automatic preview rendering",
     REQUIRE(result.error.empty());
     REQUIRE_FALSE(result.onGpu);
     REQUIRE(result.fallbackReason.empty());
+}
+
+TEST_CASE("The curve histogram is counted once requests pause", "[app][preview][histogram]") {
+    Collector collector;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
+    renderer.setCurveHistogramWanted(true);
+    const auto source = makeLargeSource();
+    renderer.setSource(source);
+    DevelopState state;
+    state.settings.tone.exposure = 0.4F;
+    const auto id = renderer.request(state, app::PreviewView::wholeFrame({300, 300}));
+    REQUIRE(collector.waitForHistogram(id));
+
+    const auto histograms = collector.histograms();
+    REQUIRE(histograms.size() == 1);
+    const app::PreviewResult& delivered = histograms.back();
+    REQUIRE(delivered.request == id);
+    REQUIRE_FALSE(delivered.image.has_value());
+    REQUIRE_FALSE(delivered.background.has_value());
+    // The level that covers the CPU's own histogram request, whatever the
+    // view's: 2048x1024 fits 512 at level 2, not at level 1 as the GPU's 1024 would.
+    const ImageBuffer level2 = halved(halved(*source));
+    REQUIRE(*delivered.curveHistogram ==
+            curveHistogram(level2, state, app::cpuCurveHistogramRequest));
+    REQUIRE(*delivered.curveHistogram != curveHistogram(halved(*source), state));
+}
+
+TEST_CASE("A curve edit keeps the histogram, an exposure edit recounts it",
+          "[app][preview][histogram][slow]") {
+    Collector collector;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
+    renderer.setCurveHistogramWanted(true);
+    renderer.setSource(makeSource());
+    const app::PreviewView view = app::PreviewView::wholeFrame({200, 200});
+    DevelopState state;
+    auto id = renderer.request(state, view);
+    REQUIRE(collector.waitForHistogram(id));
+    const CurveHistogram first = *collector.histograms().back().curveHistogram;
+
+    // A curve drag: several renders, each followed by a pause.
+    for (const float y : {0.55F, 0.6F, 0.7F}) {
+        state.settings.toneCurve.luma.points = {{0.0F, 0.0F}, {0.5F, y}, {1.0F, 1.0F}};
+        id = renderer.request(state, view);
+        REQUIRE(collector.waitFor(id));
+        // Well past the pause: a recount, had one been started, would come
+        // before the next request is served.
+        std::this_thread::sleep_for(400ms);
+    }
+    // A zoom changes the view, not the histogram.
+    id = renderer.request(
+        state, app::PreviewView{.region = QRect(10, 10, 100, 60), .outputSize = {100, 60}});
+    REQUIRE(collector.waitFor(id));
+    std::this_thread::sleep_for(400ms);
+
+    state.settings.tone.exposure = 1.0F;
+    id = renderer.request(state, view);
+    REQUIRE(collector.waitForHistogram(id));
+    const auto histograms = collector.histograms();
+    REQUIRE(histograms.size() == 2);
+    REQUIRE(histograms.back().request == id);
+    REQUIRE(*histograms.back().curveHistogram != first);
+}
+
+TEST_CASE("A new source recounts the histogram", "[app][preview][histogram]") {
+    Collector collector;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
+    renderer.setCurveHistogramWanted(true);
+    renderer.setSource(makeSource());
+    auto id = renderer.request({}, app::PreviewView::wholeFrame({200, 200}));
+    REQUIRE(collector.waitForHistogram(id));
+
+    renderer.setSource(makeSource());
+    id = renderer.request({}, app::PreviewView::wholeFrame({200, 200}));
+    REQUIRE(collector.waitForHistogram(id));
+    REQUIRE(collector.histograms().size() == 2);
+}
+
+TEST_CASE("No histogram is counted while none is wanted", "[app][preview][histogram]") {
+    Collector collector;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
+    renderer.setSource(makeSource());
+    const app::PreviewView view = app::PreviewView::wholeFrame({200, 200});
+    auto id = renderer.request({}, view);
+    REQUIRE(collector.waitFor(id));
+    std::this_thread::sleep_for(400ms);
+    REQUIRE(collector.histograms().empty());
+
+    // Wanted, then not wanted again before an exposure edit: still nothing.
+    renderer.setCurveHistogramWanted(true);
+    REQUIRE(collector.waitForHistogram(id));
+    renderer.setCurveHistogramWanted(false);
+    DevelopState state;
+    state.settings.tone.exposure = 1.0F;
+    id = renderer.request(state, view);
+    REQUIRE(collector.waitFor(id));
+    std::this_thread::sleep_for(400ms);
+    REQUIRE(collector.histograms().size() == 1);
+}
+
+TEST_CASE("Becoming wanted counts once for the state last rendered", "[app][preview][histogram]") {
+    Collector collector;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
+    const auto source = makeSource();
+    renderer.setSource(source);
+    DevelopState state;
+    state.settings.tone.exposure = 0.7F;
+    const auto id = renderer.request(state, app::PreviewView::wholeFrame({200, 200}));
+    REQUIRE(collector.waitFor(id));
+    std::this_thread::sleep_for(400ms);
+    REQUIRE(collector.histograms().empty());
+
+    // No new request: the worker counts for the last one at the next pause.
+    renderer.setCurveHistogramWanted(true);
+    REQUIRE(collector.waitForHistogram(id));
+    const auto histograms = collector.histograms();
+    REQUIRE(histograms.size() == 1);
+    REQUIRE(histograms.back().request == id);
+    REQUIRE(*histograms.back().curveHistogram ==
+            curveHistogram(*source, state, app::cpuCurveHistogramRequest));
+
+    // Hidden and shown again with nothing changed: the histogram is still current.
+    renderer.setCurveHistogramWanted(false);
+    renderer.setCurveHistogramWanted(true);
+    std::this_thread::sleep_for(400ms);
+    REQUIRE(collector.histograms().size() == 1);
+    REQUIRE(collector.results().size() == 1);
+}
+
+TEST_CASE("Becoming wanted with no render yet counts nothing", "[app][preview][histogram]") {
+    Collector collector;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
+    renderer.setSource(makeSource());
+    renderer.setCurveHistogramWanted(true);
+    std::this_thread::sleep_for(300ms);
+    REQUIRE(collector.histograms().empty());
+    REQUIRE(collector.results().empty());
+}
+
+namespace {
+
+/// Progress reports delivered by a renderer, collected for the test thread.
+class ProgressCollector {
+public:
+    /// Callback to give the renderer.
+    [[nodiscard]] app::PreviewRenderer::ProgressCallback callback() {
+        return [this](std::uint64_t request, const Progress& progress) {
+            {
+                const std::scoped_lock lock(mutex_);
+                reports_.emplace_back(request, progress);
+            }
+            changed_.notify_all();
+        };
+    }
+
+    /// Waits until the render of @p id has reported at least once.
+    [[nodiscard]] bool waitForReport(std::uint64_t id) {
+        std::unique_lock lock(mutex_);
+        return changed_.wait_for(lock, timeout, [&] {
+            return std::ranges::any_of(reports_,
+                                       [id](const auto& report) { return report.first == id; });
+        });
+    }
+
+    /// Reports of one request's render, in order.
+    [[nodiscard]] std::vector<Progress> of(std::uint64_t id) {
+        const std::scoped_lock lock(mutex_);
+        std::vector<Progress> found;
+        for (const auto& [request, progress] : reports_) {
+            if (request == id) {
+                found.push_back(progress);
+            }
+        }
+        return found;
+    }
+
+private:
+    std::mutex mutex_;
+    std::condition_variable changed_;
+    std::vector<std::pair<std::uint64_t, Progress>> reports_;
+};
+
+/// @brief A state whose render at level 0 of the large source takes many seconds.
+DevelopState slowState() {
+    DevelopState state;
+    state.settings.noiseReduction.luminance = 100.0F;
+    state.settings.noiseReduction.color = 100.0F;
+    state.settings.presence.dehaze = 50.0F;
+    state.settings.presence.clarity = 50.0F;
+    return state;
+}
+
+} // namespace
+
+TEST_CASE("A newer request cancels the render in flight, and only the newest is shown",
+          "[app][preview][cancel]") {
+    Collector collector;
+    ProgressCollector progress;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu,
+                                  app::AppSettings{}, progress.callback());
+    renderer.setSource(makeLargeSource());
+
+    // At level 0 with everything slow on: far longer than the test waits for it.
+    const std::uint64_t slow =
+        renderer.request(slowState(), app::PreviewView::wholeFrame({2048, 1024}));
+    REQUIRE(progress.waitForReport(slow));
+    const auto superseded = std::chrono::steady_clock::now();
+    const std::uint64_t fast = renderer.request({}, app::PreviewView::wholeFrame({256, 128}));
+    REQUIRE(collector.waitFor(fast));
+    const auto shown = std::chrono::steady_clock::now();
+
+    // One render completed: the newest. The slow one delivered neither an image nor an error.
+    const auto results = collector.results();
+    REQUIRE(results.size() == 1);
+    REQUIRE(results[0].request == fast);
+    REQUIRE(results[0].image.has_value());
+    REQUIRE(results[0].error.empty());
+    REQUIRE(progress.of(slow).back().fraction < 1.0);
+    // Well within the time the slow render would have taken to finish.
+    REQUIRE(shown - superseded < 5s);
+}
+
+TEST_CASE("A burst of slow requests ends with the newest shown", "[app][preview][cancel]") {
+    Collector collector;
+    ProgressCollector progress;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu,
+                                  app::AppSettings{}, progress.callback());
+    renderer.setSource(makeLargeSource());
+
+    std::uint64_t last = 0;
+    for (int i = 0; i < 6; ++i) {
+        DevelopState state = slowState();
+        state.settings.tone.exposure = static_cast<float>(i) * 0.1F;
+        last = renderer.request(state, app::PreviewView::wholeFrame({512, 256}));
+        std::this_thread::sleep_for(20ms);
+    }
+    REQUIRE(collector.waitFor(last));
+    const auto results = collector.results();
+    // Superseded renders were cancelled: none came out as a failure, and fewer than all completed.
+    REQUIRE(results.size() < 6);
+    for (const auto& result : results) {
+        REQUIRE(result.error.empty());
+        REQUIRE(result.image.has_value());
+    }
+    REQUIRE(results.back().request == last);
+
+    // The newest render's progress rose to its end, thinned.
+    const std::vector<Progress> reports = progress.of(last);
+    REQUIRE_FALSE(reports.empty());
+    for (std::size_t index = 1; index < reports.size(); ++index) {
+        REQUIRE(reports[index].fraction >= reports[index - 1].fraction);
+    }
+    REQUIRE(reports.back().fraction == 1.0);
+}
+
+TEST_CASE("Progress is handed on at about thirty reports a second",
+          "[app][preview][progress][slow]") {
+    Collector collector;
+    ProgressCollector progress;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu,
+                                  app::AppSettings{}, progress.callback());
+    renderer.setSource(makeLargeSource());
+    const auto begin = std::chrono::steady_clock::now();
+    const std::uint64_t id =
+        renderer.request(slowState(), app::PreviewView::wholeFrame({1024, 512}));
+    REQUIRE(collector.waitFor(id));
+    const auto took = std::chrono::steady_clock::now() - begin;
+    const std::vector<Progress> reports = progress.of(id);
+    REQUIRE_FALSE(reports.empty());
+    // One per interval, one per step change and per call of the resume chain, and the end.
+    const auto intervals = static_cast<std::size_t>(took / app::previewProgressInterval);
+    REQUIRE(reports.size() <= intervals + 5 * progressStepCount + 2);
+    REQUIRE(reports.back().fraction == 1.0);
+}
+
+TEST_CASE("Destroying the renderer cancels the render in flight", "[app][preview][cancel]") {
+    Collector collector;
+    ProgressCollector progress;
+    std::optional<app::PreviewRenderer> renderer;
+    renderer.emplace(collector.callback(), app::PreviewRenderer::Device::Cpu, app::AppSettings{},
+                     progress.callback());
+    renderer->setSource(makeLargeSource());
+    const std::uint64_t slow =
+        renderer->request(slowState(), app::PreviewView::wholeFrame({2048, 1024}));
+    REQUIRE(progress.waitForReport(slow));
+    const auto begin = std::chrono::steady_clock::now();
+    renderer.reset();
+    const auto stopping = std::chrono::steady_clock::now() - begin;
+    REQUIRE(collector.results().empty());
+    REQUIRE(stopping < 5s);
 }

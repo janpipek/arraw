@@ -11,16 +11,20 @@ namespace arraw {
 ///
 /// A pass boundary is a place where a buffer exists anyway (ADR 011), so this
 /// names the passes that exist rather than every stage that one day will. It
-/// grows as spatial stages arrive: decode, lens, spots and noise join it when
-/// each becomes a pass with its parameters in the plan (ADR 012).
+/// grows as spatial stages arrive: decode, lens and spots join it when each
+/// becomes a pass with its parameters in the plan (ADR 012).
 enum class Stage {
+    /// After noise reduction, on the source's pixels and in its encoding; equals the
+    /// source when no noise reduction is on (ADR 039).
+    Denoise,
     Pointwise, ///< After the fused pointwise chain, before any geometry.
     Geometry,  ///< After the resample into the upright, cropped frame.
     Resize,    ///< After the resize to a requested size; equals Geometry's pixels when none.
+    Effects,   ///< After the effects on the crop frame; equals Resize's pixels when none is on.
 };
 
 /// @brief Number of pass boundaries, for the prefix fold to iterate over.
-inline constexpr std::size_t stageCount = 3;
+inline constexpr std::size_t stageCount = 5;
 
 struct CheckpointState;
 

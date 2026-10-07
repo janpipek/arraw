@@ -25,8 +25,25 @@ BANDS = ("red", "orange", "yellow", "green", "aqua", "blue", "purple", "magenta"
 HSL = {f"{kind}_{band}" for kind in ("hue", "saturation", "luminance") for band in BANDS}
 GRAY = {f"gray_{band}" for band in BANDS}
 RANGES.update({name: (-100.0, 100.0) for name in HSL | GRAY})
+ZONES = ("shadow", "midtone", "highlight")
+GRADE = {f"grade_{zone}_{kind}": (0.0, 360.0 if kind == "hue" else 100.0)
+         for zone in ZONES for kind in ("hue", "saturation")}
+GRADE.update({"grade_balance": (-100.0, 100.0), "grade_blending": (0.0, 100.0)})
+RANGES.update(GRADE)
+EFFECTS = {"vignette_amount": (-100.0, 100.0), "vignette_midpoint": (0.0, 100.0),
+           "vignette_feather": (0.0, 100.0), "grain_amount": (0.0, 100.0),
+           "grain_size": (0.0, 100.0), "grain_roughness": (0.0, 100.0),
+           "grain_seed": (0.0, 4294967295.0)}
+RANGES.update(EFFECTS)
+DETAIL = {"luminance_noise_reduction": (0.0, 100.0), "luminance_noise_detail": (0.0, 100.0),
+          "color_noise_reduction": (0.0, 100.0), "color_noise_smoothness": (0.0, 100.0)}
+RANGES.update(DETAIL)
+PRESENCE = {"texture": (-100.0, 100.0), "clarity": (-100.0, 100.0), "dehaze": (-100.0, 100.0)}
+RANGES.update(PRESENCE)
+CURVES = {"tone_curve_luma", "tone_curve_red", "tone_curve_green", "tone_curve_blue"}
 UNRANGED = {"white_balance", "rotation", "flip_horizontal", "flip_vertical",
-            "crop_rectangle", "crop_aspect", "convert_to_grayscale"}
+            "crop_rectangle", "crop_aspect", "convert_to_grayscale", "grain_model",
+            "luminance_noise_filter"} | CURVES
 
 
 def snake(key: str) -> str:
@@ -39,8 +56,8 @@ def descriptors():
 
 
 def test_one_row_per_leaf(descriptors):
-    assert len(descriptors) == 51
-    assert len({d.name for d in descriptors}) == 51
+    assert len(descriptors) == len(RANGES) + len(UNRANGED) == 79
+    assert len({d.name for d in descriptors}) == len(RANGES) + len(UNRANGED) == 79
     assert {d.name for d in descriptors} == set(RANGES) | UNRANGED
 
 
@@ -91,7 +108,54 @@ def test_colour_groups(descriptors):
         assert by_name[name].affects == arraw.Stage.POINTWISE
 
 
+def test_colour_grading_descriptors(descriptors):
+    by_name = {d.name: d for d in descriptors}
+    for name in GRADE:
+        assert by_name[name].group == arraw.SettingGroup.COLOR_GRADING
+        assert by_name[name].affects == arraw.Stage.POINTWISE
+        assert by_name[name].applies == arraw.Applicability.ALWAYS
+
+
+def test_effects_descriptors(descriptors):
+    by_name = {d.name: d for d in descriptors}
+    for name in set(EFFECTS) | {"grain_model"}:
+        assert by_name[name].group == arraw.SettingGroup.EFFECTS
+        assert by_name[name].affects == arraw.Stage.EFFECTS
+        assert by_name[name].applies == arraw.Applicability.ALWAYS
+
+
+def test_only_the_grain_seed_is_the_photographs_own(descriptors):
+    own = {d.name for d in descriptors if d.scope == arraw.SettingScope.PHOTO}
+    assert own == {"grain_seed"}
+    assert all(d.scope == arraw.SettingScope.LOOK for d in descriptors if d.name not in own)
+
+
+def test_curve_descriptors(descriptors):
+    by_name = {d.name: d for d in descriptors}
+    for name in CURVES:
+        assert by_name[name].range is None
+        assert by_name[name].group == arraw.SettingGroup.TONE_CURVE
+        assert by_name[name].affects == arraw.Stage.POINTWISE
+        assert by_name[name].applies == arraw.Applicability.ALWAYS
+
+
 def test_descriptors_are_unhashable_but_comparable(descriptors):
     assert descriptors == arraw.setting_descriptors()
     with pytest.raises(TypeError):
         hash(descriptors[0])
+
+
+def test_noise_reduction_descriptors(descriptors):
+    by_name = {d.name: d for d in descriptors}
+    for name in set(DETAIL) | {"luminance_noise_filter"}:
+        assert by_name[name].group == arraw.SettingGroup.DETAIL
+        assert by_name[name].affects == arraw.Stage.DENOISE
+        assert by_name[name].applies == arraw.Applicability.ALWAYS
+
+
+def test_presence_descriptors(descriptors):
+    by_name = {d.name: d for d in descriptors}
+    for name in PRESENCE:
+        assert by_name[name].group == arraw.SettingGroup.PRESENCE
+        assert by_name[name].affects == arraw.Stage.POINTWISE
+        assert by_name[name].applies == arraw.Applicability.ALWAYS

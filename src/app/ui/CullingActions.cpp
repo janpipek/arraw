@@ -10,44 +10,50 @@
 #include <QKeySequence>
 #include <QMainWindow>
 #include <QMenu>
-#include <QMenuBar>
 
 namespace arraw::app {
 
 namespace {
 
-/// Keys of the labels, in the order of ::arraw::colorLabelNames.
-constexpr Qt::Key labelKeys[] = {Qt::Key_R, Qt::Key_Y, Qt::Key_G, Qt::Key_B, Qt::Key_P};
+/// Keys of the labels, in the order of ::arraw::colorLabelNames: Shift with the colour's
+/// initial. R alone enters the crop mode, as in Lightroom (ADR 040), so all five take Shift
+/// alike rather than red alone.
+const QKeyCombination labelKeys[] = {Qt::SHIFT | Qt::Key_R, Qt::SHIFT | Qt::Key_Y,
+                                     Qt::SHIFT | Qt::Key_G, Qt::SHIFT | Qt::Key_B,
+                                     Qt::SHIFT | Qt::Key_P};
 
 } // namespace
 
-CullingActions::CullingActions(QMainWindow& window, FilmStrip& strip)
+CullingActions::CullingActions(QMainWindow& window, FilmStrip& strip, QMenu& menu)
     : QObject(&window), window_(window), strip_(strip) {
-    QMenu* menu = window.menuBar()->addMenu(tr("&Image"));
-
-    QMenu* rateMenu = menu->addMenu(tr("&Rating"));
+    QMenu* rateMenu = menu.addMenu(tr("&Rating"));
     const auto addRating = [&](const QString& text, int rating, Qt::Key key) {
         QAction* action = rateMenu->addAction(text);
+        action->setObjectName(QString("rating%1Action").arg(rating));
         action->setShortcut(QKeySequence(key));
         action->setCheckable(true);
         connect(action, &QAction::triggered, this, [this, rating] { strip_.rate(rating); });
         ratingActions_.emplace_back(action, rating);
+        return action;
     };
     for (int stars = highestRating; stars >= 1; --stars) {
         addRating(QString(stars, QChar(0x2605)), stars, static_cast<Qt::Key>(Qt::Key_0 + stars));
     }
     rateMenu->addSeparator();
     addRating(tr("&Unrated"), 0, Qt::Key_0);
-    addRating(tr("Re&ject"), rejectedRating, Qt::Key_X);
+    rejectAction_ = addRating(tr("Re&ject"), rejectedRating, Qt::Key_X);
+    rejectAction_->setObjectName("rejectAction");
 
     // The menu is a radio group whose items set a label, or none. The keys
-    // toggle instead (main's behaviour: R on a red shot clears it), so they are
+    // toggle instead (main's behaviour: the red key on a red shot clears it), so they are
     // separate window actions; the menu only shows them, after a tab.
-    QMenu* labelMenu = menu->addMenu(tr("&Label"));
+    QMenu* labelMenu = menu.addMenu(tr("&Label"));
     auto* labelGroup = new QActionGroup(labelMenu);
     labelGroup->setExclusive(true);
     const auto addLabel = [&](const QString& text, std::optional<ColorLabel> label) {
         QAction* action = labelMenu->addAction(text);
+        action->setObjectName(label ? QString("label%1Action").arg(static_cast<int>(*label))
+                                    : QString("labelNoneAction"));
         action->setCheckable(true);
         action->setActionGroup(labelGroup);
         connect(action, &QAction::triggered, this, [this, label] { strip_.setLabel(label); });
@@ -60,6 +66,7 @@ CullingActions::CullingActions(QMainWindow& window, FilmStrip& strip)
                      shortcut.toString(QKeySequence::NativeText),
                  label);
         auto* toggle = new QAction(this);
+        toggle->setObjectName(QString("toggleLabel%1Action").arg(static_cast<int>(label)));
         toggle->setShortcut(shortcut);
         connect(toggle, &QAction::triggered, this,
                 [this, label = label] { strip_.toggleLabel(label); });
@@ -69,17 +76,19 @@ CullingActions::CullingActions(QMainWindow& window, FilmStrip& strip)
     labelMenu->addSeparator();
     addLabel(tr("&None"), std::nullopt);
 
-    menu->addSeparator();
-    QAction* previous = menu->addAction(tr("&Previous Photo"));
+    menu.addSeparator();
+    QAction* previous = menu.addAction(tr("&Previous Photo"));
+    previous->setObjectName("previousPhotoAction");
     previous->setShortcuts({QKeySequence(Qt::Key_Left), QKeySequence(Qt::CTRL | Qt::Key_Left)});
     connect(previous, &QAction::triggered, this, [this] { strip_.navigate(-1); });
-    QAction* next = menu->addAction(tr("&Next Photo"));
+    QAction* next = menu.addAction(tr("&Next Photo"));
+    next->setObjectName("nextPhotoAction");
     next->setShortcuts({QKeySequence(Qt::Key_Right), QKeySequence(Qt::CTRL | Qt::Key_Right)});
     connect(next, &QAction::triggered, this, [this] { strip_.navigate(1); });
     // Stepping needs shots shown, not an active one: from no shot it goes to the first or last.
     // The strip refuses at the ends, so these stay enabled.
 
-    connect(menu, &QMenu::aboutToShow, this, &CullingActions::reflectActiveShot);
+    connect(&menu, &QMenu::aboutToShow, this, &CullingActions::reflectActiveShot);
     connect(&strip, &FilmStrip::activeChanged, this, &CullingActions::reflectActiveShot);
     reflectActiveShot();
 
@@ -92,11 +101,16 @@ CullingActions::~CullingActions() {
     }
 }
 
+void CullingActions::setCropMode(bool cropping) {
+    cropping_ = cropping;
+    reflectActiveShot();
+}
+
 void CullingActions::reflectActiveShot() {
     const bool any = strip_.activePrimary().has_value();
     const PhotoMarks marks = strip_.activeMarks();
     for (const auto& [action, rating] : ratingActions_) {
-        action->setEnabled(any);
+        action->setEnabled(any && !(cropping_ && action == rejectAction_));
         action->setChecked(any && marks.rating == rating);
     }
     for (const auto& [action, label] : labelActions_) {

@@ -1,3 +1,5 @@
+#include "support/RowBandLimit.h"
+
 #include <Develop.h>
 #include <ImagePyramid.h>
 
@@ -11,6 +13,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <numbers>
 #include <stdexcept>
 
@@ -264,4 +267,25 @@ TEST_CASE("Developing a reduced level stays near developing the full photograph"
     // shifted or mis-averaged level, which is off by whole percents.
     REQUIRE(mean <= 0.005);
     REQUIRE(worst <= 0.02);
+}
+
+TEST_CASE("Halving is bit-identical on any number of threads", "[pyramid][threads]") {
+    // Half of this is above 2^17 pixels, so the rows split into several bands.
+    constexpr ImageSize size{1000, 800};
+    const ImageBuffer source = made(size, [](std::uint32_t x, std::uint32_t y) {
+        return std::array<float, 4>{std::sin(static_cast<float>(x) * 0.3F),
+                                    static_cast<float>((x * 31 + y * 17) % 101) / 100.0F,
+                                    static_cast<float>(y % 13) / 12.0F,
+                                    (x / 8 + y / 8) % 4 == 0 ? 0.0F : 1.0F};
+    });
+
+    ImageBuffer single({1, 1}, workingFormat, workingEncoding);
+    {
+        const test::ScopedRowBandLimit one(1);
+        single = halved(source);
+    }
+    const ImageBuffer banded = halved(source);
+
+    REQUIRE(banded.size() == ImageSize{500, 400});
+    REQUIRE(std::memcmp(banded.bytes().data(), single.bytes().data(), single.byteSize()) == 0);
 }

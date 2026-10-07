@@ -1,3 +1,4 @@
+#include "CurveEditing.h"
 #include "SettingPresentation.h"
 
 #include <SettingDescriptors.h>
@@ -23,8 +24,9 @@ using Catch::Approx;
 namespace {
 
 /// Settings that no panel shows yet; deciding where a new one goes is deliberate.
-constexpr std::array<std::string_view, 6> notShownYet{
-    "rotation", "flipHorizontal", "flipVertical", "straighten", "cropRectangle", "cropAspect"};
+///
+/// The grain model and the luminance noise filter have one value so far: a choice of one is no row.
+constexpr std::array<std::string_view, 2> notShownYet{"grainModel", "luminanceNoiseFilter"};
 
 /// Settings the Treatment buttons edit; they have no slider row.
 constexpr std::array<std::string_view, 1> shownByTreatment{"convertToGrayscale"};
@@ -34,6 +36,11 @@ std::vector<std::string_view> slidingKeys() {
     std::vector<std::string_view> keys(toneKeys().begin(), toneKeys().end());
     keys.insert(keys.end(), whiteBalanceKeys().begin(), whiteBalanceKeys().end());
     keys.insert(keys.end(), colorKeys().begin(), colorKeys().end());
+    keys.insert(keys.end(), presenceKeys().begin(), presenceKeys().end());
+    keys.insert(keys.end(), colorGradingKeys().begin(), colorGradingKeys().end());
+    keys.insert(keys.end(), noiseReductionKeys().begin(), noiseReductionKeys().end());
+    keys.insert(keys.end(), effectsKeys().begin(), effectsKeys().end());
+    keys.insert(keys.end(), geometryKeys().begin(), geometryKeys().end());
     for (int page = 0; page < hslPageCount; ++page) {
         keys.insert(keys.end(), hslKeys(page).begin(), hslKeys(page).end());
     }
@@ -72,16 +79,21 @@ TEST_CASE("Every shown key has a descriptor, a range, a numeric leaf and a prese
     }
 }
 
-TEST_CASE("Every setting is either shown or listed as not shown yet", "[SettingPresentation]") {
+TEST_CASE("Every setting is either shown, listed as not shown yet, or the photograph's own",
+          "[SettingPresentation]") {
     for (const FieldDescriptor& descriptor : developSettingDescriptors) {
         CAPTURE(descriptor.key);
+        // A photograph's own setting, such as its grain seed, is never shown.
+        const bool own = descriptor.scope == SettingScope::Photo;
         const std::vector<std::string_view> sliding = slidingKeys();
         const bool shown =
             std::ranges::find(sliding, descriptor.key) != sliding.end() ||
+            std::ranges::find(toneCurveKeys(), descriptor.key) != toneCurveKeys().end() ||
             std::ranges::find(shownByCombo, descriptor.key) != shownByCombo.end() ||
+            std::ranges::find(geometryButtonKeys(), descriptor.key) != geometryButtonKeys().end() ||
             std::ranges::find(shownByTreatment, descriptor.key) != shownByTreatment.end();
         const bool listed = std::ranges::find(notShownYet, descriptor.key) != notShownYet.end();
-        CHECK(shown != listed);
+        CHECK(int{shown} + int{listed} + int{own} == 1);
     }
     for (const std::string_view key : notShownYet) {
         CAPTURE(key);
@@ -220,7 +232,7 @@ TEST_CASE("Band rows are named for their band and move in whole units", "[Settin
     CHECK(presentationOf("saturation").label == QString("Saturation"));
     CHECK(presentationOf("vibrance").label == QString("Vibrance"));
     for (const std::string_view key : slidingKeys()) {
-        if (key != "exposure" && key != "temperature") {
+        if (key != "exposure" && key != "temperature" && key != "straighten") {
             CAPTURE(key);
             CHECK(presentationOf(key).step == 1.0);
             CHECK(presentationOf(key).decimals == 0);
@@ -228,7 +240,7 @@ TEST_CASE("Band rows are named for their band and move in whole units", "[Settin
     }
 }
 
-TEST_CASE("Black and white swaps the Color and HSL groups for the mix", "[SettingPresentation]") {
+TEST_CASE("Black and white swaps the Colour and HSL groups for the mix", "[SettingPresentation]") {
     const TreatmentVisibility colour = visibleGroups(false);
     CHECK(colour.color);
     CHECK(colour.hsl);
@@ -238,4 +250,31 @@ TEST_CASE("Black and white swaps the Color and HSL groups for the mix", "[Settin
     CHECK_FALSE(grey.color);
     CHECK_FALSE(grey.hsl);
     CHECK(grey.blackAndWhiteMix);
+}
+
+TEST_CASE("The curve editor's keys are curves with no slider row", "[SettingPresentation]") {
+    REQUIRE(toneCurveKeys().size() == curveChannelCount);
+    for (const std::string_view key : toneCurveKeys()) {
+        CAPTURE(key);
+        const FieldDescriptor* descriptor = findDescriptor(key);
+        REQUIRE(descriptor != nullptr);
+        CHECK_FALSE(descriptor->range.has_value());
+        CHECK_THROWS_AS(presentationOf(key), std::out_of_range);
+    }
+}
+
+TEST_CASE("Only the grading hues paint a hue track", "[SettingPresentation]") {
+    for (const std::string_view key : slidingKeys()) {
+        CAPTURE(key);
+        const bool gradeHue =
+            key == "gradeShadowHue" || key == "gradeMidtoneHue" || key == "gradeHighlightHue";
+        CHECK((presentationOf(key).track == SliderTrack::OklabHue) == gradeHue);
+    }
+}
+
+TEST_CASE("The Angle row moves in tenths of a degree", "[SettingPresentation]") {
+    const SettingPresentation& angle = presentationOf("straighten");
+    CHECK(angle.step == Approx(0.1));
+    CHECK(angle.decimals == 1);
+    CHECK(angle.label == QString("Angle"));
 }

@@ -51,6 +51,13 @@ QColorSpace arraw::qtimage::toColorSpace(NamedEncoding encoding) {
         return QColorSpace::DisplayP3;
     case NamedEncoding::AdobeRgb:
         return QColorSpace::AdobeRgb;
+    case NamedEncoding::Rec2020Gamma22:
+        // The curve input (ADR 035): the working primaries with a pure 2.2
+        // gamma, which is what it is above zero. Qt can then convert a sample
+        // to look at it; below zero, which only an out-of-gamut colour has, Qt
+        // knows nothing of the odd extension.
+        return QColorSpace(QColorSpace::Primaries::Bt2020, QColorSpace::TransferFunction::Gamma,
+                           2.2F);
     }
     throw std::invalid_argument("Unknown colour encoding");
 }

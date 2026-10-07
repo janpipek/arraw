@@ -36,8 +36,16 @@ public:
     /// @throws std::invalid_argument if @p state is not valid (see ::arraw::validate),
     /// or if the rating of @p marks is outside -1 to 5, so an invalid
     /// photograph cannot exist.
-    Photo(std::filesystem::path path, ImageMetadata metadata, DevelopState state = {},
+    Photo(std::filesystem::path path, ImageMetadata metadata, DevelopState state,
           PhotoMarks marks = {});
+
+    /// @brief Builds a document nobody has edited: the state its kind starts from, no marks.
+    ///
+    /// The state is ::arraw::defaultStateFor the encoding @p metadata declares,
+    /// so a RAW starts with its colour noise reduction (ADR 039).
+    /// @param path File the photograph was read from.
+    /// @param metadata What that file declares about itself.
+    Photo(std::filesystem::path path, ImageMetadata metadata);
 
     /// @brief File the photograph was read from.
     [[nodiscard]] const std::filesystem::path& path() const noexcept {
@@ -88,8 +96,11 @@ private:
 ///
 /// Reads what the file declares — its dimensions and the encoding its pixels
 /// will arrive in — and pairs it with the state and marks of its sidecar
-/// (see ::arraw::readSidecar), or with defaults when it has none. Decoding
-/// happens when something asks for pixels, which a document never does.
+/// (see ::arraw::readSidecar). Without a sidecar, or with one that records no
+/// develop settings (one of marks only, or another tool's), the state is the
+/// one its kind starts from (::arraw::defaultStateFor), and without a sidecar
+/// there are no marks. Decoding happens when something asks for pixels, which a
+/// document never does.
 ///
 /// @param path File to open.
 /// @param log Where to report what a photographer should know about the file,
@@ -97,7 +108,8 @@ private:
 /// @return The document.
 /// @throws std::runtime_error if the file cannot be opened or is not an image
 /// arraw recognises. A sidecar that is not readable XML is not thrown: it is
-/// reported as ::arraw::Notice::SidecarUnreadable and the defaults are used.
+/// reported as ::arraw::Notice::SidecarUnreadable and the photograph opens as
+/// if it had none.
 [[nodiscard]] Photo openPhoto(const std::filesystem::path& path,
                               DiagnosticLog& log = discardedDiagnostics());
 

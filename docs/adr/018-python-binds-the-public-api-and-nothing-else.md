@@ -121,9 +121,15 @@ checks that they are present.
 
 ## Consequences
 
-- **Adding a develop setting is still two edits** (the field and its row). The
-  new setting reaches Python, the command line and `setting_descriptors()`
-  with no further change.
+- **Adding a develop setting is two edits to reach Python** (the field and its
+  row). The new setting reaches Python, the command line and
+  `setting_descriptors()` with no further change. What the setting does in the
+  render is more work (ADR 019).
+- **The bindings include no private header** (checked 2026-10-07). `_arraw`
+  links `arraw` alone, with `include/` as its only include path; the
+  shortest-decimal formatter it needs became public for that reason. The
+  bindings expose no render checkpoints, so `canResumeFrom` and `resumeFrom`
+  are not bound.
 - **Settings read back at float32 precision**, for example
   `with_(exposure=0.7)` gives `0.699999988`. The repr prints the shortest text
   that reads back the same. Tests need `pytest.approx`.

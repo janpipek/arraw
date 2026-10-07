@@ -21,6 +21,8 @@ constexpr std::array<std::string_view, 2> whiteBalanceKeyList{"temperature", "ti
 
 constexpr std::array<std::string_view, 2> colorKeyList{"saturation", "vibrance"};
 
+constexpr std::array<std::string_view, 3> presenceKeyList{"texture", "clarity", "dehaze"};
+
 constexpr std::array<std::array<std::string_view, 8>, hslPageCount> hslKeyLists{{
     {"hueRed", "hueOrange", "hueYellow", "hueGreen", "hueAqua", "hueBlue", "huePurple",
      "hueMagenta"},
@@ -33,6 +35,26 @@ constexpr std::array<std::array<std::string_view, 8>, hslPageCount> hslKeyLists{
 constexpr std::array<std::string_view, 8> blackAndWhiteKeyList{
     "grayRed",  "grayOrange", "grayYellow", "grayGreen",
     "grayAqua", "grayBlue",   "grayPurple", "grayMagenta"};
+
+constexpr std::array<std::string_view, 8> colorGradingKeyList{
+    "gradeShadowHue",    "gradeShadowSaturation",    "gradeMidtoneHue", "gradeMidtoneSaturation",
+    "gradeHighlightHue", "gradeHighlightSaturation", "gradeBalance",    "gradeBlending"};
+
+constexpr std::array<std::string_view, 6> effectsKeyList{"vignetteAmount",  "vignetteMidpoint",
+                                                         "vignetteFeather", "grainAmount",
+                                                         "grainSize",       "grainRoughness"};
+
+constexpr std::array<std::string_view, 4> noiseReductionKeyList{
+    "luminanceNoiseReduction", "luminanceNoiseDetail", "colorNoiseReduction",
+    "colorNoiseSmoothness"};
+
+constexpr std::array<std::string_view, 1> geometryKeyList{"straighten"};
+
+constexpr std::array<std::string_view, 5> geometryButtonKeyList{
+    "rotation", "flipHorizontal", "flipVertical", "cropRectangle", "cropAspect"};
+
+constexpr std::array<std::string_view, 4> toneCurveKeyList{"toneCurveLuma", "toneCurveRed",
+                                                           "toneCurveGreen", "toneCurveBlue"};
 
 QString tr(const char* text) {
     return QCoreApplication::translate("SettingPresentation", text);
@@ -97,6 +119,30 @@ const std::vector<Row>& table() {
                            tr("Makes the muted colours more or less intense, leaving the vivid "
                               "ones alone.")}},
                      });
+        built.insert(built.end(),
+                     {
+                         {"texture",
+                          {tr("Texture"),
+                           {},
+                           0,
+                           1.0,
+                           tr("Brings out (positive) or smooths (negative) fine detail such as "
+                              "skin, foliage and fabric. A small preview shows it coarser.")}},
+                         {"clarity",
+                          {tr("Clarity"),
+                           {},
+                           0,
+                           1.0,
+                           tr("Adds (positive) or takes away (negative) local contrast in the "
+                              "midtones, at the scale of shapes rather than fine detail.")}},
+                         {"dehaze",
+                          {tr("Dehaze"),
+                           {},
+                           0,
+                           1.0,
+                           tr("Removes (positive) or adds (negative) atmospheric haze: the veil "
+                              "over distant parts of a scene, with some contrast and colour.")}},
+                     });
         struct Band {
             std::string_view name;
             const char* label;
@@ -130,6 +176,120 @@ const std::vector<Row>& table() {
             add("gray", band.name, band.label,
                 "How light these colours come out in black and white.");
         }
+        struct Zone {
+            const char* key;
+            const char* hueName;
+            const char* saturationName;
+        };
+        const std::array<Zone, 3> zones{
+            {{"Shadow", QT_TR_NOOP("Shadows hue"), QT_TR_NOOP("Shadows saturation")},
+             {"Midtone", QT_TR_NOOP("Midtones hue"), QT_TR_NOOP("Midtones saturation")},
+             {"Highlight", QT_TR_NOOP("Highlights hue"), QT_TR_NOOP("Highlights saturation")}}};
+        for (const Zone& zone : zones) {
+            const FieldDescriptor* hue = findDescriptor(std::string("grade") + zone.key + "Hue");
+            const FieldDescriptor* saturation =
+                findDescriptor(std::string("grade") + zone.key + "Saturation");
+            built.push_back({hue->key,
+                             {tr(zone.hueName), tr("\u00B0"), 0, 1.0,
+                              tr("The hue this tonal zone is tinted with, as an angle around the "
+                                 "colour wheel."),
+                              SliderScale::Linear, SliderTrack::OklabHue}});
+            built.push_back({saturation->key,
+                             {tr(zone.saturationName),
+                              {},
+                              0,
+                              1.0,
+                              tr("How strongly this tonal zone is tinted; zero leaves it "
+                                 "untinted.")}});
+        }
+        built.push_back(
+            {"gradeBalance",
+             {tr("Balance"),
+              {},
+              0,
+              1.0,
+              tr("Gives more of the tonal range to the Shadows tint (negative) or to the "
+                 "Highlights tint (positive).")}});
+        built.push_back({"gradeBlending",
+                         {tr("Blending"),
+                          {},
+                          0,
+                          1.0,
+                          tr("How softly the three tints melt into each other; lower is "
+                             "sharper.")}});
+        built.push_back({"straighten",
+                         {tr("Angle"), tr("\u00B0"), 1, 0.1,
+                          tr("Turns the photograph a little to level a horizon or a vertical. "
+                             "Positive turns it clockwise. The crop shrinks to keep empty "
+                             "corners out.")}});
+        built.push_back({"vignetteAmount",
+                         {tr("Vignette"),
+                          {},
+                          0,
+                          1.0,
+                          tr("Darkens (negative) or lightens (positive) the edges of the cropped "
+                             "frame. It follows the crop.")}});
+        built.push_back({"vignetteMidpoint",
+                         {tr("Midpoint"),
+                          {},
+                          0,
+                          1.0,
+                          tr("Where the vignette begins: lower reaches further toward the "
+                             "centre.")}});
+        built.push_back({"vignetteFeather",
+                         {tr("Feather"),
+                          {},
+                          0,
+                          1.0,
+                          tr("How softly the vignette fades in; zero is a hard edge.")}});
+        built.push_back({"grainAmount",
+                         {tr("Grain"),
+                          {},
+                          0,
+                          1.0,
+                          tr("Strength of a film-like grain over the cropped frame. It stays put "
+                             "as you pan and zoom; a small preview shows it softer.")}});
+        built.push_back({"grainSize",
+                         {tr("Size"),
+                          {},
+                          0,
+                          1.0,
+                          tr("Size of the grain, relative to the cropped frame's long edge.")}});
+        built.push_back({"grainRoughness",
+                         {tr("Roughness"),
+                          {},
+                          0,
+                          1.0,
+                          tr("How clumped the grain is: zero is even, higher mixes in coarser "
+                             "clusters.")}});
+        built.push_back({"luminanceNoiseReduction",
+                         {tr("Luminance"),
+                          {},
+                          0,
+                          1.0,
+                          tr("Smooths the grain of brightness noise, in the photograph as the "
+                             "camera saw it. Higher is smoother and softer.")}});
+        built.push_back({"luminanceNoiseDetail",
+                         {tr("Detail"),
+                          {},
+                          0,
+                          1.0,
+                          tr("How much edge the luminance smoothing keeps: higher keeps more "
+                             "detail and more noise.")}});
+        built.push_back({"colorNoiseReduction",
+                         {tr("Colour"),
+                          {},
+                          0,
+                          1.0,
+                          tr("Smooths blotches of false colour, keeping the brightness exactly "
+                             "as it is.")}});
+        built.push_back({"colorNoiseSmoothness",
+                         {tr("Smoothness"),
+                          {},
+                          0,
+                          1.0,
+                          tr("Size of the colour blotches smoothed: higher evens out larger "
+                             "ones, and can wash colour out of fine detail.")}});
         return built;
     }();
     return rows;
@@ -149,6 +309,10 @@ std::span<const std::string_view> colorKeys() noexcept {
     return colorKeyList;
 }
 
+std::span<const std::string_view> presenceKeys() noexcept {
+    return presenceKeyList;
+}
+
 std::span<const std::string_view> hslKeys(int page) {
     if (page < 0 || page >= hslPageCount) {
         throw std::out_of_range("no HSL page " + std::to_string(page));
@@ -158,6 +322,30 @@ std::span<const std::string_view> hslKeys(int page) {
 
 std::span<const std::string_view> blackAndWhiteKeys() noexcept {
     return blackAndWhiteKeyList;
+}
+
+std::span<const std::string_view> colorGradingKeys() noexcept {
+    return colorGradingKeyList;
+}
+
+std::span<const std::string_view> noiseReductionKeys() noexcept {
+    return noiseReductionKeyList;
+}
+
+std::span<const std::string_view> effectsKeys() noexcept {
+    return effectsKeyList;
+}
+
+std::span<const std::string_view> geometryKeys() noexcept {
+    return geometryKeyList;
+}
+
+std::span<const std::string_view> geometryButtonKeys() noexcept {
+    return geometryButtonKeyList;
+}
+
+std::span<const std::string_view> toneCurveKeys() noexcept {
+    return toneCurveKeyList;
 }
 
 const SettingPresentation& presentationOf(std::string_view key) {
@@ -210,8 +398,7 @@ double valueOfTick(int tick, const SettingRange& range, double step, SliderScale
     return std::clamp(range.minimum + tick * step, range.minimum, range.maximum);
 }
 
-double defaultValueOf(const FieldDescriptor& descriptor) {
-    const DevelopSettings defaults{};
+double defaultValueOf(const FieldDescriptor& descriptor, const DevelopSettings& defaults) {
     return visitField(descriptor, defaults, [&](const auto& field) -> double {
         using Field = std::remove_cvref_t<decltype(field)>;
         if constexpr (std::is_same_v<Field, float> || std::is_same_v<Field, double>) {

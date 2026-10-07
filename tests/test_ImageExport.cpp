@@ -1,3 +1,4 @@
+#include "support/RowBandLimit.h"
 #include "support/TempDir.h"
 #include "support/TestImages.h"
 
@@ -189,7 +190,8 @@ TEST_CASE("Invalid export options preserve an existing destination", "[ImageExpo
                                   ExportOptions{.format = ImageFileFormat::Jpeg, .bitDepth = 16},
                                   ExportOptions{.format = ImageFileFormat::Jpeg, .quality = -1},
                                   ExportOptions{.format = ImageFileFormat::Jpeg, .quality = 101},
-                                  ExportOptions{.encoding = workingEncoding});
+                                  ExportOptions{.encoding = workingEncoding},
+                                  ExportOptions{.encoding = perceptualEncoding});
     const test::TempDir directory;
     const auto destination = directory.file("existing.png");
     const auto image = test::rainbow();
@@ -221,6 +223,18 @@ TEST_CASE("The working encoding is refused as an output encoding", "[ImageExport
 
     REQUIRE_THROWS_AS(exportImage(image, destination, options), std::invalid_argument);
     REQUIRE_FALSE(std::filesystem::exists(destination));
+}
+
+TEST_CASE("A curve-input sample can be saved, to look at", "[ImageExport]") {
+    // The perceptual encoding is internal as an output, but a sample in it can
+    // still be converted to a viewer's encoding, for diagnostics.
+    const test::TempDir directory;
+    const auto destination = directory.file("tap.png");
+    const auto image = test::rainbow({3, 2}, PixelFormat::RgbaF32, perceptualEncoding);
+
+    exportImage(image, destination, {});
+
+    REQUIRE(startsWith(destination, pngSignature));
 }
 
 TEST_CASE("A camera-native buffer is refused before the encoder", "[ImageExport]") {
@@ -355,8 +369,8 @@ namespace {
 ImageBuffer stepEdge(std::uint8_t alpha = 255, ImageSize size = {24, 8}) {
     ImageBuffer image(size, PixelFormat::RgbaU8, NamedEncoding::Srgb);
     auto samples = image.samples<std::uint8_t>();
-    for (int y = 0; y < size.height; ++y) {
-        for (int x = 0; x < size.width; ++x) {
+    for (std::uint32_t y = 0; y < size.height; ++y) {
+        for (std::uint32_t x = 0; x < size.width; ++x) {
             const std::size_t index = (static_cast<std::size_t>(y) * size.width + x) * 4;
             const std::uint8_t level = x < size.width / 2 ? 80 : 170;
             samples[index] = samples[index + 1] = samples[index + 2] = level;
@@ -465,4 +479,77 @@ TEST_CASE("Sharpening outside 0 to 100 is refused", "[ImageExport][sharpen]") {
     REQUIRE_THROWS_AS(exportImage(image, destination, {.sharpening = amount}),
                       std::invalid_argument);
     REQUIRE_FALSE(std::filesystem::exists(destination));
+}
+
+namespace {
+
+/// @brief Builds an opaque, varied picture of a format, large enough for several bands.
+ImageBuffer variedPicture(PixelFormat format, NamedEncoding encoding) {
+    constexpr ImageSize size{601, 401};
+    ImageBuffer image(size, format, encoding);
+    std::uint32_t state = 2463534242U;
+    const auto next = [&state] {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        return state;
+    };
+    const std::size_t channels = channelCount(format);
+    const auto opaque = [&](std::size_t index) { return channels == 4 && index % 4 == 3; };
+    switch (format) {
+    case PixelFormat::RgbU8:
+    case PixelFormat::RgbaU8: {
+        const auto samples = image.samples<std::uint8_t>();
+        for (std::size_t i = 0; i < samples.size(); ++i) {
+            samples[i] = opaque(i) ? std::uint8_t{255} : static_cast<std::uint8_t>(next() >> 24);
+        }
+        break;
+    }
+    case PixelFormat::RgbU16:
+    case PixelFormat::RgbaU16: {
+        const auto samples = image.samples<std::uint16_t>();
+        for (std::size_t i = 0; i < samples.size(); ++i) {
+            samples[i] =
+                opaque(i) ? std::uint16_t{65535} : static_cast<std::uint16_t>(next() >> 16);
+        }
+        break;
+    }
+    case PixelFormat::RgbF32:
+    case PixelFormat::RgbaF32: {
+        const auto samples = image.samples<float>();
+        for (std::size_t i = 0; i < samples.size(); ++i) {
+            samples[i] = opaque(i) ? 1.0F : static_cast<float>(next() >> 8) / 16777216.0F;
+        }
+        break;
+    }
+    }
+    return image;
+}
+
+/// @brief Reads a whole file.
+std::vector<std::uint8_t> contents(const std::filesystem::path& path) {
+    return head(path, static_cast<std::size_t>(std::filesystem::file_size(path)));
+}
+
+} // namespace
+
+TEST_CASE("An export is the same file on any number of threads", "[ImageExport][threads][slow]") {
+    const auto format = GENERATE(PixelFormat::RgbU8, PixelFormat::RgbaU8, PixelFormat::RgbaU16,
+                                 PixelFormat::RgbaF32);
+    const auto encoding = format == PixelFormat::RgbaF32 ? workingEncoding : NamedEncoding::Srgb;
+    const int sharpening = GENERATE(0, 40);
+    const ExportOptions options{.format = ImageFileFormat::Tiff,
+                                .encoding = NamedEncoding::DisplayP3,
+                                .bitDepth = format == PixelFormat::RgbU8 ? 8 : 16,
+                                .sharpening = sharpening};
+    const test::TempDir directory;
+    const ImageBuffer image = variedPicture(format, encoding);
+
+    {
+        const test::ScopedRowBandLimit one(1);
+        exportImage(image, directory.file("single.tif"), options);
+    }
+    exportImage(image, directory.file("banded.tif"), options);
+
+    REQUIRE(contents(directory.file("banded.tif")) == contents(directory.file("single.tif")));
 }

@@ -67,6 +67,169 @@ def test_flat_keywords_reach_the_colour_leaves():
     assert settings.black_and_white.blue == 45.0
 
 
+def test_curve_defaults_are_identities():
+    curves = arraw.DevelopSettings().tone_curve
+    assert curves == arraw.ToneCurveSettings()
+    for curve in (curves.luma, curves.red, curves.green, curves.blue):
+        assert curve == arraw.ToneCurve()
+        assert curve.points == [(0.0, 0.0), (1.0, 1.0)]
+        assert curve.is_identity
+
+
+def test_curve_points_are_tuples_that_keep_their_spelling():
+    curve = arraw.ToneCurve([[0, 0], (0.3, 0.7), (1.0, 1)])
+    assert curve.points == [(0.0, 0.0), (0.3, 0.7), (1.0, 1.0)]
+    assert not curve.is_identity
+    assert arraw.ToneCurve([(0, 0), (1, 1)]).is_identity
+    assert hash(curve) == hash(arraw.ToneCurve([(0, 0), (0.3, 0.7), (1, 1)]))
+    assert curve.replace(points=[(0, 0), (1, 1)]).is_identity
+    with pytest.raises(TypeError):
+        arraw.ToneCurve([(0, 0), (1,)])
+    with pytest.raises(TypeError):
+        arraw.ToneCurve([(0, True), (1, 1)])
+
+
+def test_curve_points_may_be_given_in_any_order_and_are_sorted():
+    expected = [(0.0, 0.0), (0.3, 0.7), (1.0, 1.0)]
+    assert arraw.ToneCurve([(1, 1), (0.3, 0.7), (0, 0)]).points == expected
+    assert arraw.ToneCurve().replace(points=[(1, 1), (0.3, 0.7), (0, 0)]).points == expected
+    flat = arraw.DevelopSettings().with_(tone_curve_green=[(1, 1), (0.3, 0.7), (0, 0)])
+    assert flat.tone_curve.green.points == expected
+    # An end a rounding error off its x is snapped, as in the sidecar and on the command line.
+    assert arraw.ToneCurve([(0, 0), (0.5, 0.5), (1.0000004, 1)]).points[-1] == (1.0, 1.0)
+
+
+@pytest.mark.parametrize("point", [b"\x00\x00", bytearray(b"\x00\x01"), "01"])
+def test_a_curve_point_is_not_bytes_or_text(point):
+    with pytest.raises(TypeError):
+        arraw.ToneCurve([point, (1, 1)])
+
+
+def test_colour_grading_defaults():
+    grading = arraw.DevelopSettings().color_grading
+    assert grading == arraw.ColorGradingSettings()
+    assert grading.shadows == arraw.GradeZone(hue=0.0, saturation=0.0)
+    assert grading.midtones == grading.highlights == arraw.GradeZone()
+    assert grading.balance == 0.0
+    assert grading.blending == 50.0
+
+
+def test_colour_grading_constructs_flat_sets_and_round_trips_json():
+    settings = arraw.DevelopSettings(
+        color_grading=arraw.ColorGradingSettings(
+            shadows=arraw.GradeZone(hue=250.0, saturation=40.0),
+            highlights=arraw.GradeZone(hue=70.0, saturation=25.0),
+            balance=-20.0,
+            blending=80.0,
+        )
+    )
+    assert settings.color_grading.shadows.hue == 250.0
+    assert settings.color_grading.midtones == arraw.GradeZone()
+    flat = arraw.DevelopSettings().with_(
+        grade_shadow_hue=250, grade_shadow_saturation=40,
+        grade_highlight_hue=70, grade_highlight_saturation=25,
+        grade_balance=-20, grade_blending=80,
+    )
+    assert flat == settings
+    assert arraw.DevelopSettings.from_json(settings.to_json()) == settings
+    assert settings.color_grading.shadows.replace(saturation=0.0) != settings.color_grading.shadows
+    with pytest.raises(TypeError):
+        arraw.DevelopSettings().with_(grade_shadow=0.5)
+
+
+def test_vignette_defaults_construct_flat_and_round_trip_json():
+    vignette = arraw.DevelopSettings().effects.vignette
+    assert arraw.DevelopSettings().effects == arraw.EffectsSettings()
+    assert vignette == arraw.VignetteSettings(amount=0.0, midpoint=50.0, feather=50.0)
+    settings = arraw.DevelopSettings(
+        effects=arraw.EffectsSettings(
+            vignette=arraw.VignetteSettings(amount=-40.0, midpoint=30.0, feather=0.0)))
+    flat = arraw.DevelopSettings().with_(vignette_amount=-40, vignette_midpoint=30,
+                                         vignette_feather=0)
+    assert flat == settings
+    assert arraw.DevelopSettings.from_json(settings.to_json()) == settings
+
+
+def test_grain_defaults_construct_flat_and_round_trip_json():
+    grain = arraw.DevelopSettings().effects.grain
+    assert grain == arraw.GrainSettings(amount=0.0, size=50.0, roughness=50.0,
+                                        model=arraw.GrainModel.VALUE_NOISE, seed=0)
+    settings = arraw.DevelopSettings(
+        effects=arraw.EffectsSettings(
+            grain=arraw.GrainSettings(amount=35.0, size=20.0, roughness=80.0, seed=4294967295)))
+    flat = arraw.DevelopSettings().with_(grain_amount=35, grain_size=20, grain_roughness=80,
+                                         grain_seed=4294967295)
+    assert flat == settings
+    assert arraw.DevelopSettings.from_json(settings.to_json()) == settings
+    assert '"grainModel": "valueNoise"' in settings.to_json()
+    # A seed is a whole 32-bit number: nothing else, and no bool, is taken.
+    for bad in (-1, 2**32, 1.5, True):
+        with pytest.raises(TypeError):
+            arraw.GrainSettings(seed=bad)
+    with pytest.raises(TypeError):
+        arraw.GrainSettings(model=0)
+
+
+def test_noise_reduction_defaults_construct_flat_and_round_trip_json():
+    noise = arraw.DevelopSettings().noise_reduction
+    assert noise == arraw.NoiseReductionSettings(
+        luminance=0.0, luminance_detail=50.0, color=0.0, color_smoothness=50.0,
+        luminance_filter=arraw.LuminanceNoiseFilter.BILATERAL)
+    flat = arraw.DevelopSettings().with_(luminance_noise_reduction=40, color_noise_reduction=25,
+                                         color_noise_smoothness=80)
+    assert flat.noise_reduction.luminance == 40.0
+    assert flat.noise_reduction.color_smoothness == 80.0
+    back = arraw.DevelopSettings.from_json(flat.to_json())
+    assert back == flat
+
+
+def test_presence_defaults_construct_flat_and_round_trip_json():
+    assert arraw.DevelopSettings().presence == arraw.PresenceSettings(
+        texture=0.0, clarity=0.0, dehaze=0.0)
+    flat = arraw.DevelopSettings().with_(texture=20, clarity=-35, dehaze=60)
+    assert flat.presence == arraw.PresenceSettings(texture=20.0, clarity=-35.0, dehaze=60.0)
+    assert arraw.DevelopSettings.from_json(flat.to_json()) == flat
+    assert '"clarity": -35' in flat.to_json()
+
+
+def test_choose_grain_seed_is_the_one_policy():
+    off = arraw.GrainSettings()
+    on = arraw.GrainSettings(amount=30.0)
+    # Left off, or turned off: kept.
+    assert arraw.choose_grain_seed(off, off, lambda: 9) == 0
+    assert arraw.choose_grain_seed(on, off, lambda: 9) == 0
+    # Already on: kept, the fixed pattern of seed 0 included.
+    assert arraw.choose_grain_seed(on, on.replace(amount=60.0), lambda: 9) == 0
+    # Turned on with a seed: kept.
+    assert arraw.choose_grain_seed(off, on.replace(seed=5), lambda: 9) == 5
+    # Turned on without one: drawn from the entropy given, never 0, else the system's.
+    assert arraw.choose_grain_seed(off, on, lambda: 0xDEADBEEF) == 0xDEADBEEF
+    assert arraw.choose_grain_seed(off, on, lambda: 0) != 0
+    assert arraw.choose_grain_seed(off, on) != 0
+    with pytest.raises(TypeError):
+        arraw.choose_grain_seed(off, on, lambda: -1)
+
+
+def test_curves_construct_flat_set_and_round_trip_json():
+    settings = arraw.DevelopSettings(
+        tone_curve=arraw.ToneCurveSettings(
+            luma=arraw.ToneCurve([(0, 0), (0.25, 0.2), (1, 1)]),
+            blue=arraw.ToneCurve([(0, 0.1), (1, 1)]),
+        )
+    )
+    assert settings.tone_curve.luma.points[1] == (0.25, 0.2)
+    assert settings.tone_curve.red.is_identity
+    flat = arraw.DevelopSettings().with_(
+        tone_curve_luma=[(0, 0), (0.25, 0.2), (1, 1)],
+        tone_curve_blue=arraw.ToneCurve([(0, 0.1), (1, 1)]),
+    )
+    assert flat == settings
+    assert arraw.DevelopSettings.from_json(settings.to_json()) == settings
+    assert arraw.DevelopSettings() != settings
+    with pytest.raises(TypeError):
+        arraw.DevelopSettings().with_(tone_curve=0.5)
+
+
 @pytest.mark.parametrize(
     "obj, attr, value",
     [

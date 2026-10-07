@@ -139,9 +139,12 @@ sidecar's own name appears in the message where it matters.
 
 ## Consequences
 
-- **Adding a develop setting is still two edits,** a field and a row. It then
-  appears in JSON, the sidecar, the command line's options, `info` and
-  Python.
+- **Adding a develop setting takes two edits for persistence,** a field and a
+  row. It then appears in JSON, the sidecar, the command line's options, `info`
+  and Python with no codec work. Making the setting *do* something is much
+  more: Dehaze (ADR 041) touched about eleven production files, among them the
+  plan, the CPU and GPU develop paths, a shader, the panel and its
+  presentation. "Two edits" counts the storage, not the feature.
 - **Moving a crop with a rotation or flip (ADR 014) is not implemented.** The
   command line resets an explicit crop to automatic framing, with
   `CropReset`, when its flags change the frame the crop was drawn in. The
@@ -159,3 +162,13 @@ Conditions that require revisiting this decision:
 - **A GUI that saves.** It decides when `writeSidecar` runs (on every edit,
   debounced, on leaving a photograph), and how a sidecar changed on disk by
   another tool meanwhile is noticed.
+
+## Note, 2026-10-05
+
+A sidecar either records a develop state or does not
+(`SidecarContents::state` is optional; [ADR 039](039-noise-reduction-is-the-first-pass-and-reads-the-as-shot-luminance.md)). It records one when it holds an
+`arraw:version` or any settings key, and each key it omits keeps the neutral
+default, so sidecars written before a setting existed render as they did. A
+sidecar of marks alone, or one only another tool wrote in, records none, and
+the photograph starts from `defaultStateFor` its kind, as with no sidecar.
+`writeSidecarMarks` without an existing sidecar writes the marks alone.

@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -18,13 +19,27 @@ namespace arraw {
 /// A crop rectangle is left, top, right, bottom; a crop ratio is ratio.
 using Compound = std::vector<std::pair<std::string, double>>;
 
+/// @brief Control points of a curve as (x, y) pairs, in the order the curve holds them.
+using PointList = std::vector<std::pair<double, double>>;
+
+/// @brief Reads control points written as `x,y;x,y;...`.
+///
+/// The one parse of that spelling, for the sidecar and the command line. Blanks
+/// around a number are ignored and so is a leading `+`; nothing else is
+/// repaired, and the values are not checked, so each caller applies its own
+/// policy to them (a sidecar clamps, the command line refuses).
+/// @param text The spelling.
+/// @return The points in the order written, or nothing if the text is empty, a
+/// pair is missing or does not have two parts, or a part is not a number.
+[[nodiscard]] std::optional<PointList> parsePointList(std::string_view text);
+
 /// @brief Format-neutral value of one setting, which each document format maps to its own syntax.
 ///
 /// Null stands for an unset optional, a number for any float or double, a
 /// string for an enumeration or a keyword, and a compound for a value of
-/// several named numbers. Reading accepts the members of a compound in any
-/// order; writing uses the order ::arraw::encode gives.
-using Encoded = std::variant<std::monostate, bool, double, std::string, Compound>;
+/// several named numbers, a point list for a curve. Reading accepts the members of a compound in
+/// any order; writing uses the order ::arraw::encode gives.
+using Encoded = std::variant<std::monostate, bool, double, std::string, Compound, PointList>;
 
 /// @brief Encodes the field a row describes.
 ///
@@ -47,6 +62,14 @@ using Encoded = std::variant<std::monostate, bool, double, std::string, Compound
 [[nodiscard]] std::vector<std::vector<std::string>>
 compoundShapes(const FieldDescriptor& descriptor);
 
+/// @brief Tells whether a row encodes to a point list.
+///
+/// For a format whose text does not say what shape a value has: a curve's
+/// points are the one value that cannot be told from a number or a compound.
+/// @param descriptor Row naming the field.
+/// @return `true` for a tone curve row.
+[[nodiscard]] bool takesPoints(const FieldDescriptor& descriptor);
+
 /// @brief Describes what a row accepts, in words for a warning.
 /// @param descriptor Row naming the field.
 /// @return The expectation, for instance "a number, or unset".
@@ -64,11 +87,16 @@ void reportMalformed(const FieldDescriptor& descriptor, DiagnosticLog& log,
 /// @brief Applies an encoded value to the field a row describes.
 ///
 /// A value of the wrong shape, a non-finite number, an unknown name, a crop
-/// rectangle or ratio that the geometry plan would refuse, or a null
+/// rectangle or ratio that the geometry plan would refuse, a curve with fewer
+/// than two or more than sixteen points, neighbouring x closer than
+/// ::arraw::minimumCurvePointSpacing, an end x further than
+/// ::arraw::curveCoordinateTolerance from 0 or 1, or a non-finite coordinate, or a null
 /// for a field that cannot be unset is skipped with a ::arraw::Notice::SettingMalformed
 /// warning. A number outside the row's range is clamped into it with a
-/// ::arraw::Notice::SettingClamped warning (ADR 008). Either way the field
-/// ends up valid, and a skipped field keeps its value.
+/// ::arraw::Notice::SettingClamped warning (ADR 008), and so is a curve's y
+/// outside zero to one; an end x within the tolerance is snapped onto 0 or 1, and a curve's points
+/// may come in any order and are sorted by x. Either way the field ends up valid, and a skipped
+/// field keeps its value.
 /// @param descriptor Row naming the field.
 /// @param encoded Value read from a document.
 /// @param settings Settings to change.

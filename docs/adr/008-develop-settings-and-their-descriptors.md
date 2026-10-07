@@ -170,8 +170,9 @@ quietly erasing somebody's Lightroom edits in the meantime.
 
 ## Consequences
 
-- **Adding a setting is two edits** — the field and its row — and the missing
-  row fails the build on Linux.
+- **Adding a setting is two edits to store it** — the field and its row — and
+  the missing row fails the build on Linux. Making it affect the render is
+  more work (ADR 019).
 - **An absolute Kelvin transfers correctly across bodies.** Pasting 5500 K
   across a shoot shot on two cameras lands on the same colour, which a gain
   measured in the working space cannot do.
@@ -197,3 +198,15 @@ when it arrives:
   processing-compatibility policy the reimplementation plan lists as open, and
   clamp-with-a-warning is a defensible default for it rather than an answer.
 
+
+## Note, 2026-10-05
+
+A descriptor's default stays the one of a default-constructed
+`DevelopSettings`, the neutral value every document assumes. What a
+photograph *starts from* can differ by its kind: `defaultStateFor(encoding)`
+gives a RAW colour noise reduction 25 ([ADR 039](039-noise-reduction-is-the-first-pass-and-reads-the-as-shot-luminance.md)). The table is not changed for it.
+
+## Note, 2026-10-06
+
+`SettingGroup::Presence` holds Texture, Clarity and Dehaze
+([ADR 041](041-texture-clarity-and-dehaze-read-a-context-of-log-luminance.md)), appended to the enumeration so that no value moves.

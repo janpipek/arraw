@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!-- Makes the process's ANSI code page UTF-8 (Windows 10 1903 and later), so
+     that the narrow argv of arraw-cli and arraw-ui, and every narrow-string
+     conversion of a path, are UTF-8 as on Linux and macOS. Older Windows
+     ignore the setting. -->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>
+    </windowsSettings>
+  </application>
+</assembly>

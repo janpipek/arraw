@@ -55,8 +55,8 @@ def test_jpeg_quality_changes_size(developed, tmp_path):
 
 @pytest.mark.parametrize("encoding", list(arraw.NamedEncoding))
 def test_encodings_write(developed, tmp_path, encoding):
-    if encoding == arraw.NamedEncoding.LINEAR_REC2020:
-        pytest.skip("linear working space is not an output encoding in the CLI")
+    if encoding in (arraw.NamedEncoding.LINEAR_REC2020, arraw.NamedEncoding.REC2020_GAMMA22):
+        pytest.skip("the working and perceptual encodings are internal, not output ones")
     arraw.save(developed, tmp_path / "e.png", encoding=encoding)
     assert (tmp_path / "e.png").stat().st_size > 0
 

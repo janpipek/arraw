@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <exception>
+#include <optional>
 #include <utility>
 
 #if defined(_WIN32)
@@ -61,8 +62,12 @@ QImage toQImage(const ImageBuffer& preview) {
     return view.copy();
 }
 
-/// @brief Reads the saved develop state of a photograph; defaults when there is no sidecar.
-DevelopState savedState(const fs::path& primary) {
+/// @brief Reads the develop state a photograph's sidecar records, if it records one.
+///
+/// Nothing when there is no sidecar, when it records no settings, or when it
+/// cannot be read: the photograph then develops from what its kind starts
+/// from, as opening it would say.
+std::optional<DevelopState> savedState(const fs::path& primary) {
     try {
         if (const auto contents = readSidecar(primary)) {
             return contents->state;
@@ -70,7 +75,18 @@ DevelopState savedState(const fs::path& primary) {
     } catch (const std::exception&) {
         // An unreadable sidecar develops as defaults, as opening the photograph would say.
     }
-    return {};
+    return std::nullopt;
+}
+
+/// @brief Gives the state a photograph's thumbnail develops with.
+///
+/// What its sidecar records, or else what its kind starts from, which takes a
+/// look at the file's header (no decode) to tell a RAW from anything else.
+DevelopState thumbnailState(const fs::path& primary) {
+    if (auto saved = savedState(primary)) {
+        return std::move(*saved);
+    }
+    return defaultStateFor(readImageMetadata(primary).encoding);
 }
 
 /// @brief Develops the thumbnail of a photograph: half-size decode, pyramid, develop.
@@ -83,6 +99,8 @@ QImage developThumbnail(const fs::path& primary, const DevelopState& state) {
     for (int i = 0; i < level; ++i) {
         source = halved(source);
     }
+    // Radii in sensor pixels shrink with the reduction: the half-size decode
+    // and every halving say so on the pixels (ADR 039).
     return toDisplayImage(develop(source, state, request));
 }
 
@@ -209,26 +227,34 @@ void ThumbnailWorker::run(const std::stop_token& stop) {
     }
 }
 
+QImage embeddedPreviewImage(const ThumbnailCache& cache, const std::filesystem::path& file) {
+    const auto key = ThumbnailCache::embeddedKey(file);
+    if (!key) {
+        return {};
+    }
+    QImage image = cache.load(*key);
+    if (image.isNull()) {
+        const auto preview = readEmbeddedPreview(file, ThumbnailCache::maxEdge);
+        if (!preview) {
+            return {};
+        }
+        image = toQImage(*preview);
+        cache.store(*key, image);
+    }
+    return image;
+}
+
 void ThumbnailWorker::execute(const Job& job, std::uint64_t generation) {
     // Nothing may escape the thread, or the process terminates.
     try {
         QImage image;
         if (job.kind == ThumbnailKind::Embedded) {
-            const auto key = ThumbnailCache::embeddedKey(job.primary);
-            if (!key) {
-                return;
-            }
-            image = cache_.load(*key);
+            image = embeddedPreviewImage(cache_, job.primary);
             if (image.isNull()) {
-                const auto preview = readEmbeddedPreview(job.primary, ThumbnailCache::maxEdge);
-                if (!preview) {
-                    return; // The shot has none; the placeholder stays until the developed one.
-                }
-                image = toQImage(*preview);
-                cache_.store(*key, image);
+                return; // The shot has none; the placeholder stays until the developed one.
             }
         } else {
-            const DevelopState state = savedState(job.primary);
+            const DevelopState state = thumbnailState(job.primary);
             const auto key = ThumbnailCache::developedKey(job.primary, state);
             if (!key) {
                 return;
