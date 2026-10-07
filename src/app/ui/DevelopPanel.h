@@ -238,6 +238,8 @@ private:
 
     /// Last state shown, kept only to build the next one.
     DevelopState shown_;
+    /// @brief State from before the row edit under way, the baseline of a run of straighten edits.
+    DevelopState editStart_;
 
     /// @brief Photograph the shown state belongs to, for the edit rules.
     ImageMetadata photo_{};

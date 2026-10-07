@@ -112,8 +112,10 @@ from zero: 45° gives 90° minus 45°, and -45° gives 270° plus 45°.
 Crop edges describe the final upright frame, regardless of argument order;
 they are not a sequence of crop and rotation commands. Aspect is a remembered
 constraint, not a substitute for crop edges. With an automatic crop, the renderer
-chooses the largest valid rectangle at the requested aspect. An explicit crop
-must already match a locked aspect; a mismatch fails that input. Crops that
+chooses the largest valid rectangle at the requested aspect. A sidecar's
+explicit crop is carried with the content when the flags rotate or flip it; a
+`--crop` frees the aspect unless `--crop-aspect` is given too, and a pair that disagrees is
+reshaped to the aspect, not refused. Crops that
 would include empty corners shrink around their centre, moving only when no
 positive-size rectangle fits there. Source pixels are never modified.
 

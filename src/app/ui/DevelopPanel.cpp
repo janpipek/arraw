@@ -29,6 +29,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <stdexcept>
 #include <string_view>
 #include <type_traits>
 #include <variant>
@@ -112,6 +113,9 @@ SettingSlider* DevelopPanel::addRow(std::string_view key, QWidget* group) {
     connect(row, &SettingSlider::editStarted, this, [this, row] {
         // One edit at a time: another row's pending edit ends before this one begins.
         finishOtherEdits(row);
+        // The baseline of a run of straighten edits: SettingSlider starts every edit before its
+        // first value.
+        editStart_ = shown_;
         emit editStarted();
     });
     connect(row, &SettingSlider::editFinished, this, &DevelopPanel::editFinished);
@@ -720,14 +724,23 @@ void DevelopPanel::watchViewport() {
 
 void DevelopPanel::applyEdit(const SettingSlider& row, double value) {
     if (row.key() == "straighten") {
-        // The row shows the angle as on screen; the setting is stored before the flips.
-        const bool mirrored =
-            shown_.settings.geometry.flipHorizontal != shown_.settings.geometry.flipVertical;
-        value = mirrored ? -value : value;
+        // The row shows the angle as on screen. Each tick starts from the state before the
+        // edit, so the crop's shrinking is undone when the angle goes back.
+        try {
+            emit stateEdited(withDisplayedStraighten(photo_, editStart_, value));
+        } catch (const std::invalid_argument&) {
+            // A geometry that is not valid for the frame (a crop that disagrees with its
+            // locked aspect, say) cannot be fitted; assign the angle alone and let the render
+            // report the geometry, as it does without an edit.
+            DevelopState next = editStart_;
+            next.settings.geometry.straighten = storedStraighten(next.settings.geometry, value);
+            emit stateEdited(next);
+        }
+        return;
     }
     // The rules of the key (white balance mode, a new grain seed) are core's. withValue throws
     // on a value out of range, which cannot reach a slot: SettingSlider clamps both the slider
-    // and the spin box to the descriptor's range.
+    // and the spin box to the descriptor's range. The other keys do not read the frame.
     emit stateEdited(withValue(photo_, shown_, row.key(), value));
 }
 

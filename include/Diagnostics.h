@@ -92,10 +92,6 @@ enum class Notice {
     /// opened without its settings and marks: the reason.
     SidecarUnreadable,
 
-    /// @brief An explicit crop was dropped for automatic framing, because an
-    /// edit changed the rotation or flips it was drawn in: what changed.
-    CropReset,
-
     /// @brief A photograph's EXIF could not be read, or it records none, so
     /// no capture information is shown: the reason.
     ExifUnreadable,

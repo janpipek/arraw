@@ -75,8 +75,6 @@ std::string nameOf(Notice notice) {
         return "filtered_out";
     case Notice::OptionIgnored:
         return "option_ignored";
-    case Notice::CropReset:
-        return "crop_reset";
     }
     return "unknown";
 }

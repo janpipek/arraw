@@ -954,7 +954,7 @@ class DevelopSettings:
         """
 
     def with_(self, **kwargs: Any) -> DevelopSettings:
-        """Return a copy with flat snake_case keywords applied, e.g. exposure=0.7."""
+        """Return a copy with flat snake_case keywords applied, e.g. exposure=0.7. Applies no rules: each keyword is assigned as it is, so a temperature leaves the white balance as it was and a turn leaves the crop where it was. Photo.edited applies the rules of the editing frontends."""
 
 class SettingDescriptor:
     """One row of the develop settings table."""
@@ -1133,6 +1133,38 @@ def default_state(metadata: ImageMetadata) -> DevelopState:
 def default_state(buffer: ImageBuffer) -> DevelopState:
     """The state a decoded buffer's kind starts from, as for its metadata."""
 
+def turned(metadata: ImageMetadata, state: DevelopState, clockwise: bool) -> DevelopState:
+    """
+    Turn the photograph by a quarter as it appears on screen, carrying the crop.
+    """
+
+def flipped(metadata: ImageMetadata, state: DevelopState, horizontal: bool) -> DevelopState:
+    """Mirror the photograph as it appears on screen, carrying the crop."""
+
+def with_aspect(metadata: ImageMetadata, state: DevelopState, aspect: FreeCropAspect | OriginalCropAspect | CropRatio) -> DevelopState:
+    """
+    Set the crop aspect, fitting the crop to a ratio. ValueError without the photograph's size.
+    """
+
+def with_locked_aspect(metadata: ImageMetadata, state: DevelopState) -> DevelopState:
+    """Lock the aspect at the crop's present ratio."""
+
+def with_swapped_orientation(metadata: ImageMetadata, state: DevelopState) -> DevelopState:
+    """Swap portrait and landscape."""
+
+def with_crop_reset(metadata: ImageMetadata, state: DevelopState) -> DevelopState:
+    """Return to automatic framing, keeping the aspect constraint."""
+
+def displayed_straighten(state: DevelopState) -> float:
+    """
+    The straighten as it appears on screen: degrees, clockwise positive. Needs no metadata.
+    """
+
+def with_displayed_straighten(metadata: ImageMetadata, state: DevelopState, displayed: float) -> DevelopState:
+    """
+    Straighten to an angle as it appears on screen (clockwise positive), shrinking the crop as the `straighten` setting does.
+    """
+
 def xmp_namespace_owner(uri: str) -> str | None:
     """
     Name the tool or standard behind an XMP namespace URI, or None when unknown.
@@ -1153,6 +1185,11 @@ class Photo:
     @property
     def marks(self) -> PhotoMarks: ...
 
+    def edited(self, **kwargs) -> Photo:
+        """
+        Return a photograph with flat snake_case keywords set, e.g. exposure=0.7, by the rules the app and the command line apply: a temperature makes the white balance Custom, grain turned on gets a seed, a turn carries the crop, a straighten shrinks it, a crop rectangle frees the aspect. Keywords are applied in the order given, so crop_aspect then crop_rectangle differs from the reverse. Raises TypeError for an unknown keyword or a wrong type, and ValueError for a value the setting refuses or a geometry that does not fit the photograph's size.
+        """
+
     def load(self) -> ImageBuffer:
         """Decode the photograph's file into a buffer."""
 
@@ -1172,7 +1209,7 @@ class Photo:
         **kwargs: Any,
     ) -> Photo:
         """
-        Return a photograph with `state` (and `marks`) replacing the current ones wholesale, then flat snake_case keywords applied, e.g. exposure=0.7, which edit the settings of the state. `rating` and `label` change the marks instead (label=None clears it).
+        Return a photograph with `state` (and `marks`) replacing the current ones wholesale, then flat snake_case keywords applied, e.g. exposure=0.7, which edit the settings of the state. `rating` and `label` change the marks instead (label=None clears it). Applies no rules: each keyword is assigned as it is, so a turn leaves the crop where it was. `edited` applies the rules of the editing frontends.
         """
 
 def open(path: str | os.PathLike, *, sidecar: bool = True) -> Photo:

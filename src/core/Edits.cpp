@@ -87,9 +87,58 @@ void clearLight(ColorSettings& color) {
     color.tint.reset();
 }
 
+/// @brief Gives the shape a geometry rule plans against, refusing a photograph without a size.
+SourceShape framedShape(const ImageMetadata& photo, std::string_view key) {
+    if (photo.size.empty()) {
+        throw std::invalid_argument(
+            std::format("{} needs the photograph's size, which it does not declare", key));
+    }
+    return shapeOf(photo);
+}
+
+/// @brief Applies a geometry key's rule, leaving the state as it is for an unchanged value.
+/// @return Whether @p key names a geometry setting.
+bool applyGeometryField(const ImageMetadata& photo, std::string_view key,
+                        const GeometrySettings& wanted, GeometrySettings& geometry) {
+    if (key == "rotation") {
+        if (wanted.rotation != geometry.rotation) {
+            geometry = withRotation(std::move(geometry), wanted.rotation);
+        }
+    } else if (key == "flipHorizontal" || key == "flipVertical") {
+        const bool horizontal = key == "flipHorizontal";
+        if (wanted.flipHorizontal != geometry.flipHorizontal && horizontal) {
+            geometry = flipped(std::move(geometry), true);
+        } else if (wanted.flipVertical != geometry.flipVertical && !horizontal) {
+            geometry = flipped(std::move(geometry), false);
+        }
+    } else if (key == "straighten") {
+        if (wanted.straighten != geometry.straighten) {
+            geometry = rotatedTo(framedShape(photo, key), geometry, wanted.straighten);
+        }
+    } else if (key == "cropRectangle") {
+        if (wanted.crop.rectangle != geometry.crop.rectangle) {
+            const SourceShape shape = framedShape(photo, key);
+            if (wanted.crop.rectangle) {
+                geometry.crop.rectangle = wanted.crop.rectangle;
+                geometry.crop.aspect = FreeCropAspect{};
+                geometry = fittedCrop(shape, std::move(geometry));
+            } else {
+                geometry = withCropReset(std::move(geometry));
+            }
+        }
+    } else if (key == "cropAspect") {
+        if (wanted.crop.aspect != geometry.crop.aspect) {
+            geometry = withAspect(framedShape(photo, key), std::move(geometry), wanted.crop.aspect);
+        }
+    } else {
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
-DevelopState withField(const ImageMetadata& photo [[maybe_unused]], DevelopState state,
+DevelopState withField(const ImageMetadata& photo, DevelopState state,
                        const FieldDescriptor& descriptor, const DevelopSettings& values,
                        const GrainEntropy& entropy) {
     validateField(descriptor, values);
@@ -119,8 +168,7 @@ DevelopState withField(const ImageMetadata& photo [[maybe_unused]], DevelopState
         copyField(descriptor, values, next);
         next.effects.grain.seed =
             chooseGrainSeed(before.effects.grain, next.effects.grain, entropy);
-    } else {
-        // Geometry included: plain assignment until the geometry rules move into core.
+    } else if (!applyGeometryField(photo, key, values.geometry, next.geometry)) {
         copyField(descriptor, values, next);
     }
     state.settings = std::move(next);
@@ -157,6 +205,48 @@ DevelopState withValues(const ImageMetadata& photo, DevelopState state,
     return state;
 }
 
+DevelopState turned(const ImageMetadata&, DevelopState state, bool clockwise) noexcept {
+    state.settings.geometry = turned(std::move(state.settings.geometry), clockwise);
+    return state;
+}
+
+DevelopState flipped(const ImageMetadata&, DevelopState state, bool horizontal) noexcept {
+    state.settings.geometry = flipped(std::move(state.settings.geometry), horizontal);
+    return state;
+}
+
+DevelopState withAspect(const ImageMetadata& photo, DevelopState state, const CropAspect& aspect) {
+    state.settings.geometry =
+        withAspect(shapeOf(photo), std::move(state.settings.geometry), aspect);
+    return state;
+}
+
+DevelopState withLockedAspect(const ImageMetadata& photo, DevelopState state) {
+    state.settings.geometry = withLockedAspect(shapeOf(photo), std::move(state.settings.geometry));
+    return state;
+}
+
+DevelopState withSwappedOrientation(const ImageMetadata& photo, DevelopState state) {
+    state.settings.geometry =
+        withSwappedOrientation(shapeOf(photo), std::move(state.settings.geometry));
+    return state;
+}
+
+DevelopState withCropReset(const ImageMetadata&, DevelopState state) noexcept {
+    state.settings.geometry = withCropReset(std::move(state.settings.geometry));
+    return state;
+}
+
+double displayedStraighten(const DevelopState& state) noexcept {
+    return displayedStraighten(state.settings.geometry);
+}
+
+DevelopState withDisplayedStraighten(const ImageMetadata& photo, DevelopState state,
+                                     double displayed) {
+    const double stored = storedStraighten(state.settings.geometry, displayed);
+    return withValue(photo, std::move(state), "straighten", stored);
+}
+
 Look lookOf(const ImageMetadata& photo, const DevelopSettings& settings) {
     return Look{settings, !std::holds_alternative<NamedEncoding>(photo.encoding)};
 }
@@ -176,7 +266,7 @@ AppliedLook withLook(const ImageMetadata& photo, DevelopState state, const Look&
         const auto index = static_cast<std::size_t>(section);
         if (std::ranges::find(copyableSections, section) == copyableSections.end()) {
             throw std::invalid_argument(std::format(
-                "the section {} cannot be copied yet",
+                "{} is not a section that can be copied",
                 index < sectionCount ? copySectionNames[index] : std::string_view{"unknown"}));
         }
         chosen.set(index);

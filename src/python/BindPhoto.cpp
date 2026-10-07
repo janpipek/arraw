@@ -4,6 +4,7 @@
 #include <Develop.h>
 #include <DevelopState.h>
 #include <Diagnostics.h>
+#include <Edits.h>
 #include <ImageExport.h>
 #include <ImageImport.h>
 #include <Photo.h>
@@ -78,6 +79,40 @@ Photo photoWith(const Photo& photo, const std::optional<DevelopState>& newState,
     }
     applyFlatSettings(result.settings, flat);
     return {photo.path(), photo.metadata(), result, marks};
+}
+
+/// @brief Applies snake_case keywords one after the other by the rules of ::arraw::withValue.
+///
+/// Each keyword is converted to the type its setting takes and set in the order given, so a
+/// rule that reads the state as it stands (a crop aspect after a rectangle, a straighten after a
+/// turn) sees what the keywords before it did.
+/// @throws nb::type_error for an unknown keyword or a value of the wrong type.
+/// @throws std::invalid_argument (a ValueError) as ::arraw::withValue.
+DevelopState editedState(const ImageMetadata& metadata, DevelopState state,
+                         const nb::kwargs& keywords) {
+    for (auto [key, value] : keywords) {
+        const std::string name = nb::cast<std::string>(key);
+        const FieldDescriptor* match = findSettingByKeyword(name);
+        if (match == nullptr) {
+            throw nb::type_error(("unknown develop setting '" + name + "'").c_str());
+        }
+        DevelopSettings scratch = state.settings;
+        visitField(*match, scratch, [&](auto& leaf) {
+            using Leaf = std::remove_cvref_t<decltype(leaf)>;
+            if constexpr (std::is_same_v<Leaf, ToneCurve>) {
+                // A curve may be given as a ToneCurve or as its list of (x, y) points.
+                if (!nb::isinstance<ToneCurve>(value)) {
+                    ToneCurve curve{convertValue<std::vector<CurvePoint>>(value, name)};
+                    normaliseCurvePoints(curve.points);
+                    state = withValue(metadata, std::move(state), match->key, curve);
+                    return;
+                }
+            }
+            state =
+                withValue(metadata, std::move(state), match->key, convertValue<Leaf>(value, name));
+        });
+    }
+    return state;
 }
 
 /// @brief Reads one side of a requested size: a positive Python int that fits a 32-bit side.
@@ -207,6 +242,59 @@ void bindPhoto(nb::module_& m) {
         [](const ImageBuffer& buffer) { return defaultStateFor(buffer.encoding()); }, "buffer"_a,
         "The state a decoded buffer's kind starts from, as for its metadata.");
 
+    m.def(
+        "turned",
+        [](const ImageMetadata& metadata, const DevelopState& state, bool clockwise) {
+            return turned(metadata, state, clockwise);
+        },
+        "metadata"_a, "state"_a, "clockwise"_a,
+        "Turn the photograph by a quarter as it appears on screen, carrying the crop.");
+    m.def(
+        "flipped",
+        [](const ImageMetadata& metadata, const DevelopState& state, bool horizontal) {
+            return flipped(metadata, state, horizontal);
+        },
+        "metadata"_a, "state"_a, "horizontal"_a,
+        "Mirror the photograph as it appears on screen, carrying the crop.");
+    m.def(
+        "with_aspect",
+        [](const ImageMetadata& metadata, const DevelopState& state, const CropAspect& aspect) {
+            return withAspect(metadata, state, aspect);
+        },
+        "metadata"_a, "state"_a, "aspect"_a,
+        "Set the crop aspect, fitting the crop to a ratio. ValueError without the photograph's "
+        "size.");
+    m.def(
+        "with_locked_aspect",
+        [](const ImageMetadata& metadata, const DevelopState& state) {
+            return withLockedAspect(metadata, state);
+        },
+        "metadata"_a, "state"_a, "Lock the aspect at the crop's present ratio.");
+    m.def(
+        "with_swapped_orientation",
+        [](const ImageMetadata& metadata, const DevelopState& state) {
+            return withSwappedOrientation(metadata, state);
+        },
+        "metadata"_a, "state"_a, "Swap portrait and landscape.");
+    m.def(
+        "with_crop_reset",
+        [](const ImageMetadata& metadata, const DevelopState& state) {
+            return withCropReset(metadata, state);
+        },
+        "metadata"_a, "state"_a, "Return to automatic framing, keeping the aspect constraint.");
+    m.def(
+        "displayed_straighten",
+        [](const DevelopState& state) { return displayedStraighten(state); }, "state"_a,
+        "The straighten as it appears on screen: degrees, clockwise positive. Needs no metadata.");
+    m.def(
+        "with_displayed_straighten",
+        [](const ImageMetadata& metadata, const DevelopState& state, double displayed) {
+            return withDisplayedStraighten(metadata, state, displayed);
+        },
+        "metadata"_a, "state"_a, "displayed"_a,
+        "Straighten to an angle as it appears on screen (clockwise positive), shrinking the "
+        "crop as the `straighten` setting does.");
+
     m.def("xmp_namespace_owner", &xmpNamespaceOwner, "uri"_a,
           "Name the tool or standard behind an XMP namespace URI, or None when unknown.");
 
@@ -220,7 +308,23 @@ void bindPhoto(nb::module_& m) {
              "Return a photograph with `state` (and `marks`) replacing the current ones "
              "wholesale, then flat snake_case keywords applied, e.g. exposure=0.7, which edit the "
              "settings of the state. `rating` and "
-             "`label` change the marks instead (label=None clears it).")
+             "`label` change the marks instead (label=None clears it). Applies no rules: each "
+             "keyword is assigned as it is, so a turn leaves the crop where it was. `edited` "
+             "applies the rules of the editing frontends.")
+        .def(
+            "edited",
+            [](const Photo& photo, const nb::kwargs& keywords) {
+                return Photo(photo.path(), photo.metadata(),
+                             editedState(photo.metadata(), photo.state(), keywords), photo.marks());
+            },
+            "kwargs"_a,
+            "Return a photograph with flat snake_case keywords set, e.g. exposure=0.7, by the "
+            "rules the app and the command line apply: a temperature makes the white balance "
+            "Custom, grain turned on gets a seed, a turn carries the crop, a straighten shrinks "
+            "it, a crop rectangle frees the aspect. Keywords are applied in the order given, "
+            "so crop_aspect then crop_rectangle differs from the reverse. Raises TypeError for "
+            "an unknown keyword or a wrong type, and ValueError for a value the setting refuses "
+            "or a geometry that does not fit the photograph's size.")
         .def(
             "load",
             [](const Photo& photo) {

@@ -270,21 +270,29 @@ private:
     /// @brief Enables Paste: with settings held, a photograph open, and outside the crop mode.
     void updatePasteAction();
 
+    /// @brief Change of the geometry that a menu entry or a panel button asks for, in both forms.
+    struct GeometryCommand {
+        /// @brief Change as the crop mode makes it, on the overlay's editing.
+        std::function<void(CropEditing&)> crop;
+        /// @brief Change as the state operations of Edits.h make it, outside the crop mode.
+        std::function<DevelopState(const ImageMetadata&, DevelopState)> state;
+    };
+
     /// @brief Applies a geometry command: a quarter-turn, a flip, an aspect, a reset.
     ///
     /// In the crop mode it joins the session's edit; otherwise it is one
-    /// history step of its own. The rules are CropEditing's either way, so the
+    /// history step of its own. The rules are the same either way (CropGeometry.h), so the
     /// crop is carried and kept inside the photograph.
     /// @param command Change to make to the geometry.
-    void editGeometry(const std::function<void(CropEditing&)>& command);
+    void editGeometry(const GeometryCommand& command);
 
     /// @brief Arms or disarms the straighten tool, entering the crop mode to arm it.
     void setStraightening(bool straightening);
 
-    /// @brief Gives the geometry a panel edit asks for, through the crop rules.
+    /// @brief Gives the geometry a panel edit asks for.
     ///
-    /// A straighten from a slider shrinks the crop as a rotation in the crop
-    /// mode does, from where the edit began rather than step by step.
+    /// Outside the crop mode, the geometry as it is: the panel built it with the rules of
+    /// Edits.h. In the crop mode, the one the overlay adopts it as.
     /// @param geometry Geometry the panel's edited state carries.
     [[nodiscard]] GeometrySettings reconciledGeometry(const GeometrySettings& geometry);
 
@@ -466,9 +474,6 @@ private:
 
     /// Renders of the crop mode on their way, with the state each shows, oldest first.
     std::deque<std::pair<std::uint64_t, DevelopState>> cropRequests_;
-
-    /// Crop rules for a panel edit of the geometry outside the crop mode, from its start.
-    std::optional<CropEditing> geometryEdit_;
 
     /// File names of the exports that have not reported yet, by the identifier the queue gave.
     std::map<std::uint64_t, QString> exportNames_;

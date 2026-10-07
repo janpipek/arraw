@@ -324,8 +324,7 @@ void MainWindow::buildMenu() {
     connect(cropAction_, &QAction::triggered, this, &MainWindow::setCropMode);
     photoMenu_->addSeparator();
     const auto addGeometryAction = [this](const QString& name, const QString& text,
-                                          const QKeySequence& shortcut,
-                                          std::function<void(CropEditing&)> command) {
+                                          const QKeySequence& shortcut, GeometryCommand command) {
         QAction* action = photoMenu_->addAction(text);
         action->setObjectName(name);
         if (!shortcut.isEmpty()) {
@@ -338,14 +337,26 @@ void MainWindow::buildMenu() {
     };
     addGeometryAction("rotateLeftAction", tr("Rotate &Left"),
                       QKeySequence(Qt::CTRL | Qt::Key_BracketLeft),
-                      [](CropEditing& editing) { editing.turn(false); });
+                      {[](CropEditing& editing) { editing.turn(false); },
+                       [](const ImageMetadata& photo, DevelopState state) {
+                           return turned(photo, std::move(state), false);
+                       }});
     addGeometryAction("rotateRightAction", tr("Rotate &Right"),
                       QKeySequence(Qt::CTRL | Qt::Key_BracketRight),
-                      [](CropEditing& editing) { editing.turn(true); });
+                      {[](CropEditing& editing) { editing.turn(true); },
+                       [](const ImageMetadata& photo, DevelopState state) {
+                           return turned(photo, std::move(state), true);
+                       }});
     addGeometryAction("flipHorizontalAction", tr("Flip &Horizontal"), {},
-                      [](CropEditing& editing) { editing.flip(true); });
+                      {[](CropEditing& editing) { editing.flip(true); },
+                       [](const ImageMetadata& photo, DevelopState state) {
+                           return flipped(photo, std::move(state), true);
+                       }});
     addGeometryAction("flipVerticalAction", tr("Flip &Vertical"), {},
-                      [](CropEditing& editing) { editing.flip(false); });
+                      {[](CropEditing& editing) { editing.flip(false); },
+                       [](const ImageMetadata& photo, DevelopState state) {
+                           return flipped(photo, std::move(state), false);
+                       }});
 
     // Rating, colour labels and stepping follow the geometry in the same menu, as in Lightroom.
     photoMenu_->addSeparator();
@@ -476,7 +487,6 @@ void MainWindow::buildDevelopDock() {
     // joins it rather than opening and closing one of its own.
     connect(developPanel_, &DevelopPanel::editStarted, this, [this] {
         guarded([this] {
-            geometryEdit_.reset();
             if (photoView_->isCropMode()) {
                 // One step of the crop session's history, however many changes it makes.
                 photoView_->cropOverlay().beginStep();
@@ -515,28 +525,48 @@ void MainWindow::buildDevelopDock() {
     connect(&photoView_->cropOverlay(), &CropOverlay::straighteningChanged, developPanel_,
             &DevelopPanel::setStraightening);
     connect(developPanel_, &DevelopPanel::turned, this, [this](bool clockwise) {
-        editGeometry([clockwise](CropEditing& editing) { editing.turn(clockwise); });
+        editGeometry({[clockwise](CropEditing& editing) { editing.turn(clockwise); },
+                      [clockwise](const ImageMetadata& photo, DevelopState state) {
+                          return turned(photo, std::move(state), clockwise);
+                      }});
     });
     connect(developPanel_, &DevelopPanel::flipped, this, [this](bool horizontal) {
-        editGeometry([horizontal](CropEditing& editing) { editing.flip(horizontal); });
+        editGeometry({[horizontal](CropEditing& editing) { editing.flip(horizontal); },
+                      [horizontal](const ImageMetadata& photo, DevelopState state) {
+                          return flipped(photo, std::move(state), horizontal);
+                      }});
     });
-    connect(developPanel_, &DevelopPanel::orientationSwapped, this,
-            [this] { editGeometry([](CropEditing& editing) { editing.swapOrientation(); }); });
+    connect(developPanel_, &DevelopPanel::orientationSwapped, this, [this] {
+        editGeometry({[](CropEditing& editing) { editing.swapOrientation(); },
+                      [](const ImageMetadata& photo, DevelopState state) {
+                          return withSwappedOrientation(photo, std::move(state));
+                      }});
+    });
     connect(developPanel_, &DevelopPanel::lockToggled, this, [this](bool locked) {
-        editGeometry([locked](CropEditing& editing) { editing.setLocked(locked); });
+        editGeometry({[locked](CropEditing& editing) { editing.setLocked(locked); },
+                      [locked](const ImageMetadata& photo, DevelopState state) {
+                          return locked ? withLockedAspect(photo, std::move(state))
+                                        : withAspect(photo, std::move(state), FreeCropAspect{});
+                      }});
     });
     connect(developPanel_, &DevelopPanel::aspectChosen, this,
             [this](const CropAspect& aspect, bool matchOrientation) {
-                editGeometry([aspect, matchOrientation](CropEditing& editing) {
-                    CropAspect chosen = aspect;
-                    // The menu's ratios are landscape; a portrait crop keeps its orientation.
+                // The menu's ratios are landscape; a portrait crop keeps its orientation.
+                const auto chosenFor = [aspect, matchOrientation](const CropBox& crop) {
                     if (const auto* ratio = std::get_if<CropRatio>(&aspect);
-                        ratio != nullptr && matchOrientation &&
-                        editing.crop().height > editing.crop().width) {
-                        chosen = CropRatio{1.0 / ratio->widthOverHeight};
+                        ratio != nullptr && matchOrientation && crop.height > crop.width) {
+                        return CropAspect{CropRatio{1.0 / ratio->widthOverHeight}};
                     }
-                    editing.setAspect(chosen);
-                });
+                    return aspect;
+                };
+                editGeometry({[chosenFor](CropEditing& editing) {
+                                  editing.setAspect(chosenFor(editing.crop()));
+                              },
+                              [chosenFor](const ImageMetadata& photo, DevelopState state) {
+                                  const CropBox crop =
+                                      cropFrameFor(shapeOf(photo), state.settings.geometry).crop;
+                                  return withAspect(photo, std::move(state), chosenFor(crop));
+                              }});
             });
     // The curve histogram costs a render (ADR 035): counted only while the editor shows.
     connect(developPanel_, &DevelopPanel::curveHistogramWantedChanged, this,
@@ -547,7 +577,6 @@ void MainWindow::buildDevelopDock() {
             qOverload<>(&QWidget::setFocus));
     connect(developPanel_, &DevelopPanel::editFinished, this, [this] {
         guarded([this] {
-            geometryEdit_.reset();
             if (photoView_->isCropMode()) {
                 photoView_->cropOverlay().endStep();
                 return;
@@ -735,22 +764,18 @@ void MainWindow::leaveCropMode(bool accept) {
     });
 }
 
-void MainWindow::editGeometry(const std::function<void(CropEditing&)>& command) {
+void MainWindow::editGeometry(const GeometryCommand& command) {
     if (!editable()) {
         return;
     }
     if (photoView_->isCropMode()) {
-        photoView_->cropOverlay().edit(command);
+        photoView_->cropOverlay().edit(command.crop);
         return;
     }
     guarded([this, &command] {
         developPanel_->finishPendingEdit();
-        DevelopState next = open_->session.photo().state();
-        CropEditing editing(open_->decoded->size(), open_->decoded->orientation(),
-                            next.settings.geometry);
-        command(editing);
-        next.settings.geometry = editing.geometry();
-        open_->session.setState(next);
+        const Photo& photo = open_->session.photo();
+        open_->session.setState(command.state(photo.metadata(), photo.state()));
         refreshPanel();
     });
 }
@@ -765,19 +790,13 @@ void MainWindow::setStraightening(bool straightening) {
 }
 
 GeometrySettings MainWindow::reconciledGeometry(const GeometrySettings& geometry) {
-    const GeometrySettings& current = open_->session.photo().state().settings.geometry;
-    if (geometry == current || !open_->decoded) {
+    // Outside the crop mode the panel's state already follows the rules (core's Edits.h).
+    if (!photoView_->isCropMode() || !open_->decoded ||
+        geometry == open_->session.photo().state().settings.geometry) {
         return geometry;
     }
-    if (photoView_->isCropMode()) {
-        photoView_->cropOverlay().adopt(geometry);
-        return photoView_->cropOverlay().editing().geometry();
-    }
-    if (!geometryEdit_) {
-        geometryEdit_.emplace(open_->decoded->size(), open_->decoded->orientation(), current);
-    }
-    geometryEdit_->adopt(geometry);
-    return geometryEdit_->geometry();
+    photoView_->cropOverlay().adopt(geometry);
+    return photoView_->cropOverlay().editing().geometry();
 }
 
 void MainWindow::pickNeutralAt(const QPointF& point) {
@@ -1571,7 +1590,6 @@ void MainWindow::showPhoto(Photo photo) {
         // Only when nothing asked first; the edit belongs to the session being replaced.
         closeCropOverlay();
     }
-    geometryEdit_.reset();
     setPicking(false);
     // The shot just left shows its saved settings again, not the edits that were abandoned.
     filmStrip_->releaseLiveThumbnail();
@@ -1655,7 +1673,6 @@ void MainWindow::closePhoto() {
     if (photoView_->isCropMode()) {
         closeCropOverlay();
     }
-    geometryEdit_.reset();
     setPicking(false);
     filmStrip_->releaseLiveThumbnail();
     filmStrip_->clearActive();

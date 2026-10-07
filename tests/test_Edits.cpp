@@ -3,6 +3,7 @@
 
 #include <Edits.h>
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
@@ -371,44 +372,226 @@ TEST_CASE("The white balance section copies as one", "[Edits][WhiteBalance]") {
     }
 }
 
-TEST_CASE("Geometry is a plain assignment for now", "[Edits][Geometry]") {
-    SECTION("a rotation leaves an explicit crop untouched") {
-        DevelopState base;
-        const UprightCropRect crop{.left = 0.1, .top = 0.2, .right = 0.6, .bottom = 0.9};
-        base.settings.geometry.crop.rectangle = crop;
-        const DevelopState turned = withValue(photo, base, "rotation", QuarterTurn::Clockwise90);
-        CHECK(turned.settings.geometry.rotation == QuarterTurn::Clockwise90);
-        CHECK(turned.settings.geometry.crop.rectangle == crop);
+namespace {
+
+const ImageMetadata wide{ImageSize{40, 20}, workingEncoding};
+const ImageMetadata sizeless{ImageSize{}, workingEncoding};
+
+DevelopState withGeometry(GeometrySettings geometry) {
+    DevelopState state;
+    state.settings.geometry = std::move(geometry);
+    return state;
+}
+
+/// A 2:1 crop, off centre, on the 40x20 photograph, its aspect locked.
+DevelopState lockedWideCrop() {
+    DevelopState state;
+    state.settings.geometry.crop.rectangle = UprightCropRect{0.1, 0.1, 0.6, 0.6};
+    return withLockedAspect(wide, state);
+}
+
+bool isNear(const UprightCropRect& a, const UprightCropRect& b, double slack = 1e-9) {
+    return std::abs(a.left - b.left) < slack && std::abs(a.top - b.top) < slack &&
+           std::abs(a.right - b.right) < slack && std::abs(a.bottom - b.bottom) < slack;
+}
+
+double ratioOf(const DevelopState& state) {
+    return std::get<CropRatio>(state.settings.geometry.crop.aspect).widthOverHeight;
+}
+
+} // namespace
+
+TEST_CASE("A rotation carries the crop and reciprocates a ratio", "[Edits][Geometry]") {
+    const DevelopState base = lockedWideCrop();
+    REQUIRE(ratioOf(base) == Catch::Approx(2.0));
+    const DevelopState turned = withValue(wide, base, "rotation", QuarterTurn::Clockwise90);
+    const GeometrySettings& geometry = turned.settings.geometry;
+    CHECK(geometry.rotation == QuarterTurn::Clockwise90);
+    REQUIRE(geometry.crop.rectangle);
+    CHECK(isNear(*geometry.crop.rectangle, UprightCropRect{0.4, 0.1, 0.9, 0.6}));
+    CHECK(ratioOf(turned) == Catch::Approx(0.5));
+    CHECK(geometry == withRotation(base.settings.geometry, QuarterTurn::Clockwise90));
+}
+
+TEST_CASE("A flip mirrors the crop, and the same flip changes nothing", "[Edits][Geometry]") {
+    DevelopState base;
+    base.settings.geometry.crop.rectangle = UprightCropRect{0.1, 0.2, 0.5, 0.6};
+    SECTION("horizontal") {
+        const DevelopState flipped = withValue(wide, base, "flipHorizontal", true);
+        CHECK(flipped.settings.geometry.flipHorizontal);
+        REQUIRE(flipped.settings.geometry.crop.rectangle);
+        CHECK(
+            isNear(*flipped.settings.geometry.crop.rectangle, UprightCropRect{0.5, 0.2, 0.9, 0.6}));
     }
-    SECTION("a well-formed crop is stored and nullopt clears it") {
-        const UprightCropRect crop{.left = 0.1, .top = 0.1, .right = 0.9, .bottom = 0.9};
-        const DevelopState cropped = withValue(photo, DevelopState{}, "cropRectangle", crop);
-        CHECK(cropped.settings.geometry.crop.rectangle == crop);
-        CHECK_FALSE(withValue(photo, cropped, "cropRectangle", std::nullopt)
-                        .settings.geometry.crop.rectangle);
+    SECTION("vertical") {
+        const DevelopState flipped = withValue(wide, base, "flipVertical", true);
+        REQUIRE(flipped.settings.geometry.crop.rectangle);
+        CHECK(
+            isNear(*flipped.settings.geometry.crop.rectangle, UprightCropRect{0.1, 0.4, 0.5, 0.8}));
     }
-    SECTION("an aspect is any alternative") {
-        CHECK(withValue(photo, DevelopState{}, "cropAspect", CropRatio{1.5})
-                  .settings.geometry.crop.aspect == CropAspect{CropRatio{1.5}});
-        CHECK(withValue(photo, DevelopState{}, "cropAspect", OriginalCropAspect{})
-                  .settings.geometry.crop.aspect == CropAspect{OriginalCropAspect{}});
+    SECTION("the value it already has") {
+        CHECK(withValue(wide, base, "flipHorizontal", false) == base);
+        const DevelopState once = withValue(wide, base, "flipHorizontal", true);
+        CHECK(withValue(wide, once, "flipHorizontal", true) == once);
+        const DevelopState undone = withValue(wide, once, "flipHorizontal", false);
+        CHECK_FALSE(undone.settings.geometry.flipHorizontal);
+        REQUIRE(undone.settings.geometry.crop.rectangle);
+        CHECK(isNear(*undone.settings.geometry.crop.rectangle,
+                     *base.settings.geometry.crop.rectangle));
     }
-    SECTION("malformed values throw") {
-        CHECK_THROWS_AS(withValue(photo, DevelopState{}, "cropRectangle",
-                                  UprightCropRect{.left = 0.9, .right = 0.1}),
-                        std::invalid_argument);
-        CHECK_THROWS_AS(withValue(photo, DevelopState{}, "cropAspect", CropRatio{0.0}),
-                        std::invalid_argument);
-        ToneCurve bad;
-        bad.points = {{0.5F, 0.5F}};
-        CHECK_THROWS_AS(withValue(photo, DevelopState{}, "toneCurveLuma", bad),
-                        std::invalid_argument);
+}
+
+TEST_CASE("Straightening shrinks the crop and the baseline restores it", "[Edits][Geometry]") {
+    DevelopState base;
+    base.settings.geometry.crop.rectangle = UprightCropRect{0.05, 0.05, 0.95, 0.95};
+    const DevelopState tilted = withValue(wide, base, "straighten", 10.0);
+    const auto& tiltedRectangle = tilted.settings.geometry.crop.rectangle;
+    REQUIRE(tiltedRectangle);
+    CHECK(tiltedRectangle->right - tiltedRectangle->left < 0.9);
+    CHECK(tilted.settings.geometry == rotatedTo(shapeOf(wide), base.settings.geometry, 10.0));
+    // A drag passes the state from before it every time.
+    const DevelopState back = withValue(wide, base, "straighten", 0.0);
+    CHECK(back == base);
+    const DevelopState again = withValue(wide, base, "straighten", 4.0);
+    CHECK(again.settings.geometry == rotatedTo(shapeOf(wide), base.settings.geometry, 4.0));
+    CHECK(withValue(wide, tilted, "straighten", 10.0) == tilted);
+}
+
+TEST_CASE("A crop rectangle frees a locked aspect and is fitted", "[Edits][Geometry]") {
+    SECTION("the aspect is freed") {
+        const UprightCropRect rectangle{0.2, 0.2, 0.5, 0.9};
+        const DevelopState set = withValue(wide, lockedWideCrop(), "cropRectangle", rectangle);
+        CHECK(set.settings.geometry.crop.rectangle == rectangle);
+        CHECK(set.settings.geometry.crop.aspect == CropAspect{FreeCropAspect{}});
     }
-    SECTION("a well-formed curve is stored") {
-        ToneCurve curve;
-        curve.points = {{0.0F, 0.0F}, {0.5F, 0.75F}, {1.0F, 1.0F}};
-        CHECK(withValue(photo, DevelopState{}, "toneCurveRed", curve).settings.toneCurve.red ==
-              curve);
+    SECTION("a rectangle outside valid content is fitted") {
+        DevelopState tilted;
+        tilted.settings.geometry.straighten = 20.0;
+        const UprightCropRect whole{0.0, 0.0, 1.0, 1.0};
+        const DevelopState set = withValue(wide, tilted, "cropRectangle", whole);
+        REQUIRE(set.settings.geometry.crop.rectangle);
+        CHECK(*set.settings.geometry.crop.rectangle != whole);
+        CHECK(set.settings.geometry == fittedCrop(shapeOf(wide), [&] {
+                  GeometrySettings g = tilted.settings.geometry;
+                  g.crop.rectangle = whole;
+                  return g;
+              }()));
+    }
+    SECTION("nullopt returns to automatic framing and keeps the aspect") {
+        const DevelopState reset = withValue(wide, lockedWideCrop(), "cropRectangle", std::nullopt);
+        CHECK_FALSE(reset.settings.geometry.crop.rectangle);
+        CHECK(ratioOf(reset) == Catch::Approx(2.0));
+    }
+    SECTION("the same rectangle changes nothing") {
+        const DevelopState base = lockedWideCrop();
+        CHECK(withValue(wide, base, "cropRectangle", *base.settings.geometry.crop.rectangle) ==
+              base);
+    }
+}
+
+TEST_CASE("A crop aspect fits the crop to its ratio", "[Edits][Geometry]") {
+    DevelopState base;
+    base.settings.geometry.crop.rectangle = UprightCropRect{0.2, 0.1, 0.8, 0.9};
+    const DevelopState set = withValue(wide, base, "cropAspect", CropRatio{1.0});
+    CHECK(set.settings.geometry ==
+          withAspect(shapeOf(wide), base.settings.geometry, CropRatio{1.0}));
+    REQUIRE(set.settings.geometry.crop.rectangle);
+    // 24 wide by 16 high shrinks to the square 16 by 16.
+    CHECK(isNear(*set.settings.geometry.crop.rectangle, UprightCropRect{0.3, 0.1, 0.7, 0.9}, 1e-6));
+    CHECK(withValue(wide, set, "cropAspect", CropRatio{1.0}) == set);
+}
+
+TEST_CASE("A rectangle and an aspect together never disagree", "[Edits][Geometry]") {
+    DevelopSettings source;
+    source.geometry.crop.rectangle = UprightCropRect{0.1, 0.1, 0.9, 0.9};
+    source.geometry.crop.aspect = CropRatio{0.5};
+    const std::array<std::string_view, 2> keys{"cropAspect", "cropRectangle"};
+    const DevelopState target = lockedWideCrop();
+    DevelopState result;
+    REQUIRE_NOTHROW(result = withValues(wide, target, keys, source));
+    CHECK(result.settings.geometry.crop.aspect == CropAspect{CropRatio{0.5}});
+    REQUIRE(result.settings.geometry.crop.rectangle);
+    CHECK(ratioOf(result) == Catch::Approx(0.5));
+    const CropFrame frame = cropFrameFor(shapeOf(wide), result.settings.geometry);
+    CHECK(frame.crop.width / frame.crop.height == Catch::Approx(0.5));
+}
+
+TEST_CASE("The named crop wins over a rotation and a straighten in one call", "[Edits][Geometry]") {
+    DevelopSettings source;
+    source.geometry.rotation = QuarterTurn::Clockwise90;
+    source.geometry.straighten = 5.0;
+    source.geometry.crop.rectangle = UprightCropRect{0.3, 0.3, 0.6, 0.6};
+    const std::array<std::string_view, 3> keys{"cropRectangle", "straighten", "rotation"};
+    DevelopState target;
+    target.settings.geometry.crop.rectangle = UprightCropRect{0.1, 0.1, 0.9, 0.9};
+    const DevelopState result = withValues(wide, target, keys, source);
+    CHECK(result.settings.geometry.rotation == QuarterTurn::Clockwise90);
+    CHECK(result.settings.geometry.straighten == 5.0);
+    CHECK(result.settings.geometry.crop.rectangle == UprightCropRect{0.3, 0.3, 0.6, 0.6});
+}
+
+TEST_CASE("A photograph without a size refuses the rules that read its frame",
+          "[Edits][Geometry]") {
+    const DevelopState base = withGeometry({});
+    CHECK_THROWS_AS(withValue(sizeless, base, "straighten", 3.0), std::invalid_argument);
+    CHECK_THROWS_AS(withValue(sizeless, base, "cropRectangle", UprightCropRect{0.1, 0.1, 0.9, 0.9}),
+                    std::invalid_argument);
+    CHECK_THROWS_AS(withValue(sizeless, base, "cropAspect", CropRatio{1.0}), std::invalid_argument);
+    CHECK_NOTHROW(withValue(sizeless, base, "rotation", QuarterTurn::Clockwise90));
+    CHECK_NOTHROW(withValue(sizeless, base, "flipHorizontal", true));
+    CHECK_NOTHROW(withValue(sizeless, base, "flipVertical", true));
+}
+
+TEST_CASE("A malformed geometry value throws", "[Edits][Geometry]") {
+    CHECK_THROWS_AS(withValue(photo, DevelopState{}, "cropRectangle",
+                              UprightCropRect{.left = 0.9, .right = 0.1}),
+                    std::invalid_argument);
+    CHECK_THROWS_AS(withValue(photo, DevelopState{}, "cropAspect", CropRatio{0.0}),
+                    std::invalid_argument);
+    ToneCurve bad;
+    bad.points = {{0.5F, 0.5F}};
+    CHECK_THROWS_AS(withValue(photo, DevelopState{}, "toneCurveLuma", bad), std::invalid_argument);
+}
+
+TEST_CASE("A well-formed curve is stored", "[Edits]") {
+    ToneCurve curve;
+    curve.points = {{0.0F, 0.0F}, {0.5F, 0.75F}, {1.0F, 1.0F}};
+    CHECK(withValue(photo, DevelopState{}, "toneCurveRed", curve).settings.toneCurve.red == curve);
+}
+
+TEST_CASE("Each geometry operation is its CropGeometry rule on the state's geometry",
+          "[Edits][Geometry]") {
+    DevelopState base;
+    base.settings.geometry.crop.rectangle = UprightCropRect{0.1, 0.2, 0.7, 0.8};
+    base.settings.geometry.straighten = 4.0;
+    base.settings.geometry.flipHorizontal = true;
+    base.settings.tone.exposure = 1.0F;
+    const GeometrySettings& g = base.settings.geometry;
+    const SourceShape shape = shapeOf(wide);
+
+    const auto check = [&](const DevelopState& result, const GeometrySettings& expected) {
+        CHECK(result.settings.geometry == expected);
+        CHECK(result.settings.tone.exposure == 1.0F);
+    };
+    check(turned(wide, base, true), turned(g, true));
+    check(turned(wide, base, false), turned(g, false));
+    check(flipped(wide, base, true), flipped(g, true));
+    check(flipped(wide, base, false), flipped(g, false));
+    check(withAspect(wide, base, CropRatio{1.5}), withAspect(shape, g, CropRatio{1.5}));
+    check(withLockedAspect(wide, base), withLockedAspect(shape, g));
+    check(withSwappedOrientation(wide, base), withSwappedOrientation(shape, g));
+    check(withCropReset(wide, base), withCropReset(g));
+    CHECK(displayedStraighten(base) == displayedStraighten(g));
+    CHECK(displayedStraighten(base) == -4.0);
+
+    SECTION("the displayed straighten is stored with the flips' sign") {
+        const DevelopState set = withDisplayedStraighten(wide, base, 6.0);
+        CHECK(set.settings.geometry.straighten == -6.0);
+        CHECK(displayedStraighten(set) == 6.0);
+        CHECK(set == withValue(wide, base, "straighten", -6.0));
+    }
+    SECTION("a displayed angle out of range throws") {
+        CHECK_THROWS_AS(withDisplayedStraighten(wide, base, 100.0), std::invalid_argument);
     }
 }
 
@@ -495,8 +678,6 @@ TEST_CASE("A look is taken with whether its photograph is a RAW", "[Edits][Look]
 
 TEST_CASE("The copyable sections are consistent with the table", "[Edits][Look]") {
     for (const CopySection section : copyableSections) {
-        CHECK(section != CopySection::RotateAndFlip);
-        CHECK(section != CopySection::Crop);
         const bool hasRow =
             std::ranges::any_of(developSettingDescriptors, [&](const FieldDescriptor& d) {
                 return d.section == section && d.scope == SettingScope::Look;
@@ -505,6 +686,11 @@ TEST_CASE("The copyable sections are consistent with the table", "[Edits][Look]"
     }
     for (const CopySection section : defaultCopySections) {
         CHECK(std::ranges::find(copyableSections, section) != copyableSections.end());
+    }
+    // The geometry can be carried, but is not chosen until someone chooses it.
+    for (const CopySection geometry : {CopySection::RotateAndFlip, CopySection::Crop}) {
+        CHECK(std::ranges::find(copyableSections, geometry) != copyableSections.end());
+        CHECK(std::ranges::find(defaultCopySections, geometry) == defaultCopySections.end());
     }
 }
 
@@ -639,8 +825,7 @@ TEST_CASE("The white balance crosses only between photographs it applies to", "[
     }
 }
 
-TEST_CASE("A look with every copyable section leaves the target's geometry alone",
-          "[Edits][Look]") {
+TEST_CASE("A look with every default section leaves the target's geometry alone", "[Edits][Look]") {
     DevelopSettings source;
     source.tone.exposure = 1.0F;
     source.geometry.crop.rectangle = UprightCropRect{0.1, 0.1, 0.9, 0.9};
@@ -654,21 +839,141 @@ TEST_CASE("A look with every copyable section leaves the target's geometry alone
     CHECK(applied.state.settings.tone.exposure == 1.0F);
 }
 
-TEST_CASE("A look refuses the geometry sections and invalid values", "[Edits][Look]") {
+namespace {
+
+const CopySection rotateSections[] = {CopySection::RotateAndFlip};
+const CopySection cropSections[] = {CopySection::Crop};
+const CopySection bothGeometrySections[] = {CopySection::RotateAndFlip, CopySection::Crop};
+
+Look geometryLook(const GeometrySettings& geometry) {
+    DevelopSettings settings;
+    settings.geometry = geometry;
+    return lookOf(wide, settings);
+}
+
+CropBox resolvedCrop(const ImageMetadata& on, const DevelopState& state) {
+    return cropFrameFor(shapeOf(on), state.settings.geometry).crop;
+}
+
+} // namespace
+
+TEST_CASE("Rotate and Flip carries the target's crop with it", "[Edits][Look][Geometry]") {
+    GeometrySettings wanted;
+    wanted.rotation = QuarterTurn::Clockwise90;
+    wanted.flipHorizontal = true;
+    wanted.straighten = 2.0;
+    const DevelopState target = lockedWideCrop();
+    const AppliedLook applied = withLook(wide, target, geometryLook(wanted), rotateSections);
+    const GeometrySettings& got = applied.state.settings.geometry;
+    CHECK(got.rotation == QuarterTurn::Clockwise90);
+    CHECK(got.flipHorizontal);
+    CHECK(got.straighten == 2.0);
+    CHECK(got.crop.rectangle);
+    CHECK(got.crop.rectangle != target.settings.geometry.crop.rectangle);
+    // The 2:1 ratio turned with the frame, and the crop still fits it.
+    CHECK(ratioOf(applied.state) == Catch::Approx(0.5));
+    CHECK_NOTHROW(resolvedCrop(wide, applied.state));
+    CHECK(applied.skipped.empty());
+}
+
+TEST_CASE("Crop carries the look's fractions, fitted to the target", "[Edits][Look][Geometry]") {
+    GeometrySettings wanted;
+    wanted.crop.rectangle = UprightCropRect{0.1, 0.2, 0.9, 0.8};
+
+    SECTION("inside valid content it is kept exactly") {
+        const AppliedLook applied = withLook(wide, {}, geometryLook(wanted), cropSections);
+        CHECK(applied.state.settings.geometry.crop == wanted.crop);
+    }
+    SECTION("a frame of other proportions takes the same fractions") {
+        const ImageMetadata tall{ImageSize{20, 40}, workingEncoding};
+        const AppliedLook onWide = withLook(wide, {}, geometryLook(wanted), cropSections);
+        const AppliedLook onTall = withLook(tall, {}, geometryLook(wanted), cropSections);
+        CHECK(onTall.state.settings.geometry.crop == onWide.state.settings.geometry.crop);
+        const CropBox wideBox = resolvedCrop(wide, onWide.state);
+        const CropBox tallBox = resolvedCrop(tall, onTall.state);
+        CHECK(wideBox.width / wideBox.height == Catch::Approx(32.0 / 12.0));
+        CHECK(tallBox.width / tallBox.height == Catch::Approx(16.0 / 24.0));
+    }
+    SECTION("outside valid content it is shrunk to fit") {
+        DevelopState target;
+        target.settings.geometry.straighten = 10.0;
+        const AppliedLook applied = withLook(wide, target, geometryLook(wanted), cropSections);
+        const auto& rectangle = applied.state.settings.geometry.crop.rectangle;
+        REQUIRE(rectangle);
+        CHECK(rectangle != wanted.crop.rectangle);
+        CHECK(rectangle->left >= 0.1);
+        CHECK(rectangle->right <= 0.9);
+        CHECK(rectangle->top >= 0.2);
+        CHECK(rectangle->bottom <= 0.8);
+        CHECK_NOTHROW(resolvedCrop(wide, applied.state));
+        CHECK(applied.state.settings.geometry.straighten == 10.0);
+    }
+}
+
+TEST_CASE("Crop keeps the look's aspect", "[Edits][Look][Geometry]") {
+    GeometrySettings wanted;
+    wanted.crop.rectangle = UprightCropRect{0.1, 0.1, 0.9, 0.9};
+
+    SECTION("a ratio keeps its literal value, portrait or landscape") {
+        for (const double ratio : {1.0, 0.5, 1.5}) {
+            wanted.crop.aspect = CropRatio{ratio};
+            const AppliedLook applied = withLook(wide, {}, geometryLook(wanted), cropSections);
+            CHECK(applied.state.settings.geometry.crop.aspect == CropAspect{CropRatio{ratio}});
+            const CropBox box = resolvedCrop(wide, applied.state);
+            CHECK(box.width / box.height == Catch::Approx(ratio).epsilon(1e-6));
+        }
+    }
+    SECTION("the Original aspect resolves against the target's frame") {
+        wanted.crop.aspect = OriginalCropAspect{};
+        const AppliedLook applied = withLook(wide, {}, geometryLook(wanted), cropSections);
+        CHECK(applied.state.settings.geometry.crop.aspect == CropAspect{OriginalCropAspect{}});
+        const CropBox box = resolvedCrop(wide, applied.state);
+        CHECK(box.width / box.height == Catch::Approx(2.0).epsilon(1e-6));
+    }
+    SECTION("an automatic crop stays automatic, with the look's aspect") {
+        wanted.crop.rectangle = std::nullopt;
+        wanted.crop.aspect = CropRatio{1.5};
+        const AppliedLook applied =
+            withLook(wide, lockedWideCrop(), geometryLook(wanted), cropSections);
+        CHECK_FALSE(applied.state.settings.geometry.crop.rectangle);
+        CHECK(applied.state.settings.geometry.crop.aspect == CropAspect{CropRatio{1.5}});
+    }
+}
+
+TEST_CASE("With Crop and Rotate and Flip both chosen, the look's crop wins",
+          "[Edits][Look][Geometry]") {
+    GeometrySettings wanted;
+    wanted.rotation = QuarterTurn::Clockwise90;
+    wanted.crop.rectangle = UprightCropRect{0.1, 0.2, 0.9, 0.8};
+    const AppliedLook applied =
+        withLook(wide, lockedWideCrop(), geometryLook(wanted), bothGeometrySections);
+    CHECK(applied.state.settings.geometry.rotation == QuarterTurn::Clockwise90);
+    CHECK(applied.state.settings.geometry.crop == wanted.crop);
+}
+
+TEST_CASE("Geometry is never skipped, and needs the photograph's size", "[Edits][Look][Geometry]") {
+    GeometrySettings wanted;
+    wanted.rotation = QuarterTurn::Clockwise180;
+    wanted.crop.rectangle = UprightCropRect{0.1, 0.2, 0.9, 0.8};
+    DevelopSettings settings;
+    settings.geometry = wanted;
+    const Look fromRaw = lookOf(rawPhoto, settings);
+    REQUIRE(fromRaw.fromRaw);
+    CHECK(withLook(photo, {}, fromRaw, bothGeometrySections).skipped.empty());
+
+    CHECK_THROWS_AS(withLook(sizeless, {}, fromRaw, cropSections), std::invalid_argument);
+    CHECK_THROWS_AS(withLook(sizeless, {}, fromRaw, bothGeometrySections), std::invalid_argument);
+    const CopySection exposure[] = {CopySection::Exposure};
+    CHECK_NOTHROW(withLook(sizeless, {}, fromRaw, exposure));
+}
+
+TEST_CASE("A look refuses invalid values", "[Edits][Look]") {
     DevelopSettings source;
     source.tone.exposure = 1.0F;
     const Look look = lookOf(photo, source);
     DevelopState state;
     state.settings.tone.exposure = -1.0F;
 
-    SECTION("a geometry section throws, naming it, and nothing is applied") {
-        const CopySection rotate[] = {CopySection::Exposure, CopySection::RotateAndFlip};
-        CHECK_THROWS_WITH(withLook(photo, state, look, rotate),
-                          Catch::Matchers::ContainsSubstring("rotateAndFlip"));
-        const CopySection crop[] = {CopySection::Crop, CopySection::Exposure};
-        CHECK_THROWS_WITH(withLook(photo, state, look, crop),
-                          Catch::Matchers::ContainsSubstring("crop"));
-    }
     SECTION("a value out of range throws") {
         Look bad = look;
         bad.settings.tone.exposure = 1000.0F;

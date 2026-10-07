@@ -43,13 +43,14 @@ TEST_CASE("Missing copy sections mean the default, an empty list means none",
     CHECK(restoreCopySections(again).empty());
 }
 
-TEST_CASE("Unknown and uncopyable section names are dropped", "[app][settings][copy]") {
+TEST_CASE("Unknown section names are dropped, the geometry is kept", "[app][settings][copy]") {
     const test::TempDir directory;
     QSettings store = scratch(directory);
     store.setValue("copySettings/sections", QStringList{"tone", "nonsense", "crop", "rotateAndFlip",
                                                         "whiteBalance", "tone"});
     CHECK(restoreCopySections(store) ==
-          std::vector<CopySection>{CopySection::WhiteBalance, CopySection::Tone});
+          std::vector<CopySection>{CopySection::WhiteBalance, CopySection::Tone,
+                                   CopySection::RotateAndFlip, CopySection::Crop});
 }
 
 TEST_CASE("Every copy section has a label", "[app][copy]") {

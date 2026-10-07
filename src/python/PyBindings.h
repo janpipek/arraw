@@ -19,6 +19,7 @@
 
 #include <DevelopSettings.h>
 #include <Diagnostics.h>
+#include <SettingDescriptors.h>
 #include <ShortestDecimal.h>
 #include <ToneCurveSettings.h>
 
@@ -100,6 +101,11 @@ void bindPhoto(nb::module_& module);
 /// @param keywords Keyword arguments, each naming one leaf of the table.
 /// @throws nb::type_error for a key not in the table or a value of the wrong type.
 void applyFlatSettings(DevelopSettings& settings, const nb::kwargs& keywords);
+
+/// @brief Finds the row of the setting a snake_case keyword names.
+/// @param name Keyword such as "filmic_highlights".
+/// @return The row of ::arraw::developSettingDescriptors, or null for an unknown keyword.
+[[nodiscard]] const FieldDescriptor* findSettingByKeyword(std::string_view name);
 
 /// @brief Log that forwards each diagnostic to `logging.getLogger("arraw")`.
 ///

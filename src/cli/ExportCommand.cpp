@@ -146,63 +146,6 @@ void addEdit(std::vector<SettingEdit>& edits, std::string_view key, const Develo
     edits.push_back({&descriptor, encode(descriptor, source)});
 }
 
-/// @brief Puts the geometry flags on top of a photograph's own geometry.
-///
-/// The flags are values, not operations. ADR 014 has a rotation or flip carry
-/// an explicit crop with the content it selects, composed in displayed axes;
-/// that belongs to the geometry editor, not to the command line. So when the
-/// flags change the rotation, straighten or flips a sidecar's explicit crop
-/// was drawn in, the crop goes back to automatic framing, with a warning, and
-/// a quarter-turn that swaps the frame's sides reciprocates a custom ratio.
-/// `--crop` with a rectangle, without an aspect, leaves the aspect free, since
-/// a rectangle a photographer draws does not obey the sidecar's old
-/// constraint; `--crop-aspect` other than free, without a rectangle, makes the
-/// rectangle automatic when the aspect changes. Given together, the two are
-/// taken as they are, and the render rejects a pair that does not agree.
-GeometrySettings withGeometryEdits(GeometrySettings base, const GeometryEdits& edits,
-                                   DiagnosticLog& log, const std::filesystem::path& subject) {
-    const GeometrySettings before = base;
-    if (edits.rotate) {
-        cli::setRotationAngle(base, *edits.rotate);
-    }
-    if (edits.flipHorizontal) {
-        base.flipHorizontal = *edits.flipHorizontal;
-    }
-    if (edits.flipVertical) {
-        base.flipVertical = *edits.flipVertical;
-    }
-    const int turns = (static_cast<int>(base.rotation) - static_cast<int>(before.rotation) + 4) % 4;
-    if (turns % 2 == 1) {
-        if (auto* ratio = std::get_if<CropRatio>(&base.crop.aspect)) {
-            ratio->widthOverHeight = 1.0 / ratio->widthOverHeight;
-        }
-    }
-    const bool reframed =
-        base.rotation != before.rotation || base.straighten != before.straighten ||
-        base.flipHorizontal != before.flipHorizontal || base.flipVertical != before.flipVertical;
-    if (reframed && base.crop.rectangle && !edits.crop) {
-        base.crop.rectangle.reset();
-        log.record({.notice = Notice::CropReset,
-                    .severity = Severity::Warning,
-                    .subject = subject,
-                    .values = {std::string(edits.rotate ? "the rotation" : "the flips")}});
-    }
-    if (edits.crop) {
-        base.crop.rectangle = edits.crop->rectangle;
-        if (edits.crop->rectangle && !edits.aspect) {
-            base.crop.aspect = FreeCropAspect{};
-        }
-    }
-    if (edits.aspect) {
-        const bool freed = std::holds_alternative<FreeCropAspect>(*edits.aspect);
-        if (!edits.crop && !freed && *edits.aspect != base.crop.aspect) {
-            base.crop.rectangle.reset();
-        }
-        base.crop.aspect = *edits.aspect;
-    }
-    return base;
-}
-
 /// @brief Reads a side of a `--resize` box: digits only, at least 1, within 32 bits.
 /// @throws std::invalid_argument if @p text is not one.
 std::uint32_t parseSide(std::string_view text, std::string_view spec) {
@@ -742,12 +685,12 @@ void configure(QCommandLineParser& parser) {
         "sidecar.\n"
         "Camera orientation is honoured. Rotation, flips and cropping are applied\n"
         "after colour and tone; crops always stay inside valid image content.\n"
-        "Geometry flags are values: --rotate replaces the sidecar's rotation, and a\n"
-        "rotation, straighten or flip that changes drops its explicit crop for\n"
-        "automatic framing, with a warning. --crop with a rectangle leaves the aspect free unless "
-        "--crop-aspect\n"
-        "is given too; --crop-aspect alone makes the crop automatic when it changes\n"
-        "the aspect to something other than free. A sidecar that cannot be read fails\n"
+        "Geometry flags set the rotation, straighten and flips as the Develop panel does:\n"
+        "an explicit crop in the sidecar is carried with the content it selects, and kept\n"
+        "inside valid content. --crop with a rectangle replaces it and leaves the aspect\n"
+        "free unless --crop-aspect is given too; --crop-aspect alone fits the largest crop\n"
+        "of that ratio inside the sidecar's rectangle. A --crop that disagrees with\n"
+        "--crop-aspect is reshaped to the aspect. A sidecar that cannot be read fails\n"
         "its file, unless --no-sidecar is given.\n"
         "\n"
         "Development runs on the GPU when there is one, unless --device cpu is given or\n"
@@ -1339,15 +1282,6 @@ cli::parseResize(std::string_view spec) {
 }
 
 DevelopSettings cli::applyEdits(DevelopSettings base, const ExportEdits& edits, DiagnosticLog& log,
-                                const std::filesystem::path& subject, bool raw) {
-    // A stand-in for a photograph the caller only knows the kind of; no rule reads
-    // anything else of it yet.
-    ImageMetadata photo;
-    photo.encoding = raw ? ColorEncoding{CameraNative{}} : ColorEncoding{workingEncoding};
-    return applyEdits(std::move(base), edits, log, subject, photo);
-}
-
-DevelopSettings cli::applyEdits(DevelopSettings base, const ExportEdits& edits, DiagnosticLog& log,
                                 const std::filesystem::path& subject, const ImageMetadata& photo) {
     // Whatever a sidecar left in the settings a render does not read is dropped
     // first: naming one half of temperature and tint then leaves the other as
@@ -1363,10 +1297,31 @@ DevelopSettings cli::applyEdits(DevelopSettings base, const ExportEdits& edits, 
         decode(*edit.descriptor, edit.value, source, log, subject);
         keys.push_back(edit.descriptor->key);
     }
-    DevelopSettings result =
-        withValues(photo, DevelopState{std::move(base)}, keys, source).settings;
-    result.geometry = withGeometryEdits(result.geometry, edits.geometry, log, subject);
-    return result;
+    // The geometry flags are values too; the rules of core (Edits.h) carry the photograph's own
+    // crop through them, in the table's order.
+    const GeometryEdits& geometry = edits.geometry;
+    if (geometry.rotate) {
+        setRotationAngle(source.geometry, *geometry.rotate);
+        keys.push_back("rotation");
+        keys.push_back("straighten");
+    }
+    if (geometry.flipHorizontal) {
+        source.geometry.flipHorizontal = *geometry.flipHorizontal;
+        keys.push_back("flipHorizontal");
+    }
+    if (geometry.flipVertical) {
+        source.geometry.flipVertical = *geometry.flipVertical;
+        keys.push_back("flipVertical");
+    }
+    if (geometry.crop) {
+        source.geometry.crop.rectangle = geometry.crop->rectangle;
+        keys.push_back("cropRectangle");
+    }
+    if (geometry.aspect) {
+        source.geometry.crop.aspect = *geometry.aspect;
+        keys.push_back("cropAspect");
+    }
+    return withValues(photo, DevelopState{std::move(base)}, keys, source).settings;
 }
 
 int cli::runExportCommand(const QStringList& arguments, std::ostream& out, std::ostream& err,

@@ -80,6 +80,14 @@ from ._arraw import (
     write_sidecar,
     write_sidecar_marks,
     xmp_namespace_owner,
+    displayed_straighten,
+    flipped,
+    turned,
+    with_aspect,
+    with_crop_reset,
+    with_displayed_straighten,
+    with_locked_aspect,
+    with_swapped_orientation,
 )
 
 __all__ = [
@@ -161,4 +169,12 @@ __all__ = [
     "write_sidecar",
     "write_sidecar_marks",
     "xmp_namespace_owner",
+    "displayed_straighten",
+    "flipped",
+    "turned",
+    "with_aspect",
+    "with_crop_reset",
+    "with_displayed_straighten",
+    "with_locked_aspect",
+    "with_swapped_orientation",
 ]

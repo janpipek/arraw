@@ -101,9 +101,6 @@ std::string arraw::describe(const Diagnostic& diagnostic) {
         return valueAt(diagnostic, 0) + " left out, as their marks do not match the filter";
     case Notice::OptionIgnored:
         return valueAt(diagnostic, 0) + " does nothing without " + valueAt(diagnostic, 1);
-    case Notice::CropReset:
-        return "the crop was drawn before " + valueAt(diagnostic, 0) +
-               " changed, so automatic framing was used instead";
     }
     return {};
 }

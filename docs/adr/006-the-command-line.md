@@ -103,19 +103,22 @@ to that base: `--temperature` or `--tint` makes white balance Custom, and the
 half not named keeps the photograph's own value when its sidecar is Custom and is
 as shot otherwise (ADR 008: a partial edit leaves what it does not name
 untouched); `--white-balance as-shot` clears both. Whatever the flags leave
-out stays as the sidecar has it. The geometry flags are values, not the
-operations ADR 014 defines for an editor, which carry an explicit crop with
-the content in displayed axes; the command line does not reproduce that. So
-`--rotate` sets rotation and straighten, `--flip-horizontal` and
-`--flip-vertical` set a flip and `--no-flip-horizontal` and
-`--no-flip-vertical` clear it, and when any of them changes what the sidecar
-had, its explicit rectangle is dropped for automatic framing with a
-`CropReset` warning, and a change of an odd number of quarter-turns
-reciprocates a custom ratio; `--crop` with a rectangle leaves the
-aspect free unless `--crop-aspect` is given too, and `--crop auto` keeps it;
-`--crop-aspect` alone makes the rectangle automatic when the aspect changes to
-anything but free. Given together, `--crop` and `--crop-aspect` are taken as
-given, and a pair that disagrees fails the file at planning. `applyEdits` drops
+out stays as the sidecar has it. The geometry flags are setters, applied by the
+rules core's `Edits.h` gives every front end (ADR 014), which read the
+photograph's declared size: `--rotate` sets rotation and straighten,
+`--flip-horizontal` and `--flip-vertical` set a flip and `--no-flip-horizontal`
+and `--no-flip-vertical` clear it. A sidecar's explicit crop is carried with the
+content it selects, composed as the editor composes it, a custom ratio is
+reciprocated when the frame's sides swap, and a straighten shrinks it only as
+far as rotated content requires. A flag that names the value the sidecar
+already has changes nothing, so no crop moves and nothing is logged.
+`--crop` with a rectangle replaces the crop and frees the aspect unless
+`--crop-aspect` is given too, and `--crop auto` keeps the aspect;
+`--crop-aspect` alone fits the largest crop of that ratio inside the sidecar's
+rectangle, about its centre (an automatic crop stays automatic). Given
+together, `--crop` and `--crop-aspect` that disagree are reshaped to the aspect,
+as the rectangle is fitted and the aspect then applied, rather than failing the
+file. There is no `CropReset` warning any more. `applyEdits` drops
 the temperature and tint of a sidecar that is not Custom even with no flags,
 which changes nothing a render reads. `--no-sidecar` ignores sidecars (defaults
 plus flags). An unreadable sidecar fails that input (exit 1, the rest of the

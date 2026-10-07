@@ -1,5 +1,6 @@
 #pragma once
 
+#include <CropGeometry.h>
 #include <DevelopState.h>
 #include <EffectsSettings.h>
 #include <GeometrySettings.h>
@@ -163,17 +164,46 @@ void assignSetting(const FieldDescriptor& descriptor, Field& field, const T& val
 ///   neither value renders as As Shot.
 /// - `grainAmount`: going from zero to above zero gives grain that has no seed
 ///   a new one, drawn from @p entropy; ::arraw::chooseGrainSeed decides.
-/// - `rotation`, `flipHorizontal`, `flipVertical`, `straighten`,
-///   `cropRectangle`, `cropAspect`: **no rule yet**, plain assignment.
+/// - `rotation`: the stored quarter-turn is set by ::arraw::withRotation. The
+///   flips and the straighten stay; an explicit crop is carried with the
+///   content it selects, and a locked ratio is reciprocated when the frame's
+///   sides swap.
+/// - `flipHorizontal`, `flipVertical`: a value other than the present one
+///   mirrors the photograph by ::arraw::flipped, so an explicit crop is
+///   mirrored with the content.
+/// - `straighten`: the stored angle, before the flips (the one shown on screen
+///   is ::arraw::displayedStraighten(const DevelopState&)), is set by
+///   ::arraw::rotatedTo from @p state's geometry: an explicit crop keeps its
+///   centre and size, shrinking about the centre only as far as rotated
+///   content requires; an automatic crop stays automatic.
+/// - `cropRectangle`: a rectangle frees the aspect and is then fitted inside
+///   valid content by ::arraw::fittedCrop (kept exactly when it is inside;
+///   else shrunk about its centre, keeping its proportions, or moved), as the
+///   command line's `--crop` has always freed it. A front end that wants a
+///   lock sets `cropAspect` after the rectangle. `std::nullopt` returns to
+///   automatic framing and keeps the aspect (::arraw::withCropReset).
+/// - `cropAspect`: set by ::arraw::withAspect: Free keeps the rectangle; a
+///   ratio, or the Original aspect, fits the largest crop of that ratio inside
+///   the explicit one, about its centre; an automatic crop stays automatic.
 ///
-/// **The geometry keys will change.** For now a turn, a flip or a straighten
-/// leaves an explicit crop where it is in upright coordinates, so it no longer
-/// selects the same content, and a crop is not fitted back into valid content.
-/// The rules of ADR 014 (a turn or flip carries the crop, a straighten shrinks
-/// it, a crop is fitted to the frame) arrive with `CropGeometry.h` (plan step 1)
-/// and will be added here without changing a signature: that is what @p photo
-/// is for. The straighten is the stored value, before the flips, not the one
-/// shown on screen.
+/// **Geometry: an unchanged value changes nothing.** A geometry key given the
+/// value it already has returns @p state as it is, with no fitting or
+/// shrinking, so naming a sidecar's own rotation or straighten again cannot
+/// move its crop.
+///
+/// **Geometry: the photograph's frame.** `straighten`, `cropRectangle` and
+/// `cropAspect` resolve @p state's geometry on @p photo's frame
+/// (::arraw::shapeOf(const ImageMetadata&)): @p photo must declare its size,
+/// and @p state's geometry must be one ::arraw::develop accepts for it (a crop
+/// outside valid content is accepted and fitted; one that disagrees with its
+/// locked aspect is not). The rotation and the flips do not read the frame.
+///
+/// **Geometry: a run of straighten edits.** A slider drag or a typed angle
+/// passes the state from before the run every time, not the previous result:
+/// ::arraw::rotatedTo depends on its baseline only, so the crop's shrinking is
+/// undone when the angle goes back (looks-and-history plan, §2, "a drag starts
+/// from its baseline"). This holds for the straighten only: a grain amount
+/// dragged from a baseline without a seed would draw a new seed every time.
 ///
 /// **Types.** The value's type must be one the setting takes
 /// (::arraw::detail::takes): any number for a numeric setting; for the
@@ -191,15 +221,16 @@ void assignSetting(const FieldDescriptor& descriptor, Field& field, const T& val
 ///
 /// @tparam T Type of the value; see ::arraw::detail::SettingValue.
 /// @param photo Photograph the state belongs to, as ::arraw::readImageMetadata describes it;
-/// no rule reads it yet.
-/// @param state State to edit.
+/// the geometry rules read its size and orientation.
+/// @param state State to edit; for a run of straighten edits, the state from before the run.
 /// @param key camelCase name of the setting, as in ::arraw::developSettingDescriptors.
 /// @param value New value.
 /// @param entropy Where a new grain seed's bits come from; empty for `std::random_device`.
 /// @return @p state with the setting changed and its rule applied.
 /// @throws std::invalid_argument if @p key names no setting, the setting does not take a @p T,
 /// a number is not finite or lies outside the setting's range, or a curve, crop rectangle or
-/// crop ratio is not well formed.
+/// crop ratio is not well formed; for `straighten`, `cropRectangle` and `cropAspect`, also if
+/// @p photo declares no size or @p state's geometry is not valid for its frame.
 template <detail::SettingValue T>
 [[nodiscard]] DevelopState withValue(const ImageMetadata& photo, DevelopState state,
                                      std::string_view key, const T& value,
@@ -222,7 +253,7 @@ template <detail::SettingValue T>
 /// absent when @p source is As Shot, whatever it has left in them. Copying
 /// either from an As Shot source therefore clears it, and a front end that
 /// wants a source's temperature copied makes that source Custom.
-/// @param photo Photograph the state belongs to; reserved for the geometry rules.
+/// @param photo Photograph the state belongs to; the geometry rules read its frame.
 /// @param state State to edit.
 /// @param key camelCase name of the setting.
 /// @param source Settings holding the value.
@@ -237,17 +268,29 @@ template <detail::SettingValue T>
 ///
 /// The settings are applied one by one as ::arraw::withValueFrom applies them,
 /// in the order of ::arraw::developSettingDescriptors and not in the order
-/// given. The table puts the rotation and the flips before the straighten and
-/// the crop last, so once the geometry rules exist a carried crop is placed on
-/// the final frame, and a crop named in @p keys replaces the carried one; the
-/// white balance mode comes before its temperature and tint, and the grain's
-/// amount before its seed, so a seed named in @p keys wins over one the amount
-/// chose. A key given twice is applied once.
+/// given. The table's order is what makes several values at once well defined:
 ///
-/// Every key is looked up before anything is applied. What ::arraw::withLook
-/// builds on: it passes the Look-scoped keys of the chosen
-/// ::arraw::CopySection values.
-/// @param photo Photograph the state belongs to; reserved for the geometry rules.
+/// - the white balance mode comes before its temperature and tint, and the
+///   grain's amount before its seed, so a seed named in @p keys wins over one
+///   the amount chose;
+/// - `rotation`, then the flips, then `straighten`: each carries the state's
+///   explicit crop to the frame the next one starts from;
+/// - `cropRectangle`, then `cropAspect`, last: a crop named in @p keys is
+///   placed on the final frame and replaces the crop the turn, flips and
+///   straighten carried. This is how the command line's `--crop` wins over a
+///   sidecar's crop, and a pasted crop over the target's.
+///
+/// **A rectangle and an aspect together** need no rule of their own: the
+/// rectangle frees the aspect and is fitted inside valid content, and the
+/// aspect is then set by ::arraw::withAspect, which fits the largest crop of
+/// its ratio inside the rectangle. A rectangle that disagrees with the target's
+/// locked aspect, or with the aspect it comes with, is therefore never
+/// refused, only fitted (review of plan step 1, L8).
+///
+/// A key given twice is applied once. Every key is looked up before anything is
+/// applied. What ::arraw::withLook builds on: it passes the Look-scoped keys of
+/// the chosen ::arraw::CopySection values.
+/// @param photo Photograph the state belongs to; the geometry rules read its frame.
 /// @param state State to edit.
 /// @param keys camelCase names of the settings to set, in any order.
 /// @param source Settings holding the values.
@@ -259,13 +302,131 @@ template <detail::SettingValue T>
                                       const DevelopSettings& source,
                                       const GrainEntropy& entropy = {});
 
+/// @name Geometry operations
+///
+/// The edits of a geometry that are not one value: what the Develop panel's
+/// buttons, the Photo menu and Python ask for. Each applies a rule of
+/// `CropGeometry.h` to the state's geometry and leaves every other setting as
+/// it is; the crop mode keeps its own gesture, run of rotations and history in
+/// `app/CropEditing`, over the same rules (ADR 040). Like the setters, each
+/// returns a new state, so a throw leaves the caller's state as it was.
+///
+/// Every operation takes the photograph, as the setters do, so a front end
+/// calls them all alike. turned(), flipped() and withCropReset() do not read
+/// it: their rules need no frame, and, as in `CropGeometry.h`, they do not
+/// check the state against one either.
+/// @{
+
+/// @brief Turns the photograph by a quarter, as it appears on screen, carrying the crop.
+///
+/// ::arraw::turned(GeometrySettings, bool) on the state's geometry: the turn is
+/// composed in displayed axes, so with one flip set the stored quarter-turn
+/// steps the other way and the flips swap (ADR 014). An explicit crop keeps the
+/// content it selects; a locked ratio is reciprocated. Unlike setting
+/// `rotation` (::arraw::withValue), the picture always turns the way asked.
+/// @param photo Photograph the state belongs to; not read.
+/// @param state State whose geometry to turn.
+/// @param clockwise Whether clockwise on screen.
+/// @return @p state turned.
+[[nodiscard]] DevelopState turned(const ImageMetadata& photo, DevelopState state,
+                                  bool clockwise) noexcept;
+
+/// @brief Mirrors the photograph as it appears on screen, carrying the crop.
+///
+/// ::arraw::flipped(GeometrySettings, bool) on the state's geometry: the stored
+/// flip toggles, and an explicit crop is mirrored with the content. Setting
+/// `flipHorizontal` or `flipVertical` to the other value
+/// (::arraw::withValue) does the same.
+/// @param photo Photograph the state belongs to; not read.
+/// @param state State whose geometry to mirror.
+/// @param horizontal Whether left and right swap, rather than top and bottom.
+/// @return @p state mirrored.
+[[nodiscard]] DevelopState flipped(const ImageMetadata& photo, DevelopState state,
+                                   bool horizontal) noexcept;
+
+/// @brief Sets the aspect constraint.
+///
+/// The rule of the `cropAspect` key, by ::arraw::withAspect: Free keeps the
+/// rectangle; a ratio, or the Original aspect, fits the largest crop of that
+/// ratio inside the explicit one, about its centre; an automatic crop stays
+/// automatic and resolves at the new ratio.
+/// @param photo Photograph the state belongs to; its frame is read.
+/// @param state State whose aspect to set.
+/// @param aspect Aspect to set.
+/// @return @p state with the aspect set and its crop fitted to it.
+/// @throws std::invalid_argument if @p aspect is a ratio that is not well formed, @p photo
+/// declares no size, or @p state's geometry is not valid for its frame.
+[[nodiscard]] DevelopState withAspect(const ImageMetadata& photo, DevelopState state,
+                                      const CropAspect& aspect);
+
+/// @brief Locks the aspect at the crop's present ratio.
+///
+/// ::arraw::withLockedAspect(SourceShape, GeometrySettings) on the state's
+/// geometry: an explicit crop's ratio is taken from its stored edges, an
+/// automatic one's from its resolved size, and an aspect already locked is
+/// kept. Unlocking is ::arraw::withAspect with ::arraw::FreeCropAspect.
+/// @param photo Photograph the state belongs to; its frame is read.
+/// @param state State whose aspect to lock.
+/// @return @p state with its aspect locked.
+/// @throws std::invalid_argument if @p photo declares no size, or @p state's geometry is not
+/// valid for its frame.
+[[nodiscard]] DevelopState withLockedAspect(const ImageMetadata& photo, DevelopState state);
+
+/// @brief Swaps portrait and landscape.
+///
+/// ::arraw::withSwappedOrientation(SourceShape, GeometrySettings) on the state's
+/// geometry: a locked ratio is reciprocated, and the crop's width and height
+/// swap about its centre, shrinking if they no longer fit.
+/// @param photo Photograph the state belongs to; its frame is read.
+/// @param state State whose crop to swap.
+/// @return @p state with its crop's orientation swapped.
+/// @throws std::invalid_argument if @p photo declares no size, or @p state's geometry is not
+/// valid for its frame.
+[[nodiscard]] DevelopState withSwappedOrientation(const ImageMetadata& photo, DevelopState state);
+
+/// @brief Returns to automatic framing, keeping the aspect constraint.
+///
+/// What setting `cropRectangle` to `std::nullopt` does (::arraw::withValue).
+/// @param photo Photograph the state belongs to; not read.
+/// @param state State whose crop to reset.
+/// @return @p state with an automatic crop.
+[[nodiscard]] DevelopState withCropReset(const ImageMetadata& photo, DevelopState state) noexcept;
+
+/// @brief Gives the straighten as it appears on screen: degrees, clockwise positive.
+///
+/// ::arraw::displayedStraighten(const GeometrySettings&) of the state's
+/// geometry: the stored angle comes before the flips (ADR 014), so one flip
+/// reverses the direction in which it appears. What the Develop panel's
+/// Straighten row shows, and what Python reports as the visible angle.
+/// @param state State to read.
+[[nodiscard]] double displayedStraighten(const DevelopState& state) noexcept;
+
+/// @brief Straightens to an angle as it appears on screen, by the rule of the `straighten` key.
+///
+/// The angle is converted to the stored one with @p state's flips
+/// (::arraw::storedStraighten) and set with ::arraw::withValue, so the crop
+/// shrinks as that key's rule says. What the Develop panel's Straighten row
+/// calls; during a drag it passes the state from before the drag every time,
+/// whose flips are the drag's too (see ::arraw::withValue, "a run of
+/// straighten edits").
+/// @param photo Photograph the state belongs to; its frame is read.
+/// @param state State to straighten; for a run of edits, the state from before the run.
+/// @param displayed Angle as it appears on screen, clockwise positive, within the straighten
+/// limits.
+/// @return @p state straightened, its crop fitted.
+/// @throws std::invalid_argument if @p displayed is not finite or lies outside the straighten
+/// limits, @p photo declares no size, or @p state's geometry is not valid for its frame.
+[[nodiscard]] DevelopState withDisplayedStraighten(const ImageMetadata& photo, DevelopState state,
+                                                   double displayed);
+
+/// @}
+
 /// @brief Copy sections ::arraw::withLook carries, in enumeration order.
 ///
-/// Every section but ::arraw::CopySection::RotateAndFlip and
-/// ::arraw::CopySection::Crop, which wait for the geometry rules (looks-and-history
-/// plan, step 1): carried by plain assignment, a crop would no longer frame the
-/// same content on a photograph of another size or orientation. When the rules
-/// arrive both are added here, and the sections a copy dialog offers follow.
+/// Every section. The geometry sections, ::arraw::CopySection::RotateAndFlip and
+/// ::arraw::CopySection::Crop, are carried by the rules of ::arraw::withValue
+/// (looks-and-history plan, step 2), so a crop frames the same content on a
+/// photograph of another size or orientation, as ::arraw::withLook describes.
 inline constexpr auto copyableSections = std::to_array<CopySection>({
     CopySection::WhiteBalance,
     CopySection::Exposure,
@@ -279,14 +440,30 @@ inline constexpr auto copyableSections = std::to_array<CopySection>({
     CopySection::NoiseReduction,
     CopySection::Vignette,
     CopySection::Grain,
+    CopySection::RotateAndFlip,
+    CopySection::Crop,
 });
 
 /// @brief Copy sections chosen until someone chooses otherwise, in enumeration order.
 ///
-/// Every section of ::arraw::copyableSections; the geometry stays out of the
-/// default even once it can be carried, as in Lightroom, because a crop rarely
-/// suits another frame (looks-and-history plan, §3).
-inline constexpr auto defaultCopySections = copyableSections;
+/// Every section of ::arraw::copyableSections but ::arraw::CopySection::RotateAndFlip and
+/// ::arraw::CopySection::Crop: as in Lightroom, a crop rarely suits another
+/// frame, so the geometry is carried only when chosen (looks-and-history
+/// plan, §3).
+inline constexpr auto defaultCopySections = std::to_array<CopySection>({
+    CopySection::WhiteBalance,
+    CopySection::Exposure,
+    CopySection::Tone,
+    CopySection::Presence,
+    CopySection::Color,
+    CopySection::ToneCurve,
+    CopySection::Hsl,
+    CopySection::BlackAndWhite,
+    CopySection::ColorGrading,
+    CopySection::NoiseReduction,
+    CopySection::Vignette,
+    CopySection::Grain,
+});
 
 /// @brief Settings taken from one photograph, to be carried onto others.
 ///
@@ -370,24 +547,56 @@ struct AppliedLook {
 /// A section given twice is applied once, and the order of @p sections does
 /// not matter. An empty @p sections leaves the state as it was, with nothing skipped.
 ///
-/// **Geometry.** ::arraw::CopySection::RotateAndFlip and
-/// ::arraw::CopySection::Crop are refused until the geometry rules are in core
-/// (see ::arraw::copyableSections), so no caller gets a crop that was quietly
-/// not fitted to the target's frame.
+/// **Geometry.** Neither ::arraw::CopySection::RotateAndFlip nor
+/// ::arraw::CopySection::Crop is in ::arraw::defaultCopySections: a frame
+/// rarely suits another photograph, so they are carried only when chosen.
+/// They are carried as follows.
+///
+/// - **Rotate & Flip** sets the look's `rotation`, flips and `straighten`
+///   through their setters, in that order. The target's own explicit crop is
+///   carried by each: turned, mirrored, then shrunk about its centre as far as
+///   the straighten requires. When Crop is chosen too, the look's crop then
+///   replaces it.
+/// - **Crop: normalised, then fitted** (ADR 014, amended 2026-10-07). The
+///   look's ::arraw::UprightCropRect is normalised already: its edges are
+///   fractions of the source's uncropped upright frame. The same fractions are
+///   taken of the target's uncropped upright frame, as it stands once Rotate &
+///   Flip (if chosen) is applied, with the aspect free; ::arraw::fittedCrop
+///   then puts the rectangle inside the target's valid content, keeping it
+///   exactly when it is inside, else shrinking it about its centre with its
+///   proportions in that frame, or moving it. The look's aspect is then set by
+///   ::arraw::withAspect: Free keeps the fitted rectangle; a ratio keeps its
+///   literal value, landscape or portrait as stored, and fits the largest crop
+///   of that ratio inside the rectangle, about its centre; the Original aspect
+///   resolves against the target's own frame. A look with an automatic crop
+///   gives automatic framing with the look's aspect. These are the setters'
+///   rules for `cropRectangle` then `cropAspect` (::arraw::withValues); Crop
+///   adds none of its own.
+/// - **What that means for a free crop.** Between frames of different
+///   proportions, a free crop's physical proportions follow the frame: a
+///   square free crop on a 3:2 landscape is not square on a 2:3 portrait. A
+///   locked ratio keeps them. ADR 014's earlier transfer rule (the crop's
+///   centre and long-edge fraction, its physical aspect kept) needs the source
+///   frame, which a Look does not carry (review of plan step 1, U1, option a).
+///
+/// A crop the command line names wins over a preset's: `export --preset`
+/// applies the preset first and the flags after (looks-and-history plan, §3).
 ///
 /// **Errors.** Every section is checked before anything is applied, and the
 /// result is a new state, so a throw leaves the caller's state as it was. The
 /// look's values are validated as ::arraw::withValue validates them, so a look
 /// read from a damaged file is refused rather than pasted.
 /// @param photo Photograph the state belongs to, as ::arraw::readImageMetadata describes it:
-/// whether it is a RAW decides what crosses, and the geometry rules will need its frame.
+/// whether it is a RAW decides what crosses, and the geometry rules read its frame.
 /// @param state State to carry the look onto.
 /// @param look Settings to carry, and whether they came from a RAW.
 /// @param sections Sections of @p look to carry, in any order.
 /// @param entropy Where a new grain seed's bits come from; empty for `std::random_device`.
 /// @return @p state with the sections carried onto it, and the sections left out.
 /// @throws std::invalid_argument naming the section if @p sections holds one not in
-/// ::arraw::copyableSections; as ::arraw::withValue if a value of @p look is not valid.
+/// ::arraw::copyableSections; as ::arraw::withValue if a value of @p look is not valid, or,
+/// with a geometry section chosen, if @p photo declares no size or @p state's geometry is not
+/// valid for its frame.
 [[nodiscard]] AppliedLook withLook(const ImageMetadata& photo, DevelopState state, const Look& look,
                                    std::span<const CopySection> sections,
                                    const GrainEntropy& entropy = {});

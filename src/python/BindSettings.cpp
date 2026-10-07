@@ -77,16 +77,19 @@ std::vector<SettingDescriptor> listDescriptors() {
 
 } // namespace
 
+const FieldDescriptor* findSettingByKeyword(std::string_view name) {
+    for (const FieldDescriptor& row : developSettingDescriptors) {
+        if (snakeCase(row.key) == name) {
+            return &row;
+        }
+    }
+    return nullptr;
+}
+
 void applyFlatSettings(DevelopSettings& settings, const nb::kwargs& keywords) {
     for (auto [key, value] : keywords) {
         const std::string name = nb::cast<std::string>(key);
-        const FieldDescriptor* match = nullptr;
-        for (const FieldDescriptor& row : developSettingDescriptors) {
-            if (snakeCase(row.key) == name) {
-                match = &row;
-                break;
-            }
-        }
+        const FieldDescriptor* match = findSettingByKeyword(name);
         if (match == nullptr) {
             throw nb::type_error(("unknown develop setting '" + name + "'").c_str());
         }
@@ -304,7 +307,10 @@ void bindSettings(nb::module_& m) {
                 applyFlatSettings(copy, keywords);
                 return copy;
             },
-            "Return a copy with flat snake_case keywords applied, e.g. exposure=0.7.")
+            "Return a copy with flat snake_case keywords applied, e.g. exposure=0.7. Applies no "
+            "rules: each keyword is assigned as it is, so a temperature leaves the white balance "
+            "as it was and a turn leaves the crop where it was. Photo.edited applies the rules "
+            "of the editing frontends.")
         .def(
             "to_json", [](const DevelopSettings& self) { return settingsToJson(self); },
             "Write the settings as a JSON document.")

@@ -58,6 +58,11 @@ fixes and the Windows CPU default) is done. Step (a) is planned in
   commits and leaves it (ADR 040).
 - **GPU cancellation** only acts between renders (ADR 042).
 - **Python:** no progress callback yet (ADR 042).
+- **LibRaw may resize after decoding** (`stretch()` for non-square pixels,
+  `fuji_rotate()` for SuperCCD), so the decoded size can differ from
+  `ImageMetadata::size`, which the CLI, Python and `Edits.h` plan against;
+  unverified, needs a sample file. Options: the post-processing size in the
+  metadata, LibRaw's resizing off, or the decoded shape wherever it exists.
 - **Responsiveness, not measured:** leaving the crop mode and rotating, the
   crop overlay's pixmap conversion, strip painting with many cells, folders far
   larger than 300 shots or on a network share (ADR 043).

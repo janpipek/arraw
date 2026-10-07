@@ -19,10 +19,13 @@ TEST_CASE("The copy dialog offers only what can be copied", "[app][dialog][copy]
     CopySettingsDialog dialog(defaultCopySections, true);
     CHECK(dialog.findChildren<QCheckBox*>().size() ==
           static_cast<qsizetype>(copyableSections.size()));
-    CHECK(dialog.findChild<QCheckBox*>("crop") == nullptr);
-    CHECK(dialog.findChild<QCheckBox*>("rotateAndFlip") == nullptr);
+    for (const char* geometry : {"crop", "rotateAndFlip"}) {
+        auto* box = dialog.findChild<QCheckBox*>(geometry);
+        REQUIRE(box != nullptr);
+        CHECK_FALSE(box->isChecked());
+    }
     CHECK(dialog.sections() ==
-          std::vector<CopySection>(copyableSections.begin(), copyableSections.end()));
+          std::vector<CopySection>(defaultCopySections.begin(), defaultCopySections.end()));
 }
 
 TEST_CASE("The copy dialog shows an ampersand in a label, not a mnemonic", "[app][dialog][copy]") {

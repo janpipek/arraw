@@ -12,12 +12,12 @@ Photo\.__suffix__:
         **kwargs: Any,
     ) -> Photo:
         """
-        Return a photograph with `state` (and `marks`) replacing the current ones wholesale, then flat snake_case keywords applied, e.g. exposure=0.7, which edit the settings of the state. `rating` and `label` change the marks instead (label=None clears it).
+        Return a photograph with `state` (and `marks`) replacing the current ones wholesale, then flat snake_case keywords applied, e.g. exposure=0.7, which edit the settings of the state. `rating` and `label` change the marks instead (label=None clears it). Applies no rules: each keyword is assigned as it is, so a turn leaves the crop where it was. `edited` applies the rules of the editing frontends.
         """
 
 DevelopSettings\.__suffix__:
     def with_(self, **kwargs: Any) -> DevelopSettings:
-        """Return a copy with flat snake_case keywords applied, e.g. exposure=0.7."""
+        """Return a copy with flat snake_case keywords applied, e.g. exposure=0.7. Applies no rules: each keyword is assigned as it is, so a temperature leaves the white balance as it was and a turn leaves the crop where it was. Photo.edited applies the rules of the editing frontends."""
 
 _arraw\.__suffix__:
     __version__: str
