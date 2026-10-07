@@ -10,9 +10,14 @@ Goals:
 - a library to support the operations, CLI app to
 - (eventually) Python or Lua scripting based on the library (and perhaps to drive the GUI app?)
 
+Models:
+- Use workflows/sub-agents to distribute the work. 
+- Architecture decisions should have the best available model (newest Opus/Sol) / high thinking.
+- For reviews and orchestration use the best model / medium thinking
+- Orchestration can be done on a good model (Sonnet/Luna) / medium thinking
+
 Setting:
-- This branch is a major rework of the "main" branch. You are allowed to look at the files there but you should not
-  follow blindly, "clean slate" is an asset (see important files)
+- This branch is a major rework of a branch called "old". You are allowed to look at the files there but you should not
 
 Structure:
 - include: Public API
