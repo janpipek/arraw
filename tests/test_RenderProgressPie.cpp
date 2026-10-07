@@ -102,6 +102,69 @@ TEST_CASE("With no photograph open the pie is an empty grey ring", "[app][progre
     CHECK(widget.toolTip() == "Up to date");
 }
 
+TEST_CASE("An opening photograph is never up to date", "[app][progress][pie]") {
+    RenderProgressPie widget;
+    widget.setPhotoOpen(true);
+    widget.setOpening("a.dng");
+    CHECK(widget.opening());
+    // Within the show delay: an empty ring, not green.
+    CHECK_FALSE(widget.rendering());
+    CHECK(widget.filled() == 0.0);
+    CHECK(widget.toolTip() == QString::fromUtf8("Opening a.dng\u2026"));
+
+    widget.setDisplay(displayOf({}));
+    CHECK(widget.filled() == 0.0);
+    CHECK(widget.toolTip() == QString::fromUtf8("Opening a.dng\u2026"));
+    widget.setDisplay(displayOf(0.4));
+    CHECK(widget.filled() == Catch::Approx(0.4));
+    CHECK(widget.toolTip() == QString::fromUtf8("Opening a.dng\u2026 40%"));
+
+    // The first render shown ends it; the indicator's hold keeps the render's own wording.
+    widget.setOpened();
+    CHECK_FALSE(widget.opening());
+    CHECK(widget.toolTip() == QString::fromUtf8("Reducing noise\u2026 40%"));
+    widget.setDisplay({});
+    CHECK(widget.filled() == 1.0);
+    CHECK(widget.toolTip() == "Up to date");
+
+    // A failure shows the error but does not end it: nothing has been rendered yet. A closed
+    // photograph ends it.
+    widget.setOpening("b.dng");
+    widget.setFailed("bad");
+    CHECK(widget.toolTip() == "Render failed: bad");
+    CHECK(widget.opening());
+    widget.setOpening("c.dng");
+    CHECK_FALSE(widget.failed());
+    widget.setPhotoOpen(false);
+    CHECK_FALSE(widget.opening());
+    CHECK(widget.toolTip() == "No photograph open");
+}
+
+TEST_CASE("The window's pie is not up to date until the first render is shown",
+          "[app][window][progress]") {
+    test::TempDir folder;
+    const std::filesystem::path fixtures(ARRAW_TEST_DATA_DIR);
+    std::filesystem::copy_file(fixtures / "preview-32x24.dng", folder.file("a.dng"));
+    DebugLog debugLog;
+    MainWindow window(debugLog);
+    window.show();
+    auto& view = *window.findChild<PhotoView*>();
+    auto& progress = *window.findChild<RenderProgressPie*>();
+    window.openInitialPath(folder.file("a.dng"));
+    // Opened, nothing decoded or shown yet.
+    CHECK(view.wholeFrameImage().isNull());
+    CHECK(progress.opening());
+    CHECK(progress.toolTip() != "Up to date");
+    CHECK(progress.toolTip().startsWith("Opening a.dng"));
+    CHECK(progress.filled() < 1.0);
+
+    REQUIRE(QTest::qWaitFor([&] { return !view.wholeFrameImage().isNull(); }, 20000));
+    CHECK_FALSE(progress.opening());
+    REQUIRE(QTest::qWaitFor([&] { return !progress.rendering(); }, 5000));
+    CHECK(progress.toolTip() == "Up to date");
+    CHECK(progress.filled() == 1.0);
+}
+
 TEST_CASE("The window's pie says when no photograph is open", "[app][window][progress]") {
     test::TempDir folder;
     const std::filesystem::path fixtures(ARRAW_TEST_DATA_DIR);

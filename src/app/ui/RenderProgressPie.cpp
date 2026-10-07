@@ -18,10 +18,11 @@ constexpr int margin = 1;
 constexpr qreal penWidth = 1.0;
 
 /// @brief Gives the fill in steps of the resolution: the fraction while a render is shown, full
-/// when up to date, empty with no photograph, and empty for a render without a fraction.
-int stepsOf(const RenderActivity::Display& display, bool photoOpen) {
+/// when up to date, empty when there is nothing to be up to date (no photograph, or one still
+/// opening), and empty for a render without a fraction.
+int stepsOf(const RenderActivity::Display& display, bool upToDate) {
     if (!display.visible) {
-        return photoOpen ? RenderProgressPie::resolution : 0;
+        return upToDate ? RenderProgressPie::resolution : 0;
     }
     if (!display.fraction) {
         return 0;
@@ -45,7 +46,11 @@ double RenderProgressPie::filled() const noexcept {
     if (failed_) {
         return 0.0;
     }
-    return static_cast<double>(stepsOf(display_, photoOpen_)) / resolution;
+    return static_cast<double>(stepsOf(display_, upToDate())) / resolution;
+}
+
+bool RenderProgressPie::upToDate() const noexcept {
+    return photoOpen_ && !opening_;
 }
 
 QString RenderProgressPie::describe() const {
@@ -53,9 +58,12 @@ QString RenderProgressPie::describe() const {
         return tr("Render failed: %1").arg(*failed_);
     }
     if (!display_.visible) {
+        if (opening_) {
+            return tr("Opening %1\u2026").arg(*opening_);
+        }
         return photoOpen_ ? tr("Up to date") : tr("No photograph open");
     }
-    QString text = renderStepText(display_.step);
+    QString text = opening_ ? tr("Opening %1\u2026").arg(*opening_) : renderStepText(display_.step);
     if (display_.fraction) {
         text += QStringLiteral(" %1%").arg(std::lround(filled() * 100));
     }
@@ -87,8 +95,20 @@ void RenderProgressPie::setFailed(const QString& error) {
     refresh();
 }
 
+void RenderProgressPie::setOpening(const QString& name) {
+    opening_ = name;
+    failed_.reset();
+    refresh();
+}
+
+void RenderProgressPie::setOpened() {
+    opening_.reset();
+    refresh();
+}
+
 void RenderProgressPie::setPhotoOpen(bool open) {
     photoOpen_ = open;
+    opening_.reset();
     failed_.reset();
     refresh();
 }
@@ -99,15 +119,15 @@ void RenderProgressPie::refresh() {
         setToolTip(text);
         setAccessibleDescription(text);
     }
-    const int steps = failed_ ? 0 : stepsOf(display_, photoOpen_);
+    const int steps = failed_ ? 0 : stepsOf(display_, upToDate());
     const bool shownFailed = failed_.has_value();
     // Repaint only when the shown state changes.
     if (steps != shownSteps_ || display_.visible != shownRendering_ ||
-        photoOpen_ != shownPhotoOpen_ || shownFailed != shownFailed_) {
+        upToDate() != shownUpToDate_ || shownFailed != shownFailed_) {
         shownFailed_ = shownFailed;
         shownSteps_ = steps;
         shownRendering_ = display_.visible;
-        shownPhotoOpen_ = photoOpen_;
+        shownUpToDate_ = upToDate();
         update();
     }
 }
@@ -123,7 +143,7 @@ void RenderProgressPie::paintEvent(QPaintEvent* /*event*/) {
     const QRectF rect(QPointF((width() - side) / 2, (height() - side) / 2), QSizeF(side, side));
     const QRectF outline = rect.adjusted(inset, inset, -inset, -inset);
     const QColor colour = (shownRendering_ || shownFailed_) ? theme::progressBusy
-                          : shownPhotoOpen_                 ? theme::progressDone
+                          : shownUpToDate_                  ? theme::progressDone
                                                             : theme::progressIdle;
 
     // The fill first, so that the outline of the whole pie, in the state colour, is on top: an

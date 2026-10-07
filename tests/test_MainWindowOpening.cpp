@@ -8,6 +8,7 @@
 #include "ui/FilmStrip.h"
 #include "ui/MainWindow.h"
 #include "ui/PhotoView.h"
+#include "ui/RenderProgressPie.h"
 #include "ui/SettingSlider.h"
 
 #include <Photo.h>
@@ -217,6 +218,21 @@ TEST_CASE("Entering the crop mode reads the camera preview off the GUI thread",
     REQUIRE(QTest::qWaitFor([&] { return !overlay.image().isNull(); }, 20000));
     findAction(w.window, "cropAction")->trigger();
     CHECK_FALSE(w.view().isCropMode());
+}
+
+TEST_CASE("A render shown in the crop mode ends the opening", "[app][window][opening][crop]") {
+    Window w;
+    w.window.openInitialPath(w.shot("a.dng"));
+    auto* crop = findAction(w.window, "cropAction");
+    auto* pie = w.window.findChild<RenderProgressPie*>();
+    REQUIRE(pie != nullptr);
+    CHECK(pie->opening());
+    // The decode has landed; the first render may not have been shown yet.
+    REQUIRE(QTest::qWaitFor([&] { return crop->isEnabled(); }, 20000));
+    crop->trigger();
+    REQUIRE(w.view().isCropMode());
+    // The overlay may fill from the camera's preview first; only a render ends the opening.
+    CHECK(QTest::qWaitFor([&] { return !pie->opening(); }, 20000));
 }
 
 /// Measures the GUI thread's longest stall in each interaction on a folder of large photographs

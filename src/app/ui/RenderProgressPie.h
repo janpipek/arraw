@@ -42,6 +42,23 @@ public:
     /// @param open Whether a photograph is open; a pie that is not told assumes one is.
     void setPhotoOpen(bool open);
 
+    /// @brief Starts showing that a photograph is being opened.
+    ///
+    /// Until setOpened(), the pie is never "up to date": an empty grey ring before a render is
+    /// to be shown, then the red pie of the progress, both with the tooltip "Opening <name>…".
+    /// A failure shows its error meanwhile but does not end it, as nothing has been rendered yet;
+    /// setPhotoOpen(false) does.
+    /// @param name Name of the photograph, for the tooltip.
+    void setOpening(const QString& name);
+
+    /// @brief Ends the opening: the photograph's first render is on screen.
+    void setOpened();
+
+    /// @brief Tells whether a photograph is being opened.
+    [[nodiscard]] bool opening() const noexcept {
+        return opening_.has_value();
+    }
+
     /// @brief Tells whether a photograph is open.
     [[nodiscard]] bool photoOpen() const noexcept {
         return photoOpen_;
@@ -70,6 +87,9 @@ private:
     /// Brings the tooltip and the picture up to the state.
     void refresh();
 
+    /// Whether the picture says "up to date": a photograph is open and not still opening.
+    [[nodiscard]] bool upToDate() const noexcept;
+
     /// Text for the tooltip and the accessible description.
     [[nodiscard]] QString describe() const;
 
@@ -78,14 +98,16 @@ private:
     std::optional<QString> failed_;
     /// Whether a photograph is open.
     bool photoOpen_ = true;
+    /// Name of the photograph being opened, until its first render is shown.
+    std::optional<QString> opening_;
     /// Fill in steps of `resolution`, to tell when the picture changes.
     int shownSteps_ = resolution;
     /// Whether the pie is drawn as rendering.
     bool shownRendering_ = false;
     /// Whether the pie is drawn as failed.
     bool shownFailed_ = false;
-    /// Whether the pie is drawn with a photograph open.
-    bool shownPhotoOpen_ = true;
+    /// Whether the pie is drawn as up to date when idle.
+    bool shownUpToDate_ = true;
 };
 
 } // namespace arraw::app

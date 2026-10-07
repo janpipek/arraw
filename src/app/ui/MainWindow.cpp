@@ -1499,6 +1499,7 @@ void MainWindow::showResult(const PreviewResult& result) {
             // Turned and flipped to the geometry now, should a turn have happened since.
             photoView_->cropOverlay().setImage(*result.image, renderedFor->settings.geometry);
             open_->lastCropImage.emplace(*renderedFor, *result.image);
+            renderProgress_->setOpened(); // A render shown in the crop mode ends the opening too.
             showDevice(result);
             return;
         }
@@ -1523,6 +1524,7 @@ void MainWindow::showResult(const PreviewResult& result) {
     }
     if (result.image) {
         latestShown_ = result.request;
+        renderProgress_->setOpened(); // The first render of a photograph ends its opening.
         photoView_->setImage(*result.image, result.region, result.background.value_or(QImage{}));
         showDevice(result);
         followWithThumbnail(result);
@@ -1576,6 +1578,7 @@ void MainWindow::showPhoto(Photo photo) {
     const std::filesystem::path path = photo.path();
     open_.emplace(OpenPhoto{EditSession(std::move(photo)), nullptr, std::nullopt, std::nullopt});
     renderProgress_->setPhotoOpen(true);
+    renderProgress_->setOpening(toQString(path.filename()));
     // The previous photograph's pixels go, and with them whatever the renderer was doing.
     previewRenderer_.setSource(nullptr);
     // Results of the previous photograph are still on their way, or in progress.
