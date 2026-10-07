@@ -8,7 +8,7 @@ class QPaintEvent;
 
 namespace arraw::app {
 
-/// @brief Thin bar along the top edge of the photo view that shows a render is going.
+/// @brief Bar along the top edge of the photo view that shows a render is going.
 ///
 /// Determinate when it has a fraction: a fill in the palette's highlight colour
 /// over a faint track. Without one, a short segment sweeps along the track.
@@ -20,7 +20,7 @@ class RenderProgressBar : public QWidget {
     Q_DISABLE_COPY_MOVE(RenderProgressBar)
 public:
     /// @brief Height of the bar, in logical pixels.
-    static constexpr int thickness = 3;
+    static constexpr int thickness = 12;
 
     explicit RenderProgressBar(QWidget* parent = nullptr);
 

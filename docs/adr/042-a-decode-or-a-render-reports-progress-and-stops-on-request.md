@@ -197,11 +197,11 @@ and `RenderIndicator` drives it from a timer:
   milliseconds, so a slider drag over a slow render does not alternate between
   a bar and a sweep.
 
-The bar is 3 px along the top of the photo view, and the step's wording
-("Reducing noise…", "Analysing local contrast…", "Developing…") is a permanent
-status-bar label. The newest result ends the busy period even when it is no
-longer wanted (a photograph was opened, or the crop mode was left), so the
-bar cannot sweep forever (F8).
+The bar is 12 px along the top of the photo view (3 px at first, widened once
+seen in use), and the step's wording ("Reducing noise…", "Analysing local
+contrast…", "Developing…") is a permanent status-bar label. The newest result
+ends the busy period even when it is no longer wanted (a photograph was
+opened, or the crop mode was left), so the bar cannot sweep forever (F8).
 
 **Python gets no progress callable yet.** The bindings
 ([ADR 018](018-python-binds-the-public-api-and-nothing-else.md)) keep their
