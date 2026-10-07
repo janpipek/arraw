@@ -15,12 +15,11 @@ namespace arraw::app {
 
 namespace {
 
-/// Keys of the labels, in the order of ::arraw::colorLabelNames: Shift with the colour's
-/// initial. R alone enters the crop mode, as in Lightroom (ADR 040), so all five take Shift
-/// alike rather than red alone.
-const QKeyCombination labelKeys[] = {Qt::SHIFT | Qt::Key_R, Qt::SHIFT | Qt::Key_Y,
-                                     Qt::SHIFT | Qt::Key_G, Qt::SHIFT | Qt::Key_B,
-                                     Qt::SHIFT | Qt::Key_P};
+/// Keys of the labels, in the order of ::arraw::colorLabelNames: the colour's initial. The crop
+/// mode is on C, so R is free for red (ADR 040).
+const QKeyCombination labelKeys[] = {QKeyCombination(Qt::Key_R), QKeyCombination(Qt::Key_Y),
+                                     QKeyCombination(Qt::Key_G), QKeyCombination(Qt::Key_B),
+                                     QKeyCombination(Qt::Key_P)};
 
 } // namespace
 

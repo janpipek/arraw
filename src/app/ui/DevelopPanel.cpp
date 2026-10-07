@@ -306,7 +306,7 @@ QWidget* DevelopPanel::buildCropGroup() {
     cropButton_->setCheckable(true);
     cropButton_->setFocusPolicy(Qt::NoFocus);
     cropButton_->setToolTip(tr("Frame the photograph on screen: drag the handles to crop, drag "
-                               "inside to move the photograph, outside to turn it (R)."));
+                               "inside to move the photograph, outside to turn it (C)."));
     levelButton_ = new QPushButton(tr("Level"), group);
     levelButton_->setObjectName("cropLevel");
     levelButton_->setCheckable(true);

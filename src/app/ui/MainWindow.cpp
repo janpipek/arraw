@@ -318,7 +318,7 @@ void MainWindow::buildMenu() {
     photoMenu_ = menuBar()->addMenu(tr("&Photo"));
     cropAction_ = photoMenu_->addAction(tr("&Crop && Straighten"));
     cropAction_->setObjectName("cropAction");
-    cropAction_->setShortcut(QKeySequence(Qt::Key_R));
+    cropAction_->setShortcut(QKeySequence(Qt::Key_C));
     cropAction_->setCheckable(true);
     cropAction_->setEnabled(false);
     connect(cropAction_, &QAction::triggered, this, &MainWindow::setCropMode);

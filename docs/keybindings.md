@@ -18,7 +18,7 @@ its rows from *Planned* to *Current* in the same change that wires them.
 | `Ctrl+Shift+C` | Copy settings… (asks which sections) | Edit menu |
 | `Ctrl+Shift+V` | Paste settings (no dialog; off in the crop mode) | Edit menu |
 | (platform) | Settings | Edit menu (`QKeySequence::Preferences`; no key on some platforms) |
-| `R` | Crop & Straighten (toggle) | Photo menu |
+| `C` | Crop & Straighten (toggle) | Photo menu |
 | `Ctrl+]` / `Ctrl+[` | Rotate 90° clockwise / counter-clockwise | Photo menu |
 | `Ctrl+Shift+D` | Debug log | Window-level action |
 | `Ctrl++` / `Ctrl+-` | Zoom in / out | View menu (`QKeySequence::ZoomIn`, `ZoomOut`) |
@@ -28,7 +28,7 @@ its rows from *Planned* to *Current* in the same change that wires them.
 | `1`–`5` | Star rating | Culling actions |
 | `0` | Unrated | Culling actions |
 | `X` | Reject (outside cropping) | Culling actions |
-| `Shift+R` `Shift+Y` `Shift+G` `Shift+B` `Shift+P` | Red, yellow, green, blue, purple colour label | Culling actions |
+| `R` `Y` `G` `B` `P` | Red, yellow, green, blue, purple colour label | Culling actions |
 
 ## Wiring rules
 

@@ -237,6 +237,8 @@ wherever the focus is in the window:
   pressing Enter ends the typing, not the mode.
 - R was the red label's key. All five labels move to Shift with the colour's
   initial (Shift+R, Y, G, B, P), alike, rather than red alone.
+  *Amended 2026-10-07 (user):* the crop mode moves to C, as `main` planned,
+  and the labels go back to the plain initials (R, Y, G, B, P).
 - Left and Right keep stepping between photographs: the crop is committed,
   as in Lightroom, and the next photograph opens outside the mode.
 
