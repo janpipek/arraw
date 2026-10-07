@@ -194,6 +194,20 @@ including its antialiasing policy, remains outside this implementation.
 > content test are shared helpers in `GeometryPlan.h`. See
 > [ADR 040](040-the-crop-mode-straightens-on-screen-over-an-uncropped-render.md).
 
+> **Note (2026-10-07).** The editing rules are now public core in
+> `include/CropGeometry.h`: pure functions over `GeometrySettings` that take a
+> `SourceShape` (size and orientation), so the crop mode, the Develop panel,
+> the command line and Python edit a geometry alike. Core now holds the rules
+> the Consequences bullet below asks the geometry editor to own for dependent
+> crop and aspect updates; `Edits.h` applies them, and the command line carries
+> the crop, in the next step. Setting the stored `rotation` (`withRotation`) keeps the
+> flips, so the direction the picture turns on screen depends on how many
+> flips are set; the crop is carried either way. Open: the rule for copying a
+> crop above (normalised centre and long-edge fraction, physical aspect kept)
+> needs the source frame, which a `Look` does not carry, and conflicts with the
+> looks-and-history plan's "normalised, then fitted to the target"; decide
+> before Crop joins the copyable sections.
+
 ## Consequences
 
 - Settings resolve once into geometry shared by sampling and coordinate mapping.

@@ -294,6 +294,14 @@ repeated and only comparisons made in one process are trusted.
 session throws, `MainWindow::guarded` closes the overlay before it cancels the
 session's edit, so what the user sees is never ahead of the session.
 
+> **Note (2026-10-07).** `CropEditing` keeps only the gesture (handles, resize,
+> the gesture's starting geometry for the image move), the run of rotations
+> and the nested step history; every other rule is a call into
+> `include/CropGeometry.h` (see ADR 014). `CropEditing.cpp` no longer sees the
+> engine-private `GeometryPlan.h`, which supersedes "They are engine-private:
+> `CropEditing.cpp` sees `src/core`" above. `CropPoint`, `CropBox` and
+> `displayedStraighten` moved to namespace `arraw`.
+
 ## Consequences
 
 - Nothing in the engine's render path changed; `geometryPlanFor` now calls the

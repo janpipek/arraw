@@ -164,6 +164,8 @@ add_library(arraw STATIC
         include/DevelopSettings.h
         include/DevelopState.h
         src/core/DevelopState.cpp
+        include/CropGeometry.h
+        src/core/CropGeometry.cpp
         include/GeometrySettings.h
         include/ImageOrientation.h
         include/ImagePyramid.h

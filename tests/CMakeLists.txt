@@ -22,6 +22,7 @@ add_executable(arraw-tests
         test_CopySections.cpp
         test_ColorEncoding.cpp
         test_CropEditing.cpp
+        test_CropGeometry.cpp
         test_CurveEditing.cpp
         test_CurveHistogramRefresh.cpp
         test_Develop.cpp

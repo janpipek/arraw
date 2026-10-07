@@ -1,11 +1,8 @@
 #include "CropEditing.h"
 
-#include "GeometryPlan.h"
-
 #include <algorithm>
 #include <cmath>
 #include <limits>
-#include <numbers>
 #include <utility>
 #include <vector>
 
@@ -27,20 +24,10 @@ struct HalfPlane {
     }
 };
 
-/// @brief Resolves a geometry's frame alone: its crop removed, so any aspect is accepted.
-GeometryPlan frameOf(ImageSize size, ImageOrientation orientation, GeometrySettings geometry) {
-    geometry.crop = {};
-    return geometryPlanFor(size, orientation, geometry);
-}
-
-CropBox toBox(const UprightBox& box) {
-    return {box.left, box.top, box.width, box.height};
-}
-
 /// @brief Gives the half-planes of valid content, with unit normals pointing out of it.
-std::vector<HalfPlane> contentPlanes(const GeometryPlan& frame) {
-    const auto corners = contentCorners(frame);
-    const UprightPoint centre{frame.uprightWidth / 2, frame.uprightHeight / 2};
+std::vector<HalfPlane> contentPlanes(const CropFrame& frame) {
+    const auto& corners = frame.content;
+    const CropPoint centre{frame.uprightWidth / 2, frame.uprightHeight / 2};
     std::vector<HalfPlane> planes;
     for (std::size_t index = 0; index < corners.size(); ++index) {
         const auto& from = corners[index];
@@ -171,54 +158,32 @@ CropPoint handlePosition(const CropBox& box, CropHandle handle) noexcept {
             sy < 0 ? box.top : (sy > 0 ? box.bottom() : box.top + box.height / 2)};
 }
 
-double displayedStraighten(const GeometrySettings& geometry) noexcept {
-    return geometry.flipHorizontal != geometry.flipVertical ? -geometry.straighten
-                                                            : geometry.straighten;
-}
-
 CropEditing::CropEditing(ImageSize sourceSize, ImageOrientation orientation,
                          GeometrySettings geometry)
-    : sourceSize_(sourceSize), orientation_(orientation) {
-    resolve(geometry);
+    : source_{sourceSize, orientation} {
+    resolve(std::move(geometry));
     gestureStart_ = geometry_;
 }
 
 void CropEditing::resolve(GeometrySettings geometry) {
-    // Both throw for an invalid geometry before anything changes.
-    const GeometryPlan frame = frameOf(sourceSize_, orientation_, geometry);
-    const GeometryPlan full = geometryPlanFor(sourceSize_, orientation_, geometry);
-    GeometrySettings level = geometry;
-    level.straighten = 0.0;
-    const GeometryPlan upright = frameOf(sourceSize_, orientation_, level);
+    // Throws for an invalid geometry before anything changes.
+    frame_ = cropFrameFor(source_, geometry);
     geometry_ = std::move(geometry);
-    uprightWidth_ = frame.uprightWidth;
-    uprightHeight_ = frame.uprightHeight;
-    crop_ = toBox(full.crop());
-    const auto corners = contentCorners(frame);
-    for (std::size_t index = 0; index < corners.size(); ++index) {
-        content_[index] = {corners[index].x, corners[index].y};
-    }
-    unstraightened_ = {0.0, 0.0, upright.uprightWidth, upright.uprightHeight};
 }
 
 std::optional<double> CropEditing::lockedRatio() const {
-    if (std::holds_alternative<OriginalCropAspect>(geometry_.crop.aspect)) {
-        return unstraightened_.width / unstraightened_.height;
-    }
-    if (const auto* ratio = std::get_if<CropRatio>(&geometry_.crop.aspect)) {
-        return ratio->widthOverHeight;
-    }
-    return std::nullopt;
+    return arraw::lockedRatio(frame_, geometry_.crop.aspect);
 }
 
 double CropEditing::minimumSide() const noexcept {
-    return minimumCropFraction * std::min(unstraightened_.width, unstraightened_.height);
+    return minimumCropFraction *
+           std::min(frame_.unstraightened.width, frame_.unstraightened.height);
 }
 
 namespace {
 
 /// @brief Stores a box as a geometry's explicit crop, normalised to its frame.
-GeometrySettings withBox(GeometrySettings geometry, const GeometryPlan& frame, const CropBox& box,
+GeometrySettings withBox(GeometrySettings geometry, const CropFrame& frame, const CropBox& box,
                          CropAspect aspect) {
     const auto edge = [](double value, double length) {
         return std::clamp(value / length, 0.0, 1.0);
@@ -240,8 +205,8 @@ void CropEditing::beginGesture() {
 void CropEditing::resizeTo(CropHandle handle, CropPoint pointer) {
     rotationStart_.reset();
     const GeometrySettings& start = gestureStart_;
-    const GeometryPlan frame = frameOf(sourceSize_, orientation_, start);
-    const CropBox box = toBox(geometryPlanFor(sourceSize_, orientation_, start).crop());
+    const CropFrame frame = cropFrameFor(source_, start);
+    const CropBox box = frame.crop;
     const auto planes = contentPlanes(frame);
     const double slack = 1e-9 * std::max(frame.uprightWidth, frame.uprightHeight);
     // A crop already below the minimum (a tiny photograph) is not made to grow.
@@ -250,15 +215,7 @@ void CropEditing::resizeTo(CropHandle handle, CropPoint pointer) {
     const double sy = verticalOf(handle);
     CropBox next = box;
 
-    std::optional<double> ratio;
-    if (std::holds_alternative<OriginalCropAspect>(start.crop.aspect)) {
-        GeometrySettings level = start;
-        level.straighten = 0.0;
-        const GeometryPlan upright = frameOf(sourceSize_, orientation_, level);
-        ratio = upright.uprightWidth / upright.uprightHeight;
-    } else if (const auto* custom = std::get_if<CropRatio>(&start.crop.aspect)) {
-        ratio = custom->widthOverHeight;
-    }
+    const std::optional<double> ratio = arraw::lockedRatio(frame, start.crop.aspect);
 
     // One free parameter t: corners are base + t * direction, each must stay
     // inside, and t no smaller than the minimum.
@@ -354,16 +311,11 @@ void CropEditing::resizeTo(CropHandle handle, CropPoint pointer) {
 
 void CropEditing::moveImageBy(double dx, double dy) {
     rotationStart_.reset();
-    const GeometrySettings& start = gestureStart_;
-    const GeometryPlan frame = frameOf(sourceSize_, orientation_, start);
-    UprightBox box = geometryPlanFor(sourceSize_, orientation_, start).crop();
-    box.left -= dx;
-    box.top -= dy;
-    resolve(withBox(start, frame, toBox(shiftedIntoContent(frame, box)), start.crop.aspect));
+    resolve(withCropMovedBy(source_, gestureStart_, -dx, -dy));
 }
 
 void CropEditing::rotateTo(double degrees) {
-    rotateStored(geometry_.flipHorizontal != geometry_.flipVertical ? -degrees : degrees);
+    rotateStored(storedStraighten(geometry_, degrees));
 }
 
 void CropEditing::rotateStored(double straighten) {
@@ -373,68 +325,24 @@ void CropEditing::rotateStored(double straighten) {
     if (!rotationStart_) {
         rotationStart_ = geometry_;
     }
-    const GeometrySettings& start = *rotationStart_;
-    GeometrySettings next = start;
-    next.straighten = std::clamp(straighten, minimumStraighten, maximumStraighten);
-    if (start.crop.rectangle) {
-        // About the crop's centre (ADR 040): the content under it stays under
-        // it, the size is kept, and the fit shrinks about that centre, moving
-        // it only when nothing fits there (ADR 014).
-        const GeometryPlan before = frameOf(sourceSize_, orientation_, start);
-        const UprightBox box = geometryPlanFor(sourceSize_, orientation_, start).crop();
-        const GeometryPlan after = frameOf(sourceSize_, orientation_, next);
-        const UprightPoint centre =
-            after.toUpright(before.toSource({box.left + box.width / 2, box.top + box.height / 2}));
-        const UprightBox carried{centre.x - box.width / 2, centre.y - box.height / 2, box.width,
-                                 box.height};
-        next = withBox(next, after, toBox(fittedToContent(after, carried)), start.crop.aspect);
-    }
-    resolve(next);
+    resolve(rotatedTo(source_, *rotationStart_, straighten));
 }
 
 void CropEditing::straightenAlong(CropPoint from, CropPoint to) {
-    const double dx = to.x - from.x;
-    const double dy = to.y - from.y;
-    if (std::hypot(dx, dy) < 1e-9 * std::max(uprightWidth_, uprightHeight_)) {
+    if (std::hypot(to.x - from.x, to.y - from.y) <
+        1e-9 * std::max(frame_.uprightWidth, frame_.uprightHeight)) {
         return;
     }
-    // Clockwise on screen, with y down; a line has no direction, so -90 to 90.
-    double angle = std::atan2(dy, dx) * 180.0 / std::numbers::pi;
-    if (angle > 90.0) {
-        angle -= 180.0;
-    } else if (angle <= -90.0) {
-        angle += 180.0;
-    }
-    const double turn =
-        std::abs(angle) <= 45.0 ? -angle : (angle > 0 ? 90.0 - angle : -90.0 - angle);
     rotationStart_.reset();
-    rotateTo(displayedAngle() + turn);
-    rotationStart_.reset();
+    resolve(arraw::straightenedAlong(source_, geometry_, from, to));
 }
 
 void CropEditing::setAspect(const CropAspect& aspect) {
     rotationStart_.reset();
-    GeometrySettings next = geometry_;
-    next.crop.aspect = aspect;
-    std::optional<double> ratio;
-    if (std::holds_alternative<OriginalCropAspect>(aspect)) {
-        ratio = unstraightened_.width / unstraightened_.height;
-    } else if (const auto* custom = std::get_if<CropRatio>(&aspect)) {
-        if (!isWellFormed(*custom)) {
-            return;
-        }
-        ratio = custom->widthOverHeight;
+    if (const auto* custom = std::get_if<CropRatio>(&aspect); custom && !isWellFormed(*custom)) {
+        return;
     }
-    if (ratio && geometry_.crop.rectangle) {
-        // The largest box of the ratio inside the present one, about its centre.
-        const GeometryPlan frame = frameOf(sourceSize_, orientation_, geometry_);
-        const double height = std::min(crop_.height, crop_.width / *ratio);
-        const double width = height * *ratio;
-        const CropPoint centre = crop_.centre();
-        next = withBox(next, frame, {centre.x - width / 2, centre.y - height / 2, width, height},
-                       aspect);
-    }
-    resolve(next);
+    resolve(withAspect(source_, geometry_, aspect));
 }
 
 void CropEditing::setLocked(bool locked) {
@@ -446,85 +354,27 @@ void CropEditing::setLocked(bool locked) {
         return;
     }
     rotationStart_.reset();
-    GeometrySettings next = geometry_;
-    if (const auto& rectangle = next.crop.rectangle) {
-        // The ratio as the engine checks it, from the stored edges, so it agrees exactly.
-        next.crop.aspect = CropRatio{(rectangle->right - rectangle->left) * uprightWidth_ /
-                                     ((rectangle->bottom - rectangle->top) * uprightHeight_)};
-    } else {
-        next.crop.aspect = CropRatio{crop_.width / crop_.height};
-    }
-    resolve(next);
+    resolve(withLockedAspect(source_, geometry_));
 }
 
 void CropEditing::swapOrientation() {
     rotationStart_.reset();
-    GeometrySettings next = geometry_;
-    if (const auto ratio = lockedRatio()) {
-        // Swapping a swapped Original aspect gives the photograph's own ratio
-        // back, so it becomes the Original aspect again.
-        const double swappedRatio = 1.0 / *ratio;
-        const double own = unstraightened_.width / unstraightened_.height;
-        if (std::abs(swappedRatio - own) <= 1e-9 * own) {
-            next.crop.aspect = OriginalCropAspect{};
-        } else {
-            next.crop.aspect = CropRatio{swappedRatio};
-        }
-        if (!next.crop.rectangle) {
-            resolve(next);
-            return;
-        }
-    }
-    const GeometryPlan frame = frameOf(sourceSize_, orientation_, geometry_);
-    const CropPoint centre = crop_.centre();
-    const UprightBox swapped{centre.x - crop_.height / 2, centre.y - crop_.width / 2, crop_.height,
-                             crop_.width};
-    resolve(withBox(next, frame, toBox(fittedToContent(frame, swapped)), next.crop.aspect));
+    resolve(withSwappedOrientation(source_, geometry_));
 }
 
 void CropEditing::turn(bool clockwise) {
     rotationStart_.reset();
-    GeometrySettings next = geometry_;
-    const int steps = (static_cast<int>(next.rotation) + (clockwise ? 1 : 3)) % 4;
-    next.rotation = static_cast<QuarterTurn>(steps);
-    // A turn after a flip is the flip of the other axis after the turn.
-    std::swap(next.flipHorizontal, next.flipVertical);
-    if (auto& rectangle = next.crop.rectangle) {
-        const UprightCropRect r = *rectangle;
-        rectangle = clockwise ? UprightCropRect{1 - r.bottom, r.left, 1 - r.top, r.right}
-                              : UprightCropRect{r.top, 1 - r.right, r.bottom, 1 - r.left};
-    }
-    if (auto* ratio = std::get_if<CropRatio>(&next.crop.aspect)) {
-        ratio->widthOverHeight = 1.0 / ratio->widthOverHeight;
-    }
-    resolve(next);
+    resolve(turned(geometry_, clockwise));
 }
 
 void CropEditing::flip(bool horizontal) {
     rotationStart_.reset();
-    GeometrySettings next = geometry_;
-    auto& rectangle = next.crop.rectangle;
-    if (horizontal) {
-        next.flipHorizontal = !next.flipHorizontal;
-        if (rectangle) {
-            rectangle = UprightCropRect{1 - rectangle->right, rectangle->top, 1 - rectangle->left,
-                                        rectangle->bottom};
-        }
-    } else {
-        next.flipVertical = !next.flipVertical;
-        if (rectangle) {
-            rectangle = UprightCropRect{rectangle->left, 1 - rectangle->bottom, rectangle->right,
-                                        1 - rectangle->top};
-        }
-    }
-    resolve(next);
+    resolve(flipped(geometry_, horizontal));
 }
 
 void CropEditing::resetCrop() {
     rotationStart_.reset();
-    GeometrySettings next = geometry_;
-    next.crop.rectangle.reset();
-    resolve(next);
+    resolve(withCropReset(geometry_));
 }
 
 void CropEditing::adopt(const GeometrySettings& geometry) {
@@ -537,21 +387,10 @@ void CropEditing::adopt(const GeometrySettings& geometry) {
         rotateStored(geometry.straighten);
         return;
     }
-    const GeometryPlan frame = frameOf(sourceSize_, orientation_, geometry);
-    GeometrySettings next = geometry;
-    if (next.crop.rectangle) {
-        // Throws for a rectangle that is not well formed or disagrees with its aspect.
-        const UprightBox box = geometryPlanFor(sourceSize_, orientation_, next).crop();
-        const auto& r = *next.crop.rectangle;
-        const UprightBox stored{r.left * frame.uprightWidth, r.top * frame.uprightHeight,
-                                (r.right - r.left) * frame.uprightWidth,
-                                (r.bottom - r.top) * frame.uprightHeight};
-        if (!isInsideContent(frame, stored)) {
-            next = withBox(next, frame, toBox(box), next.crop.aspect);
-        }
-    }
+    // Throws for a geometry that is not valid, before anything changes.
+    GeometrySettings next = fittedCrop(source_, geometry);
     rotationStart_.reset();
-    resolve(next);
+    resolve(std::move(next));
 }
 
 void CropEditing::beginStep() {
