@@ -1,11 +1,27 @@
 # To-do
 
-As of 2026-10-07, branch `finish-global-adjustments`, nothing pushed.
-Done on this branch: the global-adjustments plan, phases 1–7
+As of 2026-10-07, branch `copy-settings`, nothing pushed. Earlier, on
+`finish-global-adjustments`: the global-adjustments plan, phases 1–7
 (`docs/ideas/global-adjustments-plan.md`), the crop and rotation tool
 (`docs/ideas/crop-ui-plan.md`), and render progress with cancellation
 (`docs/ideas/render-progress-plan.md`). The reviews are in `docs/reviews/`,
 untracked on purpose.
+
+## Done: copy settings (branch `copy-settings`)
+
+Steps 1 and 2 of `docs/ideas/looks-and-history-plan.md` and the copy/paste
+half of its step 4:
+- copy sections in the descriptor table; the grain seed belongs to none;
+- `include/Edits.h`: one setter per key with its rules (white balance, grain
+  seed, geometry), used by the GUI, the CLI and Python (`Photo.edited`);
+- `include/CropGeometry.h`: the crop rules, moved from the app into core;
+- `withLook` and Edit ▸ Copy Settings… / Paste Settings, Rotate & Flip and
+  Crop included but off by default; a pasted crop is normalised and fitted;
+- the CLI's `--rotate` and flips carry the crop, `--crop-aspect` alone fits
+  inside the sidecar's crop, and a disagreeing `--crop` and `--crop-aspect`
+  are reshaped, not refused;
+- the crop mode on C, the colour labels on R, Y, G, B, P;
+- the render progress as a pie, always in the status bar (ADR 042).
 
 ## Done: responsiveness
 
@@ -18,10 +34,19 @@ weights were remeasured, and the develop dock keeps every slider at least
 ## Next
 
 The order and the decisions are in `docs/ideas/architecture-roadmap.md`;
-loose ideas are in `docs/ideas/parked-ideas.md`. Step 0 (the review's small
-fixes and the Windows CPU default) is done. Step (a) is planned in
-`docs/ideas/looks-and-history-plan.md` (accepted 2026-10-07); next is its step
-1, the geometry rules into core.
+loose ideas are in `docs/ideas/parked-ideas.md`. Of step (a), planned in
+`docs/ideas/looks-and-history-plan.md`, two steps remain:
+
+- **Step 3, session history (plan §4).** `EditSession` keeps a list and a
+  position; `goTo`, origins (Edit, Paste, Preset, Reset, Crop) and
+  `describeChange` (ADR 022 amended); a `HistoryModel` and a History dock on
+  the left, where a click navigates; Python binds `EditSession`, with
+  `with session.edit():`.
+- **Step 4, presets (plan §3).** A `PresetStore` in core over
+  `AppDataLocation/presets` (the settings document plus a name; a new ADR);
+  a Presets list above History; the CLI's `preset list | show | apply` and
+  `export --preset`; Python's `presets()`, `load_preset`, `save_preset` and
+  `with_look`. Copy/paste itself is done.
 
 - **Demosaic and lens corrections as an import group (user, 2026-10-07).**
   - **Today:** neither exists on this branch. `DecodeOptions` has only
