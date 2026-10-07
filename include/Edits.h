@@ -6,6 +6,7 @@
 #include <ImageImport.h>
 #include <SettingDescriptors.h>
 
+#include <array>
 #include <concepts>
 #include <cstdint>
 #include <optional>
@@ -14,6 +15,7 @@
 #include <type_traits>
 #include <utility>
 #include <variant>
+#include <vector>
 
 namespace arraw {
 
@@ -243,7 +245,7 @@ template <detail::SettingValue T>
 /// chose. A key given twice is applied once.
 ///
 /// Every key is looked up before anything is applied. What ::arraw::withLook
-/// will build on: it passes the Look-scoped keys of the chosen
+/// builds on: it passes the Look-scoped keys of the chosen
 /// ::arraw::CopySection values.
 /// @param photo Photograph the state belongs to; reserved for the geometry rules.
 /// @param state State to edit.
@@ -256,5 +258,130 @@ template <detail::SettingValue T>
                                       std::span<const std::string_view> keys,
                                       const DevelopSettings& source,
                                       const GrainEntropy& entropy = {});
+
+/// @brief Copy sections ::arraw::withLook carries, in enumeration order.
+///
+/// Every section but ::arraw::CopySection::RotateAndFlip and
+/// ::arraw::CopySection::Crop, which wait for the geometry rules (looks-and-history
+/// plan, step 1): carried by plain assignment, a crop would no longer frame the
+/// same content on a photograph of another size or orientation. When the rules
+/// arrive both are added here, and the sections a copy dialog offers follow.
+inline constexpr auto copyableSections = std::to_array<CopySection>({
+    CopySection::WhiteBalance,
+    CopySection::Exposure,
+    CopySection::Tone,
+    CopySection::Presence,
+    CopySection::Color,
+    CopySection::ToneCurve,
+    CopySection::Hsl,
+    CopySection::BlackAndWhite,
+    CopySection::ColorGrading,
+    CopySection::NoiseReduction,
+    CopySection::Vignette,
+    CopySection::Grain,
+});
+
+/// @brief Copy sections chosen until someone chooses otherwise, in enumeration order.
+///
+/// Every section of ::arraw::copyableSections; the geometry stays out of the
+/// default even once it can be carried, as in Lightroom, because a crop rarely
+/// suits another frame (looks-and-history plan, §3).
+inline constexpr auto defaultCopySections = copyableSections;
+
+/// @brief Settings taken from one photograph, to be carried onto others.
+///
+/// What a copy holds, and later what a preset reads into: all of the
+/// settings, of which ::arraw::withLook takes the chosen sections, and the one
+/// thing about the photograph they came from that decides which sections can
+/// cross, whether it was a RAW (ADR 008).
+struct Look {
+    /// @brief Settings of the photograph the look was taken from.
+    DevelopSettings settings{};
+
+    /// @brief Whether the photograph the look was taken from is a RAW, its encoding its camera's
+    /// own.
+    bool fromRaw = false;
+
+    friend bool operator==(const Look&, const Look&) = default;
+};
+
+/// @brief Takes the look of a photograph.
+///
+/// A RAW is a photograph whose ::arraw::ImageMetadata::encoding is not a
+/// ::arraw::NamedEncoding, as everywhere else in arraw.
+/// @param photo Photograph the settings belong to.
+/// @param settings Its settings, usually those of its current state.
+/// @return The settings, with whether @p photo is a RAW.
+[[nodiscard]] Look lookOf(const ImageMetadata& photo, const DevelopSettings& settings);
+
+/// @brief Outcome of carrying a look onto a photograph: the new state, and what was left out.
+struct AppliedLook {
+    /// @brief State with the look's sections carried onto it.
+    DevelopState state;
+
+    /// @brief Chosen sections not carried in full, because some of their settings apply to
+    /// only one of the two photographs; in enumeration order, each once.
+    ///
+    /// Today only ::arraw::CopySection::WhiteBalance, between a RAW and a
+    /// photograph that is not one. A front end tells the user: nothing was
+    /// wrong, but something they chose did not arrive.
+    std::vector<CopySection> skipped;
+
+    friend bool operator==(const AppliedLook&, const AppliedLook&) = default;
+};
+
+/// @brief Carries chosen sections of a look onto a photograph's state.
+///
+/// The one function behind pasting settings and applying a preset
+/// (looks-and-history plan, §3). Every ::arraw::SettingScope::Look setting of
+/// each chosen section is copied from @p look through ::arraw::withValues, so
+/// the rules of ::arraw::withValue apply as if each had been set by hand:
+///
+/// - **A section is replaced, not merged.** All of its Look settings take the
+///   look's values, defaults included: a look with the tone curves flat
+///   flattens the target's curves.
+/// - **The photograph's own settings stay.** ::arraw::SettingScope::Photo
+///   settings (the grain seed) are never copied, whatever the sections.
+/// - **Grain turned on gets a seed.** When the look's grain amount turns the
+///   target's grain on and the target has no seed, one is drawn from
+///   @p entropy (::arraw::chooseGrainSeed); a target that had a seed keeps it,
+///   so its pattern does not change.
+/// - **Settings that apply on one side only do not cross (ADR 008).** A
+///   setting is copied only when it applies (::arraw::Applicability) both to
+///   the photograph the look came from and to @p photo. A chosen section that
+///   loses a setting because it applies on one side and not the other is
+///   listed in AppliedLook::skipped, and the target keeps its own values of
+///   what was not copied. Today this means the white balance does not cross
+///   between a RAW and a photograph that is not one; between two that are
+///   not RAWs it applies to neither, is not copied, and is not reported.
+/// - **The white balance is carried as the look's mode means it.** A look in
+///   As Shot gives As Shot, whatever it has left in its temperature and tint
+///   (::arraw::withValueFrom). Between two RAWs, As Shot means each camera's
+///   own reading, not the source's Kelvin.
+///
+/// A section given twice is applied once, and the order of @p sections does
+/// not matter. An empty @p sections leaves the state as it was, with nothing skipped.
+///
+/// **Geometry.** ::arraw::CopySection::RotateAndFlip and
+/// ::arraw::CopySection::Crop are refused until the geometry rules are in core
+/// (see ::arraw::copyableSections), so no caller gets a crop that was quietly
+/// not fitted to the target's frame.
+///
+/// **Errors.** Every section is checked before anything is applied, and the
+/// result is a new state, so a throw leaves the caller's state as it was. The
+/// look's values are validated as ::arraw::withValue validates them, so a look
+/// read from a damaged file is refused rather than pasted.
+/// @param photo Photograph the state belongs to, as ::arraw::readImageMetadata describes it:
+/// whether it is a RAW decides what crosses, and the geometry rules will need its frame.
+/// @param state State to carry the look onto.
+/// @param look Settings to carry, and whether they came from a RAW.
+/// @param sections Sections of @p look to carry, in any order.
+/// @param entropy Where a new grain seed's bits come from; empty for `std::random_device`.
+/// @return @p state with the sections carried onto it, and the sections left out.
+/// @throws std::invalid_argument naming the section if @p sections holds one not in
+/// ::arraw::copyableSections; as ::arraw::withValue if a value of @p look is not valid.
+[[nodiscard]] AppliedLook withLook(const ImageMetadata& photo, DevelopState state, const Look& look,
+                                   std::span<const CopySection> sections,
+                                   const GrainEntropy& entropy = {});
 
 } // namespace arraw

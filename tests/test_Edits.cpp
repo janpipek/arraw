@@ -4,7 +4,9 @@
 #include <Edits.h>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -459,5 +461,222 @@ TEST_CASE("Every setting can be copied from a source that differs from the defau
         });
         // The one-element enumerations differ from a default by an out-of-table value only.
         CHECK_FALSE(result == DevelopState{});
+    }
+}
+
+namespace {
+
+const ImageMetadata rawPhoto{ImageSize{32, 24}, CameraNative{}};
+
+DevelopState withSettings(const DevelopSettings& settings) {
+    DevelopState state;
+    state.settings = settings;
+    return state;
+}
+
+const CopySection allCopyable[] = {
+    CopySection::WhiteBalance, CopySection::Exposure,
+    CopySection::Tone,         CopySection::Presence,
+    CopySection::Color,        CopySection::ToneCurve,
+    CopySection::Hsl,          CopySection::BlackAndWhite,
+    CopySection::ColorGrading, CopySection::NoiseReduction,
+    CopySection::Vignette,     CopySection::Grain,
+};
+
+} // namespace
+
+TEST_CASE("A look is taken with whether its photograph is a RAW", "[Edits][Look]") {
+    CHECK(lookOf(rawPhoto, {}).fromRaw);
+    CHECK_FALSE(lookOf(photo, {}).fromRaw);
+    DevelopSettings settings;
+    settings.tone.exposure = 1.0F;
+    CHECK(lookOf(photo, settings).settings == settings);
+}
+
+TEST_CASE("The copyable sections are consistent with the table", "[Edits][Look]") {
+    for (const CopySection section : copyableSections) {
+        CHECK(section != CopySection::RotateAndFlip);
+        CHECK(section != CopySection::Crop);
+        const bool hasRow =
+            std::ranges::any_of(developSettingDescriptors, [&](const FieldDescriptor& d) {
+                return d.section == section && d.scope == SettingScope::Look;
+            });
+        CHECK(hasRow);
+    }
+    for (const CopySection section : defaultCopySections) {
+        CHECK(std::ranges::find(copyableSections, section) != copyableSections.end());
+    }
+}
+
+TEST_CASE("A look replaces the sections chosen and leaves the others", "[Edits][Look]") {
+    DevelopSettings source;
+    source.tone.exposure = 1.5F;
+    source.tone.contrast = 20.0F;
+    source.color.saturation = 10.0F;
+    DevelopSettings target;
+    target.tone.exposure = -1.0F;
+    target.tone.contrast = -30.0F;
+    target.color.saturation = -40.0F;
+    const Look look = lookOf(photo, source);
+
+    SECTION("exposure alone leaves the contrast") {
+        const CopySection sections[] = {CopySection::Exposure};
+        const AppliedLook applied = withLook(photo, withSettings(target), look, sections);
+        CHECK(applied.state.settings.tone.exposure == 1.5F);
+        CHECK(applied.state.settings.tone.contrast == -30.0F);
+        CHECK(applied.state.settings.color.saturation == -40.0F);
+        CHECK(applied.skipped.empty());
+    }
+    SECTION("tone alone leaves the exposure") {
+        const CopySection sections[] = {CopySection::Tone};
+        const AppliedLook applied = withLook(photo, withSettings(target), look, sections);
+        CHECK(applied.state.settings.tone.exposure == -1.0F);
+        CHECK(applied.state.settings.tone.contrast == 20.0F);
+    }
+    SECTION("a section is replaced in full, defaults included") {
+        DevelopSettings curved = target;
+        curved.toneCurve.luma.points = {{0.0F, 0.0F}, {0.5F, 0.3F}, {1.0F, 1.0F}};
+        const CopySection sections[] = {CopySection::ToneCurve};
+        const AppliedLook applied = withLook(photo, withSettings(curved), look, sections);
+        CHECK(applied.state.settings.toneCurve == ToneCurveSettings{});
+    }
+    SECTION("order and duplicates do not matter") {
+        const CopySection one[] = {CopySection::Exposure, CopySection::Tone, CopySection::Exposure};
+        const CopySection two[] = {CopySection::Tone, CopySection::Exposure};
+        CHECK(withLook(photo, withSettings(target), look, one) ==
+              withLook(photo, withSettings(target), look, two));
+    }
+    SECTION("no sections change nothing") {
+        const AppliedLook applied = withLook(photo, withSettings(target), look, {});
+        CHECK(applied == AppliedLook{withSettings(target), {}});
+    }
+}
+
+TEST_CASE("A look never carries the grain seed of its photograph", "[Edits][Look][Grain]") {
+    const auto grainOf = [](const AppliedLook& a) { return a.state.settings.effects.grain; };
+    DevelopSettings source;
+    source.effects.grain.amount = 30.0F;
+    source.effects.grain.seed = 77U;
+    const Look look = lookOf(photo, source);
+    const CopySection sections[] = {CopySection::Grain};
+
+    SECTION("a target with no grain and no seed draws one") {
+        const AppliedLook applied = withLook(photo, DevelopState{}, look, sections, drawn);
+        CHECK(grainOf(applied).amount == 30.0F);
+        CHECK(grainOf(applied).seed == entropyBits);
+    }
+    SECTION("a target with grain keeps its seed") {
+        DevelopSettings target;
+        target.effects.grain.amount = 10.0F;
+        target.effects.grain.seed = 5U;
+        CHECK(grainOf(withLook(photo, withSettings(target), look, sections, drawn)).seed == 5U);
+    }
+    SECTION("a seed from the look is not copied with every section") {
+        const AppliedLook applied = withLook(photo, DevelopState{}, look, allCopyable, drawn);
+        CHECK(grainOf(applied).seed == entropyBits);
+    }
+    SECTION("a look without grain turns it off and keeps the seed") {
+        DevelopSettings target;
+        target.effects.grain.amount = 10.0F;
+        target.effects.grain.seed = 5U;
+        const Look none = lookOf(photo, {});
+        const AppliedLook applied = withLook(photo, withSettings(target), none, sections, drawn);
+        CHECK(grainOf(applied).amount == 0.0F);
+        CHECK(grainOf(applied).seed == 5U);
+    }
+}
+
+TEST_CASE("The white balance crosses only between photographs it applies to", "[Edits][Look]") {
+    DevelopSettings custom;
+    custom.color = {WhiteBalanceMode::Custom, 5000.0F, 7.0F};
+    custom.color.saturation = 25.0F;
+    custom.color.vibrance = 15.0F;
+    DevelopSettings target;
+    target.color = {WhiteBalanceMode::Custom, 3000.0F, -5.0F};
+    const CopySection wb[] = {CopySection::WhiteBalance};
+
+    SECTION("RAW to JPEG keeps the target's colour and reports it") {
+        const AppliedLook applied =
+            withLook(photo, withSettings(target), lookOf(rawPhoto, custom), wb);
+        CHECK(applied.state.settings.color == target.color);
+        CHECK(applied.skipped == std::vector{CopySection::WhiteBalance});
+    }
+    SECTION("JPEG to RAW keeps the target's colour and reports it") {
+        const AppliedLook applied =
+            withLook(rawPhoto, withSettings(target), lookOf(photo, custom), wb);
+        CHECK(applied.state.settings.color == target.color);
+        CHECK(applied.skipped == std::vector{CopySection::WhiteBalance});
+    }
+    SECTION("RAW to RAW carries Custom") {
+        const AppliedLook applied =
+            withLook(rawPhoto, withSettings(target), lookOf(rawPhoto, custom), wb);
+        CHECK(applied.state.settings.color.whiteBalance == WhiteBalanceMode::Custom);
+        CHECK(applied.state.settings.color.temperature == 5000.0F);
+        CHECK(applied.state.settings.color.tint == 7.0F);
+        CHECK(applied.skipped.empty());
+    }
+    SECTION("an As Shot source with leftovers arrives as As Shot") {
+        DevelopSettings leftovers;
+        leftovers.color = {WhiteBalanceMode::AsShot, 3000.0F, 9.0F};
+        const AppliedLook applied =
+            withLook(rawPhoto, withSettings(target), lookOf(rawPhoto, leftovers), wb);
+        CHECK(applied.state.settings.color == ColorSettings{});
+    }
+    SECTION("JPEG to JPEG copies nothing and reports nothing") {
+        const AppliedLook applied =
+            withLook(photo, withSettings(target), lookOf(photo, custom), wb);
+        CHECK(applied.state == withSettings(target));
+        CHECK(applied.skipped.empty());
+    }
+    SECTION("the colour section still crosses") {
+        const CopySection sections[] = {CopySection::WhiteBalance, CopySection::Color};
+        const AppliedLook applied =
+            withLook(photo, withSettings(target), lookOf(rawPhoto, custom), sections);
+        CHECK(applied.state.settings.color.saturation == 25.0F);
+        CHECK(applied.state.settings.color.vibrance == 15.0F);
+        CHECK(applied.state.settings.color.temperature == 3000.0F);
+        CHECK(applied.skipped == std::vector{CopySection::WhiteBalance});
+    }
+}
+
+TEST_CASE("A look with every copyable section leaves the target's geometry alone",
+          "[Edits][Look]") {
+    DevelopSettings source;
+    source.tone.exposure = 1.0F;
+    source.geometry.crop.rectangle = UprightCropRect{0.1, 0.1, 0.9, 0.9};
+    source.geometry.straighten = 3.0;
+    source.geometry.rotation = QuarterTurn::Clockwise90;
+    DevelopSettings target;
+    target.geometry.crop.rectangle = UprightCropRect{0.2, 0.2, 0.7, 0.8};
+    const AppliedLook applied =
+        withLook(photo, withSettings(target), lookOf(photo, source), allCopyable);
+    CHECK(applied.state.settings.geometry == target.geometry);
+    CHECK(applied.state.settings.tone.exposure == 1.0F);
+}
+
+TEST_CASE("A look refuses the geometry sections and invalid values", "[Edits][Look]") {
+    DevelopSettings source;
+    source.tone.exposure = 1.0F;
+    const Look look = lookOf(photo, source);
+    DevelopState state;
+    state.settings.tone.exposure = -1.0F;
+
+    SECTION("a geometry section throws, naming it, and nothing is applied") {
+        const CopySection rotate[] = {CopySection::Exposure, CopySection::RotateAndFlip};
+        CHECK_THROWS_WITH(withLook(photo, state, look, rotate),
+                          Catch::Matchers::ContainsSubstring("rotateAndFlip"));
+        const CopySection crop[] = {CopySection::Crop, CopySection::Exposure};
+        CHECK_THROWS_WITH(withLook(photo, state, look, crop),
+                          Catch::Matchers::ContainsSubstring("crop"));
+    }
+    SECTION("a value out of range throws") {
+        Look bad = look;
+        bad.settings.tone.exposure = 1000.0F;
+        const CopySection sections[] = {CopySection::Exposure};
+        CHECK_THROWS_AS(withLook(photo, state, bad, sections), std::invalid_argument);
+    }
+    SECTION("an unknown enumerator throws") {
+        const CopySection sections[] = {static_cast<CopySection>(99)};
+        CHECK_THROWS_AS(withLook(photo, state, look, sections), std::invalid_argument);
     }
 }

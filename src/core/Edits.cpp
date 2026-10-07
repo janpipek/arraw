@@ -9,6 +9,8 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <variant>
+#include <vector>
 
 namespace arraw {
 
@@ -153,6 +155,54 @@ DevelopState withValues(const ImageMetadata& photo, DevelopState state,
         }
     }
     return state;
+}
+
+Look lookOf(const ImageMetadata& photo, const DevelopSettings& settings) {
+    return Look{settings, !std::holds_alternative<NamedEncoding>(photo.encoding)};
+}
+
+AppliedLook withLook(const ImageMetadata& photo, DevelopState state, const Look& look,
+                     std::span<const CopySection> sections, const GrainEntropy& entropy) {
+    constexpr std::size_t sectionCount = copySectionNames.size();
+    std::bitset<sectionCount> chosen;
+    for (const CopySection section : sections) {
+        const auto index = static_cast<std::size_t>(section);
+        if (std::ranges::find(copyableSections, section) == copyableSections.end()) {
+            throw std::invalid_argument(std::format(
+                "the section {} cannot be copied yet",
+                index < sectionCount ? copySectionNames[index] : std::string_view{"unknown"}));
+        }
+        chosen.set(index);
+    }
+
+    const bool toRaw = !std::holds_alternative<NamedEncoding>(photo.encoding);
+    std::vector<std::string_view> keys;
+    std::bitset<sectionCount> lost;
+    for (const FieldDescriptor& descriptor : developSettingDescriptors) {
+        const auto index = static_cast<std::size_t>(descriptor.section);
+        if (descriptor.scope != SettingScope::Look || !chosen.test(index)) {
+            continue;
+        }
+        const auto appliesTo = [&](bool raw) {
+            return descriptor.applies == Applicability::Always || raw;
+        };
+        const bool fromSide = appliesTo(look.fromRaw);
+        const bool toSide = appliesTo(toRaw);
+        if (fromSide && toSide) {
+            keys.push_back(descriptor.key);
+        } else if (fromSide != toSide) {
+            lost.set(index);
+        }
+    }
+
+    AppliedLook result;
+    result.state = withValues(photo, std::move(state), keys, look.settings, entropy);
+    for (std::size_t i = 0; i < sectionCount; ++i) {
+        if (lost.test(i)) {
+            result.skipped.push_back(static_cast<CopySection>(i));
+        }
+    }
+    return result;
 }
 
 } // namespace arraw
