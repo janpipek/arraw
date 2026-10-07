@@ -7,6 +7,7 @@
 #include <DevelopSettings.h>
 #include <Diagnostics.h>
 #include <GeometrySettings.h>
+#include <ImageImport.h>
 #include <SettingDescriptors.h>
 
 #include <QtCore/qcontainerfwd.h>
@@ -103,11 +104,29 @@ struct ExportEdits {
 /// @param edits What the flags said.
 /// @param log Where the codec's warnings go; a value the flags gave is already in range.
 /// @param subject Photograph the settings are for.
+/// For tests: stands in a metadata of only the encoding @p raw implies, and draws a seed for
+/// grain the edits turn on from `std::random_device`. Goes when the geometry rules need the
+/// photograph's real size.
 /// @param raw Whether the photograph is a RAW, which decides the settings a render does not read.
 /// @return @p base with the edits applied.
 [[nodiscard]] DevelopSettings applyEdits(DevelopSettings base, const ExportEdits& edits,
                                          DiagnosticLog& log, const std::filesystem::path& subject,
                                          bool raw = true);
+
+/// @brief Puts the flags' edits on top of a photograph's own settings, by the rules of
+/// ::arraw::withValues.
+///
+/// Settings a render does not read are dropped first; the white balance and grain seed rules
+/// come from core, so the command line, the GUI and Python agree.
+/// @param base Settings the photograph came with.
+/// @param edits What the flags said.
+/// @param log Where the codec's warnings go.
+/// @param subject Photograph the settings are for.
+/// @param photo What the photograph declares about itself.
+/// @return @p base with the edits applied.
+[[nodiscard]] DevelopSettings applyEdits(DevelopSettings base, const ExportEdits& edits,
+                                         DiagnosticLog& log, const std::filesystem::path& subject,
+                                         const ImageMetadata& photo);
 
 /// @brief Renders images and writes them out.
 ///

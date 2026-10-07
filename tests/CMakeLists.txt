@@ -28,6 +28,7 @@ add_executable(arraw-tests
         test_DevelopState.cpp
         test_DisplayImage.cpp
         test_EditSession.cpp
+        test_Edits.cpp
         test_EmbeddedPreview.cpp
         test_ExifInfo.cpp
         test_ExportMetadata.cpp

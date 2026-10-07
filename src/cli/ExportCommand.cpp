@@ -17,6 +17,7 @@
 #include <DevelopSettings.h>
 #include <DevelopState.h>
 #include <Diagnostics.h>
+#include <Edits.h>
 #include <EffectsSettings.h>
 #include <ImageExport.h>
 #include <ImageImport.h>
@@ -143,14 +144,6 @@ const FieldDescriptor& descriptorFor(std::string_view key) {
 void addEdit(std::vector<SettingEdit>& edits, std::string_view key, const DevelopSettings& source) {
     const FieldDescriptor& descriptor = descriptorFor(key);
     edits.push_back({&descriptor, encode(descriptor, source)});
-}
-
-/// @brief Tells whether the flags gave a setting a value.
-/// @param edits What the flags said.
-/// @param key Key of the setting.
-bool namesSetting(const cli::ExportEdits& edits, std::string_view key) {
-    return std::ranges::any_of(
-        edits.settings, [key](const SettingEdit& edit) { return edit.descriptor->key == key; });
 }
 
 /// @brief Puts the geometry flags on top of a photograph's own geometry.
@@ -1204,16 +1197,12 @@ int exportAll(const ExportRequest& request, std::ostream& err) {
                                          "export without it");
             }
             DevelopState edited = opened.state();
-            edited.settings =
-                cli::applyEdits(std::move(edited.settings), request.edits, log, input,
-                                !std::holds_alternative<NamedEncoding>(opened.metadata().encoding));
-            // Grain the flags turn on gets a seed of its own, unless they name
-            // one; grain the photograph already has keeps its seed, zero
-            // included, so its exports repeat (ADR 038).
-            if (!namesSetting(request.edits, "grainSeed")) {
-                edited.settings.effects.grain.seed = chooseGrainSeed(
-                    opened.state().settings.effects.grain, edited.settings.effects.grain);
-            }
+            // The edits' rules, grain seed included, are core's (Edits.h): grain the
+            // flags turn on gets a seed of its own unless they name one, and grain the
+            // photograph already has keeps its seed, zero included, so its exports
+            // repeat (ADR 038).
+            edited.settings = cli::applyEdits(std::move(edited.settings), request.edits, log, input,
+                                              opened.metadata());
             const Photo photo = opened.with(std::move(edited));
             // Decoded once, before the device is involved: a file that cannot be
             // read is the input's failure, whichever device would have developed it.
@@ -1351,16 +1340,33 @@ cli::parseResize(std::string_view spec) {
 
 DevelopSettings cli::applyEdits(DevelopSettings base, const ExportEdits& edits, DiagnosticLog& log,
                                 const std::filesystem::path& subject, bool raw) {
+    // A stand-in for a photograph the caller only knows the kind of; no rule reads
+    // anything else of it yet.
+    ImageMetadata photo;
+    photo.encoding = raw ? ColorEncoding{CameraNative{}} : ColorEncoding{workingEncoding};
+    return applyEdits(std::move(base), edits, log, subject, photo);
+}
+
+DevelopSettings cli::applyEdits(DevelopSettings base, const ExportEdits& edits, DiagnosticLog& log,
+                                const std::filesystem::path& subject, const ImageMetadata& photo) {
     // Whatever a sidecar left in the settings a render does not read is dropped
     // first: naming one half of temperature and tint then leaves the other as
     // shot, as it always did, rather than adopting a value the photograph was
     // not using. This happens with no flags too, which changes nothing a render reads.
-    base = withoutUnusedSettings(std::move(base), raw);
+    base = withoutUnusedSettings(std::move(base),
+                                 !std::holds_alternative<NamedEncoding>(photo.encoding));
+    // The flags are decoded into a source, and the rules of core (white balance
+    // mode, grain seed) apply them to the photograph's own settings.
+    DevelopSettings source = base;
+    std::vector<std::string_view> keys;
     for (const SettingEdit& edit : edits.settings) {
-        decode(*edit.descriptor, edit.value, base, log, subject);
+        decode(*edit.descriptor, edit.value, source, log, subject);
+        keys.push_back(edit.descriptor->key);
     }
-    base.geometry = withGeometryEdits(base.geometry, edits.geometry, log, subject);
-    return base;
+    DevelopSettings result =
+        withValues(photo, DevelopState{std::move(base)}, keys, source).settings;
+    result.geometry = withGeometryEdits(result.geometry, edits.geometry, log, subject);
+    return result;
 }
 
 int cli::runExportCommand(const QStringList& arguments, std::ostream& out, std::ostream& err,

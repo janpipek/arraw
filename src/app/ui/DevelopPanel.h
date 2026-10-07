@@ -5,6 +5,7 @@
 #include <CurveHistogram.h>
 #include <DevelopState.h>
 #include <GeometrySettings.h>
+#include <ImageImport.h>
 #include <WhiteBalance.h>
 
 #include <QWidget>
@@ -33,6 +34,9 @@ struct PanelContext {
 
     /// @brief What a reset restores: the photograph's defaults (::arraw::defaultStateFor).
     DevelopSettings defaults{};
+
+    /// @brief What the photograph declares about itself, for the edit rules of ::arraw::withValue.
+    ImageMetadata photo{};
 };
 
 /// @brief Panel of the develop controls, showing a state and reporting edits to it.
@@ -234,6 +238,9 @@ private:
 
     /// Last state shown, kept only to build the next one.
     DevelopState shown_;
+
+    /// @brief Photograph the shown state belongs to, for the edit rules.
+    ImageMetadata photo_{};
 
     std::vector<SettingSlider*> rows_;
 

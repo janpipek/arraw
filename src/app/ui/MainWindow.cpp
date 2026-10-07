@@ -21,6 +21,7 @@
 
 #include <ColorEncoding.h>
 #include <Develop.h>
+#include <Edits.h>
 #include <ImageBuffer.h>
 #include <ImageImport.h>
 #include <Photo.h>
@@ -734,7 +735,10 @@ void MainWindow::pickNeutralAt(const QPointF& point) {
         const DevelopState& current = open_->session.photo().state();
         const ColourTemperature light = neutralTemperatureAt(*open_->decoded, current, x, y);
         DevelopState next = current;
-        next.settings.color = {WhiteBalanceMode::Custom, light.kelvin, light.tint};
+        DevelopSettings source;
+        source.color = {WhiteBalanceMode::Custom, light.kelvin, light.tint};
+        constexpr std::array<std::string_view, 3> keys{"whiteBalance", "temperature", "tint"};
+        next = withValues(open_->session.photo().metadata(), std::move(next), keys, source);
         open_->session.begin();
         open_->session.update(next);
         open_->session.commit();
@@ -775,7 +779,8 @@ void MainWindow::refreshPanel(std::chrono::milliseconds renderDelay) {
     const detail::TimingSpan timing("window.panel");
     const Photo& photo = open_->session.photo();
     const bool raw = !std::holds_alternative<NamedEncoding>(photo.metadata().encoding);
-    PanelContext context{raw, std::nullopt, defaultStateFor(photo.metadata().encoding).settings};
+    PanelContext context{raw, std::nullopt, defaultStateFor(photo.metadata().encoding).settings,
+                         photo.metadata()};
     if (const auto* camera = std::get_if<CameraNative>(&photo.metadata().encoding)) {
         try {
             // The light the pixels went through, which is also what development

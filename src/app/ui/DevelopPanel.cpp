@@ -6,7 +6,7 @@
 #include "SettingSlider.h"
 #include "WhiteBalanceChoice.h"
 
-#include <EffectsSettings.h>
+#include <Edits.h>
 #include <SettingDescriptors.h>
 
 #include <QButtonGroup>
@@ -29,6 +29,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <string_view>
 #include <type_traits>
 #include <variant>
 
@@ -578,6 +579,7 @@ DevelopPanel::DevelopPanel(QWidget* parent) : QWidget(parent) {
 
 void DevelopPanel::showState(const DevelopState& state, const PanelContext& context) {
     shown_ = state;
+    photo_ = context.photo;
     const ColorSettings& color = shown_.settings.color;
 
     {
@@ -717,39 +719,24 @@ void DevelopPanel::watchViewport() {
 }
 
 void DevelopPanel::applyEdit(const SettingSlider& row, double value) {
-    DevelopState next = shown_;
-    if (row.key() == "temperature") {
-        next.settings.color = withTemperature(next.settings.color, static_cast<float>(value));
-    } else if (row.key() == "tint") {
-        next.settings.color = withTint(next.settings.color, static_cast<float>(value));
-    } else if (row.key() == "straighten") {
+    if (row.key() == "straighten") {
         // The row shows the angle as on screen; the setting is stored before the flips.
         const bool mirrored =
-            next.settings.geometry.flipHorizontal != next.settings.geometry.flipVertical;
-        next.settings.geometry.straighten = mirrored ? -value : value;
-    } else {
-        visitField(*findDescriptor(row.key()), next.settings, [value](auto& field) {
-            using Field = std::remove_cvref_t<decltype(field)>;
-            if constexpr (std::is_same_v<Field, float> || std::is_same_v<Field, double>) {
-                field = static_cast<Field>(value);
-            }
-        });
+            shown_.settings.geometry.flipHorizontal != shown_.settings.geometry.flipVertical;
+        value = mirrored ? -value : value;
     }
-    // Grain this edit turns on gets its photograph's own seed (ADR 038); every
-    // other edit, and turning it off, keeps the one it has, zero included.
-    next.settings.effects.grain.seed =
-        chooseGrainSeed(shown_.settings.effects.grain, next.settings.effects.grain);
-    emit stateEdited(next);
+    // The rules of the key (white balance mode, a new grain seed) are core's. withValue throws
+    // on a value out of range, which cannot reach a slot: SettingSlider clamps both the slider
+    // and the spin box to the descriptor's range.
+    emit stateEdited(withValue(photo_, shown_, row.key(), value));
 }
 
 void DevelopPanel::applyClear(const SettingSlider& row) {
-    DevelopState next = shown_;
-    if (row.key() == "temperature") {
-        next.settings.color = withTemperature(next.settings.color, std::nullopt);
-    } else if (row.key() == "tint") {
-        next.settings.color = withTint(next.settings.color, std::nullopt);
+    if (row.key() == "temperature" || row.key() == "tint") {
+        emit stateEdited(withValue(photo_, shown_, row.key(), std::nullopt));
+        return;
     }
-    emit stateEdited(next);
+    emit stateEdited(shown_);
 }
 
 void DevelopPanel::applyTreatment(bool grayscale) {
@@ -767,7 +754,15 @@ void DevelopPanel::applyTreatment(bool grayscale) {
 void DevelopPanel::applyChoice(int index) {
     const auto choice = static_cast<WhiteBalanceChoice>(presetCombo_->itemData(index).toInt());
     DevelopState next = shown_;
-    next.settings.color = withChoice(next.settings.color, choice);
+    if (choice != WhiteBalanceChoice::Custom) {
+        // Only the three white balance values change; the rest of the colour settings stay.
+        DevelopSettings source;
+        if (const auto light = lightOf(choice)) {
+            source.color = {WhiteBalanceMode::Custom, light->kelvin, light->tint};
+        }
+        constexpr std::array<std::string_view, 3> keys{"whiteBalance", "temperature", "tint"};
+        next = withValues(photo_, next, keys, source);
+    }
     if (next.settings.color == shown_.settings.color) {
         // The Custom entry, or the light already set: nothing to edit, and the
         // combo goes back to describing the settings.

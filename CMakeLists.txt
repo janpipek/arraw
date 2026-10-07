@@ -211,6 +211,8 @@ add_library(arraw STATIC
         src/core/Photo.cpp
         include/SettingDescriptors.h
         src/core/SettingDescriptors.cpp
+        include/Edits.h
+        src/core/Edits.cpp
         src/core/SettingCodec.h
         include/ShortestDecimal.h
         src/core/SettingCodec.cpp
