@@ -123,8 +123,7 @@ private:
 
 PhotoLoader::Decoder PhotoLoader::imageDecoder(DiagnosticModel* diagnostics) {
     return [diagnostics](const std::filesystem::path& path, ProgressChannel& channel) {
-        DebugDiagnostics log = diagnostics != nullptr ? DebugDiagnostics(*diagnostics)
-                                                      : DebugDiagnostics();
+        DebugDiagnostics log(diagnostics);
         return loadImage(path, log, {}, &channel);
     };
 }

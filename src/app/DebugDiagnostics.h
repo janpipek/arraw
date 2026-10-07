@@ -19,6 +19,10 @@ public:
     /// @brief Makes a log that only echoes diagnostics to Qt's debug output.
     DebugDiagnostics() = default;
 
+    /// @brief Makes a log that optionally keeps what it is given in a table.
+    /// @param model Table to keep diagnostics in, or null; must outlive the log.
+    explicit DebugDiagnostics(DiagnosticModel* model) : model_(model) {}
+
     /// @brief Makes a log that keeps what it is given in a table.
     /// @param model Table to keep diagnostics in; must outlive the log.
     explicit DebugDiagnostics(DiagnosticModel& model) : model_(&model) {}
