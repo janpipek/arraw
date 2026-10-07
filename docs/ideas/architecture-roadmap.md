@@ -45,6 +45,8 @@ Reviewed in `docs/reviews/claude-opus-5-5_2026-10-07_small-fixes.md`.
 
 ### (a) Presets, copy/paste, session history
 
+Detailed plan: `looks-and-history-plan.md` (accepted 2026-10-07).
+
 Restructuring first:
 - **Library-owned edit operations,** a public `Edits.h` of pure state-to-state
   functions:
@@ -73,8 +75,8 @@ Then the features:
 - **Room for Snapshots:**
   - history steps stay whole develop states, so a snapshot is a named whole
     state;
-  - returning to a step, or later restoring a snapshot, is one undoable change
-    of the whole state;
+  - a history click navigates, as in `main` and Lightroom; restoring a
+    snapshot later is one undoable change of the whole state;
   - the dock leaves room for a Snapshots list beneath History;
   - persisting snapshots waits for the structured sidecar format of step (c).
 

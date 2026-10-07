@@ -19,9 +19,9 @@ weights were remeasured, and the develop dock keeps every slider at least
 
 The order and the decisions are in `docs/ideas/architecture-roadmap.md`;
 loose ideas are in `docs/ideas/parked-ideas.md`. Step 0 (the review's small
-fixes and the Windows CPU default) is done; next is step (a): a detailed plan
-for library-owned edit operations, presets, copy/paste and the session history
-view, for the user to approve before code.
+fixes and the Windows CPU default) is done. Step (a) is planned in
+`docs/ideas/looks-and-history-plan.md` (accepted 2026-10-07); next is its step
+1, the geometry rules into core.
 
 - **Demosaic and lens corrections as an import group (user, 2026-10-07).**
   - **Today:** neither exists on this branch. `DecodeOptions` has only
