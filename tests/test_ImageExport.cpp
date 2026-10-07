@@ -533,7 +533,7 @@ std::vector<std::uint8_t> contents(const std::filesystem::path& path) {
 
 } // namespace
 
-TEST_CASE("An export is the same file on any number of threads", "[ImageExport][threads]") {
+TEST_CASE("An export is the same file on any number of threads", "[ImageExport][threads][slow]") {
     const auto format = GENERATE(PixelFormat::RgbU8, PixelFormat::RgbaU8, PixelFormat::RgbaU16,
                                  PixelFormat::RgbaF32);
     const auto encoding = format == PixelFormat::RgbaF32 ? workingEncoding : NamedEncoding::Srgb;

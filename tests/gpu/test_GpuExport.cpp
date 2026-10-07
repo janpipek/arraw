@@ -139,7 +139,7 @@ int occurrences(const std::string& text, const std::string& what) {
 
 } // namespace
 
-TEST_CASE("Export on the GPU stays within rounding of the CPU", "[gpu][cli][export]") {
+TEST_CASE("Export on the GPU stays within rounding of the CPU", "[gpu][cli][export][slow]") {
     (void)test::gpuContext(); // skips the case when there is no device at all
 
     struct Case {
@@ -196,6 +196,10 @@ TEST_CASE("A photograph too wide for the device falls back alone, in auto mode",
     }
     const test::TempDir directory;
     const auto good = test::fixture("testcard-61x41-srgb8.png");
+    // A second photograph after the one that falls back: a copy under another
+    // name, as the same file named twice is exported only once.
+    const auto again = directory.file("again.png");
+    std::filesystem::copy_file(good, again);
     const auto wide = directory.file("wide.png");
     QImage image(limit + 1, 2, QImage::Format_RGBA8888);
     image.fill(QColor(200, 100, 50));
@@ -207,7 +211,7 @@ TEST_CASE("A photograph too wide for the device falls back alone, in auto mode",
         if (test::gpuTestBackend() == GpuBackend::OpenGL) {
             SKIP("--gpu-backend opengl makes auto gpu (ADR 017); the gpu section covers it");
         }
-        const Exported result = exportBatch("auto", {good, wide, good}, out);
+        const Exported result = exportBatch("auto", {good, wide, again}, out);
         INFO(result.err);
         REQUIRE(result.code == cli::Success);
         REQUIRE(std::filesystem::exists(out / "wide.png"));
@@ -225,7 +229,7 @@ TEST_CASE("A photograph too wide for the device falls back alone, in auto mode",
         if (test::gpuTestBackend() == GpuBackend::OpenGL) {
             SKIP("--gpu-backend opengl makes auto gpu (ADR 017); the gpu section covers it");
         }
-        const Exported result = exportBatch("auto", {good, wide, good}, out, {"--resize", "30"});
+        const Exported result = exportBatch("auto", {good, wide, again}, out, {"--resize", "30"});
         INFO(result.err);
         REQUIRE(result.code == cli::Success);
         REQUIRE(occurrences(result.err, "\"notice\":\"gpu_fallback\"") == 1);
@@ -236,7 +240,7 @@ TEST_CASE("A photograph too wide for the device falls back alone, in auto mode",
         REQUIRE(onDevice.size() == QSize(30, 20));
     }
     SECTION("gpu fails that input and exports the rest") {
-        const Exported result = exportBatch("gpu", {good, wide, good}, out);
+        const Exported result = exportBatch("gpu", {good, wide, again}, out);
         INFO(result.err);
         REQUIRE(result.code == cli::Failed);
         REQUIRE(occurrences(result.err, "\"notice\":\"input_failed\"") == 1);

@@ -56,7 +56,8 @@ enum class PointwiseProbe : std::uint32_t {
 /// @brief The pointwise chain's uniform block, byte for byte as std140 lays it out.
 ///
 /// The shader data contract of `src/gpu/shaders/develop.frag`, whose
-/// `Pointwise` block declares the same members in the same order. Filled from a
+/// `Pointwise` block declares the same members in the same order
+/// (`tests/gpu/test_GpuShaderLayout.cpp` compares the two). Filled from a
 /// ::arraw::ProcessingPlan by ::arraw::packPointwise, never copied from one: the
 /// plan holds `bool`, `std::optional` and padding, none of which has a portable
 /// shader layout (GPU implementation plan, "Shader data contract").
@@ -341,9 +342,9 @@ inline constexpr std::size_t resizePlaneCount = 3;
 
 /// @brief The resize passes' uniform block, byte for byte as std140 lays it out.
 ///
-/// The shader data contract of `src/gpu/shaders/resize_across.frag` and
-/// `resize_down.frag`, whose `Resize` blocks declare the same members in the
-/// same order.
+/// The shader data contract of the four resize passes, whose `Resize` block,
+/// in `src/gpu/shaders/common/resize.glsl`, declares the same members in the
+/// same order (`tests/gpu/test_GpuShaderLayout.cpp` compares the two).
 struct GpuResizeBlock {
     /// @brief Plane the horizontal pass writes, as a ::arraw::ResizePlane; unused by the vertical
     /// one.
@@ -469,7 +470,8 @@ enum class DenoiseStep : std::uint32_t {
 /// @brief The Denoise passes' uniform block, byte for byte as std140 lays it out.
 ///
 /// The shader data contract of `src/gpu/shaders/denoise_filter.frag` and
-/// `denoise_combine.frag`, whose `Denoise` blocks declare the same members in
+/// `denoise_combine.frag`, whose `Denoise` block, in
+/// `src/gpu/shaders/common/denoise_block.glsl`, declares the same members in
 /// the same order. One block for every step: each reads what it needs. The
 /// spatial weights are worked out on the host by ::arraw::denoiseWeights, the
 /// same numbers the CPU uses, so that neither backend's `exp` decides them;

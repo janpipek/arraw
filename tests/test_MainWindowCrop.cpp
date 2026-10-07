@@ -70,13 +70,13 @@ struct Window {
         return *found;
     }
 
-    [[nodiscard]] QAction& action(const QString& text) const {
+    [[nodiscard]] QAction& action(const QString& name) const {
         for (QAction* candidate : window.findChildren<QAction*>()) {
-            if (candidate->text() == text) {
+            if (candidate->objectName() == name) {
                 return *candidate;
             }
         }
-        FAIL("no action " << text.toStdString());
+        FAIL("no action " << name.toStdString());
         throw;
     }
 
@@ -114,7 +114,7 @@ TEST_CASE("In the crop mode the keys stay with the mode wherever the focus went"
     w.press(Qt::Key_X);
     CHECK(w.landscapeCrop() == landscape);
     CHECK(w.strip().activeMarks().rating == rating);
-    CHECK_FALSE(w.action("Re&ject").isEnabled());
+    CHECK_FALSE(w.action("rejectAction").isEnabled());
 
     // With the focus elsewhere in the window, the window's own crop keys answer.
     w.strip().setFocus();
@@ -125,7 +125,7 @@ TEST_CASE("In the crop mode the keys stay with the mode wherever the focus went"
     CHECK_FALSE(w.view().isCropMode());
     // Esc dropped the session: nothing to save.
     CHECK_FALSE(w.window.isWindowModified());
-    CHECK(w.action("Re&ject").isEnabled());
+    CHECK(w.action("rejectAction").isEnabled());
 }
 
 TEST_CASE("Enter after typing an angle ends the typing; the next Enter keeps the crop",
@@ -156,8 +156,8 @@ TEST_CASE("Enter after typing an angle ends the typing; the next Enter keeps the
 TEST_CASE("Undo in the crop mode steps through its gestures; leaving keeps one step",
           "[app][window][crop][history]") {
     Window w;
-    QAction& undo = w.action("&Undo");
-    QAction& redo = w.action("&Redo");
+    QAction& undo = w.action("undoAction");
+    QAction& redo = w.action("redoAction");
     w.press(Qt::Key_R);
     REQUIRE(w.view().isCropMode());
     CHECK_FALSE(undo.isEnabled());

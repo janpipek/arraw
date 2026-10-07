@@ -465,6 +465,122 @@ TEST_CASE("An existing output is refused unless overwriting is asked for", "[cli
     REQUIRE(std::filesystem::file_size(destination) != original);
 }
 
+TEST_CASE("An export never replaces its own input, even when overwriting", "[cli]") {
+    const test::TempDir directory;
+    const auto input = directory.file("testcard-61x41-srgb8.jpg");
+    std::filesystem::copy_file(test::fixture(card), input);
+    const auto bytes = [&] {
+        std::ifstream stream(input, std::ios::binary);
+        return std::string(std::istreambuf_iterator<char>(stream), {});
+    };
+    const std::string before = bytes();
+
+    const auto result = invoke({"export", input.string(), "-o", directory.path().string(),
+                                "--overwrite", "--exposure", "1"});
+    REQUIRE(result.code == cli::Failed);
+    REQUIRE_THAT(result.err, ContainsSubstring("is the input itself"));
+    REQUIRE(bytes() == before);
+}
+
+namespace {
+
+/// @brief Reads a file's bytes, to tell that it was not touched.
+std::string bytesOf(const std::filesystem::path& path) {
+    std::ifstream stream(path, std::ios::binary);
+    return std::string(std::istreambuf_iterator<char>(stream), {});
+}
+
+} // namespace
+
+TEST_CASE("Two inputs of one name do not overwrite each other's export", "[cli]") {
+    const test::TempDir directory;
+    const test::TempDir output;
+    // Different pictures under one name, so an overwrite would change the bytes.
+    const auto first = directory.path() / "a" / "card.png";
+    const auto second = directory.path() / "b" / "card.png";
+    std::filesystem::create_directories(first.parent_path());
+    std::filesystem::create_directories(second.parent_path());
+    std::filesystem::copy_file(test::fixture("testcard-61x41-srgb8.png"), first);
+    std::filesystem::copy_file(test::fixture("testcard-61x41-grey8.png"), second);
+    const auto exported = output.file("card.png");
+
+    for (const bool overwrite : {false, true}) {
+        std::filesystem::remove(exported);
+        std::vector<std::string> command{"export",   first.string(), "-o", output.path().string(),
+                                         "--format", "png"};
+        if (overwrite) {
+            command.emplace_back("--overwrite");
+        }
+        REQUIRE(invoke(command).code == cli::Success);
+        const std::string alone = bytesOf(exported);
+        std::filesystem::remove(exported);
+
+        command.insert(command.begin() + 2, second.string());
+        const auto result = invoke(command);
+        REQUIRE(result.code == cli::Failed);
+        REQUIRE_THAT(result.err, ContainsSubstring("would overwrite the export of"));
+        REQUIRE_THAT(result.err, ContainsSubstring(first.string()));
+        // The first input's export, untouched by the second.
+        REQUIRE(bytesOf(exported) == alone);
+    }
+}
+
+TEST_CASE("An export never replaces another file the batch reads", "[cli]") {
+    SECTION("a RAW's camera JPEG, its companion") {
+        const test::TempDir shoot;
+        std::filesystem::copy_file(test::fixture("preview-32x24.dng"), shoot.file("shot.dng"));
+        std::filesystem::copy_file(test::fixture(card), shoot.file("shot.jpg"));
+        const std::string before = bytesOf(shoot.file("shot.jpg"));
+
+        const auto result = invoke({"export", shoot.path().string(), "-o", shoot.path().string(),
+                                    "--format", "jpeg", "--overwrite"});
+        REQUIRE(result.code == cli::Failed);
+        REQUIRE_THAT(result.err, ContainsSubstring("which this export reads"));
+        REQUIRE(bytesOf(shoot.file("shot.jpg")) == before);
+    }
+    SECTION("another input of the folder, in another format") {
+        const test::TempDir folder;
+        std::filesystem::copy_file(test::fixture(card), folder.file("card.jpg"));
+        std::filesystem::copy_file(test::fixture("testcard-61x41-srgb8.png"),
+                                   folder.file("card.png"));
+        const std::string before = bytesOf(folder.file("card.jpg"));
+
+        const auto result = invoke({"export", folder.path().string(), "-o", folder.path().string(),
+                                    "--format", "jpeg", "--overwrite"});
+        REQUIRE(result.code == cli::Failed);
+        REQUIRE(bytesOf(folder.file("card.jpg")) == before);
+    }
+    SECTION("an input given later on the command line") {
+        const test::TempDir x;
+        const test::TempDir y;
+        std::filesystem::copy_file(test::fixture("testcard-61x41-srgb8.png"), x.file("card.png"));
+        std::filesystem::copy_file(test::fixture("testcard-61x41-grey8.png"), y.file("card.png"));
+        const std::string before = bytesOf(y.file("card.png"));
+
+        const auto result =
+            invoke({"export", x.file("card.png").string(), y.file("card.png").string(), "-o",
+                    y.path().string(), "--format", "png", "--overwrite"});
+        REQUIRE(result.code == cli::Failed);
+        REQUIRE(bytesOf(y.file("card.png")) == before);
+    }
+}
+
+TEST_CASE("A file named twice is exported once", "[cli]") {
+    const test::TempDir directory;
+    const test::TempDir output;
+    const auto input = directory.file("card.png");
+    std::filesystem::copy_file(test::fixture("testcard-61x41-srgb8.png"), input);
+
+    const auto result = invoke({"export", input.string(), input.string(), directory.path().string(),
+                                "-o", output.path().string()});
+    INFO(result.err);
+    REQUIRE(result.code == cli::Success);
+    const auto entries = std::distance(std::filesystem::directory_iterator(output.path()),
+                                       std::filesystem::directory_iterator());
+    REQUIRE(entries == 1);
+    REQUIRE(std::filesystem::exists(output.file("card.jpg")));
+}
+
 TEST_CASE("The sharpen flag is documented and sharpens the export", "[cli]") {
     REQUIRE_THAT(invoke({"export", "--help"}).out, ContainsSubstring("--sharpen"));
 
@@ -2558,12 +2674,6 @@ TEST_CASE("Info has its own help, usage errors, and writes nothing", "[cli][info
 }
 
 namespace {
-
-/// @brief Reads a file's bytes.
-std::string bytesOf(const std::filesystem::path& path) {
-    std::ifstream in(path, std::ios::binary);
-    return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
-}
 
 /// @brief Lists the names in a directory, sorted.
 std::vector<std::string> namesIn(const std::filesystem::path& directory) {

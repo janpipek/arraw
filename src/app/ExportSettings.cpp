@@ -7,7 +7,6 @@
 #include <array>
 #include <cctype>
 #include <string>
-#include <system_error>
 
 namespace arraw::app {
 
@@ -87,23 +86,9 @@ std::filesystem::path withSuffix(const std::filesystem::path& path, ImageFileFor
 }
 
 std::filesystem::path suggestedPath(const std::filesystem::path& source, ImageFileFormat format) {
-    return source.parent_path() / (source.stem().string() + "." + std::string(suffixOf(format)));
-}
-
-bool isSameFile(const std::filesystem::path& a, const std::filesystem::path& b) {
-    std::error_code error;
-    if (std::filesystem::exists(a, error) && std::filesystem::exists(b, error)) {
-        const bool same = std::filesystem::equivalent(a, b, error);
-        if (!error) {
-            return same;
-        }
-    }
-    const auto normal = [](const std::filesystem::path& path) {
-        std::error_code ignored;
-        const auto absolute = std::filesystem::absolute(path, ignored);
-        return (ignored ? path : absolute).lexically_normal();
-    };
-    return normal(a) == normal(b);
+    std::filesystem::path name = source.stem();
+    name += "." + std::string(suffixOf(format));
+    return source.parent_path() / name;
 }
 
 void saveSettings(const ExportSettings& settings, QSettings& store) {

@@ -70,9 +70,9 @@ private:
     qint64 longest_ = 0;
 };
 
-QAction* findAction(const MainWindow& window, const QString& text) {
+QAction* findAction(const MainWindow& window, const QString& name) {
     for (QAction* candidate : window.findChildren<QAction*>()) {
-        if (candidate->text() == text) {
+        if (candidate->objectName() == name) {
             return candidate;
         }
     }
@@ -158,17 +158,17 @@ TEST_CASE("Opening a photograph returns before it is decoded, and edits wait for
     CHECK(w.panelExposure() == 0.5);
     CHECK(w.view().wholeFrameImage().isNull());
     CHECK_FALSE(w.developDock().isEnabled());
-    CHECK_FALSE(findAction(w.window, "&Crop && Straighten")->isEnabled());
-    CHECK_FALSE(findAction(w.window, "&Export…")->isEnabled());
-    CHECK_FALSE(findAction(w.window, "Rotate &Right")->isEnabled());
+    CHECK_FALSE(findAction(w.window, "cropAction")->isEnabled());
+    CHECK_FALSE(findAction(w.window, "exportAction")->isEnabled());
+    CHECK_FALSE(findAction(w.window, "rotateRightAction")->isEnabled());
     // A crop asked for now is not entered: there is nothing to crop yet.
-    findAction(w.window, "&Crop && Straighten")->trigger();
+    findAction(w.window, "cropAction")->trigger();
     CHECK_FALSE(w.view().isCropMode());
 
     REQUIRE(w.waitForRender());
     CHECK(w.developDock().isEnabled());
-    CHECK(findAction(w.window, "&Crop && Straighten")->isEnabled());
-    CHECK(findAction(w.window, "&Export…")->isEnabled());
+    CHECK(findAction(w.window, "cropAction")->isEnabled());
+    CHECK(findAction(w.window, "exportAction")->isEnabled());
     CHECK(w.panelExposure() == 0.5);
 }
 
@@ -206,14 +206,14 @@ TEST_CASE("Entering the crop mode reads the camera preview off the GUI thread",
     w.window.openInitialPath(w.shot("a.dng"));
     REQUIRE(w.waitForRender());
     auto& overlay = *w.window.findChild<CropOverlay*>();
-    findAction(w.window, "&Crop && Straighten")->trigger();
+    findAction(w.window, "cropAction")->trigger();
     REQUIRE(w.view().isCropMode());
     // No event has been processed: the developed frame stands in, the preview is not read yet.
     CHECK(overlay.showsPhotograph());
     CHECK(overlay.image().isNull());
     // The preview, or the render that follows it, then fills the whole photograph.
     REQUIRE(QTest::qWaitFor([&] { return !overlay.image().isNull(); }, 20000));
-    findAction(w.window, "&Crop && Straighten")->trigger();
+    findAction(w.window, "cropAction")->trigger();
     CHECK_FALSE(w.view().isCropMode());
 }
 
@@ -279,16 +279,16 @@ TEST_CASE("The window's interactions stall the GUI thread no longer than measure
                   << " ms, " << preview.width() << "x" << preview.height() << "\n";
     }
     measure(
-        "enter crop", [&] { findAction(window, "&Crop && Straighten")->trigger(); },
+        "enter crop", [&] { findAction(window, "cropAction")->trigger(); },
         [&] { return view.isCropMode(); });
     QTest::qWait(1000);
     measure(
-        "leave crop", [&] { findAction(window, "&Crop && Straighten")->trigger(); },
+        "leave crop", [&] { findAction(window, "cropAction")->trigger(); },
         [&] { return !view.isCropMode(); });
     QTest::qWait(500);
-    measure("rotate", [&] { findAction(window, "Rotate &Right")->trigger(); }, [] { return true; });
-    QTest::qWait(1000);
     measure(
-        "save", [&] { findAction(window, "&Save Adjustments")->trigger(); }, [] { return true; });
+        "rotate", [&] { findAction(window, "rotateRightAction")->trigger(); }, [] { return true; });
+    QTest::qWait(1000);
+    measure("save", [&] { findAction(window, "saveAction")->trigger(); }, [] { return true; });
     QTest::qWait(500);
 }

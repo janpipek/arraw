@@ -174,7 +174,7 @@ TEST_CASE("A reduced level is denoised with radii divided by its scale",
 }
 
 TEST_CASE("A viewport as large as the source is developed from the source itself",
-          "[app][preview][pyramid]") {
+          "[app][preview][pyramid][slow]") {
     Collector collector;
     app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
     renderer.setSource(makeLargeSource());
@@ -409,7 +409,8 @@ DevelopState stateWith(float exposure, double straighten, float vignette = 0.0F,
 
 } // namespace
 
-TEST_CASE("An edit resumes from the newest checkpoint it can still use", "[app][preview][resume]") {
+TEST_CASE("An edit resumes from the newest checkpoint it can still use",
+          "[app][preview][resume][slow]") {
     Collector collector;
     app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
     renderer.setSource(makeSource());
@@ -569,7 +570,7 @@ TEST_CASE("A region outside the frame is reported as a failure", "[app][preview]
     REQUIRE_FALSE(result.image.has_value());
 }
 
-TEST_CASE("A region carries the last whole frame beneath it", "[app][preview][region]") {
+TEST_CASE("A region carries the last whole frame beneath it", "[app][preview][region][slow]") {
     Collector collector;
     app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
     renderer.setSource(makeLargeSource());
@@ -595,7 +596,7 @@ TEST_CASE("A region carries the last whole frame beneath it", "[app][preview][re
 }
 
 TEST_CASE("An edit shows the earlier fallback until a refreshed one follows",
-          "[app][preview][region]") {
+          "[app][preview][region][slow]") {
     Collector collector;
     app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
     renderer.setSource(makeLargeSource());
@@ -673,7 +674,7 @@ TEST_CASE("The curve histogram is counted once requests pause", "[app][preview][
 }
 
 TEST_CASE("A curve edit keeps the histogram, an exposure edit recounts it",
-          "[app][preview][histogram]") {
+          "[app][preview][histogram][slow]") {
     Collector collector;
     app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
     renderer.setCurveHistogramWanted(true);
@@ -899,7 +900,8 @@ TEST_CASE("A burst of slow requests ends with the newest shown", "[app][preview]
     REQUIRE(reports.back().fraction == 1.0);
 }
 
-TEST_CASE("Progress is handed on at about thirty reports a second", "[app][preview][progress]") {
+TEST_CASE("Progress is handed on at about thirty reports a second",
+          "[app][preview][progress][slow]") {
     Collector collector;
     ProgressCollector progress;
     app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu,

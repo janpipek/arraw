@@ -1,4 +1,5 @@
 #version 440
+#extension GL_GOOGLE_include_directive : require
 
 // The Effects pass: Effects.cpp's effectsPixel, effect for effect.
 //
@@ -41,31 +42,8 @@ layout(std140, binding = 1) uniform Effects {
     GrainLayer grainLayers[4];
 } plan;
 
-// 1 / 2.2f and 2.2f as C++ rounds them to float; see develop.frag.
-const float perceptualExponent = 0.454545438;
-const float linearExponent = 2.20000005;
-
-// std::pow for the arguments given it; see develop.frag.
-float pow0(float x, float y) {
-    if (x > 0.0) {
-        return pow(x, y);
-    }
-    if (x == 0.0) {
-        return 0.0;
-    }
-    return uintBitsToFloat(0x7fc00000u);
-}
-
-// std::clamp, leaving a NaN alone; see develop.frag.
-float clampExact(float value, float low, float high) {
-    return value < low ? low : (high < value ? high : value);
-}
-
-// smoothstep, ProcessingPlan.h; not the built-in.
-float smoothStep(float first, float last, float value) {
-    const float t = clampExact((value - first) / (last - first), 0.0, 1.0);
-    return t * t * (3.0 - 2.0 * t);
-}
+#include "common/perceptual.glsl"
+#include "common/exact.glsl"
 
 // toPerceptualSigned and fromPerceptualSigned, ProcessingPlan.h.
 float toPerceptualSigned(float value) {

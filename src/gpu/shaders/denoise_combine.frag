@@ -1,4 +1,5 @@
 #version 440
+#extension GL_GOOGLE_include_directive : require
 
 // The recombination that ends the Denoise pass: Denoise.cpp's applyDenoise
 // after its filters. Each pixel is split into luminance and unit-luma ratio,
@@ -15,32 +16,14 @@
 layout(location = 0) out vec4 fragColor;
 
 layout(binding = 0) uniform sampler2D source;
-layout(std140, binding = 1) uniform Denoise {
-    uint step;
-    uint radius;
-    uint gridReduction;
-    uint luminance;
-    uint color;
-    float rangeFactor;
-    float luminanceMix;
-    float colorMix;
-    vec4 lumaRow;
-    vec4 neutral;
-    uvec2 sourceSize;
-    uvec2 gridSize;
-    vec4 weights[17];
-} plan;
+// The Denoise block and ratioFloor.
+#include "common/denoise_block.glsl"
 // The blurred ratios on the grid; the source when colour is not smoothed.
 layout(binding = 2) uniform sampler2D grid;
 // The filtered luminance in r; the source when luminance is not smoothed.
 layout(binding = 3) uniform sampler2D filtered;
 
-// denoiseRatioFloor in Denoise.h: 2^-14.
-const float ratioFloor = 6.103515625e-05;
-
-float lumaOf(vec3 colour) {
-    return plan.lumaRow.x * colour.r + plan.lumaRow.y * colour.g + plan.lumaRow.z * colour.b;
-}
+#include "common/luma_row.glsl"
 
 vec3 decomposeRatio(vec3 colour, float luminance) {
     const float scale = max(luminance, 0.0) + ratioFloor;

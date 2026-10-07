@@ -33,7 +33,8 @@ inline constexpr float presenceLuminanceCeiling = 0x1p16F;
 /// Every luminance the context sums or the chain takes the logarithm of goes
 /// through this, so that a non-finite pixel moves its cell by a bounded
 /// amount rather than poisoning its neighbourhood.
-/// Mirrored by `boundedLuminance` in `presence_filter.frag` and `develop.frag`.
+/// Mirrored by `boundedLuminance` in `src/gpu/shaders/common/presence_bounds.glsl`,
+/// which `presence_filter.frag` and `develop.frag` include.
 [[nodiscard]] inline float boundedLuminance(float luminance) {
     if (!(luminance > presenceLuminanceFloor)) {
         return presenceLuminanceFloor;

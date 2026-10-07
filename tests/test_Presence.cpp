@@ -454,7 +454,7 @@ TEST_CASE("Dehaze raises the contrast of a veiled image", "[presence]") {
     REQUIRE(chromaAt(hazier) < chromaAt(plain));
 }
 
-TEST_CASE("Dehaze takes off a broad veil", "[presence]") {
+TEST_CASE("Dehaze takes off a broad veil", "[presence][slow]") {
     // Blocks of 40 pixels, 0.02 and 0.3, tinted: shapes above Clarity's sigma
     // (12 pixels here) and within Dehaze's window (36). The lower half sits
     // under a uniform veil of 0.3, as a distant part of a landscape would.
@@ -587,7 +587,8 @@ TEST_CASE("Dehaze takes as much off a bright area at its edge as inside it", "[p
     REQUIRE(std::abs(darkSide - interior) < 0.01F);
 }
 
-TEST_CASE("Dehaze takes as much off a round bright area at its edge as inside it", "[presence]") {
+TEST_CASE("Dehaze takes as much off a round bright area at its edge as inside it",
+          "[presence][slow]") {
     // Disks of 90, 150, 300 and 600 pixels, 0.3 on 0.03 under a uniform veil,
     // in a frame of 2400: cells of 4 and an octagon of inradius 18 cells (72
     // pixels), whose corners reach 78. Every disk holds the octagon; the
@@ -653,7 +654,7 @@ TEST_CASE("Dehaze takes as much off a round bright area at its edge as inside it
 }
 
 TEST_CASE("Dehaze leaves less off only the tip of a bright area's right-angled corner",
-          "[presence]") {
+          "[presence][slow]") {
     // A known limit, held: a square of 800 pixels, 0.3 on 0.03 under a veil,
     // in a frame of 2400 (cells of 4, an octagon of inradius 18, 5 cells a
     // diagonal). The octagon's cut corner does not reach into a right-angled
@@ -711,7 +712,7 @@ TEST_CASE("Dehaze leaves less off only the tip of a bright area's right-angled c
     REQUIRE(deepest < 48.0);
 }
 
-TEST_CASE("Dehaze leaves less off only the ends of an elongated bright area", "[presence]") {
+TEST_CASE("Dehaze leaves less off only the ends of an elongated bright area", "[presence][slow]") {
     // A known limit, held, wider than a right-angled corner: a convex tip whose
     // curvature radius is below about the window keeps less, here the ends of
     // an ellipse with semi-axes 600 and 200 pixels (tip radius 67), upright and
@@ -865,7 +866,8 @@ float blotchAt(std::uint32_t x, std::uint32_t y) {
 
 } // namespace
 
-TEST_CASE("Dehaze leaves a texture beside a bright area as it leaves it elsewhere", "[presence]") {
+TEST_CASE("Dehaze leaves a texture beside a bright area as it leaves it elsewhere",
+          "[presence][slow]") {
     // At an export's cells: 3400 pixels, cells of 8, an octagon of inradius 13
     // cells (104 pixels). A dark blotchy texture, about a stop from end to end
     // at a scale of a cell and a half, with a bright rectangle on its right
@@ -1147,7 +1149,7 @@ TEST_CASE("Presence keeps black, and a dark pixel's hue", "[presence]") {
 }
 
 TEST_CASE("A preview level shows the Clarity and Dehaze the full frame does",
-          "[presence][preview]") {
+          "[presence][preview][slow]") {
     // A scene whose shapes are a few tens of pixels across at full resolution.
     const ImageSize size{1600, 1200};
     const ImageBuffer full = tintedOf(size, [](auto x, auto y) { return sceneAt(x, y, 0.25); });
@@ -1254,7 +1256,8 @@ TEST_CASE("The curve input includes Texture, Clarity and Dehaze", "[presence][sa
         sameAtTap(planFor(source, clear), planFor(source, DevelopState{curved}), Tap::CurveInput));
 }
 
-TEST_CASE("The threaded Presence context gives the single-threaded bits", "[presence][threads]") {
+TEST_CASE("The threaded Presence context gives the single-threaded bits",
+          "[presence][threads][slow]") {
     const ImageBuffer source =
         tintedOf({517, 389}, [](auto x, auto y) { return sceneAt(x, y, 1.0); });
     const PresencePlan plan = planFor(source, DevelopState{presence(40.0F, 40.0F, 40.0F)}).presence;
@@ -1270,7 +1273,7 @@ TEST_CASE("The threaded Presence context gives the single-threaded bits", "[pres
     REQUIRE(threaded.haze.cells == single.haze.cells);
 }
 
-TEST_CASE("The threaded chain gives the single-threaded bits", "[presence][threads]") {
+TEST_CASE("The threaded chain gives the single-threaded bits", "[presence][threads][slow]") {
     const ImageBuffer source =
         tintedOf({301, 517}, [](auto x, auto y) { return sceneAt(x, y, 1.0); });
     const DevelopState state{presence(30.0F, 60.0F, 40.0F)};

@@ -25,7 +25,7 @@ endfunction()
 # headers those include in turn. Since Qt 6.10 a private module is only defined
 # when it is named here; linking Qt6::GuiPrivate after finding Gui alone no
 # longer works.
-find_package(Qt6 6.10 REQUIRED COMPONENTS Core CorePrivate Gui GuiPrivate Widgets Concurrent
+find_package(Qt6 6.10 REQUIRED COMPONENTS Core CorePrivate Gui GuiPrivate Widgets
         ShaderTools Xml)
 
 # RAW decoding, required rather than optional: an arraw built without it would
@@ -111,6 +111,21 @@ endfunction()
 
 qt_standard_project_setup()
 
+# The opt-in timing trace (QT_LOGGING_RULES="arraw.timing.debug=true"), on its
+# own so that the engine, the GPU module and the front ends can each record
+# spans without reaching into src/core. Not public API: its header names a Qt
+# logging category, which include/ must not, and Python has no use for it.
+add_library(arraw-trace STATIC
+        src/trace/TimingTrace.cpp
+        src/trace/TimingTrace.h)
+arraw_enable_warnings(arraw-trace)
+target_include_directories(arraw-trace PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/trace)
+target_link_libraries(arraw-trace PUBLIC Qt6::Core)
+set_target_properties(arraw-trace PROPERTIES AUTOMOC OFF)
+if(ARRAW_BUILD_PYTHON)
+    set_target_properties(arraw-trace PROPERTIES POSITION_INDEPENDENT_CODE ON)
+endif()
+
 # The engine library. Everything photographic lives here; the executables are
 # thin front ends over it. Headers under include/ are the public API and are
 # propagated to consumers through target_link_libraries.
@@ -163,8 +178,6 @@ add_library(arraw STATIC
         include/ToneSettings.h
         src/core/ToneSettings.cpp
         src/core/ColorSpaces.h
-        src/core/TimingTrace.cpp
-        src/core/TimingTrace.h
         src/core/Develop.cpp
         include/CurveHistogram.h
         src/core/CurveHistogram.cpp
@@ -181,9 +194,9 @@ add_library(arraw STATIC
         include/RenderCheckpoint.h
         src/core/CheckpointState.h
         src/core/RenderCheckpoint.cpp
-        src/gpu/DeviceImage.h
-        src/gpu/DeviceImageState.h
-        src/gpu/DeviceImage.cpp
+        src/core/device/DeviceImage.h
+        src/core/device/DeviceImageState.h
+        src/core/device/DeviceImage.cpp
         src/core/WhiteBalance.cpp
         include/ImageBuffer.h
         include/ImageExport.h
@@ -194,7 +207,7 @@ add_library(arraw STATIC
         include/SettingDescriptors.h
         src/core/SettingDescriptors.cpp
         src/core/SettingCodec.h
-        src/core/ShortestDecimal.h
+        include/ShortestDecimal.h
         src/core/SettingCodec.cpp
         include/SettingsJson.h
         src/core/SettingsJson.cpp
@@ -231,17 +244,19 @@ arraw_enable_warnings(arraw)
 set_source_files_properties(src/core/GrainModels.cpp PROPERTIES
         COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-ffp-contract=off>")
 target_include_directories(arraw PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-# The GPU module's own headers name no graphics type — the QRhi texture lives
-# behind DeviceImageState, whose device-side subclass is arraw-gpu's — so core
-# may hold a device image without Qt reaching either the engine's headers or the
-# public API. Only arraw-gpu links Qt6::GuiPrivate, and the tests that drive its
-# QRhi device directly (tests/test_GpuDevice.cpp).
-target_include_directories(arraw PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/gpu)
+# A checkpoint may hold its pixels on a device (ADR 015), so the device image
+# handle is the engine's: src/core/device holds it and the Qt-free state behind
+# it, whose device-side subclass is arraw-gpu's. Nothing there names a graphics
+# type, so core holds a device image without Qt reaching either the engine's
+# headers or the public API, and without seeing the rest of the GPU module.
+# Only arraw-gpu links Qt6::GuiPrivate, and the tests that drive its QRhi
+# device directly (tests/test_GpuDevice.cpp).
+target_include_directories(arraw PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/core/device)
 # Qt GUI holds QImage and the image codecs (QImageReader/QImageWriter); it needs
 # no display and no QGuiApplication, only a QCoreApplication for plugin paths.
 # Private: nothing in include/ mentions Qt, and CMake still propagates the link
 # requirement to consumers of this static library.
-target_link_libraries(arraw PRIVATE Qt6::Core Qt6::Gui Qt6::Xml ${ARRAW_LIBRAW} ${ARRAW_EXIV2})
+target_link_libraries(arraw PRIVATE arraw-trace Qt6::Core Qt6::Gui Qt6::Xml ${ARRAW_LIBRAW} ${ARRAW_EXIV2})
 # Stamped into exported files as their Software tag (ADR 032).
 target_compile_definitions(arraw PRIVATE ARRAW_VERSION="${PROJECT_VERSION}")
 # qt_standard_project_setup() turns AUTOMOC on globally; the engine has no Qt
@@ -272,14 +287,21 @@ add_library(arraw-gpu STATIC
         src/gpu/GpuPlan.h
         src/gpu/GpuPlan.cpp)
 arraw_enable_warnings(arraw-gpu)
-target_include_directories(arraw-gpu PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/gpu)
+# src/core/device too, because GpuContext.h hands out DeviceImages: whoever can
+# use the device can name what it makes.
+target_include_directories(arraw-gpu PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/gpu
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/core/device)
 # The processing plan and checkpoint state are engine-private; the GPU packs its
 # uniforms from the one and builds the other.
 target_include_directories(arraw-gpu PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/core)
 # The passes' shaders, compiled at build time into .qsb resources, so a shader
 # that does not compile fails the build rather than the first render. GLSL
 # 440 sources; qsb adds SPIR-V for Vulkan and translates for the rest. The GLSL
-# targets start at ES 3.0 and 3.30, the first with texelFetch and uint.
+# targets start at ES 3.0 and 3.30, the first with texelFetch and uint. What
+# several passes share is in src/gpu/shaders/common/*.glsl, pulled in with
+# #include (GL_GOOGLE_include_directive) and not listed here: those files are
+# never compiled on their own. qsb writes a depfile, so editing one rebuilds the
+# shaders that include it.
 qt_add_shaders(arraw-gpu "arraw-shaders"
         PREFIX "/arraw/shaders"
         BASE src/gpu/shaders
@@ -299,7 +321,7 @@ qt_add_shaders(arraw-gpu "arraw-shaders"
         src/gpu/shaders/denoise_filter.frag
         src/gpu/shaders/denoise_combine.frag
         src/gpu/shaders/presence_filter.frag)
-target_link_libraries(arraw-gpu PUBLIC arraw PRIVATE Qt6::Gui Qt6::GuiPrivate)
+target_link_libraries(arraw-gpu PUBLIC arraw PRIVATE arraw-trace Qt6::Gui Qt6::GuiPrivate)
 set_target_properties(arraw-gpu PROPERTIES AUTOMOC OFF)
 # QRhi declares its Vulkan backend only where vulkan/vulkan.h is visible, so a
 # machine without the headers builds arraw-gpu without Vulkan and nothing fails
@@ -410,7 +432,7 @@ add_library(arraw-app-core STATIC
 arraw_enable_warnings(arraw-app-core)
 target_include_directories(arraw-app-core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/app
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/core)
-target_link_libraries(arraw-app-core PUBLIC arraw arraw-gpu Qt6::Core Qt6::Gui)
+target_link_libraries(arraw-app-core PUBLIC arraw arraw-gpu Qt6::Core Qt6::Gui PRIVATE arraw-trace)
 # The shot model, its filter and the folder watcher are QObjects with signals.
 set_target_properties(arraw-app-core PROPERTIES AUTOMOC ON)
 
@@ -439,15 +461,18 @@ add_library(arraw-app-ui STATIC
         src/app/ui/SettingSlider.cpp
         src/app/ui/SettingSlider.h)
 arraw_enable_warnings(arraw-app-ui)
-target_include_directories(arraw-app-ui PUBLIC src/app
-        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/core)
-target_link_libraries(arraw-app-ui PUBLIC arraw-app-core Qt6::Widgets)
+target_include_directories(arraw-app-ui PUBLIC src/app)
+target_link_libraries(arraw-app-ui PUBLIC arraw-app-core Qt6::Widgets PRIVATE arraw-trace)
 set_target_properties(arraw-app-ui PROPERTIES AUTOMOC ON)
 
 add_executable(arraw-ui src/app/main.cpp)
 arraw_enable_warnings(arraw-ui)
 target_link_libraries(arraw-ui PRIVATE arraw-app-ui)
 arraw_deploy_qt_plugins(arraw-ui)
+if(MSVC)
+    # activeCodePage UTF-8: narrow argv and path conversions are UTF-8 (needs Windows 10 1903+).
+    target_sources(arraw-ui PRIVATE src/platform/arraw.manifest)
+endif()
 
 # The command line's behaviour, split from its main() so the tests can drive it
 # in-process and assert on what reaches each stream. See ADR 006.
@@ -478,7 +503,7 @@ target_include_directories(arraw-cli-core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src
 # instance (QCoreApplication or QGuiApplication, see arraw-cli below) for codec
 # plugin paths. The GPU probe reaches a device
 # through arraw-gpu, which keeps QRhi to itself. Widgets must never appear here.
-target_link_libraries(arraw-cli-core PUBLIC arraw PRIVATE arraw-gpu Qt6::Core)
+target_link_libraries(arraw-cli-core PUBLIC arraw PRIVATE arraw-gpu arraw-trace Qt6::Core)
 target_compile_definitions(arraw-cli-core PRIVATE ARRAW_VERSION="${PROJECT_VERSION}")
 set_target_properties(arraw-cli-core PROPERTIES AUTOMOC OFF)
 
@@ -490,6 +515,9 @@ arraw_enable_warnings(arraw-cli)
 # unless QT_QPA_PLATFORM names another.
 target_link_libraries(arraw-cli PRIVATE arraw-cli-core Qt6::Core Qt6::Gui)
 arraw_deploy_qt_plugins(arraw-cli)
+if(MSVC)
+    target_sources(arraw-cli PRIVATE src/platform/arraw.manifest)
+endif()
 if(TARGET arraw-headless-platform)
     target_link_libraries(arraw-cli PRIVATE arraw-headless-platform)
 endif()

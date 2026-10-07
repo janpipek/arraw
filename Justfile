@@ -29,10 +29,15 @@ cli *args: configure
     cmake --build --preset debug --target arraw-cli
     ./{{build_dir}}debug/arraw-cli {{args}}
 
-# Build and run the test suite
+# Build and run the test suite, in parallel
 test *args: configure
     cmake --build --preset debug --target arraw-test-binaries
-    ctest --preset debug {{args}}
+    ctest --preset debug -j {{num_cpus()}} {{args}}
+
+# Like `test`, without the cases labelled slow (a second or more each)
+test-fast *args: configure
+    cmake --build --preset debug --target arraw-test-binaries
+    ctest --preset debug -j {{num_cpus()}} -LE slow {{args}}
 
 # Needs the uv-managed .venv; `--no-install-project` uninstalls an editable arraw that a plain `uv sync` installed.
 # Build the Python extension in its own tree (build/[prefix]py-debug)

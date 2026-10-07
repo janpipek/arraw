@@ -32,4 +32,26 @@ jobs:
       # its own headless platform, so no QT_QPA_PLATFORM is needed here, and
       # lavapipe stands in for a GPU (the device tests skip without Vulkan).
       - name: Test
-        run: ctest --preset debug
+        run: ctest --preset debug -j "$(nproc)"
+
+  python:
+    name: Python bindings (Qt 6.10, Debug)
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: sudo tools/ci/install-deps.sh
+
+      # uv provides the managed Python (with headers) the extension builds
+      # against; just runs the same recipe as a developer does.
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Install just
+        run: sudo apt-get install -y --no-install-recommends just
+
+      # Builds the _arraw module and arraw-cli (the parity tests compare the two),
+      # then runs pytest with ARRAW_REQUIRE_CLI=1, so a missing CLI fails
+      # instead of skipping.
+      - name: Test
+        run: just py-test

@@ -1,4 +1,5 @@
 #version 440
+#extension GL_GOOGLE_include_directive : require
 
 // The vertical half of the resize: Resample.cpp's verticalPass, which also
 // unpremultiplies each pixel into the result.
@@ -22,27 +23,8 @@ layout(binding = 0) uniform sampler2D sums;
 layout(binding = 3) uniform sampler2D lows;
 layout(binding = 4) uniform sampler2D highs;
 
-// The contract with GpuResizeBlock: keep the members in step with it. The
-// plane is the horizontal pass's, and is not read here.
-layout(std140, binding = 1) uniform Resize {
-    uint plane;
-    uint inputLength;
-    uvec2 offset;
-} plan;
-
-// The weights of the vertical axis, as packResizeWeights lays them out.
-layout(binding = 2) uniform sampler2D weights;
-
-const float transparentBelow = 1.0 / 65536.0;
-const float floatMax = 3.4028235e38;
-
-float tapWeight(int row, int k) {
-    return texelFetch(weights, ivec2(1 + k / 4, row), 0)[k % 4];
-}
-
-float store(float value, float sawNegative) {
-    return (value < 0.0 && sawNegative == 0.0) ? 0.0 : value;
-}
+// The Resize block, the weights of the resized axis, and tapWeight and store.
+#include "common/resize.glsl"
 
 void main() {
     // gl_FragCoord is (x + 0.5, y + 0.5): output column x of row y.

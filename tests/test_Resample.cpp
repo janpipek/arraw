@@ -451,7 +451,7 @@ ImageBuffer busyPicture(ImageSize size, bool opaque) {
 
 } // namespace
 
-TEST_CASE("A resize is bit-identical on any number of threads", "[resample][threads]") {
+TEST_CASE("A resize is bit-identical on any number of threads", "[resample][threads][slow]") {
     const bool opaque = GENERATE(true, false);
     // Both passes have more than 2^17 pixels of work, so each splits into bands.
     const auto [from, to] = GENERATE(std::pair{ImageSize{512, 400}, ImageSize{800, 600}},

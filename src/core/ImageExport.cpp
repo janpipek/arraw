@@ -18,10 +18,12 @@
 #include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
 #include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -356,4 +358,20 @@ void arraw::exportImage(const ImageBuffer& image, const std::filesystem::path& p
     if (!output.commit()) {
         throw std::runtime_error("Cannot commit export: " + output.errorString().toStdString());
     }
+}
+
+bool arraw::isSameFile(const std::filesystem::path& a, const std::filesystem::path& b) {
+    std::error_code error;
+    if (std::filesystem::exists(a, error) && std::filesystem::exists(b, error)) {
+        const bool same = std::filesystem::equivalent(a, b, error);
+        if (!error) {
+            return same;
+        }
+    }
+    const auto normal = [](const std::filesystem::path& path) {
+        std::error_code ignored;
+        const auto absolute = std::filesystem::absolute(path, ignored);
+        return (ignored ? path : absolute).lexically_normal();
+    };
+    return normal(a) == normal(b);
 }

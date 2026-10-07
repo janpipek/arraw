@@ -129,6 +129,17 @@ since `--device` was `auto`, not `gpu`. `--device cpu` still wins and ignores th
 backend. Every other backend goes through the headless platform and keeps
 `auto`'s fallback.
 
+## Added later (2026-10-07): `auto` is the CPU on Windows, for now
+
+Direct3D 11, Windows' default backend, has never run the parity suite: every
+tolerance above was measured on Vulkan, and HLSL may be compiled with fast
+maths. Until it has run (a Windows CI job on WARP is the planned way,
+`docs/ideas/architecture-roadmap.md`), `auto` develops on the CPU there
+(`gpuUsedByDefault()`), in the command line and in the app alike.
+- `--device gpu` and `gpuN` still use the GPU.
+- In the app, so does an adapter chosen in the settings; "Automatic" is the CPU.
+- `--gpu-backend opengl` still asks for the GPU, as above.
+
 ## Consequences
 
 - **The one fallback branch that is untested is device loss mid-batch.**

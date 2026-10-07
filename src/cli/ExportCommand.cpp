@@ -7,7 +7,6 @@
 #include "GpuDevelop.h"
 #include "ProcessingPlan.h"
 #include "SettingCodec.h"
-#include "ShortestDecimal.h"
 #include "ShotInputs.h"
 #include "SidecarWatch.h"
 #include "StreamDiagnostics.h"
@@ -25,6 +24,7 @@
 #include <NoiseReductionSettings.h>
 #include <Photo.h>
 #include <SettingDescriptors.h>
+#include <ShortestDecimal.h>
 #include <ToneCurveSettings.h>
 #include <WhiteBalance.h>
 
@@ -40,9 +40,11 @@
 #include <exception>
 #include <filesystem>
 #include <limits>
+#include <map>
 #include <memory>
 #include <optional>
 #include <ostream>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -73,6 +75,39 @@ bool cli::isRangedFloatSetting(const FieldDescriptor& descriptor) {
 }
 
 namespace {
+
+/// @brief Gives the key a path is compared by: canonical where it can be, else lexically normal.
+std::filesystem::path pathKey(const std::filesystem::path& path) {
+    std::error_code error;
+    std::filesystem::path key = std::filesystem::weakly_canonical(path, error);
+    return error ? path.lexically_normal() : key;
+}
+
+/// @brief Finds the file among some that a path names.
+///
+/// By key first; then, when the path exists, by asking the file system, which
+/// also sees a name that differs only in case on a case-insensitive one, or a
+/// hard link. A batch is small, so the second pass's cost does not matter.
+/// @param path Path to look for.
+/// @param files The files, by ::pathKey, each with the path to report.
+/// @return The reported path of the file @p path names, or nothing.
+std::optional<std::filesystem::path>
+sameFileIn(const std::filesystem::path& path,
+           const std::map<std::filesystem::path, std::filesystem::path>& files) {
+    if (const auto found = files.find(pathKey(path)); found != files.end()) {
+        return found->second;
+    }
+    std::error_code error;
+    if (!std::filesystem::exists(path, error)) {
+        return std::nullopt;
+    }
+    for (const auto& [key, reported] : files) {
+        if (isSameFile(path, key)) {
+            return reported;
+        }
+    }
+    return std::nullopt;
+}
 
 using cli::CropEdit;
 using cli::GeometryEdits;
@@ -799,8 +834,9 @@ void configure(QCommandLineParser& parser) {
     parser.addOption({"device",
                       "auto, cpu, gpu, or gpuN. Auto uses the GPU when it can and says so when "
                       "it cannot; gpu never falls back; gpuN is gpu on the backend's N-th "
-                      "adapter, counting from 0. With --gpu-backend opengl, auto is gpu. "
-                      "Default: auto.",
+                      "adapter, counting from 0. With --gpu-backend opengl, auto is gpu. On "
+                      "Windows auto is the CPU for now, until Direct3D has been validated; "
+                      "pass gpu to use it. Default: auto.",
                       "name"});
     parser.addOption({"gpu-backend",
                       "vulkan, opengl, d3d11, d3d12, or metal. Default: " +
@@ -821,7 +857,10 @@ void configure(QCommandLineParser& parser) {
                       "rights). Default: capture,descriptive.",
                       "list"});
     cli::addMarksFilterOptions(parser);
-    parser.addOption({"overwrite", "Replace outputs that already exist."});
+    parser.addOption(
+        {"overwrite",
+         "Replace outputs that already exist, but never a file this run reads (a shot's "
+         "companions included) or has written."});
     parser.addOption({{"q", "quiet"}, "Do not report each file as it is written."});
     cli::addLogFormatOption(parser);
     // The syntax carries the command word, which Qt's usage line otherwise
@@ -1004,7 +1043,8 @@ std::optional<ExportRequest> buildRequest(const QCommandLineParser& parser, std:
 /// @brief Whether the request develops on the CPU without ever looking for a GPU.
 bool cpuOnly(const ExportRequest& request) {
     return request.device.kind == cli::DeviceKind::Cpu ||
-           (request.device.kind == cli::DeviceKind::Auto && cli::gpuDisabled());
+           (request.device.kind == cli::DeviceKind::Auto &&
+            (cli::gpuDisabled() || !gpuUsedByDefault()));
 }
 
 /// @brief Creates the batch's one GPU context, or says why there is none.
@@ -1082,20 +1122,61 @@ int exportAll(const ExportRequest& request, std::ostream& err) {
         log.record({.notice = Notice::CpuUsed, .severity = Severity::Info});
     }
 
-    const cli::ExpandedInputs expanded = cli::expandInputs(request.inputs, log);
+    cli::ExpandedInputs expanded = cli::expandInputs(request.inputs, log);
     failures += expanded.unreadableFolders;
+    // A file named twice (repeated, overlapping globs, or a folder and a file in
+    // it) is exported once: the second would only replace the first's export.
+    {
+        std::set<std::filesystem::path> seen;
+        std::erase_if(expanded.photographs, [&seen](const cli::ShotInput& photograph) {
+            return !seen.insert(pathKey(photograph.path)).second;
+        });
+    }
+    // Every file the batch reads, a shot's companions included: none may become
+    // a destination, --overwrite or not, or a photograph is lost to an export.
+    std::map<std::filesystem::path, std::filesystem::path> batchFiles;
+    for (const auto& [input, shot] : expanded.photographs) {
+        batchFiles.emplace(pathKey(input), input);
+        if (shot) {
+            for (const auto& companion : shot->companions) {
+                batchFiles.emplace(pathKey(companion), companion);
+            }
+        }
+    }
     std::size_t filteredOut = 0;
     std::uint64_t timingRequest = 0;
+    // What this batch has written, by destination, and from which input.
+    std::map<std::filesystem::path, std::filesystem::path> written;
     for (const auto& [input, shot] : expanded.photographs) {
         const detail::TimingSpan timing("cli.export", ++timingRequest);
-        const auto destination =
-            request.outputDirectory /
-            (input.stem().string() + std::string(extensionFor(request.format)));
+        // Built from path parts, not by joining strings: a name that is not
+        // ASCII must not pass through the narrow code page on Windows.
+        std::filesystem::path name = input.stem();
+        name += extensionFor(request.format);
+        const auto destination = request.outputDirectory / name;
 
         try {
             if (!cli::passesFilter(request.filter, input, request.useSidecars)) {
                 ++filteredOut;
                 continue;
+            }
+            if (const auto file = sameFileIn(destination, batchFiles)) {
+                if (isSameFile(*file, input)) {
+                    throw std::runtime_error(destination.string() +
+                                             " is the input itself; the export would replace "
+                                             "it, so choose another --output folder");
+                }
+                throw std::runtime_error(destination.string() + " is " + file->string() +
+                                         ", which this export reads; choose another "
+                                         "--output folder");
+            }
+            // Nor a file this batch already wrote: inputs of one stem from
+            // different folders map to one name, and the later would silently
+            // replace the earlier one's export.
+            if (const auto earlier = sameFileIn(destination, written)) {
+                throw std::runtime_error(destination.string() + " would overwrite the export of " +
+                                         earlier->string() +
+                                         "; export them separately or to different folders");
             }
             if (!request.overwrite && std::filesystem::exists(destination)) {
                 // Refused rather than replaced: the destination is usually a
@@ -1181,6 +1262,7 @@ int exportAll(const ExportRequest& request, std::ostream& err) {
                 throw std::runtime_error(std::string(problem.what()) +
                                          "; pass --metadata none to export without it");
             }
+            written.emplace(pathKey(destination), input);
             log.record({.notice = Notice::Exported,
                         .severity = Severity::Info,
                         .subject = input,

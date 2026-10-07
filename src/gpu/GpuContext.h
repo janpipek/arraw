@@ -39,6 +39,14 @@ enum class GpuBackend {
 /// Direct3D 12 remains selectable), Metal on macOS.
 [[nodiscard]] GpuBackend defaultGpuBackend() noexcept;
 
+/// @brief Tells whether an automatic choice of device takes the GPU on this platform.
+///
+/// False on Windows for now: Direct3D 11, its default backend, has not run the
+/// CPU parity suite, so `auto` develops on the CPU there until it has (ADR 017).
+/// An explicit choice of the GPU (`--device gpu`, or an adapter named in the
+/// app's settings) still takes it.
+[[nodiscard]] bool gpuUsedByDefault() noexcept;
+
 /// @brief Names a backend as the command line spells it.
 /// @return `vulkan`, `opengl`, `d3d11`, `d3d12` or `metal`.
 [[nodiscard]] std::string_view gpuBackendName(GpuBackend backend) noexcept;

@@ -297,6 +297,16 @@ RenderCheckpoint arraw::resumeFrom(const RenderCheckpoint& from, const ImageBuff
     return done;
 }
 
+bool arraw::canResumeFrom(const RenderCheckpoint& from, const ImageBuffer& source,
+                          const DevelopState& state, Stage stopAfter,
+                          const RenderRequest& request) {
+    const CheckpointState& held = stateOf(from);
+    requireStopAfter(held.boundary, stopAfter);
+    // Planned as both backends' resumes plan, so that the answer is theirs.
+    const ProcessingPlan plan = planFor(source, state, plannedRequest(request, stopAfter));
+    return !staleReason(held, plan, source.size()).has_value();
+}
+
 ImageBuffer arraw::sample(const ImageBuffer& source, const DevelopState& state, Tap tap,
                           const RenderRequest& request, ProgressChannel* progress) {
     // Validated first, so a bad tap costs nothing.

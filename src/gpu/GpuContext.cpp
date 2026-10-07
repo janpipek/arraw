@@ -494,6 +494,14 @@ GpuBackend defaultGpuBackend() noexcept {
 #endif
 }
 
+bool gpuUsedByDefault() noexcept {
+#if defined(_WIN32)
+    return false;
+#else
+    return true;
+#endif
+}
+
 std::string_view gpuBackendName(GpuBackend backend) noexcept {
     switch (backend) {
     case GpuBackend::Vulkan:

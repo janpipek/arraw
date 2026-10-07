@@ -109,7 +109,7 @@ void requireWellFormed(const std::vector<Progress>& reports) {
 
 } // namespace
 
-TEST_CASE("A render with a channel gives the bits of one without", "[progress][develop]") {
+TEST_CASE("A render with a channel gives the bits of one without", "[progress][develop][slow]") {
     const ImageBuffer source = makeSource();
     const DevelopState state = everyStep();
     const ImageBuffer unobserved = develop(source, state, resized());
@@ -176,7 +176,7 @@ TEST_CASE("A cancelled channel stops a render before it starts", "[progress][can
 }
 
 TEST_CASE("A cancellation during a render stops it, and nothing reports after",
-          "[progress][cancel]") {
+          "[progress][cancel][slow]") {
     const ImageBuffer source = makeSource();
     const DevelopState state = everyStep();
     // Stopped in each step in turn, the first report of it cancelling.
@@ -236,7 +236,7 @@ TEST_CASE("A callback that throws stops the render with what it threw", "[progre
     REQUIRE(detail::currentProgress() == nullptr);
 }
 
-TEST_CASE("A chain of resumes on one channel reads as one render", "[progress][resume]") {
+TEST_CASE("A chain of resumes on one channel reads as one render", "[progress][resume][slow]") {
     const ImageBuffer source = makeSource();
     const DevelopState state = everyStep();
     const RenderRequest request = resized();
@@ -273,7 +273,8 @@ TEST_CASE("A chain of resumes on one channel reads as one render", "[progress][r
     REQUIRE(sameBits(effects.readBack(), develop(source, state, request)));
 }
 
-TEST_CASE("A cancelled resume leaves the checkpoint it started from usable", "[progress][resume]") {
+TEST_CASE("A cancelled resume leaves the checkpoint it started from usable",
+          "[progress][resume][slow]") {
     const ImageBuffer source = makeSource();
     const DevelopState state = everyStep();
     const RenderCheckpoint pointwise = developUntil(source, state, Stage::Pointwise, resized());
@@ -290,7 +291,7 @@ TEST_CASE("A cancelled resume leaves the checkpoint it started from usable", "[p
     REQUIRE(sameBits(done.readBack(), develop(source, state, resized())));
 }
 
-TEST_CASE("A sample and a histogram report and can be cancelled", "[progress][sample]") {
+TEST_CASE("A sample and a histogram report and can be cancelled", "[progress][sample][slow]") {
     const ImageBuffer source = makeSource();
     const DevelopState state = everyStep();
     Recorder recorder;

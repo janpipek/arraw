@@ -60,8 +60,10 @@ public:
     /// Tries the resize checkpoint, then the geometry one, then the pointwise
     /// one, then the denoise one, then the level itself, and carries on to the
     /// effects through each boundary it passes so the next request can reuse
-    /// them. A checkpoint the engine refuses is dropped: it is stale, and the
-    /// render goes on from an earlier one. A render that fails leaves only
+    /// them. A checkpoint the engine says no longer applies
+    /// (::arraw::canResumeFrom) is dropped: it is stale, and the render goes on
+    /// from an earlier one. A bad request is not staleness: it throws, as the
+    /// render would, and drops nothing. A render that fails leaves only
     /// checkpoints that are whole. With every effect off the effects boundary
     /// is the resize's pixels, so keeping the resize checkpoint costs nothing
     /// on the GPU and one viewport-sized buffer on the CPU. With noise
@@ -71,12 +73,14 @@ public:
     /// existed (ADR 039).
     /// @tparam Develop Callable `(Stage) -> RenderCheckpoint`, developing the level.
     /// @tparam Resume Callable `(const RenderCheckpoint&, Stage) -> RenderCheckpoint`.
+    /// @tparam CanResume Callable `(const RenderCheckpoint&, Stage) -> bool`, asking
+    /// ::arraw::canResumeFrom with the same arguments as @p resume.
     /// @param denoising Whether the state reduces noise (::arraw::reducesNoise).
     /// @param resumedFrom Set to the boundary resumed from, or reset.
     /// @return The checkpoint at the effects.
-    template <typename Develop, typename Resume>
-    [[nodiscard]] RenderCheckpoint render(Develop&& develop, Resume&& resume, bool denoising,
-                                          std::optional<Stage>& resumedFrom) {
+    template <typename Develop, typename Resume, typename CanResume>
+    [[nodiscard]] RenderCheckpoint render(Develop&& develop, Resume&& resume, CanResume&& canResume,
+                                          bool denoising, std::optional<Stage>& resumedFrom) {
         resumedFrom.reset();
         if (!denoising) {
             denoised_.reset();
@@ -84,14 +88,14 @@ public:
         // Each checkpoint is checked after the later one made from it: one
         // that does not match now is useless to keep.
         if (resized_) {
-            if (auto done = tryResume(resume, *resized_, Stage::Effects)) {
+            if (auto done = tryResume(resume, canResume, *resized_, Stage::Effects)) {
                 resumedFrom = Stage::Resize;
                 return std::move(*done);
             }
             resized_.reset();
         }
         if (geometry_) {
-            if (auto done = tryResume(resume, *geometry_, Stage::Resize)) {
+            if (auto done = tryResume(resume, canResume, *geometry_, Stage::Resize)) {
                 resumedFrom = Stage::Geometry;
                 resized_ = std::move(*done);
                 return resume(*resized_, Stage::Effects);
@@ -99,7 +103,7 @@ public:
             geometry_.reset();
         }
         if (pointwise_) {
-            if (auto done = tryResume(resume, *pointwise_, Stage::Geometry)) {
+            if (auto done = tryResume(resume, canResume, *pointwise_, Stage::Geometry)) {
                 resumedFrom = Stage::Pointwise;
                 geometry_ = std::move(*done);
                 resized_ = resume(*geometry_, Stage::Resize);
@@ -108,7 +112,7 @@ public:
             pointwise_.reset();
         }
         if (denoised_) {
-            if (auto done = tryResume(resume, *denoised_, Stage::Pointwise)) {
+            if (auto done = tryResume(resume, canResume, *denoised_, Stage::Pointwise)) {
                 resumedFrom = Stage::Denoise;
                 pointwise_ = std::move(*done);
                 geometry_ = resume(*pointwise_, Stage::Geometry);
@@ -131,17 +135,15 @@ public:
 private:
     /// @brief Resumes, or says the checkpoint does not apply.
     ///
-    /// The engine refuses a stale checkpoint with an `std::invalid_argument`,
-    /// which is also what a bad request raises; the latter is raised again by
-    /// the render that follows, so nothing is hidden.
-    template <typename Resume>
-    static std::optional<RenderCheckpoint> tryResume(Resume& resume, const RenderCheckpoint& from,
-                                                     Stage stopAfter) {
-        try {
-            return resume(from, stopAfter);
-        } catch (const std::invalid_argument&) {
+    /// Asks the engine first, so that only a stale checkpoint is passed over;
+    /// anything the resume itself throws, a bad request included, propagates.
+    template <typename Resume, typename CanResume>
+    static std::optional<RenderCheckpoint>
+    tryResume(Resume& resume, CanResume& canResume, const RenderCheckpoint& from, Stage stopAfter) {
+        if (!canResume(from, stopAfter)) {
             return std::nullopt;
         }
+        return resume(from, stopAfter);
     }
 
     /// Level the checkpoints were made from.
@@ -249,6 +251,9 @@ public:
             },
             [&](const RenderCheckpoint& from, Stage stop) {
                 return developOnGpu(*context_, from, *image, state, stop, request, progress);
+            },
+            [&](const RenderCheckpoint& from, Stage stop) {
+                return canResumeFrom(from, *image, state, stop, request);
             },
             reducesNoise(state.settings.noiseReduction), resumedFrom);
         return checkpoint.readBack();
@@ -517,6 +522,9 @@ std::optional<PreviewResult> render(std::uint64_t id, const DevelopState& state,
             [&](Stage stop) { return developUntil(*reduced, state, stop, request, progress); },
             [&](const RenderCheckpoint& from, Stage stop) {
                 return resumeFrom(from, *reduced, state, stop, request, progress);
+            },
+            [&](const RenderCheckpoint& from, Stage stop) {
+                return canResumeFrom(from, *reduced, state, stop, request);
             },
             reducesNoise(state.settings.noiseReduction), result.resumedFrom);
         QImage image = toDisplayImage(developed.readBack());

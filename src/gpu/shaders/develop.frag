@@ -1,4 +1,5 @@
 #version 440
+#extension GL_GOOGLE_include_directive : require
 
 // The pointwise chain: ProcessingPlan.h's developPixel, stage for stage.
 //
@@ -18,11 +19,9 @@
 //   - toLinear takes max(value, 0), so x >= 0.
 //   - The exponents are 1/2.2, 2.2 and contrastSlope = exp2(c / 200) > 0.
 // So the only case that needs care is x == 0, where std::pow gives 0 and a
-// driver's exp2(y * log2(x)) gives it only by way of infinities. pow0 spells
-// it out. It also returns NaN for x < 0 (as std::pow does for a non-integer
-// exponent), although nothing reaches that today, so that a future caller
-// cannot silently get an undefined value. NaN and +inf pass through pow as on
-// the CPU: a NaN fails every comparison below the way it does there.
+// driver's exp2(y * log2(x)) gives it only by way of infinities. pow0
+// (common/exact.glsl) spells it out. NaN and +inf pass through pow as on the
+// CPU: a NaN fails every comparison below the way it does there.
 //
 // Parity with the CPU, including NaN and infinity, and the tolerances the
 // tests hold, are measured on Vulkan (lavapipe) only. HLSL and MSL compilers
@@ -98,10 +97,7 @@ layout(std140, binding = 1) uniform Pointwise {
     uvec2 presencePadding;
 } plan;
 
-// 1 / 2.2f and 2.2f as C++ rounds them to float, spelled out so that no
-// compiler folds the division at another precision.
-const float perceptualExponent = 0.454545438;
-const float linearExponent = 2.20000005;
+#include "common/perceptual.glsl"
 
 
 // greyPivot, ProcessingPlan.h. The shader does not use it: the plan carries
@@ -117,30 +113,8 @@ const vec3 workingLuminance = vec3(0.2627, 0.6780, 0.0593);
 // not, so a denormal luminance would branch differently on the two.
 const float liftedBlackThreshold = 1.0e-20;
 
-// std::pow for the arguments the chain gives it; see the note at the top.
-float pow0(float x, float y) {
-    if (x > 0.0) {
-        return pow(x, y);
-    }
-    if (x == 0.0) {
-        return 0.0;
-    }
-    // Negative, or NaN: NaN, as std::pow with a non-integer exponent.
-    return uintBitsToFloat(0x7fc00000u);
-}
-
-// std::clamp(value, low, high), which the built-in clamp is not: it leaves a
-// NaN alone where the built-in is undefined.
-float clampExact(float value, float low, float high) {
-    return value < low ? low : (high < value ? high : value);
-}
-
-// smoothstep, ProcessingPlan.h. Not the built-in, which is undefined for
-// first >= last and leaves the clamping to the driver.
-float smoothStep(float first, float last, float value) {
-    const float t = clampExact((value - first) / (last - first), 0.0, 1.0);
-    return t * t * (3.0 - 2.0 * t);
-}
+// pow0, clampExact and smoothStep; see the note at the top.
+#include "common/exact.glsl"
 
 float toPerceptual(float luminance) {
     return pow0(luminance, perceptualExponent);
@@ -408,24 +382,17 @@ vec3 applySaturation(vec3 colour, float amount) {
 
 // Presence.h and Presence.cpp: Texture, Clarity and Dehaze (ADR 041).
 
-// presenceLuminanceFloor, presenceLuminanceCeiling, textureLimitStops,
-// clarityLimitStops, dehazeStrength, dehazeVeil, dehazeChroma and
-// dehazeMeanLimitStops, Presence.h.
-const float presenceLuminanceFloor = 6.103515625e-05;
-const float presenceLuminanceCeiling = 65536.0;
+// presenceLuminanceFloor, presenceLuminanceCeiling and boundedLuminance.
+#include "common/presence_bounds.glsl"
+
+// textureLimitStops, clarityLimitStops, dehazeStrength, dehazeVeil,
+// dehazeChroma and dehazeMeanLimitStops, Presence.h.
 const float textureLimitStops = 0.5;
 const float clarityLimitStops = 1.0;
 const float dehazeStrength = 0.6;
 const float dehazeVeil = 0.4;
 const float dehazeChroma = 0.16;
 const float dehazeMeanLimitStops = 6.0;
-
-float boundedLuminance(float luminance) {
-    if (!(luminance > presenceLuminanceFloor)) {
-        return presenceLuminanceFloor;
-    }
-    return luminance < presenceLuminanceCeiling ? luminance : presenceLuminanceCeiling;
-}
 
 float presenceLogLuminance(vec3 colour) {
     const float luminance = plan.presenceLumaRow.x * colour.x + plan.presenceLumaRow.y * colour.y +

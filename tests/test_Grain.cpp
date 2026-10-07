@@ -305,7 +305,7 @@ TEST_CASE("Grain is the same on every render, and another seed is another patter
 }
 
 TEST_CASE("A point of the frame gets the same grain whatever region or zoom renders it",
-          "[effects][grain][region]") {
+          "[effects][grain][region][slow]") {
     // Coarse grain wherever the frame is a thousand pixels or more, so that
     // every comparison below has grain to compare.
     const DevelopState coarse{grainy(80.0F, 100.0F, 60.0F, 7U)};
@@ -385,7 +385,7 @@ TEST_CASE("Grain finer than a pixel fades into a pixel-scale substitute instead 
 }
 
 TEST_CASE("Grain at the default size stays visible on an ordinary export",
-          "[effects][grain][band]") {
+          "[effects][grain][band][slow]") {
     // An 1800 by 1200 render: the default size is 1.24 pixels a cell of the
     // finest lattice there, which the band-limit fades nearly out. The
     // substitute keeps what a box filter of the pixel would keep of it.
@@ -412,7 +412,7 @@ TEST_CASE("Grain at the default size stays visible on an ordinary export",
 }
 
 TEST_CASE("A smaller render is as grainy as a larger one downscaled to its size",
-          "[effects][grain][band][preview]") {
+          "[effects][grain][band][preview][slow]") {
     // The top-left 1024 pixels of an 8192-pixel frame, where every lattice is
     // two pixels a cell or more, boxed down to what renders 4 and 8 times
     // smaller would show; those renders draw it with the substitute.
@@ -436,7 +436,8 @@ TEST_CASE("A smaller render is as grainy as a larger one downscaled to its size"
     }
 }
 
-TEST_CASE("A preview softens grain but never moves what it can show", "[effects][grain][preview]") {
+TEST_CASE("A preview softens grain but never moves what it can show",
+          "[effects][grain][preview][slow]") {
     // A pyramid level and the full frame, the level rendered at a quarter of
     // the size; the full-resolution render boxed down to that size is what the
     // preview should resemble. Coarse, clustered grain on a 2048-pixel edge:

@@ -1,6 +1,6 @@
 #include "SettingCodec.h"
 
-#include "ShortestDecimal.h"
+#include <ShortestDecimal.h>
 
 #include <algorithm>
 #include <array>

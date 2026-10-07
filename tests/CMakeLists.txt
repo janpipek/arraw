@@ -97,7 +97,7 @@ target_compile_definitions(arraw-tests
 # the one place outside arraw-gpu that names it, because the failures it covers
 # cannot be caused through GpuContext.
 target_link_libraries(arraw-tests
-        PRIVATE arraw arraw-gpu arraw-app-core arraw-cli-core Catch2::Catch2 Qt6::Gui Qt6::GuiPrivate Qt6::Xml
+        PRIVATE arraw arraw-gpu arraw-app-core arraw-cli-core arraw-trace Catch2::Catch2 Qt6::Gui Qt6::GuiPrivate Qt6::Xml
         # exiv2 itself, to write the EXIF tags test_ExifInfo.cpp reads back.
         ${ARRAW_EXIV2})
 set_target_properties(arraw-tests PROPERTIES AUTOMOC OFF)
@@ -116,16 +116,23 @@ add_executable(arraw-widget-tests
 arraw_enable_warnings(arraw-widget-tests)
 # Qt Test for key clicks that go through the window's shortcuts, as a user's do.
 find_package(Qt6 REQUIRED COMPONENTS Test)
-target_link_libraries(arraw-widget-tests PRIVATE arraw-app-ui Qt6::Test Catch2::Catch2)
-target_include_directories(arraw-widget-tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src/core)
+# arraw-trace for test_MainWindowOpening, which turns the timing trace on.
+target_link_libraries(arraw-widget-tests PRIVATE arraw-app-ui arraw-trace Qt6::Test Catch2::Catch2)
 target_compile_definitions(arraw-widget-tests
         PRIVATE ARRAW_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 set_target_properties(arraw-widget-tests PROPERTIES AUTOMOC ON)
 arraw_deploy_qt_plugins(arraw-widget-tests)
-catch_discover_tests(arraw-widget-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# The widget tests share one QSettings file and one thumbnail cache, so under
+# `ctest -j` they run one at a time; the rest still runs beside them.
+catch_discover_tests(arraw-widget-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+                     RESOURCE_LOCK arraw-widget-state)
 
 # Registers each TEST_CASE with CTest individually, so `ctest -R` can select one.
-catch_discover_tests(arraw-tests)
+# The cases tagged [slow] (a second or more each in Debug) are also labelled
+# "slow", so `ctest -LE slow` (`just test-fast`) skips them. Two discoveries with
+# complementary specs register every case once.
+catch_discover_tests(arraw-tests TEST_SPEC "~[slow]")
+catch_discover_tests(arraw-tests TEST_SPEC "[slow]" PROPERTIES LABELS slow)
 
 # arraw's headless platform, in its own executable: it needs a QGuiApplication
 # on that platform, and the suite above needs its QCoreApplication. Linux only,
@@ -170,17 +177,22 @@ add_executable(arraw-gpu-tests
         gpu/test_GpuPointwise.cpp
         gpu/test_GpuGeometry.cpp
         gpu/test_GpuResize.cpp
-        gpu/test_GpuSample.cpp)
+        gpu/test_GpuSample.cpp
+        gpu/test_GpuShaderLayout.cpp)
 arraw_enable_warnings(arraw-gpu-tests)
 target_include_directories(arraw-gpu-tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/core
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/gpu)
 # Later steps load tests/fixtures/*.dng, as arraw-tests does.
+# test_GpuShaderLayout reads the shader sources for the constants that
+# reflection cannot see.
 target_compile_definitions(arraw-gpu-tests
-        PRIVATE ARRAW_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+        PRIVATE ARRAW_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
+        ARRAW_SHADER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../src/gpu/shaders")
+# GuiPrivate for QShader, whose reflection test_GpuShaderLayout compares with GpuPlan.h.
 target_link_libraries(arraw-gpu-tests
-        PRIVATE arraw arraw-gpu arraw-cli-core Catch2::Catch2 Qt6::Gui)
+        PRIVATE arraw arraw-gpu arraw-cli-core Catch2::Catch2 Qt6::Gui Qt6::GuiPrivate)
 # The headless platform exists on Linux only; its INTERFACE defines
 # ARRAW_HEADLESS_PLATFORM, which main.cpp tests.
 if(TARGET arraw-headless-platform)
@@ -188,7 +200,9 @@ if(TARGET arraw-headless-platform)
 endif()
 set_target_properties(arraw-gpu-tests PROPERTIES AUTOMOC OFF)
 arraw_deploy_qt_plugins(arraw-gpu-tests)
-catch_discover_tests(arraw-gpu-tests PROPERTIES SKIP_RETURN_CODE 4)
+catch_discover_tests(arraw-gpu-tests TEST_SPEC "~[slow]" PROPERTIES SKIP_RETURN_CODE 4)
+catch_discover_tests(arraw-gpu-tests TEST_SPEC "[slow]"
+        PROPERTIES SKIP_RETURN_CODE 4 LABELS slow)
 
 # The real arraw-cli binary, for what only main() decides: which Qt application
 # is made, when, and from which arguments. A platform that does not exist makes

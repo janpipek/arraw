@@ -170,8 +170,9 @@ quietly erasing somebody's Lightroom edits in the meantime.
 
 ## Consequences
 
-- **Adding a setting is two edits** — the field and its row — and the missing
-  row fails the build on Linux.
+- **Adding a setting is two edits to store it** — the field and its row — and
+  the missing row fails the build on Linux. Making it affect the render is
+  more work (ADR 019).
 - **An absolute Kelvin transfers correctly across bodies.** Pasting 5500 K
   across a shoot shot on two cameras lands on the same colour, which a gain
   measured in the working space cannot do.

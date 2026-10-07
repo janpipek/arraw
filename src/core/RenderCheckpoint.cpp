@@ -3,6 +3,7 @@
 #include "CheckpointState.h"
 
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 namespace arraw {
@@ -46,16 +47,19 @@ const CheckpointState& stateOf(const RenderCheckpoint& checkpoint) noexcept {
     return *checkpoint.state_;
 }
 
-void requireResumable(const CheckpointState& from, const ProcessingPlan& plan, ImageSize sourceSize,
-                      Stage stopAfter) {
+void requireStopAfter(Stage from, Stage stopAfter) {
     if (static_cast<std::size_t>(stopAfter) >= stageCount) {
         throw std::invalid_argument("A render needs a recognised pass boundary to stop after");
     }
-    if (stopAfter < from.boundary) {
+    if (stopAfter < from) {
         throw std::invalid_argument("A render cannot stop before the checkpoint it resumes from");
     }
+}
+
+std::optional<std::string_view> staleReason(const CheckpointState& from, const ProcessingPlan& plan,
+                                            ImageSize sourceSize) {
     if (!prefixMatches(from.plan, plan, from.boundary)) {
-        throw std::invalid_argument("The checkpoint was not made by this render's plan");
+        return "The checkpoint was not made by this render's plan";
     }
     ImageSize expected = sourceSize;
     if (from.boundary == Stage::Geometry) {
@@ -64,7 +68,16 @@ void requireResumable(const CheckpointState& from, const ProcessingPlan& plan, I
         expected = plan.resize->outputSize;
     }
     if (from.size() != expected) {
-        throw std::invalid_argument("The checkpoint is not of the size this render would make");
+        return "The checkpoint is not of the size this render would make";
+    }
+    return std::nullopt;
+}
+
+void requireResumable(const CheckpointState& from, const ProcessingPlan& plan, ImageSize sourceSize,
+                      Stage stopAfter) {
+    requireStopAfter(from.boundary, stopAfter);
+    if (const auto why = staleReason(from, plan, sourceSize)) {
+        throw std::invalid_argument(std::string(*why));
     }
 }
 

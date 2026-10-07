@@ -1,4 +1,5 @@
 #version 440
+#extension GL_GOOGLE_include_directive : require
 
 // The vertical half of the resize of an opaque image: Resample.cpp's
 // verticalPass<true>.
@@ -13,24 +14,8 @@ layout(location = 0) out vec4 fragColor;
 
 layout(binding = 0) uniform sampler2D sums;
 
-// The contract with GpuResizeBlock: keep the members in step with it. The
-// plane is not read here.
-layout(std140, binding = 1) uniform Resize {
-    uint plane;
-    uint inputLength;
-    uvec2 offset;
-} plan;
-
-// The weights of the vertical axis, as packResizeWeights lays them out.
-layout(binding = 2) uniform sampler2D weights;
-
-float tapWeight(int row, int k) {
-    return texelFetch(weights, ivec2(1 + k / 4, row), 0)[k % 4];
-}
-
-float store(float value, float sawNegative) {
-    return (value < 0.0 && sawNegative == 0.0) ? 0.0 : value;
-}
+// The Resize block, the weights of the resized axis, and tapWeight and store.
+#include "common/resize.glsl"
 
 void main() {
     // gl_FragCoord is (x + 0.5, y + 0.5): output column x of row y.

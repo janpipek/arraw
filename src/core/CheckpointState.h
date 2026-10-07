@@ -6,6 +6,8 @@
 #include <ImageBuffer.h>
 #include <RenderCheckpoint.h>
 
+#include <optional>
+#include <string_view>
 #include <variant>
 
 namespace arraw {
@@ -57,23 +59,42 @@ struct CheckpointState {
 /// @param checkpoint Checkpoint to look into; the result lives as long as it does.
 [[nodiscard]] const CheckpointState& stateOf(const RenderCheckpoint& checkpoint) noexcept;
 
+/// @brief Refuses a render that cannot stop where it asks to, after a checkpoint.
+///
+/// A caller's mistake rather than a stale checkpoint, so it is refused by
+/// ::arraw::canResumeFrom as well as by a resume.
+/// @param from Boundary of the checkpoint resumed from.
+/// @param stopAfter Last boundary the render runs.
+/// @throws std::invalid_argument if @p stopAfter is not a boundary or is before @p from.
+void requireStopAfter(Stage from, Stage stopAfter);
+
+/// @brief Says why a checkpoint cannot serve a render, or nothing if it can.
+///
+/// The one place the validity rule is applied, for both backends and for
+/// ::arraw::canResumeFrom (ADR 011): the checkpoint's plan must equal the new
+/// one up to its own boundary. The plan carries the source's size and
+/// orientation (in the geometry group) and its encoding (in the pointwise
+/// one), but not yet a file or a stamp (ADR 012's decode block), so for a
+/// checkpoint whose boundary precedes the geometry, the pixels' size is also
+/// checked against the source's. Two sources of one size and encoding are not
+/// told apart here; a caller that swaps one for the other must drop its
+/// checkpoints. Where the pixels live is not part of the rule.
+/// @param from Checkpoint to resume from.
+/// @param plan Plan of the render being resumed, resolved for its stop.
+/// @param sourceSize Size of the source the render develops.
+/// @return Why the checkpoint is stale, or empty if it is not.
+[[nodiscard]] std::optional<std::string_view>
+staleReason(const CheckpointState& from, const ProcessingPlan& plan, ImageSize sourceSize);
+
 /// @brief Refuses a resume that a checkpoint cannot serve.
 ///
-/// The one place the validity rule is applied, for both backends (ADR 011): the
-/// checkpoint's plan must equal the new one up to its own boundary, and the run
-/// must not stop before it. The plan carries the source's size and orientation
-/// (in the geometry group) and its encoding (in the pointwise one), but not yet
-/// a file or a stamp (ADR 012's decode block), so for a pointwise checkpoint,
-/// whose boundary precedes the geometry, the pixels' size is also checked
-/// against the source's. Two sources of one size and encoding are not told
-/// apart here; a caller that swaps one for the other must drop its checkpoints.
+/// ::arraw::requireStopAfter, then ::arraw::staleReason, raised.
 /// @param from Checkpoint to resume from.
 /// @param plan Plan of the render being resumed, resolved for @p stopAfter.
 /// @param sourceSize Size of the source the render develops.
 /// @param stopAfter Last boundary the render runs.
 /// @throws std::invalid_argument if @p stopAfter is not a boundary or is before
-/// the checkpoint's, the plan prefixes differ, or the pixels are not what the
-/// plan would have made at that boundary.
+/// the checkpoint's, or the checkpoint is stale.
 void requireResumable(const CheckpointState& from, const ProcessingPlan& plan, ImageSize sourceSize,
                       Stage stopAfter);
 

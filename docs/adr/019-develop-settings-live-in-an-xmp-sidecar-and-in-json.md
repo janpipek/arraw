@@ -139,9 +139,12 @@ sidecar's own name appears in the message where it matters.
 
 ## Consequences
 
-- **Adding a develop setting is still two edits,** a field and a row. It then
-  appears in JSON, the sidecar, the command line's options, `info` and
-  Python.
+- **Adding a develop setting takes two edits for persistence,** a field and a
+  row. It then appears in JSON, the sidecar, the command line's options, `info`
+  and Python with no codec work. Making the setting *do* something is much
+  more: Dehaze (ADR 041) touched about eleven production files, among them the
+  plan, the CPU and GPU develop paths, a shader, the panel and its
+  presentation. "Two edits" counts the storage, not the feature.
 - **Moving a crop with a rotation or flip (ADR 014) is not implemented.** The
   command line resets an explicit crop to automatic framing, with
   `CropReset`, when its flags change the frame the crop was drawn in. The

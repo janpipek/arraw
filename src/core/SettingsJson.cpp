@@ -1,7 +1,8 @@
 #include "SettingsJson.h"
 
 #include "SettingCodec.h"
-#include "ShortestDecimal.h"
+
+#include <ShortestDecimal.h>
 
 #include <QByteArray>
 #include <QJsonArray>

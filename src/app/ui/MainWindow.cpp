@@ -57,6 +57,7 @@
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
+#include <iterator>
 #include <optional>
 #include <stdexcept>
 #include <string_view>
@@ -77,9 +78,28 @@ bool cpuForcedByEnvironment() {
     return value != nullptr && std::string_view(value) == "cpu";
 }
 
+/// @brief Tells whether previews and exports stay on the CPU without looking for a GPU.
+///
+/// When the environment says so, or on a platform whose GPU is not used by
+/// default (Windows for now, ADR 017) unless the settings name an adapter.
+bool cpuChosen(const AppSettings& settings) {
+    return cpuForcedByEnvironment() || (!gpuUsedByDefault() && !settings.gpu);
+}
+
 /// @brief Converts a filesystem path to a Qt string, through UTF-16.
 QString toQString(const std::filesystem::path& path) {
     return QString::fromStdU16String(path.u16string());
+}
+
+/// @brief Reduces a state to what the crop mode shows (ADR 040, ADR 037).
+///
+/// The photograph keeps its turns and flips but is neither straightened nor
+/// cropped, and the effects, which follow the crop, are left off.
+DevelopState uncroppedState(DevelopState state) {
+    state.settings.geometry.straighten = 0.0;
+    state.settings.geometry.crop = {};
+    state.settings.effects = {};
+    return state;
 }
 
 } // namespace
@@ -97,7 +117,8 @@ MainWindow::MainWindow(QWidget* parent)
                   this, [this, result = std::move(result)] { showResult(result); },
                   Qt::QueuedConnection);
           },
-          cpuForcedByEnvironment() ? PreviewRenderer::Device::Cpu : PreviewRenderer::Device::Auto,
+          cpuChosen(runningSettings_) ? PreviewRenderer::Device::Cpu
+                                      : PreviewRenderer::Device::Auto,
           runningSettings_,
           [this](std::uint64_t request, const Progress& progress) {
               // On the worker thread, already thinned to about thirty a second.
@@ -115,7 +136,7 @@ MainWindow::MainWindow(QWidget* parent)
                   this, [this, result = std::move(result)] { showExportResult(result); },
                   Qt::QueuedConnection);
           },
-          cpuForcedByEnvironment() ? ExportQueue::Device::Cpu : ExportQueue::Device::Auto,
+          cpuChosen(runningSettings_) ? ExportQueue::Device::Cpu : ExportQueue::Device::Auto,
           runningSettings_),
       photoLoader_(
           ThumbnailCache(ThumbnailCache::defaultRoot()),
@@ -201,30 +222,36 @@ void MainWindow::buildMenu() {
     QMenu* fileMenu = menuBar()->addMenu(tr("&File"));
 
     QAction* openAction = fileMenu->addAction(tr("&Open…"));
+    openAction->setObjectName("openAction");
     openAction->setShortcut(QKeySequence::Open);
     connect(openAction, &QAction::triggered, this, &MainWindow::openFileWithDialog);
 
     QAction* openFolderAction = fileMenu->addAction(tr("Open &Folder…"));
+    openFolderAction->setObjectName("openFolderAction");
     openFolderAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_O));
     connect(openFolderAction, &QAction::triggered, this, &MainWindow::openFolderWithDialog);
 
     saveAction_ = fileMenu->addAction(tr("&Save Adjustments"));
+    saveAction_->setObjectName("saveAction");
     saveAction_->setShortcut(QKeySequence::Save);
     saveAction_->setEnabled(false);
     connect(saveAction_, &QAction::triggered, this, [this] { saveAdjustments(); });
 
     exportAction_ = fileMenu->addAction(tr("&Export…"));
+    exportAction_->setObjectName("exportAction");
     exportAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_E));
     exportAction_->setEnabled(false);
     connect(exportAction_, &QAction::triggered, this, &MainWindow::exportWithDialog);
 
     fileMenu->addSeparator();
     QAction* quitAction = fileMenu->addAction(tr("&Quit"));
+    quitAction->setObjectName("quitAction");
     quitAction->setShortcut(QKeySequence::Quit);
     connect(quitAction, &QAction::triggered, this, [this] { close(); });
 
     QMenu* editMenu = menuBar()->addMenu(tr("&Edit"));
     undoAction_ = editMenu->addAction(tr("&Undo"));
+    undoAction_->setObjectName("undoAction");
     undoAction_->setShortcuts(QKeySequence::Undo);
     undoAction_->setEnabled(false);
     connect(undoAction_, &QAction::triggered, this, [this] {
@@ -240,6 +267,7 @@ void MainWindow::buildMenu() {
         });
     });
     redoAction_ = editMenu->addAction(tr("&Redo"));
+    redoAction_->setObjectName("redoAction");
     // Every binding the platform has: Ctrl+Shift+Z as well as Ctrl+Y where both are usual.
     redoAction_->setShortcuts(QKeySequence::Redo);
     redoAction_->setEnabled(false);
@@ -257,20 +285,24 @@ void MainWindow::buildMenu() {
 
     editMenu->addSeparator();
     QAction* settingsAction = editMenu->addAction(tr("&Settings…"));
+    settingsAction->setObjectName("settingsAction");
     settingsAction->setMenuRole(QAction::PreferencesRole);
     settingsAction->setShortcut(QKeySequence::Preferences);
     connect(settingsAction, &QAction::triggered, this, &MainWindow::showSettings);
 
     photoMenu_ = menuBar()->addMenu(tr("&Photo"));
     cropAction_ = photoMenu_->addAction(tr("&Crop && Straighten"));
+    cropAction_->setObjectName("cropAction");
     cropAction_->setShortcut(QKeySequence(Qt::Key_R));
     cropAction_->setCheckable(true);
     cropAction_->setEnabled(false);
     connect(cropAction_, &QAction::triggered, this, &MainWindow::setCropMode);
     photoMenu_->addSeparator();
-    const auto addGeometryAction = [this](const QString& text, const QKeySequence& shortcut,
+    const auto addGeometryAction = [this](const QString& name, const QString& text,
+                                          const QKeySequence& shortcut,
                                           std::function<void(CropEditing&)> command) {
         QAction* action = photoMenu_->addAction(text);
+        action->setObjectName(name);
         if (!shortcut.isEmpty()) {
             action->setShortcut(shortcut);
         }
@@ -279,12 +311,16 @@ void MainWindow::buildMenu() {
                 [this, command = std::move(command)] { editGeometry(command); });
         geometryActions_.push_back(action);
     };
-    addGeometryAction(tr("Rotate &Left"), QKeySequence(Qt::CTRL | Qt::Key_BracketLeft),
+    addGeometryAction("rotateLeftAction", tr("Rotate &Left"),
+                      QKeySequence(Qt::CTRL | Qt::Key_BracketLeft),
                       [](CropEditing& editing) { editing.turn(false); });
-    addGeometryAction(tr("Rotate &Right"), QKeySequence(Qt::CTRL | Qt::Key_BracketRight),
+    addGeometryAction("rotateRightAction", tr("Rotate &Right"),
+                      QKeySequence(Qt::CTRL | Qt::Key_BracketRight),
                       [](CropEditing& editing) { editing.turn(true); });
-    addGeometryAction(tr("Flip &Horizontal"), {}, [](CropEditing& editing) { editing.flip(true); });
-    addGeometryAction(tr("Flip &Vertical"), {}, [](CropEditing& editing) { editing.flip(false); });
+    addGeometryAction("flipHorizontalAction", tr("Flip &Horizontal"), {},
+                      [](CropEditing& editing) { editing.flip(true); });
+    addGeometryAction("flipVerticalAction", tr("Flip &Vertical"), {},
+                      [](CropEditing& editing) { editing.flip(false); });
 
     // Rating, colour labels and stepping follow the geometry in the same menu, as in Lightroom.
     photoMenu_->addSeparator();
@@ -323,9 +359,11 @@ void MainWindow::buildZoomControls() {
     QMenu* zoomMenu = viewMenu_->addMenu(tr("&Zoom"));
 
     zoomInAction_ = zoomMenu->addAction(tr("Zoom &In"));
+    zoomInAction_->setObjectName("zoomInAction");
     zoomInAction_->setShortcut(QKeySequence::ZoomIn);
     connect(zoomInAction_, &QAction::triggered, this, [this] { photoView_->zoomBy(2.0); });
     zoomOutAction_ = zoomMenu->addAction(tr("Zoom &Out"));
+    zoomOutAction_->setObjectName("zoomOutAction");
     zoomOutAction_->setShortcut(QKeySequence::ZoomOut);
     connect(zoomOutAction_, &QAction::triggered, this, [this] { photoView_->zoomBy(0.5); });
     zoomMenu->addSeparator();
@@ -336,10 +374,12 @@ void MainWindow::buildZoomControls() {
     auto* fitAction = new QAction(tr("&Fit"), this);
     fitAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_0));
     connect(fitAction, &QAction::triggered, this, [this] { photoView_->zoomToFit(); });
+    fitAction->setObjectName("zoomFitAction");
     zoomActions_.push_back(fitAction);
     for (const double preset : zoomPresets) {
         auto* action = new QAction(zoomPercentLabel(preset), this);
         connect(action, &QAction::triggered, this, [this, preset] { photoView_->zoomTo(preset); });
+        action->setObjectName(QString("zoom%1Action").arg(qRound(preset * 100)));
         zoomActions_.push_back(action);
     }
     auto* dropdown = new QMenu(this);
@@ -539,10 +579,7 @@ void MainWindow::setCropMode(bool cropping) {
 void MainWindow::seedCropOverlay() {
     CropOverlay& crop = photoView_->cropOverlay();
     const GeometrySettings& geometry = crop.editing().geometry();
-    DevelopState uncropped = open_->session.photo().state();
-    uncropped.settings.geometry.straighten = 0.0;
-    uncropped.settings.geometry.crop = {};
-    uncropped.settings.effects = {};
+    DevelopState uncropped = uncroppedState(open_->session.photo().state());
     if (open_->lastCropImage && open_->lastCropImage->first == uncropped) {
         // Nothing the mode shows changed since it was last left: its render is exact.
         crop.setImage(open_->lastCropImage->second);
@@ -1001,6 +1038,7 @@ void MainWindow::buildFilmStripDock() {
     resizeDocks({stripDock_}, {132}, Qt::Vertical);
 
     QAction* toggle = stripDock_->toggleViewAction();
+    toggle->setObjectName("filmStripAction");
     toggle->setText(tr("&Film Strip"));
     toggle->setShortcut(Qt::Key_F9);
     viewMenu_->addAction(toggle);
@@ -1130,15 +1168,16 @@ void MainWindow::exportWithDialog() {
             return; // The file dialog only asked about the name as typed.
         }
 
-        exportQueue_.enqueue({.state = photo.state(),
-                              .source = open_->decoded,
-                              .request = requestOf(settings),
-                              .options = optionsOf(settings),
-                              .path = path,
-                              .metadata = ExportMetadata{.source = photo.path(),
-                                                         .marks = photo.marks(),
-                                                         .selection = selectionOf(settings)}});
-        exportNames_.push_back(toQString(path.filename()));
+        const std::uint64_t id =
+            exportQueue_.enqueue({.state = photo.state(),
+                                  .source = open_->decoded,
+                                  .request = requestOf(settings),
+                                  .options = optionsOf(settings),
+                                  .path = path,
+                                  .metadata = ExportMetadata{.source = photo.path(),
+                                                             .marks = photo.marks(),
+                                                             .selection = selectionOf(settings)}});
+        exportNames_.emplace(id, toQString(path.filename()));
         showExportProgress();
     } catch (const std::exception& error) {
         QMessageBox::warning(this, tr("Cannot Export Photograph"), QString::fromUtf8(error.what()));
@@ -1149,7 +1188,7 @@ void MainWindow::showExportProgress() {
     if (exportNames_.empty()) {
         return;
     }
-    QString text = tr("Exporting %1…").arg(exportNames_.front());
+    QString text = tr("Exporting %1…").arg(exportNames_.begin()->second);
     if (exportNames_.size() > 1) {
         text += tr(" (%1 more)").arg(exportNames_.size() - 1);
     }
@@ -1158,10 +1197,10 @@ void MainWindow::showExportProgress() {
 
 void MainWindow::showExportResult(const ExportResult& result) {
     statusBar()->setToolTip({});
-    // Every result belongs to the oldest name: jobs run in order.
-    if (!exportNames_.empty()) {
-        const QString name = exportNames_.front();
-        exportNames_.pop_front();
+    // A result names its job; one whose job was cancelled has no name left.
+    if (const auto found = exportNames_.find(result.id); found != exportNames_.end()) {
+        const QString name = found->second;
+        exportNames_.erase(found);
         if (result.error.empty()) {
             if (result.warnings.empty()) {
                 statusBar()->showMessage(tr("Exported %1").arg(name), 5000);
@@ -1279,7 +1318,10 @@ void MainWindow::closeEvent(QCloseEvent* event) {
         // The queue's oldest job is the one in progress, or about to start;
         // the others are dropped and will not report.
         const std::size_t dropped = exportQueue_.cancelQueued();
-        exportNames_.resize(exportNames_.size() - std::min(dropped, exportNames_.size()));
+        // Identifiers increase, so the dropped jobs are the newest names.
+        for (std::size_t i = 0; i < dropped && !exportNames_.empty(); ++i) {
+            exportNames_.erase(std::prev(exportNames_.end()));
+        }
         QMainWindow::closeEvent(event);
         return;
     }
@@ -1304,10 +1346,7 @@ void MainWindow::requestRender() {
         // crop (ADR 037), so they wait for it. One geometry for the whole
         // session, so the renderer's checkpoints serve every crop edit, and an
         // edit that changes nothing here asks for nothing.
-        DevelopState uncropped = state;
-        uncropped.settings.geometry.straighten = 0.0;
-        uncropped.settings.geometry.crop = {};
-        uncropped.settings.effects = {};
+        DevelopState uncropped = uncroppedState(state);
         const QSize size = photoView_->cropOverlay().renderSize().expandedTo({1, 1});
         if (lastCropRender_ && lastCropRender_->first == uncropped &&
             lastCropRender_->second == size) {

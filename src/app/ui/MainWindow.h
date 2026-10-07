@@ -24,6 +24,7 @@
 #include <deque>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -442,8 +443,8 @@ private:
     /// Crop rules for a panel edit of the geometry outside the crop mode, from its start.
     std::optional<CropEditing> geometryEdit_;
 
-    /// File names of the exports that have not reported yet, oldest first.
-    std::deque<QString> exportNames_;
+    /// File names of the exports that have not reported yet, by the identifier the queue gave.
+    std::map<std::uint64_t, QString> exportNames_;
 
     /// Whether the user chose to wait for the exports before closing.
     bool closeWhenIdle_ = false;
@@ -453,21 +454,23 @@ private:
 
     /// Worker that renders the preview.
     ///
-    /// Declared last so that it is destroyed first: its destructor joins the
-    /// thread, after which no callback can run, so nothing it touches has
-    /// been destroyed yet.
+    /// The three workers are the last members, in the order previewRenderer_,
+    /// exportQueue_, photoLoader_, so they are destroyed in the reverse order,
+    /// before everything declared above them. Each destructor joins its thread
+    /// (the export queue finishes its job in progress), after which no callback
+    /// can run, so nothing a callback touches has been destroyed yet. The
+    /// workers do not use one another, so their order among themselves is free.
     PreviewRenderer previewRenderer_;
 
     /// Worker that develops and writes exports.
     ///
-    /// Declared after everything it reports to, so that it is destroyed
-    /// before any of it, and no callback reaches a destroyed window.
+    /// Declared after everything it reports to; see previewRenderer_.
     ExportQueue exportQueue_;
 
     /// Workers that decode photographs and read camera previews (ADR 043).
     ///
-    /// Declared last, as the workers above: destroying it cancels the decode in
-    /// progress and waits for its threads, after which no callback can run.
+    /// Declared last, so it is destroyed first: it cancels the decode in
+    /// progress and waits for its threads; see previewRenderer_.
     PhotoLoader photoLoader_;
 };
 

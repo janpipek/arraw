@@ -1,4 +1,5 @@
 #version 440
+#extension GL_GOOGLE_include_directive : require
 
 // One filtering step of the Denoise pass: Denoise.cpp's reduction to the grid,
 // its colour blur and its separable bilateral, one step per render.
@@ -17,21 +18,8 @@ layout(location = 0) out vec4 fragColor;
 // The source, the grid of ratios, or the across result (luminance, perceptual), by step.
 layout(binding = 0) uniform sampler2D source;
 
-layout(std140, binding = 1) uniform Denoise {
-    uint step;
-    uint radius;
-    uint gridReduction;
-    uint luminance;
-    uint color;
-    float rangeFactor;
-    float luminanceMix;
-    float colorMix;
-    vec4 lumaRow;
-    vec4 neutral;
-    uvec2 sourceSize;
-    uvec2 gridSize;
-    vec4 weights[17];
-} plan;
+// The Denoise block and ratioFloor.
+#include "common/denoise_block.glsl"
 
 // DenoiseStep in GpuPlan.h.
 const uint stepReduce = 0u;
@@ -40,19 +28,13 @@ const uint stepBlurDown = 2u;
 const uint stepBilateralAcross = 3u;
 const uint stepBilateralDown = 4u;
 
-// denoiseRatioFloor in Denoise.h: 2^-14.
-const float ratioFloor = 6.103515625e-05;
-
-// 1 / 2.2f as C++ rounds it to float; see develop.frag.
-const float perceptualExponent = 0.454545438;
+#include "common/perceptual.glsl"
 
 float weightAt(uint tap) {
     return plan.weights[tap / 4u][tap % 4u];
 }
 
-float lumaOf(vec3 colour) {
-    return plan.lumaRow.x * colour.r + plan.lumaRow.y * colour.g + plan.lumaRow.z * colour.b;
-}
+#include "common/luma_row.glsl"
 
 float perceptualLuma(float luminance) {
     return luminance > 0.0 ? pow(luminance, perceptualExponent) : 0.0;

@@ -183,7 +183,7 @@ const char* name(ResizeFilter filter) {
 
 } // namespace
 
-TEST_CASE("Resizing on the GPU matches the CPU when shrinking", "[gpu][resize]") {
+TEST_CASE("Resizing on the GPU matches the CPU when shrinking", "[gpu][resize][slow]") {
     const ImageBuffer source = opaqueImage({1200, 800});
     for (const ResizeFilter filter : {ResizeFilter::Lanczos3, ResizeFilter::Bilinear}) {
         for (const double factor : {0.5, 1.0 / 3.0, 0.125, 1.0 / 13.7, 0.37, 0.9}) {
@@ -625,7 +625,7 @@ RenderRequest regional(RenderRequest::Region region, double factor, ResizeFilter
 
 } // namespace
 
-TEST_CASE("Rendering a region on the GPU matches the CPU", "[gpu][resize][region]") {
+TEST_CASE("Rendering a region on the GPU matches the CPU", "[gpu][resize][region][slow]") {
     const ImageBuffer opaque = opaqueImage({400, 300});
     const ImageBuffer translucent = translucentImage({400, 300});
     const RenderRequest::Region regions[] = {

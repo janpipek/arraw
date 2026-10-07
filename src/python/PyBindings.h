@@ -17,10 +17,9 @@
 #include <nanobind/stl/vector.h>
 // clang-format on
 
-#include "ShortestDecimal.h"
-
 #include <DevelopSettings.h>
 #include <Diagnostics.h>
+#include <ShortestDecimal.h>
 #include <ToneCurveSettings.h>
 
 #include <optional>

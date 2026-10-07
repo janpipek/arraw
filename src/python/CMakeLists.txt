@@ -18,7 +18,6 @@ find_package(nanobind CONFIG REQUIRED)
 nanobind_add_module(_arraw NB_STATIC Module.cpp BindImage.cpp BindExif.cpp BindSettings.cpp BindPhoto.cpp BindShots.cpp)
 arraw_enable_warnings(_arraw)
 target_link_libraries(_arraw PRIVATE arraw)
-target_include_directories(_arraw PRIVATE ${CMAKE_SOURCE_DIR}/src/core)
 target_compile_definitions(_arraw PRIVATE ARRAW_VERSION="${PROJECT_VERSION}")
 
 if(SKBUILD)

@@ -1,4 +1,5 @@
 #version 440
+#extension GL_GOOGLE_include_directive : require
 
 // One step of one base of the Presence context: Presence.cpp's reduction to
 // the grid of log2 mean luminance, its opening by an octagon and the opening's
@@ -50,26 +51,14 @@ const uint stepMinimumAntidiagonal = 10u;
 const uint stepMaximumDiagonal = 11u;
 const uint stepMaximumAntidiagonal = 12u;
 
-// presenceLuminanceFloor and presenceLuminanceCeiling in Presence.h: 2^-14 and 2^16.
-const float luminanceFloor = 6.103515625e-05;
-const float luminanceCeiling = 65536.0;
-
 float weightAt(uint tap) {
     return plan.weights[tap / 4u][tap % 4u];
 }
 
-// boundedLuminance(), Presence.h: NaN and below the floor to the floor, above
-// the ceiling to the ceiling.
-float boundedLuminance(float luminance) {
-    if (!(luminance > luminanceFloor)) {
-        return luminanceFloor;
-    }
-    return luminance < luminanceCeiling ? luminance : luminanceCeiling;
-}
+// presenceLuminanceFloor, presenceLuminanceCeiling and boundedLuminance.
+#include "common/presence_bounds.glsl"
 
-float lumaOf(vec3 colour) {
-    return plan.lumaRow.x * colour.r + plan.lumaRow.y * colour.g + plan.lumaRow.z * colour.b;
-}
+#include "common/luma_row.glsl"
 
 // reducedGrid(): the log2 of the mean luminance of the block a cell covers.
 float reduce(ivec2 cell) {

@@ -258,6 +258,33 @@ struct RenderRequest {
                                           const RenderRequest& request = {},
                                           ProgressChannel* progress = nullptr);
 
+/// @brief Says whether a checkpoint can still serve a render, without rendering.
+///
+/// The question ::arraw::resumeFrom answers by refusing, asked without the
+/// exception: true exactly when the plan this render resolves equals the
+/// checkpoint's up to its boundary and the pixels are of the size it would
+/// have made (ADR 011), by the same code that rule is applied by. A caller
+/// keeping checkpoints asks this to choose which one to resume from, and so
+/// tells a stale checkpoint, which is expected, from a bad request, which is
+/// not and still throws.
+///
+/// Where the pixels live is not part of the answer: a resume on the other
+/// backend's kind of checkpoint, or on another device's, is refused by the
+/// resume itself. The plan is resolved here as the resume would resolve it,
+/// so asking first costs one more planning of the render (and, for a resize
+/// with alpha, one more opacity scan; see ::arraw::develop).
+/// @param from Checkpoint to resume from, on the host or on a device.
+/// @param source Decoded photograph the checkpoint was made from.
+/// @param state How the photograph is developed now.
+/// @param stopAfter Last boundary the render would run; not before the checkpoint's.
+/// @param request What to render; read only when @p stopAfter is ::arraw::Stage::Resize or later.
+/// @return Whether resuming from @p from would be valid.
+/// @throws std::invalid_argument if @p stopAfter is not a boundary or is before
+/// the checkpoint's, or as ::arraw::develop for @p state and @p request.
+[[nodiscard]] bool canResumeFrom(const RenderCheckpoint& from, const ImageBuffer& source,
+                                 const DevelopState& state, Stage stopAfter,
+                                 const RenderRequest& request = {});
+
 /// @brief Renders a photograph with the pointwise chain stopped at a tap, to measure it.
 ///
 /// ADR 011's `sample(tap)`, the looking verb beside ::arraw::developUntil's

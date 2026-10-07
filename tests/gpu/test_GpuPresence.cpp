@@ -87,7 +87,7 @@ double requirePointwiseMatches(ImageBuffer source, const DevelopSettings& settin
 
 } // namespace
 
-TEST_CASE("Presence on the device matches the CPU", "[gpu][presence]") {
+TEST_CASE("Presence on the device matches the CPU", "[gpu][presence][slow]") {
     struct Case {
         std::string label;
         DevelopSettings settings;
