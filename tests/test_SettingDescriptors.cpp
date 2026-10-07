@@ -466,3 +466,99 @@ TEST_CASE("A row's stage is the first boundary its value changes in the plan", "
         }
     }
 }
+
+TEST_CASE("Every copy section has a Look-scoped row", "[descriptors][sections]") {
+    std::set<CopySection> covered;
+    for (const FieldDescriptor& descriptor : developSettingDescriptors) {
+        if (descriptor.scope == SettingScope::Look) {
+            covered.insert(descriptor.section);
+        }
+    }
+    for (std::size_t i = 0; i < copySectionNames.size(); ++i) {
+        CAPTURE(copySectionNames[i]);
+        REQUIRE(covered.contains(static_cast<CopySection>(i)));
+    }
+}
+
+TEST_CASE("Copy section names cover the enumeration in order, uniquely",
+          "[descriptors][sections]") {
+    REQUIRE(copySectionNames.size() == static_cast<std::size_t>(CopySection::Crop) + 1);
+    REQUIRE(copySectionNames.front() == "whiteBalance");
+    REQUIRE(copySectionNames[static_cast<std::size_t>(CopySection::Grain)] == "grain");
+    REQUIRE(copySectionNames.back() == "crop");
+    const std::set<std::string_view> unique(copySectionNames.begin(), copySectionNames.end());
+    REQUIRE(unique.size() == copySectionNames.size());
+}
+
+TEST_CASE("Descriptor rows sit in the expected copy sections", "[descriptors][sections]") {
+    const auto sectionOf = [](std::string_view key) { return findDescriptor(key)->section; };
+    REQUIRE(sectionOf("exposure") == CopySection::Exposure);
+    REQUIRE(sectionOf("contrast") == CopySection::Tone);
+    REQUIRE(sectionOf("temperature") == CopySection::WhiteBalance);
+    REQUIRE(sectionOf("saturation") == CopySection::Color);
+    REQUIRE(sectionOf("straighten") == CopySection::RotateAndFlip);
+    REQUIRE(sectionOf("grainSeed") == CopySection::Grain);
+    REQUIRE(findDescriptor("grainSeed")->scope == SettingScope::Photo);
+}
+
+TEST_CASE("The copy sections list the keys the plan gives them", "[descriptors][sections]") {
+    struct Row {
+        CopySection section;
+        std::vector<std::string> keys;
+    };
+    std::vector<Row> table{
+        {CopySection::WhiteBalance, {"whiteBalance", "temperature", "tint"}},
+        {CopySection::Exposure, {"exposure"}},
+        {CopySection::Tone,
+         {"contrast", "highlights", "shadows", "whites", "blacks", "filmicHighlights"}},
+        {CopySection::Presence, {"texture", "clarity", "dehaze"}},
+        {CopySection::Color, {"saturation", "vibrance"}},
+        {CopySection::ToneCurve,
+         {"toneCurveLuma", "toneCurveRed", "toneCurveGreen", "toneCurveBlue"}},
+        {CopySection::Hsl, {}},
+        {CopySection::BlackAndWhite, {"convertToGrayscale"}},
+        {CopySection::ColorGrading, {"gradeBalance", "gradeBlending"}},
+        {CopySection::NoiseReduction,
+         {"luminanceNoiseReduction", "luminanceNoiseDetail", "luminanceNoiseFilter",
+          "colorNoiseReduction", "colorNoiseSmoothness"}},
+        {CopySection::Vignette, {"vignetteAmount", "vignetteMidpoint", "vignetteFeather"}},
+        {CopySection::Grain, {"grainAmount", "grainSize", "grainRoughness", "grainModel"}},
+        {CopySection::RotateAndFlip, {"rotation", "flipHorizontal", "flipVertical", "straighten"}},
+        {CopySection::Crop, {"cropRectangle", "cropAspect"}},
+    };
+    const auto row = [&table](CopySection section) -> Row& {
+        return table[static_cast<std::size_t>(section)];
+    };
+    for (const char* band :
+         {"Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta"}) {
+        for (const char* control : {"hue", "saturation", "luminance"}) {
+            row(CopySection::Hsl).keys.push_back(std::string(control) + band);
+        }
+        row(CopySection::BlackAndWhite).keys.push_back(std::string("gray") + band);
+    }
+    for (const char* zone : {"Shadow", "Midtone", "Highlight"}) {
+        for (const char* control : {"Hue", "Saturation"}) {
+            row(CopySection::ColorGrading).keys.push_back("grade" + std::string(zone) + control);
+        }
+    }
+
+    std::set<std::string> listed;
+    for (std::size_t i = 0; i < table.size(); ++i) {
+        REQUIRE(table[i].section == static_cast<CopySection>(i));
+        for (const std::string& key : table[i].keys) {
+            CAPTURE(key);
+            const FieldDescriptor* descriptor = findDescriptor(key);
+            REQUIRE(descriptor != nullptr);
+            CHECK(descriptor->section == table[i].section);
+            CHECK(descriptor->scope == SettingScope::Look);
+            CHECK(listed.insert(key).second);
+        }
+    }
+    std::set<std::string> look;
+    for (const FieldDescriptor& descriptor : developSettingDescriptors) {
+        if (descriptor.scope == SettingScope::Look) {
+            look.insert(std::string(descriptor.key));
+        }
+    }
+    CHECK(listed == look);
+}
