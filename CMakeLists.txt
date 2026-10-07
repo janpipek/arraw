@@ -392,6 +392,8 @@ endif()
 add_library(arraw-app-core STATIC
         src/app/AppSettings.cpp
         src/app/AppSettings.h
+        src/app/CopySections.cpp
+        src/app/CopySections.h
         src/app/CropEditing.cpp
         src/app/CropEditing.h
         src/app/CurveEditing.cpp
@@ -449,6 +451,8 @@ set_target_properties(arraw-app-core PROPERTIES AUTOMOC ON)
 
 # The widgets, apart from main(), so the widget tests can drive the whole window.
 add_library(arraw-app-ui STATIC
+        src/app/ui/CopySettingsDialog.cpp
+        src/app/ui/CopySettingsDialog.h
         src/app/ui/CropOverlay.cpp
         src/app/ui/CropOverlay.h
         src/app/ui/CullingActions.cpp

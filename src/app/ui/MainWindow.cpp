@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 
+#include "CopySettingsDialog.h"
 #include "CropOverlay.h"
 #include "CullingActions.h"
 #include "DebugDiagnostics.h"
@@ -294,6 +295,18 @@ void MainWindow::buildMenu() {
             refreshPanel();
         });
     });
+
+    editMenu->addSeparator();
+    copyAction_ = editMenu->addAction(tr("&Copy Settings…"));
+    copyAction_->setObjectName("copySettingsAction");
+    copyAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_C));
+    copyAction_->setEnabled(false);
+    connect(copyAction_, &QAction::triggered, this, &MainWindow::copySettings);
+    pasteAction_ = editMenu->addAction(tr("&Paste Settings"));
+    pasteAction_->setObjectName("pasteSettingsAction");
+    pasteAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_V));
+    pasteAction_->setEnabled(false);
+    connect(pasteAction_, &QAction::triggered, this, &MainWindow::pasteSettings);
 
     editMenu->addSeparator();
     QAction* settingsAction = editMenu->addAction(tr("&Settings…"));
@@ -628,6 +641,7 @@ void MainWindow::cameraPreviewLanded(const CameraPreview& preview) {
 }
 
 void MainWindow::updateHistoryActions() {
+    updatePasteAction();
     if (!open_) {
         undoAction_->setEnabled(false);
         redoAction_->setEnabled(false);
@@ -640,6 +654,52 @@ void MainWindow::updateHistoryActions() {
     }
     undoAction_->setEnabled(open_->session.canUndo());
     redoAction_->setEnabled(open_->session.canRedo());
+}
+
+void MainWindow::updatePasteAction() {
+    pasteAction_->setEnabled(clipboard_ && editable() && !photoView_->isCropMode());
+}
+
+void MainWindow::copySettings() {
+    if (!editable()) {
+        return;
+    }
+    guarded([this] {
+        // A drag still on the slider counts.
+        developPanel_->finishPendingEdit();
+        QSettings saved;
+        CopySettingsDialog dialog(restoreCopySections(saved), this);
+        if (dialog.exec() != QDialog::Accepted) {
+            return;
+        }
+        const std::vector<CopySection> sections = dialog.sections();
+        QSettings store;
+        saveCopySections(sections, store);
+        const Photo& photo = open_->session.photo();
+        clipboard_ = SettingsClipboard{lookOf(photo.metadata(), photo.state().settings), sections};
+        updatePasteAction();
+    });
+}
+
+void MainWindow::pasteSettings() {
+    if (!clipboard_ || !editable() || photoView_->isCropMode()) {
+        return;
+    }
+    guarded([this] {
+        developPanel_->finishPendingEdit();
+        const Photo& photo = open_->session.photo();
+        const AppliedLook applied =
+            withLook(photo.metadata(), photo.state(), clipboard_->look, clipboard_->sections);
+        const bool changed = applied.state != photo.state();
+        open_->session.setState(applied.state);
+        refreshPanel();
+        const QString skipped = skippedMessage(applied.skipped);
+        if (!skipped.isEmpty()) {
+            statusBar()->showMessage(skipped, 8000);
+        } else if (!changed) {
+            statusBar()->showMessage(tr("Nothing to paste."), 4000);
+        }
+    });
 }
 
 void MainWindow::closeCropOverlay() {
@@ -1614,6 +1674,8 @@ void MainWindow::updateEditingActions() {
     developDock_->setEnabled(ready);
     exportAction_->setEnabled(ready);
     cropAction_->setEnabled(ready);
+    copyAction_->setEnabled(ready);
+    updatePasteAction();
     for (QAction* action : geometryActions_) {
         action->setEnabled(ready);
     }

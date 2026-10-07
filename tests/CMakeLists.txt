@@ -19,6 +19,7 @@ add_executable(arraw-tests
         support/TestImages.cpp
         test_AppSettings.cpp
         test_Cli.cpp
+        test_CopySections.cpp
         test_ColorEncoding.cpp
         test_CropEditing.cpp
         test_CurveEditing.cpp
@@ -107,9 +108,11 @@ arraw_deploy_qt_plugins(arraw-tests)
 # Widget behavior runs separately because the core suite owns a QCoreApplication.
 add_executable(arraw-widget-tests
         test_SettingsDialog.cpp
+        test_CopySettingsDialog.cpp
         test_CropOverlay.cpp
         test_CurveEditor.cpp
         test_DevelopPanel.cpp
+        test_MainWindowCopy.cpp
         test_MainWindowCrop.cpp
         test_MainWindowOpening.cpp
         test_RenderProgressBar.cpp

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "CopySections.h"
 #include "CropEditing.h"
 #include "ExportQueue.h"
 #include "PhotoLoader.h"
@@ -255,8 +256,19 @@ private:
     void seedCropOverlay();
 
     /// @brief Enables Undo and Redo: through the crop session's gestures in the mode, else
-    /// through the photograph's history.
+    /// through the photograph's history; Paste follows, as it too edits the history.
     void updateHistoryActions();
+
+    /// @brief Asks which sections to copy and holds the open photograph's settings for pasting.
+    void copySettings();
+
+    /// @brief Carries the held settings onto the open photograph as one history step.
+    ///
+    /// Tells the status bar what could not be carried.
+    void pasteSettings();
+
+    /// @brief Enables Paste: with settings held, a photograph open, and outside the crop mode.
+    void updatePasteAction();
 
     /// @brief Applies a geometry command: a quarter-turn, a flip, an aspect, a reset.
     ///
@@ -392,6 +404,10 @@ private:
     QAction* saveAction_ = nullptr;
     QAction* undoAction_ = nullptr;
     QAction* redoAction_ = nullptr;
+    QAction* copyAction_ = nullptr;
+    QAction* pasteAction_ = nullptr;
+    /// Settings copied from a photograph; lasts across photographs, which is its use.
+    std::optional<SettingsClipboard> clipboard_;
     QAction* exportAction_ = nullptr;
     QShortcut* cancelPickShortcut_ = nullptr;
     /// Enter, Esc, X and O of the crop mode wherever the focus is; enabled only in the mode.
