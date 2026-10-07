@@ -121,9 +121,10 @@ private:
     std::jthread thread_;
 };
 
-PhotoLoader::Decoder PhotoLoader::imageDecoder() {
-    return [](const std::filesystem::path& path, ProgressChannel& channel) {
-        DebugDiagnostics log;
+PhotoLoader::Decoder PhotoLoader::imageDecoder(DiagnosticModel* diagnostics) {
+    return [diagnostics](const std::filesystem::path& path, ProgressChannel& channel) {
+        DebugDiagnostics log = diagnostics != nullptr ? DebugDiagnostics(*diagnostics)
+                                                      : DebugDiagnostics();
         return loadImage(path, log, {}, &channel);
     };
 }

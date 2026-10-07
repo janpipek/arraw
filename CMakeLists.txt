@@ -398,6 +398,8 @@ add_library(arraw-app-core STATIC
         src/app/CurveHistogramRefresh.h
         src/app/DebugDiagnostics.cpp
         src/app/DebugDiagnostics.h
+        src/app/DebugLog.cpp
+        src/app/DebugLog.h
         src/app/DisplayImage.cpp
         src/app/DisplayImage.h
         src/app/ExportQueue.cpp
@@ -414,6 +416,8 @@ add_library(arraw-app-core STATIC
         src/app/RenderDelay.h
         src/app/RenderIndicator.cpp
         src/app/RenderIndicator.h
+        src/app/QtMessageCapture.cpp
+        src/app/QtMessageCapture.h
         src/app/FilmStripRules.cpp
         src/app/FilmStripRules.h
         src/app/FolderWatcher.cpp
@@ -449,6 +453,8 @@ add_library(arraw-app-ui STATIC
         src/app/ui/CullingActions.h
         src/app/ui/CurveEditor.cpp
         src/app/ui/CurveEditor.h
+        src/app/ui/DebugWindow.cpp
+        src/app/ui/DebugWindow.h
         src/app/ui/DevelopPanel.cpp
         src/app/ui/DevelopPanel.h
         src/app/ui/ExportDialog.cpp
@@ -464,15 +470,22 @@ add_library(arraw-app-ui STATIC
         src/app/ui/SettingsDialog.cpp
         src/app/ui/SettingsDialog.h
         src/app/ui/SettingSlider.cpp
-        src/app/ui/SettingSlider.h)
+        src/app/ui/SettingSlider.h
+        src/app/ui/Theme.cpp
+        src/app/ui/Theme.h
+        src/app/ui/ThemeColors.h)
 arraw_enable_warnings(arraw-app-ui)
 target_include_directories(arraw-app-ui PUBLIC src/app)
 target_link_libraries(arraw-app-ui PUBLIC arraw-app-core Qt6::Widgets PRIVATE arraw-trace)
 set_target_properties(arraw-app-ui PROPERTIES AUTOMOC ON)
 
-add_executable(arraw-ui src/app/main.cpp)
+add_executable(arraw-ui src/app/main.cpp resources/icon.qrc)
 arraw_enable_warnings(arraw-ui)
 target_link_libraries(arraw-ui PRIVATE arraw-app-ui)
+target_compile_definitions(arraw-ui PRIVATE ARRAW_VERSION="${PROJECT_VERSION}")
+# qt_standard_project_setup() turns on AUTOMOC only; the window icon comes
+# in through resources/icon.qrc.
+set_target_properties(arraw-ui PROPERTIES AUTORCC ON)
 arraw_deploy_qt_plugins(arraw-ui)
 if(MSVC)
     # activeCodePage UTF-8: narrow argv and path conversions are UTF-8 (needs Windows 10 1903+).

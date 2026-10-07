@@ -16,6 +16,8 @@
 
 namespace arraw::app {
 
+class DiagnosticModel;
+
 /// @brief Outcome of decoding a photograph for the window.
 struct DecodedPhoto {
     /// Identifier PhotoLoader::decode returned.
@@ -65,8 +67,9 @@ public:
         std::function<ImageBuffer(const std::filesystem::path& path, ProgressChannel& channel)>;
 
     /// @brief Gives the decoder the window uses: ::arraw::loadImage, with diagnostics to Qt's
-    /// debug output.
-    [[nodiscard]] static Decoder imageDecoder();
+    /// debug output and, when supplied, the debug window's table.
+    /// @param diagnostics Table to keep diagnostics in; must outlive the decoder.
+    [[nodiscard]] static Decoder imageDecoder(DiagnosticModel* diagnostics = nullptr);
 
     /// @brief Starts the threads.
     /// @param cache Where embedded previews are kept, as the film strip keeps them.

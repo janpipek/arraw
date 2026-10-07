@@ -44,6 +44,8 @@ class QObject;
 namespace arraw::app {
 
 class CullingActions;
+struct DebugLog;
+class DebugWindow;
 class DevelopPanel;
 class FilmStrip;
 class PhotoView;
@@ -54,7 +56,11 @@ class MainWindow : public QMainWindow {
     Q_OBJECT
     Q_DISABLE_COPY_MOVE(MainWindow)
 public:
-    explicit MainWindow(QWidget* parent = nullptr);
+    /// @brief Makes the window.
+    /// @param debugLog Log the window's diagnostics go to, and the debug
+    /// window shows; must outlive the window.
+    /// @param parent Parent widget, usually none.
+    explicit MainWindow(DebugLog& debugLog, QWidget* parent = nullptr);
 
     /// @brief Cuts the panel's signals off before the members they use are gone.
     ~MainWindow() override;
@@ -125,6 +131,9 @@ private:
 
     /// @brief Shows what the queue is working on in the status bar.
     void showExportProgress();
+
+    /// @brief Shows the debug window, making it on first use.
+    void showDebugWindow();
 
     /// @brief Asks the user for a photograph and opens it.
     void openFileWithDialog();
@@ -360,6 +369,8 @@ private:
         std::optional<std::pair<DevelopState, QImage>> lastCropImage;
     };
 
+    DebugLog& debugLog_;
+    DebugWindow* debugWindow_ = nullptr;
     PhotoView* photoView_ = nullptr;
     FilmStrip* filmStrip_ = nullptr;
     QDockWidget* stripDock_ = nullptr;

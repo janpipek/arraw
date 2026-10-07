@@ -3,6 +3,8 @@
 #include "CropOverlay.h"
 #include "CullingActions.h"
 #include "DebugDiagnostics.h"
+#include "DebugLog.h"
+#include "DebugWindow.h"
 #include "DevelopPanel.h"
 #include "DisplayImage.h"
 #include "ExportDialog.h"
@@ -104,8 +106,8 @@ DevelopState uncroppedState(DevelopState state) {
 
 } // namespace
 
-MainWindow::MainWindow(QWidget* parent)
-    : QMainWindow(parent), runningSettings_([] {
+MainWindow::MainWindow(DebugLog& debugLog, QWidget* parent)
+    : QMainWindow(parent), debugLog_(debugLog), runningSettings_([] {
           QSettings store;
           return restoreAppSettings(store);
       }()),
@@ -161,13 +163,22 @@ MainWindow::MainWindow(QWidget* parent)
                       }
                   },
                   Qt::QueuedConnection);
-          }) {
+          },
+          PhotoLoader::imageDecoder(&debugLog.diagnostics)) {
     filmStrip_ = new FilmStrip(this);
     buildMenu();
     buildStatusBar();
     buildImageView();
     buildDevelopDock();
     buildFilmStripDock();
+
+    // Last in the View menu, after the docks' toggles.
+    viewMenu_->addSeparator();
+    QAction* debugAction = viewMenu_->addAction(tr("&Debug Log"));
+    debugAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_D));
+    connect(debugAction, &QAction::triggered, this, &MainWindow::showDebugWindow);
+    // Also on the window, so the shortcut outlives a hidden menu bar.
+    addAction(debugAction);
 
     cancelPickShortcut_ = new QShortcut(Qt::Key_Escape, this);
     cancelPickShortcut_->setEnabled(false);
@@ -798,6 +809,15 @@ void MainWindow::updateTitle() {
     setWindowModified(open_->session.hasUnsavedChanges());
 }
 
+void MainWindow::showDebugWindow() {
+    if (!debugWindow_) {
+        debugWindow_ = new DebugWindow(debugLog_, this);
+    }
+    debugWindow_->show();
+    debugWindow_->raise();
+    debugWindow_->activateWindow();
+}
+
 void MainWindow::buildImageView() {
     photoView_ = new PhotoView(this);
     photoView_->installEventFilter(this);
@@ -928,7 +948,7 @@ void MainWindow::openFile(const std::filesystem::path& path) {
     // by decodeLanded.
     const detail::TimingSpan timing("window.openFile");
     try {
-        DebugDiagnostics log;
+        DebugDiagnostics log(debugLog_.diagnostics);
         Photo photo = [&] {
             const detail::TimingSpan metadataTiming("window.open.metadata");
             return openPhoto(path, log);
@@ -998,7 +1018,7 @@ void MainWindow::activateShot(const QString& primary) {
     const std::filesystem::path path(primary.toStdU16String());
     const detail::TimingSpan timing("window.activateShot");
     try {
-        DebugDiagnostics log;
+        DebugDiagnostics log(debugLog_.diagnostics);
         Photo photo = [&] {
             const detail::TimingSpan metadataTiming("window.open.metadata");
             return openPhoto(path, log);
@@ -1081,7 +1101,7 @@ void MainWindow::sidecarChangedOnDisk(const QString& primary) {
         return;
     }
     try {
-        DebugDiagnostics log;
+        DebugDiagnostics log(debugLog_.diagnostics);
         Photo photo = openPhoto(path, log);
         const Photo& saved = open_->session.saved();
         if (photo.state() == saved.state() && photo.marks() == saved.marks()) {
