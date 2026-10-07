@@ -208,6 +208,16 @@ picture. The newest result ends the busy period even when it is no longer
 wanted (a photograph was opened, or the crop mode was left), so the bar cannot
 stay busy forever (F8).
 
+*Amended 2026-10-07 (user):* the label and bar become one small pie chart
+(`RenderProgressPie`), a permanent status-bar widget on the right beside the
+device label, so a status message neither hides it nor is hidden by it. It is
+always present: a full green pie while nothing is to be shown (no render, or
+within the show delay), and while shown a red pie filled with the fraction (an
+empty red outline until there is one). The fill is the cue that does not depend on
+colour; the colours are a second cue. The step's wording moves to the tooltip
+("Reducing noise… 40%"; "Up to date" when done) and the accessible name and
+description. The show delay and holds are unchanged.
+
 **Python gets no progress callable yet.** The bindings
 ([ADR 018](018-python-binds-the-public-api-and-nothing-else.md)) keep their
 signatures. The C++ default (`nullptr`) means they call the same functions as

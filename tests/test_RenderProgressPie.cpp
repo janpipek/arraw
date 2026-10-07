@@ -3,10 +3,8 @@
 #include "ui/CropOverlay.h"
 #include "ui/MainWindow.h"
 #include "ui/PhotoView.h"
-#include "ui/RenderProgressBar.h"
+#include "ui/RenderProgressPie.h"
 
-#include <QLabel>
-#include <QProgressBar>
 #include <QStatusBar>
 #include <QTest>
 
@@ -17,7 +15,7 @@
 using namespace arraw;
 using namespace arraw::app;
 
-/// The step and the progress bar in the status bar (ADR 042).
+/// The render pie in the status bar (ADR 042).
 
 namespace {
 
@@ -27,30 +25,41 @@ RenderActivity::Display displayOf(std::optional<double> fraction) {
 
 } // namespace
 
-TEST_CASE("The widget shows the step and the fraction, and hides with the display",
-          "[app][progress][bar]") {
-    RenderProgressBar widget;
-    CHECK(widget.isHidden());
+TEST_CASE("The pie is full when idle, and shows the fraction while rendering",
+          "[app][progress][pie]") {
+    RenderProgressPie widget;
+    widget.show();
+    CHECK(widget.isVisible());
+    CHECK_FALSE(widget.rendering());
+    CHECK(widget.filled() == 1.0);
+    CHECK(widget.toolTip() == "Up to date");
+    CHECK(widget.accessibleName() == "Render progress");
+    CHECK(widget.accessibleDescription() == "Up to date");
 
     widget.setDisplay(displayOf(0.4));
-    REQUIRE(widget.isVisible());
-    CHECK(widget.stepLabel().text() == QString::fromUtf8("Reducing noise…"));
-    CHECK(widget.bar().maximum() == RenderProgressBar::resolution);
-    CHECK(widget.bar().value() == 400);
+    CHECK(widget.isVisible());
+    CHECK(widget.rendering());
+    CHECK(widget.filled() == 0.4);
+    CHECK(widget.toolTip() == QString::fromUtf8("Reducing noise\u2026 40%"));
+    CHECK(widget.accessibleDescription() == widget.toolTip());
 
-    // Without a fraction the bar is busy, and back to a fraction when one comes.
+    // No fraction yet: an empty pie with the step alone.
     widget.setDisplay(displayOf({}));
-    CHECK(widget.bar().minimum() == 0);
-    CHECK(widget.bar().maximum() == 0);
+    CHECK(widget.rendering());
+    CHECK(widget.filled() == 0.0);
+    CHECK(widget.toolTip() == QString::fromUtf8("Reducing noise\u2026"));
+
     widget.setDisplay(displayOf(1.0));
-    CHECK(widget.bar().value() == RenderProgressBar::resolution);
+    CHECK(widget.filled() == 1.0);
+    CHECK(widget.rendering());
 
     widget.setDisplay({});
-    CHECK_FALSE(widget.isVisible());
+    CHECK(widget.isVisible());
+    CHECK_FALSE(widget.rendering());
+    CHECK(widget.toolTip() == "Up to date");
 }
 
-TEST_CASE("The window shows a long render's step and bar, and hides them when it is done",
-          "[app][window][progress]") {
+TEST_CASE("The window's pie is always there, beside a status message", "[app][window][progress]") {
     test::TempDir folder;
     const std::filesystem::path fixtures(ARRAW_TEST_DATA_DIR);
     std::filesystem::copy_file(fixtures / "preview-32x24.dng", folder.file("a.dng"));
@@ -61,32 +70,30 @@ TEST_CASE("The window shows a long render's step and bar, and hides them when it
     REQUIRE(QTest::qWaitForWindowActive(&window));
     auto& view = *window.findChild<PhotoView*>();
     REQUIRE(QTest::qWaitFor([&] { return !view.wholeFrameImage().isNull(); }, 20000));
-    auto* label = window.findChild<QLabel*>("renderStepLabel");
-    REQUIRE(label != nullptr);
-    auto& progress = *window.findChild<RenderProgressBar*>();
+    auto& progress = *window.findChild<RenderProgressPie*>();
     // In the status bar, not over the photograph.
     CHECK(progress.parentWidget() != &view);
-    CHECK(view.findChild<RenderProgressBar*>() == nullptr);
+    CHECK(view.findChild<RenderProgressPie*>() == nullptr);
     // The first render was over in a moment.
     QTest::qWait(700);
-    CHECK_FALSE(progress.isVisible());
-    CHECK_FALSE(label->isVisible());
+    CHECK(progress.isVisible());
+    CHECK(progress.filled() == 1.0);
 
-    // A render that takes its time: the bar waits out the delay, then shows.
+    // A render that takes its time: the pie waits out the delay, then empties.
     RenderIndicator& indicator = window.renderIndicator();
     indicator.begin();
-    CHECK_FALSE(progress.isVisible());
-    CHECK(QTest::qWaitFor([&] { return progress.isVisible(); }, 2000));
-    CHECK(label->isVisible());
-    CHECK(label->text() == QString::fromUtf8("Developing…"));
-    // Beside an export's message, not in its place.
-    window.statusBar()->showMessage("Exporting a.dng…");
-    CHECK(label->isVisible());
+    CHECK_FALSE(progress.rendering());
+    CHECK(progress.isVisible());
+    CHECK(QTest::qWaitFor([&] { return progress.rendering(); }, 2000));
+    CHECK(progress.toolTip() == QString::fromUtf8("Developing\u2026"));
+    // Beside an export's message, not hidden by it.
+    window.statusBar()->showMessage("Exporting a.dng...");
+    CHECK(progress.isVisible());
     window.statusBar()->clearMessage();
 
     indicator.report(0.4, ProgressStep::Denoise);
     CHECK(progress.display().fraction == 0.4);
-    CHECK(label->text() == QString::fromUtf8("Reducing noise…"));
+    CHECK(progress.toolTip() == QString::fromUtf8("Reducing noise\u2026 40%"));
 
     // In the crop mode as well.
     view.setCropMode(true);
@@ -94,8 +101,9 @@ TEST_CASE("The window shows a long render's step and bar, and hides them when it
     view.setCropMode(false);
 
     indicator.finish();
-    CHECK(QTest::qWaitFor([&] { return !progress.isVisible(); }, 2000));
-    CHECK_FALSE(label->isVisible());
+    CHECK(QTest::qWaitFor([&] { return !progress.rendering(); }, 2000));
+    CHECK(progress.isVisible());
+    CHECK(progress.filled() == 1.0);
 }
 
 TEST_CASE("The window's renders begin and end the busy period, and stale progress is ignored",
@@ -111,7 +119,7 @@ TEST_CASE("The window's renders begin and end the busy period, and stale progres
     auto& view = *window.findChild<PhotoView*>();
     REQUIRE(QTest::qWaitFor([&] { return !view.wholeFrameImage().isNull(); }, 20000));
     RenderIndicator& indicator = window.renderIndicator();
-    auto& progress = *window.findChild<RenderProgressBar*>();
+    auto& progress = *window.findChild<RenderProgressPie*>();
     // The first render's image ended its busy period.
     REQUIRE(QTest::qWaitFor([&] { return !indicator.busy(); }, 20000));
 
@@ -120,11 +128,11 @@ TEST_CASE("The window's renders begin and end the busy period, and stale progres
     REQUIRE(QTest::qWaitFor([&] { return indicator.busy(); }, 5000));
     REQUIRE(QTest::qWaitFor([&] { return !indicator.busy(); }, 20000));
 
-    // Progress of a request that is not the newest does not reach the bar.
+    // Progress of a request that is not the newest does not reach the pie.
     indicator.begin();
-    REQUIRE(QTest::qWaitFor([&] { return progress.isVisible(); }, 2000));
+    REQUIRE(QTest::qWaitFor([&] { return progress.rendering(); }, 2000));
     window.showRenderProgress(0, 0.5, ProgressStep::Denoise);
     CHECK_FALSE(progress.display().fraction.has_value());
     indicator.finish(false);
-    CHECK(QTest::qWaitFor([&] { return !progress.isVisible(); }, 2000));
+    CHECK(QTest::qWaitFor([&] { return !progress.rendering(); }, 2000));
 }

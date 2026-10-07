@@ -50,7 +50,7 @@ class DebugWindow;
 class DevelopPanel;
 class FilmStrip;
 class PhotoView;
-class RenderProgressBar;
+class RenderProgressPie;
 
 /// @brief Top-level window of the desktop application.
 class MainWindow : public QMainWindow {
@@ -396,7 +396,7 @@ private:
     QAction* zoomOutAction_ = nullptr;
     QLabel* deviceLabel_ = nullptr;
     /// Step and progress of a render in progress, in the status bar.
-    RenderProgressBar* renderProgress_ = nullptr;
+    RenderProgressPie* renderProgress_ = nullptr;
     /// Decides when a render in progress shows, and what of it.
     RenderIndicator* renderIndicator_ = nullptr;
     DevelopPanel* developPanel_ = nullptr;

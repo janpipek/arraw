@@ -13,7 +13,7 @@
 #include "FilmStrip.h"
 #include "PhotoView.h"
 #include "RenderDelay.h"
-#include "RenderProgressBar.h"
+#include "RenderProgressPie.h"
 #include "SettingsDialog.h"
 #include "ThumbnailCache.h"
 #include "ThumbnailWorker.h"
@@ -919,7 +919,7 @@ void MainWindow::buildImageView() {
     setCentralWidget(photoView_);
     renderIndicator_ = new RenderIndicator(this);
     connect(renderIndicator_, &RenderIndicator::changed, renderProgress_,
-            &RenderProgressBar::setDisplay);
+            &RenderProgressPie::setDisplay);
     updateZoomControls();
 }
 
@@ -930,9 +930,9 @@ void MainWindow::showRenderProgress(std::uint64_t request, double fraction, Prog
 }
 
 void MainWindow::buildStatusBar() {
-    renderProgress_ = new RenderProgressBar(this);
-    // A regular widget occupies the left side; permanent widgets are laid out from the right.
-    statusBar()->addWidget(renderProgress_);
+    renderProgress_ = new RenderProgressPie(this);
+    // Permanent, so that a status message neither hides it nor is hidden by it.
+    statusBar()->addPermanentWidget(renderProgress_);
     deviceLabel_ = new QLabel(this);
     statusBar()->addPermanentWidget(deviceLabel_);
     statusBar()->addPermanentWidget(zoomButton_);

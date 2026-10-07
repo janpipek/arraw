@@ -115,7 +115,7 @@ add_executable(arraw-widget-tests
         test_MainWindowCopy.cpp
         test_MainWindowCrop.cpp
         test_MainWindowOpening.cpp
-        test_RenderProgressBar.cpp
+        test_RenderProgressPie.cpp
         test_SettingSlider.cpp)
 arraw_enable_warnings(arraw-widget-tests)
 # Qt Test for key clicks that go through the window's shortcuts, as a user's do.

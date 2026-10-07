@@ -471,8 +471,8 @@ add_library(arraw-app-ui STATIC
         src/app/ui/MainWindow.h
         src/app/ui/PhotoView.cpp
         src/app/ui/PhotoView.h
-        src/app/ui/RenderProgressBar.cpp
-        src/app/ui/RenderProgressBar.h
+        src/app/ui/RenderProgressPie.cpp
+        src/app/ui/RenderProgressPie.h
         src/app/ui/SettingsDialog.cpp
         src/app/ui/SettingsDialog.h
         src/app/ui/SettingSlider.cpp
