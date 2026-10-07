@@ -24,8 +24,8 @@ RenderProgressBar::RenderProgressBar(QWidget* parent)
     bar_->setFixedWidth(barWidthInCharacters * fontMetrics().averageCharWidth());
     auto* layout = new QHBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
-    layout->addWidget(step_);
     layout->addWidget(bar_);
+    layout->addWidget(step_);
     hide();
 }
 

@@ -865,9 +865,9 @@ void MainWindow::showRenderProgress(std::uint64_t request, double fraction, Prog
 }
 
 void MainWindow::buildStatusBar() {
-    // Permanent, so that a message such as the export's neither hides it nor is hidden by it.
     renderProgress_ = new RenderProgressBar(this);
-    statusBar()->addPermanentWidget(renderProgress_);
+    // A regular widget occupies the left side; permanent widgets are laid out from the right.
+    statusBar()->addWidget(renderProgress_);
     deviceLabel_ = new QLabel(this);
     statusBar()->addPermanentWidget(deviceLabel_);
     statusBar()->addPermanentWidget(zoomButton_);
