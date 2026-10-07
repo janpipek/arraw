@@ -4,8 +4,8 @@ using namespace arraw;
 using namespace arraw::app;
 
 std::chrono::milliseconds arraw::app::renderDelayFor(const DevelopState& before,
-                                                     const DevelopState& after) {
-    if (before.settings.noiseReduction == after.settings.noiseReduction) {
+                                                     const DevelopState& after, bool onGpu) {
+    if (onGpu || before.settings.noiseReduction == after.settings.noiseReduction) {
         return std::chrono::milliseconds{0};
     }
     DevelopState sameNoise = after;

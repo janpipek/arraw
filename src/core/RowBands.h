@@ -50,6 +50,23 @@ inline std::atomic<std::uint32_t> rowBandLimit{0};
         std::max<std::uint64_t>(1, minimumPixelsPerBand / std::max<std::uint32_t>(width, 1)));
 }
 
+/// @brief Gives the calling thread's scheduling priority, for band threads to take on.
+///
+/// Linux keeps a thread's nice value across `pthread_create`, so a band thread
+/// runs at its caller's priority already; Windows starts every thread at normal
+/// priority, and macOS is not relied on to pass the quality-of-service class
+/// on. A worker that lowered its own priority, such as the thumbnail worker
+/// (ADR 039), would otherwise run its bands at full priority there.
+/// @return The priority in the OS's terms on Windows and macOS; zero on Linux.
+[[nodiscard]] int callerThreadPriority() noexcept;
+
+/// @brief Gives the calling thread a priority ::arraw::detail::callerThreadPriority gave.
+///
+/// Does nothing on Linux, or when the priority is already that one. A failure
+/// changes nothing that matters and is ignored.
+/// @param priority Priority to take on.
+void adoptThreadPriority(int priority) noexcept;
+
 /// @brief Splits rows into bands and runs each on a thread of its own.
 ///
 /// The machinery under ::arraw::detail::forEachRowBand: calls
@@ -79,10 +96,16 @@ template <typename Band> void splitRowBands(std::uint32_t rows, std::uint32_t wi
         }
     };
     {
+        const int priority = callerThreadPriority();
         std::vector<std::jthread> workers;
         workers.reserve(bands - 1);
         for (std::uint32_t index = 1; index < bands; ++index) {
-            workers.emplace_back(run, index);
+            workers.emplace_back(
+                [&run, priority](std::uint32_t band) {
+                    adoptThreadPriority(priority);
+                    run(band);
+                },
+                index);
         }
         run(0);
     }

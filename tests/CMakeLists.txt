@@ -58,6 +58,7 @@ add_executable(arraw-tests
         test_Region.cpp
         test_RenderCheckpoint.cpp
         test_Resample.cpp
+        test_RowBands.cpp
         test_RawImport.cpp
         test_SettingCodec.cpp
         test_SettingDescriptors.cpp

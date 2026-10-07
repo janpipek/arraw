@@ -151,6 +151,7 @@ add_library(arraw STATIC
         src/core/GeometryPlan.h
         src/core/GeometryPlan.cpp
         src/core/Resample.h
+        src/core/RowBands.cpp
         src/core/RowBands.h
         src/core/Resample.cpp
         src/core/ResampleWeights.h

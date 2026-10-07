@@ -431,7 +431,7 @@ void MainWindow::buildDevelopDock() {
             DevelopState next = state;
             next.settings.geometry = reconciledGeometry(state.settings.geometry);
             open_->session.update(next);
-            refreshPanel(renderDelayFor(before, open_->session.photo().state()));
+            refreshPanel(renderDelayFor(before, open_->session.photo().state(), previewOnGpu_));
         });
     });
     connect(developPanel_, &DevelopPanel::pickToggled, this, &MainWindow::setPicking);
@@ -826,6 +826,7 @@ void MainWindow::buildStatusBar() {
 }
 
 void MainWindow::showDevice(const PreviewResult& result) {
+    previewOnGpu_ = result.onGpu;
     QString text = result.onGpu
                        ? tr("Preview: GPU \u2014 %1").arg(QString::fromStdString(result.deviceName))
                        : tr("Preview: CPU");

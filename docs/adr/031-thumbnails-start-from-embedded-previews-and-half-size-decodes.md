@@ -56,7 +56,10 @@ half_size=False)`.
 **The strip's thumbnails are built on these two** (`src/app/ThumbnailWorker`,
 `ThumbnailCache`):
 - **One worker thread, at low OS priority and CPU only.** The preview owns the
-  GPU, and a thumbnail must never slow a slider.
+  GPU, and a thumbnail must never slow a slider. The threads its banded loops
+  start take that priority on (`detail::adoptThreadPriority`): Linux passes a
+  nice value on to a new thread by itself, Windows starts every thread at
+  normal priority, and macOS is not relied on to pass its class on.
 - **Order:** for each shot, the embedded preview first, then arraw's rendering of
   the *saved* state (half-size decode, pyramid, `FitInside{512, 512}`). The
   visible shots go first, all embedded previews come before any developed

@@ -261,7 +261,10 @@ Python has `NoiseReductionSettings`, `LuminanceNoiseFilter` and the flat keys.
   other control, undo, redo and a change of view render at once, and a newer
   request cancels the held one. Renders still cannot be cancelled once under
   way, so the threaded CPU pass (1.4 s at 24 MP) bounds the wait after a
-  drag, down from about 5 s.
+  drag, down from about 5 s. Since, a render stops on request
+  ([ADR 042](042-a-decode-or-a-render-reports-progress-and-stops-on-request.md)),
+  and a preview on the GPU, where the pass is a few renders, is not held at
+  all: the window goes by where its last render was made.
 - Only lavapipe was measured for the scalar target (it has R32F). The RGBA
   fallback is the same shader and target as before this change, but no device
   in the suite exercises it.

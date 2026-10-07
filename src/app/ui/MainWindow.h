@@ -422,6 +422,10 @@ private:
     /// Identifier of the decode the window waits for; 0 when none.
     std::uint64_t decodeRequest_ = 0;
 
+    /// Whether the last render shown came from the GPU, where a noise reduction edit is not
+    /// held back (renderDelayFor()).
+    bool previewOnGpu_ = false;
+
     /// Identifier of the camera preview read the crop mode waits for; 0 when none.
     std::uint64_t cameraPreviewRequest_ = 0;
 
