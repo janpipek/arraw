@@ -179,8 +179,11 @@ AppliedLook withLook(const ImageMetadata& photo, DevelopState state, const Look&
     std::vector<std::string_view> keys;
     std::bitset<sectionCount> lost;
     for (const FieldDescriptor& descriptor : developSettingDescriptors) {
-        const auto index = static_cast<std::size_t>(descriptor.section);
-        if (descriptor.scope != SettingScope::Look || !chosen.test(index)) {
+        if (descriptor.scope != SettingScope::Look || !descriptor.section) {
+            continue;
+        }
+        const auto index = static_cast<std::size_t>(*descriptor.section);
+        if (!chosen.test(index)) {
             continue;
         }
         const auto appliesTo = [&](bool raw) {

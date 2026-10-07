@@ -471,7 +471,7 @@ TEST_CASE("Every copy section has a Look-scoped row", "[descriptors][sections]")
     std::set<CopySection> covered;
     for (const FieldDescriptor& descriptor : developSettingDescriptors) {
         if (descriptor.scope == SettingScope::Look) {
-            covered.insert(descriptor.section);
+            covered.insert(descriptor.section.value());
         }
     }
     for (std::size_t i = 0; i < copySectionNames.size(); ++i) {
@@ -497,7 +497,7 @@ TEST_CASE("Descriptor rows sit in the expected copy sections", "[descriptors][se
     REQUIRE(sectionOf("temperature") == CopySection::WhiteBalance);
     REQUIRE(sectionOf("saturation") == CopySection::Color);
     REQUIRE(sectionOf("straighten") == CopySection::RotateAndFlip);
-    REQUIRE(sectionOf("grainSeed") == CopySection::Grain);
+    REQUIRE_FALSE(sectionOf("grainSeed").has_value());
     REQUIRE(findDescriptor("grainSeed")->scope == SettingScope::Photo);
 }
 
@@ -561,4 +561,12 @@ TEST_CASE("The copy sections list the keys the plan gives them", "[descriptors][
         }
     }
     CHECK(listed == look);
+}
+
+TEST_CASE("Look rows have a copy section and the photograph's own rows none",
+          "[descriptors][sections]") {
+    for (const FieldDescriptor& descriptor : developSettingDescriptors) {
+        CAPTURE(descriptor.key);
+        CHECK(descriptor.section.has_value() == (descriptor.scope == SettingScope::Look));
+    }
 }

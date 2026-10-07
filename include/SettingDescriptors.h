@@ -69,7 +69,7 @@ enum class CopySection {
     ColorGrading,   ///< Shadow, midtone and highlight grading, balance and blending.
     NoiseReduction, ///< Luminance and colour noise reduction.
     Vignette,       ///< Vignette amount, midpoint and feather.
-    Grain,          ///< Grain amount, size, roughness, model and seed.
+    Grain,          ///< Grain amount, size, roughness and model; never the seed.
     RotateAndFlip,  ///< Quarter-turn rotation, flips and straightening.
     Crop,           ///< Crop rectangle and aspect.
 };
@@ -123,8 +123,9 @@ struct FieldDescriptor {
     /// @brief Panel the setting is shown in.
     SettingGroup group;
 
-    /// @brief Section of a look the setting is copied, pasted and saved with.
-    CopySection section;
+    /// @brief Section of a look the setting is copied, pasted and saved with; absent for the
+    /// photograph's own settings, which no look carries.
+    std::optional<CopySection> section;
 
     /// @brief Photographs the setting applies to.
     Applicability applies;
@@ -301,7 +302,7 @@ inline constexpr std::array developSettingDescriptors{
                     SettingGroup::Effects, CopySection::Grain, Applicability::Always,
                     Stage::Effects},
     FieldDescriptor{"grainSeed", ARRAW_ACCESSOR(std::uint32_t, effects.grain.seed),
-                    SettingRange{0.0, maximumGrainSeed}, SettingGroup::Effects, CopySection::Grain,
+                    SettingRange{0.0, maximumGrainSeed}, SettingGroup::Effects, std::nullopt,
                     Applicability::Always, Stage::Effects, SettingScope::Photo},
     FieldDescriptor{"luminanceNoiseReduction", ARRAW_ACCESSOR(float, noiseReduction.luminance),
                     SettingRange{minimumNoiseReduction, maximumNoiseReduction},
