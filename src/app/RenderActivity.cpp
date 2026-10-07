@@ -3,7 +3,6 @@
 #include <QCoreApplication>
 
 #include <algorithm>
-#include <cmath>
 
 namespace arraw::app {
 
@@ -68,12 +67,6 @@ RenderActivity::Display RenderActivity::poll(Clock::time_point now) {
     }
     display.fraction = fraction_;
     display.step = step_;
-    if (!fraction_) {
-        const auto elapsed = std::chrono::duration<double>(now - shownSince_);
-        const double period = std::chrono::duration<double>(renderActivitySweep).count();
-        const double turns = elapsed.count() / period;
-        display.sweep = turns - std::floor(turns);
-    }
     return display;
 }
 

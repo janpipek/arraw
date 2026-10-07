@@ -20,9 +20,6 @@ inline constexpr std::chrono::milliseconds renderActivityHold{300};
 /// So that a slow render visibly ends rather than vanishing as its image lands.
 inline constexpr std::chrono::milliseconds renderActivityFilled{150};
 
-/// @brief Period of the indicator's sweep when there is no fraction to show.
-inline constexpr std::chrono::milliseconds renderActivitySweep{1200};
-
 /// @brief Decides when a render in progress is shown, and what is shown of it.
 ///
 /// A pure state machine over time points that the caller supplies, so that the
@@ -44,12 +41,10 @@ public:
     struct Display {
         /// Whether to show anything: the bar and the step's text.
         bool visible = false;
-        /// Fraction done from 0 to 1, or empty when there is none to show: a sweep.
+        /// Fraction done from 0 to 1, or empty when there is none to show: a busy bar.
         std::optional<double> fraction;
         /// Step being worked on, or the one last reported.
         ProgressStep step = ProgressStep::Pointwise;
-        /// Position of the sweep within its period, from 0 to 1; only for an empty fraction.
-        double sweep = 0.0;
 
         friend bool operator==(const Display&, const Display&) = default;
     };
@@ -59,7 +54,7 @@ public:
     /// A new busy period has no fraction until its render reports, and the
     /// step ::arraw::ProgressStep::Pointwise, the one a render is named after
     /// before it says otherwise. Within one, the last fraction and step stay
-    /// until the newer render reports, so the bar neither falls to a sweep nor
+    /// until the newer render reports, so the bar neither falls back to busy nor
     /// flickers between the two during a slider drag.
     /// @param now Current time.
     void begin(Clock::time_point now);
@@ -85,8 +80,7 @@ public:
 
     /// @brief Gives when the display next changes of its own accord, if it will.
     ///
-    /// The moment to poll again, apart from the sweep, which moves continuously
-    /// while @ref Display::visible and without a fraction.
+    /// The moment to poll again.
     [[nodiscard]] std::optional<Clock::time_point> nextChange() const;
 
     /// @brief Tells whether a render is in progress.

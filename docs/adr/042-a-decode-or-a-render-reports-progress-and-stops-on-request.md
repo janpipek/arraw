@@ -195,13 +195,18 @@ and `RenderIndicator` drives it from a timer:
 - A newer render within a busy period keeps the last fraction and step until
   it reports itself (F10, option 1). With cancellation that is within
   milliseconds, so a slider drag over a slow render does not alternate between
-  a bar and a sweep.
+  a bar and a busy one.
 
-The bar is 12 px along the top of the photo view (3 px at first, widened once
-seen in use), and the step's wording ("Reducing noise…", "Analysing local
-contrast…", "Developing…") is a permanent status-bar label. The newest result
-ends the busy period even when it is no longer wanted (a photograph was
-opened, or the crop mode was left), so the bar cannot sweep forever (F8).
+The indicator is a permanent status-bar widget (`RenderProgressBar`): the
+step's wording ("Reducing noise…", "Analysing local contrast…",
+"Developing…") beside a `QProgressBar` with the percentage, busy while there
+is no fraction yet. It was first a thin bar painted along the top of the photo
+view, with the wording alone in the status bar; once seen in use, the step and
+its progress belonged together, and a native widget that covers nothing of
+the photograph or the crop handles was worth the short glance away from the
+picture. The newest result ends the busy period even when it is no longer
+wanted (a photograph was opened, or the crop mode was left), so the bar cannot
+stay busy forever (F8).
 
 **Python gets no progress callable yet.** The bindings
 ([ADR 018](018-python-binds-the-public-api-and-nothing-else.md)) keep their

@@ -105,17 +105,12 @@ TEST_CASE("Reports give a determinate bar and the step", "[app][progress]") {
     CHECK(*activity.poll(at(350ms)).fraction == 1.0);
 }
 
-TEST_CASE("Without a fraction the bar sweeps", "[app][progress]") {
+TEST_CASE("Without a fraction the bar is busy", "[app][progress]") {
     RenderActivity activity;
     activity.begin(at(0ms));
     const auto first = activity.poll(at(250ms));
     REQUIRE(first.visible);
     CHECK_FALSE(first.fraction.has_value());
-    CHECK(first.sweep == 0.0);
-    const auto half = activity.poll(at(250ms + renderActivitySweep / 2));
-    CHECK_THAT(half.sweep, Catch::Matchers::WithinAbs(0.5, 1e-9));
-    const auto wrapped = activity.poll(at(250ms + renderActivitySweep + renderActivitySweep / 4));
-    CHECK_THAT(wrapped.sweep, Catch::Matchers::WithinAbs(0.25, 1e-9));
 }
 
 TEST_CASE("A newer render keeps the busy period and the bar until it reports", "[app][progress]") {
@@ -123,7 +118,7 @@ TEST_CASE("A newer render keeps the busy period and the bar until it reports", "
     activity.begin(at(0ms));
     activity.report(at(100ms), 0.9, ProgressStep::Effects);
     REQUIRE(activity.poll(at(400ms)).visible);
-    // The edit that superseded it: the delay is not owed again, and no sweep in between.
+    // The edit that superseded it: the delay is not owed again, and no busy bar in between.
     activity.begin(at(410ms));
     const auto kept = activity.poll(at(410ms));
     CHECK(kept.visible);

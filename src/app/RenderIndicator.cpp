@@ -6,13 +6,6 @@
 
 namespace arraw::app {
 
-namespace {
-
-/// Time between polls while a sweep moves.
-constexpr std::chrono::milliseconds sweepInterval{16};
-
-} // namespace
-
 RenderIndicator::RenderIndicator(QObject* parent)
     : RenderIndicator([] { return RenderActivity::Clock::now(); }, parent) {
     timed_ = true;
@@ -58,9 +51,6 @@ void RenderIndicator::refresh() {
     if (const auto due = activity_.nextChange()) {
         wait = std::max(std::chrono::milliseconds{1},
                         std::chrono::ceil<std::chrono::milliseconds>(*due - now));
-    }
-    if (display_.visible && !display_.fraction) {
-        wait = std::min(wait.value_or(sweepInterval), sweepInterval);
     }
     if (wait) {
         timer_.start(*wait);

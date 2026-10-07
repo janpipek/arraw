@@ -15,7 +15,7 @@ namespace arraw::app {
 /// @brief Drives a RenderActivity from real time and announces what to show.
 ///
 /// Owns the activity and a timer that polls it when the display is due to
-/// change, and about 60 times a second while a sweep is moving. The clock is
+/// change. The clock is
 /// injectable, so a test sets the time itself and calls poll().
 class RenderIndicator : public QObject {
     Q_OBJECT

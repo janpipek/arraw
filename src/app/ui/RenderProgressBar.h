@@ -4,27 +4,26 @@
 
 #include <QWidget>
 
-class QPaintEvent;
+class QLabel;
+class QProgressBar;
 
 namespace arraw::app {
 
-/// @brief Bar along the top edge of the photo view that shows a render is going.
+/// @brief Status-bar widget that shows a render is going: the step's name and its progress.
 ///
-/// Determinate when it has a fraction: a fill in the palette's highlight colour
-/// over a faint track. Without one, a short segment sweeps along the track.
-/// Takes no mouse events, so it can lie over the view and the crop overlay
-/// without taking anything from them. Drawn on whole device pixels, so that it
-/// is as crisp at a fractional scale as at 1:1.
+/// A label with the step ("Reducing noise…") beside a progress bar with the percentage, or a
+/// busy bar when there is no fraction yet. Both are hidden while the indicator says nothing
+/// is to be shown (ADR 042).
 class RenderProgressBar : public QWidget {
     Q_OBJECT
     Q_DISABLE_COPY_MOVE(RenderProgressBar)
 public:
-    /// @brief Height of the bar, in logical pixels.
-    static constexpr int thickness = 12;
+    /// @brief Steps of the bar from empty to full.
+    static constexpr int resolution = 1000;
 
     explicit RenderProgressBar(QWidget* parent = nullptr);
 
-    /// @brief Shows what an indicator announced, or hides the bar.
+    /// @brief Shows what an indicator announced, or hides the widget.
     /// @param display What to show.
     void setDisplay(const RenderActivity::Display& display);
 
@@ -33,21 +32,22 @@ public:
         return display_;
     }
 
-    /// @brief Gives the part of the track the bar fills, in whole device pixels, for a width.
-    ///
-    /// The fill from the left for a fraction, and the segment of the sweep
-    /// without one.
-    /// @param display What is shown.
-    /// @param width Width of the track in device pixels.
-    /// @return Left edge and width in device pixels; empty width when nothing is filled.
-    [[nodiscard]] static std::pair<int, int> fill(const RenderActivity::Display& display,
-                                                  int width);
+    /// @brief Gives the label that names the step.
+    [[nodiscard]] QLabel& stepLabel() const noexcept {
+        return *step_;
+    }
 
-protected:
-    void paintEvent(QPaintEvent* event) override;
+    /// @brief Gives the bar that shows the fraction done.
+    [[nodiscard]] QProgressBar& bar() const noexcept {
+        return *bar_;
+    }
 
 private:
     RenderActivity::Display display_;
+    /// Name of the step being worked on.
+    QLabel* step_ = nullptr;
+    /// Fraction done; busy without one.
+    QProgressBar* bar_ = nullptr;
 };
 
 } // namespace arraw::app

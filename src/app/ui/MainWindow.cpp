@@ -795,16 +795,9 @@ void MainWindow::buildImageView() {
         }
     });
     setCentralWidget(photoView_);
-    // The bar lies over the view in the crop mode too: the render beneath is the same work.
     renderIndicator_ = new RenderIndicator(this);
-    connect(renderIndicator_, &RenderIndicator::changed, this,
-            [this](const RenderActivity::Display& display) {
-                photoView_->progressBar().setDisplay(display);
-                renderStepLabel_->setVisible(display.visible);
-                if (display.visible) {
-                    renderStepLabel_->setText(renderStepText(display.step));
-                }
-            });
+    connect(renderIndicator_, &RenderIndicator::changed, renderProgress_,
+            &RenderProgressBar::setDisplay);
     updateZoomControls();
 }
 
@@ -816,10 +809,8 @@ void MainWindow::showRenderProgress(std::uint64_t request, double fraction, Prog
 
 void MainWindow::buildStatusBar() {
     // Permanent, so that a message such as the export's neither hides it nor is hidden by it.
-    renderStepLabel_ = new QLabel(this);
-    renderStepLabel_->setObjectName("renderStepLabel");
-    renderStepLabel_->hide();
-    statusBar()->addPermanentWidget(renderStepLabel_);
+    renderProgress_ = new RenderProgressBar(this);
+    statusBar()->addPermanentWidget(renderProgress_);
     deviceLabel_ = new QLabel(this);
     statusBar()->addPermanentWidget(deviceLabel_);
     statusBar()->addPermanentWidget(zoomButton_);
