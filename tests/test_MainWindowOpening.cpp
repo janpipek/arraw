@@ -1,3 +1,4 @@
+#include "DebugLog.h"
 #include "ThumbnailCache.h"
 #include "ThumbnailWorker.h"
 #include "TimingTrace.h"
@@ -82,7 +83,8 @@ QAction* findAction(const MainWindow& window, const QString& name) {
 /// A window over a folder of three photographs, each with a sidecar of its own exposure.
 struct Window {
     test::TempDir folder;
-    MainWindow window;
+    DebugLog debugLog;
+    MainWindow window{debugLog};
 
     Window() {
         const std::filesystem::path fixtures(ARRAW_TEST_DATA_DIR);
@@ -226,7 +228,8 @@ TEST_CASE("The window's interactions stall the GUI thread no longer than measure
         SKIP("ARRAW_BENCH_FOLDER is not set");
     }
     const std::filesystem::path folder(folderVariable);
-    MainWindow window;
+    DebugLog debugLog;
+    MainWindow window(debugLog);
     window.resize(1600, 1000);
     window.show();
     REQUIRE(QTest::qWaitForWindowExposed(&window));

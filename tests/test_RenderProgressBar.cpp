@@ -1,3 +1,4 @@
+#include "DebugLog.h"
 #include "support/TempDir.h"
 #include "ui/CropOverlay.h"
 #include "ui/MainWindow.h"
@@ -53,7 +54,8 @@ TEST_CASE("The window shows a long render's step and bar, and hides them when it
     test::TempDir folder;
     const std::filesystem::path fixtures(ARRAW_TEST_DATA_DIR);
     std::filesystem::copy_file(fixtures / "preview-32x24.dng", folder.file("a.dng"));
-    MainWindow window;
+    DebugLog debugLog;
+    MainWindow window(debugLog);
     window.openInitialPath(folder.file("a.dng"));
     window.show();
     REQUIRE(QTest::qWaitForWindowActive(&window));
@@ -101,7 +103,8 @@ TEST_CASE("The window's renders begin and end the busy period, and stale progres
     test::TempDir folder;
     const std::filesystem::path fixtures(ARRAW_TEST_DATA_DIR);
     std::filesystem::copy_file(fixtures / "preview-32x24.dng", folder.file("a.dng"));
-    MainWindow window;
+    DebugLog debugLog;
+    MainWindow window(debugLog);
     window.openInitialPath(folder.file("a.dng"));
     window.show();
     REQUIRE(QTest::qWaitForWindowActive(&window));

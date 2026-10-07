@@ -1,3 +1,4 @@
+#include "DebugLog.h"
 #include "support/TempDir.h"
 #include "ui/CropOverlay.h"
 #include "ui/DevelopPanel.h"
@@ -35,7 +36,8 @@ namespace {
 /// A window with a folder of two photographs open, the first one shown and rendered.
 struct Window {
     test::TempDir folder;
-    MainWindow window;
+    DebugLog debugLog;
+    MainWindow window{debugLog};
 
     Window() {
         const std::filesystem::path fixtures(ARRAW_TEST_DATA_DIR);
