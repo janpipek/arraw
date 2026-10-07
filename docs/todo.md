@@ -18,7 +18,10 @@ weights were remeasured, and the develop dock keeps every slider at least
 ## Next
 
 The order and the decisions are in `docs/ideas/architecture-roadmap.md`;
-loose ideas are in `docs/ideas/parked-ideas.md`.
+loose ideas are in `docs/ideas/parked-ideas.md`. Step 0 (the review's small
+fixes and the Windows CPU default) is done; next is step (a): a detailed plan
+for library-owned edit operations, presets, copy/paste and the session history
+view, for the user to approve before code.
 
 - **Demosaic and lens corrections as an import group (user, 2026-10-07).**
   - **Today:** neither exists on this branch. `DecodeOptions` has only
@@ -63,6 +66,11 @@ loose ideas are in `docs/ideas/parked-ideas.md`.
 - **PNG export** takes ~6 s at 24 MP; a lower zlib level is the lever (ADR 043).
 - **Dock width:** `minimumDockWidth` asks the panel's style for the scroll bar
   extent, not the scroll area's; equal under Fusion and Breeze.
+- **Small-fixes review leftovers:** `canResumeFrom` plans a render twice on
+  every resume (L3); the cache's new error path has no test (L4); Windows code
+  (manifest, console, `gpuUsedByDefault`) was never compiled; MinGW would need
+  an `.rc` for the manifest; `CLAUDE.md`'s structure list does not name
+  `src/trace` or `src/platform` (the user's file).
 - **Hardware:** the suite runs on lavapipe. One real GPU (Mesa ANV, Intel HD
   Graphics 630) has been used, on 2026-09-30, to measure the parity tolerances
   (ADR 017, `tests/gpu/GpuTesting.h`). The passes added since (Presence, effects,

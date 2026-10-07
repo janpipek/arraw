@@ -27,7 +27,7 @@ Python. The pipeline takes new settings easily, but not new passes or masks.
 
 ## Steps
 
-### 0. Small fixes from the review (in progress)
+### 0. Small fixes from the review (done, `bfc0670`)
 
 - the CLI overwrite and collision bug;
 - the `canResumeFrom` query;
@@ -40,7 +40,8 @@ Python. The pipeline takes new settings easily, but not new passes or masks.
 - `MainWindow` tidy-ups;
 - ADR 015, 018 and 019 wording.
 
-Then the Windows CPU default (decision above).
+Then the Windows CPU default (decision above), done in the same commit.
+Reviewed in `docs/reviews/claude-opus-5-5_2026-10-07_small-fixes.md`.
 
 ### (a) Presets, copy/paste, session history
 
