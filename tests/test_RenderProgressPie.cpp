@@ -8,6 +8,7 @@
 #include <QStatusBar>
 #include <QTest>
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <filesystem>
@@ -39,7 +40,7 @@ TEST_CASE("The pie is full when idle, and shows the fraction while rendering",
     widget.setDisplay(displayOf(0.4));
     CHECK(widget.isVisible());
     CHECK(widget.rendering());
-    CHECK(widget.filled() == 0.4);
+    CHECK(widget.filled() == Catch::Approx(0.4));
     CHECK(widget.toolTip() == QString::fromUtf8("Reducing noise\u2026 40%"));
     CHECK(widget.accessibleDescription() == widget.toolTip());
 
@@ -57,6 +58,64 @@ TEST_CASE("The pie is full when idle, and shows the fraction while rendering",
     CHECK(widget.isVisible());
     CHECK_FALSE(widget.rendering());
     CHECK(widget.toolTip() == "Up to date");
+}
+
+TEST_CASE("A failed render shows a red ring until a render is shown", "[app][progress][pie]") {
+    RenderProgressPie widget;
+    widget.setFailed("out of memory");
+    CHECK(widget.failed());
+    CHECK(widget.filled() == 0.0);
+    CHECK(widget.toolTip() == "Render failed: out of memory");
+    CHECK(widget.accessibleDescription() == widget.toolTip());
+
+    // An idle display does not clear it; a render on its way does.
+    widget.setDisplay({});
+    CHECK(widget.failed());
+    widget.setDisplay(displayOf(0.4));
+    CHECK_FALSE(widget.failed());
+    CHECK(widget.filled() == Catch::Approx(0.4));
+
+    widget.setDisplay({});
+    widget.setFailed("again");
+    widget.setPhotoOpen(false);
+    CHECK_FALSE(widget.failed());
+    CHECK(widget.toolTip() == "No photograph open");
+}
+
+TEST_CASE("With no photograph open the pie is an empty grey ring", "[app][progress][pie]") {
+    RenderProgressPie widget;
+    widget.setPhotoOpen(false);
+    CHECK_FALSE(widget.photoOpen());
+    CHECK_FALSE(widget.rendering());
+    CHECK(widget.filled() == 0.0);
+    CHECK(widget.toolTip() == "No photograph open");
+    CHECK(widget.accessibleDescription() == "No photograph open");
+
+    // A render shown is still shown as one.
+    widget.setDisplay(displayOf(0.4));
+    CHECK(widget.filled() == Catch::Approx(0.4));
+    CHECK(widget.toolTip() == QString::fromUtf8("Reducing noise\u2026 40%"));
+
+    widget.setDisplay({});
+    widget.setPhotoOpen(true);
+    CHECK(widget.filled() == 1.0);
+    CHECK(widget.toolTip() == "Up to date");
+}
+
+TEST_CASE("The window's pie says when no photograph is open", "[app][window][progress]") {
+    test::TempDir folder;
+    const std::filesystem::path fixtures(ARRAW_TEST_DATA_DIR);
+    std::filesystem::copy_file(fixtures / "preview-32x24.dng", folder.file("a.dng"));
+    DebugLog debugLog;
+    MainWindow window(debugLog);
+    window.show();
+    auto& progress = *window.findChild<RenderProgressPie*>();
+    CHECK_FALSE(progress.photoOpen());
+    CHECK(progress.toolTip() == "No photograph open");
+
+    window.openInitialPath(folder.file("a.dng"));
+    CHECK(progress.photoOpen());
+    CHECK(progress.toolTip() != "No photograph open");
 }
 
 TEST_CASE("The window's pie is always there, beside a status message", "[app][window][progress]") {
@@ -89,6 +148,7 @@ TEST_CASE("The window's pie is always there, beside a status message", "[app][wi
     // Beside an export's message, not hidden by it.
     window.statusBar()->showMessage("Exporting a.dng...");
     CHECK(progress.isVisible());
+    CHECK(window.statusBar()->currentMessage() == "Exporting a.dng...");
     window.statusBar()->clearMessage();
 
     indicator.report(0.4, ProgressStep::Denoise);

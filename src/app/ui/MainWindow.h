@@ -395,7 +395,7 @@ private:
     QAction* zoomInAction_ = nullptr;
     QAction* zoomOutAction_ = nullptr;
     QLabel* deviceLabel_ = nullptr;
-    /// Step and progress of a render in progress, in the status bar.
+    /// Pie in the status bar that shows whether a render is going and how far it is.
     RenderProgressPie* renderProgress_ = nullptr;
     /// Decides when a render in progress shows, and what of it.
     RenderIndicator* renderIndicator_ = nullptr;

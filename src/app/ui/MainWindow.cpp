@@ -933,6 +933,7 @@ void MainWindow::buildStatusBar() {
     renderProgress_ = new RenderProgressPie(this);
     // Permanent, so that a status message neither hides it nor is hidden by it.
     statusBar()->addPermanentWidget(renderProgress_);
+    renderProgress_->setPhotoOpen(false);
     deviceLabel_ = new QLabel(this);
     statusBar()->addPermanentWidget(deviceLabel_);
     statusBar()->addPermanentWidget(zoomButton_);
@@ -1538,6 +1539,7 @@ void MainWindow::showResult(const PreviewResult& result) {
         return;
     }
     reportingFailure_ = true;
+    renderProgress_->setFailed(QString::fromStdString(result.error));
     QMessageBox::warning(this, tr("Cannot Render Photograph"),
                          QString::fromStdString(result.error));
     reportingFailure_ = false;
@@ -1573,6 +1575,7 @@ void MainWindow::showPhoto(Photo photo) {
     filmStrip_->releaseLiveThumbnail();
     const std::filesystem::path path = photo.path();
     open_.emplace(OpenPhoto{EditSession(std::move(photo)), nullptr, std::nullopt, std::nullopt});
+    renderProgress_->setPhotoOpen(true);
     // The previous photograph's pixels go, and with them whatever the renderer was doing.
     previewRenderer_.setSource(nullptr);
     // Results of the previous photograph are still on their way, or in progress.
@@ -1654,6 +1657,7 @@ void MainWindow::closePhoto() {
     filmStrip_->releaseLiveThumbnail();
     filmStrip_->clearActive();
     open_.reset();
+    renderProgress_->setPhotoOpen(false);
     photoLoader_.cancelDecode();
     decodeRequest_ = 0;
     cameraPreviewRequest_ = 0;

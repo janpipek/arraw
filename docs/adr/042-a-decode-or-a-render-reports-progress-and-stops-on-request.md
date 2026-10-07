@@ -197,7 +197,8 @@ and `RenderIndicator` drives it from a timer:
   milliseconds, so a slider drag over a slow render does not alternate between
   a bar and a busy one.
 
-The indicator is a permanent status-bar widget (`RenderProgressBar`): the
+*Superseded 2026-10-07 by the amendment below (`RenderProgressPie`).* The indicator
+was a permanent status-bar widget (`RenderProgressBar`): the
 step's wording ("Reducing noise…", "Analysing local contrast…",
 "Developing…") beside a `QProgressBar` with the percentage, busy while there
 is no fraction yet. It was first a thin bar painted along the top of the photo
@@ -217,6 +218,14 @@ empty red outline until there is one). The fill is the cue that does not depend 
 colour; the colours are a second cue. The step's wording moves to the tooltip
 ("Reducing noise… 40%"; "Up to date" when done) and the accessible name and
 description. The show delay and holds are unchanged.
+
+With no photograph open the pie is an empty grey ring, tooltip "No photograph open". A
+render that was cancelled delivers nothing, so the pie goes back to "up to date" for it. The
+newest render that failed (the window already isolates it and shows a message box) also
+turns the pie into an empty red ring with the tooltip "Render failed: <error>", until a
+render is shown or the photograph changes.
+The red is its own, more saturated than the error text, so a render does not read as an
+error.
 
 **Python gets no progress callable yet.** The bindings
 ([ADR 018](018-python-binds-the-public-api-and-nothing-else.md)) keep their

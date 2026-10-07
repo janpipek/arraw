@@ -50,10 +50,16 @@ inline const QColor warningText{0xd6, 0xa6, 0x4a};
 /// Text of errors, such as a log's error rows; muted, like the accent.
 inline const QColor errorText{0xe0, 0x6c, 0x64};
 
-/// Fill and outline of the render pie when the picture is up to date; muted green.
+/// Fill and outline of the render pie when the picture is up to date; muted green, about
+/// 4.9:1 against the window grey.
 inline const QColor progressDone{0x5a, 0xa8, 0x6a};
-/// Fill and outline of the render pie while a render is going; muted red.
-inline const QColor progressBusy{0xe0, 0x6c, 0x64};
+/// Fill and outline of the render pie while a render is going; a clear, more saturated red than
+/// ::arraw::app::theme::errorText, so that a render does not read as an error, about 3.8:1
+/// against the window grey.
+inline const QColor progressBusy{0xf0, 0x44, 0x3c};
+/// Outline of the render pie with no photograph open; neutral grey, about 3.5:1 against the
+/// window grey.
+inline const QColor progressIdle{0x80, 0x80, 0x80};
 
 /// Toolbar separators: a dim divider only a touch off the window grey.
 inline const QColor separator{0x3a, 0x3a, 0x3a};
