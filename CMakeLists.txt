@@ -58,7 +58,12 @@ endif()
 # PRIVATE: no exiv2 type appears in include/. BMFF (CR3, HEIF) is on by
 # default in 0.28.
 if(WIN32)
-    find_package(exiv2 0.28 CONFIG REQUIRED)
+    # exiv2's version file is ExactVersion, so `find_package(exiv2 0.28)`
+    # would reject 0.28.8; ask for any version and check the floor here.
+    find_package(exiv2 CONFIG REQUIRED)
+    if(exiv2_VERSION VERSION_LESS 0.28)
+        message(FATAL_ERROR "exiv2 >= 0.28 required, found ${exiv2_VERSION}")
+    endif()
     set(ARRAW_EXIV2 Exiv2::exiv2lib)
 else()
     pkg_check_modules(EXIV2 REQUIRED IMPORTED_TARGET exiv2>=0.28)

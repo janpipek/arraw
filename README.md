@@ -28,6 +28,8 @@ just format    # clang-format owns mechanical formatting
 just fixtures  # regenerate the committed test fixtures (needs uv)
 ```
 
+On Windows, see [`docs/development.md`](docs/development.md).
+
 For containerized agent sessions, the [VibePod overlay](.vibepod/README.md)
 provides the Linux build dependencies and developer tools automatically.
 
@@ -154,6 +156,7 @@ alongside `--log-format json` mixes debug traces with diagnostic JSON on stderr.
 - `src/platform/headless/` — the command line's display-free Qt platform (Linux)
 - `docs/adr/` — why each hard-to-reverse choice was made
 - `docs/desired-features.md` — the feature brief, from a photographer's view
+- `docs/development.md` — platform-specific build notes
 
 ## Licence
 
