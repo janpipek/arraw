@@ -264,3 +264,7 @@ caller-supplied type, `ProgressChannel`, passed as a nullable pointer beside
 `DiagnosticLog&`. The "channel" above is therefore two types. They differ in
 direction, in their thread rules and in their lifetime, and ADR 042 sets out
 why they are kept apart rather than merged.
+
+## Note, 2026-10-08
+
+Mask geometry joins the plan's pointwise group as [ADR 044](044-local-adjustments-are-masked-deltas-summed-into-the-chain.md) specifies; a brush's strokes are compared by pointer and then contents rather than by a revision.
