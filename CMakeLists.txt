@@ -428,6 +428,8 @@ add_library(arraw-app-core STATIC
         src/app/FilmStripRules.h
         src/app/FolderWatcher.cpp
         src/app/FolderWatcher.h
+        src/app/HistoryModel.cpp
+        src/app/HistoryModel.h
         src/app/OklabHue.cpp
         src/app/OklabHue.h
         src/app/ShotFilterModel.cpp

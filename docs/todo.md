@@ -7,6 +7,21 @@ As of 2026-10-07, branch `copy-settings`, nothing pushed. Earlier, on
 (`docs/ideas/render-progress-plan.md`). The reviews are in `docs/reviews/`,
 untracked on purpose.
 
+## Done: session history (branch `copy-settings`, 2026-10-08)
+
+Step 3 of `docs/ideas/looks-and-history-plan.md`: `EditSession` keeps a list
+and a position, `goTo`, origins and `describeChange` (ADR 022 amended); a
+`HistoryModel` and a History dock on the left, where a click navigates;
+Python binds `EditSession` with `with session.edit():`. Reviewed in
+`docs/reviews/claude-opus-5-5_2026-10-08_session-history.md`. Low leftovers:
+- `groupDisplayName` belongs in `SettingPresentation`, not `HistoryModel.h`
+  (the panel includes the model's header for it) (N1);
+- `with session.edit():` commits an edit the block itself began, with the
+  scope's origin (L7, second half);
+- no window test for the curve's own pending drag then its Reset (N2), nor
+  for the dock after a save or a sidecar reload;
+- `test_MainWindowHistory.cpp` uses `REQUIRE` inside a `QTimer` lambda (N3).
+
 ## Done: copy settings (branch `copy-settings`)
 
 Steps 1 and 2 of `docs/ideas/looks-and-history-plan.md` and the copy/paste
@@ -35,13 +50,9 @@ weights were remeasured, and the develop dock keeps every slider at least
 
 The order and the decisions are in `docs/ideas/architecture-roadmap.md`;
 loose ideas are in `docs/ideas/parked-ideas.md`. Of step (a), planned in
-`docs/ideas/looks-and-history-plan.md`, two steps remain:
+`docs/ideas/looks-and-history-plan.md`, one step remains, after local
+adjustments (user, 2026-10-08; `docs/ideas/local-adjustment-plan.md`):
 
-- **Step 3, session history (plan §4).** `EditSession` keeps a list and a
-  position; `goTo`, origins (Edit, Paste, Preset, Reset, Crop) and
-  `describeChange` (ADR 022 amended); a `HistoryModel` and a History dock on
-  the left, where a click navigates; Python binds `EditSession`, with
-  `with session.edit():`.
 - **Step 4, presets (plan §3).** A `PresetStore` in core over
   `AppDataLocation/presets` (the settings document plus a name; a new ADR);
   a Presets list above History; the CLI's `preset list | show | apply` and

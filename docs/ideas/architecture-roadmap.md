@@ -75,8 +75,9 @@ Then the features:
 - **Room for Snapshots:**
   - history steps stay whole develop states, so a snapshot is a named whole
     state;
-  - a history click navigates, as in `main` and Lightroom; restoring a
-    snapshot later is one undoable change of the whole state;
+  - a history click navigates (`goTo`), as in `main` and Lightroom, and is not
+    an undoable step; only restoring a snapshot later is one undoable change
+    of the whole state;
   - the dock leaves room for a Snapshots list beneath History;
   - persisting snapshots waits for the structured sidecar format of step (c).
 

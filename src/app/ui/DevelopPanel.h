@@ -4,6 +4,7 @@
 
 #include <CurveHistogram.h>
 #include <DevelopState.h>
+#include <EditSession.h>
 #include <GeometrySettings.h>
 #include <ImageImport.h>
 #include <WhiteBalance.h>
@@ -90,6 +91,14 @@ public:
     /// For callers about to act on the history, such as undo, which must see
     /// that edit committed rather than open.
     void finishPendingEdit();
+
+    /// @brief Tells what kind of step the edit being announced makes.
+    ///
+    /// Meaningful while ::arraw::app::DevelopPanel::editFinished is emitted: a Reset button's
+    /// edit says ::arraw::EditOrigin::Reset, any other edit ::arraw::EditOrigin::Edit.
+    [[nodiscard]] EditOrigin editOrigin() const noexcept {
+        return editOrigin_;
+    }
 
     /// @brief Shows the curve-input histogram behind the tone curves.
     /// @param histogram Counts for the state being edited (ADR 035).
@@ -180,6 +189,9 @@ private:
     /// @brief Reports the geometry's return to its defaults, as one complete edit.
     void applyGeometryReset();
 
+    /// @brief Origin of the edit in progress; see ::arraw::app::DevelopPanel::editOrigin.
+    EditOrigin editOrigin_ = EditOrigin::Edit;
+
     /// @brief Builds the White Balance group.
     QWidget* buildWhiteBalanceGroup();
 
@@ -226,6 +238,11 @@ private:
     /// @brief Ends every pending edit but the one of a row or the curve editor.
     /// @param keep Row or editor whose edit begins; nullptr ends them all.
     void finishOtherEdits(const QObject* keep);
+
+    /// @brief Announces the end of an edit that a Reset button made.
+    ///
+    /// Sets the origin only around the one ::arraw::app::DevelopPanel::editFinished it emits.
+    void finishResetEdit();
 
     /// @brief Reports a combo entry the user chose, as one complete edit.
     void applyChoice(int index);

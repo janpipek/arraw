@@ -48,6 +48,7 @@ add_executable(arraw-tests
         test_GpuContext.cpp
         test_GpuDevice.cpp
         test_GpuPlan.cpp
+        test_HistoryModel.cpp
         test_ImageBuffer.cpp
         test_ImageExport.cpp
         test_ImagePyramid.cpp
@@ -113,6 +114,7 @@ add_executable(arraw-widget-tests
         test_CropOverlay.cpp
         test_CurveEditor.cpp
         test_DevelopPanel.cpp
+        test_MainWindowHistory.cpp
         test_MainWindowCopy.cpp
         test_MainWindowCrop.cpp
         test_MainWindowOpening.cpp

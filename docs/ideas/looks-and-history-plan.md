@@ -319,6 +319,8 @@ and the roadmap is corrected.
   as the preset's name.
 - It is not free text, so the GUI still localises it and the list can never
   claim a change the states do not show.
+- Only a Reset button's edit is a `Reset`: double-clicking a slider's label to
+  reset it stays an `Edit`, since its wording ("Exposure 0.00 EV") is truthful.
 
 **The dock.** History sits in the left dock, under Presets:
 - a `QListView` over a `HistoryModel` in app-core, which is testable without

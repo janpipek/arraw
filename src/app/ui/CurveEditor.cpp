@@ -153,7 +153,7 @@ void CurveEditor::resetChannel() {
     selected_.reset();
     emit editStarted();
     apply(ToneCurve{});
-    emit editFinished();
+    emit resetFinished();
 }
 
 void CurveEditor::finishPendingEdit() {

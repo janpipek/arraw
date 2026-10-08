@@ -9,10 +9,12 @@
 #include <Sidecar.h>
 
 #include <QAbstractButton>
+#include <QAbstractItemModel>
 #include <QAction>
 #include <QApplication>
 #include <QDialog>
 #include <QDoubleSpinBox>
+#include <QListView>
 #include <QSettings>
 #include <QStatusBar>
 #include <QTest>
@@ -126,6 +128,17 @@ TEST_CASE("Pasting gives the photograph the copied settings, in one history step
     w.action("undoAction").trigger();
     CHECK(w.panelExposure() == 1.0);
     CHECK_FALSE(w.action("undoAction").isEnabled());
+}
+
+TEST_CASE("A paste shows in the history as Paste Settings", "[app][window][copy][history]") {
+    Window w;
+    w.copy();
+    w.open("b.dng");
+    w.action("pasteSettingsAction").trigger();
+    const auto* list = w.window.findChild<QListView*>("historyList");
+    REQUIRE(list != nullptr);
+    REQUIRE(list->model()->rowCount() == 2);
+    CHECK(list->model()->index(0, 0).data().toString() == "Paste Settings");
 }
 
 TEST_CASE("Paste is off in the crop mode", "[app][window][copy][crop]") {

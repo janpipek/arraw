@@ -1,9 +1,11 @@
 #pragma once
 
+#include <DevelopState.h>
 #include <SettingDescriptors.h>
 
 #include <QString>
 
+#include <optional>
 #include <span>
 #include <string_view>
 
@@ -182,6 +184,17 @@ struct TreatmentVisibility {
 /// @return The value, clamped to the range.
 [[nodiscard]] double valueOfTick(int tick, const SettingRange& range, double step,
                                  SliderScale scale = SliderScale::Linear);
+
+/// @brief Reads the value a setting shows in a state, as the panel and the history show it.
+///
+/// The straighten is the angle as it appears on screen (::arraw::displayedStraighten), not the
+/// stored one; every other number is its stored value.
+/// @param descriptor Row of the setting.
+/// @param state State to read it from.
+/// @return The value; empty for a flag, an enumeration, a curve, a crop, and an optional setting
+/// that is unset (the temperature and tint while they follow the camera).
+[[nodiscard]] std::optional<double> displayedValue(const FieldDescriptor& descriptor,
+                                                   const DevelopState& state);
 
 /// @brief Reads the value a setting has in a set of defaults.
 /// @param descriptor Row of a float or double setting.

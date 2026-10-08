@@ -2,6 +2,7 @@
 
 #include "CropEditing.h"
 #include "CurveEditor.h"
+#include "HistoryModel.h"
 #include "SettingPresentation.h"
 #include "SettingSlider.h"
 #include "WhiteBalanceChoice.h"
@@ -37,6 +38,11 @@
 namespace arraw::app {
 
 namespace {
+
+/// Gives the title of a group box: the group's display name, with `&` escaped for the mnemonics.
+QString groupTitle(SettingGroup group) {
+    return groupDisplayName(group).replace('&', QStringLiteral("&&"));
+}
 
 /// What the White Balance rows show when the camera's reading is not known.
 constexpr ColourTemperature fallbackLight{5500.0F, 0.0F};
@@ -161,7 +167,7 @@ void DevelopPanel::finishOtherEdits(const QObject* keep) {
 }
 
 QWidget* DevelopPanel::buildToneCurveGroup() {
-    auto* group = new QGroupBox(tr("Tone Curve"), this);
+    auto* group = new QGroupBox(groupTitle(SettingGroup::ToneCurve), this);
     auto* groupLayout = new QVBoxLayout(group);
 
     curveEditor_ = new CurveEditor(group);
@@ -208,12 +214,13 @@ QWidget* DevelopPanel::buildToneCurveGroup() {
     });
     connect(curveEditor_, &CurveEditor::curveEdited, this, &DevelopPanel::applyCurveEdit);
     connect(curveEditor_, &CurveEditor::editFinished, this, &DevelopPanel::editFinished);
+    connect(curveEditor_, &CurveEditor::resetFinished, this, &DevelopPanel::finishResetEdit);
     connect(curveEditor_, &CurveEditor::focusReleased, this, &DevelopPanel::focusReleased);
     return group;
 }
 
 QWidget* DevelopPanel::buildColorGroup() {
-    auto* group = new QGroupBox(tr("Colour"), this);
+    auto* group = new QGroupBox(groupTitle(SettingGroup::Color), this);
     new QVBoxLayout(group);
     for (const std::string_view key : colorKeys()) {
         addRow(key, group);
@@ -222,7 +229,7 @@ QWidget* DevelopPanel::buildColorGroup() {
 }
 
 QWidget* DevelopPanel::buildPresenceGroup() {
-    auto* group = new QGroupBox(tr("Presence"), this);
+    auto* group = new QGroupBox(groupTitle(SettingGroup::Presence), this);
     new QVBoxLayout(group);
     for (const std::string_view key : presenceKeys()) {
         addRow(key, group);
@@ -231,7 +238,7 @@ QWidget* DevelopPanel::buildPresenceGroup() {
 }
 
 QWidget* DevelopPanel::buildColorGradingGroup() {
-    auto* group = new QGroupBox(tr("Colour Grading"), this);
+    auto* group = new QGroupBox(groupTitle(SettingGroup::ColorGrading), this);
     new QVBoxLayout(group);
     for (const std::string_view key : colorGradingKeys()) {
         addRow(key, group);
@@ -240,7 +247,7 @@ QWidget* DevelopPanel::buildColorGradingGroup() {
 }
 
 QWidget* DevelopPanel::buildNoiseReductionGroup() {
-    auto* group = new QGroupBox(tr("Noise Reduction"), this);
+    auto* group = new QGroupBox(groupTitle(SettingGroup::Detail), this);
     new QVBoxLayout(group);
     for (const std::string_view key : noiseReductionKeys()) {
         addRow(key, group);
@@ -249,7 +256,7 @@ QWidget* DevelopPanel::buildNoiseReductionGroup() {
 }
 
 QWidget* DevelopPanel::buildEffectsGroup() {
-    auto* group = new QGroupBox(tr("Effects"), this);
+    auto* group = new QGroupBox(groupTitle(SettingGroup::Effects), this);
     new QVBoxLayout(group);
     for (const std::string_view key : effectsKeys()) {
         addRow(key, group);
@@ -258,7 +265,7 @@ QWidget* DevelopPanel::buildEffectsGroup() {
 }
 
 QWidget* DevelopPanel::buildHslGroup() {
-    auto* group = new QGroupBox(tr("HSL / Colour Mix"), this);
+    auto* group = new QGroupBox(groupTitle(SettingGroup::Hsl), this);
     auto* groupLayout = new QVBoxLayout(group);
 
     auto* tabRow = new QHBoxLayout;
@@ -289,7 +296,7 @@ QWidget* DevelopPanel::buildHslGroup() {
 }
 
 QWidget* DevelopPanel::buildBlackAndWhiteGroup() {
-    auto* group = new QGroupBox(tr("Black && White"), this);
+    auto* group = new QGroupBox(groupTitle(SettingGroup::BlackAndWhite), this);
     // On the group, so it shows over the title; the rows keep their own tips.
     group->setToolTip(tr("How each colour becomes grey: drag a band darker or lighter."));
     new QVBoxLayout(group);
@@ -300,7 +307,7 @@ QWidget* DevelopPanel::buildBlackAndWhiteGroup() {
 }
 
 QWidget* DevelopPanel::buildCropGroup() {
-    auto* group = new QGroupBox(tr("Crop"), this);
+    auto* group = new QGroupBox(groupTitle(SettingGroup::Geometry), this);
     auto* groupLayout = new QVBoxLayout(group);
 
     // None of these takes the focus: in the crop mode it stays on the overlay, which claims
@@ -466,7 +473,13 @@ void DevelopPanel::applyGeometryReset() {
     finishPendingEdit();
     emit editStarted();
     emit stateEdited(next);
+    finishResetEdit();
+}
+
+void DevelopPanel::finishResetEdit() {
+    editOrigin_ = EditOrigin::Reset;
     emit editFinished();
+    editOrigin_ = EditOrigin::Edit;
 }
 
 void DevelopPanel::showGeometry(const GeometrySettings& geometry) {
@@ -549,7 +562,7 @@ DevelopPanel::DevelopPanel(QWidget* parent) : QWidget(parent) {
     layout->addWidget(buildCropGroup());
     addGroup(buildWhiteBalanceGroup());
 
-    auto* tone = new QGroupBox(tr("Tone"), this);
+    auto* tone = new QGroupBox(groupTitle(SettingGroup::Tone), this);
     new QVBoxLayout(tone);
     for (const std::string_view key : toneKeys()) {
         addRow(key, tone);
@@ -624,21 +637,13 @@ void DevelopPanel::showState(const DevelopState& state, const PanelContext& cont
                 return 0.0;
             }
         }));
-        if (row->key() == "straighten") {
-            // Shown as it appears on screen: one flip reverses the stored angle.
-            row->setValue(displayedStraighten(shown_.settings.geometry));
-        } else if (row->key() == "temperature") {
+        if (row->key() == "temperature") {
             row->setValue(light.kelvin);
         } else if (row->key() == "tint") {
             row->setValue(light.tint);
         } else {
-            row->setValue(visitField(descriptor, shown_.settings, [](const auto& field) -> double {
-                if constexpr (std::is_arithmetic_v<std::remove_cvref_t<decltype(field)>>) {
-                    return static_cast<double>(field);
-                } else {
-                    return 0.0;
-                }
-            }));
+            // Shown as it appears on screen; an unset optional shows nothing.
+            row->setValue(displayedValue(descriptor, shown_).value_or(0.0));
         }
     }
 }

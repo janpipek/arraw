@@ -1,4 +1,5 @@
 #include "CurveEditing.h"
+#include "HistoryModel.h"
 #include "ui/CurveEditor.h"
 #include "ui/DevelopPanel.h"
 #include "ui/SettingSlider.h"
@@ -641,5 +642,21 @@ TEST_CASE("Every slider keeps its minimum track at the dock's minimum and defaul
                 CHECK(checked > 0);
             }
         }
+    }
+}
+
+TEST_CASE("The panel titles its groups as the history names them", "[app][panel][history]") {
+    DevelopPanel panel;
+    QStringList titles;
+    for (const auto* group : panel.findChildren<QGroupBox*>()) {
+        // A mnemonic's ampersand is doubled in a title.
+        titles.push_back(QString(group->title()).replace("&&", "&"));
+    }
+    for (const SettingGroup group :
+         {SettingGroup::Color, SettingGroup::Tone, SettingGroup::Geometry, SettingGroup::Hsl,
+          SettingGroup::BlackAndWhite, SettingGroup::ToneCurve, SettingGroup::ColorGrading,
+          SettingGroup::Effects, SettingGroup::Detail, SettingGroup::Presence}) {
+        INFO(groupDisplayName(group).toStdString());
+        CHECK(titles.contains(groupDisplayName(group)));
     }
 }

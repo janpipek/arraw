@@ -15,6 +15,7 @@
 
 #include <QImage>
 #include <QMainWindow>
+#include <QModelIndex>
 #include <QPointF>
 #include <QSize>
 #include <QString>
@@ -37,6 +38,7 @@ class QCloseEvent;
 class QDockWidget;
 class QMenu;
 class QLabel;
+class QListView;
 class QToolButton;
 class QEvent;
 class QShortcut;
@@ -49,6 +51,7 @@ struct DebugLog;
 class DebugWindow;
 class DevelopPanel;
 class FilmStrip;
+class HistoryModel;
 class PhotoView;
 class RenderProgressPie;
 
@@ -259,6 +262,18 @@ private:
     /// through the photograph's history; Paste follows, as it too edits the history.
     void updateHistoryActions();
 
+    /// @brief Builds the History dock and its toggle in the View menu.
+    void buildHistoryDock();
+
+    /// @brief Shows the session's history in the dock, and disables the dock in the crop mode.
+    ///
+    /// Leaves the list as it is while an edit is open.
+    void updateHistoryDock();
+
+    /// @brief Goes to the step a row of the History dock shows, as Undo and Redo do.
+    /// @param row Row clicked or activated.
+    void goToHistoryRow(const QModelIndex& row);
+
     /// @brief Asks which sections to copy and holds the open photograph's settings for pasting.
     void copySettings();
 
@@ -409,6 +424,10 @@ private:
     RenderIndicator* renderIndicator_ = nullptr;
     DevelopPanel* developPanel_ = nullptr;
     QWidget* developDock_ = nullptr;
+    /// Steps of the open photograph's session, newest on top.
+    HistoryModel* historyModel_ = nullptr;
+    QListView* historyView_ = nullptr;
+    QDockWidget* historyDock_ = nullptr;
     QAction* saveAction_ = nullptr;
     QAction* undoAction_ = nullptr;
     QAction* redoAction_ = nullptr;

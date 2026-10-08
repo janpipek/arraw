@@ -96,6 +96,9 @@ void bindShots(nb::module_& module);
 /// @brief Binds photographs, diagnostics and the develop and save functions.
 void bindPhoto(nb::module_& module);
 
+/// @brief Binds the edit session, its history and describe_change.
+void bindSession(nb::module_& module);
+
 /// @brief Applies flat snake_case keywords to settings, driven by the descriptor table.
 /// @param settings Settings to change.
 /// @param keywords Keyword arguments, each naming one leaf of the table.

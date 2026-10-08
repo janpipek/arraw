@@ -131,6 +131,12 @@ signals:
     /// @brief Announces that the edit is over.
     void editFinished();
 
+    /// @brief Announces that the edit made by resetChannel() is over.
+    ///
+    /// Takes the place of editFinished() for that edit, so that a listener can tell a reset from
+    /// any other edit.
+    void resetFinished();
+
     /// @brief Asks for the keyboard focus to go back to the photograph.
     void focusReleased();
 

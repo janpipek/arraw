@@ -11,6 +11,7 @@
 #include "ExportDialog.h"
 #include "ExportSettings.h"
 #include "FilmStrip.h"
+#include "HistoryModel.h"
 #include "PhotoView.h"
 #include "RenderDelay.h"
 #include "RenderProgressPie.h"
@@ -37,8 +38,10 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QImage>
+#include <QItemSelectionModel>
 #include <QKeySequence>
 #include <QLabel>
+#include <QListView>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
@@ -54,6 +57,7 @@
 #include <QString>
 #include <QStringList>
 #include <QStyle>
+#include <QStyledItemDelegate>
 #include <QToolButton>
 
 #include <algorithm>
@@ -172,6 +176,7 @@ MainWindow::MainWindow(DebugLog& debugLog, QWidget* parent)
     buildStatusBar();
     buildImageView();
     buildDevelopDock();
+    buildHistoryDock();
     buildFilmStripDock();
 
     // Last in the View menu, after the docks' toggles.
@@ -584,7 +589,7 @@ void MainWindow::buildDevelopDock() {
             if (!open_->session.editing()) {
                 return;
             }
-            open_->session.commit();
+            open_->session.commit(developPanel_->editOrigin());
             refreshPanel();
         });
     });
@@ -671,6 +676,7 @@ void MainWindow::cameraPreviewLanded(const CameraPreview& preview) {
 
 void MainWindow::updateHistoryActions() {
     updatePasteAction();
+    updateHistoryDock();
     if (!open_) {
         undoAction_->setEnabled(false);
         redoAction_->setEnabled(false);
@@ -683,6 +689,92 @@ void MainWindow::updateHistoryActions() {
     }
     undoAction_->setEnabled(open_->session.canUndo());
     redoAction_->setEnabled(open_->session.canRedo());
+}
+
+namespace {
+
+/// Delegate that dims the steps the list shows as redoable, as a disabled control is.
+class HistoryDelegate : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+
+    void initStyleOption(QStyleOptionViewItem* option, const QModelIndex& index) const override {
+        QStyledItemDelegate::initStyleOption(option, index);
+        if (index.data(HistoryModel::RedoableRole).toBool()) {
+            option->palette.setColor(QPalette::Text,
+                                     option->palette.color(QPalette::Disabled, QPalette::Text));
+            option->palette.setColor(
+                QPalette::HighlightedText,
+                option->palette.color(QPalette::Disabled, QPalette::HighlightedText));
+        }
+    }
+};
+
+} // namespace
+
+void MainWindow::buildHistoryDock() {
+    historyModel_ = new HistoryModel(this);
+    historyView_ = new QListView(this);
+    historyView_->setObjectName("historyList");
+    historyView_->setModel(historyModel_);
+    historyView_->setItemDelegate(new HistoryDelegate(historyView_));
+    historyView_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    historyView_->setSelectionMode(QAbstractItemView::SingleSelection);
+    // A click or Enter goes to the step; moving the highlight alone does not.
+    connect(historyView_, &QListView::clicked, this, &MainWindow::goToHistoryRow);
+    connect(historyView_, &QListView::activated, this, &MainWindow::goToHistoryRow);
+
+    historyDock_ = new QDockWidget(tr("History"), this);
+    historyDock_->setObjectName("HistoryDock");
+    historyDock_->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
+    historyDock_->setWidget(historyView_);
+    historyDock_->setEnabled(false);
+    addDockWidget(Qt::LeftDockWidgetArea, historyDock_);
+    resizeDocks({historyDock_}, {200}, Qt::Horizontal);
+
+    // Presets join this dock in a later step; the action already carries both names.
+    QAction* toggle = historyDock_->toggleViewAction();
+    toggle->setObjectName("presetsAndHistoryAction");
+    toggle->setText(tr("Presets and &History"));
+    viewMenu_->addAction(toggle);
+}
+
+void MainWindow::updateHistoryDock() {
+    if (!open_) {
+        historyModel_->clear();
+        historyDock_->setEnabled(false);
+        return;
+    }
+    const bool cropping = photoView_->isCropMode();
+    historyDock_->setEnabled(editable() && !cropping);
+    // The list changes when an edit commits, not while one is open (a drag, the crop mode).
+    if (open_->session.editing()) {
+        return;
+    }
+    const EditSession& session = open_->session;
+    historyModel_->setHistory(session.history(), session.position(), session.saved().state());
+    const QModelIndex current = historyModel_->index(historyModel_->rowOfIndex(session.position()));
+    historyView_->setCurrentIndex(current);
+    historyView_->scrollTo(current);
+}
+
+void MainWindow::goToHistoryRow(const QModelIndex& row) {
+    if (!row.isValid() || !open_ || photoView_->isCropMode()) {
+        return;
+    }
+    guarded([this, row] {
+        // What the click meant, read before a pending edit changes the list under it.
+        const std::size_t step = historyModel_->indexOfRow(row.row());
+        const std::size_t steps = open_->session.history().size();
+        developPanel_->finishPendingEdit();
+        // An edit that was still open added or dropped steps (and showed the new list): the old
+        // row no longer says which step was clicked.
+        if (open_->session.history().size() != steps || step == open_->session.position()) {
+            return;
+        }
+        open_->session.goTo(step);
+        refreshPanel();
+    });
 }
 
 void MainWindow::updatePasteAction() {
@@ -720,7 +812,7 @@ void MainWindow::pasteSettings() {
         const AppliedLook applied =
             withLook(photo.metadata(), photo.state(), clipboard_->look, clipboard_->sections);
         const bool changed = applied.state != photo.state();
-        open_->session.setState(applied.state);
+        open_->session.setState(applied.state, EditOrigin::Paste);
         refreshPanel();
         const QString skipped = skippedMessage(applied.skipped);
         if (!skipped.isEmpty()) {
@@ -755,7 +847,7 @@ void MainWindow::leaveCropMode(bool accept) {
     guarded([this, accept] {
         if (open_->session.editing()) {
             if (accept) {
-                open_->session.commit();
+                open_->session.commit(EditOrigin::Crop);
             } else {
                 open_->session.cancel();
             }

@@ -1430,4 +1430,146 @@ def is_supported_image(path: str | os.PathLike) -> bool:
 
 SUPPORTED_EXTENSIONS: tuple = ...
 
+class EditOrigin(enum.Enum):
+    """Kind of change that made a history step, beyond what its states show."""
+
+    OPENED = 0
+
+    EDIT = 1
+
+    PASTE = 2
+
+    PRESET = 3
+
+    RESET = 4
+
+    CROP = 5
+
+class HistoryStep:
+    """One entry of an edit history: the state it left, and why."""
+
+    @property
+    def state(self) -> DevelopState:
+        """Whole develop state after the step."""
+
+    @property
+    def origin(self) -> EditOrigin:
+        """Kind of change the step was."""
+
+    @property
+    def detail(self) -> str:
+        """What the origin applies to, such as a preset's name; empty otherwise."""
+
+    def __eq__(self, arg: HistoryStep, /) -> bool: ...
+
+    def __repr__(self) -> str: ...
+
+class ChangeDescription:
+    """Settings two develop states differ in, for naming a step."""
+
+    @property
+    def keys(self) -> list[str]:
+        """
+        Descriptor keys (camelCase, as JSON and the sidecar spell them) whose values differ, in table
+        order; setting_descriptors() maps them to the Python names.
+        """
+
+    @property
+    def group(self) -> SettingGroup | None:
+        """
+        Group every key belongs to; None when there are no keys or they span groups.
+        """
+
+    def __eq__(self, arg: ChangeDescription, /) -> bool: ...
+
+    def __repr__(self) -> str: ...
+
+def describe_change(before: DevelopState, after: DevelopState) -> ChangeDescription:
+    """List the settings two develop states differ in."""
+
+class EditScope:
+    """Context manager of one edit; made by EditSession.edit()."""
+
+    def __enter__(self) -> object: ...
+
+    def __exit__(self, type: object | None, value: object | None, traceback: object | None) -> bool: ...
+
+class EditSession:
+    """
+    One photograph being edited: the document as it stands, and how it got there.
+    """
+
+    def __init__(self, photo: Photo) -> None: ...
+
+    @property
+    def photo(self) -> Photo:
+        """Current photograph, including an edit in progress."""
+
+    def begin(self) -> None:
+        """Open an edit; one already open is committed first."""
+
+    def update(self, state: DevelopState) -> None:
+        """Change the state provisionally, inside the open edit."""
+
+    def commit(self, origin: EditOrigin = EditOrigin.EDIT, detail: str = '') -> None:
+        """
+        Close the open edit as one history step; an edit that ends where it began leaves none.
+        """
+
+    def cancel(self) -> None:
+        """Close the open edit, restoring its starting state."""
+
+    @property
+    def editing(self) -> bool:
+        """Whether an edit is open."""
+
+    def set_state(self, state: DevelopState, origin: EditOrigin = EditOrigin.EDIT, detail: str = '') -> None:
+        """Replace the develop state as one history step."""
+
+    @property
+    def history(self) -> list[HistoryStep]:
+        """Steps taken so far, the opening state first; a new list on every access."""
+
+    @property
+    def position(self) -> int:
+        """Index in history of the step the document is at."""
+
+    def go_to(self, index: int) -> None:
+        """
+        Move to a step, keeping every step. An open edit is committed first, and index is taken after that.
+        """
+
+    @property
+    def can_undo(self) -> bool: ...
+
+    @property
+    def can_redo(self) -> bool: ...
+
+    def undo(self) -> None:
+        """Take back the latest history step."""
+
+    def redo(self) -> None:
+        """Bring back the step undo took back."""
+
+    @property
+    def saved(self) -> Photo:
+        """Photograph as its sidecar holds it."""
+
+    @property
+    def has_unsaved_changes(self) -> bool: ...
+
+    def save(self) -> None:
+        """Write the photograph to its sidecar and make that the saved state."""
+
+    def set_marks(self, marks: PhotoMarks) -> None:
+        """Set the marks, writing them to the sidecar at once."""
+
+    def discard_changes(self) -> None:
+        """Return to the saved state, dropping history and any open edit."""
+
+    def edit(self, origin: EditOrigin = EditOrigin.EDIT, detail: str = '') -> EditScope:
+        """
+        Context manager for one edit: commits on a normal exit, cancels if the block raises. Entering raises RuntimeError while an edit is open; leaving does nothing if the block closed the edit itself.
+        """
+
 __version__: str
