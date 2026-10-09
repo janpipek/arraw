@@ -4,8 +4,10 @@
 #include "ui/MainWindow.h"
 #include "ui/PhotoView.h"
 #include "ui/RenderProgressPie.h"
+#include "ui/StatusLine.h"
 #include "ui/ThemeColors.h"
 
+#include <QLabel>
 #include <QStatusBar>
 #include <QTest>
 
@@ -228,10 +230,13 @@ TEST_CASE("The window's pie is always there, beside a status message", "[app][wi
     CHECK(QTest::qWaitFor([&] { return progress.rendering(); }, 2000));
     CHECK(progress.toolTip() == QString::fromUtf8("Developing\u2026"));
     // Beside an export's message, not hidden by it.
-    window.statusBar()->showMessage("Exporting a.dng...");
+    auto& line = *window.findChild<StatusLine*>();
+    line.showMessage("Exporting a.dng...");
     CHECK(progress.isVisible());
-    CHECK(window.statusBar()->currentMessage() == "Exporting a.dng...");
-    window.statusBar()->clearMessage();
+    CHECK(line.message() == "Exporting a.dng...");
+    CHECK(progress.mapTo(&window, QPoint()).x() <
+          line.messageLabel()->mapTo(&window, QPoint()).x());
+    line.clearMessage();
 
     indicator.report(0.4, ProgressStep::Denoise);
     CHECK(progress.display().fraction == 0.4);

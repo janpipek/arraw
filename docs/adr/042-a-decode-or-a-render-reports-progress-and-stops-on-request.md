@@ -252,6 +252,13 @@ needs it, because it has two costs worth paying only then:
 When it is added, `ProgressChannel` is bound with a callable and `cancel()`,
 and `Cancelled` becomes a Python exception.
 
+*Amended 2026-10-09 (user):* the pie sits at the left of the status bar, in arraw's own
+`StatusLine` widget (pie, message, device, zoom) installed as the status bar's one widget.
+`QStatusBar` hides ordinary widgets while `showMessage` text shows and keeps permanent ones
+only at the right, so the pie could not be both at the left and always visible beside a message.
+The line has its own message label (elided when long) and timer; `QStatusBar::showMessage` is no
+longer used.
+
 ## Measurements
 
 These were taken on the release tree with eight threads, on a 6000×4000

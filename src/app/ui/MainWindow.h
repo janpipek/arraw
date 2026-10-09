@@ -57,6 +57,7 @@ class FilmStrip;
 class HistoryModel;
 class PhotoView;
 class RenderProgressPie;
+class StatusLine;
 
 /// @brief Top-level window of the desktop application.
 class MainWindow : public QMainWindow {
@@ -91,6 +92,9 @@ public:
     }
 
 protected:
+    /// @brief Sends status tips to the status line, which a status bar message would hide.
+    bool event(QEvent* event) override;
+
     /// @brief Schedules a new render when the view changes size or pixel ratio.
     ///
     /// Watching the view rather than the window catches whatever changes the
@@ -493,9 +497,13 @@ private:
     std::vector<QAction*> zoomActions_;
     QAction* zoomInAction_ = nullptr;
     QAction* zoomOutAction_ = nullptr;
+    /// Device label, owned by statusLine_.
     QLabel* deviceLabel_ = nullptr;
-    /// Pie in the status bar that shows whether a render is going and how far it is.
+    /// Pie in the status bar that shows whether a render is going and how far it is; owned by
+    /// statusLine_.
     RenderProgressPie* renderProgress_ = nullptr;
+    /// Status-bar line that owns the pie, the message, the device label and the zoom button.
+    StatusLine* statusLine_ = nullptr;
     /// Decides when a render in progress shows, and what of it.
     RenderIndicator* renderIndicator_ = nullptr;
     DevelopPanel* developPanel_ = nullptr;

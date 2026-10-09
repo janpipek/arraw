@@ -4,6 +4,7 @@
 #include "ui/MainWindow.h"
 #include "ui/PhotoView.h"
 #include "ui/SettingSlider.h"
+#include "ui/StatusLine.h"
 
 #include <Photo.h>
 #include <Sidecar.h>
@@ -166,8 +167,8 @@ TEST_CASE("Copying from a photograph that is not a RAW leaves White Balance out"
 
     w.open("b.dng");
     REQUIRE(w.panelExposure() == 1.0);
-    w.window.statusBar()->clearMessage();
+    w.window.findChild<StatusLine*>()->clearMessage();
     w.action("pasteSettingsAction").trigger();
     CHECK(w.panelExposure() == 0.0);
-    CHECK(w.window.statusBar()->currentMessage().isEmpty());
+    CHECK(w.window.findChild<StatusLine*>()->message().isEmpty());
 }
