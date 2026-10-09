@@ -132,7 +132,8 @@ add_executable(arraw-widget-tests
         test_MaskOverlay.cpp
         test_MasksPanel.cpp
         test_RenderProgressPie.cpp
-        test_SettingSlider.cpp)
+        test_SettingSlider.cpp
+        test_StatusLine.cpp)
 arraw_enable_warnings(arraw-widget-tests)
 # Qt Test for key clicks that go through the window's shortcuts, as a user's do.
 find_package(Qt6 REQUIRED COMPONENTS Test)

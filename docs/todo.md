@@ -86,15 +86,12 @@ adjustments (user, 2026-10-08; `docs/ideas/local-adjustment-plan.md`):
 
 `old` is the reference (`src/MainWindow.cpp`, `src/ChromeHider.*`, ADR 0028 there).
 
-- **Render status pie always present, at the left of the status bar.** Today
-  `RenderProgressPie` is a permanent widget on the right (`buildStatusBar`).
-  A normal (`addWidget`) widget is hidden while a `showMessage` text shows.
-  Plan (user, 2026-10-09): our own status-bar widget — the pie, a message
-  label and a timer behind `showMessage(text, timeout)` / `clearMessage()`,
-  then the device label and zoom button; the ~15 `statusBar()->showMessage`
-  call sites (and the export tooltip) move to it. ADR 042 needs to be updated.
 - **Spots and Info tabs** in the develop dock, as `old` had (Q switched to
   Spots there).
+
+Done (ADR 042): the render pie is always present at the left of the status
+bar, in the new `StatusLine` widget that also owns the message, device label
+and zoom button.
 
 Done (ADR 047): F7 History, F8 Develop, F9 film strip, F11 full screen and
 F12 Hide Panels, in the View menu and on the window.

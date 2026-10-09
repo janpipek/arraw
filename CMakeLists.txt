@@ -514,6 +514,8 @@ add_library(arraw-app-ui STATIC
         src/app/ui/SettingsDialog.h
         src/app/ui/SettingSlider.cpp
         src/app/ui/SettingSlider.h
+        src/app/ui/StatusLine.cpp
+        src/app/ui/StatusLine.h
         src/app/ui/Theme.cpp
         src/app/ui/Theme.h
         src/app/ui/ThemeColors.h)

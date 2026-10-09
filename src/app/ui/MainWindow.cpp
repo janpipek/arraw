@@ -19,6 +19,7 @@
 #include "RenderDelay.h"
 #include "RenderProgressPie.h"
 #include "SettingsDialog.h"
+#include "StatusLine.h"
 #include "ThumbnailCache.h"
 #include "ThumbnailWorker.h"
 #include "TimingTrace.h"
@@ -61,6 +62,7 @@
 #include <QSignalBlocker>
 #include <QStandardPaths>
 #include <QStatusBar>
+#include <QStatusTipEvent>
 #include <QString>
 #include <QStringList>
 #include <QStyle>
@@ -260,6 +262,16 @@ MainWindow::MainWindow(DebugLog& debugLog, QWidget* parent)
     }
 }
 
+bool MainWindow::event(QEvent* event) {
+    // QMainWindow would show a status tip in the QStatusBar, hiding the whole line.
+    if (event->type() == QEvent::StatusTip) {
+        statusLine_->showMessage(static_cast<QStatusTipEvent*>(event)->tip());
+        event->accept();
+        return true;
+    }
+    return QMainWindow::event(event);
+}
+
 bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
     if (watched == photoView_ && open_ &&
         (event->type() == QEvent::Resize || event->type() == QEvent::DevicePixelRatioChange)) {
@@ -431,7 +443,7 @@ void MainWindow::showSettings() {
         saveAppSettings(dialog.settings(), store);
         store.sync();
         if (store.status() == QSettings::NoError) {
-            statusBar()->showMessage(
+            statusLine_->showMessage(
                 tr("Settings saved. Restart Arraw to apply processing changes."), 6000);
             return;
         }
@@ -1139,9 +1151,9 @@ void MainWindow::pasteSettings() {
         refreshPanel();
         const QString skipped = skippedMessage(applied.skipped);
         if (!skipped.isEmpty()) {
-            statusBar()->showMessage(skipped, 8000);
+            statusLine_->showMessage(skipped, 8000);
         } else if (!changed) {
-            statusBar()->showMessage(tr("Nothing to paste."), 4000);
+            statusLine_->showMessage(tr("Nothing to paste."), 4000);
         }
     });
 }
@@ -1367,13 +1379,12 @@ void MainWindow::showRenderProgress(std::uint64_t request, double fraction, Prog
 }
 
 void MainWindow::buildStatusBar() {
-    renderProgress_ = new RenderProgressPie(this);
-    // Permanent, so that a status message neither hides it nor is hidden by it.
-    statusBar()->addPermanentWidget(renderProgress_);
+    // Our own line, so that the pie stays beside a message instead of being hidden by it.
+    statusLine_ = new StatusLine(zoomButton_, this);
+    statusBar()->addWidget(statusLine_, 1);
+    renderProgress_ = statusLine_->pie();
     renderProgress_->setPhotoOpen(false);
-    deviceLabel_ = new QLabel(this);
-    statusBar()->addPermanentWidget(deviceLabel_);
-    statusBar()->addPermanentWidget(zoomButton_);
+    deviceLabel_ = statusLine_->deviceLabel();
 }
 
 void MainWindow::showDevice(const PreviewResult& result) {
@@ -1468,7 +1479,7 @@ void MainWindow::openFile(const std::filesystem::path& path) {
                 filmStrip_->setFolder(folder);
             } catch (const std::exception& error) {
                 // The photograph itself opened; only the strip cannot show its folder.
-                statusBar()->showMessage(
+                statusLine_->showMessage(
                     tr("Cannot list %1: %2")
                         .arg(toQString(folder), QString::fromUtf8(error.what())),
                     8000);
@@ -1599,7 +1610,7 @@ void MainWindow::sidecarChangedOnDisk(const QString& primary) {
         // The edit stays open, and counts as unsaved below.
     }
     if (open_->session.hasUnsavedChanges()) {
-        statusBar()->showMessage(
+        statusLine_->showMessage(
             tr("The sidecar of %1 changed on disk; your unsaved edits are kept.").arg(name), 10000);
         return;
     }
@@ -1618,9 +1629,9 @@ void MainWindow::sidecarChangedOnDisk(const QString& primary) {
         open_.emplace(OpenPhoto{EditSession(std::move(photo)), std::move(decoded),
                                 std::move(cameraPreview), std::move(lastCropImage)});
         refreshPanel();
-        statusBar()->showMessage(tr("Reloaded %1: its sidecar changed on disk.").arg(name), 5000);
+        statusLine_->showMessage(tr("Reloaded %1: its sidecar changed on disk.").arg(name), 5000);
     } catch (const std::exception& error) {
-        statusBar()->showMessage(
+        statusLine_->showMessage(
             tr("Cannot reload the sidecar of %1: %2").arg(name, QString::fromUtf8(error.what())),
             10000);
     }
@@ -1648,7 +1659,7 @@ void MainWindow::exportWithDialog() {
         return;
     }
     if (!open_->decoded) {
-        statusBar()->showMessage(tr("%1 is still being decoded.")
+        statusLine_->showMessage(tr("%1 is still being decoded.")
                                      .arg(toQString(open_->session.photo().path().filename())),
                                  5000);
         return;
@@ -1715,28 +1726,27 @@ void MainWindow::showExportProgress() {
     if (exportNames_.size() > 1) {
         text += tr(" (%1 more)").arg(exportNames_.size() - 1);
     }
-    statusBar()->showMessage(text);
+    statusLine_->showMessage(text);
 }
 
 void MainWindow::showExportResult(const ExportResult& result) {
-    statusBar()->setToolTip({});
     // A result names its job; one whose job was cancelled has no name left.
     if (const auto found = exportNames_.find(result.id); found != exportNames_.end()) {
         const QString name = found->second;
         exportNames_.erase(found);
         if (result.error.empty()) {
             if (result.warnings.empty()) {
-                statusBar()->showMessage(tr("Exported %1").arg(name), 5000);
+                statusLine_->showMessage(tr("Exported %1").arg(name), 5000);
             } else {
                 QStringList details;
                 for (const auto& warning : result.warnings) {
                     details << QString::fromStdString(warning);
                 }
-                statusBar()->setToolTip(details.join(QLatin1Char('\n')));
-                statusBar()->showMessage(tr("Exported %1 without some metadata").arg(name), 8000);
+                statusLine_->showMessage(tr("Exported %1 without some metadata").arg(name), 8000,
+                                         details.join(QLatin1Char('\n')));
             }
         } else {
-            statusBar()->clearMessage();
+            statusLine_->clearMessage();
         }
     }
     if (!result.error.empty()) {
