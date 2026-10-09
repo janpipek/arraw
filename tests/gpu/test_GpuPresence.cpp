@@ -75,7 +75,7 @@ double requirePointwiseMatches(ImageBuffer source, const DevelopSettings& settin
                                double pixelScale) {
     source.setPixelScale(pixelScale);
     const DevelopState state{settings};
-    REQUIRE(planFor(source, state).presence.active());
+    REQUIRE(planFor(source, state).pointwise.presence.active());
     const ImageBuffer expected = developUntil(source, state, Stage::Pointwise).readBack();
     const ImageBuffer actual =
         developOnGpu(gpuContext(), source, state, Stage::Pointwise).readBack();
@@ -133,9 +133,8 @@ TEST_CASE("Presence on the device matches the CPU", "[gpu][presence][slow]") {
 
     SECTION("an export's cells: eight pixels, with Dehaze's opening over many") {
         const ImageBuffer wide = sceneOf({3203, 24});
-        REQUIRE(
-            planFor(wide, DevelopState{presence(0.0F, 50.0F, 50.0F)}).presence.coarse.reduction ==
-            8);
+        REQUIRE(planFor(wide, DevelopState{presence(0.0F, 50.0F, 50.0F)})
+                    .pointwise.presence.coarse.reduction == 8);
         worst = std::max(worst,
                          requirePointwiseMatches(wide.clone(), presence(30.0F, 70.0F, 60.0F), 1.0));
     }
@@ -158,7 +157,7 @@ TEST_CASE("Presence on the device matches the CPU", "[gpu][presence][slow]") {
             }
         }
         const PresencePlan plan =
-            planFor(disk, DevelopState{presence(0.0F, 0.0F, 100.0F)}).presence;
+            planFor(disk, DevelopState{presence(0.0F, 0.0F, 100.0F)}).pointwise.presence;
         REQUIRE(plan.haze.window == 18);
         REQUIRE(plan.haze.reconstruction == hazeReconstructionSteps);
         worst = std::max(worst,
@@ -181,7 +180,7 @@ TEST_CASE("Presence on the device matches the CPU", "[gpu][presence][slow]") {
             }
         }
         const PresencePlan plan =
-            planFor(board, DevelopState{presence(0.0F, 0.0F, 100.0F)}).presence;
+            planFor(board, DevelopState{presence(0.0F, 0.0F, 100.0F)}).pointwise.presence;
         REQUIRE(octagonOf(plan.haze.window) == OctagonWindow{.across = 2, .diagonal = 2});
         worst = std::max(worst,
                          requirePointwiseMatches(board.clone(), presence(0.0F, 0.0F, 100.0F), 1.0));
@@ -237,7 +236,7 @@ TEST_CASE("The Presence passes run only for the bases the controls read", "[gpu]
     // two cells) and its reconstruction, a render a step, before it: a fixed
     // count of two.
     const PresencePlan clearer =
-        planFor(source, DevelopState{presence(0.0F, 0.0F, 50.0F)}).presence;
+        planFor(source, DevelopState{presence(0.0F, 0.0F, 50.0F)}).pointwise.presence;
     REQUIRE(octagonOf(clearer.haze.window).diagonal == 0);
     const std::size_t steps = clearer.haze.reconstruction;
     REQUIRE(steps == hazeReconstructionSteps);

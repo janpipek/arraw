@@ -2,11 +2,14 @@
 
 #include "GpuContext.h"
 
+#include <CheckpointLadder.h>
 #include <Develop.h>
 #include <DevelopState.h>
 #include <ImageBuffer.h>
 #include <Progress.h>
 #include <RenderCheckpoint.h>
+
+#include <memory>
 
 namespace arraw {
 
@@ -138,6 +141,32 @@ RenderCheckpoint developOnGpu(GpuContext& context, const ImageBuffer& source,
                                             Stage stopAfter = Stage::Effects,
                                             const RenderRequest& request = {},
                                             ProgressChannel* progress = nullptr);
+
+/// @brief Renders through a ladder of device checkpoints, resuming from the best one.
+///
+/// ::arraw::resumeOrDevelop on a device: the rungs stay on @p context, shared
+/// rather than copied, so keeping them is free. A rung on the host, or on
+/// another device, is dropped; so is a stale one, and a ladder bound to
+/// another source is cleared first. The request is planned before the ladder is
+/// touched, so one that cannot be rendered throws and leaves it as it was. The
+/// ladder belongs to the thread that owns the device (ADR 015).
+/// @param context Device to render on.
+/// @param ladder Rungs kept of the source; updated.
+/// @param source Decoded photograph, kept alive by the ladder.
+/// @param uploaded @p source on @p context, as ::arraw::uploadSource makes it.
+/// @param state How the photograph is developed.
+/// @param request What to render; see ::arraw::develop.
+/// @param progress Channel for progress and cancellation, or null.
+/// @return A checkpoint on the device at the effects, equal to what
+/// ::arraw::developOnGpu renders, and the boundary resumed from.
+/// @throws std::invalid_argument as ::arraw::developOnGpu, and if @p source is null.
+/// @throws ::arraw::Cancelled if @p progress was cancelled before the render finished.
+[[nodiscard]] LadderRender resumeOrDevelopOnGpu(GpuContext& context, CheckpointLadder& ladder,
+                                                std::shared_ptr<const ImageBuffer> source,
+                                                const DeviceImage& uploaded,
+                                                const DevelopState& state,
+                                                const RenderRequest& request = {},
+                                                ProgressChannel* progress = nullptr);
 
 /// @brief Samples a photograph already on the device at a tap, and reads the result back.
 ///

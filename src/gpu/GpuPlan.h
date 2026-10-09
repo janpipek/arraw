@@ -15,6 +15,7 @@
 namespace arraw {
 
 struct GeometryPlan;
+struct PointwisePlan;
 struct ProcessingPlan;
 struct ToneCurvePlan;
 
@@ -58,7 +59,7 @@ enum class PointwiseProbe : std::uint32_t {
 /// The shader data contract of `src/gpu/shaders/develop.frag`, whose
 /// `Pointwise` block declares the same members in the same order
 /// (`tests/gpu/test_GpuShaderLayout.cpp` compares the two). Filled from a
-/// ::arraw::ProcessingPlan by ::arraw::packPointwise, never copied from one: the
+/// ::arraw::PointwisePlan by ::arraw::packPointwise, never copied from one: the
 /// plan holds `bool`, `std::optional` and padding, none of which has a portable
 /// shader layout (GPU implementation plan, "Shader data contract").
 ///
@@ -627,11 +628,11 @@ static_assert(maximumPresenceRadius <= maximumDenoiseRadius,
                                           DenoiseStep step);
 
 /// @brief Fills the pointwise block from a resolved plan.
-/// @param plan Plan to pack; only its pointwise fields are read, with the
-/// geometry's source size for the Presence grids when Presence is on.
+/// @param plan Pointwise block to pack.
+/// @param source Size of the pass's input, which the Presence grids are over.
 /// @param probe Intermediate the shader should write instead of its result.
 /// @return The block, ready to be copied into a uniform buffer.
-[[nodiscard]] GpuPointwiseBlock packPointwise(const ProcessingPlan& plan,
+[[nodiscard]] GpuPointwiseBlock packPointwise(const PointwisePlan& plan, ImageSize source,
                                               PointwiseProbe probe = PointwiseProbe::Developed);
 
 /// @brief Fills the effects block from a resolved plan.

@@ -1,6 +1,7 @@
 #include "RenderCheckpoint.h"
 
 #include "CheckpointState.h"
+#include "StageTable.h"
 
 #include <stdexcept>
 #include <string>
@@ -61,13 +62,7 @@ std::optional<std::string_view> staleReason(const CheckpointState& from, const P
     if (!prefixMatches(from.plan, plan, from.boundary)) {
         return "The checkpoint was not made by this render's plan";
     }
-    ImageSize expected = sourceSize;
-    if (from.boundary == Stage::Geometry) {
-        expected = plan.geometry->outputSize;
-    } else if (from.boundary == Stage::Resize || from.boundary == Stage::Effects) {
-        expected = plan.resize->outputSize;
-    }
-    if (from.size() != expected) {
+    if (from.size() != rowOf(from.boundary).sizeAt(plan, sourceSize)) {
         return "The checkpoint is not of the size this render would make";
     }
     return std::nullopt;

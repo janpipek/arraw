@@ -29,13 +29,11 @@ inline constexpr std::size_t hueBandCount = 8;
 /// magenta.
 using BandValues = std::array<float, hueBandCount>;
 
-/// @brief The colour block of a plan: saturation, vibrance, HSL, Black & White and Colour
-/// Grading, resolved.
+/// @brief Saturation and Vibrance, resolved: the colour block's values a pixel applies.
 ///
-/// Part of the pointwise group (ADR 011, ADR 027). Each control that is left
-/// at zero resolves to a flag that is off, so that the chain skips it outright
-/// and default settings leave every pixel exactly as it was.
-struct ColorAdjustmentPlan {
+/// Kept apart from the rest of the block so that the chain can take them as
+/// one value, and so that a pixel may have amounts of its own (ADR 044).
+struct ChromaAmounts {
     /// @brief Whether Saturation changes anything.
     bool adjustsSaturation = false;
 
@@ -45,8 +43,35 @@ struct ColorAdjustmentPlan {
     /// @brief Whether Vibrance changes anything.
     bool adjustsVibrance = false;
 
-    /// @brief Vibrance on the same scale as ::saturation.
+    /// @brief Vibrance on the same scale as ::arraw::ChromaAmounts::saturation.
     float vibrance = 0.0F;
+
+    friend bool operator==(const ChromaAmounts&, const ChromaAmounts&) = default;
+};
+
+/// @brief Resolves Saturation and Vibrance from their settings.
+///
+/// Called by the planner for the whole photograph, and by the chain for a pixel
+/// once a pixel can have settings of its own (ADR 044).
+/// @param saturation Finite Saturation setting inside its range.
+/// @param vibrance Finite Vibrance setting inside its range.
+/// @return The flags and the amounts, minus one to one.
+[[nodiscard]] constexpr ChromaAmounts chromaAmountsFor(float saturation, float vibrance) noexcept {
+    return {.adjustsSaturation = saturation != 0.0F,
+            .saturation = saturation / strongestSaturation,
+            .adjustsVibrance = vibrance != 0.0F,
+            .vibrance = vibrance / strongestSaturation};
+}
+
+/// @brief The colour block of a plan: saturation, vibrance, HSL, Black & White and Colour
+/// Grading, resolved.
+///
+/// Part of the pointwise group (ADR 011, ADR 027). Each control that is left
+/// at zero resolves to a flag that is off, so that the chain skips it outright
+/// and default settings leave every pixel exactly as it was.
+struct ColorAdjustmentPlan {
+    /// @brief Saturation and Vibrance, resolved: the values a pixel applies.
+    ChromaAmounts chroma{};
 
     /// @brief Whether any HSL band changes anything.
     bool adjustsHsl = false;
@@ -161,26 +186,38 @@ struct Oklab {
 /// in a grey photograph (ADR 027). Colour Grading follows wherever the two
 /// branches meet, so it tints a grey photograph as well as a colour one: that
 /// is what it is for (ADR 034).
-/// @param plan Colour block.
+/// @param plan Colour block, whose HSL, Black & White and Colour Grading it applies.
+/// @param chroma Saturation and Vibrance to apply.
 /// @param colour Colour in the working encoding, after tone and the shoulder.
 /// @return The adjusted colour; exactly @p colour when the block is all off.
 ///
 /// Mirrored by `src/gpu/shaders/develop.frag`, which must change with it.
-[[nodiscard]] inline Colour adjustColor(const ColorAdjustmentPlan& plan, Colour colour) {
+[[nodiscard]] inline Colour adjustColor(const ColorAdjustmentPlan& plan,
+                                        const ChromaAmounts& chroma, Colour colour) {
     if (plan.convertsToGrayscale) {
         colour = applyBlackAndWhite(plan.grayMix, colour);
     } else {
         if (plan.adjustsHsl) {
             colour = applyHsl(plan, colour);
         }
-        if (plan.adjustsSaturation) {
-            colour = applySaturation(colour, plan.saturation);
+        if (chroma.adjustsSaturation) {
+            colour = applySaturation(colour, chroma.saturation);
         }
-        if (plan.adjustsVibrance) {
-            colour = applyVibrance(colour, plan.vibrance);
+        if (chroma.adjustsVibrance) {
+            colour = applyVibrance(colour, chroma.vibrance);
         }
     }
     return applyColorGrading(plan.grading, colour);
+}
+
+/// @brief Applies the colour block to one colour with the plan's own chroma amounts.
+///
+/// The global case: every pixel has the amounts of the whole photograph.
+/// @param plan Colour block.
+/// @param colour Colour in the working encoding, after tone and the shoulder.
+/// @return The adjusted colour; exactly @p colour when the block is all off.
+[[nodiscard]] inline Colour adjustColor(const ColorAdjustmentPlan& plan, Colour colour) {
+    return adjustColor(plan, plan.chroma, colour);
 }
 
 } // namespace arraw

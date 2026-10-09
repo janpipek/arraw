@@ -183,7 +183,7 @@ add_library(arraw STATIC
         src/core/ToneCurve.h
         src/core/ToneCurve.cpp
         include/ToneSettings.h
-        src/core/ToneSettings.cpp
+        src/core/TonePlan.cpp
         src/core/ColorSpaces.h
         src/core/Develop.cpp
         include/CurveHistogram.h
@@ -199,6 +199,11 @@ add_library(arraw STATIC
         src/core/ProcessingPlan.cpp
         src/core/ProcessingPlan.h
         include/RenderCheckpoint.h
+        include/CheckpointLadder.h
+        src/core/CheckpointLadder.cpp
+        src/core/LadderAccess.h
+        src/core/StageTable.h
+        src/core/StageDriver.h
         src/core/CheckpointState.h
         src/core/RenderCheckpoint.cpp
         src/core/device/DeviceImage.h

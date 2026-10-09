@@ -282,7 +282,7 @@ user-reachable path creates a mask that export ignores.
 0. **ADR 044, masks:** §1–§8 with the Temp/Tint constants, the Dehaze
    reachability rule, the stroke contract and the brush texture packing left
    open for step 5. No code.
-1. **Restructuring, no output change:** one stage table and driver for CPU
+1. **Restructuring, no output change (done, 2026-10-09):** one stage table and driver for CPU
    and GPU, an engine-owned `CheckpointLadder`, `PointwisePlan` / `TonePlan`
    with the chain taking sub-blocks and per-pixel resolution functions
    shared by both. All parity and golden tests unchanged.

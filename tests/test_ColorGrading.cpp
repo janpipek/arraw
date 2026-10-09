@@ -41,7 +41,7 @@ ProcessingPlan planOf(DevelopSettings settings) {
 
 /// @brief Develops one colour through settings, with the shoulder out of the way.
 Colour developed(const DevelopSettings& settings, Colour colour) {
-    return developPixel(planOf(settings), colour);
+    return developPixel(planOf(settings).pointwise, colour);
 }
 
 /// @brief Builds settings with a grade and nothing else.
@@ -118,13 +118,14 @@ TEST_CASE("A grade with no saturation leaves every colour bit for bit alone", "[
             planFor(ColorEncoding{workingEncoding}, DevelopState{graded(grading)});
         // Off, and the plan the defaults make: Balance and Blending alone
         // change nothing, not even what a checkpoint compares.
-        REQUIRE_FALSE(plan.colorAdjustments.grading.active);
-        REQUIRE(plan.colorAdjustments.grading == ColorGradingPlan{});
+        REQUIRE_FALSE(plan.pointwise.colorAdjustments.grading.active);
+        REQUIRE(plan.pointwise.colorAdjustments.grading == ColorGradingPlan{});
         REQUIRE(plan == planFor(ColorEncoding{workingEncoding}, DevelopState{}));
         for (const Colour colour : awkwardColours()) {
             CAPTURE(colour[0], colour[1], colour[2]);
-            REQUIRE(sameBits(applyColorGrading(plan.colorAdjustments.grading, colour), colour));
-            REQUIRE(sameBits(adjustColor(plan.colorAdjustments, colour), colour));
+            REQUIRE(sameBits(applyColorGrading(plan.pointwise.colorAdjustments.grading, colour),
+                             colour));
+            REQUIRE(sameBits(adjustColor(plan.pointwise.colorAdjustments, colour), colour));
         }
     }
 }
@@ -137,12 +138,12 @@ TEST_CASE("A negative saturation clamps to none and leaves the grade off", "[gra
                                         .blending = 10.0F};
     const ProcessingPlan plan =
         planFor(ColorEncoding{workingEncoding}, DevelopState{graded(negative)});
-    REQUIRE_FALSE(plan.colorAdjustments.grading.active);
-    REQUIRE(plan.colorAdjustments.grading == ColorGradingPlan{});
+    REQUIRE_FALSE(plan.pointwise.colorAdjustments.grading.active);
+    REQUIRE(plan.pointwise.colorAdjustments.grading == ColorGradingPlan{});
     REQUIRE(plan == planFor(ColorEncoding{workingEncoding}, DevelopState{}));
     for (const Colour colour : awkwardColours()) {
         CAPTURE(colour[0], colour[1], colour[2]);
-        REQUIRE(sameBits(adjustColor(plan.colorAdjustments, colour), colour));
+        REQUIRE(sameBits(adjustColor(plan.pointwise.colorAdjustments, colour), colour));
     }
 }
 
@@ -348,7 +349,8 @@ TEST_CASE("Grading tints a black and white photograph", "[grading][blackandwhite
         const Colour tinted = developed(toned, colour);
         REQUIRE(chromaOf(tinted) > 0.01F);
         // The grade acts on the grey the mixer made, after it.
-        REQUIRE(sameBits(tinted, applyColorGrading(plan.colorAdjustments.grading, neutral)));
+        REQUIRE(
+            sameBits(tinted, applyColorGrading(plan.pointwise.colorAdjustments.grading, neutral)));
         REQUIRE(toOklab(tinted).lightness == Approx(toOklab(neutral).lightness).margin(2e-5F));
     }
     // Dark greys toward the shadows' blue, light ones toward the highlights' red.
@@ -474,7 +476,7 @@ TEST_CASE("A highlight tint near white keeps every channel in range", "[grading]
     for (const Case& c : cases) {
         const DevelopSettings settings =
             graded({.highlights = {.hue = c.hue, .saturation = strongestGrade}});
-        const ColorGradingPlan plan = planOf(settings).colorAdjustments.grading;
+        const ColorGradingPlan plan = planOf(settings).pointwise.colorAdjustments.grading;
         CAPTURE(c.hue, c.colour[0]);
         const float ceiling = std::max({1.0F, c.colour[0], c.colour[1], c.colour[2]});
         const Colour out = developed(settings, c.colour);
@@ -498,7 +500,7 @@ TEST_CASE("At half saturation every grey stays in range whatever the hue", "[gra
         const DevelopSettings settings =
             graded({.midtones = {.hue = static_cast<float>(hue), .saturation = 50.0F},
                     .highlights = {.hue = static_cast<float>(hue), .saturation = 50.0F}});
-        const ColorGradingPlan plan = planOf(settings).colorAdjustments.grading;
+        const ColorGradingPlan plan = planOf(settings).pointwise.colorAdjustments.grading;
         for (int step = 0; step <= 100; ++step) {
             const Colour colour = greyOfLightness(0.5F + 0.5F * static_cast<float>(step) / 100);
             const Colour out = applyColorGrading(plan, colour);
@@ -514,7 +516,7 @@ TEST_CASE("A grey at white or above it is left as it is", "[grading][fade]") {
     const DevelopSettings settings =
         graded({.midtones = {.hue = 140.0F, .saturation = 80.0F},
                 .highlights = {.hue = 30.0F, .saturation = strongestGrade}});
-    const ColorGradingPlan plan = planOf(settings).colorAdjustments.grading;
+    const ColorGradingPlan plan = planOf(settings).pointwise.colorAdjustments.grading;
     for (const Colour colour : {greyOfLightness(1.0F), grey(1.0F), grey(1.5F), grey(16.0F)}) {
         CAPTURE(colour[0]);
         // Not even the Oklab round trip's rounding.
@@ -533,7 +535,7 @@ TEST_CASE("Below L 0.85 the grade is bit for bit what it was before the fade", "
                                              .highlights = {.hue = 90.0F, .saturation = 100.0F},
                                              .balance = 30.0F,
                                              .blending = 70.0F});
-    const ColorGradingPlan plan = planOf(settings).colorAdjustments.grading;
+    const ColorGradingPlan plan = planOf(settings).pointwise.colorAdjustments.grading;
     std::vector<Colour> colours{{0.8F, 0.1F, 0.05F},
                                 {0.1F, 0.5F, 0.2F},
                                 {0.3F, 0.3F, 0.9F},

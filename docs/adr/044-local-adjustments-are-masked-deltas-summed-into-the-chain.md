@@ -763,3 +763,26 @@ amendment requires, rather than from new origins.
   change for one.
 - **New `EditOrigin` values for mask edits.** ADR 022 words steps from the
   states; a description of the local change keeps that rule.
+
+## Note, 2026-10-08 (where the pieces went)
+
+The restructuring this ADR builds on is done for the plan and the chain
+(`docs/ideas/pipeline-restructuring-plan.md`, sub-step A). The local block of
+this ADR is `PointwisePlan::local`, to be added to `PointwisePlan`
+(`src/core/PointwisePlan.h`). The chain (`developToCurveInput`, `developPixel`,
+`developToTap`, `curveInputFieldsOf`) lives in `PointwisePlan.h`, and it already
+takes its per-pixel values as one `PixelAmounts` (`globalAmountsOf(plan)` for
+now), so this ADR only replaces that value. `smoothstep` is in `TonePlan.h`
+beside the tone weights, and the per-pixel resolution functions
+(`exposureGainFor`, `contrastSlopeFor`, `contrastScaleFor`, `regionalShiftFor`,
+`endpointShiftFor`, `resolveTone`) are there too, `noexcept` and taking clamped
+inputs; `presenceAmountFor` is in `Presence.h` and `chromaAmountsFor` in
+`ColorAdjustments.h`. Their GLSL mirrors are not
+written yet. `ToneSettings.cpp` is now `TonePlan.cpp`.
+
+For step 2: the CPU gates Clarity and Dehaze on whether their bases exist
+(`Presence.cpp`, `plan.coarse.active()`, `plan.haze.active()`), the shader on the
+amounts (`develop.frag`, `amounts.clarity`, `amounts.dehaze`). That was so
+before step 1. Once amounts are per pixel, a pixel with a local Clarity under a
+global Clarity of zero would branch differently on the two backends, so step 2
+changes both gates together.

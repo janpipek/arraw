@@ -19,6 +19,7 @@ add_executable(arraw-tests
         support/TestImages.cpp
         test_AppSettings.cpp
         test_Cli.cpp
+        test_CheckpointLadder.cpp
         test_CopySections.cpp
         test_ColorEncoding.cpp
         test_CropEditing.cpp
@@ -57,6 +58,7 @@ add_executable(arraw-tests
         test_PreviewRenderer.cpp
         test_RenderActivity.cpp
         test_RenderDelay.cpp
+        test_RenderDigest.cpp
         test_ProcessingPlan.cpp
         test_Progress.cpp
         test_Region.cpp
@@ -177,7 +179,9 @@ add_executable(arraw-gpu-tests
         gpu/test_GpuDenoise.cpp
         gpu/test_GpuPresence.cpp
         gpu/test_GpuProgress.cpp
+        gpu/test_GpuRenderDigest.cpp
         gpu/test_GpuDevelop.cpp
+        gpu/test_GpuLadder.cpp
         gpu/test_GpuEffects.cpp
         gpu/test_GpuExport.cpp
         gpu/test_GpuPasses.cpp

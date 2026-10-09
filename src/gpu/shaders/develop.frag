@@ -1,13 +1,17 @@
 #version 440
 #extension GL_GOOGLE_include_directive : require
 
-// The pointwise chain: ProcessingPlan.h's developPixel, stage for stage.
+// The pointwise chain: PointwisePlan.h's developPixel, stage for stage.
 //
 // Every function below mirrors the C++ of the same name in
-// src/core/ProcessingPlan.h (and, for the colour grade, src/core/ColorGrading.h
-// and ColorGrading.cpp), in the same order and with the same arithmetic,
-// and must change with it. The Pointwise block is the contract with
-// GpuPointwiseBlock in GpuPlan.h: same members, same order.
+// src/core/PointwisePlan.h and src/core/TonePlan.h (and, for the colour
+// grade, src/core/ColorGrading.h and ColorGrading.cpp), in the same order and
+// with the same arithmetic, and must change with it. The Pointwise block is
+// the contract with GpuPointwiseBlock in GpuPlan.h: same members, same order.
+// The structs TonePlan, PresenceAmounts, ChromaAmounts and PixelAmounts below
+// are locals that mirror the C++ structs of the same name (TonePlan.h,
+// Presence.h, ColorAdjustments.h, PointwisePlan.h); the block does not hold
+// them, globalAmounts() builds them from it.
 //
 // Powers. C++ std::pow and GLSL pow differ where GLSL leaves the result
 // undefined: for x < 0, and for x == 0 with y <= 0. Where the CPU chain can
@@ -100,7 +104,7 @@ layout(std140, binding = 1) uniform Pointwise {
 #include "common/perceptual.glsl"
 
 
-// greyPivot, ProcessingPlan.h. The shader does not use it: the plan carries
+// greyPivot, TonePlan.h. The shader does not use it: the plan carries
 // contrastScale, which is derived from it. It is kept so that the mirrored
 // constants stay in one place if a stage ever needs it.
 const float greyPivot = 0.45865646;
@@ -108,7 +112,7 @@ const float greyPivot = 0.45865646;
 // colorspaces::workingLuminance, ColorSpaces.h.
 const vec3 workingLuminance = vec3(0.2627, 0.6780, 0.0593);
 
-// liftedBlackThreshold, ProcessingPlan.h: luminance at or below which a colour
+// liftedBlackThreshold, TonePlan.h: luminance at or below which a colour
 // is black for tone. Not zero, because GPUs flush denormals and the CPU does
 // not, so a denormal luminance would branch differently on the two.
 const float liftedBlackThreshold = 1.0e-20;
@@ -140,14 +144,58 @@ float whiteWeight(float value) {
     return smoothStep(0.6, 1.0, value);
 }
 
-float shapeLuminance(float luminance) {
-    float value = toPerceptual(luminance);
-    value = plan.contrastScale * pow0(value, plan.contrastSlope);
+// TonePlan, TonePlan.h: Exposure and Basic Tone, resolved.
+struct TonePlan {
+    float exposureGain;
+    bool shapesTone;
+    float contrastSlope;
+    float contrastScale;
+    float shadowShift;
+    float highlightShift;
+    float blackShift;
+    float whiteShift;
+};
 
-    value += plan.shadowShift * shadowWeight(value);
-    value += plan.highlightShift * highlightWeight(value);
-    value += plan.blackShift * blackWeight(value);
-    value += plan.whiteShift * whiteWeight(value);
+// PresenceAmounts, Presence.h.
+struct PresenceAmounts {
+    float texture;
+    float clarity;
+    float dehaze;
+};
+
+// ChromaAmounts, ColorAdjustments.h.
+struct ChromaAmounts {
+    bool adjustsSaturation;
+    float saturation;
+    bool adjustsVibrance;
+    float vibrance;
+};
+
+// PixelAmounts, PointwisePlan.h: the values a pixel applies as its own.
+struct PixelAmounts {
+    TonePlan tone;
+    PresenceAmounts presence;
+    ChromaAmounts chroma;
+};
+
+// globalAmountsOf, PointwisePlan.h: every pixel has the photograph's amounts.
+PixelAmounts globalAmounts() {
+    return PixelAmounts(
+        TonePlan(plan.exposureGain, plan.shapesTone != 0u, plan.contrastSlope, plan.contrastScale,
+                 plan.shadowShift, plan.highlightShift, plan.blackShift, plan.whiteShift),
+        PresenceAmounts(plan.textureAmount, plan.clarityAmount, plan.dehazeAmount),
+        ChromaAmounts(plan.adjustsSaturation != 0u, plan.saturation, plan.adjustsVibrance != 0u,
+                      plan.vibrance));
+}
+
+float shapeLuminance(TonePlan tone, float luminance) {
+    float value = toPerceptual(luminance);
+    value = tone.contrastScale * pow0(value, tone.contrastSlope);
+
+    value += tone.shadowShift * shadowWeight(value);
+    value += tone.highlightShift * highlightWeight(value);
+    value += tone.blackShift * blackWeight(value);
+    value += tone.whiteShift * whiteWeight(value);
     // std::max(value, 0.0F): a NaN stays a NaN.
     return toLinear(value < 0.0 ? 0.0 : value);
 }
@@ -157,18 +205,18 @@ float luminanceOf(vec3 colour) {
            workingLuminance.z * colour.z;
 }
 
-vec3 shapeTone(vec3 colour) {
-    if (plan.shapesTone == 0u) {
+vec3 shapeTone(TonePlan tone, vec3 colour) {
+    if (!tone.shapesTone) {
         return colour;
     }
 
     const float luminance = luminanceOf(colour);
     if (!(luminance > liftedBlackThreshold)) {
-        const float lifted = shapeLuminance(0.0);
+        const float lifted = shapeLuminance(tone, 0.0);
         return vec3(lifted, lifted, lifted);
     }
 
-    const float ratio = shapeLuminance(luminance) / luminance;
+    const float ratio = shapeLuminance(tone, luminance) / luminance;
     return vec3(colour.x * ratio, colour.y * ratio, colour.z * ratio);
 }
 
@@ -199,11 +247,11 @@ float evaluateCurve(int channel, float x) {
     return low + fraction * (high - low);
 }
 
-// curveRatioFloor, ProcessingPlan.h: luminance below which the luma curve's
+// curveRatioFloor, PointwisePlan.h: luminance below which the luma curve's
 // ratio is held, 2^-14.
 const float curveRatioFloor = 6.103515625e-05;
 
-// applyToneCurves' channel curve, ProcessingPlan.h: a negative channel moves
+// applyToneCurves' channel curve, PointwisePlan.h: a negative channel moves
 // by the lift, a NaN or zero one takes it.
 float curveChannel(int channel, float value) {
     if (value > 0.0) {
@@ -215,7 +263,7 @@ float curveChannel(int channel, float value) {
     return value < 0.0 ? value + lift : lift;
 }
 
-// applyToneCurves, ProcessingPlan.h: luminance first, then each channel.
+// applyToneCurves, PointwisePlan.h: luminance first, then each channel.
 vec3 applyToneCurves(vec3 colour) {
     if (plan.curvesLuma != 0u) {
         const float black = evaluateCurve(0, 0.0);
@@ -473,7 +521,7 @@ float upsampledCoarse(int which, ivec2 at) {
     return top + ty * (bottom - top);
 }
 
-vec3 applyPresence(vec3 colour, float logLuminance, ivec2 at) {
+vec3 applyPresence(PresenceAmounts amounts, vec3 colour, float logLuminance, ivec2 at) {
     if (plan.presence == 0u) {
         return colour;
     }
@@ -484,18 +532,18 @@ vec3 applyPresence(vec3 colour, float logLuminance, ivec2 at) {
 
     float stops = 0.0;
     if (plan.fineReduction != 0u) {
-        stops += plan.textureAmount * softLimit(logLuminance - upsampledFine(at), textureLimitStops);
+        stops += amounts.texture * softLimit(logLuminance - upsampledFine(at), textureLimitStops);
     }
-    if (plan.clarityAmount != 0.0) {
+    if (amounts.clarity != 0.0) {
         const float limited =
             softLimit(upsampledCoarse(coarseOfCells, at) - upsampledCoarse(coarseOfBase, at),
                       clarityLimitStops);
         const float perceptual = toPerceptual(clampExact(luminance, 0.0, 1.0));
-        stops += plan.clarityAmount * midtoneWeight(perceptual) * limited;
+        stops += amounts.clarity * midtoneWeight(perceptual) * limited;
     }
     const float gain = exp2(stops);
     colour = vec3(colour.x * gain, colour.y * gain, colour.z * gain);
-    if (plan.dehazeAmount == 0.0) {
+    if (amounts.dehaze == 0.0) {
         return colour;
     }
 
@@ -503,17 +551,17 @@ vec3 applyPresence(vec3 colour, float logLuminance, ivec2 at) {
     const float open = 1.0 - smoothStep(0.75, 1.25, toned);
     const float haze = upsampledCoarse(coarseOfHaze, at);
     float hazy = 0.0;
-    if (plan.dehazeAmount > 0.0) {
+    if (amounts.dehaze > 0.0) {
         hazy = exp2(min(haze - upsampledCoarse(coarseOfCells, at), 0.0)) * open;
-        const float keep = 1.0 - plan.dehazeAmount * dehazeStrength * hazy;
+        const float keep = 1.0 - amounts.dehaze * dehazeStrength * hazy;
         colour = vec3(colour.x * keep, colour.y * keep, colour.z * keep);
     } else {
         const float mean = toned * exp2(min(haze - logLuminance, dehazeMeanLimitStops));
-        const float veil = open > 0.0 ? -plan.dehazeAmount * dehazeVeil * open * mean : 0.0;
+        const float veil = open > 0.0 ? -amounts.dehaze * dehazeVeil * open * mean : 0.0;
         hazy = veil > 0.0 ? veil / (toned + veil) : 0.0;
         colour = vec3(colour.x + veil, colour.y + veil, colour.z + veil);
     }
-    const float chroma = plan.dehazeAmount * dehazeChroma * hazy;
+    const float chroma = amounts.dehaze * dehazeChroma * hazy;
     return chroma == 0.0 ? colour : applySaturation(colour, chroma);
 }
 
@@ -623,18 +671,18 @@ vec3 applyColorGrading(vec3 colour) {
     return fromOklab(lab);
 }
 
-vec3 adjustColor(vec3 colour) {
+vec3 adjustColor(ChromaAmounts chroma, vec3 colour) {
     if (plan.convertsToGrayscale != 0u) {
         colour = applyBlackAndWhite(colour);
     } else {
         if (plan.adjustsHsl != 0u) {
             colour = applyHsl(colour);
         }
-        if (plan.adjustsSaturation != 0u) {
-            colour = applySaturation(colour, plan.saturation);
+        if (chroma.adjustsSaturation) {
+            colour = applySaturation(colour, chroma.saturation);
         }
-        if (plan.adjustsVibrance != 0u) {
-            colour = applyVibrance(colour, plan.vibrance);
+        if (chroma.adjustsVibrance) {
+            colour = applyVibrance(colour, chroma.vibrance);
         }
     }
     return applyColorGrading(colour);
@@ -650,6 +698,7 @@ const uint probeAfterCurves = 5u;
 void main() {
     const ivec2 at = ivec2(gl_FragCoord.xy);
     const vec4 texel = texelFetch(source, at, 0);
+    const PixelAmounts amounts = globalAmounts();
 
     // developPixel, with a stop after the stage a probe names. Alpha is not
     // developed; it goes through as it came. Presence measures the source
@@ -667,15 +716,15 @@ void main() {
         return;
     }
 
-    colour = vec3(colour.x * plan.exposureGain, colour.y * plan.exposureGain,
-                  colour.z * plan.exposureGain);
+    colour = vec3(colour.x * amounts.tone.exposureGain, colour.y * amounts.tone.exposureGain,
+                  colour.z * amounts.tone.exposureGain);
     if (plan.probe == probeAfterExposure) {
         fragColor = vec4(colour, texel.a);
         return;
     }
 
-    colour = shapeTone(colour);
-    colour = applyPresence(colour, logLuminance, at);
+    colour = shapeTone(amounts.tone, colour);
+    colour = applyPresence(amounts.presence, colour, logLuminance, at);
     if (plan.probe == probeAfterTone) {
         fragColor = vec4(colour, texel.a);
         return;
@@ -693,5 +742,5 @@ void main() {
         return;
     }
 
-    fragColor = vec4(adjustColor(colour), texel.a);
+    fragColor = vec4(adjustColor(amounts.chroma, colour), texel.a);
 }

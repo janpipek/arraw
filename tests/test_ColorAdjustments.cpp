@@ -34,7 +34,7 @@ ProcessingPlan planOf(DevelopSettings settings) {
 
 /// @brief Develops one colour through settings, with the shoulder out of the way.
 Colour developed(const DevelopSettings& settings, Colour colour) {
-    return developPixel(planOf(settings), colour);
+    return developPixel(planOf(settings).pointwise, colour);
 }
 
 /// @brief Oklab chroma of a colour.
@@ -72,41 +72,43 @@ constexpr Colour vivid{0.85F, 0.10F, 0.05F};
 
 TEST_CASE("Default settings leave every colour bit for bit alone", "[colour]") {
     const auto plan = planFor(ColorEncoding{workingEncoding}, DevelopState{});
-    REQUIRE(plan.colorAdjustments == ColorAdjustmentPlan{});
-    REQUIRE_FALSE(plan.colorAdjustments.adjustsSaturation);
-    REQUIRE_FALSE(plan.colorAdjustments.adjustsVibrance);
-    REQUIRE_FALSE(plan.colorAdjustments.adjustsHsl);
-    REQUIRE_FALSE(plan.colorAdjustments.convertsToGrayscale);
+    REQUIRE(plan.pointwise.colorAdjustments == ColorAdjustmentPlan{});
+    REQUIRE_FALSE(plan.pointwise.colorAdjustments.chroma.adjustsSaturation);
+    REQUIRE_FALSE(plan.pointwise.colorAdjustments.chroma.adjustsVibrance);
+    REQUIRE_FALSE(plan.pointwise.colorAdjustments.adjustsHsl);
+    REQUIRE_FALSE(plan.pointwise.colorAdjustments.convertsToGrayscale);
 
     for (const Colour colour : awkwardColours()) {
         CAPTURE(colour[0], colour[1], colour[2]);
-        REQUIRE(sameBits(adjustColor(plan.colorAdjustments, colour), colour));
+        REQUIRE(sameBits(adjustColor(plan.pointwise.colorAdjustments, colour), colour));
         // The same chain as before the colour block existed: matrix, gain, tone
         // (off) and the default shoulder, with nothing after it.
         ProcessingPlan without = plan;
-        without.colorAdjustments = {};
-        REQUIRE(sameBits(developPixel(plan, colour), developPixel(without, colour)));
+        without.pointwise.colorAdjustments = {};
+        REQUIRE(sameBits(developPixel(plan.pointwise, colour),
+                         developPixel(without.pointwise, colour)));
     }
 }
 
 TEST_CASE("Each colour control resolves to its own flag", "[colour][plan]") {
     const auto resolve = [](DevelopSettings settings) {
-        return planFor(ColorEncoding{workingEncoding}, DevelopState{settings}).colorAdjustments;
+        return planFor(ColorEncoding{workingEncoding}, DevelopState{settings})
+            .pointwise.colorAdjustments;
     };
 
     DevelopSettings settings;
     settings.color.saturation = 50.0F;
     auto block = resolve(settings);
-    REQUIRE(block.adjustsSaturation);
-    REQUIRE(block.saturation == 0.5F);
-    REQUIRE_FALSE(block.adjustsVibrance);
+    REQUIRE(block.chroma.adjustsSaturation);
+    REQUIRE(block.chroma.saturation == 0.5F);
+    REQUIRE_FALSE(block.chroma.adjustsVibrance);
     REQUIRE_FALSE(block.adjustsHsl);
 
     settings = {};
     settings.color.vibrance = -100.0F;
     block = resolve(settings);
-    REQUIRE(block.adjustsVibrance);
-    REQUIRE(block.vibrance == -1.0F);
+    REQUIRE(block.chroma.adjustsVibrance);
+    REQUIRE(block.chroma.vibrance == -1.0F);
 
     settings = {};
     settings.hsl.aqua.luminance = 20.0F;
@@ -128,7 +130,7 @@ TEST_CASE("Each colour control resolves to its own flag", "[colour][plan]") {
         settings.hsl.red.hue = -250.0F;
         settings.blackAndWhite.magenta = 999.0F;
         block = resolve(settings);
-        REQUIRE(block.saturation == 1.0F);
+        REQUIRE(block.chroma.saturation == 1.0F);
         REQUIRE(block.hueShift[0] == -1.0F);
         REQUIRE(block.grayMix[7] == 100.0F);
     }
@@ -341,8 +343,10 @@ TEST_CASE("The colour block runs after the shoulder", "[colour]") {
     const auto plan = planFor(ColorEncoding{workingEncoding}, DevelopState{settings});
     const Colour colour{6.0F, 2.0F, 0.5F};
 
-    const Colour rolled = rollHighlights(plan, shapeTone(plan, plan.toWorking * colour));
-    const Colour out = developPixel(plan, colour);
+    const Colour rolled =
+        rollHighlights(plan.pointwise.shoulderKnee,
+                       shapeTone(plan.pointwise.tone, plan.pointwise.toWorking * colour));
+    const Colour out = developPixel(plan.pointwise, colour);
     REQUIRE(chromaOf(out) == Approx(0.0F).margin(1e-4F));
     REQUIRE(toOklab(out).lightness == Approx(toOklab(rolled).lightness).margin(1e-4F));
 }

@@ -28,7 +28,7 @@ float clampExact(float value, float low, float high) {
     return value < low ? low : (high < value ? high : value);
 }
 
-// smoothstep, ProcessingPlan.h. Not the built-in, which is undefined for
+// smoothstep, TonePlan.h. Not the built-in, which is undefined for
 // first >= last and leaves the clamping to the driver.
 float smoothStep(float first, float last, float value) {
     const float t = clampExact((value - first) / (last - first), 0.0, 1.0);

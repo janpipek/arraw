@@ -127,12 +127,12 @@ struct PreviewResult {
 /// from whatever setSource was given, and the smallest level that still covers
 /// the output is used (ADR 020). The result says which level it was.
 ///
-/// Keeps the last pointwise and geometry results of the level it renders, as
-/// checkpoints (resident on the GPU path, in host memory on the CPU one), so
-/// that a geometry edit resumes after the pointwise pass and a viewport change
-/// after the geometry. The engine decides whether a checkpoint still applies
-/// (ADR 011); the renderer only drops them when the source, the level or the
-/// device changes, which the plan cannot tell it.
+/// Renders through checkpoint ladders (::arraw::CheckpointLadder; resident on
+/// the GPU path, in host memory on the CPU one), so that a geometry edit
+/// resumes after the pointwise pass and a viewport change after the geometry.
+/// The engine keeps the rungs and decides whether each still applies (ADR 011,
+/// 045), and binds a ladder to the level it renders; the renderer only clears
+/// them when the source or the device changes, which the plan cannot tell it.
 ///
 /// A newer request cancels the render in flight (ADR 042): on the CPU it stops
 /// within a few milliseconds, on the GPU after the render pass it is in. A

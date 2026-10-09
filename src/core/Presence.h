@@ -208,6 +208,28 @@ struct PresenceBase {
     friend bool operator==(const PresenceBase&, const PresenceBase&) = default;
 };
 
+/// @brief The three Presence controls, resolved: the values a pixel applies.
+///
+/// Kept apart from the parameters of the context so that the chain can take
+/// them as one value, and so that a pixel may have amounts of its own (ADR 044).
+struct PresenceAmounts {
+    float texture = 0.0F; ///< Texture, minus one to one.
+    float clarity = 0.0F; ///< Clarity, minus one to one.
+    float dehaze = 0.0F;  ///< Dehaze, minus one to one.
+
+    friend bool operator==(const PresenceAmounts&, const PresenceAmounts&) = default;
+};
+
+/// @brief Resolves one Presence control from its setting.
+///
+/// Called by the planner for the whole photograph, and by the chain for a pixel
+/// once a pixel can have a setting of its own (ADR 044).
+/// @param setting A finite setting inside the Presence range.
+/// @return The amount, minus one to one.
+[[nodiscard]] constexpr float presenceAmountFor(float setting) noexcept {
+    return setting / strongestPresence;
+}
+
 /// @brief Texture, Clarity and Dehaze, resolved: part of the pointwise group of a plan.
 ///
 /// The amounts and the context's parameters. The context, a side image of
@@ -217,14 +239,8 @@ struct PresenceBase {
 /// Dehaze's sign (ADR 041). Every control at zero resolves to the default,
 /// and nothing is computed.
 struct PresencePlan {
-    /// @brief Texture, minus one to one.
-    float texture = 0.0F;
-
-    /// @brief Clarity, minus one to one.
-    float clarity = 0.0F;
-
-    /// @brief Dehaze, minus one to one.
-    float dehaze = 0.0F;
+    /// @brief Texture, Clarity and Dehaze, each minus one to one.
+    PresenceAmounts amounts{};
 
     /// @brief Source channels to working luminance, as shot (::arraw::asShotLuminanceRow).
     Colour lumaRow{};
@@ -416,14 +432,25 @@ private:
 /// `open` is zero. Last,
 /// Dehaze's chroma: Saturation of `dehaze * 0.16` times the veil's share
 /// (ADR 041). A colour with no luminance is returned as it is.
-/// @param plan Resolved Presence.
+/// @param plan Resolved Presence, whose bases say which controls run.
+/// @param amounts What the controls ask for at the pixel.
 /// @param colour Colour after Basic Tone, in the working encoding.
 /// @param logLuminance ::arraw::presenceLogLuminance of the pixel's source colour.
 /// @param context The grids at the pixel; not read for a control that is zero.
 /// @return The colour; itself when nothing is active.
 ///
 /// Mirrored by `applyPresence` in `src/gpu/shaders/develop.frag`.
-[[nodiscard]] Colour applyPresence(const PresencePlan& plan, Colour colour, float logLuminance,
-                                   const PixelContext& context);
+[[nodiscard]] Colour applyPresence(const PresencePlan& plan, const PresenceAmounts& amounts,
+                                   Colour colour, float logLuminance, const PixelContext& context);
+
+/// @brief Applies Texture, Clarity and Dehaze with the plan's own amounts.
+///
+/// The global case: every pixel has the amounts of the whole photograph.
+/// @copydetails applyPresence(const PresencePlan&, const PresenceAmounts&, Colour, float, const
+/// PixelContext&)
+[[nodiscard]] inline Colour applyPresence(const PresencePlan& plan, Colour colour,
+                                          float logLuminance, const PixelContext& context) {
+    return applyPresence(plan, plan.amounts, colour, logLuminance, context);
+}
 
 } // namespace arraw

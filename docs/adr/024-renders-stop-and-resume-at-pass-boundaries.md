@@ -99,3 +99,13 @@ The CPU pointwise pass now runs over bands of rows on threads, with the
 single-threaded bits ([ADR 041](041-texture-clarity-and-dehaze-read-a-context-of-log-luminance.md)): 0.71 s to 0.31 s for the chain at 24 MP.
 Texture, Clarity and Dehaze resume from the Denoise checkpoint; their context
 is recomputed with the chain.
+
+## Note, 2026-10-09
+
+The preview's cache of checkpoints (`CheckpointCache` in `PreviewRenderer`)
+moved into the engine as `CheckpointLadder`: the renderer holds four ladders
+and clears them when the source or the device changes, and the engine plans
+once, picks the deepest rung that still applies and stores the rungs it passes.
+The rules above are unchanged; one render now reports progress through one
+root. See
+[ADR 045](045-a-render-runs-one-stage-table-and-keeps-its-checkpoints-on-a-ladder.md).
