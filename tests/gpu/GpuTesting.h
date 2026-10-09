@@ -86,9 +86,12 @@ struct FloatDifference {
 /// turns a power's relative error into a larger one in the result. The rest is
 /// plain float arithmetic that a GPU may fuse into multiply-adds.
 ///
+/// Mesa ANV (Intel HD Graphics 630) reaches 5.4e-5 on the colour controls
+/// (every HSL band at once), near black, where the floor below is the scale.
+///
 /// Looser than the plan's 1e-5 target, and the floor higher than its 1e-6, for
 /// that reason; a wrong stage, matrix layout or order disagrees by 1e-3 or more.
-inline constexpr double pointwiseRelativeTolerance = 3e-5;
+inline constexpr double pointwiseRelativeTolerance = 6e-5;
 
 /// @brief Largest error the pointwise pass may have against the CPU chain on ill-conditioned
 /// input, relative to the pixel's scale (see worstColourError).

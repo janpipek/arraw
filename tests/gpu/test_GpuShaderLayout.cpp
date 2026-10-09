@@ -19,9 +19,9 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <charconv>
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -299,7 +299,11 @@ void requireSameFloat(const char* shader, const std::string& name, float expecte
     const auto constants = constantsOf(shader);
     const auto found = constants.find(name);
     REQUIRE(found != constants.end());
-    REQUIRE(std::strtof(found->second.c_str(), nullptr) == expected);
+    // from_chars, not strtof: GLSL spells the decimal point '.' whatever the locale.
+    const std::string& text = found->second;
+    float value = 0.0F;
+    REQUIRE(std::from_chars(text.data(), text.data() + text.size(), value).ec == std::errc{});
+    REQUIRE(value == expected);
 }
 
 } // namespace

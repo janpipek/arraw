@@ -1,0 +1,3 @@
+# The description names the executables arraw-ui and arraw-cli; rpmlint splits
+# them at the hyphen and checks the halves as words.
+addFilter("spelling-error .*\('(ui|cli)'")

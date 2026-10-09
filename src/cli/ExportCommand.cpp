@@ -1254,11 +1254,12 @@ cli::parseResize(std::string_view spec) {
                            std::ranges::all_of(
                                number, [](char c) { return (c >= '0' && c <= '9') || c == '.'; }) &&
                            std::ranges::count(number, '.') <= 1;
+        // from_chars, not strtod: the decimal point is '.' whatever the locale.
         double percent = 0.0;
-        if (plain) {
-            percent = std::strtod(std::string(number).c_str(), nullptr);
-        }
-        if (!plain || !std::isfinite(percent)) {
+        const bool parsed =
+            plain && std::from_chars(number.data(), number.data() + number.size(), percent).ptr ==
+                         number.data() + number.size();
+        if (!parsed || !std::isfinite(percent)) {
             throw std::invalid_argument("--resize: '" + std::string(spec) +
                                         "' is not a percentage such as 50% or 12.5%");
         }

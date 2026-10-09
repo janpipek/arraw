@@ -13,6 +13,7 @@
 #include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -75,18 +76,32 @@ struct CodeDifference {
     double worstExcess = 0.0;
 };
 
-/// @brief Compares every sample of two images of the same format.
+/// @brief Decodes an sRGB code value to linear light, 0 to 1.
+double linearFromSrgb(int code, int maximum) {
+    const double encoded = static_cast<double>(code) / maximum;
+    return encoded <= 0.04045 ? encoded / 12.92 : std::pow((encoded + 0.055) / 1.055, 2.4);
+}
+
+/// @brief Compares every sample of two sRGB images of the same format.
 ///
 /// A sample may differ by one code value, or by @p relative of its value when
 /// that is more: at 16 bits the GPU's `pow` rounding shows up as tens of codes
 /// (see illConditionedRelativeTolerance), which one code value in 65535 cannot
-/// absorb.
+/// absorb. A colour sample may also differ by pointwiseRelativeTolerance in
+/// linear light: near black the sRGB toe spreads that over tens of 16-bit
+/// codes (3e-5 is 26 codes at 0.001), where @p relative of a small value
+/// allows less than one.
 CodeDifference compareCodes(const QImage& a, const QImage& b, double relative) {
     CodeDifference difference;
-    const auto sample = [&](int left, int right) {
+    const int maximum = a.format() == QImage::Format_RGBA64 ? 65535 : 255;
+    const auto sample = [&](int left, int right, bool colour) {
         const int codes = std::abs(left - right);
-        const double allowed = std::max(1.0, relative * std::max(left, right));
         difference.worstCodes = std::max(difference.worstCodes, codes);
+        if (colour && std::abs(linearFromSrgb(left, maximum) - linearFromSrgb(right, maximum)) <=
+                          test::pointwiseRelativeTolerance) {
+            return;
+        }
+        const double allowed = std::max(1.0, relative * std::max(left, right));
         difference.worstExcess = std::max(difference.worstExcess, codes / allowed);
     };
     for (int y = 0; y < a.height(); ++y) {
@@ -96,11 +111,11 @@ CodeDifference compareCodes(const QImage& a, const QImage& b, double relative) {
             const auto* l = reinterpret_cast<const quint16*>(left);
             const auto* r = reinterpret_cast<const quint16*>(right);
             for (int i = 0; i < a.width() * 4; ++i) {
-                sample(l[i], r[i]);
+                sample(l[i], r[i], i % 4 != 3);
             }
         } else {
             for (int i = 0; i < a.width() * 4; ++i) {
-                sample(left[i], right[i]);
+                sample(left[i], right[i], i % 4 != 3);
             }
         }
     }
