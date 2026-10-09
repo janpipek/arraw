@@ -82,6 +82,12 @@ adjustments (user, 2026-10-08; `docs/ideas/local-adjustment-plan.md`):
     pyramid). Also how presets and copy/paste treat them (a lens profile is
     per shot), and where this fits in the roadmap's stage table, step (c).
 
+## GUI tasks (user, 2026-10-09)
+
+Done (ADR 048): the develop dock has Adjustments and Masks tabs, the tab
+following the mask mode; the Adjustments groups collapse, each remembered in
+`QSettings`. Still open: Spots and Info tabs.
+
 ## Follow-ups (known limits, all documented in ADRs)
 
 - **Dehaze:** convex tips sharper than the window (corners, the ends of
