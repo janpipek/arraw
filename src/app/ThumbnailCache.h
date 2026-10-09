@@ -52,8 +52,9 @@ public:
     /// @brief Makes the key of a file's developed thumbnail.
     ///
     /// The embedded key's ingredients plus everything in the saved state that changes the
-    /// picture: the settings as ::arraw::settingsToJson writes them. Whatever else joins
-    /// ::arraw::DevelopState later (masks, spots) is added here and nowhere else.
+    /// picture: the settings as ::arraw::settingsToJson writes them, and, when there are any, the
+    /// local adjustments (without their id counter). Whatever else joins ::arraw::DevelopState
+    /// later (spots) is added here and nowhere else.
     /// @param file Photograph.
     /// @param state Saved develop state of the photograph.
     /// @return The key, or nothing if the file cannot be looked at.

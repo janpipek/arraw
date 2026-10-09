@@ -1,6 +1,7 @@
 #pragma once
 
 #include <DevelopState.h>
+#include <LocalAdjustments.h>
 #include <Photo.h>
 #include <SettingDescriptors.h>
 
@@ -42,7 +43,55 @@ struct HistoryStep {
     friend bool operator==(const HistoryStep&, const HistoryStep&) = default;
 };
 
-/// @brief Settings two develop states differ in, for naming a history step.
+/// @brief What changed in one local adjustment that two develop states both hold.
+struct MaskChange {
+    /// @brief Id of the adjustment.
+    LocalAdjustmentId id{};
+
+    /// @brief Whether the name differs.
+    bool name = false;
+
+    /// @brief Whether it was turned on or off.
+    bool enabled = false;
+
+    /// @brief Whether the opacity differs.
+    bool opacity = false;
+
+    /// @brief Whether the weight was inverted or restored.
+    bool invert = false;
+
+    /// @brief Whether the shape differs: its geometry, or its kind.
+    bool shape = false;
+
+    /// @brief Keys of ::arraw::localAdjustmentDescriptors whose deltas differ, in table order.
+    std::vector<std::string_view> deltas;
+
+    friend bool operator==(const MaskChange&, const MaskChange&) = default;
+};
+
+/// @brief Local adjustments two develop states differ in, for naming a history step (ADR 044).
+struct LocalChange {
+    /// @brief Ids the second state holds and the first does not, in the second's order.
+    std::vector<LocalAdjustmentId> added;
+
+    /// @brief Ids the first state holds and the second does not, in the first's order.
+    std::vector<LocalAdjustmentId> removed;
+
+    /// @brief Whether the adjustments both hold are in another order.
+    bool reordered = false;
+
+    /// @brief The adjustments both hold that differ, in the second state's order.
+    std::vector<MaskChange> changed;
+
+    /// @brief Tells whether the two lists are the same.
+    [[nodiscard]] bool empty() const noexcept {
+        return added.empty() && removed.empty() && !reordered && changed.empty();
+    }
+
+    friend bool operator==(const LocalChange&, const LocalChange&) = default;
+};
+
+/// @brief Settings and local adjustments two develop states differ in, for naming a history step.
 struct ChangeDescription {
     /// @brief Keys of ::arraw::developSettingDescriptors whose values differ, in table order.
     std::vector<std::string_view> keys;
@@ -50,15 +99,21 @@ struct ChangeDescription {
     /// @brief Group every key belongs to; empty when there are no keys or they span groups.
     std::optional<SettingGroup> group;
 
+    /// @brief How the local adjustments differ; empty when they do not. The counter alone is not
+    /// described.
+    LocalChange local;
+
     friend bool operator==(const ChangeDescription&, const ChangeDescription&) = default;
 };
 
-/// @brief Lists the settings two develop states differ in.
+/// @brief Lists the settings and the local adjustments two develop states differ in.
 ///
 /// Compares each row of ::arraw::developSettingDescriptors through its
 /// accessor, so a new setting is covered by its row alone. Rows of the
 /// photograph's own settings, such as the grain seed, are compared like any
-/// other: a step that changes only the seed still names it.
+/// other: a step that changes only the seed still names it. The local part
+/// matches adjustments by id (ADR 044): ids added, removed or reordered, and, for each id both
+/// states hold, what differs in it.
 /// @param before State a step started from.
 /// @param after State it left.
 [[nodiscard]] ChangeDescription describeChange(const DevelopState& before,

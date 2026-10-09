@@ -220,6 +220,14 @@ add_library(arraw STATIC
         src/core/SettingDescriptors.cpp
         include/Edits.h
         src/core/Edits.cpp
+        include/LocalAdjustments.h
+        src/core/LocalAdjustments.cpp
+        include/LocalAdjustmentEdits.h
+        src/core/LocalAdjustmentEdits.cpp
+        src/core/LocalAdjustmentCodec.h
+        src/core/LocalAdjustmentCodec.cpp
+        src/core/LocalPlan.h
+        src/core/LocalPlan.cpp
         src/core/SettingCodec.h
         include/ShortestDecimal.h
         src/core/SettingCodec.cpp
@@ -257,6 +265,10 @@ arraw_enable_warnings(arraw)
 # MSVC does not contract under its default /fp:precise.
 set_source_files_properties(src/core/GrainModels.cpp PROPERTIES
         COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-ffp-contract=off>")
+# The same for the local adjustments' sums (ADR 044, section 2): masks that cancel must cancel
+# exactly, as the shader's `precise` sum does, and LocalPlan.h is inline in every target that
+# renders on the CPU (the library and what links it: the tests, the Python module).
+target_compile_options(arraw PUBLIC "$<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-ffp-contract=off>")
 target_include_directories(arraw PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 # A checkpoint may hold its pixels on a device (ADR 015), so the device image
 # handle is the engine's: src/core/device holds it and the Qt-free state behind

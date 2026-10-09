@@ -1,7 +1,9 @@
 #include "HistoryModel.h"
+#include "support/LocalAdjustmentStates.h"
 
 #include <DevelopState.h>
 #include <EditSession.h>
+#include <LocalAdjustmentEdits.h>
 
 #include <QCoreApplication>
 #include <QRegularExpression>
@@ -201,4 +203,171 @@ TEST_CASE("Clearing the model leaves no rows", "[app][history]") {
     CHECK(model.rowCount() == 1);
     model.clear();
     CHECK(model.rowCount() == 0);
+}
+
+// Masks
+
+namespace {
+
+/// A history over states, each a change to the one before; the first is the opening state.
+struct BuiltStates {
+    std::vector<HistoryStep> steps;
+
+    explicit BuiltStates(DevelopState first = {}) {
+        steps.push_back({std::move(first), EditOrigin::Opened, {}});
+    }
+
+    BuiltStates& then(DevelopState next, EditOrigin origin = EditOrigin::Edit) {
+        steps.push_back({std::move(next), origin, {}});
+        return *this;
+    }
+
+    const DevelopState& last() const {
+        return steps.back().state;
+    }
+
+    QString textOfLast() const {
+        HistoryModel model;
+        model.setHistory(steps, steps.size() - 1, DevelopState{});
+        return textAt(model, steps.size() - 1);
+    }
+};
+
+LocalAdjustmentId idOf(const DevelopState& state, std::size_t index) {
+    return state.localAdjustments.at(index).id;
+}
+
+} // namespace
+
+TEST_CASE("Adding and removing a mask name it by kind and place", "[app][history][local]") {
+    BuiltStates built;
+    built.then(withLocalAdjustmentAdded(built.last(), RadialMask{}));
+    CHECK(built.textOfLast() == "Add Radial 1");
+    built.then(withLocalAdjustmentAdded(built.last(), LinearMask{}));
+    CHECK(built.textOfLast() == "Add Linear 1");
+    built.then(withLocalAdjustmentAdded(built.last(), LinearMask{}));
+    CHECK(built.textOfLast() == "Add Linear 2");
+    // The name of a mask that goes is the one it had in the state before.
+    built.then(withLocalAdjustmentRemoved(built.last(), idOf(built.last(), 1)));
+    CHECK(built.textOfLast() == "Remove Linear 1");
+    built.then(withLocalAdjustmentRemoved(built.last(), idOf(built.last(), 1)));
+    // The second linear mask became the first when the first went.
+    CHECK(built.textOfLast() == "Remove Linear 1");
+    built.then(withLocalAdjustmentRemoved(built.last(), idOf(built.last(), 0)));
+    CHECK(built.textOfLast() == "Remove Radial 1");
+}
+
+TEST_CASE("A named mask is worded by its name", "[app][history][local]") {
+    BuiltStates built{withLocalAdjustmentAdded(DevelopState{}, LinearMask{})};
+    const LocalAdjustmentId id = idOf(built.last(), 0);
+    built.then(withLocalAdjustmentRenamed(built.last(), id, "Sky"));
+    CHECK(built.textOfLast() == "Rename Sky");
+    built.then(withLocalDelta(built.last(), id, "exposure", 0.5));
+    CHECK(built.textOfLast() == "Sky: Exposure +0.50 EV");
+    built.then(withLocalAdjustmentRemoved(built.last(), id));
+    CHECK(built.textOfLast() == "Remove Sky");
+}
+
+TEST_CASE("One delta of a mask is worded with its control and value", "[app][history][local]") {
+    BuiltStates built{withLocalAdjustmentAdded(
+        withLocalAdjustmentAdded(DevelopState{}, LinearMask{}), LinearMask{})};
+    const LocalAdjustmentId second = idOf(built.last(), 1);
+
+    built.then(withLocalDelta(built.last(), second, "exposure", 0.5));
+    CHECK(built.textOfLast() == "Linear 2: Exposure +0.50 EV");
+    built.then(withLocalDelta(built.last(), second, "exposure", -1.25));
+    CHECK(built.textOfLast() == "Linear 2: Exposure -1.25 EV");
+    built.then(withLocalDelta(built.last(), second, "dehaze", 20.0));
+    CHECK(built.textOfLast() == "Linear 2: Dehaze +20");
+    built.then(withLocalDelta(built.last(), second, "shadows", -35.0));
+    CHECK(built.textOfLast() == "Linear 2: Shadows -35");
+    built.then(withLocalDelta(built.last(), second, "relativeTemperature", 40.0));
+    CHECK(built.textOfLast() == "Linear 2: Temp +40");
+    built.then(withLocalDelta(built.last(), second, "relativeTint", -8.0));
+    CHECK(built.textOfLast() == "Linear 2: Tint -8");
+    built.then(withLocalDelta(built.last(), second, "vibrance", 12.0));
+    CHECK(built.textOfLast().startsWith("Linear 2: Vibrance +12"));
+    built.then(withLocalDelta(built.last(), second, "vibrance", 0.0));
+    CHECK(built.textOfLast().startsWith("Linear 2: Vibrance 0"));
+}
+
+TEST_CASE("Every local control has wording", "[app][history][local]") {
+    for (const LocalDescriptor& row : localAdjustmentDescriptors) {
+        INFO(row.key);
+        BuiltStates built{withLocalAdjustmentAdded(DevelopState{}, LinearMask{})};
+        built.then(withLocalDelta(built.last(), idOf(built.last(), 0), row.key, 10.0));
+        HistoryModel model;
+        model.setHistory(built.steps, 1, DevelopState{});
+        const QString text = textAt(model, 1);
+        CHECK(text.startsWith("Linear 1: "));
+        CHECK(text.contains("+"));
+    }
+}
+
+TEST_CASE("Several deltas of one mask are counted", "[app][history][local]") {
+    BuiltStates built{withLocalAdjustmentAdded(DevelopState{}, RadialMask{})};
+    const LocalAdjustmentId id = idOf(built.last(), 0);
+    DevelopState next = withLocalDelta(built.last(), id, "exposure", 0.5);
+    next = withLocalDelta(next, id, "clarity", 10.0);
+    built.then(next);
+    CHECK(built.textOfLast() == "Radial 1: 2 settings");
+}
+
+TEST_CASE("The flags, opacity and handles of a mask have their own wording",
+          "[app][history][local]") {
+    BuiltStates built{withLocalAdjustmentAdded(DevelopState{}, RadialMask{})};
+    const LocalAdjustmentId id = idOf(built.last(), 0);
+
+    built.then(withLocalAdjustmentEnabled(built.last(), id, false));
+    CHECK(built.textOfLast() == "Disable Radial 1");
+    built.then(withLocalAdjustmentEnabled(built.last(), id, true));
+    CHECK(built.textOfLast() == "Enable Radial 1");
+    built.then(withLocalAdjustmentInverted(built.last(), id, true));
+    CHECK(built.textOfLast() == "Invert Radial 1");
+    built.then(withLocalOpacity(built.last(), id, 0.5F));
+    CHECK(built.textOfLast() == "Radial 1: Opacity 50%");
+    built.then(withLocalShape(built.last(), id, RadialMask{.centre = {0.1F, 0.1F}}));
+    CHECK(built.textOfLast() == "Move Radial 1");
+    // More than one aspect of the mask at once.
+    DevelopState both = withLocalOpacity(built.last(), id, 0.25F);
+    both = withLocalDelta(both, id, "exposure", 1.0);
+    built.then(both);
+    CHECK(built.textOfLast() == "Edit Radial 1");
+}
+
+TEST_CASE("Reordering, and several masks at once, are worded", "[app][history][local]") {
+    DevelopState three;
+    for (int i = 0; i < 3; ++i) {
+        three = withLocalAdjustmentAdded(three, i == 1 ? Mask{RadialMask{}} : Mask{LinearMask{}});
+    }
+    BuiltStates built{three};
+    built.then(withLocalAdjustmentReordered(built.last(), idOf(built.last(), 0), 2));
+    CHECK(built.textOfLast() == "Reorder Masks");
+
+    DevelopState edited = withLocalDelta(built.last(), idOf(built.last(), 0), "exposure", 1.0);
+    edited = withLocalDelta(edited, idOf(edited, 1), "exposure", 1.0);
+    built.then(edited);
+    CHECK(built.textOfLast() == "2 mask changes");
+
+    BuiltStates added;
+    DevelopState two = withLocalAdjustmentAdded(
+        withLocalAdjustmentAdded(DevelopState{}, LinearMask{}), RadialMask{});
+    added.then(two);
+    CHECK(added.textOfLast() == "2 mask changes");
+}
+
+TEST_CASE("A step that changes masks and settings counts them together", "[app][history][local]") {
+    BuiltStates built;
+    DevelopState next = withLocalAdjustmentAdded(built.last(), LinearMask{});
+    next.settings.tone.exposure = 1.0F;
+    built.then(next);
+    CHECK(built.textOfLast() == "2 changes");
+}
+
+TEST_CASE("A step that changes settings alone is worded as before", "[app][history][local]") {
+    BuiltStates built{test::stateWithMasks()};
+    DevelopState next = built.last();
+    next.settings.tone.exposure = 0.5F;
+    built.then(next);
+    CHECK(built.textOfLast() == "Exposure +0.50 EV");
 }

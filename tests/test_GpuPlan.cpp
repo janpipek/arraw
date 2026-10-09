@@ -369,25 +369,25 @@ TEST_CASE("The pointwise block carries Presence and its grids", "[gpu][plan][pre
     settings.presence = {.texture = 0.0F, .clarity = 0.0F, .dehaze = 30.0F};
     const ProcessingPlan hazy = planFor(source, DevelopState{settings});
     const GpuPointwiseBlock hazyBlock = packPointwise(hazy.pointwise, source.size());
-    REQUIRE(hazyBlock.coarseReduction == hazy.pointwise.presence.haze.reduction);
+    REQUIRE(hazyBlock.coarseReduction == hazy.pointwise.presence.hazeFloor.reduction);
     REQUIRE(hazyBlock.coarseGridSize == std::array<std::uint32_t, 2>{203, 77});
     const GpuPresenceBlock minimum =
-        packPresence(hazy.pointwise.presence, hazy.pointwise.presence.haze, source.size(),
+        packPresence(hazy.pointwise.presence, hazy.pointwise.presence.hazeFloor, source.size(),
                      PresenceStep::MinimumAcross);
     // The octagon's passes across and down carry its half-width across, the
     // diagonal ones its half-length along a diagonal.
-    const OctagonWindow octagon = octagonOf(hazy.pointwise.presence.haze.window);
+    const OctagonWindow octagon = octagonOf(hazy.pointwise.presence.hazeFloor.window);
     REQUIRE(octagon.diagonal > 0U);
     REQUIRE(minimum.window == octagon.across);
     REQUIRE(minimum.radius == 0U);
-    REQUIRE(packPresence(hazy.pointwise.presence, hazy.pointwise.presence.haze, source.size(),
+    REQUIRE(packPresence(hazy.pointwise.presence, hazy.pointwise.presence.hazeFloor, source.size(),
                          PresenceStep::MaximumDown)
                 .window == octagon.across);
     for (const PresenceStep step :
          {PresenceStep::MinimumDiagonal, PresenceStep::MinimumAntidiagonal,
           PresenceStep::MaximumDiagonal, PresenceStep::MaximumAntidiagonal}) {
         const GpuPresenceBlock diagonal = packPresence(
-            hazy.pointwise.presence, hazy.pointwise.presence.haze, source.size(), step);
+            hazy.pointwise.presence, hazy.pointwise.presence.hazeFloor, source.size(), step);
         REQUIRE(diagonal.step == static_cast<std::uint32_t>(step));
         REQUIRE(diagonal.window == octagon.diagonal);
         REQUIRE(diagonal.radius == 0U);
@@ -396,16 +396,16 @@ TEST_CASE("The pointwise block carries Presence and its grids", "[gpu][plan][pre
     REQUIRE(static_cast<std::uint32_t>(PresenceStep::MaximumAntidiagonal) == 12U);
     // The floor's last blur, kept above the opening, carries the blur's taps.
     const GpuPresenceBlock last =
-        packPresence(hazy.pointwise.presence, hazy.pointwise.presence.haze, source.size(),
+        packPresence(hazy.pointwise.presence, hazy.pointwise.presence.hazeFloor, source.size(),
                      PresenceStep::BlurDownAboveOpening);
     REQUIRE(last.step == 7U);
-    REQUIRE(last.radius == hazy.pointwise.presence.haze.radius);
-    REQUIRE(last.weights[1] == denoiseWeights(hazy.pointwise.presence.haze.sigma,
-                                              hazy.pointwise.presence.haze.radius)[1]);
+    REQUIRE(last.radius == hazy.pointwise.presence.hazeFloor.radius);
+    REQUIRE(last.weights[1] == denoiseWeights(hazy.pointwise.presence.hazeFloor.sigma,
+                                              hazy.pointwise.presence.hazeFloor.radius)[1]);
 
     // A step of the opening's reconstruction carries neither the window nor the blur.
     const GpuPresenceBlock reconstruct =
-        packPresence(hazy.pointwise.presence, hazy.pointwise.presence.haze, source.size(),
+        packPresence(hazy.pointwise.presence, hazy.pointwise.presence.hazeFloor, source.size(),
                      PresenceStep::Reconstruct);
     REQUIRE(reconstruct.step == 8U);
     REQUIRE(reconstruct.window == 0U);

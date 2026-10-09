@@ -2,6 +2,7 @@
 
 #include "ColorAdjustments.h"
 #include "ColorSpaces.h"
+#include "LocalPlan.h"
 #include "Presence.h"
 #include "ToneCurve.h"
 #include "TonePlan.h"
@@ -11,6 +12,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstdint>
 #include <limits>
 #include <tuple>
 
@@ -29,6 +31,14 @@ struct PointwisePlan {
     /// linear, so they compose into one transform and cost one multiply per
     /// pixel between them.
     Matrix3 toWorking = Matrix3::identity();
+
+    /// @brief The local adjustments, resolved against the size of the source (ADR 044).
+    ///
+    /// The masks that do something, the globals they add to and the controls they touch. Empty
+    /// for a state without masks, and for the overloads of ::arraw::planFor that know no size,
+    /// as Presence is; the chain then has every pixel take the photograph's own amounts. Pixels
+    /// under a mask get amounts of their own from ::arraw::amountsAt.
+    LocalPlan local{};
 
     /// @brief Exposure and Basic Tone, resolved.
     TonePlan tone{};
@@ -70,9 +80,16 @@ struct PointwisePlan {
 
 /// @brief The values of a plan that a pixel applies as its own: the seam for per-pixel amounts.
 ///
-/// Today every pixel has the photograph's (::arraw::globalAmountsOf); ADR 044
-/// replaces that with a value resolved per pixel.
+/// The photograph's (::arraw::globalAmountsOf) for a pixel no mask reaches, and otherwise the
+/// pixel's own, resolved by ::arraw::amountsAt (ADR 044).
 struct PixelAmounts {
+    /// @brief Whether the pixel takes the relative Temperature and Tint gain.
+    bool balances = false;
+
+    /// @brief Relative Temperature and Tint at the pixel, as a gain per working channel
+    /// (::arraw::relativeBalanceGainFor); not read unless @ref balances.
+    Colour balance{1.0F, 1.0F, 1.0F};
+
     TonePlan tone{};            ///< Exposure and Basic Tone at the pixel.
     PresenceAmounts presence{}; ///< Texture, Clarity and Dehaze at the pixel.
     ChromaAmounts chroma{};     ///< Saturation and Vibrance at the pixel.
@@ -84,7 +101,104 @@ struct PixelAmounts {
 /// @param plan Resolved settings.
 /// @return The photograph's tone, Presence and chroma amounts.
 [[nodiscard]] constexpr PixelAmounts globalAmountsOf(const PointwisePlan& plan) noexcept {
-    return {plan.tone, plan.presence.amounts, plan.colorAdjustments.chroma};
+    return {.tone = plan.tone,
+            .presence = plan.presence.amounts,
+            .chroma = plan.colorAdjustments.chroma};
+}
+
+/// @brief Gives the amounts of the pixel at a column and row of the source.
+///
+/// For each control the sum of the masks' weighted amounts, summed in list order and in float
+/// (::arraw::localSumsAt); where the sum is exactly zero the pixel takes the plan's global
+/// value, as resolved, and so is bit-identical to a render without masks. Otherwise the global
+/// value in setting units is added, the result clamped once to the global control's range, and
+/// resolved by the expression the global setting uses (ADR 044, section 2). A pixel shapes tone
+/// when the plan does or any of its five tone sums is non-zero. Relative Temperature and Tint
+/// resolve to a gain, when either sum is non-zero.
+/// @param plan Resolved settings.
+/// @param column Column of the pixel in the source the plan was resolved for.
+/// @param row Row of the pixel.
+/// @return The pixel's amounts; the plan's own for a plan without masks.
+///
+/// Mirrored by `src/gpu/shaders/develop.frag`, which must change with it.
+[[nodiscard]] inline PixelAmounts amountsAt(const PointwisePlan& plan, std::uint32_t column,
+                                            std::uint32_t row) {
+    PixelAmounts at = globalAmountsOf(plan);
+    const LocalPlan& local = plan.local;
+    if (local.empty()) {
+        return at;
+    }
+    // The centre of the pixel, in source pixels.
+    const LocalAmounts sums =
+        localSumsAt(local, static_cast<float>(column) + 0.5F, static_cast<float>(row) + 0.5F);
+    const auto sum = [&sums](LocalControl control) { return sums[indexOf(control)]; };
+    // The global value and the pixel's sum, clamped once to the global control's range.
+    const auto effective = [&](LocalControl control, float least, float most) {
+        return std::clamp(local.global[indexOf(control)] + sum(control), least, most);
+    };
+
+    const float temperature = sum(LocalControl::RelativeTemperature);
+    const float tint = sum(LocalControl::RelativeTint);
+    if (temperature != 0.0F || tint != 0.0F) {
+        at.balances = true;
+        at.balance =
+            relativeBalanceGainFor(std::clamp(temperature, -static_cast<float>(localControlLimit),
+                                              static_cast<float>(localControlLimit)),
+                                   std::clamp(tint, -static_cast<float>(localControlLimit),
+                                              static_cast<float>(localControlLimit)));
+    }
+
+    TonePlan& tone = at.tone;
+    if (sum(LocalControl::Exposure) != 0.0F) {
+        tone.exposureGain =
+            exposureGainFor(effective(LocalControl::Exposure, darkestExposure, brightestExposure));
+    }
+    if (sum(LocalControl::Contrast) != 0.0F) {
+        tone.contrastSlope =
+            contrastSlopeFor(effective(LocalControl::Contrast, flattestContrast, steepestContrast));
+        tone.contrastScale = contrastScaleFor(tone.contrastSlope);
+        tone.shapesTone = true;
+    }
+    if (sum(LocalControl::Highlights) != 0.0F) {
+        tone.highlightShift = regionalShiftFor(
+            effective(LocalControl::Highlights, weakestToneControl, strongestToneControl));
+        tone.shapesTone = true;
+    }
+    if (sum(LocalControl::Shadows) != 0.0F) {
+        tone.shadowShift = regionalShiftFor(
+            effective(LocalControl::Shadows, weakestToneControl, strongestToneControl));
+        tone.shapesTone = true;
+    }
+    if (sum(LocalControl::Whites) != 0.0F) {
+        tone.whiteShift = endpointShiftFor(
+            effective(LocalControl::Whites, weakestToneControl, strongestToneControl));
+        tone.shapesTone = true;
+    }
+    if (sum(LocalControl::Blacks) != 0.0F) {
+        tone.blackShift = endpointShiftFor(
+            effective(LocalControl::Blacks, weakestToneControl, strongestToneControl));
+        tone.shapesTone = true;
+    }
+
+    if (sum(LocalControl::Texture) != 0.0F) {
+        at.presence.texture =
+            presenceAmountFor(effective(LocalControl::Texture, weakestPresence, strongestPresence));
+    }
+    if (sum(LocalControl::Clarity) != 0.0F) {
+        at.presence.clarity =
+            presenceAmountFor(effective(LocalControl::Clarity, weakestPresence, strongestPresence));
+    }
+    if (sum(LocalControl::Dehaze) != 0.0F) {
+        at.presence.dehaze =
+            presenceAmountFor(effective(LocalControl::Dehaze, weakestPresence, strongestPresence));
+    }
+
+    if (sum(LocalControl::Saturation) != 0.0F || sum(LocalControl::Vibrance) != 0.0F) {
+        at.chroma = chromaAmountsFor(
+            effective(LocalControl::Saturation, weakestSaturation, strongestSaturation),
+            effective(LocalControl::Vibrance, weakestSaturation, strongestSaturation));
+    }
+    return at;
 }
 
 /// @brief Luminance below which the luma curve stops dividing by it.
@@ -164,7 +278,8 @@ inline constexpr float curveRatioFloor = 0x1p-14F;
 /// repeating it, so that ::arraw::Tap::CurveInput and its position in the
 /// chain cannot drift apart (ADR 011): white balance and the matrix, exposure,
 /// Basic Tone, then Texture, Clarity and Dehaze, which Lightroom counts as
-/// Basic too (ADR 041). What comes out is what the tone curves take in.
+/// Basic too (ADR 041). A pixel under local Temperature or Tint takes their gain right after the
+/// matrix (ADR 044). What comes out is what the tone curves take in.
 /// @param plan Resolved settings.
 /// @param at The amounts that are the pixel's own: tone, Presence and chroma.
 /// @param colour Source colour, in the encoding the plan was built for.
@@ -182,6 +297,9 @@ inline constexpr float curveRatioFloor = 0x1p-14F;
     const float logLuminance =
         plan.presence.active() ? presenceLogLuminance(plan.presence, colour) : 0.0F;
     colour = plan.toWorking * colour;
+    if (at.balances) {
+        colour = {colour[0] * at.balance[0], colour[1] * at.balance[1], colour[2] * at.balance[2]};
+    }
     colour = {colour[0] * at.tone.exposureGain, colour[1] * at.tone.exposureGain,
               colour[2] * at.tone.exposureGain};
     colour = shapeTone(at.tone, colour);
@@ -279,9 +397,12 @@ inline constexpr float curveRatioFloor = 0x1p-14F;
 /// prefix starts reading must join this list, or ::arraw::sameAtTap would call
 /// a stale sample current.
 /// @param plan Pointwise block to view.
-/// @return References to white balance and the matrix, exposure, Basic Tone and Presence.
+/// @return White balance and the matrix, exposure, Basic Tone and Presence by reference, and
+/// the local fields before the tap by value (::arraw::preTapLocalFieldsOf): the masks that carry
+/// one of the eleven controls before the tap and the globals they add to.
 [[nodiscard]] inline auto curveInputFieldsOf(const PointwisePlan& plan) {
-    return std::tie(plan.toWorking, plan.tone, plan.presence);
+    return std::tuple<const Matrix3&, const TonePlan&, const PresencePlan&, PreTapLocal>(
+        plan.toWorking, plan.tone, plan.presence, preTapLocalFieldsOf(plan.local));
 }
 
 } // namespace arraw

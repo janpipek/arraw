@@ -1,7 +1,14 @@
 #include "Denoise.h"
 #include "GpuPlan.h"
+#include "LocalPlan.h"
 #include "Presence.h"
 #include "ProcessingPlan.h"
+#include "TonePlan.h"
+
+#include <ColorSettings.h>
+#include <PresenceSettings.h>
+#include <SettingDescriptors.h>
+#include <ToneSettings.h>
 
 #include <QByteArray>
 #include <QFile>
@@ -344,9 +351,29 @@ TEST_CASE("The pointwise shader's block is GpuPointwiseBlock, member for member"
                          ARRAW_MEMBER(Block, fineGridSize),
                          ARRAW_MEMBER(Block, coarseGridSize),
                          ARRAW_MEMBER(Block, presencePadding),
+                         ARRAW_MEMBER(Block, localHeader),
+                         ARRAW_MEMBER(Block, localGlobal),
+                         ARRAW_MEMBER(Block, local),
                      },
                      // The three words before the band sets, which std140 skips by itself.
                      {"padding"});
+
+    // The masks: sixteen structs, each member where GpuLocalMask puts it.
+    const auto block = blockOf(loadShader("develop.frag"), 1);
+    const auto masks = std::find_if(block.members.begin(), block.members.end(),
+                                    [](const auto& member) { return member.name == "local"; });
+    REQUIRE(masks != block.members.end());
+    REQUIRE(masks->arrayDims == QList<int>{static_cast<int>(gpuLocalMaskCapacity)});
+    using Mask = GpuLocalMask;
+    requireSameLayout(masks->structMembers, {
+                                                ARRAW_MEMBER(Mask, header),
+                                                ARRAW_MEMBER(Mask, shapeA),
+                                                ARRAW_MEMBER(Mask, shapeB),
+                                                ARRAW_MEMBER(Mask, k),
+                                            });
+    REQUIRE(static_cast<std::size_t>(masks->size) == sizeof(Block::local));
+    REQUIRE(sizeof(Mask) == 112);
+    REQUIRE(sizeof(Block) == 2256);
 }
 
 TEST_CASE("The geometry shader's block is GpuGeometryBlock, member for member", "[gpu][shader]") {
@@ -465,6 +492,72 @@ TEST_CASE("The shaders' step and probe numbers are the C++ enumerators", "[gpu][
                                         {"probeAfterCurves", PointwiseProbe::AfterCurves},
                                     },
                                     "PointwiseProbe", {"Developed"});
+}
+
+TEST_CASE("The pointwise shader's local constants are the C++ ones", "[gpu][shader]") {
+    requireSameEnum<GpuLocalFlag>("develop.frag", "localFlag",
+                                  {
+                                      {"localFlagFineBase", GpuLocalFlag::FineBase},
+                                      {"localFlagCoarseBase", GpuLocalFlag::CoarseBase},
+                                      {"localFlagHazeFloor", GpuLocalFlag::HazeFloor},
+                                      {"localFlagHazeMean", GpuLocalFlag::HazeMean},
+                                  },
+                                  "GpuLocalFlag");
+    // The kinds are in LocalPlan.h, which the enumerator scan above does not read.
+    const auto kinds = constantsOf("develop.frag");
+    REQUIRE(std::stoul(kinds.at("maskKindLinear")) ==
+            static_cast<unsigned long>(LocalMaskKind::Linear));
+    REQUIRE(std::stoul(kinds.at("maskKindRadial")) ==
+            static_cast<unsigned long>(LocalMaskKind::Radial));
+
+    // The rows of the local table, by key, so that a reordered table is caught here.
+    const std::map<std::string, std::string> rows{
+        {"controlTemperature", "relativeTemperature"},
+        {"controlTint", "relativeTint"},
+        {"controlExposure", "exposure"},
+        {"controlContrast", "contrast"},
+        {"controlHighlights", "highlights"},
+        {"controlShadows", "shadows"},
+        {"controlWhites", "whites"},
+        {"controlBlacks", "blacks"},
+        {"controlTexture", "texture"},
+        {"controlClarity", "clarity"},
+        {"controlDehaze", "dehaze"},
+        {"controlSaturation", "saturation"},
+        {"controlVibrance", "vibrance"},
+    };
+    const auto constants = constantsOf("develop.frag");
+    for (const auto& [name, key] : rows) {
+        CAPTURE(name, key);
+        const auto found = constants.find(name);
+        REQUIRE(found != constants.end());
+        const auto row = std::find_if(
+            localAdjustmentDescriptors.begin(), localAdjustmentDescriptors.end(),
+            [&key](const LocalDescriptor& descriptor) { return descriptor.key == key; });
+        REQUIRE(row != localAdjustmentDescriptors.end());
+        REQUIRE(std::stoul(found->second) ==
+                static_cast<unsigned long>(row - localAdjustmentDescriptors.begin()));
+    }
+    REQUIRE(std::stoul(constants.at("controlCount")) == localAdjustmentDescriptors.size());
+
+    requireSameFloat("develop.frag", "darkestExposure", darkestExposure);
+    requireSameFloat("develop.frag", "brightestExposure", brightestExposure);
+    requireSameFloat("develop.frag", "flattestContrast", flattestContrast);
+    requireSameFloat("develop.frag", "steepestContrast", steepestContrast);
+    requireSameFloat("develop.frag", "weakestToneControl", weakestToneControl);
+    requireSameFloat("develop.frag", "strongestToneControl", strongestToneControl);
+    requireSameFloat("develop.frag", "weakestPresence", weakestPresence);
+    requireSameFloat("develop.frag", "strongestPresence", strongestPresence);
+    requireSameFloat("develop.frag", "weakestSaturation", weakestSaturation);
+    requireSameFloat("develop.frag", "strongestSaturation", strongestSaturation);
+    requireSameFloat("develop.frag", "localControlLimit", static_cast<float>(localControlLimit));
+    requireSameFloat("develop.frag", "regionalReach", regionalReach);
+    requireSameFloat("develop.frag", "endpointReach", endpointReach);
+    requireSameFloat("develop.frag", "temperatureRedStops", temperatureRedStops);
+    requireSameFloat("develop.frag", "temperatureBlueStops", temperatureBlueStops);
+    requireSameFloat("develop.frag", "tintRedStops", tintRedStops);
+    requireSameFloat("develop.frag", "tintBlueStops", tintBlueStops);
+    requireSameFloat("develop.frag", "greyPivot", greyPivot);
 }
 
 TEST_CASE("The shaders' shared float constants are the C++ ones", "[gpu][shader]") {

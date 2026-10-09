@@ -7,6 +7,7 @@
 #include <Edits.h>
 #include <ImageExport.h>
 #include <ImageImport.h>
+#include <LocalAdjustmentEdits.h>
 #include <Photo.h>
 #include <PhotoMarks.h>
 #include <Sidecar.h>
@@ -18,7 +19,10 @@
 #include <cstdint>
 #include <exception>
 #include <limits>
+#include <stdexcept>
 #include <string>
+#include <string_view>
+#include <utility>
 
 namespace arraw::python {
 
@@ -113,6 +117,90 @@ DevelopState editedState(const ImageMetadata& metadata, DevelopState state,
         });
     }
     return state;
+}
+
+/// @brief Finds the local control a snake_case keyword names.
+/// @return The row of ::arraw::localAdjustmentDescriptors, or null for an unknown keyword.
+const LocalDescriptor* findLocalByKeyword(std::string_view name) {
+    for (const LocalDescriptor& row : localAdjustmentDescriptors) {
+        if (row.pythonName == name) {
+            return &row;
+        }
+    }
+    return nullptr;
+}
+
+/// @brief Reads the keywords of a new mask that are not deltas, and then the deltas.
+///
+/// The deltas are set by the table's Python names, as the number is given; whether it is in
+/// range is for ::arraw::withLocalAdjustmentAdded to say, which clamps.
+/// @throws nb::type_error for an unknown keyword or a value of the wrong type.
+LocalDeltas deltasFrom(const nb::kwargs& keywords) {
+    LocalDeltas deltas;
+    for (auto [key, value] : keywords) {
+        const std::string name = nb::cast<std::string>(key);
+        const LocalDescriptor* match = findLocalByKeyword(name);
+        if (match == nullptr) {
+            throw nb::type_error(("unknown local adjustment keyword '" + name + "'").c_str());
+        }
+        deltas.*match->member = convertValue<float>(value, name);
+    }
+    return deltas;
+}
+
+/// @brief Adds a mask to a photograph's state, as a new photograph.
+/// @throws std::invalid_argument (a ValueError) if the list is full or a number is not finite.
+Photo withMaskAdded(const Photo& photo, Mask shape, std::string name, const nb::object& opacity,
+                    bool invert, bool enabled, const nb::kwargs& deltas) {
+    LocalAdjustment adjustment;
+    adjustment.shape = std::move(shape);
+    adjustment.name = std::move(name);
+    adjustment.enabled = enabled;
+    adjustment.invert = invert;
+    adjustment.opacity = convertValue<float>(opacity, "opacity");
+    adjustment.deltas = deltasFrom(deltas);
+    return {photo.path(), photo.metadata(),
+            withLocalAdjustmentAdded(photo.state(), std::move(adjustment)), photo.marks()};
+}
+
+/// @brief Changes one adjustment of a photograph by the keywords, in the order given, as a new
+/// photograph.
+///
+/// `name`, `enabled`, `invert`, `opacity` and `shape` change the adjustment's own fields (a
+/// shape must be of the kind the adjustment has), every other keyword is a delta by its Python
+/// name. Each is applied by the edit rules of ::arraw::withLocalDelta and its siblings, which
+/// clamp a number to its range.
+/// @throws nb::type_error for an unknown keyword or a value of the wrong type.
+/// @throws std::invalid_argument (a ValueError) for an unknown id, a shape of another kind, or a
+/// number that is not finite.
+Photo withLocalChanged(const Photo& photo, LocalAdjustmentId id, const nb::kwargs& keywords) {
+    DevelopState state = photo.state();
+    if (findLocalAdjustment(state, id) == nullptr) {
+        throw std::invalid_argument("no local adjustment with id " + std::to_string(id.value));
+    }
+    for (auto [key, value] : keywords) {
+        const std::string name = nb::cast<std::string>(key);
+        if (name == "name") {
+            state = withLocalAdjustmentRenamed(std::move(state), id,
+                                               convertValue<std::string>(value, name));
+        } else if (name == "enabled") {
+            state =
+                withLocalAdjustmentEnabled(std::move(state), id, convertValue<bool>(value, name));
+        } else if (name == "invert") {
+            state =
+                withLocalAdjustmentInverted(std::move(state), id, convertValue<bool>(value, name));
+        } else if (name == "opacity") {
+            state = withLocalOpacity(std::move(state), id, convertValue<float>(value, name));
+        } else if (name == "shape") {
+            state = withLocalShape(std::move(state), id, convertValue<Mask>(value, name));
+        } else if (const LocalDescriptor* match = findLocalByKeyword(name)) {
+            state =
+                withLocalDelta(std::move(state), id, match->key, convertValue<double>(value, name));
+        } else {
+            throw nb::type_error(("unknown local adjustment keyword '" + name + "'").c_str());
+        }
+    }
+    return {photo.path(), photo.metadata(), std::move(state), photo.marks()};
 }
 
 /// @brief Reads one side of a requested size: a positive Python int that fits a 32-bit side.
@@ -218,9 +306,17 @@ void bindPhoto(nb::module_& m) {
 
     bindFrozen<DevelopState>(
         m, "DevelopState",
-        "Everything that says how one photograph is developed: its global settings now, per-image "
-        "edits later.",
-        field("settings", &DevelopState::settings));
+        "Everything that says how one photograph is developed: its global settings, and its local "
+        "adjustments (masks), a tuple of LocalAdjustment with ids, in the order they sum in. "
+        "`next_local_adjustment_id` is the id the next added mask takes; it never goes down.",
+        field("settings", &DevelopState::settings),
+        field("local_adjustments", &DevelopState::localAdjustments),
+        field("next_local_adjustment_id", &DevelopState::nextLocalAdjustmentId))
+        .def_prop_ro(
+            "local_adjustments",
+            [](const DevelopState& state) { return hashable(state.localAdjustments); },
+            nb::sig("def local_adjustments(self) -> tuple[LocalAdjustment, ...]"),
+            "The masked adjustments, in the order they sum in: a tuple of LocalAdjustment.");
 
     bindFrozen<SidecarContents>(
         m, "SidecarContents",
@@ -325,6 +421,73 @@ void bindPhoto(nb::module_& m) {
             "so crop_aspect then crop_rectangle differs from the reverse. Raises TypeError for "
             "an unknown keyword or a wrong type, and ValueError for a value the setting refuses "
             "or a geometry that does not fit the photograph's size.")
+        .def_prop_ro(
+            "local_adjustments",
+            [](const Photo& photo) { return hashable(photo.state().localAdjustments); },
+            nb::sig("def local_adjustments(self) -> tuple[LocalAdjustment, ...]"),
+            "The photograph's masked adjustments, ids included, in the order they sum in; the "
+            "same as `state.local_adjustments`.")
+        .def(
+            "add_linear_mask",
+            [](const Photo& photo, const CorrectedPoint& from, const CorrectedPoint& to,
+               const std::string& name, const nb::object& opacity, bool invert, bool enabled,
+               const nb::kwargs& deltas) {
+                return withMaskAdded(photo, LinearMask{from, to}, name, opacity, invert, enabled,
+                                     deltas);
+            },
+            "from_"_a, "to"_a, nb::kw_only(), "name"_a = "", "opacity"_a = nb::float_(1.0),
+            "invert"_a = false, "enabled"_a = true, "kwargs"_a,
+            nb::sig("def add_linear_mask(self, from_: tuple[float, float], to: tuple[float, "
+                    "float], *, name: str = '', opacity: float = 1.0, invert: bool = False, "
+                    "enabled: bool = True, **deltas: float) -> Photo"),
+            "Return a photograph with a linear (graduated) mask added last, so that it is "
+            "`local_adjustments[-1]`. `from_` and `to` are (u, v) points normalised to the "
+            "corrected frame; the weight is 1 at `from_` and 0 at `to`. The remaining keywords "
+            "are the mask's deltas by their snake_case names (relative_temperature, "
+            "relative_tint, exposure, contrast, highlights, shadows, whites, blacks, texture, "
+            "clarity, dehaze, saturation, vibrance), added to the global settings where the mask "
+            "has weight. Numbers out of range are clamped; a non-finite or degenerate one, a "
+            "full list (16) or an unknown keyword is refused (ValueError, TypeError).")
+        .def(
+            "add_radial_mask",
+            [](const Photo& photo, const CorrectedPoint& centre, const nb::object& radiusX,
+               const nb::object& radiusY, const nb::object& angle, const nb::object& feather,
+               const std::string& name, const nb::object& opacity, bool invert, bool enabled,
+               const nb::kwargs& deltas) {
+                const RadialMask mask{.centre = centre,
+                                      .radiusX = convertValue<float>(radiusX, "radius_x"),
+                                      .radiusY = convertValue<float>(radiusY, "radius_y"),
+                                      .angle = convertValue<float>(angle, "angle"),
+                                      .feather = convertValue<float>(feather, "feather")};
+                return withMaskAdded(photo, mask, name, opacity, invert, enabled, deltas);
+            },
+            "centre"_a, "radius_x"_a, "radius_y"_a, "angle"_a = nb::float_(0.0),
+            "feather"_a = nb::float_(0.5), nb::kw_only(), "name"_a = "",
+            "opacity"_a = nb::float_(1.0), "invert"_a = false, "enabled"_a = true, "kwargs"_a,
+            nb::sig("def add_radial_mask(self, centre: tuple[float, float], radius_x: float, "
+                    "radius_y: float, angle: float = 0.0, feather: float = 0.5, *, name: str = "
+                    "'', opacity: float = 1.0, invert: bool = False, enabled: bool = True, "
+                    "**deltas: float) -> Photo"),
+            "Return a photograph with a radial (oval) mask added last. `centre` is a (u, v) "
+            "point normalised to the corrected frame, the radii are in long-edge units, `angle` "
+            "turns the x radius towards +y in degrees, and `feather` is the soft edge's width "
+            "from 0 (hard) to 1. Keywords and errors are as for add_linear_mask.")
+        .def("with_local_adjustment", &withLocalChanged, "id"_a, "kwargs"_a,
+             nb::sig("def with_local_adjustment(self, id: int, **changes: typing.Any) -> Photo"),
+             "Return a photograph with the adjustment of that id changed. The keywords, applied "
+             "in the order given, are `name`, `enabled`, `invert`, `opacity`, `shape` (a "
+             "LinearMask or RadialMask of the kind the adjustment already has) and the deltas "
+             "by their snake_case names; numbers out of range are clamped. ValueError for an "
+             "unknown id or a shape of another kind, TypeError for an unknown keyword.")
+        .def(
+            "without_local_adjustment",
+            [](const Photo& photo, LocalAdjustmentId id) {
+                return Photo(photo.path(), photo.metadata(),
+                             withLocalAdjustmentRemoved(photo.state(), id), photo.marks());
+            },
+            "id"_a,
+            "Return a photograph without the adjustment of that id; its id is not reused. "
+            "ValueError for an unknown id.")
         .def(
             "load",
             [](const Photo& photo) {

@@ -1,7 +1,9 @@
 #include "EditSession.h"
 
+#include <LocalAdjustmentEdits.h>
 #include <Sidecar.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <stdexcept>
 #include <string>
@@ -120,6 +122,59 @@ void EditSession::discardChanges() {
     position_ = 0;
 }
 
+namespace {
+
+/// @brief Lists how the local adjustments of two states differ.
+LocalChange describeLocalChange(const DevelopState& before, const DevelopState& after) {
+    LocalChange change;
+    const auto holds = [](const DevelopState& state, LocalAdjustmentId id) {
+        return std::ranges::find(state.localAdjustments, id, &LocalAdjustment::id) !=
+               state.localAdjustments.end();
+    };
+    for (const LocalAdjustment& adjustment : before.localAdjustments) {
+        if (!holds(after, adjustment.id)) {
+            change.removed.push_back(adjustment.id);
+        }
+    }
+    std::vector<LocalAdjustmentId> orderAfter;
+    for (const LocalAdjustment& adjustment : after.localAdjustments) {
+        if (holds(before, adjustment.id)) {
+            orderAfter.push_back(adjustment.id);
+        } else {
+            change.added.push_back(adjustment.id);
+        }
+    }
+    std::vector<LocalAdjustmentId> orderBefore;
+    for (const LocalAdjustment& adjustment : before.localAdjustments) {
+        if (holds(after, adjustment.id)) {
+            orderBefore.push_back(adjustment.id);
+        }
+    }
+    change.reordered = orderBefore != orderAfter;
+    for (const LocalAdjustment& now : after.localAdjustments) {
+        const LocalAdjustment* was = findLocalAdjustment(before, now.id);
+        if (was == nullptr || *was == now) {
+            continue;
+        }
+        MaskChange mask;
+        mask.id = now.id;
+        mask.name = was->name != now.name;
+        mask.enabled = was->enabled != now.enabled;
+        mask.opacity = was->opacity != now.opacity;
+        mask.invert = was->invert != now.invert;
+        mask.shape = was->shape != now.shape;
+        for (const LocalDescriptor& descriptor : localAdjustmentDescriptors) {
+            if (was->deltas.*descriptor.member != now.deltas.*descriptor.member) {
+                mask.deltas.push_back(descriptor.key);
+            }
+        }
+        change.changed.push_back(std::move(mask));
+    }
+    return change;
+}
+
+} // namespace
+
 ChangeDescription arraw::describeChange(const DevelopState& before, const DevelopState& after) {
     ChangeDescription change;
     bool first = true;
@@ -149,5 +204,6 @@ ChangeDescription arraw::describeChange(const DevelopState& before, const Develo
     if (!oneGroup) {
         change.group.reset();
     }
+    change.local = describeLocalChange(before, after);
     return change;
 }

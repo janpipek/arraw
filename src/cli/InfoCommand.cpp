@@ -14,9 +14,12 @@
 #include <ExifInfo.h>
 #include <ImageImport.h>
 #include <ImageOrientation.h>
+#include <LocalAdjustmentEdits.h>
 #include <MarksFilter.h>
 #include <Photo.h>
 #include <SettingDescriptors.h>
+#include <SettingsJson.h>
+#include <ShortestDecimal.h>
 #include <Shot.h>
 #include <Sidecar.h>
 
@@ -445,6 +448,29 @@ std::vector<ListedSetting> listedSettings(const DevelopSettings& settings, bool 
     return listed;
 }
 
+/// @brief Writes the local adjustments of a state, one line each; nothing when it has none.
+void writeMasks(std::ostream& out, const DevelopState& state) {
+    if (state.localAdjustments.empty()) {
+        return;
+    }
+    out << "  local adjustments:\n";
+    for (const LocalAdjustment& mask : state.localAdjustments) {
+        out << "    " << cli::terminalText(displayedMaskName(state, mask.id)) << " ("
+            << maskTypeName(mask.shape) << "): " << (mask.enabled ? "enabled" : "disabled")
+            << ", opacity " << shortestText(shortestDouble(mask.opacity));
+        if (mask.invert) {
+            out << ", inverted";
+        }
+        for (const LocalDescriptor& descriptor : localAdjustmentDescriptors) {
+            const float delta = mask.deltas.*descriptor.member;
+            if (delta != 0.0F) {
+                out << ", " << descriptor.key << ' ' << shortestText(shortestDouble(delta));
+            }
+        }
+        out << '\n';
+    }
+}
+
 /// @brief Writes one file as lines of text.
 void writeText(std::ostream& out, const FileReport& report, bool all) {
     const Photo& photo = report.photo;
@@ -498,12 +524,13 @@ void writeText(std::ostream& out, const FileReport& report, bool all) {
         listedSettings(withoutUnusedSettings(photo.state().settings, isRaw(metadata)), all);
     if (listed.empty()) {
         out << "  develop settings: defaults\n";
-        return;
+    } else {
+        out << "  develop settings:\n";
+        for (const auto& [descriptor, value] : listed) {
+            out << "    " << descriptor->key << ": " << cli::terminalText(textOf(value)) << '\n';
+        }
     }
-    out << "  develop settings:\n";
-    for (const auto& [descriptor, value] : listed) {
-        out << "    " << descriptor->key << ": " << cli::terminalText(textOf(value)) << '\n';
-    }
+    writeMasks(out, photo.state());
 }
 
 /// @brief Spells one file as a JSON object.
@@ -546,7 +573,7 @@ std::string jsonOfReport(const FileReport& report, bool all) {
         text += jsonString(descriptor->key) + ": " + encodedToJson(value);
         first = false;
     }
-    return text + "}}";
+    return text + "}, \"localAdjustments\": " + localAdjustmentsToJson(photo.state()) + "}";
 }
 
 /// @brief Finds the sidecar beside a photograph, if it is a regular file.

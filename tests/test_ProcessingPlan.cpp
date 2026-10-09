@@ -209,6 +209,6 @@ TEST_CASE("The plan has one block per stage, and the pointwise blocks have no st
     /// without a line in stagesOf, or to curveInputFieldsOf's blocks without a
     /// look at it, fails here.
     STATIC_REQUIRE(test::fieldCount<ProcessingPlan> == stageCount);
-    STATIC_REQUIRE(test::fieldCount<PointwisePlan> == 6);
+    STATIC_REQUIRE(test::fieldCount<PointwisePlan> == 7);
     STATIC_REQUIRE(test::fieldCount<TonePlan> == 8);
 }

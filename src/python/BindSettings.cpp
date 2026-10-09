@@ -3,6 +3,7 @@
 #include <ColorGradingSettings.h>
 #include <DevelopSettings.h>
 #include <EffectsSettings.h>
+#include <LocalAdjustments.h>
 #include <NoiseReductionSettings.h>
 #include <PresenceSettings.h>
 #include <SettingDescriptors.h>
@@ -269,6 +270,47 @@ void bindSettings(nb::module_& m) {
         field("luminance_filter", &NoiseReductionSettings::luminanceFilter),
         field("color", &NoiseReductionSettings::color),
         field("color_smoothness", &NoiseReductionSettings::colorSmoothness));
+
+    bindFrozen<LinearMask, false>(
+        m, "LinearMask",
+        "A graduated fade between two points of the corrected frame, each (u, v) normalised to "
+        "the frame (0 to 1 across it; handles may lie outside, from -2 to 3). The weight is 1 at "
+        "`from_`, 0 at `to`, and smooth between; it is constant along lines perpendicular to "
+        "the one between them, measured in long-edge units so that a circle is a circle.",
+        field("from_", &LinearMask::from), field("to", &LinearMask::to));
+    bindFrozen<RadialMask, false>(
+        m, "RadialMask",
+        "An oval with a feathered edge. `centre` is (u, v) normalised to the frame; the radii are "
+        "in long-edge units (the longer side of the frame is 1); `angle` turns the x radius "
+        "towards +y in degrees (clockwise on screen); `feather` is the width of the soft edge, "
+        "0 (hard, one pixel) to 1 (from the centre).",
+        field("centre", &RadialMask::centre), field("radius_x", &RadialMask::radiusX),
+        field("radius_y", &RadialMask::radiusY), field("angle", &RadialMask::angle),
+        field("feather", &RadialMask::feather));
+    bindFrozen<LocalDeltas>(
+        m, "LocalDeltas",
+        "What a local adjustment adds to the global controls where its mask has full weight, in "
+        "the units of the global setting (stops for exposure, -100 to 100 for the rest; "
+        "relative_temperature and relative_tint have no global counterpart). 0 changes nothing.",
+        field("relative_temperature", &LocalDeltas::relativeTemperature),
+        field("relative_tint", &LocalDeltas::relativeTint),
+        field("exposure", &LocalDeltas::exposure), field("contrast", &LocalDeltas::contrast),
+        field("highlights", &LocalDeltas::highlights), field("shadows", &LocalDeltas::shadows),
+        field("whites", &LocalDeltas::whites), field("blacks", &LocalDeltas::blacks),
+        field("texture", &LocalDeltas::texture), field("clarity", &LocalDeltas::clarity),
+        field("dehaze", &LocalDeltas::dehaze), field("saturation", &LocalDeltas::saturation),
+        field("vibrance", &LocalDeltas::vibrance));
+    bindFrozen<LocalAdjustment>(
+        m, "LocalAdjustment",
+        "One masked adjustment: a LinearMask or RadialMask and the LocalDeltas added where it "
+        "applies, scaled by `opacity` (0 to 1) and, with `invert`, applied outside the mask "
+        "instead. `id` is the photograph's own identity for it, unique in its state and never "
+        "reused; a value built here carries 0 and gets its id when added with Photo.add_*_mask. "
+        "Adjustments are summed in list order; up to 16 per photograph.",
+        field("id", &LocalAdjustment::id), field("name", &LocalAdjustment::name),
+        field("enabled", &LocalAdjustment::enabled), field("opacity", &LocalAdjustment::opacity),
+        field("invert", &LocalAdjustment::invert), field("shape", &LocalAdjustment::shape),
+        field("deltas", &LocalAdjustment::deltas));
 
     m.def(
         "choose_grain_seed",

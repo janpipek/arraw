@@ -404,7 +404,7 @@ std::size_t inputCountOf(GpuPass pass) {
     case GpuPass::DenoiseCombine:
         return 3;
     case GpuPass::Pointwise:
-        return 6;
+        return 7;
     case GpuPass::ResizeAcross:
     case GpuPass::ResizeAcrossOpaque:
     case GpuPass::ResizeDownOpaque:

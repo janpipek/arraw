@@ -43,7 +43,7 @@ namespace {
 /// ::arraw::ResizePlan::opaque, scanned from the source, relies on this: were
 /// alpha ever changed here, it would no longer describe the developed pixels.
 /// @param chain What one colour goes through: developPixel, or a tap's prefix,
-/// called with the colour and the pixel's ::arraw::PixelContext.
+/// called with the pixel's column and row, its colour and its ::arraw::PixelContext.
 /// @param context The Presence context of @p source, or null when Presence is off.
 template <typename Sample, typename Chain>
 void developSamples(const ImageBuffer& source, ImageBuffer& result, const Chain& chain,
@@ -71,7 +71,7 @@ void developSamples(const ImageBuffer& source, ImageBuffer& result, const Chain&
 
                 const PixelContext around = sampler ? sampler->at(x) : PixelContext{};
                 const Colour developed =
-                    chain({toUnit(in[0]), toUnit(in[1]), toUnit(in[2])}, around);
+                    chain(x, y, {toUnit(in[0]), toUnit(in[1]), toUnit(in[2])}, around);
                 out[0] = developed[0];
                 out[1] = developed[1];
                 out[2] = developed[2];
@@ -119,10 +119,15 @@ ImageBuffer runPointwise(const ImageBuffer& source, const PointwisePlan& plan, c
 
 /// @brief The whole chain, as the traversal calls it.
 ///
-/// The amounts every pixel has are worked out here, once for the render.
+/// The amounts every pixel has are worked out here, once for the render; a plan with masks
+/// resolves them for each pixel instead (::arraw::amountsAt).
 auto developChain(const PointwisePlan& plan) {
-    return [&plan, amounts = globalAmountsOf(plan)](Colour colour, const PixelContext& context) {
-        return developPixel(plan, amounts, colour, context);
+    return [&plan, amounts = globalAmountsOf(plan)](std::uint32_t x, std::uint32_t y, Colour colour,
+                                                    const PixelContext& context) {
+        if (plan.local.empty()) {
+            return developPixel(plan, amounts, colour, context);
+        }
+        return developPixel(plan, amountsAt(plan, x, y), colour, context);
     };
 }
 
@@ -257,12 +262,17 @@ private:
     /// @brief Runs the pointwise chain, or a tap's prefix of it.
     ImageBuffer pointwise(const ImageBuffer& input, const ProcessingPlan& plan) const {
         if (tap) {
-            return runPointwise(input, plan.pointwise,
-                                [&pointwise = plan.pointwise,
-                                 amounts = globalAmountsOf(plan.pointwise),
-                                 tap = *tap](Colour colour, const PixelContext& context) {
-                                    return developToTap(pointwise, amounts, colour, tap, context);
-                                });
+            return runPointwise(
+                input, plan.pointwise,
+                [&pointwise = plan.pointwise, amounts = globalAmountsOf(plan.pointwise),
+                 tap = *tap](std::uint32_t x, std::uint32_t y, Colour colour,
+                             const PixelContext& context) {
+                    if (pointwise.local.empty()) {
+                        return developToTap(pointwise, amounts, colour, tap, context);
+                    }
+                    return developToTap(pointwise, amountsAt(pointwise, x, y), colour, tap,
+                                        context);
+                });
         }
         const detail::TimingSpan timing("cpu.pointwise");
         return runPointwise(input, plan.pointwise, developChain(plan.pointwise));

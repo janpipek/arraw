@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <system_error>
 #include <vector>
 
@@ -82,7 +83,19 @@ std::optional<std::string> ThumbnailCache::embeddedKey(const fs::path& file) {
 std::optional<std::string> ThumbnailCache::developedKey(const fs::path& file,
                                                         const DevelopState& state) {
     // The one place that lists what a developed thumbnail depends on beyond the file.
-    return hashKey('d', file, settingsToJson(state.settings));
+    std::string ingredients = settingsToJson(state.settings);
+    if (!state.localAdjustments.empty()) {
+        // Only when there are masks, so the keys of mask-free photographs stay what they were.
+        // The counter does not change the picture, so it is replaced by the smallest valid one.
+        DevelopState masked = state;
+        std::uint32_t next = 1;
+        for (const LocalAdjustment& mask : masked.localAdjustments) {
+            next = std::max(next, mask.id.value + 1);
+        }
+        masked.nextLocalAdjustmentId = LocalAdjustmentId{next};
+        ingredients += localAdjustmentsToJson(masked);
+    }
+    return hashKey('d', file, ingredients);
 }
 
 fs::path ThumbnailCache::pathOf(const std::string& key) const {

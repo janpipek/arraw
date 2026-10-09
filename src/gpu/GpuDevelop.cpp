@@ -190,18 +190,18 @@ struct DevicePresence {
     DeviceImage fine;
     DeviceImage coarse;
     DeviceImage coarseCells;
-    DeviceImage haze;
+    DeviceImage hazeFloor;
+    DeviceImage hazeMean;
 };
 
 /// @brief Computes the Presence context of the pointwise pass's input on a device.
 ///
-/// Texture's base from its own cells; Clarity's base and Dehaze's from one
-/// reduction to the coarse cells, which Clarity and a positive Dehaze also read
-/// unblurred.
+/// Texture's base from its own cells; Clarity's base and Dehaze's floor and mean from one
+/// reduction to the coarse cells, which Clarity and the floor also read unblurred.
 DevicePresence presenceOnGpu(GpuContext& context, const DeviceImage& input,
                              const PresencePlan& plan) {
     const ImageSize size = input.size();
-    DevicePresence result{input, input, input, input};
+    DevicePresence result{input, input, input, input, input};
     // One unit a render: a reduction for each cell, and each base's steps.
     const auto baseRenders = [](const PresenceBase& base) {
         return base.window == 0 ? 2U : 8U + base.reconstruction + 2U;
@@ -210,9 +210,11 @@ DevicePresence presenceOnGpu(GpuContext& context, const DeviceImage& input,
     if (plan.fine.active()) {
         renders += 1 + baseRenders(plan.fine);
     }
-    if (plan.coarse.active() || plan.haze.active()) {
+    const bool coarseCellsNeeded = plan.coarse.active() || plan.hazeActive();
+    if (coarseCellsNeeded) {
         renders += 1 + (plan.coarse.active() ? baseRenders(plan.coarse) : 0U) +
-                   (plan.haze.active() ? baseRenders(plan.haze) : 0U);
+                   (plan.hazeFloor.active() ? baseRenders(plan.hazeFloor) : 0U) +
+                   (plan.hazeMean.active() ? baseRenders(plan.hazeMean) : 0U);
     }
     const detail::ProgressSpan progress(ProgressStep::Context, renders);
     if (plan.fine.active()) {
@@ -220,18 +222,24 @@ DevicePresence presenceOnGpu(GpuContext& context, const DeviceImage& input,
             presenceStepOnGpu(context, plan, plan.fine, size, PresenceStep::Reduce, input);
         result.fine = presenceBaseOnGpu(context, cells, plan, plan.fine, size);
     }
-    if (plan.coarse.active() || plan.haze.active()) {
-        const PresenceBase& shared = plan.coarse.active() ? plan.coarse : plan.haze;
+    if (coarseCellsNeeded) {
+        // The bases share the cells, so any of them gives the reduction.
+        const PresenceBase& shared = plan.coarse.active()      ? plan.coarse
+                                     : plan.hazeFloor.active() ? plan.hazeFloor
+                                                               : plan.hazeMean;
         const DeviceImage cells =
             presenceStepOnGpu(context, plan, shared, size, PresenceStep::Reduce, input);
         if (plan.coarse.active()) {
             result.coarse = presenceBaseOnGpu(context, cells, plan, plan.coarse, size);
         }
-        if (plan.coarse.active() || plan.haze.window != 0) {
+        if (plan.coarse.active() || plan.hazeFloor.active()) {
             result.coarseCells = cells;
         }
-        if (plan.haze.active()) {
-            result.haze = presenceBaseOnGpu(context, cells, plan, plan.haze, size);
+        if (plan.hazeFloor.active()) {
+            result.hazeFloor = presenceBaseOnGpu(context, cells, plan, plan.hazeFloor, size);
+        }
+        if (plan.hazeMean.active()) {
+            result.hazeMean = presenceBaseOnGpu(context, cells, plan, plan.hazeMean, size);
         }
     }
     return result;
@@ -296,8 +304,9 @@ DeviceImage pointwiseOnGpu(GpuContext& context, const DeviceImage& image,
     // the pass runs, rather than kept with a checkpoint (ADR 041); with
     // Presence off nothing is rendered and the image stands in for every grid.
     const DevicePresence around = presenceOnGpu(context, image, plan.pointwise.presence);
-    const std::array inputs{image,      curves, around.fine, around.coarse, around.coarseCells,
-                            around.haze};
+    const std::array inputs{
+        image,          curves, around.fine, around.coarse, around.coarseCells, around.hazeFloor,
+        around.hazeMean};
     const detail::ProgressSpan progress(ProgressStep::Pointwise, 1);
     return context.render(GpuPass::Pointwise, bytesOf(pointwise), inputs, image.size(),
                           workingEncoding);

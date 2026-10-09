@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Fixtures.h"
+#include "LocalAdjustmentStates.h"
 #include "TestImages.h"
 
 #include <ColorEncoding.h>
@@ -157,6 +158,75 @@ struct DigestRequest {
         orientation(settings);
         effects(settings);
     });
+    return states;
+}
+
+/// @brief Builds the states of the matrix that carry local adjustments (ADR 044).
+///
+/// Kept apart from ::arraw::digestStates, whose lines must not change, and written after them,
+/// so that a digest from before the masks existed is a prefix of one from after.
+[[nodiscard]] inline std::vector<DigestState> digestMaskStates() {
+    std::vector<DigestState> states;
+    const auto add = [&](const char* name, DevelopSettings settings,
+                         const std::vector<LocalAdjustment>& masks) {
+        DevelopState state{settings};
+        for (const LocalAdjustment& mask : masks) {
+            state = withLocalAdjustmentAdded(std::move(state), mask);
+        }
+        states.push_back({name, std::move(state)});
+    };
+    const auto mask = [](Mask shape, auto&& deltas, float opacity = 1.0F, bool invert = false) {
+        LocalAdjustment adjustment;
+        adjustment.shape = std::move(shape);
+        adjustment.opacity = opacity;
+        adjustment.invert = invert;
+        deltas(adjustment.deltas);
+        return adjustment;
+    };
+    const LinearMask linear{.from = {0.2F, 0.1F}, .to = {0.35F, 0.8F}};
+    const RadialMask radial{.centre = {0.4F, 0.6F},
+                            .radiusX = 0.3F,
+                            .radiusY = 0.15F,
+                            .angle = 30.0F,
+                            .feather = 0.25F};
+
+    add("mask-linear-tone", {}, {mask(linear, [](LocalDeltas& deltas) {
+            deltas.exposure = 0.8F;
+            deltas.contrast = 25.0F;
+            deltas.shadows = 40.0F;
+            deltas.highlights = -30.0F;
+            deltas.blacks = -20.0F;
+            deltas.whites = 15.0F;
+        })});
+    add("mask-radial-colour", {},
+        {mask(
+            radial,
+            [](LocalDeltas& deltas) {
+                deltas.relativeTemperature = 60.0F;
+                deltas.relativeTint = -30.0F;
+                deltas.saturation = 35.0F;
+                deltas.vibrance = 40.0F;
+            },
+            0.8F, true)});
+    DevelopSettings presence;
+    presence.presence = {.texture = 10.0F, .clarity = 0.0F, .dehaze = 20.0F};
+    add("mask-presence", presence,
+        {mask(radial,
+              [](LocalDeltas& deltas) {
+                  deltas.texture = 40.0F;
+                  deltas.clarity = 50.0F;
+                  deltas.dehaze = -70.0F;
+              }),
+         mask(linear, [](LocalDeltas& deltas) { deltas.dehaze = 60.0F; })});
+    DevelopSettings everything;
+    everything.tone.exposure = 0.3F;
+    everything.color.saturation = 15.0F;
+    everything.presence = {.texture = 20.0F, .clarity = -10.0F, .dehaze = 0.0F};
+    everything.geometry.straighten = 7.5;
+    everything.geometry.crop.rectangle = UprightCropRect{0.1, 0.1, 0.9, 0.85};
+    add("mask-everything", everything,
+        {mask(linear, [](LocalDeltas& deltas) { giveEveryDelta(deltas); }),
+         mask(radial, [](LocalDeltas& deltas) { giveEveryDelta(deltas); }, 0.6F, true)});
     return states;
 }
 

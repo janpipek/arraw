@@ -1,5 +1,6 @@
 #include "Sidecar.h"
 
+#include "LocalAdjustmentCodec.h"
 #include "RawImport.h"
 #include "SettingCodec.h"
 
@@ -20,6 +21,7 @@
 #include <cctype>
 #include <charconv>
 #include <cmath>
+#include <limits>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -535,6 +537,136 @@ void readVersion(const std::vector<QDomElement>& descriptions, DiagnosticLog& lo
     }
 }
 
+/// @brief Whether a key is one of the three properties that hold the local adjustments.
+bool isLocalAdjustmentProperty(std::string_view key) {
+    return key == "localAdjustments" || key == "localAdjustmentsVersion" ||
+           key == "nextLocalAdjustmentId";
+}
+
+/// @brief Reads a field's text as every value it could stand for.
+FieldValue fieldOfText(const QString& raw) {
+    FieldValue field;
+    field.text = raw.toStdString();
+    const QString trimmed = raw.trimmed();
+    field.number = numberIn(trimmed);
+    if (trimmed.compare("True"_L1, Qt::CaseInsensitive) == 0) {
+        field.flag = true;
+    } else if (trimmed.compare("False"_L1, Qt::CaseInsensitive) == 0) {
+        field.flag = false;
+    }
+    return field;
+}
+
+/// @brief Gathers the fields of a mask from an element, in any of RDF's equivalent spellings:
+/// attributes of the element, child elements, and the same inside a nested `rdf:Description`.
+void gatherFields(const QDomElement& holder, const QString& arrawNs, MaskFields& into) {
+    const auto add = [&](const QString& local, FieldValue value) {
+        const std::string key = local.toStdString();
+        switch (partOfKey(key)) {
+        case FieldPart::Top:
+            into.top.emplace_back(key, std::move(value));
+            break;
+        case FieldPart::Geometry:
+            into.geometry.emplace_back(key, std::move(value));
+            break;
+        case FieldPart::Delta:
+            into.deltas.emplace_back(key, std::move(value));
+            break;
+        }
+    };
+    const QDomNamedNodeMap attributes = holder.attributes();
+    QStringList names;
+    for (int i = 0; i < attributes.size(); ++i) {
+        names.push_back(attributes.item(i).nodeName());
+    }
+    names.sort();
+    for (const QString& name : names) {
+        const auto [prefix, local] = splitName(name);
+        if (!prefix.isEmpty() && prefix != "xmlns"_L1 && namespaceOf(holder, prefix) == arrawNs) {
+            add(local, fieldOfText(holder.attribute(name)));
+        }
+    }
+    for (QDomElement child = holder.firstChildElement(); !child.isNull();
+         child = child.nextSiblingElement()) {
+        const Resolved name = resolved(child);
+        if (name.ns == rdfNamespace && name.local == "Description"_L1) {
+            gatherFields(child, arrawNs, into);
+        } else if (name.ns == arrawNs) {
+            if (child.firstChildElement().isNull()) {
+                add(name.local, fieldOfText(child.text()));
+            } else {
+                FieldValue structured;
+                structured.structured = true;
+                add(name.local, std::move(structured));
+            }
+        }
+    }
+}
+
+/// @brief Reads the masks and the counter a description holds, with the version they declare.
+///
+/// @return Whether the sidecar holds the list in any of its three properties.
+bool readLocalAdjustmentsIn(const std::vector<QDomElement>& descriptions, DevelopState& state,
+                            DiagnosticLog& log, const std::filesystem::path& subject) {
+    const auto lists = occurrencesOf(descriptions, arrawProperty("localAdjustments"));
+    const auto versions = occurrencesOf(descriptions, arrawProperty("localAdjustmentsVersion"));
+    const auto counters = occurrencesOf(descriptions, arrawProperty("nextLocalAdjustmentId"));
+    if (lists.empty() && versions.empty() && counters.empty()) {
+        return false;
+    }
+    if (!versions.empty()) {
+        const auto version =
+            versions.back().simple ? integerIn(versions.back().text) : std::nullopt;
+        if (!version || *version < 1) {
+            reportUnreadable("localAdjustmentsVersion", "an integer of at least 1", log, subject);
+        } else if (*version > localAdjustmentsVersion) {
+            log.record({.notice = Notice::NewerLocalAdjustmentsVersion,
+                        .severity = Severity::Warning,
+                        .subject = subject,
+                        .values = {static_cast<double>(*version),
+                                   static_cast<double>(localAdjustmentsVersion)}});
+        }
+    }
+    std::optional<double> stored;
+    if (!counters.empty()) {
+        stored = counters.back().simple ? numberIn(counters.back().text) : std::nullopt;
+        if (!stored) {
+            stored = std::numeric_limits<double>::quiet_NaN();
+        }
+    }
+    std::vector<MaskFields> entries;
+    if (!lists.empty()) {
+        const QString arrawNs = arrawProperty("").ns;
+        const QDomElement property = lists.back().element;
+        QDomElement sequence;
+        if (!property.isNull()) {
+            for (QDomElement child = property.firstChildElement(); !child.isNull();
+                 child = child.nextSiblingElement()) {
+                if (isNamed(child, rdfNamespace, "Seq"_L1)) {
+                    sequence = child;
+                    break;
+                }
+            }
+        }
+        if (sequence.isNull()) {
+            reportUnreadable("localAdjustments", "a sequence of masks", log, subject);
+        } else {
+            for (QDomElement item = sequence.firstChildElement(); !item.isNull();
+                 item = item.nextSiblingElement()) {
+                if (isNamed(item, rdfNamespace, "li"_L1)) {
+                    MaskFields fields;
+                    gatherFields(item, arrawNs, fields);
+                    entries.push_back(std::move(fields));
+                }
+            }
+        }
+    }
+    ReadLocalAdjustments read = readLocalAdjustments(entries, stored, log, subject);
+    state.localAdjustments = std::move(read.adjustments);
+    state.nextLocalAdjustmentId = read.next;
+    return true;
+}
+
 /// @brief Reports every `arraw:` property that is not a setting arraw knows.
 void readUnknownKeys(const std::vector<QDomElement>& descriptions, DiagnosticLog& log,
                      const std::filesystem::path& subject) {
@@ -542,7 +674,8 @@ void readUnknownKeys(const std::vector<QDomElement>& descriptions, DiagnosticLog
     for (const QDomElement& description : descriptions) {
         for (const Resolved& property : propertiesOf(description)) {
             const std::string key = property.local.toStdString();
-            if (property.ns == ns && key != "version" && findDescriptor(key) == nullptr) {
+            if (property.ns == ns && key != "version" && !isLocalAdjustmentProperty(key) &&
+                findDescriptor(key) == nullptr) {
                 log.record({.notice = Notice::SettingUnknown,
                             .severity = Severity::Warning,
                             .subject = subject,
@@ -706,6 +839,7 @@ std::optional<SidecarContents> arraw::readSidecar(const std::filesystem::path& p
             reportMalformed(descriptor, log, photo);
         }
     }
+    recorded = readLocalAdjustmentsIn(descriptions, state, log, photo) || recorded;
     if (recorded) {
         contents.state = std::move(state);
     }
@@ -717,6 +851,76 @@ std::optional<SidecarContents> arraw::readSidecar(const std::filesystem::path& p
 }
 
 namespace {
+
+/// @brief Reads the version of the local adjustment list a sidecar declares; nothing when it
+/// declares none or one that is unreadable.
+std::optional<int> listVersionIn(const std::vector<QDomElement>& descriptions) {
+    const auto found = occurrencesOf(descriptions, arrawProperty("localAdjustmentsVersion"));
+    if (found.empty() || !found.back().simple) {
+        return std::nullopt;
+    }
+    const auto version = integerIn(found.back().text);
+    return version && *version >= 1 ? version : std::nullopt;
+}
+
+/// @brief Spells a written value as the text of an XMP field.
+QString spellWritten(const WrittenValue& value) {
+    struct Speller {
+        QString operator()(bool flag) const {
+            return flag ? "True"_L1 : "False"_L1;
+        }
+        QString operator()(double number) const {
+            char buffer[64];
+            const auto written = std::to_chars(buffer, buffer + sizeof buffer, number);
+            return QString::fromLatin1(buffer, written.ptr - buffer);
+        }
+        QString operator()(const std::string& text) const {
+            return QString::fromStdString(text);
+        }
+    };
+    return std::visit(Speller{}, value);
+}
+
+/// @brief Writes the local adjustments, their counter and their version, or removes all three.
+///
+/// A state with no masks and a fresh counter leaves no trace, so every written state reads back
+/// equal. The list is an `rdf:Seq` of `rdf:li rdf:parseType="Resource"` structures, which is a
+/// child element of the description and so not an attribute like the settings.
+void setLocalAdjustments(const std::vector<QDomElement>& descriptions, QDomElement home,
+                         const DevelopState& state) {
+    const bool needed = !state.localAdjustments.empty() || state.nextLocalAdjustmentId.value > 1;
+    const Property listProperty = arrawProperty("localAdjustments");
+    setProperty(descriptions, home, listProperty, std::nullopt);
+    setProperty(descriptions, home, arrawProperty("localAdjustmentsVersion"),
+                needed ? std::optional{QString::number(localAdjustmentsVersion)} : std::nullopt);
+    setProperty(descriptions, home, arrawProperty("nextLocalAdjustmentId"),
+                needed ? std::optional{QString::number(state.nextLocalAdjustmentId.value)}
+                       : std::nullopt);
+    if (!needed) {
+        return;
+    }
+    QDomDocument document = home.ownerDocument();
+    const QString arrawPrefix = prefixOn(home, listProperty);
+    const QString rdfPrefix = prefixOn(home, {QString(rdfNamespace), "rdf"_L1, QString()});
+    QDomElement list = document.createElement(arrawPrefix + ":localAdjustments");
+    QDomElement sequence = document.createElement(rdfPrefix + ":Seq");
+    for (const LocalAdjustment& adjustment : state.localAdjustments) {
+        QDomElement item = document.createElement(rdfPrefix + ":li");
+        item.setAttribute(rdfPrefix + ":parseType", "Resource"_L1);
+        const WrittenMask written = writtenForm(adjustment);
+        for (const WrittenFields* fields : {&written.top, &written.geometry, &written.deltas}) {
+            for (const auto& [key, value] : *fields) {
+                QDomElement field =
+                    document.createElement(arrawPrefix + ':' + QString::fromStdString(key));
+                field.appendChild(document.createTextNode(spellWritten(value)));
+                item.appendChild(field);
+            }
+        }
+        sequence.appendChild(item);
+    }
+    list.appendChild(sequence);
+    home.appendChild(list);
+}
 
 /// @brief Edits or creates the sidecar of a photograph.
 /// @param photo Path of the photograph.
@@ -744,6 +948,14 @@ void writeSidecarFor(const std::filesystem::path& photo, const DevelopState* sta
                                  std::to_string(sidecarVersion) +
                                  " this arraw writes, so it was left alone");
     }
+    // Reading dropped what it did not understand, so writing the list back would destroy it.
+    if (const auto listVersion = listVersionIn(descriptions);
+        listVersion && *listVersion > localAdjustmentsVersion) {
+        throw std::runtime_error(
+            "sidecar " + path.string() + " holds local adjustments of version " +
+            std::to_string(*listVersion) + ", newer than the " +
+            std::to_string(localAdjustmentsVersion) + " this arraw writes, so it was left alone");
+    }
     declareUtf8(document);
     if (descriptions.empty()) {
         const QString prefix = splitName(packets.front().tagName()).first;
@@ -769,6 +981,7 @@ void writeSidecarFor(const std::filesystem::path& photo, const DevelopState* sta
             setProperty(descriptions, home, arrawProperty(descriptor.key),
                         spell(encode(descriptor, state->settings)));
         }
+        setLocalAdjustments(descriptions, home, *state);
     }
     // Marks are standard XMP that other tools write too, and some of what they
     // write is no mark arraw has (a rating of 9, a label named "Rot"). So a mark

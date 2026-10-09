@@ -1,6 +1,7 @@
 #include "GpuPlan.h"
 
 #include "GeometryPlan.h"
+#include "LocalPlan.h"
 #include "ProcessingPlan.h"
 #include "ResampleWeights.h"
 #include "ToneCurve.h"
@@ -191,6 +192,34 @@ GpuPointwiseBlock packPointwise(const PointwisePlan& plan, ImageSize source, Poi
             presenceGridSize(PresenceBase{.reduction = presence.coarseReduction()}, source);
         block.fineGridSize = {fine.width, fine.height};
         block.coarseGridSize = {coarse.width, coarse.height};
+    }
+    // Which bases have grids: a control whose base is absent is never read (ADR 044, section 5).
+    std::uint32_t flags = 0;
+    flags |= presence.fine.active() ? static_cast<std::uint32_t>(GpuLocalFlag::FineBase) : 0U;
+    flags |= presence.coarse.active() ? static_cast<std::uint32_t>(GpuLocalFlag::CoarseBase) : 0U;
+    flags |= presence.hazeFloor.active() ? static_cast<std::uint32_t>(GpuLocalFlag::HazeFloor) : 0U;
+    flags |= presence.hazeMean.active() ? static_cast<std::uint32_t>(GpuLocalFlag::HazeMean) : 0U;
+
+    const LocalPlan& local = plan.local;
+    if (local.masks.size() > gpuLocalMaskCapacity) {
+        throw std::invalid_argument("A pointwise block holds at most sixteen masks");
+    }
+    block.localHeader = {static_cast<std::uint32_t>(local.masks.size()), local.touched, flags, 0U};
+    std::copy(local.global.begin(), local.global.end(), block.localGlobal.begin());
+    for (std::size_t index = 0; index < local.masks.size(); ++index) {
+        const LocalMaskPlan& mask = local.masks[index];
+        GpuLocalMask& packed = block.local[index];
+        packed.header = {static_cast<std::uint32_t>(mask.kind), mask.invert ? 1U : 0U, 0U, 0U};
+        switch (mask.kind) {
+        case LocalMaskKind::Linear:
+            packed.shapeA = {mask.alpha, mask.beta, mask.gamma, 0.0F};
+            break;
+        case LocalMaskKind::Radial:
+            packed.shapeA = {mask.centreX, mask.centreY, mask.inner, 0.0F};
+            packed.shapeB = mask.matrix;
+            break;
+        }
+        std::copy(mask.k.begin(), mask.k.end(), packed.k.begin());
     }
     block.probe = static_cast<std::uint32_t>(probe);
     return block;

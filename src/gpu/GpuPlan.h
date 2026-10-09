@@ -6,6 +6,7 @@
 
 #include <Develop.h>
 #include <ImageBuffer.h>
+#include <LocalAdjustments.h>
 
 #include <array>
 #include <cstddef>
@@ -27,8 +28,8 @@ struct ToneCurvePlan;
 /// are stable identifiers shared with the shader, not the order of the
 /// pipeline: the tone curves (5) run before the shoulder (4).
 enum class PointwiseProbe : std::uint32_t {
-    Developed = 0,     ///< The whole chain: what development writes.
-    AfterMatrix = 1,   ///< After the source-to-working transform.
+    Developed = 0,   ///< The whole chain: what development writes.
+    AfterMatrix = 1, ///< After the source-to-working transform and the local Temperature and Tint.
     AfterExposure = 2, ///< After the exposure gain.
     AfterTone = 3,     ///< After the tone controls, before the tone curves: the curve input tap.
     AfterShoulder = 4, ///< After the shoulder, before the colour controls.
@@ -53,6 +54,47 @@ enum class PointwiseProbe : std::uint32_t {
 /// @param probe Probe to ask about.
 /// @return `true` for every probe at or after the tone curves; `false` for those before.
 [[nodiscard]] bool probeReadsCurves(PointwiseProbe probe);
+
+/// @brief Most masks the pointwise block holds: ::arraw::maximumLocalAdjustments.
+inline constexpr std::size_t gpuLocalMaskCapacity = maximumLocalAdjustments;
+
+/// @brief Which of the Presence context's bases a pointwise block has grids for.
+///
+/// The bits of the local header's third word (ADR 044, sections 5 and 7). A control whose base
+/// does not exist at a pixel is never read, whatever its amount rounded to. The shader's
+/// `localFlag...` constants carry the same numbers.
+enum class GpuLocalFlag : std::uint32_t {
+    FineBase = 1,   ///< Texture's base exists.
+    CoarseBase = 2, ///< Clarity's base exists.
+    HazeFloor = 4,  ///< Dehaze's floor exists.
+    HazeMean = 8,   ///< Dehaze's mean exists.
+};
+
+/// @brief One mask of the pointwise block, byte for byte as std140 lays it out: 112 bytes.
+///
+/// Mirrors ::arraw::LocalMaskPlan member for member; `src/gpu/shaders/develop.frag` declares
+/// the same struct. The coverage words are for brush masks, which a later step adds; both are
+/// zero for linear and radial masks.
+struct GpuLocalMask {
+    /// @brief Shape (::arraw::LocalMaskKind), invert (0 or 1), coverage texture, coverage channel.
+    std::array<std::uint32_t, 4> header{};
+
+    /// @brief Linear: `alpha, beta, gamma, 0`. Radial: `centreX, centreY, inner, 0`.
+    std::array<float, 4> shapeA{};
+
+    /// @brief Radial: the matrix, row-major. Linear: zero.
+    std::array<float, 4> shapeB{};
+
+    /// @brief `opacity * delta` of each local control in the table's order, as four `vec4`s;
+    /// thirteen of the sixteen floats are used.
+    std::array<float, 16> k{};
+};
+
+static_assert(offsetof(GpuLocalMask, header) == 0);
+static_assert(offsetof(GpuLocalMask, shapeA) == 16);
+static_assert(offsetof(GpuLocalMask, shapeB) == 32);
+static_assert(offsetof(GpuLocalMask, k) == 48);
+static_assert(sizeof(GpuLocalMask) == 112);
 
 /// @brief The pointwise chain's uniform block, byte for byte as std140 lays it out.
 ///
@@ -176,7 +218,7 @@ struct GpuPointwiseBlock {
 
     /// @brief Whether Texture, Clarity or Dehaze does anything: 0 or 1.
     ///
-    /// The grids travel in four more inputs (bindings 3 to 6); a flag that is 0
+    /// The grids travel in five more inputs (bindings 3 to 7); a flag that is 0
     /// keeps the shader from reading them.
     std::uint32_t presence = 0;
 
@@ -193,7 +235,7 @@ struct GpuPointwiseBlock {
     std::uint32_t fineReduction = 0;
 
     /// @brief Source pixels per cell of the coarse grids Clarity and Dehaze share; zero when
-    /// both are off. Which of them the shader reads, the amounts say.
+    /// none is on. Which of them the shader reads, the local header's flags and the amounts say.
     std::uint32_t coarseReduction = 0;
 
     /// @brief Width and height of Texture's base.
@@ -202,8 +244,22 @@ struct GpuPointwiseBlock {
     /// @brief Width and height of the coarse grids.
     std::array<std::uint32_t, 2> coarseGridSize{};
 
-    /// @brief Rounds the block up to a whole `vec4`.
+    /// @brief Rounds the Presence scalars up to a whole `vec4`.
     std::array<std::uint32_t, 2> presencePadding{};
+
+    /// @brief The local adjustments' header, one `uvec4` (ADR 044, section 7): the number of
+    /// masks, the touched controls' bits (::arraw::LocalPlan::touched), the ::arraw::GpuLocalFlag
+    /// bits, and a word of padding.
+    ///
+    /// A count of zero is the global chain: the shader reads nothing below.
+    std::array<std::uint32_t, 4> localHeader{};
+
+    /// @brief The photograph's own value of each local control, in setting units and the local
+    /// table's order (::arraw::LocalPlan::global); thirteen of the sixteen floats are used.
+    std::array<float, 16> localGlobal{};
+
+    /// @brief The masks, in the order they sum in; the first `localHeader[0]` are used.
+    std::array<GpuLocalMask, gpuLocalMaskCapacity> local{};
 };
 
 static_assert(offsetof(GpuPointwiseBlock, toWorking) == 0);
@@ -248,7 +304,11 @@ static_assert(offsetof(GpuPointwiseBlock, fineReduction) == 352);
 static_assert(offsetof(GpuPointwiseBlock, coarseReduction) == 356);
 static_assert(offsetof(GpuPointwiseBlock, fineGridSize) == 360);
 static_assert(offsetof(GpuPointwiseBlock, coarseGridSize) == 368);
-static_assert(sizeof(GpuPointwiseBlock) == 384);
+static_assert(offsetof(GpuPointwiseBlock, presencePadding) == 376);
+static_assert(offsetof(GpuPointwiseBlock, localHeader) == 384);
+static_assert(offsetof(GpuPointwiseBlock, localGlobal) == 400);
+static_assert(offsetof(GpuPointwiseBlock, local) == 464);
+static_assert(sizeof(GpuPointwiseBlock) == 2256);
 
 /// @brief Widest output, in pixels per side, that the geometry block can address exactly.
 ///

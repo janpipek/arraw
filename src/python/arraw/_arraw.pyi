@@ -4,7 +4,7 @@ from collections.abc import Callable, Sequence, Set
 import enum
 import os
 import pathlib
-from typing import Annotated, overload
+from typing import Annotated, Any, overload
 
 import numpy
 from numpy.typing import NDArray
@@ -895,6 +895,152 @@ class NoiseReductionSettings:
     def replace(self, **kwargs) -> NoiseReductionSettings:
         """Return a copy with the given attributes replaced."""
 
+class LinearMask:
+    """
+    A graduated fade between two points of the corrected frame, each (u, v) normalised to the frame (0 to 1 across it; handles may lie outside, from -2 to 3). The weight is 1 at `from_`, 0 at `to`, and smooth between; it is constant along lines perpendicular to the one between them, measured in long-edge units so that a circle is a circle.
+    """
+
+    def __init__(self, from_: tuple[float, float] | None = None, to: tuple[float, float] | None = None) -> None: ...
+
+    @property
+    def to(self) -> tuple[float, float]: ...
+
+    def __eq__(self, arg: LinearMask, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> LinearMask:
+        """Return a copy with the given attributes replaced."""
+
+    @property
+    def from_(self) -> tuple[float, float]:
+        """Where the weight is 1: a (u, v) point normalised to the corrected frame."""
+
+class RadialMask:
+    """
+    An oval with a feathered edge. `centre` is (u, v) normalised to the frame; the radii are in long-edge units (the longer side of the frame is 1); `angle` turns the x radius towards +y in degrees (clockwise on screen); `feather` is the width of the soft edge, 0 (hard, one pixel) to 1 (from the centre).
+    """
+
+    def __init__(self, centre: tuple[float, float] | None = None, radius_x: float | None = 0.25, radius_y: float | None = 0.25, angle: float | None = 0.0, feather: float | None = 0.5) -> None: ...
+
+    @property
+    def centre(self) -> tuple[float, float]: ...
+
+    @property
+    def radius_x(self) -> float: ...
+
+    @property
+    def radius_y(self) -> float: ...
+
+    @property
+    def angle(self) -> float: ...
+
+    @property
+    def feather(self) -> float: ...
+
+    def __eq__(self, arg: RadialMask, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> RadialMask:
+        """Return a copy with the given attributes replaced."""
+
+class LocalDeltas:
+    """
+    What a local adjustment adds to the global controls where its mask has full weight, in the units of the global setting (stops for exposure, -100 to 100 for the rest; relative_temperature and relative_tint have no global counterpart). 0 changes nothing.
+    """
+
+    def __init__(self, *, relative_temperature: float | None = 0.0, relative_tint: float | None = 0.0, exposure: float | None = 0.0, contrast: float | None = 0.0, highlights: float | None = 0.0, shadows: float | None = 0.0, whites: float | None = 0.0, blacks: float | None = 0.0, texture: float | None = 0.0, clarity: float | None = 0.0, dehaze: float | None = 0.0, saturation: float | None = 0.0, vibrance: float | None = 0.0) -> None: ...
+
+    @property
+    def relative_temperature(self) -> float: ...
+
+    @property
+    def relative_tint(self) -> float: ...
+
+    @property
+    def exposure(self) -> float: ...
+
+    @property
+    def contrast(self) -> float: ...
+
+    @property
+    def highlights(self) -> float: ...
+
+    @property
+    def shadows(self) -> float: ...
+
+    @property
+    def whites(self) -> float: ...
+
+    @property
+    def blacks(self) -> float: ...
+
+    @property
+    def texture(self) -> float: ...
+
+    @property
+    def clarity(self) -> float: ...
+
+    @property
+    def dehaze(self) -> float: ...
+
+    @property
+    def saturation(self) -> float: ...
+
+    @property
+    def vibrance(self) -> float: ...
+
+    def __eq__(self, arg: LocalDeltas, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> LocalDeltas:
+        """Return a copy with the given attributes replaced."""
+
+class LocalAdjustment:
+    """
+    One masked adjustment: a LinearMask or RadialMask and the LocalDeltas added where it applies, scaled by `opacity` (0 to 1) and, with `invert`, applied outside the mask instead. `id` is the photograph's own identity for it, unique in its state and never reused; a value built here carries 0 and gets its id when added with Photo.add_*_mask. Adjustments are summed in list order; up to 16 per photograph.
+    """
+
+    def __init__(self, *, id: int | None = None, name: str | None = None, enabled: bool = True, opacity: float | None = 1.0, invert: bool = False, shape: LinearMask | RadialMask | None = None, deltas: LocalDeltas | None = None) -> None: ...
+
+    @property
+    def id(self) -> int: ...
+
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def enabled(self) -> bool: ...
+
+    @property
+    def opacity(self) -> float: ...
+
+    @property
+    def invert(self) -> bool: ...
+
+    @property
+    def shape(self) -> LinearMask | RadialMask: ...
+
+    @property
+    def deltas(self) -> LocalDeltas: ...
+
+    def __eq__(self, arg: LocalAdjustment, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> LocalAdjustment:
+        """Return a copy with the given attributes replaced."""
+
 def choose_grain_seed(previous: GrainSettings, next: GrainSettings, entropy: Callable[[], int] | None = None) -> int:
     """
     Return the seed grain should carry after an edit from `previous` to `next`: a new one, never 0, when the edit turns grain on (amount from 0 to above 0) and `next` has none, else `next`'s seed, 0 included. `entropy` returns 32 random bits per call; None uses the operating system's. Store the result as the photograph's grain seed.
@@ -1078,13 +1224,22 @@ class ForeignNamespace:
 
 class DevelopState:
     """
-    Everything that says how one photograph is developed: its global settings now, per-image edits later.
+    Everything that says how one photograph is developed: its global settings, and its local adjustments (masks), a tuple of LocalAdjustment with ids, in the order they sum in. `next_local_adjustment_id` is the id the next added mask takes; it never goes down.
     """
 
-    def __init__(self, *, settings: DevelopSettings | None = None) -> None: ...
+    def __init__(self, *, settings: DevelopSettings | None = None, local_adjustments: Sequence[LocalAdjustment] | None = None, next_local_adjustment_id: int | None = None) -> None: ...
 
     @property
     def settings(self) -> DevelopSettings: ...
+
+    @property
+    def local_adjustments(self) -> tuple[LocalAdjustment, ...]:
+        """
+        The masked adjustments, in the order they sum in: a tuple of LocalAdjustment.
+        """
+
+    @property
+    def next_local_adjustment_id(self) -> int: ...
 
     def __eq__(self, arg: DevelopState, /) -> bool: ...
 
@@ -1188,6 +1343,32 @@ class Photo:
     def edited(self, **kwargs) -> Photo:
         """
         Return a photograph with flat snake_case keywords set, e.g. exposure=0.7, by the rules the app and the command line apply: a temperature makes the white balance Custom, grain turned on gets a seed, a turn carries the crop, a straighten shrinks it, a crop rectangle frees the aspect. Keywords are applied in the order given, so crop_aspect then crop_rectangle differs from the reverse. Raises TypeError for an unknown keyword or a wrong type, and ValueError for a value the setting refuses or a geometry that does not fit the photograph's size.
+        """
+
+    @property
+    def local_adjustments(self) -> tuple[LocalAdjustment, ...]:
+        """
+        The photograph's masked adjustments, ids included, in the order they sum in; the same as `state.local_adjustments`.
+        """
+
+    def add_linear_mask(self, from_: tuple[float, float], to: tuple[float, float], *, name: str = '', opacity: float = 1.0, invert: bool = False, enabled: bool = True, **deltas: float) -> Photo:
+        """
+        Return a photograph with a linear (graduated) mask added last, so that it is `local_adjustments[-1]`. `from_` and `to` are (u, v) points normalised to the corrected frame; the weight is 1 at `from_` and 0 at `to`. The remaining keywords are the mask's deltas by their snake_case names (relative_temperature, relative_tint, exposure, contrast, highlights, shadows, whites, blacks, texture, clarity, dehaze, saturation, vibrance), added to the global settings where the mask has weight. Numbers out of range are clamped; a non-finite or degenerate one, a full list (16) or an unknown keyword is refused (ValueError, TypeError).
+        """
+
+    def add_radial_mask(self, centre: tuple[float, float], radius_x: float, radius_y: float, angle: float = 0.0, feather: float = 0.5, *, name: str = '', opacity: float = 1.0, invert: bool = False, enabled: bool = True, **deltas: float) -> Photo:
+        """
+        Return a photograph with a radial (oval) mask added last. `centre` is a (u, v) point normalised to the corrected frame, the radii are in long-edge units, `angle` turns the x radius towards +y in degrees, and `feather` is the soft edge's width from 0 (hard) to 1. Keywords and errors are as for add_linear_mask.
+        """
+
+    def with_local_adjustment(self, id: int, **changes: Any) -> Photo:
+        """
+        Return a photograph with the adjustment of that id changed. The keywords, applied in the order given, are `name`, `enabled`, `invert`, `opacity`, `shape` (a LinearMask or RadialMask of the kind the adjustment already has) and the deltas by their snake_case names; numbers out of range are clamped. ValueError for an unknown id or a shape of another kind, TypeError for an unknown keyword.
+        """
+
+    def without_local_adjustment(self, id: int) -> Photo:
+        """
+        Return a photograph without the adjustment of that id; its id is not reused. ValueError for an unknown id.
         """
 
     def load(self) -> ImageBuffer:
@@ -1470,8 +1651,7 @@ class ChangeDescription:
     @property
     def keys(self) -> list[str]:
         """
-        Descriptor keys (camelCase, as JSON and the sidecar spell them) whose values differ, in table
-        order; setting_descriptors() maps them to the Python names.
+        Descriptor keys (camelCase, as JSON and the sidecar spell them) whose values differ, in table order; setting_descriptors() maps them to the Python names.
         """
 
     @property
@@ -1528,7 +1708,9 @@ class EditSession:
 
     @property
     def history(self) -> list[HistoryStep]:
-        """Steps taken so far, the opening state first; a new list on every access."""
+        """
+        Steps taken so far, the opening state first; a new list on every access.
+        """
 
     @property
     def position(self) -> int:

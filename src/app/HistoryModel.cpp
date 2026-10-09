@@ -2,8 +2,12 @@
 
 #include "SettingPresentation.h"
 
+#include <LocalAdjustmentEdits.h>
+
 #include <QCoreApplication>
 #include <QVariant>
+
+#include <variant>
 
 namespace arraw::app {
 
@@ -27,6 +31,97 @@ QString wordSingle(std::string_view key, const DevelopState& after) {
         number.prepend('+');
     }
     return QStringLiteral("%1 %2%3").arg(presentation->label, number, presentation->unit);
+}
+
+/// Words a mask as the list shows it: its own name, or its kind and place among that kind.
+QString maskLabel(const DevelopState& state, LocalAdjustmentId id) {
+    const LocalAdjustment& adjustment = *findLocalAdjustment(state, id);
+    if (!adjustment.name.empty()) {
+        return QString::fromStdString(adjustment.name);
+    }
+    const auto ordinal = static_cast<int>(maskOrdinal(state, id));
+    if (std::holds_alternative<LinearMask>(adjustment.shape)) {
+        return QCoreApplication::translate("arraw::app::HistoryModel", "Linear %1").arg(ordinal);
+    }
+    return QCoreApplication::translate("arraw::app::HistoryModel", "Radial %1").arg(ordinal);
+}
+
+/// Words one changed delta of a mask: the control's name and the value it now has.
+QString wordDelta(const LocalDescriptor& descriptor, float value) {
+    QString label;
+    QString unit;
+    int decimals = 0;
+    if (descriptor.globalKey.empty()) {
+        label = descriptor.key == "relativeTemperature"
+                    ? QCoreApplication::translate("arraw::app::HistoryModel", "Temp")
+                    : QCoreApplication::translate("arraw::app::HistoryModel", "Tint");
+    } else {
+        const SettingPresentation& presentation = presentationOf(descriptor.globalKey);
+        label = presentation.label;
+        unit = presentation.unit;
+        decimals = presentation.decimals;
+    }
+    QString number = QString::number(value, 'f', decimals);
+    if (value > 0.0F) {
+        number.prepend('+');
+    }
+    return QStringLiteral("%1 %2%3").arg(label, number, unit);
+}
+
+/// Words an ordinary edit that changed masks and no setting.
+QString wordLocal(const DevelopState& before, const DevelopState& after, const LocalChange& local) {
+    const auto tr = [](const char* text) {
+        return QCoreApplication::translate("arraw::app::HistoryModel", text);
+    };
+    const std::size_t total = local.added.size() + local.removed.size() + local.changed.size() +
+                              (local.reordered ? 1 : 0);
+    if (total > 1) {
+        return QCoreApplication::translate("arraw::app::HistoryModel", "%n mask changes", nullptr,
+                                           static_cast<int>(total));
+    }
+    if (!local.added.empty()) {
+        return tr("Add %1").arg(maskLabel(after, local.added.front()));
+    }
+    if (!local.removed.empty()) {
+        return tr("Remove %1").arg(maskLabel(before, local.removed.front()));
+    }
+    if (local.reordered) {
+        return tr("Reorder Masks");
+    }
+    const MaskChange& change = local.changed.front();
+    const QString label = maskLabel(after, change.id);
+    const LocalAdjustment& now = *findLocalAdjustment(after, change.id);
+    const int aspects = (change.name ? 1 : 0) + (change.enabled ? 1 : 0) +
+                        (change.opacity ? 1 : 0) + (change.invert ? 1 : 0) +
+                        (change.shape ? 1 : 0) + (change.deltas.empty() ? 0 : 1);
+    if (aspects == 1) {
+        if (change.deltas.size() == 1) {
+            const LocalDescriptor& descriptor = *findLocalDescriptor(change.deltas.front());
+            return QStringLiteral("%1: %2").arg(
+                label, wordDelta(descriptor, now.deltas.*descriptor.member));
+        }
+        if (!change.deltas.empty()) {
+            return QStringLiteral("%1: %2").arg(
+                label,
+                QCoreApplication::translate("arraw::app::HistoryModel", "%n settings", nullptr,
+                                            static_cast<int>(change.deltas.size())));
+        }
+        if (change.name) {
+            return tr("Rename %1").arg(label);
+        }
+        if (change.enabled) {
+            return (now.enabled ? tr("Enable %1") : tr("Disable %1")).arg(label);
+        }
+        if (change.invert) {
+            return tr("Invert %1").arg(label);
+        }
+        if (change.opacity) {
+            return QStringLiteral("%1: %2 %3%")
+                .arg(label, tr("Opacity"), QString::number(qRound(now.opacity * 100.0F)));
+        }
+        return tr("Move %1").arg(label);
+    }
+    return tr("Edit %1").arg(label);
 }
 
 } // namespace
@@ -138,6 +233,16 @@ QString HistoryModel::textOf(std::size_t index) const {
         return tr("Edit");
     }
     const ChangeDescription change = describeChange(history_[index - 1].state, step.state);
+    if (!change.local.empty()) {
+        if (change.keys.empty()) {
+            return wordLocal(history_[index - 1].state, step.state, change.local);
+        }
+        // Settings and masks at once: nothing to name but how many.
+        const std::size_t masks = change.local.added.size() + change.local.removed.size() +
+                                  change.local.changed.size() + (change.local.reordered ? 1 : 0);
+        return QCoreApplication::translate("arraw::app::HistoryModel", "%n changes", nullptr,
+                                           static_cast<int>(change.keys.size() + masks));
+    }
     if (change.keys.size() == 1) {
         return wordSingle(change.keys.front(), step.state);
     }

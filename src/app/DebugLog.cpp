@@ -86,6 +86,12 @@ QString noticeName(Notice notice) {
         return QStringLiteral("OptionIgnored");
     case Notice::PreviewUnreadable:
         return QStringLiteral("PreviewUnreadable");
+    case Notice::LocalAdjustmentDropped:
+        return QStringLiteral("LocalAdjustmentDropped");
+    case Notice::LocalAdjustmentFieldIgnored:
+        return QStringLiteral("LocalAdjustmentFieldIgnored");
+    case Notice::NewerLocalAdjustmentsVersion:
+        return QStringLiteral("NewerLocalAdjustmentsVersion");
     case Notice::MetadataNotCarried:
         return QStringLiteral("MetadataNotCarried");
     }

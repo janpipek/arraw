@@ -32,6 +32,9 @@ add_executable(arraw-tests
         test_DisplayImage.cpp
         test_EditSession.cpp
         test_Edits.cpp
+        test_LocalAdjustments.cpp
+        test_LocalAdjustmentsJson.cpp
+        test_LocalAdjustmentsSidecar.cpp
         test_EmbeddedPreview.cpp
         test_ExifInfo.cpp
         test_ExportMetadata.cpp
@@ -44,6 +47,7 @@ add_executable(arraw-tests
         test_ColorGrading.cpp
         test_Denoise.cpp
         test_Presence.cpp
+        test_LocalPlan.cpp
         test_Effects.cpp
         test_Grain.cpp
         test_GpuContext.cpp
@@ -177,6 +181,7 @@ add_executable(arraw-gpu-tests
         gpu/GpuTesting.h
         gpu/test_GpuAdapters.cpp
         gpu/test_GpuDenoise.cpp
+        gpu/test_GpuLocalAdjustments.cpp
         gpu/test_GpuPresence.cpp
         gpu/test_GpuProgress.cpp
         gpu/test_GpuRenderDigest.cpp

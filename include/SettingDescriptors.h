@@ -1,6 +1,7 @@
 #pragma once
 
 #include <DevelopSettings.h>
+#include <LocalAdjustments.h>
 #include <RenderCheckpoint.h>
 #include <WhiteBalance.h>
 
@@ -355,6 +356,113 @@ inline constexpr std::array developSettingDescriptors{
 /// @return The row, or null when no setting has that key.
 [[nodiscard]] constexpr const FieldDescriptor* findDescriptor(std::string_view key) noexcept {
     for (const FieldDescriptor& descriptor : developSettingDescriptors) {
+        if (descriptor.key == key) {
+            return &descriptor;
+        }
+    }
+    return nullptr;
+}
+
+/// @brief Where in the chain a local control acts (ADR 044, section 2).
+enum class LocalChainPosition {
+    AfterToWorking, ///< Right after the source-to-working transform: relative temperature and tint.
+    ExposureGain,   ///< The exposure gain.
+    ShapeTone,      ///< The tone shaping: contrast, highlights, shadows, whites and blacks.
+    ApplyPresence,  ///< Texture, Clarity and Dehaze.
+    AdjustColor,    ///< After the curve-input tap: Saturation and Vibrance.
+};
+
+/// @brief Largest local exposure delta, in stops either way.
+inline constexpr double localExposureLimit = 4.0;
+
+/// @brief Largest local delta of every control but exposure, either way.
+inline constexpr double localControlLimit = 100.0;
+
+/// @brief Description of one local control: its key, range and the global control it adds to.
+///
+/// The table drives the state JSON and sidecar keys, the Python names, the slider rows and the
+/// history wording of local adjustments, as ::arraw::developSettingDescriptors does for the global
+/// settings. Every default is 0.
+struct LocalDescriptor {
+    /// @brief camelCase name, as the JSON document and the sidecar spell it; unique.
+    std::string_view key;
+
+    /// @brief snake_case name, as Python spells it.
+    std::string_view pythonName;
+
+    /// @brief The delta in ::arraw::LocalDeltas.
+    float LocalDeltas::* member;
+
+    /// @brief Accepted values, in setting units.
+    SettingRange range;
+
+    /// @brief Key in ::arraw::developSettingDescriptors of the global control this one adds to;
+    /// empty for relative temperature and tint, which have none.
+    std::string_view globalKey;
+
+    /// @brief Where in the chain the control acts.
+    LocalChainPosition position;
+
+    /// @brief Tells whether the control acts before the curve-input tap (every one but
+    /// Saturation and Vibrance).
+    [[nodiscard]] constexpr bool beforeCurveTap() const noexcept {
+        return position != LocalChainPosition::AdjustColor;
+    }
+};
+
+/// @brief One descriptor per field of ::arraw::LocalDeltas, in the panel's order, which is the
+/// order of the fields and of the GPU's arrays (ADR 044, section 2).
+inline constexpr std::array localAdjustmentDescriptors{
+    LocalDescriptor{"relativeTemperature", "relative_temperature",
+                    &LocalDeltas::relativeTemperature,
+                    SettingRange{-localControlLimit, localControlLimit}, "",
+                    LocalChainPosition::AfterToWorking},
+    LocalDescriptor{"relativeTint", "relative_tint", &LocalDeltas::relativeTint,
+                    SettingRange{-localControlLimit, localControlLimit}, "",
+                    LocalChainPosition::AfterToWorking},
+    LocalDescriptor{"exposure", "exposure", &LocalDeltas::exposure,
+                    SettingRange{-localExposureLimit, localExposureLimit}, "exposure",
+                    LocalChainPosition::ExposureGain},
+    LocalDescriptor{"contrast", "contrast", &LocalDeltas::contrast,
+                    SettingRange{-localControlLimit, localControlLimit}, "contrast",
+                    LocalChainPosition::ShapeTone},
+    LocalDescriptor{"highlights", "highlights", &LocalDeltas::highlights,
+                    SettingRange{-localControlLimit, localControlLimit}, "highlights",
+                    LocalChainPosition::ShapeTone},
+    LocalDescriptor{"shadows", "shadows", &LocalDeltas::shadows,
+                    SettingRange{-localControlLimit, localControlLimit}, "shadows",
+                    LocalChainPosition::ShapeTone},
+    LocalDescriptor{"whites", "whites", &LocalDeltas::whites,
+                    SettingRange{-localControlLimit, localControlLimit}, "whites",
+                    LocalChainPosition::ShapeTone},
+    LocalDescriptor{"blacks", "blacks", &LocalDeltas::blacks,
+                    SettingRange{-localControlLimit, localControlLimit}, "blacks",
+                    LocalChainPosition::ShapeTone},
+    LocalDescriptor{"texture", "texture", &LocalDeltas::texture,
+                    SettingRange{-localControlLimit, localControlLimit}, "texture",
+                    LocalChainPosition::ApplyPresence},
+    LocalDescriptor{"clarity", "clarity", &LocalDeltas::clarity,
+                    SettingRange{-localControlLimit, localControlLimit}, "clarity",
+                    LocalChainPosition::ApplyPresence},
+    LocalDescriptor{"dehaze", "dehaze", &LocalDeltas::dehaze,
+                    SettingRange{-localControlLimit, localControlLimit}, "dehaze",
+                    LocalChainPosition::ApplyPresence},
+    LocalDescriptor{"saturation", "saturation", &LocalDeltas::saturation,
+                    SettingRange{-localControlLimit, localControlLimit}, "saturation",
+                    LocalChainPosition::AdjustColor},
+    LocalDescriptor{"vibrance", "vibrance", &LocalDeltas::vibrance,
+                    SettingRange{-localControlLimit, localControlLimit}, "vibrance",
+                    LocalChainPosition::AdjustColor},
+};
+
+static_assert(sizeof(LocalDeltas) == localAdjustmentDescriptors.size() * sizeof(float),
+              "LocalDeltas and localAdjustmentDescriptors must have one row per field");
+
+/// @brief Finds the local descriptor with a given key.
+/// @param key camelCase name, such as "exposure".
+/// @return The row, or null when no local control has that key.
+[[nodiscard]] constexpr const LocalDescriptor* findLocalDescriptor(std::string_view key) noexcept {
+    for (const LocalDescriptor& descriptor : localAdjustmentDescriptors) {
         if (descriptor.key == key) {
             return &descriptor;
         }

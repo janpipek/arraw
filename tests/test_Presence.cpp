@@ -172,19 +172,19 @@ TEST_CASE("With every control at zero Presence does not exist", "[presence]") {
             planFor(source, DevelopState{presence(0.0F, 30.0F, 0.0F)}).pointwise.presence;
         REQUIRE_FALSE(clarity.fine.active());
         REQUIRE(clarity.coarse.active());
-        REQUIRE_FALSE(clarity.haze.active());
+        REQUIRE_FALSE(clarity.hazeActive());
         const PresencePlan hazier =
             planFor(source, DevelopState{presence(0.0F, 0.0F, -30.0F)}).pointwise.presence;
         REQUIRE_FALSE(hazier.coarse.active());
-        REQUIRE(hazier.haze.active());
+        REQUIRE(hazier.hazeMean.active());
         REQUIRE(hazier.amounts.dehaze == -0.3F);
         // A negative Dehaze measures the mean, a positive one the floor.
-        REQUIRE(hazier.haze.window == 0);
+        REQUIRE(hazier.hazeMean.window == 0);
         const PresencePlan clearer =
             planFor(source, DevelopState{presence(0.0F, 0.0F, 30.0F)}).pointwise.presence;
-        REQUIRE(clearer.haze.window > 0);
+        REQUIRE(clearer.hazeFloor.window > 0);
         // And over a narrower blur: the floor keeps to its edges, the mean is broad.
-        REQUIRE(clearer.haze.sigma < hazier.haze.sigma);
+        REQUIRE(clearer.hazeFloor.sigma < hazier.hazeMean.sigma);
         REQUIRE(clearer.coarseReduction() == hazier.coarseReduction());
     }
 }
@@ -205,16 +205,16 @@ TEST_CASE("Presence resolves its radii from the sensor and the long edge", "[pre
     REQUIRE(plan.coarse.window == 0);
     // Dehaze: the same cells; a floor opened by 3% of 6000, 180 sensor
     // pixels, and smoothed by a quarter of a percent, 15.
-    REQUIRE(plan.haze.reduction == 8);
-    REQUIRE(plan.haze.window == 23);
-    REQUIRE(plan.haze.sigma == 1.875F);
-    REQUIRE(plan.haze.radius == 6);
+    REQUIRE(plan.hazeFloor.reduction == 8);
+    REQUIRE(plan.hazeFloor.window == 23);
+    REQUIRE(plan.hazeFloor.sigma == 1.875F);
+    REQUIRE(plan.hazeFloor.radius == 6);
     // An octagon of inradius 23: 9 cells across and down, 7 steps along each
     // diagonal, so 9 + 2 * 7 = 23 along the axes and sqrt(2) * 16 = 22.6 along
     // the diagonals; then two steps of reconstruction.
-    REQUIRE(octagonOf(plan.haze.window) == OctagonWindow{.across = 9, .diagonal = 7});
-    REQUIRE(plan.haze.reconstruction == hazeReconstructionSteps);
-    REQUIRE(plan.haze.reconstruction == 2);
+    REQUIRE(octagonOf(plan.hazeFloor.window) == OctagonWindow{.across = 9, .diagonal = 7});
+    REQUIRE(plan.hazeFloor.reconstruction == hazeReconstructionSteps);
+    REQUIRE(plan.hazeFloor.reconstruction == 2);
     REQUIRE(plan.coarse.reconstruction == 0);
     REQUIRE(plan.lumaRow == colorspaces::workingLuminance);
     // The margin a region's footprint would need: Dehaze's opening (the
@@ -231,9 +231,9 @@ TEST_CASE("Presence resolves its radii from the sensor and the long edge", "[pre
         REQUIRE(reduced.coarse.reduction == 2);
         REQUIRE(reduced.coarse.sigma == plan.coarse.sigma);
         REQUIRE(reduced.coarse.radius == plan.coarse.radius);
-        REQUIRE(reduced.haze.reduction == 2);
-        REQUIRE(reduced.haze.window == plan.haze.window);
-        REQUIRE(reduced.haze.sigma == plan.haze.sigma);
+        REQUIRE(reduced.hazeFloor.reduction == 2);
+        REQUIRE(reduced.hazeFloor.window == plan.hazeFloor.window);
+        REQUIRE(reduced.hazeFloor.sigma == plan.hazeFloor.sigma);
         // Texture's four sensor pixels are one pixel of the level, its finest scale.
         REQUIRE(reduced.fine.reduction == 1);
         REQUIRE(reduced.fine.sigma == 1.0F);
@@ -285,7 +285,8 @@ TEST_CASE("White balance and exposure never reach the Presence context", "[prese
     REQUIRE(context.fine.cells == again.fine.cells);
     REQUIRE(context.coarse.cells == again.coarse.cells);
     REQUIRE(context.coarseCells.cells == again.coarseCells.cells);
-    REQUIRE(context.haze.cells == again.haze.cells);
+    REQUIRE(context.hazeFloor.cells == again.hazeFloor.cells);
+    REQUIRE(context.hazeMean.cells == again.hazeMean.cells);
 
     // An exposure change scales the toned result but leaves the detail alone:
     // in neutral tone, the developed image is the same image times the gain.
@@ -561,7 +562,7 @@ TEST_CASE("Dehaze takes as much off a bright area at its edge as inside it", "[p
     const std::uint32_t edge = 601;
     const ImageBuffer step = greyOf(size, [&](auto x, auto) { return x < edge ? 0.03F : 0.3F; });
     REQUIRE(planFor(step, DevelopState{presence(0.0F, 0.0F, 100.0F)})
-                .pointwise.presence.haze.reduction == 2);
+                .pointwise.presence.hazeFloor.reduction == 2);
     const ImageBuffer plain = develop(step, DevelopState{presence(0.0F, 0.0F, 0.0F)});
     const ImageBuffer clear = develop(step, DevelopState{presence(0.0F, 0.0F, 100.0F)});
     const auto stopsAt = [&](std::uint32_t x) {
@@ -617,8 +618,8 @@ TEST_CASE("Dehaze takes as much off a round bright area at its edge as inside it
     });
     const PresencePlan plan =
         planFor(scene, DevelopState{presence(0.0F, 0.0F, 100.0F)}).pointwise.presence;
-    REQUIRE(plan.haze.reduction == 4);
-    REQUIRE(plan.haze.window == 18);
+    REQUIRE(plan.hazeFloor.reduction == 4);
+    REQUIRE(plan.hazeFloor.window == 18);
     const ImageBuffer plain = develop(scene, DevelopState{presence(0.0F, 0.0F, 0.0F)});
     const ImageBuffer clear = develop(scene, DevelopState{presence(0.0F, 0.0F, 100.0F)});
     const auto stopsAt = [&](std::uint32_t x, std::uint32_t y) {
@@ -678,8 +679,8 @@ TEST_CASE("Dehaze leaves less off only the tip of a bright area's right-angled c
     });
     const PresencePlan plan =
         planFor(scene, DevelopState{presence(0.0F, 0.0F, 100.0F)}).pointwise.presence;
-    REQUIRE(plan.haze.reduction == 4);
-    REQUIRE(octagonOf(plan.haze.window) == OctagonWindow{.across = 8, .diagonal = 5});
+    REQUIRE(plan.hazeFloor.reduction == 4);
+    REQUIRE(octagonOf(plan.hazeFloor.window) == OctagonWindow{.across = 8, .diagonal = 5});
     const ImageBuffer plain = develop(scene, DevelopState{presence(0.0F, 0.0F, 0.0F)});
     const ImageBuffer clear = develop(scene, DevelopState{presence(0.0F, 0.0F, 100.0F)});
     const auto stopsAt = [&](std::uint32_t x, std::uint32_t y) {
@@ -831,15 +832,15 @@ TEST_CASE("Dehaze's octagon is regular and its passes mix both parities", "[pres
         PresencePlan plan;
         plan.amounts.dehaze = 1.0F;
         plan.lumaRow = colorspaces::workingLuminance;
-        plan.haze = {.reduction = 1,
-                     .sigma = 1.0F,
-                     .radius = 3,
-                     .window = window,
-                     .reconstruction = hazeReconstructionSteps};
+        plan.hazeFloor = {.reduction = 1,
+                          .sigma = 1.0F,
+                          .radius = 3,
+                          .window = window,
+                          .reconstruction = hazeReconstructionSteps};
         const PresenceContext context = presenceContextOf(board, plan);
         const float dark = std::ranges::min(context.coarseCells.cells);
         REQUIRE(dark < std::ranges::max(context.coarseCells.cells) - 3.0F);
-        for (const float floor : context.haze.cells) {
+        for (const float floor : context.hazeFloor.cells) {
             REQUIRE(std::abs(floor - dark) <= 1e-5F);
         }
     }
@@ -898,8 +899,8 @@ TEST_CASE("Dehaze leaves a texture beside a bright area as it leaves it elsewher
     });
     const PresencePlan plan =
         planFor(scene, DevelopState{presence(0.0F, 0.0F, 100.0F)}).pointwise.presence;
-    REQUIRE(plan.haze.reduction == 8);
-    REQUIRE(plan.haze.window == 13);
+    REQUIRE(plan.hazeFloor.reduction == 8);
+    REQUIRE(plan.hazeFloor.window == 13);
     const ImageBuffer plain = develop(scene, DevelopState{presence(0.0F, 0.0F, 0.0F)});
     const ImageBuffer clear = develop(scene, DevelopState{presence(0.0F, 0.0F, 100.0F)});
     // Mean stops taken off the pixels a predicate picks.
@@ -1024,7 +1025,7 @@ TEST_CASE("Dehaze raises fine detail and noise in a flat area no more than Textu
     const ImageBuffer grain = greyOf(size, noise);
     const ImageBuffer mid = greyOf(size, wave(128.0));
     REQUIRE(planFor(fine, DevelopState{presence(0.0F, 0.0F, 100.0F)})
-                .pointwise.presence.haze.reduction == 8);
+                .pointwise.presence.hazeFloor.reduction == 8);
     const auto gain = [](const ImageBuffer& image, float texture, float dehaze) {
         return logSpread(develop(image, DevelopState{presence(texture, 0.0F, dehaze)})) /
                logSpread(develop(image, DevelopState{presence(0.0F, 0.0F, 0.0F)}));
@@ -1271,7 +1272,7 @@ TEST_CASE("The threaded Presence context gives the single-threaded bits",
         tintedOf({517, 389}, [](auto x, auto y) { return sceneAt(x, y, 1.0); });
     const PresencePlan plan =
         planFor(source, DevelopState{presence(40.0F, 40.0F, 40.0F)}).pointwise.presence;
-    REQUIRE(plan.haze.window > 0);
+    REQUIRE(plan.hazeFloor.window > 0);
     const PresenceContext threaded = presenceContextOf(source, plan);
     const PresenceContext single = [&] {
         const test::ScopedRowBandLimit one(1);
@@ -1280,7 +1281,7 @@ TEST_CASE("The threaded Presence context gives the single-threaded bits",
     REQUIRE(threaded.fine.cells == single.fine.cells);
     REQUIRE(threaded.coarse.cells == single.coarse.cells);
     REQUIRE(threaded.coarseCells.cells == single.coarseCells.cells);
-    REQUIRE(threaded.haze.cells == single.haze.cells);
+    REQUIRE(threaded.hazeFloor.cells == single.hazeFloor.cells);
 }
 
 TEST_CASE("The threaded chain gives the single-threaded bits", "[presence][threads][slow]") {

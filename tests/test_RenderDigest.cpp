@@ -5,6 +5,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <string>
+#include <vector>
 
 using namespace arraw;
 using namespace arraw::test;
@@ -18,25 +19,30 @@ TEST_CASE("The CPU render digest", "[.digest]") {
     }
     DigestWriter writer(path);
     const auto sources = digestSources();
-    const auto states = digestStates();
     const auto requests = digestRequests();
-    for (const auto& source : sources) {
-        for (const auto& state : states) {
-            for (const auto& request : requests) {
-                const std::string base =
-                    "cpu/" + source.name + "/" + state.name + "/" + request.name;
-                writer.render(base + "/develop",
-                              [&] { return develop(source.buffer, state.state, request.request); });
-                for (const Stage stop : digestStages) {
-                    writer.render(base + "/until-" + digestStageName(stop), [&] {
-                        return developUntil(source.buffer, state.state, stop, request.request)
-                            .readBack();
+    const auto run = [&](const std::vector<DigestState>& states) {
+        for (const auto& source : sources) {
+            for (const auto& state : states) {
+                for (const auto& request : requests) {
+                    const std::string base =
+                        "cpu/" + source.name + "/" + state.name + "/" + request.name;
+                    writer.render(base + "/develop", [&] {
+                        return develop(source.buffer, state.state, request.request);
+                    });
+                    for (const Stage stop : digestStages) {
+                        writer.render(base + "/until-" + digestStageName(stop), [&] {
+                            return developUntil(source.buffer, state.state, stop, request.request)
+                                .readBack();
+                        });
+                    }
+                    writer.render(base + "/sample", [&] {
+                        return sample(source.buffer, state.state, Tap::CurveInput, request.request);
                     });
                 }
-                writer.render(base + "/sample", [&] {
-                    return sample(source.buffer, state.state, Tap::CurveInput, request.request);
-                });
             }
         }
-    }
+    };
+    run(digestStates());
+    // Appended after the matrix above, whose lines stay as they were.
+    run(digestMaskStates());
 }

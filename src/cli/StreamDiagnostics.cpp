@@ -61,6 +61,12 @@ std::string nameOf(Notice notice) {
         return "setting_malformed";
     case Notice::NewerSettingsVersion:
         return "newer_settings_version";
+    case Notice::LocalAdjustmentDropped:
+        return "local_adjustment_dropped";
+    case Notice::LocalAdjustmentFieldIgnored:
+        return "local_adjustment_field_ignored";
+    case Notice::NewerLocalAdjustmentsVersion:
+        return "newer_local_adjustments_version";
     case Notice::SidecarUnreadable:
         return "sidecar_unreadable";
     case Notice::ExifUnreadable:

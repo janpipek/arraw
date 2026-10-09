@@ -158,8 +158,8 @@ TEST_CASE("Presence on the device matches the CPU", "[gpu][presence][slow]") {
         }
         const PresencePlan plan =
             planFor(disk, DevelopState{presence(0.0F, 0.0F, 100.0F)}).pointwise.presence;
-        REQUIRE(plan.haze.window == 18);
-        REQUIRE(plan.haze.reconstruction == hazeReconstructionSteps);
+        REQUIRE(plan.hazeFloor.window == 18);
+        REQUIRE(plan.hazeFloor.reconstruction == hazeReconstructionSteps);
         worst = std::max(worst,
                          requirePointwiseMatches(disk.clone(), presence(0.0F, 0.0F, 100.0F), 1.0));
     }
@@ -181,7 +181,7 @@ TEST_CASE("Presence on the device matches the CPU", "[gpu][presence][slow]") {
         }
         const PresencePlan plan =
             planFor(board, DevelopState{presence(0.0F, 0.0F, 100.0F)}).pointwise.presence;
-        REQUIRE(octagonOf(plan.haze.window) == OctagonWindow{.across = 2, .diagonal = 2});
+        REQUIRE(octagonOf(plan.hazeFloor.window) == OctagonWindow{.across = 2, .diagonal = 2});
         worst = std::max(worst,
                          requirePointwiseMatches(board.clone(), presence(0.0F, 0.0F, 100.0F), 1.0));
     }
@@ -237,8 +237,8 @@ TEST_CASE("The Presence passes run only for the bases the controls read", "[gpu]
     // count of two.
     const PresencePlan clearer =
         planFor(source, DevelopState{presence(0.0F, 0.0F, 50.0F)}).pointwise.presence;
-    REQUIRE(octagonOf(clearer.haze.window).diagonal == 0);
-    const std::size_t steps = clearer.haze.reconstruction;
+    REQUIRE(octagonOf(clearer.hazeFloor.window).diagonal == 0);
+    const std::size_t steps = clearer.hazeFloor.reconstruction;
     REQUIRE(steps == hazeReconstructionSteps);
     REQUIRE(passesFor(presence(50.0F, 0.0F, 0.0F)) == plain + 3);
     REQUIRE(passesFor(presence(0.0F, 50.0F, 0.0F)) == plain + 3);

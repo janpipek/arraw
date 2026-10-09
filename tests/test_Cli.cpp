@@ -6,6 +6,7 @@
 #include "StreamDiagnostics.h"
 #include "TerminalStyle.h"
 #include "support/Fixtures.h"
+#include "support/LocalAdjustmentStates.h"
 #include "support/TempDir.h"
 
 #include <Develop.h>
@@ -14,8 +15,10 @@
 #include <Edits.h>
 #include <EffectsSettings.h>
 #include <ExifInfo.h>
+#include <LocalAdjustmentEdits.h>
 #include <NoiseReductionSettings.h>
 #include <Photo.h>
+#include <SettingsJson.h>
 #include <Sidecar.h>
 
 #include <QByteArray>
@@ -2473,6 +2476,158 @@ TEST_CASE("Info lists only what the sidecar changes, and its marks", "[cli][info
     REQUIRE_THAT(result.out, !ContainsSubstring("contrast"));
     REQUIRE_THAT(result.out, !ContainsSubstring("defaults"));
     REQUIRE(result.out.find("exposure") < result.out.find("cropRectangle"));
+}
+
+TEST_CASE("Info lists the masks a sidecar holds", "[cli][info][local]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    writeSidecar(openPhoto(raw).with(test::stateWithMasks()));
+    const auto result = invoke({"info", raw.string()});
+
+    REQUIRE(result.code == cli::Success);
+    REQUIRE_THAT(result.out, ContainsSubstring("  local adjustments:\n"));
+    // Type, name (or the default), whether it acts, opacity, inversion, and the deltas that
+    // are not zero, in the table's order.
+    REQUIRE_THAT(result.out, ContainsSubstring("    Linear 1 (linear): disabled, opacity 1, "
+                                               "exposure 0.5, dehaze 20\n"));
+    REQUIRE_THAT(result.out, ContainsSubstring("    Sky \"left\" & <more> (radial): enabled, "
+                                               "opacity 0.35, inverted, relativeTemperature "
+                                               "-42.5, vibrance 7\n"));
+    REQUIRE_THAT(result.out, ContainsSubstring("    Radial 2 (radial): enabled, opacity 1\n"));
+    // After the settings, in list order.
+    REQUIRE(result.out.find("Linear 1") < result.out.find("Sky"));
+    REQUIRE(result.out.find("Sky") < result.out.find("Radial 2"));
+    REQUIRE(result.err.empty());
+}
+
+TEST_CASE("Info lists masks after the settings, and none when there are none",
+          "[cli][info][local]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    REQUIRE_THAT(invoke({"info", raw.string()}).out, !ContainsSubstring("local adjustments"));
+
+    DevelopState state = test::stateWithMasks();
+    state.settings.tone.exposure = 0.5F;
+    writeSidecar(openPhoto(raw).with(state));
+    const auto result = invoke({"info", raw.string()});
+    REQUIRE(result.out.find("    exposure: 0.5\n") < result.out.find("local adjustments"));
+    // The sidecar is ignored when asked to be, masks with it.
+    REQUIRE_THAT(invoke({"info", "--no-sidecar", raw.string()}).out,
+                 !ContainsSubstring("local adjustments"));
+    // The masks alone, with defaults for the settings.
+    writeSidecar(openPhoto(raw).with(test::stateWithMasks()));
+    const auto only = invoke({"info", raw.string()});
+    REQUIRE_THAT(only.out,
+                 ContainsSubstring("  develop settings: defaults\n  local adjustments:\n"));
+}
+
+TEST_CASE("Info --json gives the masks with their geometry, as the state document writes them",
+          "[cli][info][local]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    const DevelopState state = test::stateWithMasks();
+    writeSidecar(openPhoto(raw).with(state));
+
+    const auto file = firstFile(invoke({"info", "--json", raw.string()}).out);
+    const auto list = file.value("localAdjustments").toObject();
+    REQUIRE(list.value("version").toInt() == 1);
+    REQUIRE(list.value("nextId").toInt() == 4);
+    const auto masks = list.value("masks").toArray();
+    REQUIRE(masks.size() == 3);
+
+    const auto linear = masks[0].toObject();
+    REQUIRE(linear.value("id").toInt() == 1);
+    REQUIRE(linear.value("type").toString() == "linear");
+    REQUIRE(linear.value("enabled").toBool() == false);
+    REQUIRE(linear.value("geometry").toObject().value("from").toArray().at(0).toDouble() ==
+            Catch::Approx(0.2));
+    REQUIRE(linear.value("geometry").toObject().value("to").toArray().at(1).toDouble() ==
+            Catch::Approx(0.8));
+    REQUIRE(linear.value("deltas").toObject().value("exposure").toDouble() == Catch::Approx(0.5));
+    REQUIRE(linear.value("deltas").toObject().contains("contrast") == false);
+
+    const auto radial = masks[1].toObject();
+    REQUIRE(radial.value("type").toString() == "radial");
+    REQUIRE(radial.value("name").toString() == "Sky \"left\" & <more>");
+    REQUIRE(radial.value("invert").toBool());
+    REQUIRE(radial.value("opacity").toDouble() == Catch::Approx(0.35));
+    REQUIRE(radial.value("geometry").toObject().value("angle").toDouble() == Catch::Approx(30.0));
+    REQUIRE(radial.value("geometry").toObject().value("radius").toArray().size() == 2);
+
+    // The same object the state document holds, so a script can read either.
+    const auto document = QJsonDocument::fromJson(QByteArray::fromStdString(stateToJson(state)));
+    REQUIRE(document.object().value("localAdjustments").toObject() == list);
+
+    // No masks still gives the key, with an empty list.
+    const auto bare = firstFile(invoke({"info", "--json", "--no-sidecar", raw.string()}).out);
+    REQUIRE(bare.value("localAdjustments").toObject().value("masks").toArray().isEmpty());
+    REQUIRE(bare.value("localAdjustments").toObject().value("nextId").toInt() == 1);
+}
+
+TEST_CASE("Info reports a mask it had to drop, and lists the others", "[cli][info][local]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    writeSidecar(openPhoto(raw).with(withLocalAdjustmentAdded(DevelopState{}, test::someLinear())));
+    // Adds a mask of a kind this arraw does not know to the sidecar's list.
+    std::string text;
+    {
+        std::ifstream stream(directory.file("frame.xmp"), std::ios::binary);
+        text.assign(std::istreambuf_iterator<char>(stream), {});
+    }
+    const std::string brush =
+        R"(<rdf:li rdf:parseType="Resource"><arraw:id>9</arraw:id><arraw:type>brush</arraw:type></rdf:li>)";
+    const auto at = text.find("</rdf:Seq>");
+    REQUIRE(at != std::string::npos);
+    text.insert(at, brush);
+    std::ofstream(directory.file("frame.xmp"), std::ios::binary) << text;
+
+    const auto result = invoke({"info", raw.string()});
+    REQUIRE(result.code == cli::Success);
+    REQUIRE_THAT(result.out, ContainsSubstring("    Linear 1 (linear): enabled, opacity 1\n"));
+    REQUIRE_THAT(result.out, !ContainsSubstring("brush"));
+    REQUIRE_THAT(result.err, ContainsSubstring("mask 2 (id 9, brush) was dropped"));
+    REQUIRE_THAT(result.err, ContainsSubstring("brush"));
+}
+
+TEST_CASE("An export renders a photograph whose sidecar holds masks", "[cli][sidecar][local]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    writeSidecar(openPhoto(raw).with(test::stateWithMasks()));
+    const QImage image = exportedPng(raw, {});
+    REQUIRE_FALSE(image.isNull());
+    REQUIRE(openPhoto(raw).state() == test::stateWithMasks());
+}
+
+TEST_CASE("An export applies a sidecar's mask inside it and nowhere else",
+          "[cli][sidecar][local]") {
+    const test::TempDir directory;
+    const auto plainRaw = copyRaw(directory, "plain.dng");
+    const auto maskedRaw = copyRaw(directory, "masked.dng");
+    // Full weight down to a fifth of the height, none from three tenths on.
+    const DevelopState masked = withLocalAdjustmentAdded(
+        DevelopState{},
+        LocalAdjustment{.name = {},
+                        .shape = LinearMask{.from = {0.5F, 0.2F}, .to = {0.5F, 0.3F}},
+                        .deltas = {.exposure = 2.0F}});
+    writeSidecar(openPhoto(maskedRaw).with(masked));
+
+    const QImage plain = exportedPng(plainRaw, {});
+    const QImage image = exportedPng(maskedRaw, {});
+    REQUIRE_FALSE(plain.isNull());
+    REQUIRE(image.size() == plain.size());
+    const int top = image.height() / 10;
+    const int bottom = image.height() * 4 / 10;
+    bool differsInside = false;
+    for (int y = 0; y < image.height(); ++y) {
+        for (int x = 0; x < image.width(); ++x) {
+            if (y < top) {
+                differsInside = differsInside || image.pixel(x, y) != plain.pixel(x, y);
+            } else if (y >= bottom) {
+                REQUIRE(image.pixel(x, y) == plain.pixel(x, y));
+            }
+        }
+    }
+    REQUIRE(differsInside);
 }
 
 TEST_CASE("Info says rejected for a rating of -1", "[cli][info]") {

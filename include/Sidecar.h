@@ -129,6 +129,18 @@ inline constexpr auto xmpNamespaceOwners = std::to_array<XmpNamespaceOwner>({
 /// keeps it (see ::arraw::writeSidecar). Whether the file records develop
 /// settings at all is ::arraw::SidecarContents::state. `arraw:version` above
 /// ::arraw::sidecarVersion gives ::arraw::Notice::NewerSettingsVersion.
+///
+/// **Local adjustments** (ADR 044) are three more `arraw:` properties: `arraw:localAdjustments`,
+/// an `rdf:Seq` of structures (read in any of RDF's equivalent spellings:
+/// `rdf:parseType="Resource"`, a nested `rdf:Description`, fields as attributes),
+/// `arraw:localAdjustmentsVersion` and `arraw:nextLocalAdjustmentId`. Only the description's own
+/// properties are settings, so a mask's `arraw:exposure` is never the global one. A mask that
+/// cannot be used is dropped, with
+/// ::arraw::Notice::LocalAdjustmentDropped, and a field that is not known ignored, with
+/// ::arraw::Notice::LocalAdjustmentFieldIgnored; the counter is raised above every id kept. The
+/// rules are those of ::arraw::applyStateJson. A list of a version above
+/// ::arraw::localAdjustmentsVersion is read as far as it is understood, with
+/// ::arraw::Notice::NewerLocalAdjustmentsVersion. Any of the three properties records a state.
 /// `crs:` and anything else is not read, but it is reported: `xmp:CreatorTool`
 /// and the other namespaces that hold properties (see ::arraw::SidecarContents).
 /// @param photo Path of the photograph, which is also the subject of every warning.
@@ -150,15 +162,19 @@ readSidecar(const std::filesystem::path& photo, DiagnosticLog& log = discardedDi
 /// thing once. `xmp:Rating` and `xmp:Label` are written only when the
 /// photograph's marks differ from what reading the file gives, so a rating or
 /// label arraw cannot represent (`9`, `Rot`) stays as another tool wrote it
-/// until the mark is changed; clearing the label removes it. Without a
-/// sidecar, a new one is created. The
+/// until the mark is changed; clearing the label removes it. The local adjustments are
+/// rewritten whole: `arraw:localAdjustments`, `arraw:localAdjustmentsVersion` and
+/// `arraw:nextLocalAdjustmentId` are written when the list is not empty or the counter is above 1,
+/// and removed otherwise, so a state with no masks and a fresh counter leaves no trace and every
+/// state reads back equal. Without a sidecar, a new one is created. The
 /// file is replaced atomically. What is preserved is the meaning of the
 /// document, not its bytes: attributes may be reordered, the packet's padding
 /// and trailing newline are dropped, and the declaration is rewritten as UTF-8.
 /// @param photo Photograph whose settings and marks to write.
 /// @throws std::runtime_error if the existing sidecar is not XMP, or is of a
-/// newer ::arraw::sidecarVersion, naming it, in which case it is left alone,
-/// or if the file cannot be written.
+/// newer ::arraw::sidecarVersion, or holds local adjustments of a newer
+/// ::arraw::localAdjustmentsVersion (writing would destroy what a newer arraw wrote), naming it,
+/// in which case it is left alone, or if the file cannot be written.
 void writeSidecar(const Photo& photo);
 
 /// @brief Writes only the marks of a photograph into its sidecar.

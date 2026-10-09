@@ -786,3 +786,49 @@ amounts (`develop.frag`, `amounts.clarity`, `amounts.dehaze`). That was so
 before step 1. Once amounts are per pixel, a pixel with a local Clarity under a
 global Clarity of zero would branch differently on the two backends, so step 2
 changes both gates together.
+
+## Note, 2026-10-09 (what step 2 settled differently from the text)
+
+Step 2 (linear and radial, end to end without a GUI) agreed on these
+deviations and additions; where they differ from the text above, this note
+holds.
+
+- **`validate` rejects, edits and reading clamp.** Section 1 says out-of-range
+  values are clamped. `validate(const DevelopState&)` and
+  `validate(const LocalAdjustment&)` refuse an out-of-range number, as
+  `validate` does for settings (ADR 008); `normalised`, the edit rules and the
+  readers clamp.
+- **The name rule.** A name is valid UTF-8 made of characters XML 1.0 can
+  carry, without control characters (tab and line breaks included, DEL too).
+  `validate` and the edits refuse anything else; the readers strip it
+  (`storableMaskName`). A character XML cannot hold would make the whole
+  sidecar unreadable.
+- **Every field is a float.** Positions, radii, angle, feather, opacity and
+  each delta are `float` in the model and in the documents, as the settings are.
+- **"Every mask past 16" is counted by position.** A reader drops the entries
+  from the seventeenth of the stored list on, even when an earlier one was
+  dropped for another reason and fewer than 16 survive.
+- **The counter is repaired from the ids that were kept.** The stored counter
+  is raised above the largest kept id; a dropped mask's id does not count.
+- **A newer list blocks every write.** A sidecar holding a list of a version
+  newer than `localAdjustmentsVersion` refuses a marks-only write too, not
+  only a write of the list, so that the newer list is not lost with its
+  version.
+- **Presence gating.** The CPU and the shader gate Clarity and Dehaze on the
+  amount and on the base together (`applyPresence`, `hasBase`), and Dehaze
+  selects its base by the sign of the amount, exactly 0 reading neither. There
+  are two Dehaze bases (`hazeFloor`, `hazeMean`) sharing one reduction.
+- **The sum is not contracted.** The CPU sum `localSumsAt` is compiled with
+  `-ffp-contract=off` (the `arraw` target and what links it), as the shader's
+  `precise`, so that masks which cancel cancel exactly on every platform.
+- **Thumbnails.** The key of a developed thumbnail covers the masks (without
+  the id counter) when there are any.
+- **Measured CPU cost** (consequences, "measured in step 2"): a release export
+  of a 24 MP (6000 by 4000) 8-bit PNG on 8 cores, CPU device, PNG output, user
+  time over three runs: 18.3 to 19.0 s with no mask, 20.3 to 21.3 s with one
+  linear mask (Exposure, Contrast, Temperature, Shadows), 27.8 to 29.4 s with
+  16 (eight linear, eight radial, each with Exposure, Contrast, a relative
+  temperature or tint, Shadows or Highlights). Wall time was 15 to 18 s in all
+  three, dominated by the PNG decode and encode. So a mask costs about 0.6 s of
+  CPU per 24 MP (all 16: about 10 s), and a photograph with none pays nothing
+  (the digests are bit-identical).
