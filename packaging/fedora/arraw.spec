@@ -77,7 +77,8 @@ appstreamcli validate --no-net \
 
 %changelog
 * Fri Oct 09 2026 Jan Pipek <janpipek@users.noreply.github.com> - 0.4.0-1
-- Package the rewrite: the arraw-ui and arraw-cli executables, the desktop entry, the metainfo and the icons
+- Package rewrite: the arraw-ui and arraw-cli executables, the desktop entry, the metainfo and the icons
+- Some of the old features are temporarily not available.
 
 * Tue Aug 04 2026 Jan Pipek <janpipek@users.noreply.github.com> - 0.3.1-1
 - Add the arraw command-line front end with export, preset, and info subcommands (ADR 0049/0050/0051/0053)
@@ -122,7 +123,7 @@ appstreamcli validate --no-net \
 - Ship lensfun support and its profile database in Linux release artifacts
 - Add an About dialog and refresh installation, shortcut, and README documentation
 
-* Sun Jun 22 2026 Jan Pipek <janpipek@users.noreply.github.com> - 0.2.2-1
+* Mon Jun 22 2026 Jan Pipek <janpipek@users.noreply.github.com> - 0.2.2-1
 - Index the tone LUT in the perceptual domain for better shadow detail
 - Show a format label (ARW/JPEG/ARW+JPEG) on every filmstrip cell
 
