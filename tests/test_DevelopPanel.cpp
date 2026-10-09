@@ -1,5 +1,6 @@
 #include "CurveEditing.h"
 #include "HistoryModel.h"
+#include "ui/CollapsibleSection.h"
 #include "ui/CurveEditor.h"
 #include "ui/DevelopPanel.h"
 #include "ui/SettingSlider.h"
@@ -16,16 +17,17 @@
 #include <QCoreApplication>
 #include <QDialog>
 #include <QDoubleSpinBox>
-#include <QGroupBox>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QMouseEvent>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QSettings>
 #include <QSlider>
 #include <QStackedWidget>
 #include <QStyle>
+#include <QTest>
 #include <QTimer>
 
 #include <catch2/catch_test_macros.hpp>
@@ -105,7 +107,7 @@ TEST_CASE("The Presence group edits Texture, Clarity and Dehaze in both treatmen
         for (const std::string_view key : {"texture", "clarity", "dehaze"}) {
             SettingSlider* row = rowOf(panel, key);
             REQUIRE(row != nullptr);
-            auto* group = qobject_cast<QGroupBox*>(row->parentWidget());
+            auto* group = qobject_cast<CollapsibleSection*>(row->parentWidget()->parentWidget());
             REQUIRE(group != nullptr);
             CHECK(group->title() == QStringLiteral("Presence"));
             CHECK(group->isVisibleTo(&panel));
@@ -561,7 +563,7 @@ TEST_CASE("The crop mode disables every group but Crop", "[app][panel][crop]") {
     DevelopPanel panel;
     panel.showState(DevelopState{}, PanelContext{});
     const auto enabled = [&](const QString& title) {
-        for (const auto* group : panel.findChildren<QGroupBox*>()) {
+        for (const auto* group : panel.findChildren<CollapsibleSection*>()) {
             if (group->title() == title) {
                 return group->isEnabled();
             }
@@ -648,9 +650,8 @@ TEST_CASE("Every slider keeps its minimum track at the dock's minimum and defaul
 TEST_CASE("The panel titles its groups as the history names them", "[app][panel][history]") {
     DevelopPanel panel;
     QStringList titles;
-    for (const auto* group : panel.findChildren<QGroupBox*>()) {
-        // A mnemonic's ampersand is doubled in a title.
-        titles.push_back(QString(group->title()).replace("&&", "&"));
+    for (const auto* group : panel.findChildren<CollapsibleSection*>()) {
+        titles.push_back(group->title());
     }
     for (const SettingGroup group :
          {SettingGroup::Color, SettingGroup::Tone, SettingGroup::Geometry, SettingGroup::Hsl,
@@ -659,4 +660,118 @@ TEST_CASE("The panel titles its groups as the history names them", "[app][panel]
         INFO(groupDisplayName(group).toStdString());
         CHECK(titles.contains(groupDisplayName(group)));
     }
+}
+
+namespace {
+
+/// Forgets what the sections remember, before and after a case, so cases do not meet.
+struct CleanSections {
+    static void clear() {
+        QSettings settings;
+        settings.remove("developSections");
+    }
+
+    CleanSections() {
+        clear();
+    }
+
+    ~CleanSections() {
+        clear();
+    }
+};
+
+CollapsibleSection* sectionOf(const DevelopPanel& panel, const QString& id) {
+    return panel.findChild<CollapsibleSection*>("section_" + id);
+}
+
+QAbstractButton* headerOf(const CollapsibleSection* section) {
+    return section->findChild<QAbstractButton*>("sectionHeader");
+}
+
+} // namespace
+
+TEST_CASE("The develop groups are open at first and open and close from their title row",
+          "[app][panel][sections]") {
+    const CleanSections clean;
+    DevelopPanel panel;
+    panel.show();
+    const auto sections = panel.findChildren<CollapsibleSection*>();
+    CHECK(sections.size() == 11);
+    for (const CollapsibleSection* section : sections) {
+        INFO(section->title().toStdString());
+        CHECK(section->isOpen());
+    }
+
+    CollapsibleSection* tone = sectionOf(panel, "tone");
+    REQUIRE(tone != nullptr);
+    QAbstractButton* header = headerOf(tone);
+    REQUIRE(header != nullptr);
+    CHECK(header->text().startsWith(QString(QChar(u'▾'))));
+    CHECK(rowOf(panel, "exposure")->isVisible());
+
+    // The whole row takes the click, not only the arrow or the words.
+    QTest::mouseClick(header, Qt::LeftButton, Qt::NoModifier,
+                      QPoint(header->width() - 3, header->height() / 2));
+    CHECK_FALSE(tone->isOpen());
+    CHECK_FALSE(rowOf(panel, "exposure")->isVisible());
+    CHECK(header->text().startsWith(QString(QChar(u'▸'))));
+    // The others are as they were.
+    CHECK(sectionOf(panel, "color")->isOpen());
+
+    QTest::mouseClick(header, Qt::LeftButton);
+    CHECK(tone->isOpen());
+    CHECK(rowOf(panel, "exposure")->isVisible());
+}
+
+TEST_CASE("A title row is reached by Tab, flipped by Space, and never takes a click's focus",
+          "[app][panel][sections]") {
+    const CleanSections clean;
+    DevelopPanel panel;
+    panel.show();
+    CollapsibleSection* tone = sectionOf(panel, "tone");
+    QAbstractButton* header = headerOf(tone);
+    REQUIRE(header != nullptr);
+    // Tab only: a click would take the keys from the photograph or the crop overlay (ADR 040).
+    CHECK(header->focusPolicy() == Qt::TabFocus);
+    header->setFocus(Qt::TabFocusReason);
+    QTest::keyClick(header, Qt::Key_Space);
+    CHECK_FALSE(tone->isOpen());
+    QTest::keyClick(header, Qt::Key_Space);
+    CHECK(tone->isOpen());
+}
+
+TEST_CASE("Which groups are closed is kept across runs under the group's identifier",
+          "[app][panel][sections]") {
+    const CleanSections clean;
+    {
+        DevelopPanel panel;
+        sectionOf(panel, "toneCurve")->setOpen(false);
+        sectionOf(panel, "hsl")->setOpen(false);
+        sectionOf(panel, "hsl")->setOpen(true);
+    }
+    // Kept under the stable identifier, not the title, which is translated.
+    CHECK(QSettings().value("developSections/toneCurve/open").toBool() == false);
+    CHECK(QSettings().value("developSections/hsl/open").toBool() == true);
+
+    DevelopPanel again;
+    again.show();
+    CHECK_FALSE(sectionOf(again, "toneCurve")->isOpen());
+    CHECK_FALSE(again.findChild<CurveEditor*>()->isVisible());
+    CHECK(sectionOf(again, "hsl")->isOpen());
+    CHECK(sectionOf(again, "tone")->isOpen());
+}
+
+TEST_CASE("Closed groups do not narrow the dock", "[app][panel][sections]") {
+    const CleanSections clean;
+    const DevelopPanel open;
+    const int openWidth = open.minimumDockWidth();
+    for (CollapsibleSection* section : open.findChildren<CollapsibleSection*>()) {
+        section->setOpen(false);
+    }
+    // A panel built with every group closed, as the next run is, is as wide at least.
+    DevelopPanel closed;
+    for (const CollapsibleSection* section : closed.findChildren<CollapsibleSection*>()) {
+        CHECK_FALSE(section->isOpen());
+    }
+    CHECK(closed.minimumDockWidth() == openWidth);
 }

@@ -480,8 +480,12 @@ set_target_properties(arraw-app-core PROPERTIES AUTOMOC ON)
 
 # The widgets, apart from main(), so the widget tests can drive the whole window.
 add_library(arraw-app-ui STATIC
+        src/app/ui/ChromeHider.cpp
+        src/app/ui/ChromeHider.h
         src/app/ui/CopySettingsDialog.cpp
         src/app/ui/CopySettingsDialog.h
+        src/app/ui/CollapsibleSection.cpp
+        src/app/ui/CollapsibleSection.h
         src/app/ui/CropOverlay.cpp
         src/app/ui/CropOverlay.h
         src/app/ui/CullingActions.cpp

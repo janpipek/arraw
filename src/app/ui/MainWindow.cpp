@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 
+#include "ChromeHider.h"
 #include "CopySettingsDialog.h"
 #include "CropOverlay.h"
 #include "CullingActions.h"
@@ -13,6 +14,7 @@
 #include "FilmStrip.h"
 #include "HistoryModel.h"
 #include "MaskOverlay.h"
+#include "MasksPanel.h"
 #include "PhotoView.h"
 #include "RenderDelay.h"
 #include "RenderProgressPie.h"
@@ -56,13 +58,17 @@
 #include <QScrollBar>
 #include <QSettings>
 #include <QShortcut>
+#include <QSignalBlocker>
 #include <QStandardPaths>
 #include <QStatusBar>
 #include <QString>
 #include <QStringList>
 #include <QStyle>
 #include <QStyledItemDelegate>
+#include <QTabBar>
+#include <QTabWidget>
 #include <QToolButton>
+#include <QWindowStateChangeEvent>
 
 #include <algorithm>
 #include <cmath>
@@ -80,6 +86,11 @@
 namespace arraw::app {
 
 namespace {
+
+/// Index of the Adjustments tab of the develop dock.
+constexpr int adjustmentsTab = 0;
+/// Index of the Masks tab of the develop dock.
+constexpr int masksTab = 1;
 
 /// @brief Reads whether ARRAW_PREVIEW_DEVICE forces the CPU.
 ///
@@ -182,6 +193,7 @@ MainWindow::MainWindow(DebugLog& debugLog, QWidget* parent)
     buildDevelopDock();
     buildHistoryDock();
     buildFilmStripDock();
+    buildPanelActions();
 
     // Last in the View menu, after the docks' toggles.
     viewMenu_->addSeparator();
@@ -190,6 +202,7 @@ MainWindow::MainWindow(DebugLog& debugLog, QWidget* parent)
     connect(debugAction, &QAction::triggered, this, &MainWindow::showDebugWindow);
     // Also on the window, so the shortcut outlives a hidden menu bar.
     addAction(debugAction);
+    keepMenuShortcutsOnWindow(menuBar());
 
     cancelPickShortcut_ = new QShortcut(Qt::Key_Escape, this);
     cancelPickShortcut_->setEnabled(false);
@@ -499,22 +512,49 @@ void MainWindow::updateZoomControls() {
 
 void MainWindow::buildDevelopDock() {
     developPanel_ = new DevelopPanel;
-    auto* scroll = new QScrollArea;
-    scroll->setWidget(developPanel_);
-    scroll->setWidgetResizable(true);
-    scroll->setFrameShape(QFrame::NoFrame);
-    // A click on a button that takes no focus would otherwise give it to the scroll area,
-    // the nearest ancestor that takes it, and the photo view, or the crop mode, would lose
-    // its keys (ADR 040). The panel scrolls with the wheel and its scroll bar.
-    scroll->setFocusPolicy(Qt::NoFocus);
+    // Each tab scrolls on its own. A click on a button that takes no focus would otherwise
+    // give it to the scroll area, the nearest ancestor that takes it, and the photo view, or
+    // the crop mode, would lose its keys (ADR 040). The tabs scroll with the wheel and their
+    // scroll bars.
+    const auto scrolling = [](QWidget* content) {
+        auto* scroll = new QScrollArea;
+        scroll->setWidget(content);
+        scroll->setWidgetResizable(true);
+        scroll->setFrameShape(QFrame::NoFrame);
+        scroll->setFocusPolicy(Qt::NoFocus);
+        return scroll;
+    };
+    auto* adjustments = scrolling(developPanel_);
+    auto* masks = scrolling(developPanel_->masksPanel());
 
-    // Never narrower than the panel and a vertical scroll bar, so the panel never scrolls
+    // The tab follows the mask mode, and choosing one enters or leaves it (ADR 048). The tab
+    // bar takes no focus, for the same reason as the scroll areas.
+    developTabs_ = new QTabWidget;
+    developTabs_->setObjectName("developTabs");
+    developTabs_->setFocusPolicy(Qt::NoFocus);
+    developTabs_->tabBar()->setFocusPolicy(Qt::NoFocus);
+    developTabs_->setDocumentMode(true);
+    developTabs_->addTab(adjustments, tr("Adjustments"));
+    developTabs_->addTab(masks, tr("Masks"));
+    connect(developTabs_, &QTabWidget::currentChanged, this, [this](int index) {
+        setMaskMode(index == masksTab);
+        // The tab widget has already hidden the Masks page and passed its focus on, to
+        // the Adjustments controls or the tab bar; keys belong to the photograph.
+        if (index != masksTab && developTabs_->isAncestorOf(QApplication::focusWidget())) {
+            photoView_->setFocus();
+        }
+    });
+
+    // Never narrower than the wider tab and a vertical scroll bar, so neither scrolls
     // sideways; it opens a little wider (DevelopPanel::defaultDockWidth()).
-    scroll->setMinimumWidth(developPanel_->minimumDockWidth() + 2 * scroll->frameWidth());
+    developTabs_->setMinimumWidth(developPanel_->minimumDockWidth() +
+                                  2 * adjustments->frameWidth());
 
     auto* dock = new QDockWidget(tr("Develop"), this);
-    dock->setFeatures(QDockWidget::NoDockWidgetFeatures);
-    dock->setWidget(scroll);
+    // Closable, and nothing else: QDockWidget offers a toggle action only to a closable dock.
+    dock->setObjectName("DevelopDock");
+    dock->setFeatures(QDockWidget::DockWidgetClosable);
+    dock->setWidget(developTabs_);
     dock->setEnabled(false);
     addDockWidget(Qt::RightDockWidgetArea, dock);
     resizeDocks({dock}, {developPanel_->defaultDockWidth()}, Qt::Horizontal);
@@ -535,7 +575,7 @@ void MainWindow::buildDevelopDock() {
                     // moves the focus to the photograph; a keyboard user keeps the list.
                     QWidget* held = QApplication::focusWidget();
                     setMaskMode(true);
-                    if (held != nullptr && developPanel_->isAncestorOf(held)) {
+                    if (held != nullptr && developDock_->isAncestorOf(held)) {
                         held->setFocus();
                     }
                 }
@@ -683,7 +723,7 @@ void MainWindow::setMaskMode(bool masking) {
         return;
     }
     if (!editable() || photoView_->isMaskMode()) {
-        maskAction_->setChecked(photoView_->isMaskMode());
+        showMaskMode();
         return;
     }
     // Keeping the crop, as pressing C again does.
@@ -697,12 +737,28 @@ void MainWindow::setMaskMode(bool masking) {
         }
         syncMasks();
     });
+    showMaskMode();
+}
+
+void MainWindow::showMaskMode() {
     maskAction_->setChecked(photoView_->isMaskMode());
+    if (developTabs_ == nullptr) {
+        return;
+    }
+    // The tab shows what the mode is; moving it must not enter or leave the mode again.
+    const QSignalBlocker blocker(developTabs_);
+    // Hiding the Masks page would pass its focus on to the Adjustments controls, and keys would
+    // stop reaching the photograph (ADR 040).
+    if (!photoView_->isMaskMode() &&
+        developTabs_->widget(masksTab)->isAncestorOf(QApplication::focusWidget())) {
+        photoView_->setFocus();
+    }
+    developTabs_->setCurrentIndex(photoView_->isMaskMode() ? masksTab : adjustmentsTab);
 }
 
 void MainWindow::leaveMaskMode() {
     if (!photoView_->isMaskMode()) {
-        maskAction_->setChecked(false);
+        showMaskMode();
         return;
     }
     // A gesture under way is dropped with its edit.
@@ -710,7 +766,7 @@ void MainWindow::leaveMaskMode() {
     photoView_->maskOverlay().setTool(MaskTool::None);
     developPanel_->setMaskTool(MaskTool::None);
     photoView_->setMaskMode(false);
-    maskAction_->setChecked(false);
+    showMaskMode();
     for (QShortcut* shortcut : maskShortcuts_) {
         shortcut->setEnabled(false);
     }
@@ -914,7 +970,95 @@ void MainWindow::buildHistoryDock() {
     QAction* toggle = historyDock_->toggleViewAction();
     toggle->setObjectName("presetsAndHistoryAction");
     toggle->setText(tr("Presets and &History"));
-    viewMenu_->addAction(toggle);
+}
+
+void MainWindow::buildPanelActions() {
+    // The docks' own toggles, in the View menu's order. Each is also added to the window,
+    // so the key still works when lights-out has hidden the menu bar.
+    const auto addToggle = [this](QAction* toggle, const QKeySequence& key) {
+        toggle->setShortcut(key);
+        viewMenu_->addAction(toggle);
+        addAction(toggle);
+    };
+    addToggle(historyDock_->toggleViewAction(), Qt::Key_F7);
+
+    QAction* develop = developDock_->toggleViewAction();
+    develop->setObjectName("developPanelAction");
+    develop->setText(tr("&Develop Panel"));
+    addToggle(develop, Qt::Key_F8);
+
+    addToggle(stripDock_->toggleViewAction(), Qt::Key_F9);
+    panelToggles_ = {historyDock_->toggleViewAction(), develop, stripDock_->toggleViewAction()};
+
+    viewMenu_->addSeparator();
+    fullScreenAction_ = viewMenu_->addAction(tr("&Full Screen"));
+    fullScreenAction_->setObjectName("fullScreenAction");
+    fullScreenAction_->setCheckable(true);
+    fullScreenAction_->setShortcut(Qt::Key_F11);
+    connect(fullScreenAction_, &QAction::triggered, this, &MainWindow::toggleFullScreen);
+    addAction(fullScreenAction_);
+
+    panelHider_ = std::make_unique<ChromeHider>(
+        std::vector<QWidget*>{developDock_, historyDock_, stripDock_, menuBar(), statusBar()});
+    hidePanelsAction_ = viewMenu_->addAction(tr("&Hide Panels"));
+    hidePanelsAction_->setObjectName("hidePanelsAction");
+    hidePanelsAction_->setCheckable(true);
+    hidePanelsAction_->setShortcut(Qt::Key_F12);
+    connect(hidePanelsAction_, &QAction::triggered, this, &MainWindow::setPanelsHidden);
+    addAction(hidePanelsAction_);
+}
+
+void MainWindow::keepMenuShortcutsOnWindow(QWidget* menu) {
+    // Qt does not fire the shortcut of an action whose only widget is a hidden menu, which
+    // is what Hide Panels makes of the menu bar. The window carries them all instead.
+    for (QAction* action : menu->actions()) {
+        if (action->menu() != nullptr) {
+            keepMenuShortcutsOnWindow(action->menu());
+        } else if (!action->shortcut().isEmpty() && !actions().contains(action)) {
+            addAction(action);
+        }
+    }
+}
+
+void MainWindow::setPanelsHidden(bool hidden) {
+    if (hidden) {
+        panelHider_->hide();
+    } else {
+        panelHider_->restore();
+    }
+    // The dock toggles would show a panel the restore is about to hide again; they rest
+    // while the panels are away, and F12 (or the menu's Hide Panels) brings them back.
+    for (QAction* toggle : panelToggles_) {
+        toggle->setEnabled(!hidden);
+    }
+    hidePanelsAction_->setChecked(panelHider_->hidden());
+}
+
+void MainWindow::toggleFullScreen() {
+    // The state before full screen is noted in changeEvent(), which also sees full screen
+    // entered from outside the program.
+    if (isFullScreen()) {
+        if (maximizedBeforeFullScreen_) {
+            showMaximized();
+        } else {
+            showNormal();
+        }
+    } else {
+        showFullScreen();
+    }
+}
+
+void MainWindow::changeEvent(QEvent* event) {
+    if (event->type() == QEvent::WindowStateChange) {
+        const auto previous = static_cast<QWindowStateChangeEvent*>(event)->oldState();
+        if (isFullScreen() && !previous.testFlag(Qt::WindowFullScreen)) {
+            maximizedBeforeFullScreen_ = previous.testFlag(Qt::WindowMaximized);
+        }
+        if (fullScreenAction_ != nullptr) {
+            fullScreenAction_->setChecked(isFullScreen());
+        }
+    }
+    QMainWindow::changeEvent(event);
 }
 
 void MainWindow::updateHistoryDock() {
@@ -1419,8 +1563,6 @@ void MainWindow::buildFilmStripDock() {
     QAction* toggle = stripDock_->toggleViewAction();
     toggle->setObjectName("filmStripAction");
     toggle->setText(tr("&Film Strip"));
-    toggle->setShortcut(Qt::Key_F9);
-    viewMenu_->addAction(toggle);
 
     filmStrip_->setMarksWriter([this](const std::filesystem::path& primary,
                                       const PhotoMarks& marks) { writeMarks(primary, marks); });

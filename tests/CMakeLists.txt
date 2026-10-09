@@ -124,6 +124,7 @@ add_executable(arraw-widget-tests
         test_CurveEditor.cpp
         test_DevelopPanel.cpp
         test_MainWindowHistory.cpp
+        test_MainWindowView.cpp
         test_MainWindowCopy.cpp
         test_MainWindowCrop.cpp
         test_MainWindowMasks.cpp

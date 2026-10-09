@@ -43,10 +43,12 @@ class QListView;
 class QToolButton;
 class QEvent;
 class QShortcut;
+class QTabWidget;
 class QObject;
 
 namespace arraw::app {
 
+class ChromeHider;
 class CullingActions;
 struct DebugLog;
 class DebugWindow;
@@ -104,7 +106,34 @@ protected:
     /// @param event Close request.
     void closeEvent(QCloseEvent* event) override;
 
+    /// @brief Keeps the Full Screen action and the state to return to in step with the window.
+    /// @param event Change notification.
+    void changeEvent(QEvent* event) override;
+
 private:
+    /// @brief Adds the panel toggles (F7, F8, F9), Full Screen (F11) and Hide Panels (F12)
+    /// to the View menu and to the window, so their keys outlive a hidden menu bar.
+    void buildPanelActions();
+
+    /// @brief Adds the shortcut-bearing actions of a menu, submenus included, to the window.
+    ///
+    /// Lights-out hides the menu bar, and Qt does not fire an action whose only widget is a
+    /// hidden menu. Run once, at the end of the constructor: re-run it after adding a menu action
+    /// that has a shortcut, or that key stops working in lights-out.
+    /// @param menu The menu or menu bar to walk.
+    void keepMenuShortcutsOnWindow(QWidget* menu);
+
+    /// @brief Hides or restores every panel, the menu bar and the status bar.
+    ///
+    /// Each comes back as visible as it was; one that was closed stays closed. The dock
+    /// toggles (F7, F8, F9) are disabled while the panels are hidden, so a panel cannot
+    /// change under the snapshot; only Hide Panels leaves the mode.
+    /// @param hidden True to hide, false to restore.
+    void setPanelsHidden(bool hidden);
+
+    /// @brief Enters full screen, or returns to the maximised or normal state it left.
+    void toggleFullScreen();
+
     /// @brief Builds the menu bar and the actions it offers.
     void buildMenu();
 
@@ -255,6 +284,9 @@ private:
     ///
     /// Keeps the selection, so the panel still shows the mask's rows.
     void leaveMaskMode();
+
+    /// @brief Shows whether the mask mode is on, in its action and in the develop tabs.
+    void showMaskMode();
 
     /// @brief Selects a mask, or none, in the overlay and the panel.
     /// @param id Mask to select; dropped when the state holds none with that id.
@@ -467,7 +499,19 @@ private:
     /// Decides when a render in progress shows, and what of it.
     RenderIndicator* renderIndicator_ = nullptr;
     DevelopPanel* developPanel_ = nullptr;
-    QWidget* developDock_ = nullptr;
+    /// Tabs of the develop dock: Adjustments and Masks, the tab following the mask mode.
+    QTabWidget* developTabs_ = nullptr;
+    QDockWidget* developDock_ = nullptr;
+    /// Whether the window was maximised when it last entered full screen.
+    bool maximizedBeforeFullScreen_ = false;
+    /// Full Screen toggle (F11), checked while the window is full screen.
+    QAction* fullScreenAction_ = nullptr;
+    /// Hide Panels toggle (F12), checked while the panels are hidden.
+    QAction* hidePanelsAction_ = nullptr;
+    /// The dock toggles of F7, F8 and F9.
+    std::vector<QAction*> panelToggles_;
+    /// Hides the panels and the bars together for Hide Panels.
+    std::unique_ptr<ChromeHider> panelHider_;
     /// Steps of the open photograph's session, newest on top.
     HistoryModel* historyModel_ = nullptr;
     QListView* historyView_ = nullptr;
