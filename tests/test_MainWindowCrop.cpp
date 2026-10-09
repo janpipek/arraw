@@ -1,3 +1,4 @@
+#include "DebugLog.h"
 #include "support/TempDir.h"
 #include "ui/CropOverlay.h"
 #include "ui/DevelopPanel.h"
@@ -35,7 +36,8 @@ namespace {
 /// A window with a folder of two photographs open, the first one shown and rendered.
 struct Window {
     test::TempDir folder;
-    MainWindow window;
+    DebugLog debugLog;
+    MainWindow window{debugLog};
 
     Window() {
         const std::filesystem::path fixtures(ARRAW_TEST_DATA_DIR);
@@ -101,7 +103,7 @@ struct Window {
 TEST_CASE("In the crop mode the keys stay with the mode wherever the focus went",
           "[app][window][crop]") {
     Window w;
-    w.press(Qt::Key_R);
+    w.press(Qt::Key_C);
     REQUIRE(w.view().isCropMode());
     CHECK(QApplication::focusWidget() == &w.overlay());
     const int rating = w.strip().activeMarks().rating;
@@ -131,7 +133,7 @@ TEST_CASE("In the crop mode the keys stay with the mode wherever the focus went"
 TEST_CASE("Enter after typing an angle ends the typing; the next Enter keeps the crop",
           "[app][window][crop]") {
     Window w;
-    w.press(Qt::Key_R);
+    w.press(Qt::Key_C);
     REQUIRE(w.view().isCropMode());
     QDoubleSpinBox* angle = nullptr;
     for (auto* row : w.panel().findChildren<SettingSlider*>()) {
@@ -158,7 +160,7 @@ TEST_CASE("Undo in the crop mode steps through its gestures; leaving keeps one s
     Window w;
     QAction& undo = w.action("undoAction");
     QAction& redo = w.action("redoAction");
-    w.press(Qt::Key_R);
+    w.press(Qt::Key_C);
     REQUIRE(w.view().isCropMode());
     CHECK_FALSE(undo.isEnabled());
 
@@ -191,7 +193,7 @@ TEST_CASE("Undo in the crop mode steps through its gestures; leaving keeps one s
 
 TEST_CASE("The crop mode opens on the photograph, not an empty frame", "[app][window][crop]") {
     Window w;
-    w.press(Qt::Key_R);
+    w.press(Qt::Key_C);
     REQUIRE(w.view().isCropMode());
     // Before any render of the mode could arrive: no event has been processed since. The
     // developed frame stands in at once; the camera's preview is read off the GUI thread
@@ -202,7 +204,7 @@ TEST_CASE("The crop mode opens on the photograph, not an empty frame", "[app][wi
     REQUIRE(QTest::qWaitFor([&] { return w.overlay().hasRender(); }, 20000));
     w.press(Qt::Key_Return);
     REQUIRE_FALSE(w.view().isCropMode());
-    w.press(Qt::Key_R);
+    w.press(Qt::Key_C);
     REQUIRE(w.view().isCropMode());
     CHECK(w.overlay().hasRender());
     w.press(Qt::Key_Escape);
@@ -220,31 +222,32 @@ TEST_CASE("The crop mode leaves only the Crop group to edit", "[app][window][cro
     };
     REQUIRE(tone() != nullptr);
     CHECK(tone()->isEnabled());
-    w.press(Qt::Key_R);
+    w.press(Qt::Key_C);
     CHECK_FALSE(tone()->isEnabled());
-    w.press(Qt::Key_R);
+    w.press(Qt::Key_C);
     CHECK_FALSE(w.view().isCropMode());
     CHECK(tone()->isEnabled());
 }
 
-TEST_CASE("Colour labels take Shift with the colour's initial", "[app][window]") {
+TEST_CASE("Colour labels take the colour's initial; C is the crop mode", "[app][window]") {
     Window w;
     REQUIRE_FALSE(w.strip().activeMarks().label.has_value());
     w.press(Qt::Key_G);
-    CHECK_FALSE(w.strip().activeMarks().label.has_value());
-    w.press(Qt::Key_G, Qt::ShiftModifier);
     CHECK(w.strip().activeMarks().label == ColorLabel::Green);
-    w.press(Qt::Key_Y, Qt::ShiftModifier);
+    w.press(Qt::Key_Y);
     CHECK(w.strip().activeMarks().label == ColorLabel::Yellow);
-    w.press(Qt::Key_R, Qt::ShiftModifier);
+    w.press(Qt::Key_R);
     CHECK(w.strip().activeMarks().label == ColorLabel::Red);
     CHECK_FALSE(w.view().isCropMode());
+    w.press(Qt::Key_C);
+    CHECK(w.view().isCropMode());
+    CHECK(w.strip().activeMarks().label == ColorLabel::Red);
 }
 
 TEST_CASE("Right in the crop mode keeps the crop and steps to the next photograph",
           "[app][window][crop]") {
     Window w;
-    w.press(Qt::Key_R);
+    w.press(Qt::Key_C);
     QTest::mouseClick(&w.button("cropTurnRight"), Qt::LeftButton);
     // Leaving the photograph asks about the unsaved crop; the test saves it.
     QTimer::singleShot(0, [] {

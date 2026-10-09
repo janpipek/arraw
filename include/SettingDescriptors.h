@@ -1,6 +1,7 @@
 #pragma once
 
 #include <DevelopSettings.h>
+#include <LocalAdjustments.h>
 #include <RenderCheckpoint.h>
 #include <WhiteBalance.h>
 
@@ -53,6 +54,46 @@ enum class SettingGroup {
     Presence, ///< Texture, Clarity and Dehaze, which Lightroom shows in its Basic panel.
 };
 
+/// @brief Part of a look that is copied, pasted and saved as one unit.
+///
+/// Finer than ::arraw::SettingGroup: exposure is apart from the rest of Tone, the white balance
+/// apart from Saturation and Vibrance, and the vignette apart from the grain.
+enum class CopySection {
+    WhiteBalance,   ///< White balance mode, temperature and tint.
+    Exposure,       ///< Exposure.
+    Tone,           ///< Contrast, highlights, shadows, whites, blacks and filmic highlights.
+    Presence,       ///< Texture, clarity and dehaze.
+    Color,          ///< Saturation and vibrance.
+    ToneCurve,      ///< The luma, red, green and blue curves.
+    Hsl,            ///< Hue, saturation and luminance of each colour band.
+    BlackAndWhite,  ///< Grayscale conversion and the grey mix.
+    ColorGrading,   ///< Shadow, midtone and highlight grading, balance and blending.
+    NoiseReduction, ///< Luminance and colour noise reduction.
+    Vignette,       ///< Vignette amount, midpoint and feather.
+    Grain,          ///< Grain amount, size, roughness and model; never the seed.
+    RotateAndFlip,  ///< Quarter-turn rotation, flips and straightening.
+    Crop,           ///< Crop rectangle and aspect.
+};
+
+/// @brief Stable names of the copy sections, in enumeration order, as documents and the
+/// command line spell them.
+inline constexpr auto copySectionNames = std::to_array<std::string_view>({
+    "whiteBalance",
+    "exposure",
+    "tone",
+    "presence",
+    "color",
+    "toneCurve",
+    "hsl",
+    "blackAndWhite",
+    "colorGrading",
+    "noiseReduction",
+    "vignette",
+    "grain",
+    "rotateAndFlip",
+    "crop",
+});
+
 /// @brief Whether a setting means anything for every photograph.
 enum class Applicability {
     Always,  ///< Applies to any image.
@@ -83,6 +124,10 @@ struct FieldDescriptor {
     /// @brief Panel the setting is shown in.
     SettingGroup group;
 
+    /// @brief Section of a look the setting is copied, pasted and saved with; absent for the
+    /// photograph's own settings, which no look carries.
+    std::optional<CopySection> section;
+
     /// @brief Photographs the setting applies to.
     Applicability applies;
 
@@ -107,25 +152,27 @@ struct FieldDescriptor {
                     ARRAW_ACCESSOR(float, hsl.member.hue),                                         \
                     SettingRange{weakestHslControl, strongestHslControl},                          \
                     SettingGroup::Hsl,                                                             \
+                    CopySection::Hsl,                                                              \
                     Applicability::Always,                                                         \
                     Stage::Pointwise},                                                             \
         FieldDescriptor{"saturation" #Name,                                                        \
                         ARRAW_ACCESSOR(float, hsl.member.saturation),                              \
                         SettingRange{weakestHslControl, strongestHslControl},                      \
                         SettingGroup::Hsl,                                                         \
+                        CopySection::Hsl,                                                          \
                         Applicability::Always,                                                     \
                         Stage::Pointwise},                                                         \
         FieldDescriptor {                                                                          \
         "luminance" #Name, ARRAW_ACCESSOR(float, hsl.member.luminance),                            \
             SettingRange{weakestHslControl, strongestHslControl}, SettingGroup::Hsl,               \
-            Applicability::Always, Stage::Pointwise                                                \
+            CopySection::Hsl, Applicability::Always, Stage::Pointwise                              \
     }
 
 #define ARRAW_GRAY_BAND(Name, member)                                                              \
     FieldDescriptor {                                                                              \
         "gray" #Name, ARRAW_ACCESSOR(float, blackAndWhite.member),                                 \
             SettingRange{darkestGrayMix, lightestGrayMix}, SettingGroup::BlackAndWhite,            \
-            Applicability::Always, Stage::Pointwise                                                \
+            CopySection::BlackAndWhite, Applicability::Always, Stage::Pointwise                    \
     }
 
 // The two rows of one Colour Grading zone.
@@ -134,12 +181,13 @@ struct FieldDescriptor {
                     ARRAW_ACCESSOR(float, colorGrading.member.hue),                                \
                     SettingRange{minimumGradeHue, maximumGradeHue},                                \
                     SettingGroup::ColorGrading,                                                    \
+                    CopySection::ColorGrading,                                                     \
                     Applicability::Always,                                                         \
                     Stage::Pointwise},                                                             \
         FieldDescriptor {                                                                          \
         "grade" #Name "Saturation", ARRAW_ACCESSOR(float, colorGrading.member.saturation),         \
             SettingRange{weakestGrade, strongestGrade}, SettingGroup::ColorGrading,                \
-            Applicability::Always, Stage::Pointwise                                                \
+            CopySection::ColorGrading, Applicability::Always, Stage::Pointwise                     \
     }
 
 /// @brief One descriptor per leaf of ::arraw::DevelopSettings.
@@ -149,56 +197,61 @@ struct FieldDescriptor {
 inline constexpr std::array developSettingDescriptors{
     FieldDescriptor{"exposure", ARRAW_ACCESSOR(float, tone.exposure),
                     SettingRange{darkestExposure, brightestExposure}, SettingGroup::Tone,
-                    Applicability::Always, Stage::Pointwise},
+                    CopySection::Exposure, Applicability::Always, Stage::Pointwise},
     FieldDescriptor{"contrast", ARRAW_ACCESSOR(float, tone.contrast),
                     SettingRange{flattestContrast, steepestContrast}, SettingGroup::Tone,
-                    Applicability::Always, Stage::Pointwise},
+                    CopySection::Tone, Applicability::Always, Stage::Pointwise},
     FieldDescriptor{"shadows", ARRAW_ACCESSOR(float, tone.shadows),
                     SettingRange{weakestToneControl, strongestToneControl}, SettingGroup::Tone,
-                    Applicability::Always, Stage::Pointwise},
+                    CopySection::Tone, Applicability::Always, Stage::Pointwise},
     FieldDescriptor{"highlights", ARRAW_ACCESSOR(float, tone.highlights),
                     SettingRange{weakestToneControl, strongestToneControl}, SettingGroup::Tone,
-                    Applicability::Always, Stage::Pointwise},
+                    CopySection::Tone, Applicability::Always, Stage::Pointwise},
     FieldDescriptor{"blacks", ARRAW_ACCESSOR(float, tone.blacks),
                     SettingRange{weakestToneControl, strongestToneControl}, SettingGroup::Tone,
-                    Applicability::Always, Stage::Pointwise},
+                    CopySection::Tone, Applicability::Always, Stage::Pointwise},
     FieldDescriptor{"whites", ARRAW_ACCESSOR(float, tone.whites),
                     SettingRange{weakestToneControl, strongestToneControl}, SettingGroup::Tone,
-                    Applicability::Always, Stage::Pointwise},
+                    CopySection::Tone, Applicability::Always, Stage::Pointwise},
     FieldDescriptor{"filmicHighlights", ARRAW_ACCESSOR(float, tone.filmicHighlights),
                     SettingRange{noFilmicHighlights, fullFilmicHighlights}, SettingGroup::Tone,
-                    Applicability::Always, Stage::Pointwise},
+                    CopySection::Tone, Applicability::Always, Stage::Pointwise},
     FieldDescriptor{"texture", ARRAW_ACCESSOR(float, presence.texture),
                     SettingRange{weakestPresence, strongestPresence}, SettingGroup::Presence,
-                    Applicability::Always, Stage::Pointwise},
+                    CopySection::Presence, Applicability::Always, Stage::Pointwise},
     FieldDescriptor{"clarity", ARRAW_ACCESSOR(float, presence.clarity),
                     SettingRange{weakestPresence, strongestPresence}, SettingGroup::Presence,
-                    Applicability::Always, Stage::Pointwise},
+                    CopySection::Presence, Applicability::Always, Stage::Pointwise},
     FieldDescriptor{"dehaze", ARRAW_ACCESSOR(float, presence.dehaze),
                     SettingRange{weakestPresence, strongestPresence}, SettingGroup::Presence,
-                    Applicability::Always, Stage::Pointwise},
+                    CopySection::Presence, Applicability::Always, Stage::Pointwise},
     FieldDescriptor{"toneCurveLuma", ARRAW_ACCESSOR(ToneCurve, toneCurve.luma), std::nullopt,
-                    SettingGroup::ToneCurve, Applicability::Always, Stage::Pointwise},
+                    SettingGroup::ToneCurve, CopySection::ToneCurve, Applicability::Always,
+                    Stage::Pointwise},
     FieldDescriptor{"toneCurveRed", ARRAW_ACCESSOR(ToneCurve, toneCurve.red), std::nullopt,
-                    SettingGroup::ToneCurve, Applicability::Always, Stage::Pointwise},
+                    SettingGroup::ToneCurve, CopySection::ToneCurve, Applicability::Always,
+                    Stage::Pointwise},
     FieldDescriptor{"toneCurveGreen", ARRAW_ACCESSOR(ToneCurve, toneCurve.green), std::nullopt,
-                    SettingGroup::ToneCurve, Applicability::Always, Stage::Pointwise},
+                    SettingGroup::ToneCurve, CopySection::ToneCurve, Applicability::Always,
+                    Stage::Pointwise},
     FieldDescriptor{"toneCurveBlue", ARRAW_ACCESSOR(ToneCurve, toneCurve.blue), std::nullopt,
-                    SettingGroup::ToneCurve, Applicability::Always, Stage::Pointwise},
+                    SettingGroup::ToneCurve, CopySection::ToneCurve, Applicability::Always,
+                    Stage::Pointwise},
     FieldDescriptor{"whiteBalance", ARRAW_ACCESSOR(WhiteBalanceMode, color.whiteBalance),
-                    std::nullopt, SettingGroup::Color, Applicability::Always, Stage::Pointwise},
+                    std::nullopt, SettingGroup::Color, CopySection::WhiteBalance,
+                    Applicability::Always, Stage::Pointwise},
     FieldDescriptor{"temperature", ARRAW_ACCESSOR(std::optional<float>, color.temperature),
                     SettingRange{warmestKelvin, coolestKelvin}, SettingGroup::Color,
-                    Applicability::RawOnly, Stage::Pointwise},
+                    CopySection::WhiteBalance, Applicability::RawOnly, Stage::Pointwise},
     FieldDescriptor{"tint", ARRAW_ACCESSOR(std::optional<float>, color.tint),
                     SettingRange{-tintLimit, tintLimit}, SettingGroup::Color,
-                    Applicability::RawOnly, Stage::Pointwise},
+                    CopySection::WhiteBalance, Applicability::RawOnly, Stage::Pointwise},
     FieldDescriptor{"saturation", ARRAW_ACCESSOR(float, color.saturation),
                     SettingRange{weakestSaturation, strongestSaturation}, SettingGroup::Color,
-                    Applicability::Always, Stage::Pointwise},
+                    CopySection::Color, Applicability::Always, Stage::Pointwise},
     FieldDescriptor{"vibrance", ARRAW_ACCESSOR(float, color.vibrance),
                     SettingRange{weakestSaturation, strongestSaturation}, SettingGroup::Color,
-                    Applicability::Always, Stage::Pointwise},
+                    CopySection::Color, Applicability::Always, Stage::Pointwise},
     ARRAW_HSL_BAND(Red, red),
     ARRAW_HSL_BAND(Orange, orange),
     ARRAW_HSL_BAND(Yellow, yellow),
@@ -208,8 +261,8 @@ inline constexpr std::array developSettingDescriptors{
     ARRAW_HSL_BAND(Purple, purple),
     ARRAW_HSL_BAND(Magenta, magenta),
     FieldDescriptor{"convertToGrayscale", ARRAW_ACCESSOR(bool, blackAndWhite.convertToGrayscale),
-                    std::nullopt, SettingGroup::BlackAndWhite, Applicability::Always,
-                    Stage::Pointwise},
+                    std::nullopt, SettingGroup::BlackAndWhite, CopySection::BlackAndWhite,
+                    Applicability::Always, Stage::Pointwise},
     ARRAW_GRAY_BAND(Red, red),
     ARRAW_GRAY_BAND(Orange, orange),
     ARRAW_GRAY_BAND(Yellow, yellow),
@@ -223,62 +276,74 @@ inline constexpr std::array developSettingDescriptors{
     ARRAW_GRADE_ZONE(Highlight, highlights),
     FieldDescriptor{"gradeBalance", ARRAW_ACCESSOR(float, colorGrading.balance),
                     SettingRange{-gradeBalanceLimit, gradeBalanceLimit}, SettingGroup::ColorGrading,
-                    Applicability::Always, Stage::Pointwise},
+                    CopySection::ColorGrading, Applicability::Always, Stage::Pointwise},
     FieldDescriptor{"gradeBlending", ARRAW_ACCESSOR(float, colorGrading.blending),
                     SettingRange{sharpestGradeBlending, softestGradeBlending},
-                    SettingGroup::ColorGrading, Applicability::Always, Stage::Pointwise},
+                    SettingGroup::ColorGrading, CopySection::ColorGrading, Applicability::Always,
+                    Stage::Pointwise},
     FieldDescriptor{"vignetteAmount", ARRAW_ACCESSOR(float, effects.vignette.amount),
                     SettingRange{darkestVignette, lightestVignette}, SettingGroup::Effects,
-                    Applicability::Always, Stage::Effects},
+                    CopySection::Vignette, Applicability::Always, Stage::Effects},
     FieldDescriptor{"vignetteMidpoint", ARRAW_ACCESSOR(float, effects.vignette.midpoint),
                     SettingRange{minimumVignetteShape, maximumVignetteShape}, SettingGroup::Effects,
-                    Applicability::Always, Stage::Effects},
+                    CopySection::Vignette, Applicability::Always, Stage::Effects},
     FieldDescriptor{"vignetteFeather", ARRAW_ACCESSOR(float, effects.vignette.feather),
                     SettingRange{minimumVignetteShape, maximumVignetteShape}, SettingGroup::Effects,
-                    Applicability::Always, Stage::Effects},
+                    CopySection::Vignette, Applicability::Always, Stage::Effects},
     FieldDescriptor{"grainAmount", ARRAW_ACCESSOR(float, effects.grain.amount),
                     SettingRange{minimumGrainControl, maximumGrainControl}, SettingGroup::Effects,
-                    Applicability::Always, Stage::Effects},
+                    CopySection::Grain, Applicability::Always, Stage::Effects},
     FieldDescriptor{"grainSize", ARRAW_ACCESSOR(float, effects.grain.size),
                     SettingRange{minimumGrainControl, maximumGrainControl}, SettingGroup::Effects,
-                    Applicability::Always, Stage::Effects},
+                    CopySection::Grain, Applicability::Always, Stage::Effects},
     FieldDescriptor{"grainRoughness", ARRAW_ACCESSOR(float, effects.grain.roughness),
                     SettingRange{minimumGrainControl, maximumGrainControl}, SettingGroup::Effects,
-                    Applicability::Always, Stage::Effects},
+                    CopySection::Grain, Applicability::Always, Stage::Effects},
     FieldDescriptor{"grainModel", ARRAW_ACCESSOR(GrainModel, effects.grain.model), std::nullopt,
-                    SettingGroup::Effects, Applicability::Always, Stage::Effects},
+                    SettingGroup::Effects, CopySection::Grain, Applicability::Always,
+                    Stage::Effects},
     FieldDescriptor{"grainSeed", ARRAW_ACCESSOR(std::uint32_t, effects.grain.seed),
-                    SettingRange{0.0, maximumGrainSeed}, SettingGroup::Effects,
+                    SettingRange{0.0, maximumGrainSeed}, SettingGroup::Effects, std::nullopt,
                     Applicability::Always, Stage::Effects, SettingScope::Photo},
     FieldDescriptor{"luminanceNoiseReduction", ARRAW_ACCESSOR(float, noiseReduction.luminance),
                     SettingRange{minimumNoiseReduction, maximumNoiseReduction},
-                    SettingGroup::Detail, Applicability::Always, Stage::Denoise},
+                    SettingGroup::Detail, CopySection::NoiseReduction, Applicability::Always,
+                    Stage::Denoise},
     FieldDescriptor{"luminanceNoiseDetail", ARRAW_ACCESSOR(float, noiseReduction.luminanceDetail),
                     SettingRange{minimumNoiseReduction, maximumNoiseReduction},
-                    SettingGroup::Detail, Applicability::Always, Stage::Denoise},
+                    SettingGroup::Detail, CopySection::NoiseReduction, Applicability::Always,
+                    Stage::Denoise},
     FieldDescriptor{"luminanceNoiseFilter",
                     ARRAW_ACCESSOR(LuminanceNoiseFilter, noiseReduction.luminanceFilter),
-                    std::nullopt, SettingGroup::Detail, Applicability::Always, Stage::Denoise},
+                    std::nullopt, SettingGroup::Detail, CopySection::NoiseReduction,
+                    Applicability::Always, Stage::Denoise},
     FieldDescriptor{"colorNoiseReduction", ARRAW_ACCESSOR(float, noiseReduction.color),
                     SettingRange{minimumNoiseReduction, maximumNoiseReduction},
-                    SettingGroup::Detail, Applicability::Always, Stage::Denoise},
+                    SettingGroup::Detail, CopySection::NoiseReduction, Applicability::Always,
+                    Stage::Denoise},
     FieldDescriptor{"colorNoiseSmoothness", ARRAW_ACCESSOR(float, noiseReduction.colorSmoothness),
                     SettingRange{minimumNoiseReduction, maximumNoiseReduction},
-                    SettingGroup::Detail, Applicability::Always, Stage::Denoise},
+                    SettingGroup::Detail, CopySection::NoiseReduction, Applicability::Always,
+                    Stage::Denoise},
     FieldDescriptor{"rotation", ARRAW_ACCESSOR(QuarterTurn, geometry.rotation), std::nullopt,
-                    SettingGroup::Geometry, Applicability::Always, Stage::Geometry},
+                    SettingGroup::Geometry, CopySection::RotateAndFlip, Applicability::Always,
+                    Stage::Geometry},
     FieldDescriptor{"flipHorizontal", ARRAW_ACCESSOR(bool, geometry.flipHorizontal), std::nullopt,
-                    SettingGroup::Geometry, Applicability::Always, Stage::Geometry},
+                    SettingGroup::Geometry, CopySection::RotateAndFlip, Applicability::Always,
+                    Stage::Geometry},
     FieldDescriptor{"flipVertical", ARRAW_ACCESSOR(bool, geometry.flipVertical), std::nullopt,
-                    SettingGroup::Geometry, Applicability::Always, Stage::Geometry},
+                    SettingGroup::Geometry, CopySection::RotateAndFlip, Applicability::Always,
+                    Stage::Geometry},
     FieldDescriptor{"straighten", ARRAW_ACCESSOR(double, geometry.straighten),
                     SettingRange{minimumStraighten, maximumStraighten}, SettingGroup::Geometry,
-                    Applicability::Always, Stage::Geometry},
+                    CopySection::RotateAndFlip, Applicability::Always, Stage::Geometry},
     FieldDescriptor{"cropRectangle",
                     ARRAW_ACCESSOR(std::optional<UprightCropRect>, geometry.crop.rectangle),
-                    std::nullopt, SettingGroup::Geometry, Applicability::Always, Stage::Geometry},
+                    std::nullopt, SettingGroup::Geometry, CopySection::Crop, Applicability::Always,
+                    Stage::Geometry},
     FieldDescriptor{"cropAspect", ARRAW_ACCESSOR(CropAspect, geometry.crop.aspect), std::nullopt,
-                    SettingGroup::Geometry, Applicability::Always, Stage::Geometry},
+                    SettingGroup::Geometry, CopySection::Crop, Applicability::Always,
+                    Stage::Geometry},
 };
 
 #undef ARRAW_GRADE_ZONE
@@ -291,6 +356,113 @@ inline constexpr std::array developSettingDescriptors{
 /// @return The row, or null when no setting has that key.
 [[nodiscard]] constexpr const FieldDescriptor* findDescriptor(std::string_view key) noexcept {
     for (const FieldDescriptor& descriptor : developSettingDescriptors) {
+        if (descriptor.key == key) {
+            return &descriptor;
+        }
+    }
+    return nullptr;
+}
+
+/// @brief Where in the chain a local control acts (ADR 044, section 2).
+enum class LocalChainPosition {
+    AfterToWorking, ///< Right after the source-to-working transform: relative temperature and tint.
+    ExposureGain,   ///< The exposure gain.
+    ShapeTone,      ///< The tone shaping: contrast, highlights, shadows, whites and blacks.
+    ApplyPresence,  ///< Texture, Clarity and Dehaze.
+    AdjustColor,    ///< After the curve-input tap: Saturation and Vibrance.
+};
+
+/// @brief Largest local exposure delta, in stops either way.
+inline constexpr double localExposureLimit = 4.0;
+
+/// @brief Largest local delta of every control but exposure, either way.
+inline constexpr double localControlLimit = 100.0;
+
+/// @brief Description of one local control: its key, range and the global control it adds to.
+///
+/// The table drives the state JSON and sidecar keys, the Python names, the slider rows and the
+/// history wording of local adjustments, as ::arraw::developSettingDescriptors does for the global
+/// settings. Every default is 0.
+struct LocalDescriptor {
+    /// @brief camelCase name, as the JSON document and the sidecar spell it; unique.
+    std::string_view key;
+
+    /// @brief snake_case name, as Python spells it.
+    std::string_view pythonName;
+
+    /// @brief The delta in ::arraw::LocalDeltas.
+    float LocalDeltas::* member;
+
+    /// @brief Accepted values, in setting units.
+    SettingRange range;
+
+    /// @brief Key in ::arraw::developSettingDescriptors of the global control this one adds to;
+    /// empty for relative temperature and tint, which have none.
+    std::string_view globalKey;
+
+    /// @brief Where in the chain the control acts.
+    LocalChainPosition position;
+
+    /// @brief Tells whether the control acts before the curve-input tap (every one but
+    /// Saturation and Vibrance).
+    [[nodiscard]] constexpr bool beforeCurveTap() const noexcept {
+        return position != LocalChainPosition::AdjustColor;
+    }
+};
+
+/// @brief One descriptor per field of ::arraw::LocalDeltas, in the panel's order, which is the
+/// order of the fields and of the GPU's arrays (ADR 044, section 2).
+inline constexpr std::array localAdjustmentDescriptors{
+    LocalDescriptor{"relativeTemperature", "relative_temperature",
+                    &LocalDeltas::relativeTemperature,
+                    SettingRange{-localControlLimit, localControlLimit}, "",
+                    LocalChainPosition::AfterToWorking},
+    LocalDescriptor{"relativeTint", "relative_tint", &LocalDeltas::relativeTint,
+                    SettingRange{-localControlLimit, localControlLimit}, "",
+                    LocalChainPosition::AfterToWorking},
+    LocalDescriptor{"exposure", "exposure", &LocalDeltas::exposure,
+                    SettingRange{-localExposureLimit, localExposureLimit}, "exposure",
+                    LocalChainPosition::ExposureGain},
+    LocalDescriptor{"contrast", "contrast", &LocalDeltas::contrast,
+                    SettingRange{-localControlLimit, localControlLimit}, "contrast",
+                    LocalChainPosition::ShapeTone},
+    LocalDescriptor{"highlights", "highlights", &LocalDeltas::highlights,
+                    SettingRange{-localControlLimit, localControlLimit}, "highlights",
+                    LocalChainPosition::ShapeTone},
+    LocalDescriptor{"shadows", "shadows", &LocalDeltas::shadows,
+                    SettingRange{-localControlLimit, localControlLimit}, "shadows",
+                    LocalChainPosition::ShapeTone},
+    LocalDescriptor{"whites", "whites", &LocalDeltas::whites,
+                    SettingRange{-localControlLimit, localControlLimit}, "whites",
+                    LocalChainPosition::ShapeTone},
+    LocalDescriptor{"blacks", "blacks", &LocalDeltas::blacks,
+                    SettingRange{-localControlLimit, localControlLimit}, "blacks",
+                    LocalChainPosition::ShapeTone},
+    LocalDescriptor{"texture", "texture", &LocalDeltas::texture,
+                    SettingRange{-localControlLimit, localControlLimit}, "texture",
+                    LocalChainPosition::ApplyPresence},
+    LocalDescriptor{"clarity", "clarity", &LocalDeltas::clarity,
+                    SettingRange{-localControlLimit, localControlLimit}, "clarity",
+                    LocalChainPosition::ApplyPresence},
+    LocalDescriptor{"dehaze", "dehaze", &LocalDeltas::dehaze,
+                    SettingRange{-localControlLimit, localControlLimit}, "dehaze",
+                    LocalChainPosition::ApplyPresence},
+    LocalDescriptor{"saturation", "saturation", &LocalDeltas::saturation,
+                    SettingRange{-localControlLimit, localControlLimit}, "saturation",
+                    LocalChainPosition::AdjustColor},
+    LocalDescriptor{"vibrance", "vibrance", &LocalDeltas::vibrance,
+                    SettingRange{-localControlLimit, localControlLimit}, "vibrance",
+                    LocalChainPosition::AdjustColor},
+};
+
+static_assert(sizeof(LocalDeltas) == localAdjustmentDescriptors.size() * sizeof(float),
+              "LocalDeltas and localAdjustmentDescriptors must have one row per field");
+
+/// @brief Finds the local descriptor with a given key.
+/// @param key camelCase name, such as "exposure".
+/// @return The row, or null when no local control has that key.
+[[nodiscard]] constexpr const LocalDescriptor* findLocalDescriptor(std::string_view key) noexcept {
+    for (const LocalDescriptor& descriptor : localAdjustmentDescriptors) {
         if (descriptor.key == key) {
             return &descriptor;
         }

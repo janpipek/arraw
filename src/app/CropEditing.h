@@ -1,5 +1,6 @@
 #pragma once
 
+#include <CropGeometry.h>
 #include <GeometrySettings.h>
 #include <ImageBuffer.h>
 #include <ImageOrientation.h>
@@ -9,33 +10,6 @@
 #include <vector>
 
 namespace arraw::app {
-
-/// @brief Point in the uncropped upright frame, in its edge units (pixels of the photograph).
-struct CropPoint {
-    double x = 0.0;
-    double y = 0.0;
-};
-
-/// @brief Axis-aligned rectangle in the uncropped upright frame, in its edge units.
-struct CropBox {
-    double left = 0.0;
-    double top = 0.0;
-    double width = 0.0;
-    double height = 0.0;
-
-    /// @brief Gives the right edge.
-    [[nodiscard]] double right() const noexcept {
-        return left + width;
-    }
-    /// @brief Gives the bottom edge.
-    [[nodiscard]] double bottom() const noexcept {
-        return top + height;
-    }
-    /// @brief Gives the centre.
-    [[nodiscard]] CropPoint centre() const noexcept {
-        return {left + width / 2, top + height / 2};
-    }
-};
 
 /// @brief One of the eight handles of the crop frame.
 enum class CropHandle { TopLeft, Top, TopRight, Right, BottomRight, Bottom, BottomLeft, Left };
@@ -55,20 +29,15 @@ inline constexpr double minimumCropFraction = 0.02;
 /// @brief Gives the handle's position on a box.
 [[nodiscard]] CropPoint handlePosition(const CropBox& box, CropHandle handle) noexcept;
 
-/// @brief Gives the straighten as it appears on screen: degrees, clockwise positive.
-///
-/// The stored angle comes before the flips (ADR 014), so one flip reverses
-/// the direction in which it appears.
-[[nodiscard]] double displayedStraighten(const GeometrySettings& geometry) noexcept;
-
-/// @brief Crop and rotation rules for one photograph, over its geometry settings.
+/// @brief Gestures, run of rotations and history of one crop session, over its geometry settings.
 ///
 /// The interaction model of the crop mode (ADR 040), without Qt, as
-/// CurveEditing is for the curve editor: it takes the geometry, the
-/// photograph's decoded size and orientation, and what a gesture or a command
-/// asks for, and keeps the geometry that results. Every operation leaves an
-/// explicit crop well formed, agreeing with a locked aspect, and inside valid
-/// rotated content (ADR 014's contract), through the engine's own geometry.
+/// CurveEditing is for the curve editor: it keeps the geometry, the
+/// photograph's decoded size and orientation, the gesture under way, the run
+/// of rotations and the session's history. The rules that turn a request into
+/// the next geometry live in CropGeometry.h; every operation here applies one
+/// of them, so an explicit crop stays well formed, agreeing with a locked
+/// aspect, and inside valid rotated content (ADR 014's contract).
 ///
 /// Positions are in the uncropped upright frame of the current geometry, in
 /// its edge units, which are the photograph's pixels: an isotropic scale of
@@ -100,22 +69,22 @@ public:
 
     /// @brief Gives the width of the uncropped upright frame.
     [[nodiscard]] double uprightWidth() const noexcept {
-        return uprightWidth_;
+        return frame_.uprightWidth;
     }
 
     /// @brief Gives the height of the uncropped upright frame.
     [[nodiscard]] double uprightHeight() const noexcept {
-        return uprightHeight_;
+        return frame_.uprightHeight;
     }
 
     /// @brief Gives the crop as the engine resolves it, automatic framing included.
     [[nodiscard]] const CropBox& crop() const noexcept {
-        return crop_;
+        return frame_.crop;
     }
 
     /// @brief Gives the corners of the valid content, in order around it.
     [[nodiscard]] const std::array<CropPoint, 4>& content() const noexcept {
-        return content_;
+        return frame_.content;
     }
 
     /// @brief Gives the size of the photograph turned and flipped but not straightened.
@@ -123,7 +92,7 @@ public:
     /// What a render with no straighten and no crop shows; the crop mode
     /// rotates that render on screen (ADR 040).
     [[nodiscard]] CropBox unstraightened() const noexcept {
-        return unstraightened_;
+        return frame_.unstraightened;
     }
 
     /// @brief Gives the straighten as it appears on screen (see displayedStraighten()).
@@ -254,18 +223,14 @@ private:
     /// @brief Rotates to a stored straighten, from the start of the run of rotations.
     void rotateStored(double straighten);
 
-    ImageSize sourceSize_;
-    ImageOrientation orientation_;
+    SourceShape source_;
     GeometrySettings geometry_;
     /// Geometry at beginGesture().
     GeometrySettings gestureStart_;
     /// Geometry before the latest run of rotations; empty when the last change was something else.
     std::optional<GeometrySettings> rotationStart_;
-    double uprightWidth_ = 0.0;
-    double uprightHeight_ = 0.0;
-    CropBox crop_;
-    std::array<CropPoint, 4> content_{};
-    CropBox unstraightened_;
+    /// Frame the geometry resolves to.
+    CropFrame frame_;
     /// Geometry before each recorded step, oldest first.
     std::vector<GeometrySettings> undo_;
     /// Geometry after each undone step, latest undone last.

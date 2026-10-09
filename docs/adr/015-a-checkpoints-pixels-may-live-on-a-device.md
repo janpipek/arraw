@@ -170,3 +170,11 @@ that uses it, and the preview, the exports and the CLI each have one of their
 own. The decision that holds is the first one, that a retained result is a
 `RenderCheckpoint`. Presenting into a viewport's device remains possible, but
 it would be a new decision, and it would change who owns the device.
+
+## Note, 2026-10-09
+
+A `CheckpointLadder` holding resident rungs belongs to its device's thread,
+as a single resident checkpoint does: it is rendered through, cleared and
+destroyed there. The GPU entry drops host rungs and those of another device;
+the CPU entry drops resident ones. See
+[ADR 045](045-a-render-runs-one-stage-table-and-keeps-its-checkpoints-on-a-ladder.md).

@@ -16,6 +16,7 @@ class QWheelEvent;
 namespace arraw::app {
 
 class CropOverlay;
+class MaskOverlay;
 
 /// @brief Widget that shows a part of the developed photograph, zoomed and panned.
 ///
@@ -30,7 +31,9 @@ class CropOverlay;
 /// left click picks; a middle drag and Alt with a left drag pan either way.
 ///
 /// In the crop mode a CropOverlay covers it and takes the mouse, the wheel and
-/// the keys (ADR 040); the view beneath keeps its zoom for when the mode ends.
+/// the keys (ADR 040); the view beneath keeps its zoom for when the mode ends. In the mask mode
+/// a MaskOverlay covers it instead, leaving the wheel and the pans to the view beneath; the two
+/// overlays are never shown together.
 class PhotoView : public QWidget {
     Q_OBJECT
     Q_DISABLE_COPY_MOVE(PhotoView)
@@ -99,6 +102,24 @@ public:
     /// @brief Tells whether the crop overlay is shown.
     [[nodiscard]] bool isCropMode() const;
 
+    /// @brief Shows or hides the mask overlay over the view, giving it the focus when shown.
+    ///
+    /// Showing it hides the crop overlay, and showing the crop overlay hides it. While shown the
+    /// mask overlay is the view's focus proxy.
+    void setMaskMode(bool masking);
+
+    /// @brief Tells whether the mask overlay is shown.
+    [[nodiscard]] bool isMaskMode() const;
+
+    /// @brief Gives the mask overlay, a child that covers the view.
+    [[nodiscard]] MaskOverlay& maskOverlay() const noexcept {
+        return *mask_;
+    }
+
+    /// @brief Pans the view by a drag the mask overlay saw.
+    /// @param delta How far the pointer moved, in logical pixels; the photograph follows it.
+    void panBy(QPointF delta);
+
     /// @brief Gives the crop overlay, a child that covers the view.
     [[nodiscard]] CropOverlay& cropOverlay() const noexcept {
         return *crop_;
@@ -120,6 +141,9 @@ signals:
     void viewChanged();
     /// Emitted when the zoom or whether it is fitting changed, for any reason.
     void zoomChanged();
+    /// Emitted whenever the view's transform may have changed, for any reason: a zoom, a pan,
+    /// the frame, the size or the pixel ratio. Never means a render is due; see viewChanged.
+    void transformChanged();
     /// Emitted by a click while picking, with the point in fractions of the frame
     /// (inside [0, 1]).
     void picked(QPointF point);
@@ -139,11 +163,16 @@ private:
     /// @param user Whether the user did it, so that a render is due.
     void adopt(const ViewTransform& next, bool fit, bool user);
 
+    /// @brief Shows one overlay and hides the other, moving the focus with the mode.
+    void showOverlay(QWidget* shown, QWidget* hidden);
+
     /// @brief Makes the cursor suit the mode and the drag.
     void updateCursor();
 
     /// Crop mode's overlay; hidden outside the mode.
     CropOverlay* crop_ = nullptr;
+    /// Mask mode's overlay; hidden outside the mode.
+    MaskOverlay* mask_ = nullptr;
     /// Full-resolution frame size; empty without a photograph.
     QSize frame_;
     /// Device pixels per photograph pixel.

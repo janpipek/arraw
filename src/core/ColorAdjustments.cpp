@@ -118,10 +118,7 @@ ColorAdjustmentPlan arraw::colorAdjustmentPlanFor(const ColorSettings& color,
         clampedSetting(color.saturation, weakestSaturation, strongestSaturation, "saturation");
     const float vibrance =
         clampedSetting(color.vibrance, weakestSaturation, strongestSaturation, "vibrance");
-    plan.adjustsSaturation = saturation != 0.0F;
-    plan.saturation = saturation / strongestSaturation;
-    plan.adjustsVibrance = vibrance != 0.0F;
-    plan.vibrance = vibrance / strongestSaturation;
+    plan.chroma = chromaAmountsFor(saturation, vibrance);
 
     plan.hueShift = hslValues<&HueBand::hue>(hsl, "hue");
     plan.bandSaturation = hslValues<&HueBand::saturation>(hsl, "band saturation");

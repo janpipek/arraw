@@ -7,6 +7,7 @@
 #include <QTimer>
 #include <QWidget>
 
+#include <string>
 #include <string_view>
 
 class QDoubleSpinBox;
@@ -49,7 +50,20 @@ public:
     /// @throws std::out_of_range if no presentation exists for @p key.
     explicit SettingSlider(std::string_view key, QWidget* parent = nullptr);
 
-    /// @brief Gives the key of the setting.
+    /// @brief Builds a row that is not a row of the descriptor table.
+    ///
+    /// For controls that have their own range and presentation, such as the rows of a local
+    /// adjustment (ADR 044), which share the label of a global control but not its range.
+    /// The row is never optional: a reset restores @p defaultValue.
+    /// @param id Name of the row, such as `local.exposure`; copied, and what key() gives.
+    /// @param range Range of the values.
+    /// @param defaultValue Value a reset restores.
+    /// @param presentation Label, unit, decimals, step, tool tip, scale and track.
+    /// @param parent Owning widget.
+    SettingSlider(std::string_view id, const SettingRange& range, double defaultValue,
+                  const SettingPresentation& presentation, QWidget* parent = nullptr);
+
+    /// @brief Gives the key of the setting, or the id the row was given.
     [[nodiscard]] std::string_view key() const noexcept {
         return key_;
     }
@@ -111,12 +125,16 @@ protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
+    /// @brief Builds the row; the other constructors delegate here.
+    SettingSlider(std::string_view id, const SettingRange& range, double defaultValue,
+                  const SettingPresentation& presentation, bool optional, QWidget* parent);
+
     /// @brief Reports one change of a keyboard, wheel or spin-box edit, opening it if needed.
     /// @param value Value in the setting's units.
     void nudge(double value);
 
-    /// Key of the setting, pointing into the descriptor table.
-    std::string_view key_;
+    /// Key of the setting, or the id of a row of another table.
+    std::string key_;
 
     /// Range of the setting.
     SettingRange range_;

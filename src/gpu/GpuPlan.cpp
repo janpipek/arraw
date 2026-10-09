@@ -1,6 +1,7 @@
 #include "GpuPlan.h"
 
 #include "GeometryPlan.h"
+#include "LocalPlan.h"
 #include "ProcessingPlan.h"
 #include "ResampleWeights.h"
 #include "ToneCurve.h"
@@ -130,21 +131,21 @@ GpuEffectsBlock packEffects(const ProcessingPlan& plan) {
     return block;
 }
 
-GpuPointwiseBlock packPointwise(const ProcessingPlan& plan, PointwiseProbe probe) {
+GpuPointwiseBlock packPointwise(const PointwisePlan& plan, ImageSize source, PointwiseProbe probe) {
     GpuPointwiseBlock block;
     for (std::size_t row = 0; row < 3; ++row) {
         for (std::size_t column = 0; column < 3; ++column) {
             block.toWorking[row * 4 + column] = plan.toWorking.at(row, column);
         }
     }
-    block.exposureGain = plan.exposureGain;
-    block.contrastSlope = plan.contrastSlope;
-    block.contrastScale = plan.contrastScale;
-    block.shadowShift = plan.shadowShift;
-    block.highlightShift = plan.highlightShift;
-    block.blackShift = plan.blackShift;
-    block.whiteShift = plan.whiteShift;
-    block.shapesTone = plan.shapesTone ? 1U : 0U;
+    block.exposureGain = plan.tone.exposureGain;
+    block.contrastSlope = plan.tone.contrastSlope;
+    block.contrastScale = plan.tone.contrastScale;
+    block.shadowShift = plan.tone.shadowShift;
+    block.highlightShift = plan.tone.highlightShift;
+    block.blackShift = plan.tone.blackShift;
+    block.whiteShift = plan.tone.whiteShift;
+    block.shapesTone = plan.tone.shapesTone ? 1U : 0U;
     // A knee no luminance reaches is how the plan says "no shoulder"; the
     // shader is told so outright rather than trusted with an infinity. The
     // shader's comparison is the CPU's `!(luminance > knee)`, so a NaN
@@ -154,10 +155,10 @@ GpuPointwiseBlock packPointwise(const ProcessingPlan& plan, PointwiseProbe probe
     block.shoulderKnee = rolls ? plan.shoulderKnee : 0.0F;
     const ColorAdjustmentPlan& colour = plan.colorAdjustments;
     block.convertsToGrayscale = colour.convertsToGrayscale ? 1U : 0U;
-    block.saturation = colour.saturation;
-    block.vibrance = colour.vibrance;
-    block.adjustsSaturation = colour.adjustsSaturation ? 1U : 0U;
-    block.adjustsVibrance = colour.adjustsVibrance ? 1U : 0U;
+    block.saturation = colour.chroma.saturation;
+    block.vibrance = colour.chroma.vibrance;
+    block.adjustsSaturation = colour.chroma.adjustsSaturation ? 1U : 0U;
+    block.adjustsVibrance = colour.chroma.adjustsVibrance ? 1U : 0U;
     block.adjustsHsl = colour.adjustsHsl ? 1U : 0U;
     block.hueShift = colour.hueShift;
     block.bandSaturation = colour.bandSaturation;
@@ -180,19 +181,45 @@ GpuPointwiseBlock packPointwise(const ProcessingPlan& plan, PointwiseProbe probe
         block.presence = 1U;
         block.presenceLumaRow = {presence.lumaRow[0], presence.lumaRow[1], presence.lumaRow[2],
                                  0.0F};
-        block.textureAmount = presence.texture;
-        block.clarityAmount = presence.clarity;
-        block.dehazeAmount = presence.dehaze;
+        block.textureAmount = presence.amounts.texture;
+        block.clarityAmount = presence.amounts.clarity;
+        block.dehazeAmount = presence.amounts.dehaze;
         block.fineReduction = presence.fine.reduction;
         block.coarseReduction = presence.coarseReduction();
-        // The grids are over the pass's input, the source, whose size the
-        // geometry block records.
-        const ImageSize source = plan.geometry ? plan.geometry->sourceSize : ImageSize{};
+        // The grids are over the pass's input, the source.
         const ImageSize fine = presenceGridSize(presence.fine, source);
         const ImageSize coarse =
             presenceGridSize(PresenceBase{.reduction = presence.coarseReduction()}, source);
         block.fineGridSize = {fine.width, fine.height};
         block.coarseGridSize = {coarse.width, coarse.height};
+    }
+    // Which bases have grids: a control whose base is absent is never read (ADR 044, section 5).
+    std::uint32_t flags = 0;
+    flags |= presence.fine.active() ? static_cast<std::uint32_t>(GpuLocalFlag::FineBase) : 0U;
+    flags |= presence.coarse.active() ? static_cast<std::uint32_t>(GpuLocalFlag::CoarseBase) : 0U;
+    flags |= presence.hazeFloor.active() ? static_cast<std::uint32_t>(GpuLocalFlag::HazeFloor) : 0U;
+    flags |= presence.hazeMean.active() ? static_cast<std::uint32_t>(GpuLocalFlag::HazeMean) : 0U;
+
+    const LocalPlan& local = plan.local;
+    if (local.masks.size() > gpuLocalMaskCapacity) {
+        throw std::invalid_argument("A pointwise block holds at most sixteen masks");
+    }
+    block.localHeader = {static_cast<std::uint32_t>(local.masks.size()), local.touched, flags, 0U};
+    std::copy(local.global.begin(), local.global.end(), block.localGlobal.begin());
+    for (std::size_t index = 0; index < local.masks.size(); ++index) {
+        const LocalMaskPlan& mask = local.masks[index];
+        GpuLocalMask& packed = block.local[index];
+        packed.header = {static_cast<std::uint32_t>(mask.kind), mask.invert ? 1U : 0U, 0U, 0U};
+        switch (mask.kind) {
+        case LocalMaskKind::Linear:
+            packed.shapeA = {mask.alpha, mask.beta, mask.gamma, 0.0F};
+            break;
+        case LocalMaskKind::Radial:
+            packed.shapeA = {mask.centreX, mask.centreY, mask.inner, 0.0F};
+            packed.shapeB = mask.matrix;
+            break;
+        }
+        std::copy(mask.k.begin(), mask.k.end(), packed.k.begin());
     }
     block.probe = static_cast<std::uint32_t>(probe);
     return block;

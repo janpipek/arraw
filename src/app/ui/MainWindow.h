@@ -1,7 +1,9 @@
 #pragma once
 
+#include "CopySections.h"
 #include "CropEditing.h"
 #include "ExportQueue.h"
+#include "MaskEditing.h"
 #include "PhotoLoader.h"
 #include "PreviewRenderer.h"
 #include "RenderIndicator.h"
@@ -14,6 +16,7 @@
 
 #include <QImage>
 #include <QMainWindow>
+#include <QModelIndex>
 #include <QPointF>
 #include <QSize>
 #include <QString>
@@ -36,6 +39,7 @@ class QCloseEvent;
 class QDockWidget;
 class QMenu;
 class QLabel;
+class QListView;
 class QToolButton;
 class QEvent;
 class QShortcut;
@@ -48,8 +52,9 @@ struct DebugLog;
 class DebugWindow;
 class DevelopPanel;
 class FilmStrip;
+class HistoryModel;
 class PhotoView;
-class RenderProgressBar;
+class RenderProgressPie;
 
 /// @brief Top-level window of the desktop application.
 class MainWindow : public QMainWindow {
@@ -221,6 +226,49 @@ private:
     /// @param action Body to run.
     void guarded(const std::function<void()>& action);
 
+    /// @brief Opens an edit of the open photograph's session, as the panel and the mask overlay
+    /// begin theirs.
+    ///
+    /// In the crop mode it begins a step of the crop session's history instead.
+    void beginEdit();
+
+    /// @brief Takes the state an edit has reached, from the panel or the mask overlay.
+    ///
+    /// Ignored when no edit is open: a failure cancelled it, and the rest of that drag is dropped.
+    void updateEdit(const DevelopState& state);
+
+    /// @brief Closes the edit as one history step.
+    /// @param origin Kind of step it is.
+    void finishEdit(EditOrigin origin);
+
+    /// @brief Drops the edit that is open, as when a drag is lost, and shows the state before it.
+    void cancelEdit();
+
+    /// @brief Enters or leaves the mask mode (M, Photo > Masks).
+    ///
+    /// Entering finishes a pending panel edit, disarms the picker and leaves the crop mode
+    /// keeping the crop. The mode opens no edit of its own: each gesture is a history step
+    /// (ADR 044).
+    void setMaskMode(bool masking);
+
+    /// @brief Leaves the mask mode, cancelling a gesture under way.
+    ///
+    /// Keeps the selection, so the panel still shows the mask's rows.
+    void leaveMaskMode();
+
+    /// @brief Selects a mask, or none, in the overlay and the panel.
+    /// @param id Mask to select; dropped when the state holds none with that id.
+    void selectMask(std::optional<LocalAdjustmentId> id);
+
+    /// @brief Arms or disarms a mask creation tool, entering the mask mode to arm one.
+    void setMaskTool(MaskTool tool);
+
+    /// @brief Gives the mask overlay and the panel the session's state and the selection.
+    ///
+    /// Sets the view's frame size first, so that the overlay maps through the frame the state
+    /// has (the crop may have changed it). The selection stays while its mask is in the list.
+    void syncMasks();
+
     /// @brief Arms or disarms the white balance picker.
     ///
     /// Armed, the view shows a cross cursor and a click on the photograph reads
@@ -232,7 +280,7 @@ private:
     /// @param point Click position, in fractions of the developed frame.
     void pickNeutralAt(const QPointF& point);
 
-    /// @brief Enters or leaves the crop mode; leaving this way keeps the crop (R, the Crop button).
+    /// @brief Enters or leaves the crop mode; leaving this way keeps the crop (C, the Crop button).
     ///
     /// Entering finishes a pending panel edit, disarms the picker and opens the
     /// one edit the whole session is (ADR 022, ADR 040). Only with a photograph open.
@@ -255,24 +303,55 @@ private:
     void seedCropOverlay();
 
     /// @brief Enables Undo and Redo: through the crop session's gestures in the mode, else
-    /// through the photograph's history.
+    /// through the photograph's history; Paste follows, as it too edits the history.
     void updateHistoryActions();
+
+    /// @brief Builds the History dock and its toggle in the View menu.
+    void buildHistoryDock();
+
+    /// @brief Shows the session's history in the dock, and disables the dock in the crop mode.
+    ///
+    /// Leaves the list as it is while an edit is open.
+    void updateHistoryDock();
+
+    /// @brief Goes to the step a row of the History dock shows, as Undo and Redo do.
+    /// @param row Row clicked or activated.
+    void goToHistoryRow(const QModelIndex& row);
+
+    /// @brief Asks which sections to copy and holds the open photograph's settings for pasting.
+    void copySettings();
+
+    /// @brief Carries the held settings onto the open photograph as one history step.
+    ///
+    /// Tells the status bar what could not be carried.
+    void pasteSettings();
+
+    /// @brief Enables Paste: with settings held, a photograph open, and outside the crop mode.
+    void updatePasteAction();
+
+    /// @brief Change of the geometry that a menu entry or a panel button asks for, in both forms.
+    struct GeometryCommand {
+        /// @brief Change as the crop mode makes it, on the overlay's editing.
+        std::function<void(CropEditing&)> crop;
+        /// @brief Change as the state operations of Edits.h make it, outside the crop mode.
+        std::function<DevelopState(const ImageMetadata&, DevelopState)> state;
+    };
 
     /// @brief Applies a geometry command: a quarter-turn, a flip, an aspect, a reset.
     ///
     /// In the crop mode it joins the session's edit; otherwise it is one
-    /// history step of its own. The rules are CropEditing's either way, so the
+    /// history step of its own. The rules are the same either way (CropGeometry.h), so the
     /// crop is carried and kept inside the photograph.
     /// @param command Change to make to the geometry.
-    void editGeometry(const std::function<void(CropEditing&)>& command);
+    void editGeometry(const GeometryCommand& command);
 
     /// @brief Arms or disarms the straighten tool, entering the crop mode to arm it.
     void setStraightening(bool straightening);
 
-    /// @brief Gives the geometry a panel edit asks for, through the crop rules.
+    /// @brief Gives the geometry a panel edit asks for.
     ///
-    /// A straighten from a slider shrinks the crop as a rotation in the crop
-    /// mode does, from where the edit began rather than step by step.
+    /// Outside the crop mode, the geometry as it is: the panel built it with the rules of
+    /// Edits.h. In the crop mode, the one the overlay adopts it as.
     /// @param geometry Geometry the panel's edited state carries.
     [[nodiscard]] GeometrySettings reconciledGeometry(const GeometrySettings& geometry);
 
@@ -383,19 +462,32 @@ private:
     QAction* zoomInAction_ = nullptr;
     QAction* zoomOutAction_ = nullptr;
     QLabel* deviceLabel_ = nullptr;
-    /// Step and progress of a render in progress, in the status bar.
-    RenderProgressBar* renderProgress_ = nullptr;
+    /// Pie in the status bar that shows whether a render is going and how far it is.
+    RenderProgressPie* renderProgress_ = nullptr;
     /// Decides when a render in progress shows, and what of it.
     RenderIndicator* renderIndicator_ = nullptr;
     DevelopPanel* developPanel_ = nullptr;
     QWidget* developDock_ = nullptr;
+    /// Steps of the open photograph's session, newest on top.
+    HistoryModel* historyModel_ = nullptr;
+    QListView* historyView_ = nullptr;
+    QDockWidget* historyDock_ = nullptr;
     QAction* saveAction_ = nullptr;
     QAction* undoAction_ = nullptr;
     QAction* redoAction_ = nullptr;
+    QAction* copyAction_ = nullptr;
+    QAction* pasteAction_ = nullptr;
+    /// Settings copied from a photograph; lasts across photographs, which is its use.
+    std::optional<SettingsClipboard> clipboard_;
     QAction* exportAction_ = nullptr;
     QShortcut* cancelPickShortcut_ = nullptr;
     /// Enter, Esc, X and O of the crop mode wherever the focus is; enabled only in the mode.
     std::vector<QShortcut*> cropShortcuts_;
+    /// Esc, O, Delete and Backspace of the mask mode wherever the focus is; enabled only in it.
+    std::vector<QShortcut*> maskShortcuts_;
+    QAction* maskAction_ = nullptr;
+    /// Mask whose handles are shown; view state of the window (ADR 044).
+    std::optional<LocalAdjustmentId> maskSelection_;
     QMenu* photoMenu_ = nullptr;
     QAction* cropAction_ = nullptr;
 
@@ -450,9 +542,6 @@ private:
 
     /// Renders of the crop mode on their way, with the state each shows, oldest first.
     std::deque<std::pair<std::uint64_t, DevelopState>> cropRequests_;
-
-    /// Crop rules for a panel edit of the geometry outside the crop mode, from its start.
-    std::optional<CropEditing> geometryEdit_;
 
     /// File names of the exports that have not reported yet, by the identifier the queue gave.
     std::map<std::uint64_t, QString> exportNames_;

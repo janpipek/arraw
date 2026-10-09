@@ -125,9 +125,21 @@ key:
 - rotation or a flip: an explicit crop is carried with its content, and a ratio
   is reciprocated on an odd turn.
 - straighten: an explicit crop shrinks about its centre as far as rotated
-  content requires.
-- cropRectangle or cropAspect: a crop outside the valid content is fitted back,
-  and a ratio fits the largest crop inside the explicit one.
+  content requires. The shrinking is computed from the state the caller passes,
+  so a run of edits (a drag) passes the state from before the run each time.
+  This is for the straighten only: a grain amount dragged that way would draw a
+  new seed on every tick.
+- cropRectangle: a rectangle frees the aspect and is then fitted back inside
+  the valid content (`fittedCrop`); `nullopt` resets to automatic framing and
+  keeps the aspect. Because the rectangle frees the aspect, the table's order
+  (rectangle, then aspect) is enough for a pair, and a locked target aspect
+  never makes `withValues` throw.
+- cropAspect: a ratio fits the largest crop inside the explicit one
+  (`withAspect`).
+- **An unchanged value changes nothing.** A geometry key given the value it
+  already has applies no fitting and no shrinking.
+- **The frame.** `straighten` and the two crop keys need `photo.size` and a
+  state whose geometry is valid for it, else `std::invalid_argument`.
 
 **Several values at once.** Edits that come together are applied in the
 descriptor table's order, where rotation and the flips come before straighten
@@ -143,7 +155,8 @@ back then undoes the shrinking, as `CropEditing`'s run of rotations does today.
 **Operations.** The few edits that are not one value are functions too:
 - `turned(photo, state, clockwise)` and `flipped(photo, state, horizontal)`, in
   displayed axes;
-- `withAspect`, `withSwappedOrientation` and `withCropReset`;
+- `withAspect`, `withLockedAspect`, `withSwappedOrientation` and
+  `withCropReset`;
 - `withLook` (§3);
 - `displayedStraighten` and `withDisplayedStraighten`, the on-screen sign of
   the straighten.
@@ -209,8 +222,24 @@ section, defaults included; it does not merge. The rules:
   lens profile).
 - **The white balance does not cross between a RAW and a non-RAW** (ADR 008).
   It is skipped and reported, and the dialog shows it as not applicable.
-- **Rotate & Flip and Crop are not in the default selection.** When chosen, an
-  explicit crop is normalised, so it is fitted to the target's frame.
+- **Rotate & Flip and Crop are not in the default selection.** When chosen
+  they are carried by the setters' rules:
+  - Rotate & Flip sets the look's rotation, flips and straighten through their
+    setters, which carry the target's own crop. When Crop is chosen too, the
+    look's crop then replaces it.
+  - **Crop: normalised, then fitted** (ADR 014, 2026-10-07). The look's edges
+    are fractions of its own upright frame; the same fractions are taken of the
+    target's upright frame, after Rotate & Flip if that is chosen, with the
+    aspect free. `fittedCrop` puts the rectangle inside valid content. The
+    look's aspect is then set with `withAspect`: a ratio keeps its literal
+    value, Original resolves against the target's frame, and an automatic crop
+    stays automatic with the look's aspect.
+  - **Consequence:** a free crop's proportions follow the target's frame. A
+    free square crop from a landscape photograph is not square on a portrait
+    one; a locked ratio keeps its shape.
+  - **U1 (review of step 1) is resolved as option (a):** the earlier transfer
+    rule (the crop's centre and long-edge fraction, its physical aspect kept)
+    needs the source frame, which a Look does not carry.
 
 **The preset file** is the existing settings document plus a name, holding only
 the keys of the carried sections:
@@ -290,6 +319,8 @@ and the roadmap is corrected.
   as the preset's name.
 - It is not free text, so the GUI still localises it and the list can never
   claim a change the states do not show.
+- Only a Reset button's edit is a `Reset`: double-clicking a slider's label to
+  reset it stays an `Edit`, since its wording ("Exposure 0.00 EV") is truthful.
 
 **The dock.** History sits in the left dock, under Presets:
 - a `QListView` over a `HistoryModel` in app-core, which is testable without

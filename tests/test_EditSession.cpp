@@ -2,13 +2,18 @@
 #include "support/TempDir.h"
 
 #include <EditSession.h>
+#include <SettingDescriptors.h>
 #include <Sidecar.h>
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <filesystem>
 #include <fstream>
+#include <initializer_list>
 #include <stdexcept>
+#include <string_view>
+#include <type_traits>
+#include <vector>
 
 using namespace arraw;
 
@@ -383,4 +388,280 @@ TEST_CASE("A save into a read-only directory throws and changes nothing", "[sess
     if (!enforced) {
         SKIP("permissions are not enforced here (running as root?)");
     }
+}
+
+namespace {
+
+/// @brief Builds a session that has taken one exposure step per value, in order.
+EditSession sessionWithSteps(std::initializer_list<float> exposures) {
+    EditSession session(testPhoto());
+    for (const float exposure : exposures) {
+        session.setState(exposed(exposure));
+    }
+    return session;
+}
+
+} // namespace
+
+TEST_CASE("History of a new session is just the opening state", "[session][history]") {
+    const EditSession session(testPhoto());
+
+    REQUIRE(session.history().size() == 1);
+    CHECK(session.history()[0] == HistoryStep{DevelopState{}, EditOrigin::Opened, {}});
+    CHECK(session.position() == 0);
+}
+
+TEST_CASE("Each edit adds a step and moves the position to it", "[session][history]") {
+    const EditSession session = sessionWithSteps({1.0F, 2.0F});
+
+    REQUIRE(session.history().size() == 3);
+    CHECK(session.position() == 2);
+    CHECK(session.history()[1].state == exposed(1.0F));
+    CHECK(session.history()[2].state == exposed(2.0F));
+    CHECK(session.history()[1].origin == EditOrigin::Edit);
+    CHECK(session.photo().state() == session.history()[session.position()].state);
+}
+
+TEST_CASE("goTo moves both ways and keeps every step", "[session][history]") {
+    EditSession session = sessionWithSteps({1.0F, 2.0F});
+    const std::vector<HistoryStep> before = session.history();
+
+    session.goTo(0);
+    CHECK(session.position() == 0);
+    CHECK(session.photo().state() == DevelopState{});
+    CHECK(session.canRedo());
+    CHECK(session.history() == before);
+
+    session.goTo(2);
+    CHECK(session.position() == 2);
+    CHECK(session.photo().state() == exposed(2.0F));
+
+    session.goTo(1);
+    CHECK(session.photo().state() == exposed(1.0F));
+    CHECK(session.history() == before);
+}
+
+TEST_CASE("An edit after going back drops the later steps", "[session][history]") {
+    EditSession session = sessionWithSteps({1.0F, 2.0F, 3.0F});
+    session.goTo(1);
+
+    session.setState(exposed(4.5F));
+
+    REQUIRE(session.history().size() == 3);
+    CHECK(session.position() == 2);
+    CHECK(session.history()[1].state == exposed(1.0F));
+    CHECK(session.history()[2].state == exposed(4.5F));
+    CHECK_FALSE(session.canRedo());
+}
+
+TEST_CASE("goTo commits an open edit that changed nothing and keeps the steps",
+          "[session][history]") {
+    EditSession session = sessionWithSteps({1.0F, 2.0F});
+    session.goTo(1);
+    session.begin();
+
+    session.goTo(2);
+
+    CHECK_FALSE(session.editing());
+    CHECK(session.history().size() == 3);
+    CHECK(session.position() == 2);
+}
+
+TEST_CASE("goTo takes its index after committing an open edit that changed something",
+          "[session][history]") {
+    EditSession session = sessionWithSteps({1.0F, 2.0F, 3.0F});
+    session.goTo(1);
+    session.begin();
+    session.update(exposed(4.0F));
+
+    // The commit drops steps 2 and 3 and adds the edit as step 2, so index 2 is the edit.
+    session.goTo(2);
+
+    REQUIRE(session.history().size() == 3);
+    CHECK(session.position() == 2);
+    CHECK(session.photo().state() == exposed(4.0F));
+    CHECK_FALSE(session.editing());
+
+    // What was step 3 is gone, so the index is out of range now.
+    session.goTo(1);
+    session.begin();
+    session.update(exposed(3.5F));
+    CHECK_THROWS_AS(session.goTo(3), std::out_of_range);
+}
+
+TEST_CASE("goTo out of range throws and changes nothing", "[session][history]") {
+    EditSession session = sessionWithSteps({1.0F});
+    const std::vector<HistoryStep> before = session.history();
+
+    CHECK_THROWS_AS(session.goTo(2), std::out_of_range);
+
+    CHECK(session.history() == before);
+    CHECK(session.position() == 1);
+    CHECK(session.photo().state() == exposed(1.0F));
+}
+
+TEST_CASE("Commit and setState record the origin and detail", "[session][history]") {
+    EditSession session(testPhoto());
+
+    session.begin();
+    session.update(exposed(1.0F));
+    session.commit(EditOrigin::Crop);
+    session.setState(exposed(2.0F), EditOrigin::Preset, "Warm");
+    session.setState(DevelopState{}, EditOrigin::Reset);
+
+    REQUIRE(session.history().size() == 4);
+    CHECK(session.history()[1].origin == EditOrigin::Crop);
+    CHECK(session.history()[1].detail.empty());
+    CHECK(session.history()[2] == HistoryStep{exposed(2.0F), EditOrigin::Preset, "Warm"});
+    CHECK(session.history()[3].origin == EditOrigin::Reset);
+}
+
+TEST_CASE("An edit that ends where it began leaves no step whatever its origin",
+          "[session][history]") {
+    EditSession session(testPhoto());
+
+    session.setState(DevelopState{}, EditOrigin::Paste);
+
+    CHECK(session.history().size() == 1);
+}
+
+TEST_CASE("Undo and redo move the position and keep the steps", "[session][history]") {
+    EditSession session = sessionWithSteps({1.0F, 2.0F});
+
+    session.undo();
+    CHECK(session.position() == 1);
+    CHECK(session.history().size() == 3);
+
+    session.redo();
+    CHECK(session.position() == 2);
+}
+
+TEST_CASE("Discarding changes restarts history at the saved state", "[session][history]") {
+    EditSession session = sessionWithSteps({1.0F, 2.0F});
+
+    session.discardChanges();
+
+    REQUIRE(session.history().size() == 1);
+    CHECK(session.history()[0] == HistoryStep{DevelopState{}, EditOrigin::Opened, {}});
+    CHECK(session.position() == 0);
+}
+
+TEST_CASE("Saving keeps history", "[session][history][save]") {
+    const test::TempDir directory;
+    EditSession session(openPhoto(rawIn(directory)));
+    session.setState(exposed(1.0F));
+    session.setState(exposed(2.0F));
+    const std::vector<HistoryStep> before = session.history();
+
+    session.save();
+
+    CHECK(session.history() == before);
+    CHECK(session.position() == 2);
+}
+
+TEST_CASE("describeChange finds no difference between equal states", "[session][history]") {
+    const ChangeDescription change = describeChange(exposed(1.0F), exposed(1.0F));
+
+    CHECK(change.keys.empty());
+    CHECK_FALSE(change.group.has_value());
+}
+
+TEST_CASE("describeChange names one key and its group", "[session][history]") {
+    const ChangeDescription change = describeChange(DevelopState{}, exposed(1.0F));
+
+    CHECK(change.keys == std::vector<std::string_view>{"exposure"});
+    CHECK(change.group == SettingGroup::Tone);
+}
+
+TEST_CASE("describeChange lists several keys of one group in table order", "[session][history]") {
+    DevelopState after;
+    after.settings.tone.highlights = 20.0F;
+    after.settings.tone.contrast = 10.0F;
+
+    const ChangeDescription change = describeChange(DevelopState{}, after);
+
+    CHECK(change.keys == std::vector<std::string_view>{"contrast", "highlights"});
+    CHECK(change.group == SettingGroup::Tone);
+}
+
+TEST_CASE("describeChange leaves the group empty when keys span groups", "[session][history]") {
+    DevelopState after = exposed(1.0F);
+    after.settings.color.saturation = 10.0F;
+
+    const ChangeDescription change = describeChange(DevelopState{}, after);
+
+    CHECK(change.keys.size() == 2);
+    CHECK_FALSE(change.group.has_value());
+}
+
+TEST_CASE("describeChange compares a curve as one key", "[session][history]") {
+    DevelopState after;
+    after.settings.toneCurve.red.points = {{0.0F, 0.1F}, {0.5F, 0.6F}, {1.0F, 1.0F}};
+
+    const ChangeDescription change = describeChange(DevelopState{}, after);
+
+    CHECK(change.keys == std::vector<std::string_view>{"toneCurveRed"});
+    CHECK(change.group == SettingGroup::ToneCurve);
+}
+
+TEST_CASE("describeChange names the white balance keys", "[session][history]") {
+    DevelopState after;
+    after.settings.color.whiteBalance = WhiteBalanceMode::Custom;
+    after.settings.color.temperature = 5200.0F;
+    after.settings.color.tint = 4.0F;
+
+    const ChangeDescription change = describeChange(DevelopState{}, after);
+
+    CHECK(change.keys == std::vector<std::string_view>{"whiteBalance", "temperature", "tint"});
+    CHECK(change.group == SettingGroup::Color);
+}
+
+TEST_CASE("describeChange names exactly the row that changed, for every row",
+          "[session][history]") {
+    std::vector<std::string_view> skipped;
+    for (const FieldDescriptor& descriptor : developSettingDescriptors) {
+        DevelopState after;
+        const bool perturbed = visitField(descriptor, after.settings, [&](auto& field) -> bool {
+            using Field = std::remove_cvref_t<decltype(field)>;
+            if constexpr (std::is_same_v<Field, bool>) {
+                field = !field;
+            } else if constexpr (std::is_same_v<Field, float> || std::is_same_v<Field, double>) {
+                // A step to the far end of the range; one past the value if unranged.
+                const double now = static_cast<double>(field);
+                field = static_cast<Field>(descriptor.range ? (now == descriptor.range->maximum
+                                                                   ? descriptor.range->minimum
+                                                                   : descriptor.range->maximum)
+                                                            : now + 1.0);
+            } else if constexpr (std::is_same_v<Field, std::optional<float>>) {
+                field = field.value_or(0.0F) + 1.0F;
+            } else if constexpr (std::is_same_v<Field, std::uint32_t>) {
+                field += 1U;
+            } else if constexpr (std::is_same_v<Field, WhiteBalanceMode>) {
+                field = WhiteBalanceMode::Custom;
+            } else if constexpr (std::is_same_v<Field, QuarterTurn>) {
+                field = QuarterTurn::Clockwise90;
+            } else if constexpr (std::is_same_v<Field, std::optional<UprightCropRect>>) {
+                field = UprightCropRect{0.1, 0.1, 0.9, 0.9};
+            } else if constexpr (std::is_same_v<Field, CropAspect>) {
+                field = CropRatio{2.0};
+            } else if constexpr (std::is_same_v<Field, ToneCurve>) {
+                field.points = {{0.0F, 0.1F}, {0.5F, 0.6F}, {1.0F, 1.0F}};
+            } else {
+                // GrainModel and LuminanceNoiseFilter have one value each so far: a lone
+                // change of them cannot be expressed.
+                return false;
+            }
+            return true;
+        });
+        if (!perturbed) {
+            skipped.push_back(descriptor.key);
+            continue;
+        }
+        INFO("row " << descriptor.key);
+        const ChangeDescription change = describeChange(DevelopState{}, after);
+        CHECK(change.keys == std::vector<std::string_view>{descriptor.key});
+        CHECK(change.group == descriptor.group);
+    }
+    // Only the single-valued enumerations are skipped.
+    CHECK(skipped.size() == 2);
 }

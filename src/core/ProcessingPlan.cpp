@@ -118,12 +118,14 @@ FrameMapping arraw::frameMappingOf(const ProcessingPlan& plan) {
 ProcessingPlan arraw::planFor(const ColorEncoding& encoding, const DevelopState& state,
                               double pixelScale) {
     const DevelopSettings& settings = state.settings;
-    ProcessingPlan plan = tonePlanFor(settings.tone);
-    plan.toWorking = colorMatrixFor(encoding, settings.color);
+    ProcessingPlan plan;
+    plan.pointwise.tone = tonePlanFor(settings.tone);
+    plan.pointwise.shoulderKnee = shoulderKneeFor(settings.tone);
+    plan.pointwise.toWorking = colorMatrixFor(encoding, settings.color);
     plan.denoise = denoisePlanFor(settings.noiseReduction, encoding, pixelScale);
-    plan.toneCurves = toneCurvePlanFor(settings.toneCurve);
-    plan.colorAdjustments = colorAdjustmentPlanFor(settings.color, settings.hsl,
-                                                   settings.blackAndWhite, settings.colorGrading);
+    plan.pointwise.toneCurves = toneCurvePlanFor(settings.toneCurve);
+    plan.pointwise.colorAdjustments = colorAdjustmentPlanFor(
+        settings.color, settings.hsl, settings.blackAndWhite, settings.colorGrading);
     plan.effects = effectsPlanFor(settings.effects);
     return plan;
 }
@@ -131,8 +133,10 @@ ProcessingPlan arraw::planFor(const ColorEncoding& encoding, const DevelopState&
 ProcessingPlan arraw::planFor(const Photo& photo, const RenderRequest& request) {
     // What the file declares is its full resolution: one sensor pixel a pixel.
     auto plan = planFor(photo.metadata().encoding, photo.state());
-    plan.presence = presencePlanFor(photo.state().settings.presence, photo.metadata().encoding, 1.0,
-                                    photo.metadata().size);
+    plan.pointwise.local = localPlanFor(photo.state(), photo.metadata().size);
+    plan.pointwise.presence =
+        presencePlanFor(photo.state().settings.presence, photo.metadata().encoding, 1.0,
+                        photo.metadata().size, presenceReachOf(plan.pointwise.local));
     plan.geometry = geometryPlanFor(photo.metadata().size, photo.metadata().orientation,
                                     photo.state().settings.geometry);
     plan.resize = resizePlanFor(request, plan.geometry->outputSize, nullptr);
@@ -143,8 +147,10 @@ ProcessingPlan arraw::planFor(const ImageBuffer& source, const DevelopState& sta
                               const RenderRequest& request) {
     const detail::TimingSpan timing("develop.plan");
     auto plan = planFor(source.encoding(), state, source.pixelScale());
-    plan.presence = presencePlanFor(state.settings.presence, source.encoding(), source.pixelScale(),
-                                    source.size());
+    plan.pointwise.local = localPlanFor(state, source.size());
+    plan.pointwise.presence =
+        presencePlanFor(state.settings.presence, source.encoding(), source.pixelScale(),
+                        source.size(), presenceReachOf(plan.pointwise.local));
     plan.geometry = geometryPlanFor(source.size(), source.orientation(), state.settings.geometry);
     plan.resize = resizePlanFor(request, plan.geometry->outputSize, &source);
     return plan;

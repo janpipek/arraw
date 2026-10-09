@@ -92,10 +92,6 @@ enum class Notice {
     /// opened without its settings and marks: the reason.
     SidecarUnreadable,
 
-    /// @brief An explicit crop was dropped for automatic framing, because an
-    /// edit changed the rotation or flips it was drawn in: what changed.
-    CropReset,
-
     /// @brief A photograph's EXIF could not be read, or it records none, so
     /// no capture information is shown: the reason.
     ExifUnreadable,
@@ -113,6 +109,18 @@ enum class Notice {
     /// @brief A photograph's embedded preview could not be looked for, so none
     /// is shown: the reason.
     PreviewUnreadable,
+
+    /// @brief A local adjustment read from a document was dropped: its position in the list
+    /// (from 1), its id (empty when unreadable), its type (empty when unreadable), then why.
+    LocalAdjustmentDropped,
+
+    /// @brief A field of a local adjustment read from a document is not one arraw knows, and was
+    /// ignored: the adjustment's position (from 1), its id, then the key.
+    LocalAdjustmentFieldIgnored,
+
+    /// @brief A document's list of local adjustments was written by a newer arraw, and was read
+    /// as far as it is understood: its version, then the newest this arraw knows.
+    NewerLocalAdjustmentsVersion,
 
     /// @brief An export left out metadata it could not read or copy from its
     /// source, but was written: what was left out and why.

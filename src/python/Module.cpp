@@ -17,4 +17,5 @@ NB_MODULE(_arraw, m) {
     arraw::python::bindSettings(m);
     arraw::python::bindPhoto(m);
     arraw::python::bindShots(m);
+    arraw::python::bindSession(m);
 }

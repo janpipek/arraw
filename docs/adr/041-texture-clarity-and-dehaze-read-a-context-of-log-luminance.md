@@ -613,3 +613,12 @@ resample tolerances. Only lavapipe was measured.
   change; held at one cell, the preview shows it coarser instead.
 - **Caching the context on the Denoise checkpoint now.** See the measurement:
   a sixth of the pass at most, for a second payload on both backends.
+
+## Note, 2026-10-08 (the amounts)
+
+The three amounts are `PresencePlan::amounts`, a `PresenceAmounts`
+(`src/core/Presence.h`), with `presenceAmountFor` resolving one control from its
+setting; `applyPresence` takes the amounts as a parameter, and the four-argument
+form passes the plan's own. The shader mirrors the struct locally
+(`develop.frag`). Nothing else of this ADR changes, and the output is the same
+bit for bit.

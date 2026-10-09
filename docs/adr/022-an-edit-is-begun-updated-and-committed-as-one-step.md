@@ -75,3 +75,23 @@ or batch undo arrives, probably with a context-manager form for an edit.
   on top without changing the protocol.
 - Batch undo across several photographs, and what happens when a sidecar
   changes on disk during a session, are still open.
+
+## Amendment, 2026-10-08: history is a list and a position
+
+- **A list and a position.** `EditSession` keeps `history()`, the steps with
+  the opening state first, and `position()`, instead of an undo and a redo
+  stack. Each step is still a whole develop state.
+- **A click navigates.** `goTo(index)` moves the position. It is not an
+  undoable step: it adds none and drops none, and the steps above stay listed
+  until the next edit drops them. `undo()` and `redo()` are `goTo` one step
+  either way. An open edit is committed first, so the index is taken after
+  that commit. Only restoring a Snapshot (later) will be a step, an ordinary
+  `setState` with its own origin.
+- **Steps carry an origin.** `commit` and `setState` take an `EditOrigin`
+  (`Edit`, `Paste`, `Preset`, `Reset`, `Crop`; `Opened` for the first step) and
+  a detail, such as a preset's name. The enum is meant to grow.
+- **Wording comes from the front end.** The library gives
+  `describeChange(before, after)`: the descriptor keys that differ and their
+  group, when there is one. A front end words a step from the origin, the
+  detail and that description, never from free text, so the list cannot
+  claim a change the states do not show.

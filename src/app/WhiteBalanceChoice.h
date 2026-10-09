@@ -56,25 +56,10 @@ struct WhiteBalancePreset {
 /// settings' temperature and tint (Daylight before Flash); else Custom.
 [[nodiscard]] WhiteBalanceChoice choiceOf(const ColorSettings& settings);
 
-/// @brief Applies a combo entry to the settings.
-/// @param settings Settings to start from.
+/// @brief Gives the light a combo entry names.
 /// @param choice Entry chosen.
-/// @return As Shot with no values; a named light as Custom with both its values;
-/// for the Custom entry, @p settings unchanged.
-[[nodiscard]] ColorSettings withChoice(ColorSettings settings, WhiteBalanceChoice choice);
-
-/// @brief Moves the temperature, leaving the tint where it is.
-///
-/// A value makes the mode Custom. Clearing it returns to As Shot when the tint
-/// is not set either. In As Shot mode any stale values are ignored: the rows
-/// showed the camera's reading, so that is what the other value stays at.
-/// @param settings Settings to start from.
-/// @param kelvin New temperature, or empty to follow the camera again.
-[[nodiscard]] ColorSettings withTemperature(ColorSettings settings, std::optional<float> kelvin);
-
-/// @brief Moves the tint, leaving the temperature where it is.
-/// @copydetails withTemperature
-[[nodiscard]] ColorSettings withTint(ColorSettings settings, std::optional<float> tint);
+/// @return The light of a named entry; nothing for As Shot and Custom.
+[[nodiscard]] std::optional<ColourTemperature> lightOf(WhiteBalanceChoice choice);
 
 /// @brief Gives the light the Temp and Tint rows show.
 /// @param settings Settings being shown.

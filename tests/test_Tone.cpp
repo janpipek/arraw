@@ -4,8 +4,12 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
+#include <cstdint>
 #include <limits>
+#include <stdexcept>
+#include <string>
 
 using namespace arraw;
 
@@ -26,7 +30,7 @@ float luminanceOf(const Colour& colour) {
 float rolled(float value, float amount) {
     const auto plan = planFor(ColorEncoding{workingEncoding},
                               {.settings = {.tone = {.filmicHighlights = amount}}});
-    return developPixel(plan, {value, value, value})[1];
+    return developPixel(plan.pointwise, {value, value, value})[1];
 }
 
 /// @brief Checks that a value came back as good as unchanged.
@@ -43,7 +47,7 @@ bool unmoved(float value, float from) {
 float toned(float value, DevelopSettings settings) {
     settings.tone.filmicHighlights = noFilmicHighlights;
     const auto plan = planFor(ColorEncoding{workingEncoding}, DevelopState{settings});
-    return developPixel(plan, {value, value, value})[1];
+    return developPixel(plan.pointwise, {value, value, value})[1];
 }
 
 /// @brief Shapes one neutral value, with the shoulder out of the way.
@@ -51,7 +55,7 @@ float shaped(float value, float contrast) {
     const auto plan = planFor(
         ColorEncoding{workingEncoding},
         {.settings = {.tone = {.contrast = contrast, .filmicHighlights = noFilmicHighlights}}});
-    return developPixel(plan, {value, value, value})[1];
+    return developPixel(plan.pointwise, {value, value, value})[1];
 }
 
 } // namespace
@@ -126,7 +130,8 @@ TEST_CASE("No combination of the tone controls can invert the scale", "[tone]") 
                         float previous = 0.0F;
                         for (int step = 0; step <= 400; ++step) {
                             const float input = static_cast<float>(step) / 100.0F;
-                            const float output = developPixel(plan, {input, input, input})[1];
+                            const float output =
+                                developPixel(plan.pointwise, {input, input, input})[1];
                             worstDrop = std::min(worstDrop, output - previous);
                             previous = output;
                         }
@@ -164,7 +169,7 @@ TEST_CASE("Contrast pushes bright values past white, for the shoulder to catch",
     /// And with the shoulder in the chain, it comes back below white.
     const auto plan =
         planFor(ColorEncoding{workingEncoding}, {.settings = {.tone = {.contrast = 100.0F}}});
-    REQUIRE(developPixel(plan, {0.9F, 0.9F, 0.9F})[1] < 1.0F);
+    REQUIRE(developPixel(plan.pointwise, {0.9F, 0.9F, 0.9F})[1] < 1.0F);
 }
 
 TEST_CASE("Contrast never inverts the tone scale", "[tone]") {
@@ -188,7 +193,7 @@ TEST_CASE("Contrast leaves colour where it was", "[tone]") {
         {.settings = {.tone = {.contrast = 100.0F, .filmicHighlights = noFilmicHighlights}}});
     constexpr Colour source{0.3F, 0.2F, 0.1F};
 
-    const Colour developed = developPixel(plan, source);
+    const Colour developed = developPixel(plan.pointwise, source);
     const float ratio = developed[0] / source[0];
 
     REQUIRE(std::abs(developed[1] / source[1] - ratio) < 1e-5F);
@@ -200,8 +205,8 @@ TEST_CASE("The plan carries contrast as a slope, not as a slider", "[tone][plan]
         planFor(ColorEncoding{workingEncoding}, {.settings = {.tone = {.contrast = 200.0F}}});
 
     /// Clamped rather than refused, like every other setting (ADR 008).
-    REQUIRE(std::abs(plan.contrastSlope - std::sqrt(2.0F)) < 1e-5F);
-    REQUIRE(plan.shapesTone);
+    REQUIRE(std::abs(plan.pointwise.tone.contrastSlope - std::sqrt(2.0F)) < 1e-5F);
+    REQUIRE(plan.pointwise.tone.shapesTone);
 }
 
 TEST_CASE("A photograph with no tone set is not shaped at all", "[tone][plan]") {
@@ -211,9 +216,9 @@ TEST_CASE("A photograph with no tone set is not shaped at all", "[tone][plan]") 
     const auto plan = planFor(ColorEncoding{workingEncoding}, {});
     constexpr Colour colour{0.25F, 0.5F, 0.7F};
 
-    REQUIRE_FALSE(plan.shapesTone);
-    REQUIRE(plan.contrastSlope == 1.0F);
-    REQUIRE(developPixel(plan, colour) == colour);
+    REQUIRE_FALSE(plan.pointwise.tone.shapesTone);
+    REQUIRE(plan.pointwise.tone.contrastSlope == 1.0F);
+    REQUIRE(developPixel(plan.pointwise, colour) == colour);
 }
 
 TEST_CASE("The shoulder leaves everything below its knee alone", "[tone]") {
@@ -261,7 +266,7 @@ TEST_CASE("No roll-off at all is allowed, and clips", "[tone]") {
     const auto plan =
         planFor(ColorEncoding{workingEncoding}, {.settings = {.tone = {.filmicHighlights = 0.0F}}});
 
-    REQUIRE(std::isinf(plan.shoulderKnee));
+    REQUIRE(std::isinf(plan.pointwise.shoulderKnee));
     REQUIRE(rolled(4.0F, 0.0F) == 4.0F);
 }
 
@@ -271,7 +276,7 @@ TEST_CASE("A rolled highlight loses its colour on the way to white", "[tone]") {
     const auto plan = planFor(ColorEncoding{workingEncoding}, {});
     constexpr Colour bright{4.0F, 0.5F, 0.1F};
 
-    const Colour developed = developPixel(plan, bright);
+    const Colour developed = developPixel(plan.pointwise, bright);
     const float ratio = luminanceOf(developed) / luminanceOf(bright);
     const Colour scaledOnly{bright[0] * ratio, bright[1] * ratio, bright[2] * ratio};
 
@@ -287,7 +292,7 @@ TEST_CASE("A rolled highlight loses its colour on the way to white", "[tone]") {
 
 TEST_CASE("A neutral highlight stays neutral", "[tone]") {
     const auto plan = planFor(ColorEncoding{workingEncoding}, {});
-    const Colour developed = developPixel(plan, {3.0F, 3.0F, 3.0F});
+    const Colour developed = developPixel(plan.pointwise, {3.0F, 3.0F, 3.0F});
 
     REQUIRE(developed[0] == developed[1]);
     REQUIRE(developed[1] == developed[2]);
@@ -298,17 +303,150 @@ TEST_CASE("The plan carries the knee, not the amount", "[tone][plan]") {
     /// and what the pixels need is where the bend starts (ADR 011).
     REQUIRE(planFor(ColorEncoding{workingEncoding},
                     {.settings = {.tone = {.filmicHighlights = 100.0F}}})
-                .shoulderKnee == 0.5F);
+                .pointwise.shoulderKnee == 0.5F);
     REQUIRE(
         planFor(ColorEncoding{workingEncoding}, {.settings = {.tone = {.filmicHighlights = 25.0F}}})
-            .shoulderKnee == 0.875F);
+            .pointwise.shoulderKnee == 0.875F);
 
     /// Out of range is clamped rather than refused, like every other setting:
     /// no pixel maths depends on a caller having checked first (ADR 008).
     REQUIRE(planFor(ColorEncoding{workingEncoding},
                     {.settings = {.tone = {.filmicHighlights = 400.0F}}})
-                .shoulderKnee == 0.5F);
+                .pointwise.shoulderKnee == 0.5F);
     REQUIRE(std::isinf(planFor(ColorEncoding{workingEncoding},
                                {.settings = {.tone = {.filmicHighlights = -10.0F}}})
-                           .shoulderKnee));
+                           .pointwise.shoulderKnee));
+}
+
+namespace {
+
+/// @brief Whether two floats have the same bits.
+bool sameBits(float first, float second) {
+    return std::bit_cast<std::uint32_t>(first) == std::bit_cast<std::uint32_t>(second);
+}
+
+/// @brief Whether two tone plans have the same bits in every field.
+bool sameBits(const TonePlan& first, const TonePlan& second) {
+    return sameBits(first.exposureGain, second.exposureGain) &&
+           first.shapesTone == second.shapesTone &&
+           sameBits(first.contrastSlope, second.contrastSlope) &&
+           sameBits(first.contrastScale, second.contrastScale) &&
+           sameBits(first.shadowShift, second.shadowShift) &&
+           sameBits(first.highlightShift, second.highlightShift) &&
+           sameBits(first.blackShift, second.blackShift) &&
+           sameBits(first.whiteShift, second.whiteShift);
+}
+
+/// @brief Tone settings at, inside and beyond the limits.
+std::array<ToneSettings, 6> resolutionSettings() {
+    return {{{},
+             {.exposure = 1.25F,
+              .contrast = 40.0F,
+              .shadows = 20.0F,
+              .highlights = -30.0F,
+              .blacks = 10.0F,
+              .whites = -10.0F},
+             {.exposure = darkestExposure,
+              .contrast = flattestContrast,
+              .shadows = weakestToneControl,
+              .highlights = weakestToneControl,
+              .blacks = weakestToneControl,
+              .whites = weakestToneControl},
+             {.exposure = brightestExposure,
+              .contrast = steepestContrast,
+              .shadows = strongestToneControl,
+              .highlights = strongestToneControl,
+              .blacks = strongestToneControl,
+              .whites = strongestToneControl},
+             {.exposure = 9.0F,
+              .contrast = 900.0F,
+              .shadows = 500.0F,
+              .highlights = -500.0F,
+              .blacks = 250.0F,
+              .whites = -250.0F},
+             {.exposure = -9.0F, .contrast = -900.0F, .whites = 0.001F}}};
+}
+
+} // namespace
+
+TEST_CASE("Resolving the tone amounts gives the plan, bit for bit", "[tone][plan]") {
+    for (const ToneSettings& settings : resolutionSettings()) {
+        CAPTURE(settings.exposure, settings.contrast, settings.shadows, settings.whites);
+        const ToneAmounts amounts = toneAmountsOf(settings);
+        const TonePlan plan = tonePlanFor(settings);
+        REQUIRE(sameBits(resolveTone(amounts), plan));
+
+        // Each function is the expression the planner has always used.
+        const float exposure = std::clamp(settings.exposure, darkestExposure, brightestExposure);
+        const float contrast = std::clamp(settings.contrast, flattestContrast, steepestContrast);
+        const auto control = [](float setting) {
+            return std::clamp(setting, weakestToneControl, strongestToneControl);
+        };
+        REQUIRE(sameBits(plan.exposureGain, exposureGainFor(amounts.exposure)));
+        REQUIRE(sameBits(plan.exposureGain, std::exp2(exposure)));
+        REQUIRE(sameBits(plan.contrastSlope, contrastSlopeFor(amounts.contrast)));
+        REQUIRE(sameBits(plan.contrastSlope, std::exp2(contrast / (2.0F * steepestContrast))));
+        REQUIRE(sameBits(plan.contrastScale, contrastScaleFor(plan.contrastSlope)));
+        REQUIRE(sameBits(plan.contrastScale, std::pow(greyPivot, 1.0F - plan.contrastSlope)));
+        REQUIRE(sameBits(plan.shadowShift, regionalShiftFor(amounts.shadows)));
+        REQUIRE(sameBits(plan.shadowShift,
+                         regionalReach * control(settings.shadows) / strongestToneControl));
+        REQUIRE(sameBits(plan.highlightShift, regionalShiftFor(amounts.highlights)));
+        REQUIRE(sameBits(plan.blackShift, endpointShiftFor(amounts.blacks)));
+        REQUIRE(sameBits(plan.blackShift,
+                         endpointReach * control(settings.blacks) / strongestToneControl));
+        REQUIRE(sameBits(plan.whiteShift, endpointShiftFor(amounts.whites)));
+        REQUIRE(plan.shapesTone == (settings.contrast != 0.0F || settings.shadows != 0.0F ||
+                                    settings.highlights != 0.0F || settings.blacks != 0.0F ||
+                                    settings.whites != 0.0F));
+    }
+}
+
+TEST_CASE("The tone amounts are clamped into their ranges", "[tone][plan]") {
+    const ToneAmounts amounts = toneAmountsOf({.exposure = 9.0F,
+                                               .contrast = -900.0F,
+                                               .shadows = 500.0F,
+                                               .highlights = -500.0F,
+                                               .blacks = 250.0F,
+                                               .whites = -250.0F});
+    REQUIRE(amounts.exposure == brightestExposure);
+    REQUIRE(amounts.contrast == flattestContrast);
+    REQUIRE(amounts.shadows == strongestToneControl);
+    REQUIRE(amounts.highlights == weakestToneControl);
+    REQUIRE(amounts.blacks == strongestToneControl);
+    REQUIRE(amounts.whites == weakestToneControl);
+}
+
+TEST_CASE("A tone setting that is not finite is refused, naming the first", "[tone][plan]") {
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const float inf = std::numeric_limits<float>::infinity();
+    const auto message = [](ToneSettings settings) -> std::string {
+        try {
+            static_cast<void>(toneAmountsOf(settings));
+        } catch (const std::invalid_argument& error) {
+            return error.what();
+        }
+        return {};
+    };
+    REQUIRE(message({.exposure = nan}) == "An exposure adjustment must be finite");
+    REQUIRE(message({.contrast = inf}) == "A contrast adjustment must be finite");
+    REQUIRE(message({.shadows = nan}) == "A shadows adjustment must be finite");
+    REQUIRE(message({.highlights = -inf}) == "A highlights adjustment must be finite");
+    REQUIRE(message({.blacks = nan}) == "A blacks adjustment must be finite");
+    REQUIRE(message({.whites = inf}) == "A whites adjustment must be finite");
+    // The order of the checks is exposure, contrast, shadows, highlights, blacks, whites.
+    REQUIRE(message({.exposure = nan, .contrast = nan, .whites = nan}) ==
+            "An exposure adjustment must be finite");
+    REQUIRE(message({.contrast = nan, .shadows = nan}) == "A contrast adjustment must be finite");
+    REQUIRE(message({.shadows = nan, .highlights = nan}) == "A shadows adjustment must be finite");
+    REQUIRE(message({.highlights = nan, .blacks = nan}) ==
+            "A highlights adjustment must be finite");
+    REQUIRE(message({.blacks = nan, .whites = nan}) == "A blacks adjustment must be finite");
+    REQUIRE_THROWS_AS(tonePlanFor({.whites = nan}), std::invalid_argument);
+    try {
+        static_cast<void>(shoulderKneeFor({.filmicHighlights = nan}));
+        FAIL("a non-finite roll-off was accepted");
+    } catch (const std::invalid_argument& error) {
+        REQUIRE(std::string(error.what()) == "A highlight roll-off must be finite");
+    }
 }

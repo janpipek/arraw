@@ -2,6 +2,7 @@
 
 #include "Denoise.h"
 #include "Presence.h"
+#include "StageTable.h"
 
 #include <algorithm>
 #include <exception>
@@ -72,12 +73,13 @@ detail::StepWeights detail::renderStepWeights(const ProcessingPlan& plan,
     };
     try {
         at(ProgressStep::Denoise) = sumOf(denoiseLoopWeights(plan.denoise, source));
-        at(ProgressStep::Context) = sumOf(presenceLoopWeights(plan.presence, source));
+        at(ProgressStep::Context) = sumOf(presenceLoopWeights(plan.pointwise.presence, source));
     } catch (const std::exception&) {
         // Only an allocation can fail here; the pass itself would say so.
     }
     at(ProgressStep::Pointwise) =
-        (pointwiseCost + (plan.presence.active() ? presenceSampleCost : 0.0)) * pixelsOf(source);
+        (pointwiseCost + (plan.pointwise.presence.active() ? presenceSampleCost : 0.0)) *
+        pixelsOf(source);
     if (!geometry.isIdentity()) {
         at(ProgressStep::Geometry) = geometryCost * pixelsOf(geometry.outputSize);
     }
@@ -103,32 +105,12 @@ detail::StepWeights detail::renderStepWeights(const ProcessingPlan& plan,
 }
 
 ProgressStep detail::stepAfter(Stage boundary) noexcept {
-    switch (boundary) {
-    case Stage::Denoise:
-        return ProgressStep::Context;
-    case Stage::Pointwise:
-        return ProgressStep::Geometry;
-    case Stage::Geometry:
-        return ProgressStep::Resize;
-    case Stage::Resize:
-    case Stage::Effects:
-        break;
+    if (boundary == Stage::Effects) {
+        return rowOf(Stage::Effects).firstStep;
     }
-    return ProgressStep::Effects;
+    return rowOf(following(boundary)).firstStep;
 }
 
 ProgressStep detail::stepThrough(Stage boundary) noexcept {
-    switch (boundary) {
-    case Stage::Denoise:
-        return ProgressStep::Denoise;
-    case Stage::Pointwise:
-        return ProgressStep::Pointwise;
-    case Stage::Geometry:
-        return ProgressStep::Geometry;
-    case Stage::Resize:
-        return ProgressStep::Resize;
-    case Stage::Effects:
-        break;
-    }
-    return ProgressStep::Effects;
+    return rowOf(boundary).lastStep;
 }

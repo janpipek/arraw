@@ -1,3 +1,4 @@
+#include "DebugLog.h"
 #include "ThumbnailCache.h"
 #include "ThumbnailWorker.h"
 #include "TimingTrace.h"
@@ -7,6 +8,7 @@
 #include "ui/FilmStrip.h"
 #include "ui/MainWindow.h"
 #include "ui/PhotoView.h"
+#include "ui/RenderProgressPie.h"
 #include "ui/SettingSlider.h"
 
 #include <Photo.h>
@@ -82,7 +84,8 @@ QAction* findAction(const MainWindow& window, const QString& name) {
 /// A window over a folder of three photographs, each with a sidecar of its own exposure.
 struct Window {
     test::TempDir folder;
-    MainWindow window;
+    DebugLog debugLog;
+    MainWindow window{debugLog};
 
     Window() {
         const std::filesystem::path fixtures(ARRAW_TEST_DATA_DIR);
@@ -217,6 +220,21 @@ TEST_CASE("Entering the crop mode reads the camera preview off the GUI thread",
     CHECK_FALSE(w.view().isCropMode());
 }
 
+TEST_CASE("A render shown in the crop mode ends the opening", "[app][window][opening][crop]") {
+    Window w;
+    w.window.openInitialPath(w.shot("a.dng"));
+    auto* crop = findAction(w.window, "cropAction");
+    auto* pie = w.window.findChild<RenderProgressPie*>();
+    REQUIRE(pie != nullptr);
+    CHECK(pie->opening());
+    // The decode has landed; the first render may not have been shown yet.
+    REQUIRE(QTest::qWaitFor([&] { return crop->isEnabled(); }, 20000));
+    crop->trigger();
+    REQUIRE(w.view().isCropMode());
+    // The overlay may fill from the camera's preview first; only a render ends the opening.
+    CHECK(QTest::qWaitFor([&] { return !pie->opening(); }, 20000));
+}
+
 /// Measures the GUI thread's longest stall in each interaction on a folder of large photographs
 /// (ADR 043). ARRAW_BENCH_FOLDER names the folder; its first two shots are opened in turn.
 TEST_CASE("The window's interactions stall the GUI thread no longer than measured",
@@ -226,7 +244,8 @@ TEST_CASE("The window's interactions stall the GUI thread no longer than measure
         SKIP("ARRAW_BENCH_FOLDER is not set");
     }
     const std::filesystem::path folder(folderVariable);
-    MainWindow window;
+    DebugLog debugLog;
+    MainWindow window(debugLog);
     window.resize(1600, 1000);
     window.show();
     REQUIRE(QTest::qWaitForWindowExposed(&window));

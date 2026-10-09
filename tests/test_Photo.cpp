@@ -116,6 +116,6 @@ TEST_CASE("A plan resolves from a photograph", "[photo]") {
     const ProcessingPlan plan = planFor(photo);
 
     REQUIRE(plan == planFor(loadImage(photo.path()), photo.state()));
-    REQUIRE(plan.exposureGain == 0.5F);
+    REQUIRE(plan.pointwise.tone.exposureGain == 0.5F);
     REQUIRE_FALSE(plan == planFor(openPhoto(test::fixture(neutralFixture))));
 }

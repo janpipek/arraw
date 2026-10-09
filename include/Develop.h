@@ -1,11 +1,13 @@
 #pragma once
 
+#include <CheckpointLadder.h>
 #include <DevelopState.h>
 #include <ImageBuffer.h>
 #include <Progress.h>
 #include <RenderCheckpoint.h>
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <variant>
 
@@ -284,6 +286,33 @@ struct RenderRequest {
 [[nodiscard]] bool canResumeFrom(const RenderCheckpoint& from, const ImageBuffer& source,
                                  const DevelopState& state, Stage stopAfter,
                                  const RenderRequest& request = {});
+
+/// @brief Renders a photograph through a ladder of checkpoints, resuming from the best one.
+///
+/// ::arraw::develop to the effects, as ::arraw::developUntil and
+/// ::arraw::resumeFrom would chain it, planned and observed as one render: the
+/// ladder's deepest rung that the new plan still matches is resumed from, the
+/// rungs that no longer match are dropped, and each boundary the render passes
+/// before the effects is stored as a rung for the next one (ADR 045). A ladder
+/// bound to another source is cleared first, and a rung that is not on the
+/// host is dropped. The request is planned before the ladder is touched, so
+/// one that cannot be rendered throws and leaves the ladder as it was. A render
+/// cancelled part-way keeps the rungs it finished.
+/// @param ladder Rungs kept of the source; updated.
+/// @param source Decoded photograph, kept alive by the ladder.
+/// @param state How the photograph is developed.
+/// @param request What to render; see ::arraw::develop.
+/// @param progress Channel for progress and cancellation, or null. The render
+/// is measured from the share of the rung it resumes from.
+/// @return The checkpoint at the effects, equal to what ::arraw::develop
+/// renders, and the boundary resumed from.
+/// @throws std::invalid_argument as ::arraw::develop, and if @p source is null.
+/// @throws ::arraw::Cancelled if @p progress was cancelled before the render finished.
+[[nodiscard]] LadderRender resumeOrDevelop(CheckpointLadder& ladder,
+                                           std::shared_ptr<const ImageBuffer> source,
+                                           const DevelopState& state,
+                                           const RenderRequest& request = {},
+                                           ProgressChannel* progress = nullptr);
 
 /// @brief Renders a photograph with the pointwise chain stopped at a tap, to measure it.
 ///

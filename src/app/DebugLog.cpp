@@ -76,8 +76,6 @@ QString noticeName(Notice notice) {
         return QStringLiteral("NewerSettingsVersion");
     case Notice::SidecarUnreadable:
         return QStringLiteral("SidecarUnreadable");
-    case Notice::CropReset:
-        return QStringLiteral("CropReset");
     case Notice::ExifUnreadable:
         return QStringLiteral("ExifUnreadable");
     case Notice::NoPhotographs:
@@ -88,6 +86,12 @@ QString noticeName(Notice notice) {
         return QStringLiteral("OptionIgnored");
     case Notice::PreviewUnreadable:
         return QStringLiteral("PreviewUnreadable");
+    case Notice::LocalAdjustmentDropped:
+        return QStringLiteral("LocalAdjustmentDropped");
+    case Notice::LocalAdjustmentFieldIgnored:
+        return QStringLiteral("LocalAdjustmentFieldIgnored");
+    case Notice::NewerLocalAdjustmentsVersion:
+        return QStringLiteral("NewerLocalAdjustmentsVersion");
     case Notice::MetadataNotCarried:
         return QStringLiteral("MetadataNotCarried");
     }

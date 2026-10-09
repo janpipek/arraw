@@ -19,8 +19,9 @@ class FilmStrip;
 
 /// @brief The Photo menu's items for rating, colour labels and stepping between shots.
 ///
-/// Builds the actions with the keys of main's film strip for ratings (0 to 5, X), Shift with
-/// R Y G B P for the colour labels (R alone is the crop mode, ADR 040), and the arrow keys,
+/// Builds the actions with the keys of main's film strip for ratings (0 to 5, X), the plain
+/// keys R Y G B P for the colour labels (C is the crop mode, ADR 040, and M the mask mode), and
+/// the arrow keys,
 /// and routes them to a ::arraw::app::FilmStrip. The actions belong to the
 /// window, so the keys work whichever widget has the focus, except while a text field
 /// takes them for typing: the shortcut machinery asks the focused widget first, and a

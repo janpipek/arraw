@@ -161,3 +161,7 @@ Still open: the tolerance at which the two backends are held to agree. "How
 close is close enough" for a resampled pixel is not answerable without the code
 and the fixtures in front of us, and a number invented now would only be a
 number.
+
+## Note, 2026-10-08
+
+Masks are specified in [ADR 044](044-local-adjustments-are-masked-deltas-summed-into-the-chain.md): linear and radial geometry in the corrected frame and brush strokes (stored as strokes, not rasters) in the sensor frame, as decided here.

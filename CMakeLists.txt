@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(arraw VERSION 0.3.1 LANGUAGES CXX)
+project(arraw VERSION 0.4.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -164,6 +164,10 @@ add_library(arraw STATIC
         include/DevelopSettings.h
         include/DevelopState.h
         src/core/DevelopState.cpp
+        include/CropGeometry.h
+        src/core/CropGeometry.cpp
+        include/DevelopedFrame.h
+        src/core/DevelopedFrame.cpp
         include/GeometrySettings.h
         include/ImageOrientation.h
         include/ImagePyramid.h
@@ -181,7 +185,7 @@ add_library(arraw STATIC
         src/core/ToneCurve.h
         src/core/ToneCurve.cpp
         include/ToneSettings.h
-        src/core/ToneSettings.cpp
+        src/core/TonePlan.cpp
         src/core/ColorSpaces.h
         src/core/Develop.cpp
         include/CurveHistogram.h
@@ -197,6 +201,11 @@ add_library(arraw STATIC
         src/core/ProcessingPlan.cpp
         src/core/ProcessingPlan.h
         include/RenderCheckpoint.h
+        include/CheckpointLadder.h
+        src/core/CheckpointLadder.cpp
+        src/core/LadderAccess.h
+        src/core/StageTable.h
+        src/core/StageDriver.h
         src/core/CheckpointState.h
         src/core/RenderCheckpoint.cpp
         src/core/device/DeviceImage.h
@@ -211,6 +220,16 @@ add_library(arraw STATIC
         src/core/Photo.cpp
         include/SettingDescriptors.h
         src/core/SettingDescriptors.cpp
+        include/Edits.h
+        src/core/Edits.cpp
+        include/LocalAdjustments.h
+        src/core/LocalAdjustments.cpp
+        include/LocalAdjustmentEdits.h
+        src/core/LocalAdjustmentEdits.cpp
+        src/core/LocalAdjustmentCodec.h
+        src/core/LocalAdjustmentCodec.cpp
+        src/core/LocalPlan.h
+        src/core/LocalPlan.cpp
         src/core/SettingCodec.h
         include/ShortestDecimal.h
         src/core/SettingCodec.cpp
@@ -248,6 +267,10 @@ arraw_enable_warnings(arraw)
 # MSVC does not contract under its default /fp:precise.
 set_source_files_properties(src/core/GrainModels.cpp PROPERTIES
         COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-ffp-contract=off>")
+# The same for the local adjustments' sums (ADR 044, section 2): masks that cancel must cancel
+# exactly, as the shader's `precise` sum does, and LocalPlan.h is inline in every target that
+# renders on the CPU (the library and what links it: the tests, the Python module).
+target_compile_options(arraw PUBLIC "$<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-ffp-contract=off>")
 target_include_directories(arraw PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 # A checkpoint may hold its pixels on a device (ADR 015), so the device image
 # handle is the engine's: src/core/device holds it and the Qt-free state behind
@@ -390,6 +413,8 @@ endif()
 add_library(arraw-app-core STATIC
         src/app/AppSettings.cpp
         src/app/AppSettings.h
+        src/app/CopySections.cpp
+        src/app/CopySections.h
         src/app/CropEditing.cpp
         src/app/CropEditing.h
         src/app/CurveEditing.cpp
@@ -422,6 +447,14 @@ add_library(arraw-app-core STATIC
         src/app/FilmStripRules.h
         src/app/FolderWatcher.cpp
         src/app/FolderWatcher.h
+        src/app/HistoryModel.cpp
+        src/app/HistoryModel.h
+        src/app/MaskEditing.cpp
+        src/app/MaskEditing.h
+        src/app/MaskPresentation.cpp
+        src/app/MaskPresentation.h
+        src/app/MasksModel.cpp
+        src/app/MasksModel.h
         src/app/OklabHue.cpp
         src/app/OklabHue.h
         src/app/ShotFilterModel.cpp
@@ -447,6 +480,8 @@ set_target_properties(arraw-app-core PROPERTIES AUTOMOC ON)
 
 # The widgets, apart from main(), so the widget tests can drive the whole window.
 add_library(arraw-app-ui STATIC
+        src/app/ui/CopySettingsDialog.cpp
+        src/app/ui/CopySettingsDialog.h
         src/app/ui/CropOverlay.cpp
         src/app/ui/CropOverlay.h
         src/app/ui/CullingActions.cpp
@@ -463,10 +498,14 @@ add_library(arraw-app-ui STATIC
         src/app/ui/FilmStrip.h
         src/app/ui/MainWindow.cpp
         src/app/ui/MainWindow.h
+        src/app/ui/MaskOverlay.cpp
+        src/app/ui/MaskOverlay.h
+        src/app/ui/MasksPanel.cpp
+        src/app/ui/MasksPanel.h
         src/app/ui/PhotoView.cpp
         src/app/ui/PhotoView.h
-        src/app/ui/RenderProgressBar.cpp
-        src/app/ui/RenderProgressBar.h
+        src/app/ui/RenderProgressPie.cpp
+        src/app/ui/RenderProgressPie.h
         src/app/ui/SettingsDialog.cpp
         src/app/ui/SettingsDialog.h
         src/app/ui/SettingSlider.cpp
@@ -538,6 +577,30 @@ if(MSVC)
 endif()
 if(TARGET arraw-headless-platform)
     target_link_libraries(arraw-cli PRIVATE arraw-headless-platform)
+endif()
+
+# Linux desktop integration: what `cmake --install` lays down for a package
+# (packaging/fedora/arraw.spec; ADR 046). The executables keep their build
+# names. Everything else they need is inside them: the shaders and the window
+# icon are Qt resources, and arraw-headless-platform is linked in statically.
+# The reverse-DNS id io.github.janpipek.arraw names the .desktop file, the
+# metainfo and the icons, and matches QApplication::setDesktopFileName.
+if(UNIX AND NOT APPLE)
+    include(GNUInstallDirs)
+    set(arraw_app_id io.github.janpipek.arraw)
+    install(TARGETS arraw-ui arraw-cli RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    install(FILES packaging/linux/${arraw_app_id}.desktop
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+    install(FILES packaging/linux/${arraw_app_id}.metainfo.xml
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo)
+    foreach(icon_size 16 24 32 48 64 128 256)
+        install(FILES resources/icons/arraw-${icon_size}.png
+                DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/${icon_size}x${icon_size}/apps
+                RENAME ${arraw_app_id}.png)
+    endforeach()
+    install(FILES resources/icon.svg
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps
+            RENAME ${arraw_app_id}.svg)
 endif()
 
 endif() # ARRAW_BUILD_APPS

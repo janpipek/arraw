@@ -2,21 +2,33 @@
 
 #include <ColorEncoding.h>
 #include <DevelopSettings.h>
+#include <LocalAdjustments.h>
+
+#include <vector>
 
 namespace arraw {
 
 /// @brief Everything that says how one photograph is developed.
 ///
-/// Global settings now, per-image edits such as masks and spots later.
-/// ::arraw::DevelopSettings is the global, descriptor-described part: what
-/// presets, the JSON document and copy-paste between photographs carry. Edits
-/// that belong to one image alone will be siblings of `settings`, as lists with
-/// stable ids whose large payloads live in immutable shared storage so that
-/// copying a state stays cheap. Culling marks are not part of it (see
-/// ::arraw::PhotoMarks).
+/// Global settings, and the edits that belong to this photograph alone: its local adjustments
+/// (masks) now, spots later. ::arraw::DevelopSettings is the global, descriptor-described part:
+/// what presets, the JSON document and copy-paste between photographs carry. The per-image edits
+/// are siblings of `settings`, as lists with stable ids whose large payloads (a brush's strokes,
+/// later) live in immutable shared storage so that copying a state stays cheap. Culling marks are
+/// not part of it (see ::arraw::PhotoMarks).
 struct DevelopState {
     /// @brief Global photographic settings, the part presets and JSON carry.
     DevelopSettings settings{};
+
+    /// @brief Masked adjustments of this photograph alone, at most
+    /// ::arraw::maximumLocalAdjustments, in the order they sum in (ADR 044).
+    ///
+    /// Not part of a look: copy and paste, and presets, leave a target's list as it is.
+    std::vector<LocalAdjustment> localAdjustments{};
+
+    /// @brief Identity the next added adjustment takes; the counter starts at 1 and never goes
+    /// down, so removing an adjustment does not free its id.
+    LocalAdjustmentId nextLocalAdjustmentId{1};
 
     friend bool operator==(const DevelopState&, const DevelopState&) = default;
 };
@@ -45,8 +57,17 @@ struct DevelopState {
 [[nodiscard]] DevelopState defaultStateFor(const ColorEncoding& encoding);
 
 /// @brief Checks a state.
+///
+/// The settings by ::arraw::validate(const DevelopSettings&), then the local adjustments (ADR
+/// 044): at most ::arraw::maximumLocalAdjustments; ids that are not zero, not repeated, and
+/// below the counter; opacity and feather within 0 to 1; each delta within its row of
+/// ::arraw::localAdjustmentDescriptors; handle positions within
+/// ::arraw::minimumMaskPosition to ::arraw::maximumMaskPosition; radii within
+/// ::arraw::minimumMaskExtent to ::arraw::maximumMaskRadius; an angle within [-180, 180); a
+/// linear mask's ends at least ::arraw::minimumMaskExtent apart; every number finite; a name
+/// that is valid UTF-8 without control characters or characters XML cannot hold.
 /// @param state State to check.
-/// @throws std::invalid_argument as ::arraw::validate(const DevelopSettings&).
+/// @throws std::invalid_argument naming the first thing that is wrong.
 void validate(const DevelopState& state);
 
 } // namespace arraw

@@ -39,6 +39,7 @@ struct Recorder {
                              channels.push_back(channel);
                          });
         QObject::connect(&editor, &CurveEditor::editFinished, [this] { events.push_back('F'); });
+        QObject::connect(&editor, &CurveEditor::resetFinished, [this] { events.push_back('F'); });
     }
 
     /// Edits are well formed and come in whole edits: S, then E at least once, then F.

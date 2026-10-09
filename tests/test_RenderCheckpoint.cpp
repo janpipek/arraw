@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <initializer_list>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -91,17 +92,23 @@ TEST_CASE("Plan prefixes ignore later geometry but include every pointwise input
         REQUIRE(prefixMatches(original, other, Stage::Effects) == (original == other));
     };
     changed = original;
-    changed.toWorking = Matrix3{};
+    changed.pointwise.toWorking = Matrix3{};
     check(changed);
     changed = original;
-    changed.shapesTone = true;
+    changed.pointwise.tone.shapesTone = true;
     check(changed);
-    for (auto field : {&ProcessingPlan::exposureGain, &ProcessingPlan::contrastSlope,
-                       &ProcessingPlan::contrastScale, &ProcessingPlan::shadowShift,
-                       &ProcessingPlan::highlightShift, &ProcessingPlan::blackShift,
-                       &ProcessingPlan::whiteShift, &ProcessingPlan::shoulderKnee}) {
+    using Field = float& (*)(ProcessingPlan&);
+    for (const Field field : std::initializer_list<Field>{
+             [](ProcessingPlan& plan) -> float& { return plan.pointwise.tone.exposureGain; },
+             [](ProcessingPlan& plan) -> float& { return plan.pointwise.tone.contrastSlope; },
+             [](ProcessingPlan& plan) -> float& { return plan.pointwise.tone.contrastScale; },
+             [](ProcessingPlan& plan) -> float& { return plan.pointwise.tone.shadowShift; },
+             [](ProcessingPlan& plan) -> float& { return plan.pointwise.tone.highlightShift; },
+             [](ProcessingPlan& plan) -> float& { return plan.pointwise.tone.blackShift; },
+             [](ProcessingPlan& plan) -> float& { return plan.pointwise.tone.whiteShift; },
+             [](ProcessingPlan& plan) -> float& { return plan.pointwise.shoulderKnee; }}) {
         changed = original;
-        changed.*field = 0.25F;
+        field(changed) = 0.25F;
         check(changed);
     }
     REQUIRE(prefixMatches(original, original, Stage::Geometry) == (original == original));
@@ -162,7 +169,7 @@ TEST_CASE("Plan prefixes tell requests apart at the resize and no earlier", "[pl
 
 TEST_CASE("NaN plan inputs refuse reuse even against themselves", "[plan][checkpoint]") {
     ProcessingPlan plan;
-    plan.exposureGain = std::numeric_limits<float>::quiet_NaN();
+    plan.pointwise.tone.exposureGain = std::numeric_limits<float>::quiet_NaN();
     REQUIRE_FALSE(prefixMatches(plan, plan, Stage::Pointwise));
     REQUIRE_FALSE(prefixMatches(plan, plan, Stage::Geometry));
 }

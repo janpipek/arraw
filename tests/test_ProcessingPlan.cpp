@@ -1,4 +1,5 @@
 #include "ProcessingPlan.h"
+#include "support/FieldCount.h"
 #include "support/Fixtures.h"
 #include "support/TestImages.h"
 
@@ -37,10 +38,10 @@ TEST_CASE("The plan carries exposure as a gain, not as stops", "[plan]") {
     const auto plan =
         planFor(ColorEncoding{workingEncoding}, {.settings = {.tone = {.exposure = 2.0F}}});
 
-    REQUIRE(std::abs(plan.exposureGain - 4.0F) < 1e-6F);
-    REQUIRE(plan.toWorking == Matrix3::identity());
+    REQUIRE(std::abs(plan.pointwise.tone.exposureGain - 4.0F) < 1e-6F);
+    REQUIRE(plan.pointwise.toWorking == Matrix3::identity());
 
-    const Colour developed = developPixel(plan, {0.1F, 0.2F, 0.3F});
+    const Colour developed = developPixel(plan.pointwise, {0.1F, 0.2F, 0.3F});
     REQUIRE(std::abs(developed[0] - 0.4F) < 1e-6F);
     REQUIRE(std::abs(developed[2] - 1.2F) < 1e-6F);
 }
@@ -58,9 +59,9 @@ TEST_CASE("White balance is folded into the plan's one transform", "[plan]") {
                                                            .temperature = 4000.0F,
                                                            .tint = 0.0F}}});
 
-    REQUIRE(asShot.toWorking == camera->toWorking);
-    REQUIRE_FALSE(custom.toWorking == camera->toWorking);
-    REQUIRE(custom.exposureGain == asShot.exposureGain);
+    REQUIRE(asShot.pointwise.toWorking == camera->toWorking);
+    REQUIRE_FALSE(custom.pointwise.toWorking == camera->toWorking);
+    REQUIRE(custom.pointwise.tone.exposureGain == asShot.pointwise.tone.exposureGain);
 }
 
 TEST_CASE("A plan refuses what development cannot start from", "[plan]") {
@@ -87,7 +88,7 @@ TEST_CASE("Developing a buffer is the chain applied to each pixel", "[plan]") {
         const Colour input{static_cast<float>(before[pixel * 4]) / 65535.0F,
                            static_cast<float>(before[pixel * 4 + 1]) / 65535.0F,
                            static_cast<float>(before[pixel * 4 + 2]) / 65535.0F};
-        const Colour expected = developPixel(plan, input);
+        const Colour expected = developPixel(plan.pointwise, input);
         for (std::size_t channel = 0; channel < 3; ++channel) {
             REQUIRE(std::abs(after[pixel * 4 + channel] - expected[channel]) < 1e-6F);
         }
@@ -200,4 +201,14 @@ TEST_CASE("Whether the pixels are opaque does not make two resize plans differ",
     REQUIRE_FALSE(fast ==
                   planFor(opaqueSource, DevelopState{settings},
                           {.size = RenderRequest::Scale{0.5}, .filter = ResizeFilter::Bilinear}));
+}
+
+TEST_CASE("The plan has one block per stage, and the pointwise blocks have no stray field",
+          "[plan]") {
+    /// The guards ADR 011 wanted from reflection: a member added to a plan
+    /// without a line in stagesOf, or to curveInputFieldsOf's blocks without a
+    /// look at it, fails here.
+    STATIC_REQUIRE(test::fieldCount<ProcessingPlan> == stageCount);
+    STATIC_REQUIRE(test::fieldCount<PointwisePlan> == 7);
+    STATIC_REQUIRE(test::fieldCount<TonePlan> == 8);
 }

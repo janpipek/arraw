@@ -151,47 +151,48 @@ TEST_CASE("With every control at zero Presence does not exist", "[presence]") {
     const ImageBuffer source =
         tintedOf({64, 48}, [](auto x, auto y) { return sceneAt(x, y, 1.0); });
     const ProcessingPlan plan = planFor(source, DevelopState{presence(0.0F, 0.0F, 0.0F)});
-    REQUIRE(plan.presence == PresencePlan{});
-    REQUIRE_FALSE(plan.presence.active());
+    REQUIRE(plan.pointwise.presence == PresencePlan{});
+    REQUIRE_FALSE(plan.pointwise.presence.active());
     REQUIRE(plan == planFor(source, DevelopState{presence(0.0F, 0.0F, 0.0F)}));
     REQUIRE(hasPresence(PresenceSettings{}) == false);
     REQUIRE(DevelopSettings{}.presence == PresenceSettings{});
 
     // The chain returns the colour itself, not a colour scaled by one.
     const Colour colour{0.3F, 0.2F, 0.1F};
-    REQUIRE(applyPresence(plan.presence, colour, -1.0F, {}) == colour);
-    REQUIRE(developPixel(plan, colour, {.fineBase = 7.0F, .coarseBase = -3.0F}) ==
-            developPixel(plan, colour));
+    REQUIRE(applyPresence(plan.pointwise.presence, colour, -1.0F, {}) == colour);
+    REQUIRE(developPixel(plan.pointwise, colour, {.fineBase = 7.0F, .coarseBase = -3.0F}) ==
+            developPixel(plan.pointwise, colour));
 
     SECTION("each control alone switches on only the base it reads") {
         const PresencePlan texture =
-            planFor(source, DevelopState{presence(30.0F, 0.0F, 0.0F)}).presence;
+            planFor(source, DevelopState{presence(30.0F, 0.0F, 0.0F)}).pointwise.presence;
         REQUIRE(texture.fine.active());
         REQUIRE_FALSE(texture.coarse.active());
         const PresencePlan clarity =
-            planFor(source, DevelopState{presence(0.0F, 30.0F, 0.0F)}).presence;
+            planFor(source, DevelopState{presence(0.0F, 30.0F, 0.0F)}).pointwise.presence;
         REQUIRE_FALSE(clarity.fine.active());
         REQUIRE(clarity.coarse.active());
-        REQUIRE_FALSE(clarity.haze.active());
+        REQUIRE_FALSE(clarity.hazeActive());
         const PresencePlan hazier =
-            planFor(source, DevelopState{presence(0.0F, 0.0F, -30.0F)}).presence;
+            planFor(source, DevelopState{presence(0.0F, 0.0F, -30.0F)}).pointwise.presence;
         REQUIRE_FALSE(hazier.coarse.active());
-        REQUIRE(hazier.haze.active());
-        REQUIRE(hazier.dehaze == -0.3F);
+        REQUIRE(hazier.hazeMean.active());
+        REQUIRE(hazier.amounts.dehaze == -0.3F);
         // A negative Dehaze measures the mean, a positive one the floor.
-        REQUIRE(hazier.haze.window == 0);
+        REQUIRE(hazier.hazeMean.window == 0);
         const PresencePlan clearer =
-            planFor(source, DevelopState{presence(0.0F, 0.0F, 30.0F)}).presence;
-        REQUIRE(clearer.haze.window > 0);
+            planFor(source, DevelopState{presence(0.0F, 0.0F, 30.0F)}).pointwise.presence;
+        REQUIRE(clearer.hazeFloor.window > 0);
         // And over a narrower blur: the floor keeps to its edges, the mean is broad.
-        REQUIRE(clearer.haze.sigma < hazier.haze.sigma);
+        REQUIRE(clearer.hazeFloor.sigma < hazier.hazeMean.sigma);
         REQUIRE(clearer.coarseReduction() == hazier.coarseReduction());
     }
 }
 
 TEST_CASE("Presence resolves its radii from the sensor and the long edge", "[presence][plan]") {
     const ImageBuffer full = greyOf({6000, 4}, [](auto, auto) { return 0.18F; });
-    const PresencePlan plan = planFor(full, DevelopState{presence(50.0F, 50.0F, 50.0F)}).presence;
+    const PresencePlan plan =
+        planFor(full, DevelopState{presence(50.0F, 50.0F, 50.0F)}).pointwise.presence;
     // Texture: 4 sensor pixels on a grid of 2.
     REQUIRE(plan.fine.reduction == 2);
     REQUIRE(plan.fine.sigma == 2.0F);
@@ -204,16 +205,16 @@ TEST_CASE("Presence resolves its radii from the sensor and the long edge", "[pre
     REQUIRE(plan.coarse.window == 0);
     // Dehaze: the same cells; a floor opened by 3% of 6000, 180 sensor
     // pixels, and smoothed by a quarter of a percent, 15.
-    REQUIRE(plan.haze.reduction == 8);
-    REQUIRE(plan.haze.window == 23);
-    REQUIRE(plan.haze.sigma == 1.875F);
-    REQUIRE(plan.haze.radius == 6);
+    REQUIRE(plan.hazeFloor.reduction == 8);
+    REQUIRE(plan.hazeFloor.window == 23);
+    REQUIRE(plan.hazeFloor.sigma == 1.875F);
+    REQUIRE(plan.hazeFloor.radius == 6);
     // An octagon of inradius 23: 9 cells across and down, 7 steps along each
     // diagonal, so 9 + 2 * 7 = 23 along the axes and sqrt(2) * 16 = 22.6 along
     // the diagonals; then two steps of reconstruction.
-    REQUIRE(octagonOf(plan.haze.window) == OctagonWindow{.across = 9, .diagonal = 7});
-    REQUIRE(plan.haze.reconstruction == hazeReconstructionSteps);
-    REQUIRE(plan.haze.reconstruction == 2);
+    REQUIRE(octagonOf(plan.hazeFloor.window) == OctagonWindow{.across = 9, .diagonal = 7});
+    REQUIRE(plan.hazeFloor.reconstruction == hazeReconstructionSteps);
+    REQUIRE(plan.hazeFloor.reconstruction == 2);
     REQUIRE(plan.coarse.reconstruction == 0);
     REQUIRE(plan.lumaRow == colorspaces::workingLuminance);
     // The margin a region's footprint would need: Dehaze's opening (the
@@ -226,13 +227,13 @@ TEST_CASE("Presence resolves its radii from the sensor and the long edge", "[pre
         ImageBuffer level = greyOf({1500, 1}, [](auto, auto) { return 0.18F; });
         level.setPixelScale(4.0);
         const PresencePlan reduced =
-            planFor(level, DevelopState{presence(50.0F, 50.0F, 50.0F)}).presence;
+            planFor(level, DevelopState{presence(50.0F, 50.0F, 50.0F)}).pointwise.presence;
         REQUIRE(reduced.coarse.reduction == 2);
         REQUIRE(reduced.coarse.sigma == plan.coarse.sigma);
         REQUIRE(reduced.coarse.radius == plan.coarse.radius);
-        REQUIRE(reduced.haze.reduction == 2);
-        REQUIRE(reduced.haze.window == plan.haze.window);
-        REQUIRE(reduced.haze.sigma == plan.haze.sigma);
+        REQUIRE(reduced.hazeFloor.reduction == 2);
+        REQUIRE(reduced.hazeFloor.window == plan.hazeFloor.window);
+        REQUIRE(reduced.hazeFloor.sigma == plan.hazeFloor.sigma);
         // Texture's four sensor pixels are one pixel of the level, its finest scale.
         REQUIRE(reduced.fine.reduction == 1);
         REQUIRE(reduced.fine.sigma == 1.0F);
@@ -240,7 +241,7 @@ TEST_CASE("Presence resolves its radii from the sensor and the long edge", "[pre
         ImageBuffer deeper = greyOf({750, 1}, [](auto, auto) { return 0.18F; });
         deeper.setPixelScale(8.0);
         const PresencePlan deep =
-            planFor(deeper, DevelopState{presence(50.0F, 50.0F, 0.0F)}).presence;
+            planFor(deeper, DevelopState{presence(50.0F, 50.0F, 0.0F)}).pointwise.presence;
         REQUIRE(deep.coarse.reduction == 1);
         REQUIRE(deep.coarse.sigma == 7.5F);
         // Held at one pixel of the level rather than vanishing.
@@ -251,7 +252,8 @@ TEST_CASE("Presence resolves its radii from the sensor and the long edge", "[pre
         const Photo photo = openPhoto(test::fixture("linear-32x24-skewed.dng"));
         const Photo edited = photo.with(DevelopState{presence(20.0F, 40.0F, 10.0F)});
         const ImageBuffer pixels = loadImage(photo.path());
-        REQUIRE(planFor(edited).presence == planFor(pixels, edited.state()).presence);
+        REQUIRE(planFor(edited).pointwise.presence ==
+                planFor(pixels, edited.state()).pointwise.presence);
     }
 }
 
@@ -266,23 +268,25 @@ TEST_CASE("White balance and exposure never reach the Presence context", "[prese
     moved.color.tint = 15.0F;
     const ProcessingPlan first = planFor(camera, DevelopState{base});
     const ProcessingPlan second = planFor(camera, DevelopState{moved});
-    REQUIRE_FALSE(first.toWorking == second.toWorking);
-    REQUIRE(first.presence == second.presence);
-    REQUIRE(presenceContextFieldsOf(first.presence) == presenceContextFieldsOf(second.presence));
+    REQUIRE_FALSE(first.pointwise.toWorking == second.pointwise.toWorking);
+    REQUIRE(first.pointwise.presence == second.pointwise.presence);
+    REQUIRE(presenceContextFieldsOf(first.pointwise.presence) ==
+            presenceContextFieldsOf(second.pointwise.presence));
 
     // The amounts do not reach the context either; only which bases exist does.
     DevelopSettings stronger = base;
     stronger.presence = {.texture = -80.0F, .clarity = 10.0F, .dehaze = 90.0F};
-    REQUIRE(presenceContextFieldsOf(planFor(camera, DevelopState{stronger}).presence) ==
-            presenceContextFieldsOf(first.presence));
+    REQUIRE(presenceContextFieldsOf(planFor(camera, DevelopState{stronger}).pointwise.presence) ==
+            presenceContextFieldsOf(first.pointwise.presence));
 
     // The context is a function of the pixels and those fields alone.
-    const PresenceContext context = presenceContextOf(camera, first.presence);
-    const PresenceContext again = presenceContextOf(camera, second.presence);
+    const PresenceContext context = presenceContextOf(camera, first.pointwise.presence);
+    const PresenceContext again = presenceContextOf(camera, second.pointwise.presence);
     REQUIRE(context.fine.cells == again.fine.cells);
     REQUIRE(context.coarse.cells == again.coarse.cells);
     REQUIRE(context.coarseCells.cells == again.coarseCells.cells);
-    REQUIRE(context.haze.cells == again.haze.cells);
+    REQUIRE(context.hazeFloor.cells == again.hazeFloor.cells);
+    REQUIRE(context.hazeMean.cells == again.hazeMean.cells);
 
     // An exposure change scales the toned result but leaves the detail alone:
     // in neutral tone, the developed image is the same image times the gain.
@@ -312,7 +316,8 @@ TEST_CASE("Clarity raises local contrast at a step, with a bounded halo", "[pres
     const ImageSize size{400, 40};
     const ImageBuffer step = greyOf(size, [](auto x, auto) { return x < 200 ? 0.05F : 0.2F; });
     const ImageBuffer plain = develop(step, DevelopState{presence(0.0F, 0.0F, 0.0F)});
-    const PresencePlan plan = planFor(step, DevelopState{presence(0.0F, 100.0F, 0.0F)}).presence;
+    const PresencePlan plan =
+        planFor(step, DevelopState{presence(0.0F, 100.0F, 0.0F)}).pointwise.presence;
     REQUIRE(plan.coarse.reduction == 1);
     REQUIRE(plan.coarse.sigma == 4.0F);
 
@@ -556,7 +561,8 @@ TEST_CASE("Dehaze takes as much off a bright area at its edge as inside it", "[p
     const ImageSize size{1200, 48};
     const std::uint32_t edge = 601;
     const ImageBuffer step = greyOf(size, [&](auto x, auto) { return x < edge ? 0.03F : 0.3F; });
-    REQUIRE(planFor(step, DevelopState{presence(0.0F, 0.0F, 100.0F)}).presence.haze.reduction == 2);
+    REQUIRE(planFor(step, DevelopState{presence(0.0F, 0.0F, 100.0F)})
+                .pointwise.presence.hazeFloor.reduction == 2);
     const ImageBuffer plain = develop(step, DevelopState{presence(0.0F, 0.0F, 0.0F)});
     const ImageBuffer clear = develop(step, DevelopState{presence(0.0F, 0.0F, 100.0F)});
     const auto stopsAt = [&](std::uint32_t x) {
@@ -610,9 +616,10 @@ TEST_CASE("Dehaze takes as much off a round bright area at its edge as inside it
         });
         return 0.6F * (inside ? 0.3F : 0.03F) + 0.2F;
     });
-    const PresencePlan plan = planFor(scene, DevelopState{presence(0.0F, 0.0F, 100.0F)}).presence;
-    REQUIRE(plan.haze.reduction == 4);
-    REQUIRE(plan.haze.window == 18);
+    const PresencePlan plan =
+        planFor(scene, DevelopState{presence(0.0F, 0.0F, 100.0F)}).pointwise.presence;
+    REQUIRE(plan.hazeFloor.reduction == 4);
+    REQUIRE(plan.hazeFloor.window == 18);
     const ImageBuffer plain = develop(scene, DevelopState{presence(0.0F, 0.0F, 0.0F)});
     const ImageBuffer clear = develop(scene, DevelopState{presence(0.0F, 0.0F, 100.0F)});
     const auto stopsAt = [&](std::uint32_t x, std::uint32_t y) {
@@ -670,9 +677,10 @@ TEST_CASE("Dehaze leaves less off only the tip of a bright area's right-angled c
         const bool inside = x >= left && x < left + side && y >= top && y < top + side;
         return 0.6F * (inside ? 0.3F : 0.03F) + 0.2F;
     });
-    const PresencePlan plan = planFor(scene, DevelopState{presence(0.0F, 0.0F, 100.0F)}).presence;
-    REQUIRE(plan.haze.reduction == 4);
-    REQUIRE(octagonOf(plan.haze.window) == OctagonWindow{.across = 8, .diagonal = 5});
+    const PresencePlan plan =
+        planFor(scene, DevelopState{presence(0.0F, 0.0F, 100.0F)}).pointwise.presence;
+    REQUIRE(plan.hazeFloor.reduction == 4);
+    REQUIRE(octagonOf(plan.hazeFloor.window) == OctagonWindow{.across = 8, .diagonal = 5});
     const ImageBuffer plain = develop(scene, DevelopState{presence(0.0F, 0.0F, 0.0F)});
     const ImageBuffer clear = develop(scene, DevelopState{presence(0.0F, 0.0F, 100.0F)});
     const auto stopsAt = [&](std::uint32_t x, std::uint32_t y) {
@@ -822,17 +830,17 @@ TEST_CASE("Dehaze's octagon is regular and its passes mix both parities", "[pres
     for (const std::uint32_t window : {1U, 2U, 3U, 4U, 7U, 18U, 23U, 64U}) {
         CAPTURE(window);
         PresencePlan plan;
-        plan.dehaze = 1.0F;
+        plan.amounts.dehaze = 1.0F;
         plan.lumaRow = colorspaces::workingLuminance;
-        plan.haze = {.reduction = 1,
-                     .sigma = 1.0F,
-                     .radius = 3,
-                     .window = window,
-                     .reconstruction = hazeReconstructionSteps};
+        plan.hazeFloor = {.reduction = 1,
+                          .sigma = 1.0F,
+                          .radius = 3,
+                          .window = window,
+                          .reconstruction = hazeReconstructionSteps};
         const PresenceContext context = presenceContextOf(board, plan);
         const float dark = std::ranges::min(context.coarseCells.cells);
         REQUIRE(dark < std::ranges::max(context.coarseCells.cells) - 3.0F);
-        for (const float floor : context.haze.cells) {
+        for (const float floor : context.hazeFloor.cells) {
             REQUIRE(std::abs(floor - dark) <= 1e-5F);
         }
     }
@@ -889,9 +897,10 @@ TEST_CASE("Dehaze leaves a texture beside a bright area as it leaves it elsewher
         const double texture = 0.06 * std::exp2(blotchAt(x, y)) + 0.16 * blob;
         return static_cast<float>(0.6 * (bright ? 0.3 : texture) + 0.06);
     });
-    const PresencePlan plan = planFor(scene, DevelopState{presence(0.0F, 0.0F, 100.0F)}).presence;
-    REQUIRE(plan.haze.reduction == 8);
-    REQUIRE(plan.haze.window == 13);
+    const PresencePlan plan =
+        planFor(scene, DevelopState{presence(0.0F, 0.0F, 100.0F)}).pointwise.presence;
+    REQUIRE(plan.hazeFloor.reduction == 8);
+    REQUIRE(plan.hazeFloor.window == 13);
     const ImageBuffer plain = develop(scene, DevelopState{presence(0.0F, 0.0F, 0.0F)});
     const ImageBuffer clear = develop(scene, DevelopState{presence(0.0F, 0.0F, 100.0F)});
     // Mean stops taken off the pixels a predicate picks.
@@ -1015,7 +1024,8 @@ TEST_CASE("Dehaze raises fine detail and noise in a flat area no more than Textu
     const ImageBuffer fine = greyOf(size, wave(5.0));
     const ImageBuffer grain = greyOf(size, noise);
     const ImageBuffer mid = greyOf(size, wave(128.0));
-    REQUIRE(planFor(fine, DevelopState{presence(0.0F, 0.0F, 100.0F)}).presence.haze.reduction == 8);
+    REQUIRE(planFor(fine, DevelopState{presence(0.0F, 0.0F, 100.0F)})
+                .pointwise.presence.hazeFloor.reduction == 8);
     const auto gain = [](const ImageBuffer& image, float texture, float dehaze) {
         return logSpread(develop(image, DevelopState{presence(texture, 0.0F, dehaze)})) /
                logSpread(develop(image, DevelopState{presence(0.0F, 0.0F, 0.0F)}));
@@ -1060,7 +1070,7 @@ TEST_CASE("Clarity leaves fine detail to Texture", "[presence]") {
     const ImageSize size{3400, 16};
     REQUIRE(planFor(greyOf(size, [](auto, auto) { return 0.18F; }),
                     DevelopState{presence(0.0F, 50.0F, 0.0F)})
-                .presence.coarse.reduction == 8);
+                .pointwise.presence.coarse.reduction == 8);
     const auto wave = [](double period) {
         return [period](std::uint32_t x, std::uint32_t) {
             return static_cast<float>(
@@ -1260,8 +1270,9 @@ TEST_CASE("The threaded Presence context gives the single-threaded bits",
           "[presence][threads][slow]") {
     const ImageBuffer source =
         tintedOf({517, 389}, [](auto x, auto y) { return sceneAt(x, y, 1.0); });
-    const PresencePlan plan = planFor(source, DevelopState{presence(40.0F, 40.0F, 40.0F)}).presence;
-    REQUIRE(plan.haze.window > 0);
+    const PresencePlan plan =
+        planFor(source, DevelopState{presence(40.0F, 40.0F, 40.0F)}).pointwise.presence;
+    REQUIRE(plan.hazeFloor.window > 0);
     const PresenceContext threaded = presenceContextOf(source, plan);
     const PresenceContext single = [&] {
         const test::ScopedRowBandLimit one(1);
@@ -1270,7 +1281,7 @@ TEST_CASE("The threaded Presence context gives the single-threaded bits",
     REQUIRE(threaded.fine.cells == single.fine.cells);
     REQUIRE(threaded.coarse.cells == single.coarse.cells);
     REQUIRE(threaded.coarseCells.cells == single.coarseCells.cells);
-    REQUIRE(threaded.haze.cells == single.haze.cells);
+    REQUIRE(threaded.hazeFloor.cells == single.hazeFloor.cells);
 }
 
 TEST_CASE("The threaded chain gives the single-threaded bits", "[presence][threads][slow]") {
@@ -1295,7 +1306,8 @@ TEST_CASE("Presence refuses what it cannot resolve", "[presence]") {
                           std::invalid_argument);
     }
     // Out of range is clamped, as every other setting (ADR 008).
-    REQUIRE(planFor(source, DevelopState{presence(250.0F, 0.0F, 0.0F)}).presence.texture == 1.0F);
+    REQUIRE(planFor(source, DevelopState{presence(250.0F, 0.0F, 0.0F)})
+                .pointwise.presence.amounts.texture == 1.0F);
     REQUIRE_THROWS_AS(presencePlanFor({.clarity = 10.0F}, workingEncoding, 0.0, {8, 8}),
                       std::invalid_argument);
 }

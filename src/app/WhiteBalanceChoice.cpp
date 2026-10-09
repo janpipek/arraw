@@ -26,19 +26,12 @@ QString tr(const char* text) {
     return QCoreApplication::translate("WhiteBalanceChoice", text);
 }
 
-/// @brief Reads a mode's values, ignoring leftovers in As Shot.
+/// @brief Reads a mode's values, ignoring leftovers in As Shot (as ::arraw::withValue does).
 ColorSettings settled(ColorSettings settings) {
     if (settings.whiteBalance == WhiteBalanceMode::AsShot) {
         settings.temperature.reset();
         settings.tint.reset();
     }
-    return settings;
-}
-
-/// @brief Sets the mode that goes with whichever values are present.
-ColorSettings resolved(ColorSettings settings) {
-    settings.whiteBalance =
-        settings.temperature || settings.tint ? WhiteBalanceMode::Custom : WhiteBalanceMode::AsShot;
     return settings;
 }
 
@@ -79,30 +72,12 @@ WhiteBalanceChoice choiceOf(const ColorSettings& settings) {
     return WhiteBalanceChoice::Custom;
 }
 
-ColorSettings withChoice(ColorSettings settings, WhiteBalanceChoice choice) {
-    if (choice == WhiteBalanceChoice::Custom) {
-        return settings;
-    }
-    if (choice == WhiteBalanceChoice::AsShot) {
-        return {WhiteBalanceMode::AsShot, std::nullopt, std::nullopt};
-    }
+std::optional<ColourTemperature> lightOf(WhiteBalanceChoice choice) {
     const auto preset = std::ranges::find(presets, choice, &WhiteBalancePreset::choice);
     if (preset == presets.end()) {
-        return settings;
+        return std::nullopt;
     }
-    return {WhiteBalanceMode::Custom, preset->light.kelvin, preset->light.tint};
-}
-
-ColorSettings withTemperature(ColorSettings settings, std::optional<float> kelvin) {
-    settings = settled(settings);
-    settings.temperature = kelvin;
-    return resolved(settings);
-}
-
-ColorSettings withTint(ColorSettings settings, std::optional<float> tint) {
-    settings = settled(settings);
-    settings.tint = tint;
-    return resolved(settings);
+    return preset->light;
 }
 
 ColourTemperature shownLight(const ColorSettings& settings, ColourTemperature asShot) {

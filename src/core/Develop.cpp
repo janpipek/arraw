@@ -3,6 +3,7 @@
 #include "CheckpointState.h"
 #include "Denoise.h"
 #include "Effects.h"
+#include "LadderAccess.h"
 #include "Presence.h"
 #include "ProcessingPlan.h"
 #include "ProgressScope.h"
@@ -10,6 +11,7 @@
 #include "Resample.h"
 #include "RowBands.h"
 #include "SampleConversion.h"
+#include "StageDriver.h"
 #include "Taps.h"
 #include "TimingTrace.h"
 
@@ -22,8 +24,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <stdexcept>
+#include <utility>
 #include <variant>
 
 using namespace arraw;
@@ -39,7 +43,7 @@ namespace {
 /// ::arraw::ResizePlan::opaque, scanned from the source, relies on this: were
 /// alpha ever changed here, it would no longer describe the developed pixels.
 /// @param chain What one colour goes through: developPixel, or a tap's prefix,
-/// called with the colour and the pixel's ::arraw::PixelContext.
+/// called with the pixel's column and row, its colour and its ::arraw::PixelContext.
 /// @param context The Presence context of @p source, or null when Presence is off.
 template <typename Sample, typename Chain>
 void developSamples(const ImageBuffer& source, ImageBuffer& result, const Chain& chain,
@@ -67,7 +71,7 @@ void developSamples(const ImageBuffer& source, ImageBuffer& result, const Chain&
 
                 const PixelContext around = sampler ? sampler->at(x) : PixelContext{};
                 const Colour developed =
-                    chain({toUnit(in[0]), toUnit(in[1]), toUnit(in[2])}, around);
+                    chain(x, y, {toUnit(in[0]), toUnit(in[1]), toUnit(in[2])}, around);
                 out[0] = developed[0];
                 out[1] = developed[1];
                 out[2] = developed[2];
@@ -85,8 +89,7 @@ void developSamples(const ImageBuffer& source, ImageBuffer& result, const Chain&
 /// the context is recomputed with the chain rather than carried by a
 /// checkpoint (ADR 041).
 template <typename Chain>
-ImageBuffer runPointwise(const ImageBuffer& source, const ProcessingPlan& plan,
-                         const Chain& chain) {
+ImageBuffer runPointwise(const ImageBuffer& source, const PointwisePlan& plan, const Chain& chain) {
     std::optional<PresenceContext> context;
     if (plan.presence.active()) {
         context = presenceContextOf(source, plan.presence);
@@ -115,49 +118,17 @@ ImageBuffer runPointwise(const ImageBuffer& source, const ProcessingPlan& plan,
 }
 
 /// @brief The whole chain, as the traversal calls it.
-auto developChain(const ProcessingPlan& plan) {
-    return [&plan](Colour colour, const PixelContext& context) {
-        return developPixel(plan, colour, context);
+///
+/// The amounts every pixel has are worked out here, once for the render; a plan with masks
+/// resolves them for each pixel instead (::arraw::amountsAt).
+auto developChain(const PointwisePlan& plan) {
+    return [&plan, amounts = globalAmountsOf(plan)](std::uint32_t x, std::uint32_t y, Colour colour,
+                                                    const PixelContext& context) {
+        if (plan.local.empty()) {
+            return developPixel(plan, amounts, colour, context);
+        }
+        return developPixel(plan, amountsAt(plan, x, y), colour, context);
     };
-}
-
-/// @brief Runs the pointwise chain over a source, into the working format.
-ImageBuffer developPointwise(const ImageBuffer& source, const ProcessingPlan& plan) {
-    const detail::TimingSpan timing("cpu.pointwise");
-    return runPointwise(source, plan, developChain(plan));
-}
-
-/// @brief Runs the Denoise pass that a plan resolved, or copies the source as it stands.
-///
-/// What a checkpoint at ::arraw::Stage::Denoise holds. With noise reduction off
-/// the boundary collapses onto the source (ADR 039), and only a render that
-/// stops there pays for the copy: it must own its pixels.
-ImageBuffer denoisedCopy(const ImageBuffer& source, const ProcessingPlan& plan) {
-    if (plan.denoise.active()) {
-        return applyDenoise(source, plan.denoise);
-    }
-    return source.format() == PixelFormat::RgbaF32 ? source.clone() : toRgbaF32(source);
-}
-
-/// @brief Runs the stages from the source to the pointwise boundary: denoise, if on, then the
-/// chain.
-///
-/// With noise reduction off the chain reads the source itself, so the pixels,
-/// and the cost, are those of before the Denoise stage existed.
-/// @param chain What one colour goes through: developPixel, or a tap's prefix.
-template <typename Chain>
-ImageBuffer pointwiseFromSource(const ImageBuffer& source, const ProcessingPlan& plan,
-                                const Chain& chain) {
-    if (!plan.denoise.active()) {
-        return runPointwise(source, plan, chain);
-    }
-    return runPointwise(applyDenoise(source, plan.denoise), plan, chain);
-}
-
-/// @brief Runs noise reduction and the pointwise chain over a source, into the working format.
-ImageBuffer developFromSource(const ImageBuffer& source, const ProcessingPlan& plan) {
-    const detail::TimingSpan timing("cpu.pointwise");
-    return pointwiseFromSource(source, plan, developChain(plan));
 }
 
 /// @brief Copies a rectangle of working-format pixels out of a frame.
@@ -203,30 +174,116 @@ void requireBoundary(Stage stopAfter) {
     }
 }
 
-/// @brief Runs the stages after a boundary, up to another, on pixels taken at the first.
-/// @param done Boundary @p pixels were taken at.
-/// @param pixels Developed pixels at @p done; consumed.
-/// @param plan The plan that made them and makes the rest.
-/// @param stopAfter Last boundary to run, not before @p done.
-RenderCheckpoint runStages(Stage done, ImageBuffer pixels, ProcessingPlan plan, Stage stopAfter) {
-    Stage at = done;
-    if (at == Stage::Denoise && stopAfter != Stage::Denoise) {
-        pixels = developPointwise(pixels, plan);
-        at = Stage::Pointwise;
+/// @brief Pixels on the host: the source or a checkpoint's, borrowed, or a buffer of its own.
+///
+/// What the CPU stages pass between them. A borrowed buffer is never copied
+/// until a pass needs to consume it; ::arraw::HostPixels::take then clones it,
+/// so a pass that only reads (Denoise, the pointwise chain) costs no copy and
+/// the clone count of every path is what it was (ADR 024, 039).
+class HostPixels {
+public:
+    /// @brief Borrows a buffer that outlives these pixels.
+    static HostPixels borrowed(const ImageBuffer& buffer) noexcept {
+        HostPixels pixels;
+        pixels.borrowed_ = &buffer;
+        return pixels;
     }
-    if (at == Stage::Pointwise && stopAfter != Stage::Pointwise) {
-        pixels = applyGeometry(std::move(pixels), *plan.geometry);
-        at = Stage::Geometry;
+
+    /// @brief Takes ownership of a buffer.
+    static HostPixels owned(ImageBuffer buffer) {
+        HostPixels pixels;
+        pixels.owned_.emplace(std::move(buffer));
+        return pixels;
     }
-    if (at == Stage::Geometry && stopAfter >= Stage::Resize) {
-        pixels = resizeBy(std::move(pixels), plan);
-        at = Stage::Resize;
+
+    /// @brief Gives the pixels for reading.
+    [[nodiscard]] const ImageBuffer& view() const noexcept {
+        return owned_ ? *owned_ : *borrowed_;
     }
-    if (at == Stage::Resize && stopAfter == Stage::Effects) {
-        pixels = effectsBy(std::move(pixels), plan);
-        at = Stage::Effects;
+
+    /// @brief Gives the pixels as a buffer of their own.
+    ///
+    /// An owned buffer is handed over; a borrowed one is cloned if it is in the
+    /// working layout, and converted to it otherwise (only the source is ever
+    /// borrowed in another).
+    [[nodiscard]] ImageBuffer take() && {
+        if (owned_) {
+            return std::move(*owned_);
+        }
+        return borrowed_->format() == PixelFormat::RgbaF32 ? borrowed_->clone()
+                                                           : toRgbaF32(*borrowed_);
     }
-    return makeCheckpoint(at, std::move(plan), std::move(pixels));
+
+private:
+    /// Leaves the pixels empty; only the factories make one.
+    HostPixels() = default;
+
+    /// Buffer read in place, when the pixels are not their own.
+    const ImageBuffer* borrowed_ = nullptr;
+    /// Buffer of their own.
+    std::optional<ImageBuffer> owned_;
+};
+
+/// @brief The CPU's passes, for ::arraw::runStages.
+struct CpuStages {
+    using Pixels = HostPixels;
+
+    /// Tap the pointwise pass stops at, or empty for the whole chain.
+    std::optional<Tap> tap;
+
+    /// @brief Runs the pass that ends at a stage's boundary.
+    Pixels run(Stage stage, Pixels pixels, const ProcessingPlan& plan) const {
+        switch (stage) {
+        case Stage::Denoise:
+            return Pixels::owned(applyDenoise(pixels.view(), plan.denoise));
+        case Stage::Pointwise:
+            return Pixels::owned(pointwise(pixels.view(), plan));
+        case Stage::Geometry:
+            return Pixels::owned(applyGeometry(std::move(pixels).take(), *plan.geometry));
+        case Stage::Resize:
+            return Pixels::owned(resizeBy(std::move(pixels).take(), plan));
+        case Stage::Effects:
+            return Pixels::owned(effectsBy(std::move(pixels).take(), plan));
+        }
+        throw std::logic_error("A render ran a pass that does not exist");
+    }
+
+    /// @brief Makes a checkpoint of the pixels at a boundary.
+    RenderCheckpoint checkpoint(Stage stage, Pixels pixels, const ProcessingPlan& plan) const {
+        return makeCheckpoint(stage, plan, std::move(pixels).take());
+    }
+
+    /// @brief Reads a checkpoint's pixels in place.
+    Pixels borrow(const RenderCheckpoint& checkpoint) const {
+        return Pixels::borrowed(std::get<ImageBuffer>(stateOf(checkpoint).pixels));
+    }
+
+private:
+    /// @brief Runs the pointwise chain, or a tap's prefix of it.
+    ImageBuffer pointwise(const ImageBuffer& input, const ProcessingPlan& plan) const {
+        if (tap) {
+            return runPointwise(
+                input, plan.pointwise,
+                [&pointwise = plan.pointwise, amounts = globalAmountsOf(plan.pointwise),
+                 tap = *tap](std::uint32_t x, std::uint32_t y, Colour colour,
+                             const PixelContext& context) {
+                    if (pointwise.local.empty()) {
+                        return developToTap(pointwise, amounts, colour, tap, context);
+                    }
+                    return developToTap(pointwise, amountsAt(pointwise, x, y), colour, tap,
+                                        context);
+                });
+        }
+        const detail::TimingSpan timing("cpu.pointwise");
+        return runPointwise(input, plan.pointwise, developChain(plan.pointwise));
+    }
+};
+
+static_assert(StageBackend<CpuStages>);
+
+/// @brief Tells whether a rung's pixels are on the host.
+bool onHost(const CheckpointState& rung) {
+    return std::holds_alternative<ImageBuffer>(rung.pixels);
 }
 
 } // namespace
@@ -238,10 +295,11 @@ ImageBuffer arraw::develop(const ImageBuffer& source, const DevelopState& state,
     const ProcessingPlan plan = planFor(source, state, request);
     detail::ProgressRoot root(progress, detail::observedStepWeights(progress, plan, request),
                               ProgressStep::Denoise);
-    ImageBuffer developed = effectsBy(
-        resizeBy(applyGeometry(developFromSource(source, plan), *plan.geometry), plan), plan);
+    CpuStages backend;
+    StagesRun<CpuStages> run =
+        runStages(backend, std::nullopt, HostPixels::borrowed(source), plan, Stage::Effects);
     root.finish(ProgressStep::Effects);
-    return developed;
+    return std::move(run.pixels).take();
 }
 
 RenderCheckpoint arraw::developUntil(const ImageBuffer& source, const DevelopState& state,
@@ -255,16 +313,12 @@ RenderCheckpoint arraw::developUntil(const ImageBuffer& source, const DevelopSta
     // resumes after this one carry on from where it stops.
     detail::ProgressRoot root(progress, detail::observedStepWeights(progress, plan, request),
                               ProgressStep::Denoise);
-    if (stopAfter == Stage::Denoise) {
-        ImageBuffer denoised = denoisedCopy(source, plan);
-        root.finish(ProgressStep::Denoise);
-        return makeCheckpoint(Stage::Denoise, std::move(plan), std::move(denoised));
-    }
-    ImageBuffer developed = developFromSource(source, plan);
-    RenderCheckpoint done =
-        runStages(Stage::Pointwise, std::move(developed), std::move(plan), stopAfter);
+    CpuStages backend;
+    StagesRun<CpuStages> run =
+        runStages(backend, std::nullopt, HostPixels::borrowed(source), plan, stopAfter);
     root.finish(detail::stepThrough(stopAfter));
-    return done;
+    // A collapsed Denoise hands the source over, and the checkpoint must own its pixels.
+    return makeCheckpoint(run.done, std::move(plan), std::move(run.pixels).take());
 }
 
 RenderCheckpoint arraw::resumeFrom(const RenderCheckpoint& from, const ImageBuffer& source,
@@ -286,15 +340,38 @@ RenderCheckpoint arraw::resumeFrom(const RenderCheckpoint& from, const ImageBuff
         root.finish(last);
         return from;
     }
-    RenderCheckpoint done =
-        held.boundary == Stage::Denoise
-            // The chain reads its input without consuming it, so the shared pixels
-            // need no copy: a tone edit resumes for the price of the chain alone.
-            ? runStages(Stage::Pointwise, developPointwise(*pixels, plan), std::move(plan),
-                        stopAfter)
-            : runStages(held.boundary, pixels->clone(), std::move(plan), stopAfter);
+    // The shared pixels are read in place until a pass has to consume them, so
+    // a tone edit resumes from the Denoise checkpoint for the price of the chain alone.
+    CpuStages backend;
+    StagesRun<CpuStages> run =
+        runStages(backend, held.boundary, HostPixels::borrowed(*pixels), plan, stopAfter);
     root.finish(last);
-    return done;
+    return makeCheckpoint(run.done, std::move(plan), std::move(run.pixels).take());
+}
+
+LadderRender arraw::resumeOrDevelop(CheckpointLadder& ladder,
+                                    std::shared_ptr<const ImageBuffer> source,
+                                    const DevelopState& state, const RenderRequest& request,
+                                    ProgressChannel* progress) {
+    if (!source) {
+        throw std::invalid_argument("A render through a ladder needs a source");
+    }
+    // Planned before the ladder is touched, so that a bad request drops nothing.
+    ProcessingPlan plan = planFor(*source, state, request);
+    LadderAccess::bind(ladder, source);
+    const std::optional<Stage> resumedFrom =
+        LadderAccess::deepestUsable(ladder, plan, source->size(), onHost);
+    detail::ProgressRoot root(progress, detail::observedStepWeights(progress, plan, request),
+                              resumedFrom ? detail::stepAfter(*resumedFrom)
+                                          : ProgressStep::Denoise);
+    CpuStages backend;
+    HostPixels start = resumedFrom ? backend.borrow(LadderAccess::rung(ladder, *resumedFrom))
+                                   : HostPixels::borrowed(*source);
+    StagesRun<CpuStages> run =
+        runStages(backend, resumedFrom, std::move(start), plan, Stage::Effects, &ladder);
+    root.finish(ProgressStep::Effects);
+    return {makeCheckpoint(Stage::Effects, std::move(plan), std::move(run.pixels).take()),
+            resumedFrom};
 }
 
 bool arraw::canResumeFrom(const RenderCheckpoint& from, const ImageBuffer& source,
@@ -317,14 +394,12 @@ ImageBuffer arraw::sample(const ImageBuffer& source, const DevelopState& state, 
     detail::StepWeights weights = detail::observedStepWeights(progress, plan, request);
     weights[static_cast<std::size_t>(ProgressStep::Effects)] = 0.0;
     detail::ProgressRoot root(progress, weights, ProgressStep::Denoise);
-    ImageBuffer tapped =
-        pointwiseFromSource(source, plan, [&plan, tap](Colour colour, const PixelContext& context) {
-            return developToTap(plan, colour, tap, context);
-        });
     // The same geometry and resize as a render, in linear light (ADR 020), so
     // the sample covers the frame the render shows; then the tap's encoding.
-    const ImageBuffer framed = resizeBy(applyGeometry(std::move(tapped), *plan.geometry), plan);
-    ImageBuffer encoded = encodeTap(framed, tap);
+    CpuStages backend{.tap = tap};
+    const StagesRun<CpuStages> run =
+        runStages(backend, std::nullopt, HostPixels::borrowed(source), plan, Stage::Resize);
+    ImageBuffer encoded = encodeTap(run.pixels.view(), tap);
     root.finish(ProgressStep::Resize);
     return encoded;
 }

@@ -30,6 +30,20 @@ just fixtures  # regenerate the committed test fixtures (needs uv)
 
 On Windows, see [`docs/development.md`](docs/development.md).
 
+### Fedora package
+
+```bash
+just rpm         # build the RPM and SRPM from committed HEAD into dist/fedora
+just rpm-smoke   # install it in a clean Fedora 44 container and check it runs
+sudo dnf install "dist/fedora/$(cat dist/fedora/BINARY_RPM)"
+```
+
+`just rpm` needs `rpm-build`, `rpmlint` and the build dependencies (it lists
+what is missing), and builds committed HEAD. The package installs `arraw-ui`
+and `arraw-cli`, and adds arraw to the file manager's "Open With" for the RAW
+formats it opens, JPEG, PNG, TIFF and folders; see
+[ADR 046](docs/adr/046-the-rewrite-ships-a-fedora-rpm-and-opens-from-the-desktop.md).
+
 For containerized agent sessions, the [VibePod overlay](.vibepod/README.md)
 provides the Linux build dependencies and developer tools automatically.
 
@@ -112,8 +126,10 @@ from zero: 45° gives 90° minus 45°, and -45° gives 270° plus 45°.
 Crop edges describe the final upright frame, regardless of argument order;
 they are not a sequence of crop and rotation commands. Aspect is a remembered
 constraint, not a substitute for crop edges. With an automatic crop, the renderer
-chooses the largest valid rectangle at the requested aspect. An explicit crop
-must already match a locked aspect; a mismatch fails that input. Crops that
+chooses the largest valid rectangle at the requested aspect. A sidecar's
+explicit crop is carried with the content when the flags rotate or flip it; a
+`--crop` frees the aspect unless `--crop-aspect` is given too, and a pair that disagrees is
+reshaped to the aspect, not refused. Crops that
 would include empty corners shrink around their centre, moving only when no
 positive-size rectangle fits there. Source pixels are never modified.
 

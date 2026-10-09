@@ -264,3 +264,29 @@ caller-supplied type, `ProgressChannel`, passed as a nullable pointer beside
 `DiagnosticLog&`. The "channel" above is therefore two types. They differ in
 direction, in their thread rules and in their lifetime, and ADR 042 sets out
 why they are kept apart rather than merged.
+
+## Note, 2026-10-08
+
+Mask geometry joins the plan's pointwise group as [ADR 044](044-local-adjustments-are-masked-deltas-summed-into-the-chain.md) specifies; a brush's strokes are compared by pointer and then contents rather than by a revision.
+
+## Note, 2026-10-08 (pointwise block)
+
+`ProcessingPlan` now has one member per stage: `denoise`, `pointwise`,
+`geometry`, `resize`, `effects`. `stagesOf` is a flat `std::tie` of those five,
+the shape this ADR sketched, and `prefixMatches` compares whole blocks. The
+drift guard that this ADR and ADR 015 wanted from reflection is `fieldCount`
+(`tests/support/FieldCount.h`): a test pins `fieldCount<ProcessingPlan> ==
+stageCount`, so a member added outside a stage block fails it. The pointwise
+fields are `PointwisePlan` (`src/core/PointwisePlan.h`), whose tone part is
+`TonePlan` (`src/core/TonePlan.h`); `curveInputFieldsOf` ties
+`toWorking`, `tone` and `presence`, and tests pin `fieldCount<PointwisePlan> ==
+6` and `fieldCount<TonePlan> == 8`. See
+`docs/ideas/pipeline-restructuring-plan.md`.
+
+## Note, 2026-10-09 (the ladder)
+
+`stopAfter` and `resumeFrom` stay, but the processor that cached the
+checkpoints is now the engine's: `CheckpointLadder` with `resumeOrDevelop` and
+`resumeOrDevelopOnGpu` hold, search and refresh the rungs by the rule above,
+and every render runs one stage table through one driver. See
+[ADR 045](045-a-render-runs-one-stage-table-and-keeps-its-checkpoints-on-a-ladder.md).

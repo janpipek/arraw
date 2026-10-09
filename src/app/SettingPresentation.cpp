@@ -1,5 +1,7 @@
 #include "SettingPresentation.h"
 
+#include <Edits.h>
+
 #include <QCoreApplication>
 
 #include <algorithm>
@@ -396,6 +398,24 @@ double valueOfTick(int tick, const SettingRange& range, double step, SliderScale
         return std::clamp(std::round(value / step) * step, range.minimum, range.maximum);
     }
     return std::clamp(range.minimum + tick * step, range.minimum, range.maximum);
+}
+
+std::optional<double> displayedValue(const FieldDescriptor& descriptor, const DevelopState& state) {
+    if (descriptor.key == "straighten") {
+        return displayedStraighten(state);
+    }
+    return visitField(descriptor, state.settings, [](const auto& field) -> std::optional<double> {
+        using Field = std::remove_cvref_t<decltype(field)>;
+        if constexpr (std::is_same_v<Field, bool>) {
+            return std::nullopt;
+        } else if constexpr (std::is_arithmetic_v<Field>) {
+            return static_cast<double>(field);
+        } else if constexpr (std::is_same_v<Field, std::optional<float>>) {
+            return field ? std::optional<double>(static_cast<double>(*field)) : std::nullopt;
+        } else {
+            return std::nullopt;
+        }
+    });
 }
 
 double defaultValueOf(const FieldDescriptor& descriptor, const DevelopSettings& defaults) {

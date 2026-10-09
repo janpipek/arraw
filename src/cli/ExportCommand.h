@@ -7,6 +7,7 @@
 #include <DevelopSettings.h>
 #include <Diagnostics.h>
 #include <GeometrySettings.h>
+#include <ImageImport.h>
 #include <SettingDescriptors.h>
 
 #include <QtCore/qcontainerfwd.h>
@@ -98,16 +99,21 @@ struct ExportEdits {
 [[nodiscard]] std::optional<ExportEdits> readExportEdits(const std::vector<std::string>& flags,
                                                          std::ostream& err);
 
-/// @brief Puts the flags' edits on top of a photograph's own settings.
+/// @brief Puts the flags' edits on top of a photograph's own settings, by the rules of
+/// ::arraw::withValues.
+///
+/// Settings a render does not read are dropped first; the white balance, grain seed and geometry
+/// rules come from core, so the command line, the GUI and Python agree. The geometry rules read
+/// the photograph's size.
 /// @param base Settings the photograph came with.
 /// @param edits What the flags said.
-/// @param log Where the codec's warnings go; a value the flags gave is already in range.
+/// @param log Where the codec's warnings go.
 /// @param subject Photograph the settings are for.
-/// @param raw Whether the photograph is a RAW, which decides the settings a render does not read.
+/// @param photo What the photograph declares about itself.
 /// @return @p base with the edits applied.
 [[nodiscard]] DevelopSettings applyEdits(DevelopSettings base, const ExportEdits& edits,
                                          DiagnosticLog& log, const std::filesystem::path& subject,
-                                         bool raw = true);
+                                         const ImageMetadata& photo);
 
 /// @brief Renders images and writes them out.
 ///

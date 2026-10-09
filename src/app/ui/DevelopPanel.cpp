@@ -2,11 +2,13 @@
 
 #include "CropEditing.h"
 #include "CurveEditor.h"
+#include "HistoryModel.h"
+#include "MasksPanel.h"
 #include "SettingPresentation.h"
 #include "SettingSlider.h"
 #include "WhiteBalanceChoice.h"
 
-#include <EffectsSettings.h>
+#include <Edits.h>
 #include <SettingDescriptors.h>
 
 #include <QButtonGroup>
@@ -29,12 +31,19 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <stdexcept>
+#include <string_view>
 #include <type_traits>
 #include <variant>
 
 namespace arraw::app {
 
 namespace {
+
+/// Gives the title of a group box: the group's display name, with `&` escaped for the mnemonics.
+QString groupTitle(SettingGroup group) {
+    return groupDisplayName(group).replace('&', QStringLiteral("&&"));
+}
 
 /// What the White Balance rows show when the camera's reading is not known.
 constexpr ColourTemperature fallbackLight{5500.0F, 0.0F};
@@ -111,6 +120,9 @@ SettingSlider* DevelopPanel::addRow(std::string_view key, QWidget* group) {
     connect(row, &SettingSlider::editStarted, this, [this, row] {
         // One edit at a time: another row's pending edit ends before this one begins.
         finishOtherEdits(row);
+        // The baseline of a run of straighten edits: SettingSlider starts every edit before its
+        // first value.
+        editStart_ = shown_;
         emit editStarted();
     });
     connect(row, &SettingSlider::editFinished, this, &DevelopPanel::editFinished);
@@ -153,10 +165,43 @@ void DevelopPanel::finishOtherEdits(const QObject* keep) {
     if (curveEditor_ != nullptr && curveEditor_ != keep) {
         curveEditor_->finishPendingEdit();
     }
+    if (masksPanel_ != nullptr && masksPanel_ != keep) {
+        masksPanel_->finishPendingEdit();
+    }
+}
+
+QWidget* DevelopPanel::buildMasksGroup() {
+    masksPanel_ = new MasksPanel(this);
+    // Its edits are the panel's own: another row's pending edit ends before one begins.
+    connect(masksPanel_, &MasksPanel::editStarted, this, [this] {
+        finishOtherEdits(masksPanel_);
+        editStart_ = shown_;
+        emit editStarted();
+    });
+    connect(masksPanel_, &MasksPanel::stateEdited, this, &DevelopPanel::stateEdited);
+    connect(masksPanel_, &MasksPanel::editFinished, this, &DevelopPanel::editFinished);
+    connect(masksPanel_, &MasksPanel::focusReleased, this, &DevelopPanel::focusReleased);
+    connect(masksPanel_, &MasksPanel::maskClicked, this, &DevelopPanel::maskClicked);
+    connect(masksPanel_, &MasksPanel::maskSelected, this, &DevelopPanel::maskSelected);
+    connect(masksPanel_, &MasksPanel::maskToolChosen, this, &DevelopPanel::maskToolChosen);
+    connect(masksPanel_, &MasksPanel::overlayToggled, this, &DevelopPanel::overlayToggled);
+    return masksPanel_;
+}
+
+void DevelopPanel::setSelectedMask(std::optional<LocalAdjustmentId> id) {
+    masksPanel_->setSelectedMask(id);
+}
+
+void DevelopPanel::setMaskTool(MaskTool tool) {
+    masksPanel_->setTool(tool);
+}
+
+void DevelopPanel::setMaskOverlayShown(bool shown) {
+    masksPanel_->setOverlayShown(shown);
 }
 
 QWidget* DevelopPanel::buildToneCurveGroup() {
-    auto* group = new QGroupBox(tr("Tone Curve"), this);
+    auto* group = new QGroupBox(groupTitle(SettingGroup::ToneCurve), this);
     auto* groupLayout = new QVBoxLayout(group);
 
     curveEditor_ = new CurveEditor(group);
@@ -203,12 +248,13 @@ QWidget* DevelopPanel::buildToneCurveGroup() {
     });
     connect(curveEditor_, &CurveEditor::curveEdited, this, &DevelopPanel::applyCurveEdit);
     connect(curveEditor_, &CurveEditor::editFinished, this, &DevelopPanel::editFinished);
+    connect(curveEditor_, &CurveEditor::resetFinished, this, &DevelopPanel::finishResetEdit);
     connect(curveEditor_, &CurveEditor::focusReleased, this, &DevelopPanel::focusReleased);
     return group;
 }
 
 QWidget* DevelopPanel::buildColorGroup() {
-    auto* group = new QGroupBox(tr("Colour"), this);
+    auto* group = new QGroupBox(groupTitle(SettingGroup::Color), this);
     new QVBoxLayout(group);
     for (const std::string_view key : colorKeys()) {
         addRow(key, group);
@@ -217,7 +263,7 @@ QWidget* DevelopPanel::buildColorGroup() {
 }
 
 QWidget* DevelopPanel::buildPresenceGroup() {
-    auto* group = new QGroupBox(tr("Presence"), this);
+    auto* group = new QGroupBox(groupTitle(SettingGroup::Presence), this);
     new QVBoxLayout(group);
     for (const std::string_view key : presenceKeys()) {
         addRow(key, group);
@@ -226,7 +272,7 @@ QWidget* DevelopPanel::buildPresenceGroup() {
 }
 
 QWidget* DevelopPanel::buildColorGradingGroup() {
-    auto* group = new QGroupBox(tr("Colour Grading"), this);
+    auto* group = new QGroupBox(groupTitle(SettingGroup::ColorGrading), this);
     new QVBoxLayout(group);
     for (const std::string_view key : colorGradingKeys()) {
         addRow(key, group);
@@ -235,7 +281,7 @@ QWidget* DevelopPanel::buildColorGradingGroup() {
 }
 
 QWidget* DevelopPanel::buildNoiseReductionGroup() {
-    auto* group = new QGroupBox(tr("Noise Reduction"), this);
+    auto* group = new QGroupBox(groupTitle(SettingGroup::Detail), this);
     new QVBoxLayout(group);
     for (const std::string_view key : noiseReductionKeys()) {
         addRow(key, group);
@@ -244,7 +290,7 @@ QWidget* DevelopPanel::buildNoiseReductionGroup() {
 }
 
 QWidget* DevelopPanel::buildEffectsGroup() {
-    auto* group = new QGroupBox(tr("Effects"), this);
+    auto* group = new QGroupBox(groupTitle(SettingGroup::Effects), this);
     new QVBoxLayout(group);
     for (const std::string_view key : effectsKeys()) {
         addRow(key, group);
@@ -253,7 +299,7 @@ QWidget* DevelopPanel::buildEffectsGroup() {
 }
 
 QWidget* DevelopPanel::buildHslGroup() {
-    auto* group = new QGroupBox(tr("HSL / Colour Mix"), this);
+    auto* group = new QGroupBox(groupTitle(SettingGroup::Hsl), this);
     auto* groupLayout = new QVBoxLayout(group);
 
     auto* tabRow = new QHBoxLayout;
@@ -284,7 +330,7 @@ QWidget* DevelopPanel::buildHslGroup() {
 }
 
 QWidget* DevelopPanel::buildBlackAndWhiteGroup() {
-    auto* group = new QGroupBox(tr("Black && White"), this);
+    auto* group = new QGroupBox(groupTitle(SettingGroup::BlackAndWhite), this);
     // On the group, so it shows over the title; the rows keep their own tips.
     group->setToolTip(tr("How each colour becomes grey: drag a band darker or lighter."));
     new QVBoxLayout(group);
@@ -295,7 +341,7 @@ QWidget* DevelopPanel::buildBlackAndWhiteGroup() {
 }
 
 QWidget* DevelopPanel::buildCropGroup() {
-    auto* group = new QGroupBox(tr("Crop"), this);
+    auto* group = new QGroupBox(groupTitle(SettingGroup::Geometry), this);
     auto* groupLayout = new QVBoxLayout(group);
 
     // None of these takes the focus: in the crop mode it stays on the overlay, which claims
@@ -305,7 +351,7 @@ QWidget* DevelopPanel::buildCropGroup() {
     cropButton_->setCheckable(true);
     cropButton_->setFocusPolicy(Qt::NoFocus);
     cropButton_->setToolTip(tr("Frame the photograph on screen: drag the handles to crop, drag "
-                               "inside to move the photograph, outside to turn it (R)."));
+                               "inside to move the photograph, outside to turn it (C)."));
     levelButton_ = new QPushButton(tr("Level"), group);
     levelButton_->setObjectName("cropLevel");
     levelButton_->setCheckable(true);
@@ -461,7 +507,13 @@ void DevelopPanel::applyGeometryReset() {
     finishPendingEdit();
     emit editStarted();
     emit stateEdited(next);
+    finishResetEdit();
+}
+
+void DevelopPanel::finishResetEdit() {
+    editOrigin_ = EditOrigin::Reset;
     emit editFinished();
+    editOrigin_ = EditOrigin::Edit;
 }
 
 void DevelopPanel::showGeometry(const GeometrySettings& geometry) {
@@ -542,9 +594,11 @@ DevelopPanel::DevelopPanel(QWidget* parent) : QWidget(parent) {
     // Geometry is the first thing a photograph is given, as in Lightroom, below
     // the Treatment row, which describes the whole photograph rather than a step.
     layout->addWidget(buildCropGroup());
+    // Right below Crop: the two tools that act on the picture's area come first (ADR 044).
+    addGroup(buildMasksGroup());
     addGroup(buildWhiteBalanceGroup());
 
-    auto* tone = new QGroupBox(tr("Tone"), this);
+    auto* tone = new QGroupBox(groupTitle(SettingGroup::Tone), this);
     new QVBoxLayout(tone);
     for (const std::string_view key : toneKeys()) {
         addRow(key, tone);
@@ -569,15 +623,18 @@ DevelopPanel::DevelopPanel(QWidget* parent) : QWidget(parent) {
     for (const SettingSlider* row : rows_) {
         labelWidth = std::max(labelWidth, row->labelWidthHint());
     }
+    labelWidth = std::max(labelWidth, masksPanel_->labelWidthHint());
     for (SettingSlider* row : rows_) {
         row->setLabelWidth(labelWidth);
     }
+    masksPanel_->setLabelWidth(labelWidth);
     showState(shown_, PanelContext{});
     watchViewport();
 }
 
 void DevelopPanel::showState(const DevelopState& state, const PanelContext& context) {
     shown_ = state;
+    photo_ = context.photo;
     const ColorSettings& color = shown_.settings.color;
 
     {
@@ -603,6 +660,7 @@ void DevelopPanel::showState(const DevelopState& state, const PanelContext& cont
     blackAndWhiteGroup_->setVisible(visible.blackAndWhiteMix);
 
     curveEditor_->setCurves(shown_.settings.toneCurve);
+    masksPanel_->showState(shown_);
     showGeometry(shown_.settings.geometry);
 
     const ColourTemperature light = shownLight(color, context.asShot.value_or(fallbackLight));
@@ -618,21 +676,13 @@ void DevelopPanel::showState(const DevelopState& state, const PanelContext& cont
                 return 0.0;
             }
         }));
-        if (row->key() == "straighten") {
-            // Shown as it appears on screen: one flip reverses the stored angle.
-            row->setValue(displayedStraighten(shown_.settings.geometry));
-        } else if (row->key() == "temperature") {
+        if (row->key() == "temperature") {
             row->setValue(light.kelvin);
         } else if (row->key() == "tint") {
             row->setValue(light.tint);
         } else {
-            row->setValue(visitField(descriptor, shown_.settings, [](const auto& field) -> double {
-                if constexpr (std::is_arithmetic_v<std::remove_cvref_t<decltype(field)>>) {
-                    return static_cast<double>(field);
-                } else {
-                    return 0.0;
-                }
-            }));
+            // Shown as it appears on screen; an unset optional shows nothing.
+            row->setValue(displayedValue(descriptor, shown_).value_or(0.0));
         }
     }
 }
@@ -717,39 +767,33 @@ void DevelopPanel::watchViewport() {
 }
 
 void DevelopPanel::applyEdit(const SettingSlider& row, double value) {
-    DevelopState next = shown_;
-    if (row.key() == "temperature") {
-        next.settings.color = withTemperature(next.settings.color, static_cast<float>(value));
-    } else if (row.key() == "tint") {
-        next.settings.color = withTint(next.settings.color, static_cast<float>(value));
-    } else if (row.key() == "straighten") {
-        // The row shows the angle as on screen; the setting is stored before the flips.
-        const bool mirrored =
-            next.settings.geometry.flipHorizontal != next.settings.geometry.flipVertical;
-        next.settings.geometry.straighten = mirrored ? -value : value;
-    } else {
-        visitField(*findDescriptor(row.key()), next.settings, [value](auto& field) {
-            using Field = std::remove_cvref_t<decltype(field)>;
-            if constexpr (std::is_same_v<Field, float> || std::is_same_v<Field, double>) {
-                field = static_cast<Field>(value);
-            }
-        });
+    if (row.key() == "straighten") {
+        // The row shows the angle as on screen. Each tick starts from the state before the
+        // edit, so the crop's shrinking is undone when the angle goes back.
+        try {
+            emit stateEdited(withDisplayedStraighten(photo_, editStart_, value));
+        } catch (const std::invalid_argument&) {
+            // A geometry that is not valid for the frame (a crop that disagrees with its
+            // locked aspect, say) cannot be fitted; assign the angle alone and let the render
+            // report the geometry, as it does without an edit.
+            DevelopState next = editStart_;
+            next.settings.geometry.straighten = storedStraighten(next.settings.geometry, value);
+            emit stateEdited(next);
+        }
+        return;
     }
-    // Grain this edit turns on gets its photograph's own seed (ADR 038); every
-    // other edit, and turning it off, keeps the one it has, zero included.
-    next.settings.effects.grain.seed =
-        chooseGrainSeed(shown_.settings.effects.grain, next.settings.effects.grain);
-    emit stateEdited(next);
+    // The rules of the key (white balance mode, a new grain seed) are core's. withValue throws
+    // on a value out of range, which cannot reach a slot: SettingSlider clamps both the slider
+    // and the spin box to the descriptor's range. The other keys do not read the frame.
+    emit stateEdited(withValue(photo_, shown_, row.key(), value));
 }
 
 void DevelopPanel::applyClear(const SettingSlider& row) {
-    DevelopState next = shown_;
-    if (row.key() == "temperature") {
-        next.settings.color = withTemperature(next.settings.color, std::nullopt);
-    } else if (row.key() == "tint") {
-        next.settings.color = withTint(next.settings.color, std::nullopt);
+    if (row.key() == "temperature" || row.key() == "tint") {
+        emit stateEdited(withValue(photo_, shown_, row.key(), std::nullopt));
+        return;
     }
-    emit stateEdited(next);
+    emit stateEdited(shown_);
 }
 
 void DevelopPanel::applyTreatment(bool grayscale) {
@@ -767,7 +811,15 @@ void DevelopPanel::applyTreatment(bool grayscale) {
 void DevelopPanel::applyChoice(int index) {
     const auto choice = static_cast<WhiteBalanceChoice>(presetCombo_->itemData(index).toInt());
     DevelopState next = shown_;
-    next.settings.color = withChoice(next.settings.color, choice);
+    if (choice != WhiteBalanceChoice::Custom) {
+        // Only the three white balance values change; the rest of the colour settings stay.
+        DevelopSettings source;
+        if (const auto light = lightOf(choice)) {
+            source.color = {WhiteBalanceMode::Custom, light->kelvin, light->tint};
+        }
+        constexpr std::array<std::string_view, 3> keys{"whiteBalance", "temperature", "tint"};
+        next = withValues(photo_, next, keys, source);
+    }
     if (next.settings.color == shown_.settings.color) {
         // The Custom entry, or the light already set: nothing to edit, and the
         // combo goes back to describing the settings.

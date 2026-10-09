@@ -208,52 +208,107 @@ struct PresenceBase {
     friend bool operator==(const PresenceBase&, const PresenceBase&) = default;
 };
 
+/// @brief The three Presence controls, resolved: the values a pixel applies.
+///
+/// Kept apart from the parameters of the context so that the chain can take
+/// them as one value, and so that a pixel may have amounts of its own (ADR 044).
+struct PresenceAmounts {
+    float texture = 0.0F; ///< Texture, minus one to one.
+    float clarity = 0.0F; ///< Clarity, minus one to one.
+    float dehaze = 0.0F;  ///< Dehaze, minus one to one.
+
+    friend bool operator==(const PresenceAmounts&, const PresenceAmounts&) = default;
+};
+
+/// @brief Resolves one Presence control from its setting.
+///
+/// Called by the planner for the whole photograph, and by the chain for a pixel
+/// once a pixel can have a setting of its own (ADR 044).
+/// @param setting A finite setting inside the Presence range.
+/// @return The amount, minus one to one.
+[[nodiscard]] constexpr float presenceAmountFor(float setting) noexcept {
+    return setting / strongestPresence;
+}
+
+/// @brief What the local adjustments of a plan can add to one Presence control, in setting units.
+///
+/// The two sums of ADR 044, section 5: the total of the negative `k` and of the positive `k` of
+/// every mask the plan holds. A pixel's local sum lies between them.
+struct PresenceSum {
+    float negative = 0.0F; ///< Sum of `min(0, k)` over the plan's masks; zero or below.
+    float positive = 0.0F; ///< Sum of `max(0, k)` over the plan's masks; zero or above.
+
+    friend bool operator==(const PresenceSum&, const PresenceSum&) = default;
+};
+
+/// @brief What the local adjustments of a plan can add to Texture, Clarity and Dehaze.
+///
+/// With it, ::arraw::presencePlanFor prepares the bases every pixel's effective amount can reach
+/// (ADR 044, section 5). The default is no masks.
+struct PresenceReach {
+    PresenceSum texture{}; ///< Texture's sums.
+    PresenceSum clarity{}; ///< Clarity's sums.
+    PresenceSum dehaze{};  ///< Dehaze's sums.
+
+    friend bool operator==(const PresenceReach&, const PresenceReach&) = default;
+};
+
 /// @brief Texture, Clarity and Dehaze, resolved: part of the pointwise group of a plan.
 ///
 /// The amounts and the context's parameters. The context, a side image of
 /// the input of the pointwise pass, is computed from the pixels after noise
-/// reduction and from @ref lumaRow, @ref fine, @ref coarse and @ref haze
-/// alone, none of which white balance, exposure or the amounts reach, only
-/// Dehaze's sign (ADR 041). Every control at zero resolves to the default,
-/// and nothing is computed.
+/// reduction and from @ref lumaRow, @ref fine, @ref coarse, @ref hazeFloor and
+/// @ref hazeMean alone, none of which white balance, exposure or the amounts
+/// reach, only which bases exist (ADR 041, ADR 044). A base exists when some pixel's
+/// effective amount can need it: the global amounts alone without masks, the interval the
+/// masks widen them to with them. Every control unreachable resolves to the default, and
+/// nothing is computed.
 struct PresencePlan {
-    /// @brief Texture, minus one to one.
-    float texture = 0.0F;
-
-    /// @brief Clarity, minus one to one.
-    float clarity = 0.0F;
-
-    /// @brief Dehaze, minus one to one.
-    float dehaze = 0.0F;
+    /// @brief Texture, Clarity and Dehaze of the whole photograph, each minus one to one.
+    ///
+    /// The amount of a pixel under a mask is its own (::arraw::PixelAmounts).
+    PresenceAmounts amounts{};
 
     /// @brief Source channels to working luminance, as shot (::arraw::asShotLuminanceRow).
     Colour lumaRow{};
 
-    /// @brief Texture's base: active when Texture is not zero.
+    /// @brief Texture's base: active when Texture's reachable amounts are not all zero.
     PresenceBase fine{};
 
-    /// @brief Clarity's base: active when Clarity is not zero.
+    /// @brief Clarity's base: active when Clarity's reachable amounts are not all zero.
     ///
     /// Clarity reads both its blurred grid and the grid unblurred, whose
     /// difference is its band. A positive Dehaze reads the grid unblurred too.
     PresenceBase coarse{};
 
-    /// @brief Dehaze's base, on the coarse cells: active when Dehaze is not zero.
+    /// @brief Dehaze's floor, on the coarse cells: active when a positive Dehaze is reachable.
     ///
-    /// For a positive Dehaze, the floor of the cells (their opening by a
-    /// window, lightly blurred but never below the opening), measured against
-    /// the cells unblurred; for a negative one, their mean (broadly blurred,
-    /// no window).
-    PresenceBase haze{};
+    /// The floor of the cells (their opening by a window, lightly blurred but
+    /// never below the opening), measured against the cells unblurred.
+    PresenceBase hazeFloor{};
+
+    /// @brief Dehaze's mean, on the coarse cells: active when a negative Dehaze is reachable.
+    ///
+    /// The cells' mean, broadly blurred, no window.
+    PresenceBase hazeMean{};
 
     /// @brief Whether any control does anything, and so whether the context is computed.
     [[nodiscard]] bool active() const noexcept {
-        return fine.active() || coarse.active() || haze.active();
+        return fine.active() || coarse.active() || hazeFloor.active() || hazeMean.active();
     }
 
-    /// @brief Gives the cell of the coarse grid Clarity and Dehaze share; zero when neither is on.
+    /// @brief Whether either of Dehaze's bases exists.
+    [[nodiscard]] bool hazeActive() const noexcept {
+        return hazeFloor.active() || hazeMean.active();
+    }
+
+    /// @brief Gives the cell of the coarse grid Clarity and Dehaze share; zero when none is on.
     [[nodiscard]] std::uint32_t coarseReduction() const noexcept {
-        return coarse.active() ? coarse.reduction : haze.reduction;
+        if (coarse.active()) {
+            return coarse.reduction;
+        }
+        // Both Dehaze bases read the same cells.
+        return hazeFloor.active() ? hazeFloor.reduction : hazeMean.reduction;
     }
 
     friend bool operator==(const PresencePlan&, const PresencePlan&) = default;
@@ -262,10 +317,10 @@ struct PresencePlan {
 /// @brief Groups the fields of a Presence plan that the context depends on.
 ///
 /// The context is a function of the pixels at the Denoise boundary and these
-/// (Dehaze's sign through @ref PresencePlan::haze's window):
-/// what a cache of it beside a ::arraw::Stage::Denoise checkpoint would compare.
+/// (which Dehaze bases exist through the floor's window): what a cache of it beside a
+/// ::arraw::Stage::Denoise checkpoint would compare.
 [[nodiscard]] inline auto presenceContextFieldsOf(const PresencePlan& plan) {
-    return std::tie(plan.lumaRow, plan.fine, plan.coarse, plan.haze);
+    return std::tie(plan.lumaRow, plan.fine, plan.coarse, plan.hazeFloor, plan.hazeMean);
 }
 
 /// @brief Resolves the Presence settings for one source.
@@ -273,13 +328,17 @@ struct PresencePlan {
 /// @param encoding Encoding of the source's pixels, which gives the luminance row.
 /// @param pixelScale Sensor pixels per source pixel (::arraw::ImageBuffer::pixelScale).
 /// @param sourceSize Size of the source, whose long edge Clarity's radius is relative to.
-/// @return The block; the default when every control is zero.
+/// @param reach What the plan's local adjustments add to each control (ADR 044, section 5); the
+/// default for none. A control's bases follow the interval `[clamp(g + negative), clamp(g +
+/// positive)]` of its amounts: Texture's and Clarity's exist when it is not `[0, 0]`, Dehaze's
+/// floor when its upper end is above zero and its mean when its lower end is below.
+/// @return The block; the default when no control is reachable.
 /// @throws std::invalid_argument if a setting is not finite, @p pixelScale is
 /// not finite and above zero, or a control is asked of an encoding development
 /// cannot start from.
 [[nodiscard]] PresencePlan presencePlanFor(const PresenceSettings& settings,
                                            const ColorEncoding& encoding, double pixelScale,
-                                           ImageSize sourceSize);
+                                           ImageSize sourceSize, const PresenceReach& reach = {});
 
 /// @brief Gives how far a source pixel's context reaches, in source pixels, for a region render.
 ///
@@ -300,12 +359,13 @@ struct PresenceGrid {
 
 /// @brief The Presence context: the side image the pointwise chain reads, one grid per base.
 struct PresenceContext {
-    PresenceGrid fine;   ///< Texture's base; empty when Texture is zero.
-    PresenceGrid coarse; ///< Clarity's base; empty when Clarity is zero.
+    PresenceGrid fine;   ///< Texture's base; empty when it has none.
+    PresenceGrid coarse; ///< Clarity's base; empty when it has none.
     /// @brief The coarse grid unblurred: Clarity's band's top and what a positive Dehaze measures
     /// its floor's share against; empty when neither is on.
     PresenceGrid coarseCells;
-    PresenceGrid haze; ///< Dehaze's base; empty when Dehaze is zero.
+    PresenceGrid hazeFloor; ///< Dehaze's floor; empty when it has none.
+    PresenceGrid hazeMean;  ///< Dehaze's mean; empty when it has none.
 };
 
 /// @brief What the pointwise chain knows about a pixel besides its colour (ADR 011's context).
@@ -318,7 +378,8 @@ struct PixelContext {
     float fineBase = 0.0F;   ///< Texture's base at the pixel.
     float coarseBase = 0.0F; ///< Clarity's base at the pixel.
     float coarseCell = 0.0F; ///< The unblurred coarse grid at the pixel (Clarity, positive Dehaze).
-    float hazeBase = 0.0F;   ///< Dehaze's floor (or mean) at the pixel.
+    float hazeFloor = 0.0F;  ///< Dehaze's floor at the pixel, read where Dehaze is positive.
+    float hazeMean = 0.0F;   ///< Dehaze's mean at the pixel, read where Dehaze is negative.
 };
 
 /// @brief Gives the size of a base's grid for a source.
@@ -416,14 +477,29 @@ private:
 /// `open` is zero. Last,
 /// Dehaze's chroma: Saturation of `dehaze * 0.16` times the veil's share
 /// (ADR 041). A colour with no luminance is returned as it is.
-/// @param plan Resolved Presence.
+///
+/// A control acts where its amount at the pixel is not zero and its base exists (ADR 044,
+/// section 5): Texture and Clarity need theirs, a positive Dehaze the floor, a negative one the
+/// mean, and a base that does not exist is never read, whatever the amount rounded to.
+/// @param plan Resolved Presence, whose bases say which controls run.
+/// @param amounts What the controls ask for at the pixel.
 /// @param colour Colour after Basic Tone, in the working encoding.
 /// @param logLuminance ::arraw::presenceLogLuminance of the pixel's source colour.
 /// @param context The grids at the pixel; not read for a control that is zero.
 /// @return The colour; itself when nothing is active.
 ///
 /// Mirrored by `applyPresence` in `src/gpu/shaders/develop.frag`.
-[[nodiscard]] Colour applyPresence(const PresencePlan& plan, Colour colour, float logLuminance,
-                                   const PixelContext& context);
+[[nodiscard]] Colour applyPresence(const PresencePlan& plan, const PresenceAmounts& amounts,
+                                   Colour colour, float logLuminance, const PixelContext& context);
+
+/// @brief Applies Texture, Clarity and Dehaze with the plan's own amounts.
+///
+/// The global case: every pixel has the amounts of the whole photograph.
+/// @copydetails applyPresence(const PresencePlan&, const PresenceAmounts&, Colour, float, const
+/// PixelContext&)
+[[nodiscard]] inline Colour applyPresence(const PresencePlan& plan, Colour colour,
+                                          float logLuminance, const PixelContext& context) {
+    return applyPresence(plan, plan.amounts, colour, logLuminance, context);
+}
 
 } // namespace arraw

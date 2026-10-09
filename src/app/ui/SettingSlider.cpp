@@ -112,13 +112,24 @@ QSlider* sliderFor(const SettingPresentation& presentation, const SettingRange& 
 } // namespace
 
 SettingSlider::SettingSlider(std::string_view key, QWidget* parent)
-    : QWidget(parent), key_(numericDescriptor(key).key), range_(*numericDescriptor(key).range),
-      step_(presentationOf(key).step), scale_(presentationOf(key).scale), default_(0.0),
-      optional_(isOptional(numericDescriptor(key))) {
-    const SettingPresentation& presentation = presentationOf(key);
-    // An optional setting has no default; the panel shows its fallback at once.
-    default_ = optional_ ? (range_.minimum + range_.maximum) / 2.0
-                         : defaultValueOf(numericDescriptor(key));
+    : SettingSlider(numericDescriptor(key).key, *numericDescriptor(key).range,
+                    // An optional setting has no default of its own; the panel shows its
+                    // fallback at once.
+                    isOptional(numericDescriptor(key)) ? (numericDescriptor(key).range->minimum +
+                                                          numericDescriptor(key).range->maximum) /
+                                                             2.0
+                                                       : defaultValueOf(numericDescriptor(key)),
+                    presentationOf(key), isOptional(numericDescriptor(key)), parent) {}
+
+SettingSlider::SettingSlider(std::string_view id, const SettingRange& range, double defaultValue,
+                             const SettingPresentation& presentation, QWidget* parent)
+    : SettingSlider(id, range, defaultValue, presentation, false, parent) {}
+
+SettingSlider::SettingSlider(std::string_view id, const SettingRange& range, double defaultValue,
+                             const SettingPresentation& presentation, bool optional,
+                             QWidget* parent)
+    : QWidget(parent), key_(id), range_(range), step_(presentation.step),
+      scale_(presentation.scale), default_(defaultValue), optional_(optional) {
 
     label_ = new QLabel(presentation.label, this);
     label_->setToolTip(presentation.toolTip);

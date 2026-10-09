@@ -66,6 +66,22 @@ TEST_CASE("Cache keys follow the file, and developed ones the saved state", "[th
     SECTION("the saved state changes the developed key and not the embedded one") {
         REQUIRE(*ThumbnailCache::developedKey(file, bright) != *developed);
     }
+    SECTION("the masks change the developed key, and the id counter does not") {
+        DevelopState masked;
+        masked.localAdjustments.push_back(
+            {.id = LocalAdjustmentId{1}, .shape = LinearMask{}, .deltas = {.exposure = 1.0F}});
+        masked.nextLocalAdjustmentId = LocalAdjustmentId{2};
+        const std::string withMask = *ThumbnailCache::developedKey(file, masked);
+        REQUIRE(withMask != *developed);
+
+        DevelopState other = masked;
+        other.localAdjustments[0].deltas.exposure = 2.0F;
+        REQUIRE(*ThumbnailCache::developedKey(file, other) != withMask);
+
+        DevelopState counted = masked;
+        counted.nextLocalAdjustmentId = LocalAdjustmentId{9};
+        REQUIRE(*ThumbnailCache::developedKey(file, counted) == withMask);
+    }
     SECTION("the modification time changes both") {
         setAge(file, std::chrono::hours(5));
         REQUIRE(*ThumbnailCache::embeddedKey(file) != *embedded);

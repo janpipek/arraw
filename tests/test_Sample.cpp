@@ -114,10 +114,11 @@ TEST_CASE("A curve-input sample is the chain up to Basic Tone, perceptually enco
             const auto out = tapped.samples<float>();
             for (std::size_t pixel = 0; pixel < in.size() / 4; ++pixel) {
                 Colour colour{in[pixel * 4], in[pixel * 4 + 1], in[pixel * 4 + 2]};
-                colour = plan.toWorking * colour;
-                colour = {colour[0] * plan.exposureGain, colour[1] * plan.exposureGain,
-                          colour[2] * plan.exposureGain};
-                colour = shapeTone(plan, colour);
+                colour = plan.pointwise.toWorking * colour;
+                colour = {colour[0] * plan.pointwise.tone.exposureGain,
+                          colour[1] * plan.pointwise.tone.exposureGain,
+                          colour[2] * plan.pointwise.tone.exposureGain};
+                colour = shapeTone(plan.pointwise.tone, colour);
                 for (std::size_t channel = 0; channel < 3; ++channel) {
                     CAPTURE(pixel, channel);
                     REQUIRE(out[pixel * 4 + channel] == toPerceptualSigned(colour[channel]));

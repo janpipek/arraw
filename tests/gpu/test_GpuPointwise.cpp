@@ -78,7 +78,7 @@ ImageBuffer cpuPointwise(const ImageBuffer& source, const DevelopSettings& setti
     const std::span<float> out = result.samples<float>();
     for (std::size_t pixel = 0; pixel < in.size() / 4; ++pixel) {
         const Colour developed =
-            developPixel(plan, {in[pixel * 4], in[pixel * 4 + 1], in[pixel * 4 + 2]});
+            developPixel(plan.pointwise, {in[pixel * 4], in[pixel * 4 + 1], in[pixel * 4 + 2]});
         out[pixel * 4] = developed[0];
         out[pixel * 4 + 1] = developed[1];
         out[pixel * 4 + 2] = developed[2];
@@ -557,7 +557,7 @@ TEST_CASE("Default tone curves leave the GPU's result bit for bit as without the
     DevelopSettings spelledOut = plain;
     spelledOut.toneCurve.luma = curveOf({{0.0F, 0.0F}, {1.0F, 1.0F}});
     spelledOut.toneCurve.red = curveOf({{0.0F, 0.0F}, {1.0F, 1.0F}});
-    REQUIRE(planFor(source, DevelopState{spelledOut}).toneCurves == ToneCurvePlan{});
+    REQUIRE(planFor(source, DevelopState{spelledOut}).pointwise.toneCurves == ToneCurvePlan{});
 
     const ImageBuffer without = gpuPointwise(source, plain);
     const ImageBuffer with = gpuPointwise(source, spelledOut);
@@ -954,14 +954,14 @@ TEST_CASE("The pointwise pass writes the CPU's value after each stage", "[gpu][p
     settings.colorGrading = {.shadows = {.hue = 210.0F, .saturation = 35.0F},
                              .highlights = {.hue = 40.0F, .saturation = 50.0F}};
     const ProcessingPlan plan = planFor(source, DevelopState{settings});
-    REQUIRE(plan.shapesTone);
-    REQUIRE(plan.colorAdjustments.grading.active);
-    REQUIRE(plan.toneCurves.luma.active);
-    REQUIRE(plan.toneCurves.blue.active);
-    REQUIRE(plan.colorAdjustments.adjustsHsl);
+    REQUIRE(plan.pointwise.tone.shapesTone);
+    REQUIRE(plan.pointwise.colorAdjustments.grading.active);
+    REQUIRE(plan.pointwise.toneCurves.luma.active);
+    REQUIRE(plan.pointwise.toneCurves.blue.active);
+    REQUIRE(plan.pointwise.colorAdjustments.adjustsHsl);
 
     const DeviceImage input = context.upload(source);
-    const DeviceImage curves = context.upload(packToneCurves(plan.toneCurves));
+    const DeviceImage curves = context.upload(packToneCurves(plan.pointwise.toneCurves));
     const std::span<const float> in = source.samples<float>();
 
     struct Probe {
@@ -971,32 +971,39 @@ TEST_CASE("The pointwise pass writes the CPU's value after each stage", "[gpu][p
     };
     const std::array<Probe, 6> probes{{
         {"after the matrix", PointwiseProbe::AfterMatrix,
-         [](const ProcessingPlan& p, Colour c) { return p.toWorking * c; }},
+         [](const ProcessingPlan& p, Colour c) { return p.pointwise.toWorking * c; }},
         {"after exposure", PointwiseProbe::AfterExposure,
          [](const ProcessingPlan& p, Colour c) {
-             c = p.toWorking * c;
-             return Colour{c[0] * p.exposureGain, c[1] * p.exposureGain, c[2] * p.exposureGain};
+             c = p.pointwise.toWorking * c;
+             return Colour{c[0] * p.pointwise.tone.exposureGain,
+                           c[1] * p.pointwise.tone.exposureGain,
+                           c[2] * p.pointwise.tone.exposureGain};
          }},
         {"after tone", PointwiseProbe::AfterTone,
          [](const ProcessingPlan& p, Colour c) {
-             c = p.toWorking * c;
-             c = {c[0] * p.exposureGain, c[1] * p.exposureGain, c[2] * p.exposureGain};
-             return shapeTone(p, c);
+             c = p.pointwise.toWorking * c;
+             c = {c[0] * p.pointwise.tone.exposureGain, c[1] * p.pointwise.tone.exposureGain,
+                  c[2] * p.pointwise.tone.exposureGain};
+             return shapeTone(p.pointwise.tone, c);
          }},
         {"after the curves", PointwiseProbe::AfterCurves,
          [](const ProcessingPlan& p, Colour c) {
-             c = p.toWorking * c;
-             c = {c[0] * p.exposureGain, c[1] * p.exposureGain, c[2] * p.exposureGain};
-             return applyToneCurves(p, shapeTone(p, c));
+             c = p.pointwise.toWorking * c;
+             c = {c[0] * p.pointwise.tone.exposureGain, c[1] * p.pointwise.tone.exposureGain,
+                  c[2] * p.pointwise.tone.exposureGain};
+             return applyToneCurves(p.pointwise.toneCurves, shapeTone(p.pointwise.tone, c));
          }},
         {"after the shoulder", PointwiseProbe::AfterShoulder,
          [](const ProcessingPlan& p, Colour c) {
-             c = p.toWorking * c;
-             c = {c[0] * p.exposureGain, c[1] * p.exposureGain, c[2] * p.exposureGain};
-             return rollHighlights(p, applyToneCurves(p, shapeTone(p, c)));
+             c = p.pointwise.toWorking * c;
+             c = {c[0] * p.pointwise.tone.exposureGain, c[1] * p.pointwise.tone.exposureGain,
+                  c[2] * p.pointwise.tone.exposureGain};
+             return rollHighlights(
+                 p.pointwise.shoulderKnee,
+                 applyToneCurves(p.pointwise.toneCurves, shapeTone(p.pointwise.tone, c)));
          }},
         {"developed", PointwiseProbe::Developed,
-         [](const ProcessingPlan& p, Colour c) { return developPixel(p, c); }},
+         [](const ProcessingPlan& p, Colour c) { return developPixel(p.pointwise, c); }},
     }};
 
     for (const Probe& probe : probes) {
@@ -1012,9 +1019,10 @@ TEST_CASE("The pointwise pass writes the CPU's value after each stage", "[gpu][p
                 want[pixel * 4 + 3] = in[pixel * 4 + 3];
             }
 
-            const GpuPointwiseBlock block = packPointwise(plan, probe.probe);
-            // No Presence: its four grids are not read, and the image stands in.
-            const std::array inputs{input, curves, input, input, input, input};
+            const GpuPointwiseBlock block =
+                packPointwise(plan.pointwise, source.size(), probe.probe);
+            // No Presence: its five grids are not read, and the image stands in.
+            const std::array inputs{input, curves, input, input, input, input, input};
             const ImageBuffer actual = context
                                            .render(GpuPass::Pointwise, bytesOf(block), inputs,
                                                    source.size(), workingEncoding)

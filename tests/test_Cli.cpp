@@ -6,15 +6,19 @@
 #include "StreamDiagnostics.h"
 #include "TerminalStyle.h"
 #include "support/Fixtures.h"
+#include "support/LocalAdjustmentStates.h"
 #include "support/TempDir.h"
 
 #include <Develop.h>
 #include <DevelopSettings.h>
 #include <Diagnostics.h>
+#include <Edits.h>
 #include <EffectsSettings.h>
 #include <ExifInfo.h>
+#include <LocalAdjustmentEdits.h>
 #include <NoiseReductionSettings.h>
 #include <Photo.h>
+#include <SettingsJson.h>
 #include <Sidecar.h>
 
 #include <QByteArray>
@@ -1528,39 +1532,7 @@ TEST_CASE("The --crop and --crop-aspect flags together are taken as given", "[cl
         exportedPng(raw, {"--no-sidecar", "--crop", "0.2,0.1,0.8,0.9", "--crop-aspect", "1:1"}));
 }
 
-TEST_CASE("A --crop-aspect on a sidecar with a rectangle makes the crop automatic",
-          "[cli][sidecar]") {
-    const test::TempDir directory;
-    const auto raw = copyRaw(directory, "frame.dng");
-    DevelopSettings settings;
-    settings.geometry.crop.rectangle = UprightCropRect{0.2, 0.1, 0.8, 0.9};
-    settings.geometry.crop.aspect = CropRatio{1.0};
-    sidecarWith(raw, settings);
-
-    SECTION("a different ratio") {
-        int code = 0;
-        const QImage image = exportedPng(raw, {"--crop-aspect", "3:2"}, &code);
-        REQUIRE(code == cli::Success);
-        REQUIRE(image == exportedPng(raw, {"--no-sidecar", "--crop-aspect", "3:2"}));
-    }
-    SECTION("original") {
-        int code = 0;
-        const QImage image = exportedPng(raw, {"--crop-aspect", "original"}, &code);
-        REQUIRE(code == cli::Success);
-        REQUIRE(image == exportedPng(raw, {"--no-sidecar", "--crop-aspect", "original"}));
-    }
-    SECTION("the same ratio keeps the rectangle") {
-        REQUIRE(exportedPng(raw, {"--crop-aspect", "1:1"}) ==
-                exportedPng(raw,
-                            {"--no-sidecar", "--crop", "0.2,0.1,0.8,0.9", "--crop-aspect", "1:1"}));
-    }
-    SECTION("free keeps the rectangle") {
-        REQUIRE(exportedPng(raw, {"--crop-aspect", "free"}) ==
-                exportedPng(raw, {"--no-sidecar", "--crop", "0.2,0.1,0.8,0.9"}));
-    }
-}
-
-TEST_CASE("A --rotate that turns the frame reframes a sidecar's crop, and says so",
+TEST_CASE("A --rotate that turns the frame carries a sidecar's crop with the content",
           "[cli][sidecar]") {
     const test::TempDir directory;
     const auto raw = copyRaw(directory, "frame.dng");
@@ -1575,11 +1547,12 @@ TEST_CASE("A --rotate that turns the frame reframes a sidecar's crop, and says s
     const QImage image = exportedPng(raw, {"--rotate", "90"}, &code, &err);
 
     REQUIRE(code == cli::Success);
-    REQUIRE_THAT(err, ContainsSubstring("automatic framing"));
-    REQUIRE(image == exportedPng(raw, {"--no-sidecar", "--rotate", "90", "--crop-aspect", "1:1"}));
+    REQUIRE_THAT(err, !ContainsSubstring("automatic framing"));
+    REQUIRE(image == exportedPng(raw, {"--no-sidecar", "--rotate", "90", "--crop",
+                                       "0.1,0.2,0.9,0.8", "--crop-aspect", "1:1"}));
 }
 
-TEST_CASE("A flip flag reframes a sidecar's crop, and --no-flip undoes a sidecar's flip",
+TEST_CASE("A flip flag mirrors a sidecar's crop, and --no-flip undoes a sidecar's flip",
           "[cli][sidecar]") {
     const test::TempDir directory;
     const auto raw = copyRaw(directory, "frame.dng");
@@ -1592,13 +1565,11 @@ TEST_CASE("A flip flag reframes a sidecar's crop, and --no-flip undoes a sidecar
     sidecarWith(raw, plain);
     sidecarWith(other, flipped);
 
-    SECTION("adding a flip frames the picture anew") {
-        REQUIRE(exportedPng(raw, {"--flip-horizontal"}) ==
-                exportedPng(raw, {"--no-sidecar", "--flip-horizontal"}));
+    SECTION("adding a flip mirrors the crop with the picture") {
+        REQUIRE(exportedPng(raw, {"--flip-horizontal"}) == exportedPng(other, {}));
     }
-    SECTION("removing a flip frames the picture anew") {
-        REQUIRE(exportedPng(other, {"--no-flip-horizontal"}) ==
-                exportedPng(other, {"--no-sidecar"}));
+    SECTION("removing a flip mirrors the crop back") {
+        REQUIRE(exportedPng(other, {"--no-flip-horizontal"}) == exportedPng(raw, {}));
     }
     SECTION("a flip with a crop uses that crop") {
         REQUIRE(exportedPng(raw, {"--flip-horizontal", "--crop", "0.5,0.1,1,0.6"}) ==
@@ -1828,10 +1799,19 @@ cli::ExportEdits editsOf(const std::vector<std::string>& flags) {
     return *edits;
 }
 
-/// @brief Applies flags to settings.
-DevelopSettings applied(const DevelopSettings& base, const std::vector<std::string>& flags) {
+/// @brief What a RAW of the given size declares, as the geometry rules need.
+ImageMetadata rawOfSize(std::uint32_t width, std::uint32_t height) {
+    ImageMetadata photo;
+    photo.size = ImageSize{width, height};
+    photo.encoding = CameraNative{};
+    return photo;
+}
+
+/// @brief Applies flags to settings of a RAW of 2000 by 1000, or of the given photograph.
+DevelopSettings applied(const DevelopSettings& base, const std::vector<std::string>& flags,
+                        const ImageMetadata& photo = rawOfSize(2000, 1000)) {
     CollectedDiagnostics log;
-    return cli::applyEdits(base, editsOf(flags), log, "frame.dng");
+    return cli::applyEdits(base, editsOf(flags), log, "frame.dng", photo);
 }
 
 /// @brief Whether a crop rectangle is, to rounding, the one expected.
@@ -2175,45 +2155,52 @@ TEST_CASE("Info shows a tone curve as its points", "[cli][info][curve]") {
 }
 
 TEST_CASE("Geometry flags keep the sidecar's geometry they do not name", "[cli][sidecar]") {
-    DevelopSettings sidecar;
-    sidecar.geometry.rotation = QuarterTurn::Clockwise180;
-    sidecar.geometry.straighten = 3.0;
-    sidecar.geometry.flipHorizontal = true;
-    sidecar.geometry.flipVertical = true;
-    sidecar.geometry.crop.rectangle = UprightCropRect{0.1, 0.2, 0.6, 0.7};
-    sidecar.geometry.crop.aspect = CropRatio{2.0};
+    // A crop of 3:1 or so on the 2000 by 1000 frame, off centre, valid at the straighten.
+    DevelopState start;
+    start.settings.geometry.rotation = QuarterTurn::Clockwise180;
+    start.settings.geometry.straighten = 3.0;
+    start.settings.geometry.flipHorizontal = true;
+    start.settings.geometry.flipVertical = true;
+    start.settings.geometry.crop.rectangle = UprightCropRect{0.3, 0.35, 0.6, 0.55};
+    const DevelopSettings sidecar = withLockedAspect(rawOfSize(2000, 1000), start).settings;
+    const double ratio = std::get<CropRatio>(sidecar.geometry.crop.aspect).widthOverHeight;
+    REQUIRE(ratio > 2.0);
 
     SECTION("nothing named") {
         REQUIRE(applied(sidecar, {"--exposure", "1"}).geometry == sidecar.geometry);
     }
-    SECTION("the vertical flip is undone, and the crop is framed anew") {
+    SECTION("the vertical flip is undone, the crop is mirrored, and nothing is logged") {
         CollectedDiagnostics log;
-        const auto geometry =
-            cli::applyEdits(sidecar, editsOf({"--no-flip-vertical"}), log, "frame.dng").geometry;
+        const auto geometry = cli::applyEdits(sidecar, editsOf({"--no-flip-vertical"}), log,
+                                              "frame.dng", rawOfSize(2000, 1000))
+                                  .geometry;
         REQUIRE_FALSE(geometry.flipVertical);
         REQUIRE(geometry.flipHorizontal);
-        REQUIRE_FALSE(geometry.crop.rectangle);
-        REQUIRE(geometry.crop.aspect == CropAspect{CropRatio{2.0}});
+        REQUIRE(isNear(geometry.crop.rectangle, {0.3, 0.45, 0.6, 0.65}));
+        REQUIRE(geometry.crop.aspect == sidecar.geometry.crop.aspect);
         REQUIRE(geometry.rotation == QuarterTurn::Clockwise180);
-        REQUIRE(log.entries().size() == 1);
-        REQUIRE(log.entries().front().notice == Notice::CropReset);
-        REQUIRE(log.entries().front().severity == Severity::Warning);
+        REQUIRE(log.entries().empty());
     }
     SECTION("a vertical flip already there changes nothing") {
         REQUIRE(applied(sidecar, {"--flip-vertical"}).geometry == sidecar.geometry);
     }
-    SECTION("a rotation that changes frames the crop anew and reciprocates the ratio") {
+    SECTION("a rotation that changes carries the crop and reciprocates the ratio") {
         const auto geometry = applied(sidecar, {"--rotate", "270"}).geometry;
         REQUIRE(geometry.rotation == QuarterTurn::Clockwise270);
         REQUIRE(geometry.straighten == 0.0);
-        REQUIRE_FALSE(geometry.crop.rectangle);
-        REQUIRE(geometry.crop.aspect == CropAspect{CropRatio{0.5}});
+        REQUIRE(geometry.crop.rectangle);
+        REQUIRE(geometry.crop.rectangle->right - geometry.crop.rectangle->left <
+                geometry.crop.rectangle->bottom - geometry.crop.rectangle->top);
+        const auto* turned = std::get_if<CropRatio>(&geometry.crop.aspect);
+        REQUIRE(turned != nullptr);
+        REQUIRE(turned->widthOverHeight == Catch::Approx(1.0 / ratio).epsilon(1e-6));
     }
-    SECTION("a half-turn keeps the ratio") {
+    SECTION("a half-turn rotates the crop and keeps the ratio") {
         const auto geometry = applied(sidecar, {"--rotate", "3"}).geometry;
         REQUIRE(geometry.rotation == QuarterTurn::None);
-        REQUIRE_FALSE(geometry.crop.rectangle);
-        REQUIRE(geometry.crop.aspect == CropAspect{CropRatio{2.0}});
+        REQUIRE(geometry.straighten == 3.0);
+        REQUIRE(isNear(geometry.crop.rectangle, {0.4, 0.45, 0.7, 0.65}));
+        REQUIRE(geometry.crop.aspect == sidecar.geometry.crop.aspect);
     }
     SECTION("a crop given with a flip is the crop used") {
         const auto geometry =
@@ -2229,7 +2216,54 @@ TEST_CASE("Geometry flags keep the sidecar's geometry they do not name", "[cli][
     SECTION("--crop auto keeps the aspect") {
         const auto geometry = applied(sidecar, {"--crop", "auto"}).geometry;
         REQUIRE_FALSE(geometry.crop.rectangle);
-        REQUIRE(geometry.crop.aspect == CropAspect{CropRatio{2.0}});
+        REQUIRE(geometry.crop.aspect == sidecar.geometry.crop.aspect);
+    }
+}
+
+TEST_CASE("A --crop that disagrees with --crop-aspect is reshaped to the aspect",
+          "[cli][sidecar]") {
+    // 1600 by 800 asked for, at 1:2: the largest 1:2 crop inside it, about its centre.
+    const auto geometry =
+        applied(DevelopSettings{}, {"--crop", "0.1,0.1,0.9,0.9", "--crop-aspect", "1:2"}).geometry;
+    REQUIRE(isNear(geometry.crop.rectangle, {0.4, 0.1, 0.6, 0.9}));
+    REQUIRE(geometry.crop.aspect == CropAspect{CropRatio{0.5}});
+}
+
+TEST_CASE("A --crop-aspect on a sidecar with a rectangle fits the largest crop of it inside",
+          "[cli][sidecar]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    DevelopSettings settings;
+    settings.geometry.crop.rectangle = UprightCropRect{0.2, 0.1, 0.8, 0.9};
+    settings.geometry.crop.aspect = CropRatio{1.0};
+    sidecarWith(raw, settings);
+
+    // The rectangle is square on a 4:3 frame, 2.4 by 2.4 in units of a third of the height.
+    const ImageMetadata fourThirds = rawOfSize(4000, 3000);
+    SECTION("a different ratio") {
+        int code = 0;
+        (void)exportedPng(raw, {"--crop-aspect", "3:2"}, &code);
+        REQUIRE(code == cli::Success);
+        const auto geometry = applied(settings, {"--crop-aspect", "3:2"}, fourThirds).geometry;
+        REQUIRE(isNear(geometry.crop.rectangle, {0.2, 0.2333333, 0.8, 0.7666667}));
+        REQUIRE(geometry.crop.aspect == CropAspect{CropRatio{1.5}});
+    }
+    SECTION("original") {
+        int code = 0;
+        (void)exportedPng(raw, {"--crop-aspect", "original"}, &code);
+        REQUIRE(code == cli::Success);
+        const auto geometry = applied(settings, {"--crop-aspect", "original"}, fourThirds).geometry;
+        REQUIRE(isNear(geometry.crop.rectangle, {0.2, 0.2, 0.8, 0.8}));
+        REQUIRE(geometry.crop.aspect == CropAspect{OriginalCropAspect{}});
+    }
+    SECTION("the same ratio keeps the rectangle") {
+        REQUIRE(exportedPng(raw, {"--crop-aspect", "1:1"}) ==
+                exportedPng(raw,
+                            {"--no-sidecar", "--crop", "0.2,0.1,0.8,0.9", "--crop-aspect", "1:1"}));
+    }
+    SECTION("free keeps the rectangle") {
+        REQUIRE(exportedPng(raw, {"--crop-aspect", "free"}) ==
+                exportedPng(raw, {"--no-sidecar", "--crop", "0.2,0.1,0.8,0.9"}));
     }
 }
 
@@ -2442,6 +2476,158 @@ TEST_CASE("Info lists only what the sidecar changes, and its marks", "[cli][info
     REQUIRE_THAT(result.out, !ContainsSubstring("contrast"));
     REQUIRE_THAT(result.out, !ContainsSubstring("defaults"));
     REQUIRE(result.out.find("exposure") < result.out.find("cropRectangle"));
+}
+
+TEST_CASE("Info lists the masks a sidecar holds", "[cli][info][local]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    writeSidecar(openPhoto(raw).with(test::stateWithMasks()));
+    const auto result = invoke({"info", raw.string()});
+
+    REQUIRE(result.code == cli::Success);
+    REQUIRE_THAT(result.out, ContainsSubstring("  local adjustments:\n"));
+    // Type, name (or the default), whether it acts, opacity, inversion, and the deltas that
+    // are not zero, in the table's order.
+    REQUIRE_THAT(result.out, ContainsSubstring("    Linear 1 (linear): disabled, opacity 1, "
+                                               "exposure 0.5, dehaze 20\n"));
+    REQUIRE_THAT(result.out, ContainsSubstring("    Sky \"left\" & <more> (radial): enabled, "
+                                               "opacity 0.35, inverted, relativeTemperature "
+                                               "-42.5, vibrance 7\n"));
+    REQUIRE_THAT(result.out, ContainsSubstring("    Radial 2 (radial): enabled, opacity 1\n"));
+    // After the settings, in list order.
+    REQUIRE(result.out.find("Linear 1") < result.out.find("Sky"));
+    REQUIRE(result.out.find("Sky") < result.out.find("Radial 2"));
+    REQUIRE(result.err.empty());
+}
+
+TEST_CASE("Info lists masks after the settings, and none when there are none",
+          "[cli][info][local]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    REQUIRE_THAT(invoke({"info", raw.string()}).out, !ContainsSubstring("local adjustments"));
+
+    DevelopState state = test::stateWithMasks();
+    state.settings.tone.exposure = 0.5F;
+    writeSidecar(openPhoto(raw).with(state));
+    const auto result = invoke({"info", raw.string()});
+    REQUIRE(result.out.find("    exposure: 0.5\n") < result.out.find("local adjustments"));
+    // The sidecar is ignored when asked to be, masks with it.
+    REQUIRE_THAT(invoke({"info", "--no-sidecar", raw.string()}).out,
+                 !ContainsSubstring("local adjustments"));
+    // The masks alone, with defaults for the settings.
+    writeSidecar(openPhoto(raw).with(test::stateWithMasks()));
+    const auto only = invoke({"info", raw.string()});
+    REQUIRE_THAT(only.out,
+                 ContainsSubstring("  develop settings: defaults\n  local adjustments:\n"));
+}
+
+TEST_CASE("Info --json gives the masks with their geometry, as the state document writes them",
+          "[cli][info][local]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    const DevelopState state = test::stateWithMasks();
+    writeSidecar(openPhoto(raw).with(state));
+
+    const auto file = firstFile(invoke({"info", "--json", raw.string()}).out);
+    const auto list = file.value("localAdjustments").toObject();
+    REQUIRE(list.value("version").toInt() == 1);
+    REQUIRE(list.value("nextId").toInt() == 4);
+    const auto masks = list.value("masks").toArray();
+    REQUIRE(masks.size() == 3);
+
+    const auto linear = masks[0].toObject();
+    REQUIRE(linear.value("id").toInt() == 1);
+    REQUIRE(linear.value("type").toString() == "linear");
+    REQUIRE(linear.value("enabled").toBool() == false);
+    REQUIRE(linear.value("geometry").toObject().value("from").toArray().at(0).toDouble() ==
+            Catch::Approx(0.2));
+    REQUIRE(linear.value("geometry").toObject().value("to").toArray().at(1).toDouble() ==
+            Catch::Approx(0.8));
+    REQUIRE(linear.value("deltas").toObject().value("exposure").toDouble() == Catch::Approx(0.5));
+    REQUIRE(linear.value("deltas").toObject().contains("contrast") == false);
+
+    const auto radial = masks[1].toObject();
+    REQUIRE(radial.value("type").toString() == "radial");
+    REQUIRE(radial.value("name").toString() == "Sky \"left\" & <more>");
+    REQUIRE(radial.value("invert").toBool());
+    REQUIRE(radial.value("opacity").toDouble() == Catch::Approx(0.35));
+    REQUIRE(radial.value("geometry").toObject().value("angle").toDouble() == Catch::Approx(30.0));
+    REQUIRE(radial.value("geometry").toObject().value("radius").toArray().size() == 2);
+
+    // The same object the state document holds, so a script can read either.
+    const auto document = QJsonDocument::fromJson(QByteArray::fromStdString(stateToJson(state)));
+    REQUIRE(document.object().value("localAdjustments").toObject() == list);
+
+    // No masks still gives the key, with an empty list.
+    const auto bare = firstFile(invoke({"info", "--json", "--no-sidecar", raw.string()}).out);
+    REQUIRE(bare.value("localAdjustments").toObject().value("masks").toArray().isEmpty());
+    REQUIRE(bare.value("localAdjustments").toObject().value("nextId").toInt() == 1);
+}
+
+TEST_CASE("Info reports a mask it had to drop, and lists the others", "[cli][info][local]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    writeSidecar(openPhoto(raw).with(withLocalAdjustmentAdded(DevelopState{}, test::someLinear())));
+    // Adds a mask of a kind this arraw does not know to the sidecar's list.
+    std::string text;
+    {
+        std::ifstream stream(directory.file("frame.xmp"), std::ios::binary);
+        text.assign(std::istreambuf_iterator<char>(stream), {});
+    }
+    const std::string brush =
+        R"(<rdf:li rdf:parseType="Resource"><arraw:id>9</arraw:id><arraw:type>brush</arraw:type></rdf:li>)";
+    const auto at = text.find("</rdf:Seq>");
+    REQUIRE(at != std::string::npos);
+    text.insert(at, brush);
+    std::ofstream(directory.file("frame.xmp"), std::ios::binary) << text;
+
+    const auto result = invoke({"info", raw.string()});
+    REQUIRE(result.code == cli::Success);
+    REQUIRE_THAT(result.out, ContainsSubstring("    Linear 1 (linear): enabled, opacity 1\n"));
+    REQUIRE_THAT(result.out, !ContainsSubstring("brush"));
+    REQUIRE_THAT(result.err, ContainsSubstring("mask 2 (id 9, brush) was dropped"));
+    REQUIRE_THAT(result.err, ContainsSubstring("brush"));
+}
+
+TEST_CASE("An export renders a photograph whose sidecar holds masks", "[cli][sidecar][local]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    writeSidecar(openPhoto(raw).with(test::stateWithMasks()));
+    const QImage image = exportedPng(raw, {});
+    REQUIRE_FALSE(image.isNull());
+    REQUIRE(openPhoto(raw).state() == test::stateWithMasks());
+}
+
+TEST_CASE("An export applies a sidecar's mask inside it and nowhere else",
+          "[cli][sidecar][local]") {
+    const test::TempDir directory;
+    const auto plainRaw = copyRaw(directory, "plain.dng");
+    const auto maskedRaw = copyRaw(directory, "masked.dng");
+    // Full weight down to a fifth of the height, none from three tenths on.
+    const DevelopState masked = withLocalAdjustmentAdded(
+        DevelopState{},
+        LocalAdjustment{.name = {},
+                        .shape = LinearMask{.from = {0.5F, 0.2F}, .to = {0.5F, 0.3F}},
+                        .deltas = {.exposure = 2.0F}});
+    writeSidecar(openPhoto(maskedRaw).with(masked));
+
+    const QImage plain = exportedPng(plainRaw, {});
+    const QImage image = exportedPng(maskedRaw, {});
+    REQUIRE_FALSE(plain.isNull());
+    REQUIRE(image.size() == plain.size());
+    const int top = image.height() / 10;
+    const int bottom = image.height() * 4 / 10;
+    bool differsInside = false;
+    for (int y = 0; y < image.height(); ++y) {
+        for (int x = 0; x < image.width(); ++x) {
+            if (y < top) {
+                differsInside = differsInside || image.pixel(x, y) != plain.pixel(x, y);
+            } else if (y >= bottom) {
+                REQUIRE(image.pixel(x, y) == plain.pixel(x, y));
+            }
+        }
+    }
+    REQUIRE(differsInside);
 }
 
 TEST_CASE("Info says rejected for a rating of -1", "[cli][info]") {

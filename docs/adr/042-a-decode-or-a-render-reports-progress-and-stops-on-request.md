@@ -197,7 +197,8 @@ and `RenderIndicator` drives it from a timer:
   milliseconds, so a slider drag over a slow render does not alternate between
   a bar and a busy one.
 
-The indicator is a permanent status-bar widget (`RenderProgressBar`): the
+*Superseded 2026-10-07 by the amendment below (`RenderProgressPie`).* The indicator
+was a permanent status-bar widget (`RenderProgressBar`): the
 step's wording ("Reducing noise…", "Analysing local contrast…",
 "Developing…") beside a `QProgressBar` with the percentage, busy while there
 is no fraction yet. It was first a thin bar painted along the top of the photo
@@ -207,6 +208,36 @@ the photograph or the crop handles was worth the short glance away from the
 picture. The newest result ends the busy period even when it is no longer
 wanted (a photograph was opened, or the crop mode was left), so the bar cannot
 stay busy forever (F8).
+
+*Amended 2026-10-07 (user):* the label and bar become one small pie chart
+(`RenderProgressPie`), a permanent status-bar widget on the right beside the
+device label, so a status message neither hides it nor is hidden by it. It is
+always present: a full green pie while nothing is to be shown (no render, or
+within the show delay), and while shown a red pie filled with the fraction (an
+empty red outline until there is one). The fill is the cue that does not depend on
+colour; the colours are a second cue. The step's wording moves to the tooltip
+("Reducing noise… 40%"; "Up to date" when done) and the accessible name and
+description. The show delay and holds are unchanged.
+
+With no photograph open the pie is an empty grey ring, tooltip "No photograph open". A
+render that was cancelled delivers nothing, so the pie goes back to "up to date" for it. The
+newest render that failed (the window already isolates it and shows a message box) also
+turns the pie into an empty red ring with the tooltip "Render failed: <error>", until a
+render is shown (even one that never became visible) or the photograph changes.
+
+The red is its own, more saturated than the error text, so a render does not read as an
+error.
+
+*Amended 2026-10-07 (user):* a photograph being opened is never "up to date". From the
+moment it starts opening (`showPhoto`) until its first render is on screen the pie says so:
+the decode's progress, which the window already receives and feeds to the same indicator
+(ADR 043), shows as the red fill with the tooltip "Opening <file name>… NN%", or an empty
+red ring with "Opening <file name>…" while there is no fraction. The indicator's show delay
+applies as for any render: before it has passed the pie is an empty dim green ring (`progressOpening`) with the
+tooltip "Opening <file name>…", so an open that is over in a moment flashes no red, is
+never full green, and a quick switch in the film strip does not blink green, grey, green. Grey is
+kept for no photograph open. The first render shown ends the opening and the normal states follow. A
+decode that fails closes the photograph, so the pie goes to "No photograph open".
 
 **Python gets no progress callable yet.** The bindings
 ([ADR 018](018-python-binds-the-public-api-and-nothing-else.md)) keep their

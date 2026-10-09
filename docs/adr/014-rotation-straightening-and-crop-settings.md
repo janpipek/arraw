@@ -118,16 +118,19 @@ travel together. An excluded crop leaves both destination values unchanged.
 An automatic crop transfers as automatic with its constraint. Original remains
 relative to the destination; a custom ratio retains its literal value.
 
-For an explicit crop, transfer the normalised centre and its physical long-edge
-length divided by the source upright frame's long-edge length. Reconstruct on
-the destination using its long edge. Preserve the source crop's physical aspect
-for free/custom modes; original instead resolves against the destination.
-Shrink uniformly or shift only as needed using the fitting policy above. Thus
-a free square crop stays square even between landscape and portrait images.
-This operation needs both photographs' resolved frame dimensions: copying the
-four stored edges is not enough. A portable preset containing an explicit crop
-must carry the source aspect and relative size as transfer data, not pretend
-that `DevelopSettings` alone supplies the missing dimensions.
+*Updated 2026-10-07: normalised, then fitted.* An explicit crop transfers as
+its four edges, which are fractions of the source's own upright frame, taken
+as the same fractions of the destination's upright frame (after the destination's
+rotation and flips, when those are copied too). The aspect is free while the
+rectangle is fitted inside valid content (shrunk uniformly about its centre or
+shifted, by the fitting policy above); the source's aspect is then set, a
+ratio keeping its literal value and Original resolving against the
+destination. This replaces the earlier rule, which carried the centre and
+long-edge fraction and kept the physical aspect, so that a free square crop
+stayed square between landscape and portrait photographs. That rule needed the
+source's frame, which a copied look does not carry; the new one needs only the
+destination's. A free crop's proportions now follow the destination's frame,
+and a portable preset needs no transfer data beyond the settings.
 
 **Validation happens before pixel processing.**
 Straighten and all coordinates must be finite; straighten is within its named
@@ -194,12 +197,27 @@ including its antialiasing policy, remains outside this implementation.
 > content test are shared helpers in `GeometryPlan.h`. See
 > [ADR 040](040-the-crop-mode-straightens-on-screen-over-an-uncropped-render.md).
 
+> **Note (2026-10-07).** The editing rules are now public core in
+> `include/CropGeometry.h`: pure functions over `GeometrySettings` that take a
+> `SourceShape` (size and orientation), so the crop mode, the Develop panel,
+> the command line and Python edit a geometry alike. Core now holds the rules
+> the Consequences bullet below asks the geometry editor to own for dependent
+> crop and aspect updates; `Edits.h` applies them, and the command line carries
+> the crop, in the next step. Setting the stored `rotation` (`withRotation`) keeps the
+> flips, so the direction the picture turns on screen depends on how many
+> flips are set; the crop is carried either way. The open question
+> of how to copy a crop is closed: it is "normalised, then fitted" (see
+> "Copying crop" above, updated 2026-10-07), which a `Look` can supply.
+
 ## Consequences
 
 - Settings resolve once into geometry shared by sampling and coordinate mapping.
-- The future geometry editor owns dependent crop/aspect updates. Plain field
-  assignment stores a new value; it does not remap an existing crop from an old
-  frame. The CLI describes one final geometry state, not a sequence of edits.
+- Core owns dependent crop/aspect updates (`CropGeometry.h`, applied by the
+  setters of `Edits.h`). Setting a geometry key carries or fits the existing
+  crop by the rule above, from the photograph's declared size; only the
+  storage layer assigns fields plainly. The CLI's flags are setters in the
+  same table order, so a rotation, a flip or a crop flag carries a sidecar's
+  crop as the editor would.
 - Tests cover mirrored camera orientations, off-centre crops, non-square and
   odd-sized images, locked ratios, forward/inverse mapping, exact remapping,
   fractional sampling and alpha. Preview sizing and copying between unlike

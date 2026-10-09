@@ -1,10 +1,12 @@
 #include "CurveEditing.h"
+#include "HistoryModel.h"
 #include "ui/CurveEditor.h"
 #include "ui/DevelopPanel.h"
 #include "ui/SettingSlider.h"
 
 #include <ColorEncoding.h>
 #include <DevelopState.h>
+#include <Edits.h>
 #include <GeometrySettings.h>
 #include <NoiseReductionSettings.h>
 
@@ -27,8 +29,10 @@
 #include <QTimer>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 #include <cstdint>
+#include <initializer_list>
 #include <optional>
 #include <string_view>
 #include <variant>
@@ -413,16 +417,35 @@ TEST_CASE("The aspect menu and lock show the geometry's aspect", "[app][panel][c
     CHECK(combo->currentText() == "Free");
 }
 
+namespace {
+
+PanelContext sizedContext() {
+    PanelContext context;
+    context.photo.size = ImageSize{40, 20};
+    return context;
+}
+
+/// Starts an edit of the row as a drag does, then ticks it to each value.
+void drag(SettingSlider* row, std::initializer_list<double> values) {
+    emit row->editStarted();
+    for (const double value : values) {
+        emit row->valueEdited(value);
+    }
+    emit row->editFinished();
+}
+
+} // namespace
+
 TEST_CASE("The Angle row edits the straighten as it appears on screen", "[app][panel][crop]") {
     DevelopPanel panel;
-    panel.showState(DevelopState{}, PanelContext{});
+    panel.showState(DevelopState{}, sizedContext());
     std::optional<DevelopState> edited;
     QObject::connect(&panel, &DevelopPanel::stateEdited,
                      [&](const DevelopState& next) { edited = next; });
     SettingSlider* angle = rowOf(panel, "straighten");
     REQUIRE(angle != nullptr);
 
-    emit angle->valueEdited(8.0);
+    drag(angle, {8.0});
     REQUIRE(edited);
     CHECK(edited->settings.geometry.straighten == 8.0);
 
@@ -430,11 +453,62 @@ TEST_CASE("The Angle row edits the straighten as it appears on screen", "[app][p
     DevelopState flipped;
     flipped.settings.geometry.flipHorizontal = true;
     flipped.settings.geometry.straighten = -5.0;
-    panel.showState(flipped, PanelContext{});
+    panel.showState(flipped, sizedContext());
     CHECK(angle->findChild<QDoubleSpinBox*>()->value() == 5.0);
-    emit angle->valueEdited(8.0);
+    drag(angle, {8.0});
     CHECK(edited->settings.geometry.straighten == -8.0);
     CHECK(edited->settings.geometry.flipHorizontal);
+}
+
+TEST_CASE("Dragging the Angle row back restores the crop", "[app][panel][crop]") {
+    DevelopState start;
+    start.settings.geometry.crop.rectangle = UprightCropRect{0.05, 0.05, 0.95, 0.95};
+    SECTION("not mirrored, and mirrored") {
+        const bool mirrored = GENERATE(false, true);
+        start.settings.geometry.flipHorizontal = mirrored;
+        DevelopPanel panel;
+        panel.showState(start, sizedContext());
+        std::optional<DevelopState> edited;
+        // The owner shows each edit back, as the main window does.
+        QObject::connect(&panel, &DevelopPanel::stateEdited, [&](const DevelopState& next) {
+            edited = next;
+            panel.showState(next, sizedContext());
+        });
+        SettingSlider* angle = rowOf(panel, "straighten");
+        REQUIRE(angle != nullptr);
+
+        emit angle->editStarted();
+        emit angle->valueEdited(10.0);
+        REQUIRE(edited);
+        const auto& tilted = edited->settings.geometry.crop.rectangle;
+        REQUIRE(tilted);
+        CHECK(tilted->right - tilted->left < 0.9);
+        CHECK(displayedStraighten(*edited) == 10.0);
+
+        emit angle->valueEdited(0.0);
+        emit angle->editFinished();
+        CHECK(edited->settings.geometry.crop.rectangle == start.settings.geometry.crop.rectangle);
+        CHECK(edited->settings.geometry.straighten == 0.0);
+    }
+}
+
+TEST_CASE("Dragging the Angle row on a crop that disagrees with its aspect sets the angle only",
+          "[app][panel][crop]") {
+    DevelopState start;
+    start.settings.geometry.crop.rectangle = UprightCropRect{0.05, 0.05, 0.95, 0.95};
+    start.settings.geometry.crop.aspect = CropRatio{1.0};
+    DevelopPanel panel;
+    panel.showState(start, sizedContext());
+    std::optional<DevelopState> edited;
+    QObject::connect(&panel, &DevelopPanel::stateEdited,
+                     [&](const DevelopState& next) { edited = next; });
+    SettingSlider* angle = rowOf(panel, "straighten");
+    REQUIRE(angle != nullptr);
+
+    CHECK_NOTHROW(drag(angle, {8.0}));
+    REQUIRE(edited);
+    CHECK(edited->settings.geometry.straighten == 8.0);
+    CHECK(edited->settings.geometry.crop == start.settings.geometry.crop);
 }
 
 TEST_CASE("Reset returns the geometry to its defaults as one edit", "[app][panel][crop]") {
@@ -568,5 +642,21 @@ TEST_CASE("Every slider keeps its minimum track at the dock's minimum and defaul
                 CHECK(checked > 0);
             }
         }
+    }
+}
+
+TEST_CASE("The panel titles its groups as the history names them", "[app][panel][history]") {
+    DevelopPanel panel;
+    QStringList titles;
+    for (const auto* group : panel.findChildren<QGroupBox*>()) {
+        // A mnemonic's ampersand is doubled in a title.
+        titles.push_back(QString(group->title()).replace("&&", "&"));
+    }
+    for (const SettingGroup group :
+         {SettingGroup::Color, SettingGroup::Tone, SettingGroup::Geometry, SettingGroup::Hsl,
+          SettingGroup::BlackAndWhite, SettingGroup::ToneCurve, SettingGroup::ColorGrading,
+          SettingGroup::Effects, SettingGroup::Detail, SettingGroup::Presence}) {
+        INFO(groupDisplayName(group).toStdString());
+        CHECK(titles.contains(groupDisplayName(group)));
     }
 }

@@ -20,24 +20,19 @@ ColorSettings custom(std::optional<float> kelvin, std::optional<float> tint) {
 
 TEST_CASE("The presets are Lightroom's lights", "[WhiteBalanceChoice]") {
     CHECK(whiteBalancePresets().size() == 6);
-    CHECK(withChoice({}, WhiteBalanceChoice::Daylight) == custom(5500.0F, 10.0F));
-    CHECK(withChoice({}, WhiteBalanceChoice::Cloudy) == custom(6500.0F, 10.0F));
-    CHECK(withChoice({}, WhiteBalanceChoice::Shade) == custom(7500.0F, 10.0F));
-    CHECK(withChoice({}, WhiteBalanceChoice::Tungsten) == custom(2850.0F, 0.0F));
-    CHECK(withChoice({}, WhiteBalanceChoice::Fluorescent) == custom(3800.0F, 21.0F));
-    CHECK(withChoice({}, WhiteBalanceChoice::Flash) == custom(5500.0F, 0.0F));
+    CHECK(lightOf(WhiteBalanceChoice::Daylight) == ColourTemperature{5500.0F, 10.0F});
+    CHECK(lightOf(WhiteBalanceChoice::Cloudy) == ColourTemperature{6500.0F, 10.0F});
+    CHECK(lightOf(WhiteBalanceChoice::Shade) == ColourTemperature{7500.0F, 10.0F});
+    CHECK(lightOf(WhiteBalanceChoice::Tungsten) == ColourTemperature{2850.0F, 0.0F});
+    CHECK(lightOf(WhiteBalanceChoice::Fluorescent) == ColourTemperature{3800.0F, 21.0F});
+    CHECK(lightOf(WhiteBalanceChoice::Flash) == ColourTemperature{5500.0F, 0.0F});
     CHECK(whiteBalanceChoices().front() == WhiteBalanceChoice::AsShot);
     CHECK(whiteBalanceChoices().back() == WhiteBalanceChoice::Custom);
 }
 
-TEST_CASE("Choosing As Shot forgets the values", "[WhiteBalanceChoice]") {
-    CHECK(withChoice(custom(4000.0F, 3.0F), WhiteBalanceChoice::AsShot) == ColorSettings{});
-}
-
-TEST_CASE("The Custom entry changes nothing", "[WhiteBalanceChoice]") {
-    const ColorSettings settings = custom(4000.0F, std::nullopt);
-    CHECK(withChoice(settings, WhiteBalanceChoice::Custom) == settings);
-    CHECK(withChoice({}, WhiteBalanceChoice::Custom) == ColorSettings{});
+TEST_CASE("As Shot and Custom name no light", "[WhiteBalanceChoice]") {
+    CHECK(!lightOf(WhiteBalanceChoice::AsShot).has_value());
+    CHECK(!lightOf(WhiteBalanceChoice::Custom).has_value());
 }
 
 TEST_CASE("The combo describes the settings", "[WhiteBalanceChoice]") {
@@ -64,37 +59,12 @@ TEST_CASE("The combo describes the settings", "[WhiteBalanceChoice]") {
 TEST_CASE("Every preset reads back as itself", "[WhiteBalanceChoice]") {
     for (const WhiteBalancePreset& preset : whiteBalancePresets()) {
         CAPTURE(preset.name);
-        const WhiteBalanceChoice back = choiceOf(withChoice({}, preset.choice));
+        const ColourTemperature light = preset.light;
+        const WhiteBalanceChoice back = choiceOf(custom(light.kelvin, light.tint));
         // Flash shares Daylight's temperature but not its tint, so every one is unique.
         CHECK(back == preset.choice);
         CHECK(!nameOf(preset.choice).isEmpty());
     }
-}
-
-TEST_CASE("Moving Temp leaves Tint where it was", "[WhiteBalanceChoice]") {
-    SECTION("from As Shot, tint stays the camera's") {
-        CHECK(withTemperature({}, 4200.0F) == custom(4200.0F, std::nullopt));
-    }
-    SECTION("from As Shot with stale values, they are ignored") {
-        CHECK(withTemperature({WhiteBalanceMode::AsShot, 3000.0F, 9.0F}, 4200.0F) ==
-              custom(4200.0F, std::nullopt));
-    }
-    SECTION("from Custom, a set tint stays") {
-        CHECK(withTemperature(custom(5000.0F, 7.0F), 4200.0F) == custom(4200.0F, 7.0F));
-    }
-}
-
-TEST_CASE("Moving Tint leaves Temp where it was", "[WhiteBalanceChoice]") {
-    CHECK(withTint({}, 12.0F) == custom(std::nullopt, 12.0F));
-    CHECK(withTint(custom(5000.0F, std::nullopt), 12.0F) == custom(5000.0F, 12.0F));
-}
-
-TEST_CASE("Resetting a row clears its value, and both cleared is As Shot", "[WhiteBalanceChoice]") {
-    CHECK(withTemperature(custom(5000.0F, 7.0F), std::nullopt) == custom(std::nullopt, 7.0F));
-    CHECK(withTint(custom(5000.0F, 7.0F), std::nullopt) == custom(5000.0F, std::nullopt));
-    CHECK(withTemperature(custom(5000.0F, std::nullopt), std::nullopt) == ColorSettings{});
-    CHECK(withTint(custom(std::nullopt, 7.0F), std::nullopt) == ColorSettings{});
-    CHECK(withTemperature(ColorSettings{}, std::nullopt) == ColorSettings{});
 }
 
 TEST_CASE("The rows show the camera's reading for whatever is absent", "[WhiteBalanceChoice]") {

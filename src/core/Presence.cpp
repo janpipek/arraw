@@ -273,6 +273,14 @@ float upsampled(const PresenceGrid& grid, const GridTap& across, const GridTap& 
     return top + down.fraction * (bottom - top);
 }
 
+/// @brief Gives one of the grids that share the coarse cells' size, to take their taps from.
+const PresenceGrid& sharedCoarse(const PresenceContext& context) {
+    if (!context.coarse.cells.empty()) {
+        return context.coarse;
+    }
+    return context.hazeFloor.cells.empty() ? context.hazeMean : context.hazeFloor;
+}
+
 /// @brief Weight of Clarity at a perceptual luminance: full in the midtones, none at the ends.
 float midtoneWeight(float value) {
     return smoothstep(0.0F, 0.8F, 1.0F - std::abs(2.0F * value - 1.0F));
@@ -281,7 +289,8 @@ float midtoneWeight(float value) {
 } // namespace
 
 PresencePlan arraw::presencePlanFor(const PresenceSettings& settings, const ColorEncoding& encoding,
-                                    double pixelScale, ImageSize sourceSize) {
+                                    double pixelScale, ImageSize sourceSize,
+                                    const PresenceReach& reach) {
     if (!std::isfinite(pixelScale) || !(pixelScale > 0.0)) {
         throw std::invalid_argument("A source's pixel scale must be finite and above zero");
     }
@@ -291,18 +300,31 @@ PresencePlan arraw::presencePlanFor(const PresenceSettings& settings, const Colo
         clampedSetting(settings.clarity, weakestPresence, strongestPresence, "clarity");
     const float dehaze =
         clampedSetting(settings.dehaze, weakestPresence, strongestPresence, "dehaze");
+    // The amounts a pixel's effective amount can take: the global one, moved by what the
+    // masks can add either way, clamped as the sum is (ADR 044, section 5).
+    const auto lowest = [](float global, const PresenceSum& sum) {
+        return std::clamp(global + sum.negative, weakestPresence, strongestPresence);
+    };
+    const auto highest = [](float global, const PresenceSum& sum) {
+        return std::clamp(global + sum.positive, weakestPresence, strongestPresence);
+    };
+    const bool needsFine =
+        lowest(texture, reach.texture) != 0.0F || highest(texture, reach.texture) != 0.0F;
+    const bool needsCoarse =
+        lowest(clarity, reach.clarity) != 0.0F || highest(clarity, reach.clarity) != 0.0F;
+    const bool needsFloor = highest(dehaze, reach.dehaze) > 0.0F;
+    const bool needsMean = lowest(dehaze, reach.dehaze) < 0.0F;
     PresencePlan plan;
-    if (texture == 0.0F && clarity == 0.0F && dehaze == 0.0F) {
+    if (!needsFine && !needsCoarse && !needsFloor && !needsMean) {
         return plan;
     }
-    plan.texture = texture / strongestPresence;
-    plan.clarity = clarity / strongestPresence;
-    plan.dehaze = dehaze / strongestPresence;
+    plan.amounts = {presenceAmountFor(texture), presenceAmountFor(clarity),
+                    presenceAmountFor(dehaze)};
     plan.lumaRow = asShotLuminanceRow(encoding);
-    if (plan.texture != 0.0F) {
+    if (needsFine) {
         plan.fine = baseFor(textureSigmaSensorPixels, textureCellSensorPixels, pixelScale);
     }
-    if (plan.clarity != 0.0F || plan.dehaze != 0.0F) {
+    if (needsCoarse || needsFloor || needsMean) {
         // The long edge in sensor pixels, so a reduced copy of a source resolves
         // the same sigma and cell in sensor pixels as the source itself.
         const double longEdge =
@@ -311,20 +333,20 @@ PresencePlan arraw::presencePlanFor(const PresenceSettings& settings, const Colo
         const double cell = std::max(1.0, std::floor(sigma / clarityCellsPerSigma));
         const std::uint32_t cellSensor = std::bit_floor(
             static_cast<std::uint32_t>(std::min(cell, static_cast<double>(1U << 16))));
-        if (plan.clarity != 0.0F) {
+        if (needsCoarse) {
             plan.coarse = baseFor(static_cast<float>(sigma), cellSensor, pixelScale);
         }
-        if (plan.dehaze != 0.0F) {
-            // The same cells, so that the two share one reduction.
-            const float sigmaFraction =
-                plan.dehaze > 0.0F ? hazeFloorSigmaFraction : hazeMeanSigmaFraction;
-            plan.haze =
-                baseFor(static_cast<float>(sigmaFraction * longEdge), cellSensor, pixelScale);
-            if (plan.dehaze > 0.0F) {
-                plan.haze.window = windowFor(static_cast<float>(hazeWindowFraction * longEdge),
-                                             pixelScale, plan.haze.reduction);
-                plan.haze.reconstruction = hazeReconstructionSteps;
-            }
+        // The same cells, so that the three share one reduction.
+        if (needsFloor) {
+            plan.hazeFloor = baseFor(static_cast<float>(hazeFloorSigmaFraction * longEdge),
+                                     cellSensor, pixelScale);
+            plan.hazeFloor.window = windowFor(static_cast<float>(hazeWindowFraction * longEdge),
+                                              pixelScale, plan.hazeFloor.reduction);
+            plan.hazeFloor.reconstruction = hazeReconstructionSteps;
+        }
+        if (needsMean) {
+            plan.hazeMean = baseFor(static_cast<float>(hazeMeanSigmaFraction * longEdge),
+                                    cellSensor, pixelScale);
         }
     }
     return plan;
@@ -332,7 +354,7 @@ PresencePlan arraw::presencePlanFor(const PresenceSettings& settings, const Colo
 
 std::uint32_t arraw::presenceReach(const PresencePlan& plan) {
     std::uint32_t reach = 0;
-    for (const PresenceBase* base : {&plan.fine, &plan.coarse, &plan.haze}) {
+    for (const PresenceBase* base : {&plan.fine, &plan.coarse, &plan.hazeFloor, &plan.hazeMean}) {
         if (base->active()) {
             // The opening's minimum and maximum, a window each (the octagon's
             // axis inradius, its widest reach along a row or a column), then
@@ -385,10 +407,13 @@ std::vector<double> arraw::presenceLoopWeights(const PresencePlan& plan, ImageSi
         weights.push_back(reduce);
         appendBaseLoops(weights, plan.fine, size);
     }
-    if (plan.coarse.active() || plan.haze.active()) {
+    if (plan.coarse.active() || plan.hazeActive()) {
         weights.push_back(reduce);
-        if (plan.haze.active()) {
-            appendBaseLoops(weights, plan.haze, size);
+        if (plan.hazeFloor.active()) {
+            appendBaseLoops(weights, plan.hazeFloor, size);
+        }
+        if (plan.hazeMean.active()) {
+            appendBaseLoops(weights, plan.hazeMean, size);
         }
         if (plan.coarse.active()) {
             appendBaseLoops(weights, plan.coarse, size);
@@ -406,17 +431,20 @@ PresenceContext arraw::presenceContextOf(const ImageBuffer& input, const Presenc
     if (plan.fine.active()) {
         context.fine = baseOf(cellsOf(input, plan.lumaRow, plan.fine.reduction), plan.fine);
     }
-    if (plan.coarse.active() || plan.haze.active()) {
-        // One reduction for both: the plan gives them the same cell.
+    if (plan.coarse.active() || plan.hazeActive()) {
+        // One reduction for all: the plan gives them the same cell.
         PresenceGrid cells = cellsOf(input, plan.lumaRow, plan.coarseReduction());
-        if (plan.haze.active()) {
-            context.haze = baseOf(cells, plan.haze);
+        if (plan.hazeFloor.active()) {
+            context.hazeFloor = baseOf(cells, plan.hazeFloor);
+        }
+        if (plan.hazeMean.active()) {
+            context.hazeMean = baseOf(cells, plan.hazeMean);
         }
         if (plan.coarse.active()) {
             context.coarse = baseOf(cells, plan.coarse);
         }
         // Clarity's band and positive Dehaze's share both read the cells unblurred.
-        if (plan.coarse.active() || plan.haze.window != 0) {
+        if (plan.coarse.active() || plan.hazeFloor.active()) {
             context.coarseCells = std::move(cells);
         }
     }
@@ -436,14 +464,14 @@ PresenceSampler::PresenceSampler(const PresenceContext& context, ImageSize size)
     };
     columns(context.fine, fineColumns_);
     // Clarity's grids and Dehaze's share the coarse cells, and so their taps.
-    columns(context.coarse.cells.empty() ? context.haze : context.coarse, coarseColumns_);
+    columns(sharedCoarse(context), coarseColumns_);
 }
 
 void PresenceSampler::setRow(std::uint32_t y) {
     if (!context_.fine.cells.empty()) {
         fineRow_ = gridTap(y, context_.fine.reduction, context_.fine.height);
     }
-    const PresenceGrid& coarse = context_.coarse.cells.empty() ? context_.haze : context_.coarse;
+    const PresenceGrid& coarse = sharedCoarse(context_);
     if (!coarse.cells.empty()) {
         coarseRow_ = gridTap(y, coarse.reduction, coarse.height);
     }
@@ -460,14 +488,17 @@ PixelContext PresenceSampler::at(std::uint32_t x) const {
     if (!context_.coarseCells.cells.empty()) {
         pixel.coarseCell = upsampled(context_.coarseCells, coarseColumns_[x], coarseRow_);
     }
-    if (!context_.haze.cells.empty()) {
-        pixel.hazeBase = upsampled(context_.haze, coarseColumns_[x], coarseRow_);
+    if (!context_.hazeFloor.cells.empty()) {
+        pixel.hazeFloor = upsampled(context_.hazeFloor, coarseColumns_[x], coarseRow_);
+    }
+    if (!context_.hazeMean.cells.empty()) {
+        pixel.hazeMean = upsampled(context_.hazeMean, coarseColumns_[x], coarseRow_);
     }
     return pixel;
 }
 
-Colour arraw::applyPresence(const PresencePlan& plan, Colour colour, float logLuminance,
-                            const PixelContext& context) {
+Colour arraw::applyPresence(const PresencePlan& plan, const PresenceAmounts& amounts, Colour colour,
+                            float logLuminance, const PixelContext& context) {
     if (!plan.active()) {
         return colour;
     }
@@ -479,20 +510,27 @@ Colour arraw::applyPresence(const PresencePlan& plan, Colour colour, float logLu
         return colour;
     }
 
+    // A control acts where its base exists and its amount at the pixel is not zero; a base that
+    // does not exist is never read, whatever the pixel's amount rounded to (ADR 044, section 5).
     float stops = 0.0F;
-    if (plan.fine.active()) {
-        stops += plan.texture * softLimit(logLuminance - context.fineBase, textureLimitStops);
+    if (plan.fine.active() && amounts.texture != 0.0F) {
+        stops += amounts.texture * softLimit(logLuminance - context.fineBase, textureLimitStops);
     }
-    if (plan.coarse.active()) {
+    if (plan.coarse.active() && amounts.clarity != 0.0F) {
         // Clarity's band: the unblurred coarse grid against its blur, so the
         // detail finer than a cell, Texture's and the noise, stays out of it.
         const float limited = softLimit(context.coarseCell - context.coarseBase, clarityLimitStops);
         const float perceptual = toPerceptual(std::clamp(luminance, 0.0F, 1.0F));
-        stops += plan.clarity * midtoneWeight(perceptual) * limited;
+        stops += amounts.clarity * midtoneWeight(perceptual) * limited;
     }
     const float gain = std::exp2(stops);
     colour = {colour[0] * gain, colour[1] * gain, colour[2] * gain};
-    if (!plan.haze.active()) {
+
+    // Each pixel selects by the sign of its Dehaze: positive reads the floor, negative the mean,
+    // and exactly zero reads neither.
+    const bool floorOn = amounts.dehaze > 0.0F && plan.hazeFloor.active();
+    const bool meanOn = amounts.dehaze < 0.0F && plan.hazeMean.active();
+    if (!floorOn && !meanOn) {
         return colour;
     }
 
@@ -500,26 +538,26 @@ Colour arraw::applyPresence(const PresencePlan& plan, Colour colour, float logLu
     const float toned = luminance * gain;
     const float open = 1.0F - smoothstep(0.75F, 1.25F, toned);
     float hazy = 0.0F;
-    if (plan.dehaze > 0.0F) {
+    if (floorOn) {
         // The floor's share of the cell around the pixel: one at or below the
         // floor, less above it. Scaling by 1 - k * share subtracts k times the
         // floor from a cell above it, raising contrast at every scale above a
         // cell, and leaves one at it 1 - k of itself, never crossing black.
         // Measured against the smooth cell rather than the pixel, so detail
         // finer than a cell, and noise, is scaled smoothly, not expanded.
-        hazy = std::exp2(std::min(context.hazeBase - context.coarseCell, 0.0F)) * open;
-        const float keep = 1.0F - plan.dehaze * dehazeStrength * hazy;
+        hazy = std::exp2(std::min(context.hazeFloor - context.coarseCell, 0.0F)) * open;
+        const float keep = 1.0F - amounts.dehaze * dehazeStrength * hazy;
         colour = {colour[0] * keep, colour[1] * keep, colour[2] * keep};
     } else {
         // The surroundings' mean in the colour's own scale.
         const float mean =
-            toned * std::exp2(std::min(context.hazeBase - logLuminance, dehazeMeanLimitStops));
+            toned * std::exp2(std::min(context.hazeMean - logLuminance, dehazeMeanLimitStops));
         // Nothing for what is nearly white, nor so for an infinite pixel,
         // whose mean is infinite too.
-        const float veil = open > 0.0F ? -plan.dehaze * dehazeVeil * open * mean : 0.0F;
+        const float veil = open > 0.0F ? -amounts.dehaze * dehazeVeil * open * mean : 0.0F;
         hazy = veil > 0.0F ? veil / (toned + veil) : 0.0F;
         colour = {colour[0] + veil, colour[1] + veil, colour[2] + veil};
     }
-    const float chroma = plan.dehaze * dehazeChroma * hazy;
+    const float chroma = amounts.dehaze * dehazeChroma * hazy;
     return chroma == 0.0F ? colour : applySaturation(colour, chroma);
 }

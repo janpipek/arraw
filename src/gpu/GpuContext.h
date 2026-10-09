@@ -162,7 +162,7 @@ enum class GpuPass {
     /// @brief The pointwise chain; uniforms are a ::arraw::GpuPointwiseBlock.
     ///
     /// Inputs are the image, the curves, and the Presence context's fine base,
-    /// coarse base, coarse cells and haze base (bindings 0 and 2 to 6); the
+    /// coarse base, coarse cells, haze floor and haze mean (bindings 0 and 2 to 7); the
     /// image stands in for any the block says are not read.
     Pointwise,
     Geometry, ///< The geometry resample; uniforms are a ::arraw::GpuGeometryBlock.

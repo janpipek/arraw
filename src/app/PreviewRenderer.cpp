@@ -6,6 +6,7 @@
 #include "GpuDevelop.h"
 #include "TimingTrace.h"
 
+#include <CheckpointLadder.h>
 #include <CurveHistogram.h>
 #include <Develop.h>
 #include <ImagePyramid.h>
@@ -26,137 +27,6 @@
 namespace arraw::app {
 
 namespace {
-
-/// @brief The last denoise, pointwise, geometry and resize results of one level of one source.
-///
-/// Whether a checkpoint still applies to a request is the engine's to say; what
-/// the plan cannot tell is that the pixels underneath changed to others of the
-/// same size and encoding, so the cache is bound to the level's buffer and
-/// dropped when that is another one. Used on the worker only, which is also
-/// where resident checkpoints must be released.
-class CheckpointCache {
-public:
-    /// @brief Binds the cache to a level, dropping the checkpoints of any other.
-    /// @param level Buffer the next renders develop from; kept alive, so that its
-    /// address identifies it.
-    void bind(const std::shared_ptr<const ImageBuffer>& level) {
-        if (level != level_) {
-            clear();
-            level_ = level;
-        }
-    }
-
-    /// @brief Drops every checkpoint and the binding.
-    void clear() noexcept {
-        denoised_.reset();
-        pointwise_.reset();
-        geometry_.reset();
-        resized_.reset();
-        level_.reset();
-    }
-
-    /// @brief Renders a request from the best checkpoint there is, refreshing the cache.
-    ///
-    /// Tries the resize checkpoint, then the geometry one, then the pointwise
-    /// one, then the denoise one, then the level itself, and carries on to the
-    /// effects through each boundary it passes so the next request can reuse
-    /// them. A checkpoint the engine says no longer applies
-    /// (::arraw::canResumeFrom) is dropped: it is stale, and the render goes on
-    /// from an earlier one. A bad request is not staleness: it throws, as the
-    /// render would, and drops nothing. A render that fails leaves only
-    /// checkpoints that are whole. With every effect off the effects boundary
-    /// is the resize's pixels, so keeping the resize checkpoint costs nothing
-    /// on the GPU and one viewport-sized buffer on the CPU. With noise
-    /// reduction off the denoise boundary is the level itself, which a
-    /// checkpoint would only copy (a level-sized float buffer on the CPU), so
-    /// none is kept and the level is developed from as before the stage
-    /// existed (ADR 039).
-    /// @tparam Develop Callable `(Stage) -> RenderCheckpoint`, developing the level.
-    /// @tparam Resume Callable `(const RenderCheckpoint&, Stage) -> RenderCheckpoint`.
-    /// @tparam CanResume Callable `(const RenderCheckpoint&, Stage) -> bool`, asking
-    /// ::arraw::canResumeFrom with the same arguments as @p resume.
-    /// @param denoising Whether the state reduces noise (::arraw::reducesNoise).
-    /// @param resumedFrom Set to the boundary resumed from, or reset.
-    /// @return The checkpoint at the effects.
-    template <typename Develop, typename Resume, typename CanResume>
-    [[nodiscard]] RenderCheckpoint render(Develop&& develop, Resume&& resume, CanResume&& canResume,
-                                          bool denoising, std::optional<Stage>& resumedFrom) {
-        resumedFrom.reset();
-        if (!denoising) {
-            denoised_.reset();
-        }
-        // Each checkpoint is checked after the later one made from it: one
-        // that does not match now is useless to keep.
-        if (resized_) {
-            if (auto done = tryResume(resume, canResume, *resized_, Stage::Effects)) {
-                resumedFrom = Stage::Resize;
-                return std::move(*done);
-            }
-            resized_.reset();
-        }
-        if (geometry_) {
-            if (auto done = tryResume(resume, canResume, *geometry_, Stage::Resize)) {
-                resumedFrom = Stage::Geometry;
-                resized_ = std::move(*done);
-                return resume(*resized_, Stage::Effects);
-            }
-            geometry_.reset();
-        }
-        if (pointwise_) {
-            if (auto done = tryResume(resume, canResume, *pointwise_, Stage::Geometry)) {
-                resumedFrom = Stage::Pointwise;
-                geometry_ = std::move(*done);
-                resized_ = resume(*geometry_, Stage::Resize);
-                return resume(*resized_, Stage::Effects);
-            }
-            pointwise_.reset();
-        }
-        if (denoised_) {
-            if (auto done = tryResume(resume, canResume, *denoised_, Stage::Pointwise)) {
-                resumedFrom = Stage::Denoise;
-                pointwise_ = std::move(*done);
-                geometry_ = resume(*pointwise_, Stage::Geometry);
-                resized_ = resume(*geometry_, Stage::Resize);
-                return resume(*resized_, Stage::Effects);
-            }
-            denoised_.reset();
-        }
-        if (denoising) {
-            denoised_ = develop(Stage::Denoise);
-            pointwise_ = resume(*denoised_, Stage::Pointwise);
-        } else {
-            pointwise_ = develop(Stage::Pointwise);
-        }
-        geometry_ = resume(*pointwise_, Stage::Geometry);
-        resized_ = resume(*geometry_, Stage::Resize);
-        return resume(*resized_, Stage::Effects);
-    }
-
-private:
-    /// @brief Resumes, or says the checkpoint does not apply.
-    ///
-    /// Asks the engine first, so that only a stale checkpoint is passed over;
-    /// anything the resume itself throws, a bad request included, propagates.
-    template <typename Resume, typename CanResume>
-    static std::optional<RenderCheckpoint>
-    tryResume(Resume& resume, CanResume& canResume, const RenderCheckpoint& from, Stage stopAfter) {
-        if (!canResume(from, stopAfter)) {
-            return std::nullopt;
-        }
-        return resume(from, stopAfter);
-    }
-
-    /// Level the checkpoints were made from.
-    std::shared_ptr<const ImageBuffer> level_;
-    /// Result after noise reduction, at the level's size and in its encoding.
-    std::optional<RenderCheckpoint> denoised_;
-    /// Result after the pointwise chain, at the level's size.
-    std::optional<RenderCheckpoint> pointwise_;
-    /// Result after the geometry, before any resize.
-    std::optional<RenderCheckpoint> geometry_;
-    /// Result after the resize, before the effects.
-    std::optional<RenderCheckpoint> resized_;
-};
 
 /// @brief Idle time after a region render before the fallback beneath it is refreshed.
 ///
@@ -241,21 +111,13 @@ public:
                                      const std::shared_ptr<const ImageBuffer>& image,
                                      const DevelopState& state, const RenderRequest& request,
                                      std::optional<Stage>& resumedFrom, ProgressChannel* progress) {
+        resumedFrom.reset();
         const DeviceImage& uploaded = uploadedLevel(level, *image);
-        CheckpointCache& checkpoints =
-            layer == Layer::Background ? backgroundCheckpoints_ : checkpoints_;
-        checkpoints.bind(image);
-        const RenderCheckpoint checkpoint = checkpoints.render(
-            [&](Stage stop) {
-                return developOnGpu(*context_, *image, uploaded, state, stop, request, progress);
-            },
-            [&](const RenderCheckpoint& from, Stage stop) {
-                return developOnGpu(*context_, from, *image, state, stop, request, progress);
-            },
-            [&](const RenderCheckpoint& from, Stage stop) {
-                return canResumeFrom(from, *image, state, stop, request);
-            },
-            reducesNoise(state.settings.noiseReduction), resumedFrom);
+        CheckpointLadder& ladder = layer == Layer::Background ? backgroundLadder_ : ladder_;
+        LadderRender rendered =
+            resumeOrDevelopOnGpu(*context_, ladder, image, uploaded, state, request, progress);
+        resumedFrom = rendered.resumedFrom;
+        const RenderCheckpoint& checkpoint = rendered.checkpoint;
         return checkpoint.readBack();
     }
 
@@ -323,8 +185,8 @@ private:
 
     /// @brief Drops the checkpoints of both layers.
     void clearCheckpoints() noexcept {
-        checkpoints_.clear();
-        backgroundCheckpoints_.clear();
+        ladder_.clear();
+        backgroundLadder_.clear();
     }
 
     /// @brief Drops the device once it has failed for good; the CPU takes over.
@@ -346,9 +208,9 @@ private:
     /// Pyramid levels on the device, by level; a level not yet needed is empty.
     std::vector<DeviceImage> uploaded_;
     /// Last denoise, pointwise, geometry and resize results of the level shown, resident here.
-    CheckpointCache checkpoints_;
+    CheckpointLadder ladder_;
     /// The same for the background, whose coarser level would evict the shown one's.
-    CheckpointCache backgroundCheckpoints_;
+    CheckpointLadder backgroundLadder_;
     /// Photograph the levels belong to, or whose upload failed; kept alive so
     /// that its address identifies it.
     std::shared_ptr<const ImageBuffer> source_;
@@ -430,7 +292,7 @@ private:
 std::optional<PreviewResult> render(std::uint64_t id, const DevelopState& state,
                                     const PreviewView& view,
                                     const std::shared_ptr<const ImageBuffer>& source,
-                                    SourcePyramid& pyramid, CheckpointCache& cpuCache,
+                                    SourcePyramid& pyramid, CheckpointLadder& cpuLadder,
                                     GpuPreview* gpu, Layer layer, ProgressChannel* progress) {
     const detail::TimingSpan timing("preview.render", id);
     PreviewResult result{.request = id,
@@ -450,7 +312,7 @@ std::optional<PreviewResult> render(std::uint64_t id, const DevelopState& state,
     try {
         pyramid.reset(source);
         if (!source) {
-            cpuCache.clear();
+            cpuLadder.clear();
             result.error = "No photograph to render";
             if (gpu != nullptr) {
                 gpu->forget();
@@ -517,17 +379,9 @@ std::optional<PreviewResult> render(std::uint64_t id, const DevelopState& state,
         // The CPU renders: no GPU was wanted, or it could not. It runs before
         // the GPU is given up for this photograph, since if it fails too the
         // request was at fault and the GPU is not.
-        cpuCache.bind(reduced);
-        const RenderCheckpoint developed = cpuCache.render(
-            [&](Stage stop) { return developUntil(*reduced, state, stop, request, progress); },
-            [&](const RenderCheckpoint& from, Stage stop) {
-                return resumeFrom(from, *reduced, state, stop, request, progress);
-            },
-            [&](const RenderCheckpoint& from, Stage stop) {
-                return canResumeFrom(from, *reduced, state, stop, request);
-            },
-            reducesNoise(state.settings.noiseReduction), result.resumedFrom);
-        QImage image = toDisplayImage(developed.readBack());
+        LadderRender developed = resumeOrDevelop(cpuLadder, reduced, state, request, progress);
+        result.resumedFrom = developed.resumedFrom;
+        QImage image = toDisplayImage(developed.checkpoint.readBack());
         image.setDevicePixelRatio(view.devicePixelRatio);
         result.image = std::move(image);
         timing.note("CPU");
@@ -752,13 +606,13 @@ void PreviewRenderer::run(std::stop_token stop) {
     }
     // Host memory only: the GPU's copies of the levels are its own.
     SourcePyramid pyramid;
-    // Host checkpoints of the CPU path, for the level it last rendered.
-    CheckpointCache cpuCache;
-    // Whole-frame fallback beneath region renders, with its own CPU cache so it
-    // never evicts the detailed checkpoints (GpuPreview keeps a second one too).
+    // Host rungs of the CPU path, for the level it last rendered.
+    CheckpointLadder cpuLadder;
+    // Whole-frame fallback beneath region renders, with its own CPU ladder so it
+    // never evicts the detailed rungs (GpuPreview keeps a second one too).
     // Kept across edits that leave the geometry alone, as it still lines up;
     // backgroundState is what it was rendered for.
-    CheckpointCache backgroundCache;
+    CheckpointLadder backgroundLadder;
     std::shared_ptr<const ImageBuffer> backgroundSource;
     std::optional<DevelopState> backgroundState;
     std::optional<QImage> background;
@@ -806,8 +660,8 @@ void PreviewRenderer::run(std::stop_token stop) {
             // Everything kept for the previous source goes, so that its memory is free
             // while the next photograph decodes.
             pyramid.reset(nullptr);
-            cpuCache.clear();
-            backgroundCache.clear();
+            cpuLadder.clear();
+            backgroundLadder.clear();
             backgroundSource.reset();
             backgroundState.reset();
             background.reset();
@@ -841,7 +695,7 @@ void PreviewRenderer::run(std::stop_token stop) {
                 const std::shared_ptr<ProgressChannel> channel =
                     startChannel(thinned(onProgress_, job->id), source);
                 std::optional<PreviewResult> rendered =
-                    render(job->id, job->state, job->view, source, pyramid, cpuCache,
+                    render(job->id, job->state, job->view, source, pyramid, cpuLadder,
                            gpu ? &*gpu : nullptr, Layer::Shown, channel.get());
                 endChannel();
                 if (!rendered) {
@@ -886,7 +740,7 @@ void PreviewRenderer::run(std::stop_token stop) {
             const std::shared_ptr<ProgressChannel> channel = startChannel({}, source);
             std::optional<PreviewResult> reduced = render(
                 job->id, job->state, PreviewView::wholeFrame(backgroundSize), source, pyramid,
-                backgroundCache, gpu ? &*gpu : nullptr, Layer::Background, channel.get());
+                backgroundLadder, gpu ? &*gpu : nullptr, Layer::Background, channel.get());
             endChannel();
             if (!reduced) {
                 // Cancelled by a newer request: refreshed after that one instead.

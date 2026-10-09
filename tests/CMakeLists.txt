@@ -19,15 +19,23 @@ add_executable(arraw-tests
         support/TestImages.cpp
         test_AppSettings.cpp
         test_Cli.cpp
+        test_CheckpointLadder.cpp
+        test_CopySections.cpp
         test_ColorEncoding.cpp
         test_CropEditing.cpp
+        test_CropGeometry.cpp
         test_CurveEditing.cpp
         test_CurveHistogramRefresh.cpp
         test_Develop.cpp
+        test_DevelopedFrame.cpp
         test_ToneCurve.cpp
         test_DevelopState.cpp
         test_DisplayImage.cpp
         test_EditSession.cpp
+        test_Edits.cpp
+        test_LocalAdjustments.cpp
+        test_LocalAdjustmentsJson.cpp
+        test_LocalAdjustmentsSidecar.cpp
         test_EmbeddedPreview.cpp
         test_ExifInfo.cpp
         test_ExportMetadata.cpp
@@ -40,11 +48,15 @@ add_executable(arraw-tests
         test_ColorGrading.cpp
         test_Denoise.cpp
         test_Presence.cpp
+        test_LocalPlan.cpp
         test_Effects.cpp
         test_Grain.cpp
         test_GpuContext.cpp
         test_GpuDevice.cpp
         test_GpuPlan.cpp
+        test_HistoryModel.cpp
+        test_MaskEditing.cpp
+        test_MasksModel.cpp
         test_ImageBuffer.cpp
         test_ImageExport.cpp
         test_ImagePyramid.cpp
@@ -53,6 +65,7 @@ add_executable(arraw-tests
         test_PreviewRenderer.cpp
         test_RenderActivity.cpp
         test_RenderDelay.cpp
+        test_RenderDigest.cpp
         test_ProcessingPlan.cpp
         test_Progress.cpp
         test_Region.cpp
@@ -106,12 +119,18 @@ arraw_deploy_qt_plugins(arraw-tests)
 # Widget behavior runs separately because the core suite owns a QCoreApplication.
 add_executable(arraw-widget-tests
         test_SettingsDialog.cpp
+        test_CopySettingsDialog.cpp
         test_CropOverlay.cpp
         test_CurveEditor.cpp
         test_DevelopPanel.cpp
+        test_MainWindowHistory.cpp
+        test_MainWindowCopy.cpp
         test_MainWindowCrop.cpp
+        test_MainWindowMasks.cpp
         test_MainWindowOpening.cpp
-        test_RenderProgressBar.cpp
+        test_MaskOverlay.cpp
+        test_MasksPanel.cpp
+        test_RenderProgressPie.cpp
         test_SettingSlider.cpp)
 arraw_enable_warnings(arraw-widget-tests)
 # Qt Test for key clicks that go through the window's shortcuts, as a user's do.
@@ -168,9 +187,12 @@ add_executable(arraw-gpu-tests
         gpu/GpuTesting.h
         gpu/test_GpuAdapters.cpp
         gpu/test_GpuDenoise.cpp
+        gpu/test_GpuLocalAdjustments.cpp
         gpu/test_GpuPresence.cpp
         gpu/test_GpuProgress.cpp
+        gpu/test_GpuRenderDigest.cpp
         gpu/test_GpuDevelop.cpp
+        gpu/test_GpuLadder.cpp
         gpu/test_GpuEffects.cpp
         gpu/test_GpuExport.cpp
         gpu/test_GpuPasses.cpp

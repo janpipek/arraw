@@ -237,6 +237,8 @@ wherever the focus is in the window:
   pressing Enter ends the typing, not the mode.
 - R was the red label's key. All five labels move to Shift with the colour's
   initial (Shift+R, Y, G, B, P), alike, rather than red alone.
+  *Amended 2026-10-07 (user):* the crop mode moves to C, as `main` planned,
+  and the labels go back to the plain initials (R, Y, G, B, P).
 - Left and Right keep stepping between photographs: the crop is committed,
   as in Lightroom, and the next photograph opens outside the mode.
 
@@ -291,6 +293,14 @@ repeated and only comparisons made in one process are trusted.
 **A failed geometry change leaves the mode.** If handing a geometry to the
 session throws, `MainWindow::guarded` closes the overlay before it cancels the
 session's edit, so what the user sees is never ahead of the session.
+
+> **Note (2026-10-07).** `CropEditing` keeps only the gesture (handles, resize,
+> the gesture's starting geometry for the image move), the run of rotations
+> and the nested step history; every other rule is a call into
+> `include/CropGeometry.h` (see ADR 014). `CropEditing.cpp` no longer sees the
+> engine-private `GeometryPlan.h`, which supersedes "They are engine-private:
+> `CropEditing.cpp` sees `src/core`" above. `CropPoint`, `CropBox` and
+> `displayedStraighten` moved to namespace `arraw`.
 
 ## Consequences
 

@@ -145,10 +145,9 @@ sidecar's own name appears in the message where it matters.
   more: Dehaze (ADR 041) touched about eleven production files, among them the
   plan, the CPU and GPU develop paths, a shader, the panel and its
   presentation. "Two edits" counts the storage, not the feature.
-- **Moving a crop with a rotation or flip (ADR 014) is not implemented.** The
-  command line resets an explicit crop to automatic framing, with
-  `CropReset`, when its flags change the frame the crop was drawn in. The
-  geometry editor will carry it properly.
+- **Moving a crop with a rotation or flip (ADR 014)** is done by core's setters
+  (`Edits.h`), which the command line's flags go through: an explicit crop is
+  carried with the content, and the former `CropReset` warning is gone.
 - **Clamping on read is safe only while Lightroom does not read these files.**
   That is ADR 008's revisit condition, and it now applies to `crs:` interop.
 

@@ -18,10 +18,14 @@
 // clang-format on
 
 #include <DevelopSettings.h>
+#include <DevelopState.h>
 #include <Diagnostics.h>
+#include <LocalAdjustments.h>
+#include <SettingDescriptors.h>
 #include <ShortestDecimal.h>
 #include <ToneCurveSettings.h>
 
+#include <cstdint>
 #include <optional>
 #include <set>
 #include <string>
@@ -74,6 +78,77 @@ template <> struct nanobind::detail::type_caster<arraw::CurvePoint> {
     }
 };
 
+/// @brief Caster of a position in the corrected frame to and from a Python `(u, v)` tuple.
+///
+/// As for a curve point: floats go out as the doubles of their shortest decimal spelling, and
+/// reading takes any two-item sequence of numbers except text and bytes (a bool is no number).
+template <> struct nanobind::detail::type_caster<arraw::CorrectedPoint> {
+    NB_TYPE_CASTER(arraw::CorrectedPoint, const_name("tuple[float, float]"))
+
+    /// @brief Reads a two-item sequence of numbers.
+    bool from_python(nanobind::handle source, uint8_t, cleanup_list*) noexcept {
+        PyObject* object = source.ptr();
+        if (PyUnicode_Check(object) || PyBytes_Check(object) || PyByteArray_Check(object) ||
+            PySequence_Check(object) == 0 || PySequence_Size(object) != 2) {
+            PyErr_Clear();
+            return false;
+        }
+        double coordinates[2]{};
+        for (Py_ssize_t index = 0; index < 2; ++index) {
+            PyObject* item = PySequence_GetItem(object, index);
+            const bool number = item != nullptr && PyBool_Check(item) == 0;
+            coordinates[index] = number ? PyFloat_AsDouble(item) : 0.0;
+            const bool failed = !number || PyErr_Occurred() != nullptr;
+            Py_XDECREF(item);
+            if (failed) {
+                PyErr_Clear();
+                return false;
+            }
+        }
+        value = arraw::CorrectedPoint{arraw::shortestFloat(coordinates[0]),
+                                      arraw::shortestFloat(coordinates[1])};
+        return true;
+    }
+
+    /// @brief Makes a `(u, v)` tuple.
+    static handle from_cpp(const arraw::CorrectedPoint& point, rv_policy, cleanup_list*) noexcept {
+        PyObject* tuple = PyTuple_New(2);
+        PyTuple_SET_ITEM(tuple, 0, PyFloat_FromDouble(arraw::shortestDouble(point.u)));
+        PyTuple_SET_ITEM(tuple, 1, PyFloat_FromDouble(arraw::shortestDouble(point.v)));
+        return tuple;
+    }
+};
+
+/// @brief Caster of a local adjustment's id to and from a Python `int`.
+///
+/// Reading takes an int that fits 32 bits and is no bool.
+template <> struct nanobind::detail::type_caster<arraw::LocalAdjustmentId> {
+    NB_TYPE_CASTER(arraw::LocalAdjustmentId, const_name("int"))
+
+    /// @brief Reads an int in the range of a 32-bit unsigned number.
+    bool from_python(nanobind::handle source, uint8_t, cleanup_list*) noexcept {
+        PyObject* object = source.ptr();
+        if (PyLong_Check(object) == 0 || PyBool_Check(object) != 0) {
+            return false;
+        }
+        const unsigned long long number = PyLong_AsUnsignedLongLong(object);
+        if (number == static_cast<unsigned long long>(-1) && PyErr_Occurred() != nullptr) {
+            PyErr_Clear();
+            return false;
+        }
+        if (number > 0xFFFFFFFFULL) {
+            return false;
+        }
+        value = arraw::LocalAdjustmentId{static_cast<std::uint32_t>(number)};
+        return true;
+    }
+
+    /// @brief Makes an int.
+    static handle from_cpp(const arraw::LocalAdjustmentId& id, rv_policy, cleanup_list*) noexcept {
+        return PyLong_FromUnsignedLong(id.value);
+    }
+};
+
 /// @brief Private helpers of the Python bindings.
 namespace arraw::python {
 
@@ -95,11 +170,19 @@ void bindShots(nb::module_& module);
 /// @brief Binds photographs, diagnostics and the develop and save functions.
 void bindPhoto(nb::module_& module);
 
+/// @brief Binds the edit session, its history and describe_change.
+void bindSession(nb::module_& module);
+
 /// @brief Applies flat snake_case keywords to settings, driven by the descriptor table.
 /// @param settings Settings to change.
 /// @param keywords Keyword arguments, each naming one leaf of the table.
 /// @throws nb::type_error for a key not in the table or a value of the wrong type.
 void applyFlatSettings(DevelopSettings& settings, const nb::kwargs& keywords);
+
+/// @brief Finds the row of the setting a snake_case keyword names.
+/// @param name Keyword such as "filmic_highlights".
+/// @return The row of ::arraw::developSettingDescriptors, or null for an unknown keyword.
+[[nodiscard]] const FieldDescriptor* findSettingByKeyword(std::string_view name);
 
 /// @brief Log that forwards each diagnostic to `logging.getLogger("arraw")`.
 ///
@@ -306,6 +389,17 @@ template <class T> void canonicalise(T&) {}
 /// order as every other frontend does (ADR 033).
 inline void canonicalise(arraw::ToneCurve& curve) {
     arraw::normaliseCurvePoints(curve.points);
+}
+
+/// @brief Keeps a state's id counter above the ids of its adjustments, so that a state built in
+/// Python adds the next one under an id that is free.
+inline void canonicalise(arraw::DevelopState& state) {
+    for (const arraw::LocalAdjustment& adjustment : state.localAdjustments) {
+        if (adjustment.id.value >= state.nextLocalAdjustmentId.value &&
+            adjustment.id.value != 0xFFFFFFFFU) {
+            state.nextLocalAdjustmentId.value = adjustment.id.value + 1;
+        }
+    }
 }
 
 /// @brief Binds a plain settings struct as a frozen Python value class.

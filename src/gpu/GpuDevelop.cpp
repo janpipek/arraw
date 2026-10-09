@@ -2,21 +2,24 @@
 
 #include "CheckpointState.h"
 #include "GpuPlan.h"
+#include "LadderAccess.h"
 #include "ProcessingPlan.h"
 #include "ProgressScope.h"
 #include "RenderProgress.h"
 #include "Resample.h"
 #include "SampleConversion.h"
+#include "StageDriver.h"
 #include "Taps.h"
 #include "TimingTrace.h"
 
 #include <array>
-#include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <span>
 #include <stdexcept>
+#include <utility>
 #include <variant>
 
 namespace arraw {
@@ -187,18 +190,18 @@ struct DevicePresence {
     DeviceImage fine;
     DeviceImage coarse;
     DeviceImage coarseCells;
-    DeviceImage haze;
+    DeviceImage hazeFloor;
+    DeviceImage hazeMean;
 };
 
 /// @brief Computes the Presence context of the pointwise pass's input on a device.
 ///
-/// Texture's base from its own cells; Clarity's base and Dehaze's from one
-/// reduction to the coarse cells, which Clarity and a positive Dehaze also read
-/// unblurred.
+/// Texture's base from its own cells; Clarity's base and Dehaze's floor and mean from one
+/// reduction to the coarse cells, which Clarity and the floor also read unblurred.
 DevicePresence presenceOnGpu(GpuContext& context, const DeviceImage& input,
                              const PresencePlan& plan) {
     const ImageSize size = input.size();
-    DevicePresence result{input, input, input, input};
+    DevicePresence result{input, input, input, input, input};
     // One unit a render: a reduction for each cell, and each base's steps.
     const auto baseRenders = [](const PresenceBase& base) {
         return base.window == 0 ? 2U : 8U + base.reconstruction + 2U;
@@ -207,9 +210,11 @@ DevicePresence presenceOnGpu(GpuContext& context, const DeviceImage& input,
     if (plan.fine.active()) {
         renders += 1 + baseRenders(plan.fine);
     }
-    if (plan.coarse.active() || plan.haze.active()) {
+    const bool coarseCellsNeeded = plan.coarse.active() || plan.hazeActive();
+    if (coarseCellsNeeded) {
         renders += 1 + (plan.coarse.active() ? baseRenders(plan.coarse) : 0U) +
-                   (plan.haze.active() ? baseRenders(plan.haze) : 0U);
+                   (plan.hazeFloor.active() ? baseRenders(plan.hazeFloor) : 0U) +
+                   (plan.hazeMean.active() ? baseRenders(plan.hazeMean) : 0U);
     }
     const detail::ProgressSpan progress(ProgressStep::Context, renders);
     if (plan.fine.active()) {
@@ -217,18 +222,24 @@ DevicePresence presenceOnGpu(GpuContext& context, const DeviceImage& input,
             presenceStepOnGpu(context, plan, plan.fine, size, PresenceStep::Reduce, input);
         result.fine = presenceBaseOnGpu(context, cells, plan, plan.fine, size);
     }
-    if (plan.coarse.active() || plan.haze.active()) {
-        const PresenceBase& shared = plan.coarse.active() ? plan.coarse : plan.haze;
+    if (coarseCellsNeeded) {
+        // The bases share the cells, so any of them gives the reduction.
+        const PresenceBase& shared = plan.coarse.active()      ? plan.coarse
+                                     : plan.hazeFloor.active() ? plan.hazeFloor
+                                                               : plan.hazeMean;
         const DeviceImage cells =
             presenceStepOnGpu(context, plan, shared, size, PresenceStep::Reduce, input);
         if (plan.coarse.active()) {
             result.coarse = presenceBaseOnGpu(context, cells, plan, plan.coarse, size);
         }
-        if (plan.coarse.active() || plan.haze.window != 0) {
+        if (plan.coarse.active() || plan.hazeFloor.active()) {
             result.coarseCells = cells;
         }
-        if (plan.haze.active()) {
-            result.haze = presenceBaseOnGpu(context, cells, plan, plan.haze, size);
+        if (plan.hazeFloor.active()) {
+            result.hazeFloor = presenceBaseOnGpu(context, cells, plan, plan.hazeFloor, size);
+        }
+        if (plan.hazeMean.active()) {
+            result.hazeMean = presenceBaseOnGpu(context, cells, plan, plan.hazeMean, size);
         }
     }
     return result;
@@ -256,12 +267,6 @@ RenderCheckpoint developOnGpu(GpuContext& context, const ImageBuffer& source,
 
 namespace {
 
-/// @brief Pixels on the device, and the boundary they were taken at.
-struct PassResult {
-    DeviceImage image; ///< The pixels.
-    Stage done;        ///< Last boundary run.
-};
-
 /// @brief Checks that an uploaded source is this device's copy of a host source.
 /// @throws std::invalid_argument if it is not.
 void requireUploaded(const GpuContext& context, const ImageBuffer& source,
@@ -274,107 +279,118 @@ void requireUploaded(const GpuContext& context, const ImageBuffer& source,
     }
 }
 
-/// @brief Runs the passes after a boundary, up to another, on an image taken at the first.
+/// @brief Runs the Pointwise pass on a device image.
 ///
-/// The one path for every GPU development and sample: a fresh one starts at
-/// the Denoise pass, a resumed one after the boundary it resumes from, and
-/// each pass is skipped under exactly the condition the CPU skips it.
-/// @param context Device the images live on.
-/// @param done Boundary @p image was taken at, or empty for the uploaded source.
-/// @param image Source pixels, or the pixels at @p done.
-/// @param plan The plan that makes the rest.
-/// @param stopAfter Last boundary to run.
-/// @param probe What the pointwise pass writes: the developed colour, or a tap's.
-PassResult runPasses(GpuContext& context, std::optional<Stage> done, DeviceImage image,
-                     const ProcessingPlan& plan, Stage stopAfter,
-                     PointwiseProbe probe = PointwiseProbe::Developed) {
-    if (!done) {
-        // As denoisedCopy and pointwiseFromSource: with noise reduction off the
-        // boundary collapses onto the source, which is shared, not copied.
-        if (plan.denoise.active()) {
-            image = denoiseOnGpu(context, image, plan.denoise);
-        }
-        done = Stage::Denoise;
-    }
-    if (*done == Stage::Denoise && stopAfter != Stage::Denoise) {
-        // The block's grid sizes come from the plan's geometry and the bases are rendered
-        // from the image: they must be of one size, or Presence would misread its grids.
-        assert(!plan.presence.active() ||
-               (plan.geometry && plan.geometry->sourceSize == image.size()));
-        const GpuPointwiseBlock pointwise = packPointwise(plan, probe);
-        // The curves' tables are uploaded here, once per development that runs
-        // this pass: a resumed one starts after it and pays nothing. With no
-        // active curve, or a probe that stops before the curves, the shader
-        // never reads the second input, so the source stands in for it and
-        // nothing is uploaded.
-        const ToneCurvePlan& tones = plan.toneCurves;
-        const bool anyCurve =
-            tones.luma.active || tones.red.active || tones.green.active || tones.blue.active;
-        const DeviceImage curves =
-            anyCurve && probeReadsCurves(probe) ? context.upload(packToneCurves(tones)) : image;
-        // The Presence context is worked out from this pass's input every time
-        // the pass runs, rather than kept with a checkpoint (ADR 041); with
-        // Presence off nothing is rendered and the image stands in for every grid.
-        const DevicePresence around = presenceOnGpu(context, image, plan.presence);
-        const std::array inputs{image,      curves, around.fine, around.coarse, around.coarseCells,
-                                around.haze};
-        const detail::ProgressSpan progress(ProgressStep::Pointwise, 1);
-        image = context.render(GpuPass::Pointwise, bytesOf(pointwise), inputs, image.size(),
-                               workingEncoding);
-        done = Stage::Pointwise;
-    }
-    if (*done == Stage::Pointwise && stopAfter != Stage::Pointwise) {
-        // As applyGeometry: an identity geometry leaves the developed pixels as
-        // they are, rather than resampling them onto themselves.
-        const GeometryPlan& geometry = *plan.geometry;
-        if (!geometry.isIdentity()) {
-            const GpuGeometryBlock block = packGeometry(geometry);
-            const detail::ProgressSpan progress(ProgressStep::Geometry, 1);
-            image = context.render(GpuPass::Geometry, bytesOf(block), image, geometry.outputSize,
-                                   workingEncoding);
-        }
-        done = Stage::Geometry;
-    }
-    if (*done == Stage::Geometry && stopAfter >= Stage::Resize) {
-        // As resample: a size equal to the cropped one is not resized, and the
-        // pixels are reused as they are.
-        if (!plan.resize->isIdentity(plan.geometry->outputSize)) {
-            const detail::ProgressSpan progress(ProgressStep::Resize,
-                                                plan.resize->opaque ? 2U : resizePlaneCount + 1);
-            image = resizeOnGpu(context, image, *plan.resize);
-        }
-        done = Stage::Resize;
-    }
-    if (*done == Stage::Resize && stopAfter == Stage::Effects) {
-        // As effectsBy: with every effect off the boundary collapses onto the
-        // resize, and the image is shared rather than rendered again.
-        if (plan.effects.active()) {
-            const GpuEffectsBlock block = packEffects(plan);
-            const detail::ProgressSpan progress(ProgressStep::Effects, 1);
-            image = context.render(GpuPass::Effects, bytesOf(block), image, image.size(),
-                                   workingEncoding);
-        }
-        done = Stage::Effects;
-    }
-    return {std::move(image), *done};
+/// Uploads the curves' tables when a curve is active and the probe reads them,
+/// works out the Presence context, and renders the chain (or a tap's prefix
+/// of it).
+/// @param probe What the pass writes: the developed colour, or a tap's.
+DeviceImage pointwiseOnGpu(GpuContext& context, const DeviceImage& image,
+                           const ProcessingPlan& plan, PointwiseProbe probe) {
+    // The block's grid sizes come from the image the bases are rendered from,
+    // so the two cannot differ.
+    const GpuPointwiseBlock pointwise = packPointwise(plan.pointwise, image.size(), probe);
+    // The curves' tables are uploaded here, once per development that runs
+    // this pass: a resumed one starts after it and pays nothing. With no
+    // active curve, or a probe that stops before the curves, the shader
+    // never reads the second input, so the source stands in for it and
+    // nothing is uploaded.
+    const ToneCurvePlan& tones = plan.pointwise.toneCurves;
+    const bool anyCurve =
+        tones.luma.active || tones.red.active || tones.green.active || tones.blue.active;
+    const DeviceImage curves =
+        anyCurve && probeReadsCurves(probe) ? context.upload(packToneCurves(tones)) : image;
+    // The Presence context is worked out from this pass's input every time
+    // the pass runs, rather than kept with a checkpoint (ADR 041); with
+    // Presence off nothing is rendered and the image stands in for every grid.
+    const DevicePresence around = presenceOnGpu(context, image, plan.pointwise.presence);
+    const std::array inputs{
+        image,          curves, around.fine, around.coarse, around.coarseCells, around.hazeFloor,
+        around.hazeMean};
+    const detail::ProgressSpan progress(ProgressStep::Pointwise, 1);
+    return context.render(GpuPass::Pointwise, bytesOf(pointwise), inputs, image.size(),
+                          workingEncoding);
 }
 
-/// @brief Runs the passes and keeps the result as a checkpoint.
+/// @brief Runs the Geometry pass on a device image, as ::arraw::applyGeometry does on the host.
+DeviceImage geometryOnGpu(GpuContext& context, const DeviceImage& image,
+                          const GeometryPlan& geometry) {
+    const GpuGeometryBlock block = packGeometry(geometry);
+    const detail::ProgressSpan progress(ProgressStep::Geometry, 1);
+    return context.render(GpuPass::Geometry, bytesOf(block), image, geometry.outputSize,
+                          workingEncoding);
+}
+
+/// @brief Runs the Effects pass on a device image, as ::arraw::applyEffects does on the host.
+DeviceImage effectsOnGpu(GpuContext& context, const DeviceImage& image,
+                         const ProcessingPlan& plan) {
+    const GpuEffectsBlock block = packEffects(plan);
+    const detail::ProgressSpan progress(ProgressStep::Effects, 1);
+    return context.render(GpuPass::Effects, bytesOf(block), image, image.size(), workingEncoding);
+}
+
+/// @brief The GPU's passes, for ::arraw::runStages.
+///
+/// The pixels are device images, which are shared handles: a checkpoint and a
+/// borrow of it cost nothing.
+struct GpuStages {
+    using Pixels = DeviceImage;
+
+    /// Device the images live on.
+    GpuContext& context;
+    /// What the pointwise pass writes: the developed colour, or a tap's.
+    PointwiseProbe probe = PointwiseProbe::Developed;
+
+    /// @brief Runs the pass that ends at a stage's boundary.
+    Pixels run(Stage stage, Pixels image, const ProcessingPlan& plan) const {
+        switch (stage) {
+        case Stage::Denoise:
+            return denoiseOnGpu(context, image, plan.denoise);
+        case Stage::Pointwise:
+            return pointwiseOnGpu(context, image, plan, probe);
+        case Stage::Geometry:
+            return geometryOnGpu(context, image, *plan.geometry);
+        case Stage::Resize: {
+            const detail::ProgressSpan progress(ProgressStep::Resize,
+                                                plan.resize->opaque ? 2U : resizePlaneCount + 1);
+            return resizeOnGpu(context, image, *plan.resize);
+        }
+        case Stage::Effects:
+            return effectsOnGpu(context, image, plan);
+        }
+        throw std::logic_error("A render ran a pass that does not exist");
+    }
+
+    /// @brief Makes a checkpoint of the image at a boundary, sharing it.
+    RenderCheckpoint checkpoint(Stage stage, Pixels image, const ProcessingPlan& plan) const {
+        return makeCheckpoint(stage, plan, std::move(image));
+    }
+
+    /// @brief Gives a checkpoint's image.
+    Pixels borrow(const RenderCheckpoint& checkpoint) const {
+        return std::get<DeviceImage>(stateOf(checkpoint).pixels);
+    }
+};
+
+static_assert(StageBackend<GpuStages>);
+
+/// @brief Runs the passes after a boundary and keeps the result as a checkpoint.
 ///
 /// Observed as ::arraw::developUntil and ::arraw::resumeFrom are, against the
 /// whole render @p request asks for; nothing is made into a checkpoint until
 /// the last pass returned, so a cancelled render keeps none.
 /// @param request What the whole render is asked for, which sizes the shares.
 /// @param progress The caller's channel, or null.
-RenderCheckpoint developPasses(GpuContext& context, std::optional<Stage> done, DeviceImage image,
+RenderCheckpoint developStages(GpuContext& context, std::optional<Stage> done, DeviceImage image,
                                ProcessingPlan plan, Stage stopAfter, const RenderRequest& request,
                                ProgressChannel* progress) {
     const detail::TimingSpan timing("gpu.develop");
     detail::ProgressRoot root(progress, detail::observedStepWeights(progress, plan, request),
                               done ? detail::stepAfter(*done) : ProgressStep::Denoise);
-    PassResult result = runPasses(context, done, std::move(image), plan, stopAfter);
-    root.finish(detail::stepThrough(result.done));
-    return makeCheckpoint(result.done, std::move(plan), std::move(result.image));
+    GpuStages backend{context};
+    StagesRun<GpuStages> run = runStages(backend, done, std::move(image), plan, stopAfter);
+    root.finish(detail::stepThrough(run.done));
+    return makeCheckpoint(run.done, std::move(plan), std::move(run.pixels));
 }
 
 } // namespace
@@ -390,7 +406,7 @@ RenderCheckpoint developOnGpu(GpuContext& context, const ImageBuffer& source,
     // Only a render that reaches the resize plans one: stopping earlier ignores
     // the request, whatever it says, and has no use for the opacity scan.
     ProcessingPlan plan = planFor(source, state, plannedRequest(request, stopAfter));
-    return developPasses(context, std::nullopt, uploaded, std::move(plan), stopAfter, request,
+    return developStages(context, std::nullopt, uploaded, std::move(plan), stopAfter, request,
                          progress);
 }
 
@@ -417,8 +433,40 @@ RenderCheckpoint developOnGpu(GpuContext& context, const RenderCheckpoint& from,
         root.finish(detail::stepThrough(stopAfter));
         return from;
     }
-    return developPasses(context, held.boundary, *image, std::move(plan), stopAfter, request,
+    return developStages(context, held.boundary, *image, std::move(plan), stopAfter, request,
                          progress);
+}
+
+LadderRender resumeOrDevelopOnGpu(GpuContext& context, CheckpointLadder& ladder,
+                                  std::shared_ptr<const ImageBuffer> source,
+                                  const DeviceImage& uploaded, const DevelopState& state,
+                                  const RenderRequest& request, ProgressChannel* progress) {
+    if (!source) {
+        throw std::invalid_argument("A render through a ladder needs a source");
+    }
+    requireUploaded(context, *source, uploaded);
+    // Planned before the ladder is touched, so that a bad request drops nothing.
+    ProcessingPlan plan = planFor(*source, state, request);
+    LadderAccess::bind(ladder, source);
+    // A rung on the host, or on another device, cannot serve this render.
+    const std::optional<Stage> resumedFrom = LadderAccess::deepestUsable(
+        ladder, plan, source->size(), [&context](const CheckpointState& rung) {
+            const auto* image = std::get_if<DeviceImage>(&rung.pixels);
+            return image != nullptr && image->device() == context.id();
+        });
+    DeviceImage start =
+        resumedFrom
+            ? std::get<DeviceImage>(stateOf(LadderAccess::rung(ladder, *resumedFrom)).pixels)
+            : uploaded;
+    const detail::TimingSpan timing("gpu.develop");
+    detail::ProgressRoot root(progress, detail::observedStepWeights(progress, plan, request),
+                              resumedFrom ? detail::stepAfter(*resumedFrom)
+                                          : ProgressStep::Denoise);
+    GpuStages backend{context};
+    StagesRun<GpuStages> run =
+        runStages(backend, resumedFrom, std::move(start), plan, Stage::Effects, &ladder);
+    root.finish(ProgressStep::Effects);
+    return {makeCheckpoint(Stage::Effects, std::move(plan), std::move(run.pixels)), resumedFrom};
 }
 
 ImageBuffer sampleOnGpu(GpuContext& context, const ImageBuffer& source, const DeviceImage& uploaded,
@@ -432,9 +480,10 @@ ImageBuffer sampleOnGpu(GpuContext& context, const ImageBuffer& source, const De
     detail::StepWeights weights = detail::observedStepWeights(progress, plan, request);
     weights[static_cast<std::size_t>(ProgressStep::Effects)] = 0.0;
     detail::ProgressRoot root(progress, weights, ProgressStep::Denoise);
-    const PassResult result =
-        runPasses(context, std::nullopt, uploaded, plan, Stage::Resize, probe);
-    ImageBuffer encoded = encodeTap(result.image.readBack(), tap);
+    GpuStages backend{context, probe};
+    const StagesRun<GpuStages> run =
+        runStages(backend, std::nullopt, uploaded, plan, Stage::Resize);
+    ImageBuffer encoded = encodeTap(run.pixels.readBack(), tap);
     root.finish(ProgressStep::Resize);
     return encoded;
 }
