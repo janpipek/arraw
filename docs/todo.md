@@ -93,15 +93,15 @@ adjustments (user, 2026-10-08; `docs/ideas/local-adjustment-plan.md`):
   label and a timer behind `showMessage(text, timeout)` / `clearMessage()`,
   then the device label and zoom button; the ~15 `statusBar()->showMessage`
   call sites (and the export tooltip) move to it. ADR 042 needs to be updated.
-
-- **Masks in their own tab.** Today `MasksPanel` sits inside `DevelopPanel`;
-  `old` had a `QTabWidget` with Adjustments | Masks | Spots | Info, and M / Q
-  switched to the Masks / Spots tab.
-- **Collapsible develop groups**, each group's open/closed state kept in
-  `QSettings` across runs. The groups are `QGroupBox`es in `DevelopPanel.cpp`.
+- **Spots and Info tabs** in the develop dock, as `old` had (Q switched to
+  Spots there).
 
 Done (ADR 047): F7 History, F8 Develop, F9 film strip, F11 full screen and
 F12 Hide Panels, in the View menu and on the window.
+
+Done (ADR 048): the develop dock has Adjustments and Masks tabs, the tab
+following the mask mode; the Adjustments groups collapse, each remembered in
+`QSettings`.
 
 ## Follow-ups (known limits, all documented in ADRs)
 

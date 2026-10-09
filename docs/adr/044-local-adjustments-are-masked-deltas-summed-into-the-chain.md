@@ -846,7 +846,7 @@ window. What was built, and where it departs from section 10:
   Unlike the crop mode it opens no edit of its own: every gesture is one history
   step (origin Edit), so Undo, Redo, the History dock, the zoom and Paste work
   inside it. Choosing a mask in the list enters it.
-- **The Masks group** sits in the develop dock below Crop (`MasksPanel`, in
+- **The Masks group** sits in the develop dock below Crop (superseded by ADR 048: it has a tab of its own) (`MasksPanel`, in
   `nonGeometryGroups_`, so the crop mode disables it). It shares the panel's
   label column and its edit signals; the rows are `SettingSlider`s made from an
   id, the local range and `localPresentationOf` (the new constructor), with ids

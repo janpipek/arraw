@@ -1,5 +1,6 @@
 #include "DebugLog.h"
 #include "support/TempDir.h"
+#include "ui/CollapsibleSection.h"
 #include "ui/CropOverlay.h"
 #include "ui/DevelopPanel.h"
 #include "ui/FilmStrip.h"
@@ -15,7 +16,6 @@
 #include <QAction>
 #include <QApplication>
 #include <QDoubleSpinBox>
-#include <QGroupBox>
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QTest>
@@ -213,12 +213,12 @@ TEST_CASE("The crop mode opens on the photograph, not an empty frame", "[app][wi
 TEST_CASE("The crop mode leaves only the Crop group to edit", "[app][window][crop]") {
     Window w;
     const auto tone = [&] {
-        for (auto* group : w.panel().findChildren<QGroupBox*>()) {
+        for (auto* group : w.panel().findChildren<CollapsibleSection*>()) {
             if (group->title() == "Tone") {
                 return group;
             }
         }
-        return static_cast<QGroupBox*>(nullptr);
+        return static_cast<CollapsibleSection*>(nullptr);
     };
     REQUIRE(tone() != nullptr);
     CHECK(tone()->isEnabled());

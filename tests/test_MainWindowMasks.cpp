@@ -25,6 +25,8 @@
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSettings>
+#include <QTabBar>
+#include <QTabWidget>
 #include <QTest>
 
 #include <catch2/catch_test_macros.hpp>
@@ -141,7 +143,7 @@ struct Window {
 
     /// Types a value into a mask row and ends the edit at once.
     void setRow(const char* key, double value) const {
-        for (auto* row : panel().findChildren<SettingSlider*>()) {
+        for (auto* row : window.findChildren<SettingSlider*>()) {
             if (row->key() == key) {
                 row->findChild<QDoubleSpinBox*>()->setValue(value);
             }
@@ -193,6 +195,112 @@ TEST_CASE("C and M switch between the crop mode and the mask mode", "[app][windo
     CHECK(w.masks().isEnabled());
     CHECK(w.steps() == 2);
     CHECK(w.step(0) == "Crop");
+}
+
+TEST_CASE("The develop dock's tab follows the mask mode, and choosing a tab sets the mode",
+          "[app][window][masks][tabs]") {
+    Window w;
+    auto& tabs = *w.window.findChild<QTabWidget*>("developTabs");
+    REQUIRE(tabs.count() == 2);
+    CHECK(tabs.tabText(0) == "Adjustments");
+    CHECK(tabs.tabText(1) == "Masks");
+    CHECK(tabs.currentIndex() == 0);
+    CHECK_FALSE(w.masks().isVisible());
+
+    // The key shows the tab, and the key back shows Adjustments.
+    w.press(Qt::Key_M);
+    CHECK(tabs.currentIndex() == 1);
+    CHECK(w.masks().isVisible());
+    w.press(Qt::Key_M);
+    CHECK(tabs.currentIndex() == 0);
+    CHECK_FALSE(w.masks().isVisible());
+
+    // Esc leaves the mode, and the tab with it.
+    w.press(Qt::Key_M);
+    w.press(Qt::Key_Escape);
+    CHECK_FALSE(w.view().isMaskMode());
+    CHECK(tabs.currentIndex() == 0);
+
+    // Choosing the tab enters the mode, the focus going to the photograph's overlay as with M.
+    QTest::mouseClick(tabs.tabBar(), Qt::LeftButton, Qt::NoModifier,
+                      tabs.tabBar()->tabRect(1).center());
+    CHECK(tabs.currentIndex() == 1);
+    CHECK(w.view().isMaskMode());
+    CHECK(w.action("maskAction").isChecked());
+    CHECK(w.overlay().hasFocus());
+
+    // Drawing a mask selects it; leaving by the tab keeps the selection and ends the mode.
+    w.draw();
+    REQUIRE(w.overlay().selection().has_value());
+    const auto selected = w.overlay().selection();
+    QTest::mouseClick(tabs.tabBar(), Qt::LeftButton, Qt::NoModifier,
+                      tabs.tabBar()->tabRect(0).center());
+    CHECK(tabs.currentIndex() == 0);
+    CHECK_FALSE(w.view().isMaskMode());
+    CHECK_FALSE(w.action("maskAction").isChecked());
+    CHECK(w.overlay().selection() == selected);
+
+    // Entering the crop mode leaves the mask mode, and shows Adjustments.
+    w.press(Qt::Key_M);
+    REQUIRE(tabs.currentIndex() == 1);
+    w.press(Qt::Key_C);
+    CHECK(w.view().isCropMode());
+    CHECK(tabs.currentIndex() == 0);
+}
+
+TEST_CASE("Leaving the mask mode from the mask list keeps the focus out of the dock",
+          "[app][window][masks][tabs][focus]") {
+    Window w;
+    auto& tabs = *w.window.findChild<QTabWidget*>("developTabs");
+    const auto inDock = [&] {
+        const QWidget* focus = QApplication::focusWidget();
+        return focus != nullptr && tabs.isAncestorOf(focus);
+    };
+    const auto leave = [&](const char* how) {
+        INFO(how);
+        w.press(Qt::Key_M);
+        w.draw();
+        REQUIRE(w.view().isMaskMode());
+        w.masks().findChild<QListView*>("maskList")->setFocus();
+        REQUIRE(w.masks().findChild<QListView*>("maskList")->hasFocus());
+        const QString how_ = how;
+        if (how_ == "tab") {
+            QTest::mouseClick(tabs.tabBar(), Qt::LeftButton, Qt::NoModifier,
+                              tabs.tabBar()->tabRect(0).center());
+        } else if (how_ == "M") {
+            w.press(Qt::Key_M);
+        } else if (how_ == "Esc") {
+            w.press(Qt::Key_Escape);
+        } else {
+            w.press(Qt::Key_C);
+        }
+        CHECK_FALSE(w.view().isMaskMode());
+        CHECK_FALSE(inDock());
+        if (how_ == "C") {
+            w.press(Qt::Key_C);
+        }
+    };
+    leave("tab");
+    leave("M");
+    leave("Esc");
+    leave("C");
+}
+
+TEST_CASE("The develop dock holds both tabs without sideways scrolling",
+          "[app][window][masks][tabs]") {
+    Window w;
+    auto& tabs = *w.window.findChild<QTabWidget*>("developTabs");
+    w.press(Qt::Key_M);
+    QCoreApplication::processEvents();
+    for (int index = 0; index < tabs.count(); ++index) {
+        tabs.setCurrentIndex(index);
+        QCoreApplication::processEvents();
+        const auto* scroll = qobject_cast<QScrollArea*>(tabs.widget(index));
+        REQUIRE(scroll != nullptr);
+        CHECK(scroll->horizontalScrollBar()->maximum() == 0);
+        CHECK(scroll->focusPolicy() == Qt::NoFocus);
+    }
+    CHECK(tabs.minimumWidth() >= w.panel().minimumDockWidth());
 }
 
 TEST_CASE("Linear then a drag makes one step, selects the mask, and edits are steps of their own",
@@ -570,7 +678,7 @@ TEST_CASE("Mask mode timing with sixteen masks", "[.timing]") {
     idle();
 
     mark("exposure drag");
-    for (auto* row : w.panel().findChildren<SettingSlider*>()) {
+    for (auto* row : w.window.findChildren<SettingSlider*>()) {
         if (row->key() == "local.exposure") {
             auto* box = row->findChild<QDoubleSpinBox*>();
             for (int step = 0; step < 40; ++step) {

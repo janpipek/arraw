@@ -1,5 +1,6 @@
 #include "DevelopPanel.h"
 
+#include "CollapsibleSection.h"
 #include "CropEditing.h"
 #include "CurveEditor.h"
 #include "HistoryModel.h"
@@ -18,7 +19,6 @@
 #include <QDoubleSpinBox>
 #include <QEvent>
 #include <QFormLayout>
-#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
@@ -39,11 +39,6 @@
 namespace arraw::app {
 
 namespace {
-
-/// Gives the title of a group box: the group's display name, with `&` escaped for the mnemonics.
-QString groupTitle(SettingGroup group) {
-    return groupDisplayName(group).replace('&', QStringLiteral("&&"));
-}
 
 /// What the White Balance rows show when the camera's reading is not known.
 constexpr ColourTemperature fallbackLight{5500.0F, 0.0F};
@@ -172,6 +167,8 @@ void DevelopPanel::finishOtherEdits(const QObject* keep) {
 
 QWidget* DevelopPanel::buildMasksGroup() {
     masksPanel_ = new MasksPanel(this);
+    // Not in this panel's layout; hidden until the window puts it in its tab.
+    masksPanel_->hide();
     // Its edits are the panel's own: another row's pending edit ends before one begins.
     connect(masksPanel_, &MasksPanel::editStarted, this, [this] {
         finishOtherEdits(masksPanel_);
@@ -201,7 +198,9 @@ void DevelopPanel::setMaskOverlayShown(bool shown) {
 }
 
 QWidget* DevelopPanel::buildToneCurveGroup() {
-    auto* group = new QGroupBox(groupTitle(SettingGroup::ToneCurve), this);
+    auto* section =
+        new CollapsibleSection("toneCurve", groupDisplayName(SettingGroup::ToneCurve), this);
+    QWidget* group = section->body();
     auto* groupLayout = new QVBoxLayout(group);
 
     curveEditor_ = new CurveEditor(group);
@@ -250,56 +249,65 @@ QWidget* DevelopPanel::buildToneCurveGroup() {
     connect(curveEditor_, &CurveEditor::editFinished, this, &DevelopPanel::editFinished);
     connect(curveEditor_, &CurveEditor::resetFinished, this, &DevelopPanel::finishResetEdit);
     connect(curveEditor_, &CurveEditor::focusReleased, this, &DevelopPanel::focusReleased);
-    return group;
+    return section;
 }
 
 QWidget* DevelopPanel::buildColorGroup() {
-    auto* group = new QGroupBox(groupTitle(SettingGroup::Color), this);
+    auto* section = new CollapsibleSection("color", groupDisplayName(SettingGroup::Color), this);
+    QWidget* group = section->body();
     new QVBoxLayout(group);
     for (const std::string_view key : colorKeys()) {
         addRow(key, group);
     }
-    return group;
+    return section;
 }
 
 QWidget* DevelopPanel::buildPresenceGroup() {
-    auto* group = new QGroupBox(groupTitle(SettingGroup::Presence), this);
+    auto* section =
+        new CollapsibleSection("presence", groupDisplayName(SettingGroup::Presence), this);
+    QWidget* group = section->body();
     new QVBoxLayout(group);
     for (const std::string_view key : presenceKeys()) {
         addRow(key, group);
     }
-    return group;
+    return section;
 }
 
 QWidget* DevelopPanel::buildColorGradingGroup() {
-    auto* group = new QGroupBox(groupTitle(SettingGroup::ColorGrading), this);
+    auto* section =
+        new CollapsibleSection("colorGrading", groupDisplayName(SettingGroup::ColorGrading), this);
+    QWidget* group = section->body();
     new QVBoxLayout(group);
     for (const std::string_view key : colorGradingKeys()) {
         addRow(key, group);
     }
-    return group;
+    return section;
 }
 
 QWidget* DevelopPanel::buildNoiseReductionGroup() {
-    auto* group = new QGroupBox(groupTitle(SettingGroup::Detail), this);
+    auto* section = new CollapsibleSection("detail", groupDisplayName(SettingGroup::Detail), this);
+    QWidget* group = section->body();
     new QVBoxLayout(group);
     for (const std::string_view key : noiseReductionKeys()) {
         addRow(key, group);
     }
-    return group;
+    return section;
 }
 
 QWidget* DevelopPanel::buildEffectsGroup() {
-    auto* group = new QGroupBox(groupTitle(SettingGroup::Effects), this);
+    auto* section =
+        new CollapsibleSection("effects", groupDisplayName(SettingGroup::Effects), this);
+    QWidget* group = section->body();
     new QVBoxLayout(group);
     for (const std::string_view key : effectsKeys()) {
         addRow(key, group);
     }
-    return group;
+    return section;
 }
 
 QWidget* DevelopPanel::buildHslGroup() {
-    auto* group = new QGroupBox(groupTitle(SettingGroup::Hsl), this);
+    auto* section = new CollapsibleSection("hsl", groupDisplayName(SettingGroup::Hsl), this);
+    QWidget* group = section->body();
     auto* groupLayout = new QVBoxLayout(group);
 
     auto* tabRow = new QHBoxLayout;
@@ -326,22 +334,26 @@ QWidget* DevelopPanel::buildHslGroup() {
     connect(tabs, &QButtonGroup::idClicked, stack, &QStackedWidget::setCurrentIndex);
     groupLayout->addLayout(tabRow);
     groupLayout->addWidget(stack);
-    return group;
+    return section;
 }
 
 QWidget* DevelopPanel::buildBlackAndWhiteGroup() {
-    auto* group = new QGroupBox(groupTitle(SettingGroup::BlackAndWhite), this);
+    auto* section = new CollapsibleSection("blackAndWhite",
+                                           groupDisplayName(SettingGroup::BlackAndWhite), this);
+    QWidget* group = section->body();
     // On the group, so it shows over the title; the rows keep their own tips.
-    group->setToolTip(tr("How each colour becomes grey: drag a band darker or lighter."));
+    section->setToolTip(tr("How each colour becomes grey: drag a band darker or lighter."));
     new QVBoxLayout(group);
     for (const std::string_view key : blackAndWhiteKeys()) {
         addRow(key, group);
     }
-    return group;
+    return section;
 }
 
 QWidget* DevelopPanel::buildCropGroup() {
-    auto* group = new QGroupBox(groupTitle(SettingGroup::Geometry), this);
+    auto* section =
+        new CollapsibleSection("geometry", groupDisplayName(SettingGroup::Geometry), this);
+    QWidget* group = section->body();
     auto* groupLayout = new QVBoxLayout(group);
 
     // None of these takes the focus: in the crop mode it stays on the overlay, which claims
@@ -466,7 +478,7 @@ QWidget* DevelopPanel::buildCropGroup() {
     connect(flipHorizontal, &QToolButton::clicked, this, [this] { emit flipped(true); });
     connect(flipVertical, &QToolButton::clicked, this, [this] { emit flipped(false); });
     connect(reset, &QToolButton::clicked, this, &DevelopPanel::applyGeometryReset);
-    return group;
+    return section;
 }
 
 void DevelopPanel::chooseCustomAspect() {
@@ -541,8 +553,12 @@ void DevelopPanel::setCropMode(bool cropping) {
     }
 }
 
+MasksPanel* DevelopPanel::masksPanel() const {
+    return masksPanel_;
+}
+
 int DevelopPanel::minimumDockWidth() const {
-    return minimumSizeHint().width() +
+    return std::max(minimumSizeHint().width(), masksPanel_->minimumSizeHint().width()) +
            style()->pixelMetric(QStyle::PM_ScrollBarExtent, nullptr, this);
 }
 
@@ -557,7 +573,8 @@ void DevelopPanel::setStraightening(bool straightening) {
 }
 
 QWidget* DevelopPanel::buildWhiteBalanceGroup() {
-    auto* group = new QGroupBox(tr("White Balance"), this);
+    auto* section = new CollapsibleSection("whiteBalance", tr("White Balance"), this);
+    QWidget* group = section->body();
     auto* groupLayout = new QVBoxLayout(group);
 
     presetCombo_ = new QComboBox(group);
@@ -580,7 +597,7 @@ QWidget* DevelopPanel::buildWhiteBalanceGroup() {
     for (const std::string_view key : whiteBalanceKeys()) {
         addRow(key, group);
     }
-    return group;
+    return section;
 }
 
 DevelopPanel::DevelopPanel(QWidget* parent) : QWidget(parent) {
@@ -594,14 +611,14 @@ DevelopPanel::DevelopPanel(QWidget* parent) : QWidget(parent) {
     // Geometry is the first thing a photograph is given, as in Lightroom, below
     // the Treatment row, which describes the whole photograph rather than a step.
     layout->addWidget(buildCropGroup());
-    // Right below Crop: the two tools that act on the picture's area come first (ADR 044).
-    addGroup(buildMasksGroup());
+    // The Masks group has a tab of its own (ADR 048): the window takes it from masksPanel().
+    nonGeometryGroups_.push_back(buildMasksGroup());
     addGroup(buildWhiteBalanceGroup());
 
-    auto* tone = new QGroupBox(groupTitle(SettingGroup::Tone), this);
-    new QVBoxLayout(tone);
+    auto* tone = new CollapsibleSection("tone", groupDisplayName(SettingGroup::Tone), this);
+    new QVBoxLayout(tone->body());
     for (const std::string_view key : toneKeys()) {
-        addRow(key, tone);
+        addRow(key, tone->body());
     }
     addGroup(tone);
     // Below Tone, as Lightroom's Basic panel has it, and shown in both treatments.

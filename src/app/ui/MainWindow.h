@@ -43,6 +43,7 @@ class QListView;
 class QToolButton;
 class QEvent;
 class QShortcut;
+class QTabWidget;
 class QObject;
 
 namespace arraw::app {
@@ -284,6 +285,9 @@ private:
     /// Keeps the selection, so the panel still shows the mask's rows.
     void leaveMaskMode();
 
+    /// @brief Shows whether the mask mode is on, in its action and in the develop tabs.
+    void showMaskMode();
+
     /// @brief Selects a mask, or none, in the overlay and the panel.
     /// @param id Mask to select; dropped when the state holds none with that id.
     void selectMask(std::optional<LocalAdjustmentId> id);
@@ -495,10 +499,14 @@ private:
     /// Decides when a render in progress shows, and what of it.
     RenderIndicator* renderIndicator_ = nullptr;
     DevelopPanel* developPanel_ = nullptr;
+    /// Tabs of the develop dock: Adjustments and Masks, the tab following the mask mode.
+    QTabWidget* developTabs_ = nullptr;
     QDockWidget* developDock_ = nullptr;
     /// Whether the window was maximised when it last entered full screen.
     bool maximizedBeforeFullScreen_ = false;
+    /// Full Screen toggle (F11), checked while the window is full screen.
     QAction* fullScreenAction_ = nullptr;
+    /// Hide Panels toggle (F12), checked while the panels are hidden.
     QAction* hidePanelsAction_ = nullptr;
     /// The dock toggles of F7, F8 and F9.
     std::vector<QAction*> panelToggles_;

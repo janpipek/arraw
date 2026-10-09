@@ -66,12 +66,17 @@ public:
     /// @param cropping Whether the Crop button is checked.
     void setCropMode(bool cropping);
 
+    /// @brief Gives the Masks group, which the panel owns but does not lay out.
+    ///
+    /// The window puts it in a tab of its own (ADR 048); until then it stays hidden.
+    [[nodiscard]] MasksPanel* masksPanel() const;
+
     /// @brief Gives the narrowest the develop dock can be, in logical pixels.
     ///
     /// Derived from the content: the panel's minimum width (label column, value
     /// field and a slider of at least ::arraw::app::SettingSlider::minimumSliderLength,
-    /// plus margins) and a vertical scroll bar, so that nothing scrolls sideways.
-    /// The dock's frame, if any, comes on top.
+    /// plus margins) and a vertical scroll bar, for the wider of this panel and the Masks group, so
+    /// that nothing scrolls sideways. The dock's frame, if any, comes on top.
     [[nodiscard]] int minimumDockWidth() const;
 
     /// @brief Gives the width the develop dock opens at, in logical pixels.
