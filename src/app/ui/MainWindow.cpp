@@ -13,6 +13,7 @@
 #include "FilmStrip.h"
 #include "HistoryModel.h"
 #include "MaskOverlay.h"
+#include "MasksPanel.h"
 #include "PhotoView.h"
 #include "RenderDelay.h"
 #include "RenderProgressPie.h"
@@ -56,12 +57,15 @@
 #include <QScrollBar>
 #include <QSettings>
 #include <QShortcut>
+#include <QSignalBlocker>
 #include <QStandardPaths>
 #include <QStatusBar>
 #include <QString>
 #include <QStringList>
 #include <QStyle>
 #include <QStyledItemDelegate>
+#include <QTabBar>
+#include <QTabWidget>
 #include <QToolButton>
 
 #include <algorithm>
@@ -80,6 +84,11 @@
 namespace arraw::app {
 
 namespace {
+
+/// Index of the Adjustments tab of the develop dock.
+constexpr int adjustmentsTab = 0;
+/// Index of the Masks tab of the develop dock.
+constexpr int masksTab = 1;
 
 /// @brief Reads whether ARRAW_PREVIEW_DEVICE forces the CPU.
 ///
@@ -499,22 +508,41 @@ void MainWindow::updateZoomControls() {
 
 void MainWindow::buildDevelopDock() {
     developPanel_ = new DevelopPanel;
-    auto* scroll = new QScrollArea;
-    scroll->setWidget(developPanel_);
-    scroll->setWidgetResizable(true);
-    scroll->setFrameShape(QFrame::NoFrame);
-    // A click on a button that takes no focus would otherwise give it to the scroll area,
-    // the nearest ancestor that takes it, and the photo view, or the crop mode, would lose
-    // its keys (ADR 040). The panel scrolls with the wheel and its scroll bar.
-    scroll->setFocusPolicy(Qt::NoFocus);
+    // Each tab scrolls on its own. A click on a button that takes no focus would otherwise
+    // give it to the scroll area, the nearest ancestor that takes it, and the photo view, or
+    // the crop mode, would lose its keys (ADR 040). The tabs scroll with the wheel and their
+    // scroll bars.
+    const auto scrolling = [](QWidget* content) {
+        auto* scroll = new QScrollArea;
+        scroll->setWidget(content);
+        scroll->setWidgetResizable(true);
+        scroll->setFrameShape(QFrame::NoFrame);
+        scroll->setFocusPolicy(Qt::NoFocus);
+        return scroll;
+    };
+    auto* adjustments = scrolling(developPanel_);
+    auto* masks = scrolling(developPanel_->masksPanel());
 
-    // Never narrower than the panel and a vertical scroll bar, so the panel never scrolls
+    // The tab follows the mask mode, and choosing one enters or leaves it (ADR 048). The tab
+    // bar takes no focus, for the same reason as the scroll areas.
+    developTabs_ = new QTabWidget;
+    developTabs_->setObjectName("developTabs");
+    developTabs_->setFocusPolicy(Qt::NoFocus);
+    developTabs_->tabBar()->setFocusPolicy(Qt::NoFocus);
+    developTabs_->setDocumentMode(true);
+    developTabs_->addTab(adjustments, tr("Adjustments"));
+    developTabs_->addTab(masks, tr("Masks"));
+    connect(developTabs_, &QTabWidget::currentChanged, this,
+            [this](int index) { setMaskMode(index == masksTab); });
+
+    // Never narrower than the wider tab and a vertical scroll bar, so neither scrolls
     // sideways; it opens a little wider (DevelopPanel::defaultDockWidth()).
-    scroll->setMinimumWidth(developPanel_->minimumDockWidth() + 2 * scroll->frameWidth());
+    developTabs_->setMinimumWidth(developPanel_->minimumDockWidth() +
+                                  2 * adjustments->frameWidth());
 
     auto* dock = new QDockWidget(tr("Develop"), this);
     dock->setFeatures(QDockWidget::NoDockWidgetFeatures);
-    dock->setWidget(scroll);
+    dock->setWidget(developTabs_);
     dock->setEnabled(false);
     addDockWidget(Qt::RightDockWidgetArea, dock);
     resizeDocks({dock}, {developPanel_->defaultDockWidth()}, Qt::Horizontal);
@@ -535,7 +563,7 @@ void MainWindow::buildDevelopDock() {
                     // moves the focus to the photograph; a keyboard user keeps the list.
                     QWidget* held = QApplication::focusWidget();
                     setMaskMode(true);
-                    if (held != nullptr && developPanel_->isAncestorOf(held)) {
+                    if (held != nullptr && developDock_->isAncestorOf(held)) {
                         held->setFocus();
                     }
                 }
@@ -683,7 +711,7 @@ void MainWindow::setMaskMode(bool masking) {
         return;
     }
     if (!editable() || photoView_->isMaskMode()) {
-        maskAction_->setChecked(photoView_->isMaskMode());
+        showMaskMode();
         return;
     }
     // Keeping the crop, as pressing C again does.
@@ -697,12 +725,22 @@ void MainWindow::setMaskMode(bool masking) {
         }
         syncMasks();
     });
+    showMaskMode();
+}
+
+void MainWindow::showMaskMode() {
     maskAction_->setChecked(photoView_->isMaskMode());
+    if (developTabs_ == nullptr) {
+        return;
+    }
+    // The tab shows what the mode is; moving it must not enter or leave the mode again.
+    const QSignalBlocker blocker(developTabs_);
+    developTabs_->setCurrentIndex(photoView_->isMaskMode() ? masksTab : adjustmentsTab);
 }
 
 void MainWindow::leaveMaskMode() {
     if (!photoView_->isMaskMode()) {
-        maskAction_->setChecked(false);
+        showMaskMode();
         return;
     }
     // A gesture under way is dropped with its edit.
@@ -710,7 +748,7 @@ void MainWindow::leaveMaskMode() {
     photoView_->maskOverlay().setTool(MaskTool::None);
     developPanel_->setMaskTool(MaskTool::None);
     photoView_->setMaskMode(false);
-    maskAction_->setChecked(false);
+    showMaskMode();
     for (QShortcut* shortcut : maskShortcuts_) {
         shortcut->setEnabled(false);
     }

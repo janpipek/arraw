@@ -172,6 +172,8 @@ void DevelopPanel::finishOtherEdits(const QObject* keep) {
 
 QWidget* DevelopPanel::buildMasksGroup() {
     masksPanel_ = new MasksPanel(this);
+    // Not in this panel's layout; hidden until the window puts it in its tab.
+    masksPanel_->hide();
     // Its edits are the panel's own: another row's pending edit ends before one begins.
     connect(masksPanel_, &MasksPanel::editStarted, this, [this] {
         finishOtherEdits(masksPanel_);
@@ -541,8 +543,12 @@ void DevelopPanel::setCropMode(bool cropping) {
     }
 }
 
+MasksPanel* DevelopPanel::masksPanel() const {
+    return masksPanel_;
+}
+
 int DevelopPanel::minimumDockWidth() const {
-    return minimumSizeHint().width() +
+    return std::max(minimumSizeHint().width(), masksPanel_->minimumSizeHint().width()) +
            style()->pixelMetric(QStyle::PM_ScrollBarExtent, nullptr, this);
 }
 
@@ -594,8 +600,8 @@ DevelopPanel::DevelopPanel(QWidget* parent) : QWidget(parent) {
     // Geometry is the first thing a photograph is given, as in Lightroom, below
     // the Treatment row, which describes the whole photograph rather than a step.
     layout->addWidget(buildCropGroup());
-    // Right below Crop: the two tools that act on the picture's area come first (ADR 044).
-    addGroup(buildMasksGroup());
+    // The Masks group has a tab of its own (ADR 048): the window takes it from masksPanel().
+    nonGeometryGroups_.push_back(buildMasksGroup());
     addGroup(buildWhiteBalanceGroup());
 
     auto* tone = new QGroupBox(groupTitle(SettingGroup::Tone), this);

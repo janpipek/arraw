@@ -43,6 +43,7 @@ class QListView;
 class QToolButton;
 class QEvent;
 class QShortcut;
+class QTabWidget;
 class QObject;
 
 namespace arraw::app {
@@ -256,6 +257,9 @@ private:
     /// Keeps the selection, so the panel still shows the mask's rows.
     void leaveMaskMode();
 
+    /// @brief Shows whether the mask mode is on, in its action and in the develop tabs.
+    void showMaskMode();
+
     /// @brief Selects a mask, or none, in the overlay and the panel.
     /// @param id Mask to select; dropped when the state holds none with that id.
     void selectMask(std::optional<LocalAdjustmentId> id);
@@ -467,6 +471,8 @@ private:
     /// Decides when a render in progress shows, and what of it.
     RenderIndicator* renderIndicator_ = nullptr;
     DevelopPanel* developPanel_ = nullptr;
+    /// Tabs of the develop dock: Adjustments and Masks, the tab following the mask mode.
+    QTabWidget* developTabs_ = nullptr;
     QWidget* developDock_ = nullptr;
     /// Steps of the open photograph's session, newest on top.
     HistoryModel* historyModel_ = nullptr;
