@@ -40,6 +40,17 @@ using namespace arraw::test;
 
 namespace {
 
+/// @brief Largest error the extreme gray mix may have on negative channels, relative to the
+/// pixel's scale (see worstColourError).
+///
+/// Neighbouring bands at the darkest and the lightest mix make the grey as
+/// steep in hue as it gets, and the hue of a negative channel is itself
+/// ill-conditioned, so `pow`'s rounding moves the grey further than
+/// illConditionedRelativeTolerance allows elsewhere. Measured worst case:
+/// within that on lavapipe, 2.3e-3 on Mesa ANV (Intel HD Graphics 630). A
+/// wrong branch still disagrees by 1e-2 or more.
+constexpr double extremeGrayMixTolerance = 3e-3;
+
 /// @brief Views a uniform block as the bytes a pass takes.
 template <typename Block> std::span<const std::byte> bytesOf(const Block& block) {
     return std::as_bytes(std::span(&block, 1));
@@ -504,7 +515,9 @@ TEST_CASE("The pointwise pass matches the CPU chain for colour controls on negat
     const ImageBuffer source = sweep({64, 48}, true, workingEncoding, 43, 2.0);
     for (const auto& [name, settings] : colorCases()) {
         DYNAMIC_SECTION(name) {
-            requireMatchesCpu(source, settings, illConditionedRelativeTolerance);
+            requireMatchesCpu(source, settings,
+                              name == "grayscale, extremes" ? extremeGrayMixTolerance
+                                                            : illConditionedRelativeTolerance);
         }
     }
 }
