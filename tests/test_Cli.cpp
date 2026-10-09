@@ -39,6 +39,7 @@
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <iterator>
 #include <limits>
@@ -2062,8 +2063,8 @@ TEST_CASE("The tone curve flags replace their own curve and keep the others",
     SECTION("sixteen points are the most") {
         std::string spelled = "0,0";
         for (int i = 1; i <= 14; ++i) {
-            spelled += ";" + std::to_string(i / 16.0);
-            spelled += "," + std::to_string(i / 16.0);
+            // std::format, not std::to_string: the decimal point is '.' whatever the locale.
+            spelled += std::format(";{0},{0}", i / 16.0);
         }
         std::ostringstream err;
         REQUIRE(cli::readExportEdits({"--tone-curve-luma", spelled + ";1,1"}, err));
