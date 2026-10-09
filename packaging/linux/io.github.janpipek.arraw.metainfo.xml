@@ -23,6 +23,7 @@
       <li>Exposure, tone controls, white balance, tone curves, black and white conversion and colour grading</li>
       <li>Texture, clarity, dehaze, noise reduction, vignette and grain</li>
       <li>Crop, straighten, rotate and flip</li>
+      <li>Local adjustments through linear and radial masks, up to sixteen per photograph</li>
       <li>Ratings and colour labels, a filterable film strip and an edit history</li>
       <li>Export to JPEG, PNG or TIFF in sRGB, Display P3 or Adobe RGB, with chosen metadata</li>
       <li>A command line for batch export and inspection, with no display needed</li>
