@@ -126,7 +126,8 @@ if ! rpm -qp --requires "$binary_rpm" | grep -Eq 'Qt_6\.[0-9]+_PRIVATE_API'; the
     exit 1
 fi
 
-rpmlint "${output_packages[@]}"
+git show HEAD:packaging/fedora/arraw.rpmlintrc >"$work_dir/arraw.rpmlintrc"
+rpmlint --rpmlintrc "$work_dir/arraw.rpmlintrc" "${output_packages[@]}"
 (
     cd "$output_dir"
     sha256sum "${output_packages[@]##*/}" >SHA256SUMS

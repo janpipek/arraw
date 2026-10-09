@@ -45,8 +45,11 @@ sidecars, and exports to JPEG, PNG or TIFF.
 
 %build
 # Catch2 comes from catch-devel; FetchContent must not reach for the network.
+# qt_standard_project_setup() adds an $ORIGIN install RPATH, which Fedora
+# forbids; the executables link arraw statically and need none.
 %cmake -G Ninja \
     -DARRAW_BUILD_TESTS=ON \
+    -DCMAKE_SKIP_INSTALL_RPATH=ON \
     -DFETCHCONTENT_FULLY_DISCONNECTED=ON
 %cmake_build
 
