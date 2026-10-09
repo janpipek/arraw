@@ -227,6 +227,7 @@ TEST_CASE("The develop dock's tab follows the mask mode, and choosing a tab sets
     CHECK(tabs.currentIndex() == 1);
     CHECK(w.view().isMaskMode());
     CHECK(w.action("maskAction").isChecked());
+    CHECK(w.overlay().hasFocus());
 
     // Drawing a mask selects it; leaving by the tab keeps the selection and ends the mode.
     w.draw();
@@ -245,6 +246,44 @@ TEST_CASE("The develop dock's tab follows the mask mode, and choosing a tab sets
     w.press(Qt::Key_C);
     CHECK(w.view().isCropMode());
     CHECK(tabs.currentIndex() == 0);
+}
+
+TEST_CASE("Leaving the mask mode from the mask list keeps the focus out of the dock",
+          "[app][window][masks][tabs][focus]") {
+    Window w;
+    auto& tabs = *w.window.findChild<QTabWidget*>("developTabs");
+    const auto inDock = [&] {
+        const QWidget* focus = QApplication::focusWidget();
+        return focus != nullptr && tabs.isAncestorOf(focus);
+    };
+    const auto leave = [&](const char* how) {
+        INFO(how);
+        w.press(Qt::Key_M);
+        w.draw();
+        REQUIRE(w.view().isMaskMode());
+        w.masks().findChild<QListView*>("maskList")->setFocus();
+        REQUIRE(w.masks().findChild<QListView*>("maskList")->hasFocus());
+        const QString how_ = how;
+        if (how_ == "tab") {
+            QTest::mouseClick(tabs.tabBar(), Qt::LeftButton, Qt::NoModifier,
+                              tabs.tabBar()->tabRect(0).center());
+        } else if (how_ == "M") {
+            w.press(Qt::Key_M);
+        } else if (how_ == "Esc") {
+            w.press(Qt::Key_Escape);
+        } else {
+            w.press(Qt::Key_C);
+        }
+        CHECK_FALSE(w.view().isMaskMode());
+        CHECK_FALSE(inDock());
+        if (how_ == "C") {
+            w.press(Qt::Key_C);
+        }
+    };
+    leave("tab");
+    leave("M");
+    leave("Esc");
+    leave("C");
 }
 
 TEST_CASE("The develop dock holds both tabs without sideways scrolling",

@@ -532,8 +532,14 @@ void MainWindow::buildDevelopDock() {
     developTabs_->setDocumentMode(true);
     developTabs_->addTab(adjustments, tr("Adjustments"));
     developTabs_->addTab(masks, tr("Masks"));
-    connect(developTabs_, &QTabWidget::currentChanged, this,
-            [this](int index) { setMaskMode(index == masksTab); });
+    connect(developTabs_, &QTabWidget::currentChanged, this, [this](int index) {
+        setMaskMode(index == masksTab);
+        // The tab widget has already hidden the Masks page and passed its focus on, to
+        // the Adjustments controls or the tab bar; keys belong to the photograph.
+        if (index != masksTab && developTabs_->isAncestorOf(QApplication::focusWidget())) {
+            photoView_->setFocus();
+        }
+    });
 
     // Never narrower than the wider tab and a vertical scroll bar, so neither scrolls
     // sideways; it opens a little wider (DevelopPanel::defaultDockWidth()).
@@ -735,6 +741,12 @@ void MainWindow::showMaskMode() {
     }
     // The tab shows what the mode is; moving it must not enter or leave the mode again.
     const QSignalBlocker blocker(developTabs_);
+    // Hiding the Masks page would pass its focus on to the Adjustments controls, and keys would
+    // stop reaching the photograph (ADR 040).
+    if (!photoView_->isMaskMode() &&
+        developTabs_->widget(masksTab)->isAncestorOf(QApplication::focusWidget())) {
+        photoView_->setFocus();
+    }
     developTabs_->setCurrentIndex(photoView_->isMaskMode() ? masksTab : adjustmentsTab);
 }
 
