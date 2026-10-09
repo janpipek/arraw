@@ -12,13 +12,17 @@ RUN sh /tmp/install-deps.sh && rm /tmp/install-deps.sh
 # agents' search tools, the Wayland platform and Mesa drivers used only when
 # the launcher is given --gui or --gpu, and a virtual X server (with the
 # xcb-cursor library Qt's xcb platform needs) for running the GPU suite on
-# OpenGL with no display (ADR 017).
+# OpenGL with no display (ADR 017). The packaging linters (rpm for rpmbuild and
+# rpmspec, rpmlint, desktop-file-utils, appstream, shared-mime-info) check
+# packaging/fedora/arraw.spec, the desktop file and the metainfo; the real
+# Fedora build and the podman smoke test stay on a Fedora host (ADR 046).
 RUN apt-get install -y --no-install-recommends \
         curl jq less vim-tiny just ccache gdb ripgrep fd-find \
         clangd clang-tidy clazy \
         qt6-wayland libgl1-mesa-dri fonts-dejavu-core \
         xvfb xauth libxcb-cursor0 \
         nodejs npm \
+        rpm rpmlint desktop-file-utils appstream shared-mime-info \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -LsSf https://astral.sh/uv/install.sh \

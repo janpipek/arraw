@@ -30,6 +30,20 @@ just fixtures  # regenerate the committed test fixtures (needs uv)
 
 On Windows, see [`docs/development.md`](docs/development.md).
 
+### Fedora package
+
+```bash
+just rpm         # build the RPM and SRPM from committed HEAD into dist/fedora
+just rpm-smoke   # install it in a clean Fedora 44 container and check it runs
+sudo dnf install "dist/fedora/$(cat dist/fedora/BINARY_RPM)"
+```
+
+`just rpm` needs `rpm-build`, `rpmlint` and the build dependencies (it lists
+what is missing), and builds committed HEAD. The package installs `arraw-ui`
+and `arraw-cli`, and adds arraw to the file manager's "Open With" for the RAW
+formats it opens, JPEG, PNG, TIFF and folders; see
+[ADR 046](docs/adr/046-the-rewrite-ships-a-fedora-rpm-and-opens-from-the-desktop.md).
+
 For containerized agent sessions, the [VibePod overlay](.vibepod/README.md)
 provides the Linux build dependencies and developer tools automatically.
 

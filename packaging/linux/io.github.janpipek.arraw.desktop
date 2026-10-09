@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=arraw
+GenericName=RAW Photo Editor
+Comment=Develop RAW photographs on the GPU
+Exec=arraw-ui %f
+Icon=io.github.janpipek.arraw
+Terminal=false
+Categories=Graphics;Photography;
+Keywords=RAW;photo;photography;develop;
+# The RAW types arraw opens that shared-mime-info defines, JPEG, PNG, TIFF and
+# folders. No type without a system definition (SRW, 3FR, IIQ, ERF); see ADR 046.
+MimeType=image/x-canon-cr2;image/x-canon-cr3;image/x-canon-crw;image/x-nikon-nef;image/x-nikon-nrw;image/x-sony-arw;image/x-sony-srf;image/x-adobe-dng;image/x-fuji-raf;image/x-olympus-orf;image/x-panasonic-rw2;image/x-panasonic-rw;image/x-pentax-pef;image/x-minolta-mrw;image/x-kodak-kdc;image/x-sigma-x3f;image/jpeg;image/png;image/tiff;inode/directory;

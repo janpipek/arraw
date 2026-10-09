@@ -123,3 +123,13 @@ sandbox-build *args:
 [unix]
 sandbox-check:
     uv run --script tools/sandbox/test_sandbox.py
+
+# Build the Fedora RPM and SRPM from committed HEAD into dist/fedora
+[linux]
+rpm:
+    bash tools/package_fedora.sh
+
+# Install the RPM from dist/fedora in a clean Fedora 44 container and check it runs
+[linux]
+rpm-smoke:
+    bash tools/smoke_fedora_rpm.sh
