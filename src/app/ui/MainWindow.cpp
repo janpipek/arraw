@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 
+#include "ChromeHider.h"
 #include "CopySettingsDialog.h"
 #include "CropOverlay.h"
 #include "CullingActions.h"
@@ -63,6 +64,7 @@
 #include <QStyle>
 #include <QStyledItemDelegate>
 #include <QToolButton>
+#include <QWindowStateChangeEvent>
 
 #include <algorithm>
 #include <cmath>
@@ -182,6 +184,7 @@ MainWindow::MainWindow(DebugLog& debugLog, QWidget* parent)
     buildDevelopDock();
     buildHistoryDock();
     buildFilmStripDock();
+    buildPanelActions();
 
     // Last in the View menu, after the docks' toggles.
     viewMenu_->addSeparator();
@@ -190,6 +193,7 @@ MainWindow::MainWindow(DebugLog& debugLog, QWidget* parent)
     connect(debugAction, &QAction::triggered, this, &MainWindow::showDebugWindow);
     // Also on the window, so the shortcut outlives a hidden menu bar.
     addAction(debugAction);
+    keepMenuShortcutsOnWindow(menuBar());
 
     cancelPickShortcut_ = new QShortcut(Qt::Key_Escape, this);
     cancelPickShortcut_->setEnabled(false);
@@ -513,7 +517,9 @@ void MainWindow::buildDevelopDock() {
     scroll->setMinimumWidth(developPanel_->minimumDockWidth() + 2 * scroll->frameWidth());
 
     auto* dock = new QDockWidget(tr("Develop"), this);
-    dock->setFeatures(QDockWidget::NoDockWidgetFeatures);
+    // Closable, and nothing else: QDockWidget offers a toggle action only to a closable dock.
+    dock->setObjectName("DevelopDock");
+    dock->setFeatures(QDockWidget::DockWidgetClosable);
     dock->setWidget(scroll);
     dock->setEnabled(false);
     addDockWidget(Qt::RightDockWidgetArea, dock);
@@ -914,7 +920,95 @@ void MainWindow::buildHistoryDock() {
     QAction* toggle = historyDock_->toggleViewAction();
     toggle->setObjectName("presetsAndHistoryAction");
     toggle->setText(tr("Presets and &History"));
-    viewMenu_->addAction(toggle);
+}
+
+void MainWindow::buildPanelActions() {
+    // The docks' own toggles, in the View menu's order. Each is also added to the window,
+    // so the key still works when lights-out has hidden the menu bar.
+    const auto addToggle = [this](QAction* toggle, const QKeySequence& key) {
+        toggle->setShortcut(key);
+        viewMenu_->addAction(toggle);
+        addAction(toggle);
+    };
+    addToggle(historyDock_->toggleViewAction(), Qt::Key_F7);
+
+    QAction* develop = developDock_->toggleViewAction();
+    develop->setObjectName("developPanelAction");
+    develop->setText(tr("&Develop Panel"));
+    addToggle(develop, Qt::Key_F8);
+
+    addToggle(stripDock_->toggleViewAction(), Qt::Key_F9);
+    panelToggles_ = {historyDock_->toggleViewAction(), develop, stripDock_->toggleViewAction()};
+
+    viewMenu_->addSeparator();
+    fullScreenAction_ = viewMenu_->addAction(tr("&Full Screen"));
+    fullScreenAction_->setObjectName("fullScreenAction");
+    fullScreenAction_->setCheckable(true);
+    fullScreenAction_->setShortcut(Qt::Key_F11);
+    connect(fullScreenAction_, &QAction::triggered, this, &MainWindow::toggleFullScreen);
+    addAction(fullScreenAction_);
+
+    panelHider_ = std::make_unique<ChromeHider>(
+        std::vector<QWidget*>{developDock_, historyDock_, stripDock_, menuBar(), statusBar()});
+    hidePanelsAction_ = viewMenu_->addAction(tr("&Hide Panels"));
+    hidePanelsAction_->setObjectName("hidePanelsAction");
+    hidePanelsAction_->setCheckable(true);
+    hidePanelsAction_->setShortcut(Qt::Key_F12);
+    connect(hidePanelsAction_, &QAction::triggered, this, &MainWindow::setPanelsHidden);
+    addAction(hidePanelsAction_);
+}
+
+void MainWindow::keepMenuShortcutsOnWindow(QWidget* menu) {
+    // Qt does not fire the shortcut of an action whose only widget is a hidden menu, which
+    // is what Hide Panels makes of the menu bar. The window carries them all instead.
+    for (QAction* action : menu->actions()) {
+        if (action->menu() != nullptr) {
+            keepMenuShortcutsOnWindow(action->menu());
+        } else if (!action->shortcut().isEmpty() && !actions().contains(action)) {
+            addAction(action);
+        }
+    }
+}
+
+void MainWindow::setPanelsHidden(bool hidden) {
+    if (hidden) {
+        panelHider_->hide();
+    } else {
+        panelHider_->restore();
+    }
+    // The dock toggles would show a panel the restore is about to hide again; they rest
+    // while the panels are away, and F12 (or the menu's Hide Panels) brings them back.
+    for (QAction* toggle : panelToggles_) {
+        toggle->setEnabled(!hidden);
+    }
+    hidePanelsAction_->setChecked(panelHider_->hidden());
+}
+
+void MainWindow::toggleFullScreen() {
+    // The state before full screen is noted in changeEvent(), which also sees full screen
+    // entered from outside the program.
+    if (isFullScreen()) {
+        if (maximizedBeforeFullScreen_) {
+            showMaximized();
+        } else {
+            showNormal();
+        }
+    } else {
+        showFullScreen();
+    }
+}
+
+void MainWindow::changeEvent(QEvent* event) {
+    if (event->type() == QEvent::WindowStateChange) {
+        const auto previous = static_cast<QWindowStateChangeEvent*>(event)->oldState();
+        if (isFullScreen() && !previous.testFlag(Qt::WindowFullScreen)) {
+            maximizedBeforeFullScreen_ = previous.testFlag(Qt::WindowMaximized);
+        }
+        if (fullScreenAction_ != nullptr) {
+            fullScreenAction_->setChecked(isFullScreen());
+        }
+    }
+    QMainWindow::changeEvent(event);
 }
 
 void MainWindow::updateHistoryDock() {
@@ -1419,8 +1513,6 @@ void MainWindow::buildFilmStripDock() {
     QAction* toggle = stripDock_->toggleViewAction();
     toggle->setObjectName("filmStripAction");
     toggle->setText(tr("&Film Strip"));
-    toggle->setShortcut(Qt::Key_F9);
-    viewMenu_->addAction(toggle);
 
     filmStrip_->setMarksWriter([this](const std::filesystem::path& primary,
                                       const PhotoMarks& marks) { writeMarks(primary, marks); });

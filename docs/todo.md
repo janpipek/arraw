@@ -82,6 +82,27 @@ adjustments (user, 2026-10-08; `docs/ideas/local-adjustment-plan.md`):
     pyramid). Also how presets and copy/paste treat them (a lens profile is
     per shot), and where this fits in the roadmap's stage table, step (c).
 
+## GUI tasks (user, 2026-10-09)
+
+`old` is the reference (`src/MainWindow.cpp`, `src/ChromeHider.*`, ADR 0028 there).
+
+- **Render status pie always present, at the left of the status bar.** Today
+  `RenderProgressPie` is a permanent widget on the right (`buildStatusBar`).
+  A normal (`addWidget`) widget is hidden while a `showMessage` text shows.
+  Plan (user, 2026-10-09): our own status-bar widget — the pie, a message
+  label and a timer behind `showMessage(text, timeout)` / `clearMessage()`,
+  then the device label and zoom button; the ~15 `statusBar()->showMessage`
+  call sites (and the export tooltip) move to it. ADR 042 needs to be updated.
+
+- **Masks in their own tab.** Today `MasksPanel` sits inside `DevelopPanel`;
+  `old` had a `QTabWidget` with Adjustments | Masks | Spots | Info, and M / Q
+  switched to the Masks / Spots tab.
+- **Collapsible develop groups**, each group's open/closed state kept in
+  `QSettings` across runs. The groups are `QGroupBox`es in `DevelopPanel.cpp`.
+
+Done (ADR 047): F7 History, F8 Develop, F9 film strip, F11 full screen and
+F12 Hide Panels, in the View menu and on the window.
+
 ## Follow-ups (known limits, all documented in ADRs)
 
 - **Dehaze:** convex tips sharper than the window (corners, the ends of
