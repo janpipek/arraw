@@ -14,6 +14,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <filesystem>
+#include <functional>
 
 using namespace arraw;
 using namespace arraw::app;
@@ -160,6 +161,22 @@ TEST_CASE("Menu-only shortcuts work in lights-out mode", "[app][window][view]") 
     REQUIRE(w.window.menuBar()->isHidden());
     w.press(Qt::Key_Right);
     CHECK(strip->activePrimary() == w.folder.file("b.dng"));
+}
+
+TEST_CASE("Every menu shortcut is also on the window", "[app][window][view]") {
+    Window w;
+    const QList<QAction*> onWindow = w.window.actions();
+    std::function<void(QWidget*)> walk = [&](QWidget* menu) {
+        for (QAction* action : menu->actions()) {
+            if (action->menu() != nullptr) {
+                walk(action->menu());
+            } else if (!action->shortcut().isEmpty()) {
+                INFO("action " << action->text().toStdString());
+                CHECK(onWindow.contains(action));
+            }
+        }
+    };
+    walk(w.window.menuBar());
 }
 
 TEST_CASE("F11 toggles full screen", "[app][window][view]") {

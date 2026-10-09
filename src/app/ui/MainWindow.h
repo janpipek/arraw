@@ -117,7 +117,8 @@ private:
     /// @brief Adds the shortcut-bearing actions of a menu, submenus included, to the window.
     ///
     /// Lights-out hides the menu bar, and Qt does not fire an action whose only widget is a
-    /// hidden menu.
+    /// hidden menu. Run once, at the end of the constructor: re-run it after adding a menu action
+    /// that has a shortcut, or that key stops working in lights-out.
     /// @param menu The menu or menu bar to walk.
     void keepMenuShortcutsOnWindow(QWidget* menu);
 
