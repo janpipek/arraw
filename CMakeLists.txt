@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(arraw VERSION 0.3.1 LANGUAGES CXX)
+project(arraw VERSION 0.4.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -565,6 +565,30 @@ if(MSVC)
 endif()
 if(TARGET arraw-headless-platform)
     target_link_libraries(arraw-cli PRIVATE arraw-headless-platform)
+endif()
+
+# Linux desktop integration: what `cmake --install` lays down for a package
+# (packaging/fedora/arraw.spec; ADR 046). The executables keep their build
+# names. Everything else they need is inside them: the shaders and the window
+# icon are Qt resources, and arraw-headless-platform is linked in statically.
+# The reverse-DNS id io.github.janpipek.arraw names the .desktop file, the
+# metainfo and the icons, and matches QApplication::setDesktopFileName.
+if(UNIX AND NOT APPLE)
+    include(GNUInstallDirs)
+    set(arraw_app_id io.github.janpipek.arraw)
+    install(TARGETS arraw-ui arraw-cli RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    install(FILES packaging/linux/${arraw_app_id}.desktop
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+    install(FILES packaging/linux/${arraw_app_id}.metainfo.xml
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo)
+    foreach(icon_size 16 24 32 48 64 128 256)
+        install(FILES resources/icons/arraw-${icon_size}.png
+                DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/${icon_size}x${icon_size}/apps
+                RENAME ${arraw_app_id}.png)
+    endforeach()
+    install(FILES resources/icon.svg
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps
+            RENAME ${arraw_app_id}.svg)
 endif()
 
 endif() # ARRAW_BUILD_APPS

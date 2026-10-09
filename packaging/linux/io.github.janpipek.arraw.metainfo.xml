@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.janpipek.arraw</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>arraw</name>
+  <summary>RAW photo editor with a GPU preview</summary>
+  <developer id="io.github.janpipek">
+    <name>Jan Pipek</name>
+  </developer>
+  <description>
+    <p>
+      arraw is a RAW processing engine with a desktop application and a
+      command line on top. Open a photograph or a folder, develop it
+      non-destructively with a preview rendered on the GPU, and export. It is
+      still being rebuilt, and not every feature of a full RAW editor exists yet.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>Reads RAW files from most cameras (through LibRaw), plus JPEG, PNG and TIFF</li>
+      <li>Non-destructive editing: settings live in an XMP sidecar beside the photograph</li>
+      <li>Colour-managed development in a linear Rec.2020 working space</li>
+      <li>Exposure, tone controls, white balance, tone curves, black and white conversion and colour grading</li>
+      <li>Texture, clarity, dehaze, noise reduction, vignette and grain</li>
+      <li>Crop, straighten, rotate and flip</li>
+      <li>Ratings and colour labels, a filterable film strip and an edit history</li>
+      <li>Export to JPEG, PNG or TIFF in sRGB, Display P3 or Adobe RGB, with chosen metadata</li>
+      <li>A command line for batch export and inspection, with no display needed</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">io.github.janpipek.arraw.desktop</launchable>
+  <provides>
+    <binary>arraw-ui</binary>
+    <binary>arraw-cli</binary>
+    <mediatype>image/x-canon-cr2</mediatype>
+    <mediatype>image/x-canon-cr3</mediatype>
+    <mediatype>image/x-canon-crw</mediatype>
+    <mediatype>image/x-nikon-nef</mediatype>
+    <mediatype>image/x-nikon-nrw</mediatype>
+    <mediatype>image/x-sony-arw</mediatype>
+    <mediatype>image/x-sony-srf</mediatype>
+    <mediatype>image/x-adobe-dng</mediatype>
+    <mediatype>image/x-fuji-raf</mediatype>
+    <mediatype>image/x-olympus-orf</mediatype>
+    <mediatype>image/x-panasonic-rw2</mediatype>
+    <mediatype>image/x-panasonic-rw</mediatype>
+    <mediatype>image/x-pentax-pef</mediatype>
+    <mediatype>image/x-minolta-mrw</mediatype>
+    <mediatype>image/x-kodak-kdc</mediatype>
+    <mediatype>image/x-sigma-x3f</mediatype>
+    <mediatype>image/jpeg</mediatype>
+    <mediatype>image/png</mediatype>
+    <mediatype>image/tiff</mediatype>
+    <mediatype>inode/directory</mediatype>
+  </provides>
+  <content_rating type="oars-1.1"/>
+  <url type="homepage">https://github.com/janpipek/arraw</url>
+  <url type="bugtracker">https://github.com/janpipek/arraw/issues</url>
+  <releases>
+    <release version="0.4.0" date="2026-10-09"/>
+  </releases>
+</component>
