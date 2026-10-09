@@ -3,6 +3,7 @@
 #include "CropEditing.h"
 #include "CurveEditor.h"
 #include "HistoryModel.h"
+#include "MasksPanel.h"
 #include "SettingPresentation.h"
 #include "SettingSlider.h"
 #include "WhiteBalanceChoice.h"
@@ -164,6 +165,39 @@ void DevelopPanel::finishOtherEdits(const QObject* keep) {
     if (curveEditor_ != nullptr && curveEditor_ != keep) {
         curveEditor_->finishPendingEdit();
     }
+    if (masksPanel_ != nullptr && masksPanel_ != keep) {
+        masksPanel_->finishPendingEdit();
+    }
+}
+
+QWidget* DevelopPanel::buildMasksGroup() {
+    masksPanel_ = new MasksPanel(this);
+    // Its edits are the panel's own: another row's pending edit ends before one begins.
+    connect(masksPanel_, &MasksPanel::editStarted, this, [this] {
+        finishOtherEdits(masksPanel_);
+        editStart_ = shown_;
+        emit editStarted();
+    });
+    connect(masksPanel_, &MasksPanel::stateEdited, this, &DevelopPanel::stateEdited);
+    connect(masksPanel_, &MasksPanel::editFinished, this, &DevelopPanel::editFinished);
+    connect(masksPanel_, &MasksPanel::focusReleased, this, &DevelopPanel::focusReleased);
+    connect(masksPanel_, &MasksPanel::maskClicked, this, &DevelopPanel::maskClicked);
+    connect(masksPanel_, &MasksPanel::maskSelected, this, &DevelopPanel::maskSelected);
+    connect(masksPanel_, &MasksPanel::maskToolChosen, this, &DevelopPanel::maskToolChosen);
+    connect(masksPanel_, &MasksPanel::overlayToggled, this, &DevelopPanel::overlayToggled);
+    return masksPanel_;
+}
+
+void DevelopPanel::setSelectedMask(std::optional<LocalAdjustmentId> id) {
+    masksPanel_->setSelectedMask(id);
+}
+
+void DevelopPanel::setMaskTool(MaskTool tool) {
+    masksPanel_->setTool(tool);
+}
+
+void DevelopPanel::setMaskOverlayShown(bool shown) {
+    masksPanel_->setOverlayShown(shown);
 }
 
 QWidget* DevelopPanel::buildToneCurveGroup() {
@@ -560,6 +594,8 @@ DevelopPanel::DevelopPanel(QWidget* parent) : QWidget(parent) {
     // Geometry is the first thing a photograph is given, as in Lightroom, below
     // the Treatment row, which describes the whole photograph rather than a step.
     layout->addWidget(buildCropGroup());
+    // Right below Crop: the two tools that act on the picture's area come first (ADR 044).
+    addGroup(buildMasksGroup());
     addGroup(buildWhiteBalanceGroup());
 
     auto* tone = new QGroupBox(groupTitle(SettingGroup::Tone), this);
@@ -587,9 +623,11 @@ DevelopPanel::DevelopPanel(QWidget* parent) : QWidget(parent) {
     for (const SettingSlider* row : rows_) {
         labelWidth = std::max(labelWidth, row->labelWidthHint());
     }
+    labelWidth = std::max(labelWidth, masksPanel_->labelWidthHint());
     for (SettingSlider* row : rows_) {
         row->setLabelWidth(labelWidth);
     }
+    masksPanel_->setLabelWidth(labelWidth);
     showState(shown_, PanelContext{});
     watchViewport();
 }
@@ -622,6 +660,7 @@ void DevelopPanel::showState(const DevelopState& state, const PanelContext& cont
     blackAndWhiteGroup_->setVisible(visible.blackAndWhiteMix);
 
     curveEditor_->setCurves(shown_.settings.toneCurve);
+    masksPanel_->showState(shown_);
     showGeometry(shown_.settings.geometry);
 
     const ColourTemperature light = shownLight(color, context.asShot.value_or(fallbackLight));

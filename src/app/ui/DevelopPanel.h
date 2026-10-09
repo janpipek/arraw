@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CurveEditing.h"
+#include "MaskEditing.h"
 
 #include <CurveHistogram.h>
 #include <DevelopState.h>
@@ -23,6 +24,7 @@ class QStackedWidget;
 namespace arraw::app {
 
 class CurveEditor;
+class MasksPanel;
 class SettingSlider;
 
 /// @brief What the panel needs to know about the photograph, besides its state.
@@ -78,6 +80,19 @@ public:
     /// sliders to stretch into.
     [[nodiscard]] int defaultDockWidth() const;
 
+    /// @brief Shows which mask is selected, without emitting any signal.
+    ///
+    /// Selection is the window's (view state, ADR 044): the Masks group shows the controls of
+    /// that mask and nothing when it is empty.
+    /// @param id Mask selected; nothing for none.
+    void setSelectedMask(std::optional<LocalAdjustmentId> id);
+
+    /// @brief Shows which mask creation tool is armed, without emitting any signal.
+    void setMaskTool(MaskTool tool);
+
+    /// @brief Shows whether the mask overlay is on, without emitting any signal.
+    void setMaskOverlayShown(bool shown);
+
     /// @brief Shows whether the straighten tool is armed, without emitting any signal.
     /// @param straightening Whether the Level button is checked.
     void setStraightening(bool straightening);
@@ -131,6 +146,18 @@ signals:
     /// @brief Announces that the Crop button was checked or unchecked by the user.
     /// @param cropping Whether the crop mode is asked for.
     void cropModeToggled(bool cropping);
+
+    /// @brief Announces a mask the user chose in the Masks list.
+    void maskSelected(std::optional<arraw::LocalAdjustmentId> id);
+
+    /// @brief Announces that the user clicked a mask in the list.
+    void maskClicked();
+
+    /// @brief Announces that the user armed a mask creation tool, or disarmed the armed one.
+    void maskToolChosen(arraw::app::MaskTool tool);
+
+    /// @brief Announces that the user toggled the mask overlay.
+    void overlayToggled(bool shown);
 
     /// @brief Announces that the Level button was checked or unchecked by the user.
     /// @param straightening Whether the straighten tool is asked for.
@@ -191,6 +218,9 @@ private:
 
     /// @brief Origin of the edit in progress; see ::arraw::app::DevelopPanel::editOrigin.
     EditOrigin editOrigin_ = EditOrigin::Edit;
+
+    /// @brief Builds the Masks group: the list, the creation tools and the selected mask's rows.
+    QWidget* buildMasksGroup();
 
     /// @brief Builds the White Balance group.
     QWidget* buildWhiteBalanceGroup();
@@ -266,6 +296,7 @@ private:
     QComboBox* presetCombo_ = nullptr;
     QPushButton* pickButton_ = nullptr;
 
+    MasksPanel* masksPanel_ = nullptr;
     QPushButton* cropButton_ = nullptr;
     QPushButton* levelButton_ = nullptr;
     QAbstractButton* lockButton_ = nullptr;

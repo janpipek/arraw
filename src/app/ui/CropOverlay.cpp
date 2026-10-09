@@ -871,7 +871,7 @@ void CropOverlay::keyPressEvent(QKeyEvent* event) {
         QWidget::keyPressEvent(event);
         return;
     }
-    // R is the window's: its Crop action leaves the mode, keeping the crop.
+    // C is the window's: its Crop action leaves the mode, keeping the crop.
     switch (event->key()) {
     case Qt::Key_Return:
     case Qt::Key_Enter:

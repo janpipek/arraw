@@ -832,3 +832,75 @@ holds.
   three, dominated by the PNG decode and encode. So a mask costs about 0.6 s of
   CPU per 24 MP (all 16: about 10 s), and a photograph with none pays nothing
   (the digests are bit-identical).
+
+## Note, 2026-10-09: the linear and radial masks in the window, as built
+
+Step 3 of the local adjustment plan (`docs/ideas/masks-gui-plan.md`) is in the
+window. What was built, and where it departs from section 10:
+
+- **Mask mode.** Photo > Masks, key **M**, a mode over the photograph with
+  its own overlay (`MaskOverlay`, a child of `PhotoView`, the view's focus proxy
+  while on). It is exclusive with the crop mode: entering the crop mode drops a
+  gesture under way and leaves the mask mode; M while cropping leaves the crop
+  mode keeping the crop, as C does. Arming the white balance picker leaves it.
+  Unlike the crop mode it opens no edit of its own: every gesture is one history
+  step (origin Edit), so Undo, Redo, the History dock, the zoom and Paste work
+  inside it. Choosing a mask in the list enters it.
+- **The Masks group** sits in the develop dock below Crop (`MasksPanel`, in
+  `nonGeometryGroups_`, so the crop mode disables it). It shares the panel's
+  label column and its edit signals; the rows are `SettingSlider`s made from an
+  id, the local range and `localPresentationOf` (the new constructor), with ids
+  of their own (`local.exposure`) beside the global rows. Black & White hides the
+  local Saturation and Vibrance rows, as it does the global ones.
+- **Keys in the mode:** Esc cancels a gesture, else disarms the tool, else
+  leaves the mode; O toggles the tint; Delete and Backspace delete the selected
+  mask; Space with a left drag pans. The wheel, a middle drag and Alt with a
+  left drag are the view's. A drag on empty canvas pans, a click there clears the
+  selection.
+- **Creation** arms a tool (Linear or Radial in the group) and is a drag on the
+  photograph: Linear from the press to the release, Radial from the centre to the
+  radius as a circle; a click shorter than 4 pixels makes the default size there.
+  One step ("Add Linear 1"); the mask is selected from the first move on, and the
+  tool disarms.
+- **Handles** (of the selected mask) and **pins** (at the centre of the others)
+  are grabbed within 10 logical pixels. All the maths runs in the long-edge frame
+  (section 4), so a turned, flipped or straightened photograph needs no special
+  case. A drag is worked out from the shape at the press and clamped so that
+  `withLocalShape` never throws.
+- **Public API added** (`include/DevelopedFrame.h`): `DevelopedFrameMap` (the
+  affine map between the corrected frame and the developed one, in doubles:
+  `CorrectedPosition`, `DevelopedPoint`, `LongEdgePoint`) and `maskCoverage`, the
+  weights of a mask over a grid of the developed frame, sharing the engine's
+  `maskWeight` (so the tint is what the render applies). The app takes no private
+  core header for any of it.
+- **The tint** is a red overlay at alpha 0.5 w of the selected mask's shape and
+  Invert (not Enabled, Opacity or the deltas), on a grid of half the widget's
+  logical size capped at one megapixel, remade on a zero-delay timer when the
+  shape, the geometry or the view changes. Off by default, mask mode only.
+- **A gesture is cancelled** when the pointer is lost: Esc, a window
+  deactivation, hiding, losing the focus, a move without the button held, and by
+  the window when the photograph is left, the crop mode entered, or a sidecar
+  reloaded. Undo, Redo and a History click during a drag first stop the drag, then
+  the session commits it and takes it back.
+
+Where it departs from section 10:
+
+- **No `CropModeController`** exists, so there is no `MaskModeController`
+  either: the window owns the mode, as it owns the crop mode (`setMaskMode`,
+  `leaveMaskMode`, `selectMask`, `syncMasks`, with the three panel lambdas
+  turned into the shared slots `beginEdit`, `updateEdit`, `finishEdit` and
+  `cancelEdit`).
+- **Space pans in the mask mode only.** Section 10 says "pan stays on Space", but
+  the photo view pans with a left drag and knows no Space; outside the mask mode
+  that is unchanged (open question 6 of the plan, left open).
+- **Renaming** is a double-click in the list (F2 too, while the list has the
+  focus, which a click on a row gives up again at once by entering the mode).
+
+Measured (release build, 24 MP generated 6000 by 4000 PNG, eight linear and eight
+radial masks with four deltas each, the tint on, 41 updates of a 20 ms drag, the
+preview at 1/4): `window.panel` 0.4 ms median (the edit, the panel and the
+overlay), `mask.coverage` 2.0 ms median (24 ms at most, the first), the preview
+render about 47 to 53 ms median for a handle drag and 47 ms for an Exposure drag,
+coalesced to about one render per two updates. On this machine every device is
+the CPU: the only Vulkan device is llvmpipe, which `createGpuContext` refuses as
+a software rasteriser, so no GPU figures were taken.

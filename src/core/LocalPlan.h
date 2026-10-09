@@ -136,6 +136,15 @@ struct LocalPlan {
 /// adjustment is degenerate.
 [[nodiscard]] LocalPlan localPlanFor(const DevelopState& state, ImageSize source);
 
+/// @brief Resolves one mask's shape against the size of the source being rendered.
+///
+/// The shape's coefficients only: `k` stays zero. What ::arraw::localPlanFor does for each
+/// adjustment it keeps, and what ::arraw::maskCoverage does for the one it draws.
+/// @param shape Shape, normalised (::arraw::normalised(const Mask&)).
+/// @param invert Whether the weight is turned to `1 - w`.
+/// @param source Size of the pixels the weight is evaluated at; not empty.
+[[nodiscard]] LocalMaskPlan resolvedMask(const Mask& shape, bool invert, ImageSize source);
+
 /// @brief Gives what a block's masks can add to Texture, Clarity and Dehaze, for the bases the
 /// Presence plan prepares (ADR 044, section 5).
 /// @param local Resolved block.

@@ -166,6 +166,8 @@ add_library(arraw STATIC
         src/core/DevelopState.cpp
         include/CropGeometry.h
         src/core/CropGeometry.cpp
+        include/DevelopedFrame.h
+        src/core/DevelopedFrame.cpp
         include/GeometrySettings.h
         include/ImageOrientation.h
         include/ImagePyramid.h
@@ -447,6 +449,12 @@ add_library(arraw-app-core STATIC
         src/app/FolderWatcher.h
         src/app/HistoryModel.cpp
         src/app/HistoryModel.h
+        src/app/MaskEditing.cpp
+        src/app/MaskEditing.h
+        src/app/MaskPresentation.cpp
+        src/app/MaskPresentation.h
+        src/app/MasksModel.cpp
+        src/app/MasksModel.h
         src/app/OklabHue.cpp
         src/app/OklabHue.h
         src/app/ShotFilterModel.cpp
@@ -490,6 +498,10 @@ add_library(arraw-app-ui STATIC
         src/app/ui/FilmStrip.h
         src/app/ui/MainWindow.cpp
         src/app/ui/MainWindow.h
+        src/app/ui/MaskOverlay.cpp
+        src/app/ui/MaskOverlay.h
+        src/app/ui/MasksPanel.cpp
+        src/app/ui/MasksPanel.h
         src/app/ui/PhotoView.cpp
         src/app/ui/PhotoView.h
         src/app/ui/RenderProgressPie.cpp

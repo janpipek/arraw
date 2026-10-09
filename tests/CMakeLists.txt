@@ -27,6 +27,7 @@ add_executable(arraw-tests
         test_CurveEditing.cpp
         test_CurveHistogramRefresh.cpp
         test_Develop.cpp
+        test_DevelopedFrame.cpp
         test_ToneCurve.cpp
         test_DevelopState.cpp
         test_DisplayImage.cpp
@@ -54,6 +55,8 @@ add_executable(arraw-tests
         test_GpuDevice.cpp
         test_GpuPlan.cpp
         test_HistoryModel.cpp
+        test_MaskEditing.cpp
+        test_MasksModel.cpp
         test_ImageBuffer.cpp
         test_ImageExport.cpp
         test_ImagePyramid.cpp
@@ -123,7 +126,10 @@ add_executable(arraw-widget-tests
         test_MainWindowHistory.cpp
         test_MainWindowCopy.cpp
         test_MainWindowCrop.cpp
+        test_MainWindowMasks.cpp
         test_MainWindowOpening.cpp
+        test_MaskOverlay.cpp
+        test_MasksPanel.cpp
         test_RenderProgressPie.cpp
         test_SettingSlider.cpp)
 arraw_enable_warnings(arraw-widget-tests)

@@ -1,13 +1,12 @@
 #include "HistoryModel.h"
 
+#include "MaskPresentation.h"
 #include "SettingPresentation.h"
 
 #include <LocalAdjustmentEdits.h>
 
 #include <QCoreApplication>
 #include <QVariant>
-
-#include <variant>
 
 namespace arraw::app {
 
@@ -33,39 +32,14 @@ QString wordSingle(std::string_view key, const DevelopState& after) {
     return QStringLiteral("%1 %2%3").arg(presentation->label, number, presentation->unit);
 }
 
-/// Words a mask as the list shows it: its own name, or its kind and place among that kind.
-QString maskLabel(const DevelopState& state, LocalAdjustmentId id) {
-    const LocalAdjustment& adjustment = *findLocalAdjustment(state, id);
-    if (!adjustment.name.empty()) {
-        return QString::fromStdString(adjustment.name);
-    }
-    const auto ordinal = static_cast<int>(maskOrdinal(state, id));
-    if (std::holds_alternative<LinearMask>(adjustment.shape)) {
-        return QCoreApplication::translate("arraw::app::HistoryModel", "Linear %1").arg(ordinal);
-    }
-    return QCoreApplication::translate("arraw::app::HistoryModel", "Radial %1").arg(ordinal);
-}
-
 /// Words one changed delta of a mask: the control's name and the value it now has.
 QString wordDelta(const LocalDescriptor& descriptor, float value) {
-    QString label;
-    QString unit;
-    int decimals = 0;
-    if (descriptor.globalKey.empty()) {
-        label = descriptor.key == "relativeTemperature"
-                    ? QCoreApplication::translate("arraw::app::HistoryModel", "Temp")
-                    : QCoreApplication::translate("arraw::app::HistoryModel", "Tint");
-    } else {
-        const SettingPresentation& presentation = presentationOf(descriptor.globalKey);
-        label = presentation.label;
-        unit = presentation.unit;
-        decimals = presentation.decimals;
-    }
-    QString number = QString::number(value, 'f', decimals);
+    const SettingPresentation& presentation = localPresentationOf(descriptor.key);
+    QString number = QString::number(value, 'f', presentation.decimals);
     if (value > 0.0F) {
         number.prepend('+');
     }
-    return QStringLiteral("%1 %2%3").arg(label, number, unit);
+    return QStringLiteral("%1 %2%3").arg(presentation.label, number, presentation.unit);
 }
 
 /// Words an ordinary edit that changed masks and no setting.
@@ -80,16 +54,16 @@ QString wordLocal(const DevelopState& before, const DevelopState& after, const L
                                            static_cast<int>(total));
     }
     if (!local.added.empty()) {
-        return tr("Add %1").arg(maskLabel(after, local.added.front()));
+        return tr("Add %1").arg(maskDisplayName(after, local.added.front()));
     }
     if (!local.removed.empty()) {
-        return tr("Remove %1").arg(maskLabel(before, local.removed.front()));
+        return tr("Remove %1").arg(maskDisplayName(before, local.removed.front()));
     }
     if (local.reordered) {
         return tr("Reorder Masks");
     }
     const MaskChange& change = local.changed.front();
-    const QString label = maskLabel(after, change.id);
+    const QString label = maskDisplayName(after, change.id);
     const LocalAdjustment& now = *findLocalAdjustment(after, change.id);
     const int aspects = (change.name ? 1 : 0) + (change.enabled ? 1 : 0) +
                         (change.opacity ? 1 : 0) + (change.invert ? 1 : 0) +

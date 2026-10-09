@@ -1,6 +1,8 @@
 #include "CurveEditing.h"
+#include "MaskPresentation.h"
 #include "SettingPresentation.h"
 
+#include <LocalAdjustmentEdits.h>
 #include <SettingDescriptors.h>
 
 #include <catch2/catch_approx.hpp>
@@ -277,4 +279,70 @@ TEST_CASE("The Angle row moves in tenths of a degree", "[SettingPresentation]") 
     CHECK(angle.step == Approx(0.1));
     CHECK(angle.decimals == 1);
     CHECK(angle.label == QString("Angle"));
+}
+
+TEST_CASE("Every local control has a presentation that words it as its global counterpart",
+          "[SettingPresentation][masks]") {
+    for (const LocalDescriptor& descriptor : localAdjustmentDescriptors) {
+        CAPTURE(descriptor.key);
+        const SettingPresentation& local = localPresentationOf(descriptor.key);
+        CHECK(!local.label.isEmpty());
+        CHECK(!local.toolTip.isEmpty());
+        CHECK(local.step > 0.0);
+        CHECK(local.decimals >= 0);
+        if (descriptor.globalKey.empty()) {
+            CHECK(local.unit.isEmpty());
+            CHECK(local.decimals == 0);
+        } else {
+            const SettingPresentation& global = presentationOf(descriptor.globalKey);
+            CHECK(local.label == global.label);
+            CHECK(local.unit == global.unit);
+            CHECK(local.decimals == global.decimals);
+            CHECK(local.step == global.step);
+            CHECK(local.toolTip != global.toolTip);
+        }
+        // The range is the local table's, never the global one's.
+        REQUIRE(descriptor.range.minimum < 0.0);
+        CHECK(descriptor.range.maximum == -descriptor.range.minimum);
+    }
+}
+
+TEST_CASE("The local rows have their own words and ranges", "[SettingPresentation][masks]") {
+    const SettingPresentation& exposure = localPresentationOf("exposure");
+    CHECK(exposure.label == "Exposure");
+    CHECK(exposure.unit == " EV");
+    CHECK(exposure.decimals == 2);
+    CHECK(findLocalDescriptor("exposure")->range.maximum <
+          findDescriptor("exposure")->range->maximum);
+    CHECK(localPresentationOf("relativeTemperature").label == "Temp");
+    CHECK(localPresentationOf("relativeTint").label == "Tint");
+    CHECK(localPresentationOf("contrast").decimals == 0);
+    CHECK_THROWS_AS(localPresentationOf("temperature"), std::out_of_range);
+    CHECK_THROWS_AS(localPresentationOf("rotation"), std::out_of_range);
+}
+
+TEST_CASE("The opacity row shows a percent", "[SettingPresentation][masks]") {
+    const SettingPresentation& opacity = maskOpacityPresentation();
+    CHECK(opacity.label == "Opacity");
+    CHECK(opacity.unit == " %");
+    CHECK(opacity.decimals == 0);
+    CHECK(opacity.step == 1.0);
+    CHECK(!opacity.toolTip.isEmpty());
+    CHECK(maskOpacityRange.minimum == 0.0);
+    CHECK(maskOpacityRange.maximum == 100.0);
+}
+
+TEST_CASE("A mask is shown under its name or its kind and place among that kind",
+          "[SettingPresentation][masks]") {
+    DevelopState state;
+    state = withLocalAdjustmentAdded(state, LinearMask{});
+    state = withLocalAdjustmentAdded(state, RadialMask{});
+    state = withLocalAdjustmentAdded(state, LinearMask{});
+    const auto id = [&state](std::size_t index) { return state.localAdjustments[index].id; };
+    CHECK(maskDisplayName(state, id(0)) == "Linear 1");
+    CHECK(maskDisplayName(state, id(1)) == "Radial 1");
+    CHECK(maskDisplayName(state, id(2)) == "Linear 2");
+    state = withLocalAdjustmentRenamed(state, id(2), "Sky");
+    CHECK(maskDisplayName(state, id(2)) == "Sky");
+    CHECK_THROWS_AS(maskDisplayName(state, LocalAdjustmentId{99}), std::invalid_argument);
 }

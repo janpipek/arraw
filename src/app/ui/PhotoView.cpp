@@ -1,6 +1,7 @@
 #include "PhotoView.h"
 
 #include "CropOverlay.h"
+#include "MaskOverlay.h"
 
 #include <QMouseEvent>
 #include <QPaintEvent>
@@ -34,7 +35,30 @@ PhotoView::PhotoView(QWidget* parent) : QWidget(parent) {
     setAutoFillBackground(false);
     crop_ = new CropOverlay(this);
     crop_->hide();
+    mask_ = new MaskOverlay(this);
+    mask_->hide();
     updateCursor();
+}
+
+void PhotoView::showOverlay(QWidget* shown, QWidget* hidden) {
+    // The view takes the focus before an overlay hides: hiding the focused widget would pass
+    // the focus on to the next one in the chain, such as a spin box of the panel, which would
+    // then take the keys meant for the window (C, M, Ctrl+Z).
+    const bool focused = hidden->hasFocus();
+    if (!hidden->isHidden()) {
+        setFocusProxy(nullptr);
+        if (focused) {
+            setFocus();
+        }
+        hidden->hide();
+    }
+    shown->setGeometry(rect());
+    shown->show();
+    shown->raise();
+    // Whatever gives the view the focus back, such as Enter in a spin box, gives it to
+    // the overlay, which claims the mode's keys (ADR 040).
+    setFocusProxy(shown);
+    shown->setFocus();
 }
 
 void PhotoView::setCropMode(bool cropping) {
@@ -43,23 +67,43 @@ void PhotoView::setCropMode(bool cropping) {
     }
     crop_->setGeometry(rect());
     if (cropping) {
-        crop_->show();
-        crop_->raise();
-        // Whatever gives the view the focus back, such as Enter in a spin box, gives it to
-        // the overlay, which claims the mode's keys (ADR 040).
-        setFocusProxy(crop_);
-        crop_->setFocus();
+        showOverlay(crop_, mask_);
         return;
     }
-    // The view takes the focus before the overlay hides: hiding the focused widget would pass
-    // the focus on to the next one in the chain, such as a spin box of the panel, which would
-    // then take the keys meant for the window (R, Ctrl+Z).
     const bool focused = crop_->hasFocus();
     setFocusProxy(nullptr);
     if (focused) {
         setFocus();
     }
     crop_->hide();
+}
+
+void PhotoView::setMaskMode(bool masking) {
+    if (masking == isMaskMode()) {
+        return;
+    }
+    mask_->setGeometry(rect());
+    if (masking) {
+        showOverlay(mask_, crop_);
+        return;
+    }
+    const bool focused = mask_->hasFocus();
+    setFocusProxy(nullptr);
+    if (focused) {
+        setFocus();
+    }
+    mask_->hide();
+}
+
+bool PhotoView::isMaskMode() const {
+    return !mask_->isHidden();
+}
+
+void PhotoView::panBy(QPointF delta) {
+    if (frame_.isEmpty()) {
+        return;
+    }
+    adopt(transform().panned(delta * devicePixelRatioF()), fit_, true);
 }
 
 QImage PhotoView::wholeFrameImage() const {
@@ -96,6 +140,7 @@ void PhotoView::adopt(const ViewTransform& next, bool fit, bool user) {
     centre_ = next.centre();
     if (moved) {
         update();
+        emit transformChanged();
     }
     if (zoomMoved) {
         emit zoomChanged();
@@ -112,6 +157,7 @@ void PhotoView::setFrameSize(QSize frame) {
     frame_ = frame;
     adopt(transform(), fit_, false);
     updateCursor();
+    emit transformChanged();
 }
 
 void PhotoView::setStandIn(const QImage& standIn) {
@@ -139,6 +185,7 @@ void PhotoView::resetView() {
     standIn_ = {};
     update();
     adopt(ViewTransform::fitted(QSizeF(frame_), QSizeF(devicePixels())), true, false);
+    emit transformChanged();
 }
 
 void PhotoView::setPicking(bool picking) {
@@ -204,8 +251,10 @@ void PhotoView::paintEvent(QPaintEvent* /*event*/) {
 void PhotoView::resizeEvent(QResizeEvent* event) {
     QWidget::resizeEvent(event);
     crop_->setGeometry(rect());
+    mask_->setGeometry(rect());
     // Fitting follows the size; a zoom is kept, with the centre clamped anew.
     adopt(transform(), fit_, false);
+    emit transformChanged();
 }
 
 void PhotoView::wheelEvent(QWheelEvent* event) {

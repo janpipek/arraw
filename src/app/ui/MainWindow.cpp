@@ -12,6 +12,7 @@
 #include "ExportSettings.h"
 #include "FilmStrip.h"
 #include "HistoryModel.h"
+#include "MaskOverlay.h"
 #include "PhotoView.h"
 #include "RenderDelay.h"
 #include "RenderProgressPie.h"
@@ -23,15 +24,18 @@
 
 #include <ColorEncoding.h>
 #include <Develop.h>
+#include <DevelopedFrame.h>
 #include <Edits.h>
 #include <ImageBuffer.h>
 #include <ImageImport.h>
+#include <LocalAdjustmentEdits.h>
 #include <Photo.h>
 #include <Sidecar.h>
 #include <WhiteBalance.h>
 
 #include <QAction>
 #include <QActionGroup>
+#include <QApplication>
 #include <QCloseEvent>
 #include <QDockWidget>
 #include <QEvent>
@@ -209,6 +213,21 @@ MainWindow::MainWindow(DebugLog& debugLog, QWidget* parent)
         crop->edit([](CropEditing& editing) { editing.swapOrientation(); });
     });
 
+    // The mask mode's keys wherever the focus is, as the crop mode's; the overlay claims them
+    // itself when it has the focus. Esc is the picker's and the crop mode's elsewhere, and
+    // neither is on while this mode is.
+    MaskOverlay* masks = &photoView_->maskOverlay();
+    const auto addMaskShortcut = [this](QKeyCombination key, const std::function<void()>& act) {
+        auto* shortcut = new QShortcut(QKeySequence(key), this);
+        shortcut->setEnabled(false);
+        connect(shortcut, &QShortcut::activated, this, act);
+        maskShortcuts_.push_back(shortcut);
+    };
+    addMaskShortcut(QKeyCombination(Qt::Key_Escape), [masks] { masks->escape(); });
+    addMaskShortcut(QKeyCombination(Qt::Key_O), [masks] { masks->toggleOverlay(); });
+    addMaskShortcut(QKeyCombination(Qt::Key_Delete), [masks] { masks->deleteSelected(); });
+    addMaskShortcut(QKeyCombination(Qt::Key_Backspace), [masks] { masks->deleteSelected(); });
+
     // Long enough to coalesce the events of a drag, short enough to feel prompt.
     resizeTimer_.setSingleShot(true);
     resizeTimer_.setInterval(100);
@@ -280,6 +299,8 @@ void MainWindow::buildMenu() {
                 photoView_->cropOverlay().undo();
                 return;
             }
+            // A drag under way stops being tracked; the session commits it and takes it back.
+            photoView_->maskOverlay().abandonDrag();
             open_->session.undo();
             refreshPanel();
         });
@@ -296,6 +317,7 @@ void MainWindow::buildMenu() {
                 photoView_->cropOverlay().redo();
                 return;
             }
+            photoView_->maskOverlay().abandonDrag();
             open_->session.redo();
             refreshPanel();
         });
@@ -327,6 +349,12 @@ void MainWindow::buildMenu() {
     cropAction_->setCheckable(true);
     cropAction_->setEnabled(false);
     connect(cropAction_, &QAction::triggered, this, &MainWindow::setCropMode);
+    maskAction_ = photoMenu_->addAction(tr("&Masks"));
+    maskAction_->setObjectName("maskAction");
+    maskAction_->setShortcut(QKeySequence(Qt::Key_M));
+    maskAction_->setCheckable(true);
+    maskAction_->setEnabled(false);
+    connect(maskAction_, &QAction::triggered, this, &MainWindow::setMaskMode);
     photoMenu_->addSeparator();
     const auto addGeometryAction = [this](const QString& name, const QString& text,
                                           const QKeySequence& shortcut, GeometryCommand command) {
@@ -375,6 +403,10 @@ MainWindow::~MainWindow() {
     // curveHistogramWantedChanged into a lambda that uses previewRenderer_.
     if (developPanel_ != nullptr) {
         developPanel_->disconnect(this);
+    }
+    if (photoView_ != nullptr) {
+        // Hiding or deactivating the overlay while the window comes down must not reach it.
+        photoView_->maskOverlay().disconnect(this);
     }
 }
 
@@ -490,31 +522,43 @@ void MainWindow::buildDevelopDock() {
 
     // In the crop mode the whole session is one edit (ADR 040): a panel edit
     // joins it rather than opening and closing one of its own.
-    connect(developPanel_, &DevelopPanel::editStarted, this, [this] {
-        guarded([this] {
-            if (photoView_->isCropMode()) {
-                // One step of the crop session's history, however many changes it makes.
-                photoView_->cropOverlay().beginStep();
-            } else {
-                open_->session.begin();
-            }
-        });
-    });
-    connect(developPanel_, &DevelopPanel::stateEdited, this, [this](const DevelopState& state) {
-        guarded([this, &state] {
-            // No edit is open after a failure cancelled one: the rest of that
-            // drag is dropped, rather than failing again with every move.
-            if (!open_->session.editing()) {
-                return;
-            }
-            const DevelopState before = open_->session.photo().state();
-            DevelopState next = state;
-            next.settings.geometry = reconciledGeometry(state.settings.geometry);
-            open_->session.update(next);
-            refreshPanel(renderDelayFor(before, open_->session.photo().state(), previewOnGpu_));
-        });
-    });
+    connect(developPanel_, &DevelopPanel::editStarted, this, &MainWindow::beginEdit);
+    connect(developPanel_, &DevelopPanel::stateEdited, this, &MainWindow::updateEdit);
     connect(developPanel_, &DevelopPanel::pickToggled, this, &MainWindow::setPicking);
+
+    // The Masks group and the overlay speak the same protocol, and share the slots above.
+    connect(developPanel_, &DevelopPanel::maskSelected, this,
+            [this](std::optional<LocalAdjustmentId> id) {
+                selectMask(id);
+                if (id) {
+                    // Choosing a mask in the list is asking to work on it. Entering the mode
+                    // moves the focus to the photograph; a keyboard user keeps the list.
+                    QWidget* held = QApplication::focusWidget();
+                    setMaskMode(true);
+                    if (held != nullptr && developPanel_->isAncestorOf(held)) {
+                        held->setFocus();
+                    }
+                }
+            });
+    // A click hands the keys to the photograph; moving in the list by keyboard keeps them.
+    connect(developPanel_, &DevelopPanel::maskClicked, this, [this] {
+        if (photoView_->isMaskMode()) {
+            photoView_->maskOverlay().setFocus();
+        }
+    });
+    connect(developPanel_, &DevelopPanel::maskToolChosen, this, &MainWindow::setMaskTool);
+    connect(developPanel_, &DevelopPanel::overlayToggled, &photoView_->maskOverlay(),
+            &MaskOverlay::setOverlayShown);
+    MaskOverlay& overlay = photoView_->maskOverlay();
+    connect(&overlay, &MaskOverlay::editStarted, this, &MainWindow::beginEdit);
+    connect(&overlay, &MaskOverlay::stateEdited, this, &MainWindow::updateEdit);
+    connect(&overlay, &MaskOverlay::editFinished, this, [this] { finishEdit(EditOrigin::Edit); });
+    connect(&overlay, &MaskOverlay::editCancelled, this, &MainWindow::cancelEdit);
+    connect(&overlay, &MaskOverlay::maskSelected, this, &MainWindow::selectMask);
+    connect(&overlay, &MaskOverlay::toolChanged, this, &MainWindow::setMaskTool);
+    connect(&overlay, &MaskOverlay::overlayToggled, developPanel_,
+            &DevelopPanel::setMaskOverlayShown);
+    connect(&overlay, &MaskOverlay::leaveRequested, this, &MainWindow::leaveMaskMode);
 
     // The Crop group asks for what the menu and keys ask for; its button and the
     // action stay in step whoever flipped them.
@@ -580,23 +624,155 @@ void MainWindow::buildDevelopDock() {
     // Enter or Esc in a spin box ends the typing: the arrow keys are the window's again.
     connect(developPanel_, &DevelopPanel::focusReleased, photoView_,
             qOverload<>(&QWidget::setFocus));
-    connect(developPanel_, &DevelopPanel::editFinished, this, [this] {
-        guarded([this] {
-            if (photoView_->isCropMode()) {
-                photoView_->cropOverlay().endStep();
-                return;
-            }
-            if (!open_->session.editing()) {
-                return;
-            }
-            open_->session.commit(developPanel_->editOrigin());
-            refreshPanel();
-        });
+    connect(developPanel_, &DevelopPanel::editFinished, this,
+            [this] { finishEdit(developPanel_->editOrigin()); });
+}
+
+void MainWindow::beginEdit() {
+    guarded([this] {
+        if (photoView_->isCropMode()) {
+            // One step of the crop session's history, however many changes it makes.
+            photoView_->cropOverlay().beginStep();
+        } else {
+            open_->session.begin();
+        }
     });
+}
+
+void MainWindow::updateEdit(const DevelopState& state) {
+    guarded([this, &state] {
+        // No edit is open after a failure cancelled one: the rest of that
+        // drag is dropped, rather than failing again with every move.
+        if (!open_->session.editing()) {
+            return;
+        }
+        const DevelopState before = open_->session.photo().state();
+        DevelopState next = state;
+        next.settings.geometry = reconciledGeometry(state.settings.geometry);
+        open_->session.update(next);
+        refreshPanel(renderDelayFor(before, open_->session.photo().state(), previewOnGpu_));
+    });
+}
+
+void MainWindow::finishEdit(EditOrigin origin) {
+    guarded([this, origin] {
+        if (photoView_->isCropMode()) {
+            photoView_->cropOverlay().endStep();
+            return;
+        }
+        if (!open_->session.editing()) {
+            return;
+        }
+        open_->session.commit(origin);
+        refreshPanel();
+    });
+}
+
+void MainWindow::cancelEdit() {
+    guarded([this] {
+        if (open_->session.editing()) {
+            open_->session.cancel();
+        }
+        refreshPanel();
+    });
+}
+
+void MainWindow::setMaskMode(bool masking) {
+    if (!masking) {
+        leaveMaskMode();
+        return;
+    }
+    if (!editable() || photoView_->isMaskMode()) {
+        maskAction_->setChecked(photoView_->isMaskMode());
+        return;
+    }
+    // Keeping the crop, as pressing C again does.
+    leaveCropMode(true);
+    guarded([this] {
+        developPanel_->finishPendingEdit();
+        setPicking(false);
+        photoView_->setMaskMode(true);
+        for (QShortcut* shortcut : maskShortcuts_) {
+            shortcut->setEnabled(true);
+        }
+        syncMasks();
+    });
+    maskAction_->setChecked(photoView_->isMaskMode());
+}
+
+void MainWindow::leaveMaskMode() {
+    if (!photoView_->isMaskMode()) {
+        maskAction_->setChecked(false);
+        return;
+    }
+    // A gesture under way is dropped with its edit.
+    photoView_->maskOverlay().cancelGesture();
+    photoView_->maskOverlay().setTool(MaskTool::None);
+    developPanel_->setMaskTool(MaskTool::None);
+    photoView_->setMaskMode(false);
+    maskAction_->setChecked(false);
+    for (QShortcut* shortcut : maskShortcuts_) {
+        shortcut->setEnabled(false);
+    }
+}
+
+void MainWindow::selectMask(std::optional<LocalAdjustmentId> id) {
+    maskSelection_ = open_ ? reconciledSelection(open_->session.photo().state(), id) : std::nullopt;
+    photoView_->maskOverlay().setSelection(maskSelection_);
+    developPanel_->setSelectedMask(maskSelection_);
+}
+
+void MainWindow::setMaskTool(MaskTool tool) {
+    if (tool != MaskTool::None) {
+        setMaskMode(true);
+        if (!photoView_->isMaskMode()) {
+            tool = MaskTool::None;
+        }
+    }
+    photoView_->maskOverlay().setTool(tool);
+    developPanel_->setMaskTool(tool);
+    if (tool != MaskTool::None) {
+        photoView_->maskOverlay().setFocus();
+    }
+}
+
+void MainWindow::syncMasks() {
+    if (!open_) {
+        return;
+    }
+    const DevelopState& state = open_->session.photo().state();
+    maskSelection_ = reconciledSelection(state, maskSelection_);
+    std::optional<SourceShape> source;
+    if (open_->decoded) {
+        source = shapeOf(*open_->decoded);
+        if (!photoView_->isCropMode()) {
+            // Before the overlay maps through the frame: the crop may have changed it, and a
+            // render held back would set it only later.
+            try {
+                const ImageSize cropped =
+                    croppedSize(open_->decoded->size(), open_->decoded->orientation(), state);
+                photoView_->setFrameSize(
+                    QSize(static_cast<int>(cropped.width), static_cast<int>(cropped.height)));
+            } catch (const std::exception&) {
+                // A state the renderer will report on.
+            }
+        }
+    }
+    MaskOverlay& overlay = photoView_->maskOverlay();
+    overlay.setScene(state, source);
+    overlay.setSelection(maskSelection_);
+    developPanel_->setSelectedMask(maskSelection_);
+    if (overlay.tool() != MaskTool::None && !canAddLocalAdjustment(state)) {
+        // Redo or a paste filled the list while a tool was armed: a press would do nothing.
+        setMaskTool(MaskTool::None);
+    }
 }
 
 void MainWindow::setPicking(bool picking) {
     picking_ = picking && editable() && !photoView_->isCropMode();
+    if (picking_) {
+        leaveMaskMode();
+    }
     developPanel_->setPicking(picking_);
     cancelPickShortcut_->setEnabled(picking_);
     photoView_->setPicking(picking_);
@@ -611,6 +787,8 @@ void MainWindow::setCropMode(bool cropping) {
         cropAction_->setChecked(photoView_->isCropMode());
         return;
     }
+    // A mask gesture under way is dropped, and the mode left (ADR 040, ADR 044).
+    leaveMaskMode();
     guarded([this] {
         developPanel_->finishPendingEdit();
         setPicking(false);
@@ -772,6 +950,7 @@ void MainWindow::goToHistoryRow(const QModelIndex& row) {
         if (open_->session.history().size() != steps || step == open_->session.position()) {
             return;
         }
+        photoView_->maskOverlay().abandonDrag();
         open_->session.goTo(step);
         refreshPanel();
     });
@@ -925,6 +1104,8 @@ void MainWindow::guarded(const std::function<void()>& action) {
         action();
     } catch (const std::exception& error) {
         const QString message = QString::fromUtf8(error.what());
+        // The edit is about to be cancelled, whatever the overlay was tracking.
+        photoView_->maskOverlay().abandonDrag();
         if (photoView_->isCropMode()) {
             // The crop on screen can no longer be kept in step with the session.
             closeCropOverlay();
@@ -965,6 +1146,7 @@ void MainWindow::refreshPanel(std::chrono::milliseconds renderDelay) {
         }
     }
     developPanel_->showState(photo.state(), context);
+    syncMasks();
     updateHistoryActions();
     saveAction_->setEnabled(open_->session.hasUnsavedChanges());
     updateTitle();
@@ -1267,6 +1449,8 @@ void MainWindow::sidecarChangedOnDisk(const QString& primary) {
     }
     const QString name = toQString(path.filename());
     leaveCropMode(true);
+    // A gesture under way belongs to the state being replaced.
+    photoView_->maskOverlay().cancelGesture();
     try {
         developPanel_->finishPendingEdit();
     } catch (const std::exception&) {
@@ -1454,6 +1638,7 @@ bool MainWindow::confirmLeavingPhoto() {
         return true;
     }
     leaveCropMode(true);
+    photoView_->maskOverlay().cancelGesture();
     try {
         developPanel_->finishPendingEdit();
     } catch (const std::exception&) {
@@ -1682,6 +1867,10 @@ void MainWindow::showPhoto(Photo photo) {
         // Only when nothing asked first; the edit belongs to the session being replaced.
         closeCropOverlay();
     }
+    // The mode and the selection belong to the photograph being left; a gesture under way
+    // leaves no step.
+    leaveMaskMode();
+    maskSelection_.reset();
     setPicking(false);
     // The shot just left shows its saved settings again, not the edits that were abandoned.
     filmStrip_->releaseLiveThumbnail();
@@ -1765,6 +1954,9 @@ void MainWindow::closePhoto() {
     if (photoView_->isCropMode()) {
         closeCropOverlay();
     }
+    leaveMaskMode();
+    maskSelection_.reset();
+    developPanel_->setSelectedMask(std::nullopt);
     setPicking(false);
     filmStrip_->releaseLiveThumbnail();
     filmStrip_->clearActive();
@@ -1790,6 +1982,7 @@ void MainWindow::updateEditingActions() {
     developDock_->setEnabled(ready);
     exportAction_->setEnabled(ready);
     cropAction_->setEnabled(ready);
+    maskAction_->setEnabled(ready);
     copyAction_->setEnabled(ready);
     updatePasteAction();
     for (QAction* action : geometryActions_) {

@@ -3,6 +3,7 @@
 #include "CopySections.h"
 #include "CropEditing.h"
 #include "ExportQueue.h"
+#include "MaskEditing.h"
 #include "PhotoLoader.h"
 #include "PreviewRenderer.h"
 #include "RenderIndicator.h"
@@ -225,6 +226,49 @@ private:
     /// @param action Body to run.
     void guarded(const std::function<void()>& action);
 
+    /// @brief Opens an edit of the open photograph's session, as the panel and the mask overlay
+    /// begin theirs.
+    ///
+    /// In the crop mode it begins a step of the crop session's history instead.
+    void beginEdit();
+
+    /// @brief Takes the state an edit has reached, from the panel or the mask overlay.
+    ///
+    /// Ignored when no edit is open: a failure cancelled it, and the rest of that drag is dropped.
+    void updateEdit(const DevelopState& state);
+
+    /// @brief Closes the edit as one history step.
+    /// @param origin Kind of step it is.
+    void finishEdit(EditOrigin origin);
+
+    /// @brief Drops the edit that is open, as when a drag is lost, and shows the state before it.
+    void cancelEdit();
+
+    /// @brief Enters or leaves the mask mode (M, Photo > Masks).
+    ///
+    /// Entering finishes a pending panel edit, disarms the picker and leaves the crop mode
+    /// keeping the crop. The mode opens no edit of its own: each gesture is a history step
+    /// (ADR 044).
+    void setMaskMode(bool masking);
+
+    /// @brief Leaves the mask mode, cancelling a gesture under way.
+    ///
+    /// Keeps the selection, so the panel still shows the mask's rows.
+    void leaveMaskMode();
+
+    /// @brief Selects a mask, or none, in the overlay and the panel.
+    /// @param id Mask to select; dropped when the state holds none with that id.
+    void selectMask(std::optional<LocalAdjustmentId> id);
+
+    /// @brief Arms or disarms a mask creation tool, entering the mask mode to arm one.
+    void setMaskTool(MaskTool tool);
+
+    /// @brief Gives the mask overlay and the panel the session's state and the selection.
+    ///
+    /// Sets the view's frame size first, so that the overlay maps through the frame the state
+    /// has (the crop may have changed it). The selection stays while its mask is in the list.
+    void syncMasks();
+
     /// @brief Arms or disarms the white balance picker.
     ///
     /// Armed, the view shows a cross cursor and a click on the photograph reads
@@ -236,7 +280,7 @@ private:
     /// @param point Click position, in fractions of the developed frame.
     void pickNeutralAt(const QPointF& point);
 
-    /// @brief Enters or leaves the crop mode; leaving this way keeps the crop (R, the Crop button).
+    /// @brief Enters or leaves the crop mode; leaving this way keeps the crop (C, the Crop button).
     ///
     /// Entering finishes a pending panel edit, disarms the picker and opens the
     /// one edit the whole session is (ADR 022, ADR 040). Only with a photograph open.
@@ -439,6 +483,11 @@ private:
     QShortcut* cancelPickShortcut_ = nullptr;
     /// Enter, Esc, X and O of the crop mode wherever the focus is; enabled only in the mode.
     std::vector<QShortcut*> cropShortcuts_;
+    /// Esc, O, Delete and Backspace of the mask mode wherever the focus is; enabled only in it.
+    std::vector<QShortcut*> maskShortcuts_;
+    QAction* maskAction_ = nullptr;
+    /// Mask whose handles are shown; view state of the window (ADR 044).
+    std::optional<LocalAdjustmentId> maskSelection_;
     QMenu* photoMenu_ = nullptr;
     QAction* cropAction_ = nullptr;
 

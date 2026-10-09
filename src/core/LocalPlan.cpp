@@ -85,6 +85,17 @@ void resolveRadial(const RadialMask& shape, ImageSize source, LocalMaskPlan& pla
 
 } // namespace
 
+LocalMaskPlan arraw::resolvedMask(const Mask& shape, bool invert, ImageSize source) {
+    LocalMaskPlan plan;
+    plan.invert = invert;
+    if (const auto* linear = std::get_if<LinearMask>(&shape)) {
+        resolveLinear(*linear, source, plan);
+    } else {
+        resolveRadial(std::get<RadialMask>(shape), source, plan);
+    }
+    return plan;
+}
+
 LocalPlan arraw::localPlanFor(const DevelopState& state, ImageSize source) {
     LocalPlan plan;
     if (state.localAdjustments.empty()) {
@@ -102,22 +113,18 @@ LocalPlan arraw::localPlanFor(const DevelopState& state, ImageSize source) {
         adjustment.name.clear();
         adjustment = normalised(std::move(adjustment));
 
-        LocalMaskPlan mask;
-        mask.invert = adjustment.invert;
+        LocalAmounts k{};
         bool carries = false;
         for (std::size_t row = 0; row < localControlCount; ++row) {
             const LocalDescriptor& descriptor = localAdjustmentDescriptors[row];
-            mask.k[row] = adjustment.opacity * adjustment.deltas.*descriptor.member;
-            carries = carries || mask.k[row] != 0.0F;
+            k[row] = adjustment.opacity * adjustment.deltas.*descriptor.member;
+            carries = carries || k[row] != 0.0F;
         }
         if (!carries) {
             continue;
         }
-        if (const auto* linear = std::get_if<LinearMask>(&adjustment.shape)) {
-            resolveLinear(*linear, source, mask);
-        } else {
-            resolveRadial(std::get<RadialMask>(adjustment.shape), source, mask);
-        }
+        LocalMaskPlan mask = resolvedMask(adjustment.shape, adjustment.invert, source);
+        mask.k = k;
         for (std::size_t row = 0; row < localControlCount; ++row) {
             if (mask.k[row] != 0.0F) {
                 plan.touched |= std::uint32_t{1} << row;
