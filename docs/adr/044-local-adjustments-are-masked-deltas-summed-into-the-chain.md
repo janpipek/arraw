@@ -992,3 +992,62 @@ text. Where it differs from the earlier text, it holds:
   number unique in the process, assigned when it is made or cloned for painting,
   and a ladder's residency compares serials. A freed tile's address can be
   reused, and keeping old grids alive to prevent that would defeat the budget.)
+
+## What step 5 settled (2026-10-10)
+
+Step 5 built the brush end to end without a GUI (plan:
+`docs/ideas/brush-end-to-end-plan.md`; review:
+`docs/reviews/claude-opus-5-5_2026-10-10_brush-end-to-end-plan.md`). The
+decisions the earlier text left open, and where the build differs from a literal
+reading of it:
+
+- **Dither phase.** A brush's 4x4 Bayer phase is its index in
+  `state.localAdjustments`, so no two masks of one state dither in step. Coverage
+  is quantised to 8 bits by `floor(m * 255 + threshold)`; 0 gives 0 and 1 gives
+  255 exactly, so outside every stroke the pixel takes the global path bit for
+  bit. The CPU reads the host RGBA8 planes, the GPU the textures made from them.
+- **Residency lives in the ladder.** The engine owns one process-wide float
+  cache (512 MiB, 128-pixel tiles); the `CheckpointLadder` that renders owns the
+  packed planes (host, and textures on a GPU ladder). Pending upload rectangles
+  survive a cancel and a CPU render through the same ladder.
+- **Serials, not pointers.** Every tile carries a serial number unique in the
+  process; a ladder repacks and uploads only tiles whose serial changed. No ABA,
+  and old grids need not be kept alive.
+- **Direct renders.** Up to `retainedCoveragePixels` (2048 by 2048) they go
+  through the cache and are retained. Above it (an export), a hit-only lookup,
+  else a banded raster in row buckets of 64 straight into fresh RGBA8 planes;
+  nothing is retained. The result equals quantising the reference rasteriser bit
+  for bit, for any thread count and band split.
+- **Progress.** `ProgressStep::Coverage` ("Painting brush masks...") sits
+  between `Context` and `Pointwise`.
+- **Rasteriser and list versions.** `brushRasteriserVersion` is 1;
+  `localAdjustmentsVersion` stays 1 (the builds of steps 2 and 3 were never
+  released). A future rasteriser 2 must come with list version 2, so that an
+  older build reads the list "as far as it is understood" and refuses to write
+  the sidecar back (section 9) instead of dropping the mask and saving.
+- **Reading rules (section 9).** A stroke that cannot be read (bad base64, a
+  non-finite number, no points) in an otherwise good brush is dropped and the
+  rest kept, with one warning per mask and reason. This deviates from a literal
+  reading of section 9 ("a malformed entry, a non-finite number" drop the entry);
+  the user chose (1a). Numbers out of range are clamped; points past 10 000 in a
+  stroke are cut by the decoder; strokes past the caps or a budget are dropped
+  from the first that passes it on, and the cap on strokes counts them by their
+  position in the document.
+- **`info --json`.** It writes the full strokes of a brush (decision 7a).
+- **Python.** `Stroke`, `BrushMask`, `Photo.add_brush_mask`,
+  `Photo.with_brush_stroke` (appending is `withStrokeAppended`) and
+  `with_local_adjustment(shape=BrushMask(...))` (replaces the strokes). The
+  settings JSON of a whole state is not exposed to Python; brushes round-trip
+  through the sidecar there.
+- **The tint is drawn on the GUI thread (accepted exception).** The red tint of
+  a selected brush (O) is drawn by `maskCoverage` from the shared cache at a
+  pyramid size no coarser than the grid. Usually a cache hit, worst case about a
+  second. This is an accepted exception to keeping heavy work off the GUI thread
+  (user decision 6b); step 6 may move it off.
+- **The coarser first render.** When a level-0 window render would draw a
+  brush's coverage from nothing (neither in the ladder's residency nor in the
+  cache, whole or as a list it extends), the window first renders and shows
+  level 1, then level 0 (user decision 9b). Delta drags, undo and appended
+  strokes never pay the second render.
+- **Memory at a 1:1 view with many brushes** is accepted: the cache, the ladder's
+  host planes and, on the GPU, the textures (366 MiB each for 16 masks at 24 MP).

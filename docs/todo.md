@@ -102,18 +102,19 @@ following the mask mode; the Adjustments groups collapse, each remembered in
 
 ## Local adjustments (user, 2026-10-08; `docs/ideas/local-adjustment-plan.md`)
 
-Done: steps 0 to 3 (ADR 044) and **step 4, the brush prototype (2026-10-10)**.
+Done: steps 0 to 3 (ADR 044), **step 4, the brush prototype** and **step 5**
+(2026-10-10).
 The report `docs/ideas/brush-prototype-report.md` is accepted and ADR 044
 sections 6, 7 and 9 are amended. The prototype code
 (`src/core/{BrushStrokes,BrushRaster,BrushCoverageCache,StrokeCodec}`) is
 on branch `brush-prototype`.
 
-- **Next, step 5: the brush end to end without GUI.** The rasteriser and cache
-  in the render path, GPU textures (RGBA8, four masks per texture, dithered),
-  parity, persistence (readable strokes in state JSON, base64 in XMP) and
-  Python. Open for it: rasterise the displayed size first on open, full size
-  lazily or in bands at export; compare tile pointers to find the tiles to
-  upload.
+- **Step 5, the brush end to end without GUI: done (2026-10-10).** Model and
+  edit rules, the rasteriser and cache in the render path (coverage retained in
+  the ladder, a coarser first render at level 0), GPU textures, persistence
+  (readable strokes in state JSON, base64 in XMP), `info`, the GUI minimum (list,
+  history, tint) and Python (`add_brush_mask`, `with_brush_stroke`). See ADR 044
+  "What step 5 settled".
 - Step 6, the brush GUI, follows.
 
 ## Follow-ups (known limits, all documented in ADRs)

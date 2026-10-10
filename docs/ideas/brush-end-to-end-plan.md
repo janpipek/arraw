@@ -942,8 +942,10 @@ different for other strokes, unchanged for states without brushes.
 `Stroke` and `BrushMask` construction (clamping out-of-range numbers, refusing
 non-finite ones and budgets), freezing, equality and a short `repr`; `add_brush_mask`
 clamps, refuses past a budget and at 16; `with_brush_stroke`;
-`with_local_adjustment(shape=BrushMask(...))` and the kind check; JSON and
-sidecar round trips equal; a render equals the C++ digest; stubs current; a
+`with_local_adjustment(shape=BrushMask(...))` and the kind check; sidecar
+round trip equal (the JSON of a whole state is not bound to Python, so only the
+sidecar is tested there; no C++ digest is pinned, the CLI/Python parity test
+stands in for it); stubs current; a
 CLI/Python parity test over a sidecar with brushes.
 
 ### 8.8 CLI and GUI (`tests/test_Cli.cpp`, `tests/test_MasksModel.cpp`, `tests/test_HistoryModel.cpp`, `tests/test_MaskEditing.cpp`, `tests/test_MaskOverlay.cpp`, `tests/test_MainWindowMasks.cpp`)

@@ -297,7 +297,7 @@ user-reachable path creates a mask that export ignores.
 4. **Brush prototype (done, 2026-10-10):** the stroke contract and cache,
    measured; encoding and texture packing fixed; ADR 044 amended. See
    `docs/ideas/brush-prototype-report.md`.
-5. **Brush, end to end without GUI:** rasteriser, cache, GPU textures,
+5. **Brush, end to end without GUI (done, 2026-10-10):** rasteriser, cache, GPU textures,
    parity, persistence, Python. Tests: same path at different event rates,
    different resolutions, after reload.
 6. **Brush GUI:** the tool, dirty-tile painting, cursor, history. Measure a
@@ -314,8 +314,8 @@ user-reachable path creates a mask that export ignores.
 - ~~Stroke encoding~~: settled. Base64-delta per stroke, with caps of 10 000
   points per stroke, 2 000 strokes and 100 000 points per mask, plus swept-area
   and dab budgets.
-- For step 5: rasterise the displayed size first on open; full size lazily or
-  in bands at export.
+- ~~For step 5: rasterise the displayed size first on open; full size lazily or
+  in bands at export~~: settled (ADR 044, "What step 5 settled").
 - Whether to cache the Presence context apart from the pointwise run.
 - Lens corrections later: parametric masks move with a new profile, brush
   strokes do not (ADR 009 already accepts this).

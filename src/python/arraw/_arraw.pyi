@@ -1411,9 +1411,19 @@ class Photo:
         Return a photograph with a radial (oval) mask added last. `centre` is a (u, v) point normalised to the corrected frame, the radii are in long-edge units, `angle` turns the x radius towards +y in degrees, and `feather` is the soft edge's width from 0 (hard) to 1. Keywords and errors are as for add_linear_mask.
         """
 
+    def add_brush_mask(self, strokes: Sequence[Stroke] = (), *, name: str = '', opacity: float = 1.0, invert: bool = False, enabled: bool = True, **deltas: float) -> Photo:
+        """
+        Return a photograph with a brush mask of those strokes added last. Each stroke's numbers are clamped, then the list is built. A stroke without points, a number that is not finite, a cap or budget passed (see BrushMask) or a full list (16) is a ValueError, an unknown keyword a TypeError. Keywords are as for add_linear_mask.
+        """
+
+    def with_brush_stroke(self, id: int, stroke: Stroke) -> Photo:
+        """
+        Return a photograph with the stroke, clamped, appended to the brush mask of that id. ValueError for an unknown id, an adjustment that is not a brush, a stroke that cannot be normalised or a mask that would pass a cap or budget.
+        """
+
     def with_local_adjustment(self, id: int, **changes: Any) -> Photo:
         """
-        Return a photograph with the adjustment of that id changed. The keywords, applied in the order given, are `name`, `enabled`, `invert`, `opacity`, `shape` (a LinearMask or RadialMask of the kind the adjustment already has) and the deltas by their snake_case names; numbers out of range are clamped. ValueError for an unknown id or a shape of another kind, TypeError for an unknown keyword.
+        Return a photograph with the adjustment of that id changed. The keywords, applied in the order given, are `name`, `enabled`, `invert`, `opacity`, `shape` (a LinearMask, RadialMask or BrushMask of the kind the adjustment already has; a BrushMask replaces the strokes) and the deltas by their snake_case names; numbers out of range are clamped. ValueError for an unknown id or a shape of another kind, TypeError for an unknown keyword.
         """
 
     def without_local_adjustment(self, id: int) -> Photo:

@@ -204,6 +204,14 @@ void bindSession(nb::module_& module);
 /// @throws nb::type_error for a key not in the table or a value of the wrong type.
 void applyFlatSettings(DevelopSettings& settings, const nb::kwargs& keywords);
 
+/// @brief Builds a brush mask from strokes, clamping each stroke's numbers first.
+[[nodiscard]] inline BrushMask brushMaskOf(std::vector<Stroke> strokes) {
+    for (Stroke& each : strokes) {
+        each = normalised(std::move(each));
+    }
+    return BrushMask{std::make_shared<const StrokeList>(std::move(strokes))};
+}
+
 /// @brief Finds the row of the setting a snake_case keyword names.
 /// @param name Keyword such as "filmic_highlights".
 /// @return The row of ::arraw::developSettingDescriptors, or null for an unknown keyword.

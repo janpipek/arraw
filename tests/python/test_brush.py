@@ -1,7 +1,7 @@
 """The brush's value types in Python and a state that holds one (ADR 044, section 10).
 
 Step 5.1: the types, so that a state holding a brush converts and renders on the CPU. Step 5.4: it
-persists. The Photo methods come with a later step."""
+persists. Step 5.5: the Photo methods (add_brush_mask, with_brush_stroke)."""
 
 import math
 import shutil
@@ -184,6 +184,128 @@ def test_a_brush_survives_a_sidecar_round_trip(dng, tmp_path):
     shutil.copy(dng, copy)
     photo = arraw.open(copy, sidecar=False)
     masked = photo.with_(state_with(photo, arraw.BrushMask([some_stroke()]), exposure=1.0))
+    arraw.write_sidecar(masked)
+    reloaded = arraw.open(copy)
+    assert reloaded.local_adjustments == masked.local_adjustments
+    assert np.array_equal(arraw.develop(reloaded).pixels, arraw.develop(masked).pixels)
+
+
+# ---- the Photo methods -----------------------------------------------------------------------
+
+
+def test_add_brush_mask_adds_last_with_name_opacity_and_deltas(photo):
+    added = photo.add_brush_mask(
+        [some_stroke()], name="Sky", opacity=0.5, invert=True, enabled=False, exposure=0.5
+    )
+    (adjustment,) = added.local_adjustments
+    assert adjustment.shape == arraw.BrushMask([some_stroke()])
+    assert (adjustment.name, adjustment.opacity) == ("Sky", 0.5)
+    assert adjustment.invert and not adjustment.enabled
+    assert adjustment.deltas.exposure == 0.5
+    assert adjustment.id == 1
+    again = added.add_brush_mask()
+    assert again.local_adjustments[-1].shape == arraw.BrushMask()
+    assert again.local_adjustments[-1].id == 2
+    assert photo.local_adjustments == ()
+
+
+def test_add_brush_mask_clamps_each_stroke(photo):
+    wild = arraw.Stroke(radius=9.0, hardness=3.0, flow=-1.0, points=[(100.0, -100.0)])
+    added = photo.add_brush_mask([wild], exposure=99.0)
+    (stroke,) = added.local_adjustments[0].shape.strokes
+    assert (stroke.radius, stroke.hardness, stroke.flow) == (1.0, 1.0, 0.0)
+    assert stroke.points == ((3.0, -2.0),)
+    assert added.local_adjustments[0].deltas.exposure == photo.add_linear_mask(
+        (0.5, 0.0), (0.5, 1.0), exposure=99.0
+    ).local_adjustments[0].deltas.exposure
+    assert added.local_adjustments[0].shape == arraw.BrushMask([wild])
+
+
+def test_add_brush_mask_refuses_bad_input(photo):
+    with pytest.raises(ValueError):
+        photo.add_brush_mask([arraw.Stroke()])  # no points
+    with pytest.raises(ValueError):
+        photo.add_brush_mask([arraw.Stroke(radius=math.nan, points=[(0.5, 0.5)])])
+    with pytest.raises(ValueError):
+        photo.add_brush_mask([arraw.Stroke(points=[(0.5, 0.5)])] * 2_001)
+    sweep = arraw.Stroke(radius=1.0, points=[(0.0, 0.0), (3.0, 0.0)])
+    with pytest.raises(ValueError):
+        photo.add_brush_mask([sweep, sweep])
+    with pytest.raises(ValueError):
+        photo.add_brush_mask([some_stroke()], exposure=math.nan)
+    with pytest.raises(TypeError):
+        photo.add_brush_mask([some_stroke()], bogus=1.0)
+    with pytest.raises(TypeError):
+        photo.add_brush_mask([1])
+
+
+def test_add_brush_mask_refuses_the_seventeenth(photo):
+    full = photo
+    for _ in range(16):
+        full = full.add_brush_mask([some_stroke()])
+    assert len(full.local_adjustments) == 16
+    with pytest.raises(ValueError):
+        full.add_brush_mask([some_stroke()])
+
+
+def test_with_brush_stroke_appends_a_clamped_stroke(photo):
+    base = photo.add_brush_mask([some_stroke()], exposure=1.0)
+    (adjustment,) = base.local_adjustments
+    extended = base.with_brush_stroke(adjustment.id, some_stroke(0.8, radius=5.0))
+    strokes = extended.local_adjustments[0].shape.strokes
+    assert len(strokes) == 2
+    assert strokes[0] == some_stroke()
+    assert strokes[1] == some_stroke(0.8, radius=1.0)
+    assert len(base.local_adjustments[0].shape.strokes) == 1
+    assert extended.local_adjustments[0].deltas == adjustment.deltas
+
+
+def test_with_brush_stroke_refuses_what_cannot_be_appended(photo):
+    base = photo.add_brush_mask([some_stroke()]).add_linear_mask((0.5, 0.0), (0.5, 1.0))
+    brush, linear = base.local_adjustments
+    with pytest.raises(ValueError):
+        base.with_brush_stroke(linear.id, some_stroke())  # not a brush
+    with pytest.raises(ValueError):
+        base.with_brush_stroke(99, some_stroke())  # unknown id
+    with pytest.raises(ValueError):
+        base.with_brush_stroke(brush.id, arraw.Stroke())  # no points
+    with pytest.raises(ValueError):
+        base.with_brush_stroke(brush.id, arraw.Stroke(radius=math.inf, points=[(0.5, 0.5)]))
+    full = photo.add_brush_mask([arraw.Stroke(points=[(0.5, 0.5)])] * 2_000)
+    with pytest.raises(ValueError):
+        full.with_brush_stroke(full.local_adjustments[0].id, arraw.Stroke(points=[(0.5, 0.5)]))
+    with pytest.raises(TypeError):
+        base.with_brush_stroke(brush.id, (0.5, 0.5))
+
+
+def test_painting_by_strokes_matches_a_brush_made_at_once(photo):
+    first, second = some_stroke(0.3, radius=0.2), some_stroke(0.7, radius=0.2, erase=True)
+    one = photo.add_brush_mask([first, second], exposure=1.0)
+    two = photo.add_brush_mask([first], exposure=1.0)
+    two = two.with_brush_stroke(two.local_adjustments[0].id, second)
+    assert one.local_adjustments == two.local_adjustments
+    assert np.array_equal(arraw.develop(one).pixels, arraw.develop(two).pixels)
+
+
+def test_a_python_made_brush_renders_and_repeated_renders_agree(photo):
+    plain = arraw.develop(photo).pixels
+    brushed = photo.add_brush_mask(
+        [arraw.Stroke(radius=0.3, hardness=1.0, points=[(0.2, 0.5), (0.8, 0.5)])], exposure=1.0
+    )
+    first = arraw.develop(brushed).pixels
+    assert not np.array_equal(first, plain)
+    # Repeated renders, cached or not, must not differ.
+    assert np.array_equal(arraw.develop(brushed).pixels, first)
+    small = arraw.develop(brushed, size=16).pixels
+    assert np.array_equal(arraw.develop(brushed, size=16).pixels, small)
+
+
+def test_a_brush_added_by_the_method_survives_a_sidecar(dng, tmp_path):
+    copy = tmp_path / "copy.dng"
+    shutil.copy(dng, copy)
+    photo = arraw.open(copy, sidecar=False)
+    masked = photo.add_brush_mask([some_stroke(), some_stroke(0.7, erase=True)], exposure=1.0)
+    masked = masked.add_radial_mask((0.5, 0.5), 0.2, 0.1, exposure=-0.5)
     arraw.write_sidecar(masked)
     reloaded = arraw.open(copy)
     assert reloaded.local_adjustments == masked.local_adjustments

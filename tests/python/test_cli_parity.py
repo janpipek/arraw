@@ -1,3 +1,4 @@
+import shutil
 import subprocess
 
 import numpy as np
@@ -71,3 +72,45 @@ def test_python_matches_cli_export(request, cli, tmp_path, fixture, case, fmt, e
     assert py_px.shape == cli_px.shape
     # Both sides run the same CPU pipeline on float32 settings: bit-exact.
     assert np.array_equal(py_px, cli_px)
+
+
+def test_python_matches_cli_export_of_a_sidecar_with_brushes(cli, dng, tmp_path):
+    """CPU only: bit-exact output is needed; GPU brush export is covered by the C++ lavapipe tests."""
+    source = tmp_path / "brushed.dng"
+    shutil.copy(dng, source)
+    photo = arraw.open(source, sidecar=False).with_(exposure=0.3)
+    photo = photo.add_brush_mask(
+        [
+            arraw.Stroke(radius=0.25, hardness=0.6, points=[(0.1, 0.3), (0.5, 0.6), (0.9, 0.4)]),
+            arraw.Stroke(radius=0.1, hardness=1.0, erase=True, flow=0.7, points=[(0.5, 0.5)]),
+        ],
+        name="Sky",
+        exposure=1.0,
+        saturation=-20,
+    )
+    photo = photo.add_brush_mask(
+        [arraw.Stroke(radius=0.2, points=[(0.8, 0.8), (0.2, 0.9)])], invert=True, contrast=30
+    )
+    photo = photo.add_radial_mask((0.5, 0.5), 0.3, 0.2, exposure=-0.4)
+    arraw.write_sidecar(photo)
+
+    py_out = tmp_path / "py.tif"
+    arraw.save(arraw.develop(arraw.open(source)), py_out, bit_depth=16)
+
+    outdir = tmp_path / "cli"
+    outdir.mkdir()
+    result = subprocess.run(
+        [str(cli), "export", "--quiet", "--device", "cpu", "--format", "tiff", "--bit-depth", "16",
+         "-o", str(outdir), str(source)],
+        capture_output=True, text=True, timeout=120,
+    )
+    assert result.returncode == 0, result.stderr
+    (cli_out,) = list(outdir.iterdir())
+
+    py_px = arraw.load(py_out).pixels.astype(np.int64)
+    cli_px = arraw.load(cli_out).pixels.astype(np.int64)
+    assert py_px.shape == cli_px.shape
+    assert np.array_equal(py_px, cli_px)
+    # The brushes did something: the same render without the masks differs.
+    plain = arraw.develop(photo.with_(arraw.DevelopState(settings=photo.state.settings)))
+    assert not np.array_equal(plain.pixels.astype(np.int64), py_px)

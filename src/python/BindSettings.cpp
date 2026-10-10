@@ -174,10 +174,7 @@ void bindBrush(nb::module_& m) {
     brush.def(
         "__init__",
         [](BrushMask* self, std::vector<Stroke> strokes) {
-            for (Stroke& each : strokes) {
-                each = normalised(std::move(each));
-            }
-            new (self) BrushMask{std::make_shared<const StrokeList>(std::move(strokes))};
+            new (self) BrushMask(brushMaskOf(std::move(strokes)));
         },
         nb::arg("strokes") = nb::tuple(),
         nb::sig("def __init__(self, strokes: collections.abc.Sequence[Stroke] = ()) -> None"));
