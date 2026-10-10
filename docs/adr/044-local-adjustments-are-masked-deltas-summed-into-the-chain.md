@@ -1051,3 +1051,145 @@ reading of it:
   strokes never pay the second render.
 - **Memory at a 1:1 view with many brushes** is accepted: the cache, the ladder's
   host planes and, on the GPU, the textures (366 MiB each for 16 masks at 24 MP).
+
+## Note, 2026-10-10: the brush in the window, as built
+
+Step 6 of the local adjustment plan (`docs/ideas/brush-gui-plan.md`, sub-steps 6.1
+to 6.6). What the window does, and what a long painting session measured.
+
+**What was built**
+
+- **Tool and creation.** A checkable Brush button in the Masks tab arms the tool;
+  the first stroke with no brush selected makes the mask in one history step
+  ("Add Brush 1"), later strokes are "Paint Brush 1". While it paints, pins are
+  hidden and a left drag paints. Choosing a brush in the list arms the tool;
+  unchecking it returns a drag to panning.
+- **Settings and keys.** Size (a radius in long-edge units, on a logarithmic
+  slider), Hardness, Flow and an Erase toggle, kept in `QSettings` under
+  `brush/`. `[` `]` scale the size by 1.25, `{` `}` move the hardness by 10 %,
+  `E` flips Erase, Alt at the press erases that stroke. They are window shortcuts
+  (`docs/keybindings.md`).
+- **Pointer to storage.** View to developed to upright to corrected as before, then
+  the identity `sensorFrom` until lens corrections (ADR 009). One stroke is one
+  begin, update, commit (ADR 022); each update appends the partial stroke.
+- **The tail method in the cache.** `BrushCoverageCache` has a fifth lookup,
+  `Grown`: a list whose last stroke grew repaints only the new dabs and replaces
+  its parent entry. Every draw of a last stroke, a `Miss` included, leaves a
+  growable entry. A ladder repacks and uploads only the tiles whose serial
+  changed.
+- **Paced requests.** While `MaskOverlay::stroking()` and for the commit, a request
+  is `Supersede::Queue`: a render in flight finishes and is shown, the newest
+  request runs next. No thumbnail until the commit.
+- **Cursor and tint.** A ring of the brush's radius anchored to the photograph, a
+  dashed core at the hardness, "-" when erasing. O shows the tint, which follows
+  each update and repaints only the stroke's new area; it shows by itself while
+  the painted brush contributes nothing.
+- **Instrumentation.** Spans `brush.update` (`MainWindow::updateEdit` while
+  stroking, noting the request it made), `overlay.paint` (`MaskOverlay`), and a
+  note on `cpu.coverage` with the raster size and the tiles it packed.
+
+**Measurements.** Machine: Intel Core i7-7700HQ (4 cores, 8 threads), 31 GiB,
+Linux 7.2, offscreen Qt, release build, CPU backend (`ARRAW_PREVIEW_DEVICE=cpu`;
+the GPU is llvmpipe, which the app refuses). The GPU run is **not measured**: no
+hardware GPU here; lavapipe checks correctness only. Harnesses, both hidden
+tags: the engine bench B9 (`arraw-tests "B9*"`) and the window session
+(`arraw-widget-tests "Brush painting session"`, with `QT_SCALE_FACTOR=2` for the
+second ratio). The window session has 15 masks first (14 of B2's realistic
+brushes and a radial, from a sidecar), a brush of its own, then 60 strokes of 120
+moves at 120 Hz at fit (tint off), 20 undos and 20 redos, 10 strokes at 1:1, and
+20 strokes at fit with the tint on. The view is 864 by 717 pixels, so the shown
+level is 1500 by 1000 at ratio 1 (a quarter of the 24 MP frame) and 3000 by 2000
+at ratio 2 (a half).
+
+B9 (engine, one ladder, 15 brushes and the one painted, noisy: nothing else ran
+beside it):
+
+| Session | Updates | Whole render median / p95 | Coverage step median | Tiles packed median / max | Cache max | Misses / evictions |
+|---|---|---|---|---|---|---|
+| A, 1500x1000, 100 strokes | 3131 | 112 ms / 145 ms (q4) | 0.57-0.66 ms | 4 / 9 | 165 MiB | 0 / 0 |
+| A2, 3000x2000, 30 strokes | 986 | 566-576 ms / 598 ms | 1.4-1.5 ms | 9 / 16 | 392 MiB | 0 / 0 |
+| B, 6000x4000, 10 strokes | 379 | 2.33 s / 2.41 s | 2.5-3.2 ms | 25 / 49 | 512 MiB | 0 / 10 |
+| C, 1500x1000, new brush, 20 strokes | 719 | 88 ms | 0.65 ms | | 39 MiB | 20 (one per stroke) / 0 |
+
+All of B9's asserts pass (the last render equals a direct render bit for bit; one
+cache entry gained per stroke at most; no `Miss` during strokes in A and A2; an
+undo is a `Hit` that packs the undone stroke's tiles). Against §11.1's targets:
+the Coverage step (A at most 1 ms: met; B at most 3 ms: met in the later
+quarters, **missed** in the first, 3.2 ms), the last quarter's p95 within 1.2 times the
+first's (met: 1.12, 1.00, 0.99), the cache at most 512 MiB (met, at the limit in
+B), an undo no slower than a delta edit (met: 113 against 106 ms, 560 against
+554 ms). **Missed:** the whole render, 60 ms median and 90 ms p95 at A: it is 112
+and 145 ms, flat over the session (no slowdown). That is the pointwise and
+develop cost of the whole level, not the cache (the Coverage step is about 1 % of
+it); the target was set without a measurement of 16 masks with two deltas each.
+
+Window session, ratio 1, CPU (targets of §11.2; the first of two runs, which agreed within
+10 % except for the stalls):
+
+| Metric | Measured | Target | |
+|---|---|---|---|
+| GUI time per update (60 strokes, 7191 updates) | median 1.76 ms, p99 14.7 ms | 1.5 / 5 ms | missed |
+| Longest GUI stall | 24 to 45 ms (tint off), 74 to 90 ms (tint on), two runs | 16 / 24 ms | missed |
+| Latency, update to picture | median 291 ms, p95 381 ms (tint on 301 / 399) | 100 / 160 ms | missed |
+| Renders shown per second | 5.1 (tint on 4.6) | at least 10 | missed |
+| Tint `mask.coverage` | median 1.64 ms, p95 5.4 ms | 4 / 8 ms | met |
+| Commit, release to the last result | median 289 ms, p95 362 ms; one render is 187 ms | one render | missed |
+| Undo (20 strokes back) | 183 ms (redo 184 ms), cache `Hit`s only, at most 26 tiles packed, never above the undone stroke's | one render, `Hit`s only | met |
+| Cache at fit | 0 `Miss`, 0 evictions, 188 MiB | none | met |
+| Memory (resident set) | 606 MiB after the 15 masks, 640 MiB before fit, 754 MiB after fit; 2255 MiB at 1:1; 1174 MiB back at fit | reported | |
+
+A render is 187 ms at this level (the plan expected about 100 ms), so with one
+render in flight and one queued, the picture trails the hand by about 1.5 to 2
+renders: 290 ms, 5 pictures a second. The commit costs the render in flight and
+the queued one (1.5 renders), not one.
+
+Ratio 2 (the same session, 1728 by 1434 device pixels, level 3000 by 2000):
+render 816 ms; GUI time per update median 3.3 ms, p99 21 ms; longest stall 49 ms
+(tint on 66 ms); latency median 1322 ms, p95 1634 ms; 0.8 pictures a second;
+commit 1229 ms; undo 754 ms (`Hit`s only, at most 64 tiles packed); tint median
+1.7 ms, p95 6.4 ms. **Sixteen brushes do not fit the 512 MiB at this level:** 15
+evictions at fit, 11 more with the tint on, and no `Miss` at fit; the cache sits
+at its limit (512 MiB). Resident set 1060 MiB after the 15 masks, 1450 MiB before
+1:1.
+
+1:1 (10 strokes, reported only): render 2.4 s at ratio 1 and 2.9 s at ratio 2;
+GUI time per update median 7.9 ms (ratio 1) and 3.5 ms (ratio 2), p99 27 to 29
+ms; latency median 4.1 and 5.0 s (p95 20 to 22 s at ratio 1, five times the median); the cache evicts (100 and 85 evictions, 15
+`Miss`es: the base brushes, redrawn at the next level) and the resident set peaks
+at 2.3 and 2.5 GiB. The first fit render after it redraws what 1:1 evicted
+(2 to 3 `Miss`es, 11 evictions at ratio 2). The picture follows the hand at about one render per 2.4 s.
+
+**What the numbers say.** The brush is correct and cheap where it should be: the
+cache, the tail method, the tint and the tile-wise upload cost a millisecond or
+two per update, and an undo is a cache hit. What is slow is the whole shown level
+re-rendered through the pointwise pass for every picture (ADR 025's limit),
+which is 190 ms at the fit view at ratio 1, 0.8 s at ratio 2 and 2.4 s at 1:1,
+all on the CPU. The GUI-thread figures miss their targets: the median of an update is
+1.76 ms against 1.5 ms (a small miss), the p99 and the stalls by far; the likely
+cause is a `window.result` (the conversion and the repaint of a whole picture)
+landing inside the stroke, but that is not measured (the session does not print
+those spans). B9 renders its level in 112 ms and the window in 187 ms at the same
+level; that gap is unexplained, so (c) may gain less than the cost of the
+pointwise pass alone suggests. **Q6's follow-up is the user's pick:**
+(a) leave it, (b) render the stroke through a coarser level and show the full
+level after the release, (c) restrict the pointwise pass and the geometry to the
+stroke's dirty rectangle in the ladder (ADR 025's future work, its own ADR and
+plan). The numbers favour (c): the cost is per picture, not per dab, and a dab
+touches 4 to 9 tiles of 128 pixels. A GPU would shift the CPU fallback's role
+but is not measured here.
+
+**Departures from section 10 and the plan** (where the build differs from the
+text)
+
+- B9 renders a generated source at the level's size rather than a 6000 by 4000
+  frame through its pyramid (14 realistic brushes, a radial and the painted
+  brush), so its render times are of the level and not of the window's.
+- The window session reads the 15 masks from a sidecar, not through the session's
+  `setState`; GUI time per update counts the `overlay.paint` spans that begin
+  within 20 ms after an update and before the next; latency pairs an update with
+  the first `window.result` of at least the request it noted, without telling a
+  provisional result (none arrives while stroking on a cached brush); an undo
+  packs at most the tiles of the undone stroke's bounding box (an upper bound,
+  where B9 checks the exact serials).
+- The window session asserts no `Miss` at fit; it asserts no eviction only at
+  ratio 1, and reports the rest.

@@ -1,6 +1,8 @@
 # The brush in the window — plan
 
-Status: accepted, 2026-10-10 (user: every recommendation, Q1–Q9 (a)); revised the same day after the review
+Status: accepted, 2026-10-10 (user: every recommendation, Q1–Q9 (a)); built and
+measured, 2026-10-10 (sub-steps 6.1 to 6.6; numbers in the ADR 044 note "the brush in
+the window, as built"; Q6's follow-up is open); revised the same day after the review
 `docs/reviews/claude-opus-5-5_2026-10-10_brush-gui-plan.md` (every High and
 Medium finding fixed, most Low ones too; the response is at the end, before
 the open questions). Step 6 of `local-adjustment-plan.md`: "Brush

@@ -11,6 +11,7 @@
 #include <cmath>
 #include <span>
 #include <stdexcept>
+#include <string>
 
 namespace arraw::detail {
 
@@ -171,6 +172,7 @@ const PackedCoverage& CoverageResidency::update(const LocalPlan& local, ImageSiz
 const PackedCoverage& CoverageResidency::update(const LocalPlan& local, ImageSize size,
                                                 BrushCoverageCache& cache) {
     const detail::TimingSpan timing("cpu.coverage");
+    const std::uint64_t packedBefore = tilesPacked_;
     if (!(size == packed_.size)) {
         reset();
         packed_.size = size;
@@ -240,6 +242,10 @@ const PackedCoverage& CoverageResidency::update(const LocalPlan& local, ImageSiz
         }
         record.identity = brush;
         record.serials = std::move(serials);
+    }
+    if (detail::timingLog().isDebugEnabled()) {
+        timing.note("size=" + std::to_string(size.width) + "x" + std::to_string(size.height) +
+                    " tilesPacked=" + std::to_string(tilesPacked_ - packedBefore));
     }
     return packed_;
 }

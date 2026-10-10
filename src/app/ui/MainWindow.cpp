@@ -745,11 +745,20 @@ void MainWindow::updateEdit(const DevelopState& state) {
             }
             return;
         }
+        // Measured while painting: the whole handling of a stroke's update.
+        std::optional<detail::TimingSpan> timing;
+        if (photoView_->maskOverlay().stroking()) {
+            timing.emplace("brush.update");
+        }
         const DevelopState before = open_->session.photo().state();
         DevelopState next = state;
         next.settings.geometry = reconciledGeometry(state.settings.geometry);
         open_->session.update(next);
         refreshPanel(renderDelayFor(before, open_->session.photo().state(), previewOnGpu_));
+        if (timing) {
+            // The request that follows from this update, so that updates pair with results.
+            timing->note("request=" + std::to_string(latestRequest_));
+        }
     });
 }
 

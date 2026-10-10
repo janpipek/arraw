@@ -967,6 +967,7 @@ void MaskOverlay::paintHandles(QPainter& painter, const MaskViewMapping& map) co
 }
 
 void MaskOverlay::paintEvent(QPaintEvent* /*event*/) {
+    const detail::TimingSpan timing("overlay.paint");
     const std::optional<MaskViewMapping> map = mapping();
     if (!map) {
         return;
