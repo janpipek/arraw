@@ -789,6 +789,62 @@ TEST_CASE("A stroke edit rendered on the CPU through a ladder, then on the GPU t
     REQUIRE(residency.device()->planesUploaded() == 1);
 }
 
+TEST_CASE("A growing stroke uploads only the tiles that changed, and the texture equals the host "
+          "plane",
+          "[gpu][brush][ladder][grown]") {
+    brushCoverageCache().clear();
+    GpuContext& context = gpuContext();
+    const auto source = tiledSource();
+    const DeviceImage uploaded = uploadSource(context, *source);
+    const DevelopState first = twoBrushes();
+    const auto id = first.localAdjustments[0].id;
+    std::mt19937_64 generator(77);
+    const Stroke path = wanderingStroke(generator, detailStyle, 0.75);
+    REQUIRE(path.points.size() >= 90);
+
+    CheckpointLadder ladder;
+    static_cast<void>(ladderRender(context, ladder, source, uploaded, first));
+    CoverageResidency& residency = LadderAccess::coverage(ladder);
+    REQUIRE(residency.device()->planesUploaded() == 1);
+    const auto sizeOf = source->size();
+    std::shared_ptr<const CoverageTiles> previous = brushCoverageCache().find(
+        std::get<BrushMask>(first.localAdjustments[0].shape).strokes, sizeOf);
+    REQUIRE(previous != nullptr);
+
+    std::uint64_t grown = 0;
+    for (std::size_t points = 10; points <= 90; points += 10) {
+        Stroke partial = path;
+        partial.points.resize(points);
+        const DevelopState live = withStrokeAppended(first, id, partial);
+        const auto list = std::get<BrushMask>(live.localAdjustments[0].shape).strokes;
+        const std::uint64_t grownBefore = brushCoverageCache().lookups(CoverageLookup::Grown);
+        const std::uint64_t rectangles = residency.device()->rectanglesUploaded();
+        REQUIRE(sameBits(ladderRender(context, ladder, source, uploaded, live),
+                         directRender(context, *source, uploaded, live)));
+        grown += brushCoverageCache().lookups(CoverageLookup::Grown) - grownBefore;
+        const auto current = brushCoverageCache().find(list, sizeOf);
+        REQUIRE(current != nullptr);
+        std::uint64_t changed = 0;
+        for (std::uint32_t i = 0; i < current->columns() * current->rows(); ++i) {
+            const auto serial = [i](const CoverageTiles& tiles) {
+                return tiles.tile(i) ? tiles.tile(i)->serial : std::uint64_t{0};
+            };
+            changed += serial(*previous) != serial(*current) ? 1U : 0U;
+        }
+        // Only those went up, never the whole plane again.
+        const std::uint64_t uploads = residency.device()->rectanglesUploaded() - rectangles;
+        REQUIRE(uploads <= changed);
+        REQUIRE((changed == 0) == (uploads == 0));
+        REQUIRE(residency.device()->planesUploaded() == 1);
+        REQUIRE_FALSE(residency.hasPending(0));
+        // The texture is the host plane.
+        REQUIRE(holdsBytes(static_cast<const GpuCoverage&>(*residency.device()).texture(0),
+                           residency.packed().planes[0]));
+        previous = current;
+    }
+    REQUIRE(grown >= 7);
+}
+
 TEST_CASE("A GPU render cancelled while its coverage is made leaves the next one right",
           "[gpu][brush][ladder][cancel]") {
     brushCoverageCache().clear();

@@ -425,8 +425,11 @@ needs no new public API.
   stroke's `dabCentres(stroke, raster, false)` it holds). **Every draw that
   paints the list's last stroke keeps them: a `Miss`, an `Extended` and a
   `Grown`.** Each draws the last stroke in two parts (its settled dabs, then
-  the end dab onto clones of the tiles it touches), so the two grids share
-  every tile but the one to four the end dab touched. This covers the first
+  the end dab onto copies of the tiles it touches, in the same parallel
+  pass), so the two grids share every tile but those the end dab touched: one
+  to four for a brush narrower than a tile, dozens for an everyday brush at
+  24 MP and hundreds for a wash brush. A draw with `retain` false skips the
+  copies. This covers the first
   stroke of a new brush (its base list is empty, and `Extended` needs a
   non-empty held prefix, so its first update is a `Miss`) and a stroke on a
   brush whose list is not held at that size (evicted, or a first 1:1 render):
@@ -679,6 +682,10 @@ Two harnesses, both hidden tags, run by name in a release build
     its `tilesPacked` delta equals the number of tiles the undone stroke
     touched;
   - no `Miss` during strokes in sessions A and A2.
+- As built (differences from the above): the source is generated at the level
+  size, not as a 6000×4000 frame; the base is 14 realistic brushes plus a
+  radial plus the painted brush (the list holds 16); "packs only the new
+  dabs' tiles" is checked by comparing tile serials, not dab geometry.
 - Targets on this machine: Coverage step median ≤ 1 ms (A) and ≤ 3 ms (B);
   whole update render ≤ 60 ms median, ≤ 90 ms p95 (A), reported for A2; the
   last quarter's p95 within 1.2× the first's; cache ≤ 512 MiB throughout; an
@@ -875,6 +882,9 @@ session runs before 6.5.
   2, every target of §11 is met or its miss is written down with the
   follow-up the user picks (Q6), and the GPU run is reported or marked "not
   measured" with the reason.
+- Note from 6.2: a `Queue` request cancelling a histogram count in flight has
+  no deterministic test; the count is too quick to be caught in flight, and
+  the test only checks that the newest request ends with a histogram.
 
 ## Response to the review (2026-10-10)
 

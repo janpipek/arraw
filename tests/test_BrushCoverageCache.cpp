@@ -1,13 +1,17 @@
 // The tiled coverage cache of the brush prototype (ADR 044, section 6).
 
 #include "BrushCoverageCache.h"
+#include "ProgressScope.h"
 #include "support/BrushGenerators.h"
+
+#include <Progress.h>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <latch>
 #include <set>
 #include <thread>
@@ -239,9 +243,438 @@ TEST_CASE("Two threads asking for the same coverage leave one entry", "[brush][c
         }
         threads.clear();
         CHECK(cache.entryCount() == 1);
-        CHECK(cache.memoryBytes() == results[0].tiles->tileBytes());
+        // The tiles shown, and at most the four an end dab reaches, kept for growing.
+        CHECK(cache.memoryBytes() >= results[0].tiles->tileBytes());
+        CHECK(cache.memoryBytes() <= results[0].tiles->tileBytes() + 4 * 64 * 64 * sizeof(float));
         const CoveragePlane reference = rasteriseBrush(*list, raster);
         CHECK(results[0].tiles->gathered() == reference);
         CHECK(results[1].tiles->gathered() == reference);
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The tail method (brush GUI plan section 7): a stroke that grows is not redrawn.
+
+namespace {
+
+/// Makes the stroke with its first @p count points.
+Stroke partialOf(const Stroke& stroke, std::size_t count) {
+    Stroke partial = stroke;
+    partial.points.resize(std::min(count, stroke.points.size()));
+    return partial;
+}
+
+/// Counts the tiles whose serial differs between two grids of one raster.
+std::set<std::uint32_t> changedTiles(const CoverageTiles& a, const CoverageTiles& b) {
+    std::set<std::uint32_t> changed;
+    for (std::uint32_t i = 0; i < a.columns() * a.rows(); ++i) {
+        const auto serialOf = [i](const CoverageTiles& t) {
+            return t.tile(i) ? t.tile(i)->serial : std::uint64_t{0};
+        };
+        if (serialOf(a) != serialOf(b)) {
+            changed.insert(i);
+        }
+    }
+    return changed;
+}
+
+/// Makes a random path of @p count points that steps, repeats, jumps back and leaves the picture.
+Stroke difficultPath(std::mt19937_64& g, std::uint32_t count, float radius, float hardness,
+                     bool erase) {
+    Stroke stroke{radius, hardness, 0.7F, erase, {}};
+    double u = 0.5;
+    double v = 0.4;
+    for (std::uint32_t i = 0; i < count; ++i) {
+        stroke.points.push_back({static_cast<float>(u), static_cast<float>(v)});
+        const double roll = test::unitDouble(g);
+        if (roll < 0.1) {
+            continue; // A repeated point.
+        }
+        if (roll < 0.2 && stroke.points.size() > 3) {
+            // A point jumping back to an earlier place.
+            const auto& back = stroke.points[test::uniformCount(
+                g, 0, static_cast<std::uint32_t>(stroke.points.size()) - 1)];
+            u = back.u;
+            v = back.v;
+            continue;
+        }
+        const double step = 0.02 + 0.03 * test::unitDouble(g);
+        u += step * (test::unitDouble(g) - 0.45);
+        v += step * (test::unitDouble(g) - 0.5);
+        if (roll > 0.97) {
+            // Out of the picture, and back.
+            u = -0.2 + 1.4 * test::unitDouble(g);
+            v = -0.2 + 1.4 * test::unitDouble(g);
+        }
+    }
+    return stroke;
+}
+
+} // namespace
+
+TEST_CASE("A growing stroke gives the reference bits after every step", "[brush][cache][grown]") {
+    struct Style {
+        float radius;
+        float hardness;
+        bool erase;
+    };
+    const Style style =
+        GENERATE(Style{0.03F, 0.0F, false}, Style{0.03F, 1.0F, false}, Style{0.02F, 0.5F, true},
+                 Style{minimumBrushRadius, 1.0F, false}, Style{0.05F, 0.3F, false});
+    const std::uint32_t tile = GENERATE(64U, 256U);
+    INFO("radius " << style.radius << " hardness " << style.hardness << " tile " << tile);
+    constexpr ImageSize raster{400, 300};
+    std::mt19937_64 g(seed + 30);
+    BrushCoverageCache cache(std::size_t{512} << 20, tile);
+    // Something under the stroke, so that the first update is an extension of a held list.
+    const auto before = test::paintedMask(seed + 31, 2, test::everydayStyle, 0.75);
+    const Stroke path = difficultPath(g, 200, style.radius, style.hardness, style.erase);
+    const bool held = GENERATE(true, false);
+    if (held) {
+        static_cast<void>(cache.coverage(before, raster));
+    }
+    std::uint64_t grown = 0;
+    for (std::size_t points = 1; points <= path.points.size();
+         points += test::uniformCount(g, 1, 50)) {
+        const auto list = before->appended(partialOf(path, points));
+        const auto result = cache.coverage(list, raster);
+        REQUIRE(result.tiles->gathered() == rasteriseBrush(*list, raster));
+        if (result.lookup == CoverageLookup::Grown) {
+            ++grown;
+        } else {
+            // Only the first update is anything else.
+            REQUIRE(points == 1);
+        }
+    }
+    CHECK(grown > 0);
+    CHECK(cache.lookups(CoverageLookup::Grown) == grown);
+}
+
+TEST_CASE("A stroke on an empty brush is a miss once, then grown", "[brush][cache][grown]") {
+    BrushCoverageCache cache(std::size_t{512} << 20, 64);
+    constexpr ImageSize raster{600, 400};
+    std::mt19937_64 g(seed + 32);
+    const Stroke path = test::wanderingStroke(g, test::everydayStyle, 0.667);
+    const auto empty = std::make_shared<const StrokeList>();
+    for (std::size_t points = 10; points <= path.points.size(); points += 10) {
+        const auto list = empty->appended(partialOf(path, points));
+        const auto result = cache.coverage(list, raster, true);
+        CHECK(result.lookup == (points == 10 ? CoverageLookup::Miss : CoverageLookup::Grown));
+        CHECK(cache.peek(list, raster).lookup == CoverageLookup::Hit);
+        CHECK(result.tiles->gathered() == rasteriseBrush(*list, raster));
+    }
+    CHECK(cache.lookups(CoverageLookup::Miss) == 1);
+    CHECK(cache.entryCount() == 1);
+}
+
+TEST_CASE("A stroke on a brush whose list was evicted is a miss once, then grown",
+          "[brush][cache][grown]") {
+    BrushCoverageCache cache(std::size_t{512} << 20, 64);
+    constexpr ImageSize raster{600, 400};
+    std::mt19937_64 g(seed + 33);
+    const auto before = test::paintedMask(seed + 34, 3, test::everydayStyle, 0.667);
+    static_cast<void>(cache.coverage(before, raster));
+    cache.clear();
+    const std::uint64_t missesBefore = cache.lookups(CoverageLookup::Miss);
+    const Stroke path = test::wanderingStroke(g, test::everydayStyle, 0.667);
+    for (std::size_t points = 10; points <= path.points.size(); points += 10) {
+        const auto list = before->appended(partialOf(path, points));
+        const auto result = cache.coverage(list, raster);
+        CHECK(result.lookup == (points == 10 ? CoverageLookup::Miss : CoverageLookup::Grown));
+        CHECK(result.tiles->gathered() == rasteriseBrush(*list, raster));
+    }
+    CHECK(cache.lookups(CoverageLookup::Miss) == missesBefore + 1);
+}
+
+TEST_CASE("A 200-update stroke leaves one more entry, and the list before it stays a hit",
+          "[brush][cache][grown]") {
+    BrushCoverageCache cache(std::size_t{512} << 20, 64);
+    constexpr ImageSize raster{600, 400};
+    std::mt19937_64 g(seed + 35);
+    const auto before = test::paintedMask(seed + 36, 4, test::everydayStyle, 0.667);
+    static_cast<void>(cache.coverage(before, raster));
+    const std::size_t entries = cache.entryCount();
+    const std::uint64_t evictionsBefore = cache.evictions();
+    Stroke path = test::wanderingStroke(g, test::detailStyle, 0.667);
+    path.points.resize(200);
+    std::shared_ptr<const StrokeList> last;
+    for (std::size_t points = 1; points <= 200; ++points) {
+        last = before->appended(partialOf(path, points));
+        const auto result = cache.coverage(last, raster);
+        CHECK(result.lookup == (points == 1 ? CoverageLookup::Extended : CoverageLookup::Grown));
+        REQUIRE(cache.entryCount() == entries + 1);
+    }
+    CHECK(cache.evictions() == evictionsBefore);
+    CHECK(cache.lookups(CoverageLookup::Grown) == 199);
+    // Undo: the list before the stroke is held as it was.
+    const auto undone = cache.coverage(before, raster);
+    CHECK(undone.lookup == CoverageLookup::Hit);
+    CHECK(undone.tiles->gathered() == rasteriseBrush(*before, raster));
+    CHECK(cache.coverage(last, raster).tiles->gathered() == rasteriseBrush(*last, raster));
+}
+
+TEST_CASE("A changed style or a path that is not a prefix extends instead of growing",
+          "[brush][cache][grown]") {
+    BrushCoverageCache cache(std::size_t{512} << 20, 64);
+    constexpr ImageSize raster{600, 400};
+    std::mt19937_64 g(seed + 37);
+    const auto before = test::paintedMask(seed + 38, 2, test::everydayStyle, 0.667);
+    static_cast<void>(cache.coverage(before, raster));
+    const Stroke path = test::wanderingStroke(g, test::everydayStyle, 0.667);
+    REQUIRE(path.points.size() > 40);
+    static_cast<void>(cache.coverage(before->appended(partialOf(path, 20)), raster));
+    REQUIRE(cache.coverage(before->appended(partialOf(path, 30)), raster).lookup ==
+            CoverageLookup::Grown);
+
+    const auto asked = [&](const Stroke& stroke) {
+        const auto list = before->appended(stroke);
+        const CoverageLookup peeked = cache.peek(list, raster).lookup;
+        const auto result = cache.coverage(list, raster);
+        CHECK(result.lookup == peeked);
+        CHECK(result.tiles->gathered() == rasteriseBrush(*list, raster));
+        return result.lookup;
+    };
+    Stroke style = partialOf(path, 40);
+    style.radius *= 1.5F;
+    CHECK(asked(style) == CoverageLookup::Extended);
+    style = partialOf(path, 40);
+    style.hardness = std::min(1.0F, style.hardness + 0.2F);
+    CHECK(asked(style) == CoverageLookup::Extended);
+    style = partialOf(path, 40);
+    style.flow *= 0.5F;
+    CHECK(asked(style) == CoverageLookup::Extended);
+    style = partialOf(path, 40);
+    style.erase = !style.erase;
+    CHECK(asked(style) == CoverageLookup::Extended);
+    Stroke moved = partialOf(path, 40);
+    moved.points[2].u += 0.01F;
+    CHECK(asked(moved) == CoverageLookup::Extended);
+    // A shorter path is not a growth either.
+    CHECK(asked(partialOf(path, 5)) == CoverageLookup::Extended);
+}
+
+TEST_CASE("peek agrees with coverage along a growth", "[brush][cache][grown]") {
+    BrushCoverageCache cache(std::size_t{512} << 20, 64);
+    constexpr ImageSize raster{500, 300};
+    std::mt19937_64 g(seed + 39);
+    const auto before = test::paintedMask(seed + 40, 3, test::everydayStyle, 0.6);
+    static_cast<void>(cache.coverage(before, raster));
+    const Stroke path = test::wanderingStroke(g, test::everydayStyle, 0.6);
+    for (std::size_t points = 1; points <= path.points.size(); points += 17) {
+        const auto list = before->appended(partialOf(path, points));
+        const auto peeked = cache.peek(list, raster);
+        const std::size_t entries = cache.entryCount();
+        const auto bytes = cache.memoryBytes();
+        static_cast<void>(cache.peek(list, raster));
+        CHECK(cache.entryCount() == entries);
+        CHECK(cache.memoryBytes() == bytes);
+        const auto result = cache.coverage(list, raster);
+        CHECK(result.lookup == peeked.lookup);
+        CHECK(peeked.cachedStrokes == before->size());
+    }
+}
+
+TEST_CASE("A grown update clones only the tiles the new dabs and the end dab touch",
+          "[brush][cache][grown]") {
+    constexpr ImageSize raster{1000, 667};
+    for (const std::uint32_t tile : {64U, 256U}) {
+        INFO("tile " << tile);
+        BrushCoverageCache cache(std::size_t{512} << 20, tile);
+        std::mt19937_64 g(seed + 41);
+        const auto before = test::paintedMask(seed + 42, 3, test::detailStyle, 0.667);
+        const Stroke path = test::wanderingStroke(g, test::detailStyle, 0.667);
+        std::shared_ptr<const CoverageTiles> shown;
+        for (std::size_t points = 5; points <= path.points.size(); points += 10) {
+            const auto list = before->appended(partialOf(path, points));
+            const auto result = cache.coverage(list, raster);
+            if (shown && result.lookup == CoverageLookup::Grown) {
+                // The tiles that differ from the last picture are the ones listed as drawn.
+                const std::set<std::uint32_t> differ = changedTiles(*shown, *result.tiles);
+                const std::set<std::uint32_t> drawn(result.dirty.begin(), result.dirty.end());
+                for (const std::uint32_t index : differ) {
+                    CHECK(drawn.contains(index));
+                }
+                // A handful of tiles: the new dabs and the two end dabs, not the stroke.
+                CHECK(drawn.size() <= 12);
+            }
+            shown = result.tiles;
+        }
+    }
+}
+
+TEST_CASE("A grown update lists the tiles the previous end dab touched and this one does not",
+          "[brush][cache][grown]") {
+    // A path that stops with its end dab across a tile edge, then turns back: the tile only the
+    // old end dab reached goes back to its settled contents.
+    constexpr ImageSize raster{512, 128};
+    std::uint32_t reverted = 0;
+    for (int step = 0; step < 80; ++step) {
+        const float end = 0.1F + 0.0005F * static_cast<float>(step);
+        BrushCoverageCache cache(std::size_t{512} << 20, 64);
+        Stroke out;
+        out.radius = 0.02F;
+        out.hardness = 0.5F;
+        out.points = {{0.05F, 0.5F}, {end, 0.5F}};
+        Stroke back = out;
+        back.points = {{0.05F, 0.5F}, {end, 0.5F}, {0.03F, 0.5F}, {0.02F, 0.5F}};
+        const auto empty = std::make_shared<const StrokeList>();
+        const auto first = cache.coverage(empty->appended(out), raster);
+        const auto list = empty->appended(back);
+        const auto result = cache.coverage(list, raster);
+        REQUIRE(result.lookup == CoverageLookup::Grown);
+        REQUIRE(result.tiles->gathered() == rasteriseBrush(*list, raster));
+        const std::set<std::uint32_t> drawn(result.dirty.begin(), result.dirty.end());
+        for (const std::uint32_t index : changedTiles(*first.tiles, *result.tiles)) {
+            CHECK(drawn.contains(index));
+        }
+        // A tile of the old picture that no new dab touches, yet is listed.
+        const auto touched = touchedTiles(*list, 0, raster, 64);
+        for (const std::uint32_t index : drawn) {
+            reverted += touched.contains(index) ? 0U : 1U;
+        }
+    }
+    CHECK(reverted > 0);
+}
+
+TEST_CASE("A grown update of a wash brush gives the reference bits, with and without retaining",
+          "[brush][cache][grown]") {
+    constexpr ImageSize raster{600, 400};
+    std::mt19937_64 g(seed + 60);
+    const bool retain = GENERATE(true, false);
+    BrushCoverageCache cache(std::size_t{512} << 20, 64);
+    const Stroke path = difficultPath(g, 60, 0.3F, 0.3F, false);
+    const auto empty = std::make_shared<const StrokeList>();
+    std::uint64_t grown = 0;
+    for (std::size_t points = 5; points <= path.points.size(); points += 7) {
+        const auto list = empty->appended(partialOf(path, points));
+        const auto result = cache.coverage(list, raster, retain);
+        REQUIRE(result.tiles->gathered() == rasteriseBrush(*list, raster));
+        grown += result.lookup == CoverageLookup::Grown ? 1 : 0;
+    }
+    CHECK(grown == (retain ? 7 : 0));
+    CHECK(cache.entryCount() == (retain ? 1U : 0U));
+}
+
+TEST_CASE("A growth that is not retained leaves the entry it grew from", "[brush][cache][grown]") {
+    constexpr ImageSize raster{400, 300};
+    std::mt19937_64 g(seed + 61);
+    BrushCoverageCache cache(std::size_t{512} << 20, 64);
+    const Stroke path = difficultPath(g, 80, 0.03F, 0.5F, false);
+    const auto empty = std::make_shared<const StrokeList>();
+    static_cast<void>(cache.coverage(empty->appended(partialOf(path, 10)), raster));
+    const auto bytes = cache.memoryBytes();
+    const auto quiet = empty->appended(partialOf(path, 30));
+    const auto once = cache.coverage(quiet, raster, false);
+    CHECK(once.lookup == CoverageLookup::Grown);
+    CHECK(once.tiles->gathered() == rasteriseBrush(*quiet, raster));
+    CHECK(cache.entryCount() == 1);
+    CHECK(cache.memoryBytes() == bytes);
+    const auto kept = empty->appended(partialOf(path, 50));
+    const auto next = cache.coverage(kept, raster, true);
+    CHECK(next.lookup == CoverageLookup::Grown);
+    CHECK(next.tiles->gathered() == rasteriseBrush(*kept, raster));
+}
+
+TEST_CASE("A growth builds on an entry inserted by a content hit", "[brush][cache][grown]") {
+    constexpr ImageSize raster{400, 300};
+    std::mt19937_64 g(seed + 62);
+    BrushCoverageCache cache(std::size_t{512} << 20, 64);
+    const Stroke path = difficultPath(g, 80, 0.03F, 0.5F, false);
+    const auto empty = std::make_shared<const StrokeList>();
+    static_cast<void>(cache.coverage(empty->appended(partialOf(path, 20)), raster));
+    // The same list behind new pointers: a content hit that inserts its own entry.
+    const auto reloaded =
+        std::make_shared<const StrokeList>(std::vector<Stroke>{partialOf(path, 20)});
+    CHECK(cache.coverage(reloaded, raster).lookup == CoverageLookup::ContentHit);
+    Stroke longer = partialOf(path, 45);
+    const auto list = std::make_shared<const StrokeList>(std::vector<Stroke>{longer});
+    const auto result = cache.coverage(list, raster);
+    CHECK(result.lookup == CoverageLookup::Grown);
+    CHECK(result.tiles->gathered() == rasteriseBrush(*list, raster));
+}
+
+TEST_CASE("Two threads growing the same chain give the reference bits", "[brush][cache][grown]") {
+    constexpr ImageSize raster{600, 400};
+    for (int round = 0; round < 5; ++round) {
+        BrushCoverageCache cache(std::size_t{512} << 20, 64);
+        std::mt19937_64 g(seed + 50 + round);
+        const auto before = test::paintedMask(seed + 60 + round, 3, test::everydayStyle, 0.667);
+        const Stroke path = test::wanderingStroke(g, test::everydayStyle, 0.667);
+        std::vector<std::shared_ptr<const StrokeList>> lists;
+        std::vector<CoveragePlane> references;
+        for (std::size_t points = 5; points <= path.points.size(); points += 5) {
+            lists.push_back(before->appended(partialOf(path, points)));
+            references.push_back(rasteriseBrush(*lists.back(), raster));
+        }
+        std::latch start(2);
+        std::array<std::vector<bool>, 2> equal;
+        {
+            std::vector<std::jthread> threads;
+            for (std::size_t n = 0; n < equal.size(); ++n) {
+                threads.emplace_back([&, n] {
+                    start.arrive_and_wait();
+                    for (std::size_t i = 0; i < lists.size(); ++i) {
+                        const auto result = cache.coverage(lists[i], raster);
+                        equal[n].push_back(result.tiles->gathered() == references[i]);
+                    }
+                });
+            }
+        }
+        for (const auto& thread : equal) {
+            CHECK(std::ranges::all_of(thread, [](bool same) { return same; }));
+        }
+        // Whatever the interleaving, the cache holds a few entries, not one per update.
+        CHECK(cache.entryCount() <= 4);
+    }
+}
+
+TEST_CASE("An insert whose parent is gone adds a plain entry", "[brush][cache][grown]") {
+    constexpr ImageSize raster{600, 400};
+    BrushCoverageCache cache(std::size_t{512} << 20, 64);
+    std::mt19937_64 g(seed + 70);
+    const auto before = test::paintedMask(seed + 71, 2, test::everydayStyle, 0.667);
+    const Stroke path = test::wanderingStroke(g, test::everydayStyle, 0.667);
+    REQUIRE(path.points.size() > 60);
+    const auto first = before->appended(partialOf(path, 20));
+    const auto second = before->appended(partialOf(path, 40));
+    const auto third = before->appended(partialOf(path, 60));
+    static_cast<void>(cache.coverage(before, raster));
+    static_cast<void>(cache.coverage(first, raster));
+    const std::size_t entries = cache.entryCount();
+
+    // The first thread grows `second` from `first` and stops while it draws.
+    std::atomic<bool> drawing{false};
+    std::atomic<bool> blocked{false};
+    std::latch entered(1);
+    std::latch release(1);
+    ProgressChannel channel([&](const Progress&) {
+        if (drawing.load() && !blocked.exchange(true)) {
+            entered.count_down();
+            release.wait();
+        }
+    });
+    BrushCoverageCache::Result slow;
+    std::thread worker([&] {
+        detail::StepWeights weights{};
+        weights[static_cast<std::size_t>(ProgressStep::Coverage)] = 1.0;
+        detail::ProgressRoot root(&channel, weights, ProgressStep::Coverage);
+        const detail::ProgressSpan span(ProgressStep::Coverage, 1);
+        drawing = true;
+        slow = cache.coverage(second, raster);
+    });
+    entered.wait();
+    // Meanwhile the second thread grows `third` from `first`, replacing it.
+    const auto quick = cache.coverage(third, raster);
+    CHECK(quick.lookup == CoverageLookup::Grown);
+    CHECK(cache.entryCount() == entries);
+    release.count_down();
+    worker.join();
+
+    CHECK(slow.lookup == CoverageLookup::Grown);
+    CHECK(slow.tiles->gathered() == rasteriseBrush(*second, raster));
+    CHECK(quick.tiles->gathered() == rasteriseBrush(*third, raster));
+    // `first` was gone when `second` arrived: it is inserted plainly, beside `third`.
+    CHECK(cache.entryCount() == entries + 1);
+    CHECK(cache.coverage(second, raster).lookup == CoverageLookup::Hit);
+    CHECK(cache.coverage(third, raster).lookup == CoverageLookup::Hit);
 }

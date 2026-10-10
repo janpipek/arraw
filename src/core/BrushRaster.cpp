@@ -10,7 +10,8 @@
 
 namespace arraw {
 
-std::vector<DabCentre> dabCentres(const Stroke& stroke, ImageSize raster, bool endDab) {
+std::vector<DabCentre> dabCentres(const Stroke& stroke, ImageSize raster, bool endDab,
+                                  std::size_t* regular) {
     const double width = raster.width;
     const double height = raster.height;
     const double longEdge = std::max(width, height);
@@ -47,6 +48,9 @@ std::vector<DabCentre> dabCentres(const Stroke& stroke, ImageSize raster, bool e
         }
         travelled += length;
     }
+    if (regular != nullptr) {
+        *regular = dabs.size();
+    }
     if (endDab && static_cast<double>(k - 1) * spacing < travelled) {
         emit(at(stroke.points.size() - 1));
     }
@@ -74,7 +78,7 @@ PlacedStroke placedStroke(const Stroke& stroke, ImageSize raster) {
         static_cast<float>(std::min(static_cast<double>(stroke.hardness) * drawn, drawn - 1.0));
     placed.flow = static_cast<float>(static_cast<double>(stroke.flow) * areaRatio);
     placed.erase = stroke.erase;
-    placed.dabs = dabCentres(stroke, raster);
+    placed.dabs = dabCentres(stroke, raster, true, &placed.regular);
     placed.left = placed.top = INT64_MAX;
     placed.right = placed.bottom = INT64_MIN;
     for (const DabCentre& dab : placed.dabs) {

@@ -4,6 +4,7 @@
 #include "ProgressScope.h"
 #include "RenderProgress.h"
 #include "RowBands.h"
+#include "TimingTrace.h"
 
 #include <algorithm>
 #include <array>
@@ -169,6 +170,7 @@ const PackedCoverage& CoverageResidency::update(const LocalPlan& local, ImageSiz
 
 const PackedCoverage& CoverageResidency::update(const LocalPlan& local, ImageSize size,
                                                 BrushCoverageCache& cache) {
+    const detail::TimingSpan timing("cpu.coverage");
     if (!(size == packed_.size)) {
         reset();
         packed_.size = size;
@@ -253,6 +255,7 @@ CoverageStatus statusOf(const BrushCoverageRef& brush, const CoverageResidency* 
     case CoverageLookup::ContentHit:
         return {CoverageReadiness::Cached, peeked.cachedStrokes};
     case CoverageLookup::Extended:
+    case CoverageLookup::Grown:
         return {CoverageReadiness::Extended, peeked.cachedStrokes};
     case CoverageLookup::Miss:
         break;
