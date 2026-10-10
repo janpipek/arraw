@@ -187,3 +187,19 @@ TEST_CASE("A full list of sixteen masks is listed", "[app][masks-model]") {
     CHECK(model.index(15).data(Qt::DisplayRole).toString() == "Radial 8");
     CHECK(model.index(14).data(Qt::DisplayRole).toString() == "Linear 8");
 }
+
+TEST_CASE("A brush is listed as Brush 1, with kind 3", "[app][masks-model][brush]") {
+    DevelopState state = withLocalAdjustmentAdded(DevelopState{}, LinearMask{});
+    state = withLocalAdjustmentAdded(state, BrushMask{});
+    state = withLocalAdjustmentAdded(state, BrushMask{});
+    state = withLocalAdjustmentRenamed(state, state.localAdjustments[2].id, "Face");
+    MasksModel model;
+    model.setState(state);
+    REQUIRE(model.rowCount() == 3);
+    CHECK(model.index(1).data(Qt::DisplayRole).toString() == "Brush 1");
+    CHECK(model.index(2).data(Qt::DisplayRole).toString() == "Face");
+    CHECK(model.index(0).data(MasksModel::KindRole).toInt() == 1);
+    CHECK(model.index(1).data(MasksModel::KindRole).toInt() == 3);
+    CHECK(model.index(2).data(MasksModel::KindRole).toInt() == 3);
+    CHECK(maskDisplayName(state, state.localAdjustments[1].id) == "Brush 1");
+}

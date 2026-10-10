@@ -3,6 +3,7 @@
 #include "LocalAdjustmentCodec.h"
 #include "SettingCodec.h"
 
+#include <BrushStrokes.h>
 #include <ShortestDecimal.h>
 
 #include <QByteArray>
@@ -12,7 +13,9 @@
 #include <QJsonParseError>
 #include <QJsonValue>
 
+#include <algorithm>
 #include <cmath>
+#include <format>
 #include <limits>
 #include <optional>
 #include <stdexcept>
@@ -182,8 +185,33 @@ std::string fieldJson(const WrittenFields& fields, std::string_view key) {
     return "null";
 }
 
+/// @brief Spells a list of strokes as JSON: whole, or as a count and a hash.
+std::string strokesJson(const StrokeList& strokes, StrokeDetail detail) {
+    if (detail == StrokeDetail::Digest) {
+        return std::format("{{\"count\": {}, \"hash\": \"{:016x}\"}}", strokes.size(),
+                           strokes.contentHash());
+    }
+    std::string text = "[";
+    for (const auto& stroke : strokes.strokes()) {
+        text += text.size() > 1 ? ", " : "";
+        text += "{\"radius\": " + shortestText(shortestDouble(stroke->radius)) +
+                ", \"hardness\": " + shortestText(shortestDouble(stroke->hardness)) +
+                ", \"flow\": " + shortestText(shortestDouble(stroke->flow)) +
+                ", \"erase\": " + (stroke->erase ? "true" : "false") + ", \"points\": [";
+        bool first = true;
+        for (const SensorPoint& point : stroke->points) {
+            text += first ? "[" : ", [";
+            text += shortestText(shortestDouble(point.u)) + ", " +
+                    shortestText(shortestDouble(point.v)) + "]";
+            first = false;
+        }
+        text += "]}";
+    }
+    return text + "]";
+}
+
 /// @brief Spells one mask as a one-line JSON object.
-std::string maskToJson(const LocalAdjustment& adjustment) {
+std::string maskToJson(const LocalAdjustment& adjustment, StrokeDetail detail) {
     const WrittenMask written = writtenForm(adjustment);
     std::string text = "{";
     for (const auto& [key, value] : written.top) {
@@ -196,6 +224,9 @@ std::string maskToJson(const LocalAdjustment& adjustment) {
     text += ", \"geometry\": {";
     if (std::holds_alternative<LinearMask>(adjustment.shape)) {
         text += pair("from", "from") + ", " + pair("to", "to");
+    } else if (written.strokes) {
+        text += "\"rasteriser\": " + fieldJson(written.geometry, "rasteriser") +
+                ", \"strokes\": " + strokesJson(*written.strokes, detail);
     } else {
         text += pair("centre", "centre") + ", " + pair("radius", "radius") +
                 ", \"angle\": " + fieldJson(written.geometry, "angle") +
@@ -211,13 +242,13 @@ std::string maskToJson(const LocalAdjustment& adjustment) {
 }
 
 /// @brief Spells the list object; one mask a line, indented, or all on one line.
-std::string listJson(const DevelopState& state, bool lines) {
+std::string listJson(const DevelopState& state, bool lines, StrokeDetail detail) {
     std::string text = "{\"version\": " + std::to_string(localAdjustmentsVersion) +
                        ", \"nextId\": " + std::to_string(state.nextLocalAdjustmentId.value) +
                        ", \"masks\": [";
     for (std::size_t i = 0; i < state.localAdjustments.size(); ++i) {
         text += lines ? "\n    " : (i > 0 ? ", " : "");
-        text += maskToJson(state.localAdjustments[i]);
+        text += maskToJson(state.localAdjustments[i], detail);
         text += lines && i + 1 < state.localAdjustments.size() ? "," : "";
     }
     if (lines && !state.localAdjustments.empty()) {
@@ -262,6 +293,66 @@ std::optional<std::pair<double, double>> pairOf(const QJsonValue& value) {
     return std::pair{array[0].toDouble(), array[1].toDouble()};
 }
 
+/// @brief Narrows a double to a float, clamping what is too large for one.
+float floatOf(double value) {
+    constexpr double most = std::numeric_limits<float>::max();
+    return static_cast<float>(std::clamp(value, -most, most));
+}
+
+/// @brief Reads one stroke object of a brush's `strokes`.
+StrokeFields strokeFieldsOf(const QJsonValue& value) {
+    StrokeFields fields;
+    if (!value.isObject()) {
+        fields.problem = "it is not an object";
+        return fields;
+    }
+    const QJsonObject object = value.toObject();
+    DecodedStroke decoded;
+    const auto numberOf = [&](const char* key, float& into) {
+        const QJsonValue entry = object.value(key);
+        if (!entry.isDouble()) {
+            fields.problem = std::string("'") + key +
+                             (entry.isUndefined() ? "' is missing" : "' is not a number");
+            return;
+        }
+        into = floatOf(entry.toDouble());
+    };
+    numberOf("radius", decoded.stroke.radius);
+    numberOf("hardness", decoded.stroke.hardness);
+    numberOf("flow", decoded.stroke.flow);
+    if (!object.value("erase").isBool()) {
+        fields.problem = "'erase' is missing or not true or false";
+    }
+    decoded.stroke.erase = object.value("erase").toBool();
+    if (!object.value("points").isArray()) {
+        fields.problem = "'points' is missing or not a list";
+    } else {
+        for (const QJsonValue& entry : object.value("points").toArray()) {
+            const auto pair = pairOf(entry);
+            if (!pair) {
+                fields.problem = "a point is not a pair of numbers";
+                break;
+            }
+            if (decoded.stroke.points.size() < maximumStrokePoints) {
+                decoded.stroke.points.push_back({floatOf(pair->first), floatOf(pair->second)});
+            } else {
+                ++decoded.pointsDropped;
+            }
+        }
+    }
+    for (auto it = object.begin(); it != object.end(); ++it) {
+        const QString key = it.key();
+        if (key != "radius" && key != "hardness" && key != "flow" && key != "erase" &&
+            key != "points") {
+            fields.unknownKeys.push_back(key.toStdString());
+        }
+    }
+    if (fields.problem.empty()) {
+        fields.decoded = std::move(decoded);
+    }
+    return fields;
+}
+
 /// @brief Reads one entry of the `masks` array as the fields it holds.
 MaskFields maskFieldsOf(const QJsonValue& value) {
     MaskFields fields;
@@ -287,6 +378,19 @@ MaskFields maskFieldsOf(const QJsonValue& value) {
                     } else {
                         fields.problem = "'" + name + "' is not a pair of numbers";
                     }
+                } else if (name == "strokes") {
+                    if (!part.value().isArray()) {
+                        fields.strokesProblem = "'strokes' is not a sequence of strokes";
+                        continue;
+                    }
+                    std::vector<StrokeFields> strokes;
+                    for (const QJsonValue& stroke : part.value().toArray()) {
+                        // Past the cap a stroke is only counted, so it is not decoded.
+                        strokes.push_back(strokes.size() < maximumStrokesPerMask
+                                              ? strokeFieldsOf(stroke)
+                                              : StrokeFields{});
+                    }
+                    fields.strokes = std::move(strokes);
                 } else {
                     fields.geometry.emplace_back(name, fieldOf(part.value()));
                 }
@@ -323,12 +427,12 @@ std::string arraw::settingsToJson(const DevelopSettings& settings) {
 std::string arraw::stateToJson(const DevelopState& state) {
     validate(state);
     return settingsDocumentHead(state.settings) +
-           ",\n  \"localAdjustments\": " + listJson(state, true) + "\n}\n";
+           ",\n  \"localAdjustments\": " + listJson(state, true, StrokeDetail::Points) + "\n}\n";
 }
 
-std::string arraw::localAdjustmentsToJson(const DevelopState& state) {
+std::string arraw::localAdjustmentsToJson(const DevelopState& state, StrokeDetail detail) {
     validate(state);
-    return listJson(state, false);
+    return listJson(state, false, detail);
 }
 
 DevelopState arraw::applyStateJson(std::string_view json, DevelopState base, DiagnosticLog& log) {

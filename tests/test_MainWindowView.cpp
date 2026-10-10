@@ -1,4 +1,5 @@
 #include "DebugLog.h"
+#include "PreviewRenderer.h"
 #include "support/TempDir.h"
 #include "ui/DebugWindow.h"
 #include "ui/FilmStrip.h"
@@ -215,4 +216,53 @@ TEST_CASE("F11 returns to the maximised state and follows outside changes", "[ap
     w.window.showFullScreen();
     REQUIRE(QTest::qWaitFor([&] { return w.window.isFullScreen(); }, 2000));
     CHECK(full.isChecked());
+}
+
+TEST_CASE("A coarser stand-in is shown, keeps the busy period, and gives no thumbnail",
+          "[app][window][view][provisional]") {
+    Window w;
+    auto& view = *w.window.findChild<PhotoView*>();
+    RenderIndicator& indicator = w.window.renderIndicator();
+    REQUIRE(QTest::qWaitFor([&] { return !indicator.busy(); }, 20000));
+
+    const auto picture = [](QColor colour) {
+        QImage image(32, 24, QImage::Format_ARGB32);
+        image.fill(colour);
+        return image;
+    };
+    constexpr std::uint64_t request = 1'000'000;
+    PreviewResult standIn;
+    standIn.request = request;
+    standIn.image = picture(Qt::red);
+    standIn.region = QRectF(0.0, 0.0, 1.0, 1.0);
+    standIn.frame = QSize(32, 24);
+    standIn.level = 1;
+    standIn.provisional = true;
+    standIn.thumbnail = picture(Qt::blue);
+
+    indicator.begin();
+    REQUIRE(indicator.busy());
+    const std::filesystem::path path = w.folder.file("a.dng");
+    const QImage thumbnailBefore = w.window.findChild<FilmStrip*>()->thumbnail(path);
+
+    w.window.showResult(standIn);
+    CHECK(view.wholeFrameImage() == *standIn.image);
+    CHECK(indicator.busy());
+    CHECK(w.window.findChild<FilmStrip*>()->thumbnail(path) == thumbnailBefore);
+
+    // The render of the request's own level follows it, is shown, and ends the busy period.
+    PreviewResult own = standIn;
+    own.image = picture(Qt::green);
+    own.level = 0;
+    own.provisional = false;
+    own.thumbnail.reset();
+    w.window.showResult(own);
+    CHECK(view.wholeFrameImage() == *own.image);
+    CHECK_FALSE(indicator.busy());
+
+    // Once the render of its own level is shown, neither a repeat nor a late stand-in is.
+    w.window.showResult(standIn);
+    CHECK(view.wholeFrameImage() == *own.image);
+    w.window.showResult(own);
+    CHECK(view.wholeFrameImage() == *own.image);
 }

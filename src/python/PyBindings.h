@@ -17,6 +17,7 @@
 #include <nanobind/stl/vector.h>
 // clang-format on
 
+#include <BrushStrokes.h>
 #include <DevelopSettings.h>
 #include <DevelopState.h>
 #include <Diagnostics.h>
@@ -119,6 +120,30 @@ template <> struct nanobind::detail::type_caster<arraw::CorrectedPoint> {
     }
 };
 
+/// @brief Caster of a position in the sensor frame to and from a Python `(u, v)` tuple.
+///
+/// As for a corrected position, which it is built on.
+template <> struct nanobind::detail::type_caster<arraw::SensorPoint> {
+    NB_TYPE_CASTER(arraw::SensorPoint, const_name("tuple[float, float]"))
+
+    /// @brief Reads a two-item sequence of numbers.
+    bool from_python(nanobind::handle source, uint8_t flags, cleanup_list* cleanup) noexcept {
+        make_caster<arraw::CorrectedPoint> point;
+        if (!point.from_python(source, flags, cleanup)) {
+            return false;
+        }
+        value = arraw::SensorPoint{point.value.u, point.value.v};
+        return true;
+    }
+
+    /// @brief Makes a `(u, v)` tuple.
+    static handle from_cpp(const arraw::SensorPoint& point, rv_policy policy,
+                           cleanup_list* cleanup) noexcept {
+        return make_caster<arraw::CorrectedPoint>::from_cpp(arraw::CorrectedPoint{point.u, point.v},
+                                                            policy, cleanup);
+    }
+};
+
 /// @brief Caster of a local adjustment's id to and from a Python `int`.
 ///
 /// Reading takes an int that fits 32 bits and is no bool.
@@ -178,6 +203,14 @@ void bindSession(nb::module_& module);
 /// @param keywords Keyword arguments, each naming one leaf of the table.
 /// @throws nb::type_error for a key not in the table or a value of the wrong type.
 void applyFlatSettings(DevelopSettings& settings, const nb::kwargs& keywords);
+
+/// @brief Builds a brush mask from strokes, clamping each stroke's numbers first.
+[[nodiscard]] inline BrushMask brushMaskOf(std::vector<Stroke> strokes) {
+    for (Stroke& each : strokes) {
+        each = normalised(std::move(each));
+    }
+    return BrushMask{std::make_shared<const StrokeList>(std::move(strokes))};
+}
 
 /// @brief Finds the row of the setting a snake_case keyword names.
 /// @param name Keyword such as "filmic_highlights".

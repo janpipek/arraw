@@ -472,11 +472,38 @@ void bindPhoto(nb::module_& m) {
             "point normalised to the corrected frame, the radii are in long-edge units, `angle` "
             "turns the x radius towards +y in degrees, and `feather` is the soft edge's width "
             "from 0 (hard) to 1. Keywords and errors are as for add_linear_mask.")
+        .def(
+            "add_brush_mask",
+            [](const Photo& photo, std::vector<Stroke> strokes, const std::string& name,
+               const nb::object& opacity, bool invert, bool enabled, const nb::kwargs& deltas) {
+                return withMaskAdded(photo, brushMaskOf(std::move(strokes)), name, opacity, invert,
+                                     enabled, deltas);
+            },
+            "strokes"_a = nb::tuple(), nb::kw_only(), "name"_a = "", "opacity"_a = nb::float_(1.0),
+            "invert"_a = false, "enabled"_a = true, "kwargs"_a,
+            nb::sig("def add_brush_mask(self, strokes: collections.abc.Sequence[Stroke] = (), *, "
+                    "name: str = '', opacity: float = 1.0, invert: bool = False, enabled: bool = "
+                    "True, **deltas: float) -> Photo"),
+            "Return a photograph with a brush mask of those strokes added last. Each stroke's "
+            "numbers are clamped, then the list is built. A stroke without points, a number "
+            "that is not finite, a cap or budget passed (see BrushMask) or a full list (16) is "
+            "a ValueError, an unknown keyword a TypeError. Keywords are as for add_linear_mask.")
+        .def(
+            "with_brush_stroke",
+            [](const Photo& photo, LocalAdjustmentId id, const Stroke& stroke) {
+                return Photo(photo.path(), photo.metadata(),
+                             withStrokeAppended(photo.state(), id, stroke), photo.marks());
+            },
+            "id"_a, "stroke"_a,
+            "Return a photograph with the stroke, clamped, appended to the brush mask of that "
+            "id. ValueError for an unknown id, an adjustment that is not a brush, a stroke "
+            "that cannot be normalised or a mask that would pass a cap or budget.")
         .def("with_local_adjustment", &withLocalChanged, "id"_a, "kwargs"_a,
              nb::sig("def with_local_adjustment(self, id: int, **changes: typing.Any) -> Photo"),
              "Return a photograph with the adjustment of that id changed. The keywords, applied "
              "in the order given, are `name`, `enabled`, `invert`, `opacity`, `shape` (a "
-             "LinearMask or RadialMask of the kind the adjustment already has) and the deltas "
+             "LinearMask, RadialMask or BrushMask of the kind the adjustment already has; a "
+             "BrushMask replaces the strokes) and the deltas "
              "by their snake_case names; numbers out of range are clamped. ValueError for an "
              "unknown id or a shape of another kind, TypeError for an unknown keyword.")
         .def(

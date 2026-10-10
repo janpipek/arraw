@@ -1,6 +1,7 @@
 #include "LocalPlan.h"
 #include "Presence.h"
 #include "ProcessingPlan.h"
+#include "support/BrushGenerators.h"
 #include "support/FieldCount.h"
 #include "support/LadderTesting.h"
 
@@ -139,7 +140,7 @@ float weightAt(const DevelopState& state, ImageSize size, std::uint32_t x, std::
                std::size_t index = 0) {
     const LocalPlan plan = localPlanFor(state, size);
     return maskWeight(plan.masks.at(index), static_cast<float>(x) + 0.5F,
-                      static_cast<float>(y) + 0.5F);
+                      static_cast<float>(y) + 0.5F, PixelCoverage{});
 }
 
 double smoothstepRef(double first, double last, double value) {
@@ -305,8 +306,8 @@ TEST_CASE("A plan built twice from equal states compares equal", "[local][plan]"
 
 TEST_CASE("The plan's blocks have no stray field", "[local][plan]") {
     STATIC_REQUIRE(test::fieldCount<LocalPlan> == 3);
-    STATIC_REQUIRE(test::fieldCount<LocalMaskPlan> == 10);
-    STATIC_REQUIRE(test::fieldCount<PreTapMask> == 10);
+    STATIC_REQUIRE(test::fieldCount<LocalMaskPlan> == 11);
+    STATIC_REQUIRE(test::fieldCount<PreTapMask> == 11);
     STATIC_REQUIRE(test::fieldCount<PreTapLocal> == 2);
     STATIC_REQUIRE(test::fieldCount<PixelAmounts> == 5);
     STATIC_REQUIRE(test::fieldCount<PresencePlan> == 6);
@@ -537,15 +538,16 @@ TEST_CASE("Masks sum in setting units and clamp once", "[local][sum]") {
         const DevelopState state =
             withMask(withMask(DevelopState{settings}, everywhere(), {.exposure = 1.0F}),
                      everywhere(), {.exposure = 1.0F});
-        const PixelAmounts at = amountsAt(planOf(source, state).pointwise, 3, 4);
+        const PixelAmounts at = amountsAt(planOf(source, state).pointwise, 3, 4, PixelCoverage{});
         REQUIRE(at.tone.exposureGain == exposureGainFor(brightestExposure));
         // Masks that overshoot and come back: the clamp is on the total, not on each step.
         settings.tone.exposure = 3.0F;
         const DevelopState opposed =
             withMask(withMask(DevelopState{settings}, everywhere(), {.exposure = 4.0F}),
                      everywhere(), {.exposure = -1.0F});
-        REQUIRE(amountsAt(planOf(source, opposed).pointwise, 3, 4).tone.exposureGain ==
-                exposureGainFor(brightestExposure));
+        REQUIRE(
+            amountsAt(planOf(source, opposed).pointwise, 3, 4, PixelCoverage{}).tone.exposureGain ==
+            exposureGainFor(brightestExposure));
     }
 }
 
@@ -678,7 +680,7 @@ TEST_CASE("Zero relative Temperature and Tint apply no gain at all", "[local][ba
     state = withMask(state, LinearMask{}, {.relativeTemperature = -40.0F});
     const PointwisePlan plan = planOf(source, state).pointwise;
     for (std::uint32_t y = 0; y < 16; ++y) {
-        REQUIRE_FALSE(amountsAt(plan, 5, y).balances);
+        REQUIRE_FALSE(amountsAt(plan, 5, y, PixelCoverage{}).balances);
     }
     REQUIRE(sameBits(develop(source, state), develop(source, without)));
     // Two masks of 50 are one of 100.
@@ -1054,10 +1056,10 @@ TEST_CASE("A mask reaches Tone through the chain: a control the mask has and the
     const DevelopState state = withMask(none, blob, {.highlights = -80.0F});
     const PointwisePlan plan = planOf(source, state).pointwise;
     REQUIRE_FALSE(plan.tone.shapesTone);
-    REQUIRE(amountsAt(plan, 16, 12).tone.shapesTone);
-    REQUIRE_FALSE(amountsAt(plan, 0, 0).tone.shapesTone);
+    REQUIRE(amountsAt(plan, 16, 12, PixelCoverage{}).tone.shapesTone);
+    REQUIRE_FALSE(amountsAt(plan, 0, 0, PixelCoverage{}).tone.shapesTone);
     // A pixel no mask reaches has exactly the plan's amounts.
-    REQUIRE(amountsAt(plan, 0, 0) == globalAmountsOf(plan));
+    REQUIRE(amountsAt(plan, 0, 0, PixelCoverage{}) == globalAmountsOf(plan));
 }
 
 TEST_CASE("The mask stays on the same source pixels under every orientation", "[local][anchor]") {
@@ -1174,8 +1176,9 @@ TEST_CASE("A reduced level evaluates the same field as the full source", "[local
                     const float fx = (static_cast<float>(x) + 0.5F) * static_cast<float>(factor);
                     const float fy = (static_cast<float>(y) + 0.5F) * static_cast<float>(factor);
                     REQUIRE(maskWeight(small.masks[index], static_cast<float>(x) + 0.5F,
-                                       static_cast<float>(y) + 0.5F) ==
-                            Catch::Approx(maskWeight(big.masks[index], fx, fy)).margin(3e-5));
+                                       static_cast<float>(y) + 0.5F, PixelCoverage{}) ==
+                            Catch::Approx(maskWeight(big.masks[index], fx, fy, PixelCoverage{}))
+                                .margin(3e-5));
                 }
             }
         }
@@ -1389,4 +1392,163 @@ TEST_CASE("The pre-tap view holds the masks with a pre-tap control and the eleve
     REQUIRE(view.masks[0].kind == LocalMaskKind::Radial);
     REQUIRE(view.masks[0].k[indexOf(LocalControl::Exposure)] == 1.0F);
     REQUIRE(view.global[indexOf(LocalControl::Exposure)] == 0.5F);
+}
+
+namespace {
+
+/// @brief A short stroke in the left half of a frame.
+Stroke strokeAt(float v, float radius = 0.03F) {
+    return test::straightStroke({0.1F, v}, {0.4F, v}, 6, radius, 0.5F, 1.0F);
+}
+
+/// @brief A brush mask of the strokes.
+BrushMask brushOf(std::vector<Stroke> strokes) {
+    return BrushMask{std::make_shared<const StrokeList>(std::move(strokes))};
+}
+
+} // namespace
+
+TEST_CASE("Brush slots are dense in plan order, skipping masks the plan leaves out",
+          "[local][plan][brush]") {
+    const ImageSize size{60, 40};
+    DevelopState state{plainSettings()};
+    state = withMask(state, brushOf({strokeAt(0.2F)}), {.exposure = 1.0F}); // list index 0
+    state = withMask(state, LinearMask{}, {.exposure = 1.0F});              // 1
+    state = withMask(state, brushOf({strokeAt(0.3F)}), {});                 // 2: no delta
+    state = withMask(state, brushOf({strokeAt(0.4F)}), {.exposure = 1.0F}); // 3
+    state = withMask(state, brushOf({strokeAt(0.5F)}), {.exposure = 1.0F}); // 4: disabled
+    state = withLocalAdjustmentEnabled(state, state.localAdjustments[4].id, false);
+    state = withMask(state, brushOf({}), {.contrast = 5.0F}); // 5: empty, kept
+
+    const LocalPlan plan = localPlanFor(state, size);
+    REQUIRE(plan.masks.size() == 4);
+    REQUIRE(plan.brushCount() == 3);
+    const std::vector<std::pair<std::uint32_t, std::uint32_t>> expected{
+        {0, 0}, {1, 3}, {2, 5}}; // slot, phase: the list index
+    std::size_t next = 0;
+    for (const LocalMaskPlan& mask : plan.masks) {
+        if (mask.kind != LocalMaskKind::Brush) {
+            REQUIRE(mask.brush.strokes == nullptr);
+            continue;
+        }
+        REQUIRE(mask.brush.slot == expected[next].first);
+        REQUIRE(mask.brush.phase == expected[next].second);
+        REQUIRE(mask.brush.raster == size);
+        REQUIRE(mask.brush.strokes != nullptr);
+        ++next;
+    }
+    REQUIRE(next == 3);
+    // An empty brush with a non-zero amount still counts for Presence reach.
+    const DevelopState empty =
+        withMask(DevelopState{plainSettings()}, brushOf({}), {.texture = 30.0F});
+    const LocalPlan emptyPlan = localPlanFor(empty, size);
+    REQUIRE(emptyPlan.brushCount() == 1);
+    REQUIRE(presenceReachOf(emptyPlan).texture.positive == 30.0F);
+}
+
+TEST_CASE("Plans of equal states behind other list pointers are equal", "[local][plan][brush]") {
+    const ImageSize size{60, 40};
+    const DevelopState a = withMask(DevelopState{plainSettings()},
+                                    brushOf({strokeAt(0.2F), strokeAt(0.6F)}), {.exposure = 1.0F});
+    const DevelopState b = withMask(DevelopState{plainSettings()},
+                                    brushOf({strokeAt(0.2F), strokeAt(0.6F)}), {.exposure = 1.0F});
+    const auto& listA = std::get<BrushMask>(a.localAdjustments[0].shape).strokes;
+    const auto& listB = std::get<BrushMask>(b.localAdjustments[0].shape).strokes;
+    REQUIRE(listA != listB);
+    REQUIRE(localPlanFor(a, size) == localPlanFor(b, size));
+    // Other strokes, another size or another phase are other plans.
+    const DevelopState c = withMask(DevelopState{plainSettings()},
+                                    brushOf({strokeAt(0.2F), strokeAt(0.7F)}), {.exposure = 1.0F});
+    REQUIRE_FALSE(localPlanFor(a, size) == localPlanFor(c, size));
+    REQUIRE_FALSE(localPlanFor(a, size) == localPlanFor(a, {61, 40}));
+    const DevelopState shifted =
+        withMask(withMask(DevelopState{plainSettings()}, LinearMask{}, {}),
+                 brushOf({strokeAt(0.2F), strokeAt(0.6F)}), {.exposure = 1.0F});
+    REQUIRE_FALSE(localPlanFor(a, size) == localPlanFor(shifted, size));
+}
+
+TEST_CASE("A delta edit leaves every brush reference equal and resumes from Denoise",
+          "[local][plan][brush][ladder]") {
+    const auto source = std::make_shared<const ImageBuffer>(sceneOf({64, 40}));
+    DevelopSettings settings = plainSettings();
+    settings.noiseReduction.color = 40.0F;
+    settings.noiseReduction.luminance = 30.0F;
+    DevelopState state{settings};
+    state = withMask(state, brushOf({strokeAt(0.3F)}), {.exposure = 1.0F});
+    state = withMask(state, brushOf({strokeAt(0.7F)}), {.contrast = 20.0F});
+    const LocalAdjustmentId id = state.localAdjustments[0].id;
+
+    const DevelopState louder = withLocalDelta(state, id, "exposure", 2.0);
+    const LocalPlan before = localPlanFor(state, source->size());
+    const LocalPlan after = localPlanFor(louder, source->size());
+    REQUIRE(before.masks.size() == after.masks.size());
+    for (std::size_t i = 0; i < before.masks.size(); ++i) {
+        REQUIRE(before.masks[i].brush == after.masks[i].brush);
+    }
+    REQUIRE_FALSE(before == after);
+
+    CheckpointLadder ladder;
+    static_cast<void>(resumeOrDevelop(ladder, source, state, {}));
+    REQUIRE(ladder.holds(Stage::Denoise));
+    const LadderRender render = resumeOrDevelop(ladder, source, louder, {});
+    REQUIRE(render.resumedFrom == Stage::Denoise);
+    REQUIRE(sameBits(render.checkpoint.readBack(), develop(*source, louder)));
+}
+
+TEST_CASE("An appended stroke invalidates Pointwise and nothing before it",
+          "[local][plan][brush][ladder]") {
+    const ImageBuffer source = sceneOf({48, 32});
+    DevelopSettings settings = plainSettings();
+    settings.noiseReduction.color = 40.0F;
+    const DevelopState state =
+        withMask(DevelopState{settings}, brushOf({strokeAt(0.3F)}), {.exposure = 1.0F});
+    const DevelopState painted =
+        withStrokeAppended(state, state.localAdjustments[0].id, strokeAt(0.6F));
+    const ProcessingPlan before = planOf(source, state);
+    const ProcessingPlan after = planOf(source, painted);
+    REQUIRE(prefixMatches(before, after, Stage::Denoise));
+    REQUIRE_FALSE(prefixMatches(before, after, Stage::Pointwise));
+}
+
+TEST_CASE(
+    "A stroke edit of a Saturation-only brush keeps the curve-input tap, a pre-tap one moves it",
+    "[local][tap][brush]") {
+    const ImageBuffer source = sceneOf({48, 32});
+    const DevelopState none{plainSettings()};
+    const auto same = [&](const DevelopState& a, const DevelopState& b) {
+        return sameAtTap(planOf(source, a), planOf(source, b), Tap::CurveInput);
+    };
+
+    const DevelopState colour = withMask(none, brushOf({strokeAt(0.3F)}), {.saturation = 40.0F});
+    const DevelopState painted =
+        withStrokeAppended(colour, colour.localAdjustments[0].id, strokeAt(0.6F));
+    REQUIRE(same(colour, painted));
+    REQUIRE(same(none, colour));
+
+    const DevelopState light = withMask(none, brushOf({strokeAt(0.3F)}), {.exposure = 1.0F});
+    const DevelopState lightPainted =
+        withStrokeAppended(light, light.localAdjustments[0].id, strokeAt(0.6F));
+    REQUIRE_FALSE(same(light, lightPainted));
+    REQUIRE(same(light, light));
+    // A pre-tap brush's phase (its place in the list) moves the tap too.
+    const DevelopState shifted = withMask(withMask(none, LinearMask{}, {.saturation = 5.0F}),
+                                          brushOf({strokeAt(0.3F)}), {.exposure = 1.0F});
+    REQUIRE_FALSE(same(light, shifted));
+
+    // The slot is not part of the view: a Saturation-only brush in front moves the slot of the
+    // pre-tap brush behind it, and the view stays the same.
+    const DevelopState both = withMask(colour, brushOf({strokeAt(0.3F)}), {.exposure = 1.0F});
+    const DevelopState oneOnly =
+        withLocalAdjustmentEnabled(both, both.localAdjustments[0].id, false);
+    const PreTapLocal a = preTapLocalFieldsOf(planOf(source, both).pointwise.local);
+    REQUIRE(a.masks.size() == 1);
+    REQUIRE(a.masks[0].kind == LocalMaskKind::Brush);
+    // Disabling the first moves the second's slot from 1 to 0, and its phase stays 1.
+    REQUIRE(planOf(source, both).pointwise.local.masks[1].brush.slot == 1);
+    REQUIRE(planOf(source, oneOnly).pointwise.local.masks[0].brush.slot == 0);
+    REQUIRE(a.masks[0].brush.slot == 0);
+    const PreTapLocal b = preTapLocalFieldsOf(planOf(source, oneOnly).pointwise.local);
+    REQUIRE(b.masks.size() == 1);
+    REQUIRE(a.masks[0].brush.phase == b.masks[0].brush.phase);
+    REQUIRE(a == b);
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "DeviceImage.h"
+#include "PixelRect.h"
 
 #include <ImageBuffer.h>
 
@@ -161,9 +162,9 @@ enum class GpuPass {
     Copy, ///< Copies its input unchanged; no uniforms. The render round trip's proof.
     /// @brief The pointwise chain; uniforms are a ::arraw::GpuPointwiseBlock.
     ///
-    /// Inputs are the image, the curves, and the Presence context's fine base,
-    /// coarse base, coarse cells, haze floor and haze mean (bindings 0 and 2 to 7); the
-    /// image stands in for any the block says are not read.
+    /// Inputs are the image, the curves, the Presence context's fine base,
+    /// coarse base, coarse cells, haze floor and haze mean, and the four brush coverage textures
+    /// (bindings 0 and 2 to 11); the image stands in for any the block says are not read.
     Pointwise,
     Geometry, ///< The geometry resample; uniforms are a ::arraw::GpuGeometryBlock.
 
@@ -324,6 +325,37 @@ public:
     /// GpuDeviceInfo::floatTextures), cannot create or fill the texture, or an
     /// earlier transfer failed.
     [[nodiscard]] DeviceImage upload(const ImageBuffer& image);
+
+    /// @brief Copies one plane of packed brush coverage into a new RGBA8 texture.
+    ///
+    /// The texture is `RGBA8` without the sRGB flag, which a driver would otherwise linearise:
+    /// the codes are weights, not colours. The result reports ::arraw::PixelFormat::RgbaU8, a
+    /// placeholder encoding and a pixel scale of 1; its read back is the plane. No format check:
+    /// every backend has RGBA8.
+    /// @param size Dimensions of the plane.
+    /// @param plane `size.width * size.height * 4` bytes, RGBA, row-major.
+    /// @throws std::invalid_argument if @p plane is not that long, or @p size is empty or
+    /// larger than the device or a single QRhi transfer accepts.
+    /// @throws std::logic_error if called from a thread other than the owner.
+    /// @throws std::runtime_error if the device cannot create or fill the texture, or an earlier
+    /// transfer failed.
+    [[nodiscard]] DeviceImage uploadCoverage(ImageSize size, std::span<const std::uint8_t> plane);
+
+    /// @brief Uploads rectangles of a plane into an existing coverage texture.
+    ///
+    /// Each rectangle is copied to a contiguous buffer; all go in one resource update batch.
+    /// This is the one exception to ::arraw::DeviceImage's immutability: a coverage texture is
+    /// never a checkpoint's pixels, and is updated only by the residency that made it, on the
+    /// owner thread, between renders (which wait for completion).
+    /// @param image A coverage texture of this device, made by ::arraw::GpuContext::uploadCoverage.
+    /// @param rectangles Rectangles to copy, inside the texture; none is a no-op.
+    /// @param plane The whole plane the rectangles are cut from, of the texture's size.
+    /// @throws std::invalid_argument if @p image is not a coverage texture of this device,
+    /// @p plane is not of its size, or a rectangle is empty or outside it.
+    /// @throws std::logic_error if called from a thread other than the owner.
+    /// @throws std::runtime_error if the transfer fails.
+    void updateCoverage(const DeviceImage& image, std::span<const PixelRect> rectangles,
+                        std::span<const std::uint8_t> plane);
 
     /// @brief Renders one pass from a device image into a new one.
     ///

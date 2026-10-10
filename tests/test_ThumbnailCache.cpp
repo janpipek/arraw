@@ -1,8 +1,11 @@
 #include "ThumbnailCache.h"
 #include "support/Fixtures.h"
+#include "support/LocalAdjustmentStates.h"
 #include "support/TempDir.h"
 
 #include <DevelopState.h>
+#include <LocalAdjustmentEdits.h>
+#include <SettingsJson.h>
 
 #include <QColor>
 #include <QFile>
@@ -14,7 +17,9 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <string>
+#include <vector>
 
 using namespace arraw;
 using namespace arraw::app;
@@ -81,6 +86,31 @@ TEST_CASE("Cache keys follow the file, and developed ones the saved state", "[th
         DevelopState counted = masked;
         counted.nextLocalAdjustmentId = LocalAdjustmentId{9};
         REQUIRE(*ThumbnailCache::developedKey(file, counted) == withMask);
+    }
+    SECTION("the strokes of a brush change the key, behind whatever pointers") {
+        const DevelopState brushes = test::stateWithBrushes();
+        const std::string key = *ThumbnailCache::developedKey(file, brushes);
+        REQUIRE(key != *developed);
+
+        // Equal strokes behind other pointers: the same picture, the same key.
+        DevelopState copied = brushes;
+        const auto& list = *std::get<BrushMask>(brushes.localAdjustments[0].shape).strokes;
+        copied.localAdjustments[0].shape =
+            BrushMask{std::make_shared<const StrokeList>(std::vector<Stroke>{list[0], list[1]})};
+        REQUIRE(*ThumbnailCache::developedKey(file, copied) == key);
+
+        // Other strokes, or one more, another picture.
+        DevelopState other = brushes;
+        other.localAdjustments[0].shape = test::brushMaskWith({list[0]});
+        REQUIRE(*ThumbnailCache::developedKey(file, other) != key);
+        DevelopState more = brushes;
+        more.localAdjustments[0].shape = BrushMask{list.appended(list[0])};
+        REQUIRE(*ThumbnailCache::developedKey(file, more) != key);
+    }
+    SECTION("a state without a brush is keyed by the same text as before") {
+        const DevelopState masks = test::stateWithMasks();
+        REQUIRE(localAdjustmentsToJson(masks, StrokeDetail::Digest) ==
+                localAdjustmentsToJson(masks));
     }
     SECTION("the modification time changes both") {
         setAge(file, std::chrono::hours(5));

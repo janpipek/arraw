@@ -2,6 +2,7 @@
 
 #include "support/LocalAdjustmentStates.h"
 
+#include <BrushStrokes.h>
 #include <DevelopState.h>
 #include <Diagnostics.h>
 #include <LocalAdjustmentEdits.h>
@@ -11,6 +12,8 @@
 #include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <cstddef>
+#include <cstdint>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -245,18 +248,17 @@ TEST_CASE("A mask is read with its defaults for what it leaves out", "[local][js
 }
 
 TEST_CASE("An unknown mask type is dropped with a warning, the others kept", "[local][json]") {
-    const std::string brush =
-        R"({"id": 2, "type": "brush", "geometry": {"rasteriser": 1, "strokes": []}})";
-    const auto [state, log] = applyDoc(document({linearJson(1), brush, radialJson(3)}));
+    const std::string stamp = R"({"id": 2, "type": "stamp", "geometry": {"radius": 1}})";
+    const auto [state, log] = applyDoc(document({linearJson(1), stamp, radialJson(3)}));
     CHECK(idsOf(state) == std::vector<std::uint32_t>{1, 3});
     const Diagnostic warning = only(log, Notice::LocalAdjustmentDropped);
     CHECK(warning.severity == Severity::Warning);
     CHECK(warning.values.size() == 4);
     CHECK(std::get<double>(warning.values[0]) == 2.0);
     CHECK(std::get<std::string>(warning.values[1]) == "2");
-    CHECK(std::get<std::string>(warning.values[2]) == "brush");
+    CHECK(std::get<std::string>(warning.values[2]) == "stamp");
     CHECK_THAT(describe(warning), ContainsSubstring("mask 2"));
-    CHECK_THAT(describe(warning), ContainsSubstring("brush"));
+    CHECK_THAT(describe(warning), ContainsSubstring("stamp"));
     // The dropped mask's id is not handed out again by the counter it leaves: only kept ids count.
     CHECK(state.nextLocalAdjustmentId == LocalAdjustmentId{4});
 }
@@ -513,4 +515,319 @@ TEST_CASE("A document that is not a state document is refused as a settings docu
     CHECK_THROWS_AS(applyStateJson("nope", DevelopState{}), std::invalid_argument);
     CHECK_THROWS_AS(applyStateJson(R"({"arraw": 1})", DevelopState{}), std::invalid_argument);
     CHECK_THROWS_AS(applyStateJson(R"({"settings": {}})", DevelopState{}), std::invalid_argument);
+}
+
+// Brush masks (ADR 044, sections 6 and 9; the brush plan, sections 3.3, 5.1 and 5.3).
+
+namespace {
+
+/// A stroke object the way the document spells it.
+std::string strokeJson(const std::string& points = "[[0.1, 0.2], [0.11, 0.21]]",
+                       const std::string& style = R"("radius": 0.02, "hardness": 0.5, "flow": 1,)"
+                                                  R"( "erase": false,)") {
+    return "{" + style + R"( "points": )" + points + "}";
+}
+
+/// A brush mask the way the document spells it, with the given strokes (JSON text of the array)
+/// and extra members of the geometry.
+std::string brushJson(int id, const std::string& strokes = "[]",
+                      const std::string& rasteriser = "1", const std::string& extra = "") {
+    std::string geometry = extra;
+    for (const std::string& member : {rasteriser.empty() ? "" : R"("rasteriser": )" + rasteriser,
+                                      strokes.empty() ? "" : R"("strokes": )" + strokes}) {
+        geometry += member.empty() ? "" : (geometry.empty() ? "" : ", ") + member;
+    }
+    return R"({"id": )" + std::to_string(id) +
+           R"(, "type": "brush", "name": "", "enabled": true, "opacity": 1, "invert": false,)"
+           R"( "geometry": {)" +
+           geometry + R"(}, "deltas": {"exposure": 1}})";
+}
+
+/// The strokes array of a document of several stroke objects.
+std::string strokesOf(const std::vector<std::string>& strokes) {
+    std::string text = "[";
+    for (const std::string& stroke : strokes) {
+        text += (text.size() > 1 ? ", " : "") + stroke;
+    }
+    return text + "]";
+}
+
+const BrushMask& brushAt(const DevelopState& state, std::size_t index = 0) {
+    return std::get<BrushMask>(state.localAdjustments.at(index).shape);
+}
+
+/// The warnings of a kind, as the text `describe` gives.
+std::vector<std::string> wordsOf(const CollectedDiagnostics& log, Notice notice) {
+    std::vector<std::string> words;
+    for (const Diagnostic& entry : log.entries()) {
+        if (entry.notice == notice) {
+            words.push_back(describe(entry));
+        }
+    }
+    return words;
+}
+
+} // namespace
+
+TEST_CASE("Brush masks are written as readable strokes", "[local][json][brush]") {
+    DevelopState state = withLocalAdjustmentAdded(
+        DevelopState{},
+        test::brushMaskWith({Stroke{0.02F, 0.5F, 1.0F, false, {{0.1F, 0.2F}, {0.11F, 0.21F}}}}));
+    state = withLocalAdjustmentAdded(state, BrushMask{});
+    const std::string text = stateToJson(state);
+    CHECK_THAT(text,
+               ContainsSubstring(R"("type": "brush", "name": "", "enabled": true, )"
+                                 R"("opacity": 1, "invert": false, "geometry": )"
+                                 R"({"rasteriser": 1, "strokes": [{"radius": 0.02, )"
+                                 R"("hardness": 0.5, "flow": 1, "erase": false, )"
+                                 R"("points": [[0.1, 0.2], [0.11, 0.21]]}]}, "deltas": {}})"));
+    // An empty brush writes an empty list.
+    CHECK_THAT(text, ContainsSubstring(R"("geometry": {"rasteriser": 1, "strokes": []})"));
+}
+
+TEST_CASE("Brush masks survive a write and a read, equal", "[local][json][brush]") {
+    for (const DevelopState& state :
+         {test::stateWithBrushes(), withLocalAdjustmentAdded(DevelopState{}, BrushMask{})}) {
+        CollectedDiagnostics log;
+        const DevelopState back = applyStateJson(stateToJson(state), DevelopState{}, log);
+        CHECK(back == state);
+        CHECK(log.entries().empty());
+        // The one-line form is the same list.
+        CHECK(applyStateJson(R"({"arraw": 1, "settings": {}, "localAdjustments": )" +
+                                 localAdjustmentsToJson(state) + "}",
+                             DevelopState{}) == state);
+    }
+    // Awkward floats come back to the bit.
+    const Stroke awkward{
+        0.0123456789F, 1.0F / 3.0F, 0.1F, true, {{1.0F / 7.0F, 0.37F}, {-1.5F, 2.9999998F}}};
+    const DevelopState state =
+        withLocalAdjustmentAdded(DevelopState{}, test::brushMaskWith({awkward}));
+    CHECK((*brushAt(applyStateJson(stateToJson(state), DevelopState{})).strokes)[0] == awkward);
+}
+
+TEST_CASE("A digest of the strokes is a count and a hash, for keys", "[local][json][brush]") {
+    const DevelopState state = test::stateWithBrushes();
+    const std::string digest = localAdjustmentsToJson(state, StrokeDetail::Digest);
+    const std::string whole = localAdjustmentsToJson(state);
+    CHECK(digest.size() < whole.size());
+    CHECK_THAT(digest, ContainsSubstring(R"("rasteriser": 1, "strokes": {"count": 2, "hash": ")"));
+    CHECK_THAT(digest, !ContainsSubstring("points"));
+    // Equal strokes behind other pointers give the same text; other strokes another.
+    DevelopState copy = state;
+    const auto& original = brushAt(state);
+    copy.localAdjustments[0].shape = BrushMask{std::make_shared<const StrokeList>(
+        std::vector<Stroke>{(*original.strokes)[0], (*original.strokes)[1]})};
+    CHECK(localAdjustmentsToJson(copy, StrokeDetail::Digest) == digest);
+    copy.localAdjustments[0].shape = test::brushMaskWith({(*original.strokes)[0]});
+    CHECK(localAdjustmentsToJson(copy, StrokeDetail::Digest) != digest);
+}
+
+TEST_CASE("A brush with no strokes member reads as an empty brush, without a warning",
+          "[local][json][brush]") {
+    const auto applied = applyDoc(document({brushJson(1, "")}));
+    REQUIRE(applied.state.localAdjustments.size() == 1);
+    CHECK(brushAt(applied.state).strokes->empty());
+    CHECK(applied.log.entries().empty());
+}
+
+TEST_CASE("A brush whose rasteriser cannot be used is dropped", "[local][json][brush]") {
+    for (const char* rasteriser : {"2", "0", "1.5", "\"1\"", "[1]", ""}) {
+        CAPTURE(rasteriser);
+        const auto applied = applyDoc(document({brushJson(1, "[]", rasteriser)}));
+        CHECK(applied.state.localAdjustments.empty());
+        CHECK(count(applied.log, Notice::LocalAdjustmentDropped) == 1);
+    }
+    const auto applied = applyDoc(document({brushJson(1, "[]", "2")}));
+    CHECK_THAT(describe(only(applied.log, Notice::LocalAdjustmentDropped)),
+               ContainsSubstring("unknown rasteriser 2"));
+}
+
+TEST_CASE("Strokes that are not a sequence drop the mask", "[local][json][brush]") {
+    for (const char* strokes : {"{}", "3", "\"x\"", "null"}) {
+        CAPTURE(strokes);
+        const auto applied = applyDoc(document({brushJson(1, strokes)}));
+        CHECK(applied.state.localAdjustments.empty());
+        CHECK(count(applied.log, Notice::LocalAdjustmentDropped) == 1);
+    }
+}
+
+TEST_CASE("A stroke that cannot be read is dropped and the rest kept, with one warning",
+          "[local][json][brush]") {
+    const std::string good = strokeJson();
+    const auto applied = applyDoc(document({brushJson(
+        4, strokesOf({good, "3", strokeJson("[]"), strokeJson("[[1]]"), strokeJson("5"),
+                      strokeJson("[[0.1, 0.2]]", R"("radius": "big", "hardness": 0.5, "flow": 1,)"
+                                                 R"( "erase": false,)"),
+                      strokeJson("[[0.3, 0.4]]", R"("radius": 0.02, "hardness": 0.5, "flow": 1,)"),
+                      good}))}));
+    REQUIRE(applied.state.localAdjustments.size() == 1);
+    CHECK(brushAt(applied.state).strokes->size() == 2);
+    const Diagnostic warning = only(applied.log, Notice::BrushStrokesTrimmed);
+    CHECK(count(applied.log, Notice::LocalAdjustmentDropped) == 0);
+    CHECK(describe(warning) == "mask 1 (id 4): 6 strokes could not be read");
+    CHECK(std::get<double>(warning.values[2]) == 6.0);
+}
+
+TEST_CASE("A number too large for a float is clamped, not dropped", "[local][json][brush]") {
+    // 1e39 and 1e40 are finite doubles but not floats.
+    const auto applied = applyDoc(document({brushJson(
+        1, strokesOf({strokeJson("[[1e39, 0.2]]"),
+                      strokeJson("[[0.5, 0.5]]", R"("radius": 1e40, "hardness": 0.5, "flow": 1,)"
+                                                 R"( "erase": false,)")}))}));
+    REQUIRE(applied.state.localAdjustments.size() == 1);
+    const StrokeList& list = *brushAt(applied.state).strokes;
+    REQUIRE(list.size() == 2);
+    CHECK(list[0].points[0].u == maximumMaskPosition);
+    CHECK(list[1].radius == maximumBrushRadius);
+    CHECK(wordsOf(applied.log, Notice::BrushStrokesTrimmed) ==
+          std::vector<std::string>{"mask 1 (id 1): radius clamped in 1 stroke",
+                                   "mask 1 (id 1): positions clamped in 1 stroke"});
+}
+
+TEST_CASE("Strokes on a linear mask that are not a sequence are reported", "[local][json][brush]") {
+    const auto applied = applyDoc(
+        document({linearJson(1, R"("from": [0.5, 0.2], "to": [0.5, 0.8], "strokes": "x")")}));
+    REQUIRE(applied.state.localAdjustments.size() == 1);
+    CHECK(count(applied.log, Notice::LocalAdjustmentFieldIgnored) == 1);
+}
+
+TEST_CASE("Points past the cap are cut, once per mask", "[local][json][brush]") {
+    std::string points = "[";
+    for (std::size_t i = 0; i < maximumStrokePoints + 5; ++i) {
+        points += (i > 0 ? "," : "") + std::string("[0.5,0.5]");
+    }
+    points += "]";
+    const auto applied =
+        applyDoc(document({brushJson(1, strokesOf({strokeJson(points), strokeJson(points)}))}));
+    REQUIRE(applied.state.localAdjustments.size() == 1);
+    // Two strokes of 10 000 points are 20 000 points, within the mask's cap.
+    const StrokeList& list = *brushAt(applied.state).strokes;
+    REQUIRE(list.size() == 2);
+    CHECK(list[0].points.size() == maximumStrokePoints);
+    CHECK(wordsOf(applied.log, Notice::BrushStrokesTrimmed) ==
+          std::vector<std::string>{"mask 1 (id 1): points past 10000 cut from 2 strokes"});
+}
+
+TEST_CASE("Numbers out of range are clamped, with one warning per mask and field",
+          "[local][json][brush]") {
+    const auto wild = [](const std::string& style, const std::string& points) {
+        return strokeJson(points, style);
+    };
+    const std::string badRadius =
+        wild(R"("radius": 7, "hardness": 0.5, "flow": 1, "erase": false,)", "[[0.5, 0.5]]");
+    const std::string badTone = wild(R"("radius": 0.02, "hardness": 3, "flow": -1, "erase": true,)",
+                                     "[[9, -9], [0.5, 0.5]]");
+    const std::string tinyRadius =
+        wild(R"("radius": 0.0001, "hardness": 0.5, "flow": 1, "erase": false,)", "[[0.5, 0.5]]");
+    const auto applied =
+        applyDoc(document({brushJson(1, strokesOf({badRadius, badTone, tinyRadius}))}));
+    REQUIRE(applied.state.localAdjustments.size() == 1);
+    const StrokeList& list = *brushAt(applied.state).strokes;
+    REQUIRE(list.size() == 3);
+    CHECK(list[0].radius == maximumBrushRadius);
+    CHECK(list[2].radius == minimumBrushRadius);
+    CHECK(list[1].hardness == 1.0F);
+    CHECK(list[1].flow == 0.0F);
+    CHECK(list[1].erase);
+    CHECK(list[1].points[0] == SensorPoint{maximumMaskPosition, minimumMaskPosition});
+    CHECK(count(applied.log, Notice::SettingClamped) == 0);
+    CHECK(wordsOf(applied.log, Notice::BrushStrokesTrimmed) ==
+          std::vector<std::string>{"mask 1 (id 1): radius clamped in 2 strokes",
+                                   "mask 1 (id 1): hardness clamped in 1 stroke",
+                                   "mask 1 (id 1): flow clamped in 1 stroke",
+                                   "mask 1 (id 1): positions clamped in 1 stroke"});
+}
+
+TEST_CASE("Strokes from the 2 001st stored one on are dropped, counted by position",
+          "[local][json][brush]") {
+    // The first stroke cannot be read, so 2 000 kept strokes would be 2 001 stored ones.
+    std::vector<std::string> strokes{"3"};
+    for (std::size_t i = 0; i < maximumStrokesPerMask + 4; ++i) {
+        strokes.push_back(strokeJson("[[0.5, 0.5]]"));
+    }
+    const auto applied = applyDoc(document({brushJson(1, strokesOf(strokes))}));
+    REQUIRE(applied.state.localAdjustments.size() == 1);
+    CHECK(brushAt(applied.state).strokes->size() == maximumStrokesPerMask - 1);
+    CHECK(wordsOf(applied.log, Notice::BrushStrokesTrimmed) ==
+          std::vector<std::string>{"mask 1 (id 1): 1 stroke could not be read",
+                                   "mask 1 (id 1): strokes from 2001 on dropped: past the 2000 a "
+                                   "mask holds"});
+    // Five strokes were past the 2 000th stored one.
+    for (const Diagnostic& entry : applied.log.entries()) {
+        if (entry.notice == Notice::BrushStrokesTrimmed &&
+            describe(entry).find("2001") != std::string::npos) {
+            CHECK(std::get<double>(entry.values[2]) == 5.0);
+        }
+    }
+}
+
+TEST_CASE("Strokes from the first that passes a budget on are dropped", "[local][json][brush]") {
+    // A long stroke spends 0.5 of the swept area (length 1 times radius 0.5); nine pass 4.
+    const std::string heavy = strokeJson(
+        "[[0, 0], [1, 0]]", R"("radius": 0.5, "hardness": 1, "flow": 1, "erase": false,)");
+    std::vector<std::string> strokes(10, heavy);
+    strokes.push_back(strokeJson());
+    const auto applied = applyDoc(document({brushJson(1, strokesOf(strokes))}));
+    REQUIRE(applied.state.localAdjustments.size() == 1);
+    const StrokeList& list = *brushAt(applied.state).strokes;
+    // Whatever fitted is kept, and nothing after the first that did not, the small last one
+    // included.
+    CHECK(list.size() < 10);
+    CHECK(list.budget().withinMaskLimits());
+    const auto words = wordsOf(applied.log, Notice::BrushStrokesTrimmed);
+    REQUIRE(words.size() == 1);
+    CHECK_THAT(words[0], ContainsSubstring("on dropped: past the"));
+    CHECK_THAT(words[0], ContainsSubstring("budget"));
+    CHECK(count(applied.log, Notice::LocalAdjustmentDropped) == 0);
+}
+
+TEST_CASE("A stroke that alone passes a budget is treated as past it", "[local][json][brush]") {
+    // 400 points zigzagging over the frame at the largest radius spend more than the swept area.
+    std::string points = "[";
+    for (int i = 0; i < 400; ++i) {
+        points += std::string(i > 0 ? "," : "") + (i % 2 == 0 ? "[0,0]" : "[1,1]");
+    }
+    points += "]";
+    const auto applied = applyDoc(document(
+        {brushJson(1, strokesOf({strokeJson(),
+                                 strokeJson(points, R"("radius": 1, "hardness": 1, "flow": 1,)"
+                                                    R"( "erase": false,)"),
+                                 strokeJson()}))}));
+    REQUIRE(applied.state.localAdjustments.size() == 1);
+    CHECK(brushAt(applied.state).strokes->size() == 1);
+    const auto words = wordsOf(applied.log, Notice::BrushStrokesTrimmed);
+    REQUIRE(words.size() == 1);
+    CHECK_THAT(words[0], ContainsSubstring("strokes from 2 on dropped"));
+}
+
+TEST_CASE("An unknown key in a stroke is reported once per mask and key", "[local][json][brush]") {
+    const std::string odd =
+        strokeJson("[[0.1, 0.2]]", R"("radius": 0.02, "hardness": 0.5,)"
+                                   R"( "flow": 1, "erase": false, "pressure": 1,)");
+    const auto applied = applyDoc(document({brushJson(1, strokesOf({odd, odd, odd}))}));
+    REQUIRE(applied.state.localAdjustments.size() == 1);
+    CHECK(brushAt(applied.state).strokes->size() == 3);
+    CHECK(count(applied.log, Notice::LocalAdjustmentFieldIgnored) == 1);
+}
+
+TEST_CASE("The brush keys do not belong to the other kinds", "[local][json][brush]") {
+    const auto applied = applyDoc(document(
+        {radialJson(1, R"("centre": [0.5, 0.5], "radius": [0.2, 0.2], "angle": 0, "feather": 0.5,)"
+                       R"( "rasteriser": 1, "strokes": [])")}));
+    REQUIRE(applied.state.localAdjustments.size() == 1);
+    CHECK(count(applied.log, Notice::LocalAdjustmentFieldIgnored) == 2);
+    // And a brush ignores the geometry of the others.
+    const auto brush = applyDoc(document({brushJson(1, "[]", "1", R"("from": [0, 0])")}));
+    REQUIRE(brush.state.localAdjustments.size() == 1);
+    CHECK(count(brush.log, Notice::LocalAdjustmentFieldIgnored) == 2);
+}
+
+TEST_CASE("A brush among other masks keeps its place, and the sixteen cap holds",
+          "[local][json][brush]") {
+    const auto applied =
+        applyDoc(document({linearJson(1), brushJson(2, strokesOf({strokeJson()})), radialJson(3)}));
+    REQUIRE(applied.state.localAdjustments.size() == 3);
+    CHECK(idsOf(applied.state) == std::vector<std::uint32_t>{1, 2, 3});
+    CHECK(applied.state.localAdjustments[1].deltas.exposure == 1.0F);
+    CHECK(brushAt(applied.state, 1).strokes->size() == 1);
 }

@@ -9,6 +9,8 @@
 #include <ImageBuffer.h>
 #include <ImageImport.h>
 #include <ImagePyramid.h>
+#include <LocalAdjustmentEdits.h>
+#include <LocalAdjustments.h>
 #include <RenderCheckpoint.h>
 
 #include <catch2/catch_test_macros.hpp>

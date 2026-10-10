@@ -329,7 +329,12 @@ std::vector<HandlePosition> handlePositions(const Mask& mask, const MaskViewMapp
                 {MaskHandle::LinearMiddle, (from + to) / 2.0}};
         return dots;
     }
-    const auto& radial = std::get<RadialMask>(mask);
+    const auto* radialMask = std::get_if<RadialMask>(&mask);
+    if (radialMask == nullptr) {
+        // A brush has no handles: it is edited by painting, and selected from the list.
+        return dots;
+    }
+    const RadialMask& radial = *radialMask;
     const QPointF centre = longEdgeOf(mapping, radial.centre);
     const double angle = radians(radial.angle);
     const QPointF xAxis(std::cos(angle), std::sin(angle));
@@ -352,11 +357,14 @@ std::vector<HandlePosition> handlePositions(const Mask& mask, const MaskViewMapp
     return dots;
 }
 
-QPointF pinPosition(const Mask& mask, const MaskViewMapping& mapping) {
+std::optional<QPointF> pinPosition(const Mask& mask, const MaskViewMapping& mapping) {
     if (const auto* linear = std::get_if<LinearMask>(&mask)) {
         return (mapping.widgetFrom(linear->from) + mapping.widgetFrom(linear->to)) / 2.0;
     }
-    return mapping.widgetFrom(std::get<RadialMask>(mask).centre);
+    if (const auto* radial = std::get_if<RadialMask>(&mask)) {
+        return mapping.widgetFrom(radial->centre);
+    }
+    return std::nullopt;
 }
 
 MaskHandle handleAt(const Mask& mask, const MaskViewMapping& mapping, QPointF position,
@@ -405,7 +413,11 @@ std::optional<LocalAdjustmentId> pinAt(const DevelopState& state, const MaskView
         if (except && *except == adjustment.id) {
             continue;
         }
-        const double distance = length(pinPosition(adjustment.shape, mapping) - position);
+        const std::optional<QPointF> pin = pinPosition(adjustment.shape, mapping);
+        if (!pin) {
+            continue;
+        }
+        const double distance = length(*pin - position);
         if (distance <= reach && (!best || distance <= bestDistance)) {
             best = adjustment.id;
             bestDistance = distance;
@@ -421,8 +433,10 @@ Mask draggedShape(const Mask& atPress, MaskHandle handle, QPointF press, QPointF
     if (const auto* linear = std::get_if<LinearMask>(&atPress)) {
         return draggedLinear(*linear, handle, pressLong, pointerLong, mapping, constrain);
     }
-    return draggedRadial(std::get<RadialMask>(atPress), handle, pressLong, pointerLong, mapping,
-                         constrain);
+    if (const auto* radial = std::get_if<RadialMask>(&atPress)) {
+        return draggedRadial(*radial, handle, pressLong, pointerLong, mapping, constrain);
+    }
+    return atPress;
 }
 
 Mask createdShape(MaskTool tool, QPointF press, QPointF pointer, const MaskViewMapping& mapping,

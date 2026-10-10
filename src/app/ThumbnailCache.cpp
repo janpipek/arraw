@@ -93,7 +93,7 @@ std::optional<std::string> ThumbnailCache::developedKey(const fs::path& file,
             next = std::max(next, mask.id.value + 1);
         }
         masked.nextLocalAdjustmentId = LocalAdjustmentId{next};
-        ingredients += localAdjustmentsToJson(masked);
+        ingredients += localAdjustmentsToJson(masked, StrokeDetail::Digest);
     }
     return hashKey('d', file, ingredients);
 }

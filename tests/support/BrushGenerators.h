@@ -1,7 +1,8 @@
 #pragma once
 
 #include "BrushRaster.h"
-#include "BrushStrokes.h"
+
+#include <BrushStrokes.h>
 
 #include <algorithm>
 #include <array>

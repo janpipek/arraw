@@ -3,6 +3,7 @@
 #include "RowBands.h"
 
 #include <algorithm>
+#include <atomic>
 #include <stdexcept>
 
 namespace arraw {
@@ -10,6 +11,12 @@ namespace arraw {
 namespace {
 
 constexpr std::size_t maximumEntries = 512;
+
+/// Gives the next tile serial, unique in the process.
+std::uint64_t nextSerial() noexcept {
+    static std::atomic<std::uint64_t> counter{0};
+    return counter.fetch_add(1, std::memory_order_relaxed) + 1;
+}
 
 std::size_t bytesOf(const CoverageTile& tile) noexcept {
     return tile.values.size() * sizeof(float);
@@ -116,6 +123,12 @@ BrushCoverageCache::drawn(const std::shared_ptr<const CoverageTiles>& base,
             result.dirty.push_back(i);
         }
     }
+    if (result.dirty.empty()) {
+        // No loop to run, but an observer counting the drawing as a unit still has it done.
+        detail::completeUnit();
+    }
+    // One bucket per tile row, so that a tile paints only the dabs that reach its rows.
+    const DabBuckets buckets(placed, raster.height, tileSize_);
     std::vector<std::shared_ptr<CoverageTile>> fresh(result.dirty.size());
     detail::forEachRowBand(
         static_cast<std::uint32_t>(result.dirty.size()), tileSize_ * tileSize_,
@@ -134,7 +147,8 @@ BrushCoverageCache::drawn(const std::shared_ptr<const CoverageTiles>& base,
                         CoverageTile{width, height,
                                      std::vector<float>(static_cast<std::size_t>(width) * height)});
                 }
-                paintRegion(placed, {x, y, width, height}, tile->values);
+                paintBucket(placed, buckets, index / columns, {x, y, width, height}, tile->values);
+                tile->serial = nextSerial();
                 fresh[n] = std::move(tile);
             }
         });
@@ -143,6 +157,64 @@ BrushCoverageCache::drawn(const std::shared_ptr<const CoverageTiles>& base,
     }
     result.tiles = std::make_shared<const CoverageTiles>(raster, tileSize_, std::move(grid));
     return result;
+}
+
+std::shared_ptr<const CoverageTiles>
+BrushCoverageCache::find(const std::shared_ptr<const StrokeList>& strokes, ImageSize raster) {
+    if (!strokes || raster.empty()) {
+        return nullptr;
+    }
+    const std::scoped_lock lock(mutex_);
+    for (Entry& entry : entries_) {
+        if (entry.size == raster && entry.list == strokes) {
+            entry.lastUse = ++clock_;
+            return entry.tiles;
+        }
+    }
+    for (Entry& entry : entries_) {
+        if (entry.size == raster && entry.list->contentHash() == strokes->contentHash() &&
+            *entry.list == *strokes) {
+            entry.lastUse = ++clock_;
+            return entry.tiles;
+        }
+    }
+    return nullptr;
+}
+
+BrushCoverageCache::Peek BrushCoverageCache::peek(const std::shared_ptr<const StrokeList>& strokes,
+                                                  ImageSize raster) const {
+    if (!strokes || raster.empty() || strokes->rasteriser() != brushRasteriserVersion) {
+        return {};
+    }
+    const std::scoped_lock lock(mutex_);
+    for (const Entry& entry : entries_) {
+        if (entry.size == raster && entry.list == strokes) {
+            return {CoverageLookup::Hit, strokes->strokes().size()};
+        }
+    }
+    for (const Entry& entry : entries_) {
+        if (entry.size == raster && entry.list->contentHash() == strokes->contentHash() &&
+            *entry.list == *strokes) {
+            return {CoverageLookup::ContentHit, strokes->strokes().size()};
+        }
+    }
+    // The same test as ::arraw::BrushCoverageCache::coverage makes for the longest prefix to
+    // extend.
+    const auto wanted = strokes->strokes();
+    std::size_t prefix = 0;
+    for (const Entry& entry : entries_) {
+        const auto held = entry.list->strokes();
+        if (entry.size == raster && entry.list->rasteriser() == strokes->rasteriser() &&
+            !held.empty() && held.size() < wanted.size() && held.size() > prefix &&
+            std::equal(held.begin(), held.end(), wanted.begin(),
+                       [](const auto& a, const auto& b) { return a.get() == b.get(); })) {
+            prefix = held.size();
+        }
+    }
+    if (prefix != 0) {
+        return {CoverageLookup::Extended, prefix};
+    }
+    return {};
 }
 
 BrushCoverageCache::Result

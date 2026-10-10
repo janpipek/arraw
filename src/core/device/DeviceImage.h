@@ -57,7 +57,8 @@ public:
 
     /// @brief Host sample layout the texture corresponds to.
     ///
-    /// Only ::arraw::PixelFormat::RgbaF32 occurs today. Whether a half-float
+    /// ::arraw::PixelFormat::RgbaF32, except for a brush coverage texture, which is
+    /// ::arraw::PixelFormat::RgbaU8 (four weight codes a texel, ADR 044). Whether a half-float
     /// texture is worth its precision loss is an empirical question the GPU
     /// probe answers before anything depends on it; naming the host layout here
     /// keeps the storage contract visible rather than implied.

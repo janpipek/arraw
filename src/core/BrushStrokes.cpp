@@ -204,6 +204,11 @@ std::shared_ptr<const StrokeList> StrokeList::appended(Stroke stroke) const {
     return next;
 }
 
+const std::shared_ptr<const StrokeList>& emptyStrokeList() {
+    static const auto empty = std::make_shared<const StrokeList>();
+    return empty;
+}
+
 bool operator==(const StrokeList& a, const StrokeList& b) {
     if (a.rasteriser_ != b.rasteriser_ || a.strokes_.size() != b.strokes_.size() ||
         a.hash_ != b.hash_) {

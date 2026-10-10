@@ -67,7 +67,8 @@ QString wordLocal(const DevelopState& before, const DevelopState& after, const L
     const LocalAdjustment& now = *findLocalAdjustment(after, change.id);
     const int aspects = (change.name ? 1 : 0) + (change.enabled ? 1 : 0) +
                         (change.opacity ? 1 : 0) + (change.invert ? 1 : 0) +
-                        (change.shape ? 1 : 0) + (change.deltas.empty() ? 0 : 1);
+                        (change.shape ? 1 : 0) + (change.strokes ? 1 : 0) +
+                        (change.deltas.empty() ? 0 : 1);
     if (aspects == 1) {
         if (change.deltas.size() == 1) {
             const LocalDescriptor& descriptor = *findLocalDescriptor(change.deltas.front());
@@ -92,6 +93,9 @@ QString wordLocal(const DevelopState& before, const DevelopState& after, const L
         if (change.opacity) {
             return QStringLiteral("%1: %2 %3%")
                 .arg(label, tr("Opacity"), QString::number(qRound(now.opacity * 100.0F)));
+        }
+        if (change.strokes) {
+            return tr("Paint %1").arg(label);
         }
         return tr("Move %1").arg(label);
     }

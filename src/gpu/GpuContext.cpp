@@ -6,11 +6,14 @@
 #include "ProgressScope.h"
 #include "TimingTrace.h"
 
+#include <ColorEncoding.h>
+
 #include <QByteArray>
 #include <QCoreApplication>
 #include <QFile>
 #include <QGuiApplication>
 #include <QOffscreenSurface>
+#include <QPoint>
 #include <QSize>
 #include <QString>
 #include <QThread>
@@ -234,10 +237,10 @@ std::string describe(ImageSize size) {
 class RhiDeviceImage final : public detail::DeviceImageState {
 public:
     RhiDeviceImage(std::shared_ptr<detail::GpuDevice> owner, std::unique_ptr<QRhiTexture> pixels,
-                   ImageSize dimensions, ColorEncoding meaning, ImageOrientation source,
-                   double scale)
-        : DeviceImageState(owner->id, dimensions, PixelFormat::RgbaF32, std::move(meaning), source,
-                           scale, pixels->format() == QRhiTexture::R32F ? 1 : 4),
+                   ImageSize dimensions, PixelFormat layout, ColorEncoding meaning,
+                   ImageOrientation source, double scale)
+        : DeviceImageState(owner->id, dimensions, layout, std::move(meaning), source, scale,
+                           pixels->format() == QRhiTexture::R32F ? 1 : 4),
           device_(std::move(owner)), texture_(std::move(pixels)) {}
 
     RhiDeviceImage(const RhiDeviceImage&) = delete;
@@ -280,7 +283,9 @@ public:
         const std::span<std::byte> destination = buffer.bytes();
         // Every backend returns rows tightly packed, which is also the
         // buffer's own layout, so one exact size check covers the stride too.
-        const std::size_t expectedBytes = destination.size() / 4 * channels;
+        // A coverage texture is RGBA8, whose four bytes a texel are the buffer's own.
+        const std::size_t expectedBytes =
+            format == PixelFormat::RgbaU8 ? destination.size() : destination.size() / 4 * channels;
         const QSize expected(static_cast<int>(size.width), static_cast<int>(size.height));
         if (result.pixelSize != expected ||
             static_cast<std::size_t>(result.data.size()) != expectedBytes) {
@@ -404,7 +409,7 @@ std::size_t inputCountOf(GpuPass pass) {
     case GpuPass::DenoiseCombine:
         return 3;
     case GpuPass::Pointwise:
-        return 7;
+        return 11;
     case GpuPass::ResizeAcross:
     case GpuPass::ResizeAcrossOpaque:
     case GpuPass::ResizeDownOpaque:
@@ -694,9 +699,114 @@ DeviceImage GpuContext::upload(const ImageBuffer& image) {
         batch.uploadTexture(texture.get(), description);
     });
 
-    return DeviceImage(std::make_shared<const RhiDeviceImage>(device_, std::move(texture), size,
-                                                              image.encoding(), image.orientation(),
-                                                              image.pixelScale()));
+    return DeviceImage(std::make_shared<const RhiDeviceImage>(
+        device_, std::move(texture), size, PixelFormat::RgbaF32, image.encoding(),
+        image.orientation(), image.pixelScale()));
+}
+
+DeviceImage GpuContext::uploadCoverage(ImageSize size, std::span<const std::uint8_t> plane) {
+    const detail::TimingSpan timing("gpu.upload-coverage");
+    device_->requireUsable("upload");
+
+    const std::uint32_t edge =
+        info_.maxTextureSize > 0 ? static_cast<std::uint32_t>(info_.maxTextureSize) : 0U;
+    if (size.empty() || size.width > edge || size.height > edge) {
+        throw std::invalid_argument("A " + describe(size) +
+                                    " coverage plane exceeds this device's largest texture edge, " +
+                                    std::to_string(edge) + " pixels");
+    }
+    if (plane.size() != size.pixelCount() * 4) {
+        throw std::invalid_argument("A coverage plane of " + describe(size) + " holds " +
+                                    std::to_string(size.pixelCount() * 4) + " bytes, not " +
+                                    std::to_string(plane.size()));
+    }
+    if (plane.size() > maxTransferBytes) {
+        throw std::invalid_argument("A " + describe(size) +
+                                    " coverage plane is larger than one GPU transfer can carry");
+    }
+
+    QRhi& rhi = *device_->rhi;
+    // Not sRGB: a driver would linearise the codes, which are weights and not colours.
+    std::unique_ptr<QRhiTexture> texture(rhi.newTexture(
+        QRhiTexture::RGBA8, QSize(static_cast<int>(size.width), static_cast<int>(size.height)), 1,
+        QRhiTexture::UsedAsTransferSource));
+    if (!texture->create()) {
+        throw std::runtime_error("The GPU device could not create a " + describe(size) +
+                                 " RGBA8 coverage texture");
+    }
+    QRhiTextureSubresourceUploadDescription subresource;
+    subresource.setData(QByteArray::fromRawData(reinterpret_cast<const char*>(plane.data()),
+                                                static_cast<qsizetype>(plane.size())));
+    const QRhiTextureUploadDescription description(QRhiTextureUploadEntry(0, 0, subresource));
+    submitUpdates(*device_, "upload a coverage texture", [&](QRhiResourceUpdateBatch& batch) {
+        batch.uploadTexture(texture.get(), description);
+    });
+    // The encoding is a placeholder: the codes are weights, not colours.
+    return DeviceImage(std::make_shared<const RhiDeviceImage>(
+        device_, std::move(texture), size, PixelFormat::RgbaU8, ColorEncoding(workingEncoding),
+        ImageOrientation::Normal, 1.0));
+}
+
+void GpuContext::updateCoverage(const DeviceImage& image, std::span<const PixelRect> rectangles,
+                                std::span<const std::uint8_t> plane) {
+    const detail::TimingSpan timing("gpu.update-coverage");
+    device_->requireUsable("upload");
+    if (!image.valid() || image.device() != id() || image.format() != PixelFormat::RgbaU8) {
+        throw std::invalid_argument(
+            "Only a coverage texture of this device can be updated with coverage");
+    }
+    const ImageSize size = image.size();
+    if (plane.size() != size.pixelCount() * 4) {
+        throw std::invalid_argument("A coverage plane of " + describe(size) + " holds " +
+                                    std::to_string(size.pixelCount() * 4) + " bytes, not " +
+                                    std::to_string(plane.size()));
+    }
+    if (rectangles.empty()) {
+        return;
+    }
+    // Each rectangle is copied out of the plane to the contiguous rows QRhi takes, and kept
+    // here until the batch has completed.
+    std::vector<QByteArray> pieces;
+    pieces.reserve(rectangles.size());
+    std::vector<QRhiTextureUploadEntry> entries;
+    entries.reserve(rectangles.size());
+    std::size_t total = 0;
+    for (const PixelRect& rect : rectangles) {
+        if (rect.width == 0 || rect.height == 0 || rect.x > size.width ||
+            rect.width > size.width - rect.x || rect.y > size.height ||
+            rect.height > size.height - rect.y) {
+            throw std::invalid_argument("A coverage rectangle lies outside its texture");
+        }
+        QByteArray piece(
+            static_cast<qsizetype>(static_cast<std::size_t>(rect.width) * rect.height * 4),
+            Qt::Uninitialized);
+        const std::size_t rowBytes = static_cast<std::size_t>(rect.width) * 4;
+        for (std::uint32_t row = 0; row < rect.height; ++row) {
+            std::memcpy(piece.data() + static_cast<std::size_t>(row) * rowBytes,
+                        plane.data() +
+                            (static_cast<std::size_t>(rect.y + row) * size.width + rect.x) * 4,
+                        rowBytes);
+        }
+        total += static_cast<std::size_t>(piece.size());
+        QRhiTextureSubresourceUploadDescription subresource;
+        subresource.setData(piece);
+        subresource.setSourceSize(
+            QSize(static_cast<int>(rect.width), static_cast<int>(rect.height)));
+        subresource.setDestinationTopLeft(
+            QPoint(static_cast<int>(rect.x), static_cast<int>(rect.y)));
+        entries.emplace_back(0, 0, subresource);
+        pieces.push_back(std::move(piece));
+    }
+    if (total > maxTransferBytes) {
+        throw std::invalid_argument("The coverage rectangles are larger than one GPU transfer can "
+                                    "carry");
+    }
+    QRhiTexture& texture = static_cast<const RhiDeviceImage&>(*image.state_).texture();
+    QRhiTextureUploadDescription description;
+    description.setEntries(entries.begin(), entries.end());
+    submitUpdates(*device_, "update a coverage texture", [&](QRhiResourceUpdateBatch& batch) {
+        batch.uploadTexture(&texture, description);
+    });
 }
 
 DeviceImage GpuContext::render(GpuPass pass, std::span<const std::byte> uniforms,
@@ -837,7 +947,8 @@ DeviceImage GpuContext::render(GpuPass pass, std::span<const std::byte> uniforms
 
     ++device_->rendersDone;
     DeviceImage result(std::make_shared<const RhiDeviceImage>(
-        device_, std::move(texture), outputSize, encoding, ImageOrientation::Normal, pixelScale));
+        device_, std::move(texture), outputSize, PixelFormat::RgbaF32, encoding,
+        ImageOrientation::Normal, pixelScale));
     // Each render is a unit of the observed step it is part of.
     detail::completeUnit();
     return result;

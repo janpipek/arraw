@@ -9,6 +9,7 @@
 #include <string>
 #include <type_traits>
 #include <utility>
+#include <variant>
 
 using namespace arraw;
 
@@ -162,7 +163,13 @@ LocalChange describeLocalChange(const DevelopState& before, const DevelopState& 
         mask.enabled = was->enabled != now.enabled;
         mask.opacity = was->opacity != now.opacity;
         mask.invert = was->invert != now.invert;
-        mask.shape = was->shape != now.shape;
+        const auto* wasBrush = std::get_if<BrushMask>(&was->shape);
+        const auto* nowBrush = std::get_if<BrushMask>(&now.shape);
+        if (wasBrush != nullptr && nowBrush != nullptr) {
+            mask.strokes = *wasBrush != *nowBrush;
+        } else {
+            mask.shape = was->shape != now.shape;
+        }
         for (const LocalDescriptor& descriptor : localAdjustmentDescriptors) {
             if (was->deltas.*descriptor.member != now.deltas.*descriptor.member) {
                 mask.deltas.push_back(descriptor.key);

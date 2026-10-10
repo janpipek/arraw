@@ -97,6 +97,34 @@ std::vector<PlacedStroke> placedStrokes(const StrokeList& strokes, ImageSize ras
     return placed;
 }
 
+void paintDab(const PlacedStroke& stroke, const DabCentre& dab, PixelRect region,
+              std::span<float> values) {
+    const auto regionLeft = static_cast<std::int64_t>(region.x);
+    const auto regionTop = static_cast<std::int64_t>(region.y);
+    const auto regionRight = regionLeft + region.width;
+    const auto regionBottom = regionTop + region.height;
+    const PixelSpan columns = dabSpan(dab.x, stroke.radius);
+    const PixelSpan rows = dabSpan(dab.y, stroke.radius);
+    const std::int64_t x0 = std::max(columns.first, regionLeft);
+    const std::int64_t x1 = std::min(columns.last, regionRight);
+    const std::int64_t y0 = std::max(rows.first, regionTop);
+    const std::int64_t y1 = std::min(rows.last, regionBottom);
+    for (std::int64_t y = y0; y < y1; ++y) {
+        const float dy = (static_cast<float>(y) + 0.5F) - dab.y;
+        float* row = values.data() + static_cast<std::size_t>(y - regionTop) * region.width;
+        for (std::int64_t x = x0; x < x1; ++x) {
+            const float dx = (static_cast<float>(x) + 0.5F) - dab.x;
+            const float r = std::sqrt(dx * dx + dy * dy);
+            if (r >= stroke.radius) {
+                continue;
+            }
+            const float d = 1.0F - smoothstep(stroke.inner, stroke.radius, r);
+            float& m = row[x - regionLeft];
+            m = stroke.erase ? m * (1.0F - stroke.flow * d) : m + (stroke.flow * d) * (1.0F - m);
+        }
+    }
+}
+
 void paintRegion(std::span<const PlacedStroke> strokes, PixelRect region, std::span<float> values) {
     assert(values.size() == static_cast<std::size_t>(region.width) * region.height);
     const auto regionLeft = static_cast<std::int64_t>(region.x);
@@ -109,28 +137,65 @@ void paintRegion(std::span<const PlacedStroke> strokes, PixelRect region, std::s
             continue;
         }
         for (const DabCentre& dab : stroke.dabs) {
-            const PixelSpan columns = dabSpan(dab.x, stroke.radius);
-            const PixelSpan rows = dabSpan(dab.y, stroke.radius);
-            const std::int64_t x0 = std::max(columns.first, regionLeft);
-            const std::int64_t x1 = std::min(columns.last, regionRight);
-            const std::int64_t y0 = std::max(rows.first, regionTop);
-            const std::int64_t y1 = std::min(rows.last, regionBottom);
-            for (std::int64_t y = y0; y < y1; ++y) {
-                const float dy = (static_cast<float>(y) + 0.5F) - dab.y;
-                float* row = values.data() + static_cast<std::size_t>(y - regionTop) * region.width;
-                for (std::int64_t x = x0; x < x1; ++x) {
-                    const float dx = (static_cast<float>(x) + 0.5F) - dab.x;
-                    const float r = std::sqrt(dx * dx + dy * dy);
-                    if (r >= stroke.radius) {
-                        continue;
-                    }
-                    const float d = 1.0F - smoothstep(stroke.inner, stroke.radius, r);
-                    float& m = row[x - regionLeft];
-                    m = stroke.erase ? m * (1.0F - stroke.flow * d)
-                                     : m + (stroke.flow * d) * (1.0F - m);
-                }
+            paintDab(stroke, dab, region, values);
+        }
+    }
+}
+
+DabBuckets::DabBuckets(std::span<const PlacedStroke> placed, std::uint32_t rows,
+                       std::uint32_t bucketRows)
+    : bucketRows_(bucketRows) {
+    if (rows == 0 || bucketRows == 0) {
+        throw std::invalid_argument("a dab index needs rows and a bucket height");
+    }
+    count_ = static_cast<std::uint32_t>((static_cast<std::uint64_t>(rows) + bucketRows - 1) /
+                                        bucketRows);
+    // The buckets a dab's row span meets, clipped to the raster; empty when it meets none.
+    const auto bucketsOf = [&](const PlacedStroke& stroke, const DabCentre& dab) {
+        const PixelSpan span = dabSpan(dab.y, stroke.radius);
+        const std::int64_t first = std::max<std::int64_t>(span.first, 0);
+        const std::int64_t last = std::min<std::int64_t>(span.last, rows);
+        struct Range {
+            std::int64_t first;
+            std::int64_t last; ///< Inclusive; below first when empty.
+        };
+        if (first >= last) {
+            return Range{0, -1};
+        }
+        return Range{first / bucketRows, (last - 1) / bucketRows};
+    };
+    start_.assign(static_cast<std::size_t>(count_) + 1, 0);
+    for (const PlacedStroke& stroke : placed) {
+        for (const DabCentre& dab : stroke.dabs) {
+            const auto range = bucketsOf(stroke, dab);
+            for (std::int64_t b = range.first; b <= range.last; ++b) {
+                ++start_[static_cast<std::size_t>(b) + 1];
             }
         }
+    }
+    for (std::size_t b = 0; b < count_; ++b) {
+        start_[b + 1] += start_[b];
+    }
+    refs_.resize(start_.back());
+    std::vector<std::size_t> next(start_.begin(), start_.end() - 1);
+    for (std::size_t s = 0; s < placed.size(); ++s) {
+        const PlacedStroke& stroke = placed[s];
+        for (std::size_t d = 0; d < stroke.dabs.size(); ++d) {
+            const auto range = bucketsOf(stroke, stroke.dabs[d]);
+            for (std::int64_t b = range.first; b <= range.last; ++b) {
+                refs_[next[static_cast<std::size_t>(b)]++] = {static_cast<std::uint32_t>(s),
+                                                              static_cast<std::uint32_t>(d)};
+            }
+        }
+    }
+}
+
+void paintBucket(std::span<const PlacedStroke> placed, const DabBuckets& buckets,
+                 std::uint32_t bucket, PixelRect region, std::span<float> values) {
+    assert(values.size() == static_cast<std::size_t>(region.width) * region.height);
+    for (const DabBuckets::Ref& ref : buckets.bucket(bucket)) {
+        const PlacedStroke& stroke = placed[ref.stroke];
+        paintDab(stroke, stroke.dabs[ref.dab], region, values);
     }
 }
 

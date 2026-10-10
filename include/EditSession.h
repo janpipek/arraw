@@ -60,8 +60,12 @@ struct MaskChange {
     /// @brief Whether the weight was inverted or restored.
     bool invert = false;
 
-    /// @brief Whether the shape differs: its geometry, or its kind.
+    /// @brief Whether the shape differs: its geometry, or its kind. False for two brush masks,
+    /// which differ in ::arraw::MaskChange::strokes.
     bool shape = false;
+
+    /// @brief Whether the brush's strokes differ (both masks are brushes).
+    bool strokes = false;
 
     /// @brief Keys of ::arraw::localAdjustmentDescriptors whose deltas differ, in table order.
     std::vector<std::string_view> deltas;

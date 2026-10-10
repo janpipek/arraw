@@ -579,3 +579,26 @@ TEST_CASE("The shaders' shared float constants are the C++ ones", "[gpu][shader]
     }
     requireSameFloat("develop.frag", "curveRatioFloor", curveRatioFloor);
 }
+
+TEST_CASE("The pointwise shader reads the brush coverage at bindings 8 to 11",
+          "[gpu][shader][brush]") {
+    const QShader shader = loadShader("develop.frag");
+    std::map<std::string, int> bindings;
+    for (const auto& sampler : shader.description().combinedImageSamplers()) {
+        bindings[sampler.name.toStdString()] = sampler.binding;
+    }
+    // The inputs in the order GpuContext binds them: the image at 0, the rest from 2 on.
+    const std::vector<std::pair<std::string, int>> expected{
+        {"source", 0},      {"curves", 2},     {"fineBase", 3},  {"coarseBase", 4},
+        {"coarseCells", 5}, {"hazeFloor", 6},  {"hazeMean", 7},  {"coverage0", 8},
+        {"coverage1", 9},   {"coverage2", 10}, {"coverage3", 11}};
+    REQUIRE(bindings.size() == expected.size());
+    for (const auto& [name, binding] : expected) {
+        CAPTURE(name);
+        REQUIRE(bindings.count(name) == 1);
+        REQUIRE(bindings.at(name) == binding);
+    }
+    // The kind a brush mask has, and the words GpuPlan.h packs the texture and channel in.
+    REQUIRE(std::stoul(constantsOf("develop.frag").at("maskKindBrush")) ==
+            static_cast<unsigned long>(LocalMaskKind::Brush));
+}

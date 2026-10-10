@@ -54,9 +54,20 @@ layout(binding = 5) uniform sampler2D coarseCells;
 layout(binding = 6) uniform sampler2D hazeFloor;
 layout(binding = 7) uniform sampler2D hazeMean;
 
+// The brush masks' packed coverage, ::arraw::detail::PackedCoverage: four RGBA8 textures (not
+// sRGB) whose texel (x, y) holds, in channel c of texture p, the dithered code of the brush mask
+// in slot 4p + c at that pixel. Read with texelFetch, whose UNORM8 fetch is code / 255, which is
+// the CPU's weight(code). Bound even when no brush is in the plan; a texture the plan does not
+// use is bound to the source and never read.
+layout(binding = 8) uniform sampler2D coverage0;
+layout(binding = 9) uniform sampler2D coverage1;
+layout(binding = 10) uniform sampler2D coverage2;
+layout(binding = 11) uniform sampler2D coverage3;
+
 // LocalMask, GpuLocalMask in GpuPlan.h and LocalMaskPlan in LocalPlan.h: one
 // mask resolved against the size of the source being rendered (ADR 044).
-//   header  kind, invert, coverage texture, coverage channel (the last two for brush masks)
+//   header  kind, invert, coverage texture (slot / 4), coverage channel (slot % 4); the last two
+//           for brush masks, whose shapeA and shapeB are zero
 //   shapeA  linear: alpha, beta, gamma, 0.  radial: centreX, centreY, inner, 0
 //   shapeB  radial: the matrix, row-major.  linear: 0
 //   k       opacity * delta of each local control, in the table's order
@@ -226,6 +237,7 @@ bool hasBase(uint flag) {
 // LocalMaskKind, LocalPlan.h.
 const uint maskKindLinear = 0u;
 const uint maskKindRadial = 1u;
+const uint maskKindBrush = 2u;
 
 // The rows of the local table, SettingDescriptors.h and LocalControl in LocalPlan.h.
 const uint controlTemperature = 0u;
@@ -267,10 +279,33 @@ const float temperatureBlueStops = -0.43;
 const float tintRedStops = 0.19;
 const float tintBlueStops = 0.31;
 
-// maskWeight, LocalPlan.h: the weight of a mask at a pixel centre, 0 to 1.
-float maskWeight(LocalMask mask, float x, float y) {
+// weight(code), BrushCoverage.h: the coverage a brush mask's texel stands for, 0 to 1.
+float brushWeight(LocalMask mask, ivec2 at) {
+    vec4 texel;
+    // A switch rather than an array of samplers: dynamic sampler indexing is not in GLSL ES 3.0.
+    switch (mask.header.z) {
+    case 0u:
+        texel = texelFetch(coverage0, at, 0);
+        break;
+    case 1u:
+        texel = texelFetch(coverage1, at, 0);
+        break;
+    case 2u:
+        texel = texelFetch(coverage2, at, 0);
+        break;
+    default:
+        texel = texelFetch(coverage3, at, 0);
+        break;
+    }
+    return texel[mask.header.w];
+}
+
+// maskWeight, LocalPlan.h: the weight of a mask at a pixel centre (x, y) of the pixel `at`, 0 to 1.
+float maskWeight(LocalMask mask, float x, float y, ivec2 at) {
     float weight = 0.0;
-    if (mask.header.x == maskKindLinear) {
+    if (mask.header.x == maskKindBrush) {
+        weight = brushWeight(mask, at);
+    } else if (mask.header.x == maskKindLinear) {
         const float t = mask.shapeA.x * x + mask.shapeA.y * y + mask.shapeA.z;
         weight = 1.0 - smoothStep(0.0, 1.0, t);
     } else {
@@ -310,7 +345,7 @@ PixelAmounts amountsAt(ivec2 at) {
         sums[control] = 0.0;
     }
     for (uint index = 0u; index < plan.localHeader.x; ++index) {
-        const float weight = maskWeight(plan.local[index], x, y);
+        const float weight = maskWeight(plan.local[index], x, y, at);
         for (uint control = 0u; control < controlCount; ++control) {
             if (((plan.localHeader.y >> control) & 1u) != 0u) {
                 // Not fused with the sum: two masks that cancel exactly must cancel to zero.

@@ -86,6 +86,17 @@ public:
     /// @param step Step being worked on.
     void showRenderProgress(std::uint64_t request, double fraction, ProgressStep step);
 
+    /// @brief Shows a finished render, or reports why there is none.
+    ///
+    /// On the GUI thread, which the renderer's results are handed over to. Ignores results of a
+    /// previous photograph and ones older than what is shown. Keeps the picture it shows if
+    /// rendering failed, and reports a failure only for the newest request, one message box at a
+    /// time. A provisional result (a coarser stand-in) is shown like any other, but does not end
+    /// the busy period, and gives no thumbnail; the render of its own level, of the same request,
+    /// is shown after it.
+    /// @param result Outcome delivered by the renderer.
+    void showResult(const PreviewResult& result);
+
     /// @brief Gives the indicator that decides when a render in progress shows.
     [[nodiscard]] RenderIndicator& renderIndicator() const noexcept {
         return *renderIndicator_;
@@ -402,14 +413,6 @@ private:
     /// arrives through showResult, and a newer request replaces one not yet started.
     void requestRender();
 
-    /// @brief Shows a finished render, or reports why there is none.
-    ///
-    /// Ignores results of a previous photograph and ones older than what is
-    /// shown. Keeps the picture it shows if rendering failed, and reports a
-    /// failure only for the newest request, one message box at a time.
-    /// @param result Outcome delivered by the renderer.
-    void showResult(const PreviewResult& result);
-
     /// @brief Makes the open photograph's thumbnail in the strip follow a preview.
     ///
     /// Only for a preview of the whole frame of the shot's primary file; the thumbnail is the
@@ -571,6 +574,9 @@ private:
 
     /// Identifier of the newest result shown or reported.
     std::uint64_t latestShown_ = 0;
+    /// Whether what latestShown_ shows is a coarser stand-in, so that the render of its own
+    /// level, of the same request, is still to be shown.
+    bool latestShownProvisional_ = false;
 
     /// Identifier of the first request made for the photograph being edited;
     /// results below it belong to a previous photograph.

@@ -5,6 +5,8 @@
 
 #include <DevelopState.h>
 #include <ImageImport.h>
+#include <LocalAdjustmentEdits.h>
+#include <LocalAdjustments.h>
 #include <NoiseReductionSettings.h>
 #include <Photo.h>
 #include <SettingDescriptors.h>

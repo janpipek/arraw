@@ -141,16 +141,37 @@ namespace arraw {
 /// cannot be normalised.
 [[nodiscard]] DevelopState withLocalShape(DevelopState state, LocalAdjustmentId id, Mask shape);
 
+/// @brief Tells whether a stroke can be appended to a brush mask: it normalises, and the mask
+/// stays within every cap and budget (what a front end shows as "mask full").
+/// @param state State holding the mask.
+/// @param id Brush mask to ask about.
+/// @param stroke Stroke to append.
+/// @return `false` if @p id is not in the list or not a brush mask, the stroke cannot be
+/// normalised, or the mask would pass a cap or budget.
+[[nodiscard]] bool canAppendStroke(const DevelopState& state, LocalAdjustmentId id,
+                                   const Stroke& stroke) noexcept;
+
+/// @brief Appends a stroke to a brush mask, normalised (::arraw::normalised(Stroke)).
+/// @param state State to edit.
+/// @param id Brush mask to extend.
+/// @param stroke Stroke to append.
+/// @return @p state with the stroke last in the mask; earlier strokes are shared.
+/// @throws std::invalid_argument if @p id is not in the list or not a brush mask, the stroke
+/// cannot be normalised, or the mask would pass a cap or budget; @p state is then unchanged.
+[[nodiscard]] DevelopState withStrokeAppended(DevelopState state, LocalAdjustmentId id,
+                                              Stroke stroke);
+
 /// @}
 
 /// @brief Counts the adjustments of the same kind up to and including one, in list order.
 /// @param state State holding the adjustment.
 /// @param id Adjustment to count.
-/// @return Its place among the linear masks, or among the radial ones: 1 for the first.
+/// @return Its place among the masks of its kind (linear, radial or brush): 1 for the first.
 /// @throws std::invalid_argument if @p id is not in the list.
 [[nodiscard]] std::size_t maskOrdinal(const DevelopState& state, LocalAdjustmentId id);
 
-/// @brief Gives the name an unnamed adjustment is shown under, such as "Linear 2" (English).
+/// @brief Gives the name an unnamed adjustment is shown under, such as "Linear 2" or "Brush 1"
+/// (English).
 ///
 /// The kind and its ::arraw::maskOrdinal. A translated front end builds its own from the same two.
 /// @param state State holding the adjustment.

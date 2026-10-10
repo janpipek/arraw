@@ -1,8 +1,8 @@
 #pragma once
 
 #include "BrushRaster.h"
-#include "BrushStrokes.h"
 
+#include <BrushStrokes.h>
 #include <ImageBuffer.h>
 
 #include <cstddef>
@@ -19,6 +19,10 @@ struct CoverageTile {
     std::uint32_t width;       ///< Columns.
     std::uint32_t height;      ///< Rows.
     std::vector<float> values; ///< Coverage, row-major, width times height values.
+    /// Number unique in the process, given when the tile is made or cloned for painting: a tile
+    /// that differs from another has a different serial, and no serial comes back (no ABA, as a
+    /// pointer can). Zero for a tile made outside the cache.
+    std::uint64_t serial = 0;
 };
 
 /// One raster of coverage as a grid of shared tiles; an absent tile is all zero.
@@ -92,7 +96,7 @@ public:
         std::shared_ptr<const CoverageTiles> tiles; ///< The coverage.
         CoverageLookup lookup;                      ///< How it was found.
         /// Tiles drawn by this call, ascending: relative to the entry it was built on, so only a
-        /// hint. To find what differs from a grid already uploaded, compare tile pointers.
+        /// hint. To find what differs from a grid already uploaded, compare tile serials.
         std::vector<std::uint32_t> dirty;
     };
 
@@ -100,6 +104,27 @@ public:
     /// @param retain Whether to keep the result; false for a live stroke's updates.
     [[nodiscard]] Result coverage(const std::shared_ptr<const StrokeList>& strokes,
                                   ImageSize raster, bool retain = true);
+
+    /// Finds the coverage of a list at a raster size only if it is held, whole or as an equal list
+    /// behind other pointers: no insert, no extension, no drawing.
+    /// @return The tiles of a `Hit` or `ContentHit`, empty otherwise. The LRU order is touched.
+    [[nodiscard]] std::shared_ptr<const CoverageTiles>
+    find(const std::shared_ptr<const StrokeList>& strokes, ImageSize raster);
+
+    /// What ::arraw::BrushCoverageCache::peek found.
+    struct Peek {
+        CoverageLookup lookup = CoverageLookup::Miss; ///< What coverage() would answer.
+        /// Strokes of the list the cache already holds drawn: the prefix an `Extended` answer
+        /// builds on, the whole list for a `Hit` or `ContentHit`, else 0.
+        std::size_t cachedStrokes = 0;
+    };
+
+    /// Tells what ::arraw::BrushCoverageCache::coverage would answer, without drawing, inserting
+    /// or touching the LRU order: the entries, the bytes and their order stay as they are.
+    /// @return `Hit`, `ContentHit`, `Extended` or `Miss` (also for a list the cache would
+    /// refuse), with the strokes already drawn.
+    [[nodiscard]] Peek peek(const std::shared_ptr<const StrokeList>& strokes,
+                            ImageSize raster) const;
 
     /// Bytes of the distinct tiles across entries.
     [[nodiscard]] std::size_t memoryBytes() const;

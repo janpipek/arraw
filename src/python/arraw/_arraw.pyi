@@ -949,6 +949,56 @@ class RadialMask:
     def replace(self, **kwargs) -> RadialMask:
         """Return a copy with the given attributes replaced."""
 
+class Stroke:
+    """
+    One brush stroke: a dab `radius` in long-edge units (0.0005 to 1), the `hardness` of its core (0 to 1), the `flow` of one dab (0 to 1), whether it `erase`s coverage, and the `points` of its path, (u, v) positions normalised to the frame, as a tuple. The numbers are kept as given and clamped when the stroke is made into a BrushMask or appended to one.
+    """
+
+    def __init__(self, radius: float = 0.02, hardness: float = 0.5, flow: float = 1.0, erase: bool = False, points: Sequence[tuple[float, float]] = ()) -> None: ...
+
+    @property
+    def radius(self) -> float: ...
+
+    @property
+    def hardness(self) -> float: ...
+
+    @property
+    def flow(self) -> float: ...
+
+    @property
+    def erase(self) -> bool: ...
+
+    @property
+    def points(self) -> tuple[tuple[float, float], ...]: ...
+
+    def __eq__(self, arg: Stroke, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> Stroke:
+        """Return a copy with the given attributes replaced."""
+
+class BrushMask:
+    """
+    A stencil painted on the photograph: the `strokes`, in painting order, in the sensor frame. Making one clamps each stroke's numbers as adding a mask does, then builds the list; ValueError for a number that is not finite, a stroke without points, or a cap or budget passed (at most 2000 strokes, 100000 points, a swept area of 4 and 2 million dabs). `rasteriser` is the version of the rules that turn the strokes into coverage.
+    """
+
+    def __init__(self, strokes: Sequence[Stroke] = ()) -> None: ...
+
+    @property
+    def strokes(self) -> tuple[Stroke, ...]: ...
+
+    @property
+    def rasteriser(self) -> int: ...
+
+    def __eq__(self, arg: BrushMask, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
 class LocalDeltas:
     """
     What a local adjustment adds to the global controls where its mask has full weight, in the units of the global setting (stops for exposure, -100 to 100 for the rest; relative_temperature and relative_tint have no global counterpart). 0 changes nothing.
@@ -1006,10 +1056,10 @@ class LocalDeltas:
 
 class LocalAdjustment:
     """
-    One masked adjustment: a LinearMask or RadialMask and the LocalDeltas added where it applies, scaled by `opacity` (0 to 1) and, with `invert`, applied outside the mask instead. `id` is the photograph's own identity for it, unique in its state and never reused; a value built here carries 0 and gets its id when added with Photo.add_*_mask. Adjustments are summed in list order; up to 16 per photograph.
+    One masked adjustment: a LinearMask, RadialMask or BrushMask and the LocalDeltas added where it applies, scaled by `opacity` (0 to 1) and, with `invert`, applied outside the mask instead. `id` is the photograph's own identity for it, unique in its state and never reused; a value built here carries 0 and gets its id when added with Photo.add_*_mask. Adjustments are summed in list order; up to 16 per photograph.
     """
 
-    def __init__(self, *, id: int | None = None, name: str | None = None, enabled: bool = True, opacity: float | None = 1.0, invert: bool = False, shape: LinearMask | RadialMask | None = None, deltas: LocalDeltas | None = None) -> None: ...
+    def __init__(self, *, id: int | None = None, name: str | None = None, enabled: bool = True, opacity: float | None = 1.0, invert: bool = False, shape: LinearMask | RadialMask | BrushMask | None = None, deltas: LocalDeltas | None = None) -> None: ...
 
     @property
     def id(self) -> int: ...
@@ -1027,7 +1077,7 @@ class LocalAdjustment:
     def invert(self) -> bool: ...
 
     @property
-    def shape(self) -> LinearMask | RadialMask: ...
+    def shape(self) -> LinearMask | RadialMask | BrushMask: ...
 
     @property
     def deltas(self) -> LocalDeltas: ...
@@ -1361,9 +1411,19 @@ class Photo:
         Return a photograph with a radial (oval) mask added last. `centre` is a (u, v) point normalised to the corrected frame, the radii are in long-edge units, `angle` turns the x radius towards +y in degrees, and `feather` is the soft edge's width from 0 (hard) to 1. Keywords and errors are as for add_linear_mask.
         """
 
+    def add_brush_mask(self, strokes: Sequence[Stroke] = (), *, name: str = '', opacity: float = 1.0, invert: bool = False, enabled: bool = True, **deltas: float) -> Photo:
+        """
+        Return a photograph with a brush mask of those strokes added last. Each stroke's numbers are clamped, then the list is built. A stroke without points, a number that is not finite, a cap or budget passed (see BrushMask) or a full list (16) is a ValueError, an unknown keyword a TypeError. Keywords are as for add_linear_mask.
+        """
+
+    def with_brush_stroke(self, id: int, stroke: Stroke) -> Photo:
+        """
+        Return a photograph with the stroke, clamped, appended to the brush mask of that id. ValueError for an unknown id, an adjustment that is not a brush, a stroke that cannot be normalised or a mask that would pass a cap or budget.
+        """
+
     def with_local_adjustment(self, id: int, **changes: Any) -> Photo:
         """
-        Return a photograph with the adjustment of that id changed. The keywords, applied in the order given, are `name`, `enabled`, `invert`, `opacity`, `shape` (a LinearMask or RadialMask of the kind the adjustment already has) and the deltas by their snake_case names; numbers out of range are clamped. ValueError for an unknown id or a shape of another kind, TypeError for an unknown keyword.
+        Return a photograph with the adjustment of that id changed. The keywords, applied in the order given, are `name`, `enabled`, `invert`, `opacity`, `shape` (a LinearMask, RadialMask or BrushMask of the kind the adjustment already has; a BrushMask replaces the strokes) and the deltas by their snake_case names; numbers out of range are clamped. ValueError for an unknown id or a shape of another kind, TypeError for an unknown keyword.
         """
 
     def without_local_adjustment(self, id: int) -> Photo:

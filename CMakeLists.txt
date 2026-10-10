@@ -172,6 +172,7 @@ add_library(arraw STATIC
         include/ImageOrientation.h
         include/ImagePyramid.h
         src/core/ImagePyramid.cpp
+        src/core/PyramidSize.h
         src/core/GeometryPlan.h
         src/core/GeometryPlan.cpp
         src/core/Resample.h
@@ -228,12 +229,14 @@ add_library(arraw STATIC
         src/core/LocalAdjustmentEdits.cpp
         src/core/LocalAdjustmentCodec.h
         src/core/LocalAdjustmentCodec.cpp
-        src/core/BrushStrokes.h
+        include/BrushStrokes.h
         src/core/BrushStrokes.cpp
         src/core/BrushRaster.h
         src/core/BrushRaster.cpp
         src/core/BrushCoverageCache.h
         src/core/BrushCoverageCache.cpp
+        src/core/BrushCoverage.h
+        src/core/BrushCoverage.cpp
         src/core/StrokeCodec.h
         src/core/StrokeCodec.cpp
         src/core/LocalPlan.h
@@ -316,6 +319,8 @@ if(ARRAW_BUILD_APPS)
 add_library(arraw-gpu STATIC
         src/gpu/GpuContext.h
         src/gpu/GpuContext.cpp
+        src/gpu/GpuCoverage.h
+        src/gpu/GpuCoverage.cpp
         src/gpu/GpuDevice.h
         src/gpu/GpuDevice.cpp
         src/gpu/GpuDevelop.h

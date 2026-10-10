@@ -4,12 +4,14 @@
 #include "LocalAdjustmentStates.h"
 #include "TestImages.h"
 
+#include <BrushStrokes.h>
 #include <ColorEncoding.h>
 #include <Develop.h>
 #include <DevelopSettings.h>
 #include <DevelopState.h>
 #include <ImageBuffer.h>
 #include <ImageImport.h>
+#include <LocalAdjustments.h>
 #include <RenderCheckpoint.h>
 
 #include <QByteArray>
@@ -20,6 +22,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -227,6 +230,52 @@ struct DigestRequest {
     add("mask-everything", everything,
         {mask(linear, [](LocalDeltas& deltas) { giveEveryDelta(deltas); }),
          mask(radial, [](LocalDeltas& deltas) { giveEveryDelta(deltas); }, 0.6F, true)});
+
+    // Brushes, appended after the states above (the CPU only until the GPU draws them).
+    const auto straightStroke = [](SensorPoint from, SensorPoint to, int points, float radius,
+                                   float hardness, float flow, bool erase = false) {
+        Stroke stroke{radius, hardness, flow, erase, {}};
+        for (int i = 0; i < points; ++i) {
+            const float t = static_cast<float>(i) / static_cast<float>(points - 1);
+            stroke.points.push_back({from.u + (to.u - from.u) * t, from.v + (to.v - from.v) * t});
+        }
+        return stroke;
+    };
+    const auto list = [](std::vector<Stroke> strokes) {
+        return BrushMask{std::make_shared<const StrokeList>(std::move(strokes))};
+    };
+    const BrushMask soft = list({straightStroke({0.2F, 0.3F}, {0.7F, 0.6F}, 9, 0.12F, 0.0F, 0.8F)});
+    add("mask-brush-tone", {}, {mask(soft, [](LocalDeltas& deltas) {
+            deltas.exposure = 0.9F;
+            deltas.contrast = 25.0F;
+            deltas.shadows = 35.0F;
+            deltas.highlights = -25.0F;
+        })});
+    // Paint, erase and an inverted brush, a radial mask, Presence and Temp/Tint deltas.
+    const BrushMask painted =
+        list({straightStroke({0.1F, 0.2F}, {0.9F, 0.3F}, 12, 0.08F, 0.3F, 1.0F),
+              straightStroke({0.15F, 0.8F}, {0.85F, 0.2F}, 12, 0.06F, 0.8F, 0.9F),
+              straightStroke({0.5F, 0.2F}, {0.5F, 0.9F}, 8, 0.05F, 0.5F, 1.0F, true)});
+    const BrushMask other = list({straightStroke({0.3F, 0.5F}, {0.6F, 0.7F}, 6, 0.1F, 1.0F, 1.0F)});
+    DevelopSettings mixedSettings;
+    mixedSettings.presence = {.texture = 10.0F, .clarity = 0.0F, .dehaze = 15.0F};
+    add("mask-brush-mixed", mixedSettings,
+        {mask(painted,
+              [](LocalDeltas& deltas) {
+                  deltas.exposure = 0.6F;
+                  deltas.relativeTemperature = 40.0F;
+                  deltas.relativeTint = -20.0F;
+                  deltas.clarity = 40.0F;
+              }),
+         mask(
+             other,
+             [](LocalDeltas& deltas) {
+                 deltas.saturation = 30.0F;
+                 deltas.texture = 30.0F;
+             },
+             0.7F, true),
+         mask(radial, [](LocalDeltas& deltas) { deltas.dehaze = -30.0F; }),
+         mask(soft, [](LocalDeltas& deltas) { deltas.blacks = -30.0F; })});
     return states;
 }
 

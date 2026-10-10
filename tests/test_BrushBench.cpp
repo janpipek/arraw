@@ -4,7 +4,9 @@
 // unit tests; a hidden case runs only when a tag filter names it).
 // Set ARRAW_BENCH_OUT to a directory to get PNG crops of the precision and resolution cases.
 
+#include "BrushCoverage.h"
 #include "BrushCoverageCache.h"
+#include "LocalPlan.h"
 #include "RowBands.h"
 #include "StrokeCodec.h"
 #include "support/BrushGenerators.h"
@@ -12,9 +14,12 @@
 #include "support/RowBandLimit.h"
 #include "support/TempDir.h"
 
+#include <DevelopState.h>
 #include <Diagnostics.h>
 #include <ImageBuffer.h>
 #include <ImageExport.h>
+#include <LocalAdjustmentEdits.h>
+#include <LocalAdjustments.h>
 #include <Sidecar.h>
 
 #include <catch2/catch_test_macros.hpp>
@@ -1141,4 +1146,51 @@ TEST_CASE("B7 what the budgets allow", "[.bench][brush-bench]") {
                                             strokesAtCap / 1048576.0)(
         "base64MiB", static_cast<double>(strokeBase64(stroke).size()) * strokesAtCap / 1048576.0);
     finish("B7");
+}
+
+// ---------------------------------------------------------------------------------------------
+
+TEST_CASE("B8 the cost of coverage in a render", "[.bench][brush-bench]") {
+    // Step 5.2: the constants of RenderProgress.cpp (coverageCost, packCost) and a cache miss of
+    // B2's sixteen masks through the cache's bucketed `drawn`, beside the banded path.
+    begin("B8");
+    constexpr ImageSize frame{6000, 4000};
+    const double pixels = static_cast<double>(frame.pixelCount());
+    const double edge = std::max(frame.width, frame.height);
+    std::vector<std::shared_ptr<const StrokeList>> masks;
+    DevelopState state;
+    for (std::uint32_t i = 0; i < 16; ++i) {
+        masks.push_back(test::paintedMask(seed + i, 60, test::everydayStyle, 4000.0 / 6000.0));
+        LocalAdjustment adjustment;
+        adjustment.shape = BrushMask{masks.back()};
+        adjustment.deltas.exposure = 1.0F;
+        state = withLocalAdjustmentAdded(std::move(state), adjustment);
+    }
+    // Per mask: a miss through the cache (not retained), then packing the tiles it made.
+    double drawnMs = 0.0;
+    double packMs = 0.0;
+    double areaEdgeSquared = 0.0;
+    for (std::size_t i = 0; i < masks.size(); ++i) {
+        BrushCoverageCache cache;
+        BrushCoverageCache::Result result;
+        const double ms = timed([&] { result = cache.coverage(masks[i], frame, false); });
+        drawnMs += ms;
+        areaEdgeSquared += masks[i]->budget().sweptArea * edge * edge;
+        detail::PackedCoverage packed;
+        packed.size = frame;
+        packed.planes.assign(1, std::vector<std::uint8_t>(frame.pixelCount() * 4));
+        const double pack = bestOfThree(
+            [&] { detail::quantiseInto(*result.tiles, 0, static_cast<std::uint32_t>(i), packed); });
+        packMs += pack;
+        Line("B8.mask")("index", i)("drawnMs", ms)("sweptArea",
+                                                   masks[i]->budget().sweptArea)("packMs", pack);
+    }
+    // All sixteen banded, outside the cache, in one call.
+    const LocalPlan local = localPlanFor(state, frame);
+    double bandedMs = timed([&] { (void)detail::packBanded(local); });
+    Line("B8.total")("drawnMsAll16", drawnMs)("bandedMsAll16", bandedMs)(
+        "coverageCostNsPerAreaEdge2", drawnMs * 1e6 / areaEdgeSquared)(
+        "packCostNsPerPixel", packMs * 1e6 / (pixels * 16.0))("bandedNsPerAreaEdge2",
+                                                              bandedMs * 1e6 / areaEdgeSquared);
+    finish("B8");
 }

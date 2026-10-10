@@ -1,5 +1,6 @@
 #pragma once
 
+#include "BrushCoverage.h"
 #include "ProcessingPlan.h"
 #include "ProgressScope.h"
 
@@ -8,6 +9,7 @@
 #include <RenderCheckpoint.h>
 
 #include <array>
+#include <vector>
 
 namespace arraw::detail {
 
@@ -24,8 +26,39 @@ namespace arraw::detail {
 /// @param plan The render's plan.
 /// @param request What the whole render is asked for; one that cannot be
 /// resolved is taken as no resize.
+/// @param residency The ladder's packed coverage when the render goes through one, else null: the
+/// Coverage step counts only the brushes whose coverage is not ready (see
+/// ::arraw::detail::coverageUnitWeights).
 [[nodiscard]] StepWeights renderStepWeights(const ProcessingPlan& plan,
-                                            const RenderRequest& request) noexcept;
+                                            const RenderRequest& request,
+                                            const CoverageResidency* residency = nullptr) noexcept;
+
+/// @brief What one brush's coverage costs a render, in nanoseconds of the time model.
+struct CoverageWork {
+    double draw = 0.0; ///< Drawing the strokes not yet in the cache.
+    double pack = 0.0; ///< Quantising into the packed planes.
+};
+
+/// @brief Gives the cost of a brush's coverage for a status.
+///
+/// Nothing for a held brush. Packing is `packCost` per pixel; drawing is `coverageCost` per unit
+/// of swept area times the long edge squared (report B7), of the strokes the cache does not hold:
+/// all for a brush drawn from nothing, those after the prefix for an extended one, none for a
+/// cached one.
+[[nodiscard]] CoverageWork coverageWorkOf(const CoverageStatus& status,
+                                          const BrushCoverageRef& brush) noexcept;
+
+/// @brief Gives the cost of each brush whose coverage a render still has to work on.
+///
+/// A brush the residency holds costs nothing and is left out. One the cache holds, whole or as an
+/// equal list, costs its packing (`packCost` per pixel); any other costs also its drawing
+/// (`coverageCost` per unit of swept area times the long edge squared, the time model of report
+/// B7). Draws, inserts and packs nothing.
+/// @param local The plan's local block.
+/// @param residency The ladder's packed coverage, or null for a direct render.
+/// @return One weight per brush to work on, in plan order; their sum is the Coverage step's cost.
+[[nodiscard]] std::vector<double> coverageUnitWeights(const LocalPlan& local,
+                                                      const CoverageResidency* residency);
 
 /// @brief Gives the step weights of a render that may be observed: none when it is not.
 ///
@@ -33,10 +66,12 @@ namespace arraw::detail {
 /// @param progress The caller's channel, or null.
 /// @param plan The render's plan.
 /// @param request What the whole render is asked for.
-[[nodiscard]] inline StepWeights observedStepWeights(const ProgressChannel* progress,
-                                                     const ProcessingPlan& plan,
-                                                     const RenderRequest& request) noexcept {
-    return progress != nullptr ? renderStepWeights(plan, request) : StepWeights{};
+/// @param residency The ladder's packed coverage when the render goes through one, else null.
+[[nodiscard]] inline StepWeights
+observedStepWeights(const ProgressChannel* progress, const ProcessingPlan& plan,
+                    const RenderRequest& request,
+                    const CoverageResidency* residency = nullptr) noexcept {
+    return progress != nullptr ? renderStepWeights(plan, request, residency) : StepWeights{};
 }
 
 /// @brief Gives the first step a render resuming from a boundary runs.

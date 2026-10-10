@@ -191,6 +191,18 @@ TEST_CASE("Steps are worded in British English", "[app][progress]") {
     CHECK(renderStepText(ProgressStep::Denoise) == QString::fromUtf8("Reducing noise…"));
     CHECK(renderStepText(ProgressStep::Pointwise) == QString::fromUtf8("Developing…"));
     CHECK(renderStepText(ProgressStep::Context).contains("Analysing"));
+    CHECK(renderStepText(ProgressStep::Coverage) == QString::fromUtf8("Painting brush masks…"));
+}
+
+TEST_CASE("The Coverage step is shown as the step being worked on", "[app][progress]") {
+    RenderActivity activity;
+    activity.begin(at(0ms));
+    activity.report(at(300ms), 0.35, ProgressStep::Context);
+    activity.report(at(400ms), 0.4, ProgressStep::Coverage);
+    const auto display = activity.poll(at(400ms));
+    REQUIRE(display.visible);
+    CHECK(display.step == ProgressStep::Coverage);
+    CHECK_THAT(*display.fraction, Catch::Matchers::WithinAbs(0.4, 1e-12));
 }
 
 TEST_CASE("The indicator announces each change of what is shown", "[app][progress]") {

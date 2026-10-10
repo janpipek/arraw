@@ -1,8 +1,11 @@
 #pragma once
 
+#include <BrushStrokes.h>
+
 #include <compare>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <variant>
@@ -77,12 +80,25 @@ struct RadialMask {
     friend bool operator==(const RadialMask&, const RadialMask&) = default;
 };
 
+/// @brief A stencil painted on the photograph: strokes in the sensor frame (ADR 044, section 6).
+struct BrushMask {
+    /// @brief The strokes, shared and immutable; never null in a valid state.
+    std::shared_ptr<const StrokeList> strokes = emptyStrokeList();
+
+    /// @brief Compares by meaning: equal when the pointers are, or failing that the lists'
+    /// contents (ADR 044, section 1).
+    friend bool operator==(const BrushMask& a, const BrushMask& b) {
+        return a.strokes == b.strokes ||
+               (a.strokes != nullptr && b.strokes != nullptr && *a.strokes == *b.strokes);
+    }
+};
+
 /// @brief The shape of a local adjustment.
 ///
-/// Linear and radial for now. Everything that reads a mask reads its weight, never its shape,
-/// so a kind added later (a brush) is a new alternative, and the shape may become a list of
-/// components without changing anything around it.
-using Mask = std::variant<LinearMask, RadialMask>;
+/// Everything that reads a mask reads its weight, never its shape, so a kind added later is a new
+/// alternative, and the shape may become a list of components without changing anything around
+/// it.
+using Mask = std::variant<LinearMask, RadialMask, BrushMask>;
 
 /// @brief The amounts a local adjustment adds to the global controls, one per row of
 /// ::arraw::localAdjustmentDescriptors, in the table's order.
@@ -138,7 +154,7 @@ struct LocalAdjustment {
     friend bool operator==(const LocalAdjustment&, const LocalAdjustment&) = default;
 };
 
-/// @brief Gives the name a mask's kind has in documents: `linear` or `radial`.
+/// @brief Gives the name a mask's kind has in documents: `linear`, `radial` or `brush`.
 /// @param shape Mask to name.
 [[nodiscard]] std::string_view maskTypeName(const Mask& shape) noexcept;
 

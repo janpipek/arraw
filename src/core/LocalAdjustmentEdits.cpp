@@ -1,6 +1,7 @@
 #include "LocalAdjustmentEdits.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <format>
 #include <limits>
@@ -156,6 +157,40 @@ DevelopState arraw::withLocalShape(DevelopState state, LocalAdjustmentId id, Mas
     return state;
 }
 
+bool arraw::canAppendStroke(const DevelopState& state, LocalAdjustmentId id,
+                            const Stroke& stroke) noexcept {
+    try {
+        const LocalAdjustment* adjustment = findLocalAdjustment(state, id);
+        const auto* brush =
+            adjustment == nullptr ? nullptr : std::get_if<BrushMask>(&adjustment->shape);
+        if (brush == nullptr) {
+            return false;
+        }
+        const Stroke clean = normalised(stroke);
+        const std::shared_ptr<const StrokeList>& list =
+            brush->strokes != nullptr ? brush->strokes : emptyStrokeList();
+        return list->rasteriser() == brushRasteriserVersion && list->accepts(clean);
+    } catch (...) {
+        return false;
+    }
+}
+
+DevelopState arraw::withStrokeAppended(DevelopState state, LocalAdjustmentId id, Stroke stroke) {
+    LocalAdjustment& adjustment = state.localAdjustments[indexOf(state, id)];
+    auto* brush = std::get_if<BrushMask>(&adjustment.shape);
+    if (brush == nullptr) {
+        throw std::invalid_argument(
+            std::format("a {} mask takes no strokes", maskTypeName(adjustment.shape)));
+    }
+    const std::shared_ptr<const StrokeList>& list =
+        brush->strokes != nullptr ? brush->strokes : emptyStrokeList();
+    if (list->rasteriser() != brushRasteriserVersion) {
+        throw std::invalid_argument("the brush mask's rasteriser is not supported");
+    }
+    brush->strokes = list->appended(normalised(std::move(stroke)));
+    return state;
+}
+
 std::size_t arraw::maskOrdinal(const DevelopState& state, LocalAdjustmentId id) {
     const std::size_t index = indexOf(state, id);
     const std::size_t kind = state.localAdjustments[index].shape.index();
@@ -167,8 +202,8 @@ std::size_t arraw::maskOrdinal(const DevelopState& state, LocalAdjustmentId id) 
 
 std::string arraw::defaultMaskName(const DevelopState& state, LocalAdjustmentId id) {
     const LocalAdjustment& adjustment = state.localAdjustments[indexOf(state, id)];
-    return std::format("{} {}", adjustment.shape.index() == 0 ? "Linear" : "Radial",
-                       maskOrdinal(state, id));
+    constexpr std::array<std::string_view, 3> kinds{"Linear", "Radial", "Brush"};
+    return std::format("{} {}", kinds.at(adjustment.shape.index()), maskOrdinal(state, id));
 }
 
 std::string arraw::displayedMaskName(const DevelopState& state, LocalAdjustmentId id) {

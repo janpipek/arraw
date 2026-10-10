@@ -9,6 +9,10 @@
 
 namespace arraw {
 
+namespace detail {
+class CoverageResidency;
+} // namespace detail
+
 /// @brief The checkpoints one caller keeps of one source, one per pass boundary.
 ///
 /// A render through ::arraw::resumeOrDevelop (or ::arraw::resumeOrDevelopOnGpu)
@@ -23,6 +27,25 @@ namespace arraw {
 /// thread: render through it, clear it and destroy it there.
 class CheckpointLadder {
 public:
+    /// @brief Makes an empty ladder.
+    CheckpointLadder() = default;
+
+    /// @brief Copies the rungs and the source, but not the brush coverage: a copy starts with
+    /// none, so two ladders never write the same packed planes.
+    CheckpointLadder(const CheckpointLadder& other);
+
+    /// @brief Copies as the copy constructor does; this ladder's own coverage is dropped.
+    CheckpointLadder& operator=(const CheckpointLadder& other);
+
+    /// @brief Moves a ladder, its coverage included.
+    CheckpointLadder(CheckpointLadder&&) noexcept = default;
+
+    /// @brief Moves a ladder, its coverage included.
+    CheckpointLadder& operator=(CheckpointLadder&&) noexcept = default;
+
+    /// @brief Frees the ladder.
+    ~CheckpointLadder() = default;
+
     /// @brief Drops every rung and the source.
     void clear() noexcept;
 
@@ -40,6 +63,8 @@ private:
     std::shared_ptr<const ImageBuffer> source_;
     /// Rung at each boundary, by stage.
     std::array<std::optional<RenderCheckpoint>, stageCount> rungs_;
+    /// The packed brush coverage of the source, made on first use (ADR 044, section 8).
+    std::shared_ptr<detail::CoverageResidency> coverage_;
 };
 
 /// @brief A render through a ladder: its result, and where it resumed from.

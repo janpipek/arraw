@@ -148,7 +148,17 @@ std::string arraw::storableMaskName(std::string_view name) {
 }
 
 std::string_view arraw::maskTypeName(const Mask& shape) noexcept {
-    return std::holds_alternative<LinearMask>(shape) ? "linear" : "radial";
+    switch (shape.index()) {
+    case 0:
+        return "linear";
+    case 1:
+        return "radial";
+    case 2:
+        return "brush";
+    default:
+        break;
+    }
+    return "unknown";
 }
 
 float arraw::wrappedAngle(float degrees) noexcept {
@@ -163,7 +173,17 @@ Mask arraw::normalised(const Mask& shape) {
     return std::visit(
         [](const auto& mask) -> Mask {
             using T = std::remove_cvref_t<decltype(mask)>;
-            if constexpr (std::is_same_v<T, LinearMask>) {
+            if constexpr (std::is_same_v<T, BrushMask>) {
+                BrushMask checked = mask;
+                if (checked.strokes == nullptr) {
+                    checked.strokes = emptyStrokeList();
+                } else if (checked.strokes->rasteriser() != brushRasteriserVersion) {
+                    throw std::invalid_argument(
+                        std::format("a brush mask's rasteriser {} is not the supported {}",
+                                    checked.strokes->rasteriser(), brushRasteriserVersion));
+                }
+                return checked;
+            } else if constexpr (std::is_same_v<T, LinearMask>) {
                 const LinearMask clamped{clampedPoint(mask.from, "a linear mask's from point"),
                                          clampedPoint(mask.to, "a linear mask's to point")};
                 refuseDegenerate(distanceBetween(clamped.from, clamped.to));
@@ -217,7 +237,16 @@ void arraw::validate(const LocalAdjustment& adjustment) {
     std::visit(
         [](const auto& mask) {
             using T = std::remove_cvref_t<decltype(mask)>;
-            if constexpr (std::is_same_v<T, LinearMask>) {
+            if constexpr (std::is_same_v<T, BrushMask>) {
+                if (mask.strokes == nullptr) {
+                    throw std::invalid_argument("a brush mask has no stroke list");
+                }
+                if (mask.strokes->rasteriser() != brushRasteriserVersion) {
+                    throw std::invalid_argument(
+                        std::format("a brush mask's rasteriser {} is not the supported {}",
+                                    mask.strokes->rasteriser(), brushRasteriserVersion));
+                }
+            } else if constexpr (std::is_same_v<T, LinearMask>) {
                 requirePoint(mask.from, "a linear mask's from point");
                 requirePoint(mask.to, "a linear mask's to point");
                 refuseDegenerate(distanceBetween(mask.from, mask.to));

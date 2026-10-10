@@ -1,7 +1,6 @@
 // The stroke model of the brush prototype (ADR 044, section 6).
 
-#include "BrushStrokes.h"
-
+#include <BrushStrokes.h>
 #include <LocalAdjustments.h>
 
 #include <catch2/catch_approx.hpp>

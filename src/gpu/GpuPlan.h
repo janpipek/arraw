@@ -73,8 +73,9 @@ enum class GpuLocalFlag : std::uint32_t {
 /// @brief One mask of the pointwise block, byte for byte as std140 lays it out: 112 bytes.
 ///
 /// Mirrors ::arraw::LocalMaskPlan member for member; `src/gpu/shaders/develop.frag` declares
-/// the same struct. The coverage words are for brush masks, which a later step adds; both are
-/// zero for linear and radial masks.
+/// the same struct. The coverage words are for brush masks: the texture (the slot / 4) and the
+/// channel (the slot % 4) the mask's packed coverage is read from; both are zero for linear and
+/// radial masks.
 struct GpuLocalMask {
     /// @brief Shape (::arraw::LocalMaskKind), invert (0 or 1), coverage texture, coverage channel.
     std::array<std::uint32_t, 4> header{};

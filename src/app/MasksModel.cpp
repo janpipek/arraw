@@ -74,7 +74,7 @@ QVariant MasksModel::data(const QModelIndex& index, int role) const {
     case IdRole:
         return adjustment.id.value;
     case KindRole:
-        return std::holds_alternative<LinearMask>(adjustment.shape) ? 1 : 2;
+        return static_cast<int>(adjustment.shape.index()) + 1;
     case InvertedRole:
         return adjustment.invert;
     default:
