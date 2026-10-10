@@ -228,6 +228,14 @@ add_library(arraw STATIC
         src/core/LocalAdjustmentEdits.cpp
         src/core/LocalAdjustmentCodec.h
         src/core/LocalAdjustmentCodec.cpp
+        src/core/BrushStrokes.h
+        src/core/BrushStrokes.cpp
+        src/core/BrushRaster.h
+        src/core/BrushRaster.cpp
+        src/core/BrushCoverageCache.h
+        src/core/BrushCoverageCache.cpp
+        src/core/StrokeCodec.h
+        src/core/StrokeCodec.cpp
         src/core/LocalPlan.h
         src/core/LocalPlan.cpp
         src/core/SettingCodec.h
