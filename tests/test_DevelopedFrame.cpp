@@ -247,7 +247,7 @@ TEST_CASE("Coverage is the engine's weight, rounded to eight bits, on an identit
             for (std::uint32_t y = 0; y < source.size.height; ++y) {
                 for (std::uint32_t x = 0; x < source.size.width; ++x) {
                     const float weight = maskWeight(plan.masks[0], static_cast<float>(x) + 0.5F,
-                                                    static_cast<float>(y) + 0.5F);
+                                                    static_cast<float>(y) + 0.5F, PixelCoverage{});
                     REQUIRE(coverage.weights[y * source.size.width + x] ==
                             static_cast<std::uint8_t>(std::lround(255.0F * weight)));
                 }
@@ -436,4 +436,13 @@ TEST_CASE("Timing of a 1024 by 1024 coverage", "[.timing]") {
         std::cout << (std::holds_alternative<LinearMask>(shape) ? "linear" : "radial")
                   << " maskCoverage 1024x1024, best of five: " << best << " ms\n";
     }
+}
+
+TEST_CASE("Coverage of a brush mask is refused until the tint is drawn",
+          "[developed-frame][coverage]") {
+    constexpr SourceShape source{{40, 30}, ImageOrientation::Normal};
+    const DevelopedFrameMap map(source, {});
+    LocalAdjustment adjustment;
+    adjustment.shape = BrushMask{};
+    REQUIRE_THROWS_AS(maskCoverage(adjustment, map, {}, {4, 4}), std::invalid_argument);
 }

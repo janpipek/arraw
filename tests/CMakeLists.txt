@@ -19,7 +19,10 @@ add_executable(arraw-tests
         support/TestImages.cpp
         test_AppSettings.cpp
         test_BrushBench.cpp
+        test_BrushCoverage.cpp
         test_BrushCoverageCache.cpp
+        test_BrushMask.cpp
+        test_BrushRender.cpp
         test_BrushRaster.cpp
         test_BrushStrokes.cpp
         test_StrokeCodec.cpp

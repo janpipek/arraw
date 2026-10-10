@@ -6,6 +6,8 @@
 #include <Develop.h>
 #include <DevelopSettings.h>
 #include <ImagePyramid.h>
+#include <LocalAdjustmentEdits.h>
+#include <LocalAdjustments.h>
 #include <Progress.h>
 
 #include <catch2/catch_approx.hpp>
@@ -935,4 +937,24 @@ TEST_CASE("Destroying the renderer cancels the render in flight", "[app][preview
     const auto stopping = std::chrono::steady_clock::now() - begin;
     REQUIRE(collector.results().empty());
     REQUIRE(stopping < 5s);
+}
+
+TEST_CASE("A state with a brush renders a preview whichever device the renderer has",
+          "[app][preview][brush]") {
+    Collector collector;
+    app::PreviewRenderer renderer(collector.callback());
+    renderer.setSource(makeSource());
+    LocalAdjustment adjustment;
+    adjustment.shape = BrushMask{};
+    adjustment.deltas.exposure = 1.0F;
+    const DevelopState state = withLocalAdjustmentAdded(DevelopState{}, adjustment);
+
+    const std::uint64_t id = renderer.request(state, app::PreviewView::wholeFrame({100, 100}));
+    REQUIRE(collector.waitFor(id));
+    const auto results = collector.results();
+    const app::PreviewResult& result = results.back();
+    REQUIRE(result.error.empty());
+    REQUIRE(result.image.has_value());
+    // The GPU cannot draw a brush yet: a preview that did get a device is not on it.
+    REQUIRE_FALSE(result.onGpu);
 }

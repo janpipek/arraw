@@ -10,8 +10,10 @@
 #include <iterator>
 #include <limits>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <variant>
 
 using namespace arraw;
 
@@ -342,6 +344,9 @@ arraw::readLocalAdjustments(std::span<const MaskFields> entries, std::optional<d
 }
 
 WrittenMask arraw::writtenForm(const LocalAdjustment& adjustment) {
+    if (std::holds_alternative<BrushMask>(adjustment.shape)) {
+        throw std::logic_error("brush masks are not persisted yet");
+    }
     const auto num = [](float value) { return WrittenValue{shortestDouble(value)}; };
     WrittenMask written;
     written.top = {{"id", WrittenValue{static_cast<double>(adjustment.id.value)}},

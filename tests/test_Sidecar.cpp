@@ -5,6 +5,8 @@
 
 #include <DevelopState.h>
 #include <ImageImport.h>
+#include <LocalAdjustmentEdits.h>
+#include <LocalAdjustments.h>
 #include <NoiseReductionSettings.h>
 #include <Photo.h>
 #include <SettingDescriptors.h>
@@ -139,6 +141,14 @@ TEST_CASE("Every settings row survives a write and a read", "[sidecar]") {
     // Back to defaults: the unset optionals leave no attribute, and read back as unset.
     writeSidecar(photoOf(path));
     REQUIRE(readSidecar(path)->state->settings == DevelopSettings{});
+}
+
+TEST_CASE("A sidecar is not written for a photograph with a brush", "[sidecar][brush]") {
+    const test::TempDir directory;
+    const fs::path path = copyRaw(directory, "IMG_1.dng");
+    const DevelopState state = withLocalAdjustmentAdded(DevelopState{}, Mask{BrushMask{}});
+    REQUIRE_THROWS(writeSidecar(openPhoto(path).with(state)));
+    REQUIRE_FALSE(fs::exists(sidecarPath(path)));
 }
 
 TEST_CASE("Marks survive a write and a read", "[sidecar][marks]") {

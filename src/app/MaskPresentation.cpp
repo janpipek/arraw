@@ -108,7 +108,13 @@ QString maskDisplayName(const DevelopState& state, LocalAdjustmentId id) {
     if (std::holds_alternative<LinearMask>(adjustment->shape)) {
         return tr("Linear %1").arg(ordinal);
     }
-    return tr("Radial %1").arg(ordinal);
+    if (std::holds_alternative<RadialMask>(adjustment->shape)) {
+        return tr("Radial %1").arg(ordinal);
+    }
+    if (std::holds_alternative<BrushMask>(adjustment->shape)) {
+        return tr("Brush %1").arg(ordinal);
+    }
+    return tr("Mask %1").arg(ordinal);
 }
 
 } // namespace arraw::app

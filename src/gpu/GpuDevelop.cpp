@@ -287,6 +287,9 @@ void requireUploaded(const GpuContext& context, const ImageBuffer& source,
 /// @param probe What the pass writes: the developed colour, or a tap's.
 DeviceImage pointwiseOnGpu(GpuContext& context, const DeviceImage& image,
                            const ProcessingPlan& plan, PointwiseProbe probe) {
+    if (plan.pointwise.local.brushCount() != 0) {
+        throw std::runtime_error("brush masks cannot be rendered on the GPU yet");
+    }
     // The block's grid sizes come from the image the bases are rendered from,
     // so the two cannot differ.
     const GpuPointwiseBlock pointwise = packPointwise(plan.pointwise, image.size(), probe);

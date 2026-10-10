@@ -591,7 +591,9 @@ void MaskOverlay::paintHandles(QPainter& painter, const MaskViewMapping& map) co
     const LocalAdjustment* selected = selectedMask();
     for (const LocalAdjustment& other : state_.localAdjustments) {
         if (selected == nullptr || other.id != selected->id) {
-            drawPin(painter, pinPosition(other.shape, map), other.enabled);
+            if (const std::optional<QPointF> pin = pinPosition(other.shape, map)) {
+                drawPin(painter, *pin, other.enabled);
+            }
         }
     }
     if (selected == nullptr) {
@@ -609,9 +611,8 @@ void MaskOverlay::paintHandles(QPainter& painter, const MaskViewMapping& map) co
         if (marks.toLine) {
             strokeLine(painter, *marks.toLine, 1.5, Qt::DashLine);
         }
-    } else {
-        const auto& radial = std::get<RadialMask>(selected->shape);
-        const RadialMarks marks = radialMarks(radial, map);
+    } else if (const auto* radialShape = std::get_if<RadialMask>(&selected->shape)) {
+        const RadialMarks marks = radialMarks(*radialShape, map);
         painter.save();
         painter.setTransform(marks.unitToWidget, true);
         strokeUnitCircle(painter, 1.0, Qt::SolidLine);

@@ -9,6 +9,8 @@
 #include <GeometrySettings.h>
 #include <ImageBuffer.h>
 #include <ImageOrientation.h>
+#include <LocalAdjustmentEdits.h>
+#include <LocalAdjustments.h>
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -435,4 +437,15 @@ TEST_CASE("The pointwise block takes its Presence grid sizes from the size it is
     const GpuPointwiseBlock other = packPointwise(plan, {64, 32});
     REQUIRE(other.fineGridSize == std::array<std::uint32_t, 2>{32, 16});
     REQUIRE(other.coarseGridSize == std::array<std::uint32_t, 2>{64, 32});
+}
+
+TEST_CASE("A pointwise block cannot be packed for a brush mask yet", "[gpu][plan][brush]") {
+    const ImageBuffer source({64, 48}, workingFormat, workingEncoding);
+    LocalAdjustment adjustment;
+    adjustment.shape = BrushMask{};
+    adjustment.deltas.exposure = 1.0F;
+    const DevelopState state = withLocalAdjustmentAdded(DevelopState{}, adjustment);
+    const PointwisePlan plan = planFor(source, state).pointwise;
+    REQUIRE(plan.local.brushCount() == 1);
+    REQUIRE_THROWS_AS(packPointwise(plan, source.size()), std::invalid_argument);
 }

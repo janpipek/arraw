@@ -218,6 +218,8 @@ GpuPointwiseBlock packPointwise(const PointwisePlan& plan, ImageSize source, Poi
             packed.shapeA = {mask.centreX, mask.centreY, mask.inner, 0.0F};
             packed.shapeB = mask.matrix;
             break;
+        case LocalMaskKind::Brush:
+            throw std::invalid_argument("A brush mask has no GPU block yet");
         }
         std::copy(mask.k.begin(), mask.k.end(), packed.k.begin());
     }

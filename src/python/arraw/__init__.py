@@ -3,6 +3,7 @@
 from ._arraw import (
     Applicability,
     BlackAndWhiteSettings,
+    BrushMask,
     CameraNative,
     ChangeDescription,
     ColorGradingSettings,
@@ -57,6 +58,7 @@ from ._arraw import (
     SidecarContents,
     SRational,
     Stage,
+    Stroke,
     SUPPORTED_EXTENSIONS,
     Tap,
     ToneCurve,
@@ -102,6 +104,7 @@ from ._arraw import (
 __all__ = [
     "Applicability",
     "BlackAndWhiteSettings",
+    "BrushMask",
     "CameraNative",
     "ChangeDescription",
     "ColorGradingSettings",
@@ -156,6 +159,7 @@ __all__ = [
     "SidecarContents",
     "SRational",
     "Stage",
+    "Stroke",
     "SUPPORTED_EXTENSIONS",
     "Tap",
     "ToneCurve",

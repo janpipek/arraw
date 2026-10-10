@@ -521,7 +521,7 @@ TEST_CASE("Random degenerate drags are always accepted by the edit rules", "[app
                     return found.position;
                 }
             }
-            return pinPosition(shape, mapping);
+            return *pinPosition(shape, mapping);
         }();
         const Mask dragged = draggedShape(shape, handle, dot, pointerAt(), mapping, constrain);
         CAPTURE(trial, static_cast<int>(handle), constrain);
@@ -669,8 +669,8 @@ TEST_CASE("Pins select other masks", "[app][mask-editing]") {
     const LocalAdjustmentId line = state.localAdjustments[0].id;
     const LocalAdjustmentId oval = state.localAdjustments[1].id;
     const MaskViewMapping mapping = mappingFor(landscape, flippedAndTurned());
-    const QPointF linePin = pinPosition(someLine, mapping);
-    const QPointF ovalPin = pinPosition(apart, mapping);
+    const QPointF linePin = *pinPosition(someLine, mapping);
+    const QPointF ovalPin = *pinPosition(apart, mapping);
     REQUIRE(distance(linePin, ovalPin) > 30.0);
 
     CHECK(pinAt(state, mapping, linePin) == line);
@@ -739,4 +739,24 @@ TEST_CASE("The feather knob follows the pointer from where it is drawn", "[app][
     const RadialMask moved = std::get<RadialMask>(
         draggedShape(soft, MaskHandle::RadialFeather, press, pointer, mapping, false));
     CHECK(distance(handleOf(moved, mapping, MaskHandle::RadialFeather), pointer) < 1e-2);
+}
+
+TEST_CASE("A brush has no handles and no pin, and a drag leaves it alone",
+          "[app][mask-editing][brush]") {
+    const Mask brush = BrushMask{};
+    const MaskViewMapping mapping = mappingFor(landscape, GeometrySettings{});
+    CHECK(handlePositions(brush, mapping).empty());
+    CHECK_FALSE(pinPosition(brush, mapping));
+    for (const QPointF at : {QPointF{0.0, 0.0}, QPointF{400.0, 300.0}, QPointF{799.0, 599.0}}) {
+        CHECK(handleAt(brush, mapping, at) == MaskHandle::None);
+        CHECK(handleAt(brush, mapping, at, 1000.0, true) == MaskHandle::None);
+    }
+    CHECK(draggedShape(brush, MaskHandle::RadialCentre, {10, 10}, {200, 200}, mapping, false) ==
+          brush);
+    // It has no pin to select it by, among masks that do.
+    DevelopState state = withLocalAdjustmentAdded(DevelopState{}, LinearMask{});
+    state = withLocalAdjustmentAdded(state, BrushMask{});
+    const QPointF linePin = *pinPosition(state.localAdjustments[0].shape, mapping);
+    CHECK(pinAt(state, mapping, linePin) == state.localAdjustments[0].id);
+    CHECK_FALSE(pinAt(state, mapping, linePin + QPointF(300.0, 0.0), 10.0));
 }

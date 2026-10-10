@@ -1,8 +1,8 @@
 #pragma once
 
 #include "BrushRaster.h"
-#include "BrushStrokes.h"
 
+#include <BrushStrokes.h>
 #include <ImageBuffer.h>
 
 #include <cstddef>
@@ -19,6 +19,10 @@ struct CoverageTile {
     std::uint32_t width;       ///< Columns.
     std::uint32_t height;      ///< Rows.
     std::vector<float> values; ///< Coverage, row-major, width times height values.
+    /// Number unique in the process, given when the tile is made or cloned for painting: a tile
+    /// that differs from another has a different serial, and no serial comes back (no ABA, as a
+    /// pointer can). Zero for a tile made outside the cache.
+    std::uint64_t serial = 0;
 };
 
 /// One raster of coverage as a grid of shared tiles; an absent tile is all zero.
@@ -100,6 +104,12 @@ public:
     /// @param retain Whether to keep the result; false for a live stroke's updates.
     [[nodiscard]] Result coverage(const std::shared_ptr<const StrokeList>& strokes,
                                   ImageSize raster, bool retain = true);
+
+    /// Finds the coverage of a list at a raster size only if it is held, whole or as an equal list
+    /// behind other pointers: no insert, no extension, no drawing.
+    /// @return The tiles of a `Hit` or `ContentHit`, empty otherwise. The LRU order is touched.
+    [[nodiscard]] std::shared_ptr<const CoverageTiles>
+    find(const std::shared_ptr<const StrokeList>& strokes, ImageSize raster);
 
     /// Bytes of the distinct tiles across entries.
     [[nodiscard]] std::size_t memoryBytes() const;

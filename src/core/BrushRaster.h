@@ -1,7 +1,6 @@
 #pragma once
 
-#include "BrushStrokes.h"
-
+#include <BrushStrokes.h>
 #include <ImageBuffer.h>
 
 #include <cstddef>
@@ -94,6 +93,64 @@ struct PixelSpan {
 /// @param region Pixels the values are for, in raster coordinates.
 /// @param values region.width * region.height floats, row-major, region-relative.
 void paintRegion(std::span<const PlacedStroke> strokes, PixelRect region, std::span<float> values);
+
+/// Applies one dab of a placed stroke onto coverage held for a region, clipped to the region.
+///
+/// The step of paintRegion's loop, so that painting a region from a list of dabs gives its bits.
+void paintDab(const PlacedStroke& stroke, const DabCentre& dab, PixelRect region,
+              std::span<float> values);
+
+/// Dabs of placed strokes grouped by the bands of raster rows they reach.
+///
+/// Each bucket lists, in painting order (strokes in list order, dabs in path order), the dabs
+/// whose row span meets its rows; a dab spanning two buckets is listed in both. Painting a
+/// bucket's rows from its list gives the bits of painting them from every dab.
+class DabBuckets {
+public:
+    /// A dab of a placed stroke.
+    struct Ref {
+        std::uint32_t stroke; ///< Index among the placed strokes.
+        std::uint32_t dab;    ///< Index among that stroke's dabs.
+    };
+
+    /// Builds the index.
+    /// @param placed Strokes in painting order.
+    /// @param rows Rows of the raster.
+    /// @param bucketRows Rows per bucket, at least 1.
+    /// @throws std::invalid_argument for no rows or no bucket rows.
+    DabBuckets(std::span<const PlacedStroke> placed, std::uint32_t rows, std::uint32_t bucketRows);
+
+    /// Number of buckets.
+    [[nodiscard]] std::uint32_t count() const noexcept {
+        return count_;
+    }
+
+    /// Rows per bucket; the last one may have fewer.
+    [[nodiscard]] std::uint32_t bucketRows() const noexcept {
+        return bucketRows_;
+    }
+
+    /// Dabs of one bucket, in painting order.
+    [[nodiscard]] std::span<const Ref> bucket(std::uint32_t index) const {
+        return std::span<const Ref>(refs_).subspan(start_.at(index),
+                                                   start_.at(index + 1) - start_.at(index));
+    }
+
+private:
+    std::uint32_t bucketRows_;
+    std::uint32_t count_;
+    std::vector<std::size_t> start_; ///< count() + 1 offsets into refs_.
+    std::vector<Ref> refs_;
+};
+
+/// Applies a bucket's dabs onto coverage held for a region within the bucket's rows.
+/// @param placed The strokes the buckets were built from.
+/// @param buckets The index.
+/// @param bucket Bucket whose list is applied.
+/// @param region Pixels the values are for; its rows must lie within the bucket's.
+/// @param values region.width * region.height floats, region-relative.
+void paintBucket(std::span<const PlacedStroke> placed, const DabBuckets& buckets,
+                 std::uint32_t bucket, PixelRect region, std::span<float> values);
 
 /// Draws all strokes onto zero over the whole raster, banded by rows: the reference.
 /// @throws std::invalid_argument for an empty size or a rasteriser other than 1.

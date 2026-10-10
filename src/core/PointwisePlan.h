@@ -118,19 +118,20 @@ struct PixelAmounts {
 /// @param plan Resolved settings.
 /// @param column Column of the pixel in the source the plan was resolved for.
 /// @param row Row of the pixel.
+/// @param coverage The pixel's coverage codes, for the brush masks of the plan.
 /// @return The pixel's amounts; the plan's own for a plan without masks.
 ///
 /// Mirrored by `src/gpu/shaders/develop.frag`, which must change with it.
 [[nodiscard]] inline PixelAmounts amountsAt(const PointwisePlan& plan, std::uint32_t column,
-                                            std::uint32_t row) {
+                                            std::uint32_t row, const PixelCoverage& coverage) {
     PixelAmounts at = globalAmountsOf(plan);
     const LocalPlan& local = plan.local;
     if (local.empty()) {
         return at;
     }
     // The centre of the pixel, in source pixels.
-    const LocalAmounts sums =
-        localSumsAt(local, static_cast<float>(column) + 0.5F, static_cast<float>(row) + 0.5F);
+    const LocalAmounts sums = localSumsAt(local, static_cast<float>(column) + 0.5F,
+                                          static_cast<float>(row) + 0.5F, coverage);
     const auto sum = [&sums](LocalControl control) { return sums[indexOf(control)]; };
     // The global value and the pixel's sum, clamped once to the global control's range.
     const auto effective = [&](LocalControl control, float least, float most) {

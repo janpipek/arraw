@@ -17,6 +17,7 @@
 #include <nanobind/stl/vector.h>
 // clang-format on
 
+#include <BrushStrokes.h>
 #include <DevelopSettings.h>
 #include <DevelopState.h>
 #include <Diagnostics.h>
@@ -116,6 +117,30 @@ template <> struct nanobind::detail::type_caster<arraw::CorrectedPoint> {
         PyTuple_SET_ITEM(tuple, 0, PyFloat_FromDouble(arraw::shortestDouble(point.u)));
         PyTuple_SET_ITEM(tuple, 1, PyFloat_FromDouble(arraw::shortestDouble(point.v)));
         return tuple;
+    }
+};
+
+/// @brief Caster of a position in the sensor frame to and from a Python `(u, v)` tuple.
+///
+/// As for a corrected position, which it is built on.
+template <> struct nanobind::detail::type_caster<arraw::SensorPoint> {
+    NB_TYPE_CASTER(arraw::SensorPoint, const_name("tuple[float, float]"))
+
+    /// @brief Reads a two-item sequence of numbers.
+    bool from_python(nanobind::handle source, uint8_t flags, cleanup_list* cleanup) noexcept {
+        make_caster<arraw::CorrectedPoint> point;
+        if (!point.from_python(source, flags, cleanup)) {
+            return false;
+        }
+        value = arraw::SensorPoint{point.value.u, point.value.v};
+        return true;
+    }
+
+    /// @brief Makes a `(u, v)` tuple.
+    static handle from_cpp(const arraw::SensorPoint& point, rv_policy policy,
+                           cleanup_list* cleanup) noexcept {
+        return make_caster<arraw::CorrectedPoint>::from_cpp(arraw::CorrectedPoint{point.u, point.v},
+                                                            policy, cleanup);
     }
 };
 

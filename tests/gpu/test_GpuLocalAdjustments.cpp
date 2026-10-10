@@ -445,7 +445,7 @@ TEST_CASE("The after-matrix probe applies the local Temperature and Tint", "[gpu
     for (std::uint32_t y = 0; y < source.size().height; ++y) {
         for (std::uint32_t x = 0; x < source.size().width; ++x) {
             const std::size_t at = (static_cast<std::size_t>(y) * source.size().width + x) * 4;
-            const PixelAmounts amounts = amountsAt(plan.pointwise, x, y);
+            const PixelAmounts amounts = amountsAt(plan.pointwise, x, y, PixelCoverage{});
             Colour colour = plan.pointwise.toWorking * Colour{in[at], in[at + 1], in[at + 2]};
             if (amounts.balances) {
                 colour = {colour[0] * amounts.balance[0], colour[1] * amounts.balance[1],

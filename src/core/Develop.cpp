@@ -1,5 +1,6 @@
 #include "Develop.h"
 
+#include "BrushCoverage.h"
 #include "CheckpointState.h"
 #include "Denoise.h"
 #include "Effects.h"
@@ -121,13 +122,21 @@ ImageBuffer runPointwise(const ImageBuffer& source, const PointwisePlan& plan, c
 ///
 /// The amounts every pixel has are worked out here, once for the render; a plan with masks
 /// resolves them for each pixel instead (::arraw::amountsAt).
-auto developChain(const PointwisePlan& plan) {
-    return [&plan, amounts = globalAmountsOf(plan)](std::uint32_t x, std::uint32_t y, Colour colour,
-                                                    const PixelContext& context) {
+///
+/// The coverage of the plan's brush masks, packed before the traversal, is read here for each
+/// pixel; @p coverage is null when the plan has none.
+auto developChain(const PointwisePlan& plan, const detail::PackedCoverage* coverage) {
+    return [&plan, coverage, brushSlots = static_cast<std::uint32_t>(plan.local.brushCount()),
+            amounts = globalAmountsOf(plan)](std::uint32_t x, std::uint32_t y, Colour colour,
+                                             const PixelContext& context) {
         if (plan.local.empty()) {
             return developPixel(plan, amounts, colour, context);
         }
-        return developPixel(plan, amountsAt(plan, x, y), colour, context);
+        if (coverage != nullptr) {
+            const PixelCoverage codes = coverage->at(x, y, brushSlots);
+            return developPixel(plan, amountsAt(plan, x, y, codes), colour, context);
+        }
+        return developPixel(plan, amountsAt(plan, x, y, PixelCoverage{}), colour, context);
     };
 }
 
@@ -261,21 +270,38 @@ struct CpuStages {
 private:
     /// @brief Runs the pointwise chain, or a tap's prefix of it.
     ImageBuffer pointwise(const ImageBuffer& input, const ProcessingPlan& plan) const {
+        // The brushes' coverage is packed before the pass's own span opens: it adds nothing to
+        // the fraction, though it notices a cancellation.
+        std::optional<detail::PackedCoverage> packed;
+        if (plan.pointwise.local.brushCount() != 0) {
+            packed = detail::packCoverage(plan.pointwise.local);
+            if (packed->size.width != input.size().width ||
+                packed->size.height != input.size().height) {
+                throw std::logic_error("The brush coverage was packed for another size");
+            }
+        }
+        const detail::PackedCoverage* coverage = packed ? &*packed : nullptr;
         if (tap) {
             return runPointwise(
                 input, plan.pointwise,
-                [&pointwise = plan.pointwise, amounts = globalAmountsOf(plan.pointwise),
-                 tap = *tap](std::uint32_t x, std::uint32_t y, Colour colour,
-                             const PixelContext& context) {
+                [&pointwise = plan.pointwise, coverage,
+                 brushSlots = static_cast<std::uint32_t>(plan.pointwise.local.brushCount()),
+                 amounts = globalAmountsOf(plan.pointwise), tap = *tap](
+                    std::uint32_t x, std::uint32_t y, Colour colour, const PixelContext& context) {
                     if (pointwise.local.empty()) {
                         return developToTap(pointwise, amounts, colour, tap, context);
                     }
-                    return developToTap(pointwise, amountsAt(pointwise, x, y), colour, tap,
-                                        context);
+                    if (coverage != nullptr) {
+                        const PixelCoverage codes = coverage->at(x, y, brushSlots);
+                        return developToTap(pointwise, amountsAt(pointwise, x, y, codes), colour,
+                                            tap, context);
+                    }
+                    return developToTap(pointwise, amountsAt(pointwise, x, y, PixelCoverage{}),
+                                        colour, tap, context);
                 });
         }
         const detail::TimingSpan timing("cpu.pointwise");
-        return runPointwise(input, plan.pointwise, developChain(plan.pointwise));
+        return runPointwise(input, plan.pointwise, developChain(plan.pointwise, coverage));
     }
 };
 

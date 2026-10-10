@@ -1,6 +1,6 @@
 #pragma once
 
-#include "BrushStrokes.h"
+#include <BrushStrokes.h>
 
 #include <cstddef>
 #include <string>

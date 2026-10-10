@@ -90,6 +90,10 @@ LocalMaskPlan arraw::resolvedMask(const Mask& shape, bool invert, ImageSize sour
     plan.invert = invert;
     if (const auto* linear = std::get_if<LinearMask>(&shape)) {
         resolveLinear(*linear, source, plan);
+    } else if (const auto* brush = std::get_if<BrushMask>(&shape)) {
+        plan.kind = LocalMaskKind::Brush;
+        plan.brush.strokes = brush->strokes != nullptr ? brush->strokes : emptyStrokeList();
+        plan.brush.raster = source;
     } else {
         resolveRadial(std::get<RadialMask>(shape), source, plan);
     }
@@ -104,7 +108,9 @@ LocalPlan arraw::localPlanFor(const DevelopState& state, ImageSize source) {
     if (source.empty()) {
         throw std::invalid_argument("Cannot resolve local adjustments against an empty photograph");
     }
-    for (const LocalAdjustment& original : state.localAdjustments) {
+    for (std::size_t index = 0; index < state.localAdjustments.size(); ++index) {
+        const LocalAdjustment& original = state.localAdjustments[index];
+        const auto phase = static_cast<std::uint32_t>(index);
         if (!original.enabled) {
             continue;
         }
@@ -125,6 +131,10 @@ LocalPlan arraw::localPlanFor(const DevelopState& state, ImageSize source) {
         }
         LocalMaskPlan mask = resolvedMask(adjustment.shape, adjustment.invert, source);
         mask.k = k;
+        if (mask.kind == LocalMaskKind::Brush) {
+            mask.brush.slot = static_cast<std::uint32_t>(plan.brushCount());
+            mask.brush.phase = phase;
+        }
         for (std::size_t row = 0; row < localControlCount; ++row) {
             if (mask.k[row] != 0.0F) {
                 plan.touched |= std::uint32_t{1} << row;
@@ -192,7 +202,9 @@ PreTapLocal arraw::preTapLocalFieldsOf(const LocalPlan& local) {
                          .centreX = mask.centreX,
                          .centreY = mask.centreY,
                          .matrix = mask.matrix,
-                         .inner = mask.inner};
+                         .inner = mask.inner,
+                         .brush = mask.brush};
+        entry.brush.slot = 0;
         std::copy_n(mask.k.begin(), preTapControlCount, entry.k.begin());
         view.masks.push_back(entry);
     }

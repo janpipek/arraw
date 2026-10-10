@@ -4,6 +4,7 @@
 #include "Presence.h"
 #include "TonePlan.h"
 
+#include <BrushStrokes.h>
 #include <ColorEncoding.h>
 #include <DevelopState.h>
 #include <ImageBuffer.h>
@@ -14,6 +15,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 namespace arraw {
@@ -62,7 +64,36 @@ inline constexpr std::size_t preTapControlCount =
 enum class LocalMaskKind : std::uint32_t {
     Linear = 0, ///< A graduated fade.
     Radial = 1, ///< An oval with a feathered edge.
+    Brush = 2,  ///< Strokes painted on the photograph; read from packed coverage.
 };
+
+/// @brief Where a brush mask's coverage comes from, and where it lives (ADR 044, section 7).
+struct BrushCoverageRef {
+    std::shared_ptr<const StrokeList> strokes; ///< Null for linear and radial masks.
+    ImageSize raster;                          ///< The rendered source's size.
+    std::uint32_t slot = 0;  ///< 0 to 15, in plan order: plane slot / 4, channel slot % 4.
+    std::uint32_t phase = 0; ///< Dither phase: the mask's index in the state's list.
+
+    /// @brief Compares by meaning: equal sizes, slots and phases, and the same pointer or equal
+    /// lists.
+    friend bool operator==(const BrushCoverageRef& a, const BrushCoverageRef& b) {
+        return a.raster == b.raster && a.slot == b.slot && a.phase == b.phase &&
+               (a.strokes == b.strokes ||
+                (a.strokes != nullptr && b.strokes != nullptr && *a.strokes == *b.strokes));
+    }
+};
+
+/// @brief The quantised coverage of every brush slot at one pixel: 0 to 255, by slot.
+///
+/// Slots that no brush of the plan uses stay zero.
+struct PixelCoverage {
+    std::array<std::uint8_t, maximumLocalAdjustments> codes{}; ///< Code of each slot.
+};
+
+/// @brief Gives the weight a coverage code stands for: `code / 255`.
+[[nodiscard]] constexpr float coverageWeight(std::uint8_t code) noexcept {
+    return static_cast<float>(code) / 255.0F;
+}
 
 /// @brief One mask, resolved against the size of the source being rendered.
 ///
@@ -90,6 +121,9 @@ struct LocalMaskPlan {
     /// @brief Radial: the distance `d` below which the weight is one.
     float inner = 0.0F;
 
+    /// @brief Brush: where the coverage comes from; empty for the other kinds.
+    BrushCoverageRef brush;
+
     /// @brief What the mask adds to each control where its weight is one: `opacity * delta`,
     /// in setting units, in the table's order.
     LocalAmounts k{};
@@ -114,6 +148,14 @@ struct LocalPlan {
     /// @brief One bit (::arraw::bitOf) per control that any mask in the block carries a non-zero
     /// `k` for, so that a pixel sums only those.
     std::uint32_t touched = 0;
+
+    /// @brief Number of brush masks in the block: the slots in use.
+    [[nodiscard]] std::size_t brushCount() const noexcept {
+        return static_cast<std::size_t>(
+            std::count_if(masks.begin(), masks.end(), [](const LocalMaskPlan& mask) {
+                return mask.kind == LocalMaskKind::Brush;
+            }));
+    }
 
     /// @brief Whether the block holds no mask, and the chain is the global one.
     [[nodiscard]] bool empty() const noexcept {
@@ -158,10 +200,15 @@ struct LocalPlan {
 /// @param x Column of the pixel centre in source pixels: the pixel's column plus one half.
 /// @param y Row of the pixel centre in source pixels.
 ///
-/// Mirrored by `src/gpu/shaders/develop.frag`, which must change with it.
-[[nodiscard]] inline float maskWeight(const LocalMaskPlan& mask, float x, float y) noexcept {
+/// @param coverage The pixel's coverage codes; read only by a brush.
+///
+/// Mirrored by `src/gpu/shaders/develop.frag`, which must change with it (for linear and radial).
+[[nodiscard]] inline float maskWeight(const LocalMaskPlan& mask, float x, float y,
+                                      const PixelCoverage& coverage) noexcept {
     float weight = 0.0F;
-    if (mask.kind == LocalMaskKind::Linear) {
+    if (mask.kind == LocalMaskKind::Brush) {
+        weight = coverageWeight(coverage.codes[mask.brush.slot]);
+    } else if (mask.kind == LocalMaskKind::Linear) {
         const float t = mask.alpha * x + mask.beta * y + mask.gamma;
         weight = 1.0F - smoothstep(0.0F, 1.0F, t);
     } else {
@@ -182,13 +229,15 @@ struct LocalPlan {
 /// @param local Resolved block.
 /// @param x Column of the pixel centre in source pixels.
 /// @param y Row of the pixel centre in source pixels.
+/// @param coverage The pixel's coverage codes, for the brush masks.
 /// @return The sums in setting units; zero for a control no mask touches.
 ///
 /// Mirrored by `src/gpu/shaders/develop.frag`, which must change with it.
-[[nodiscard]] inline LocalAmounts localSumsAt(const LocalPlan& local, float x, float y) noexcept {
+[[nodiscard]] inline LocalAmounts localSumsAt(const LocalPlan& local, float x, float y,
+                                              const PixelCoverage& coverage) noexcept {
     LocalAmounts sums{};
     for (const LocalMaskPlan& mask : local.masks) {
-        const float weight = maskWeight(mask, x, y);
+        const float weight = maskWeight(mask, x, y, coverage);
         for (std::size_t control = 0; control < localControlCount; ++control) {
             if ((local.touched >> control & 1U) != 0) {
                 sums[control] += weight * mask.k[control];
@@ -244,7 +293,10 @@ struct PreTapMask {
     float centreY = 0.0F;                       ///< @copydoc LocalMaskPlan::centreY
     std::array<float, 4> matrix{};              ///< @copydoc LocalMaskPlan::matrix
     float inner = 0.0F;                         ///< @copydoc LocalMaskPlan::inner
-    std::array<float, preTapControlCount> k{};  ///< The pre-tap controls' amounts.
+    /// @brief Brush: the strokes, raster size and phase; the slot is zeroed, because it is only
+    /// where the codes are stored and must not make a recount of the curve histogram.
+    BrushCoverageRef brush;
+    std::array<float, preTapControlCount> k{}; ///< The pre-tap controls' amounts.
 
     friend bool operator==(const PreTapMask&, const PreTapMask&) = default;
 };

@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
+#include <variant>
 
 using namespace arraw;
 
@@ -60,6 +61,9 @@ MaskCoverage arraw::maskCoverage(const LocalAdjustment& adjustment, const Develo
         !std::isfinite(region.height) || !(region.width > 0.0) || !(region.height > 0.0)) {
         throw std::invalid_argument("A coverage region must be finite and not empty");
     }
+    if (std::holds_alternative<BrushMask>(adjustment.shape)) {
+        throw std::invalid_argument("The coverage of a brush mask is not drawn yet");
+    }
     const LocalMaskPlan mask =
         resolvedMask(normalised(adjustment.shape), adjustment.invert, frame.source().size);
 
@@ -86,8 +90,9 @@ MaskCoverage arraw::maskCoverage(const LocalAdjustment& adjustment, const Develo
         const double rowU = origin.u * sourceWidth + row * downU;
         const double rowV = origin.v * sourceHeight + row * downV;
         for (std::uint32_t column = 0; column < size.width; ++column) {
-            const float weight = maskWeight(mask, static_cast<float>(rowU + column * acrossU),
-                                            static_cast<float>(rowV + column * acrossV));
+            const float weight =
+                maskWeight(mask, static_cast<float>(rowU + column * acrossU),
+                           static_cast<float>(rowV + column * acrossV), PixelCoverage{});
             // Round half up: the weight is never negative.
             *out++ = static_cast<std::uint8_t>(std::clamp(weight, 0.0F, 1.0F) * 255.0F + 0.5F);
         }

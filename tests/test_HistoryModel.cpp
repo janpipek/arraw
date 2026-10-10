@@ -371,3 +371,23 @@ TEST_CASE("A step that changes settings alone is worded as before", "[app][histo
     built.then(next);
     CHECK(built.textOfLast() == "Exposure +0.50 EV");
 }
+
+TEST_CASE("A brush is worded by its name, and a stroke change is Paint",
+          "[app][history][local][brush]") {
+    BuiltStates built;
+    built.then(withLocalAdjustmentAdded(built.last(), BrushMask{}));
+    CHECK(built.textOfLast() == "Add Brush 1");
+    const LocalAdjustmentId id = idOf(built.last(), 0);
+    built.then(withLocalDelta(built.last(), id, "exposure", 0.5));
+    CHECK(built.textOfLast() == "Brush 1: Exposure +0.50 EV");
+    Stroke stroke{0.02F, 0.5F, 1.0F, false, {{0.2F, 0.2F}, {0.6F, 0.5F}}};
+    built.then(withStrokeAppended(built.last(), id, stroke));
+    CHECK(built.textOfLast() == "Paint Brush 1");
+    // Strokes and a delta in one step are several aspects.
+    DevelopState both = withStrokeAppended(built.last(), id, stroke);
+    both = withLocalDelta(both, id, "contrast", 10.0);
+    built.then(both);
+    CHECK(built.textOfLast() == "Edit Brush 1");
+    built.then(withLocalAdjustmentRemoved(built.last(), id));
+    CHECK(built.textOfLast() == "Remove Brush 1");
+}

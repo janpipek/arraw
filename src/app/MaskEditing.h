@@ -112,14 +112,15 @@ struct HandlePosition {
 /// @brief Gives the dots of a mask's handles, in grab priority order.
 ///
 /// Linear: both ends, then the middle. Radial: the rotation knob, the four radius points, the
-/// feather knob, then the centre. The band lines of a linear mask are not dots; see
-/// ::arraw::app::linearMarks.
+/// feather knob, then the centre. A brush has none. The band lines of a linear mask are not dots;
+/// see ::arraw::app::linearMarks.
 [[nodiscard]] std::vector<HandlePosition> handlePositions(const Mask& mask,
                                                           const MaskViewMapping& mapping);
 
 /// @brief Gives where a mask's pin is drawn: the middle of a linear mask's ends, a radial mask's
 /// centre.
-[[nodiscard]] QPointF pinPosition(const Mask& mask, const MaskViewMapping& mapping);
+/// @return The position, or none for a brush, which has no pin: it is selected from the list.
+[[nodiscard]] std::optional<QPointF> pinPosition(const Mask& mask, const MaskViewMapping& mapping);
 
 /// @brief Finds the handle under a position.
 ///

@@ -12,8 +12,10 @@
 
 #include <cctype>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace arraw::python {
@@ -74,6 +76,131 @@ std::vector<SettingDescriptor> listDescriptors() {
                           row.affects, row.scope});
     }
     return result;
+}
+
+/// @brief Binds the brush's value classes: a stroke, and the mask of strokes.
+///
+/// A stroke keeps the numbers it is given; building a mask normalises each (clamps, as the edit
+/// rules do) and then makes the list, which refuses what is not finite and what passes a cap or
+/// a budget (a ValueError).
+void bindBrush(nb::module_& m) {
+    nb::class_<Stroke> stroke(
+        m, "Stroke",
+        "One brush stroke: a dab `radius` in long-edge units (0.0005 to 1), the `hardness` of its "
+        "core (0 to 1), the `flow` of one dab (0 to 1), whether it `erase`s coverage, and the "
+        "`points` of its path, (u, v) positions normalised to the frame, as a tuple. The numbers "
+        "are kept as given and clamped when the stroke is made into a BrushMask or appended to "
+        "one.");
+    stroke.def(
+        "__init__",
+        [](Stroke* self, const nb::object& radius, const nb::object& hardness,
+           const nb::object& flow, const nb::object& erase, std::vector<SensorPoint> points) {
+            Stroke value;
+            value.radius = convertValue<float>(radius, "radius");
+            value.hardness = convertValue<float>(hardness, "hardness");
+            value.flow = convertValue<float>(flow, "flow");
+            value.erase = convertValue<bool>(erase, "erase");
+            value.points = std::move(points);
+            new (self) Stroke(std::move(value));
+        },
+        nb::arg("radius").none() = 0.02F, nb::arg("hardness").none() = 0.5F,
+        nb::arg("flow").none() = 1.0F, nb::arg("erase").none() = false,
+        nb::arg("points") = nb::tuple(),
+        nb::sig("def __init__(self, radius: float = 0.02, hardness: float = 0.5, flow: float = "
+                "1.0, erase: bool = False, points: collections.abc.Sequence[tuple[float, float]] "
+                "= ()) -> None"));
+    stroke.def_prop_ro("radius", [](const Stroke& self) { return shortestDouble(self.radius); });
+    stroke.def_prop_ro("hardness",
+                       [](const Stroke& self) { return shortestDouble(self.hardness); });
+    stroke.def_prop_ro("flow", [](const Stroke& self) { return shortestDouble(self.flow); });
+    stroke.def_prop_ro("erase", [](const Stroke& self) { return self.erase; });
+    stroke.def_prop_ro(
+        "points",
+        [](const Stroke& self) {
+            nb::list items;
+            for (const SensorPoint& point : self.points) {
+                items.append(nb::cast(point));
+            }
+            return nb::steal<nb::object>(PySequence_Tuple(items.ptr()));
+        },
+        nb::sig("def points(self) -> tuple[tuple[float, float], ...]"));
+    stroke.def(nb::self == nb::self);
+    stroke.def("__hash__", [](const Stroke& self) {
+        nb::list items;
+        for (const SensorPoint& point : self.points) {
+            items.append(nb::cast(point));
+        }
+        return nb::hash(nb::make_tuple(self.radius, self.hardness, self.flow, self.erase,
+                                       nb::steal<nb::object>(PySequence_Tuple(items.ptr()))));
+    });
+    stroke.def("__repr__", [](const Stroke& self) {
+        return "Stroke(radius=" + formatFloat(self.radius) +
+               ", hardness=" + formatFloat(self.hardness) + ", flow=" + formatFloat(self.flow) +
+               ", erase=" + (self.erase ? "True" : "False") + ", " +
+               std::to_string(self.points.size()) + " points)";
+    });
+    stroke.def(
+        "replace",
+        [](const Stroke& self, const nb::kwargs& keywords) {
+            Stroke copy = self;
+            for (auto [key, value] : keywords) {
+                const std::string name = nb::cast<std::string>(key);
+                if (name == "radius") {
+                    copy.radius = convertValue<float>(value, name);
+                } else if (name == "hardness") {
+                    copy.hardness = convertValue<float>(value, name);
+                } else if (name == "flow") {
+                    copy.flow = convertValue<float>(value, name);
+                } else if (name == "erase") {
+                    copy.erase = convertValue<bool>(value, name);
+                } else if (name == "points") {
+                    copy.points = convertValue<std::vector<SensorPoint>>(value, name);
+                } else {
+                    throw nb::type_error(
+                        ("replace() got an unexpected keyword argument '" + name + "'").c_str());
+                }
+            }
+            return copy;
+        },
+        "Return a copy with the given attributes replaced.");
+
+    nb::class_<BrushMask> brush(
+        m, "BrushMask",
+        "A stencil painted on the photograph: the `strokes`, in painting order, in the sensor "
+        "frame. Making one clamps each stroke's numbers as adding a mask does, then builds the "
+        "list; ValueError for a number that is not finite, a stroke without points, or a cap or "
+        "budget passed (at most 2000 strokes, 100000 points, a swept area of 4 and 2 million "
+        "dabs). `rasteriser` is the version of the rules that turn the strokes into coverage.");
+    brush.def(
+        "__init__",
+        [](BrushMask* self, std::vector<Stroke> strokes) {
+            for (Stroke& each : strokes) {
+                each = normalised(std::move(each));
+            }
+            new (self) BrushMask{std::make_shared<const StrokeList>(std::move(strokes))};
+        },
+        nb::arg("strokes") = nb::tuple(),
+        nb::sig("def __init__(self, strokes: collections.abc.Sequence[Stroke] = ()) -> None"));
+    brush.def_prop_ro(
+        "strokes",
+        [](const BrushMask& self) {
+            nb::list items;
+            for (const auto& each : self.strokes->strokes()) {
+                items.append(nb::cast(*each));
+            }
+            return nb::steal<nb::object>(PySequence_Tuple(items.ptr()));
+        },
+        nb::sig("def strokes(self) -> tuple[Stroke, ...]"));
+    brush.def_prop_ro("rasteriser",
+                      [](const BrushMask& self) { return self.strokes->rasteriser(); });
+    brush.def(nb::self == nb::self);
+    brush.def("__hash__", [](const BrushMask& self) {
+        return nb::hash(nb::make_tuple(self.strokes->rasteriser(), self.strokes->contentHash()));
+    });
+    brush.def("__repr__", [](const BrushMask& self) {
+        return "BrushMask(" + std::to_string(self.strokes->size()) + " strokes, " +
+               std::to_string(self.strokes->pointCount()) + " points)";
+    });
 }
 
 } // namespace
@@ -287,6 +414,7 @@ void bindSettings(nb::module_& m) {
         field("centre", &RadialMask::centre), field("radius_x", &RadialMask::radiusX),
         field("radius_y", &RadialMask::radiusY), field("angle", &RadialMask::angle),
         field("feather", &RadialMask::feather));
+    bindBrush(m);
     bindFrozen<LocalDeltas>(
         m, "LocalDeltas",
         "What a local adjustment adds to the global controls where its mask has full weight, in "
@@ -302,8 +430,9 @@ void bindSettings(nb::module_& m) {
         field("vibrance", &LocalDeltas::vibrance));
     bindFrozen<LocalAdjustment>(
         m, "LocalAdjustment",
-        "One masked adjustment: a LinearMask or RadialMask and the LocalDeltas added where it "
-        "applies, scaled by `opacity` (0 to 1) and, with `invert`, applied outside the mask "
+        "One masked adjustment: a LinearMask, RadialMask or BrushMask and the LocalDeltas added "
+        "where it applies, scaled by `opacity` (0 to 1) and, with `invert`, applied outside the "
+        "mask "
         "instead. `id` is the photograph's own identity for it, unique in its state and never "
         "reused; a value built here carries 0 and gets its id when added with Photo.add_*_mask. "
         "Adjustments are summed in list order; up to 16 per photograph.",

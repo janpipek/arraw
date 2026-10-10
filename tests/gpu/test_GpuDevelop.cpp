@@ -9,6 +9,8 @@
 #include <ImageBuffer.h>
 #include <ImageImport.h>
 #include <ImagePyramid.h>
+#include <LocalAdjustmentEdits.h>
+#include <LocalAdjustments.h>
 #include <RenderCheckpoint.h>
 
 #include <catch2/catch_test_macros.hpp>
@@ -338,4 +340,15 @@ TEST_CASE("The CPU refuses a checkpoint that lives on a device", "[gpu][develop]
     const RenderCheckpoint resident = developOnGpu(context, source, state, Stage::Pointwise);
     REQUIRE(resident.isResident());
     REQUIRE_THROWS_AS(resumeFrom(resident, source, state, Stage::Resize), std::invalid_argument);
+}
+
+TEST_CASE("The GPU refuses a brush, in a render and in a sample", "[gpu][develop][brush]") {
+    GpuContext& context = gpuContext();
+    const ImageBuffer source = fixtureImage("linear-32x24-neutral.dng");
+    LocalAdjustment adjustment;
+    adjustment.shape = BrushMask{};
+    adjustment.deltas.exposure = 1.0F;
+    const DevelopState state = withLocalAdjustmentAdded(DevelopState{}, adjustment);
+    REQUIRE_THROWS_AS(developOnGpu(context, source, state), std::runtime_error);
+    REQUIRE_THROWS_AS(sampleOnGpu(context, source, state, Tap::CurveInput), std::runtime_error);
 }

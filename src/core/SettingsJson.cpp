@@ -184,6 +184,9 @@ std::string fieldJson(const WrittenFields& fields, std::string_view key) {
 
 /// @brief Spells one mask as a one-line JSON object.
 std::string maskToJson(const LocalAdjustment& adjustment) {
+    if (std::holds_alternative<BrushMask>(adjustment.shape)) {
+        throw std::logic_error("brush masks are not persisted yet");
+    }
     const WrittenMask written = writtenForm(adjustment);
     std::string text = "{";
     for (const auto& [key, value] : written.top) {
