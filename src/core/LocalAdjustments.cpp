@@ -224,6 +224,22 @@ LocalAdjustment arraw::normalised(LocalAdjustment adjustment) {
     return adjustment;
 }
 
+bool arraw::carriesEffect(const LocalAdjustment& adjustment) noexcept {
+    if (!adjustment.enabled || !std::isfinite(adjustment.opacity)) {
+        return false;
+    }
+    const float opacity = std::clamp(adjustment.opacity, 0.0F, 1.0F);
+    return std::ranges::any_of(localAdjustmentDescriptors, [&](const LocalDescriptor& row) {
+        const float raw = adjustment.deltas.*row.member;
+        if (!std::isfinite(raw)) {
+            return false;
+        }
+        const auto delta = static_cast<float>(
+            std::clamp(static_cast<double>(raw), row.range.minimum, row.range.maximum));
+        return opacity * delta != 0.0F;
+    });
+}
+
 void arraw::validate(const LocalAdjustment& adjustment) {
     if (!isStorableName(adjustment.name)) {
         throw std::invalid_argument("a mask's name must be valid UTF-8 without control characters "

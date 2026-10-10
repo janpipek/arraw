@@ -96,7 +96,7 @@ public:
 
     /// @brief Tells whether a stroke is under way.
     [[nodiscard]] bool stroking() const noexcept {
-        return gesture_ == Gesture::Stroke;
+        return gesture_ == Gesture::Stroke || finishing_;
     }
 
     /// @brief Gives the radius of the brush's ring, in logical pixels; zero without a photograph.
@@ -224,6 +224,9 @@ private:
     /// @brief Gives what the tint would be made from now, or nothing when it is not wanted.
     [[nodiscard]] std::optional<CoverageInputs> coverageInputs() const;
 
+    /// @brief Tells whether the tint is drawn: the O key's, or the brush has no other effect.
+    [[nodiscard]] bool tintWanted() const;
+
     /// @brief Asks for the tint to be remade on the next turn of the event loop.
     void scheduleCoverage();
 
@@ -285,6 +288,8 @@ private:
     std::optional<LocalAdjustmentId> selection_;
     MaskTool tool_ = MaskTool::None;
     bool tint_ = false;
+    /// Whether the window is handling the end of a stroke, which still counts as one.
+    bool finishing_ = false;
     bool spaceHeld_ = false;
     /// Whether Alt is held, which inverts the brush's Erase setting.
     bool altHeld_ = false;

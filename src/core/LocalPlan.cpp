@@ -120,13 +120,11 @@ LocalPlan arraw::localPlanFor(const DevelopState& state, ImageSize source) {
         adjustment = normalised(std::move(adjustment));
 
         LocalAmounts k{};
-        bool carries = false;
         for (std::size_t row = 0; row < localControlCount; ++row) {
             const LocalDescriptor& descriptor = localAdjustmentDescriptors[row];
             k[row] = adjustment.opacity * adjustment.deltas.*descriptor.member;
-            carries = carries || k[row] != 0.0F;
         }
-        if (!carries) {
+        if (!carriesEffect(adjustment)) {
             continue;
         }
         LocalMaskPlan mask = resolvedMask(adjustment.shape, adjustment.invert, source);

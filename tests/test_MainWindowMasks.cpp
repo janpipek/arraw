@@ -10,7 +10,9 @@
 #include "ui/MasksPanel.h"
 #include "ui/PhotoView.h"
 #include "ui/SettingSlider.h"
+#include "ui/StatusLine.h"
 
+#include <BrushStrokes.h>
 #include <DevelopState.h>
 #include <LocalAdjustmentEdits.h>
 #include <Photo.h>
@@ -21,6 +23,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QCoreApplication>
+#include <QDialog>
 #include <QDir>
 #include <QDockWidget>
 #include <QDoubleSpinBox>
@@ -35,7 +38,9 @@
 #include <QTabBar>
 #include <QTabWidget>
 #include <QTest>
+#include <QTimer>
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
@@ -879,4 +884,400 @@ TEST_CASE("Choosing a tool in mid-stroke cancels the stroke", "[app][window][mas
     QTest::mouseClick(&w.button("maskLinear"), Qt::LeftButton);
     CHECK_FALSE(w.overlay().stroking());
     CHECK(w.steps() == 1);
+}
+
+namespace {
+
+/// Forgets the brush settings the earlier windows stored, then again when it goes out of scope.
+struct BrushSettingsReset {
+    BrushSettingsReset() {
+        QSettings().remove("brush");
+    }
+    ~BrushSettingsReset() {
+        QSettings().remove("brush");
+    }
+};
+
+/// A brush of one stroke of a given radius that has used `area` of the swept-area budget.
+DevelopState brushUsing(double area, float radius) {
+    Stroke stroke{radius, 0.5F, 1.0F, false, {{0.1F, 0.5F}}};
+    double length = 0.0;
+    const double wanted = area / static_cast<double>(radius);
+    bool right = true;
+    while (length < wanted) {
+        const double step = std::min(0.8, wanted - length);
+        const SensorPoint last = stroke.points.back();
+        stroke.points.push_back({static_cast<float>(right ? last.u + step : last.u - step), 0.5F});
+        right = !right;
+        length += step;
+    }
+    return withLocalAdjustmentAdded(DevelopState{}, test::brushMaskWith({stroke}));
+}
+
+/// Starts a stroke at one place and moves to another, leaving the button down.
+void startStroke(const Window& w, QPointF from, QPointF to) {
+    w.mouse(QEvent::MouseButtonPress, from);
+    for (int step = 1; step <= 4; ++step) {
+        w.mouse(QEvent::MouseMove, from + (to - from) * step / 4.0);
+    }
+}
+
+void armBrush(const Window& w) {
+    QTest::mouseClick(&w.button("maskBrush"), Qt::LeftButton);
+    REQUIRE(w.overlay().painting());
+}
+
+} // namespace
+
+TEST_CASE("Strokes make steps, and Esc starts a new brush; undo and redo take them back",
+          "[app][window][masks][brush]") {
+    const BrushSettingsReset reset;
+    Window w(640, 480, {}, false);
+    armBrush(w);
+    w.drag(w.at(0.3, 0.3), w.at(0.6, 0.6));
+    REQUIRE(w.step(0) == "Add Brush 1");
+    const QImage plain = w.view().wholeFrameImage();
+    // The brush carries nothing yet; with a delta the render shows where it painted.
+    w.setRow("local.exposure", 2.0);
+    REQUIRE(w.waitForRenderOtherThan(plain));
+    const QImage lit = w.view().wholeFrameImage();
+    w.drag(w.at(0.3, 0.7), w.at(0.8, 0.7));
+    CHECK(w.step(0) == "Paint Brush 1");
+    CHECK(w.waitForRenderOtherThan(lit));
+
+    w.press(Qt::Key_Escape);
+    CHECK(w.overlay().painting());
+    w.drag(w.at(0.2, 0.2), w.at(0.4, 0.2));
+    CHECK(w.step(0) == "Add Brush 2");
+    QListView& list = *w.masks().findChild<QListView*>("maskList");
+    CHECK(list.model()->rowCount() == 2);
+
+    w.action("undoAction").trigger();
+    CHECK(list.model()->rowCount() == 1);
+    w.action("redoAction").trigger();
+    CHECK(list.model()->rowCount() == 2);
+}
+
+TEST_CASE("The brush stays armed with the new mask selected after its first stroke",
+          "[app][window][masks][brush]") {
+    const BrushSettingsReset reset;
+    Window w(640, 480, {}, false);
+    armBrush(w);
+    w.drag(w.at(0.3, 0.3), w.at(0.6, 0.6));
+    CHECK(w.overlay().painting());
+    CHECK(w.overlay().selection().has_value());
+}
+
+TEST_CASE("C, the arrow keys and Esc in the middle of a stroke leave no step",
+          "[app][window][masks][brush]") {
+    const BrushSettingsReset reset;
+    Window w;
+    armBrush(w);
+    SECTION("Esc") {
+        startStroke(w, w.at(0.3, 0.3), w.at(0.5, 0.5));
+        REQUIRE(w.overlay().stroking());
+        w.press(Qt::Key_Escape);
+        CHECK_FALSE(w.overlay().stroking());
+        CHECK(w.overlay().painting());
+    }
+    SECTION("C") {
+        startStroke(w, w.at(0.3, 0.3), w.at(0.5, 0.5));
+        REQUIRE(w.overlay().stroking());
+        w.press(Qt::Key_C);
+        CHECK_FALSE(w.overlay().stroking());
+        CHECK(w.view().isCropMode());
+    }
+    SECTION("The arrow keys") {
+        startStroke(w, w.at(0.3, 0.3), w.at(0.5, 0.5));
+        REQUIRE(w.overlay().stroking());
+        w.press(Qt::Key_Right);
+        CHECK_FALSE(w.overlay().stroking());
+        CHECK(QTest::qWaitFor([&] { return w.window.windowTitle().startsWith("b.png"); }, 20000));
+    }
+    CHECK(w.steps() == 1);
+    QListView& list = *w.masks().findChild<QListView*>("maskList");
+    CHECK(list.model()->rowCount() == 0);
+}
+
+TEST_CASE("Undo in the middle of a stroke commits it and takes it back; Redo is off from the press",
+          "[app][window][masks][brush]") {
+    const BrushSettingsReset reset;
+    Window w(640, 480, {}, false);
+    armBrush(w);
+    w.drag(w.at(0.3, 0.3), w.at(0.6, 0.6));
+    w.action("undoAction").trigger();
+    REQUIRE(w.action("redoAction").isEnabled());
+
+    startStroke(w, w.at(0.3, 0.3), w.at(0.5, 0.5));
+    REQUIRE(w.overlay().stroking());
+    CHECK_FALSE(w.action("redoAction").isEnabled());
+    const QKeyCombination redoKey = w.action("redoAction").shortcut()[0];
+    w.press(redoKey.key(), redoKey.keyboardModifiers());
+    CHECK(w.overlay().stroking());
+
+    QListView& list = *w.masks().findChild<QListView*>("maskList");
+    REQUIRE(list.model()->rowCount() == 1);
+    w.action("undoAction").trigger();
+    CHECK_FALSE(w.overlay().stroking());
+    CHECK(list.model()->rowCount() == 0);
+    // The stroke was committed as a step before it was undone, so Redo restores it.
+    REQUIRE(w.action("redoAction").isEnabled());
+    w.action("redoAction").trigger();
+    CHECK(list.model()->rowCount() == 1);
+    CHECK(w.step(0) == "Add Brush 1");
+}
+
+TEST_CASE("A rotation or a paste in the middle of a stroke follows the stroke's own step",
+          "[app][window][masks][brush]") {
+    const BrushSettingsReset reset;
+    Window w(640, 480, {}, false);
+    armBrush(w);
+    w.drag(w.at(0.3, 0.3), w.at(0.6, 0.6));
+    REQUIRE(w.steps() == 2);
+
+    SECTION("Rotate") {
+        startStroke(w, w.at(0.3, 0.7), w.at(0.6, 0.7));
+        REQUIRE(w.overlay().stroking());
+        w.press(Qt::Key_BracketRight, Qt::ControlModifier);
+        CHECK_FALSE(w.overlay().stroking());
+        REQUIRE(w.steps() == 4);
+        CHECK(w.step(1) == "Paint Brush 1");
+        CHECK(w.step(0) != "Paint Brush 1");
+    }
+    SECTION("Paste") {
+        // Something to paste: the copied settings differ from the photograph's now.
+        QDialog* seen = nullptr;
+        QTimer::singleShot(0, [&seen] {
+            seen = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+            if (seen != nullptr) {
+                seen->accept();
+            }
+        });
+        w.action("copySettingsAction").trigger();
+        REQUIRE(seen != nullptr);
+        w.setRow("exposure", 1.0);
+        const int before = w.steps();
+        startStroke(w, w.at(0.3, 0.7), w.at(0.6, 0.7));
+        REQUIRE(w.overlay().stroking());
+        w.action("pasteSettingsAction").trigger();
+        CHECK_FALSE(w.overlay().stroking());
+        REQUIRE(w.steps() == before + 2);
+        CHECK(w.step(1) == "Paint Brush 1");
+        CHECK(w.step(0) == "Paste Settings");
+    }
+}
+
+TEST_CASE("A brush at its budget refuses a press, and a stroke that reaches it commits what fits",
+          "[app][window][masks][brush]") {
+    const BrushSettingsReset reset;
+    BrushSettings big;
+    big.radius = 0.4F;
+    SECTION("Refused at the press") {
+        const DevelopState state = brushUsing(3.95, big.radius);
+        Window w(640, 480, QSize(1400, 900), false, &state);
+        QListView& list = *w.masks().findChild<QListView*>("maskList");
+        emit list.clicked(list.model()->index(0, 0));
+        REQUIRE(w.overlay().painting());
+        w.panel().setBrushSettings(big);
+        w.overlay().setBrushSettings(big);
+        const int before = w.steps();
+        w.window.findChild<StatusLine*>()->clearMessage();
+        w.mouse(QEvent::MouseButtonPress, w.at(0.3, 0.5));
+        w.mouse(QEvent::MouseButtonRelease, w.at(0.3, 0.5), Qt::NoButton);
+        CHECK_FALSE(w.overlay().stroking());
+        CHECK(w.steps() == before);
+        CHECK(w.window.findChild<StatusLine*>()->message().contains("full"));
+    }
+    SECTION("Stopped by the budget") {
+        const DevelopState state = brushUsing(3.8, big.radius);
+        Window w(640, 480, QSize(1400, 900), false, &state);
+        QListView& list = *w.masks().findChild<QListView*>("maskList");
+        emit list.clicked(list.model()->index(0, 0));
+        REQUIRE(w.overlay().painting());
+        w.panel().setBrushSettings(big);
+        w.overlay().setBrushSettings(big);
+        const int before = w.steps();
+        DevelopState last;
+        QObject::connect(&w.overlay(), &MaskOverlay::stateEdited,
+                         [&last](const DevelopState& next) { last = next; });
+        w.window.findChild<StatusLine*>()->clearMessage();
+        w.drag(w.at(0.1, 0.5), w.at(0.9, 0.5));
+        CHECK(w.steps() == before + 1);
+        CHECK(w.step(0) == "Paint Brush 1");
+        CHECK(w.overlay().painting());
+        // Recomputed at the release: the brush is at its budget now.
+        CHECK(w.overlay().cursor().shape() == Qt::ForbiddenCursor);
+        CHECK(w.window.findChild<StatusLine*>()->message().contains("stops"));
+        REQUIRE(last.localAdjustments.size() == 1);
+        const auto& brush = std::get<BrushMask>(last.localAdjustments[0].shape);
+        REQUIRE(brush.strokes != nullptr);
+        CHECK(brush.strokes->size() == 2);
+        CHECK(brush.strokes->budget().sweptArea <= maximumSweptAreaPerMask);
+    }
+}
+
+TEST_CASE("The brush's keys change the settings, with either widget focused, and are kept",
+          "[app][window][masks][brush]") {
+    const BrushSettingsReset reset;
+    const BrushSettings start;
+    {
+        Window w(640, 480, QSize(1400, 900), false);
+        armBrush(w);
+        for (int count = 0; count < 3; ++count) {
+            w.press(Qt::Key_BracketRight);
+        }
+        CHECK(w.masks().brushSettings().radius ==
+              Catch::Approx(start.radius * 1.25F * 1.25F * 1.25F));
+        // From the photograph view as well.
+        w.view().setFocus();
+        w.press(Qt::Key_BracketRight);
+        CHECK(w.masks().brushSettings().radius ==
+              Catch::Approx(start.radius * 1.25F * 1.25F * 1.25F * 1.25F));
+        w.press(Qt::Key_BracketLeft);
+        w.press(Qt::Key_BraceRight);
+        CHECK(w.masks().brushSettings().hardness == Catch::Approx(start.hardness + 0.1F));
+        w.press(Qt::Key_BraceLeft);
+        w.press(Qt::Key_BraceLeft);
+        CHECK(w.masks().brushSettings().hardness == Catch::Approx(start.hardness - 0.1F));
+        w.press(Qt::Key_E);
+        CHECK(w.masks().brushSettings().erase);
+        w.press(Qt::Key_E);
+        CHECK_FALSE(w.masks().brushSettings().erase);
+
+        // The next stroke has the new radius.
+        DevelopState made;
+        QObject::connect(&w.overlay(), &MaskOverlay::stateEdited,
+                         [&made](const DevelopState& next) { made = next; });
+        w.drag(w.at(0.3, 0.3), w.at(0.5, 0.5));
+        REQUIRE(made.localAdjustments.size() == 1);
+        const auto& brush = std::get<BrushMask>(made.localAdjustments[0].shape);
+        REQUIRE(brush.strokes != nullptr);
+        CHECK((*brush.strokes)[0].radius == Catch::Approx(start.radius * 1.25F * 1.25F * 1.25F));
+    }
+    // A new window starts with what was left; Erase is not kept.
+    Window again(640, 480, {}, false);
+    CHECK(again.masks().brushSettings().radius ==
+          Catch::Approx(start.radius * 1.25F * 1.25F * 1.25F));
+    CHECK_FALSE(again.masks().brushSettings().erase);
+    // Outside the brush the keys do nothing.
+    const float before = again.masks().brushSettings().radius;
+    again.press(Qt::Key_M);
+    REQUIRE(again.view().isMaskMode());
+    QTest::mouseClick(&again.button("maskLinear"), Qt::LeftButton);
+    again.press(Qt::Key_BracketRight);
+    CHECK(again.masks().brushSettings().radius == before);
+}
+
+TEST_CASE("While a stroke is under way no thumbnail follows; the commit brings one",
+          "[app][window][masks][brush]") {
+    const BrushSettingsReset reset;
+    Window w(640, 480, QSize(1400, 900), false);
+    armBrush(w);
+    BrushSettings big;
+    big.radius = 0.3F;
+    w.panel().setBrushSettings(big);
+    w.overlay().setBrushSettings(big);
+    w.drag(w.at(0.2, 0.5), w.at(0.25, 0.5));
+    w.setRow("local.exposure", 2.0);
+    const QImage painted = w.view().wholeFrameImage();
+    QTest::qWait(200);
+    REQUIRE(QTest::qWaitFor([&] { return !w.window.renderIndicator().busy(); }, 20000));
+    const std::filesystem::path path = w.folder.file("a.png");
+    const QImage before = w.window.findChild<FilmStrip*>()->thumbnail(path);
+
+    startStroke(w, w.at(0.5, 0.2), w.at(0.5, 0.8));
+    REQUIRE(w.overlay().stroking());
+    // The renders come, and the view follows them, but not the strip.
+    REQUIRE(w.waitForRenderOtherThan(painted));
+    QTest::qWait(200);
+    CHECK(w.window.findChild<FilmStrip*>()->thumbnail(path) == before);
+    w.mouse(QEvent::MouseButtonRelease, w.at(0.5, 0.8), Qt::NoButton);
+    CHECK(QTest::qWaitFor(
+        [&] { return w.window.findChild<FilmStrip*>()->thumbnail(path) != before; }, 20000));
+}
+
+TEST_CASE("The render after a stroke's commit is the one of the committed state",
+          "[app][window][masks][brush]") {
+    const BrushSettingsReset reset;
+    DevelopState committed;
+    QImage shown;
+    {
+        Window w(640, 480, QSize(1400, 900), false);
+        armBrush(w);
+        w.drag(w.at(0.2, 0.5), w.at(0.25, 0.5));
+        w.setRow("local.exposure", 2.0);
+        QObject::connect(&w.overlay(), &MaskOverlay::stateEdited,
+                         [&committed](const DevelopState& next) { committed = next; });
+        w.drag(w.at(0.2, 0.3), w.at(0.8, 0.7));
+        QTest::qWait(100);
+        REQUIRE(QTest::qWaitFor([&] { return !w.window.renderIndicator().busy(); }, 20000));
+        shown = w.view().wholeFrameImage();
+    }
+    Window direct(640, 480, QSize(1400, 900), false, &committed);
+    REQUIRE(QTest::qWaitFor([&] { return !direct.window.renderIndicator().busy(); }, 20000));
+    CHECK(direct.view().wholeFrameImage() == shown);
+}
+
+TEST_CASE("A delta drag with the brush armed is not a stroke", "[app][window][masks][brush]") {
+    const BrushSettingsReset reset;
+    Window w(640, 480, {}, false);
+    armBrush(w);
+    w.drag(w.at(0.3, 0.3), w.at(0.6, 0.6));
+    REQUIRE(w.overlay().painting());
+    const QImage before = w.view().wholeFrameImage();
+    // A drag of the row's value, as a slider's drag is: it ends with the last value shown.
+    for (auto* row : w.window.findChildren<SettingSlider*>()) {
+        if (row->key() == "local.exposure") {
+            row->findChild<QDoubleSpinBox*>()->setValue(1.0);
+            CHECK_FALSE(w.overlay().stroking());
+            row->findChild<QDoubleSpinBox*>()->setValue(2.0);
+        }
+    }
+    w.panel().finishPendingEdit();
+    CHECK_FALSE(w.overlay().stroking());
+    CHECK(w.waitForRenderOtherThan(before));
+    QTest::qWait(100);
+    REQUIRE(QTest::qWaitFor([&] { return !w.window.renderIndicator().busy(); }, 20000));
+    const QImage after = w.view().wholeFrameImage();
+    CHECK(after != before);
+}
+
+TEST_CASE("A brush that changes nothing is tinted whether O is on or not",
+          "[app][window][masks][brush]") {
+    const BrushSettingsReset reset;
+    SECTION("Without deltas") {
+        Window w(640, 480, QSize(1400, 900), false);
+        armBrush(w);
+        REQUIRE_FALSE(w.overlay().overlayShown());
+        w.drag(w.at(0.3, 0.3), w.at(0.6, 0.6));
+        w.overlay().updateCoverage();
+        CHECK_FALSE(w.overlay().overlayShown());
+        CHECK_FALSE(w.overlay().coverage().isNull());
+        // Once it carries something the tint follows O again.
+        w.setRow("local.exposure", 1.0);
+        w.overlay().updateCoverage();
+        QTest::qWait(10);
+        w.overlay().updateCoverage();
+        CHECK(w.overlay().coverage().isNull());
+    }
+    SECTION("A disabled brush") {
+        DevelopState state = withLocalAdjustmentAdded(
+            DevelopState{}, test::brushMaskWith({Stroke{0.3F, 1.0F, 1.0F, false, {{0.5F, 0.5F}}}}));
+        state = withLocalDelta(state, state.localAdjustments[0].id, "exposure", 1.0);
+        state = withLocalAdjustmentEnabled(state, state.localAdjustments[0].id, false);
+        Window w(640, 480, QSize(1400, 900), false, &state);
+        QListView& list = *w.masks().findChild<QListView*>("maskList");
+        emit list.clicked(list.model()->index(0, 0));
+        REQUIRE(w.overlay().painting());
+        REQUIRE_FALSE(w.overlay().overlayShown());
+        // Arming alone, with no press yet, brings the tint.
+        CHECK(QTest::qWaitFor([&w] { return !w.overlay().coverage().isNull(); }));
+        // Disarmed with the brush still selected, the tint goes; armed again, it comes back.
+        QTest::mouseClick(&w.button("maskBrush"), Qt::LeftButton);
+        REQUIRE_FALSE(w.overlay().painting());
+        CHECK(QTest::qWaitFor([&w] { return w.overlay().coverage().isNull(); }));
+        QTest::mouseClick(&w.button("maskBrush"), Qt::LeftButton);
+        REQUIRE(w.overlay().painting());
+        CHECK(QTest::qWaitFor([&w] { return !w.overlay().coverage().isNull(); }));
+    }
 }

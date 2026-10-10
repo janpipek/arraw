@@ -248,6 +248,21 @@ MainWindow::MainWindow(DebugLog& debugLog, QWidget* parent)
     addMaskShortcut(QKeyCombination(Qt::Key_O), [masks] { masks->toggleOverlay(); });
     addMaskShortcut(QKeyCombination(Qt::Key_Delete), [masks] { masks->deleteSelected(); });
     addMaskShortcut(QKeyCombination(Qt::Key_Backspace), [masks] { masks->deleteSelected(); });
+    // The brush's keys, acting only while the tool paints. Shift+[ arrives as the brace on a US
+    // layout, so the braces are registered as keys of their own (ADR 044).
+    addMaskShortcut(QKeyCombination(Qt::Key_BracketLeft),
+                    [this] { changeBrush(resized(brushSettings_, -1)); });
+    addMaskShortcut(QKeyCombination(Qt::Key_BracketRight),
+                    [this] { changeBrush(resized(brushSettings_, 1)); });
+    addMaskShortcut(QKeyCombination(Qt::Key_BraceLeft),
+                    [this] { changeBrush(hardened(brushSettings_, -1)); });
+    addMaskShortcut(QKeyCombination(Qt::Key_BraceRight),
+                    [this] { changeBrush(hardened(brushSettings_, 1)); });
+    addMaskShortcut(QKeyCombination(Qt::Key_E), [this] {
+        BrushSettings flipped = brushSettings_;
+        flipped.erase = !flipped.erase;
+        changeBrush(flipped);
+    });
 
     // Long enough to coalesce the events of a drag, short enough to feel prompt.
     resizeTimer_.setSingleShot(true);
@@ -611,8 +626,22 @@ void MainWindow::buildDevelopDock() {
         }
     });
     connect(developPanel_, &DevelopPanel::maskToolChosen, this, &MainWindow::chooseMaskTool);
-    connect(developPanel_, &DevelopPanel::brushSettingsChanged, &photoView_->maskOverlay(),
-            &MaskOverlay::setBrushSettings);
+    {
+        QSettings store;
+        brushSettings_ = restoreBrushSettings(store);
+    }
+    developPanel_->setBrushSettings(brushSettings_);
+    photoView_->maskOverlay().setBrushSettings(brushSettings_);
+    connect(developPanel_, &DevelopPanel::brushSettingsChanged, this,
+            [this](const BrushSettings& settings) {
+                brushSettings_ = settings;
+                photoView_->maskOverlay().setBrushSettings(settings);
+                QSettings store;
+                saveBrushSettings(settings, store);
+            });
+    connect(
+        &photoView_->maskOverlay(), &MaskOverlay::brushRefused, this,
+        [this](BrushRefusal, const QString& message) { statusLine_->showMessage(message, 6000); });
     connect(developPanel_, &DevelopPanel::overlayToggled, &photoView_->maskOverlay(),
             &MaskOverlay::setOverlayShown);
     MaskOverlay& overlay = photoView_->maskOverlay();
@@ -736,8 +765,16 @@ void MainWindow::finishEdit(EditOrigin origin) {
             }
             return;
         }
-        open_->session.commit(origin);
-        refreshPanel();
+        // The request of a stroke's commit is queued like the stroke's, but gets the thumbnail.
+        committingStroke_ = photoView_->maskOverlay().stroking();
+        try {
+            open_->session.commit(origin);
+            refreshPanel();
+        } catch (...) {
+            committingStroke_ = false;
+            throw;
+        }
+        committingStroke_ = false;
     });
 }
 
@@ -815,6 +852,17 @@ void MainWindow::chooseMaskTool(MaskTool tool) {
     // The user's own choice ends a stroke under way; the program's disarming never does.
     photoView_->maskOverlay().cancelGesture();
     setMaskTool(tool);
+}
+
+void MainWindow::changeBrush(const BrushSettings& settings) {
+    if (!photoView_->maskOverlay().painting()) {
+        return;
+    }
+    brushSettings_ = settings;
+    developPanel_->setBrushSettings(settings);
+    photoView_->maskOverlay().setBrushSettings(settings);
+    QSettings store;
+    saveBrushSettings(settings, store);
 }
 
 void MainWindow::setMaskTool(MaskTool tool) {
@@ -1927,10 +1975,13 @@ void MainWindow::requestRender() {
         cropRequests_.emplace_back(latestRequest_, std::move(uncropped));
         return;
     }
+    // A stroke under way renders one request after another rather than cancelling each; the
+    // strip follows once, with the commit's request (ADR 044).
+    const bool stroking = photoView_->maskOverlay().stroking();
     PreviewView view{.region = std::nullopt,
                      .outputSize = photoView_->devicePixels(),
                      .devicePixelRatio = ratio,
-                     .thumbnailEdge = ThumbnailCache::maxEdge};
+                     .thumbnailEdge = stroking && !committingStroke_ ? 0 : ThumbnailCache::maxEdge};
     try {
         // The crop may have changed the frame; the view keeps its zoom and centre.
         const ImageSize cropped =
@@ -1951,7 +2002,8 @@ void MainWindow::requestRender() {
         // Left to the renderer, which reports what is wrong with the state.
     }
     renderIndicator_->begin();
-    latestRequest_ = previewRenderer_.request(state, std::move(view));
+    latestRequest_ = previewRenderer_.request(state, std::move(view),
+                                              stroking ? Supersede::Queue : Supersede::Cancel);
 }
 
 void MainWindow::showResult(const PreviewResult& result) {

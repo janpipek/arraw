@@ -7,6 +7,7 @@
 
 #include <DevelopedFrame.h>
 #include <LocalAdjustmentEdits.h>
+#include <SettingDescriptors.h>
 
 #include <QCoreApplication>
 #include <QCursor>
@@ -186,14 +187,24 @@ void MaskOverlay::setSelection(std::optional<LocalAdjustmentId> id) {
 
 void MaskOverlay::setTool(MaskTool tool) {
     tool_ = tool;
+    scheduleCoverage();
     refreshBrushFull();
     update();
 }
 
 void MaskOverlay::setBrushSettings(const BrushSettings& settings) {
     // A stroke under way keeps what it was captured with; the next one has these.
+    const std::optional<QRectF> oldRing =
+        hover_ ? std::optional<QRectF>(ringRect(*hover_)) : std::nullopt;
     brush_ = settings;
     refreshBrushFull();
+    if (stroking()) {
+        // The ring alone changes under a stroke (old and new extent); the dabs and the tint stay.
+        if (hover_) {
+            update((*oldRing | ringRect(*hover_)).toAlignedRect());
+        }
+        return;
+    }
     update();
 }
 
@@ -275,7 +286,7 @@ const LocalAdjustment* MaskOverlay::selectedMask() const {
 
 std::optional<MaskOverlay::CoverageInputs> MaskOverlay::coverageInputs() const {
     const LocalAdjustment* mask = selectedMask();
-    if (!tint_ || mask == nullptr || !frame_ || size().isEmpty()) {
+    if (!tintWanted() || mask == nullptr || !frame_ || size().isEmpty()) {
         return std::nullopt;
     }
     const ViewTransform t = view_->transform();
@@ -293,8 +304,21 @@ std::optional<MaskOverlay::CoverageInputs> MaskOverlay::coverageInputs() const {
     return inputs;
 }
 
+bool MaskOverlay::tintWanted() const {
+    if (tint_) {
+        return true;
+    }
+    // A brush that changes nothing shows nothing in the render, so the tint is all there is.
+    const LocalAdjustment* mask = selectedMask();
+    if (!painting() || mask == nullptr || !std::holds_alternative<BrushMask>(mask->shape)) {
+        return false;
+    }
+    return !carriesEffect(*mask);
+}
+
 void MaskOverlay::scheduleCoverage() {
-    if (tint_ && !coverageTimer_.isActive()) {
+    // Even when no tint is wanted any more: the remake clears the one that was drawn.
+    if (!coverageTimer_.isActive()) {
         coverageTimer_.start();
     }
 }
@@ -603,7 +627,7 @@ void MaskOverlay::startStroke(QPointF at, bool alt, const MaskViewMapping& map) 
 }
 
 void MaskOverlay::growStrokeDirt(QPointF at) {
-    if (!tint_) {
+    if (!tintWanted()) {
         return;
     }
     // The tint changes within a radius of the segment, and a grid cell beyond it.
@@ -671,10 +695,14 @@ void MaskOverlay::finishStroke(QPointF at) {
         return;
     }
     stroke_.reset();
+    // Still a stroke while the window handles the end: its last request is paced as the others.
+    finishing_ = true;
     gesture_ = Gesture::None;
+    emit editFinished();
+    finishing_ = false;
+    refreshBrushFull();
     scheduleCoverage();
     update();
-    emit editFinished();
 }
 
 void MaskOverlay::continueGesture(QPointF pointer, bool constrain) {
@@ -945,7 +973,7 @@ void MaskOverlay::paintEvent(QPaintEvent* /*event*/) {
     }
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
-    if (tint_ && !coverageImage_.isNull() && selectedMask() != nullptr) {
+    if (tintWanted() && !coverageImage_.isNull() && selectedMask() != nullptr) {
         // Clipped to the picture; the grid covers the whole widget.
         const ViewTransform t = map->view();
         const double ratio = map->devicePixelRatio();
