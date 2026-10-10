@@ -452,20 +452,8 @@ bool arraw::drawsBrushCoverage(const CheckpointLadder& ladder, const ImageBuffer
         // The render resumes past the pointwise pass and draws nothing.
         return false;
     }
-    const detail::CoverageResidency* residency = LadderAccess::coverage(ladder);
-    bool fromNothing = false;
-    double nanoseconds = 0.0;
-    for (const LocalMaskPlan& mask : plan.pointwise.local.masks) {
-        if (mask.kind != LocalMaskKind::Brush) {
-            continue;
-        }
-        const detail::CoverageStatus status = detail::statusOf(mask.brush, residency);
-        if (status.readiness == detail::CoverageReadiness::Missing) {
-            fromNothing = true;
-            nanoseconds += detail::coverageWorkOf(status, mask.brush).draw;
-        }
-    }
-    return fromNothing && nanoseconds * 1e-9 >= minimumSeconds;
+    return detail::drawsFromNothing(plan.pointwise.local, LadderAccess::coverage(ladder),
+                                    minimumSeconds);
 }
 
 bool arraw::canResumeFrom(const RenderCheckpoint& from, const ImageBuffer& source,

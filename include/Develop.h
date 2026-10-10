@@ -320,10 +320,11 @@ struct RenderRequest {
 /// True when some brush of the plan is neither held by the ladder's packed coverage nor in the
 /// shared cache, whole or as a list it extends (an appended stroke, or the same strokes behind
 /// other pointers, is not "from nothing"), and the modelled time to draw all such brushes (report
-/// B7) reaches @p minimumSeconds. False when the ladder holds a rung at the pointwise pass or
-/// beyond that the render would resume from, which draws nothing. Draws, inserts and packs
-/// nothing. The window asks it before a render at full size, to show a coarser level first
-/// (ADR 044, section 8).
+/// B7) reaches @p minimumSeconds. False when the ladder holds a host rung at the pointwise pass or
+/// beyond that the render would resume from, which draws nothing. A rung on a device does not count
+/// (see drawsBrushCoverageOnGpu). Draws,
+/// inserts and packs nothing. The window asks it before a render at full size, to show a coarser
+/// level first (ADR 044, section 8).
 /// @param ladder Ladder the render would go through.
 /// @param source Buffer the render would develop.
 /// @param state Settings of the render.

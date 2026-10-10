@@ -121,6 +121,8 @@ void CoverageResidency::reset() noexcept {
     }
     pending_.clear();
     tileSize_ = 0;
+    // The textures follow the planes: those of another size are of no use.
+    device_.reset();
 }
 
 bool CoverageResidency::holds(const BrushCoverageRef& brush) const noexcept {
@@ -260,6 +262,23 @@ CoverageStatus statusOf(const BrushCoverageRef& brush, const CoverageResidency* 
 
 CoverageStatus statusOf(const BrushCoverageRef& brush, const CoverageResidency* residency) {
     return statusOf(brush, residency, brushCoverageCache());
+}
+
+bool drawsFromNothing(const LocalPlan& local, const CoverageResidency* residency,
+                      double minimumSeconds) {
+    bool fromNothing = false;
+    double nanoseconds = 0.0;
+    for (const LocalMaskPlan& mask : local.masks) {
+        if (mask.kind != LocalMaskKind::Brush) {
+            continue;
+        }
+        const CoverageStatus status = statusOf(mask.brush, residency);
+        if (status.readiness == CoverageReadiness::Missing) {
+            fromNothing = true;
+            nanoseconds += coverageWorkOf(status, mask.brush).draw;
+        }
+    }
+    return fromNothing && nanoseconds * 1e-9 >= minimumSeconds;
 }
 
 CoverageReadiness readinessOf(const BrushCoverageRef& brush, const CoverageResidency* residency) {

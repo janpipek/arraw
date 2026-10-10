@@ -979,7 +979,7 @@ TEST_CASE("A state with a brush renders a preview whichever device the renderer 
     const app::PreviewResult& result = results.back();
     REQUIRE(result.error.empty());
     REQUIRE(result.image.has_value());
-    // The GPU cannot draw a brush yet: a preview that did get a device is not on it.
+    // This suite has no QGuiApplication, so there is no device: the CPU drew it.
     REQUIRE_FALSE(result.onGpu);
 }
 

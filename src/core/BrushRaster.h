@@ -1,5 +1,7 @@
 #pragma once
 
+#include "PixelRect.h"
+
 #include <BrushStrokes.h>
 #include <ImageBuffer.h>
 
@@ -38,14 +40,6 @@ struct PlacedStroke {
     std::int64_t top;            ///< First pixel row of the box.
     std::int64_t right;          ///< Column past the box (half-open), unclipped.
     std::int64_t bottom;         ///< Row past the box (half-open), unclipped.
-};
-
-/// A rectangle of pixels in a raster.
-struct PixelRect {
-    std::uint32_t x;      ///< First column.
-    std::uint32_t y;      ///< First row.
-    std::uint32_t width;  ///< Columns.
-    std::uint32_t height; ///< Rows.
 };
 
 /// Float coverage of a whole raster, row-major.

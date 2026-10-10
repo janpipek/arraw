@@ -196,9 +196,11 @@ add_executable(arraw-gpu-tests
         gpu/GpuTesting.cpp
         gpu/GpuTesting.h
         gpu/test_GpuAdapters.cpp
+        gpu/test_GpuBrush.cpp
         gpu/test_GpuDenoise.cpp
         gpu/test_GpuLocalAdjustments.cpp
         gpu/test_GpuPresence.cpp
+        gpu/test_GpuPreviewRenderer.cpp
         gpu/test_GpuProgress.cpp
         gpu/test_GpuRenderDigest.cpp
         gpu/test_GpuDevelop.cpp
@@ -224,7 +226,7 @@ target_compile_definitions(arraw-gpu-tests
         ARRAW_SHADER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../src/gpu/shaders")
 # GuiPrivate for QShader, whose reflection test_GpuShaderLayout compares with GpuPlan.h.
 target_link_libraries(arraw-gpu-tests
-        PRIVATE arraw arraw-gpu arraw-cli-core Catch2::Catch2 Qt6::Gui Qt6::GuiPrivate)
+        PRIVATE arraw arraw-gpu arraw-app-core arraw-cli-core Catch2::Catch2 Qt6::Gui Qt6::GuiPrivate)
 # The headless platform exists on Linux only; its INTERFACE defines
 # ARRAW_HEADLESS_PLATFORM, which main.cpp tests.
 if(TARGET arraw-headless-platform)

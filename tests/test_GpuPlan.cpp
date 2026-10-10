@@ -439,13 +439,52 @@ TEST_CASE("The pointwise block takes its Presence grid sizes from the size it is
     REQUIRE(other.coarseGridSize == std::array<std::uint32_t, 2>{64, 32});
 }
 
-TEST_CASE("A pointwise block cannot be packed for a brush mask yet", "[gpu][plan][brush]") {
+TEST_CASE("A brush mask packs its texture and channel into the header, and no shape",
+          "[gpu][plan][brush]") {
     const ImageBuffer source({64, 48}, workingFormat, workingEncoding);
-    LocalAdjustment adjustment;
-    adjustment.shape = BrushMask{};
-    adjustment.deltas.exposure = 1.0F;
-    const DevelopState state = withLocalAdjustmentAdded(DevelopState{}, adjustment);
+    DevelopState state;
+    // Five brushes among a linear and a radial mask: slots 0 to 4 in list order, two textures.
+    const auto add = [&](Mask shape, bool invert, float exposure) {
+        LocalAdjustment adjustment;
+        adjustment.shape = std::move(shape);
+        adjustment.invert = invert;
+        adjustment.deltas.exposure = exposure;
+        state = withLocalAdjustmentAdded(std::move(state), adjustment);
+    };
+    add(BrushMask{}, false, 1.0F);
+    add(LinearMask{{0.1F, 0.1F}, {0.9F, 0.2F}}, false, 0.5F);
+    add(BrushMask{}, true, 0.25F);
+    add(BrushMask{}, false, -0.5F);
+    add(RadialMask{}, false, 0.75F);
+    add(BrushMask{}, false, 0.125F);
+    add(BrushMask{}, true, 0.0625F);
     const PointwisePlan plan = planFor(source, state).pointwise;
-    REQUIRE(plan.local.brushCount() == 1);
-    REQUIRE_THROWS_AS(packPointwise(plan, source.size()), std::invalid_argument);
+    REQUIRE(plan.local.brushCount() == 5);
+    const GpuPointwiseBlock block = packPointwise(plan, source.size());
+    REQUIRE(block.localHeader[0] == 7);
+
+    std::uint32_t slot = 0;
+    for (std::size_t index = 0; index < plan.local.masks.size(); ++index) {
+        const LocalMaskPlan& mask = plan.local.masks[index];
+        const GpuLocalMask& packed = block.local[index];
+        CAPTURE(index);
+        REQUIRE(packed.header[0] == static_cast<std::uint32_t>(mask.kind));
+        REQUIRE(packed.header[1] == (mask.invert ? 1U : 0U));
+        if (mask.kind != LocalMaskKind::Brush) {
+            REQUIRE(packed.header[2] == 0U);
+            REQUIRE(packed.header[3] == 0U);
+            continue;
+        }
+        REQUIRE(mask.brush.slot == slot);
+        REQUIRE(packed.header[0] == 2U);
+        REQUIRE(packed.header[2] == slot / 4);
+        REQUIRE(packed.header[3] == slot % 4);
+        REQUIRE(packed.shapeA == std::array<float, 4>{});
+        REQUIRE(packed.shapeB == std::array<float, 4>{});
+        ++slot;
+    }
+    REQUIRE(slot == 5);
+    // The last brush is the fifth: the first channel of the second texture.
+    REQUIRE(block.local[6].header[2] == 1U);
+    REQUIRE(block.local[6].header[3] == 0U);
 }

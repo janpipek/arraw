@@ -1,6 +1,7 @@
 #pragma once
 
 #include "BrushCoverageCache.h"
+#include "DeviceCoverage.h"
 #include "LocalPlan.h"
 
 #include <ImageBuffer.h>
@@ -8,7 +9,9 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace arraw::detail {
@@ -120,6 +123,18 @@ public:
     /// Forgets a plane's pending tiles: an upload of it completed.
     void clearPending(std::uint32_t plane) noexcept;
 
+    /// Gives the device-side copy of the planes, or null if no GPU render has made one.
+    [[nodiscard]] DeviceCoverage* device() const noexcept {
+        return device_.get();
+    }
+
+    /// Replaces the device-side copy of the planes; null drops it.
+    ///
+    /// The copy is also dropped when the residency starts again for another size.
+    void setDevice(std::unique_ptr<DeviceCoverage> device) noexcept {
+        device_ = std::move(device);
+    }
+
     /// Number of calls of the cache this residency has made (for tests).
     [[nodiscard]] std::uint64_t cacheCalls() const noexcept {
         return cacheCalls_;
@@ -146,6 +161,7 @@ private:
     std::uint32_t tileSize_ = 0;             ///< Tile edge of the pending grids; 0 if none.
     std::uint64_t cacheCalls_ = 0;
     std::uint64_t tilesPacked_ = 0;
+    std::unique_ptr<DeviceCoverage> device_; ///< The planes on a GPU, made by the GPU's renders.
 };
 
 /// What a render would have to do for one brush's coverage, with how much of its list is drawn.
@@ -179,6 +195,14 @@ struct CoverageStatus {
 /// @param residency The ladder's residency, or null for a direct render.
 [[nodiscard]] CoverageReadiness readinessOf(const BrushCoverageRef& brush,
                                             const CoverageResidency* residency);
+
+/// Tells whether some brush of a plan would be drawn from nothing, and whether that is worth a
+/// coarser stand-in.
+/// @param local Plan whose brush masks are asked about.
+/// @param residency The ladder's residency, or null for a direct render.
+/// @param minimumSeconds Least modelled drawing time of all such brushes that counts.
+[[nodiscard]] bool drawsFromNothing(const LocalPlan& local, const CoverageResidency* residency,
+                                    double minimumSeconds);
 
 /// Packs the coverage of a plan's brushes, outside any ladder (the direct path, ADR 044).
 ///

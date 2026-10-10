@@ -318,6 +318,8 @@ if(ARRAW_BUILD_APPS)
 add_library(arraw-gpu STATIC
         src/gpu/GpuContext.h
         src/gpu/GpuContext.cpp
+        src/gpu/GpuCoverage.h
+        src/gpu/GpuCoverage.cpp
         src/gpu/GpuDevice.h
         src/gpu/GpuDevice.cpp
         src/gpu/GpuDevelop.h

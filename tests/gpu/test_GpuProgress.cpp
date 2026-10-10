@@ -1,18 +1,26 @@
+#include "BrushCoverage.h"
 #include "GpuContext.h"
 #include "GpuDevelop.h"
 #include "GpuTesting.h"
 #include "ProgressScope.h"
 #include "support/TestImages.h"
 
+#include <CheckpointLadder.h>
 #include <Develop.h>
 #include <DevelopSettings.h>
 #include <DevelopState.h>
+#include <LocalAdjustmentEdits.h>
+#include <LocalAdjustments.h>
 #include <Progress.h>
 #include <RenderCheckpoint.h>
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <utility>
 #include <vector>
 
 using namespace arraw;
@@ -184,4 +192,60 @@ TEST_CASE("Each pass of a GPU render runs the renders its span declares", "[gpu]
     state.settings.presence.clarity = 40.0F;
     run(translucent, state);
     run(translucent, everyStep());
+}
+
+TEST_CASE("A GPU render with brushes reports the Coverage step, and a delta drag does not",
+          "[gpu][progress][brush]") {
+    // A debug build asserts that a span ran exactly the units it declared: drawn, held by the
+    // ladder, and changed in one brush.
+    detail::brushCoverageCache().clear();
+    GpuContext& context = gpuContext();
+    const auto source = std::make_shared<const ImageBuffer>(makeSource());
+    const DeviceImage uploaded = uploadSource(context, *source);
+    DevelopState state;
+    state.settings.presence.clarity = 30.0F;
+    for (const std::uint32_t radius : {2U, 3U}) {
+        Stroke stroke{0.01F * static_cast<float>(radius), 0.5F, 1.0F, false, {}};
+        for (int i = 0; i < 40; ++i) {
+            stroke.points.push_back({0.1F + 0.02F * static_cast<float>(i), 0.3F * radius});
+        }
+        LocalAdjustment adjustment;
+        adjustment.shape =
+            BrushMask{std::make_shared<const StrokeList>(std::vector<Stroke>{std::move(stroke)})};
+        adjustment.deltas.exposure = 1.0F;
+        state = withLocalAdjustmentAdded(std::move(state), adjustment);
+    }
+    const auto hasCoverage = [](const std::vector<Progress>& reports) {
+        return std::ranges::any_of(
+            reports, [](const Progress& report) { return report.step == ProgressStep::Coverage; });
+    };
+    const auto run = [&](CheckpointLadder* ladder, const DevelopState& wanted) {
+        std::vector<Progress> reports;
+        ProgressChannel channel([&](const Progress& progress) { reports.push_back(progress); });
+        if (ladder != nullptr) {
+            static_cast<void>(resumeOrDevelopOnGpu(context, *ladder, source, uploaded, wanted,
+                                                   resized(), &channel));
+        } else {
+            static_cast<void>(developOnGpu(context, *source, uploaded, wanted, Stage::Effects,
+                                           resized(), &channel));
+        }
+        requireWellFormed(reports);
+        return reports;
+    };
+    SECTION("direct renders, drawn and then from the cache") {
+        REQUIRE(hasCoverage(run(nullptr, state)));
+        REQUIRE(hasCoverage(run(nullptr, state)));
+    }
+    SECTION("through a ladder: drawn, held, one brush changed, and a delta drag") {
+        CheckpointLadder ladder;
+        REQUIRE(hasCoverage(run(&ladder, state)));
+        run(&ladder, state);
+        const DevelopState more =
+            withStrokeAppended(state, state.localAdjustments[1].id,
+                               Stroke{0.02F, 1.0F, 1.0F, false, {{0.2F, 0.2F}, {0.3F, 0.25F}}});
+        REQUIRE(hasCoverage(run(&ladder, more)));
+        const DevelopState louder =
+            withLocalDelta(more, more.localAdjustments[0].id, "exposure", 1.5);
+        REQUIRE_FALSE(hasCoverage(run(&ladder, louder)));
+    }
 }

@@ -49,7 +49,8 @@ enum class Layer {
 /// is destroyed on the thread that owns it, before that thread ends.
 class GpuPreview {
 public:
-    explicit GpuPreview(AppSettings settings) : settings_(std::move(settings)) {}
+    GpuPreview(AppSettings settings, PreviewRenderer::GpuContextFactory contextFactory)
+        : settings_(std::move(settings)), contextFactory_(std::move(contextFactory)) {}
     GpuPreview(const GpuPreview&) = delete;
     GpuPreview& operator=(const GpuPreview&) = delete;
     GpuPreview(GpuPreview&&) = delete;
@@ -145,7 +146,7 @@ public:
                                           const DevelopState& state, const RenderRequest& request,
                                           double minimumSeconds) const {
         const CheckpointLadder& ladder = layer == Layer::Background ? backgroundLadder_ : ladder_;
-        return arraw::drawsBrushCoverage(ladder, image, state, request, minimumSeconds);
+        return drawsBrushCoverageOnGpu(*context_, ladder, image, state, request, minimumSeconds);
     }
 
     /// @brief Counts the curve histogram of a level on the device.
@@ -207,7 +208,8 @@ private:
 
     /// @brief Creates the device, or records why not.
     void create() {
-        context_ = createAppGpuContext(settings_, reason_);
+        context_ =
+            contextFactory_ ? contextFactory_(reason_) : createAppGpuContext(settings_, reason_);
     }
 
     /// @brief Drops the checkpoints of both layers.
@@ -231,6 +233,7 @@ private:
     // and goes last (the destructor says so too).
     /// Desktop GPU preference.
     AppSettings settings_;
+    PreviewRenderer::GpuContextFactory contextFactory_;
     std::unique_ptr<GpuContext> context_;
     /// Pyramid levels on the device, by level; a level not yet needed is empty.
     std::vector<DeviceImage> uploaded_;
@@ -314,12 +317,6 @@ private:
 /// A level has a quarter of the pixels of the one below it, so the stand-in is a fifth of the
 /// work of both.
 constexpr double standInProgressShare = 0.2;
-
-/// @brief Whether the GPU renders brush masks, which the stand-in asks before trying it.
-///
-/// False until the GPU draws brushes (ADR 044 step 5.3): the device refuses them, and a try
-/// would upload the level to it for nothing.
-constexpr bool gpuDrawsBrushes = false;
 
 /// @brief Range of a request's progress that what renders now fills.
 ///
@@ -480,12 +477,11 @@ std::optional<PreviewResult> render(std::uint64_t id, const DevelopState& state,
             QRectF(QPointF(rendered.left, rendered.top), QPointF(rendered.right, rendered.bottom));
         const bool gpuReady = gpu != nullptr && gpu->prepare(source);
         if (standIn != nullptr && level == 0 && SourcePyramid::highestLevel(source->size()) >= 1) {
-            // Asked of the CPU ladder, which a fallback goes through, and of the GPU's when the
-            // GPU renders: it is "from nothing" only if neither ladder nor the cache has it.
-            const bool draws =
-                drawsBrushCoverage(cpuLadder, *reduced, state, request, standIn->minimumSeconds) &&
-                (!gpuReady ||
-                 gpu->drawsBrushCoverage(layer, *reduced, state, request, standIn->minimumSeconds));
+            // Asked of the ladder that renders: the GPU's when the GPU does, else the CPU's.
+            const bool draws = gpuReady ? gpu->drawsBrushCoverage(layer, *reduced, state, request,
+                                                                  standIn->minimumSeconds)
+                                        : drawsBrushCoverage(cpuLadder, *reduced, state, request,
+                                                             standIn->minimumSeconds);
             if (draws) {
                 const detail::TimingSpan coarserTiming("preview.provisional", id);
                 if (standIn->phase != nullptr) {
@@ -493,7 +489,7 @@ std::optional<PreviewResult> render(std::uint64_t id, const DevelopState& state,
                 }
                 std::optional<PreviewResult> coarser =
                     provisionalRender(result, pyramid.level(1), state, request, view,
-                                      gpuReady && gpuDrawsBrushes ? gpu : nullptr, progress);
+                                      gpuReady ? gpu : nullptr, progress);
                 if (standIn->phase != nullptr) {
                     *standIn->phase = {standInProgressShare, 1.0};
                 }
@@ -662,9 +658,11 @@ std::optional<QImage> reducedForThumbnail(const PreviewResult& result, int edge)
 } // namespace
 
 PreviewRenderer::PreviewRenderer(std::function<void(PreviewResult)> onResult, Device device,
-                                 AppSettings settings, ProgressCallback onProgress)
+                                 AppSettings settings, ProgressCallback onProgress,
+                                 GpuContextFactory contextFactory)
     : onResult_(std::move(onResult)), onProgress_(std::move(onProgress)),
       device_(settings.cpuOnly ? Device::Cpu : device), settings_(std::move(settings)),
+      contextFactory_(std::move(contextFactory)),
       worker_([this](const std::stop_token& stop) { run(stop); }) {}
 
 PreviewRenderer::~PreviewRenderer() {
@@ -755,7 +753,7 @@ void PreviewRenderer::run(std::stop_token stop) {
     // thread ends. Only built when the GPU is allowed at all.
     std::optional<GpuPreview> gpu;
     if (device_ == Device::Auto) {
-        gpu.emplace(settings_);
+        gpu.emplace(settings_, contextFactory_);
     }
     // Host memory only: the GPU's copies of the levels are its own.
     SourcePyramid pyramid;

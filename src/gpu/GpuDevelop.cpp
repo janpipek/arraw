@@ -1,6 +1,8 @@
 #include "GpuDevelop.h"
 
+#include "BrushCoverage.h"
 #include "CheckpointState.h"
+#include "GpuCoverage.h"
 #include "GpuPlan.h"
 #include "LadderAccess.h"
 #include "ProcessingPlan.h"
@@ -21,6 +23,7 @@
 #include <stdexcept>
 #include <utility>
 #include <variant>
+#include <vector>
 
 namespace arraw {
 
@@ -279,17 +282,51 @@ void requireUploaded(const GpuContext& context, const ImageBuffer& source,
     }
 }
 
+/// @brief Makes the brush masks' coverage and puts it on the device, in the Coverage step.
+///
+/// As the CPU's pass does between the Presence context and the chain: through the ladder's
+/// residency, which repacks only the tiles that changed and uploads those, or, for a render
+/// through no ladder, packed for the call and uploaded whole.
+/// @param residency The ladder's packed coverage, or null for a render through none.
+/// @param standIn Texture bound for each plane the plan does not use.
+/// @return The four textures the pass reads; all @p standIn for a plan without brushes.
+CoverageTextures coverageOnGpu(GpuContext& context, const LocalPlan& local, ImageSize size,
+                               detail::CoverageResidency* residency, const DeviceImage& standIn) {
+    if (local.brushCount() == 0) {
+        return {standIn, standIn, standIn, standIn};
+    }
+    const std::vector<double> weights = detail::coverageUnitWeights(local, residency);
+    // Only when some brush has work: a delta drag reports no Coverage step at all.
+    std::optional<detail::ProgressSpan> progress;
+    if (!weights.empty()) {
+        progress.emplace(ProgressStep::Coverage, weights);
+    }
+    if (residency != nullptr) {
+        const detail::PackedCoverage& packed = residency->update(local, size);
+        if (packed.size != size) {
+            throw std::logic_error("The brush coverage was packed for another size");
+        }
+        progress.reset();
+        return coverageTexturesOf(context, *residency, standIn);
+    }
+    const detail::PackedCoverage packed = detail::packCoverage(local);
+    if (packed.size != size) {
+        throw std::logic_error("The brush coverage was packed for another size");
+    }
+    progress.reset();
+    return coverageTexturesOf(context, packed, standIn);
+}
+
 /// @brief Runs the Pointwise pass on a device image.
 ///
 /// Uploads the curves' tables when a curve is active and the probe reads them,
-/// works out the Presence context, and renders the chain (or a tap's prefix
-/// of it).
+/// works out the Presence context, makes the brush masks' coverage, and renders the chain
+/// (or a tap's prefix of it).
 /// @param probe What the pass writes: the developed colour, or a tap's.
+/// @param residency The ladder's packed coverage, or null for a render through none.
 DeviceImage pointwiseOnGpu(GpuContext& context, const DeviceImage& image,
-                           const ProcessingPlan& plan, PointwiseProbe probe) {
-    if (plan.pointwise.local.brushCount() != 0) {
-        throw std::runtime_error("brush masks cannot be rendered on the GPU yet");
-    }
+                           const ProcessingPlan& plan, PointwiseProbe probe,
+                           detail::CoverageResidency* residency) {
     // The block's grid sizes come from the image the bases are rendered from,
     // so the two cannot differ.
     const GpuPointwiseBlock pointwise = packPointwise(plan.pointwise, image.size(), probe);
@@ -307,9 +344,19 @@ DeviceImage pointwiseOnGpu(GpuContext& context, const DeviceImage& image,
     // the pass runs, rather than kept with a checkpoint (ADR 041); with
     // Presence off nothing is rendered and the image stands in for every grid.
     const DevicePresence around = presenceOnGpu(context, image, plan.pointwise.presence);
-    const std::array inputs{
-        image,          curves, around.fine, around.coarse, around.coarseCells, around.hazeFloor,
-        around.hazeMean};
+    const CoverageTextures coverage =
+        coverageOnGpu(context, plan.pointwise.local, image.size(), residency, image);
+    const std::array inputs{image,
+                            curves,
+                            around.fine,
+                            around.coarse,
+                            around.coarseCells,
+                            around.hazeFloor,
+                            around.hazeMean,
+                            coverage[0],
+                            coverage[1],
+                            coverage[2],
+                            coverage[3]};
     const detail::ProgressSpan progress(ProgressStep::Pointwise, 1);
     return context.render(GpuPass::Pointwise, bytesOf(pointwise), inputs, image.size(),
                           workingEncoding);
@@ -343,6 +390,9 @@ struct GpuStages {
     GpuContext& context;
     /// What the pointwise pass writes: the developed colour, or a tap's.
     PointwiseProbe probe = PointwiseProbe::Developed;
+    /// Packed brush coverage kept by the ladder this render goes through, or null for a direct
+    /// render, which packs its own for the call (ADR 044).
+    detail::CoverageResidency* residency = nullptr;
 
     /// @brief Runs the pass that ends at a stage's boundary.
     Pixels run(Stage stage, Pixels image, const ProcessingPlan& plan) const {
@@ -350,7 +400,7 @@ struct GpuStages {
         case Stage::Denoise:
             return denoiseOnGpu(context, image, plan.denoise);
         case Stage::Pointwise:
-            return pointwiseOnGpu(context, image, plan, probe);
+            return pointwiseOnGpu(context, image, plan, probe, residency);
         case Stage::Geometry:
             return geometryOnGpu(context, image, *plan.geometry);
         case Stage::Resize: {
@@ -457,19 +507,45 @@ LadderRender resumeOrDevelopOnGpu(GpuContext& context, CheckpointLadder& ladder,
             const auto* image = std::get_if<DeviceImage>(&rung.pixels);
             return image != nullptr && image->device() == context.id();
         });
+    // A plan without brushes lets the ladder's packed planes and textures go.
+    const bool brushes = plan.pointwise.local.brushCount() != 0;
+    if (!brushes) {
+        LadderAccess::dropCoverage(ladder);
+    }
     DeviceImage start =
         resumedFrom
             ? std::get<DeviceImage>(stateOf(LadderAccess::rung(ladder, *resumedFrom)).pixels)
             : uploaded;
     const detail::TimingSpan timing("gpu.develop");
-    detail::ProgressRoot root(progress, detail::observedStepWeights(progress, plan, request),
-                              resumedFrom ? detail::stepAfter(*resumedFrom)
-                                          : ProgressStep::Denoise);
+    detail::ProgressRoot root(
+        progress,
+        detail::observedStepWeights(progress, plan, request,
+                                    LadderAccess::coverage(std::as_const(ladder))),
+        resumedFrom ? detail::stepAfter(*resumedFrom) : ProgressStep::Denoise);
     GpuStages backend{context};
+    if (brushes) {
+        backend.residency = &LadderAccess::coverage(ladder);
+    }
     StagesRun<GpuStages> run =
         runStages(backend, resumedFrom, std::move(start), plan, Stage::Effects, &ladder);
     root.finish(ProgressStep::Effects);
     return {makeCheckpoint(Stage::Effects, std::move(plan), std::move(run.pixels)), resumedFrom};
+}
+
+bool drawsBrushCoverageOnGpu(const GpuContext& context, const CheckpointLadder& ladder,
+                             const ImageBuffer& source, const DevelopState& state,
+                             const RenderRequest& request, double minimumSeconds) {
+    const ProcessingPlan plan = planFor(source, state, request);
+    if (LadderAccess::hasUsableFrom(ladder, Stage::Pointwise, plan, source.size(),
+                                    [&context](const CheckpointState& rung) {
+                                        const auto* image = std::get_if<DeviceImage>(&rung.pixels);
+                                        return image != nullptr && image->device() == context.id();
+                                    })) {
+        // The render resumes past the pointwise pass and draws nothing.
+        return false;
+    }
+    return detail::drawsFromNothing(plan.pointwise.local, LadderAccess::coverage(ladder),
+                                    minimumSeconds);
 }
 
 ImageBuffer sampleOnGpu(GpuContext& context, const ImageBuffer& source, const DeviceImage& uploaded,

@@ -219,7 +219,11 @@ GpuPointwiseBlock packPointwise(const PointwisePlan& plan, ImageSize source, Poi
             packed.shapeB = mask.matrix;
             break;
         case LocalMaskKind::Brush:
-            throw std::invalid_argument("A brush mask has no GPU block yet");
+            // The shape coefficients stay zero; the coverage is a texel of a texture (ADR 044,
+            // section 7): plane (texture) slot / 4, channel slot % 4.
+            packed.header[2] = mask.brush.slot / 4;
+            packed.header[3] = mask.brush.slot % 4;
+            break;
         }
         std::copy(mask.k.begin(), mask.k.end(), packed.k.begin());
     }

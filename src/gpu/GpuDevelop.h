@@ -168,6 +168,24 @@ RenderCheckpoint developOnGpu(GpuContext& context, const ImageBuffer& source,
                                                 const RenderRequest& request = {},
                                                 ProgressChannel* progress = nullptr);
 
+/// @brief Tells whether rendering through a device ladder would draw brush coverage from nothing.
+///
+/// ::arraw::drawsBrushCoverage for the rungs of @p context: a rung on the host or on another
+/// device does not count. Draws, inserts and packs nothing.
+/// @param context Device the render would run on.
+/// @param ladder Ladder the render would go through.
+/// @param source Buffer the render would develop.
+/// @param state Settings of the render.
+/// @param request What to render.
+/// @param minimumSeconds Least modelled drawing time that counts.
+/// @return False for a state without brush masks.
+/// @throws std::invalid_argument as ::arraw::developOnGpu for @p state and @p request.
+[[nodiscard]] bool drawsBrushCoverageOnGpu(const GpuContext& context,
+                                           const CheckpointLadder& ladder,
+                                           const ImageBuffer& source, const DevelopState& state,
+                                           const RenderRequest& request = {},
+                                           double minimumSeconds = 0.0);
+
 /// @brief Samples a photograph already on the device at a tap, and reads the result back.
 ///
 /// The GPU's ::arraw::sample: the pointwise pass writes the tap's colour

@@ -434,7 +434,9 @@ TEST_CASE("The after-matrix probe applies the local Temperature and Tint", "[gpu
     const DeviceImage input = context.upload(source);
     const GpuPointwiseBlock block =
         packPointwise(plan.pointwise, source.size(), PointwiseProbe::AfterMatrix);
-    const std::array inputs{input, input, input, input, input, input, input};
+    // The image stands in for the Presence grids and the brush coverage, which are not read.
+    const std::array inputs{input, input, input, input, input, input,
+                            input, input, input, input, input};
     const ImageBuffer actual = context
                                    .render(GpuPass::Pointwise, std::as_bytes(std::span(&block, 1)),
                                            inputs, source.size(), workingEncoding)

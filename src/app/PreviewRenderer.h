@@ -188,6 +188,13 @@ public:
     /// is needed. Must not throw; what it throws stops the render, as a failure.
     using ProgressCallback = std::function<void(std::uint64_t request, const Progress& progress)>;
 
+    /// @brief Maker of the GPU context, in place of ::arraw::app::createAppGpuContext.
+    ///
+    /// Called once, on the worker thread, when the first render needs a device. Returns null and
+    /// sets the problem if there is none. For tests, which can run on a software device the
+    /// application refuses.
+    using GpuContextFactory = std::function<std::unique_ptr<GpuContext>(std::string& problem)>;
+
     /// @brief Starts the worker thread.
     /// @param onResult Receives each finished render, called on the worker
     /// thread; the caller marshals it to wherever it is needed. Must not throw;
@@ -197,9 +204,11 @@ public:
     /// @param onProgress Receives the progress of the render of each request,
     /// thinned (see ::arraw::app::previewProgressInterval); may be empty.
     /// Neither the fallback's nor the histogram's renders report.
+    /// @param contextFactory Makes the GPU context; empty for the application's choice.
     explicit PreviewRenderer(std::function<void(PreviewResult)> onResult,
                              Device device = Device::Auto, AppSettings settings = {},
-                             ProgressCallback onProgress = {});
+                             ProgressCallback onProgress = {},
+                             GpuContextFactory contextFactory = {});
 
     PreviewRenderer(const PreviewRenderer&) = delete;
     PreviewRenderer& operator=(const PreviewRenderer&) = delete;
@@ -281,6 +290,9 @@ private:
 
     /// Desktop preferences captured before the worker starts.
     AppSettings settings_;
+
+    /// Maker of the GPU context, or empty for the application's choice.
+    GpuContextFactory contextFactory_;
 
     /// Least modelled drawing time of brush coverage that earns a stand-in; see
     /// setStandInThreshold.
