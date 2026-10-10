@@ -18,6 +18,11 @@ add_executable(arraw-tests
         support/ImageCompare.cpp
         support/TestImages.cpp
         test_AppSettings.cpp
+        test_BrushBench.cpp
+        test_BrushCoverageCache.cpp
+        test_BrushRaster.cpp
+        test_BrushStrokes.cpp
+        test_StrokeCodec.cpp
         test_Cli.cpp
         test_CheckpointLadder.cpp
         test_CopySections.cpp

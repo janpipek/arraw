@@ -294,8 +294,9 @@ user-reachable path creates a mask that export ignores.
    disabled and inverted masks.
 3. **Linear and radial GUI:** panel, mask tool, overlay, gestures, history.
    Measure slider and drag response with 16 masks.
-4. **Brush prototype:** the stroke contract and cache, measured; fix the
-   encoding and texture packing; amend ADR 044.
+4. **Brush prototype (done, 2026-10-10):** the stroke contract and cache,
+   measured; encoding and texture packing fixed; ADR 044 amended. See
+   `docs/ideas/brush-prototype-report.md`.
 5. **Brush, end to end without GUI:** rasteriser, cache, GPU textures,
    parity, persistence, Python. Tests: same path at different event rates,
    different resolutions, after reload.
@@ -306,8 +307,15 @@ user-reachable path creates a mask that export ignores.
 
 - Temp/Tint constants `a`, `b`, and whether the luminance normalisation
   should use the working space's or the as-shot luminance row.
-- Brush coverage resolution and texture packing (after the prototype).
-- Stroke encoding: text vs base64 binary (after the prototype).
+- ~~Brush coverage resolution and texture packing~~: settled by the brush
+  prototype (`docs/ideas/brush-prototype-report.md`). Full rendered-source
+  size; RGBA8 four per texture with an ordered dither (RGBA16F if the dither is
+  unwanted).
+- ~~Stroke encoding~~: settled. Base64-delta per stroke, with caps of 10 000
+  points per stroke, 2 000 strokes and 100 000 points per mask, plus swept-area
+  and dab budgets.
+- For step 5: rasterise the displayed size first on open; full size lazily or
+  in bands at export.
 - Whether to cache the Presence context apart from the pointwise run.
 - Lens corrections later: parametric masks move with a new profile, brush
   strokes do not (ADR 009 already accepts this).

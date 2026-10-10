@@ -13,8 +13,8 @@ persistence and the front ends.
 
 It is written ahead of the code (step 0 of the plan). Statements about today's
 code cite the file; everything else is what steps 1 to 6 build. The brush
-parts marked *provisional* hold until the brush prototype (plan step 4), which
-amends this ADR.
+parts were provisional until the brush prototype (plan step 4), which amended
+sections 6, 7 and 9 (see the note of 2026-10-10 at the end).
 
 ## Decision
 
@@ -409,67 +409,108 @@ no floor is prepared and none is read); the bases a plan prepares for given
 globals and `k`, as a table test of the interval rule with opacity and invert;
 both backends.
 
-### 6. Brush: the stroke contract (provisional until the brush prototype)
+### 6. Brush: the stroke contract
 
 ```text
-StrokeList   rasteriser: std::uint32_t; strokes: std::vector<Stroke>
-Stroke       radius (long-edge units of the sensor frame), hardness (0 to 1),
+StrokeList   rasteriser: std::uint32_t;
+             strokes: std::vector<std::shared_ptr<const Stroke>>; a content hash
+Stroke       radius (long-edge units, 0.0005 to 1), hardness (0 to 1),
              flow (0 to 1), erase (bool), points: std::vector<SensorPoint>
+             (1 to 10 000)
 ```
 
 Strokes, not rasters, are stored, in the sensor frame (ADR 009). Pressure is
-reserved and ignored.
+reserved and ignored. A list is persistent: appending makes a new list that
+shares every earlier stroke and extends the content hash.
 
-**Dabs by distance.** Along each stroke's polyline, measured in the isotropic
-metric of the sensor frame, a dab is placed at every arc length `k * s` from
-the first point, `s = 0.25 * radius`, `k = 0, 1, …`, and one more at the last
-point when the length is not a multiple of `s`. A single point is one dab. The
-dabs depend on the path only, never on the pointer's event rate or the
-resolution painted at: an extra point inserted on a straight segment changes
-nothing. Extending a stroke keeps every dab at `k * s` and moves only the end
-dab, so it changes coverage only near the stroke's end.
+**Dabs by distance.** Arc length is measured in the long-edge metric of the
+raster being made: a point `(u, v)` sits at `(u * W / L, v * H / L)`, with
+`W x H` the raster and `L = max(W, H)`. A dab is placed at every arc length
+`k * s` from the first point, with `s = 0.25 * radius` and `k = 0, 1, …`,
+computed from the integer `k`, never by accumulation. One more dab is placed
+at the last point when `(k_last) * s` falls short of the length. A single
+point, or a run of equal points, is one dab. Placement is in double precision.
 
-**Dab profile.** At distance `r` from the dab's centre, with
-`inner = min(hardness * radius, radius - p)` (`p` one raster pixel in
-long-edge units, so hardness 1 is a hard edge antialiased over a pixel):
+The dabs do not depend on the pointer's event rate. An extra point on a straight
+segment gives the same coverage bit for bit when the split is exact in
+floating point, and within 1e-5 otherwise. Extending a stroke keeps every
+`k * s` dab and moves only the end dab.
+
+**Dab profile.** In raster pixels, with `R = radius * L`, a dab is drawn with
+radius `R_d = max(R, 1.5)` and flow `f_d = flow * (R / R_d)^2`. A thin stroke
+therefore keeps its weight: it neither falls between pixel centres nor changes
+with its sub-pixel position. With `inner = min(hardness * R_d, R_d - 1)`, at a
+distance `r` from the dab's centre:
 
 ```text
-d = 1 - smoothstep(inner, radius, r)
-paint:  m <- m + flow * d * (1 - m)
-erase:  m <- m * (1 - flow * d)
+d = 1 - smoothstep(inner, R_d, r)          (0 for r >= R_d)
+paint:  m <- m + f_d * d * (1 - m)
+erase:  m <- m * (1 - f_d * d)
 ```
 
-Coverage `m` starts at 0. Strokes apply in list order, dabs in path order.
-Each raster pixel is evaluated at its centre, `((i + 0.5) / Wr, (j + 0.5) / Hr)`
-normalised, with `Wr x Hr` the raster's size. Radius, hardness, flow and erase
-are captured per stroke when it begins.
+Coverage `m` starts at 0. Strokes apply in list order, and dabs in path order.
+Pixel `(i, j)` is evaluated at its centre `(i + 0.5, j + 0.5)`. The pixel loop
+uses only `+ - * /`, `sqrt` and comparisons, and is built without
+floating-point contraction. A pixel's bits therefore do not depend on the
+banding, the tiling or the platform. Two golden digests pin version 1.
+Radius, hardness, flow and erase are captured per stroke when it begins.
 
 **Rasteriser version.** `StrokeList::rasteriser` is 1 for the rules above. An
 arraw keeps rendering every version it has written. A version it does not
 know drops the mask with a warning (section 9).
 
-**Rasterising and caching.** `rasteriseBrush(strokes, size, pixelScale)` is a
-pure function, and the reference. A cache in front of it is an optimisation
-that correctness never relies on:
-- keyed by the stroke list (pointer, then contents), the raster size, the
-  pixel scale and the rasteriser version;
-- tiled, so an appended stroke re-rasterises only the tiles its dabs touch.
+**Caps.** Per stroke, 1 to 10 000 points. Per mask, at most 2 000 strokes and
+100 000 points in all. Two budgets bound the work without knowing a raster
+size, with lengths measured in normalised `(u, v)` units, which bound the
+long-edge metric for every aspect:
+- swept area, `Σ length * radius <= 4`;
+- dabs, `Σ length / (0.25 * radius) <= 2 000 000`.
 
-**During a gesture** the live stroke is a mutable buffer the window owns.
-Commit freezes it into a new `StrokeList` that shares the previous strokes (a
-persistent list, not a copy). Undo restores the previous list, whose tiles the
-cache still holds; cancel drops the live stroke.
+The edit rules refuse an append past any cap or budget with
+`std::invalid_argument`, and leave the list unchanged.
+
+**Rasterising and caching.** `rasteriseBrush(strokes, size)` is a pure
+function and the reference. There is no pixel scale: radii are in long-edge
+units, so the size alone fixes the pixels. A cache in front of it is an
+optimisation that correctness never relies on:
+- it is keyed by the stroke list (pointer, then content hash and contents),
+  the raster size and the rasteriser version;
+- it holds float coverage in 128-pixel tiles. An appended stroke is painted
+  onto clones of the tiles its dabs touch, on top of the longest held prefix.
+  Untouched tiles are shared between entries;
+- it is bounded by an LRU budget of 512 MiB of distinct tiles, and it serves
+  the sizes the window renders. Export rasterises outside it, band by band.
+
+Cached and uncached coverage are equal bit for bit.
+
+**During a gesture** the window keeps two tile states. The first holds the
+prefix plus the live stroke's settled dabs (those at `k * s`). The second is
+that plus the end dab. A pointer update paints only the new settled dabs onto
+clones of the first state, then the end dab onto a clone of that. This equals
+the reference bit for bit, because the end dab is painted last. Commit freezes
+the stroke into a new `StrokeList` that shares the previous strokes. Undo
+restores the previous list, whose tiles the cache still holds. Cancel drops
+the live stroke.
 
 **Resolution.** Coverage is rasterised at the rendered source's size, one
-coverage pixel per source pixel. One level coarser is the option the
-prototype measures, with hardness 1 as the case to judge.
+coverage pixel per source pixel. A preview's coverage is therefore at the
+preview's size. One level coarser was measured and rejected: at hardness 1 it
+puts 2.7 to 2.8 times as many pixels more than 32/255 off, and edges grow from
+1.6 to between 2.2 and 3.4 px.
 
-**Tests.** The same path sampled at different event rates (extra collinear
-points) gives identical coverage; the same strokes at two raster sizes agree
-after resampling within a stated tolerance; a reloaded stroke list rasterises
-bit-identically; a cached and an uncached raster are equal; an extended stroke
-differs from the original only within `radius + s` of the old end point and
-within `radius` of the added path.
+**Tests.**
+- The same path sampled at different event rates gives identical coverage
+  when the split is exact, and within 1e-5 otherwise.
+- The same strokes at two raster sizes agree after box-halving: max 0.02 and
+  mean 0.00015, or a mean of 0.005 at hardness 1.
+- A thinnest stroke has a stable weight across sizes and sub-pixel phases.
+- Dab placement matches an independent placement from this text.
+- A reloaded stroke list rasterises bit-identically.
+- A cached and an uncached raster are equal, for any tile size and thread
+  count.
+- An extended stroke differs from the original only within `R_d + s` of the
+  old end point and within `R_d` of the added path.
+- Rasteriser 1's golden digests hold.
 
 ### 7. GPU
 
@@ -502,14 +543,20 @@ stands in when off, as for every grid), 8 to 11 brush coverage. Twelve
 bindings, eleven of them textures: within the 16 sampled textures per stage
 that Vulkan and OpenGL ES 3.0 guarantee; D3D11 and Metal allow more.
 
-**Brush coverage packing (provisional).** Four brush masks per RGBA8 texture,
-up to four textures. Every QRhi backend supports RGBA8, so this needs no
-format check. The CPU rasterises the coverage and quantises it to 8 bits, and
-both backends read the same texels (`texelFetch` at the pixel, as the source),
-so coverage adds nothing to the parity gap. A brush mask's
-`coverage texture` and `channel` say where it lives. The prototype may choose
-R16 or RGBA16F (banding) or a texture array instead. Packing reduces bindings,
-not memory: 16 full-size brush masks are 384 MB at 24 MP in 8 bits.
+**Brush coverage packing.** Four brush masks go in each RGBA8 texture, in up
+to four textures (bindings 8 to 11). Every QRhi backend supports RGBA8, so this
+needs no format check. The CPU rasterises float coverage and quantises it to 8
+bits with a 4x4 ordered (Bayer) dither. The dither is anchored to the raster
+pixel and offset per mask, so that masks do not dither in step. Both backends
+read the same texels (`texelFetch` at the pixel, as the source), so coverage
+adds nothing to the parity gap.
+
+Measured at +4 EV over a soft, low-flow stroke, plain rounding left contours of
+0.28 to 0.40 ΔL* between plateaus 156 to 174 px wide. The dither leaves no
+contour, and a blurred error of 0.02 ΔL*. A brush mask's `coverage texture` and
+`channel` say where it lives. Sixteen full-size brush masks take 366 MiB at
+24 MP. RGBA16F, at twice the memory, is the fallback if the dither is ever
+unwanted.
 
 **Parity.** One shader function per shape and per resolution of section 2,
 mirroring the C++ of the same name line for line. Held to the pointwise
@@ -583,9 +630,11 @@ which stay settings-only. The document is the settings document plus one key:
 
 A linear mask's geometry is `{"from": [x, y], "to": [x, y]}`; a brush's is
 `{"rasteriser": 1, "strokes": [{"radius", "hardness", "flow", "erase",
-"points": [[x, y], …]}]}` (provisional). Only non-zero deltas are written; an
-absent one is 0. When `localAdjustments` is present it replaces the base's list
-and counter whole; absent, the base's list stays. `stateToJson` therefore
+"points": [[x, y], …]}]}`, the numbers in shortest decimal as everywhere in
+the document (only XMP stores strokes as base64, below), within the caps of
+section 6. Only non-zero deltas are written; an absent one is 0. When
+`localAdjustments` is present it replaces the base's list and counter whole;
+absent, the base's list stays. `stateToJson` therefore
 always writes the key, an empty `masks` included, so a written state applied
 onto any base gives that state back.
 
@@ -605,14 +654,23 @@ fresh counter leaves no trace and every written state reads back equal.
 Numbers are written in shortest decimal (`include/ShortestDecimal.h`), as the
 settings are, so they round-trip exactly.
 
-Brush strokes (provisional): `arraw:strokes` is an `rdf:Seq` with one text
-string per stroke, `radius hardness flow erase; x,y x,y …`, numbers in
-shortest decimal. Base64 binary is the alternative the prototype weighs.
-Provisional caps: 10 000 points per stroke and 2 000 strokes per mask. The
-edit rules hold the same caps (appending past them throws
-`std::invalid_argument`), so a saved list always reads back equal; on reading,
-points past the cap are cut from their stroke and strokes past the cap are
-dropped, each with a warning.
+Brush strokes: `arraw:strokes` is an `rdf:Seq` with one base64 string per
+stroke (RFC 4648 alphabet, padded, no line breaks). The bytes are:
+- the format, 1;
+- flags (bit 0 erase, the others 0);
+- radius, hardness and flow as little-endian float32 bits;
+- the point count as a LEB128 varint;
+- for each point, `u` then `v`, each as the zigzag LEB128 difference of the
+  float's order-preserving bit pattern from the previous point's (from 0.0 for
+  the first point).
+
+The form is canonical: shortest varints, zero padding bits, and nothing after
+the padding. It round-trips exactly. It takes about 7.6 bytes per point, where
+shortest-decimal text took 21.3. The caps are those of section 6, and the edit
+rules hold them, so a saved list always reads back equal. On reading, points
+past 10 000 are cut from their stroke and strokes past 2 000 are dropped. From
+the first stroke that would pass the mask's point, area or dab budget, that
+stroke and every later one are dropped. Each of these gives a warning.
 
 **Reading.**
 - A document without the list loads with no masks.
@@ -721,10 +779,10 @@ amendment requires, rather than from new origins.
   still refuses them.
 - Older arraw builds warn about the new properties, render without masks and
   keep the list when saving; a newer list blocks writing in this one.
-- Brush memory is real: 24 MB per full-size brush mask at 24 MP before the
-  prototype's resolution decision.
-- The plan step 4 prototype amends sections 6, 7 (packing) and 9 (stroke
-  encoding and caps).
+- Brush memory is real: coverage is at the rendered source's size, 91.6 MiB of
+  float per mask at 24 MP (366 MiB for 16 as RGBA8 textures).
+- The plan step 4 prototype amended sections 6, 7 (packing) and 9 (stroke
+  encoding and caps) on 2026-10-10.
 
 ## Alternatives considered
 
@@ -904,3 +962,29 @@ render about 47 to 53 ms median for a handle drag and 47 ms for an Exposure drag
 coalesced to about one render per two updates. On this machine every device is
 the CPU: the only Vulkan device is llvmpipe, which `createGpuContext` refuses as
 a software rasteriser, so no GPU figures were taken.
+
+## Amended 2026-10-10 after the brush prototype (user)
+
+Plan step 4 built the stroke contract, the rasteriser, the coverage cache and
+both stroke encodings, and measured them
+(`docs/ideas/brush-prototype-report.md`, reviewed in
+`docs/reviews/claude-opus-5-5_2026-10-09_brush-prototype.md`). The user accepted
+the preferred option of every recommendation, and the text of sections 6, 7
+(brush coverage packing) and 9 (brush strokes) above replaces the provisional
+text. Where it differs from the earlier text, it holds:
+
+- **Thin strokes.** A dab is drawn at `max(R, 1.5)` pixels with its flow scaled
+  by `(R / R_d)^2`, so a stroke keeps its weight at every raster size.
+- **Resolution.** The rendered source's size, one coverage pixel per source
+  pixel. A caller opening a photograph should rasterise the displayed size
+  first and the full size lazily, or in bands at export (16 masks take 13.4 s
+  at 24 MP).
+- **Packing.** RGBA8, four masks per texture, a 4x4 Bayer dither offset per
+  mask, applied by the CPU when it quantises.
+- **Encoding.** Base64 of delta-encoded points. The text form was measured and
+  rejected (2.78 times larger, 2.48 times slower to read).
+- **Caps.** 10 000 points per stroke, 2 000 strokes and 100 000 points per mask;
+  swept area at most 4 and at most 2 000 000 dabs per mask; radius 0.0005 to 1.
+- **Cache.** Float tiles of 128 pixels, LRU on 512 MiB, serving the window's
+  sizes; export rasterises outside it. The live stroke repaints only its new
+  dabs. `Result::dirty` is a hint; a GPU upload compares tile pointers.

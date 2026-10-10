@@ -100,6 +100,22 @@ Done (ADR 048): the develop dock has Adjustments and Masks tabs, the tab
 following the mask mode; the Adjustments groups collapse, each remembered in
 `QSettings`.
 
+## Local adjustments (user, 2026-10-08; `docs/ideas/local-adjustment-plan.md`)
+
+Done: steps 0 to 3 (ADR 044) and **step 4, the brush prototype (2026-10-10)**.
+The report `docs/ideas/brush-prototype-report.md` is accepted and ADR 044
+sections 6, 7 and 9 are amended. The prototype code
+(`src/core/{BrushStrokes,BrushRaster,BrushCoverageCache,StrokeCodec}`) is
+on branch `brush-prototype`.
+
+- **Next, step 5: the brush end to end without GUI.** The rasteriser and cache
+  in the render path, GPU textures (RGBA8, four masks per texture, dithered),
+  parity, persistence (readable strokes in state JSON, base64 in XMP) and
+  Python. Open for it: rasterise the displayed size first on open, full size
+  lazily or in bands at export; compare tile pointers to find the tiles to
+  upload.
+- Step 6, the brush GUI, follows.
+
 ## Follow-ups (known limits, all documented in ADRs)
 
 - **Dehaze:** convex tips sharper than the window (corners, the ends of
