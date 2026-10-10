@@ -441,7 +441,7 @@ Mask draggedShape(const Mask& atPress, MaskHandle handle, QPointF press, QPointF
 
 Mask createdShape(MaskTool tool, QPointF press, QPointF pointer, const MaskViewMapping& mapping,
                   QSizeF widget) {
-    if (tool == MaskTool::None) {
+    if (tool != MaskTool::Linear && tool != MaskTool::Radial) {
         throw std::invalid_argument("A mask is created with the Linear or the Radial tool");
     }
     const double side = std::min(widget.width(), widget.height());

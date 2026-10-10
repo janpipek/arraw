@@ -98,6 +98,14 @@ TEST_CASE("The map round-trips both ways in every geometry", "[developed-frame]"
     REQUIRE(count == 8 * 4 * 4 * 3 * 2);
 }
 
+TEST_CASE("The sensor point under a corrected position is the same numbers", "[developed-frame]") {
+    for (const CorrectedPosition at : samples) {
+        const SensorPoint point = sensorFrom(at);
+        CHECK(point.u == static_cast<float>(at.u));
+        CHECK(point.v == static_cast<float>(at.v));
+    }
+}
+
 TEST_CASE("The map puts known points where the picture shows them", "[developed-frame]") {
     const SourceShape landscape{{300, 200}, ImageOrientation::Normal};
 

@@ -576,6 +576,8 @@ TEST_CASE("Creating by click makes the default size at the click", "[app][mask-e
             CHECK(oval.radiusX == oval.radiusY);
         }
     }
+    CHECK_THROWS_AS(createdShape(MaskTool::Brush, {}, {}, mappingFor(landscape, {}), widgetSize),
+                    std::invalid_argument);
     CHECK_THROWS_AS(createdShape(MaskTool::None, {}, {}, mappingFor(landscape, {}), widgetSize),
                     std::invalid_argument);
 }

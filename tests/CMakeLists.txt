@@ -22,6 +22,7 @@ add_executable(arraw-tests
         test_BrushCoverage.cpp
         test_BrushCoverageCache.cpp
         test_BrushMask.cpp
+        test_BrushPainting.cpp
         test_BrushReload.cpp
         test_BrushRender.cpp
         test_BrushRaster.cpp

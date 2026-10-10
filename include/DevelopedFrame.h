@@ -1,5 +1,6 @@
 #pragma once
 
+#include <BrushStrokes.h>
 #include <CropGeometry.h>
 #include <GeometrySettings.h>
 #include <ImageBuffer.h>
@@ -39,6 +40,12 @@ struct CorrectedPosition {
 
     friend bool operator==(const CorrectedPosition&, const CorrectedPosition&) = default;
 };
+
+/// @brief Gives the sensor-frame point under a corrected position.
+///
+/// The same numbers until lens corrections (ADR 009), the one place that changes then. Narrowed to
+/// float once, here.
+[[nodiscard]] SensorPoint sensorFrom(CorrectedPosition position) noexcept;
 
 /// @brief A position in the developed frame: the upright, straightened, cropped picture a render
 /// shows, normalised per axis to the crop.

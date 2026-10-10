@@ -88,8 +88,12 @@ StrokeBudget budgetOf(const Stroke& stroke) noexcept {
         const double dv = static_cast<double>(stroke.points[i].v) - stroke.points[i - 1].v;
         length += std::sqrt(du * du + dv * dv);
     }
-    const double radius = stroke.radius;
-    return {stroke.points.size(), length * radius, length / (dabSpacingFactor * radius)};
+    return budgetOf(stroke.points.size(), length, stroke.radius);
+}
+
+StrokeBudget budgetOf(std::size_t points, double pathLength, float radius) noexcept {
+    const double r = radius;
+    return {points, pathLength * r, pathLength / (dabSpacingFactor * r)};
 }
 
 void validate(const Stroke& stroke) {

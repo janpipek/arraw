@@ -16,8 +16,9 @@
 
 namespace arraw::app {
 
-/// @brief Mask kind a creation gesture is armed for.
-enum class MaskTool { None, Linear, Radial };
+/// @brief Mask kind a gesture is armed for: a drag creates a linear or radial mask, a stroke paints
+/// a brush.
+enum class MaskTool { None, Linear, Radial, Brush };
 
 /// @brief A grabbable part of the selected mask's handles (ADR 044, section 10).
 enum class MaskHandle {

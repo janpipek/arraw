@@ -71,6 +71,14 @@ struct StrokeBudget {
 /// long-edge lengths for every aspect.
 [[nodiscard]] StrokeBudget budgetOf(const Stroke& stroke) noexcept;
 
+/// @brief Measures what a stroke of a given size costs, for a caller that tracks the path length
+/// as it grows.
+/// @param points Number of points.
+/// @param pathLength Length along the path in normalised (u, v) units, summed segment by segment
+/// in double precision as ::arraw::budgetOf does.
+/// @param radius Brush radius.
+[[nodiscard]] StrokeBudget budgetOf(std::size_t points, double pathLength, float radius) noexcept;
+
 /// @brief Refuses a stroke outside the contract.
 ///
 /// Checks that every number is finite, the radius is within the brush radius range, hardness

@@ -161,3 +161,7 @@ MaskCoverage arraw::maskCoverage(const LocalAdjustment& adjustment, const Develo
     }
     return coverage;
 }
+
+SensorPoint arraw::sensorFrom(CorrectedPosition position) noexcept {
+    return {static_cast<float>(position.u), static_cast<float>(position.v)};
+}
