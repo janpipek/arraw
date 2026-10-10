@@ -292,9 +292,3 @@ TEST_CASE("describeChange tells the strokes from the shape", "[brush][edit]") {
     REQUIRE(kind.shape);
     REQUIRE_FALSE(kind.strokes);
 }
-
-TEST_CASE("Brush masks are not persisted yet", "[brush][mask]") {
-    const DevelopState state = withBrush({someStroke()});
-    REQUIRE_THROWS_AS(stateToJson(state), std::logic_error);
-    REQUIRE_THROWS_AS(localAdjustmentsToJson(state), std::logic_error);
-}

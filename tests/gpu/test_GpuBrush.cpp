@@ -9,9 +9,11 @@
 #include "ProcessingPlan.h"
 #include "SampleConversion.h"
 #include "support/BrushGenerators.h"
+#include "support/Fixtures.h"
 #include "support/LadderTesting.h"
 #include "support/LocalAdjustmentStates.h"
 #include "support/RenderDigest.h"
+#include "support/TempDir.h"
 
 #include <BrushStrokes.h>
 #include <CheckpointLadder.h>
@@ -23,9 +25,12 @@
 #include <ImagePyramid.h>
 #include <LocalAdjustmentEdits.h>
 #include <LocalAdjustments.h>
+#include <Photo.h>
 #include <Progress.h>
 #include <RenderCheckpoint.h>
 #include <SettingDescriptors.h>
+#include <SettingsJson.h>
+#include <Sidecar.h>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -1106,4 +1111,29 @@ TEST_CASE("The pointwise pass reads eleven images", "[gpu][brush]") {
     const DeviceImage rendered =
         context.render(GpuPass::Pointwise, bytes, eleven, image.size(), workingEncoding);
     REQUIRE(rendered.size() == image.size());
+}
+
+TEST_CASE("Brushes after a reload render the same bits, on the device and on the CPU",
+          "[gpu][brush][persistence][reload]") {
+    GpuContext& context = gpuContext();
+    const DevelopState state = test::stateWithBrushes();
+    const auto source = std::make_shared<const ImageBuffer>(gentleOf({256, 192}));
+    const DeviceImage uploaded = uploadSource(context, *source);
+    const ImageBuffer before = directRender(context, *source, uploaded, state);
+    const ImageBuffer cpu = develop(*source, state, {});
+
+    const test::TempDir directory;
+    const std::filesystem::path photo = directory.file("IMG_1.dng");
+    std::filesystem::copy_file(test::fixture("linear-32x24-neutral.dng"), photo);
+    writeSidecar(openPhoto(photo).with(state));
+    const auto contents = readSidecar(photo);
+    REQUIRE(contents);
+    REQUIRE(contents->state);
+
+    for (const DevelopState& back :
+         {applyStateJson(stateToJson(state), DevelopState{}), *contents->state}) {
+        REQUIRE(back == state);
+        requireBitIdentical(before, directRender(context, *source, uploaded, back));
+        requireBitIdentical(cpu, develop(*source, back, {}));
+    }
 }

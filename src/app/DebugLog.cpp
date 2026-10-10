@@ -90,6 +90,8 @@ QString noticeName(Notice notice) {
         return QStringLiteral("LocalAdjustmentDropped");
     case Notice::LocalAdjustmentFieldIgnored:
         return QStringLiteral("LocalAdjustmentFieldIgnored");
+    case Notice::BrushStrokesTrimmed:
+        return QStringLiteral("BrushStrokesTrimmed");
     case Notice::NewerLocalAdjustmentsVersion:
         return QStringLiteral("NewerLocalAdjustmentsVersion");
     case Notice::MetadataNotCarried:

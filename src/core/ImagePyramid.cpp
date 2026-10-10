@@ -2,6 +2,7 @@
 
 #include "GeometryPlan.h"
 #include "ProcessingPlan.h"
+#include "PyramidSize.h"
 #include "RowBands.h"
 #include "SampleConversion.h"
 
@@ -13,11 +14,6 @@
 namespace arraw {
 
 namespace {
-
-/// @brief Gives the size of the next level of a pyramid.
-ImageSize halfOf(ImageSize size) {
-    return {(size.width + 1) / 2, (size.height + 1) / 2};
-}
 
 /// @brief Halves an image of one sample type into a float one.
 ///

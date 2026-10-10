@@ -9,6 +9,7 @@
 #include <format>
 #include <iterator>
 #include <limits>
+#include <memory>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -22,6 +23,7 @@ namespace {
 constexpr std::array<std::string_view, 6> topKeys{"id",      "type",    "name",
                                                   "enabled", "opacity", "invert"};
 constexpr std::array<std::string_view, 4> linearKeys{"fromX", "fromY", "toX", "toY"};
+constexpr std::array<std::string_view, 1> brushKeys{"rasteriser"};
 constexpr std::array<std::string_view, 6> radialKeys{"centreX", "centreY", "radiusX",
                                                      "radiusY", "angle",   "feather"};
 
@@ -109,7 +111,7 @@ private:
         if (!type->text || type->structured) {
             throw Drop{"its type is not text"};
         }
-        if (*type->text != "linear" && *type->text != "radial") {
+        if (*type->text != "linear" && *type->text != "radial" && *type->text != "brush") {
             throw Drop{std::format("the type '{}' is not one this arraw knows", *type->text)};
         }
         const FieldValue* idField = find(fields_.top, "id");
@@ -138,10 +140,15 @@ private:
         if (const FieldValue* opacity = find(fields_.top, "opacity")) {
             adjustment.opacity = clamped(number(opacity, "opacity"), 0.0, 1.0, "opacity");
         }
+        if (*type->text != "brush" && (fields_.strokes || !fields_.strokesProblem.empty())) {
+            ignored("strokes");
+        }
         if (*type->text == "linear") {
             adjustment.shape = linear();
-        } else {
+        } else if (*type->text == "radial") {
             adjustment.shape = radial();
+        } else {
+            adjustment.shape = brush();
         }
         deltas(adjustment.deltas);
         return adjustment;
@@ -258,6 +265,160 @@ private:
         return mask;
     }
 
+    /// @brief How many strokes of each kind of trouble a brush had.
+    struct StrokeTally {
+        std::size_t unreadable = 0; ///< Strokes that could not be read.
+        std::size_t pointsCut = 0;  ///< Strokes kept with points cut.
+        std::size_t pastCap = 0;    ///< Strokes past the cap.
+        std::size_t pastBudget = 0; ///< Strokes past a budget.
+        std::size_t budgetFrom = 0; ///< Position (from 1) of the first stroke past a budget.
+        std::string budgetName;     ///< Name of the budget that was passed.
+        std::size_t radius = 0;     ///< Strokes kept with a radius clamped.
+        std::size_t hardness = 0;   ///< Strokes kept with a hardness clamped.
+        std::size_t flow = 0;       ///< Strokes kept with a flow clamped.
+        std::size_t positions = 0;  ///< Strokes kept with a position clamped.
+    };
+
+    /// @brief Names the budget a stroke total passes.
+    static std::string budgetOverrun(const StrokeBudget& total) {
+        return total.points > maximumPointsPerMask         ? "points"
+               : total.sweptArea > maximumSweptAreaPerMask ? "swept-area"
+                                                           : "dab";
+    }
+
+    /// @brief Reports a count of strokes trimmed, once.
+    void trimmed(std::size_t count, std::string words) {
+        if (count == 0) {
+            return;
+        }
+        log_.record({.notice = Notice::BrushStrokesTrimmed,
+                     .severity = Severity::Warning,
+                     .subject = subject_,
+                     .values = {static_cast<double>(position_), idText_, static_cast<double>(count),
+                                std::move(words)}});
+    }
+
+    /// @brief Words a count of strokes ("1 stroke", "3 strokes").
+    static std::string strokesWord(std::size_t count) {
+        return count == 1 ? "1 stroke" : std::format("{} strokes", count);
+    }
+
+    /// @brief Brings a number into a range, noting in @p moved if it moved.
+    static void clampInto(float& value, float low, float high, bool& moved) {
+        const float used = std::clamp(value, low, high);
+        if (used != value) {
+            value = used;
+            moved = true;
+        }
+    }
+
+    /// @brief Reads a brush's geometry and strokes, applying the reading rules of ADR 044.
+    BrushMask brush() {
+        const FieldValue* rasteriser = find(fields_.geometry, "rasteriser");
+        if (rasteriser == nullptr || rasteriser->structured || !rasteriser->number ||
+            !std::isfinite(*rasteriser->number) ||
+            *rasteriser->number != std::trunc(*rasteriser->number)) {
+            throw Drop{"its rasteriser is missing or not a whole number"};
+        }
+        if (*rasteriser->number != static_cast<double>(brushRasteriserVersion)) {
+            throw Drop{std::format("unknown rasteriser {}", *rasteriser->number)};
+        }
+        if (find(fields_.geometry, "strokes") != nullptr) {
+            throw Drop{"'strokes' is not a sequence of strokes"};
+        }
+        ignoreOtherGeometry(brushKeys);
+        if (!fields_.strokesProblem.empty()) {
+            throw Drop{fields_.strokesProblem};
+        }
+        BrushMask mask;
+        if (!fields_.strokes) {
+            return mask;
+        }
+        StrokeTally tally;
+        std::vector<Stroke> kept;
+        StrokeBudget total;
+        bool stopped = false;
+        std::set<std::string> unknown;
+        for (std::size_t i = 0; i < fields_.strokes->size(); ++i) {
+            const StrokeFields& stored = (*fields_.strokes)[i];
+            if (i >= maximumStrokesPerMask) {
+                ++tally.pastCap;
+                continue;
+            }
+            unknown.insert(stored.unknownKeys.begin(), stored.unknownKeys.end());
+            if (stopped) {
+                ++tally.pastBudget;
+                continue;
+            }
+            if (!stored.decoded) {
+                ++tally.unreadable;
+                continue;
+            }
+            Stroke stroke = stored.decoded->stroke;
+            const bool finite = std::isfinite(stroke.radius) && std::isfinite(stroke.hardness) &&
+                                std::isfinite(stroke.flow) &&
+                                std::ranges::all_of(stroke.points, [](const SensorPoint& point) {
+                                    return std::isfinite(point.u) && std::isfinite(point.v);
+                                });
+            if (!finite || stroke.points.empty()) {
+                ++tally.unreadable;
+                continue;
+            }
+            bool movedRadius = false;
+            bool movedHardness = false;
+            bool movedFlow = false;
+            bool movedPosition = false;
+            clampInto(stroke.radius, minimumBrushRadius, maximumBrushRadius, movedRadius);
+            clampInto(stroke.hardness, 0.0F, 1.0F, movedHardness);
+            clampInto(stroke.flow, 0.0F, 1.0F, movedFlow);
+            for (SensorPoint& point : stroke.points) {
+                clampInto(point.u, minimumMaskPosition, maximumMaskPosition, movedPosition);
+                clampInto(point.v, minimumMaskPosition, maximumMaskPosition, movedPosition);
+            }
+            const StrokeBudget own = budgetOf(stroke);
+            StrokeBudget next = total;
+            next += own;
+            bool alone = true;
+            try {
+                stroke = normalised(std::move(stroke));
+            } catch (const std::invalid_argument&) {
+                alone = false;
+            }
+            if (!alone || !next.withinMaskLimits()) {
+                stopped = true;
+                tally.budgetFrom = i + 1;
+                tally.budgetName = budgetOverrun(alone ? next : own);
+                ++tally.pastBudget;
+                continue;
+            }
+            // Counted only now, so a stroke that is dropped is not reported as trimmed too.
+            tally.pointsCut += stored.decoded->pointsDropped > 0 ? 1 : 0;
+            tally.radius += movedRadius ? 1 : 0;
+            tally.hardness += movedHardness ? 1 : 0;
+            tally.flow += movedFlow ? 1 : 0;
+            tally.positions += movedPosition ? 1 : 0;
+            total = next;
+            kept.push_back(std::move(stroke));
+        }
+        trimmed(tally.unreadable, strokesWord(tally.unreadable) + " could not be read");
+        trimmed(tally.pointsCut, std::format("points past {} cut from {}", maximumStrokePoints,
+                                             strokesWord(tally.pointsCut)));
+        trimmed(tally.pastCap, std::format("strokes from {} on dropped: past the {} a mask holds",
+                                           maximumStrokesPerMask + 1, maximumStrokesPerMask));
+        trimmed(tally.pastBudget, std::format("strokes from {} on dropped: past the {} budget",
+                                              tally.budgetFrom, tally.budgetName));
+        trimmed(tally.radius, std::format("radius clamped in {}", strokesWord(tally.radius)));
+        trimmed(tally.hardness, std::format("hardness clamped in {}", strokesWord(tally.hardness)));
+        trimmed(tally.flow, std::format("flow clamped in {}", strokesWord(tally.flow)));
+        trimmed(tally.positions,
+                std::format("positions clamped in {}", strokesWord(tally.positions)));
+        for (const std::string& key : unknown) {
+            ignored("strokes[]." + key);
+        }
+        mask.strokes = std::make_shared<const StrokeList>(std::move(kept), brushRasteriserVersion);
+        return mask;
+    }
+
     void deltas(LocalDeltas& into) {
         for (const auto& [key, value] : fields_.deltas) {
             const LocalDescriptor* descriptor = findLocalDescriptor(key);
@@ -284,7 +445,8 @@ FieldPart arraw::partOfKey(std::string_view key) noexcept {
     if (std::ranges::find(topKeys, key) != topKeys.end()) {
         return FieldPart::Top;
     }
-    if (std::ranges::find(linearKeys, key) != linearKeys.end() ||
+    if (std::ranges::find(brushKeys, key) != brushKeys.end() || key == "strokes" ||
+        std::ranges::find(linearKeys, key) != linearKeys.end() ||
         std::ranges::find(radialKeys, key) != radialKeys.end()) {
         return FieldPart::Geometry;
     }
@@ -344,9 +506,6 @@ arraw::readLocalAdjustments(std::span<const MaskFields> entries, std::optional<d
 }
 
 WrittenMask arraw::writtenForm(const LocalAdjustment& adjustment) {
-    if (std::holds_alternative<BrushMask>(adjustment.shape)) {
-        throw std::logic_error("brush masks are not persisted yet");
-    }
     const auto num = [](float value) { return WrittenValue{shortestDouble(value)}; };
     WrittenMask written;
     written.top = {{"id", WrittenValue{static_cast<double>(adjustment.id.value)}},
@@ -360,6 +519,10 @@ WrittenMask arraw::writtenForm(const LocalAdjustment& adjustment) {
                             {"fromY", num(linear->from.v)},
                             {"toX", num(linear->to.u)},
                             {"toY", num(linear->to.v)}};
+    } else if (const auto* brush = std::get_if<BrushMask>(&adjustment.shape)) {
+        written.strokes = brush->strokes ? brush->strokes : emptyStrokeList();
+        written.geometry = {
+            {"rasteriser", WrittenValue{static_cast<double>(written.strokes->rasteriser())}}};
     } else {
         const auto& radial = std::get<RadialMask>(adjustment.shape);
         written.geometry = {{"centreX", num(radial.centre.u)}, {"centreY", num(radial.centre.v)},

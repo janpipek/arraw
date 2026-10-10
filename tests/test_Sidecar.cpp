@@ -143,14 +143,6 @@ TEST_CASE("Every settings row survives a write and a read", "[sidecar]") {
     REQUIRE(readSidecar(path)->state->settings == DevelopSettings{});
 }
 
-TEST_CASE("A sidecar is not written for a photograph with a brush", "[sidecar][brush]") {
-    const test::TempDir directory;
-    const fs::path path = copyRaw(directory, "IMG_1.dng");
-    const DevelopState state = withLocalAdjustmentAdded(DevelopState{}, Mask{BrushMask{}});
-    REQUIRE_THROWS(writeSidecar(openPhoto(path).with(state)));
-    REQUIRE_FALSE(fs::exists(sidecarPath(path)));
-}
-
 TEST_CASE("Marks survive a write and a read", "[sidecar][marks]") {
     const test::TempDir directory;
     const fs::path path = copyRaw(directory, "IMG_1.dng");

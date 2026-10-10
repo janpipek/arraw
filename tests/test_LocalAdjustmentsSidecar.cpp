@@ -1,10 +1,13 @@
 // The local adjustments in an XMP sidecar (ADR 044, section 9).
 
+#include "StrokeCodec.h"
 #include "support/Fixtures.h"
 #include "support/LocalAdjustmentStates.h"
 #include "support/TempDir.h"
 
+#include <BrushStrokes.h>
 #include <DevelopState.h>
+#include <Diagnostics.h>
 #include <ImageImport.h>
 #include <LocalAdjustmentEdits.h>
 #include <Photo.h>
@@ -454,8 +457,7 @@ TEST_CASE("A mask's fields are not top-level settings", "[local][sidecar]") {
 TEST_CASE("Entries that cannot be used are dropped with a warning that names them",
           "[local][sidecar]") {
     const std::vector<std::string> bad = {
-        item(field("id", "2") + field("type", "brush") + field("rasteriser", "1") +
-             field("strokes", "")),
+        item(field("id", "2") + field("type", "stamp") + field("radius", "1")),
         item(field("id", "2") + field("type", "spiral")),
         item(field("type", "linear") + field("fromX", "0") + field("fromY", "0") +
              field("toX", "1") + field("toY", "1")), // no id
@@ -646,4 +648,259 @@ TEST_CASE("A photograph opens with the masks of its sidecar", "[local][sidecar]"
     const DevelopState state = test::stateWithMasks();
     bench.write(state);
     CHECK(openPhoto(bench.photo).state() == state);
+}
+
+// Brush masks (ADR 044, section 9; the brush plan, sections 5.2 and 5.3).
+
+namespace {
+
+/// The fields of a brush mask other than its strokes, as child elements.
+std::string brushFields(int id, const std::string& rasteriser = "1") {
+    return field("id", std::to_string(id)) + field("type", "brush") + field("name", "") +
+           field("enabled", "True") + field("opacity", "1") + field("invert", "False") +
+           (rasteriser.empty() ? "" : field("rasteriser", rasteriser)) + field("exposure", "0.5");
+}
+
+/// An `arraw:strokes` property of the given `rdf:li` texts.
+std::string strokesElement(const std::vector<std::string>& texts) {
+    std::string items;
+    for (const std::string& text : texts) {
+        items += "<rdf:li>" + text + "</rdf:li>";
+    }
+    return "<arraw:strokes><rdf:Seq>" + items + "</rdf:Seq></arraw:strokes>";
+}
+
+Stroke stroke(float v, float radius = 0.02F) {
+    return test::paintedStroke({0.2F, v}, {0.6F, v}, 5, radius, 0.5F, 1.0F);
+}
+
+const BrushMask& brushAt(const DevelopState& state, std::size_t index = 0) {
+    return std::get<BrushMask>(state.localAdjustments.at(index).shape);
+}
+
+std::vector<std::string> wordsOf(const CollectedDiagnostics& log, Notice notice) {
+    std::vector<std::string> words;
+    for (const Diagnostic& entry : log.entries()) {
+        if (entry.notice == notice) {
+            words.push_back(describe(entry));
+        }
+    }
+    return words;
+}
+
+} // namespace
+
+TEST_CASE("Brush masks survive a write and a read, with radial masks beside them",
+          "[local][sidecar][brush]") {
+    const Workbench bench;
+    for (const DevelopState& state :
+         {test::stateWithBrushes(), withLocalAdjustmentAdded(DevelopState{}, BrushMask{}),
+          withLocalAdjustmentAdded(
+              withLocalAdjustmentAdded(DevelopState{}, test::someRadial()),
+              test::brushMaskWith({Stroke{0.0123456789F,
+                                          1.0F / 3.0F,
+                                          0.1F,
+                                          true,
+                                          {{1.0F / 7.0F, 0.37F}, {-1.5F, 2.9999998F}}}}))}) {
+        bench.write(state);
+        CollectedDiagnostics log;
+        CHECK(bench.read(log) == state);
+        CHECK(log.entries().empty());
+    }
+}
+
+TEST_CASE("A brush is a rasteriser and one base64 string per stroke", "[local][sidecar][brush]") {
+    const Workbench bench;
+    const DevelopState state = test::stateWithBrushes();
+    bench.write(state);
+    const std::string text = slurp(bench.sidecar);
+    CHECK(occurrences(text, "<arraw:strokes>") == 4);
+    CHECK(occurrences(text, "<arraw:rasteriser>1</arraw:rasteriser>") == 4);
+    std::size_t strokes = 0;
+    for (std::size_t i = 0; i < 4; ++i) {
+        for (const auto& each : brushAt(state, i).strokes->strokes()) {
+            CHECK(occurrences(text, "<rdf:li>" + strokeBase64(*each) + "</rdf:li>") == 1);
+            ++strokes;
+        }
+    }
+    CHECK(strokes == 5);
+    // An empty brush writes an empty sequence.
+    CHECK_THAT(text, ContainsSubstring("<arraw:strokes><rdf:Seq/></arraw:strokes>"));
+    // Writing again says each thing once.
+    bench.write(state);
+    CHECK(occurrences(slurp(bench.sidecar), "<arraw:strokes>") == 4);
+}
+
+TEST_CASE("A brush reads in each spelling the structure may take", "[local][sidecar][brush]") {
+    const Stroke one = stroke(0.4F);
+    const Stroke two = stroke(0.6F, 0.05F);
+    DevelopState expected =
+        withLocalAdjustmentAdded(DevelopState{}, test::brushMaskWith({one, two}));
+    expected.localAdjustments[0].id = LocalAdjustmentId{1};
+    expected.localAdjustments[0].deltas.exposure = 0.5F;
+    expected.nextLocalAdjustmentId = LocalAdjustmentId{2};
+    const std::string strokes = strokesElement({strokeBase64(one), strokeBase64(two)});
+
+    SECTION("fields and strokes as elements of a resource") {
+        Hand hand(sidecarWith("", item(brushFields(1) + strokes)));
+        CHECK(hand.state == expected);
+        CHECK(hand.log.entries().empty());
+    }
+    SECTION("a nested description") {
+        Hand hand(sidecarWith("", "<rdf:li><rdf:Description>" + brushFields(1) + strokes +
+                                      "</rdf:Description></rdf:li>"));
+        CHECK(hand.state == expected);
+        CHECK(hand.log.entries().empty());
+    }
+    SECTION("the other fields as attributes, the strokes as an element") {
+        Hand hand(sidecarWith(
+            "",
+            R"(<rdf:li arraw:id="1" arraw:type="brush" arraw:rasteriser="1" arraw:exposure="0.5">)" +
+                strokes + "</rdf:li>"));
+        CHECK(hand.state == expected);
+        CHECK(hand.log.entries().empty());
+    }
+    SECTION("the sequence inside a description of its own, and spaces around the text") {
+        Hand hand(sidecarWith(
+            "", item(brushFields(1) + "<arraw:strokes><rdf:Description><rdf:Seq><rdf:li>\n  " +
+                     strokeBase64(one) + " \n</rdf:li><rdf:li>" + strokeBase64(two) +
+                     "</rdf:li></rdf:Seq></rdf:Description></arraw:strokes>")));
+        CHECK(hand.state == expected);
+        CHECK(hand.log.entries().empty());
+    }
+    SECTION("another prefix for both namespaces") {
+        const std::string xmp = R"(<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <r:RDF xmlns:r="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <r:Description r:about="" xmlns:q="http://ns.arraw.org/develop/1.0/">
+   <q:localAdjustments><r:Seq><r:li r:parseType="Resource">
+    <q:id>1</q:id><q:type>brush</q:type><q:rasteriser>1</q:rasteriser><q:exposure>0.5</q:exposure>
+    <q:strokes><r:Seq><r:li>)" + strokeBase64(one) +
+                                "</r:li><r:li>" + strokeBase64(two) + R"(</r:li></r:Seq></q:strokes>
+   </r:li></r:Seq></q:localAdjustments>
+  </r:Description></r:RDF></x:xmpmeta>)";
+        Hand hand(xmp);
+        CHECK(hand.state == expected);
+        CHECK(hand.log.entries().empty());
+    }
+}
+
+TEST_CASE("A brush with no strokes, or an empty container, is an empty brush",
+          "[local][sidecar][brush]") {
+    for (const std::string& strokes : {std::string{}, std::string("<arraw:strokes/>"),
+                                       std::string("<arraw:strokes><rdf:Seq/></arraw:strokes>")}) {
+        CAPTURE(strokes);
+        Hand hand(sidecarWith("", item(brushFields(1) + strokes)));
+        REQUIRE(hand.state.localAdjustments.size() == 1);
+        CHECK(brushAt(hand.state).strokes->empty());
+        CHECK(hand.log.entries().empty());
+    }
+}
+
+TEST_CASE("Strokes that are not a sequence drop the brush", "[local][sidecar][brush]") {
+    for (const std::string& strokes :
+         {std::string("<arraw:strokes>AAAA</arraw:strokes>"),
+          std::string("<arraw:strokes><rdf:Bag><rdf:li>AAAA</rdf:li></rdf:Bag></arraw:strokes>"),
+          std::string(R"(<arraw:strokes arraw:x="1"><arraw:y>1</arraw:y></arraw:strokes>)")}) {
+        CAPTURE(strokes);
+        Hand hand(sidecarWith("", item(brushFields(1) + strokes)));
+        CHECK(hand.state.localAdjustments.empty());
+        CHECK(count(hand.log, Notice::LocalAdjustmentDropped) == 1);
+    }
+    // As an attribute it cannot hold a sequence either.
+    Hand attribute(sidecarWith(
+        "",
+        R"(<rdf:li arraw:id="1" arraw:type="brush" arraw:rasteriser="1" arraw:strokes="AAAA"/>)"));
+    CHECK(attribute.state.localAdjustments.empty());
+    CHECK(count(attribute.log, Notice::LocalAdjustmentDropped) == 1);
+}
+
+TEST_CASE("Strokes on a linear mask that are not a sequence are reported",
+          "[local][sidecar][brush]") {
+    Hand hand(sidecarWith("", item(linearFields(1, "<arraw:strokes>text</arraw:strokes>"))));
+    REQUIRE(hand.state.localAdjustments.size() == 1);
+    CHECK(count(hand.log, Notice::LocalAdjustmentFieldIgnored) == 1);
+}
+
+TEST_CASE("A rasteriser that is missing, malformed or unknown drops the brush",
+          "[local][sidecar][brush]") {
+    const std::string strokes = strokesElement({strokeBase64(stroke(0.5F))});
+    for (const std::string& rasteriser : {std::string{}, std::string("two"), std::string("1.5"),
+                                          std::string("2"), std::string("0")}) {
+        CAPTURE(rasteriser);
+        Hand hand(sidecarWith("", item(brushFields(1, rasteriser) + strokes)));
+        CHECK(hand.state.localAdjustments.empty());
+        REQUIRE(count(hand.log, Notice::LocalAdjustmentDropped) == 1);
+    }
+    Hand unknown(sidecarWith("", item(brushFields(1, "2") + strokes)));
+    CHECK_THAT(wordsOf(unknown.log, Notice::LocalAdjustmentDropped).at(0),
+               ContainsSubstring("unknown rasteriser 2"));
+}
+
+TEST_CASE("Strokes that cannot be decoded are dropped, with one warning",
+          "[local][sidecar][brush]") {
+    const std::string good = strokeBase64(stroke(0.5F));
+    // Not base64, empty, truncated, and a stroke that has no points.
+    const std::string noPoints = strokeBase64(Stroke{0.02F, 0.5F, 1.0F, false, {}});
+    Hand hand(sidecarWith(
+        "", item(brushFields(1) +
+                 strokesElement({good, "***", "", good.substr(0, 6), noPoints, good}))));
+    REQUIRE(hand.state.localAdjustments.size() == 1);
+    CHECK(brushAt(hand.state).strokes->size() == 2);
+    CHECK(wordsOf(hand.log, Notice::BrushStrokesTrimmed) ==
+          std::vector<std::string>{"mask 1 (id 1): 4 strokes could not be read"});
+    CHECK(count(hand.log, Notice::LocalAdjustmentDropped) == 0);
+}
+
+TEST_CASE("Strokes of a hand-written sidecar are clamped, with one warning per field",
+          "[local][sidecar][brush]") {
+    Stroke wild{9.0F, -4.0F, 7.0F, false, {{10.0F, -10.0F}}};
+    Hand hand(sidecarWith(
+        "", item(brushFields(1) + strokesElement({strokeBase64(wild), strokeBase64(wild)}))));
+    REQUIRE(hand.state.localAdjustments.size() == 1);
+    const Stroke& clamped = (*brushAt(hand.state).strokes)[0];
+    CHECK(clamped.radius == maximumBrushRadius);
+    CHECK(clamped.hardness == 0.0F);
+    CHECK(clamped.flow == 1.0F);
+    CHECK(clamped.points[0] == SensorPoint{maximumMaskPosition, minimumMaskPosition});
+    CHECK(wordsOf(hand.log, Notice::BrushStrokesTrimmed) ==
+          std::vector<std::string>{"mask 1 (id 1): radius clamped in 2 strokes",
+                                   "mask 1 (id 1): hardness clamped in 2 strokes",
+                                   "mask 1 (id 1): flow clamped in 2 strokes",
+                                   "mask 1 (id 1): positions clamped in 2 strokes"});
+}
+
+TEST_CASE("Strokes past the 2 000th stored one are dropped, even after an unreadable one",
+          "[local][sidecar][brush]") {
+    std::vector<std::string> texts{"***"};
+    const std::string dot = strokeBase64(Stroke{0.02F, 0.5F, 1.0F, false, {{0.5F, 0.5F}}});
+    for (std::size_t i = 0; i < maximumStrokesPerMask + 2; ++i) {
+        texts.push_back(dot);
+    }
+    Hand hand(sidecarWith("", item(brushFields(1) + strokesElement(texts))));
+    REQUIRE(hand.state.localAdjustments.size() == 1);
+    CHECK(brushAt(hand.state).strokes->size() == maximumStrokesPerMask - 1);
+    CHECK(wordsOf(hand.log, Notice::BrushStrokesTrimmed).size() == 2);
+}
+
+TEST_CASE("Strokes past a budget are dropped from the first that passes it",
+          "[local][sidecar][brush]") {
+    const std::string heavy =
+        strokeBase64(Stroke{0.5F, 1.0F, 1.0F, false, {{0.0F, 0.0F}, {1.0F, 0.0F}}});
+    std::vector<std::string> texts(10, heavy);
+    texts.push_back(strokeBase64(stroke(0.5F)));
+    Hand hand(sidecarWith("", item(brushFields(1) + strokesElement(texts))));
+    REQUIRE(hand.state.localAdjustments.size() == 1);
+    CHECK(brushAt(hand.state).strokes->size() == 8);
+    const auto words = wordsOf(hand.log, Notice::BrushStrokesTrimmed);
+    REQUIRE(words.size() == 1);
+    CHECK_THAT(words[0],
+               ContainsSubstring("strokes from 9 on dropped: past the swept-area budget"));
+}
+
+TEST_CASE("A brush is not a field of a linear mask", "[local][sidecar][brush]") {
+    Hand hand(
+        sidecarWith("", item(linearFields(1, field("rasteriser", "1") +
+                                                 strokesElement({strokeBase64(stroke(0.5F))})))));
+    REQUIRE(hand.state.localAdjustments.size() == 1);
+    CHECK(count(hand.log, Notice::LocalAdjustmentFieldIgnored) == 2);
 }

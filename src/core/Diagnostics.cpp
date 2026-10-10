@@ -100,6 +100,9 @@ std::string arraw::describe(const Diagnostic& diagnostic) {
     case Notice::LocalAdjustmentFieldIgnored:
         return "mask " + valueAt(diagnostic, 0) + " (id " + valueAt(diagnostic, 1) + ") has '" +
                valueAt(diagnostic, 2) + "', which is not a field of its kind, so it was ignored";
+    case Notice::BrushStrokesTrimmed:
+        return "mask " + valueAt(diagnostic, 0) + " (id " + valueAt(diagnostic, 1) +
+               "): " + valueAt(diagnostic, 3);
     case Notice::NewerLocalAdjustmentsVersion:
         return "these local adjustments are version " + valueAt(diagnostic, 0) +
                ", but this arraw knows up to version " + valueAt(diagnostic, 1) +

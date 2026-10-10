@@ -1,6 +1,9 @@
+#include "BrushCoverage.h"
+#include "BrushCoverageCache.h"
 #include "GeometryPlan.h"
 #include "LocalPlan.h"
 
+#include <BrushStrokes.h>
 #include <CropGeometry.h>
 #include <Develop.h>
 #include <DevelopState.h>
@@ -20,6 +23,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <memory>
 #include <random>
 #include <stdexcept>
 #include <vector>
@@ -438,11 +442,260 @@ TEST_CASE("Timing of a 1024 by 1024 coverage", "[.timing]") {
     }
 }
 
-TEST_CASE("Coverage of a brush mask is refused until the tint is drawn",
-          "[developed-frame][coverage]") {
+// The tint of a brush (decision 6b; the brush plan, section 7.1).
+
+namespace {
+
+/// A brush whose one stroke is a hardness-one band along the middle of the picture.
+std::shared_ptr<const StrokeList> bandStrokes(float v = 0.5F, float radius = 0.1F) {
+    return std::make_shared<const StrokeList>(
+        std::vector<Stroke>{Stroke{radius, 1.0F, 1.0F, false, {{0.2F, v}, {0.5F, v}, {0.8F, v}}}});
+}
+
+LocalAdjustment brushAdjustment(std::shared_ptr<const StrokeList> strokes, bool invert = false) {
+    LocalAdjustment adjustment;
+    adjustment.shape = BrushMask{std::move(strokes)};
+    adjustment.invert = invert;
+    return adjustment;
+}
+
+BrushCoverageCache& cache() {
+    return detail::brushCoverageCache();
+}
+
+/// Starts a case with nothing cached.
+void emptyCache() {
+    cache().clear();
+}
+
+/// Where a pyramid level of a source is: ceil-halved, as the window's pyramid is.
+ImageSize levelSize(ImageSize size, int level) {
+    for (int i = 0; i < level; ++i) {
+        size = {(size.width + 1) / 2, (size.height + 1) / 2};
+    }
+    return size;
+}
+
+} // namespace
+
+TEST_CASE("The tint of a brush is 255 deep inside a hard stroke and 0 beyond its reach",
+          "[developed-frame][coverage][brush]") {
+    emptyCache();
+    constexpr SourceShape source{{200, 100}, ImageOrientation::Normal};
+    const DevelopedFrameMap map(source, {});
+    const auto strokes = bandStrokes();
+    // One cell a pixel; the band is 20 pixels either side of row 50.
+    const MaskCoverage plain = maskCoverage(brushAdjustment(strokes), map, {}, source.size);
+    const MaskCoverage inverted =
+        maskCoverage(brushAdjustment(strokes, true), map, {}, source.size);
+    REQUIRE(plain.size == source.size);
+    const auto at = [&](const MaskCoverage& coverage, std::uint32_t x, std::uint32_t y) {
+        return coverage.weights[y * source.size.width + x];
+    };
+    CHECK(at(plain, 100, 50) == 255);
+    CHECK(at(plain, 60, 45) == 255);
+    CHECK(at(plain, 100, 5) == 0);
+    CHECK(at(plain, 100, 95) == 0);
+    CHECK(at(plain, 5, 50) == 0);
+    for (std::size_t i = 0; i < plain.weights.size(); ++i) {
+        CHECK(plain.weights[i] + inverted.weights[i] == 255);
+    }
+    // The edge is soft only by the antialiasing of one pixel, so it is not all 0 and 255.
+    CHECK(std::ranges::any_of(plain.weights, [](std::uint8_t w) { return w > 0 && w < 255; }));
+}
+
+TEST_CASE("The tint of a brush is 0 off the picture, and 255 inverted",
+          "[developed-frame][coverage][brush]") {
+    emptyCache();
+    constexpr SourceShape source{{64, 48}, ImageOrientation::Normal};
+    const DevelopedFrameMap map(source, {});
+    // A stroke wide enough to cover the whole picture.
+    const auto everything = std::make_shared<const StrokeList>(
+        std::vector<Stroke>{Stroke{1.0F, 1.0F, 1.0F, false, {{0.5F, 0.5F}}}});
+    const DevelopedRegion region{-1.0, -1.0, 3.0, 3.0};
+    const MaskCoverage plain = maskCoverage(brushAdjustment(everything), map, region, {30, 30});
+    const MaskCoverage inverted =
+        maskCoverage(brushAdjustment(everything, true), map, region, {30, 30});
+    // The picture is the middle tenth to the two-thirds of the region's axes; cells at the
+    // corners are off it.
+    CHECK(plain.weights[15 * 30 + 15] == 255);
+    CHECK(inverted.weights[15 * 30 + 15] == 0);
+    for (const std::size_t corner :
+         {std::size_t{0}, std::size_t{29}, std::size_t{29 * 30}, std::size_t{30 * 30 - 1}}) {
+        CHECK(plain.weights[corner] == 0);
+        CHECK(inverted.weights[corner] == 255);
+    }
+}
+
+TEST_CASE("An empty brush tints nothing, and draws nothing", "[developed-frame][coverage][brush]") {
+    emptyCache();
+    constexpr SourceShape source{{64, 48}, ImageOrientation::Normal};
+    const DevelopedFrameMap map(source, {});
+    const MaskCoverage plain = maskCoverage(brushAdjustment(emptyStrokeList()), map, {}, {16, 12});
+    const MaskCoverage inverted =
+        maskCoverage(brushAdjustment(emptyStrokeList(), true), map, {}, {16, 12});
+    CHECK(std::ranges::all_of(plain.weights, [](std::uint8_t w) { return w == 0; }));
+    CHECK(std::ranges::all_of(inverted.weights, [](std::uint8_t w) { return w == 255; }));
+    CHECK(cache().entryCount() == 0);
+    // A null list is the empty one.
+    LocalAdjustment bare;
+    bare.shape = BrushMask{nullptr};
+    CHECK(maskCoverage(bare, map, {}, {4, 4}).weights == std::vector<std::uint8_t>(16, 0));
+    CHECK(cache().entryCount() == 0);
+}
+
+TEST_CASE("The level is the coarsest no coarser than the grid",
+          "[developed-frame][coverage][brush]") {
+    constexpr SourceShape source{{512, 256}, ImageOrientation::Normal};
+    const DevelopedFrameMap map(source, {});
+    struct Density {
+        std::uint32_t columns; ///< Of a grid over the whole picture.
+        int level;             ///< Of the coverage it draws.
+    };
+    // A cell of 1, 2, 4, 5.12 and 17.06 source pixels; the shorter of the two steps decides.
+    for (const Density density :
+         {Density{512, 0}, Density{256, 1}, Density{128, 2}, Density{100, 2}, Density{30, 4}}) {
+        emptyCache();
+        const auto strokes = bandStrokes();
+        const ImageSize grid{density.columns, std::max(1U, density.columns / 2)};
+        INFO(density.columns << " columns");
+        (void)maskCoverage(brushAdjustment(strokes), map, {}, grid);
+        REQUIRE(cache().entryCount() == 1);
+        for (int level = 0; level <= 5; ++level) {
+            INFO("level " << level);
+            const auto lookup = cache().peek(strokes, levelSize(source.size, level)).lookup;
+            CHECK((lookup == CoverageLookup::Hit) == (level == density.level));
+        }
+    }
+    // The shorter step decides when the cells are not square.
+    emptyCache();
+    const auto strokes = bandStrokes();
+    (void)maskCoverage(brushAdjustment(strokes), map, {}, {512, 16});
+    CHECK(cache().peek(strokes, source.size).lookup == CoverageLookup::Hit);
+}
+
+TEST_CASE("The tint uses the level the cache holds, finer than the grid's, and draws nothing",
+          "[developed-frame][coverage][brush]") {
+    emptyCache();
+    constexpr SourceShape source{{512, 256}, ImageOrientation::Normal};
+    const DevelopedFrameMap map(source, {});
+    const auto strokes = bandStrokes(0.5F, 0.08F);
+    // The window has rendered level 1; the grid asks for level 2.
+    const ImageSize held = levelSize(source.size, 1);
+    const auto tiles = cache().coverage(strokes, held).tiles;
+    REQUIRE(cache().entryCount() == 1);
+    const std::size_t bytes = cache().memoryBytes();
+
+    const ImageSize grid{128, 64};
+    const MaskCoverage coverage = maskCoverage(brushAdjustment(strokes), map, {}, grid);
+    CHECK(cache().entryCount() == 1);
+    CHECK(cache().memoryBytes() == bytes);
+    CHECK(cache().peek(strokes, levelSize(source.size, 2)).lookup == CoverageLookup::Miss);
+    // Every cell is the held level's coverage under the cell's centre, rounded.
+    for (std::uint32_t row = 0; row < grid.height; ++row) {
+        for (std::uint32_t column = 0; column < grid.width; ++column) {
+            const double u = (column + 0.5) / grid.width;
+            const double v = (row + 0.5) / grid.height;
+            const float m = tiles->at(static_cast<std::uint32_t>(u * held.width),
+                                      static_cast<std::uint32_t>(v * held.height));
+            REQUIRE(coverage.weights[row * grid.width + column] ==
+                    static_cast<std::uint8_t>(m * 255.0F + 0.5F));
+        }
+    }
+    // The same strokes behind another pointer hit as well.
+    const auto copy = std::make_shared<const StrokeList>(std::vector<Stroke>{(*strokes)[0]});
+    REQUIRE(copy != strokes);
+    CHECK(maskCoverage(brushAdjustment(copy), map, {}, grid).weights == coverage.weights);
+    CHECK(cache().entryCount() == 1);
+}
+
+TEST_CASE("With nothing cached the tint draws at the grid's level, once",
+          "[developed-frame][coverage][brush]") {
+    emptyCache();
+    constexpr SourceShape source{{512, 256}, ImageOrientation::Normal};
+    const DevelopedFrameMap map(source, {});
+    const auto strokes = bandStrokes();
+    const ImageSize grid{128, 64};
+    const MaskCoverage first = maskCoverage(brushAdjustment(strokes), map, {}, grid);
+    REQUIRE(cache().entryCount() == 1);
+    const std::size_t bytes = cache().memoryBytes();
+    const auto drawn = cache().find(strokes, levelSize(source.size, 2));
+    REQUIRE(drawn);
+    const MaskCoverage second = maskCoverage(brushAdjustment(strokes), map, {}, grid);
+    CHECK(cache().find(strokes, levelSize(source.size, 2)) == drawn);
+    CHECK(cache().entryCount() == 1);
+    CHECK(cache().memoryBytes() == bytes);
+    CHECK(second.weights == first.weights);
+    // The rasteriser was drawn once, and what it drew is what the cache now holds.
+    CHECK(cache().peek(strokes, levelSize(source.size, 2)).lookup == CoverageLookup::Hit);
+}
+
+TEST_CASE("The tint draws its own level when the cache holds only a coarser one",
+          "[developed-frame][coverage][brush]") {
+    emptyCache();
+    constexpr SourceShape source{{512, 256}, ImageOrientation::Normal};
+    const DevelopedFrameMap map(source, {});
+    const auto strokes = bandStrokes();
+    (void)cache().coverage(strokes, levelSize(source.size, 3));
+    REQUIRE(cache().entryCount() == 1);
+    (void)maskCoverage(brushAdjustment(strokes), map, {}, {128, 64});
+    CHECK(cache().entryCount() == 2);
+    CHECK(cache().peek(strokes, levelSize(source.size, 2)).lookup == CoverageLookup::Hit);
+}
+
+TEST_CASE("The tint follows a rotated and cropped frame", "[developed-frame][coverage][brush]") {
+    emptyCache();
+    constexpr SourceShape source{{300, 200}, ImageOrientation::Rotate90};
+    GeometrySettings geometry;
+    geometry.straighten = 5.0;
+    geometry.crop.rectangle = UprightCropRect{0.1, 0.1, 0.9, 0.9};
+    const DevelopedFrameMap map(source, geometry);
+    const auto strokes = bandStrokes(0.5F, 0.15F);
+    // Cells no larger than a pixel: the coverage at the source's own size.
+    const ImageSize grid{200, 300};
+    const MaskCoverage coverage = maskCoverage(brushAdjustment(strokes), map, {}, grid);
+    const auto tiles = cache().find(strokes, source.size);
+    REQUIRE(tiles);
+    std::size_t covered = 0;
+    for (std::uint32_t row = 0; row < grid.height; ++row) {
+        for (std::uint32_t column = 0; column < grid.width; ++column) {
+            const CorrectedPosition at =
+                map.correctedFrom({(column + 0.5) / grid.width, (row + 0.5) / grid.height});
+            std::uint8_t expected = 0;
+            if (at.u >= 0.0 && at.v >= 0.0 && at.u < 1.0 && at.v < 1.0) {
+                expected = static_cast<std::uint8_t>(
+                    tiles->at(static_cast<std::uint32_t>(at.u * source.size.width),
+                              static_cast<std::uint32_t>(at.v * source.size.height)) *
+                        255.0F +
+                    0.5F);
+            }
+            // The map is affine: a row start and a step per cell may differ from a map per cell
+            // by rounding, which moves a weight by one at an edge at most.
+            const int got = coverage.weights[row * grid.width + column];
+            REQUIRE(std::abs(got - expected) <= 1);
+            covered += got == 255 ? 1 : 0;
+        }
+    }
+    CHECK(covered > 1000);
+    CHECK(covered < grid.pixelCount());
+}
+
+TEST_CASE("The tint of a brush refuses what it cannot evaluate",
+          "[developed-frame][coverage][brush]") {
+    emptyCache();
     constexpr SourceShape source{{40, 30}, ImageOrientation::Normal};
     const DevelopedFrameMap map(source, {});
-    LocalAdjustment adjustment;
-    adjustment.shape = BrushMask{};
-    REQUIRE_THROWS_AS(maskCoverage(adjustment, map, {}, {4, 4}), std::invalid_argument);
+    const LocalAdjustment adjustment = brushAdjustment(bandStrokes());
+    REQUIRE_THROWS_AS(maskCoverage(adjustment, map, {}, {0, 4}), std::invalid_argument);
+    REQUIRE_THROWS_AS(maskCoverage(adjustment, map, {}, {maximumCoverageSide + 1, 4}),
+                      std::invalid_argument);
+    REQUIRE_THROWS_AS(maskCoverage(adjustment, map, {0.0, 0.0, 0.0, 1.0}, {4, 4}),
+                      std::invalid_argument);
+    REQUIRE_THROWS_AS(maskCoverage(adjustment, map, {std::nan(""), 0.0, 1.0, 1.0}, {4, 4}),
+                      std::invalid_argument);
+    // A list of a rasteriser this arraw does not draw with.
+    LocalAdjustment unknown;
+    unknown.shape = BrushMask{std::make_shared<const StrokeList>(std::vector<Stroke>{}, 2)};
+    REQUIRE_THROWS_AS(maskCoverage(unknown, map, {}, {4, 4}), std::invalid_argument);
+    CHECK(cache().entryCount() == 0);
 }

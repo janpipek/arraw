@@ -1,7 +1,7 @@
 """The brush's value types in Python and a state that holds one (ADR 044, section 10).
 
-Step 5.1: the types, so that a state holding a brush converts and renders on the CPU. The Photo
-methods and persistence come with later steps."""
+Step 5.1: the types, so that a state holding a brush converts and renders on the CPU. Step 5.4: it
+persists. The Photo methods come with a later step."""
 
 import math
 import shutil
@@ -179,10 +179,12 @@ def test_a_photo_edit_by_shape_keeps_the_kind(photo):
         masked.with_local_adjustment(adjustment.id, shape=arraw.LinearMask())
 
 
-def test_a_brush_is_not_persisted_yet(dng, tmp_path):
+def test_a_brush_survives_a_sidecar_round_trip(dng, tmp_path):
     copy = tmp_path / "copy.dng"
     shutil.copy(dng, copy)
     photo = arraw.open(copy, sidecar=False)
     masked = photo.with_(state_with(photo, arraw.BrushMask([some_stroke()]), exposure=1.0))
-    with pytest.raises(Exception):
-        arraw.write_sidecar(masked)
+    arraw.write_sidecar(masked)
+    reloaded = arraw.open(copy)
+    assert reloaded.local_adjustments == masked.local_adjustments
+    assert np.array_equal(arraw.develop(reloaded).pixels, arraw.develop(masked).pixels)

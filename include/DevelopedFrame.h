@@ -146,12 +146,18 @@ inline constexpr std::uint32_t maximumCoverageSide = 4096;
 /// where it would act. The weight is the engine's own (::arraw::maskWeight) resolved against the
 /// full source, so a hard edge's one-pixel antialiasing is the export's. Cells off the picture
 /// are evaluated too: the mask extends past the frame.
+///
+/// A brush is sampled from the coverage the shared cache holds (ADR 044, section 6): the coarsest
+/// pyramid level whose pixel is no larger than a grid cell, or a finer one already held; a miss
+/// draws the grid's level on the calling thread and keeps it. The weight is the float coverage
+/// rounded, not the dithered codes a render reads, and is 0 (255 when inverted) off the picture.
 /// @param adjustment Adjustment whose shape and Invert to evaluate.
 /// @param frame Placement of the corrected frame in the developed one.
 /// @param region Rectangle of the developed frame the grid covers; finite, not empty.
 /// @param size Grid size; each side 1 to ::arraw::maximumCoverageSide.
 /// @throws std::invalid_argument if @p size or @p region is empty or not valid, or the shape
-/// cannot be normalised (::arraw::normalised(const Mask&)).
+/// cannot be normalised (::arraw::normalised(const Mask&)), a brush of an unknown rasteriser
+/// included.
 [[nodiscard]] MaskCoverage maskCoverage(const LocalAdjustment& adjustment,
                                         const DevelopedFrameMap& frame, DevelopedRegion region,
                                         ImageSize size);

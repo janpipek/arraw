@@ -461,6 +461,13 @@ void writeMasks(std::ostream& out, const DevelopState& state) {
         if (mask.invert) {
             out << ", inverted";
         }
+        if (const auto* brush = std::get_if<BrushMask>(&mask.shape); brush) {
+            const StrokeList& list = brush->strokes ? *brush->strokes : *emptyStrokeList();
+            const std::size_t strokes = list.size();
+            const std::size_t points = list.pointCount();
+            out << ", " << strokes << (strokes == 1 ? " stroke, " : " strokes, ") << points
+                << (points == 1 ? " point" : " points");
+        }
         for (const LocalDescriptor& descriptor : localAdjustmentDescriptors) {
             const float delta = mask.deltas.*descriptor.member;
             if (delta != 0.0F) {

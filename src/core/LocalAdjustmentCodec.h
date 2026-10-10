@@ -1,11 +1,15 @@
 #pragma once
 
+#include "StrokeCodec.h"
+
+#include <BrushStrokes.h>
 #include <DevelopState.h>
 #include <Diagnostics.h>
 #include <LocalAdjustments.h>
 
 #include <cstddef>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -45,14 +49,33 @@ struct FieldValue {
 /// @brief Fields of a mask in a document, by key, in the order the document gave them.
 using FieldList = std::vector<std::pair<std::string, FieldValue>>;
 
+/// @brief One stroke as a document gave it, decoded but not yet normalised.
+struct StrokeFields {
+    /// @brief Empty when it could not be decoded.
+    std::optional<DecodedStroke> decoded;
+
+    /// @brief Why not ("not base64", "no points", ...).
+    std::string problem;
+
+    /// @brief JSON only: keys a stroke object should not have.
+    std::vector<std::string> unknownKeys;
+};
+
 /// @brief One mask as a document holds it, before any rule is applied.
 struct MaskFields {
     /// @brief `id`, `type`, `name`, `enabled`, `opacity` and `invert`.
     FieldList top;
 
     /// @brief The geometry, flat: `fromX`, `fromY`, `toX`, `toY`; or `centreX`, `centreY`,
-    /// `radiusX`, `radiusY`, `angle`, `feather`.
+    /// `radiusX`, `radiusY`, `angle`, `feather`; or `rasteriser`.
     FieldList geometry;
+
+    /// @brief A brush's strokes; present when the document had the field.
+    std::optional<std::vector<StrokeFields>> strokes;
+
+    /// @brief What is wrong with the strokes as a whole, such as "not a sequence"; empty if
+    /// nothing.
+    std::string strokesProblem;
 
     /// @brief The deltas, by key of ::arraw::localAdjustmentDescriptors.
     FieldList deltas;
@@ -82,13 +105,17 @@ enum class FieldPart { Top, Geometry, Delta };
 /// @brief Applies the rules of reading to the masks a document holds.
 ///
 /// Dropped with a ::arraw::Notice::LocalAdjustmentDropped warning, naming position, id, type and
-/// reason: an entry that is not a structure, an unknown type (a brush included, for now), a
-/// missing or malformed field, a number that is not finite, an id that is zero or too large,
+/// reason: an entry that is not a structure, an unknown type, a missing or malformed field, a
+/// brush whose rasteriser is missing, not a whole number or not the one this arraw draws with,
+/// strokes that are not a sequence, a number that is not finite, an id that is zero or too large,
 /// degenerate geometry, a duplicate id (the later one), and every entry from the seventeenth on.
 /// Ignored with ::arraw::Notice::LocalAdjustmentFieldIgnored: an unknown field or delta key.
 /// Clamped with ::arraw::Notice::SettingClamped, under the key `localAdjustments[position].field`:
 /// opacity, feather, radii, positions, deltas, and an angle outside [-180, 180) (wrapped). Control
-/// characters are removed from a name, silently.
+/// characters are removed from a name, silently. A brush keeps what it can of its strokes (ADR
+/// 044, section 9): strokes that cannot be read, or that are past the caps and budgets of a mask,
+/// are dropped, points past the cap are cut and numbers out of range are clamped, each reported
+/// once per mask and reason with ::arraw::Notice::BrushStrokesTrimmed.
 /// @param entries Masks as the document gave them, in order.
 /// @param storedNext The counter the document gave, when it gave one.
 /// @param log Where the warnings go.
@@ -111,6 +138,9 @@ struct WrittenMask {
 
     /// @brief The geometry, flat, in the order of the keys of ::arraw::MaskFields::geometry.
     WrittenFields geometry;
+
+    /// @brief A brush's strokes; null for the other kinds.
+    std::shared_ptr<const StrokeList> strokes;
 
     /// @brief The non-zero deltas, in table order.
     WrittenFields deltas;

@@ -2,6 +2,7 @@
 #include "ui/MaskOverlay.h"
 #include "ui/PhotoView.h"
 
+#include <BrushStrokes.h>
 #include <Develop.h>
 #include <DevelopState.h>
 #include <LocalAdjustmentEdits.h>
@@ -18,6 +19,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cmath>
+#include <memory>
 #include <optional>
 #include <variant>
 #include <vector>
@@ -445,4 +447,37 @@ TEST_CASE("A press or drag with a brush selected makes no edit", "[app][masks][o
     CHECK(f.updates == 0);
     CHECK(f.cancelled == 0);
     CHECK(f.state.localAdjustments == before.localAdjustments);
+}
+
+TEST_CASE("O tints a selected brush, and nothing when O is off", "[app][masks][overlay][brush]") {
+    Fixture f;
+    f.add(BrushMask{std::make_shared<const StrokeList>(
+        std::vector<Stroke>{Stroke{0.1F, 1.0F, 1.0F, false, {{0.3F, 0.5F}, {0.7F, 0.5F}}}})});
+    f.overlay.setSelection(f.mask().id);
+    f.overlay.updateCoverage();
+    CHECK(f.overlay.coverage().isNull());
+
+    QTest::keyClick(&f.overlay, Qt::Key_O);
+    REQUIRE(f.overlay.overlayShown());
+    f.overlay.updateCoverage();
+    const QImage tint = f.overlay.coverage();
+    REQUIRE_FALSE(tint.isNull());
+    // Half the widget's logical size; red along the stroke (at v = 0.5) and clear above it.
+    CHECK(tint.width() == 300);
+    CHECK(tint.height() == 200);
+    CHECK(qAlpha(tint.pixel(150, 100)) > 100);
+    CHECK(qAlpha(tint.pixel(150, 20)) == 0);
+    CHECK(qAlpha(tint.pixel(5, 100)) == 0);
+
+    // Inverted, it is the other way round.
+    f.state = withLocalAdjustmentInverted(f.state, f.mask().id, true);
+    f.show();
+    f.overlay.updateCoverage();
+    CHECK(qAlpha(f.overlay.coverage().pixel(150, 100)) == 0);
+    CHECK(qAlpha(f.overlay.coverage().pixel(150, 20)) > 100);
+
+    QTest::keyClick(&f.overlay, Qt::Key_O);
+    CHECK_FALSE(f.overlay.overlayShown());
+    f.overlay.updateCoverage();
+    CHECK(f.overlay.coverage().isNull());
 }

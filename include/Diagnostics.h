@@ -118,6 +118,11 @@ enum class Notice {
     /// ignored: the adjustment's position (from 1), its id, then the key.
     LocalAdjustmentFieldIgnored,
 
+    /// @brief Strokes of a brush mask read from a document were dropped, cut or clamped, and the
+    /// mask was kept: the mask's position (from 1), its id, how many strokes or fields, then why
+    /// in words. One per mask and reason.
+    BrushStrokesTrimmed,
+
     /// @brief A document's list of local adjustments was written by a newer arraw, and was read
     /// as far as it is understood: its version, then the newest this arraw knows.
     NewerLocalAdjustmentsVersion,

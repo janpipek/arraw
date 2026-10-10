@@ -1,5 +1,6 @@
 #include "DebugLog.h"
 #include "support/GeneratedPhoto.h"
+#include "support/LocalAdjustmentStates.h"
 #include "support/TempDir.h"
 #include "ui/CropOverlay.h"
 #include "ui/DevelopPanel.h"
@@ -9,6 +10,11 @@
 #include "ui/MasksPanel.h"
 #include "ui/PhotoView.h"
 #include "ui/SettingSlider.h"
+
+#include <DevelopState.h>
+#include <LocalAdjustmentEdits.h>
+#include <Photo.h>
+#include <Sidecar.h>
 
 #include <QAbstractButton>
 #include <QAbstractItemModel>
@@ -50,8 +56,12 @@ struct Window {
     DebugLog debugLog;
     MainWindow window{debugLog};
 
-    explicit Window(int width = 640, int height = 480, QSize size = {}, bool second = true) {
+    explicit Window(int width = 640, int height = 480, QSize size = {}, bool second = true,
+                    const DevelopState* sidecarState = nullptr) {
         test::writeGeneratedPhoto(folder.file("a.png"), width, height);
+        if (sidecarState != nullptr) {
+            writeSidecar(openPhoto(folder.file("a.png")).with(*sidecarState));
+        }
         if (second) {
             test::writeGeneratedPhoto(folder.file("b.png"), width, height);
         }
@@ -441,6 +451,50 @@ TEST_CASE("The history dock and the zoom stay on in the mask mode, and O shows t
     w.press(Qt::Key_O);
     CHECK_FALSE(w.overlay().overlayShown());
     CHECK_FALSE(w.button("maskOverlay").isChecked());
+}
+
+TEST_CASE("A photograph whose sidecar holds a brush lists it, renders it and tints it, and "
+          "the tab offers no brush",
+          "[app][window][masks][brush]") {
+    // A stroke wide enough to cover the whole photograph, with a lot of exposure.
+    DevelopState state = withLocalAdjustmentAdded(
+        DevelopState{}, test::brushMaskWith({Stroke{1.0F, 1.0F, 1.0F, false, {{0.5F, 0.5F}}}}));
+    state = withLocalDelta(state, state.localAdjustments[0].id, "exposure", 2.0);
+
+    QImage plain;
+    {
+        Window bare(640, 480, {}, false);
+        plain = bare.view().wholeFrameImage();
+    }
+    Window w(640, 480, {}, false, &state);
+    QListView& list = *w.masks().findChild<QListView*>("maskList");
+    REQUIRE(list.model()->rowCount() == 1);
+    CHECK(list.model()->index(0, 0).data(Qt::DisplayRole).toString() == "Brush 1");
+    CHECK(w.waitForRenderOtherThan(plain));
+
+    // Choosing it enters the mode; it has no handles to draw, and O tints it.
+    emit list.clicked(list.model()->index(0, 0));
+    REQUIRE(w.view().isMaskMode());
+    REQUIRE(w.overlay().selection().has_value());
+    w.press(Qt::Key_O);
+    REQUIRE(w.overlay().overlayShown());
+    w.overlay().updateCoverage();
+    const QImage tint = w.overlay().coverage();
+    REQUIRE_FALSE(tint.isNull());
+    CHECK(qAlpha(tint.pixel(tint.width() / 2, tint.height() / 2)) > 100);
+    w.press(Qt::Key_O);
+    w.overlay().updateCoverage();
+    CHECK(w.overlay().coverage().isNull());
+
+    // The tab offers Linear and Radial to create, and no brush.
+    CHECK(w.masks().findChild<QAbstractButton*>("maskLinear") != nullptr);
+    CHECK(w.masks().findChild<QAbstractButton*>("maskRadial") != nullptr);
+    for (const QAbstractButton* button : w.masks().findChildren<QAbstractButton*>()) {
+        CHECK_FALSE(button->text().contains("Brush", Qt::CaseInsensitive));
+        CHECK_FALSE(button->objectName().contains("brush", Qt::CaseInsensitive));
+    }
+    // Nothing was added to the history by looking.
+    CHECK(w.steps() <= 1);
 }
 
 TEST_CASE("Choosing a mask in the list enters the mode and selects it", "[app][window][masks]") {

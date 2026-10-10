@@ -15,6 +15,8 @@
 #include <Edits.h>
 #include <EffectsSettings.h>
 #include <ExifInfo.h>
+#include <ImageExport.h>
+#include <ImageImport.h>
 #include <LocalAdjustmentEdits.h>
 #include <NoiseReductionSettings.h>
 #include <Photo.h>
@@ -2588,6 +2590,96 @@ TEST_CASE("Info reports a mask it had to drop, and lists the others", "[cli][inf
     REQUIRE_THAT(result.out, !ContainsSubstring("brush"));
     REQUIRE_THAT(result.err, ContainsSubstring("mask 2 (id 9, brush) was dropped"));
     REQUIRE_THAT(result.err, ContainsSubstring("brush"));
+}
+
+TEST_CASE("Info describes a brush by its strokes and points", "[cli][info][local][brush]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    const DevelopState state = test::stateWithBrushes();
+    writeSidecar(openPhoto(raw).with(state));
+
+    const auto result = invoke({"info", raw.string()});
+    REQUIRE(result.code == cli::Success);
+    REQUIRE_THAT(result.out,
+                 ContainsSubstring("    Brush 1 (brush): enabled, opacity 1, 2 strokes, 24 points, "
+                                   "relativeTemperature 40, exposure 0.6\n"));
+    REQUIRE_THAT(result.out, ContainsSubstring("    Brush 2 (brush): enabled, opacity 1, "
+                                               "2 strokes, 17 points, contrast -30\n"));
+    REQUIRE_THAT(result.out,
+                 ContainsSubstring("Everything but the tree (brush): enabled, opacity 1, inverted, "
+                                   "1 stroke, 6 points, saturation 30\n"));
+    REQUIRE_THAT(result.out, ContainsSubstring("    Brush 4 (brush): disabled, opacity 1, "
+                                               "0 strokes, 0 points\n"));
+    REQUIRE(result.err.empty());
+}
+
+TEST_CASE("Info --json gives a brush's strokes, as the state document writes them",
+          "[cli][info][local][brush]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    const DevelopState state = test::stateWithBrushes();
+    writeSidecar(openPhoto(raw).with(state));
+
+    const auto file = firstFile(invoke({"info", "--json", raw.string()}).out);
+    const auto list = file.value("localAdjustments").toObject();
+    // The same object the state document holds.
+    const auto document = QJsonDocument::fromJson(QByteArray::fromStdString(stateToJson(state)));
+    REQUIRE(document.object().value("localAdjustments").toObject() == list);
+
+    const auto masks = list.value("masks").toArray();
+    REQUIRE(masks.size() == 5);
+    const auto brush = masks[1].toObject();
+    REQUIRE(brush.value("type").toString() == "brush");
+    const auto geometry = brush.value("geometry").toObject();
+    REQUIRE(geometry.value("rasteriser").toInt() == 1);
+    const auto strokes = geometry.value("strokes").toArray();
+    REQUIRE(strokes.size() == 2);
+    REQUIRE(strokes[1].toObject().value("erase").toBool());
+    REQUIRE(strokes[0].toObject().value("points").toArray().size() == 9);
+    REQUIRE(strokes[0].toObject().value("radius").toDouble() == Catch::Approx(0.1));
+    REQUIRE(masks[3].toObject().value("geometry").toObject().value("strokes").toArray().isEmpty());
+}
+
+TEST_CASE("Info words what it trimmed from a brush", "[cli][info][local][brush]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    writeSidecar(openPhoto(raw).with(withLocalAdjustmentAdded(DevelopState{}, test::someLinear())));
+    std::string text;
+    {
+        std::ifstream stream(directory.file("frame.xmp"), std::ios::binary);
+        text.assign(std::istreambuf_iterator<char>(stream), {});
+    }
+    const std::string brush =
+        R"(<rdf:li rdf:parseType="Resource"><arraw:id>9</arraw:id><arraw:type>brush</arraw:type>)"
+        R"(<arraw:rasteriser>1</arraw:rasteriser><arraw:strokes><rdf:Seq><rdf:li>***</rdf:li>)"
+        R"(</rdf:Seq></arraw:strokes></rdf:li>)";
+    const auto at = text.find("</rdf:Seq>");
+    REQUIRE(at != std::string::npos);
+    text.insert(at, brush);
+    std::ofstream(directory.file("frame.xmp"), std::ios::binary) << text;
+
+    const auto result = invoke({"info", raw.string()});
+    REQUIRE(result.code == cli::Success);
+    REQUIRE_THAT(result.out, ContainsSubstring("Brush 1 (brush): enabled, opacity 1, 0 strokes"));
+    REQUIRE_THAT(result.err, ContainsSubstring("mask 2 (id 9): 1 stroke could not be read"));
+}
+
+TEST_CASE("An export of a sidecar with brushes equals the library's render",
+          "[cli][sidecar][local][brush]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    const DevelopState state = test::stateWithBrushes();
+    writeSidecar(openPhoto(raw).with(state));
+
+    const QImage exported = exportedPng(raw, {});
+    REQUIRE_FALSE(exported.isNull());
+    // The same render by the library.
+    const test::TempDir output;
+    const auto library = output.file("library.png");
+    exportImage(develop(loadImage(raw), state, {}), library, {});
+    REQUIRE(exported == QImage(QString::fromStdString(library.string())));
+    // The brushes did something.
+    REQUIRE(exported != exportedPng(raw, {"--no-sidecar"}));
 }
 
 TEST_CASE("An export renders a photograph whose sidecar holds masks", "[cli][sidecar][local]") {

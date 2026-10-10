@@ -4,6 +4,8 @@
 #include "RawImport.h"
 #include "SettingCodec.h"
 
+#include <BrushStrokes.h>
+
 #include <QByteArray>
 #include <QDomDocument>
 #include <QDomElement>
@@ -557,6 +559,59 @@ FieldValue fieldOfText(const QString& raw) {
     return field;
 }
 
+/// @brief Finds the `rdf:Seq` a property holds, directly or inside a nested `rdf:Description`.
+QDomElement sequenceIn(const QDomElement& property) {
+    for (QDomElement child = property.firstChildElement(); !child.isNull();
+         child = child.nextSiblingElement()) {
+        if (isNamed(child, rdfNamespace, "Seq"_L1)) {
+            return child;
+        }
+        if (isNamed(child, rdfNamespace, "Description"_L1)) {
+            if (const QDomElement inner = sequenceIn(child); !inner.isNull()) {
+                return inner;
+            }
+        }
+    }
+    return {};
+}
+
+/// @brief Reads a brush's `arraw:strokes` property: one base64 string per `rdf:li`.
+///
+/// An empty property is an empty brush, as XMP tools may drop an empty container.
+void gatherStrokes(const QDomElement& property, MaskFields& into) {
+    into.strokes.reset();
+    into.strokesProblem.clear();
+    const QDomElement sequence = sequenceIn(property);
+    if (sequence.isNull()) {
+        if (property.firstChildElement().isNull() && property.text().trimmed().isEmpty()) {
+            into.strokes = std::vector<StrokeFields>{};
+        } else {
+            into.strokesProblem = "'strokes' is not a sequence of strokes";
+        }
+        return;
+    }
+    std::vector<StrokeFields> strokes;
+    for (QDomElement item = sequence.firstChildElement(); !item.isNull();
+         item = item.nextSiblingElement()) {
+        if (!isNamed(item, rdfNamespace, "li"_L1)) {
+            continue;
+        }
+        StrokeFields stroke;
+        if (strokes.size() >= maximumStrokesPerMask) {
+            // Past the cap a stroke is only counted, so it is not decoded.
+            strokes.emplace_back();
+            continue;
+        }
+        try {
+            stroke.decoded = strokeFromBase64(item.text().trimmed().toStdString());
+        } catch (const std::invalid_argument& error) {
+            stroke.problem = error.what();
+        }
+        strokes.push_back(std::move(stroke));
+    }
+    into.strokes = std::move(strokes);
+}
+
 /// @brief Gathers the fields of a mask from an element, in any of RDF's equivalent spellings:
 /// attributes of the element, child elements, and the same inside a nested `rdf:Description`.
 void gatherFields(const QDomElement& holder, const QString& arrawNs, MaskFields& into) {
@@ -591,6 +646,8 @@ void gatherFields(const QDomElement& holder, const QString& arrawNs, MaskFields&
         const Resolved name = resolved(child);
         if (name.ns == rdfNamespace && name.local == "Description"_L1) {
             gatherFields(child, arrawNs, into);
+        } else if (name.ns == arrawNs && name.local == "strokes"_L1) {
+            gatherStrokes(child, into);
         } else if (name.ns == arrawNs) {
             if (child.firstChildElement().isNull()) {
                 add(name.local, fieldOfText(child.text()));
@@ -915,6 +972,18 @@ void setLocalAdjustments(const std::vector<QDomElement>& descriptions, QDomEleme
                 field.appendChild(document.createTextNode(spellWritten(value)));
                 item.appendChild(field);
             }
+        }
+        if (written.strokes) {
+            QDomElement strokes = document.createElement(arrawPrefix + ":strokes");
+            QDomElement strokeSequence = document.createElement(rdfPrefix + ":Seq");
+            for (const auto& stroke : written.strokes->strokes()) {
+                QDomElement entry = document.createElement(rdfPrefix + ":li");
+                entry.appendChild(
+                    document.createTextNode(QString::fromStdString(strokeBase64(*stroke))));
+                strokeSequence.appendChild(entry);
+            }
+            strokes.appendChild(strokeSequence);
+            item.appendChild(strokes);
         }
         sequence.appendChild(item);
     }

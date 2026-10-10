@@ -172,6 +172,7 @@ add_library(arraw STATIC
         include/ImageOrientation.h
         include/ImagePyramid.h
         src/core/ImagePyramid.cpp
+        src/core/PyramidSize.h
         src/core/GeometryPlan.h
         src/core/GeometryPlan.cpp
         src/core/Resample.h
