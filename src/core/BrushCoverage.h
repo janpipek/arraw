@@ -8,6 +8,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace arraw::detail {
@@ -70,11 +71,114 @@ struct PackedCoverage {
     }
 };
 
+/// What a render would have to do for one brush's coverage (ADR 044, section 8).
+enum class CoverageReadiness {
+    Held,     ///< A ladder's residency holds it: nothing to do.
+    Cached,   ///< The cache holds it, whole or as an equal list: only packing.
+    Extended, ///< The cache holds a prefix of the list: its new strokes are drawn.
+    Missing,  ///< Nothing usable is held: it is drawn from nothing.
+};
+
+/// Keeps the packed, dithered coverage of one ladder's source, tile by tile (ADR 044, section 8).
+///
+/// One residency per ladder, made by `LadderAccess::coverage` and dropped when the ladder rebinds
+/// or clears. It holds the host planes the CPU pass reads, one record per slot of what that slot's
+/// channel holds, and per plane the tiles changed since a GPU upload last completed.
+/// Not thread-safe, like the ladder.
+class CoverageResidency {
+public:
+    /// Brings the packed planes up to a plan's brushes and gives them.
+    ///
+    /// A brush whose reference equals its slot's record is left alone (a delta drag). Otherwise
+    /// its coverage comes from the cache and only the tiles whose serial differs from the record's
+    /// (all of them when the slot was empty or its phase differs) are quantised and marked pending.
+    /// @param local Plan whose brush masks are packed; every raster must be @p size.
+    /// @param size Size of the source the ladder renders.
+    /// @param cache Cache the coverage comes from; the process-wide one unless a test says so.
+    /// @return The planes, of @p size; valid until the next call.
+    /// @throws ::arraw::Cancelled if the observed operation is cancelled; the record of the slot
+    /// being updated is then cleared, those of the earlier slots stay valid.
+    const PackedCoverage& update(const LocalPlan& local, ImageSize size, BrushCoverageCache& cache);
+
+    /// Brings the packed planes up to a plan's brushes, from the process-wide cache.
+    const PackedCoverage& update(const LocalPlan& local, ImageSize size);
+
+    /// The planes as the last update left them.
+    [[nodiscard]] const PackedCoverage& packed() const noexcept {
+        return packed_;
+    }
+
+    /// Tells whether a slot's channel holds exactly the coverage a brush reference names.
+    [[nodiscard]] bool holds(const BrushCoverageRef& brush) const noexcept;
+
+    /// Gives the rectangles (whole tiles) of a plane changed since its upload last completed.
+    [[nodiscard]] std::vector<PixelRect> pending(std::uint32_t plane) const;
+
+    /// Tells whether a plane has changed tiles no upload has taken yet.
+    [[nodiscard]] bool hasPending(std::uint32_t plane) const noexcept;
+
+    /// Forgets a plane's pending tiles: an upload of it completed.
+    void clearPending(std::uint32_t plane) noexcept;
+
+    /// Number of calls of the cache this residency has made (for tests).
+    [[nodiscard]] std::uint64_t cacheCalls() const noexcept {
+        return cacheCalls_;
+    }
+
+    /// Number of tiles quantised, counting each slot's tile (for tests).
+    [[nodiscard]] std::uint64_t tilesPacked() const noexcept {
+        return tilesPacked_;
+    }
+
+private:
+    /// What one slot's channel holds.
+    struct Record {
+        std::optional<BrushCoverageRef> identity; ///< Empty when the channel holds nothing valid.
+        std::vector<std::uint64_t> serials;       ///< Per tile; 0 for an absent, all-zero tile.
+    };
+
+    /// Drops the planes, the records and the pending tiles.
+    void reset() noexcept;
+
+    PackedCoverage packed_;
+    std::array<Record, maximumLocalAdjustments> records_;
+    std::vector<std::vector<bool>> pending_; ///< Per plane, per tile: changed since the upload.
+    std::uint32_t tileSize_ = 0;             ///< Tile edge of the pending grids; 0 if none.
+    std::uint64_t cacheCalls_ = 0;
+    std::uint64_t tilesPacked_ = 0;
+};
+
+/// What a render would have to do for one brush's coverage, with how much of its list is drawn.
+struct CoverageStatus {
+    CoverageReadiness readiness = CoverageReadiness::Missing; ///< The work to do.
+    /// Strokes of the list already drawn in the cache: the prefix of an `Extended` brush, the
+    /// whole list of a `Cached` one, else 0.
+    std::size_t cachedStrokes = 0;
+};
+
 /// Gives the process-wide float coverage cache (512 MiB, 128-pixel tiles).
 ///
 /// Allocated once and never destroyed, so a render thread still running during static
 /// destruction, such as Python's at interpreter exit, cannot touch a dead cache.
 [[nodiscard]] BrushCoverageCache& brushCoverageCache();
+
+/// Tells what a render would have to do for a brush's coverage.
+/// @param brush The brush's reference.
+/// @param residency The ladder's residency, or null for a direct render.
+/// @param cache Cache the coverage would come from.
+[[nodiscard]] CoverageStatus statusOf(const BrushCoverageRef& brush,
+                                      const CoverageResidency* residency,
+                                      const BrushCoverageCache& cache);
+
+/// Tells what a render would have to do for a brush's coverage, with the process-wide cache.
+[[nodiscard]] CoverageStatus statusOf(const BrushCoverageRef& brush,
+                                      const CoverageResidency* residency);
+
+/// Tells what a render would have to do for a brush's coverage.
+/// @param brush The brush's reference.
+/// @param residency The ladder's residency, or null for a direct render.
+[[nodiscard]] CoverageReadiness readinessOf(const BrushCoverageRef& brush,
+                                            const CoverageResidency* residency);
 
 /// Packs the coverage of a plan's brushes, outside any ladder (the direct path, ADR 044).
 ///

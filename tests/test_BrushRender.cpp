@@ -1,6 +1,7 @@
 // Brush masks in a CPU render: the direct path (brush plan sections 2.5, 2.7 and 8.1 to 8.4).
 
 #include "BrushCoverage.h"
+#include "LadderAccess.h"
 #include "LocalPlan.h"
 #include "ProcessingPlan.h"
 #include "ProgressScope.h"
@@ -25,6 +26,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <set>
 #include <utility>
 #include <vector>
 
@@ -470,4 +472,161 @@ TEST_CASE("The progress of a brush render never decreases", "[brush][render][pro
     REQUIRE_FALSE(fractions.empty());
     REQUIRE(std::ranges::is_sorted(fractions));
     REQUIRE(fractions.back() <= 1.0);
+}
+
+TEST_CASE("A delta drag through a ladder does no coverage work", "[brush][render][ladder]") {
+    brushCoverageCache().clear();
+    const auto source = std::make_shared<const ImageBuffer>(sceneOf({160, 120}));
+    DevelopState state{plainSettings()};
+    state = withMask(state, BrushMask{paintedMask(31, 4, everydayStyle, 0.75)},
+                     {.exposure = 0.8F, .shadows = 30.0F});
+    state = withMask(
+        state, brushOf({test::straightStroke({0.2F, 0.3F}, {0.7F, 0.6F}, 10, 0.08F, 0.4F, 0.9F)}),
+        {.exposure = -0.4F});
+    CheckpointLadder ladder;
+    REQUIRE(sameBits(resumeOrDevelop(ladder, source, state, {}).checkpoint.readBack(),
+                     develop(*source, state)));
+    const CoverageResidency& residency = *LadderAccess::coverage(std::as_const(ladder));
+    const std::uint64_t calls = residency.cacheCalls();
+    const std::uint64_t packed = residency.tilesPacked();
+    REQUIRE(calls == 2);
+
+    DevelopState dragged = state;
+    for (const double amount : {1.0, 1.4, 1.9, -0.5}) {
+        dragged = withLocalDelta(dragged, dragged.localAdjustments[0].id, "exposure", amount);
+        const LadderRender render = resumeOrDevelop(ladder, source, dragged, {});
+        REQUIRE(sameBits(render.checkpoint.readBack(), develop(*source, dragged)));
+    }
+    REQUIRE(residency.cacheCalls() == calls);
+    REQUIRE(residency.tilesPacked() == packed);
+}
+
+TEST_CASE("A ladder render follows an appended stroke, an undo and a disabled brush bit for bit",
+          "[brush][render][ladder]") {
+    brushCoverageCache().clear();
+    const auto source = std::make_shared<const ImageBuffer>(sceneOf({300, 200}));
+    DevelopState state{plainSettings()};
+    state = withMask(state, BrushMask{paintedMask(32, 4, everydayStyle, 2.0 / 3.0)},
+                     {.exposure = 0.8F});
+    state =
+        withMask(state, BrushMask{paintedMask(33, 4, detailStyle, 2.0 / 3.0)}, {.shadows = 40.0F});
+    CheckpointLadder ladder;
+    const auto render = [&](const DevelopState& wanted) {
+        const ImageBuffer ladderBits =
+            resumeOrDevelop(ladder, source, wanted, {}).checkpoint.readBack();
+        REQUIRE(sameBits(ladderBits, develop(*source, wanted)));
+    };
+    render(state);
+    const CoverageResidency& residency = *LadderAccess::coverage(std::as_const(ladder));
+    const std::uint64_t packed = residency.tilesPacked();
+
+    const DevelopState more = withStrokeAppended(
+        state, state.localAdjustments[1].id,
+        test::straightStroke({0.05F, 0.05F}, {0.1F, 0.1F}, 5, 0.02F, 1.0F, 1.0F));
+    render(more);
+    const std::uint64_t repacked = residency.tilesPacked() - packed;
+    REQUIRE(repacked > 0);
+    REQUIRE(repacked < 3 * 2); // Fewer than all six tiles of the one brush.
+    // Undo: the earlier list again, and the tiles that differ only.
+    render(state);
+    REQUIRE(residency.tilesPacked() - packed == 2 * repacked);
+
+    // An earlier brush disabled: the later one moves to slot 0, repacked from the cache.
+    const std::size_t entries = brushCoverageCache().entryCount();
+    render(withLocalAdjustmentEnabled(state, state.localAdjustments[0].id, false));
+    REQUIRE(brushCoverageCache().entryCount() == entries);
+    render(state);
+}
+
+TEST_CASE("Another source or size starts the ladder's coverage again", "[brush][render][ladder]") {
+    brushCoverageCache().clear();
+    DevelopState state{plainSettings()};
+    state = withMask(state, BrushMask{paintedMask(34, 4, everydayStyle, 2.0 / 3.0)},
+                     {.exposure = 0.8F});
+    CheckpointLadder ladder;
+    for (const ImageSize size : {ImageSize{240, 160}, ImageSize{120, 80}, ImageSize{240, 160}}) {
+        const auto source = std::make_shared<const ImageBuffer>(sceneOf(size));
+        REQUIRE(sameBits(resumeOrDevelop(ladder, source, state, {}).checkpoint.readBack(),
+                         develop(*source, state)));
+    }
+}
+
+TEST_CASE("The Coverage step is reported between Context and Pointwise, and never falls",
+          "[brush][render][progress]") {
+    brushCoverageCache().clear();
+    const auto source = std::make_shared<const ImageBuffer>(sceneOf({400, 300}));
+    DevelopState state{plainSettings()};
+    state.settings.presence.clarity = 30.0F;
+    state = withMask(state, BrushMask{paintedMask(77, 5, everydayStyle, 0.75)}, {.exposure = 1.0F});
+
+    ReportLog log;
+    ProgressChannel channel(log.callback());
+    static_cast<void>(develop(*source, state, {}, &channel));
+    REQUIRE(log.wellFormed());
+    std::vector<ProgressStep> steps;
+    for (const Progress& report : log.reports) {
+        if (steps.empty() || steps.back() != report.step) {
+            steps.push_back(report.step);
+        }
+    }
+    const auto at = [&](ProgressStep step) { return std::ranges::find(steps, step); };
+    REQUIRE(at(ProgressStep::Coverage) != steps.end());
+    REQUIRE(at(ProgressStep::Context) < at(ProgressStep::Coverage));
+    REQUIRE(at(ProgressStep::Coverage) < at(ProgressStep::Pointwise));
+
+    // Through a ladder: the first render paints, a drag of the amount reports no Coverage.
+    CheckpointLadder ladder;
+    ReportLog first;
+    ProgressChannel firstChannel(first.callback());
+    static_cast<void>(resumeOrDevelop(ladder, source, state, {}, &firstChannel));
+    REQUIRE(first.wellFormed());
+    REQUIRE(std::ranges::any_of(first.reports, [](const Progress& report) {
+        return report.step == ProgressStep::Coverage;
+    }));
+    ReportLog drag;
+    ProgressChannel dragChannel(drag.callback());
+    static_cast<void>(resumeOrDevelop(
+        ladder, source, withLocalDelta(state, state.localAdjustments[0].id, "exposure", 2.0), {},
+        &dragChannel));
+    REQUIRE(drag.wellFormed());
+    REQUIRE(std::ranges::none_of(drag.reports, [](const Progress& report) {
+        return report.step == ProgressStep::Coverage;
+    }));
+}
+
+TEST_CASE("A ladder render cancelled while its coverage is made leaves the next one right",
+          "[brush][render][ladder][cancel]") {
+    brushCoverageCache().clear();
+    const auto source = std::make_shared<const ImageBuffer>(sceneOf({400, 300}));
+    DevelopState state{plainSettings()};
+    state = withMask(state, BrushMask{paintedMask(78, 5, everydayStyle, 0.75)}, {.exposure = 1.0F});
+    state = withMask(state, BrushMask{paintedMask(79, 5, detailStyle, 0.75)}, {.shadows = 30.0F});
+    const ImageBuffer reference = develop(*source, state);
+    brushCoverageCache().clear();
+
+    CheckpointLadder ladder;
+    for (const int cancelAt : {1, 2, 3, 6}) {
+        INFO("cancelled at report " << cancelAt);
+        int seen = 0;
+        ProgressChannel channel([&](const Progress& progress) {
+            if (progress.step == ProgressStep::Coverage && ++seen >= cancelAt) {
+                channel.cancel();
+            }
+        });
+        try {
+            static_cast<void>(resumeOrDevelop(ladder, source, state, {}, &channel));
+        } catch (const Cancelled&) {
+            // Either way, nothing wrong is kept.
+        }
+        // The cache holds only the reference's coverage.
+        for (const auto& mask : localPlanFor(state, source->size()).masks) {
+            if (const auto held = brushCoverageCache().find(mask.brush.strokes, source->size())) {
+                REQUIRE(held->gathered() == rasteriseBrush(*mask.brush.strokes, source->size()));
+            }
+        }
+        REQUIRE(
+            sameBits(resumeOrDevelop(ladder, source, state, {}).checkpoint.readBack(), reference));
+        ladder.clear();
+        brushCoverageCache().clear();
+    }
 }

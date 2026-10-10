@@ -1926,12 +1926,16 @@ void MainWindow::showResult(const PreviewResult& result) {
     // filter below, so that a render no longer wanted (a photograph was opened, the crop
     // mode left) still ends it when no request follows.
     // While a decode is awaited the busy period is the decode's.
-    if (decodeRequest_ == 0 && result.request >= latestRequest_ &&
+    // A coarser stand-in does not end it: the render of the request's own level follows.
+    if (decodeRequest_ == 0 && result.request >= latestRequest_ && !result.provisional &&
         (result.image || !result.error.empty())) {
         renderIndicator_->finish(result.image.has_value() && result.request >= firstRequest_);
     }
     if (result.request < firstRequest_) {
         return;
+    }
+    if (photoView_->isCropMode() && result.provisional) {
+        return; // The crop overlay takes the render of the request's own level.
     }
     if (photoView_->isCropMode() && result.request >= cropFirstRequest_) {
         // The state the render shows, and the requests older than it, which will not be shown.
@@ -1944,6 +1948,7 @@ void MainWindow::showResult(const PreviewResult& result) {
         }
         if (result.image && result.request > latestShown_ && renderedFor) {
             latestShown_ = result.request;
+            latestShownProvisional_ = false;
             // Turned and flipped to the geometry now, should a turn have happened since.
             photoView_->cropOverlay().setImage(*result.image, renderedFor->settings.geometry);
             open_->lastCropImage.emplace(*renderedFor, *result.image);
@@ -1967,15 +1972,20 @@ void MainWindow::showResult(const PreviewResult& result) {
         photoView_->setBackground(*result.background);
         return;
     }
-    if (result.request <= latestShown_) {
+    // The render of a request's own level follows its stand-in, and is shown after it.
+    if (result.request < latestShown_ ||
+        (result.request == latestShown_ && !(latestShownProvisional_ && !result.provisional))) {
         return;
     }
     if (result.image) {
         latestShown_ = result.request;
+        latestShownProvisional_ = result.provisional;
         renderProgress_->setOpened(); // Ends the opening and any failure.
         photoView_->setImage(*result.image, result.region, result.background.value_or(QImage{}));
         showDevice(result);
-        followWithThumbnail(result);
+        if (!result.provisional) {
+            followWithThumbnail(result);
+        }
         return;
     }
     // A newer request is on its way and may well succeed: say nothing yet.
@@ -1983,6 +1993,7 @@ void MainWindow::showResult(const PreviewResult& result) {
         return;
     }
     latestShown_ = result.request;
+    latestShownProvisional_ = false;
     // The message box runs a nested event loop, in which further results can
     // arrive: one box at a time.
     if (reportingFailure_) {

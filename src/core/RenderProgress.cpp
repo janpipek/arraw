@@ -25,6 +25,17 @@ constexpr double pointwiseCost = 7.0;
 /// @brief What reading the Presence context adds to the chain per pixel.
 constexpr double presenceSampleCost = 30.0;
 
+/// @brief Cost of drawing a brush's coverage, in nanoseconds per unit of swept area times the
+/// long edge in pixels squared (the time model `t = 1.0 s * A * (L / 6000)^2` of the prototype's
+/// report, B7).
+///
+/// Release build, 24 MP, eight threads, B8 of the brush bench, sixteen realistic masks: 27.3
+/// through the cache's `drawn` and 28.9 banded; 28 is taken for both.
+constexpr double coverageCost = 28.0;
+
+/// @brief Cost of quantising one brush's coverage into the packed planes, per pixel (B8: 1.8).
+constexpr double packCost = 1.8;
+
 /// @brief Cost of the geometry resample per pixel of its result.
 constexpr double geometryCost = 12.0;
 
@@ -60,8 +71,46 @@ std::array<double, 2> detail::resizeUnitWeights(ImageSize input, ImageSize outpu
     return {resizeAcrossCost * widest * inputHeight, resizeDownCost * tallest * output.width};
 }
 
+detail::CoverageWork detail::coverageWorkOf(const CoverageStatus& status,
+                                            const BrushCoverageRef& brush) noexcept {
+    CoverageWork work;
+    if (status.readiness == CoverageReadiness::Held) {
+        return work;
+    }
+    work.pack = packCost * pixelsOf(brush.raster);
+    if (status.readiness == CoverageReadiness::Cached) {
+        return work;
+    }
+    const double edge = std::max(brush.raster.width, brush.raster.height);
+    double area = 0.0;
+    const auto strokes = brush.strokes->strokes();
+    for (std::size_t n = std::min(status.cachedStrokes, strokes.size()); n < strokes.size(); ++n) {
+        area += budgetOf(*strokes[n]).sweptArea;
+    }
+    work.draw = coverageCost * area * edge * edge;
+    return work;
+}
+
+std::vector<double> detail::coverageUnitWeights(const LocalPlan& local,
+                                                const CoverageResidency* residency) {
+    std::vector<double> weights;
+    for (const LocalMaskPlan& mask : local.masks) {
+        if (mask.kind != LocalMaskKind::Brush) {
+            continue;
+        }
+        const CoverageStatus status = statusOf(mask.brush, residency);
+        if (status.readiness == CoverageReadiness::Held) {
+            continue;
+        }
+        const CoverageWork work = coverageWorkOf(status, mask.brush);
+        weights.push_back(work.draw + work.pack);
+    }
+    return weights;
+}
+
 detail::StepWeights detail::renderStepWeights(const ProcessingPlan& plan,
-                                              const RenderRequest& request) noexcept {
+                                              const RenderRequest& request,
+                                              const CoverageResidency* residency) noexcept {
     StepWeights weights{};
     if (!plan.geometry) {
         return weights;
@@ -74,6 +123,7 @@ detail::StepWeights detail::renderStepWeights(const ProcessingPlan& plan,
     try {
         at(ProgressStep::Denoise) = sumOf(denoiseLoopWeights(plan.denoise, source));
         at(ProgressStep::Context) = sumOf(presenceLoopWeights(plan.pointwise.presence, source));
+        at(ProgressStep::Coverage) = sumOf(coverageUnitWeights(plan.pointwise.local, residency));
     } catch (const std::exception&) {
         // Only an allocation can fail here; the pass itself would say so.
     }

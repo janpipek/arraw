@@ -12,6 +12,7 @@
 #include <QRect>
 #include <QSize>
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -66,6 +67,12 @@ struct PreviewView {
 /// About thirty a second: as often as a bar can be seen to move.
 inline constexpr std::chrono::milliseconds previewProgressInterval{33};
 
+/// @brief Least modelled time to draw brush coverage from nothing that earns a coarser stand-in.
+///
+/// Below it the stand-in, a full render of a quarter of the pixels that reuses no saved stage,
+/// would cost about what it hides (report B7's time model; ADR 044, section 8).
+inline constexpr double defaultStandInSeconds = 0.3;
+
 /// @brief Outcome of one preview render.
 ///
 /// A result with only @ref background set is a refreshed fallback, rendered
@@ -99,6 +106,10 @@ struct PreviewResult {
     /// Pyramid level the image was developed from: 0 is the full-resolution
     /// photograph, and each level above halves both sides (ADR 020).
     int level = 0;
+    /// Whether it is a coarser stand-in: the render of the same request at its own level
+    /// follows (the coarser first render, ADR 044, section 8). Such a result is not a
+    /// thumbnail's source, not the fallback beneath a region, and does not end the render.
+    bool provisional = false;
     /// Boundary of the checkpoint the render resumed from, or empty when it
     /// developed from the level itself. A diagnostic: nothing shows it.
     std::optional<Stage> resumedFrom;
@@ -141,6 +152,13 @@ struct PreviewResult {
 /// from them. The newest request is never cancelled by another, so it always
 /// ends with a result. The refreshed fallback and the histogram recount below
 /// are cancelled the same way, so neither holds up the next request.
+///
+/// A render at full size whose brush masks would take ::arraw::app::defaultStandInSeconds or more
+/// to rasterise from nothing delivers a coarser
+/// stand-in first (PreviewResult::provisional): the same request developed from the pyramid's
+/// level 1, a quarter of the pixels, as a direct render. The window shows it while level 0
+/// renders, which delivers as usual. A request whose coverage is held, or extends a held list
+/// (an undo, a delta drag, an appended stroke), delivers one result.
 ///
 /// Reports the progress of the render of each request, at most about
 /// ::arraw::app::previewProgressInterval apart and whenever the step changes,
@@ -221,6 +239,13 @@ public:
     /// @param wanted Whether the curve editor is on screen.
     void setCurveHistogramWanted(bool wanted);
 
+    /// @brief Sets the least modelled time to draw brush coverage that earns a coarser stand-in.
+    ///
+    /// For requests made after the call. The default is the cost at which the stand-in, a
+    /// full render of a quarter of the pixels, starts to pay for itself; tests set 0.
+    /// @param seconds Modelled seconds of drawing, per report B7.
+    void setStandInThreshold(double seconds);
+
 private:
     /// Request waiting for the worker.
     struct Pending {
@@ -256,6 +281,10 @@ private:
 
     /// Desktop preferences captured before the worker starts.
     AppSettings settings_;
+
+    /// Least modelled drawing time of brush coverage that earns a stand-in; see
+    /// setStandInThreshold.
+    std::atomic<double> standInSeconds_{defaultStandInSeconds};
 
     /// Guard of source_, pending_, sourceChanged_, lastId_, curveHistogramWanted_,
     /// recountHistogram_ and inFlight_.

@@ -89,13 +89,22 @@ void developSamples(const ImageBuffer& source, ImageBuffer& result, const Chain&
 /// when the plan has Presence on: from the source after noise reduction, so
 /// the context is recomputed with the chain rather than carried by a
 /// checkpoint (ADR 041).
-template <typename Chain>
-ImageBuffer runPointwise(const ImageBuffer& source, const PointwisePlan& plan, const Chain& chain) {
+///
+/// The brush masks' coverage is made after the context and before the pass, in the Coverage step
+/// between them.
+/// @param makeCoverage Callable `() -> const detail::PackedCoverage*`: makes the plan's coverage
+/// (opening the Coverage step's span), or gives null when it has none.
+/// @param makeChain Callable `(const detail::PackedCoverage*) -> Chain`.
+template <typename MakeCoverage, typename MakeChain>
+ImageBuffer runPointwise(const ImageBuffer& source, const PointwisePlan& plan,
+                         const MakeCoverage& makeCoverage, const MakeChain& makeChain) {
     std::optional<PresenceContext> context;
     if (plan.presence.active()) {
         context = presenceContextOf(source, plan.presence);
     }
     const PresenceContext* around = context ? &*context : nullptr;
+    const detail::PackedCoverage* const coverage = makeCoverage();
+    const auto chain = makeChain(coverage);
     // Opened before the result is made, whose zeroing at 24 MP takes as long
     // as a cheap chain does, so that the step named is the one being paid for.
     const detail::ProgressSpan progress(ProgressStep::Pointwise);
@@ -240,6 +249,10 @@ struct CpuStages {
     /// Tap the pointwise pass stops at, or empty for the whole chain.
     std::optional<Tap> tap;
 
+    /// Packed brush coverage kept by the ladder this render goes through, or null for a direct
+    /// render, which packs its own for the call (ADR 044).
+    detail::CoverageResidency* residency = nullptr;
+
     /// @brief Runs the pass that ends at a stage's boundary.
     Pixels run(Stage stage, Pixels pixels, const ProcessingPlan& plan) const {
         switch (stage) {
@@ -270,38 +283,59 @@ struct CpuStages {
 private:
     /// @brief Runs the pointwise chain, or a tap's prefix of it.
     ImageBuffer pointwise(const ImageBuffer& input, const ProcessingPlan& plan) const {
-        // The brushes' coverage is packed before the pass's own span opens: it adds nothing to
-        // the fraction, though it notices a cancellation.
+        // The brushes' coverage is made between the Presence context and the pass, in a span of
+        // its own: one unit for each brush that has work to do.
         std::optional<detail::PackedCoverage> packed;
-        if (plan.pointwise.local.brushCount() != 0) {
-            packed = detail::packCoverage(plan.pointwise.local);
-            if (packed->size.width != input.size().width ||
-                packed->size.height != input.size().height) {
+        const auto makeCoverage = [&]() -> const detail::PackedCoverage* {
+            if (plan.pointwise.local.brushCount() == 0) {
+                return nullptr;
+            }
+            const std::vector<double> weights =
+                detail::coverageUnitWeights(plan.pointwise.local, residency);
+            // Only when some brush has work: a delta drag reports no Coverage step at all.
+            std::optional<detail::ProgressSpan> progress;
+            if (!weights.empty()) {
+                progress.emplace(ProgressStep::Coverage, weights);
+            }
+            const detail::PackedCoverage* made = nullptr;
+            if (residency != nullptr) {
+                made = &residency->update(plan.pointwise.local, input.size());
+            } else {
+                packed = detail::packCoverage(plan.pointwise.local);
+                made = &*packed;
+            }
+            if (made->size != input.size()) {
                 throw std::logic_error("The brush coverage was packed for another size");
             }
-        }
-        const detail::PackedCoverage* coverage = packed ? &*packed : nullptr;
+            return made;
+        };
+        const auto brushSlots = static_cast<std::uint32_t>(plan.pointwise.local.brushCount());
         if (tap) {
             return runPointwise(
-                input, plan.pointwise,
-                [&pointwise = plan.pointwise, coverage,
-                 brushSlots = static_cast<std::uint32_t>(plan.pointwise.local.brushCount()),
-                 amounts = globalAmountsOf(plan.pointwise), tap = *tap](
-                    std::uint32_t x, std::uint32_t y, Colour colour, const PixelContext& context) {
-                    if (pointwise.local.empty()) {
-                        return developToTap(pointwise, amounts, colour, tap, context);
-                    }
-                    if (coverage != nullptr) {
-                        const PixelCoverage codes = coverage->at(x, y, brushSlots);
-                        return developToTap(pointwise, amountsAt(pointwise, x, y, codes), colour,
-                                            tap, context);
-                    }
-                    return developToTap(pointwise, amountsAt(pointwise, x, y, PixelCoverage{}),
-                                        colour, tap, context);
+                input, plan.pointwise, makeCoverage,
+                [&pointwise = plan.pointwise, brushSlots, amounts = globalAmountsOf(plan.pointwise),
+                 tap = *tap](const detail::PackedCoverage* coverage) {
+                    return [&pointwise, coverage, brushSlots, amounts,
+                            tap](std::uint32_t x, std::uint32_t y, Colour colour,
+                                 const PixelContext& context) {
+                        if (pointwise.local.empty()) {
+                            return developToTap(pointwise, amounts, colour, tap, context);
+                        }
+                        if (coverage != nullptr) {
+                            const PixelCoverage codes = coverage->at(x, y, brushSlots);
+                            return developToTap(pointwise, amountsAt(pointwise, x, y, codes),
+                                                colour, tap, context);
+                        }
+                        return developToTap(pointwise, amountsAt(pointwise, x, y, PixelCoverage{}),
+                                            colour, tap, context);
+                    };
                 });
         }
         const detail::TimingSpan timing("cpu.pointwise");
-        return runPointwise(input, plan.pointwise, developChain(plan.pointwise, coverage));
+        return runPointwise(input, plan.pointwise, makeCoverage,
+                            [&plan](const detail::PackedCoverage* coverage) {
+                                return developChain(plan.pointwise, coverage);
+                            });
     }
 };
 
@@ -387,10 +421,20 @@ LadderRender arraw::resumeOrDevelop(CheckpointLadder& ladder,
     LadderAccess::bind(ladder, source);
     const std::optional<Stage> resumedFrom =
         LadderAccess::deepestUsable(ladder, plan, source->size(), onHost);
-    detail::ProgressRoot root(progress, detail::observedStepWeights(progress, plan, request),
-                              resumedFrom ? detail::stepAfter(*resumedFrom)
-                                          : ProgressStep::Denoise);
+    // A plan without brushes lets the ladder's packed planes go (up to 366 MiB at 24 MP).
+    const bool brushes = plan.pointwise.local.brushCount() != 0;
+    if (!brushes) {
+        LadderAccess::dropCoverage(ladder);
+    }
+    detail::ProgressRoot root(
+        progress,
+        detail::observedStepWeights(progress, plan, request,
+                                    LadderAccess::coverage(std::as_const(ladder))),
+        resumedFrom ? detail::stepAfter(*resumedFrom) : ProgressStep::Denoise);
     CpuStages backend;
+    if (brushes) {
+        backend.residency = &LadderAccess::coverage(ladder);
+    }
     HostPixels start = resumedFrom ? backend.borrow(LadderAccess::rung(ladder, *resumedFrom))
                                    : HostPixels::borrowed(*source);
     StagesRun<CpuStages> run =
@@ -398,6 +442,30 @@ LadderRender arraw::resumeOrDevelop(CheckpointLadder& ladder,
     root.finish(ProgressStep::Effects);
     return {makeCheckpoint(Stage::Effects, std::move(plan), std::move(run.pixels).take()),
             resumedFrom};
+}
+
+bool arraw::drawsBrushCoverage(const CheckpointLadder& ladder, const ImageBuffer& source,
+                               const DevelopState& state, const RenderRequest& request,
+                               double minimumSeconds) {
+    const ProcessingPlan plan = planFor(source, state, request);
+    if (LadderAccess::hasUsableFrom(ladder, Stage::Pointwise, plan, source.size(), onHost)) {
+        // The render resumes past the pointwise pass and draws nothing.
+        return false;
+    }
+    const detail::CoverageResidency* residency = LadderAccess::coverage(ladder);
+    bool fromNothing = false;
+    double nanoseconds = 0.0;
+    for (const LocalMaskPlan& mask : plan.pointwise.local.masks) {
+        if (mask.kind != LocalMaskKind::Brush) {
+            continue;
+        }
+        const detail::CoverageStatus status = detail::statusOf(mask.brush, residency);
+        if (status.readiness == detail::CoverageReadiness::Missing) {
+            fromNothing = true;
+            nanoseconds += detail::coverageWorkOf(status, mask.brush).draw;
+        }
+    }
+    return fromNothing && nanoseconds * 1e-9 >= minimumSeconds;
 }
 
 bool arraw::canResumeFrom(const RenderCheckpoint& from, const ImageBuffer& source,

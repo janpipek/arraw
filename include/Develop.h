@@ -314,6 +314,28 @@ struct RenderRequest {
                                            const RenderRequest& request = {},
                                            ProgressChannel* progress = nullptr);
 
+/// @brief Tells whether a render through a ladder would rasterise a brush mask's coverage from
+/// nothing, taking at least some modelled time.
+///
+/// True when some brush of the plan is neither held by the ladder's packed coverage nor in the
+/// shared cache, whole or as a list it extends (an appended stroke, or the same strokes behind
+/// other pointers, is not "from nothing"), and the modelled time to draw all such brushes (report
+/// B7) reaches @p minimumSeconds. False when the ladder holds a rung at the pointwise pass or
+/// beyond that the render would resume from, which draws nothing. Draws, inserts and packs
+/// nothing. The window asks it before a render at full size, to show a coarser level first
+/// (ADR 044, section 8).
+/// @param ladder Ladder the render would go through.
+/// @param source Buffer the render would develop.
+/// @param state Settings of the render.
+/// @param request What to render.
+/// @param minimumSeconds Least modelled drawing time that counts; 0 for any brush drawn from
+/// nothing.
+/// @return False for a state without brush masks.
+/// @throws std::invalid_argument as ::arraw::develop for @p state and @p request.
+[[nodiscard]] bool drawsBrushCoverage(const CheckpointLadder& ladder, const ImageBuffer& source,
+                                      const DevelopState& state, const RenderRequest& request = {},
+                                      double minimumSeconds = 0.0);
+
 /// @brief Renders a photograph with the pointwise chain stopped at a tap, to measure it.
 ///
 /// ADR 011's `sample(tap)`, the looking verb beside ::arraw::developUntil's

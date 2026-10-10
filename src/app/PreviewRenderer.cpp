@@ -121,6 +121,33 @@ public:
         return checkpoint.readBack();
     }
 
+    /// @brief Renders a request on the device as a direct render, keeping nothing.
+    ///
+    /// The coarser first render's path: no ladder is rebound or touched, so the shown ladder
+    /// keeps its rungs. Uploads the level the first time it is rendered from.
+    /// @pre prepare returned true.
+    /// @param level Pyramid level of @p image.
+    /// @param image The level to develop.
+    /// @param progress Channel of the render.
+    /// @throws ::arraw::Cancelled if @p progress is cancelled.
+    [[nodiscard]] ImageBuffer renderDirect(int level, const ImageBuffer& image,
+                                           const DevelopState& state, const RenderRequest& request,
+                                           ProgressChannel* progress) {
+        const DeviceImage& uploaded = uploadedLevel(level, image);
+        return developOnGpu(*context_, image, uploaded, state, Stage::Effects, request, progress)
+            .readBack();
+    }
+
+    /// @brief Tells whether rendering through the ladder of a layer would draw brush coverage
+    /// from nothing.
+    /// @pre prepare returned true.
+    [[nodiscard]] bool drawsBrushCoverage(Layer layer, const ImageBuffer& image,
+                                          const DevelopState& state, const RenderRequest& request,
+                                          double minimumSeconds) const {
+        const CheckpointLadder& ladder = layer == Layer::Background ? backgroundLadder_ : ladder_;
+        return arraw::drawsBrushCoverage(ladder, image, state, request, minimumSeconds);
+    }
+
     /// @brief Counts the curve histogram of a level on the device.
     ///
     /// Samples the curve input at ::arraw::curveHistogramRequest, which is bounded
@@ -282,18 +309,112 @@ private:
     std::vector<std::shared_ptr<const ImageBuffer>> levels_;
 };
 
+/// @brief Part of a request's progress the stand-in fills, the rest being the render at level 0.
+///
+/// A level has a quarter of the pixels of the one below it, so the stand-in is a fifth of the
+/// work of both.
+constexpr double standInProgressShare = 0.2;
+
+/// @brief Whether the GPU renders brush masks, which the stand-in asks before trying it.
+///
+/// False until the GPU draws brushes (ADR 044 step 5.3): the device refuses them, and a try
+/// would upload the level to it for nothing.
+constexpr bool gpuDrawsBrushes = false;
+
+/// @brief Range of a request's progress that what renders now fills.
+///
+/// A request that makes a stand-in runs two renders on one channel, each reporting from 0 to 1;
+/// mapped into ranges, the pie only rises through both. Read and written on the worker only.
+struct ProgressPhase {
+    double from = 0.0; ///< Fraction when the render starts.
+    double to = 1.0;   ///< Fraction when the render ends.
+};
+
+/// @brief Develops a request from a coarser level as a direct render, for the stand-in.
+///
+/// No ladder is rebound, so the shown ladders keep their rungs and coverage. A failure other
+/// than a cancellation gives nothing: the render at the request's own level reports what is
+/// wrong, falling back from the GPU as for any render.
+/// @param shown The level-0 result being made, whose request and frame the stand-in shares.
+/// @param coarser The level to develop from.
+/// @param gpu The GPU when it renders, else null.
+/// @return The stand-in, or nothing when it failed.
+/// @throws ::arraw::Cancelled if @p progress was cancelled, before or during the render, so
+/// that nothing is delivered for a superseded request.
+std::optional<PreviewResult>
+provisionalRender(const PreviewResult& shown, const std::shared_ptr<const ImageBuffer>& coarser,
+                  const DevelopState& state, const RenderRequest& request, const PreviewView& view,
+                  GpuPreview* gpu, ProgressChannel* progress) {
+    PreviewResult result = shown;
+    result.image.reset();
+    result.provisional = true;
+    result.level = 1;
+    const RenderRequest::Region region =
+        renderedRegion(request, croppedSize(coarser->size(), coarser->orientation(), state));
+    result.region = QRectF(QPointF(region.left, region.top), QPointF(region.right, region.bottom));
+    const auto finished = [&](ImageBuffer rendered) {
+        QImage image = toDisplayImage(rendered);
+        image.setDevicePixelRatio(view.devicePixelRatio);
+        result.image = std::move(image);
+        // Delivered only for a request still wanted.
+        if (progress != nullptr && progress->cancelled()) {
+            throw Cancelled();
+        }
+        return result;
+    };
+    try {
+        if (gpu != nullptr) {
+            try {
+                ImageBuffer rendered = gpu->renderDirect(1, *coarser, state, request, progress);
+                result.onGpu = true;
+                result.deviceName = gpu->deviceName();
+                return finished(std::move(rendered));
+            } catch (const Cancelled&) {
+                throw;
+            } catch (const std::exception&) {
+                // The CPU renders the stand-in; the render at level 0 reports the GPU's failure.
+            }
+        }
+        result.onGpu = false;
+        result.deviceName.clear();
+        return finished(develop(*coarser, state, request, progress));
+    } catch (const Cancelled&) {
+        throw;
+    } catch (const std::exception&) {
+        return std::nullopt;
+    }
+}
+
+/// @brief What a render needs to make a coarser stand-in first, when its request calls for one.
+struct StandIn {
+    /// Receiver of the stand-in, called on the worker thread.
+    std::function<void(PreviewResult)> deliver;
+    /// Range of the request's progress that what renders now fills; narrowed while the stand-in
+    /// renders and set to the rest after.
+    ProgressPhase* phase = nullptr;
+    /// Least modelled time to draw brush coverage that earns a stand-in.
+    double minimumSeconds = defaultStandInSeconds;
+};
+
 /// @brief Renders one request, turning a failure into a result.
 ///
 /// The checkpoints are only ever replaced by a pass that returned, so a render
 /// cancelled part-way leaves those it finished and no other (ADR 042).
+///
+/// A shown render at level 0 whose brush coverage would be drawn from nothing first renders
+/// the request from level 1 as a direct render (no ladder is touched) and hands that to
+/// @p provisional, unless the channel was cancelled meanwhile (ADR 044, section 8).
 /// @param progress Channel of the render, which a newer request cancels.
+/// @param standIn How to make and deliver a coarser stand-in; null for a render that never makes
+/// one.
 /// @return The result, or nothing when the render was cancelled: neither an
 /// image nor a failure.
 std::optional<PreviewResult> render(std::uint64_t id, const DevelopState& state,
                                     const PreviewView& view,
                                     const std::shared_ptr<const ImageBuffer>& source,
                                     SourcePyramid& pyramid, CheckpointLadder& cpuLadder,
-                                    GpuPreview* gpu, Layer layer, ProgressChannel* progress) {
+                                    GpuPreview* gpu, Layer layer, ProgressChannel* progress,
+                                    const StandIn* standIn = nullptr) {
     const detail::TimingSpan timing("preview.render", id);
     PreviewResult result{.request = id,
                          .image = std::nullopt,
@@ -305,6 +426,7 @@ std::optional<PreviewResult> render(std::uint64_t id, const DevelopState& state,
                          .region = {},
                          .frame = {},
                          .level = 0,
+                         .provisional = false,
                          .resumedFrom = std::nullopt,
                          .curveHistogram = std::nullopt,
                          .thumbnail = std::nullopt};
@@ -356,8 +478,32 @@ std::optional<PreviewResult> render(std::uint64_t id, const DevelopState& state,
             renderedRegion(request, croppedSize(reduced->size(), reduced->orientation(), state));
         result.region =
             QRectF(QPointF(rendered.left, rendered.top), QPointF(rendered.right, rendered.bottom));
+        const bool gpuReady = gpu != nullptr && gpu->prepare(source);
+        if (standIn != nullptr && level == 0 && SourcePyramid::highestLevel(source->size()) >= 1) {
+            // Asked of the CPU ladder, which a fallback goes through, and of the GPU's when the
+            // GPU renders: it is "from nothing" only if neither ladder nor the cache has it.
+            const bool draws =
+                drawsBrushCoverage(cpuLadder, *reduced, state, request, standIn->minimumSeconds) &&
+                (!gpuReady ||
+                 gpu->drawsBrushCoverage(layer, *reduced, state, request, standIn->minimumSeconds));
+            if (draws) {
+                const detail::TimingSpan coarserTiming("preview.provisional", id);
+                if (standIn->phase != nullptr) {
+                    *standIn->phase = {0.0, standInProgressShare};
+                }
+                std::optional<PreviewResult> coarser =
+                    provisionalRender(result, pyramid.level(1), state, request, view,
+                                      gpuReady && gpuDrawsBrushes ? gpu : nullptr, progress);
+                if (standIn->phase != nullptr) {
+                    *standIn->phase = {standInProgressShare, 1.0};
+                }
+                if (coarser) {
+                    standIn->deliver(std::move(*coarser));
+                }
+            }
+        }
         std::string gpuFailure;
-        if (gpu != nullptr && gpu->prepare(source)) {
+        if (gpuReady) {
             try {
                 QImage image = toDisplayImage(gpu->render(layer, level, reduced, state, request,
                                                           result.resumedFrom, progress));
@@ -469,13 +615,16 @@ std::optional<CurveHistogram> countCurveHistogram(const DevelopState& state,
 /// the worker only.
 /// @param onProgress Where reports go; must outlive the receiver.
 /// @param id The request whose render it is.
+/// @param phase Range of the request's progress that the render now running fills; must outlive
+/// the callback.
 ProgressChannel::Callback thinned(const PreviewRenderer::ProgressCallback& onProgress,
-                                  std::uint64_t id) {
+                                  std::uint64_t id, const ProgressPhase& phase) {
     if (!onProgress) {
         return {};
     }
-    return [&onProgress, id, step = std::optional<ProgressStep>(),
-            at = std::chrono::steady_clock::time_point()](const Progress& progress) mutable {
+    return [&onProgress, &phase, id, step = std::optional<ProgressStep>(),
+            at = std::chrono::steady_clock::time_point()](Progress progress) mutable {
+        progress.fraction = phase.from + (phase.to - phase.from) * progress.fraction;
         const auto now = std::chrono::steady_clock::now();
         // The end always goes through, so that a bar is not left short of it.
         if (step == progress.step && now - at < previewProgressInterval &&
@@ -566,6 +715,10 @@ void PreviewRenderer::setSource(std::shared_ptr<const ImageBuffer> decoded) {
     // The worker lets go of the previous photograph's levels and checkpoints now, not at
     // the next render, which waits for the next decode (ADR 043).
     wake_.notify_one();
+}
+
+void PreviewRenderer::setStandInThreshold(double seconds) {
+    standInSeconds_ = seconds;
 }
 
 void PreviewRenderer::setCurveHistogramWanted(bool wanted) {
@@ -692,11 +845,19 @@ void PreviewRenderer::run(std::stop_token stop) {
                 const detail::TimingSpan timing("preview", job->id);
                 // Without the lock: developing takes long, and the window must be
                 // able to queue the next request meanwhile.
+                ProgressPhase phase;
                 const std::shared_ptr<ProgressChannel> channel =
-                    startChannel(thinned(onProgress_, job->id), source);
+                    startChannel(thinned(onProgress_, job->id, phase), source);
+                // A coarser stand-in goes out at once; it is neither the fallback beneath a
+                // region nor a thumbnail's source.
+                const StandIn standIn{[&](PreviewResult coarser) {
+                                          coarser.background = background;
+                                          deliver(std::move(coarser));
+                                      },
+                                      &phase, standInSeconds_.load()};
                 std::optional<PreviewResult> rendered =
                     render(job->id, job->state, job->view, source, pyramid, cpuLadder,
-                           gpu ? &*gpu : nullptr, Layer::Shown, channel.get());
+                           gpu ? &*gpu : nullptr, Layer::Shown, channel.get(), &standIn);
                 endChannel();
                 if (!rendered) {
                     // Cancelled by a newer request, which is pending: nothing to deliver.

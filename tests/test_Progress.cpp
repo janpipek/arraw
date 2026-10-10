@@ -7,6 +7,8 @@
 #include <DevelopSettings.h>
 #include <DevelopState.h>
 #include <ImageImport.h>
+#include <LocalAdjustmentEdits.h>
+#include <LocalAdjustments.h>
 #include <Progress.h>
 #include <RenderCheckpoint.h>
 
@@ -17,6 +19,7 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -424,4 +427,46 @@ TEST_CASE("Each pass of a CPU render runs the loops its span declares", "[progre
     state.settings.presence.clarity = 40.0F;
     state.settings.geometry.rotation = QuarterTurn::Clockwise90;
     run(sixteenBit, state);
+}
+
+TEST_CASE("The Coverage step runs the units it declares, direct and through a ladder",
+          "[progress][develop][brush]") {
+    // A debug build asserts that a span ran exactly the units it declared. Brushes of three
+    // kinds of work: drawn, taken from the cache, and held by the ladder.
+    const ImageBuffer buffer = test::rainbow({320, 240}, PixelFormat::RgbaF32, workingEncoding);
+    const auto source = std::make_shared<const ImageBuffer>(buffer.clone());
+    DevelopState state;
+    state.settings.presence.clarity = 30.0F;
+    for (const std::uint32_t radius : {2U, 3U}) {
+        Stroke stroke{0.01F * static_cast<float>(radius), 0.5F, 1.0F, false, {}};
+        for (int i = 0; i < 40; ++i) {
+            stroke.points.push_back({0.1F + 0.02F * static_cast<float>(i), 0.3F * radius});
+        }
+        LocalAdjustment adjustment;
+        adjustment.shape =
+            BrushMask{std::make_shared<const StrokeList>(std::vector<Stroke>{std::move(stroke)})};
+        adjustment.deltas.exposure = 1.0F;
+        state = withLocalAdjustmentAdded(std::move(state), adjustment);
+    }
+    const auto run = [&](CheckpointLadder* ladder, const DevelopState& wanted) {
+        Recorder recorder;
+        ProgressChannel channel(recorder.callback());
+        if (ladder != nullptr) {
+            static_cast<void>(resumeOrDevelop(*ladder, source, wanted, resized(), &channel));
+        } else {
+            static_cast<void>(develop(*source, wanted, resized(), &channel));
+        }
+        requireWellFormed(recorder.reports);
+        return recorder.reports;
+    };
+    run(nullptr, state);
+    run(nullptr, state); // From the cache.
+    CheckpointLadder ladder;
+    run(&ladder, state);
+    run(&ladder, state); // Held.
+    // One brush changed, the other held.
+    const DevelopState more =
+        withStrokeAppended(state, state.localAdjustments[1].id,
+                           Stroke{0.02F, 1.0F, 1.0F, false, {{0.2F, 0.2F}, {0.3F, 0.25F}}});
+    run(&ladder, more);
 }

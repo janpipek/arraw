@@ -196,7 +196,10 @@ the GPU and the sidecar writer refuse it loudly until steps 5.3 and 5.4.
 `coverage(CheckpointLadder&)`, creating it on first use. `LadderAccess::bind`
 to another source and `CheckpointLadder::clear` drop it. A copied ladder
 starts with no residency (the copy constructor and assignment reset
-`coverage_`), so two ladders never write the same planes. The GPU part of a
+`coverage_`), so two ladders never write the same planes. A render of a plan
+with no brush drops the residency too (an implementer's choice, kept: it frees
+up to 366 MiB at 24 MP; toggling the only brush off and on then repacks every
+brush from the cache, and redraws those the cache evicted). The GPU part of a
 residency is a `detail::DeviceCoverage` interface declared in core and
 implemented in `src/gpu` (the `DeviceImageState` pattern), so core never names
 Qt.
@@ -376,7 +379,14 @@ direct path's bits (tested).
   Otherwise, at 24 MP with heavy brushes, the coverage weight (seconds of
   model) would dwarf the pointwise pass, and the pie would sit near zero then
   jump on every delta drag that does no coverage work at all.
-- Units of the span: one per brush, weighted by its swept area.
+- Units of the span: one per brush that has work, weighted by its modelled
+  cost. A unit is itself divided into two parts, the drawing and then the
+  packing, with their own weights, so that the pie moves through both loops
+  (a brush only packed has a drawing of weight 0). Of an `Extended` brush
+  only the strokes after the cached prefix are weighted
+  (`BrushCoverageCache::peek` also returns how many strokes the cache holds).
+  The drawing counts as done when the cache answers without drawing, so the
+  declared units are run whatever another thread did to the cache meanwhile.
 - Cancellation: the banded raster, the cache's `drawn` and the residency's
   packing all loop through `forEachRowBand`, so they stop within a chunk. A
   cancelled draw inserts nothing; a cancelled residency update leaves the
@@ -424,7 +434,14 @@ level 0.
   background and the curve histogram never). It applies when the level chosen
   is 0, the source has a level 1 (`SourcePyramid::highestLevel` at least 1),
   and `drawsBrushCoverage` is true for the ladder this render would go
-  through: the GPU ladder when the GPU renders, else the CPU one.
+  through: the GPU ladder when the GPU renders, else the CPU one. It takes a
+  `minimumSeconds` (default 0, any brush drawn from nothing); the window passes
+  0.3 s (`defaultStandInSeconds`, settable on `PreviewRenderer` for tests), the
+  modelled drawing time of §2.8 of the brushes drawn from nothing. Under it the
+  stand-in, a full render of a quarter of the pixels that reuses no saved
+  stage, would cost about what it hides (a first short stroke, a small brush,
+  a zoom to 1:1 over a level already shown). It is false when the ladder holds
+  a usable rung at the pointwise pass or beyond, which the render resumes from.
 - **The coarser render.** The same request, developed from level 1 as a
   direct render (`develop`, or `developOnGpu` with the uploaded level 1; a GPU
   failure falls back to the CPU as for any render): no ladder is rebound, so
@@ -443,9 +460,9 @@ level 0.
   the background, and does not end the render indicator for the request. A
   newer request cancels either render, as today; when the level-0 render is
   cancelled, the provisional image stays until the next result.
-- **Progress.** Both renders report through the request's channel: the pie
-  runs through the level-1 render, then starts again for level 0. Each shows
-  its Coverage step.
+- **Progress.** Both renders report through the request's channel, mapped into
+  one rising fraction: the level-1 render fills the first fifth (a level has a
+  quarter of the pixels), level 0 the rest. Each shows its Coverage step.
 - **Cost.** Level 1 has a quarter of the pixels: for 16 heavy brushes at
   24 MP, an image after about 3 s instead of 13 s, and level 0 about 13 s
   after that (about 16 s in all). Once level 0's coverage is in the residency
@@ -820,7 +837,8 @@ prototype tests stay (`test_BrushStrokes`, `test_BrushRaster`,
 2. **Different resolutions.** (a) The float coverage the cache makes at the
    level 0 and level 1 sizes of an **even-sized** source (both sides even, so
    level 1 is an exact half) agree after box-halving within ADR 044 §6 (max
-   0.02, mean 0.00015; mean 0.005 at hardness 1). Pyramid levels halve with
+   0.021, mean 0.00015; mean 0.005 at hardness 1; the prototype measured a max
+   of 0.02 on its seeds and 0.0201 on another, so the bound has that margin). Pyramid levels halve with
    `ceil`. For an odd side, level 1 is not an exact half and positions drift by
    up to half a pixel, which alone passes max 0.02 at hardness 1. Odd sizes are
    covered by (b) and by the parity cases.
@@ -1044,6 +1062,12 @@ while the GPU and the sidecar writer refuse it with an error.
   exactly, partial uploads match whole ones, GPU digests are pinned, the window
   renders a brush on the GPU without falling back, the provisional level-1
   render included.
+- To do here from 5.2: the stand-in skips the GPU until the GPU draws brushes
+  (`gpuDrawsBrushes` in `PreviewRenderer.cpp` becomes true), and the "CPU and
+  GPU ladder both say it draws" test in `render` becomes the GPU ladder's
+  answer alone. A GPU ladder's residency may exist without a rung:
+  `drawsBrushCoverage` already answers false when a usable rung at the
+  pointwise pass or beyond is held, but check it for the GPU's rungs.
 
 ### Step 5.4: Persistence, the GUI minimum and `info`
 

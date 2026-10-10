@@ -63,6 +63,15 @@ TEST_CASE("The pie is full when idle, and shows the fraction while rendering",
     CHECK(widget.toolTip() == "Up to date");
 }
 
+TEST_CASE("The pie names the Coverage step while brush masks are painted", "[app][progress][pie]") {
+    RenderProgressPie widget;
+    widget.show();
+    widget.setDisplay({.visible = true, .fraction = 0.5, .step = ProgressStep::Coverage});
+    CHECK(widget.rendering());
+    CHECK(widget.filled() == Catch::Approx(0.5));
+    CHECK(widget.toolTip() == QString::fromUtf8("Painting brush masks\u2026 50%"));
+}
+
 TEST_CASE("A failed render shows a red ring until a render is shown", "[app][progress][pie]") {
     RenderProgressPie widget;
     widget.setFailed("out of memory");

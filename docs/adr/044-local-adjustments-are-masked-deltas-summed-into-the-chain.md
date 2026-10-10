@@ -988,3 +988,7 @@ text. Where it differs from the earlier text, it holds:
 - **Cache.** Float tiles of 128 pixels, LRU on 512 MiB, serving the window's
   sizes; export rasterises outside it. The live stroke repaints only its new
   dabs. `Result::dirty` is a hint; a GPU upload compares tile pointers.
+  (Step 5.2 departs from "compare tile pointers": every tile carries a serial
+  number unique in the process, assigned when it is made or cloned for painting,
+  and a ladder's residency compares serials. A freed tile's address can be
+  reused, and keeping old grids alive to prevent that would defeat the budget.)

@@ -20,6 +20,7 @@ enum class ProgressStep {
     Decode,    ///< Reading the file and, for a RAW, demosaicing it.
     Denoise,   ///< Noise reduction, the first pass (ADR 039).
     Context,   ///< The log-luminance context Texture, Clarity and Dehaze read (ADR 041).
+    Coverage,  ///< Painting the coverage of brush masks, packed for the chain (ADR 044).
     Pointwise, ///< The fused pointwise chain: colour, tone and the rest (ADR 011).
     Geometry,  ///< Orientation, rotation, straightening and crop.
     Resize,    ///< The resize to the requested size, and the region's cut.

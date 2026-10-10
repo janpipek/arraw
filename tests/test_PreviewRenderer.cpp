@@ -1,5 +1,7 @@
+#include "BrushCoverage.h"
 #include "DisplayImage.h"
 #include "PreviewRenderer.h"
+#include "support/BrushGenerators.h"
 #include "support/TestImages.h"
 
 #include <CurveHistogram.h>
@@ -61,6 +63,16 @@ public:
             lock, timeout, [&] { return !results_.empty() && results_.back().request >= id; });
     }
 
+    /// Waits until a result of the render at its own level for @p id, or a later one, has arrived.
+    [[nodiscard]] bool waitForFinal(std::uint64_t id) {
+        std::unique_lock lock(mutex_);
+        return changed_.wait_for(lock, timeout, [&] {
+            return std::ranges::any_of(results_, [id](const app::PreviewResult& result) {
+                return result.request >= id && !result.provisional;
+            });
+        });
+    }
+
     /// Waits until a refreshed fallback for @p id, or a later one, has arrived.
     [[nodiscard]] bool waitForBackground(std::uint64_t id) {
         std::unique_lock lock(mutex_);
@@ -86,6 +98,18 @@ public:
     [[nodiscard]] std::vector<app::PreviewResult> results() {
         const std::scoped_lock lock(mutex_);
         return results_;
+    }
+
+    /// The renders delivered for one request, in order.
+    [[nodiscard]] std::vector<app::PreviewResult> resultsOf(std::uint64_t id) {
+        const std::scoped_lock lock(mutex_);
+        std::vector<app::PreviewResult> found;
+        for (const app::PreviewResult& result : results_) {
+            if (result.request == id) {
+                found.push_back(result);
+            }
+        }
+        return found;
     }
 
     /// Refreshed fallbacks, apart from the renders.
@@ -957,4 +981,284 @@ TEST_CASE("A state with a brush renders a preview whichever device the renderer 
     REQUIRE(result.image.has_value());
     // The GPU cannot draw a brush yet: a preview that did get a device is not on it.
     REQUIRE_FALSE(result.onGpu);
+}
+
+namespace {
+
+/// A source of 1024 x 512, whose level 1 is an exact half.
+std::shared_ptr<const ImageBuffer> makeMediumSource() {
+    return std::make_shared<const ImageBuffer>(
+        test::rainbow({1024, 512}, PixelFormat::RgbaF32, workingEncoding));
+}
+
+/// A state with one painted brush that carries an Exposure delta.
+DevelopState brushState(std::uint64_t seed) {
+    LocalAdjustment adjustment;
+    adjustment.shape = BrushMask{test::paintedMask(seed, 4, test::everydayStyle, 0.5)};
+    adjustment.deltas.exposure = 1.0F;
+    return withLocalAdjustmentAdded(DevelopState{}, adjustment);
+}
+
+constexpr QSize fullSize{1024, 512};
+
+} // namespace
+
+TEST_CASE("A level 0 render whose brush coverage is not made delivers level 1 first",
+          "[app][preview][brush][provisional]") {
+    detail::brushCoverageCache().clear();
+    Collector collector;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
+    renderer.setStandInThreshold(0.0);
+    const auto source = makeMediumSource();
+    renderer.setSource(source);
+    const DevelopState state = brushState(9001);
+
+    const std::uint64_t id = renderer.request(state, app::PreviewView::wholeFrame(fullSize));
+    REQUIRE(collector.waitForFinal(id));
+    const auto results = collector.resultsOf(id);
+    REQUIRE(results.size() == 2);
+    const app::PreviewResult& coarse = results[0];
+    const app::PreviewResult& own = results[1];
+    REQUIRE(coarse.error.empty());
+    REQUIRE(own.error.empty());
+    REQUIRE(coarse.provisional);
+    REQUIRE(coarse.level == 1);
+    REQUIRE(coarse.image.has_value());
+    REQUIRE_FALSE(own.provisional);
+    REQUIRE(own.level == 0);
+    REQUIRE(own.region == QRectF(0.0, 0.0, 1.0, 1.0));
+
+    // The level-0 image is a direct level-0 render; the stand-in a direct level-1 one.
+    const RenderRequest request = app::previewRequest(fullSize);
+    REQUIRE(*own.image == app::toDisplayImage(develop(*source, state, request)));
+    REQUIRE(*coarse.image == app::toDisplayImage(develop(halved(*source), state, request)));
+    REQUIRE(coarse.region == own.region);
+    // The stand-in comes with no thumbnail.
+    REQUIRE_FALSE(coarse.thumbnail.has_value());
+}
+
+TEST_CASE("A render whose coverage is held delivers one result",
+          "[app][preview][brush][provisional]") {
+    detail::brushCoverageCache().clear();
+    Collector collector;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
+    renderer.setStandInThreshold(0.0);
+    renderer.setSource(makeMediumSource());
+    const DevelopState state = brushState(9002);
+    const app::PreviewView view = app::PreviewView::wholeFrame(fullSize);
+
+    const std::uint64_t first = renderer.request(state, view);
+    REQUIRE(collector.waitForFinal(first));
+    REQUIRE(collector.resultsOf(first).size() == 2);
+
+    SECTION("the same request again") {
+        const std::uint64_t again = renderer.request(state, view);
+        REQUIRE(collector.waitForFinal(again));
+        REQUIRE(collector.resultsOf(again).size() == 1);
+    }
+    SECTION("a delta-only edit") {
+        const DevelopState louder =
+            withLocalDelta(state, state.localAdjustments[0].id, "exposure", 2.0);
+        const std::uint64_t id = renderer.request(louder, view);
+        REQUIRE(collector.waitForFinal(id));
+        REQUIRE(collector.resultsOf(id).size() == 1);
+    }
+    SECTION("an appended stroke") {
+        const DevelopState more = withStrokeAppended(
+            state, state.localAdjustments[0].id,
+            test::straightStroke({0.1F, 0.1F}, {0.2F, 0.15F}, 5, 0.02F, 1.0F, 1.0F));
+        const std::uint64_t id = renderer.request(more, view);
+        REQUIRE(collector.waitForFinal(id));
+        REQUIRE(collector.resultsOf(id).size() == 1);
+    }
+    SECTION("an undo to the list it had") {
+        const DevelopState more = withStrokeAppended(
+            state, state.localAdjustments[0].id,
+            test::straightStroke({0.1F, 0.1F}, {0.2F, 0.15F}, 5, 0.02F, 1.0F, 1.0F));
+        // The intermediate request renders in full first, or the undo could only repeat the last.
+        const std::uint64_t moreId = renderer.request(more, view);
+        REQUIRE(collector.waitForFinal(moreId));
+        const std::uint64_t id = renderer.request(state, view);
+        REQUIRE(collector.waitForFinal(id));
+        REQUIRE(collector.resultsOf(id).size() == 1);
+    }
+}
+
+TEST_CASE("Only a level 0 render of a state with a brush gets a stand-in",
+          "[app][preview][brush][provisional]") {
+    detail::brushCoverageCache().clear();
+    Collector collector;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
+    renderer.setStandInThreshold(0.0);
+    renderer.setSource(makeMediumSource());
+
+    SECTION("a view at level 1 or coarser") {
+        const std::uint64_t id =
+            renderer.request(brushState(9003), app::PreviewView::wholeFrame({512, 256}));
+        REQUIRE(collector.waitForFinal(id));
+        const auto results = collector.resultsOf(id);
+        REQUIRE(results.size() == 1);
+        REQUIRE(results[0].level == 1);
+        REQUIRE_FALSE(results[0].provisional);
+    }
+    SECTION("a state without a brush") {
+        const std::uint64_t id = renderer.request({}, app::PreviewView::wholeFrame(fullSize));
+        REQUIRE(collector.waitForFinal(id));
+        REQUIRE(collector.resultsOf(id).size() == 1);
+    }
+    SECTION("a state whose brush does nothing") {
+        LocalAdjustment adjustment;
+        adjustment.shape = BrushMask{test::paintedMask(9004, 4, test::everydayStyle, 0.5)};
+        const std::uint64_t id =
+            renderer.request(withLocalAdjustmentAdded(DevelopState{}, adjustment),
+                             app::PreviewView::wholeFrame(fullSize));
+        REQUIRE(collector.waitForFinal(id));
+        REQUIRE(collector.resultsOf(id).size() == 1);
+    }
+}
+
+TEST_CASE("The fallback beneath a region and the histogram are never provisional",
+          "[app][preview][brush][provisional]") {
+    detail::brushCoverageCache().clear();
+    Collector collector;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
+    renderer.setStandInThreshold(0.0);
+    renderer.setSource(makeMediumSource());
+    renderer.setCurveHistogramWanted(true);
+    const DevelopState state = brushState(9005);
+    // A 1:1 region of the frame: the detail at level 0 over a reduced whole frame.
+    app::PreviewView view = app::PreviewView::wholeFrame({400, 300});
+    view.region = QRect(100, 100, 400, 300);
+
+    const std::uint64_t id = renderer.request(state, view);
+    REQUIRE(collector.waitForFinal(id));
+    REQUIRE(collector.waitForBackground(id));
+    REQUIRE(collector.waitForHistogram(id));
+    // The detail got its stand-in, once.
+    const auto shown = collector.resultsOf(id);
+    REQUIRE(shown.size() == 2);
+    REQUIRE(shown[0].provisional);
+    REQUIRE(shown[0].level == 1);
+    REQUIRE_FALSE(shown[1].provisional);
+    for (const app::PreviewResult& update : collector.backgrounds()) {
+        REQUIRE_FALSE(update.provisional);
+        REQUIRE_FALSE(update.image.has_value());
+    }
+    for (const app::PreviewResult& update : collector.histograms()) {
+        REQUIRE_FALSE(update.provisional);
+    }
+}
+
+TEST_CASE("A source too small for a level 1 renders level 0 only",
+          "[app][preview][brush][provisional]") {
+    detail::brushCoverageCache().clear();
+    Collector collector;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
+    renderer.setStandInThreshold(0.0);
+    renderer.setSource(std::make_shared<const ImageBuffer>(
+        test::rainbow({500, 300}, PixelFormat::RgbaF32, workingEncoding)));
+    const std::uint64_t id =
+        renderer.request(brushState(9006), app::PreviewView::wholeFrame({500, 300}));
+    REQUIRE(collector.waitForFinal(id));
+    const auto results = collector.resultsOf(id);
+    REQUIRE(results.size() == 1);
+    REQUIRE(results[0].level == 0);
+}
+
+TEST_CASE("A newer request during the stand-in cancels it, and nothing provisional is delivered "
+          "for the old one",
+          "[app][preview][brush][provisional][cancel]") {
+    detail::brushCoverageCache().clear();
+    Collector collector;
+    std::mutex mutex;
+    app::PreviewRenderer* renderer = nullptr;
+    std::uint64_t older = 0;
+    std::uint64_t newer = 0;
+    bool asked = false;
+    const DevelopState replacement = brushState(9008);
+    ProgressCollector progress;
+    const auto onProgress = progress.callback();
+    app::PreviewRenderer instance(collector.callback(), app::PreviewRenderer::Device::Cpu, {},
+                                  [&](std::uint64_t request, const Progress& report) {
+                                      onProgress(request, report);
+                                      // The first report of the older request is its stand-in's
+                                      // start.
+                                      const std::scoped_lock lock(mutex);
+                                      if (!asked && request == older && older != 0) {
+                                          asked = true;
+                                          newer = renderer->request(
+                                              replacement, app::PreviewView::wholeFrame(fullSize));
+                                      }
+                                  });
+    {
+        const std::scoped_lock lock(mutex);
+        renderer = &instance;
+    }
+    instance.setStandInThreshold(0.0);
+    instance.setSource(makeMediumSource());
+    std::uint64_t id = 0;
+    {
+        // Held so that the callback sees the id only once it is known.
+        const std::scoped_lock lock(mutex);
+        id = instance.request(brushState(9007), app::PreviewView::wholeFrame(fullSize));
+        older = id;
+    }
+    REQUIRE(collector.waitForFinal(id + 1));
+    REQUIRE(asked);
+    REQUIRE(collector.resultsOf(id).empty());
+    const auto results = collector.resultsOf(newer);
+    REQUIRE(results.size() == 2);
+    REQUIRE(results[0].provisional);
+    REQUIRE_FALSE(results[1].provisional);
+}
+
+TEST_CASE("A brush cheap to draw gets no stand-in, whatever the threshold says",
+          "[app][preview][brush][provisional]") {
+    detail::brushCoverageCache().clear();
+    Collector collector;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
+    renderer.setSource(makeMediumSource());
+    const app::PreviewView view = app::PreviewView::wholeFrame(fullSize);
+
+    SECTION("the default threshold: a few strokes at 0.5 MP draw in a few milliseconds") {
+        const std::uint64_t id = renderer.request(brushState(9010), view);
+        REQUIRE(collector.waitForFinal(id));
+        REQUIRE(collector.resultsOf(id).size() == 1);
+    }
+    SECTION("a threshold above the modelled time") {
+        renderer.setStandInThreshold(1e6);
+        const std::uint64_t id = renderer.request(brushState(9011), view);
+        REQUIRE(collector.waitForFinal(id));
+        REQUIRE(collector.resultsOf(id).size() == 1);
+    }
+    SECTION("a threshold of zero") {
+        renderer.setStandInThreshold(0.0);
+        const std::uint64_t id = renderer.request(brushState(9012), view);
+        REQUIRE(collector.waitForFinal(id));
+        REQUIRE(collector.resultsOf(id).size() == 2);
+    }
+}
+
+TEST_CASE("The progress of a request with a stand-in never falls between its two renders",
+          "[app][preview][brush][provisional][progress]") {
+    detail::brushCoverageCache().clear();
+    Collector collector;
+    ProgressCollector progress;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu, {},
+                                  progress.callback());
+    renderer.setStandInThreshold(0.0);
+    renderer.setSource(makeMediumSource());
+    const std::uint64_t id =
+        renderer.request(brushState(9013), app::PreviewView::wholeFrame(fullSize));
+    REQUIRE(collector.waitForFinal(id));
+    REQUIRE(collector.resultsOf(id).size() == 2);
+    const std::vector<Progress> reports = progress.of(id);
+    REQUIRE(reports.size() > 2);
+    double last = 0.0;
+    for (const Progress& report : reports) {
+        REQUIRE(report.fraction >= last);
+        REQUIRE(report.fraction <= 1.0);
+        last = report.fraction;
+    }
+    REQUIRE(last == 1.0);
 }

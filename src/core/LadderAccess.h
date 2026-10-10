@@ -21,6 +21,18 @@ struct LadderAccess {
     /// identifies it.
     static void bind(CheckpointLadder& ladder, const std::shared_ptr<const ImageBuffer>& source);
 
+    /// @brief Gives the ladder's packed brush coverage, making it on first use.
+    ///
+    /// Dropped when the ladder rebinds to another source or is cleared.
+    [[nodiscard]] static detail::CoverageResidency& coverage(CheckpointLadder& ladder);
+
+    /// @brief Gives the ladder's packed brush coverage, or null if it has none yet.
+    [[nodiscard]] static const detail::CoverageResidency*
+    coverage(const CheckpointLadder& ladder) noexcept;
+
+    /// @brief Drops the ladder's packed brush coverage, if any.
+    static void dropCoverage(CheckpointLadder& ladder) noexcept;
+
     /// @brief Finds the deepest rung a render can resume from, dropping those it cannot.
     ///
     /// From the Resize rung down to the Denoise one: a rung the backend cannot
@@ -49,6 +61,26 @@ struct LadderAccess {
             slot.reset();
         }
         return std::nullopt;
+    }
+
+    /// @brief Tells whether a render could resume from a rung at a boundary or beyond it.
+    ///
+    /// The query ::deepestUsable answers, without dropping any rung.
+    /// @param from Boundary of the shallowest rung that counts.
+    template <typename HoldsHere>
+    [[nodiscard]] static bool hasUsableFrom(const CheckpointLadder& ladder, Stage from,
+                                            const ProcessingPlan& plan, ImageSize sourceSize,
+                                            HoldsHere&& holdsHere) {
+        for (std::size_t index = stageCount; index-- > static_cast<std::size_t>(from);) {
+            const auto& slot = ladder.rungs_[index];
+            if (slot) {
+                const CheckpointState& held = stateOf(*slot);
+                if (holdsHere(held) && !staleReason(held, plan, sourceSize)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /// @brief Gives the rung at a boundary.
