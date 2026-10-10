@@ -2,6 +2,7 @@
 #include "DisplayImage.h"
 #include "PreviewRenderer.h"
 #include "support/BrushGenerators.h"
+#include "support/ProgressGate.h"
 #include "support/TestImages.h"
 
 #include <CurveHistogram.h>
@@ -1261,4 +1262,209 @@ TEST_CASE("The progress of a request with a stand-in never falls between its two
         last = report.fraction;
     }
     REQUIRE(last == 1.0);
+}
+
+namespace {
+
+/// A state that differs from the default in a cheap way, so each request is its own render.
+DevelopState exposureState(float exposure) {
+    DevelopState state;
+    state.settings.tone.exposure = exposure;
+    return state;
+}
+
+} // namespace
+
+TEST_CASE("A Queue request lets the render in flight finish, then delivers its own",
+          "[app][preview][queue]") {
+    Collector collector;
+    test::ProgressGate gate;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu,
+                                  app::AppSettings{}, gate.callback());
+    renderer.setSource(makeSource());
+    const app::PreviewView view = app::PreviewView::wholeFrame({256, 128});
+    gate.close();
+    const std::uint64_t first = renderer.request(exposureState(0.1F), view);
+    REQUIRE(gate.waitHeld());
+    const std::uint64_t second = renderer.request(exposureState(0.2F), view, app::Supersede::Queue);
+    gate.open();
+    REQUIRE(collector.waitFor(second));
+
+    const auto results = collector.results();
+    REQUIRE(results.size() == 2);
+    REQUIRE(results[0].request == first);
+    REQUIRE(results[0].image.has_value());
+    REQUIRE(results[0].error.empty());
+    REQUIRE(results[1].request == second);
+    REQUIRE(results[1].image.has_value());
+    REQUIRE(*results[0].image != *results[1].image);
+}
+
+TEST_CASE("Three Queue requests during one render deliver the first and the last",
+          "[app][preview][queue]") {
+    Collector collector;
+    test::ProgressGate gate;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu,
+                                  app::AppSettings{}, gate.callback());
+    renderer.setSource(makeSource());
+    const app::PreviewView view = app::PreviewView::wholeFrame({256, 128});
+    gate.close();
+    const std::uint64_t first = renderer.request(exposureState(0.1F), view);
+    REQUIRE(gate.waitHeld());
+    const std::uint64_t second = renderer.request(exposureState(0.2F), view, app::Supersede::Queue);
+    const std::uint64_t third = renderer.request(exposureState(0.3F), view, app::Supersede::Queue);
+    const std::uint64_t fourth = renderer.request(exposureState(0.4F), view, app::Supersede::Queue);
+    gate.open();
+    REQUIRE(collector.waitFor(fourth));
+
+    const auto results = collector.results();
+    REQUIRE(results.size() == 2);
+    REQUIRE(results[0].request == first);
+    REQUIRE(results[1].request == fourth);
+    REQUIRE(collector.resultsOf(second).empty());
+    REQUIRE(collector.resultsOf(third).empty());
+    REQUIRE(results[1].image.has_value());
+}
+
+TEST_CASE("A Cancel request after a Queue one cancels the render in flight as before",
+          "[app][preview][queue]") {
+    Collector collector;
+    test::ProgressGate gate;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu,
+                                  app::AppSettings{}, gate.callback());
+    renderer.setSource(makeSource());
+    const app::PreviewView view = app::PreviewView::wholeFrame({256, 128});
+    gate.close();
+    const std::uint64_t first = renderer.request(exposureState(0.1F), view);
+    REQUIRE(gate.waitHeld());
+    const std::uint64_t second = renderer.request(exposureState(0.2F), view, app::Supersede::Queue);
+    const std::uint64_t third = renderer.request(exposureState(0.3F), view);
+    gate.open();
+    REQUIRE(collector.waitFor(third));
+
+    const auto results = collector.results();
+    REQUIRE(results.size() == 1);
+    REQUIRE(results[0].request == third);
+    REQUIRE(collector.resultsOf(first).empty());
+    REQUIRE(collector.resultsOf(second).empty());
+}
+
+TEST_CASE("A Cancel request before a Queue one still cancels the render in flight",
+          "[app][preview][queue]") {
+    Collector collector;
+    test::ProgressGate gate;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu,
+                                  app::AppSettings{}, gate.callback());
+    renderer.setSource(makeSource());
+    const app::PreviewView view = app::PreviewView::wholeFrame({256, 128});
+    gate.close();
+    const std::uint64_t first = renderer.request(exposureState(0.1F), view);
+    REQUIRE(gate.waitHeld());
+    // The worker is held inside its render, so the Cancel request cancels that render directly.
+    // The sticky flag for a Cancel request that lands between taking a job and starting its
+    // channel is not reached here: it has no test hook.
+    (void)renderer.request(exposureState(0.2F), view);
+    const std::uint64_t last = renderer.request(exposureState(0.3F), view, app::Supersede::Queue);
+    gate.open();
+    REQUIRE(collector.waitFor(last));
+
+    const auto results = collector.results();
+    REQUIRE(results.size() == 1);
+    REQUIRE(results[0].request == last);
+    REQUIRE(collector.resultsOf(first).empty());
+}
+
+TEST_CASE("A Queue request cancels a fallback refresh in flight", "[app][preview][queue][region]") {
+    Collector collector;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
+    renderer.setSource(makeLargeSource());
+    app::PreviewView region = app::PreviewView::wholeFrame({256, 128});
+    region.region = QRect(0, 0, 512, 256);
+    // The fallback of this state is slow: far longer than the test waits for it.
+    const std::uint64_t first = renderer.request(slowState(), region);
+    REQUIRE(collector.waitFor(first));
+    // The refresh starts once requests pause (150 ms); it has no progress to wait on, so the
+    // pause is waited out. Were it not yet started, the request would still end it.
+    std::this_thread::sleep_for(400ms);
+    const auto begin = std::chrono::steady_clock::now();
+    const std::uint64_t second = renderer.request({}, region, app::Supersede::Queue);
+    REQUIRE(collector.waitFor(second));
+    REQUIRE(std::chrono::steady_clock::now() - begin < 5s);
+    // The second request's own refresh may follow; the first's must not.
+    for (const auto& background : collector.backgrounds()) {
+        REQUIRE(background.request != first);
+    }
+}
+
+TEST_CASE("A Queue request cancels a histogram count in flight",
+          "[app][preview][queue][histogram]") {
+    Collector collector;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
+    renderer.setCurveHistogramWanted(true);
+    renderer.setSource(makeLargeSource());
+    const std::uint64_t first =
+        renderer.request(exposureState(0.4F), app::PreviewView::wholeFrame({300, 300}));
+    REQUIRE(collector.waitFor(first));
+    // The count starts once requests pause (150 ms) and is too quick to be caught in flight
+    // reliably, so this only checks that a Queue request around it still ends with a histogram for
+    // the newest request.
+    std::this_thread::sleep_for(150ms);
+    const std::uint64_t second = renderer.request(
+        exposureState(0.5F), app::PreviewView::wholeFrame({300, 300}), app::Supersede::Queue);
+    REQUIRE(collector.waitFor(second));
+    REQUIRE(collector.waitForHistogram(second));
+    const auto histograms = collector.histograms();
+    REQUIRE(histograms.back().request == second);
+}
+
+TEST_CASE("A request with no thumbnail edge delivers no thumbnail", "[app][preview][queue]") {
+    Collector collector;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
+    renderer.setSource(makeSource());
+    app::PreviewView view = app::PreviewView::wholeFrame({256, 128});
+    view.thumbnailEdge = 0;
+    const std::uint64_t without = renderer.request(exposureState(0.1F), view);
+    REQUIRE(collector.waitFor(without));
+    view.thumbnailEdge = 64;
+    const std::uint64_t with = renderer.request(exposureState(0.2F), view, app::Supersede::Queue);
+    REQUIRE(collector.waitFor(with));
+
+    REQUIRE_FALSE(collector.resultsOf(without).at(0).thumbnail.has_value());
+    const auto delivered = collector.resultsOf(with);
+    REQUIRE(delivered.size() == 1);
+    REQUIRE(delivered[0].thumbnail.has_value());
+    REQUIRE(std::max(delivered[0].thumbnail->width(), delivered[0].thumbnail->height()) == 64);
+}
+
+TEST_CASE("The newest of a mixed run of requests always ends with a result",
+          "[app][preview][queue]") {
+    // One run ends with a Cancel request, the other with a Queue one.
+    for (const bool endWithQueue : {false, true}) {
+        Collector collector;
+        test::ProgressGate gate;
+        app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu,
+                                      app::AppSettings{}, gate.callback());
+        renderer.setSource(makeSource());
+        const app::PreviewView view = app::PreviewView::wholeFrame({256, 128});
+        gate.close();
+        (void)renderer.request(exposureState(0.1F), view);
+        REQUIRE(gate.waitHeld());
+        std::uint64_t last = 0;
+        for (int i = 0; i < 6; ++i) {
+            const bool queue = i == 5 ? endWithQueue : i % 3 != 2;
+            last = renderer.request(exposureState(0.2F + static_cast<float>(i) * 0.1F), view,
+                                    queue ? app::Supersede::Queue : app::Supersede::Cancel);
+        }
+        gate.open();
+        REQUIRE(collector.waitFor(last));
+        const auto results = collector.results();
+        REQUIRE(results.back().request == last);
+        REQUIRE(results.back().image.has_value());
+        std::uint64_t previous = 0;
+        for (const auto& result : results) {
+            REQUIRE(result.error.empty());
+            REQUIRE(result.request > previous);
+            previous = result.request;
+        }
+    }
 }

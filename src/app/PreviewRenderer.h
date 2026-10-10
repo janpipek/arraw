@@ -73,6 +73,12 @@ inline constexpr std::chrono::milliseconds previewProgressInterval{33};
 /// would cost about what it hides (report B7's time model; ADR 044, section 8).
 inline constexpr double defaultStandInSeconds = 0.3;
 
+/// @brief What a request does to the render in flight.
+enum class Supersede {
+    Cancel, ///< Cancel it (the default): the newest request is what matters.
+    Queue,  ///< Let a render of an earlier request finish and be delivered; this one runs next.
+};
+
 /// @brief Outcome of one preview render.
 ///
 /// A result with only @ref background set is a refreshed fallback, rendered
@@ -145,8 +151,12 @@ struct PreviewResult {
 /// 045), and binds a ladder to the level it renders; the renderer only clears
 /// them when the source or the device changes, which the plan cannot tell it.
 ///
-/// A newer request cancels the render in flight (ADR 042): on the CPU it stops
-/// within a few milliseconds, on the GPU after the render pass it is in. A
+/// A newer request cancels the render in flight (ADR 042), unless it asks to be queued behind it
+/// (::arraw::app::Supersede::Queue, for a brush stroke, ADR 044): then a render of a request
+/// (its stand-in included) finishes and is delivered, and the newest request runs next, so
+/// renders follow one another, and a stroke's picture is at most two renders later than its change.
+/// A fallback refresh or a histogram count in flight is cancelled by either kind. On the CPU a
+/// cancelled render stops within a few milliseconds, on the GPU after the render pass it is in. A
 /// cancelled render delivers nothing, neither an image nor an error, and keeps
 /// the checkpoints of the passes it finished, so the newer request resumes
 /// from them. The newest request is never cancelled by another, so it always
@@ -230,15 +240,18 @@ public:
     /// @param decoded Decoded photograph; may be empty to clear the source.
     void setSource(std::shared_ptr<const ImageBuffer> decoded);
 
-    /// @brief Queues a render, replacing any request not yet started and cancelling the one in
-    /// flight.
+    /// @brief Queues a render, replacing any request not yet started and, by default, cancelling
+    /// the one in flight.
     ///
     /// A request made while no source is set is not ignored: it yields a result
     /// with an error.
     /// @param state How to develop the photograph.
     /// @param view Part of the frame to show, and the size to show it at.
+    /// @param supersede Whether the render of an earlier request in flight is cancelled; a
+    /// fallback refresh or histogram count in flight is cancelled whatever it says.
     /// @return Identifier of the request, increasing with each call.
-    std::uint64_t request(DevelopState state, PreviewView view);
+    std::uint64_t request(DevelopState state, PreviewView view,
+                          Supersede supersede = Supersede::Cancel);
 
     /// @brief Says whether the curve histogram is shown, so whether it is worth counting.
     ///
@@ -272,9 +285,10 @@ private:
     /// Already cancelled when a request or another source arrived since the work was taken.
     /// @param onProgress Receiver of the work's progress; may be empty.
     /// @param source Source the work was taken with.
+    /// @param shown Whether the work is the render of a request, which a Queue request leaves be.
     [[nodiscard]] std::shared_ptr<ProgressChannel>
     startChannel(ProgressChannel::Callback onProgress,
-                 const std::shared_ptr<const ImageBuffer>& source);
+                 const std::shared_ptr<const ImageBuffer>& source, bool shown = false);
 
     /// @brief Forgets the channel of the work that ended.
     void endChannel();
@@ -298,8 +312,8 @@ private:
     /// setStandInThreshold.
     std::atomic<double> standInSeconds_{defaultStandInSeconds};
 
-    /// Guard of source_, pending_, sourceChanged_, lastId_, curveHistogramWanted_,
-    /// recountHistogram_ and inFlight_.
+    /// Guard of source_, pending_, sourceChanged_, inFlightShown_, cancelsShown_, lastId_,
+    /// curveHistogramWanted_, recountHistogram_ and inFlight_.
     std::mutex mutex_;
 
     /// Signal that a request or a recount is pending, or the worker should stop.
@@ -317,6 +331,12 @@ private:
 
     /// Channel of the work the worker is doing, which a newer request cancels; null when idle.
     std::shared_ptr<ProgressChannel> inFlight_;
+
+    /// Whether inFlight_ is the render of a request, not a fallback refresh or a histogram count.
+    bool inFlightShown_ = false;
+
+    /// Whether a request that cancels the render in flight arrived since the worker last took one.
+    bool cancelsShown_ = false;
 
     /// Identifier of the newest request.
     std::uint64_t lastId_ = 0;

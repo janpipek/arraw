@@ -680,23 +680,27 @@ PreviewRenderer::~PreviewRenderer() {
 
 std::shared_ptr<ProgressChannel>
 PreviewRenderer::startChannel(ProgressChannel::Callback onProgress,
-                              const std::shared_ptr<const ImageBuffer>& source) {
+                              const std::shared_ptr<const ImageBuffer>& source, bool shown) {
     auto channel = std::make_shared<ProgressChannel>(std::move(onProgress));
     const std::scoped_lock lock(mutex_);
     // A request or a new source that came while the work was being taken has
     // superseded it already. A stop requested before this lock found nothing in
     // flight to cancel, so the new work stops here instead of holding up the
     // destructor.
-    if (pending_ || source_ != source || worker_.get_stop_token().stop_requested()) {
+    // A request that queues behind a render of a request does not supersede it.
+    const bool superseded = shown ? cancelsShown_ : pending_.has_value();
+    if (superseded || source_ != source || worker_.get_stop_token().stop_requested()) {
         channel->cancel();
     }
     inFlight_ = channel;
+    inFlightShown_ = shown;
     return channel;
 }
 
 void PreviewRenderer::endChannel() {
     const std::scoped_lock lock(mutex_);
     inFlight_.reset();
+    inFlightShown_ = false;
 }
 
 void PreviewRenderer::setSource(std::shared_ptr<const ImageBuffer> decoded) {
@@ -705,6 +709,7 @@ void PreviewRenderer::setSource(std::shared_ptr<const ImageBuffer> decoded) {
         sourceChanged_ = sourceChanged_ || decoded != source_;
         source_ = std::move(decoded);
         pending_.reset();
+        cancelsShown_ = false;
         // Whatever the worker does is for the previous photograph.
         if (inFlight_) {
             inFlight_->cancel();
@@ -732,14 +737,16 @@ void PreviewRenderer::setCurveHistogramWanted(bool wanted) {
     }
 }
 
-std::uint64_t PreviewRenderer::request(DevelopState state, PreviewView view) {
+std::uint64_t PreviewRenderer::request(DevelopState state, PreviewView view, Supersede supersede) {
     std::uint64_t id = 0;
     {
         const std::scoped_lock lock(mutex_);
         id = ++lastId_;
         pending_.emplace(Pending{id, std::move(state), view});
-        // Superseded: whatever the worker does now, this request makes pointless.
-        if (inFlight_) {
+        cancelsShown_ = cancelsShown_ || supersede == Supersede::Cancel;
+        // Superseded: whatever the worker does now, this request makes pointless, except the
+        // render of a request that a Queue request lets finish.
+        if (inFlight_ && (supersede == Supersede::Cancel || !inFlightShown_)) {
             inFlight_->cancel();
         }
     }
@@ -798,6 +805,7 @@ void PreviewRenderer::run(std::stop_token stop) {
             if (pending_) {
                 job = std::move(pending_);
                 pending_.reset();
+                cancelsShown_ = false;
             } else if (recountHistogram_) {
                 // Only a recount: of the state last rendered, if it was of this source.
                 recountHistogram_ = false;
@@ -845,7 +853,7 @@ void PreviewRenderer::run(std::stop_token stop) {
                 // able to queue the next request meanwhile.
                 ProgressPhase phase;
                 const std::shared_ptr<ProgressChannel> channel =
-                    startChannel(thinned(onProgress_, job->id, phase), source);
+                    startChannel(thinned(onProgress_, job->id, phase), source, true);
                 // A coarser stand-in goes out at once; it is neither the fallback beneath a
                 // region nor a thumbnail's source.
                 const StandIn standIn{[&](PreviewResult coarser) {
