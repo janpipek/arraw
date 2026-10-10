@@ -1,5 +1,6 @@
 #pragma once
 
+#include "BrushPainting.h"
 #include "MaskEditing.h"
 
 #include <CropGeometry.h>
@@ -9,11 +10,13 @@
 
 #include <QImage>
 #include <QPointF>
+#include <QRectF>
 #include <QTimer>
 #include <QWidget>
 
 #include <optional>
 
+class QEnterEvent;
 class QEvent;
 class QFocusEvent;
 class QPainter;
@@ -43,9 +46,15 @@ class PhotoView;
 /// a click there clearing the selection. A middle drag, Alt with a left drag, and a left drag
 /// while Space is held pan; the wheel zooms: all of those are left to the photo view beneath.
 ///
-/// Keys: Esc cancels a gesture, else disarms the tool, else asks to leave the mode; O shows or
-/// hides the tint; Delete and Backspace delete the selected mask; Space held turns a drag into a
-/// pan.
+/// With Brush armed the tool paints: a press starts a stroke on the selected brush, or on a new
+/// one, every move extends it and the release ends it, each as one gesture in the same protocol;
+/// the moves of one turn of the event loop make one stateEdited. No handles or pins are drawn
+/// then; the cursor is a ring of the brush's size instead, with a dashed ring at its hardness
+/// and a bar while the stroke would erase (the Erase setting, inverted by Alt held).
+///
+/// Keys: Esc cancels a gesture, else (with Brush armed and a brush selected) deselects it, else
+/// disarms the tool, else asks to leave the mode; O shows or hides the tint; Delete and Backspace
+/// delete the selected mask; Space held turns a drag into a pan.
 ///
 /// A gesture is cancelled when the pointer is lost. Qt Widgets has no event for a lost implicit
 /// grab, so the window being deactivated, the overlay hidden or losing the focus, and a move
@@ -76,6 +85,22 @@ public:
 
     /// @brief Arms or disarms a creation tool, without emitting any signal.
     void setTool(MaskTool tool);
+
+    /// @brief Gives the settings the next stroke is made with.
+    void setBrushSettings(const BrushSettings& settings);
+
+    /// @brief Tells whether the tool paints: the brush is armed.
+    [[nodiscard]] bool painting() const noexcept {
+        return tool_ == MaskTool::Brush;
+    }
+
+    /// @brief Tells whether a stroke is under way.
+    [[nodiscard]] bool stroking() const noexcept {
+        return gesture_ == Gesture::Stroke;
+    }
+
+    /// @brief Gives the radius of the brush's ring, in logical pixels; zero without a photograph.
+    [[nodiscard]] double ringRadius() const;
 
     /// @brief Gives the armed tool.
     [[nodiscard]] MaskTool tool() const noexcept {
@@ -146,6 +171,13 @@ signals:
     /// @brief Announces that the tool is disarmed, as after a creation or by Esc.
     void toolChanged(arraw::app::MaskTool tool);
 
+    /// @brief Announces that a press or a stroke was refused by a cap or budget of the brush.
+    ///
+    /// Emitted once per press, or once per stroke when it is stopped.
+    /// @param refusal Reason.
+    /// @param message The words for the status line.
+    void brushRefused(arraw::app::BrushRefusal refusal, const QString& message);
+
     /// @brief Announces that the O key toggled the tint.
     void overlayToggled(bool shown);
 
@@ -163,10 +195,12 @@ protected:
     void keyPressEvent(QKeyEvent* event) override;
     void keyReleaseEvent(QKeyEvent* event) override;
     void focusOutEvent(QFocusEvent* event) override;
+    void enterEvent(QEnterEvent* event) override;
+    void leaveEvent(QEvent* event) override;
 
 private:
     /// What a gesture is.
-    enum class Gesture { None, Handle, Create, Pan };
+    enum class Gesture { None, Handle, Create, Pan, Stroke };
 
     /// What the tint was made from, to tell whether it is out of date.
     struct CoverageInputs {
@@ -199,6 +233,43 @@ private:
     /// @brief Ends a creation or a handle drag, reporting it.
     void finishGesture(QPointF pointer, bool constrain);
 
+    /// @brief Starts a stroke at a press, reporting it, or says why it cannot start.
+    void startStroke(QPointF at, bool alt, const MaskViewMapping& map);
+
+    /// @brief Adds a pointer position to the stroke.
+    void extendStroke(QPointF at, bool release);
+
+    /// @brief Ends the stroke at the release, reporting what is left of it.
+    void finishStroke(QPointF at);
+
+    /// @brief Reports the stroke's state if it changed since the last report.
+    void reportStroke();
+
+    /// @brief Remembers the part of the widget a kept point changes, for the next repaint.
+    void growStrokeDirt(QPointF at);
+
+    /// @brief Repaints what changed: the whole widget, or while stroking the ring and the new
+    /// dabs only.
+    /// @param consume Whether the dabs' region is spent by it.
+    void refresh(bool consume);
+
+    /// @brief Moves the ring to a pointer position, repainting where it was and where it is.
+    void trackHover(std::optional<QPointF> at);
+
+    /// @brief Gives the part of the widget the ring at a position covers.
+    [[nodiscard]] QRectF ringRect(QPointF centre) const;
+
+    /// @brief Finds out whether the brush could take one more stroke, for the cursor.
+    void refreshBrushFull();
+
+    /// @brief Tells whether the next stroke would erase: the setting, inverted by Alt.
+    [[nodiscard]] bool erasing() const noexcept {
+        return brush_.erase != altHeld_;
+    }
+
+    /// @brief Paints the brush's ring at the pointer.
+    void paintBrushCursor(QPainter& painter, const MaskViewMapping& mapping) const;
+
     /// @brief Makes the cursor suit what is under the pointer.
     void updateCursor(QPointF pointer);
 
@@ -215,6 +286,27 @@ private:
     MaskTool tool_ = MaskTool::None;
     bool tint_ = false;
     bool spaceHeld_ = false;
+    /// Whether Alt is held, which inverts the brush's Erase setting.
+    bool altHeld_ = false;
+
+    /// Settings the next stroke is made with.
+    BrushSettings brush_;
+    /// Radius the stroke under way started with, in the brush's units.
+    float strokeRadius_ = 0.0F;
+    /// Stroke under way; nothing otherwise.
+    std::optional<LiveStroke> stroke_;
+    /// Reports the stroke once per turn of the event loop.
+    QTimer strokeTimer_;
+    /// Pointer over the overlay while painting; nothing when it is elsewhere.
+    std::optional<QPointF> hover_;
+    /// Whether the brush cannot take one more stroke: the cursor says so.
+    bool brushFull_ = false;
+    /// Whether the stroke's refusal was announced.
+    bool refusalShown_ = false;
+    /// Where the last point the stroke kept lies in the widget.
+    QPointF lastKept_;
+    /// Part of the widget the tint changed in since it was last repainted, while stroking.
+    QRectF strokeDirt_;
 
     Gesture gesture_ = Gesture::None;
     /// State when the gesture began: what each result is built from.

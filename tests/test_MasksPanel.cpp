@@ -271,6 +271,96 @@ TEST_CASE("The creation buttons arm one tool at a time", "[app][masks][panel]") 
     CHECK(f.tools.size() == 3);
 }
 
+TEST_CASE("The Brush button arms the brush, and the Brush block shows while it is armed",
+          "[app][masks][panel][brush]") {
+    Fixture f;
+    REQUIRE(f.panel.findChild<QWidget*>("brushControls") != nullptr);
+    const QWidget* block = f.panel.findChild<QWidget*>("brushControls");
+    CHECK_FALSE(f.shows(block));
+    f.button("maskBrush").click();
+    REQUIRE(f.tools.size() == 1);
+    CHECK(f.tools.back() == MaskTool::Brush);
+    CHECK(f.shows(block));
+    // Exclusive with the others.
+    f.button("maskLinear").click();
+    CHECK_FALSE(f.button("maskBrush").isChecked());
+    CHECK_FALSE(f.shows(block));
+    f.panel.setTool(MaskTool::Brush);
+    CHECK(f.button("maskBrush").isChecked());
+    CHECK_FALSE(f.button("maskLinear").isChecked());
+    CHECK(f.shows(block));
+    CHECK(f.tools.size() == 2);
+    f.panel.setTool(MaskTool::None);
+    CHECK_FALSE(f.shows(block));
+}
+
+TEST_CASE("Brush is disabled at sixteen masks unless a brush is selected",
+          "[app][masks][panel][brush]") {
+    Fixture f;
+    for (std::size_t count = 0; count + 1 < maximumLocalAdjustments; ++count) {
+        f.add(gradient);
+    }
+    f.add(BrushMask{});
+    f.select(0);
+    CHECK_FALSE(f.button("maskBrush").isEnabled());
+    CHECK(f.button("maskBrush").toolTip().contains("at most 16"));
+    f.select(maximumLocalAdjustments - 1);
+    CHECK(f.button("maskBrush").isEnabled());
+    f.panel.setSelectedMask(std::nullopt);
+    CHECK_FALSE(f.button("maskBrush").isEnabled());
+}
+
+TEST_CASE("The hint names the brush being painted", "[app][masks][panel][brush]") {
+    Fixture f;
+    f.add(BrushMask{});
+    f.select(0);
+    const QLabel* hint = f.panel.findChild<QLabel*>("maskHint");
+    CHECK_FALSE(f.shows(hint));
+    f.panel.setTool(MaskTool::Brush);
+    CHECK(f.shows(hint));
+    CHECK(hint->text() == "Painting Brush 1. Esc starts a new brush.");
+    f.panel.setSelectedMask(std::nullopt);
+    CHECK(hint->text().contains("Brush"));
+    CHECK(hint->text().startsWith("Select a mask"));
+}
+
+TEST_CASE("The brush rows report settings and are not edits", "[app][masks][panel][brush]") {
+    Fixture f;
+    std::vector<BrushSettings> reported;
+    QObject::connect(&f.panel, &MasksPanel::brushSettingsChanged,
+                     [&](const BrushSettings& settings) { reported.push_back(settings); });
+    f.panel.setTool(MaskTool::Brush);
+    REQUIRE(f.row("brush.size") != nullptr);
+    REQUIRE(f.row("brush.hardness") != nullptr);
+    REQUIRE(f.row("brush.flow") != nullptr);
+    CHECK(f.row("brush.size")->findChild<QDoubleSpinBox*>()->value() == Approx(2.0));
+
+    f.row("brush.size")->findChild<QDoubleSpinBox*>()->setValue(10.0);
+    f.row("brush.hardness")->findChild<QDoubleSpinBox*>()->setValue(80.0);
+    f.row("brush.flow")->findChild<QDoubleSpinBox*>()->setValue(25.0);
+    f.button("brushErase").click();
+    REQUIRE_FALSE(reported.empty());
+    const BrushSettings last = reported.back();
+    CHECK(last.radius == Approx(0.10F));
+    CHECK(last.hardness == Approx(0.8F));
+    CHECK(last.flow == Approx(0.25F));
+    CHECK(last.erase);
+    CHECK(f.panel.brushSettings() == last);
+    CHECK(f.started == 0);
+    CHECK(f.updates == 0);
+    CHECK(f.finished == 0);
+
+    // Showing settings from outside reports nothing.
+    const std::size_t count = reported.size();
+    BrushSettings shown;
+    shown.radius = 0.2F;
+    shown.erase = false;
+    f.panel.setBrushSettings(shown);
+    CHECK(reported.size() == count);
+    CHECK_FALSE(f.button("brushErase").isChecked());
+    CHECK(f.row("brush.size")->findChild<QDoubleSpinBox*>()->value() == Approx(20.0));
+}
+
 TEST_CASE("Black and white hides the local saturation and vibrance", "[app][masks][panel]") {
     Fixture f;
     f.add(gradient);

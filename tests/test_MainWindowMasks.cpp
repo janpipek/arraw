@@ -24,6 +24,7 @@
 #include <QDir>
 #include <QDockWidget>
 #include <QDoubleSpinBox>
+#include <QEnterEvent>
 #include <QLabel>
 #include <QListView>
 #include <QMouseEvent>
@@ -454,7 +455,7 @@ TEST_CASE("The history dock and the zoom stay on in the mask mode, and O shows t
 }
 
 TEST_CASE("A photograph whose sidecar holds a brush lists it, renders it and tints it, and "
-          "the tab offers no brush",
+          "the tab offers a brush",
           "[app][window][masks][brush]") {
     // A stroke wide enough to cover the whole photograph, with a lot of exposure.
     DevelopState state = withLocalAdjustmentAdded(
@@ -486,13 +487,13 @@ TEST_CASE("A photograph whose sidecar holds a brush lists it, renders it and tin
     w.overlay().updateCoverage();
     CHECK(w.overlay().coverage().isNull());
 
-    // The tab offers Linear and Radial to create, and no brush.
+    // Choosing a brush in the list arms the Brush tool, which shows the Brush block.
     CHECK(w.masks().findChild<QAbstractButton*>("maskLinear") != nullptr);
     CHECK(w.masks().findChild<QAbstractButton*>("maskRadial") != nullptr);
-    for (const QAbstractButton* button : w.masks().findChildren<QAbstractButton*>()) {
-        CHECK_FALSE(button->text().contains("Brush", Qt::CaseInsensitive));
-        CHECK_FALSE(button->objectName().contains("brush", Qt::CaseInsensitive));
-    }
+    REQUIRE(w.masks().findChild<QAbstractButton*>("maskBrush") != nullptr);
+    CHECK(w.button("maskBrush").isChecked());
+    CHECK(w.overlay().painting());
+    CHECK(w.masks().findChild<QWidget*>("brushControls")->isVisibleTo(&w.masks()));
     // Nothing was added to the history by looking.
     CHECK(w.steps() <= 1);
 }
@@ -749,4 +750,133 @@ TEST_CASE("Mask mode timing with sixteen masks", "[.timing]") {
         }
     }
     mark("end");
+}
+
+TEST_CASE("Brush, then a drag, adds a brush and keeps the tool armed",
+          "[app][window][masks][brush]") {
+    Window w(640, 480, {}, false);
+    QTest::mouseClick(&w.button("maskBrush"), Qt::LeftButton);
+    REQUIRE(w.overlay().painting());
+    w.drag(w.at(0.3, 0.3), w.at(0.6, 0.6));
+    CHECK(w.step(0) == "Add Brush 1");
+    CHECK(w.steps() == 2);
+    CHECK(w.overlay().selection().has_value());
+    CHECK(w.overlay().painting());
+    CHECK(w.button("maskBrush").isChecked());
+    // A second drag paints the same brush.
+    w.drag(w.at(0.3, 0.6), w.at(0.6, 0.3));
+    CHECK(w.step(0) == "Paint Brush 1");
+    CHECK(w.steps() == 3);
+}
+
+TEST_CASE("With fifteen masks a brush drag makes the sixteenth and stays armed on it",
+          "[app][window][masks][brush]") {
+    DevelopState state;
+    for (int count = 0; count < 15; ++count) {
+        state = withLocalAdjustmentAdded(state, BrushMask{});
+    }
+    Window w(640, 480, QSize(1400, 900), false, &state);
+    w.press(Qt::Key_M);
+    REQUIRE(w.view().isMaskMode());
+    QTest::mouseClick(&w.button("maskBrush"), Qt::LeftButton);
+    REQUIRE(w.overlay().painting());
+    DevelopState last;
+    QObject::connect(&w.overlay(), &MaskOverlay::stateEdited,
+                     [&last](const DevelopState& next) { last = next; });
+    w.drag(w.at(0.2, 0.3), w.at(0.8, 0.7));
+    CHECK(w.step(0) == "Add Brush 16");
+    CHECK(w.overlay().painting());
+    CHECK(w.button("maskBrush").isChecked());
+    REQUIRE(w.overlay().selection().has_value());
+    REQUIRE(last.localAdjustments.size() == 16);
+    // The selection is the new sixteenth mask.
+    CHECK(*w.overlay().selection() == last.localAdjustments.back().id);
+    const auto& painted = std::get<BrushMask>(last.localAdjustments.back().shape);
+    REQUIRE(painted.strokes != nullptr);
+    // Not cut short: the whole drag is in the stroke.
+    CHECK((*painted.strokes)[0].points.size() >= 4);
+    CHECK(w.button("maskBrush").isEnabled());
+    CHECK_FALSE(w.button("maskLinear").isEnabled());
+}
+
+TEST_CASE("Choosing a linear mask in the list disarms the brush", "[app][window][masks][brush]") {
+    Window w;
+    w.draw();
+    QTest::mouseClick(&w.button("maskBrush"), Qt::LeftButton);
+    REQUIRE(w.overlay().painting());
+    QListView& list = *w.masks().findChild<QListView*>("maskList");
+    emit list.clicked(list.model()->index(0, 0));
+    CHECK_FALSE(w.overlay().painting());
+    CHECK_FALSE(w.button("maskBrush").isChecked());
+}
+
+TEST_CASE("Alt held while another widget has the focus shows the erase bar on entering",
+          "[app][window][masks][brush]") {
+    Window w(640, 480, QSize(1400, 900));
+    QTest::mouseClick(&w.button("maskBrush"), Qt::LeftButton);
+    REQUIRE(w.overlay().painting());
+    BrushSettings settings;
+    settings.radius = 0.1F;
+    w.overlay().setBrushSettings(settings);
+    w.panel().setFocus();
+    const QPointF centre = w.at(0.5, 0.5);
+    const auto barDrawn = [&] {
+        const QImage image = w.overlay().grab().toImage();
+        return qAlpha(image.pixel(centre.toPoint())) > 0;
+    };
+    QEnterEvent enter(centre, centre, w.overlay().mapToGlobal(centre));
+    QCoreApplication::sendEvent(&w.overlay(), &enter);
+    CHECK_FALSE(barDrawn());
+
+    QTest::keyPress(w.window.windowHandle(), Qt::Key_Alt, Qt::AltModifier);
+    QEnterEvent again(centre, centre, w.overlay().mapToGlobal(centre));
+    QCoreApplication::sendEvent(&w.overlay(), &again);
+    const bool shown = barDrawn();
+    QTest::keyRelease(w.window.windowHandle(), Qt::Key_Alt);
+    CHECK(shown);
+}
+
+TEST_CASE("In the window a stroke repaints only where it painted", "[app][window][masks][brush]") {
+    Window w(640, 480, QSize(1400, 900), false);
+    w.press(Qt::Key_M);
+    REQUIRE(w.view().isMaskMode());
+    QTest::mouseClick(&w.button("maskBrush"), Qt::LeftButton);
+    w.overlay().setOverlayShown(true);
+    // A first stroke makes the brush; the next one is the one measured.
+    w.drag(w.at(0.2, 0.5), w.at(0.22, 0.5));
+    QTest::qWait(50);
+
+    struct Recorder : QObject {
+        QRect painted;
+        bool eventFilter(QObject*, QEvent* event) override {
+            // The first repaint only: a render that lands later repaints the view whole.
+            if (event->type() == QEvent::Paint && painted.isNull()) {
+                painted = static_cast<QPaintEvent*>(event)->rect();
+            }
+            return false;
+        }
+    } recorder;
+    w.overlay().installEventFilter(&recorder);
+    w.mouse(QEvent::MouseButtonPress, w.at(0.2, 0.5));
+    recorder.painted = {};
+    w.mouse(QEvent::MouseMove, w.at(0.22, 0.5));
+    w.mouse(QEvent::MouseMove, w.at(0.24, 0.5));
+    REQUIRE(QTest::qWaitFor([&] { return !recorder.painted.isNull(); }, 5000));
+    REQUIRE_FALSE(recorder.painted.isNull());
+    CHECK(recorder.painted.right() < w.overlay().width() / 2);
+    CHECK(recorder.painted.height() < w.overlay().height());
+    // What was painted covers the dab.
+    CHECK(recorder.painted.contains(w.at(0.24, 0.5).toPoint()));
+    w.mouse(QEvent::MouseButtonRelease, w.at(0.24, 0.5), Qt::NoButton);
+}
+
+TEST_CASE("Choosing a tool in mid-stroke cancels the stroke", "[app][window][masks][brush]") {
+    Window w(640, 480, {}, false);
+    QTest::mouseClick(&w.button("maskBrush"), Qt::LeftButton);
+    w.mouse(QEvent::MouseButtonPress, w.at(0.3, 0.3));
+    w.mouse(QEvent::MouseMove, w.at(0.4, 0.4));
+    REQUIRE(w.overlay().stroking());
+    QTest::mouseClick(&w.button("maskLinear"), Qt::LeftButton);
+    CHECK_FALSE(w.overlay().stroking());
+    CHECK(w.steps() == 1);
 }

@@ -10,13 +10,16 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QEvent>
+#include <QFocusEvent>
 #include <QKeyEvent>
 #include <QMouseEvent>
+#include <QPaintEvent>
 #include <QTest>
 #include <QWheelEvent>
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 #include <cmath>
 #include <memory>
@@ -480,4 +483,351 @@ TEST_CASE("O tints a selected brush, and nothing when O is off", "[app][masks][o
     CHECK_FALSE(f.overlay.overlayShown());
     f.overlay.updateCoverage();
     CHECK(f.overlay.coverage().isNull());
+}
+
+namespace {
+
+/// A fixture with the brush armed, over a visible view so that it paints.
+struct BrushFixture : Fixture {
+    int refusals = 0;
+    BrushRefusal lastRefusal = BrushRefusal::None;
+
+    BrushFixture() {
+        QObject::connect(&overlay, &MaskOverlay::brushRefused,
+                         [this](BrushRefusal refusal, const QString&) {
+                             ++refusals;
+                             lastRefusal = refusal;
+                         });
+        BrushSettings settings;
+        settings.radius = 0.05F;
+        overlay.setBrushSettings(settings);
+        overlay.setTool(MaskTool::Brush);
+    }
+
+    /// Lets the zero-delay timers run.
+    static void turn() {
+        QTest::qWait(5);
+    }
+
+    [[nodiscard]] const Stroke& stroke(std::size_t mask = 0, std::size_t index = 0) const {
+        const auto& brush = std::get<BrushMask>(state.localAdjustments.at(mask).shape);
+        return (*brush.strokes)[index];
+    }
+};
+
+/// A brush that can take no more strokes.
+BrushMask fullBrush() {
+    std::vector<Stroke> strokes(maximumStrokesPerMask,
+                                Stroke{0.01F, 1.0F, 1.0F, false, {{0.5F, 0.5F}}});
+    return BrushMask{std::make_shared<const StrokeList>(std::move(strokes))};
+}
+
+} // namespace
+
+TEST_CASE("A press starts a stroke with a one-point result at once",
+          "[app][masks][overlay][brush]") {
+    BrushFixture f;
+    REQUIRE(f.overlay.painting());
+    f.press(f.at(0.3, 0.5));
+    CHECK(f.overlay.stroking());
+    CHECK(f.started == 1);
+    CHECK(f.updates == 1);
+    REQUIRE(f.state.localAdjustments.size() == 1);
+    CHECK(f.stroke().points.size() == 1);
+    CHECK(f.stroke().radius == Approx(0.05F));
+    // The new brush is announced as selected, and the tool stays armed.
+    REQUIRE(f.selections.size() == 1);
+    CHECK(f.selections.back() == f.mask().id);
+    CHECK(f.overlay.tool() == MaskTool::Brush);
+    f.release(f.at(0.3, 0.5));
+    CHECK(f.finished == 1);
+    CHECK_FALSE(f.overlay.stroking());
+    CHECK(f.overlay.tool() == MaskTool::Brush);
+    CHECK(f.tools.empty());
+}
+
+TEST_CASE("Moves in one turn give one result, and the release flushes them",
+          "[app][masks][overlay][brush]") {
+    BrushFixture f;
+    f.press(f.at(0.2, 0.5));
+    REQUIRE(f.updates == 1);
+    f.move(f.at(0.3, 0.5));
+    f.move(f.at(0.4, 0.5));
+    f.move(f.at(0.5, 0.5));
+    CHECK(f.updates == 1);
+    BrushFixture::turn();
+    CHECK(f.updates == 2);
+    CHECK(f.stroke().points.size() == 4);
+    f.move(f.at(0.6, 0.5));
+    f.release(f.at(0.7, 0.5));
+    // The release reports what is left without waiting for a turn.
+    CHECK(f.updates == 3);
+    CHECK(f.finished == 1);
+    CHECK(f.stroke().points.size() == 6);
+    BrushFixture::turn();
+    CHECK(f.updates == 3);
+}
+
+TEST_CASE("Alt at the press erases, and a stroke on a selected brush adds no mask",
+          "[app][masks][overlay][brush]") {
+    BrushFixture f;
+    f.add(BrushMask{});
+    f.overlay.setSelection(f.mask().id);
+    f.mouse(QEvent::MouseButtonPress, f.at(0.4, 0.4), Qt::LeftButton, Qt::AltModifier);
+    f.release(f.at(0.4, 0.4));
+    REQUIRE(f.state.localAdjustments.size() == 1);
+    CHECK(f.stroke().erase);
+    CHECK(f.selections.empty());
+
+    // The Erase setting inverts the other way.
+    BrushSettings settings;
+    settings.erase = true;
+    f.overlay.setBrushSettings(settings);
+    f.press(f.at(0.6, 0.6));
+    f.release(f.at(0.6, 0.6));
+    CHECK(f.stroke(0, 1).erase);
+    f.mouse(QEvent::MouseButtonPress, f.at(0.6, 0.6), Qt::LeftButton, Qt::AltModifier);
+    f.release(f.at(0.6, 0.6));
+    CHECK_FALSE(f.stroke(0, 2).erase);
+}
+
+TEST_CASE("A stroke is cancelled when the pointer is lost", "[app][masks][overlay][brush]") {
+    const auto lose = GENERATE(0, 1, 2, 3, 4);
+    BrushFixture f;
+    f.press(f.at(0.3, 0.5));
+    f.move(f.at(0.4, 0.5));
+    REQUIRE(f.overlay.stroking());
+    const int updates = f.updates;
+    switch (lose) {
+    case 0:
+        QTest::keyClick(&f.overlay, Qt::Key_Escape);
+        break;
+    case 1: {
+        QEvent event(QEvent::WindowDeactivate);
+        QCoreApplication::sendEvent(&f.overlay, &event);
+        break;
+    }
+    case 2: {
+        QEvent event(QEvent::Hide);
+        QCoreApplication::sendEvent(&f.overlay, &event);
+        break;
+    }
+    case 3: {
+        QFocusEvent event(QEvent::FocusOut);
+        QCoreApplication::sendEvent(&f.overlay, &event);
+        break;
+    }
+    default:
+        f.mouse(QEvent::MouseMove, f.at(0.5, 0.5), Qt::NoButton);
+        break;
+    }
+    CHECK(f.cancelled == 1);
+    CHECK(f.finished == 0);
+    CHECK_FALSE(f.overlay.stroking());
+    // The pending move is not reported afterwards.
+    BrushFixture::turn();
+    CHECK(f.updates == updates);
+    CHECK(f.overlay.tool() == MaskTool::Brush);
+}
+
+TEST_CASE("Esc cancels the stroke, then deselects the brush, then disarms, then leaves",
+          "[app][masks][overlay][brush]") {
+    BrushFixture f;
+    f.add(BrushMask{});
+    f.overlay.setSelection(f.mask().id);
+    f.press(f.at(0.3, 0.5));
+    REQUIRE(f.overlay.stroking());
+
+    f.overlay.escape();
+    CHECK(f.cancelled == 1);
+    CHECK(f.selections.empty());
+
+    f.overlay.escape();
+    REQUIRE(f.selections.size() == 1);
+    CHECK_FALSE(f.selections.back().has_value());
+    CHECK(f.overlay.tool() == MaskTool::Brush);
+    CHECK(f.leaves == 0);
+
+    f.overlay.escape();
+    CHECK(f.overlay.tool() == MaskTool::None);
+    REQUIRE(f.tools.size() == 1);
+    CHECK(f.tools.back() == MaskTool::None);
+
+    f.overlay.escape();
+    CHECK(f.leaves == 1);
+}
+
+TEST_CASE("Space with a drag and a middle drag pan while the tool paints",
+          "[app][masks][overlay][brush]") {
+    BrushFixture f;
+    f.view.zoomTo(2.0);
+    const QPointF before = f.view.transform().centre();
+    QTest::keyPress(&f.overlay, Qt::Key_Space);
+    f.drag(f.at(0.5, 0.5), f.at(0.5, 0.5) + QPointF(-40.0, -30.0));
+    QTest::keyRelease(&f.overlay, Qt::Key_Space);
+    CHECK(f.view.transform().centre() != before);
+    CHECK(f.started == 0);
+    CHECK(f.state.localAdjustments.empty());
+
+    QMouseEvent middle(QEvent::MouseButtonPress, f.at(0.5, 0.5),
+                       f.overlay.mapToGlobal(f.at(0.5, 0.5)), Qt::MiddleButton, Qt::MiddleButton,
+                       Qt::NoModifier);
+    QCoreApplication::sendEvent(&f.overlay, &middle);
+    // Left to the view beneath, which pans with it: no edit begins.
+    CHECK(f.started == 0);
+    CHECK_FALSE(f.overlay.stroking());
+    CHECK(f.state.localAdjustments.empty());
+}
+
+TEST_CASE("The wheel is ignored in the middle of a stroke", "[app][masks][overlay][brush]") {
+    BrushFixture f;
+    f.press(f.at(0.3, 0.5));
+    const double zoom = f.view.zoom();
+    const QPointF where(200.0, 150.0);
+    QWheelEvent wheel(where, f.overlay.mapToGlobal(where), QPoint(), QPoint(0, 120), Qt::NoButton,
+                      Qt::NoModifier, Qt::NoScrollPhase, false);
+    QCoreApplication::sendEvent(&f.overlay, &wheel);
+    CHECK(f.view.zoom() == zoom);
+    f.release(f.at(0.3, 0.5));
+    QCoreApplication::sendEvent(&f.overlay, &wheel);
+    CHECK(f.view.zoom() > zoom);
+}
+
+TEST_CASE("Pins are not grabbable while the tool paints, and are not drawn",
+          "[app][masks][overlay][brush]") {
+    BrushFixture f;
+    f.add(RadialMask{{0.5F, 0.5F}, 0.2F, 0.1F, 0.0F, 0.5F});
+    f.overlay.setSelection(std::nullopt);
+    // A stroke across the radial's centre paints rather than selecting it.
+    f.drag(f.at(0.3, 0.5), f.at(0.7, 0.5));
+    CHECK(f.started == 1);
+    REQUIRE(f.state.localAdjustments.size() == 2);
+    CHECK(std::holds_alternative<BrushMask>(f.state.localAdjustments.back().shape));
+    CHECK(f.selections.back() == f.state.localAdjustments.back().id);
+}
+
+TEST_CASE("With the brush unchecked and a brush selected, a drag pans and a click deselects",
+          "[app][masks][overlay][brush]") {
+    Fixture f;
+    f.add(BrushMask{});
+    f.overlay.setSelection(f.mask().id);
+    f.view.zoomTo(2.0);
+    const QPointF before = f.view.transform().centre();
+    f.drag(f.at(0.5, 0.5), f.at(0.5, 0.5) + QPointF(-40.0, -30.0));
+    CHECK(f.view.transform().centre() != before);
+    CHECK(f.started == 0);
+    f.press(f.at(0.5, 0.5));
+    f.release(f.at(0.5, 0.5));
+    REQUIRE_FALSE(f.selections.empty());
+    CHECK_FALSE(f.selections.back().has_value());
+    CHECK(f.started == 0);
+}
+
+TEST_CASE("The brush's ring has the radius of the brush on screen",
+          "[app][masks][overlay][brush]") {
+    BrushFixture f;
+    const double radius = 0.05;
+    for (const double zoom : {0.25, 0.0, 2.0}) {
+        if (zoom == 0.0) {
+            f.view.resetView();
+        } else {
+            f.view.zoomTo(zoom);
+        }
+        const double ratio = f.view.devicePixelRatioF();
+        const double expected = radius * 600.0 * f.view.zoom() / ratio;
+        CHECK(f.overlay.ringRadius() == Approx(expected).margin(0.5));
+    }
+    // The same chain at a device pixel ratio of two: logical pixels are half the device ones.
+    for (const double ratio : {1.0, 2.0}) {
+        const MaskViewMapping map(f.mapping().frame(), f.view.transform(), ratio);
+        CHECK(radius * map.scale() == Approx(radius * 600.0 * f.view.zoom() / ratio).margin(0.5));
+    }
+}
+
+TEST_CASE("The cursor is forbidden on a brush that is full", "[app][masks][overlay][brush]") {
+    BrushFixture f;
+    f.add(fullBrush());
+    f.overlay.setSelection(f.mask().id);
+    CHECK(f.overlay.cursor().shape() == Qt::ForbiddenCursor);
+
+    // A press on it is refused: no edit, and the reason is announced.
+    f.press(f.at(0.3, 0.5));
+    CHECK(f.started == 0);
+    CHECK(f.refusals == 1);
+    CHECK(f.lastRefusal == BrushRefusal::Strokes);
+    CHECK_FALSE(f.overlay.stroking());
+
+    // A new brush takes a stroke again.
+    f.overlay.setSelection(std::nullopt);
+    CHECK(f.overlay.cursor().shape() == Qt::BlankCursor);
+    f.press(f.at(0.3, 0.5));
+    CHECK(f.started == 1);
+    f.release(f.at(0.3, 0.5));
+}
+
+TEST_CASE("A stroke stopped by a budget keeps what fits and says so once",
+          "[app][masks][overlay][brush]") {
+    BrushFixture f;
+    // Nine strokes of the point cap and one of 9 995: five points are left of the mask's budget.
+    std::vector<Stroke> strokes(
+        9, Stroke{0.01F, 1.0F, 1.0F, false,
+                  std::vector<SensorPoint>(maximumStrokePoints, SensorPoint{0.5F, 0.5F})});
+    strokes.push_back(
+        Stroke{0.01F, 1.0F, 1.0F, false,
+               std::vector<SensorPoint>(maximumStrokePoints - 5, SensorPoint{0.5F, 0.5F})});
+    f.add(BrushMask{std::make_shared<const StrokeList>(std::move(strokes))});
+    f.overlay.setSelection(f.mask().id);
+    f.press(f.at(0.1, 0.5));
+    REQUIRE(f.overlay.stroking());
+    REQUIRE(f.refusals == 0);
+    for (int step = 1; step <= 8; ++step) {
+        f.move(f.at(0.1 + 0.05 * step, 0.5));
+    }
+    CHECK(f.refusals == 1);
+    CHECK(f.lastRefusal == BrushRefusal::Points);
+    CHECK(f.overlay.cursor().shape() == Qt::ForbiddenCursor);
+    f.release(f.at(0.6, 0.5));
+    // The release commits what fitted.
+    CHECK(f.finished == 1);
+    CHECK(f.refusals == 1);
+    CHECK(f.stroke(0, 10).points.size() == 5);
+    // The brush is full now: the next press is refused.
+    f.press(f.at(0.3, 0.5));
+    CHECK(f.refusals == 2);
+    CHECK(f.started == 1);
+}
+
+TEST_CASE("While stroking only the ring and the new dabs repaint", "[app][masks][overlay][brush]") {
+    BrushFixture f;
+    f.view.show();
+    REQUIRE(QTest::qWaitForWindowExposed(&f.view));
+    QTest::keyClick(&f.overlay, Qt::Key_O);
+    QTest::qWait(20);
+
+    struct Recorder : QObject {
+        QRect painted;
+        bool eventFilter(QObject*, QEvent* event) override {
+            if (event->type() == QEvent::Paint) {
+                painted |= static_cast<QPaintEvent*>(event)->rect();
+            }
+            return false;
+        }
+    } recorder;
+    f.overlay.installEventFilter(&recorder);
+
+    f.press(f.at(0.2, 0.5));
+    f.release(f.at(0.2, 0.5));
+    QTest::qWait(30);
+    f.press(f.at(0.2, 0.5));
+    recorder.painted = {};
+    // A stroke at the left edge: the right of the widget is none of its business.
+    f.move(f.at(0.22, 0.5));
+    f.move(f.at(0.24, 0.5));
+    QTest::qWait(30);
+    REQUIRE_FALSE(recorder.painted.isNull());
+    CHECK(recorder.painted.right() < f.overlay.width() / 2);
+    CHECK(recorder.painted.height() < f.overlay.height());
+    // And what it painted covers the new dab.
+    CHECK(recorder.painted.contains(f.at(0.24, 0.5).toPoint()));
+    f.release(f.at(0.24, 0.5));
 }

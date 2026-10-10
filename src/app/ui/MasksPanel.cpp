@@ -22,6 +22,7 @@
 
 #include <algorithm>
 #include <string>
+#include <variant>
 
 namespace arraw::app {
 
@@ -78,7 +79,8 @@ MasksPanel::MasksPanel(QWidget* parent) : QGroupBox(tr("Masks"), parent) {
     // Linear and Radial arm a tool, Overlay shows the tint; the rest act on the selection.
     linear_ = compactButton(tr("Linear"), QString(), "maskLinear", this);
     radial_ = compactButton(tr("Radial"), QString(), "maskRadial", this);
-    for (QToolButton* button : {linear_, radial_}) {
+    brush_ = compactButton(tr("Brush"), QString(), "maskBrush", this);
+    for (QToolButton* button : {linear_, radial_, brush_}) {
         button->setCheckable(true);
     }
     duplicate_ =
@@ -103,6 +105,7 @@ MasksPanel::MasksPanel(QWidget* parent) : QGroupBox(tr("Masks"), parent) {
     creation->setSpacing(2);
     creation->addWidget(linear_, 1);
     creation->addWidget(radial_, 1);
+    creation->addWidget(brush_, 1);
     creation->addWidget(overlay_, 1);
     layout->addLayout(creation);
 
@@ -129,11 +132,58 @@ MasksPanel::MasksPanel(QWidget* parent) : QGroupBox(tr("Masks"), parent) {
     actions->addWidget(count_);
     layout->addLayout(actions);
 
-    hint_ = new QLabel(tr("Select a mask, or add one with Linear or Radial."), this);
+    hint_ = new QLabel(tr("Select a mask, or add one with Linear, Radial or Brush."), this);
     hint_->setObjectName("maskHint");
     hint_->setWordWrap(true);
     hint_->setForegroundRole(QPalette::PlaceholderText);
     layout->addWidget(hint_);
+
+    // The brush's own settings: view state, not edits, so they never touch the session.
+    brushControls_ = new QWidget(this);
+    brushControls_->setObjectName("brushControls");
+    auto* brushLayout = new QVBoxLayout(brushControls_);
+    brushLayout->setContentsMargins(0, 0, 0, 0);
+    const auto addBrushRow = [this, brushLayout](const char* id, const SettingRange& range,
+                                                 double value,
+                                                 const SettingPresentation& presentation) {
+        auto* row = new SettingSlider(id, range, value, presentation, brushControls_);
+        brushLayout->addWidget(row);
+        connect(row, &SettingSlider::focusReleased, this, &MasksPanel::focusReleased);
+        return row;
+    };
+    brushSize_ =
+        addBrushRow("brush.size", brushSizeRange(),
+                    static_cast<double>(brushSettings_.radius) * 100.0, brushSizePresentation());
+    brushHardness_ = addBrushRow("brush.hardness", brushHardnessRange(),
+                                 static_cast<double>(brushSettings_.hardness) * 100.0,
+                                 brushHardnessPresentation());
+    brushFlow_ =
+        addBrushRow("brush.flow", brushFlowRange(),
+                    static_cast<double>(brushSettings_.flow) * 100.0, brushFlowPresentation());
+    brushErase_ = compactButton(tr("Erase"), tr("Erase (E; or hold Alt while pressing)"),
+                                "brushErase", brushControls_);
+    brushErase_->setCheckable(true);
+    brushErase_->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+    brushLayout->addWidget(brushErase_, 0, Qt::AlignLeft);
+    brushControls_->hide();
+    layout->addWidget(brushControls_);
+    connect(brushSize_, &SettingSlider::valueEdited, this, [this](double value) {
+        brushSettings_.radius = static_cast<float>(value / 100.0);
+        emit brushSettingsChanged(brushSettings_);
+    });
+    connect(brushHardness_, &SettingSlider::valueEdited, this, [this](double value) {
+        brushSettings_.hardness = static_cast<float>(value / 100.0);
+        emit brushSettingsChanged(brushSettings_);
+    });
+    connect(brushFlow_, &SettingSlider::valueEdited, this, [this](double value) {
+        brushSettings_.flow = static_cast<float>(value / 100.0);
+        emit brushSettingsChanged(brushSettings_);
+    });
+    connect(brushErase_, &QToolButton::clicked, this, [this](bool checked) {
+        brushSettings_.erase = checked;
+        emit brushSettingsChanged(brushSettings_);
+        emit focusReleased();
+    });
 
     controls_ = new QWidget(this);
     controls_->setObjectName("maskControls");
@@ -154,11 +204,21 @@ MasksPanel::MasksPanel(QWidget* parent) : QGroupBox(tr("Masks"), parent) {
 
     connect(linear_, &QToolButton::clicked, this, [this](bool checked) {
         radial_->setChecked(false);
+        brush_->setChecked(false);
+        updateBrushBlock();
         emit maskToolChosen(checked ? MaskTool::Linear : MaskTool::None);
     });
     connect(radial_, &QToolButton::clicked, this, [this](bool checked) {
         linear_->setChecked(false);
+        brush_->setChecked(false);
+        updateBrushBlock();
         emit maskToolChosen(checked ? MaskTool::Radial : MaskTool::None);
+    });
+    connect(brush_, &QToolButton::clicked, this, [this](bool checked) {
+        linear_->setChecked(false);
+        radial_->setChecked(false);
+        updateBrushBlock();
+        emit maskToolChosen(checked ? MaskTool::Brush : MaskTool::None);
     });
     connect(overlay_, &QToolButton::clicked, this, &MasksPanel::overlayToggled);
     connect(duplicate_, &QToolButton::clicked, this, [this] {
@@ -322,7 +382,6 @@ void MasksPanel::showSelected() {
         list_->selectionModel()->clear();
         list_->setCurrentIndex({});
     }
-    hint_->setVisible(mask == nullptr);
     controls_->setVisible(mask != nullptr);
     if (mask != nullptr) {
         {
@@ -340,7 +399,21 @@ void MasksPanel::showSelected() {
         }
     }
     updateButtons();
+    updateBrushBlock();
     showing_ = was;
+}
+
+void MasksPanel::updateBrushBlock() {
+    const bool painting = brush_->isChecked();
+    brushControls_->setVisible(painting);
+    const LocalAdjustment* mask = selected_ ? findLocalAdjustment(shown_, *selected_) : nullptr;
+    const bool paintingSelected =
+        painting && mask != nullptr && std::holds_alternative<BrushMask>(mask->shape);
+    hint_->setVisible(mask == nullptr || paintingSelected);
+    hint_->setText(
+        paintingSelected
+            ? tr("Painting %1. Esc starts a new brush.").arg(maskDisplayName(shown_, mask->id))
+            : tr("Select a mask, or add one with Linear, Radial or Brush."));
 }
 
 void MasksPanel::updateButtons() {
@@ -349,6 +422,12 @@ void MasksPanel::updateButtons() {
     // An armed tool stays unchecked-able at the limit, so that Esc and a click can disarm it.
     linear_->setEnabled(room || linear_->isChecked());
     radial_->setEnabled(room || radial_->isChecked());
+    // A full list can still be painted on: a stroke on a selected brush adds no mask.
+    const LocalAdjustment* mask = selected_ ? findLocalAdjustment(shown_, *selected_) : nullptr;
+    const bool brushSelected = mask != nullptr && std::holds_alternative<BrushMask>(mask->shape);
+    brush_->setEnabled(room || brushSelected || brush_->isChecked());
+    brush_->setToolTip(
+        room || brushSelected ? tr("Paints a mask with the brush: drag on the photograph.") : full);
     duplicate_->setEnabled(room && selected_.has_value());
     linear_->setToolTip(room ? tr("Draws a graduated mask: drag from where it applies fully to "
                                   "where it fades out, or click for a default one.")
@@ -367,9 +446,21 @@ void MasksPanel::updateButtons() {
 void MasksPanel::setTool(MaskTool tool) {
     const QSignalBlocker linear(linear_);
     const QSignalBlocker radial(radial_);
+    const QSignalBlocker brush(brush_);
     linear_->setChecked(tool == MaskTool::Linear);
     radial_->setChecked(tool == MaskTool::Radial);
+    brush_->setChecked(tool == MaskTool::Brush);
     updateButtons();
+    updateBrushBlock();
+}
+
+void MasksPanel::setBrushSettings(const BrushSettings& settings) {
+    brushSettings_ = settings;
+    brushSize_->setValue(static_cast<double>(settings.radius) * 100.0);
+    brushHardness_->setValue(static_cast<double>(settings.hardness) * 100.0);
+    brushFlow_->setValue(static_cast<double>(settings.flow) * 100.0);
+    const QSignalBlocker blocker(brushErase_);
+    brushErase_->setChecked(settings.erase);
 }
 
 void MasksPanel::setOverlayShown(bool shown) {

@@ -1,5 +1,6 @@
 #include "MaskOverlay.h"
 
+#include "MaskPresentation.h"
 #include "PhotoView.h"
 #include "TimingTrace.h"
 #include "ViewTransform.h"
@@ -10,8 +11,10 @@
 #include <QCoreApplication>
 #include <QCursor>
 #include <QElapsedTimer>
+#include <QEnterEvent>
 #include <QEvent>
 #include <QFocusEvent>
+#include <QGuiApplication>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPaintEvent>
@@ -96,6 +99,32 @@ void drawPin(QPainter& painter, QPointF at, bool enabled) {
     painter.drawEllipse(at, pinRadius, pinRadius);
 }
 
+/// Radius of a brush's ring, in logical pixels, below which a cross stands in for it.
+constexpr double crossBelowRadius = 4.0;
+
+/// Radius of a brush's ring, in logical pixels, below which the ring is not drawn at all.
+constexpr double ringBelowRadius = 1.5;
+
+/// Length of the cross that stands for a small brush, in logical pixels.
+constexpr double crossLength = 9.0;
+
+/// Length of the bar that marks an erasing brush, in logical pixels.
+constexpr double eraseBarLength = 8.0;
+
+/// Room the ring's strokes need beyond its radius, in logical pixels.
+constexpr double ringMargin = 4.0;
+
+/// @brief Strokes a circle white over a dark rim, in widget pixels.
+void strokeCircle(QPainter& painter, QPointF centre, double radius, Qt::PenStyle style) {
+    painter.setBrush(Qt::NoBrush);
+    painter.setPen(QPen(rimColour(), 3.0));
+    painter.drawEllipse(centre, radius, radius);
+    QPen pen(markColour(), 1.0);
+    pen.setStyle(style);
+    painter.setPen(pen);
+    painter.drawEllipse(centre, radius, radius);
+}
+
 /// @brief Tells whether a key is one the mode claims.
 bool claimedKey(int key) {
     return key == Qt::Key_Escape || key == Qt::Key_O || key == Qt::Key_Delete ||
@@ -113,6 +142,9 @@ MaskOverlay::MaskOverlay(PhotoView* view) : QWidget(view), view_(view) {
         tr("Drag a handle to move or reshape the selected mask; with Linear or Radial armed, "
            "drag on the photograph to draw one. Esc cancels, O shows where the mask applies, "
            "Delete removes it."));
+    strokeTimer_.setSingleShot(true);
+    strokeTimer_.setInterval(0);
+    connect(&strokeTimer_, &QTimer::timeout, this, &MaskOverlay::reportStroke);
     coverageTimer_.setSingleShot(true);
     coverageTimer_.setInterval(0);
     connect(&coverageTimer_, &QTimer::timeout, this, &MaskOverlay::updateCoverage);
@@ -136,18 +168,92 @@ void MaskOverlay::setScene(const DevelopState& state, const std::optional<Source
     }
     selection_ = reconciledSelection(state_, selection_);
     scheduleCoverage();
-    update();
+    refreshBrushFull();
+    refresh(false);
 }
 
 void MaskOverlay::setSelection(std::optional<LocalAdjustmentId> id) {
-    selection_ = reconciledSelection(state_, id);
+    const std::optional<LocalAdjustmentId> reconciled = reconciledSelection(state_, id);
+    if (reconciled == selection_) {
+        // Nothing to redraw: a stroke's every result lands here with the selection it had.
+        return;
+    }
+    selection_ = reconciled;
     scheduleCoverage();
+    refreshBrushFull();
     update();
 }
 
 void MaskOverlay::setTool(MaskTool tool) {
     tool_ = tool;
+    refreshBrushFull();
+    update();
+}
+
+void MaskOverlay::setBrushSettings(const BrushSettings& settings) {
+    // A stroke under way keeps what it was captured with; the next one has these.
+    brush_ = settings;
+    refreshBrushFull();
+    update();
+}
+
+double MaskOverlay::ringRadius() const {
+    const std::optional<MaskViewMapping> map = mapping();
+    return map ? static_cast<double>(brush_.radius) * map->scale() : 0.0;
+}
+
+QRectF MaskOverlay::ringRect(QPointF centre) const {
+    const double half = std::max(ringRadius(), crossLength / 2.0) + ringMargin;
+    return {centre.x() - half, centre.y() - half, 2.0 * half, 2.0 * half};
+}
+
+void MaskOverlay::refreshBrushFull() {
+    if (stroking()) {
+        return;
+    }
+    BrushRefusal refusal = BrushRefusal::None;
+    if (painting()) {
+        const LocalAdjustment* selected = selectedMask();
+        if (selected != nullptr && std::holds_alternative<BrushMask>(selected->shape)) {
+            refusal = refusalOf(state_, selected->id, probeStroke(brush_, SensorPoint{0.5F, 0.5F}));
+        } else if (!canAddLocalAdjustment(state_)) {
+            refusal = BrushRefusal::MasksFull;
+        }
+    }
+    brushFull_ = refusal != BrushRefusal::None;
     updateCursor(mapFromGlobal(QCursor::pos()));
+}
+
+void MaskOverlay::trackHover(std::optional<QPointF> at) {
+    const std::optional<QPointF> was = hover_;
+    hover_ = at;
+    if (!painting()) {
+        return;
+    }
+    QRectF dirty;
+    if (was) {
+        dirty |= ringRect(*was);
+    }
+    if (at) {
+        dirty |= ringRect(*at);
+    }
+    update(dirty.toAlignedRect());
+}
+
+void MaskOverlay::refresh(bool consume) {
+    if (!stroking()) {
+        update();
+        return;
+    }
+    // Only the ring and the dabs added since the last repaint changed.
+    QRectF dirty = strokeDirt_;
+    if (hover_) {
+        dirty |= ringRect(*hover_);
+    }
+    if (consume) {
+        strokeDirt_ = QRectF();
+    }
+    update(dirty.toAlignedRect());
 }
 
 void MaskOverlay::setOverlayShown(bool shown) {
@@ -241,6 +347,10 @@ void MaskOverlay::updateCoverage() {
                 line[x] = (alpha << 24) | (alpha << 16);
             }
         }
+        if (stroking() && image.size() != coverageImage_.size()) {
+            // The grid changed: every cell moved, so all of it is repainted.
+            strokeDirt_ = QRectF(rect());
+        }
         coverageImage_ = std::move(image);
         coveredFor_ = inputs;
     } catch (const std::exception&) {
@@ -252,14 +362,20 @@ void MaskOverlay::updateCoverage() {
     if (gesture_ != Gesture::None && coverageMilliseconds_ > slowCoverageMilliseconds) {
         reduced_ = true;
     }
-    update();
+    refresh(true);
 }
 
 void MaskOverlay::abandonDrag() {
+    const bool stroked = gesture_ == Gesture::Stroke;
     gesture_ = Gesture::None;
+    stroke_.reset();
+    strokeTimer_.stop();
     scheduleCoverage();
     creating_ = MaskTool::None;
-    updateCursor(mapFromGlobal(QCursor::pos()));
+    if (stroked) {
+        update();
+    }
+    refreshBrushFull();
 }
 
 bool MaskOverlay::cancelGesture() {
@@ -267,13 +383,19 @@ bool MaskOverlay::cancelGesture() {
         return false;
     }
     const bool edit = gesture_ != Gesture::Pan;
+    const bool stroked = gesture_ == Gesture::Stroke;
     gesture_ = Gesture::None;
+    stroke_.reset();
+    strokeTimer_.stop();
     scheduleCoverage();
     creating_ = MaskTool::None;
     if (edit) {
         emit editCancelled();
     }
-    updateCursor(mapFromGlobal(QCursor::pos()));
+    if (stroked) {
+        update();
+    }
+    refreshBrushFull();
     return true;
 }
 
@@ -281,9 +403,18 @@ void MaskOverlay::escape() {
     if (cancelGesture()) {
         return;
     }
+    if (painting()) {
+        const LocalAdjustment* selected = selectedMask();
+        if (selected != nullptr && std::holds_alternative<BrushMask>(selected->shape)) {
+            // Brush stays armed: the next stroke starts a new brush.
+            emit maskSelected(std::nullopt);
+            return;
+        }
+    }
     if (tool_ != MaskTool::None) {
         tool_ = MaskTool::None;
-        updateCursor(mapFromGlobal(QCursor::pos()));
+        refreshBrushFull();
+        update();
         emit toolChanged(MaskTool::None);
         return;
     }
@@ -328,6 +459,7 @@ bool MaskOverlay::event(QEvent* event) {
         // The pointer may never report its release.
         cancelGesture();
         spaceHeld_ = false;
+        altHeld_ = false;
         break;
     default:
         break;
@@ -339,6 +471,19 @@ void MaskOverlay::focusOutEvent(QFocusEvent* event) {
     QWidget::focusOutEvent(event);
     spaceHeld_ = false;
     cancelGesture();
+}
+
+void MaskOverlay::enterEvent(QEnterEvent* event) {
+    QWidget::enterEvent(event);
+    // Alt may have gone down while another widget had the keys.
+    altHeld_ = QGuiApplication::queryKeyboardModifiers().testFlag(Qt::AltModifier);
+    refreshBrushFull();
+    trackHover(event->position());
+}
+
+void MaskOverlay::leaveEvent(QEvent* event) {
+    QWidget::leaveEvent(event);
+    trackHover(std::nullopt);
 }
 
 void MaskOverlay::resizeEvent(QResizeEvent* event) {
@@ -362,8 +507,13 @@ void MaskOverlay::wheelEvent(QWheelEvent* event) {
 void MaskOverlay::mousePressEvent(QMouseEvent* event) {
     const std::optional<MaskViewMapping> map = mapping();
     // A middle drag, Alt with a left drag and Space with a left drag pan: the view beneath's.
+    // While the tool paints, Alt erases rather than pans.
     if (!map || event->button() != Qt::LeftButton || spaceHeld_ ||
-        (event->modifiers() & Qt::AltModifier)) {
+        ((event->modifiers() & Qt::AltModifier) && !painting())) {
+        if (painting() && gesture_ == Gesture::None) {
+            // The view pans now and the overlay hears no more moves: the ring would stay behind.
+            trackHover(std::nullopt);
+        }
         event->ignore();
         return;
     }
@@ -376,6 +526,11 @@ void MaskOverlay::mousePressEvent(QMouseEvent* event) {
     moved_ = false;
     lastReported_.reset();
     baseline_ = state_;
+    if (painting()) {
+        trackHover(at);
+        startStroke(at, event->modifiers() & Qt::AltModifier, *map);
+        return;
+    }
     if (tool_ != MaskTool::None) {
         if (!canAddLocalAdjustment(state_)) {
             return;
@@ -414,6 +569,114 @@ void MaskOverlay::mousePressEvent(QMouseEvent* event) {
     setCursor(Qt::ClosedHandCursor);
 }
 
+void MaskOverlay::startStroke(QPointF at, bool alt, const MaskViewMapping& map) {
+    altHeld_ = alt;
+    std::optional<LocalAdjustmentId> target;
+    if (const LocalAdjustment* selected = selectedMask();
+        selected != nullptr && std::holds_alternative<BrushMask>(selected->shape)) {
+        target = selected->id;
+    }
+    BrushRefusal refused = BrushRefusal::None;
+    std::optional<LiveStroke> stroke =
+        LiveStroke::begin(baseline_, target, brush_, erasing(), at, map, refused);
+    if (!stroke) {
+        brushFull_ = true;
+        updateCursor(at);
+        const QString name = target ? maskDisplayName(state_, *target) : QString();
+        emit brushRefused(refused, describeRefusal(refused, name));
+        return;
+    }
+    const LocalAdjustmentId id = stroke->mask();
+    stroke_ = std::move(stroke);
+    gesture_ = Gesture::Stroke;
+    refusalShown_ = false;
+    strokeRadius_ = brush_.radius;
+    strokeDirt_ = QRectF();
+    lastKept_ = at;
+    emit editStarted();
+    // The press's own result, at once: the first dab shows without waiting for a turn.
+    reportStroke();
+    if (!target && stroking()) {
+        // The mask exists from the first result on, as a created Linear does.
+        emit maskSelected(id);
+    }
+}
+
+void MaskOverlay::growStrokeDirt(QPointF at) {
+    if (!tint_) {
+        return;
+    }
+    // The tint changes within a radius of the segment, and a grid cell beyond it.
+    // The cell is the tint image's own, which the slow-coverage fallback may have coarsened.
+    const double cell = coverageImage_.isNull()
+                            ? 1.0 / coverageDensity
+                            : static_cast<double>(width()) / coverageImage_.width();
+    const std::optional<MaskViewMapping> map = mapping();
+    const double radius = map ? static_cast<double>(strokeRadius_) * map->scale() : 0.0;
+    const double reach = radius + 2.0 * cell;
+    QRectF dirt = QRectF(lastKept_, at).normalized();
+    dirt.adjust(-reach, -reach, reach, reach);
+    strokeDirt_ |= dirt;
+}
+
+void MaskOverlay::reportStroke() {
+    strokeTimer_.stop();
+    if (!stroke_ || !stroke_->pendingReport()) {
+        return;
+    }
+    // A copy: the receiver may abandon the gesture, which drops the stroke.
+    const DevelopState state = stroke_->state();
+    stroke_->reported();
+    emit stateEdited(state);
+}
+
+void MaskOverlay::extendStroke(QPointF at, bool release) {
+    const std::optional<MaskViewMapping> map = mapping();
+    if (!map) {
+        cancelGesture();
+        return;
+    }
+    if (stroke_->atPointCap() && stroke_->pendingReport()) {
+        // The stroke the split finishes is the one the cache has seen.
+        reportStroke();
+        if (!stroke_) {
+            return;
+        }
+    }
+    if (stroke_->extend(at, *map, release)) {
+        growStrokeDirt(at);
+        lastKept_ = at;
+        if (!release && !strokeTimer_.isActive()) {
+            strokeTimer_.start();
+        }
+    }
+    if (stroke_->refusal() != BrushRefusal::None && !refusalShown_) {
+        refusalShown_ = true;
+        brushFull_ = true;
+        setCursor(Qt::ForbiddenCursor);
+        emit brushRefused(stroke_->refusal(),
+                          describeRefusal(stroke_->refusal(),
+                                          maskDisplayName(stroke_->state(), stroke_->mask()),
+                                          true));
+    }
+}
+
+void MaskOverlay::finishStroke(QPointF at) {
+    extendStroke(at, true);
+    if (!stroke_) {
+        return; // Lost while working out the last position.
+    }
+    reportStroke();
+    if (!stroke_) {
+        return;
+    }
+    stroke_.reset();
+    gesture_ = Gesture::None;
+    scheduleCoverage();
+    update();
+    emit editFinished();
+}
+
 void MaskOverlay::continueGesture(QPointF pointer, bool constrain) {
     const std::optional<MaskViewMapping> map = mapping();
     if (!map) {
@@ -446,6 +709,10 @@ void MaskOverlay::continueGesture(QPointF pointer, bool constrain) {
 
 void MaskOverlay::mouseMoveEvent(QMouseEvent* event) {
     const QPointF at = event->position();
+    altHeld_ = event->modifiers() & Qt::AltModifier;
+    if (painting()) {
+        trackHover(at);
+    }
     if (gesture_ == Gesture::None) {
         updateCursor(at);
         event->ignore();
@@ -467,6 +734,10 @@ void MaskOverlay::mouseMoveEvent(QMouseEvent* event) {
         return;
     }
     last_ = at;
+    if (gesture_ == Gesture::Stroke) {
+        extendStroke(at, false);
+        return;
+    }
     continueGesture(at, event->modifiers() & Qt::ShiftModifier);
 }
 
@@ -508,11 +779,21 @@ void MaskOverlay::mouseReleaseEvent(QMouseEvent* event) {
         }
         return;
     }
-    finishGesture(at, event->modifiers() & Qt::ShiftModifier);
+    if (gesture_ == Gesture::Stroke) {
+        finishStroke(at);
+    } else {
+        finishGesture(at, event->modifiers() & Qt::ShiftModifier);
+    }
     updateCursor(at);
 }
 
 void MaskOverlay::keyPressEvent(QKeyEvent* event) {
+    if (event->key() == Qt::Key_Alt && !event->isAutoRepeat()) {
+        altHeld_ = true;
+        if (hover_) {
+            update(ringRect(*hover_).toAlignedRect());
+        }
+    }
     if (event->modifiers() & ~Qt::KeypadModifier) {
         QWidget::keyPressEvent(event);
         return;
@@ -531,6 +812,9 @@ void MaskOverlay::keyPressEvent(QKeyEvent* event) {
     case Qt::Key_Space:
         if (!event->isAutoRepeat()) {
             spaceHeld_ = true;
+            if (hover_) {
+                update(ringRect(*hover_).toAlignedRect());
+            }
             updateCursor(mapFromGlobal(QCursor::pos()));
         }
         break;
@@ -542,8 +826,17 @@ void MaskOverlay::keyPressEvent(QKeyEvent* event) {
 }
 
 void MaskOverlay::keyReleaseEvent(QKeyEvent* event) {
+    if (event->key() == Qt::Key_Alt && !event->isAutoRepeat()) {
+        altHeld_ = false;
+        if (hover_) {
+            update(ringRect(*hover_).toAlignedRect());
+        }
+    }
     if (event->key() == Qt::Key_Space && !event->isAutoRepeat()) {
         spaceHeld_ = false;
+        if (hover_) {
+            update(ringRect(*hover_).toAlignedRect());
+        }
         updateCursor(mapFromGlobal(QCursor::pos()));
         event->accept();
         return;
@@ -561,6 +854,10 @@ void MaskOverlay::updateCursor(QPointF pointer) {
     }
     if (spaceHeld_) {
         setCursor(Qt::OpenHandCursor);
+        return;
+    }
+    if (painting()) {
+        setCursor(brushFull_ ? Qt::ForbiddenCursor : Qt::BlankCursor);
         return;
     }
     if (tool_ != MaskTool::None) {
@@ -660,7 +957,36 @@ void MaskOverlay::paintEvent(QPaintEvent* /*event*/) {
         painter.drawImage(QRectF(rect()), coverageImage_);
         painter.restore();
     }
+    if (painting()) {
+        // A brush has no handles, and a stroke across another mask's pin must not look grabbable.
+        paintBrushCursor(painter, *map);
+        return;
+    }
     paintHandles(painter, *map);
+}
+
+void MaskOverlay::paintBrushCursor(QPainter& painter, const MaskViewMapping& map) const {
+    if (!hover_ || brushFull_ || spaceHeld_) {
+        return;
+    }
+    const QPointF at = *hover_;
+    const double radius = static_cast<double>(brush_.radius) * map.scale();
+    if (radius < crossBelowRadius) {
+        const double arm = crossLength / 2.0;
+        strokeLine(painter, QLineF(at.x() - arm, at.y(), at.x() + arm, at.y()), 1.0, Qt::SolidLine);
+        strokeLine(painter, QLineF(at.x(), at.y() - arm, at.x(), at.y() + arm), 1.0, Qt::SolidLine);
+    }
+    if (radius >= ringBelowRadius) {
+        strokeCircle(painter, at, radius, Qt::SolidLine);
+        const double core = static_cast<double>(brush_.hardness) * radius;
+        if (brush_.hardness > 0.0F && brush_.hardness < 1.0F && core >= 1.0) {
+            strokeCircle(painter, at, core, Qt::DashLine);
+        }
+    }
+    if (erasing()) {
+        const double arm = eraseBarLength / 2.0;
+        strokeLine(painter, QLineF(at.x() - arm, at.y(), at.x() + arm, at.y()), 2.0, Qt::SolidLine);
+    }
 }
 
 } // namespace arraw::app

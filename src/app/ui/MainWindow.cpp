@@ -94,6 +94,12 @@ constexpr int adjustmentsTab = 0;
 /// Index of the Masks tab of the develop dock.
 constexpr int masksTab = 1;
 
+/// @brief Tells whether a mask of the state is a brush.
+bool isBrushMask(const DevelopState& state, LocalAdjustmentId id) {
+    const LocalAdjustment* mask = findLocalAdjustment(state, id);
+    return mask != nullptr && std::holds_alternative<BrushMask>(mask->shape);
+}
+
 /// @brief Reads whether ARRAW_PREVIEW_DEVICE forces the CPU.
 ///
 /// `cpu` forces it, for previews and exports alike; anything else, or nothing,
@@ -587,6 +593,12 @@ void MainWindow::buildDevelopDock() {
                     // moves the focus to the photograph; a keyboard user keeps the list.
                     QWidget* held = QApplication::focusWidget();
                     setMaskMode(true);
+                    // A brush is painted on; another mask shows its handles instead.
+                    if (isBrushMask(open_->session.photo().state(), *id)) {
+                        setMaskTool(MaskTool::Brush);
+                    } else if (photoView_->maskOverlay().painting()) {
+                        setMaskTool(MaskTool::None);
+                    }
                     if (held != nullptr && developDock_->isAncestorOf(held)) {
                         held->setFocus();
                     }
@@ -598,7 +610,9 @@ void MainWindow::buildDevelopDock() {
             photoView_->maskOverlay().setFocus();
         }
     });
-    connect(developPanel_, &DevelopPanel::maskToolChosen, this, &MainWindow::setMaskTool);
+    connect(developPanel_, &DevelopPanel::maskToolChosen, this, &MainWindow::chooseMaskTool);
+    connect(developPanel_, &DevelopPanel::brushSettingsChanged, &photoView_->maskOverlay(),
+            &MaskOverlay::setBrushSettings);
     connect(developPanel_, &DevelopPanel::overlayToggled, &photoView_->maskOverlay(),
             &MaskOverlay::setOverlayShown);
     MaskOverlay& overlay = photoView_->maskOverlay();
@@ -696,6 +710,10 @@ void MainWindow::updateEdit(const DevelopState& state) {
         // No edit is open after a failure cancelled one: the rest of that
         // drag is dropped, rather than failing again with every move.
         if (!open_->session.editing()) {
+            // The session no longer has the stroke's edit: nothing may keep drawing it.
+            if (photoView_->maskOverlay().stroking()) {
+                photoView_->maskOverlay().abandonDrag();
+            }
             return;
         }
         const DevelopState before = open_->session.photo().state();
@@ -713,6 +731,9 @@ void MainWindow::finishEdit(EditOrigin origin) {
             return;
         }
         if (!open_->session.editing()) {
+            if (photoView_->maskOverlay().stroking()) {
+                photoView_->maskOverlay().abandonDrag();
+            }
             return;
         }
         open_->session.commit(origin);
@@ -790,6 +811,12 @@ void MainWindow::selectMask(std::optional<LocalAdjustmentId> id) {
     developPanel_->setSelectedMask(maskSelection_);
 }
 
+void MainWindow::chooseMaskTool(MaskTool tool) {
+    // The user's own choice ends a stroke under way; the program's disarming never does.
+    photoView_->maskOverlay().cancelGesture();
+    setMaskTool(tool);
+}
+
 void MainWindow::setMaskTool(MaskTool tool) {
     if (tool != MaskTool::None) {
         setMaskMode(true);
@@ -830,9 +857,13 @@ void MainWindow::syncMasks() {
     overlay.setScene(state, source);
     overlay.setSelection(maskSelection_);
     developPanel_->setSelectedMask(maskSelection_);
-    if (overlay.tool() != MaskTool::None && !canAddLocalAdjustment(state)) {
-        // Redo or a paste filled the list while a tool was armed: a press would do nothing.
-        setMaskTool(MaskTool::None);
+    if (overlay.tool() != MaskTool::None && !canAddLocalAdjustment(state) && !overlay.stroking()) {
+        // Redo or a paste filled the list while a tool was armed: a press would do nothing, but
+        // a brush can still paint on the brush that is selected.
+        if (overlay.tool() != MaskTool::Brush || !maskSelection_ ||
+            !isBrushMask(state, *maskSelection_)) {
+            setMaskTool(MaskTool::None);
+        }
     }
 }
 
@@ -1143,6 +1174,8 @@ void MainWindow::pasteSettings() {
     }
     guarded([this] {
         developPanel_->finishPendingEdit();
+        // A stroke under way is committed by the session, then the paste is its own step.
+        photoView_->maskOverlay().abandonDrag();
         const Photo& photo = open_->session.photo();
         const AppliedLook applied =
             withLook(photo.metadata(), photo.state(), clipboard_->look, clipboard_->sections);
@@ -1201,6 +1234,8 @@ void MainWindow::editGeometry(const GeometryCommand& command) {
     }
     guarded([this, &command] {
         developPanel_->finishPendingEdit();
+        // A stroke under way is committed by the session, then the turn is its own step.
+        photoView_->maskOverlay().abandonDrag();
         const Photo& photo = open_->session.photo();
         open_->session.setState(command.state(photo.metadata(), photo.state()));
         refreshPanel();
