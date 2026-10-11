@@ -426,6 +426,8 @@ endif()
 add_library(arraw-app-core STATIC
         src/app/AppSettings.cpp
         src/app/AppSettings.h
+        src/app/BrushPainting.cpp
+        src/app/BrushPainting.h
         src/app/CopySections.cpp
         src/app/CopySections.h
         src/app/CropEditing.cpp

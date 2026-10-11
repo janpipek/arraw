@@ -22,6 +22,7 @@ add_executable(arraw-tests
         test_BrushCoverage.cpp
         test_BrushCoverageCache.cpp
         test_BrushMask.cpp
+        test_BrushPainting.cpp
         test_BrushReload.cpp
         test_BrushRender.cpp
         test_BrushRaster.cpp
@@ -148,6 +149,8 @@ arraw_enable_warnings(arraw-widget-tests)
 find_package(Qt6 REQUIRED COMPONENTS Test)
 # arraw-trace for test_MainWindowOpening, which turns the timing trace on.
 target_link_libraries(arraw-widget-tests PRIVATE arraw-app-ui arraw-trace Qt6::Test Catch2::Catch2)
+# The painting session reads the process-wide brush coverage cache.
+target_include_directories(arraw-widget-tests PRIVATE ${CMAKE_SOURCE_DIR}/src/core)
 target_compile_definitions(arraw-widget-tests
         PRIVATE ARRAW_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 set_target_properties(arraw-widget-tests PROPERTIES AUTOMOC ON)

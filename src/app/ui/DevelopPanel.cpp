@@ -182,6 +182,8 @@ QWidget* DevelopPanel::buildMasksGroup() {
     connect(masksPanel_, &MasksPanel::maskSelected, this, &DevelopPanel::maskSelected);
     connect(masksPanel_, &MasksPanel::maskToolChosen, this, &DevelopPanel::maskToolChosen);
     connect(masksPanel_, &MasksPanel::overlayToggled, this, &DevelopPanel::overlayToggled);
+    connect(masksPanel_, &MasksPanel::brushSettingsChanged, this,
+            &DevelopPanel::brushSettingsChanged);
     return masksPanel_;
 }
 
@@ -195,6 +197,10 @@ void DevelopPanel::setMaskTool(MaskTool tool) {
 
 void DevelopPanel::setMaskOverlayShown(bool shown) {
     masksPanel_->setOverlayShown(shown);
+}
+
+void DevelopPanel::setBrushSettings(const BrushSettings& settings) {
+    masksPanel_->setBrushSettings(settings);
 }
 
 QWidget* DevelopPanel::buildToneCurveGroup() {

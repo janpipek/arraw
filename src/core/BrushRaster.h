@@ -40,6 +40,8 @@ struct PlacedStroke {
     std::int64_t top;            ///< First pixel row of the box.
     std::int64_t right;          ///< Column past the box (half-open), unclipped.
     std::int64_t bottom;         ///< Row past the box (half-open), unclipped.
+    std::size_t regular; ///< How many of the first dabs are not the end dab: all of them, or all
+                         ///< but the last.
 };
 
 /// Float coverage of a whole raster, row-major.
@@ -62,9 +64,10 @@ struct CoveragePlane {
 /// @param raster Raster the dabs are for.
 /// @param endDab Whether to add the last dab at the end of the path; without it the dabs are
 /// those that stay the same when the path grows (a live stroke's settled part).
+/// @param regular Receives the number of dabs that are not the end dab, if not null.
 /// @return Dab centres in raster pixels, at least one.
 [[nodiscard]] std::vector<DabCentre> dabCentres(const Stroke& stroke, ImageSize raster,
-                                                bool endDab = true);
+                                                bool endDab = true, std::size_t* regular = nullptr);
 
 /// Resolves one stroke against a raster size.
 [[nodiscard]] PlacedStroke placedStroke(const Stroke& stroke, ImageSize raster);

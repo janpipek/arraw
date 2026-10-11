@@ -1,5 +1,6 @@
 #pragma once
 
+#include "BrushPainting.h"
 #include "MaskEditing.h"
 
 #include <DevelopState.h>
@@ -57,6 +58,14 @@ public:
     /// @brief Shows whether the overlay is on, without emitting any signal.
     void setOverlayShown(bool shown);
 
+    /// @brief Shows the brush settings, without emitting any signal.
+    void setBrushSettings(const BrushSettings& settings);
+
+    /// @brief Gives the brush settings the rows show.
+    [[nodiscard]] const BrushSettings& brushSettings() const noexcept {
+        return brushSettings_;
+    }
+
     /// @brief Gives the width the labels of the rows need.
     [[nodiscard]] int labelWidthHint() const;
 
@@ -87,6 +96,9 @@ signals:
     /// @brief Announces that the user toggled the overlay button.
     void overlayToggled(bool shown);
 
+    /// @brief Announces that the user changed a brush setting (not an edit of the photograph).
+    void brushSettingsChanged(const arraw::app::BrushSettings& settings);
+
     /// @brief Announces that the user clicked a mask in the list, as opposed to moving in it by
     /// the keyboard.
     void maskClicked();
@@ -100,6 +112,9 @@ private:
 
     /// @brief Shows the selected mask's controls, or the hint.
     void showSelected();
+
+    /// @brief Shows the Brush block and the hint as the armed tool and the selection ask.
+    void updateBrushBlock();
 
     /// @brief Enables the buttons as the list and the selection allow.
     void updateButtons();
@@ -124,6 +139,13 @@ private:
     QCheckBox* invert_ = nullptr;
     QToolButton* linear_ = nullptr;
     QToolButton* radial_ = nullptr;
+    QToolButton* brush_ = nullptr;
+    QWidget* brushControls_ = nullptr;
+    SettingSlider* brushSize_ = nullptr;
+    SettingSlider* brushHardness_ = nullptr;
+    SettingSlider* brushFlow_ = nullptr;
+    QToolButton* brushErase_ = nullptr;
+    BrushSettings brushSettings_;
     QToolButton* duplicate_ = nullptr;
     QToolButton* remove_ = nullptr;
     QToolButton* up_ = nullptr;

@@ -1,7 +1,9 @@
+#include "BrushPainting.h"
 #include "CurveEditing.h"
 #include "MaskPresentation.h"
 #include "SettingPresentation.h"
 
+#include <BrushStrokes.h>
 #include <LocalAdjustmentEdits.h>
 #include <SettingDescriptors.h>
 
@@ -345,4 +347,70 @@ TEST_CASE("A mask is shown under its name or its kind and place among that kind"
     state = withLocalAdjustmentRenamed(state, id(2), "Sky");
     CHECK(maskDisplayName(state, id(2)) == "Sky");
     CHECK_THROWS_AS(maskDisplayName(state, LocalAdjustmentId{99}), std::invalid_argument);
+}
+
+TEST_CASE("The brush size slider is even in the logarithm", "[SettingPresentation]") {
+    const SettingRange range = brushSizeRange();
+    CHECK(range.minimum == Approx(0.05));
+    CHECK(range.maximum == Approx(100.0));
+    const SettingPresentation& presentation = brushSizePresentation();
+    constexpr SliderScale scale = SliderScale::Logarithmic;
+    REQUIRE(presentation.scale == scale);
+    const double step = presentation.step;
+    const int count = tickCount(range, step, scale);
+    CHECK(count == logarithmicTickCount);
+
+    SECTION("the ends are exact") {
+        CHECK(valueOfTick(0, range, step, scale) == range.minimum);
+        CHECK(valueOfTick(count, range, step, scale) == range.maximum);
+        CHECK(valueOfTick(-3, range, step, scale) == range.minimum);
+        CHECK(valueOfTick(count + 3, range, step, scale) == range.maximum);
+        CHECK(tickOf(range.minimum, range, step, scale) == 0);
+        CHECK(tickOf(range.maximum, range, step, scale) == count);
+        CHECK(tickOf(0.001, range, step, scale) == 0);
+        CHECK(tickOf(1000.0, range, step, scale) == count);
+    }
+    SECTION("values rise with the tick") {
+        double previous = 0.0;
+        for (int tick = 0; tick <= count; ++tick) {
+            const double value = valueOfTick(tick, range, step, scale);
+            CAPTURE(tick, value);
+            CHECK(value >= previous);
+            CHECK(value >= range.minimum);
+            CHECK(value <= range.maximum);
+            previous = value;
+        }
+    }
+    SECTION("the middle tick is the geometric mean") {
+        CHECK(valueOfTick(count / 2, range, step, scale) ==
+              Approx(std::sqrt(0.05 * 100.0)).epsilon(0.01));
+    }
+    SECTION("a value maps back to nearly itself") {
+        for (const double value : {0.05, 0.3, 2.0, 15.0, 100.0}) {
+            CAPTURE(value);
+            const double back = valueOfTick(tickOf(value, range, step, scale), range, step, scale);
+            CHECK(back == Approx(value).epsilon(0.01).margin(step));
+        }
+    }
+}
+
+TEST_CASE("The brush rows are presented", "[SettingPresentation]") {
+    for (const SettingPresentation* presentation :
+         {&brushSizePresentation(), &brushHardnessPresentation(), &brushFlowPresentation()}) {
+        CHECK(!presentation->label.isEmpty());
+        CHECK(!presentation->toolTip.isEmpty());
+        CHECK(presentation->step > 0.0);
+        CHECK(presentation->unit == QString(" %"));
+    }
+    CHECK(brushSizePresentation().decimals == 2);
+    CHECK(brushSizeRange().minimum == 0.05);
+    CHECK(static_cast<float>(brushSizeRange().minimum / 100.0) == minimumBrushRadius);
+    CHECK(static_cast<float>(brushSizeRange().maximum / 100.0) == maximumBrushRadius);
+    CHECK(brushHardnessRange().minimum == 0.0);
+    CHECK(brushHardnessRange().maximum == 100.0);
+    CHECK(brushFlowRange().minimum == 1.0);
+    CHECK(static_cast<float>(brushFlowRange().minimum / 100.0) == minimumBrushFlow);
+    CHECK(brushFlowRange().maximum == 100.0);
+    CHECK(brushHardnessPresentation().scale == SliderScale::Linear);
+    CHECK(brushFlowPresentation().scale == SliderScale::Linear);
 }

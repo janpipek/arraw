@@ -677,13 +677,15 @@ TEST_CASE("peek says what coverage then gives, and changes nothing", "[brush][pe
 }
 
 TEST_CASE("peek does not touch the order entries are evicted in", "[brush][peek]") {
-    // Room for two one-tile entries.
-    BrushCoverageCache cache(2 * 64 * 64 * sizeof(float), 64);
     const ImageSize size{64, 64};
     const auto make = [](float u) {
         return std::make_shared<const StrokeList>(std::vector<Stroke>{
             test::straightStroke({u, 0.5F}, {u + 0.05F, 0.5F}, 4, 0.1F, 1.0F, 1.0F)});
     };
+    // Room for two entries of this size: an entry also holds the settled tiles of its last stroke.
+    BrushCoverageCache probe(std::size_t{1} << 20, 64);
+    static_cast<void>(probe.coverage(make(0.2F), size));
+    BrushCoverageCache cache(2 * probe.memoryBytes(), 64);
     const auto x = make(0.2F);
     const auto y = make(0.4F);
     const auto z = make(0.6F);
@@ -923,4 +925,126 @@ TEST_CASE("A brush unit reports its drawing and its packing, never falling",
         // The packing moves the pie after the drawing: some report is strictly inside the end.
         REQUIRE(std::ranges::any_of(fractions, [](double f) { return f > 0.0 && f < 1.0; }));
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The tail method through the residency and the ladder (brush GUI plan section 7).
+
+namespace {
+
+/// Makes the stroke with its first @p count points.
+Stroke firstPoints(const Stroke& stroke, std::size_t count) {
+    Stroke partial = stroke;
+    partial.points.resize(std::min(count, stroke.points.size()));
+    return partial;
+}
+
+/// Finds the tiles a stroke's dabs reach, by the box rule alone.
+std::uint32_t tilesReachedBy(const Stroke& stroke, ImageSize raster, std::uint32_t tile) {
+    std::set<std::uint32_t> tiles;
+    const std::uint32_t columns = (raster.width + tile - 1) / tile;
+    const PlacedStroke placed = placedStroke(stroke, raster);
+    for (const DabCentre& dab : placed.dabs) {
+        const PixelSpan xs = dabSpan(dab.x, placed.radius);
+        const PixelSpan ys = dabSpan(dab.y, placed.radius);
+        const std::int64_t x0 = std::max<std::int64_t>(xs.first, 0);
+        const std::int64_t x1 = std::min<std::int64_t>(xs.last, raster.width);
+        const std::int64_t y0 = std::max<std::int64_t>(ys.first, 0);
+        const std::int64_t y1 = std::min<std::int64_t>(ys.last, raster.height);
+        for (std::int64_t ty = y0 / tile; x0 < x1 && y0 < y1 && ty <= (y1 - 1) / tile; ++ty) {
+            for (std::int64_t tx = x0 / tile; tx <= (x1 - 1) / tile; ++tx) {
+                tiles.insert(static_cast<std::uint32_t>(ty * columns + tx));
+            }
+        }
+    }
+    return static_cast<std::uint32_t>(tiles.size());
+}
+
+} // namespace
+
+TEST_CASE("Through a ladder a grown update packs the tiles that changed, and undo the stroke's",
+          "[brush][residency][grown]") {
+    brushCoverageCache().clear();
+    const ImageSize size{600, 400};
+    const auto source = flatSource(size);
+    std::mt19937_64 g(seed + 80);
+    const auto before = paintedMask(seed + 81, 3, everydayStyle, 400.0 / 600.0);
+    const DevelopState state = brushesOf({before});
+    const auto id = state.localAdjustments[0].id;
+    const Stroke path = test::wanderingStroke(g, detailStyle, 400.0 / 600.0);
+    REQUIRE(path.points.size() >= 100);
+
+    CheckpointLadder ladder;
+    static_cast<void>(resumeOrDevelop(ladder, source, state));
+    const CoverageResidency* residency = LadderAccess::coverage(std::as_const(ladder));
+    REQUIRE(residency != nullptr);
+    const auto beforeTiles = brushCoverageCache().find(before, size);
+    REQUIRE(beforeTiles != nullptr);
+
+    std::shared_ptr<const CoverageTiles> previous = beforeTiles;
+    std::uint64_t grown = 0;
+    for (std::size_t points = 10; points <= 100; points += 10) {
+        const Stroke partial = firstPoints(path, points);
+        const DevelopState live = withStrokeAppended(state, id, partial);
+        const auto list = std::get<BrushMask>(live.localAdjustments[0].shape).strokes;
+        const BrushCoverageCache::Peek peeked = brushCoverageCache().peek(list, size);
+        // A growth is not coverage drawn from nothing, so it is not "drawing" for the window.
+        REQUIRE_FALSE(drawsBrushCoverage(ladder, *source, live));
+        const std::uint64_t packedBefore = residency->tilesPacked();
+        const std::uint64_t grownBefore = brushCoverageCache().lookups(CoverageLookup::Grown);
+        static_cast<void>(resumeOrDevelop(ladder, source, live));
+        const auto current = brushCoverageCache().find(list, size);
+        REQUIRE(current != nullptr);
+        if (peeked.lookup == CoverageLookup::Grown) {
+            ++grown;
+            REQUIRE(brushCoverageCache().lookups(CoverageLookup::Grown) == grownBefore + 1);
+            REQUIRE(peeked.cachedStrokes == before->size());
+        }
+        // Exactly the tiles whose serial changed, and a handful.
+        REQUIRE(residency->tilesPacked() - packedBefore == tilesDiffering(*previous, *current));
+        if (peeked.lookup == CoverageLookup::Grown) {
+            REQUIRE(tilesDiffering(*previous, *current) <= 12);
+        }
+        previous = current;
+    }
+    REQUIRE(grown >= 8);
+
+    // Undo: the list before the stroke is a hit; only the stroke's tiles are packed.
+    const std::uint64_t packedBefore = residency->tilesPacked();
+    const std::uint64_t hits = brushCoverageCache().lookups(CoverageLookup::Hit);
+    const std::uint64_t others = brushCoverageCache().lookups(CoverageLookup::Extended) +
+                                 brushCoverageCache().lookups(CoverageLookup::Grown) +
+                                 brushCoverageCache().lookups(CoverageLookup::Miss);
+    static_cast<void>(resumeOrDevelop(ladder, source, state));
+    CHECK(brushCoverageCache().lookups(CoverageLookup::Hit) == hits + 1);
+    CHECK(brushCoverageCache().lookups(CoverageLookup::Extended) +
+              brushCoverageCache().lookups(CoverageLookup::Grown) +
+              brushCoverageCache().lookups(CoverageLookup::Miss) ==
+          others);
+    CHECK(residency->tilesPacked() - packedBefore ==
+          tilesReachedBy(firstPoints(path, 100), size, beforeTiles->tileSize()));
+}
+
+TEST_CASE("A growth counts as extending the last stroke in the status and the weights",
+          "[brush][peek][grown][progress]") {
+    brushCoverageCache().clear();
+    const ImageSize size{600, 400};
+    std::mt19937_64 g(seed + 82);
+    const auto before = paintedMask(seed + 83, 3, everydayStyle, 400.0 / 600.0);
+    const Stroke path = test::wanderingStroke(g, everydayStyle, 400.0 / 600.0);
+    REQUIRE(path.points.size() > 60);
+    const auto brushOf = [&](const std::shared_ptr<const StrokeList>& list) {
+        return localPlanFor(brushesOf({list}), size).masks[0].brush;
+    };
+    const auto first = before->appended(firstPoints(path, 30));
+    const auto second = before->appended(firstPoints(path, 60));
+    static_cast<void>(brushCoverageCache().coverage(first, size));
+
+    const CoverageStatus status = statusOf(brushOf(second), nullptr);
+    CHECK(status.readiness == CoverageReadiness::Extended);
+    CHECK(status.cachedStrokes == before->size());
+    CHECK(brushCoverageCache().peek(second, size).lookup == CoverageLookup::Grown);
+    // The drawing counted is the last stroke's, and the list is not drawn from nothing.
+    CHECK(coverageWorkOf(status, brushOf(second)).draw > 0.0);
+    CHECK_FALSE(drawsFromNothing(localPlanFor(brushesOf({second}), size), nullptr, 0.0));
 }

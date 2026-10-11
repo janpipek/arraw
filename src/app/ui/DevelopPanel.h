@@ -1,5 +1,6 @@
 #pragma once
 
+#include "BrushPainting.h"
 #include "CurveEditing.h"
 #include "MaskEditing.h"
 
@@ -98,6 +99,9 @@ public:
     /// @brief Shows whether the mask overlay is on, without emitting any signal.
     void setMaskOverlayShown(bool shown);
 
+    /// @brief Shows the brush settings, without emitting any signal.
+    void setBrushSettings(const BrushSettings& settings);
+
     /// @brief Shows whether the straighten tool is armed, without emitting any signal.
     /// @param straightening Whether the Level button is checked.
     void setStraightening(bool straightening);
@@ -160,6 +164,9 @@ signals:
 
     /// @brief Announces that the user armed a mask creation tool, or disarmed the armed one.
     void maskToolChosen(arraw::app::MaskTool tool);
+
+    /// @brief Announces that the user changed a brush setting in the Masks group.
+    void brushSettingsChanged(const arraw::app::BrushSettings& settings);
 
     /// @brief Announces that the user toggled the mask overlay.
     void overlayToggled(bool shown);

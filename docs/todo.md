@@ -103,7 +103,7 @@ following the mask mode; the Adjustments groups collapse, each remembered in
 ## Local adjustments (user, 2026-10-08; `docs/ideas/local-adjustment-plan.md`)
 
 Done: steps 0 to 3 (ADR 044), **step 4, the brush prototype** and **step 5**
-(2026-10-10).
+(2026-10-10); **step 6** is built and measured, Q6 open.
 The report `docs/ideas/brush-prototype-report.md` is accepted and ADR 044
 sections 6, 7 and 9 are amended. The prototype code
 (`src/core/{BrushStrokes,BrushRaster,BrushCoverageCache,StrokeCodec}`) is
@@ -115,7 +115,14 @@ on branch `brush-prototype`.
   (readable strokes in state JSON, base64 in XMP), `info`, the GUI minimum (list,
   history, tint) and Python (`add_brush_mask`, `with_brush_stroke`). See ADR 044
   "What step 5 settled".
-- Step 6, the brush GUI, follows.
+- **Step 6, the brush GUI: built and measured; Q6 open (2026-10-10).** The tool, settings and keys,
+  the tail method in the cache, paced requests, the tint, and the measured long
+  session (ADR 044 note "the brush in the window, as built"). **Open, the
+  user's pick (Q6):** the whole shown level is re-rendered per picture (190 ms at
+  fit, 0.8 s at ratio 2, 2.4 s at 1:1 on the CPU), so latency misses its targets
+  (290 ms against 100 ms at ratio 1); options are to leave it, a coarser level
+  during a stroke, or a dirty-rectangle pointwise pass in the ladder (the
+  numbers favour that). The GPU run is not measured (no hardware GPU here).
 
 ## Follow-ups (known limits, all documented in ADRs)
 

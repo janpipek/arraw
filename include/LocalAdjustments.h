@@ -190,6 +190,14 @@ struct LocalAdjustment {
 /// delta is not finite, or the name is not storable (see ::arraw::storableMaskName).
 [[nodiscard]] LocalAdjustment normalised(LocalAdjustment adjustment);
 
+/// @brief Tells whether an adjustment changes the picture at all.
+///
+/// It does when it is enabled and some `opacity * delta` is not zero, the opacity and the deltas
+/// taken as ::arraw::normalised(LocalAdjustment) brings them into range. Non-finite numbers count
+/// as no effect. What ::arraw::localPlanFor keeps an adjustment for.
+/// @param adjustment Adjustment to look at.
+[[nodiscard]] bool carriesEffect(const LocalAdjustment& adjustment) noexcept;
+
 /// @brief Checks one adjustment on its own, not against the rest of a state.
 ///
 /// Every number finite and within its range (so a state that has not been through

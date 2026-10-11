@@ -1,4 +1,5 @@
 #include "MaskPresentation.h"
+#include "SettingPresentation.h"
 #include "ui/SettingSlider.h"
 
 #include <SettingDescriptors.h>
@@ -70,4 +71,31 @@ TEST_CASE("The key constructor still names the row by the setting's key", "[app]
     CHECK(row.key() == "exposure");
     SettingSlider temperature("temperature");
     CHECK(temperature.key() == "temperature");
+}
+
+TEST_CASE("A logarithmic row reaches both ends of its range and rises between", "[app][slider]") {
+    SettingSlider row("brush.size", brushSizeRange(), 2.0, brushSizePresentation());
+    auto* slider = row.findChild<QSlider*>("slider");
+    auto* box = row.findChild<QDoubleSpinBox*>();
+    REQUIRE(slider != nullptr);
+    REQUIRE(box != nullptr);
+    CHECK(slider->minimum() == 0);
+    CHECK(slider->maximum() == logarithmicTickCount);
+    CHECK(box->value() == 2.0);
+
+    slider->setValue(slider->minimum());
+    CHECK(box->value() == 0.05);
+    slider->setValue(slider->maximum());
+    CHECK(box->value() == 100.0);
+
+    double previous = 0.0;
+    for (int tick = slider->minimum(); tick <= slider->maximum(); tick += 10) {
+        slider->setValue(tick);
+        CHECK(box->value() >= previous);
+        previous = box->value();
+    }
+    row.setValue(0.05);
+    CHECK(slider->value() == 0);
+    row.setValue(100.0);
+    CHECK(slider->value() == slider->maximum());
 }

@@ -29,6 +29,27 @@ its rows from *Planned* to *Current* in the same change that wires them.
 | `0` | Unrated | Culling actions |
 | `X` | Reject (outside cropping) | Culling actions |
 | `R` `Y` `G` `B` `P` | Red, yellow, green, blue, purple colour label | Culling actions |
+| `F7` | Toggle History panel | View menu |
+| `F8` | Toggle Adjustments panel | View menu |
+| `F11` | Full screen | View menu |
+| `F12` | Hide panels (lights-out) | View menu |
+| `M` | Masks tab and its on-image controls (toggle) | Photo menu |
+
+### Mask mode
+
+Window-level shortcuts, on in the mask mode only; they fire whether the photograph or
+another widget has the focus (a slider's value field keeps typed characters).
+
+| Key | Action |
+|---|---|
+| `O` | Toggle the mask tint |
+| `Space` (hold) with a drag | Pan the view |
+| `Delete` / `Backspace` | Delete the selected mask |
+| `Esc` | Cancel the gesture under way; else, on a selected brush, deselect it; else disarm the tool; else leave the mask mode |
+| `[` / `]` | Brush smaller / larger (÷ / × 1.25) while the brush is armed |
+| `{` / `}` (`Shift+[` / `Shift+]` on a US layout) | Brush softer / harder (∓ 10 % hardness) while the brush is armed |
+| `E` | Flip the brush's Erase toggle while the brush is armed |
+| `Alt` (held at the press) | Erase with this stroke (paint when Erase is on); on some Linux desktops `Alt` with a drag moves the window, so use `E` or the Erase button |
 
 ## Wiring rules
 
@@ -56,24 +77,18 @@ From `main`, grouped by the feature that brings them.
 
 | Key | Action |
 |---|---|
-| `F7` | Toggle History panel |
-| `F8` | Toggle Adjustments panel |
-| `F11` | Full screen |
-| `F12` | Hide panels (lights-out) |
 | `S` | Toggle soft-proofing |
 | `J` | Toggle clipping overlay (highlights and shadows) |
 | `\` (hold) | Show the original (before/after) |
 | `Esc` | Cancel the active tool, or leave full screen / lights-out |
 
-Zoom also follows the scroll wheel; pan with `Alt`+drag or middle-button drag.
+Zoom also follows the scroll wheel; pan with middle-button drag (`Alt`+drag is taken by Alt-to-erase in the mask mode).
 
 ### Tools
 
 | Key | Action |
 |---|---|
-| `M` | Masks tab and its on-image controls |
 | `Q` | Spots tab and its on-image controls |
-| `O` | Toggle the mask overlay (while masking) |
 | `Enter` | Commit the active tool |
 | `Esc` | Cancel the active tool |
 | `X` | Swap crop orientation (while cropping) |

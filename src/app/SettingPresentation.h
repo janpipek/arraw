@@ -22,7 +22,16 @@ enum class SliderScale {
     /// kelvin) look like equal steps of colour, where equal kelvin steps crowd
     /// all the change into the warm end.
     Reciprocal,
+
+    /// @brief Equal steps in the logarithm of the value.
+    ///
+    /// For a size that spans orders of magnitude, such as the brush radius: each step is the same
+    /// share bigger.
+    Logarithmic,
 };
+
+/// @brief Slider positions across a logarithmic range.
+inline constexpr int logarithmicTickCount = 1000;
 
 /// @brief What a slider's groove shows behind the handle.
 enum class SliderTrack {
@@ -156,10 +165,30 @@ struct TreatmentVisibility {
 /// @throws std::out_of_range if no presentation exists for @p key.
 [[nodiscard]] const SettingPresentation& presentationOf(std::string_view key);
 
+/// @brief Gives the range of the brush tool's Size row, in percent: the core's radius caps.
+[[nodiscard]] SettingRange brushSizeRange() noexcept;
+
+/// @brief Gives the range of the brush tool's Hardness row, in percent.
+[[nodiscard]] SettingRange brushHardnessRange() noexcept;
+
+/// @brief Gives the range of the brush tool's Flow row, in percent: from the minimum flow.
+[[nodiscard]] SettingRange brushFlowRange() noexcept;
+
+/// @brief Gives the presentation of the brush tool's Size row: the radius, in percent of the
+/// photograph's long edge, on a logarithmic scale.
+[[nodiscard]] const SettingPresentation& brushSizePresentation();
+
+/// @brief Gives the presentation of the brush tool's Hardness row, in percent.
+[[nodiscard]] const SettingPresentation& brushHardnessPresentation();
+
+/// @brief Gives the presentation of the brush tool's Flow row, in percent.
+[[nodiscard]] const SettingPresentation& brushFlowPresentation();
+
 /// @brief Counts the slider steps across a range.
-/// @param range Range of the setting; positive for a reciprocal scale.
+/// @param range Range of the setting; positive for a reciprocal or logarithmic scale.
 /// @param step Distance between two steps, in the setting's units; positive.
-/// @param scale How steps are spread; a reciprocal one has ::reciprocalTickCount of them.
+/// @param scale How steps are spread; a reciprocal one has ::reciprocalTickCount of them and a
+/// logarithmic one ::logarithmicTickCount.
 /// @return The number of steps from minimum to maximum.
 [[nodiscard]] int tickCount(const SettingRange& range, double step,
                             SliderScale scale = SliderScale::Linear);

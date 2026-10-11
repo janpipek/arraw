@@ -2,6 +2,7 @@
 #include "ThumbnailCache.h"
 #include "ThumbnailWorker.h"
 #include "TimingTrace.h"
+#include "support/StallProbe.h"
 #include "support/TempDir.h"
 #include "ui/CropOverlay.h"
 #include "ui/DevelopPanel.h"
@@ -36,41 +37,6 @@ using namespace arraw;
 using namespace arraw::app;
 
 namespace {
-
-/// Longest gap between two turns of the event loop while a probe runs.
-class StallProbe {
-public:
-    StallProbe() {
-        timer_.setInterval(1);
-        QObject::connect(&timer_, &QTimer::timeout, [this] {
-            const qint64 now = clock_.nsecsElapsed();
-            if (now - last_ > 12'000'000) {
-                const detail::TimingSpan stall("bench.stall");
-                stall.note(std::to_string((now - last_) / 1000000) + " ms");
-            }
-            longest_ = std::max(longest_, now - last_);
-            last_ = now;
-        });
-    }
-
-    void start() {
-        longest_ = 0;
-        clock_.start();
-        last_ = 0;
-        timer_.start();
-    }
-
-    /// @brief Longest gap so far, including the one still open, in milliseconds.
-    [[nodiscard]] double longestMs() const {
-        return static_cast<double>(std::max(longest_, clock_.nsecsElapsed() - last_)) / 1e6;
-    }
-
-private:
-    QTimer timer_;
-    QElapsedTimer clock_;
-    qint64 last_ = 0;
-    qint64 longest_ = 0;
-};
 
 QAction* findAction(const MainWindow& window, const QString& name) {
     for (QAction* candidate : window.findChildren<QAction*>()) {
@@ -251,7 +217,7 @@ TEST_CASE("The window's interactions stall the GUI thread no longer than measure
     REQUIRE(QTest::qWaitForWindowExposed(&window));
     auto& view = *window.findChild<PhotoView*>();
     auto& strip = *window.findChild<FilmStrip*>();
-    StallProbe probe;
+    test::StallProbe probe;
     const auto measure = [&](const char* what, const std::function<void()>& act,
                              const std::function<bool()>& done) {
         probe.start();

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "BrushPainting.h"
 #include "CopySections.h"
 #include "CropEditing.h"
 #include "ExportQueue.h"
@@ -307,8 +308,18 @@ private:
     /// @param id Mask to select; dropped when the state holds none with that id.
     void selectMask(std::optional<LocalAdjustmentId> id);
 
+    /// @brief Arms or disarms a mask tool as the user chose, ending a stroke under way first.
+    void chooseMaskTool(MaskTool tool);
+
     /// @brief Arms or disarms a mask creation tool, entering the mask mode to arm one.
+    ///
+    /// Never ends a stroke: the program disarms tools itself, as when the list fills.
     void setMaskTool(MaskTool tool);
+
+    /// @brief Takes new brush settings from a key: shows, applies and stores them.
+    ///
+    /// Nothing unless the tool paints.
+    void changeBrush(const BrushSettings& settings);
 
     /// @brief Gives the mask overlay and the panel the session's state and the selection.
     ///
@@ -538,8 +549,13 @@ private:
     QShortcut* cancelPickShortcut_ = nullptr;
     /// Enter, Esc, X and O of the crop mode wherever the focus is; enabled only in the mode.
     std::vector<QShortcut*> cropShortcuts_;
-    /// Esc, O, Delete and Backspace of the mask mode wherever the focus is; enabled only in it.
+    /// Esc, O, Delete, Backspace and the brush keys of the mask mode wherever the focus is; enabled
+    /// only in it.
     std::vector<QShortcut*> maskShortcuts_;
+    /// Settings of the brush tool, as the panel shows them and the next stroke is made with.
+    BrushSettings brushSettings_;
+    /// Whether the edit being committed is a brush stroke's.
+    bool committingStroke_ = false;
     QAction* maskAction_ = nullptr;
     /// Mask whose handles are shown; view state of the window (ADR 044).
     std::optional<LocalAdjustmentId> maskSelection_;

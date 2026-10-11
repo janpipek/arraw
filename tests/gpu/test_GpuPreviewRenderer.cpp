@@ -5,6 +5,7 @@
 #include "GpuTesting.h"
 #include "PreviewRenderer.h"
 #include "support/BrushGenerators.h"
+#include "support/ProgressGate.h"
 #include "support/TestImages.h"
 
 #include <Develop.h>
@@ -12,6 +13,7 @@
 #include <ImagePyramid.h>
 #include <LocalAdjustmentEdits.h>
 #include <LocalAdjustments.h>
+#include <Progress.h>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -130,4 +132,34 @@ TEST_CASE("The window renders a brush on the GPU, the stand-in included, without
     REQUIRE(*coarse.image ==
             app::toDisplayImage(
                 developOnGpu(context, level1, state, Stage::Effects, request).readBack()));
+}
+
+TEST_CASE("On the GPU a Queue request lets the render in flight finish, then delivers its own",
+          "[gpu][app][preview][queue]") {
+    static_cast<void>(gpuContext());
+    const auto source = std::make_shared<const ImageBuffer>(
+        test::rainbow({256, 128}, PixelFormat::RgbaF32, workingEncoding));
+    const QSize size{256, 128};
+
+    test::ProgressGate gate;
+
+    Collector collector;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Auto, {},
+                                  gate.callback(), makeTestContext);
+    renderer.setSource(source);
+    DevelopState exposed;
+    exposed.settings.tone.exposure = 0.5F;
+    gate.close();
+    const std::uint64_t first = renderer.request({}, app::PreviewView::wholeFrame(size));
+    REQUIRE(gate.waitHeld());
+    const std::uint64_t second =
+        renderer.request(exposed, app::PreviewView::wholeFrame(size), app::Supersede::Queue);
+    gate.open();
+    REQUIRE(collector.waitForFinal(second));
+
+    const auto firstResults = collector.resultsOf(first);
+    REQUIRE(firstResults.size() == 1);
+    REQUIRE(firstResults[0].onGpu);
+    REQUIRE(collector.resultsOf(second).size() == 1);
+    REQUIRE(collector.resultsOf(second)[0].onGpu);
 }

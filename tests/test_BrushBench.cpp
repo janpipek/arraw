@@ -6,20 +6,25 @@
 
 #include "BrushCoverage.h"
 #include "BrushCoverageCache.h"
+#include "LadderAccess.h"
 #include "LocalPlan.h"
 #include "RowBands.h"
 #include "StrokeCodec.h"
 #include "support/BrushGenerators.h"
 #include "support/Fixtures.h"
+#include "support/LadderTesting.h"
 #include "support/RowBandLimit.h"
 #include "support/TempDir.h"
 
+#include <CheckpointLadder.h>
+#include <Develop.h>
 #include <DevelopState.h>
 #include <Diagnostics.h>
 #include <ImageBuffer.h>
 #include <ImageExport.h>
 #include <LocalAdjustmentEdits.h>
 #include <LocalAdjustments.h>
+#include <Progress.h>
 #include <Sidecar.h>
 
 #include <catch2/catch_test_macros.hpp>
@@ -35,10 +40,12 @@
 #include <functional>
 #include <iomanip>
 #include <iostream>
+#include <set>
 #include <sstream>
 #include <string>
 #include <thread>
 #include <unordered_set>
+#include <variant>
 #include <vector>
 
 #if defined(__linux__)
@@ -1193,4 +1200,482 @@ TEST_CASE("B8 the cost of coverage in a render", "[.bench][brush-bench]") {
         "packCostNsPerPixel", packMs * 1e6 / (pixels * 16.0))("bandedNsPerAreaEdge2",
                                                               bandedMs * 1e6 / areaEdgeSquared);
     finish("B8");
+}
+
+// ---------------------------------------------------------------------------------------------
+
+namespace {
+
+using detail::brushCoverageCache;
+
+/// Index of a lookup kind in the counters of a render.
+constexpr std::size_t lookupKinds = coverageLookupKinds;
+
+/// One render of a painting session.
+struct SessionUpdate {
+    double renderMs = 0.0;    ///< Time of the whole render.
+    double coverageMs = 0.0;  ///< Time from entering the Coverage step to the next step.
+    std::uint64_t packed = 0; ///< Tiles the residency packed.
+    std::array<std::uint64_t, lookupKinds> lookups{}; ///< Cache answers, by CoverageLookup.
+    std::size_t entries = 0;                          ///< Cache entries afterwards.
+    std::size_t bytes = 0;                            ///< Cache bytes afterwards.
+};
+
+/// What a stroke of a session did.
+struct StrokeSummary {
+    std::size_t updates = 0;
+    std::uint64_t misses = 0;
+    std::uint64_t extended = 0;
+    std::uint64_t grown = 0;
+    std::size_t entriesGained = 0;
+    std::size_t packMismatches = 0; ///< Grown updates that packed other tiles than changed.
+};
+
+/// A generated photograph: a ramp with a little texture, so that the pointwise chain has work.
+std::shared_ptr<const ImageBuffer> rampSource(ImageSize size) {
+    ImageBuffer image(size, workingFormat, workingEncoding);
+    const auto samples = image.samples<float>();
+    for (std::size_t i = 0; i < samples.size(); ++i) {
+        const std::size_t pixel = i / 4;
+        samples[i] =
+            0.1F + 0.5F * static_cast<float>(pixel % size.width) / static_cast<float>(size.width) +
+            0.05F * static_cast<float>(i % 7) / 7.0F;
+    }
+    return std::make_shared<const ImageBuffer>(std::move(image));
+}
+
+/// Adds a brush with an Exposure and a Shadows delta.
+DevelopState withBrushAdded(DevelopState state, std::shared_ptr<const StrokeList> strokes) {
+    LocalAdjustment adjustment;
+    adjustment.shape = BrushMask{std::move(strokes)};
+    adjustment.deltas.exposure = 1.0F;
+    adjustment.deltas.shadows = 30.0F;
+    return withLocalAdjustmentAdded(std::move(state), adjustment);
+}
+
+/// Gives the strokes of the brush an id names.
+std::shared_ptr<const StrokeList> strokesOf(const DevelopState& state, LocalAdjustmentId id) {
+    for (const LocalAdjustment& adjustment : state.localAdjustments) {
+        if (adjustment.id == id) {
+            return std::get<BrushMask>(adjustment.shape).strokes;
+        }
+    }
+    throw std::logic_error("no such brush");
+}
+
+/// Counts the tiles that differ by serial between two grids.
+std::uint64_t tilesThatDiffer(const CoverageTiles& a, const CoverageTiles& b) {
+    std::uint64_t count = 0;
+    for (std::uint32_t i = 0; i < a.columns() * a.rows(); ++i) {
+        const auto serial = [i](const CoverageTiles& t) {
+            return t.tile(i) ? t.tile(i)->serial : std::uint64_t{0};
+        };
+        count += serial(a) != serial(b) ? 1U : 0U;
+    }
+    return count;
+}
+
+/// Counts the tiles a stroke's dabs reach, by the box rule alone.
+std::uint64_t tilesTouchedBy(const Stroke& stroke, ImageSize raster, std::uint32_t tile) {
+    std::set<std::int64_t> tiles;
+    const std::int64_t columns = (raster.width + tile - 1) / tile;
+    const PlacedStroke placed = placedStroke(stroke, raster);
+    for (const DabCentre& dab : placed.dabs) {
+        const PixelSpan xs = dabSpan(dab.x, placed.radius);
+        const PixelSpan ys = dabSpan(dab.y, placed.radius);
+        const std::int64_t x0 = std::max<std::int64_t>(xs.first, 0);
+        const std::int64_t x1 = std::min<std::int64_t>(xs.last, raster.width);
+        const std::int64_t y0 = std::max<std::int64_t>(ys.first, 0);
+        const std::int64_t y1 = std::min<std::int64_t>(ys.last, raster.height);
+        if (x0 >= x1 || y0 >= y1) {
+            continue;
+        }
+        for (std::int64_t ty = y0 / tile; ty <= (y1 - 1) / tile; ++ty) {
+            for (std::int64_t tx = x0 / tile; tx <= (x1 - 1) / tile; ++tx) {
+                tiles.insert(ty * columns + tx);
+            }
+        }
+    }
+    return tiles.size();
+}
+
+/// Paints strokes as growing partials through one ladder, as the window's shown layer does.
+class PaintingSession {
+public:
+    /// Makes a session on the level image the window renders: the source is the pyramid level
+    /// of the frame at the size of the view, as the preview's layers hold it.
+    PaintingSession(ImageSize level, DevelopState state)
+        : source_(rampSource(level)), committed_(std::move(state)) {
+        states_.push_back(committed_);
+        brushCoverageCache().clear();
+        static_cast<void>(render(committed_));
+    }
+
+    /// Starts painting on the brush an id names.
+    void paintOn(LocalAdjustmentId id) {
+        painted_ = id;
+    }
+
+    /// Replaces the committed state and the history, as opening another brush does.
+    void restart(DevelopState state) {
+        committed_ = std::move(state);
+        states_.assign(1, committed_);
+    }
+
+    [[nodiscard]] const DevelopState& committed() const {
+        return committed_;
+    }
+
+    /// Renders a state through the ladder, timing it and its Coverage step.
+    SessionUpdate render(const DevelopState& state) {
+        const auto lookups = countersNow();
+        const std::uint64_t packedBefore = packedNow();
+        Clock::time_point start{};
+        Clock::time_point end{};
+        bool inCoverage = false;
+        bool done = false;
+        ProgressChannel channel([&](const Progress& progress) {
+            const auto now = Clock::now();
+            if (progress.step == ProgressStep::Coverage) {
+                if (!inCoverage && !done) {
+                    start = now;
+                    inCoverage = true;
+                }
+            } else if (inCoverage && !done) {
+                end = now;
+                done = true;
+            }
+        });
+        SessionUpdate update;
+        std::optional<LadderRender> result;
+        update.renderMs = timed(
+            [&] { result.emplace(resumeOrDevelop(ladder_, source_, state, request_, &channel)); });
+        last_ = std::move(result->checkpoint);
+        if (inCoverage) {
+            update.coverageMs =
+                std::chrono::duration<double, std::milli>((done ? end : Clock::now()) - start)
+                    .count();
+        }
+        update.packed = packedNow() - packedBefore;
+        const auto after = countersNow();
+        for (std::size_t kind = 0; kind < lookupKinds; ++kind) {
+            update.lookups[kind] = after[kind] - lookups[kind];
+        }
+        update.entries = brushCoverageCache().entryCount();
+        update.bytes = brushCoverageCache().memoryBytes();
+        return update;
+    }
+
+    /// Paints one stroke as partials of @p step points, then commits it.
+    /// @return What the updates did; the updates are appended to updates().
+    StrokeSummary paint(const Stroke& stroke, std::size_t step = 10) {
+        StrokeSummary summary;
+        const std::size_t entriesBefore = brushCoverageCache().entryCount();
+        std::shared_ptr<const CoverageTiles> previous;
+        DevelopState live;
+        for (std::size_t points = step;; points += step) {
+            const std::size_t count = std::min(points, stroke.points.size());
+            Stroke partial = stroke;
+            partial.points.resize(count);
+            live = withStrokeAppended(committed_, painted_, partial);
+            if (!previous) {
+                previous = brushCoverageCache().find(strokesOf(committed_, painted_), levelSize());
+            }
+            const SessionUpdate update = render(live);
+            updates_.push_back(update);
+            ++summary.updates;
+            summary.misses += update.lookups[static_cast<std::size_t>(CoverageLookup::Miss)];
+            summary.extended += update.lookups[static_cast<std::size_t>(CoverageLookup::Extended)];
+            summary.grown += update.lookups[static_cast<std::size_t>(CoverageLookup::Grown)];
+            maxEntries_ = std::max(maxEntries_, update.entries);
+            maxBytes_ = std::max(maxBytes_, update.bytes);
+            summary.entriesGained = std::max(
+                summary.entriesGained,
+                update.entries > entriesBefore ? update.entries - entriesBefore : std::size_t{0});
+            const auto current = brushCoverageCache().find(strokesOf(live, painted_), levelSize());
+            if (current && previous &&
+                update.lookups[static_cast<std::size_t>(CoverageLookup::Grown)] == 1 &&
+                update.packed != tilesThatDiffer(*previous, *current)) {
+                ++summary.packMismatches;
+            }
+            previous = current;
+            if (count == stroke.points.size()) {
+                break;
+            }
+        }
+        committed_ = live;
+        states_.push_back(committed_);
+        return summary;
+    }
+
+    /// Undoes @p count strokes one render at a time, then redoes them.
+    /// @return Whether every undo was a cache hit that packed the undone stroke's tiles.
+    bool undoAndRedo(std::size_t count, std::vector<double>& undoMs, std::vector<double>& redoMs,
+                     bool& undoPacksRight) {
+        bool onlyHits = true;
+        const std::size_t top = states_.size() - 1;
+        for (std::size_t j = 0; j < count; ++j) {
+            const auto list = strokesOf(states_[top - j], painted_);
+            const auto tiles = brushCoverageCache().find(list, levelSize());
+            const SessionUpdate update = render(states_[top - j - 1]);
+            undoMs.push_back(update.renderMs);
+            onlyHits = onlyHits &&
+                       update.lookups[static_cast<std::size_t>(CoverageLookup::Hit)] == 1 &&
+                       update.lookups[static_cast<std::size_t>(CoverageLookup::ContentHit)] == 0 &&
+                       update.lookups[static_cast<std::size_t>(CoverageLookup::Extended)] == 0 &&
+                       update.lookups[static_cast<std::size_t>(CoverageLookup::Grown)] == 0 &&
+                       update.lookups[static_cast<std::size_t>(CoverageLookup::Miss)] == 0;
+            undoPacksRight = undoPacksRight && tiles &&
+                             update.packed == tilesTouchedBy(list->strokes().back().operator*(),
+                                                             levelSize(), tiles->tileSize());
+        }
+        for (std::size_t j = count; j > 0; --j) {
+            redoMs.push_back(render(states_[top - j + 1]).renderMs);
+        }
+        return onlyHits;
+    }
+
+    /// Renders a state that differs by an Exposure delta only: the baseline for an undo.
+    double deltaEditMs(LocalAdjustmentId id, double exposure) {
+        return render(withLocalDelta(committed_, id, "exposure", exposure)).renderMs;
+    }
+
+    /// Whether the last render is the direct render of the committed state, to the bit.
+    bool lastEqualsDirect() {
+        static_cast<void>(render(committed_));
+        return test::sameBits(last_->readBack(), develop(*source_, committed_, request_));
+    }
+
+    [[nodiscard]] const std::vector<SessionUpdate>& updates() const {
+        return updates_;
+    }
+    [[nodiscard]] std::size_t maxEntries() const {
+        return maxEntries_;
+    }
+    [[nodiscard]] std::size_t maxBytes() const {
+        return maxBytes_;
+    }
+    [[nodiscard]] std::size_t strokesDone() const {
+        return states_.size() - 1;
+    }
+
+private:
+    static std::array<std::uint64_t, lookupKinds> countersNow() {
+        std::array<std::uint64_t, lookupKinds> now{};
+        for (std::size_t kind = 0; kind < lookupKinds; ++kind) {
+            now[kind] = brushCoverageCache().lookups(static_cast<CoverageLookup>(kind));
+        }
+        return now;
+    }
+
+    std::uint64_t packedNow() {
+        const detail::CoverageResidency* residency = LadderAccess::coverage(std::as_const(ladder_));
+        return residency != nullptr ? residency->tilesPacked() : 0;
+    }
+
+    /// The coverage raster: the size of the level image.
+    ImageSize levelSize() const {
+        return source_->size();
+    }
+
+    std::shared_ptr<const ImageBuffer> source_;
+    RenderRequest request_;
+    CheckpointLadder ladder_;
+    DevelopState committed_;
+    std::vector<DevelopState> states_;
+    LocalAdjustmentId painted_{};
+    std::optional<RenderCheckpoint> last_;
+    std::vector<SessionUpdate> updates_;
+    std::size_t maxEntries_ = 0;
+    std::size_t maxBytes_ = 0;
+};
+
+/// Prints the spread of a value over the four quarters of a session.
+void printQuarters(Line& line, const char* key, const std::vector<SessionUpdate>& updates,
+                   double SessionUpdate::* field) {
+    for (std::size_t quarter = 0; quarter < 4; ++quarter) {
+        std::vector<double> values;
+        for (std::size_t i = updates.size() * quarter / 4; i < updates.size() * (quarter + 1) / 4;
+             ++i) {
+            values.push_back(updates[i].*field);
+        }
+        line((std::string(key) + ".q" + std::to_string(quarter + 1)).c_str(), spreadOf(values));
+    }
+}
+
+/// The state every session starts from: realistic brushes, a radial, and the one being painted.
+DevelopState sessionBase(std::size_t realistic, std::uint32_t paintedStrokes,
+                         LocalAdjustmentId& painted) {
+    DevelopState state;
+    for (std::uint32_t i = 0; i < realistic; ++i) {
+        state =
+            withBrushAdded(std::move(state),
+                           test::paintedMask(seed + i, 60, test::everydayStyle, 4000.0 / 6000.0));
+    }
+    state = withLocalAdjustmentAdded(std::move(state), RadialMask{});
+    state = withBrushAdded(
+        std::move(state),
+        paintedStrokes == 0
+            ? emptyStrokeList()
+            : test::paintedMask(seed + 100, paintedStrokes, test::everydayStyle, 4000.0 / 6000.0));
+    painted = state.localAdjustments.back().id;
+    return state;
+}
+
+/// Runs a session of strokes on the painted brush and prints and asserts what is wanted.
+void runSession(const char* name, ImageSize level, std::uint32_t strokeCount, bool coldLevel) {
+    LocalAdjustmentId painted{};
+    PaintingSession session(level, sessionBase(14, 5, painted));
+    session.paintOn(painted);
+    std::mt19937_64 g(seed + 200);
+    std::uint64_t misses = 0;
+    std::uint64_t extended = 0;
+    std::uint64_t grown = 0;
+    std::size_t updates = 0;
+    std::size_t worstGain = 0;
+    std::size_t mismatches = 0;
+    std::vector<double> undoMs;
+    std::vector<double> redoMs;
+    std::vector<double> deltaMs;
+    bool undoHits = true;
+    bool undoPacks = true;
+    bool firstIsExtended = true;
+    for (std::uint32_t done = 0; done < strokeCount; ++done) {
+        const Stroke stroke = test::wanderingStroke(g, test::everydayStyle, 4000.0 / 6000.0);
+        if (!canAppendStroke(session.committed(), painted, stroke)) {
+            break; // the mask is full: the edit rules refuse the next stroke
+        }
+        const StrokeSummary summary = session.paint(stroke);
+        misses += summary.misses;
+        extended += summary.extended;
+        grown += summary.grown;
+        updates += summary.updates;
+        worstGain = std::max(worstGain, summary.entriesGained);
+        mismatches += summary.packMismatches;
+        firstIsExtended = firstIsExtended && summary.extended + summary.misses <= 1;
+        if (done % 25 == 24 && session.strokesDone() > 10) {
+            undoHits = session.undoAndRedo(10, undoMs, redoMs, undoPacks) && undoHits;
+            for (int r = 0; r < 3; ++r) {
+                deltaMs.push_back(session.deltaEditMs(painted, 1.0 + 0.25 * r));
+            }
+        }
+    }
+    const bool equalsDirect = session.lastEqualsDirect();
+    const auto& all = session.updates();
+    Line line(std::string("B9.") + name);
+    line("level", std::to_string(level.width) + "x" + std::to_string(level.height))(
+        "strokes", session.strokesDone())("updates", updates)("miss", misses)("extended", extended)(
+        "grown", grown)("evictions", brushCoverageCache().evictions());
+    printQuarters(line, "renderMs", all, &SessionUpdate::renderMs);
+    printQuarters(line, "coverageMs", all, &SessionUpdate::coverageMs);
+    std::vector<double> packed;
+    for (const SessionUpdate& update : all) {
+        packed.push_back(static_cast<double>(update.packed));
+    }
+    line("packedTiles", spreadOf(packed))("undoMs", spreadOf(undoMs))("redoMs", spreadOf(redoMs))(
+        "deltaEditMs", spreadOf(deltaMs))("maxEntries", session.maxEntries())(
+        "maxCacheMiB", static_cast<double>(session.maxBytes()) / (1024.0 * 1024.0))(
+        "undoOnlyHits", undoHits)("undoPacksStrokeTiles", undoPacks)("equalsDirect", equalsDirect);
+    // What does not depend on the machine.
+    REQUIRE(equalsDirect);
+    REQUIRE(mismatches == 0);
+    REQUIRE(worstGain <= 1);
+    if (!coldLevel) {
+        REQUIRE(firstIsExtended);
+        REQUIRE(misses == 0);
+        REQUIRE(undoHits);
+        REQUIRE(undoPacks);
+        REQUIRE(session.maxBytes() <= (std::size_t{512} << 20));
+    }
+}
+
+/// Session C: strokes on brushes that are new, then on brushes whose list is not held.
+void runColdSession() {
+    LocalAdjustmentId painted{};
+    PaintingSession session({1500, 1000}, sessionBase(5, 0, painted));
+    // The base state holds an empty brush that is painted first, then new ones are added.
+    std::mt19937_64 g(seed + 300);
+    DevelopState others = session.committed();
+    others.localAdjustments.pop_back();
+    const auto strokeOf = [&] {
+        return test::wanderingStroke(g, test::everydayStyle, 4000.0 / 6000.0);
+    };
+    std::size_t worstGain = 0;
+    std::uint64_t misses = 0;
+    std::uint64_t grown = 0;
+    std::size_t updates = 0;
+    std::size_t mismatches = 0;
+    bool oneMissAtMost = true;
+    // Phase 1: ten brushes created inside the session, empty to begin with.
+    session.restart(others);
+    static_cast<void>(session.render(others));
+    for (int i = 0; i < 10; ++i) {
+        DevelopState next = withBrushAdded(session.committed(), emptyStrokeList());
+        const LocalAdjustmentId id = next.localAdjustments.back().id;
+        session.restart(next);
+        static_cast<void>(session.render(next));
+        session.paintOn(id);
+        const StrokeSummary summary = session.paint(strokeOf());
+        misses += summary.misses;
+        grown += summary.grown;
+        updates += summary.updates;
+        worstGain = std::max(worstGain, summary.entriesGained);
+        mismatches += summary.packMismatches;
+        oneMissAtMost =
+            oneMissAtMost && summary.misses <= 1 && summary.grown + 1 == summary.updates;
+    }
+    // Phase 2: ten brushes whose list the cache does not hold.
+    for (int i = 0; i < 10; ++i) {
+        session.restart(others);
+        static_cast<void>(session.render(others));
+        brushCoverageCache().clear();
+        DevelopState next = withBrushAdded(
+            others, test::paintedMask(seed + 400 + i, 3, test::everydayStyle, 4000.0 / 6000.0));
+        const LocalAdjustmentId id = next.localAdjustments.back().id;
+        session.restart(next);
+        session.paintOn(id);
+        const StrokeSummary summary = session.paint(strokeOf());
+        misses += summary.misses;
+        grown += summary.grown;
+        updates += summary.updates;
+        worstGain = std::max(worstGain, summary.entriesGained);
+        mismatches += summary.packMismatches;
+        oneMissAtMost =
+            oneMissAtMost && summary.misses <= 1 && summary.grown + 1 == summary.updates;
+    }
+    const bool equalsDirect = session.lastEqualsDirect();
+    const auto& all = session.updates();
+    Line line("B9.C");
+    line("level", "1500x1000")("strokes", 20)("updates", updates)("miss", misses)("grown", grown);
+    printQuarters(line, "renderMs", all, &SessionUpdate::renderMs);
+    printQuarters(line, "coverageMs", all, &SessionUpdate::coverageMs);
+    line("maxCacheMiB", static_cast<double>(session.maxBytes()) / (1024.0 * 1024.0))("equalsDirect",
+                                                                                     equalsDirect);
+    REQUIRE(equalsDirect);
+    REQUIRE(mismatches == 0);
+    REQUIRE(worstGain <= 1);
+    REQUIRE(oneMissAtMost);
+    REQUIRE(session.maxBytes() <= (std::size_t{512} << 20));
+}
+
+} // namespace
+
+TEST_CASE("B9 a painting session through a ladder", "[.bench][brush-bench]") {
+    // Brush GUI plan section 11.1: growing partials of a live stroke through a ladder, as the
+    // window's shown layer renders them. The base is 14 of B2's masks, a radial and the brush
+    // being painted (the mask list holds 16).
+    begin("B9");
+    SECTION("A the fit level at ratio 1") {
+        runSession("A", {1500, 1000}, 100, false);
+    }
+    SECTION("A2 the fit level at ratio 2") {
+        runSession("A2", {3000, 2000}, 30, false);
+    }
+    SECTION("B 1:1") {
+        runSession("B", {6000, 4000}, 10, true);
+    }
+    SECTION("C brushes that are new, and lists that are not held") {
+        runColdSession();
+    }
+    finish("B9");
 }

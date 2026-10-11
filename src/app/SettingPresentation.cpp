@@ -1,5 +1,8 @@
 #include "SettingPresentation.h"
 
+#include "BrushPainting.h"
+
+#include <BrushStrokes.h>
 #include <Edits.h>
 
 #include <QCoreApplication>
@@ -368,11 +371,19 @@ double reciprocalFraction(double value, const SettingRange& range) {
     return (low - 1.0 / value) / (low - high);
 }
 
+/// Position of a value along a logarithmic range: 0 at the minimum, 1 at the maximum.
+double logarithmicFraction(double value, const SettingRange& range) {
+    return std::log(value / range.minimum) / std::log(range.maximum / range.minimum);
+}
+
 } // namespace
 
 int tickCount(const SettingRange& range, double step, SliderScale scale) {
     if (scale == SliderScale::Reciprocal) {
         return reciprocalTickCount;
+    }
+    if (scale == SliderScale::Logarithmic) {
+        return logarithmicTickCount;
     }
     return static_cast<int>(std::lround((range.maximum - range.minimum) / step));
 }
@@ -383,6 +394,11 @@ int tickOf(double value, const SettingRange& range, double step, SliderScale sca
         const double clamped = std::clamp(value, range.minimum, range.maximum);
         return static_cast<int>(
             std::clamp<long>(std::lround(reciprocalFraction(clamped, range) * count), 0, count));
+    }
+    if (scale == SliderScale::Logarithmic) {
+        const double clamped = std::clamp(value, range.minimum, range.maximum);
+        return static_cast<int>(
+            std::clamp<long>(std::lround(logarithmicFraction(clamped, range) * count), 0, count));
     }
     const long tick = std::lround((value - range.minimum) / step);
     return static_cast<int>(std::clamp<long>(tick, 0, count));
@@ -397,7 +413,61 @@ double valueOfTick(int tick, const SettingRange& range, double step, SliderScale
         const double value = 1.0 / (low - fraction * (low - high));
         return std::clamp(std::round(value / step) * step, range.minimum, range.maximum);
     }
+    if (scale == SliderScale::Logarithmic) {
+        const int count = tickCount(range, step, scale);
+        if (tick <= 0) {
+            return range.minimum;
+        }
+        if (tick >= count) {
+            return range.maximum;
+        }
+        const double value =
+            range.minimum * std::pow(range.maximum / range.minimum,
+                                     static_cast<double>(tick) / static_cast<double>(count));
+        return std::clamp(std::round(value / step) * step, range.minimum, range.maximum);
+    }
     return std::clamp(range.minimum + tick * step, range.minimum, range.maximum);
+}
+
+SettingRange brushSizeRange() noexcept {
+    // Rounded to the row's hundredths: the float cap 0.0005F times 100 is 0.0499999989, which
+    // converts back to a radius just below the cap.
+    const auto percent = [](float radius) {
+        return std::round(static_cast<double>(radius) * 10000.0) / 100.0;
+    };
+    return {percent(minimumBrushRadius), percent(maximumBrushRadius)};
+}
+
+SettingRange brushHardnessRange() noexcept {
+    return {0.0, 100.0};
+}
+
+SettingRange brushFlowRange() noexcept {
+    return {std::round(static_cast<double>(minimumBrushFlow) * 100.0), 100.0};
+}
+
+const SettingPresentation& brushSizePresentation() {
+    static const SettingPresentation presentation{
+        tr("Size"),
+        tr(" %"),
+        2,
+        0.01,
+        tr("Radius of the brush, as a share of the photograph's long edge."),
+        SliderScale::Logarithmic};
+    return presentation;
+}
+
+const SettingPresentation& brushHardnessPresentation() {
+    static const SettingPresentation presentation{
+        tr("Hardness"), tr(" %"), 0, 1.0,
+        tr("Share of the radius painted at full strength; the rest fades out.")};
+    return presentation;
+}
+
+const SettingPresentation& brushFlowPresentation() {
+    static const SettingPresentation presentation{
+        tr("Flow"), tr(" %"), 0, 1.0, tr("Strength of each dab; overlapping dabs build up.")};
+    return presentation;
 }
 
 std::optional<double> displayedValue(const FieldDescriptor& descriptor, const DevelopState& state) {
