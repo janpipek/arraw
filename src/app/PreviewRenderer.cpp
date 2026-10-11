@@ -454,9 +454,25 @@ std::optional<PreviewResult> render(std::uint64_t id, const DevelopState& state,
                 .bottom = static_cast<double>(shown.bottom() + 1) / frame.height()};
         }
         result.frame = frame;
-        const int level =
-            std::min(pyramidLevelFor(source->size(), source->orientation(), state, request),
-                     SourcePyramid::highestLevel(source->size()));
+        const int highestLevel = SourcePyramid::highestLevel(source->size());
+        int level = std::min(pyramidLevelFor(source->size(), source->orientation(), state, request),
+                             highestLevel);
+        // Only a picture that is not at full resolution is reduced: at 1:1 and beyond the
+        // stroke's level and the commit's level 0 would evict each other's brush coverage, and
+        // a coarser picture drawn magnified looks blocky.
+        const bool coarsened = view.reduced && level > 0;
+        if (coarsened) {
+            // A stroke's picture: the level that holds the shown part in the pixel budget, even
+            // if that is coarser than the output (the picture is drawn scaled to its region).
+            double shownPixels = static_cast<double>(shown.width()) * shown.height();
+            for (int step = 0; step < level; ++step) {
+                shownPixels /= 4.0;
+            }
+            while (level < highestLevel && shownPixels > static_cast<double>(strokePreviewPixels)) {
+                shownPixels /= 4.0;
+                ++level;
+            }
+        }
         const std::shared_ptr<const ImageBuffer> reduced = [&] {
             const detail::TimingSpan pyramidTiming("preview.pyramid");
             return pyramid.level(level);
@@ -476,7 +492,8 @@ std::optional<PreviewResult> render(std::uint64_t id, const DevelopState& state,
         result.region =
             QRectF(QPointF(rendered.left, rendered.top), QPointF(rendered.right, rendered.bottom));
         const bool gpuReady = gpu != nullptr && gpu->prepare(source);
-        if (standIn != nullptr && level == 0 && SourcePyramid::highestLevel(source->size()) >= 1) {
+        if (standIn != nullptr && !coarsened && level == 0 &&
+            SourcePyramid::highestLevel(source->size()) >= 1) {
             // Asked of the ladder that renders: the GPU's when the GPU does, else the CPU's.
             const bool draws = gpuReady ? gpu->drawsBrushCoverage(layer, *reduced, state, request,
                                                                   standIn->minimumSeconds)

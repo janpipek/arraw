@@ -2,7 +2,8 @@
 
 Status: accepted, 2026-10-10 (user: every recommendation, Q1–Q9 (a)); built and
 measured, 2026-10-10 (sub-steps 6.1 to 6.6; numbers in the ADR 044 note "the brush in
-the window, as built"; Q6's follow-up is open); revised the same day after the review
+the window, as built"; Q6 decided 2026-10-11: (b), a coarser picture while stroking,
+not at level 0; see the ADR note); revised the same day after the review
 `docs/reviews/claude-opus-5-5_2026-10-10_brush-gui-plan.md` (every High and
 Medium finding fixed, most Low ones too; the response is at the end, before
 the open questions). Step 6 of `local-adjustment-plan.md`: "Brush
@@ -41,7 +42,7 @@ Proposed; the open questions at the end say which ones the user should confirm.
 | Pointer to storage | `MaskViewMapping::correctedFrom` (view → developed → upright → corrected, existing), then a new public `sensorFrom(CorrectedPosition)` beside `DevelopedFrameMap`: the identity until lens corrections (ADR 009) |
 | The edit | One stroke is one begin / update / commit (ADR 022); each update is `withStrokeAppended(base, id, partial)`; the press updates at once, later moves once per event-loop turn; points thinned to `max(1 logical px, 0.1 · radius)` apart |
 | Engine | The tail method moves into `BrushCoverageCache` as a new lookup, `Grown`: a list whose last stroke grew repaints only the new dabs, and replaces its parent entry. Every draw that paints a list's last stroke (a `Miss` too) leaves a growable entry, so a new brush's first stroke grows. No public API change in the engine |
-| Rendering while painting | Paced: `PreviewRenderer::request(..., Supersede::Queue)` while a stroke is under way and for its commit (`MaskOverlay::stroking()`, not the mode); no thumbnail until the commit. The whole shown level's pointwise pass reruns per render (ADR 025's limit; Q6) |
+| Rendering while painting | Paced: `PreviewRenderer::request(..., Supersede::Queue)` while a stroke is under way and for its commit (`MaskOverlay::stroking()`, not the mode); no thumbnail until the commit. The whole shown level's pointwise pass reruns per render (ADR 025's limit). Decided 2026-10-11 (Q6 b): while stroking, the picture is at most 0.4 MP (coarser level, not at level 0), the commit's is full |
 | GPU | Only the tiles a render's coverage changed are packed and uploaded (the step-5 residency, by serials); asserted by a counter |
 | Coarser first render | Unchanged: `Grown` and `Extended` are not a miss, so a stroke over a cached brush never makes one |
 | Tint (O) | Follows every update, on the GUI thread, through `maskCoverage` (a `Grown` lookup at the grid's level); shown automatically while the painted brush contributes nothing to the plan (Q2); repaints only the stroke's new area |

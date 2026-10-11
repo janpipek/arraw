@@ -50,6 +50,10 @@ struct PreviewView {
     /// Long edge of a reduced copy to deliver beside an image of the whole frame, for a
     /// thumbnail; 0 for none. Reduced on the worker, so the receiver does not (ADR 043).
     int thumbnailEdge = 0;
+    /// Whether the picture is for a brush stroke in progress: a level that holds at most
+    /// strokePreviewPixels is chosen, if the full one is coarser than the source, and no
+    /// stand-in then precedes the render.
+    bool reduced = false;
 
     /// @brief Makes a view of the whole frame.
     /// @param box Box to fit the frame inside, in device pixels.
@@ -58,9 +62,17 @@ struct PreviewView {
         return {.region = std::nullopt,
                 .outputSize = box,
                 .devicePixelRatio = ratio,
-                .thumbnailEdge = 0};
+                .thumbnailEdge = 0,
+                .reduced = false};
     }
 };
+
+/// @brief Most pixels of a picture shown while a brush stroke is in progress.
+///
+/// The CPU renders 1.5 MP in about 187 ms (ADR 044); this is about a quarter of that. The
+/// render measured 72 to 74 ms, as a fixed cost per render remains. The full picture follows
+/// the release.
+inline constexpr std::int64_t strokePreviewPixels = 400'000;
 
 /// @brief Least time between two progress reports of one preview render, unless its step changes.
 ///

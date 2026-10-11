@@ -1193,3 +1193,50 @@ text)
   where B9 checks the exact serials).
 - The window session asserts no `Miss` at fit; it asserts no eviction only at
   ratio 1, and reports the rest.
+
+**2026-10-11: Q6 (b), a coarser picture while a stroke is under way.** The user
+picked (b). While `MaskOverlay::stroking()` and not the commit's request,
+`MainWindow` sets `PreviewView::reduced`, whatever the window's size. The renderer
+then raises the pyramid level its usual rule picked until the shown part holds at
+most `strokePreviewPixels` (400,000 pixels, about a quarter of the 1.5 MP that cost
+187 ms), if that level is above 0; no output size is scaled (the level loop decides
+alone, and a covering level at fit 864 by 717 would still be 1500 by 1000). A view
+whose full level is 0 (1:1 and beyond) is not reduced: the coarse and the full
+level would evict each other's coverage there, and a coarse picture magnified is
+drawn unsmoothed. The region is unchanged, so the picture stays aligned with the tint
+and the cursor; `PhotoView` draws a result scaled to its region. A reduced request
+gets no coarser stand-in. The commit's request, and everything outside a stroke,
+stay full size; the GPU follows the same rule (not measured: lavapipe only, and the
+level switch at each stroke start and commit may re-upload the coverage tiles). The
+tail method works at the smaller level: it has its own cache entries (`grown` 774
+at fit).
+
+Measured as above (release, CPU, the same session; before in brackets):
+
+| Metric (fit) | Ratio 1 | Ratio 2 |
+|---|---|---|
+| Render | 72 ms (187) | 74 ms (816) |
+| Latency, median / p95 | 111 / 153 ms (291 / 381) | 110 / 381 ms (1322 / 1634) |
+| Renders shown per second | 13.1 (5.1) | 12.8 (0.8) |
+| GUI time per update, median / p99 | 0.77 / 18 ms (1.76 / 14.7) | 1.29 / 19 ms (3.3 / 21) |
+| Longest GUI stall | 23 ms (24 to 45) | 33 ms (49) |
+| Commit, release to last result | 280 ms (289) | 962 ms (1229) |
+| Tint on: latency median / pictures per second | 116 ms / 13.0 (301 / 4.6) | 112 ms / 12.5 |
+
+Latency now meets its p95 target at ratio 1 (the median, 111 ms, misses 100 ms
+by a little) and the picture rate meets 10 a second. The commit is still a render
+or two behind the release (the render in flight and the queued one finish first).
+
+**Cache.** At ratio 1 and fit painting causes no eviction and no `Miss` (264 MiB;
+434 MiB with the tint). At ratio 2 it does: the full level (3000 by 2000) was
+already at the limit, and the coarse level's entries push more of it out: 362
+`Miss`es and 441 evictions at fit (before: 0 and 15), so a commit redraws about
+six brushes (median 1.0 s, p95 4.7 s; before 1.2 s). The session reports rather
+than asserts the `Miss`es at ratio 2, a known limit. At 1:1 the first version of
+this note reduced too and was much worse (commit about 21 s); with level 0 left
+alone it is as before: ratio 1 latency median 4.2 s and commit 3.0 s (before 4.1 s
+and 2.6 s), ratio 2 5.0 s and 3.7 s.
+
+**Re-measured after the review fixes (same session):** fit ratio 1 render 73 ms,
+latency 112 / 155 ms, 13.1 pictures a second, commit 276 ms; ratio 2 latency
+115 / 416 ms, 12.3 a second.
