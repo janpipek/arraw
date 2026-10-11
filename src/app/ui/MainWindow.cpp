@@ -1990,7 +1990,8 @@ void MainWindow::requestRender() {
     PreviewView view{.region = std::nullopt,
                      .outputSize = photoView_->devicePixels(),
                      .devicePixelRatio = ratio,
-                     .thumbnailEdge = stroking && !committingStroke_ ? 0 : ThumbnailCache::maxEdge};
+                     .thumbnailEdge = stroking && !committingStroke_ ? 0 : ThumbnailCache::maxEdge,
+                     .reduced = false};
     try {
         // The crop may have changed the frame; the view keeps its zoom and centre.
         const ImageSize cropped =
@@ -2010,6 +2011,9 @@ void MainWindow::requestRender() {
     } catch (const std::exception&) {
         // Left to the renderer, which reports what is wrong with the state.
     }
+    // The renderer picks a coarser level while painting, drawn into the same region; the
+    // commit brings the full one (ADR 044).
+    view.reduced = stroking && !committingStroke_;
     renderIndicator_->begin();
     latestRequest_ = previewRenderer_.request(state, std::move(view),
                                               stroking ? Supersede::Queue : Supersede::Cancel);

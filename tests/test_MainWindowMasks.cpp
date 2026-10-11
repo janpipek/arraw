@@ -937,6 +937,160 @@ void startStroke(const Window& w, QPointF from, QPointF to) {
     }
 }
 
+/// One line of the timing trace.
+struct TimingEvent {
+    double t = 0.0; ///< Milliseconds since the trace's origin.
+    std::uint64_t span = 0;
+    std::uint64_t request = 0;
+    std::string stage;
+    std::string event;
+    std::string detail;
+};
+
+/// One span of the timing trace, begin to end.
+struct SpanRecord {
+    std::string stage;
+    double begin = 0.0;
+    double end = 0.0;
+    std::uint64_t request = 0;
+    std::string note; ///< The last note written in the span.
+    int level = -1;   ///< The pyramid level a render span noted, or -1.
+
+    [[nodiscard]] double ms() const {
+        return end - begin;
+    }
+};
+
+/// Collects the timing trace in process, as the session computes its metrics itself.
+class TimingCollector {
+public:
+    TimingCollector()
+        : category_(const_cast<QLoggingCategory&>(detail::timingLog())),
+          wasEnabled_(category_.isDebugEnabled()) {
+        category_.setEnabled(QtDebugMsg, true);
+        previous_ = qInstallMessageHandler(&TimingCollector::handle);
+        previousHandler() = previous_;
+    }
+    ~TimingCollector() {
+        qInstallMessageHandler(previous_);
+        category_.setEnabled(QtDebugMsg, wasEnabled_);
+    }
+    TimingCollector(const TimingCollector&) = delete;
+    TimingCollector& operator=(const TimingCollector&) = delete;
+
+    void clear() const {
+        const std::scoped_lock lock(mutex());
+        events().clear();
+    }
+
+    /// Gives the spans closed since the last clear, in the order they began.
+    [[nodiscard]] std::vector<SpanRecord> spans() const {
+        std::vector<TimingEvent> copy;
+        {
+            const std::scoped_lock lock(mutex());
+            copy = events();
+        }
+        std::vector<SpanRecord> out;
+        std::vector<std::pair<std::uint64_t, std::size_t>> open;
+        const auto find = [&open](std::uint64_t id) {
+            for (auto& entry : open) {
+                if (entry.first == id) {
+                    return &entry;
+                }
+            }
+            return static_cast<std::pair<std::uint64_t, std::size_t>*>(nullptr);
+        };
+        std::vector<bool> closed;
+        for (const TimingEvent& event : copy) {
+            if (event.event == "begin") {
+                out.push_back({event.stage, event.t, event.t, event.request, {}, -1});
+                closed.push_back(false);
+                open.emplace_back(event.span, out.size() - 1);
+            } else if (auto* entry = find(event.span)) {
+                if (event.event == "note") {
+                    out[entry->second].note = event.detail;
+                    if (event.detail.rfind("level=", 0) == 0) {
+                        out[entry->second].level = std::atoi(event.detail.c_str() + 6);
+                    }
+                } else {
+                    out[entry->second].end = event.t;
+                    closed[entry->second] = true;
+                    *entry = open.back();
+                    open.pop_back();
+                }
+            }
+        }
+        std::vector<SpanRecord> done;
+        for (std::size_t i = 0; i < out.size(); ++i) {
+            if (closed[i]) {
+                done.push_back(std::move(out[i]));
+            }
+        }
+        return done;
+    }
+
+private:
+    static std::mutex& mutex() {
+        static std::mutex instance;
+        return instance;
+    }
+    static std::vector<TimingEvent>& events() {
+        static std::vector<TimingEvent> instance;
+        return instance;
+    }
+    static QtMessageHandler& previousHandler() {
+        static QtMessageHandler instance = nullptr;
+        return instance;
+    }
+
+    static std::string field(const std::string& text, const std::string& key) {
+        const std::string needle = (key == "t" ? "" : " ") + key + "=";
+        const auto at = text.find(needle);
+        if (at == std::string::npos) {
+            return {};
+        }
+        const auto from = at + needle.size();
+        return text.substr(from, text.find(' ', from) - from);
+    }
+
+    static void handle(QtMsgType type, const QMessageLogContext& context, const QString& message) {
+        if (context.category == nullptr || std::string_view(context.category) != "arraw.timing") {
+            if (previousHandler() != nullptr) {
+                previousHandler()(type, context, message);
+            }
+            return;
+        }
+        const std::string text = message.toStdString();
+        TimingEvent event;
+        event.t = std::atof(field(text, "t").c_str());
+        event.span = std::strtoull(field(text, "span").c_str(), nullptr, 10);
+        event.request = std::strtoull(field(text, "request").c_str(), nullptr, 10);
+        event.stage = field(text, "stage");
+        event.event = field(text, "event");
+        const auto detail = text.find(" detail=");
+        if (detail != std::string::npos) {
+            event.detail = text.substr(detail + 8);
+        }
+        const std::scoped_lock lock(mutex());
+        events().push_back(std::move(event));
+    }
+
+    QLoggingCategory& category_;
+    bool wasEnabled_;
+    QtMessageHandler previous_ = nullptr;
+};
+
+/// Pyramid levels of the renders the window did since a collector was cleared, in order.
+std::vector<int> renderLevels(const TimingCollector& collector) {
+    std::vector<int> levels;
+    for (const SpanRecord& span : collector.spans()) {
+        if (span.stage == "preview.render" && span.level >= 0) {
+            levels.push_back(span.level);
+        }
+    }
+    return levels;
+}
+
 void armBrush(const Window& w) {
     QTest::mouseClick(&w.button("maskBrush"), Qt::LeftButton);
     REQUIRE(w.overlay().painting());
@@ -1233,6 +1387,142 @@ TEST_CASE("The render after a stroke's commit is the one of the committed state"
     CHECK(direct.view().wholeFrameImage() == shown);
 }
 
+TEST_CASE("During a stroke the pictures are coarser; the commit's is full size",
+          "[app][window][masks][brush]") {
+    const BrushSettingsReset reset;
+    const TimingCollector collector;
+    DevelopState committed;
+    QImage shown;
+    QSize full;
+    {
+        Window w(4000, 3000, QSize(1400, 900), false);
+        armBrush(w);
+        BrushSettings big;
+        big.radius = 0.2F;
+        w.panel().setBrushSettings(big);
+        w.overlay().setBrushSettings(big);
+        w.drag(w.at(0.2, 0.5), w.at(0.25, 0.5));
+        w.setRow("local.exposure", 2.0);
+        QTest::qWait(100);
+        REQUIRE(QTest::qWaitFor([&] { return !w.window.renderIndicator().busy(); }, 60000));
+        full = w.view().wholeFrameImage().size();
+        const std::vector<int> before = renderLevels(collector);
+        REQUIRE_FALSE(before.empty());
+        const int fullLevel = before.back();
+        REQUIRE(fullLevel > 0);
+
+        QObject::connect(&w.overlay(), &MaskOverlay::stateEdited,
+                         [&committed](const DevelopState& next) { committed = next; });
+        collector.clear();
+        startStroke(w, w.at(0.3, 0.3), w.at(0.7, 0.7));
+        REQUIRE(w.overlay().stroking());
+        REQUIRE(QTest::qWaitFor([&] { return !renderLevels(collector).empty(); }, 60000));
+        QTest::qWait(300);
+        // Every render meanwhile is of a coarser level than the full one.
+        const std::vector<int> during = renderLevels(collector);
+        for (const int level : during) {
+            CHECK(level > fullLevel);
+        }
+        CHECK(w.view().wholeFrameImage().size().width() < full.width());
+        // No queued stroke render may start after the clear and be counted as the commit's.
+        REQUIRE(QTest::qWaitFor([&] { return !w.window.renderIndicator().busy(); }, 60000));
+        collector.clear();
+        w.mouse(QEvent::MouseButtonRelease, w.at(0.7, 0.7), Qt::NoButton);
+        // The commit's render replaces the coarse one with the full size.
+        REQUIRE(QTest::qWaitFor([&] { return w.view().wholeFrameImage().size() == full; }, 60000));
+        QTest::qWait(100);
+        REQUIRE(QTest::qWaitFor([&] { return !w.window.renderIndicator().busy(); }, 60000));
+        for (const int level : renderLevels(collector)) {
+            CHECK(level == fullLevel);
+        }
+        shown = w.view().wholeFrameImage();
+        CHECK(shown.size() == full);
+    }
+    Window direct(4000, 3000, QSize(1400, 900), false, &committed);
+    REQUIRE(QTest::qWaitFor([&] { return !direct.window.renderIndicator().busy(); }, 60000));
+    CHECK(direct.view().wholeFrameImage() == shown);
+}
+
+TEST_CASE("A stroke's pictures are full size where the full level is the source's",
+          "[app][window][masks][brush]") {
+    const BrushSettingsReset reset;
+    const TimingCollector collector;
+    Window w(1000, 750, QSize(1400, 900), false);
+    armBrush(w);
+    w.drag(w.at(0.2, 0.5), w.at(0.25, 0.5));
+    QTest::qWait(100);
+    REQUIRE(QTest::qWaitFor([&] { return !w.window.renderIndicator().busy(); }, 20000));
+    const QSize full = w.view().wholeFrameImage().size();
+    collector.clear();
+    startStroke(w, w.at(0.3, 0.3), w.at(0.7, 0.7));
+    REQUIRE(w.overlay().stroking());
+    REQUIRE(QTest::qWaitFor([&] { return !renderLevels(collector).empty(); }, 20000));
+    QTest::qWait(200);
+    for (const int level : renderLevels(collector)) {
+        CHECK(level == 0);
+    }
+    CHECK(w.view().wholeFrameImage().size() == full);
+    w.mouse(QEvent::MouseButtonRelease, w.at(0.7, 0.7), Qt::NoButton);
+}
+
+TEST_CASE("Outside a stroke the pictures are of the full level", "[app][window][masks][brush]") {
+    const BrushSettingsReset reset;
+    const TimingCollector collector;
+    Window w(4000, 3000, QSize(1400, 900), false);
+    armBrush(w);
+    w.drag(w.at(0.2, 0.5), w.at(0.25, 0.5));
+    QTest::qWait(100);
+    REQUIRE(QTest::qWaitFor([&] { return !w.window.renderIndicator().busy(); }, 60000));
+    const std::vector<int> settled = renderLevels(collector);
+    REQUIRE_FALSE(settled.empty());
+    const int fullLevel = settled.back();
+    const QSize full = w.view().wholeFrameImage().size();
+    const QImage before = w.view().wholeFrameImage();
+    collector.clear();
+    // A drag of a row's value, with the brush armed, is no stroke.
+    for (auto* row : w.window.findChildren<SettingSlider*>()) {
+        if (row->key() == "local.exposure") {
+            for (const double value : {0.5, 1.0, 1.5}) {
+                row->findChild<QDoubleSpinBox*>()->setValue(value);
+                CHECK_FALSE(w.overlay().stroking());
+                QTest::qWait(100);
+            }
+        }
+    }
+    w.panel().finishPendingEdit();
+    CHECK(w.waitForRenderOtherThan(before));
+    REQUIRE(QTest::qWaitFor([&] { return !w.window.renderIndicator().busy(); }, 60000));
+    CHECK(w.view().wholeFrameImage().size() == full);
+    const std::vector<int> delta = renderLevels(collector);
+    CHECK_FALSE(delta.empty());
+    for (const int level : delta) {
+        CHECK(level == fullLevel);
+    }
+    // A handle drag of a radial mask is no stroke either.
+    QTest::mouseClick(&w.button("maskRadial"), Qt::LeftButton);
+    const QPointF click = w.at(0.5, 0.5);
+    w.mouse(QEvent::MouseButtonPress, click);
+    w.mouse(QEvent::MouseButtonRelease, click, Qt::NoButton);
+    w.setRow("local.exposure", 0.5);
+    REQUIRE(QTest::qWaitFor([&] { return !w.window.renderIndicator().busy(); }, 60000));
+    collector.clear();
+    const double radius = std::min(w.overlay().width(), w.overlay().height()) / 6.0;
+    const QPointF handle = click + QPointF(radius, 0.0);
+    w.mouse(QEvent::MouseButtonPress, handle);
+    for (int step = 1; step <= 10; ++step) {
+        w.mouse(QEvent::MouseMove, handle + QPointF(step * 4.0, 0.0));
+        QTest::qWait(30);
+    }
+    w.mouse(QEvent::MouseButtonRelease, handle + QPointF(40.0, 0.0), Qt::NoButton);
+    REQUIRE(QTest::qWaitFor([&] { return !w.window.renderIndicator().busy(); }, 60000));
+    const std::vector<int> handles = renderLevels(collector);
+    CHECK_FALSE(handles.empty());
+    for (const int level : handles) {
+        CHECK(level == fullLevel);
+    }
+    CHECK(w.view().wholeFrameImage().size() == full);
+}
+
 TEST_CASE("A delta drag with the brush armed is not a stroke", "[app][window][masks][brush]") {
     const BrushSettingsReset reset;
     Window w(640, 480, {}, false);
@@ -1298,145 +1588,6 @@ TEST_CASE("A brush that changes nothing is tinted whether O is on or not",
 }
 
 namespace {
-
-/// One line of the timing trace.
-struct TimingEvent {
-    double t = 0.0; ///< Milliseconds since the trace's origin.
-    std::uint64_t span = 0;
-    std::uint64_t request = 0;
-    std::string stage;
-    std::string event;
-    std::string detail;
-};
-
-/// One span of the timing trace, begin to end.
-struct SpanRecord {
-    std::string stage;
-    double begin = 0.0;
-    double end = 0.0;
-    std::uint64_t request = 0;
-    std::string note; ///< The last note written in the span.
-
-    [[nodiscard]] double ms() const {
-        return end - begin;
-    }
-};
-
-/// Collects the timing trace in process, as the session computes its metrics itself.
-class TimingCollector {
-public:
-    TimingCollector()
-        : category_(const_cast<QLoggingCategory&>(detail::timingLog())),
-          wasEnabled_(category_.isDebugEnabled()) {
-        category_.setEnabled(QtDebugMsg, true);
-        previous_ = qInstallMessageHandler(&TimingCollector::handle);
-        previousHandler() = previous_;
-    }
-    ~TimingCollector() {
-        qInstallMessageHandler(previous_);
-        category_.setEnabled(QtDebugMsg, wasEnabled_);
-    }
-    TimingCollector(const TimingCollector&) = delete;
-    TimingCollector& operator=(const TimingCollector&) = delete;
-
-    void clear() const {
-        const std::scoped_lock lock(mutex());
-        events().clear();
-    }
-
-    /// Gives the spans closed since the last clear, in the order they began.
-    [[nodiscard]] std::vector<SpanRecord> spans() const {
-        std::vector<TimingEvent> copy;
-        {
-            const std::scoped_lock lock(mutex());
-            copy = events();
-        }
-        std::vector<SpanRecord> out;
-        std::vector<std::pair<std::uint64_t, std::size_t>> open;
-        const auto find = [&open](std::uint64_t id) {
-            for (auto& entry : open) {
-                if (entry.first == id) {
-                    return &entry;
-                }
-            }
-            return static_cast<std::pair<std::uint64_t, std::size_t>*>(nullptr);
-        };
-        std::vector<bool> closed;
-        for (const TimingEvent& event : copy) {
-            if (event.event == "begin") {
-                out.push_back({event.stage, event.t, event.t, event.request, {}});
-                closed.push_back(false);
-                open.emplace_back(event.span, out.size() - 1);
-            } else if (auto* entry = find(event.span)) {
-                if (event.event == "note") {
-                    out[entry->second].note = event.detail;
-                } else {
-                    out[entry->second].end = event.t;
-                    closed[entry->second] = true;
-                    *entry = open.back();
-                    open.pop_back();
-                }
-            }
-        }
-        std::vector<SpanRecord> done;
-        for (std::size_t i = 0; i < out.size(); ++i) {
-            if (closed[i]) {
-                done.push_back(std::move(out[i]));
-            }
-        }
-        return done;
-    }
-
-private:
-    static std::mutex& mutex() {
-        static std::mutex instance;
-        return instance;
-    }
-    static std::vector<TimingEvent>& events() {
-        static std::vector<TimingEvent> instance;
-        return instance;
-    }
-    static QtMessageHandler& previousHandler() {
-        static QtMessageHandler instance = nullptr;
-        return instance;
-    }
-
-    static std::string field(const std::string& text, const std::string& key) {
-        const std::string needle = (key == "t" ? "" : " ") + key + "=";
-        const auto at = text.find(needle);
-        if (at == std::string::npos) {
-            return {};
-        }
-        const auto from = at + needle.size();
-        return text.substr(from, text.find(' ', from) - from);
-    }
-
-    static void handle(QtMsgType type, const QMessageLogContext& context, const QString& message) {
-        if (context.category == nullptr || std::string_view(context.category) != "arraw.timing") {
-            if (previousHandler() != nullptr) {
-                previousHandler()(type, context, message);
-            }
-            return;
-        }
-        const std::string text = message.toStdString();
-        TimingEvent event;
-        event.t = std::atof(field(text, "t").c_str());
-        event.span = std::strtoull(field(text, "span").c_str(), nullptr, 10);
-        event.request = std::strtoull(field(text, "request").c_str(), nullptr, 10);
-        event.stage = field(text, "stage");
-        event.event = field(text, "event");
-        const auto detail = text.find(" detail=");
-        if (detail != std::string::npos) {
-            event.detail = text.substr(detail + 8);
-        }
-        const std::scoped_lock lock(mutex());
-        events().push_back(std::move(event));
-    }
-
-    QLoggingCategory& category_;
-    bool wasEnabled_;
-    QtMessageHandler previous_ = nullptr;
-};
 
 /// Median, 95th and 99th percentile and maximum of some milliseconds.
 struct Spread {
@@ -1843,10 +1994,11 @@ TEST_CASE("Brush painting session", "[.timing]") {
             // Asserted before the 1:1 phase empties the cache; the first fit render after it
             // may draw what 1:1 evicted, which the line above reports.
             if (!tint) {
-                CHECK(misses == 0);
                 // At ratio 2 the level is four times the pixels and sixteen brushes do not fit
-                // the 512 MiB: reported, not asserted (Q6's numbers).
+                // the 512 MiB, and the stroke's coarser level has entries of its own: misses
+                // and evictions are reported, not asserted. Ratio 2 is a known limit (Q6).
                 if (ratio <= 1.0) {
+                    CHECK(misses == 0);
                     CHECK(evictions == 0);
                 }
             }

@@ -115,14 +115,14 @@ on branch `brush-prototype`.
   (readable strokes in state JSON, base64 in XMP), `info`, the GUI minimum (list,
   history, tint) and Python (`add_brush_mask`, `with_brush_stroke`). See ADR 044
   "What step 5 settled".
-- **Step 6, the brush GUI: built and measured; Q6 open (2026-10-10).** The tool, settings and keys,
+- **Step 6, the brush GUI: built and measured; Q6 (b) done (2026-10-11).** The tool, settings and keys,
   the tail method in the cache, paced requests, the tint, and the measured long
-  session (ADR 044 note "the brush in the window, as built"). **Open, the
-  user's pick (Q6):** the whole shown level is re-rendered per picture (190 ms at
-  fit, 0.8 s at ratio 2, 2.4 s at 1:1 on the CPU), so latency misses its targets
-  (290 ms against 100 ms at ratio 1); options are to leave it, a coarser level
-  during a stroke, or a dirty-rectangle pointwise pass in the ladder (the
-  numbers favour that). The GPU run is not measured (no hardware GPU here).
+  session (ADR 044 notes "as built" and "Q6 (b)"). While a stroke is under way the
+  picture is rendered at most 0.4 MP (a coarser level) and the full one follows the
+  release: fit latency 111 ms (was 291), 13 pictures a second, at ratio 2 110 ms
+  (was 1322). Not reduced at level 0 (1:1 and beyond), which stays as slow as before
+  (latency 4.2 s, commit 3.0 s). **Open:** at ratio 2 the commit redraws about six
+  brushes (about 1 s; the coarse level evicts the full level's coverage). The GPU run is not measured (no hardware GPU here).
 
 ## Follow-ups (known limits, all documented in ADRs)
 
