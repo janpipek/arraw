@@ -173,6 +173,7 @@ alongside `--log-format json` mixes debug traces with diagnostic JSON on stderr.
 - `docs/adr/` — why each hard-to-reverse choice was made
 - `docs/desired-features.md` — the feature brief, from a photographer's view
 - `docs/development.md` — platform-specific build notes
+- [Photo development reference](docs/photo-development.md) — pipeline equations, colour spaces and photographic controls ([PDF](docs/photo-development.pdf))
 
 ## Licence
 
