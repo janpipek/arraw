@@ -300,7 +300,7 @@ user-reachable path creates a mask that export ignores.
 5. **Brush, end to end without GUI (done, 2026-10-10):** rasteriser, cache, GPU textures,
    parity, persistence, Python. Tests: same path at different event rates,
    different resolutions, after reload.
-6. **Brush GUI (built and measured, 2026-10-10; Q6 open):** the tool, dirty-tile painting, cursor, history. Long
+6. **Brush GUI (done, 2026-10-16; Q6 (b), ratio-2 commit of about 0.5 s accepted):** the tool, dirty-tile painting, cursor, history. Long
    painting session measured: see `docs/ideas/brush-gui-plan.md` and the ADR 044
    note "the brush in the window, as built".
 

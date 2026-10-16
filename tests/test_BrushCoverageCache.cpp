@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <functional>
 #include <latch>
 #include <set>
 #include <thread>
@@ -677,4 +678,228 @@ TEST_CASE("An insert whose parent is gone adds a plain entry", "[brush][cache][g
     CHECK(cache.entryCount() == entries + 1);
     CHECK(cache.coverage(second, raster).lookup == CoverageLookup::Hit);
     CHECK(cache.coverage(third, raster).lookup == CoverageLookup::Hit);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Superseded entries: the base of an extension is kept for undo, and evicted first.
+
+namespace {
+
+constexpr ImageSize supersedeRaster{300, 200};
+constexpr std::uint32_t supersedeTile = 32;
+
+/// Makes @p count wash strokes on top of an empty list, keeping every prefix.
+std::vector<std::shared_ptr<const StrokeList>> washChain(std::uint64_t chainSeed,
+                                                         std::size_t count) {
+    std::mt19937_64 g(chainSeed);
+    std::vector<std::shared_ptr<const StrokeList>> lists;
+    auto list = std::make_shared<const StrokeList>();
+    for (std::size_t i = 0; i < count; ++i) {
+        list = list->appended(test::wanderingStroke(g, test::washStyle, 0.667));
+        lists.push_back(list);
+    }
+    return lists;
+}
+
+/// Makes a list of one small stroke, which adds a few tiles.
+std::shared_ptr<const StrokeList> smallList(std::uint64_t listSeed) {
+    return test::paintedMask(listSeed, 1, test::detailStyle, 0.667, {{0.1, 0.2, 0.1, 0.2}});
+}
+
+/// Bytes of the distinct tiles of some grids.
+std::size_t distinctTileBytes(std::initializer_list<const CoverageTiles*> grids) {
+    std::set<const CoverageTile*> seen;
+    std::size_t total = 0;
+    for (const CoverageTiles* grid : grids) {
+        for (std::uint32_t i = 0; i < grid->columns() * grid->rows(); ++i) {
+            const auto& tile = grid->tile(i);
+            if (tile && seen.insert(tile.get()).second) {
+                total += tile->values.size() * sizeof(float);
+            }
+        }
+    }
+    return total;
+}
+
+/// Bytes the chain of the first @p count lists takes in a cache with room to spare.
+std::size_t chainBytes(const std::vector<std::shared_ptr<const StrokeList>>& chain,
+                       std::size_t count) {
+    BrushCoverageCache probe(std::size_t{512} << 20, supersedeTile);
+    for (std::size_t i = 0; i < count; ++i) {
+        static_cast<void>(probe.coverage(chain[i], supersedeRaster));
+    }
+    return probe.memoryBytes();
+}
+
+} // namespace
+
+TEST_CASE("A superseded parent is evicted before an older live entry", "[brush][cache]") {
+    const auto a = washChain(seed + 60, 1)[0];
+    const auto b = washChain(seed + 61, 2);
+    const auto pressure = smallList(seed + 62);
+    BrushCoverageCache full(std::size_t{512} << 20, supersedeTile);
+    static_cast<void>(full.coverage(a, supersedeRaster));
+    static_cast<void>(full.coverage(b[0], supersedeRaster));
+    static_cast<void>(full.coverage(b[1], supersedeRaster));
+    BrushCoverageCache cache(full.memoryBytes(), supersedeTile);
+    static_cast<void>(cache.coverage(a, supersedeRaster));
+    static_cast<void>(cache.coverage(b[0], supersedeRaster));
+    CHECK(cache.coverage(b[1], supersedeRaster).lookup == CoverageLookup::Extended);
+    REQUIRE(cache.peek(b[0], supersedeRaster).lookup == CoverageLookup::Hit);
+
+    static_cast<void>(cache.coverage(pressure, supersedeRaster));
+    CHECK(cache.peek(a, supersedeRaster).lookup == CoverageLookup::Hit);
+    const auto parent = cache.peek(b[0], supersedeRaster).lookup;
+    CHECK(parent != CoverageLookup::Hit);
+    CHECK(parent != CoverageLookup::ContentHit);
+    CHECK(cache.peek(b[1], supersedeRaster).lookup == CoverageLookup::Hit);
+    CHECK(cache.evictions() == 1);
+}
+
+TEST_CASE("A hit on a superseded entry makes it live again", "[brush][cache]") {
+    const auto a = washChain(seed + 63, 1)[0];
+    const auto b = washChain(seed + 64, 2);
+    const auto pressure = smallList(seed + 65);
+    BrushCoverageCache full(std::size_t{512} << 20, supersedeTile);
+    static_cast<void>(full.coverage(a, supersedeRaster));
+    static_cast<void>(full.coverage(b[0], supersedeRaster));
+    static_cast<void>(full.coverage(b[1], supersedeRaster));
+    BrushCoverageCache cache(full.memoryBytes(), supersedeTile);
+    static_cast<void>(cache.coverage(a, supersedeRaster));
+    static_cast<void>(cache.coverage(b[0], supersedeRaster));
+    static_cast<void>(cache.coverage(b[1], supersedeRaster));
+    // An undo: A and the newest list are used, then the parent, which is live again. A is now the
+    // oldest of the three.
+    static_cast<void>(cache.coverage(a, supersedeRaster));
+    static_cast<void>(cache.coverage(b[1], supersedeRaster));
+    CHECK(cache.coverage(b[0], supersedeRaster).lookup == CoverageLookup::Hit);
+
+    static_cast<void>(cache.coverage(pressure, supersedeRaster));
+    CHECK(cache.peek(a, supersedeRaster).lookup != CoverageLookup::Hit);
+    CHECK(cache.peek(b[0], supersedeRaster).lookup == CoverageLookup::Hit);
+    CHECK(cache.peek(b[1], supersedeRaster).lookup == CoverageLookup::Hit);
+}
+
+TEST_CASE("Superseded prefixes go in LRU order", "[brush][cache]") {
+    const auto chain = washChain(seed + 66, 4);
+    BrushCoverageCache cache(chainBytes(chain, 4), supersedeTile);
+    for (const auto& list : chain) {
+        static_cast<void>(cache.coverage(list, supersedeRaster));
+    }
+    // Pressure: small lists one by one, noting the step at which each list of the chain goes.
+    constexpr int never = 99;
+    std::array<int, 3> gone{never, never, never};
+    for (int step = 1; step <= 30; ++step) {
+        static_cast<void>(cache.coverage(smallList(seed + 70 + static_cast<std::uint64_t>(step)),
+                                         supersedeRaster));
+        for (std::size_t i = 0; i < gone.size(); ++i) {
+            if (gone[i] == never &&
+                cache.peek(chain[i], supersedeRaster).lookup != CoverageLookup::Hit) {
+                gone[i] = step;
+            }
+        }
+    }
+    CHECK(gone[0] < never);
+    CHECK(gone[0] <= gone[1]);
+    CHECK(gone[1] <= gone[2]);
+    CHECK(cache.peek(chain[3], supersedeRaster).lookup == CoverageLookup::Hit);
+}
+
+TEST_CASE("Extending releases the settled grid of the base", "[brush][cache][grown]") {
+    std::mt19937_64 g(seed + 90);
+    const auto before = test::paintedMask(seed + 91, 1, test::everydayStyle, 0.667);
+    const Stroke path = test::wanderingStroke(g, test::everydayStyle, 0.667);
+    const auto base = before->appended(partialOf(path, 20));
+    BrushCoverageCache cache(std::size_t{512} << 20, supersedeTile);
+    const auto first = cache.coverage(base, supersedeRaster);
+    const auto extended = base->appended(test::wanderingStroke(g, test::everydayStyle, 0.667));
+    const auto second = cache.coverage(extended, supersedeRaster);
+    REQUIRE(second.lookup == CoverageLookup::Extended);
+    // The new entry keeps its own settled grid; the base keeps tiles only.
+    BrushCoverageCache alone(std::size_t{512} << 20, supersedeTile);
+    static_cast<void>(alone.coverage(extended, supersedeRaster));
+    const std::size_t settledOfNew = alone.memoryBytes() - distinctTileBytes({second.tiles.get()});
+    CHECK(cache.memoryBytes() ==
+          distinctTileBytes({first.tiles.get(), second.tiles.get()}) + settledOfNew);
+
+    // The same stroke, longer: its base is superseded and has no settled grid, so this cannot
+    // be a Grown, but it is right.
+    const auto longer = before->appended(partialOf(path, 40));
+    const auto grown = cache.coverage(longer, supersedeRaster);
+    CHECK(grown.lookup != CoverageLookup::Grown);
+    CHECK(grown.tiles->gathered() == rasteriseBrush(*longer, supersedeRaster));
+}
+
+TEST_CASE("An extension does not touch a live prefix it passes", "[brush][cache]") {
+    const auto chain = washChain(seed + 92, 3);
+    const auto other = washChain(seed + 93, 1)[0];
+    const auto pressure = smallList(seed + 94);
+    BrushCoverageCache full(std::size_t{512} << 20, supersedeTile);
+    static_cast<void>(full.coverage(chain[0], supersedeRaster));
+    static_cast<void>(full.coverage(chain[1], supersedeRaster));
+    static_cast<void>(full.coverage(other, supersedeRaster));
+    BrushCoverageCache cache(full.memoryBytes(), supersedeTile);
+    static_cast<void>(cache.coverage(chain[0], supersedeRaster));
+    static_cast<void>(cache.coverage(chain[1], supersedeRaster));
+    // An undo: the first list is live again, and used before the unrelated one.
+    CHECK(cache.coverage(chain[0], supersedeRaster).lookup == CoverageLookup::Hit);
+    static_cast<void>(cache.coverage(other, supersedeRaster));
+    // A longer list builds on chain[1] and passes chain[0], which it must not touch.
+    CHECK(cache.coverage(chain[2], supersedeRaster, false).lookup == CoverageLookup::Extended);
+
+    static_cast<void>(cache.coverage(pressure, supersedeRaster));
+    CHECK(cache.peek(chain[0], supersedeRaster).lookup != CoverageLookup::Hit);
+    CHECK(cache.peek(other, supersedeRaster).lookup == CoverageLookup::Hit);
+    CHECK(cache.peek(chain[1], supersedeRaster).lookup == CoverageLookup::Hit);
+}
+
+namespace {
+
+/// Checks that @p revive, run on the superseded parent of an extension, makes it live again: it
+/// then outlives an older entry under pressure.
+void checkRevived(
+    std::uint64_t listSeed,
+    const std::function<void(BrushCoverageCache&, const std::shared_ptr<const StrokeList>&,
+                             const std::shared_ptr<const StrokeList>&)>& revive) {
+    const auto a = washChain(listSeed, 1)[0];
+    const auto b = washChain(listSeed + 1, 2);
+    // The same content behind other pointers.
+    const auto equal = washChain(listSeed + 1, 2);
+    const auto pressure = smallList(listSeed + 2);
+    BrushCoverageCache full(std::size_t{512} << 20, supersedeTile);
+    static_cast<void>(full.coverage(a, supersedeRaster));
+    static_cast<void>(full.coverage(b[0], supersedeRaster));
+    static_cast<void>(full.coverage(b[1], supersedeRaster));
+    BrushCoverageCache cache(full.memoryBytes(), supersedeTile);
+    static_cast<void>(cache.coverage(a, supersedeRaster));
+    static_cast<void>(cache.coverage(b[0], supersedeRaster));
+    static_cast<void>(cache.coverage(b[1], supersedeRaster));
+    static_cast<void>(cache.coverage(a, supersedeRaster));
+    static_cast<void>(cache.coverage(b[1], supersedeRaster));
+    revive(cache, b[0], equal[0]);
+
+    static_cast<void>(cache.coverage(pressure, supersedeRaster));
+    CHECK(cache.peek(a, supersedeRaster).lookup != CoverageLookup::Hit);
+    CHECK(cache.peek(b[0], supersedeRaster).lookup == CoverageLookup::Hit);
+    CHECK(cache.peek(b[1], supersedeRaster).lookup == CoverageLookup::Hit);
+}
+
+} // namespace
+
+TEST_CASE("An undo through find or a content hit makes a superseded entry live", "[brush][cache]") {
+    SECTION("find, same pointer") {
+        checkRevived(seed + 100, [](BrushCoverageCache& c, const auto& same, const auto&) {
+            CHECK(c.find(same, supersedeRaster) != nullptr);
+        });
+    }
+    SECTION("find, equal list") {
+        checkRevived(seed + 110, [](BrushCoverageCache& c, const auto&, const auto& equal) {
+            CHECK(c.find(equal, supersedeRaster) != nullptr);
+        });
+    }
+    SECTION("coverage, equal list") {
+        checkRevived(seed + 120, [](BrushCoverageCache& c, const auto&, const auto& equal) {
+            CHECK(c.coverage(equal, supersedeRaster, false).lookup == CoverageLookup::ContentHit);
+        });
+    }
 }
