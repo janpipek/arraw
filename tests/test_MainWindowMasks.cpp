@@ -1994,11 +1994,12 @@ TEST_CASE("Brush painting session", "[.timing]") {
             // Asserted before the 1:1 phase empties the cache; the first fit render after it
             // may draw what 1:1 evicted, which the line above reports.
             if (!tint) {
-                // At ratio 2 the level is four times the pixels and sixteen brushes do not fit
-                // the 512 MiB, and the stroke's coarser level has entries of its own: misses
-                // and evictions are reported, not asserted. Ratio 2 is a known limit (Q6).
+                // At ratio 2 the level is four times the pixels: the cache keeps the live lists
+                // and drops the superseded Extended parents first, so no commit redraws a brush.
+                // The evictions are reported, not asserted (they are mostly those parents; the
+                // cache is nearly full, so the margin on the misses is a few MiB).
+                CHECK(misses == 0);
                 if (ratio <= 1.0) {
-                    CHECK(misses == 0);
                     CHECK(evictions == 0);
                 }
             }

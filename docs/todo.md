@@ -103,7 +103,7 @@ following the mask mode; the Adjustments groups collapse, each remembered in
 ## Local adjustments (user, 2026-10-08; `docs/ideas/local-adjustment-plan.md`)
 
 Done: steps 0 to 3 (ADR 044), **step 4, the brush prototype** and **step 5**
-(2026-10-10); **step 6** is built and measured, Q6 open.
+(2026-10-10) and **step 6** (done 2026-10-16).
 The report `docs/ideas/brush-prototype-report.md` is accepted and ADR 044
 sections 6, 7 and 9 are amended. The prototype code
 (`src/core/{BrushStrokes,BrushRaster,BrushCoverageCache,StrokeCodec}`) is
@@ -115,14 +115,17 @@ on branch `brush-prototype`.
   (readable strokes in state JSON, base64 in XMP), `info`, the GUI minimum (list,
   history, tint) and Python (`add_brush_mask`, `with_brush_stroke`). See ADR 044
   "What step 5 settled".
-- **Step 6, the brush GUI: built and measured; Q6 (b) done (2026-10-11).** The tool, settings and keys,
+- **Step 6, the brush GUI: done (2026-10-16); Q6 (b) 2026-10-11.** The tool, settings and keys,
   the tail method in the cache, paced requests, the tint, and the measured long
   session (ADR 044 notes "as built" and "Q6 (b)"). While a stroke is under way the
   picture is rendered at most 0.4 MP (a coarser level) and the full one follows the
   release: fit latency 111 ms (was 291), 13 pictures a second, at ratio 2 110 ms
   (was 1322). Not reduced at level 0 (1:1 and beyond), which stays as slow as before
-  (latency 4.2 s, commit 3.0 s). **Open:** at ratio 2 the commit redraws about six
-  brushes (about 1 s; the coarse level evicts the full level's coverage). The GPU run is not measured (no hardware GPU here).
+  (latency 4.2 s, commit 3.0 s). At ratio 2 the commit no longer redraws brushes (0
+  misses, was 376; superseded Extended parents are evicted first, ADR 044 note
+  2026-10-16): p95 2.3 s down to 0.53 s, median unchanged at about 0.5 s.
+  Accepted (user, 2026-10-16): the 0.5 s left is rendering the 6 MP level itself;
+  the cache has under 4 MiB to spare at ratio 2. The GPU run is not measured (no hardware GPU here).
 
 ## Follow-ups (known limits, all documented in ADRs)
 

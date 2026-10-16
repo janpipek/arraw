@@ -93,6 +93,7 @@ inline constexpr std::size_t coverageLookupKinds =
     static_cast<std::size_t>(CoverageLookup::Miss) + 1;
 
 /// Keeps the coverage of stroke lists, tile by tile, and extends it when a stroke is appended.
+/// The entry an extension builds on is kept (an undo returns to it) but evicted before the rest.
 class BrushCoverageCache {
 public:
     /// Makes an empty cache.
@@ -167,6 +168,8 @@ private:
         std::shared_ptr<const CoverageTiles> settled;
         /// How many of the last stroke's dabs without the end dab `settled` holds.
         std::size_t settledDabs = 0;
+        /// Whether a longer list of the same size was built on it (an Extended); evicted first.
+        bool superseded = false;
     };
 
     /// A draw: the coverage, and the same without the last stroke's end dab.
@@ -199,7 +202,10 @@ private:
     /// allow. Holds the lock.
     /// @param replaces The list of an entry of the same size that this one grew from, which goes;
     /// null to keep every entry.
-    void insert(Entry entry, const StrokeList* replaces = nullptr);
+    /// @param extends The list of an entry of the same size that this one extended, which is
+    /// marked superseded (kept for undo, evicted first) and loses its settled grid.
+    void insert(Entry entry, const StrokeList* replaces = nullptr,
+                const StrokeList* extends = nullptr);
 
     /// Stops counting the tiles of an entry. Holds the lock.
     void releaseEntry(const Entry& entry);

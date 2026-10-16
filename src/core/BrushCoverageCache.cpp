@@ -210,6 +210,7 @@ BrushCoverageCache::find(const std::shared_ptr<const StrokeList>& strokes, Image
     for (Entry& entry : entries_) {
         if (entry.size == raster && entry.list == strokes) {
             entry.lastUse = ++clock_;
+            entry.superseded = false;
             return entry.tiles;
         }
     }
@@ -217,6 +218,7 @@ BrushCoverageCache::find(const std::shared_ptr<const StrokeList>& strokes, Image
         if (entry.size == raster && entry.list->contentHash() == strokes->contentHash() &&
             *entry.list == *strokes) {
             entry.lastUse = ++clock_;
+            entry.superseded = false;
             return entry.tiles;
         }
     }
@@ -321,11 +323,14 @@ BrushCoverageCache::coverage(const std::shared_ptr<const StrokeList>& strokes, I
     std::shared_ptr<const CoverageTiles> parentSettled;
     std::shared_ptr<const CoverageTiles> parentTiles;
     std::size_t settledDabs = 0;
+    // What an Extended builds on: the entry's list is held so that its identity stays unique.
+    std::shared_ptr<const StrokeList> extended;
     {
         const std::scoped_lock lock(mutex_);
         for (Entry& entry : entries_) {
             if (entry.list == strokes && sameSize(entry)) {
                 entry.lastUse = ++clock_;
+                entry.superseded = false;
                 counted(CoverageLookup::Hit);
                 return {entry.tiles, CoverageLookup::Hit, {}};
             }
@@ -334,6 +339,7 @@ BrushCoverageCache::coverage(const std::shared_ptr<const StrokeList>& strokes, I
             if (sameSize(entry) && entry.list->contentHash() == strokes->contentHash() &&
                 *entry.list == *strokes) {
                 entry.lastUse = ++clock_;
+                entry.superseded = false;
                 counted(CoverageLookup::ContentHit);
                 Result result{entry.tiles, CoverageLookup::ContentHit, {}};
                 if (retain) {
@@ -352,6 +358,7 @@ BrushCoverageCache::coverage(const std::shared_ptr<const StrokeList>& strokes, I
             entry.lastUse = ++clock_;
         } else {
             const auto wanted = strokes->strokes();
+            Entry* best = nullptr;
             for (Entry& entry : entries_) {
                 const auto held = entry.list->strokes();
                 if (!sameSize(entry) || entry.list->rasteriser() != strokes->rasteriser() ||
@@ -362,8 +369,12 @@ BrushCoverageCache::coverage(const std::shared_ptr<const StrokeList>& strokes, I
                                [](const auto& a, const auto& b) { return a.get() == b.get(); })) {
                     prefix = held.size();
                     base = entry.tiles;
-                    entry.lastUse = ++clock_;
+                    extended = entry.list;
+                    best = &entry;
                 }
+            }
+            if (best != nullptr) {
+                best->lastUse = ++clock_;
             }
         }
     }
@@ -418,7 +429,7 @@ BrushCoverageCache::coverage(const std::shared_ptr<const StrokeList>& strokes, I
         }
         const std::scoped_lock lock(mutex_);
         entry.lastUse = ++clock_;
-        insert(std::move(entry), parent.get());
+        insert(std::move(entry), parent.get(), parent ? nullptr : extended.get());
     }
     return std::move(made.result);
 }
@@ -452,7 +463,8 @@ void BrushCoverageCache::releaseEntry(const Entry& entry) {
     }
 }
 
-void BrushCoverageCache::insert(Entry entry, const StrokeList* replaces) {
+void BrushCoverageCache::insert(Entry entry, const StrokeList* replaces,
+                                const StrokeList* extends) {
     // Two threads that missed on the same request both arrive here: keep one entry per key,
     // or the same coverage would count twice towards the budget.
     const auto duplicate = std::ranges::find_if(entries_, [&](const Entry& e) {
@@ -475,6 +487,22 @@ void BrushCoverageCache::insert(Entry entry, const StrokeList* replaces) {
             entries_.erase(parent);
         }
     }
+    if (extends != nullptr) {
+        // The list this one extended stays for undo, but no Grown can use its settled grid, and
+        // it goes first.
+        const auto base = std::ranges::find_if(entries_, [&](const Entry& e) {
+            return e.list.get() == extends && e.size.width == entry.size.width &&
+                   e.size.height == entry.size.height;
+        });
+        if (base != entries_.end()) {
+            base->superseded = true;
+            if (base->settled && base->settled != base->tiles) {
+                releaseTiles(*base->settled);
+            }
+            base->settled = nullptr;
+            base->settledDabs = 0;
+        }
+    }
     retainTiles(*entry.tiles);
     if (entry.settled && entry.settled != entry.tiles) {
         retainTiles(*entry.settled);
@@ -482,9 +510,11 @@ void BrushCoverageCache::insert(Entry entry, const StrokeList* replaces) {
     entries_.push_back(std::move(entry));
     while (entries_.size() > 1 && (bytes_ > budget_ || entries_.size() > maximumEntries)) {
         // The entry just made is the last one and is never the one to go.
-        const auto oldest =
-            std::min_element(entries_.begin(), entries_.end() - 1,
-                             [](const Entry& a, const Entry& b) { return a.lastUse < b.lastUse; });
+        // Superseded entries go first, the least recently used of either kind.
+        const auto oldest = std::min_element(
+            entries_.begin(), entries_.end() - 1, [](const Entry& a, const Entry& b) {
+                return a.superseded != b.superseded ? a.superseded : a.lastUse < b.lastUse;
+            });
         releaseEntry(*oldest);
         entries_.erase(oldest);
         evictions_.fetch_add(1, std::memory_order_relaxed);

@@ -1191,7 +1191,8 @@ text)
   provisional result (none arrives while stroking on a cached brush); an undo
   packs at most the tiles of the undone stroke's bounding box (an upper bound,
   where B9 checks the exact serials).
-- The window session asserts no `Miss` at fit; it asserts no eviction only at
+- The window session asserts no `Miss` at fit at either ratio (since 2026-10-16;
+  at ratio 2 the margin is thin, see that note); it asserts no eviction only at
   ratio 1, and reports the rest.
 
 **2026-10-11: Q6 (b), a coarser picture while a stroke is under way.** The user
@@ -1228,11 +1229,11 @@ by a little) and the picture rate meets 10 a second. The commit is still a rende
 or two behind the release (the render in flight and the queued one finish first).
 
 **Cache.** At ratio 1 and fit painting causes no eviction and no `Miss` (264 MiB;
-434 MiB with the tint). At ratio 2 it does: the full level (3000 by 2000) was
-already at the limit, and the coarse level's entries push more of it out: 362
-`Miss`es and 441 evictions at fit (before: 0 and 15), so a commit redraws about
-six brushes (median 1.0 s, p95 4.7 s; before 1.2 s). The session reports rather
-than asserts the `Miss`es at ratio 2, a known limit. At 1:1 the first version of
+434 MiB with the tint). At ratio 2 it did: the full level (3000 by 2000) was
+already at the limit, and the coarse level's entries pushed more of it out: 362
+`Miss`es and 441 evictions at fit (before: 0 and 15), so a commit redrew about
+six brushes (median 1.0 s, p95 4.7 s on the run that found it; before 1.2 s). The
+2026-10-16 note below fixes that. At 1:1 the first version of
 this note reduced too and was much worse (commit about 21 s); with level 0 left
 alone it is as before: ratio 1 latency median 4.2 s and commit 3.0 s (before 4.1 s
 and 2.6 s), ratio 2 5.0 s and 3.7 s.
@@ -1240,3 +1241,53 @@ and 2.6 s), ratio 2 5.0 s and 3.7 s.
 **Re-measured after the review fixes (same session):** fit ratio 1 render 73 ms,
 latency 112 / 155 ms, 13.1 pictures a second, commit 276 ms; ratio 2 latency
 115 / 416 ms, 12.3 a second.
+
+**2026-10-16: the cause of the ratio-2 misses was stale Extended parents, not the
+coarse level.** At ratio 2 the full level (3000 by 2000) holds the 14 dense preset
+brushes in about 312 MiB; the coarse level takes only about 22 MiB. The rest went to
+the Extended parents of the brush being painted: an Extended entry does not replace
+its parent, and the prefix loop in `coverage()` touched every prefix it passed, so up
+to 59 dead parents (about 152 MiB held only by them) were younger than the idle preset
+brushes and the LRU evicted the presets instead. Now the entry an Extended builds on is
+marked `superseded`, loses its settled grid, and is evicted before any live entry; a
+Hit, ContentHit or `find` on it (an undo) makes it live again; only the best base is
+touched. Output is unchanged and the budget stays 512 MiB. The tests cover the order
+of eviction, a stray touch on a live prefix, and the three ways an undo reaches a
+parent (`coverage` Hit, `find`, an equal list behind another pointer).
+
+Measured on the same machine in one sitting (release, CPU, ratio 2, fit; two runs
+before, from the code of `main`, one after; an earlier run of the change in
+brackets):
+
+| Ratio 2, fit | Before | After |
+|---|---|---|
+| `Miss` lookups | 376 | 0 |
+| Evictions | 455 | 38 (36, 37) |
+| Commit median / p95 | 491 and 521 / 2292 and 2320 ms | 512 / 534 ms (511 / 535, 520 / 546) |
+| Latency p95 | 246 and 264 ms | 98 ms (102, 135) |
+| Undo (Ctrl+Z to result) | 402 and 463 ms | 402 ms (410, 423), 20 of 20 `Hit` |
+| Cache at the end of fit | 511.6 MiB | 508.4 MiB |
+
+The commit median did not move (about 0.5 s either way; the 1.0 s median in the
+Cache paragraph above is from the run that found the problem, when it was slower):
+only its tail did, since the commits that redrew brushes were the slow ones. What is
+left of a commit is rendering the 6 MP level plus drawing the new stroke once at that
+level (`extended` is 120 at fit, so not every lookup is a `Hit`); the undo, all
+`Hit`s, takes 402 of the 512 ms. Ratio 1 is unchanged (0 misses, 0 evictions).
+
+The 38 evictions are expected to be mostly superseded parents, which is what the
+order is for, but nothing counts that (no counter separates live from superseded
+evictions). The cache sits at 508 to 511 of 512 MiB, so `CHECK(misses == 0)` at
+ratio 2 has under 4 MiB of margin. With the tint on there are still 16 `Miss`es and
+9 evictions (11 before), which the session does not assert. At 1:1 and ratio 2,
+evictions went from 83 to 136 (misses 15 either way), and the session shows no
+change there: latency median 2311 and 2515 ms before, 2324 after; commit median 2485
+and 2141 ms before, 2404 after.
+
+A superseded parent that an undo revives stays live, without a settled grid, even if
+a redo then supersedes it again: a session with a lot of undo and redo brings back
+some dead-parent pressure. Accepted; flagging by a test at eviction (a strict prefix
+of another held entry) would remove it if it ever shows.
+
+Step 6 is closed with this (user, 2026-10-16): a commit of about 0.5 s at ratio 2,
+the render of the 6 MP level, is accepted as a known limit.
