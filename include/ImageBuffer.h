@@ -1,12 +1,14 @@
 #pragma once
 
 #include <ColorEncoding.h>
+#include <DecodeOptions.h>
 #include <ImageOrientation.h>
 
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <type_traits>
@@ -216,6 +218,22 @@ public:
     /// @throws std::invalid_argument if @p scale is not finite or not above zero.
     void setPixelScale(double scale);
 
+    /// @brief Options the pixels were decoded with, in canonical form, if a decode made them.
+    ///
+    /// Set by ::arraw::loadImage (see ::arraw::canonical), kept by the levels of an
+    /// ::arraw::ImagePyramid and by ::arraw::halved, and empty for pixels a caller built
+    /// or developed. A plan copies it, so a render of another negative is another source
+    /// by value (ADR 049).
+    [[nodiscard]] const std::optional<DecodeOptions>& decodedWith() const noexcept {
+        return decodedWith_;
+    }
+
+    /// @brief Says how the pixels were decoded.
+    /// @param options Canonical options of the decode, or empty for pixels no decode made.
+    void setDecodedWith(std::optional<DecodeOptions> options) noexcept {
+        decodedWith_ = options;
+    }
+
     /// @brief Number of bytes between the start of consecutive rows.
     [[nodiscard]] std::size_t rowStride() const noexcept {
         return rowStride_;
@@ -256,7 +274,8 @@ public:
         return {values.data(), values.size()};
     }
 
-    /// @brief Create an independent copy of the buffer, its pixel scale included.
+    /// @brief Create an independent copy of the buffer, its pixel scale and decode options
+    /// included.
     [[nodiscard]] ImageBuffer clone() const;
 
     /// @brief Holds real, correctly-aligned vector objects rather
@@ -288,6 +307,7 @@ private:
     ColorEncoding encoding_;
     ImageOrientation orientation_;
     double pixelScale_ = 1.0;
+    std::optional<DecodeOptions> decodedWith_;
     std::size_t rowStride_;
     Storage storage_;
 };

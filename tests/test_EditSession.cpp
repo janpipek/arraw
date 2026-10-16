@@ -2,6 +2,7 @@
 #include "support/TempDir.h"
 
 #include <EditSession.h>
+#include <NegativeSettings.h>
 #include <SettingDescriptors.h>
 #include <Sidecar.h>
 
@@ -407,7 +408,7 @@ TEST_CASE("History of a new session is just the opening state", "[session][histo
     const EditSession session(testPhoto());
 
     REQUIRE(session.history().size() == 1);
-    CHECK(session.history()[0] == HistoryStep{DevelopState{}, EditOrigin::Opened, {}});
+    CHECK(session.history()[0] == HistoryStep{DevelopState{}, EditOrigin::Opened, {}, {}});
     CHECK(session.position() == 0);
 }
 
@@ -512,7 +513,7 @@ TEST_CASE("Commit and setState record the origin and detail", "[session][history
     REQUIRE(session.history().size() == 4);
     CHECK(session.history()[1].origin == EditOrigin::Crop);
     CHECK(session.history()[1].detail.empty());
-    CHECK(session.history()[2] == HistoryStep{exposed(2.0F), EditOrigin::Preset, "Warm"});
+    CHECK(session.history()[2] == HistoryStep{exposed(2.0F), EditOrigin::Preset, "Warm", {}});
     CHECK(session.history()[3].origin == EditOrigin::Reset);
 }
 
@@ -542,7 +543,7 @@ TEST_CASE("Discarding changes restarts history at the saved state", "[session][h
     session.discardChanges();
 
     REQUIRE(session.history().size() == 1);
-    CHECK(session.history()[0] == HistoryStep{DevelopState{}, EditOrigin::Opened, {}});
+    CHECK(session.history()[0] == HistoryStep{DevelopState{}, EditOrigin::Opened, {}, {}});
     CHECK(session.position() == 0);
 }
 
@@ -664,4 +665,139 @@ TEST_CASE("describeChange names exactly the row that changed, for every row",
     }
     // Only the single-valued enumerations are skipped.
     CHECK(skipped.size() == 2);
+}
+
+namespace {
+
+/// @brief Negative settings that differ from the default.
+constexpr NegativeSettings vng{Demosaic::Vng};
+
+} // namespace
+
+TEST_CASE("A negative edit is one history step that undo and redo move with the state",
+          "[session][negative]") {
+    EditSession session(testPhoto());
+    session.setState(exposed(1.0F));
+    session.setNegative(vng);
+
+    REQUIRE(session.history().size() == 3);
+    REQUIRE(session.history()[0].negative == NegativeSettings{});
+    REQUIRE(session.history()[1].negative == NegativeSettings{});
+    REQUIRE(session.history()[2].negative == vng);
+    REQUIRE(session.history()[2].state == exposed(1.0F));
+    REQUIRE(session.photo().negative() == vng);
+
+    session.undo();
+    REQUIRE(session.photo().negative() == NegativeSettings{});
+    REQUIRE(session.photo().state() == exposed(1.0F));
+    session.undo();
+    REQUIRE(session.photo().state() == DevelopState{});
+    session.redo();
+    session.redo();
+    REQUIRE(session.photo().negative() == vng);
+    REQUIRE(session.photo().state() == exposed(1.0F));
+    session.goTo(0);
+    REQUIRE(session.photo().negative() == NegativeSettings{});
+}
+
+TEST_CASE("The same negative leaves no step, and an invalid one changes nothing",
+          "[session][negative]") {
+    EditSession session(testPhoto());
+    session.setNegative(NegativeSettings{});
+    REQUIRE(session.history().size() == 1);
+
+    session.begin();
+    session.update(exposed(0.5F));
+    REQUIRE_THROWS_AS(session.setNegative(NegativeSettings{static_cast<Demosaic>(99)}),
+                      std::invalid_argument);
+    REQUIRE(session.editing());
+    REQUIRE(session.history().size() == 1);
+}
+
+TEST_CASE("A negative edit commits an open edit first, as a step of its own",
+          "[session][negative]") {
+    EditSession session(testPhoto());
+    session.begin();
+    session.update(exposed(0.5F));
+    session.setNegative(vng);
+
+    REQUIRE_FALSE(session.editing());
+    REQUIRE(session.history().size() == 3);
+    REQUIRE(session.history()[1].state == exposed(0.5F));
+    REQUIRE(session.history()[1].negative == NegativeSettings{});
+    REQUIRE(session.history()[2].negative == vng);
+}
+
+TEST_CASE("Updates and commits never change the negative", "[session][negative]") {
+    EditSession session(testPhoto());
+    session.setNegative(vng);
+    session.begin();
+    session.update(exposed(0.5F));
+    REQUIRE(session.photo().negative() == vng);
+    session.commit();
+    REQUIRE(session.history().back().negative == vng);
+    session.begin();
+    session.update(exposed(0.9F));
+    session.cancel();
+    REQUIRE(session.photo().negative() == vng);
+}
+
+TEST_CASE("A state and a negative together are one step", "[session][negative]") {
+    EditSession session(testPhoto());
+    session.setState(vng, exposed(1.0F), EditOrigin::Paste);
+    REQUIRE(session.history().size() == 2);
+    REQUIRE(session.history().back().origin == EditOrigin::Paste);
+    REQUIRE(session.photo().negative() == vng);
+    REQUIRE(session.photo().state() == exposed(1.0F));
+
+    // Neither part differs: no step.
+    session.setState(vng, exposed(1.0F), EditOrigin::Paste);
+    REQUIRE(session.history().size() == 2);
+
+    // Only the negative differs.
+    session.setState(NegativeSettings{}, exposed(1.0F), EditOrigin::Paste);
+    REQUIRE(session.history().size() == 3);
+    session.undo();
+    REQUIRE(session.photo().negative() == vng);
+}
+
+TEST_CASE("A negative-only change is unsaved until saved, and discard restores it",
+          "[session][negative][save]") {
+    const test::TempDir directory;
+    const std::filesystem::path path = rawIn(directory);
+    EditSession session(openPhoto(path));
+    REQUIRE_FALSE(session.hasUnsavedChanges());
+
+    session.setNegative(vng);
+    REQUIRE(session.hasUnsavedChanges());
+    session.undo();
+    REQUIRE_FALSE(session.hasUnsavedChanges());
+    session.redo();
+    REQUIRE(session.hasUnsavedChanges());
+
+    session.discardChanges();
+    REQUIRE_FALSE(session.hasUnsavedChanges());
+    REQUIRE(session.photo().negative() == NegativeSettings{});
+    REQUIRE(session.history().size() == 1);
+
+    session.setNegative(vng);
+    session.save();
+    REQUIRE_FALSE(session.hasUnsavedChanges());
+    REQUIRE(openPhoto(path).negative() == vng);
+    REQUIRE(session.saved().negative() == vng);
+    // Saving is not an edit: history stays, and undo is a change again.
+    session.undo();
+    REQUIRE(session.hasUnsavedChanges());
+}
+
+TEST_CASE("describeChange between steps names the negative", "[session][negative]") {
+    const HistoryStep before{exposed(0.0F), EditOrigin::Opened, {}, NegativeSettings{}};
+    const HistoryStep after{exposed(0.0F), EditOrigin::Edit, {}, vng};
+    const ChangeDescription change = describeChange(before, after);
+    REQUIRE(change.negative == std::vector<std::string_view>{"demosaic"});
+    REQUIRE(change.keys.empty());
+    REQUIRE(change.local.empty());
+    REQUIRE(describeChange(before, before).negative.empty());
+    // The overload over states never sees a negative.
+    REQUIRE(describeChange(before.state, after.state).negative.empty());
 }

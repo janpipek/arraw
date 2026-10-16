@@ -2,6 +2,8 @@
 // the GUI, the command line and later Python all go through.
 
 #include <Edits.h>
+#include <NegativeSettings.h>
+#include <Photo.h>
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -682,7 +684,8 @@ TEST_CASE("The copyable sections are consistent with the table", "[Edits][Look]"
             std::ranges::any_of(developSettingDescriptors, [&](const FieldDescriptor& d) {
                 return d.section == section && d.scope == SettingScope::Look;
             });
-        CHECK(hasRow);
+        // The negative's demosaic has no row: it is carried by the overload over a photograph.
+        CHECK(hasRow == (section != CopySection::Demosaic));
     }
     for (const CopySection section : defaultCopySections) {
         CHECK(std::ranges::find(copyableSections, section) != copyableSections.end());
@@ -692,6 +695,9 @@ TEST_CASE("The copyable sections are consistent with the table", "[Edits][Look]"
         CHECK(std::ranges::find(copyableSections, geometry) != copyableSections.end());
         CHECK(std::ranges::find(defaultCopySections, geometry) == defaultCopySections.end());
     }
+    // The demosaic is carried by default (ADR 049).
+    CHECK(std::ranges::find(defaultCopySections, CopySection::Demosaic) !=
+          defaultCopySections.end());
 }
 
 TEST_CASE("A look replaces the sections chosen and leaves the others", "[Edits][Look]") {
@@ -734,7 +740,7 @@ TEST_CASE("A look replaces the sections chosen and leaves the others", "[Edits][
     }
     SECTION("no sections change nothing") {
         const AppliedLook applied = withLook(photo, withSettings(target), look, {});
-        CHECK(applied == AppliedLook{withSettings(target), {}});
+        CHECK(applied == AppliedLook{withSettings(target), {}, {}});
     }
 }
 
@@ -986,11 +992,88 @@ TEST_CASE("A look refuses invalid values", "[Edits][Look]") {
     }
 }
 
-TEST_CASE("Only White Balance has nothing to carry from a photograph that is not a RAW",
+TEST_CASE("Only White Balance and Demosaic have nothing to carry from a photograph that is not "
+          "a RAW",
           "[Edits][Look]") {
     for (const CopySection section : copyableSections) {
         CAPTURE(copySectionNames[static_cast<std::size_t>(section)]);
         CHECK(sectionApplies(section, true));
-        CHECK(sectionApplies(section, false) == (section != CopySection::WhiteBalance));
+        CHECK(sectionApplies(section, false) ==
+              (section != CopySection::WhiteBalance && section != CopySection::Demosaic));
     }
+}
+
+namespace {
+
+/// @brief Documents over no file, since carrying a look reads none.
+Photo documentOf(const ImageMetadata& metadata, NegativeSettings negative = {}) {
+    return {"photo", metadata, negative, DevelopState{}};
+}
+
+constexpr NegativeSettings vngNegative{Demosaic::Vng};
+const CopySection demosaicOnly[] = {CopySection::Demosaic};
+
+} // namespace
+
+TEST_CASE("A look of a photograph holds its negative", "[Edits][Look][negative]") {
+    const Look raw = lookOf(documentOf(rawPhoto, vngNegative));
+    CHECK(raw.fromRaw);
+    CHECK(raw.negative == vngNegative);
+    CHECK(lookOf(rawPhoto, {}).negative == NegativeSettings{});
+    CHECK_FALSE(lookOf(documentOf(photo)).fromRaw);
+}
+
+TEST_CASE("A paste with Demosaic carries the negative, one without leaves it",
+          "[Edits][Look][negative]") {
+    const Look look = lookOf(documentOf(rawPhoto, vngNegative));
+    const Photo target = documentOf(rawPhoto, {Demosaic::Dcb});
+
+    const AppliedLook with = withLook(target, look, demosaicOnly);
+    CHECK(with.negative == vngNegative);
+    CHECK(with.state == target.state());
+    CHECK(with.skipped.empty());
+
+    const CopySection exposure[] = {CopySection::Exposure};
+    const AppliedLook without = withLook(target, look, exposure);
+    CHECK(without.negative == target.negative());
+    CHECK(without.skipped.empty());
+
+    CHECK(withLook(target, look, {}).negative == target.negative());
+}
+
+TEST_CASE("A RAW to a photograph that is not a RAW skips Demosaic and says so",
+          "[Edits][Look][negative]") {
+    const Look fromRaw = lookOf(documentOf(rawPhoto, vngNegative));
+    const Photo jpeg = documentOf(photo);
+    const AppliedLook toJpeg = withLook(jpeg, fromRaw, demosaicOnly);
+    CHECK(toJpeg.negative == jpeg.negative());
+    CHECK(toJpeg.skipped == std::vector<CopySection>{CopySection::Demosaic});
+
+    const Look fromJpeg = lookOf(jpeg);
+    const Photo raw = documentOf(rawPhoto, {Demosaic::Dcb});
+    const AppliedLook toRaw = withLook(raw, fromJpeg, demosaicOnly);
+    CHECK(toRaw.negative == raw.negative());
+    CHECK(toRaw.skipped == std::vector<CopySection>{CopySection::Demosaic});
+
+    // Neither side has a mosaic: nothing to carry, nothing to report.
+    const AppliedLook bothJpeg = withLook(jpeg, fromJpeg, demosaicOnly);
+    CHECK(bothJpeg.negative == jpeg.negative());
+    CHECK(bothJpeg.skipped.empty());
+}
+
+TEST_CASE("The overload without a photograph refuses Demosaic", "[Edits][Look][negative]") {
+    CHECK_THROWS_AS(withLook(rawPhoto, DevelopState{}, lookOf(rawPhoto, {}), demosaicOnly),
+                    std::invalid_argument);
+}
+
+TEST_CASE("The overload over a photograph carries the settings as the other does",
+          "[Edits][Look][negative]") {
+    DevelopSettings custom;
+    custom.tone.exposure = 1.5F;
+    const Look look = lookOf(rawPhoto, custom);
+    const Photo target = documentOf(rawPhoto);
+    const CopySection sections[] = {CopySection::Exposure, CopySection::Demosaic};
+    const AppliedLook applied = withLook(target, look, sections);
+    CHECK(applied.state == withLook(rawPhoto, target.state(), look, {sections, 1}).state);
+    CHECK(applied.state.settings.tone.exposure == 1.5F);
 }

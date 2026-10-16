@@ -5,6 +5,7 @@
 
 #include <ExifInfo.h>
 #include <ImageImport.h>
+#include <Photo.h>
 
 #include <QImage>
 #include <QString>
@@ -16,6 +17,7 @@
 #include <filesystem>
 #include <memory>
 #include <mutex>
+#include <utility>
 #include <vector>
 
 using namespace arraw;
@@ -245,4 +247,63 @@ TEST_CASE("Desktop CPU preference overrides automatic export rendering",
     REQUIRE_FALSE(result.onGpu);
     REQUIRE(result.fallbackReason.empty());
     REQUIRE_FALSE(load(path).isNull());
+}
+
+TEST_CASE("A job without a source decodes the file with the job's negative",
+          "[app][export][queue][negative]") {
+    const test::TempDir dir;
+    Collector collector;
+    app::ExportQueue queue(collector.callback(), app::ExportQueue::Device::Cpu);
+    const std::filesystem::path input = test::fixture("bayer-detail-32x24.dng");
+
+    const auto exportOf = [&](const char* name, NegativeSettings negative, bool shared) {
+        app::ExportJob job;
+        job.decode = DecodeOptions{.demosaic = negative.demosaic};
+        job.input = input;
+        if (shared) {
+            // What the window shares when its pixels were decoded with the job's negative.
+            job.source = std::make_shared<const ImageBuffer>(loadImage(
+                input, discardedDiagnostics(), DecodeOptions{.demosaic = negative.demosaic}));
+        }
+        job.options.format = ImageFileFormat::Png;
+        job.path = dir.file(name);
+        return job;
+    };
+    (void)queue.enqueue(exportOf("vng.png", {Demosaic::Vng}, false));
+    (void)queue.enqueue(exportOf("ahd.png", {Demosaic::Ahd}, false));
+    (void)queue.enqueue(exportOf("shared.png", {Demosaic::Ahd}, true));
+    REQUIRE(collector.waitFor(3));
+    for (const auto& result : collector.results()) {
+        REQUIRE(result.error.empty());
+    }
+    const QImage vng = load(dir.file("vng.png"));
+    const QImage ahd = load(dir.file("ahd.png"));
+    REQUIRE_FALSE(vng.isNull());
+    CHECK(vng != ahd);
+    CHECK(load(dir.file("shared.png")) == ahd);
+}
+
+TEST_CASE("A job decodes a file with no mosaic as the options say, whatever the demosaic",
+          "[app][export][queue][negative]") {
+    const test::TempDir dir;
+    Collector collector;
+    app::ExportQueue queue(collector.callback(), app::ExportQueue::Device::Cpu);
+    const std::filesystem::path input = test::fixture("testcard-61x41-srgb8.png");
+
+    for (const auto& [name, demosaic] :
+         {std::pair{"ahd.png", Demosaic::Ahd}, std::pair{"vng.png", Demosaic::Vng}}) {
+        app::ExportJob job;
+        job.decode = decodeOptionsFor(Photo(input, readImageMetadata(input),
+                                            NegativeSettings{.demosaic = demosaic}, DevelopState{}),
+                                      false);
+        job.input = input;
+        job.options.format = ImageFileFormat::Png;
+        job.path = dir.file(name);
+        (void)queue.enqueue(std::move(job));
+    }
+    REQUIRE(collector.waitFor(2));
+    for (const auto& result : collector.results()) {
+        REQUIRE(result.error.empty());
+    }
+    CHECK(load(dir.file("vng.png")) == load(dir.file("ahd.png")));
 }

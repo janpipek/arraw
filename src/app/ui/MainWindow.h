@@ -9,8 +9,10 @@
 #include "PreviewRenderer.h"
 #include "RenderIndicator.h"
 
+#include <DecodeOptions.h>
 #include <EditSession.h>
 #include <ImageBuffer.h>
+#include <NegativeSettings.h>
 #include <Photo.h>
 #include <PhotoMarks.h>
 #include <Progress.h>
@@ -69,7 +71,10 @@ public:
     /// @param debugLog Log the window's diagnostics go to, and the debug
     /// window shows; must outlive the window.
     /// @param parent Parent widget, usually none.
-    explicit MainWindow(DebugLog& debugLog, QWidget* parent = nullptr);
+    /// @param decoder Decodes the photographs; empty for ::arraw::app::PhotoLoader::imageDecoder.
+    /// A test may give one it counts calls of.
+    explicit MainWindow(DebugLog& debugLog, QWidget* parent = nullptr,
+                        PhotoLoader::Decoder decoder = {});
 
     /// @brief Cuts the panel's signals off before the members they use are gone.
     ~MainWindow() override;
@@ -452,12 +457,31 @@ private:
     /// @param photo Photograph to show, already read with its sidecar.
     void showPhoto(Photo photo);
 
-    /// @brief Takes the pixels of the photograph being opened, or reports why there are none.
+    /// @brief Takes the pixels of the photograph being opened, or of a re-decode, or reports why
+    /// there are none.
     ///
     /// Ignores a decode the window no longer waits for. On success enables editing and asks
-    /// for the first render; on failure closes the photograph, as there is nothing to edit.
+    /// for the first render; on failure closes the photograph, as there is nothing to edit. A
+    /// re-decode (syncDecode()) that fails leaves the pixels shown, and says so.
     /// @param result Outcome delivered by the loader.
     void decodeLanded(const DecodedPhoto& result);
+
+    /// @brief Takes the negative settings the user chose in the Negative group, as one step.
+    ///
+    /// Not in the crop mode, whose history it would join.
+    /// @param negative Settings to carry from now on.
+    void chooseNegative(const NegativeSettings& negative);
+
+    /// @brief Starts, keeps or cancels the re-decode that makes the shown pixels match the
+    /// photograph's negative settings (ADR 049).
+    ///
+    /// The one place that decides: called after every change of the negative (a choice, undo,
+    /// redo, a jump in the history, a paste, a discard). Compares the decode options the
+    /// photograph needs (decodeOptionsFor(), canonical) with those the shown pixels were decoded
+    /// with, so a negative that cannot change the pixels never costs a decode. The old pixels
+    /// stay shown, and develop edits keep rendering on them, until the new ones land. A failed
+    /// decode is not retried until the photograph has been back on the shown pixels' options.
+    void syncDecode();
 
     /// @brief Keeps a camera preview read for the crop mode, and shows it if the mode still
     /// waits for its first render.
@@ -490,6 +514,8 @@ private:
         /// the renderer, which may still be using them after the window moved on.
         /// Null while the loader decodes them.
         std::shared_ptr<const ImageBuffer> decoded;
+        /// Options decoded was decoded with, in canonical form (decodeOptionsFor()).
+        DecodeOptions decodedOptions;
         /// Camera's embedded preview, upright; read off the GUI thread on first entering the
         /// crop mode, and null if the file has none.
         std::optional<QImage> cameraPreview;
@@ -600,6 +626,16 @@ private:
 
     /// Identifier of the decode the window waits for; 0 when none.
     std::uint64_t decodeRequest_ = 0;
+
+    /// Identifier of the re-decode for another negative the window waits for; 0 when none.
+    std::uint64_t redecodeRequest_ = 0;
+
+    /// Options of the re-decode in flight; meaningful while redecodeRequest_ is set.
+    DecodeOptions redecodeOptions_;
+
+    /// Options whose re-decode failed, which syncDecode() does not try again until the
+    /// photograph has been back on the shown pixels' options.
+    std::optional<DecodeOptions> failedOptions_;
 
     /// Whether the last render shown came from the GPU, where a noise reduction edit is not
     /// held back (renderDelayFor()).

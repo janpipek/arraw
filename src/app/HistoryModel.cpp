@@ -133,11 +133,12 @@ QString groupDisplayName(SettingGroup group) {
 HistoryModel::HistoryModel(QObject* parent) : QAbstractListModel(parent) {}
 
 void HistoryModel::setHistory(const std::vector<HistoryStep>& history, std::size_t position,
-                              const DevelopState& saved) {
+                              const DevelopState& saved, const NegativeSettings& savedNegative) {
     beginResetModel();
     history_ = history;
     position_ = position;
     saved_ = saved;
+    savedNegative_ = savedNegative;
     endResetModel();
 }
 
@@ -166,7 +167,8 @@ QVariant HistoryModel::data(const QModelIndex& index, int role) const {
     case RedoableRole:
         return step > position_;
     case SavedRole:
-        return saved_ && history_[step].state == *saved_;
+        return saved_ && history_[step].state == *saved_ &&
+               history_[step].negative == savedNegative_;
     default:
         return {};
     }
@@ -210,7 +212,19 @@ QString HistoryModel::textOf(std::size_t index) const {
     if (index == 0) {
         return tr("Edit");
     }
-    const ChangeDescription change = describeChange(history_[index - 1].state, step.state);
+    const ChangeDescription change = describeChange(history_[index - 1], step);
+    if (!change.negative.empty()) {
+        // A step that changed the negative alone is named for it; anything more is a count.
+        const std::size_t masks = change.local.added.size() + change.local.removed.size() +
+                                  change.local.changed.size() + (change.local.reordered ? 1 : 0);
+        const std::size_t total = change.negative.size() + change.keys.size() + masks;
+        if (total == 1) {
+            return QStringLiteral("%1: %2").arg(tr("Demosaic"),
+                                                demosaicDisplayName(step.negative.demosaic));
+        }
+        return QCoreApplication::translate("arraw::app::HistoryModel", "%n changes", nullptr,
+                                           static_cast<int>(total));
+    }
     if (!change.local.empty()) {
         if (change.keys.empty()) {
             return wordLocal(history_[index - 1].state, step.state, change.local);

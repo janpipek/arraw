@@ -25,6 +25,12 @@ def bayer_dng() -> Path:
 
 
 @pytest.fixture(scope="session")
+def bayer_detail_dng() -> Path:
+    """Bayer DNG with a fine pattern, so that two demosaics decode it differently."""
+    return FIXTURES / "bayer-detail-32x24.dng"
+
+
+@pytest.fixture(scope="session")
 def rotated_dng() -> Path:
     return FIXTURES / "linear-32x24-rotated.dng"
 

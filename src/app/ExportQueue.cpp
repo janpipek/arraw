@@ -5,6 +5,7 @@
 #include "TimingTrace.h"
 
 #include <Diagnostics.h>
+#include <ImageImport.h>
 #include <RenderCheckpoint.h>
 
 #include <exception>
@@ -36,9 +37,11 @@ public:
     /// Every device image is gone before this returns, whether it succeeds
     /// or not. A lost device is dropped, and every later call is refused.
     /// @param job What to develop.
+    /// @param source Decoded photograph to develop.
     /// @param failure Receives why the GPU did not develop; left alone on success.
     /// @return The developed photograph, or nothing if the CPU must.
-    [[nodiscard]] std::optional<ImageBuffer> develop(const ExportJob& job, std::string& failure) {
+    [[nodiscard]] std::optional<ImageBuffer>
+    develop(const ExportJob& job, const ImageBuffer& source, std::string& failure) {
         if (!tried_) {
             tried_ = true;
             context_ = createAppGpuContext(settings_, reason_);
@@ -49,7 +52,7 @@ public:
         }
         try {
             const RenderCheckpoint checkpoint =
-                developOnGpu(*context_, *job.source, job.state, Stage::Effects, job.request);
+                developOnGpu(*context_, source, job.state, Stage::Effects, job.request);
             return checkpoint.readBack();
         } catch (const std::exception& error) {
             failure = error.what();
@@ -82,21 +85,26 @@ ExportResult execute(std::uint64_t id, const ExportJob& job, GpuExport* gpu) {
     ExportResult result{.id = id, .path = job.path};
     // Nothing may escape the thread, or the process terminates.
     try {
-        if (!job.source) {
-            throw std::invalid_argument("No photograph to export");
+        CollectedDiagnostics log;
+        std::shared_ptr<const ImageBuffer> source = job.source;
+        if (!source) {
+            if (job.input.empty()) {
+                throw std::invalid_argument("No photograph to export");
+            }
+            // The window's pixels were made with other options: decode as the job says.
+            source = std::make_shared<const ImageBuffer>(loadImage(job.input, log, job.decode));
         }
         std::optional<ImageBuffer> developed;
         if (gpu != nullptr) {
-            developed = gpu->develop(job, result.fallbackReason);
+            developed = gpu->develop(job, *source, result.fallbackReason);
             result.onGpu = developed.has_value();
             if (result.onGpu) {
                 result.fallbackReason.clear();
             }
         }
         if (!developed) {
-            developed = develop(*job.source, job.state, job.request);
+            developed = develop(*source, job.state, job.request);
         }
-        CollectedDiagnostics log;
         exportImage(*developed, job.path, job.options, job.metadata, log);
         for (const auto& entry : log.entries()) {
             result.warnings.push_back(describe(entry));

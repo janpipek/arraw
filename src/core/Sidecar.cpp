@@ -5,6 +5,7 @@
 #include "SettingCodec.h"
 
 #include <BrushStrokes.h>
+#include <NegativeSettings.h>
 
 #include <QByteArray>
 #include <QDomDocument>
@@ -731,8 +732,8 @@ void readUnknownKeys(const std::vector<QDomElement>& descriptions, DiagnosticLog
     for (const QDomElement& description : descriptions) {
         for (const Resolved& property : propertiesOf(description)) {
             const std::string key = property.local.toStdString();
-            if (property.ns == ns && key != "version" && !isLocalAdjustmentProperty(key) &&
-                findDescriptor(key) == nullptr) {
+            if (property.ns == ns && key != "version" && key != "demosaic" &&
+                !isLocalAdjustmentProperty(key) && findDescriptor(key) == nullptr) {
                 log.record({.notice = Notice::SettingUnknown,
                             .severity = Severity::Warning,
                             .subject = subject,
@@ -740,6 +741,36 @@ void readUnknownKeys(const std::vector<QDomElement>& descriptions, DiagnosticLog
             }
         }
     }
+}
+
+/// @brief Reads `arraw:demosaic` as the negative settings of the photograph.
+///
+/// A token that is not one of ::arraw::demosaicTokens, or a value that is not simple text, is
+/// reported and read as the default (AHD): the file keeps it regardless, as a write touches the
+/// key only when the negative differs from what this reading gave (see ::arraw::writeSidecar).
+/// @return The settings, or nothing when the sidecar has no such key.
+std::optional<NegativeSettings> negativeIn(const std::vector<QDomElement>& descriptions,
+                                           DiagnosticLog& log,
+                                           const std::filesystem::path& subject) {
+    const auto found = occurrencesOf(descriptions, arrawProperty("demosaic"));
+    if (found.empty()) {
+        return std::nullopt;
+    }
+    NegativeSettings negative;
+    const auto token = found.back().simple
+                           ? parseDemosaic(found.back().text.trimmed().toStdString())
+                           : std::nullopt;
+    if (token) {
+        negative.demosaic = *token;
+    } else {
+        std::string expected = "one of";
+        for (const std::string_view name : demosaicTokens) {
+            expected += ' ';
+            expected += name;
+        }
+        reportUnreadable("demosaic", std::move(expected), log, subject);
+    }
+    return negative;
 }
 
 /// @brief Reads a whole number, which XMP may spell as a real: `3` and `3.0` alike.
@@ -900,6 +931,7 @@ std::optional<SidecarContents> arraw::readSidecar(const std::filesystem::path& p
     if (recorded) {
         contents.state = std::move(state);
     }
+    contents.negative = negativeIn(descriptions, log, photo);
     readUnknownKeys(descriptions, log, photo);
     contents.marks = marksIn(descriptions, log, photo);
     contents.creatorTool = creatorToolIn(descriptions);
@@ -995,9 +1027,10 @@ void setLocalAdjustments(const std::vector<QDomElement>& descriptions, QDomEleme
 /// @param photo Path of the photograph.
 /// @param state Develop state to write; null to leave the settings of an
 /// existing sidecar alone (a new one then records none).
+/// @param negative Negative settings to write; null to leave the key alone.
 /// @param marks Marks to write.
 void writeSidecarFor(const std::filesystem::path& photo, const DevelopState* state,
-                     const PhotoMarks& marks) {
+                     const NegativeSettings* negative, const PhotoMarks& marks) {
     const std::filesystem::path path = sidecarPath(photo);
     std::error_code error;
     const bool exists = std::filesystem::is_regular_file(path, error);
@@ -1052,6 +1085,21 @@ void writeSidecarFor(const std::filesystem::path& photo, const DevelopState* sta
         }
         setLocalAdjustments(descriptions, home, *state);
     }
+    // The negative follows the rule the marks follow: the key is written only when the settings
+    // differ from what reading the file gives, so a token this arraw does not know survives.
+    // The default is no key at all, as it is what an absent key means.
+    if (negative != nullptr) {
+        const NegativeSettings read =
+            negativeIn(descriptions, discardedDiagnostics(), path).value_or(NegativeSettings{});
+        if (*negative != read) {
+            setProperty(descriptions, home, arrawProperty("demosaic"),
+                        negative->demosaic == NegativeSettings{}.demosaic
+                            ? std::nullopt
+                            : std::optional{QString::fromUtf8(
+                                  tokenOf(negative->demosaic).data(),
+                                  static_cast<qsizetype>(tokenOf(negative->demosaic).size()))});
+        }
+    }
     // Marks are standard XMP that other tools write too, and some of what they
     // write is no mark arraw has (a rating of 9, a label named "Rot"). So a mark
     // is written only when it differs from what reading the file gave: an
@@ -1089,12 +1137,13 @@ void writeSidecarFor(const std::filesystem::path& photo, const DevelopState* sta
 
 void arraw::writeSidecar(const Photo& photo) {
     const DevelopState state = photo.state();
-    writeSidecarFor(photo.path(), &state, photo.marks());
+    const NegativeSettings negative = photo.negative();
+    writeSidecarFor(photo.path(), &state, &negative, photo.marks());
 }
 
 void arraw::writeSidecarMarks(const std::filesystem::path& photo, const PhotoMarks& marks) {
     if (marks.rating < rejectedRating || marks.rating > highestRating) {
         throw std::invalid_argument("rating must be from -1 to 5");
     }
-    writeSidecarFor(photo, nullptr, marks);
+    writeSidecarFor(photo, nullptr, nullptr, marks);
 }

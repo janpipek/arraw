@@ -8,6 +8,7 @@
 #include <ImageExport.h>
 #include <ImageImport.h>
 #include <LocalAdjustmentEdits.h>
+#include <NegativeSettings.h>
 #include <Photo.h>
 #include <PhotoMarks.h>
 #include <Sidecar.h>
@@ -56,18 +57,21 @@ namespace {
 /// @brief Formats a photograph for repr.
 std::string photoRepr(const Photo& photo) {
     return "Photo(path=" + reprValue(photo.path()) + ", metadata=" + reprValue(photo.metadata()) +
-           ", state=" + reprValue(photo.state()) + ", marks=" + reprValue(photo.marks()) + ")";
+           ", negative=" + reprValue(photo.negative()) + ", state=" + reprValue(photo.state()) +
+           ", marks=" + reprValue(photo.marks()) + ")";
 }
 
 /// @brief Derives a photograph with a new state and marks, then applies flat keywords.
 ///
 /// `state` replaces the develop state wholesale, and the flat keywords then edit its settings.
-/// `marks` replaces the marks wholesale. `rating` and `label` then change them,
+/// `marks` replaces the marks wholesale, and `negative` the negative settings. `rating` and
+/// `label` then change the marks,
 /// where `label=None` clears the label; every other keyword is a develop
 /// setting. Those two names are reserved: a develop setting must never be
 /// called `rating` or `label`, or it would be taken for a mark.
 Photo photoWith(const Photo& photo, const std::optional<DevelopState>& newState,
-                const std::optional<PhotoMarks>& newMarks, const nb::kwargs& keywords) {
+                const std::optional<PhotoMarks>& newMarks,
+                const std::optional<NegativeSettings>& newNegative, const nb::kwargs& keywords) {
     DevelopState result = newState.value_or(photo.state());
     PhotoMarks marks = newMarks.value_or(photo.marks());
     const nb::kwargs flat = nb::steal<nb::kwargs>(PyDict_New());
@@ -82,7 +86,8 @@ Photo photoWith(const Photo& photo, const std::optional<DevelopState>& newState,
         }
     }
     applyFlatSettings(result.settings, flat);
-    return {photo.path(), photo.metadata(), result, marks};
+    return {photo.path(), photo.metadata(), newNegative.value_or(photo.negative()),
+            std::move(result), marks};
 }
 
 /// @brief Applies snake_case keywords one after the other by the rules of ::arraw::withValue.
@@ -159,8 +164,7 @@ Photo withMaskAdded(const Photo& photo, Mask shape, std::string name, const nb::
     adjustment.invert = invert;
     adjustment.opacity = convertValue<float>(opacity, "opacity");
     adjustment.deltas = deltasFrom(deltas);
-    return {photo.path(), photo.metadata(),
-            withLocalAdjustmentAdded(photo.state(), std::move(adjustment)), photo.marks()};
+    return photo.with(withLocalAdjustmentAdded(photo.state(), std::move(adjustment)));
 }
 
 /// @brief Changes one adjustment of a photograph by the keywords, in the order given, as a new
@@ -200,7 +204,7 @@ Photo withLocalChanged(const Photo& photo, LocalAdjustmentId id, const nb::kwarg
             throw nb::type_error(("unknown local adjustment keyword '" + name + "'").c_str());
         }
     }
-    return {photo.path(), photo.metadata(), std::move(state), photo.marks()};
+    return photo.with(std::move(state));
 }
 
 /// @brief Reads one side of a requested size: a positive Python int that fits a 32-bit side.
@@ -293,6 +297,12 @@ void bindPhoto(nb::module_& m) {
         .value("BLUE", ColorLabel::Blue)
         .value("PURPLE", ColorLabel::Purple);
 
+    bindFrozen<NegativeSettings>(
+        m, "NegativeSettings",
+        "What shapes the decoded negative, as opposed to what is done with it: a RAW's "
+        "demosaic. Changing it costs a decode; no develop edit can reach it.",
+        field("demosaic", &NegativeSettings::demosaic));
+
     bindFrozen<PhotoMarks>(
         m, "PhotoMarks", "Culling marks of a photograph: rating -1 (rejected) to 5, and a label.",
         field("rating", &PhotoMarks::rating), field("label", &PhotoMarks::label));
@@ -321,8 +331,10 @@ void bindPhoto(nb::module_& m) {
     bindFrozen<SidecarContents>(
         m, "SidecarContents",
         "What an XMP sidecar holds, and which other tools wrote in it. `state` is None when the "
-        "sidecar records no develop settings (marks only, or another tool's).",
+        "sidecar records no develop settings (marks only, or another tool's), and `negative` when "
+        "it records no negative settings.",
         field("state", &SidecarContents::state), field("marks", &SidecarContents::marks),
+        field("negative", &SidecarContents::negative),
         field("creator_tool", &SidecarContents::creatorTool),
         field("others", &SidecarContents::others));
 
@@ -398,11 +410,14 @@ void bindPhoto(nb::module_& m) {
         .def_prop_ro("path", &Photo::path)
         .def_prop_ro("metadata", &Photo::metadata)
         .def_prop_ro("state", &Photo::state)
+        .def_prop_ro("negative", &Photo::negative,
+                     "How the negative is decoded (NegativeSettings); no develop edit changes it.")
         .def_prop_ro("marks", &Photo::marks)
         .def("with_", &photoWith, "state"_a = nb::none(), nb::kw_only(), "marks"_a = nb::none(),
-             "kwargs"_a,
-             "Return a photograph with `state` (and `marks`) replacing the current ones "
-             "wholesale, then flat snake_case keywords applied, e.g. exposure=0.7, which edit the "
+             "negative"_a = nb::none(), "kwargs"_a,
+             "Return a photograph with `state` (and `marks`, and `negative`) replacing the "
+             "current ones wholesale, then flat snake_case keywords applied, e.g. exposure=0.7, "
+             "which edit the "
              "settings of the state. `rating` and "
              "`label` change the marks instead (label=None clears it). Applies no rules: each "
              "keyword is assigned as it is, so a turn leaves the crop where it was. `edited` "
@@ -410,8 +425,7 @@ void bindPhoto(nb::module_& m) {
         .def(
             "edited",
             [](const Photo& photo, const nb::kwargs& keywords) {
-                return Photo(photo.path(), photo.metadata(),
-                             editedState(photo.metadata(), photo.state(), keywords), photo.marks());
+                return photo.with(editedState(photo.metadata(), photo.state(), keywords));
             },
             "kwargs"_a,
             "Return a photograph with flat snake_case keywords set, e.g. exposure=0.7, by the "
@@ -491,8 +505,7 @@ void bindPhoto(nb::module_& m) {
         .def(
             "with_brush_stroke",
             [](const Photo& photo, LocalAdjustmentId id, const Stroke& stroke) {
-                return Photo(photo.path(), photo.metadata(),
-                             withStrokeAppended(photo.state(), id, stroke), photo.marks());
+                return photo.with(withStrokeAppended(photo.state(), id, stroke));
             },
             "id"_a, "stroke"_a,
             "Return a photograph with the stroke, clamped, appended to the brush mask of that "
@@ -509,8 +522,7 @@ void bindPhoto(nb::module_& m) {
         .def(
             "without_local_adjustment",
             [](const Photo& photo, LocalAdjustmentId id) {
-                return Photo(photo.path(), photo.metadata(),
-                             withLocalAdjustmentRemoved(photo.state(), id), photo.marks());
+                return photo.with(withLocalAdjustmentRemoved(photo.state(), id));
             },
             "id"_a,
             "Return a photograph without the adjustment of that id; its id is not reused. "
@@ -520,7 +532,10 @@ void bindPhoto(nb::module_& m) {
             [](const Photo& photo) {
                 // What the file declares was reported when the photograph was
                 // opened; decoding it again says nothing new (as the CLI does).
-                return withoutGil([&] { return loadImage(photo.path()); });
+                return withoutGil([&] {
+                    return loadImage(photo.path(), discardedDiagnostics(),
+                                     decodeOptionsFor(photo, false));
+                });
             },
             "Decode the photograph's file into a buffer.")
         .def(nb::self == nb::self)
@@ -601,7 +616,8 @@ void bindPhoto(nb::module_& m) {
             const RenderRequest request = requestFrom(size, filter, allowUpscale);
             // Reported once, by open(), as in Photo.load.
             return withoutGil([&] {
-                const ImageBuffer source = loadImage(photo.path());
+                const ImageBuffer source =
+                    loadImage(photo.path(), discardedDiagnostics(), decodeOptionsFor(photo, false));
                 return develop(source, state.value_or(photo.state()), request);
             });
         },
@@ -644,7 +660,8 @@ void bindPhoto(nb::module_& m) {
            const nb::object& size, const nb::object& filter, bool allowUpscale) {
             const RenderRequest request = requestFrom(size, filter, allowUpscale);
             return withoutGil([&] {
-                const ImageBuffer source = loadImage(photo.path());
+                const ImageBuffer source =
+                    loadImage(photo.path(), discardedDiagnostics(), decodeOptionsFor(photo, false));
                 return sample(source, state.value_or(photo.state()), tap, request);
             });
         },
@@ -719,7 +736,8 @@ void bindPhoto(nb::module_& m) {
             const RenderRequest request =
                 requestFrom(size, nb::cast(curveHistogramRequest.filter), allowUpscale);
             return withoutGil([&] {
-                const ImageBuffer source = loadImage(photo.path());
+                const ImageBuffer source =
+                    loadImage(photo.path(), discardedDiagnostics(), decodeOptionsFor(photo, false));
                 return curveHistogram(source, state.value_or(photo.state()), request);
             });
         },

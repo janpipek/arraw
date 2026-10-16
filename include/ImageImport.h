@@ -1,5 +1,6 @@
 #pragma once
 
+#include <DecodeOptions.h>
 #include <Diagnostics.h>
 #include <ImageBuffer.h>
 #include <Progress.h>
@@ -11,6 +12,13 @@
 #include <string_view>
 
 namespace arraw {
+
+/// @brief Layout of the colour filter array a file's sensor records.
+enum class Mosaic {
+    None,   ///< Not mosaiced: an encoded picture, a linear DNG, a monochrome sensor.
+    Bayer,  ///< A Bayer-type array, including the four-colour variants.
+    XTrans, ///< Fujifilm's X-Trans array.
+};
 
 /// @brief What a photograph declares about itself, read without decoding it.
 ///
@@ -31,6 +39,12 @@ struct ImageMetadata {
 
     /// @brief Camera orientation, retained without rearranging decoded pixels.
     ImageOrientation orientation = ImageOrientation::Normal;
+
+    /// @brief Colour filter array of the sensor, which decides whether a demosaic applies.
+    ///
+    /// ::arraw::Mosaic::None for anything that is not a RAW, and for a RAW whose pixels
+    /// arrive already in colour.
+    Mosaic mosaic = Mosaic::None;
 
     friend bool operator==(const ImageMetadata&, const ImageMetadata&) = default;
 };
@@ -67,27 +81,6 @@ struct ImageMetadata {
 /// either decoder recognises.
 [[nodiscard]] ImageMetadata readImageMetadata(const std::filesystem::path& path,
                                               DiagnosticLog& log = discardedDiagnostics());
-
-/// @brief How a decode trades completeness for speed.
-struct DecodeOptions {
-    /// @brief Whether to decode a RAW at half its width and height.
-    ///
-    /// The RAW decoder then combines each 2x2 block of the sensor into one
-    /// pixel instead of demosaicing, which costs a fraction of a full decode
-    /// and suits a render that is small anyway (ADR 031). The result is an
-    /// ordinary decoded buffer: same encoding, orientation and applied white
-    /// balance, with each side `size / 2` (rounded down, as the decoder does),
-    /// whatever the file holds (one already demosaiced, a linear DNG, is
-    /// halved afterwards, without the speed-up), so ::arraw::develop takes it
-    /// unchanged. Its pixel scale is 2 (::arraw::ImageBuffer::pixelScale), so
-    /// noise reduction shrinks its reach to match. Its size is then not the one
-    /// ::arraw::readImageMetadata declares, so plan against the buffer
-    /// (`planFor(buffer, ...)`), not the metadata. Ignored for anything that is
-    /// not a RAW: those decode in full, and ::arraw::halved is there to reduce them.
-    bool halfSize = false;
-
-    friend bool operator==(const DecodeOptions&, const DecodeOptions&) = default;
-};
 
 /// @brief Decodes an image file into a buffer in the working encoding.
 ///

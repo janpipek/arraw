@@ -2,6 +2,7 @@
 
 #include <DevelopState.h>
 #include <LocalAdjustments.h>
+#include <NegativeSettings.h>
 #include <Photo.h>
 #include <SettingDescriptors.h>
 
@@ -39,6 +40,12 @@ struct HistoryStep {
     ///
     /// A name to show, not wording: the sentence is the front end's.
     std::string detail;
+
+    /// @brief Negative settings after the step (ADR 049).
+    ///
+    /// Only ::arraw::EditSession::setNegative and the two-part ::arraw::EditSession::setState
+    /// change it from one step to the next.
+    NegativeSettings negative;
 
     friend bool operator==(const HistoryStep&, const HistoryStep&) = default;
 };
@@ -103,6 +110,10 @@ struct ChangeDescription {
     /// @brief Group every key belongs to; empty when there are no keys or they span groups.
     std::optional<SettingGroup> group;
 
+    /// @brief Keys of the negative settings that differ, in the order `"demosaic"`, ...; empty
+    /// when the two negatives are equal. Filled only by the overload over history steps.
+    std::vector<std::string_view> negative;
+
     /// @brief How the local adjustments differ; empty when they do not. The counter alone is not
     /// described.
     LocalChange local;
@@ -123,6 +134,13 @@ struct ChangeDescription {
 [[nodiscard]] ChangeDescription describeChange(const DevelopState& before,
                                                const DevelopState& after);
 
+/// @brief Lists what two history steps differ in: the develop state and the negative.
+///
+/// As the overload over states, plus ::arraw::ChangeDescription::negative (ADR 049).
+/// @param before Step a change started from.
+/// @param after Step it left.
+[[nodiscard]] ChangeDescription describeChange(const HistoryStep& before, const HistoryStep& after);
+
 /// @brief One photograph being edited: the document as it stands now, and how it got there.
 ///
 /// A session exists only while a photograph is open, so there is no empty
@@ -134,7 +152,9 @@ struct ChangeDescription {
 /// that edits produce. An edit is opened with begin(), changed any number of
 /// times with update() and closed with commit() or cancel(), so that a slider
 /// drag or a brush stroke is one history step rather than a hundred (ADR 022).
-/// History holds develop states only: marks are not undone.
+/// History holds develop states and negative settings: marks are not undone. The negative is
+/// chosen, never dragged, so begin(), update() and commit() leave it as it is, and
+/// setNegative() makes its own step (ADR 049).
 ///
 /// History is a list of steps and a position in it, the opening state first.
 /// Undo and redo move the position, and so does goTo(): navigating is not an
@@ -152,7 +172,7 @@ public:
     /// taken to be what its sidecar holds (or defaults, when there is none).
     explicit EditSession(Photo photo)
         : photo_(photo), saved_(std::move(photo)),
-          history_{{saved_.state(), EditOrigin::Opened, {}}} {}
+          history_{{saved_.state(), EditOrigin::Opened, {}, saved_.negative()}} {}
 
     /// @brief Current state of the document, including an edit in progress.
     ///
@@ -201,6 +221,30 @@ public:
     void setState(DevelopState state, EditOrigin origin = EditOrigin::Edit,
                   std::string detail = {});
 
+    /// @brief Replaces the negative settings as one history step.
+    ///
+    /// An open edit is committed first. Setting the negative it already has leaves no step. A
+    /// new step drops every step after the position. A caller that decodes (the window) compares
+    /// photo().negative() with the one its pixels were decoded with after this, as after undo.
+    /// @param negative Negative settings the document carries from now on.
+    /// @param origin Kind of change the step is.
+    /// @param detail What the origin applies to, such as a preset's name.
+    /// @throws std::invalid_argument if @p negative is not valid; nothing changes.
+    void setNegative(NegativeSettings negative, EditOrigin origin = EditOrigin::Edit,
+                     std::string detail = {});
+
+    /// @brief Replaces the negative settings and the develop state as one history step.
+    ///
+    /// For a paste or a preset, which carry both. An open edit is committed first; when neither
+    /// part differs there is no step.
+    /// @param negative Negative settings the document carries from now on.
+    /// @param state State the document carries from now on.
+    /// @param origin Kind of change the step is.
+    /// @param detail What the origin applies to, such as a preset's name.
+    /// @throws std::invalid_argument if either is not valid; nothing changes.
+    void setState(NegativeSettings negative, DevelopState state,
+                  EditOrigin origin = EditOrigin::Edit, std::string detail = {});
+
     /// @brief Steps taken so far, the opening state first.
     ///
     /// Steps after position() can be redone. While an edit is open they do not
@@ -248,11 +292,12 @@ public:
         return saved_;
     }
 
-    /// @brief Whether the develop state, an open edit included, differs from the saved one.
+    /// @brief Whether the develop state or the negative, an open edit included, differs from
+    /// the saved one.
     ///
     /// Marks never count: they are written as they change (see setMarks()).
     [[nodiscard]] bool hasUnsavedChanges() const {
-        return photo_.state() != saved_.state();
+        return photo_.state() != saved_.state() || photo_.negative() != saved_.negative();
     }
 
     /// @brief Writes the photograph to its sidecar and makes that the saved state.
@@ -272,7 +317,8 @@ public:
     /// Either way nothing changes.
     void setMarks(PhotoMarks marks);
 
-    /// @brief Returns the develop state to the saved one, dropping history and any open edit.
+    /// @brief Returns the develop state and the negative to the saved ones, dropping history and
+    /// any open edit.
     ///
     /// History starts again from the saved state, as an Opened step.
     void discardChanges();

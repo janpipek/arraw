@@ -7,12 +7,13 @@ Photo\.__suffix__:
         state: DevelopState | None = None,
         *,
         marks: PhotoMarks | None = None,
+        negative: NegativeSettings | None = None,
         rating: int = ...,
         label: ColorLabel | None = ...,
         **kwargs: Any,
     ) -> Photo:
         """
-        Return a photograph with `state` (and `marks`) replacing the current ones wholesale, then flat snake_case keywords applied, e.g. exposure=0.7, which edit the settings of the state. `rating` and `label` change the marks instead (label=None clears it). Applies no rules: each keyword is assigned as it is, so a turn leaves the crop where it was. `edited` applies the rules of the editing frontends.
+        Return a photograph with `state` (and `marks`, and `negative`) replacing the current ones wholesale, then flat snake_case keywords applied, e.g. exposure=0.7, which edit the settings of the state. `rating` and `label` change the marks instead (label=None clears it). Applies no rules: each keyword is assigned as it is, so a turn leaves the crop where it was. `edited` applies the rules of the editing frontends.
         """
 
 DevelopSettings\.__suffix__:

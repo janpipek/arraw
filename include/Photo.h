@@ -3,6 +3,7 @@
 #include <DevelopState.h>
 #include <Diagnostics.h>
 #include <ImageImport.h>
+#include <NegativeSettings.h>
 #include <PhotoMarks.h>
 
 #include <filesystem>
@@ -33,11 +34,23 @@ public:
     /// @param metadata What that file declares about itself.
     /// @param state How it is developed.
     /// @param marks How it is culled.
+    /// @details The negative settings are ::arraw::defaultNegativeFor @p metadata.
     /// @throws std::invalid_argument if @p state is not valid (see ::arraw::validate),
     /// or if the rating of @p marks is outside -1 to 5, so an invalid
     /// photograph cannot exist.
     Photo(std::filesystem::path path, ImageMetadata metadata, DevelopState state,
           PhotoMarks marks = {});
+
+    /// @brief Builds a document from parts that already agree, negative settings included.
+    /// @param path File the photograph was read from.
+    /// @param metadata What that file declares about itself.
+    /// @param negative How its negative is decoded.
+    /// @param state How it is developed.
+    /// @param marks How it is culled.
+    /// @throws std::invalid_argument as the constructor without @p negative does, and if
+    /// @p negative is not valid (see ::arraw::validate).
+    Photo(std::filesystem::path path, ImageMetadata metadata, NegativeSettings negative,
+          DevelopState state, PhotoMarks marks = {});
 
     /// @brief Builds a document nobody has edited: the state its kind starts from, no marks.
     ///
@@ -57,6 +70,11 @@ public:
         return metadata_;
     }
 
+    /// @brief How the photograph's negative is decoded.
+    [[nodiscard]] const NegativeSettings& negative() const noexcept {
+        return negative_;
+    }
+
     /// @brief How the photograph is developed.
     [[nodiscard]] const DevelopState& state() const noexcept {
         return state_;
@@ -72,7 +90,15 @@ public:
     /// @return A document over the same file with the same marks, leaving this one alone.
     /// @throws std::invalid_argument as the constructor does.
     [[nodiscard]] Photo with(DevelopState state) const {
-        return {path_, metadata_, std::move(state), marks_};
+        return {path_, metadata_, negative_, std::move(state), marks_};
+    }
+
+    /// @brief Makes the same photograph, decoded differently.
+    /// @param negative Negative settings the new document carries.
+    /// @return A document over the same file with the same state and marks, leaving this one alone.
+    /// @throws std::invalid_argument as the constructor does.
+    [[nodiscard]] Photo with(NegativeSettings negative) const {
+        return {path_, metadata_, negative, state_, marks_};
     }
 
     /// @brief Makes the same photograph, culled differently.
@@ -80,7 +106,7 @@ public:
     /// @return A document over the same file with the same state, leaving this one alone.
     /// @throws std::invalid_argument as the constructor does.
     [[nodiscard]] Photo with(PhotoMarks marks) const {
-        return {path_, metadata_, state_, marks};
+        return {path_, metadata_, negative_, state_, marks};
     }
 
     friend bool operator==(const Photo&, const Photo&) = default;
@@ -88,9 +114,21 @@ public:
 private:
     std::filesystem::path path_;
     ImageMetadata metadata_;
+    NegativeSettings negative_;
     DevelopState state_;
     PhotoMarks marks_;
 };
+
+/// @brief Gives the options a photograph is decoded with.
+///
+/// The one place a document becomes decode options (ADR 049): it reads the photograph's
+/// negative settings and what its file declares, and never its develop state, so no develop
+/// edit can change a decode. Every caller that holds a photograph and decodes it uses this.
+/// @param photo Document to decode.
+/// @param halfSize Whether the decode is the reduced one (::arraw::DecodeOptions::halfSize).
+/// @return The options in canonical form (::arraw::canonical), so that two documents which
+/// decode to the same pixels give equal options.
+[[nodiscard]] DecodeOptions decodeOptionsFor(const Photo& photo, bool halfSize);
 
 /// @brief Opens a photograph as a document, reading no pixels.
 ///

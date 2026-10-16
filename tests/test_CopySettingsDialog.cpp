@@ -72,12 +72,32 @@ TEST_CASE("From a photograph that is not a RAW, White Balance is unavailable but
 
     const std::vector<CopySection> sections = dialog.sections();
     CHECK(std::ranges::find(sections, CopySection::WhiteBalance) == sections.end());
-    CHECK(sections.size() == copyableSections.size() - 1);
+    CHECK(sections.size() == copyableSections.size() - 2);
     const std::vector<CopySection> remembered = dialog.remembered();
     CHECK(std::ranges::find(remembered, CopySection::WhiteBalance) != remembered.end());
 
     dialog.findChild<QPushButton*>("checkNone")->click();
     CHECK_FALSE(dialog.findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok)->isEnabled());
     // Unchecking what can be seen leaves the unavailable choice as it was.
-    CHECK(dialog.remembered() == std::vector<CopySection>{CopySection::WhiteBalance});
+    // The demosaic is unavailable too, and given by default.
+    CHECK(dialog.remembered() ==
+          std::vector<CopySection>{CopySection::WhiteBalance, CopySection::Demosaic});
+}
+
+TEST_CASE("The demosaic row is checked by default, and unavailable from a non-RAW",
+          "[app][dialog][copy][negative]") {
+    CopySettingsDialog raw(defaultCopySections, true);
+    auto* box = raw.findChild<QCheckBox*>("demosaic");
+    REQUIRE(box != nullptr);
+    CHECK(box->isEnabled());
+    CHECK(box->isChecked());
+    CHECK(box->text() == "Demosaic");
+
+    CopySettingsDialog jpeg(defaultCopySections, false);
+    auto* unavailable = jpeg.findChild<QCheckBox*>("demosaic");
+    CHECK_FALSE(unavailable->isEnabled());
+    CHECK_FALSE(unavailable->isChecked());
+    CHECK_FALSE(unavailable->toolTip().isEmpty());
+    const std::vector<CopySection> remembered = jpeg.remembered();
+    CHECK(std::ranges::find(remembered, CopySection::Demosaic) != remembered.end());
 }

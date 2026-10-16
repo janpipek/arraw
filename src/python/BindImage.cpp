@@ -4,6 +4,7 @@
 #include <ImageBuffer.h>
 #include <ImageImport.h>
 #include <ImageOrientation.h>
+#include <NegativeSettings.h>
 
 #include <nanobind/ndarray.h>
 
@@ -55,6 +56,18 @@ nb::ndarray<nb::numpy> pixelsOf(nb::handle self) {
 } // namespace
 
 void bindImage(nb::module_& m) {
+    nb::enum_<Demosaic>(m, "Demosaic",
+                        "Algorithm that turns a RAW's sensor mosaic into colour; str() is the "
+                        "token the sidecar and the command line use.")
+        .value("LINEAR", Demosaic::Linear)
+        .value("VNG", Demosaic::Vng)
+        .value("PPG", Demosaic::Ppg)
+        .value("AHD", Demosaic::Ahd)
+        .value("DCB", Demosaic::Dcb)
+        .value("DHT", Demosaic::Dht)
+        .value("AAHD", Demosaic::Aahd)
+        .def("__str__", [](Demosaic demosaic) { return std::string(tokenOf(demosaic)); });
+
     nb::class_<ImageSize>(m, "ImageSize", "Pixel dimensions of an image.")
         .def(nb::init<std::uint32_t, std::uint32_t>(), "width"_a, "height"_a)
         .def_ro("width", &ImageSize::width)
@@ -145,15 +158,17 @@ void bindImage(nb::module_& m) {
 
     m.def(
         "load",
-        [](const std::filesystem::path& path, bool halfSize) {
+        [](const std::filesystem::path& path, bool halfSize, Demosaic demosaic) {
             PythonLog log;
-            return withoutGil([&] { return loadImage(path, log, {.halfSize = halfSize}); });
+            return withoutGil(
+                [&] { return loadImage(path, log, {.halfSize = halfSize, .demosaic = demosaic}); });
         },
-        "path"_a, "half_size"_a = false,
+        "path"_a, "half_size"_a = false, "demosaic"_a = Demosaic::Ahd,
         "Decode an image file into a buffer. With half_size a RAW is decoded at half its width "
         "and height, without demosaicing, its pixel_scale is 2, and the buffer is that much "
         "smaller than "
-        "read_metadata says; other files ignore it.");
+        "read_metadata says; other files ignore it. demosaic is the algorithm of a full-size "
+        "decode of a mosaiced RAW; a half-size decode and other files ignore it.");
 
     m.def(
         "read_embedded_preview",

@@ -59,6 +59,9 @@ void requireStopAfter(Stage from, Stage stopAfter) {
 
 std::optional<std::string_view> staleReason(const CheckpointState& from, const ProcessingPlan& plan,
                                             ImageSize sourceSize) {
+    if (from.plan.decode != plan.decode) {
+        return "The checkpoint was made from a source decoded differently";
+    }
     if (!prefixMatches(from.plan, plan, from.boundary)) {
         return "The checkpoint was not made by this render's plan";
     }

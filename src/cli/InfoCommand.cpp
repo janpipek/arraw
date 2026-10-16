@@ -16,6 +16,7 @@
 #include <ImageOrientation.h>
 #include <LocalAdjustmentEdits.h>
 #include <MarksFilter.h>
+#include <NegativeSettings.h>
 #include <Photo.h>
 #include <SettingDescriptors.h>
 #include <SettingsJson.h>
@@ -27,6 +28,8 @@
 #include <QString>
 #include <QStringList>
 
+#include <algorithm>
+#include <cctype>
 #include <charconv>
 #include <cmath>
 #include <cstddef>
@@ -527,6 +530,12 @@ void writeText(std::ostream& out, const FileReport& report, bool all) {
                 << (other.properties == 1 ? " property)\n" : " properties)\n");
         }
     }
+    if (isRaw(metadata) && (all || photo.negative() != defaultNegativeFor(metadata))) {
+        std::string name(tokenOf(photo.negative().demosaic));
+        std::ranges::transform(name, name.begin(),
+                               [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+        out << "  Demosaic: " << (name == "LINEAR" ? "Linear" : name) << '\n';
+    }
     const auto listed =
         listedSettings(withoutUnusedSettings(photo.state().settings, isRaw(metadata)), all);
     if (listed.empty()) {
@@ -580,7 +589,8 @@ std::string jsonOfReport(const FileReport& report, bool all) {
         text += jsonString(descriptor->key) + ": " + encodedToJson(value);
         first = false;
     }
-    return text + "}, \"localAdjustments\": " + localAdjustmentsToJson(photo.state()) + "}";
+    return text + "}, \"negative\": " + negativeToJson(photo.negative()) +
+           ", \"localAdjustments\": " + localAdjustmentsToJson(photo.state()) + "}";
 }
 
 /// @brief Finds the sidecar beside a photograph, if it is a regular file.
@@ -630,7 +640,9 @@ FileReport open(const InfoRequest& request, const std::filesystem::path& input,
         }
         DevelopState state =
             contents->state ? *contents->state : defaultStateFor(described.encoding);
-        return Photo(input, std::move(described), std::move(state), contents->marks);
+        const NegativeSettings negative =
+            contents->negative.value_or(defaultNegativeFor(described));
+        return Photo(input, std::move(described), negative, std::move(state), contents->marks);
     };
     FileReport report{photoOf(std::move(metadata)), std::nullopt, sidecar, true,
                       readExif(input, exifLog),     std::nullopt, {}};

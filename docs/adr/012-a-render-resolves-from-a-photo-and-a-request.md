@@ -107,3 +107,17 @@ render on the device that holds them.
   rasters and long spot lists live in it, a snapshot shares them rather than
   copying, and the plan compares them by revision, as ADR 011 already says for
   large payloads.
+
+## Amendment, 2026-10-16: the decode block exists, as a plan header
+
+[ADR 049](049-settings-of-the-negative-sit-beside-the-develop-state.md) builds
+the smallest form of the decode block: `ProcessingPlan::decode`, the
+`DecodeOptions` the source was decoded with, in canonical form (the demosaic is
+reset for a non-RAW, a half-size decode or a sensor with no mosaic, and
+`halfSize` is reset for a non-RAW, since the decode never read them). It is a
+header of the plan, not a `Stage`, because the caller still supplies the
+source. `ImageBuffer::decodedWith()` records how a buffer was decoded, and
+`planFor(buffer, ...)` copies it. `prefixMatches` compares the block before any
+stage, and `staleReason` reports "decoded differently". The file stamp and the
+highlight and white-balance parameters are not in the block yet, so ADR 005's
+migration has one step fewer to go: the demosaic.

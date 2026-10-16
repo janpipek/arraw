@@ -34,6 +34,7 @@
 #include <stdexcept>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 #include <variant>
 
 namespace arraw::app {
@@ -606,6 +607,44 @@ QWidget* DevelopPanel::buildWhiteBalanceGroup() {
     return section;
 }
 
+QWidget* DevelopPanel::buildNegativeGroup() {
+    auto* section = new CollapsibleSection("negative", tr("Negative"), this);
+    QWidget* group = section->body();
+    auto* groupLayout = new QVBoxLayout(group);
+
+    auto* row = new QHBoxLayout;
+    row->addWidget(new QLabel(tr("Demosaic"), group));
+    demosaicCombo_ = new QComboBox(group);
+    demosaicCombo_->setObjectName("demosaicCombo");
+    for (std::size_t i = 0; i < demosaicCount; ++i) {
+        const auto demosaic = static_cast<Demosaic>(i);
+        demosaicCombo_->addItem(demosaicDisplayName(demosaic), static_cast<int>(demosaic));
+    }
+    row->addWidget(demosaicCombo_, 1);
+    groupLayout->addLayout(row);
+
+    negativeNote_ = new QLabel(group);
+    negativeNote_->setObjectName("negativeNote");
+    negativeNote_->setWordWrap(true);
+    negativeNote_->hide();
+    groupLayout->addWidget(negativeNote_);
+
+    connect(demosaicCombo_, &QComboBox::activated, this, [this](int index) {
+        NegativeSettings next = shownNegative_;
+        next.demosaic = static_cast<Demosaic>(demosaicCombo_->itemData(index).toInt());
+        if (next == shownNegative_) {
+            return;
+        }
+        finishPendingEdit();
+        emit negativeChosen(next);
+        // The window shows the settings again once it has taken the choice.
+        const QSignalBlocker blocker(demosaicCombo_);
+        demosaicCombo_->setCurrentIndex(
+            demosaicCombo_->findData(static_cast<int>(shownNegative_.demosaic)));
+    });
+    return section;
+}
+
 DevelopPanel::DevelopPanel(QWidget* parent) : QWidget(parent) {
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -613,6 +652,8 @@ DevelopPanel::DevelopPanel(QWidget* parent) : QWidget(parent) {
         layout->addWidget(group);
         nonGeometryGroups_.push_back(group);
     };
+    // First: it decides the pixels everything below works on.
+    addGroup(buildNegativeGroup());
     addGroup(buildTreatmentRow());
     // Geometry is the first thing a photograph is given, as in Lightroom, below
     // the Treatment row, which describes the whole photograph rather than a step.
@@ -681,6 +722,24 @@ void DevelopPanel::showState(const DevelopState& state, const PanelContext& cont
     colorGroup_->setVisible(visible.color);
     hslGroup_->setVisible(visible.hsl);
     blackAndWhiteGroup_->setVisible(visible.blackAndWhiteMix);
+
+    {
+        shownNegative_ = context.negative;
+        const QSignalBlocker blocker(demosaicCombo_);
+        demosaicCombo_->setCurrentIndex(
+            demosaicCombo_->findData(static_cast<int>(context.negative.demosaic)));
+        const bool mosaiced = context.raw && context.photo.mosaic != Mosaic::None;
+        demosaicCombo_->setEnabled(mosaiced);
+        QString note;
+        if (!context.raw) {
+            note = tr("Demosaic applies only to a RAW file.");
+        } else if (!mosaiced) {
+            note = tr("This file's pixels arrive in colour, so there is nothing to demosaic.");
+        }
+        negativeNote_->setText(note);
+        negativeNote_->setVisible(!note.isEmpty());
+        demosaicCombo_->setToolTip(note);
+    }
 
     curveEditor_->setCurves(shown_.settings.toneCurve);
     masksPanel_->showState(shown_);

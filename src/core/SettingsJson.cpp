@@ -483,6 +483,44 @@ DevelopState arraw::applyStateJson(std::string_view json, DevelopState base, Dia
     return base;
 }
 
+std::string arraw::negativeToJson(const NegativeSettings& negative) {
+    validate(negative);
+    return "{\"demosaic\": " + jsonString(tokenOf(negative.demosaic)) + "}";
+}
+
+NegativeSettings arraw::applyNegativeJson(std::string_view json, NegativeSettings base,
+                                          DiagnosticLog& log) {
+    QJsonParseError error;
+    const QJsonDocument document = QJsonDocument::fromJson(
+        QByteArray::fromRawData(json.data(), static_cast<qsizetype>(json.size())), &error);
+    if (error.error != QJsonParseError::NoError || !document.isObject()) {
+        throw std::invalid_argument("negative settings are not a JSON object");
+    }
+    const QJsonObject root = document.object();
+    for (auto it = root.begin(); it != root.end(); ++it) {
+        const std::string key = it.key().toStdString();
+        if (key != "demosaic") {
+            log.record(
+                {.notice = Notice::SettingUnknown, .severity = Severity::Warning, .values = {key}});
+            continue;
+        }
+        const auto token = it.value().isString()
+                               ? parseDemosaic(it.value().toString().toStdString())
+                               : std::nullopt;
+        if (token) {
+            base.demosaic = *token;
+        } else {
+            std::string expected = "one of";
+            for (const std::string_view name : demosaicTokens) {
+                expected += ' ';
+                expected += name;
+            }
+            reportMalformedList("demosaic", std::move(expected), log);
+        }
+    }
+    return base;
+}
+
 DevelopSettings arraw::applySettingsJson(std::string_view json, DevelopSettings base,
                                          DiagnosticLog& log) {
     QJsonParseError error;

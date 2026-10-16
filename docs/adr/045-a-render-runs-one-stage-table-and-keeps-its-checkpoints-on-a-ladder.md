@@ -117,3 +117,13 @@ driver with no ladder.
   keeps Python and the services layer open.
 - **Keeping the policy in the app.** It chained four or five public calls per
   render, each planning again, and every second client would have copied it.
+
+## Amendment, 2026-10-16: a rung's source is compared by value too
+
+[ADR 049](049-settings-of-the-negative-sit-beside-the-develop-state.md): a rung
+was stale only when the ladder's buffer binding differed (the address of the
+source). The plan now has a decode block (ADR 012, amended), compared before any
+stage, so a rung from another negative is stale by value even when the same
+buffer is reused. The app still clears every ladder when it installs a new
+source. A negative edit therefore clears every ladder, and a develop edit never
+reaches the block. The default render digests are unchanged.

@@ -9,6 +9,7 @@
 #include <EditSession.h>
 #include <GeometrySettings.h>
 #include <ImageImport.h>
+#include <NegativeSettings.h>
 #include <WhiteBalance.h>
 
 #include <QWidget>
@@ -19,6 +20,7 @@
 class QAbstractButton;
 class QButtonGroup;
 class QComboBox;
+class QLabel;
 class QPushButton;
 class QStackedWidget;
 
@@ -41,6 +43,9 @@ struct PanelContext {
 
     /// @brief What the photograph declares about itself, for the edit rules of ::arraw::withValue.
     ImageMetadata photo{};
+
+    /// @brief Negative settings the Negative group shows (ADR 049).
+    NegativeSettings negative{};
 };
 
 /// @brief Panel of the develop controls, showing a state and reporting edits to it.
@@ -148,6 +153,12 @@ signals:
     /// @brief Announces that the edit is over.
     void editFinished();
 
+    /// @brief Announces negative settings the user chose in the Negative group.
+    ///
+    /// A choice, never a drag: the window makes it one history step and re-decodes.
+    /// @param negative Settings with the chosen value, other values as last shown.
+    void negativeChosen(const arraw::NegativeSettings& negative);
+
     /// @brief Announces that the Pick button was checked or unchecked by the user.
     /// @param picking Whether the picker is now armed.
     void pickToggled(bool picking);
@@ -213,6 +224,10 @@ protected:
 private:
     /// @brief Builds the Treatment row, Colour and B&W.
     QWidget* buildTreatmentRow();
+
+    /// @brief Builds the Negative group: the settings that decide the pixels development starts
+    /// from, which cost a decode (ADR 049).
+    QWidget* buildNegativeGroup();
 
     /// @brief Builds the Crop group: the mode, aspect, angle, turns, flips and Reset.
     QWidget* buildCropGroup();
@@ -314,6 +329,12 @@ private:
     QAbstractButton* lockButton_ = nullptr;
     QAbstractButton* cropResetButton_ = nullptr;
     QComboBox* aspectCombo_ = nullptr;
+    /// Demosaic choice of the Negative group.
+    QComboBox* demosaicCombo_ = nullptr;
+    /// Note under the demosaic choice that says why it is disabled.
+    QLabel* negativeNote_ = nullptr;
+    /// Negative settings last shown, the base of the next choice.
+    NegativeSettings shownNegative_{};
     /// Treatment row and every group but Crop, disabled in the crop mode.
     std::vector<QWidget*> nonGeometryGroups_;
 

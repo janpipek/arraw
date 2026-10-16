@@ -208,7 +208,8 @@ TEST_CASE("The plan has one block per stage, and the pointwise blocks have no st
     /// The guards ADR 011 wanted from reflection: a member added to a plan
     /// without a line in stagesOf, or to curveInputFieldsOf's blocks without a
     /// look at it, fails here.
-    STATIC_REQUIRE(test::fieldCount<ProcessingPlan> == stageCount);
+    // decode is the one header outside the stages (ADR 049).
+    STATIC_REQUIRE(test::fieldCount<ProcessingPlan> == stageCount + 1);
     STATIC_REQUIRE(test::fieldCount<PointwisePlan> == 7);
     STATIC_REQUIRE(test::fieldCount<TonePlan> == 8);
 }

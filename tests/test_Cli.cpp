@@ -18,6 +18,7 @@
 #include <ImageExport.h>
 #include <ImageImport.h>
 #include <LocalAdjustmentEdits.h>
+#include <NegativeSettings.h>
 #include <NoiseReductionSettings.h>
 #include <Photo.h>
 #include <SettingsJson.h>
@@ -731,6 +732,79 @@ TEST_CASE("A RAW without a sidecar exports with its kind's colour noise reductio
     REQUIRE(exportWith({"--no-sidecar"}) == plain);
     REQUIRE(exportWith({"--color-noise-reduction", "25"}) == plain);
     REQUIRE(exportWith({"--color-noise-reduction", "0"}) != plain);
+}
+
+TEST_CASE("A sidecar's demosaic reaches the exported pixels", "[cli][negative]") {
+    // ADR 049: an export decodes through the photograph's own negative, so a sidecar with
+    // `vng` renders differently from one without, and --no-sidecar renders as AHD does.
+    const test::TempDir directory;
+    const auto raw = directory.file("detail.dng");
+    std::filesystem::copy_file(test::fixture("bayer-detail-32x24.dng"), raw);
+    const auto exported = QString::fromStdString(directory.file("detail.png").string());
+    const auto exportWith = [&](std::vector<std::string> flags) {
+        std::vector<std::string> arguments{
+            "export",      raw.string(), "-o",         directory.path().string(), "--format", "png",
+            "--bit-depth", "16",         "--overwrite"};
+        arguments.insert(arguments.end(), flags.begin(), flags.end());
+        REQUIRE(invoke(arguments).code == cli::Success);
+        return QImage(exported);
+    };
+    const QImage plain = exportWith({});
+    REQUIRE_FALSE(plain.isNull());
+
+    writeSidecar(openPhoto(raw).with(NegativeSettings{Demosaic::Vng}));
+    REQUIRE(exportWith({}) != plain);
+    REQUIRE(exportWith({"--no-sidecar"}) == plain);
+
+    writeSidecar(openPhoto(raw).with(NegativeSettings{Demosaic::Ahd}));
+    REQUIRE(exportWith({}) == plain);
+}
+
+TEST_CASE("The demosaic flag overrides the sidecar's and an unknown token is a usage error",
+          "[cli][negative]") {
+    const test::TempDir directory;
+    const auto raw = directory.file("detail.dng");
+    std::filesystem::copy_file(test::fixture("bayer-detail-32x24.dng"), raw);
+    const auto exported = QString::fromStdString(directory.file("detail.png").string());
+    const auto exportWith = [&](std::vector<std::string> flags) {
+        std::vector<std::string> arguments{
+            "export",      raw.string(), "-o",         directory.path().string(), "--format", "png",
+            "--bit-depth", "16",         "--overwrite"};
+        arguments.insert(arguments.end(), flags.begin(), flags.end());
+        REQUIRE(invoke(arguments).code == cli::Success);
+        return QImage(exported);
+    };
+    const QImage ahd = exportWith({});
+    REQUIRE_FALSE(ahd.isNull());
+
+    SECTION("over no sidecar") {
+        const QImage vng = exportWith({"--demosaic", "vng"});
+        REQUIRE(vng != ahd);
+        REQUIRE(exportWith({"--demosaic", "ahd"}) == ahd);
+        REQUIRE(exportWith({"--demosaic", "vng", "--no-sidecar"}) == vng);
+    }
+    SECTION("over the sidecar's, both ways") {
+        writeSidecar(openPhoto(raw).with(NegativeSettings{Demosaic::Vng}));
+        const QImage vng = exportWith({});
+        REQUIRE(vng != ahd);
+        REQUIRE(exportWith({"--demosaic", "ahd"}) == ahd);
+        REQUIRE(exportWith({"--demosaic", "vng"}) == vng);
+    }
+    SECTION("an unknown or upper-case token lists the tokens") {
+        for (const char* token : {"nearest", "VNG"}) {
+            const auto result = invoke(
+                {"export", raw.string(), "-o", directory.path().string(), "--demosaic", token});
+            CAPTURE(token);
+            REQUIRE(result.code == cli::UsageError);
+            REQUIRE_THAT(result.err, ContainsSubstring("--demosaic"));
+            for (const std::string_view known : demosaicTokens) {
+                REQUIRE_THAT(result.err, ContainsSubstring(std::string(known)));
+            }
+        }
+    }
+    SECTION("the help lists it") {
+        REQUIRE_THAT(invoke({"export", "--help"}).out, ContainsSubstring("--demosaic"));
+    }
 }
 
 TEST_CASE("White balance reaches the exported pixels", "[cli]") {
@@ -2425,6 +2499,37 @@ TEST_CASE("Info leaves out settings a render would not read", "[cli][info]") {
         REQUIRE_THAT(result.out, ContainsSubstring("whiteBalance"));
         REQUIRE_THAT(result.out, !ContainsSubstring("temperature"));
         REQUIRE_THAT(result.out, !ContainsSubstring("tint"));
+    }
+}
+
+TEST_CASE("Info --json gives the negative beside the settings", "[cli][info][negative]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    const auto negativeOf = [&] {
+        return firstFile(invoke({"info", "--json", raw.string()}).out).value("negative").toObject();
+    };
+    REQUIRE(negativeOf().value("demosaic").toString() == "ahd");
+    writeSidecar(openPhoto(raw).with(NegativeSettings{Demosaic::Vng}));
+    REQUIRE(negativeOf().value("demosaic").toString() == "vng");
+}
+
+TEST_CASE("Info names the demosaic when it is not the default, and always with --all",
+          "[cli][info][negative]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    REQUIRE_THAT(invoke({"info", raw.string()}).out, !ContainsSubstring("Demosaic"));
+    REQUIRE_THAT(invoke({"info", "--all", raw.string()}).out,
+                 ContainsSubstring("  Demosaic: AHD\n"));
+    writeSidecar(openPhoto(raw).with(NegativeSettings{Demosaic::Vng}));
+    REQUIRE_THAT(invoke({"info", raw.string()}).out, ContainsSubstring("  Demosaic: VNG\n"));
+    REQUIRE_THAT(invoke({"info", "--all", raw.string()}).out,
+                 ContainsSubstring("  Demosaic: VNG\n"));
+
+    SECTION("not for a file with no mosaic to read") {
+        const test::TempDir pngs;
+        const auto png = pngs.file("card.png");
+        std::filesystem::copy_file(test::fixture(card), png);
+        REQUIRE_THAT(invoke({"info", "--all", png.string()}).out, !ContainsSubstring("Demosaic"));
     }
 }
 

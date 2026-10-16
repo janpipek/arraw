@@ -36,7 +36,7 @@ void EditSession::commit(EditOrigin origin, std::string detail) {
     if (before != photo_.state()) {
         history_.erase(history_.begin() + static_cast<std::ptrdiff_t>(position_) + 1,
                        history_.end());
-        history_.push_back({photo_.state(), origin, std::move(detail)});
+        history_.push_back({photo_.state(), origin, std::move(detail), photo_.negative()});
         ++position_;
     }
 }
@@ -58,6 +58,26 @@ void EditSession::setState(DevelopState state, EditOrigin origin, std::string de
     commit(origin, std::move(detail));
 }
 
+void EditSession::setNegative(NegativeSettings negative, EditOrigin origin, std::string detail) {
+    setState(negative, photo_.state(), origin, std::move(detail));
+}
+
+void EditSession::setState(NegativeSettings negative, DevelopState state, EditOrigin origin,
+                           std::string detail) {
+    // Both are checked before anything changes, so an invalid one leaves no edit behind.
+    Photo next = photo_.with(negative).with(std::move(state));
+    if (editing()) {
+        commit();
+    }
+    if (next.state() == photo_.state() && next.negative() == photo_.negative()) {
+        return;
+    }
+    photo_ = std::move(next);
+    history_.erase(history_.begin() + static_cast<std::ptrdiff_t>(position_) + 1, history_.end());
+    history_.push_back({photo_.state(), origin, std::move(detail), photo_.negative()});
+    ++position_;
+}
+
 bool EditSession::canUndo() const noexcept {
     return position_ > 0 || (editing() && *baseline_ != photo_.state());
 }
@@ -74,7 +94,7 @@ void EditSession::goTo(std::size_t index) {
     if (index >= history_.size()) {
         throw std::out_of_range("There is no history step " + std::to_string(index));
     }
-    photo_ = photo_.with(history_[index].state);
+    photo_ = photo_.with(history_[index].negative).with(history_[index].state);
     position_ = index;
 }
 
@@ -119,7 +139,7 @@ void EditSession::setMarks(PhotoMarks marks) {
 void EditSession::discardChanges() {
     photo_ = saved_;
     baseline_.reset();
-    history_ = {{saved_.state(), EditOrigin::Opened, {}}};
+    history_ = {{saved_.state(), EditOrigin::Opened, {}, saved_.negative()}};
     position_ = 0;
 }
 
@@ -212,5 +232,13 @@ ChangeDescription arraw::describeChange(const DevelopState& before, const Develo
         change.group.reset();
     }
     change.local = describeLocalChange(before, after);
+    return change;
+}
+
+ChangeDescription arraw::describeChange(const HistoryStep& before, const HistoryStep& after) {
+    ChangeDescription change = describeChange(before.state, after.state);
+    if (before.negative.demosaic != after.negative.demosaic) {
+        change.negative.push_back("demosaic");
+    }
     return change;
 }

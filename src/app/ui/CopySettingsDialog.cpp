@@ -29,7 +29,9 @@ CopySettingsDialog::CopySettingsDialog(std::span<const CopySection> checked, boo
             box->setChecked(given);
         } else {
             box->setEnabled(false);
-            box->setToolTip(tr("Only a RAW has a white balance to copy."));
+            box->setToolTip(section == CopySection::Demosaic
+                                ? tr("Only a RAW has a demosaic to copy.")
+                                : tr("Only a RAW has a white balance to copy."));
         }
         given_.push_back(given);
         connect(box, &QCheckBox::toggled, this, &CopySettingsDialog::updateAccept);

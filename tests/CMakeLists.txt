@@ -70,6 +70,7 @@ add_executable(arraw-tests
         test_ImageBuffer.cpp
         test_ImageExport.cpp
         test_ImagePyramid.cpp
+        test_NegativeSettings.cpp
         test_Photo.cpp
         test_PhotoLoader.cpp
         test_PreviewRenderer.cpp
@@ -138,6 +139,7 @@ add_executable(arraw-widget-tests
         test_MainWindowCopy.cpp
         test_MainWindowCrop.cpp
         test_MainWindowMasks.cpp
+        test_MainWindowNegative.cpp
         test_MainWindowOpening.cpp
         test_MaskOverlay.cpp
         test_MasksPanel.cpp

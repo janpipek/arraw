@@ -7,6 +7,45 @@ As of 2026-10-07, branch `copy-settings`, nothing pushed. Earlier, on
 (`docs/ideas/render-progress-plan.md`). The reviews are in `docs/reviews/`,
 untracked on purpose.
 
+## Done: demosaic as settings of the negative (branch `negative-settings`, 2026-10-16)
+
+Phase 1, steps 1-9 of `docs/ideas/negative-settings-plan.md` (ADR 049, Option C):
+- `NegativeSettings` (`include/NegativeSettings.h`), held by `Photo` beside
+  `DevelopState`; the demosaic is one of LibRaw's seven LGPL built-ins, saved as a
+  token, AHD by default. No develop edit can reach it, by type;
+- `DecodeOptions.demosaic`, `canonical`, `decodeOptionsFor(photo, halfSize)` and
+  `ImageBuffer::decodedWith()`; `ProcessingPlan::decode` is a plan header, so a
+  new negative is a stale rung by value (ADRs 005, 012, 045 amended);
+- history, unsaved changes and the sidecar's `arraw:demosaic` (ADRs 022, 030);
+  `info --json` and Python carry `"negative"`;
+- copy/paste: `CopySection::Demosaic`, in the default sections, with a migration
+  of remembered selections; paste applies the negative as one history step;
+- the app: a Negative group on the Adjustments tab, a re-decode off the GUI
+  thread with the old picture kept, the export queue deciding per job;
+- the CLI's `export --demosaic`, Python's `Demosaic`, `NegativeSettings`,
+  `set_negative`.
+
+Where the code differs from the plan:
+- `canonical()` also resets `halfSize` for a non-RAW, not only the demosaic;
+- `ImageMetadata::mosaic` knows one non-Bayer pattern, X-Trans; every other
+  filter is Bayer, and LibRaw's own substitutions are not detected;
+- the review is `docs/reviews/claude-opus-5-5_2026-10-16_negative-settings.md`
+  (untracked); its critical and medium findings are fixed (decode loop, retry
+  after a failed re-decode, export queue using `DecodeOptions`).
+
+Status (2026-10-16), to pick up later:
+- uncommitted before this note; committed on `negative-settings`, not pushed,
+  not merged; ADR 049 still says "proposed";
+- a fresh Opus pass should confirm the fixes, then mark ADR 049 accepted;
+- review findings 5 to 8 (lower) are open; no tests yet for `goTo`, discard,
+  a sidecar reloaded after changing on disk, nor an export during a re-decode
+  at window level (queue level only);
+- `docs/photo-development.pdf` is stale against section 3.4 (no PDF recipe);
+- `PresetStore` (looks plan step 4) must carry the negative (plan step 6);
+- Phase 2, lens corrections (ADR 050): embedded profile first, then lensfun;
+- known flaky under load: the brush repaint app tests, "An observed loop
+  covers every row once".
+
 ## Done: session history (branch `copy-settings`, 2026-10-08)
 
 Step 3 of `docs/ideas/looks-and-history-plan.md`: `EditSession` keeps a list
@@ -59,28 +98,17 @@ adjustments (user, 2026-10-08; `docs/ideas/local-adjustment-plan.md`):
   `export --preset`; Python's `presets()`, `load_preset`, `save_preset` and
   `with_look`. Copy/paste itself is done.
 
-- **Demosaic and lens corrections as an import group (user, 2026-10-07).**
-  - **Today:** neither exists on this branch. `DecodeOptions` has only
-    `halfSize`, and `SettingGroup` has no group for what shapes the decoded
-    negative.
-  - **The aim:** the demosaic choice and lens corrections become a group of
-    their own, *Import*, or sit even higher in the model: settings of the
-    negative, applied before every develop stage.
-    - Changing one re-decodes or re-corrects the source and invalidates every
-      checkpoint.
-    - No develop edit ever does that.
-  - **What `main` did:**
-    - ADR 0036: a demosaic choice that re-decodes through the load path, over
-      LibRaw's LGPL built-ins only (AHD, VNG, PPG, DCB, DHT, AAHD, Linear),
-      saved as a stable string token.
-    - ADR 0032: lens corrections (distortion, vignetting, lateral CA) as on/off
-      switches driven by a lens profile, from lensfun or the file's own profile.
-      They are applied once on the CPU to make a corrected negative beneath
-      spots, masks and the shaders.
-  - **Decide:** whether these belong in `DevelopState` as a group, or with the
-    `Photo` as part of its negative (beside the decoded pixels and the
-    pyramid). Also how presets and copy/paste treat them (a lens profile is
-    per shot), and where this fits in the roadmap's stage table, step (c).
+- **Lens corrections as settings of the negative (Phase 2, ADR 050 to write).**
+  Distortion, vignetting and lateral CA as switches in `NegativeSettings::lens`,
+  applied once on the CPU beneath spots, masks and the shaders; the profile
+  comes from the file or lensfun (`auto | embedded | lensfun`). The demosaic
+  half is done (above). ADR 049 section 7 and the plan's "Phase 2 sketch" list
+  what ADR 050 must settle: packaging, the database version, stage placement,
+  and the frame crop and mask coordinates live in.
+- **Presets (step 4 above) must carry the negative (plan step 6).** The preset
+  file's `"negative"` object, the carried sections being those whose keys are
+  present, and the save dialog pre-checking Demosaic only when it is not AHD.
+  `preset apply` writes the negative to the sidecar and decodes nothing.
 
 ## GUI tasks (user, 2026-10-09)
 
