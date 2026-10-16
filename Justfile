@@ -129,6 +129,11 @@ sandbox-check:
 rpm:
     bash tools/package_fedora.sh
 
+# Build the Ubuntu/Debian package into dist/deb (Release; Ubuntu 26.04+)
+[linux]
+deb: release
+    cpack --config {{build_dir}}release/CPackConfig.cmake -G DEB -B dist/deb
+
 # Install the RPM from dist/fedora in a clean Fedora 44 container and check it runs
 [linux]
 rpm-smoke:

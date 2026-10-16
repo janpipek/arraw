@@ -622,6 +622,24 @@ if(UNIX AND NOT APPLE)
     install(FILES resources/icon.svg
             DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps
             RENAME ${arraw_app_id}.svg)
+
+    # `cpack -G DEB` (just deb). Targets Ubuntu 26.04 and newer, whose Qt is
+    # recent enough; shared-library dependencies are derived from the binaries.
+    set(CPACK_PACKAGE_NAME arraw)
+    set(CPACK_PACKAGE_VENDOR "Jan Pipek")
+    set(CPACK_PACKAGE_CONTACT "Jan Pipek <jan.pipek@gmail.com>")
+    set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "RAW photo editor with a GPU preview")
+    set(CPACK_PACKAGE_HOMEPAGE_URL "https://github.com/janpipek/arraw")
+    set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
+    set(CPACK_GENERATOR DEB)
+    set(CPACK_DEBIAN_PACKAGE_SECTION graphics)
+    set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
+    set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
+    # Run-time pieces no shared-library scan can see: the TIFF/JPEG image
+    # plugins, and the Vulkan loader Qt opens on demand.
+    set(CPACK_DEBIAN_PACKAGE_DEPENDS
+            "qt6-image-formats-plugins, libvulkan1, hicolor-icon-theme")
+    include(CPack)
 endif()
 
 endif() # ARRAW_BUILD_APPS

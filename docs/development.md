@@ -1,5 +1,35 @@
 # Development
 
+## Building on Ubuntu
+
+Arraw needs Qt >= 6.10, LibRaw >= 0.21 and exiv2 >= 0.28. Ubuntu 26.04 or newer
+ships a recent enough Qt; on older releases install Qt 6.10 yourself (e.g. with
+[aqtinstall](https://github.com/miurahr/aqtinstall)) and point `CMAKE_PREFIX_PATH`
+at it.
+
+```bash
+sudo apt install build-essential cmake ninja-build pkg-config just \
+    qt6-base-dev qt6-base-private-dev qt6-shadertools-dev qt6-tools-dev \
+    qt6-image-formats-plugins libraw-dev libexiv2-dev libvulkan-dev catch2
+just build
+```
+
+To build a `.deb` instead, run `just deb`.
+
+## Building on Fedora
+
+The package list mirrors `packaging/fedora/arraw.spec`.
+
+```bash
+sudo dnf install gcc-c++ cmake ninja-build just pkgconf-pkg-config \
+    qt6-qtbase-devel qt6-qtbase-private-devel qt6-qtshadertools-devel \
+    qt6-qttools-devel qt6-qtimageformats LibRaw-devel exiv2-devel \
+    vulkan-headers catch-devel
+just build
+```
+
+To build an RPM instead, run `just rpm`.
+
 ## Building on Windows
 
 Dependencies come from [vcpkg](https://vcpkg.io/) (triplet `x64-windows`), the
