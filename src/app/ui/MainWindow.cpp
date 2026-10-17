@@ -2062,7 +2062,9 @@ void MainWindow::showResult(const PreviewResult& result) {
             latestShownProvisional_ = false;
             // Turned and flipped to the geometry now, should a turn have happened since.
             photoView_->cropOverlay().setImage(*result.image, renderedFor->settings.geometry);
-            open_->lastCropImage.emplace(*renderedFor, *result.image);
+            if (result.request > open_->cropImageFloor) {
+                open_->lastCropImage.emplace(*renderedFor, *result.image);
+            }
             renderProgress_->setOpened(); // A render shown in the crop mode counts too.
             showDevice(result);
             return;
@@ -2228,6 +2230,7 @@ void MainWindow::decodeLanded(const DecodedPhoto& result) {
         open_->decodedOptions = result.options;
         // Made from the old pixels.
         open_->lastCropImage.reset();
+        open_->cropImageFloor = latestRequest_; // A queued render of the old pixels may still land.
         previewRenderer_.setSource(result.decoded);
         refreshPanel(); // Requests the render, and checks the negative once more.
         return;

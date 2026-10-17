@@ -522,6 +522,9 @@ private:
         /// Last render of the crop mode, and the uncropped state it shows, to show at once
         /// on entering the mode again.
         std::optional<std::pair<DevelopState, QImage>> lastCropImage;
+        /// Newest render request made before the pixels last changed; the crop mode's cached
+        /// image is made only from renders of later requests.
+        std::uint64_t cropImageFloor = 0;
     };
 
     DebugLog& debugLog_;

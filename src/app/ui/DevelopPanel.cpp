@@ -735,6 +735,9 @@ void DevelopPanel::showState(const DevelopState& state, const PanelContext& cont
             note = tr("Demosaic applies only to a RAW file.");
         } else if (!mosaiced) {
             note = tr("This file's pixels arrive in colour, so there is nothing to demosaic.");
+        } else if (context.photo.mosaic == Mosaic::XTrans) {
+            note = tr("An X-Trans sensor is demosaiced by LibRaw's own method, "
+                      "which may differ from the one chosen.");
         }
         negativeNote_->setText(note);
         negativeNote_->setVisible(!note.isEmpty());

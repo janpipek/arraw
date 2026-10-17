@@ -33,13 +33,11 @@ Where the code differs from the plan:
   (untracked); its critical and medium findings are fixed (decode loop, retry
   after a failed re-decode, export queue using `DecodeOptions`).
 
-Status (2026-10-16), to pick up later:
-- uncommitted before this note; committed on `negative-settings`, not pushed,
-  not merged; ADR 049 still says "proposed";
-- a fresh Opus pass should confirm the fixes, then mark ADR 049 accepted;
-- review findings 5 to 8 (lower) are open; no tests yet for `goTo`, discard,
-  a sidecar reloaded after changing on disk, nor an export during a re-decode
-  at window level (queue level only);
+Status (2026-10-17): Phase 1 is done and re-reviewed merge-ready (ADR 049
+accepted); committed on `negative-settings`, not pushed or merged. Open:
+- low: discarding changes while closing the window starts a pointless
+  re-decode; X-Trans / four-colour re-decodes, the LibRaw mapping pin test and
+  the thumbnail key (Phase 2) are in the review;
 - `docs/photo-development.pdf` is stale against section 3.4 (no PDF recipe);
 - `PresetStore` (looks plan step 4) must carry the negative (plan step 6);
 - Phase 2, lens corrections (ADR 050): embedded profile first, then lensfun;

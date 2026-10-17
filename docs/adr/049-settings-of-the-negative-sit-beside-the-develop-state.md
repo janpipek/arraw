@@ -1,6 +1,6 @@
 # Settings of the negative sit beside the develop state
 
-Status: proposed, 2026-10-16. The plan is
+Status: accepted, 2026-10-17 (proposed 2026-10-16). The plan is
 [negative-settings-plan.md](../ideas/negative-settings-plan.md).
 
 A photographer will want to choose the demosaic and, later, turn lens

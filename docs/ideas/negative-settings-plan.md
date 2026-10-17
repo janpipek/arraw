@@ -1,6 +1,6 @@
 # Settings of the negative: demosaic now, lens corrections later — plan
 
-Status: proposed, 2026-10-16. Decision record:
+Status: Phase 1 done, 2026-10-17 (proposed 2026-10-16). Decision record:
 [ADR 049](../adr/049-settings-of-the-negative-sit-beside-the-develop-state.md).
 Answers `docs/todo.md`, "Demosaic and lens corrections as an import group".
 

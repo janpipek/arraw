@@ -18,7 +18,13 @@
 #include <QComboBox>
 #include <QDialog>
 #include <QDoubleSpinBox>
+#include <QFileDialog>
+#include <QImage>
 #include <QLabel>
+#include <QLineEdit>
+#include <QListView>
+#include <QMessageBox>
+#include <QPushButton>
 #include <QSettings>
 #include <QStringList>
 #include <QTest>
@@ -155,6 +161,21 @@ struct Window {
 
     [[nodiscard]] Demosaic shown() const {
         return static_cast<Demosaic>(combo().currentData().toInt());
+    }
+
+    [[nodiscard]] QString pathOf(const char* name) const {
+        return QString::fromStdU16String(folder.file(name).u16string());
+    }
+
+    /// Clicks a row of the history list (the newest is row 0).
+    void clickHistory(int row) const {
+        auto* list = window.findChild<QListView*>("historyList");
+        REQUIRE(list != nullptr);
+        emit list->clicked(list->model()->index(row, 0));
+    }
+
+    [[nodiscard]] int historyRows() const {
+        return window.findChild<QListView*>("historyList")->model()->rowCount();
     }
 
     void setExposure(double value) const {
@@ -376,4 +397,135 @@ TEST_CASE("A changed demosaic changes the picture shown", "[app][window][negativ
     w.choose(Demosaic::Vng);
     REQUIRE(w.settled(2));
     REQUIRE(QTest::qWaitFor([&] { return w.view().wholeFrameImage() != before; }, 20000));
+}
+
+TEST_CASE("Going to a step across a demosaic decodes once, and shows that step",
+          "[app][window][negative][history]") {
+    Window w;
+    REQUIRE(w.settled(1));
+    const QImage ahd = w.view().wholeFrameImage();
+
+    w.choose(Demosaic::Vng);
+    REQUIRE(w.settled(2));
+    w.setExposure(0.5);
+    REQUIRE(w.historyRows() == 3); // Exposure, Demosaic, Opened.
+    QTest::qWait(100);
+    CHECK(w.counter.started == 2);
+
+    w.clickHistory(2); // Opened: AHD again, with the exposure edit still ahead.
+    REQUIRE(w.settled(3));
+    CHECK(w.counter.started == 3);
+    CHECK(w.counter.last() == Demosaic::Ahd);
+    CHECK(w.shown() == Demosaic::Ahd);
+    CHECK(QTest::qWaitFor([&] { return w.view().wholeFrameImage() == ahd; }, 20000));
+
+    w.clickHistory(0); // The newest: VNG and the exposure, in one jump.
+    REQUIRE(w.settled(4));
+    CHECK(w.counter.started == 4);
+    CHECK(w.counter.last() == Demosaic::Vng);
+    CHECK(w.shown() == Demosaic::Vng);
+
+    w.clickHistory(1); // Same pixels, no exposure: no decode.
+    QTest::qWait(150);
+    CHECK(w.counter.started == 4);
+    CHECK(w.shown() == Demosaic::Vng);
+}
+
+TEST_CASE("Discarding changes brings back the saved negative and its pixels",
+          "[app][window][negative]") {
+    Window w;
+    REQUIRE(w.settled(1));
+    const QImage ahd = w.view().wholeFrameImage();
+    w.choose(Demosaic::Vng);
+    REQUIRE(w.settled(2));
+    REQUIRE(QTest::qWaitFor([&] { return w.view().wholeFrameImage() != ahd; }, 20000));
+
+    QTimer::singleShot(0, [] {
+        if (auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget())) {
+            box->button(QMessageBox::Discard)->click();
+        }
+    });
+    w.window.close(); // Asks about the unsaved change, and discards it.
+    REQUIRE(w.settled(3));
+    CHECK(w.counter.last() == Demosaic::Ahd);
+    CHECK(w.shown() == Demosaic::Ahd);
+    CHECK(QTest::qWaitFor([&] { return w.view().wholeFrameImage() == ahd; }, 20000));
+}
+
+TEST_CASE("A sidecar changed on disk to another demosaic decodes with it",
+          "[app][window][negative]") {
+    Window w;
+    REQUIRE(w.settled(1));
+    const QImage ahd = w.view().wholeFrameImage();
+
+    const Photo bare = openPhoto(w.folder.file("a.dng"));
+    writeSidecar(Photo(w.folder.file("a.dng"), bare.metadata(),
+                       NegativeSettings{.demosaic = Demosaic::Vng}, bare.state()));
+    emit w.strip().sidecarChangedExternally(w.pathOf("a.dng"));
+    REQUIRE(w.settled(2));
+    CHECK(w.counter.last() == Demosaic::Vng);
+    CHECK(w.shown() == Demosaic::Vng);
+    CHECK(QTest::qWaitFor([&] { return w.view().wholeFrameImage() != ahd; }, 20000));
+    QTest::qWait(150);
+    CHECK(w.counter.started == 2);
+}
+
+TEST_CASE("An export queued during a re-decode renders the chosen demosaic",
+          "[app][window][negative][export]") {
+    Window w;
+    REQUIRE(w.settled(1));
+
+    // Exports through the real dialogs, which are modal: accepts the options, names the file,
+    // and waits for the written picture (the format's own suffix replaces the typed one).
+    const auto exportAs = [&](const char* stem) {
+        const std::filesystem::path typed = w.folder.file(std::string(stem) + ".png");
+        int stage = 0;
+        QTimer poll;
+        QObject::connect(&poll, &QTimer::timeout, [&] {
+            QWidget* modal = QApplication::activeModalWidget();
+            if (auto* files = qobject_cast<QFileDialog*>(modal)) {
+                files->findChild<QLineEdit*>("fileNameEdit")
+                    ->setText(QString::fromStdU16String(typed.u16string()));
+                static_cast<QDialog*>(files)->accept();
+                stage = 2;
+            } else if (auto* dialog = qobject_cast<QDialog*>(modal); dialog && stage == 0) {
+                dialog->accept();
+                stage = 1;
+            }
+        });
+        poll.start(10);
+        w.action("exportAction").trigger();
+        poll.stop();
+        REQUIRE(stage == 2);
+        return [&w, stem] {
+            QImage image;
+            REQUIRE(QTest::qWaitFor(
+                [&] {
+                    for (const auto& entry : std::filesystem::directory_iterator(w.folder.path())) {
+                        if (entry.path().stem() == stem && entry.path().extension() != ".xmp" &&
+                            image.load(QString::fromStdU16String(entry.path().u16string()))) {
+                            return true;
+                        }
+                    }
+                    return false;
+                },
+                20000));
+            return image;
+        };
+    };
+
+    const QImage ahd = exportAs("ahd")();
+
+    w.counter.hold = true;
+    w.choose(Demosaic::Vng);
+    REQUIRE(QTest::qWaitFor([&] { return w.counter.started == 2; }, 20000));
+    // The pixels shown are still AHD, so the export thread decodes for itself.
+    const auto during = exportAs("during");
+    w.counter.hold = false;
+    const QImage duringImage = during();
+    REQUIRE(w.settled(2));
+
+    const QImage after = exportAs("after")();
+    CHECK(duringImage != ahd);
+    CHECK(duringImage == after);
 }
