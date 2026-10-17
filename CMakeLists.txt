@@ -216,6 +216,9 @@ add_library(arraw STATIC
         include/ImageBuffer.h
         include/ImageExport.h
         include/EditSession.h
+        include/NegativeSettings.h
+        src/core/NegativeSettings.cpp
+        include/DecodeOptions.h
         include/Photo.h
         src/core/EditSession.cpp
         src/core/Photo.cpp

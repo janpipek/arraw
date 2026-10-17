@@ -8,6 +8,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <cstddef>
@@ -476,16 +477,22 @@ TEST_CASE("Every copy section has a Look-scoped row", "[descriptors][sections]")
     }
     for (std::size_t i = 0; i < copySectionNames.size(); ++i) {
         CAPTURE(copySectionNames[i]);
+        // The demosaic is a setting of the negative (ADR 049), which has no row in this table.
+        if (static_cast<CopySection>(i) == CopySection::Demosaic) {
+            REQUIRE_FALSE(covered.contains(CopySection::Demosaic));
+            continue;
+        }
         REQUIRE(covered.contains(static_cast<CopySection>(i)));
     }
 }
 
 TEST_CASE("Copy section names cover the enumeration in order, uniquely",
           "[descriptors][sections]") {
-    REQUIRE(copySectionNames.size() == static_cast<std::size_t>(CopySection::Crop) + 1);
+    REQUIRE(copySectionNames.size() == static_cast<std::size_t>(CopySection::Demosaic) + 1);
     REQUIRE(copySectionNames.front() == "whiteBalance");
     REQUIRE(copySectionNames[static_cast<std::size_t>(CopySection::Grain)] == "grain");
-    REQUIRE(copySectionNames.back() == "crop");
+    REQUIRE(copySectionNames[static_cast<std::size_t>(CopySection::Crop)] == "crop");
+    REQUIRE(copySectionNames.back() == "demosaic");
     const std::set<std::string_view> unique(copySectionNames.begin(), copySectionNames.end());
     REQUIRE(unique.size() == copySectionNames.size());
 }
@@ -568,5 +575,49 @@ TEST_CASE("Look rows have a copy section and the photograph's own rows none",
     for (const FieldDescriptor& descriptor : developSettingDescriptors) {
         CAPTURE(descriptor.key);
         CHECK(descriptor.section.has_value() == (descriptor.scope == SettingScope::Look));
+    }
+}
+
+TEST_CASE("No develop edit changes how a photograph is decoded", "[settings][negative]") {
+    /// ADR 049's rule, as a property of the types: whatever row is edited, the decode options
+    /// and the plan's decode block stay as they were, so no edit can ask for a re-decode.
+    const Photo base = openPhoto(test::fixture("bayer-32x24.dng"));
+    const Photo vng = base.with(NegativeSettings{Demosaic::Vng});
+
+    for (const Photo& photo : {base, vng}) {
+        for (const FieldDescriptor& descriptor : developSettingDescriptors) {
+            // Enumerations with one entry have no other value to change to.
+            if (descriptor.key == "grainModel" || descriptor.key == "luminanceNoiseFilter") {
+                continue;
+            }
+            DYNAMIC_SECTION(descriptor.key) {
+                DevelopState edited = photo.state();
+                writeSentinel(descriptor, edited.settings);
+                // Held to the row's range, so that the document accepts it.
+                if (descriptor.range) {
+                    visitField(descriptor, edited.settings, [&](auto& field) {
+                        using T = std::remove_cvref_t<decltype(field)>;
+                        const auto held = [&](auto value) {
+                            return std::clamp(static_cast<double>(value), descriptor.range->minimum,
+                                              descriptor.range->maximum);
+                        };
+                        if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double> ||
+                                      std::is_same_v<T, std::uint32_t>) {
+                            field = static_cast<T>(held(field));
+                        } else if constexpr (std::is_same_v<T, std::optional<float>>) {
+                            if (field) {
+                                field = static_cast<float>(held(*field));
+                            }
+                        }
+                    });
+                }
+                const Photo after = photo.with(edited);
+                for (const bool halfSize : {false, true}) {
+                    REQUIRE(decodeOptionsFor(after, halfSize) == decodeOptionsFor(photo, halfSize));
+                }
+                REQUIRE(planFor(after).decode == planFor(photo).decode);
+                REQUIRE(after.negative() == photo.negative());
+            }
+        }
     }
 }

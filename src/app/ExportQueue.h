@@ -2,10 +2,12 @@
 
 #include "AppSettings.h"
 
+#include <DecodeOptions.h>
 #include <Develop.h>
 #include <DevelopState.h>
 #include <ImageBuffer.h>
 #include <ImageExport.h>
+#include <NegativeSettings.h>
 
 #include <condition_variable>
 #include <cstddef>
@@ -29,7 +31,12 @@ namespace arraw::app {
 struct ExportJob {
     /// How the photograph was developed when the export was asked for.
     DevelopState state;
-    /// Full-resolution decoded photograph; shared, never copied.
+    /// How the photograph must be decoded, from decodeOptionsFor() (ADR 049).
+    DecodeOptions decode;
+    /// File to decode when source is null; the export thread then decodes it with decode.
+    std::filesystem::path input;
+    /// Full-resolution decoded photograph, shared, never copied; null when the window's source
+    /// was decoded with other options, so that the export thread decodes input itself.
     std::shared_ptr<const ImageBuffer> source;
     /// Size and filter to render at.
     RenderRequest request;

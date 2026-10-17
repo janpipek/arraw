@@ -260,6 +260,29 @@ def bayer_flat() -> bytes:
     return bytes(pixels)
 
 
+def bayer_detail() -> bytes:
+    """An RGGB mosaic with detail finer than the pattern: a diagonal edge and a stripe.
+
+    Flat fields demosaic alike under every algorithm, so a test that must tell
+    two of them apart needs edges. The left of a diagonal is dark and the right
+    bright, and one-pixel columns alternate across the bright side, which
+    interpolating methods resolve in different ways.
+    """
+    pixels = bytearray()
+    for y in range(H):
+        for x in range(W):
+            bright = x > y + 4
+            value = 56000 if bright else 6000
+            if bright and x % 2 == 0:
+                value = 24000
+            if y % 2 == 0:
+                value = value if x % 2 == 0 else value * 3 // 4
+            else:
+                value = value * 3 // 4 if x % 2 == 0 else value // 2
+            pixels += struct.pack("<H", value)
+    return bytes(pixels)
+
+
 def linear_halves(left: int, right: int) -> bytes:
     """A neutral field of two flat halves, three 16-bit samples per pixel.
 
@@ -342,6 +365,15 @@ def main() -> None:
         (50714, TYPE_SHORT, [0]),             # BlackLevel
     ]
     write_dng(here / "bayer-32x24.dng", sorted(entries, key=lambda e: e[0]), bayer)
+
+    # The same mosaic with edges in it: the demosaic algorithms agree on a flat
+    # field, so this is the fixture that can tell one from another (ADR 049).
+    detail = bayer_detail()
+    detail_entries = base_entries(pixel_bytes=len(detail), samples_per_pixel=1,
+                                  photometric=PHOTOMETRIC_CFA,
+                                  as_shot_neutral=(1.0, 1.0, 1.0), orientation=None)
+    detail_entries += entries[len(entries) - 5:]
+    write_dng(here / "bayer-detail-32x24.dng", sorted(detail_entries, key=lambda e: e[0]), detail)
 
     # A camera that is not sRGB: scaled matrix rows, so the daylight calibration
     # LibRaw keeps in pre_mul is not unity, and a red row mixed with green, so

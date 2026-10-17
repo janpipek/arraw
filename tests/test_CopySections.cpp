@@ -6,6 +6,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <vector>
 
 using namespace arraw;
@@ -48,9 +49,11 @@ TEST_CASE("Unknown section names are dropped, the geometry is kept", "[app][sett
     QSettings store = scratch(directory);
     store.setValue("copySettings/sections", QStringList{"tone", "nonsense", "crop", "rotateAndFlip",
                                                         "whiteBalance", "tone"});
+    // A selection from before the demosaic existed also gets it, once.
     CHECK(restoreCopySections(store) ==
           std::vector<CopySection>{CopySection::WhiteBalance, CopySection::Tone,
-                                   CopySection::RotateAndFlip, CopySection::Crop});
+                                   CopySection::RotateAndFlip, CopySection::Crop,
+                                   CopySection::Demosaic});
 }
 
 TEST_CASE("Every copy section has a label", "[app][copy]") {
@@ -63,4 +66,31 @@ TEST_CASE("Skipped sections are worded, and nothing skipped is silent", "[app][c
     CHECK(skippedMessage({}).isEmpty());
     const std::vector<CopySection> white{CopySection::WhiteBalance};
     CHECK(skippedMessage(white).contains("White balance"));
+}
+
+TEST_CASE("A remembered selection from before Demosaic gets it, once", "[app][settings][copy]") {
+    const test::TempDir directory;
+    QSettings store = scratch(directory);
+    store.setValue("copySettings/sections", QStringList{"tone", "exposure"});
+    CHECK(restoreCopySections(store) == std::vector<CopySection>{CopySection::Exposure,
+                                                                 CopySection::Tone,
+                                                                 CopySection::Demosaic});
+
+    // Unchecked afterwards, it stays unchecked.
+    saveCopySections(std::vector<CopySection>{CopySection::Tone}, store);
+    CHECK(restoreCopySections(store) == std::vector<CopySection>{CopySection::Tone});
+    store.sync();
+    QSettings again(store.fileName(), QSettings::IniFormat);
+    CHECK(restoreCopySections(again) == std::vector<CopySection>{CopySection::Tone});
+}
+
+TEST_CASE("A selection that none was stored for is the default, and the migration is spent",
+          "[app][settings][copy]") {
+    const test::TempDir directory;
+    QSettings store = scratch(directory);
+    CHECK(restoreCopySections(store) == defaults);
+    CHECK(std::ranges::find(defaults, CopySection::Demosaic) != defaults.end());
+    // An empty selection that was saved means none, migration or not.
+    saveCopySections({}, store);
+    CHECK(restoreCopySections(store).empty());
 }

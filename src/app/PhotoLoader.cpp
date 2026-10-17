@@ -122,9 +122,10 @@ private:
 };
 
 PhotoLoader::Decoder PhotoLoader::imageDecoder(DiagnosticModel* diagnostics) {
-    return [diagnostics](const std::filesystem::path& path, ProgressChannel& channel) {
+    return [diagnostics](const std::filesystem::path& path, const DecodeOptions& options,
+                         ProgressChannel& channel) {
         DebugDiagnostics log(diagnostics);
-        return loadImage(path, log, {}, &channel);
+        return loadImage(path, log, options, &channel);
     };
 }
 
@@ -140,35 +141,36 @@ PhotoLoader::~PhotoLoader() {
     previews_->requestStop();
 }
 
-std::uint64_t PhotoLoader::decode(std::filesystem::path path) {
+std::uint64_t PhotoLoader::decode(std::filesystem::path path, DecodeOptions options) {
     const std::uint64_t id = ++lastId_;
     ProgressChannel::Callback forward;
     if (onProgress_) {
         forward = [this, id](const Progress& progress) { onProgress_(id, progress); };
     }
-    decodes_->post(
-        std::move(forward), [this, id, path = std::move(path)](ProgressChannel& channel) {
-            const detail::TimingSpan timing("loader.decode", id);
-            DecodedPhoto result{.request = id, .path = path, .decoded = nullptr, .error = {}};
-            try {
-                result.decoded = std::make_shared<const ImageBuffer>(decoder_(path, channel));
-            } catch (const Cancelled&) {
-                return; // Superseded: nobody wants it.
-            } catch (const std::exception& error) {
-                result.error = error.what();
-            } catch (...) {
-                // Delivered all the same: the window waits for this decode.
-                result.error = "unknown error";
-            }
-            if (channel.cancelled() && !result.decoded) {
-                return; // A failure after a cancel is the cancel's.
-            }
-            try {
-                onDecoded_(std::move(result));
-            } catch (...) {
-                // The callback's failure is not ours to handle.
-            }
-        });
+    decodes_->post(std::move(forward), [this, id, path = std::move(path),
+                                        options](ProgressChannel& channel) {
+        const detail::TimingSpan timing("loader.decode", id);
+        DecodedPhoto result{
+            .request = id, .path = path, .options = options, .decoded = nullptr, .error = {}};
+        try {
+            result.decoded = std::make_shared<const ImageBuffer>(decoder_(path, options, channel));
+        } catch (const Cancelled&) {
+            return; // Superseded: nobody wants it.
+        } catch (const std::exception& error) {
+            result.error = error.what();
+        } catch (...) {
+            // Delivered all the same: the window waits for this decode.
+            result.error = "unknown error";
+        }
+        if (channel.cancelled() && !result.decoded) {
+            return; // A failure after a cancel is the cancel's.
+        }
+        try {
+            onDecoded_(std::move(result));
+        } catch (...) {
+            // The callback's failure is not ours to handle.
+        }
+    });
     return id;
 }
 

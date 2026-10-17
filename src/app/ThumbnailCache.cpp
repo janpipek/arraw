@@ -81,7 +81,8 @@ std::optional<std::string> ThumbnailCache::embeddedKey(const fs::path& file) {
 }
 
 std::optional<std::string> ThumbnailCache::developedKey(const fs::path& file,
-                                                        const DevelopState& state) {
+                                                        const DevelopState& state,
+                                                        const NegativeSettings& negative) {
     // The one place that lists what a developed thumbnail depends on beyond the file.
     std::string ingredients = settingsToJson(state.settings);
     if (!state.localAdjustments.empty()) {
@@ -94,6 +95,9 @@ std::optional<std::string> ThumbnailCache::developedKey(const fs::path& file,
         }
         masked.nextLocalAdjustmentId = LocalAdjustmentId{next};
         ingredients += localAdjustmentsToJson(masked, StrokeDetail::Digest);
+    }
+    if (negative != NegativeSettings{}) {
+        ingredients += negativeToJson(negative);
     }
     return hashKey('d', file, ingredients);
 }

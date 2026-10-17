@@ -77,6 +77,7 @@ ImageBuffer halved(const ImageBuffer& image) {
     }
     ImageBuffer result(halfOf(in), PixelFormat::RgbaF32, image.encoding(), image.orientation());
     result.setPixelScale(2.0 * image.pixelScale());
+    result.setDecodedWith(image.decodedWith());
     switch (image.format()) {
     case PixelFormat::RgbU8:
     case PixelFormat::RgbaU8:

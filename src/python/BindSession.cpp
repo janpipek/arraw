@@ -2,10 +2,12 @@
 
 #include <DevelopState.h>
 #include <EditSession.h>
+#include <NegativeSettings.h>
 #include <Photo.h>
 #include <PhotoMarks.h>
 
 #include <cstddef>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -47,11 +49,12 @@ void bindSession(nb::module_& module) {
         .def_ro("origin", &HistoryStep::origin, "Kind of change the step was.")
         .def_ro("detail", &HistoryStep::detail,
                 "What the origin applies to, such as a preset's name; empty otherwise.")
+        .def_ro("negative", &HistoryStep::negative, "Negative settings after the step.")
         .def(nb::self == nb::self)
         .def("__repr__", [](const HistoryStep& step) {
             return "HistoryStep(state=" + reprValue(step.state) +
                    ", origin=" + reprValue(step.origin) + ", detail=" + reprValue(step.detail) +
-                   ")";
+                   ", negative=" + reprValue(step.negative) + ")";
         });
 
     nb::class_<ChangeDescription>(module, "ChangeDescription",
@@ -63,14 +66,27 @@ void bindSession(nb::module_& module) {
             "table order; setting_descriptors() maps them to the Python names.")
         .def_ro("group", &ChangeDescription::group,
                 "Group every key belongs to; None when there are no keys or they span groups.")
+        .def_prop_ro(
+            "negative", [](const ChangeDescription& change) { return change.negative; },
+            "Keys of the negative settings that differ ('demosaic'); empty unless made by "
+            "describe_change over two history steps.")
         .def(nb::self == nb::self)
         .def("__repr__", [](const ChangeDescription& change) {
             return "ChangeDescription(keys=" + reprValue(change.keys) +
-                   ", group=" + reprValue(change.group) + ")";
+                   ", group=" + reprValue(change.group) +
+                   ", negative=" + reprValue(change.negative) + ")";
         });
 
-    module.def("describe_change", &describeChange, "before"_a, "after"_a,
-               "List the settings two develop states differ in.");
+    module.def("describe_change",
+               static_cast<ChangeDescription (*)(const DevelopState&, const DevelopState&)>(
+                   &describeChange),
+               "before"_a, "after"_a, "List the settings two develop states differ in.");
+    module.def(
+        "describe_change",
+        static_cast<ChangeDescription (*)(const HistoryStep&, const HistoryStep&)>(&describeChange),
+        "before"_a, "after"_a,
+        "List what two history steps differ in: the develop state, and the negative "
+        "settings in `negative`.");
 
     nb::class_<EditScope>(module, "EditScope",
                           "Context manager of one edit; made by EditSession.edit().")
@@ -114,8 +130,24 @@ void bindSession(nb::module_& module) {
              "none.")
         .def("cancel", &EditSession::cancel, "Close the open edit, restoring its starting state.")
         .def_prop_ro("editing", &EditSession::editing, "Whether an edit is open.")
-        .def("set_state", &EditSession::setState, "state"_a, "origin"_a = EditOrigin::Edit,
-             "detail"_a = "", "Replace the develop state as one history step.")
+        .def(
+            "set_state",
+            [](EditSession& session, DevelopState state, EditOrigin origin, std::string detail,
+               const std::optional<NegativeSettings>& negative) {
+                if (negative) {
+                    session.setState(*negative, std::move(state), origin, std::move(detail));
+                } else {
+                    session.setState(std::move(state), origin, std::move(detail));
+                }
+            },
+            "state"_a, "origin"_a = EditOrigin::Edit, "detail"_a = "", nb::kw_only(),
+            "negative"_a = nb::none(),
+            "Replace the develop state as one history step. With `negative`, the negative "
+            "settings change in the same step (a paste or a preset); None leaves them.")
+        .def("set_negative", &EditSession::setNegative, "negative"_a, "origin"_a = EditOrigin::Edit,
+             "detail"_a = "",
+             "Replace the negative settings as one history step; equal ones leave none. An open "
+             "edit is committed first.")
         .def_prop_ro("history", &EditSession::history, nb::rv_policy::copy,
                      "Steps taken so far, the opening state first; a new list on every access.")
         .def_prop_ro("position", &EditSession::position,

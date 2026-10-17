@@ -23,13 +23,13 @@ namespace {
 /// A history from the opening state and the steps after it, each made by a change to the one
 /// before.
 struct Built {
-    std::vector<HistoryStep> steps{HistoryStep{DevelopState{}, EditOrigin::Opened, {}}};
+    std::vector<HistoryStep> steps{HistoryStep{DevelopState{}, EditOrigin::Opened, {}, {}}};
 
     template <class Change>
     Built& then(Change change, EditOrigin origin = EditOrigin::Edit, std::string detail = {}) {
         DevelopState next = steps.back().state;
         change(next.settings);
-        steps.push_back(HistoryStep{next, origin, std::move(detail)});
+        steps.push_back(HistoryStep{next, origin, std::move(detail), steps.back().negative});
         return *this;
     }
 };
@@ -47,7 +47,7 @@ TEST_CASE("Each origin has its own wording", "[app][history]") {
         .then([](DevelopSettings&) {}, EditOrigin::Reset)
         .then([](DevelopSettings& s) { s.geometry.flipHorizontal = true; }, EditOrigin::Crop);
     HistoryModel model;
-    model.setHistory(built.steps, 4, DevelopState{});
+    model.setHistory(built.steps, 4, DevelopState{}, {});
 
     CHECK(textAt(model, 0) == "Opened");
     CHECK(textAt(model, 1) == "Paste Settings");
@@ -62,7 +62,7 @@ TEST_CASE("An edit of one setting names it with its value", "[app][history]") {
         .then([](DevelopSettings& s) { s.tone.exposure = -1.25F; })
         .then([](DevelopSettings& s) { s.color.saturation = 12.0F; });
     HistoryModel model;
-    model.setHistory(built.steps, 3, DevelopState{});
+    model.setHistory(built.steps, 3, DevelopState{}, {});
 
     CHECK(textAt(model, 1) == "Exposure +0.50 EV");
     CHECK(textAt(model, 2) == "Exposure -1.25 EV");
@@ -73,7 +73,7 @@ TEST_CASE("An edit of one setting without a number gives just its name", "[app][
     Built built;
     built.then([](DevelopSettings& s) { s.geometry.flipVertical = true; });
     HistoryModel model;
-    model.setHistory(built.steps, 1, DevelopState{});
+    model.setHistory(built.steps, 1, DevelopState{}, {});
 
     const QString text = textAt(model, 1);
     CHECK_FALSE(text.isEmpty());
@@ -89,7 +89,7 @@ TEST_CASE("The straighten is worded as the panel shows it", "[app][history]") {
     const std::vector<HistoryStep> steps{{flipped, EditOrigin::Opened, {}},
                                          {straightened, EditOrigin::Edit, {}}};
     HistoryModel model;
-    model.setHistory(steps, 1, flipped);
+    model.setHistory(steps, 1, flipped, {});
 
     CHECK(textAt(model, 1).contains("+2.0"));
     CHECK_FALSE(textAt(model, 1).contains("-2.0"));
@@ -106,7 +106,7 @@ TEST_CASE("A reset names the group it reset", "[app][history]") {
             },
             EditOrigin::Reset);
     HistoryModel model;
-    model.setHistory(built.steps, 3, DevelopState{});
+    model.setHistory(built.steps, 3, DevelopState{}, {});
 
     CHECK(textAt(model, 2) == "Reset Tone Curve");
     // Two groups at once: nothing to name.
@@ -120,7 +120,7 @@ TEST_CASE("An edit of several settings in one group names the group", "[app][his
         s.tone.contrast = 20.0F;
     });
     HistoryModel model;
-    model.setHistory(built.steps, 1, DevelopState{});
+    model.setHistory(built.steps, 1, DevelopState{}, {});
 
     CHECK(textAt(model, 1) == groupDisplayName(SettingGroup::Tone));
     CHECK(textAt(model, 1) == "Tone");
@@ -139,7 +139,7 @@ TEST_CASE("An edit across groups counts its settings", "[app][history]") {
             s.geometry.flipHorizontal = true;
         });
     HistoryModel model;
-    model.setHistory(built.steps, 2, DevelopState{});
+    model.setHistory(built.steps, 2, DevelopState{}, {});
 
     CHECK(textAt(model, 1) == "2 settings");
     CHECK(textAt(model, 2) == "3 settings");
@@ -149,7 +149,7 @@ TEST_CASE("An edit that changes nothing is worded plainly", "[app][history]") {
     Built built;
     built.then([](DevelopSettings&) {});
     HistoryModel model;
-    model.setHistory(built.steps, 1, DevelopState{});
+    model.setHistory(built.steps, 1, DevelopState{}, {});
 
     CHECK(textAt(model, 1) == "Edit");
 }
@@ -160,7 +160,7 @@ TEST_CASE("Rows run newest first and map to history indices", "[app][history]") 
         s.tone.contrast = 10.0F;
     });
     HistoryModel model;
-    model.setHistory(built.steps, 2, DevelopState{});
+    model.setHistory(built.steps, 2, DevelopState{}, {});
 
     REQUIRE(model.rowCount() == 3);
     CHECK(model.index(2).data(Qt::DisplayRole).toString() == "Opened");
@@ -178,7 +178,7 @@ TEST_CASE("Rows say whether they are current, redoable or saved", "[app][history
     });
     HistoryModel model;
     // Gone back to the first edit, which is what is on disk.
-    model.setHistory(built.steps, 1, built.steps[1].state);
+    model.setHistory(built.steps, 1, built.steps[1].state, built.steps[1].negative);
 
     const auto flag = [&](std::size_t index, int role) {
         return model.index(model.rowOfIndex(index)).data(role).toBool();
@@ -199,7 +199,7 @@ TEST_CASE("Rows say whether they are current, redoable or saved", "[app][history
 TEST_CASE("Clearing the model leaves no rows", "[app][history]") {
     Built built;
     HistoryModel model;
-    model.setHistory(built.steps, 0, DevelopState{});
+    model.setHistory(built.steps, 0, DevelopState{}, {});
     CHECK(model.rowCount() == 1);
     model.clear();
     CHECK(model.rowCount() == 0);
@@ -228,7 +228,7 @@ struct BuiltStates {
 
     QString textOfLast() const {
         HistoryModel model;
-        model.setHistory(steps, steps.size() - 1, DevelopState{});
+        model.setHistory(steps, steps.size() - 1, DevelopState{}, {});
         return textAt(model, steps.size() - 1);
     }
 };
@@ -297,7 +297,7 @@ TEST_CASE("Every local control has wording", "[app][history][local]") {
         BuiltStates built{withLocalAdjustmentAdded(DevelopState{}, LinearMask{})};
         built.then(withLocalDelta(built.last(), idOf(built.last(), 0), row.key, 10.0));
         HistoryModel model;
-        model.setHistory(built.steps, 1, DevelopState{});
+        model.setHistory(built.steps, 1, DevelopState{}, {});
         const QString text = textAt(model, 1);
         CHECK(text.startsWith("Linear 1: "));
         CHECK(text.contains("+"));
@@ -390,4 +390,28 @@ TEST_CASE("A brush is worded by its name, and a stroke change is Paint",
     CHECK(built.textOfLast() == "Edit Brush 1");
     built.then(withLocalAdjustmentRemoved(built.last(), id));
     CHECK(built.textOfLast() == "Remove Brush 1");
+}
+
+TEST_CASE("A negative-only step is worded for the demosaic", "[app][history][negative]") {
+    Built built;
+    built.then([](DevelopSettings& s) { s.tone.exposure = 1.0F; });
+    HistoryStep demosaic = built.steps.back();
+    demosaic.negative.demosaic = Demosaic::Vng;
+    built.steps.push_back(demosaic);
+    HistoryStep both = demosaic;
+    both.state.settings.tone.contrast = 10.0F;
+    both.negative.demosaic = Demosaic::Dcb;
+    built.steps.push_back(both);
+
+    HistoryModel model;
+    model.setHistory(built.steps, 3, both.state, both.negative);
+    CHECK(textAt(model, 2) == "Demosaic: VNG");
+    CHECK(textAt(model, 3) == "2 changes");
+
+    const auto saved = [&](std::size_t index) {
+        return model.index(model.rowOfIndex(index)).data(HistoryModel::SavedRole).toBool();
+    };
+    // Step 1 has the saved state's exposure only; the negative decides between 2 and 3.
+    CHECK(saved(3));
+    CHECK_FALSE(saved(2));
 }

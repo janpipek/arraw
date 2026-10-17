@@ -7,6 +7,7 @@
 #include <ImageImport.h>
 #include <LocalAdjustmentEdits.h>
 #include <LocalAdjustments.h>
+#include <NegativeSettings.h>
 #include <NoiseReductionSettings.h>
 #include <Photo.h>
 #include <SettingDescriptors.h>
@@ -883,4 +884,79 @@ TEST_CASE("Writing only the marks refuses what writeSidecar refuses", "[sidecar]
     REQUIRE(slurp(directory.file("IMG_1.xmp")) == "this is not XML");
     REQUIRE_THROWS_AS(writeSidecarMarks(path, {.rating = 6}), std::invalid_argument);
     REQUIRE_THROWS_AS(writeSidecarMarks(path, {.rating = -2}), std::invalid_argument);
+}
+
+TEST_CASE("The demosaic survives a write and a read, and AHD leaves no key",
+          "[sidecar][negative]") {
+    const test::TempDir directory;
+    const fs::path path = copyRaw(directory, "IMG_1.dng");
+    const fs::path sidecar = directory.file("IMG_1.xmp");
+
+    writeSidecar(openPhoto(path).with(NegativeSettings{Demosaic::Vng}));
+    REQUIRE(slurp(sidecar).find("arraw:demosaic=\"vng\"") != std::string::npos);
+    REQUIRE(readSidecar(path)->negative == NegativeSettings{Demosaic::Vng});
+    REQUIRE(openPhoto(path).negative().demosaic == Demosaic::Vng);
+
+    // Back to the default: no key, which reads as AHD.
+    writeSidecar(openPhoto(path).with(NegativeSettings{}));
+    REQUIRE(slurp(sidecar).find("demosaic") == std::string::npos);
+    REQUIRE_FALSE(readSidecar(path)->negative.has_value());
+    REQUIRE(openPhoto(path).negative() == NegativeSettings{});
+}
+
+TEST_CASE("A sidecar of develop settings is the same in meaning after a write with AHD",
+          "[sidecar][negative]") {
+    const test::TempDir directory;
+    const fs::path path = copyRaw(directory, "IMG_1.dng");
+    const fs::path sidecar = directory.file("IMG_1.xmp");
+    writeSidecar(photoOf(path, allNonDefault(), {.rating = 3}));
+    const auto before = meaning(sidecar);
+    writeSidecar(openPhoto(path));
+    REQUIRE(meaning(sidecar) == before);
+    REQUIRE(slurp(sidecar).find("demosaic") == std::string::npos);
+}
+
+TEST_CASE("A sidecar with only a demosaic records a negative and no state", "[sidecar][negative]") {
+    const test::TempDir directory;
+    const fs::path path = copyRaw(directory, "IMG_1.dng");
+    spit(directory.file("IMG_1.xmp"), sidecarWith(R"(arraw:demosaic="dcb")"));
+    const auto contents = readSidecar(path);
+    REQUIRE(contents.has_value());
+    REQUIRE(contents->negative == NegativeSettings{Demosaic::Dcb});
+    REQUIRE_FALSE(contents->state.has_value());
+    const Photo photo = openPhoto(path);
+    REQUIRE(photo.negative().demosaic == Demosaic::Dcb);
+    REQUIRE(photo.state() == defaultStateFor(photo.metadata().encoding));
+}
+
+TEST_CASE("An unknown demosaic token is reported, read as AHD and kept by a write",
+          "[sidecar][negative][diagnostics]") {
+    const test::TempDir directory;
+    const fs::path path = copyRaw(directory, "IMG_1.dng");
+    const fs::path sidecar = directory.file("IMG_1.xmp");
+    spit(sidecar, sidecarWith(R"(arraw:demosaic="amaze")"));
+
+    CollectedDiagnostics log;
+    const Photo photo = openPhoto(path, log);
+    REQUIRE(photo.negative() == NegativeSettings{});
+    REQUIRE(count(log, Notice::SettingMalformed) == 1);
+    REQUIRE(count(log, Notice::SettingUnknown) == 0);
+
+    // A write that leaves the negative as read leaves the key as it is.
+    writeSidecar(photo.with(PhotoMarks{.rating = 2}));
+    REQUIRE(slurp(sidecar).find("arraw:demosaic=\"amaze\"") != std::string::npos);
+
+    // A write that changes it replaces the token.
+    writeSidecar(photo.with(NegativeSettings{Demosaic::Ppg}));
+    const std::string text = slurp(sidecar);
+    REQUIRE(text.find("amaze") == std::string::npos);
+    REQUIRE(text.find("arraw:demosaic=\"ppg\"") != std::string::npos);
+}
+
+TEST_CASE("Writing only marks leaves the demosaic alone", "[sidecar][negative]") {
+    const test::TempDir directory;
+    const fs::path path = copyRaw(directory, "IMG_1.dng");
+    writeSidecar(openPhoto(path).with(NegativeSettings{Demosaic::Vng}));
+    writeSidecarMarks(path, {.rating = 4});
+    REQUIRE(readSidecar(path)->negative == NegativeSettings{Demosaic::Vng});
 }

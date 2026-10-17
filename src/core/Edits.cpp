@@ -251,15 +251,29 @@ Look lookOf(const ImageMetadata& photo, const DevelopSettings& settings) {
     return Look{settings, !std::holds_alternative<NamedEncoding>(photo.encoding)};
 }
 
+Look lookOf(const Photo& photo) {
+    Look look = lookOf(photo.metadata(), photo.state().settings);
+    look.negative = photo.negative();
+    return look;
+}
+
 bool sectionApplies(CopySection section, bool raw) noexcept {
+    // The demosaic has no row in the table: it needs a mosaic, which only a RAW has.
+    if (section == CopySection::Demosaic) {
+        return raw;
+    }
     return raw || std::ranges::none_of(developSettingDescriptors, [&](const FieldDescriptor& d) {
                return d.scope == SettingScope::Look && d.section == section &&
                       d.applies == Applicability::RawOnly;
            });
 }
 
-AppliedLook withLook(const ImageMetadata& photo, DevelopState state, const Look& look,
-                     std::span<const CopySection> sections, const GrainEntropy& entropy) {
+namespace {
+
+/// @brief Carries the sections that are settings of the state; ::arraw::CopySection::Demosaic
+/// has no row, so it passes through unseen.
+AppliedLook carrySettings(const ImageMetadata& photo, DevelopState state, const Look& look,
+                          std::span<const CopySection> sections, const GrainEntropy& entropy) {
     constexpr std::size_t sectionCount = copySectionNames.size();
     std::bitset<sectionCount> chosen;
     for (const CopySection section : sections) {
@@ -301,6 +315,34 @@ AppliedLook withLook(const ImageMetadata& photo, DevelopState state, const Look&
         if (lost.test(i)) {
             result.skipped.push_back(static_cast<CopySection>(i));
         }
+    }
+    return result;
+}
+
+} // namespace
+
+AppliedLook withLook(const ImageMetadata& photo, DevelopState state, const Look& look,
+                     std::span<const CopySection> sections, const GrainEntropy& entropy) {
+    if (std::ranges::find(sections, CopySection::Demosaic) != sections.end()) {
+        throw std::invalid_argument(
+            "demosaic is a setting of the negative, which needs a photograph to carry onto");
+    }
+    return carrySettings(photo, std::move(state), look, sections, entropy);
+}
+
+AppliedLook withLook(const Photo& photo, const Look& look, std::span<const CopySection> sections,
+                     const GrainEntropy& entropy) {
+    AppliedLook result = carrySettings(photo.metadata(), photo.state(), look, sections, entropy);
+    result.negative = photo.negative();
+    if (std::ranges::find(sections, CopySection::Demosaic) == sections.end()) {
+        return result;
+    }
+    const bool toRaw = !std::holds_alternative<NamedEncoding>(photo.metadata().encoding);
+    if (look.fromRaw && toRaw) {
+        validate(look.negative);
+        result.negative = look.negative;
+    } else if (look.fromRaw != toRaw) {
+        result.skipped.push_back(CopySection::Demosaic);
     }
     return result;
 }

@@ -2,7 +2,9 @@
 
 #include "ThumbnailCache.h"
 
+#include <DecodeOptions.h>
 #include <ImageBuffer.h>
+#include <NegativeSettings.h>
 #include <Progress.h>
 
 #include <QImage>
@@ -24,6 +26,9 @@ struct DecodedPhoto {
     std::uint64_t request = 0;
     /// File that was decoded.
     std::filesystem::path path;
+    /// Options the decode was asked for, in canonical form: what the window compares the
+    /// photograph's own against (ADR 049).
+    DecodeOptions options;
     /// Decoded pixels; null when the decode failed.
     std::shared_ptr<const ImageBuffer> decoded;
     /// Description of the failure; empty when the decode succeeded.
@@ -63,8 +68,8 @@ public:
     /// @brief Receiver of a decode's progress, on the decode thread, with the decode's request.
     using ProgressCallback = std::function<void(std::uint64_t request, const Progress& progress)>;
     /// @brief Decoder of a file, reporting into and stopping on the channel it is given.
-    using Decoder =
-        std::function<ImageBuffer(const std::filesystem::path& path, ProgressChannel& channel)>;
+    using Decoder = std::function<ImageBuffer(
+        const std::filesystem::path& path, const DecodeOptions& options, ProgressChannel& channel)>;
 
     /// @brief Gives the decoder the window uses: ::arraw::loadImage, with diagnostics to Qt's
     /// debug output and, when supplied, the debug window's table.
@@ -94,9 +99,10 @@ public:
 
     /// @brief Queues the decode of a photograph, cancelling the one in progress.
     /// @param path File to decode.
+    /// @param options How to decode it; for a photograph, ::arraw::decodeOptionsFor.
     /// @return Identifier of the request, increasing with each call of this or
     /// readCameraPreview().
-    std::uint64_t decode(std::filesystem::path path);
+    std::uint64_t decode(std::filesystem::path path, DecodeOptions options);
 
     /// @brief Drops the queued decode and cancels the one in progress; neither delivers.
     void cancelDecode();

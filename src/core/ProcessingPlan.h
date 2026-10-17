@@ -8,6 +8,7 @@
 #include "PointwisePlan.h"
 
 #include <ColorEncoding.h>
+#include <DecodeOptions.h>
 #include <Develop.h>
 #include <DevelopSettings.h>
 #include <DevelopState.h>
@@ -133,6 +134,15 @@ struct ResizePlan {
 /// Settings that are switched off should resolve to a value that costs
 /// nothing here rather than to a test inside the per-pixel loop.
 struct ProcessingPlan {
+    /// @brief Options the source was decoded with, in canonical form (ADR 049).
+    ///
+    /// ADR 012's decode block in its smallest form: a header of the plan, not a stage, since
+    /// nothing runs it inside the stage driver (the caller supplies the source). It is
+    /// compared by every prefix before any stage, so a render of another negative never
+    /// resumes from a checkpoint of this one. Empty for a source no decode made. It is the
+    /// one member of the plan outside ::arraw::stagesOf.
+    std::optional<DecodeOptions> decode = std::nullopt;
+
     /// @brief Luminance and colour noise reduction, run on the source before anything else.
     ///
     /// Its own pass and the first group of `stagesOf` (ADR 039). It reads the
@@ -169,7 +179,8 @@ struct ProcessingPlan {
 /// ::arraw::Stage, so this is a flat `std::tie` and a pass that arrives (decode,
 /// lens, spots) adds a block and a line. The grouping is what the prefix
 /// comparison folds over, so there is no per-stage line to forget, only this
-/// list to keep honest; a test pins that the plan has no member outside it.
+/// list to keep honest. ::arraw::ProcessingPlan::decode is the one member outside it: it
+/// is compared before any stage.
 /// @param plan Plan to view by stage.
 /// @return One tuple element per ::arraw::Stage, in pipeline order.
 [[nodiscard]] inline auto stagesOf(const ProcessingPlan& plan) {
@@ -209,14 +220,14 @@ static_assert(std::tuple_size_v<decltype(stagesOf(std::declval<const ProcessingP
 /// @param first One plan.
 /// @param second The other.
 /// @param upTo Last boundary to compare; later stages are not looked at.
-/// @return `true` if @p upTo is a known boundary and every stage up to it
-/// resolved identically.
+/// @return `true` if @p upTo is a known boundary, the sources were decoded the same way
+/// (::arraw::ProcessingPlan::decode) and every stage up to it resolved identically.
 [[nodiscard]] inline bool prefixMatches(const ProcessingPlan& first, const ProcessingPlan& second,
                                         Stage upTo) {
     const auto left = stagesOf(first);
     const auto right = stagesOf(second);
     const auto last = static_cast<std::size_t>(upTo);
-    if (last >= stageCount) {
+    if (last >= stageCount || first.decode != second.decode) {
         return false;
     }
     return [&]<std::size_t... I>(std::index_sequence<I...>) {

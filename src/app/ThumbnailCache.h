@@ -1,6 +1,7 @@
 #pragma once
 
 #include <DevelopState.h>
+#include <NegativeSettings.h>
 
 #include <QImage>
 
@@ -57,9 +58,12 @@ public:
     /// later (spots) is added here and nowhere else.
     /// @param file Photograph.
     /// @param state Saved develop state of the photograph.
+    /// @param negative Saved negative settings; part of the key only when not the default, so
+    /// that existing keys stay as they are (ADR 049).
     /// @return The key, or nothing if the file cannot be looked at.
-    [[nodiscard]] static std::optional<std::string> developedKey(const std::filesystem::path& file,
-                                                                 const DevelopState& state);
+    [[nodiscard]] static std::optional<std::string>
+    developedKey(const std::filesystem::path& file, const DevelopState& state,
+                 const NegativeSettings& negative = {});
 
     /// @brief Reads an entry and marks it as just used.
     /// @param key Key from one of the key functions.

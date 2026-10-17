@@ -10,6 +10,27 @@ import numpy
 from numpy.typing import NDArray
 
 
+class Demosaic(enum.Enum):
+    """
+    Algorithm that turns a RAW's sensor mosaic into colour; str() is the token the sidecar and the command line use.
+    """
+
+    def __str__(self) -> str: ...
+
+    LINEAR = 0
+
+    VNG = 1
+
+    PPG = 2
+
+    AHD = 3
+
+    DCB = 4
+
+    DHT = 5
+
+    AAHD = 6
+
 class ImageSize:
     """Pixel dimensions of an image."""
 
@@ -140,9 +161,9 @@ class ImageBuffer:
 def read_metadata(path: str | os.PathLike) -> ImageMetadata:
     """Read what a file declares about itself, without decoding its pixels."""
 
-def load(path: str | os.PathLike, half_size: bool = False) -> ImageBuffer:
+def load(path: str | os.PathLike, half_size: bool = False, demosaic: Demosaic = Demosaic.AHD) -> ImageBuffer:
     """
-    Decode an image file into a buffer. With half_size a RAW is decoded at half its width and height, without demosaicing, its pixel_scale is 2, and the buffer is that much smaller than read_metadata says; other files ignore it.
+    Decode an image file into a buffer. With half_size a RAW is decoded at half its width and height, without demosaicing, its pixel_scale is 2, and the buffer is that much smaller than read_metadata says; other files ignore it. demosaic is the algorithm of a full-size decode of a mosaiced RAW; a half-size decode and other files ignore it.
     """
 
 def read_embedded_preview(path: str | os.PathLike, max_edge: int) -> ImageBuffer | None:
@@ -1227,6 +1248,25 @@ class ColorLabel(enum.Enum):
 
     PURPLE = 4
 
+class NegativeSettings:
+    """
+    What shapes the decoded negative, as opposed to what is done with it: a RAW's demosaic. Changing it costs a decode; no develop edit can reach it.
+    """
+
+    def __init__(self, *, demosaic: Demosaic = Demosaic.AHD) -> None: ...
+
+    @property
+    def demosaic(self) -> Demosaic: ...
+
+    def __eq__(self, arg: NegativeSettings, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> NegativeSettings:
+        """Return a copy with the given attributes replaced."""
+
 class PhotoMarks:
     """Culling marks of a photograph: rating -1 (rejected) to 5, and a label."""
 
@@ -1302,16 +1342,19 @@ class DevelopState:
 
 class SidecarContents:
     """
-    What an XMP sidecar holds, and which other tools wrote in it. `state` is None when the sidecar records no develop settings (marks only, or another tool's).
+    What an XMP sidecar holds, and which other tools wrote in it. `state` is None when the sidecar records no develop settings (marks only, or another tool's), and `negative` when it records no negative settings.
     """
 
-    def __init__(self, *, state: DevelopState | None = None, marks: PhotoMarks | None = None, creator_tool: str | None = None, others: Sequence[ForeignNamespace] | None = None) -> None: ...
+    def __init__(self, *, state: DevelopState | None = None, marks: PhotoMarks | None = None, negative: NegativeSettings | None = None, creator_tool: str | None = None, others: Sequence[ForeignNamespace] | None = None) -> None: ...
 
     @property
     def state(self) -> DevelopState | None: ...
 
     @property
     def marks(self) -> PhotoMarks: ...
+
+    @property
+    def negative(self) -> NegativeSettings | None: ...
 
     @property
     def creator_tool(self) -> str | None: ...
@@ -1388,6 +1431,12 @@ class Photo:
     def state(self) -> DevelopState: ...
 
     @property
+    def negative(self) -> NegativeSettings:
+        """
+        How the negative is decoded (NegativeSettings); no develop edit changes it.
+        """
+
+    @property
     def marks(self) -> PhotoMarks: ...
 
     def edited(self, **kwargs) -> Photo:
@@ -1445,12 +1494,13 @@ class Photo:
         state: DevelopState | None = None,
         *,
         marks: PhotoMarks | None = None,
+        negative: NegativeSettings | None = None,
         rating: int = ...,
         label: ColorLabel | None = ...,
         **kwargs: Any,
     ) -> Photo:
         """
-        Return a photograph with `state` (and `marks`) replacing the current ones wholesale, then flat snake_case keywords applied, e.g. exposure=0.7, which edit the settings of the state. `rating` and `label` change the marks instead (label=None clears it). Applies no rules: each keyword is assigned as it is, so a turn leaves the crop where it was. `edited` applies the rules of the editing frontends.
+        Return a photograph with `state` (and `marks`, and `negative`) replacing the current ones wholesale, then flat snake_case keywords applied, e.g. exposure=0.7, which edit the settings of the state. `rating` and `label` change the marks instead (label=None clears it). Applies no rules: each keyword is assigned as it is, so a turn leaves the crop where it was. `edited` applies the rules of the editing frontends.
         """
 
 def open(path: str | os.PathLike, *, sidecar: bool = True) -> Photo:
@@ -1701,6 +1751,10 @@ class HistoryStep:
     def detail(self) -> str:
         """What the origin applies to, such as a preset's name; empty otherwise."""
 
+    @property
+    def negative(self) -> NegativeSettings:
+        """Negative settings after the step."""
+
     def __eq__(self, arg: HistoryStep, /) -> bool: ...
 
     def __repr__(self) -> str: ...
@@ -1720,12 +1774,25 @@ class ChangeDescription:
         Group every key belongs to; None when there are no keys or they span groups.
         """
 
+    @property
+    def negative(self) -> list[str]:
+        """
+        Keys of the negative settings that differ ('demosaic'); empty unless made by describe_change over two history steps.
+        """
+
     def __eq__(self, arg: ChangeDescription, /) -> bool: ...
 
     def __repr__(self) -> str: ...
 
+@overload
 def describe_change(before: DevelopState, after: DevelopState) -> ChangeDescription:
     """List the settings two develop states differ in."""
+
+@overload
+def describe_change(before: HistoryStep, after: HistoryStep) -> ChangeDescription:
+    """
+    List what two history steps differ in: the develop state, and the negative settings in `negative`.
+    """
 
 class EditScope:
     """Context manager of one edit; made by EditSession.edit()."""
@@ -1763,8 +1830,15 @@ class EditSession:
     def editing(self) -> bool:
         """Whether an edit is open."""
 
-    def set_state(self, state: DevelopState, origin: EditOrigin = EditOrigin.EDIT, detail: str = '') -> None:
-        """Replace the develop state as one history step."""
+    def set_state(self, state: DevelopState, origin: EditOrigin = EditOrigin.EDIT, detail: str = '', *, negative: NegativeSettings | None = None) -> None:
+        """
+        Replace the develop state as one history step. With `negative`, the negative settings change in the same step (a paste or a preset); None leaves them.
+        """
+
+    def set_negative(self, negative: NegativeSettings, origin: EditOrigin = EditOrigin.EDIT, detail: str = '') -> None:
+        """
+        Replace the negative settings as one history step; equal ones leave none. An open edit is committed first.
+        """
 
     @property
     def history(self) -> list[HistoryStep]:

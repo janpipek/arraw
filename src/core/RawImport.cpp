@@ -33,8 +33,30 @@ namespace {
 /// recorded, so the conversion out of it belongs to development (ADR 007).
 constexpr int outputColorCameraNative = 0;
 
-/// @brief LibRaw's `user_qual` value for the AHD demosaic.
-constexpr int demosaicAhd = 3;
+/// @brief Maps a demosaic to LibRaw's `user_qual`, the only place that knows the numbers.
+///
+/// LibRaw validates nothing, so a value outside the enumerators is refused here rather than
+/// handed over (ADR 005).
+/// @throws std::invalid_argument if @p demosaic is not an enumerator.
+int userQualityOf(Demosaic demosaic) {
+    switch (demosaic) {
+    case Demosaic::Linear:
+        return 0;
+    case Demosaic::Vng:
+        return 1;
+    case Demosaic::Ppg:
+        return 2;
+    case Demosaic::Ahd:
+        return 3;
+    case Demosaic::Dcb:
+        return 4;
+    case Demosaic::Dht:
+        return 11;
+    case Demosaic::Aahd:
+        return 12;
+    }
+    throw std::invalid_argument("the demosaic is not one arraw knows");
+}
 
 /// @brief Deleter for images allocated by `dcraw_make_mem_image`.
 struct ProcessedImageDeleter {
@@ -142,7 +164,13 @@ void applyDecodeSettings(LibRaw& raw, DecodeOptions options) {
     params.use_camera_wb = hasCameraNeutral(raw) ? 1 : 0;
     params.use_auto_wb = 0;
 
-    params.user_qual = demosaicAhd;
+    // Every parameter of every algorithm is set, whether or not the chosen one reads it
+    // (ADR 005): a LibRaw default is not a decision.
+    params.user_qual = userQualityOf(options.demosaic);
+    params.dcb_iterations = 1;
+    params.dcb_enhance_fl = 0;
+    params.four_color_rgb = 0;
+    params.med_passes = 0;
 
     // LibRaw defaults to -1, "rotate to the camera's orientation". arraw keeps
     // rotation a develop setting, so the buffer stays in sensor geometry --
@@ -192,6 +220,18 @@ CameraNative cameraColour(const LibRaw& raw) {
     return camera;
 }
 
+/// @brief Reads the colour filter array an opened file declares.
+/// @param raw Opened handle, before any processing.
+/// @return None when the pixels are not a mosaic: no filter pattern, or one colour.
+Mosaic mosaicOf(const LibRaw& raw) {
+    const auto& idata = raw.imgdata.idata;
+    if (idata.filters == 0 || idata.colors == 1) {
+        return Mosaic::None;
+    }
+    // LibRaw marks X-Trans with its own filter value.
+    return idata.filters == LIBRAW_XTRANS ? Mosaic::XTrans : Mosaic::Bayer;
+}
+
 /// @brief Describes an opened file, for a plan to be resolved against.
 ///
 /// The dimensions are the visible frame's rather than `iwidth`/`iheight`,
@@ -211,7 +251,8 @@ ImageMetadata metadataOf(const LibRaw& raw) {
         sizes.flip >= 0 && sizes.flip < 8 ? orientations[sizes.flip] : ImageOrientation::Normal;
     return {.size = {sizes.width, sizes.height},
             .encoding = cameraColour(raw),
-            .orientation = orientation};
+            .orientation = orientation,
+            .mosaic = mosaicOf(raw)};
 }
 
 /// @brief Reports a white balance the camera did not record.
@@ -405,6 +446,7 @@ ImageBuffer arraw::rawimport::load(const std::filesystem::path& path, Diagnostic
         // stage measured in sensor pixels reads this (ADR 039).
         decoded.setPixelScale(2.0);
     }
+    decoded.setDecodedWith(canonical(options, metadata));
     detail::completeUnit();
     return decoded;
 }

@@ -2,6 +2,7 @@
 
 #include <DevelopState.h>
 #include <Diagnostics.h>
+#include <NegativeSettings.h>
 #include <Photo.h>
 #include <PhotoMarks.h>
 
@@ -49,6 +50,13 @@ struct SidecarContents {
     /// one only another tool wrote in, records none, and the photograph starts
     /// from what its kind does (::arraw::defaultStateFor), as with no sidecar.
     std::optional<DevelopState> state;
+
+    /// @brief Negative settings the sidecar records, or nothing when it has no `arraw:demosaic`.
+    ///
+    /// Independent of ::arraw::SidecarContents::state: a sidecar with only `arraw:demosaic`
+    /// records a negative and no state. A token that is not known is reported and read as the
+    /// default.
+    std::optional<NegativeSettings> negative;
 
     /// @brief Culling marks, none for whatever the sidecar does not say.
     PhotoMarks marks;
@@ -119,6 +127,10 @@ inline constexpr auto xmpNamespaceOwners = std::to_array<XmpNamespaceOwner>({
 
 /// @brief Reads the sidecar of a photograph, if it has one.
 ///
+/// `arraw:demosaic` is the photograph's negative (ADR 049): one of
+/// ::arraw::demosaicTokens. An unknown token gives ::arraw::Notice::SettingMalformed and the
+/// default, AHD.
+///
 /// Every `rdf:Description` is searched. The develop settings are the
 /// `arraw:` properties, as attributes or as simple child elements, applied onto
 /// defaults through the same codec as the JSON document, so a value out of
@@ -162,7 +174,10 @@ readSidecar(const std::filesystem::path& photo, DiagnosticLog& log = discardedDi
 /// thing once. `xmp:Rating` and `xmp:Label` are written only when the
 /// photograph's marks differ from what reading the file gives, so a rating or
 /// label arraw cannot represent (`9`, `Rot`) stays as another tool wrote it
-/// until the mark is changed; clearing the label removes it. The local adjustments are
+/// until the mark is changed; clearing the label removes it. `arraw:demosaic` follows the same
+/// rule: it is written only when the photograph's negative differs from what reading the file
+/// gives, so a token of a newer arraw survives, and AHD, the default, is written as no key.
+/// ::arraw::writeSidecarMarks leaves it alone. The local adjustments are
 /// rewritten whole: `arraw:localAdjustments`, `arraw:localAdjustmentsVersion` and
 /// `arraw:nextLocalAdjustmentId` are written when the list is not empty or the counter is above 1,
 /// and removed otherwise, so a state with no masks and a fresh counter leaves no trace and every

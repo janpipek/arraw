@@ -42,8 +42,9 @@ public:
     /// @param history Steps, oldest first, as ::arraw::EditSession::history gives them.
     /// @param position Index of the current step.
     /// @param saved State on disk, to mark the steps that equal it.
+    /// @param savedNegative Negative settings on disk, which a step must also equal.
     void setHistory(const std::vector<HistoryStep>& history, std::size_t position,
-                    const DevelopState& saved);
+                    const DevelopState& saved, const NegativeSettings& savedNegative);
 
     /// @brief Shows no steps.
     void clear();
@@ -76,6 +77,7 @@ private:
     std::vector<HistoryStep> history_;
     std::size_t position_ = 0;
     std::optional<DevelopState> saved_;
+    NegativeSettings savedNegative_;
 };
 
 } // namespace arraw::app

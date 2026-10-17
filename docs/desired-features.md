@@ -49,7 +49,8 @@ top: turning on B&W hides the colour controls and reveals the mixer.
 | **Color** | Saturation and Vibrance, plus HSL — hue, saturation and luminance across 8 colour ranges |
 | **Black & White** | An 8-band hue mixer: each original colour is weighted into its own grey, the way a coloured filter over B&W film behaves. Not a flat desaturation |
 | **Colour Grading** | Independent hue + saturation for shadows, midtones and highlights, with Balance and Blending. Works over colour *and* B&W images |
-| **Detail** | Demosaic choice; Texture, Clarity, Dehaze, Sharpen; separate Luminance noise (amount/detail) and Colour noise (strength/smoothness) reduction, both edge-aware |
+| **Negative** | Demosaic choice (Linear, VNG, PPG, AHD, DCB, DHT, AAHD) for a RAW. It re-decodes the file, so it is kept apart from the develop sliders; it is saved, undoable, and copied and pasted with the look |
+| **Detail** | Texture, Clarity, Dehaze, Sharpen; separate Luminance noise (amount/detail) and Colour noise (strength/smoothness) reduction, both edge-aware |
 | **Geometry** | 90° rotation and flips, Straighten (±45°), Crop with aspect presets |
 | **Lens Corrections** | Profile-driven distortion, vignetting and chromatic-aberration correction, from the lensfun database or the profile embedded in the file |
 | **Effects** | Post-crop vignette (amount / midpoint / feather) and film grain (amount / size / roughness) |

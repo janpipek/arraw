@@ -83,7 +83,8 @@ struct ControlledDecoder {
     std::atomic<int> slowCancelled{0};
 
     [[nodiscard]] PhotoLoader::Decoder decoder() {
-        return [this](const std::filesystem::path& path, ProgressChannel& channel) {
+        return [this](const std::filesystem::path& path, const DecodeOptions&,
+                      ProgressChannel& channel) {
             if (path.filename() == "slow") {
                 ++slowStarted;
                 while (!channel.cancelled()) {
@@ -108,7 +109,7 @@ TEST_CASE("The loader decodes a photograph on its thread and reports its progres
     Collector collector;
     PhotoLoader loader(ThumbnailCache(cacheRoot.path()), collector.onDecoded(),
                        collector.onPreview(), collector.onProgress());
-    const std::uint64_t request = loader.decode(test::fixture("bayer-32x24.dng"));
+    const std::uint64_t request = loader.decode(test::fixture("bayer-32x24.dng"), {});
     REQUIRE(waitUntil([&] { return collector.decodedCount() == 1; }));
     const std::scoped_lock lock(collector.mutex);
     const DecodedPhoto& result = collector.decoded.front();
@@ -129,7 +130,7 @@ TEST_CASE("A decode that fails delivers why, and no pixels", "[app][loader]") {
     ControlledDecoder control;
     PhotoLoader loader(ThumbnailCache(cacheRoot.path()), collector.onDecoded(), {}, {},
                        control.decoder());
-    const std::uint64_t request = loader.decode("broken");
+    const std::uint64_t request = loader.decode("broken", {});
     REQUIRE(waitUntil([&] { return collector.decodedCount() == 1; }));
     const std::scoped_lock lock(collector.mutex);
     CHECK(collector.decoded.front().request == request);
@@ -143,11 +144,11 @@ TEST_CASE("A newer decode cancels the one in progress, which delivers nothing", 
     ControlledDecoder control;
     PhotoLoader loader(ThumbnailCache(cacheRoot.path()), collector.onDecoded(), {}, {},
                        control.decoder());
-    loader.decode("slow");
+    loader.decode("slow", {});
     REQUIRE(waitUntil([&] { return control.slowStarted == 1; }));
     // Queued behind the slow one, then replaced before it could start: never decoded.
-    loader.decode("replaced");
-    const std::uint64_t newest = loader.decode("newest");
+    loader.decode("replaced", {});
+    const std::uint64_t newest = loader.decode("newest", {});
     REQUIRE(waitUntil([&] { return collector.decodedCount() == 1; }));
     CHECK(control.slowCancelled == 1);
     std::this_thread::sleep_for(50ms);
@@ -164,12 +165,12 @@ TEST_CASE("Cancelling the decode drops it, and closing the loader stops it", "[a
     {
         PhotoLoader loader(ThumbnailCache(cacheRoot.path()), collector.onDecoded(), {}, {},
                            control.decoder());
-        loader.decode("slow");
+        loader.decode("slow", {});
         REQUIRE(waitUntil([&] { return control.slowStarted == 1; }));
         loader.cancelDecode();
         REQUIRE(waitUntil([&] { return control.slowCancelled == 1; }));
 
-        loader.decode("slow");
+        loader.decode("slow", {});
         REQUIRE(waitUntil([&] { return control.slowStarted == 2; }));
         // The destructor cancels the decode rather than waiting for it to finish.
     }
@@ -183,7 +184,7 @@ TEST_CASE("The loader reads a camera preview without holding up decodes", "[app]
     ControlledDecoder control;
     PhotoLoader loader(ThumbnailCache(cacheRoot.path()), collector.onDecoded(),
                        collector.onPreview(), {}, control.decoder());
-    loader.decode("slow");
+    loader.decode("slow", {});
     REQUIRE(waitUntil([&] { return control.slowStarted == 1; }));
     // On its own thread: the decode in progress does not hold it up.
     const std::uint64_t request = loader.readCameraPreview(test::fixture("preview-32x24.dng"));

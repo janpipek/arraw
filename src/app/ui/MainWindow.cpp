@@ -18,6 +18,7 @@
 #include "PhotoView.h"
 #include "RenderDelay.h"
 #include "RenderProgressPie.h"
+#include "SettingPresentation.h"
 #include "SettingsDialog.h"
 #include "StatusLine.h"
 #include "ThumbnailCache.h"
@@ -135,7 +136,7 @@ DevelopState uncroppedState(DevelopState state) {
 
 } // namespace
 
-MainWindow::MainWindow(DebugLog& debugLog, QWidget* parent)
+MainWindow::MainWindow(DebugLog& debugLog, QWidget* parent, PhotoLoader::Decoder decoder)
     : QMainWindow(parent), debugLog_(debugLog), runningSettings_([] {
           QSettings store;
           return restoreAppSettings(store);
@@ -187,13 +188,13 @@ MainWindow::MainWindow(DebugLog& debugLog, QWidget* parent)
               QMetaObject::invokeMethod(
                   this,
                   [this, request, progress] {
-                      if (request == decodeRequest_) {
+                      if (request == decodeRequest_ || request == redecodeRequest_) {
                           renderIndicator_->report(progress.fraction, progress.step);
                       }
                   },
                   Qt::QueuedConnection);
           },
-          PhotoLoader::imageDecoder(&debugLog.diagnostics)) {
+          decoder ? std::move(decoder) : PhotoLoader::imageDecoder(&debugLog.diagnostics)) {
     filmStrip_ = new FilmStrip(this);
     buildMenu();
     buildStatusBar();
@@ -598,6 +599,7 @@ void MainWindow::buildDevelopDock() {
     connect(developPanel_, &DevelopPanel::editStarted, this, &MainWindow::beginEdit);
     connect(developPanel_, &DevelopPanel::stateEdited, this, &MainWindow::updateEdit);
     connect(developPanel_, &DevelopPanel::pickToggled, this, &MainWindow::setPicking);
+    connect(developPanel_, &DevelopPanel::negativeChosen, this, &MainWindow::chooseNegative);
 
     // The Masks group and the overlay speak the same protocol, and share the slots above.
     connect(developPanel_, &DevelopPanel::maskSelected, this,
@@ -1174,7 +1176,8 @@ void MainWindow::updateHistoryDock() {
         return;
     }
     const EditSession& session = open_->session;
-    historyModel_->setHistory(session.history(), session.position(), session.saved().state());
+    historyModel_->setHistory(session.history(), session.position(), session.saved().state(),
+                              session.saved().negative());
     const QModelIndex current = historyModel_->index(historyModel_->rowOfIndex(session.position()));
     historyView_->setCurrentIndex(current);
     historyView_->scrollTo(current);
@@ -1212,7 +1215,7 @@ void MainWindow::copySettings() {
         // A drag still on the slider counts.
         developPanel_->finishPendingEdit();
         const Photo& photo = open_->session.photo();
-        const Look look = lookOf(photo.metadata(), photo.state().settings);
+        const Look look = lookOf(photo);
         QSettings saved;
         CopySettingsDialog dialog(restoreCopySections(saved), look.fromRaw, this);
         if (dialog.exec() != QDialog::Accepted) {
@@ -1234,10 +1237,10 @@ void MainWindow::pasteSettings() {
         // A stroke under way is committed by the session, then the paste is its own step.
         photoView_->maskOverlay().abandonDrag();
         const Photo& photo = open_->session.photo();
-        const AppliedLook applied =
-            withLook(photo.metadata(), photo.state(), clipboard_->look, clipboard_->sections);
-        const bool changed = applied.state != photo.state();
-        open_->session.setState(applied.state, EditOrigin::Paste);
+        const AppliedLook applied = withLook(photo, clipboard_->look, clipboard_->sections);
+        const bool changed = applied.state != photo.state() || applied.negative != photo.negative();
+        // Both parts in one step; refreshPanel() re-decodes when the negative changed.
+        open_->session.setState(applied.negative, applied.state, EditOrigin::Paste);
         refreshPanel();
         const QString skipped = skippedMessage(applied.skipped);
         if (!skipped.isEmpty()) {
@@ -1380,7 +1383,7 @@ void MainWindow::refreshPanel(std::chrono::milliseconds renderDelay) {
     const Photo& photo = open_->session.photo();
     const bool raw = !std::holds_alternative<NamedEncoding>(photo.metadata().encoding);
     PanelContext context{raw, std::nullopt, defaultStateFor(photo.metadata().encoding).settings,
-                         photo.metadata()};
+                         photo.metadata(), photo.negative()};
     if (const auto* camera = std::get_if<CameraNative>(&photo.metadata().encoding)) {
         try {
             // The light the pixels went through, which is also what development
@@ -1398,6 +1401,7 @@ void MainWindow::refreshPanel(std::chrono::milliseconds renderDelay) {
     updateHistoryActions();
     saveAction_->setEnabled(open_->session.hasUnsavedChanges());
     updateTitle();
+    syncDecode();
     if (renderDelay.count() > 0) {
         noiseReductionTimer_.start(renderDelay);
     } else {
@@ -1710,17 +1714,19 @@ void MainWindow::sidecarChangedOnDisk(const QString& primary) {
         DebugDiagnostics log(debugLog_.diagnostics);
         Photo photo = openPhoto(path, log);
         const Photo& saved = open_->session.saved();
-        if (photo.state() == saved.state() && photo.marks() == saved.marks()) {
+        if (photo.state() == saved.state() && photo.negative() == saved.negative() &&
+            photo.marks() == saved.marks()) {
             return; // Touched, not changed: keep the history.
         }
         // The pixels are the same file's; only the settings and marks are read again, and the
         // view stays where it is.
         auto decoded = open_->decoded;
+        const DecodeOptions decodedOptions = open_->decodedOptions;
         auto cameraPreview = std::move(open_->cameraPreview);
         auto lastCropImage = std::move(open_->lastCropImage);
-        open_.emplace(OpenPhoto{EditSession(std::move(photo)), std::move(decoded),
+        open_.emplace(OpenPhoto{EditSession(std::move(photo)), std::move(decoded), decodedOptions,
                                 std::move(cameraPreview), std::move(lastCropImage)});
-        refreshPanel();
+        refreshPanel(); // Re-decodes if the sidecar's negative is not the shown pixels'.
         statusLine_->showMessage(tr("Reloaded %1: its sidecar changed on disk.").arg(name), 5000);
     } catch (const std::exception& error) {
         statusLine_->showMessage(
@@ -1794,15 +1800,20 @@ void MainWindow::exportWithDialog() {
             return; // The file dialog only asked about the name as typed.
         }
 
-        const std::uint64_t id =
-            exportQueue_.enqueue({.state = photo.state(),
-                                  .source = open_->decoded,
-                                  .request = requestOf(settings),
-                                  .options = optionsOf(settings),
-                                  .path = path,
-                                  .metadata = ExportMetadata{.source = photo.path(),
-                                                             .marks = photo.marks(),
-                                                             .selection = selectionOf(settings)}});
+        const DecodeOptions decodeOptions = decodeOptionsFor(photo, false);
+        const std::uint64_t id = exportQueue_.enqueue(
+            {.state = photo.state(),
+             .decode = decodeOptions,
+             .input = photo.path(),
+             // Only pixels made with the job's options; else the export thread decodes
+             // for itself.
+             .source = open_->decodedOptions == decodeOptions ? open_->decoded : nullptr,
+             .request = requestOf(settings),
+             .options = optionsOf(settings),
+             .path = path,
+             .metadata = ExportMetadata{.source = photo.path(),
+                                        .marks = photo.marks(),
+                                        .selection = selectionOf(settings)}});
         exportNames_.emplace(id, toQString(path.filename()));
         showExportProgress();
     } catch (const std::exception& error) {
@@ -2027,8 +2038,8 @@ void MainWindow::showResult(const PreviewResult& result) {
     // mode left) still ends it when no request follows.
     // While a decode is awaited the busy period is the decode's.
     // A coarser stand-in does not end it: the render of the request's own level follows.
-    if (decodeRequest_ == 0 && result.request >= latestRequest_ && !result.provisional &&
-        (result.image || !result.error.empty())) {
+    if (decodeRequest_ == 0 && redecodeRequest_ == 0 && result.request >= latestRequest_ &&
+        !result.provisional && (result.image || !result.error.empty())) {
         renderIndicator_->finish(result.image.has_value() && result.request >= firstRequest_);
     }
     if (result.request < firstRequest_) {
@@ -2051,7 +2062,9 @@ void MainWindow::showResult(const PreviewResult& result) {
             latestShownProvisional_ = false;
             // Turned and flipped to the geometry now, should a turn have happened since.
             photoView_->cropOverlay().setImage(*result.image, renderedFor->settings.geometry);
-            open_->lastCropImage.emplace(*renderedFor, *result.image);
+            if (result.request > open_->cropImageFloor) {
+                open_->lastCropImage.emplace(*renderedFor, *result.image);
+            }
             renderProgress_->setOpened(); // A render shown in the crop mode counts too.
             showDevice(result);
             return;
@@ -2138,7 +2151,11 @@ void MainWindow::showPhoto(Photo photo) {
     // The shot just left shows its saved settings again, not the edits that were abandoned.
     filmStrip_->releaseLiveThumbnail();
     const std::filesystem::path path = photo.path();
-    open_.emplace(OpenPhoto{EditSession(std::move(photo)), nullptr, std::nullopt, std::nullopt});
+    const DecodeOptions decodeOptions = decodeOptionsFor(photo, false);
+    open_.emplace(OpenPhoto{EditSession(std::move(photo)), nullptr, decodeOptions, std::nullopt,
+                            std::nullopt});
+    redecodeRequest_ = 0;
+    failedOptions_.reset();
     renderProgress_->setPhotoOpen(true);
     renderProgress_->setOpening(toQString(path.filename()));
     // The previous photograph's pixels go, and with them whatever the renderer was doing.
@@ -2150,7 +2167,7 @@ void MainWindow::showPhoto(Photo photo) {
     cameraPreviewRequest_ = 0;
     showStandIn();
     // Cancels the decode of a photograph opened before this one (ADR 042).
-    decodeRequest_ = photoLoader_.decode(path);
+    decodeRequest_ = photoLoader_.decode(path, decodeOptions);
     renderIndicator_->begin();
     // A render of the previous photograph may still hold the bar: its step is not this one's.
     renderIndicator_->report(0.0, ProgressStep::Decode);
@@ -2190,6 +2207,34 @@ void MainWindow::showStandIn() {
 }
 
 void MainWindow::decodeLanded(const DecodedPhoto& result) {
+    if (result.request != 0 && result.request == redecodeRequest_) {
+        redecodeRequest_ = 0;
+        if (!open_ || !open_->decoded) {
+            return;
+        }
+        statusLine_->clearMessage();
+        if (!result.decoded) {
+            // The old pixels stay, and so does the step: undo takes it back.
+            failedOptions_ = redecodeOptions_;
+            renderIndicator_->finish(false);
+            statusLine_->showMessage(
+                tr("Cannot decode with %1: %2 The photograph is still shown as decoded with %3.")
+                    .arg(demosaicDisplayName(redecodeOptions_.demosaic),
+                         QString::fromStdString(result.error),
+                         demosaicDisplayName(open_->decodedOptions.demosaic)),
+                15000);
+            return;
+        }
+        const detail::TimingSpan timing("window.redecodeLanded");
+        open_->decoded = result.decoded;
+        open_->decodedOptions = result.options;
+        // Made from the old pixels.
+        open_->lastCropImage.reset();
+        open_->cropImageFloor = latestRequest_; // A queued render of the old pixels may still land.
+        previewRenderer_.setSource(result.decoded);
+        refreshPanel(); // Requests the render, and checks the negative once more.
+        return;
+    }
     if (result.request != decodeRequest_) {
         return; // Of a photograph left since.
     }
@@ -2208,9 +2253,54 @@ void MainWindow::decodeLanded(const DecodedPhoto& result) {
     }
     const detail::TimingSpan timing("window.decodeLanded");
     open_->decoded = result.decoded;
+    open_->decodedOptions = result.options;
     previewRenderer_.setSource(result.decoded);
     updateEditingActions();
-    refreshPanel(); // Requests the first render.
+    refreshPanel(); // Requests the first render, and re-decodes if the negative changed since.
+}
+
+void MainWindow::chooseNegative(const NegativeSettings& negative) {
+    if (!editable() || photoView_->isCropMode()) {
+        refreshPanel();
+        return;
+    }
+    guarded([this, &negative] {
+        developPanel_->finishPendingEdit();
+        photoView_->maskOverlay().abandonDrag();
+        open_->session.setNegative(negative);
+        refreshPanel();
+    });
+}
+
+void MainWindow::syncDecode() {
+    // Until the first pixels land, decodeLanded() compares the negative itself.
+    if (!open_ || !open_->decoded) {
+        return;
+    }
+    const Photo& photo = open_->session.photo();
+    const DecodeOptions wanted = decodeOptionsFor(photo, false);
+    if (wanted == open_->decodedOptions) {
+        // Back on the shown pixels: a failure of another choice is not this one's.
+        failedOptions_.reset();
+        if (redecodeRequest_ != 0) {
+            // Back to the shown pixels' negative: nothing left to wait for.
+            photoLoader_.cancelDecode();
+            redecodeRequest_ = 0;
+            statusLine_->clearMessage();
+            renderIndicator_->finish(true);
+        }
+        return;
+    }
+    if ((redecodeRequest_ != 0 && wanted == redecodeOptions_) || wanted == failedOptions_) {
+        return;
+    }
+    failedOptions_.reset();
+    redecodeOptions_ = wanted;
+    // Cancels the one in flight, if any: the newest choice wins (ADR 042).
+    redecodeRequest_ = photoLoader_.decode(photo.path(), wanted);
+    statusLine_->showMessage(tr("Decoding with %1…").arg(demosaicDisplayName(wanted.demosaic)));
+    renderIndicator_->begin();
+    renderIndicator_->report(0.0, ProgressStep::Decode);
 }
 
 void MainWindow::closePhoto() {
@@ -2227,6 +2317,8 @@ void MainWindow::closePhoto() {
     renderProgress_->setPhotoOpen(false);
     photoLoader_.cancelDecode();
     decodeRequest_ = 0;
+    redecodeRequest_ = 0;
+    failedOptions_.reset();
     cameraPreviewRequest_ = 0;
     previewRenderer_.setSource(nullptr);
     firstRequest_ = latestRequest_ + 1;

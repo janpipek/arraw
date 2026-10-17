@@ -17,6 +17,26 @@
 
 namespace arraw::app {
 
+QString demosaicDisplayName(Demosaic demosaic) {
+    switch (demosaic) {
+    case Demosaic::Linear:
+        return QCoreApplication::translate("arraw::app::SettingPresentation", "Linear");
+    case Demosaic::Vng:
+        return QStringLiteral("VNG");
+    case Demosaic::Ppg:
+        return QStringLiteral("PPG");
+    case Demosaic::Ahd:
+        return QStringLiteral("AHD");
+    case Demosaic::Dcb:
+        return QStringLiteral("DCB");
+    case Demosaic::Dht:
+        return QStringLiteral("DHT");
+    case Demosaic::Aahd:
+        return QStringLiteral("AAHD");
+    }
+    return {};
+}
+
 namespace {
 
 constexpr std::array<std::string_view, 7> toneKeyList{

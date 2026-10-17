@@ -1,6 +1,7 @@
 #pragma once
 
 #include <DevelopState.h>
+#include <NegativeSettings.h>
 #include <SettingDescriptors.h>
 
 #include <QString>
@@ -10,6 +11,11 @@
 #include <string_view>
 
 namespace arraw::app {
+
+/// @brief Names a demosaic the way a photographer knows it.
+/// @param demosaic Algorithm to name.
+/// @return Its name for the window, or an empty string if it is not an enumerator.
+[[nodiscard]] QString demosaicDisplayName(Demosaic demosaic);
 
 /// @brief How slider positions are spread across a setting's range.
 enum class SliderScale {

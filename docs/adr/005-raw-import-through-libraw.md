@@ -159,3 +159,19 @@ and the two `output_color = 0` sentences above came out of a review of the
 first implementation.
 The measurements quoted here were reproduced against LibRaw 0.22.2 and are
 pinned by fixtures in `tests/fixtures` rather than left as prose.
+
+## Amendment, 2026-10-16: the demosaic is a setting of the negative
+
+[ADR 049](049-settings-of-the-negative-sit-beside-the-develop-state.md) takes
+the demosaic out of the baked-in decode. `DecodeOptions` gains `demosaic`
+(Linear, VNG, PPG, AHD, DCB, DHT, AAHD), and `RawLoadOptions` is merged into it
+rather than added beside it. One `switch` in `RawImport.cpp` maps it to
+`user_qual`; the default stays AHD (`3`), so every existing photograph decodes
+as before. Highlight handling, white balance, the output space and the rest
+stay baked in as described above. Of "changing demosaic or highlight handling
+means re-decoding", only the highlight half is still a fixed choice.
+`DCB` sets `dcb_iterations` and `dcb_enhance_fl` explicitly, as every
+parameter is set. `ImageMetadata::mosaic` (`Bayer`, `XTrans`, `None`) says
+whether a RAW has a mosaic at all. It recognises one non-Bayer pattern,
+X-Trans; any other filter pattern counts as Bayer, and LibRaw may still
+substitute its own method for a sensor it handles differently.

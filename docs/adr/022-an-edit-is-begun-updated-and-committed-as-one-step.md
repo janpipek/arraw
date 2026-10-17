@@ -95,3 +95,15 @@ or batch undo arrives, probably with a context-manager form for an edit.
   group, when there is one. A front end words a step from the origin, the
   detail and that description, never from free text, so the list cannot
   claim a change the states do not show.
+
+## Amendment, 2026-10-16: a step holds the negative too
+
+[ADR 049](049-settings-of-the-negative-sit-beside-the-develop-state.md): a
+`HistoryStep` carries a `NegativeSettings` beside its `DevelopState`.
+`setNegative(negative, origin, detail)` commits an open edit and makes one step,
+and leaves none when the value is equal. `setState(negative, state, origin,
+detail)` makes one step for a paste or a preset that changes both.
+`begin`/`update`/`commit` keep the negative as it is, since a negative is
+chosen, never dragged. Undo, redo and `goTo` move both parts, and a front end
+re-decodes when the step it lands on has another negative.
+`describeChange` names it (`ChangeDescription::negative`, key `"demosaic"`).

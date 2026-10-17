@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <stdexcept>
 #include <string>
+#include <variant>
 
 using namespace arraw;
 using namespace std;
@@ -214,10 +215,25 @@ ImageBuffer decode(const std::filesystem::path& path, DiagnosticLog& log, Decode
                                  ": cannot convert to the working space");
     }
 
-    return qtimage::toBuffer(working, workingEncoding, orientation);
+    ImageBuffer buffer = qtimage::toBuffer(working, workingEncoding, orientation);
+    buffer.setDecodedWith(canonical(
+        options, {.size = buffer.size(), .encoding = workingEncoding, .orientation = orientation}));
+    return buffer;
 }
 
 } // namespace
+
+DecodeOptions arraw::canonical(DecodeOptions options, const ImageMetadata& metadata) {
+    const bool raw = std::holds_alternative<CameraNative>(metadata.encoding);
+    if (!raw) {
+        // A picture Qt decoded is never reduced here, whatever was asked.
+        options.halfSize = false;
+    }
+    if (!raw || options.halfSize || metadata.mosaic == Mosaic::None) {
+        options.demosaic = DecodeOptions{}.demosaic;
+    }
+    return options;
+}
 
 ImageBuffer arraw::loadImage(const std::filesystem::path& path, DiagnosticLog& log,
                              DecodeOptions options, ProgressChannel* progress) {

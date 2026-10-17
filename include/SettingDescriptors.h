@@ -73,6 +73,7 @@ enum class CopySection {
     Grain,          ///< Grain amount, size, roughness and model; never the seed.
     RotateAndFlip,  ///< Quarter-turn rotation, flips and straightening.
     Crop,           ///< Crop rectangle and aspect.
+    Demosaic,       ///< The demosaic of the negative (ADR 049); no row of the table, a RAW only.
 };
 
 /// @brief Stable names of the copy sections, in enumeration order, as documents and the
@@ -92,6 +93,7 @@ inline constexpr auto copySectionNames = std::to_array<std::string_view>({
     "grain",
     "rotateAndFlip",
     "crop",
+    "demosaic",
 });
 
 /// @brief Whether a setting means anything for every photograph.

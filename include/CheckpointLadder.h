@@ -21,7 +21,8 @@ class CoverageResidency;
 /// engine decides what is kept and what is stale (ADR 011); the caller only
 /// holds the ladder and clears it when something the plan cannot see changes,
 /// such as the device. Bound to one source buffer, which it keeps alive so that
-/// its address identifies it (until the plan has ADR 012's decode block).
+/// its address identifies it. A rung also carries the plan's decode block, so one made from
+/// another decode of the file is stale by value (ADR 049).
 ///
 /// Not thread-safe. A ladder holding resident rungs belongs to its device's
 /// thread: render through it, clear it and destroy it there.

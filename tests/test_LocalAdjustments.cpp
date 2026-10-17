@@ -559,13 +559,16 @@ TEST_CASE("A history session refuses a state with an invalid mask", "[local][ses
 // Looks never carry masks
 
 TEST_CASE("A look leaves the target's masks and counter alone", "[local][look]") {
+    // Every section a state can carry: the demosaic belongs to the negative.
+    std::vector<CopySection> copyableSettings(copyableSections.begin(), copyableSections.end());
+    std::erase(copyableSettings, CopySection::Demosaic);
     const DevelopState target = test::stateWithMasks();
     DevelopSettings source;
     source.tone.exposure = 1.5F;
     source.color.saturation = 12.0F;
     const Look look = lookOf(photo, source);
 
-    const AppliedLook applied = withLook(photo, target, look, copyableSections);
+    const AppliedLook applied = withLook(photo, target, look, copyableSettings);
     CHECK(applied.state.settings.tone.exposure == 1.5F);
     CHECK(applied.state.localAdjustments == target.localAdjustments);
     CHECK(applied.state.nextLocalAdjustmentId == target.nextLocalAdjustmentId);
@@ -574,7 +577,7 @@ TEST_CASE("A look leaves the target's masks and counter alone", "[local][look]")
     DevelopState sourceState = test::stateWithEveryDelta();
     sourceState.settings = source;
     const Look fromMasked = lookOf(photo, sourceState.settings);
-    const AppliedLook onPlain = withLook(photo, DevelopState{}, fromMasked, copyableSections);
+    const AppliedLook onPlain = withLook(photo, DevelopState{}, fromMasked, copyableSettings);
     CHECK(onPlain.state.localAdjustments.empty());
     CHECK(onPlain.state.nextLocalAdjustmentId == LocalAdjustmentId{1});
 

@@ -140,6 +140,7 @@ ProcessingPlan arraw::planFor(const Photo& photo, const RenderRequest& request) 
     plan.geometry = geometryPlanFor(photo.metadata().size, photo.metadata().orientation,
                                     photo.state().settings.geometry);
     plan.resize = resizePlanFor(request, plan.geometry->outputSize, nullptr);
+    plan.decode = decodeOptionsFor(photo, false);
     return plan;
 }
 
@@ -153,5 +154,6 @@ ProcessingPlan arraw::planFor(const ImageBuffer& source, const DevelopState& sta
                         source.size(), presenceReachOf(plan.pointwise.local));
     plan.geometry = geometryPlanFor(source.size(), source.orientation(), state.settings.geometry);
     plan.resize = resizePlanFor(request, plan.geometry->outputSize, &source);
+    plan.decode = source.decodedWith();
     return plan;
 }

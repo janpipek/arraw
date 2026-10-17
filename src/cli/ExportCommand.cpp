@@ -22,6 +22,7 @@
 #include <ImageExport.h>
 #include <ImageImport.h>
 #include <MarksFilter.h>
+#include <NegativeSettings.h>
 #include <NoiseReductionSettings.h>
 #include <Photo.h>
 #include <SettingDescriptors.h>
@@ -174,6 +175,8 @@ struct ExportRequest {
     ImageFileFormat format = ImageFileFormat::Jpeg;
     /// @brief What the flags said, applied over each photograph's own settings.
     cli::ExportEdits edits;
+    /// @brief What `--demosaic` named, applied over each RAW's own negative; none keeps it.
+    std::optional<Demosaic> demosaic;
     /// @brief Whether each photograph's sidecar is read; false is `--no-sidecar`.
     bool useSidecars = true;
     ExportOptions options;
@@ -734,6 +737,10 @@ void configure(QCommandLineParser& parser) {
     }
     parser.addOption(
         {"white-balance", "as-shot or custom. Temperature/tint imply custom.", "mode"});
+    parser.addOption({"demosaic",
+                      "How a RAW's sensor mosaic becomes colour: linear, vng, ppg, ahd, dcb, dht "
+                      "or aahd. Default: the sidecar's, or ahd. Other files ignore it.",
+                      "name"});
     parser.addOption({"grain-seed",
                       "Which grain pattern, a whole number; 0 is one fixed pattern. Default: "
                       "the sidecar's, or a random one when the flags turn grain on.",
@@ -880,6 +887,18 @@ std::optional<ExportRequest> buildRequest(const QCommandLineParser& parser, std:
 
     if (!readEdits(parser, request.edits, err, code)) {
         return std::nullopt;
+    }
+    if (parser.isSet("demosaic")) {
+        const std::string token = parser.value("demosaic").toStdString();
+        request.demosaic = parseDemosaic(token);
+        if (!request.demosaic) {
+            std::string names;
+            for (const std::string_view known : demosaicTokens) {
+                names += (names.empty() ? "" : ", ") + std::string(known);
+            }
+            code = usageError(err, "unknown --demosaic '" + token + "'; expected " + names);
+            return std::nullopt;
+        }
     }
 
     if (parser.isSet("resize")) {
@@ -1146,10 +1165,14 @@ int exportAll(const ExportRequest& request, std::ostream& err) {
             // repeat (ADR 038).
             edited.settings = cli::applyEdits(std::move(edited.settings), request.edits, log, input,
                                               opened.metadata());
-            const Photo photo = opened.with(std::move(edited));
+            Photo photo = opened.with(std::move(edited));
+            if (request.demosaic) {
+                photo = photo.with(NegativeSettings{*request.demosaic});
+            }
             // Decoded once, before the device is involved: a file that cannot be
             // read is the input's failure, whichever device would have developed it.
-            const ImageBuffer source = loadImage(input);
+            const ImageBuffer source =
+                loadImage(input, discardedDiagnostics(), decodeOptionsFor(photo, false));
             // Planned on the host for the same reason: settings the plan rejects
             // (std::invalid_argument) fail the input on either device. What the
             // device is then blamed for is developOnGpu and readBack alone, so

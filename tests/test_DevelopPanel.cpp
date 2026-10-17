@@ -696,7 +696,7 @@ TEST_CASE("The develop groups are open at first and open and close from their ti
     DevelopPanel panel;
     panel.show();
     const auto sections = panel.findChildren<CollapsibleSection*>();
-    CHECK(sections.size() == 11);
+    CHECK(sections.size() == 12);
     for (const CollapsibleSection* section : sections) {
         INFO(section->title().toStdString());
         CHECK(section->isOpen());

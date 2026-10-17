@@ -3,6 +3,7 @@
 #include <DevelopSettings.h>
 #include <DevelopState.h>
 #include <Diagnostics.h>
+#include <NegativeSettings.h>
 
 #include <string>
 #include <string_view>
@@ -98,5 +99,28 @@ enum class StrokeDetail {
 /// @throws std::invalid_argument as ::arraw::applySettingsJson.
 [[nodiscard]] DevelopState applyStateJson(std::string_view json, DevelopState base,
                                           DiagnosticLog& log = discardedDiagnostics());
+
+/// @brief Writes negative settings as a JSON object on one line.
+///
+/// The object that sits beside `"settings"` in the documents describing a photograph (ADR 049),
+/// such as `{"demosaic": "vng"}`. It is not part of ::arraw::stateToJson.
+/// @param negative Settings to write.
+/// @return The object.
+/// @throws std::invalid_argument if @p negative fails ::arraw::validate.
+[[nodiscard]] std::string negativeToJson(const NegativeSettings& negative);
+
+/// @brief Applies the negative settings in a JSON object onto a base.
+///
+/// A key that is absent leaves the base alone. An unknown key is skipped with
+/// ::arraw::Notice::SettingUnknown, and a `demosaic` that is not one of
+/// ::arraw::demosaicTokens (or not a string) with ::arraw::Notice::SettingMalformed, which
+/// leaves the base's value.
+/// @param json The object.
+/// @param base Settings the object's keys are applied onto.
+/// @param log Where the warnings go.
+/// @return The settings.
+/// @throws std::invalid_argument if the text is not a JSON object.
+[[nodiscard]] NegativeSettings applyNegativeJson(std::string_view json, NegativeSettings base,
+                                                 DiagnosticLog& log = discardedDiagnostics());
 
 } // namespace arraw

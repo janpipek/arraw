@@ -48,6 +48,8 @@ On a first read, follow the photographic explanations and examples; return to th
 
 # 2. The complete processing order
 
+Two kinds of choice sit in front of this order. The **negative** is the decoded source: the file, and the settings that decide which pixels the decode hands to development (today the demosaic; lens corrections are planned, section 3.4). Everything below the decode line is **development**, the stages from noise reduction to export. A negative setting is stored with the photograph beside the develop settings, but it is not one of them; section 3.4 gives the reason.
+
 ```text
 RAW mosaic                         JPEG / PNG / TIFF
     | LibRaw decode                    | Qt decode + profile conversion
@@ -131,7 +133,7 @@ Arraw delegates sensor-format decoding and camera-specific preparation to LibRaw
 
 | Choice | Setting and photographic consequence |
 |---|---|
-| Demosaicing | AHD (`user_qual=3`), where applicable; reconstructs three colour channels from filtered sensor samples. |
+| Demosaicing | A setting of the negative (section 3.4), AHD (`user_qual=3`) by default, where applicable; reconstructs three colour channels from filtered sensor samples. |
 | Transfer and precision | Linear (`gamm=(1,1)`), 16 bits/channel. Samples reaching the decode maximum are clipped; later floating-point stages can carry values above working white. |
 | Colour primaries | Camera-native (`output_color=0`); camera RGB is not sRGB. |
 | Brightness | Both automatic brightness and frame-dependent maximum adjustment disabled. A bracket does not receive a separate content-dependent stretch per frame. |
@@ -141,7 +143,7 @@ Arraw delegates sensor-format decoding and camera-specific preparation to LibRaw
 
 A monochrome sensor's single channel is copied to R, G and B. For half-size RAW decoding, each applicable 2×2 sensor block becomes one pixel, avoiding full demosaicing. Already demosaiced linear DNGs that remain full size are explicitly reduced by averaging 2×2 linear blocks, rounding $(\sum n+2)/4$ to an integer. This fallback rounds dimensions down. The separate floating-point preview pyramid rounds odd dimensions up.
 
-Source: [RAW import](../src/core/RawImport.cpp). Background: [LibRaw processing parameters](https://www.libraw.org/docs/API-datastruct-eng.html) and [demosaicing](https://en.wikipedia.org/wiki/Demosaicing). The AHD choice is a request to LibRaw, not a claim that every sensor format executes an identical algorithm.
+Source: [RAW import](../src/core/RawImport.cpp). Background: [LibRaw processing parameters](https://www.libraw.org/docs/API-datastruct-eng.html) and [demosaicing](https://en.wikipedia.org/wiki/Demosaicing). The demosaic choice is a request to LibRaw, not a claim that every sensor format executes an identical algorithm.
 
 ## 3.2 Colour-space ledger
 
@@ -211,6 +213,20 @@ As Shot gives an exact unit ratio. Custom mode without either value specified al
 The neutral eyedropper maps the displayed position back through geometry and averages a source window, normally 7×7 pixels, clipped at edges. For channel sums $S_R,S_G,S_B$, it requests gains proportional to $(S_G/S_R,1,S_G/S_B)$ times the already applied WB, then converts those gains back to temperature/tint. It reads source data rather than the currently edited display, so exposure and grading do not contaminate the pick. A clipped or non-neutral target can still yield an unsuitable balance.
 
 Sources: [WB algorithm and Robertson table](../src/core/WhiteBalance.cpp), [WB composition](../src/core/ColorSettings.cpp). Background: [colour temperature](https://en.wikipedia.org/wiki/Color_temperature), [mired](https://en.wikipedia.org/wiki/Mired), [CIE 1960 colour space](https://en.wikipedia.org/wiki/CIE_1960_color_space), [chromatic adaptation](https://en.wikipedia.org/wiki/Chromatic_adaptation).
+
+## 3.4 Settings of the negative: demosaic now, lens corrections later
+
+Demosaicing is the one choice of section 3.1 that a photographer may change. It is **not a develop setting**. Write the decoded source as $N = D(F;\,d)$, where $F$ is the file and $d$ the demosaic, one of Linear, VNG, PPG, AHD, DCB, DHT and AAHD (LibRaw's `user_qual` 0, 1, 2, 3, 4, 11 and 12; the default is AHD). Development is then $R = P(N;\,s)$ with the develop settings $s$. A develop edit changes $s$ and leaves $N$ alone, so the render resumes from a stored checkpoint (chapter 9). A change of $d$ changes $N$ itself:
+
+$$d \neq d' \;\Rightarrow\; D(F;d) \neq D(F;d')\ \text{in general, so every checkpoint computed from } N \text{ is void.}$$
+
+Arraw therefore **decodes again** (about 1 to 3 s for 24 MP, off the interface thread) and drops every checkpoint, while the old picture stays on screen until the new source arrives. No develop edit does this: the demosaic is held beside the develop state, and no function that takes or returns develop settings can reach it. Each stored checkpoint knows how its source was decoded, so a checkpoint from another demosaic is refused even if the same buffer were reused.
+
+The choice applies only to a full-size decode of a mosaiced RAW. A half-size decode combines 2×2 blocks and does not demosaic; a JPEG, PNG or TIFF, a monochrome sensor and an already demosaiced linear DNG have nothing to interpolate. For these the choice is ignored, and two requests that decode to the same pixels count as the same decode. LibRaw may also substitute its own method for some sensors (X-Trans, four-colour), so the token is the request, as in section 3.1. In the pipeline the negative lies before everything else: it is the "LibRaw decode" line of chapter 2. Noise reduction, the first stage, reads its result.
+
+It is saved in the sidecar as a token (`arraw:demosaic="vng"`), is one undoable history step, and travels with a pasted look as its own section. **Lens corrections** (distortion, vignetting, lateral chromatic aberration) are planned as the second setting of the negative: applied once to the decoded source, before every stage here, from the file's own profile or the lensfun database. They are not built; their frame, and what they do to crops and masks, are still to be decided.
+
+Source: [negative settings](../include/NegativeSettings.h), [decode options](../include/DecodeOptions.h), [RAW import](../src/core/RawImport.cpp).
 
 # 4. Exposure, tone and curves
 
@@ -807,7 +823,7 @@ Sources: [export implementation](../src/core/ImageExport.cpp), [export options](
 # 10. Glossary
 
 AHD
-:   Adaptive homogeneity-directed demosaicing; the requested LibRaw reconstruction method.
+:   Adaptive homogeneity-directed demosaicing; the default of the demosaic setting of the negative (section 3.4).
 
 Alpha / premultiplication
 :   Coverage/transparency; premultiplying RGB by alpha before filtering prevents hidden colours from bleeding into visible edges.
