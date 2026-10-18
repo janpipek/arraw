@@ -16,6 +16,8 @@ RUN sh /tmp/install-deps.sh && rm /tmp/install-deps.sh
 # rpmspec, rpmlint, desktop-file-utils, appstream, shared-mime-info) check
 # packaging/fedora/arraw.spec, the desktop file and the metainfo; the real
 # Fedora build and the podman smoke test stay on a Fedora host (ADR 046).
+# exiftool is the reference for what a sample file declares (lens IDs, maker notes);
+# arraw itself reads them through Exiv2.
 RUN apt-get install -y --no-install-recommends \
         curl jq less vim-tiny just ccache gdb ripgrep fd-find \
         clangd clang-tidy clazy \
@@ -23,6 +25,7 @@ RUN apt-get install -y --no-install-recommends \
         xvfb xauth libxcb-cursor0 \
         nodejs npm \
         rpm rpmlint desktop-file-utils appstream shared-mime-info \
+        libimage-exiftool-perl \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -LsSf https://astral.sh/uv/install.sh \
