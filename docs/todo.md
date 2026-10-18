@@ -193,6 +193,45 @@ on branch `brush-prototype`.
   Accepted (user, 2026-10-16): the 0.5 s left is rendering the 6 MP level itself;
   the cache has under 4 MiB to spare at ratio 2. The GPU run is not measured (no hardware GPU here).
 
+## Merging frames: bracketing, panorama, focus stacking (user, 2026-10-18; speculation, needs scoping)
+
+Not planned. Wanted, not necessarily inside arraw: lean on external OSS tools where
+they exist. Scope, ADR and plan are required before any code.
+
+Sketch: arraw renders each selected frame to a linear 16-bit TIFF in a temp directory
+(lens stage on or off, to be decided: Hugin does its own geometry), runs an external
+command, and imports the result as a new photo.
+- **Phase 1, generic "external merge":** N selected images, a configurable command
+  template, presets for `focus-stack` (focus stacking), Enfuse with
+  `align_image_stack` (bracketing, exposure fusion) and Hugin's `pto_gen`, `cpfind`,
+  `autooptimiser`, `nona`, `enblend` (panorama). Headless by default, plus "Open in
+  Hugin" (a generated `.pto`) when the result is poor. Hugin has a GUI; the rest do
+  not.
+- **Phase 2, own HDR merge:** weighted average in linear space divided by exposure
+  time; the one case where doing it ourselves pays off (editable scene-referred
+  result). Registration is still needed, so own the merge, not the alignment:
+  1. tripod-only first (no alignment, linear merge only);
+  2. then alignment through `align_image_stack` (optional runtime dependency);
+  3. or through OpenCV (`createAlignMTB` for brackets, ECC or features for the
+     rest; a new library to build and package on all three platforms).
+  Caveats: handheld brackets differ in exposure, so compare by median-threshold
+  bitmaps or gradients, not raw pixels; moving subjects need a separate per-pixel
+  ghost weight; focus stacks also change scale (focus breathing), so they need a
+  similarity or affine transform, and misalignment shows as halos; panorama needs
+  features, a camera model, bundle adjustment and seam blending, so leave it to
+  Hugin.
+- **Alternatives for panorama:** OpenCV's stitching module (embeddable, weaker);
+  hand-off only (export, open Hugin).
+
+To scope:
+- result format: linear TIFF, float TIFF or linear DNG (needs a DNG writer);
+- provenance: record the source frames in the result's sidecar?
+- detection or bundling of the tools; Windows and macOS packaging of Hugin is hard;
+- CLI and Python exposure (favours the command template);
+- lens stage before or after the merge; the bracket's per-frame exposure metadata;
+- no focus-stacking GUI exists upstream, so arraw would need its own around
+  `focus-stack`.
+
 ## Follow-ups (known limits, all documented in ADRs)
 
 - **Dehaze:** convex tips sharper than the window (corners, the ends of
