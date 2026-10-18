@@ -70,8 +70,18 @@ Where the code differs from the plan (also in ADR 050's amendment):
 - GPU parity numbers were measured on lavapipe only (no hardware GPU).
 
 Open:
-- step 11, the hand check on real Canon 80D CR2 files, one per lens, needs the
-  user (what the EXIF says, that each lens matches, the overlay check);
+- step 11, the hand check, is partly done (2026-10-18; samples in the git-excluded
+  `samples/`; results in `docs/reviews/claude-opus-5-5_2026-10-18_lens-hand-check.md`):
+  two Canon 80D frames with the Tamron SP 17-50 f/2.8 (non-VC) match correctly through
+  Canon's lens-type name (Exiv2 and exiftool agree); the distortion matches lensfun's
+  model plus the fill zoom to about 1 px. Still open: straightness (needs a long line
+  into a corner), vignetting (the 17 mm f/2.8 sky corner is raised 27%; needs a wide-open
+  shot of an even surface), CA, the app toggles, a clipped corner, and the `exiftool -v3`
+  check that a CR2 holds switches only (exiftool is now in the sandbox image);
+- matching hardening: the maker-note name picks the lens by a 6-point fuzzy margin
+  (83 against 77 for the VC), so drop candidates carrying tokens the name lacks (VC,
+  OS, Macro) or prefer an entry containing all the name's tokens; test first;
+- `lens-corrections` is committed (2150c30, 5cec115), not pushed or merged;
 - GPU parity on real hardware is unmeasured;
 - packaging is unverified: `just rpm`, `rpm-smoke` and the `.deb`'s
   `liblensfun1` dependency were not run here;
