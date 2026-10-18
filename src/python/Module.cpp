@@ -12,10 +12,12 @@ NB_MODULE(_arraw, m) {
     m.attr("__version__") = ARRAW_VERSION;
 
     // Order matters: later classes name earlier ones in their signatures.
+    arraw::python::bindLens(m);
     arraw::python::bindImage(m);
     arraw::python::bindExif(m);
     arraw::python::bindSettings(m);
     arraw::python::bindPhoto(m);
+    arraw::python::bindLensMethods(m);
     arraw::python::bindShots(m);
     arraw::python::bindSession(m);
 }

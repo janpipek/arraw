@@ -236,3 +236,17 @@ def test_describe_change_names_the_negative(session):
     session.set_state(session.photo.with_(exposure=0.4).state)
     assert arraw.describe_change(after, session.history[-1]).negative == []
     assert arraw.describe_change(after, session.history[-1]).keys == ["exposure"]
+
+
+def test_the_lens_stage_sits_between_denoise_and_pointwise():
+    # ADR 050: a stage of its own, so the values after DENOISE moved by one.
+    order = [
+        arraw.Stage.DENOISE,
+        arraw.Stage.LENS,
+        arraw.Stage.POINTWISE,
+        arraw.Stage.GEOMETRY,
+        arraw.Stage.RESIZE,
+        arraw.Stage.EFFECTS,
+    ]
+    assert [stage.value for stage in order] == list(range(6))
+    assert arraw.Stage.LENS.name == "LENS"

@@ -10,6 +10,478 @@ import numpy
 from numpy.typing import NDArray
 
 
+def lensfun_available() -> bool:
+    """
+    Whether this build can read a lens database at all (it was built with lensfun).
+    """
+
+def lensfun_version() -> str:
+    """
+    The lensfun this build was compiled against, such as '0.3.4'; empty without lensfun.
+    """
+
+class LensOrigin(enum.Enum):
+    """
+    How the lens recorded in a photograph's lens settings was chosen; str() is the token the sidecar uses.
+    """
+
+    def __str__(self) -> str: ...
+
+    MATCHED = 0
+    """Found from the file's EXIF."""
+
+    CHOSEN = 1
+    """Picked by the photographer."""
+
+class LensProblem(enum.Enum):
+    """Why a lens could not be found or loaded."""
+
+    LENS_UNIDENTIFIED = 0
+
+    LENS_FOCAL_UNKNOWN = 1
+
+    CAMERA_NOT_IN_DATABASE = 2
+
+    LENS_NOT_IN_DATABASE = 3
+
+    LENS_AMBIGUOUS = 4
+
+    LENS_PROFILE_MISSING = 5
+
+    LENS_DATABASE_CHANGED = 6
+
+    LENS_DATABASE_MISSING = 7
+
+    LENSFUN_UNAVAILABLE = 8
+
+class CropSource(enum.Enum):
+    """Where the crop factor of a lens match came from."""
+
+    CAMERA = 0
+    """The camera listed in the database."""
+
+    FOCAL_RATIO = 1
+    """The 35 mm focal length over the focal length."""
+
+    LENS = 2
+    """The lens's own, when nothing else says."""
+
+class LensIdentity:
+    """A lens by name, exactly as lensfun spells its maker and model."""
+
+    def __init__(self, maker: str | None = None, model: str | None = None) -> None: ...
+
+    @property
+    def maker(self) -> str: ...
+
+    @property
+    def model(self) -> str: ...
+
+    def __eq__(self, arg: LensIdentity, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> LensIdentity:
+        """Return a copy with the given attributes replaced."""
+
+class RecordedLens:
+    """
+    The lens a photograph's corrections were found for, by name only: lensfun's maker and model, the crop factor of the image as the match used it, how the lens was chosen, and the stamp of the database at the time. No calibration is recorded.
+    """
+
+    def __init__(self, *, maker: str | None = None, model: str | None = None, crop_factor: float | None = 1.0, origin: LensOrigin = LensOrigin.MATCHED, database: str | None = None) -> None: ...
+
+    @property
+    def maker(self) -> str: ...
+
+    @property
+    def model(self) -> str: ...
+
+    @property
+    def crop_factor(self) -> float: ...
+
+    @property
+    def origin(self) -> LensOrigin: ...
+
+    @property
+    def database(self) -> str: ...
+
+    def __eq__(self, arg: RecordedLens, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> RecordedLens:
+        """Return a copy with the given attributes replaced."""
+
+class LensSettings:
+    """
+    Which lens corrections a photograph asks for (all off by default), and the lens recorded for them, None until one is first turned on. They apply to a RAW only.
+    """
+
+    def __init__(self, *, distortion: bool = False, vignetting: bool = False, lateral_ca: bool = False, lens: RecordedLens | None = None) -> None: ...
+
+    @property
+    def distortion(self) -> bool: ...
+
+    @property
+    def vignetting(self) -> bool: ...
+
+    @property
+    def lateral_ca(self) -> bool: ...
+
+    @property
+    def lens(self) -> RecordedLens | None: ...
+
+    def __eq__(self, arg: LensSettings, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> LensSettings:
+        """Return a copy with the given attributes replaced."""
+
+    @property
+    def any(self) -> bool:
+        """Whether any correction is asked for."""
+
+class LensFacts:
+    """
+    What a RAW says about its camera and lens, for a profile to be found by; empty for any other file.
+    """
+
+    def __init__(self, *, camera_maker: str | None = None, camera_model: str | None = None, lens_names: Sequence[str] | None = None, min_focal: float | None = None, max_focal: float | None = None, max_aperture: float | None = None, focal_length: float | None = None, aperture: float | None = None, focus_distance: float | None = None, focal_length_35: float | None = None) -> None: ...
+
+    @property
+    def camera_maker(self) -> str: ...
+
+    @property
+    def camera_model(self) -> str: ...
+
+    @property
+    def lens_names(self) -> list[str]: ...
+
+    @property
+    def min_focal(self) -> float | None: ...
+
+    @property
+    def max_focal(self) -> float | None: ...
+
+    @property
+    def max_aperture(self) -> float | None: ...
+
+    @property
+    def focal_length(self) -> float | None: ...
+
+    @property
+    def aperture(self) -> float | None: ...
+
+    @property
+    def focus_distance(self) -> float | None: ...
+
+    @property
+    def focal_length_35(self) -> float | None: ...
+
+    def __eq__(self, arg: LensFacts, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> LensFacts:
+        """Return a copy with the given attributes replaced."""
+
+class CameraEntry:
+    """A camera as the lens database lists it."""
+
+    def __init__(self, *, maker: str | None = None, model: str | None = None, mount: str | None = None, crop_factor: float | None = 1.0) -> None: ...
+
+    @property
+    def maker(self) -> str: ...
+
+    @property
+    def model(self) -> str: ...
+
+    @property
+    def mount(self) -> str: ...
+
+    @property
+    def crop_factor(self) -> float: ...
+
+    def __eq__(self, arg: CameraEntry, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> CameraEntry:
+        """Return a copy with the given attributes replaced."""
+
+class LensEntry:
+    """A lens as the lens database lists it."""
+
+    def __init__(self, *, maker: str | None = None, model: str | None = None, mounts: Sequence[str] | None = None, crop_factor: float | None = 1.0, min_focal: float | None = 0.0, max_focal: float | None = 0.0, widest_aperture: float | None = 0.0, score: int | None = 0) -> None: ...
+
+    @property
+    def maker(self) -> str: ...
+
+    @property
+    def model(self) -> str: ...
+
+    @property
+    def mounts(self) -> list[str]: ...
+
+    @property
+    def crop_factor(self) -> float: ...
+
+    @property
+    def min_focal(self) -> float: ...
+
+    @property
+    def max_focal(self) -> float: ...
+
+    @property
+    def widest_aperture(self) -> float: ...
+
+    @property
+    def score(self) -> int: ...
+
+    def __eq__(self, arg: LensEntry, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> LensEntry:
+        """Return a copy with the given attributes replaced."""
+
+class LensMatch:
+    """
+    A lens found for a photograph, and what it was found with; not constructible from Python.
+    """
+
+    @property
+    def lens(self) -> LensIdentity:
+        """The lens found."""
+
+    @property
+    def name(self) -> str:
+        """The name from the photograph that found it."""
+
+    @property
+    def score(self) -> int:
+        """lensfun's score for that name."""
+
+    @property
+    def exact_name(self) -> bool:
+        """Whether the name is the lens's whole name, not merely like it."""
+
+    @property
+    def camera_listed(self) -> bool:
+        """Whether the camera is in the database; informational when not."""
+
+    @property
+    def crop_factor(self) -> float:
+        """Crop factor of the image, as the profile is applied with."""
+
+    @property
+    def crop_source(self) -> CropSource:
+        """Where the crop factor came from."""
+
+    @property
+    def focal_length(self) -> float:
+        """Focal length to resolve the profile at, in millimetres."""
+
+    @property
+    def focal_length_read(self) -> bool:
+        """Whether the file recorded the focal length; a prime's own is assumed."""
+
+    def __eq__(self, arg: LensMatch, /) -> bool: ...
+
+    def __repr__(self) -> str: ...
+
+    __hash__: None = None
+
+class LensProvenance:
+    """
+    Where one correction's numbers came from: the lens, the conditions it was resolved for, and whether the file recorded each or it was assumed.
+    """
+
+    def __init__(self, *, lens: LensIdentity | None = None, crop_factor: float | None = 1.0, focal_length: float | None = 0.0, focal_length_read: bool = False, aperture: float | None = 0.0, aperture_read: bool = False, distance: float | None = 0.0, distance_read: bool = False, database: str | None = None) -> None: ...
+
+    @property
+    def lens(self) -> LensIdentity: ...
+
+    @property
+    def crop_factor(self) -> float: ...
+
+    @property
+    def focal_length(self) -> float: ...
+
+    @property
+    def focal_length_read(self) -> bool: ...
+
+    @property
+    def aperture(self) -> float: ...
+
+    @property
+    def aperture_read(self) -> bool: ...
+
+    @property
+    def distance(self) -> float: ...
+
+    @property
+    def distance_read(self) -> bool: ...
+
+    @property
+    def database(self) -> str: ...
+
+    def __eq__(self, arg: LensProvenance, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> LensProvenance:
+        """Return a copy with the given attributes replaced."""
+
+class LensCorrection:
+    """
+    A lens's corrections resolved into radial tables, independent of resolution and of where the profile came from; not constructible from Python. The radius is 0 at the optical centre and 1 at the farthest corner, and each table holds the same number of values evenly spaced over it; an empty table means that correction is absent.
+    """
+
+    @property
+    def active(self) -> bool:
+        """Whether any correction is present, so whether the render has work."""
+
+    @property
+    def distortion(self) -> tuple:
+        """
+        Radial scale from a point of the corrected image to the sensor image, before the fill scale; empty for none.
+        """
+
+    @property
+    def red_scale(self) -> tuple:
+        """
+        Scale of red's position against green's, by sensor radius; empty for none.
+        """
+
+    @property
+    def blue_scale(self) -> tuple:
+        """
+        Scale of blue's position against green's, by sensor radius; empty for none.
+        """
+
+    @property
+    def vignetting(self) -> tuple:
+        """Gain that restores the light, by sensor radius; empty for none."""
+
+    @property
+    def center_u(self) -> float:
+        """Optical centre across, as a fraction of the width."""
+
+    @property
+    def center_v(self) -> float:
+        """Optical centre down, as a fraction of the height."""
+
+    @property
+    def aspect(self) -> float:
+        """Width over height of the frames the tables were sampled for."""
+
+    @property
+    def fill(self) -> float:
+        """
+        Zoom that keeps every sample of the corrected frame inside the sensor image.
+        """
+
+    @property
+    def distortion_from(self) -> LensProvenance | None:
+        """Provenance of the distortion, or None."""
+
+    @property
+    def lateral_ca_from(self) -> LensProvenance | None:
+        """Provenance of the lateral chromatic aberration, or None."""
+
+    @property
+    def vignetting_from(self) -> LensProvenance | None:
+        """Provenance of the vignetting, or None."""
+
+    def __eq__(self, arg: LensCorrection, /) -> bool: ...
+
+    def __repr__(self) -> str: ...
+
+    __hash__: None = None
+
+class LensDatabase:
+    """
+    The lens and camera database, loaded once and read-only afterwards. One that could not be loaded is an object like any other, which finds nothing and says why in `problem`.
+    """
+
+    @staticmethod
+    def system() -> LensDatabase:
+        """
+        The process's database, loaded on the first call (slow): beside the executable, else lensfun's own directories, the user's update replacing either when newer.
+        """
+
+    @staticmethod
+    def from_directory(directory: str | os.PathLike) -> LensDatabase:
+        """
+        Load the database of one directory of lensfun XML files, and optionally a timestamp.txt naming its age. Never raises: check `loaded` and `problem`.
+        """
+
+    @property
+    def loaded(self) -> bool:
+        """Whether any database was loaded."""
+
+    @property
+    def problem(self) -> LensProblem | None:
+        """Why nothing was loaded, or None."""
+
+    @property
+    def directory(self) -> pathlib.Path:
+        """The directory it came from."""
+
+    @property
+    def stamp(self) -> str:
+        """
+        Its age, as its newest timestamp: a UTC time; empty when nothing loaded.
+        """
+
+    @property
+    def camera_count(self) -> int: ...
+
+    @property
+    def lens_count(self) -> int: ...
+
+    def find_camera(self, maker: str, model: str) -> CameraEntry | None:
+        """
+        Find a camera from its EXIF Make and Model, or None when it is not listed.
+        """
+
+    def find_lenses(self, name: str, *, mount: str | None = None, crop_factor: float | None = None) -> list[LensEntry]:
+        """
+        The lenses a name as a photograph records it could mean, best first by lensfun's score, within the mount and crop factor given.
+        """
+
+    def lens(self, maker: str, model: str, crop_factor: float | None = None) -> LensEntry | None:
+        """
+        Look a lens up by its exact lensfun name, or None. A name the database lists more than once is answered by the calibration for `crop_factor`.
+        """
+
+    def lenses(self, search: str = '', mount: str | None = None) -> list[LensEntry]:
+        """
+        List lenses whose maker and model hold every word of `search` (any order and case), ordered by maker and model, within a mount if one is given.
+        """
+
+    def mount_of(self, maker: str, model: str) -> str | None:
+        """The mount of a camera, or None when it is not listed or has none."""
+
+    def __repr__(self) -> str: ...
+
 class Demosaic(enum.Enum):
     """
     Algorithm that turns a RAW's sensor mosaic into colour; str() is the token the sidecar and the command line use.
@@ -119,6 +591,12 @@ class ImageMetadata:
     @property
     def encoding(self) -> object:
         """NamedEncoding, or an opaque CameraNative."""
+
+    @property
+    def lens(self) -> LensFacts:
+        """
+        What the file says about its camera and lens, for a profile to be found by; empty for anything but a RAW.
+        """
 
     def __eq__(self, arg: ImageMetadata, /) -> bool: ...
 
@@ -380,13 +858,15 @@ class Stage(enum.Enum):
 
     DENOISE = 0
 
-    POINTWISE = 1
+    LENS = 1
 
-    GEOMETRY = 2
+    POINTWISE = 2
 
-    RESIZE = 3
+    GEOMETRY = 3
 
-    EFFECTS = 4
+    RESIZE = 4
+
+    EFFECTS = 5
 
 class ToneSettings:
     """Photographic tone adjustments."""
@@ -1250,13 +1730,16 @@ class ColorLabel(enum.Enum):
 
 class NegativeSettings:
     """
-    What shapes the decoded negative, as opposed to what is done with it: a RAW's demosaic. Changing it costs a decode; no develop edit can reach it.
+    What shapes the decoded negative, as opposed to what is done with it: a RAW's demosaic and its lens corrections. Changing the demosaic costs a decode; the lens corrections are a stage of the render and cost none; no develop edit can reach either.
     """
 
-    def __init__(self, *, demosaic: Demosaic = Demosaic.AHD) -> None: ...
+    def __init__(self, *, demosaic: Demosaic = Demosaic.AHD, lens: LensSettings | None = None) -> None: ...
 
     @property
     def demosaic(self) -> Demosaic: ...
+
+    @property
+    def lens(self) -> LensSettings: ...
 
     def __eq__(self, arg: NegativeSettings, /) -> bool: ...
 
@@ -1489,6 +1972,30 @@ class Photo:
 
     __hash__: None = None
 
+    @property
+    def lens(self) -> LensSettings:
+        """The lens settings of the negative; the same as `negative.lens`."""
+
+    def lens_correction(self, database: LensDatabase | None = None) -> LensCorrection:
+        """
+        Resolve the photograph's lens corrections as a render applies them: empty when none is on or the photograph is not a RAW, else the tables of the recorded lens (looked up by its exact name) or of the match of the file's EXIF. What cannot be resolved is logged on the 'arraw' logger and the correction skipped. `database` defaults to the process's, loaded only when a correction is on.
+        """
+
+    def lens_match(self, database: LensDatabase | None = None) -> LensMatch | None:
+        """
+        Find the lens the photograph's corrections are for, whether or not any is on: the recorded lens, else the match of the file's EXIF. None for a file that is not a RAW or when no lens is found (the reason is logged on the 'arraw' logger).
+        """
+
+    def with_lens_corrections(self, *, distortion: bool | None = None, vignetting: bool | None = None, lateral_ca: bool | None = None) -> Photo:
+        """
+        Return a photograph with the lens switches given set, as `--lens-corrections` sets them; None keeps one as it is, and the recorded lens is untouched (see record_lens_match). A photograph that is not a RAW is returned as it was.
+        """
+
+    def with_chosen_lens(self, maker: str, model: str, database: LensDatabase | None = None) -> Photo:
+        """
+        Return a photograph with the lens recorded as chosen by the photographer, as `--lens 'Maker|Model'` does: looked up by its exact lensfun name, with the camera's crop factor. ValueError when the database does not list it or the photograph is not a RAW.
+        """
+
     def with_(
         self,
         state: DevelopState | None = None,
@@ -1525,15 +2032,15 @@ def write_sidecar_marks(path: str | os.PathLike, marks: PhotoMarks) -> None:
     """
 
 @overload
-def develop(source: ImageBuffer, state: DevelopState | None = None, *, size: int | tuple[int, int] | float | None = None, filter: ResizeFilter = ResizeFilter.LANCZOS3, allow_upscale: bool = False) -> ImageBuffer:
+def develop(source: ImageBuffer, state: DevelopState | None = None, *, size: int | tuple[int, int] | float | None = None, filter: ResizeFilter = ResizeFilter.LANCZOS3, allow_upscale: bool = False, lens: LensCorrection | None = None) -> ImageBuffer:
     """
-    Develop a decoded buffer on the CPU; with no state, the defaults of its kind (default_state: colour noise reduction for a RAW, nothing for anything else). `size` renders the cropped result smaller: an int is the long edge, a (width, height) tuple a box to fit inside, a float a scale factor. Sizes only shrink unless `allow_upscale`.
+    Develop a decoded buffer on the CPU; with no state, the defaults of its kind (default_state: colour noise reduction for a RAW, nothing for anything else). `size` renders the cropped result smaller: an int is the long edge, a (width, height) tuple a box to fit inside, a float a scale factor. Sizes only shrink unless `allow_upscale`. `lens` is the correction to apply to the sensor frame, as Photo.lens_correction resolves it; None applies none, since a buffer knows nothing of its photograph.
     """
 
 @overload
-def develop(source: Photo, state: DevelopState | None = None, *, size: int | tuple[int, int] | float | None = None, filter: ResizeFilter = ResizeFilter.LANCZOS3, allow_upscale: bool = False) -> ImageBuffer:
+def develop(source: Photo, state: DevelopState | None = None, *, size: int | tuple[int, int] | float | None = None, filter: ResizeFilter = ResizeFilter.LANCZOS3, allow_upscale: bool = False, lens_database: LensDatabase | None = None) -> ImageBuffer:
     """
-    Decode a photograph and develop it with its own state unless `state` is given; `size`, `filter` and `allow_upscale` are as for a decoded buffer.
+    Decode a photograph and develop it with its own state unless `state` is given; `size`, `filter` and `allow_upscale` are as for a decoded buffer. The photograph's own lens corrections are applied when it asks for any (Photo.lens_correction), looked up in `lens_database`, by default the process's; what cannot be resolved is logged on the 'arraw' logger and the render goes ahead without it.
     """
 
 class Tap(enum.Enum):
@@ -1545,15 +2052,15 @@ class Tap(enum.Enum):
     """
 
 @overload
-def sample(source: ImageBuffer, tap: Tap, state: DevelopState | None = None, *, size: int | tuple[int, int] | float | None = None, filter: ResizeFilter = ResizeFilter.LANCZOS3, allow_upscale: bool = False) -> ImageBuffer:
+def sample(source: ImageBuffer, tap: Tap, state: DevelopState | None = None, *, size: int | tuple[int, int] | float | None = None, filter: ResizeFilter = ResizeFilter.LANCZOS3, allow_upscale: bool = False, lens: LensCorrection | None = None) -> ImageBuffer:
     """
     Develop a decoded buffer on the CPU with the chain stopped at `tap`, to measure it: the same frame and size as develop() with the same arguments, in the tap's encoding.
     """
 
 @overload
-def sample(source: Photo, tap: Tap, state: DevelopState | None = None, *, size: int | tuple[int, int] | float | None = None, filter: ResizeFilter = ResizeFilter.LANCZOS3, allow_upscale: bool = False) -> ImageBuffer:
+def sample(source: Photo, tap: Tap, state: DevelopState | None = None, *, size: int | tuple[int, int] | float | None = None, filter: ResizeFilter = ResizeFilter.LANCZOS3, allow_upscale: bool = False, lens_database: LensDatabase | None = None) -> ImageBuffer:
     """
-    Decode a photograph and sample it at `tap` with its own state unless `state` is given.
+    Decode a photograph and sample it at `tap` with its own state unless `state` is given, through its own lens corrections as develop() applies them.
     """
 
 CURVE_HISTOGRAM_BINS: int = 256
@@ -1598,13 +2105,13 @@ def curve_histogram(image: ImageBuffer) -> CurveHistogram:
     """
 
 @overload
-def curve_histogram(source: ImageBuffer, state: DevelopState, *, size: int | tuple[int, int] | float | None = 1024, allow_upscale: bool = False) -> CurveHistogram:
+def curve_histogram(source: ImageBuffer, state: DevelopState, *, size: int | tuple[int, int] | float | None = 1024, allow_upscale: bool = False, lens: LensCorrection | None = None) -> CurveHistogram:
     """
     Sample a decoded buffer at Tap.CURVE_INPUT and count it. `size` is as for develop() and defaults to a 1024-pixel long edge; None counts the full cropped resolution. The resize is always bilinear, so no ringing reaches the end bins.
     """
 
 @overload
-def curve_histogram(source: Photo, state: DevelopState | None = None, *, size: int | tuple[int, int] | float | None = 1024, allow_upscale: bool = False) -> CurveHistogram:
+def curve_histogram(source: Photo, state: DevelopState | None = None, *, size: int | tuple[int, int] | float | None = 1024, allow_upscale: bool = False, lens_database: LensDatabase | None = None) -> CurveHistogram:
     """
     Decode a photograph, sample it at Tap.CURVE_INPUT with its own state unless `state` is given, and count it; `size` and the resize as for a decoded buffer.
     """
@@ -1642,6 +2149,11 @@ class MetadataSelection:
 def save(image: ImageBuffer, path: str | os.PathLike, *, format: ImageFileFormat | None = None, encoding: NamedEncoding = NamedEncoding.SRGB, bit_depth: int = 8, quality: int = 90, embed_profile: bool = True, sharpening: int = 0, metadata_from: Photo | None = None, metadata: MetadataSelection = ...) -> None:
     """
     Write an image as JPEG, PNG or TIFF; the format comes from the extension unless given. `sharpening` (0-100, default 0 = off) applies an unsharp mask to the final pixels. With `metadata_from` (the photograph the pixels came from) the groups of `metadata` are copied from its file and sidecar, and its marks written as rating and label; without it nothing is written. A source or sidecar that cannot be read is logged as a warning on the 'arraw' logger and its metadata left out; the file is still written.
+    """
+
+def record_lens_match(photo: Photo, database: LensDatabase | None = None) -> Photo:
+    """
+    Record the lens matched from the file's EXIF in a photograph that has a correction on and no lens recorded, with its crop factor and the database's stamp, so that a database update cannot move the edit to another lens. The photograph is returned as it was when nothing is on, a lens is recorded already, it is not a RAW, or no lens matches.
     """
 
 class Shot:
@@ -1755,6 +2267,10 @@ class HistoryStep:
     def negative(self) -> NegativeSettings:
         """Negative settings after the step."""
 
+    @property
+    def lens(self) -> LensSettings:
+        """Lens settings after the step; the same as `negative.lens`."""
+
     def __eq__(self, arg: HistoryStep, /) -> bool: ...
 
     def __repr__(self) -> str: ...
@@ -1777,7 +2293,13 @@ class ChangeDescription:
     @property
     def negative(self) -> list[str]:
         """
-        Keys of the negative settings that differ ('demosaic'); empty unless made by describe_change over two history steps.
+        Keys of the negative settings that differ, in the order 'demosaic', 'lensDistortion', 'lensVignetting', 'lensLateralCa' and 'lens' (the recorded lens); empty unless made by describe_change over two history steps.
+        """
+
+    @property
+    def lens(self) -> list[str]:
+        """
+        The lens keys of `negative`: which corrections were switched and whether the recorded lens changed.
         """
 
     def __eq__(self, arg: ChangeDescription, /) -> bool: ...
@@ -1838,6 +2360,21 @@ class EditSession:
     def set_negative(self, negative: NegativeSettings, origin: EditOrigin = EditOrigin.EDIT, detail: str = '') -> None:
         """
         Replace the negative settings as one history step; equal ones leave none. An open edit is committed first.
+        """
+
+    def set_lens_corrections(self, *, distortion: bool | None = None, vignetting: bool | None = None, lateral_ca: bool | None = None, database: LensDatabase | None = None, origin: EditOrigin = EditOrigin.EDIT, detail: str = '') -> None:
+        """
+        Set the lens switches given (None keeps one) as one history step. A correction turned on for a photograph with no recorded lens records the lens matched from its EXIF in the same step, in `database` (default: the process's), so undo takes both away; switching off keeps the record. Equal settings leave no step.
+        """
+
+    def choose_lens(self, maker: str, model: str, database: LensDatabase | None = None, origin: EditOrigin = EditOrigin.EDIT, detail: str = '') -> None:
+        """
+        Record the lens the photographer chose, as one history step; ValueError when the database does not list it. The switches stay as they are.
+        """
+
+    def reset_lens(self, database: LensDatabase | None = None, origin: EditOrigin = EditOrigin.EDIT, detail: str = '') -> None:
+        """
+        Forget the recorded lens, as one history step, and match the file's EXIF again when a correction is on ("reset to automatic").
         """
 
     @property

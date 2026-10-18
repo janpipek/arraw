@@ -1,5 +1,6 @@
 #include "BrushPainting.h"
 #include "BrushRaster.h"
+#include "support/LensTables.h"
 #include "support/LocalAdjustmentStates.h"
 #include "support/TempDir.h"
 
@@ -533,4 +534,43 @@ TEST_CASE("A refusal at the split stops the stroke and keeps the finished state"
     CHECK_FALSE(stroke.extend(pointer(step), mapping));
     CHECK(stroke.refusal() == BrushRefusal::Strokes);
     CHECK(brushIn(stroke.state(), id).strokes == brushIn(reported, id).strokes);
+}
+
+TEST_CASE("Under a lens a stroke stores the sensor point the pointer is mapped to",
+          "[brush][painting][lens]") {
+    // 3000x2000 is 3:2.
+    const auto barrel = std::make_shared<const LensCorrection>(test::barrelCorrection(-0.10F, 1.5));
+    DevelopedFrameMap map(landscape, {});
+    const QSizeF frame(map.width(), map.height());
+    const QSizeF view(widgetSize);
+    const MaskViewMapping mapping(std::move(map),
+                                  ViewTransform(frame, view, ViewTransform::fitZoom(frame, view)),
+                                  1.0, barrel);
+    const MaskViewMapping plain = fitMapping();
+
+    // Near a corner, where the lens moves things the most.
+    const QPointF press = at(plain, 0.92, 0.1);
+    const CorrectedPosition corrected = mapping.correctedFrom(press);
+    const SensorPoint point = mapping.sensorFrom(corrected);
+    const SensorPoint unmapped = plain.sensorFrom(plain.correctedFrom(press));
+    CHECK(std::abs(point.u - unmapped.u) > 0.005F);
+
+    // Pointer, sensor frame and corrected frame round-trip: the inverse puts it back.
+    const auto back = correctedFrom(*barrel, point);
+    REQUIRE(back.has_value());
+    CHECK(std::abs(back->u - corrected.u) * 3000.0 < 1e-3);
+    CHECK(std::abs(back->v - corrected.v) * 2000.0 < 1e-3);
+
+    const LiveStroke stroke = beginNew(mapping, press, settingsOf(0.03F));
+    const Stroke& painted = *brushIn(stroke.state(), stroke.mask()).strokes->strokes()[0];
+    REQUIRE(painted.points.size() == 1);
+    CHECK(painted.points[0] == point);
+
+    // Every point a drag adds is mapped the same way.
+    LiveStroke dragged = beginNew(mapping, press, settingsOf(0.03F));
+    const QPointF next = at(plain, 0.88, 0.14);
+    REQUIRE(dragged.extend(next, mapping));
+    const Stroke& path = *brushIn(dragged.state(), dragged.mask()).strokes->strokes()[0];
+    REQUIRE(path.points.size() == 2);
+    CHECK(path.points[1] == mapping.sensorFrom(mapping.correctedFrom(next)));
 }

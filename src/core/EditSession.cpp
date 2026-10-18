@@ -237,8 +237,22 @@ ChangeDescription arraw::describeChange(const DevelopState& before, const Develo
 
 ChangeDescription arraw::describeChange(const HistoryStep& before, const HistoryStep& after) {
     ChangeDescription change = describeChange(before.state, after.state);
-    if (before.negative.demosaic != after.negative.demosaic) {
+    const NegativeSettings& was = before.negative;
+    const NegativeSettings& now = after.negative;
+    if (was.demosaic != now.demosaic) {
         change.negative.push_back("demosaic");
+    }
+    if (was.lens.distortion != now.lens.distortion) {
+        change.negative.push_back("lensDistortion");
+    }
+    if (was.lens.vignetting != now.lens.vignetting) {
+        change.negative.push_back("lensVignetting");
+    }
+    if (was.lens.lateralCa != now.lens.lateralCa) {
+        change.negative.push_back("lensLateralCa");
+    }
+    if (was.lens.lens != now.lens.lens) {
+        change.negative.push_back("lens");
     }
     return change;
 }

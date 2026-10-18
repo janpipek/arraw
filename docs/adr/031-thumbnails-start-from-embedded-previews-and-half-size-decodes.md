@@ -94,3 +94,10 @@ match ([ADR 039](039-noise-reduction-is-the-first-pass-and-reads-the-as-shot-lum
 its thumbnail cached, with `defaultStateFor` its kind. The worker reads the
 file's header to tell a RAW, which costs a header parse but no decode, also on
 a cache hit.
+
+## Note, 2026-10-18
+
+[ADR 050](050-lens-corrections-are-a-stage-between-noise-reduction-and-the-chain.md): the thumbnail key gains a digest of the resolved lens correction, and the
+worker reads the negative (with its recorded lens) from the sidecar. A half-size
+decode resolves the same normalised tables, so a thumbnail is corrected like the
+full render.

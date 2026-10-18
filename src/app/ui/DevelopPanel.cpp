@@ -13,6 +13,7 @@
 #include <SettingDescriptors.h>
 
 #include <QButtonGroup>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -642,6 +643,68 @@ QWidget* DevelopPanel::buildNegativeGroup() {
         demosaicCombo_->setCurrentIndex(
             demosaicCombo_->findData(static_cast<int>(shownNegative_.demosaic)));
     });
+
+    // The lens corrections (ADR 050): three switches without sliders, and which lens they use.
+    auto* lensTitle = new QLabel(tr("Lens corrections"), group);
+    lensTitle->setObjectName("lensTitle");
+    groupLayout->addWidget(lensTitle);
+    const auto addSwitch = [&](QCheckBox*& box, const char* name, const QString& label,
+                               const QString& help, bool LensSettings::* member) {
+        box = new QCheckBox(label, group);
+        box->setObjectName(name);
+        box->setToolTip(help);
+        groupLayout->addWidget(box);
+        connect(box, &QCheckBox::clicked, this, [this, box, member](bool checked) {
+            NegativeSettings next = shownNegative_;
+            next.lens.*member = checked;
+            finishPendingEdit();
+            if (next != shownNegative_) {
+                emit negativeChosen(next);
+            }
+            // The window shows the settings again once it has taken the choice.
+            const QSignalBlocker blocker(box);
+            box->setChecked(shownNegative_.lens.*member);
+        });
+    };
+    addSwitch(lensDistortion_, "lensDistortionCheck", tr("Distortion"),
+              tr("Straightens the lines the lens bends, from its profile. The picture is "
+                 "enlarged a little to fill the frame."),
+              &LensSettings::distortion);
+    addSwitch(lensVignetting_, "lensVignettingCheck", tr("Vignetting"),
+              tr("Lifts the corners the lens darkens, from its profile. It lifts noise "
+                 "there as well."),
+              &LensSettings::vignetting);
+    addSwitch(lensCa_, "lensCaCheck", tr("Chromatic aberration"),
+              tr("Realigns the red and blue fringes at the edges, from the lens's profile."),
+              &LensSettings::lateralCa);
+
+    lensStatus_ = new QLabel(group);
+    lensStatus_->setObjectName("lensStatus");
+    lensStatus_->setWordWrap(true);
+    groupLayout->addWidget(lensStatus_);
+    lensNote_ = new QLabel(group);
+    lensNote_->setObjectName("lensNote");
+    lensNote_->setWordWrap(true);
+    lensNote_->hide();
+    groupLayout->addWidget(lensNote_);
+
+    auto* lensButtons = new QHBoxLayout;
+    lensChoose_ = new QPushButton(tr("Choose lens…"), group);
+    lensChoose_->setObjectName("lensChooseButton");
+    lensReset_ = new QPushButton(tr("Reset to automatic"), group);
+    lensReset_->setObjectName("lensResetButton");
+    lensButtons->addWidget(lensChoose_);
+    lensButtons->addWidget(lensReset_);
+    lensButtons->addStretch(1);
+    groupLayout->addLayout(lensButtons);
+    connect(lensChoose_, &QPushButton::clicked, this, [this] {
+        finishPendingEdit();
+        emit chooseLensRequested();
+    });
+    connect(lensReset_, &QPushButton::clicked, this, [this] {
+        finishPendingEdit();
+        emit resetLensRequested();
+    });
     return section;
 }
 
@@ -742,6 +805,27 @@ void DevelopPanel::showState(const DevelopState& state, const PanelContext& cont
         negativeNote_->setText(note);
         negativeNote_->setVisible(!note.isEmpty());
         demosaicCombo_->setToolTip(note);
+
+        const LensStatus& lens = context.lens;
+        // Until the database has loaded no switch can be set: a toggle never waits on it.
+        const bool settable = lens.applicable && !lens.loading;
+        const struct {
+            QCheckBox* box;
+            bool on;
+        } switches[] = {{lensDistortion_, context.negative.lens.distortion},
+                        {lensVignetting_, context.negative.lens.vignetting},
+                        {lensCa_, context.negative.lens.lateralCa}};
+        for (const auto& [box, on] : switches) {
+            const QSignalBlocker switchBlocker(box);
+            box->setChecked(on);
+            box->setEnabled(settable);
+        }
+        lensStatus_->setText(lens.text);
+        lensStatus_->setVisible(!lens.text.isEmpty());
+        lensNote_->setText(lens.note);
+        lensNote_->setVisible(!lens.note.isEmpty());
+        lensChoose_->setEnabled(settable && lens.canChoose);
+        lensReset_->setEnabled(settable && lens.canReset);
     }
 
     curveEditor_->setCurves(shown_.settings.toneCurve);

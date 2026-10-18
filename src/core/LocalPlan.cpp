@@ -85,7 +85,21 @@ void resolveRadial(const RadialMask& shape, ImageSize source, LocalMaskPlan& pla
 
 } // namespace
 
-LocalMaskPlan arraw::resolvedMask(const Mask& shape, bool invert, ImageSize source) {
+BrushFrame arraw::brushFrameOf(const LensCorrection& lens) {
+    if (lens.distortion.empty()) {
+        return nullptr;
+    }
+    auto frame = std::make_shared<LensCorrection>();
+    frame->distortion = lens.distortion;
+    frame->centerU = lens.centerU;
+    frame->centerV = lens.centerV;
+    frame->aspect = lens.aspect;
+    frame->fill = lens.fill;
+    return frame;
+}
+
+LocalMaskPlan arraw::resolvedMask(const Mask& shape, bool invert, ImageSize source,
+                                  const BrushFrame& frame) {
     LocalMaskPlan plan;
     plan.invert = invert;
     if (const auto* linear = std::get_if<LinearMask>(&shape)) {
@@ -94,13 +108,15 @@ LocalMaskPlan arraw::resolvedMask(const Mask& shape, bool invert, ImageSize sour
         plan.kind = LocalMaskKind::Brush;
         plan.brush.strokes = brush->strokes != nullptr ? brush->strokes : emptyStrokeList();
         plan.brush.raster = source;
+        plan.brush.frame = frame;
     } else {
         resolveRadial(std::get<RadialMask>(shape), source, plan);
     }
     return plan;
 }
 
-LocalPlan arraw::localPlanFor(const DevelopState& state, ImageSize source) {
+LocalPlan arraw::localPlanFor(const DevelopState& state, ImageSize source,
+                              const BrushFrame& frame) {
     LocalPlan plan;
     if (state.localAdjustments.empty()) {
         return plan;
@@ -127,7 +143,7 @@ LocalPlan arraw::localPlanFor(const DevelopState& state, ImageSize source) {
         if (!carriesEffect(adjustment)) {
             continue;
         }
-        LocalMaskPlan mask = resolvedMask(adjustment.shape, adjustment.invert, source);
+        LocalMaskPlan mask = resolvedMask(adjustment.shape, adjustment.invert, source, frame);
         mask.k = k;
         if (mask.kind == LocalMaskKind::Brush) {
             mask.brush.slot = static_cast<std::uint32_t>(plan.brushCount());

@@ -257,15 +257,16 @@ DeviceImage uploadSource(GpuContext& context, const ImageBuffer& source) {
 }
 
 RenderCheckpoint developOnGpu(GpuContext& context, const ImageBuffer& source,
-                              const DevelopState& state, Stage stopAfter,
-                              const RenderRequest& request, ProgressChannel* progress) {
+                              const DevelopState& state, const LensCorrection& lens,
+                              Stage stopAfter, const RenderRequest& request,
+                              ProgressChannel* progress) {
     // One path: the transfer this call pays for is the only difference.
     // Validating first keeps a bad argument from costing an upload.
     if (static_cast<std::size_t>(stopAfter) >= stageCount) {
         throw std::invalid_argument("A GPU development needs a recognised pass boundary");
     }
     const DeviceImage uploaded = uploadSource(context, source);
-    return developOnGpu(context, source, uploaded, state, stopAfter, request, progress);
+    return developOnGpu(context, source, uploaded, state, lens, stopAfter, request, progress);
 }
 
 namespace {
@@ -371,6 +372,18 @@ DeviceImage geometryOnGpu(GpuContext& context, const DeviceImage& image,
                           workingEncoding);
 }
 
+/// @brief Runs the Lens pass on a device image, as ::arraw::applyLens does on the host.
+///
+/// One render: the radial tables are a small texture uploaded for the call (a resumed render
+/// starts after the pass and pays nothing), and the pass keeps the image's size and encoding.
+DeviceImage lensOnGpu(GpuContext& context, const DeviceImage& image, const LensPlan& plan) {
+    const GpuLensBlock block = packLens(plan, image.size());
+    const DeviceImage tables = context.upload(packLensTables(plan));
+    const std::array inputs{image, tables};
+    const detail::ProgressSpan progress(ProgressStep::Lens, 1);
+    return context.render(GpuPass::Lens, bytesOf(block), inputs, image.size(), image.encoding());
+}
+
 /// @brief Runs the Effects pass on a device image, as ::arraw::applyEffects does on the host.
 DeviceImage effectsOnGpu(GpuContext& context, const DeviceImage& image,
                          const ProcessingPlan& plan) {
@@ -399,6 +412,8 @@ struct GpuStages {
         switch (stage) {
         case Stage::Denoise:
             return denoiseOnGpu(context, image, plan.denoise);
+        case Stage::Lens:
+            return lensOnGpu(context, image, plan.lens);
         case Stage::Pointwise:
             return pointwiseOnGpu(context, image, plan, probe, residency);
         case Stage::Geometry:
@@ -450,21 +465,22 @@ RenderCheckpoint developStages(GpuContext& context, std::optional<Stage> done, D
 
 RenderCheckpoint developOnGpu(GpuContext& context, const ImageBuffer& source,
                               const DeviceImage& uploaded, const DevelopState& state,
-                              Stage stopAfter, const RenderRequest& request,
-                              ProgressChannel* progress) {
+                              const LensCorrection& lens, Stage stopAfter,
+                              const RenderRequest& request, ProgressChannel* progress) {
     if (static_cast<std::size_t>(stopAfter) >= stageCount) {
         throw std::invalid_argument("A GPU development needs a recognised pass boundary");
     }
     requireUploaded(context, source, uploaded);
     // Only a render that reaches the resize plans one: stopping earlier ignores
     // the request, whatever it says, and has no use for the opacity scan.
-    ProcessingPlan plan = planFor(source, state, plannedRequest(request, stopAfter));
+    ProcessingPlan plan = planFor(source, state, lens, plannedRequest(request, stopAfter));
     return developStages(context, std::nullopt, uploaded, std::move(plan), stopAfter, request,
                          progress);
 }
 
 RenderCheckpoint developOnGpu(GpuContext& context, const RenderCheckpoint& from,
-                              const ImageBuffer& source, const DevelopState& state, Stage stopAfter,
+                              const ImageBuffer& source, const DevelopState& state,
+                              const LensCorrection& lens, Stage stopAfter,
                               const RenderRequest& request, ProgressChannel* progress) {
     if (static_cast<std::size_t>(stopAfter) >= stageCount) {
         throw std::invalid_argument("A GPU development needs a recognised pass boundary");
@@ -477,7 +493,7 @@ RenderCheckpoint developOnGpu(GpuContext& context, const RenderCheckpoint& from,
     if (image->device() != context.id()) {
         throw std::invalid_argument("The checkpoint belongs to another device");
     }
-    ProcessingPlan plan = planFor(source, state, plannedRequest(request, stopAfter));
+    ProcessingPlan plan = planFor(source, state, lens, plannedRequest(request, stopAfter));
     requireResumable(held, plan, source.size(), stopAfter);
     if (stopAfter == held.boundary) {
         // Nothing to run, but a cancelled channel still says so, as on the CPU.
@@ -493,13 +509,14 @@ RenderCheckpoint developOnGpu(GpuContext& context, const RenderCheckpoint& from,
 LadderRender resumeOrDevelopOnGpu(GpuContext& context, CheckpointLadder& ladder,
                                   std::shared_ptr<const ImageBuffer> source,
                                   const DeviceImage& uploaded, const DevelopState& state,
-                                  const RenderRequest& request, ProgressChannel* progress) {
+                                  const LensCorrection& lens, const RenderRequest& request,
+                                  ProgressChannel* progress) {
     if (!source) {
         throw std::invalid_argument("A render through a ladder needs a source");
     }
     requireUploaded(context, *source, uploaded);
     // Planned before the ladder is touched, so that a bad request drops nothing.
-    ProcessingPlan plan = planFor(*source, state, request);
+    ProcessingPlan plan = planFor(*source, state, lens, request);
     LadderAccess::bind(ladder, source);
     // A rung on the host, or on another device, cannot serve this render.
     const std::optional<Stage> resumedFrom = LadderAccess::deepestUsable(
@@ -534,8 +551,9 @@ LadderRender resumeOrDevelopOnGpu(GpuContext& context, CheckpointLadder& ladder,
 
 bool drawsBrushCoverageOnGpu(const GpuContext& context, const CheckpointLadder& ladder,
                              const ImageBuffer& source, const DevelopState& state,
-                             const RenderRequest& request, double minimumSeconds) {
-    const ProcessingPlan plan = planFor(source, state, request);
+                             const LensCorrection& lens, const RenderRequest& request,
+                             double minimumSeconds) {
+    const ProcessingPlan plan = planFor(source, state, lens, request);
     if (LadderAccess::hasUsableFrom(ladder, Stage::Pointwise, plan, source.size(),
                                     [&context](const CheckpointState& rung) {
                                         const auto* image = std::get_if<DeviceImage>(&rung.pixels);
@@ -549,12 +567,12 @@ bool drawsBrushCoverageOnGpu(const GpuContext& context, const CheckpointLadder& 
 }
 
 ImageBuffer sampleOnGpu(GpuContext& context, const ImageBuffer& source, const DeviceImage& uploaded,
-                        const DevelopState& state, Tap tap, const RenderRequest& request,
-                        ProgressChannel* progress) {
+                        const DevelopState& state, const LensCorrection& lens, Tap tap,
+                        const RenderRequest& request, ProgressChannel* progress) {
     const PointwiseProbe probe = probeFor(tap);
     requireUploaded(context, source, uploaded);
     const detail::TimingSpan timing("gpu.sample");
-    const ProcessingPlan plan = planFor(source, state, request);
+    const ProcessingPlan plan = planFor(source, state, lens, request);
     // As ::arraw::sample: no effects, so they take no share.
     detail::StepWeights weights = detail::observedStepWeights(progress, plan, request);
     weights[static_cast<std::size_t>(ProgressStep::Effects)] = 0.0;
@@ -568,11 +586,12 @@ ImageBuffer sampleOnGpu(GpuContext& context, const ImageBuffer& source, const De
 }
 
 ImageBuffer sampleOnGpu(GpuContext& context, const ImageBuffer& source, const DevelopState& state,
-                        Tap tap, const RenderRequest& request, ProgressChannel* progress) {
+                        const LensCorrection& lens, Tap tap, const RenderRequest& request,
+                        ProgressChannel* progress) {
     // Validating first keeps a bad tap from costing an upload.
     static_cast<void>(probeFor(tap));
     const DeviceImage uploaded = uploadSource(context, source);
-    return sampleOnGpu(context, source, uploaded, state, tap, request, progress);
+    return sampleOnGpu(context, source, uploaded, state, lens, tap, request, progress);
 }
 
 } // namespace arraw

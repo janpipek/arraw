@@ -4,10 +4,12 @@
 
 #include <BrushStrokes.h>
 #include <ImageBuffer.h>
+#include <LensCorrection.h>
 
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <span>
 #include <vector>
 
@@ -20,6 +22,18 @@ namespace arraw {
 /// Measured: from 1.5 the weight of a hardness 1 line varies by 14% or less with its sub-pixel
 /// position, against 59% from 1.
 inline constexpr double minimumDrawnRadius = 1.5;
+
+/// @brief The map from the sensor frame, where brush strokes are stored, to the corrected frame the
+/// coverage is drawn in (ADR 009, ADR 050, section 7); null where the two are the same.
+///
+/// Holds only what places a point: the distortion table, the centre, the aspect and the fill
+/// scale (see ::arraw::brushFrameOf), so vignetting and lateral CA never move a stroke.
+using BrushFrame = std::shared_ptr<const LensCorrection>;
+
+/// @brief Compares two brush frames by meaning: both null, or equal.
+[[nodiscard]] inline bool sameBrushFrame(const BrushFrame& a, const BrushFrame& b) {
+    return a == b || (a != nullptr && b != nullptr && *a == *b);
+}
 
 /// Centre of one dab, in raster pixels (pixel i spans [i, i+1)).
 struct DabCentre {
@@ -70,11 +84,19 @@ struct CoveragePlane {
                                                 bool endDab = true, std::size_t* regular = nullptr);
 
 /// Resolves one stroke against a raster size.
-[[nodiscard]] PlacedStroke placedStroke(const Stroke& stroke, ImageSize raster);
+///
+/// The dabs are laid along the stroke's path in the sensor frame, where strokes are stored, and
+/// each dab's centre is then mapped to the corrected frame by the lens (ADR 009, ADR 050, section
+/// 7): the stroke follows its subject, and the radii stay what they were. A centre the map cannot
+/// place stays where it is.
+/// @param lens Map of the sensor frame into the raster's frame, or null for the identity.
+[[nodiscard]] PlacedStroke placedStroke(const Stroke& stroke, ImageSize raster,
+                                        const LensCorrection* lens = nullptr);
 
 /// Resolves the strokes of a list from @p first on.
 [[nodiscard]] std::vector<PlacedStroke> placedStrokes(const StrokeList& strokes, ImageSize raster,
-                                                      std::size_t first = 0);
+                                                      std::size_t first = 0,
+                                                      const LensCorrection* lens = nullptr);
 
 /// Half-open pixel range [first, last) along one axis that a dab at @p centre can touch.
 struct PixelSpan {
@@ -150,7 +172,9 @@ void paintBucket(std::span<const PlacedStroke> placed, const DabBuckets& buckets
                  std::uint32_t bucket, PixelRect region, std::span<float> values);
 
 /// Draws all strokes onto zero over the whole raster, banded by rows: the reference.
+/// @param lens Map of the sensor frame into the raster's frame, or null for the identity.
 /// @throws std::invalid_argument for an empty size or a rasteriser other than 1.
-[[nodiscard]] CoveragePlane rasteriseBrush(const StrokeList& strokes, ImageSize raster);
+[[nodiscard]] CoveragePlane rasteriseBrush(const StrokeList& strokes, ImageSize raster,
+                                           const LensCorrection* lens = nullptr);
 
 } // namespace arraw

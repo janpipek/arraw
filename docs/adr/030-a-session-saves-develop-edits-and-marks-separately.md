@@ -76,3 +76,11 @@ saved one, `discardChanges` restores it, and the sidecar gets `arraw:demosaic`
 under the rule `xmp:Rating` follows: written only when it differs from what
 reading gave, so an unknown token from a newer arraw survives. A sidecar with
 only that key records a negative and no state.
+
+## Amendment, 2026-10-18: the lens settings are saved with the negative
+
+[ADR 050](050-lens-corrections-are-a-stage-between-noise-reduction-and-the-chain.md): the sidecar gains `arraw:lensDistortion`, `lensVignetting`, `lensLateralCa`,
+and, when a lens is recorded, `lensMaker`, `lensModel`, `lensCropFactor`,
+`lensOrigin` (`matched` or `chosen`) and `lensDatabase`, under the same "written
+only when it differs from what reading gave" rule as `arraw:demosaic`. No
+coefficients are written. Unsaved changes and discard include them.

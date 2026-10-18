@@ -13,6 +13,7 @@
 #include "ExportSettings.h"
 #include "FilmStrip.h"
 #include "HistoryModel.h"
+#include "LensPickerDialog.h"
 #include "MaskOverlay.h"
 #include "MasksPanel.h"
 #include "PhotoView.h"
@@ -32,6 +33,7 @@
 #include <Edits.h>
 #include <ImageBuffer.h>
 #include <ImageImport.h>
+#include <LensResolution.h>
 #include <LocalAdjustmentEdits.h>
 #include <Photo.h>
 #include <Sidecar.h>
@@ -136,11 +138,13 @@ DevelopState uncroppedState(DevelopState state) {
 
 } // namespace
 
-MainWindow::MainWindow(DebugLog& debugLog, QWidget* parent, PhotoLoader::Decoder decoder)
+MainWindow::MainWindow(DebugLog& debugLog, QWidget* parent, PhotoLoader::Decoder decoder,
+                       LensDatabaseSource lensDatabase)
     : QMainWindow(parent), debugLog_(debugLog), runningSettings_([] {
           QSettings store;
           return restoreAppSettings(store);
       }()),
+      lensSource_(lensDatabase ? std::move(lensDatabase) : systemLensDatabase()),
       previewRenderer_(
           [this](PreviewResult result) {
               // On the worker thread. Dropped if the window is gone by the time the
@@ -169,7 +173,7 @@ MainWindow::MainWindow(DebugLog& debugLog, QWidget* parent, PhotoLoader::Decoder
                   Qt::QueuedConnection);
           },
           cpuChosen(runningSettings_) ? ExportQueue::Device::Cpu : ExportQueue::Device::Auto,
-          runningSettings_),
+          runningSettings_, lensSource_),
       photoLoader_(
           ThumbnailCache(ThumbnailCache::defaultRoot()),
           [this](DecodedPhoto result) {
@@ -195,7 +199,7 @@ MainWindow::MainWindow(DebugLog& debugLog, QWidget* parent, PhotoLoader::Decoder
                   Qt::QueuedConnection);
           },
           decoder ? std::move(decoder) : PhotoLoader::imageDecoder(&debugLog.diagnostics)) {
-    filmStrip_ = new FilmStrip(this);
+    filmStrip_ = new FilmStrip(this, ThumbnailCache(ThumbnailCache::defaultRoot()), lensSource_);
     buildMenu();
     buildStatusBar();
     buildImageView();
@@ -282,6 +286,20 @@ MainWindow::MainWindow(DebugLog& debugLog, QWidget* parent, PhotoLoader::Decoder
     if (const QScreen* screenOfWindow = screen()) {
         resize(screenOfWindow->availableGeometry().size() * 2 / 3);
     }
+
+    // The database loads off this thread (ADR 043, ADR 050); the lens switches wait for it.
+    lensLoader_ = std::jthread([this] {
+        const LensDatabase* database = nullptr;
+        try {
+            database = &lensSource_();
+        } catch (const std::exception&) {
+            // A source that cannot give one is a database that is not there.
+            static const LensDatabase none = LensDatabase::fromDirectory({});
+            database = &none;
+        }
+        QMetaObject::invokeMethod(
+            this, [this, database] { lensDatabaseLoaded(database); }, Qt::QueuedConnection);
+    });
 }
 
 bool MainWindow::event(QEvent* event) {
@@ -600,6 +618,8 @@ void MainWindow::buildDevelopDock() {
     connect(developPanel_, &DevelopPanel::stateEdited, this, &MainWindow::updateEdit);
     connect(developPanel_, &DevelopPanel::pickToggled, this, &MainWindow::setPicking);
     connect(developPanel_, &DevelopPanel::negativeChosen, this, &MainWindow::chooseNegative);
+    connect(developPanel_, &DevelopPanel::chooseLensRequested, this, &MainWindow::chooseLens);
+    connect(developPanel_, &DevelopPanel::resetLensRequested, this, &MainWindow::resetLens);
 
     // The Masks group and the overlay speak the same protocol, and share the slots above.
     connect(developPanel_, &DevelopPanel::maskSelected, this,
@@ -914,6 +934,7 @@ void MainWindow::syncMasks() {
     }
     MaskOverlay& overlay = photoView_->maskOverlay();
     overlay.setScene(state, source);
+    overlay.setLens(lensView().correction);
     overlay.setSelection(maskSelection_);
     developPanel_->setSelectedMask(maskSelection_);
     if (overlay.tool() != MaskTool::None && !canAddLocalAdjustment(state) && !overlay.stroking()) {
@@ -1237,7 +1258,19 @@ void MainWindow::pasteSettings() {
         // A stroke under way is committed by the session, then the paste is its own step.
         photoView_->maskOverlay().abandonDrag();
         const Photo& photo = open_->session.photo();
-        const AppliedLook applied = withLook(photo, clipboard_->look, clipboard_->sections);
+        AppliedLook applied = withLook(photo, clipboard_->look, clipboard_->sections);
+        if (lensDatabase_ == nullptr && applied.negative.lens.any() &&
+            !applied.negative.lens.lens && applied.negative != photo.negative()) {
+            // The lens this photograph is matched to is recorded with the paste (ADR 050, section
+            // 6), and the database that finds it is still loading.
+            statusLine_->showMessage(tr("The lens database is still loading; paste again once "
+                                        "it has."),
+                                     6000);
+            return;
+        }
+        // The target records its own lens when the paste turns a correction on (ADR 050, section
+        // 6); the one copied from is never carried.
+        applied.negative = withMatchRecorded(photo, applied.negative, lensDatabase_);
         const bool changed = applied.state != photo.state() || applied.negative != photo.negative();
         // Both parts in one step; refreshPanel() re-decodes when the negative changed.
         open_->session.setState(applied.negative, applied.state, EditOrigin::Paste);
@@ -1375,15 +1408,15 @@ void MainWindow::guarded(const std::function<void()>& action) {
     }
 }
 
-void MainWindow::refreshPanel(std::chrono::milliseconds renderDelay) {
-    if (!open_) {
-        return;
-    }
-    const detail::TimingSpan timing("window.panel");
+void MainWindow::showPanel() {
     const Photo& photo = open_->session.photo();
     const bool raw = !std::holds_alternative<NamedEncoding>(photo.metadata().encoding);
-    PanelContext context{raw, std::nullopt, defaultStateFor(photo.metadata().encoding).settings,
-                         photo.metadata(), photo.negative()};
+    PanelContext context{raw,
+                         std::nullopt,
+                         defaultStateFor(photo.metadata().encoding).settings,
+                         photo.metadata(),
+                         photo.negative(),
+                         lensView().status};
     if (const auto* camera = std::get_if<CameraNative>(&photo.metadata().encoding)) {
         try {
             // The light the pixels went through, which is also what development
@@ -1397,6 +1430,14 @@ void MainWindow::refreshPanel(std::chrono::milliseconds renderDelay) {
         }
     }
     developPanel_->showState(photo.state(), context);
+}
+
+void MainWindow::refreshPanel(std::chrono::milliseconds renderDelay) {
+    if (!open_) {
+        return;
+    }
+    const detail::TimingSpan timing("window.panel");
+    showPanel();
     syncMasks();
     updateHistoryActions();
     saveAction_->setEnabled(open_->session.hasUnsavedChanges());
@@ -1804,6 +1845,9 @@ void MainWindow::exportWithDialog() {
         const std::uint64_t id = exportQueue_.enqueue(
             {.state = photo.state(),
              .decode = decodeOptions,
+             // Resolved on the export thread, against the database, by the same code as
+             // everything else: the export applies the corrections the photograph asks for.
+             .document = photo,
              .input = photo.path(),
              // Only pixels made with the job's options; else the export thread decodes
              // for itself.
@@ -1838,7 +1882,16 @@ void MainWindow::showExportResult(const ExportResult& result) {
         const QString name = found->second;
         exportNames_.erase(found);
         if (result.error.empty()) {
-            if (result.warnings.empty()) {
+            if (!result.lensNotices.empty()) {
+                // The export went ahead without the corrections that could not be applied.
+                QStringList details;
+                for (const auto& notice : result.lensNotices) {
+                    details << QString::fromStdString(notice);
+                }
+                statusLine_->showMessage(
+                    tr("Exported %1 without lens corrections: %2").arg(name, details.first()),
+                    10000, details.join(QLatin1Char('\n')));
+            } else if (result.warnings.empty()) {
                 statusLine_->showMessage(tr("Exported %1").arg(name), 5000);
             } else {
                 QStringList details;
@@ -1975,6 +2028,12 @@ void MainWindow::requestRender() {
     resizeTimer_.stop();
     interactionTimer_.stop();
     noiseReductionTimer_.stop();
+    const LensView& lens = lensView();
+    if (lens.status.loading && open_->session.photo().negative().lens.any()) {
+        // The photograph asks for corrections the database has to resolve; a picture without them
+        // would be a wrong one. lensDatabaseLoaded asks again.
+        return;
+    }
     const DevelopState& state = open_->session.photo().state();
     const qreal ratio = photoView_->devicePixelRatioF();
     if (photoView_->isCropMode()) {
@@ -1991,7 +2050,8 @@ void MainWindow::requestRender() {
         }
         lastCropRender_.emplace(uncropped, size);
         renderIndicator_->begin();
-        latestRequest_ = previewRenderer_.request(uncropped, PreviewView::wholeFrame(size, ratio));
+        latestRequest_ = previewRenderer_.request(uncropped, lens.correction,
+                                                  PreviewView::wholeFrame(size, ratio));
         cropRequests_.emplace_back(latestRequest_, std::move(uncropped));
         return;
     }
@@ -2026,7 +2086,7 @@ void MainWindow::requestRender() {
     // commit brings the full one (ADR 044).
     view.reduced = stroking && !committingStroke_;
     renderIndicator_->begin();
-    latestRequest_ = previewRenderer_.request(state, std::move(view),
+    latestRequest_ = previewRenderer_.request(state, lens.correction, std::move(view),
                                               stroking ? Supersede::Queue : Supersede::Cancel);
 }
 
@@ -2267,8 +2327,90 @@ void MainWindow::chooseNegative(const NegativeSettings& negative) {
     guarded([this, &negative] {
         developPanel_->finishPendingEdit();
         photoView_->maskOverlay().abandonDrag();
-        open_->session.setNegative(negative);
+        // A correction turned on records the lens it was matched to in the same step.
+        open_->session.setNegative(
+            withMatchRecorded(open_->session.photo(), negative, lensDatabase_));
         refreshPanel();
+    });
+}
+
+void MainWindow::lensDatabaseLoaded(const LensDatabase* database) {
+    lensDatabase_ = database;
+    if (!open_) {
+        return;
+    }
+    if (!editable() || !open_->session.photo().negative().lens.any()) {
+        // Nothing shown depends on it but the lens rows (and a decode still to come asks for its
+        // own render).
+        showPanel();
+        return;
+    }
+    // The renders held back for it, and the crop mode's, were made without it.
+    lastCropRender_.reset();
+    refreshPanel();
+}
+
+const LensView& MainWindow::lensView() {
+    OpenPhoto& open = *open_;
+    const Photo& photo = open.session.photo();
+    const LensSettings& settings = photo.negative().lens;
+    if (open.lensKey && open.lensKey->first == settings && open.lensKey->second == lensDatabase_) {
+        return open.lensView;
+    }
+    const detail::TimingSpan timing("window.lens");
+    LensView resolved;
+    try {
+        resolved = resolveLensView(photo, lensDatabase_);
+    } catch (const std::exception& error) {
+        resolved.status.applicable = true;
+        resolved.status.text = tr("No profile: %1").arg(QString::fromUtf8(error.what()));
+    }
+    if (!(resolved.correction == open.lensView.correction)) {
+        // What the crop mode drew, and renders on their way, were made with the other correction.
+        open.lastCropImage.reset();
+        open.cropImageFloor = latestRequest_;
+        lastCropRender_.reset();
+    }
+    open.lensView = std::move(resolved);
+    open.lensKey.emplace(settings, lensDatabase_);
+    return open.lensView;
+}
+
+void MainWindow::chooseLens() {
+    if (!editable() || photoView_->isCropMode() || lensDatabase_ == nullptr ||
+        !lensDatabase_->loaded()) {
+        return;
+    }
+    guarded([this] {
+        developPanel_->finishPendingEdit();
+        const Photo& photo = open_->session.photo();
+        const LensFacts& facts = photo.metadata().lens;
+        LensPickerDialog dialog(*lensDatabase_,
+                                lensDatabase_->mountOf(facts.cameraMaker, facts.cameraModel),
+                                lensView().status.candidates, this);
+        if (dialog.exec() != QDialog::Accepted) {
+            return;
+        }
+        const std::optional<LensIdentity> chosen = dialog.chosen();
+        if (!chosen) {
+            return;
+        }
+        const std::optional<Photo> recorded = withChosenLens(photo, *chosen, *lensDatabase_);
+        if (!recorded) {
+            statusLine_->showMessage(tr("The lens database does not list that lens."), 6000);
+            return;
+        }
+        chooseNegative(recorded->negative());
+    });
+}
+
+void MainWindow::resetLens() {
+    if (!editable() || photoView_->isCropMode()) {
+        return;
+    }
+    guarded([this] {
+        developPanel_->finishPendingEdit();
+        chooseNegative(withLensReset(open_->session.photo(), lensDatabase_));
     });
 }
 

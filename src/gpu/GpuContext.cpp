@@ -324,6 +324,8 @@ std::string_view passName(GpuPass pass) {
         return "pointwise";
     case GpuPass::Geometry:
         return "geometry";
+    case GpuPass::Lens:
+        return "lens";
     case GpuPass::ResizeAcross:
         return "resize-across";
     case GpuPass::ResizeDown:
@@ -353,6 +355,8 @@ QString fragmentShaderOf(GpuPass pass) {
         return QStringLiteral(":/arraw/shaders/develop.frag.qsb");
     case GpuPass::Geometry:
         return QStringLiteral(":/arraw/shaders/geometry.frag.qsb");
+    case GpuPass::Lens:
+        return QStringLiteral(":/arraw/shaders/lens.frag.qsb");
     case GpuPass::ResizeAcross:
         return QStringLiteral(":/arraw/shaders/resize_across.frag.qsb");
     case GpuPass::ResizeDown:
@@ -382,6 +386,8 @@ std::size_t uniformSizeOf(GpuPass pass) {
         return sizeof(GpuPointwiseBlock);
     case GpuPass::Geometry:
         return sizeof(GpuGeometryBlock);
+    case GpuPass::Lens:
+        return sizeof(GpuLensBlock);
     case GpuPass::ResizeAcross:
     case GpuPass::ResizeDown:
     case GpuPass::ResizeAcrossOpaque:
@@ -414,6 +420,7 @@ std::size_t inputCountOf(GpuPass pass) {
     case GpuPass::ResizeAcrossOpaque:
     case GpuPass::ResizeDownOpaque:
     case GpuPass::PresenceFilter:
+    case GpuPass::Lens:
         return 2;
     case GpuPass::ResizeDown:
         return 4;

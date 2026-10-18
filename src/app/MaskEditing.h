@@ -4,6 +4,7 @@
 
 #include <DevelopState.h>
 #include <DevelopedFrame.h>
+#include <LensCorrection.h>
 #include <LocalAdjustments.h>
 
 #include <QLineF>
@@ -11,6 +12,7 @@
 #include <QSizeF>
 #include <QTransform>
 
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -61,13 +63,23 @@ public:
     /// @param frame Placement of the corrected frame in the developed one.
     /// @param view Where the developed frame lies in the view, in device pixels.
     /// @param devicePixelRatio Device pixels per logical pixel; positive.
-    MaskViewMapping(DevelopedFrameMap frame, ViewTransform view, double devicePixelRatio);
+    /// @param lens Lens corrections of the render shown, which place a brush stroke's sensor-frame
+    /// points; null for none (ADR 050, section 7).
+    MaskViewMapping(DevelopedFrameMap frame, ViewTransform view, double devicePixelRatio,
+                    std::shared_ptr<const LensCorrection> lens = nullptr);
 
     /// @brief Gives the widget position of a corrected position.
     [[nodiscard]] QPointF widgetFrom(CorrectedPosition position) const;
 
     /// @brief Gives the corrected position under a widget position.
     [[nodiscard]] CorrectedPosition correctedFrom(QPointF widget) const;
+
+    /// @brief Gives the sensor-frame point a corrected position is of: where a brush stroke
+    /// painted there is stored (ADR 009, ADR 050, section 7).
+    ///
+    /// The same numbers without a lens correction; with distortion, the point the lens maps to
+    /// that position, narrowed to float once.
+    [[nodiscard]] SensorPoint sensorFrom(CorrectedPosition position) const noexcept;
 
     /// @brief Gives the widget position of a long-edge position.
     [[nodiscard]] QPointF widgetFromLongEdge(QPointF position) const;
@@ -102,6 +114,7 @@ private:
     DevelopedFrameMap frame_;
     ViewTransform view_;
     double ratio_;
+    std::shared_ptr<const LensCorrection> lens_;
 };
 
 /// @brief A handle and where it is drawn.

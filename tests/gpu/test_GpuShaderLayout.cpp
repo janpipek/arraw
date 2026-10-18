@@ -395,6 +395,22 @@ TEST_CASE("The geometry shader's block is GpuGeometryBlock, member for member", 
                      });
 }
 
+TEST_CASE("The lens shader's block is GpuLensBlock, member for member", "[gpu][shader]") {
+    using Block = GpuLensBlock;
+    requireSameBlock("lens.frag", 1, sizeof(Block),
+                     {
+                         ARRAW_MEMBER(Block, centerWhole),
+                         ARRAW_MEMBER(Block, centerFraction),
+                         ARRAW_MEMBER(Block, radiusStep),
+                         ARRAW_MEMBER(Block, distorts),
+                         ARRAW_MEMBER(Block, colorSplit),
+                         ARRAW_MEMBER(Block, dims),
+                         ARRAW_MEMBER(Block, fillGain),
+                         ARRAW_MEMBER(Block, inverseFill),
+                         ARRAW_MEMBER(Block, lastNode),
+                     });
+}
+
 TEST_CASE("Every resize shader's block is GpuResizeBlock, member for member", "[gpu][shader]") {
     for (const char* shader : {"resize_across.frag", "resize_across_opaque.frag",
                                "resize_down.frag", "resize_down_opaque.frag"}) {

@@ -107,3 +107,11 @@ detail)` makes one step for a paste or a preset that changes both.
 chosen, never dragged. Undo, redo and `goTo` move both parts, and a front end
 re-decodes when the step it lands on has another negative.
 `describeChange` names it (`ChangeDescription::negative`, key `"demosaic"`).
+
+## Amendment, 2026-10-18: lens switches and the recorded lens
+
+[ADR 050](050-lens-corrections-are-a-stage-between-noise-reduction-and-the-chain.md): the lens switches and the recorded lens are part of the negative, so a step
+holds them. Turning a correction on for a photograph with no recorded lens
+records the match in the same step, so undo removes both; turning it off keeps
+the record. `describeChange` names the key `"lens"`. A lens change never
+triggers a re-decode.

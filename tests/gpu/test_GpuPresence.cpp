@@ -75,10 +75,11 @@ double requirePointwiseMatches(ImageBuffer source, const DevelopSettings& settin
                                double pixelScale) {
     source.setPixelScale(pixelScale);
     const DevelopState state{settings};
-    REQUIRE(planFor(source, state).pointwise.presence.active());
-    const ImageBuffer expected = developUntil(source, state, Stage::Pointwise).readBack();
+    REQUIRE(planFor(source, state, LensCorrection{}).pointwise.presence.active());
+    const ImageBuffer expected =
+        developUntil(source, state, LensCorrection{}, Stage::Pointwise).readBack();
     const ImageBuffer actual =
-        developOnGpu(gpuContext(), source, state, Stage::Pointwise).readBack();
+        developOnGpu(gpuContext(), source, state, LensCorrection{}, Stage::Pointwise).readBack();
     const double colour = worstColourError(expected, actual);
     CAPTURE(pixelScale, colour, compareFloat(expected, actual, pointwiseAbsoluteFloor));
     REQUIRE(colour <= presenceRelativeTolerance);
@@ -133,7 +134,7 @@ TEST_CASE("Presence on the device matches the CPU", "[gpu][presence][slow]") {
 
     SECTION("an export's cells: eight pixels, with Dehaze's opening over many") {
         const ImageBuffer wide = sceneOf({3203, 24});
-        REQUIRE(planFor(wide, DevelopState{presence(0.0F, 50.0F, 50.0F)})
+        REQUIRE(planFor(wide, DevelopState{presence(0.0F, 50.0F, 50.0F)}, LensCorrection{})
                     .pointwise.presence.coarse.reduction == 8);
         worst = std::max(worst,
                          requirePointwiseMatches(wide.clone(), presence(30.0F, 70.0F, 60.0F), 1.0));
@@ -157,7 +158,8 @@ TEST_CASE("Presence on the device matches the CPU", "[gpu][presence][slow]") {
             }
         }
         const PresencePlan plan =
-            planFor(disk, DevelopState{presence(0.0F, 0.0F, 100.0F)}).pointwise.presence;
+            planFor(disk, DevelopState{presence(0.0F, 0.0F, 100.0F)}, LensCorrection{})
+                .pointwise.presence;
         REQUIRE(plan.hazeFloor.window == 18);
         REQUIRE(plan.hazeFloor.reconstruction == hazeReconstructionSteps);
         worst = std::max(worst,
@@ -180,7 +182,8 @@ TEST_CASE("Presence on the device matches the CPU", "[gpu][presence][slow]") {
             }
         }
         const PresencePlan plan =
-            planFor(board, DevelopState{presence(0.0F, 0.0F, 100.0F)}).pointwise.presence;
+            planFor(board, DevelopState{presence(0.0F, 0.0F, 100.0F)}, LensCorrection{})
+                .pointwise.presence;
         REQUIRE(octagonOf(plan.hazeFloor.window) == OctagonWindow{.across = 2, .diagonal = 2});
         worst = std::max(worst,
                          requirePointwiseMatches(board.clone(), presence(0.0F, 0.0F, 100.0F), 1.0));
@@ -210,9 +213,10 @@ TEST_CASE("A Presence render on the device matches the CPU end to end", "[gpu][p
     settings.geometry.straighten = 2.0;
     const DevelopState state{settings};
     const RenderRequest request{.size = RenderRequest::Scale{0.5}};
-    const ImageBuffer expected = develop(source, state, request);
+    const ImageBuffer expected = develop(source, state, LensCorrection{}, request);
     const ImageBuffer actual =
-        developOnGpu(gpuContext(), source, state, Stage::Effects, request).readBack();
+        developOnGpu(gpuContext(), source, state, LensCorrection{}, Stage::Effects, request)
+            .readBack();
     const double colour = worstColourError(expected, actual);
     CAPTURE(colour);
     REQUIRE(colour <= presenceRelativeTolerance + resampleTolerance);
@@ -223,7 +227,8 @@ TEST_CASE("The Presence passes run only for the bases the controls read", "[gpu]
     const ImageBuffer source = sceneOf({60, 40});
     const auto passesFor = [&](const DevelopSettings& settings) {
         const std::size_t before = context.renderCount();
-        static_cast<void>(developOnGpu(context, source, DevelopState{settings}, Stage::Pointwise));
+        static_cast<void>(developOnGpu(context, source, DevelopState{settings}, LensCorrection{},
+                                       Stage::Pointwise));
         return context.renderCount() - before;
     };
     const std::size_t plain = passesFor(DevelopSettings{});
@@ -236,7 +241,8 @@ TEST_CASE("The Presence passes run only for the bases the controls read", "[gpu]
     // two cells) and its reconstruction, a render a step, before it: a fixed
     // count of two.
     const PresencePlan clearer =
-        planFor(source, DevelopState{presence(0.0F, 0.0F, 50.0F)}).pointwise.presence;
+        planFor(source, DevelopState{presence(0.0F, 0.0F, 50.0F)}, LensCorrection{})
+            .pointwise.presence;
     REQUIRE(octagonOf(clearer.hazeFloor.window).diagonal == 0);
     const std::size_t steps = clearer.hazeFloor.reconstruction;
     REQUIRE(steps == hazeReconstructionSteps);
@@ -252,14 +258,17 @@ TEST_CASE("The Presence passes run only for the bases the controls read", "[gpu]
     // Dehaze, whatever the window.
     const ImageBuffer wide = sceneOf({3203, 24});
     const std::size_t before = context.renderCount();
-    static_cast<void>(
-        developOnGpu(context, wide, DevelopState{presence(0.0F, 0.0F, 50.0F)}, Stage::Pointwise));
+    static_cast<void>(developOnGpu(context, wide, DevelopState{presence(0.0F, 0.0F, 50.0F)},
+                                   LensCorrection{}, Stage::Pointwise));
     REQUIRE(context.renderCount() - before == plain + 13);
 
     // Off, the pixels are those of a render without the controls, bit for bit.
     REQUIRE(compareFloat(
-                developOnGpu(context, source, DevelopState{DevelopSettings{}}).readBack(),
-                developOnGpu(context, source, DevelopState{presence(0.0F, 0.0F, 0.0F)}).readBack())
+                developOnGpu(context, source, DevelopState{DevelopSettings{}}, LensCorrection{})
+                    .readBack(),
+                developOnGpu(context, source, DevelopState{presence(0.0F, 0.0F, 0.0F)},
+                             LensCorrection{})
+                    .readBack())
                 .bitExact);
 }
 
@@ -270,17 +279,19 @@ TEST_CASE("A Presence edit on the device resumes from the Denoise checkpoint",
     DevelopSettings settings = presence(20.0F, 40.0F, 0.0F);
     settings.noiseReduction.color = 60.0F;
     const RenderCheckpoint denoised =
-        developOnGpu(context, source, DevelopState{settings}, Stage::Denoise);
+        developOnGpu(context, source, DevelopState{settings}, LensCorrection{}, Stage::Denoise);
 
     settings.presence.clarity = -50.0F;
     settings.presence.dehaze = 30.0F;
     settings.tone.exposure = 0.3F;
     const DevelopState after{settings};
     const std::size_t before = context.renderCount();
-    const RenderCheckpoint resumed = developOnGpu(context, denoised, source, after, Stage::Effects);
+    const RenderCheckpoint resumed =
+        developOnGpu(context, denoised, source, after, LensCorrection{}, Stage::Effects);
     const std::size_t resumedPasses = context.renderCount() - before;
     const std::size_t start = context.renderCount();
-    const ImageBuffer fresh = developOnGpu(context, source, after, Stage::Effects).readBack();
+    const ImageBuffer fresh =
+        developOnGpu(context, source, after, LensCorrection{}, Stage::Effects).readBack();
     const std::size_t freshPasses = context.renderCount() - start;
     // The colour half of noise reduction is four renders; the context is
     // recomputed from the checkpoint either way.
@@ -292,8 +303,8 @@ TEST_CASE("The curve input on the device includes Presence", "[gpu][presence][sa
     GpuContext& context = gpuContext();
     const ImageBuffer source = sceneOf({80, 60});
     const DevelopState state{presence(40.0F, 70.0F, 30.0F)};
-    const ImageBuffer cpu = sample(source, state, Tap::CurveInput);
-    const ImageBuffer gpu = sampleOnGpu(context, source, state, Tap::CurveInput);
+    const ImageBuffer cpu = sample(source, state, LensCorrection{}, Tap::CurveInput);
+    const ImageBuffer gpu = sampleOnGpu(context, source, state, LensCorrection{}, Tap::CurveInput);
     // Compared after decoding back to linear, as the tap's own parity test does.
     const auto decode = [](ImageBuffer image) {
         for (float& value : image.samples<float>()) {
@@ -304,5 +315,7 @@ TEST_CASE("The curve input on the device includes Presence", "[gpu][presence][sa
     const double colour = worstColourError(decode(cpu.clone()), decode(gpu.clone()));
     CAPTURE(colour);
     REQUIRE(colour <= presenceRelativeTolerance);
-    REQUIRE_FALSE(compareFloat(cpu, sample(source, DevelopState{}, Tap::CurveInput)).bitExact);
+    REQUIRE_FALSE(
+        compareFloat(cpu, sample(source, DevelopState{}, LensCorrection{}, Tap::CurveInput))
+            .bitExact);
 }

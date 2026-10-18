@@ -87,10 +87,11 @@ void requireDenoiseMatches(const ImageBuffer& original, const DevelopSettings& s
     ImageBuffer source = original.clone();
     source.setPixelScale(std::ldexp(1.0, level));
     const DevelopState state{settings};
-    const ProcessingPlan plan = planFor(source, state);
+    const ProcessingPlan plan = planFor(source, state, LensCorrection{});
     REQUIRE(plan.denoise.active());
     const ImageBuffer expected = applyDenoise(source, plan.denoise);
-    const RenderCheckpoint held = developOnGpu(gpuContext(), source, state, Stage::Denoise);
+    const RenderCheckpoint held =
+        developOnGpu(gpuContext(), source, state, LensCorrection{}, Stage::Denoise);
     REQUIRE(held.boundary() == Stage::Denoise);
     REQUIRE(held.encoding() == source.encoding());
     const ImageBuffer actual = held.readBack();
@@ -147,8 +148,9 @@ TEST_CASE("A denoised render on the device matches the CPU end to end", "[gpu][d
     DevelopSettings settings = noiseSettings(50.0F, 60.0F);
     settings.tone = {0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F};
     const DevelopState state{settings};
-    const ImageBuffer expected = develop(source, state);
-    const ImageBuffer actual = developOnGpu(gpuContext(), source, state).readBack();
+    const ImageBuffer expected = develop(source, state, LensCorrection{});
+    const ImageBuffer actual =
+        developOnGpu(gpuContext(), source, state, LensCorrection{}).readBack();
     const double colour = worstColourError(expected, actual);
     CAPTURE(colour);
     REQUIRE(colour <= denoiseRelativeTolerance + pointwiseRelativeTolerance);
@@ -159,15 +161,17 @@ TEST_CASE("The Denoise passes run only when noise reduction is on", "[gpu][denoi
     const ImageBuffer source = noisyStep({40, 30}, 0.3F);
     const auto passesTo = [&](const DevelopSettings& settings, Stage stop) {
         const std::size_t before = context.renderCount();
-        static_cast<void>(developOnGpu(context, source, DevelopState{settings}, stop));
+        static_cast<void>(
+            developOnGpu(context, source, DevelopState{settings}, LensCorrection{}, stop));
         return context.renderCount() - before;
     };
     // Off, whatever Detail and Smoothness say: no pass, and the boundary is the upload.
     const DevelopSettings off = noiseSettings(0.0F, 0.0F, 10.0F, 90.0F);
     REQUIRE(passesTo(off, Stage::Denoise) == 0);
     REQUIRE(passesTo(off, Stage::Pointwise) == passesTo(DevelopSettings{}, Stage::Pointwise));
-    REQUIRE(compareFloat(
-                source, developOnGpu(context, source, DevelopState{off}, Stage::Denoise).readBack())
+    REQUIRE(compareFloat(source, developOnGpu(context, source, DevelopState{off}, LensCorrection{},
+                                              Stage::Denoise)
+                                     .readBack())
                 .bitExact);
     // Colour: reduce, blur across, blur down, combine. Luminance: the
     // bilateral's two steps and the combination. Both share the combination.
@@ -182,27 +186,29 @@ TEST_CASE("A tone edit on the device resumes from the Denoise checkpoint",
     const ImageBuffer source = noisyStep({40, 30}, 0.3F);
     DevelopSettings settings = noiseSettings(50.0F, 60.0F);
     const RenderCheckpoint denoised =
-        developOnGpu(context, source, DevelopState{settings}, Stage::Denoise);
+        developOnGpu(context, source, DevelopState{settings}, LensCorrection{}, Stage::Denoise);
 
     settings.tone.exposure = 0.6F;
     const DevelopState after{settings};
     const std::size_t before = context.renderCount();
-    const RenderCheckpoint resumed = developOnGpu(context, denoised, source, after, Stage::Effects);
+    const RenderCheckpoint resumed =
+        developOnGpu(context, denoised, source, after, LensCorrection{}, Stage::Effects);
     const std::size_t resumedPasses = context.renderCount() - before;
     const std::size_t freshPasses = [&] {
         const std::size_t start = context.renderCount();
-        static_cast<void>(developOnGpu(context, source, after, Stage::Effects));
+        static_cast<void>(developOnGpu(context, source, after, LensCorrection{}, Stage::Effects));
         return context.renderCount() - start;
     }();
     REQUIRE(resumedPasses + 6 == freshPasses);
-    const ImageBuffer fresh = developOnGpu(context, source, after, Stage::Effects).readBack();
+    const ImageBuffer fresh =
+        developOnGpu(context, source, after, LensCorrection{}, Stage::Effects).readBack();
     REQUIRE(compareFloat(fresh, resumed.readBack()).bitExact);
 
     // A noise reduction edit does not resume.
     settings.noiseReduction.color = 80.0F;
-    REQUIRE_THROWS_AS(
-        developOnGpu(context, denoised, source, DevelopState{settings}, Stage::Pointwise),
-        std::invalid_argument);
+    REQUIRE_THROWS_AS(developOnGpu(context, denoised, source, DevelopState{settings},
+                                   LensCorrection{}, Stage::Pointwise),
+                      std::invalid_argument);
 }
 
 TEST_CASE("A scalar render target keeps the first channel, or falls back to RGBA",
@@ -243,12 +249,15 @@ TEST_CASE("The device carries the pixel scale as the CPU does", "[gpu][denoise]"
     for (const Stage stop : {Stage::Denoise, Stage::Pointwise, Stage::Geometry, Stage::Effects}) {
         CAPTURE(static_cast<int>(stop));
         const RenderRequest request{.size = RenderRequest::Scale{0.5}};
-        const ImageBuffer cpu = developUntil(source, state, stop, request).readBack();
-        const ImageBuffer gpu = developOnGpu(context, source, state, stop, request).readBack();
+        const ImageBuffer cpu =
+            developUntil(source, state, LensCorrection{}, stop, request).readBack();
+        const ImageBuffer gpu =
+            developOnGpu(context, source, state, LensCorrection{}, stop, request).readBack();
         REQUIRE(gpu.pixelScale() == cpu.pixelScale());
     }
     // After the resize, each pixel spans twice the sensor pixels.
     const RenderRequest half{.size = RenderRequest::Scale{0.5}};
-    REQUIRE(developOnGpu(context, source, state, Stage::Effects, half).readBack().pixelScale() ==
-            4.0);
+    REQUIRE(developOnGpu(context, source, state, LensCorrection{}, Stage::Effects, half)
+                .readBack()
+                .pixelScale() == 4.0);
 }

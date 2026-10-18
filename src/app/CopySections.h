@@ -28,9 +28,10 @@ struct SettingsClipboard {
 ///
 /// A missing key gives ::arraw::defaultCopySections; an empty stored list is
 /// kept as "none checked". Unknown names and sections that cannot be copied
-/// are dropped. A selection stored before ::arraw::CopySection::Demosaic existed gets it added,
-/// once, which is also written back: without it the first copy after an update would leave the
-/// demosaic out whatever the default says (ADR 049).
+/// are dropped. A selection stored before ::arraw::CopySection::Demosaic (or
+/// ::arraw::CopySection::Lens) existed gets it added, once, which is also written back: without it
+/// the first copy after an update would leave the section out whatever the default says
+/// (ADR 049, ADR 050).
 /// @param store Settings to read.
 /// @return The sections, in enumeration order, each once.
 [[nodiscard]] std::vector<CopySection> restoreCopySections(QSettings& store);

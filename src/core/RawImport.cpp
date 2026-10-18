@@ -1,6 +1,7 @@
 #include "RawImport.h"
 
 #include "ColorSpaces.h"
+#include "LensFactsReader.h"
 #include "ProgressScope.h"
 
 #include <Progress.h>
@@ -10,10 +11,13 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <exception>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -255,6 +259,43 @@ ImageMetadata metadataOf(const LibRaw& raw) {
             .mosaic = mosaicOf(raw)};
 }
 
+/// @brief Reads a LibRaw string, which is a fixed array.
+template <std::size_t N> std::string textOf(const char (&text)[N]) {
+    return {text, strnlen(text, N)};
+}
+
+/// @brief Reads a LibRaw number as a positive double, or nothing.
+std::optional<double> positiveOf(double value) {
+    return value > 0.0 && std::isfinite(value) ? std::optional<double>(value) : std::nullopt;
+}
+
+/// @brief Reads what the decoder knows of the camera and the lens, without unpacking.
+///
+/// The file's EXIF is read on top of this (::arraw::lensfacts::complete), which says more and
+/// spells it as the camera does; LibRaw covers makers whose maker notes exiv2 does not name.
+/// @param raw Opened handle.
+/// @param path File it was opened from.
+/// @return The decoder's facts.
+LensFacts lensFactsOf(const LibRaw& raw, const std::filesystem::path& path) {
+    const auto& lens = raw.imgdata.lens;
+    const auto& notes = lens.makernotes;
+    LensFacts facts;
+    facts.cameraMaker = textOf(raw.imgdata.idata.make);
+    facts.cameraModel = textOf(raw.imgdata.idata.model);
+    lensfacts::addName(facts.lensNames, textOf(lens.Lens));
+    lensfacts::addName(facts.lensNames, textOf(notes.Lens));
+    facts.minFocal = positiveOf(notes.MinFocal > 0.0F ? notes.MinFocal : lens.MinFocal);
+    facts.maxFocal = positiveOf(notes.MaxFocal > 0.0F ? notes.MaxFocal : lens.MaxFocal);
+    facts.maxAperture = positiveOf(notes.MaxAp4CurFocal);
+    facts.focalLength = positiveOf(raw.imgdata.other.focal_len);
+    facts.aperture = positiveOf(raw.imgdata.other.aperture);
+    facts.focalLength35 =
+        positiveOf(lens.FocalLengthIn35mmFormat > 0 ? lens.FocalLengthIn35mmFormat
+                                                    : notes.FocalLengthIn35mmFormat);
+    lensfacts::complete(path, facts);
+    return facts;
+}
+
 /// @brief Reports a white balance the camera did not record.
 ///
 /// The frame will not look as its camera intended, and the temperature a
@@ -388,7 +429,9 @@ ImageMetadata arraw::rawimport::readMetadata(const std::filesystem::path& path,
     // No unpack and no processing: the colour description comes out of the
     // headers, and asking for it must not cost a demosaic.
     reportSubstitutedWhiteBalance(raw, path, log);
-    return metadataOf(raw);
+    ImageMetadata metadata = metadataOf(raw);
+    metadata.lens = lensFactsOf(raw, path);
+    return metadata;
 }
 
 ImageBuffer arraw::rawimport::load(const std::filesystem::path& path, DiagnosticLog& log,

@@ -110,13 +110,14 @@ public:
     /// checkpoints of the passes that finished.
     [[nodiscard]] ImageBuffer render(Layer layer, int level,
                                      const std::shared_ptr<const ImageBuffer>& image,
-                                     const DevelopState& state, const RenderRequest& request,
+                                     const DevelopState& state, const LensCorrection& lens,
+                                     const RenderRequest& request,
                                      std::optional<Stage>& resumedFrom, ProgressChannel* progress) {
         resumedFrom.reset();
         const DeviceImage& uploaded = uploadedLevel(level, *image);
         CheckpointLadder& ladder = layer == Layer::Background ? backgroundLadder_ : ladder_;
-        LadderRender rendered =
-            resumeOrDevelopOnGpu(*context_, ladder, image, uploaded, state, request, progress);
+        LadderRender rendered = resumeOrDevelopOnGpu(*context_, ladder, image, uploaded, state,
+                                                     lens, request, progress);
         resumedFrom = rendered.resumedFrom;
         const RenderCheckpoint& checkpoint = rendered.checkpoint;
         return checkpoint.readBack();
@@ -132,10 +133,12 @@ public:
     /// @param progress Channel of the render.
     /// @throws ::arraw::Cancelled if @p progress is cancelled.
     [[nodiscard]] ImageBuffer renderDirect(int level, const ImageBuffer& image,
-                                           const DevelopState& state, const RenderRequest& request,
+                                           const DevelopState& state, const LensCorrection& lens,
+                                           const RenderRequest& request,
                                            ProgressChannel* progress) {
         const DeviceImage& uploaded = uploadedLevel(level, image);
-        return developOnGpu(*context_, image, uploaded, state, Stage::Effects, request, progress)
+        return developOnGpu(*context_, image, uploaded, state, lens, Stage::Effects, request,
+                            progress)
             .readBack();
     }
 
@@ -143,10 +146,12 @@ public:
     /// from nothing.
     /// @pre prepare returned true.
     [[nodiscard]] bool drawsBrushCoverage(Layer layer, const ImageBuffer& image,
-                                          const DevelopState& state, const RenderRequest& request,
+                                          const DevelopState& state, const LensCorrection& lens,
+                                          const RenderRequest& request,
                                           double minimumSeconds) const {
         const CheckpointLadder& ladder = layer == Layer::Background ? backgroundLadder_ : ladder_;
-        return drawsBrushCoverageOnGpu(*context_, ladder, image, state, request, minimumSeconds);
+        return drawsBrushCoverageOnGpu(*context_, ladder, image, state, lens, request,
+                                       minimumSeconds);
     }
 
     /// @brief Counts the curve histogram of a level on the device.
@@ -161,9 +166,10 @@ public:
     [[nodiscard]] CurveHistogram curveHistogramOf(int level,
                                                   const std::shared_ptr<const ImageBuffer>& image,
                                                   const DevelopState& state,
+                                                  const LensCorrection& lens,
                                                   ProgressChannel* progress) {
         return curveHistogram(sampleOnGpu(*context_, *image, uploadedLevel(level, *image), state,
-                                          Tap::CurveInput, curveHistogramRequest, progress));
+                                          lens, Tap::CurveInput, curveHistogramRequest, progress));
     }
 
     /// @brief Releases the photograph from the device, as there is none to show.
@@ -340,8 +346,9 @@ struct ProgressPhase {
 /// that nothing is delivered for a superseded request.
 std::optional<PreviewResult>
 provisionalRender(const PreviewResult& shown, const std::shared_ptr<const ImageBuffer>& coarser,
-                  const DevelopState& state, const RenderRequest& request, const PreviewView& view,
-                  GpuPreview* gpu, ProgressChannel* progress) {
+                  const DevelopState& state, const LensCorrection& lens,
+                  const RenderRequest& request, const PreviewView& view, GpuPreview* gpu,
+                  ProgressChannel* progress) {
     PreviewResult result = shown;
     result.image.reset();
     result.provisional = true;
@@ -362,7 +369,8 @@ provisionalRender(const PreviewResult& shown, const std::shared_ptr<const ImageB
     try {
         if (gpu != nullptr) {
             try {
-                ImageBuffer rendered = gpu->renderDirect(1, *coarser, state, request, progress);
+                ImageBuffer rendered =
+                    gpu->renderDirect(1, *coarser, state, lens, request, progress);
                 result.onGpu = true;
                 result.deviceName = gpu->deviceName();
                 return finished(std::move(rendered));
@@ -374,7 +382,7 @@ provisionalRender(const PreviewResult& shown, const std::shared_ptr<const ImageB
         }
         result.onGpu = false;
         result.deviceName.clear();
-        return finished(develop(*coarser, state, request, progress));
+        return finished(develop(*coarser, state, lens, request, progress));
     } catch (const Cancelled&) {
         throw;
     } catch (const std::exception&) {
@@ -407,7 +415,7 @@ struct StandIn {
 /// @return The result, or nothing when the render was cancelled: neither an
 /// image nor a failure.
 std::optional<PreviewResult> render(std::uint64_t id, const DevelopState& state,
-                                    const PreviewView& view,
+                                    const LensCorrection& lens, const PreviewView& view,
                                     const std::shared_ptr<const ImageBuffer>& source,
                                     SourcePyramid& pyramid, CheckpointLadder& cpuLadder,
                                     GpuPreview* gpu, Layer layer, ProgressChannel* progress,
@@ -495,17 +503,17 @@ std::optional<PreviewResult> render(std::uint64_t id, const DevelopState& state,
         if (standIn != nullptr && !coarsened && level == 0 &&
             SourcePyramid::highestLevel(source->size()) >= 1) {
             // Asked of the ladder that renders: the GPU's when the GPU does, else the CPU's.
-            const bool draws = gpuReady ? gpu->drawsBrushCoverage(layer, *reduced, state, request,
-                                                                  standIn->minimumSeconds)
-                                        : drawsBrushCoverage(cpuLadder, *reduced, state, request,
-                                                             standIn->minimumSeconds);
+            const bool draws = gpuReady ? gpu->drawsBrushCoverage(layer, *reduced, state, lens,
+                                                                  request, standIn->minimumSeconds)
+                                        : drawsBrushCoverage(cpuLadder, *reduced, state, lens,
+                                                             request, standIn->minimumSeconds);
             if (draws) {
                 const detail::TimingSpan coarserTiming("preview.provisional", id);
                 if (standIn->phase != nullptr) {
                     *standIn->phase = {0.0, standInProgressShare};
                 }
                 std::optional<PreviewResult> coarser =
-                    provisionalRender(result, pyramid.level(1), state, request, view,
+                    provisionalRender(result, pyramid.level(1), state, lens, request, view,
                                       gpuReady ? gpu : nullptr, progress);
                 if (standIn->phase != nullptr) {
                     *standIn->phase = {standInProgressShare, 1.0};
@@ -518,8 +526,8 @@ std::optional<PreviewResult> render(std::uint64_t id, const DevelopState& state,
         std::string gpuFailure;
         if (gpuReady) {
             try {
-                QImage image = toDisplayImage(gpu->render(layer, level, reduced, state, request,
-                                                          result.resumedFrom, progress));
+                QImage image = toDisplayImage(gpu->render(layer, level, reduced, state, lens,
+                                                          request, result.resumedFrom, progress));
                 image.setDevicePixelRatio(view.devicePixelRatio);
                 result.image = std::move(image);
                 result.onGpu = true;
@@ -538,7 +546,8 @@ std::optional<PreviewResult> render(std::uint64_t id, const DevelopState& state,
         // The CPU renders: no GPU was wanted, or it could not. It runs before
         // the GPU is given up for this photograph, since if it fails too the
         // request was at fault and the GPU is not.
-        LadderRender developed = resumeOrDevelop(cpuLadder, reduced, state, request, progress);
+        LadderRender developed =
+            resumeOrDevelop(cpuLadder, reduced, state, lens, request, progress);
         result.resumedFrom = developed.resumedFrom;
         QImage image = toDisplayImage(developed.checkpoint.readBack());
         image.setDevicePixelRatio(view.devicePixelRatio);
@@ -571,11 +580,10 @@ std::optional<PreviewResult> render(std::uint64_t id, const DevelopState& state,
 /// @return The histogram, or nothing when the last one is current, it failed or
 /// it was cancelled; a failure is not retried before the next render, and a
 /// cancelled count is owed again at the next pause.
-std::optional<CurveHistogram> countCurveHistogram(const DevelopState& state,
-                                                  const std::shared_ptr<const ImageBuffer>& source,
-                                                  SourcePyramid& pyramid, GpuPreview* gpu,
-                                                  CurveHistogramRefresh& refresh,
-                                                  ProgressChannel* progress) {
+std::optional<CurveHistogram>
+countCurveHistogram(const DevelopState& state, const LensCorrection& lens,
+                    const std::shared_ptr<const ImageBuffer>& source, SourcePyramid& pyramid,
+                    GpuPreview* gpu, CurveHistogramRefresh& refresh, ProgressChannel* progress) {
     const detail::TimingSpan timing("preview.curveHistogram");
     const auto levelFor = [&](const RenderRequest& request) {
         return std::min(pyramidLevelFor(source->size(), source->orientation(), state, request),
@@ -586,7 +594,7 @@ std::optional<CurveHistogram> countCurveHistogram(const DevelopState& state,
         const RenderRequest& request = onGpu ? curveHistogramRequest : cpuCurveHistogramRequest;
         int level = levelFor(request);
         std::shared_ptr<const ImageBuffer> reduced = pyramid.level(level);
-        ProcessingPlan plan = planFor(*reduced, state, request);
+        ProcessingPlan plan = planFor(*reduced, state, lens, request);
         if (refresh.isCurrent(reduced, plan)) {
             timing.note("current");
             return std::nullopt;
@@ -594,7 +602,7 @@ std::optional<CurveHistogram> countCurveHistogram(const DevelopState& state,
         std::optional<CurveHistogram> counted;
         if (onGpu) {
             try {
-                counted = gpu->curveHistogramOf(level, reduced, state, progress);
+                counted = gpu->curveHistogramOf(level, reduced, state, lens, progress);
                 timing.note(gpu->deviceName());
             } catch (const Cancelled&) {
                 throw;
@@ -603,11 +611,11 @@ std::optional<CurveHistogram> countCurveHistogram(const DevelopState& state,
                 // reports a GPU that is gone.
                 level = levelFor(cpuCurveHistogramRequest);
                 reduced = pyramid.level(level);
-                plan = planFor(*reduced, state, cpuCurveHistogramRequest);
+                plan = planFor(*reduced, state, lens, cpuCurveHistogramRequest);
             }
         }
         if (!counted) {
-            counted = curveHistogram(*reduced, state, cpuCurveHistogramRequest, progress);
+            counted = curveHistogram(*reduced, state, lens, cpuCurveHistogramRequest, progress);
             timing.note("CPU");
         }
         refresh.record(reduced, std::move(plan));
@@ -754,12 +762,13 @@ void PreviewRenderer::setCurveHistogramWanted(bool wanted) {
     }
 }
 
-std::uint64_t PreviewRenderer::request(DevelopState state, PreviewView view, Supersede supersede) {
+std::uint64_t PreviewRenderer::request(DevelopState state, LensCorrection lens, PreviewView view,
+                                       Supersede supersede) {
     std::uint64_t id = 0;
     {
         const std::scoped_lock lock(mutex_);
         id = ++lastId_;
-        pending_.emplace(Pending{id, std::move(state), view});
+        pending_.emplace(Pending{id, std::move(state), std::move(lens), view});
         cancelsShown_ = cancelsShown_ || supersede == Supersede::Cancel;
         // Superseded: whatever the worker does now, this request makes pointless, except the
         // render of a request that a Queue request lets finish.
@@ -790,6 +799,7 @@ void PreviewRenderer::run(std::stop_token stop) {
     CheckpointLadder backgroundLadder;
     std::shared_ptr<const ImageBuffer> backgroundSource;
     std::optional<DevelopState> backgroundState;
+    LensCorrection backgroundLens;
     std::optional<QImage> background;
     // What the last curve histogram was counted from.
     CurveHistogramRefresh histogramRefresh;
@@ -840,6 +850,7 @@ void PreviewRenderer::run(std::stop_token stop) {
             backgroundLadder.clear();
             backgroundSource.reset();
             backgroundState.reset();
+            backgroundLens = {};
             background.reset();
             histogramRefresh.clear();
             lastShown.reset();
@@ -854,7 +865,10 @@ void PreviewRenderer::run(std::stop_token stop) {
         if (!recountOnly) {
             if (source != backgroundSource ||
                 (backgroundState &&
-                 backgroundState->settings.geometry != job->state.settings.geometry)) {
+                 (backgroundState->settings.geometry != job->state.settings.geometry ||
+                  backgroundLens != job->lens))) {
+                // A lens correction moves the picture's content, so the fallback no longer
+                // lines up with it.
                 background.reset();
                 backgroundState.reset();
                 if (source != backgroundSource) {
@@ -879,7 +893,7 @@ void PreviewRenderer::run(std::stop_token stop) {
                                       },
                                       &phase, standInSeconds_.load()};
                 std::optional<PreviewResult> rendered =
-                    render(job->id, job->state, job->view, source, pyramid, cpuLadder,
+                    render(job->id, job->state, job->lens, job->view, source, pyramid, cpuLadder,
                            gpu ? &*gpu : nullptr, Layer::Shown, channel.get(), &standIn);
                 endChannel();
                 if (!rendered) {
@@ -890,6 +904,7 @@ void PreviewRenderer::run(std::stop_token stop) {
                 if (result.image && result.region == QRectF(0.0, 0.0, 1.0, 1.0)) {
                     background = result.image;
                     backgroundState = job->state;
+                    backgroundLens = job->lens;
                 }
                 if (result.image) {
                     shown = true;
@@ -919,12 +934,12 @@ void PreviewRenderer::run(std::stop_token stop) {
             }
             continue;
         }
-        if (job->view.region && backgroundState != job->state) {
+        if (job->view.region && (backgroundState != job->state || backgroundLens != job->lens)) {
             const detail::TimingSpan timing("preview.background", job->id);
             const std::shared_ptr<ProgressChannel> channel = startChannel({}, source);
             std::optional<PreviewResult> reduced = render(
-                job->id, job->state, PreviewView::wholeFrame(backgroundSize), source, pyramid,
-                backgroundLadder, gpu ? &*gpu : nullptr, Layer::Background, channel.get());
+                job->id, job->state, job->lens, PreviewView::wholeFrame(backgroundSize), source,
+                pyramid, backgroundLadder, gpu ? &*gpu : nullptr, Layer::Background, channel.get());
             endChannel();
             if (!reduced) {
                 // Cancelled by a newer request: refreshed after that one instead.
@@ -932,6 +947,7 @@ void PreviewRenderer::run(std::stop_token stop) {
             }
             // A failure is not retried for the same state; the region render reports it.
             backgroundState = job->state;
+            backgroundLens = job->lens;
             background = std::move(reduced->image);
             if (background) {
                 PreviewResult update;
@@ -956,8 +972,9 @@ void PreviewRenderer::run(std::stop_token stop) {
             }
         }
         const std::shared_ptr<ProgressChannel> channel = startChannel({}, source);
-        std::optional<CurveHistogram> histogram = countCurveHistogram(
-            job->state, source, pyramid, gpu ? &*gpu : nullptr, histogramRefresh, channel.get());
+        std::optional<CurveHistogram> histogram =
+            countCurveHistogram(job->state, job->lens, source, pyramid, gpu ? &*gpu : nullptr,
+                                histogramRefresh, channel.get());
         endChannel();
         if (histogram) {
             PreviewResult update;

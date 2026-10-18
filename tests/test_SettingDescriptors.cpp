@@ -456,8 +456,8 @@ TEST_CASE("A row's stage is the first boundary its value changes in the plan", "
             } else {
                 writeSentinel(descriptor, to);
             }
-            const ProcessingPlan before = planFor(source, DevelopState{from});
-            const ProcessingPlan after = planFor(source, DevelopState{to});
+            const ProcessingPlan before = planFor(source, DevelopState{from}, LensCorrection{});
+            const ProcessingPlan after = planFor(source, DevelopState{to}, LensCorrection{});
             const auto first = static_cast<std::size_t>(descriptor.affects);
             // Untouched before the boundary, different at it.
             if (first > 0) {
@@ -477,9 +477,11 @@ TEST_CASE("Every copy section has a Look-scoped row", "[descriptors][sections]")
     }
     for (std::size_t i = 0; i < copySectionNames.size(); ++i) {
         CAPTURE(copySectionNames[i]);
-        // The demosaic is a setting of the negative (ADR 049), which has no row in this table.
-        if (static_cast<CopySection>(i) == CopySection::Demosaic) {
-            REQUIRE_FALSE(covered.contains(CopySection::Demosaic));
+        // The demosaic and the lens switches are settings of the negative (ADR 049, ADR 050),
+        // which has no row in this table.
+        if (static_cast<CopySection>(i) == CopySection::Demosaic ||
+            static_cast<CopySection>(i) == CopySection::Lens) {
+            REQUIRE_FALSE(covered.contains(static_cast<CopySection>(i)));
             continue;
         }
         REQUIRE(covered.contains(static_cast<CopySection>(i)));
@@ -488,11 +490,12 @@ TEST_CASE("Every copy section has a Look-scoped row", "[descriptors][sections]")
 
 TEST_CASE("Copy section names cover the enumeration in order, uniquely",
           "[descriptors][sections]") {
-    REQUIRE(copySectionNames.size() == static_cast<std::size_t>(CopySection::Demosaic) + 1);
+    REQUIRE(copySectionNames.size() == static_cast<std::size_t>(CopySection::Lens) + 1);
     REQUIRE(copySectionNames.front() == "whiteBalance");
     REQUIRE(copySectionNames[static_cast<std::size_t>(CopySection::Grain)] == "grain");
     REQUIRE(copySectionNames[static_cast<std::size_t>(CopySection::Crop)] == "crop");
-    REQUIRE(copySectionNames.back() == "demosaic");
+    REQUIRE(copySectionNames[static_cast<std::size_t>(CopySection::Demosaic)] == "demosaic");
+    REQUIRE(copySectionNames.back() == "lens");
     const std::set<std::string_view> unique(copySectionNames.begin(), copySectionNames.end());
     REQUIRE(unique.size() == copySectionNames.size());
 }

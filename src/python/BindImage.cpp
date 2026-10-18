@@ -122,6 +122,9 @@ void bindImage(nb::module_& m) {
             "encoding",
             [](const ImageMetadata& metadata) { return encodingToPython(metadata.encoding); },
             "NamedEncoding, or an opaque CameraNative.")
+        .def_ro("lens", &ImageMetadata::lens,
+                "What the file says about its camera and lens, for a profile to be found by; "
+                "empty for anything but a RAW.")
         .def(nb::self == nb::self)
         .def("__repr__", [](const ImageMetadata& metadata) {
             return "ImageMetadata(size=" + reprValue(metadata.size) +

@@ -6,6 +6,7 @@
 #include <CropGeometry.h>
 #include <DevelopState.h>
 #include <GeometrySettings.h>
+#include <LensCorrection.h>
 #include <LocalAdjustments.h>
 
 #include <QImage>
@@ -14,6 +15,7 @@
 #include <QTimer>
 #include <QWidget>
 
+#include <memory>
 #include <optional>
 
 class QEnterEvent;
@@ -74,6 +76,14 @@ public:
     /// @param source Shape of the full photograph; nothing without one, when the overlay
     /// draws and takes nothing.
     void setScene(const DevelopState& state, const std::optional<SourceShape>& source);
+
+    /// @brief Shows the lens corrections of the render the overlay lies over.
+    ///
+    /// A brush stroke is stored in the sensor frame and shown in the corrected one: the tint is
+    /// drawn through the lens, and a stroke painted from now on is stored where the lens maps the
+    /// pointer from (ADR 009, ADR 050, section 7). Not an edit.
+    /// @param lens Corrections as resolved for the render; an empty one for none.
+    void setLens(const LensCorrection& lens);
 
     /// @brief Shows which mask has handles, without emitting any signal.
     void setSelection(std::optional<LocalAdjustmentId> id);
@@ -208,6 +218,7 @@ private:
         bool invert = false;
         GeometrySettings geometry;
         std::optional<SourceShape> source;
+        LensCorrection lens;
         QSize widget;
         double zoom = 0.0;
         QPointF centre;
@@ -285,6 +296,8 @@ private:
     std::optional<SourceShape> source_;
     /// Corrected frame in the developed one, for the state's geometry; nothing without a source.
     std::optional<DevelopedFrameMap> frame_;
+    /// Lens corrections of the render shown; null for none.
+    std::shared_ptr<const LensCorrection> lens_;
     std::optional<LocalAdjustmentId> selection_;
     MaskTool tool_ = MaskTool::None;
     bool tint_ = false;

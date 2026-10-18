@@ -62,7 +62,7 @@ TEST_CASE("Brushes after a reload are equal and render the same bits",
     // Three brushes (paint, erase, inverted), a disabled empty one and a radial mask.
     const DevelopState state = test::stateWithBrushes();
     const ImageBuffer source = sceneOf({256, 192});
-    const ImageBuffer before = develop(source, state, {});
+    const ImageBuffer before = develop(source, state, LensCorrection{}, {});
 
     SECTION("through the state JSON") {
         CollectedDiagnostics log;
@@ -72,9 +72,9 @@ TEST_CASE("Brushes after a reload are equal and render the same bits",
         // The reloaded lists are other objects: equality is by contents.
         CHECK(std::get<BrushMask>(back.localAdjustments[0].shape).strokes !=
               std::get<BrushMask>(state.localAdjustments[0].shape).strokes);
-        CHECK(sameBits(before, develop(source, back, {})));
-        CHECK(sameBits(sample(source, state, Tap::CurveInput, {}),
-                       sample(source, back, Tap::CurveInput, {})));
+        CHECK(sameBits(before, develop(source, back, LensCorrection{}, {})));
+        CHECK(sameBits(sample(source, state, LensCorrection{}, Tap::CurveInput, {}),
+                       sample(source, back, LensCorrection{}, Tap::CurveInput, {})));
     }
     SECTION("through the XMP sidecar") {
         const test::TempDir directory;
@@ -87,12 +87,12 @@ TEST_CASE("Brushes after a reload are equal and render the same bits",
         REQUIRE(contents->state);
         CHECK(log.entries().empty());
         REQUIRE(*contents->state == state);
-        CHECK(sameBits(before, develop(source, *contents->state, {})));
+        CHECK(sameBits(before, develop(source, *contents->state, LensCorrection{}, {})));
         // And once more through a second write, which says nothing new.
         writeSidecar(openPhoto(photo).with(*contents->state));
         CHECK(readSidecar(photo)->state == state);
     }
     SECTION("the render does something") {
-        CHECK_FALSE(sameBits(before, develop(source, DevelopState{}, {})));
+        CHECK_FALSE(sameBits(before, develop(source, DevelopState{}, LensCorrection{}, {})));
     }
 }

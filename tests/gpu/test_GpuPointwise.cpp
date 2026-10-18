@@ -82,7 +82,7 @@ void requireSameAlpha(const ImageBuffer& expected, const ImageBuffer& actual) {
 /// What `arraw::develop` does before geometry: the source as RGBA float, each
 /// colour through ::arraw::developPixel, alpha as it came.
 ImageBuffer cpuPointwise(const ImageBuffer& source, const DevelopSettings& settings) {
-    const ProcessingPlan plan = planFor(source, DevelopState{settings});
+    const ProcessingPlan plan = planFor(source, DevelopState{settings}, LensCorrection{});
     const ImageBuffer floats = toRgbaF32(source);
     ImageBuffer result(source.size(), PixelFormat::RgbaF32, workingEncoding);
     const std::span<const float> in = floats.samples<float>();
@@ -100,8 +100,8 @@ ImageBuffer cpuPointwise(const ImageBuffer& source, const DevelopSettings& setti
 
 /// @brief Develops on the device up to the pointwise boundary and reads it back.
 ImageBuffer gpuPointwise(const ImageBuffer& source, const DevelopSettings& settings) {
-    const RenderCheckpoint checkpoint =
-        developOnGpu(gpuContext(), source, DevelopState{settings}, Stage::Pointwise);
+    const RenderCheckpoint checkpoint = developOnGpu(gpuContext(), source, DevelopState{settings},
+                                                     LensCorrection{}, Stage::Pointwise);
     REQUIRE(checkpoint.isResident());
     REQUIRE(checkpoint.size() == source.size());
     return checkpoint.readBack();
@@ -116,7 +116,7 @@ void requireMatchesCpu(const ImageBuffer& source, const DevelopSettings& setting
     const ImageBuffer expected = cpuPointwise(source, settings);
     if (source.orientation() == ImageOrientation::Normal &&
         settings.geometry == GeometrySettings{}) {
-        const ImageBuffer developed = develop(source, DevelopState{settings});
+        const ImageBuffer developed = develop(source, DevelopState{settings}, LensCorrection{});
         REQUIRE(compareFloat(developed, expected).bitExact);
     }
     const ImageBuffer actual = gpuPointwise(source, settings);
@@ -570,7 +570,8 @@ TEST_CASE("Default tone curves leave the GPU's result bit for bit as without the
     DevelopSettings spelledOut = plain;
     spelledOut.toneCurve.luma = curveOf({{0.0F, 0.0F}, {1.0F, 1.0F}});
     spelledOut.toneCurve.red = curveOf({{0.0F, 0.0F}, {1.0F, 1.0F}});
-    REQUIRE(planFor(source, DevelopState{spelledOut}).pointwise.toneCurves == ToneCurvePlan{});
+    REQUIRE(planFor(source, DevelopState{spelledOut}, LensCorrection{}).pointwise.toneCurves ==
+            ToneCurvePlan{});
 
     const ImageBuffer without = gpuPointwise(source, plain);
     const ImageBuffer with = gpuPointwise(source, spelledOut);
@@ -593,17 +594,17 @@ TEST_CASE("A tone curve resumes from a checkpoint like any other pointwise setti
     // A checkpoint taken at the pointwise boundary resumes into geometry
     // without running the pass, so the curves are not uploaded again and the
     // pixels are those of the first development.
-    const RenderCheckpoint first =
-        developOnGpu(gpuContext(), source, DevelopState{curved}, Stage::Pointwise);
-    const RenderCheckpoint resumed =
-        developOnGpu(gpuContext(), first, source, DevelopState{curved}, Stage::Geometry);
+    const RenderCheckpoint first = developOnGpu(gpuContext(), source, DevelopState{curved},
+                                                LensCorrection{}, Stage::Pointwise);
+    const RenderCheckpoint resumed = developOnGpu(gpuContext(), first, source, DevelopState{curved},
+                                                  LensCorrection{}, Stage::Geometry);
     REQUIRE(compareFloat(first.readBack(), resumed.readBack()).bitExact);
 
     // Changing the curve is a change at the pointwise stage: a fresh render.
     DevelopSettings other = curved;
     other.toneCurve.red = curveOf({{0.0F, 0.1F}, {1.0F, 1.0F}});
     const RenderCheckpoint changed =
-        developOnGpu(gpuContext(), source, DevelopState{other}, Stage::Pointwise);
+        developOnGpu(gpuContext(), source, DevelopState{other}, LensCorrection{}, Stage::Pointwise);
     requireClose(cpuPointwise(source, other), changed.readBack());
 }
 
@@ -966,7 +967,7 @@ TEST_CASE("The pointwise pass writes the CPU's value after each stage", "[gpu][p
     settings.toneCurve.blue = curveOf({{0.0F, 0.05F}, {0.5F, 0.45F}, {1.0F, 1.0F}});
     settings.colorGrading = {.shadows = {.hue = 210.0F, .saturation = 35.0F},
                              .highlights = {.hue = 40.0F, .saturation = 50.0F}};
-    const ProcessingPlan plan = planFor(source, DevelopState{settings});
+    const ProcessingPlan plan = planFor(source, DevelopState{settings}, LensCorrection{});
     REQUIRE(plan.pointwise.tone.shapesTone);
     REQUIRE(plan.pointwise.colorAdjustments.grading.active);
     REQUIRE(plan.pointwise.toneCurves.luma.active);

@@ -51,11 +51,12 @@ struct SidecarContents {
     /// from what its kind does (::arraw::defaultStateFor), as with no sidecar.
     std::optional<DevelopState> state;
 
-    /// @brief Negative settings the sidecar records, or nothing when it has no `arraw:demosaic`.
+    /// @brief Negative settings the sidecar records, or nothing when it has none of their keys
+    /// (`arraw:demosaic` and the `arraw:lens...` ones).
     ///
-    /// Independent of ::arraw::SidecarContents::state: a sidecar with only `arraw:demosaic`
-    /// records a negative and no state. A token that is not known is reported and read as the
-    /// default.
+    /// Independent of ::arraw::SidecarContents::state: a sidecar with only `arraw:demosaic` or
+    /// `arraw:lensDistortion` records a negative and no state. A token that is not known is
+    /// reported and read as the default.
     std::optional<NegativeSettings> negative;
 
     /// @brief Culling marks, none for whatever the sidecar does not say.
@@ -129,7 +130,12 @@ inline constexpr auto xmpNamespaceOwners = std::to_array<XmpNamespaceOwner>({
 ///
 /// `arraw:demosaic` is the photograph's negative (ADR 049): one of
 /// ::arraw::demosaicTokens. An unknown token gives ::arraw::Notice::SettingMalformed and the
-/// default, AHD.
+/// default, AHD. The lens corrections are `arraw:lensDistortion`, `arraw:lensVignetting` and
+/// `arraw:lensLateralCa` (`True` or `False`; absent means off), and the lens they were found for
+/// is `arraw:lensMaker`, `arraw:lensModel`, `arraw:lensCropFactor`, `arraw:lensOrigin`
+/// (`matched` or `chosen`) and `arraw:lensDatabase` together (ADR 050, section 8). A switch that
+/// is neither gives ::arraw::Notice::SettingMalformed and off; a record with no model or no
+/// positive crop factor gives it and no recorded lens; an unknown origin gives it and `matched`.
 ///
 /// Every `rdf:Description` is searched. The develop settings are the
 /// `arraw:` properties, as attributes or as simple child elements, applied onto
@@ -174,10 +180,12 @@ readSidecar(const std::filesystem::path& photo, DiagnosticLog& log = discardedDi
 /// thing once. `xmp:Rating` and `xmp:Label` are written only when the
 /// photograph's marks differ from what reading the file gives, so a rating or
 /// label arraw cannot represent (`9`, `Rot`) stays as another tool wrote it
-/// until the mark is changed; clearing the label removes it. `arraw:demosaic` follows the same
-/// rule: it is written only when the photograph's negative differs from what reading the file
-/// gives, so a token of a newer arraw survives, and AHD, the default, is written as no key.
-/// ::arraw::writeSidecarMarks leaves it alone. The local adjustments are
+/// until the mark is changed; clearing the label removes it. `arraw:demosaic` and the lens keys
+/// follow the same rule, key by key: each is written only when the photograph's negative differs
+/// from what reading the file gives, so a token of a newer arraw survives, and a default (AHD,
+/// a switch that is off, no recorded lens) is written as no key. The lens record is written and
+/// removed as a unit. No coefficient is written: the calibration stays the database's.
+/// ::arraw::writeSidecarMarks leaves the negative alone. The local adjustments are
 /// rewritten whole: `arraw:localAdjustments`, `arraw:localAdjustmentsVersion` and
 /// `arraw:nextLocalAdjustmentId` are written when the list is not empty or the counter is above 1,
 /// and removed otherwise, so a state with no masks and a fresh counter leaves no trace and every

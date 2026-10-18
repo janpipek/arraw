@@ -684,8 +684,9 @@ TEST_CASE("The copyable sections are consistent with the table", "[Edits][Look]"
             std::ranges::any_of(developSettingDescriptors, [&](const FieldDescriptor& d) {
                 return d.section == section && d.scope == SettingScope::Look;
             });
-        // The negative's demosaic has no row: it is carried by the overload over a photograph.
-        CHECK(hasRow == (section != CopySection::Demosaic));
+        // The negative's demosaic and lens switches have no row: the overload over a photograph
+        // carries them.
+        CHECK(hasRow == (section != CopySection::Demosaic && section != CopySection::Lens));
     }
     for (const CopySection section : defaultCopySections) {
         CHECK(std::ranges::find(copyableSections, section) != copyableSections.end());
@@ -992,14 +993,15 @@ TEST_CASE("A look refuses invalid values", "[Edits][Look]") {
     }
 }
 
-TEST_CASE("Only White Balance and Demosaic have nothing to carry from a photograph that is not "
-          "a RAW",
+TEST_CASE("Only White Balance, Demosaic and Lens have nothing to carry from a photograph that is "
+          "not a RAW",
           "[Edits][Look]") {
     for (const CopySection section : copyableSections) {
         CAPTURE(copySectionNames[static_cast<std::size_t>(section)]);
         CHECK(sectionApplies(section, true));
         CHECK(sectionApplies(section, false) ==
-              (section != CopySection::WhiteBalance && section != CopySection::Demosaic));
+              (section != CopySection::WhiteBalance && section != CopySection::Demosaic &&
+               section != CopySection::Lens));
     }
 }
 

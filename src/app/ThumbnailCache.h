@@ -1,6 +1,7 @@
 #pragma once
 
 #include <DevelopState.h>
+#include <LensCorrection.h>
 #include <NegativeSettings.h>
 
 #include <QImage>
@@ -60,10 +61,14 @@ public:
     /// @param state Saved develop state of the photograph.
     /// @param negative Saved negative settings; part of the key only when not the default, so
     /// that existing keys stay as they are (ADR 049).
+    /// @param lens Lens corrections the thumbnail is developed with, as resolved from the
+    /// database now; part of the key only when active, as a digest of its tables and the stamp of
+    /// the database they came from, so that an updated database makes the thumbnail again (ADR
+    /// 050, section 8).
     /// @return The key, or nothing if the file cannot be looked at.
     [[nodiscard]] static std::optional<std::string>
     developedKey(const std::filesystem::path& file, const DevelopState& state,
-                 const NegativeSettings& negative = {});
+                 const NegativeSettings& negative = {}, const LensCorrection& lens = {});
 
     /// @brief Reads an entry and marks it as just used.
     /// @param key Key from one of the key functions.

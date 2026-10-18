@@ -35,8 +35,8 @@ std::span<const float> pixelAt(const ImageBuffer& image, std::uint32_t x, std::u
 } // namespace
 
 TEST_CASE("Development ends in the working encoding, whatever it started in", "[develop]") {
-    const auto raw = develop(loadImage(test::fixture(neutralFixture)), {});
-    const auto card = develop(loadImage(test::fixture(testCard)), {});
+    const auto raw = develop(loadImage(test::fixture(neutralFixture)), {}, LensCorrection{});
+    const auto card = develop(loadImage(test::fixture(testCard)), {}, LensCorrection{});
 
     REQUIRE(isWorkingEncoding(raw.encoding()));
     REQUIRE(isWorkingEncoding(card.encoding()));
@@ -51,8 +51,9 @@ TEST_CASE("Converting a RAW is all that happens below the knee", "[develop]") {
     /// stored ramp must arrive as the same ramp in unit float -- with the
     /// highlight roll-off out of the way, since the conversion is what is
     /// under test and the roll-off has a test of its own.
-    const auto image = develop(loadImage(test::fixture(neutralFixture)),
-                               {.settings = {.tone = {.filmicHighlights = noFilmicHighlights}}});
+    const auto image =
+        develop(loadImage(test::fixture(neutralFixture)),
+                {.settings = {.tone = {.filmicHighlights = noFilmicHighlights}}}, LensCorrection{});
     const auto width = image.size().width;
 
     float worst = 0.0F;
@@ -73,13 +74,14 @@ TEST_CASE("Exposure is a doubling per stop", "[develop]") {
     /// a doubling back toward white, and here the doubling is the point.
     const auto source = test::rainbow({4, 2}, PixelFormat::RgbaU16, workingEncoding);
 
-    const auto flat =
-        develop(source, {.settings = {.tone = {.filmicHighlights = noFilmicHighlights}}});
+    const auto flat = develop(
+        source, {.settings = {.tone = {.filmicHighlights = noFilmicHighlights}}}, LensCorrection{});
     const auto lifted = develop(
-        source, {.settings = {.tone = {.exposure = 1.0F, .filmicHighlights = noFilmicHighlights}}});
+        source, {.settings = {.tone = {.exposure = 1.0F, .filmicHighlights = noFilmicHighlights}}},
+        LensCorrection{});
     const auto dropped = develop(
-        source,
-        {.settings = {.tone = {.exposure = -1.0F, .filmicHighlights = noFilmicHighlights}}});
+        source, {.settings = {.tone = {.exposure = -1.0F, .filmicHighlights = noFilmicHighlights}}},
+        LensCorrection{});
 
     for (std::size_t index = 0; index < flat.samples<float>().size(); index += 4) {
         for (std::size_t channel = 0; channel < 3; ++channel) {
@@ -96,9 +98,9 @@ TEST_CASE("Highlights roll by default, and a whole photograph survives it", "[de
     /// brightest values bent toward white -- and everything below the knee
     /// arrives exactly as the conversion left it.
     const auto source = loadImage(test::fixture(neutralFixture));
-    const auto rolled = develop(source, {});
-    const auto clipping =
-        develop(source, {.settings = {.tone = {.filmicHighlights = noFilmicHighlights}}});
+    const auto rolled = develop(source, {}, LensCorrection{});
+    const auto clipping = develop(
+        source, {.settings = {.tone = {.filmicHighlights = noFilmicHighlights}}}, LensCorrection{});
 
     const auto width = rolled.size().width;
     bool anyRolled = false;
@@ -120,7 +122,8 @@ TEST_CASE("Exposure leaves alpha alone", "[develop]") {
     auto source = test::rainbow({2, 1}, PixelFormat::RgbaU16, workingEncoding);
     source.samples<std::uint16_t>()[3] = 32768;
 
-    const auto developed = develop(source, {.settings = {.tone = {.exposure = 2.0F}}});
+    const auto developed =
+        develop(source, {.settings = {.tone = {.exposure = 2.0F}}}, LensCorrection{});
 
     /// No develop setting produces transparency, and a source that carried
     /// some keeps exactly what it had: four stops must not make it opaque.
@@ -130,7 +133,7 @@ TEST_CASE("Exposure leaves alpha alone", "[develop]") {
 TEST_CASE("A working-encoded photograph passes through unchanged", "[develop]") {
     const auto source = test::rainbow({3, 2}, PixelFormat::RgbaF32, workingEncoding);
 
-    const auto developed = develop(source, {});
+    const auto developed = develop(source, {}, LensCorrection{});
 
     const auto before = source.samples<float>();
     const auto after = developed.samples<float>();
@@ -145,7 +148,7 @@ TEST_CASE("Development refuses an encoding it cannot start from", "[develop]") {
     /// sRGB buffer arriving here means a photograph skipped that step.
     const auto source = test::rainbow({2, 2}, PixelFormat::RgbaU8, NamedEncoding::Srgb);
 
-    REQUIRE_THROWS_AS(develop(source, {}), std::invalid_argument);
+    REQUIRE_THROWS_AS(develop(source, {}, LensCorrection{}), std::invalid_argument);
 }
 
 TEST_CASE("A requested size resizes after geometry, exactly as a resample would",
@@ -154,14 +157,14 @@ TEST_CASE("A requested size resizes after geometry, exactly as a resample would"
     for (const auto filter : {ResizeFilter::Lanczos3, ResizeFilter::Bilinear}) {
         DevelopSettings settings;
         settings.geometry.rotation = QuarterTurn::Clockwise90;
-        const auto full = develop(source, DevelopState{settings});
+        const auto full = develop(source, DevelopState{settings}, LensCorrection{});
         const RenderRequest request{.size = RenderRequest::FitInside{20, 20}, .filter = filter};
-        const auto sized = develop(source, DevelopState{settings}, request);
+        const auto sized = develop(source, DevelopState{settings}, LensCorrection{}, request);
 
         REQUIRE(sized.size() == resolvedSize(request, full.size()));
         REQUIRE(sized.size() == ImageSize{13, 20});
-        const auto expected =
-            resample(develop(source, DevelopState{settings}), sized.size(), filter);
+        const auto expected = resample(develop(source, DevelopState{settings}, LensCorrection{}),
+                                       sized.size(), filter);
         const auto a = sized.samples<float>();
         const auto b = expected.samples<float>();
         REQUIRE(std::equal(a.begin(), a.end(), b.begin(), b.end()));
@@ -170,8 +173,9 @@ TEST_CASE("A requested size resizes after geometry, exactly as a resample would"
 
 TEST_CASE("A size that does not change the photograph leaves it alone", "[develop][size]") {
     const auto source = loadImage(test::fixture(testCard));
-    const auto plain = develop(source, {});
-    const auto same = develop(source, {}, {.size = RenderRequest::FitInside{4000, 4000}});
+    const auto plain = develop(source, {}, LensCorrection{});
+    const auto same =
+        develop(source, {}, LensCorrection{}, {.size = RenderRequest::FitInside{4000, 4000}});
     const auto a = plain.samples<float>();
     const auto b = same.samples<float>();
     REQUIRE(same.size() == plain.size());
@@ -183,23 +187,24 @@ TEST_CASE("A crop ratio and a requested size compose", "[develop][size]") {
     DevelopSettings settings;
     settings.geometry.crop.aspect = CropRatio{1.0};
 
-    const auto cropped = develop(source, DevelopState{settings});
+    const auto cropped = develop(source, DevelopState{settings}, LensCorrection{});
     REQUIRE(cropped.size().width == cropped.size().height);
 
-    const auto sized =
-        develop(source, DevelopState{settings}, {.size = RenderRequest::FitInside{10, 10}});
+    const auto sized = develop(source, DevelopState{settings}, LensCorrection{},
+                               {.size = RenderRequest::FitInside{10, 10}});
     REQUIRE(sized.size() == ImageSize{10, 10});
-    const auto scaled =
-        develop(source, DevelopState{settings}, {.size = RenderRequest::Scale{0.5}});
+    const auto scaled = develop(source, DevelopState{settings}, LensCorrection{},
+                                {.size = RenderRequest::Scale{0.5}});
     REQUIRE(scaled.size() == resolvedSize({.size = RenderRequest::Scale{0.5}}, cropped.size()));
 }
 
 TEST_CASE("An invalid request fails before any work", "[develop][size]") {
     const auto source = test::rainbow({4, 4}, PixelFormat::RgbaU16, workingEncoding);
 
-    REQUIRE_THROWS_AS(develop(source, {}, {.size = RenderRequest::FitInside{0, 2}}),
-                      std::invalid_argument);
-    REQUIRE_THROWS_AS(develop(source, {}, {.size = RenderRequest::Scale{-1.0}}),
+    REQUIRE_THROWS_AS(
+        develop(source, {}, LensCorrection{}, {.size = RenderRequest::FitInside{0, 2}}),
+        std::invalid_argument);
+    REQUIRE_THROWS_AS(develop(source, {}, LensCorrection{}, {.size = RenderRequest::Scale{-1.0}}),
                       std::invalid_argument);
 }
 
@@ -212,11 +217,12 @@ TEST_CASE("Asking for the light the camera saw changes nothing", "[develop]") {
     REQUIRE(camera != nullptr);
     const auto asShot = asShotTemperature(*camera);
 
-    const auto left = develop(source, {});
-    const auto right =
-        develop(source, {.settings = {.color = {.whiteBalance = WhiteBalanceMode::Custom,
-                                                .temperature = asShot.kelvin,
-                                                .tint = asShot.tint}}});
+    const auto left = develop(source, {}, LensCorrection{});
+    const auto right = develop(source,
+                               {.settings = {.color = {.whiteBalance = WhiteBalanceMode::Custom,
+                                                       .temperature = asShot.kelvin,
+                                                       .tint = asShot.tint}}},
+                               LensCorrection{});
 
     const auto before = left.samples<float>();
     const auto after = right.samples<float>();
@@ -228,14 +234,16 @@ TEST_CASE("Asking for the light the camera saw changes nothing", "[develop]") {
 TEST_CASE("A lower temperature cools the developed photograph", "[develop]") {
     const auto source = loadImage(test::fixture(skewedFixture));
 
-    const auto warm =
-        develop(source, {.settings = {.color = {.whiteBalance = WhiteBalanceMode::Custom,
-                                                .temperature = 3000.0F,
-                                                .tint = 0.0F}}});
-    const auto cool =
-        develop(source, {.settings = {.color = {.whiteBalance = WhiteBalanceMode::Custom,
-                                                .temperature = 9000.0F,
-                                                .tint = 0.0F}}});
+    const auto warm = develop(source,
+                              {.settings = {.color = {.whiteBalance = WhiteBalanceMode::Custom,
+                                                      .temperature = 3000.0F,
+                                                      .tint = 0.0F}}},
+                              LensCorrection{});
+    const auto cool = develop(source,
+                              {.settings = {.color = {.whiteBalance = WhiteBalanceMode::Custom,
+                                                      .temperature = 9000.0F,
+                                                      .tint = 0.0F}}},
+                              LensCorrection{});
 
     /// Naming a warm light tells arraw to take red back out of the picture.
     const auto warmPixel = pixelAt(warm, 20, 12);
@@ -247,14 +255,16 @@ TEST_CASE("A lower temperature cools the developed photograph", "[develop]") {
 TEST_CASE("Tint moves without disturbing the temperature", "[develop]") {
     const auto source = loadImage(test::fixture(skewedFixture));
 
-    const auto neutral =
-        develop(source, {.settings = {.color = {.whiteBalance = WhiteBalanceMode::Custom,
-                                                .temperature = 5500.0F,
-                                                .tint = 0.0F}}});
-    const auto magenta =
-        develop(source, {.settings = {.color = {.whiteBalance = WhiteBalanceMode::Custom,
-                                                .temperature = 5500.0F,
-                                                .tint = 40.0F}}});
+    const auto neutral = develop(source,
+                                 {.settings = {.color = {.whiteBalance = WhiteBalanceMode::Custom,
+                                                         .temperature = 5500.0F,
+                                                         .tint = 0.0F}}},
+                                 LensCorrection{});
+    const auto magenta = develop(source,
+                                 {.settings = {.color = {.whiteBalance = WhiteBalanceMode::Custom,
+                                                         .temperature = 5500.0F,
+                                                         .tint = 40.0F}}},
+                                 LensCorrection{});
 
     /// A magenta shift is red and blue rising against green. Green is pinned
     /// at 1 in the *sensor's* channels, but the working space's green is a
@@ -275,13 +285,15 @@ TEST_CASE("An unset temperature or tint keeps the camera's own", "[develop]") {
     REQUIRE(camera != nullptr);
     const auto asShot = asShotTemperature(*camera);
 
-    const auto partial =
-        develop(source, {.settings = {.color = {.whiteBalance = WhiteBalanceMode::Custom,
-                                                .temperature = 6000.0F}}});
-    const auto spelled =
-        develop(source, {.settings = {.color = {.whiteBalance = WhiteBalanceMode::Custom,
-                                                .temperature = 6000.0F,
-                                                .tint = asShot.tint}}});
+    const auto partial = develop(
+        source,
+        {.settings = {.color = {.whiteBalance = WhiteBalanceMode::Custom, .temperature = 6000.0F}}},
+        LensCorrection{});
+    const auto spelled = develop(source,
+                                 {.settings = {.color = {.whiteBalance = WhiteBalanceMode::Custom,
+                                                         .temperature = 6000.0F,
+                                                         .tint = asShot.tint}}},
+                                 LensCorrection{});
 
     const auto left = partial.samples<float>();
     const auto right = spelled.samples<float>();
@@ -295,10 +307,11 @@ TEST_CASE("A temperature is refused on a photograph with no sensor", "[develop]"
     /// gets the incremental setting instead, which is not implemented yet.
     const auto source = test::rainbow({2, 2}, PixelFormat::RgbaU16, workingEncoding);
 
-    REQUIRE_THROWS_AS(
-        develop(source, {.settings = {.color = {.whiteBalance = WhiteBalanceMode::Custom,
-                                                .temperature = 4000.0F}}}),
-        std::invalid_argument);
+    REQUIRE_THROWS_AS(develop(source,
+                              {.settings = {.color = {.whiteBalance = WhiteBalanceMode::Custom,
+                                                      .temperature = 4000.0F}}},
+                              LensCorrection{}),
+                      std::invalid_argument);
 }
 
 TEST_CASE("A file that recorded no white balance still develops from what it got", "[develop]") {
@@ -320,11 +333,13 @@ TEST_CASE("A file that recorded no white balance still develops from what it got
     /// Naming only the tint must leave the temperature alone: the result has to
     /// match spelling out the effective temperature by hand.
     const auto partial = develop(
-        source, {.settings = {.color = {.whiteBalance = WhiteBalanceMode::Custom, .tint = 20.0F}}});
-    const auto spelled =
-        develop(source, {.settings = {.color = {.whiteBalance = WhiteBalanceMode::Custom,
-                                                .temperature = effective.kelvin,
-                                                .tint = 20.0F}}});
+        source, {.settings = {.color = {.whiteBalance = WhiteBalanceMode::Custom, .tint = 20.0F}}},
+        LensCorrection{});
+    const auto spelled = develop(source,
+                                 {.settings = {.color = {.whiteBalance = WhiteBalanceMode::Custom,
+                                                         .temperature = effective.kelvin,
+                                                         .tint = 20.0F}}},
+                                 LensCorrection{});
 
     const auto left = partial.samples<float>();
     const auto right = spelled.samples<float>();
@@ -336,9 +351,10 @@ TEST_CASE("A file that recorded no white balance still develops from what it got
 TEST_CASE("Custom with nothing named is the photograph it already was", "[develop]") {
     const auto source = loadImage(test::fixture(skewedNoWbFixture));
 
-    const auto asShot = develop(source, {});
+    const auto asShot = develop(source, {}, LensCorrection{});
     const auto custom =
-        develop(source, {.settings = {.color = {.whiteBalance = WhiteBalanceMode::Custom}}});
+        develop(source, {.settings = {.color = {.whiteBalance = WhiteBalanceMode::Custom}}},
+                LensCorrection{});
 
     const auto left = asShot.samples<float>();
     const auto right = custom.samples<float>();

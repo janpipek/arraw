@@ -100,13 +100,15 @@ TEST_CASE("Default effects add no pass and change no pixel", "[effects][develop]
     const DevelopState plain{plainSettings()};
     // A shape with no amount is the same render.
     const DevelopState shaped{plainSettings(0.0F, 10.0F, 0.0F)};
-    const ImageBuffer expected = develop(source, plain, request);
-    requireIdentical(expected, develop(source, shaped, request));
-    requireIdentical(expected, developUntil(source, plain, Stage::Resize, request).readBack());
-    const auto effects = developUntil(source, plain, Stage::Effects, request);
+    const ImageBuffer expected = develop(source, plain, LensCorrection{}, request);
+    requireIdentical(expected, develop(source, shaped, LensCorrection{}, request));
+    requireIdentical(
+        expected, developUntil(source, plain, LensCorrection{}, Stage::Resize, request).readBack());
+    const auto effects = developUntil(source, plain, LensCorrection{}, Stage::Effects, request);
     REQUIRE(effects.boundary() == Stage::Effects);
     requireIdentical(expected, effects.readBack());
-    REQUIRE(planFor(source, plain, request) == planFor(source, shaped, request));
+    REQUIRE(planFor(source, plain, LensCorrection{}, request) ==
+            planFor(source, shaped, LensCorrection{}, request));
 }
 
 TEST_CASE("The falloff leaves the centre alone and is strongest in the corners",
@@ -142,7 +144,8 @@ TEST_CASE("The falloff leaves the centre alone and is strongest in the corners",
     }
 
     // On a rendered frame: the centre pixels are the input, the corners darkest.
-    const ImageBuffer frame = develop(greyOf({41, 31}), DevelopState{plainSettings(-60.0F)});
+    const ImageBuffer frame =
+        develop(greyOf({41, 31}), DevelopState{plainSettings(-60.0F)}, LensCorrection{});
     REQUIRE(redAt(frame, 20, 15) == 0.5F);
     float darkest = 1.0F;
     for (std::uint32_t y = 0; y < 31; ++y) {
@@ -212,7 +215,7 @@ TEST_CASE("The crop frame position follows the region and the size", "[effects][
     const ImageBuffer source = greyOf({40, 30});
     const DevelopState state{plainSettings(-50.0F)};
     const auto mappingOf = [&](const RenderRequest& request) {
-        return frameMappingOf(planFor(source, state, request));
+        return frameMappingOf(planFor(source, state, LensCorrection{}, request));
     };
     const FrameMapping whole = mappingOf({});
     REQUIRE(whole.origin == std::array{0.0, 0.0});
@@ -235,9 +238,9 @@ TEST_CASE("A point of the frame gets the same falloff whatever region or zoom re
     const DevelopState state{plainSettings(-80.0F, 20.0F, 70.0F)};
 
     // At one to one, a region is exactly the pixels of the whole frame it covers.
-    const ImageBuffer whole = develop(source, state);
-    const ImageBuffer region =
-        develop(source, state, {.region = RenderRequest::Region{0.25, 0.5, 0.75, 1.0}});
+    const ImageBuffer whole = develop(source, state, LensCorrection{});
+    const ImageBuffer region = develop(source, state, LensCorrection{},
+                                       {.region = RenderRequest::Region{0.25, 0.5, 0.75, 1.0}});
     REQUIRE(region.size() == ImageSize{24, 16});
     double worst = 0.0;
     for (std::uint32_t y = 0; y < 16; ++y) {
@@ -253,8 +256,8 @@ TEST_CASE("A point of the frame gets the same falloff whatever region or zoom re
     const RenderRequest zoom{.size = RenderRequest::Scale{2.0}, .upscale = Upscale::Allowed};
     RenderRequest zoomedRegion = zoom;
     zoomedRegion.region = RenderRequest::Region{0.5, 0.25, 1.0, 0.75};
-    const ImageBuffer big = develop(source, state, zoom);
-    const ImageBuffer part = develop(source, state, zoomedRegion);
+    const ImageBuffer big = develop(source, state, LensCorrection{}, zoom);
+    const ImageBuffer part = develop(source, state, LensCorrection{}, zoomedRegion);
     REQUIRE(part.size() == ImageSize{48, 32});
     worst = 0.0;
     for (std::uint32_t y = 0; y < 32; ++y) {
@@ -275,16 +278,16 @@ TEST_CASE("A preview level shows the same vignette as the full frame", "[effects
     // float rounding separates the two.
     const ImageBuffer source = greyOf({256, 192});
     const ImageBuffer level = halved(halved(source));
-    const ImageBuffer full = develop(source, state, request);
-    const ImageBuffer reduced = develop(level, state, request);
+    const ImageBuffer full = develop(source, state, LensCorrection{}, request);
+    const ImageBuffer reduced = develop(level, state, LensCorrection{}, request);
     REQUIRE(worstDifference(full, reduced) <= 1e-5);
 
     // Odd sizes: the reduced frame is off by up to a pixel, which moves the
     // falloff by less than its slope over a pixel.
     const ImageBuffer odd = greyOf({250, 187});
     const ImageBuffer oddLevel = halved(halved(odd));
-    const ImageBuffer oddFull = develop(odd, state, oddRequest);
-    const ImageBuffer oddReduced = develop(oddLevel, state, oddRequest);
+    const ImageBuffer oddFull = develop(odd, state, LensCorrection{}, oddRequest);
+    const ImageBuffer oddReduced = develop(oddLevel, state, LensCorrection{}, oddRequest);
     REQUIRE(oddFull.size() == oddReduced.size());
     REQUIRE(worstDifference(oddFull, oddReduced) <= 1e-2);
 }
@@ -296,22 +299,23 @@ TEST_CASE("A vignette edit resumes from the resize, and a crop edit cannot",
     const DevelopState before{plainSettings(-30.0F)};
     const DevelopState after{plainSettings(45.0F, 70.0F, 20.0F)};
 
-    const auto resized = developUntil(source, before, Stage::Resize, request);
-    const auto resumed = resumeFrom(resized, source, after, Stage::Effects, request);
+    const auto resized = developUntil(source, before, LensCorrection{}, Stage::Resize, request);
+    const auto resumed =
+        resumeFrom(resized, source, after, LensCorrection{}, Stage::Effects, request);
     REQUIRE(resumed.boundary() == Stage::Effects);
-    requireIdentical(develop(source, after, request), resumed.readBack());
+    requireIdentical(develop(source, after, LensCorrection{}, request), resumed.readBack());
 
     // The effects checkpoint is for its own vignette only.
-    const auto effects = developUntil(source, before, Stage::Effects, request);
-    REQUIRE_NOTHROW(resumeFrom(effects, source, before, Stage::Effects, request));
-    REQUIRE_THROWS_AS(resumeFrom(effects, source, after, Stage::Effects, request),
+    const auto effects = developUntil(source, before, LensCorrection{}, Stage::Effects, request);
+    REQUIRE_NOTHROW(resumeFrom(effects, source, before, LensCorrection{}, Stage::Effects, request));
+    REQUIRE_THROWS_AS(resumeFrom(effects, source, after, LensCorrection{}, Stage::Effects, request),
                       std::invalid_argument);
     // And a different region moves every pixel's place in the frame.
     RenderRequest panned = request;
     panned.region = RenderRequest::Region{0.0, 0.0, 0.5, 0.5};
-    REQUIRE_THROWS_AS(resumeFrom(effects, source, before, Stage::Effects, panned),
+    REQUIRE_THROWS_AS(resumeFrom(effects, source, before, LensCorrection{}, Stage::Effects, panned),
                       std::invalid_argument);
-    REQUIRE_THROWS_AS(resumeFrom(effects, source, before, Stage::Resize, request),
+    REQUIRE_THROWS_AS(resumeFrom(effects, source, before, LensCorrection{}, Stage::Resize, request),
                       std::invalid_argument);
 }
 
@@ -322,8 +326,8 @@ TEST_CASE("Effects keep alpha and act after the region and resize", "[effects][d
         samples[index] = 0.5F;
     }
     const DevelopState state{plainSettings(60.0F)};
-    const ImageBuffer plain = develop(source, DevelopState{plainSettings()});
-    const ImageBuffer vignetted = develop(source, state);
+    const ImageBuffer plain = develop(source, DevelopState{plainSettings()}, LensCorrection{});
+    const ImageBuffer vignetted = develop(source, state, LensCorrection{});
     const auto want = plain.samples<float>();
     const auto got = vignetted.samples<float>();
     for (std::size_t index = 3; index < want.size(); index += 4) {

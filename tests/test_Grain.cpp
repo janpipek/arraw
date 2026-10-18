@@ -201,10 +201,13 @@ TEST_CASE("Grain at zero amount is off whatever else it says, and the plan stays
     const RenderRequest request{.size = RenderRequest::FitInside{25, 25}};
     const DevelopState plain{grainy(0.0F)};
     const DevelopState shaped{grainy(0.0F, 90.0F, 10.0F, 777U)};
-    requireIdentical(develop(source, plain, request), develop(source, shaped, request));
-    REQUIRE(planFor(source, plain, request) == planFor(source, shaped, request));
-    requireIdentical(developUntil(source, shaped, Stage::Resize, request).readBack(),
-                     develop(source, shaped, request));
+    requireIdentical(develop(source, plain, LensCorrection{}, request),
+                     develop(source, shaped, LensCorrection{}, request));
+    REQUIRE(planFor(source, plain, LensCorrection{}, request) ==
+            planFor(source, shaped, LensCorrection{}, request));
+    requireIdentical(
+        developUntil(source, shaped, LensCorrection{}, Stage::Resize, request).readBack(),
+        develop(source, shaped, LensCorrection{}, request));
 }
 
 TEST_CASE("The plan resolves size, roughness and deviation from the settings", "[effects][grain]") {
@@ -225,9 +228,9 @@ TEST_CASE("A seed of zero renders one fixed pattern", "[effects][grain][seed]") 
     REQUIRE(planOf(40.0F).seed == unseededGrainSeed);
     REQUIRE(planOf(40.0F, 50.0F, 50.0F, 9U).seed == 9U);
     const ImageBuffer source = greyOf({64, 48});
-    requireIdentical(
-        develop(source, DevelopState{grainy(40.0F, 100.0F)}),
-        develop(source, DevelopState{grainy(40.0F, 100.0F, 50.0F, unseededGrainSeed)}));
+    requireIdentical(develop(source, DevelopState{grainy(40.0F, 100.0F)}, LensCorrection{}),
+                     develop(source, DevelopState{grainy(40.0F, 100.0F, 50.0F, unseededGrainSeed)},
+                             LensCorrection{}));
 }
 
 TEST_CASE("Only an edit that turns grain on without a seed gets a new one",
@@ -278,8 +281,8 @@ TEST_CASE("Grain is zero-mean, with the plan's deviation, at every roughness",
     }
     // On a developed grey, in the perceptual coordinate, the same: a frame
     // 1024 pixels long, so two pixels a cell, the finest drawn in full.
-    const Field developed =
-        grainOf(develop(greyOf({1024, 256}), DevelopState{grainy(100.0F, 100.0F, 0.0F)}));
+    const Field developed = grainOf(
+        develop(greyOf({1024, 256}), DevelopState{grainy(100.0F, 100.0F, 0.0F)}, LensCorrection{}));
     CAPTURE(meanOf(developed), deviationOf(developed));
     REQUIRE(std::abs(meanOf(developed)) <= 0.03 * strongestGrainDeviation);
     REQUIRE(std::abs(deviationOf(developed) / strongestGrainDeviation - 1.0) <= 0.06);
@@ -291,10 +294,10 @@ TEST_CASE("Grain is the same on every render, and another seed is another patter
     const ImageBuffer source = greyOf({96, 64});
     const RenderRequest request{.size = RenderRequest::Scale{8.0}, .upscale = Upscale::Allowed};
     const DevelopState state{grainy(60.0F, 100.0F, 40.0F, 42U)};
-    const ImageBuffer first = develop(source, state, request);
-    requireIdentical(first, develop(source, state, request));
+    const ImageBuffer first = develop(source, state, LensCorrection{}, request);
+    requireIdentical(first, develop(source, state, LensCorrection{}, request));
     const ImageBuffer other =
-        develop(source, DevelopState{grainy(60.0F, 100.0F, 40.0F, 43U)}, request);
+        develop(source, DevelopState{grainy(60.0F, 100.0F, 40.0F, 43U)}, LensCorrection{}, request);
     REQUIRE_FALSE(std::ranges::equal(first.bytes(), other.bytes()));
 
     const ImageSize size{256, 256};
@@ -313,9 +316,9 @@ TEST_CASE("A point of the frame gets the same grain whatever region or zoom rend
 
     // At one to one, a region is the pixels of the whole frame it covers.
     const ImageBuffer wide = greyOf({1024, 512});
-    const Field whole = grainOf(develop(wide, coarse));
-    const Field region =
-        grainOf(develop(wide, coarse, {.region = RenderRequest::Region{0.25, 0.5, 0.75, 1.0}}));
+    const Field whole = grainOf(develop(wide, coarse, LensCorrection{}));
+    const Field region = grainOf(develop(wide, coarse, LensCorrection{},
+                                         {.region = RenderRequest::Region{0.25, 0.5, 0.75, 1.0}}));
     REQUIRE(region.width == 512);
     REQUIRE(deviationOf(region) > visible);
     REQUIRE(worstDifference(region, whole, 256, 256) <= regionTolerance);
@@ -325,8 +328,8 @@ TEST_CASE("A point of the frame gets the same grain whatever region or zoom rend
     const RenderRequest zoom{.size = RenderRequest::Scale{4.0}, .upscale = Upscale::Allowed};
     RenderRequest zoomedRegion = zoom;
     zoomedRegion.region = RenderRequest::Region{0.5, 0.25, 1.0, 0.75};
-    const Field big = grainOf(develop(source, coarse, zoom));
-    const Field part = grainOf(develop(source, coarse, zoomedRegion));
+    const Field big = grainOf(develop(source, coarse, LensCorrection{}, zoom));
+    const Field part = grainOf(develop(source, coarse, LensCorrection{}, zoomedRegion));
     REQUIRE(part.width == 512);
     REQUIRE(deviationOf(part) > visible);
     REQUIRE(worstDifference(part, big, 512, 256) <= regionTolerance);
@@ -340,8 +343,8 @@ TEST_CASE("A point of the frame gets the same grain whatever region or zoom rend
     first.region = RenderRequest::Region{0.375, 0.375, 0.5, 0.5};
     RenderRequest second = deep;
     second.region = RenderRequest::Region{0.4375, 0.4375, 0.5625, 0.5625};
-    const Field a = grainOf(develop(source, fine, first));
-    const Field b = grainOf(develop(source, fine, second));
+    const Field a = grainOf(develop(source, fine, LensCorrection{}, first));
+    const Field b = grainOf(develop(source, fine, LensCorrection{}, second));
     REQUIRE(a.width == 512);
     Field overlap{256, 256, {}};
     for (std::uint32_t y = 0; y < 256; ++y) {
@@ -391,7 +394,8 @@ TEST_CASE("Grain at the default size stays visible on an ordinary export",
     // substitute keeps what a box filter of the pixel would keep of it.
     // Developed at roughness 50, the default; from the model at roughness 0,
     // the finest lattice alone.
-    const Field grain = grainOf(develop(greyOf({1800, 1200}), DevelopState{grainy(100.0F)}));
+    const Field grain =
+        grainOf(develop(greyOf({1800, 1200}), DevelopState{grainy(100.0F)}, LensCorrection{}));
     const double developed = deviationOf(grain) / strongestGrainDeviation;
     const GrainPlan even = planOf(100.0F, 50.0F, 0.0F);
     const double model = deviationOf(grainOf(even, cornerOf(1800.0), {512, 512})) / even.deviation;
@@ -447,12 +451,14 @@ TEST_CASE("A preview softens grain but never moves what it can show",
     const ImageBuffer level = halved(halved(source));
     const RenderRequest preview{.size = RenderRequest::FitInside{512, 512}};
     const DevelopState state{grainy(100.0F, 100.0F, 100.0F, 3U)};
-    const Field full = grainOf(develop(source, state));
-    const Field reduced = grainOf(develop(level, state, preview));
+    const Field full = grainOf(develop(source, state, LensCorrection{}));
+    const Field reduced = grainOf(develop(level, state, LensCorrection{}, preview));
     REQUIRE(reduced.width == 512);
     const Field boxed = boxedDown(full, 4);
     const Field elsewhere =
-        boxedDown(grainOf(develop(source, DevelopState{grainy(100.0F, 100.0F, 100.0F, 4U)})), 4);
+        boxedDown(grainOf(develop(source, DevelopState{grainy(100.0F, 100.0F, 100.0F, 4U)},
+                                  LensCorrection{})),
+                  4);
 
     // Alike, though the preview draws the finest grain as its substitute,
     // another pattern (about 0.33 here); against another seed's grain,
@@ -535,16 +541,18 @@ TEST_CASE("A grain edit resumes from the resize, and the effects checkpoint is i
     const DevelopState after{grainy(70.0F, 80.0F, 20.0F, 1U)};
     const DevelopState reseeded{grainy(30.0F, 50.0F, 50.0F, 2U)};
 
-    const auto resized = developUntil(source, before, Stage::Resize, request);
-    const auto resumed = resumeFrom(resized, source, after, Stage::Effects, request);
-    requireIdentical(develop(source, after, request), resumed.readBack());
+    const auto resized = developUntil(source, before, LensCorrection{}, Stage::Resize, request);
+    const auto resumed =
+        resumeFrom(resized, source, after, LensCorrection{}, Stage::Effects, request);
+    requireIdentical(develop(source, after, LensCorrection{}, request), resumed.readBack());
 
-    const auto effects = developUntil(source, before, Stage::Effects, request);
-    REQUIRE_NOTHROW(resumeFrom(effects, source, before, Stage::Effects, request));
-    REQUIRE_THROWS_AS(resumeFrom(effects, source, after, Stage::Effects, request),
+    const auto effects = developUntil(source, before, LensCorrection{}, Stage::Effects, request);
+    REQUIRE_NOTHROW(resumeFrom(effects, source, before, LensCorrection{}, Stage::Effects, request));
+    REQUIRE_THROWS_AS(resumeFrom(effects, source, after, LensCorrection{}, Stage::Effects, request),
                       std::invalid_argument);
-    REQUIRE_THROWS_AS(resumeFrom(effects, source, reseeded, Stage::Effects, request),
-                      std::invalid_argument);
+    REQUIRE_THROWS_AS(
+        resumeFrom(effects, source, reseeded, LensCorrection{}, Stage::Effects, request),
+        std::invalid_argument);
 }
 
 TEST_CASE("Grain is monochrome, follows the vignette and keeps alpha", "[effects][grain]") {
@@ -555,10 +563,10 @@ TEST_CASE("Grain is monochrome, follows the vignette and keeps alpha", "[effects
     for (std::size_t index = 3; index < input.size(); index += 8) {
         input[index] = 0.25F;
     }
-    const ImageBuffer out = develop(source, DevelopState{settings});
+    const ImageBuffer out = develop(source, DevelopState{settings}, LensCorrection{});
     DevelopSettings vignetteOnly = settings;
     vignetteOnly.effects.grain = {};
-    const ImageBuffer vignetted = develop(source, DevelopState{vignetteOnly});
+    const ImageBuffer vignetted = develop(source, DevelopState{vignetteOnly}, LensCorrection{});
     const auto got = out.samples<float>();
     const auto base = vignetted.samples<float>();
     for (std::size_t index = 0; index < got.size(); index += 4) {

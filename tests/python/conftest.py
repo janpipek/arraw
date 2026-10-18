@@ -59,3 +59,33 @@ def cli() -> Path:
     if os.environ.get("ARRAW_REQUIRE_CLI"):
         pytest.fail(message)
     pytest.skip(f"arraw-cli not built ({candidate} is absent); run `just build`")
+
+
+@pytest.fixture(scope="session")
+def lens_dng() -> Path:
+    """A RAW that names the reference body's kit lens (Canon EOS 80D, EF-S 18-135mm)."""
+    return FIXTURES / "lens-canon-32x24.dng"
+
+
+@pytest.fixture(scope="session")
+def lens_database_dir() -> Path:
+    """The small lensfun database of the tests, with invented calibrations."""
+    return FIXTURES / "lensfun"
+
+
+@pytest.fixture(scope="session")
+def lensfun():
+    """Skips a test in a build without lensfun; CI sets ARRAW_REQUIRE_LENSFUN to fail instead."""
+    import arraw
+
+    if not arraw.lensfun_available():
+        if os.environ.get("ARRAW_REQUIRE_LENSFUN"):
+            pytest.fail("ARRAW_REQUIRE_LENSFUN is set, but this build has no lensfun")
+        pytest.skip("this build has no lensfun")
+
+
+@pytest.fixture(scope="session")
+def lens_database(lensfun, lens_database_dir):
+    import arraw
+
+    return arraw.LensDatabase.from_directory(lens_database_dir)

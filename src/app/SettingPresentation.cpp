@@ -248,7 +248,7 @@ const std::vector<Row>& table() {
                              "Positive turns it clockwise. The crop shrinks to keep empty "
                              "corners out.")}});
         built.push_back({"vignetteAmount",
-                         {tr("Vignette"),
+                         {tr("Post-crop vignette"),
                           {},
                           0,
                           1.0,

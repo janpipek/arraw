@@ -3,6 +3,10 @@ set windows-powershell := true
 # The one clang-format everyone formats with: host, sandbox, CI and Windows
 clang_format := env_var_or_default("CLANG_FORMAT", "uvx clang-format@22.1.8")
 
+# Set ARRAW_WITH_LENSFUN to AUTO, ON or OFF to configure every tree below with it; unset, a tree
+# keeps what it was configured with (AUTO at first). CI sets ON (ADR 050).
+lensfun_flag := if env_var_or_default("ARRAW_WITH_LENSFUN", "") == "" { "" } else { "-DARRAW_WITH_LENSFUN=" + env_var("ARRAW_WITH_LENSFUN") }
+
 # Build trees live in build/<prefix><preset>; the sandbox sets the prefix, so
 # its tree never collides with the host's (see CMakePresets.json)
 build_dir := "build/" + env_var_or_default("ARRAW_BUILD_PREFIX", "")
@@ -13,7 +17,7 @@ default:
 
 # Configure the Debug build tree (build/[prefix]debug); cheap to re-run
 configure:
-    cmake --preset debug
+    cmake --preset debug {{lensfun_flag}}
 
 # Configure and build everything (Debug)
 build: configure
@@ -44,14 +48,14 @@ test-fast *args: configure
 [unix]
 py-build:
     uv sync --no-install-project
-    cmake --preset py-debug -DPython_EXECUTABLE="$(pwd)/.venv/bin/python"
+    cmake --preset py-debug {{lensfun_flag}} -DPython_EXECUTABLE="$(pwd)/.venv/bin/python"
     cmake --build --preset py-debug --target _arraw
 
 # Also builds arraw-cli in the debug tree, which the CLI parity tests compare against.
 # Build the Python extension and run pytest against it
 [unix]
 py-test *args: py-build
-    cmake --preset debug
+    cmake --preset debug {{lensfun_flag}}
     cmake --build --preset debug --target arraw-cli
     ARRAW_REQUIRE_CLI=1 PYTHONPATH="$(pwd)/{{build_dir}}py-debug/python" uv run --no-sync pytest tests/python {{args}}
 
@@ -84,7 +88,17 @@ format-check:
 format-check:
     & {{clang_format}} --dry-run --Werror @(Get-ChildItem src,include,tests -Recurse -File -Include *.cpp,*.h | ForEach-Object FullName)
 
+# A Linux release needs lensfun, so that the package never ships without lens corrections (ADR 050)
 # Configure and build Release (build/[prefix]release)
+[linux]
+release:
+    cmake --preset release -DARRAW_WITH_LENSFUN=ON
+    cmake --build --preset release
+
+# Windows and macOS packaging has no lensfun yet, so lens corrections stay optional there
+# Configure and build Release (build/[prefix]release)
+[macos]
+[windows]
 release:
     cmake --preset release
     cmake --build --preset release

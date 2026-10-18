@@ -4,6 +4,7 @@
 #include "CopySections.h"
 #include "CropEditing.h"
 #include "ExportQueue.h"
+#include "LensSupport.h"
 #include "MaskEditing.h"
 #include "PhotoLoader.h"
 #include "PreviewRenderer.h"
@@ -33,6 +34,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -73,8 +75,12 @@ public:
     /// @param parent Parent widget, usually none.
     /// @param decoder Decodes the photographs; empty for ::arraw::app::PhotoLoader::imageDecoder.
     /// A test may give one it counts calls of.
+    /// @param lensDatabase Gives the lens database, called once on a thread of its own at
+    /// startup, and by the export queue and the thumbnails when they need it; empty for the
+    /// process's own (::arraw::LensDatabase::system). The lens switches stay disabled until it
+    /// has returned. A test may give one that loads a fixture.
     explicit MainWindow(DebugLog& debugLog, QWidget* parent = nullptr,
-                        PhotoLoader::Decoder decoder = {});
+                        PhotoLoader::Decoder decoder = {}, LensDatabaseSource lensDatabase = {});
 
     /// @brief Cuts the panel's signals off before the members they use are gone.
     ~MainWindow() override;
@@ -418,6 +424,10 @@ private:
     /// @param geometry Geometry the panel's edited state carries.
     [[nodiscard]] GeometrySettings reconciledGeometry(const GeometrySettings& geometry);
 
+    /// @brief Shows the open photograph's state in the develop panel, lens rows included.
+    /// @pre A photograph is open.
+    void showPanel();
+
     /// @brief Shows the session's state in the panel and updates the actions, then asks for a
     /// render.
     /// @param renderDelay Time to hold the render back; a newer request or edit replaces it.
@@ -469,8 +479,27 @@ private:
     /// @brief Takes the negative settings the user chose in the Negative group, as one step.
     ///
     /// Not in the crop mode, whose history it would join.
+    /// The step that turns a lens correction on records the matched lens with it (ADR 050,
+    /// section 6), so undo removes both.
     /// @param negative Settings to carry from now on.
     void chooseNegative(const NegativeSettings& negative);
+
+    /// @brief Takes the lens database the loader thread made, and shows what it enables.
+    /// @param database The database, valid for the life of the program.
+    void lensDatabaseLoaded(const LensDatabase* database);
+
+    /// @brief Gives the open photograph's lens corrections and what the panel says of them.
+    ///
+    /// Resolved when the switches, the recorded lens or the database change, and kept until they
+    /// do again. Matching a lens takes some milliseconds with the full database.
+    /// @pre A photograph is open.
+    [[nodiscard]] const LensView& lensView();
+
+    /// @brief Lets the user choose the lens the corrections are for, from the database.
+    void chooseLens();
+
+    /// @brief Forgets the recorded lens and matches the photograph's again.
+    void resetLens();
 
     /// @brief Starts, keeps or cancels the re-decode that makes the shown pixels match the
     /// photograph's negative settings (ADR 049).
@@ -525,6 +554,11 @@ private:
         /// Newest render request made before the pixels last changed; the crop mode's cached
         /// image is made only from renders of later requests.
         std::uint64_t cropImageFloor = 0;
+        /// What lensView was resolved for: the switches and recorded lens, and the database (null
+        /// while it loads). Empty before the first resolution.
+        std::optional<std::pair<LensSettings, const LensDatabase*>> lensKey = std::nullopt;
+        /// The lens corrections and the panel's words about them, as of lensKey.
+        LensView lensView = {};
     };
 
     DebugLog& debugLog_;
@@ -665,6 +699,13 @@ private:
     /// Desktop preferences used by this application session.
     AppSettings runningSettings_;
 
+    /// Gives the lens database; called on the loader thread, the export thread and the
+    /// thumbnail thread, never on the interface thread.
+    LensDatabaseSource lensSource_;
+
+    /// The lens database once the loader thread returned it; null while it loads.
+    const LensDatabase* lensDatabase_ = nullptr;
+
     /// Worker that renders the preview.
     ///
     /// The three workers are the last members, in the order previewRenderer_,
@@ -685,6 +726,12 @@ private:
     /// Declared last, so it is destroyed first: it cancels the decode in
     /// progress and waits for its threads; see previewRenderer_.
     PhotoLoader photoLoader_;
+
+    /// Thread that loads the lens database at startup (ADR 050, step 7).
+    ///
+    /// Declared after every worker, so it is destroyed, and joined, first: the load cannot be
+    /// interrupted, so closing the window while it runs waits for it.
+    std::jthread lensLoader_;
 };
 
 } // namespace arraw::app

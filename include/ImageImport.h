@@ -3,6 +3,7 @@
 #include <DecodeOptions.h>
 #include <Diagnostics.h>
 #include <ImageBuffer.h>
+#include <LensFacts.h>
 #include <Progress.h>
 
 #include <cstdint>
@@ -45,6 +46,12 @@ struct ImageMetadata {
     /// ::arraw::Mosaic::None for anything that is not a RAW, and for a RAW whose pixels
     /// arrive already in colour.
     Mosaic mosaic = Mosaic::None;
+
+    /// @brief What the file says about its camera and lens, for a lens profile to be found by.
+    ///
+    /// Filled for a RAW, empty for anything else. Not part of what a render is planned from, and
+    /// so not part of a decode's identity (::arraw::canonical).
+    LensFacts lens = {};
 
     friend bool operator==(const ImageMetadata&, const ImageMetadata&) = default;
 };

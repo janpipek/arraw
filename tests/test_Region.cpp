@@ -69,14 +69,15 @@ TEST_CASE("A region covering the frame is the render of no region", "[region]") 
     const RenderRequest::Region whole{0.0, 0.0, 1.0, 1.0};
 
     SECTION("at the photograph's own size") {
-        requireIdentical(develop(source, state), develop(source, state, withRegion(whole)));
+        requireIdentical(develop(source, state, LensCorrection{}),
+                         develop(source, state, LensCorrection{}, withRegion(whole)));
     }
     SECTION("resized") {
         const RenderRequest::FitInside box{20, 20};
-        requireIdentical(develop(source, state, {.size = box}),
-                         develop(source, state, withRegion(whole, box)));
-        const auto plain = planFor(source, state, {.size = box});
-        const auto framed = planFor(source, state, withRegion(whole, box));
+        requireIdentical(develop(source, state, LensCorrection{}, {.size = box}),
+                         develop(source, state, LensCorrection{}, withRegion(whole, box)));
+        const auto plain = planFor(source, state, LensCorrection{}, {.size = box});
+        const auto framed = planFor(source, state, LensCorrection{}, withRegion(whole, box));
         REQUIRE(plain.resize == framed.resize);
     }
 }
@@ -108,8 +109,9 @@ TEST_CASE("A region at the photograph's resolution is the pixels cut from the fu
 
     // Cut and kept, so exact: pointwise and geometry are untouched, and the cut
     // is a copy.
-    const ImageBuffer full = develop(source, state);
-    const ImageBuffer part = develop(source, state, withRegion({0.25, 0.5, 0.75, 1.0}));
+    const ImageBuffer full = develop(source, state, LensCorrection{});
+    const ImageBuffer part =
+        develop(source, state, LensCorrection{}, withRegion({0.25, 0.5, 0.75, 1.0}));
     const PixelRegion pixels = arraw::regionOf(withRegion({0.25, 0.5, 0.75, 1.0}), full.size());
     requireIdentical(cut(full, pixels.x, pixels.y, pixels.size()), part);
 }
@@ -136,7 +138,8 @@ TEST_CASE("A resized region is what resizing the cut frame gives", "[region]") {
             const RenderRequest request{.size = size, .upscale = upscale, .filter = filter};
             RenderRequest regional = request;
             regional.region = region;
-            requireIdentical(develop(cutOut, state, request), develop(source, state, regional));
+            requireIdentical(develop(cutOut, state, LensCorrection{}, request),
+                             develop(source, state, LensCorrection{}, regional));
         }
     }
 }
@@ -147,10 +150,10 @@ TEST_CASE("The size resolves against the region", "[region]") {
     const auto request = withRegion({0.0, 0.0, 0.5, 0.5}, RenderRequest::FitInside{100, 100});
 
     // The region is 32x24: without upscaling it is kept, with it, it fills the box.
-    REQUIRE(develop(source, state, request).size() == ImageSize{32, 24});
+    REQUIRE(develop(source, state, LensCorrection{}, request).size() == ImageSize{32, 24});
     RenderRequest enlarging = request;
     enlarging.upscale = Upscale::Allowed;
-    REQUIRE(develop(source, state, enlarging).size() == ImageSize{100, 75});
+    REQUIRE(develop(source, state, LensCorrection{}, enlarging).size() == ImageSize{100, 75});
 }
 
 TEST_CASE("A region that is not well formed is refused", "[region]") {
@@ -169,8 +172,10 @@ TEST_CASE("A region that is not well formed is refused", "[region]") {
     };
     for (const RenderRequest::Region& region : bad) {
         CAPTURE(region.left, region.top, region.right, region.bottom);
-        REQUIRE_THROWS_AS(develop(source, state, withRegion(region)), std::invalid_argument);
-        REQUIRE_THROWS_AS(planFor(source, state, withRegion(region)), std::invalid_argument);
+        REQUIRE_THROWS_AS(develop(source, state, LensCorrection{}, withRegion(region)),
+                          std::invalid_argument);
+        REQUIRE_THROWS_AS(planFor(source, state, LensCorrection{}, withRegion(region)),
+                          std::invalid_argument);
     }
 }
 
@@ -181,9 +186,12 @@ TEST_CASE("A region belongs to the resize stage of the plan", "[region][plan]") 
     const DevelopState state{settings};
     const RenderRequest::FitInside box{20, 20};
 
-    const auto left = planFor(source, state, withRegion({0.0, 0.0, 0.5, 0.5}, box));
-    const auto right = planFor(source, state, withRegion({0.5, 0.0, 1.0, 0.5}, box));
-    const auto again = planFor(source, state, withRegion({0.0, 0.0, 0.5, 0.5}, box));
+    const auto left =
+        planFor(source, state, LensCorrection{}, withRegion({0.0, 0.0, 0.5, 0.5}, box));
+    const auto right =
+        planFor(source, state, LensCorrection{}, withRegion({0.5, 0.0, 1.0, 0.5}, box));
+    const auto again =
+        planFor(source, state, LensCorrection{}, withRegion({0.0, 0.0, 0.5, 0.5}, box));
 
     REQUIRE_FALSE(left.resize->region == right.resize->region);
     REQUIRE(prefixMatches(left, right, Stage::Pointwise));
@@ -200,15 +208,16 @@ TEST_CASE("A geometry checkpoint is resumed across regions", "[region][checkpoin
     settings.geometry.straighten = 3.0;
     const DevelopState state{settings};
 
-    const RenderCheckpoint geometry = developUntil(source, state, Stage::Geometry);
+    const RenderCheckpoint geometry =
+        developUntil(source, state, LensCorrection{}, Stage::Geometry);
     for (const RenderRequest::Region region : {RenderRequest::Region{0.0, 0.0, 0.5, 0.5},
                                                {0.5, 0.25, 1.0, 0.75},
                                                {0.1, 0.1, 0.9, 0.9}}) {
         const auto request = withRegion(region, RenderRequest::FitInside{20, 20});
         const RenderCheckpoint resumed =
-            resumeFrom(geometry, source, state, Stage::Resize, request);
+            resumeFrom(geometry, source, state, LensCorrection{}, Stage::Resize, request);
         REQUIRE(resumed.boundary() == Stage::Resize);
-        requireIdentical(develop(source, state, request), resumed.readBack());
+        requireIdentical(develop(source, state, LensCorrection{}, request), resumed.readBack());
     }
 }
 

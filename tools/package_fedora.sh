@@ -29,6 +29,7 @@ required_packages=(
     desktop-file-utils
     gcc-c++
     exiv2-devel
+    lensfun-devel
     LibRaw-devel
     ninja-build
     qt6-qtbase-devel

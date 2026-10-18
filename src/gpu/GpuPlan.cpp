@@ -1,6 +1,7 @@
 #include "GpuPlan.h"
 
 #include "GeometryPlan.h"
+#include "Lens.h"
 #include "LocalPlan.h"
 #include "ProcessingPlan.h"
 #include "ResampleWeights.h"
@@ -11,6 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
+#include <vector>
 
 namespace arraw {
 
@@ -305,6 +307,62 @@ ImageBuffer packToneCurves(const ToneCurvePlan& curves) {
         samples[index * 4 + 1] = curves.red.table[index];
         samples[index * 4 + 2] = curves.green.table[index];
         samples[index * 4 + 3] = curves.blue.table[index];
+    }
+    return image;
+}
+
+GpuLensBlock packLens(const LensPlan& plan, ImageSize size) {
+    const LensCorrection& c = plan.correction;
+    // As applyLens resolves them.
+    const double aspect = c.aspect > 0.0 ? c.aspect : 1.0;
+    const double centerX = c.centerU * aspect;
+    const double reach =
+        std::hypot(std::max(centerX, aspect - centerX), std::max(c.centerV, 1.0 - c.centerV));
+    const double centerAcross = c.centerU * size.width;
+    const double centerDown = c.centerV * size.height;
+    GpuLensBlock block;
+    block.centerWhole = {static_cast<float>(std::floor(centerAcross)),
+                         static_cast<float>(std::floor(centerDown))};
+    block.centerFraction = {static_cast<float>(centerAcross - std::floor(centerAcross)),
+                            static_cast<float>(centerDown - std::floor(centerDown))};
+    block.radiusStep = {static_cast<float>(aspect / size.width / reach),
+                        static_cast<float>(1.0 / size.height / reach)};
+    block.distorts = c.distortion.empty() ? 0U : 1U;
+    block.colorSplit = c.hasLateralCa() ? 1U : 0U;
+    block.dims = c.vignetting.empty() ? 0U : 1U;
+    if (block.distorts != 0) {
+        const double fill = c.fill > 0.0 ? c.fill : 1.0;
+        block.inverseFill = static_cast<float>(1.0 / fill);
+        block.fillGain = static_cast<float>(1.0 / fill - 1.0);
+    }
+    block.lastNode = static_cast<float>(lensTableNodes - 1);
+    return block;
+}
+
+ImageBuffer packLensTables(const LensPlan& plan) {
+    const LensCorrection& c = plan.correction;
+    ImageBuffer image({static_cast<std::uint32_t>(lensTableNodes), 1}, workingFormat,
+                      workingEncoding);
+    const auto samples = image.samples<float>();
+    // A table of another length (tests build short ones) is read at the nodes' radii, which a
+    // linear table of the standard length reproduces to within its own interpolation.
+    const auto valueAt = [](const std::vector<float>& table, std::size_t node) {
+        if (table.size() == lensTableNodes) {
+            return static_cast<double>(table[node]);
+        }
+        return tableValue(table, static_cast<double>(node) / (lensTableNodes - 1));
+    };
+    // The scales go as their excess over one, computed in double, which is exact for the float
+    // node; the shader reconstructs the displacement from the small number.
+    const auto excess = [&](const std::vector<float>& table, std::size_t node) {
+        return table.empty() ? 0.0F : static_cast<float>(valueAt(table, node) - 1.0);
+    };
+    for (std::size_t node = 0; node < lensTableNodes; ++node) {
+        samples[node * 4] = excess(c.distortion, node);
+        samples[node * 4 + 1] = excess(c.redScale, node);
+        samples[node * 4 + 2] = excess(c.blueScale, node);
+        samples[node * 4 + 3] =
+            c.vignetting.empty() ? 0.0F : static_cast<float>(valueAt(c.vignetting, node));
     }
     return image;
 }

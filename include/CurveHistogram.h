@@ -86,6 +86,7 @@ inline constexpr RenderRequest curveHistogramRequest{
 /// clipping (ADR 035). Call ::arraw::sample directly to count another filter.
 /// @param source Decoded photograph, in the working or a camera encoding.
 /// @param state How the photograph is developed.
+/// @param lens Lens corrections of the render the histogram belongs to; empty for none.
 /// @param request What to render, see ::arraw::develop; its filter is ignored.
 /// The default fits the frame inside ::arraw::curveHistogramLongEdge.
 /// @param progress Channel for progress and cancellation, or null; see ::arraw::sample.
@@ -93,6 +94,7 @@ inline constexpr RenderRequest curveHistogramRequest{
 /// @throws std::invalid_argument as ::arraw::sample.
 /// @throws ::arraw::Cancelled if @p progress was cancelled before the sample finished.
 [[nodiscard]] CurveHistogram curveHistogram(const ImageBuffer& source, const DevelopState& state,
+                                            const LensCorrection& lens,
                                             const RenderRequest& request = curveHistogramRequest,
                                             ProgressChannel* progress = nullptr);
 

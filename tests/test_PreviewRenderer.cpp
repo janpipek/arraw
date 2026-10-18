@@ -2,6 +2,7 @@
 #include "DisplayImage.h"
 #include "PreviewRenderer.h"
 #include "support/BrushGenerators.h"
+#include "support/LensTables.h"
 #include "support/ProgressGate.h"
 #include "support/TestImages.h"
 
@@ -159,7 +160,8 @@ TEST_CASE("A large source in a small viewport is developed from a reduced level"
     app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
     renderer.setSource(makeLargeSource());
 
-    const std::uint64_t id = renderer.request({}, app::PreviewView::wholeFrame({512, 512}));
+    const std::uint64_t id =
+        renderer.request({}, LensCorrection{}, app::PreviewView::wholeFrame({512, 512}));
 
     REQUIRE(collector.waitFor(id));
     const auto results = collector.results();
@@ -181,7 +183,8 @@ TEST_CASE("A reduced level is denoised with radii divided by its scale",
     state.settings.noiseReduction.luminance = 80.0F;
     state.settings.noiseReduction.color = 60.0F;
 
-    const std::uint64_t id = renderer.request(state, app::PreviewView::wholeFrame({512, 512}));
+    const std::uint64_t id =
+        renderer.request(state, LensCorrection{}, app::PreviewView::wholeFrame({512, 512}));
     REQUIRE(collector.waitFor(id));
     const app::PreviewResult result = collector.results().back();
     REQUIRE(result.error.empty());
@@ -192,10 +195,11 @@ TEST_CASE("A reduced level is denoised with radii divided by its scale",
     const ImageBuffer level2 = halved(halved(*source));
     REQUIRE(level2.pixelScale() == 4.0 * source->pixelScale());
     const RenderRequest request = app::previewRequest({512, 512});
-    const QImage expected = app::toDisplayImage(develop(level2, state, request));
+    const QImage expected = app::toDisplayImage(develop(level2, state, LensCorrection{}, request));
     ImageBuffer claimsFull = level2.clone();
     claimsFull.setPixelScale(1.0);
-    const QImage unscaled = app::toDisplayImage(develop(claimsFull, state, request));
+    const QImage unscaled =
+        app::toDisplayImage(develop(claimsFull, state, LensCorrection{}, request));
     REQUIRE(*result.image == expected);
     REQUIRE(*result.image != unscaled);
 }
@@ -206,7 +210,8 @@ TEST_CASE("A viewport as large as the source is developed from the source itself
     app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
     renderer.setSource(makeLargeSource());
 
-    const std::uint64_t id = renderer.request({}, app::PreviewView::wholeFrame({2048, 1024}));
+    const std::uint64_t id =
+        renderer.request({}, LensCorrection{}, app::PreviewView::wholeFrame({2048, 1024}));
 
     REQUIRE(collector.waitFor(id));
     const auto results = collector.results();
@@ -221,7 +226,8 @@ TEST_CASE("The pyramid stops before its levels become too small to be of use",
     app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
     renderer.setSource(makeLargeSource());
 
-    const std::uint64_t id = renderer.request({}, app::PreviewView::wholeFrame({16, 16}));
+    const std::uint64_t id =
+        renderer.request({}, LensCorrection{}, app::PreviewView::wholeFrame({16, 16}));
 
     REQUIRE(collector.waitFor(id));
     const auto results = collector.results();
@@ -235,11 +241,13 @@ TEST_CASE("A new source starts a new pyramid", "[app][preview][pyramid]") {
     Collector collector;
     app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
     renderer.setSource(makeLargeSource());
-    const std::uint64_t first = renderer.request({}, app::PreviewView::wholeFrame({512, 512}));
+    const std::uint64_t first =
+        renderer.request({}, LensCorrection{}, app::PreviewView::wholeFrame({512, 512}));
     REQUIRE(collector.waitFor(first));
 
     renderer.setSource(makeSource()); // 256x128: nothing to reduce.
-    const std::uint64_t second = renderer.request({}, app::PreviewView::wholeFrame({128, 128}));
+    const std::uint64_t second =
+        renderer.request({}, LensCorrection{}, app::PreviewView::wholeFrame({128, 128}));
 
     REQUIRE(collector.waitFor(second));
     const auto results = collector.results();
@@ -254,7 +262,8 @@ TEST_CASE("A renderer told to use the CPU says so and needs no fallback reason",
     app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
     renderer.setSource(makeSource());
 
-    const std::uint64_t id = renderer.request({}, app::PreviewView::wholeFrame({100, 100}));
+    const std::uint64_t id =
+        renderer.request({}, LensCorrection{}, app::PreviewView::wholeFrame({100, 100}));
 
     REQUIRE(collector.waitFor(id));
     const auto results = collector.results();
@@ -268,9 +277,11 @@ TEST_CASE("An automatic renderer without a usable GPU falls back and says why", 
     app::PreviewRenderer renderer(collector.callback());
     renderer.setSource(makeSource());
 
-    const std::uint64_t first = renderer.request({}, app::PreviewView::wholeFrame({100, 100}));
+    const std::uint64_t first =
+        renderer.request({}, LensCorrection{}, app::PreviewView::wholeFrame({100, 100}));
     REQUIRE(collector.waitFor(first));
-    const std::uint64_t second = renderer.request({}, app::PreviewView::wholeFrame({64, 64}));
+    const std::uint64_t second =
+        renderer.request({}, LensCorrection{}, app::PreviewView::wholeFrame({64, 64}));
     REQUIRE(collector.waitFor(second));
 
     const auto results = collector.results();
@@ -294,7 +305,8 @@ TEST_CASE("A request renders and is answered with its id", "[app][preview]") {
     app::PreviewRenderer renderer(collector.callback());
     renderer.setSource(makeSource());
 
-    const std::uint64_t id = renderer.request({}, app::PreviewView::wholeFrame({100, 100}));
+    const std::uint64_t id =
+        renderer.request({}, LensCorrection{}, app::PreviewView::wholeFrame({100, 100}));
 
     REQUIRE(collector.waitFor(id));
     const auto results = collector.results();
@@ -315,7 +327,7 @@ TEST_CASE("The newest request wins, and results never arrive out of order", "[ap
     for (int i = 0; i < 50; ++i) {
         DevelopState state;
         state.settings.tone.exposure = static_cast<float>(i) * 0.02F;
-        last = renderer.request(state, app::PreviewView::wholeFrame({128, 64}));
+        last = renderer.request(state, LensCorrection{}, app::PreviewView::wholeFrame({128, 64}));
     }
 
     REQUIRE(collector.waitFor(last));
@@ -333,7 +345,8 @@ TEST_CASE("A failed render yields an error and the worker carries on", "[app][pr
     app::PreviewRenderer renderer(collector.callback());
     renderer.setSource(makeSource());
 
-    const std::uint64_t bad = renderer.request({}, app::PreviewView::wholeFrame({0, 0}));
+    const std::uint64_t bad =
+        renderer.request({}, LensCorrection{}, app::PreviewView::wholeFrame({0, 0}));
     REQUIRE(collector.waitFor(bad));
     {
         const auto results = collector.results();
@@ -342,7 +355,8 @@ TEST_CASE("A failed render yields an error and the worker carries on", "[app][pr
         REQUIRE(!results.back().error.empty());
     }
 
-    const std::uint64_t good = renderer.request({}, app::PreviewView::wholeFrame({64, 64}));
+    const std::uint64_t good =
+        renderer.request({}, LensCorrection{}, app::PreviewView::wholeFrame({64, 64}));
     REQUIRE(collector.waitFor(good));
     const auto results = collector.results();
     REQUIRE(results.back().request == good);
@@ -354,7 +368,8 @@ TEST_CASE("A request before any source yields an error result", "[app][preview]"
     Collector collector;
     app::PreviewRenderer renderer(collector.callback());
 
-    const std::uint64_t id = renderer.request({}, app::PreviewView::wholeFrame({64, 64}));
+    const std::uint64_t id =
+        renderer.request({}, LensCorrection{}, app::PreviewView::wholeFrame({64, 64}));
 
     REQUIRE(collector.waitFor(id));
     const auto results = collector.results();
@@ -368,10 +383,13 @@ TEST_CASE("Replacing the source drops requests not yet started", "[app][preview]
     app::PreviewRenderer renderer(collector.callback());
     renderer.setSource(makeSource());
     // Occupy the worker, then queue a request and drop it with the source.
-    const std::uint64_t first = renderer.request({}, app::PreviewView::wholeFrame({128, 64}));
-    const std::uint64_t dropped = renderer.request({}, app::PreviewView::wholeFrame({128, 64}));
+    const std::uint64_t first =
+        renderer.request({}, LensCorrection{}, app::PreviewView::wholeFrame({128, 64}));
+    const std::uint64_t dropped =
+        renderer.request({}, LensCorrection{}, app::PreviewView::wholeFrame({128, 64}));
     renderer.setSource(makeSource());
-    const std::uint64_t kept = renderer.request({}, app::PreviewView::wholeFrame({128, 64}));
+    const std::uint64_t kept =
+        renderer.request({}, LensCorrection{}, app::PreviewView::wholeFrame({128, 64}));
 
     REQUIRE(collector.waitFor(kept));
     for (const auto& result : collector.results()) {
@@ -388,7 +406,7 @@ TEST_CASE("Destroying the renderer with work pending ends the worker for good", 
         app::PreviewRenderer renderer(collector.callback());
         renderer.setSource(makeSource());
         for (int i = 0; i < 20; ++i) {
-            (void)renderer.request({}, app::PreviewView::wholeFrame({128, 64}));
+            (void)renderer.request({}, LensCorrection{}, app::PreviewView::wholeFrame({128, 64}));
         }
     }
     collector.close();
@@ -407,7 +425,8 @@ namespace {
 /// @brief Renders one request and returns its result, requiring it to succeed.
 app::PreviewResult renderOne(app::PreviewRenderer& renderer, Collector& collector,
                              const DevelopState& state, QSize viewport) {
-    const std::uint64_t id = renderer.request(state, app::PreviewView::wholeFrame(viewport));
+    const std::uint64_t id =
+        renderer.request(state, LensCorrection{}, app::PreviewView::wholeFrame(viewport));
     REQUIRE(collector.waitFor(id));
     app::PreviewResult result = collector.results().back();
     REQUIRE(result.request == id);
@@ -512,8 +531,8 @@ TEST_CASE("A region request renders that part of the frame at the size asked for
     renderer.setSource(makeLargeSource());
 
     const QRect region(512, 256, 256, 128);
-    const std::uint64_t id =
-        renderer.request({}, {.region = region, .outputSize = {128, 64}, .devicePixelRatio = 2.0});
+    const std::uint64_t id = renderer.request(
+        {}, LensCorrection{}, {.region = region, .outputSize = {128, 64}, .devicePixelRatio = 2.0});
 
     REQUIRE(collector.waitFor(id));
     const auto result = collector.results().back();
@@ -539,7 +558,7 @@ TEST_CASE("A region off the level's pixels reports where it was actually rendere
     // Odd edges at full resolution; level 1 has pixels twice as wide, so the
     // engine snaps outward to even ones: 513 -> 512, 513 + 255 = 768 stays.
     const std::uint64_t id = renderer.request(
-        {},
+        {}, LensCorrection{},
         {.region = QRect(513, 257, 255, 127), .outputSize = {128, 64}, .devicePixelRatio = 1.0});
 
     REQUIRE(collector.waitFor(id));
@@ -559,7 +578,7 @@ TEST_CASE("A small region at one image pixel per output pixel is developed from 
     renderer.setSource(makeLargeSource());
 
     const std::uint64_t id = renderer.request(
-        {},
+        {}, LensCorrection{},
         {.region = QRect(100, 100, 200, 100), .outputSize = {200, 100}, .devicePixelRatio = 1.0});
 
     REQUIRE(collector.waitFor(id));
@@ -574,7 +593,8 @@ TEST_CASE("A request without a region reports the whole frame", "[app][preview][
     app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
     renderer.setSource(makeLargeSource());
 
-    const std::uint64_t id = renderer.request({}, app::PreviewView::wholeFrame({512, 512}));
+    const std::uint64_t id =
+        renderer.request({}, LensCorrection{}, app::PreviewView::wholeFrame({512, 512}));
 
     REQUIRE(collector.waitFor(id));
     const auto result = collector.results().back();
@@ -588,7 +608,7 @@ TEST_CASE("A region outside the frame is reported as a failure", "[app][preview]
     renderer.setSource(makeLargeSource());
 
     const std::uint64_t id = renderer.request(
-        {},
+        {}, LensCorrection{},
         {.region = QRect(2000, 0, 100, 100), .outputSize = {100, 100}, .devicePixelRatio = 1.0});
 
     REQUIRE(collector.waitFor(id));
@@ -601,19 +621,19 @@ TEST_CASE("A region carries the last whole frame beneath it", "[app][preview][re
     Collector collector;
     app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
     renderer.setSource(makeLargeSource());
-    auto id = renderer.request({}, app::PreviewView::wholeFrame({1024, 1024}));
+    auto id = renderer.request({}, LensCorrection{}, app::PreviewView::wholeFrame({1024, 1024}));
     REQUIRE(collector.waitFor(id));
     const QImage whole = *collector.results().back().image;
 
     app::PreviewView view{.region = QRect(100, 100, 200, 100), .outputSize = {200, 100}};
-    id = renderer.request({}, view);
+    id = renderer.request({}, LensCorrection{}, view);
     REQUIRE(collector.waitFor(id));
     const auto zoomed = collector.results().back();
     REQUIRE(zoomed.background.has_value());
     REQUIRE(zoomed.background->cacheKey() == whole.cacheKey());
 
     view.region = QRect(200, 100, 200, 100);
-    id = renderer.request({}, view);
+    id = renderer.request({}, LensCorrection{}, view);
     REQUIRE(collector.waitFor(id));
     const auto panned = collector.results().back();
     REQUIRE(panned.background->cacheKey() == whole.cacheKey());
@@ -628,7 +648,7 @@ TEST_CASE("An edit shows the earlier fallback until a refreshed one follows",
     app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
     renderer.setSource(makeLargeSource());
     const app::PreviewView view{.region = QRect(100, 100, 200, 100), .outputSize = {200, 100}};
-    auto id = renderer.request({}, view);
+    auto id = renderer.request({}, LensCorrection{}, view);
     REQUIRE(collector.waitFor(id));
     // Nothing was rendered of the whole frame yet.
     REQUIRE_FALSE(collector.results().back().background.has_value());
@@ -638,7 +658,7 @@ TEST_CASE("An edit shows the earlier fallback until a refreshed one follows",
 
     DevelopState edited;
     edited.settings.tone.exposure = 1.0F;
-    id = renderer.request(edited, view);
+    id = renderer.request(edited, LensCorrection{}, view);
     REQUIRE(collector.waitFor(id));
     REQUIRE(collector.results().back().background->cacheKey() == first.cacheKey());
     REQUIRE(collector.waitForBackground(id));
@@ -646,14 +666,15 @@ TEST_CASE("An edit shows the earlier fallback until a refreshed one follows",
 
     // A geometry edit moves the frame under the fallback, which is dropped.
     edited.settings.geometry.straighten = 5.0;
-    id = renderer.request(edited, view);
+    id = renderer.request(edited, LensCorrection{}, view);
     REQUIRE(collector.waitFor(id));
     REQUIRE_FALSE(collector.results().back().background.has_value());
     REQUIRE(collector.waitForBackground(id));
 
     renderer.setSource(makeSource());
     id = renderer.request(
-        {}, app::PreviewView{.region = QRect(0, 0, 100, 100), .outputSize = {100, 100}});
+        {}, LensCorrection{},
+        app::PreviewView{.region = QRect(0, 0, 100, 100), .outputSize = {100, 100}});
     REQUIRE(collector.waitFor(id));
     REQUIRE_FALSE(collector.results().back().background.has_value());
     REQUIRE(collector.waitForBackground(id));
@@ -666,7 +687,7 @@ TEST_CASE("Desktop CPU preference overrides automatic preview rendering",
     app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Auto,
                                   {.cpuOnly = true, .gpu = std::nullopt});
     renderer.setSource(makeSource());
-    const auto id = renderer.request({}, app::PreviewView::wholeFrame({128, 64}));
+    const auto id = renderer.request({}, LensCorrection{}, app::PreviewView::wholeFrame({128, 64}));
     REQUIRE(collector.waitFor(id));
     const auto result = collector.results().back();
     REQUIRE(result.image);
@@ -683,7 +704,8 @@ TEST_CASE("The curve histogram is counted once requests pause", "[app][preview][
     renderer.setSource(source);
     DevelopState state;
     state.settings.tone.exposure = 0.4F;
-    const auto id = renderer.request(state, app::PreviewView::wholeFrame({300, 300}));
+    const auto id =
+        renderer.request(state, LensCorrection{}, app::PreviewView::wholeFrame({300, 300}));
     REQUIRE(collector.waitForHistogram(id));
 
     const auto histograms = collector.histograms();
@@ -696,8 +718,8 @@ TEST_CASE("The curve histogram is counted once requests pause", "[app][preview][
     // view's: 2048x1024 fits 512 at level 2, not at level 1 as the GPU's 1024 would.
     const ImageBuffer level2 = halved(halved(*source));
     REQUIRE(*delivered.curveHistogram ==
-            curveHistogram(level2, state, app::cpuCurveHistogramRequest));
-    REQUIRE(*delivered.curveHistogram != curveHistogram(halved(*source), state));
+            curveHistogram(level2, state, LensCorrection{}, app::cpuCurveHistogramRequest));
+    REQUIRE(*delivered.curveHistogram != curveHistogram(halved(*source), state, LensCorrection{}));
 }
 
 TEST_CASE("A curve edit keeps the histogram, an exposure edit recounts it",
@@ -708,14 +730,14 @@ TEST_CASE("A curve edit keeps the histogram, an exposure edit recounts it",
     renderer.setSource(makeSource());
     const app::PreviewView view = app::PreviewView::wholeFrame({200, 200});
     DevelopState state;
-    auto id = renderer.request(state, view);
+    auto id = renderer.request(state, LensCorrection{}, view);
     REQUIRE(collector.waitForHistogram(id));
     const CurveHistogram first = *collector.histograms().back().curveHistogram;
 
     // A curve drag: several renders, each followed by a pause.
     for (const float y : {0.55F, 0.6F, 0.7F}) {
         state.settings.toneCurve.luma.points = {{0.0F, 0.0F}, {0.5F, y}, {1.0F, 1.0F}};
-        id = renderer.request(state, view);
+        id = renderer.request(state, LensCorrection{}, view);
         REQUIRE(collector.waitFor(id));
         // Well past the pause: a recount, had one been started, would come
         // before the next request is served.
@@ -723,12 +745,13 @@ TEST_CASE("A curve edit keeps the histogram, an exposure edit recounts it",
     }
     // A zoom changes the view, not the histogram.
     id = renderer.request(
-        state, app::PreviewView{.region = QRect(10, 10, 100, 60), .outputSize = {100, 60}});
+        state, LensCorrection{},
+        app::PreviewView{.region = QRect(10, 10, 100, 60), .outputSize = {100, 60}});
     REQUIRE(collector.waitFor(id));
     std::this_thread::sleep_for(400ms);
 
     state.settings.tone.exposure = 1.0F;
-    id = renderer.request(state, view);
+    id = renderer.request(state, LensCorrection{}, view);
     REQUIRE(collector.waitForHistogram(id));
     const auto histograms = collector.histograms();
     REQUIRE(histograms.size() == 2);
@@ -741,11 +764,11 @@ TEST_CASE("A new source recounts the histogram", "[app][preview][histogram]") {
     app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
     renderer.setCurveHistogramWanted(true);
     renderer.setSource(makeSource());
-    auto id = renderer.request({}, app::PreviewView::wholeFrame({200, 200}));
+    auto id = renderer.request({}, LensCorrection{}, app::PreviewView::wholeFrame({200, 200}));
     REQUIRE(collector.waitForHistogram(id));
 
     renderer.setSource(makeSource());
-    id = renderer.request({}, app::PreviewView::wholeFrame({200, 200}));
+    id = renderer.request({}, LensCorrection{}, app::PreviewView::wholeFrame({200, 200}));
     REQUIRE(collector.waitForHistogram(id));
     REQUIRE(collector.histograms().size() == 2);
 }
@@ -755,7 +778,7 @@ TEST_CASE("No histogram is counted while none is wanted", "[app][preview][histog
     app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
     renderer.setSource(makeSource());
     const app::PreviewView view = app::PreviewView::wholeFrame({200, 200});
-    auto id = renderer.request({}, view);
+    auto id = renderer.request({}, LensCorrection{}, view);
     REQUIRE(collector.waitFor(id));
     std::this_thread::sleep_for(400ms);
     REQUIRE(collector.histograms().empty());
@@ -766,7 +789,7 @@ TEST_CASE("No histogram is counted while none is wanted", "[app][preview][histog
     renderer.setCurveHistogramWanted(false);
     DevelopState state;
     state.settings.tone.exposure = 1.0F;
-    id = renderer.request(state, view);
+    id = renderer.request(state, LensCorrection{}, view);
     REQUIRE(collector.waitFor(id));
     std::this_thread::sleep_for(400ms);
     REQUIRE(collector.histograms().size() == 1);
@@ -779,7 +802,8 @@ TEST_CASE("Becoming wanted counts once for the state last rendered", "[app][prev
     renderer.setSource(source);
     DevelopState state;
     state.settings.tone.exposure = 0.7F;
-    const auto id = renderer.request(state, app::PreviewView::wholeFrame({200, 200}));
+    const auto id =
+        renderer.request(state, LensCorrection{}, app::PreviewView::wholeFrame({200, 200}));
     REQUIRE(collector.waitFor(id));
     std::this_thread::sleep_for(400ms);
     REQUIRE(collector.histograms().empty());
@@ -791,7 +815,7 @@ TEST_CASE("Becoming wanted counts once for the state last rendered", "[app][prev
     REQUIRE(histograms.size() == 1);
     REQUIRE(histograms.back().request == id);
     REQUIRE(*histograms.back().curveHistogram ==
-            curveHistogram(*source, state, app::cpuCurveHistogramRequest));
+            curveHistogram(*source, state, LensCorrection{}, app::cpuCurveHistogramRequest));
 
     // Hidden and shown again with nothing changed: the histogram is still current.
     renderer.setCurveHistogramWanted(false);
@@ -876,10 +900,11 @@ TEST_CASE("A newer request cancels the render in flight, and only the newest is 
 
     // At level 0 with everything slow on: far longer than the test waits for it.
     const std::uint64_t slow =
-        renderer.request(slowState(), app::PreviewView::wholeFrame({2048, 1024}));
+        renderer.request(slowState(), LensCorrection{}, app::PreviewView::wholeFrame({2048, 1024}));
     REQUIRE(progress.waitForReport(slow));
     const auto superseded = std::chrono::steady_clock::now();
-    const std::uint64_t fast = renderer.request({}, app::PreviewView::wholeFrame({256, 128}));
+    const std::uint64_t fast =
+        renderer.request({}, LensCorrection{}, app::PreviewView::wholeFrame({256, 128}));
     REQUIRE(collector.waitFor(fast));
     const auto shown = std::chrono::steady_clock::now();
 
@@ -905,7 +930,7 @@ TEST_CASE("A burst of slow requests ends with the newest shown", "[app][preview]
     for (int i = 0; i < 6; ++i) {
         DevelopState state = slowState();
         state.settings.tone.exposure = static_cast<float>(i) * 0.1F;
-        last = renderer.request(state, app::PreviewView::wholeFrame({512, 256}));
+        last = renderer.request(state, LensCorrection{}, app::PreviewView::wholeFrame({512, 256}));
         std::this_thread::sleep_for(20ms);
     }
     REQUIRE(collector.waitFor(last));
@@ -936,7 +961,7 @@ TEST_CASE("Progress is handed on at about thirty reports a second",
     renderer.setSource(makeLargeSource());
     const auto begin = std::chrono::steady_clock::now();
     const std::uint64_t id =
-        renderer.request(slowState(), app::PreviewView::wholeFrame({1024, 512}));
+        renderer.request(slowState(), LensCorrection{}, app::PreviewView::wholeFrame({1024, 512}));
     REQUIRE(collector.waitFor(id));
     const auto took = std::chrono::steady_clock::now() - begin;
     const std::vector<Progress> reports = progress.of(id);
@@ -954,8 +979,8 @@ TEST_CASE("Destroying the renderer cancels the render in flight", "[app][preview
     renderer.emplace(collector.callback(), app::PreviewRenderer::Device::Cpu, app::AppSettings{},
                      progress.callback());
     renderer->setSource(makeLargeSource());
-    const std::uint64_t slow =
-        renderer->request(slowState(), app::PreviewView::wholeFrame({2048, 1024}));
+    const std::uint64_t slow = renderer->request(slowState(), LensCorrection{},
+                                                 app::PreviewView::wholeFrame({2048, 1024}));
     REQUIRE(progress.waitForReport(slow));
     const auto begin = std::chrono::steady_clock::now();
     renderer.reset();
@@ -974,7 +999,8 @@ TEST_CASE("A state with a brush renders a preview whichever device the renderer 
     adjustment.deltas.exposure = 1.0F;
     const DevelopState state = withLocalAdjustmentAdded(DevelopState{}, adjustment);
 
-    const std::uint64_t id = renderer.request(state, app::PreviewView::wholeFrame({100, 100}));
+    const std::uint64_t id =
+        renderer.request(state, LensCorrection{}, app::PreviewView::wholeFrame({100, 100}));
     REQUIRE(collector.waitFor(id));
     const auto results = collector.results();
     const app::PreviewResult& result = results.back();
@@ -1014,7 +1040,8 @@ TEST_CASE("A level 0 render whose brush coverage is not made delivers level 1 fi
     renderer.setSource(source);
     const DevelopState state = brushState(9001);
 
-    const std::uint64_t id = renderer.request(state, app::PreviewView::wholeFrame(fullSize));
+    const std::uint64_t id =
+        renderer.request(state, LensCorrection{}, app::PreviewView::wholeFrame(fullSize));
     REQUIRE(collector.waitForFinal(id));
     const auto results = collector.resultsOf(id);
     REQUIRE(results.size() == 2);
@@ -1031,8 +1058,9 @@ TEST_CASE("A level 0 render whose brush coverage is not made delivers level 1 fi
 
     // The level-0 image is a direct level-0 render; the stand-in a direct level-1 one.
     const RenderRequest request = app::previewRequest(fullSize);
-    REQUIRE(*own.image == app::toDisplayImage(develop(*source, state, request)));
-    REQUIRE(*coarse.image == app::toDisplayImage(develop(halved(*source), state, request)));
+    REQUIRE(*own.image == app::toDisplayImage(develop(*source, state, LensCorrection{}, request)));
+    REQUIRE(*coarse.image ==
+            app::toDisplayImage(develop(halved(*source), state, LensCorrection{}, request)));
     REQUIRE(coarse.region == own.region);
     // The stand-in comes with no thumbnail.
     REQUIRE_FALSE(coarse.thumbnail.has_value());
@@ -1048,19 +1076,19 @@ TEST_CASE("A render whose coverage is held delivers one result",
     const DevelopState state = brushState(9002);
     const app::PreviewView view = app::PreviewView::wholeFrame(fullSize);
 
-    const std::uint64_t first = renderer.request(state, view);
+    const std::uint64_t first = renderer.request(state, LensCorrection{}, view);
     REQUIRE(collector.waitForFinal(first));
     REQUIRE(collector.resultsOf(first).size() == 2);
 
     SECTION("the same request again") {
-        const std::uint64_t again = renderer.request(state, view);
+        const std::uint64_t again = renderer.request(state, LensCorrection{}, view);
         REQUIRE(collector.waitForFinal(again));
         REQUIRE(collector.resultsOf(again).size() == 1);
     }
     SECTION("a delta-only edit") {
         const DevelopState louder =
             withLocalDelta(state, state.localAdjustments[0].id, "exposure", 2.0);
-        const std::uint64_t id = renderer.request(louder, view);
+        const std::uint64_t id = renderer.request(louder, LensCorrection{}, view);
         REQUIRE(collector.waitForFinal(id));
         REQUIRE(collector.resultsOf(id).size() == 1);
     }
@@ -1068,7 +1096,7 @@ TEST_CASE("A render whose coverage is held delivers one result",
         const DevelopState more = withStrokeAppended(
             state, state.localAdjustments[0].id,
             test::straightStroke({0.1F, 0.1F}, {0.2F, 0.15F}, 5, 0.02F, 1.0F, 1.0F));
-        const std::uint64_t id = renderer.request(more, view);
+        const std::uint64_t id = renderer.request(more, LensCorrection{}, view);
         REQUIRE(collector.waitForFinal(id));
         REQUIRE(collector.resultsOf(id).size() == 1);
     }
@@ -1077,9 +1105,9 @@ TEST_CASE("A render whose coverage is held delivers one result",
             state, state.localAdjustments[0].id,
             test::straightStroke({0.1F, 0.1F}, {0.2F, 0.15F}, 5, 0.02F, 1.0F, 1.0F));
         // The intermediate request renders in full first, or the undo could only repeat the last.
-        const std::uint64_t moreId = renderer.request(more, view);
+        const std::uint64_t moreId = renderer.request(more, LensCorrection{}, view);
         REQUIRE(collector.waitForFinal(moreId));
-        const std::uint64_t id = renderer.request(state, view);
+        const std::uint64_t id = renderer.request(state, LensCorrection{}, view);
         REQUIRE(collector.waitForFinal(id));
         REQUIRE(collector.resultsOf(id).size() == 1);
     }
@@ -1094,8 +1122,8 @@ TEST_CASE("Only a level 0 render of a state with a brush gets a stand-in",
     renderer.setSource(makeMediumSource());
 
     SECTION("a view at level 1 or coarser") {
-        const std::uint64_t id =
-            renderer.request(brushState(9003), app::PreviewView::wholeFrame({512, 256}));
+        const std::uint64_t id = renderer.request(brushState(9003), LensCorrection{},
+                                                  app::PreviewView::wholeFrame({512, 256}));
         REQUIRE(collector.waitForFinal(id));
         const auto results = collector.resultsOf(id);
         REQUIRE(results.size() == 1);
@@ -1103,7 +1131,8 @@ TEST_CASE("Only a level 0 render of a state with a brush gets a stand-in",
         REQUIRE_FALSE(results[0].provisional);
     }
     SECTION("a state without a brush") {
-        const std::uint64_t id = renderer.request({}, app::PreviewView::wholeFrame(fullSize));
+        const std::uint64_t id =
+            renderer.request({}, LensCorrection{}, app::PreviewView::wholeFrame(fullSize));
         REQUIRE(collector.waitForFinal(id));
         REQUIRE(collector.resultsOf(id).size() == 1);
     }
@@ -1111,7 +1140,7 @@ TEST_CASE("Only a level 0 render of a state with a brush gets a stand-in",
         LocalAdjustment adjustment;
         adjustment.shape = BrushMask{test::paintedMask(9004, 4, test::everydayStyle, 0.5)};
         const std::uint64_t id =
-            renderer.request(withLocalAdjustmentAdded(DevelopState{}, adjustment),
+            renderer.request(withLocalAdjustmentAdded(DevelopState{}, adjustment), LensCorrection{},
                              app::PreviewView::wholeFrame(fullSize));
         REQUIRE(collector.waitForFinal(id));
         REQUIRE(collector.resultsOf(id).size() == 1);
@@ -1131,7 +1160,7 @@ TEST_CASE("The fallback beneath a region and the histogram are never provisional
     app::PreviewView view = app::PreviewView::wholeFrame({400, 300});
     view.region = QRect(100, 100, 400, 300);
 
-    const std::uint64_t id = renderer.request(state, view);
+    const std::uint64_t id = renderer.request(state, LensCorrection{}, view);
     REQUIRE(collector.waitForFinal(id));
     REQUIRE(collector.waitForBackground(id));
     REQUIRE(collector.waitForHistogram(id));
@@ -1158,8 +1187,8 @@ TEST_CASE("A source too small for a level 1 renders level 0 only",
     renderer.setStandInThreshold(0.0);
     renderer.setSource(std::make_shared<const ImageBuffer>(
         test::rainbow({500, 300}, PixelFormat::RgbaF32, workingEncoding)));
-    const std::uint64_t id =
-        renderer.request(brushState(9006), app::PreviewView::wholeFrame({500, 300}));
+    const std::uint64_t id = renderer.request(brushState(9006), LensCorrection{},
+                                              app::PreviewView::wholeFrame({500, 300}));
     REQUIRE(collector.waitForFinal(id));
     const auto results = collector.resultsOf(id);
     REQUIRE(results.size() == 1);
@@ -1188,7 +1217,8 @@ TEST_CASE("A newer request during the stand-in cancels it, and nothing provision
                                       if (!asked && request == older && older != 0) {
                                           asked = true;
                                           newer = renderer->request(
-                                              replacement, app::PreviewView::wholeFrame(fullSize));
+                                              replacement, LensCorrection{},
+                                              app::PreviewView::wholeFrame(fullSize));
                                       }
                                   });
     {
@@ -1201,7 +1231,8 @@ TEST_CASE("A newer request during the stand-in cancels it, and nothing provision
     {
         // Held so that the callback sees the id only once it is known.
         const std::scoped_lock lock(mutex);
-        id = instance.request(brushState(9007), app::PreviewView::wholeFrame(fullSize));
+        id = instance.request(brushState(9007), LensCorrection{},
+                              app::PreviewView::wholeFrame(fullSize));
         older = id;
     }
     REQUIRE(collector.waitForFinal(id + 1));
@@ -1222,19 +1253,19 @@ TEST_CASE("A brush cheap to draw gets no stand-in, whatever the threshold says",
     const app::PreviewView view = app::PreviewView::wholeFrame(fullSize);
 
     SECTION("the default threshold: a few strokes at 0.5 MP draw in a few milliseconds") {
-        const std::uint64_t id = renderer.request(brushState(9010), view);
+        const std::uint64_t id = renderer.request(brushState(9010), LensCorrection{}, view);
         REQUIRE(collector.waitForFinal(id));
         REQUIRE(collector.resultsOf(id).size() == 1);
     }
     SECTION("a threshold above the modelled time") {
         renderer.setStandInThreshold(1e6);
-        const std::uint64_t id = renderer.request(brushState(9011), view);
+        const std::uint64_t id = renderer.request(brushState(9011), LensCorrection{}, view);
         REQUIRE(collector.waitForFinal(id));
         REQUIRE(collector.resultsOf(id).size() == 1);
     }
     SECTION("a threshold of zero") {
         renderer.setStandInThreshold(0.0);
-        const std::uint64_t id = renderer.request(brushState(9012), view);
+        const std::uint64_t id = renderer.request(brushState(9012), LensCorrection{}, view);
         REQUIRE(collector.waitForFinal(id));
         REQUIRE(collector.resultsOf(id).size() == 2);
     }
@@ -1249,8 +1280,8 @@ TEST_CASE("The progress of a request with a stand-in never falls between its two
                                   progress.callback());
     renderer.setStandInThreshold(0.0);
     renderer.setSource(makeMediumSource());
-    const std::uint64_t id =
-        renderer.request(brushState(9013), app::PreviewView::wholeFrame(fullSize));
+    const std::uint64_t id = renderer.request(brushState(9013), LensCorrection{},
+                                              app::PreviewView::wholeFrame(fullSize));
     REQUIRE(collector.waitForFinal(id));
     REQUIRE(collector.resultsOf(id).size() == 2);
     const std::vector<Progress> reports = progress.of(id);
@@ -1284,9 +1315,10 @@ TEST_CASE("A Queue request lets the render in flight finish, then delivers its o
     renderer.setSource(makeSource());
     const app::PreviewView view = app::PreviewView::wholeFrame({256, 128});
     gate.close();
-    const std::uint64_t first = renderer.request(exposureState(0.1F), view);
+    const std::uint64_t first = renderer.request(exposureState(0.1F), LensCorrection{}, view);
     REQUIRE(gate.waitHeld());
-    const std::uint64_t second = renderer.request(exposureState(0.2F), view, app::Supersede::Queue);
+    const std::uint64_t second =
+        renderer.request(exposureState(0.2F), LensCorrection{}, view, app::Supersede::Queue);
     gate.open();
     REQUIRE(collector.waitFor(second));
 
@@ -1309,11 +1341,14 @@ TEST_CASE("Three Queue requests during one render deliver the first and the last
     renderer.setSource(makeSource());
     const app::PreviewView view = app::PreviewView::wholeFrame({256, 128});
     gate.close();
-    const std::uint64_t first = renderer.request(exposureState(0.1F), view);
+    const std::uint64_t first = renderer.request(exposureState(0.1F), LensCorrection{}, view);
     REQUIRE(gate.waitHeld());
-    const std::uint64_t second = renderer.request(exposureState(0.2F), view, app::Supersede::Queue);
-    const std::uint64_t third = renderer.request(exposureState(0.3F), view, app::Supersede::Queue);
-    const std::uint64_t fourth = renderer.request(exposureState(0.4F), view, app::Supersede::Queue);
+    const std::uint64_t second =
+        renderer.request(exposureState(0.2F), LensCorrection{}, view, app::Supersede::Queue);
+    const std::uint64_t third =
+        renderer.request(exposureState(0.3F), LensCorrection{}, view, app::Supersede::Queue);
+    const std::uint64_t fourth =
+        renderer.request(exposureState(0.4F), LensCorrection{}, view, app::Supersede::Queue);
     gate.open();
     REQUIRE(collector.waitFor(fourth));
 
@@ -1335,10 +1370,11 @@ TEST_CASE("A Cancel request after a Queue one cancels the render in flight as be
     renderer.setSource(makeSource());
     const app::PreviewView view = app::PreviewView::wholeFrame({256, 128});
     gate.close();
-    const std::uint64_t first = renderer.request(exposureState(0.1F), view);
+    const std::uint64_t first = renderer.request(exposureState(0.1F), LensCorrection{}, view);
     REQUIRE(gate.waitHeld());
-    const std::uint64_t second = renderer.request(exposureState(0.2F), view, app::Supersede::Queue);
-    const std::uint64_t third = renderer.request(exposureState(0.3F), view);
+    const std::uint64_t second =
+        renderer.request(exposureState(0.2F), LensCorrection{}, view, app::Supersede::Queue);
+    const std::uint64_t third = renderer.request(exposureState(0.3F), LensCorrection{}, view);
     gate.open();
     REQUIRE(collector.waitFor(third));
 
@@ -1358,13 +1394,14 @@ TEST_CASE("A Cancel request before a Queue one still cancels the render in fligh
     renderer.setSource(makeSource());
     const app::PreviewView view = app::PreviewView::wholeFrame({256, 128});
     gate.close();
-    const std::uint64_t first = renderer.request(exposureState(0.1F), view);
+    const std::uint64_t first = renderer.request(exposureState(0.1F), LensCorrection{}, view);
     REQUIRE(gate.waitHeld());
     // The worker is held inside its render, so the Cancel request cancels that render directly.
     // The sticky flag for a Cancel request that lands between taking a job and starting its
     // channel is not reached here: it has no test hook.
-    (void)renderer.request(exposureState(0.2F), view);
-    const std::uint64_t last = renderer.request(exposureState(0.3F), view, app::Supersede::Queue);
+    (void)renderer.request(exposureState(0.2F), LensCorrection{}, view);
+    const std::uint64_t last =
+        renderer.request(exposureState(0.3F), LensCorrection{}, view, app::Supersede::Queue);
     gate.open();
     REQUIRE(collector.waitFor(last));
 
@@ -1381,13 +1418,14 @@ TEST_CASE("A Queue request cancels a fallback refresh in flight", "[app][preview
     app::PreviewView region = app::PreviewView::wholeFrame({256, 128});
     region.region = QRect(0, 0, 512, 256);
     // The fallback of this state is slow: far longer than the test waits for it.
-    const std::uint64_t first = renderer.request(slowState(), region);
+    const std::uint64_t first = renderer.request(slowState(), LensCorrection{}, region);
     REQUIRE(collector.waitFor(first));
     // The refresh starts once requests pause (150 ms); it has no progress to wait on, so the
     // pause is waited out. Were it not yet started, the request would still end it.
     std::this_thread::sleep_for(400ms);
     const auto begin = std::chrono::steady_clock::now();
-    const std::uint64_t second = renderer.request({}, region, app::Supersede::Queue);
+    const std::uint64_t second =
+        renderer.request({}, LensCorrection{}, region, app::Supersede::Queue);
     REQUIRE(collector.waitFor(second));
     REQUIRE(std::chrono::steady_clock::now() - begin < 5s);
     // The second request's own refresh may follow; the first's must not.
@@ -1402,15 +1440,16 @@ TEST_CASE("A Queue request cancels a histogram count in flight",
     app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
     renderer.setCurveHistogramWanted(true);
     renderer.setSource(makeLargeSource());
-    const std::uint64_t first =
-        renderer.request(exposureState(0.4F), app::PreviewView::wholeFrame({300, 300}));
+    const std::uint64_t first = renderer.request(exposureState(0.4F), LensCorrection{},
+                                                 app::PreviewView::wholeFrame({300, 300}));
     REQUIRE(collector.waitFor(first));
     // The count starts once requests pause (150 ms) and is too quick to be caught in flight
     // reliably, so this only checks that a Queue request around it still ends with a histogram for
     // the newest request.
     std::this_thread::sleep_for(150ms);
-    const std::uint64_t second = renderer.request(
-        exposureState(0.5F), app::PreviewView::wholeFrame({300, 300}), app::Supersede::Queue);
+    const std::uint64_t second =
+        renderer.request(exposureState(0.5F), LensCorrection{},
+                         app::PreviewView::wholeFrame({300, 300}), app::Supersede::Queue);
     REQUIRE(collector.waitFor(second));
     REQUIRE(collector.waitForHistogram(second));
     const auto histograms = collector.histograms();
@@ -1423,10 +1462,11 @@ TEST_CASE("A request with no thumbnail edge delivers no thumbnail", "[app][previ
     renderer.setSource(makeSource());
     app::PreviewView view = app::PreviewView::wholeFrame({256, 128});
     view.thumbnailEdge = 0;
-    const std::uint64_t without = renderer.request(exposureState(0.1F), view);
+    const std::uint64_t without = renderer.request(exposureState(0.1F), LensCorrection{}, view);
     REQUIRE(collector.waitFor(without));
     view.thumbnailEdge = 64;
-    const std::uint64_t with = renderer.request(exposureState(0.2F), view, app::Supersede::Queue);
+    const std::uint64_t with =
+        renderer.request(exposureState(0.2F), LensCorrection{}, view, app::Supersede::Queue);
     REQUIRE(collector.waitFor(with));
 
     REQUIRE_FALSE(collector.resultsOf(without).at(0).thumbnail.has_value());
@@ -1447,12 +1487,13 @@ TEST_CASE("The newest of a mixed run of requests always ends with a result",
         renderer.setSource(makeSource());
         const app::PreviewView view = app::PreviewView::wholeFrame({256, 128});
         gate.close();
-        (void)renderer.request(exposureState(0.1F), view);
+        (void)renderer.request(exposureState(0.1F), LensCorrection{}, view);
         REQUIRE(gate.waitHeld());
         std::uint64_t last = 0;
         for (int i = 0; i < 6; ++i) {
             const bool queue = i == 5 ? endWithQueue : i % 3 != 2;
-            last = renderer.request(exposureState(0.2F + static_cast<float>(i) * 0.1F), view,
+            last = renderer.request(exposureState(0.2F + static_cast<float>(i) * 0.1F),
+                                    LensCorrection{}, view,
                                     queue ? app::Supersede::Queue : app::Supersede::Cancel);
         }
         gate.open();
@@ -1467,4 +1508,87 @@ TEST_CASE("The newest of a mixed run of requests always ends with a result",
             previous = result.request;
         }
     }
+}
+
+TEST_CASE("A lens toggle resumes from the Denoise rung, a develop edit from the Lens rung, and the "
+          "pass reports its step",
+          "[app][preview][lens]") {
+    Collector collector;
+    std::mutex stepsMutex;
+    std::vector<std::pair<std::uint64_t, ProgressStep>> steps;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu, {},
+                                  [&](std::uint64_t request, const Progress& progress) {
+                                      const std::scoped_lock lock(stepsMutex);
+                                      steps.emplace_back(request, progress.step);
+                                  });
+    renderer.setSource(makeSource());
+    // Colour noise reduction on, so that there is a Denoise rung to resume from.
+    DevelopState state;
+    state.settings.noiseReduction.color = 40.0F;
+    const LensCorrection barrel = test::barrelCorrection(-0.08F, 2.0);
+
+    const std::uint64_t plain =
+        renderer.request(state, LensCorrection{}, app::PreviewView::wholeFrame({256, 128}));
+    REQUIRE(collector.waitForFinal(plain));
+    const std::uint64_t toggled =
+        renderer.request(state, barrel, app::PreviewView::wholeFrame({256, 128}));
+    REQUIRE(collector.waitForFinal(toggled));
+    DevelopState edited = state;
+    edited.settings.tone.exposure = 0.5F;
+    const std::uint64_t developed =
+        renderer.request(edited, barrel, app::PreviewView::wholeFrame({256, 128}));
+    REQUIRE(collector.waitForFinal(developed));
+
+    const auto first = collector.resultsOf(plain).back();
+    const auto second = collector.resultsOf(toggled).back();
+    const auto third = collector.resultsOf(developed).back();
+    for (const auto& result : {first, second, third}) {
+        REQUIRE(result.error.empty());
+        REQUIRE(result.image.has_value());
+    }
+    // The toggle costs the Lens pass and what follows, never the pixels before it.
+    CHECK_FALSE(first.resumedFrom.has_value());
+    CHECK(second.resumedFrom == Stage::Denoise);
+    CHECK(third.resumedFrom == Stage::Lens);
+    // It is another picture, and it is the library's.
+    CHECK(*second.image != *first.image);
+    const ImageBuffer expected =
+        develop(*makeSource(), state, barrel, app::previewRequest({256, 128}));
+    CHECK(*second.image == app::toDisplayImage(expected));
+
+    const std::scoped_lock lock(stepsMutex);
+    CHECK(std::ranges::any_of(steps, [&](const auto& step) {
+        return step.first == toggled && step.second == ProgressStep::Lens;
+    }));
+    CHECK(std::ranges::none_of(steps, [&](const auto& step) {
+        return step.first == developed && step.second == ProgressStep::Lens;
+    }));
+}
+
+TEST_CASE("A lens correction cancels like any stage, and the next request resumes",
+          "[app][preview][lens]") {
+    Collector collector;
+    test::ProgressGate gate;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu, {},
+                                  gate.callback());
+    renderer.setSource(makeLargeSource());
+    DevelopState state;
+    state.settings.noiseReduction.color = 40.0F;
+    const LensCorrection barrel = test::barrelCorrection(-0.08F, 2.0);
+
+    gate.close();
+    const std::uint64_t held =
+        renderer.request(state, barrel, app::PreviewView::wholeFrame({512, 512}));
+    REQUIRE(gate.waitHeld());
+    // A newer request while the render is held cancels it; it delivers nothing.
+    DevelopState edited = state;
+    edited.settings.tone.exposure = 0.5F;
+    const std::uint64_t newer =
+        renderer.request(edited, barrel, app::PreviewView::wholeFrame({512, 512}));
+    gate.open();
+    REQUIRE(collector.waitForFinal(newer));
+    CHECK(collector.resultsOf(held).empty());
+    const auto result = collector.resultsOf(newer).back();
+    CHECK(result.error.empty());
+    CHECK(result.image.has_value());
 }

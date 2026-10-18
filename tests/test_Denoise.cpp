@@ -185,13 +185,13 @@ TEST_CASE("With every amount at zero noise reduction does not exist", "[denoise]
     const DevelopSettings colourWithoutSmoothness = noiseSettings(0.0F, 60.0F, 50.0F, 0.0F);
 
     for (const DevelopSettings& settings : {shaped, colourWithoutSmoothness}) {
-        const ProcessingPlan plan = planFor(source, DevelopState{settings});
+        const ProcessingPlan plan = planFor(source, DevelopState{settings}, LensCorrection{});
         REQUIRE(plan.denoise == DenoisePlan{});
         REQUIRE_FALSE(plan.denoise.active());
         REQUIRE_FALSE(reducesNoise(settings.noiseReduction));
-        REQUIRE(plan == planFor(source, DevelopState{}));
-        REQUIRE(
-            sameBytes(develop(source, DevelopState{settings}), develop(source, DevelopState{})));
+        REQUIRE(plan == planFor(source, DevelopState{}, LensCorrection{}));
+        REQUIRE(sameBytes(develop(source, DevelopState{settings}, LensCorrection{}),
+                          develop(source, DevelopState{}, LensCorrection{})));
     }
 
     SECTION("the front ends' predicate agrees with the plan") {
@@ -200,13 +200,14 @@ TEST_CASE("With every amount at zero noise reduction does not exist", "[denoise]
               noiseSettings(0.0F, 1.0F, 50.0F, 0.0F), noiseSettings(0.0F, 0.0F, 0.0F, 100.0F),
               noiseSettings(250.0F, -5.0F)}) {
             REQUIRE(reducesNoise(settings.noiseReduction) ==
-                    planFor(source, DevelopState{settings}).denoise.active());
+                    planFor(source, DevelopState{settings}, LensCorrection{}).denoise.active());
         }
     }
 
     SECTION("a checkpoint at the boundary holds the source as it stands") {
         const ImageBuffer u16 = test::rainbow({9, 7}, PixelFormat::RgbaU16, workingEncoding);
-        const RenderCheckpoint denoised = developUntil(u16, DevelopState{shaped}, Stage::Denoise);
+        const RenderCheckpoint denoised =
+            developUntil(u16, DevelopState{shaped}, LensCorrection{}, Stage::Denoise);
         REQUIRE(denoised.boundary() == Stage::Denoise);
         const ImageBuffer held = denoised.readBack();
         REQUIRE(held.format() == PixelFormat::RgbaF32);
@@ -235,8 +236,8 @@ TEST_CASE("Colour noise reduction keeps every pixel's luminance", "[denoise]") {
         samples[6] = 0.0F;
     }
     for (const float strength : {30.0F, 100.0F}) {
-        const ProcessingPlan plan =
-            planFor(source, DevelopState{noiseSettings(0.0F, strength, 50.0F, 60.0F)});
+        const ProcessingPlan plan = planFor(
+            source, DevelopState{noiseSettings(0.0F, strength, 50.0F, 60.0F)}, LensCorrection{});
         REQUIRE(plan.denoise.color);
         REQUIRE_FALSE(plan.denoise.luminance);
         const ImageBuffer denoised = applyDenoise(source, plan.denoise);
@@ -260,7 +261,7 @@ TEST_CASE("Colour noise reduction smooths chroma noise on a flat patch", "[denoi
     // the chroma: each channel over the pixel's luminance.
     const ImageBuffer source = chromaNoise({64, 48}, 0.5F);
     const ProcessingPlan plan =
-        planFor(source, DevelopState{noiseSettings(0.0F, 100.0F, 50.0F, 50.0F)});
+        planFor(source, DevelopState{noiseSettings(0.0F, 100.0F, 50.0F, 50.0F)}, LensCorrection{});
     const ImageBuffer denoised = applyDenoise(source, plan.denoise);
     for (std::size_t channel = 0; channel < 3; ++channel) {
         INFO("channel " << channel);
@@ -273,7 +274,7 @@ TEST_CASE("The bilateral smooths a flat noisy patch and keeps a step edge", "[de
     const ImageSize size{64, 40};
     const ImageBuffer source = noisyStep(size, 0.04F);
     const ProcessingPlan plan =
-        planFor(source, DevelopState{noiseSettings(100.0F, 0.0F, 50.0F, 50.0F)});
+        planFor(source, DevelopState{noiseSettings(100.0F, 0.0F, 50.0F, 50.0F)}, LensCorrection{});
     REQUIRE(plan.denoise.luminance);
     REQUIRE(plan.denoise.spatialRadius == 6);
     const ImageBuffer denoised = applyDenoise(source, plan.denoise);
@@ -294,8 +295,8 @@ TEST_CASE("The bilateral smooths a flat noisy patch and keeps a step edge", "[de
     }
 
     SECTION("a higher Detail keeps more of the noise") {
-        const ProcessingPlan tight =
-            planFor(source, DevelopState{noiseSettings(100.0F, 0.0F, 100.0F, 50.0F)});
+        const ProcessingPlan tight = planFor(
+            source, DevelopState{noiseSettings(100.0F, 0.0F, 100.0F, 50.0F)}, LensCorrection{});
         const ImageBuffer kept = applyDenoise(source, tight.denoise);
         REQUIRE(varianceOf(kept, 2, 24, 1) > varianceOf(denoised, 2, 24, 1));
     }
@@ -312,8 +313,8 @@ TEST_CASE("White balance and exposure never reach the denoise group", "[denoise]
     moved.color.temperature = 3500.0F;
     moved.color.tint = 20.0F;
 
-    const ProcessingPlan first = planFor(source, DevelopState{base});
-    const ProcessingPlan second = planFor(source, DevelopState{moved});
+    const ProcessingPlan first = planFor(source, DevelopState{base}, LensCorrection{});
+    const ProcessingPlan second = planFor(source, DevelopState{moved}, LensCorrection{});
     REQUIRE(first.denoise.active());
     REQUIRE(first.denoise == second.denoise);
     REQUIRE(std::get<0>(stagesOf(first)) == std::get<0>(stagesOf(second)));
@@ -321,10 +322,11 @@ TEST_CASE("White balance and exposure never reach the denoise group", "[denoise]
     REQUIRE_FALSE(prefixMatches(first, second, Stage::Pointwise));
 
     // The checkpoint therefore survives both edits, and resuming equals a fresh render.
-    const RenderCheckpoint denoised = developUntil(source, DevelopState{base}, Stage::Denoise);
+    const RenderCheckpoint denoised =
+        developUntil(source, DevelopState{base}, LensCorrection{}, Stage::Denoise);
     const RenderCheckpoint resumed =
-        resumeFrom(denoised, source, DevelopState{moved}, Stage::Effects);
-    REQUIRE(sameBytes(resumed.readBack(), develop(source, DevelopState{moved})));
+        resumeFrom(denoised, source, DevelopState{moved}, LensCorrection{}, Stage::Effects);
+    REQUIRE(sameBytes(resumed.readBack(), develop(source, DevelopState{moved}, LensCorrection{})));
 
     // The row is the camera's own, and a neutral of unit luminance has luminance one.
     const float neutralLuma = first.denoise.lumaRow[0] * first.denoise.neutral[0] +
@@ -384,17 +386,17 @@ TEST_CASE("A reduced source divides the radii by its pixel scale", "[denoise][pr
     DevelopSettings on;
     on.noiseReduction = settings;
     ImageBuffer source = chromaNoise({16, 12}, 0.2F);
-    REQUIRE(planFor(source, DevelopState{on}).denoise == full);
+    REQUIRE(planFor(source, DevelopState{on}, LensCorrection{}).denoise == full);
     source.setPixelScale(4.0);
-    REQUIRE(planFor(source, DevelopState{on}).denoise == quarter);
-    REQUIRE(planFor(source, DevelopState{}) ==
-            planFor(chromaNoise({16, 12}, 0.2F), DevelopState{}));
+    REQUIRE(planFor(source, DevelopState{on}, LensCorrection{}).denoise == quarter);
+    REQUIRE(planFor(source, DevelopState{}, LensCorrection{}) ==
+            planFor(chromaNoise({16, 12}, 0.2F), DevelopState{}, LensCorrection{}));
     // Two halvings make the same quarter, whoever asks for the render.
     const ImageBuffer level2 = halved(halved(chromaNoise({64, 48}, 0.2F)));
     REQUIRE(level2.pixelScale() == 4.0);
-    REQUIRE(planFor(level2, DevelopState{on}).denoise == quarter);
-    REQUIRE(planFor(level2, DevelopState{on}, {.size = RenderRequest::Scale{0.5}}).denoise ==
-            quarter);
+    REQUIRE(planFor(level2, DevelopState{on}, LensCorrection{}).denoise == quarter);
+    REQUIRE(planFor(level2, DevelopState{on}, LensCorrection{}, {.size = RenderRequest::Scale{0.5}})
+                .denoise == quarter);
 
     SECTION("a level's colour smoothing approximates the full render's, reduced") {
         // The grid is the same in sensor pixels, so a reduced copy denoised at
@@ -403,14 +405,14 @@ TEST_CASE("A reduced source divides the radii by its pixel scale", "[denoise][pr
         // is the colour blur alone.
         const ImageBuffer large = flatLumaChromaNoise({128, 96}, 0.6F);
         DevelopSettings colour = noiseSettings(0.0F, 100.0F, 50.0F, 60.0F);
-        const ImageBuffer fullThenHalved =
-            halved(applyDenoise(large, planFor(large, DevelopState{colour}).denoise));
+        const ImageBuffer fullThenHalved = halved(
+            applyDenoise(large, planFor(large, DevelopState{colour}, LensCorrection{}).denoise));
         const ImageBuffer reduced = halved(large);
         const ImageBuffer halvedThenDenoised =
-            applyDenoise(reduced, planFor(reduced, DevelopState{colour}).denoise);
+            applyDenoise(reduced, planFor(reduced, DevelopState{colour}, LensCorrection{}).denoise);
         // The rejected alternative: a grid that is always a quarter of the
         // level, so that the reduced copy blurs twice as far in sensor pixels.
-        DenoisePlan quarterOfLevel = planFor(large, DevelopState{colour}).denoise;
+        DenoisePlan quarterOfLevel = planFor(large, DevelopState{colour}, LensCorrection{}).denoise;
         quarterOfLevel.gridReduction = colorNoiseGridReduction;
         const ImageBuffer fixedQuarter = applyDenoise(reduced, quarterOfLevel);
         const auto worstAgainst = [&](const ImageBuffer& other) {
@@ -439,17 +441,18 @@ TEST_CASE("A half-size decode develops with half the reach", "[denoise][preview]
     REQUIRE(halfSize.size() == ImageSize{16, 12});
     REQUIRE(halfSize.pixelScale() == 2.0);
     const DevelopState state{noiseSettings(50.0F, 50.0F)};
-    const DenoisePlan plan = planFor(halfSize, state).denoise;
+    const DenoisePlan plan = planFor(halfSize, state, LensCorrection{}).denoise;
     REQUIRE(plan.spatialSigma == luminanceNoiseSpatialSigma / 2.0F);
     REQUIRE(plan.spatialRadius == 3);
     REQUIRE(plan.gridReduction == 2);
     const ImageBuffer level1 = halved(halfSize);
     REQUIRE(level1.pixelScale() == 4.0);
-    REQUIRE(planFor(level1, state).denoise.spatialRadius == 2);
-    REQUIRE(planFor(level1, state).denoise.gridReduction == 1);
+    REQUIRE(planFor(level1, state, LensCorrection{}).denoise.spatialRadius == 2);
+    REQUIRE(planFor(level1, state, LensCorrection{}).denoise.gridReduction == 1);
     // Developing keeps the scale up to the resize, which multiplies it by the reduction.
-    REQUIRE(develop(halfSize, state).pixelScale() == 2.0);
-    REQUIRE(develop(halfSize, state, {.size = RenderRequest::Scale{0.5}}).pixelScale() == 4.0);
+    REQUIRE(develop(halfSize, state, LensCorrection{}).pixelScale() == 2.0);
+    REQUIRE(develop(halfSize, state, LensCorrection{}, {.size = RenderRequest::Scale{0.5}})
+                .pixelScale() == 4.0);
 }
 
 TEST_CASE("A region render is the crop of the whole render", "[denoise][region]") {
@@ -457,10 +460,10 @@ TEST_CASE("A region render is the crop of the whole render", "[denoise][region]"
     // source, so a region needs no margin of its own (ADR 025, ADR 039).
     const ImageBuffer source = chromaNoise({40, 30}, 0.5F);
     const DevelopState state{noiseSettings(70.0F, 80.0F, 40.0F, 30.0F)};
-    const ImageBuffer whole = develop(source, state);
+    const ImageBuffer whole = develop(source, state, LensCorrection{});
     RenderRequest request;
     request.region = RenderRequest::Region{.left = 0.25, .top = 0.2, .right = 0.75, .bottom = 0.7};
-    const ImageBuffer part = develop(source, state, request);
+    const ImageBuffer part = develop(source, state, LensCorrection{}, request);
     REQUIRE(part.size() == ImageSize{20, 15});
     const auto in = whole.samples<float>();
     const auto out = part.samples<float>();
@@ -475,8 +478,8 @@ TEST_CASE("A region render is the crop of the whole render", "[denoise][region]"
     // The same on a reduced source, whose scale the region keeps.
     ImageBuffer reduced = source.clone();
     reduced.setPixelScale(2.0);
-    const ImageBuffer reducedWhole = develop(reduced, state);
-    const ImageBuffer reducedPart = develop(reduced, state, request);
+    const ImageBuffer reducedWhole = develop(reduced, state, LensCorrection{});
+    const ImageBuffer reducedPart = develop(reduced, state, LensCorrection{}, request);
     REQUIRE(reducedPart.pixelScale() == 2.0);
     const auto reducedIn = reducedWhole.samples<float>();
     const auto reducedOut = reducedPart.samples<float>();
@@ -489,7 +492,7 @@ TEST_CASE("A region render is the crop of the whole render", "[denoise][region]"
         }
     }
     // What a render restricted to the region would need around it.
-    const ProcessingPlan plan = planFor(source, state);
+    const ProcessingPlan plan = planFor(source, state, LensCorrection{});
     REQUIRE(denoiseReach(plan.denoise) ==
             std::max(plan.denoise.spatialRadius,
                      (plan.denoise.colorRadius + 2) * plan.denoise.gridReduction));
@@ -499,48 +502,59 @@ TEST_CASE("A region render is the crop of the whole render", "[denoise][region]"
 TEST_CASE("Renders stop and resume at the denoise boundary", "[denoise][resume]") {
     const ImageBuffer source = chromaNoise({24, 18}, 0.4F);
     const DevelopState state{noiseSettings(50.0F, 60.0F)};
-    const ImageBuffer direct = develop(source, state);
+    const ImageBuffer direct = develop(source, state, LensCorrection{});
 
-    const RenderCheckpoint denoised = developUntil(source, state, Stage::Denoise);
+    const RenderCheckpoint denoised = developUntil(source, state, LensCorrection{}, Stage::Denoise);
     REQUIRE(denoised.boundary() == Stage::Denoise);
     REQUIRE(denoised.size() == source.size());
     REQUIRE(denoised.encoding() == source.encoding());
-    REQUIRE(sameBytes(denoised.readBack(), applyDenoise(source, planFor(source, state).denoise)));
-    REQUIRE(sameBytes(resumeFrom(denoised, source, state, Stage::Effects).readBack(), direct));
-    REQUIRE(sameBytes(developUntil(source, state, Stage::Effects).readBack(), direct));
+    REQUIRE(sameBytes(denoised.readBack(),
+                      applyDenoise(source, planFor(source, state, LensCorrection{}).denoise)));
+    REQUIRE(sameBytes(
+        resumeFrom(denoised, source, state, LensCorrection{}, Stage::Effects).readBack(), direct));
+    REQUIRE(sameBytes(developUntil(source, state, LensCorrection{}, Stage::Effects).readBack(),
+                      direct));
 
     // A tone edit keeps it; a noise reduction edit or another level does not.
     DevelopSettings toned = state.settings;
     toned.tone.exposure = 0.7F;
-    REQUIRE(sameBytes(resumeFrom(denoised, source, DevelopState{toned}, Stage::Effects).readBack(),
-                      develop(source, DevelopState{toned})));
+    REQUIRE(sameBytes(
+        resumeFrom(denoised, source, DevelopState{toned}, LensCorrection{}, Stage::Effects)
+            .readBack(),
+        develop(source, DevelopState{toned}, LensCorrection{})));
     DevelopSettings stronger = state.settings;
     stronger.noiseReduction.color = 90.0F;
-    REQUIRE_THROWS_AS(resumeFrom(denoised, source, DevelopState{stronger}, Stage::Pointwise),
-                      std::invalid_argument);
+    REQUIRE_THROWS_AS(
+        resumeFrom(denoised, source, DevelopState{stronger}, LensCorrection{}, Stage::Pointwise),
+        std::invalid_argument);
     // Pixels of another scale make another denoise group.
     ImageBuffer otherScale = source.clone();
     otherScale.setPixelScale(2.0);
-    REQUIRE_THROWS_AS(resumeFrom(denoised, otherScale, state, Stage::Pointwise),
+    REQUIRE_THROWS_AS(resumeFrom(denoised, otherScale, state, LensCorrection{}, Stage::Pointwise),
                       std::invalid_argument);
 
     // Stopping earlier than a checkpoint is refused, as at every boundary.
-    const RenderCheckpoint pointwise = developUntil(source, state, Stage::Pointwise);
-    REQUIRE_THROWS_AS(resumeFrom(pointwise, source, state, Stage::Denoise), std::invalid_argument);
+    const RenderCheckpoint pointwise =
+        developUntil(source, state, LensCorrection{}, Stage::Pointwise);
+    REQUIRE_THROWS_AS(resumeFrom(pointwise, source, state, LensCorrection{}, Stage::Denoise),
+                      std::invalid_argument);
     // A denoise checkpoint resumed at its own boundary is itself.
-    REQUIRE(resumeFrom(denoised, source, state, Stage::Denoise).boundary() == Stage::Denoise);
+    REQUIRE(resumeFrom(denoised, source, state, LensCorrection{}, Stage::Denoise).boundary() ==
+            Stage::Denoise);
     // Another source size is refused by the size check.
     const ImageBuffer other = chromaNoise({20, 18}, 0.4F);
-    REQUIRE_THROWS_AS(resumeFrom(denoised, other, state, Stage::Pointwise), std::invalid_argument);
+    REQUIRE_THROWS_AS(resumeFrom(denoised, other, state, LensCorrection{}, Stage::Pointwise),
+                      std::invalid_argument);
 }
 
 TEST_CASE("A sample at the curve input sees the denoised source", "[denoise][sample]") {
     const ImageBuffer source = chromaNoise({16, 12}, 0.5F);
     const DevelopState off{};
     const DevelopState on{noiseSettings(80.0F, 80.0F)};
-    REQUIRE_FALSE(
-        sameBytes(sample(source, off, Tap::CurveInput), sample(source, on, Tap::CurveInput)));
-    REQUIRE_FALSE(sameAtTap(planFor(source, off), planFor(source, on), Tap::CurveInput));
+    REQUIRE_FALSE(sameBytes(sample(source, off, LensCorrection{}, Tap::CurveInput),
+                            sample(source, on, LensCorrection{}, Tap::CurveInput)));
+    REQUIRE_FALSE(sameAtTap(planFor(source, off, LensCorrection{}),
+                            planFor(source, on, LensCorrection{}), Tap::CurveInput));
 }
 
 TEST_CASE("Noise reduction refuses what it cannot resolve", "[denoise]") {
@@ -559,7 +573,8 @@ TEST_CASE("The threaded CPU pass gives the single-threaded bits", "[denoise][thr
     // Large enough for several bands, odd so the bands are uneven, with the
     // radius reaching across band edges.
     const ImageBuffer source = chromaNoise({517, 509}, 0.5F);
-    const DenoisePlan plan = planFor(source, DevelopState{noiseSettings(60.0F, 70.0F)}).denoise;
+    const DenoisePlan plan =
+        planFor(source, DevelopState{noiseSettings(60.0F, 70.0F)}, LensCorrection{}).denoise;
     // Set, so that the test splits even on a machine of one thread.
     const auto denoisedWith = [&](std::uint32_t limit) {
         const test::ScopedRowBandLimit scoped(limit);

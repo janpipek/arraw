@@ -100,7 +100,7 @@ TEST_CASE("A curve-input sample is the chain up to Basic Tone, perceptually enco
         DYNAMIC_SECTION(name) {
             const ImageBuffer source = loadImage(test::fixture(name));
             const DevelopState state{toned()};
-            const ImageBuffer tapped = sample(source, state, Tap::CurveInput);
+            const ImageBuffer tapped = sample(source, state, LensCorrection{}, Tap::CurveInput);
 
             REQUIRE(tapped.format() == workingFormat);
             REQUIRE(std::get<NamedEncoding>(tapped.encoding()) == perceptualEncoding);
@@ -108,7 +108,7 @@ TEST_CASE("A curve-input sample is the chain up to Basic Tone, perceptually enco
 
             // The stages spelled out here rather than through developToCurveInput,
             // so that a change to the tap's composition fails.
-            const ProcessingPlan plan = planFor(source, state);
+            const ProcessingPlan plan = planFor(source, state, LensCorrection{});
             const ImageBuffer floats = toRgbaF32(source);
             const auto in = floats.samples<float>();
             const auto out = tapped.samples<float>();
@@ -143,8 +143,9 @@ TEST_CASE("A curve-input sample covers the frame and size a render does", "[deve
         const RenderRequest request{.size = RenderRequest::FitInside{17, 17},
                                     .region = RenderRequest::Region{0.1, 0.0, 1.0, 0.9},
                                     .filter = filter};
-        const ImageBuffer developed = develop(source, state, request);
-        const ImageBuffer tapped = sample(source, state, Tap::CurveInput, request);
+        const ImageBuffer developed = develop(source, state, LensCorrection{}, request);
+        const ImageBuffer tapped =
+            sample(source, state, LensCorrection{}, Tap::CurveInput, request);
         REQUIRE(tapped.size() == developed.size());
         REQUIRE(tapped.orientation() == ImageOrientation::Normal);
         const auto want = developed.samples<float>();
@@ -166,12 +167,13 @@ TEST_CASE("The curve-input tap ignores everything after it", "[develop][sample][
             const ImageBuffer source = loadImage(test::fixture(name));
             const DevelopState before{toned()};
             const DevelopState after{afterTheTap(toned())};
-            REQUIRE_FALSE(develop(source, before).samples<float>()[0] ==
-                          develop(source, after).samples<float>()[0]);
+            REQUIRE_FALSE(develop(source, before, LensCorrection{}).samples<float>()[0] ==
+                          develop(source, after, LensCorrection{}).samples<float>()[0]);
 
-            REQUIRE(sameBits(sample(source, before, Tap::CurveInput),
-                             sample(source, after, Tap::CurveInput)));
-            REQUIRE(curveHistogram(source, before) == curveHistogram(source, after));
+            REQUIRE(sameBits(sample(source, before, LensCorrection{}, Tap::CurveInput),
+                             sample(source, after, LensCorrection{}, Tap::CurveInput)));
+            REQUIRE(curveHistogram(source, before, LensCorrection{}) ==
+                    curveHistogram(source, after, LensCorrection{}));
         }
     }
 }
@@ -179,7 +181,7 @@ TEST_CASE("The curve-input tap ignores everything after it", "[develop][sample][
 TEST_CASE("The curve-input tap follows exposure, white balance and Basic Tone",
           "[develop][sample][histogram]") {
     const ImageBuffer source = loadImage(test::fixture(neutralFixture));
-    const CurveHistogram base = curveHistogram(source, DevelopState{});
+    const CurveHistogram base = curveHistogram(source, DevelopState{}, LensCorrection{});
 
     DevelopSettings exposed;
     exposed.tone.exposure = 1.0F;
@@ -190,10 +192,10 @@ TEST_CASE("The curve-input tap follows exposure, white balance and Basic Tone",
     warm.color.temperature = 3000.0F;
     warm.color.tint = 20.0F;
 
-    const CurveHistogram brighter = curveHistogram(source, DevelopState{exposed});
+    const CurveHistogram brighter = curveHistogram(source, DevelopState{exposed}, LensCorrection{});
     REQUIRE(brighter != base);
-    REQUIRE(curveHistogram(source, DevelopState{contrasty}) != base);
-    const CurveHistogram balanced = curveHistogram(source, DevelopState{warm});
+    REQUIRE(curveHistogram(source, DevelopState{contrasty}, LensCorrection{}) != base);
+    const CurveHistogram balanced = curveHistogram(source, DevelopState{warm}, LensCorrection{});
     REQUIRE(balanced.red != base.red);
     REQUIRE(balanced.blue != base.blue);
 
@@ -213,19 +215,22 @@ TEST_CASE("The curve-input tap follows exposure, white balance and Basic Tone",
 TEST_CASE("A sample refuses what a render refuses, and taps that do not exist",
           "[develop][sample]") {
     const ImageBuffer card = loadImage(test::fixture(testCard));
-    REQUIRE_THROWS_AS(sample(card, {}, static_cast<Tap>(7)), std::invalid_argument);
+    REQUIRE_THROWS_AS(sample(card, {}, LensCorrection{}, static_cast<Tap>(7)),
+                      std::invalid_argument);
     const auto srgb = test::rainbow({2, 2}, PixelFormat::RgbaU8, NamedEncoding::Srgb);
-    REQUIRE_THROWS_AS(sample(srgb, {}, Tap::CurveInput), std::invalid_argument);
+    REQUIRE_THROWS_AS(sample(srgb, {}, LensCorrection{}, Tap::CurveInput), std::invalid_argument);
     const RenderRequest badRegion{.region = RenderRequest::Region{0.5, 0.0, 0.5, 1.0}};
-    REQUIRE_THROWS_AS(sample(card, {}, Tap::CurveInput, badRegion), std::invalid_argument);
+    REQUIRE_THROWS_AS(sample(card, {}, LensCorrection{}, Tap::CurveInput, badRegion),
+                      std::invalid_argument);
 }
 
 TEST_CASE("Development refuses a perceptual sample as a source", "[develop][sample]") {
     const ImageBuffer card = loadImage(test::fixture(testCard));
-    const ImageBuffer curveInput = sample(card, {}, Tap::CurveInput);
+    const ImageBuffer curveInput = sample(card, {}, LensCorrection{}, Tap::CurveInput);
     REQUIRE(curveInput.encoding() == ColorEncoding{perceptualEncoding});
-    REQUIRE_THROWS_AS(develop(curveInput, {}), std::invalid_argument);
-    REQUIRE_THROWS_AS(sample(curveInput, {}, Tap::CurveInput), std::invalid_argument);
+    REQUIRE_THROWS_AS(develop(curveInput, {}, LensCorrection{}), std::invalid_argument);
+    REQUIRE_THROWS_AS(sample(curveInput, {}, LensCorrection{}, Tap::CurveInput),
+                      std::invalid_argument);
 }
 
 TEST_CASE("A curve histogram bins the perceptual coordinate", "[histogram]") {
@@ -299,9 +304,10 @@ TEST_CASE("Sampling and binning in one call equals the two steps, resized biline
                                 .filter = ResizeFilter::Lanczos3};
     RenderRequest bilinear = lanczos;
     bilinear.filter = ResizeFilter::Bilinear;
-    const CurveHistogram direct = curveHistogram(source, state, lanczos);
-    REQUIRE(direct == curveHistogram(sample(source, state, Tap::CurveInput, bilinear)));
-    REQUIRE(direct == curveHistogram(source, state, bilinear));
+    const CurveHistogram direct = curveHistogram(source, state, LensCorrection{}, lanczos);
+    REQUIRE(direct ==
+            curveHistogram(sample(source, state, LensCorrection{}, Tap::CurveInput, bilinear)));
+    REQUIRE(direct == curveHistogram(source, state, LensCorrection{}, bilinear));
     REQUIRE(direct.pixels == resolvedSize(lanczos, source.size()).pixelCount());
 }
 
@@ -327,8 +333,9 @@ TEST_CASE("A curve histogram's end bins hold no ringing from the resize", "[deve
     };
 
     // The test means something only if Lanczos does ring here.
-    REQUIRE(endBins(curveHistogram(sample(edge, {}, Tap::CurveInput, request))) > 0);
-    const CurveHistogram histogram = curveHistogram(edge, {}, request);
+    REQUIRE(endBins(curveHistogram(sample(edge, {}, LensCorrection{}, Tap::CurveInput, request))) >
+            0);
+    const CurveHistogram histogram = curveHistogram(edge, {}, LensCorrection{}, request);
     REQUIRE(histogram.pixels == resolvedSize(request, size).pixelCount());
     REQUIRE(endBins(histogram) == 0);
 }
@@ -340,29 +347,31 @@ TEST_CASE("A curve histogram counts a bounded render by default", "[develop][his
     const ImageSize large{1500, 300};
     // No alpha channel, so every pixel is opaque and counts.
     const ImageBuffer source(large, PixelFormat::RgbF32, workingEncoding);
-    const CurveHistogram histogram = curveHistogram(source, {});
+    const CurveHistogram histogram = curveHistogram(source, {}, LensCorrection{});
     const ImageSize bounded = resolvedSize(curveHistogramRequest, large);
     REQUIRE(bounded.width == curveHistogramLongEdge);
     REQUIRE(histogram.pixels == bounded.pixelCount());
 
     // A source smaller than the bound is counted at its own size.
     const ImageBuffer card = loadImage(test::fixture(testCard));
-    REQUIRE(curveHistogram(card, {}).pixels == card.size().pixelCount());
+    REQUIRE(curveHistogram(card, {}, LensCorrection{}).pixels == card.size().pixelCount());
 }
 
 TEST_CASE("Plans agree at the curve input exactly when its sample does", "[develop][sample]") {
     const ImageBuffer source = loadImage(test::fixture(neutralFixture));
     const RenderRequest request{.size = RenderRequest::FitInside{16, 16}};
-    const ProcessingPlan base = planFor(source, DevelopState{toned()}, request);
+    const ProcessingPlan base = planFor(source, DevelopState{toned()}, LensCorrection{}, request);
 
     // What follows the tap changes the plan, but not the sample.
-    const ProcessingPlan curved = planFor(source, DevelopState{afterTheTap(toned())}, request);
+    const ProcessingPlan curved =
+        planFor(source, DevelopState{afterTheTap(toned())}, LensCorrection{}, request);
     REQUIRE_FALSE(curved == base);
     REQUIRE(sameAtTap(base, curved, Tap::CurveInput));
 
     // What precedes it, and the frame, change both.
     const auto differs = [&](const DevelopSettings& settings, const RenderRequest& other) {
-        return !sameAtTap(base, planFor(source, DevelopState{settings}, other), Tap::CurveInput);
+        return !sameAtTap(base, planFor(source, DevelopState{settings}, LensCorrection{}, other),
+                          Tap::CurveInput);
     };
     DevelopSettings settings = toned();
     settings.tone.exposure = 0.7F;

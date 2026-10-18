@@ -2,6 +2,7 @@
 #include "GpuContext.h"
 #include "GpuTesting.h"
 #include "support/Fixtures.h"
+#include "support/Lensfun.h"
 #include "support/TempDir.h"
 
 #include <QColor>
@@ -198,6 +199,47 @@ TEST_CASE("Export on the GPU stays within rounding of the CPU", "[gpu][cli][expo
                     test::illConditionedRelativeTolerance);
                 CAPTURE(difference.worstCodes, difference.worstExcess);
                 REQUIRE(difference.worstExcess <= 1.0);
+            }
+        }
+    }
+}
+
+TEST_CASE("Export with lens corrections runs on the GPU, within rounding of the CPU",
+          "[gpu][cli][export][lens][lensfun]") {
+    (void)test::gpuContext(); // skips the case when there is no device at all
+    ARRAW_REQUIRE_LENSFUN_OR_SKIP();
+    const test::TempDir directory;
+    const auto raw = directory.file("frame.dng");
+    std::filesystem::copy_file(test::fixture("lens-canon-32x24.dng"), raw);
+    const std::string database = test::fixture("lensfun").string();
+
+    for (const char* corrections : {"all", "distortion", "vignetting", "ca"}) {
+        for (const int bitDepth : {8, 16}) {
+            DYNAMIC_SECTION(corrections << " at " << bitDepth << " bits") {
+                const std::vector<std::string> options{"--lens-corrections", corrections,
+                                                       "--lens-database", database};
+                const Exported gpu = exportWith("gpu", raw.string(), bitDepth, options);
+                const Exported cpu = exportWith("cpu", raw.string(), bitDepth, options);
+                INFO(gpu.err);
+                REQUIRE(gpu.code == cli::Success);
+                REQUIRE(cpu.code == cli::Success);
+                // On the device, not retried on the CPU.
+                REQUIRE_THAT(gpu.err, ContainsSubstring("exporting on the GPU"));
+                REQUIRE_THAT(gpu.err, !ContainsSubstring("warning"));
+                REQUIRE(!gpu.image.isNull());
+                REQUIRE(gpu.image.size() == cpu.image.size());
+                const QImage::Format format =
+                    bitDepth == 16 ? QImage::Format_RGBA64 : QImage::Format_RGBA8888;
+                const CodeDifference difference = compareCodes(
+                    gpu.image.convertToFormat(format), cpu.image.convertToFormat(format),
+                    test::illConditionedRelativeTolerance);
+                CAPTURE(difference.worstCodes, difference.worstExcess);
+                REQUIRE(difference.worstExcess <= 1.0);
+                // And the correction is in the picture.
+                const Exported plain =
+                    exportWith("gpu", raw.string(), bitDepth, {"--lens-corrections", "none"});
+                REQUIRE(plain.code == cli::Success);
+                REQUIRE(plain.image != gpu.image);
             }
         }
     }

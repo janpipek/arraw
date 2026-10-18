@@ -103,7 +103,11 @@ enum class StrokeDetail {
 /// @brief Writes negative settings as a JSON object on one line.
 ///
 /// The object that sits beside `"settings"` in the documents describing a photograph (ADR 049),
-/// such as `{"demosaic": "vng"}`. It is not part of ::arraw::stateToJson.
+/// such as `{"demosaic": "vng"}`. It is not part of ::arraw::stateToJson. Lens corrections are
+/// written as `"lens": {"distortion": true, "vignetting": false, "lateralCa": false, "recorded":
+/// {"maker": ..., "model": ..., "cropFactor": 1.6, "origin": "matched", "database": ...}}`, only
+/// when something is on or recorded (`"recorded"` only when a lens is), so a negative without
+/// lens corrections reads as it did before they existed.
 /// @param negative Settings to write.
 /// @return The object.
 /// @throws std::invalid_argument if @p negative fails ::arraw::validate.
@@ -114,7 +118,9 @@ enum class StrokeDetail {
 /// A key that is absent leaves the base alone. An unknown key is skipped with
 /// ::arraw::Notice::SettingUnknown, and a `demosaic` that is not one of
 /// ::arraw::demosaicTokens (or not a string) with ::arraw::Notice::SettingMalformed, which
-/// leaves the base's value.
+/// leaves the base's value. Likewise for the parts of `lens` (a switch that is not a boolean, a
+/// recorded lens without a model or with a crop factor that is not positive, which leaves the
+/// base's record; `"recorded": null` clears it).
 /// @param json The object.
 /// @param base Settings the object's keys are applied onto.
 /// @param log Where the warnings go.

@@ -493,6 +493,28 @@ def main() -> None:
                [(sorted(ifd0, key=lambda e: e[0]), linear),
                 (exif_ifd, b""), (gps_ifd, b"")])
 
+    # The same shape with a Canon body and its kit lens, as the 80D writes the strings the
+    # lens profile is found by: the body in IFD0, and in the EXIF IFD the lens named without its
+    # maker and without a space after the mount, the focal length, the aperture, the distance
+    # and the 35 mm focal length (ADR 050). Canon's maker note cannot be generated, so the lens
+    # ID and the focal range are not here; the matching tests build those facts in code.
+    canon_ifd0 = [entry for entry in ifd0 if entry[0] not in (271, 272)]
+    canon_ifd0 += [
+        (271, TYPE_ASCII, b"Canon\0"),                      # Make
+        (272, TYPE_ASCII, b"Canon EOS 80D\0"),              # Model
+    ]
+    canon_exif_ifd = [entry for entry in exif_ifd if entry[0] not in (33437, 37386, 41989, 42036)]
+    canon_exif_ifd += [
+        (33437, TYPE_RATIONAL, [(56, 10)]),                 # FNumber: f/5.6
+        (37382, TYPE_RATIONAL, [(30, 10)]),                 # SubjectDistance: 3 m
+        (37386, TYPE_RATIONAL, [(50, 1)]),                  # FocalLength: 50 mm
+        (41989, TYPE_SHORT, [80]),                          # FocalLengthIn35mmFilm
+        (42036, TYPE_ASCII, b"EF-S18-135mm f/3.5-5.6 IS USM\0"),  # LensModel
+    ]
+    write_tiff(here / "lens-canon-32x24.dng",
+               [(sorted(canon_ifd0, key=lambda e: e[0]), linear),
+                (sorted(canon_exif_ifd, key=lambda e: e[0]), b""), (gps_ifd, b"")])
+
     for path in sorted(here.glob("*.dng")):
         print(f"{path.name}: {path.stat().st_size} bytes")
 

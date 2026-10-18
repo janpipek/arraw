@@ -20,6 +20,9 @@ that every build decodes a RAW identically — see
 [ADR 005](docs/adr/005-raw-import-through-libraw.md); exiv2 is, so that every
 build reads the same capture information — see
 [ADR 028](docs/adr/028-exif-is-read-through-exiv2-into-a-typed-struct.md).
+**lensfun** (`liblensfun-dev` and `liblensfun-data-v1` on Ubuntu, `lensfun-devel` on Fedora)
+provides lens profiles; it is optional in a development build and required in a Linux release
+([ADR 050](docs/adr/050-lens-corrections-are-a-stage-between-noise-reduction-and-the-chain.md)).
 
 ```bash
 just build     # configure and build (Debug)
@@ -198,6 +201,7 @@ arraw links libraries under their own terms, all compatible with GPL-3.0-or-late
 | [Qt 6](https://www.qt.io/) | LGPL-3.0-or-later | Application framework, image codecs |
 | [LibRaw](https://www.libraw.org/) | LGPL-2.1 / CDDL-1.0 | RAW decoding |
 | [exiv2](https://exiv2.org/) | GPL-2.0-or-later | EXIF reading (later also metadata writing) |
+| [lensfun](https://lensfun.github.io/) | LGPL-3.0 | Lens profiles (optional); its database is CC BY-SA 3.0 |
 | [Catch2](https://github.com/catchorg/Catch2) | BSL-1.0 | Test framework (not distributed) |
 
 A distributed binary must carry these licence texts alongside arraw's own.

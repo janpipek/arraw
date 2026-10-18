@@ -316,7 +316,7 @@ TEST_CASE("The effects block carries the vignette and the crop frame mapping", "
     const ImageBuffer source({40, 30}, workingFormat, workingEncoding);
     DevelopSettings settings;
     settings.effects.vignette = {60.0F, 40.0F, 0.0F};
-    const ProcessingPlan plan = planFor(source, DevelopState{settings},
+    const ProcessingPlan plan = planFor(source, DevelopState{settings}, LensCorrection{},
                                         {.size = RenderRequest::Scale{2.0},
                                          .region = RenderRequest::Region{0.25, 0.5, 0.75, 1.0},
                                          .upscale = Upscale::Allowed});
@@ -335,14 +335,14 @@ TEST_CASE("The effects block carries the vignette and the crop frame mapping", "
 
     // Off, the block says so, whatever the shape asked for.
     settings.effects.vignette.amount = 0.0F;
-    REQUIRE(packEffects(planFor(source, DevelopState{settings})).vignettes == 0U);
+    REQUIRE(packEffects(planFor(source, DevelopState{settings}, LensCorrection{})).vignettes == 0U);
 }
 
 TEST_CASE("The pointwise block carries Presence and its grids", "[gpu][plan][presence]") {
     const ImageBuffer source({203, 77}, workingFormat, workingEncoding);
     DevelopSettings settings;
     settings.presence = {.texture = 40.0F, .clarity = -20.0F, .dehaze = 0.0F};
-    const ProcessingPlan plan = planFor(source, DevelopState{settings});
+    const ProcessingPlan plan = planFor(source, DevelopState{settings}, LensCorrection{});
     const GpuPointwiseBlock block = packPointwise(plan.pointwise, source.size());
     REQUIRE(block.presence == 1U);
     REQUIRE(block.textureAmount == 0.4F);
@@ -369,7 +369,7 @@ TEST_CASE("The pointwise block carries Presence and its grids", "[gpu][plan][pre
 
     // Dehaze alone: the coarse grids are its, and its minimum carries the window.
     settings.presence = {.texture = 0.0F, .clarity = 0.0F, .dehaze = 30.0F};
-    const ProcessingPlan hazy = planFor(source, DevelopState{settings});
+    const ProcessingPlan hazy = planFor(source, DevelopState{settings}, LensCorrection{});
     const GpuPointwiseBlock hazyBlock = packPointwise(hazy.pointwise, source.size());
     REQUIRE(hazyBlock.coarseReduction == hazy.pointwise.presence.hazeFloor.reduction);
     REQUIRE(hazyBlock.coarseGridSize == std::array<std::uint32_t, 2>{203, 77});
@@ -416,7 +416,7 @@ TEST_CASE("The pointwise block carries Presence and its grids", "[gpu][plan][pre
 
     // Off, the block says so and carries nothing else.
     const GpuPointwiseBlock off =
-        packPointwise(planFor(source, DevelopState{}).pointwise, source.size());
+        packPointwise(planFor(source, DevelopState{}, LensCorrection{}).pointwise, source.size());
     REQUIRE(off.presence == 0U);
     REQUIRE(off.fineReduction == 0U);
     REQUIRE(off.coarseReduction == 0U);
@@ -428,7 +428,7 @@ TEST_CASE("The pointwise block takes its Presence grid sizes from the size it is
     DevelopSettings settings;
     settings.presence = {.texture = 40.0F, .clarity = -20.0F, .dehaze = 0.0F};
     // A plan with no geometry at all, as a pointwise block alone is.
-    const PointwisePlan plan = planFor(source, DevelopState{settings}).pointwise;
+    const PointwisePlan plan = planFor(source, DevelopState{settings}, LensCorrection{}).pointwise;
 
     const GpuPointwiseBlock block = packPointwise(plan, source.size());
     REQUIRE(block.fineGridSize == std::array<std::uint32_t, 2>{102, 39});
@@ -458,7 +458,7 @@ TEST_CASE("A brush mask packs its texture and channel into the header, and no sh
     add(RadialMask{}, false, 0.75F);
     add(BrushMask{}, false, 0.125F);
     add(BrushMask{}, true, 0.0625F);
-    const PointwisePlan plan = planFor(source, state).pointwise;
+    const PointwisePlan plan = planFor(source, state, LensCorrection{}).pointwise;
     REQUIRE(plan.local.brushCount() == 5);
     const GpuPointwiseBlock block = packPointwise(plan, source.size());
     REQUIRE(block.localHeader[0] == 7);

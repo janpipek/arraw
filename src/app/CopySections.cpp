@@ -18,6 +18,9 @@ const char* const settingsKey = "copySettings/sections";
 /// save, which writes a selection that has seen it.
 const char* const demosaicMigratedKey = "copySettings/demosaicMigrated";
 
+/// As ::demosaicMigratedKey, for Lens (ADR 050).
+const char* const lensMigratedKey = "copySettings/lensMigrated";
+
 QString tr(const char* text) {
     return QCoreApplication::translate("CopySections", text);
 }
@@ -30,6 +33,23 @@ std::vector<CopySection> inOrder(const std::bitset<copySectionNames.size()>& cho
         }
     }
     return sections;
+}
+
+/// Adds a section to a remembered selection that predates it, once.
+void migrate(QSettings& store, const char* migratedKey, CopySection section) {
+    if (store.contains(migratedKey)) {
+        return;
+    }
+    if (store.contains(settingsKey)) {
+        QStringList names = store.value(settingsKey).toStringList();
+        const QString name =
+            QString::fromUtf8(copySectionNames[static_cast<std::size_t>(section)].data());
+        if (!names.contains(name)) {
+            names.push_back(name);
+            store.setValue(settingsKey, names);
+        }
+    }
+    store.setValue(migratedKey, true);
 }
 
 } // namespace
@@ -57,7 +77,7 @@ QString copySectionLabel(CopySection section) {
     case CopySection::NoiseReduction:
         return tr("Noise Reduction");
     case CopySection::Vignette:
-        return tr("Vignette");
+        return tr("Post-crop Vignette");
     case CopySection::Grain:
         return tr("Grain");
     case CopySection::RotateAndFlip:
@@ -66,25 +86,17 @@ QString copySectionLabel(CopySection section) {
         return tr("Crop");
     case CopySection::Demosaic:
         return tr("Demosaic");
+    case CopySection::Lens:
+        return tr("Lens Corrections");
     }
     return {};
 }
 
 std::vector<CopySection> restoreCopySections(QSettings& store) {
-    // A selection remembered before Demosaic existed would leave it unchecked for good, while
-    // the default is to carry it: add it to such a selection, once (ADR 049).
-    if (!store.contains(demosaicMigratedKey)) {
-        if (store.contains(settingsKey)) {
-            QStringList names = store.value(settingsKey).toStringList();
-            const QString demosaic = QString::fromUtf8(
-                copySectionNames[static_cast<std::size_t>(CopySection::Demosaic)].data());
-            if (!names.contains(demosaic)) {
-                names.push_back(demosaic);
-                store.setValue(settingsKey, names);
-            }
-        }
-        store.setValue(demosaicMigratedKey, true);
-    }
+    // A selection remembered before Demosaic or Lens existed would leave it unchecked for good,
+    // while the default is to carry it: add it to such a selection, once (ADR 049, ADR 050).
+    migrate(store, demosaicMigratedKey, CopySection::Demosaic);
+    migrate(store, lensMigratedKey, CopySection::Lens);
     if (!store.contains(settingsKey)) {
         return {defaultCopySections.begin(), defaultCopySections.end()};
     }
@@ -108,6 +120,7 @@ void saveCopySections(std::span<const CopySection> sections, QSettings& store) {
     // An empty list stays a stored value: it means none checked, not "use the default".
     store.setValue(settingsKey, names);
     store.setValue(demosaicMigratedKey, true);
+    store.setValue(lensMigratedKey, true);
 }
 
 QString skippedMessage(std::span<const CopySection> skipped) {

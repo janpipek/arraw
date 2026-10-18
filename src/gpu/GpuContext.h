@@ -168,6 +168,12 @@ enum class GpuPass {
     Pointwise,
     Geometry, ///< The geometry resample; uniforms are a ::arraw::GpuGeometryBlock.
 
+    /// @brief The lens corrections (ADR 050); uniforms are a ::arraw::GpuLensBlock.
+    ///
+    /// Inputs are the image and the radial tables of ::arraw::packLensTables, as uploaded
+    /// (bindings 0 and 2).
+    Lens,
+
     /// @brief The horizontal half of a resize, one ::arraw::ResizePlane per render.
     ///
     /// Inputs are the image and the weights of ::arraw::packResizeWeights, as
@@ -216,7 +222,7 @@ enum class GpuPass {
 };
 
 /// @brief Number of ::arraw::GpuPass values, for tables indexed by one.
-inline constexpr std::size_t gpuPassCount = 11;
+inline constexpr std::size_t gpuPassCount = 12;
 
 /// @brief Channels a pass's render target stores, each a 32-bit float.
 ///

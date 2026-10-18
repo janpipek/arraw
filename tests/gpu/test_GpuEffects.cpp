@@ -59,9 +59,10 @@ DevelopSettings vignetted(float amount, float midpoint = 50.0F, float feather = 
 void requireMatchesCpu(const ImageBuffer& source, const DevelopSettings& settings,
                        const RenderRequest& request, double tolerance) {
     const DevelopState state{settings};
-    const ImageBuffer expected = develop(source, state, request);
+    const ImageBuffer expected = develop(source, state, LensCorrection{}, request);
     const ImageBuffer actual =
-        developOnGpu(gpuContext(), source, state, Stage::Effects, request).readBack();
+        developOnGpu(gpuContext(), source, state, LensCorrection{}, Stage::Effects, request)
+            .readBack();
     REQUIRE(actual.size() == expected.size());
     const double colour = worstColourError(expected, actual);
     if (std::getenv("ARRAW_PRINT_MEASURED") != nullptr) {
@@ -116,9 +117,9 @@ TEST_CASE("The hard-edged vignette matches the CPU away from its edge", "[gpu][e
     // to the usual bound, and a wrong edge flips far more than a couple.
     const ImageBuffer source = widenedSweep({61, 41});
     const DevelopState state{vignetted(-100.0F, 30.0F, 0.0F)};
-    const ImageBuffer expected = develop(source, state, {});
+    const ImageBuffer expected = develop(source, state, LensCorrection{}, {});
     const ImageBuffer actual =
-        developOnGpu(gpuContext(), source, state, Stage::Effects, {}).readBack();
+        developOnGpu(gpuContext(), source, state, LensCorrection{}, Stage::Effects, {}).readBack();
     REQUIRE(actual.size() == expected.size());
     const auto want = expected.samples<float>();
     const auto got = actual.samples<float>();
@@ -205,7 +206,8 @@ TEST_CASE("Grain on the device matches the CPU in a region, shrunk and far in",
     }
     // The frame at its own size and shrunk is too small for the finest
     // lattice, so those renders draw the pixel-scale substitute too.
-    const ProcessingPlan shrunk = planFor(sweep, DevelopState{settings}, requests[2]);
+    const ProcessingPlan shrunk =
+        planFor(sweep, DevelopState{settings}, LensCorrection{}, requests[2]);
     REQUIRE(grainPlacementOf(shrunk.effects.grain, frameMappingOf(shrunk))
                 .layers[valueNoiseSubstituteLayer]
                 .weight > 0.0F);
@@ -217,7 +219,8 @@ TEST_CASE("The effects pass runs only when an effect is on", "[gpu][effects]") {
     const RenderRequest request{.size = RenderRequest::FitInside{20, 20}};
     const auto passesTo = [&](const DevelopSettings& settings, Stage stop) {
         const std::size_t before = context.renderCount();
-        static_cast<void>(developOnGpu(context, source, DevelopState{settings}, stop, request));
+        static_cast<void>(
+            developOnGpu(context, source, DevelopState{settings}, LensCorrection{}, stop, request));
         return context.renderCount() - before;
     };
     const DevelopSettings plain = vignetted(0.0F, 10.0F, 0.0F);
@@ -233,9 +236,9 @@ TEST_CASE("The effects pass runs only when an effect is on", "[gpu][effects]") {
     // Off, the effects boundary is the resize's pixels, bit for bit.
     const DevelopState state{plain};
     const ImageBuffer resized =
-        developOnGpu(context, source, state, Stage::Resize, request).readBack();
+        developOnGpu(context, source, state, LensCorrection{}, Stage::Resize, request).readBack();
     const ImageBuffer effects =
-        developOnGpu(context, source, state, Stage::Effects, request).readBack();
+        developOnGpu(context, source, state, LensCorrection{}, Stage::Effects, request).readBack();
     REQUIRE(compareFloat(resized, effects).bitExact);
 }
 
@@ -244,16 +247,16 @@ TEST_CASE("A vignette edit on the GPU resumes from the resize in one pass",
     GpuContext& context = gpuContext();
     const ImageBuffer source = rainbow({40, 30}, PixelFormat::RgbaF32, workingEncoding);
     const RenderRequest request{.size = RenderRequest::FitInside{20, 20}};
-    const RenderCheckpoint resized =
-        developOnGpu(context, source, DevelopState{vignetted(-30.0F)}, Stage::Resize, request);
+    const RenderCheckpoint resized = developOnGpu(context, source, DevelopState{vignetted(-30.0F)},
+                                                  LensCorrection{}, Stage::Resize, request);
 
     const DevelopState after{vignetted(45.0F, 70.0F, 20.0F)};
     const std::size_t before = context.renderCount();
     const RenderCheckpoint resumed =
-        developOnGpu(context, resized, source, after, Stage::Effects, request);
+        developOnGpu(context, resized, source, after, LensCorrection{}, Stage::Effects, request);
     REQUIRE(context.renderCount() == before + 1);
     REQUIRE(resumed.boundary() == Stage::Effects);
     const ImageBuffer fresh =
-        developOnGpu(context, source, after, Stage::Effects, request).readBack();
+        developOnGpu(context, source, after, LensCorrection{}, Stage::Effects, request).readBack();
     REQUIRE(compareFloat(fresh, resumed.readBack()).bitExact);
 }

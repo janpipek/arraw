@@ -16,6 +16,7 @@ BuildRequires:  desktop-file-utils
 BuildRequires:  gcc-c++
 BuildRequires:  ninja-build
 BuildRequires:  pkgconfig(exiv2) >= 0.28
+BuildRequires:  pkgconfig(lensfun)
 BuildRequires:  pkgconfig(libraw) >= 0.21
 BuildRequires:  qt6-qtbase-devel >= 6.10
 BuildRequires:  qt6-qtbase-private-devel >= 6.10
@@ -28,6 +29,8 @@ BuildRequires:  vulkan-headers
 # them: JPEG and PNG are in qtbase, TIFF is here.
 Requires:       qt6-qtimageformats%{?_isa}
 Requires:       hicolor-icon-theme
+# The lens database is data that no soname dependency finds.
+Requires:       lensfun
 %{?_qt6:Requires: %{_qt6}%{?_isa} = %{_qt6_version}}
 # Qt reaches the GPU through the Vulkan loader, which it opens at run time. Without
 # one arraw develops on the CPU.
@@ -47,8 +50,10 @@ sidecars, and exports to JPEG, PNG or TIFF.
 # Catch2 comes from catch-devel; FetchContent must not reach for the network.
 # qt_standard_project_setup() adds an $ORIGIN install RPATH, which Fedora
 # forbids; the executables link arraw statically and need none.
+# lensfun is required, not optional, so a package never ships without lens corrections.
 %cmake -G Ninja \
     -DARRAW_BUILD_TESTS=ON \
+    -DARRAW_WITH_LENSFUN=ON \
     -DCMAKE_SKIP_INSTALL_RPATH=ON \
     -DFETCHCONTENT_FULLY_DISCONNECTED=ON
 %cmake_build
@@ -82,6 +87,7 @@ appstreamcli validate --no-net \
 * Fri Oct 09 2026 Jan Pipek <janpipek@users.noreply.github.com> - 0.4.0-1
 - Package rewrite: the arraw-ui and arraw-cli executables, the desktop entry, the metainfo and the icons
 - Some of the old features are temporarily not available.
+- Build against lensfun, for the lens corrections to come, and depend on it and its database
 
 * Tue Aug 04 2026 Jan Pipek <janpipek@users.noreply.github.com> - 0.3.1-1
 - Add the arraw command-line front end with export, preset, and info subcommands (ADR 0049/0050/0051/0053)

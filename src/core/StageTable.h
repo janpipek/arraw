@@ -37,6 +37,9 @@ inline constexpr std::array<StageRow, stageCount> stageTable{{
     {Stage::Denoise, ProgressStep::Denoise, ProgressStep::Denoise,
      [](const ProcessingPlan& plan) { return plan.denoise.active(); },
      [](const ProcessingPlan&, ImageSize source) { return source; }},
+    {Stage::Lens, ProgressStep::Lens, ProgressStep::Lens,
+     [](const ProcessingPlan& plan) { return plan.lens.active(); },
+     [](const ProcessingPlan&, ImageSize source) { return source; }},
     {Stage::Pointwise, ProgressStep::Context, ProgressStep::Pointwise,
      [](const ProcessingPlan&) { return true; },
      [](const ProcessingPlan&, ImageSize source) { return source; }},
@@ -81,8 +84,8 @@ static_assert(detail::stageTableInOrder(), "row i of the stage table must be Sta
 
 /// @brief Whether a render that passes a boundary before its last keeps a rung there.
 ///
-/// Every boundary but the last, except a collapsed Denoise, which would only
-/// copy the source the caller keeps anyway. A collapsed Geometry is kept: the
+/// Every boundary but the last, except a collapsed Denoise or Lens, which would only
+/// copy what the boundary before keeps anyway. A collapsed Geometry is kept: the
 /// preview resumes from it for a viewport change whether or not a geometry is
 /// set. The last boundary, Effects, is the render's result and is never kept.
 /// @param boundary Boundary just passed.
@@ -90,7 +93,8 @@ static_assert(detail::stageTableInOrder(), "row i of the stage table must be Sta
 [[nodiscard]] inline bool keepsRung(Stage boundary, const ProcessingPlan& plan) {
     switch (boundary) {
     case Stage::Denoise:
-        return rowOf(Stage::Denoise).runs(plan);
+    case Stage::Lens:
+        return rowOf(boundary).runs(plan);
     case Stage::Pointwise:
     case Stage::Geometry:
     case Stage::Resize:

@@ -206,3 +206,11 @@ with this branch's GPL-3. ADR 050 must still settle:
   second line.
 - **The GPL demosaic packs (AMaZE and others).** Licensing is not the obstacle
   (ADR 005); packaging is. They can be added later as tokens.
+
+## Amendment, 2026-10-18: Phase 2 as decided (section 7)
+
+[ADR 050](050-lens-corrections-are-a-stage-between-noise-reduction-and-the-chain.md)
+changes section 7: lensfun is the only source in v1, there is no source field,
+the sidecar records the automatic match, and the resolved profile goes into the
+Lens block of the plan, not the decode block. The corrections are applied by a
+cached stage after noise reduction, not in the decode.

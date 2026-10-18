@@ -181,15 +181,18 @@ private:
     QString active_;
 };
 
-FilmStrip::FilmStrip(QWidget* parent, ThumbnailCache cache)
+FilmStrip::FilmStrip(QWidget* parent, ThumbnailCache cache, LensDatabaseSource lensDatabase)
     : QWidget(parent), watcher_(model_),
-      thumbnails_(std::move(cache), [this](ThumbnailResult result) {
-          // On the worker thread. Dropped if the strip is gone by the time the GUI thread
-          // would run it.
-          QMetaObject::invokeMethod(
-              this, [this, result = std::move(result)] { receiveThumbnail(result); },
-              Qt::QueuedConnection);
-      }) {
+      thumbnails_(
+          std::move(cache),
+          [this](ThumbnailResult result) {
+              // On the worker thread. Dropped if the strip is gone by the time the GUI thread
+              // would run it.
+              QMetaObject::invokeMethod(
+                  this, [this, result = std::move(result)] { receiveThumbnail(result); },
+                  Qt::QueuedConnection);
+          },
+          true, std::move(lensDatabase)) {
     proxy_.setSourceModel(&model_);
 
     auto* layout = new QHBoxLayout(this);

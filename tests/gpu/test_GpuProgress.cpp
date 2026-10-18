@@ -74,12 +74,14 @@ TEST_CASE("A GPU render reports every step in order, and its bits do not change"
     const ImageBuffer source = makeSource();
     const DevelopState state = everyStep();
     const ImageBuffer unobserved =
-        developOnGpu(context, source, state, Stage::Effects, resized()).readBack();
+        developOnGpu(context, source, state, LensCorrection{}, Stage::Effects, resized())
+            .readBack();
 
     std::vector<Progress> reports;
     ProgressChannel channel([&](const Progress& progress) { reports.push_back(progress); });
     const ImageBuffer observed =
-        developOnGpu(context, source, state, Stage::Effects, resized(), &channel).readBack();
+        developOnGpu(context, source, state, LensCorrection{}, Stage::Effects, resized(), &channel)
+            .readBack();
     requireWellFormed(reports);
     std::vector<ProgressStep> steps;
     for (const Progress& report : reports) {
@@ -102,14 +104,16 @@ TEST_CASE("A GPU render stops between renders when cancelled", "[gpu][progress][
         ProgressChannel channel;
         channel.cancel();
         const std::size_t before = context.renderCount();
-        REQUIRE_THROWS_AS(developOnGpu(context, source, state, Stage::Effects, resized(), &channel),
+        REQUIRE_THROWS_AS(developOnGpu(context, source, state, LensCorrection{}, Stage::Effects,
+                                       resized(), &channel),
                           Cancelled);
         REQUIRE(context.renderCount() == before);
     }
 
     SECTION("part-way, no render follows the cancellation") {
         const std::size_t before = context.renderCount();
-        static_cast<void>(developOnGpu(context, source, state, Stage::Effects, resized()));
+        static_cast<void>(
+            developOnGpu(context, source, state, LensCorrection{}, Stage::Effects, resized()));
         const std::size_t whole = context.renderCount() - before;
 
         std::size_t atCancel = 0;
@@ -121,7 +125,8 @@ TEST_CASE("A GPU render stops between renders when cancelled", "[gpu][progress][
             }
         });
         self = &channel;
-        REQUIRE_THROWS_AS(developOnGpu(context, source, state, Stage::Effects, resized(), &channel),
+        REQUIRE_THROWS_AS(developOnGpu(context, source, state, LensCorrection{}, Stage::Effects,
+                                       resized(), &channel),
                           Cancelled);
         REQUIRE(atCancel != 0);
         REQUIRE(context.renderCount() == atCancel);
@@ -136,11 +141,12 @@ TEST_CASE("A GPU chain of resumes reads as one render", "[gpu][progress][resume]
     const DevelopState state = everyStep();
     std::vector<Progress> reports;
     ProgressChannel channel([&](const Progress& progress) { reports.push_back(progress); });
-    RenderCheckpoint at = developOnGpu(context, source, state, Stage::Denoise, resized(), &channel);
+    RenderCheckpoint at =
+        developOnGpu(context, source, state, LensCorrection{}, Stage::Denoise, resized(), &channel);
     for (const Stage next : {Stage::Pointwise, Stage::Geometry, Stage::Resize, Stage::Effects}) {
         const std::size_t start = reports.size();
         REQUIRE(reports.back().fraction < 1.0);
-        at = developOnGpu(context, at, source, state, next, resized(), &channel);
+        at = developOnGpu(context, at, source, state, LensCorrection{}, next, resized(), &channel);
         REQUIRE(reports.size() > start);
         REQUIRE(reports[start].fraction == reports[start - 1].fraction);
     }
@@ -152,12 +158,13 @@ TEST_CASE("A GPU sample reports and can be cancelled", "[gpu][progress][sample]"
     const ImageBuffer source = makeSource();
     std::vector<Progress> reports;
     ProgressChannel channel([&](const Progress& progress) { reports.push_back(progress); });
-    static_cast<void>(
-        sampleOnGpu(context, source, everyStep(), Tap::CurveInput, resized(), &channel));
+    static_cast<void>(sampleOnGpu(context, source, everyStep(), LensCorrection{}, Tap::CurveInput,
+                                  resized(), &channel));
     requireWellFormed(reports);
     channel.cancel();
-    REQUIRE_THROWS_AS(
-        sampleOnGpu(context, source, everyStep(), Tap::CurveInput, resized(), &channel), Cancelled);
+    REQUIRE_THROWS_AS(sampleOnGpu(context, source, everyStep(), LensCorrection{}, Tap::CurveInput,
+                                  resized(), &channel),
+                      Cancelled);
 }
 
 TEST_CASE("Each pass of a GPU render runs the renders its span declares", "[gpu][progress]") {
@@ -172,8 +179,8 @@ TEST_CASE("Each pass of a GPU render runs the renders its span declares", "[gpu]
     const auto run = [&](const ImageBuffer& source, const DevelopState& state) {
         std::vector<Progress> reports;
         ProgressChannel channel([&](const Progress& progress) { reports.push_back(progress); });
-        static_cast<void>(
-            developOnGpu(context, source, state, Stage::Effects, resized(), &channel));
+        static_cast<void>(developOnGpu(context, source, state, LensCorrection{}, Stage::Effects,
+                                       resized(), &channel));
         requireWellFormed(reports);
     };
     DevelopState state;
@@ -224,10 +231,10 @@ TEST_CASE("A GPU render with brushes reports the Coverage step, and a delta drag
         ProgressChannel channel([&](const Progress& progress) { reports.push_back(progress); });
         if (ladder != nullptr) {
             static_cast<void>(resumeOrDevelopOnGpu(context, *ladder, source, uploaded, wanted,
-                                                   resized(), &channel));
+                                                   LensCorrection{}, resized(), &channel));
         } else {
-            static_cast<void>(developOnGpu(context, *source, uploaded, wanted, Stage::Effects,
-                                           resized(), &channel));
+            static_cast<void>(developOnGpu(context, *source, uploaded, wanted, LensCorrection{},
+                                           Stage::Effects, resized(), &channel));
         }
         requireWellFormed(reports);
         return reports;

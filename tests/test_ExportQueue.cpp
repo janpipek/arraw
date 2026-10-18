@@ -1,10 +1,15 @@
 #include "ExportQueue.h"
 #include "support/Fixtures.h"
+#include "support/LensFixtures.h"
+#include "support/Lensfun.h"
 #include "support/TempDir.h"
 #include "support/TestImages.h"
 
+#include <Develop.h>
 #include <ExifInfo.h>
+#include <ImageExport.h>
 #include <ImageImport.h>
+#include <LensResolution.h>
 #include <Photo.h>
 
 #include <QImage>
@@ -306,4 +311,69 @@ TEST_CASE("A job decodes a file with no mosaic as the options say, whatever the 
         REQUIRE(result.error.empty());
     }
     CHECK(load(dir.file("vng.png")) == load(dir.file("ahd.png")));
+}
+
+TEST_CASE("An export queued after a lens toggle applies the corrections, and says what it left out",
+          "[app][export][queue][lens][lensfun]") {
+    ARRAW_REQUIRE_LENSFUN_OR_SKIP();
+    const test::TempDir dir;
+    const auto raw = dir.file("frame.dng");
+    std::filesystem::copy_file(test::fixture("lens-canon-32x24.dng"), raw);
+    Collector collector;
+    app::ExportQueue queue(collector.callback(), app::ExportQueue::Device::Cpu, {},
+                           []() -> const LensDatabase& { return test::fixtureDatabase(); });
+
+    const auto exported = [&](const Photo& photo, const char* name) {
+        app::ExportJob job;
+        job.state = photo.state();
+        job.input = photo.path();
+        job.document = photo;
+        job.options.format = ImageFileFormat::Png;
+        job.path = dir.file(name);
+        const auto count = collector.results().size();
+        queue.enqueue(std::move(job));
+        REQUIRE(collector.waitFor(count + 1));
+        const app::ExportResult result = collector.results().back();
+        REQUIRE(result.error.empty());
+        return result;
+    };
+
+    const Photo plain = openPhoto(raw);
+    NegativeSettings negative = plain.negative();
+    negative.lens.distortion = true;
+    negative.lens.vignetting = true;
+    negative.lens.lateralCa = true;
+    const app::ExportResult off = exported(plain, "off.png");
+    const app::ExportResult on = exported(plain.with(negative), "on.png");
+    CHECK(off.lensNotices.empty());
+    CHECK(on.lensNotices.empty());
+    // The corrections are in the file, and it is the library's render.
+    REQUIRE(load(dir.file("on.png")) != load(dir.file("off.png")));
+    const Photo corrected = plain.with(negative);
+    const LensCorrection lens = lensCorrectionFor(corrected, test::fixtureDatabase());
+    REQUIRE(lens.active());
+    exportImage(develop(loadImage(raw), corrected.state(), lens, {}), dir.file("library.png"), {});
+    CHECK(load(dir.file("on.png")) == load(dir.file("library.png")));
+
+    // A lens the database does not list: the export goes ahead, uncorrected, and says why.
+    ImageMetadata unknown = plain.metadata();
+    unknown.lens.lensNames = {"Nonexistent 1mm f/0.1"};
+    const Photo lost(raw, unknown, negative, plain.state());
+    const app::ExportResult missing = exported(lost, "missing.png");
+    CHECK(missing.lensNotices.size() == 1);
+    CHECK(load(dir.file("missing.png")) == load(dir.file("off.png")));
+
+    // A lens the database lists without a calibration for what was asked is told as well.
+    ImageMetadata bare = plain.metadata();
+    bare.lens.lensNames = {"Sigma 18-35mm F1.8 DC HSM"};
+    bare.lens.minFocal = 18.0;
+    bare.lens.maxFocal = 35.0;
+    bare.lens.maxAperture = 1.8;
+    bare.lens.focalLength = 24.0;
+    NegativeSettings vignettingOnly = plain.negative();
+    vignettingOnly.lens.vignetting = true;
+    const Photo uncalibrated(raw, bare, vignettingOnly, plain.state());
+    const app::ExportResult skipped = exported(uncalibrated, "uncalibrated.png");
+    REQUIRE(skipped.lensNotices.size() == 1);
+    CHECK(skipped.lensNotices.front().find("vignetting") != std::string::npos);
 }

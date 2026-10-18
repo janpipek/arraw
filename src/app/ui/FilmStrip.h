@@ -53,8 +53,11 @@ public:
     /// @brief Builds an empty strip with its title bar, and starts its thumbnail worker.
     /// @param parent Owning widget.
     /// @param cache Where thumbnails are kept; the application's cache directory by default.
+    /// @param lensDatabase Gives the lens database for thumbnails of photographs with lens
+    /// corrections on, called on the thumbnail thread; empty for the process's own.
     explicit FilmStrip(QWidget* parent = nullptr,
-                       ThumbnailCache cache = ThumbnailCache(ThumbnailCache::defaultRoot()));
+                       ThumbnailCache cache = ThumbnailCache(ThumbnailCache::defaultRoot()),
+                       LensDatabaseSource lensDatabase = {});
 
     /// @brief Stops watching the folder.
     ~FilmStrip() override;

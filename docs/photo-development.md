@@ -48,7 +48,7 @@ On a first read, follow the photographic explanations and examples; return to th
 
 # 2. The complete processing order
 
-Two kinds of choice sit in front of this order. The **negative** is the decoded source: the file, and the settings that decide which pixels the decode hands to development (today the demosaic; lens corrections are planned, section 3.4). Everything below the decode line is **development**, the stages from noise reduction to export. A negative setting is stored with the photograph beside the develop settings, but it is not one of them; section 3.4 gives the reason.
+Two kinds of choice sit in front of this order. The **negative** is the decoded source: the file, and the settings that decide which pixels the decode hands to development (the demosaic and the lens switches, section 3.4). Everything below the decode line is **development**, the stages from noise reduction to export, the lens stage (section 6.3) among them. A negative setting is stored with the photograph beside the develop settings, but it is not one of them; section 3.4 gives the reason.
 
 ```text
 RAW mosaic                         JPEG / PNG / TIFF
@@ -59,6 +59,8 @@ RAW mosaic                         JPEG / PNG / TIFF
            [optional source pyramid for preview]
                         |
                  Noise reduction
+                        |
+   Lens: distortion, lateral CA, vignetting (if on)
                         |
             Presence context + mask coverage
                         |
@@ -214,7 +216,7 @@ The neutral eyedropper maps the displayed position back through geometry and ave
 
 Sources: [WB algorithm and Robertson table](../src/core/WhiteBalance.cpp), [WB composition](../src/core/ColorSettings.cpp). Background: [colour temperature](https://en.wikipedia.org/wiki/Color_temperature), [mired](https://en.wikipedia.org/wiki/Mired), [CIE 1960 colour space](https://en.wikipedia.org/wiki/CIE_1960_color_space), [chromatic adaptation](https://en.wikipedia.org/wiki/Chromatic_adaptation).
 
-## 3.4 Settings of the negative: demosaic now, lens corrections later
+## 3.4 Settings of the negative: demosaic and the lens switches
 
 Demosaicing is the one choice of section 3.1 that a photographer may change. It is **not a develop setting**. Write the decoded source as $N = D(F;\,d)$, where $F$ is the file and $d$ the demosaic, one of Linear, VNG, PPG, AHD, DCB, DHT and AAHD (LibRaw's `user_qual` 0, 1, 2, 3, 4, 11 and 12; the default is AHD). Development is then $R = P(N;\,s)$ with the develop settings $s$. A develop edit changes $s$ and leaves $N$ alone, so the render resumes from a stored checkpoint (chapter 9). A change of $d$ changes $N$ itself:
 
@@ -224,7 +226,7 @@ Arraw therefore **decodes again** (about 1 to 3 s for 24 MP, off the interface t
 
 The choice applies only to a full-size decode of a mosaiced RAW. A half-size decode combines 2×2 blocks and does not demosaic; a JPEG, PNG or TIFF, a monochrome sensor and an already demosaiced linear DNG have nothing to interpolate. For these the choice is ignored, and two requests that decode to the same pixels count as the same decode. LibRaw may also substitute its own method for some sensors (X-Trans, four-colour), so the token is the request, as in section 3.1. In the pipeline the negative lies before everything else: it is the "LibRaw decode" line of chapter 2. Noise reduction, the first stage, reads its result.
 
-It is saved in the sidecar as a token (`arraw:demosaic="vng"`), is one undoable history step, and travels with a pasted look as its own section. **Lens corrections** (distortion, vignetting, lateral chromatic aberration) are planned as the second setting of the negative: applied once to the decoded source, before every stage here, from the file's own profile or the lensfun database. They are not built; their frame, and what they do to crops and masks, are still to be decided.
+It is saved in the sidecar as a token (`arraw:demosaic="vng"`), is one undoable history step, and travels with a pasted look as its own section. The **lens switches** (distortion, vignetting, lateral chromatic aberration, section 6.3) are also held with the negative, but unlike the demosaic they do not change the decode: a toggle never decodes again. They are kept there because they describe the photograph's optics, not a taste, and because they record which lens profile was used.
 
 Source: [negative settings](../include/NegativeSettings.h), [decode options](../include/DecodeOptions.h), [RAW import](../src/core/RawImport.cpp).
 
@@ -598,6 +600,33 @@ $$(a_{\mathrm{ok}}',b_{\mathrm{ok}}')=(1+0.16ah)(a_{\mathrm{ok}},b_{\mathrm{ok}}
 
 Here $a$ is the normalised Dehaze amount; $a_{\mathrm{ok}},b_{\mathrm{ok}}$ are Oklab chromatic coordinates of the just-dehazed colour. Positive Dehaze increases chroma by up to 16%; negative decreases it according to the added veil share. The factor is not a slider value of 0.16. Its strength follows the estimated veil share. The positive and negative algorithms are intentionally asymmetric; a +50 edit and a −50 edit do not invert one another.
 
+## 6.3 Lens corrections
+
+Implementation: [Lens.cpp](../src/core/Lens.cpp), [the model](../include/LensCorrection.h), [matching and sampling](../src/core/LensfunSource.cpp), [GPU pass](../src/gpu/shaders/lens.frag). The settings are three switches, off by default, for a RAW only.
+
+A lens does three things to the image that a profile can undo. **Distortion** bends straight lines: a point whose true distance from the optical centre is $r$ lands at $r\,d(r)$. **Lateral chromatic aberration** magnifies red and blue slightly differently from green, so colour fringes grow towards the edges. **Vignetting** loses light towards the corners, and a gain $g(r)>1$ restores it. Distortion and lateral CA move samples; vignetting only multiplies.
+
+Radius is normalised to the distance from the optical centre to the farthest corner, so $r\in[0,1]$ at any resolution, and each correction is a table of 129 values over $r$. Because the tables do not name a pixel size, a preview level, a half-size decode and the full decode resolve to the same corrections. The centre is the profile's calibrated one, not necessarily the middle of the frame. For each output pixel at corrected radius $r_c$, with $\mathbf u$ its offset from the centre:
+
+$$
+\begin{aligned}
+\mathbf p_G&=\mathbf u\,z\,d(r_c),\qquad \mathbf p_R=\mathbf p_G\,k_R(|\mathbf p_G|),\quad \mathbf p_B=\mathbf p_G\,k_B(|\mathbf p_G|),\\
+c_{\mathrm{out}}&=g(|\mathbf p_G|)\cdot \mathrm{sample}(c,\ \mathbf p_c)\quad (c\in\{R,G,B\}),
+\end{aligned}
+$$
+
+where $z\ge1$ is the **fill scale**: the smallest zoom that keeps every sample inside the sensor image, so no empty corners appear. It is computed from the distortion table alone, so every resolution agrees, and the corrected frame keeps the source's size and aspect. Sampling is bicubic (Catmull-Rom, 4×4 taps) because bilinear softens every corrected photograph at half-pixel offsets. Vignetting alone is a gain and does not resample; lateral CA alone copies green exactly.
+
+**Why the stage sits here.** Noise reduction comes first because it must see the noise as the sensor made it: resampling correlates neighbouring pixels and changes its statistics (chapter 6.1). Everything after works in the corrected frame, so masks, Presence, geometry and crop need no per-pixel map, and the vignetting gain, applied to linear values above 1, is not clipped before tone. The stage is a checkpoint of its own: a develop edit resumes from it; a lens toggle resumes from the noise-reduction checkpoint and never decodes. With no correction on, the stage does not exist and the render is unchanged.
+
+**Where the numbers come from.** Arraw does not reimplement the models; lensfun does, from its calibration database, and Arraw samples its answers into the tables. The camera and lens are matched from the EXIF (the camera's mount and crop factor constrain the lenses; the name, the focal range and the aperture score the candidates). When two lenses fit equally well nothing is applied and the photographer chooses; a wrong lens is worse than none. An unknown focus distance takes lensfun's default and is recorded as assumed. When a correction cannot be resolved (no lens found, no calibration, no database, a build without lensfun) its switch stays set and that correction is skipped, with the reason reported.
+
+**The name-only record.** When a correction is first turned on, the matched lens is recorded with the photograph: lensfun's maker and model, the crop factor and the database's date stamp, but **no coefficients**. Later renders look up that exact name, with no fuzzy matching, so a database update cannot move an old edit to another lens. If the database is newer, the same lens's calibration may have been revised, so the pixels can change slightly and a notice says so. If the lens has left the database, the corrections are skipped, not re-matched.
+
+Crops live in the corrected frame, so toggling distortion moves the content under an existing crop radially about the centre. Brush strokes are stored on the sensor and drawn by mapping each stroke forward; linear and radial masks stay in the corrected frame and so move against the subject on a toggle.
+
+Inspect straight edges near the frame border, colour fringes on high-contrast edges and a flat sky in the corners. A profile corrects the average lens of its model, not your copy, and applies to the whole frame with no sliders.
+
 # 7. Local adjustments and masks
 
 Implementation: [LocalPlan.cpp](../src/core/LocalPlan.cpp), [mask evaluation](../src/core/LocalPlan.h), [effective pixel settings](../src/core/PointwisePlan.h), [brush rasterisation](../src/core/BrushRaster.cpp), [coverage quantisation](../src/core/BrushCoverage.h).
@@ -685,7 +714,7 @@ The source-centred orthogonal matrix is $M=M_{\mathrm{flip}}M_{\mathrm{fine}}M_{
 
 For source $(W,H)$, upright dimensions are $(|M_{00}|W+|M_{01}|H,\ |M_{10}|W+|M_{11}|H)$. Crop edges are fractions of this box. Automatic crop maximises centred area within source content, respecting any aspect constraint. Explicit crops are fitted into content; aspect agreement requires relative tolerance $10^{-6}$. Raster dimensions are floored to at least one pixel, repairing floating-point error near integers.
 
-Output centres map to $\mathbf p_u=(l+(x+0.5)W_c/W_o,\ t+(y+0.5)H_c/H_o)$, where $(l,t)$ is the crop origin, $(W_c,H_c)$ its dimensions and $(W_o,H_o)$ the output dimensions, then to source with $M^T$ and centred translations. Bilinear sampling clamps boundaries and interpolates premultiplied RGB/alpha before unpremultiplying. Zero alpha yields transparent black; exact source-centre alignment copies pixels. Straightening resamples; aligned crops and quarter-turns can avoid interpolation blur. No lens or perspective correction occurs.
+Output centres map to $\mathbf p_u=(l+(x+0.5)W_c/W_o,\ t+(y+0.5)H_c/H_o)$, where $(l,t)$ is the crop origin, $(W_c,H_c)$ its dimensions and $(W_o,H_o)$ the output dimensions, then to source with $M^T$ and centred translations. Bilinear sampling clamps boundaries and interpolates premultiplied RGB/alpha before unpremultiplying. Zero alpha yields transparent black; exact source-centre alignment copies pixels. Straightening resamples; aligned crops and quarter-turns can avoid interpolation blur. Lens distortion is removed earlier, by the lens stage (section 6.3); no perspective correction occurs.
 
 ## 8.2 Resize and reconstruction filters
 
@@ -949,4 +978,4 @@ White balance
 
 For exact settings contracts consult [DevelopSettings.h](../include/DevelopSettings.h) and [SettingDescriptors.cpp](../src/core/SettingDescriptors.cpp). The [architecture decisions](adr/) explain why stages occupy their present positions; the implementation links in each chapter define the current behavior. CPU equations are mirrored in [GPU shaders](../src/gpu/shaders/), and corresponding tests live under [tests](../tests/), including GPU parity tests. No claim of exact cross-device last-bit equality is intended.
 
-This pipeline presently contains no separate Arraw implementation of lens-profile distortion, chromatic-aberration correction, perspective correction, spot/heal processing, deconvolution, AI detail synthesis, spectral film response, raw-channel highlight reconstruction, or soft proofing. Sensor-specific LibRaw preparation is distinct from an editable Arraw correction stage. A mathematical contrast or colour adjustment can reveal **existing** distinctions; it cannot recover distinct measurements after clipping has made them identical.
+This pipeline presently contains no Arraw implementation of the lens models themselves (lensfun supplies them, section 6.3), no embedded-profile lens correction, no perspective correction, spot/heal processing, deconvolution, AI detail synthesis, spectral film response, raw-channel highlight reconstruction, or soft proofing. Sensor-specific LibRaw preparation is distinct from an editable Arraw correction stage. A mathematical contrast or colour adjustment can reveal **existing** distinctions; it cannot recover distinct measurements after clipping has made them identical.

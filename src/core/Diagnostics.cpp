@@ -121,6 +121,37 @@ std::string arraw::describe(const Diagnostic& diagnostic) {
         return valueAt(diagnostic, 0) + " left out, as their marks do not match the filter";
     case Notice::OptionIgnored:
         return valueAt(diagnostic, 0) + " does nothing without " + valueAt(diagnostic, 1);
+    case Notice::LensUnidentified:
+        return "the photograph names no lens, so lens corrections were not applied";
+    case Notice::LensFocalUnknown:
+        return "the focal length of the zoom '" + valueAt(diagnostic, 0) +
+               "' is not recorded, so lens corrections were not applied";
+    case Notice::CameraNotInDatabase:
+        return "the camera '" + valueAt(diagnostic, 0) + " " + valueAt(diagnostic, 1) +
+               "' is not in the lens database; its lens was matched without it";
+    case Notice::LensNotInDatabase:
+        return valueAt(diagnostic, 0).empty()
+                   ? "no lens in the database fits this photograph, so lens corrections were not "
+                     "applied"
+                   : "no lens in the database fits '" + valueAt(diagnostic, 0) +
+                         "', so lens corrections were not applied";
+    case Notice::LensAmbiguous:
+        return "these lenses fit equally well: " + valueAt(diagnostic, 0) +
+               "; none was applied, so choose the lens";
+    case Notice::LensProfileMissing:
+        return "the recorded lens '" + valueAt(diagnostic, 0) +
+               "' is not in the lens database, so lens corrections were not applied";
+    case Notice::LensDatabaseChanged:
+        return "the lens database is not the one this lens was recorded against (" +
+               valueAt(diagnostic, 0) + ", now " + valueAt(diagnostic, 1) +
+               "), so its calibration may have been revised";
+    case Notice::LensDatabaseMissing:
+        return "no lens database was found, so lens corrections were not applied";
+    case Notice::LensfunUnavailable:
+        return "this build of arraw has no lensfun, so lens corrections were not applied";
+    case Notice::LensNotCalibrated:
+        return "'" + valueAt(diagnostic, 0) + "' has no calibration for " + valueAt(diagnostic, 1) +
+               ", so it was not applied";
     }
     return {};
 }

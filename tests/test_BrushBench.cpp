@@ -1348,8 +1348,10 @@ public:
         });
         SessionUpdate update;
         std::optional<LadderRender> result;
-        update.renderMs = timed(
-            [&] { result.emplace(resumeOrDevelop(ladder_, source_, state, request_, &channel)); });
+        update.renderMs = timed([&] {
+            result.emplace(
+                resumeOrDevelop(ladder_, source_, state, LensCorrection{}, request_, &channel));
+        });
         last_ = std::move(result->checkpoint);
         if (inCoverage) {
             update.coverageMs =
@@ -1443,7 +1445,8 @@ public:
     /// Whether the last render is the direct render of the committed state, to the bit.
     bool lastEqualsDirect() {
         static_cast<void>(render(committed_));
-        return test::sameBits(last_->readBack(), develop(*source_, committed_, request_));
+        return test::sameBits(last_->readBack(),
+                              develop(*source_, committed_, LensCorrection{}, request_));
     }
 
     [[nodiscard]] const std::vector<SessionUpdate>& updates() const {

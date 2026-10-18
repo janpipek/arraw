@@ -1291,3 +1291,10 @@ of another held entry) would remove it if it ever shows.
 
 Step 6 is closed with this (user, 2026-10-16): a commit of about 0.5 s at ratio 2,
 the render of the 6 MP level, is accepted as a known limit.
+
+## Amendment, 2026-10-18: `sensorFrom` is no longer the identity
+
+[ADR 050](050-lens-corrections-are-a-stage-between-noise-reduction-and-the-chain.md): with distortion on, `sensorFrom(lens, corrected)` inverts the radial table
+for the pointer path, and the brush coverage is drawn in the corrected frame by
+mapping each stroke's dab centres forward. The `BrushCoverageCache` key gains the
+lens block. Linear and radial masks are unchanged.

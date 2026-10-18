@@ -83,6 +83,26 @@ std::string nameOf(Notice notice) {
         return "filtered_out";
     case Notice::OptionIgnored:
         return "option_ignored";
+    case Notice::LensUnidentified:
+        return "lens_unidentified";
+    case Notice::LensFocalUnknown:
+        return "lens_focal_unknown";
+    case Notice::CameraNotInDatabase:
+        return "camera_not_in_database";
+    case Notice::LensNotInDatabase:
+        return "lens_not_in_database";
+    case Notice::LensAmbiguous:
+        return "lens_ambiguous";
+    case Notice::LensProfileMissing:
+        return "lens_profile_missing";
+    case Notice::LensDatabaseChanged:
+        return "lens_database_changed";
+    case Notice::LensDatabaseMissing:
+        return "lens_database_missing";
+    case Notice::LensfunUnavailable:
+        return "lensfun_unavailable";
+    case Notice::LensNotCalibrated:
+        return "lens_not_calibrated";
     }
     return "unknown";
 }

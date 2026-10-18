@@ -6,6 +6,7 @@
 
 #include <BrushStrokes.h>
 #include <NegativeSettings.h>
+#include <ShortestDecimal.h>
 
 #include <QByteArray>
 #include <QDomDocument>
@@ -725,6 +726,16 @@ bool readLocalAdjustmentsIn(const std::vector<QDomElement>& descriptions, Develo
     return true;
 }
 
+/// @brief Keys that together record the lens of a photograph (ADR 050, section 8).
+constexpr std::array<std::string_view, 5> lensRecordKeys = {
+    "lensMaker", "lensModel", "lensCropFactor", "lensOrigin", "lensDatabase"};
+
+/// @brief Whether a key of the `arraw:` namespace belongs to the negative settings.
+bool isNegativeProperty(std::string_view key) {
+    return key == "demosaic" || key == "lensDistortion" || key == "lensVignetting" ||
+           key == "lensLateralCa" || std::ranges::find(lensRecordKeys, key) != lensRecordKeys.end();
+}
+
 /// @brief Reports every `arraw:` property that is not a setting arraw knows.
 void readUnknownKeys(const std::vector<QDomElement>& descriptions, DiagnosticLog& log,
                      const std::filesystem::path& subject) {
@@ -732,7 +743,7 @@ void readUnknownKeys(const std::vector<QDomElement>& descriptions, DiagnosticLog
     for (const QDomElement& description : descriptions) {
         for (const Resolved& property : propertiesOf(description)) {
             const std::string key = property.local.toStdString();
-            if (property.ns == ns && key != "version" && key != "demosaic" &&
+            if (property.ns == ns && key != "version" && !isNegativeProperty(key) &&
                 !isLocalAdjustmentProperty(key) && findDescriptor(key) == nullptr) {
                 log.record({.notice = Notice::SettingUnknown,
                             .severity = Severity::Warning,
@@ -743,34 +754,122 @@ void readUnknownKeys(const std::vector<QDomElement>& descriptions, DiagnosticLog
     }
 }
 
-/// @brief Reads `arraw:demosaic` as the negative settings of the photograph.
+/// @brief Reads one of the lens switches, `True` or `False`.
 ///
-/// A token that is not one of ::arraw::demosaicTokens, or a value that is not simple text, is
-/// reported and read as the default (AHD): the file keeps it regardless, as a write touches the
-/// key only when the negative differs from what this reading gave (see ::arraw::writeSidecar).
-/// @return The settings, or nothing when the sidecar has no such key.
+/// Anything else is reported and read as off: the file keeps it regardless, as a write touches the
+/// key only when the setting differs from what this reading gave.
+/// @return Whether the key is there.
+bool flagIn(const std::vector<QDomElement>& descriptions, std::string_view key, bool& flag,
+            DiagnosticLog& log, const std::filesystem::path& subject) {
+    const auto found = occurrencesOf(descriptions, arrawProperty(key));
+    if (found.empty()) {
+        return false;
+    }
+    const QString text = found.back().text.trimmed();
+    if (found.back().simple && text.compare("True"_L1, Qt::CaseInsensitive) == 0) {
+        flag = true;
+    } else if (found.back().simple && text.compare("False"_L1, Qt::CaseInsensitive) == 0) {
+        flag = false;
+    } else {
+        reportUnreadable(key, "True or False", log, subject);
+    }
+    return true;
+}
+
+/// @brief Reads the recorded lens, which is the keys `lensMaker`, `lensModel`, `lensCropFactor`,
+/// `lensOrigin` and `lensDatabase` together.
+///
+/// A record without a model, or with a crop factor that is not a positive number, cannot name a
+/// lens and is reported and read as none; the lens is then matched again from the file. An origin
+/// that is not a token is reported and read as `matched`.
+/// @return The lens, or nothing when none of the keys is there or the record cannot be used.
+std::optional<RecordedLens> recordedLensIn(const std::vector<QDomElement>& descriptions,
+                                           DiagnosticLog& log,
+                                           const std::filesystem::path& subject) {
+    const auto textOf = [&](std::string_view key) -> std::optional<QString> {
+        const auto found = occurrencesOf(descriptions, arrawProperty(key));
+        if (found.empty()) {
+            return std::nullopt;
+        }
+        return found.back().simple ? std::optional{found.back().text.trimmed()}
+                                   : std::optional{QString()};
+    };
+    const auto maker = textOf("lensMaker");
+    const auto model = textOf("lensModel");
+    const auto crop = textOf("lensCropFactor");
+    const auto origin = textOf("lensOrigin");
+    const auto database = textOf("lensDatabase");
+    if (!maker && !model && !crop && !origin && !database) {
+        return std::nullopt;
+    }
+    if (!model || model->isEmpty()) {
+        reportUnreadable("lensModel", "the model of the recorded lens", log, subject);
+        return std::nullopt;
+    }
+    // A record without its crop factor cannot say what scale its profile was applied at.
+    const std::optional<double> cropFactor = crop ? numberIn(*crop) : std::nullopt;
+    if (!cropFactor || !std::isfinite(*cropFactor) || *cropFactor <= 0.0) {
+        reportUnreadable("lensCropFactor", "a positive number", log, subject);
+        return std::nullopt;
+    }
+    RecordedLens lens;
+    lens.maker = maker ? maker->toStdString() : std::string{};
+    lens.model = model->toStdString();
+    lens.cropFactor = *cropFactor;
+    lens.database = database ? database->toStdString() : std::string{};
+    if (origin) {
+        if (const auto token = parseLensOrigin(origin->toStdString())) {
+            lens.origin = *token;
+        } else {
+            reportUnreadable("lensOrigin", "one of matched chosen", log, subject);
+        }
+    }
+    return lens;
+}
+
+/// @brief Reads the negative settings of the photograph: `arraw:demosaic` and the lens keys.
+///
+/// A demosaic token that is not one of ::arraw::demosaicTokens, or a value that is not simple
+/// text, is reported and read as the default (AHD); the lens keys are read as
+/// ::arraw::LensSettings describes. The file keeps what it cannot read regardless, as a write
+/// touches a key only when the negative differs from what this reading gave (see
+/// ::arraw::writeSidecar).
+/// @return The settings, or nothing when the sidecar has none of the keys.
 std::optional<NegativeSettings> negativeIn(const std::vector<QDomElement>& descriptions,
                                            DiagnosticLog& log,
                                            const std::filesystem::path& subject) {
-    const auto found = occurrencesOf(descriptions, arrawProperty("demosaic"));
-    if (found.empty()) {
-        return std::nullopt;
-    }
     NegativeSettings negative;
-    const auto token = found.back().simple
-                           ? parseDemosaic(found.back().text.trimmed().toStdString())
-                           : std::nullopt;
-    if (token) {
-        negative.demosaic = *token;
-    } else {
-        std::string expected = "one of";
-        for (const std::string_view name : demosaicTokens) {
-            expected += ' ';
-            expected += name;
+    bool recorded = false;
+    if (const auto found = occurrencesOf(descriptions, arrawProperty("demosaic")); !found.empty()) {
+        recorded = true;
+        const auto token = found.back().simple
+                               ? parseDemosaic(found.back().text.trimmed().toStdString())
+                               : std::nullopt;
+        if (token) {
+            negative.demosaic = *token;
+        } else {
+            std::string expected = "one of";
+            for (const std::string_view name : demosaicTokens) {
+                expected += ' ';
+                expected += name;
+            }
+            reportUnreadable("demosaic", std::move(expected), log, subject);
         }
-        reportUnreadable("demosaic", std::move(expected), log, subject);
     }
-    return negative;
+    recorded =
+        flagIn(descriptions, "lensDistortion", negative.lens.distortion, log, subject) || recorded;
+    recorded =
+        flagIn(descriptions, "lensVignetting", negative.lens.vignetting, log, subject) || recorded;
+    recorded =
+        flagIn(descriptions, "lensLateralCa", negative.lens.lateralCa, log, subject) || recorded;
+    const bool recordsLens = std::ranges::any_of(lensRecordKeys, [&](std::string_view key) {
+        return !occurrencesOf(descriptions, arrawProperty(key)).empty();
+    });
+    if (recordsLens) {
+        recorded = true;
+        negative.lens.lens = recordedLensIn(descriptions, log, subject);
+    }
+    return recorded ? std::optional{negative} : std::nullopt;
 }
 
 /// @brief Reads a whole number, which XMP may spell as a real: `3` and `3.0` alike.
@@ -1085,19 +1184,47 @@ void writeSidecarFor(const std::filesystem::path& photo, const DevelopState* sta
         }
         setLocalAdjustments(descriptions, home, *state);
     }
-    // The negative follows the rule the marks follow: the key is written only when the settings
-    // differ from what reading the file gives, so a token this arraw does not know survives.
-    // The default is no key at all, as it is what an absent key means.
+    // The negative follows the rule the marks follow, key by key: a key is written only when its
+    // setting differs from what reading the file gives, so a token this arraw does not know
+    // survives. The default is no key at all, as it is what an absent key means.
     if (negative != nullptr) {
         const NegativeSettings read =
             negativeIn(descriptions, discardedDiagnostics(), path).value_or(NegativeSettings{});
-        if (*negative != read) {
+        if (negative->demosaic != read.demosaic) {
             setProperty(descriptions, home, arrawProperty("demosaic"),
                         negative->demosaic == NegativeSettings{}.demosaic
                             ? std::nullopt
                             : std::optional{QString::fromUtf8(
                                   tokenOf(negative->demosaic).data(),
                                   static_cast<qsizetype>(tokenOf(negative->demosaic).size()))});
+        }
+        const auto setFlag = [&](std::string_view key, bool flag, bool onFile) {
+            if (flag != onFile) {
+                setProperty(descriptions, home, arrawProperty(key),
+                            flag ? std::optional{"True"_L1} : std::nullopt);
+            }
+        };
+        setFlag("lensDistortion", negative->lens.distortion, read.lens.distortion);
+        setFlag("lensVignetting", negative->lens.vignetting, read.lens.vignetting);
+        setFlag("lensLateralCa", negative->lens.lateralCa, read.lens.lateralCa);
+        if (negative->lens.lens != read.lens.lens) {
+            const auto& lens = negative->lens.lens;
+            const auto setKey = [&](std::string_view key, std::optional<QString> value) {
+                setProperty(descriptions, home, arrawProperty(key), value);
+            };
+            setKey("lensMaker",
+                   lens ? std::optional{QString::fromStdString(lens->maker)} : std::nullopt);
+            setKey("lensModel",
+                   lens ? std::optional{QString::fromStdString(lens->model)} : std::nullopt);
+            setKey("lensCropFactor",
+                   lens ? std::optional{QString::fromStdString(shortestText(lens->cropFactor))}
+                        : std::nullopt);
+            setKey("lensOrigin", lens ? std::optional{QString::fromUtf8(
+                                            tokenOf(lens->origin).data(),
+                                            static_cast<qsizetype>(tokenOf(lens->origin).size()))}
+                                      : std::nullopt);
+            setKey("lensDatabase",
+                   lens ? std::optional{QString::fromStdString(lens->database)} : std::nullopt);
         }
     }
     // Marks are standard XMP that other tools write too, and some of what they

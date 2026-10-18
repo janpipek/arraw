@@ -70,7 +70,8 @@ TEST_CASE("All eight camera orientations rearrange exact samples", "[geometry]")
         CAPTURE(tag);
         const auto source = labelled({3, 2}, static_cast<ImageOrientation>(tag));
         REQUIRE(source.clone().orientation() == source.orientation());
-        const auto output = develop(source, {.settings = {.tone = {.filmicHighlights = 0}}});
+        const auto output =
+            develop(source, {.settings = {.tone = {.filmicHighlights = 0}}}, LensCorrection{});
         REQUIRE(output.orientation() == ImageOrientation::Normal);
         REQUIRE(output.size() == (tag < 5 ? ImageSize{3, 2} : ImageSize{2, 3}));
         for (std::size_t pixel = 0; pixel < 6; ++pixel) {
@@ -87,7 +88,7 @@ TEST_CASE("User rotation and flips follow camera orientation", "[geometry]") {
     DevelopSettings settings;
     settings.tone.filmicHighlights = 0;
     settings.geometry.rotation = QuarterTurn::Clockwise270;
-    auto cancelled = develop(source, DevelopState{settings});
+    auto cancelled = develop(source, DevelopState{settings}, LensCorrection{});
     REQUIRE(cancelled.size() == source.size());
     REQUIRE(cancelled.orientation() == ImageOrientation::Normal);
     REQUIRE(std::equal(cancelled.samples<float>().begin(), cancelled.samples<float>().end(),
@@ -95,7 +96,7 @@ TEST_CASE("User rotation and flips follow camera orientation", "[geometry]") {
 
     settings.geometry.rotation = QuarterTurn::None;
     settings.geometry.flipHorizontal = true;
-    const auto flipped = develop(source, DevelopState{settings});
+    const auto flipped = develop(source, DevelopState{settings}, LensCorrection{});
     const int expected[]{0, 3, 1, 4, 2, 5};
     for (std::size_t index = 0; index < 6; ++index) {
         REQUIRE(flipped.samples<float>()[index * 4] ==
@@ -103,7 +104,7 @@ TEST_CASE("User rotation and flips follow camera orientation", "[geometry]") {
     }
 
     settings.geometry.flipVertical = true;
-    const auto both = develop(source, DevelopState{settings});
+    const auto both = develop(source, DevelopState{settings}, LensCorrection{});
     const int bothExpected[]{2, 5, 1, 4, 0, 3};
     for (std::size_t index = 0; index < 6; ++index) {
         REQUIRE(both.samples<float>()[index * 4] ==
@@ -117,7 +118,7 @@ TEST_CASE("An explicit crop addresses final upright edges exactly", "[geometry]"
     settings.tone.filmicHighlights = 0;
     settings.geometry.rotation = QuarterTurn::Clockwise90;
     settings.geometry.crop.rectangle = UprightCropRect{0, 0.2, 2.0 / 3.0, 0.8};
-    const auto output = develop(source, DevelopState{settings});
+    const auto output = develop(source, DevelopState{settings}, LensCorrection{});
     REQUIRE(output.size() == ImageSize{2, 3});
     const int expected[]{11, 6, 12, 7, 13, 8};
     for (std::size_t index = 0; index < 6; ++index) {
@@ -219,7 +220,7 @@ TEST_CASE("Straighten samples the rotated image in linear colour", "[geometry]")
     DevelopSettings settings;
     settings.geometry.straighten = 30;
     settings.tone.filmicHighlights = 0;
-    const auto output = develop(source, DevelopState{settings});
+    const auto output = develop(source, DevelopState{settings}, LensCorrection{});
     const auto plan = geometryPlanFor(source.size(), source.orientation(), settings.geometry);
     const double radians = std::numbers::pi / 6;
     for (std::uint32_t y = 0; y < output.size().height; ++y) {
@@ -243,7 +244,7 @@ TEST_CASE("Fractional crops interpolate alpha without coloured transparent fring
     DevelopSettings settings;
     settings.geometry.crop.rectangle = UprightCropRect{0.25, 0, 0.75, 1};
     settings.tone.filmicHighlights = 0;
-    const auto output = develop(source, DevelopState{settings});
+    const auto output = develop(source, DevelopState{settings}, LensCorrection{});
     REQUIRE(output.size() == ImageSize{1, 1});
     REQUIRE(output.samples<float>()[0] == 1);
     REQUIRE(output.samples<float>()[1] == 0);
@@ -256,25 +257,30 @@ TEST_CASE("Invalid geometry cannot reach sampling", "[geometry]") {
     DevelopSettings settings;
     for (const double angle : {46.0, -46.0, std::numeric_limits<double>::quiet_NaN()}) {
         settings.geometry.straighten = angle;
-        REQUIRE_THROWS_AS(develop(source, DevelopState{settings}), std::invalid_argument);
+        REQUIRE_THROWS_AS(develop(source, DevelopState{settings}, LensCorrection{}),
+                          std::invalid_argument);
     }
     settings = {};
     settings.geometry.rotation = static_cast<QuarterTurn>(42);
-    REQUIRE_THROWS_AS(develop(source, DevelopState{settings}), std::invalid_argument);
+    REQUIRE_THROWS_AS(develop(source, DevelopState{settings}, LensCorrection{}),
+                      std::invalid_argument);
     settings = {};
     for (const auto crop : {UprightCropRect{0, 0, 0, 1}, UprightCropRect{-0.1, 0, 1, 1},
                             UprightCropRect{0, 0, 1, std::numeric_limits<double>::infinity()}}) {
         settings.geometry.crop.rectangle = crop;
-        REQUIRE_THROWS_AS(develop(source, DevelopState{settings}), std::invalid_argument);
+        REQUIRE_THROWS_AS(develop(source, DevelopState{settings}, LensCorrection{}),
+                          std::invalid_argument);
     }
     settings = {};
     for (const double ratio : {0.0, -1.0, std::numeric_limits<double>::infinity()}) {
         settings.geometry.crop.aspect = CropRatio{ratio};
-        REQUIRE_THROWS_AS(develop(source, DevelopState{settings}), std::invalid_argument);
+        REQUIRE_THROWS_AS(develop(source, DevelopState{settings}, LensCorrection{}),
+                          std::invalid_argument);
     }
     settings.geometry.crop.aspect = CropRatio{1};
     settings.geometry.crop.rectangle = UprightCropRect{};
-    REQUIRE_THROWS_AS(develop(source, DevelopState{settings}), std::invalid_argument);
+    REQUIRE_THROWS_AS(develop(source, DevelopState{settings}, LensCorrection{}),
+                      std::invalid_argument);
 }
 
 TEST_CASE("A RAW camera orientation survives decoding and is applied once", "[geometry][raw]") {
@@ -284,10 +290,10 @@ TEST_CASE("A RAW camera orientation survives decoding and is applied once", "[ge
     REQUIRE(metadata.orientation == ImageOrientation::Rotate90);
     REQUIRE(source.orientation() == metadata.orientation);
     REQUIRE(source.size() == ImageSize{32, 24});
-    const auto output = develop(source, {});
+    const auto output = develop(source, {}, LensCorrection{});
     REQUIRE(output.size() == ImageSize{24, 32});
     REQUIRE(output.orientation() == ImageOrientation::Normal);
-    REQUIRE(develop(output, {}).size() == output.size());
+    REQUIRE(develop(output, {}, LensCorrection{}).size() == output.size());
 }
 
 TEST_CASE("Qt orientation metadata survives decoding without rearranging pixels", "[geometry]") {
@@ -318,12 +324,12 @@ TEST_CASE("Qt orientation metadata survives decoding without rearranging pixels"
 TEST_CASE("Resolved plans distinguish orientation and crop changes", "[geometry][plan]") {
     const auto normal = labelled({5, 3});
     const auto rotated = labelled({5, 3}, ImageOrientation::Rotate90);
-    const auto plan = planFor(normal, {});
+    const auto plan = planFor(normal, {}, LensCorrection{});
     REQUIRE(plan.geometry.has_value());
-    REQUIRE_FALSE(plan == planFor(rotated, {}));
+    REQUIRE_FALSE(plan == planFor(rotated, {}, LensCorrection{}));
     DevelopSettings settings;
     settings.geometry.crop.aspect = CropRatio{1};
-    REQUIRE_FALSE(plan == planFor(normal, DevelopState{settings}));
+    REQUIRE_FALSE(plan == planFor(normal, DevelopState{settings}, LensCorrection{}));
 }
 
 TEST_CASE("Content helpers agree with the resolver's fitting", "[geometry][content]") {

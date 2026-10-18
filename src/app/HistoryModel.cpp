@@ -8,6 +8,11 @@
 #include <QCoreApplication>
 #include <QVariant>
 
+#include <algorithm>
+#include <array>
+#include <string_view>
+#include <vector>
+
 namespace arraw::app {
 
 namespace {
@@ -40,6 +45,46 @@ QString wordDelta(const LocalDescriptor& descriptor, float value) {
         number.prepend('+');
     }
     return QStringLiteral("%1 %2%3").arg(presentation.label, number, presentation.unit);
+}
+
+/// Words an ordinary edit that changed the lens corrections or the lens recorded for them.
+///
+/// One switch is named with where it went; several are a count of corrections, and a record alone
+/// names the lens.
+QString wordLens(const NegativeSettings& after, const std::vector<std::string_view>& keys) {
+    const auto tr = [](const char* text) {
+        return QCoreApplication::translate("arraw::app::HistoryModel", text);
+    };
+    struct Switch {
+        std::string_view key;
+        bool now;
+        const char* on;
+        const char* off;
+    };
+    const std::array switches{Switch{"lensDistortion", after.lens.distortion, "Lens: distortion on",
+                                     "Lens: distortion off"},
+                              Switch{"lensVignetting", after.lens.vignetting, "Lens: vignetting on",
+                                     "Lens: vignetting off"},
+                              Switch{"lensLateralCa", after.lens.lateralCa,
+                                     "Lens: chromatic aberration on",
+                                     "Lens: chromatic aberration off"}};
+    std::vector<const Switch*> changed;
+    for (const Switch& one : switches) {
+        if (std::ranges::find(keys, one.key) != keys.end()) {
+            changed.push_back(&one);
+        }
+    }
+    if (changed.size() == 1) {
+        return tr(changed.front()->now ? changed.front()->on : changed.front()->off);
+    }
+    if (changed.size() > 1) {
+        return tr("Lens corrections");
+    }
+    if (after.lens.lens) {
+        return QStringLiteral("%1: %2").arg(tr("Lens"),
+                                            QString::fromStdString(after.lens.lens->model));
+    }
+    return tr("Lens: automatic");
 }
 
 /// Words an ordinary edit that changed masks and no setting.
@@ -218,9 +263,17 @@ QString HistoryModel::textOf(std::size_t index) const {
         const std::size_t masks = change.local.added.size() + change.local.removed.size() +
                                   change.local.changed.size() + (change.local.reordered ? 1 : 0);
         const std::size_t total = change.negative.size() + change.keys.size() + masks;
-        if (total == 1) {
+        if (total == 1 && change.negative.front() == "demosaic") {
             return QStringLiteral("%1: %2").arg(tr("Demosaic"),
                                                 demosaicDisplayName(step.negative.demosaic));
+        }
+        // A correction turned on records its lens in the same step, which is still one change.
+        const bool lensOnly = change.keys.empty() && masks == 0 &&
+                              std::ranges::all_of(change.negative, [](std::string_view key) {
+                                  return key != "demosaic";
+                              });
+        if (lensOnly) {
+            return wordLens(step.negative, change.negative);
         }
         return QCoreApplication::translate("arraw::app::HistoryModel", "%n changes", nullptr,
                                            static_cast<int>(total));

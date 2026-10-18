@@ -201,7 +201,7 @@ float largestDifference(const ImageBuffer& first, const ImageBuffer& second) {
 
 /// @brief The plan of a state against a source's size, as the render uses it.
 ProcessingPlan planOf(const ImageBuffer& source, const DevelopState& state) {
-    return planFor(source, state);
+    return planFor(source, state, LensCorrection{});
 }
 
 /// @brief Luminance of a colour in the working space.
@@ -475,7 +475,7 @@ TEST_CASE("A render's pixels follow the weight worked out from the ADR's words",
         const DevelopState state =
             withMask(withMask(DevelopState{plainSettings()}, linear, {.exposure = 2.0F}), radial,
                      {.exposure = -1.0F}, 1.0F, true);
-        const ImageBuffer out = develop(source, state);
+        const ImageBuffer out = develop(source, state, LensCorrection{});
         for (std::uint32_t y = 0; y < size.height; ++y) {
             for (std::uint32_t x = 0; x < size.width; ++x) {
                 const double stops = 2.0 * linearRef(linear, size, x, y) -
@@ -500,7 +500,8 @@ TEST_CASE("Masks sum in setting units and clamp once", "[local][sum]") {
                      ramp, {.relativeTemperature = 50.0F, .exposure = 0.75F});
         const DevelopState one = withMask(DevelopState{plainSettings()}, ramp,
                                           {.relativeTemperature = 100.0F, .exposure = 1.5F});
-        REQUIRE(sameBits(develop(source, two), develop(source, one)));
+        REQUIRE(sameBits(develop(source, two, LensCorrection{}),
+                         develop(source, one, LensCorrection{})));
     }
     SECTION("masks that cancel exactly leave the global render, bit for bit") {
         DevelopSettings settings = plainSettings();
@@ -519,7 +520,8 @@ TEST_CASE("Masks sum in setting units and clamp once", "[local][sum]") {
         }
         const DevelopState cancelling = withMask(withMask(without, ramp, up), ramp, down);
         REQUIRE(planOf(source, cancelling).pointwise.local.masks.size() == 2);
-        REQUIRE(sameBits(develop(source, cancelling), develop(source, without)));
+        REQUIRE(sameBits(develop(source, cancelling, LensCorrection{}),
+                         develop(source, without, LensCorrection{})));
     }
     SECTION("sixteen overlapping masks are one carrying the sum") {
         DevelopState sixteen{plainSettings()};
@@ -529,7 +531,8 @@ TEST_CASE("Masks sum in setting units and clamp once", "[local][sum]") {
         const DevelopState one =
             withMask(DevelopState{plainSettings()}, ramp, {.exposure = 2.0F, .shadows = 80.0F});
         // Sixteen sums of a power of two are exact.
-        REQUIRE(sameBits(develop(source, sixteen), develop(source, one)));
+        REQUIRE(sameBits(develop(source, sixteen, LensCorrection{}),
+                         develop(source, one, LensCorrection{})));
     }
     SECTION("the sum clamps to the global range, once") {
         DevelopSettings settings = plainSettings();
@@ -581,7 +584,8 @@ TEST_CASE("A full-weight mask is the global render at the summed setting", "[loc
         LocalDeltas deltas;
         deltas.*(findLocalDescriptor(row.key)->member) = row.local;
         const DevelopState masked = withMask(globalOnly, everywhere(), deltas);
-        REQUIRE(largestDifference(develop(source, masked), develop(source, summed)) <= 2e-6F);
+        REQUIRE(largestDifference(develop(source, masked, LensCorrection{}),
+                                  develop(source, summed, LensCorrection{})) <= 2e-6F);
     }
 }
 
@@ -591,7 +595,7 @@ TEST_CASE("Masks that do nothing leave the render bit for bit", "[local][neutral
     settings.tone.exposure = 0.3F;
     settings.presence.clarity = 25.0F;
     const DevelopState without{settings};
-    const ImageBuffer reference = develop(source, without);
+    const ImageBuffer reference = develop(source, without, LensCorrection{});
     const LocalDeltas some{
         .relativeTemperature = 20.0F, .exposure = 1.0F, .texture = 30.0F, .dehaze = 25.0F};
 
@@ -600,7 +604,7 @@ TEST_CASE("Masks that do nothing leave the render bit for bit", "[local][neutral
         state = withLocalAdjustmentEnabled(state, state.localAdjustments[0].id, false);
         state = withMask(state, RadialMask{}, some, 0.0F);
         state = withMask(state, RadialMask{}, LocalDeltas{});
-        REQUIRE(sameBits(develop(source, state), reference));
+        REQUIRE(sameBits(develop(source, state, LensCorrection{}), reference));
     }
     SECTION("outside every mask's coverage") {
         const RadialMask corner{.centre = {0.1F, 0.1F},
@@ -609,7 +613,7 @@ TEST_CASE("Masks that do nothing leave the render bit for bit", "[local][neutral
                                 .angle = 0.0F,
                                 .feather = 0.5F};
         const DevelopState state = withMask(without, corner, some);
-        const ImageBuffer masked = develop(source, state);
+        const ImageBuffer masked = develop(source, state, LensCorrection{});
         std::size_t outside = 0;
         std::size_t inside = 0;
         for (std::uint32_t y = 0; y < 36; ++y) {
@@ -649,8 +653,10 @@ TEST_CASE("Relative Temperature warms and Tint moves towards magenta, in a rende
           "[local][balance]") {
     const ImageBuffer source = flat({8, 8}, 0.25F);
     const auto render = [&](const LocalDeltas& deltas) {
-        return pixelOf(
-            develop(source, withMask(DevelopState{plainSettings()}, everywhere(), deltas)), 3, 3);
+        return pixelOf(develop(source,
+                               withMask(DevelopState{plainSettings()}, everywhere(), deltas),
+                               LensCorrection{}),
+                       3, 3);
     };
     const Colour warm = render({.relativeTemperature = 100.0F});
     REQUIRE(warm[0] > 0.25F);
@@ -682,13 +688,15 @@ TEST_CASE("Zero relative Temperature and Tint apply no gain at all", "[local][ba
     for (std::uint32_t y = 0; y < 16; ++y) {
         REQUIRE_FALSE(amountsAt(plan, 5, y, PixelCoverage{}).balances);
     }
-    REQUIRE(sameBits(develop(source, state), develop(source, without)));
+    REQUIRE(sameBits(develop(source, state, LensCorrection{}),
+                     develop(source, without, LensCorrection{})));
     // Two masks of 50 are one of 100.
     const DevelopState twice =
         withMask(withMask(without, LinearMask{}, {.relativeTemperature = 50.0F}), LinearMask{},
                  {.relativeTemperature = 50.0F});
     const DevelopState once = withMask(without, LinearMask{}, {.relativeTemperature = 100.0F});
-    REQUIRE(sameBits(develop(source, twice), develop(source, once)));
+    REQUIRE(sameBits(develop(source, twice, LensCorrection{}),
+                     develop(source, once, LensCorrection{})));
 }
 
 namespace {
@@ -943,10 +951,10 @@ TEST_CASE("Mixed-sign Dehaze across one frame is two single-sign renders compose
     REQUIRE(plan.hazeFloor.active());
     REQUIRE(plan.hazeMean.active());
 
-    const ImageBuffer mixed = develop(source, both);
-    const ImageBuffer floorOnly = develop(source, positive);
-    const ImageBuffer meanOnly = develop(source, negative);
-    const ImageBuffer plain = develop(source, none);
+    const ImageBuffer mixed = develop(source, both, LensCorrection{});
+    const ImageBuffer floorOnly = develop(source, positive, LensCorrection{});
+    const ImageBuffer meanOnly = develop(source, negative, LensCorrection{});
+    const ImageBuffer plain = develop(source, none, LensCorrection{});
     std::size_t floorPixels = 0;
     std::size_t meanPixels = 0;
     for (std::uint32_t y = 0; y < size.height; ++y) {
@@ -977,18 +985,21 @@ TEST_CASE("Masks that cancel Dehaze to zero read neither base", "[local][presenc
     const PresencePlan plan = planOf(source, cancelling).pointwise.presence;
     REQUIRE(plan.hazeFloor.active());
     REQUIRE(plan.hazeMean.active());
-    REQUIRE(sameBits(develop(source, cancelling), develop(source, none)));
+    REQUIRE(sameBits(develop(source, cancelling, LensCorrection{}),
+                     develop(source, none, LensCorrection{})));
 }
 
 TEST_CASE("Presence under masks alone, with every global at zero", "[local][presence]") {
     const ImageSize size{96, 64};
     const ImageBuffer source = veiledScene(size);
     const DevelopState none{plainSettings()};
-    const ImageBuffer plain = develop(source, none);
+    const ImageBuffer plain = develop(source, none, LensCorrection{});
     const LocalDeltas deltas{.texture = 60.0F, .clarity = 50.0F, .dehaze = 40.0F};
-    const ImageBuffer masked = develop(source, withMask(none, leftBlob(), deltas));
+    const ImageBuffer masked =
+        develop(source, withMask(none, leftBlob(), deltas), LensCorrection{});
     // The same render as the global controls at those amounts, where the mask is one.
-    const ImageBuffer global = develop(source, DevelopState{presenceSettings(60.0F, 50.0F, 40.0F)});
+    const ImageBuffer global =
+        develop(source, DevelopState{presenceSettings(60.0F, 50.0F, 40.0F)}, LensCorrection{});
     std::size_t changed = 0;
     for (std::uint32_t y = 0; y < size.height; ++y) {
         for (std::uint32_t x = 0; x < size.width; ++x) {
@@ -1021,9 +1032,9 @@ TEST_CASE("A global positive Dehaze under a negative mask, and the exact boundar
         const PresencePlan plan = planOf(source, state).pointwise.presence;
         REQUIRE(plan.hazeFloor.active());
         REQUIRE(plan.hazeMean.active());
-        const ImageBuffer masked = develop(source, state);
+        const ImageBuffer masked = develop(source, state, LensCorrection{});
         const ImageBuffer global =
-            develop(source, DevelopState{presenceSettings(0.0F, 0.0F, -30.0F)});
+            develop(source, DevelopState{presenceSettings(0.0F, 0.0F, -30.0F)}, LensCorrection{});
         REQUIRE(largestDifference(masked, global) <= 1e-6F);
     }
     SECTION("an interval that ends exactly at zero prepares no floor and reads none") {
@@ -1033,14 +1044,15 @@ TEST_CASE("A global positive Dehaze under a negative mask, and the exact boundar
         const PresencePlan plan = planOf(source, state).pointwise.presence;
         REQUIRE_FALSE(plan.hazeFloor.active());
         REQUIRE(plan.hazeMean.active());
-        const ImageBuffer masked = develop(source, state);
-        const ImageBuffer none = develop(source, DevelopState{presenceSettings(0.0F, 0.0F, 0.0F)});
+        const ImageBuffer masked = develop(source, state, LensCorrection{});
+        const ImageBuffer none =
+            develop(source, DevelopState{presenceSettings(0.0F, 0.0F, 0.0F)}, LensCorrection{});
         REQUIRE(largestDifference(masked, none) <= 1e-6F);
         // And a mask of half the weight is a negative amount: the mean.
         const DevelopState half = withMask(DevelopState{settings}, everywhere(), {.dehaze = 25.0F});
-        const ImageBuffer halved = develop(source, half);
+        const ImageBuffer halved = develop(source, half, LensCorrection{});
         const ImageBuffer global =
-            develop(source, DevelopState{presenceSettings(0.0F, 0.0F, -25.0F)});
+            develop(source, DevelopState{presenceSettings(0.0F, 0.0F, -25.0F)}, LensCorrection{});
         REQUIRE(largestDifference(halved, global) <= 1e-6F);
     }
 }
@@ -1070,7 +1082,7 @@ TEST_CASE("The mask stays on the same source pixels under every orientation", "[
         RadialMask{{0.7F, 0.3F}, 0.2F, 0.1F, 20.0F, 0.3F}, {.exposure = -1.0F, .contrast = 40.0F});
     const DevelopState none{plainSettings()};
     const ImageBuffer normal = sceneOf(size);
-    const ImageBuffer upright = develop(normal, state);
+    const ImageBuffer upright = develop(normal, state, LensCorrection{});
 
     // Where the source pixel (x, y) of a W x H frame lands under an EXIF orientation.
     const auto landing = [](ImageOrientation orientation, ImageSize frame, std::uint32_t x,
@@ -1104,8 +1116,8 @@ TEST_CASE("The mask stays on the same source pixels under every orientation", "[
           ImageOrientation::Transverse, ImageOrientation::Rotate270}) {
         INFO("orientation " << static_cast<int>(orientation));
         const ImageBuffer turned = sceneOf(size, orientation);
-        const ImageBuffer render = develop(turned, state);
-        const ImageBuffer plainRender = develop(turned, none);
+        const ImageBuffer render = develop(turned, state, LensCorrection{});
+        const ImageBuffer plainRender = develop(turned, none, LensCorrection{});
         // The orientation itself, found out on the render without masks: the oriented pixel is
         // the source pixel where the orientation lands it.
         for (std::uint32_t y = 0; y < size.height; ++y) {
@@ -1136,7 +1148,8 @@ TEST_CASE("The mask stays on the same source pixels under crop, straighten, turn
                  RadialMask{{0.7F, 0.3F}, 0.2F, 0.1F, 20.0F, 0.3F}, {.exposure = -1.0F});
 
     // The pointwise result is the same whatever the geometry: the checkpoint after it is.
-    const ImageBuffer pointwise = developUntil(source, masked, Stage::Pointwise).readBack();
+    const ImageBuffer pointwise =
+        developUntil(source, masked, LensCorrection{}, Stage::Pointwise).readBack();
     std::vector<GeometrySettings> geometries;
     geometries.push_back({.straighten = 7.5});
     geometries.push_back({.rotation = QuarterTurn::Clockwise90});
@@ -1151,10 +1164,12 @@ TEST_CASE("The mask stays on the same source pixels under crop, straighten, turn
         DevelopState state = masked;
         state.settings.geometry = geometry;
         // Pointwise, then geometry on the result: what a render is.
-        REQUIRE(sameBits(developUntil(source, state, Stage::Pointwise).readBack(), pointwise));
+        REQUIRE(sameBits(developUntil(source, state, LensCorrection{}, Stage::Pointwise).readBack(),
+                         pointwise));
         DevelopState onlyGeometry{plainSettings()};
         onlyGeometry.settings.geometry = geometry;
-        REQUIRE(sameBits(develop(source, state), develop(pointwise, onlyGeometry)));
+        REQUIRE(sameBits(develop(source, state, LensCorrection{}),
+                         develop(pointwise, onlyGeometry, LensCorrection{})));
     }
 }
 
@@ -1189,8 +1204,8 @@ TEST_CASE("A reduced level evaluates the same field as the full source", "[local
     const ImageBuffer fullSource = flat({128, 64}, 0.2F);
     ImageBuffer reducedSource = flat({64, 32}, 0.2F);
     reducedSource.setPixelScale(2.0);
-    const ImageBuffer big = develop(fullSource, state);
-    const ImageBuffer small = develop(reducedSource, state);
+    const ImageBuffer big = develop(fullSource, state, LensCorrection{});
+    const ImageBuffer small = develop(reducedSource, state, LensCorrection{});
     for (std::uint32_t y = 0; y < 32; ++y) {
         for (std::uint32_t x = 0; x < 64; ++x) {
             double mean = 0.0;
@@ -1213,9 +1228,9 @@ TEST_CASE("A region render evaluates the same field as the whole render", "[loca
         withMask(DevelopState{settings}, LinearMask{{0.1F, 0.2F}, {0.6F, 0.9F}},
                  {.exposure = 1.0F, .texture = 30.0F}),
         RadialMask{{0.7F, 0.3F}, 0.3F, 0.2F, 20.0F, 0.5F}, {.exposure = -1.0F, .dehaze = 30.0F});
-    const ImageBuffer whole = develop(source, state);
+    const ImageBuffer whole = develop(source, state, LensCorrection{});
     const RenderRequest request{.region = RenderRequest::Region{0.25, 0.5, 0.75, 1.0}};
-    const ImageBuffer part = develop(source, state, request);
+    const ImageBuffer part = develop(source, state, LensCorrection{}, request);
     const PixelRegion pixels = regionOf(request, whole.size());
     REQUIRE(part.size() == pixels.size());
     for (std::uint32_t y = 0; y < pixels.height; ++y) {
@@ -1235,7 +1250,7 @@ TEST_CASE("A mask edit resumes from the Denoise checkpoint and never reruns nois
     state = withMask(state, LinearMask{}, {.exposure = 1.0F});
 
     CheckpointLadder ladder;
-    const LadderRender first = resumeOrDevelop(ladder, source, state, {});
+    const LadderRender first = resumeOrDevelop(ladder, source, state, LensCorrection{}, {});
     REQUIRE_FALSE(first.resumedFrom.has_value());
     REQUIRE(ladder.holds(Stage::Denoise));
 
@@ -1251,10 +1266,10 @@ TEST_CASE("A mask edit resumes from the Denoise checkpoint and never reruns nois
     for (const auto& [what, edited] : edits) {
         INFO(what);
         CheckpointLadder resumed;
-        static_cast<void>(resumeOrDevelop(resumed, source, state, {}));
-        const LadderRender render = resumeOrDevelop(resumed, source, edited, {});
+        static_cast<void>(resumeOrDevelop(resumed, source, state, LensCorrection{}, {}));
+        const LadderRender render = resumeOrDevelop(resumed, source, edited, LensCorrection{}, {});
         REQUIRE(render.resumedFrom == Stage::Denoise);
-        REQUIRE(sameBits(render.checkpoint.readBack(), develop(*source, edited)));
+        REQUIRE(sameBits(render.checkpoint.readBack(), develop(*source, edited, LensCorrection{})));
     }
 }
 
@@ -1367,13 +1382,13 @@ TEST_CASE("A saturation mask is seen after the tap, in a render of the tap's sam
     const DevelopState none{plainSettings()};
     const DevelopState saturated = withMask(none, everywhere(), {.saturation = 80.0F});
     const DevelopState lit = withMask(none, everywhere(), {.exposure = 1.0F});
-    REQUIRE(sameBits(sample(source, saturated, Tap::CurveInput),
-                     sample(source, none, Tap::CurveInput)));
-    REQUIRE_FALSE(
-        sameBits(sample(source, lit, Tap::CurveInput), sample(source, none, Tap::CurveInput)));
+    REQUIRE(sameBits(sample(source, saturated, LensCorrection{}, Tap::CurveInput),
+                     sample(source, none, LensCorrection{}, Tap::CurveInput)));
+    REQUIRE_FALSE(sameBits(sample(source, lit, LensCorrection{}, Tap::CurveInput),
+                           sample(source, none, LensCorrection{}, Tap::CurveInput)));
     // The tap's sample is the chain's prefix at the pixel's own amounts.
-    const ImageBuffer tap = sample(source, lit, Tap::CurveInput);
-    const ImageBuffer plain = sample(source, none, Tap::CurveInput);
+    const ImageBuffer tap = sample(source, lit, LensCorrection{}, Tap::CurveInput);
+    const ImageBuffer plain = sample(source, none, LensCorrection{}, Tap::CurveInput);
     REQUIRE(pixelOf(tap, 4, 4)[1] > pixelOf(plain, 4, 4)[1]);
 }
 
@@ -1488,11 +1503,11 @@ TEST_CASE("A delta edit leaves every brush reference equal and resumes from Deno
     REQUIRE_FALSE(before == after);
 
     CheckpointLadder ladder;
-    static_cast<void>(resumeOrDevelop(ladder, source, state, {}));
+    static_cast<void>(resumeOrDevelop(ladder, source, state, LensCorrection{}, {}));
     REQUIRE(ladder.holds(Stage::Denoise));
-    const LadderRender render = resumeOrDevelop(ladder, source, louder, {});
+    const LadderRender render = resumeOrDevelop(ladder, source, louder, LensCorrection{}, {});
     REQUIRE(render.resumedFrom == Stage::Denoise);
-    REQUIRE(sameBits(render.checkpoint.readBack(), develop(*source, louder)));
+    REQUIRE(sameBits(render.checkpoint.readBack(), develop(*source, louder, LensCorrection{})));
 }
 
 TEST_CASE("An appended stroke invalidates Pointwise and nothing before it",

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "LensSupport.h"
 #include "ThumbnailCache.h"
 
 #include <QImage>
@@ -71,8 +72,11 @@ public:
     /// result whose generation is not ::arraw::app::ThumbnailWorker::generation any more is stale.
     /// Must not throw.
     /// @param pruneAtStart Whether to prune the cache to its cap on a second background thread.
+    /// @param lensDatabase Gives the lens database for a shot whose saved settings turn a lens
+    /// correction on; called on the worker thread, where the first load may take a second. Empty
+    /// for ::arraw::app::systemLensDatabase.
     ThumbnailWorker(ThumbnailCache cache, std::function<void(ThumbnailResult)> onResult,
-                    bool pruneAtStart = true);
+                    bool pruneAtStart = true, LensDatabaseSource lensDatabase = {});
 
     ThumbnailWorker(const ThumbnailWorker&) = delete;
     ThumbnailWorker& operator=(const ThumbnailWorker&) = delete;
@@ -135,6 +139,8 @@ private:
 
     /// Where thumbnails are kept.
     ThumbnailCache cache_;
+    /// Gives the lens database; called on the worker thread.
+    LensDatabaseSource lensDatabase_;
     /// Receiver of results, called on the worker thread.
     std::function<void(ThumbnailResult)> onResult_;
     /// Folder generation.

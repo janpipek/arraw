@@ -540,8 +540,8 @@ TEST_CASE("A half-size decode develops to what a full one does, reduced", "[inte
             loadImage(test::fixture(fixture), discardedDiagnostics(), {.halfSize = true});
 
         const DevelopState state;
-        const auto expected = halved(develop(full, state));
-        const auto actual = develop(half, state);
+        const auto expected = halved(develop(full, state, LensCorrection{}));
+        const auto actual = develop(half, state, LensCorrection{});
         REQUIRE(actual.size() == expected.size());
 
         float worst = 0.0F;

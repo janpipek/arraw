@@ -142,8 +142,8 @@ TEST_CASE("Outside every stroke a brush render is the render without masks", "[b
     const Stroke corner = test::straightStroke({0.1F, 0.15F}, {0.3F, 0.3F}, 6, 0.05F, 0.5F, 1.0F);
     const DevelopState brushed =
         withMask(without, brushOf({corner}), {.exposure = 1.0F, .saturation = 30.0F});
-    const ImageBuffer reference = develop(source, without);
-    const ImageBuffer masked = develop(source, brushed);
+    const ImageBuffer reference = develop(source, without, LensCorrection{});
+    const ImageBuffer masked = develop(source, brushed, LensCorrection{});
     const PackedCoverage packed = packedFor(brushed, size);
 
     std::size_t outside = 0;
@@ -169,15 +169,15 @@ TEST_CASE("An empty brush does nothing, and inverted it is the global render at 
     DevelopSettings settings = plainSettings();
     settings.tone.exposure = 0.4F;
     const DevelopState global{settings};
-    const ImageBuffer reference = develop(source, global);
+    const ImageBuffer reference = develop(source, global, LensCorrection{});
     const DevelopState empty = withMask(global, brushOf({}), {.exposure = 1.5F});
-    REQUIRE(sameBits(develop(source, empty), reference));
+    REQUIRE(sameBits(develop(source, empty, LensCorrection{}), reference));
 
     const DevelopState inverted = withMask(global, brushOf({}), {.exposure = 1.5F}, true);
     DevelopSettings summed = plainSettings();
     summed.tone.exposure = 1.9F;
-    REQUIRE(largestDifference(develop(source, inverted), develop(source, DevelopState{summed})) <=
-            2e-6F);
+    REQUIRE(largestDifference(develop(source, inverted, LensCorrection{}),
+                              develop(source, DevelopState{summed}, LensCorrection{})) <= 2e-6F);
 }
 
 TEST_CASE("A brush, a linear and a radial mask sum as the ADR says", "[brush][render]") {
@@ -192,7 +192,7 @@ TEST_CASE("A brush, a linear and a radial mask sum as the ADR says", "[brush][re
     state = withMask(state, linear, {.exposure = 1.0F});
     state = withMask(state, brush, {.exposure = 0.5F});
     state = withMask(state, radial, {.exposure = -0.75F}, true);
-    const ImageBuffer out = develop(source, state);
+    const ImageBuffer out = develop(source, state, LensCorrection{});
 
     const LocalPlan plan = localPlanFor(state, size);
     const PackedCoverage packed = packCoverage(plan);
@@ -225,7 +225,7 @@ TEST_CASE("The same path at different event rates is the same render", "[brush][
             const DevelopState state = withMask(DevelopState{plainSettings()},
                                                 brushOf({horizontal(split(corners, splits))}),
                                                 {.exposure = 1.0F, .contrast = 20.0F});
-            return develop(source, state);
+            return develop(source, state, LensCorrection{});
         };
         const ImageBuffer once = render(0);
         for (const int splits : {1, 2, 3}) {
@@ -238,7 +238,9 @@ TEST_CASE("The same path at different event rates is the same render", "[brush][
             withMask(DevelopState{plainSettings()}, brushOf({horizontal(split(corners, 2))}),
                      {.exposure = 1.0F, .contrast = 20.0F});
         CheckpointLadder ladder;
-        REQUIRE(sameBits(resumeOrDevelop(ladder, shared, state, {}).checkpoint.readBack(), once));
+        REQUIRE(sameBits(
+            resumeOrDevelop(ladder, shared, state, LensCorrection{}, {}).checkpoint.readBack(),
+            once));
     }
 }
 
@@ -267,8 +269,8 @@ TEST_CASE("A diagonal path at 1x and 3x differs by one code at most, in few pixe
     const DevelopState three = stateOf(3);
     const PackedCoverage a = packedFor(one, size);
     const PackedCoverage b = packedFor(three, size);
-    const ImageBuffer renderOne = develop(source, one);
-    const ImageBuffer renderThree = develop(source, three);
+    const ImageBuffer renderOne = develop(source, one, LensCorrection{});
+    const ImageBuffer renderThree = develop(source, three, LensCorrection{});
     std::size_t reached = 0;
     std::size_t differing = 0;
     for (std::uint32_t y = 0; y < size.height; ++y) {
@@ -308,9 +310,9 @@ TEST_CASE("A hardness-one stroke is the global render at g + k inside, and nothi
         const DevelopState brushed = withMask(
             none, brushOf({test::straightStroke({0.3F, 0.5F}, {0.7F, 0.5F}, 12, 0.2F, 1.0F, 1.0F)}),
             {.exposure = 1.0F});
-        const ImageBuffer rendered = develop(source, brushed);
-        const ImageBuffer unmasked = develop(source, none);
-        const ImageBuffer allIn = develop(source, DevelopState{summed});
+        const ImageBuffer rendered = develop(source, brushed, LensCorrection{});
+        const ImageBuffer unmasked = develop(source, none, LensCorrection{});
+        const ImageBuffer allIn = develop(source, DevelopState{summed}, LensCorrection{});
         const PackedCoverage packed = packedFor(brushed, size);
         std::size_t deep = 0;
         std::size_t outside = 0;
@@ -342,13 +344,14 @@ TEST_CASE("A ladder render with a brush equals the direct render", "[brush][rend
         state, brushOf({test::straightStroke({0.2F, 0.3F}, {0.7F, 0.6F}, 10, 0.08F, 0.4F, 0.9F)}),
         {.exposure = 0.8F, .shadows = 30.0F});
     CheckpointLadder ladder;
-    const ImageBuffer first = resumeOrDevelop(ladder, source, state, {}).checkpoint.readBack();
-    REQUIRE(sameBits(first, develop(*source, state)));
+    const ImageBuffer first =
+        resumeOrDevelop(ladder, source, state, LensCorrection{}, {}).checkpoint.readBack();
+    REQUIRE(sameBits(first, develop(*source, state, LensCorrection{})));
     // A delta edit resumes from the held rung and still gives the direct render's bits.
     const DevelopState louder =
         withLocalDelta(state, state.localAdjustments[0].id, "exposure", 1.6);
-    const LadderRender again = resumeOrDevelop(ladder, source, louder, {});
-    REQUIRE(sameBits(again.checkpoint.readBack(), develop(*source, louder)));
+    const LadderRender again = resumeOrDevelop(ladder, source, louder, LensCorrection{}, {});
+    REQUIRE(sameBits(again.checkpoint.readBack(), develop(*source, louder, LensCorrection{})));
 }
 
 TEST_CASE("A region render of a brush is the crop of the whole", "[brush][render][region]") {
@@ -360,9 +363,9 @@ TEST_CASE("A region render of a brush is the crop of the whole", "[brush][render
         withMask(DevelopState{settings},
                  brushOf({test::straightStroke({0.2F, 0.3F}, {0.8F, 0.7F}, 12, 0.1F, 0.5F, 1.0F)}),
                  {.exposure = 1.0F, .texture = 30.0F});
-    const ImageBuffer whole = develop(source, state);
+    const ImageBuffer whole = develop(source, state, LensCorrection{});
     const RenderRequest request{.region = RenderRequest::Region{0.25, 0.5, 0.75, 1.0}};
-    const ImageBuffer part = develop(source, state, request);
+    const ImageBuffer part = develop(source, state, LensCorrection{}, request);
     const PixelRegion pixels = regionOf(request, whole.size());
     REQUIRE(part.size() == pixels.size());
     for (std::uint32_t y = 0; y < pixels.height; ++y) {
@@ -380,17 +383,17 @@ TEST_CASE("A cancelled render leaves the cache consistent and the next render co
     const auto list = paintedMask(77, 5, everydayStyle, 0.75);
     const DevelopState state =
         withMask(DevelopState{plainSettings()}, BrushMask{list}, {.exposure = 1.0F});
-    const ImageBuffer reference = develop(source, state);
+    const ImageBuffer reference = develop(source, state, LensCorrection{});
     brushCoverageCache().clear();
 
     SECTION("cancelled before it starts") {
         ProgressChannel channel;
         channel.cancel();
-        REQUIRE_THROWS_AS(develop(source, state, {}, &channel), Cancelled);
+        REQUIRE_THROWS_AS(develop(source, state, LensCorrection{}, {}, &channel), Cancelled);
     }
     SECTION("cancelled by its first report") {
         ProgressChannel channel([&channel](const Progress&) { channel.cancel(); });
-        REQUIRE_THROWS_AS(develop(source, state, {}, &channel), Cancelled);
+        REQUIRE_THROWS_AS(develop(source, state, LensCorrection{}, {}, &channel), Cancelled);
     }
     SECTION("cancelled while the coverage is packed") {
         const LocalPlan plan = localPlanFor(state, size);
@@ -407,7 +410,7 @@ TEST_CASE("A cancelled render leaves the cache consistent and the next render co
     if (const auto held = brushCoverageCache().find(list, size)) {
         REQUIRE(held->gathered() == rasteriseBrush(*list, size));
     }
-    REQUIRE(sameBits(develop(source, state), reference));
+    REQUIRE(sameBits(develop(source, state, LensCorrection{}), reference));
 }
 
 TEST_CASE("Thumbnail-sized develop and sample work with brushes", "[brush][render]") {
@@ -417,13 +420,13 @@ TEST_CASE("Thumbnail-sized develop and sample work with brushes", "[brush][rende
                  brushOf({test::straightStroke({0.2F, 0.3F}, {0.8F, 0.7F}, 12, 0.1F, 0.5F, 1.0F)}),
                  {.exposure = 1.0F, .saturation = 20.0F});
     const RenderRequest thumbnail{.size = RenderRequest::FitInside{40, 40}};
-    const ImageBuffer small = develop(source, state, thumbnail);
+    const ImageBuffer small = develop(source, state, LensCorrection{}, thumbnail);
     REQUIRE(small.size() == ImageSize{40, 27});
-    const ImageBuffer tap = sample(source, state, Tap::CurveInput, thumbnail);
+    const ImageBuffer tap = sample(source, state, LensCorrection{}, Tap::CurveInput, thumbnail);
     REQUIRE(tap.size() == small.size());
     // Another size of the same strokes is another raster, and brightens where the brush is.
     const DevelopState none{plainSettings()};
-    REQUIRE_FALSE(sameBits(small, develop(source, none, thumbnail)));
+    REQUIRE_FALSE(sameBits(small, develop(source, none, LensCorrection{}, thumbnail)));
 }
 
 TEST_CASE("A brush the plan keeps still renders through the tap's prefix", "[brush][render][tap]") {
@@ -432,8 +435,8 @@ TEST_CASE("A brush the plan keeps still renders through the tap's prefix", "[bru
     const DevelopState lit = withMask(
         none, brushOf({test::straightStroke({0.2F, 0.5F}, {0.8F, 0.5F}, 8, 0.2F, 1.0F, 1.0F)}),
         {.exposure = 1.0F});
-    const ImageBuffer tap = sample(source, lit, Tap::CurveInput);
-    const ImageBuffer plain = sample(source, none, Tap::CurveInput);
+    const ImageBuffer tap = sample(source, lit, LensCorrection{}, Tap::CurveInput);
+    const ImageBuffer plain = sample(source, none, LensCorrection{}, Tap::CurveInput);
     // The middle of the stroke is brighter, a corner is not.
     REQUIRE(pixelOf(tap, 32, 24)[1] > pixelOf(plain, 32, 24)[1]);
     REQUIRE(sameColour(pixelOf(tap, 1, 1), pixelOf(plain, 1, 1)));
@@ -446,17 +449,19 @@ TEST_CASE("developUntil and resumeFrom carry a brush to the direct render's bits
         withMask(DevelopState{plainSettings()},
                  brushOf({test::straightStroke({0.2F, 0.3F}, {0.7F, 0.6F}, 10, 0.08F, 0.4F, 0.9F)}),
                  {.exposure = 0.8F, .shadows = 30.0F});
-    const ImageBuffer direct = develop(source, state);
+    const ImageBuffer direct = develop(source, state, LensCorrection{});
 
-    const RenderCheckpoint upTo = developUntil(source, state, Stage::Denoise);
-    const RenderCheckpoint finished = resumeFrom(upTo, source, state, Stage::Effects);
+    const RenderCheckpoint upTo = developUntil(source, state, LensCorrection{}, Stage::Denoise);
+    const RenderCheckpoint finished =
+        resumeFrom(upTo, source, state, LensCorrection{}, Stage::Effects);
     REQUIRE(sameBits(finished.readBack(), direct));
-    REQUIRE(sameBits(developUntil(source, state, Stage::Effects).readBack(), direct));
+    REQUIRE(
+        sameBits(developUntil(source, state, LensCorrection{}, Stage::Effects).readBack(), direct));
     // An edit of the brush's amount resumes from the same checkpoint to its own direct render.
     const DevelopState louder =
         withLocalDelta(state, state.localAdjustments[0].id, "exposure", 1.6);
-    REQUIRE(sameBits(resumeFrom(upTo, source, louder, Stage::Effects).readBack(),
-                     develop(source, louder)));
+    REQUIRE(sameBits(resumeFrom(upTo, source, louder, LensCorrection{}, Stage::Effects).readBack(),
+                     develop(source, louder, LensCorrection{})));
 }
 
 TEST_CASE("The progress of a brush render never decreases", "[brush][render][progress]") {
@@ -468,7 +473,7 @@ TEST_CASE("The progress of a brush render never decreases", "[brush][render][pro
     std::vector<double> fractions;
     ProgressChannel channel(
         [&fractions](const Progress& progress) { fractions.push_back(progress.fraction); });
-    (void)develop(source, state, {}, &channel);
+    (void)develop(source, state, LensCorrection{}, {}, &channel);
     REQUIRE_FALSE(fractions.empty());
     REQUIRE(std::ranges::is_sorted(fractions));
     REQUIRE(fractions.back() <= 1.0);
@@ -484,8 +489,9 @@ TEST_CASE("A delta drag through a ladder does no coverage work", "[brush][render
         state, brushOf({test::straightStroke({0.2F, 0.3F}, {0.7F, 0.6F}, 10, 0.08F, 0.4F, 0.9F)}),
         {.exposure = -0.4F});
     CheckpointLadder ladder;
-    REQUIRE(sameBits(resumeOrDevelop(ladder, source, state, {}).checkpoint.readBack(),
-                     develop(*source, state)));
+    REQUIRE(
+        sameBits(resumeOrDevelop(ladder, source, state, LensCorrection{}, {}).checkpoint.readBack(),
+                 develop(*source, state, LensCorrection{})));
     const CoverageResidency& residency = *LadderAccess::coverage(std::as_const(ladder));
     const std::uint64_t calls = residency.cacheCalls();
     const std::uint64_t packed = residency.tilesPacked();
@@ -494,8 +500,9 @@ TEST_CASE("A delta drag through a ladder does no coverage work", "[brush][render
     DevelopState dragged = state;
     for (const double amount : {1.0, 1.4, 1.9, -0.5}) {
         dragged = withLocalDelta(dragged, dragged.localAdjustments[0].id, "exposure", amount);
-        const LadderRender render = resumeOrDevelop(ladder, source, dragged, {});
-        REQUIRE(sameBits(render.checkpoint.readBack(), develop(*source, dragged)));
+        const LadderRender render = resumeOrDevelop(ladder, source, dragged, LensCorrection{}, {});
+        REQUIRE(
+            sameBits(render.checkpoint.readBack(), develop(*source, dragged, LensCorrection{})));
     }
     REQUIRE(residency.cacheCalls() == calls);
     REQUIRE(residency.tilesPacked() == packed);
@@ -513,8 +520,8 @@ TEST_CASE("A ladder render follows an appended stroke, an undo and a disabled br
     CheckpointLadder ladder;
     const auto render = [&](const DevelopState& wanted) {
         const ImageBuffer ladderBits =
-            resumeOrDevelop(ladder, source, wanted, {}).checkpoint.readBack();
-        REQUIRE(sameBits(ladderBits, develop(*source, wanted)));
+            resumeOrDevelop(ladder, source, wanted, LensCorrection{}, {}).checkpoint.readBack();
+        REQUIRE(sameBits(ladderBits, develop(*source, wanted, LensCorrection{})));
     };
     render(state);
     const CoverageResidency& residency = *LadderAccess::coverage(std::as_const(ladder));
@@ -546,8 +553,9 @@ TEST_CASE("Another source or size starts the ladder's coverage again", "[brush][
     CheckpointLadder ladder;
     for (const ImageSize size : {ImageSize{240, 160}, ImageSize{120, 80}, ImageSize{240, 160}}) {
         const auto source = std::make_shared<const ImageBuffer>(sceneOf(size));
-        REQUIRE(sameBits(resumeOrDevelop(ladder, source, state, {}).checkpoint.readBack(),
-                         develop(*source, state)));
+        REQUIRE(sameBits(
+            resumeOrDevelop(ladder, source, state, LensCorrection{}, {}).checkpoint.readBack(),
+            develop(*source, state, LensCorrection{})));
     }
 }
 
@@ -561,7 +569,7 @@ TEST_CASE("The Coverage step is reported between Context and Pointwise, and neve
 
     ReportLog log;
     ProgressChannel channel(log.callback());
-    static_cast<void>(develop(*source, state, {}, &channel));
+    static_cast<void>(develop(*source, state, LensCorrection{}, {}, &channel));
     REQUIRE(log.wellFormed());
     std::vector<ProgressStep> steps;
     for (const Progress& report : log.reports) {
@@ -578,7 +586,7 @@ TEST_CASE("The Coverage step is reported between Context and Pointwise, and neve
     CheckpointLadder ladder;
     ReportLog first;
     ProgressChannel firstChannel(first.callback());
-    static_cast<void>(resumeOrDevelop(ladder, source, state, {}, &firstChannel));
+    static_cast<void>(resumeOrDevelop(ladder, source, state, LensCorrection{}, {}, &firstChannel));
     REQUIRE(first.wellFormed());
     REQUIRE(std::ranges::any_of(first.reports, [](const Progress& report) {
         return report.step == ProgressStep::Coverage;
@@ -586,8 +594,8 @@ TEST_CASE("The Coverage step is reported between Context and Pointwise, and neve
     ReportLog drag;
     ProgressChannel dragChannel(drag.callback());
     static_cast<void>(resumeOrDevelop(
-        ladder, source, withLocalDelta(state, state.localAdjustments[0].id, "exposure", 2.0), {},
-        &dragChannel));
+        ladder, source, withLocalDelta(state, state.localAdjustments[0].id, "exposure", 2.0),
+        LensCorrection{}, {}, &dragChannel));
     REQUIRE(drag.wellFormed());
     REQUIRE(std::ranges::none_of(drag.reports, [](const Progress& report) {
         return report.step == ProgressStep::Coverage;
@@ -601,7 +609,7 @@ TEST_CASE("A ladder render cancelled while its coverage is made leaves the next 
     DevelopState state{plainSettings()};
     state = withMask(state, BrushMask{paintedMask(78, 5, everydayStyle, 0.75)}, {.exposure = 1.0F});
     state = withMask(state, BrushMask{paintedMask(79, 5, detailStyle, 0.75)}, {.shadows = 30.0F});
-    const ImageBuffer reference = develop(*source, state);
+    const ImageBuffer reference = develop(*source, state, LensCorrection{});
     brushCoverageCache().clear();
 
     CheckpointLadder ladder;
@@ -614,7 +622,8 @@ TEST_CASE("A ladder render cancelled while its coverage is made leaves the next 
             }
         });
         try {
-            static_cast<void>(resumeOrDevelop(ladder, source, state, {}, &channel));
+            static_cast<void>(
+                resumeOrDevelop(ladder, source, state, LensCorrection{}, {}, &channel));
         } catch (const Cancelled&) {
             // Either way, nothing wrong is kept.
         }
@@ -624,8 +633,9 @@ TEST_CASE("A ladder render cancelled while its coverage is made leaves the next 
                 REQUIRE(held->gathered() == rasteriseBrush(*mask.brush.strokes, source->size()));
             }
         }
-        REQUIRE(
-            sameBits(resumeOrDevelop(ladder, source, state, {}).checkpoint.readBack(), reference));
+        REQUIRE(sameBits(
+            resumeOrDevelop(ladder, source, state, LensCorrection{}, {}).checkpoint.readBack(),
+            reference));
         ladder.clear();
         brushCoverageCache().clear();
     }

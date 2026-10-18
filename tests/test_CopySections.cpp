@@ -49,11 +49,11 @@ TEST_CASE("Unknown section names are dropped, the geometry is kept", "[app][sett
     QSettings store = scratch(directory);
     store.setValue("copySettings/sections", QStringList{"tone", "nonsense", "crop", "rotateAndFlip",
                                                         "whiteBalance", "tone"});
-    // A selection from before the demosaic existed also gets it, once.
+    // A selection from before the demosaic or the lens existed also gets them, once.
     CHECK(restoreCopySections(store) ==
           std::vector<CopySection>{CopySection::WhiteBalance, CopySection::Tone,
                                    CopySection::RotateAndFlip, CopySection::Crop,
-                                   CopySection::Demosaic});
+                                   CopySection::Demosaic, CopySection::Lens});
 }
 
 TEST_CASE("Every copy section has a label", "[app][copy]") {
@@ -72,9 +72,9 @@ TEST_CASE("A remembered selection from before Demosaic gets it, once", "[app][se
     const test::TempDir directory;
     QSettings store = scratch(directory);
     store.setValue("copySettings/sections", QStringList{"tone", "exposure"});
-    CHECK(restoreCopySections(store) == std::vector<CopySection>{CopySection::Exposure,
-                                                                 CopySection::Tone,
-                                                                 CopySection::Demosaic});
+    CHECK(restoreCopySections(store) ==
+          std::vector<CopySection>{CopySection::Exposure, CopySection::Tone, CopySection::Demosaic,
+                                   CopySection::Lens});
 
     // Unchecked afterwards, it stays unchecked.
     saveCopySections(std::vector<CopySection>{CopySection::Tone}, store);

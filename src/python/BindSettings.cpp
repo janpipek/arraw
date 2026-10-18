@@ -276,6 +276,7 @@ void bindSettings(nb::module_& m) {
 
     nb::enum_<Stage>(m, "Stage", "Pass boundary of the render pipeline.")
         .value("DENOISE", Stage::Denoise)
+        .value("LENS", Stage::Lens)
         .value("POINTWISE", Stage::Pointwise)
         .value("GEOMETRY", Stage::Geometry)
         .value("RESIZE", Stage::Resize)

@@ -1,6 +1,6 @@
 # Lens corrections are a stage between noise reduction and the chain
 
-Status: proposed, 2026-10-17. The plan is
+Status: accepted, 2026-10-18 (proposed 2026-10-17). The plan is
 [lens-corrections-plan.md](../ideas/lens-corrections-plan.md). It is Phase 2 of
 [ADR 049](049-settings-of-the-negative-sit-beside-the-develop-state.md).
 
@@ -401,3 +401,38 @@ carry the database's attribution.
   crop rescaling, interpolation and an XML parser in core.
 - **Adobe's `crs:LensProfile*` keys**, which `old` claimed. They name Adobe
   profiles; a round-trip cannot hold.
+
+## Amendment, 2026-10-18: as built
+
+Steps 0 to 10 of the plan are built. Where the code differs from the text above,
+the code holds:
+
+- **Failures are a `LensProblem`, not a `Notice`.** `LensProblem`
+  (`include/LensProblem.h`) names why a correction was not resolved
+  (`LensUnidentified`, `LensFocalUnknown`, `CameraNotInDatabase`,
+  `LensNotInDatabase`, `LensAmbiguous`, `LensProfileMissing`,
+  `LensDatabaseChanged`, `LensDatabaseMissing`, `LensfunUnavailable`). The
+  resolution carries it, and a render turns it into the matching diagnostic.
+  The diagnostics also gain `LensNotCalibrated`: the lens was found but has no
+  calibration for a correction that is on, so that one is skipped.
+- **`sampleLensfun` takes the database** (`LensDatabase`) and the match; the
+  only file that includes `<lensfun.h>` is still `LensfunSource.cpp`.
+- **The tables have 129 nodes** (`lensTableNodes`), chosen by measurement: linear
+  interpolation stays under 0.05 sensor pixels at the corners and edges of a
+  24 MP frame for the strongest profile of the test database.
+- **`lensCost` is measured per combination** of corrections (distortion, lateral
+  CA, vignetting) in `RenderProgress.cpp`, not a single weight.
+- **Python's `lens` argument is optional on the buffer-form calls**, where the
+  caller holds pixels and no `Photo`; it defaults to no correction. The
+  `Photo` forms resolve it themselves.
+- **Paste before the database has loaded** matches live at render time and
+  records the lens on the next toggle, since a paste cannot wait on the
+  database off the GUI thread.
+- **GPU parity** (section 9) is measured on lavapipe only. No hardware GPU was
+  available, so the tolerance is not confirmed on a real device.
+- **Not yet done:** the hand check on the user's Canon 80D files (plan step 11),
+  and packaging (`just rpm`, `rpm-smoke`, the `.deb`'s `liblensfun1`
+  dependency) was written but not run here. See `docs/todo.md`.
+
+The amendments named in the Consequences are made in ADRs 009, 012, 031, 044,
+045 and 049, and in 022 and 030 for the history step and the saved sidecar.

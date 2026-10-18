@@ -13,6 +13,7 @@
 
 #include <QAbstractButton>
 #include <QApplication>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDialog>
@@ -774,4 +775,69 @@ TEST_CASE("Closed groups do not narrow the dock", "[app][panel][sections]") {
         CHECK_FALSE(section->isOpen());
     }
     CHECK(closed.minimumDockWidth() == openWidth);
+}
+
+TEST_CASE("The lens rows report a switch as a negative choice and show what they are given",
+          "[app][panel][lens]") {
+    DevelopPanel panel;
+    auto* distortion = panel.findChild<QCheckBox*>("lensDistortionCheck");
+    auto* vignetting = panel.findChild<QCheckBox*>("lensVignettingCheck");
+    auto* aberration = panel.findChild<QCheckBox*>("lensCaCheck");
+    auto* status = panel.findChild<QLabel*>("lensStatus");
+    auto* choose = panel.findChild<QPushButton*>("lensChooseButton");
+    auto* reset = panel.findChild<QPushButton*>("lensResetButton");
+    REQUIRE((distortion && vignetting && aberration && status && choose && reset));
+
+    // A photograph that is not a RAW, or a database still loading: nothing can be set.
+    panel.showState(DevelopState{}, PanelContext{});
+    CHECK_FALSE(distortion->isEnabled());
+    LensStatus loading;
+    loading.applicable = true;
+    loading.loading = true;
+    loading.text = "Loading the lens database…";
+    panel.showState(DevelopState{}, PanelContext{.lens = loading});
+    CHECK_FALSE(distortion->isEnabled());
+    CHECK_FALSE(choose->isEnabled());
+    CHECK(status->text() == loading.text);
+
+    // Ready: the switches follow the negative, and the buttons the status.
+    LensStatus ready;
+    ready.applicable = true;
+    ready.found = true;
+    ready.canChoose = true;
+    ready.canReset = false;
+    ready.text = "lensfun: a lens (recorded)";
+    ready.note = "The database was updated.";
+    NegativeSettings negative;
+    negative.lens.vignetting = true;
+    panel.showState(DevelopState{}, PanelContext{.negative = negative, .lens = ready});
+    CHECK(distortion->isEnabled());
+    CHECK_FALSE(distortion->isChecked());
+    CHECK(vignetting->isChecked());
+    CHECK(choose->isEnabled());
+    CHECK_FALSE(reset->isEnabled());
+    CHECK_FALSE(panel.findChild<QLabel*>("lensNote")->isHidden());
+
+    std::optional<NegativeSettings> chosen;
+    QObject::connect(&panel, &DevelopPanel::negativeChosen,
+                     [&](const NegativeSettings& next) { chosen = next; });
+    distortion->click();
+    REQUIRE(chosen.has_value());
+    // The choice keeps the other values as last shown; the window shows the result.
+    CHECK(chosen->lens.distortion);
+    CHECK(chosen->lens.vignetting);
+    CHECK_FALSE(chosen->lens.lateralCa);
+    // The panel holds no state of its own: until the window shows it, it is as it was.
+    CHECK_FALSE(distortion->isChecked());
+
+    bool chooseAsked = false;
+    bool resetAsked = false;
+    QObject::connect(&panel, &DevelopPanel::chooseLensRequested, [&] { chooseAsked = true; });
+    QObject::connect(&panel, &DevelopPanel::resetLensRequested, [&] { resetAsked = true; });
+    choose->click();
+    CHECK(chooseAsked);
+    ready.canReset = true;
+    panel.showState(DevelopState{}, PanelContext{.negative = negative, .lens = ready});
+    reset->click();
+    CHECK(resetAsked);
 }

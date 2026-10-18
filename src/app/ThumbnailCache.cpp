@@ -57,6 +57,28 @@ std::optional<std::string> hashKey(char kind, const fs::path& file, const std::s
     return QString::fromLatin1(hash.result().toHex()).toStdString();
 }
 
+/// @brief Digests what a lens correction does to a picture: its tables, centre, fill scale and
+/// the databases they came from.
+std::string lensDigest(const LensCorrection& lens) {
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    const auto addTable = [&hash](const std::vector<float>& table) {
+        hash.addData(QByteArray::number(static_cast<qulonglong>(table.size())) + ':');
+        hash.addData(QByteArrayView(reinterpret_cast<const char*>(table.data()),
+                                    static_cast<qsizetype>(table.size() * sizeof(float))));
+    };
+    addTable(lens.distortion);
+    addTable(lens.redScale);
+    addTable(lens.blueScale);
+    addTable(lens.vignetting);
+    for (const double number : {lens.centerU, lens.centerV, lens.aspect, lens.fill}) {
+        hash.addData(QByteArrayView(reinterpret_cast<const char*>(&number), sizeof(number)));
+    }
+    for (const auto* from : {&lens.distortionFrom, &lens.lateralCaFrom, &lens.vignettingFrom}) {
+        hash.addData(QByteArray::fromStdString(*from ? (*from)->database : std::string{}) + '|');
+    }
+    return QString::fromLatin1(hash.result().toHex()).toStdString();
+}
+
 /// @brief Sets a file's modification time to now; failure is of no consequence.
 void touch(const QString& path) {
     QFile file(path);
@@ -82,7 +104,8 @@ std::optional<std::string> ThumbnailCache::embeddedKey(const fs::path& file) {
 
 std::optional<std::string> ThumbnailCache::developedKey(const fs::path& file,
                                                         const DevelopState& state,
-                                                        const NegativeSettings& negative) {
+                                                        const NegativeSettings& negative,
+                                                        const LensCorrection& lens) {
     // The one place that lists what a developed thumbnail depends on beyond the file.
     std::string ingredients = settingsToJson(state.settings);
     if (!state.localAdjustments.empty()) {
@@ -98,6 +121,9 @@ std::optional<std::string> ThumbnailCache::developedKey(const fs::path& file,
     }
     if (negative != NegativeSettings{}) {
         ingredients += negativeToJson(negative);
+    }
+    if (lens.active()) {
+        ingredients += "lens:" + lensDigest(lens);
     }
     return hashKey('d', file, ingredients);
 }

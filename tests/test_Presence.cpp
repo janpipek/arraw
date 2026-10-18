@@ -150,10 +150,11 @@ float sceneAt(std::uint32_t x, std::uint32_t y, double scale) {
 TEST_CASE("With every control at zero Presence does not exist", "[presence]") {
     const ImageBuffer source =
         tintedOf({64, 48}, [](auto x, auto y) { return sceneAt(x, y, 1.0); });
-    const ProcessingPlan plan = planFor(source, DevelopState{presence(0.0F, 0.0F, 0.0F)});
+    const ProcessingPlan plan =
+        planFor(source, DevelopState{presence(0.0F, 0.0F, 0.0F)}, LensCorrection{});
     REQUIRE(plan.pointwise.presence == PresencePlan{});
     REQUIRE_FALSE(plan.pointwise.presence.active());
-    REQUIRE(plan == planFor(source, DevelopState{presence(0.0F, 0.0F, 0.0F)}));
+    REQUIRE(plan == planFor(source, DevelopState{presence(0.0F, 0.0F, 0.0F)}, LensCorrection{}));
     REQUIRE(hasPresence(PresenceSettings{}) == false);
     REQUIRE(DevelopSettings{}.presence == PresenceSettings{});
 
@@ -165,23 +166,27 @@ TEST_CASE("With every control at zero Presence does not exist", "[presence]") {
 
     SECTION("each control alone switches on only the base it reads") {
         const PresencePlan texture =
-            planFor(source, DevelopState{presence(30.0F, 0.0F, 0.0F)}).pointwise.presence;
+            planFor(source, DevelopState{presence(30.0F, 0.0F, 0.0F)}, LensCorrection{})
+                .pointwise.presence;
         REQUIRE(texture.fine.active());
         REQUIRE_FALSE(texture.coarse.active());
         const PresencePlan clarity =
-            planFor(source, DevelopState{presence(0.0F, 30.0F, 0.0F)}).pointwise.presence;
+            planFor(source, DevelopState{presence(0.0F, 30.0F, 0.0F)}, LensCorrection{})
+                .pointwise.presence;
         REQUIRE_FALSE(clarity.fine.active());
         REQUIRE(clarity.coarse.active());
         REQUIRE_FALSE(clarity.hazeActive());
         const PresencePlan hazier =
-            planFor(source, DevelopState{presence(0.0F, 0.0F, -30.0F)}).pointwise.presence;
+            planFor(source, DevelopState{presence(0.0F, 0.0F, -30.0F)}, LensCorrection{})
+                .pointwise.presence;
         REQUIRE_FALSE(hazier.coarse.active());
         REQUIRE(hazier.hazeMean.active());
         REQUIRE(hazier.amounts.dehaze == -0.3F);
         // A negative Dehaze measures the mean, a positive one the floor.
         REQUIRE(hazier.hazeMean.window == 0);
         const PresencePlan clearer =
-            planFor(source, DevelopState{presence(0.0F, 0.0F, 30.0F)}).pointwise.presence;
+            planFor(source, DevelopState{presence(0.0F, 0.0F, 30.0F)}, LensCorrection{})
+                .pointwise.presence;
         REQUIRE(clearer.hazeFloor.window > 0);
         // And over a narrower blur: the floor keeps to its edges, the mean is broad.
         REQUIRE(clearer.hazeFloor.sigma < hazier.hazeMean.sigma);
@@ -192,7 +197,8 @@ TEST_CASE("With every control at zero Presence does not exist", "[presence]") {
 TEST_CASE("Presence resolves its radii from the sensor and the long edge", "[presence][plan]") {
     const ImageBuffer full = greyOf({6000, 4}, [](auto, auto) { return 0.18F; });
     const PresencePlan plan =
-        planFor(full, DevelopState{presence(50.0F, 50.0F, 50.0F)}).pointwise.presence;
+        planFor(full, DevelopState{presence(50.0F, 50.0F, 50.0F)}, LensCorrection{})
+            .pointwise.presence;
     // Texture: 4 sensor pixels on a grid of 2.
     REQUIRE(plan.fine.reduction == 2);
     REQUIRE(plan.fine.sigma == 2.0F);
@@ -227,7 +233,8 @@ TEST_CASE("Presence resolves its radii from the sensor and the long edge", "[pre
         ImageBuffer level = greyOf({1500, 1}, [](auto, auto) { return 0.18F; });
         level.setPixelScale(4.0);
         const PresencePlan reduced =
-            planFor(level, DevelopState{presence(50.0F, 50.0F, 50.0F)}).pointwise.presence;
+            planFor(level, DevelopState{presence(50.0F, 50.0F, 50.0F)}, LensCorrection{})
+                .pointwise.presence;
         REQUIRE(reduced.coarse.reduction == 2);
         REQUIRE(reduced.coarse.sigma == plan.coarse.sigma);
         REQUIRE(reduced.coarse.radius == plan.coarse.radius);
@@ -241,7 +248,8 @@ TEST_CASE("Presence resolves its radii from the sensor and the long edge", "[pre
         ImageBuffer deeper = greyOf({750, 1}, [](auto, auto) { return 0.18F; });
         deeper.setPixelScale(8.0);
         const PresencePlan deep =
-            planFor(deeper, DevelopState{presence(50.0F, 50.0F, 0.0F)}).pointwise.presence;
+            planFor(deeper, DevelopState{presence(50.0F, 50.0F, 0.0F)}, LensCorrection{})
+                .pointwise.presence;
         REQUIRE(deep.coarse.reduction == 1);
         REQUIRE(deep.coarse.sigma == 7.5F);
         // Held at one pixel of the level rather than vanishing.
@@ -253,7 +261,7 @@ TEST_CASE("Presence resolves its radii from the sensor and the long edge", "[pre
         const Photo edited = photo.with(DevelopState{presence(20.0F, 40.0F, 10.0F)});
         const ImageBuffer pixels = loadImage(photo.path());
         REQUIRE(planFor(edited).pointwise.presence ==
-                planFor(pixels, edited.state()).pointwise.presence);
+                planFor(pixels, edited.state(), LensCorrection{}).pointwise.presence);
     }
 }
 
@@ -266,8 +274,8 @@ TEST_CASE("White balance and exposure never reach the Presence context", "[prese
     moved.color.whiteBalance = WhiteBalanceMode::Custom;
     moved.color.temperature = 3200.0F;
     moved.color.tint = 15.0F;
-    const ProcessingPlan first = planFor(camera, DevelopState{base});
-    const ProcessingPlan second = planFor(camera, DevelopState{moved});
+    const ProcessingPlan first = planFor(camera, DevelopState{base}, LensCorrection{});
+    const ProcessingPlan second = planFor(camera, DevelopState{moved}, LensCorrection{});
     REQUIRE_FALSE(first.pointwise.toWorking == second.pointwise.toWorking);
     REQUIRE(first.pointwise.presence == second.pointwise.presence);
     REQUIRE(presenceContextFieldsOf(first.pointwise.presence) ==
@@ -276,7 +284,8 @@ TEST_CASE("White balance and exposure never reach the Presence context", "[prese
     // The amounts do not reach the context either; only which bases exist does.
     DevelopSettings stronger = base;
     stronger.presence = {.texture = -80.0F, .clarity = 10.0F, .dehaze = 90.0F};
-    REQUIRE(presenceContextFieldsOf(planFor(camera, DevelopState{stronger}).pointwise.presence) ==
+    REQUIRE(presenceContextFieldsOf(
+                planFor(camera, DevelopState{stronger}, LensCorrection{}).pointwise.presence) ==
             presenceContextFieldsOf(first.pointwise.presence));
 
     // The context is a function of the pixels and those fields alone.
@@ -294,14 +303,14 @@ TEST_CASE("White balance and exposure never reach the Presence context", "[prese
     DevelopSettings brighter = plain;
     brighter.tone.exposure = 1.0F;
     const ImageBuffer grey = greyOf({48, 32}, [](auto x, auto y) { return sceneAt(x, y, 3.0); });
-    const ImageBuffer dim = develop(grey, DevelopState{plain});
-    const ImageBuffer bright = develop(grey, DevelopState{brighter});
+    const ImageBuffer dim = develop(grey, DevelopState{plain}, LensCorrection{});
+    const ImageBuffer bright = develop(grey, DevelopState{brighter}, LensCorrection{});
     // Clarity's midtone weight reads the toned luminance, so only Texture's
     // contribution is exactly a gain; with Texture alone the two match.
     plain.presence.clarity = 0.0F;
     brighter.presence.clarity = 0.0F;
-    const ImageBuffer dimTexture = develop(grey, DevelopState{plain});
-    const ImageBuffer brightTexture = develop(grey, DevelopState{brighter});
+    const ImageBuffer dimTexture = develop(grey, DevelopState{plain}, LensCorrection{});
+    const ImageBuffer brightTexture = develop(grey, DevelopState{brighter}, LensCorrection{});
     const auto d = dimTexture.samples<float>();
     const auto b = brightTexture.samples<float>();
     for (std::size_t index = 0; index < d.size(); index += 4) {
@@ -315,15 +324,18 @@ TEST_CASE("Clarity raises local contrast at a step, with a bounded halo", "[pres
     // the long edge, 4 pixels.
     const ImageSize size{400, 40};
     const ImageBuffer step = greyOf(size, [](auto x, auto) { return x < 200 ? 0.05F : 0.2F; });
-    const ImageBuffer plain = develop(step, DevelopState{presence(0.0F, 0.0F, 0.0F)});
+    const ImageBuffer plain =
+        develop(step, DevelopState{presence(0.0F, 0.0F, 0.0F)}, LensCorrection{});
     const PresencePlan plan =
-        planFor(step, DevelopState{presence(0.0F, 100.0F, 0.0F)}).pointwise.presence;
+        planFor(step, DevelopState{presence(0.0F, 100.0F, 0.0F)}, LensCorrection{})
+            .pointwise.presence;
     REQUIRE(plan.coarse.reduction == 1);
     REQUIRE(plan.coarse.sigma == 4.0F);
 
     for (const float clarity : {100.0F, 50.0F, -100.0F}) {
         INFO("clarity " << clarity);
-        const ImageBuffer clear = develop(step, DevelopState{presence(0.0F, clarity, 0.0F)});
+        const ImageBuffer clear =
+            develop(step, DevelopState{presence(0.0F, clarity, 0.0F)}, LensCorrection{});
         const auto stopsAt = [&](std::uint32_t x) {
             return std::log2(luminanceAt(clear, x, 20) / luminanceAt(plain, x, 20));
         };
@@ -351,8 +363,10 @@ TEST_CASE("Clarity raises local contrast at a step, with a bounded halo", "[pres
     SECTION("a hard edge of eight stops still moves no pixel by more than the bound") {
         const ImageBuffer hard =
             greyOf(size, [](auto x, auto) { return x < 200 ? 0.003F : 0.75F; });
-        const ImageBuffer before = develop(hard, DevelopState{presence(0.0F, 0.0F, 0.0F)});
-        const ImageBuffer after = develop(hard, DevelopState{presence(0.0F, 100.0F, 0.0F)});
+        const ImageBuffer before =
+            develop(hard, DevelopState{presence(0.0F, 0.0F, 0.0F)}, LensCorrection{});
+        const ImageBuffer after =
+            develop(hard, DevelopState{presence(0.0F, 100.0F, 0.0F)}, LensCorrection{});
         for (std::uint32_t x = 0; x < size.width; ++x) {
             const double moved = std::log2(luminanceAt(after, x, 5) / luminanceAt(before, x, 5));
             REQUIRE(std::abs(moved) <= clarityLimitStops + 1e-5);
@@ -372,8 +386,10 @@ TEST_CASE("Texture moves fine detail and leaves broad shapes alone", "[presence]
     const ImageBuffer fine = greyOf(size, wave(4.0));
     const ImageBuffer broad = greyOf(size, wave(256.0));
     const auto gain = [](const ImageBuffer& image, float texture) {
-        return logSpread(develop(image, DevelopState{presence(texture, 0.0F, 0.0F)})) /
-               logSpread(develop(image, DevelopState{presence(0.0F, 0.0F, 0.0F)}));
+        return logSpread(
+                   develop(image, DevelopState{presence(texture, 0.0F, 0.0F)}, LensCorrection{})) /
+               logSpread(
+                   develop(image, DevelopState{presence(0.0F, 0.0F, 0.0F)}, LensCorrection{}));
     };
     const double fineUp = gain(fine, 100.0F);
     const double broadUp = gain(broad, 100.0F);
@@ -396,9 +412,12 @@ TEST_CASE("Negative Clarity softens mid-scale contrast", "[presence]") {
     const ImageBuffer scene = tintedOf(size, [](auto x, auto y) {
         return static_cast<float>(0.18 * std::exp2(0.6 * std::sin(x / 2.0) * std::cos(y / 3.0)));
     });
-    const double plain = logSpread(develop(scene, DevelopState{presence(0.0F, 0.0F, 0.0F)}));
-    const double soft = logSpread(develop(scene, DevelopState{presence(0.0F, -100.0F, 0.0F)}));
-    const double crisp = logSpread(develop(scene, DevelopState{presence(0.0F, 100.0F, 0.0F)}));
+    const double plain =
+        logSpread(develop(scene, DevelopState{presence(0.0F, 0.0F, 0.0F)}, LensCorrection{}));
+    const double soft =
+        logSpread(develop(scene, DevelopState{presence(0.0F, -100.0F, 0.0F)}, LensCorrection{}));
+    const double crisp =
+        logSpread(develop(scene, DevelopState{presence(0.0F, 100.0F, 0.0F)}, LensCorrection{}));
     CAPTURE(plain, soft, crisp);
     if (std::getenv("ARRAW_PRINT_MEASURED") != nullptr) {
         std::fprintf(stderr, "clarity spread: x%.3f at -100, x%.3f at 100\n", soft / plain,
@@ -419,9 +438,12 @@ TEST_CASE("Dehaze raises the contrast of a veiled image", "[presence]") {
     };
     const ImageBuffer veiled =
         tintedOf(size, [&](auto x, auto y) { return 0.6F * scene(x, y) + 0.3F; });
-    const ImageBuffer plain = develop(veiled, DevelopState{presence(0.0F, 0.0F, 0.0F)});
-    const ImageBuffer clear = develop(veiled, DevelopState{presence(0.0F, 0.0F, 100.0F)});
-    const ImageBuffer hazier = develop(veiled, DevelopState{presence(0.0F, 0.0F, -100.0F)});
+    const ImageBuffer plain =
+        develop(veiled, DevelopState{presence(0.0F, 0.0F, 0.0F)}, LensCorrection{});
+    const ImageBuffer clear =
+        develop(veiled, DevelopState{presence(0.0F, 0.0F, 100.0F)}, LensCorrection{});
+    const ImageBuffer hazier =
+        develop(veiled, DevelopState{presence(0.0F, 0.0F, -100.0F)}, LensCorrection{});
     const double before = logSpread(plain);
     const double after = logSpread(clear);
     const double added = logSpread(hazier);
@@ -471,9 +493,12 @@ TEST_CASE("Dehaze takes off a broad veil", "[presence][slow]") {
         const float scene = block(x, y) ? 0.3F : 0.02F;
         return y >= 400 ? 0.6F * scene + 0.3F : scene;
     });
-    const ImageBuffer plain = develop(veiled, DevelopState{presence(0.0F, 0.0F, 0.0F)});
-    const ImageBuffer clear = develop(veiled, DevelopState{presence(0.0F, 0.0F, 100.0F)});
-    const ImageBuffer hazier = develop(veiled, DevelopState{presence(0.0F, 0.0F, -100.0F)});
+    const ImageBuffer plain =
+        develop(veiled, DevelopState{presence(0.0F, 0.0F, 0.0F)}, LensCorrection{});
+    const ImageBuffer clear =
+        develop(veiled, DevelopState{presence(0.0F, 0.0F, 100.0F)}, LensCorrection{});
+    const ImageBuffer hazier =
+        develop(veiled, DevelopState{presence(0.0F, 0.0F, -100.0F)}, LensCorrection{});
 
     // Mean luminance of the centres of the light or the dark blocks in a band of rows.
     const auto blocksIn = [&](const ImageBuffer& image, std::uint32_t top, std::uint32_t bottom,
@@ -538,9 +563,10 @@ TEST_CASE("Dehaze is the same at every exposure", "[presence]") {
         DevelopSettings dim = presence(0.0F, 0.0F, dehaze);
         DevelopSettings bright = dim;
         bright.tone.exposure = 1.0F;
-        const ImageBuffer d = develop(veiled, DevelopState{dim});
-        const ImageBuffer b = develop(veiled, DevelopState{bright});
-        REQUIRE_FALSE(sameBytes(d, develop(veiled, DevelopState{presence(0.0F, 0.0F, 0.0F)})));
+        const ImageBuffer d = develop(veiled, DevelopState{dim}, LensCorrection{});
+        const ImageBuffer b = develop(veiled, DevelopState{bright}, LensCorrection{});
+        REQUIRE_FALSE(sameBytes(
+            d, develop(veiled, DevelopState{presence(0.0F, 0.0F, 0.0F)}, LensCorrection{})));
         const auto low = d.samples<float>();
         const auto high = b.samples<float>();
         for (std::size_t index = 0; index < low.size(); index += 4) {
@@ -561,10 +587,12 @@ TEST_CASE("Dehaze takes as much off a bright area at its edge as inside it", "[p
     const ImageSize size{1200, 48};
     const std::uint32_t edge = 601;
     const ImageBuffer step = greyOf(size, [&](auto x, auto) { return x < edge ? 0.03F : 0.3F; });
-    REQUIRE(planFor(step, DevelopState{presence(0.0F, 0.0F, 100.0F)})
+    REQUIRE(planFor(step, DevelopState{presence(0.0F, 0.0F, 100.0F)}, LensCorrection{})
                 .pointwise.presence.hazeFloor.reduction == 2);
-    const ImageBuffer plain = develop(step, DevelopState{presence(0.0F, 0.0F, 0.0F)});
-    const ImageBuffer clear = develop(step, DevelopState{presence(0.0F, 0.0F, 100.0F)});
+    const ImageBuffer plain =
+        develop(step, DevelopState{presence(0.0F, 0.0F, 0.0F)}, LensCorrection{});
+    const ImageBuffer clear =
+        develop(step, DevelopState{presence(0.0F, 0.0F, 100.0F)}, LensCorrection{});
     const auto stopsAt = [&](std::uint32_t x) {
         return std::log2(luminanceAt(clear, x, size.height / 2) /
                          luminanceAt(plain, x, size.height / 2));
@@ -617,11 +645,14 @@ TEST_CASE("Dehaze takes as much off a round bright area at its edge as inside it
         return 0.6F * (inside ? 0.3F : 0.03F) + 0.2F;
     });
     const PresencePlan plan =
-        planFor(scene, DevelopState{presence(0.0F, 0.0F, 100.0F)}).pointwise.presence;
+        planFor(scene, DevelopState{presence(0.0F, 0.0F, 100.0F)}, LensCorrection{})
+            .pointwise.presence;
     REQUIRE(plan.hazeFloor.reduction == 4);
     REQUIRE(plan.hazeFloor.window == 18);
-    const ImageBuffer plain = develop(scene, DevelopState{presence(0.0F, 0.0F, 0.0F)});
-    const ImageBuffer clear = develop(scene, DevelopState{presence(0.0F, 0.0F, 100.0F)});
+    const ImageBuffer plain =
+        develop(scene, DevelopState{presence(0.0F, 0.0F, 0.0F)}, LensCorrection{});
+    const ImageBuffer clear =
+        develop(scene, DevelopState{presence(0.0F, 0.0F, 100.0F)}, LensCorrection{});
     const auto stopsAt = [&](std::uint32_t x, std::uint32_t y) {
         return std::log2(luminanceAt(clear, x, y) / luminanceAt(plain, x, y));
     };
@@ -678,11 +709,14 @@ TEST_CASE("Dehaze leaves less off only the tip of a bright area's right-angled c
         return 0.6F * (inside ? 0.3F : 0.03F) + 0.2F;
     });
     const PresencePlan plan =
-        planFor(scene, DevelopState{presence(0.0F, 0.0F, 100.0F)}).pointwise.presence;
+        planFor(scene, DevelopState{presence(0.0F, 0.0F, 100.0F)}, LensCorrection{})
+            .pointwise.presence;
     REQUIRE(plan.hazeFloor.reduction == 4);
     REQUIRE(octagonOf(plan.hazeFloor.window) == OctagonWindow{.across = 8, .diagonal = 5});
-    const ImageBuffer plain = develop(scene, DevelopState{presence(0.0F, 0.0F, 0.0F)});
-    const ImageBuffer clear = develop(scene, DevelopState{presence(0.0F, 0.0F, 100.0F)});
+    const ImageBuffer plain =
+        develop(scene, DevelopState{presence(0.0F, 0.0F, 0.0F)}, LensCorrection{});
+    const ImageBuffer clear =
+        develop(scene, DevelopState{presence(0.0F, 0.0F, 100.0F)}, LensCorrection{});
     const auto stopsAt = [&](std::uint32_t x, std::uint32_t y) {
         return std::log2(luminanceAt(clear, x, y) / luminanceAt(plain, x, y));
     };
@@ -750,8 +784,10 @@ TEST_CASE("Dehaze leaves less off only the ends of an elongated bright area", "[
         };
         const ImageBuffer scene = greyOf(
             size, [&](auto x, auto y) { return 0.6F * (inside(x, y) ? 0.3F : 0.03F) + 0.2F; });
-        const ImageBuffer plain = develop(scene, DevelopState{presence(0.0F, 0.0F, 0.0F)});
-        const ImageBuffer clear = develop(scene, DevelopState{presence(0.0F, 0.0F, 100.0F)});
+        const ImageBuffer plain =
+            develop(scene, DevelopState{presence(0.0F, 0.0F, 0.0F)}, LensCorrection{});
+        const ImageBuffer clear =
+            develop(scene, DevelopState{presence(0.0F, 0.0F, 100.0F)}, LensCorrection{});
         const auto stopsAt = [&](std::uint32_t x, std::uint32_t y) {
             return std::log2(luminanceAt(clear, x, y) / luminanceAt(plain, x, y));
         };
@@ -898,11 +934,14 @@ TEST_CASE("Dehaze leaves a texture beside a bright area as it leaves it elsewher
         return static_cast<float>(0.6 * (bright ? 0.3 : texture) + 0.06);
     });
     const PresencePlan plan =
-        planFor(scene, DevelopState{presence(0.0F, 0.0F, 100.0F)}).pointwise.presence;
+        planFor(scene, DevelopState{presence(0.0F, 0.0F, 100.0F)}, LensCorrection{})
+            .pointwise.presence;
     REQUIRE(plan.hazeFloor.reduction == 8);
     REQUIRE(plan.hazeFloor.window == 13);
-    const ImageBuffer plain = develop(scene, DevelopState{presence(0.0F, 0.0F, 0.0F)});
-    const ImageBuffer clear = develop(scene, DevelopState{presence(0.0F, 0.0F, 100.0F)});
+    const ImageBuffer plain =
+        develop(scene, DevelopState{presence(0.0F, 0.0F, 0.0F)}, LensCorrection{});
+    const ImageBuffer clear =
+        develop(scene, DevelopState{presence(0.0F, 0.0F, 100.0F)}, LensCorrection{});
     // Mean stops taken off the pixels a predicate picks.
     const auto removed = [&](const std::function<bool(std::uint32_t, std::uint32_t)>& where) {
         double sum = 0.0;
@@ -1024,11 +1063,13 @@ TEST_CASE("Dehaze raises fine detail and noise in a flat area no more than Textu
     const ImageBuffer fine = greyOf(size, wave(5.0));
     const ImageBuffer grain = greyOf(size, noise);
     const ImageBuffer mid = greyOf(size, wave(128.0));
-    REQUIRE(planFor(fine, DevelopState{presence(0.0F, 0.0F, 100.0F)})
+    REQUIRE(planFor(fine, DevelopState{presence(0.0F, 0.0F, 100.0F)}, LensCorrection{})
                 .pointwise.presence.hazeFloor.reduction == 8);
     const auto gain = [](const ImageBuffer& image, float texture, float dehaze) {
-        return logSpread(develop(image, DevelopState{presence(texture, 0.0F, dehaze)})) /
-               logSpread(develop(image, DevelopState{presence(0.0F, 0.0F, 0.0F)}));
+        return logSpread(develop(image, DevelopState{presence(texture, 0.0F, dehaze)},
+                                 LensCorrection{})) /
+               logSpread(
+                   develop(image, DevelopState{presence(0.0F, 0.0F, 0.0F)}, LensCorrection{}));
     };
     const double textureFine = gain(fine, 100.0F, 0.0F);
     const double textureNoise = gain(grain, 100.0F, 0.0F);
@@ -1069,7 +1110,7 @@ TEST_CASE("Clarity leaves fine detail to Texture", "[presence]") {
     // some of it survives the cells) and of 128 (Clarity's).
     const ImageSize size{3400, 16};
     REQUIRE(planFor(greyOf(size, [](auto, auto) { return 0.18F; }),
-                    DevelopState{presence(0.0F, 50.0F, 0.0F)})
+                    DevelopState{presence(0.0F, 50.0F, 0.0F)}, LensCorrection{})
                 .pointwise.presence.coarse.reduction == 8);
     const auto wave = [](double period) {
         return [period](std::uint32_t x, std::uint32_t) {
@@ -1080,8 +1121,10 @@ TEST_CASE("Clarity leaves fine detail to Texture", "[presence]") {
     const ImageBuffer fine = greyOf(size, wave(5.0));
     const ImageBuffer mid = greyOf(size, wave(128.0));
     const auto gain = [](const ImageBuffer& image, float texture, float clarity) {
-        return logSpread(develop(image, DevelopState{presence(texture, clarity, 0.0F)})) /
-               logSpread(develop(image, DevelopState{presence(0.0F, 0.0F, 0.0F)}));
+        return logSpread(develop(image, DevelopState{presence(texture, clarity, 0.0F)},
+                                 LensCorrection{})) /
+               logSpread(
+                   develop(image, DevelopState{presence(0.0F, 0.0F, 0.0F)}, LensCorrection{}));
     };
     const double textureUp = gain(fine, 100.0F, 0.0F);
     const double clarityUp = gain(fine, 0.0F, 100.0F);
@@ -1119,8 +1162,8 @@ TEST_CASE("A non-finite pixel stays where it is", "[presence]") {
     for (const float dehaze : {60.0F, -60.0F}) {
         INFO("dehaze " << dehaze);
         const DevelopState state{presence(60.0F, 80.0F, dehaze)};
-        const ImageBuffer developed = develop(source, state);
-        const ImageBuffer reference = develop(clean, state);
+        const ImageBuffer developed = develop(source, state, LensCorrection{});
+        const ImageBuffer reference = develop(clean, state, LensCorrection{});
         const auto out = developed.samples<float>();
         const auto ref = reference.samples<float>();
         for (std::size_t index = 0; index < out.size(); index += 4) {
@@ -1139,7 +1182,8 @@ TEST_CASE("A non-finite pixel stays where it is", "[presence]") {
 
 TEST_CASE("Presence keeps black, and a dark pixel's hue", "[presence]") {
     const ImageBuffer source = greyOf({40, 20}, [](auto x, auto) { return x < 20 ? 0.0F : 0.4F; });
-    const ImageBuffer developed = develop(source, DevelopState{presence(100.0F, 100.0F, 100.0F)});
+    const ImageBuffer developed =
+        develop(source, DevelopState{presence(100.0F, 100.0F, 100.0F)}, LensCorrection{});
     for (std::uint32_t y = 0; y < 20; ++y) {
         for (std::uint32_t x = 0; x < 20; ++x) {
             REQUIRE(luminanceAt(developed, x, y) == 0.0F);
@@ -1148,8 +1192,10 @@ TEST_CASE("Presence keeps black, and a dark pixel's hue", "[presence]") {
     // Hue: a coloured pixel is scaled, so its channel ratios hold without Dehaze.
     const ImageBuffer tinted =
         tintedOf({64, 64}, [](auto x, auto y) { return sceneAt(x, y, 2.0); });
-    const ImageBuffer plain = develop(tinted, DevelopState{presence(0.0F, 0.0F, 0.0F)});
-    const ImageBuffer moved = develop(tinted, DevelopState{presence(80.0F, 80.0F, 0.0F)});
+    const ImageBuffer plain =
+        develop(tinted, DevelopState{presence(0.0F, 0.0F, 0.0F)}, LensCorrection{});
+    const ImageBuffer moved =
+        develop(tinted, DevelopState{presence(80.0F, 80.0F, 0.0F)}, LensCorrection{});
     const auto p = plain.samples<float>();
     const auto m = moved.samples<float>();
     for (std::size_t index = 0; index < p.size(); index += 4) {
@@ -1171,8 +1217,10 @@ TEST_CASE("A preview level shows the Clarity and Dehaze the full frame does",
     // The effect, at the level's size: on the full frame reduced afterwards,
     // and on the level developed directly.
     const ImageBuffer fullEffect =
-        differenceOf(halved(halved(develop(full, on))), halved(halved(develop(full, none))));
-    const ImageBuffer levelEffect = differenceOf(develop(level, on), develop(level, none));
+        differenceOf(halved(halved(develop(full, on, LensCorrection{}))),
+                     halved(halved(develop(full, none, LensCorrection{}))));
+    const ImageBuffer levelEffect =
+        differenceOf(develop(level, on, LensCorrection{}), develop(level, none, LensCorrection{}));
     const auto zero = [](const ImageBuffer& image) {
         ImageBuffer blank = image.clone();
         std::ranges::fill(blank.samples<float>(), 0.0F);
@@ -1195,10 +1243,10 @@ TEST_CASE("A region render with Presence is the crop of the whole render", "[pre
     DevelopSettings settings = presence(60.0F, 70.0F, 30.0F);
     settings.noiseReduction.color = 40.0F;
     const DevelopState state{settings};
-    const ImageBuffer whole = develop(source, state);
+    const ImageBuffer whole = develop(source, state, LensCorrection{});
     const RenderRequest request{
         .region = RenderRequest::Region{.left = 0.25, .top = 0.5, .right = 0.75, .bottom = 1.0}};
-    const ImageBuffer part = develop(source, state, request);
+    const ImageBuffer part = develop(source, state, LensCorrection{}, request);
     REQUIRE(part.size() == ImageSize{80, 60});
     for (std::uint32_t y = 0; y < 60; ++y) {
         for (std::uint32_t x = 0; x < 80; ++x) {
@@ -1219,7 +1267,8 @@ TEST_CASE("Presence renders resume from the Denoise and pointwise boundaries",
         tintedOf({96, 64}, [](auto x, auto y) { return sceneAt(x, y, 2.0); });
     DevelopSettings settings = presence(30.0F, 50.0F, 20.0F);
     settings.noiseReduction.color = 50.0F;
-    const RenderCheckpoint denoised = developUntil(source, DevelopState{settings}, Stage::Denoise);
+    const RenderCheckpoint denoised =
+        developUntil(source, DevelopState{settings}, LensCorrection{}, Stage::Denoise);
 
     // A Presence edit, an exposure and a white balance edit all resume after
     // noise reduction: the context is recomputed from the checkpoint's pixels.
@@ -1231,23 +1280,26 @@ TEST_CASE("Presence renders resume from the Denoise and pointwise boundaries",
         DevelopSettings after = settings;
         edit(after);
         const DevelopState state{after};
-        const RenderCheckpoint resumed = resumeFrom(denoised, source, state, Stage::Effects);
-        REQUIRE(sameBytes(resumed.readBack(), develop(source, state)));
+        const RenderCheckpoint resumed =
+            resumeFrom(denoised, source, state, LensCorrection{}, Stage::Effects);
+        REQUIRE(sameBytes(resumed.readBack(), develop(source, state, LensCorrection{})));
     }
 
     // A crop resumes after the chain.
     const RenderCheckpoint developed =
-        developUntil(source, DevelopState{settings}, Stage::Pointwise);
+        developUntil(source, DevelopState{settings}, LensCorrection{}, Stage::Pointwise);
     DevelopSettings cropped = settings;
     cropped.geometry.crop.rectangle = UprightCropRect{0.1, 0.2, 0.8, 0.9};
-    REQUIRE(
-        sameBytes(resumeFrom(developed, source, DevelopState{cropped}, Stage::Effects).readBack(),
-                  develop(source, DevelopState{cropped})));
+    REQUIRE(sameBytes(
+        resumeFrom(developed, source, DevelopState{cropped}, LensCorrection{}, Stage::Effects)
+            .readBack(),
+        develop(source, DevelopState{cropped}, LensCorrection{})));
     // A Presence edit does not resume from the pointwise boundary.
     DevelopSettings clearer = settings;
     clearer.presence.clarity = 90.0F;
-    REQUIRE_THROWS_AS(resumeFrom(developed, source, DevelopState{clearer}, Stage::Effects),
-                      std::invalid_argument);
+    REQUIRE_THROWS_AS(
+        resumeFrom(developed, source, DevelopState{clearer}, LensCorrection{}, Stage::Effects),
+        std::invalid_argument);
 }
 
 TEST_CASE("The curve input includes Texture, Clarity and Dehaze", "[presence][sample]") {
@@ -1256,14 +1308,15 @@ TEST_CASE("The curve input includes Texture, Clarity and Dehaze", "[presence][sa
         tintedOf({64, 48}, [](auto x, auto y) { return sceneAt(x, y, 2.0); });
     const DevelopState plain{presence(0.0F, 0.0F, 0.0F)};
     const DevelopState clear{presence(0.0F, 60.0F, 0.0F)};
-    REQUIRE_FALSE(
-        sameBytes(sample(source, plain, Tap::CurveInput), sample(source, clear, Tap::CurveInput)));
-    REQUIRE_FALSE(sameAtTap(planFor(source, plain), planFor(source, clear), Tap::CurveInput));
+    REQUIRE_FALSE(sameBytes(sample(source, plain, LensCorrection{}, Tap::CurveInput),
+                            sample(source, clear, LensCorrection{}, Tap::CurveInput)));
+    REQUIRE_FALSE(sameAtTap(planFor(source, plain, LensCorrection{}),
+                            planFor(source, clear, LensCorrection{}), Tap::CurveInput));
     // And a curve edit after it still leaves the sample alone.
     DevelopSettings curved = clear.settings;
     curved.toneCurve.luma = ToneCurve{{{0.0F, 0.0F}, {0.5F, 0.6F}, {1.0F, 1.0F}}};
-    REQUIRE(
-        sameAtTap(planFor(source, clear), planFor(source, DevelopState{curved}), Tap::CurveInput));
+    REQUIRE(sameAtTap(planFor(source, clear, LensCorrection{}),
+                      planFor(source, DevelopState{curved}, LensCorrection{}), Tap::CurveInput));
 }
 
 TEST_CASE("The threaded Presence context gives the single-threaded bits",
@@ -1271,7 +1324,8 @@ TEST_CASE("The threaded Presence context gives the single-threaded bits",
     const ImageBuffer source =
         tintedOf({517, 389}, [](auto x, auto y) { return sceneAt(x, y, 1.0); });
     const PresencePlan plan =
-        planFor(source, DevelopState{presence(40.0F, 40.0F, 40.0F)}).pointwise.presence;
+        planFor(source, DevelopState{presence(40.0F, 40.0F, 40.0F)}, LensCorrection{})
+            .pointwise.presence;
     REQUIRE(plan.hazeFloor.window > 0);
     const PresenceContext threaded = presenceContextOf(source, plan);
     const PresenceContext single = [&] {
@@ -1288,10 +1342,10 @@ TEST_CASE("The threaded chain gives the single-threaded bits", "[presence][threa
     const ImageBuffer source =
         tintedOf({301, 517}, [](auto x, auto y) { return sceneAt(x, y, 1.0); });
     const DevelopState state{presence(30.0F, 60.0F, 40.0F)};
-    const ImageBuffer threaded = develop(source, state);
+    const ImageBuffer threaded = develop(source, state, LensCorrection{});
     const ImageBuffer single = [&] {
         const test::ScopedRowBandLimit one(1);
-        return develop(source, state);
+        return develop(source, state, LensCorrection{});
     }();
     REQUIRE(sameBytes(threaded, single));
 }
@@ -1300,13 +1354,15 @@ TEST_CASE("Presence refuses what it cannot resolve", "[presence]") {
     const ImageBuffer source = greyOf({8, 8}, [](auto, auto) { return 0.2F; });
     for (const float bad :
          {std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity()}) {
-        REQUIRE_THROWS_AS(planFor(source, DevelopState{presence(bad, 0.0F, 0.0F)}),
-                          std::invalid_argument);
-        REQUIRE_THROWS_AS(planFor(source, DevelopState{presence(0.0F, 0.0F, bad)}),
-                          std::invalid_argument);
+        REQUIRE_THROWS_AS(
+            planFor(source, DevelopState{presence(bad, 0.0F, 0.0F)}, LensCorrection{}),
+            std::invalid_argument);
+        REQUIRE_THROWS_AS(
+            planFor(source, DevelopState{presence(0.0F, 0.0F, bad)}, LensCorrection{}),
+            std::invalid_argument);
     }
     // Out of range is clamped, as every other setting (ADR 008).
-    REQUIRE(planFor(source, DevelopState{presence(250.0F, 0.0F, 0.0F)})
+    REQUIRE(planFor(source, DevelopState{presence(250.0F, 0.0F, 0.0F)}, LensCorrection{})
                 .pointwise.presence.amounts.texture == 1.0F);
     REQUIRE_THROWS_AS(presencePlanFor({.clarity = 10.0F}, workingEncoding, 0.0, {8, 8}),
                       std::invalid_argument);

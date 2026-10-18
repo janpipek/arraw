@@ -174,6 +174,12 @@ template <> struct nanobind::detail::type_caster<arraw::LocalAdjustmentId> {
     }
 };
 
+namespace arraw {
+class LensDatabase;
+class Photo;
+struct LensCorrection;
+} // namespace arraw
+
 /// @brief Private helpers of the Python bindings.
 namespace arraw::python {
 
@@ -182,6 +188,12 @@ using namespace nb::literals;
 
 /// @brief Binds images, pixel formats, colour encodings and metadata.
 void bindImage(nb::module_& module);
+
+/// @brief Binds the lens types: settings, database, matches and resolved corrections.
+void bindLens(nb::module_& module);
+
+/// @brief Adds the lens members to `Photo` and the lens functions; after ::bindPhoto.
+void bindLensMethods(nb::module_& module);
 
 /// @brief Binds the EXIF value classes and `read_exif`.
 void bindExif(nb::module_& module);
@@ -197,6 +209,17 @@ void bindPhoto(nb::module_& module);
 
 /// @brief Binds the edit session, its history and describe_change.
 void bindSession(nb::module_& module);
+
+/// @brief Gives the database a call names, or the process's, which is loaded on this call.
+[[nodiscard]] const LensDatabase& lensDatabaseOr(const LensDatabase* database);
+
+/// @brief Resolves a photograph's lens corrections, logging what cannot be resolved on the
+/// 'arraw' logger.
+/// @param photo Photograph to render.
+/// @param database Database to look in, or null for the process's, loaded only when a correction
+/// is on.
+/// @return The correction, empty for none.
+[[nodiscard]] LensCorrection lensCorrectionOf(const Photo& photo, const LensDatabase* database);
 
 /// @brief Applies flat snake_case keywords to settings, driven by the descriptor table.
 /// @param settings Settings to change.

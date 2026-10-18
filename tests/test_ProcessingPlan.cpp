@@ -79,7 +79,7 @@ TEST_CASE("Developing a buffer is the chain applied to each pixel", "[plan]") {
     const auto source = test::rainbow({4, 3}, PixelFormat::RgbaU16, workingEncoding);
     const DevelopSettings settings{.tone = {.exposure = -1.0F}};
 
-    const auto developed = develop(source, DevelopState{settings});
+    const auto developed = develop(source, DevelopState{settings}, LensCorrection{});
     const auto plan = planFor(source.encoding(), DevelopState{settings});
 
     const auto before = source.samples<std::uint16_t>();
@@ -99,13 +99,13 @@ TEST_CASE("The plan resolves a request into its resize block", "[plan][resample]
     const ImageBuffer source({60, 40}, workingFormat, workingEncoding);
     const DevelopSettings settings;
 
-    const auto none = planFor(source, DevelopState{settings});
+    const auto none = planFor(source, DevelopState{settings}, LensCorrection{});
     REQUIRE(none.resize.has_value());
     REQUIRE(none.resize->outputSize == ImageSize{60, 40});
     REQUIRE(none.resize->isIdentity(none.geometry->outputSize));
 
     const auto box =
-        planFor(source, DevelopState{settings},
+        planFor(source, DevelopState{settings}, LensCorrection{},
                 {.size = RenderRequest::FitInside{30, 100}, .filter = ResizeFilter::Bilinear});
     REQUIRE(box.resize->outputSize == ImageSize{30, 20});
     REQUIRE(box.resize->filter == ResizeFilter::Bilinear);
@@ -113,15 +113,18 @@ TEST_CASE("The plan resolves a request into its resize block", "[plan][resample]
     // The crop comes first: a size is resolved against what is left of it.
     DevelopSettings cropped;
     cropped.geometry.crop.aspect = CropRatio{1};
-    const auto square = planFor(source, DevelopState{cropped}, {.size = RenderRequest::Scale{0.5}});
+    const auto square = planFor(source, DevelopState{cropped}, LensCorrection{},
+                                {.size = RenderRequest::Scale{0.5}});
     REQUIRE(square.resize->outputSize == ImageSize{20, 20});
 
-    REQUIRE(planFor(source, DevelopState{settings}, {.size = RenderRequest::Scale{4.0}})
+    REQUIRE(planFor(source, DevelopState{settings}, LensCorrection{},
+                    {.size = RenderRequest::Scale{4.0}})
                 .resize->outputSize == ImageSize{60, 40});
-    REQUIRE(planFor(source, DevelopState{settings},
+    REQUIRE(planFor(source, DevelopState{settings}, LensCorrection{},
                     {.size = RenderRequest::Scale{4.0}, .upscale = Upscale::Allowed})
                 .resize->outputSize == ImageSize{240, 160});
-    REQUIRE_THROWS_AS(planFor(source, DevelopState{settings}, {.size = RenderRequest::Scale{0.0}}),
+    REQUIRE_THROWS_AS(planFor(source, DevelopState{settings}, LensCorrection{},
+                              {.size = RenderRequest::Scale{0.0}}),
                       std::invalid_argument);
 
     // The narrow overload resolves colour and tone only.
@@ -133,7 +136,7 @@ TEST_CASE("The plan knows whether the pixels are opaque", "[plan][resample]") {
     const RenderRequest shrink{.size = RenderRequest::Scale{0.5}};
     const DevelopSettings settings;
     const auto opaque = [&](const ImageBuffer& source) {
-        return planFor(source, DevelopState{settings}, shrink).resize->opaque;
+        return planFor(source, DevelopState{settings}, LensCorrection{}, shrink).resize->opaque;
     };
 
     // No alpha channel is opaque without a look.
@@ -168,7 +171,7 @@ TEST_CASE("The plan knows whether the pixels are opaque", "[plan][resample]") {
 
     // Nothing is claimed where no resize runs, or where there are no pixels.
     const ImageBuffer rgb({8, 8}, PixelFormat::RgbU8, workingEncoding);
-    REQUIRE_FALSE(planFor(rgb, DevelopState{settings}).resize->opaque);
+    REQUIRE_FALSE(planFor(rgb, DevelopState{settings}, LensCorrection{}).resize->opaque);
     const auto photo = openPhoto(test::fixture(skewedFixture));
     const auto fromPhoto = planFor(photo, {.size = RenderRequest::Scale{0.5}});
     REQUIRE_FALSE(fromPhoto.resize->isIdentity(fromPhoto.geometry->outputSize));
@@ -188,18 +191,18 @@ TEST_CASE("Whether the pixels are opaque does not make two resize plans differ",
     ImageBuffer translucent = opaqueSource.clone();
     translucent.samples<float>()[3] = 0.5F;
 
-    const auto fast = planFor(opaqueSource, DevelopState{settings}, request);
-    const auto general = planFor(translucent, DevelopState{settings}, request);
+    const auto fast = planFor(opaqueSource, DevelopState{settings}, LensCorrection{}, request);
+    const auto general = planFor(translucent, DevelopState{settings}, LensCorrection{}, request);
     REQUIRE(fast.resize->opaque);
     REQUIRE_FALSE(general.resize->opaque);
     REQUIRE(fast.resize == general.resize);
     REQUIRE(fast == general);
 
     // Size and filter still tell plans apart.
-    REQUIRE_FALSE(fast == planFor(opaqueSource, DevelopState{settings},
+    REQUIRE_FALSE(fast == planFor(opaqueSource, DevelopState{settings}, LensCorrection{},
                                   {.size = RenderRequest::Scale{0.25}}));
     REQUIRE_FALSE(fast ==
-                  planFor(opaqueSource, DevelopState{settings},
+                  planFor(opaqueSource, DevelopState{settings}, LensCorrection{},
                           {.size = RenderRequest::Scale{0.5}, .filter = ResizeFilter::Bilinear}));
 }
 

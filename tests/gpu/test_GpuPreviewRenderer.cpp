@@ -5,6 +5,7 @@
 #include "GpuTesting.h"
 #include "PreviewRenderer.h"
 #include "support/BrushGenerators.h"
+#include "support/LensTables.h"
 #include "support/ProgressGate.h"
 #include "support/TestImages.h"
 
@@ -104,7 +105,8 @@ TEST_CASE("The window renders a brush on the GPU, the stand-in included, without
                                   makeTestContext);
     renderer.setStandInThreshold(0.0);
     renderer.setSource(source);
-    const std::uint64_t id = renderer.request(state, app::PreviewView::wholeFrame(fullSize));
+    const std::uint64_t id =
+        renderer.request(state, LensCorrection{}, app::PreviewView::wholeFrame(fullSize));
     REQUIRE(collector.waitForFinal(id));
     const auto results = collector.resultsOf(id);
     REQUIRE(results.size() == 2);
@@ -128,10 +130,12 @@ TEST_CASE("The window renders a brush on the GPU, the stand-in included, without
     const ImageBuffer level1 = halved(*source);
     REQUIRE(*own.image ==
             app::toDisplayImage(
-                developOnGpu(context, *source, state, Stage::Effects, request).readBack()));
+                developOnGpu(context, *source, state, LensCorrection{}, Stage::Effects, request)
+                    .readBack()));
     REQUIRE(*coarse.image ==
             app::toDisplayImage(
-                developOnGpu(context, level1, state, Stage::Effects, request).readBack()));
+                developOnGpu(context, level1, state, LensCorrection{}, Stage::Effects, request)
+                    .readBack()));
 }
 
 TEST_CASE("On the GPU a Queue request lets the render in flight finish, then delivers its own",
@@ -150,10 +154,11 @@ TEST_CASE("On the GPU a Queue request lets the render in flight finish, then del
     DevelopState exposed;
     exposed.settings.tone.exposure = 0.5F;
     gate.close();
-    const std::uint64_t first = renderer.request({}, app::PreviewView::wholeFrame(size));
+    const std::uint64_t first =
+        renderer.request({}, LensCorrection{}, app::PreviewView::wholeFrame(size));
     REQUIRE(gate.waitHeld());
-    const std::uint64_t second =
-        renderer.request(exposed, app::PreviewView::wholeFrame(size), app::Supersede::Queue);
+    const std::uint64_t second = renderer.request(
+        exposed, LensCorrection{}, app::PreviewView::wholeFrame(size), app::Supersede::Queue);
     gate.open();
     REQUIRE(collector.waitForFinal(second));
 
@@ -162,4 +167,61 @@ TEST_CASE("On the GPU a Queue request lets the render in flight finish, then del
     REQUIRE(firstResults[0].onGpu);
     REQUIRE(collector.resultsOf(second).size() == 1);
     REQUIRE(collector.resultsOf(second)[0].onGpu);
+}
+
+TEST_CASE("A render with an active lens correction is made on the GPU, and matches the CPU's",
+          "[gpu][app][preview][lens]") {
+    GpuContext& context = gpuContext();
+    const auto source = std::make_shared<const ImageBuffer>(
+        test::rainbow({256, 128}, PixelFormat::RgbaF32, workingEncoding));
+    const QSize size{256, 128};
+    const LensCorrection barrel = test::barrelCorrection(-0.08F, 2.0);
+
+    Collector collector;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Auto, {}, {},
+                                  makeTestContext);
+    renderer.setSource(source);
+
+    const std::uint64_t plain =
+        renderer.request({}, LensCorrection{}, app::PreviewView::wholeFrame(size));
+    REQUIRE(collector.waitForFinal(plain));
+    REQUIRE(collector.resultsOf(plain).back().onGpu);
+
+    const std::uint64_t corrected =
+        renderer.request({}, barrel, app::PreviewView::wholeFrame(size));
+    REQUIRE(collector.waitForFinal(corrected));
+    const app::PreviewResult result = collector.resultsOf(corrected).back();
+    REQUIRE(result.error.empty());
+    CHECK(result.onGpu);
+    CHECK(result.fallbackReason.empty());
+    // The picture is the device's own render of the correction, which is not the plain one.
+    const RenderRequest request = app::previewRequest(size);
+    CHECK(*result.image ==
+          app::toDisplayImage(
+              developOnGpu(context, *source, {}, barrel, Stage::Effects, request).readBack()));
+    CHECK(*result.image != *collector.resultsOf(plain).back().image);
+}
+
+TEST_CASE("A lens render the device cannot make falls back to the CPU, which makes it",
+          "[gpu][app][preview][lens]") {
+    GpuContext& context = gpuContext();
+    // Wider than the device's textures, so that the device cannot hold the photograph.
+    const auto width = static_cast<std::uint32_t>(context.info().maxTextureSize) + 16;
+    const auto source = std::make_shared<const ImageBuffer>(
+        test::rainbow({width, 8}, PixelFormat::RgbaF32, workingEncoding));
+    const QSize size{static_cast<int>(width), 8};
+    const LensCorrection barrel = test::barrelCorrection(-0.08F, static_cast<double>(width) / 8.0);
+
+    Collector collector;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Auto, {}, {},
+                                  makeTestContext);
+    renderer.setSource(source);
+    const std::uint64_t id = renderer.request({}, barrel, app::PreviewView::wholeFrame(size));
+    REQUIRE(collector.waitForFinal(id));
+    const app::PreviewResult result = collector.resultsOf(id).back();
+    REQUIRE(result.error.empty());
+    CHECK_FALSE(result.onGpu);
+    CHECK_FALSE(result.fallbackReason.empty());
+    CHECK(*result.image ==
+          app::toDisplayImage(develop(*source, {}, barrel, app::previewRequest(size))));
 }

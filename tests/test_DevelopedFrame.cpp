@@ -100,7 +100,7 @@ TEST_CASE("The map round-trips both ways in every geometry", "[developed-frame]"
 
 TEST_CASE("The sensor point under a corrected position is the same numbers", "[developed-frame]") {
     for (const CorrectedPosition at : samples) {
-        const SensorPoint point = sensorFrom(at);
+        const SensorPoint point = sensorFrom(LensCorrection{}, at);
         CHECK(point.u == static_cast<float>(at.u));
         CHECK(point.v == static_cast<float>(at.v));
     }
@@ -236,7 +236,7 @@ DevelopState stateWithMask(Mask shape, bool invert = false, const GeometrySettin
 /// @brief The coverage of a state's only adjustment over the whole developed frame.
 MaskCoverage wholeCoverage(const DevelopState& state, SourceShape source, ImageSize size) {
     const DevelopedFrameMap map(source, state.settings.geometry);
-    return maskCoverage(state.localAdjustments.front(), map, {}, size);
+    return maskCoverage(state.localAdjustments.front(), map, {}, size, LensCorrection{});
 }
 
 constexpr RadialMask smallRadial{
@@ -289,7 +289,7 @@ TEST_CASE("A mask that does nothing is still covered", "[developed-frame][covera
     adjustment.shape = LinearMask{{0.5F, 0.2F}, {0.5F, 0.8F}};
     adjustment.enabled = false;
     adjustment.opacity = 0.0F;
-    const MaskCoverage coverage = maskCoverage(adjustment, map, {}, {20, 20});
+    const MaskCoverage coverage = maskCoverage(adjustment, map, {}, {20, 20}, LensCorrection{});
     REQUIRE(coverage.weights.front() == 255);
     REQUIRE(coverage.weights.back() == 0);
     // Enabled, opacity and deltas play no part.
@@ -297,7 +297,7 @@ TEST_CASE("A mask that does nothing is still covered", "[developed-frame][covera
     other.enabled = true;
     other.opacity = 1.0F;
     other.deltas.exposure = 2.0F;
-    REQUIRE(maskCoverage(other, map, {}, {20, 20}).weights == coverage.weights);
+    REQUIRE(maskCoverage(other, map, {}, {20, 20}, LensCorrection{}).weights == coverage.weights);
 }
 
 TEST_CASE("Coverage reaches past the frame", "[developed-frame][coverage]") {
@@ -308,17 +308,19 @@ TEST_CASE("Coverage reaches past the frame", "[developed-frame][coverage]") {
         .centre = {2.5F, 2.5F}, .radiusX = 0.2F, .radiusY = 0.2F, .angle = 0.0F, .feather = 0.0F};
 
     SECTION("a mask outside the frame covers none of it") {
-        const MaskCoverage coverage = maskCoverage(adjustment, map, {}, {16, 12});
+        const MaskCoverage coverage = maskCoverage(adjustment, map, {}, {16, 12}, LensCorrection{});
         REQUIRE(std::ranges::all_of(coverage.weights, [](std::uint8_t w) { return w == 0; }));
     }
     SECTION("a region around it sees it") {
-        const MaskCoverage coverage = maskCoverage(adjustment, map, {1.5, 1.5, 2.0, 2.0}, {32, 32});
+        const MaskCoverage coverage =
+            maskCoverage(adjustment, map, {1.5, 1.5, 2.0, 2.0}, {32, 32}, LensCorrection{});
         REQUIRE(coverage.weights[16 * 32 + 16] == 255);
         REQUIRE(coverage.weights[0] == 0);
     }
     SECTION("a region wider than the frame is evaluated off the picture too") {
         adjustment.shape = LinearMask{{0.5F, 0.5F}, {0.5F, 1.5F}};
-        const MaskCoverage coverage = maskCoverage(adjustment, map, {-1.0, -1.0, 3.0, 3.0}, {8, 8});
+        const MaskCoverage coverage =
+            maskCoverage(adjustment, map, {-1.0, -1.0, 3.0, 3.0}, {8, 8}, LensCorrection{});
         REQUIRE(coverage.weights[0] == 255);
         REQUIRE(coverage.weights[7 * 8] == 0);
     }
@@ -329,19 +331,25 @@ TEST_CASE("Coverage refuses what it cannot evaluate", "[developed-frame][coverag
     const DevelopedFrameMap map(source, {});
     LocalAdjustment adjustment;
     adjustment.shape = LinearMask{};
-    REQUIRE_THROWS_AS(maskCoverage(adjustment, map, {}, {0, 4}), std::invalid_argument);
-    REQUIRE_THROWS_AS(maskCoverage(adjustment, map, {}, {4, 0}), std::invalid_argument);
-    REQUIRE_THROWS_AS(maskCoverage(adjustment, map, {}, {maximumCoverageSide + 1, 4}),
+    REQUIRE_THROWS_AS(maskCoverage(adjustment, map, {}, {0, 4}, LensCorrection{}),
                       std::invalid_argument);
-    REQUIRE_THROWS_AS(maskCoverage(adjustment, map, {}, {4, maximumCoverageSide + 1}),
+    REQUIRE_THROWS_AS(maskCoverage(adjustment, map, {}, {4, 0}, LensCorrection{}),
                       std::invalid_argument);
-    REQUIRE_NOTHROW(maskCoverage(adjustment, map, {}, {maximumCoverageSide, 1}));
-    REQUIRE_THROWS_AS(maskCoverage(adjustment, map, {0.0, 0.0, 0.0, 1.0}, {4, 4}),
+    REQUIRE_THROWS_AS(
+        maskCoverage(adjustment, map, {}, {maximumCoverageSide + 1, 4}, LensCorrection{}),
+        std::invalid_argument);
+    REQUIRE_THROWS_AS(
+        maskCoverage(adjustment, map, {}, {4, maximumCoverageSide + 1}, LensCorrection{}),
+        std::invalid_argument);
+    REQUIRE_NOTHROW(maskCoverage(adjustment, map, {}, {maximumCoverageSide, 1}, LensCorrection{}));
+    REQUIRE_THROWS_AS(maskCoverage(adjustment, map, {0.0, 0.0, 0.0, 1.0}, {4, 4}, LensCorrection{}),
                       std::invalid_argument);
-    REQUIRE_THROWS_AS(maskCoverage(adjustment, map, {std::nan(""), 0.0, 1.0, 1.0}, {4, 4}),
-                      std::invalid_argument);
+    REQUIRE_THROWS_AS(
+        maskCoverage(adjustment, map, {std::nan(""), 0.0, 1.0, 1.0}, {4, 4}, LensCorrection{}),
+        std::invalid_argument);
     adjustment.shape = LinearMask{{0.5F, 0.5F}, {0.5F, 0.5F}};
-    REQUIRE_THROWS_AS(maskCoverage(adjustment, map, {}, {4, 4}), std::invalid_argument);
+    REQUIRE_THROWS_AS(maskCoverage(adjustment, map, {}, {4, 4}, LensCorrection{}),
+                      std::invalid_argument);
 }
 
 TEST_CASE("The coverage follows the render under turns, flips, straighten and crop",
@@ -383,12 +391,13 @@ TEST_CASE("The coverage follows the render under turns, flips, straighten and cr
         DevelopState plain = masked;
         plain.localAdjustments.clear();
 
-        const ImageBuffer with = develop(source, masked);
-        const ImageBuffer without = develop(source, plain);
+        const ImageBuffer with = develop(source, masked, LensCorrection{});
+        const ImageBuffer without = develop(source, plain, LensCorrection{});
         REQUIRE(with.size() == without.size());
         const ImageSize out = with.size();
         const DevelopedFrameMap map(shapeOf(source), geometry);
-        const MaskCoverage coverage = maskCoverage(masked.localAdjustments.front(), map, {}, out);
+        const MaskCoverage coverage =
+            maskCoverage(masked.localAdjustments.front(), map, {}, out, LensCorrection{});
         REQUIRE(coverage.size == out);
 
         const auto a = with.samples<float>();
@@ -439,7 +448,8 @@ TEST_CASE("Timing of a 1024 by 1024 coverage", "[.timing]") {
         double best = 1e9;
         for (int run = 0; run < 5; ++run) {
             const auto start = std::chrono::steady_clock::now();
-            const MaskCoverage coverage = maskCoverage(adjustment, map, {}, {1024, 1024});
+            const MaskCoverage coverage =
+                maskCoverage(adjustment, map, {}, {1024, 1024}, LensCorrection{});
             const std::chrono::duration<double, std::milli> took =
                 std::chrono::steady_clock::now() - start;
             REQUIRE(coverage.weights.size() == 1024U * 1024U);
@@ -493,9 +503,10 @@ TEST_CASE("The tint of a brush is 255 deep inside a hard stroke and 0 beyond its
     const DevelopedFrameMap map(source, {});
     const auto strokes = bandStrokes();
     // One cell a pixel; the band is 20 pixels either side of row 50.
-    const MaskCoverage plain = maskCoverage(brushAdjustment(strokes), map, {}, source.size);
+    const MaskCoverage plain =
+        maskCoverage(brushAdjustment(strokes), map, {}, source.size, LensCorrection{});
     const MaskCoverage inverted =
-        maskCoverage(brushAdjustment(strokes, true), map, {}, source.size);
+        maskCoverage(brushAdjustment(strokes, true), map, {}, source.size, LensCorrection{});
     REQUIRE(plain.size == source.size);
     const auto at = [&](const MaskCoverage& coverage, std::uint32_t x, std::uint32_t y) {
         return coverage.weights[y * source.size.width + x];
@@ -521,9 +532,10 @@ TEST_CASE("The tint of a brush is 0 off the picture, and 255 inverted",
     const auto everything = std::make_shared<const StrokeList>(
         std::vector<Stroke>{Stroke{1.0F, 1.0F, 1.0F, false, {{0.5F, 0.5F}}}});
     const DevelopedRegion region{-1.0, -1.0, 3.0, 3.0};
-    const MaskCoverage plain = maskCoverage(brushAdjustment(everything), map, region, {30, 30});
+    const MaskCoverage plain =
+        maskCoverage(brushAdjustment(everything), map, region, {30, 30}, LensCorrection{});
     const MaskCoverage inverted =
-        maskCoverage(brushAdjustment(everything, true), map, region, {30, 30});
+        maskCoverage(brushAdjustment(everything, true), map, region, {30, 30}, LensCorrection{});
     // The picture is the middle tenth to the two-thirds of the region's axes; cells at the
     // corners are off it.
     CHECK(plain.weights[15 * 30 + 15] == 255);
@@ -539,16 +551,18 @@ TEST_CASE("An empty brush tints nothing, and draws nothing", "[developed-frame][
     emptyCache();
     constexpr SourceShape source{{64, 48}, ImageOrientation::Normal};
     const DevelopedFrameMap map(source, {});
-    const MaskCoverage plain = maskCoverage(brushAdjustment(emptyStrokeList()), map, {}, {16, 12});
+    const MaskCoverage plain =
+        maskCoverage(brushAdjustment(emptyStrokeList()), map, {}, {16, 12}, LensCorrection{});
     const MaskCoverage inverted =
-        maskCoverage(brushAdjustment(emptyStrokeList(), true), map, {}, {16, 12});
+        maskCoverage(brushAdjustment(emptyStrokeList(), true), map, {}, {16, 12}, LensCorrection{});
     CHECK(std::ranges::all_of(plain.weights, [](std::uint8_t w) { return w == 0; }));
     CHECK(std::ranges::all_of(inverted.weights, [](std::uint8_t w) { return w == 255; }));
     CHECK(cache().entryCount() == 0);
     // A null list is the empty one.
     LocalAdjustment bare;
     bare.shape = BrushMask{nullptr};
-    CHECK(maskCoverage(bare, map, {}, {4, 4}).weights == std::vector<std::uint8_t>(16, 0));
+    CHECK(maskCoverage(bare, map, {}, {4, 4}, LensCorrection{}).weights ==
+          std::vector<std::uint8_t>(16, 0));
     CHECK(cache().entryCount() == 0);
 }
 
@@ -567,7 +581,7 @@ TEST_CASE("The level is the coarsest no coarser than the grid",
         const auto strokes = bandStrokes();
         const ImageSize grid{density.columns, std::max(1U, density.columns / 2)};
         INFO(density.columns << " columns");
-        (void)maskCoverage(brushAdjustment(strokes), map, {}, grid);
+        (void)maskCoverage(brushAdjustment(strokes), map, {}, grid, LensCorrection{});
         REQUIRE(cache().entryCount() == 1);
         for (int level = 0; level <= 5; ++level) {
             INFO("level " << level);
@@ -578,7 +592,7 @@ TEST_CASE("The level is the coarsest no coarser than the grid",
     // The shorter step decides when the cells are not square.
     emptyCache();
     const auto strokes = bandStrokes();
-    (void)maskCoverage(brushAdjustment(strokes), map, {}, {512, 16});
+    (void)maskCoverage(brushAdjustment(strokes), map, {}, {512, 16}, LensCorrection{});
     CHECK(cache().peek(strokes, source.size).lookup == CoverageLookup::Hit);
 }
 
@@ -595,7 +609,8 @@ TEST_CASE("The tint uses the level the cache holds, finer than the grid's, and d
     const std::size_t bytes = cache().memoryBytes();
 
     const ImageSize grid{128, 64};
-    const MaskCoverage coverage = maskCoverage(brushAdjustment(strokes), map, {}, grid);
+    const MaskCoverage coverage =
+        maskCoverage(brushAdjustment(strokes), map, {}, grid, LensCorrection{});
     CHECK(cache().entryCount() == 1);
     CHECK(cache().memoryBytes() == bytes);
     CHECK(cache().peek(strokes, levelSize(source.size, 2)).lookup == CoverageLookup::Miss);
@@ -613,7 +628,8 @@ TEST_CASE("The tint uses the level the cache holds, finer than the grid's, and d
     // The same strokes behind another pointer hit as well.
     const auto copy = std::make_shared<const StrokeList>(std::vector<Stroke>{(*strokes)[0]});
     REQUIRE(copy != strokes);
-    CHECK(maskCoverage(brushAdjustment(copy), map, {}, grid).weights == coverage.weights);
+    CHECK(maskCoverage(brushAdjustment(copy), map, {}, grid, LensCorrection{}).weights ==
+          coverage.weights);
     CHECK(cache().entryCount() == 1);
 }
 
@@ -624,12 +640,14 @@ TEST_CASE("With nothing cached the tint draws at the grid's level, once",
     const DevelopedFrameMap map(source, {});
     const auto strokes = bandStrokes();
     const ImageSize grid{128, 64};
-    const MaskCoverage first = maskCoverage(brushAdjustment(strokes), map, {}, grid);
+    const MaskCoverage first =
+        maskCoverage(brushAdjustment(strokes), map, {}, grid, LensCorrection{});
     REQUIRE(cache().entryCount() == 1);
     const std::size_t bytes = cache().memoryBytes();
     const auto drawn = cache().find(strokes, levelSize(source.size, 2));
     REQUIRE(drawn);
-    const MaskCoverage second = maskCoverage(brushAdjustment(strokes), map, {}, grid);
+    const MaskCoverage second =
+        maskCoverage(brushAdjustment(strokes), map, {}, grid, LensCorrection{});
     CHECK(cache().find(strokes, levelSize(source.size, 2)) == drawn);
     CHECK(cache().entryCount() == 1);
     CHECK(cache().memoryBytes() == bytes);
@@ -646,7 +664,7 @@ TEST_CASE("The tint draws its own level when the cache holds only a coarser one"
     const auto strokes = bandStrokes();
     (void)cache().coverage(strokes, levelSize(source.size, 3));
     REQUIRE(cache().entryCount() == 1);
-    (void)maskCoverage(brushAdjustment(strokes), map, {}, {128, 64});
+    (void)maskCoverage(brushAdjustment(strokes), map, {}, {128, 64}, LensCorrection{});
     CHECK(cache().entryCount() == 2);
     CHECK(cache().peek(strokes, levelSize(source.size, 2)).lookup == CoverageLookup::Hit);
 }
@@ -661,7 +679,8 @@ TEST_CASE("The tint follows a rotated and cropped frame", "[developed-frame][cov
     const auto strokes = bandStrokes(0.5F, 0.15F);
     // Cells no larger than a pixel: the coverage at the source's own size.
     const ImageSize grid{200, 300};
-    const MaskCoverage coverage = maskCoverage(brushAdjustment(strokes), map, {}, grid);
+    const MaskCoverage coverage =
+        maskCoverage(brushAdjustment(strokes), map, {}, grid, LensCorrection{});
     const auto tiles = cache().find(strokes, source.size);
     REQUIRE(tiles);
     std::size_t covered = 0;
@@ -694,16 +713,20 @@ TEST_CASE("The tint of a brush refuses what it cannot evaluate",
     constexpr SourceShape source{{40, 30}, ImageOrientation::Normal};
     const DevelopedFrameMap map(source, {});
     const LocalAdjustment adjustment = brushAdjustment(bandStrokes());
-    REQUIRE_THROWS_AS(maskCoverage(adjustment, map, {}, {0, 4}), std::invalid_argument);
-    REQUIRE_THROWS_AS(maskCoverage(adjustment, map, {}, {maximumCoverageSide + 1, 4}),
+    REQUIRE_THROWS_AS(maskCoverage(adjustment, map, {}, {0, 4}, LensCorrection{}),
                       std::invalid_argument);
-    REQUIRE_THROWS_AS(maskCoverage(adjustment, map, {0.0, 0.0, 0.0, 1.0}, {4, 4}),
+    REQUIRE_THROWS_AS(
+        maskCoverage(adjustment, map, {}, {maximumCoverageSide + 1, 4}, LensCorrection{}),
+        std::invalid_argument);
+    REQUIRE_THROWS_AS(maskCoverage(adjustment, map, {0.0, 0.0, 0.0, 1.0}, {4, 4}, LensCorrection{}),
                       std::invalid_argument);
-    REQUIRE_THROWS_AS(maskCoverage(adjustment, map, {std::nan(""), 0.0, 1.0, 1.0}, {4, 4}),
-                      std::invalid_argument);
+    REQUIRE_THROWS_AS(
+        maskCoverage(adjustment, map, {std::nan(""), 0.0, 1.0, 1.0}, {4, 4}, LensCorrection{}),
+        std::invalid_argument);
     // A list of a rasteriser this arraw does not draw with.
     LocalAdjustment unknown;
     unknown.shape = BrushMask{std::make_shared<const StrokeList>(std::vector<Stroke>{}, 2)};
-    REQUIRE_THROWS_AS(maskCoverage(unknown, map, {}, {4, 4}), std::invalid_argument);
+    REQUIRE_THROWS_AS(maskCoverage(unknown, map, {}, {4, 4}, LensCorrection{}),
+                      std::invalid_argument);
     CHECK(cache().entryCount() == 0);
 }

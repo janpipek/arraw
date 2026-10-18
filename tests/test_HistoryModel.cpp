@@ -415,3 +415,41 @@ TEST_CASE("A negative-only step is worded for the demosaic", "[app][history][neg
     CHECK(saved(3));
     CHECK_FALSE(saved(2));
 }
+
+TEST_CASE("A lens step is worded for the correction and for the lens", "[app][history][lens]") {
+    Built built;
+    built.then([](DevelopSettings& s) { s.tone.exposure = 1.0F; });
+    const RecordedLens kit{.maker = "Canon",
+                           .model = "Canon EF-S 18-135mm f/3.5-5.6 IS USM",
+                           .cropFactor = 1.6,
+                           .origin = LensOrigin::Matched,
+                           .database = "2023-11-14T22:13:20Z"};
+
+    // Turning a correction on records the lens in the same step, which is still one change.
+    HistoryStep on = built.steps.back();
+    on.negative.lens.distortion = true;
+    on.negative.lens.lens = kit;
+    built.steps.push_back(on);
+    HistoryStep off = on;
+    off.negative.lens.distortion = false;
+    built.steps.push_back(off);
+    HistoryStep several = off;
+    several.negative.lens.vignetting = true;
+    several.negative.lens.lateralCa = true;
+    built.steps.push_back(several);
+    HistoryStep chosen = several;
+    chosen.negative.lens.lens->model = "Canon EF 50mm f/1.8 STM";
+    built.steps.push_back(chosen);
+    HistoryStep mixed = chosen;
+    mixed.state.settings.tone.contrast = 10.0F;
+    mixed.negative.lens.distortion = true;
+    built.steps.push_back(mixed);
+
+    HistoryModel model;
+    model.setHistory(built.steps, 6, mixed.state, mixed.negative);
+    CHECK(textAt(model, 2) == "Lens: distortion on");
+    CHECK(textAt(model, 3) == "Lens: distortion off");
+    CHECK(textAt(model, 4) == "Lens corrections");
+    CHECK(textAt(model, 5) == "Lens: Canon EF 50mm f/1.8 STM");
+    CHECK(textAt(model, 6) == "2 changes");
+}

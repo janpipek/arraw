@@ -360,13 +360,13 @@ TEST_CASE("Developing on the GPU stops at the pass boundaries with the planned s
     REQUIRE_FALSE(plan.isIdentity());
 
     const RenderCheckpoint pointwise =
-        developOnGpu(context, source, DevelopState{settings}, Stage::Pointwise);
+        developOnGpu(context, source, DevelopState{settings}, LensCorrection{}, Stage::Pointwise);
     CHECK(pointwise.isResident());
     CHECK(pointwise.boundary() == Stage::Pointwise);
     CHECK(pointwise.size() == source.size());
 
     const RenderCheckpoint geometry =
-        developOnGpu(context, source, DevelopState{settings}, Stage::Geometry);
+        developOnGpu(context, source, DevelopState{settings}, LensCorrection{}, Stage::Geometry);
     CHECK(geometry.isResident());
     CHECK(geometry.boundary() == Stage::Geometry);
     CHECK(geometry.size() == plan.outputSize);

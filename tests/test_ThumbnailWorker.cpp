@@ -1,10 +1,13 @@
 #include "ThumbnailCache.h"
 #include "ThumbnailWorker.h"
 #include "support/Fixtures.h"
+#include "support/LensFixtures.h"
+#include "support/Lensfun.h"
 #include "support/TempDir.h"
 
 #include <DevelopState.h>
 #include <ImageImport.h>
+#include <LensResolution.h>
 #include <Photo.h>
 #include <Sidecar.h>
 
@@ -304,4 +307,70 @@ TEST_CASE("A file that cannot be read gives no thumbnail and no failure", "[thum
     const auto results = collector.results();
     REQUIRE(find(results, broken, ThumbnailKind::Developed) == nullptr);
     REQUIRE(find(results, good, ThumbnailKind::Developed) != nullptr);
+}
+
+TEST_CASE("A shot whose saved settings turn lens corrections on is developed with them",
+          "[thumbnailworker][lens][lensfun]") {
+    ARRAW_REQUIRE_LENSFUN_OR_SKIP();
+    const test::TempDir folder;
+    const test::TempDir cacheRoot;
+    const fs::path off = folder.file("off.dng");
+    const fs::path on = folder.file("on.dng");
+    fs::copy_file(test::fixture("lens-canon-32x24.dng"), off);
+    fs::copy_file(test::fixture("lens-canon-32x24.dng"), on);
+    {
+        const Photo photo = openPhoto(on);
+        NegativeSettings negative = photo.negative();
+        negative.lens.distortion = true;
+        negative.lens.vignetting = true;
+        negative.lens.lateralCa = true;
+        writeSidecar(recordLensMatch(photo.with(negative), test::fixtureDatabase()));
+    }
+
+    Collector collector;
+    ThumbnailWorker worker(ThumbnailCache(cacheRoot.path()), collector.callback(), false,
+                           []() -> const LensDatabase& { return test::fixtureDatabase(); });
+    worker.setShots({off, on});
+    // The fixtures carry no camera preview, so each shot delivers its developed picture alone.
+    REQUIRE(waitUntil([&] { return collector.count() == 2 && worker.pendingJobs() == 0; }));
+    const auto results = collector.results();
+    const auto* plain = find(results, off, ThumbnailKind::Developed);
+    const auto* corrected = find(results, on, ThumbnailKind::Developed);
+    REQUIRE(plain != nullptr);
+    REQUIRE(corrected != nullptr);
+    // The same file and settings but for the corrections: another picture.
+    REQUIRE(plain->image != corrected->image);
+
+    // It is what the library renders for the saved settings, kept under the key that names the
+    // correction.
+    const Photo photo = openPhoto(on);
+    const LensCorrection lens = lensCorrectionFor(photo, test::fixtureDatabase());
+    REQUIRE(lens.active());
+    const ThumbnailCache cache(cacheRoot.path());
+    const auto key = ThumbnailCache::developedKey(on, photo.state(), photo.negative(), lens);
+    REQUIRE(key);
+    REQUIRE_FALSE(cache.load(*key).isNull());
+    REQUIRE(*key != *ThumbnailCache::developedKey(on, photo.state(), photo.negative()));
+}
+
+TEST_CASE("A shot whose lens cannot be found is developed without the corrections",
+          "[thumbnailworker][lens][lensfun]") {
+    ARRAW_REQUIRE_LENSFUN_OR_SKIP();
+    const test::TempDir folder;
+    const test::TempDir cacheRoot;
+    const fs::path shot = folder.file("frame.dng");
+    // A RAW that names no lens in the database.
+    fs::copy_file(test::fixture("bayer-32x24.dng"), shot);
+    {
+        const Photo photo = openPhoto(shot);
+        NegativeSettings negative = photo.negative();
+        negative.lens.distortion = true;
+        writeSidecar(photo.with(negative));
+    }
+    Collector collector;
+    ThumbnailWorker worker(ThumbnailCache(cacheRoot.path()), collector.callback(), false,
+                           []() -> const LensDatabase& { return test::fixtureDatabase(); });
+    worker.setShots({shot});
+    REQUIRE(waitUntil([&] { return collector.count() == 1 && worker.pendingJobs() == 0; }));
+    REQUIRE_FALSE(find(collector.results(), shot, ThumbnailKind::Developed)->image.isNull());
 }

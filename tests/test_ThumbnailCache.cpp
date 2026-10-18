@@ -4,6 +4,7 @@
 #include "support/TempDir.h"
 
 #include <DevelopState.h>
+#include <LensCorrection.h>
 #include <LocalAdjustmentEdits.h>
 #include <SettingsJson.h>
 
@@ -111,6 +112,32 @@ TEST_CASE("Cache keys follow the file, and developed ones the saved state", "[th
         const DevelopState masks = test::stateWithMasks();
         REQUIRE(localAdjustmentsToJson(masks, StrokeDetail::Digest) ==
                 localAdjustmentsToJson(masks));
+    }
+    SECTION("an active lens correction changes the developed key, and an empty one does not") {
+        REQUIRE(*ThumbnailCache::developedKey(file, plainState, {}, LensCorrection{}) ==
+                *developed);
+        LensCorrection lens;
+        lens.vignetting = std::vector<float>(8, 1.5F);
+        lens.vignettingFrom = LensProvenance{.lens = {"Test", "Lens"}, .database = "stamp-1"};
+        const std::string key = *ThumbnailCache::developedKey(file, plainState, {}, lens);
+        REQUIRE(key != *developed);
+        REQUIRE(key == *ThumbnailCache::developedKey(file, plainState, {}, lens));
+
+        // Other tables, another centre, or another database: another picture or another thumbnail.
+        LensCorrection stronger = lens;
+        stronger.vignetting = std::vector<float>(8, 1.6F);
+        REQUIRE(*ThumbnailCache::developedKey(file, plainState, {}, stronger) != key);
+        LensCorrection moved = lens;
+        moved.centerU = 0.52;
+        REQUIRE(*ThumbnailCache::developedKey(file, plainState, {}, moved) != key);
+        LensCorrection updated = lens;
+        updated.vignettingFrom->database = "stamp-2";
+        REQUIRE(*ThumbnailCache::developedKey(file, plainState, {}, updated) != key);
+    }
+    SECTION("the switches of the negative change the key, with or without a lens found") {
+        NegativeSettings negative;
+        negative.lens.distortion = true;
+        REQUIRE(*ThumbnailCache::developedKey(file, plainState, negative) != *developed);
     }
     SECTION("the modification time changes both") {
         setAge(file, std::chrono::hours(5));

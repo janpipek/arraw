@@ -52,7 +52,7 @@ top: turning on B&W hides the colour controls and reveals the mixer.
 | **Negative** | Demosaic choice (Linear, VNG, PPG, AHD, DCB, DHT, AAHD) for a RAW. It re-decodes the file, so it is kept apart from the develop sliders; it is saved, undoable, and copied and pasted with the look |
 | **Detail** | Texture, Clarity, Dehaze, Sharpen; separate Luminance noise (amount/detail) and Colour noise (strength/smoothness) reduction, both edge-aware |
 | **Geometry** | 90° rotation and flips, Straighten (±45°), Crop with aspect presets |
-| **Lens Corrections** | Profile-driven distortion, vignetting and chromatic-aberration correction, from the lensfun database or the profile embedded in the file |
+| **Lens Corrections** | Profile-driven distortion, vignetting and chromatic-aberration correction, from the lensfun database, matched from the file's EXIF and recorded with the edit, off by default and for a RAW only; profiles embedded in the file are a later option |
 | **Effects** | Post-crop vignette (amount / midpoint / feather) and film grain (amount / size / roughness) |
 
 ### Local adjustments

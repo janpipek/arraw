@@ -176,11 +176,12 @@ double visibleDelta(const LocalDescriptor& descriptor) {
 double requirePointwiseMatches(const ImageBuffer& source, const DevelopState& state,
                                double tolerance = brushRelativeTolerance) {
     REQUIRE_FALSE(state.localAdjustments.empty());
-    const ImageBuffer expected = developUntil(source, state, Stage::Pointwise).readBack();
+    const ImageBuffer expected =
+        developUntil(source, state, LensCorrection{}, Stage::Pointwise).readBack();
     const ImageBuffer unmasked =
-        developUntil(source, withoutMasks(state), Stage::Pointwise).readBack();
+        developUntil(source, withoutMasks(state), LensCorrection{}, Stage::Pointwise).readBack();
     const ImageBuffer actual =
-        developOnGpu(gpuContext(), source, state, Stage::Pointwise).readBack();
+        developOnGpu(gpuContext(), source, state, LensCorrection{}, Stage::Pointwise).readBack();
     REQUIRE(actual.size() == expected.size());
     const double effect = worstColourError(unmasked, expected);
     const double error = worstColourError(expected, actual);
@@ -366,8 +367,11 @@ TEST_CASE("A brush with erase strokes, inverted, and an inverted empty brush mat
     SECTION("an empty brush draws nothing") {
         const DevelopState state = stateOf({adjustmentOf(brushOf({}), deltas)});
         requireBitIdentical(
-            developOnGpu(gpuContext(), source, withoutMasks(state), Stage::Pointwise).readBack(),
-            developOnGpu(gpuContext(), source, state, Stage::Pointwise).readBack());
+            developOnGpu(gpuContext(), source, withoutMasks(state), LensCorrection{},
+                         Stage::Pointwise)
+                .readBack(),
+            developOnGpu(gpuContext(), source, state, LensCorrection{}, Stage::Pointwise)
+                .readBack());
     }
     SECTION("an inverted empty brush is everywhere") {
         requirePointwiseMatches(source, stateOf({adjustmentOf(brushOf({}), deltas, 1.0F, true)}));
@@ -395,7 +399,7 @@ TEST_CASE("Sixteen brushes, four textures and every channel, match the CPU", "[g
         adjustments.push_back(adjustment);
     }
     const DevelopState state = stateOf(adjustments);
-    const ProcessingPlan plan = planFor(source, state);
+    const ProcessingPlan plan = planFor(source, state, LensCorrection{});
     REQUIRE(plan.pointwise.local.brushCount() == 16);
     requirePointwiseMatches(source, state);
     // The last slot of the last texture reads its own channel: the other fifteen stay in the plan
@@ -406,7 +410,7 @@ TEST_CASE("Sixteen brushes, four textures and every channel, match the CPU", "[g
         faint[index].deltas.exposure = 0.01F;
     }
     const DevelopState last = stateOf(faint);
-    REQUIRE(planFor(source, last).pointwise.local.brushCount() == 16);
+    REQUIRE(planFor(source, last, LensCorrection{}).pointwise.local.brushCount() == 16);
     requirePointwiseMatches(source, last);
 }
 
@@ -449,13 +453,14 @@ TEST_CASE("Brush coverage sums with a cancelling mask as the CPU's, and exactly 
     flat.shape = everywhere();
     flat.deltas = opposite;
     const DevelopState state = stateOf({brush, flat}, settings);
-    const ProcessingPlan plan = planFor(source, state);
+    const ProcessingPlan plan = planFor(source, state, LensCorrection{});
     const PackedCoverage packed = packCoverage(plan.pointwise.local);
 
     const ImageBuffer without =
-        developOnGpu(gpuContext(), source, withoutMasks(state), Stage::Pointwise).readBack();
+        developOnGpu(gpuContext(), source, withoutMasks(state), LensCorrection{}, Stage::Pointwise)
+            .readBack();
     const ImageBuffer masked =
-        developOnGpu(gpuContext(), source, state, Stage::Pointwise).readBack();
+        developOnGpu(gpuContext(), source, state, LensCorrection{}, Stage::Pointwise).readBack();
     std::size_t exact = 0;
     std::size_t elsewhere = 0;
     for (std::uint32_t y = 0; y < source.size().height; ++y) {
@@ -503,9 +508,11 @@ TEST_CASE("Brush masks match the CPU at odd sizes", "[gpu][brush]") {
                      adjustmentOf(brushOf({}), {{"shadows", 50.0}}, 1.0F, true)});
         if (size.pixelCount() == 1) {
             // One pixel: both backends read the same code; compare the render, not the effect.
-            const ImageBuffer expected = developUntil(source, state, Stage::Pointwise).readBack();
+            const ImageBuffer expected =
+                developUntil(source, state, LensCorrection{}, Stage::Pointwise).readBack();
             const ImageBuffer actual =
-                developOnGpu(gpuContext(), source, state, Stage::Pointwise).readBack();
+                developOnGpu(gpuContext(), source, state, LensCorrection{}, Stage::Pointwise)
+                    .readBack();
             REQUIRE(worstColourError(expected, actual) <= brushRelativeTolerance);
             continue;
         }
@@ -534,10 +541,12 @@ TEST_CASE("A render with a brush matches the CPU at pyramid levels 0 to 3, in a 
         levels.push_back(halved(levels.back()));
     }
     const auto requireRender = [&](const ImageBuffer& source, const RenderRequest& request) {
-        const ImageBuffer expected = develop(source, state, request);
-        const ImageBuffer unmasked = develop(source, withoutMasks(state), request);
+        const ImageBuffer expected = develop(source, state, LensCorrection{}, request);
+        const ImageBuffer unmasked =
+            develop(source, withoutMasks(state), LensCorrection{}, request);
         const ImageBuffer actual =
-            developOnGpu(context, source, state, Stage::Effects, request).readBack();
+            developOnGpu(context, source, state, LensCorrection{}, Stage::Effects, request)
+                .readBack();
         REQUIRE(actual.size() == expected.size());
         const double colour = worstColourError(expected, actual);
         if (printsMeasured()) {
@@ -570,15 +579,17 @@ TEST_CASE("The curve-input sample under a brush matches the CPU", "[gpu][brush]"
     const DevelopState state =
         stateOf({adjustmentOf(middleBrush(true), {{"exposure", 1.0}, {"clarity", 40.0}}),
                  adjustmentOf(someRadial(), {{"relativeTint", 70.0}, {"vibrance", 50.0}})});
-    const ImageBuffer expected = sample(source, state, Tap::CurveInput);
-    const ImageBuffer actual = sampleOnGpu(context, source, state, Tap::CurveInput);
+    const ImageBuffer expected = sample(source, state, LensCorrection{}, Tap::CurveInput);
+    const ImageBuffer actual =
+        sampleOnGpu(context, source, state, LensCorrection{}, Tap::CurveInput);
     REQUIRE(actual.size() == expected.size());
     REQUIRE(actual.format() == expected.format());
     const double error = worstColourError(toRgbaF32(expected), toRgbaF32(actual));
     CAPTURE(error);
     REQUIRE(error <= 2.0 * brushRelativeTolerance + 1e-3);
     // The brush did something to the sample.
-    const ImageBuffer plain = sample(source, withoutMasks(state), Tap::CurveInput);
+    const ImageBuffer plain =
+        sample(source, withoutMasks(state), LensCorrection{}, Tap::CurveInput);
     REQUIRE(worstColourError(toRgbaF32(plain), toRgbaF32(expected)) > 1e-3);
 }
 
@@ -587,8 +598,8 @@ TEST_CASE("A brush on the camera-native fixture matches the CPU", "[gpu][brush]"
     const ImageBuffer source = fixtureImage("bayer-32x24.dng");
     const DevelopState state = stateOf({adjustmentOf(
         middleBrush(true), {{"exposure", 1.0}, {"relativeTemperature", 40.0}}, 1.0F)});
-    const ImageBuffer expected = develop(source, state);
-    const ImageBuffer actual = developOnGpu(context, source, state).readBack();
+    const ImageBuffer expected = develop(source, state, LensCorrection{});
+    const ImageBuffer actual = developOnGpu(context, source, state, LensCorrection{}).readBack();
     REQUIRE(actual.size() == expected.size());
     CAPTURE(compareFloat(expected, actual, pointwiseAbsoluteFloor));
     REQUIRE(worstColourError(toRgbaF32(expected), actual) <=
@@ -610,19 +621,22 @@ TEST_CASE("The brush digest states match the CPU, through every stop and request
                     INFO(named.name << " / " << source.name << " / " << request.name << " / "
                                     << digestStageName(stop));
                     const ImageBuffer expected =
-                        developUntil(source.buffer, named.state, stop, request.request).readBack();
-                    const ImageBuffer actual =
-                        developOnGpu(context, source.buffer, named.state, stop, request.request)
+                        developUntil(source.buffer, named.state, LensCorrection{}, stop,
+                                     request.request)
                             .readBack();
+                    const ImageBuffer actual = developOnGpu(context, source.buffer, named.state,
+                                                            LensCorrection{}, stop, request.request)
+                                                   .readBack();
                     REQUIRE(actual.size() == expected.size());
                     REQUIRE(worstColourError(toRgbaF32(expected), toRgbaF32(actual)) <=
                             brushRelativeTolerance + resampleTolerance);
                     ++compared;
                 }
-                const ImageBuffer expected =
-                    sample(source.buffer, named.state, Tap::CurveInput, request.request);
-                const ImageBuffer actual = sampleOnGpu(context, source.buffer, named.state,
-                                                       Tap::CurveInput, request.request);
+                const ImageBuffer expected = sample(source.buffer, named.state, LensCorrection{},
+                                                    Tap::CurveInput, request.request);
+                const ImageBuffer actual =
+                    sampleOnGpu(context, source.buffer, named.state, LensCorrection{},
+                                Tap::CurveInput, request.request);
                 REQUIRE(actual.size() == expected.size());
                 REQUIRE(worstColourError(toRgbaF32(expected), toRgbaF32(actual)) <=
                         2.0 * brushRelativeTolerance + 1e-3);
@@ -640,7 +654,8 @@ ImageBuffer ladderRender(GpuContext& context, CheckpointLadder& ladder,
                          const std::shared_ptr<const ImageBuffer>& source,
                          const DeviceImage& uploaded, const DevelopState& state,
                          const RenderRequest& request = {}, ProgressChannel* progress = nullptr) {
-    return resumeOrDevelopOnGpu(context, ladder, source, uploaded, state, request, progress)
+    return resumeOrDevelopOnGpu(context, ladder, source, uploaded, state, LensCorrection{}, request,
+                                progress)
         .checkpoint.readBack();
 }
 
@@ -648,7 +663,8 @@ ImageBuffer ladderRender(GpuContext& context, CheckpointLadder& ladder,
 ImageBuffer directRender(GpuContext& context, const ImageBuffer& source,
                          const DeviceImage& uploaded, const DevelopState& state,
                          const RenderRequest& request = {}) {
-    return developOnGpu(context, source, uploaded, state, Stage::Effects, request).readBack();
+    return developOnGpu(context, source, uploaded, state, LensCorrection{}, Stage::Effects, request)
+        .readBack();
 }
 
 /// @brief A source of 400 x 300 pixels: 4 x 3 tiles of 128.
@@ -742,7 +758,7 @@ TEST_CASE("A GPU ladder render with brushes equals a direct GPU render, through 
                 adjustmentOf(BrushMask{paintedMask(seed, 2, everydayStyle, 0.75)},
                              {{"exposure", 0.3 + 0.2 * static_cast<double>(seed - 40)}}));
         }
-        REQUIRE(planFor(*source, many).pointwise.local.brushCount() == 5);
+        REQUIRE(planFor(*source, many, LensCorrection{}).pointwise.local.brushCount() == 5);
         REQUIRE(sameBits(ladderRender(context, ladder, source, uploaded, many),
                          directRender(context, *source, uploaded, many)));
         REQUIRE(LadderAccess::coverage(ladder).device()->planesUploaded() == 2);
@@ -775,8 +791,8 @@ TEST_CASE("A stroke edit rendered on the CPU through a ladder, then on the GPU t
     REQUIRE(sameBits(ladderRender(context, ladder, source, uploaded, first),
                      directRender(context, *source, uploaded, first)));
     // The CPU renders the edit: the planes move on, the textures do not.
-    const LadderRender onHost = resumeOrDevelop(ladder, source, appended, {});
-    REQUIRE(sameBits(onHost.checkpoint.readBack(), develop(*source, appended)));
+    const LadderRender onHost = resumeOrDevelop(ladder, source, appended, LensCorrection{}, {});
+    REQUIRE(sameBits(onHost.checkpoint.readBack(), develop(*source, appended, LensCorrection{})));
     CoverageResidency& residency = LadderAccess::coverage(ladder);
     REQUIRE(residency.hasPending(0));
     const std::uint64_t rectangles = residency.device()->rectanglesUploaded();
@@ -901,7 +917,8 @@ TEST_CASE("A residency ahead of its textures is brought up by the next GPU rende
     CheckpointLadder ladder;
     static_cast<void>(ladderRender(context, ladder, source, uploaded, first));
     CoverageResidency& residency = LadderAccess::coverage(ladder);
-    static_cast<void>(residency.update(planFor(*source, appended).pointwise.local, source->size()));
+    static_cast<void>(residency.update(planFor(*source, appended, LensCorrection{}).pointwise.local,
+                                       source->size()));
     REQUIRE(residency.hasPending(0));
     REQUIRE(sameBits(ladderRender(context, ladder, source, uploaded, appended),
                      directRender(context, *source, uploaded, appended)));
@@ -1017,8 +1034,8 @@ TEST_CASE("A diagonal path at 1x and 3x renders alike except where a code differ
     };
     const DevelopState one = stateWith(1);
     const DevelopState three = stateWith(3);
-    const PackedCoverage a = packCoverage(planFor(source, one).pointwise.local);
-    const PackedCoverage b = packCoverage(planFor(source, three).pointwise.local);
+    const PackedCoverage a = packCoverage(planFor(source, one, LensCorrection{}).pointwise.local);
+    const PackedCoverage b = packCoverage(planFor(source, three, LensCorrection{}).pointwise.local);
     const ImageBuffer renderOne = directRender(context, source, uploaded, one);
     const ImageBuffer renderThree = directRender(context, source, uploaded, three);
     std::size_t reached = 0;
@@ -1066,7 +1083,8 @@ TEST_CASE("A hardness-one stroke is the global render at g + k inside, and nothi
         const ImageBuffer rendered = directRender(context, source, uploaded, brushed);
         const ImageBuffer unmasked = directRender(context, source, uploaded, none);
         const ImageBuffer allIn = directRender(context, source, uploaded, DevelopState{summed});
-        const PackedCoverage packed = packCoverage(planFor(source, brushed).pointwise.local);
+        const PackedCoverage packed =
+            packCoverage(planFor(source, brushed, LensCorrection{}).pointwise.local);
         std::size_t deep = 0;
         std::size_t outside = 0;
         double worst = 0.0;
@@ -1111,14 +1129,15 @@ TEST_CASE("The coarser first render's sequence on the device: level 1 direct, th
 
     CheckpointLadder ladder;
     // Nothing is made: the level-0 render would draw from nothing, whichever backend renders.
-    REQUIRE(drawsBrushCoverageOnGpu(context, ladder, *source, state, request));
+    REQUIRE(drawsBrushCoverageOnGpu(context, ladder, *source, state, LensCorrection{}, request));
     // The stand-in: a direct render at level 1, no ladder touched.
-    const ImageBuffer standIn =
-        developOnGpu(context, *level1, level1Uploaded, state, Stage::Effects, request).readBack();
+    const ImageBuffer standIn = developOnGpu(context, *level1, level1Uploaded, state,
+                                             LensCorrection{}, Stage::Effects, request)
+                                    .readBack();
     REQUIRE(ladder.empty());
     REQUIRE(LadderAccess::coverage(std::as_const(ladder)) == nullptr);
     // It made level-1 coverage in the cache, not level 0's: still from nothing at level 0.
-    REQUIRE(drawsBrushCoverageOnGpu(context, ladder, *source, state, request));
+    REQUIRE(drawsBrushCoverageOnGpu(context, ladder, *source, state, LensCorrection{}, request));
 
     // Then level 0, through the ladder: the same bits as a direct GPU render.
     const ImageBuffer shown = ladderRender(context, ladder, source, uploaded, state, request);
@@ -1126,37 +1145,42 @@ TEST_CASE("The coarser first render's sequence on the device: level 1 direct, th
     REQUIRE(standIn.size() == shown.size());
 
     // Warm: the cache, the residency and the GPU's rungs are all there.
-    REQUIRE_FALSE(drawsBrushCoverageOnGpu(context, ladder, *source, state, request));
+    REQUIRE_FALSE(
+        drawsBrushCoverageOnGpu(context, ladder, *source, state, LensCorrection{}, request));
     // A delta edit invalidates the pointwise rung, and the residency holds the coverage.
     const DevelopState louder =
         withLocalDelta(state, state.localAdjustments[0].id, "exposure", 1.5);
-    REQUIRE_FALSE(drawsBrushCoverageOnGpu(context, ladder, *source, louder, request));
+    REQUIRE_FALSE(
+        drawsBrushCoverageOnGpu(context, ladder, *source, louder, LensCorrection{}, request));
     // An appended stroke extends the cached list: not from nothing either.
     const DevelopState appended =
         withStrokeAppended(state, state.localAdjustments[0].id, cornerStroke());
-    REQUIRE_FALSE(drawsBrushCoverageOnGpu(context, ladder, *source, appended, request));
+    REQUIRE_FALSE(
+        drawsBrushCoverageOnGpu(context, ladder, *source, appended, LensCorrection{}, request));
 
     SECTION("a rung alone answers, for the device that holds it") {
         // A copy keeps the rungs and drops the residency; with the cache cleared, only a rung
         // can say that nothing is drawn.
         const CheckpointLadder copy = ladder;
         brushCoverageCache().clear();
-        REQUIRE_FALSE(drawsBrushCoverageOnGpu(context, copy, *source, state, request));
+        REQUIRE_FALSE(
+            drawsBrushCoverageOnGpu(context, copy, *source, state, LensCorrection{}, request));
         // The host's question does not count a device rung.
-        REQUIRE(drawsBrushCoverage(copy, *source, state, request));
+        REQUIRE(drawsBrushCoverage(copy, *source, state, LensCorrection{}, request));
     }
     SECTION("the cache alone answers") {
         // Without the rungs and the residency, the cache still holds level 0's coverage.
         ladder.clear();
-        REQUIRE_FALSE(drawsBrushCoverageOnGpu(context, ladder, *source, state, request));
+        REQUIRE_FALSE(
+            drawsBrushCoverageOnGpu(context, ladder, *source, state, LensCorrection{}, request));
     }
 }
 
 TEST_CASE("The pointwise pass reads eleven images", "[gpu][brush]") {
     GpuContext& context = gpuContext();
     const DeviceImage image = context.upload(sceneOf({8, 8}));
-    const GpuPointwiseBlock block =
-        packPointwise(planFor(sceneOf({8, 8}), DevelopState{}).pointwise, image.size());
+    const GpuPointwiseBlock block = packPointwise(
+        planFor(sceneOf({8, 8}), DevelopState{}, LensCorrection{}).pointwise, image.size());
     const std::span<const std::byte> bytes = std::as_bytes(std::span(&block, 1));
     // Seven, the count before the coverage textures, is refused; eleven is a render.
     const std::vector<DeviceImage> seven(7, image);
@@ -1176,7 +1200,7 @@ TEST_CASE("Brushes after a reload render the same bits, on the device and on the
     const auto source = std::make_shared<const ImageBuffer>(gentleOf({256, 192}));
     const DeviceImage uploaded = uploadSource(context, *source);
     const ImageBuffer before = directRender(context, *source, uploaded, state);
-    const ImageBuffer cpu = develop(*source, state, {});
+    const ImageBuffer cpu = develop(*source, state, LensCorrection{}, {});
 
     const test::TempDir directory;
     const std::filesystem::path photo = directory.file("IMG_1.dng");
@@ -1190,6 +1214,6 @@ TEST_CASE("Brushes after a reload render the same bits, on the device and on the
          {applyStateJson(stateToJson(state), DevelopState{}), *contents->state}) {
         REQUIRE(back == state);
         requireBitIdentical(before, directRender(context, *source, uploaded, back));
-        requireBitIdentical(cpu, develop(*source, back, {}));
+        requireBitIdentical(cpu, develop(*source, back, LensCorrection{}, {}));
     }
 }

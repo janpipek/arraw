@@ -40,9 +40,46 @@ accepted); committed on `negative-settings`, not pushed or merged. Open:
   the thumbnail key (Phase 2) are in the review;
 - `docs/photo-development.pdf` is stale against section 3.4 (no PDF recipe);
 - `PresetStore` (looks plan step 4) must carry the negative (plan step 6);
-- Phase 2, lens corrections (ADR 050): embedded profile first, then lensfun;
+- Phase 2, lens corrections: done on `lens-corrections` (below);
 - known flaky under load: the brush repaint app tests, "An observed loop
   covers every row once".
+
+## Done: lens corrections (branch lens-corrections, 2026-10-18)
+
+Steps 0 to 10 of `docs/ideas/lens-corrections-plan.md` (ADR 050, accepted), not
+committed or pushed:
+- `NegativeSettings::lens`: three switches (off by default) and a recorded lens
+  (lensfun maker and model, crop factor, origin, database stamp); RAW only;
+- `Stage::Lens` between Denoise and Pointwise: distortion, lateral CA and
+  vignetting in one Catmull-Rom pass from radial tables of 129 nodes, with a
+  fill scale; a toggle resumes from the Denoise rung and decodes nothing;
+- lensfun matched from the EXIF (camera, then lens, scored, filtered by focal
+  range and aperture, ambiguity applies nothing) and the database loaded once;
+  `ARRAW_WITH_LENSFUN` is `AUTO|ON|OFF`, `ON` on Linux release and CI;
+- the sidecar, JSON, history, `CopySection::Lens`, the app (switches, "Choose
+  lens...", status), the CLI (`--lens-database`, `lenses`, `info`), Python,
+  the brush through a forward map, and a GPU pass held to the CPU;
+- ADRs 009, 012, 022, 030, 031, 044, 045 and 049 amended.
+
+Where the code differs from the plan (also in ADR 050's amendment):
+- resolution failures are a `LensProblem` enum, plus `Notice::LensNotCalibrated`;
+- `sampleLensfun` takes the database; tables have 129 nodes;
+- Python's `lens` argument is optional on the buffer-form calls;
+- a paste before the database has loaded matches live and records on the next
+  toggle; `lensCost` is measured per combination of corrections;
+- GPU parity numbers were measured on lavapipe only (no hardware GPU).
+
+Open:
+- step 11, the hand check on real Canon 80D CR2 files, one per lens, needs the
+  user (what the EXIF says, that each lens matches, the overlay check);
+- GPU parity on real hardware is unmeasured;
+- packaging is unverified: `just rpm`, `rpm-smoke` and the `.deb`'s
+  `liblensfun1` dependency were not run here;
+- embedded-profile readers (DNG opcodes, Sony, Fujifilm) are later and optional;
+- Windows and macOS lensfun are deferred;
+- the review, when it lands, is
+  `docs/reviews/claude-opus-5-5_2026-10-18_lens-corrections.md` (untracked on
+  purpose).
 
 ## Done: session history (branch `copy-settings`, 2026-10-08)
 
@@ -96,13 +133,6 @@ adjustments (user, 2026-10-08; `docs/ideas/local-adjustment-plan.md`):
   `export --preset`; Python's `presets()`, `load_preset`, `save_preset` and
   `with_look`. Copy/paste itself is done.
 
-- **Lens corrections as settings of the negative (Phase 2, ADR 050 to write).**
-  Distortion, vignetting and lateral CA as switches in `NegativeSettings::lens`,
-  applied once on the CPU beneath spots, masks and the shaders; the profile
-  comes from the file or lensfun (`auto | embedded | lensfun`). The demosaic
-  half is done (above). ADR 049 section 7 and the plan's "Phase 2 sketch" list
-  what ADR 050 must settle: packaging, the database version, stage placement,
-  and the frame crop and mask coordinates live in.
 - **Presets (step 4 above) must carry the negative (plan step 6).** The preset
   file's `"negative"` object, the carried sections being those whose keys are
   present, and the save dialog pre-checking Demosaic only when it is not AHD.

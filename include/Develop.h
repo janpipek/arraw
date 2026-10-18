@@ -3,6 +3,7 @@
 #include <CheckpointLadder.h>
 #include <DevelopState.h>
 #include <ImageBuffer.h>
+#include <LensCorrection.h>
 #include <Progress.h>
 #include <RenderCheckpoint.h>
 
@@ -180,8 +181,15 @@ struct RenderRequest {
 /// as an approximation of the full photograph (ADR 039). The result carries the
 /// source's pixel scale, multiplied by the resize's reduction.
 ///
+/// The lens corrections run after noise reduction and before the chain, in one pass, when the
+/// correction has a table; they are given and never looked for, so no caller can skip one it
+/// holds a photograph for (ADR 050, section 4). Whoever holds a ::arraw::Photo passes
+/// ::arraw::lensCorrectionFor; a caller with pixels alone passes an empty
+/// ::arraw::LensCorrection, which costs nothing and changes no bit.
+///
 /// @param source Decoded photograph, in the working or a camera encoding.
 /// @param state How the photograph is developed.
+/// @param lens Lens corrections to apply; empty for none.
 /// @param request What to render; the default is the whole photograph at its
 /// own resolution.
 /// @param progress Channel for progress and cancellation (ADR 042), or null
@@ -191,7 +199,7 @@ struct RenderRequest {
 /// cannot start from, if geometry is invalid, or if @p request is invalid.
 /// @throws ::arraw::Cancelled if @p progress was cancelled before the render finished.
 [[nodiscard]] ImageBuffer develop(const ImageBuffer& source, const DevelopState& state,
-                                  const RenderRequest& request = {},
+                                  const LensCorrection& lens, const RenderRequest& request = {},
                                   ProgressChannel* progress = nullptr);
 
 /// @brief Develops a decoded photograph as far as a pass boundary and keeps what is there.
@@ -205,9 +213,12 @@ struct RenderRequest {
 /// later; earlier stops ignore it, whatever it says, as the GPU does.
 /// @param source Decoded photograph, in the working or a camera encoding.
 /// @param state How the photograph is developed.
+/// @param lens Lens corrections to apply; empty for none.
 /// @param stopAfter Last boundary to run. ::arraw::Stage::Denoise leaves the
 /// source after noise reduction, as RGBA float in the source's own encoding and
 /// pending orientation (the source as it stands when noise reduction is off);
+/// ::arraw::Stage::Lens the same after the lens corrections (equal to Denoise's when none is
+/// on, and in the corrected frame, ADR 009, when one is);
 /// ::arraw::Stage::Pointwise a result of the source's size with no geometry
 /// applied, ::arraw::Stage::Geometry one with no resize, ::arraw::Stage::Resize
 /// one with no effects, and ::arraw::Stage::Effects what ::arraw::develop gives.
@@ -215,12 +226,13 @@ struct RenderRequest {
 /// @param progress Channel for progress and cancellation, or null; progress is
 /// measured against the whole render, so it ends at @p stopAfter's share.
 /// @return A host checkpoint; in the working encoding, with no pending
-/// orientation, at every boundary after ::arraw::Stage::Denoise.
+/// orientation, at every boundary after ::arraw::Stage::Lens.
 /// @throws std::invalid_argument as ::arraw::develop, and if @p stopAfter is not
 /// a boundary.
 /// @throws ::arraw::Cancelled if @p progress was cancelled before the render finished.
 [[nodiscard]] RenderCheckpoint developUntil(const ImageBuffer& source, const DevelopState& state,
-                                            Stage stopAfter, const RenderRequest& request = {},
+                                            const LensCorrection& lens, Stage stopAfter,
+                                            const RenderRequest& request = {},
                                             ProgressChannel* progress = nullptr);
 
 /// @brief Carries a render on from a checkpoint, stopping after a boundary.
@@ -245,6 +257,7 @@ struct RenderRequest {
 /// @param source Decoded photograph the checkpoint was made from. Still read,
 /// for what planning needs.
 /// @param state How the photograph is developed now.
+/// @param lens Lens corrections now; empty for none.
 /// @param stopAfter Last boundary to run; not before the checkpoint's.
 /// @param request What to render; read only when @p stopAfter is ::arraw::Stage::Resize or later.
 /// @param progress Channel for progress and cancellation, or null; progress
@@ -256,8 +269,8 @@ struct RenderRequest {
 /// is before the checkpoint's, or as ::arraw::develop.
 /// @throws ::arraw::Cancelled if @p progress was cancelled before the render finished.
 [[nodiscard]] RenderCheckpoint resumeFrom(const RenderCheckpoint& from, const ImageBuffer& source,
-                                          const DevelopState& state, Stage stopAfter,
-                                          const RenderRequest& request = {},
+                                          const DevelopState& state, const LensCorrection& lens,
+                                          Stage stopAfter, const RenderRequest& request = {},
                                           ProgressChannel* progress = nullptr);
 
 /// @brief Says whether a checkpoint can still serve a render, without rendering.
@@ -278,14 +291,15 @@ struct RenderRequest {
 /// @param from Checkpoint to resume from, on the host or on a device.
 /// @param source Decoded photograph the checkpoint was made from.
 /// @param state How the photograph is developed now.
+/// @param lens Lens corrections now; empty for none.
 /// @param stopAfter Last boundary the render would run; not before the checkpoint's.
 /// @param request What to render; read only when @p stopAfter is ::arraw::Stage::Resize or later.
 /// @return Whether resuming from @p from would be valid.
 /// @throws std::invalid_argument if @p stopAfter is not a boundary or is before
 /// the checkpoint's, or as ::arraw::develop for @p state and @p request.
 [[nodiscard]] bool canResumeFrom(const RenderCheckpoint& from, const ImageBuffer& source,
-                                 const DevelopState& state, Stage stopAfter,
-                                 const RenderRequest& request = {});
+                                 const DevelopState& state, const LensCorrection& lens,
+                                 Stage stopAfter, const RenderRequest& request = {});
 
 /// @brief Renders a photograph through a ladder of checkpoints, resuming from the best one.
 ///
@@ -301,6 +315,8 @@ struct RenderRequest {
 /// @param ladder Rungs kept of the source; updated.
 /// @param source Decoded photograph, kept alive by the ladder.
 /// @param state How the photograph is developed.
+/// @param lens Lens corrections to apply; empty for none. A change of them leaves the rungs
+/// before the Lens boundary valid, so a toggle decodes and denoises nothing again.
 /// @param request What to render; see ::arraw::develop.
 /// @param progress Channel for progress and cancellation, or null. The render
 /// is measured from the share of the rung it resumes from.
@@ -310,7 +326,7 @@ struct RenderRequest {
 /// @throws ::arraw::Cancelled if @p progress was cancelled before the render finished.
 [[nodiscard]] LadderRender resumeOrDevelop(CheckpointLadder& ladder,
                                            std::shared_ptr<const ImageBuffer> source,
-                                           const DevelopState& state,
+                                           const DevelopState& state, const LensCorrection& lens,
                                            const RenderRequest& request = {},
                                            ProgressChannel* progress = nullptr);
 
@@ -328,13 +344,15 @@ struct RenderRequest {
 /// @param ladder Ladder the render would go through.
 /// @param source Buffer the render would develop.
 /// @param state Settings of the render.
+/// @param lens Lens corrections of the render.
 /// @param request What to render.
 /// @param minimumSeconds Least modelled drawing time that counts; 0 for any brush drawn from
 /// nothing.
 /// @return False for a state without brush masks.
 /// @throws std::invalid_argument as ::arraw::develop for @p state and @p request.
 [[nodiscard]] bool drawsBrushCoverage(const CheckpointLadder& ladder, const ImageBuffer& source,
-                                      const DevelopState& state, const RenderRequest& request = {},
+                                      const DevelopState& state, const LensCorrection& lens,
+                                      const RenderRequest& request = {},
                                       double minimumSeconds = 0.0);
 
 /// @brief Renders a photograph with the pointwise chain stopped at a tap, to measure it.
@@ -352,6 +370,7 @@ struct RenderRequest {
 /// the only boundary before a tap is the source itself (ADR 035).
 /// @param source Decoded photograph, in the working or a camera encoding.
 /// @param state How the photograph is developed.
+/// @param lens Lens corrections to apply, as a render of the same photograph does; empty for none.
 /// @param tap Where in the chain to stop.
 /// @param request What to render; see ::arraw::develop.
 /// @param progress Channel for progress and cancellation, or null.
@@ -360,7 +379,8 @@ struct RenderRequest {
 /// orientation.
 /// @throws std::invalid_argument as ::arraw::develop, and if @p tap is not a tap.
 /// @throws ::arraw::Cancelled if @p progress was cancelled before the render finished.
-[[nodiscard]] ImageBuffer sample(const ImageBuffer& source, const DevelopState& state, Tap tap,
+[[nodiscard]] ImageBuffer sample(const ImageBuffer& source, const DevelopState& state,
+                                 const LensCorrection& lens, Tap tap,
                                  const RenderRequest& request = {},
                                  ProgressChannel* progress = nullptr);
 

@@ -299,6 +299,8 @@ struct DigestRequest {
     switch (stage) {
     case Stage::Denoise:
         return "denoise";
+    case Stage::Lens:
+        return "lens";
     case Stage::Pointwise:
         return "pointwise";
     case Stage::Geometry:
@@ -312,7 +314,7 @@ struct DigestRequest {
 }
 
 /// @brief Every boundary, in pipeline order.
-inline constexpr std::array<Stage, 5> digestStages{Stage::Denoise, Stage::Pointwise,
+inline constexpr std::array<Stage, 6> digestStages{Stage::Denoise,  Stage::Lens,   Stage::Pointwise,
                                                    Stage::Geometry, Stage::Resize, Stage::Effects};
 
 /// @brief Appends digest lines to the output file.

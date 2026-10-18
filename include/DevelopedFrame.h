@@ -20,6 +20,8 @@
 
 namespace arraw {
 
+struct LensCorrection;
+
 /// @brief A position in the corrected frame in double precision.
 ///
 /// ::arraw::CorrectedPoint stores floats; a drag computes in doubles and narrows once.
@@ -40,12 +42,6 @@ struct CorrectedPosition {
 
     friend bool operator==(const CorrectedPosition&, const CorrectedPosition&) = default;
 };
-
-/// @brief Gives the sensor-frame point under a corrected position.
-///
-/// The same numbers until lens corrections (ADR 009), the one place that changes then. Narrowed to
-/// float once, here.
-[[nodiscard]] SensorPoint sensorFrom(CorrectedPosition position) noexcept;
 
 /// @brief A position in the developed frame: the upright, straightened, cropped picture a render
 /// shows, normalised per axis to the crop.
@@ -158,15 +154,19 @@ inline constexpr std::uint32_t maximumCoverageSide = 4096;
 /// pyramid level whose pixel is no larger than a grid cell, or a finer one already held; a miss
 /// draws the grid's level on the calling thread and keeps it. The weight is the float coverage
 /// rounded, not the dithered codes a render reads, and is 0 (255 when inverted) off the picture.
+/// A brush's strokes are stored in the sensor frame and drawn in the corrected one through the
+/// lens, as a render draws them (ADR 009, ADR 050, section 7); linear and radial masks live in
+/// the corrected frame and are not moved by it.
 /// @param adjustment Adjustment whose shape and Invert to evaluate.
 /// @param frame Placement of the corrected frame in the developed one.
 /// @param region Rectangle of the developed frame the grid covers; finite, not empty.
 /// @param size Grid size; each side 1 to ::arraw::maximumCoverageSide.
+/// @param lens Lens corrections of the render the mask is shown over; an empty one for none.
 /// @throws std::invalid_argument if @p size or @p region is empty or not valid, or the shape
 /// cannot be normalised (::arraw::normalised(const Mask&)), a brush of an unknown rasteriser
 /// included.
 [[nodiscard]] MaskCoverage maskCoverage(const LocalAdjustment& adjustment,
                                         const DevelopedFrameMap& frame, DevelopedRegion region,
-                                        ImageSize size);
+                                        ImageSize size, const LensCorrection& lens);
 
 } // namespace arraw

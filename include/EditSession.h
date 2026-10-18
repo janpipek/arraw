@@ -110,8 +110,9 @@ struct ChangeDescription {
     /// @brief Group every key belongs to; empty when there are no keys or they span groups.
     std::optional<SettingGroup> group;
 
-    /// @brief Keys of the negative settings that differ, in the order `"demosaic"`, ...; empty
-    /// when the two negatives are equal. Filled only by the overload over history steps.
+    /// @brief Keys of the negative settings that differ, in the order `"demosaic"`,
+    /// `"lensDistortion"`, `"lensVignetting"`, `"lensLateralCa"` and `"lens"` (the recorded lens);
+    /// empty when the two negatives are equal. Filled only by the overload over history steps.
     std::vector<std::string_view> negative;
 
     /// @brief How the local adjustments differ; empty when they do not. The counter alone is not
