@@ -84,3 +84,10 @@ and, when a lens is recorded, `lensMaker`, `lensModel`, `lensCropFactor`,
 `lensOrigin` (`matched` or `chosen`) and `lensDatabase`, under the same "written
 only when it differs from what reading gave" rule as `arraw:demosaic`. No
 coefficients are written. Unsaved changes and discard include them.
+
+## Amendment, 2026-10-19: lensVignetting holds an amount
+
+[ADR 050](050-lens-corrections-are-a-stage-between-noise-reduction-and-the-chain.md): `arraw:lensVignetting` holds the vignetting amount (0 to 150) as its
+shortest decimal, absent at 0. `True` and `False` are still read, as 100 and 0,
+and a sidecar that is not edited keeps them. The key and `sidecarVersion` do not
+change.

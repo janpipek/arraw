@@ -135,3 +135,8 @@ reaches the block. The default render digests are unchanged.
 the Lens rung; a lens toggle resumes from the Denoise rung and decodes nothing.
 `Stage` values after Denoise shift by one (Python binds them by name). The
 progress weight is measured per combination of corrections.
+
+## Amendment, 2026-10-19: an amount change resumes as a toggle does
+
+[ADR 050](050-lens-corrections-are-a-stage-between-noise-reduction-and-the-chain.md): changing only the vignetting amount changes the `LensPlan` by value, so it
+resumes from the Denoise rung and decodes nothing, as a lens toggle does.

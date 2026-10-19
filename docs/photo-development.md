@@ -60,7 +60,7 @@ RAW mosaic                         JPEG / PNG / TIFF
                         |
                  Noise reduction
                         |
-   Lens: distortion, lateral CA, vignetting (if on)
+   Lens: distortion, lateral CA, vignetting (if above 0)
                         |
             Presence context + mask coverage
                         |
@@ -226,7 +226,7 @@ Arraw therefore **decodes again** (about 1 to 3 s for 24 MP, off the interface t
 
 The choice applies only to a full-size decode of a mosaiced RAW. A half-size decode combines 2×2 blocks and does not demosaic; a JPEG, PNG or TIFF, a monochrome sensor and an already demosaiced linear DNG have nothing to interpolate. For these the choice is ignored, and two requests that decode to the same pixels count as the same decode. LibRaw may also substitute its own method for some sensors (X-Trans, four-colour), so the token is the request, as in section 3.1. In the pipeline the negative lies before everything else: it is the "LibRaw decode" line of chapter 2. Noise reduction, the first stage, reads its result.
 
-It is saved in the sidecar as a token (`arraw:demosaic="vng"`), is one undoable history step, and travels with a pasted look as its own section. The **lens switches** (distortion, vignetting, lateral chromatic aberration, section 6.3) are also held with the negative, but unlike the demosaic they do not change the decode: a toggle never decodes again. They are kept there because they describe the photograph's optics, not a taste, and because they record which lens profile was used.
+It is saved in the sidecar as a token (`arraw:demosaic="vng"`), is one undoable history step, and travels with a pasted look as its own section. The **lens settings** (the distortion and lateral chromatic aberration switches and the vignetting amount, 0 to 150 percent of the profile's stops, section 6.3) are also held with the negative, but unlike the demosaic they do not change the decode: a toggle or an amount change never decodes again. They are kept there because they describe the photograph's optics, not a taste, and because they record which lens profile was used.
 
 Source: [negative settings](../include/NegativeSettings.h), [decode options](../include/DecodeOptions.h), [RAW import](../src/core/RawImport.cpp).
 

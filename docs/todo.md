@@ -48,7 +48,7 @@ accepted); committed on `negative-settings`, not pushed or merged. Open:
 
 Steps 0 to 10 of `docs/ideas/lens-corrections-plan.md` (ADR 050, accepted), not
 committed or pushed:
-- `NegativeSettings::lens`: three switches (off by default) and a recorded lens
+- `NegativeSettings::lens`: three corrections (off by default), a vignetting amount (0-150, 100 is the profile) and a recorded lens
   (lensfun maker and model, crop factor, origin, database stamp); RAW only;
 - `Stage::Lens` between Denoise and Pointwise: distortion, lateral CA and
   vignetting in one Catmull-Rom pass from radial tables of 129 nodes, with a
@@ -65,19 +65,38 @@ Where the code differs from the plan (also in ADR 050's amendment):
 - resolution failures are a `LensProblem` enum, plus `Notice::LensNotCalibrated`;
 - `sampleLensfun` takes the database; tables have 129 nodes;
 - Python's `lens` argument is optional on the buffer-form calls;
-- a paste before the database has loaded matches live and records on the next
-  toggle; `lensCost` is measured per combination of corrections;
+- a paste while the database loads is refused (ADR 050, amendment of 2026-10-19);
+  `lensCost` is measured per combination of corrections;
 - GPU parity numbers were measured on lavapipe only (no hardware GPU).
 
 Open:
-- step 11, the hand check, is partly done (2026-10-18; samples in the git-excluded
-  `samples/`; results in `docs/reviews/claude-opus-5-5_2026-10-18_lens-hand-check.md`):
-  two Canon 80D frames with the Tamron SP 17-50 f/2.8 (non-VC) match correctly through
-  Canon's lens-type name (Exiv2 and exiftool agree); the distortion matches lensfun's
-  model plus the fill zoom to about 1 px. Still open: straightness (needs a long line
-  into a corner), vignetting (the 17 mm f/2.8 sky corner is raised 27%; needs a wide-open
-  shot of an even surface), CA, the app toggles, a clipped corner, and the `exiftool -v3`
-  check that a CR2 holds switches only (exiftool is now in the sandbox image);
+- step 11, the hand check, is mostly done (samples in the git-excluded `samples/`;
+  results of 2026-10-18 in `docs/reviews/claude-opus-5-5_2026-10-18_lens-hand-check.md`,
+  those of 2026-10-19 not yet written there). Canon 80D, Tamron SP 17-50 f/2.8
+  (non-VC): two frames match through Canon's lens-type name (Exiv2 and exiftool agree);
+  distortion matches lensfun's model plus the fill zoom to about 1 px. Sony a6400, E PZ
+  16-50 f/3.5-5.6 OSS (XYW02870 to 02874, 16 mm, 2026-10-19): the lens matches through
+  the alias name; straightness on a picture frame (XYW02872, left edge at radius
+  0.75-0.87) goes from 22 px to 2 px of deviation over 2100 px; lateral CA at the left
+  edge, R-G -1.6 px without the correction (lensfun predicts -1.46) and 0.0 with it
+  (+-0.3 px, one direction only). **Vignetting overcorrects**: arraw applies exactly
+  lensfun's gain (within 1-3 %, to r = 0.93) but the profile, taken on a NEX-7, is too
+  strong for this a6400 and lens: a flat wall ends 1.26x the centre at r = 0.75 and
+  1.35x at r = 0.93 at f/3.5, 1.07x and 1.18x at f/7.1. Done: the vignetting amount slider
+  (2026-10-19, ADR 050 amendment: sidecar, JSON, Copy Settings; the session records the
+  lens match; review `docs/reviews/claude-opus-5-5_2026-10-19_vignetting-amount.md`).
+  Options left: a profile fitted from a
+  flat-field shot (XYW02870 is one; larger: a user profile format and a matching rule);
+  report the profile upstream to lensfun. Still open: the app toggles, a clipped corner,
+  the Tamron 17-70 B070 on the a6400 (in lensfun, to be shot), CA on other edges and
+  focal lengths, and the `exiftool -v3` check that a CR2 holds switches only (needs a
+  CR2; the 80D is gone, an ARW check is the substitute);
+- flaky app test "In the window a stroke repaints only where it painted": FIXED (the test
+  now waits for the overlay to go quiet and records the first paint smaller than the
+  overlay, ignoring whole-overlay repaints; was pre-existing, ~13 % on a clean checkout);
+- Python stub nit (vignetting-amount review S2): `EditSession.lens_database` is typed
+  non-optional but is `None` for a PNG, and `vignetting_amount` is `object | None` in the
+  stub; give the bindings `nb::sig`s and regenerate (check whether it is still open);
 - matching hardening: the maker-note name picks the lens by a 6-point fuzzy margin
   (83 against 77 for the VC), so drop candidates carrying tokens the name lacks (VC,
   OS, Macro) or prefer an entry containing all the name's tokens; test first;

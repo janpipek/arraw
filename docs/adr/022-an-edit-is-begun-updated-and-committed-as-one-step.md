@@ -115,3 +115,22 @@ holds them. Turning a correction on for a photograph with no recorded lens
 records the match in the same step, so undo removes both; turning it off keeps
 the record. `describeChange` names the key `"lens"`. A lens change never
 triggers a re-decode.
+
+## Amendment, 2026-10-19: a negative can be dragged through an open edit
+
+[ADR 050](050-lens-corrections-are-a-stage-between-noise-reduction-and-the-chain.md): vignetting is an amount, and a slider drags it, so "a negative is chosen,
+never dragged" no longer holds for it. `EditSession::updateNegative(negative)`
+changes the negative provisionally inside the open edit. The baseline holds the
+negative as well as the state, and `commit`, `cancel`, `canUndo` and `canRedo`
+compare both, so a drag is one step and `photo()` carries the dragged value.
+
+The session records the lens match itself, not its callers. It holds a
+non-owning `const LensDatabase*` (`setLensDatabase`), which whoever owns the
+database sets. A step that changes the lens settings, and leaves a correction on
+with no lens recorded, records the match in that same step. That happens at the
+commit, not on every move, so a drag that ends at 0 records nothing. The other
+paths that make a step (`setNegative`, the two-part `setState`, and so `begin`,
+`goTo`, `undo`, `redo` and `save`, which commit first) record by the same rule.
+Navigating and `cancel` never record, so undo takes a correction and its record
+away together. With no database attached the step is made without a record. A
+database attached later records nothing retroactively.
