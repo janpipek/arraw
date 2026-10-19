@@ -8,6 +8,7 @@
 
 class QCheckBox;
 class QComboBox;
+class QFormLayout;
 class QGroupBox;
 class QSlider;
 class QSpinBox;
@@ -24,8 +25,10 @@ class ExportDialog : public QDialog {
     Q_DISABLE_COPY_MOVE(ExportDialog)
 public:
     /// @brief Builds the dialog showing settings.
-    /// @param initial Settings to start from; its size is ignored.
-    /// @param frame Size of the developed frame, which the width and height start at.
+    /// @param initial Settings to start from; a resize box that is no preset long edge is
+    ///        the custom size.
+    /// @param frame Size of the developed frame, which a custom width and height start at
+    ///        unless initial has its own.
     /// @param parent Owning widget.
     ExportDialog(const ExportSettings& initial, ImageSize frame, QWidget* parent = nullptr);
 
@@ -39,7 +42,8 @@ private:
     QComboBox* formatBox_ = nullptr;
     QComboBox* profileBox_ = nullptr;
     QCheckBox* sixteenBitCheck_ = nullptr;
-    QCheckBox* resizeCheck_ = nullptr;
+    QComboBox* sizeBox_ = nullptr;
+    QFormLayout* sizeForm_ = nullptr;
     QSpinBox* widthSpin_ = nullptr;
     QSpinBox* heightSpin_ = nullptr;
     QCheckBox* enlargeCheck_ = nullptr;

@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstdint>
 #include <string>
 
 namespace arraw::app {
@@ -29,7 +30,14 @@ int storedInt(QSettings& store, const char* key, int fallback, int low, int high
     return ok && value >= low && value <= high ? value : fallback;
 }
 
+/// Long edges the export dialog offers.
+constexpr std::array<std::uint32_t, 4> longEdges{1080, 1600, 2048, 3840};
+
 } // namespace
+
+std::span<const std::uint32_t> presetLongEdges() {
+    return longEdges;
+}
 
 RenderRequest requestOf(const ExportSettings& settings) {
     RenderRequest request;
@@ -96,6 +104,10 @@ void saveSettings(const ExportSettings& settings, QSettings& store) {
     store.setValue(group + "encoding", static_cast<int>(settings.encoding));
     store.setValue(group + "sixteenBit", settings.sixteenBit);
     store.setValue(group + "resize", settings.resize);
+    if (settings.resize) {
+        store.setValue(group + "width", settings.width);
+        store.setValue(group + "height", settings.height);
+    }
     store.setValue(group + "allowEnlarging", settings.allowEnlarging);
     store.setValue(group + "quality", settings.quality);
     store.setValue(group + "sharpening", settings.sharpening);
@@ -121,7 +133,13 @@ ExportSettings restoreSettings(QSettings& store) {
                   static_cast<int>(NamedEncoding::Srgb), static_cast<int>(NamedEncoding::AdobeRgb));
     settings.encoding = static_cast<NamedEncoding>(encoding);
     settings.sixteenBit = store.value(group + "sixteenBit", settings.sixteenBit).toBool();
-    settings.resize = store.value(group + "resize", settings.resize).toBool();
+    const int width = storedInt(store, "width", 0, 1, 99999);
+    const int height = storedInt(store, "height", 0, 1, 99999);
+    if (store.value(group + "resize", false).toBool() && width > 0 && height > 0) {
+        settings.resize = true;
+        settings.width = static_cast<std::uint32_t>(width);
+        settings.height = static_cast<std::uint32_t>(height);
+    }
     settings.allowEnlarging =
         store.value(group + "allowEnlarging", settings.allowEnlarging).toBool();
     settings.quality = storedInt(store, "quality", settings.quality, 0, 100);

@@ -113,7 +113,7 @@ TEST_CASE("The source is recognised however its path is spelled", "[app][export]
     REQUIRE(isSameFile(dir.file("new.png"), dir.path() / "x" / ".." / "new.png"));
 }
 
-TEST_CASE("Settings are remembered, except the size", "[app][export][settings]") {
+TEST_CASE("Settings are remembered, the custom size included", "[app][export][settings]") {
     const test::TempDir dir;
     const QString file = QString::fromStdU16String(dir.file("settings.ini").u16string());
     ExportSettings settings;
@@ -141,8 +141,41 @@ TEST_CASE("Settings are remembered, except the size", "[app][export][settings]")
     REQUIRE(restored.allowEnlarging);
     REQUIRE(restored.quality == 55);
     REQUIRE(restored.sharpening == 33);
-    REQUIRE(restored.width == 0);
-    REQUIRE(restored.height == 0);
+    REQUIRE(restored.width == 123);
+    REQUIRE(restored.height == 456);
+}
+
+TEST_CASE("The original size is stored as no resizing, and is the default",
+          "[app][export][settings]") {
+    const test::TempDir dir;
+    const QString file = QString::fromStdU16String(dir.file("settings.ini").u16string());
+    QSettings store(file, QSettings::IniFormat);
+    REQUIRE_FALSE(app::restoreSettings(store).resize);
+
+    app::saveSettings(ExportSettings{.resize = true, .width = 2048, .height = 2048}, store);
+    ExportSettings restored = app::restoreSettings(store);
+    REQUIRE(restored.resize);
+    REQUIRE(restored.width == 2048);
+    REQUIRE(restored.height == 2048);
+
+    app::saveSettings(ExportSettings{}, store);
+    restored = app::restoreSettings(store);
+    REQUIRE_FALSE(restored.resize);
+}
+
+TEST_CASE("A bad stored size means the original size", "[app][export][settings]") {
+    const test::TempDir dir;
+    const QString file = QString::fromStdU16String(dir.file("settings.ini").u16string());
+    QSettings store(file, QSettings::IniFormat);
+    store.setValue("export/resize", true); // As older versions stored it: no box.
+    REQUIRE_FALSE(app::restoreSettings(store).resize);
+    store.setValue("export/width", 0);
+    store.setValue("export/height", 500);
+    REQUIRE_FALSE(app::restoreSettings(store).resize);
+    store.setValue("export/width", "wide");
+    REQUIRE_FALSE(app::restoreSettings(store).resize);
+    store.setValue("export/width", 100000);
+    REQUIRE_FALSE(app::restoreSettings(store).resize);
 }
 
 TEST_CASE("Metadata choices default, map to a selection, and are remembered",
