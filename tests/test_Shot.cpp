@@ -283,3 +283,73 @@ TEST_CASE("Filters compare field by field", "[marks][filter]") {
     b.labels = {ColorLabel::Blue};
     REQUIRE(a == b);
 }
+
+TEST_CASE("Listing recursively walks the subfolders folder by folder", "[shot][list][recursive]") {
+    const test::TempDir directory;
+    fs::create_directories(directory.file("b/deep"));
+    fs::create_directories(directory.file("a"));
+    fs::create_directories(directory.file("sub10"));
+    fs::create_directories(directory.file("sub2"));
+    touch(directory.file("IMG_5.jpg"));
+    touch(directory.file("a/IMG_1.ARW"));
+    touch(directory.file("a/IMG_1.JPG"));
+    touch(directory.file("b/IMG_1.ARW"));
+    touch(directory.file("b/deep/IMG_9.jpg"));
+    touch(directory.file("sub2/x.jpg"));
+    touch(directory.file("sub10/x.jpg"));
+
+    const auto shots = listShots(directory.path(), true);
+    REQUIRE(shots ==
+            std::vector{
+                shotOf(directory.file("IMG_5.jpg")),
+                shotOf(directory.file("a/IMG_1.ARW"), {directory.file("a/IMG_1.JPG")}),
+                shotOf(directory.file("b/IMG_1.ARW")), shotOf(directory.file("b/deep/IMG_9.jpg")),
+                shotOf(directory.file("sub2/x.jpg")), shotOf(directory.file("sub10/x.jpg"))});
+    // The same names in two folders are two shots, not one pair.
+    REQUIRE(std::ranges::count_if(shots, [](const Shot& shot) {
+                return shot.primary.filename() == "IMG_1.ARW";
+            }) == 2);
+}
+
+TEST_CASE("Listing recursively skips hidden and junk folders and hidden files",
+          "[shot][list][recursive]") {
+    const test::TempDir directory;
+    fs::create_directories(directory.file(".hiddendir/inner"));
+    fs::create_directories(directory.file("@eaDir"));
+    fs::create_directories(directory.file("keep"));
+    touch(directory.file(".hiddendir/a.jpg"));
+    touch(directory.file(".hiddendir/inner/b.jpg"));
+    touch(directory.file("@eaDir/c.jpg"));
+    touch(directory.file("keep/.d.jpg"));
+    touch(directory.file("keep/e.jpg"));
+
+    REQUIRE(listShots(directory.path(), true) == std::vector{shotOf(directory.file("keep/e.jpg"))});
+}
+
+TEST_CASE("Listing recursively does not follow symbolic links to folders",
+          "[shot][list][recursive]") {
+    const test::TempDir directory;
+    fs::create_directories(directory.file("real"));
+    touch(directory.file("real/a.jpg"));
+    std::error_code error;
+    fs::create_directory_symlink(directory.file("real"), directory.file("link"), error);
+    if (error) {
+        SKIP("symbolic links are not available");
+    }
+    REQUIRE(listShots(directory.path(), true) == std::vector{shotOf(directory.file("real/a.jpg"))});
+}
+
+TEST_CASE("Listing recursively still throws for a root that cannot be read",
+          "[shot][list][recursive]") {
+    const test::TempDir directory;
+    REQUIRE_THROWS_AS(listShots(directory.file("missing"), true), std::runtime_error);
+}
+
+TEST_CASE("Listing without recursion leaves the subfolders alone", "[shot][list][recursive]") {
+    const test::TempDir directory;
+    fs::create_directories(directory.file("sub"));
+    touch(directory.file("sub/a.jpg"));
+    touch(directory.file("b.jpg"));
+    REQUIRE(listShots(directory.path()) == std::vector{shotOf(directory.file("b.jpg"))});
+    REQUIRE(listShots(directory.path(), false) == listShots(directory.path()));
+}

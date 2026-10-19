@@ -200,6 +200,14 @@ MainWindow::MainWindow(DebugLog& debugLog, QWidget* parent, PhotoLoader::Decoder
           },
           decoder ? std::move(decoder) : PhotoLoader::imageDecoder(&debugLog.diagnostics)) {
     filmStrip_ = new FilmStrip(this, ThumbnailCache(ThumbnailCache::defaultRoot()), lensSource_);
+    {
+        QSettings store;
+        filmStrip_->setIncludeSubfolders(restoreIncludeSubfolders(store));
+    }
+    connect(filmStrip_, &FilmStrip::includeSubfoldersToggled, this, [](bool include) {
+        QSettings store;
+        saveIncludeSubfolders(include, store);
+    });
     buildMenu();
     buildStatusBar();
     buildImageView();
@@ -1622,7 +1630,16 @@ void MainWindow::openFile(const std::filesystem::path& path) {
             return;
         }
         const std::filesystem::path folder = path.parent_path();
-        if (filmStrip_->folder().lexically_normal() != folder.lexically_normal()) {
+        // With subfolders listed, a photograph below the listed folder is already in the strip.
+        const auto below = [&] {
+            const auto relative = folder.lexically_normal().lexically_relative(
+                filmStrip_->folder().lexically_normal());
+            return !relative.empty() && *relative.begin() != "..";
+        };
+        const bool listed =
+            filmStrip_->folder().lexically_normal() == folder.lexically_normal() ||
+            (filmStrip_->includeSubfolders() && !filmStrip_->folder().empty() && below());
+        if (!listed) {
             try {
                 const detail::TimingSpan folderTiming("window.folder.scan");
                 filmStrip_->setFolder(folder);

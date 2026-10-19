@@ -64,8 +64,8 @@ public:
 
     /// @brief Returns the title bar, to give to the dock that holds the strip.
     ///
-    /// The folder button, the folder's name, and the filter controls. Owned by the strip
-    /// until a dock takes it.
+    /// The folder button, the "Include subfolders" toggle, the folder's name, and the filter
+    /// controls. Owned by the strip until a dock takes it.
     /// @return The widget.
     [[nodiscard]] QWidget* titleBar() const noexcept {
         return titleBar_;
@@ -75,6 +75,21 @@ public:
     /// @param folder Folder to list.
     /// @throws std::runtime_error if the folder cannot be read; the strip is left as it was.
     void setFolder(const std::filesystem::path& folder);
+
+    /// @brief Sets whether the strip lists the subfolders of its folder.
+    ///
+    /// Updates the "Include subfolders" button. For a folder that is shown this lists it again,
+    /// keeping the active shot if it is still listed, and announces
+    /// ::arraw::app::FilmStrip::includeSubfoldersToggled. A folder that cannot be read leaves the
+    /// strip as it was. The flag applies to every folder set afterwards.
+    /// @param include Whether to include the subfolders.
+    void setIncludeSubfolders(bool include);
+
+    /// @brief Tells whether the strip lists the subfolders.
+    /// @return The flag; off by default.
+    [[nodiscard]] bool includeSubfolders() const noexcept {
+        return includeSubfolders_;
+    }
 
     /// @brief Names the folder shown.
     /// @return The folder, empty before ::arraw::app::FilmStrip::setFolder.
@@ -184,6 +199,10 @@ signals:
     /// @param primary Primary file of the shot.
     void activationRequested(const QString& primary);
 
+    /// @brief Announces that the subfolders are now included or not.
+    /// @param include The new flag.
+    void includeSubfoldersToggled(bool include);
+
     /// @brief Announces that the folder button was pressed.
     void folderRequested();
 
@@ -204,6 +223,12 @@ protected:
 private:
     /// @brief Builds the title bar.
     void buildTitleBar();
+
+    /// @brief Lists a folder in the model and resets what depends on the rows.
+    void listFolder(const std::filesystem::path& folder);
+
+    /// @brief Shows the folder's name, and a note when its subfolders are included.
+    void updateFolderLabel();
 
     /// @brief Takes a thumbnail from the worker.
     void receiveThumbnail(const ThumbnailResult& result);
@@ -281,6 +306,8 @@ private:
     QLabel* emptyHint_ = nullptr;
     QWidget* titleBar_ = nullptr;
     QLabel* folderLabel_ = nullptr;
+    QToolButton* subfoldersButton_ = nullptr;
+    bool includeSubfolders_ = false;
     QComboBox* starChoice_ = nullptr;
     std::vector<std::pair<QToolButton*, ColorLabel>> swatches_;
     QToolButton* clearButton_ = nullptr;

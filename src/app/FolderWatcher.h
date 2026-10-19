@@ -22,6 +22,14 @@ class ShotModel;
 /// ::arraw::app::ShotModel::refresh. The watcher also tells apart sidecar
 /// changes the application made from those other programs did.
 ///
+/// For a model that lists subfolders, every sub-directory is watched too, and the
+/// set is collected again on each refresh so that new ones join. At most
+/// ::arraw::app::FolderWatcher::maxWatchedFolders are watched, the folder itself
+/// and the shallowest sub-directories first, because the system's number of
+/// watches (inotify on Linux) is finite and shared with other programs; beyond
+/// that the deeper sub-directories are simply not watched, and their changes
+/// show on the next refresh caused by something else.
+///
 /// Only changes to the folder's entries are seen: a file added, removed or
 /// renamed, and so a sidecar that another program replaces. One that is
 /// rewritten in place without changing the folder goes unnoticed until the next
@@ -37,6 +45,9 @@ public:
     explicit FolderWatcher(ShotModel& model,
                            std::chrono::milliseconds debounce = std::chrono::milliseconds(300),
                            QObject* parent = nullptr);
+
+    /// @brief Most directories watched at once.
+    static constexpr int maxWatchedFolders = 1000;
 
     /// @brief Records a sidecar the application has just written.
     ///
@@ -55,7 +66,7 @@ signals:
     void sidecarChangedExternally(const QString& primary);
 
 private:
-    /// @brief Points the watch at the model's folder.
+    /// @brief Points the watch at the model's folder and, if it lists them, its sub-directories.
     void rewatch();
 
     /// @brief Judges a refreshed sidecar.

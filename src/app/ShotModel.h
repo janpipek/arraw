@@ -33,8 +33,13 @@ namespace arraw::app {
 /// strip used.
 /// @param shot Shot to describe.
 /// @param exif What its primary records, or nothing while that is not read yet.
+/// @param hasSidecar Whether to say that the shot has a sidecar.
+/// @param shownName What to call the primary in the first line, such as its path below the
+/// folder; empty for its file name.
 /// @return The lines, joined by newlines.
-[[nodiscard]] QString shotTooltip(const Shot& shot, const std::optional<ExifInfo>& exif);
+[[nodiscard]] QString shotTooltip(const Shot& shot, const std::optional<ExifInfo>& exif,
+                                  bool hasSidecar = false,
+                                  const std::filesystem::path& shownName = {});
 
 /// @brief Rows of the shots of one folder, with their marks and capture information.
 ///
@@ -60,6 +65,7 @@ public:
         RatingRole,                  ///< Rating, -1 to 5, as an `int`; 0 until read.
         LabelRole,       ///< Colour label as an `int` of ::arraw::ColorLabel, -1 for none.
         MarksLoadedRole, ///< Whether the sidecar has been read, as a `bool`.
+        HasSidecarRole,  ///< Whether a sidecar file exists, as a `bool`; false until read.
         ThumbnailRole,   ///< Thumbnail, as a `QImage`; null until one is set.
     };
 
@@ -75,8 +81,17 @@ public:
     /// Lists them synchronously, resets the model, and queues the marks and EXIF
     /// reads. Anything the loader was doing for the previous folder is dropped.
     /// @param folder Folder to list.
+    /// @param recursive Whether to list its subfolders too (see ::arraw::listShots); remembered
+    /// for ::arraw::app::ShotModel::refresh. Changing it for the same folder resets the model
+    /// like a new folder does.
     /// @throws std::runtime_error if the folder cannot be read; the model is left as it was.
-    void setFolder(const std::filesystem::path& folder);
+    void setFolder(const std::filesystem::path& folder, bool recursive = false);
+
+    /// @brief Tells whether the subfolders are listed.
+    /// @return The flag of the last ::arraw::app::ShotModel::setFolder.
+    [[nodiscard]] bool recursive() const noexcept {
+        return recursive_;
+    }
 
     /// @brief Names the folder shown.
     /// @return The folder, empty before ::arraw::app::ShotModel::setFolder.
@@ -136,6 +151,14 @@ public:
     /// @param marks Marks to show.
     void setMarks(const std::filesystem::path& primary, const PhotoMarks& marks);
 
+    /// @brief Takes note that the application wrote or created the sidecar of a shot.
+    ///
+    /// Looks for the file again (the stamp is left, so a recheck still reads it), so
+    /// ::arraw::app::ShotModel::HasSidecarRole is current without waiting for a recheck;
+    /// ::arraw::app::ShotModel::setMarks does this itself.
+    /// @param primary Path of the shot's primary file; an unknown one is ignored.
+    void noteSidecarWritten(const std::filesystem::path& primary);
+
     /// @brief Sets the thumbnail of a shot; the seam for the thumbnail worker.
     /// @param primary Path of the shot's primary file; an unknown one is ignored.
     /// @param thumbnail Image to show, or a null one to clear it.
@@ -173,6 +196,12 @@ private:
         bool marksSet = false;
         /// Stamp of the sidecar when it was last read; 0 when it was not there.
         std::int64_t sidecarStamp = 0;
+        /// Whether the sidecar file was there when last looked at, by a reading or by a write.
+        bool sidecarExists = false;
+        /// Whether the sidecar is known to exist.
+        [[nodiscard]] bool hasSidecar() const noexcept {
+            return marksLoaded && sidecarExists;
+        }
         /// EXIF of the primary, once read.
         std::optional<ExifInfo> exif{};
         /// Thumbnail, null until one is set.
@@ -185,6 +214,11 @@ private:
     /// @brief Takes a result from the loader thread.
     /// @param result What it read.
     void receive(const Loaded& result);
+
+    /// @brief Names a shot by its path below the folder when it lives in a subfolder.
+    /// @param shot Shot to name.
+    /// @return The relative path, or an empty one for a shot in the folder itself.
+    [[nodiscard]] std::filesystem::path shownName(const Shot& shot) const;
 
     /// @brief Rebuilds the path index after rows moved.
     void reindex();
@@ -200,6 +234,9 @@ private:
 
     /// Folder shown.
     std::filesystem::path folder_;
+
+    /// Whether the subfolders are listed too.
+    bool recursive_ = false;
 
     /// Rows, in natural order of their names.
     std::vector<Row> rows_;

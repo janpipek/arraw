@@ -98,10 +98,14 @@ std::optional<std::int64_t> fileStamp(const std::filesystem::path& path) {
     return static_cast<std::int64_t>(time.time_since_epoch().count());
 }
 
-QString shotTooltip(const Shot& shot, const std::optional<ExifInfo>& exif) {
+QString shotTooltip(const Shot& shot, const std::optional<ExifInfo>& exif, bool hasSidecar,
+                    const std::filesystem::path& shownName) {
     QStringList lines;
-    lines << qtString(shot.primary.filename());
+    lines << qtString(shownName.empty() ? shot.primary.filename() : shownName);
     lines << QString::fromStdString(formatLabel(shot));
+    if (hasSidecar) {
+        lines << QObject::tr("Has an XMP sidecar");
+    }
     if (!exif) {
         return lines.join('\n');
     }
@@ -284,13 +288,14 @@ ShotModel::~ShotModel() {
     loader_.reset();
 }
 
-void ShotModel::setFolder(const std::filesystem::path& folder) {
-    std::vector<Shot> shots = listShots(folder);
+void ShotModel::setFolder(const std::filesystem::path& folder, bool recursive) {
+    std::vector<Shot> shots = listShots(folder, recursive);
     beginResetModel();
     loader_->clear();
     ++generation_;
     pending_ = 0;
     folder_ = folder;
+    recursive_ = recursive;
     rows_.clear();
     rows_.reserve(shots.size());
     std::vector<fs::path> primaries;
@@ -304,13 +309,22 @@ void ShotModel::setFolder(const std::filesystem::path& folder) {
     queueLoads(primaries);
 }
 
+std::filesystem::path ShotModel::shownName(const Shot& shot) const {
+    if (!recursive_) {
+        return {};
+    }
+    std::filesystem::path relative = shot.primary.lexically_relative(folder_);
+    return relative.has_parent_path() && *relative.begin() != ".." ? relative
+                                                                   : std::filesystem::path();
+}
+
 void ShotModel::refresh() {
     if (folder_.empty()) {
         return;
     }
     std::vector<Shot> listing;
     try {
-        listing = listShots(folder_);
+        listing = listShots(folder_, recursive_);
     } catch (const std::runtime_error&) {
         // The folder went away: it has no shots now.
     }
@@ -365,7 +379,7 @@ QVariant ShotModel::data(const QModelIndex& index, int role) const {
     case Qt::DisplayRole:
         return qtString(row.shot.primary.filename());
     case Qt::ToolTipRole:
-        return shotTooltip(row.shot, row.exif);
+        return shotTooltip(row.shot, row.exif, row.hasSidecar(), shownName(row.shot));
     case PathRole:
         return qtString(row.shot.primary);
     case CompanionsRole: {
@@ -383,6 +397,8 @@ QVariant ShotModel::data(const QModelIndex& index, int role) const {
         return row.marks.label ? static_cast<int>(*row.marks.label) : -1;
     case MarksLoadedRole:
         return row.marksLoaded;
+    case HasSidecarRole:
+        return row.hasSidecar();
     case ThumbnailRole:
         return row.thumbnail;
     default:
@@ -417,6 +433,20 @@ void ShotModel::setMarks(const std::filesystem::path& primary, const PhotoMarks&
     row.marksLoaded = true;
     row.marksSet = true;
     changed(index, {RatingRole, LabelRole, MarksLoadedRole});
+    noteSidecarWritten(primary);
+}
+
+void ShotModel::noteSidecarWritten(const std::filesystem::path& primary) {
+    const int index = rowOf(primary);
+    if (index < 0) {
+        return;
+    }
+    Row& row = rows_[index];
+    const bool had = row.hasSidecar();
+    row.sidecarExists = sidecarStampOf(primary) != 0;
+    if (had != row.hasSidecar()) {
+        changed(index, {HasSidecarRole, Qt::ToolTipRole});
+    }
 }
 
 void ShotModel::setThumbnail(const std::filesystem::path& primary, QImage thumbnail) {
@@ -435,6 +465,7 @@ void ShotModel::receive(const Loaded& result) {
     --pending_;
     if (const int index = rowOf(result.primary); index >= 0) {
         Row& row = rows_[index];
+        const bool hadSidecar = row.hasSidecar();
         switch (result.kind) {
         case JobKind::Exif:
             row.exif = result.exif;
@@ -442,6 +473,9 @@ void ShotModel::receive(const Loaded& result) {
             break;
         case JobKind::Marks:
             row.sidecarStamp = result.stamp;
+            if (!row.marksSet) {
+                row.sidecarExists = result.stamp != 0;
+            }
             // Marks set by hand since the job was queued are newer than this reading.
             if (!row.marksSet && result.marks) {
                 row.marks = *result.marks;
@@ -453,6 +487,7 @@ void ShotModel::receive(const Loaded& result) {
             if (result.changed && result.marks) {
                 const bool differs = row.marks != *result.marks || !row.marksLoaded;
                 row.sidecarStamp = result.stamp;
+                row.sidecarExists = result.stamp != 0;
                 row.marks = *result.marks;
                 row.marksLoaded = true;
                 row.marksSet = false;
@@ -462,6 +497,9 @@ void ShotModel::receive(const Loaded& result) {
                 emit sidecarRefreshed(qtString(result.primary), result.stamp);
             }
             break;
+        }
+        if (hadSidecar != row.hasSidecar()) {
+            changed(index, {HasSidecarRole, Qt::ToolTipRole});
         }
     }
     if (pending_ == 0) {

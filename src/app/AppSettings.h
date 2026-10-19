@@ -30,6 +30,13 @@ struct AppSettings {
 /// @brief Stores desktop preferences without touching other settings groups.
 void saveAppSettings(const AppSettings& settings, QSettings& store);
 
+/// @brief Reads whether the film strip includes the subfolders of its folder.
+/// @return The stored flag; off when never stored.
+[[nodiscard]] bool restoreIncludeSubfolders(QSettings& store);
+
+/// @brief Stores whether the film strip includes the subfolders of its folder.
+void saveIncludeSubfolders(bool include, QSettings& store);
+
 /// @brief Restores the last photograph, falling back to its folder when the file is gone.
 /// @return An existing file or folder, or nothing when neither is available.
 [[nodiscard]] std::optional<std::filesystem::path> restoreOpenPath(QSettings& store);

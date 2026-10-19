@@ -24,6 +24,14 @@ std::optional<std::filesystem::path> restoreOpenPath(QSettings& store) {
     return std::nullopt;
 }
 
+bool restoreIncludeSubfolders(QSettings& store) {
+    return store.value("filmStrip/includeSubfolders", false).toBool();
+}
+
+void saveIncludeSubfolders(bool include, QSettings& store) {
+    store.setValue("filmStrip/includeSubfolders", include);
+}
+
 AppSettings restoreAppSettings(QSettings& store) {
     AppSettings settings;
     const QString mode = store.value("processing/device", "auto").toString();

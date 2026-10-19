@@ -159,3 +159,24 @@ TEST_CASE("GPU identifiers retain all their bits in settings", "[app][settings]"
     REQUIRE(restored.gpu->vendorId == gpu.vendorId);
     REQUIRE(restored.gpu->deviceId == gpu.deviceId);
 }
+
+TEST_CASE("Including subfolders in the film strip is remembered, and off by default",
+          "[app][settings]") {
+    const test::TempDir directory;
+    const QString path = QString::fromStdU16String(directory.file("settings.ini").u16string());
+    {
+        QSettings store(path, QSettings::IniFormat);
+        REQUIRE_FALSE(app::restoreIncludeSubfolders(store));
+        app::saveIncludeSubfolders(true, store);
+        store.sync();
+    }
+    {
+        QSettings store(path, QSettings::IniFormat);
+        REQUIRE(app::restoreIncludeSubfolders(store));
+        // Desktop preferences do not disturb it.
+        app::saveAppSettings({.cpuOnly = true}, store);
+        REQUIRE(app::restoreIncludeSubfolders(store));
+        app::saveIncludeSubfolders(false, store);
+        REQUIRE_FALSE(app::restoreIncludeSubfolders(store));
+    }
+}

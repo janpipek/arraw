@@ -97,6 +97,33 @@ void paintFormatChip(QPainter* painter, const QRect& inner, const QString& text)
     painter->drawText(chip, Qt::AlignCenter, text);
 }
 
+/// @brief Paints the badge of a shot with a sidecar, bottom left of a cell: three sliders.
+///
+/// A dark chip with light strokes, so that it reads over any photograph and any palette.
+void paintSidecarBadge(QPainter* painter, const QRect& inner) {
+    const int size = std::max(12, inner.height() / 9);
+    // Above the stars bar when that is shown.
+    const int lift = inner.height() >= marksMinHeight ? std::max(14, inner.height() / 6) + 2 : 3;
+    const QRect badge(inner.left() + 3, inner.bottom() - lift - size + 1, size, size);
+    painter->setPen(Qt::NoPen);
+    painter->setBrush(QColor(0, 0, 0, 150));
+    painter->drawRoundedRect(badge, 3, 3);
+    const QColor ink(0xF0, 0xF0, 0xF0);
+    const double margin = size * 0.2;
+    const double left = badge.left() + margin;
+    const double right = badge.right() + 1 - margin;
+    const double knob = std::max(1.5, size * 0.11);
+    const double knobs[] = {0.35, 0.7, 0.45};
+    for (int i = 0; i < 3; ++i) {
+        const double y = badge.top() + size * (0.27 + 0.23 * i);
+        painter->setPen(QPen(ink, std::max(1.0, size / 14.0), Qt::SolidLine, Qt::RoundCap));
+        painter->drawLine(QPointF(left, y), QPointF(right, y));
+        painter->setPen(Qt::NoPen);
+        painter->setBrush(ink);
+        painter->drawEllipse(QPointF(left + (right - left) * knobs[i], y), knob, knob);
+    }
+}
+
 } // namespace
 
 /// @brief Paints a shot's cell: thumbnail or placeholder, marks, and the outline of the active
@@ -161,6 +188,9 @@ public:
 
         paintMarks(painter, inner, index.data(ShotModel::RatingRole).toInt(),
                    index.data(ShotModel::LabelRole).toInt());
+        if (index.data(ShotModel::HasSidecarRole).toBool()) {
+            paintSidecarBadge(painter, inner);
+        }
 
         if (active || selected) {
             QColor colour = option.palette.highlight().color();
@@ -290,6 +320,15 @@ void FilmStrip::buildTitleBar() {
     connect(folderButton, &QToolButton::clicked, this, &FilmStrip::folderRequested);
     layout->addWidget(folderButton);
 
+    subfoldersButton_ = new QToolButton(titleBar_);
+    subfoldersButton_->setIcon(style()->standardIcon(QStyle::SP_FileDialogDetailedView));
+    subfoldersButton_->setCheckable(true);
+    subfoldersButton_->setAutoRaise(true);
+    subfoldersButton_->setToolTip(tr("Include subfolders"));
+    subfoldersButton_->setFocusPolicy(Qt::NoFocus);
+    connect(subfoldersButton_, &QToolButton::toggled, this, &FilmStrip::setIncludeSubfolders);
+    layout->addWidget(subfoldersButton_);
+
     folderLabel_ = new QLabel(tr("No folder"), titleBar_);
     folderLabel_->setTextInteractionFlags(Qt::TextSelectableByMouse);
     // Yields room to the filter controls when the window is narrow.
@@ -367,8 +406,8 @@ void FilmStrip::clearFilter() {
     applyFilter();
 }
 
-void FilmStrip::setFolder(const fs::path& folder) {
-    model_.setFolder(folder);
+void FilmStrip::listFolder(const fs::path& folder) {
+    model_.setFolder(folder, includeSubfolders_);
     live_.clear();
     {
         std::vector<fs::path> shots;
@@ -381,10 +420,55 @@ void FilmStrip::setFolder(const fs::path& folder) {
     visibleTimer_.start();
     active_.clear();
     delegate_->setActive({});
-    folderLabel_->setText(toQString(folder.lexically_normal()));
-    folderLabel_->setToolTip(folderLabel_->text());
+    updateFolderLabel();
     updateEmptyHint();
+}
+
+void FilmStrip::setFolder(const fs::path& folder) {
+    listFolder(folder);
     emit activeChanged();
+}
+
+void FilmStrip::updateFolderLabel() {
+    QString text = toQString(model_.folder().lexically_normal());
+    folderLabel_->setToolTip(text);
+    if (includeSubfolders_ && !model_.folder().empty()) {
+        text += tr(" (+ subfolders)");
+    }
+    folderLabel_->setText(text);
+}
+
+void FilmStrip::setIncludeSubfolders(bool include) {
+    if (include == includeSubfolders_) {
+        return;
+    }
+    const fs::path folder = model_.folder();
+    const fs::path active = active_;
+    if (!folder.empty()) {
+        // Listed first, so that a folder that cannot be read leaves everything as it was.
+        const bool before = includeSubfolders_;
+        includeSubfolders_ = include;
+        try {
+            listFolder(folder);
+        } catch (const std::exception&) {
+            includeSubfolders_ = before;
+            subfoldersButton_->blockSignals(true);
+            subfoldersButton_->setChecked(before);
+            subfoldersButton_->blockSignals(false);
+            return;
+        }
+        if (!active.empty() && model_.rowOf(active) >= 0) {
+            setActive(active);
+        } else {
+            emit activeChanged();
+        }
+    } else {
+        includeSubfolders_ = include;
+    }
+    subfoldersButton_->blockSignals(true);
+    subfoldersButton_->setChecked(include);
+    subfoldersButton_->blockSignals(false);
+    emit includeSubfoldersToggled(include);
 }
 
 QModelIndex FilmStrip::proxyIndexOf(const fs::path& primary) const {
@@ -484,6 +568,7 @@ void FilmStrip::setMarksWriter(MarksWriter writer) {
 void FilmStrip::noteOwnWrite(const fs::path& photo) {
     try {
         watcher_.noteOwnWrite(sidecarPath(photo));
+        model_.noteSidecarWritten(photo);
     } catch (const std::exception&) {
         // A photograph with no sidecar name has none that could change.
     }

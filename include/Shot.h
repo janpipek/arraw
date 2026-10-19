@@ -40,12 +40,22 @@ struct Shot {
 
 /// @brief Lists the shots of a folder.
 ///
-/// The regular files of the folder itself, not of its subfolders, without
-/// hidden ones (names that begin with a dot), through ::arraw::groupShots.
+/// The regular files of the folder itself, without hidden ones (names that
+/// begin with a dot), through ::arraw::groupShots.
+///
+/// With @p recursive the subfolders are listed too, to any depth. Hidden
+/// folders, symbolic links to folders and the clutter of NAS and desktop
+/// systems (`@eaDir`, `#recycle`, `$RECYCLE.BIN`) are not entered, and a
+/// subfolder that cannot be read is skipped without a word. The shots come
+/// folder by folder in natural order of the folder paths (the folder itself
+/// first), and in the order of ::arraw::groupShots within a folder. Files pair
+/// only within one folder, so the same name in two folders is two shots.
 /// @param folder Folder to list.
+/// @param recursive Whether to list its subfolders as well.
 /// @return Its shots; none for a folder without photographs.
-/// @throws std::runtime_error if the folder cannot be read, naming it.
-[[nodiscard]] std::vector<Shot> listShots(const std::filesystem::path& folder);
+/// @throws std::runtime_error if @p folder cannot be read, naming it.
+[[nodiscard]] std::vector<Shot> listShots(const std::filesystem::path& folder,
+                                          bool recursive = false);
 
 /// @brief Names the formats of a shot, as the film strip labels it.
 ///

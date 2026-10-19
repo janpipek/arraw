@@ -406,3 +406,96 @@ TEST_CASE("The watcher reports a sidecar another program changed, and not the ap
         REQUIRE(model.marks(0).rating == 1);
     }
 }
+
+TEST_CASE("The sidecar role says whether a sidecar file exists", "[shotmodel][sidecar]") {
+    const test::TempDir folder;
+    const fs::path one = addRaw(folder, "IMG_1.dng");
+    const fs::path two = addRaw(folder, "IMG_2.dng");
+    writeSidecarMarks(two, {.rating = 2});
+    ShotModel model;
+    std::vector<int> changes;
+    QObject::connect(&model, &QAbstractItemModel::dataChanged, &model,
+                     [&](const QModelIndex& index, const QModelIndex&, const QList<int>& roles) {
+                         if (roles.contains(ShotModel::HasSidecarRole)) {
+                             changes.push_back(index.row());
+                         }
+                     });
+    model.setFolder(folder.path());
+    // False until the marks are read.
+    REQUIRE_FALSE(model.index(1).data(ShotModel::HasSidecarRole).toBool());
+    REQUIRE(settle(model));
+    REQUIRE_FALSE(model.index(0).data(ShotModel::HasSidecarRole).toBool());
+    REQUIRE(model.index(1).data(ShotModel::HasSidecarRole).toBool());
+    REQUIRE_FALSE(model.index(0).data(Qt::ToolTipRole).toString().contains("sidecar"));
+    REQUIRE(model.index(1).data(Qt::ToolTipRole).toString().contains("XMP sidecar"));
+    REQUIRE(changes == std::vector<int>{1});
+
+    SECTION("A sidecar that appears and disappears") {
+        writeSidecarMarks(one, {.rating = 4});
+        model.refresh();
+        REQUIRE(waitUntil([&] { return model.index(0).data(ShotModel::HasSidecarRole).toBool(); }));
+        fs::remove(sidecarPath(two));
+        model.refresh();
+        REQUIRE(
+            waitUntil([&] { return !model.index(1).data(ShotModel::HasSidecarRole).toBool(); }));
+        REQUIRE(settle(model));
+    }
+    SECTION("A write through the model") {
+        writeSidecarMarks(one, {.rating = 5});
+        model.setMarks(one, {.rating = 5});
+        REQUIRE(model.index(0).data(ShotModel::HasSidecarRole).toBool());
+        // Without a file, setting marks shows no sidecar.
+        model.noteSidecarWritten(folder.file("nothing.dng"));
+        fs::remove(sidecarPath(one));
+        model.noteSidecarWritten(one);
+        REQUIRE_FALSE(model.index(0).data(ShotModel::HasSidecarRole).toBool());
+    }
+}
+
+TEST_CASE("A recursive model lists the subfolders and names them in the tooltip",
+          "[shotmodel][recursive]") {
+    const test::TempDir folder;
+    fs::create_directories(folder.file("a"));
+    fs::create_directories(folder.file("b"));
+    const fs::path top = addRaw(folder, "IMG_1.dng");
+    const fs::path inA = addRaw(folder, "a/IMG_1.dng");
+    const fs::path inB = addRaw(folder, "b/IMG_1.dng");
+    ShotModel model;
+    model.setFolder(folder.path());
+    REQUIRE(model.rowCount() == 1);
+    REQUIRE_FALSE(model.recursive());
+
+    model.setFolder(folder.path(), true);
+    REQUIRE(model.recursive());
+    REQUIRE(model.rowCount() == 3);
+    REQUIRE(model.rowOf(top) == 0);
+    REQUIRE(model.rowOf(inA) == 1);
+    REQUIRE(model.rowOf(inB) == 2);
+    REQUIRE(settle(model));
+    REQUIRE(model.index(0).data(Qt::ToolTipRole).toString().startsWith("IMG_1.dng\n"));
+    REQUIRE(model.index(1).data(Qt::ToolTipRole).toString().startsWith("a/IMG_1.dng\n"));
+    REQUIRE(model.index(2).data(Qt::DisplayRole).toString() == "IMG_1.dng");
+}
+
+TEST_CASE("The watcher sees a file added in a sub-directory, and in a new one",
+          "[shotmodel][watcher][recursive]") {
+    const test::TempDir folder;
+    fs::create_directories(folder.file("sub"));
+    addRaw(folder, "IMG_1.dng");
+    ShotModel model;
+    FolderWatcher watcher(model, std::chrono::milliseconds(20));
+    model.setFolder(folder.path(), true);
+    REQUIRE(settle(model));
+    REQUIRE(model.rowCount() == 1);
+
+    const fs::path inSub = addRaw(folder, "sub/IMG_2.dng");
+    REQUIRE(waitUntil([&] { return model.rowOf(inSub) >= 0; }));
+
+    // A sub-directory made later joins the watch once the model has refreshed.
+    fs::create_directories(folder.file("later"));
+    REQUIRE(waitUntil([&] { return model.rowCount() == 2; }));
+    waitUntil([] { return false; }, std::chrono::milliseconds(200));
+    const fs::path inLater = addRaw(folder, "later/IMG_3.dng");
+    REQUIRE(waitUntil([&] { return model.rowOf(inLater) >= 0; }));
+    REQUIRE(settle(model));
+}

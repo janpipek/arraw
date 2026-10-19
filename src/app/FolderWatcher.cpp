@@ -4,8 +4,12 @@
 
 #include <Sidecar.h>
 
+#include <QStringList>
+
 #include <exception>
 #include <system_error>
+#include <utility>
+#include <vector>
 
 namespace arraw::app {
 
@@ -18,6 +22,37 @@ std::filesystem::path normalised(const std::filesystem::path& path) {
     return error ? path.lexically_normal() : result;
 }
 
+/// @brief Lists a folder and its sub-directories, shallowest first, to a limit.
+///
+/// Hidden and symbolic-link directories are left out, as ::arraw::listShots leaves them.
+QStringList directoriesToWatch(const std::filesystem::path& root, int limit) {
+    QStringList result;
+    std::vector<std::filesystem::path> level{root};
+    while (!level.empty() && result.size() < limit) {
+        std::vector<std::filesystem::path> next;
+        for (const auto& directory : level) {
+            if (result.size() >= limit) {
+                break;
+            }
+            result << QString::fromStdU16String(directory.u16string());
+            std::error_code error;
+            std::filesystem::directory_iterator entries(
+                directory, std::filesystem::directory_options::skip_permission_denied, error);
+            for (const std::filesystem::directory_iterator end; !error && entries != end;
+                 entries.increment(error)) {
+                std::error_code ignored;
+                const auto name = entries->path().filename().native();
+                if (!name.starts_with('.') && entries->symlink_status(ignored).type() ==
+                                                  std::filesystem::file_type::directory) {
+                    next.push_back(entries->path());
+                }
+            }
+        }
+        level = std::move(next);
+    }
+    return result;
+}
+
 } // namespace
 
 FolderWatcher::FolderWatcher(ShotModel& model, std::chrono::milliseconds debounce, QObject* parent)
@@ -28,8 +63,8 @@ FolderWatcher::FolderWatcher(ShotModel& model, std::chrono::milliseconds debounc
             qOverload<>(&QTimer::start));
     connect(&debounce_, &QTimer::timeout, this, [this] {
         model_.refresh();
-        // A folder that was replaced loses its watch.
-        if (watcher_.directories().isEmpty()) {
+        // A folder that was replaced loses its watch; new sub-directories need one.
+        if (watcher_.directories().isEmpty() || model_.recursive()) {
             rewatch();
         }
     });
@@ -49,7 +84,12 @@ void FolderWatcher::rewatch() {
     if (const QStringList old = watcher_.directories(); !old.isEmpty()) {
         watcher_.removePaths(old);
     }
-    if (!model_.folder().empty()) {
+    if (model_.folder().empty()) {
+        return;
+    }
+    if (model_.recursive()) {
+        watcher_.addPaths(directoriesToWatch(model_.folder(), maxWatchedFolders));
+    } else {
         watcher_.addPath(QString::fromStdU16String(model_.folder().u16string()));
     }
 }
