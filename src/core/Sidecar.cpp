@@ -478,12 +478,20 @@ void reportUnreadable(std::string_view key, std::string expected, DiagnosticLog&
                 .values = {std::string(key), std::move(expected)}});
 }
 
+/// @brief Namespace of builds before ADR 051, which put the version in the URI.
+constexpr auto legacyNamespace = QByteArrayView("http://ns.arraw.org/develop/1.0/");
+
 /// @brief Parses an XMP document.
+///
+/// The legacy namespace is read as the current one, so a sidecar of an earlier build is read
+/// whole and written back under the current URI.
 /// @throws std::runtime_error naming @p path if the bytes are not well-formed XML.
 QDomDocument parse(const QByteArray& bytes, const std::filesystem::path& path) {
     QDomDocument document;
-    const auto result =
-        document.setContent(bytes, QDomDocument::ParseOption::PreserveSpacingOnlyNodes);
+    const QByteArray current(sidecarNamespace.data(),
+                             static_cast<qsizetype>(sidecarNamespace.size()));
+    const auto result = document.setContent(QByteArray(bytes).replace(legacyNamespace, current),
+                                            QDomDocument::ParseOption::PreserveSpacingOnlyNodes);
     if (!result) {
         throw std::runtime_error("sidecar " + path.string() +
                                  " is not valid XML: " + result.errorMessage.toStdString() +
@@ -541,7 +549,8 @@ void readVersion(const std::vector<QDomElement>& descriptions, DiagnosticLog& lo
     }
 }
 
-/// @brief Whether a key is one of the three properties that hold the local adjustments.
+/// @brief Whether a key is one of the properties that hold the local adjustments, or held their
+/// own version before `arraw:version` governed them (ADR 051): read as known, written as nothing.
 bool isLocalAdjustmentProperty(std::string_view key) {
     return key == "localAdjustments" || key == "localAdjustmentsVersion" ||
            key == "nextLocalAdjustmentId";
@@ -668,23 +677,9 @@ void gatherFields(const QDomElement& holder, const QString& arrawNs, MaskFields&
 bool readLocalAdjustmentsIn(const std::vector<QDomElement>& descriptions, DevelopState& state,
                             DiagnosticLog& log, const std::filesystem::path& subject) {
     const auto lists = occurrencesOf(descriptions, arrawProperty("localAdjustments"));
-    const auto versions = occurrencesOf(descriptions, arrawProperty("localAdjustmentsVersion"));
     const auto counters = occurrencesOf(descriptions, arrawProperty("nextLocalAdjustmentId"));
-    if (lists.empty() && versions.empty() && counters.empty()) {
+    if (lists.empty() && counters.empty()) {
         return false;
-    }
-    if (!versions.empty()) {
-        const auto version =
-            versions.back().simple ? integerIn(versions.back().text) : std::nullopt;
-        if (!version || *version < 1) {
-            reportUnreadable("localAdjustmentsVersion", "an integer of at least 1", log, subject);
-        } else if (*version > localAdjustmentsVersion) {
-            log.record({.notice = Notice::NewerLocalAdjustmentsVersion,
-                        .severity = Severity::Warning,
-                        .subject = subject,
-                        .values = {static_cast<double>(*version),
-                                   static_cast<double>(localAdjustmentsVersion)}});
-        }
     }
     std::optional<double> stored;
     if (!counters.empty()) {
@@ -1076,17 +1071,6 @@ std::optional<SidecarContents> arraw::readSidecar(const std::filesystem::path& p
 
 namespace {
 
-/// @brief Reads the version of the local adjustment list a sidecar declares; nothing when it
-/// declares none or one that is unreadable.
-std::optional<int> listVersionIn(const std::vector<QDomElement>& descriptions) {
-    const auto found = occurrencesOf(descriptions, arrawProperty("localAdjustmentsVersion"));
-    if (found.empty() || !found.back().simple) {
-        return std::nullopt;
-    }
-    const auto version = integerIn(found.back().text);
-    return version && *version >= 1 ? version : std::nullopt;
-}
-
 /// @brief Spells a written value as the text of an XMP field.
 QString spellWritten(const WrittenValue& value) {
     struct Speller {
@@ -1105,7 +1089,7 @@ QString spellWritten(const WrittenValue& value) {
     return std::visit(Speller{}, value);
 }
 
-/// @brief Writes the local adjustments, their counter and their version, or removes all three.
+/// @brief Writes the local adjustments and their counter, or removes both.
 ///
 /// A state with no masks and a fresh counter leaves no trace, so every written state reads back
 /// equal. The list is an `rdf:Seq` of `rdf:li rdf:parseType="Resource"` structures, which is a
@@ -1115,8 +1099,8 @@ void setLocalAdjustments(const std::vector<QDomElement>& descriptions, QDomEleme
     const bool needed = !state.localAdjustments.empty() || state.nextLocalAdjustmentId.value > 1;
     const Property listProperty = arrawProperty("localAdjustments");
     setProperty(descriptions, home, listProperty, std::nullopt);
-    setProperty(descriptions, home, arrawProperty("localAdjustmentsVersion"),
-                needed ? std::optional{QString::number(localAdjustmentsVersion)} : std::nullopt);
+    // The list's own version of earlier builds; `arraw:version` governs it now.
+    setProperty(descriptions, home, arrawProperty("localAdjustmentsVersion"), std::nullopt);
     setProperty(descriptions, home, arrawProperty("nextLocalAdjustmentId"),
                 needed ? std::optional{QString::number(state.nextLocalAdjustmentId.value)}
                        : std::nullopt);
@@ -1177,21 +1161,13 @@ void writeSidecarFor(const std::filesystem::path& photo, const DevelopState* sta
         throw std::runtime_error("sidecar " + path.string() + " is not XMP, so it was left alone");
     }
     std::vector<QDomElement> descriptions = descriptionsOf(document);
-    // Its values were clamped to this version's ranges on the way in, so
-    // writing them back would damage what a newer arraw put there.
+    // Reading clamped its values to this version's ranges and dropped what it did not
+    // understand, so writing them back would damage what a newer arraw put there (ADR 051).
     if (const auto version = versionIn(descriptions); version && *version > sidecarVersion) {
         throw std::runtime_error("sidecar " + path.string() + " is version " +
                                  std::to_string(*version) + ", newer than the " +
                                  std::to_string(sidecarVersion) +
                                  " this arraw writes, so it was left alone");
-    }
-    // Reading dropped what it did not understand, so writing the list back would destroy it.
-    if (const auto listVersion = listVersionIn(descriptions);
-        listVersion && *listVersion > localAdjustmentsVersion) {
-        throw std::runtime_error(
-            "sidecar " + path.string() + " holds local adjustments of version " +
-            std::to_string(*listVersion) + ", newer than the " +
-            std::to_string(localAdjustmentsVersion) + " this arraw writes, so it was left alone");
     }
     declareUtf8(document);
     if (descriptions.empty()) {

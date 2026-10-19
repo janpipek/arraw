@@ -67,8 +67,6 @@ std::string nameOf(Notice notice) {
         return "local_adjustment_field_ignored";
     case Notice::BrushStrokesTrimmed:
         return "brush_strokes_trimmed";
-    case Notice::NewerLocalAdjustmentsVersion:
-        return "newer_local_adjustments_version";
     case Notice::SidecarUnreadable:
         return "sidecar_unreadable";
     case Notice::ExifUnreadable:

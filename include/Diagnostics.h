@@ -123,10 +123,6 @@ enum class Notice {
     /// in words. One per mask and reason.
     BrushStrokesTrimmed,
 
-    /// @brief A document's list of local adjustments was written by a newer arraw, and was read
-    /// as far as it is understood: its version, then the newest this arraw knows.
-    NewerLocalAdjustmentsVersion,
-
     /// @brief An export left out metadata it could not read or copy from its
     /// source, but was written: what was left out and why.
     MetadataNotCarried,

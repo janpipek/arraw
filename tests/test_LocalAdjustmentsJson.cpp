@@ -131,8 +131,7 @@ TEST_CASE("A state document is the settings document plus the list", "[local][js
     state.settings.tone.exposure = 0.25F;
 
     const std::string text = stateToJson(state);
-    CHECK_THAT(text,
-               ContainsSubstring(R"("localAdjustments": {"version": 1, "nextId": 4, "masks": [)"));
+    CHECK_THAT(text, ContainsSubstring(R"("localAdjustments": {"nextId": 4, "masks": [)"));
     CHECK_THAT(text,
                ContainsSubstring(
                    R"({"id": 3, "type": "radial", "name": "", "enabled": true, "opacity": 1, )"
@@ -145,7 +144,7 @@ TEST_CASE("A state document is the settings document plus the list", "[local][js
     CHECK_THAT(settingsToJson(state.settings), !ContainsSubstring("localAdjustments"));
 
     CHECK(localAdjustmentsToJson(state) ==
-          R"({"version": 1, "nextId": 4, "masks": [{"id": 3, "type": "radial", "name": "", )"
+          R"({"nextId": 4, "masks": [{"id": 3, "type": "radial", "name": "", )"
           R"("enabled": true, "opacity": 1, "invert": false, "geometry": {"centre": [0.5, 0.4], )"
           R"("radius": [0.2, 0.1], "angle": 30, "feather": 0.5}, "deltas": {"exposure": 0.5, )"
           R"("dehaze": 20}}]})");
@@ -157,10 +156,9 @@ TEST_CASE("A linear mask writes its ends, and an empty list is still written", "
     CHECK_THAT(stateToJson(one),
                ContainsSubstring(R"("geometry": {"from": [0.25, 0.125], "to": [0.75, 0.875]}, )"
                                  R"("deltas": {}})"));
-    CHECK(localAdjustmentsToJson(DevelopState{}) == R"({"version": 1, "nextId": 1, "masks": []})");
-    CHECK_THAT(
-        stateToJson(DevelopState{}),
-        ContainsSubstring(R"("localAdjustments": {"version": 1, "nextId": 1, "masks": []})"));
+    CHECK(localAdjustmentsToJson(DevelopState{}) == R"({"nextId": 1, "masks": []})");
+    CHECK_THAT(stateToJson(DevelopState{}),
+               ContainsSubstring(R"("localAdjustments": {"nextId": 1, "masks": []})"));
 }
 
 TEST_CASE("A state that is not valid is not written", "[local][json]") {
@@ -437,23 +435,15 @@ TEST_CASE("The counter is repaired to sit above every id", "[local][json]") {
     CHECK(applyDoc(document({})).state.nextLocalAdjustmentId == LocalAdjustmentId{1});
 }
 
-TEST_CASE("A newer list version is read as far as it is understood", "[local][json]") {
-    const auto [state, log] =
-        applyDoc(document({linearJson(1)}, R"("version": 2, "futureThing": 1, )"));
-    CHECK(state.localAdjustments.size() == 1);
-    const Diagnostic warning = only(log, Notice::NewerLocalAdjustmentsVersion);
-    CHECK(std::get<double>(warning.values[0]) == 2.0);
-    CHECK(std::get<double>(warning.values[1]) == 1.0);
-    CHECK_THAT(describe(warning), ContainsSubstring("version 2"));
-
-    for (const char* bad : {R"("version": "one", )", R"("version": 0, )", R"("version": 1.5, )"}) {
-        INFO(bad);
-        const auto [again, badLog] = applyDoc(document({linearJson(1)}, bad));
-        CHECK(again.localAdjustments.size() == 1);
-        CHECK(count(badLog, Notice::SettingMalformed) == 1);
+TEST_CASE("The list has no version of its own, and an earlier build's is ignored",
+          "[local][json]") {
+    for (const char* version :
+         {R"("version": 1, )", R"("version": 2, )", R"("version": "one", )"}) {
+        INFO(version);
+        const auto [state, log] = applyDoc(document({linearJson(1)}, version));
+        CHECK(state.localAdjustments.size() == 1);
+        CHECK(log.entries().empty());
     }
-    CHECK(count(applyDoc(document({linearJson(1)}, R"("version": 1, )")).log,
-                Notice::SettingMalformed) == 0);
 }
 
 TEST_CASE("A list that cannot be read at all leaves the base's alone", "[local][json]") {
@@ -462,7 +452,7 @@ TEST_CASE("A list that cannot be read at all leaves the base's alone", "[local][
          {R"({"arraw": 1, "settings": {}, "localAdjustments": 5})",
           R"({"arraw": 1, "settings": {}, "localAdjustments": []})",
           R"({"arraw": 1, "settings": {}, "localAdjustments": {"masks": {}}})",
-          R"({"arraw": 1, "settings": {}, "localAdjustments": {"version": 1}})"}) {
+          R"({"arraw": 1, "settings": {}, "localAdjustments": {"nextId": 1}})"}) {
         INFO(text);
         const auto [state, log] = applyDoc(text, base);
         CHECK(state.localAdjustments == base.localAdjustments);

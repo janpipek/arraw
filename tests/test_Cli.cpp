@@ -1861,7 +1861,7 @@ TEST_CASE("A sidecar value out of range is clamped and reported, in text and JSO
     std::ofstream(directory.file("frame.xmp"))
         << "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">"
            "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">"
-           "<rdf:Description rdf:about=\"\" xmlns:arraw=\"http://ns.arraw.org/develop/1.0/\" "
+           "<rdf:Description rdf:about=\"\" xmlns:arraw=\"http://ns.arraw.org/develop/\" "
            "arraw:exposure=\"99\" arraw:futureKnob=\"7\"/></rdf:RDF></x:xmpmeta>";
 
     int code = 0;
@@ -3096,7 +3096,6 @@ TEST_CASE("Info --json gives the masks with their geometry, as the state documen
 
     const auto file = firstFile(invoke({"info", "--json", raw.string()}).out);
     const auto list = file.value("localAdjustments").toObject();
-    REQUIRE(list.value("version").toInt() == 1);
     REQUIRE(list.value("nextId").toInt() == 4);
     const auto masks = list.value("masks").toArray();
     REQUIRE(masks.size() == 3);

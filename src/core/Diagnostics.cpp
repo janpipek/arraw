@@ -103,10 +103,6 @@ std::string arraw::describe(const Diagnostic& diagnostic) {
     case Notice::BrushStrokesTrimmed:
         return "mask " + valueAt(diagnostic, 0) + " (id " + valueAt(diagnostic, 1) +
                "): " + valueAt(diagnostic, 3);
-    case Notice::NewerLocalAdjustmentsVersion:
-        return "these local adjustments are version " + valueAt(diagnostic, 0) +
-               ", but this arraw knows up to version " + valueAt(diagnostic, 1) +
-               "; reading what it can";
     case Notice::SidecarUnreadable:
         return valueAt(diagnostic, 0) + "; opened with default settings and no marks";
     case Notice::ExifUnreadable:

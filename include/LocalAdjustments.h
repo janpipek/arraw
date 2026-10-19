@@ -32,10 +32,6 @@ inline constexpr float maximumMaskPosition = 3.0F;
 /// @brief Largest radius of a radial mask, in long-edge units.
 inline constexpr float maximumMaskRadius = 4.0F;
 
-/// @brief Newest version of the local adjustment list this arraw reads and writes, in the state
-/// JSON and in the sidecar.
-inline constexpr int localAdjustmentsVersion = 1;
-
 /// @brief Identity of one local adjustment, unique within a photograph's state.
 ///
 /// Never zero for an adjustment in a state; the counter

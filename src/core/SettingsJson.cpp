@@ -243,9 +243,8 @@ std::string maskToJson(const LocalAdjustment& adjustment, StrokeDetail detail) {
 
 /// @brief Spells the list object; one mask a line, indented, or all on one line.
 std::string listJson(const DevelopState& state, bool lines, StrokeDetail detail) {
-    std::string text = "{\"version\": " + std::to_string(localAdjustmentsVersion) +
-                       ", \"nextId\": " + std::to_string(state.nextLocalAdjustmentId.value) +
-                       ", \"masks\": [";
+    std::string text =
+        "{\"nextId\": " + std::to_string(state.nextLocalAdjustmentId.value) + ", \"masks\": [";
     for (std::size_t i = 0; i < state.localAdjustments.size(); ++i) {
         text += lines ? "\n    " : (i > 0 ? ", " : "");
         text += maskToJson(state.localAdjustments[i], detail);
@@ -454,18 +453,6 @@ DevelopState arraw::applyStateJson(std::string_view json, DevelopState base, Dia
     if (!list.value("masks").isArray()) {
         reportMalformedList("localAdjustments.masks", "a list", log);
         return base;
-    }
-    if (list.contains("version")) {
-        const QJsonValue version = list.value("version");
-        if (!version.isDouble() || version.toDouble() < 1 ||
-            version.toDouble() != std::floor(version.toDouble())) {
-            reportMalformedList("localAdjustments.version", "a whole number of at least 1", log);
-        } else if (version.toDouble() > localAdjustmentsVersion) {
-            log.record(
-                {.notice = Notice::NewerLocalAdjustmentsVersion,
-                 .severity = Severity::Warning,
-                 .values = {version.toDouble(), static_cast<double>(localAdjustmentsVersion)}});
-        }
     }
     std::vector<MaskFields> entries;
     for (const QJsonValue& entry : list.value("masks").toArray()) {

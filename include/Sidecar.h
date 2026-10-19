@@ -16,8 +16,11 @@
 
 namespace arraw {
 
-/// @brief Namespace of the develop settings in an XMP sidecar; a placeholder until confirmed.
-inline constexpr std::string_view sidecarNamespace = "http://ns.arraw.org/develop/1.0/";
+/// @brief Namespace of the develop settings in an XMP sidecar.
+///
+/// Frozen: it carries no version, which `arraw:version` holds (ADR 051). Sidecars of the builds
+/// that spelled it `http://ns.arraw.org/develop/1.0/` are read as this and written back as this.
+inline constexpr std::string_view sidecarNamespace = "http://ns.arraw.org/develop/";
 
 /// @brief Prefix the develop settings get when a sidecar has to declare their namespace.
 inline constexpr std::string_view sidecarPrefix = "arraw";
@@ -148,20 +151,20 @@ inline constexpr auto xmpNamespaceOwners = std::to_array<XmpNamespaceOwner>({
 /// (a whole number, `3.0` included, clamped to -1 to 5) and `xmp:Label`. A
 /// rating or label that does not fit is reported and read as no mark; the file
 /// keeps it (see ::arraw::writeSidecar). Whether the file records develop
-/// settings at all is ::arraw::SidecarContents::state. `arraw:version` above
-/// ::arraw::sidecarVersion gives ::arraw::Notice::NewerSettingsVersion.
+/// settings at all is ::arraw::SidecarContents::state. Arraw content without an `arraw:version`
+/// is version 1, with no warning. Every version up to
+/// ::arraw::sidecarVersion is read; an `arraw:version` above it gives
+/// ::arraw::Notice::NewerSettingsVersion and is read as far as it is understood (ADR 051).
 ///
-/// **Local adjustments** (ADR 044) are three more `arraw:` properties: `arraw:localAdjustments`,
+/// **Local adjustments** (ADR 044) are two more `arraw:` properties: `arraw:localAdjustments`,
 /// an `rdf:Seq` of structures (read in any of RDF's equivalent spellings:
-/// `rdf:parseType="Resource"`, a nested `rdf:Description`, fields as attributes),
-/// `arraw:localAdjustmentsVersion` and `arraw:nextLocalAdjustmentId`. Only the description's own
-/// properties are settings, so a mask's `arraw:exposure` is never the global one. A mask that
-/// cannot be used is dropped, with
+/// `rdf:parseType="Resource"`, a nested `rdf:Description`, fields as attributes), and
+/// `arraw:nextLocalAdjustmentId`. The `arraw:localAdjustmentsVersion` of earlier builds is ignored.
+/// Only the description's own properties are settings, so a mask's `arraw:exposure` is never the
+/// global one. A mask that cannot be used is dropped, with
 /// ::arraw::Notice::LocalAdjustmentDropped, and a field that is not known ignored, with
 /// ::arraw::Notice::LocalAdjustmentFieldIgnored; the counter is raised above every id kept. The
-/// rules are those of ::arraw::applyStateJson. A list of a version above
-/// ::arraw::localAdjustmentsVersion is read as far as it is understood, with
-/// ::arraw::Notice::NewerLocalAdjustmentsVersion. Any of the three properties records a state.
+/// rules are those of ::arraw::applyStateJson. Either property records a state.
 /// `crs:` and anything else is not read, but it is reported: `xmp:CreatorTool`
 /// and the other namespaces that hold properties (see ::arraw::SidecarContents).
 /// @param photo Path of the photograph, which is also the subject of every warning.
@@ -189,17 +192,16 @@ readSidecar(const std::filesystem::path& photo, DiagnosticLog& log = discardedDi
 /// a switch that is off, no recorded lens) is written as no key. The lens record is written and
 /// removed as a unit. No coefficient is written: the calibration stays the database's.
 /// ::arraw::writeSidecarMarks leaves the negative alone. The local adjustments are
-/// rewritten whole: `arraw:localAdjustments`, `arraw:localAdjustmentsVersion` and
-/// `arraw:nextLocalAdjustmentId` are written when the list is not empty or the counter is above 1,
-/// and removed otherwise, so a state with no masks and a fresh counter leaves no trace and every
-/// state reads back equal. Without a sidecar, a new one is created. The
-/// file is replaced atomically. What is preserved is the meaning of the
-/// document, not its bytes: attributes may be reordered, the packet's padding
-/// and trailing newline are dropped, and the declaration is rewritten as UTF-8.
+/// rewritten whole: `arraw:localAdjustments` and `arraw:nextLocalAdjustmentId` are written when
+/// the list is not empty or the counter is above 1, and removed otherwise, so a state with no
+/// masks and a fresh counter leaves no trace and every state reads back equal. A sidecar of an
+/// older version is overwritten as the current one; one of a newer version is refused. Without a
+/// sidecar, a new one is created. The file is replaced atomically. What is preserved is the meaning
+/// of the document, not its bytes: attributes may be reordered, the packet's padding and trailing
+/// newline are dropped, and the declaration is rewritten as UTF-8.
 /// @param photo Photograph whose settings and marks to write.
 /// @throws std::runtime_error if the existing sidecar is not XMP, or is of a
-/// newer ::arraw::sidecarVersion, or holds local adjustments of a newer
-/// ::arraw::localAdjustmentsVersion (writing would destroy what a newer arraw wrote), naming it,
+/// newer ::arraw::sidecarVersion (writing would destroy what a newer arraw wrote), naming it,
 /// in which case it is left alone, or if the file cannot be written.
 void writeSidecar(const Photo& photo);
 

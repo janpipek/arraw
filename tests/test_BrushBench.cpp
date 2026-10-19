@@ -313,7 +313,7 @@ sidecarRun(const char* label, const char* codec,
     std::vector<std::string> encoded;
     xmp << R"(<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
 <x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-<rdf:Description rdf:about="" xmlns:arraw="http://ns.arraw.org/develop/1.0/"><arraw:localAdjustments><rdf:Seq>)";
+<rdf:Description rdf:about="" xmlns:arraw="http://ns.arraw.org/develop/"><arraw:localAdjustments><rdf:Seq>)";
     int id = 1;
     for (const auto& mask : masks) {
         xmp << R"(<rdf:li rdf:parseType="Resource"><arraw:id>)" << id++

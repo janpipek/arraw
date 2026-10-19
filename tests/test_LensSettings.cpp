@@ -306,7 +306,7 @@ TEST_CASE("A sidecar with only lens keys records a negative and no state",
     // A short hand-written sidecar: the lens key and no develop settings at all.
     std::ofstream(sidecarPath(opened.path()))
         << R"(<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">)"
-           R"(<rdf:Description rdf:about="" xmlns:arraw="http://ns.arraw.org/develop/1.0/" arraw:lensVignetting="True"/>)"
+           R"(<rdf:Description rdf:about="" xmlns:arraw="http://ns.arraw.org/develop/" arraw:lensVignetting="True"/>)"
            R"(</rdf:RDF></x:xmpmeta>)";
 
     const auto read = readSidecar(opened.path());
@@ -779,7 +779,7 @@ TEST_CASE("A vignetting amount out of range is clamped and logged",
         const Photo opened = lensPhotoIn(directory);
         std::ofstream(sidecarPath(opened.path()))
             << R"(<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">)"
-               R"(<rdf:Description rdf:about="" xmlns:arraw="http://ns.arraw.org/develop/1.0/" arraw:lensVignetting=")"
+               R"(<rdf:Description rdf:about="" xmlns:arraw="http://ns.arraw.org/develop/" arraw:lensVignetting=")"
             << text << R"("/></rdf:RDF></x:xmpmeta>)";
         CollectedDiagnostics sidecarLog;
         const auto sidecar = readSidecar(opened.path(), sidecarLog);
@@ -811,7 +811,7 @@ TEST_CASE("A vignetting amount that is no number is reported and the base is kep
         CAPTURE(bad);
         std::ofstream(sidecar)
             << R"(<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">)"
-               R"(<rdf:Description rdf:about="" xmlns:arraw="http://ns.arraw.org/develop/1.0/" arraw:lensVignetting=")"
+               R"(<rdf:Description rdf:about="" xmlns:arraw="http://ns.arraw.org/develop/" arraw:lensVignetting=")"
             << bad << R"("/></rdf:RDF></x:xmpmeta>)";
         CollectedDiagnostics log;
         const auto read = readSidecar(opened.path(), log);
