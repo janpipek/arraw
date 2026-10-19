@@ -42,6 +42,21 @@ constexpr int borderWidth = 4;
 /// Below this content height the stars and the format chip are illegible, and left out.
 constexpr int marksMinHeight = 64;
 
+/// Returns the font of the file name caption: the widget's, a little smaller.
+QFont captionFont(QFont font) {
+    if (font.pointSizeF() > 0) {
+        font.setPointSizeF(std::max(6.0, font.pointSizeF() * 0.85));
+    } else if (font.pixelSize() > 0) {
+        font.setPixelSize(std::max(7, static_cast<int>(font.pixelSize() * 0.85)));
+    }
+    return font;
+}
+
+/// Returns the height of the caption strip below a thumbnail, for the widget's font.
+int captionHeight(const QFont& widgetFont) {
+    return QFontMetrics(captionFont(widgetFont)).height() + cellPadding;
+}
+
 QString toQString(const fs::path& path) {
     return QString::fromStdU16String(path.u16string());
 }
@@ -132,9 +147,16 @@ class FilmStripDelegate : public QStyledItemDelegate {
 public:
     using QStyledItemDelegate::QStyledItemDelegate;
 
-    /// @brief Sets the side of the square cells.
-    void setSide(int side) noexcept {
+    /// @brief Sets the side of the square thumbnail area of the cells and the height of the file
+    /// name caption below it (0 for none).
+    void setSide(int side, int caption) noexcept {
         side_ = side;
+        caption_ = caption;
+    }
+
+    /// @brief Returns the height of the caption strip below the thumbnail area, 0 if none.
+    [[nodiscard]] int caption() const noexcept {
+        return caption_;
     }
 
     /// @brief Returns the side of the cells.
@@ -148,7 +170,7 @@ public:
     }
 
     [[nodiscard]] QSize sizeHint(const QStyleOptionViewItem&, const QModelIndex&) const override {
-        return {side_, side_};
+        return {side_, side_ + caption_};
     }
 
     void paint(QPainter* painter, const QStyleOptionViewItem& option,
@@ -158,8 +180,9 @@ public:
         const bool selected = (option.state & QStyle::State_Selected) != 0;
         const bool active =
             !active_.isEmpty() && index.data(ShotModel::PathRole).toString() == active_;
+        const QRect thumbnailCell(option.rect.topLeft(), QSize(option.rect.width(), side_));
         const QRect inner =
-            option.rect.adjusted(cellPadding, cellPadding, -cellPadding, -cellPadding);
+            thumbnailCell.adjusted(cellPadding, cellPadding, -cellPadding, -cellPadding);
         const QString format = index.data(ShotModel::FormatLabelRole).toString();
 
         const auto thumbnail = index.data(ShotModel::ThumbnailRole).value<QImage>();
@@ -192,12 +215,29 @@ public:
             paintSidecarBadge(painter, inner);
         }
 
+        QColor colour = option.palette.highlight().color();
         if (active || selected) {
-            QColor colour = option.palette.highlight().color();
             if (!active) {
                 // Selected beside the active one: the same weight, dimmer.
                 colour.setAlphaF(0.6);
             }
+        }
+        if (caption_ > 0 && inner.height() >= marksMinHeight) {
+            const QRect strip(option.rect.left() + borderWidth, thumbnailCell.bottom() + 1,
+                              option.rect.width() - 2 * borderWidth,
+                              option.rect.bottom() - thumbnailCell.bottom() - borderWidth);
+            if (active || selected) {
+                painter->fillRect(strip, colour);
+            }
+            const QFont font = captionFont(option.font);
+            painter->setFont(font);
+            painter->setPen(active || selected ? option.palette.highlightedText().color()
+                                               : option.palette.text().color());
+            const QString name = QFontMetrics(font).elidedText(
+                index.data(Qt::DisplayRole).toString(), Qt::ElideMiddle, strip.width() - 2);
+            painter->drawText(strip, Qt::AlignCenter, name);
+        }
+        if (active || selected) {
             painter->setPen(QPen(colour, borderWidth));
             painter->setBrush(Qt::NoBrush);
             const int offset = borderWidth / 2;
@@ -208,6 +248,7 @@ public:
 
 private:
     int side_ = 132;
+    int caption_ = 0;
     QString active_;
 };
 
@@ -303,7 +344,7 @@ FilmStrip::FilmStrip(QWidget* parent, ThumbnailCache cache, LensDatabaseSource l
 FilmStrip::~FilmStrip() = default;
 
 QSize FilmStrip::sizeHint() const {
-    return {600, 132};
+    return {600, 132 + captionHeight(font())};
 }
 
 void FilmStrip::buildTitleBar() {
@@ -747,12 +788,18 @@ void FilmStrip::updateCellSide() {
     }
     const int available = list_->height() - 2 * list_->frameWidth() -
                           list_->horizontalScrollBar()->sizeHint().height();
-    const int side = cellSide(available);
-    if (side == delegate_->side()) {
+    // The caption takes its height from the thumbnail area, unless that gets too small to take it.
+    int caption = captionHeight(list_->font());
+    int side = cellSide(available - caption);
+    if (side - 2 * cellPadding < marksMinHeight) {
+        caption = 0;
+        side = cellSide(available);
+    }
+    if (side == delegate_->side() && caption == delegate_->caption()) {
         return;
     }
     updatingCells_ = true;
-    delegate_->setSide(side);
+    delegate_->setSide(side, caption);
     list_->doItemsLayout();
     updatingCells_ = false;
 }

@@ -477,6 +477,17 @@ TEST_CASE("A recursive model lists the subfolders and names them in the tooltip"
     REQUIRE(model.index(2).data(Qt::DisplayRole).toString() == "IMG_1.dng");
 }
 
+TEST_CASE("The display role is the bare file name, also in a subfolder", "[shotmodel][recursive]") {
+    const test::TempDir folder;
+    fs::create_directories(folder.file("day1/raw"));
+    addRaw(folder, "day1/raw/IMG_0042.dng");
+    ShotModel model;
+    model.setFolder(folder.path(), true);
+    REQUIRE(model.rowCount() == 1);
+    CHECK(display(model, 0) == "IMG_0042.dng");
+    CHECK(model.index(0).data(Qt::ToolTipRole).toString().startsWith("day1/raw/IMG_0042.dng"));
+}
+
 TEST_CASE("The watcher sees a file added in a sub-directory, and in a new one",
           "[shotmodel][watcher][recursive]") {
     const test::TempDir folder;

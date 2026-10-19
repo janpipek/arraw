@@ -1,11 +1,15 @@
 #include "support/TempDir.h"
 #include "ui/FilmStrip.h"
 
+#include <QCoreApplication>
+#include <QImage>
+#include <QListView>
 #include <QSignalSpy>
 #include <QToolButton>
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 
@@ -71,4 +75,26 @@ TEST_CASE("The film strip's subfolder toggle re-lists the folder and keeps the a
     REQUIRE_FALSE(strip.includeSubfolders());
     REQUIRE_FALSE(strip.shotContaining(other.file("deeper/c.jpg")));
     REQUIRE_FALSE(strip.activePrimary());
+}
+
+TEST_CASE("The film strip's cells are taller than wide, by a caption line, and fit the strip",
+          "[app][filmstrip]") {
+    const test::TempDir folder;
+    touch(folder.file("IMG_0042.jpg"));
+    Strip holder;
+    FilmStrip& strip = holder.strip;
+    strip.resize(600, 200);
+    strip.setFolder(folder.path());
+    strip.show();
+    auto* list = strip.findChild<QListView*>();
+    REQUIRE(list);
+    QCoreApplication::processEvents();
+    const QSize cell = list->sizeHintForIndex(list->model()->index(0, 0));
+    CHECK(cell.height() > cell.width());
+    CHECK(cell.height() <= list->viewport()->height());
+    const QImage grabbed = strip.grab().toImage();
+    CHECK_FALSE(grabbed.isNull());
+    if (const char* dir = std::getenv("ARRAW_TEST_SCREENSHOT_DIR")) {
+        grabbed.save(QString::fromUtf8(dir) + "/filmstrip.png");
+    }
 }

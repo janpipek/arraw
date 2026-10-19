@@ -174,6 +174,18 @@ adjustments (user, 2026-10-08; `docs/ideas/local-adjustment-plan.md`):
 - **Spots and Info tabs** in the develop dock, as `old` had (Q switched to
   Spots there).
 
+- **Export presets** (user, 2026-10-19): the export dialog should allow named presets
+  (`ExportSettings`: format, encoding, bit depth, size box, quality, sharpening,
+  metadata). At the least, some default sizes to scale to (e.g. a choice of long
+  edge: 1080, 2048, 4096 px, or "Original") instead of typing width and height.
+  **Decided (user, 2026-10-19):** shared presets, and other model-wise config
+  that the CLI, scripts and app must all see, live in a JSON file in a standard
+  path (`QStandardPaths` config location), with format and read/write code in
+  the library. GUI-specific state (last folder, dock layout, subfolders flag)
+  stays in `QSettings`, which the CLI does not read. To scope: the file layout
+  (one file per preset or one per kind), versioning as in ADR 051, and whether
+  the develop presets move there too.
+
 Done (ADR 042): the render pie is always present at the left of the status
 bar, in the new `StatusLine` widget that also owns the message, device label
 and zoom button.
