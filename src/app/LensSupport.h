@@ -35,7 +35,7 @@ struct LensStatus {
     /// @brief Whether the lens database is still being loaded, so nothing can be set yet.
     bool loading = false;
 
-    /// @brief The line under the switches: the lens found and how, or why there is no profile.
+    /// @brief The line under the lens settings: the lens found and how, or why there is no profile.
     QString text;
 
     /// @brief A second line, such as a database updated since the lens was recorded, or a
@@ -57,8 +57,18 @@ struct LensStatus {
 
 /// @brief A photograph's lens corrections as the window needs them.
 struct LensView {
-    /// @brief What a render applies; empty when no switch is on or nothing resolved.
+    /// @brief What a render applies; empty when no correction is on or nothing resolved.
+    ///
+    /// The profile with its vignetting scaled to the photograph's amount
+    /// (::arraw::withVignettingAmount), so a drag of the amount never asks lensfun again.
     LensCorrection correction;
+
+    /// @brief The correction with the vignetting at the profile's own strength (an amount of 100);
+    /// empty when no correction is on or nothing resolved.
+    ///
+    /// What the window scales to the amount. Resolved at 100 whenever the amount is above zero,
+    /// and at 0 otherwise, so that it holds no vignetting then.
+    LensCorrection profile;
 
     /// @brief What the Negative group shows.
     LensStatus status;
@@ -71,7 +81,7 @@ struct LensView {
 
 /// @brief Resolves a photograph's lens corrections and the words that go with them.
 ///
-/// The correction is resolved only when a switch is on (::arraw::lensCorrectionFor); the status
+/// The correction is resolved only when a correction is on (::arraw::lensCorrectionFor); the status
 /// names the lens the photograph's corrections use, recorded or matched, and else says why there
 /// is no profile (the notices of ::arraw::LensProblem, in words). Reads the lens database, so it
 /// takes some milliseconds when it has to match a lens: for the interface thread only when the
@@ -81,23 +91,5 @@ struct LensView {
 /// and no correction.
 /// @return The correction and the status.
 [[nodiscard]] LensView resolveLensView(const Photo& photo, const LensDatabase* database);
-
-/// @brief Gives negative settings with the match recorded when a correction is on and nothing is.
-///
-/// ::arraw::recordLensMatch for settings the photograph does not carry yet, so that the step that
-/// turns a correction on records the lens with it (ADR 050, section 6).
-/// @param photo Document the settings are for.
-/// @param negative Settings to record the match in.
-/// @param database Database to match in; null leaves the settings as they are.
-/// @return The settings, with the lens recorded when that changed anything.
-[[nodiscard]] NegativeSettings withMatchRecorded(const Photo& photo, NegativeSettings negative,
-                                                 const LensDatabase* database);
-
-/// @brief Gives negative settings with the recorded lens cleared and, if a correction is on,
-/// matched again.
-/// @param photo Document the settings are for.
-/// @param database Database to match in; null only clears.
-/// @return The settings.
-[[nodiscard]] NegativeSettings withLensReset(const Photo& photo, const LensDatabase* database);
 
 } // namespace arraw::app

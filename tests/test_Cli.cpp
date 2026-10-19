@@ -2624,13 +2624,21 @@ std::filesystem::path copyLensRaw(const test::TempDir& directory, const std::str
     return path;
 }
 
-/// @brief Gives a photograph with lens switches set, as a sidecar would hold them.
-Photo withLensSwitches(const Photo& photo, bool distortion, bool vignetting, bool lateralCa) {
+/// @brief Gives a photograph with the lens corrections set, as a sidecar would hold them.
+Photo withLensCorrections(const Photo& photo, bool distortion, float vignettingAmount,
+                          bool lateralCa) {
     NegativeSettings negative = photo.negative();
     negative.lens.distortion = distortion;
-    negative.lens.vignetting = vignetting;
+    negative.lens.vignettingAmount = vignettingAmount;
     negative.lens.lateralCa = lateralCa;
     return photo.with(negative);
+}
+
+/// @brief Gives a photograph with lens switches set, as a sidecar would hold them.
+Photo withLensSwitches(const Photo& photo, bool distortion, bool vignetting, bool lateralCa) {
+    return withLensCorrections(photo, distortion,
+                               vignetting ? profileVignettingAmount : minimumVignettingAmount,
+                               lateralCa);
 }
 
 } // namespace
@@ -2670,6 +2678,35 @@ TEST_CASE("Export applies the lens corrections the flags name, as the library do
     REQUIRE(listed == corrected);
     REQUIRE(distortion != corrected);
     REQUIRE(distortion != plain);
+}
+
+TEST_CASE("Export takes the vignetting amount the flag names", "[cli][export][lens][lensfun]") {
+    ARRAW_REQUIRE_LENSFUN_OR_SKIP();
+    const test::TempDir directory;
+    const auto raw = copyLensRaw(directory, "frame.dng");
+    const std::string database = test::fixture("lensfun").string();
+    const auto exportWith = [&](const std::string& list) {
+        return exportedPng(raw, {"--lens-corrections", list, "--lens-database", database});
+    };
+
+    const QImage plain = exportedPng(raw, {"--lens-database", database});
+    const QImage profile = exportWith("vignetting");
+    REQUIRE(profile != plain);
+    // Bare vignetting and all mean the profile as it is, and 0 means off.
+    REQUIRE(exportWith("vignetting=100") == profile);
+    REQUIRE(exportWith("vignetting=0") == plain);
+    REQUIRE(exportWith("all") == exportWith("distortion,vignetting=100,ca"));
+    REQUIRE(exportWith("DISTORTION,Vignetting=100,CA") == exportWith("all"));
+    REQUIRE(exportWith("distortion,vignetting=0") == exportWith("distortion"));
+    REQUIRE(exportWith("none") == plain);
+
+    // A halfway amount is its own picture, and is what a sidecar at the same amount renders.
+    const QImage half = exportWith("vignetting=50");
+    REQUIRE(half != plain);
+    REQUIRE(half != profile);
+    REQUIRE(exportWith("vignetting=150") != profile);
+    writeSidecar(withLensCorrections(openPhoto(raw), false, 50.0F, false));
+    REQUIRE(exportedPng(raw, {"--lens-database", database}) == half);
 }
 
 TEST_CASE("The lens flags override the sidecar's corrections and its lens",
@@ -2774,6 +2811,33 @@ TEST_CASE("The lens flags are checked", "[cli][export][lens]") {
     REQUIRE(list.code == cli::UsageError);
     REQUIRE_THAT(list.err, ContainsSubstring("--lens-corrections takes all, none"));
     REQUIRE(run({"--lens-corrections", ""}).code == cli::UsageError);
+
+    // Each usage error of the vignetting amount, the list and its repeats.
+    const auto usageError = [&](const std::string& value, const std::string& message) {
+        const auto result = run({"--lens-corrections", value});
+        INFO(value);
+        REQUIRE(result.code == cli::UsageError);
+        REQUIRE_THAT(result.err, ContainsSubstring(message));
+    };
+    const std::string amountHelp = "vignetting takes an amount from 0 to 150, as in vignetting=60";
+    usageError("distortion,,ca", "an item is empty");
+    usageError("distortion,", "an item is empty");
+    usageError("vignetting=", amountHelp);
+    usageError("vignetting=abc", amountHelp);
+    usageError("vignetting=60x", amountHelp);
+    usageError("vignetting=-1", amountHelp);
+    usageError("vignetting=150.5", amountHelp);
+    usageError("vignetting=nan", amountHelp);
+    usageError("vignetting=inf", amountHelp);
+    usageError("vignetting= 60", amountHelp);
+    usageError("vignetting,vignetting=60", "'vignetting' is given twice");
+    usageError("vignetting=60,vignetting=70", "'vignetting' is given twice");
+    usageError("ca,distortion,ca", "'ca' is given twice");
+    usageError("all,ca", "all and none stand alone");
+    usageError("distortion,all", "all and none stand alone");
+    usageError("none,vignetting=50", "all and none stand alone");
+    usageError("all,none", "all and none stand alone");
+    usageError("vigneting=50", "'vigneting=50' is not a correction");
     REQUIRE(run({"--lens", "Canon EF 50mm"}).code == cli::UsageError);
     REQUIRE(run({"--lens", "Canon|"}).code == cli::UsageError);
     // Case does not matter for the list.
@@ -2856,10 +2920,31 @@ TEST_CASE("Info shows the recorded lens, what it was resolved for, and the stamp
                 "Canon EF-S 18-135mm f/3.5-5.6 IS USM");
         REQUIRE(negative.value("recorded").toObject().value("origin").toString() == "matched");
     }
+    SECTION("a vignetting amount below the profile's") {
+        writeSidecar(recordLensMatch(withLensCorrections(openPhoto(raw), false, 60.0F, false),
+                                     test::fixtureDatabase()));
+        const auto result = invoke({"info", raw.string(), "--lens-database", database});
+        REQUIRE(result.code == cli::Success);
+        REQUIRE_THAT(result.out, ContainsSubstring("  Lens corrections: vignetting 60%\n"));
+        const auto json =
+            firstFile(invoke({"info", "--json", raw.string(), "--lens-database", database}).out);
+        REQUIRE(json.value("negative")
+                    .toObject()
+                    .value("lens")
+                    .toObject()
+                    .value("vignetting")
+                    .toDouble() == 60.0);
+    }
+    SECTION("the profile's vignetting, beside another correction") {
+        writeSidecar(recordLensMatch(withLensCorrections(openPhoto(raw), true, 100.0F, false),
+                                     test::fixtureDatabase()));
+        const auto result = invoke({"info", raw.string(), "--lens-database", database});
+        REQUIRE_THAT(result.out, ContainsSubstring("  Lens corrections: distortion, vignetting\n"));
+    }
     SECTION("a recorded lens the database no longer lists, and a corrections diagnostic") {
         NegativeSettings negative = openPhoto(raw).negative();
         negative.lens = {.distortion = true,
-                         .vignetting = false,
+                         .vignettingAmount = minimumVignettingAmount,
                          .lateralCa = false,
                          .lens = RecordedLens{.maker = "Canon",
                                               .model = "Canon EF 85mm f/1.2L II USM",

@@ -171,7 +171,7 @@ LensCorrection arraw::resolveLens(const LensSettings& settings, const LensFacts&
         note(log, subject, Notice::LensNotCalibrated, Severity::Warning,
              {match->lens.model, missing});
     }
-    return std::move(*sampled);
+    return withVignettingAmount(std::move(*sampled), settings.vignettingAmount);
 }
 
 LensCorrection arraw::lensCorrectionFor(const Photo& photo, const LensDatabase& database,

@@ -341,7 +341,7 @@ TEST_CASE("An export queued after a lens toggle applies the corrections, and say
     const Photo plain = openPhoto(raw);
     NegativeSettings negative = plain.negative();
     negative.lens.distortion = true;
-    negative.lens.vignetting = true;
+    negative.lens.vignettingAmount = profileVignettingAmount;
     negative.lens.lateralCa = true;
     const app::ExportResult off = exported(plain, "off.png");
     const app::ExportResult on = exported(plain.with(negative), "on.png");
@@ -371,7 +371,7 @@ TEST_CASE("An export queued after a lens toggle applies the corrections, and say
     bare.lens.maxAperture = 1.8;
     bare.lens.focalLength = 24.0;
     NegativeSettings vignettingOnly = plain.negative();
-    vignettingOnly.lens.vignetting = true;
+    vignettingOnly.lens.vignettingAmount = profileVignettingAmount;
     const Photo uncalibrated(raw, bare, vignettingOnly, plain.state());
     const app::ExportResult skipped = exported(uncalibrated, "uncalibrated.png");
     REQUIRE(skipped.lensNotices.size() == 1);

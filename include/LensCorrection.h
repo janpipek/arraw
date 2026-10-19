@@ -119,6 +119,18 @@ struct LensCorrection {
 /// @return It, with ::arraw::LensCorrection::fill set to ::arraw::fillScaleOf at its aspect.
 [[nodiscard]] LensCorrection withFillScale(LensCorrection correction);
 
+/// @brief Scales a correction's vignetting gain in stops.
+///
+/// Each node g becomes g ^ (amount / 100), so 100 leaves the profile as it is, 0 removes the
+/// vignetting and 150 overcorrects by half again (ADR 050, amendment of 2026-10-19). An empty
+/// table, or an amount of exactly 100, leaves the correction unchanged. At 0 or less the
+/// vignetting and its provenance are cleared, and a correction left with nothing to do becomes
+/// the empty one. A node that is not finite and positive is kept as it is.
+/// @param correction Correction whose vignetting is scaled.
+/// @param amount Percent of the profile's stops.
+/// @return The correction with its vignetting scaled.
+[[nodiscard]] LensCorrection withVignettingAmount(LensCorrection correction, float amount);
+
 /// @brief Gives the normalised radius of a sensor-frame point: its distance from the optical centre
 /// over the centre's distance to the farthest corner, the aspect taken into account.
 ///

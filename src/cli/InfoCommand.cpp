@@ -626,12 +626,17 @@ void writeLens(std::ostream& out, const Photo& photo, const LensReport& report) 
         }
         out << '\n';
     }
+    std::string vignetting = "vignetting";
+    if (settings.vignettingAmount != profileVignettingAmount) {
+        vignetting += " " + shortestText(shortestDouble(settings.vignettingAmount)) + "%";
+    }
     std::string on;
-    for (const auto& [wanted, name] : {std::pair{settings.distortion, "distortion"},
-                                       std::pair{settings.vignetting, "vignetting"},
-                                       std::pair{settings.lateralCa, "chromatic aberration"}}) {
+    using Correction = std::pair<bool, std::string>;
+    for (const auto& [wanted, name] : {Correction{settings.distortion, "distortion"},
+                                       Correction{settings.vignettingAmount > 0.0F, vignetting},
+                                       Correction{settings.lateralCa, "chromatic aberration"}}) {
         if (wanted) {
-            on += (on.empty() ? "" : ", ") + std::string(name);
+            on += (on.empty() ? "" : ", ") + name;
         }
     }
     out << "  Lens corrections: " << (on.empty() ? "off" : on) << '\n';

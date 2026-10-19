@@ -12,6 +12,7 @@
 #include <DevelopState.h>
 #include <ImageBuffer.h>
 #include <LensCorrection.h>
+#include <NegativeSettings.h>
 #include <Progress.h>
 #include <RenderCheckpoint.h>
 
@@ -241,6 +242,18 @@ TEST_CASE("The lens pass matches the CPU, each correction and all of them", "[gp
             // The tables are for the aspect of the frame they are applied to.
             requireMatchesCpu(source, lensOf(c.kinds, sizeAspect), lensTolerance, label.c_str());
         }
+        // An amount of the profile's stops is a table like any other.
+        const std::string scaled =
+            "vignetting at 60 % " + std::to_string(size.width) + "x" + std::to_string(size.height);
+        requireMatchesCpu(source,
+                          withVignettingAmount(lensOf({.vignetting = 0.8}, sizeAspect), 60.0F),
+                          lensTolerance, scaled.c_str());
+        // Above the profile the gains are scaled past it.
+        const std::string boosted =
+            "vignetting at 150 % " + std::to_string(size.width) + "x" + std::to_string(size.height);
+        requireMatchesCpu(source,
+                          withVignettingAmount(lensOf({.vignetting = 0.8}, sizeAspect), 150.0F),
+                          lensTolerance, boosted.c_str());
     }
 }
 

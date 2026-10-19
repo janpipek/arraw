@@ -618,6 +618,7 @@ void MainWindow::buildDevelopDock() {
     connect(developPanel_, &DevelopPanel::stateEdited, this, &MainWindow::updateEdit);
     connect(developPanel_, &DevelopPanel::pickToggled, this, &MainWindow::setPicking);
     connect(developPanel_, &DevelopPanel::negativeChosen, this, &MainWindow::chooseNegative);
+    connect(developPanel_, &DevelopPanel::negativeEdited, this, &MainWindow::updateNegativeEdit);
     connect(developPanel_, &DevelopPanel::chooseLensRequested, this, &MainWindow::chooseLens);
     connect(developPanel_, &DevelopPanel::resetLensRequested, this, &MainWindow::resetLens);
 
@@ -781,6 +782,18 @@ void MainWindow::updateEdit(const DevelopState& state) {
             // The request that follows from this update, so that updates pair with results.
             timing->note("request=" + std::to_string(latestRequest_));
         }
+    });
+}
+
+void MainWindow::updateNegativeEdit(const NegativeSettings& negative) {
+    guarded([this, &negative] {
+        // No edit is open after a failure cancelled it: the rest of that drag is dropped.
+        if (!open_->session.editing()) {
+            return;
+        }
+        // The session records no match on a move; lensView() scales the profile it holds.
+        open_->session.updateNegative(negative);
+        refreshPanel();
     });
 }
 
@@ -1268,9 +1281,8 @@ void MainWindow::pasteSettings() {
                                      6000);
             return;
         }
-        // The target records its own lens when the paste turns a correction on (ADR 050, section
-        // 6); the one copied from is never carried.
-        applied.negative = withMatchRecorded(photo, applied.negative, lensDatabase_);
+        // The session records the target's own lens when the paste turns a correction on (ADR 050,
+        // section 6); the one copied from is never carried.
         const bool changed = applied.state != photo.state() || applied.negative != photo.negative();
         // Both parts in one step; refreshPanel() re-decodes when the negative changed.
         open_->session.setState(applied.negative, applied.state, EditOrigin::Paste);
@@ -1765,8 +1777,9 @@ void MainWindow::sidecarChangedOnDisk(const QString& primary) {
         const DecodeOptions decodedOptions = open_->decodedOptions;
         auto cameraPreview = std::move(open_->cameraPreview);
         auto lastCropImage = std::move(open_->lastCropImage);
-        open_.emplace(OpenPhoto{EditSession(std::move(photo)), std::move(decoded), decodedOptions,
-                                std::move(cameraPreview), std::move(lastCropImage)});
+        open_.emplace(OpenPhoto{EditSession(std::move(photo), lensDatabase_), std::move(decoded),
+                                decodedOptions, std::move(cameraPreview),
+                                std::move(lastCropImage)});
         refreshPanel(); // Re-decodes if the sidecar's negative is not the shown pixels'.
         statusLine_->showMessage(tr("Reloaded %1: its sidecar changed on disk.").arg(name), 5000);
     } catch (const std::exception& error) {
@@ -2212,8 +2225,8 @@ void MainWindow::showPhoto(Photo photo) {
     filmStrip_->releaseLiveThumbnail();
     const std::filesystem::path path = photo.path();
     const DecodeOptions decodeOptions = decodeOptionsFor(photo, false);
-    open_.emplace(OpenPhoto{EditSession(std::move(photo)), nullptr, decodeOptions, std::nullopt,
-                            std::nullopt});
+    open_.emplace(OpenPhoto{EditSession(std::move(photo), lensDatabase_), nullptr, decodeOptions,
+                            std::nullopt, std::nullopt});
     redecodeRequest_ = 0;
     failedOptions_.reset();
     renderProgress_->setPhotoOpen(true);
@@ -2327,9 +2340,9 @@ void MainWindow::chooseNegative(const NegativeSettings& negative) {
     guarded([this, &negative] {
         developPanel_->finishPendingEdit();
         photoView_->maskOverlay().abandonDrag();
-        // A correction turned on records the lens it was matched to in the same step.
-        open_->session.setNegative(
-            withMatchRecorded(open_->session.photo(), negative, lensDatabase_));
+        // A correction turned on records the lens it was matched to in the same step; the session
+        // does that.
+        open_->session.setNegative(negative);
         refreshPanel();
     });
 }
@@ -2339,6 +2352,8 @@ void MainWindow::lensDatabaseLoaded(const LensDatabase* database) {
     if (!open_) {
         return;
     }
+    // A photograph opened before the database loaded records at its next lens step.
+    open_->session.setLensDatabase(database);
     if (!editable() || !open_->session.photo().negative().lens.any()) {
         // Nothing shown depends on it but the lens rows (and a decode still to come asks for its
         // own render).
@@ -2353,18 +2368,34 @@ void MainWindow::lensDatabaseLoaded(const LensDatabase* database) {
 const LensView& MainWindow::lensView() {
     OpenPhoto& open = *open_;
     const Photo& photo = open.session.photo();
-    const LensSettings& settings = photo.negative().lens;
-    if (open.lensKey && open.lensKey->first == settings && open.lensKey->second == lensDatabase_) {
+    // The profile is resolved at 0 or 100, whatever the amount in between, so that a drag of the
+    // amount scales the held profile and never asks lensfun again.
+    const float amount = photo.negative().lens.vignettingAmount;
+    LensSettings key = photo.negative().lens;
+    key.vignettingAmount = amount > 0.0F ? profileVignettingAmount : minimumVignettingAmount;
+    const bool cached =
+        open.lensKey && open.lensKey->first == key && open.lensKey->second == lensDatabase_;
+    if (cached && open.lensAmount == amount) {
         return open.lensView;
     }
     const detail::TimingSpan timing("window.lens");
+    // Lets a test tell a drag that only rescales the held profile from a resolution by lensfun.
+    timing.note(cached ? "scaled" : "resolved");
     LensView resolved;
-    try {
-        resolved = resolveLensView(photo, lensDatabase_);
-    } catch (const std::exception& error) {
-        resolved.status.applicable = true;
-        resolved.status.text = tr("No profile: %1").arg(QString::fromUtf8(error.what()));
+    if (cached) {
+        resolved = open.lensView;
+    } else {
+        try {
+            NegativeSettings negative = photo.negative();
+            negative.lens = key;
+            resolved = resolveLensView(photo.with(std::move(negative)), lensDatabase_);
+        } catch (const std::exception& error) {
+            resolved.status.applicable = true;
+            resolved.status.text = tr("No profile: %1").arg(QString::fromUtf8(error.what()));
+        }
+        resolved.profile = resolved.correction;
     }
+    resolved.correction = withVignettingAmount(resolved.profile, amount);
     if (!(resolved.correction == open.lensView.correction)) {
         // What the crop mode drew, and renders on their way, were made with the other correction.
         open.lastCropImage.reset();
@@ -2372,7 +2403,8 @@ const LensView& MainWindow::lensView() {
         lastCropRender_.reset();
     }
     open.lensView = std::move(resolved);
-    open.lensKey.emplace(settings, lensDatabase_);
+    open.lensKey.emplace(key, lensDatabase_);
+    open.lensAmount = amount;
     return open.lensView;
 }
 
@@ -2410,7 +2442,10 @@ void MainWindow::resetLens() {
     }
     guarded([this] {
         developPanel_->finishPendingEdit();
-        chooseNegative(withLensReset(open_->session.photo(), lensDatabase_));
+        // Clearing the record lets the session match again if a correction is on.
+        NegativeSettings negative = open_->session.photo().negative();
+        negative.lens.lens.reset();
+        chooseNegative(negative);
     });
 }
 

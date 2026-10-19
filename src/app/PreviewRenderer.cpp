@@ -28,6 +28,16 @@ namespace arraw::app {
 
 namespace {
 
+/// @brief Checks whether two lens corrections place the picture's content alike.
+/// @details Vignetting changes brightness only, so it is left out of the comparison.
+[[nodiscard]] bool sameContent(LensCorrection a, LensCorrection b) {
+    for (LensCorrection* lens : {&a, &b}) {
+        lens->vignetting.clear();
+        lens->vignettingFrom.reset();
+    }
+    return a == b;
+}
+
 /// @brief Idle time after a region render before the fallback beneath it is refreshed.
 ///
 /// Long enough that the gaps of a slider drag do not start one, which would
@@ -866,9 +876,10 @@ void PreviewRenderer::run(std::stop_token stop) {
             if (source != backgroundSource ||
                 (backgroundState &&
                  (backgroundState->settings.geometry != job->state.settings.geometry ||
-                  backgroundLens != job->lens))) {
+                  !sameContent(backgroundLens, job->lens)))) {
                 // A lens correction moves the picture's content, so the fallback no longer
-                // lines up with it.
+                // lines up with it. Vignetting only changes brightness: the fallback stays,
+                // a little stale, until the refreshed one lands.
                 background.reset();
                 backgroundState.reset();
                 if (source != backgroundSource) {

@@ -99,7 +99,7 @@ void bindLens(nb::module_& m) {
         "Which lens corrections a photograph asks for (all off by default), and the lens recorded "
         "for them, None until one is first turned on. They apply to a RAW only.",
         field("distortion", &LensSettings::distortion),
-        field("vignetting", &LensSettings::vignetting),
+        field("vignetting_amount", &LensSettings::vignettingAmount),
         field("lateral_ca", &LensSettings::lateralCa), field("lens", &LensSettings::lens))
         .def_prop_ro("any", &LensSettings::any, "Whether any correction is asked for.");
 
@@ -296,21 +296,33 @@ void bindLensMethods(nb::module_& m) {
         "when no lens is found (the reason is logged on the 'arraw' logger).");
     photo.def(
         "with_lens_corrections",
-        [](const Photo& p, std::optional<bool> distortion, std::optional<bool> vignetting,
-           std::optional<bool> lateralCa) {
+        [](const Photo& p, std::optional<bool> distortion,
+           const nb::typed<nb::object, float>& vignettingAmount, std::optional<bool> lateralCa) {
+            // Checked for every kind of file, so a bad amount is refused on a PNG too.
+            std::optional<float> amount;
+            if (!vignettingAmount.is_none()) {
+                amount = convertValue<float>(vignettingAmount, "vignetting_amount");
+            }
             if (!carriesLens(p)) {
+                if (amount) {
+                    NegativeSettings probe;
+                    probe.lens.vignettingAmount = *amount;
+                    validate(probe); // the range, as a RAW is held to it
+                }
                 return p;
             }
             NegativeSettings negative = p.negative();
             negative.lens.distortion = distortion.value_or(negative.lens.distortion);
-            negative.lens.vignetting = vignetting.value_or(negative.lens.vignetting);
+            negative.lens.vignettingAmount = amount.value_or(negative.lens.vignettingAmount);
             negative.lens.lateralCa = lateralCa.value_or(negative.lens.lateralCa);
             return p.with(std::move(negative));
         },
-        nb::kw_only(), "distortion"_a = nb::none(), "vignetting"_a = nb::none(),
+        nb::kw_only(), "distortion"_a = nb::none(), "vignetting_amount"_a = nb::none(),
         "lateral_ca"_a = nb::none(),
-        "Return a photograph with the lens switches given set, as `--lens-corrections` sets "
-        "them; None keeps one as it is, and the recorded lens is untouched (see "
+        "Return a photograph with the lens corrections given set, as `--lens-corrections` sets "
+        "them; `vignetting_amount` is a number from 0 (off) to 150, 100 being the profile as it "
+        "is (a bool is refused, ValueError out of range). None keeps one as it is, and the "
+        "recorded lens is untouched (see "
         "record_lens_match). A photograph that is not a RAW is returned as it was.");
     photo.def(
         "with_chosen_lens",

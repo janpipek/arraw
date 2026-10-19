@@ -359,10 +359,8 @@ AppliedLook withLook(const Photo& photo, const Look& look, std::span<const CopyS
     }
     if (crosses(CopySection::Lens)) {
         validate(look.negative);
-        // The switches only: the lens recorded is per shot, and stays the target's own.
-        result.negative.lens.distortion = look.negative.lens.distortion;
-        result.negative.lens.vignetting = look.negative.lens.vignetting;
-        result.negative.lens.lateralCa = look.negative.lens.lateralCa;
+        // The corrections only: the lens recorded is per shot, and stays the target's own.
+        result.negative.lens = withCorrectionsOf(result.negative.lens, look.negative.lens);
     }
     return result;
 }

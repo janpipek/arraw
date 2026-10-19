@@ -322,7 +322,7 @@ TEST_CASE("A shot whose saved settings turn lens corrections on is developed wit
         const Photo photo = openPhoto(on);
         NegativeSettings negative = photo.negative();
         negative.lens.distortion = true;
-        negative.lens.vignetting = true;
+        negative.lens.vignettingAmount = profileVignettingAmount;
         negative.lens.lateralCa = true;
         writeSidecar(recordLensMatch(photo.with(negative), test::fixtureDatabase()));
     }

@@ -1,10 +1,12 @@
 #include "EditSession.h"
 
+#include <LensResolution.h>
 #include <LocalAdjustmentEdits.h>
 #include <Sidecar.h>
 
 #include <algorithm>
 #include <cstddef>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -17,7 +19,7 @@ void EditSession::begin() {
     if (editing()) {
         commit();
     }
-    baseline_ = photo_.state();
+    baseline_ = Baseline{photo_.state(), photo_.negative()};
 }
 
 void EditSession::update(DevelopState state) {
@@ -27,13 +29,25 @@ void EditSession::update(DevelopState state) {
     photo_ = photo_.with(std::move(state));
 }
 
-void EditSession::commit(EditOrigin origin, std::string detail) {
+void EditSession::updateNegative(NegativeSettings negative) {
     if (!editing()) {
-        throw std::logic_error("There is no open edit to commit");
+        throw std::logic_error("An edit must be begun before it is updated");
     }
-    DevelopState before = std::move(*baseline_);
+    photo_ = photo_.with(std::move(negative));
+}
+
+Photo EditSession::withLensRecorded(const LensSettings& before, const Photo& after) const {
+    if (lensDatabase_ == nullptr || before == after.negative().lens) {
+        return after;
+    }
+    return recordLensMatch(after, *lensDatabase_);
+}
+
+void EditSession::commitPhoto(Photo next, EditOrigin origin, std::string detail) {
+    Baseline before = std::move(*baseline_);
     baseline_.reset();
-    if (before != photo_.state()) {
+    photo_ = std::move(next);
+    if (before.state != photo_.state() || before.negative != photo_.negative()) {
         history_.erase(history_.begin() + static_cast<std::ptrdiff_t>(position_) + 1,
                        history_.end());
         history_.push_back({photo_.state(), origin, std::move(detail), photo_.negative()});
@@ -41,12 +55,21 @@ void EditSession::commit(EditOrigin origin, std::string detail) {
     }
 }
 
+void EditSession::commit(EditOrigin origin, std::string detail) {
+    if (!editing()) {
+        throw std::logic_error("There is no open edit to commit");
+    }
+    // Matched before anything changes, so a throw leaves the edit open.
+    Photo next = withLensRecorded(baseline_->negative.lens, photo_);
+    commitPhoto(std::move(next), origin, std::move(detail));
+}
+
 void EditSession::cancel() {
     if (!editing()) {
         throw std::logic_error("There is no open edit to cancel");
     }
     // The baseline was valid when it was taken, so this cannot throw on its contents.
-    photo_ = photo_.with(std::move(*baseline_));
+    photo_ = photo_.with(std::move(baseline_->negative)).with(std::move(baseline_->state));
     baseline_.reset();
 }
 
@@ -66,8 +89,24 @@ void EditSession::setState(NegativeSettings negative, DevelopState state, EditOr
                            std::string detail) {
     // Both are checked before anything changes, so an invalid one leaves no edit behind.
     Photo next = photo_.with(negative).with(std::move(state));
+    // Both records are made before anything changes, so a throw leaves the session as it was.
+    // The open edit's own record comes first: the new negative then keeps it when it turns every
+    // correction off.
+    std::optional<Photo> committed;
     if (editing()) {
-        commit();
+        committed = withLensRecorded(baseline_->negative.lens, photo_);
+    }
+    const Photo& current = committed ? *committed : photo_;
+    if (committed && !photo_.negative().lens.lens && committed->negative().lens.lens &&
+        !next.negative().lens.lens) {
+        // The caller built it before the commit recorded a lens, so it cannot know the record.
+        NegativeSettings negative = next.negative();
+        negative.lens.lens = committed->negative().lens.lens;
+        next = next.with(std::move(negative));
+    }
+    next = withLensRecorded(current.negative().lens, next);
+    if (committed) {
+        commitPhoto(std::move(*committed), EditOrigin::Edit, {});
     }
     if (next.state() == photo_.state() && next.negative() == photo_.negative()) {
         return;
@@ -78,13 +117,17 @@ void EditSession::setState(NegativeSettings negative, DevelopState state, EditOr
     ++position_;
 }
 
+bool EditSession::baselineIsCurrent() const noexcept {
+    return baseline_->state == photo_.state() && baseline_->negative == photo_.negative();
+}
+
 bool EditSession::canUndo() const noexcept {
-    return position_ > 0 || (editing() && *baseline_ != photo_.state());
+    return position_ > 0 || (editing() && !baselineIsCurrent());
 }
 
 bool EditSession::canRedo() const noexcept {
     // Redoing commits an open edit first, and one that changed something clears redo.
-    return position_ + 1 < history_.size() && (!editing() || *baseline_ == photo_.state());
+    return position_ + 1 < history_.size() && (!editing() || baselineIsCurrent());
 }
 
 void EditSession::goTo(std::size_t index) {
@@ -119,11 +162,13 @@ void EditSession::redo() {
 }
 
 void EditSession::save() {
+    // The photograph as the commit will leave it, matched before anything is written or changed.
+    Photo next = editing() ? withLensRecorded(baseline_->negative.lens, photo_) : photo_;
     // Written first, so a failure leaves even an open edit open.
-    writeSidecar(photo_);
-    saved_ = photo_;
+    writeSidecar(next);
+    saved_ = next;
     if (editing()) {
-        commit();
+        commitPhoto(std::move(next), EditOrigin::Edit, {});
     }
 }
 
@@ -245,7 +290,7 @@ ChangeDescription arraw::describeChange(const HistoryStep& before, const History
     if (was.lens.distortion != now.lens.distortion) {
         change.negative.push_back("lensDistortion");
     }
-    if (was.lens.vignetting != now.lens.vignetting) {
+    if (was.lens.vignettingAmount != now.lens.vignettingAmount) {
         change.negative.push_back("lensVignetting");
     }
     if (was.lens.lateralCa != now.lens.lateralCa) {

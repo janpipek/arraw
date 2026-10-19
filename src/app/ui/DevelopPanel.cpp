@@ -165,6 +165,9 @@ void DevelopPanel::finishOtherEdits(const QObject* keep) {
     if (masksPanel_ != nullptr && masksPanel_ != keep) {
         masksPanel_->finishPendingEdit();
     }
+    if (lensVignetting_ != nullptr && lensVignetting_ != keep) {
+        lensVignetting_->finishPendingEdit();
+    }
 }
 
 QWidget* DevelopPanel::buildMasksGroup() {
@@ -644,7 +647,7 @@ QWidget* DevelopPanel::buildNegativeGroup() {
             demosaicCombo_->findData(static_cast<int>(shownNegative_.demosaic)));
     });
 
-    // The lens corrections (ADR 050): three switches without sliders, and which lens they use.
+    // The lens corrections (ADR 050): two switches, a vignetting amount and which lens they use.
     auto* lensTitle = new QLabel(tr("Lens corrections"), group);
     lensTitle->setObjectName("lensTitle");
     groupLayout->addWidget(lensTitle);
@@ -670,10 +673,34 @@ QWidget* DevelopPanel::buildNegativeGroup() {
               tr("Straightens the lines the lens bends, from its profile. The picture is "
                  "enlarged a little to fill the frame."),
               &LensSettings::distortion);
-    addSwitch(lensVignetting_, "lensVignettingCheck", tr("Vignetting"),
-              tr("Lifts the corners the lens darkens, from its profile. It lifts noise "
-                 "there as well."),
-              &LensSettings::vignetting);
+    // The vignetting amount is a slider over the profile's stops, a drag being one history step
+    // (ADR 050, amendment of 2026-10-19). It reports negative settings on each move; the window
+    // keeps them in the open edit, which the session records the lens match at when it ends.
+    lensVignetting_ = new SettingSlider(
+        "lensVignetting", SettingRange{minimumVignettingAmount, maximumVignettingAmount},
+        minimumVignettingAmount,
+        SettingPresentation{
+            .label = tr("Vignetting"),
+            .unit = tr(" %"),
+            .decimals = 0,
+            .step = 1.0,
+            .toolTip = tr("Lifts the corners the lens darkens, by this share of the lens "
+                          "profile's correction: 100 % is the profile, more overcorrects. It "
+                          "lifts noise there as well.")},
+        group);
+    lensVignetting_->setObjectName("lensVignettingSlider");
+    groupLayout->addWidget(lensVignetting_);
+    connect(lensVignetting_, &SettingSlider::editStarted, this, [this] {
+        finishOtherEdits(lensVignetting_);
+        emit editStarted();
+    });
+    connect(lensVignetting_, &SettingSlider::valueEdited, this, [this](double value) {
+        NegativeSettings next = shownNegative_;
+        next.lens.vignettingAmount = static_cast<float>(value);
+        emit negativeEdited(next);
+    });
+    connect(lensVignetting_, &SettingSlider::editFinished, this, &DevelopPanel::editFinished);
+    connect(lensVignetting_, &SettingSlider::focusReleased, this, &DevelopPanel::focusReleased);
     addSwitch(lensCa_, "lensCaCheck", tr("Chromatic aberration"),
               tr("Realigns the red and blue fringes at the edges, from the lens's profile."),
               &LensSettings::lateralCa);
@@ -754,6 +781,7 @@ DevelopPanel::DevelopPanel(QWidget* parent) : QWidget(parent) {
     for (SettingSlider* row : rows_) {
         row->setLabelWidth(labelWidth);
     }
+    lensVignetting_->setLabelWidth(labelWidth);
     masksPanel_->setLabelWidth(labelWidth);
     showState(shown_, PanelContext{});
     watchViewport();
@@ -807,19 +835,20 @@ void DevelopPanel::showState(const DevelopState& state, const PanelContext& cont
         demosaicCombo_->setToolTip(note);
 
         const LensStatus& lens = context.lens;
-        // Until the database has loaded no switch can be set: a toggle never waits on it.
+        // Until the database has loaded no lens setting can be changed: a toggle never waits on it.
         const bool settable = lens.applicable && !lens.loading;
         const struct {
             QCheckBox* box;
             bool on;
         } switches[] = {{lensDistortion_, context.negative.lens.distortion},
-                        {lensVignetting_, context.negative.lens.vignetting},
                         {lensCa_, context.negative.lens.lateralCa}};
         for (const auto& [box, on] : switches) {
             const QSignalBlocker switchBlocker(box);
             box->setChecked(on);
             box->setEnabled(settable);
         }
+        lensVignetting_->setValue(context.negative.lens.vignettingAmount);
+        lensVignetting_->setEnabled(settable);
         lensStatus_->setText(lens.text);
         lensStatus_->setVisible(!lens.text.isEmpty());
         lensNote_->setText(lens.note);

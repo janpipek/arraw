@@ -492,7 +492,7 @@ std::string arraw::negativeToJson(const NegativeSettings& negative) {
         const LensSettings& lens = negative.lens;
         const auto flag = [](bool on) { return on ? "true" : "false"; };
         text += ", \"lens\": {\"distortion\": " + std::string(flag(lens.distortion)) +
-                ", \"vignetting\": " + flag(lens.vignetting) +
+                ", \"vignetting\": " + number(shortestDouble(lens.vignettingAmount)) +
                 ", \"lateralCa\": " + flag(lens.lateralCa);
         if (lens.lens) {
             text += ", \"recorded\": {\"maker\": " + jsonString(lens.lens->maker) +
@@ -576,10 +576,29 @@ void applyLensJson(const QJsonValue& value, LensSettings& lens, DiagnosticLog& l
     const QJsonObject object = value.toObject();
     for (auto it = object.begin(); it != object.end(); ++it) {
         const std::string key = it.key().toStdString();
-        bool* flag = key == "distortion"   ? &lens.distortion
-                     : key == "vignetting" ? &lens.vignetting
-                     : key == "lateralCa"  ? &lens.lateralCa
-                                           : nullptr;
+        if (key == "vignetting") {
+            if (it.value().isBool()) {
+                lens.vignettingAmount =
+                    it.value().toBool() ? profileVignettingAmount : minimumVignettingAmount;
+            } else if (it.value().isDouble() && std::isfinite(it.value().toDouble())) {
+                const double read = it.value().toDouble();
+                const double clamped = std::clamp(read, double(minimumVignettingAmount),
+                                                  double(maximumVignettingAmount));
+                lens.vignettingAmount = shortestFloat(clamped);
+                if (clamped != read) {
+                    log.record({.notice = Notice::SettingClamped,
+                                .severity = Severity::Warning,
+                                .values = {std::string("lens.vignetting"), read, clamped}});
+                }
+            } else {
+                reportMalformedList("lens.vignetting", "a number from 0 to 150, or true or false",
+                                    log);
+            }
+            continue;
+        }
+        bool* flag = key == "distortion"  ? &lens.distortion
+                     : key == "lateralCa" ? &lens.lateralCa
+                                          : nullptr;
         if (flag != nullptr) {
             if (it.value().isBool()) {
                 *flag = it.value().toBool();

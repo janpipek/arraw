@@ -131,10 +131,13 @@ inline constexpr auto xmpNamespaceOwners = std::to_array<XmpNamespaceOwner>({
 /// `arraw:demosaic` is the photograph's negative (ADR 049): one of
 /// ::arraw::demosaicTokens. An unknown token gives ::arraw::Notice::SettingMalformed and the
 /// default, AHD. The lens corrections are `arraw:lensDistortion`, `arraw:lensVignetting` and
-/// `arraw:lensLateralCa` (`True` or `False`; absent means off), and the lens they were found for
+/// `arraw:lensLateralCa`. The first and last are `True` or `False`; `lensVignetting` is an amount
+/// in percent of the profile, a number from 0 to 150 (a number outside is clamped with
+/// ::arraw::Notice::SettingClamped), and the legacy `True` and `False` read as 100 and 0. Absent
+/// means off. The lens they were found for
 /// is `arraw:lensMaker`, `arraw:lensModel`, `arraw:lensCropFactor`, `arraw:lensOrigin`
-/// (`matched` or `chosen`) and `arraw:lensDatabase` together (ADR 050, section 8). A switch that
-/// is neither gives ::arraw::Notice::SettingMalformed and off; a record with no model or no
+/// (`matched` or `chosen`) and `arraw:lensDatabase` together (ADR 050, section 8). A value that
+/// is none of these gives ::arraw::Notice::SettingMalformed and off; a record with no model or no
 /// positive crop factor gives it and no recorded lens; an unknown origin gives it and `matched`.
 ///
 /// Every `rdf:Description` is searched. The develop settings are the

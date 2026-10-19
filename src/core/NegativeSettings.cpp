@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstddef>
 #include <stdexcept>
+#include <string>
 
 using namespace arraw;
 
@@ -37,6 +38,14 @@ std::optional<LensOrigin> arraw::parseLensOrigin(std::string_view token) noexcep
 void arraw::validate(const NegativeSettings& settings) {
     if (static_cast<std::size_t>(settings.demosaic) >= demosaicCount) {
         throw std::invalid_argument("the demosaic is not one arraw knows");
+    }
+    const float amount = settings.lens.vignettingAmount;
+    if (!std::isfinite(amount) || amount < minimumVignettingAmount ||
+        amount > maximumVignettingAmount) {
+        throw std::invalid_argument("the vignetting amount must be from " +
+                                    std::to_string(static_cast<int>(minimumVignettingAmount)) +
+                                    " to " +
+                                    std::to_string(static_cast<int>(maximumVignettingAmount)));
     }
     if (const auto& lens = settings.lens.lens) {
         if (lens->model.empty()) {

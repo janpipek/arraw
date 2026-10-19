@@ -776,6 +776,41 @@ bool flagIn(const std::vector<QDomElement>& descriptions, std::string_view key, 
     return true;
 }
 
+/// @brief Reads the vignetting amount: a number from 0 to 150, or `True` or `False` as 100 or 0.
+///
+/// A number outside the range is clamped and reported with ::arraw::Notice::SettingClamped.
+/// Anything else is reported and read as 0: the file keeps it regardless, as a write touches the
+/// key only when the setting differs from what this reading gave.
+/// @return Whether the key is there.
+bool amountIn(const std::vector<QDomElement>& descriptions, std::string_view key, float& amount,
+              DiagnosticLog& log, const std::filesystem::path& subject) {
+    const auto found = occurrencesOf(descriptions, arrawProperty(key));
+    if (found.empty()) {
+        return false;
+    }
+    const QString text = found.back().text.trimmed();
+    const std::optional<double> value = found.back().simple ? numberIn(text) : std::nullopt;
+    if (found.back().simple && text.compare("True"_L1, Qt::CaseInsensitive) == 0) {
+        amount = profileVignettingAmount;
+    } else if (found.back().simple && text.compare("False"_L1, Qt::CaseInsensitive) == 0) {
+        amount = minimumVignettingAmount;
+    } else if (value && std::isfinite(*value)) {
+        const double clamped = std::clamp(*value, static_cast<double>(minimumVignettingAmount),
+                                          static_cast<double>(maximumVignettingAmount));
+        amount = shortestFloat(clamped);
+        if (clamped != *value) {
+            log.record({.notice = Notice::SettingClamped,
+                        .severity = Severity::Warning,
+                        .subject = subject,
+                        .values = {std::string(key), *value, clamped}});
+        }
+    } else {
+        amount = minimumVignettingAmount;
+        reportUnreadable(key, "a number from 0 to 150, or True or False", log, subject);
+    }
+    return true;
+}
+
 /// @brief Reads the recorded lens, which is the keys `lensMaker`, `lensModel`, `lensCropFactor`,
 /// `lensOrigin` and `lensDatabase` together.
 ///
@@ -859,7 +894,8 @@ std::optional<NegativeSettings> negativeIn(const std::vector<QDomElement>& descr
     recorded =
         flagIn(descriptions, "lensDistortion", negative.lens.distortion, log, subject) || recorded;
     recorded =
-        flagIn(descriptions, "lensVignetting", negative.lens.vignetting, log, subject) || recorded;
+        amountIn(descriptions, "lensVignetting", negative.lens.vignettingAmount, log, subject) ||
+        recorded;
     recorded =
         flagIn(descriptions, "lensLateralCa", negative.lens.lateralCa, log, subject) || recorded;
     const bool recordsLens = std::ranges::any_of(lensRecordKeys, [&](std::string_view key) {
@@ -1205,7 +1241,13 @@ void writeSidecarFor(const std::filesystem::path& photo, const DevelopState* sta
             }
         };
         setFlag("lensDistortion", negative->lens.distortion, read.lens.distortion);
-        setFlag("lensVignetting", negative->lens.vignetting, read.lens.vignetting);
+        if (negative->lens.vignettingAmount != read.lens.vignettingAmount) {
+            setProperty(descriptions, home, arrawProperty("lensVignetting"),
+                        negative->lens.vignettingAmount > 0.0F
+                            ? std::optional{QString::fromStdString(
+                                  shortestText(shortestDouble(negative->lens.vignettingAmount)))}
+                            : std::nullopt);
+        }
         setFlag("lensLateralCa", negative->lens.lateralCa, read.lens.lateralCa);
         if (negative->lens.lens != read.lens.lens) {
             const auto& lens = negative->lens.lens;

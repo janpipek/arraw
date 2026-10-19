@@ -1,5 +1,6 @@
 """Lens corrections (ADR 050): settings, database, matching, resolution, render and history."""
 
+import gc
 import logging
 import shutil
 import subprocess
@@ -32,7 +33,7 @@ def recorded(origin=arraw.LensOrigin.MATCHED):
 def test_corrections_are_off_by_default_and_nothing_is_recorded(lens_dng):
     assert arraw.NegativeSettings().lens == arraw.LensSettings()
     settings = arraw.LensSettings()
-    assert (settings.distortion, settings.vignetting, settings.lateral_ca) == (False,) * 3
+    assert (settings.distortion, settings.vignetting_amount, settings.lateral_ca) == (False, 0, False)
     assert settings.lens is None
     assert not settings.any
     photo = arraw.open(lens_dng, sidecar=False)
@@ -60,11 +61,67 @@ def test_lens_settings_are_frozen_values():
 
 def test_the_lens_is_part_of_the_negative(lens_dng):
     photo = arraw.open(lens_dng, sidecar=False)
-    negative = arraw.NegativeSettings(lens=arraw.LensSettings(vignetting=True))
+    negative = arraw.NegativeSettings(lens=arraw.LensSettings(vignetting_amount=100))
     assert negative.demosaic == arraw.Demosaic.AHD
-    assert photo.with_(negative=negative).lens.vignetting
+    assert photo.with_(negative=negative).lens.vignetting_amount == 100
     assert negative != arraw.NegativeSettings()
     assert hash(negative) != hash(arraw.NegativeSettings())
+
+
+def test_the_vignetting_amount_is_a_number_from_0_to_150(lens_dng):
+    photo = arraw.open(lens_dng, sidecar=False)
+    assert arraw.LensSettings(vignetting_amount=60).vignetting_amount == 60
+    assert photo.with_lens_corrections(vignetting_amount=37.5).lens.vignetting_amount == 37.5
+    assert photo.with_lens_corrections(vignetting_amount=150).lens.vignetting_amount == 150
+    # A bool is refused as for every number, and the old keyword is gone.
+    with pytest.raises(TypeError):
+        arraw.LensSettings(vignetting_amount=True)
+    with pytest.raises(TypeError):
+        photo.with_lens_corrections(vignetting_amount=True)
+    with pytest.raises(TypeError):
+        photo.with_lens_corrections(vignetting=True)
+    with pytest.raises(TypeError):
+        arraw.LensSettings(vignetting=True)
+    for bad in (200, -1, float("nan")):
+        with pytest.raises(ValueError):
+            photo.with_lens_corrections(vignetting_amount=bad)
+    # None keeps the amount.
+    kept = photo.with_lens_corrections(vignetting_amount=60).with_lens_corrections(distortion=True)
+    assert kept.lens.vignetting_amount == 60
+
+
+def test_the_session_refuses_a_bool_or_a_bad_amount(lens_dng, lens_database):
+    session = arraw.EditSession(arraw.open(lens_dng, sidecar=False), lens_database)
+    with pytest.raises(TypeError):
+        session.set_lens_corrections(vignetting_amount=True)
+    with pytest.raises(ValueError):
+        session.set_lens_corrections(vignetting_amount=200)
+    session.set_lens_corrections(vignetting_amount=60)
+    assert session.photo.lens.vignetting_amount == 60
+    assert session.photo.lens.lens is not None
+
+
+def test_a_dragged_amount_is_one_step(lens_dng):
+    session = arraw.EditSession(arraw.open(lens_dng, sidecar=False))
+    steps = len(session.history)
+    negative = session.photo.negative
+    session.begin()
+    for amount in (30, 60):
+        session.update_negative(
+            negative.replace(lens=arraw.LensSettings(vignetting_amount=amount))
+        )
+    assert session.photo.lens.vignetting_amount == 60
+    with pytest.raises(ValueError):
+        session.update_negative(
+            negative.replace(lens=arraw.LensSettings(vignetting_amount=200))
+        )
+    assert session.photo.lens.vignetting_amount == 60
+    session.commit()
+    assert len(session.history) == steps + 1
+    session.undo()
+    assert session.photo.lens.vignetting_amount == 0
+    with pytest.raises(RuntimeError):
+        session.update_negative(negative)
 
 
 def test_a_recorded_lens_must_name_a_lens(lens_dng):
@@ -77,12 +134,32 @@ def test_a_recorded_lens_must_name_a_lens(lens_dng):
 def test_switches_set_on_a_raw_and_skipped_on_a_png(lens_dng, png):
     raw = arraw.open(lens_dng, sidecar=False)
     on = raw.with_lens_corrections(distortion=True, lateral_ca=True)
-    assert (on.lens.distortion, on.lens.vignetting, on.lens.lateral_ca) == (True, False, True)
+    assert (on.lens.distortion, on.lens.vignetting_amount, on.lens.lateral_ca) == (True, 0, True)
     # None keeps a switch.
-    assert on.with_lens_corrections(vignetting=True).lens.distortion
+    assert on.with_lens_corrections(vignetting_amount=100).lens.distortion
     assert not on.with_lens_corrections(distortion=False).lens.distortion
     card = arraw.open(png, sidecar=False)
     assert card.with_lens_corrections(distortion=True) == card
+
+
+def test_a_png_refuses_a_bad_vignetting_amount_as_a_raw_does(png):
+    card = arraw.open(png, sidecar=False)
+    assert card.with_lens_corrections(vignetting_amount=60) == card
+    with pytest.raises(TypeError):
+        card.with_lens_corrections(vignetting_amount=True)
+    with pytest.raises(TypeError):
+        card.with_lens_corrections(vignetting_amount="x")
+    for bad in (200, -1, float("nan")):
+        with pytest.raises(ValueError):
+            card.with_lens_corrections(vignetting_amount=bad)
+
+
+def test_the_vignetting_amount_scales_the_gain_in_stops(lens_dng, lens_database):
+    photo = arraw.open(lens_dng, sidecar=False)
+    full = photo.with_lens_corrections(vignetting_amount=100).lens_correction(lens_database)
+    half = photo.with_lens_corrections(vignetting_amount=50).lens_correction(lens_database)
+    assert len(full.vignetting) > 1 and len(half.vignetting) == len(full.vignetting)
+    assert np.allclose(half.vignetting, np.sqrt(full.vignetting), rtol=1e-6)
 
 
 def test_the_stage_and_the_metadata_facts(lens_dng, png):
@@ -164,7 +241,7 @@ def test_a_correction_is_recorded_once_and_kept_when_switched_off(lens_dng, lens
     assert lens.crop_factor == pytest.approx(1.6)
     assert lens.origin == arraw.LensOrigin.MATCHED
     assert lens.database == lens_database.stamp
-    assert done.lens.distortion and not done.lens.vignetting
+    assert done.lens.distortion and done.lens.vignetting_amount == 0
     # Once: again changes nothing; off keeps it.
     assert arraw.record_lens_match(done, lens_database) == done
     assert done.with_lens_corrections(distortion=False).lens.lens == lens
@@ -185,7 +262,7 @@ def test_a_chosen_lens_is_recorded_as_chosen(lens_dng, lens_database):
 
 def test_the_correction_resolves_its_tables_and_provenance(lens_dng, lens_database):
     photo = arraw.open(lens_dng, sidecar=False).with_lens_corrections(
-        distortion=True, vignetting=True, lateral_ca=True
+        distortion=True, vignetting_amount=100, lateral_ca=True
     )
     lens = photo.lens_correction(lens_database)
     assert lens.active
@@ -200,7 +277,7 @@ def test_the_correction_resolves_its_tables_and_provenance(lens_dng, lens_databa
 
 def test_each_correction_alone_resolves_only_its_table(lens_dng, lens_database):
     photo = arraw.open(lens_dng, sidecar=False)
-    only = photo.with_lens_corrections(vignetting=True).lens_correction(lens_database)
+    only = photo.with_lens_corrections(vignetting_amount=100).lens_correction(lens_database)
     assert only.vignetting and not only.distortion and not only.red_scale
     assert only.vignetting_from is not None and only.distortion_from is None
 
@@ -208,7 +285,7 @@ def test_each_correction_alone_resolves_only_its_table(lens_dng, lens_database):
 def test_develop_applies_the_photographs_corrections(lens_dng, lens_database):
     photo = arraw.open(lens_dng, sidecar=False)
     plain = arraw.develop(photo, lens_database=lens_database)
-    corrected = photo.with_lens_corrections(distortion=True, vignetting=True, lateral_ca=True)
+    corrected = photo.with_lens_corrections(distortion=True, vignetting_amount=100, lateral_ca=True)
     result = arraw.develop(corrected, lens_database=lens_database)
     # The silent wrong pixels of a correction nobody applied: the picture is another.
     assert not np.array_equal(result.pixels, plain.pixels)
@@ -261,7 +338,7 @@ def test_a_missing_lens_is_skipped_with_a_notice(lens_dng, lens_database, caplog
 
 
 def test_a_photograph_that_names_no_lens_says_so(dng, lens_database, caplog):
-    photo = arraw.open(dng, sidecar=False).with_lens_corrections(distortion=True, vignetting=True)
+    photo = arraw.open(dng, sidecar=False).with_lens_corrections(distortion=True, vignetting_amount=100)
     with caplog.at_level(logging.INFO, logger="arraw"):
         lens = photo.lens_correction(lens_database)
     assert not lens.active
@@ -279,8 +356,8 @@ def test_a_png_ignores_the_switches(png, lens_database, caplog):
 
 
 def test_the_toggle_and_the_record_are_one_step_and_undo_together(lens_dng, lens_database):
-    session = arraw.EditSession(arraw.open(lens_dng, sidecar=False))
-    session.set_lens_corrections(distortion=True, database=lens_database)
+    session = arraw.EditSession(arraw.open(lens_dng, sidecar=False), lens_database=lens_database)
+    session.set_lens_corrections(distortion=True)
     assert len(session.history) == 2
     assert session.photo.lens.distortion and session.photo.lens.lens is not None
     assert session.history[-1].lens == session.photo.lens
@@ -289,7 +366,7 @@ def test_the_toggle_and_the_record_are_one_step_and_undo_together(lens_dng, lens
     assert change.lens == ["lensDistortion", "lens"]
 
     # Switching off is its own step and keeps the record.
-    session.set_lens_corrections(distortion=False, database=lens_database)
+    session.set_lens_corrections(distortion=False)
     assert len(session.history) == 3
     assert session.photo.lens.lens is not None
     assert arraw.describe_change(session.history[1], session.history[2]).lens == ["lensDistortion"]
@@ -304,22 +381,22 @@ def test_the_toggle_and_the_record_are_one_step_and_undo_together(lens_dng, lens
 
 
 def test_choosing_and_resetting_the_lens(lens_dng, lens_database):
-    session = arraw.EditSession(arraw.open(lens_dng, sidecar=False))
-    session.set_lens_corrections(vignetting=True, database=lens_database)
+    session = arraw.EditSession(arraw.open(lens_dng, sidecar=False), lens_database=lens_database)
+    session.set_lens_corrections(vignetting_amount=100)
     session.choose_lens("Canon", "Canon EF 50mm f/1.8 STM", lens_database)
     assert session.photo.lens.lens.origin == arraw.LensOrigin.CHOSEN
-    assert session.photo.lens.vignetting
+    assert session.photo.lens.vignetting_amount == 100
     with pytest.raises(ValueError):
         session.choose_lens("Canon", "Nothing like it", lens_database)
-    session.reset_lens(lens_database)
+    session.reset_lens()
     assert session.photo.lens.lens.model == KIT[1]
     assert session.photo.lens.lens.origin == arraw.LensOrigin.MATCHED
     assert not session.can_undo or session.history[-1].lens == session.photo.lens
 
 
 def test_the_lens_survives_the_sidecar(raw, lens_database):
-    session = arraw.EditSession(arraw.open(raw))
-    session.set_lens_corrections(distortion=True, lateral_ca=True, database=lens_database)
+    session = arraw.EditSession(arraw.open(raw), lens_database=lens_database)
+    session.set_lens_corrections(distortion=True, lateral_ca=True)
     session.save()
     reopened = arraw.open(raw)
     assert reopened.lens == session.photo.lens
@@ -344,9 +421,9 @@ def export_with_cli(cli, source, outdir, *flags):
 @pytest.mark.parametrize(
     "flag, switches",
     [
-        ("all", {"distortion": True, "vignetting": True, "lateral_ca": True}),
+        ("all", {"distortion": True, "vignetting_amount": 100, "lateral_ca": True}),
         ("distortion", {"distortion": True}),
-        ("vignetting,ca", {"vignetting": True, "lateral_ca": True}),
+        ("vignetting,ca", {"vignetting_amount": 100, "lateral_ca": True}),
         ("none", {}),
     ],
 )
@@ -376,3 +453,60 @@ def test_python_matches_cli_export_with_a_chosen_lens(
         "--lens", "Canon|Canon EF 50mm f/1.8 STM", "--lens-database", str(lens_database_dir),
     )
     assert np.array_equal(arraw.load(py_out).pixels.astype(np.int64), got)
+
+
+# ---- the session records the match ----------------------------------------------------------
+
+
+def test_the_session_holds_the_database_it_was_given(lens_dng, lens_database):
+    session = arraw.EditSession(arraw.open(lens_dng, sidecar=False), lens_database=lens_database)
+    assert session.lens_database is lens_database
+    with pytest.raises(AttributeError):
+        session.lens_database = None
+
+
+def test_the_database_outlives_its_last_reference(lens_dng, lens_database_dir):
+    session = arraw.EditSession(
+        arraw.open(lens_dng, sidecar=False),
+        lens_database=arraw.LensDatabase.from_directory(lens_database_dir),
+    )
+    gc.collect()
+    session.set_lens_corrections(distortion=True)
+    assert session.photo.lens.lens.model == KIT[1]
+    assert session.lens_database.loaded
+
+
+def test_a_session_of_a_png_has_no_database(png):
+    assert arraw.EditSession(arraw.open(png, sidecar=False)).lens_database is None
+
+
+def test_a_raw_session_defaults_to_the_process_database(lens_dng):
+    session = arraw.EditSession(arraw.open(lens_dng, sidecar=False))
+    assert session.lens_database is not None
+
+
+def test_set_negative_records_the_match_in_its_step(lens_dng, lens_database):
+    session = arraw.EditSession(arraw.open(lens_dng, sidecar=False), lens_database=lens_database)
+    negative = session.photo.negative
+    session.set_negative(negative.replace(lens=arraw.LensSettings(lateral_ca=True)))
+    assert len(session.history) == 2
+    assert session.photo.lens.lens.model == KIT[1]
+    session.undo()
+    assert session.photo.lens.lens is None
+
+
+def test_a_dragged_amount_records_the_match_at_the_commit(lens_dng, lens_database):
+    session = arraw.EditSession(arraw.open(lens_dng, sidecar=False), lens_database=lens_database)
+    negative = session.photo.negative
+    session.begin()
+    session.update_negative(negative.replace(lens=arraw.LensSettings(vignetting_amount=60)))
+    assert session.photo.lens.lens is None  # a move never matches
+    session.commit()
+    assert len(session.history) == 2
+    assert session.photo.lens.lens.model == KIT[1]
+
+
+def test_a_chosen_lens_defaults_to_the_sessions_database(lens_dng, lens_database):
+    session = arraw.EditSession(arraw.open(lens_dng, sidecar=False), lens_database=lens_database)
+    session.choose_lens("Canon", "Canon EF 50mm f/1.8 STM")
+    assert session.photo.lens.lens.origin == arraw.LensOrigin.CHOSEN

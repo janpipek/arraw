@@ -122,13 +122,13 @@ class LensSettings:
     Which lens corrections a photograph asks for (all off by default), and the lens recorded for them, None until one is first turned on. They apply to a RAW only.
     """
 
-    def __init__(self, *, distortion: bool = False, vignetting: bool = False, lateral_ca: bool = False, lens: RecordedLens | None = None) -> None: ...
+    def __init__(self, *, distortion: bool = False, vignetting_amount: float | None = 0.0, lateral_ca: bool = False, lens: RecordedLens | None = None) -> None: ...
 
     @property
     def distortion(self) -> bool: ...
 
     @property
-    def vignetting(self) -> bool: ...
+    def vignetting_amount(self) -> float: ...
 
     @property
     def lateral_ca(self) -> bool: ...
@@ -1986,9 +1986,9 @@ class Photo:
         Find the lens the photograph's corrections are for, whether or not any is on: the recorded lens, else the match of the file's EXIF. None for a file that is not a RAW or when no lens is found (the reason is logged on the 'arraw' logger).
         """
 
-    def with_lens_corrections(self, *, distortion: bool | None = None, vignetting: bool | None = None, lateral_ca: bool | None = None) -> Photo:
+    def with_lens_corrections(self, *, distortion: bool | None = None, vignetting_amount: float | None = None, lateral_ca: bool | None = None) -> Photo:
         """
-        Return a photograph with the lens switches given set, as `--lens-corrections` sets them; None keeps one as it is, and the recorded lens is untouched (see record_lens_match). A photograph that is not a RAW is returned as it was.
+        Return a photograph with the lens corrections given set, as `--lens-corrections` sets them; `vignetting_amount` is a number from 0 (off) to 150, 100 being the profile as it is (a bool is refused, ValueError out of range). None keeps one as it is, and the recorded lens is untouched (see record_lens_match). A photograph that is not a RAW is returned as it was.
         """
 
     def with_chosen_lens(self, maker: str, model: str, database: LensDatabase | None = None) -> Photo:
@@ -2328,7 +2328,14 @@ class EditSession:
     One photograph being edited: the document as it stands, and how it got there.
     """
 
-    def __init__(self, photo: Photo) -> None: ...
+    def __init__(self, photo: Photo, lens_database: LensDatabase | None = None) -> None:
+        """
+        Start editing `photo`. `lens_database` is the database the session records lens matches in (None: the process's, loaded on first use, for a RAW only; other files have none). It is kept alive as long as the session.
+        """
+
+    @property
+    def lens_database(self) -> LensDatabase | None:
+        """The lens database the session records matches in, or None (not a RAW)."""
 
     @property
     def photo(self) -> Photo:
@@ -2362,19 +2369,24 @@ class EditSession:
         Replace the negative settings as one history step; equal ones leave none. An open edit is committed first.
         """
 
-    def set_lens_corrections(self, *, distortion: bool | None = None, vignetting: bool | None = None, lateral_ca: bool | None = None, database: LensDatabase | None = None, origin: EditOrigin = EditOrigin.EDIT, detail: str = '') -> None:
+    def update_negative(self, negative: NegativeSettings) -> None:
         """
-        Set the lens switches given (None keeps one) as one history step. A correction turned on for a photograph with no recorded lens records the lens matched from its EXIF in the same step, in `database` (default: the process's), so undo takes both away; switching off keeps the record. Equal settings leave no step.
+        Change the negative settings provisionally, inside the open edit, so that a drag of a lens amount is one history step on commit. RuntimeError when no edit is open and ValueError when the settings are invalid, with nothing changed.
+        """
+
+    def set_lens_corrections(self, *, distortion: bool | None = None, vignetting_amount: float | None = None, lateral_ca: bool | None = None, origin: EditOrigin = EditOrigin.EDIT, detail: str = '') -> None:
+        """
+        Set the lens corrections given (None keeps one) as one history step; `vignetting_amount` is a number from 0 to 150 (100 is the profile; a bool is refused). A correction turned on for a photograph with no recorded lens records the lens matched from its EXIF in the same step, in the session's `lens_database`, so undo takes both away; switching off keeps the record. Equal settings leave no step.
         """
 
     def choose_lens(self, maker: str, model: str, database: LensDatabase | None = None, origin: EditOrigin = EditOrigin.EDIT, detail: str = '') -> None:
         """
-        Record the lens the photographer chose, as one history step; ValueError when the database does not list it. The switches stay as they are.
+        Record the lens the photographer chose, as one history step; ValueError when the database (default: the session's, else the process's) does not list it. The switches stay as they are.
         """
 
-    def reset_lens(self, database: LensDatabase | None = None, origin: EditOrigin = EditOrigin.EDIT, detail: str = '') -> None:
+    def reset_lens(self, origin: EditOrigin = EditOrigin.EDIT, detail: str = '') -> None:
         """
-        Forget the recorded lens, as one history step, and match the file's EXIF again when a correction is on ("reset to automatic").
+        Forget the recorded lens, as one history step; the session matches the file's EXIF again when a correction is on ("reset to automatic").
         """
 
     @property

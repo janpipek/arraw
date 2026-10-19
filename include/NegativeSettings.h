@@ -63,9 +63,10 @@ inline constexpr std::array<std::string_view, lensOriginCount> lensOriginTokens 
 
 /// @brief The lens a photograph's corrections were found for, by name only (ADR 050, section 1).
 ///
-/// Recorded when a correction is first turned on, so that a lens database update cannot move an
-/// edit to another lens. Only the identity is kept: the calibration stays the database's, and a
-/// revised one shows as a notice, not as a stored number.
+/// Recorded when a correction is first turned on (a switch on, or the vignetting amount leaving 0),
+/// so that a lens database update cannot move an edit to another lens. Only the identity is kept:
+/// the calibration stays the database's, and a revised one shows as a notice, not as a stored
+/// number.
 struct RecordedLens {
     /// @brief Maker of the lens, exactly as lensfun spells it.
     std::string maker;
@@ -85,31 +86,54 @@ struct RecordedLens {
     friend bool operator==(const RecordedLens&, const RecordedLens&) = default;
 };
 
+/// @brief Vignetting amount that corrects nothing.
+inline constexpr float minimumVignettingAmount = 0.0F;
+
+/// @brief Vignetting amount that applies the lens profile as it is.
+inline constexpr float profileVignettingAmount = 100.0F;
+
+/// @brief Largest vignetting amount.
+inline constexpr float maximumVignettingAmount = 150.0F;
+
 /// @brief Which lens corrections a photograph asks for, and the lens they were found for.
 ///
-/// All off by default, for new photographs too (ADR 050). They apply to a RAW only.
+/// All off by default, for new photographs too (ADR 050). They apply to a RAW only. Distortion and
+/// lateral CA are switches; vignetting is an amount, since a profile can be too strong for a body.
 struct LensSettings {
     /// @brief Whether to take geometric distortion out.
     bool distortion = false;
 
-    /// @brief Whether to lift the light falloff towards the corners.
-    bool vignetting = false;
+    /// @brief Share of the profile's vignetting stops to lift, in percent: 0 is off, 100 the
+    /// profile.
+    float vignettingAmount = 0.0F;
 
     /// @brief Whether to realign the colour fringes at the edges.
     bool lateralCa = false;
 
     /// @brief The lens recorded for these corrections, absent until one is first turned on.
     ///
-    /// Switching the corrections off keeps it.
+    /// Taking the corrections off keeps it.
     std::optional<RecordedLens> lens;
 
     /// @brief Checks whether any correction is asked for.
     [[nodiscard]] constexpr bool any() const noexcept {
-        return distortion || vignetting || lateralCa;
+        return distortion || vignettingAmount > 0.0F || lateralCa;
     }
 
     friend bool operator==(const LensSettings&, const LensSettings&) = default;
 };
+
+/// @brief Gives lens settings with the corrections of another and their own recorded lens.
+/// @param settings Settings whose recorded lens is kept.
+/// @param from Settings whose corrections (the switches and the vignetting amount) are taken.
+/// @return The settings with the corrections of `from`.
+[[nodiscard]] constexpr LensSettings withCorrectionsOf(LensSettings settings,
+                                                       const LensSettings& from) noexcept {
+    settings.distortion = from.distortion;
+    settings.vignettingAmount = from.vignettingAmount;
+    settings.lateralCa = from.lateralCa;
+    return settings;
+}
 
 /// @brief What shapes the decoded negative, as opposed to what is done with it (ADR 049).
 ///
@@ -134,7 +158,9 @@ struct NegativeSettings {
 /// @brief Checks negative settings.
 /// @param settings Settings to check.
 /// @throws std::invalid_argument if the demosaic is not an enumerator, or a recorded lens has no
-/// model, a crop factor that is not finite and positive, or an origin that is not an enumerator.
+/// model, a crop factor that is not finite and positive, or an origin that is not an enumerator, or
+/// if the vignetting amount is not finite or lies outside the range from
+/// ::arraw::minimumVignettingAmount to ::arraw::maximumVignettingAmount.
 void validate(const NegativeSettings& settings);
 
 /// @brief Gives the negative settings a photograph of some kind starts from.

@@ -21,9 +21,9 @@ namespace arraw {
 
 /// @brief Gives the corrections the settings ask for, as the profile sampling takes them.
 /// @param settings Lens settings.
-/// @return Which of the three switches are on.
+/// @return Which corrections are asked for (a vignetting amount above 0 asks for vignetting).
 [[nodiscard]] constexpr LensKinds kindsOf(const LensSettings& settings) noexcept {
-    return {settings.distortion, settings.vignetting, settings.lateralCa};
+    return {settings.distortion, settings.vignettingAmount > 0.0F, settings.lateralCa};
 }
 
 /// @brief Gives the notice that tells a photographer of a lens problem.
@@ -38,8 +38,9 @@ namespace arraw {
 /// informational ::arraw::Notice::LensDatabaseChanged); else the match of the facts
 /// (::arraw::matchLens), with ::arraw::Notice::CameraNotInDatabase when the camera is not listed.
 /// A build without lensfun and a database that did not load are told too. Nothing is sampled, and
-/// the switches are not looked at, so this serves a display of the lens as well as a render.
-/// @param settings Switches and the recorded lens, if any.
+/// which corrections are on is not looked at, so this serves a display of the lens as well as a
+/// render.
+/// @param settings Corrections and the recorded lens, if any.
 /// @param facts What the photograph says about its camera and lens.
 /// @param database Database to look in.
 /// @param log Where the notices go.
@@ -52,23 +53,25 @@ resolveLensMatch(const LensSettings& settings, const LensFacts& facts, const Len
 
 /// @brief Resolves lens settings into the correction a render applies, or says why it cannot.
 ///
-/// With no switch on, nothing is looked at and the result is empty. A recorded lens is looked up
-/// by its exact lensfun name and used with its recorded crop factor; no fuzzy matching runs, so a
-/// database update cannot move an edit to another lens. If the recorded lens is no longer in the
+/// With no correction on, nothing is looked at and the result is empty. A recorded lens is looked
+/// up by its exact lensfun name and used with its recorded crop factor; no fuzzy matching runs, so
+/// a database update cannot move an edit to another lens. If the recorded lens is no longer in the
 /// database the corrections are skipped with ::arraw::Notice::LensProfileMissing, never matched
 /// again; a database of another stamp gives the informational
 /// ::arraw::Notice::LensDatabaseChanged and goes on. With no recorded lens the facts are matched
 /// (::arraw::matchLens). When a correction cannot be resolved the render goes on without it, and
 /// one notice names the reason (the notices of ::arraw::LensProblem, plus
 /// ::arraw::Notice::LensNotCalibrated when the lens is found but has no calibration for a
-/// correction that is on, in which case the others are still applied).
-/// @param settings Switches and the recorded lens, if any.
+/// correction that is on, in which case the others are still applied). The vignetting gain is
+/// scaled by the settings' amount (::arraw::withVignettingAmount), so an amount of 100 is the
+/// profile as it is.
+/// @param settings Corrections and the recorded lens, if any.
 /// @param facts What the photograph says about its camera and lens.
 /// @param database Database to look in.
 /// @param size Size of the photograph, which fixes the aspect the tables are sampled at.
 /// @param log Where the notices go.
 /// @param subject Photograph the notices are about, or none.
-/// @return The correction, its fill scale set; empty when no switch is on or nothing resolved.
+/// @return The correction, its fill scale set; empty when no correction is on or nothing resolved.
 [[nodiscard]] LensCorrection
 resolveLens(const LensSettings& settings, const LensFacts& facts, const LensDatabase& database,
             ImageSize size, DiagnosticLog& log = discardedDiagnostics(),
@@ -114,7 +117,7 @@ resolveLens(const LensSettings& settings, const LensFacts& facts, const LensData
 ///
 /// The lens is looked up by its exact name. Its crop factor is the camera's when the camera is in
 /// the database, else the 35 mm focal length over the focal length, else the lens's own; the
-/// origin is ::arraw::LensOrigin::Chosen and the stamp the database's. The switches stay as they
+/// origin is ::arraw::LensOrigin::Chosen and the stamp the database's. The corrections stay as they
 /// are, and no focal range or aperture filter applies: the choice is the photographer's.
 /// @param photo Document to record for; a RAW.
 /// @param lens Lens to record, as lensfun names it.

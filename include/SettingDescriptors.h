@@ -74,7 +74,7 @@ enum class CopySection {
     RotateAndFlip,  ///< Quarter-turn rotation, flips and straightening.
     Crop,           ///< Crop rectangle and aspect.
     Demosaic,       ///< The demosaic of the negative (ADR 049); no row of the table, a RAW only.
-    Lens, ///< The lens correction switches (ADR 050); never the recorded lens. No row, a RAW only.
+    Lens, ///< The lens corrections (ADR 050); never the recorded lens. No row, a RAW only.
 };
 
 /// @brief Stable names of the copy sections, in enumeration order, as documents and the

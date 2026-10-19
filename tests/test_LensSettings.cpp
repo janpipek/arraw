@@ -18,12 +18,18 @@
 #include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <algorithm>
+#include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <optional>
 #include <sstream>
+#include <stdexcept>
 #include <string>
+#include <tuple>
+#include <utility>
+#include <variant>
 #include <vector>
 
 using namespace arraw;
@@ -41,7 +47,7 @@ Photo withSwitches(const Photo& photo, bool distortion, bool vignetting = false,
                    bool lateralCa = false) {
     NegativeSettings negative = photo.negative();
     negative.lens.distortion = distortion;
-    negative.lens.vignetting = vignetting;
+    negative.lens.vignettingAmount = vignetting ? profileVignettingAmount : minimumVignettingAmount;
     negative.lens.lateralCa = lateralCa;
     return photo.with(negative);
 }
@@ -98,7 +104,7 @@ TEST_CASE("Every lens origin round-trips through its token", "[lens][negative]")
 TEST_CASE("Corrections are off for every photograph, and nothing is recorded", "[lens][negative]") {
     const LensSettings settings;
     CHECK_FALSE(settings.distortion);
-    CHECK_FALSE(settings.vignetting);
+    CHECK(settings.vignettingAmount == 0.0F);
     CHECK_FALSE(settings.lateralCa);
     CHECK_FALSE(settings.lens.has_value());
     CHECK_FALSE(settings.any());
@@ -140,8 +146,10 @@ TEST_CASE("A lens edit never changes what is decoded, and a develop edit never c
         const DecodeOptions before = decodeOptionsFor(photo, halfSize);
 
         NegativeSettings negative = photo.negative();
-        negative.lens = {
-            .distortion = true, .vignetting = true, .lateralCa = true, .lens = kitLens()};
+        negative.lens = {.distortion = true,
+                         .vignettingAmount = profileVignettingAmount,
+                         .lateralCa = true,
+                         .lens = kitLens()};
         const Photo corrected = photo.with(negative);
         CHECK(decodeOptionsFor(corrected, halfSize) == before);
 
@@ -165,10 +173,13 @@ TEST_CASE("The lens round-trips through the JSON object", "[lens][negative][json
     // Nothing on and nothing recorded is the text it was before lenses existed.
     REQUIRE(negativeToJson(negative) == R"({"demosaic": "dcb"})");
 
-    negative.lens = {.distortion = true, .vignetting = false, .lateralCa = true, .lens = kitLens()};
+    negative.lens = {.distortion = true,
+                     .vignettingAmount = minimumVignettingAmount,
+                     .lateralCa = true,
+                     .lens = kitLens()};
     const std::string json = negativeToJson(negative);
     INFO(json);
-    REQUIRE_THAT(json, ContainsSubstring(R"("lens": {"distortion": true, "vignetting": false, )"
+    REQUIRE_THAT(json, ContainsSubstring(R"("lens": {"distortion": true, "vignetting": 0, )"
                                          R"("lateralCa": true, "recorded": {"maker": "Canon", )"));
     REQUIRE_THAT(json, ContainsSubstring(R"("cropFactor": 1.6, "origin": "matched", )"
                                          R"("database": "2023-11-14T22:13:20Z"}}})"));
@@ -193,7 +204,9 @@ TEST_CASE("An absent lens key leaves the base, and bad ones are warned about",
     REQUIRE(applyNegativeJson(R"({"lens": {}})", base) == base);
 
     CollectedDiagnostics log;
-    REQUIRE(applyNegativeJson(R"({"lens": {"vignetting": true}})", base, log).lens.vignetting);
+    REQUIRE(
+        applyNegativeJson(R"({"lens": {"vignetting": true}})", base, log).lens.vignettingAmount ==
+        profileVignettingAmount);
     REQUIRE(log.entries().empty());
 
     // The wrong shapes leave what they would have set, each with a warning.
@@ -239,7 +252,10 @@ TEST_CASE("The sidecar holds the switches and the lens's name, and nothing of it
     REQUIRE_THAT(textOf(sidecar), !ContainsSubstring("arraw:lens"));
 
     NegativeSettings negative;
-    negative.lens = {.distortion = true, .vignetting = false, .lateralCa = true, .lens = kitLens()};
+    negative.lens = {.distortion = true,
+                     .vignettingAmount = minimumVignettingAmount,
+                     .lateralCa = true,
+                     .lens = kitLens()};
     const Photo photo = opened.with(negative);
     writeSidecar(photo);
 
@@ -297,7 +313,7 @@ TEST_CASE("A sidecar with only lens keys records a negative and no state",
     REQUIRE(read);
     REQUIRE_FALSE(read->state);
     REQUIRE(read->negative);
-    REQUIRE(read->negative->lens.vignetting);
+    REQUIRE(read->negative->lens.vignettingAmount == profileVignettingAmount);
     REQUIRE_FALSE(read->negative->lens.lens);
 }
 
@@ -365,7 +381,10 @@ TEST_CASE("The keys of the lens are known to the sidecar", "[lens][negative][sid
     const test::TempDir directory;
     const Photo opened = lensPhotoIn(directory);
     NegativeSettings negative;
-    negative.lens = {.distortion = true, .vignetting = true, .lateralCa = true, .lens = kitLens()};
+    negative.lens = {.distortion = true,
+                     .vignettingAmount = profileVignettingAmount,
+                     .lateralCa = true,
+                     .lens = kitLens()};
     writeSidecar(opened.with(negative));
     CollectedDiagnostics log;
     static_cast<void>(readSidecar(opened.path(), log));
@@ -392,7 +411,7 @@ TEST_CASE("A correction is recorded once, kept when switched off, and not for a 
     CHECK(lens.database == database.stamp());
     // The record is the lens's name; the switches are untouched.
     CHECK(recorded.negative().lens.distortion);
-    CHECK_FALSE(recorded.negative().lens.vignetting);
+    CHECK(recorded.negative().lens.vignettingAmount == 0.0F);
     CHECK(recorded.negative().demosaic == photo.negative().demosaic);
 
     // Once: a second call, or one over another database, changes nothing.
@@ -443,6 +462,49 @@ TEST_CASE("Undo takes the toggle and the record away together", "[lens][negative
     REQUIRE(session.photo().negative().lens.lens);
 }
 
+TEST_CASE("A negative built before an open edit committed keeps the record that commit made",
+          "[lens][negative][history]") {
+    ARRAW_REQUIRE_LENSFUN_OR_SKIP();
+    const Photo photo = openPhoto(test::fixture(lensFixture));
+    EditSession session(photo, &test::fixtureDatabase());
+    const NegativeSettings allOff = session.photo().negative();
+
+    // A drag of the amount, then a negative read before the drag with every correction off.
+    session.begin();
+    NegativeSettings dragged = allOff;
+    dragged.lens.vignettingAmount = 60.0F;
+    session.updateNegative(dragged);
+    session.setNegative(allOff);
+
+    REQUIRE_FALSE(session.editing());
+    REQUIRE(session.history().size() == 3);
+    CHECK(session.history()[1].negative.lens.vignettingAmount == 60.0F);
+    REQUIRE(session.history()[1].negative.lens.lens);
+    CHECK_FALSE(session.photo().negative().lens.any());
+    CHECK(session.photo().negative().lens.lens == session.history()[1].negative.lens.lens);
+}
+
+TEST_CASE("A refused negative leaves the session and its open edit as they were",
+          "[lens][negative][history]") {
+    ARRAW_REQUIRE_LENSFUN_OR_SKIP();
+    EditSession session(openPhoto(test::fixture(lensFixture)), &test::fixtureDatabase());
+    session.begin();
+    NegativeSettings dragged = session.photo().negative();
+    dragged.lens.vignettingAmount = 60.0F;
+    session.updateNegative(dragged);
+    const Photo before = session.photo();
+    const std::size_t steps = session.history().size();
+
+    // Matching itself cannot be made to throw (it fails only on an allocation), so this checks
+    // the neighbouring refusal: an invalid negative changes nothing, the open edit included.
+    NegativeSettings invalid = dragged;
+    invalid.lens.vignettingAmount = 200.0F;
+    CHECK_THROWS_AS(session.setNegative(invalid), std::invalid_argument);
+    CHECK(session.editing());
+    CHECK(session.history().size() == steps);
+    CHECK(session.photo() == before);
+}
+
 TEST_CASE("A history step names the lens keys that changed", "[lens][negative][history]") {
     const Photo photo = openPhoto(test::fixture(lensFixture));
     const HistoryStep before{photo.state(), EditOrigin::Opened, {}, photo.negative()};
@@ -453,7 +515,7 @@ TEST_CASE("A history step names the lens keys that changed", "[lens][negative][h
     CHECK(describeChange(before, after).negative ==
           std::vector<std::string_view>{"lensDistortion"});
 
-    negative.lens.vignetting = true;
+    negative.lens.vignettingAmount = profileVignettingAmount;
     negative.lens.lateralCa = true;
     negative.lens.lens = kitLens();
     after.negative = negative;
@@ -478,7 +540,10 @@ TEST_CASE("Lens is a copy section of the switches, never of the recorded lens",
 
     const Photo source = openPhoto(test::fixture(lensFixture));
     NegativeSettings from = source.negative();
-    from.lens = {.distortion = true, .vignetting = true, .lateralCa = false, .lens = kitLens()};
+    from.lens = {.distortion = true,
+                 .vignettingAmount = profileVignettingAmount,
+                 .lateralCa = false,
+                 .lens = kitLens()};
     const Look look = lookOf(source.with(from));
     CHECK(look.negative.lens == from.lens);
 
@@ -494,7 +559,7 @@ TEST_CASE("Lens is a copy section of the switches, never of the recorded lens",
     const AppliedLook applied = withLook(target, look, sections);
     CHECK(applied.skipped.empty());
     CHECK(applied.negative.lens.distortion);
-    CHECK(applied.negative.lens.vignetting);
+    CHECK(applied.negative.lens.vignettingAmount == profileVignettingAmount);
     // The look says the third is off, and the section replaces all three.
     CHECK_FALSE(applied.negative.lens.lateralCa);
     // The record is per shot: the target keeps its own.
@@ -553,4 +618,423 @@ TEST_CASE("Lens is skipped from a RAW to another kind, and the other way",
     const AppliedLook between = withLook(png, lookOf(png), sections);
     CHECK(between.skipped.empty());
     CHECK(between.negative == png.negative());
+}
+
+TEST_CASE("The vignetting amount is validated", "[lens][negative]") {
+    NegativeSettings negative;
+    for (const float good : {0.0F, 37.5F, 150.0F}) {
+        negative.lens.vignettingAmount = good;
+        CHECK_NOTHROW(validate(negative));
+    }
+    for (const float bad : {-1.0F, 150.5F, std::numeric_limits<float>::quiet_NaN()}) {
+        negative.lens.vignettingAmount = bad;
+        CHECK_THROWS_AS(validate(negative), std::invalid_argument);
+    }
+}
+
+TEST_CASE("A vignetting amount above 0 asks for vignetting", "[lens][negative]") {
+    for (const auto& [amount, wanted] :
+         {std::pair{0.0F, false}, std::pair{0.5F, true}, std::pair{100.0F, true}}) {
+        LensSettings settings;
+        settings.vignettingAmount = amount;
+        CHECK(settings.any() == wanted);
+        const LensKinds kinds = kindsOf(settings);
+        CHECK(kinds.vignetting == wanted);
+        CHECK_FALSE(kinds.distortion);
+        CHECK_FALSE(kinds.lateralCa);
+    }
+}
+
+TEST_CASE("withCorrectionsOf copies the corrections and keeps the lens", "[lens][negative]") {
+    const LensSettings from{
+        .distortion = true, .vignettingAmount = 60.0F, .lateralCa = true, .lens = std::nullopt};
+    LensSettings own;
+    own.lens = kitLens();
+    const LensSettings result = withCorrectionsOf(own, from);
+    CHECK(result.distortion);
+    CHECK(result.vignettingAmount == 60.0F);
+    CHECK(result.lateralCa);
+    CHECK(result.lens == kitLens());
+}
+
+TEST_CASE("A paste of the lens section carries the vignetting amount", "[lens][negative][copy]") {
+    const Photo source = openPhoto(test::fixture(lensFixture));
+    NegativeSettings from = source.negative();
+    from.lens.vignettingAmount = 60.0F;
+    const Look look = lookOf(source.with(from));
+    const Photo target = openPhoto(test::fixture("exif-32x24.dng"));
+    const std::vector<CopySection> sections{CopySection::Lens};
+    CHECK(withLook(target, look, sections).negative.lens.vignettingAmount == 60.0F);
+}
+
+TEST_CASE("A history step names the vignetting key when the amount moves",
+          "[lens][negative][history]") {
+    const Photo photo = openPhoto(test::fixture(lensFixture));
+    NegativeSettings negative = photo.negative();
+    negative.lens.vignettingAmount = profileVignettingAmount;
+    const HistoryStep before{photo.state(), EditOrigin::Edit, {}, negative};
+    negative.lens.vignettingAmount = 60.0F;
+    const HistoryStep after{photo.state(), EditOrigin::Edit, {}, negative};
+    CHECK(describeChange(before, after).negative ==
+          std::vector<std::string_view>{"lensVignetting"});
+}
+
+TEST_CASE("The vignetting amount round-trips through the JSON object and the sidecar",
+          "[lens][negative][json][sidecar]") {
+    const test::TempDir directory;
+    const Photo opened = lensPhotoIn(directory);
+    const auto sidecar = sidecarPath(opened.path());
+    for (const float amount : {0.0F, 37.5F, 100.0F, 150.0F}) {
+        CAPTURE(amount);
+        NegativeSettings negative;
+        negative.lens = {.distortion = true, .vignettingAmount = amount, .lens = kitLens()};
+
+        const std::string json = negativeToJson(negative);
+        CollectedDiagnostics log;
+        REQUIRE(applyNegativeJson(json, NegativeSettings{}, log) == negative);
+        REQUIRE(log.entries().empty());
+
+        writeSidecar(opened.with(negative));
+        if (amount == 0.0F) {
+            REQUIRE_THAT(textOf(sidecar), !ContainsSubstring("lensVignetting"));
+        } else {
+            REQUIRE_THAT(textOf(sidecar),
+                         ContainsSubstring("arraw:lensVignetting=\"" +
+                                           std::string(amount == 37.5F    ? "37.5"
+                                                       : amount == 100.0F ? "100"
+                                                                          : "150") +
+                                           "\""));
+        }
+        CollectedDiagnostics sidecarLog;
+        const auto read = readSidecar(opened.path(), sidecarLog);
+        REQUIRE(read);
+        REQUIRE(read->negative);
+        REQUIRE(read->negative->lens == negative.lens);
+        REQUIRE(sidecarLog.entries().empty());
+        std::filesystem::remove(sidecar);
+    }
+}
+
+TEST_CASE("The legacy vignetting switch reads as 100 or 0", "[lens][negative][json][sidecar]") {
+    for (const auto& [json, expected] :
+         {std::pair{R"({"lens": {"vignetting": true}})", profileVignettingAmount},
+          std::pair{R"({"lens": {"vignetting": false}})", minimumVignettingAmount}}) {
+        CAPTURE(json);
+        NegativeSettings base;
+        base.lens.vignettingAmount = 42.0F;
+        CollectedDiagnostics log;
+        REQUIRE(applyNegativeJson(json, base, log).lens.vignettingAmount == expected);
+        REQUIRE(log.entries().empty());
+    }
+
+    const test::TempDir directory;
+    const Photo opened = lensPhotoIn(directory);
+    const auto sidecar = sidecarPath(opened.path());
+    NegativeSettings negative;
+    negative.lens = {.distortion = true, .vignettingAmount = 100.0F, .lens = kitLens()};
+    writeSidecar(opened.with(negative));
+    const std::string written = textOf(sidecar);
+    REQUIRE_THAT(written, ContainsSubstring(R"(arraw:lensVignetting="100")"));
+
+    for (const auto& [spelling, expected] : {std::pair{"True", 100.0F}, std::pair{"true", 100.0F},
+                                             std::pair{"False", 0.0F}, std::pair{"false", 0.0F}}) {
+        CAPTURE(spelling);
+        replaceInFile(sidecar, R"(arraw:lensVignetting="100")",
+                      std::string("arraw:lensVignetting=\"") + spelling + "\"");
+        CollectedDiagnostics log;
+        const auto read = readSidecar(opened.path(), log);
+        REQUIRE(read->negative);
+        REQUIRE(read->negative->lens.vignettingAmount == expected);
+        REQUIRE(log.entries().empty());
+        std::ofstream(sidecar) << written;
+    }
+
+    // An untouched legacy True survives a save that changes something else.
+    replaceInFile(sidecar, R"(arraw:lensVignetting="100")", R"(arraw:lensVignetting="True")");
+    NegativeSettings changed = openPhoto(opened.path()).negative();
+    REQUIRE(changed.lens.vignettingAmount == profileVignettingAmount);
+    changed.lens.lateralCa = true;
+    writeSidecar(opened.with(changed));
+    REQUIRE_THAT(textOf(sidecar), ContainsSubstring(R"(arraw:lensVignetting="True")"));
+    REQUIRE_THAT(textOf(sidecar), ContainsSubstring(R"(arraw:lensLateralCa="True")"));
+}
+
+TEST_CASE("A vignetting amount out of range is clamped and logged",
+          "[lens][negative][json][sidecar]") {
+    for (const auto& [text, expected, read] : {std::tuple{"200", maximumVignettingAmount, 200.0},
+                                               std::tuple{"-5", minimumVignettingAmount, -5.0}}) {
+        CAPTURE(text);
+        CollectedDiagnostics log;
+        const NegativeSettings fromJson = applyNegativeJson(
+            std::string(R"({"lens": {"vignetting": )") + text + "}}", NegativeSettings{}, log);
+        REQUIRE(fromJson.lens.vignettingAmount == expected);
+        REQUIRE(log.entries().size() == 1);
+        REQUIRE(log.entries().front().notice == Notice::SettingClamped);
+        REQUIRE(std::get<std::string>(log.entries().front().values.at(0)) == "lens.vignetting");
+        REQUIRE(std::get<double>(log.entries().front().values.at(1)) == read);
+        REQUIRE(std::get<double>(log.entries().front().values.at(2)) ==
+                static_cast<double>(expected));
+
+        const test::TempDir directory;
+        const Photo opened = lensPhotoIn(directory);
+        std::ofstream(sidecarPath(opened.path()))
+            << R"(<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">)"
+               R"(<rdf:Description rdf:about="" xmlns:arraw="http://ns.arraw.org/develop/1.0/" arraw:lensVignetting=")"
+            << text << R"("/></rdf:RDF></x:xmpmeta>)";
+        CollectedDiagnostics sidecarLog;
+        const auto sidecar = readSidecar(opened.path(), sidecarLog);
+        REQUIRE(sidecar->negative->lens.vignettingAmount == expected);
+        REQUIRE(sidecarLog.entries().size() == 1);
+        REQUIRE(sidecarLog.entries().front().notice == Notice::SettingClamped);
+        REQUIRE(std::get<std::string>(sidecarLog.entries().front().values.at(0)) ==
+                "lensVignetting");
+    }
+}
+
+TEST_CASE("A vignetting amount that is no number is reported and the base is kept",
+          "[lens][negative][json][sidecar]") {
+    NegativeSettings base;
+    base.lens = {.vignettingAmount = 60.0F, .lens = kitLens()};
+    for (const char* bad :
+         {R"({"lens": {"vignetting": "abc"}})", R"({"lens": {"vignetting": [1]}})"}) {
+        CAPTURE(bad);
+        CollectedDiagnostics log;
+        REQUIRE(applyNegativeJson(bad, base, log) == base);
+        REQUIRE(log.entries().size() == 1);
+        REQUIRE(log.entries().front().notice == Notice::SettingMalformed);
+    }
+
+    const test::TempDir directory;
+    const Photo opened = lensPhotoIn(directory);
+    const auto sidecar = sidecarPath(opened.path());
+    for (const char* bad : {"abc", "nan", "[1]"}) {
+        CAPTURE(bad);
+        std::ofstream(sidecar)
+            << R"(<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">)"
+               R"(<rdf:Description rdf:about="" xmlns:arraw="http://ns.arraw.org/develop/1.0/" arraw:lensVignetting=")"
+            << bad << R"("/></rdf:RDF></x:xmpmeta>)";
+        CollectedDiagnostics log;
+        const auto read = readSidecar(opened.path(), log);
+        REQUIRE(read->negative);
+        REQUIRE(read->negative->lens.vignettingAmount == minimumVignettingAmount);
+        REQUIRE(log.entries().size() == 1);
+        REQUIRE(log.entries().front().notice == Notice::SettingMalformed);
+    }
+}
+
+TEST_CASE("Amount 0 writes no vignetting key, and no lens settings write the old JSON",
+          "[lens][negative][json][sidecar]") {
+    CHECK(negativeToJson(NegativeSettings{}) == R"({"demosaic": "ahd"})");
+    NegativeSettings negative;
+    negative.lens = {.lateralCa = true};
+    CHECK_THAT(negativeToJson(negative),
+               ContainsSubstring(R"("vignetting": 0, "lateralCa": true)"));
+
+    const test::TempDir directory;
+    const Photo opened = lensPhotoIn(directory);
+    writeSidecar(opened.with(negative));
+    REQUIRE_THAT(textOf(sidecarPath(opened.path())), !ContainsSubstring("lensVignetting"));
+}
+
+namespace {
+
+/// @brief Gives the lens fixture's session with the fixture database attached.
+EditSession recordingSession(const Photo& photo) {
+    return EditSession(photo, &test::fixtureDatabase());
+}
+
+} // namespace
+
+TEST_CASE("The session holds the lens database it is given, without owning it",
+          "[lens][negative][record][session]") {
+    const Photo photo = openPhoto(test::fixture(lensFixture));
+    EditSession session(photo);
+    CHECK(session.lensDatabase() == nullptr);
+    session.setLensDatabase(&test::fixtureDatabase());
+    CHECK(session.lensDatabase() == &test::fixtureDatabase());
+    CHECK(EditSession(photo, &test::fixtureDatabase()).lensDatabase() == &test::fixtureDatabase());
+    const EditSession copy = session;
+    CHECK(copy.lensDatabase() == &test::fixtureDatabase());
+    session.setLensDatabase(nullptr);
+    CHECK(session.lensDatabase() == nullptr);
+}
+
+TEST_CASE("A step that turns a correction on records the match in the same step",
+          "[lens][negative][record][session]") {
+    ARRAW_REQUIRE_LENSFUN_OR_SKIP();
+    const Photo photo = openPhoto(test::fixture(lensFixture));
+    EditSession session = recordingSession(photo);
+
+    session.setNegative(withSwitches(photo, true).negative());
+    REQUIRE(session.history().size() == 2);
+    REQUIRE(session.photo().negative().lens.lens);
+    CHECK(session.photo().negative().lens.lens->origin == LensOrigin::Matched);
+    CHECK(session.history().back().negative == session.photo().negative());
+
+    // Undo takes the toggle and the record away together, and redo brings both back.
+    session.undo();
+    CHECK(session.photo().negative() == photo.negative());
+    session.redo();
+    CHECK(session.photo().negative().lens.lens);
+    CHECK(session.hasUnsavedChanges());
+
+    SECTION("a drag records at its commit, and a drag that ends at 0 records nothing") {
+        EditSession drag = recordingSession(photo);
+        drag.begin();
+        NegativeSettings negative = drag.photo().negative();
+        negative.lens.vignettingAmount = 60.0F;
+        drag.updateNegative(negative);
+        CHECK_FALSE(drag.photo().negative().lens.lens);
+        negative.lens.vignettingAmount = 80.0F;
+        drag.updateNegative(negative);
+        CHECK_FALSE(drag.photo().negative().lens.lens);
+        drag.commit();
+        REQUIRE(drag.history().size() == 2);
+        CHECK(drag.photo().negative().lens.lens);
+        CHECK(drag.photo().negative().lens.vignettingAmount == 80.0F);
+
+        EditSession back = recordingSession(photo);
+        back.begin();
+        negative.lens.vignettingAmount = 60.0F;
+        back.updateNegative(negative);
+        negative.lens.vignettingAmount = 0.0F;
+        back.updateNegative(negative);
+        back.commit();
+        CHECK(back.history().size() == 1);
+        CHECK_FALSE(back.photo().negative().lens.lens);
+    }
+
+    SECTION("cancel, and a develop-only step, record nothing") {
+        EditSession cancelled = recordingSession(photo);
+        cancelled.begin();
+        cancelled.updateNegative(withSwitches(photo, true).negative());
+        cancelled.cancel();
+        CHECK(cancelled.photo() == photo);
+
+        // A correction already on, with no lens recorded: an Exposure step leaves it unrecorded.
+        EditSession unrecorded(withSwitches(photo, true));
+        unrecorded.setLensDatabase(&test::fixtureDatabase());
+        DevelopState state = unrecorded.photo().state();
+        state.settings.tone.exposure = 0.5F;
+        unrecorded.setState(state);
+        REQUIRE(unrecorded.history().size() == 2);
+        CHECK(unrecorded.photo().negative().lens.any());
+        CHECK_FALSE(unrecorded.photo().negative().lens.lens);
+
+        // Nor does a demosaic-only step.
+        NegativeSettings negative = unrecorded.photo().negative();
+        negative.demosaic =
+            negative.demosaic == Demosaic::Linear ? Demosaic::Ahd : Demosaic::Linear;
+        unrecorded.setNegative(negative);
+        CHECK_FALSE(unrecorded.photo().negative().lens.lens);
+
+        // Navigation does not record either.
+        unrecorded.undo();
+        unrecorded.redo();
+        unrecorded.goTo(0);
+        CHECK_FALSE(unrecorded.photo().negative().lens.lens);
+    }
+}
+
+TEST_CASE("The session never replaces a recorded lens, and a reset matches the same lens again",
+          "[lens][negative][record][session]") {
+    ARRAW_REQUIRE_LENSFUN_OR_SKIP();
+    const Photo photo = openPhoto(test::fixture(lensFixture));
+    EditSession session = recordingSession(photo);
+    session.setNegative(withSwitches(photo, true).negative());
+    const NegativeSettings matched = session.photo().negative();
+    REQUIRE(matched.lens.lens);
+
+    // Clearing the record gives the same match with the same stamp: no step.
+    NegativeSettings cleared = matched;
+    cleared.lens.lens.reset();
+    session.setNegative(cleared);
+    CHECK(session.history().size() == 2);
+    CHECK(session.photo().negative() == matched);
+
+    // A chosen lens stays, whatever the next step does.
+    NegativeSettings chosen = matched;
+    chosen.lens.lens->origin = LensOrigin::Chosen;
+    chosen.lens.lens->model = "Another lens";
+    session.setNegative(chosen);
+    REQUIRE(session.history().size() == 3);
+    NegativeSettings more = chosen;
+    more.lens.lateralCa = true;
+    session.setNegative(more);
+    CHECK(session.photo().negative().lens.lens == chosen.lens.lens);
+}
+
+TEST_CASE("A paste records the target's match through the two-part step",
+          "[lens][negative][record][session]") {
+    ARRAW_REQUIRE_LENSFUN_OR_SKIP();
+    const Photo photo = openPhoto(test::fixture(lensFixture));
+    EditSession session = recordingSession(photo);
+    const Photo source = withSwitches(photo, true, true, true);
+
+    session.setState(source.negative(), session.photo().state(), EditOrigin::Paste);
+    REQUIRE(session.history().size() == 2);
+    REQUIRE(session.photo().negative().lens.lens);
+    CHECK(session.photo().negative().lens.lens->origin == LensOrigin::Matched);
+
+    // An open edit is committed first, and its own change of lens settings records.
+    EditSession open = recordingSession(photo);
+    open.begin();
+    open.updateNegative(withSwitches(photo, true).negative());
+    open.setState(open.photo().negative(), open.photo().state());
+    CHECK(open.history().size() == 2);
+    CHECK(open.photo().negative().lens.lens);
+}
+
+TEST_CASE("With no database the step is made as given, and one that arrives records nothing back",
+          "[lens][negative][record][session]") {
+    ARRAW_REQUIRE_LENSFUN_OR_SKIP();
+    const Photo photo = openPhoto(test::fixture(lensFixture));
+    EditSession session(photo);
+    session.setNegative(withSwitches(photo, true).negative());
+    REQUIRE(session.history().size() == 2);
+    CHECK(session.photo().negative().lens.any());
+    CHECK_FALSE(session.photo().negative().lens.lens);
+
+    // Arrival touches neither the photograph nor the history.
+    const Photo before = session.photo();
+    session.setLensDatabase(&test::fixtureDatabase());
+    CHECK(session.photo() == before);
+    CHECK(session.history().size() == 2);
+
+    // The next step that changes the lens settings records it.
+    NegativeSettings next = session.photo().negative();
+    next.lens.lateralCa = true;
+    session.setNegative(next);
+    CHECK(session.photo().negative().lens.lens);
+
+    // An edit open when it arrives records at its commit.
+    EditSession open(photo);
+    open.begin();
+    open.updateNegative(withSwitches(photo, true).negative());
+    open.setLensDatabase(&test::fixtureDatabase());
+    CHECK_FALSE(open.photo().negative().lens.lens);
+    open.commit();
+    CHECK(open.photo().negative().lens.lens);
+}
+
+TEST_CASE("Saving with an open edit writes the photograph the commit leaves",
+          "[lens][negative][record][session][sidecar]") {
+    ARRAW_REQUIRE_LENSFUN_OR_SKIP();
+    const test::TempDir directory;
+    const Photo photo = lensPhotoIn(directory);
+    EditSession session = recordingSession(photo);
+
+    session.begin();
+    session.updateNegative(withSwitches(photo, true).negative());
+    REQUIRE_FALSE(session.photo().negative().lens.lens);
+    session.save();
+
+    CHECK_FALSE(session.editing());
+    CHECK(session.photo().negative().lens.lens);
+    CHECK_FALSE(session.hasUnsavedChanges());
+    CHECK(session.saved() == session.photo());
+    CHECK(session.history().size() == 2);
+    CHECK(session.history().back().negative == session.photo().negative());
+    const Photo reopened = openPhoto(photo.path());
+    CHECK(reopened.negative() == session.photo().negative());
 }

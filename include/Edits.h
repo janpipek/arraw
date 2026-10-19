@@ -493,7 +493,7 @@ struct Look {
     /// @brief Negative settings of the photograph the look was taken from (ADR 049).
     ///
     /// What ::arraw::CopySection::Demosaic and ::arraw::CopySection::Lens carry (the latter the
-    /// three switches only). A preset file carries the sections when it holds a `"negative"`
+    /// corrections only). A preset file carries the sections when it holds a `"negative"`
     /// object (::arraw::negativeToJson); a look built from settings alone holds the default.
     NegativeSettings negative{};
 
@@ -530,10 +530,11 @@ struct AppliedLook {
     DevelopState state;
 
     /// @brief Negative settings after the look: the look's demosaic when
-    /// ::arraw::CopySection::Demosaic was chosen and carried, the look's lens switches when
+    /// ::arraw::CopySection::Demosaic was chosen and carried, the look's lens corrections when
     /// ::arraw::CopySection::Lens was, else the photograph's own. The lens recorded is always the
-    /// photograph's own: it is per shot, and the paste records the target's match
-    /// (::arraw::recordLensMatch). Always the target's own from the overload without a photograph.
+    /// photograph's own: it is per shot, and the session records the target's match when it
+    /// commits the paste (::arraw::EditSession::setLensDatabase). Always the target's own from the
+    /// overload without a photograph.
     NegativeSettings negative{};
 
     /// @brief Chosen sections not carried in full, because some of their settings apply to
@@ -638,7 +639,7 @@ struct AppliedLook {
 ///
 /// As the overload over a state, applied to `photo.state()`, and also
 /// ::arraw::CopySection::Demosaic, which replaces the photograph's demosaic by the look's
-/// (ADR 049), and ::arraw::CopySection::Lens, which replaces its three lens switches and leaves
+/// (ADR 049), and ::arraw::CopySection::Lens, which replaces its lens corrections and leaves
 /// the lens recorded for it alone (ADR 050). Between a RAW and a photograph that is not one each
 /// is skipped and listed in ::arraw::AppliedLook::skipped, as the white balance is; between two
 /// that are not RAWs it applies to neither, is not carried, and is not reported. A caller makes a

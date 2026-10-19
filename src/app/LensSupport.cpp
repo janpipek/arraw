@@ -138,18 +138,4 @@ LensView resolveLensView(const Photo& photo, const LensDatabase* database) {
     return view;
 }
 
-NegativeSettings withMatchRecorded(const Photo& photo, NegativeSettings negative,
-                                   const LensDatabase* database) {
-    if (database == nullptr) {
-        return negative;
-    }
-    return recordLensMatch(photo.with(std::move(negative)), *database).negative();
-}
-
-NegativeSettings withLensReset(const Photo& photo, const LensDatabase* database) {
-    NegativeSettings negative = photo.negative();
-    negative.lens.lens.reset();
-    return withMatchRecorded(photo, std::move(negative), database);
-}
-
 } // namespace arraw::app

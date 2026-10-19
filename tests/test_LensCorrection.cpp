@@ -8,6 +8,8 @@
 #include <ImageBuffer.h>
 #include <LensCorrection.h>
 #include <LensMatch.h>
+#include <LensResolution.h>
+#include <NegativeSettings.h>
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -19,7 +21,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <limits>
 #include <numbers>
+#include <optional>
 #include <random>
 #include <variant>
 #include <vector>
@@ -271,6 +275,101 @@ TEST_CASE("A falloff becomes flat and values above one survive", "[lens]") {
         largest = std::max(largest, at(lifted, x, 0, 1));
     }
     CHECK(largest > 1.4F);
+}
+
+TEST_CASE("A vignetting amount scales the gain in stops", "[lens]") {
+    const LensCorrection profile =
+        byHand(1.5, barrel, nullptr, nullptr, [](double r) { return 1.0 + 0.8 * r * r; });
+    REQUIRE_FALSE(profile.vignetting.empty());
+
+    // 100 is the profile, bit for bit.
+    CHECK(withVignettingAmount(profile, profileVignettingAmount) == profile);
+
+    const auto scaled = [&](float amount, double exponent) {
+        const LensCorrection result = withVignettingAmount(profile, amount);
+        REQUIRE(result.vignetting.size() == profile.vignetting.size());
+        for (std::size_t node = 0; node < profile.vignetting.size(); ++node) {
+            const auto expected = static_cast<float>(
+                std::pow(static_cast<double>(profile.vignetting[node]), exponent));
+            CHECK(result.vignetting[node] == Approx(expected).margin(0.0).epsilon(2.0 * 1.2e-7));
+        }
+        CHECK(result.distortion == profile.distortion);
+        CHECK(result.fill == profile.fill);
+        CHECK(result.aspect == profile.aspect);
+    };
+    scaled(50.0F, 0.5);
+    scaled(150.0F, 1.5);
+    scaled(37.5F, 0.375);
+
+    // A node at one stays at one, and the stops add up.
+    CHECK(withVignettingAmount(profile, 50.0F).vignetting.front() == 1.0F);
+}
+
+TEST_CASE("A vignetting amount of zero drops the vignetting and what is left of the correction",
+          "[lens]") {
+    LensCorrection only;
+    only.aspect = 1.5;
+    only.vignetting = tableOf([](double r) { return 1.0 + r; });
+    only.vignettingFrom = LensProvenance{.lens = {"Test", "Lens"}, .database = "stamp"};
+    CHECK(withVignettingAmount(only, minimumVignettingAmount) == LensCorrection{});
+    CHECK(withVignettingAmount(only, -5.0F) == LensCorrection{});
+
+    LensCorrection both = byHand(1.5, barrel, nullptr, nullptr, [](double r) { return 1.0 + r; });
+    both.vignettingFrom = LensProvenance{.lens = {"Test", "Lens"}, .database = "stamp"};
+    both.distortionFrom = LensProvenance{.lens = {"Test", "Lens"}, .database = "stamp"};
+    const LensCorrection dropped = withVignettingAmount(both, 0.0F);
+    CHECK(dropped.vignetting.empty());
+    CHECK_FALSE(dropped.vignettingFrom);
+    CHECK(dropped.distortion == both.distortion);
+    CHECK(dropped.distortionFrom == both.distortionFrom);
+    CHECK(dropped.fill == both.fill);
+}
+
+TEST_CASE("A vignetting amount leaves an empty table and unusable nodes alone", "[lens]") {
+    const LensCorrection distortion = byHand(1.5, barrel);
+    for (const float amount : {0.0F, 50.0F, 100.0F, 150.0F}) {
+        CHECK(withVignettingAmount(distortion, amount) == distortion);
+    }
+    CHECK(withVignettingAmount(LensCorrection{}, 60.0F) == LensCorrection{});
+
+    LensCorrection odd;
+    odd.aspect = 1.5;
+    odd.vignetting = std::vector<float>(lensTableNodes, 2.0F);
+    odd.vignetting[1] = 0.0F;
+    odd.vignetting[2] = -1.5F;
+    odd.vignetting[3] = std::numeric_limits<float>::quiet_NaN();
+    odd.vignetting[4] = std::numeric_limits<float>::infinity();
+    const LensCorrection result = withVignettingAmount(odd, 50.0F);
+    CHECK(result.vignetting[0] == Approx(std::sqrt(2.0F)).epsilon(1e-6));
+    CHECK(result.vignetting[1] == 0.0F);
+    CHECK(result.vignetting[2] == -1.5F);
+    CHECK(std::isnan(result.vignetting[3]));
+    CHECK(std::isinf(result.vignetting[4]));
+}
+
+TEST_CASE("An image at half the amount is flattened by the square root of the gain", "[lens]") {
+    const Radial gain = [](double r) { return 1.0 + 0.8 * r * r; };
+    const LensCorrection profile = byHand(1.5, nullptr, nullptr, nullptr, gain);
+    const LensCorrection byHandHalf =
+        byHand(1.5, nullptr, nullptr, nullptr, [&](double r) { return std::sqrt(gain(r)); });
+    const LensCorrection half = withVignettingAmount(profile, 50.0F);
+    REQUIRE(half.vignetting.size() == byHandHalf.vignetting.size());
+    for (std::size_t node = 0; node < half.vignetting.size(); ++node) {
+        CHECK(half.vignetting[node] == Approx(byHandHalf.vignetting[node]).epsilon(2e-7));
+    }
+
+    const ImageBuffer source = imageOf({120, 80}, [](double u, double v) {
+        return std::array<float, 4>{static_cast<float>(0.2 + 0.5 * u),
+                                    static_cast<float>(0.3 + 0.4 * v), 0.6F, 1.0F};
+    });
+    const ImageBuffer fromAmount = applyLens(source, LensPlan{half});
+    const ImageBuffer fromHand = applyLens(source, LensPlan{byHandHalf});
+    const auto left = fromAmount.samples<float>();
+    const auto right = fromHand.samples<float>();
+    REQUIRE(left.size() == right.size());
+    for (std::size_t sample = 0; sample < left.size(); ++sample) {
+        REQUIRE(left[sample] == Approx(right[sample]).margin(1e-6));
+    }
 }
 
 TEST_CASE("A lens straightens a grid, barrel or pincushion", "[lens]") {
@@ -814,6 +913,54 @@ TEST_CASE("Only the wanted corrections are sampled, and only those the lens has"
     // A lens the database does not list resolves to nothing.
     CHECK_FALSE(sampleLensfun(database, matchOf("Nobody", "Not A Lens", 1.0, 50.0), LensFacts{},
                               size, {true, true, true}));
+}
+
+TEST_CASE("The resolved vignetting follows the amount and is the profile's at 100",
+          "[lensfun][lens]") {
+    ARRAW_REQUIRE_LENSFUN_OR_SKIP();
+    const LensDatabase& database = test::fixtureDatabase();
+    const ImageSize size{600, 400};
+    LensFacts facts;
+    facts.cameraMaker = "Canon";
+    facts.cameraModel = "Canon EOS 80D";
+    facts.lensNames = {"EF-S18-135mm f/3.5-5.6 IS USM"};
+    facts.focalLength = 50.0;
+    facts.aperture = 5.6;
+
+    const auto settingsAt = [](float amount, bool distortion = true) {
+        return LensSettings{.distortion = distortion,
+                            .vignettingAmount = amount,
+                            .lateralCa = true,
+                            .lens = std::nullopt};
+    };
+    const auto resolveAt = [&](float amount) {
+        return resolveLens(settingsAt(amount), facts, database, size);
+    };
+
+    const auto match = resolveLensMatch(settingsAt(profileVignettingAmount), facts, database);
+    REQUIRE(match);
+    const auto profile = sampleLensfun(database, *match, facts, size, {true, true, true});
+    REQUIRE(profile);
+    REQUIRE_FALSE(profile->vignetting.empty());
+
+    const LensCorrection atProfile = resolveAt(profileVignettingAmount);
+    CHECK(atProfile == *profile);
+
+    // At 0 it is what the vignetting kind off gave before the amount existed.
+    const auto without = sampleLensfun(database, *match, facts, size, {true, false, true});
+    REQUIRE(without);
+    const LensCorrection atZero = resolveAt(minimumVignettingAmount);
+    CHECK(atZero == *without);
+    CHECK(atZero.vignetting.empty());
+    CHECK_FALSE(atZero.vignettingFrom);
+
+    // A vignetting-only correction at 0 is the empty one.
+    CHECK(resolveLens(LensSettings{.vignettingAmount = 0.0F}, facts, database, size) ==
+          LensCorrection{});
+
+    for (const float amount : {25.0F, 60.0F, 150.0F}) {
+        CHECK(resolveAt(amount) == withVignettingAmount(atProfile, amount));
+    }
 }
 
 TEST_CASE("The fill scale is the same at every resolution", "[lensfun][lens]") {

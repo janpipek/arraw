@@ -164,6 +164,13 @@ signals:
     /// @param negative Settings with the chosen value, other values as last shown.
     void negativeChosen(const arraw::NegativeSettings& negative);
 
+    /// @brief Announces negative settings a drag of the vignetting amount has reached.
+    ///
+    /// Follows editStarted() and precedes editFinished(), as stateEdited() does for a develop
+    /// edit: the window keeps the settings in the open edit, and the drag is one history step.
+    /// @param negative Settings with the amount reached, other values as last shown.
+    void negativeEdited(const arraw::NegativeSettings& negative);
+
     /// @brief Announces that the user asked to choose the lens of the corrections by hand.
     void chooseLensRequested();
 
@@ -344,9 +351,10 @@ private:
     QComboBox* demosaicCombo_ = nullptr;
     /// Note under the demosaic choice that says why it is disabled.
     QLabel* negativeNote_ = nullptr;
-    /// Switches of the lens corrections: distortion, vignetting, lateral CA.
+    /// Switches of the lens corrections: distortion, lateral CA.
     QCheckBox* lensDistortion_ = nullptr;
-    QCheckBox* lensVignetting_ = nullptr;
+    /// Slider over the vignetting amount, in percent of the lens profile's correction.
+    SettingSlider* lensVignetting_ = nullptr;
     QCheckBox* lensCa_ = nullptr;
     /// Line that names the lens or says why there is no profile.
     QLabel* lensStatus_ = nullptr;

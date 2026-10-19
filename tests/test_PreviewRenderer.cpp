@@ -681,6 +681,46 @@ TEST_CASE("An edit shows the earlier fallback until a refreshed one follows",
     REQUIRE(collector.backgrounds().back().background->size() == QSize(256, 128));
 }
 
+TEST_CASE("A vignetting amount keeps the fallback beneath a region, a geometry change drops it",
+          "[app][preview][region][lens][slow]") {
+    Collector collector;
+    app::PreviewRenderer renderer(collector.callback(), app::PreviewRenderer::Device::Cpu);
+    renderer.setSource(makeLargeSource());
+    LensCorrection lens = test::barrelCorrection(-0.05F, 2.0);
+    lens.vignetting = test::vignettingCorrection(0.6F, 2.0).vignetting;
+    const app::PreviewView view{.region = QRect(100, 100, 200, 100), .outputSize = {200, 100}};
+
+    auto id = renderer.request({}, lens, app::PreviewView::wholeFrame({1024, 512}));
+    REQUIRE(collector.waitFor(id));
+    const QImage whole = *collector.results().back().image;
+
+    // Only the amount moved: the whole frame stays beneath the region, then is refreshed.
+    id = renderer.request({}, withVignettingAmount(lens, 50.0F), view);
+    REQUIRE(collector.waitFor(id));
+    REQUIRE(collector.results().back().background.has_value());
+    REQUIRE(collector.results().back().background->cacheKey() == whole.cacheKey());
+    REQUIRE(collector.waitForBackground(id));
+    REQUIRE(*collector.backgrounds().back().background != whole);
+
+    // The distortion switched off moves the content: nothing lines up beneath the region.
+    LensCorrection vignettingOnly = lens;
+    vignettingOnly.distortion.clear();
+    vignettingOnly.distortionFrom.reset();
+    id = renderer.request({}, vignettingOnly, view);
+    REQUIRE(collector.waitFor(id));
+    REQUIRE_FALSE(collector.results().back().background.has_value());
+    REQUIRE(collector.waitForBackground(id));
+
+    // Another photograph never shows the previous one's fallback.
+    renderer.setSource(makeSource());
+    id = renderer.request(
+        {}, withVignettingAmount(lens, 50.0F),
+        app::PreviewView{.region = QRect(0, 0, 100, 100), .outputSize = {100, 100}});
+    REQUIRE(collector.waitFor(id));
+    REQUIRE_FALSE(collector.results().back().background.has_value());
+    REQUIRE(collector.waitForBackground(id));
+}
+
 TEST_CASE("Desktop CPU preference overrides automatic preview rendering",
           "[app][preview][settings]") {
     Collector collector;

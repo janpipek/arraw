@@ -63,19 +63,27 @@ QString wordLens(const NegativeSettings& after, const std::vector<std::string_vi
     };
     const std::array switches{Switch{"lensDistortion", after.lens.distortion, "Lens: distortion on",
                                      "Lens: distortion off"},
-                              Switch{"lensVignetting", after.lens.vignetting, "Lens: vignetting on",
-                                     "Lens: vignetting off"},
                               Switch{"lensLateralCa", after.lens.lateralCa,
                                      "Lens: chromatic aberration on",
                                      "Lens: chromatic aberration off"}};
-    std::vector<const Switch*> changed;
+    const auto named = [&keys](std::string_view key) {
+        return std::ranges::find(keys, key) != keys.end();
+    };
+    const float amount = after.lens.vignettingAmount;
+    const QString vignetting = amount > 0.0F
+                                   ? tr("Lens: vignetting %1%").arg(QString::number(amount, 'f', 0))
+                                   : tr("Lens: vignetting off");
+    std::vector<QString> changed;
     for (const Switch& one : switches) {
-        if (std::ranges::find(keys, one.key) != keys.end()) {
-            changed.push_back(&one);
+        if (named(one.key)) {
+            changed.push_back(tr(one.now ? one.on : one.off));
         }
     }
+    if (named("lensVignetting")) {
+        changed.push_back(vignetting);
+    }
     if (changed.size() == 1) {
-        return tr(changed.front()->now ? changed.front()->on : changed.front()->off);
+        return changed.front();
     }
     if (changed.size() > 1) {
         return tr("Lens corrections");

@@ -1,5 +1,6 @@
 #include "DebugLog.h"
 #include "PhotoLoader.h"
+#include "TimingTrace.h"
 #include "support/Fixtures.h"
 #include "support/LensFixtures.h"
 #include "support/Lensfun.h"
@@ -8,6 +9,7 @@
 #include "ui/FilmStrip.h"
 #include "ui/MainWindow.h"
 #include "ui/PhotoView.h"
+#include "ui/SettingSlider.h"
 #include "ui/StatusLine.h"
 
 #include <ImageImport.h>
@@ -19,10 +21,13 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QDialog>
+#include <QDoubleSpinBox>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListView>
 #include <QListWidget>
+#include <QLoggingCategory>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QSettings>
 #include <QTest>
@@ -36,6 +41,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <string_view>
 #include <vector>
 
 using namespace arraw;
@@ -57,6 +63,67 @@ struct CountingDecoder {
             return real(path, options, channel);
         };
     }
+};
+
+/// Counts the lens resolutions the window traces: those by lensfun, and those that only rescale.
+class ResolutionCounter {
+public:
+    ResolutionCounter()
+        : category_(const_cast<QLoggingCategory&>(detail::timingLog())),
+          wasEnabled_(category_.isDebugEnabled()) {
+        category_.setEnabled(QtDebugMsg, true);
+        previous() = qInstallMessageHandler(&ResolutionCounter::handle);
+    }
+    ~ResolutionCounter() {
+        qInstallMessageHandler(previous());
+        category_.setEnabled(QtDebugMsg, wasEnabled_);
+    }
+    ResolutionCounter(const ResolutionCounter&) = delete;
+    ResolutionCounter& operator=(const ResolutionCounter&) = delete;
+
+    static void reset() {
+        resolved().store(0);
+        scaled().store(0);
+    }
+    [[nodiscard]] static int resolvedCount() {
+        return resolved().load();
+    }
+    [[nodiscard]] static int scaledCount() {
+        return scaled().load();
+    }
+
+private:
+    static QtMessageHandler& previous() {
+        static QtMessageHandler instance = nullptr;
+        return instance;
+    }
+    static std::atomic<int>& resolved() {
+        static std::atomic<int> instance{0};
+        return instance;
+    }
+    static std::atomic<int>& scaled() {
+        static std::atomic<int> instance{0};
+        return instance;
+    }
+
+    static void handle(QtMsgType type, const QMessageLogContext& context, const QString& message) {
+        if (context.category == nullptr || std::string_view(context.category) != "arraw.timing") {
+            if (previous() != nullptr) {
+                previous()(type, context, message);
+            }
+            return;
+        }
+        if (message.contains("stage=window.lens") && message.contains("event=note")) {
+            if (message.contains("detail=resolved")) {
+                ++resolved();
+            } else if (message.contains("detail=scaled")) {
+                ++scaled();
+            }
+        }
+    }
+
+    QLoggingCategory& category_;
+    bool wasEnabled_;
 };
 
 /// A window over a folder of two RAWs that name the reference body's kit lens, a RAW that names no
@@ -119,6 +186,27 @@ struct LensWindow {
         return box("lensDistortionCheck");
     }
 
+    [[nodiscard]] SettingSlider& vignetting() const {
+        for (auto* row : window.findChildren<SettingSlider*>()) {
+            if (row->key() == "lensVignetting") {
+                return *row;
+            }
+        }
+        FAIL("no vignetting row");
+        throw;
+    }
+
+    /// Drags the vignetting row as the pointer does, ticking it to each value.
+    void dragVignetting(std::initializer_list<double> values) const {
+        SettingSlider& row = vignetting();
+        emit row.editStarted();
+        for (const double value : values) {
+            emit row.valueEdited(value);
+            QTest::qWait(30);
+        }
+        emit row.editFinished();
+    }
+
     [[nodiscard]] QString lensStatus() const {
         return window.findChild<QLabel*>("lensStatus")->text();
     }
@@ -165,14 +253,14 @@ TEST_CASE("The lens switches are disabled until the database has loaded", "[app]
     LensWindow w(true);
     w.open("a.dng");
     CHECK_FALSE(w.distortion().isEnabled());
-    CHECK_FALSE(w.box("lensVignettingCheck").isEnabled());
+    CHECK_FALSE(w.vignetting().isEnabled());
     CHECK_FALSE(w.box("lensCaCheck").isEnabled());
     CHECK_FALSE(w.button("lensChooseButton").isEnabled());
     CHECK(w.lensStatus().contains("Loading"));
 
     w.released = true;
     REQUIRE(w.ready());
-    CHECK(w.box("lensVignettingCheck").isEnabled());
+    CHECK(w.vignetting().isEnabled());
     CHECK_FALSE(w.lensStatus().contains("Loading"));
 }
 
@@ -200,7 +288,7 @@ TEST_CASE("A lens toggle never decodes again, and is one step that records the l
     const QImage corrected = w.view().wholeFrameImage();
 
     // More toggles, their undo and redo: one decode throughout.
-    w.box("lensVignettingCheck").click();
+    w.dragVignetting({100.0});
     REQUIRE(QTest::qWaitFor([&] { return w.view().wholeFrameImage() != corrected; }, 20000));
     CHECK(w.historyRows() == rows + 2);
     w.action("undoAction").trigger();
@@ -215,6 +303,112 @@ TEST_CASE("A lens toggle never decodes again, and is one step that records the l
     CHECK(w.lensStatus().contains("recorded"));
     QTest::qWait(100);
     CHECK(w.counter.started == 1);
+}
+
+TEST_CASE("A drag of the vignetting amount is one step, and records the lens only at its end",
+          "[app][window][lens][lensfun]") {
+    ARRAW_REQUIRE_LENSFUN_OR_SKIP();
+    LensWindow w;
+    w.open("a.dng");
+    REQUIRE(w.ready());
+    const QImage before = w.view().wholeFrameImage();
+    const int rows = w.historyRows();
+    CHECK(w.vignetting().findChild<QDoubleSpinBox*>()->value() == 0.0);
+
+    SettingSlider& row = w.vignetting();
+    emit row.editStarted();
+    emit row.valueEdited(30.0);
+    REQUIRE(QTest::qWaitFor([&] { return w.view().wholeFrameImage() != before; }, 20000));
+    const QImage thirty = w.view().wholeFrameImage();
+    emit row.valueEdited(60.0);
+    REQUIRE(QTest::qWaitFor([&] { return w.view().wholeFrameImage() != thirty; }, 20000));
+    // Mid-drag: the match is not recorded yet, and no step is made.
+    CHECK(w.lensStatus().contains("automatically"));
+    CHECK(w.historyRows() == rows);
+    emit row.editFinished();
+    QTest::qWait(100);
+    CHECK(w.historyRows() == rows + 1);
+    CHECK(w.lensStatus().contains("recorded"));
+    CHECK(w.vignetting().findChild<QDoubleSpinBox*>()->value() == 60.0);
+    CHECK(w.counter.started == 1);
+
+    // Undo takes the amount and the record away together.
+    const QImage sixty = w.view().wholeFrameImage();
+    w.action("undoAction").trigger();
+    REQUIRE(QTest::qWaitFor([&] { return w.view().wholeFrameImage() == before; }, 20000));
+    CHECK(w.vignetting().findChild<QDoubleSpinBox*>()->value() == 0.0);
+    CHECK(w.lensStatus().contains("automatically"));
+    w.action("redoAction").trigger();
+    REQUIRE(QTest::qWaitFor([&] { return w.view().wholeFrameImage() == sixty; }, 20000));
+
+    // The same amount again leaves no step; the profile's own amount is a different image.
+    w.dragVignetting({60.0});
+    CHECK(w.historyRows() == rows + 1);
+    w.dragVignetting({100.0});
+    REQUIRE(QTest::qWaitFor([&] { return w.view().wholeFrameImage() != sixty; }, 20000));
+    CHECK(w.historyRows() == rows + 2);
+}
+
+TEST_CASE("A drag of the vignetting amount rescales the held profile and never asks lensfun again",
+          "[app][window][lens][lensfun]") {
+    ARRAW_REQUIRE_LENSFUN_OR_SKIP();
+    LensWindow w;
+    w.open("a.dng");
+    REQUIRE(w.ready());
+    const ResolutionCounter counter;
+    ResolutionCounter::reset();
+
+    // From no amount to some: the vignetting is on for the first time, and is resolved once.
+    w.dragVignetting({30.0});
+    QTest::qWait(100);
+    CHECK(ResolutionCounter::resolvedCount() >= 1);
+
+    // Within the drag the profile is only rescaled.
+    ResolutionCounter::reset();
+    w.dragVignetting({40.0, 55.0, 70.0, 85.0, 100.0, 120.0});
+    QTest::qWait(100);
+    CHECK(ResolutionCounter::resolvedCount() == 0);
+    CHECK(ResolutionCounter::scaledCount() >= 1);
+    CHECK(w.vignetting().findChild<QDoubleSpinBox*>()->value() == 120.0);
+}
+
+TEST_CASE("A drag that fails is cancelled: the negative is restored and no step is left",
+          "[app][window][lens][lensfun]") {
+    ARRAW_REQUIRE_LENSFUN_OR_SKIP();
+    LensWindow w;
+    w.open("a.dng");
+    REQUIRE(w.ready());
+    const QImage before = w.view().wholeFrameImage();
+    const int rows = w.historyRows();
+
+    SettingSlider& row = w.vignetting();
+    emit row.editStarted();
+    emit row.valueEdited(60.0);
+    REQUIRE(QTest::qWaitFor([&] { return w.view().wholeFrameImage() != before; }, 20000));
+    CHECK(w.vignetting().findChild<QDoubleSpinBox*>()->value() == 60.0);
+
+    // The session refuses a negative out of range, as any failure of an update would.
+    bool warned = false;
+    QTimer::singleShot(0, [&warned] {
+        if (auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget())) {
+            warned = true;
+            box->accept();
+        }
+    });
+    NegativeSettings invalid;
+    invalid.lens.vignettingAmount = 1000.0F;
+    emit w.window.findChild<DevelopPanel*>()->negativeEdited(invalid);
+    CHECK(warned);
+
+    // The edit is gone with its negative, and the rest of the drag does nothing.
+    CHECK(w.vignetting().findChild<QDoubleSpinBox*>()->value() == 0.0);
+    emit row.valueEdited(70.0);
+    emit row.editFinished();
+    QTest::qWait(100);
+    CHECK(w.historyRows() == rows);
+    CHECK(w.vignetting().findChild<QDoubleSpinBox*>()->value() == 0.0);
+    REQUIRE(QTest::qWaitFor([&] { return w.view().wholeFrameImage() == before; }, 20000));
+    CHECK(w.lensStatus().contains("automatically"));
 }
 
 TEST_CASE("Turning the switches off keeps the recorded lens", "[app][window][lens][lensfun]") {
@@ -253,6 +447,7 @@ TEST_CASE("The lens rows are off for a file that is not a RAW", "[app][window][l
     LensWindow w;
     w.open("d.png");
     CHECK_FALSE(w.distortion().isEnabled());
+    CHECK_FALSE(w.vignetting().isEnabled());
     CHECK(w.lensStatus().contains("RAW"));
 }
 
@@ -321,6 +516,31 @@ TEST_CASE("A paste that needs the lens database waits for it rather than record 
     CHECK(w.lensStatus().contains("recorded"));
 }
 
+TEST_CASE("A photograph opened before the database loads records the lens on its first toggle",
+          "[app][window][lens][lensfun]") {
+    ARRAW_REQUIRE_LENSFUN_OR_SKIP();
+    LensWindow w(true);
+    w.open("a.dng");
+    CHECK_FALSE(w.distortion().isEnabled());
+    const int rows = w.historyRows();
+
+    w.released = true;
+    REQUIRE(w.ready());
+    // The database landing is not a step, and records nothing by itself.
+    CHECK(w.historyRows() == rows);
+    CHECK(w.lensStatus().contains("automatically"));
+    const QImage before = w.view().wholeFrameImage();
+
+    w.distortion().click();
+    REQUIRE(QTest::qWaitFor([&] { return w.view().wholeFrameImage() != before; }, 20000));
+    CHECK(w.historyRows() == rows + 1);
+    CHECK(w.lensStatus().contains("recorded"));
+    w.action("saveAction").trigger();
+    const NegativeSettings saved = w.saved("a.dng").negative();
+    REQUIRE(saved.lens.lens.has_value());
+    CHECK(saved.lens.lens->origin == LensOrigin::Matched);
+}
+
 TEST_CASE("A sidecar that turns a correction on renders with it once the database lands",
           "[app][window][lens][lensfun]") {
     ARRAW_REQUIRE_LENSFUN_OR_SKIP();
@@ -330,7 +550,7 @@ TEST_CASE("A sidecar that turns a correction on renders with it once the databas
         const Photo photo = w.saved("a.dng");
         NegativeSettings negative = photo.negative();
         negative.lens.distortion = true;
-        negative.lens.vignetting = true;
+        negative.lens.vignettingAmount = profileVignettingAmount;
         writeSidecar(photo.with(negative));
     }
     w.open("c.dng");
@@ -394,7 +614,7 @@ TEST_CASE("A lens with no calibration for the correction is found, and the statu
     bare.lens.maxAperture = 1.8;
     bare.lens.focalLength = 24.0;
     NegativeSettings negative = plain.negative();
-    negative.lens.vignetting = true; // The fixture lens has none.
+    negative.lens.vignettingAmount = profileVignettingAmount; // The fixture lens has none.
     const LensView view =
         resolveLensView(Photo(raw, bare, negative, plain.state()), &test::fixtureDatabase());
     CHECK_FALSE(view.correction.active());

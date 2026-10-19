@@ -1,4 +1,5 @@
 #include <LensCorrection.h>
+#include <NegativeSettings.h>
 
 #include <algorithm>
 #include <cmath>
@@ -92,6 +93,24 @@ double arraw::fillScaleOf(const LensCorrection& correction, double aspect) {
 
 LensCorrection arraw::withFillScale(LensCorrection correction) {
     correction.fill = fillScaleOf(correction, correction.aspect);
+    return correction;
+}
+
+LensCorrection arraw::withVignettingAmount(LensCorrection correction, float amount) {
+    if (correction.vignetting.empty() || amount == profileVignettingAmount) {
+        return correction;
+    }
+    if (amount <= 0.0F) {
+        correction.vignetting.clear();
+        correction.vignettingFrom.reset();
+        return correction.active() ? correction : LensCorrection{};
+    }
+    const double exponent = static_cast<double>(amount) / 100.0;
+    for (float& gain : correction.vignetting) {
+        if (std::isfinite(gain) && gain > 0.0F) {
+            gain = static_cast<float>(std::pow(static_cast<double>(gain), exponent));
+        }
+    }
     return correction;
 }
 

@@ -53,6 +53,18 @@ LensCorrection barrel(float strength, double aspect = 1.6) {
     return withFillScale(std::move(correction));
 }
 
+/// @brief Makes a vignetting profile by hand for a frame of an aspect.
+LensCorrection falloff(double aspect = 1.6) {
+    LensCorrection correction;
+    correction.aspect = aspect;
+    correction.vignetting.resize(lensTableNodes);
+    for (std::size_t node = 0; node < lensTableNodes; ++node) {
+        const double radius = static_cast<double>(node) / (lensTableNodes - 1);
+        correction.vignetting[node] = static_cast<float>(1.0 + 0.8 * radius * radius);
+    }
+    return withFillScale(std::move(correction));
+}
+
 /// @brief Makes the source the tests render.
 std::shared_ptr<const ImageBuffer> makeSource() {
     return std::make_shared<const ImageBuffer>(
@@ -151,6 +163,36 @@ TEST_CASE("A lens toggle resumes from the Denoise rung and a develop edit from t
     // A noise reduction edit runs everything after the source again.
     state.settings.noiseReduction.color = 10.0F;
     CHECK_FALSE(render(state, lens).has_value());
+}
+
+TEST_CASE("A vignetting amount resumes from the Denoise rung, up from 0 and down from 100",
+          "[lens][stage][ladder]") {
+    const auto source = makeSource();
+    const RenderRequest request = fitting(80);
+    const LensCorrection profile = falloff();
+    const LensCorrection sixty = withVignettingAmount(profile, 60.0F);
+    REQUIRE(sixty != profile);
+    const DevelopState state = denoisedState();
+
+    const auto render = [&](CheckpointLadder& ladder, const LensCorrection& with) {
+        const LadderRender rendered = resumeOrDevelop(ladder, source, state, with, request);
+        CHECK(sameBits(rendered.checkpoint.readBack(), develop(*source, state, with, request)));
+        return rendered.resumedFrom;
+    };
+
+    CheckpointLadder atProfile;
+    CHECK_FALSE(render(atProfile, profile).has_value());
+    CHECK(render(atProfile, sixty) == Stage::Denoise);
+    CHECK(render(atProfile, withVignettingAmount(profile, 0.0F)) == Stage::Denoise);
+
+    CheckpointLadder fromZero;
+    CHECK_FALSE(render(fromZero, LensCorrection{}).has_value());
+    CHECK(render(fromZero, sixty) == Stage::Denoise);
+    // Plans of other amounts differ from the Lens boundary on, and agree before it.
+    const ProcessingPlan a = planFor(*source, state, profile);
+    const ProcessingPlan b = planFor(*source, state, sixty);
+    CHECK(prefixMatches(a, b, Stage::Denoise));
+    CHECK_FALSE(prefixMatches(a, b, Stage::Lens));
 }
 
 TEST_CASE("Without noise reduction a toggle resumes from the source, which is held",
@@ -281,10 +323,14 @@ LensFacts kitFacts() {
     return facts;
 }
 
-const LensSettings distortionOnly{
-    .distortion = true, .vignetting = false, .lateralCa = false, .lens = std::nullopt};
-const LensSettings allOn{
-    .distortion = true, .vignetting = true, .lateralCa = true, .lens = std::nullopt};
+const LensSettings distortionOnly{.distortion = true,
+                                  .vignettingAmount = minimumVignettingAmount,
+                                  .lateralCa = false,
+                                  .lens = std::nullopt};
+const LensSettings allOn{.distortion = true,
+                         .vignettingAmount = profileVignettingAmount,
+                         .lateralCa = true,
+                         .lens = std::nullopt};
 
 /// @brief Copies the fixture database into a directory, replacing a text in its lens file and
 /// writing another stamp.

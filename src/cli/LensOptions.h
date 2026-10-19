@@ -3,6 +3,7 @@
 #include <LensCorrection.h>
 #include <LensDatabase.h>
 #include <LensMatch.h>
+#include <NegativeSettings.h>
 #include <Photo.h>
 
 #include <QCommandLineParser>
@@ -20,8 +21,8 @@ namespace arraw::cli {
 /// @brief What the lens flags of a command said.
 struct LensOptions {
     /// @brief Corrections `--lens-corrections` named, applied over each RAW's own settings; none
-    /// keeps them.
-    std::optional<LensKinds> corrections;
+    /// keeps them. Its lens is always empty and is ignored.
+    std::optional<LensSettings> corrections;
 
     /// @brief Lens `--lens` named, recorded as chosen over what each RAW had; none keeps it.
     std::optional<LensIdentity> lens;
@@ -67,7 +68,7 @@ private:
 
 /// @brief Applies the flags to a photograph, before it is rendered.
 ///
-/// Sets the three switches the flags named and records the lens `--lens` named as chosen. A
+/// Sets the corrections the flags named and records the lens `--lens` named as chosen. A
 /// photograph that is not a RAW is returned as it was.
 /// @param photo Photograph as opened.
 /// @param options What the flags said.

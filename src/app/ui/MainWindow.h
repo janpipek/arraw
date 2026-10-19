@@ -77,7 +77,7 @@ public:
     /// A test may give one it counts calls of.
     /// @param lensDatabase Gives the lens database, called once on a thread of its own at
     /// startup, and by the export queue and the thumbnails when they need it; empty for the
-    /// process's own (::arraw::LensDatabase::system). The lens switches stay disabled until it
+    /// process's own (::arraw::LensDatabase::system). The lens settings stay disabled until it
     /// has returned. A test may give one that loads a fixture.
     explicit MainWindow(DebugLog& debugLog, QWidget* parent = nullptr,
                         PhotoLoader::Decoder decoder = {}, LensDatabaseSource lensDatabase = {});
@@ -293,6 +293,12 @@ private:
     /// Ignored when no edit is open: a failure cancelled it, and the rest of that drag is dropped.
     void updateEdit(const DevelopState& state);
 
+    /// @brief Takes the negative settings a drag in the Negative group has reached.
+    ///
+    /// For the vignetting amount (ADR 050): the open edit keeps them and the preview shows the
+    /// scaled correction, without decoding again. Ignored when no edit is open.
+    void updateNegativeEdit(const NegativeSettings& negative);
+
     /// @brief Closes the edit as one history step.
     /// @param origin Kind of step it is.
     void finishEdit(EditOrigin origin);
@@ -490,8 +496,9 @@ private:
 
     /// @brief Gives the open photograph's lens corrections and what the panel says of them.
     ///
-    /// Resolved when the switches, the recorded lens or the database change, and kept until they
-    /// do again. Matching a lens takes some milliseconds with the full database.
+    /// Resolved when the corrections (the amount only as 0 or 100), the recorded lens or the
+    /// database change, and kept until they do again. Matching a lens takes some milliseconds with
+    /// the full database.
     /// @pre A photograph is open.
     [[nodiscard]] const LensView& lensView();
 
@@ -554,9 +561,11 @@ private:
         /// Newest render request made before the pixels last changed; the crop mode's cached
         /// image is made only from renders of later requests.
         std::uint64_t cropImageFloor = 0;
-        /// What lensView was resolved for: the switches and recorded lens, and the database (null
-        /// while it loads). Empty before the first resolution.
+        /// What lensView was resolved for: the corrections and recorded lens, and the database
+        /// (null while it loads). Empty before the first resolution.
         std::optional<std::pair<LensSettings, const LensDatabase*>> lensKey = std::nullopt;
+        /// The vignetting amount lensView's correction is scaled to; the key holds it as 0 or 100.
+        float lensAmount = 0.0F;
         /// The lens corrections and the panel's words about them, as of lensKey.
         LensView lensView = {};
     };

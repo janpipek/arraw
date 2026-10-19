@@ -6,6 +6,7 @@
 #include <DevelopState.h>
 #include <LensCorrection.h>
 #include <LocalAdjustmentEdits.h>
+#include <NegativeSettings.h>
 #include <SettingsJson.h>
 
 #include <QColor>
@@ -133,6 +134,15 @@ TEST_CASE("Cache keys follow the file, and developed ones the saved state", "[th
         LensCorrection updated = lens;
         updated.vignettingFrom->database = "stamp-2";
         REQUIRE(*ThumbnailCache::developedKey(file, plainState, {}, updated) != key);
+
+        // Amounts of the same profile: the key follows the scaled table.
+        const auto keyAt = [&](float amount) {
+            return *ThumbnailCache::developedKey(file, plainState, {},
+                                                 withVignettingAmount(lens, amount));
+        };
+        REQUIRE(keyAt(60.0F) != keyAt(profileVignettingAmount));
+        REQUIRE(keyAt(60.0F) == keyAt(60.0F));
+        REQUIRE(keyAt(profileVignettingAmount) == key);
     }
     SECTION("the switches of the negative change the key, with or without a lens found") {
         NegativeSettings negative;
