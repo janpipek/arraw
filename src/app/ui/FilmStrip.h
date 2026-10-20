@@ -259,7 +259,7 @@ public:
     /// @brief Sets the number of shots at which the notice says the folder is large.
     ///
     /// A seam for tests, which cannot list a hundred thousand shots.
-    /// @param shots Shots at which the soft note shows, once per listing.
+    /// @param shots Shots at which the soft note shows, while the strip holds as many.
     void setLargeFolderShots(int shots) {
         largeFolderShots_ = shots;
     }
@@ -269,6 +269,9 @@ public:
 
     /// @brief Tells whether the title bar's notice shows: some folders are not watched or cannot
     /// be read, the folder is unavailable, or the listing is large.
+    ///
+    /// The notice is a button that refreshes the folder, or, when the large-folder note is all it
+    /// says, a plain label.
     /// @return True while the notice is visible.
     [[nodiscard]] bool hasWatchNotice() const;
 
@@ -456,6 +459,8 @@ private:
     /// Title bar's notice (unavailable, unreadable and unwatched folders, a large listing);
     /// hidden when none applies.
     QToolButton* noticeButton_ = nullptr;
+    /// Title bar's large-folder note, in place of the button when it is all the notice says.
+    QLabel* largeNote_ = nullptr;
     /// Watch status of the folder, all zeros before its walk ends.
     WatchStatus watchStatus_;
     /// Shots at which the large-folder note shows.
@@ -466,6 +471,8 @@ private:
     /// Whether the model is being given a new folder, which a reset must not carry a selection
     /// into.
     bool changingFolder_ = false;
+    /// Whether the model is dropping the subfolders' rows, whose queued thumbnails go with them.
+    bool droppingSubfolders_ = false;
     /// Taken when the model starts a reset that merges a refresh; empty otherwise.
     std::optional<ResetStash> stash_;
     std::function<bool()> subfoldersLeaveGuard_;

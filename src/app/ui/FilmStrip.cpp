@@ -26,6 +26,7 @@
 #include <QStringList>
 #include <QStyle>
 #include <QStyledItemDelegate>
+#include <QTextDocument>
 #include <QToolButton>
 #include <QUrl>
 
@@ -332,6 +333,18 @@ FilmStrip::FilmStrip(QWidget* parent, ThumbnailCache cache, LensDatabaseSource l
     // proxy, which has taken the rows in by the time this runs.
     connect(&model_, &QAbstractItemModel::rowsInserted, this,
             [this](const QModelIndex&, int first, int last) { takeInsertedRows(first, last); });
+    connect(&model_, &QAbstractItemModel::rowsAboutToBeRemoved, this,
+            [this](const QModelIndex&, int first, int last) {
+                if (!droppingSubfolders_) {
+                    return;
+                }
+                std::vector<fs::path> leaving;
+                leaving.reserve(static_cast<std::size_t>(last - first + 1));
+                for (int row = first; row <= last; ++row) {
+                    leaving.push_back(model_.shot(row).primary);
+                }
+                thumbnails_.removeShots(leaving);
+            });
     connect(&model_, &ShotModel::listingChanged, this, &FilmStrip::onListingChanged);
     connect(&model_, &ShotModel::refreshingChanged, this, &FilmStrip::onRefreshingChanged);
     busyTimer_.setInterval(busyNoteMs);
@@ -433,6 +446,12 @@ void FilmStrip::buildTitleBar() {
     noticeButton_->hide();
     connect(noticeButton_, &QToolButton::clicked, this, &FilmStrip::refreshFolder);
     layout->addWidget(noticeButton_);
+    // The large-folder note alone has nothing to click for: a plain label in the same place.
+    largeNote_ = new QLabel(titleBar_);
+    largeNote_->setObjectName(QStringLiteral("filmStripLargeNote"));
+    largeNote_->setTextFormat(Qt::PlainText);
+    largeNote_->hide();
+    layout->addWidget(largeNote_);
 
     buildFilterControls(titleBar_);
 }
@@ -591,7 +610,7 @@ void FilmStrip::setMaxWatchedFolders(int limit) {
 }
 
 bool FilmStrip::hasWatchNotice() const {
-    return !noticeButton_->isHidden();
+    return !noticeButton_->isHidden() || !largeNote_->isHidden();
 }
 
 void FilmStrip::refreshFolder() {
@@ -620,7 +639,7 @@ void FilmStrip::updateNotice() {
     }
     if (const int unreadable = watchStatus_.unreadable; unreadable > 0) {
         texts << (unreadable == 1 ? tr("1 folder could not be read")
-                                  : tr("%1 folders could not be read").arg(unreadable));
+                                  : tr("%n folders could not be read", nullptr, unreadable));
         QStringList paths;
         for (const fs::path& path : watchStatus_.unreadableFolders) {
             paths << toQString(path.lexically_normal());
@@ -628,14 +647,14 @@ void FilmStrip::updateNotice() {
         QString tip = tr("These folders cannot be read now, so their shots are not shown "
                          "(or, after an I/O error, are shown as they were):\n%1")
                           .arg(paths.join(QLatin1Char('\n')));
-        if (unreadable > paths.size()) {
-            tip += tr("\n… and %1 more").arg(unreadable - static_cast<int>(paths.size()));
+        if (const int more = unreadable - static_cast<int>(paths.size()); more > 0) {
+            tip += tr("\n… and %n more", nullptr, more);
         }
         tips << tip + tr("\nClick, or press %1, to try again.").arg(refreshKeys);
     }
     if (const int unwatched = watchStatus_.unwatched(); unwatched > 0) {
         texts << (unwatched == 1 ? tr("1 folder not watched")
-                                 : tr("%1 folders not watched").arg(unwatched));
+                                 : tr("%n folders not watched", nullptr, unwatched));
         tips << tr("Arraw watches at most %1 folders, the shallowest first: the system limits "
                    "the watches all programs share (inotify on Linux), and %2 of the %3 folders "
                    "here have none.\nNew files in those folders appear after a refresh. Click, "
@@ -645,19 +664,28 @@ void FilmStrip::updateNotice() {
                     .arg(watchStatus_.directories)
                     .arg(refreshKeys);
     }
+    // Something to try again or refresh for; the large-folder note alone is not (review N3).
+    const bool actionable = !texts.isEmpty();
     if (largeNoted_ && model_.rowCount() >= largeFolderShots_) {
         texts << tr("Large folder: %1 shots; the strip may be slow")
                      .arg(QLocale().toString(model_.rowCount()));
         tips << tr("Very large listings can make the strip slow. Nothing is limited: all the "
                    "shots are listed.");
     }
-    if (texts.isEmpty()) {
-        noticeButton_->hide();
-        return;
+    // As plain text, whatever the paths in it look like: a tooltip that looks like rich text is
+    // shown as such (review N1).
+    const QString text = texts.join(QStringLiteral(" · "));
+    const QString tip =
+        Qt::convertFromPlainText(tips.join(QStringLiteral("\n\n")), Qt::WhiteSpaceNormal);
+    noticeButton_->setVisible(actionable);
+    largeNote_->setVisible(!actionable && !texts.isEmpty());
+    if (actionable) {
+        noticeButton_->setText(text);
+        noticeButton_->setToolTip(tip);
+    } else if (!texts.isEmpty()) {
+        largeNote_->setText(text);
+        largeNote_->setToolTip(tip);
     }
-    noticeButton_->setText(texts.join(QStringLiteral(" · ")));
-    noticeButton_->setToolTip(tips.join(QStringLiteral("\n\n")));
-    noticeButton_->show();
 }
 
 void FilmStrip::takeInsertedRows(int first, int last) {
@@ -762,13 +790,17 @@ void FilmStrip::setIncludeSubfolders(bool include) {
         } else if (!include && pendingActive_ && !inFolder(*pendingActive_)) {
             pendingActive_.reset();
         }
-        // What the first listing announced is not announced again for the shots that come.
-        firstShotSent_ = true;
+        // What the listing announced is not announced again for the shots that come; a listing
+        // that has not brought its first shot yet still announces it (review B3).
+        firstShotSent_ = firstShotSent_ || proxy_.rowCount() > 0;
+        // The thumbnails still queued for the rows that go are dropped with them (review R4).
+        droppingSubfolders_ = !include;
         model_.setRecursive(include);
+        droppingSubfolders_ = false;
         if (!include) {
             // The strip may have lost the open photograph: the window opens the first shot that
             // is left, or none, as it does at the end of a listing. Queued, after the toggle
-            // has been announced.
+            // has been announced. A first listing still under way says so itself when it ends.
             QMetaObject::invokeMethod(
                 this,
                 [this, number = listingNumber_] {
@@ -777,7 +809,7 @@ void FilmStrip::setIncludeSubfolders(bool include) {
                     }
                     if (proxy_.rowCount() > 0) {
                         emit firstShotListed(toQString(primaryAt(proxy_.index(0, 0))));
-                    } else {
+                    } else if (!model_.isListing()) {
                         emit listingEnded();
                     }
                 },

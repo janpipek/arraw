@@ -213,6 +213,25 @@ public:
         background_.clear();
     }
 
+    /// @brief Drops the jobs not yet started for some shots; the running one finishes.
+    /// @param primaries Primary files of the shots.
+    /// @param generation Folder generation whose jobs are counted.
+    /// @return Number of jobs of that generation dropped.
+    int drop(const std::unordered_set<fs::path>& primaries, std::uint64_t generation) {
+        int dropped = 0;
+        const auto unwanted = [&](const Job& job) {
+            if (!primaries.contains(job.primary)) {
+                return false;
+            }
+            dropped += job.generation == generation ? 1 : 0;
+            return true;
+        };
+        const std::scoped_lock lock(mutex_);
+        std::erase_if(urgent_, unwanted);
+        std::erase_if(background_, unwanted);
+        return dropped;
+    }
+
 private:
     /// @brief Serves jobs until asked to stop.
     void run(const std::stop_token& stop) {
@@ -349,14 +368,25 @@ void ShotModel::setRecursive(bool recursive) {
     applyTimer_.stop();
     const Walking was = walking_;
     if (recursive) {
-        if (was == Walking::None) {
+        // The silent walk of a switch off that has not ended yet is replaced by a listing, which
+        // says so (review B2).
+        if (was == Walking::None || was == Walking::Toggle) {
             walking_ = Walking::Listing;
             emit listingChanged(true);
         }
     } else {
         // Every row after the root's own goes, with one signal; the walk only has to drop the
-        // subfolders' watches, and read the root again.
-        removeRange(spans_.upper_bound(withoutTrailingSeparator(folder_)), spans_.end());
+        // subfolders' watches, and read the root again. The marks and EXIF still queued for
+        // those rows go too (review R4); switching on again queues them anew.
+        const auto first = spans_.upper_bound(withoutTrailingSeparator(folder_));
+        if (first != spans_.end()) {
+            std::unordered_set<fs::path> leaving;
+            for (auto row = rows_.begin() + first->second.first; row != rows_.end(); ++row) {
+                leaving.insert(row->shot.primary);
+            }
+            pending_ -= loader_->drop(leaving, generation_);
+        }
+        removeRange(first, spans_.end());
         if (was == Walking::None) {
             walking_ = Walking::Toggle;
         }
@@ -489,22 +519,52 @@ void ShotModel::applyStep(std::vector<fs::path>& added, std::vector<Job>& rechec
 
 void ShotModel::endWalk(const ListingSummary& summary) {
     // What the walk did not read is gone: it has no shots now. What it could not read (a folder
-    // that is unavailable for now, and everything below it) is kept as it was. From the last
-    // folder back, so that each removal moves the fewest spans. A first listing made every span
-    // from what it read, so it has none to look for.
-    std::vector<fs::path> unseen;
+    // that is unavailable for now, and everything below it) is kept as it was. Each run of
+    // adjacent folders goes with one remove, from the last run back, so that each removal moves
+    // the fewest spans. A first listing made every span from what it read, so it has none to
+    // look for.
+    /// @brief Folders of adjacent spans that go, the first and the last.
+    struct Run {
+        fs::path first;
+        fs::path last;
+    };
+    std::vector<Run> unseen;
     if (walking_ != Walking::Listing) {
-        for (const auto& [folder, span] : spans_) {
-            if (!seen_.contains(folder) &&
-                std::ranges::none_of(summary.stale, [&](const fs::path& stale) {
-                    return isWithin(folder, stale);
-                })) {
-                unseen.push_back(folder);
+        // The outermost stale folders, in folder order: each one's subtree is a range of the
+        // spans, and the ranges follow one another, so one pass over both tells what is kept
+        // (review R5: thousands of stale folders after a share failed part-way).
+        std::vector<fs::path> stale = summary.stale;
+        std::ranges::sort(stale, FolderOrder{});
+        std::vector<fs::path> kept;
+        for (fs::path& folder : stale) {
+            if (kept.empty() || !isWithin(folder, kept.back())) {
+                kept.push_back(std::move(folder));
             }
         }
+        const FolderOrder precedes;
+        auto next = kept.begin();
+        bool extends = false; // Whether the span before went too.
+        for (const auto& [folder, span] : spans_) {
+            while (next != kept.end() && precedes(*next, folder) && !isWithin(folder, *next)) {
+                ++next;
+            }
+            const bool goes =
+                !(next != kept.end() && isWithin(folder, *next)) && !seen_.contains(folder);
+            if (goes && extends) {
+                unseen.back().last = folder;
+            } else if (goes) {
+                unseen.push_back({folder, folder});
+            }
+            extends = goes;
+        }
     }
-    for (auto folder = unseen.rbegin(); folder != unseen.rend(); ++folder) {
-        removeFolder(spans_.find(*folder));
+    for (auto run = unseen.rbegin(); run != unseen.rend(); ++run) {
+        const auto first = spans_.find(run->first);
+        const auto last = spans_.find(run->last);
+        if (first == spans_.end() || last == spans_.end()) {
+            break; // A view's handler changed the folder.
+        }
+        removeRange(first, std::next(last));
     }
     seen_.clear();
     const Walking was = walking_;
@@ -698,19 +758,6 @@ void ShotModel::resetFolder(Span span, std::span<const Shot> fresh, std::vector<
                  std::make_move_iterator(next.end()));
     reindexFrom(span.first);
     endResetModel();
-}
-
-void ShotModel::removeFolder(Spans::iterator span) {
-    const Span rows = span->second;
-    beginRemoveRows({}, rows.first, rows.first + rows.count - 1);
-    for (int row = rows.first; row < rows.first + rows.count; ++row) {
-        index_.erase(rows_[row].shot.primary);
-    }
-    rows_.erase(rows_.begin() + rows.first, rows_.begin() + rows.first + rows.count);
-    shiftSpans(std::next(span), -rows.count);
-    spans_.erase(span);
-    reindexFrom(rows.first);
-    endRemoveRows();
 }
 
 void ShotModel::removeTree(const fs::path& folder) {

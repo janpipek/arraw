@@ -50,8 +50,10 @@ struct FolderResult {
     /// @brief Its own shots, in ::arraw::groupShots order; none for a directory without any.
     std::vector<Shot> shots;
 
-    /// @brief Whether the directory went, or could not be read: its rows go, and so do those of
-    /// every folder below it (::arraw::app::ShotModel::removeSubtree).
+    /// @brief Whether the directory went (gone, no longer a directory) or is refused for lack of
+    /// permission, while the root still opens: its rows go, and so do those of every folder below
+    /// it (::arraw::app::ShotModel::removeSubtree). A directory that fails in another way keeps
+    /// its rows (see ::arraw::app::ListingSummary::stale).
     bool gone = false;
 
     /// @brief Whether the directory was read again because it reported a change, so that the
@@ -61,17 +63,10 @@ struct FolderResult {
 
 /// @brief What a finished walk saw.
 struct ListingSummary {
-    /// @brief Number of shots listed.
-    int shots = 0;
-
-    /// @brief Number of directories that could not be read when the walk ended: subfolders that
-    /// were dropped for lack of permission, and subfolders kept as stale (see
-    /// ::arraw::app::ListingSummary::stale). The root is counted in neither.
-    int unreadable = 0;
-
     /// @brief Directories whose read failed in a way that may pass (the root, whatever the error,
-    /// or a subfolder with an I/O error): their rows, and those below them, are kept, not swept as
-    /// if they had gone (::arraw::app::ShotModel::finishListing).
+    /// a subfolder with an I/O error, or any subfolder while the root does not open): their rows,
+    /// and those below them, are kept, not swept as if they had gone
+    /// (::arraw::app::ShotModel::finishListing). In no particular order.
     std::vector<std::filesystem::path> stale;
 };
 

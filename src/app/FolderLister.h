@@ -70,7 +70,12 @@ namespace arraw::app {
 /// subtree; one that is refused for lack of permission is dropped too, and counted as unreadable
 /// until a read of its parent finds it readable; one with any other error (an I/O error on a
 /// share) keeps its rows, is counted and listed as stale, and is read again at the next report of
-/// its own or refresh.
+/// its own or refresh. Before a subfolder is dropped, the root is opened: when it does not open
+/// (an unmount reports every watch, and a rename reports the subfolders under their old paths),
+/// the root is unavailable and the subfolder is kept, as stale, as the root's rows are. A
+/// directory that reads again after it failed (the root, or a stale subfolder) has its subtree
+/// walked again and re-watched, with its sidecars checked; a subfolder that reads while the root
+/// is unavailable has the root read too.
 ///
 /// Results are stamped with the number of the walk of the tree they belong to, the last one
 /// started. Starting one abandons the walk under way, and what was to be read for the walk before:
@@ -212,8 +217,10 @@ private:
     /// @param directory Directory just read.
     /// @param folders Its listed subfolders, in folder order; none when not recursive.
     /// @param enter Whether its known subfolders are read again too.
+    /// @param recheck Whether the reads of its subfolders check their sidecars too.
     void followSubfolders(Tree::iterator directory,
-                          const std::vector<std::filesystem::path>& folders, bool enter);
+                          const std::vector<std::filesystem::path>& folders, bool enter,
+                          bool recheck);
 
     /// @brief Drops a directory and its subtree from the tree, releasing their watches, and hands
     /// it over as gone.
@@ -225,6 +232,9 @@ private:
     /// @param kind Why it failed.
     /// @param message The system's words for it.
     void handleFailure(Tree::iterator directory, FolderError kind, std::string message);
+
+    /// @brief Tells whether the root opens; one that does not is marked unavailable.
+    [[nodiscard]] bool rootOpens();
 
     /// @brief Forgets the failures recorded for a folder and everything below it.
     /// @param folder Folder.

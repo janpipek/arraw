@@ -195,6 +195,18 @@ void ThumbnailWorker::addShots(const std::vector<fs::path>& primaries) {
     wake_.notify_one();
 }
 
+void ThumbnailWorker::removeShots(const std::vector<fs::path>& primaries) {
+    const std::unordered_set<fs::path> gone(primaries.begin(), primaries.end());
+    const auto isGone = [&](const fs::path& primary) { return gone.contains(primary); };
+    const std::scoped_lock lock(mutex_);
+    std::erase_if(urgent_, isGone);
+    std::erase_if(embedded_, isGone);
+    std::erase_if(developed_, isGone);
+    for (const fs::path& primary : primaries) {
+        known_.erase(primary);
+    }
+}
+
 void ThumbnailWorker::setVisible(std::vector<fs::path> primaries) {
     const std::scoped_lock lock(mutex_);
     visible_.clear();

@@ -31,10 +31,9 @@ inline void listNow(app::ShotModel& model) {
             if (model.recursive()) {
                 pending.insert(pending.end(), listing.folders.rbegin(), listing.folders.rend());
             }
-            summary.shots += static_cast<int>(listing.shots.size());
             batch.push_back({directory, std::move(listing.shots)});
         } catch (const std::exception&) {
-            ++summary.unreadable;
+            // Skipped with its subtree.
         }
     }
     const std::uint64_t walk = model.walk();

@@ -298,9 +298,13 @@ TEST_CASE("A listing past the large-folder size says so once, softly", "[app][fi
     strip.setLargeFolderShots(4);
     strip.setFolder(tree.folder.path());
     REQUIRE(listed(strip));
-    auto* button = notice(strip);
     REQUIRE(QTest::qWaitFor([&] { return strip.hasWatchNotice(); }, 10000));
-    CHECK(button->text() == "Large folder: 4 shots; the strip may be slow");
+    // Nothing to try again: a plain label, not the button that refreshes (review N3).
+    const auto* note = strip.titleBar()->findChild<QLabel*>("filmStripLargeNote");
+    REQUIRE(note);
+    CHECK(note->text() == "Large folder: 4 shots; the strip may be slow");
+    CHECK_FALSE(note->isHidden());
+    CHECK(notice(strip)->isHidden());
 
     // It never blocks: the strip goes on, and the note follows the count while it is past.
     touch(tree.folder.file("e.jpg"));
@@ -318,4 +322,31 @@ TEST_CASE("A listing past the large-folder size says so once, softly", "[app][fi
     strip.setFolder(other.folder.path());
     REQUIRE(listed(strip));
     CHECK_FALSE(strip.hasWatchNotice());
+}
+
+TEST_CASE("The notice's tooltip shows a folder's path as it is, never as markup",
+          "[app][filmstrip][notice][failure]") {
+#ifdef _WIN32
+    SKIP("Windows does not allow < and > in a name");
+#else
+    // Review N1.
+    const test::TempDir parent;
+    const fs::path root = parent.file("<b>2026</b>");
+    touch(root / "a.jpg");
+    Strip holder;
+    FilmStrip& strip = holder.strip;
+    strip.setFolder(root);
+    REQUIRE(listed(strip));
+    strip.setListingHook([root](const fs::path& directory) {
+        if (directory == root) {
+            throw fs::filesystem_error("simulated", directory,
+                                       std::make_error_code(std::errc::io_error));
+        }
+    });
+    strip.refreshFolder();
+    REQUIRE(QTest::qWaitFor([&] { return strip.hasWatchNotice(); }, 10000));
+    const QString tip = notice(strip)->toolTip();
+    CHECK(tip.contains("&lt;b&gt;2026&lt;/b&gt;"));
+    CHECK_FALSE(tip.contains("<b>2026</b>"));
+#endif
 }

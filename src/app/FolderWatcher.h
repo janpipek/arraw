@@ -65,6 +65,13 @@ public:
     /// hang the application's exit (plan, answer 6). The thread is then orphaned: it owns the
     /// lister and everything the lister touches, nothing it delivers reaches this watcher or the
     /// model any more, and it ends and deletes itself once the hung call returns.
+    ///
+    /// Only the lister's thread is let go. The marks and EXIF loader of the
+    /// ::arraw::app::ShotModel, the strip's ::arraw::app::ThumbnailWorker and the export queue are
+    /// joined as they always were, so an exit while one of them is inside a read on a share that
+    /// hangs still waits for that read (an export may be writing its file, and is not cut off).
+    /// An orphaned thread whose call returns only while the process exits, as static
+    /// destructors run, may touch Qt's state as it goes; that window is not guarded.
     ~FolderWatcher() override;
 
     FolderWatcher(const FolderWatcher&) = delete;

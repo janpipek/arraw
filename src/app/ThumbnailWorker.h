@@ -95,6 +95,11 @@ public:
     /// @param primaries Primary files.
     void addShots(const std::vector<std::filesystem::path>& primaries);
 
+    /// @brief Drops the jobs still queued for shots that are no longer shown; the running one
+    /// finishes. Adding them again queues them anew.
+    /// @param primaries Primary files.
+    void removeShots(const std::vector<std::filesystem::path>& primaries);
+
     /// @brief Names the shots on screen, to serve first.
     /// @param primaries Primary files; replaces the previous list.
     void setVisible(std::vector<std::filesystem::path> primaries);

@@ -65,7 +65,7 @@ QToolButton* subfoldersButton(const FilmStrip& strip) {
 
 } // namespace
 
-TEST_CASE("The film strip's subfolder toggle re-lists the folder and keeps the active shot",
+TEST_CASE("The film strip's subfolder toggle brings the subfolders and keeps the active shot",
           "[app][filmstrip][subfolders]") {
     const test::TempDir folder;
     fs::create_directories(folder.file("sub"));
@@ -437,4 +437,49 @@ TEST_CASE("The film strip keeps its selection when a refresh is too scattered to
     REQUIRE(selection->currentIndex().isValid());
     REQUIRE(selection->currentIndex().data(ShotModel::PathRole).toString().toStdString() ==
             folder.file(name(40)).string());
+}
+
+TEST_CASE("A toggle before a folder's first shot arrives still announces that shot",
+          "[app][filmstrip][subfolders]") {
+    // Review B3: the window opens the first shot of a folder it opened when it arrives.
+    const test::TempDir folder;
+    fs::create_directories(folder.file("sub"));
+    touch(folder.file("a.jpg"));
+    touch(folder.file("sub/b.jpg"));
+    Strip holder;
+    FilmStrip& strip = holder.strip;
+    QSignalSpy first(&strip, &FilmStrip::firstShotListed);
+    QSignalSpy ended(&strip, &FilmStrip::listingEnded);
+
+    SECTION("Switched on") {
+        const test::ListingGate gate(folder.path());
+        strip.setListingHook(gate.hook());
+        strip.setFolder(folder.path());
+        REQUIRE(QTest::qWaitFor([&] { return gate.reached(); }, 10000));
+        strip.setIncludeSubfolders(true);
+        QCoreApplication::processEvents();
+        CHECK(ended.count() == 0);
+        gate.release();
+        REQUIRE(listed(strip));
+        REQUIRE(QTest::qWaitFor([&] { return ended.count() == 1; }, 10000));
+        REQUIRE(first.count() == 1);
+        CHECK(first.front().front().toString() == text(folder.file("a.jpg")));
+    }
+    SECTION("Switched off") {
+        strip.setIncludeSubfolders(true);
+        const test::ListingGate gate(folder.path());
+        strip.setListingHook(gate.hook());
+        strip.setFolder(folder.path());
+        REQUIRE(QTest::qWaitFor([&] { return gate.reached(); }, 10000));
+        strip.setIncludeSubfolders(false);
+        // The listing is still under way: its end is not announced yet.
+        QCoreApplication::processEvents();
+        CHECK(ended.count() == 0);
+        CHECK(first.count() == 0);
+        gate.release();
+        REQUIRE(listed(strip));
+        REQUIRE(QTest::qWaitFor([&] { return ended.count() == 1; }, 10000));
+        REQUIRE(first.count() == 1);
+        CHECK(first.front().front().toString() == text(folder.file("a.jpg")));
+    }
 }

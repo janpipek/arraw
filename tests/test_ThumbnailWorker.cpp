@@ -19,9 +19,11 @@
 
 #include <algorithm>
 #include <chrono>
+#include <condition_variable>
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -260,6 +262,57 @@ TEST_CASE("A new folder drops the old jobs and their results", "[thumbnailworker
         }
     }
     REQUIRE(oldDelivered < 2 * oldShots.size());
+}
+
+TEST_CASE("Removed shots lose their queued jobs, and are queued anew when added again",
+          "[thumbnailworker]") {
+    // Review R4: the subfolders switched off. The worker is held in the delivery of the first
+    // shot's preview, so that the others wait in the queue.
+    const test::TempDir folder;
+    const test::TempDir cacheRoot;
+    const fs::path first = addShot(folder, "FIRST.dng");
+    const std::vector<fs::path> others{folder.file("B.dng"), folder.file("C.dng"),
+                                       folder.file("D.dng")};
+    struct Hold {
+        std::mutex mutex;
+        std::condition_variable wake;
+        bool reached = false;
+        bool open = false;
+        void release() {
+            {
+                const std::scoped_lock lock(mutex);
+                open = true;
+            }
+            wake.notify_all();
+        }
+    };
+    auto hold = std::make_shared<Hold>();
+    ThumbnailWorker worker(
+        ThumbnailCache(cacheRoot.path()),
+        [hold](const ThumbnailResult&) {
+            std::unique_lock lock(hold->mutex);
+            hold->reached = true;
+            hold->wake.wait(lock, [&] { return hold->open; });
+        },
+        false);
+    // Released before the worker is joined, however the test ends.
+    const std::unique_ptr<Hold, void (*)(Hold*)> releaser(hold.get(),
+                                                          [](Hold* h) { h->release(); });
+
+    worker.setShots({first});
+    REQUIRE(waitUntil([&] {
+        const std::scoped_lock lock(hold->mutex);
+        return hold->reached;
+    }));
+    worker.addShots(others);
+    // The one held, the first shot's developed job, and two jobs for each of the others.
+    REQUIRE(worker.pendingJobs() == 8);
+    worker.removeShots({others[1], others[2]});
+    REQUIRE(worker.pendingJobs() == 4);
+    worker.addShots({others[2]});
+    REQUIRE(worker.pendingJobs() == 6);
+    hold->release();
+    REQUIRE(waitUntil([&] { return worker.pendingJobs() == 0; }));
 }
 
 TEST_CASE("Invalidating a shot develops its saved state afresh", "[thumbnailworker]") {

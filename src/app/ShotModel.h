@@ -126,10 +126,12 @@ public:
     /// itself stay, with their marks, EXIF and thumbnails, and so do the loader's reads owed to
     /// them. Switching on, the walk reads the root once more (its listing is where the
     /// subfolders are found), merges it, and brings the subfolders in after it;
-    /// ::arraw::app::ShotModel::isListing is true meanwhile. Switching off removes all the rows
-    /// of the subfolders with one signal at once, and the walk (one read of the root) only has
-    /// the watches of the subfolders released; no listing is shown for it. Nothing changes if the
-    /// flag is the one set, or no folder is.
+    /// ::arraw::app::ShotModel::isListing is true meanwhile, also when it replaces a switch off
+    /// whose walk had not ended. Switching off removes all the rows of the subfolders with one
+    /// signal at once, and drops the loader's reads still queued for them (they are queued again
+    /// when the subfolders come back); the walk (one read of the root) only has the watches of
+    /// the subfolders released, and no listing is shown for it. Nothing changes if the flag is
+    /// the one set, or no folder is.
     /// @param recursive Whether to list the subfolders.
     void setRecursive(bool recursive);
 
@@ -475,10 +477,6 @@ private:
     /// @param added Receives the primaries that were not rows before.
     void resetFolder(Span span, std::span<const Shot> fresh,
                      std::vector<std::filesystem::path>& added);
-
-    /// @brief Removes the rows of one folder.
-    /// @param span The folder's span; erased.
-    void removeFolder(Spans::iterator span);
 
     /// @brief Removes the rows of a folder and of its subtree, with one remove.
     /// @param folder Folder, without a trailing separator.

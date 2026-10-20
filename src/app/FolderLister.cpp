@@ -182,7 +182,6 @@ void FolderLister::step() {
         publishStatus(finishing);
         if (finishing) {
             walking_ = false;
-            summary_.unreadable = static_cast<int>(failed_.size());
             onFinished_(walk_, std::exchange(summary_, {}));
         }
         return;
@@ -200,6 +199,12 @@ void FolderLister::step() {
     bool retry = false;
     if (!dir.watched && budget_.isWatched(path)) {
         retry = !watch(directory) && budget_.isWatched(path);
+        // A watch on a dead mount can block as long as a read: a walk cancelled meanwhile does
+        // not go on to read the same path (review R3).
+        if (!current()) {
+            abandon();
+            return;
+        }
     }
 
     ReadHook hook;
@@ -233,28 +238,36 @@ void FolderLister::step() {
     if (!listing) {
         handleFailure(directory, error, std::move(message));
     } else {
+        // Back after a failure: what lies below it was not read meanwhile (the root's
+        // subfolders are not read while it is unavailable), and its watches may be gone. Its
+        // subtree is walked again, so the notice clears only once all of it is read (review R1).
+        const bool recovered = (path == root_ && rootUnavailable_) || failed_.contains(path);
         if (path == root_) {
             rootUnavailable_ = false;
             rootError_.clear();
+        } else if (rootUnavailable_) {
+            // Read while the root is not (renamed away and back, say): the root may be back too,
+            // and is read to see, with its subtree if it is.
+            enqueue(tree_.find(root_), true, true);
         }
         failed_.erase(path);
+        if (recovered) {
+            forgetDroppedWatches();
+        }
         if (retry && watch(directory)) {
             // It opens after all (replaced between the two, or a share's hiccup): watched now,
             // after the read, so read once more (plan, section 4, rule 2; review R4).
             enqueue(directory, false, true);
         }
-        if (walking_) {
-            summary_.shots += static_cast<int>(listing->shots.size());
-        }
         batchShotCount_ += listing->shots.size();
         batch_.push_back({.folder = path,
                           .shots = std::move(listing->shots),
                           .gone = false,
-                          .recheck = recheck});
+                          .recheck = recheck || recovered});
         const std::vector<fs::path> folders =
             recursive_ ? std::move(listing->folders) : std::vector<fs::path>{};
         forgetVanishedFailures(path, folders);
-        followSubfolders(directory, folders, enter);
+        followSubfolders(directory, folders, enter || recovered, recovered);
     }
 
     // The first shots go at once, however deep the walk had to go to find them.
@@ -266,7 +279,7 @@ void FolderLister::step() {
 }
 
 void FolderLister::followSubfolders(Tree::iterator directory, const std::vector<fs::path>& folders,
-                                    bool enter) {
+                                    bool enter, bool recheck) {
     const fs::path& parent = directory->first;
     const int depth = directory->second.depth + 1;
     // The subfolders known: the direct children within the directory's range of the tree.
@@ -301,7 +314,7 @@ void FolderLister::followSubfolders(Tree::iterator directory, const std::vector<
     }
     // Pre-order: the subfolders come next, before the directory's later siblings.
     for (auto child = toRead.rbegin(); child != toRead.rend(); ++child) {
-        enqueue(*child, true, false);
+        enqueue(*child, true, recheck);
     }
 }
 
@@ -329,15 +342,26 @@ void FolderLister::dropSubtree(Tree::iterator directory) {
 
 void FolderLister::handleFailure(Tree::iterator directory, FolderError kind, std::string message) {
     const fs::path path = directory->first;
+    const auto keepStale = [&] {
+        if (walking_) {
+            summary_.stale.push_back(path);
+        }
+    };
     if (path == root_) {
         // Unmounted, renamed, a share asleep: the rows stay as they were, and the next report or
         // refresh that can read it merges it normally (plan, answer 1). Its subfolders are not
         // read, and not swept as gone either.
         rootUnavailable_ = true;
         rootError_ = std::move(message);
-        if (walking_) {
-            summary_.stale.push_back(path);
-        }
+        keepStale();
+        return;
+    }
+    if (kind != FolderError::Other && !rootOpens()) {
+        // Under a root unmounted (every watch reports) or renamed away (the subfolders' watches
+        // follow them and report their old paths), every subfolder fails as gone. It is kept as
+        // the root's rows are, and read again with the root's subtree when the root reads
+        // (review B1).
+        keepStale();
         return;
     }
     switch (kind) {
@@ -353,11 +377,19 @@ void FolderLister::handleFailure(Tree::iterator directory, FolderError kind, std
     case FolderError::Other:
         // Perhaps transient: the rows stay, and its next report or refresh reads it again.
         failed_.insert_or_assign(path, std::move(message));
-        if (walking_) {
-            summary_.stale.push_back(path);
-        }
+        keepStale();
         break;
     }
+}
+
+bool FolderLister::rootOpens() {
+    std::error_code error;
+    const fs::directory_iterator probe(root_, error);
+    if (error) {
+        rootUnavailable_ = true;
+        rootError_ = error.message();
+    }
+    return !error;
 }
 
 void FolderLister::forgetFailures(const fs::path& folder) {
@@ -437,6 +469,11 @@ void FolderLister::applyMoves(WatchBudget::Moves moves) {
     }
     unwatch(released);
     for (const fs::path& path : moves.promoted) {
+        if (!current()) {
+            // Each watch may block on a dead mount (review R3). Those not had yet are had before
+            // their next read, which a later walk does.
+            break;
+        }
         const auto entry = tree_.find(path);
         if (entry == tree_.end() || entry->second.watched) {
             continue;
