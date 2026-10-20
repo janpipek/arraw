@@ -1,6 +1,6 @@
 Name:           arraw
 # A snapshot is a post-release build: the caret sorts it above the release it follows.
-%global base_version 0.4.0
+%global base_version 0.4.1
 Version:        %{base_version}%{?snapshot:^%{snapshot}}
 Release:        1%{?dist}
 Summary:        RAW photo editor with a GPU preview
@@ -84,6 +84,14 @@ appstreamcli validate --no-net \
 %{_datadir}/icons/hicolor/scalable/apps/io.github.janpipek.arraw.svg
 
 %changelog
+* Tue Oct 20 2026 Jan Pipek <janpipek@users.noreply.github.com> - 0.4.1-1
+- Add lens corrections from lensfun: distortion, vignetting (an amount) and lateral chromatic aberration
+- Add the choice of demosaic algorithm, kept with the photograph's settings
+- Add brush masks, painted in the window
+- Film strip: sidecar badge, file-name caption, an Include subfolders option, listing in the background, Refresh Folder (F5), Export… for the selected shots
+- Export dialog: choose the long edge from a list of sizes
+- Version the XMP sidecar; older sidecars are always read, newer ones are never written over
+
 * Fri Oct 09 2026 Jan Pipek <janpipek@users.noreply.github.com> - 0.4.0-1
 - Package rewrite: the arraw-ui and arraw-cli executables, the desktop entry, the metainfo and the icons
 - Some of the old features are temporarily not available.
