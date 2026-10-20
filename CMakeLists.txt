@@ -528,12 +528,18 @@ add_library(arraw-app-core STATIC
         src/app/BrushPainting.h
         src/app/CopySections.cpp
         src/app/CopySections.h
+        src/app/ClippingMask.cpp
+        src/app/ClippingMask.h
         src/app/CropEditing.cpp
         src/app/CropEditing.h
+        src/app/CropSpans.cpp
+        src/app/CropSpans.h
         src/app/CurveEditing.cpp
         src/app/CurveEditing.h
         src/app/CurveHistogramRefresh.cpp
         src/app/CurveHistogramRefresh.h
+        src/app/HistogramPresentation.cpp
+        src/app/HistogramPresentation.h
         src/app/DebugDiagnostics.cpp
         src/app/DebugDiagnostics.h
         src/app/DebugLog.cpp
