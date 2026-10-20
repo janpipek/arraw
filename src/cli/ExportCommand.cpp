@@ -3,6 +3,7 @@
 #include "Cli.h"
 #include "Command.h"
 #include "DeviceChoice.h"
+#include "ExportPresetCommand.h"
 #include "GpuContext.h"
 #include "GpuDevelop.h"
 #include "LensOptions.h"
@@ -20,6 +21,8 @@
 #include <Diagnostics.h>
 #include <Edits.h>
 #include <EffectsSettings.h>
+#include <ExportPresets.h>
+#include <ExportSettings.h>
 #include <ImageExport.h>
 #include <ImageImport.h>
 #include <LensResolution.h>
@@ -690,6 +693,10 @@ void configure(QCommandLineParser& parser) {
         "Naming --temperature or --tint makes white balance custom; the other half\n"
         "keeps the photograph's own value, or as shot. The command never writes a\n"
         "sidecar.\n"
+        "--export-preset NAME starts the export from a saved preset (see `export-preset list`;\n"
+        "four built-in ones come with arraw): its format, colour, size, quality, sharpening and\n"
+        "metadata. Any of --format, --encoding, --bit-depth, --quality, --sharpen, --resize,\n"
+        "--allow-upscale, --no-allow-upscale and --metadata given too replaces that one value.\n"
         "Camera orientation is honoured. Rotation, flips and cropping are applied\n"
         "after colour and tone; crops always stay inside valid image content.\n"
         "Geometry flags set the rotation, straighten and flips as the Develop panel does:\n"
@@ -711,11 +718,18 @@ void configure(QCommandLineParser& parser) {
         "counting from 0; `arraw-cli gpu-test` shows the numbers.");
     parser.addHelpOption();
     parser.addOption({{"o", "output"}, "Existing directory to write into.", "dir"});
-    parser.addOption({"format", "png, jpeg, or tiff. Default: jpeg.", "name"});
-    parser.addOption({"quality", "JPEG quality, 0-100. Default: 90.", "value"});
-    parser.addOption({"sharpen", "Output sharpening, 0-100. Default: 0 (off).", "amount"});
-    parser.addOption({"bit-depth", "8 or 16. Default: 8.", "value"});
-    parser.addOption({"encoding", "srgb, display-p3, or adobe-rgb. Default: srgb.", "name"});
+    parser.addOption({"export-preset",
+                      "Start from this saved export preset; the export flags given too replace "
+                      "its values. See `arraw-cli export-preset list`.",
+                      "name"});
+    cli::addConfigDirOption(parser);
+    parser.addOption({"format", "png, jpeg, or tiff. Default: the preset's, or jpeg.", "name"});
+    parser.addOption({"quality", "JPEG quality, 0-100. Default: the preset's, or 90.", "value"});
+    parser.addOption(
+        {"sharpen", "Output sharpening, 0-100. Default: the preset's, or 0 (off).", "amount"});
+    parser.addOption({"bit-depth", "8 or 16. Default: the preset's, or 8.", "value"});
+    parser.addOption(
+        {"encoding", "srgb, display-p3, or adobe-rgb. Default: the preset's, or srgb.", "name"});
     for (const FieldDescriptor& descriptor : developSettingDescriptors) {
         if (!isNumericOption(descriptor)) {
             continue;
@@ -771,9 +785,11 @@ void configure(QCommandLineParser& parser) {
     parser.addOption({"resize",
                       "Shrink to a size, after the crop: N is the long edge, WxH fits inside "
                       "a box, N% scales (12.5% is fine). A bare number is the long edge. "
-                      "Never enlarges unless --allow-upscale. Default: full size.",
+                      "Never enlarges unless --allow-upscale. Default: the preset's, or full size.",
                       "size"});
-    parser.addOption({"allow-upscale", "Let --resize enlarge a photograph past its own size."});
+    parser.addOption({"allow-upscale", "Let the size enlarge a photograph past its own size."});
+    parser.addOption({"no-allow-upscale", "Never enlarge past the photograph's own size, even if "
+                                          "the preset does."});
     parser.addOption({"resize-filter",
                       "lanczos or bilinear: how --resize resamples. Lanczos is sharper, with a "
                       "little ringing at hard edges; bilinear is softer and never rings. "
@@ -802,7 +818,7 @@ void configure(QCommandLineParser& parser) {
                       "Metadata to carry from the photograph: all, none, or a comma-separated "
                       "list of capture (camera, lens, exposure, time), location (GPS) and "
                       "descriptive (rating, label, title, caption, keywords, creator, "
-                      "rights). Default: capture,descriptive.",
+                      "rights). Default: the preset's, or capture,descriptive.",
                       "list"});
     cli::addMarksFilterOptions(parser);
     parser.addOption(
@@ -848,6 +864,34 @@ std::optional<ExportRequest> buildRequest(const QCommandLineParser& parser, std:
         return std::nullopt;
     }
 
+    const auto logFormat = cli::readLogFormat(parser, "export", err, code);
+    if (!logFormat) {
+        return std::nullopt;
+    }
+    request.logFormat = *logFormat;
+    request.quiet = parser.isSet("quiet");
+
+    // The order is: defaults, then the preset, then each flag that was given.
+    if (parser.isSet("export-preset")) {
+        const auto store = cli::openExportPresets(parser, "export", err, code);
+        if (!store) {
+            return std::nullopt;
+        }
+        cli::StreamDiagnostics log(err, request.logFormat, request.quiet);
+        const auto preset = cli::findExportPreset(
+            *store, parser.value("export-preset").toStdString(), log, "export", err, code);
+        if (!preset) {
+            return std::nullopt;
+        }
+        request.format = preset->settings.format;
+        request.options = optionsOf(preset->settings);
+        request.render = requestOf(preset->settings);
+        request.metadata = selectionOf(preset->settings);
+    } else if (parser.isSet("config-dir")) {
+        code = usageError(err, "--config-dir only matters with --export-preset");
+        return std::nullopt;
+    }
+
     if (parser.isSet("format")) {
         const auto name = parser.value("format").toLower();
         if (name == "png") {
@@ -889,6 +933,11 @@ std::optional<ExportRequest> buildRequest(const QCommandLineParser& parser, std:
         code = usageError(err, "--sharpen must be between 0 and 100");
         return std::nullopt;
     }
+    // JPEG has 8 bits only: a preset's 16 (or a 16-bit preset's format changed to JPEG) is not an
+    // error, while --bit-depth 16 with JPEG still is.
+    if (request.format == ImageFileFormat::Jpeg && !parser.isSet("bit-depth")) {
+        request.options.bitDepth = 8;
+    }
 
     if (!readEdits(parser, request.edits, err, code)) {
         return std::nullopt;
@@ -920,7 +969,13 @@ std::optional<ExportRequest> buildRequest(const QCommandLineParser& parser, std:
             return std::nullopt;
         }
     }
-    request.render.upscale = parser.isSet("allow-upscale") ? Upscale::Allowed : Upscale::Never;
+    if (parser.isSet("allow-upscale") && parser.isSet("no-allow-upscale")) {
+        code = usageError(err, "--allow-upscale and --no-allow-upscale contradict");
+        return std::nullopt;
+    }
+    if (parser.isSet("allow-upscale") || parser.isSet("no-allow-upscale")) {
+        request.render.upscale = parser.isSet("allow-upscale") ? Upscale::Allowed : Upscale::Never;
+    }
     if (parser.isSet("resize-filter")) {
         const auto filter =
             parseResizeFilter(parser.value("resize-filter").toLower().toStdString());
@@ -932,8 +987,8 @@ std::optional<ExportRequest> buildRequest(const QCommandLineParser& parser, std:
         }
         request.render.filter = *filter;
     }
-    if (!parser.isSet("resize")) {
-        for (const char* option : {"allow-upscale", "resize-filter"}) {
+    if (!request.render.size) {
+        for (const char* option : {"allow-upscale", "no-allow-upscale", "resize-filter"}) {
             if (parser.isSet(option)) {
                 request.ignoredResizeOptions.push_back(std::string("--") + option);
             }
@@ -979,12 +1034,6 @@ std::optional<ExportRequest> buildRequest(const QCommandLineParser& parser, std:
         return std::nullopt;
     }
 
-    const auto logFormat = cli::readLogFormat(parser, "export", err, code);
-    if (!logFormat) {
-        return std::nullopt;
-    }
-    request.logFormat = *logFormat;
-
     request.options.embedProfile = !parser.isSet("no-profile");
     if (parser.isSet("metadata")) {
         const auto selection = parseMetadataSelection(parser.value("metadata").toStdString());
@@ -1002,7 +1051,6 @@ std::optional<ExportRequest> buildRequest(const QCommandLineParser& parser, std:
     }
     request.filter = *filter;
     request.overwrite = parser.isSet("overwrite");
-    request.quiet = parser.isSet("quiet");
     return request;
 }
 

@@ -2,6 +2,7 @@
 
 #include "Cli.h"
 #include "ExportCommand.h"
+#include "ExportPresetCommand.h"
 #include "GpuTestCommand.h"
 #include "InfoCommand.h"
 #include "LensesCommand.h"
@@ -26,9 +27,10 @@ namespace {
 /// prints an apology. Listing them means someone who types what the
 /// documentation promised is told the feature is coming, not that they
 /// mistyped -- and the names stay visibly taken.
-constexpr std::array<Command, 5> table = {{
+constexpr std::array<Command, 6> table = {{
     {"export", "Render images through their develop settings and write them out.",
      &runExportCommand},
+    {"export-preset", "List and show the saved export presets.", &runExportPresetCommand},
     {"gpu-test", "Check that the GPU backend works on this machine.", &runGpuTestCommand},
     {"info", "Show camera metadata and edit state, read-only.", &runInfoCommand},
     {"lenses", "List the lenses of the lens database.", &runLensesCommand},

@@ -284,6 +284,12 @@ set_tests_properties(arraw-cli.help-loads-no-platform arraw-cli.usage-error-load
 add_test(NAME arraw-cli.escaped-operand-is-an-input
         COMMAND ${CMAKE_COMMAND} -DEXPECTED_EXIT=1 -DEXPECTED_ERR=-reverse -P ${arraw_expect_exit}
         -- $<TARGET_FILE:arraw-cli> export -o ${CMAKE_CURRENT_BINARY_DIR} -- -reverse)
+# An unknown export preset is a usage error, not a failed input.
+add_test(NAME arraw-cli.unknown-export-preset-is-a-usage-error
+        COMMAND ${CMAKE_COMMAND} -DEXPECTED_EXIT=2 -DEXPECTED_ERR=export-preset -P ${arraw_expect_exit}
+        -- $<TARGET_FILE:arraw-cli> export -o ${CMAKE_CURRENT_BINARY_DIR}
+        --config-dir ${CMAKE_CURRENT_BINARY_DIR} --export-preset no-such-preset
+        ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/testcard-61x41-srgb8.png)
 
 # An export never aborts for a platform it does not need: a platform Qt cannot
 # start (xcb without a display) is bypassed for arraw's headless one, so the
