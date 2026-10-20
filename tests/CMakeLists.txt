@@ -227,6 +227,7 @@ add_executable(arraw-gpu-tests
         gpu/test_GpuBrush.cpp
         gpu/test_GpuDenoise.cpp
         gpu/test_GpuLocalAdjustments.cpp
+        gpu/test_GpuOutputHistogram.cpp
         gpu/test_GpuPresence.cpp
         gpu/test_GpuPreviewRenderer.cpp
         gpu/test_GpuProgress.cpp
