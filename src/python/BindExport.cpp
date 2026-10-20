@@ -37,7 +37,7 @@ void bindExport(nb::module_& m) {
         "(`resize` with `width` and `height`, which `allow_enlarging` lets exceed the "
         "photograph's own size), JPEG `quality`, output `sharpening`, and the metadata groups "
         "(`capture_info`, `location`, `descriptive`) the file carries. Presets are named "
-        "ExportSettings, and `save(..., settings=...)` writes with them.",
+        "ExportSettings; `develop_size` gives the `size` for `develop`.",
         field("format", &ExportSettings::format), field("encoding", &ExportSettings::encoding),
         field("sixteen_bit", &ExportSettings::sixteenBit), field("resize", &ExportSettings::resize),
         field("width", &ExportSettings::width), field("height", &ExportSettings::height),

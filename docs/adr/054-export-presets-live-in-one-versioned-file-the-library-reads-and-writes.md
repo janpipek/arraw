@@ -317,7 +317,9 @@ rename and delete in v1); auto-selecting a preset whenever the controls happen t
 `arraw.config_directory()`, and `arraw.ExportPresetStore(directory=None)` with `presets()`,
 `unusable()`, `load(name)`, `save(preset)`, `rename(old, new)`, `delete(name)`, `set_aside()` and
 `file`. Failures raise `arraw.ExportPresetError` (a `RuntimeError` with `.problem`). `arraw.save`
-gains `settings=` (an `ExportSettings`) as an alternative to its separate keywords.
+takes no `ExportSettings`: a script develops with `settings.develop_size` and passes the format
+options to `save` explicitly. *Alternative:* a `settings=` argument; left out because it hides what
+`save` writes and clashes with the separate keywords.
 
 ### 9. Built-in presets: a few, defined in code
 

@@ -2146,14 +2146,14 @@ class MetadataSelection:
     def replace(self, **kwargs) -> MetadataSelection:
         """Return a copy with the given attributes replaced."""
 
-def save(image: ImageBuffer, path: str | os.PathLike, *, format: ImageFileFormat | None = None, encoding: NamedEncoding = ..., bit_depth: int = 8, quality: int = 90, embed_profile: bool = True, sharpening: int = 0, metadata_from: Photo | None = None, metadata: MetadataSelection = ..., settings: ExportSettings | None = None) -> None:
+def save(image: ImageBuffer, path: str | os.PathLike, *, format: ImageFileFormat | None = None, encoding: NamedEncoding = ..., bit_depth: int = 8, quality: int = 90, embed_profile: bool = True, sharpening: int = 0, metadata_from: Photo | None = None, metadata: MetadataSelection = ...) -> None:
     """
-    Write an image as JPEG, PNG or TIFF; the format comes from the extension unless given. `sharpening` (0-100, default 0 = off) applies an unsharp mask to the final pixels. With `metadata_from` (the photograph the pixels came from) the groups of `metadata` are copied from its file and sidecar, and its marks written as rating and label; without it nothing is written. A source or sidecar that cannot be read is logged as a warning on the 'arraw' logger and its metadata left out; the file is still written. `settings` (an ExportSettings, e.g. a preset's) gives the format, encoding, bit depth, quality, sharpening and metadata groups in one; combining it with any of those keywords is a TypeError. Its size is for `develop`, see ExportSettings.develop_size.
+    Write an image as JPEG, PNG or TIFF; the format comes from the extension unless given. `sharpening` (0-100, default 0 = off) applies an unsharp mask to the final pixels. With `metadata_from` (the photograph the pixels came from) the groups of `metadata` are copied from its file and sidecar, and its marks written as rating and label; without it nothing is written. A source or sidecar that cannot be read is logged as a warning on the 'arraw' logger and its metadata left out; the file is still written.
     """
 
 class ExportSettings:
     """
-    What an export is asked for: file format, output colour, 16 bits or 8, the box to fit (`resize` with `width` and `height`, which `allow_enlarging` lets exceed the photograph's own size), JPEG `quality`, output `sharpening`, and the metadata groups (`capture_info`, `location`, `descriptive`) the file carries. Presets are named ExportSettings, and `save(..., settings=...)` writes with them.
+    What an export is asked for: file format, output colour, 16 bits or 8, the box to fit (`resize` with `width` and `height`, which `allow_enlarging` lets exceed the photograph's own size), JPEG `quality`, output `sharpening`, and the metadata groups (`capture_info`, `location`, `descriptive`) the file carries. Presets are named ExportSettings; `develop_size` gives the `size` for `develop`.
     """
 
     def __init__(self, *, format: ImageFileFormat = ImageFileFormat.JPEG, encoding: NamedEncoding = NamedEncoding.SRGB, sixteen_bit: bool = False, resize: bool = False, width: int | None = 0, height: int | None = 0, allow_enlarging: bool = False, quality: int | None = 90, sharpening: int | None = 0, capture_info: bool = True, location: bool = False, descriptive: bool = True) -> None: ...
@@ -2250,7 +2250,9 @@ class ExportPresetProblem(enum.Enum):
     """The name is a built-in preset's, which cannot be changed."""
 
     NOT_UNREADABLE = 9
-    """The file can be read, so it is not set aside: only an unreadable one is."""
+    """
+    The file can be read, so it is not set aside: only an unreadable one is.
+    """
 
 class ExportPresetFileState(enum.Enum):
     """What reading the export presets file found."""

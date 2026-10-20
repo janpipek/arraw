@@ -252,48 +252,25 @@ def developed(dng):
     return arraw.develop(arraw.open(dng).with_(exposure=0.3))
 
 
-def test_save_with_settings_writes_what_the_keywords_write(developed, tmp_path):
-    settings = ExportSettings(
-        format=arraw.ImageFileFormat.PNG,
-        encoding=arraw.NamedEncoding.DISPLAY_P3,
-        sixteen_bit=True,
-        sharpening=25,
-    )
-    by_settings = tmp_path / "settings.png"
-    by_keywords = tmp_path / "keywords.png"
-    arraw.save(developed, by_settings, settings=settings)
-    arraw.save(
-        developed,
-        by_keywords,
-        format=arraw.ImageFileFormat.PNG,
-        encoding=arraw.NamedEncoding.DISPLAY_P3,
-        bit_depth=16,
-        sharpening=25,
-    )
-    assert by_settings.read_bytes() == by_keywords.read_bytes()
+def test_a_preset_drives_develop_and_save(dng, tmp_path):
+    settings = ExportPresetStore(tmp_path / "config").load("Web 2048 px").settings
+    photo = arraw.open(dng)
+    image = arraw.develop(photo, size=settings.develop_size)
+    out = tmp_path / "web.jpg"
+    arraw.save(image, out, format=settings.format, quality=settings.quality,
+               sharpening=settings.sharpening)
+    assert out.is_file()
+    size = arraw.read_metadata(out).size
+    assert max(size.width, size.height) <= 2048
+    assert settings.develop_size == (2048, 2048)
 
 
-def test_save_with_settings_refuses_the_keywords_it_replaces(developed, tmp_path):
-    settings = ExportSettings()
-    for keywords in (
-        {"format": arraw.ImageFileFormat.PNG},
-        {"encoding": arraw.NamedEncoding.SRGB},
-        {"bit_depth": 8},
-        {"quality": 80},
-        {"sharpening": 0},
-        {"metadata": arraw.MetadataSelection()},
-    ):
-        with pytest.raises(TypeError, match="not both"):
-            arraw.save(developed, tmp_path / "x.jpg", settings=settings, **keywords)
-    assert not (tmp_path / "x.jpg").exists()
-    with pytest.raises(ValueError):
-        arraw.save(developed, tmp_path / "x.jpg", settings=ExportSettings(quality=500))
-    # What the settings do not hold may still be given.
-    arraw.save(developed, tmp_path / "x.jpg", settings=settings, embed_profile=False)
-    assert (tmp_path / "x.jpg").is_file()
+def test_save_has_no_settings_argument(developed, tmp_path):
+    with pytest.raises(TypeError):
+        arraw.save(developed, tmp_path / "x.jpg", settings=ExportSettings())
 
 
-def test_save_keeps_its_defaults_without_settings(developed, tmp_path):
+def test_save_keeps_its_defaults(developed, tmp_path):
     arraw.save(developed, tmp_path / "plain.png")
     arraw.save(developed, tmp_path / "explicit.png", encoding=arraw.NamedEncoding.SRGB,
                bit_depth=8, quality=90, sharpening=0, metadata=arraw.MetadataSelection())

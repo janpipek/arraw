@@ -201,9 +201,8 @@ Test names are Catch2 `TEST_CASE` names; the tags follow the file's existing one
   `RuntimeError` subclass with `.problem`), `ExportPresetStore` (`presets()`, which lists built-ins first and gives each `builtin` and
   `shadowed` flags,  `unusable()`,
   `load`, `save`, `rename`, `delete`, `set_aside`, `file`) and `config_directory()`.
-- `arraw.save` gains `settings: ExportSettings | None`. Given together with `format`, `encoding`,
-  `bit_depth`, `quality`, `sharpening` or `metadata`, it is a `TypeError`.
-  `ExportSettings.develop_size` gives `develop`'s `size` (`None` or `(w, h)`).
+- `arraw.save` takes no settings; `ExportSettings.develop_size` gives `develop`'s `size`
+  (`None` or `(w, h)`), and `save` gets the format options explicitly.
 - Regenerate `_arraw.pyi` and export the names from `__init__.py`.
 - **Tests** (`tests/python/test_export_presets.py`):
   - "save, then presets() lists it, and load returns it";
@@ -212,7 +211,6 @@ Test names are Catch2 `TEST_CASE` names; the tags follow the file's existing one
   - "a newer file raises NEWER_FILE on save and leaves it";
   - "the store sees a preset the CLI's `export-preset show` prints" (parity, as
     `test_cli_parity.py` does);
-  - "save(settings=...) writes what save(format=..., ...) writes";
   - "the session's ARRAW_CONFIG_DIR is used" (so no test touches `~/.config`).
 
 ### 7. App: the preset picker in the export dialog
