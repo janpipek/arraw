@@ -10,6 +10,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <optional>
 #include <unordered_map>
@@ -51,8 +52,10 @@ namespace arraw::app {
 /// is drawn on the GUI thread, which must not open a RAW. Changing the folder
 /// drops what the loader has not done and ignores what it is still doing.
 ///
-/// The model changes by inserting and removing rows rather than by resetting
-/// (see ::arraw::app::ShotModel::refresh), so views keep their selection.
+/// The rows are kept as one contiguous span per folder, folders in
+/// ::arraw::folderPrecedes order. The model changes by inserting and removing runs of rows rather
+/// than by resetting (see ::arraw::app::ShotModel::refresh), so views keep their selection; only
+/// a change too scattered for that, past ::arraw::app::maxFolderRuns runs in a folder, resets it.
 class ShotModel : public QAbstractListModel {
     Q_OBJECT
 
@@ -99,16 +102,25 @@ public:
         return folder_;
     }
 
-    /// @brief Lists the folder again and merges the result in.
+    /// @brief Lists the folder again and merges the result in, folder by folder.
     ///
-    /// Rows of shots that are still there stay, with their marks, EXIF and
-    /// thumbnail; shots that went are removed and new ones inserted, in
-    /// order, so a view's selection follows its shot. A shot whose companions
-    /// changed is updated in place. Then the sidecar of each shot is checked on
-    /// the loader thread, and re-read when its modification time is not the one
-    /// last seen; ::arraw::app::ShotModel::sidecarRefreshed reports each of those.
-    /// A folder that can no longer be read counts as empty.
-    void refresh();
+    /// Lists synchronously (the whole tree, if the model is recursive). Each folder's shots are
+    /// compared in linear time with its span of rows (see ::arraw::app::diffFolder). Rows of
+    /// shots that are still there stay, with their marks, EXIF and thumbnail; shots that went are
+    /// removed and new ones inserted, in order, one insert or remove per run of adjacent rows, so
+    /// a view's selection follows its shot. A shot whose companions changed is updated in place.
+    /// If some folder needs more than ::arraw::app::maxFolderRuns runs, the whole model is reset
+    /// instead (rows still keep their data), and views must restore their selection.
+    ///
+    /// Then the sidecars are checked on the loader thread, and re-read when the modification
+    /// time is not the one last seen; ::arraw::app::ShotModel::sidecarRefreshed reports each of
+    /// those. Only the rows of some folders are checked, not all: with @p dirty, those of the
+    /// folders it names and of the folders whose listing changed; without it, every loaded row.
+    /// New rows are loaded as for a new folder. A folder that can no longer be read counts as
+    /// empty.
+    /// @param dirty Folders where something happened (such as a sidecar written, which no
+    /// listing shows), spelled as the watcher spells them; nothing to check every row.
+    void refresh(const std::optional<std::vector<std::filesystem::path>>& dirty = std::nullopt);
 
     /// @brief Counts the shots.
     /// @return Number of rows.
@@ -220,8 +232,40 @@ private:
     /// @return The relative path, or an empty one for a shot in the folder itself.
     [[nodiscard]] std::filesystem::path shownName(const Shot& shot) const;
 
-    /// @brief Rebuilds the path index after rows moved.
-    void reindex();
+    /// @brief Rows of one folder.
+    struct Span {
+        /// First row.
+        int first = 0;
+        /// Number of rows.
+        int count = 0;
+    };
+
+    /// @brief Orders folders as ::arraw::folderPrecedes does.
+    struct FolderOrder {
+        bool operator()(const std::filesystem::path& a, const std::filesystem::path& b) const {
+            return folderPrecedes(a, b);
+        }
+    };
+
+    struct FolderPlan;
+
+    /// @brief Finds the spans of the rows as they are.
+    /// @return The span of each folder with rows.
+    [[nodiscard]] std::map<std::filesystem::path, Span, FolderOrder> spansOfRows() const;
+
+    /// @brief Points the path index of the rows from a row on at their places.
+    /// @param from First row that moved.
+    void reindexFrom(int from);
+
+    /// @brief Replaces all rows by a listing, keeping the data of the shots that stay.
+    /// @param listing Shots in folder order.
+    /// @param added Receives the primaries that were not rows before.
+    void resetTo(const std::vector<Shot>& listing, std::vector<std::filesystem::path>& added);
+
+    /// @brief Applies the diff of each folder with a signal per run.
+    /// @param plans One per folder of the old and the new rows, in folder order.
+    /// @param added Receives the primaries that were not rows before.
+    void applyPlans(std::vector<FolderPlan>& plans, std::vector<std::filesystem::path>& added);
 
     /// @brief Queues the first reads of shots.
     /// @param primaries Shots that were just added.
@@ -238,8 +282,11 @@ private:
     /// Whether the subfolders are listed too.
     bool recursive_ = false;
 
-    /// Rows, in natural order of their names.
+    /// Rows, folder by folder, and in natural order of their names within a folder.
     std::vector<Row> rows_;
+
+    /// Rows of each folder that has any; folders in order, and each span follows the one before.
+    std::map<std::filesystem::path, Span, FolderOrder> spans_;
 
     /// Row of each primary.
     std::unordered_map<std::filesystem::path, int> index_;

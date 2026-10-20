@@ -57,10 +57,13 @@ FolderWatcher::FolderWatcher(ShotModel& model, std::chrono::milliseconds debounc
     : QObject(parent), model_(model) {
     debounce_.setSingleShot(true);
     debounce_.setInterval(debounce);
-    connect(&watcher_, &QFileSystemWatcher::directoryChanged, &debounce_,
-            qOverload<>(&QTimer::start));
+    connect(&watcher_, &QFileSystemWatcher::directoryChanged, this, [this](const QString& path) {
+        dirty_.push_back(std::filesystem::path(path.toStdU16String()));
+        debounce_.start();
+    });
     connect(&debounce_, &QTimer::timeout, this, [this] {
-        model_.refresh();
+        // The folders that changed are the ones whose sidecars are worth a look.
+        model_.refresh(std::exchange(dirty_, {}));
         // A folder that was replaced loses its watch; new sub-directories need one.
         if (watcher_.directories().isEmpty() || model_.recursive()) {
             rewatch();
@@ -79,6 +82,7 @@ void FolderWatcher::noteOwnWrite(const std::filesystem::path& sidecar) {
 
 void FolderWatcher::rewatch() {
     debounce_.stop();
+    dirty_.clear();
     if (const QStringList old = watcher_.directories(); !old.isEmpty()) {
         watcher_.removePaths(old);
     }

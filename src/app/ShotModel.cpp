@@ -1,5 +1,7 @@
 #include "ShotModel.h"
 
+#include "FolderDiff.h"
+
 #include <Sidecar.h>
 
 #include <QByteArray>
@@ -15,6 +17,8 @@
 #include <exception>
 #include <functional>
 #include <mutex>
+#include <set>
+#include <span>
 #include <stdexcept>
 #include <system_error>
 #include <thread>
@@ -87,7 +91,50 @@ QString dateText(const std::string& exifDate) {
     return text;
 }
 
+/// @brief Spells a folder one way, so that the watcher's spelling and the listing's agree.
+fs::path folderKey(const fs::path& folder) {
+    fs::path key = folder.lexically_normal();
+    return key.has_filename() ? key : key.parent_path();
+}
+
+/// @brief The shots of one folder within a listing.
+struct FolderGroup {
+    /// Folder the shots are in.
+    fs::path folder;
+    /// Its shots.
+    std::span<const Shot> shots;
+};
+
+/// @brief Splits a listing, which comes folder by folder, into its folders.
+std::vector<FolderGroup> groupByFolder(const std::vector<Shot>& listing) {
+    std::vector<FolderGroup> groups;
+    std::size_t begin = 0;
+    for (std::size_t i = 1; i <= listing.size(); ++i) {
+        if (i == listing.size() ||
+            listing[i].primary.parent_path() != listing[begin].primary.parent_path()) {
+            groups.push_back({listing[begin].primary.parent_path(),
+                              std::span<const Shot>(listing).subspan(begin, i - begin)});
+            begin = i;
+        }
+    }
+    return groups;
+}
+
 } // namespace
+
+/// @brief What one folder needs: its old rows, its fresh shots, and the difference.
+struct ShotModel::FolderPlan {
+    /// Folder, as the listing spells it.
+    fs::path folder;
+    /// Rows it has now, if any.
+    std::optional<Span> old;
+    /// Its shots now; empty when the folder is gone.
+    std::span<const Shot> fresh;
+    /// What turns the one into the other.
+    FolderDiff diff;
+    /// Whether to check the sidecars of its rows.
+    bool recheck = false;
+};
 
 std::optional<std::int64_t> fileStamp(const std::filesystem::path& path) {
     std::error_code error;
@@ -297,6 +344,8 @@ void ShotModel::setFolder(const std::filesystem::path& folder, bool recursive) {
     folder_ = folder;
     recursive_ = recursive;
     rows_.clear();
+    spans_.clear();
+    index_.clear();
     rows_.reserve(shots.size());
     std::vector<fs::path> primaries;
     primaries.reserve(shots.size());
@@ -304,7 +353,8 @@ void ShotModel::setFolder(const std::filesystem::path& folder, bool recursive) {
         primaries.push_back(shot.primary);
         rows_.push_back(Row{.shot = std::move(shot)});
     }
-    reindex();
+    reindexFrom(0);
+    spans_ = spansOfRows();
     endResetModel();
     queueLoads(primaries);
 }
@@ -321,7 +371,7 @@ std::filesystem::path ShotModel::shownName(const Shot& shot) const {
     return relative.make_preferred();
 }
 
-void ShotModel::refresh() {
+void ShotModel::refresh(const std::optional<std::vector<fs::path>>& dirty) {
     if (folder_.empty()) {
         return;
     }
@@ -331,42 +381,142 @@ void ShotModel::refresh() {
     } catch (const std::runtime_error&) {
         // The folder went away: it has no shots now.
     }
-    std::unordered_set<fs::path> wanted;
-    for (const Shot& shot : listing) {
-        wanted.insert(shot.primary);
-    }
-    for (int row = static_cast<int>(rows_.size()) - 1; row >= 0; --row) {
-        if (!wanted.contains(rows_[row].shot.primary)) {
-            beginRemoveRows({}, row, row);
-            rows_.erase(rows_.begin() + row);
-            endRemoveRows();
+    const std::vector<FolderGroup> groups = groupByFolder(listing);
+
+    // Walk the old spans and the listed folders together, both in folder order.
+    std::set<fs::path> dirtyKeys;
+    if (dirty) {
+        for (const fs::path& folder : *dirty) {
+            dirtyKeys.insert(folderKey(folder));
         }
     }
-    // What is left is a subsequence of the listing, in the same order.
+    const FolderOrder before;
+    std::vector<FolderPlan> plans;
+    bool reset = false;
+    auto oldSpan = spans_.begin();
+    std::size_t group = 0;
+    while (oldSpan != spans_.end() || group < groups.size()) {
+        FolderPlan plan;
+        const bool hasOld = oldSpan != spans_.end();
+        const bool hasNew = group < groups.size();
+        if (hasOld && (!hasNew || before(oldSpan->first, groups[group].folder))) {
+            plan.folder = oldSpan->first;
+            plan.old = oldSpan->second;
+            plan.diff.removes = {{0, oldSpan->second.count}};
+            ++oldSpan;
+        } else if (hasNew && (!hasOld || before(groups[group].folder, oldSpan->first))) {
+            plan.folder = groups[group].folder;
+            plan.fresh = groups[group].shots;
+            plan.diff.inserts = {{0, static_cast<int>(plan.fresh.size())}};
+            ++group;
+        } else {
+            const Span span = oldSpan->second;
+            plan.folder = oldSpan->first;
+            plan.old = span;
+            plan.fresh = groups[group].shots;
+            plan.diff = diffFolder(
+                static_cast<std::size_t>(span.count),
+                [&](std::size_t i) -> const Shot& { return rows_[span.first + i].shot; },
+                plan.fresh);
+            ++oldSpan;
+            ++group;
+        }
+        reset = reset || plan.diff.needsReset;
+        plan.recheck = !dirty || plan.diff.changed() || dirtyKeys.contains(folderKey(plan.folder));
+        plans.push_back(std::move(plan));
+    }
+
     std::vector<fs::path> added;
-    for (int i = 0; i < static_cast<int>(listing.size()); ++i) {
-        if (i < static_cast<int>(rows_.size()) && rows_[i].shot.primary == listing[i].primary) {
-            if (rows_[i].shot != listing[i]) {
-                rows_[i].shot = listing[i];
-                changed(i, {CompanionsRole, FormatLabelRole, Qt::ToolTipRole});
-            }
+    if (reset) {
+        resetTo(listing, added);
+    } else {
+        applyPlans(plans, added);
+    }
+
+    // Check the sidecars of the rows that were there, in the folders that call for it. A new row
+    // is not loaded yet, so it is left to queueLoads.
+    std::vector<Job> rechecks;
+    for (const FolderPlan& plan : plans) {
+        if (!plan.recheck || plan.fresh.empty()) {
             continue;
         }
-        added.push_back(listing[i].primary);
-        beginInsertRows({}, i, i);
-        rows_.insert(rows_.begin() + i, Row{.shot = listing[i]});
-        endInsertRows();
-    }
-    reindex();
-    std::vector<Job> rechecks;
-    for (const Row& row : rows_) {
-        if (row.marksLoaded && std::ranges::find(added, row.shot.primary) == added.end()) {
-            rechecks.push_back({JobKind::Recheck, generation_, row.shot.primary, row.sidecarStamp});
+        const Span span = spans_.at(plan.folder);
+        for (int row = span.first; row < span.first + span.count; ++row) {
+            const Row& entry = rows_[row];
+            if (entry.marksLoaded) {
+                rechecks.push_back(
+                    {JobKind::Recheck, generation_, entry.shot.primary, entry.sidecarStamp});
+            }
         }
     }
     pending_ += static_cast<int>(rechecks.size());
     loader_->enqueue(std::move(rechecks));
     queueLoads(added);
+}
+
+void ShotModel::applyPlans(std::vector<FolderPlan>& plans, std::vector<fs::path>& added) {
+    std::map<fs::path, Span, FolderOrder> next;
+    int position = 0; // First row of the folder at hand, in the rows as they are now.
+    int touched = static_cast<int>(rows_.size());
+    for (const FolderPlan& plan : plans) {
+        for (const RowRun& run : plan.diff.removes) {
+            const int first = position + run.first;
+            beginRemoveRows({}, first, first + run.count - 1);
+            for (int row = first; row < first + run.count; ++row) {
+                index_.erase(rows_[row].shot.primary);
+            }
+            rows_.erase(rows_.begin() + first, rows_.begin() + first + run.count);
+            endRemoveRows();
+            touched = std::min(touched, first);
+        }
+        for (const RowRun& run : plan.diff.inserts) {
+            const int first = position + run.first;
+            std::vector<Row> fresh;
+            fresh.reserve(static_cast<std::size_t>(run.count));
+            for (int k = 0; k < run.count; ++k) {
+                const Shot& shot = plan.fresh[static_cast<std::size_t>(run.first + k)];
+                fresh.push_back(Row{.shot = shot});
+                added.push_back(shot.primary);
+            }
+            beginInsertRows({}, first, first + run.count - 1);
+            rows_.insert(rows_.begin() + first, std::make_move_iterator(fresh.begin()),
+                         std::make_move_iterator(fresh.end()));
+            endInsertRows();
+            touched = std::min(touched, first);
+        }
+        for (const int k : plan.diff.updates) {
+            const int row = position + k;
+            rows_[row].shot = plan.fresh[static_cast<std::size_t>(k)];
+            changed(row, {CompanionsRole, FormatLabelRole, Qt::ToolTipRole});
+        }
+        if (!plan.fresh.empty()) {
+            next.emplace(plan.folder, Span{position, static_cast<int>(plan.fresh.size())});
+        }
+        position += static_cast<int>(plan.fresh.size());
+    }
+    spans_ = std::move(next);
+    reindexFrom(touched);
+}
+
+void ShotModel::resetTo(const std::vector<Shot>& listing, std::vector<fs::path>& added) {
+    beginResetModel();
+    std::vector<Row> next;
+    next.reserve(listing.size());
+    for (const Shot& shot : listing) {
+        if (const auto found = index_.find(shot.primary); found != index_.end()) {
+            Row row = std::move(rows_[static_cast<std::size_t>(found->second)]);
+            row.shot = shot;
+            next.push_back(std::move(row));
+        } else {
+            next.push_back(Row{.shot = shot});
+            added.push_back(shot.primary);
+        }
+    }
+    rows_ = std::move(next);
+    index_.clear();
+    reindexFrom(0);
+    spans_ = spansOfRows();
+    endResetModel();
 }
 
 int ShotModel::rowCount(const QModelIndex& parent) const {
@@ -510,10 +660,22 @@ void ShotModel::receive(const Loaded& result) {
     }
 }
 
-void ShotModel::reindex() {
-    index_.clear();
-    for (int i = 0; i < static_cast<int>(rows_.size()); ++i) {
-        index_.emplace(rows_[i].shot.primary, i);
+std::map<fs::path, ShotModel::Span, ShotModel::FolderOrder> ShotModel::spansOfRows() const {
+    std::map<fs::path, Span, FolderOrder> spans;
+    int begin = 0;
+    for (int i = 1; i <= static_cast<int>(rows_.size()); ++i) {
+        if (i == static_cast<int>(rows_.size()) ||
+            rows_[i].shot.primary.parent_path() != rows_[begin].shot.primary.parent_path()) {
+            spans.emplace(rows_[begin].shot.primary.parent_path(), Span{begin, i - begin});
+            begin = i;
+        }
+    }
+    return spans;
+}
+
+void ShotModel::reindexFrom(int from) {
+    for (int i = from; i < static_cast<int>(rows_.size()); ++i) {
+        index_.insert_or_assign(rows_[i].shot.primary, i);
     }
 }
 

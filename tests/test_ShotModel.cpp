@@ -7,6 +7,7 @@
 #include <Sidecar.h>
 
 #include <QCoreApplication>
+#include <QImage>
 #include <QPersistentModelIndex>
 #include <QThread>
 
@@ -14,6 +15,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -541,4 +543,259 @@ TEST_CASE("The watcher watches the folders the listing enters and no others",
         watched.insert(fs::path(entry.toStdU16String()));
     }
     REQUIRE(watched == expected);
+}
+
+namespace {
+
+/// Records the row signals of a model as text such as `+3..4` and `-1..2`.
+struct SignalLog {
+    std::vector<std::string> events;
+    int resets = 0;
+
+    explicit SignalLog(ShotModel& model) {
+        QObject::connect(&model, &QAbstractItemModel::rowsInserted, &model,
+                         [this](const QModelIndex&, int first, int last) {
+                             events.push_back("+" + std::to_string(first) + ".." +
+                                              std::to_string(last));
+                         });
+        QObject::connect(&model, &QAbstractItemModel::rowsRemoved, &model,
+                         [this](const QModelIndex&, int first, int last) {
+                             events.push_back("-" + std::to_string(first) + ".." +
+                                              std::to_string(last));
+                         });
+        QObject::connect(&model, &QAbstractItemModel::modelReset, &model, [this] { ++resets; });
+    }
+};
+
+/// Names of the primaries in row order.
+std::vector<std::string> names(const ShotModel& model) {
+    std::vector<std::string> result;
+    for (int row = 0; row < model.rowCount(); ++row) {
+        result.push_back(model.shot(row).primary.filename().string());
+    }
+    return result;
+}
+
+} // namespace
+
+TEST_CASE("A refresh signals one insert or remove per run of rows", "[shotmodel][merge]") {
+    const test::TempDir folder;
+    for (const char* name :
+         {"IMG_01.jpg", "IMG_02.jpg", "IMG_04.jpg", "IMG_05.jpg", "IMG_07.jpg", "IMG_08.jpg"}) {
+        addJpeg(folder, name);
+    }
+    ShotModel model;
+    model.setFolder(folder.path());
+    REQUIRE(settle(model));
+    SignalLog log(model);
+
+    SECTION("Inserts") {
+        for (const char* name : {"IMG_03.jpg", "IMG_06.jpg", "IMG_09.jpg", "IMG_10.jpg"}) {
+            addJpeg(folder, name);
+        }
+        model.refresh();
+        REQUIRE(log.events == std::vector<std::string>{"+2..2", "+5..5", "+8..9"});
+        REQUIRE(model.rowCount() == 10);
+        REQUIRE(model.rowOf(folder.file("IMG_10.jpg")) == 9);
+        REQUIRE(model.rowOf(folder.file("IMG_07.jpg")) == 6);
+        REQUIRE(log.resets == 0);
+    }
+    SECTION("Removes, the last run first") {
+        for (const char* name : {"IMG_02.jpg", "IMG_04.jpg", "IMG_05.jpg", "IMG_08.jpg"}) {
+            fs::remove(folder.file(name));
+        }
+        model.refresh();
+        REQUIRE(log.events == std::vector<std::string>{"-5..5", "-1..3"});
+        REQUIRE(names(model) == std::vector<std::string>{"IMG_01.jpg", "IMG_07.jpg"});
+        REQUIRE(model.rowOf(folder.file("IMG_07.jpg")) == 1);
+        REQUIRE(model.rowOf(folder.file("IMG_04.jpg")) == -1);
+    }
+    SECTION("A change that touches nothing sends nothing") {
+        model.refresh();
+        REQUIRE(log.events.empty());
+        REQUIRE(model.pendingLoads() >= 0);
+    }
+}
+
+TEST_CASE("Rows keep their marks, EXIF and thumbnail through a merge", "[shotmodel][merge]") {
+    const test::TempDir folder;
+    const fs::path one = addRaw(folder, "IMG_1.dng");
+    const fs::path three = addRaw(folder, "IMG_3.dng");
+    const fs::path five = addRaw(folder, "IMG_5.dng");
+    ShotModel model;
+    model.setFolder(folder.path());
+    REQUIRE(settle(model));
+    model.setMarks(three, {.rating = 4, .label = ColorLabel::Red});
+    QImage thumbnail(4, 3, QImage::Format_RGB32);
+    thumbnail.fill(Qt::green);
+    model.setThumbnail(five, thumbnail);
+    const QPersistentModelIndex tracked = model.index(model.rowOf(five));
+
+    const fs::path two = addRaw(folder, "IMG_2.dng");
+    fs::remove(one);
+    model.refresh();
+    REQUIRE(names(model) == std::vector<std::string>{"IMG_2.dng", "IMG_3.dng", "IMG_5.dng"});
+    REQUIRE(tracked.row() == 2);
+    REQUIRE(model.marks(model.rowOf(three)) == PhotoMarks{.rating = 4, .label = ColorLabel::Red});
+    REQUIRE(model.exif(model.rowOf(three)));
+    REQUIRE(model.index(model.rowOf(five)).data(ShotModel::ThumbnailRole).value<QImage>() ==
+            thumbnail);
+    REQUIRE(settle(model));
+    REQUIRE(model.exif(model.rowOf(two)));
+    REQUIRE(model.marks(model.rowOf(three)).rating == 4);
+}
+
+TEST_CASE("A companion that joins is an update in place", "[shotmodel][merge]") {
+    const test::TempDir folder;
+    addRaw(folder, "IMG_1.dng");
+    addRaw(folder, "IMG_2.dng");
+    ShotModel model;
+    model.setFolder(folder.path());
+    REQUIRE(settle(model));
+    SignalLog log(model);
+    std::vector<int> changedRows;
+    QObject::connect(&model, &QAbstractItemModel::dataChanged, &model,
+                     [&](const QModelIndex& index, const QModelIndex&, const QList<int>& roles) {
+                         if (roles.contains(ShotModel::FormatLabelRole)) {
+                             changedRows.push_back(index.row());
+                         }
+                     });
+    addJpeg(folder, "IMG_2.jpg");
+    model.refresh();
+    REQUIRE(log.events.empty());
+    REQUIRE(changedRows == std::vector<int>{1});
+    REQUIRE(model.index(1).data(ShotModel::FormatLabelRole).toString() == "DNG+JPEG");
+}
+
+TEST_CASE("Folders are merged where they stand: new, vanished and changed ones",
+          "[shotmodel][merge][recursive]") {
+    const test::TempDir folder;
+    for (const char* name : {"b", "d"}) {
+        fs::create_directories(folder.file(name));
+    }
+    addJpeg(folder, "IMG_1.jpg");
+    addJpeg(folder, "b/IMG_1.jpg");
+    addJpeg(folder, "b/IMG_2.jpg");
+    addJpeg(folder, "d/IMG_1.jpg");
+    ShotModel model;
+    model.setFolder(folder.path(), true);
+    REQUIRE(settle(model));
+    REQUIRE(model.rowCount() == 4);
+    SignalLog log(model);
+
+    // A folder between the two, one that goes, one that gains a shot.
+    fs::create_directories(folder.file("c/deep"));
+    addJpeg(folder, "c/IMG_1.jpg");
+    addJpeg(folder, "c/deep/IMG_1.jpg");
+    fs::remove_all(folder.file("d"));
+    addJpeg(folder, "b/IMG_3.jpg");
+    model.refresh();
+    REQUIRE(settle(model));
+
+    REQUIRE(model.rowCount() == 6);
+    const std::vector<std::string> expected{"IMG_1.jpg", "IMG_1.jpg", "IMG_2.jpg",
+                                            "IMG_3.jpg", "IMG_1.jpg", "IMG_1.jpg"};
+    REQUIRE(names(model) == expected);
+    const std::vector<fs::path> order{folder.file("IMG_1.jpg"),   folder.file("b/IMG_1.jpg"),
+                                      folder.file("b/IMG_2.jpg"), folder.file("b/IMG_3.jpg"),
+                                      folder.file("c/IMG_1.jpg"), folder.file("c/deep/IMG_1.jpg")};
+    for (int row = 0; row < 6; ++row) {
+        REQUIRE(model.shot(row).primary == order[static_cast<std::size_t>(row)]);
+        REQUIRE(model.rowOf(order[static_cast<std::size_t>(row)]) == row);
+    }
+    REQUIRE(model.rowOf(folder.file("d/IMG_1.jpg")) == -1);
+    REQUIRE(log.resets == 0);
+    // One signal per run, folder by folder: b gains a row, c and c/deep come in as one run each
+    // (they are two folders), and d, which was last, goes.
+    REQUIRE(log.events == std::vector<std::string>{"+3..3", "+4..4", "+5..5", "-6..6"});
+}
+
+TEST_CASE("A scattered change resets the model and keeps what the rows know",
+          "[shotmodel][merge]") {
+    const test::TempDir folder;
+    const auto name = [](int n) {
+        char text[32];
+        std::snprintf(text, sizeof text, "IMG_%04d.jpg", n);
+        return std::string(text);
+    };
+    for (int n = 0; n < 200; n += 2) {
+        addJpeg(folder, name(n));
+    }
+    ShotModel model;
+    model.setFolder(folder.path());
+    REQUIRE(settle(model));
+    model.setMarks(folder.file(name(100)), {.rating = 3});
+    QImage thumbnail(2, 2, QImage::Format_RGB32);
+    thumbnail.fill(Qt::blue);
+    model.setThumbnail(folder.file(name(100)), thumbnail);
+    SignalLog log(model);
+
+    // The odd ones come in between all of them: 100 insert runs.
+    for (int n = 1; n < 200; n += 2) {
+        addJpeg(folder, name(n));
+    }
+    model.refresh();
+    REQUIRE(log.resets == 1);
+    REQUIRE(log.events.empty());
+    REQUIRE(model.rowCount() == 200);
+    REQUIRE(model.rowOf(folder.file(name(100))) == 100);
+    REQUIRE(model.rowOf(folder.file(name(199))) == 199);
+    REQUIRE(model.marks(100).rating == 3);
+    REQUIRE(model.index(100).data(ShotModel::ThumbnailRole).value<QImage>() == thumbnail);
+    // The 100 new shots are loaded, and the old ones checked.
+    REQUIRE(settle(model));
+    REQUIRE(model.index(101).data(ShotModel::MarksLoadedRole).toBool());
+
+    // Exactly 64 runs are still merged by runs.
+    log.resets = 0;
+    for (int n = 0; n < 128; n += 2) {
+        fs::remove(folder.file(name(n)));
+    }
+    model.refresh();
+    REQUIRE(log.resets == 0);
+    REQUIRE(log.events.size() == 64);
+    REQUIRE(model.rowCount() == 200 - 64);
+}
+
+TEST_CASE("A refresh checks the sidecars of the folders that changed, or that it is told of",
+          "[shotmodel][merge][recursive]") {
+    const test::TempDir folder;
+    fs::create_directories(folder.file("a"));
+    fs::create_directories(folder.file("b"));
+    for (const char* name : {"a/IMG_1.jpg", "a/IMG_2.jpg", "a/IMG_3.jpg", "b/IMG_1.jpg",
+                             "b/IMG_2.jpg", "b/IMG_3.jpg", "b/IMG_4.jpg"}) {
+        addJpeg(folder, name);
+    }
+    ShotModel model;
+    model.setFolder(folder.path(), true);
+    REQUIRE(settle(model));
+    const std::vector<fs::path> none;
+
+    SECTION("Nothing changed and nobody called: nothing is read") {
+        model.refresh(none);
+        REQUIRE(model.pendingLoads() == 0);
+    }
+    SECTION("A changed folder is checked, and so are the new rows' first reads") {
+        addJpeg(folder, "a/IMG_4.jpg");
+        model.refresh(none);
+        // Three rechecks in a, then marks and EXIF of the new shot.
+        REQUIRE(model.pendingLoads() == 3 + 2);
+        REQUIRE(settle(model));
+    }
+    SECTION("A folder that was told about is checked, whatever its listing") {
+        model.refresh(std::vector<fs::path>{folder.file("b") / ""});
+        REQUIRE(model.pendingLoads() == 4);
+        REQUIRE(settle(model));
+    }
+    SECTION("A vanished folder checks no one") {
+        fs::remove_all(folder.file("b"));
+        model.refresh(none);
+        REQUIRE(model.pendingLoads() == 0);
+        REQUIRE(model.rowCount() == 3);
+    }
+    SECTION("Without a list of folders every loaded row is checked") {
+        model.refresh();
+        REQUIRE(model.pendingLoads() == 7);
+        REQUIRE(settle(model));
+    }
 }

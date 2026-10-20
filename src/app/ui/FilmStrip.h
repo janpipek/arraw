@@ -308,6 +308,22 @@ private:
     /// @brief Finds the primary file at a shown index.
     [[nodiscard]] static std::filesystem::path primaryAt(const QModelIndex& index);
 
+    /// @brief What a model reset that merges a refresh must not lose.
+    struct ResetStash {
+        /// Shots selected.
+        std::vector<std::filesystem::path> selected;
+        /// Shot with the focus, empty for none.
+        std::filesystem::path current;
+        /// First shot in view, empty for none.
+        std::filesystem::path anchor;
+    };
+
+    /// @brief Remembers the selection, the current shot and the scroll position before a reset.
+    void stashSelection();
+
+    /// @brief Puts back what ::arraw::app::FilmStrip::stashSelection remembered.
+    void restoreSelection();
+
     ShotModel model_;
     ShotFilterModel proxy_;
     FolderWatcher watcher_;
@@ -318,6 +334,11 @@ private:
     QLabel* folderLabel_ = nullptr;
     QToolButton* subfoldersButton_ = nullptr;
     bool includeSubfolders_ = false;
+    /// Whether the model is being given a new folder, which a reset must not carry a selection
+    /// into.
+    bool changingFolder_ = false;
+    /// Taken when the model starts a reset that merges a refresh; empty otherwise.
+    std::optional<ResetStash> stash_;
     std::function<bool()> subfoldersLeaveGuard_;
     QComboBox* starChoice_ = nullptr;
     std::vector<std::pair<QToolButton*, ColorLabel>> swatches_;

@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <map>
+#include <vector>
 
 namespace arraw::app {
 
@@ -20,7 +21,8 @@ class ShotModel;
 /// Watches the model's folder (following ::arraw::app::ShotModel::setFolder).
 /// A change to the folder's entries is debounced, because a program that
 /// writes a file touches the folder several times, and then handed to
-/// ::arraw::app::ShotModel::refresh. The watcher also tells apart sidecar
+/// ::arraw::app::ShotModel::refresh, together with the directories that reported a change. The
+/// watcher also tells apart sidecar
 /// changes the application made from those other programs did.
 ///
 /// For a model that lists subfolders, every sub-directory is watched too, and the
@@ -87,6 +89,8 @@ private:
     QFileSystemWatcher watcher_;
     /// Timer that waits for the folder to be quiet.
     QTimer debounce_;
+    /// Directories that reported a change since the last refresh.
+    std::vector<std::filesystem::path> dirty_;
     /// Stamp of each sidecar the application wrote, by normalised path.
     std::map<std::filesystem::path, std::int64_t> ownStamps_;
 };

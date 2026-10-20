@@ -13,6 +13,7 @@
 #include <QCoreApplication>
 #include <QDoubleSpinBox>
 #include <QImage>
+#include <QItemSelectionModel>
 #include <QListView>
 #include <QMessageBox>
 #include <QSettings>
@@ -26,6 +27,8 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <set>
+#include <string>
 
 using namespace arraw;
 using namespace arraw::app;
@@ -319,4 +322,50 @@ TEST_CASE("Switching subfolders off with a subfolder photograph open asks about 
         CHECK_FALSE(w.strip().activePrimary());
         CHECK_FALSE(w.view().wholeFrameImage().isNull());
     }
+}
+
+TEST_CASE("The film strip keeps its selection when a refresh is too scattered to merge by runs",
+          "[app][filmstrip][merge]") {
+    const test::TempDir folder;
+    const auto name = [](int n) { return "IMG_" + std::to_string(1000 + n) + ".jpg"; };
+    for (int n = 0; n < 200; n += 2) {
+        touch(folder.file(name(n)));
+    }
+    Strip holder;
+    FilmStrip& strip = holder.strip;
+    strip.setFolder(folder.path());
+    auto* list = strip.findChild<QListView*>();
+    REQUIRE(list);
+    REQUIRE(list->model()->rowCount() == 100);
+    strip.setActive(folder.file(name(40)));
+
+    // Three more shots are selected by hand, the active one among them.
+    QItemSelectionModel* selection = list->selectionModel();
+    for (const int n : {20, 40, 60}) {
+        const QString path = QString::fromStdU16String(folder.file(name(n)).u16string());
+        for (int row = 0; row < list->model()->rowCount(); ++row) {
+            if (list->model()->index(row, 0).data(ShotModel::PathRole).toString() == path) {
+                selection->select(list->model()->index(row, 0), QItemSelectionModel::Select);
+            }
+        }
+    }
+    REQUIRE(selection->selectedIndexes().size() == 3);
+
+    // The odd numbers arrive between them all: far past the limit of runs, so the model resets.
+    for (int n = 1; n < 200; n += 2) {
+        touch(folder.file(name(n)));
+    }
+    REQUIRE(QTest::qWaitFor([&] { return list->model()->rowCount() == 200; }, 10000));
+
+    std::set<std::string> selected;
+    for (const QModelIndex& index : selection->selectedIndexes()) {
+        selected.insert(index.data(ShotModel::PathRole).toString().toStdString());
+    }
+    REQUIRE(selected == std::set<std::string>{folder.file(name(20)).string(),
+                                              folder.file(name(40)).string(),
+                                              folder.file(name(60)).string()});
+    REQUIRE(strip.activePrimary() == folder.file(name(40)));
+    REQUIRE(selection->currentIndex().isValid());
+    REQUIRE(selection->currentIndex().data(ShotModel::PathRole).toString().toStdString() ==
+            folder.file(name(40)).string());
 }

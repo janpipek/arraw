@@ -19,6 +19,7 @@ add_executable(arraw-tests
         support/TestImages.cpp
         test_AppSettings.cpp
         test_BrushBench.cpp
+        test_FolderDiff.cpp
         test_FolderListingBench.cpp
         test_BrushCoverage.cpp
         test_BrushCoverageCache.cpp

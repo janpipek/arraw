@@ -29,6 +29,7 @@
 
 #include <algorithm>
 #include <exception>
+#include <utility>
 
 namespace arraw::app {
 
@@ -328,6 +329,30 @@ FilmStrip::FilmStrip(QWidget* parent, ThumbnailCache cache, LensDatabaseSource l
                 }
                 thumbnails_.addShots(added);
             });
+    // A refresh that is too scattered to merge by runs resets the model (see ShotModel::refresh);
+    // the selection is carried over it. A new folder is not carried, and gets its thumbnails in
+    // setFolder.
+    connect(&proxy_, &QAbstractItemModel::modelAboutToBeReset, this, [this] {
+        if (!changingFolder_) {
+            stashSelection();
+        }
+    });
+    connect(&proxy_, &QAbstractItemModel::modelReset, this, [this] {
+        if (!changingFolder_) {
+            restoreSelection();
+        }
+    });
+    connect(&model_, &QAbstractItemModel::modelReset, this, [this] {
+        if (changingFolder_) {
+            return;
+        }
+        std::vector<fs::path> shots;
+        shots.reserve(static_cast<std::size_t>(model_.rowCount()));
+        for (int row = 0; row < model_.rowCount(); ++row) {
+            shots.push_back(model_.shot(row).primary);
+        }
+        thumbnails_.addShots(shots);
+    });
     // What is on screen changes with scrolling, size, filter and the shots themselves; one report
     // after the burst.
     visibleTimer_.setSingleShot(true);
@@ -458,8 +483,52 @@ void FilmStrip::clearFilter() {
     applyFilter();
 }
 
+void FilmStrip::stashSelection() {
+    ResetStash stash;
+    for (const QModelIndex& index : list_->selectionModel()->selectedIndexes()) {
+        stash.selected.push_back(primaryAt(index));
+    }
+    if (const QModelIndex current = list_->selectionModel()->currentIndex(); current.isValid()) {
+        stash.current = primaryAt(current);
+    }
+    if (const QModelIndex first = list_->indexAt(QPoint(2, 2)); first.isValid()) {
+        stash.anchor = primaryAt(first);
+    }
+    stash_ = std::move(stash);
+}
+
+void FilmStrip::restoreSelection() {
+    if (!stash_) {
+        return;
+    }
+    const ResetStash stash = *std::exchange(stash_, std::nullopt);
+    QItemSelection selection;
+    for (const fs::path& primary : stash.selected) {
+        if (const QModelIndex index = proxyIndexOf(primary); index.isValid()) {
+            selection.select(index, index);
+        }
+    }
+    QItemSelectionModel* model = list_->selectionModel();
+    model->select(selection, QItemSelectionModel::ClearAndSelect);
+    // The shot that is open keeps the focus if nothing else had it.
+    const QModelIndex current = proxyIndexOf(stash.current.empty() ? active_ : stash.current);
+    if (current.isValid()) {
+        model->setCurrentIndex(current, QItemSelectionModel::NoUpdate);
+    }
+    if (const QModelIndex anchor = proxyIndexOf(stash.anchor); anchor.isValid()) {
+        list_->scrollTo(anchor, QAbstractItemView::PositionAtTop);
+    }
+}
+
 void FilmStrip::listFolder(const fs::path& folder) {
-    model_.setFolder(folder, includeSubfolders_);
+    changingFolder_ = true;
+    try {
+        model_.setFolder(folder, includeSubfolders_);
+    } catch (...) {
+        changingFolder_ = false;
+        throw;
+    }
+    changingFolder_ = false;
     live_.clear();
     {
         std::vector<fs::path> shots;
