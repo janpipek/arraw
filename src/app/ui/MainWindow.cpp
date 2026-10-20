@@ -226,7 +226,10 @@ MainWindow::MainWindow(DebugLog& debugLog, QWidget* parent, PhotoLoader::Decoder
     try {
         exportPresets_.emplace(ExportPresetStore::standard());
     } catch (const std::exception& error) {
-        qWarning().noquote() << "No export presets:" << error.what();
+        DebugDiagnostics log(debugLog_.diagnostics);
+        log.record({.notice = Notice::ExportPresetsUnreadable,
+                    .severity = Severity::Warning,
+                    .values = {std::string("no export presets directory: ") + error.what()}});
     }
     filmStrip_ = new FilmStrip(this, ThumbnailCache(ThumbnailCache::defaultRoot()), lensSource_);
     {
@@ -1997,6 +2000,8 @@ void MainWindow::exportPhotoImpl(const std::optional<ExportSettings>& given) {
         } else {
             ExportDialog dialog(restoreExportSettings(store), frame, exportPresetStore(),
                                 rememberedExportPreset(store), this);
+            DebugDiagnostics log(debugLog_.diagnostics);
+            dialog.setDiagnostics(&log);
             if (dialog.exec() != QDialog::Accepted) {
                 return;
             }
@@ -2071,6 +2076,7 @@ void MainWindow::exportShotsWith(const QStringList& primaries, const ExportSetti
 void MainWindow::fillExportPresetMenu(QMenu& menu,
                                       std::function<void(const ExportSettings&)> chosen) {
     menu.clear();
+    menu.setToolTipsVisible(true);
     ExportPresetCatalog catalog;
     if (exportPresets_) {
         try {
@@ -2149,6 +2155,8 @@ void MainWindow::exportShotsImpl(const QStringList& primaries,
         } else {
             ExportDialog dialog(initial, frame, exportPresetStore(), rememberedExportPreset(store),
                                 this);
+            DebugDiagnostics log(debugLog_.diagnostics);
+            dialog.setDiagnostics(&log);
             if (dialog.exec() == QDialog::Accepted) {
                 chosen = dialog.settings();
                 rememberExportPreset(dialog.chosenPreset(), store);

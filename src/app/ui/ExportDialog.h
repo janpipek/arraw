@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Diagnostics.h>
 #include <ExportPresets.h>
 #include <ExportSettings.h>
 #include <ImageBuffer.h>
@@ -68,11 +69,17 @@ public:
         prompts_ = std::move(prompts);
     }
 
+    /// @brief Sends the problems found when reading the presets file to a log.
+    /// @param log The log; it must outlive the dialog. Nothing is reported by default. Reads the
+    /// presets file again.
+    void setDiagnostics(DiagnosticLog* log);
+
     /// @brief Gives the settings as the dialog shows them now.
     [[nodiscard]] ExportSettings settings() const;
 
     /// @brief Gives the name of the preset chosen in the picker, modified or not.
-    /// @return The name, or nothing for "No preset" or without a store.
+    /// @return The name, or nothing for "No preset", a preset hidden by a built-in, or without
+    /// a store.
     [[nodiscard]] std::optional<std::string> chosenPreset() const;
 
 private:
@@ -87,7 +94,12 @@ private:
     void reloadPresets(const std::optional<std::string>& name);
 
     /// @brief Finds a usable preset of the catalog by name.
-    [[nodiscard]] const ExportPreset* findPreset(const std::string& name) const;
+    /// @param name Name to look for.
+    /// @param shadowed Whether to look among the presets hidden by a built-in instead.
+    [[nodiscard]] const ExportPreset* findPreset(const std::string& name, bool shadowed) const;
+
+    /// @brief Gives the sentence that says why a hidden preset cannot be used.
+    [[nodiscard]] QString hiddenReason() const;
 
     /// @brief Sets every control to settings.
     void apply(const ExportSettings& settings);
@@ -155,6 +167,8 @@ private:
     ExportPresetCatalog catalog_;        ///< What the file held when last read.
     std::optional<ExportPreset> chosen_; ///< The preset the picker shows as chosen.
     QComboBox* presetBox_ = nullptr;
+    QPushButton* okButton_ = nullptr;
+    DiagnosticLog* diagnostics_ = nullptr; ///< Where the file's problems go, if anywhere.
     QPushButton* saveAsButton_ = nullptr;
     QToolButton* presetMenuButton_ = nullptr;
     QAction* updateAction_ = nullptr;

@@ -3983,6 +3983,23 @@ TEST_CASE("Text diagnostics remove injected controls and JSON retains the data",
     REQUIRE_THAT(json.str(), !ContainsSubstring("\033"));
 }
 
+TEST_CASE("The export preset notices have stable names in the JSON log", "[cli][presets]") {
+    const std::pair<Notice, const char*> names[]{
+        {Notice::ExportPresetUnusable, "export_preset_unusable"},
+        {Notice::ExportPresetsUnreadable, "export_presets_unreadable"}};
+    for (const auto& [notice, name] : names) {
+        CAPTURE(name);
+        std::ostringstream json;
+        cli::StreamDiagnostics(json, cli::LogFormat::Json)
+            .record({.notice = notice,
+                     .severity = Severity::Warning,
+                     .subject = std::filesystem::path("export-presets.json"),
+                     .values = {std::string("web"), std::string("unknown format")}});
+        const auto object = QJsonDocument::fromJson(QByteArray::fromStdString(json.str())).object();
+        REQUIRE(object["notice"].toString() == QString::fromUtf8(name));
+    }
+}
+
 TEST_CASE("Info strips terminal sequences from sidecar metadata", "[cli][info][style]") {
     const test::TempDir directory;
     const auto image = directory.file("photo.png");
@@ -4270,6 +4287,15 @@ TEST_CASE("export-preset path prints the file even when it does not exist", "[cl
     REQUIRE_FALSE(std::filesystem::exists(config.file(exportPresetsFileName)));
 }
 
+TEST_CASE("export --config-dir without --export-preset is ignored", "[cli][presets]") {
+    const test::TempDir config;
+    const test::TempDir output;
+    const auto result = invoke({"export", test::fixture(card).string(), "-o",
+                                output.path().string(), "--config-dir", config.path().string()});
+    REQUIRE(result.code == cli::Success);
+    REQUIRE(std::filesystem::exists(output.file("testcard-61x41-srgb8.jpg")));
+}
+
 TEST_CASE("The --config-dir option wins over ARRAW_CONFIG_DIR", "[cli][presets]") {
     const test::TempDir environment;
     const test::TempDir option;
@@ -4288,7 +4314,6 @@ TEST_CASE("export-preset refuses a missing or unknown action", "[cli][presets]")
     REQUIRE(invoke({"export-preset", "save", "x"}).code == cli::UsageError);
     REQUIRE(invoke({"export-preset", "show"}).code == cli::UsageError);
     REQUIRE(invoke({"export-preset", "list", "extra"}).code == cli::UsageError);
-    REQUIRE(invoke({"export", "x.png", "-o", ".", "--config-dir", "."}).code == cli::UsageError);
 }
 
 TEST_CASE("The top-level help lists export-preset", "[cli][presets]") {

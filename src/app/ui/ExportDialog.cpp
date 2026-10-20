@@ -87,6 +87,12 @@ constexpr int nameRole = Qt::UserRole;
 /// Item data of the picker: whether the item is the "No preset" one.
 constexpr int noneRole = Qt::UserRole + 1;
 
+/// Item data of the picker: whether the item is a preset hidden by a built-in of its name.
+constexpr int shadowedRole = Qt::UserRole + 2;
+
+/// Item data of the picker: the item's text without any "(modified)" mark.
+constexpr int labelRole = Qt::UserRole + 3;
+
 /// @brief Makes a path a string for display.
 QString shown(const std::filesystem::path& path) {
     return QString::fromStdU16String(path.u16string());
@@ -182,6 +188,7 @@ ExportDialog::ExportDialog(const ExportSettings& initial, ImageSize frame, Expor
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
     root->addWidget(buttons);
+    okButton_ = buttons->button(QDialogButtonBox::Ok);
     connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
 
@@ -231,6 +238,7 @@ void ExportDialog::buildPresetRow(QVBoxLayout* root) {
     presetMenuButton_->setText(tr("More"));
     presetMenuButton_->setPopupMode(QToolButton::InstantPopup);
     auto* menu = new QMenu(presetMenuButton_);
+    menu->setToolTipsVisible(true);
     const auto addAction = [&](const char* name, const QString& text) {
         auto* action = menu->addAction(text);
         action->setObjectName(QString::fromLatin1(name));
@@ -251,7 +259,8 @@ void ExportDialog::buildPresetRow(QVBoxLayout* root) {
         if (presetBox_->itemData(index, noneRole).toBool()) {
             chosen_.reset();
         } else if (const ExportPreset* preset =
-                       findPreset(presetBox_->itemData(index, nameRole).toString().toStdString())) {
+                       findPreset(presetBox_->itemData(index, nameRole).toString().toStdString(),
+                                  presetBox_->itemData(index, shadowedRole).toBool())) {
             chosen_ = *preset;
             apply(preset->settings);
         }
@@ -265,9 +274,16 @@ void ExportDialog::buildPresetRow(QVBoxLayout* root) {
     connect(setAsideAction_, &QAction::triggered, this, &ExportDialog::setAsidePresets);
 }
 
-const ExportPreset* ExportDialog::findPreset(const std::string& name) const {
+void ExportDialog::setDiagnostics(DiagnosticLog* log) {
+    diagnostics_ = log;
+    if (store_ != nullptr) {
+        reloadPresets(chosenPreset());
+    }
+}
+
+const ExportPreset* ExportDialog::findPreset(const std::string& name, bool shadowed) const {
     for (const ExportPreset& preset : catalog_.presets) {
-        if (!preset.shadowed && presetNamesEqual(preset.name, name)) {
+        if (preset.shadowed == shadowed && presetNamesEqual(preset.name, name)) {
             return &preset;
         }
     }
@@ -276,7 +292,7 @@ const ExportPreset* ExportDialog::findPreset(const std::string& name) const {
 
 void ExportDialog::reloadPresets(const std::optional<std::string>& name) {
     try {
-        catalog_ = store_->read();
+        catalog_ = store_->read(diagnostics_ != nullptr ? *diagnostics_ : discardedDiagnostics());
     } catch (const std::exception& error) {
         catalog_ = {};
         catalog_.state = ExportPresetFileState::Unreadable;
@@ -290,6 +306,7 @@ void ExportDialog::reloadPresets(const std::optional<std::string>& name) {
         presetBox_->addItem(text);
         const int index = presetBox_->count() - 1;
         presetBox_->setItemData(index, shown(preset), nameRole);
+        presetBox_->setItemData(index, text, labelRole);
         if (!usable) {
             model->item(index)->setEnabled(false);
             presetBox_->setItemData(index, reason, Qt::ToolTipRole);
@@ -316,8 +333,14 @@ void ExportDialog::reloadPresets(const std::optional<std::string>& name) {
     for (const ExportPreset& preset : catalog_.presets) {
         if (!preset.builtIn) {
             separate();
-            addItem(shown(preset.name), preset.name, !preset.shadowed,
-                    tr("Hidden by the built-in preset of the same name."));
+            // A hidden preset stays selectable, to be renamed or deleted (ADR 054 section 8).
+            addItem(preset.shadowed ? tr("%1 (hidden by a built-in)").arg(shown(preset.name))
+                                    : shown(preset.name),
+                    preset.name, true, hiddenReason());
+            if (preset.shadowed) {
+                presetBox_->setItemData(presetBox_->count() - 1, true, shadowedRole);
+                presetBox_->setItemData(presetBox_->count() - 1, hiddenReason(), Qt::ToolTipRole);
+            }
         }
     }
     for (const UnusableExportPreset& preset : catalog_.unusable) {
@@ -329,10 +352,11 @@ void ExportDialog::reloadPresets(const std::optional<std::string>& name) {
     chosen_.reset();
     int index = 0;
     if (name) {
-        if (const ExportPreset* preset = findPreset(*name)) {
+        if (const ExportPreset* preset = findPreset(*name, false)) {
             chosen_ = *preset;
             for (int i = 1; i < presetBox_->count(); ++i) {
                 if (model->item(i)->isEnabled() &&
+                    !presetBox_->itemData(i, shadowedRole).toBool() &&
                     presetBox_->itemData(i, nameRole).toString() == shown(preset->name)) {
                     index = i;
                     break;
@@ -367,35 +391,50 @@ void ExportDialog::refreshPresetState() {
         return;
     }
     const bool isModified = modified();
-    // The text of the chosen item says whether it is modified.
+    // Only the chosen item can say it is modified.
     const int index = presetBox_->currentIndex();
-    if (chosen_ && index > 0) {
-        QString text = shown(chosen_->name);
-        if (isModified) {
-            text += tr(" (modified)");
+    for (int i = 1; i < presetBox_->count(); ++i) {
+        const QVariant label = presetBox_->itemData(i, labelRole);
+        if (label.isValid()) {
+            presetBox_->setItemText(i, i == index && isModified
+                                           ? label.toString() + tr(" (modified)")
+                                           : label.toString());
         }
-        presetBox_->setItemText(index, text);
     }
 
     const QString block = writeBlock();
     const bool writable = block.isEmpty();
     const bool custom = chosen_ && !chosen_->builtIn;
+    const bool hidden = chosen_ && chosen_->shadowed;
     saveAsButton_->setEnabled(writable);
     saveAsButton_->setToolTip(block);
     updateAction_->setText(chosen_ ? tr("Update \"%1\"").arg(shown(chosen_->name)) : tr("Update"));
-    updateAction_->setEnabled(writable && custom && isModified);
+    updateAction_->setEnabled(writable && custom && !hidden && isModified);
     renameAction_->setEnabled(writable && custom);
     deleteAction_->setEnabled(writable && custom);
     for (QAction* action : {updateAction_, renameAction_, deleteAction_}) {
         action->setToolTip(block);
+    }
+    if (hidden && writable) {
+        updateAction_->setToolTip(hiddenReason());
+    }
+    // A hidden preset is there to be renamed or deleted, not to be exported with.
+    if (okButton_ != nullptr) {
+        okButton_->setEnabled(!hidden);
+        okButton_->setToolTip(hidden ? hiddenReason() : QString());
     }
     std::error_code ignored;
     showFileAction_->setEnabled(std::filesystem::exists(store_->file(), ignored));
     setAsideAction_->setVisible(catalog_.state == ExportPresetFileState::Unreadable);
 }
 
+QString ExportDialog::hiddenReason() const {
+    return tr("Hidden by the built-in preset of the same name: rename or delete it, then it can "
+              "be used again.");
+}
+
 std::optional<std::string> ExportDialog::chosenPreset() const {
-    if (!chosen_) {
+    if (!chosen_ || chosen_->shadowed) {
         return std::nullopt;
     }
     return chosen_->name;
@@ -461,8 +500,11 @@ bool ExportDialog::change(const QString& title, const std::function<void()>& act
 
 void ExportDialog::saveAsPreset() {
     const QString title = tr("Save Export Preset");
-    const auto typed =
-        askName(title, tr("Name of the preset:"), chosen_ ? shown(chosen_->name) : QString());
+    QString initial = chosen_ ? shown(chosen_->name) : QString();
+    if (chosen_ && (chosen_->builtIn || chosen_->shadowed)) {
+        initial = tr("%1 copy").arg(initial);
+    }
+    const auto typed = askName(title, tr("Name of the preset:"), initial);
     if (!typed) {
         return;
     }
@@ -534,14 +576,15 @@ void ExportDialog::showPresetsFile() {
 
 void ExportDialog::setAsidePresets() {
     const QString title = tr("Set Aside Export Presets");
-    if (!confirm(title, tr("The presets file cannot be read:\n%1\n\nMove it to "
-                           "export-presets.unreadable-<date>.json in the same folder, and "
-                           "start a new one?")
-                            .arg(shown(store_->file())))) {
+    if (!confirm(title,
+                 tr("The presets file cannot be read:\n%1\n\nMove it to\n%2\n\nand "
+                    "start a new one?")
+                     .arg(shown(store_->file()), shown(store_->file().parent_path() /
+                                                       "export-presets.unreadable-<date>.json")))) {
         return;
     }
     const std::optional<std::string> keep = chosenPreset();
-    if (change(title, [&] { store_->setAside(); })) {
+    if (change(title, [&] { (void)store_->setAside(); })) {
         reloadPresets(keep);
     }
 }

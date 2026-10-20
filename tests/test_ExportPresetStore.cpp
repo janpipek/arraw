@@ -245,6 +245,37 @@ TEST_CASE("An unreadable file is never written, and setAside moves it without re
     CHECK(slurp(second) == "[1]");
 }
 
+TEST_CASE("A change of letter case is a rename even beside an unusable duplicate",
+          "[presets][store]") {
+    const test::TempDir dir;
+    ExportPresetStore store(dir.path());
+    spit(store.file(), R"({"arraw": 1, "exportPresets": [{"name": "Web"}, {"name": "web"}]})");
+    store.rename("Web", "WEB");
+    const ExportPresetCatalog catalog = store.read();
+    CHECK(find(catalog, "WEB"));
+    CHECK(catalog.unusable.size() == 1);
+    CHECK(problemOf([&] { store.rename("WEB", "Social 1080 px"); }) ==
+          ExportPresetProblem::BuiltIn);
+}
+
+TEST_CASE("setAside moves only a file that is unreadable under the lock", "[presets][store]") {
+    const test::TempDir dir;
+    ExportPresetStore store(dir.path());
+
+    // A newer arraw's file stays where it is.
+    spit(store.file(), newerFile);
+    CHECK(problemOf([&] { (void)store.setAside(); }) == ExportPresetProblem::NewerFile);
+    CHECK(slurp(store.file()) == newerFile);
+
+    // So does a file that reads fine, such as one mended since the caller looked.
+    fs::remove(store.file());
+    store.save(preset("Good"));
+    const std::string good = slurp(store.file());
+    CHECK(problemOf([&] { (void)store.setAside(); }) == ExportPresetProblem::NotUnreadable);
+    CHECK(slurp(store.file()) == good);
+    CHECK(find(store.read(), "Good"));
+}
+
 TEST_CASE("Two stores on one directory do not lose each other's saves", "[presets][store]") {
     const test::TempDir dir;
     ExportPresetStore first(dir.path());

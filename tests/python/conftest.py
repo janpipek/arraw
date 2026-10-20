@@ -16,15 +16,16 @@ def config_directory() -> Iterator[Path]:
 
     The CLI the tests start inherits it.
     """
-    if "ARRAW_CONFIG_DIR" in os.environ:
-        yield Path(os.environ["ARRAW_CONFIG_DIR"])
-        return
+    previous = os.environ.get("ARRAW_CONFIG_DIR")
     with tempfile.TemporaryDirectory(prefix="arraw-config-") as directory:
         os.environ["ARRAW_CONFIG_DIR"] = directory
         try:
             yield Path(directory)
         finally:
-            del os.environ["ARRAW_CONFIG_DIR"]
+            if previous is None:
+                del os.environ["ARRAW_CONFIG_DIR"]
+            else:
+                os.environ["ARRAW_CONFIG_DIR"] = previous
 
 
 @pytest.fixture(scope="session")

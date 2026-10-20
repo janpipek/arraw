@@ -136,6 +136,19 @@ def test_an_unreadable_file_is_never_written_over_but_can_be_set_aside(store):
     assert "New" in names(store)
 
 
+def test_set_aside_refuses_a_newer_file_and_a_readable_one(store):
+    store.file.parent.mkdir(parents=True)
+    newer = json.dumps({"arraw": 99, "exportPresets": []})
+    store.file.write_text(newer)
+    assert problem_of(store.set_aside) == ExportPresetProblem.NEWER_FILE
+    assert store.file.read_text() == newer
+
+    store.file.unlink()
+    store.save(ExportPreset("Good"))
+    assert problem_of(store.set_aside) == ExportPresetProblem.NOT_UNREADABLE
+    assert "Good" in names(store)
+
+
 def test_an_unusable_preset_is_listed_apart_and_cannot_be_replaced_or_loaded(store):
     store.file.parent.mkdir(parents=True)
     entry = {"name": "Odd", "format": "webp"}

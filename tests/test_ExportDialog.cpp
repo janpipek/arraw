@@ -1,3 +1,5 @@
+#include "DebugDiagnostics.h"
+#include "DebugLog.h"
 #include "support/TempDir.h"
 #include "ui/ExportDialog.h"
 
@@ -6,10 +8,12 @@
 #include <QAction>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDialogButtonBox>
 #include <QGroupBox>
 #include <QPushButton>
 #include <QSpinBox>
 #include <QStandardItemModel>
+#include <QTest>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -257,7 +261,8 @@ TEST_CASE("A built-in cannot be updated, renamed or deleted, but Save As copies 
     p.typedName = QStringLiteral("My web");
     saveAsOf(dialog)->click();
     CHECK(p.warnings.empty());
-    CHECK(p.nameInitials == std::vector<QString>{webPreset});
+    // A built-in cannot be saved over, so the suggestion is a copy.
+    CHECK(p.nameInitials == std::vector<QString>{webPreset + " copy"});
     CHECK(dialog.chosenPreset() == "My web");
     CHECK(box->currentText() == "My web");
     const auto saved = p.store.load("My web");
@@ -484,4 +489,89 @@ TEST_CASE("An unreadable file offers Set Aside, which moves it after confirmatio
     CHECK(saveAsOf(dialog)->isEnabled());
     CHECK_FALSE(aside->isVisible());
     CHECK(p.warnings.empty());
+}
+
+TEST_CASE("A preset hidden by a built-in can be chosen to be renamed or deleted, not used",
+          "[app][dialog][export][presets]") {
+    Presets p;
+    p.write(R"({"arraw": 1, "exportPresets": [{"name": "web 2048 PX", "quality": 33}]})");
+    ExportDialog dialog(ExportSettings{}, frame, &p.store);
+    dialog.setPrompts(p.prompts());
+    auto* box = presetBoxOf(dialog);
+    const int hidden = box->findText("web 2048 PX (hidden by a built-in)");
+    REQUIRE(hidden >= 0);
+    CHECK(enabledItem(box, hidden));
+    CHECK_FALSE(box->itemData(hidden, Qt::ToolTipRole).toString().isEmpty());
+
+    auto* ok = dialog.findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok);
+    CHECK(ok->isEnabled());
+    box->setCurrentIndex(hidden);
+    // Its settings are shown, but the remembered name never resolves to the built-in.
+    CHECK(spinIn(dialog, "JPEG Quality")->value() == 33);
+    CHECK_FALSE(dialog.chosenPreset().has_value());
+    CHECK_FALSE(ok->isEnabled());
+    CHECK_FALSE(ok->toolTip().isEmpty());
+    spinIn(dialog, "JPEG Quality")->setValue(40);
+    CHECK_FALSE(actionOf(dialog, "presetUpdate")->isEnabled());
+    CHECK_FALSE(actionOf(dialog, "presetUpdate")->toolTip().isEmpty());
+    CHECK(actionOf(dialog, "presetRename")->isEnabled());
+    CHECK(actionOf(dialog, "presetDelete")->isEnabled());
+
+    // Choosing the built-in of that name finds the built-in.
+    choose(box, webPreset);
+    CHECK(dialog.chosenPreset() == "Web 2048 px");
+    CHECK(ok->isEnabled());
+    CHECK(spinIn(dialog, "JPEG Quality")->value() == 85);
+
+    // Renaming takes it out of the shadow, whole.
+    box->setCurrentIndex(box->findText("web 2048 PX (hidden by a built-in)"));
+    p.typedName = QStringLiteral("My web");
+    actionOf(dialog, "presetRename")->trigger();
+    CHECK(p.warnings.empty());
+    CHECK(dialog.chosenPreset() == "My web");
+    CHECK(p.store.load("My web")->settings.quality == 33);
+    CHECK(ok->isEnabled());
+    CHECK(box->findText("web 2048 PX (hidden by a built-in)") < 0);
+
+    // Deleting removes only the file's preset.
+    p.write(R"({"arraw": 1, "exportPresets": [{"name": "WEB 2048 px", "quality": 33}]})");
+    dialog.setDiagnostics(nullptr);
+    box->setCurrentIndex(box->findText("WEB 2048 px (hidden by a built-in)"));
+    actionOf(dialog, "presetDelete")->trigger();
+    CHECK(p.warnings.empty());
+    CHECK(box->findText("WEB 2048 px (hidden by a built-in)") < 0);
+    CHECK(p.store.load("Web 2048 px")->builtIn);
+}
+
+TEST_CASE("Only the chosen item carries the modified mark", "[app][dialog][export][presets]") {
+    Presets p;
+    p.save("Mine", {.quality = 30});
+    ExportDialog dialog(ExportSettings{}, frame, &p.store);
+    auto* box = presetBoxOf(dialog);
+    choose(box, "Mine");
+    spinIn(dialog, "JPEG Quality")->setValue(50);
+    CHECK(box->findText("Mine (modified)") >= 0);
+    choose(box, webPreset);
+    CHECK(box->findText("Mine (modified)") < 0);
+    CHECK(box->findText("Mine") >= 0);
+}
+
+TEST_CASE("The dialog reports what it finds in the presets file to the debug log",
+          "[app][dialog][export][presets]") {
+    Presets p;
+    p.write(R"({"arraw": 1, "exportPresets": [{"name": "Future", "format": "avif"}]})");
+    DebugLog debugLog;
+    DebugDiagnostics log(debugLog.diagnostics);
+    ExportDialog dialog(ExportSettings{}, frame, &p.store);
+    dialog.setDiagnostics(&log);
+    REQUIRE(QTest::qWaitFor([&] { return debugLog.diagnostics.rowCount() > 0; }, 5000));
+    const auto notice = [&](int row) {
+        return debugLog.diagnostics.index(row, DiagnosticModel::NoticeColumn).data().toString();
+    };
+    CHECK(notice(0) == "ExportPresetUnusable");
+
+    p.write("this is not json");
+    dialog.setDiagnostics(&log);
+    REQUIRE(QTest::qWaitFor([&] { return debugLog.diagnostics.rowCount() > 1; }, 5000));
+    CHECK(notice(1) == "ExportPresetsUnreadable");
 }

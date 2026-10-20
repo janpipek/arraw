@@ -1,10 +1,13 @@
 #include "ui/SettingsDialog.h"
 
+#include <ConfigDirectory.h>
+
 #include <QApplication>
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QPushButton>
 #include <QStandardPaths>
+#include <QTemporaryDir>
 
 #include <catch2/catch_session.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -19,6 +22,11 @@ int main(int argc, char* argv[]) {
     // locations, not the user's, and previews render on the CPU, the same on every machine.
     QStandardPaths::setTestModeEnabled(true);
     qputenv("ARRAW_PREVIEW_DEVICE", "cpu");
+    // The presets file lives in a directory of this process, never in the user's.
+    const QTemporaryDir configuration;
+    if (configuration.isValid()) {
+        qputenv(arraw::configDirectoryVariable, configuration.path().toUtf8());
+    }
     const QApplication application(argc, argv);
     QCoreApplication::setOrganizationName("arraw-tests");
     QCoreApplication::setApplicationName("arraw-widget-tests");
