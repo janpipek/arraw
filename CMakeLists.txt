@@ -315,6 +315,15 @@ add_library(arraw STATIC
         include/Sidecar.h
         src/core/Sidecar.cpp
         src/core/ImageBuffer.cpp
+        include/ConfigDirectory.h
+        src/core/ConfigDirectory.cpp
+        src/core/ConfigDirectoryRules.h
+        include/ExportSettings.h
+        include/ExportPresets.h
+        src/core/ExportPresetStore.cpp
+        src/core/ExportPresetsJson.h
+        src/core/ExportPresetsJson.cpp
+        src/core/ExportSettings.cpp
         src/core/ImageExport.cpp
         include/ExifInfo.h
         src/core/ExifInfo.cpp
@@ -528,8 +537,8 @@ add_library(arraw-app-core STATIC
         src/app/DisplayImage.h
         src/app/ExportQueue.cpp
         src/app/ExportQueue.h
-        src/app/ExportSettings.cpp
-        src/app/ExportSettings.h
+        src/app/ExportPaths.cpp
+        src/app/ExportPaths.h
         src/app/PhotoLoader.cpp
         src/app/PhotoLoader.h
         src/app/PreviewRenderer.cpp
@@ -656,6 +665,8 @@ add_library(arraw-cli-core STATIC
         src/cli/DeviceChoice.h
         src/cli/ExportCommand.cpp
         src/cli/ExportCommand.h
+        src/cli/ExportPresetCommand.cpp
+        src/cli/ExportPresetCommand.h
         src/cli/GpuTestCommand.cpp
         src/cli/GpuTestCommand.h
         src/cli/InfoCommand.cpp

@@ -9,6 +9,7 @@ Two generators, one per input kind:
 | `make_fixtures.py` | `*.png` — a 61×41 test card | `test_RoundTrip.cpp` |
 | `make_raw_fixtures.py` | `*.dng` — synthetic 32×24 RAWs | `test_RawImport.cpp`, `test_ExifInfo.cpp`, `test_LensMatch.cpp` |
 | *(by hand)* | `sidecars/v<N>/` — sidecars as the writers of version N produced them; frozen, never edited (ADR 051) | `test_Sidecar.cpp` |
+| *(by hand)* | `config/export-presets/v<N>/` — export presets files as the writers of version N produced them; frozen, never edited (ADR 054) | `test_ExportPresetsJson.cpp` |
 | *(by hand)* | `lensfun/` — a small lensfun database with invented calibrations and a `timestamp.txt` | `test_LensDatabase.cpp`, `test_LensMatch.cpp`, `test_LensCorrection.cpp` |
 
 The **generated files are committed and are what the tests read**. The scripts

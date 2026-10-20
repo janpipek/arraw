@@ -17,7 +17,7 @@ namespace arraw::cli {
 namespace {
 
 /// @brief Column the command summaries line up in, in the top-level help.
-constexpr int summaryColumn = 12;
+constexpr int summaryColumn = 15;
 
 /// @brief Writes the command table.
 void listCommands(std::ostream& stream) {

@@ -101,6 +101,10 @@ std::string nameOf(Notice notice) {
         return "lensfun_unavailable";
     case Notice::LensNotCalibrated:
         return "lens_not_calibrated";
+    case Notice::ExportPresetUnusable:
+        return "export_preset_unusable";
+    case Notice::ExportPresetsUnreadable:
+        return "export_presets_unreadable";
     }
     return "unknown";
 }

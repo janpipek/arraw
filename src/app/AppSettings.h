@@ -2,6 +2,8 @@
 
 #include "GpuContext.h"
 
+#include <ExportSettings.h>
+
 #include <QSettings>
 
 #include <cstddef>
@@ -68,5 +70,21 @@ void saveMaxWatchedFolders(int limit, QSettings& store);
 /// @param problem Receives the reason to fall back to the CPU, if no context can be made.
 [[nodiscard]] std::unique_ptr<GpuContext> createAppGpuContext(const AppSettings& settings,
                                                               std::string& problem);
+
+/// @brief Stores export settings for the next time.
+///
+/// The size choice is kept as the settings carry it: resizing off is the
+/// original size; a square box of a preset long edge is that preset; any other
+/// box is the custom one. The box is stored only while resizing.
+/// @param settings What the user chose.
+/// @param store Where to keep them.
+void saveExportSettings(const ExportSettings& settings, QSettings& store);
+
+/// @brief Reads the export settings stored last time.
+///
+/// A value that is missing or not one the dialog offers is the default. Resizing
+/// is off (the original size) unless a stored box is valid: both sides from 1 to 99999.
+/// @param store Where they were kept.
+[[nodiscard]] ExportSettings restoreExportSettings(QSettings& store);
 
 } // namespace arraw::app

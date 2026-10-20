@@ -1,6 +1,8 @@
 #include "AppSettings.h"
 #include "support/TempDir.h"
 
+#include <ExportSettings.h>
+
 #include <QSettings>
 #include <QString>
 
@@ -203,4 +205,141 @@ TEST_CASE("The cap on watched folders defaults, round-trips and stays within bou
     REQUIRE(app::restoreMaxWatchedFolders(store) == 1000);
     store.setValue("filmStrip/maxWatchedFolders", "250");
     REQUIRE(app::restoreMaxWatchedFolders(store) == 250);
+}
+
+TEST_CASE("Settings are remembered, the custom size included", "[app][export][settings]") {
+    const test::TempDir dir;
+    const QString file = QString::fromStdU16String(dir.file("settings.ini").u16string());
+    ExportSettings settings;
+    settings.format = ImageFileFormat::Tiff;
+    settings.encoding = NamedEncoding::DisplayP3;
+    settings.sixteenBit = true;
+    settings.resize = true;
+    settings.width = 123;
+    settings.height = 456;
+    settings.allowEnlarging = true;
+    settings.quality = 55;
+    settings.sharpening = 33;
+    {
+        QSettings store(file, QSettings::IniFormat);
+        app::saveExportSettings(settings, store);
+    }
+
+    QSettings store(file, QSettings::IniFormat);
+    const ExportSettings restored = app::restoreExportSettings(store);
+
+    REQUIRE(restored.format == ImageFileFormat::Tiff);
+    REQUIRE(restored.encoding == NamedEncoding::DisplayP3);
+    REQUIRE(restored.sixteenBit);
+    REQUIRE(restored.resize);
+    REQUIRE(restored.allowEnlarging);
+    REQUIRE(restored.quality == 55);
+    REQUIRE(restored.sharpening == 33);
+    REQUIRE(restored.width == 123);
+    REQUIRE(restored.height == 456);
+}
+
+TEST_CASE("The original size is stored as no resizing, and is the default",
+          "[app][export][settings]") {
+    const test::TempDir dir;
+    const QString file = QString::fromStdU16String(dir.file("settings.ini").u16string());
+    QSettings store(file, QSettings::IniFormat);
+    REQUIRE_FALSE(app::restoreExportSettings(store).resize);
+
+    app::saveExportSettings(ExportSettings{.resize = true, .width = 2048, .height = 2048}, store);
+    ExportSettings restored = app::restoreExportSettings(store);
+    REQUIRE(restored.resize);
+    REQUIRE(restored.width == 2048);
+    REQUIRE(restored.height == 2048);
+
+    app::saveExportSettings(ExportSettings{}, store);
+    restored = app::restoreExportSettings(store);
+    REQUIRE_FALSE(restored.resize);
+}
+
+TEST_CASE("A bad stored size means the original size", "[app][export][settings]") {
+    const test::TempDir dir;
+    const QString file = QString::fromStdU16String(dir.file("settings.ini").u16string());
+    QSettings store(file, QSettings::IniFormat);
+    store.setValue("export/resize", true); // As older versions stored it: no box.
+    REQUIRE_FALSE(app::restoreExportSettings(store).resize);
+    store.setValue("export/width", 0);
+    store.setValue("export/height", 500);
+    REQUIRE_FALSE(app::restoreExportSettings(store).resize);
+    store.setValue("export/width", "wide");
+    REQUIRE_FALSE(app::restoreExportSettings(store).resize);
+    store.setValue("export/width", 100000);
+    REQUIRE_FALSE(app::restoreExportSettings(store).resize);
+}
+
+TEST_CASE("Nothing stored, or nonsense, gives the defaults", "[app][export][settings]") {
+    const test::TempDir dir;
+    const QString file = QString::fromStdU16String(dir.file("settings.ini").u16string());
+    QSettings store(file, QSettings::IniFormat);
+    const ExportSettings defaults;
+
+    ExportSettings restored = app::restoreExportSettings(store);
+    REQUIRE(restored.format == defaults.format);
+    REQUIRE(restored.quality == defaults.quality);
+
+    store.setValue("export/format", 99);
+    store.setValue("export/encoding", 0); // The working encoding is no output.
+    store.setValue("export/quality", 1000);
+    store.setValue("export/sharpening", "much");
+    restored = app::restoreExportSettings(store);
+    REQUIRE(restored.format == defaults.format);
+    REQUIRE(restored.encoding == defaults.encoding);
+    REQUIRE(restored.quality == defaults.quality);
+    REQUIRE(restored.sharpening == defaults.sharpening);
+}
+
+TEST_CASE("Metadata choices are remembered", "[app][export][settings][metadata]") {
+    ExportSettings settings;
+    settings.captureInfo = false;
+    settings.location = true;
+    settings.descriptive = false;
+    const test::TempDir dir;
+    const QString file = QString::fromStdU16String(dir.file("settings.ini").u16string());
+    {
+        QSettings store(file, QSettings::IniFormat);
+        app::saveExportSettings(settings, store);
+    }
+    QSettings store(file, QSettings::IniFormat);
+    const ExportSettings restored = app::restoreExportSettings(store);
+    REQUIRE_FALSE(restored.captureInfo);
+    REQUIRE(restored.location);
+    REQUIRE_FALSE(restored.descriptive);
+}
+
+TEST_CASE("Export settings stored by an earlier build are restored", "[app][export][settings]") {
+    const test::TempDir dir;
+    QSettings store(QString::fromStdU16String(dir.file("settings.ini").u16string()),
+                    QSettings::IniFormat);
+    // The keys and ints an earlier build wrote: the enumerations as their positions.
+    store.setValue("export/format", 2);   // Tiff
+    store.setValue("export/encoding", 3); // AdobeRgb
+    store.setValue("export/sixteenBit", true);
+    store.setValue("export/resize", true);
+    store.setValue("export/width", 2048);
+    store.setValue("export/height", 2048);
+    store.setValue("export/allowEnlarging", true);
+    store.setValue("export/quality", 77);
+    store.setValue("export/sharpening", 25);
+    store.setValue("export/captureInfo", false);
+    store.setValue("export/location", true);
+    store.setValue("export/descriptive", false);
+
+    const ExportSettings expected{.format = ImageFileFormat::Tiff,
+                                  .encoding = NamedEncoding::AdobeRgb,
+                                  .sixteenBit = true,
+                                  .resize = true,
+                                  .width = 2048,
+                                  .height = 2048,
+                                  .allowEnlarging = true,
+                                  .quality = 77,
+                                  .sharpening = 25,
+                                  .captureInfo = false,
+                                  .location = true,
+                                  .descriptive = false};
+    CHECK(app::restoreExportSettings(store) == expected);
 }

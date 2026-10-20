@@ -1,11 +1,31 @@
 import os
 import shutil
+import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = ROOT / "tests" / "fixtures"
+
+
+@pytest.fixture(scope="session", autouse=True)
+def config_directory() -> Iterator[Path]:
+    """Gives the session a configuration directory of its own, so no test touches the user's.
+
+    The CLI the tests start inherits it.
+    """
+    previous = os.environ.get("ARRAW_CONFIG_DIR")
+    with tempfile.TemporaryDirectory(prefix="arraw-config-") as directory:
+        os.environ["ARRAW_CONFIG_DIR"] = directory
+        try:
+            yield Path(directory)
+        finally:
+            if previous is None:
+                del os.environ["ARRAW_CONFIG_DIR"]
+            else:
+                os.environ["ARRAW_CONFIG_DIR"] = previous
 
 
 @pytest.fixture(scope="session")

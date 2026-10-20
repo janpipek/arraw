@@ -5,6 +5,7 @@
 #include <DevelopState.h>
 #include <Diagnostics.h>
 #include <Edits.h>
+#include <ExportSettings.h>
 #include <ImageExport.h>
 #include <ImageImport.h>
 #include <LensCorrection.h>
@@ -23,6 +24,7 @@
 #include <cstdint>
 #include <exception>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -799,7 +801,7 @@ void bindPhoto(nb::module_& m) {
         field("location", &MetadataSelection::location),
         field("descriptive", &MetadataSelection::descriptive));
 
-    const ExportOptions exportDefaults{};
+    const ExportOptions exportDefaults;
     m.def(
         "save",
         [](const ImageBuffer& image, const std::filesystem::path& path,
@@ -815,11 +817,16 @@ void bindPhoto(nb::module_& m) {
             PythonLog log;
             withoutGil([&] { exportImage(image, path, options, carried, log); });
         },
-        "image"_a, "path"_a, nb::kw_only(), "format"_a = exportDefaults.format,
+        "image"_a, "path"_a, nb::kw_only(), "format"_a.none() = nb::none(),
         "encoding"_a = exportDefaults.encoding, "bit_depth"_a = exportDefaults.bitDepth,
         "quality"_a = exportDefaults.quality, "embed_profile"_a = exportDefaults.embedProfile,
-        "sharpening"_a = exportDefaults.sharpening, "metadata_from"_a = std::optional<Photo>{},
+        "sharpening"_a = exportDefaults.sharpening, "metadata_from"_a.none() = nb::none(),
         "metadata"_a = MetadataSelection{},
+        nb::sig("def save(image: ImageBuffer, path: str | os.PathLike, *, "
+                "format: ImageFileFormat | None = None, encoding: NamedEncoding = ..., "
+                "bit_depth: int = 8, quality: int = 90, embed_profile: bool = True, "
+                "sharpening: int = 0, metadata_from: Photo | None = None, "
+                "metadata: MetadataSelection = ...) -> None"),
         "Write an image as JPEG, PNG or TIFF; the format comes from the extension unless given. "
         "`sharpening` (0-100, default 0 = off) applies an unsharp mask to the final pixels. "
         "With `metadata_from` (the photograph the pixels came from) the groups of `metadata` "

@@ -3,6 +3,8 @@
 #include "TimingTrace.h"
 #include "WatchBudget.h"
 
+#include <ExportSettings.h>
+
 #include <QString>
 #include <QVariant>
 
@@ -11,6 +13,20 @@
 #include <system_error>
 
 namespace arraw::app {
+
+namespace {
+
+/// Group of the stored export keys.
+const QString exportGroup = QStringLiteral("export/");
+
+/// @brief Reads a stored export integer within a range, or a fallback.
+int storedExportInt(QSettings& store, const char* key, int fallback, int low, int high) {
+    bool ok = false;
+    const int value = store.value(exportGroup + QLatin1String(key), fallback).toInt(&ok);
+    return ok && value >= low && value <= high ? value : fallback;
+}
+
+} // namespace
 
 std::optional<std::filesystem::path> restoreOpenPath(QSettings& store) {
     const std::filesystem::path file(store.value("lastFile").toString().toStdU16String());
@@ -136,6 +152,57 @@ std::unique_ptr<GpuContext> createAppGpuContext(const AppSettings& settings, std
         problem = "Unknown error while creating the selected GPU device";
     }
     return nullptr;
+}
+
+void saveExportSettings(const ExportSettings& settings, QSettings& store) {
+    store.setValue(exportGroup + "format", static_cast<int>(settings.format));
+    store.setValue(exportGroup + "encoding", static_cast<int>(settings.encoding));
+    store.setValue(exportGroup + "sixteenBit", settings.sixteenBit);
+    store.setValue(exportGroup + "resize", settings.resize);
+    if (settings.resize) {
+        store.setValue(exportGroup + "width", settings.width);
+        store.setValue(exportGroup + "height", settings.height);
+    }
+    store.setValue(exportGroup + "allowEnlarging", settings.allowEnlarging);
+    store.setValue(exportGroup + "quality", settings.quality);
+    store.setValue(exportGroup + "sharpening", settings.sharpening);
+    store.setValue(exportGroup + "captureInfo", settings.captureInfo);
+    store.setValue(exportGroup + "location", settings.location);
+    store.setValue(exportGroup + "descriptive", settings.descriptive);
+}
+
+ExportSettings restoreExportSettings(QSettings& store) {
+    ExportSettings settings;
+    switch (storedExportInt(store, "format", static_cast<int>(settings.format), 0, 2)) {
+    case static_cast<int>(ImageFileFormat::Png):
+        settings.format = ImageFileFormat::Png;
+        break;
+    case static_cast<int>(ImageFileFormat::Tiff):
+        settings.format = ImageFileFormat::Tiff;
+        break;
+    default:
+        break;
+    }
+    const int encoding = storedExportInt(store, "encoding", static_cast<int>(settings.encoding),
+                                         static_cast<int>(NamedEncoding::Srgb),
+                                         static_cast<int>(NamedEncoding::AdobeRgb));
+    settings.encoding = static_cast<NamedEncoding>(encoding);
+    settings.sixteenBit = store.value(exportGroup + "sixteenBit", settings.sixteenBit).toBool();
+    const int width = storedExportInt(store, "width", 0, 1, 99999);
+    const int height = storedExportInt(store, "height", 0, 1, 99999);
+    if (store.value(exportGroup + "resize", false).toBool() && width > 0 && height > 0) {
+        settings.resize = true;
+        settings.width = static_cast<std::uint32_t>(width);
+        settings.height = static_cast<std::uint32_t>(height);
+    }
+    settings.allowEnlarging =
+        store.value(exportGroup + "allowEnlarging", settings.allowEnlarging).toBool();
+    settings.quality = storedExportInt(store, "quality", settings.quality, 0, 100);
+    settings.sharpening = storedExportInt(store, "sharpening", settings.sharpening, 0, 100);
+    settings.captureInfo = store.value(exportGroup + "captureInfo", settings.captureInfo).toBool();
+    settings.location = store.value(exportGroup + "location", settings.location).toBool();
+    settings.descriptive = store.value(exportGroup + "descriptive", settings.descriptive).toBool();
+    return settings;
 }
 
 } // namespace arraw::app

@@ -264,3 +264,14 @@ serialization; terminal cleaning belongs to human-readable output, not the
 engine's metadata or paths. CLI regression tests cover injected sequences in
 filenames, sidecar metadata, diagnostics and usage errors, Unicode preservation,
 and cleaning before trusted styling is added.
+
+## Note, 2026-10-20: export presets
+
+`export-preset` is a command word: `export-preset list`, `show NAME` and `path` read the export
+presets file (ADR 054) and write nothing. `export` gains `--export-preset NAME`, which applies a
+named set of export settings before any other export flag, so that a flag overrides the value the
+preset gives, and `--no-allow-upscale`, the opposite of `--allow-upscale`, so that a flag can undo
+a preset's enlarging. Both commands take `--config-dir DIR` for the directory of the presets file
+(else `ARRAW_CONFIG_DIR`, else the user's arraw configuration directory); `export` ignores it
+without `--export-preset`. An unknown, unusable or unreadable preset is a usage error (exit 2),
+because retrying will not fix it.

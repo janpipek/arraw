@@ -148,6 +148,15 @@ std::string arraw::describe(const Diagnostic& diagnostic) {
     case Notice::LensNotCalibrated:
         return "'" + valueAt(diagnostic, 0) + "' has no calibration for " + valueAt(diagnostic, 1) +
                ", so it was not applied";
+    case Notice::ExportPresetUnusable:
+        return (valueAt(diagnostic, 0).empty()
+                    ? std::string("an export preset")
+                    : "the export preset '" + valueAt(diagnostic, 0) + "'") +
+               " cannot be used by this arraw, and is kept as it is: " + valueAt(diagnostic, 1);
+    case Notice::ExportPresetsUnreadable:
+        return "the export presets file cannot be read, so it is treated as empty and not "
+               "written over: " +
+               valueAt(diagnostic, 0);
     }
     return {};
 }

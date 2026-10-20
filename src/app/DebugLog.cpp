@@ -114,6 +114,10 @@ QString noticeName(Notice notice) {
         return QStringLiteral("LensfunUnavailable");
     case Notice::LensNotCalibrated:
         return QStringLiteral("LensNotCalibrated");
+    case Notice::ExportPresetUnusable:
+        return QStringLiteral("ExportPresetUnusable");
+    case Notice::ExportPresetsUnreadable:
+        return QStringLiteral("ExportPresetsUnreadable");
     }
     return {};
 }

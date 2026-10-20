@@ -11,12 +11,14 @@
 #include "support/LocalAdjustmentStates.h"
 #include "support/TempDir.h"
 
+#include <ConfigDirectory.h>
 #include <Develop.h>
 #include <DevelopSettings.h>
 #include <Diagnostics.h>
 #include <Edits.h>
 #include <EffectsSettings.h>
 #include <ExifInfo.h>
+#include <ExportPresets.h>
 #include <ImageExport.h>
 #include <ImageImport.h>
 #include <LensDatabase.h>
@@ -3981,6 +3983,23 @@ TEST_CASE("Text diagnostics remove injected controls and JSON retains the data",
     REQUIRE_THAT(json.str(), !ContainsSubstring("\033"));
 }
 
+TEST_CASE("The export preset notices have stable names in the JSON log", "[cli][presets]") {
+    const std::pair<Notice, const char*> names[]{
+        {Notice::ExportPresetUnusable, "export_preset_unusable"},
+        {Notice::ExportPresetsUnreadable, "export_presets_unreadable"}};
+    for (const auto& [notice, name] : names) {
+        CAPTURE(name);
+        std::ostringstream json;
+        cli::StreamDiagnostics(json, cli::LogFormat::Json)
+            .record({.notice = notice,
+                     .severity = Severity::Warning,
+                     .subject = std::filesystem::path("export-presets.json"),
+                     .values = {std::string("web"), std::string("unknown format")}});
+        const auto object = QJsonDocument::fromJson(QByteArray::fromStdString(json.str())).object();
+        REQUIRE(object["notice"].toString() == QString::fromUtf8(name));
+    }
+}
+
 TEST_CASE("Info strips terminal sequences from sidecar metadata", "[cli][info][style]") {
     const test::TempDir directory;
     const auto image = directory.file("photo.png");
@@ -4029,3 +4048,276 @@ TEST_CASE("Info and diagnostics strip terminal sequences from filenames", "[cli]
     REQUIRE_THAT(failed.err, !ContainsSubstring("\033"));
 }
 #endif
+
+namespace {
+
+/// @brief Saves presets into a configuration directory.
+void savePresets(const test::TempDir& config, const std::vector<ExportPreset>& presets) {
+    ExportPresetStore store(config.path());
+    for (const ExportPreset& preset : presets) {
+        store.save(preset);
+    }
+}
+
+/// @brief Writes the presets file as text, for what the library would not write.
+void writePresetsFile(const test::TempDir& config, std::string_view text) {
+    std::ofstream(config.file(exportPresetsFileName), std::ios::binary) << text;
+}
+
+/// @brief Exports the test card through a preset, with more arguments after.
+Invocation exportWithPreset(const test::TempDir& config, const test::TempDir& output,
+                            const std::string& name, const std::vector<std::string>& more = {}) {
+    std::vector<std::string> command{"export",
+                                     test::fixture(card).string(),
+                                     "-o",
+                                     output.path().string(),
+                                     "--config-dir",
+                                     config.path().string(),
+                                     "--export-preset",
+                                     name,
+                                     "--overwrite"};
+    command.insert(command.end(), more.begin(), more.end());
+    return invoke(command);
+}
+
+/// @brief Reads the width of an image file, or 0 when it cannot be read.
+int widthOf(const std::filesystem::path& path) {
+    return QImage(QString::fromStdString(path.string())).width();
+}
+
+} // namespace
+
+TEST_CASE("export --export-preset applies the preset's format, size and metadata",
+          "[cli][presets]") {
+    const test::TempDir config;
+    const test::TempDir output;
+    savePresets(config,
+                {{.name = "Small PNG",
+                  .settings = {
+                      .format = ImageFileFormat::Png, .resize = true, .width = 20, .height = 20}}});
+
+    const auto result = exportWithPreset(config, output, "small png");
+
+    REQUIRE(result.code == cli::Success);
+    const QImage image(QString::fromStdString(output.file("testcard-61x41-srgb8.png").string()));
+    REQUIRE_FALSE(image.isNull());
+    REQUIRE(image.width() == 20);
+    REQUIRE(image.height() == 13);
+
+    savePresets(config, {{.name = "Located", .settings = {.location = true}}});
+    REQUIRE(
+        invoke({"export", test::fixture("exif-32x24.dng").string(), "-o", output.path().string(),
+                "--config-dir", config.path().string(), "--export-preset", "Located"})
+            .code == cli::Success);
+    REQUIRE(readExif(output.file("exif-32x24.jpg")).gps);
+}
+
+TEST_CASE("An export flag overrides the preset's value and leaves the rest", "[cli][presets]") {
+    const test::TempDir config;
+    const test::TempDir output;
+    savePresets(config,
+                {{.name = "Small PNG",
+                  .settings = {
+                      .format = ImageFileFormat::Png, .resize = true, .width = 20, .height = 20}}});
+
+    REQUIRE(exportWithPreset(config, output, "Small PNG", {"--resize", "30"}).code == cli::Success);
+    REQUIRE(widthOf(output.file("testcard-61x41-srgb8.png")) == 30);
+
+    // The format flag replaces the preset's format; the size stays.
+    REQUIRE(exportWithPreset(config, output, "Small PNG", {"--format", "jpeg"}).code ==
+            cli::Success);
+    REQUIRE(widthOf(output.file("testcard-61x41-srgb8.jpg")) == 20);
+}
+
+TEST_CASE("The --no-allow-upscale flag turns off a preset's enlarging", "[cli][presets]") {
+    const test::TempDir config;
+    const test::TempDir output;
+    savePresets(config, {{.name = "Big",
+                          .settings = {.format = ImageFileFormat::Png,
+                                       .resize = true,
+                                       .width = 200,
+                                       .height = 200,
+                                       .allowEnlarging = true}}});
+    const auto written = output.file("testcard-61x41-srgb8.png");
+
+    REQUIRE(exportWithPreset(config, output, "Big").code == cli::Success);
+    REQUIRE(widthOf(written) == 200);
+
+    REQUIRE(exportWithPreset(config, output, "Big", {"--no-allow-upscale"}).code == cli::Success);
+    REQUIRE(widthOf(written) == 61);
+
+    const auto both =
+        exportWithPreset(config, output, "Big", {"--allow-upscale", "--no-allow-upscale"});
+    REQUIRE(both.code == cli::UsageError);
+    REQUIRE_THAT(both.err, ContainsSubstring("contradict"));
+}
+
+TEST_CASE("A preset's 16 bits become 8 under --format jpeg; --bit-depth 16 with jpeg is still an "
+          "error",
+          "[cli][presets]") {
+    const test::TempDir config;
+    const test::TempDir output;
+    savePresets(config, {{.name = "Deep",
+                          .settings = {.format = ImageFileFormat::Tiff, .sixteenBit = true}}});
+
+    REQUIRE(exportWithPreset(config, output, "Deep").code == cli::Success);
+    REQUIRE(std::filesystem::exists(output.file("testcard-61x41-srgb8.tif")));
+
+    REQUIRE(exportWithPreset(config, output, "Deep", {"--format", "jpeg"}).code == cli::Success);
+    REQUIRE(std::filesystem::exists(output.file("testcard-61x41-srgb8.jpg")));
+
+    const auto explicitDepth =
+        exportWithPreset(config, output, "Deep", {"--format", "jpeg", "--bit-depth", "16"});
+    REQUIRE(explicitDepth.code == cli::Failed);
+}
+
+TEST_CASE("An unknown preset is a usage error that points at export-preset list",
+          "[cli][presets]") {
+    const test::TempDir config;
+    const test::TempDir output;
+
+    const auto result = exportWithPreset(config, output, "Nothing");
+
+    REQUIRE(result.code == cli::UsageError);
+    REQUIRE_THAT(result.err, ContainsSubstring("Nothing"));
+    REQUIRE_THAT(result.err, ContainsSubstring("export-preset list"));
+    REQUIRE_THAT(result.err, ContainsSubstring(exportPresetsFileName));
+}
+
+TEST_CASE("An unusable preset, or an unreadable file, is a usage error naming the file",
+          "[cli][presets]") {
+    const test::TempDir config;
+    const test::TempDir output;
+    const auto file = (config.path() / exportPresetsFileName).string();
+
+    SECTION("An unusable preset") {
+        writePresetsFile(config, R"({"arraw": 1, "exportPresets": [
+            {"name": "Odd", "format": "webp", "encoding": "srgb", "bitDepth": 8, "quality": 90,
+             "sharpening": 0, "allowEnlarging": false, "size": null,
+             "metadata": {"capture": true, "descriptive": true, "location": false}}]})");
+        const auto result = exportWithPreset(config, output, "Odd");
+        REQUIRE(result.code == cli::UsageError);
+        REQUIRE_THAT(result.err, ContainsSubstring("Odd"));
+        REQUIRE_THAT(result.err, ContainsSubstring("webp"));
+        REQUIRE_THAT(result.err, ContainsSubstring(file));
+    }
+    SECTION("An unreadable file") {
+        writePresetsFile(config, "this is not json");
+        const auto result = exportWithPreset(config, output, "Anything");
+        REQUIRE(result.code == cli::UsageError);
+        REQUIRE_THAT(result.err, ContainsSubstring("cannot be read"));
+        REQUIRE_THAT(result.err, ContainsSubstring(file));
+        // A built-in preset does not need the file.
+        REQUIRE(exportWithPreset(config, output, "Full size JPEG").code == cli::Success);
+    }
+}
+
+TEST_CASE("export-preset list prints names on stdout, built-ins marked, and problems on stderr",
+          "[cli][presets]") {
+    const test::TempDir config;
+    savePresets(config, {{.name = "Mine", .settings = {}}});
+    const auto listed = invoke({"export-preset", "list", "--config-dir", config.path().string()});
+    REQUIRE(listed.code == cli::Success);
+    REQUIRE_THAT(listed.out, ContainsSubstring("Web 2048 px (built-in)\n"));
+    REQUIRE_THAT(listed.out, ContainsSubstring("Mine\n"));
+    REQUIRE_THAT(listed.out, !ContainsSubstring("Mine (built-in)"));
+    REQUIRE(listed.out.find("Print TIFF 16-bit (built-in)") < listed.out.find("Mine"));
+    REQUIRE(listed.err.empty());
+
+    writePresetsFile(config,
+                     R"({"arraw": 1, "exportPresets": [{"name": "Odd", "format": "webp"}]})");
+    const auto odd = invoke({"export-preset", "list", "--config-dir", config.path().string()});
+    REQUIRE(odd.code == cli::Success);
+    REQUIRE_THAT(odd.out, !ContainsSubstring("Odd"));
+    REQUIRE_THAT(odd.err, ContainsSubstring("Odd"));
+
+    writePresetsFile(config, "this is not json");
+    const auto broken = invoke({"export-preset", "list", "--config-dir", config.path().string()});
+    REQUIRE_THAT(broken.out, ContainsSubstring("Social 1080 px (built-in)"));
+    REQUIRE_FALSE(broken.err.empty());
+}
+
+TEST_CASE("export-preset show prints a built-in preset, and --export-preset applies it",
+          "[cli][presets]") {
+    const test::TempDir config;
+    const auto shown = invoke(
+        {"export-preset", "show", "print tiff 16-bit", "--config-dir", config.path().string()});
+    REQUIRE(shown.code == cli::Success);
+    REQUIRE_THAT(shown.out, ContainsSubstring("\"tiff\""));
+    REQUIRE_THAT(shown.out, ContainsSubstring("\"adobe-rgb\""));
+
+    const test::TempDir output;
+    REQUIRE(exportWithPreset(config, output, "Print TIFF 16-bit").code == cli::Success);
+    REQUIRE(std::filesystem::exists(output.file("testcard-61x41-srgb8.tif")));
+}
+
+TEST_CASE("export-preset show prints the preset as JSON that reads back", "[cli][presets]") {
+    const test::TempDir config;
+    const ExportSettings settings{.encoding = NamedEncoding::DisplayP3,
+                                  .resize = true,
+                                  .width = 1500,
+                                  .height = 1000,
+                                  .quality = 77,
+                                  .sharpening = 12,
+                                  .location = true};
+    savePresets(config, {{.name = "Client", .settings = settings}});
+
+    const auto shown =
+        invoke({"export-preset", "show", "Client", "--config-dir", config.path().string()});
+    REQUIRE(shown.code == cli::Success);
+
+    // The text is an entry of a presets file: put in a file of its own, it reads back equal.
+    const test::TempDir other;
+    writePresetsFile(other, R"({"arraw": 1, "exportPresets": [)" + shown.out + "]}");
+    const auto found = ExportPresetStore(other.path()).load("Client");
+    REQUIRE(found);
+    REQUIRE(found->settings == canonical(settings));
+
+    const auto missing =
+        invoke({"export-preset", "show", "Nope", "--config-dir", config.path().string()});
+    REQUIRE(missing.code == cli::UsageError);
+    REQUIRE_THAT(missing.err, ContainsSubstring("export-preset list"));
+}
+
+TEST_CASE("export-preset path prints the file even when it does not exist", "[cli][presets]") {
+    const test::TempDir config;
+    const auto result = invoke({"export-preset", "path", "--config-dir", config.path().string()});
+    REQUIRE(result.code == cli::Success);
+    REQUIRE(result.out == (config.path() / exportPresetsFileName).string() + "\n");
+    REQUIRE_FALSE(std::filesystem::exists(config.file(exportPresetsFileName)));
+}
+
+TEST_CASE("export --config-dir without --export-preset is ignored", "[cli][presets]") {
+    const test::TempDir config;
+    const test::TempDir output;
+    const auto result = invoke({"export", test::fixture(card).string(), "-o",
+                                output.path().string(), "--config-dir", config.path().string()});
+    REQUIRE(result.code == cli::Success);
+    REQUIRE(std::filesystem::exists(output.file("testcard-61x41-srgb8.jpg")));
+}
+
+TEST_CASE("The --config-dir option wins over ARRAW_CONFIG_DIR", "[cli][presets]") {
+    const test::TempDir environment;
+    const test::TempDir option;
+    const ScopedEnvironment variable(configDirectoryVariable, environment.path().string().c_str());
+
+    const auto fromVariable = invoke({"export-preset", "path"});
+    REQUIRE(fromVariable.out == (environment.path() / exportPresetsFileName).string() + "\n");
+
+    const auto fromOption =
+        invoke({"export-preset", "path", "--config-dir", option.path().string()});
+    REQUIRE(fromOption.out == (option.path() / exportPresetsFileName).string() + "\n");
+}
+
+TEST_CASE("export-preset refuses a missing or unknown action", "[cli][presets]") {
+    REQUIRE(invoke({"export-preset"}).code == cli::UsageError);
+    REQUIRE(invoke({"export-preset", "save", "x"}).code == cli::UsageError);
+    REQUIRE(invoke({"export-preset", "show"}).code == cli::UsageError);
+    REQUIRE(invoke({"export-preset", "list", "extra"}).code == cli::UsageError);
+}
+
+TEST_CASE("The top-level help lists export-preset", "[cli][presets]") {
+    REQUIRE_THAT(invoke({"--help"}).out, ContainsSubstring("export-preset"));
+    REQUIRE_THAT(invoke({"export-preset", "--help"}).out, ContainsSubstring("--config-dir"));
+    REQUIRE_THAT(invoke({"export", "--help"}).out, ContainsSubstring("--export-preset"));
+}

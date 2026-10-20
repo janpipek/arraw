@@ -2146,9 +2146,237 @@ class MetadataSelection:
     def replace(self, **kwargs) -> MetadataSelection:
         """Return a copy with the given attributes replaced."""
 
-def save(image: ImageBuffer, path: str | os.PathLike, *, format: ImageFileFormat | None = None, encoding: NamedEncoding = NamedEncoding.SRGB, bit_depth: int = 8, quality: int = 90, embed_profile: bool = True, sharpening: int = 0, metadata_from: Photo | None = None, metadata: MetadataSelection = ...) -> None:
+def save(image: ImageBuffer, path: str | os.PathLike, *, format: ImageFileFormat | None = None, encoding: NamedEncoding = ..., bit_depth: int = 8, quality: int = 90, embed_profile: bool = True, sharpening: int = 0, metadata_from: Photo | None = None, metadata: MetadataSelection = ...) -> None:
     """
     Write an image as JPEG, PNG or TIFF; the format comes from the extension unless given. `sharpening` (0-100, default 0 = off) applies an unsharp mask to the final pixels. With `metadata_from` (the photograph the pixels came from) the groups of `metadata` are copied from its file and sidecar, and its marks written as rating and label; without it nothing is written. A source or sidecar that cannot be read is logged as a warning on the 'arraw' logger and its metadata left out; the file is still written.
+    """
+
+class ExportSettings:
+    """
+    What an export is asked for: file format, output colour, 16 bits or 8, the box to fit (`resize` with `width` and `height`, which `allow_enlarging` lets exceed the photograph's own size), JPEG `quality`, output `sharpening`, and the metadata groups (`capture_info`, `location`, `descriptive`) the file carries. Presets are named ExportSettings; `develop_size` gives the `size` for `develop`.
+    """
+
+    def __init__(self, *, format: ImageFileFormat = ImageFileFormat.JPEG, encoding: NamedEncoding = NamedEncoding.SRGB, sixteen_bit: bool = False, resize: bool = False, width: int | None = 0, height: int | None = 0, allow_enlarging: bool = False, quality: int | None = 90, sharpening: int | None = 0, capture_info: bool = True, location: bool = False, descriptive: bool = True) -> None: ...
+
+    @property
+    def format(self) -> ImageFileFormat: ...
+
+    @property
+    def encoding(self) -> NamedEncoding: ...
+
+    @property
+    def sixteen_bit(self) -> bool: ...
+
+    @property
+    def resize(self) -> bool: ...
+
+    @property
+    def width(self) -> int: ...
+
+    @property
+    def height(self) -> int: ...
+
+    @property
+    def allow_enlarging(self) -> bool: ...
+
+    @property
+    def quality(self) -> int: ...
+
+    @property
+    def sharpening(self) -> int: ...
+
+    @property
+    def capture_info(self) -> bool: ...
+
+    @property
+    def location(self) -> bool: ...
+
+    @property
+    def descriptive(self) -> bool: ...
+
+    def __eq__(self, arg: ExportSettings, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def replace(self, **kwargs) -> ExportSettings:
+        """Return a copy with the given attributes replaced."""
+
+    @property
+    def develop_size(self) -> tuple[int, int] | None:
+        """
+        The `size` to give `develop`: the box to fit as (width, height), or None for the photograph's own size.
+        """
+
+    def canonical(self) -> ExportSettings:
+        """
+        The settings without what the format and size do not use: width, height and enlarging are 0 and False when not resizing, and 16 bits is off for JPEG. Two settings that export alike have one canonical form.
+        """
+
+    def validate(self) -> None:
+        """
+        Raise ValueError unless the settings can be exported: quality and sharpening 0 to 100, a box of 1 to 99999 on each side when resizing.
+        """
+
+class ExportPresetProblem(enum.Enum):
+    """Why a change to the export presets did not happen."""
+
+    INVALID_NAME = 0
+    """The name is empty, too long or holds control characters."""
+
+    NAME_TAKEN = 1
+    """Another preset already has the new name."""
+
+    NOT_FOUND = 2
+    """No preset has the name."""
+
+    UNUSABLE = 3
+    """The preset is one this arraw cannot use."""
+
+    NEWER_FILE = 4
+    """A newer arraw wrote the file, so it is never written."""
+
+    UNREADABLE_FILE = 5
+    """The file cannot be read, so it is never written over."""
+
+    BUSY = 6
+    """Another process is changing the file and did not finish in time."""
+
+    WRITE_FAILED = 7
+    """The file or its directory could not be written; the old file stays."""
+
+    BUILT_IN = 8
+    """The name is a built-in preset's, which cannot be changed."""
+
+    NOT_UNREADABLE = 9
+    """
+    The file can be read, so it is not set aside: only an unreadable one is.
+    """
+
+class ExportPresetFileState(enum.Enum):
+    """What reading the export presets file found."""
+
+    MISSING = 0
+    """There is no file."""
+
+    READ = 1
+    """The file was read, empty or not."""
+
+    NEWER = 2
+    """A newer arraw wrote it: read as far as understood, never written."""
+
+    UNREADABLE = 3
+    """It cannot be read: no presets from it, and it is never written over."""
+
+class ExportPresetError(RuntimeError):
+    """
+    A change to the export presets that could not be made. `problem` says why (ExportPresetProblem); the message names the file.
+    """
+
+class ExportPreset:
+    """
+    A named, whole set of export settings. `builtin` presets are defined by arraw and read-only; `shadowed` is a preset of the file whose name a built-in also has, which the built-in hides.
+    """
+
+    def __init__(self, name: str, settings: ExportSettings | None = None) -> None:
+        """
+        A preset for saving; `settings` default to those of a new ExportSettings.
+        """
+
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def settings(self) -> ExportSettings: ...
+
+    @property
+    def builtin(self) -> bool: ...
+
+    @property
+    def shadowed(self) -> bool: ...
+
+    def __eq__(self, arg: ExportPreset, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __repr__(self) -> str: ...
+
+    def to_json(self) -> str:
+        """
+        The preset as the presets file holds it and `arraw-cli export-preset show` prints it: a JSON object, every key written. Raises ValueError for a name or settings that are not valid.
+        """
+
+class UnusableExportPreset:
+    """
+    A preset in the file that this arraw cannot use, kept in the file as it is.
+    """
+
+    @property
+    def name(self) -> str:
+        """Its name as written, empty when it has none."""
+
+    @property
+    def reason(self) -> str:
+        """Why it cannot be used, as a phrase."""
+
+    def __repr__(self) -> str: ...
+
+class ExportPresetStore:
+    """
+    The export presets file of one directory, read and changed safely. Reading takes no lock and creates nothing. Each change takes a lock file, re-reads the file and replaces it atomically, so that the app, the command line and scripts lose none of each other's changes. A file written by a newer arraw, or one that cannot be read, is never written. The built-in presets come first in `presets()` and cannot be changed. Changes raise ExportPresetError.
+    """
+
+    def __init__(self, directory: str | os.PathLike | None = None) -> None:
+        """
+        A store for the presets file of `directory`, which need not exist; None is the configuration directory (config_directory(), which ARRAW_CONFIG_DIR overrides).
+        """
+
+    @property
+    def file(self) -> pathlib.Path:
+        """Path of the presets file, which may not exist."""
+
+    def presets(self) -> list[ExportPreset]:
+        """
+        The usable presets: the built-in ones first, in their order, then the file's, sorted by name. Problems of the file are logged on the 'arraw' logger.
+        """
+
+    def unusable(self) -> list[UnusableExportPreset]:
+        """The entries of the file that this arraw cannot use."""
+
+    def state(self) -> ExportPresetFileState:
+        """
+        What the file is: ExportPresetFileState.MISSING, READ, NEWER or UNREADABLE.
+        """
+
+    def load(self, name: str) -> ExportPreset:
+        """
+        Find a preset by name, case-insensitively; a built-in wins over a preset of the file that has its name. Raises ExportPresetError with NOT_FOUND when there is none, or UNUSABLE when the file's preset of that name cannot be used by this arraw.
+        """
+
+    def save(self, preset: ExportPreset) -> None:
+        """
+        Add a preset, or replace the one whose name folds alike (the new spelling is kept). Raises ExportPresetError (INVALID_NAME, BUILT_IN, UNUSABLE, NEWER_FILE, UNREADABLE_FILE, BUSY or WRITE_FAILED), or ValueError for invalid settings.
+        """
+
+    def rename(self, old: str, new: str) -> None:
+        """
+        Give a preset another name; a change of letter case only is allowed. Raises ExportPresetError (NOT_FOUND, NAME_TAKEN and the problems of save).
+        """
+
+    def delete(self, name: str) -> None:
+        """
+        Remove a preset, usable or not. Raises ExportPresetError with NOT_FOUND when there is none, or BUILT_IN for a built-in one.
+        """
+
+    def set_aside(self) -> pathlib.Path:
+        """
+        Move the presets file to `export-presets.unreadable-<date>.json` beside it, so that the next change starts a new file, and return the new path. Never replaces a file. Only an unreadable file is moved: raises ExportPresetError with NOT_FOUND when there is none, NEWER_FILE for a newer arraw's, NOT_UNREADABLE for one that reads fine.
+        """
+
+def config_directory() -> pathlib.Path:
+    """
+    The directory where arraw keeps its shared configuration: ARRAW_CONFIG_DIR when set, else `arraw` under the user's generic configuration location. Nothing is created. Raises RuntimeError when there is none.
     """
 
 def record_lens_match(photo: Photo, database: LensDatabase | None = None) -> Photo:
