@@ -232,7 +232,8 @@ plans. Each step lists its tests by file and case name.
 - `MainWindow`:
   - `View > Show Clipping` (`J`), checkable, added to the window (ADR 047);
   - its rule: both on if either is off, else both off;
-  - kept in step with the panel's triangles in both directions.
+  - kept in step with the panel's triangles in both directions;
+  - the state is remembered in `QSettings` under `histogram/clipping` and restored at start.
 - `docs/keybindings.md`: `J` moves to *Current*.
 - **Tests:**
   - `tests/test_PhotoView*` (or `test_MainWindowView.cpp`):
@@ -242,7 +243,8 @@ plans. Each step lists its tests by file and case name.
   - `test_MainWindowHistogram.cpp`:
     - `"J turns both on, then both off"`;
     - `"J works with the panels hidden"`;
-    - `"a triangle click and J agree"`.
+    - `"a triangle click and J agree"`;
+    - `"the clipping overlay is remembered in QSettings"` (round trip).
 - **Risks:** GUI time for the mask on a 4K screen. Use step 1's measurement; the fallback in
   ADR 055, section 5, is the counter thread.
 

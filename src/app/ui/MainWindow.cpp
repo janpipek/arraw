@@ -1228,6 +1228,23 @@ void MainWindow::buildPanelActions() {
     panelToggles_ = {historyDock_->toggleViewAction(), develop, stripDock_->toggleViewAction()};
 
     viewMenu_->addSeparator();
+    showClippingAction_ = viewMenu_->addAction(tr("Show &Clipping"));
+    showClippingAction_->setObjectName("showClippingAction");
+    showClippingAction_->setCheckable(true);
+    showClippingAction_->setShortcut(Qt::Key_J);
+    // Both on if either is off, else both off.
+    connect(showClippingAction_, &QAction::triggered, this, [this] {
+        const bool on = !(histogramPanel_->clippingShown(ClipKind::Shadows) &&
+                          histogramPanel_->clippingShown(ClipKind::Highlights));
+        setClipping(on, on);
+    });
+    addAction(showClippingAction_);
+    connect(histogramPanel_, &HistogramPanel::clippingToggled, this, &MainWindow::setClipping);
+    // Remembered between sessions (0 none, 1 shadows, 2 highlights, 3 both).
+    const int remembered = QSettings().value("histogram/clipping", 0).toInt();
+    setClipping((remembered & 1) != 0, (remembered & 2) != 0);
+
+    viewMenu_->addSeparator();
     fullScreenAction_ = viewMenu_->addAction(tr("&Full Screen"));
     fullScreenAction_->setObjectName("fullScreenAction");
     fullScreenAction_->setCheckable(true);
@@ -1255,6 +1272,13 @@ void MainWindow::keepMenuShortcutsOnWindow(QWidget* menu) {
             addAction(action);
         }
     }
+}
+
+void MainWindow::setClipping(bool shadows, bool highlights) {
+    histogramPanel_->setClippingShown(shadows, highlights);
+    photoView_->setClippingShown(shadows, highlights);
+    showClippingAction_->setChecked(shadows || highlights);
+    QSettings().setValue("histogram/clipping", (shadows ? 1 : 0) | (highlights ? 2 : 0));
 }
 
 void MainWindow::setPanelsHidden(bool hidden) {

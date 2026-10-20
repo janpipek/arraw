@@ -653,6 +653,12 @@ private:
     /// @brief Reacts to the histogram becoming wanted or not.
     void histogramGateChanged();
 
+    /// @brief Sets which kinds of clipping are painted on the picture, in step with the view,
+    /// the panel's triangles and the View menu, and remembers it in QSettings (ADR 055).
+    /// @param shadows Whether shadow-clipped pixels are painted.
+    /// @param highlights Whether highlight-clipped pixels are painted.
+    void setClipping(bool shadows, bool highlights);
+
     /// @brief Closes the open photograph, leaving the window empty.
     void closePhoto();
 
@@ -740,6 +746,8 @@ private:
     QAction* fullScreenAction_ = nullptr;
     /// View menu's "Refresh Folder", on at once when the strip shows a folder.
     QAction* refreshFolderAction_ = nullptr;
+    /// View > Show Clipping (J), checked while any kind of clipping is painted.
+    QAction* showClippingAction_ = nullptr;
     /// Hide Panels toggle (F12), checked while the panels are hidden.
     QAction* hidePanelsAction_ = nullptr;
     /// The dock toggles of F7, F8 and F9.

@@ -15,11 +15,13 @@
 
 #include <OutputHistogram.h>
 
+#include <QAction>
 #include <QApplication>
 #include <QDockWidget>
 #include <QDoubleSpinBox>
 #include <QSettings>
 #include <QTest>
+#include <QToolButton>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -325,4 +327,147 @@ TEST_CASE("The readout shows the pixel under the pointer and dashes over the let
     const QRgb colour = image.pixel(static_cast<int>(fraction.x() * image.width()),
                                     static_cast<int>(fraction.y() * image.height()));
     CHECK(w.panel().readout() == readoutText(colour));
+}
+
+namespace {
+
+/// The View menu's Show Clipping action of a window.
+QAction& clippingAction(MainWindow& window) {
+    for (QAction* candidate : window.findChildren<QAction*>()) {
+        if (candidate->objectName() == "showClippingAction") {
+            return *candidate;
+        }
+    }
+    FAIL("no Show Clipping action");
+    throw;
+}
+
+/// A bare view of a 4x4 frame at 1:1 showing a light picture whose pixels all clip highlights.
+struct ClippedView {
+    PhotoView view;
+    QImage picture{4, 4, QImage::Format_RGBA8888};
+
+    ClippedView() {
+        picture.fill(QColor(255, 128, 128));
+        view.resize(8, 8);
+        view.setFrameSize(picture.size());
+        view.zoomTo(1.0);
+        view.show();
+        REQUIRE(QTest::qWaitForWindowExposed(&view));
+        view.setImage(picture, QRectF(0, 0, 1, 1), picture);
+    }
+
+    [[nodiscard]] QColor centre() {
+        return QColor(view.grab().toImage().pixel(4, 4));
+    }
+};
+
+} // namespace
+
+TEST_CASE("With highlights shown, clipped pixels are painted red at 1:1", "[app][view][clipping]") {
+    ClippedView v;
+    CHECK(v.centre() == QColor(255, 128, 128));
+    v.view.setClippingShown(false, true);
+    const QColor painted = v.centre();
+    CHECK(painted.red() > 200);
+    CHECK(painted.green() < 60);
+    CHECK(painted.blue() < 60);
+    v.view.setClippingShown(true, false);
+    CHECK(v.centre() == QColor(255, 128, 128));
+}
+
+TEST_CASE("The clipping overlay follows a new render", "[app][view][clipping]") {
+    ClippedView v;
+    v.view.setClippingShown(true, true);
+    CHECK(v.centre().green() < 60);
+    QImage dark(4, 4, QImage::Format_RGBA8888);
+    dark.fill(QColor(0, 0, 0));
+    v.view.setImage(dark, QRectF(0, 0, 1, 1), dark);
+    const QColor painted = v.centre();
+    CHECK(painted.blue() > 200);
+    CHECK(painted.red() < 60);
+    QImage grey(4, 4, QImage::Format_RGBA8888);
+    grey.fill(QColor(100, 100, 100));
+    v.view.setImage(grey, QRectF(0, 0, 1, 1), grey);
+    CHECK(v.centre() == QColor(100, 100, 100));
+}
+
+TEST_CASE("No clipping overlay in the crop mode", "[app][view][clipping]") {
+    ClippedView v;
+    v.view.setClippingShown(true, true);
+    REQUIRE(v.centre().green() < 60);
+    v.view.setCropMode(true);
+    // The crop overlay has no image, so it paints nothing of its own over the middle.
+    CHECK(v.centre().green() >= 60);
+}
+
+TEST_CASE("J turns both on, then both off", "[app][window][histogram][clipping]") {
+    Window w;
+    QAction& action = clippingAction(w.window);
+    CHECK_FALSE(action.isChecked());
+    QTest::keyClick(&w.window, Qt::Key_J);
+    CHECK(w.panel().clippingShown(ClipKind::Shadows));
+    CHECK(w.panel().clippingShown(ClipKind::Highlights));
+    CHECK(action.isChecked());
+    QTest::keyClick(&w.window, Qt::Key_J);
+    CHECK_FALSE(w.panel().clippingShown(ClipKind::Shadows));
+    CHECK_FALSE(w.panel().clippingShown(ClipKind::Highlights));
+    CHECK_FALSE(action.isChecked());
+}
+
+TEST_CASE("J works with the panels hidden", "[app][window][histogram][clipping]") {
+    Window w;
+    QTest::keyClick(&w.window, Qt::Key_F12);
+    REQUIRE(w.dock().isHidden());
+    QTest::keyClick(&w.window, Qt::Key_J);
+    CHECK(w.panel().clippingShown(ClipKind::Highlights));
+    QTest::keyClick(&w.window, Qt::Key_F12);
+}
+
+TEST_CASE("A triangle click and J agree", "[app][window][histogram][clipping]") {
+    Window w;
+    auto* highlights = w.panel().findChild<QToolButton*>("highlightsTriangle");
+    REQUIRE(highlights != nullptr);
+    highlights->click();
+    CHECK(clippingAction(w.window).isChecked());
+    CHECK(w.panel().clippingShown(ClipKind::Highlights));
+    CHECK_FALSE(w.panel().clippingShown(ClipKind::Shadows));
+    // One kind on, so J turns both on.
+    QTest::keyClick(&w.window, Qt::Key_J);
+    CHECK(w.panel().clippingShown(ClipKind::Shadows));
+    CHECK(w.panel().clippingShown(ClipKind::Highlights));
+    auto* shadows = w.panel().findChild<QToolButton*>("shadowsTriangle");
+    REQUIRE(shadows != nullptr);
+    shadows->click();
+    CHECK_FALSE(w.panel().clippingShown(ClipKind::Shadows));
+    CHECK(w.panel().clippingShown(ClipKind::Highlights));
+}
+
+TEST_CASE("The clipping overlay is remembered in QSettings", "[app][window][histogram][clipping]") {
+    CleanSettings clean;
+    {
+        DebugLog debugLog;
+        MainWindow window(debugLog);
+        CHECK_FALSE(clippingAction(window).isChecked());
+        clippingAction(window).trigger();
+        CHECK(QSettings().value("histogram/clipping").toInt() == 3);
+    }
+    {
+        DebugLog debugLog;
+        MainWindow window(debugLog);
+        CHECK(clippingAction(window).isChecked());
+        auto* panel = window.findChild<HistogramPanel*>();
+        REQUIRE(panel != nullptr);
+        CHECK(panel->clippingShown(ClipKind::Shadows));
+        CHECK(panel->clippingShown(ClipKind::Highlights));
+        clippingAction(window).trigger();
+    }
+    QSettings settings;
+    CHECK(settings.value("histogram/clipping").toInt() == 0);
+    settings.setValue("histogram/clipping", 2);
+    DebugLog debugLog;
+    MainWindow window(debugLog);
+    auto* panel = window.findChild<HistogramPanel*>();
+    CHECK_FALSE(panel->clippingShown(ClipKind::Shadows));
+    CHECK(panel->clippingShown(ClipKind::Highlights));
 }

@@ -208,7 +208,8 @@ colours that the conversion clamps to 0 or 255 count, since they are clipped in 
     G 0.4 %, B 0.2 %)".
 - **Toggling.** A click on a triangle toggles painting that kind of clipping on the picture. `J`
   (View > Show Clipping) turns both on if either is off, and otherwise both off. The state is view
-  state: it is not saved, not undoable, and starts off.
+  state: not undoable, but remembered between sessions in `QSettings` under `histogram/clipping`
+  (0 none, 1 shadows, 2 highlights, 3 both), and it starts off on a first run.
 - *Alternative:* light a triangle only above a share of pixels (say 0.01 %). That would hide the
   few clipped pixels a photographer is looking for.
 

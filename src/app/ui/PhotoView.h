@@ -86,6 +86,14 @@ public:
     /// shows all of it, else the reduced one beneath; null before the first render.
     [[nodiscard]] QImage wholeFrameImage() const;
 
+    /// @brief Sets which kinds of clipping are painted over the picture (ADR 055, section 5).
+    ///
+    /// The mask is made from the images shown, so it needs no render and follows each new one.
+    /// Not painted in the crop mode.
+    /// @param shadows Whether shadow-clipped pixels are painted blue.
+    /// @param highlights Whether highlight-clipped pixels are painted red.
+    void setClippingShown(bool shadows, bool highlights);
+
     /// @brief Fits the whole frame and keeps it fitted; for a newly opened photograph.
     ///
     /// Does not emit viewChanged: the caller renders.
@@ -195,6 +203,26 @@ private:
     bool picking_ = false;
     bool dragging_ = false;
     QPointF lastPosition_;
+
+    /// A picture and the mask made of it, kept while the picture is the same.
+    struct CachedMask {
+        qint64 key = 0;
+        bool shadows = false;
+        bool highlights = false;
+        QImage mask;
+    };
+
+    /// @brief Gives the clipping mask of a picture, made again only if it changed.
+    /// @param picture The picture shown.
+    /// @param cache Where the last mask of that picture is kept.
+    [[nodiscard]] const QImage& maskOf(const QImage& picture, CachedMask& cache) const;
+
+    bool clipShadows_ = false;
+    bool clipHighlights_ = false;
+    /// Mask of the render.
+    mutable CachedMask imageMask_;
+    /// Mask of the whole-frame image beneath.
+    mutable CachedMask backgroundMask_;
 
     /// The newest render.
     QImage image_;

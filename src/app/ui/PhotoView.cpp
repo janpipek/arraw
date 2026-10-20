@@ -1,5 +1,6 @@
 #include "PhotoView.h"
 
+#include "ClippingMask.h"
 #include "CropOverlay.h"
 #include "MaskOverlay.h"
 
@@ -180,6 +181,24 @@ void PhotoView::setBackground(const QImage& background) {
     update();
 }
 
+void PhotoView::setClippingShown(bool shadows, bool highlights) {
+    if (shadows == clipShadows_ && highlights == clipHighlights_) {
+        return;
+    }
+    clipShadows_ = shadows;
+    clipHighlights_ = highlights;
+    update();
+}
+
+const QImage& PhotoView::maskOf(const QImage& picture, CachedMask& cache) const {
+    if (cache.key != picture.cacheKey() || cache.shadows != clipShadows_ ||
+        cache.highlights != clipHighlights_) {
+        cache = {picture.cacheKey(), clipShadows_, clipHighlights_,
+                 clippingMask(picture, clipShadows_, clipHighlights_)};
+    }
+    return cache.mask;
+}
+
 void PhotoView::resetView() {
     image_ = {};
     background_ = {};
@@ -247,6 +266,16 @@ void PhotoView::paintEvent(QPaintEvent* /*event*/) {
         painter.setRenderHint(QPainter::SmoothPixmapTransform, t.zoom() <= 1.0);
     }
     painter.drawImage(target, image_);
+    if ((clipShadows_ || clipHighlights_) && !isCropMode()) {
+        // The masks are of the images shown, so they line up at any zoom; never smoothed.
+        painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
+        if (!background_.isNull()) {
+            painter.drawImage(
+                QRectF(t.viewFromFrame({0.0, 0.0}) / ratio, t.viewFromFrame({1.0, 1.0}) / ratio),
+                maskOf(background_, backgroundMask_));
+        }
+        painter.drawImage(target, maskOf(image_, imageMask_));
+    }
 }
 
 void PhotoView::resizeEvent(QResizeEvent* event) {

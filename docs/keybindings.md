@@ -34,6 +34,7 @@ its rows from *Planned* to *Current* in the same change that wires them.
 | `F8` | Toggle Adjustments panel | View menu |
 | `F11` | Full screen | View menu |
 | `F12` | Hide panels (lights-out) | View menu |
+| `J` | Toggle the clipping overlay (highlights and shadows); remembered | View menu |
 | `M` | Masks tab and its on-image controls (toggle) | Photo menu |
 
 ### Mask mode
@@ -79,7 +80,6 @@ From `main`, grouped by the feature that brings them.
 | Key | Action |
 |---|---|
 | `S` | Toggle soft-proofing |
-| `J` | Toggle clipping overlay (highlights and shadows) |
 | `\` (hold) | Show the original (before/after) |
 | `Esc` | Cancel the active tool, or leave full screen / lights-out |
 
