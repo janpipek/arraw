@@ -34,12 +34,15 @@ add_executable(arraw-tests
         test_StrokeCodec.cpp
         test_Cli.cpp
         test_CheckpointLadder.cpp
+        test_ClippingMask.cpp
         test_CopySections.cpp
         test_ColorEncoding.cpp
         test_CropEditing.cpp
+        test_CropSpans.cpp
         test_CropGeometry.cpp
         test_CurveEditing.cpp
         test_CurveHistogramRefresh.cpp
+        test_HistogramPresentation.cpp
         test_Develop.cpp
         test_DevelopedFrame.cpp
         test_ToneCurve.cpp
@@ -150,6 +153,7 @@ add_executable(arraw-widget-tests
         test_CurveEditor.cpp
         test_DevelopPanel.cpp
         test_ExportDialog.cpp
+        test_HistogramPanel.cpp
         test_MainWindowHistory.cpp
         test_MainWindowLens.cpp
         test_MainWindowView.cpp
