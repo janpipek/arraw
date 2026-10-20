@@ -22,6 +22,7 @@ add_executable(arraw-tests
         test_FolderDiff.cpp
         test_FolderLister.cpp
         test_FolderListingBench.cpp
+        test_WatchBudget.cpp
         test_BrushCoverage.cpp
         test_BrushCoverageCache.cpp
         test_BrushMask.cpp
@@ -153,6 +154,7 @@ add_executable(arraw-widget-tests
         test_MainWindowNegative.cpp
         test_FilmStripListing.cpp
         test_FilmStripListingBench.cpp
+        test_FilmStripNotice.cpp
         test_FilmStripSubfolders.cpp
         test_MainWindowOpening.cpp
         test_MaskOverlay.cpp

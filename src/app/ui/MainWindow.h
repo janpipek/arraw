@@ -619,6 +619,8 @@ private:
     bool maximizedBeforeFullScreen_ = false;
     /// Full Screen toggle (F11), checked while the window is full screen.
     QAction* fullScreenAction_ = nullptr;
+    /// View menu's "Refresh Folder", on at once when the strip shows a folder.
+    QAction* refreshFolderAction_ = nullptr;
     /// Hide Panels toggle (F12), checked while the panels are hidden.
     QAction* hidePanelsAction_ = nullptr;
     /// The dock toggles of F7, F8 and F9.

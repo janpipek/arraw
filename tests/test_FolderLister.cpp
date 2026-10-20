@@ -14,6 +14,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -675,4 +676,155 @@ TEST_CASE("The watcher goes while changes are pending or being read", "[watcher]
     // Nothing of the gone watcher arrives.
     QCoreApplication::processEvents();
     REQUIRE(model.rowCount() == 1);
+}
+
+// Step 5 of the plan: the cap on watches, the notice's status, and the refresh of all.
+
+namespace {
+
+/// Keeps the last watch status a watcher relays.
+struct StatusLog {
+    WatchStatus last;
+    int count = 0;
+
+    explicit StatusLog(FolderWatcher& watcher) {
+        QObject::connect(&watcher, &FolderWatcher::watchStatusChanged, &watcher,
+                         [this](const WatchStatus& status) {
+                             last = status;
+                             ++count;
+                         });
+    }
+};
+
+/// A tree of six directories: `/`, `a`, `b`, `c` and, below them, `a/x` and `b/y`.
+void makeSixDirectories(const test::TempDir& folder) {
+    for (const char* name : {"IMG_1.jpg", "a/IMG_1.jpg", "b/IMG_1.jpg", "c/IMG_1.jpg",
+                             "a/x/IMG_1.jpg", "b/y/IMG_1.jpg"}) {
+        addJpeg(folder.file(name));
+    }
+}
+
+QStringList sortedPaths(QStringList paths) {
+    paths.sort();
+    return paths;
+}
+
+} // namespace
+
+TEST_CASE("With a cap the shallowest directories are watched, and the rest are reported",
+          "[watcher][listing][budget]") {
+    const test::TempDir folder;
+    makeSixDirectories(folder);
+    ShotModel model;
+    FolderWatcher watcher(model, std::chrono::milliseconds(20));
+    watcher.setMaxWatchedFolders(3);
+    StatusLog status(watcher);
+    model.setFolder(folder.path(), true);
+    REQUIRE(waitUntil([&] { return !model.isListing() && status.last.directories == 6; }));
+    REQUIRE(status.last.watched == 3);
+    REQUIRE(status.last.unwatched() == 3);
+    REQUIRE(status.last.limit == 3);
+    REQUIRE(status.last.unreadable == 0);
+    // The root and its first two subfolders, not the deeper ones the walk met first.
+    REQUIRE(
+        sortedPaths(watcher.watchedDirectories()) ==
+        sortedPaths({qtPath(folder.path()), qtPath(folder.file("a")), qtPath(folder.file("b"))}));
+    REQUIRE(waitUntil([&] { return model.pendingLoads() == 0; }));
+
+    // A change in a watched folder shows; one in an unwatched folder does not, as nothing says so.
+    addJpeg(folder.file("c/IMG_2.jpg"));
+    addJpeg(folder.file("a/x/IMG_2.jpg"));
+    addJpeg(folder.file("a/IMG_2.jpg"));
+    REQUIRE(waitUntil([&] { return model.rowOf(folder.file("a/IMG_2.jpg")) >= 0; }));
+    REQUIRE(model.rowOf(folder.file("c/IMG_2.jpg")) < 0);
+    REQUIRE(model.rowOf(folder.file("a/x/IMG_2.jpg")) < 0);
+
+    // The refresh of all reads every directory, watched or not.
+    watcher.refreshAll();
+    REQUIRE(waitUntil([&] {
+        return model.rowOf(folder.file("c/IMG_2.jpg")) >= 0 &&
+               model.rowOf(folder.file("a/x/IMG_2.jpg")) >= 0 && !model.isRefreshing();
+    }));
+    REQUIRE(primaries(model) == primaries(listShots(folder.path(), true)));
+    REQUIRE(status.last.unwatched() == 3);
+    REQUIRE(watcher.watchedDirectories().size() == 3);
+}
+
+TEST_CASE("A directory that gains a watch is read once more", "[watcher][listing][budget]") {
+    const test::TempDir folder;
+    makeSixDirectories(folder);
+    ShotModel model;
+    FolderWatcher watcher(model, std::chrono::milliseconds(20));
+    watcher.setMaxWatchedFolders(3);
+    StatusLog status(watcher);
+    model.setFolder(folder.path(), true);
+    REQUIRE(waitUntil([&] { return !model.isListing() && status.last.directories == 6; }));
+    REQUIRE(waitUntil([&] { return model.pendingLoads() == 0; }));
+
+    // Written to a folder without a watch, then a watched one goes: its place goes to /c, which
+    // is read again with the watch, and so shows what was written (no refresh of all).
+    addJpeg(folder.file("c/IMG_9.jpg"));
+    fs::remove_all(folder.file("a"));
+    REQUIRE(waitUntil([&] {
+        return model.rowOf(folder.file("c/IMG_9.jpg")) >= 0 &&
+               watcher.watchedDirectories().contains(qtPath(folder.file("c")));
+    }));
+    REQUIRE(waitUntil([&] { return status.last.directories == 4 && status.last.watched == 3; }));
+    REQUIRE(
+        sortedPaths(watcher.watchedDirectories()) ==
+        sortedPaths({qtPath(folder.path()), qtPath(folder.file("b")), qtPath(folder.file("c"))}));
+    REQUIRE_FALSE(model.isRefreshing());
+}
+
+TEST_CASE("A shallower directory that appears takes the place of a deeper one",
+          "[watcher][listing][budget]") {
+    const test::TempDir folder;
+    for (const char* name : {"IMG_1.jpg", "a/IMG_1.jpg", "a/x/IMG_1.jpg"}) {
+        addJpeg(folder.file(name));
+    }
+    ShotModel model;
+    FolderWatcher watcher(model, std::chrono::milliseconds(20));
+    watcher.setMaxWatchedFolders(3);
+    StatusLog status(watcher);
+    model.setFolder(folder.path(), true);
+    REQUIRE(waitUntil([&] { return !model.isListing() && status.last.directories == 3; }));
+    REQUIRE(watcher.watchedDirectories().size() == 3);
+    REQUIRE(status.last.unwatched() == 0);
+
+    addJpeg(folder.file("b/IMG_1.jpg"));
+    REQUIRE(waitUntil([&] {
+        const QStringList watched = watcher.watchedDirectories();
+        return model.rowOf(folder.file("b/IMG_1.jpg")) >= 0 &&
+               watched.contains(qtPath(folder.file("b"))) &&
+               !watched.contains(qtPath(folder.file("a/x")));
+    }));
+    REQUIRE(waitUntil([&] { return status.last.directories == 4 && status.last.watched == 3; }));
+    REQUIRE(status.last.unwatched() == 1);
+}
+
+TEST_CASE("A watch the system refuses shrinks the cap, and the next walk tries again",
+          "[watcher][listing][budget]") {
+    const test::TempDir folder;
+    for (const char* name : {"IMG_1.jpg", "a/IMG_1.jpg", "b/IMG_1.jpg", "c/IMG_1.jpg"}) {
+        addJpeg(folder.file(name));
+    }
+    ShotModel model;
+    FolderWatcher watcher(model, std::chrono::milliseconds(20));
+    StatusLog status(watcher);
+    // The system gives two watches and then says no, as inotify does at its limit.
+    std::atomic<int> given{0};
+    watcher.setWatchGate([&given](const fs::path&) { return given++ < 2; });
+    model.setFolder(folder.path(), true);
+    REQUIRE(waitUntil([&] { return !model.isListing() && status.last.directories == 4; }));
+    REQUIRE(waitUntil([&] { return status.last.watched == 2 && status.last.limit == 2; }));
+    REQUIRE(watcher.watchedDirectories().size() == 2);
+    REQUIRE(status.last.unwatched() == 2);
+
+    // The limit is lifted; the next walk asks again and the cap is the configured one.
+    watcher.setWatchGate({});
+    watcher.refreshAll();
+    REQUIRE(waitUntil([&] { return status.last.watched == 4 && !model.isRefreshing(); }));
+    REQUIRE(status.last.limit == FolderWatcher::maxWatchedFolders);
+    REQUIRE(watcher.watchedDirectories().size() == 4);
+    REQUIRE(status.last.unwatched() == 0);
 }

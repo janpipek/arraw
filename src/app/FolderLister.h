@@ -1,6 +1,7 @@
 #pragma once
 
 #include "FolderResult.h"
+#include "WatchBudget.h"
 
 #include <QObject>
 #include <QSet>
@@ -17,6 +18,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <vector>
 
@@ -44,8 +46,12 @@ namespace arraw::app {
 /// **Watch, then read** (plan, section 4). Each directory is watched before it is read, so a
 /// change made after the read is reported, and one made before is in the read. A directory that
 /// gets its watch only after its read (a watch that could not be had at first, or that the system
-/// dropped) is read once more. At most ::arraw::app::FolderLister::maxWatchedFolders are watched:
-/// first come during a walk, then, once there is nothing to read, the shallowest ones.
+/// dropped) is read once more. A ::arraw::app::WatchBudget decides which directories are watched:
+/// at most the cap, the shallowest first. A directory that is shallower than one watched takes
+/// its place; one that gains a watch when another goes is read once more. When the system refuses
+/// a watch (its limit is shared with other programs) the cap shrinks to what it accepted, until
+/// the next walk tries again. What is watched, and how many directories there are, is reported
+/// as a ::arraw::app::WatchStatus when a walk ends and whenever it changes.
 ///
 /// **Changes.** A directory that reports a change is read again, alone, once its reports have been
 /// quiet for the debounce time (but no later than ::arraw::app::FolderLister::maxLatency after the
@@ -67,9 +73,16 @@ public:
     /// @brief Receiver of the end of a walk, on the lister thread: its number and what it saw.
     using FinishReceiver = std::function<void(std::uint64_t, ListingSummary)>;
 
+    /// @brief Receiver of the watch status, on the lister thread: the walk's number and the status.
+    using StatusReceiver = std::function<void(std::uint64_t, WatchStatus)>;
+
     /// @brief Function called on the lister thread before each directory is read, once it is
     /// watched; a seam for tests, which may block in it.
     using ReadHook = std::function<void(const std::filesystem::path&)>;
+
+    /// @brief Function called on the lister thread before the system is asked for a watch; a seam
+    /// for tests, which return false to have the watch refused as the system's limit would.
+    using WatchGate = std::function<bool(const std::filesystem::path&)>;
 
     /// @brief Shots after which a batch is handed over.
     static constexpr std::size_t batchShots = 512;
@@ -77,8 +90,8 @@ public:
     /// @brief Time after which a batch is handed over, however few shots it holds.
     static constexpr std::chrono::milliseconds batchInterval{100};
 
-    /// @brief Most directories watched at once.
-    static constexpr int maxWatchedFolders = 1000;
+    /// @brief Most directories watched at once, unless set otherwise.
+    static constexpr int maxWatchedFolders = defaultMaxWatchedFolders;
 
     /// @brief Longest wait from a directory's first report of a change to its reading, however
     /// busy it stays (plan, answer 3).
@@ -87,8 +100,9 @@ public:
     /// @brief Makes an idle lister.
     /// @param onBatch Receives each batch; it must marshal to its own thread, and not throw.
     /// @param onFinished Receives the end of each walk that was not abandoned; the same.
+    /// @param onStatus Receives the watch status; the same.
     /// @param debounce Quiet time to wait after a directory reported a change before reading it.
-    FolderLister(BatchReceiver onBatch, FinishReceiver onFinished,
+    FolderLister(BatchReceiver onBatch, FinishReceiver onFinished, StatusReceiver onStatus,
                  std::chrono::milliseconds debounce);
 
     /// @brief Destroys the lister; its thread must have stopped (see
@@ -116,6 +130,16 @@ public:
     /// Connect it to the thread's `finished` signal with a direct connection, so that what lives
     /// on that thread is destroyed there.
     void shutDown();
+
+    /// @brief Sets the most directories to watch, taken up at the start of the next walk. Safe
+    /// from any thread.
+    /// @param limit Cap; below 0 counts as 0.
+    void setMaxWatchedFolders(int limit);
+
+    /// @brief Sets the function called before the system is asked for a watch. Safe from any
+    /// thread.
+    /// @param gate Function, or an empty one for none.
+    void setWatchGate(WatchGate gate);
 
     /// @brief Sets the function called before each directory is read. Safe from any thread.
     /// @param hook Function, or an empty one for none.
@@ -180,9 +204,25 @@ private:
     /// @param directory Directory, in the tree.
     void dropSubtree(Tree::iterator directory);
 
-    /// @brief Gives a directory a watch, if the budget allows and the system does.
+    /// @brief Adds a directory to the tree, and to the budget if it is new.
+    /// @param path Directory.
+    /// @param depth Depth below the root.
+    /// @return Its entry.
+    Tree::iterator track(const std::filesystem::path& path, int depth);
+
+    /// @brief Asks the system for the watch the budget granted a directory.
+    ///
+    /// A refusal for a directory that can be read is the system's limit: the budget shrinks to
+    /// the watches there are. One for a directory that cannot be read frees its place.
+    /// @param directory Directory the budget put among the watched.
+    /// @param promoted Receives the directories that a freed place goes to.
     /// @return Whether it is watched now.
-    bool watch(Tree::iterator directory);
+    bool watch(Tree::iterator directory, std::vector<std::filesystem::path>& promoted);
+
+    /// @brief Carries out the changes of places a budget reports: unwatches the evicted, watches
+    /// the promoted and queues a read of each (plan, section 4, rule 2).
+    /// @param moves Changes.
+    void applyMoves(WatchBudget::Moves moves);
 
     /// @brief Releases the watches of some directories.
     /// @param paths Their paths.
@@ -191,9 +231,9 @@ private:
     /// @brief Releases every watch.
     void unwatchAll();
 
-    /// @brief Moves the watches to the shallowest directories, and queues a read of each that
-    /// gets one now (plan, section 4, rule 2).
-    void balanceWatches();
+    /// @brief Hands the watch status over if it differs from the last one, or if asked to.
+    /// @param force Whether to hand it over whatever the last one was.
+    void publishStatus(bool force);
 
     /// @brief Takes a report of a change from the system watcher.
     void onDirectoryChanged(const QString& path);
@@ -216,6 +256,8 @@ private:
     BatchReceiver onBatch_;
     /// Receiver of finished walks.
     FinishReceiver onFinished_;
+    /// Receiver of the watch status.
+    StatusReceiver onStatus_;
     /// Quiet time before a changed directory is read.
     std::chrono::milliseconds debounce_;
     /// Walk last started, written by any thread; 0 for none, or after a cancel.
@@ -224,6 +266,10 @@ private:
     std::mutex hookMutex_;
     /// Function called before each read.
     ReadHook hook_;
+    /// Function called before each watch is asked for.
+    WatchGate gate_;
+    /// Cap wanted for the next walk, written by any thread.
+    std::atomic<int> maxWatched_{maxWatchedFolders};
     /// Guard of the copy of the watched set.
     mutable std::mutex watchedMutex_;
     /// Directories watched, as Qt spells them, for other threads to read.
@@ -248,10 +294,12 @@ private:
     std::set<std::filesystem::path, FolderOrder> dirty_;
     /// When the first of them reported.
     std::chrono::steady_clock::time_point firstDirty_;
-    /// Number of directories watched.
-    int watchedCount_ = 0;
-    /// Whether the watches may not be on the shallowest directories (the tree or a watch changed).
-    bool unbalanced_ = false;
+    /// Which directories are to be watched.
+    WatchBudget budget_{maxWatchedFolders};
+    /// Directories the last walk could not read.
+    int unreadable_ = 0;
+    /// Status handed over last.
+    std::optional<WatchStatus> lastStatus_;
     /// Number of the tree's walk, stamped on what is delivered; 0 when idle.
     std::uint64_t walk_ = 0;
     /// Whether a walk is under way, to be reported finished once nothing is left to read.

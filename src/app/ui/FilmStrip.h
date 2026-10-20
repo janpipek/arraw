@@ -27,6 +27,7 @@ class QComboBox;
 class QEvent;
 class QLabel;
 class QListView;
+class QMenu;
 class QToolButton;
 
 namespace arraw::app {
@@ -228,11 +229,29 @@ public:
     /// @brief Switches the filter off and resets its controls.
     void clearFilter();
 
+    /// @brief Sets the most folders watched for changes at once, from the next listing on.
+    /// @param limit Cap; see ::arraw::app::restoreMaxWatchedFolders.
+    void setMaxWatchedFolders(int limit);
+
+    /// @brief Walks the folder again in the background and merges what it finds, for the changes
+    /// no watch reported (a folder beyond the limit on watches, a sidecar rewritten in place).
+    ///
+    /// The selection and the active shot stay, and every sidecar is checked. Does nothing before
+    /// a folder is shown.
+    void refreshFolder();
+
+    /// @brief Tells whether some folders are not watched, so that the notice shows.
+    /// @return True while the title bar's notice is visible.
+    [[nodiscard]] bool hasWatchNotice() const;
+
     /// @brief Suggests a size for the dock.
     /// @return A strip as high as main's initial one.
     [[nodiscard]] QSize sizeHint() const override;
 
 signals:
+    /// @brief Announces that the strip was given a folder (not a change of the subfolder flag).
+    void folderChanged();
+
     /// @brief Asks the window to make a shot the active one.
     /// @param primary Primary file of the shot.
     void activationRequested(const QString& primary);
@@ -292,6 +311,17 @@ private:
     /// @param first First row inserted.
     /// @param last Last row inserted.
     void takeInsertedRows(int first, int last);
+
+    /// @brief Adds the "Refresh Folder" action to a context menu.
+    /// @param menu Menu to add it to.
+    void addRefreshAction(QMenu& menu);
+
+    /// @brief Takes the watch status of the folder: shows or hides the notice.
+    /// @param status What is watched and what is not.
+    void onWatchStatus(const WatchStatus& status);
+
+    /// @brief Shows the notice for the unwatched folders, or hides it.
+    void updateNotice();
 
     /// @brief Follows the start and the end of a listing.
     /// @param listing Whether a listing is under way now.
@@ -390,6 +420,10 @@ private:
     QWidget* titleBar_ = nullptr;
     QLabel* folderLabel_ = nullptr;
     QToolButton* subfoldersButton_ = nullptr;
+    /// Title bar's notice of folders that are not watched; hidden when all are.
+    QToolButton* noticeButton_ = nullptr;
+    /// Watch status of the folder, all zeros before its walk ends.
+    WatchStatus watchStatus_;
     bool includeSubfolders_ = false;
     /// Whether the model is being given a new folder, which a reset must not carry a selection
     /// into.

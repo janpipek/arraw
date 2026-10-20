@@ -8,6 +8,7 @@
 #include <QStringList>
 #include <QThread>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -63,8 +64,14 @@ public:
     FolderWatcher(FolderWatcher&&) = delete;
     FolderWatcher& operator=(FolderWatcher&&) = delete;
 
-    /// @brief Most directories watched at once.
+    /// @brief Most directories watched at once, unless set otherwise.
     static constexpr int maxWatchedFolders = FolderLister::maxWatchedFolders;
+
+    /// @brief Sets the most directories to watch, from the next walk on.
+    /// @param limit Cap; below 1 counts as 1.
+    void setMaxWatchedFolders(int limit) {
+        lister_->setMaxWatchedFolders(std::max(limit, 1));
+    }
 
     /// @brief Records a sidecar the application has just written.
     ///
@@ -83,10 +90,17 @@ public:
     /// @brief Walks the whole folder again and merges what it finds, folder by folder.
     ///
     /// For what no watch reports: a directory beyond
-    /// ::arraw::app::FolderWatcher::maxWatchedFolders, or a sidecar rewritten in place. Every
-    /// loaded row's sidecar is checked (see
-    /// ::arraw::app::ShotModel::refresh).
+    /// ::arraw::app::FolderWatcher::maxWatchedFolders, or a sidecar rewritten in place. It runs in
+    /// the background, keeps the selection and the active shot, and checks every loaded row's
+    /// sidecar (see ::arraw::app::ShotModel::refresh).
     void refreshAll();
+
+    /// @brief Sets a function the lister calls on its thread before it asks the system for a
+    /// watch.
+    ///
+    /// A seam for tests, which return false to have the watch refused as the system's limit would.
+    /// @param gate Function, or an empty one for none.
+    void setWatchGate(FolderLister::WatchGate gate);
 
     /// @brief Sets a function the lister calls on its thread before it reads each directory.
     ///
@@ -101,6 +115,11 @@ public:
     void simulateDirectoryChanged(const std::filesystem::path& directory);
 
 signals:
+    /// @brief Announces that the watch status changed: when a walk ends, and when a change in the
+    /// tree or the system's refusal of a watch alters it.
+    /// @param status What is watched and what is not.
+    void watchStatusChanged(const arraw::app::WatchStatus& status);
+
     /// @brief Announces that another program changed a shot's sidecar.
     ///
     /// The marks of the model are already refreshed. Whether the photograph
@@ -116,6 +135,11 @@ private:
     /// @param walk Number of the walk.
     /// @param summary What it saw.
     void finishWalk(std::uint64_t walk, ListingSummary summary);
+
+    /// @brief Relays the lister's watch status.
+    /// @param walk Number of the walk it belongs to.
+    /// @param status The status.
+    void takeStatus(std::uint64_t walk, const WatchStatus& status);
 
     /// @brief Judges a refreshed sidecar.
     /// @param primary Shot whose sidecar was re-read.

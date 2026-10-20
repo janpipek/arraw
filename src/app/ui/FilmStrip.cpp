@@ -11,6 +11,7 @@
 #include <QHBoxLayout>
 #include <QItemSelection>
 #include <QItemSelectionModel>
+#include <QKeySequence>
 #include <QLabel>
 #include <QListView>
 #include <QLocale>
@@ -320,6 +321,7 @@ FilmStrip::FilmStrip(QWidget* parent, ThumbnailCache cache, LensDatabaseSource l
         updateEmptyHint();
         scheduleActiveCheck();
     });
+    connect(&watcher_, &FolderWatcher::watchStatusChanged, this, &FilmStrip::onWatchStatus);
     connect(&watcher_, &FolderWatcher::sidecarChangedExternally, this,
             [this](const QString& primary) {
                 thumbnails_.invalidate(toPath(primary));
@@ -418,6 +420,18 @@ void FilmStrip::buildTitleBar() {
     // Yields room to the filter controls when the window is narrow.
     folderLabel_->setMinimumWidth(0);
     layout->addWidget(folderLabel_, 1);
+
+    // Folders beyond the limit on watches are read only by a refresh; the button says so, and
+    // is that refresh.
+    noticeButton_ = new QToolButton(titleBar_);
+    noticeButton_->setObjectName(QStringLiteral("filmStripNotice"));
+    noticeButton_->setIcon(style()->standardIcon(QStyle::SP_MessageBoxWarning));
+    noticeButton_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    noticeButton_->setAutoRaise(true);
+    noticeButton_->setFocusPolicy(Qt::NoFocus);
+    noticeButton_->hide();
+    connect(noticeButton_, &QToolButton::clicked, this, &FilmStrip::refreshFolder);
+    layout->addWidget(noticeButton_);
 
     buildFilterControls(titleBar_);
 }
@@ -544,6 +558,9 @@ void FilmStrip::listFolder(const fs::path& folder, std::optional<fs::path> activ
     pendingActive_ = std::move(activate);
     firstShotSent_ = false;
     ++listingNumber_;
+    // The new walk reports its own.
+    watchStatus_ = {};
+    updateNotice();
     delegate_->setActive({});
     updateFolderLabel();
     updateEmptyHint();
@@ -551,7 +568,47 @@ void FilmStrip::listFolder(const fs::path& folder, std::optional<fs::path> activ
 
 void FilmStrip::setFolder(const fs::path& folder, std::optional<fs::path> activate) {
     listFolder(folder, std::move(activate));
+    emit folderChanged();
     emit activeChanged();
+}
+
+void FilmStrip::setMaxWatchedFolders(int limit) {
+    watcher_.setMaxWatchedFolders(limit);
+}
+
+bool FilmStrip::hasWatchNotice() const {
+    return !noticeButton_->isHidden();
+}
+
+void FilmStrip::refreshFolder() {
+    if (!model_.folder().empty()) {
+        watcher_.refreshAll();
+    }
+}
+
+void FilmStrip::onWatchStatus(const WatchStatus& status) {
+    watchStatus_ = status;
+    updateNotice();
+}
+
+void FilmStrip::updateNotice() {
+    const int unwatched = watchStatus_.unwatched();
+    if (unwatched <= 0) {
+        noticeButton_->hide();
+        return;
+    }
+    noticeButton_->setText(unwatched == 1 ? tr("1 folder not watched")
+                                          : tr("%1 folders not watched").arg(unwatched));
+    noticeButton_->setToolTip(
+        tr("Arraw watches at most %1 folders, the shallowest first: the system limits the "
+           "watches all programs share (inotify on Linux), and %2 of the %3 folders here have "
+           "none.\nNew files in those folders appear after a refresh. Click, or press %4, to "
+           "refresh now.")
+            .arg(watchStatus_.limit)
+            .arg(unwatched)
+            .arg(watchStatus_.directories)
+            .arg(QKeySequence(QKeySequence::Refresh).toString(QKeySequence::NativeText)));
+    noticeButton_->show();
 }
 
 void FilmStrip::takeInsertedRows(int first, int last) {
@@ -992,6 +1049,11 @@ void FilmStrip::clickCell(const QModelIndex& index, Qt::KeyboardModifiers modifi
 void FilmStrip::showContextMenu(const QPoint& position) {
     const QModelIndex index = list_->indexAt(position);
     if (!index.isValid()) {
+        if (!model_.folder().empty()) {
+            QMenu menu(this);
+            addRefreshAction(menu);
+            menu.exec(list_->viewport()->mapToGlobal(position));
+        }
         return;
     }
     const fs::path clicked = primaryAt(index);
@@ -1045,7 +1107,15 @@ void FilmStrip::showContextMenu(const QPoint& position) {
         connect(menu.addAction(tr("Export…")), &QAction::triggered, this,
                 &FilmStrip::exportRequested);
     }
+    menu.addSeparator();
+    addRefreshAction(menu);
     menu.exec(list_->viewport()->mapToGlobal(position));
+}
+
+void FilmStrip::addRefreshAction(QMenu& menu) {
+    QAction* refresh = menu.addAction(tr("Refresh Folder"));
+    refresh->setObjectName(QStringLiteral("filmStripRefreshAction"));
+    connect(refresh, &QAction::triggered, this, &FilmStrip::refreshFolder);
 }
 
 bool FilmStrip::eventFilter(QObject* watched, QEvent* event) {

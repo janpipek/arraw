@@ -1,10 +1,12 @@
 #include "AppSettings.h"
 
 #include "TimingTrace.h"
+#include "WatchBudget.h"
 
 #include <QString>
 #include <QVariant>
 
+#include <algorithm>
 #include <exception>
 #include <system_error>
 
@@ -41,6 +43,20 @@ bool restoreIncludeSubfolders(QSettings& store) {
 
 void saveIncludeSubfolders(bool include, QSettings& store) {
     store.setValue("filmStrip/includeSubfolders", include);
+}
+
+int restoreMaxWatchedFolders(QSettings& store) {
+    bool valid = false;
+    const qlonglong value = store.value("filmStrip/maxWatchedFolders").toLongLong(&valid);
+    if (!valid) {
+        return defaultMaxWatchedFolders;
+    }
+    return static_cast<int>(
+        std::clamp<qlonglong>(value, minWatchedFolders, maxWatchedFoldersLimit));
+}
+
+void saveMaxWatchedFolders(int limit, QSettings& store) {
+    store.setValue("filmStrip/maxWatchedFolders", limit);
 }
 
 AppSettings restoreAppSettings(QSettings& store) {

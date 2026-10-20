@@ -45,6 +45,10 @@ FolderWatcher::FolderWatcher(ShotModel& model, std::chrono::milliseconds debounc
                   },
                   Qt::QueuedConnection);
           },
+          [this](std::uint64_t walk, WatchStatus status) {
+              QMetaObject::invokeMethod(
+                  this, [this, walk, status] { takeStatus(walk, status); }, Qt::QueuedConnection);
+          },
           debounce)) {
     thread_.setObjectName(QStringLiteral("FolderLister"));
     lister_->moveToThread(&thread_);
@@ -70,6 +74,10 @@ void FolderWatcher::setReadHook(FolderLister::ReadHook hook) {
     lister_->setReadHook(std::move(hook));
 }
 
+void FolderWatcher::setWatchGate(FolderLister::WatchGate gate) {
+    lister_->setWatchGate(std::move(gate));
+}
+
 void FolderWatcher::simulateDirectoryChanged(const std::filesystem::path& directory) {
     lister_->simulateDirectoryChanged(directory);
 }
@@ -81,6 +89,13 @@ void FolderWatcher::refreshAll() {
 void FolderWatcher::startWalk() {
     // The lister keeps the tree and its watches for the same root, and drops them for another.
     lister_->start(model_.folder(), model_.recursive(), model_.walk());
+}
+
+void FolderWatcher::takeStatus(std::uint64_t walk, const WatchStatus& status) {
+    if (walk != model_.walk()) {
+        return; // A later walk replaced it.
+    }
+    emit watchStatusChanged(status);
 }
 
 void FolderWatcher::finishWalk(std::uint64_t walk, ListingSummary summary) {

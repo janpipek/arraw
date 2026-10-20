@@ -8,7 +8,9 @@
 
 #include <algorithm>
 #include <exception>
+#include <iterator>
 #include <optional>
+#include <system_error>
 #include <utility>
 
 namespace arraw::app {
@@ -26,8 +28,9 @@ QString toQString(const fs::path& path) {
 } // namespace
 
 FolderLister::FolderLister(BatchReceiver onBatch, FinishReceiver onFinished,
-                           std::chrono::milliseconds debounce)
-    : onBatch_(std::move(onBatch)), onFinished_(std::move(onFinished)), debounce_(debounce) {}
+                           StatusReceiver onStatus, std::chrono::milliseconds debounce)
+    : onBatch_(std::move(onBatch)), onFinished_(std::move(onFinished)),
+      onStatus_(std::move(onStatus)), debounce_(debounce) {}
 
 FolderLister::~FolderLister() = default;
 
@@ -49,6 +52,15 @@ void FolderLister::shutDown() {
     watcher_.reset();
     const std::scoped_lock lock(watchedMutex_);
     watchedCopy_.clear();
+}
+
+void FolderLister::setMaxWatchedFolders(int limit) {
+    maxWatched_.store(std::max(limit, 0));
+}
+
+void FolderLister::setWatchGate(WatchGate gate) {
+    const std::scoped_lock lock(hookMutex_);
+    gate_ = std::move(gate);
 }
 
 void FolderLister::setReadHook(ReadHook hook) {
@@ -90,6 +102,7 @@ void FolderLister::begin(const fs::path& root, bool recursive, std::uint64_t wal
         // The watches and the changes of another folder say nothing of this one.
         unwatchAll();
         tree_.clear();
+        budget_.reset(maxWatched_.load());
         dirty_.clear();
         debounceTimer_->stop();
         root_ = folder;
@@ -102,8 +115,9 @@ void FolderLister::begin(const fs::path& root, bool recursive, std::uint64_t wal
     walking_ = true;
     flushed_ = false;
     lastFlush_ = Clock::now();
-    const auto [rootDir, added] = tree_.try_emplace(root_);
-    unbalanced_ = unbalanced_ || added;
+    const auto rootDir = track(root_, 0);
+    // A new walk tries again for watches the system refused, and takes up a new cap.
+    applyMoves(budget_.setCap(maxWatched_.load()));
     enqueue(rootDir, true, false);
     scheduleStep();
 }
@@ -146,15 +160,14 @@ void FolderLister::step() {
         }
     }
     if (directory == tree_.end()) {
-        // Nothing left to read: what is gathered goes, then the watches settle, which may queue
-        // reads of their own.
+        // Nothing left to read: what is gathered goes, then the watch status.
         flush();
-        balanceWatches();
-        if (!work_.empty()) {
-            scheduleStep();
-            return;
+        const bool finishing = walking_;
+        if (finishing) {
+            unreadable_ = summary_.unreadable;
         }
-        if (walking_) {
+        publishStatus(finishing);
+        if (finishing) {
             walking_ = false;
             onFinished_(walk_, std::exchange(summary_, {}));
         }
@@ -168,10 +181,12 @@ void FolderLister::step() {
     dir.enter = false;
     dir.recheck = false;
     // Watch, then read: a change after the read is reported, one before it is in the read.
-    if (!dir.watched && !watch(directory) && watchedCount_ < maxWatchedFolders) {
-        unbalanced_ = true; // Refused; tried again once there is nothing to read.
-    }
     const fs::path path = directory->first;
+    if (!dir.watched && budget_.isWatched(path)) {
+        std::vector<fs::path> promoted;
+        watch(directory, promoted);
+        applyMoves({.promoted = std::move(promoted), .evicted = {}});
+    }
 
     ReadHook hook;
     {
@@ -249,8 +264,7 @@ void FolderLister::followSubfolders(Tree::iterator directory, const std::vector<
             }
             continue;
         }
-        toRead.push_back(tree_.try_emplace(folder, Dir{.depth = depth}).first);
-        unbalanced_ = true;
+        toRead.push_back(track(folder, depth));
     }
     gone.insert(gone.end(), known.begin() + static_cast<std::ptrdiff_t>(k), known.end());
     for (const fs::path& folder : gone) {
@@ -269,30 +283,83 @@ void FolderLister::dropSubtree(Tree::iterator directory) {
         ++end;
     }
     QStringList released;
+    std::vector<fs::path> removed;
     for (auto entry = directory; entry != end; ++entry) {
         if (entry->second.watched) {
             released << toQString(entry->first);
         }
+        removed.push_back(entry->first);
     }
     unwatch(released);
     tree_.erase(directory, end);
-    unbalanced_ = true;
+    // The places the subtree leaves go to directories that waited.
+    applyMoves({.promoted = budget_.remove(removed), .evicted = {}});
     batch_.push_back({.folder = std::move(folder), .shots = {}, .gone = true, .recheck = false});
 }
 
-bool FolderLister::watch(Tree::iterator directory) {
-    if (watchedCount_ >= maxWatchedFolders) {
-        return false;
+FolderLister::Tree::iterator FolderLister::track(const fs::path& path, int depth) {
+    const auto [entry, added] = tree_.try_emplace(path, Dir{.depth = depth});
+    if (added) {
+        // It is watched when it is read; a shallower one than a watched directory takes its place.
+        if (const auto grant = budget_.add(path, depth); grant.evict) {
+            applyMoves({.promoted = {}, .evicted = {*grant.evict}});
+        }
     }
+    return entry;
+}
+
+bool FolderLister::watch(Tree::iterator directory, std::vector<fs::path>& promoted) {
     const QString path = toQString(directory->first);
-    if (!watcher_->addPath(path)) {
-        return false; // Gone already, or the system's limit (ENOSPC): unwatched.
+    WatchGate gate;
+    {
+        const std::scoped_lock lock(hookMutex_);
+        gate = gate_;
     }
-    directory->second.watched = true;
-    ++watchedCount_;
-    const std::scoped_lock lock(watchedMutex_);
-    watchedCopy_.insert(path);
-    return true;
+    if ((!gate || gate(directory->first)) && watcher_->addPath(path)) {
+        directory->second.watched = true;
+        const std::scoped_lock lock(watchedMutex_);
+        watchedCopy_.insert(path);
+        return true;
+    }
+    // Refused. A directory that opens is out of watches (ENOSPC, shared with other programs):
+    // the budget shrinks to what the system gave. One that does not is going, or gone.
+    std::error_code error;
+    const fs::directory_iterator probe(directory->first, error);
+    if (!error) {
+        budget_.refused(directory->first);
+    } else if (auto next = budget_.remove(directory->first)) {
+        promoted.push_back(std::move(*next));
+    }
+    return false;
+}
+
+void FolderLister::applyMoves(WatchBudget::Moves moves) {
+    QStringList released;
+    for (const fs::path& path : moves.evicted) {
+        if (const auto entry = tree_.find(path); entry != tree_.end() && entry->second.watched) {
+            entry->second.watched = false;
+            released << toQString(path);
+        }
+    }
+    unwatch(released);
+    // A place may go to a directory that is gone, whose refusal frees it for the next.
+    std::deque<fs::path> promoted(std::make_move_iterator(moves.promoted.begin()),
+                                  std::make_move_iterator(moves.promoted.end()));
+    while (!promoted.empty()) {
+        const auto entry = tree_.find(promoted.front());
+        promoted.pop_front();
+        if (entry == tree_.end() || entry->second.watched) {
+            continue;
+        }
+        std::vector<fs::path> more;
+        // A watch got after the read: read once more, so nothing between the two is missed
+        // (plan, section 4, rule 2).
+        if (watch(entry, more)) {
+            enqueue(entry, false, true);
+        }
+        promoted.insert(promoted.end(), more.begin(), more.end());
+    }
+    scheduleStep();
 }
 
 void FolderLister::unwatch(const QStringList& paths) {
@@ -301,7 +368,6 @@ void FolderLister::unwatch(const QStringList& paths) {
     }
     // A watch Qt dropped already is simply not removed again.
     watcher_->removePaths(paths);
-    watchedCount_ -= static_cast<int>(paths.size());
     const std::scoped_lock lock(watchedMutex_);
     for (const QString& path : paths) {
         watchedCopy_.remove(path);
@@ -315,41 +381,18 @@ void FolderLister::unwatchAll() {
     for (auto& [path, dir] : tree_) {
         dir.watched = false;
     }
-    watchedCount_ = 0;
     const std::scoped_lock lock(watchedMutex_);
     watchedCopy_.clear();
 }
 
-void FolderLister::balanceWatches() {
-    if (!unbalanced_) {
-        return;
-    }
-    unbalanced_ = false;
-    // The shallowest first; within a depth the folder order.
-    std::vector<Tree::iterator> order;
-    order.reserve(tree_.size());
-    for (auto entry = tree_.begin(); entry != tree_.end(); ++entry) {
-        order.push_back(entry);
-    }
-    const auto keep = std::min(order.size(), static_cast<std::size_t>(maxWatchedFolders));
-    if (order.size() > keep) {
-        std::ranges::stable_sort(order, {},
-                                 [](Tree::iterator entry) { return entry->second.depth; });
-    }
-    QStringList released;
-    for (std::size_t k = keep; k < order.size(); ++k) {
-        if (order[k]->second.watched) {
-            order[k]->second.watched = false;
-            released << toQString(order[k]->first);
-        }
-    }
-    unwatch(released);
-    for (std::size_t k = 0; k < keep; ++k) {
-        // A watch got after the read: read once more, so nothing between the two is missed
-        // (plan, section 4, rule 2).
-        if (!order[k]->second.watched && watch(order[k])) {
-            enqueue(order[k], false, true);
-        }
+void FolderLister::publishStatus(bool force) {
+    const WatchStatus status{.watched = budget_.watched(),
+                             .directories = static_cast<int>(tree_.size()),
+                             .unreadable = unreadable_,
+                             .limit = budget_.cap()};
+    if (force || lastStatus_ != status) {
+        lastStatus_ = status;
+        onStatus_(walk_, status);
     }
 }
 
@@ -392,7 +435,6 @@ void FolderLister::readChanged() {
             }
             if (const QString path = toQString(directory); !present->contains(path)) {
                 entry->second.watched = false;
-                --watchedCount_;
                 const std::scoped_lock lock(watchedMutex_);
                 watchedCopy_.remove(path);
             }

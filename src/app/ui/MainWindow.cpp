@@ -205,6 +205,7 @@ MainWindow::MainWindow(DebugLog& debugLog, QWidget* parent, PhotoLoader::Decoder
     {
         QSettings store;
         filmStrip_->setIncludeSubfolders(restoreIncludeSubfolders(store));
+        filmStrip_->setMaxWatchedFolders(restoreMaxWatchedFolders(store));
     }
     connect(filmStrip_, &FilmStrip::includeSubfoldersToggled, this, [](bool include) {
         QSettings store;
@@ -218,7 +219,19 @@ MainWindow::MainWindow(DebugLog& debugLog, QWidget* parent, PhotoLoader::Decoder
     buildFilmStripDock();
     buildPanelActions();
 
-    // Last in the View menu, after the docks' toggles.
+    // After the docks' toggles: the strip's folder walked again, for what no watch reports.
+    viewMenu_->addSeparator();
+    refreshFolderAction_ = viewMenu_->addAction(tr("&Refresh Folder"));
+    refreshFolderAction_->setObjectName("refreshFolderAction");
+    refreshFolderAction_->setShortcut(QKeySequence::Refresh);
+    refreshFolderAction_->setEnabled(false);
+    connect(refreshFolderAction_, &QAction::triggered, filmStrip_, &FilmStrip::refreshFolder);
+    connect(filmStrip_, &FilmStrip::folderChanged, this,
+            [this] { refreshFolderAction_->setEnabled(!filmStrip_->folder().empty()); });
+    // Also on the window, so the key outlives a hidden menu bar.
+    addAction(refreshFolderAction_);
+
+    // Last in the View menu.
     viewMenu_->addSeparator();
     QAction* debugAction = viewMenu_->addAction(tr("&Debug Log"));
     debugAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_D));

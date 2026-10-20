@@ -180,3 +180,27 @@ TEST_CASE("Including subfolders in the film strip is remembered, and off by defa
         REQUIRE_FALSE(app::restoreIncludeSubfolders(store));
     }
 }
+
+TEST_CASE("The cap on watched folders defaults, round-trips and stays within bounds",
+          "[app][settings]") {
+    const test::TempDir directory;
+    QSettings store(QString::fromStdU16String(directory.file("settings.ini").u16string()),
+                    QSettings::IniFormat);
+    REQUIRE(app::restoreMaxWatchedFolders(store) == 1000);
+
+    app::saveMaxWatchedFolders(5000, store);
+    REQUIRE(app::restoreMaxWatchedFolders(store) == 5000);
+    REQUIRE(store.value("filmStrip/maxWatchedFolders").toInt() == 5000);
+
+    // A hand-edited value outside the bounds is brought into them; a word is no number.
+    store.setValue("filmStrip/maxWatchedFolders", 0);
+    REQUIRE(app::restoreMaxWatchedFolders(store) == app::minWatchedFolders);
+    store.setValue("filmStrip/maxWatchedFolders", -7);
+    REQUIRE(app::restoreMaxWatchedFolders(store) == app::minWatchedFolders);
+    store.setValue("filmStrip/maxWatchedFolders", 99999999999LL);
+    REQUIRE(app::restoreMaxWatchedFolders(store) == app::maxWatchedFoldersLimit);
+    store.setValue("filmStrip/maxWatchedFolders", "many");
+    REQUIRE(app::restoreMaxWatchedFolders(store) == 1000);
+    store.setValue("filmStrip/maxWatchedFolders", "250");
+    REQUIRE(app::restoreMaxWatchedFolders(store) == 250);
+}

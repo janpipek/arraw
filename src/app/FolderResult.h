@@ -67,4 +67,27 @@ struct ListingSummary {
     int unreadable = 0;
 };
 
+/// @brief How much of the tree the lister watches, as it stands once everything is read.
+struct WatchStatus {
+    /// @brief Number of directories under watch.
+    int watched = 0;
+
+    /// @brief Number of directories in the tree, watched or not.
+    int directories = 0;
+
+    /// @brief Number of directories the last walk could not read.
+    int unreadable = 0;
+
+    /// @brief Most directories the lister may watch now: the limit set, or less where the
+    /// system refused a watch.
+    int limit = 0;
+
+    /// @brief Counts the directories without a watch, whose changes show on a refresh only.
+    [[nodiscard]] int unwatched() const noexcept {
+        return directories - watched;
+    }
+
+    bool operator==(const WatchStatus&) const = default;
+};
+
 } // namespace arraw::app
